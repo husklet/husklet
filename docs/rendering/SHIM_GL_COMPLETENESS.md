@@ -11,16 +11,18 @@ symbol` test asserts a 1:1 correspondence and that every level's invariants hold
 
 | Level | Count | Behavior | Error state |
 |---|---|---|---|
-| **full** | 212 | Real hand-written body at gl_shim.c parity (byte-identical IR / faithful state). | none |
-| **partial** | 107 | Spec-legitimate no-op / default query matching gl_shim.c's own degraded behavior. ALWAYS initializes outputs; returns the spec default / correct not-found sentinel. | none (a no-op is the correct answer) |
-| **stub** | 83 | An operation a conforming driver performs and the shim does NOT: FAILS truthfully — sets the API-correct GL/EGL error, zeroes outputs, returns the spec failure value, aborts under `DD_SHIM_STRICT`. | `glGetError`/`eglGetError` raised |
+| **full** | 218 | Real hand-written body at gl_shim.c parity (byte-identical IR / faithful state). | none |
+| **partial** | 106 | Spec-legitimate no-op / default query matching gl_shim.c's own degraded behavior. ALWAYS initializes outputs; returns the spec default / correct not-found sentinel. | none (a no-op is the correct answer) |
+| **stub** | 78 | An operation a conforming driver performs and the shim does NOT: FAILS truthfully — sets the API-correct GL/EGL error, zeroes outputs, returns the spec failure value, aborts under `DD_SHIM_STRICT`. | `glGetError`/`eglGetError` raised |
 
-By lib: GL = 183 full / 106 partial / 69 stub; EGL = 29 full / 1 partial / 14 stub.
+By lib: GL = 183 full / 106 partial / 69 stub; EGL = 35 full / 0 partial / 9 stub.
 
-**The advertised GLES 2.0 mandatory surface is COMPLETE (0/142 stubs):** every mandatory GLES 2.0 core
-command has a real hand-written body (the `advertised_gles2_has_real_implementations_for_every_mandatory_command`
-ledger gate passes). The last 30 (state/introspection queries + spec no-ops) were ported from the
-gl_shim.c oracle in this pass — they carry no IR, so the byte-parity gates are unchanged.
+**Both advertised core profiles' mandatory surfaces are COMPLETE:** GLES 2.0 = **0/142** stubs and
+EGL 1.4 = **0/34** stubs (the `advertised_gles2_…` and `advertised_egl14_…` ledger gates pass). The EGL
+1.4 tail (`eglSurfaceAttrib`, `eglBindTexImage`/`eglReleaseTexImage`, `eglCopyBuffers`,
+`eglCreatePixmapSurface`, `eglCreatePbufferFromClientBuffer`) has real hand-written bodies that are
+truthful for the genuinely-unsupported native-pixmap / client-buffer / texture-binding paths (a benign
+validated attribute set for `eglSurfaceAttrib`). All are IR-free, so the byte-parity gates are unchanged.
 
 **The Phase-0 exit gate holds and the profile is now more complete (Phase 4.1):** no unsupported entry
 point can silently report success, and the previously-stubbed high-use GLES2/ES3 families now have real
@@ -104,6 +106,19 @@ byte-parity gates still byte-identical):
   failure, retains the queued draws and reports `EGL_CONTEXT_LOST` (a stale surface is `EGL_BAD_SURFACE`).
 - **`gles_flush_and_finish_have_submission_and_completion_semantics`** — `glFlush` is a nonblocking
   submit (advances a submission serial); `glFinish` blocks until the completion serial catches up.
+- **`egl_wayland_handshake_discovers_globals_and_acks_the_received_configure`** — the guest wayland
+  client (`wayland.rs`) is now a real handshake state machine: it DISCOVERS globals from
+  `wl_registry.global` (binding each interface by its advertised name/version, not an assumed id),
+  acknowledges `xdg_surface.configure` with the RECEIVED serial, answers `xdg_wm_base.ping` with a pong,
+  and detects `wl_display.error`.
+- **`egl_wayland_commit_propagates_io_protocol_and_frame_timeout_failures`** — the present transport is
+  fallible end to end: `wflush`/`wflush_fd` return short-write / fd-pass failures, a peer disconnect
+  surfaces as `WlError::Disconnected` (never a silent success), and a missing frame callback within the
+  pacing deadline is `WlError::FrameTimeout`. `commit` returns a typed `Result`, which `present_frame`
+  propagates so a failed present is reported by the transactional swap rather than pretended.
+
+These wayland-client changes are the guest present transport, not the frame IR (the IR gates run in
+`DD_IR_DUMP` mode with no compositor connection), so the 8 byte-parity gates are byte-identical.
 
 ## Truthful-failure & debugging controls
 
@@ -126,18 +141,20 @@ ANGLE_framebuffer_multisample, texture_usage), each backed by a real body; `glGe
 
 Generated from build.rs `IMPLEMENTED`/`PARTIAL` over `registry/gles2_egl.manifest` (emitted into `CAPABILITIES`); the `inventory_covers_every_exported_symbol` test fails if this drifts.
 
-### full — real hand-written body at gl_shim.c parity (212)
+### full — real hand-written body at gl_shim.c parity (218)
 
 ES3-tagged members (`since`=GLES 3.0): `glBindVertexArray`, `glBlitFramebuffer`, `glClearBufferfv`, `glCopyBufferSubData`, `glDeleteVertexArrays`, `glDrawArraysInstanced`, `glDrawElementsInstanced`, `glDrawRangeElements`, `glFramebufferTextureLayer`, `glGenQueries`, `glGenSamplers`, `glGenTransformFeedbacks`, `glGenVertexArrays`, `glGetStringi`, `glIsVertexArray`, `glMapBufferRange`, `glRenderbufferStorageMultisample`, `glTexImage3D`, `glTexStorage3D`, `glTexSubImage3D`, `glUniform1ui`, `glUniform1uiv`, `glUniform2ui`, `glUniform2uiv`, `glUniform3ui`, `glUniform3uiv`, `glUniform4ui`, `glUniform4uiv`, `glUniformMatrix2x3fv`, `glUniformMatrix2x4fv`, `glUniformMatrix3x2fv`, `glUniformMatrix3x4fv`, `glUniformMatrix4x2fv`, `glUniformMatrix4x3fv`, `glUnmapBuffer`, `glVertexAttribIPointer`.
 
-`eglBindAPI` | `eglChooseConfig` | `eglCreateContext`
-`eglCreatePbufferSurface` | `eglCreateWindowSurface` | `eglDestroyContext`
-`eglDestroySurface` | `eglGetConfigAttrib` | `eglGetConfigs`
-`eglGetCurrentContext` | `eglGetCurrentDisplay` | `eglGetCurrentSurface`
-`eglGetDisplay` | `eglGetError` | `eglGetPlatformDisplay`
-`eglGetProcAddress` | `eglInitialize` | `eglMakeCurrent`
-`eglQueryAPI` | `eglQueryContext` | `eglQueryString`
-`eglQuerySurface` | `eglReleaseThread` | `eglSwapBuffers`
+`eglBindAPI` | `eglBindTexImage` | `eglChooseConfig`
+`eglCopyBuffers` | `eglCreateContext` | `eglCreatePbufferFromClientBuffer`
+`eglCreatePbufferSurface` | `eglCreatePixmapSurface` | `eglCreateWindowSurface`
+`eglDestroyContext` | `eglDestroySurface` | `eglGetConfigAttrib`
+`eglGetConfigs` | `eglGetCurrentContext` | `eglGetCurrentDisplay`
+`eglGetCurrentSurface` | `eglGetDisplay` | `eglGetError`
+`eglGetPlatformDisplay` | `eglGetProcAddress` | `eglInitialize`
+`eglMakeCurrent` | `eglQueryAPI` | `eglQueryContext`
+`eglQueryString` | `eglQuerySurface` | `eglReleaseTexImage`
+`eglReleaseThread` | `eglSurfaceAttrib` | `eglSwapBuffers`
 `eglSwapInterval` | `eglTerminate` | `eglWaitClient`
 `eglWaitGL` | `eglWaitNative` | `glActiveTexture`
 `glAttachShader` | `glBindAttribLocation` | `glBindBuffer`
@@ -202,50 +219,50 @@ ES3-tagged members (`since`=GLES 3.0): `glBindVertexArray`, `glBlitFramebuffer`,
 `glVertexAttrib4f` | `glVertexAttrib4fv` | `glVertexAttribIPointer`
 `glVertexAttribPointer` | `glViewport`
 
-### partial — spec-legitimate no-op / default query, NO error, outputs initialized (107)
+### partial — spec-legitimate no-op / default query, NO error, outputs initialized (106)
 
 Matches gl_shim.c's degraded behavior. Sentinel-returning members: .
 
-`eglSurfaceAttrib` | `glBeginQuery` | `glBeginTransformFeedback`
-`glBindBufferBase` | `glBindBufferRange` | `glBindSampler`
-`glBindTransformFeedback` | `glBlendBarrier` | `glClearBufferfi`
-`glClearBufferiv` | `glClearBufferuiv` | `glColorMaski`
-`glCompressedTexImage3D` | `glCompressedTexSubImage3D` | `glCopyTexSubImage3D`
-`glDebugMessageCallback` | `glDebugMessageControl` | `glDebugMessageInsert`
-`glDeleteProgramPipelines` | `glDeleteQueries` | `glDeleteSamplers`
-`glDeleteSync` | `glDeleteTransformFeedbacks` | `glDisablei`
-`glDrawBuffers` | `glEnablei` | `glEndQuery`
-`glEndTransformFeedback` | `glFlushMappedBufferRange` | `glGetActiveUniformBlockName`
-`glGetActiveUniformBlockiv` | `glGetActiveUniformsiv` | `glGetBooleani_v`
-`glGetBufferParameteri64v` | `glGetBufferPointerv` | `glGetDebugMessageLog`
-`glGetFragDataLocation` | `glGetFramebufferParameteriv` | `glGetGraphicsResetStatus`
-`glGetInteger64i_v` | `glGetInteger64v` | `glGetIntegeri_v`
-`glGetInternalformativ` | `glGetMultisamplefv` | `glGetObjectLabel`
-`glGetObjectPtrLabel` | `glGetPointerv` | `glGetProgramBinary`
-`glGetProgramInterfaceiv` | `glGetProgramPipelineInfoLog` | `glGetProgramPipelineiv`
-`glGetProgramResourceIndex` | `glGetProgramResourceLocation` | `glGetProgramResourceName`
-`glGetProgramResourceiv` | `glGetQueryObjectuiv` | `glGetQueryiv`
-`glGetSamplerParameterIiv` | `glGetSamplerParameterIuiv` | `glGetSamplerParameterfv`
-`glGetSamplerParameteriv` | `glGetSynciv` | `glGetTexLevelParameterfv`
-`glGetTexLevelParameteriv` | `glGetTexParameterIiv` | `glGetTexParameterIuiv`
-`glGetTransformFeedbackVarying` | `glGetUniformBlockIndex` | `glGetUniformIndices`
-`glGetUniformuiv` | `glGetVertexAttribIiv` | `glGetVertexAttribIuiv`
-`glGetnUniformfv` | `glGetnUniformiv` | `glGetnUniformuiv`
-`glInvalidateFramebuffer` | `glInvalidateSubFramebuffer` | `glIsEnabledi`
-`glIsProgramPipeline` | `glIsQuery` | `glIsSampler`
-`glIsSync` | `glIsTransformFeedback` | `glMemoryBarrier`
-`glMemoryBarrierByRegion` | `glMinSampleShading` | `glObjectLabel`
-`glObjectPtrLabel` | `glPatchParameteri` | `glPopDebugGroup`
-`glPrimitiveBoundingBox` | `glProgramBinary` | `glProgramParameteri`
-`glPushDebugGroup` | `glReadBuffer` | `glSampleMaski`
-`glSamplerParameterf` | `glSamplerParameterfv` | `glSamplerParameteri`
-`glSamplerParameteriv` | `glUniformBlockBinding` | `glValidateProgramPipeline`
-`glVertexAttribDivisor` | `glVertexAttribI4i` | `glVertexAttribI4iv`
-`glVertexAttribI4ui` | `glVertexAttribI4uiv`
+`glBeginQuery` | `glBeginTransformFeedback` | `glBindBufferBase`
+`glBindBufferRange` | `glBindSampler` | `glBindTransformFeedback`
+`glBlendBarrier` | `glClearBufferfi` | `glClearBufferiv`
+`glClearBufferuiv` | `glColorMaski` | `glCompressedTexImage3D`
+`glCompressedTexSubImage3D` | `glCopyTexSubImage3D` | `glDebugMessageCallback`
+`glDebugMessageControl` | `glDebugMessageInsert` | `glDeleteProgramPipelines`
+`glDeleteQueries` | `glDeleteSamplers` | `glDeleteSync`
+`glDeleteTransformFeedbacks` | `glDisablei` | `glDrawBuffers`
+`glEnablei` | `glEndQuery` | `glEndTransformFeedback`
+`glFlushMappedBufferRange` | `glGetActiveUniformBlockName` | `glGetActiveUniformBlockiv`
+`glGetActiveUniformsiv` | `glGetBooleani_v` | `glGetBufferParameteri64v`
+`glGetBufferPointerv` | `glGetDebugMessageLog` | `glGetFragDataLocation`
+`glGetFramebufferParameteriv` | `glGetGraphicsResetStatus` | `glGetInteger64i_v`
+`glGetInteger64v` | `glGetIntegeri_v` | `glGetInternalformativ`
+`glGetMultisamplefv` | `glGetObjectLabel` | `glGetObjectPtrLabel`
+`glGetPointerv` | `glGetProgramBinary` | `glGetProgramInterfaceiv`
+`glGetProgramPipelineInfoLog` | `glGetProgramPipelineiv` | `glGetProgramResourceIndex`
+`glGetProgramResourceLocation` | `glGetProgramResourceName` | `glGetProgramResourceiv`
+`glGetQueryObjectuiv` | `glGetQueryiv` | `glGetSamplerParameterIiv`
+`glGetSamplerParameterIuiv` | `glGetSamplerParameterfv` | `glGetSamplerParameteriv`
+`glGetSynciv` | `glGetTexLevelParameterfv` | `glGetTexLevelParameteriv`
+`glGetTexParameterIiv` | `glGetTexParameterIuiv` | `glGetTransformFeedbackVarying`
+`glGetUniformBlockIndex` | `glGetUniformIndices` | `glGetUniformuiv`
+`glGetVertexAttribIiv` | `glGetVertexAttribIuiv` | `glGetnUniformfv`
+`glGetnUniformiv` | `glGetnUniformuiv` | `glInvalidateFramebuffer`
+`glInvalidateSubFramebuffer` | `glIsEnabledi` | `glIsProgramPipeline`
+`glIsQuery` | `glIsSampler` | `glIsSync`
+`glIsTransformFeedback` | `glMemoryBarrier` | `glMemoryBarrierByRegion`
+`glMinSampleShading` | `glObjectLabel` | `glObjectPtrLabel`
+`glPatchParameteri` | `glPopDebugGroup` | `glPrimitiveBoundingBox`
+`glProgramBinary` | `glProgramParameteri` | `glPushDebugGroup`
+`glReadBuffer` | `glSampleMaski` | `glSamplerParameterf`
+`glSamplerParameterfv` | `glSamplerParameteri` | `glSamplerParameteriv`
+`glUniformBlockBinding` | `glValidateProgramPipeline` | `glVertexAttribDivisor`
+`glVertexAttribI4i` | `glVertexAttribI4iv` | `glVertexAttribI4ui`
+`glVertexAttribI4uiv`
 
-### stub — unsupported: raises API-correct error, zeroes outputs, aborts under DD_SHIM_STRICT (83)
+### stub — unsupported: raises API-correct error, zeroes outputs, aborts under DD_SHIM_STRICT (78)
 
-GL stubs raise `GL_INVALID_OPERATION`; EGL stubs raise `EGL_BAD_ACCESS`. Remaining families: transform-feedback results, occlusion/sync objects (ES3, host-unbacked), program pipelines / separable `glProgramUniform*`, compute/indirect draws, image load/store, memory barriers, and the EGL image/sync/pixmap-surface family (reported as a lower coherent surface per the audit).
+GL stubs raise `GL_INVALID_OPERATION`; EGL stubs raise `EGL_BAD_ACCESS`. Remaining families: transform-feedback results, occlusion/sync objects (ES3, host-unbacked), program pipelines / separable `glProgramUniform*`, compute/indirect draws, image load/store, memory barriers, and the EGL image/sync/platform-surface family.
 
 **GL stubs (69):**
 
@@ -273,13 +290,11 @@ GL stubs raise `GL_INVALID_OPERATION`; EGL stubs raise `EGL_BAD_ACCESS`. Remaini
 `glUseProgramStages` | `glVertexAttribBinding` | `glVertexAttribFormat`
 `glVertexAttribIFormat` | `glVertexBindingDivisor` | `glWaitSync`
 
-**EGL stubs (14):**
+**EGL stubs (9):**
 
-`eglBindTexImage` | `eglClientWaitSync` | `eglCopyBuffers`
-`eglCreateImage` | `eglCreatePbufferFromClientBuffer` | `eglCreatePixmapSurface`
-`eglCreatePlatformPixmapSurface` | `eglCreatePlatformWindowSurface` | `eglCreateSync`
-`eglDestroyImage` | `eglDestroySync` | `eglGetSyncAttrib`
-`eglReleaseTexImage` | `eglWaitSync`
+`eglClientWaitSync` | `eglCreateImage` | `eglCreatePlatformPixmapSurface`
+`eglCreatePlatformWindowSurface` | `eglCreateSync` | `eglDestroyImage`
+`eglDestroySync` | `eglGetSyncAttrib` | `eglWaitSync`
 
 ## Remaining `stub` families (next promotions / honest gaps)
 

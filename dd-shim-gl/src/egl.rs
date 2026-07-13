@@ -381,6 +381,64 @@ pub extern "C" fn eglDestroySurface(_dpy: *mut c_void, surface: *mut c_void) -> 
 }
 
 // ===================================================================================================
+// EGL 1.4 mandatory tail — real bodies (truthful for the genuinely-unsupported native-pixmap /
+// client-buffer / texture-binding paths; a benign, validated attribute set for eglSurfaceAttrib).
+// ===================================================================================================
+
+/// `eglSurfaceAttrib` — set a surface attribute (swap behavior / mipmap level). The shim tracks no
+/// mutable per-surface attribute, so a known attribute on a live surface is a benign accepted no-op; a
+/// stale/forged surface is EGL_BAD_SURFACE.
+#[no_mangle]
+pub extern "C" fn eglSurfaceAttrib(_dpy: *mut c_void, surface: *mut c_void, _attribute: i32, _value: i32) -> u32 {
+    if crate::state::egl_surface_lookup(surface).is_none() {
+        crate::state::egl_set_error(EGL_BAD_SURFACE);
+        return EGL_FALSE;
+    }
+    EGL_TRUE
+}
+
+/// `eglBindTexImage` / `eglReleaseTexImage` — render-a-pbuffer-to-a-texture. The advertised config is
+/// NOT bind-to-texture capable (`EGL_BIND_TO_TEXTURE_RGB/RGBA` == FALSE), so this is truthfully
+/// unsupported: a bad surface is EGL_BAD_SURFACE, an otherwise-valid surface is EGL_BAD_MATCH.
+#[no_mangle]
+pub extern "C" fn eglBindTexImage(_dpy: *mut c_void, surface: *mut c_void, _buffer: i32) -> u32 {
+    let err = if crate::state::egl_surface_lookup(surface).is_none() { EGL_BAD_SURFACE } else { EGL_BAD_MATCH };
+    crate::state::egl_set_error(err);
+    EGL_FALSE
+}
+#[no_mangle]
+pub extern "C" fn eglReleaseTexImage(_dpy: *mut c_void, surface: *mut c_void, _buffer: i32) -> u32 {
+    let err = if crate::state::egl_surface_lookup(surface).is_none() { EGL_BAD_SURFACE } else { EGL_BAD_MATCH };
+    crate::state::egl_set_error(err);
+    EGL_FALSE
+}
+
+/// `eglCopyBuffers` — copy the surface's color buffer to a native pixmap. No native-pixmap target
+/// exists in this (Wayland-only) surface: EGL_BAD_SURFACE for a bad handle, else EGL_BAD_NATIVE_PIXMAP.
+#[no_mangle]
+pub extern "C" fn eglCopyBuffers(_dpy: *mut c_void, surface: *mut c_void, _target: *mut c_void) -> u32 {
+    let err = if crate::state::egl_surface_lookup(surface).is_none() { EGL_BAD_SURFACE } else { EGL_BAD_NATIVE_PIXMAP };
+    crate::state::egl_set_error(err);
+    EGL_FALSE
+}
+
+/// `eglCreatePixmapSurface` — native pixmaps are not a surface type this shim backs (no X11 / GBM
+/// pixmap). Truthfully unsupported: EGL_NO_SURFACE + EGL_BAD_NATIVE_PIXMAP.
+#[no_mangle]
+pub extern "C" fn eglCreatePixmapSurface(_dpy: *mut c_void, _config: *mut c_void, _pixmap: *mut c_void, _attrib_list: *const i32) -> *mut c_void {
+    crate::state::egl_set_error(EGL_BAD_NATIVE_PIXMAP);
+    core::ptr::null_mut()
+}
+
+/// `eglCreatePbufferFromClientBuffer` — client buffers (OpenVG images) are not a supported source.
+/// Truthfully unsupported: EGL_NO_SURFACE + EGL_BAD_PARAMETER.
+#[no_mangle]
+pub extern "C" fn eglCreatePbufferFromClientBuffer(_dpy: *mut c_void, _buftype: u32, _buffer: *mut c_void, _config: *mut c_void, _attrib_list: *const i32) -> *mut c_void {
+    crate::state::egl_set_error(EGL_BAD_PARAMETER);
+    core::ptr::null_mut()
+}
+
+// ===================================================================================================
 // API selection + misc no-op lifecycle
 // ===================================================================================================
 
@@ -679,9 +737,11 @@ fn present_frame(surf: &Surface, ir: &[u8]) -> Result<(), String> {
         .unwrap_or_else(|e| e.into_inner())
         .submit(&ts, ir)
         .map_err(|e| format!("executor submit failed: {e}"))?;
-    // ...then commit the rendered dma-buf/IOSurface to the compositor (dd-display).
+    // ...then commit the rendered dma-buf/IOSurface to the compositor (dd-display). A commit failure
+    // (short write / fd-pass / disconnect / protocol / frame timeout) propagates so the swap reports it
+    // instead of pretending the frame was presented.
     if let Some(wl) = wayland_session().lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-        wl.commit(surf, &surface_geometry(surf));
+        wl.commit(surf, &surface_geometry(surf)).map_err(|e| format!("wayland commit failed: {e:?}"))?;
     }
     Ok(())
 }

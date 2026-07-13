@@ -222,6 +222,38 @@ fn mandatory_gles2_queries_return_real_values() {
     egl::eglDestroyContext(display, ctx);
 }
 
+// ---- advertised_egl14_has_real_implementations... (EGL 1.4 mandatory tail behavior) ------------
+
+#[test]
+fn egl14_mandatory_tail_is_truthful() {
+    std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-egl14-mirror.ir"));
+    let display = egl::eglGetDisplay(core::ptr::null_mut());
+    assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
+    let config = 1usize as *mut c_void;
+    let surface = egl::eglCreateWindowSurface(display, config, core::ptr::null_mut(), core::ptr::null());
+    let _ = egl::eglGetError();
+
+    // eglSurfaceAttrib: a known attribute on a LIVE surface is a benign accepted no-op.
+    assert_eq!(egl::eglSurfaceAttrib(display, surface, 0x3093 /* EGL_SWAP_BEHAVIOR */, 0x3094), EGL_TRUE);
+    // ...but a forged surface is EGL_BAD_SURFACE.
+    assert_eq!(egl::eglSurfaceAttrib(display, 0x999 as *mut c_void, 0x3093, 0x3094), EGL_FALSE);
+    assert_eq!(egl::eglGetError(), EGL_BAD_SURFACE);
+
+    // Native pixmap / client-buffer surfaces are genuinely unsupported — truthful failure, no fake handle.
+    assert!(egl::eglCreatePixmapSurface(display, config, core::ptr::null_mut(), core::ptr::null()).is_null());
+    assert_eq!(egl::eglGetError(), EGL_BAD_NATIVE_PIXMAP);
+    assert!(egl::eglCreatePbufferFromClientBuffer(display, 0, core::ptr::null_mut(), config, core::ptr::null()).is_null());
+    assert_eq!(egl::eglGetError(), EGL_BAD_PARAMETER);
+
+    // Bind-to-texture and copy-to-pixmap are not backed by the advertised config — truthful failure.
+    assert_eq!(egl::eglBindTexImage(display, surface, 0x3084 /* EGL_BACK_BUFFER */), EGL_FALSE);
+    assert_eq!(egl::eglGetError(), EGL_BAD_MATCH);
+    assert_eq!(egl::eglCopyBuffers(display, surface, core::ptr::null_mut()), EGL_FALSE);
+    assert_eq!(egl::eglGetError(), EGL_BAD_NATIVE_PIXMAP);
+
+    egl::eglDestroySurface(display, surface);
+}
+
 #[test]
 fn flush_submits_and_finish_waits_for_completion() {
     let (sub_before, _) = gles::submission_serials();

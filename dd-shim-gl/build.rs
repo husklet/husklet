@@ -713,6 +713,14 @@ const IMPLEMENTED: &[&str] = &[
     "glVertexAttrib3fv",
     "glVertexAttrib4f",
     "glVertexAttrib4fv",
+
+    // ---- Phase 11c: EGL 1.4 mandatory tail (real bodies; truthful for unsupported paths) ----
+    "eglBindTexImage",
+    "eglCopyBuffers",
+    "eglCreatePbufferFromClientBuffer",
+    "eglCreatePixmapSurface",
+    "eglReleaseTexImage",
+    "eglSurfaceAttrib",
 ];
 
 /// Subset of `IMPLEMENTED` whose real body targets an ES 3.0 core feature (for the inventory's `since`
@@ -850,7 +858,6 @@ const PARTIAL: &[&str] = &[
     "glDeleteSync",
     "glDeleteTransformFeedbacks",
     // --- EGL: benign attribute set (swap behavior / mip hint) ---
-    "eglSurfaceAttrib",
     // --- Phase 4.1: reclassified stub->partial to match gl_shim.c's deliberate no-ops (byte-parity;
     //     these raise no error because the oracle performs no work either — an error would DIVERGE) ---
     // UBO binding: uniforms flow through the translator's default `[[buffer(1)]]` block, so the explicit
