@@ -35,6 +35,22 @@ confidence.
 5. **Consolidate duplicate macOS image builders.** `mac-userland.sh` is older but still called by `tools/dev.sh` and a
    scenario. Migrate those callers to the maintained builder before removal.
 
+## Deep symbol and branch passes
+
+- [`deep-audit-cross-cutting-2026-07.md`](deep-audit-cross-cutting-2026-07.md) — empty Cargo features, compiler-
+  confirmed dead archive helper, and environment-flag ownership.
+- [`jit-deep-audit-a-2026-07.md`](jit-deep-audit-a-2026-07.md) and
+  [`jit-debug-measurement-bundle-wave-d-2026-07.md`](jit-debug-measurement-bundle-wave-d-2026-07.md) — unity-build
+  reachability, JIT fallback flags, and the abandoned ARM-B1 instrumentation bundle. The strongest zero-production-
+  behavior cut is `IBPROF`/`VDBETRACE`/`VTHITCOUNT`/`CTXDISP`: no maintained producer, yet `IBPROF` alone reserves an
+  estimated 60.9 MiB of static BSS while disabled.
+- [`render-stack-deep-audit-wave-b.md`](render-stack-deep-audit-wave-b.md) and
+  [`render-stack-deep-audit-wave-e.md`](render-stack-deep-audit-wave-e.md) — loader/ABI false positives, exact dead
+  wgpu helper, compositor migration, RAII fields, diagnostics, and cfg-aware dependency findings.
+- [`deep-runtime-frontends-wave-c-2026-07.md`](deep-runtime-frontends-wave-c-2026-07.md) and
+  [`deep-runtime-frontends-wave-f-2026-07.md`](deep-runtime-frontends-wave-f-2026-07.md) — exact GUI symbols, dormant
+  terminal hooks, scenario parser false-green paths, CI/package drift, and dependency/target verification.
+
 ## Small high-confidence cleanup
 
 - Relocate or delete `dd-jit-darwin/docs/CHECKPOINT.md`; it describes nonexistent speculative code and has no owner.
