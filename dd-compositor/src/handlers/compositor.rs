@@ -691,6 +691,26 @@ impl DdState {
         true
     }
 
+    /// AppKit visibility-notification entry point: the native window backing `sid` changed occlusion and/or
+    /// miniaturization state. Maps the host signals onto the compositor's frame-pacing visibility state so a
+    /// fully occluded or minimized window PAUSES its guest (frame callbacks are withheld/retained, feedback
+    /// discarded, but the last frame stays retained for an instant reveal) and a revealed window RESUMES
+    /// (the retained content is presented once and the retained frame callbacks fire, so the guest draws
+    /// again). Miniaturization wins over occlusion. This is the seam the macOS presenter's
+    /// `NSWindowDidChangeOcclusionState` / `windowDidMiniaturize` observers call (mac-gated); the resulting
+    /// pacing transitions are exercised on the headless CPU path via this same method.
+    pub fn note_host_window_visibility(&mut self, sid: u32, occluded: bool, minimized: bool) -> bool {
+        use dd_display::present::SurfaceVisibility;
+        let visibility = if minimized {
+            SurfaceVisibility::Minimized
+        } else if occluded {
+            SurfaceVisibility::Occluded
+        } else {
+            SurfaceVisibility::Visible
+        };
+        self.set_surface_visibility_by_sid(sid, visibility)
+    }
+
     /// Move every zero-copy surface in the presented tree from its live buffer-use slot to the in-flight
     /// queue, tagged with the delivery `serial` its GPU/present work was submitted under. The buffer is
     /// retained until the presenter reports `serial` complete.
@@ -796,18 +816,128 @@ impl DdState {
     }
 
     /// Whether any surface in `root`'s presented tree (root + subsurface descendants + popups + their
-    /// descendants) has changed since the tree was last presented. Drives the skip-redundant-present
-    /// decision in [`Self::on_commit`].
-    fn tree_dirty(&self, root: &WlSurface) -> bool {
+    /// descendants) has changed since the tree was last presented AND that change is actually VISIBLE.
+    /// Drives the skip-redundant-present decision in [`Self::on_commit`].
+    ///
+    /// Conservative opaque-region occlusion: a dirty surface whose whole logical rectangle is covered by
+    /// the committed `wl_surface.set_opaque_region` of a surface composited ABOVE it contributes no visible
+    /// change — its damage is hidden — so it does not force a present. The coverage test is conservative
+    /// (only skips when the higher surface's opaque region provably contains the lower rect), so a present
+    /// is never wrongly skipped; an unknown size or a partial/absent opaque region keeps the tree dirty.
+    pub(crate) fn tree_dirty(&self, root: &WlSurface) -> bool {
         if self.dirty.is_empty() {
             return false;
         }
-        let mut surfaces = Vec::new();
-        self.collect_tree_surfaces(root, &mut surfaces);
-        for (popup, _, _) in self.collect_popups_for_root(root) {
-            self.collect_tree_surfaces(&popup, &mut surfaces);
+        // Composite order, bottom → top: root, its subsurface descendants at their accumulated offsets,
+        // then popups (and their descendants) on top — the same z-order `present_tree` blends in.
+        let layers = self.collect_occlusion_layers(root);
+        // Precompute each layer's root-space logical rectangle once.
+        let rects: Vec<Option<(i32, i32, i32, i32)>> = layers
+            .iter()
+            .map(|(s, x, y)| self.surface_logical_size(s).map(|(w, h)| (*x, *y, w, h)))
+            .collect();
+        for (i, (surface, _, _)) in layers.iter().enumerate() {
+            if !self.dirty.contains(&self.surface_id(surface)) {
+                continue;
+            }
+            let Some((sx, sy, sw, sh)) = rects[i] else {
+                // Unknown geometry: cannot prove occlusion, so treat the change as visible.
+                return true;
+            };
+            // Occluded iff some HIGHER layer's opaque region provably covers this whole rectangle.
+            let occluded = layers[i + 1..]
+                .iter()
+                .any(|(up, ux, uy)| self.opaque_covers_root_rect(up, *ux, *uy, sx, sy, sw, sh));
+            if !occluded {
+                return true;
+            }
         }
-        surfaces.iter().any(|s| self.dirty.contains(&self.surface_id(s)))
+        false
+    }
+
+    /// The presented tree in composite order (bottom → top) as `(surface, root_x, root_y)` logical
+    /// offsets: the same walk `present_tree`/`blend_subtree` composite in, flattened for occlusion.
+    fn collect_occlusion_layers(&self, root: &WlSurface) -> Vec<(WlSurface, i32, i32)> {
+        let mut layers = Vec::new();
+        self.collect_subtree_offsets(root, 0, 0, &mut layers);
+        for (popup, ox, oy) in self.collect_popups_for_root(root) {
+            self.collect_subtree_offsets(&popup, ox, oy, &mut layers);
+        }
+        layers
+    }
+
+    fn collect_subtree_offsets(
+        &self,
+        surface: &WlSurface,
+        x: i32,
+        y: i32,
+        out: &mut Vec<(WlSurface, i32, i32)>,
+    ) {
+        out.push((surface.clone(), x, y));
+        for child in get_children(surface) {
+            if &child == surface {
+                continue;
+            }
+            let (cx, cy) = with_states(&child, |states| {
+                let loc = states.cached_state.get::<SubsurfaceCachedState>().current().location;
+                (loc.x, loc.y)
+            });
+            self.collect_subtree_offsets(&child, x + cx, y + cy, out);
+        }
+    }
+
+    /// Whether `up`'s committed opaque region — translated from its surface-local space to root space by
+    /// `up`'s offset `(ux, uy)` — provably covers the root-space logical rectangle `(rx, ry, rw, rh)`.
+    /// Opaque regions, like the rectangle, are in upright logical surface space (post buffer-transform /
+    /// scale / viewport), so no per-transform remap is needed here. `None` opaque region proves nothing.
+    pub(crate) fn opaque_covers_root_rect(
+        &self,
+        up: &WlSurface,
+        ux: i32,
+        uy: i32,
+        rx: i32,
+        ry: i32,
+        rw: i32,
+        rh: i32,
+    ) -> bool {
+        with_states(up, |states| {
+            match states.cached_state.get::<SurfaceAttributes>().current().opaque_region.as_ref() {
+                Some(region) => region_covers_rect(region, rx - ux, ry - uy, rw, rh),
+                None => false,
+            }
+        })
+    }
+
+    /// A surface's on-screen logical size `(w, h)` — the size half of [`Self::snapshot_surface`] without
+    /// cloning any pixels, so it is cheap to call per layer during the occlusion scan. `None` when the
+    /// surface has no committed buffer yet.
+    pub(crate) fn surface_logical_size(&self, surface: &WlSurface) -> Option<(i32, i32)> {
+        let sid = self.surface_id(surface);
+        let buffer = self.buffers.get(&sid)?;
+        let (buffer_scale, dst, src, buffer_transform) = with_states(surface, |states| {
+            let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+            let cur = attrs.current();
+            let scale = cur.buffer_scale.max(1);
+            let transform = cur.buffer_transform;
+            let mut vp = states.cached_state.get::<ViewportCachedState>();
+            let cur_vp = vp.current();
+            let src = cur_vp.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h));
+            (scale, cur_vp.size(), src, transform)
+        });
+        // dmabuf/IOSurface: the texture dimensions come straight off the dmabuf.
+        if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
+            use smithay::backend::allocator::Buffer as _;
+            let (tw, th) = (dmabuf.width() as i32, dmabuf.height() as i32);
+            if tw > 0 && th > 0 {
+                let (uw, uh) = transform_swaps(tw, th, buffer_transform);
+                let (lw, lh, _) = logical_size_and_uv(dst, src, uw, uh, buffer_scale);
+                return Some((lw, lh));
+            }
+        }
+        let cache = self.repacks.get(&sid)?;
+        let (uw, uh) = transform_swaps(cache.tex_w, cache.tex_h, buffer_transform);
+        let (lw, lh, _) = logical_size_and_uv(dst, src, uw, uh, buffer_scale);
+        Some((lw, lh))
     }
 
     /// Clear the dirty flag for every surface in `root`'s presented tree (called after a successful
@@ -1143,6 +1273,55 @@ fn logical_region_accepts(
     y: f64,
 ) -> bool {
     region.is_none_or(|region| region.contains((x.floor() as i32, y.floor() as i32)))
+}
+
+/// Upright (post buffer-transform) texture dimensions: 90°/270° (and their flips) swap width/height.
+fn transform_swaps(w: i32, h: i32, transform: Transform) -> (i32, i32) {
+    match transform {
+        Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270 => (h, w),
+        _ => (w, h),
+    }
+}
+
+/// Conservatively decide whether a `wl_region` (a set of add/subtract rectangles in the same logical
+/// coordinate space as `(rx, ry, rw, rh)`) provably covers the ENTIRE rectangle. Returns `true` only when
+/// some `Add` rectangle fully contains the target AND no `Subtract` rectangle intersects it — so a caller
+/// may safely treat the rectangle as opaque/occluded. Any doubt (a partial add, a touching subtract, an
+/// empty region) returns `false`, so occlusion is never over-reported. An empty target rectangle is not
+/// covered.
+pub(crate) fn region_covers_rect(
+    region: &smithay::wayland::compositor::RegionAttributes,
+    rx: i32,
+    ry: i32,
+    rw: i32,
+    rh: i32,
+) -> bool {
+    use smithay::wayland::compositor::RectangleKind;
+    if rw <= 0 || rh <= 0 {
+        return false;
+    }
+    let (r_x1, r_y1) = (rx + rw, ry + rh);
+    let mut covered = false;
+    for (kind, rect) in &region.rects {
+        let (ax, ay) = (rect.loc.x, rect.loc.y);
+        let (ax1, ay1) = (ax + rect.size.w, ay + rect.size.h);
+        let contains = ax <= rx && ay <= ry && ax1 >= r_x1 && ay1 >= r_y1;
+        let intersects = ax < r_x1 && ax1 > rx && ay < r_y1 && ay1 > ry;
+        match kind {
+            RectangleKind::Add => {
+                if contains {
+                    covered = true;
+                }
+            }
+            // A subtract that touches the target punches a hole in its proven-opaque area.
+            RectangleKind::Subtract => {
+                if intersects {
+                    return false;
+                }
+            }
+        }
+    }
+    covered
 }
 
 fn visibility_allows_present(visibility: dd_display::present::SurfaceVisibility) -> bool {

@@ -1601,3 +1601,354 @@ mod zero_copy_release_tests {
         assert_eq!(state.render_budget_totals().fds, 0, "plane fds refund exactly");
     }
 }
+
+#[cfg(test)]
+mod region_occlusion_and_pacing_tests {
+    //! ROW proofs for `compositor_honors_input_and_opaque_regions_through_surface_transforms` (opaque-
+    //! region occlusion + input regions through a buffer transform) and
+    //! `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing` (host-occlusion /
+    //! minimize frame-pacing state machine). CPU path, PngPresenter/NullPresenter; the mac AppKit observer
+    //! (`MetalPresenter::surface_visibility` reading `NSWindowOcclusionState`) is mac-gated and drives the
+    //! same `note_host_window_visibility` transitions proven here.
+
+    use super::*;
+    use crate::handlers::compositor::region_covers_rect;
+    use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
+    use dd_display::wire::{Conn, Message};
+    use smithay::reexports::wayland_server::Display;
+    use smithay::utils::{Logical, Rectangle};
+    use smithay::wayland::compositor::{RectangleKind, RegionAttributes};
+    use std::os::unix::io::{FromRawFd, RawFd};
+
+    struct P {
+        frames: u32,
+    }
+    impl Presenter for P {
+        fn present(&mut self, _s: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
+            self.frames += 1;
+            Ok(PresentOutcome::Delivered { serial: self.frames as u64, timing: None })
+        }
+        fn frame_count(&self) -> u32 {
+            self.frames
+        }
+    }
+
+    fn socketpair() -> (RawFd, RawFd) {
+        let mut sv = [0i32; 2];
+        assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) }, 0);
+        for fd in sv {
+            unsafe {
+                let fl = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
+            }
+        }
+        (sv[0], sv[1])
+    }
+
+    struct Cli {
+        conn: Conn,
+        next: u32,
+        globals: HashMap<String, u32>,
+        events: Vec<(u32, u16, Vec<u8>)>,
+    }
+    impl Cli {
+        fn new(fd: RawFd) -> Cli {
+            Cli { conn: Conn::new(fd), next: 2, globals: HashMap::new(), events: Vec::new() }
+        }
+        fn alloc(&mut self) -> u32 {
+            let id = self.next;
+            self.next += 1;
+            id
+        }
+        fn drain(&mut self) {
+            loop {
+                match self.conn.fill() {
+                    Ok(0) | Ok(-1) | Err(_) => break,
+                    _ => {}
+                }
+            }
+            while let Some(m) = self.conn.next_message() {
+                self.events.push((m.object, m.opcode, m.body.to_vec()));
+                if m.object == 2 && m.opcode == 0 {
+                    let mut r = m.reader();
+                    let name = r.u32();
+                    let iface = r.string();
+                    let _ = r.u32();
+                    self.globals.entry(iface).or_insert(name);
+                }
+            }
+        }
+        fn bind(&mut self, iface: &str, ver: u32) -> u32 {
+            let id = self.alloc();
+            let name = self.globals[iface];
+            self.conn.send(&Message::new(2, 0).u32(name).string(iface).u32(ver).u32(id));
+            id
+        }
+        fn saw(&self, object: u32, opcode: u16) -> bool {
+            self.events.iter().any(|(o, op, _)| *o == object && *op == opcode)
+        }
+        fn xdg_configure_serial(&self, xdg: u32) -> Option<u32> {
+            self.events.iter().rev().find(|(o, op, _)| *o == xdg && *op == 0)
+                .map(|(_, _, b)| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+        }
+    }
+
+    struct Harness {
+        display: Display<DdState>,
+        state: DdState,
+        c: Cli,
+        comp: u32,
+        subc: u32,
+        shm: u32,
+        wm: u32,
+    }
+    impl Harness {
+        fn new() -> Harness {
+            let display: Display<DdState> = Display::new().unwrap();
+            let mut dh = display.handle();
+            let state = DdState::new(dh.clone(), Box::new(P { frames: 0 }));
+            let (cfd, sfd) = socketpair();
+            dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(sfd) }, Arc::new(ClientState::default())).unwrap();
+            let mut h = Harness { display, state, c: Cli::new(cfd), comp: 0, subc: 0, shm: 0, wm: 0 };
+            let reg = h.c.alloc();
+            h.c.conn.send(&Message::new(1, 1).u32(reg));
+            h.pump();
+            h.comp = h.c.bind("wl_compositor", 4);
+            h.subc = h.c.bind("wl_subcompositor", 1);
+            h.shm = h.c.bind("wl_shm", 1);
+            h.wm = h.c.bind("xdg_wm_base", 1);
+            h.pump();
+            h
+        }
+        fn pump(&mut self) {
+            self.c.conn.flush().unwrap();
+            self.display.dispatch_clients(&mut self.state).unwrap();
+            self.display.flush_clients().unwrap();
+            self.c.drain();
+        }
+        fn shm_buffer(&mut self, w: i32, h: i32) -> u32 {
+            let stride = w * 4;
+            let size = (stride * h) as usize;
+            let fd = dd_display::keymap::anon_fd_with(&vec![0x30u8; size]).unwrap();
+            let pool = self.c.alloc();
+            self.c.conn.send(&Message::new(self.shm, 0).u32(pool).u32(size as u32));
+            self.c.conn.queue_fd(fd);
+            let buffer = self.c.alloc();
+            self.c.conn.send(&Message::new(pool, 0).u32(buffer).i32(0).i32(w).i32(h).i32(stride).u32(1));
+            self.pump();
+            unsafe { libc::close(fd) };
+            buffer
+        }
+        /// Map a toplevel and complete the configure/ack handshake. Returns (surface, xdg, toplevel).
+        fn map_toplevel(&mut self) -> (u32, u32, u32) {
+            let surf = self.c.alloc();
+            self.c.conn.send(&Message::new(self.comp, 0).u32(surf));
+            let xdg = self.c.alloc();
+            self.c.conn.send(&Message::new(self.wm, 2).u32(xdg).u32(surf));
+            let top = self.c.alloc();
+            self.c.conn.send(&Message::new(xdg, 1).u32(top));
+            self.c.conn.send(&Message::new(surf, 6));
+            self.pump();
+            let serial = self.c.xdg_configure_serial(xdg).expect("configure serial");
+            self.c.conn.send(&Message::new(xdg, 4).u32(serial));
+            self.pump();
+            (surf, xdg, top)
+        }
+        fn opaque_region(&mut self, surf: u32, x: i32, y: i32, w: i32, h: i32) {
+            let region = self.c.alloc();
+            self.c.conn.send(&Message::new(self.comp, 1).u32(region)); // create_region
+            self.c.conn.send(&Message::new(region, 1).i32(x).i32(y).i32(w).i32(h)); // region.add
+            self.c.conn.send(&Message::new(surf, 4).u32(region)); // set_opaque_region
+        }
+        fn surface(&self, sid: u32) -> WlSurface {
+            self.state.surface_resources.get(&sid).cloned().expect("surface registered")
+        }
+    }
+
+    /// The conservative coverage predicate: an Add rect must fully contain the target, and any touching
+    /// Subtract punches a hole. Pure, so it proves the occlusion math independent of the wire.
+    #[test]
+    fn region_covers_rect_is_conservative() {
+        let r = |kind, x, y, w, h| (kind, Rectangle::<i32, Logical>::from_loc_and_size((x, y), (w, h)));
+        let full = RegionAttributes { rects: vec![r(RectangleKind::Add, 0, 0, 32, 32)] };
+        assert!(region_covers_rect(&full, 0, 0, 32, 32), "add rect exactly covers");
+        assert!(region_covers_rect(&full, 4, 4, 8, 8), "add rect covers an interior rect");
+        assert!(!region_covers_rect(&full, -1, 0, 32, 32), "a rect poking outside is not covered");
+        assert!(!region_covers_rect(&full, 0, 0, 0, 0), "an empty rect is never covered");
+        let holed = RegionAttributes {
+            rects: vec![r(RectangleKind::Add, 0, 0, 32, 32), r(RectangleKind::Subtract, 10, 10, 4, 4)],
+        };
+        assert!(!region_covers_rect(&holed, 0, 0, 32, 32), "a subtract touching the target breaks coverage");
+        assert!(region_covers_rect(&holed, 0, 0, 8, 8), "a rect clear of the hole is still covered");
+        let partial = RegionAttributes { rects: vec![r(RectangleKind::Add, 0, 0, 16, 32)] };
+        assert!(!region_covers_rect(&partial, 0, 0, 32, 32), "a partial add does not cover the whole");
+    }
+
+    /// ROW: an opaque subsurface occludes the base beneath it — damaging only the occluded base does not
+    /// force a present (`tree_dirty` == false); damaging the un-occluded overlay does.
+    #[test]
+    fn opaque_overlay_occludes_base_damage() {
+        let mut h = Harness::new();
+        let (base, _bx, _bt) = h.map_toplevel();
+        let bbuf = h.shm_buffer(32, 32);
+        h.c.conn.send(&Message::new(base, 1).u32(bbuf).i32(0).i32(0)); // attach base
+
+        // A subsurface exactly over the base, declared fully opaque.
+        let child = h.c.alloc();
+        h.c.conn.send(&Message::new(h.comp, 0).u32(child)); // create_surface
+        let sub = h.c.alloc();
+        h.c.conn.send(&Message::new(h.subc, 1).u32(sub).u32(child).u32(base)); // get_subsurface
+        h.opaque_region(child, 0, 0, 32, 32);
+        let cbuf = h.shm_buffer(32, 32);
+        h.c.conn.send(&Message::new(child, 1).u32(cbuf).i32(0).i32(0)); // attach child
+        h.c.conn.send(&Message::new(child, 6)); // commit child (sync)
+        h.c.conn.send(&Message::new(base, 6)); // commit base -> applies child
+        h.pump();
+
+        let base_res = h.surface(1);
+        assert_eq!(h.state.surface_logical_size(&base_res), Some((32, 32)), "base logical size");
+        assert_eq!(h.state.surface_logical_size(&h.surface(2)), Some((32, 32)), "child logical size");
+
+        // Only the base changed, and it is fully hidden under the opaque child: no visible change.
+        h.state.dirty.clear();
+        h.state.dirty.insert(1);
+        assert!(!h.state.tree_dirty(&base_res), "base damage under a fully-opaque overlay is occluded");
+
+        // The overlay itself changed: visible → dirty.
+        h.state.dirty.clear();
+        h.state.dirty.insert(2);
+        assert!(h.state.tree_dirty(&base_res), "overlay damage is never occluded");
+
+        // Both dirty → dirty (the overlay's change shows).
+        h.state.dirty.clear();
+        h.state.dirty.insert(1);
+        h.state.dirty.insert(2);
+        assert!(h.state.tree_dirty(&base_res), "a visible overlay change keeps the tree dirty");
+    }
+
+    /// ROW: a NON-opaque (or absent-opaque-region) overlay does NOT occlude — the base's damage stays
+    /// visible. Proves occlusion is driven by the committed opaque region, not mere overlap.
+    #[test]
+    fn non_opaque_overlay_does_not_occlude() {
+        let mut h = Harness::new();
+        let (base, _bx, _bt) = h.map_toplevel();
+        let bbuf = h.shm_buffer(32, 32);
+        h.c.conn.send(&Message::new(base, 1).u32(bbuf).i32(0).i32(0));
+        let child = h.c.alloc();
+        h.c.conn.send(&Message::new(h.comp, 0).u32(child));
+        let sub = h.c.alloc();
+        h.c.conn.send(&Message::new(h.subc, 1).u32(sub).u32(child).u32(base));
+        // NO opaque region set on the child.
+        let cbuf = h.shm_buffer(32, 32);
+        h.c.conn.send(&Message::new(child, 1).u32(cbuf).i32(0).i32(0));
+        h.c.conn.send(&Message::new(child, 6));
+        h.c.conn.send(&Message::new(base, 6));
+        h.pump();
+
+        let base_res = h.surface(1);
+        h.state.dirty.clear();
+        h.state.dirty.insert(1);
+        assert!(h.state.tree_dirty(&base_res), "base damage under a non-opaque overlay is still visible");
+    }
+
+    /// ROW: input regions are honored in UPRIGHT LOGICAL surface space (post buffer-transform). A 90°
+    /// buffer swaps the surface's logical width/height, and both the input-region hit test and the
+    /// bounds test use that logical geometry — not raw buffer pixels. Also proves the infinite (absent)
+    /// input-region default accepts the whole surface.
+    #[test]
+    fn input_regions_apply_through_buffer_transform() {
+        let mut h = Harness::new();
+        let (surf, _x, _t) = h.map_toplevel();
+        // Buffer 40x20; a 90° transform makes the upright logical surface 20 wide x 40 tall.
+        let buf = h.shm_buffer(40, 20);
+        h.c.conn.send(&Message::new(surf, 7).u32(1)); // set_buffer_transform(90)
+        h.c.conn.send(&Message::new(surf, 1).u32(buf).i32(0).i32(0)); // attach
+        h.c.conn.send(&Message::new(surf, 6)); // commit
+        h.pump();
+
+        let root = h.surface(1);
+        assert_eq!(h.state.surface_logical_size(&root), Some((20, 40)), "90° transform swaps logical w/h");
+
+        // Infinite (no) input region: any point inside the LOGICAL bounds is accepted.
+        assert!(h.state.input_surface_at(&root, 5.0, 5.0).is_some(), "infinite input region accepts inside");
+        assert!(h.state.input_surface_at(&root, 5.0, 35.0).is_some(), "logical height is 40 (transformed)");
+        // A point past the LOGICAL width (20) is out of bounds — even though the raw buffer is 40 wide.
+        assert!(h.state.input_surface_at(&root, 25.0, 5.0).is_none(), "bounds use transformed logical width");
+
+        // Now restrict the input region to the left logical half and prove the hit test respects it.
+        let region = h.c.alloc();
+        h.c.conn.send(&Message::new(h.comp, 1).u32(region));
+        h.c.conn.send(&Message::new(region, 1).i32(0).i32(0).i32(10).i32(40)); // add left half (logical)
+        h.c.conn.send(&Message::new(surf, 5).u32(region)); // set_input_region
+        h.c.conn.send(&Message::new(surf, 6));
+        h.pump();
+        assert!(h.state.input_surface_at(&root, 5.0, 20.0).is_some(), "inside the input region hits");
+        assert!(h.state.input_surface_at(&root, 15.0, 20.0).is_none(), "outside the input region misses");
+    }
+
+    /// ROW: host occlusion / minimize frame-pacing state machine. A fully occluded (or minimized) window
+    /// PAUSES its guest — the committed `wl_surface.frame` callback is withheld and no present happens,
+    /// but the last frame + callback are retained. Revealing the window RESUMES: the retained content is
+    /// presented once and the retained callback fires.
+    #[test]
+    fn host_occlusion_pauses_and_reveal_resumes_frame_pacing() {
+        let mut h = Harness::new();
+        let (surf, _x, _t) = h.map_toplevel();
+
+        // Frame 1: visible commit with a frame callback → presented, callback fires.
+        let buf = h.shm_buffer(16, 16);
+        let cb1 = h.c.alloc();
+        h.c.conn.send(&Message::new(surf, 3).u32(cb1)); // frame(cb1)
+        h.c.conn.send(&Message::new(surf, 1).u32(buf).i32(0).i32(0));
+        h.c.conn.send(&Message::new(surf, 2).i32(0).i32(0).i32(16).i32(16));
+        h.c.conn.send(&Message::new(surf, 6));
+        h.pump();
+        assert!(h.c.saw(cb1, 0), "a visible frame fires its wl_surface.frame callback");
+        let frames_visible = h.state.presenter.frame_count();
+        assert!(frames_visible >= 1, "the visible frame was presented");
+
+        // Host reports the native window fully occluded.
+        assert!(h.state.note_host_window_visibility(1, /*occluded*/ true, /*minimized*/ false));
+
+        // A commit while occluded: request a callback, damage the surface. It must NOT present and the
+        // callback must NOT fire — the guest is paused.
+        let buf2 = h.shm_buffer(16, 16);
+        let cb2 = h.c.alloc();
+        h.c.conn.send(&Message::new(surf, 3).u32(cb2));
+        h.c.conn.send(&Message::new(surf, 1).u32(buf2).i32(0).i32(0));
+        h.c.conn.send(&Message::new(surf, 2).i32(0).i32(0).i32(16).i32(16));
+        h.c.conn.send(&Message::new(surf, 6));
+        h.pump();
+        assert!(!h.c.saw(cb2, 0), "an occluded window withholds the frame callback (guest paused)");
+        assert_eq!(h.state.presenter.frame_count(), frames_visible, "no present happens while occluded");
+
+        // Reveal: the retained frame is presented once and the retained callback fires — guest resumes.
+        assert!(h.state.note_host_window_visibility(1, false, false));
+        h.pump();
+        assert!(h.c.saw(cb2, 0), "revealing the window fires the retained frame callback (guest resumes)");
+        assert!(h.state.presenter.frame_count() > frames_visible, "reveal presents the retained content once");
+    }
+
+    /// ROW: the client protocol `xdg_toplevel.set_minimized` hides the window and pauses pacing (the
+    /// compositor's own visibility state), and a host reveal restores it.
+    #[test]
+    fn protocol_minimize_hides_then_host_reveal_restores() {
+        let mut h = Harness::new();
+        let (surf, _x, top) = h.map_toplevel();
+        let buf = h.shm_buffer(16, 16);
+        h.c.conn.send(&Message::new(surf, 1).u32(buf).i32(0).i32(0));
+        h.c.conn.send(&Message::new(surf, 6));
+        h.pump();
+        let root = h.surface(1);
+        assert!(h.state.root_is_visible(&root), "mapped toplevel is visible");
+
+        // xdg_toplevel.set_minimized (opcode 13).
+        h.c.conn.send(&Message::new(top, 13));
+        h.pump();
+        assert!(!h.state.root_is_visible(&root), "set_minimized hides the window");
+
+        // Host reveal restores visibility.
+        assert!(h.state.note_host_window_visibility(1, false, false));
+        assert!(h.state.root_is_visible(&root), "host reveal restores visibility");
+    }
+}

@@ -1224,6 +1224,28 @@ impl Presenter for MetalPresenter {
             .map(|w| (w.size.0 as i32, w.size.1 as i32))
     }
 
+    /// AppKit occlusion → compositor frame pacing (mac-gated; NOT exercised on the Linux dev host — the
+    /// `DdState` pacing transitions it drives are proven headlessly via `note_host_window_visibility`).
+    /// A window whose `NSWindowOcclusionState` lacks `Visible` is FULLY hidden (behind other windows or
+    /// miniaturized into the Dock), so its guest should stop rendering: the compositor reads this and
+    /// pauses the surface's `wl_surface.frame` callbacks (retaining the last frame) until the window is
+    /// revealed, at which point the retained frame is presented and the callbacks fire so the guest
+    /// resumes. A client-driven `xdg_toplevel.set_minimized` already sets `Minimized` on the compositor's
+    /// own visibility map, which takes precedence over this host signal. Mirrors the same
+    /// `occlusionState().contains(Visible)` check the present loop uses to gate drawable vending.
+    fn surface_visibility(&self, sid: u32) -> Option<crate::present::SurfaceVisibility> {
+        let win = self.wins.get(&sid)?;
+        let visible = win
+            .window
+            .occlusionState()
+            .contains(NSWindowOcclusionState::Visible);
+        Some(if visible {
+            crate::present::SurfaceVisibility::Visible
+        } else {
+            crate::present::SurfaceVisibility::Occluded
+        })
+    }
+
     fn dump_pngs(&self, dir: &str) -> usize {
         let _ = std::fs::create_dir_all(dir);
         let mut n = 0;
