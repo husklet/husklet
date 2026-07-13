@@ -5,11 +5,12 @@
 //!   * [`crate::mock::RecordingBackend`] — records the replayed command sequence (tests, this host).
 //!   * [`crate::software::SoftwareBackend`] — a real CPU executor (buffers/textures/clears/copies +
 //!     readback), the standing correctness fallback; runs headless here.
-//!   * `MetalBackend` — direct Metal on an Apple-silicon Mac host (`--features metal`, mac-only). It
-//!     should be built on the SAME `MTLDevice` + `MTLCommandQueue` the display renderer owns
-//!     (`dd_display::metal::MetalCtx`, constructible via `MetalCtx::from_device`), so a guest's rendered
-//!     `MTLTexture`/IOSurface can be composited by `dd-display` with no cross-device copy (GPU rung 2).
-//!   * `CudaBackend` — a native Vulkan+CUDA-interop executor on an NVIDIA host (`--features cuda`).
+//!   * `dd_gpu_wgpu::WgpuBackend` — real Metal on an Apple-silicon Mac host, in the SEPARATE
+//!     `dd-gpu-wgpu` crate (mac-only; built via `make mac-crates`). It runs on the SAME `MTLDevice` +
+//!     `MTLCommandQueue` the display renderer owns (`dd_display::metal::MetalCtx`, constructible via
+//!     `MetalCtx::from_device`), so a guest's rendered `MTLTexture`/IOSurface can be composited by
+//!     `dd-display` with no cross-device copy (GPU rung 2).
+//!   * a future `CudaBackend` — a native Vulkan+CUDA-interop executor on an NVIDIA host.
 //!
 //! Backends receive **guest-assigned ids** and keep their own id→object map (a [`crate::id::ResourceTable`]
 //! per kind is provided for that). The trait is intentionally *not* typed in terms of `ash`/Metal so it

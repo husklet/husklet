@@ -8,7 +8,8 @@
 //! ## What is real here vs designed-only
 //! This crate is **pure `std`, no serde, hand-rolled wire** — the `dd-term-core` discipline — so it
 //! `cargo test`s HEADLESS on the Linux dev box with no GPU/display/CUDA and no crates.io. The pieces
-//! that need a real GPU (`MetalBackend`, `CudaBackend`) are feature-gated and built elsewhere; here we
+//! that need a real GPU (`dd-gpu-wgpu`'s real-Metal `WgpuBackend`, a future `CudaBackend`) live in
+//! separate crates; here we
 //! prototype and test the IR, the wire round-trip, the resource table, a recording mock backend, a real
 //! CPU software backend (clear/copy/readback), the command ring, and the CUDA→IR translation shim.
 //!

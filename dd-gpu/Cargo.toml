@@ -6,10 +6,10 @@
 # `dd-term-core` discipline — so the IR + wire round-trip + handle table + the mock/software backends
 # `cargo test` HEADLESS on the Linux dev host with NO GPU, NO display, and NO crates.io access.
 #
-# The real executors are `#[cfg]`/feature gated and built elsewhere:
-#   * `MetalBackend`  — macOS host (`mac bash -lc "nix develop ./nix -c cargo build -p dd-gpu --features metal"`)
-#   * `CudaBackend`   — an NVIDIA host (unavailable to either side today; secondary "CUDA host" case)
-# Neither can build on this box; only the pure-`std` core below does.
+# The real host-GPU executors live in SEPARATE crates, not behind a feature of this one:
+#   * `dd-gpu-wgpu`'s `WgpuBackend` — real Metal on a macOS host (built via `make mac-crates`).
+#   * a future `CudaBackend` — an NVIDIA host (unavailable to either side today; secondary "CUDA host" case).
+# Only the pure-`std` core below builds on this box.
 [package]
 name = "dd-gpu"
 version = "0.1.0"
@@ -23,9 +23,6 @@ path = "src/lib.rs"
 
 [features]
 default = []
-# Heavy, host-only executors — NEVER part of the default build (no GPU/crates here).
-metal = []   # gates the direct-Metal executor on the macOS host
-cuda = []    # gates the NVIDIA/CUDA host executor
 # The dd-jit runtime-integration seam (`src/integration.rs`): the dd-gpu-side implementor of dd-jit's
 # generic DeviceProvider. Off by default so the pure-`std`, headless IR/wire core still tests with no
 # extra deps; dd-cli turns it on to wire a GPU into a container launch.
