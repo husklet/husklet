@@ -132,6 +132,63 @@ pub struct Texture {
     pub gen: u64,
 }
 
+/// An ES3 sampler object (`glGenSamplers`/`glBindSampler`/`glSamplerParameter*`). Carries the full
+/// per-object filter/wrap/LOD/compare state so `glGetSamplerParameter*` reflects what was set, rather
+/// than the old no-op that always returned 0. Defaults follow the ES 3.0 sampler-state table (6.10).
+#[derive(Clone, Copy)]
+pub struct SamplerObj {
+    pub min_filter: i32,
+    pub mag_filter: i32,
+    pub wrap_s: i32,
+    pub wrap_t: i32,
+    pub wrap_r: i32,
+    pub min_lod: f32,
+    pub max_lod: f32,
+    pub compare_mode: i32,
+    pub compare_func: i32,
+}
+
+impl Default for SamplerObj {
+    fn default() -> Self {
+        SamplerObj {
+            min_filter: 0x2702, // GL_NEAREST_MIPMAP_LINEAR
+            mag_filter: 0x2601, // GL_LINEAR
+            wrap_s: 0x2901,     // GL_REPEAT
+            wrap_t: 0x2901,
+            wrap_r: 0x2901,
+            min_lod: -1000.0,
+            max_lod: 1000.0,
+            compare_mode: 0,      // GL_NONE
+            compare_func: 0x0203, // GL_LEQUAL
+        }
+    }
+}
+
+/// An ES3 query object (`glGenQueries`/`glBeginQuery`/`glEndQuery`). Tracks the typed target it was
+/// first used with, whether it is currently active, and the result plus the submission serial at
+/// `glEndQuery` so `GL_QUERY_RESULT_AVAILABLE` becomes true only once that submission has completed
+/// (the same serial contract the sync objects use). The occlusion/primitive count itself is not run by
+/// the executor yet, so `result` is a truthful 0; the lifecycle and availability are real.
+#[derive(Clone, Copy)]
+pub struct QueryObj {
+    /// The target this query name was bound to on its first `glBeginQuery` (0 = never used).
+    pub target: u32,
+    /// Currently inside a begin/end pair.
+    pub active: bool,
+    /// A result has been produced by a completed `glEndQuery`.
+    pub ended: bool,
+    /// Result value (samples passed / primitives written). No backend counter yet ⇒ truthful 0.
+    pub result: u32,
+    /// Submission serial captured at `glEndQuery`; the result is available once completion catches up.
+    pub serial: u64,
+}
+
+impl Default for QueryObj {
+    fn default() -> Self {
+        QueryObj { target: 0, active: false, ended: false, result: 0, serial: 0 }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct Attr {
     pub enabled: bool,
@@ -276,6 +333,18 @@ pub struct GlState {
     pub samp_seq: u32,
     pub query_seq: u32,
     pub xfb_seq: u32,
+    /// Sampler-object state (real ES3 objects). `samp_reserved` holds names handed out by
+    /// `glGenSamplers` that have not yet been instantiated (first bind / first param). `samplers`
+    /// holds created objects. `samp_binding[unit]` is the sampler bound to each texture unit (0 = none).
+    pub samp_reserved: std::collections::HashSet<u32>,
+    pub samplers: std::collections::HashMap<u32, SamplerObj>,
+    pub samp_binding: std::collections::HashMap<u32, u32>,
+    /// Query-object state (real ES3 objects). `query_reserved` holds names from `glGenQueries` not yet
+    /// used; `queries` holds created objects; `active_query[target]` is the query currently inside a
+    /// begin/end pair for that target (occlusion / transform-feedback), 0 or absent = none active.
+    pub query_reserved: std::collections::HashSet<u32>,
+    pub queries: std::collections::HashMap<u32, QueryObj>,
+    pub active_query: std::collections::HashMap<u32, u32>,
 
     pub tex_unit: [u32; 8], // texture bound per active unit (GL_TEXTURE_2D)
     pub active_unit: usize,
@@ -356,6 +425,12 @@ impl Default for GlState {
             samp_seq: 1,
             query_seq: 1,
             xfb_seq: 1,
+            samp_reserved: std::collections::HashSet::new(),
+            samplers: std::collections::HashMap::new(),
+            samp_binding: std::collections::HashMap::new(),
+            query_reserved: std::collections::HashSet::new(),
+            queries: std::collections::HashMap::new(),
+            active_query: std::collections::HashMap::new(),
             tex_unit: [0; 8],
             active_unit: 0,
             unpack_alignment: 4,

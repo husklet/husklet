@@ -49,6 +49,34 @@ the oracle, breaking apps that query `glGetError` after these): UBO binding (`gl
 params (`glBindSampler`/`glSamplerParameter*`), query/transform-feedback begin/end/bind, and
 `glProgramBinary`/`glShaderBinary`.
 
+## ES3 query & sampler objects — real object lifecycle (this pass)
+
+Two `full`-classified ES3 object families whose bodies were previously no-ops (mirroring gl_shim.c's
+own no-ops: begin/end/param did nothing, and every getter returned 0) now carry **real client-side
+object state**. Both are IR-free — no `Cmd`/`Enc` is emitted for samplers or queries — so the 8
+byte-parity gates and the frame IR are byte-identical; the change is purely observable object semantics
+through the public API (mirrored by `tests/es3_objects.rs`). Counts are unchanged (these were already
+`full`).
+
+- **Sampler objects** (`glGenSamplers`/`glBindSampler`/`glSamplerParameter{i,f,iv,fv}`/
+  `glGetSamplerParameter{iv,fv}`/`glDeleteSamplers`/`glIsSampler`): each object stores the full ES 3.0
+  sampler state (min/mag filter, wrap S/T/R, min/max LOD, compare mode/func) initialized to the spec
+  defaults (table 6.10); a set value round-trips through the getter. Names reserve lazily (a name from
+  `glGenSamplers` is not yet an object until first bound/parameterized — `glIsSampler` false until
+  then), `glDeleteSamplers` unbinds from every unit, and validation is atomic: an out-of-range enum is
+  `GL_INVALID_ENUM` (object untouched), and any op on a non-generated name is `GL_INVALID_OPERATION`
+  with the output preserved.
+- **Query objects** (`glGenQueries`/`glBeginQuery`/`glEndQuery`/`glGetQueryiv`/`glGetQueryObjectuiv`/
+  `glDeleteQueries`/`glIsQuery`): typed-target lifecycle enforced — a query name binds to exactly one
+  target (`GL_ANY_SAMPLES_PASSED`, `…_CONSERVATIVE`, `GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN`) and
+  cannot be reused with another; only one query is active per target (`GL_CURRENT_QUERY` reports it);
+  nested begin, id 0, or an ungenerated name is `GL_INVALID_OPERATION`; an invalid target is
+  `GL_INVALID_ENUM`. `glEndQuery` captures the submission serial (flushing first, exactly like a fence),
+  so `GL_QUERY_RESULT_AVAILABLE` flips true only once completion catches up, and reading
+  `GL_QUERY_RESULT` blocks for completion first. The counted result itself is a **truthful 0** (the
+  executor has no occlusion/primitive counter yet) rather than a fabricated value — the honest residual
+  for this row is the backend counter, not the lifecycle.
+
 ## Object / context model & error lifecycle (audit §9.3)
 
 The GL/EGL object model is a typed share-group design rather than one process-global mutex + a sentinel

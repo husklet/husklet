@@ -77,6 +77,31 @@ pub const GL_LINEAR_MIPMAP_LINEAR: u32 = 0x2703;
 pub const GL_REPEAT: u32 = 0x2901;
 pub const GL_CLAMP_TO_EDGE: u32 = 0x812F;
 pub const GL_MIRRORED_REPEAT: u32 = 0x8370;
+// ES3 sampler-object parameters (shared pname space with texture parameters)
+pub const GL_TEXTURE_WRAP_R: u32 = 0x8072;
+pub const GL_TEXTURE_MIN_LOD: u32 = 0x813A;
+pub const GL_TEXTURE_MAX_LOD: u32 = 0x813B;
+pub const GL_TEXTURE_COMPARE_MODE: u32 = 0x884C;
+pub const GL_TEXTURE_COMPARE_FUNC: u32 = 0x884D;
+pub const GL_COMPARE_REF_TO_TEXTURE: u32 = 0x884E;
+// depth compare functions (also stencil funcs)
+pub const GL_NEVER: u32 = 0x0200;
+pub const GL_LESS: u32 = 0x0201;
+pub const GL_EQUAL: u32 = 0x0202;
+pub const GL_LEQUAL: u32 = 0x0203;
+pub const GL_GREATER: u32 = 0x0204;
+pub const GL_NOTEQUAL: u32 = 0x0205;
+pub const GL_GEQUAL: u32 = 0x0206;
+pub const GL_ALWAYS: u32 = 0x0207;
+pub const GL_NONE: u32 = 0;
+
+// ES3 occlusion / transform-feedback query objects
+pub const GL_ANY_SAMPLES_PASSED: u32 = 0x8C2F;
+pub const GL_ANY_SAMPLES_PASSED_CONSERVATIVE: u32 = 0x8D6A;
+pub const GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN: u32 = 0x8C88;
+pub const GL_CURRENT_QUERY: u32 = 0x8865;
+pub const GL_QUERY_RESULT: u32 = 0x8866;
+pub const GL_QUERY_RESULT_AVAILABLE: u32 = 0x8867;
 
 // glPixelStorei pnames
 pub const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;

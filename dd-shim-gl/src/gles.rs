@@ -601,6 +601,7 @@ pub extern "C" fn glGenSamplers(n: i32, out: *mut u32) {
     for k in 0..n as usize {
         let id = s.samp_seq;
         s.samp_seq += 1;
+        s.samp_reserved.insert(id);
         unsafe { *out.add(k) = id };
     }
 }
@@ -614,6 +615,7 @@ pub extern "C" fn glGenQueries(n: i32, out: *mut u32) {
     for k in 0..n as usize {
         let id = s.query_seq;
         s.query_seq += 1;
+        s.query_reserved.insert(id);
         unsafe { *out.add(k) = id };
     }
 }
@@ -2487,57 +2489,350 @@ pub extern "C" fn glValidateProgram(_program: u32) {}
 // advertised ES3 mandatory surface has a real hand-written body for every command.
 // ===================================================================================================
 
-// ---- sampler objects (glGenSamplers is already a full body) ----
+// ---- sampler objects (real ES3 object state; glGenSamplers reserves the name) ------------------
+//
+// These were previously no-ops that always returned 0. They now carry the full ES3 sampler state so
+// `glGetSamplerParameter*` reflects what `glSamplerParameter*` set. All of it is client-side (IR-free,
+// exactly as gl_shim.c emits no IR for samplers), so the frame IR and the byte-parity gates are
+// unchanged — the change is purely observable object semantics through the public API.
+
+/// A sampler name is usable iff it was returned by `glGenSamplers` and not deleted (reserved OR a live
+/// object). Any operation on such a name lazily instantiates the object with ES3 default state.
+fn sampler_known(s: &crate::state::GlState, sampler: u32) -> bool {
+    sampler != 0 && (s.samplers.contains_key(&sampler) || s.samp_reserved.contains(&sampler))
+}
+
+/// Instantiate (if needed) and borrow the sampler object, moving it out of the reserved set.
+fn sampler_instantiate(s: &mut crate::state::GlState, sampler: u32) {
+    if !s.samplers.contains_key(&sampler) {
+        s.samp_reserved.remove(&sampler);
+        s.samplers.insert(sampler, crate::state::SamplerObj::default());
+    }
+}
+
+/// Validate a sampler-parameter enum value for `pname`. Returns `Some(err)` (GL_INVALID_ENUM) for an
+/// out-of-range enum-typed value, or `None` if the value is acceptable (enum-valid, or a non-enum LOD).
+fn sampler_param_enum_error(pname: u32, v: i32) -> Option<u32> {
+    let ok = match pname {
+        GL_TEXTURE_MIN_FILTER => matches!(v as u32,
+            GL_NEAREST | GL_LINEAR | GL_NEAREST_MIPMAP_NEAREST | GL_LINEAR_MIPMAP_NEAREST
+            | GL_NEAREST_MIPMAP_LINEAR | GL_LINEAR_MIPMAP_LINEAR),
+        GL_TEXTURE_MAG_FILTER => matches!(v as u32, GL_NEAREST | GL_LINEAR),
+        GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T | GL_TEXTURE_WRAP_R =>
+            matches!(v as u32, GL_REPEAT | GL_CLAMP_TO_EDGE | GL_MIRRORED_REPEAT),
+        GL_TEXTURE_COMPARE_MODE => matches!(v as u32, GL_NONE | GL_COMPARE_REF_TO_TEXTURE),
+        GL_TEXTURE_COMPARE_FUNC => matches!(v as u32,
+            GL_NEVER | GL_LESS | GL_EQUAL | GL_LEQUAL | GL_GREATER | GL_NOTEQUAL | GL_GEQUAL | GL_ALWAYS),
+        GL_TEXTURE_MIN_LOD | GL_TEXTURE_MAX_LOD => return None, // non-enum LOD: any value accepted
+        _ => return Some(GL_INVALID_ENUM), // unknown pname
+    };
+    if ok { None } else { Some(GL_INVALID_ENUM) }
+}
+
+/// Core setter shared by the scalar `glSamplerParameter{i,f}` entry points. Validates before mutating
+/// (atomic: an invalid value leaves the object untouched).
+fn sampler_set(sampler: u32, pname: u32, iv: i32, fv: f32) {
+    let mut s = gl();
+    if !sampler_known(&s, sampler) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    if let Some(e) = sampler_param_enum_error(pname, iv) {
+        if s.error == GL_NO_ERROR { s.error = e; }
+        return;
+    }
+    sampler_instantiate(&mut s, sampler);
+    let obj = s.samplers.get_mut(&sampler).unwrap();
+    match pname {
+        GL_TEXTURE_MIN_FILTER => obj.min_filter = iv,
+        GL_TEXTURE_MAG_FILTER => obj.mag_filter = iv,
+        GL_TEXTURE_WRAP_S => obj.wrap_s = iv,
+        GL_TEXTURE_WRAP_T => obj.wrap_t = iv,
+        GL_TEXTURE_WRAP_R => obj.wrap_r = iv,
+        GL_TEXTURE_COMPARE_MODE => obj.compare_mode = iv,
+        GL_TEXTURE_COMPARE_FUNC => obj.compare_func = iv,
+        GL_TEXTURE_MIN_LOD => obj.min_lod = fv,
+        GL_TEXTURE_MAX_LOD => obj.max_lod = fv,
+        _ => {}
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glBindSampler(_unit: u32, _sampler: u32) {}
+pub extern "C" fn glBindSampler(unit: u32, sampler: u32) {
+    let mut s = gl();
+    if sampler == 0 {
+        s.samp_binding.remove(&unit);
+        return;
+    }
+    if !sampler_known(&s, sampler) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    sampler_instantiate(&mut s, sampler);
+    s.samp_binding.insert(unit, sampler);
+}
+
 #[no_mangle]
-pub extern "C" fn glDeleteSamplers(_n: i32, _samplers: *const u32) {}
+pub extern "C" fn glDeleteSamplers(n: i32, samplers: *const u32) {
+    if n < 0 {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if samplers.is_null() {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = unsafe { *samplers.add(k) };
+        if id == 0 {
+            continue; // deleting 0 is silently ignored
+        }
+        s.samplers.remove(&id);
+        s.samp_reserved.remove(&id);
+        // A deleted sampler is unbound from every unit it was bound to (reverts to unit's own state).
+        s.samp_binding.retain(|_, v| *v != id);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn glIsSampler(sampler: u32) -> u8 {
-    (sampler != 0) as u8
+    // Per ES3, a name is a sampler object only after it has been bound/parameterized (created), not
+    // merely reserved by glGenSamplers — mirrors the lazy buffer/texture instantiation model.
+    gl().samplers.contains_key(&sampler) as u8
+}
+
+#[no_mangle]
+pub extern "C" fn glSamplerParameteri(sampler: u32, pname: u32, param: i32) {
+    sampler_set(sampler, pname, param, param as f32);
 }
 #[no_mangle]
-pub extern "C" fn glSamplerParameteri(_sampler: u32, _pname: u32, _param: i32) {}
-#[no_mangle]
-pub extern "C" fn glSamplerParameterf(_sampler: u32, _pname: u32, _param: f32) {}
-#[no_mangle]
-pub extern "C" fn glSamplerParameteriv(_sampler: u32, _pname: u32, _param: *const i32) {}
-#[no_mangle]
-pub extern "C" fn glSamplerParameterfv(_sampler: u32, _pname: u32, _param: *const f32) {}
-#[no_mangle]
-pub extern "C" fn glGetSamplerParameteriv(_sampler: u32, _pname: u32, params: *mut i32) {
-    unsafe { set_i32(params, 0) };
+pub extern "C" fn glSamplerParameterf(sampler: u32, pname: u32, param: f32) {
+    sampler_set(sampler, pname, param as i32, param);
 }
 #[no_mangle]
-pub extern "C" fn glGetSamplerParameterfv(_sampler: u32, _pname: u32, params: *mut f32) {
-    unsafe {
-        if !params.is_null() {
-            *params = 0.0;
+pub extern "C" fn glSamplerParameteriv(sampler: u32, pname: u32, param: *const i32) {
+    if param.is_null() {
+        return;
+    }
+    let v = unsafe { *param };
+    sampler_set(sampler, pname, v, v as f32);
+}
+#[no_mangle]
+pub extern "C" fn glSamplerParameterfv(sampler: u32, pname: u32, param: *const f32) {
+    if param.is_null() {
+        return;
+    }
+    let v = unsafe { *param };
+    sampler_set(sampler, pname, v as i32, v);
+}
+
+/// Read one sampler parameter (shared by the i/f getters). Returns `Some(f32)` on success, or sets the
+/// error and returns `None`. The output slot is left untouched on error (spec: preserve on failure).
+fn sampler_get(sampler: u32, pname: u32) -> Option<f32> {
+    let mut s = gl();
+    if !sampler_known(&s, sampler) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return None;
+    }
+    sampler_instantiate(&mut s, sampler);
+    let obj = *s.samplers.get(&sampler).unwrap();
+    let v = match pname {
+        GL_TEXTURE_MIN_FILTER => obj.min_filter as f32,
+        GL_TEXTURE_MAG_FILTER => obj.mag_filter as f32,
+        GL_TEXTURE_WRAP_S => obj.wrap_s as f32,
+        GL_TEXTURE_WRAP_T => obj.wrap_t as f32,
+        GL_TEXTURE_WRAP_R => obj.wrap_r as f32,
+        GL_TEXTURE_COMPARE_MODE => obj.compare_mode as f32,
+        GL_TEXTURE_COMPARE_FUNC => obj.compare_func as f32,
+        GL_TEXTURE_MIN_LOD => obj.min_lod,
+        GL_TEXTURE_MAX_LOD => obj.max_lod,
+        _ => {
+            if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+            return None;
+        }
+    };
+    Some(v)
+}
+
+#[no_mangle]
+pub extern "C" fn glGetSamplerParameteriv(sampler: u32, pname: u32, params: *mut i32) {
+    if let Some(v) = sampler_get(sampler, pname) {
+        // Integer query of a float LOD rounds to nearest (spec: round to nearest integer).
+        unsafe { set_i32(params, v.round() as i32) };
+    }
+}
+#[no_mangle]
+pub extern "C" fn glGetSamplerParameterfv(sampler: u32, pname: u32, params: *mut f32) {
+    if let Some(v) = sampler_get(sampler, pname) {
+        unsafe {
+            if !params.is_null() {
+                *params = v;
+            }
         }
     }
 }
 
-// ---- occlusion query objects (glGenQueries is already a full body) ----
+// ---- occlusion / transform-feedback query objects (real ES3 object lifecycle) ------------------
+//
+// Previously begin/end/get were no-ops that returned 0. They now enforce the typed-target lifecycle
+// (a query name is bound to exactly one target; only one query is active per target at a time) and
+// track availability against the submission serial captured at glEndQuery — the same completion
+// contract the sync objects use, so GL_QUERY_RESULT_AVAILABLE flips only once that submission
+// completes. The counted result itself is not yet produced by the executor (no occlusion backend), so
+// `result` is a truthful 0; querying GL_QUERY_RESULT blocks for completion first. All IR-free.
+
+fn is_query_target(target: u32) -> bool {
+    matches!(target,
+        GL_ANY_SAMPLES_PASSED | GL_ANY_SAMPLES_PASSED_CONSERVATIVE
+        | GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN)
+}
+
 #[no_mangle]
-pub extern "C" fn glBeginQuery(_target: u32, _id: u32) {}
+pub extern "C" fn glBeginQuery(target: u32, id: u32) {
+    let mut s = gl();
+    if !is_query_target(target) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+        return;
+    }
+    // id must be a name from glGenQueries (reserved or an existing object), and never 0.
+    if id == 0 || !(s.query_reserved.contains(&id) || s.queries.contains_key(&id)) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    // A query already active for this target, or this id active anywhere, is an error.
+    if s.active_query.get(&target).copied().unwrap_or(0) != 0
+        || s.queries.get(&id).map(|q| q.active).unwrap_or(false)
+    {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    // A query name is typed: once used with a target it cannot be reused with a different one.
+    if let Some(q) = s.queries.get(&id) {
+        if q.target != 0 && q.target != target {
+            if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+            return;
+        }
+    }
+    s.query_reserved.remove(&id);
+    let q = s.queries.entry(id).or_insert_with(crate::state::QueryObj::default);
+    q.target = target;
+    q.active = true;
+    q.ended = false;
+    q.result = 0;
+    q.serial = 0;
+    s.active_query.insert(target, id);
+}
+
 #[no_mangle]
-pub extern "C" fn glEndQuery(_target: u32) {}
+pub extern "C" fn glEndQuery(target: u32) {
+    let mut s = gl();
+    if !is_query_target(target) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+        return;
+    }
+    let id = s.active_query.get(&target).copied().unwrap_or(0);
+    if id == 0 {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_OPERATION; }
+        return;
+    }
+    s.active_query.insert(target, 0);
+    // Capture the submission serial now (after flushing the accumulated work), exactly like a fence:
+    // the result becomes available once completion catches up to this serial.
+    drop(s);
+    glFlush();
+    let serial = SUBMIT_SERIAL.load(std::sync::atomic::Ordering::SeqCst);
+    let mut s = gl();
+    if let Some(q) = s.queries.get_mut(&id) {
+        q.active = false;
+        q.ended = true;
+        q.result = 0; // no executor occlusion counter yet — truthful zero
+        q.serial = serial;
+    }
+}
+
 #[no_mangle]
-pub extern "C" fn glDeleteQueries(_n: i32, _ids: *const u32) {}
+pub extern "C" fn glDeleteQueries(n: i32, ids: *const u32) {
+    if n < 0 {
+        crate::state::set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if ids.is_null() {
+        return;
+    }
+    let mut s = gl();
+    for k in 0..n as usize {
+        let id = unsafe { *ids.add(k) };
+        if id == 0 {
+            continue;
+        }
+        // Deleting an active query ends it (clears the target's active slot).
+        if let Some(q) = s.queries.get(&id) {
+            if q.active {
+                let t = q.target;
+                s.active_query.insert(t, 0);
+            }
+        }
+        s.queries.remove(&id);
+        s.query_reserved.remove(&id);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn glIsQuery(id: u32) -> u8 {
-    (id != 0) as u8
+    // A name is a query object only after it has been begun (created), not merely reserved.
+    gl().queries.contains_key(&id) as u8
 }
+
 #[no_mangle]
-pub extern "C" fn glGetQueryiv(_target: u32, _pname: u32, params: *mut i32) {
-    unsafe { set_i32(params, 0) };
+pub extern "C" fn glGetQueryiv(target: u32, pname: u32, params: *mut i32) {
+    let mut s = gl();
+    if !is_query_target(target) {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+        return;
+    }
+    if pname != GL_CURRENT_QUERY {
+        if s.error == GL_NO_ERROR { s.error = GL_INVALID_ENUM; }
+        return;
+    }
+    let cur = s.active_query.get(&target).copied().unwrap_or(0);
+    unsafe { set_i32(params, cur as i32) };
 }
+
 #[no_mangle]
-pub extern "C" fn glGetQueryObjectuiv(_id: u32, _pname: u32, params: *mut u32) {
-    unsafe {
-        if !params.is_null() {
-            *params = 0;
+pub extern "C" fn glGetQueryObjectuiv(id: u32, pname: u32, params: *mut u32) {
+    // Must be a created (begun) query object that is not currently active.
+    let (ended, serial, result) = {
+        let s = gl();
+        match s.queries.get(&id) {
+            Some(q) if !q.active => (q.ended, q.serial, q.result),
+            _ => {
+                drop(s);
+                crate::state::set_gl_error(GL_INVALID_OPERATION);
+                return;
+            }
         }
+    };
+    match pname {
+        GL_QUERY_RESULT_AVAILABLE => {
+            let avail = ended && COMPLETE_SERIAL.load(std::sync::atomic::Ordering::SeqCst) >= serial;
+            unsafe {
+                if !params.is_null() {
+                    *params = avail as u32;
+                }
+            }
+        }
+        GL_QUERY_RESULT => {
+            // Querying the result implies waiting for it to be available.
+            if ended && COMPLETE_SERIAL.load(std::sync::atomic::Ordering::SeqCst) < serial {
+                glFinish();
+            }
+            unsafe {
+                if !params.is_null() {
+                    *params = result;
+                }
+            }
+        }
+        _ => crate::state::set_gl_error(GL_INVALID_ENUM),
     }
 }
 
