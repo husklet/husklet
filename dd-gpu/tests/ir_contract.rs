@@ -74,6 +74,12 @@ fn every_encoder_variant() -> Vec<Enc> {
             dst_sub: TextureSubresource { mip: 0, layer: 4, aspect: TextureAspect::All },
             dst_origin: Origin3d { x: 1, y: 1, z: 0 },
             dst_extent: Extent3d { width: 12, height: 6, depth: 1 }, filter: Filter::Linear },
+        Enc::ResolveTexture { src: 2,
+            src_sub: TextureSubresource { mip: 0, layer: 1, aspect: TextureAspect::All },
+            src_origin: Origin3d { x: 3, y: 2, z: 1 }, dst: 14,
+            dst_sub: TextureSubresource { mip: 1, layer: 0, aspect: TextureAspect::All },
+            dst_origin: Origin3d { x: 0, y: 1, z: 2 },
+            extent: Extent3d { width: 5, height: 4, depth: 1 } },
     ]
 }
 
@@ -86,7 +92,7 @@ fn every_command_variant() -> Vec<Cmd> {
         Cmd::DestroyTexture(2),
         Cmd::CreateSampler(3, sampler_desc()),
         Cmd::DestroySampler(3),
-        Cmd::CreateShader { id: 4, spirv: vec![0x0723_0203, 0x0001_0000, 0, 4, 0] },
+        Cmd::CreateShader { id: 4, kind: ShaderPayloadKind::SpirV, spirv: vec![0x0723_0203, 0x0001_0000, 0, 4, 0] },
         Cmd::DestroyShader(4),
         Cmd::CreateRenderPipeline(5, render_pipeline_desc()),
         Cmd::CreateComputePipeline(7, ComputePipelineDesc {
@@ -134,6 +140,7 @@ fn enc_kind(enc: &Enc) -> &'static str {
         Enc::Dispatch { .. } => "Dispatch", Enc::CopyBufferToBuffer { .. } => "CopyBufferToBuffer",
         Enc::CopyBufferToTexture { .. } => "CopyBufferToTexture", Enc::CopyTextureToBuffer { .. } => "CopyTextureToBuffer",
         Enc::CopyTextureToTexture { .. } => "CopyTextureToTexture", Enc::BlitTexture { .. } => "BlitTexture",
+        Enc::ResolveTexture { .. } => "ResolveTexture",
     }
 }
 
@@ -142,7 +149,7 @@ fn every_gpu_ir_command_and_encoder_variant_round_trips() {
     let commands = every_command_variant();
     assert_eq!(commands.len(), 21, "update corpus count when Cmd grows");
     let encoders = every_encoder_variant();
-    assert_eq!(encoders.len(), 19, "update corpus count when Enc grows");
+    assert_eq!(encoders.len(), 20, "update corpus count when Enc grows");
     let mut cmd_kinds = BTreeSet::new();
     for command in &commands { assert!(cmd_kinds.insert(cmd_kind(command))); }
     let mut enc_kinds = BTreeSet::new();
