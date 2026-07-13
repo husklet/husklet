@@ -155,6 +155,9 @@ impl DdState {
         let mut children = get_children(surface);
         children.reverse();
         for child in children {
+            if child == *surface {
+                continue;
+            }
             let (cx, cy) = with_states(&child, |states| {
                 let pos = states.cached_state.get::<SubsurfaceCachedState>().current().location;
                 (pos.x as f64, pos.y as f64)
