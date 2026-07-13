@@ -1,3 +1,0 @@
-libodbccr.so.2 libodbccr2 #MINVER#
-* Build-Depends-Package: unixodbc-dev
- CLConnect@Base 2.3.1

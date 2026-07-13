@@ -1,1 +1,0 @@
-../mit-krb5/gssrpc/pmap_clnt.h

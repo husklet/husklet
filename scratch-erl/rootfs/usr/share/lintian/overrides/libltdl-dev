@@ -1,5 +1,0 @@
-# the whole libltdl source is included, including the COPYING.LIB
-libltdl-dev binary: extra-license-file
-
-# the whole libltdl source is included, including README
-package-contains-documentation-outside-usr-share-doc usr/share/libtool/README

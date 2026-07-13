@@ -1,1 +1,0 @@
-../mit-krb5/gssrpc/rename.h

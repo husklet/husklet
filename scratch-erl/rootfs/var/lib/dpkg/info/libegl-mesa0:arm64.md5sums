@@ -1,7 +1,0 @@
-5a94cee78887a1edd488094e95663833  usr/lib/aarch64-linux-gnu/libEGL_mesa.so.0.0.0
-7f0d95ab544ef194372363bb93229ede  usr/share/bug/libegl-mesa0/control
-114f277e413ffae0a725cc024a955b47  usr/share/bug/libegl-mesa0/script
-a9dc7944da26fc0dfc1dca876c88b810  usr/share/doc/libegl-mesa0/changelog.Debian.gz
-0afdaff557c72b3fd677716c45fe8d49  usr/share/doc/libegl-mesa0/changelog.gz
-2e2ab611d68364893311e9a62c77c3a5  usr/share/doc/libegl-mesa0/copyright
-7b6bf7308b05910cc12f4c9fa5d1a616  usr/share/glvnd/egl_vendor.d/50_mesa.json

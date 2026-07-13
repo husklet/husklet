@@ -1,8 +1,0 @@
-#!/bin/sh
-set -e
-
-# #700353
-DOCDIR=/usr/share/doc/libwmf-dev
-test ! -L $DOCDIR || rm $DOCDIR
-
-

@@ -1,9 +1,0 @@
-#! /bin/sh -e
-
-if [ $1 != "upgrade" ]; then
-    update-alternatives --remove c++ /usr/bin/g++
-fi
-
-
-
-exit 0

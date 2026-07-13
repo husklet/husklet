@@ -1,3 +1,0 @@
-libevent_pthreads-2.1.so.7 libevent-pthreads-2.1-7 #MINVER#
-* Build-Depends-Package: libevent-dev
- evthread_use_pthreads@Base 2.1.8-stable

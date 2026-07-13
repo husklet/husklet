@@ -1,9 +1,0 @@
-Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-
-Files: debian/*
-Copyright: Copyright (C) 2008, Clint Adams
-           Copyright (C) 2011 Ondřej Surý
-License: GPL-3+
- The packaging scripts and files are licensed under the GNU General Public
- License, version 3 or later, found on a Debian system in
- /usr/share/common-licenses/GPL-3

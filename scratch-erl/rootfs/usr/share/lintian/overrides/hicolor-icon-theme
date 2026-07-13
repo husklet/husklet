@@ -1,3 +1,0 @@
-# The empty directories are expected here as this package creates the
-# directories structure for the icons themes
-hicolor-icon-theme: package-contains-empty-directory

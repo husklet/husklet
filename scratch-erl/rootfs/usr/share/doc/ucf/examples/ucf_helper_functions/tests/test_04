@@ -1,9 +1,0 @@
-#!/bin/bash
-
-handle_all_ucf_files $PKGDIR $LOCDIR
-cp package-changed $PKGF
-take_ref
-handle_all_ucf_files $PKGDIR $LOCDIR
-is_package $LOCF && check_ucfq_number 1
-return $?
-

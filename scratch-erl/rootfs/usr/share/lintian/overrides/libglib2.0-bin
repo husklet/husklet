@@ -1,2 +1,0 @@
-# GLib programs normally use GLib functions instead of using libc directly
-libglib2.0-bin: hardening-no-fortify-functions [usr/bin/gio]

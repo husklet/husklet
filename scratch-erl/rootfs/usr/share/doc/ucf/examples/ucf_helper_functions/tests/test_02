@@ -1,9 +1,0 @@
-#!/bin/bash
-
-handle_all_ucf_files $PKGDIR $LOCDIR
-echo "this is a locally changed file" > $LOCF
-take_ref
-handle_all_ucf_files $PKGDIR $LOCDIR
-is_local $LOCF && check_ucfq_number 1
-return $?
-

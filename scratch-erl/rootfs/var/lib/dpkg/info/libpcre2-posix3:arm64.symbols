@@ -1,5 +1,0 @@
-libpcre2-posix.so.3 libpcre2-posix3 #MINVER#
- pcre2_regcomp@Base 10.34
- pcre2_regerror@Base 10.34
- pcre2_regexec@Base 10.34
- pcre2_regfree@Base 10.34

@@ -1,9 +1,0 @@
-#!/bin/bash
-
-handle_all_ucf_files $PKGDIR $LOCDIR
-rm -f $PKGF
-take_ref
-handle_all_ucf_files $PKGDIR $LOCDIR
-is_deleted $LOCF && check_ucfq_number 0
-return $?
-

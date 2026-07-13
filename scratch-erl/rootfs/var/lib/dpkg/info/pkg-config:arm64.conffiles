@@ -1,1 +1,0 @@
-remove-on-upgrade /etc/dpkg/dpkg.cfg.d/pkg-config-hook-config

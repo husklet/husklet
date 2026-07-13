@@ -1,3 +1,0 @@
-interest-noawait /usr/lib/aarch64-linux-gnu/gtk-3.0/3.0.0/immodules
-# Triggers added by dh_makeshlibs/13.11.4
-activate-noawait ldconfig
