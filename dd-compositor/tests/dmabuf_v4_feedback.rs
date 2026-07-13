@@ -6,7 +6,7 @@
 //! (protocol version 4). `dd-compositor` used to advertise the v3 global only, because Smithay builds
 //! the v4 feedback format-table in a `shm_open`ed file whose name overflows macOS `PSHMNAMLEN` (31) →
 //! `ENAMETOOLONG`, so the v4 global could not stand up on the macOS host. With the offline-vendored
-//! smithay fix (`third_party/smithay-0.7.0/src/utils/sealed_file.rs` shortens that object name), the
+//! smithay fix (`vendor/smithay-0.7.0/src/utils/sealed_file.rs` shortens that object name), the
 //! feedback format-table now builds and `new_dmabuf_state` creates the feedback-carrying global.
 //!
 //! This test connects a real wire client, binds feedback, receives its SCM_RIGHTS format-table fd,

@@ -36,7 +36,7 @@ default-members =["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-clien
 # only a dependency of the macOS-only `dd-compositor` (kept out of default-members), so this patch is a
 # no-op for the Linux headless build — resolution reads the manifest but never compiles smithay there.
 [patch.crates-io]
-smithay = { path = "third_party/smithay-0.7.0" }
+smithay = { path = "vendor/smithay-0.7.0" }
 
 [profile.release]
 opt-level = 2

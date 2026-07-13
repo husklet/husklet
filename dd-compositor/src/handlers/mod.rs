@@ -19,7 +19,7 @@ pub mod xdg;
 
 // ---- Modern GUI protocol groups composed from the vendored Smithay tree (codex-rendering §5.2/§9.4) ----
 // Each module supplies dd host policy (state + delegate below + handler/query methods) for a protocol
-// the vendored `third_party/smithay-0.7.0` already implements but dd-compositor did not previously compose.
+// the vendored `vendor/smithay-0.7.0` already implements but dd-compositor did not previously compose.
 pub mod color;
 pub mod content_type;
 pub mod explicit_sync;

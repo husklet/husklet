@@ -334,7 +334,7 @@ fn dd_dmabuf_formats() -> [Format; 2] {
 /// Build the default [`DmabufFeedback`] for the v4/v5 global: a single main tranche of
 /// [`dd_dmabuf_formats`] targeting [`DD_MAIN_DEVICE`]. Returns `Err` if the format-table backing file
 /// cannot be created — on macOS this is the `PSHMNAMLEN` failure the offline-vendored smithay patch
-/// fixes (`third_party/smithay-0.7.0/src/utils/sealed_file.rs`); the caller falls back to a v3 global.
+/// fixes (`vendor/smithay-0.7.0/src/utils/sealed_file.rs`); the caller falls back to a v3 global.
 pub(crate) fn build_default_feedback() -> std::io::Result<DmabufFeedback> {
     DmabufFeedbackBuilder::new(DD_MAIN_DEVICE, dd_dmabuf_formats()).build()
 }
