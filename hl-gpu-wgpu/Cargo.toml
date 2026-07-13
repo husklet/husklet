@@ -1,0 +1,63 @@
+# dd-gpu-wgpu — a `wgpu` + `naga` implementation of the `dd_gpu::GpuBackend` executor trait.
+#
+# THIN GUEST, FAT HOST: the same backend lowers the host-GPU-agnostic dd-GPU IR to Metal today and
+# (via wgpu's other backends) Vulkan/D3D12/GL later. All shader translation (SPIR-V/GLSL/WGSL -> the
+# module wgpu consumes) runs host-side in `naga`, so the guest shim only forwards shader bytes — a
+# strictly thinner guest than the in-guest MSL packing the bespoke `dd-display` Metal replay uses.
+#
+# BUILD GATING: wgpu/naga/pollster are heavy, macOS/Metal-only deps here. They are declared ONLY under
+# the `cfg(target_os = "macos")` target block, and the crate is a workspace MEMBER but NOT a
+# default-member, so a bare `cargo build` on the Linux dev host never resolves-and-builds them and the
+# headless dd-gpu / dd-display core keep building with zero new compiled deps. The Linux build of THIS
+# crate compiles to an empty lib (all code is `#[cfg(target_os = "macos")]`).
+[package]
+name = "hl-gpu-wgpu"
+version = "0.1.0"
+edition = "2021"
+description = "wgpu + naga host executor implementing dd_gpu::GpuBackend — lowers the dd-GPU command IR to Metal now (Vulkan/D3D12/GL later), with all shader translation host-side in naga."
+license = "MIT"
+
+[lib]
+name = "hl_gpu_wgpu"
+path = "src/lib.rs"
+
+[dependencies]
+# The IR + GpuBackend trait this crate implements. Pure-std, no transitive deps — safe on every host.
+hl-gpu = { path = "../hl-gpu" }
+
+# The real executor stack — macOS/Metal only (see header). Versions pinned to what the feasibility spike
+# proved (wgpu 24.0.5 / naga 24 / pollster 0.4); wgpu's API churns across majors, so pin the major.
+# wgpu-hal + metal are the raw-handle seam the LIVE present path rests on: the backend bridges an
+# IOSurface-backed MTLTexture (created by dd-display on wgpu's own device) into a `wgpu::Texture` via
+# `wgpu_hal::metal::Device::texture_from_raw` + `Device::create_texture_from_hal`, and hands its raw
+# `MTLDevice` back out (`as_hal`) so dd-display can wrap the guest IOSurface on the SAME device — the
+# zero-copy contract proven by examples/iosurface_interop.rs, now wired into `backend`. Versions MUST
+# match wgpu's own wgpu-hal/metal so the `A::Texture` handle types are identical.
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "24", default-features = false, features = ["metal", "wgsl"] }
+wgpu-hal = { version = "24", default-features = false, features = ["metal"] }
+metal = "0.31"
+naga = { version = "24", features = ["glsl-in", "spv-in", "wgsl-in", "wgsl-out", "msl-out", "spv-out"] }
+pollster = "0.4"
+
+# macOS-only dev deps for the zero-copy IOSurface interop proof (examples/iosurface_interop.rs): the
+# objc2* stack is the same one dd-display's Metal/IOSurface bridge uses (wgpu-hal + metal are now real
+# deps above). All are already in Cargo.lock at these exact versions (no new fetch).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSString", "NSDictionary", "NSValue"] }
+objc2-metal = { version = "0.2", features = ["MTLDevice", "MTLTexture", "MTLPixelFormat", "MTLResource", "MTLTypes"] }
+# The guest Vulkan ICD (dd-shim-vk) + ash, so `tests/vk_compute.rs` / `tests/vk_triangle.rs` can drive
+# the exported `vk*` API and replay the produced dd-gpu IR on this crate's WgpuBackend (real Metal) —
+# the Vulkan analogue of `spirv_compute.rs`/`spirv_triangle.rs`. dev-dep only (no lib impact); both are
+# already in Cargo.lock, and dd-shim-vk's own deps (hl-shim/hl-gpu/ash) are all cached.
+hl-shim-vk = { path = "../hl-shim-vk" }
+ash = { version = "0.38", default-features = false }
+
+[[example]]
+name = "verify_ir"
+path = "examples/verify_ir.rs"
+
+[[example]]
+name = "iosurface_interop"
+path = "examples/iosurface_interop.rs"

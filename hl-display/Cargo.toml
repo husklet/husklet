@@ -1,0 +1,55 @@
+[package]
+name = "hl-display"
+version = "0.1.0"
+edition = "2021"
+description = "dd-display — the shared host renderer for dd containers: a minimal Wayland compositor endpoint that composites guest wl_shm buffers into native macOS windows (docs/ideas/RENDERING.md). The protocol core is pure Rust + libc so it builds and self-tests headlessly on the Linux dev host; the Cocoa/AppKit presenter is macOS-only."
+license = "MIT"
+autobins = false
+
+[[bin]]
+name = "dd-display"
+path = "src/main.rs"
+
+[lib]
+name = "hl_display"
+path = "src/lib.rs"
+
+[dependencies]
+# Pure, already-vendored deps only, so the compositor CORE (wire + shm + framebuffer + PNG dump) builds
+# and is fully headless-testable on the Linux dev/CI host that cannot fetch crates.io. The Cocoa presenter
+# adds NO new crate: it reuses the objc2 stack already locked in this workspace (see the macos target block).
+libc = "0.2"
+# The workspace's pure-Rust PNG encoder — the debug-dump path writes a composited surface to a PNG the
+# author can Read back, exactly how dd-term-core proves its CPU renderer headlessly.
+hl-term = { path = "../hl-term" }
+# GPU rung 3: the forwarded command IR + GpuBackend trait the Metal executor implements (pure-Rust, no
+# new transitive deps). dd-display → dd-gpu only (no cycle; dd-gpu never depends on dd-display).
+hl-gpu = { path = "../hl-gpu" }
+# Flag-gated (`DD_GPU_BACKEND=wgpu`) alternate executor. On the Linux dev host this crate is an EMPTY lib
+# (all wgpu/naga/metal deps are macOS-gated inside it), so this adds no compiled deps here; on macOS it
+# provides `WgpuBackend` + the IOSurface interop the wgpu present path in `metal_backend` calls.
+hl-gpu-wgpu = { path = "../hl-gpu-wgpu" }
+
+# Native presenter: one NSWindow + CALayer per guest surface, blitting the committed wl_shm buffer.
+# objc2* are ALREADY in Cargo.lock (used by dd-gui), so this fetches nothing new on the mac.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSData", "NSThread", "NSRunLoop", "NSDate", "NSDictionary"] }
+objc2-app-kit = { version = "0.2", features = [
+    "NSApplication", "NSWindow", "NSResponder", "NSView", "NSControl", "NSScreen", "NSColor",
+    "NSImage", "NSImageRep", "NSBitmapImageRep", "NSImageView", "NSGraphics", "NSCursor",
+    "NSRunningApplication", "NSEvent", "NSGraphicsContext", "NSPasteboard", "objc2-quartz-core",
+] }
+# Metal present path (hardware-accelerated blit + the shared MTLDevice/queue the dd-gpu backend targets).
+objc2-metal = { version = "0.2", features = [
+    "MTLDevice", "MTLCommandQueue", "MTLCommandBuffer", "MTLCommandEncoder", "MTLBlitCommandEncoder",
+    "MTLTexture", "MTLPixelFormat", "MTLResource", "MTLTypes", "MTLDrawable", "MTLBuffer",
+    "MTLLibrary", "MTLRenderPipeline", "MTLRenderPass", "MTLRenderCommandEncoder", "MTLVertexDescriptor",
+    "MTLDepthStencil", "MTLSampler", "MTLStageInputOutputDescriptor", "MTLEvent",
+] }
+objc2-quartz-core = { version = "0.2", features = ["CALayer", "CAMetalLayer", "CATransaction", "objc2-metal"] }
+# Host SPIR-V→MSL lowering (MoltenVK's approach): the Metal executor consumes Vulkan SPIR-V shader
+# modules by transpiling them to MSL via SPIRV-Cross. naga's SPIR-V frontend cannot represent combined
+# image-samplers (glslang's default `sampler2D` output), so real textured Vulkan apps route through this.
+# macOS-only: builds SPIRV-Cross C++ for the host, matching where the Metal executor runs.
+spirv_cross = { version = "0.23", features = ["msl"] }

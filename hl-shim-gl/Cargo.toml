@@ -1,0 +1,30 @@
+# dd-shim-gl — the guest GLES2/EGL front-end, as a first-class PRODUCT crate (not a test fixture).
+#
+# Cross-compiles to the guest ELF targets and links as the single shared object deployed under the
+# GLES sonames (libEGL.so.1, with libGLESv2.so.2 / libwayland-egl.so.1 as thin DT_NEEDED stubs — see
+# docs/rendering/SHIM_RUST_ARCHITECTURE.md). A real GLES2 app links `-lEGL -lGLESv2` and runs
+# UNMODIFIED against these symbols; each call drives the shim state machine and, on swap, emits a
+# dd-gpu IR stream through `dd-shim-common`'s transport to the host executor.
+#
+# The exported entry-point SURFACE is code-generated from the Khronos registry (see `build.rs` +
+# `registry/`) so coverage is the complete GLES2+EGL symbol set, not a hand-picked few. Hand-written
+# bodies in `src/` implement the semantics; the generator emits spec-faithful default stubs for the
+# long tail, which are ported to real bodies incrementally.
+[package]
+name = "hl-shim-gl"
+version = "0.1.0"
+edition = "2021"
+description = "Guest GLES2/EGL shim producing libEGL.so.1 / libGLESv2.so.2: Khronos-registry-generated C-ABI entry-point surface over dd-shim-common's shared dd-gpu IR transport."
+license = "MIT"
+
+[lib]
+name = "hl_shim_gl"
+# cdylib = the deployed libEGL.so.1; rlib so the parity harness (tests/) and other Rust can link it.
+# The rlib is a build-time-only artifact; the deployed .so is unaffected.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+hl-shim = { path = "../hl-shim" }
+# NB: an injected shim must never unwind a Rust panic across the C-ABI boundary into a C caller.
+# `extern "C"` functions abort-on-unwind by default (Rust >= 1.81), so a panic aborts rather than
+# corrupting the C caller; no per-crate `panic = "abort"` is needed (and profiles are root-only anyway).

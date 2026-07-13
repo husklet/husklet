@@ -1,0 +1,67 @@
+[package]
+name = "hl-compositor"
+version = "0.1.0"
+edition = "2021"
+description = "dd-compositor — a Smithay-native Wayland compositor for the dd host renderer. It replaces the hand-written dd-display protocol machine (hl-display/src/server.rs) with Smithay's maintained wayland_frontend state cores, while reusing dd-display's platform present/input seam (the Presenter trait + the Cocoa/Metal window backend). Gated behind DD_DISPLAY_SMITHAY=1; the legacy server.rs path is untouched when the flag is unset."
+license = "MIT"
+autobins = false
+
+# NOT in the workspace default-members (see the root Cargo.toml): the bare `cargo build` and
+# `cargo build -p hl-display` on the Linux dev host never pull smithay in, so the headless core
+# build stays green and offline. Build this crate explicitly on the macOS host with the smithay deps.
+
+# XWAYLAND BRIDGE (opt-in, OFF by default).
+#
+# `src/handlers/xwayland.rs` composes Smithay's XWayland support (Xwayland server management + X11 window
+# manager) so X11-only guest apps present + get input/clipboard through the SAME path as native Wayland
+# toplevels. It is gated behind `#[cfg(feature = "xwayland")]` and is NOT compiled by default.
+#
+# Why it is not a declared cargo feature here: Smithay's `xwayland` feature pulls in `x11rb`, `x11rb-
+# protocol`, `encoding_rs`, `gethostname`, etc., which are NOT in the offline cargo cache and cannot be
+# fetched on this egress-blocked dev host (crates.io is TLS-intercepted). Merely DECLARING
+# `xwayland = ["smithay/xwayland"]` forces cargo to add those crates to Cargo.lock, which needs the index
+# and so breaks the offline default build (and the headless Linux test suite). Keeping it out of
+# `[features]` leaves the default resolution untouched and the suite green + offline.
+#
+# TO ENABLE on a host with the deps available (egress open, or a populated cache — e.g. the macOS build
+# host):
+#   1. add `"xwayland"` to the `smithay` `features` list in `[dependencies]` below;
+#   2. add a `[features]` section with `xwayland = ["smithay/xwayland"]`;
+#   3. build with `--features xwayland`.
+# The bridge is additionally gated at RUNTIME behind DD_XWAYLAND (only reachable under DD_DISPLAY_SMITHAY).
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("xwayland"))'] }
+
+[[bin]]
+name = "dd-compositor"
+path = "src/main.rs"
+
+[lib]
+name = "hl_compositor"
+path = "src/lib.rs"
+
+[dependencies]
+# The proven feasibility-spike configuration: Smithay's platform-agnostic protocol/state layer only.
+# `default-features = false` drops the entire Linux backend stack (drm/gbm/egl/libinput/udev/session);
+# we opt back in ONLY `wayland_frontend`. Transitively needs the system libxkbcommon at link+run time
+# (see this crate's module docs). Verified to compile + run + accept a client on aarch64-apple-darwin.
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
+
+# Reuse dd-display's platform seam: the `Presenter` trait + `SurfaceBuffer`, the Cocoa/Metal window
+# backend (present_cocoa/metal), and the XKB keymap. dd-display does NOT depend on dd-compositor, so
+# there is no cycle and the legacy path is unaffected.
+hl-display = { path = "../hl-display" }
+# Single source of truth for the `DD_GPU_BACKEND` selection (`dd_gpu_wgpu::selected()`), used to name
+# the host GPU backend when starting the executor. dd-display already depends on this crate, so it adds
+# no new compilation to `cargo build -p hl-compositor`.
+hl-gpu-wgpu = { path = "../hl-gpu-wgpu" }
+libc = "0.2"
+
+# The native present/input loop reuses the objc2 stack already locked in the workspace (via dd-gui /
+# dd-display), so this fetches nothing new on the mac.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSThread", "NSRunLoop", "NSDate"] }
+objc2-app-kit = { version = "0.2", features = [
+    "NSApplication", "NSWindow", "NSResponder", "NSView", "NSScreen", "NSEvent",
+] }

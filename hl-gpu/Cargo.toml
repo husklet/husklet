@@ -1,0 +1,35 @@
+# dd-gpu — the host-GPU-agnostic command IR, wire protocol, resource-handle table, and
+# `GpuBackend` executor abstraction for dd's rung-3 GPU forwarding (see
+# ../docs/ideas/RENDERING_GPU_BACKENDS.md and ../docs/ideas/CUDA_ON_METAL.md).
+#
+# DELIBERATELY dependency-free (pure `std`, no serde, hand-rolled little-endian wire) — exactly the
+# `dd-term-core` discipline — so the IR + wire round-trip + handle table + the mock/software backends
+# `cargo test` HEADLESS on the Linux dev host with NO GPU, NO display, and NO crates.io access.
+#
+# The real host-GPU executors live in SEPARATE crates, not behind a feature of this one:
+#   * `dd-gpu-wgpu`'s `WgpuBackend` — real Metal on a macOS host (built via `make mac-crates`).
+#   * a future `CudaBackend` — an NVIDIA host (unavailable to either side today; secondary "CUDA host" case).
+# Only the pure-`std` core below builds on this box.
+[package]
+name = "hl-gpu"
+version = "0.1.0"
+edition = "2021"
+description = "dd host-GPU-agnostic command IR + wire + resource table + GpuBackend executor trait (Metal / CUDA-host / software), dependency-free and headless-testable."
+license = "MIT"
+
+[lib]
+name = "hl_gpu"
+path = "src/lib.rs"
+
+[features]
+default = []
+# The dd-jit runtime-integration seam (`src/integration.rs`): the dd-gpu-side implementor of dd-jit's
+# generic DeviceProvider. Off by default so the pure-`std`, headless IR/wire core still tests with no
+# extra deps; dd-cli turns it on to wire a GPU into a container launch.
+runtime = ["dep:hl-jit"]
+
+[dependencies]
+# Pure std by default (see header). The ONLY dependency, and only under the `runtime` feature, is
+# dd-jit — for the DeviceProvider/DeviceRequest types the integration seam implements. It never leaks
+# into the headless core.
+hl-jit = { path = "../hl-jit", optional = true }

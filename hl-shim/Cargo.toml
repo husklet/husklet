@@ -1,0 +1,29 @@
+# dd-shim-common — the guest-side foundation every dd GPU shim (GL, Vulkan, CUDA) links against.
+#
+# It owns the ONLY-place-the-wire-lives layer that used to be hand-rolled inside
+# `dd-tests/guests/gl_shim.c`: the dd-gpu IR command encoding, the command-ring / persistent-socket
+# transport to the host GPU-exec service, the completion wake, and guest GPU-memory registration
+# (the renderD128 `DD_IOCTL_GPU_ALLOC`).
+#
+# The IR is NOT re-defined here — it is RE-EXPORTED from the host's `dd-gpu` crate, so the guest
+# producer and the host executor compile against ONE Rust type/encode/decode and cannot drift.
+#
+# Cross-compiles to the guest ELF targets (aarch64/x86_64 `-unknown-linux-gnu`). Dependency-free
+# beyond dd-gpu: the syscall surface (socket/ioctl/futex/eventfd) is hand-declared `extern "C"`
+# against libc, matching the repo's dd-term-core / dd-gpu no-external-deps discipline.
+[package]
+name = "hl-shim"
+version = "0.1.0"
+edition = "2021"
+description = "Guest-side dd GPU shim foundation: shared dd-gpu IR (re-exported), host-exec socket/ring transport, completion wake, and guest GPU-memory registration. Base crate for dd-shim-gl / dd-shim-vk / dd-shim-cuda."
+license = "MIT"
+
+[lib]
+name = "hl_shim"
+# rlib so sibling shim cdylibs (hl-shim-gl/-vk/-cuda) statically link it into their single guest .so.
+crate-type = ["rlib"]
+
+[dependencies]
+# The shared IR + wire contract. This is the whole point: the guest encodes with the SAME
+# `dd_gpu::ir::Cmd` / `encode_stream` the host decodes with `Cmd::decode`.
+hl-gpu = { path = "../hl-gpu" }

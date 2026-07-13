@@ -1,0 +1,51 @@
+[package]
+name = "hl-gui"
+version = "0.4.0"
+edition = "2021"
+description = "dd-app — a GTK4/libadwaita desktop UI for the dd VM-less container runtime."
+license = "MIT"
+autobins = false
+
+[[bin]]
+name = "dd-app"
+path = "src/main.rs"
+
+# dd-term — a standalone GPU-rendered (GTK4/GSK) terminal window with iTerm2-style tabs + splits,
+# launching dd workspaces daemon-free via `ddcli workspace launch`.
+[[bin]]
+name = "dd-term"
+path = "src/bin/term.rs"
+
+[dependencies]
+# Shared dd daemon client (a thin façade over bollard); GUI + CLI both use it.
+hl-client = { path = "../hl-client" }
+# Workspace model + persistence (pure, no GTK): the WorkspaceStore the Workspaces view reads/writes.
+hl-term = { path = "../hl-term" }
+# GUI stack (GTK4 via Relm4). Needs pkg-config + the GTK4 dev libs at build time, which only
+# exist on the macOS host (via the Nix devShell in ./nix) — that's why dd-gui is excluded from
+# the workspace default-members. Build with `make app` there.
+#
+# NOTE: libadwaita is intentionally NOT used: its `appstream` dependency fails to build under
+# nixpkgs on aarch64-darwin. GTK4 ships the Adwaita *theme* internally, so the UI still looks
+# native without the libadwaita *library*.
+# Relm4's DEFAULT features include `css` (the separate `relm4-css` crate of predefined
+# CSS-class-name constants). dd-gui styles exclusively via gtk4's own `gtk::CssProvider`
+# (see src/ui/theme.rs / src/bin/term.rs) and never references relm4-css, so `css` is dropped.
+# Keep `macros` + `gnome_42` (the other default features) unchanged.
+relm4 = { version = "0.9", default-features = false, features = ["macros", "gnome_42"] }
+gtk = { version = "0.9", package = "gtk4", features = ["v4_10"] }
+# VTE terminal widget (for the container exec terminal). 0.8 pairs with gtk4 0.9 (both on glib 0.20).
+# C lib `vte-2.91-gtk4` comes from the nix devShell (pkgs.vte-gtk4, darwin-supported; 0.84 there).
+# `v0_72` unlocks get_text_range_format (full-scrollback dump for history persistence) + get_text_selected_full.
+vte4 = { version = "0.8", features = ["v0_72"] }
+libc = "0.2"
+tokio = { version = "1", features = ["time", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Native AppKit shim to give the window a unified macOS title bar (full-size content view +
+# transparent titlebar) so the traffic lights float over our content — no separate title bar.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-foundation = "0.2"
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSView", "NSAppearance", "NSColor"] }

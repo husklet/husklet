@@ -1,31 +1,31 @@
 # dd — VM-less Linux container runtime on macOS. Cargo workspace.
 [workspace]
 resolver = "2"
-members = ["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-cli", "dd-gui", "dd-term-core", "dd-gpu", "dd-display", "dd-compositor", "dd-gpu-wgpu", "dd-shim-common", "dd-shim-gl", "dd-shim-cuda", "dd-shim-cudart", "dd-shim-vk"]
+members = ["hl-jit", "hl-jit-darwin", "hl-images", "hl-daemon", "hl-client", "hl-cli", "hl-gui", "hl-term", "hl-gpu", "hl-display", "hl-compositor", "hl-gpu-wgpu", "hl-shim", "hl-shim-gl", "hl-shim-cuda", "hl-shim-cudart", "hl-shim-vk"]
 # dd-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
 # Keep it out of the default set so a bare `cargo build` works everywhere; build it
-# explicitly with `cargo build -p dd-gui` (or `make app`) on the macOS host.
+# explicitly with `cargo build -p hl-gui` (or `make app`) on the macOS host.
 # dd-compositor pulls in smithay (needs the system libxkbcommon at link/run time) and is macOS-first;
-# it is likewise kept out of default-members so the Linux headless `cargo build -p dd-display` core
+# it is likewise kept out of default-members so the Linux headless `cargo build -p hl-display` core
 # build never compiles smithay and stays offline. Build it explicitly on the mac:
-#   RUSTFLAGS="-L native=<libxkbcommon>/lib" cargo build --release -p dd-compositor
+#   RUSTFLAGS="-L native=<libxkbcommon>/lib" cargo build --release -p hl-compositor
 # dd-gpu-wgpu wraps wgpu/naga (macOS-gated deps; compiles to an empty lib elsewhere) and is likewise
 # kept out of default-members so a bare Linux `cargo build` never fetches/compiles wgpu.
 # dd-shim-common / dd-shim-gl are the GUEST GPU shims (cross-compiled to the guest ELF targets to build
 # libEGL.so.1/libGLESv2.so.2). They build for the host too (aarch64 host == aarch64 guest) but are kept
 # out of default-members so the engine gate's `cargo build` surface is unchanged; test with
-# `cargo test -p dd-shim-common` and build the guest .so with `cargo build -p dd-shim-gl --release`.
+# `cargo test -p hl-shim` and build the guest .so with `cargo build -p hl-shim-gl --release`.
 # dd-shim-cuda is the third guest GPU shim (CUDA Driver API -> libcuda.so.1); same rationale, likewise
-# out of default-members. Test with `cargo test -p dd-shim-cuda`, build the guest .so with
-# `cargo build -p dd-shim-cuda --release`.
+# out of default-members. Test with `cargo test -p hl-shim-cuda`, build the guest .so with
+# `cargo build -p hl-shim-cuda --release`.
 # dd-shim-cudart is the fourth guest GPU shim (CUDA Runtime API -> libcudart.so.1, layered on
 # dd-shim-cuda); same rationale, likewise out of default-members. Test with `cargo test -p
-# dd-shim-cudart`, build the guest .so with `cargo build -p dd-shim-cudart --release`.
+# dd-shim-cudart`, build the guest .so with `cargo build -p hl-shim-cudart --release`.
 # dd-shim-vk is the fifth guest GPU driver (a Vulkan ICD -> libvk_dd.so, discovered by the standard
 # Vulkan loader via icd.json); same rationale, likewise out of default-members. Test with `cargo test
-# -p dd-shim-vk`, build the guest .so with `cargo build -p dd-shim-vk --release`, and enumerate it
-# through a real loader with `VK_ICD_FILENAMES=<...>/icd.json vulkaninfo` (see dd-shim-vk/icd.json).
-default-members =["dd-jit", "dd-jit-darwin", "dd-images", "dd-daemon", "dd-client", "dd-cli", "dd-term-core", "dd-gpu", "dd-display"]
+# -p hl-shim-vk`, build the guest .so with `cargo build -p hl-shim-vk --release`, and enumerate it
+# through a real loader with `VK_ICD_FILENAMES=<...>/icd.json vulkaninfo` (see hl-shim-vk/icd.json).
+default-members =["hl-jit", "hl-jit-darwin", "hl-images", "hl-daemon", "hl-client", "hl-cli", "hl-term", "hl-gpu", "hl-display"]
 
 # Offline-vendored smithay 0.7.0 with a single macOS-only fix: its `zwp_linux_dmabuf` v4-feedback
 # format-table is backed by a POSIX shm object whose name (`smithay-dmabuffeedback-format-table` +

@@ -29,10 +29,10 @@ jobs:
       # Builds ddcli + dd-daemon and (via ddjit's build.rs) compiles + allow-jit-signs the
       # ddjit-linux_{aarch64,x86_64} engines that ddcli run needs.
       - name: Build ddcli + daemon + JIT engines
-        run: cargo build --release -p dd-cli -p dd-daemon
+        run: cargo build --release -p hl-cli -p hl-daemon
 
       - name: Install docker CLI (the scenarios drive dd-daemon through it)
         run: brew install docker
 
       - name: Real-image smoke (fresh pull + run via dd-daemon; arm64 ubuntu/debian + amd64 debian)
-        run: bash dd-daemon/testdata/scenarios/smoke-realimage.sh
+        run: bash hl-daemon/testdata/scenarios/smoke-realimage.sh

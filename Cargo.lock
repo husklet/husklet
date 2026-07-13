@@ -514,191 +514,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
-name = "dd-cli"
-version = "0.4.0"
-dependencies = [
- "clap",
- "dd-client",
- "dd-gpu",
- "dd-images",
- "dd-jit",
- "dd-term-core",
- "libc",
- "serde_json",
- "sha2",
- "tokio",
-]
-
-[[package]]
-name = "dd-client"
-version = "0.4.0"
-dependencies = [
- "bollard",
- "bytes",
- "futures-util",
-]
-
-[[package]]
-name = "dd-compositor"
-version = "0.1.0"
-dependencies = [
- "dd-display",
- "dd-gpu-wgpu",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "smithay",
-]
-
-[[package]]
-name = "dd-daemon"
-version = "0.4.0"
-dependencies = [
- "axum",
- "dd-images",
- "dd-jit",
- "futures-util",
- "hyper",
- "hyper-util",
- "libc",
- "serde",
- "serde_json",
- "tokio",
- "tower",
-]
-
-[[package]]
-name = "dd-display"
-version = "0.1.0"
-dependencies = [
- "dd-gpu",
- "dd-gpu-wgpu",
- "dd-term-core",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "objc2-metal",
- "objc2-quartz-core",
- "spirv_cross",
-]
-
-[[package]]
-name = "dd-gpu"
-version = "0.1.0"
-dependencies = [
- "dd-jit",
-]
-
-[[package]]
-name = "dd-gpu-wgpu"
-version = "0.1.0"
-dependencies = [
- "ash",
- "dd-gpu",
- "dd-shim-vk",
- "metal",
- "naga",
- "objc2",
- "objc2-foundation",
- "objc2-metal",
- "pollster",
- "wgpu",
- "wgpu-hal",
-]
-
-[[package]]
-name = "dd-gui"
-version = "0.4.0"
-dependencies = [
- "dd-client",
- "dd-term-core",
- "gtk4",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "relm4",
- "serde",
- "serde_json",
- "tokio",
- "vte4",
-]
-
-[[package]]
-name = "dd-images"
-version = "0.4.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "dd-jit"
-version = "0.4.0"
-dependencies = [
- "dd-jit-darwin",
- "libc",
- "tokio",
-]
-
-[[package]]
-name = "dd-jit-darwin"
-version = "0.4.0"
-dependencies = [
- "dd-jit",
-]
-
-[[package]]
-name = "dd-shim-common"
-version = "0.1.0"
-dependencies = [
- "dd-gpu",
-]
-
-[[package]]
-name = "dd-shim-cuda"
-version = "0.1.0"
-dependencies = [
- "dd-gpu",
- "dd-shim-common",
-]
-
-[[package]]
-name = "dd-shim-cudart"
-version = "0.1.0"
-dependencies = [
- "dd-gpu",
- "dd-shim-common",
-]
-
-[[package]]
-name = "dd-shim-gl"
-version = "0.1.0"
-dependencies = [
- "dd-shim-common",
-]
-
-[[package]]
-name = "dd-shim-vk"
-version = "0.1.0"
-dependencies = [
- "ash",
- "dd-gpu",
- "dd-shim-common",
-]
-
-[[package]]
-name = "dd-term-core"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.13.0",
- "libc",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1363,6 +1178,191 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
+
+[[package]]
+name = "hl-cli"
+version = "0.4.0"
+dependencies = [
+ "clap",
+ "hl-client",
+ "hl-gpu",
+ "hl-images",
+ "hl-jit",
+ "hl-term",
+ "libc",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
+name = "hl-client"
+version = "0.4.0"
+dependencies = [
+ "bollard",
+ "bytes",
+ "futures-util",
+]
+
+[[package]]
+name = "hl-compositor"
+version = "0.1.0"
+dependencies = [
+ "hl-display",
+ "hl-gpu-wgpu",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "smithay",
+]
+
+[[package]]
+name = "hl-daemon"
+version = "0.4.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "hl-images",
+ "hl-jit",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "hl-display"
+version = "0.1.0"
+dependencies = [
+ "hl-gpu",
+ "hl-gpu-wgpu",
+ "hl-term",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-metal",
+ "objc2-quartz-core",
+ "spirv_cross",
+]
+
+[[package]]
+name = "hl-gpu"
+version = "0.1.0"
+dependencies = [
+ "hl-jit",
+]
+
+[[package]]
+name = "hl-gpu-wgpu"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "hl-gpu",
+ "hl-shim-vk",
+ "metal",
+ "naga",
+ "objc2",
+ "objc2-foundation",
+ "objc2-metal",
+ "pollster",
+ "wgpu",
+ "wgpu-hal",
+]
+
+[[package]]
+name = "hl-gui"
+version = "0.4.0"
+dependencies = [
+ "gtk4",
+ "hl-client",
+ "hl-term",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "relm4",
+ "serde",
+ "serde_json",
+ "tokio",
+ "vte4",
+]
+
+[[package]]
+name = "hl-images"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "hl-jit"
+version = "0.4.0"
+dependencies = [
+ "hl-jit-darwin",
+ "libc",
+ "tokio",
+]
+
+[[package]]
+name = "hl-jit-darwin"
+version = "0.4.0"
+dependencies = [
+ "hl-jit",
+]
+
+[[package]]
+name = "hl-shim"
+version = "0.1.0"
+dependencies = [
+ "hl-gpu",
+]
+
+[[package]]
+name = "hl-shim-cuda"
+version = "0.1.0"
+dependencies = [
+ "hl-gpu",
+ "hl-shim",
+]
+
+[[package]]
+name = "hl-shim-cudart"
+version = "0.1.0"
+dependencies = [
+ "hl-gpu",
+ "hl-shim",
+]
+
+[[package]]
+name = "hl-shim-gl"
+version = "0.1.0"
+dependencies = [
+ "hl-shim",
+]
+
+[[package]]
+name = "hl-shim-vk"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "hl-gpu",
+ "hl-shim",
+]
+
+[[package]]
+name = "hl-term"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.0",
+ "libc",
+]
 
 [[package]]
 name = "http"
