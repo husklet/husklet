@@ -2553,6 +2553,49 @@ impl GpuBackend for MetalBackend {
         // across the FULL tile height, not just within a sub-band, so a partial sub-viewport (e.g. a CSS
         // opacity/clip child render pass) lands and clips consistently with full-tile passes.
         let mut cur_target_h: u32 = 0;
+        // RENDER-TARGET TRACE (DD_DISPLAY_DEBUG): pre-scan this frame's encoder and log the FULL set of
+        // render-target texture ids bound, split into OFFSCREEN (content tiles — not the present surface)
+        // vs SURFACE (the presented IOSurface), plus the pass/draw counts. This splits the multi-proc
+        // content-white wall: if the gpu-process ever binds an offscreen content target WITH draws, the
+        // renderer's raster IS reaching the RasterDecoder (renderer/paint issue upstream of dd); if the
+        // frame only ever binds the present surface (no offscreen content targets / no offscreen draws),
+        // the content raster never arrives = a GPU command-buffer TRANSPORT dormancy in the engine.
+        if exec_debug() {
+            let mut passes = 0usize;
+            let mut draws = 0usize;
+            let mut off_draws = 0usize;
+            let mut in_offscreen_pass = false;
+            let mut offs: std::collections::BTreeSet<u32> = Default::default();
+            let mut surfs: std::collections::BTreeSet<u32> = Default::default();
+            for op in &cb.encoder {
+                match op {
+                    Enc::BeginRenderPass { color, .. } => {
+                        passes += 1;
+                        in_offscreen_pass = color
+                            .first()
+                            .is_some_and(|ca| !self.surface_ids.contains(&ca.texture));
+                        for ca in color {
+                            if self.surface_ids.contains(&ca.texture) {
+                                surfs.insert(ca.texture);
+                            } else {
+                                offs.insert(ca.texture);
+                            }
+                        }
+                    }
+                    Enc::Draw { .. } | Enc::DrawIndexed { .. } => {
+                        draws += 1;
+                        if in_offscreen_pass {
+                            off_draws += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            eprintln!(
+                "dd-gpu executor[rt]: submit surf_id={} passes={passes} draws={draws} off_draws={off_draws} offscreen_targets={:?} surface_targets={:?}",
+                self.cur_surface_id, offs, surfs
+            );
+        }
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, depth } => {
