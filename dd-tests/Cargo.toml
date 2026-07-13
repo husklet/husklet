@@ -2,7 +2,7 @@
 name = "dd-tests"
 version = "0.4.0"
 edition = "2021"
-default-run = "dd-tests"   # `cargo run -p dd-tests` → the basics matrix; the real-software runner is `--bin scenarios`
+default-run = "dd-tests"   # `cargo run -p dd-tests` → the basics matrix (the real-software scenario runner moved to dd-daemon: `cargo test -p dd-daemon --test scenarios`)
 description = "dd engine test harness — declarative groups of guest tests, run across every JIT engine."
 
 # The harness is a runner binary (great DX: grouped/colored output, filtering, summary). The same
@@ -10,11 +10,6 @@ description = "dd engine test harness — declarative groups of guest tests, run
 [[bin]]
 name = "dd-tests"
 path = "src/main.rs"
-
-# Real-software surface: boots dd-daemon (its own engine) and drives popular images through it.
-[[bin]]
-name = "scenarios"
-path = "src/bin/scenarios.rs"
 
 [lib]
 name = "dd_tests"

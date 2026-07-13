@@ -1,16 +1,21 @@
 //! Real-software scenario runner — drives popular images through a container engine (the second test
-//! surface; the first is `dd-tests`, the in-process basics matrix). Rust, no bash.
+//! surface; the first is the `dd-tests` engine basics matrix). Rust, no bash. Owned by dd-daemon.
 //!
-//!   cargo run -p dd-tests --bin scenarios -- --backend real        # host docker = ORACLE (prove tests)
-//!   cargo run -p dd-tests --bin scenarios -- --backend dd          # dd-daemon = SYSTEM UNDER TEST
-//!   cargo run -p dd-tests --bin scenarios -- --backend dd --long   # full compatibility sweep (pulls)
-//!   cargo run -p dd-tests --bin scenarios -- -c databases -t arm   # one category, one arch
-//!   cargo run -p dd-tests --bin scenarios -- --count               # list every case + total, run nothing
+//!   cargo test -p dd-daemon --test scenarios -- --backend real        # host docker = ORACLE (prove tests)
+//!   cargo test -p dd-daemon --test scenarios -- --backend dd          # dd-daemon = SYSTEM UNDER TEST
+//!   cargo test -p dd-daemon --test scenarios -- --backend dd --long   # full compatibility sweep (pulls)
+//!   cargo test -p dd-daemon --test scenarios -- -c databases -t arm   # one category, one arch
+//!   cargo test -p dd-daemon --test scenarios -- --count               # list every case + total, run nothing
 //!
 //! Each invocation boots its OWN engine/daemon (private socket) so many runners go in parallel.
 
-use dd_tests::scenario::{run_one, Backend, Cfg, Class, Daemon, Scenario, Status, Step, Target};
-use dd_tests::scenarios;
+//! This crate-owned scenario runner is a `harness = false` integration test target: `cargo test -p
+//! dd-daemon --test scenarios` runs `main` below (the CI authority AND developer runner). Args after
+//! `--` are parsed by `main`, e.g. `cargo test -p dd-daemon --test scenarios -- --count`.
+mod scenario;
+mod scenarios;
+
+use scenario::{run_one, Backend, Cfg, Class, Daemon, Scenario, Status, Step, Target};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;

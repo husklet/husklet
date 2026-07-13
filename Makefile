@@ -22,29 +22,29 @@ mac-crates:     ## POST-MERGE GATE (macOS): build+test the mac-only Wayland-rend
 perf: jit       ## same matrix + an oracle-vs-JIT slowdown table & summary (PERF_N=median runs; writes target/dd-tests/perf.{csv,json}); FILTER/ENGINE narrow
 	PERF=1 cargo run -q -p dd-tests -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
 test-docker: jit ## end-to-end Docker-CLI scenarios against dd-daemon (run/logs/stop/kill/volumes/networks)
-	bash dd-tests/scenarios/docker.sh
+	bash dd-daemon/testdata/scenarios/docker.sh
 test-docker-full: jit ## FULL Docker CLI/API compliance matrix (every command; maps each failure to a non-compliant verb)
-	bash dd-tests/scenarios/docker-full.sh
+	bash dd-daemon/testdata/scenarios/docker-full.sh
 test-compose: jit ## end-to-end Docker Compose scenarios against dd-daemon (up/ps/logs/exec/down; skips if no compose)
-	bash dd-tests/scenarios/compose.sh
-	bash dd-tests/scenarios/compose-multinet.sh
+	bash dd-daemon/testdata/scenarios/compose.sh
+	bash dd-daemon/testdata/scenarios/compose-multinet.sh
 test-docker-net: jit ## container-to-container networking (by-name DNS / by-IP / cross-network isolation)
-	bash dd-tests/scenarios/docker-net.sh
+	bash dd-daemon/testdata/scenarios/docker-net.sh
 test-macos: jit ## macOS-container parity: same docker lifecycle on a Linux AND a native-macOS container
-	bash dd-tests/scenarios/macos-container.sh
+	bash dd-daemon/testdata/scenarios/macos-container.sh
 test-realsw: jit ## run REAL pulled software (redis/python/postgres/nats) with deterministic workloads
-	bash dd-tests/scenarios/realsw.sh
+	bash dd-daemon/testdata/scenarios/realsw.sh
 test-smoke:     ## user-perspective: FRESH-PULL + run a real glibc distro on BOTH arches (the libc.so.6 guard; needs network, macOS)
 	cargo build --release -p dd-cli -p dd-daemon
-	bash dd-tests/scenarios/smoke-realimage.sh
+	bash dd-daemon/testdata/scenarios/smoke-realimage.sh
 scenarios: jit  ## REAL software through dd-daemon (the SUT): popular images, both arches. CAT=databases TGT=arm to narrow
-	cargo run -q -p dd-tests --bin scenarios -- --backend dd $(if $(CAT),-c $(CAT)) $(if $(TGT),-t $(TGT))
+	cargo test -q -p dd-daemon --test scenarios -- --backend dd $(if $(CAT),-c $(CAT)) $(if $(TGT),-t $(TGT))
 scenarios-real: ## same scenarios against the REAL docker oracle (mac Docker Desktop) — proves the tests are correct
-	cargo run -q -p dd-tests --bin scenarios -- --backend real --long $(if $(CAT),-c $(CAT)) $(if $(TGT),-t $(TGT))
+	cargo test -q -p dd-daemon --test scenarios -- --backend real --long $(if $(CAT),-c $(CAT)) $(if $(TGT),-t $(TGT))
 scenarios-long: jit ## full compatibility sweep against dd-daemon (pulls images, heavy workloads, both arches)
-	cargo run -q -p dd-tests --bin scenarios -- --backend dd --long $(if $(CAT),-c $(CAT))
+	cargo test -q -p dd-daemon --test scenarios -- --backend dd --long $(if $(CAT),-c $(CAT))
 scenarios-count: ## list every scenario×target case + total (runs nothing) — proves the case count
-	cargo run -q -p dd-tests --bin scenarios -- --count $(if $(CAT),-c $(CAT))
+	cargo test -q -p dd-daemon --test scenarios -- --count $(if $(CAT),-c $(CAT))
 scenarios-clean: ## reap ONLY harness-spawned dd-daemons (by pidfile, mac-side) + remove scratch — keeps the host clean
 	@for pf in target/dd-scen/*/daemon.pid; do [ -f "$$pf" ] || continue; pid=$$(cat "$$pf"); \
 	  mac bash -lc "kill $$pid 2>/dev/null; true" </dev/null; echo "reaped $$pid"; done; \

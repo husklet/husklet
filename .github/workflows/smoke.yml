@@ -35,4 +35,4 @@ jobs:
         run: brew install docker
 
       - name: Real-image smoke (fresh pull + run via dd-daemon; arm64 ubuntu/debian + amd64 debian)
-        run: bash dd-tests/scenarios/smoke-realimage.sh
+        run: bash dd-daemon/testdata/scenarios/smoke-realimage.sh

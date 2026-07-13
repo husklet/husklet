@@ -15,6 +15,16 @@ path = "src/lib.rs"
 name = "dd-daemon"
 path = "src/main.rs"
 
+# Real-software scenario runner (migrated from dd-tests, ownership-matrix Step 3): boots dd-daemon's OWN
+# binary on a private socket and drives popular images through the Docker API. `harness = false` gives it a
+# custom `main`, so it is BOTH the `cargo test` CI authority and a developer runner:
+#   cargo test -p dd-daemon --test scenarios -- --count
+#   cargo test -p dd-daemon --test scenarios -- --backend dd -c databases -t arm
+[[test]]
+name = "scenarios"
+path = "tests/scenarios_runner.rs"
+harness = false
+
 [dependencies]
 ddjit = { path = "../dd-jit", package = "dd-jit" }
 dd-images = { path = "../dd-images" }
@@ -27,3 +37,9 @@ hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto"] }
 tower = { version = "0.5", features = ["util"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 libc = "0.2"
+
+# dev-only: the migrated scenario runner uses the product-neutral `dd_tests::diag` helper to turn a failed
+# container run into an actionable JIT bug report. dd-tests is a leaf helper (depends only on dd-jit), so
+# this is acyclic — dd-jit does not depend on dd-daemon.
+[dev-dependencies]
+dd-tests = { path = "../dd-tests" }

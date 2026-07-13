@@ -15,9 +15,10 @@
 
 pub mod bench_gates; // guard helpers for `bin/bench` (BENCH_N / dd-lane / artifact-write gates)
 pub mod cases;
-pub mod diag;
-pub mod scenario; // real-software surface: drive popular images through dd-daemon (Real-oracle vs Dd)
-pub mod scenarios; // the scenario registry (one folder per category) // turn a failed run into an actionable JIT bug report (signals/buckets/crash details)
+pub mod diag; // turn a failed run into an actionable JIT bug report (signals/buckets/crash details); still consumed by the daemon scenario runner (now in dd-daemon) via the dd-tests dev-dep
+
+// The real-software scenario surface (`scenario`/`scenarios` + the `scenarios` bin) moved to its owner
+// `dd-daemon` (ownership-matrix Step 3): `cargo test -p dd-daemon --test scenarios`.
 
 mod harness;
 pub use harness::*;
