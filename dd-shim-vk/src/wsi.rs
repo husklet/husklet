@@ -186,6 +186,11 @@ pub extern "C" fn vkCreateSwapchainKHR(
         };
         images.push(SwapImage { image: handle, ir_id, surface });
     }
+    if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+        let ids: Vec<u32> = images.iter().map(|i| i.surface.id).collect();
+        let fds: Vec<i32> = images.iter().map(|i| i.surface.fd).collect();
+        eprintln!("[dd-shim-vk] vkCreateSwapchainKHR: {count} imgs {width}x{height} surf_ids={ids:?} fds={fds:?}");
+    }
     let handle = s.alloc_handle();
     s.swapchains.insert(
         handle,
@@ -283,13 +288,20 @@ pub extern "C" fn vkQueuePresentKHR(_queue: VkQueue, p_present_info: *const vk::
                 }
             }
         }
+        let dbg = std::env::var_os("DD_SHIM_DEBUG").is_some();
+        if dbg {
+            eprintln!("[dd-shim-vk] vkQueuePresentKHR: surface.id={} tex={} frame_ir={} cmds", surface.id, tex, frame.len());
+        }
         // App-side rendezvous: commit the host-rendered IOSurface dma-buf to the app's own wl_surface
         // (dd-display keys the IOSurface off modifier_hi=0x6464 / modifier_lo=surface.id). This is what
         // lands the frame on vkcube's window. Off-guest (no wl display / dma-buf fd) it no-ops.
-        if let Some(rec) = s.surfaces.get(&sc_surface) {
-            let committed = crate::wl_present::present(rec.wl_display, rec.wl_surface, &surface);
-            if !committed && std::env::var_os("DD_SHIM_DEBUG").is_some() {
-                eprintln!("[dd-shim-vk] vkQueuePresentKHR: wayland present unavailable (surface {})", surface.id);
+        // DD_VK_NO_WL_PRESENT disables it (diagnostic isolation of the wayland-marshal path).
+        if std::env::var_os("DD_VK_NO_WL_PRESENT").is_none() {
+            if let Some(rec) = s.surfaces.get(&sc_surface) {
+                let committed = crate::wl_present::present(rec.wl_display, rec.wl_surface, &surface);
+                if dbg {
+                    eprintln!("[dd-shim-vk] vkQueuePresentKHR: wayland commit -> {committed}");
+                }
             }
         }
     }
