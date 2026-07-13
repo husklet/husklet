@@ -178,6 +178,7 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
 
     for iface in [
         "wl_compositor",
+        "wl_subcompositor",
         "wp_fractional_scale_manager_v1",
         "zxdg_output_manager_v1",
         "wp_single_pixel_buffer_manager_v1",
@@ -344,10 +345,30 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     // Move this independent root from dd-0 to dd-1. Membership changes are ordered enter(new) then
     // leave(old), and every later presenter/feedback lookup reads this same selected output.
     c.events.clear();
+    let subcomp = bind(&mut c, "wl_subcompositor", 1);
+    let child = c.alloc();
+    c.conn.send(&Message::new(comp, 0).u32(child));
+    let subsurface = c.alloc();
+    c.conn.send(&Message::new(subcomp, 1).u32(subsurface).u32(child).u32(surface));
+    c.conn.send(&Message::new(child, 6));
+    pump!();
+    c.events.clear();
     assert!(state.route_surface_to_output(1, "dd-1"));
     display.flush_clients().unwrap();
     c.drain();
     assert_eq!(state.surface_output_name(1).as_deref(), Some("dd-1"));
     assert!(c.saw(surface, 0), "route must emit wl_surface.enter for dd-1");
     assert!(c.saw(surface, 1), "route must emit wl_surface.leave for dd-0");
+    assert_eq!(state.surface_output_name(2).as_deref(), Some("dd-1"));
+    assert!(c.saw(child, 0), "child must enter its root's replacement output");
+    assert!(c.saw(child, 1), "child must leave its root's old output");
+
+    let independent = c.alloc();
+    c.conn.send(&Message::new(comp, 0).u32(independent));
+    pump!();
+    assert_eq!(
+        state.surface_output_name(3).as_deref(),
+        Some("dd-0"),
+        "routing one root must not move an independent root"
+    );
 }

@@ -171,6 +171,12 @@ impl DdState {
             return;
         }
 
+        // A newly-role-assigned child initially entered the primary output at wl_surface creation. Once
+        // its parent/root exists, inherit that root's selected output before any synchronized early-return.
+        if let Some(root) = self.window_root(surface) {
+            self.inherit_output_membership(surface, &root);
+        }
+
         // A synchronized subsurface is presented as part of its parent's atomic commit; do not present now
         // (its buffer is already remembered above and its frame callbacks are drained when the root
         // presents). Presenting here would show a half-applied tree.
@@ -708,7 +714,7 @@ impl DdState {
     /// Every popup that ultimately belongs to `root`, each with its screen offset within `root` (the sum of
     /// the popup chain's per-popup geometry origins), ordered parents-before-children so a submenu blends on
     /// top of the menu that spawned it.
-    fn collect_popups_for_root(&self, root: &WlSurface) -> Vec<(WlSurface, i32, i32)> {
+    pub(crate) fn collect_popups_for_root(&self, root: &WlSurface) -> Vec<(WlSurface, i32, i32)> {
         // With native popup windows enabled, popups are NOT composited into the toplevel frame — each
         // presents as its own window (see `present_root`) — so the toplevel's composite/pace tree carries
         // no popups.
@@ -926,7 +932,7 @@ impl DdState {
     }
 
     /// `surface` and every subsurface descendant, depth-first.
-    fn collect_tree_surfaces(&self, surface: &WlSurface, out: &mut Vec<WlSurface>) {
+    pub(crate) fn collect_tree_surfaces(&self, surface: &WlSurface, out: &mut Vec<WlSurface>) {
         out.push(surface.clone());
         for child in get_children(surface) {
             if &child == surface {

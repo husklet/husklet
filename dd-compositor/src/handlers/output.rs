@@ -37,14 +37,40 @@ impl DdState {
             .chain(self.extra_outputs.iter())
             .find(|output| output.name() == output_name)
             .cloned() else { return false; };
-        let old = self.selected_output(&surface);
-        if old == next { return true; }
-        next.enter(&surface);
-        self.surface_outputs.insert(sid, next);
-        self.send_preferred_fractional_scale(&surface);
-        old.leave(&surface);
-        self.dirty.insert(sid);
+        let root = self.window_root(&surface).unwrap_or(surface);
+        let mut tree = Vec::new();
+        self.collect_tree_surfaces(&root, &mut tree);
+        for (popup, _, _) in self.collect_popups_for_root(&root) {
+            self.collect_tree_surfaces(&popup, &mut tree);
+        }
+        // Target validation and tree discovery complete before the first mutation. Each member enters
+        // the replacement before its membership flips and before leaving its previous output.
+        for member in tree {
+            let member_sid = self.surface_id(&member);
+            let old = self.selected_output(&member);
+            if old == next { continue; }
+            next.enter(&member);
+            self.surface_outputs.insert(member_sid, next.clone());
+            self.send_preferred_fractional_scale(&member);
+            old.leave(&member);
+            self.dirty.insert(member_sid);
+        }
         true
+    }
+
+    pub(crate) fn inherit_output_membership(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+        root: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
+        let target = self.selected_output(root);
+        let sid = self.surface_id(surface);
+        let old = self.selected_output(surface);
+        if old == target { return; }
+        target.enter(surface);
+        self.surface_outputs.insert(sid, target);
+        self.send_preferred_fractional_scale(surface);
+        old.leave(surface);
     }
 
     pub fn surface_output_name(&self, sid: u32) -> Option<String> {
