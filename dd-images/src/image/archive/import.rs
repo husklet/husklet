@@ -107,6 +107,45 @@ mod tests {
         assert!(EXTRACT_FLAGS.contains(&"--xattrs"), "xattrs round-trip (finding 3)");
     }
 
+    // C08 — the dd-images extraction boundary (run_extract_args) must REJECT an archive whose member
+    // escapes the destination via a `..` component (path traversal) BEFORE writing any file, so a
+    // `docker import` of a hostile tar can't land files outside the store.
+    #[test]
+    fn import_rejects_path_traversal_member() {
+        let src = unique_dir("trav-src");
+        std::fs::create_dir_all(&src).unwrap();
+        write_file(&src.join("x"), b"pwn\n");
+        // GNU tar --transform prepends `../` -> member "../x". Skip gracefully on bsdtar (no --transform).
+        let evil = src.join("evil.tar");
+        let made = std::process::Command::new("tar")
+            .arg("cf").arg(&evil).arg("-C").arg(&src)
+            .arg("--transform").arg("s,^,../,").arg("x").status();
+        if !matches!(made, Ok(s) if s.success()) {
+            let _ = std::fs::remove_dir_all(&src);
+            return; // no GNU tar --transform available; the guard wiring is still exercised elsewhere
+        }
+        // Prove the archive really carries a `..` member (else the test asserts nothing).
+        let listed = std::process::Command::new("tar").arg("tf").arg(&evil).output().unwrap();
+        if !String::from_utf8_lossy(&listed.stdout).contains("..") {
+            let _ = std::fs::remove_dir_all(&src);
+            return;
+        }
+        let bytes = std::fs::read(&evil).unwrap();
+
+        let store_dir = unique_dir("trav-store");
+        let store = Store::new(store_dir.to_str().unwrap());
+        let err = store
+            .import_rootfs("evilimg", &bytes)
+            .expect_err("a `..`-escaping member must be rejected at the extraction boundary");
+        assert!(err.to_string().contains("path traversal"), "err: {err}");
+        // The rejected import leaves no image dir (and never wrote the escaping file).
+        assert!(!store_dir.join("evilimg").exists(), "rejected import must leave no image dir");
+        assert!(!src.join("x.escaped").exists());
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
     // Flow 4 — import_rootfs unpacks a bare rootfs tar (files at top level, no wrapper/manifest).
     // Invariant: the given name is kept verbatim, the arch is probed from the rootfs, and every file lands
     // directly under the new image's rootfs with intact contents.

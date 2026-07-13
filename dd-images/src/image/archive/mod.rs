@@ -57,6 +57,12 @@ pub(super) fn run_extract(archive: &Path, dest: &Path) -> Result<(), Error> {
 /// Like [`run_extract`] but with `extra` tar arguments inserted before `-xf` (e.g. `--exclude` patterns
 /// used to drop AUFS/OCI whiteout markers when flattening docker-save layers).
 pub(super) fn run_extract_args(archive: &Path, dest: &Path, extra: &[&str]) -> Result<(), Error> {
+    // SECURITY (traversal guard): `docker load` / `docker import` / docker-save layer tars are all
+    // attacker-controlled archives extracted here. Reject any member that would ESCAPE `dest` — an
+    // absolute path or a `..` component — BEFORE unpacking, so a hostile member like `../../etc/foo`
+    // can't let `tar` write outside the store. Lists with `tar tf` (no extraction); a `tar tf` that
+    // itself fails is left for the real extract below to surface.
+    tar_members_contained(archive).map_err(Error::Archive)?;
     let out = Command::new("tar")
         .args(EXTRACT_FLAGS)
         .args(extra)
