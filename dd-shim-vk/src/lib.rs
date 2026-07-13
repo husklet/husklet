@@ -210,14 +210,14 @@ mod tests {
     /// The ICD advertises Vulkan **1.0**, consistently across `vkEnumerateInstanceVersion`, the
     /// physical-device `apiVersion`, and the capability profile constant.
     #[test]
-    fn advertises_vulkan_1_0() {
-        assert_eq!(capability::ADVERTISED_API_VERSION, (1, 0));
+    fn advertises_vulkan_1_1() {
+        assert_eq!(capability::ADVERTISED_API_VERSION, (1, 1));
         assert_eq!(ash::vk::api_version_major(state::DD_API_VERSION), 1);
-        assert_eq!(ash::vk::api_version_minor(state::DD_API_VERSION), 0);
+        assert_eq!(ash::vk::api_version_minor(state::DD_API_VERSION), 1);
         let mut v: u32 = 0xffff_ffff;
         assert_eq!(vkEnumerateInstanceVersion(&mut v), types::VK_SUCCESS);
         assert_eq!(ash::vk::api_version_major(v), 1);
-        assert_eq!(ash::vk::api_version_minor(v), 0);
+        assert_eq!(ash::vk::api_version_minor(v), 1);
         // The physical-device properties report the same version.
         let props = state::physical_device_properties();
         assert_eq!(props.api_version, state::DD_API_VERSION);
@@ -236,18 +236,18 @@ mod tests {
             let r = vkCreateInstance(&ci, core::ptr::null(), &mut inst);
             (r, inst)
         };
-        // 1.4 and 2.0 are newer than the advertised 1.0 → refused.
+        // 1.2, 1.4 and 2.0 are newer than the advertised 1.1 → refused.
+        assert_eq!(create(vk::make_api_version(0, 1, 2, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
         assert_eq!(create(vk::make_api_version(0, 1, 4, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
-        assert_eq!(create(vk::make_api_version(0, 1, 1, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
         assert_eq!(create(vk::make_api_version(0, 2, 0, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
-        // 1.0 (and a 1.0.x patch, and apiVersion 0 == "1.0 default") are honored.
-        let (r0, inst0) = create(vk::make_api_version(0, 1, 0, 0));
-        assert_eq!(r0, types::VK_SUCCESS, "a 1.0 request must be accepted (vkcube path)");
-        assert!(!inst0.is_null());
-        vkDestroyInstance(inst0, core::ptr::null());
-        let (rp, instp) = create(vk::make_api_version(0, 1, 0, 42));
-        assert_eq!(rp, types::VK_SUCCESS, "patch differences are always compatible");
-        vkDestroyInstance(instp, core::ptr::null());
+        // 1.0 and 1.1 (and patch differences, and apiVersion 0 == "1.0 default") are honored — a 1.0 app
+        // (vkcube) and a 1.1 app (wgpu/Zed) both run on the 1.1 driver.
+        for v in [vk::make_api_version(0, 1, 0, 0), vk::make_api_version(0, 1, 1, 0), vk::make_api_version(0, 1, 1, 42)] {
+            let (r, inst) = create(v);
+            assert_eq!(r, types::VK_SUCCESS, "a <= 1.1 request must be accepted");
+            assert!(!inst.is_null());
+            vkDestroyInstance(inst, core::ptr::null());
+        }
     }
 
     // ---- Phase 0: truthful extension enumeration + strict mode -----------------------------------

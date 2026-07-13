@@ -47,13 +47,14 @@ pub struct CommandPool {
 
 // ---- the reported device -------------------------------------------------------------------------
 
-/// The Vulkan API version we advertise (device + `vkEnumerateInstanceVersion`). **Vulkan 1.0.0.**
-/// Phase-0 truthfulness (`docs/codex-rendering.md` §2.2, §5.1, gui_vk_capability_truth): advertise only
-/// the version whose mandatory core is actually backed. 1.1+ promoted-core semantics (bind_memory2,
-/// dynamic rendering, timeline semaphores, the `...2` device queries, …) are still generated stubs, so
-/// advertising 1.1/1.2/1.3 would let an app select a version whose calls do nothing. Raise this only
-/// when the promoted core for the next version passes. A newer app request → `VK_ERROR_INCOMPATIBLE_DRIVER`.
-pub const DD_API_VERSION: u32 = vk::API_VERSION_1_0;
+/// The Vulkan API version we advertise (device + `vkEnumerateInstanceVersion`). **Vulkan 1.1.0.**
+/// Truthfulness gate (`docs/codex-rendering.md` §2.2, §5.1, gui_vk_capability_truth): advertise only the
+/// version whose mandatory core is actually backed. The **entire 1.1 mandatory core** now has real bodies
+/// (bind/requirements2, descriptor update templates, sampler YCbCr, device-groups-minimal, the `...2`
+/// physical-device queries — see `crate::capability` core:1.1 census = 28/28), so 1.1 is honestly
+/// selectable — the version wgpu-on-Vulkan / Zed require. 1.2+ promoted core is still partial, so a 1.2+
+/// request is refused with `VK_ERROR_INCOMPATIBLE_DRIVER`. Raise this again once 1.2 core passes.
+pub const DD_API_VERSION: u32 = vk::API_VERSION_1_1;
 /// Apple's PCI vendor id, as MoltenVK reports (`kAppleVendorId` in MVKDevice.mm).
 pub const APPLE_VENDOR_ID: u32 = 0x106b;
 /// `driverVersion` — dd's own driver revision (packed like an api version), increment 1.
