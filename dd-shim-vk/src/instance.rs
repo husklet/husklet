@@ -211,6 +211,109 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
     }
 }
 
+// ---- the `...2` property queries (vkcube / VK_KHR_get_physical_device_properties2) ---------------
+// Each fills only the nested payload field, leaving the app-provided sType/pNext chain intact.
+
+/// A pNext-chain node header (`{ sType, pNext }`) — every Vulkan extension struct starts with this.
+#[repr(C)]
+struct ChainHeader {
+    s_type: i32,
+    p_next: *mut ChainHeader,
+}
+
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceProperties2(
+    _physical_device: VkPhysicalDevice,
+    p_props: *mut vk::PhysicalDeviceProperties2,
+) {
+    let Some(out) = (unsafe { p_props.as_mut() }) else { return };
+    out.properties = state::physical_device_properties();
+    // Walk the pNext chain and fill the payloads apps read back (vkcube chains + prints
+    // VkPhysicalDeviceDriverProperties.driverName/driverInfo — leaving them garbage would make its
+    // printf abort on a stray "%n"). Preserve each node's sType/pNext.
+    let mut node = out.p_next as *mut ChainHeader;
+    while !node.is_null() {
+        let s_type = unsafe { (*node).s_type };
+        // VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES == 1000196000
+        if s_type == vk::StructureType::PHYSICAL_DEVICE_DRIVER_PROPERTIES.as_raw() {
+            let dp = node as *mut vk::PhysicalDeviceDriverProperties;
+            if let Some(d) = unsafe { dp.as_mut() } {
+                d.driver_id = vk::DriverId::MESA_LLVMPIPE; // a valid enum; dd has no registered id
+                write_cstr(&mut d.driver_name, "dd");
+                write_cstr(&mut d.driver_info, "dd Metal (Vulkan) 0.1");
+                d.conformance_version = vk::ConformanceVersion {
+                    major: 1,
+                    minor: 3,
+                    subminor: 0,
+                    patch: 0,
+                };
+            }
+        }
+        node = unsafe { (*node).p_next };
+    }
+}
+
+/// Write a NUL-terminated C string into a fixed `[c_char; N]` array (truncating).
+fn write_cstr(dst: &mut [core::ffi::c_char], s: &str) {
+    let keep = dst.len().saturating_sub(1);
+    for b in dst.iter_mut() {
+        *b = 0;
+    }
+    for (d, &b) in dst.iter_mut().zip(s.as_bytes().iter()).take(keep) {
+        *d = b as core::ffi::c_char;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceFeatures2(
+    _physical_device: VkPhysicalDevice,
+    p_features: *mut vk::PhysicalDeviceFeatures2,
+) {
+    if let Some(out) = unsafe { p_features.as_mut() } {
+        out.features = state::physical_device_features();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceMemoryProperties2(
+    _physical_device: VkPhysicalDevice,
+    p_mem: *mut vk::PhysicalDeviceMemoryProperties2,
+) {
+    if let Some(out) = unsafe { p_mem.as_mut() } {
+        out.memory_properties = state::memory_properties();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties2(
+    _physical_device: VkPhysicalDevice,
+    p_count: *mut u32,
+    p_props: *mut vk::QueueFamilyProperties2,
+) {
+    let Some(count) = (unsafe { p_count.as_mut() }) else { return };
+    if p_props.is_null() {
+        *count = 1;
+        return;
+    }
+    if *count >= 1 {
+        if let Some(out) = unsafe { p_props.as_mut() } {
+            out.queue_family_properties = state::queue_family_properties();
+        }
+        *count = 1;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
+    _physical_device: VkPhysicalDevice,
+    _format: i32,
+    p_props: *mut vk::FormatProperties2,
+) {
+    if let Some(out) = unsafe { p_props.as_mut() } {
+        out.format_properties = vk::FormatProperties::default();
+    }
+}
+
 // ---- device-level enumeration (physical-device scoped) -------------------------------------------
 
 /// Device extensions the ICD implements: `VK_KHR_swapchain` (present), so a windowed app finds it.

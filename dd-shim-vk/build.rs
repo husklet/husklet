@@ -266,6 +266,12 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetPhysicalDeviceMemoryProperties",
     "vkGetPhysicalDeviceQueueFamilyProperties",
     "vkGetPhysicalDeviceFormatProperties",
+    // ...2 property queries (vkcube uses these via VK_KHR_get_physical_device_properties2)
+    "vkGetPhysicalDeviceProperties2",
+    "vkGetPhysicalDeviceFeatures2",
+    "vkGetPhysicalDeviceMemoryProperties2",
+    "vkGetPhysicalDeviceQueueFamilyProperties2",
+    "vkGetPhysicalDeviceFormatProperties2",
     "vkEnumerateDeviceExtensionProperties",
     "vkEnumerateDeviceLayerProperties",
     // ---- device + queue + command pool (device.rs) ----
