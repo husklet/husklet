@@ -286,13 +286,19 @@ pub extern "C" fn vkQueuePresentKHR(_queue: VkQueue, p_present_info: *const vk::
         let from = s.present_flushed;
         let frame = s.ir_log[from..].to_vec();
         s.present_flushed = s.ir_log.len();
-        if std::env::var_os("DD_GPU_EXEC").is_some() {
+        // Always ship to the host executor via ExecConn::from_env (defaults to the standard
+        // $DD_GPU_EXEC / /run/user/0/dd-gpu-0 socket). Off-guest the connect fails harmlessly.
+        {
             let bytes = encode_stream(&frame);
             let conn = s.exec.get_or_insert_with(transport::ExecConn::from_env);
-            if let Err(e) = conn.submit(&surface, &bytes) {
-                if std::env::var_os("DD_SHIM_DEBUG").is_some() {
-                    eprintln!("[dd-shim-vk] vkQueuePresentKHR: exec submit failed: {e}");
+            match conn.submit(&surface, &bytes) {
+                Ok(()) if std::env::var_os("DD_SHIM_DEBUG").is_some() => {
+                    eprintln!("[dd-shim-vk] vkQueuePresentKHR: exec submit OK ({} bytes) surface.id={}", bytes.len(), surface.id);
                 }
+                Err(e) if std::env::var_os("DD_SHIM_DEBUG").is_some() => {
+                    eprintln!("[dd-shim-vk] vkQueuePresentKHR: exec submit FAILED: {e}");
+                }
+                _ => {}
             }
         }
         let dbg = std::env::var_os("DD_SHIM_DEBUG").is_some();
