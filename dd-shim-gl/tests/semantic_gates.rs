@@ -1,0 +1,171 @@
+//! In-tree mirrors of the five §11 rendering-ledger gates this crate closes, so they run under the
+//! normal `cargo test -p dd-shim-gl` (the tracked `rendering_surface.rs` gates are untracked and not
+//! always present). Each mirrors the corresponding gate's observable assertions.
+
+use core::ffi::c_void;
+
+use dd_shim_gl::glconst::*;
+use dd_shim_gl::{egl, gles};
+
+// ---- gles_shader_compile_link_status_and_logs_are_truthful -------------------------------------
+
+#[test]
+fn shader_compile_link_status_and_logs_are_truthful() {
+    let shader = gles::glCreateShader(GL_VERTEX_SHADER);
+    assert_ne!(shader, 0);
+    // Syntactically invalid GLSL (unbalanced parenthesis after `main`).
+    let invalid = std::ffi::CString::new("attribute vec4 position; void main( { gl_Position = position; }").unwrap();
+    let src = invalid.as_ptr();
+    gles::glShaderSource(shader, 1, &src, core::ptr::null());
+    gles::glCompileShader(shader);
+
+    let mut compiled = -1;
+    gles::glGetShaderiv(shader, GL_COMPILE_STATUS, &mut compiled);
+    assert_eq!(compiled, GL_FALSE as i32, "invalid GLSL must report COMPILE_STATUS=false");
+
+    let mut log_len = 0;
+    gles::glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &mut log_len);
+    assert!(log_len > 1, "failed shader must have a non-empty info log");
+    let mut log = vec![0 as core::ffi::c_char; log_len as usize];
+    let mut written = 0;
+    gles::glGetShaderInfoLog(shader, log_len, &mut written, log.as_mut_ptr());
+    assert!(written > 0 && log[0] != 0, "failed shader diagnostic must not be empty");
+
+    // A program with only a failed vertex shader (and no fragment shader) cannot link.
+    let program = gles::glCreateProgram();
+    gles::glAttachShader(program, shader);
+    gles::glLinkProgram(program);
+    let mut linked = -1;
+    gles::glGetProgramiv(program, GL_LINK_STATUS, &mut linked);
+    assert_eq!(linked, GL_FALSE as i32, "incomplete program must report LINK_STATUS=false");
+    let mut plen = 0;
+    gles::glGetProgramiv(program, GL_INFO_LOG_LENGTH, &mut plen);
+    assert!(plen > 1, "failed link must have a non-empty info log");
+
+    // A well-formed shader still compiles (the validator must not reject valid GLSL).
+    let good = gles::glCreateShader(GL_FRAGMENT_SHADER);
+    let valid = std::ffi::CString::new("precision mediump float; void main(){ gl_FragColor = vec4(1.0); }").unwrap();
+    let gsrc = valid.as_ptr();
+    gles::glShaderSource(good, 1, &gsrc, core::ptr::null());
+    gles::glCompileShader(good);
+    let mut ok = -1;
+    gles::glGetShaderiv(good, GL_COMPILE_STATUS, &mut ok);
+    assert_eq!(ok, GL_TRUE as i32, "valid GLSL must report COMPILE_STATUS=true");
+}
+
+// ---- egl_config_selection_and_invalid_attributes_are_truthful ----------------------------------
+
+#[test]
+fn egl_config_selection_and_invalid_attributes_are_truthful() {
+    let display = egl::eglGetDisplay(core::ptr::null_mut());
+    assert!(!display.is_null());
+    assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
+    let _ = egl::eglGetError(); // drain
+
+    // Over-constrained request: a valid query with ZERO matches; the config slot is untouched.
+    let impossible = [EGL_RED_SIZE, 64, EGL_SAMPLES, 8, EGL_NONE];
+    let sentinel = 0x55usize as *mut c_void;
+    let mut config = sentinel;
+    let mut count = -1;
+    assert_eq!(egl::eglChooseConfig(display, impossible.as_ptr(), &mut config, 1, &mut count), EGL_TRUE);
+    assert_eq!(count, 0, "impossible attributes matched the singleton config");
+    assert_eq!(config, sentinel, "zero-match selection overwrote the caller's slot");
+
+    // A satisfiable request DOES match (so real apps still get a config).
+    let ok_attrs = [EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE];
+    let mut cfg2 = core::ptr::null_mut();
+    let mut n2 = -1;
+    assert_eq!(egl::eglChooseConfig(display, ok_attrs.as_ptr(), &mut cfg2, 1, &mut n2), EGL_TRUE);
+    assert_eq!(n2, 1, "a satisfiable attribute set must match config 1");
+
+    // Unknown attribute -> EGL_BAD_ATTRIBUTE, output preserved.
+    let mut value = 0x1234;
+    assert_eq!(egl::eglGetConfigAttrib(display, 1usize as *mut c_void, 0x7fff, &mut value), EGL_FALSE);
+    assert_eq!(value, 0x1234);
+    assert_eq!(egl::eglGetError(), EGL_BAD_ATTRIBUTE);
+
+    // Forged config handle -> EGL_BAD_CONFIG.
+    assert_eq!(egl::eglGetConfigAttrib(display, 99usize as *mut c_void, EGL_RED_SIZE, &mut value), EGL_FALSE);
+    assert_eq!(egl::eglGetError(), EGL_BAD_CONFIG);
+
+    // Desktop-OpenGL API selection is rejected.
+    assert_eq!(egl::eglBindAPI(0x30A2 /* EGL_OPENGL_API */), EGL_FALSE);
+    assert_eq!(egl::eglGetError(), EGL_BAD_PARAMETER);
+    assert_eq!(egl::eglBindAPI(EGL_OPENGL_ES_API), EGL_TRUE);
+}
+
+// ---- egl_surfaces_have_distinct_lifetimes_dimensions_and_types ---------------------------------
+
+#[test]
+fn egl_surfaces_have_distinct_lifetimes_dimensions_and_types() {
+    // Host-tool mode avoids opening renderd/Wayland connections.
+    std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-egl-surface-mirror.ir"));
+    let display = egl::eglGetDisplay(core::ptr::null_mut());
+    assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
+    let config = 1usize as *mut c_void;
+
+    let window = egl::eglCreateWindowSurface(display, config, core::ptr::null_mut(), core::ptr::null());
+    let pb_attrs = [EGL_WIDTH, 37, EGL_HEIGHT, 19, EGL_NONE];
+    let pbuffer = egl::eglCreatePbufferSurface(display, config, pb_attrs.as_ptr());
+    assert!(!window.is_null() && !pbuffer.is_null());
+    assert_ne!(window, pbuffer, "window and pbuffer must be distinct handles");
+
+    // Per-surface dimensions from the pbuffer's own attributes.
+    let (mut w, mut h) = (-1, -1);
+    assert_eq!(egl::eglQuerySurface(display, pbuffer, EGL_WIDTH, &mut w), EGL_TRUE);
+    assert_eq!(egl::eglQuerySurface(display, pbuffer, EGL_HEIGHT, &mut h), EGL_TRUE);
+    assert_eq!((w, h), (37, 19), "pbuffer dimensions were discarded");
+
+    // Per-thread current draw/read surfaces.
+    let attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
+    let ctx = egl::eglCreateContext(display, config, core::ptr::null_mut(), attrs.as_ptr());
+    assert_eq!(egl::eglMakeCurrent(display, window, pbuffer, ctx), EGL_TRUE);
+    assert_eq!(egl::eglGetCurrentSurface(0x3059 /* EGL_DRAW */), window);
+    assert_eq!(egl::eglGetCurrentSurface(0x305A /* EGL_READ */), pbuffer);
+
+    // Destroy invalidates: stale handle -> EGL_BAD_SURFACE without mutating output.
+    assert_eq!(egl::eglDestroySurface(display, window), EGL_TRUE);
+    let mut stale = 0x1234;
+    let _ = egl::eglGetError();
+    assert_eq!(egl::eglQuerySurface(display, window, EGL_WIDTH, &mut stale), EGL_FALSE);
+    assert_eq!(stale, 0x1234, "stale-surface query mutated output");
+    assert_eq!(egl::eglGetError(), EGL_BAD_SURFACE);
+    assert_eq!(egl::eglSwapBuffers(display, window), EGL_FALSE);
+    assert_eq!(egl::eglGetError(), EGL_BAD_SURFACE);
+
+    egl::eglMakeCurrent(display, core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut());
+    egl::eglDestroyContext(display, ctx);
+    egl::eglDestroySurface(display, pbuffer);
+}
+
+// ---- egl_swap_failure_is_reported_without_discarding_the_frame ---------------------------------
+
+#[test]
+fn egl_swap_of_a_stale_surface_reports_bad_surface() {
+    // The transactional-submit ordering (present before draw-list reset; retained frame on failure) is
+    // enforced by the source-shape gate. Here we exercise the observable surface-validation path.
+    std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-egl-swap-mirror.ir"));
+    let display = egl::eglGetDisplay(core::ptr::null_mut());
+    assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
+    let window = egl::eglCreateWindowSurface(display, 1usize as *mut c_void, core::ptr::null_mut(), core::ptr::null());
+    assert_eq!(egl::eglDestroySurface(display, window), EGL_TRUE);
+    let _ = egl::eglGetError();
+    // A swap on the retired handle fails truthfully rather than silently succeeding.
+    assert_eq!(egl::eglSwapBuffers(display, window), EGL_FALSE);
+    assert_eq!(egl::eglGetError(), EGL_BAD_SURFACE);
+}
+
+// ---- gles_flush_and_finish_have_submission_and_completion_semantics -----------------------------
+
+#[test]
+fn flush_submits_and_finish_waits_for_completion() {
+    let (sub_before, _) = gles::submission_serials();
+    gles::glFlush(); // nonblocking submit
+    let (sub_after_flush, _) = gles::submission_serials();
+    assert!(sub_after_flush > sub_before, "glFlush must advance the submission serial (nonblocking submit)");
+
+    let (sub_pre_finish, _) = gles::submission_serials();
+    gles::glFinish(); // blocking: completion must catch up to everything submitted before it
+    let (_, completed) = gles::submission_serials();
+    assert!(completed >= sub_pre_finish, "glFinish must block until completion catches up to submission");
+}

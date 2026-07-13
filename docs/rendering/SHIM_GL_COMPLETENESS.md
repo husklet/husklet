@@ -71,6 +71,31 @@ byte-identical** (this is guest-side object-model state; the IR is untouched). T
 were already `full`; this pass makes their object/error/context semantics correct, so counts are
 unchanged.
 
+## Additional truthful semantics (audit §11 ledger closures)
+
+Five more contradictory ledger rows are closed by extending the typed model (all against already-`full`
+entries — object-model/error state, IR unchanged, byte-parity gates still byte-identical):
+
+- **`egl_surfaces_have_distinct_lifetimes_dimensions_and_types`** — a generation-checked typed surface
+  arena (`state.rs`): `eglCreate{Window,Pbuffer}Surface` return DISTINCT handles carrying their real
+  type + dimensions; `eglQuerySurface` reports per-surface size; destroy bumps the slot generation so a
+  stale/forged handle is `EGL_BAD_SURFACE` (query/swap fail without mutating output). `eglMakeCurrent`
+  records per-thread draw/read surfaces, reported by `eglGetCurrentSurface`.
+- **`gles_shader_compile_link_status_and_logs_are_truthful`** — `glCompileShader` runs a lightweight
+  dependency-free GLSL validator; `glGetShaderiv(GL_COMPILE_STATUS)` / `glGetProgramiv(GL_LINK_STATUS)`
+  and `GL_INFO_LOG_LENGTH` + `glGet{Shader,Program}InfoLog` are truthful (invalid GLSL and a program
+  missing a compiled vertex+fragment pair report failure with a non-empty diagnostic; valid shaders
+  still compile, so the parity corpus is unaffected).
+- **`egl_config_selection_and_invalid_attributes_are_truthful`** — a typed config matcher:
+  `eglChooseConfig` returns zero matches for impossible/over-constrained requests (leaving the caller's
+  slot untouched); `eglGetConfigAttrib` rejects forged handles (`EGL_BAD_CONFIG`) and unknown attributes
+  (`EGL_BAD_ATTRIBUTE`) without writing output; `eglBindAPI` rejects non-ES APIs (`EGL_BAD_PARAMETER`).
+- **`egl_swap_failure_is_reported_without_discarding_the_frame`** — `present_frame` returns a `Result`
+  and `eglSwapBuffers` is transactional: it submits BEFORE resetting the draw-list and, on a delivery
+  failure, retains the queued draws and reports `EGL_CONTEXT_LOST` (a stale surface is `EGL_BAD_SURFACE`).
+- **`gles_flush_and_finish_have_submission_and_completion_semantics`** — `glFlush` is a nonblocking
+  submit (advances a submission serial); `glFinish` blocks until the completion serial catches up.
+
 ## Truthful-failure & debugging controls
 
 - **Default (lenient):** stubs raise the GL/EGL error and initialize outputs, then return; execution

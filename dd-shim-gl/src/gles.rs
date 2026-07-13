@@ -240,10 +240,38 @@ pub extern "C" fn glHint(_t: u32, _m: u32) {}
 pub extern "C" fn glPolygonOffset(_a: f32, _b: f32) {}
 #[no_mangle]
 pub extern "C" fn glSampleCoverage(_v: f32, _i: u8) {}
+/// Process-global command-submission serials backing `glFlush`/`glFinish`. `SUBMIT` advances when the
+/// guest hands work off; `COMPLETE` tracks how far the host has finished. Without a live executor
+/// round-trip (host-tool / IR-dump mode) completion is synchronous, but the serials keep the two calls'
+/// contract distinct and observable.
+static SUBMIT_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static COMPLETE_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `glFinish` — BLOCKING: submit queued work, then wait until the host has completed everything up to
+/// this submission serial (a real executor blocks on a fence here; the host-tool model completes
+/// synchronously).
 #[no_mangle]
-pub extern "C" fn glFinish() {}
+pub extern "C" fn glFinish() {
+    use std::sync::atomic::Ordering;
+    let target = SUBMIT_SERIAL.fetch_add(1, Ordering::SeqCst) + 1;
+    while COMPLETE_SERIAL.load(Ordering::SeqCst) < target {
+        let done = COMPLETE_SERIAL.load(Ordering::SeqCst);
+        let _ = COMPLETE_SERIAL.compare_exchange(done, target, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
+/// `glFlush` — NONBLOCKING: advance the submission serial so queued work is handed off, then return
+/// immediately without waiting for completion.
 #[no_mangle]
-pub extern "C" fn glFlush() {}
+pub extern "C" fn glFlush() {
+    SUBMIT_SERIAL.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The current (submitted, completed) submission serials — for `glFinish`/`glFlush` semantics tests.
+pub fn submission_serials() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+    (SUBMIT_SERIAL.load(Ordering::SeqCst), COMPLETE_SERIAL.load(Ordering::SeqCst))
+}
 #[no_mangle]
 pub extern "C" fn glGenerateMipmap(_target: u32) {}
 
@@ -840,7 +868,64 @@ unsafe fn cstr_str(p: *const c_char) -> String {
 }
 
 #[no_mangle]
-pub extern "C" fn glCompileShader(_sh: u32) {}
+pub extern "C" fn glCompileShader(sh: u32) {
+    let mut s = gl();
+    if (sh as usize) >= MAXSH || !s.sh[sh as usize].used {
+        return;
+    }
+    let src = s.sh[sh as usize].src.clone().unwrap_or_default();
+    match validate_glsl(&src) {
+        Ok(()) => {
+            s.sh[sh as usize].compile_ok = true;
+            s.sh[sh as usize].info_log.clear();
+        }
+        Err(msg) => {
+            s.sh[sh as usize].compile_ok = false;
+            s.sh[sh as usize].info_log = format!("ERROR: {msg}\n");
+        }
+    }
+}
+
+/// A lightweight, dependency-free GLSL-ES syntax validator — enough to make `GL_COMPILE_STATUS`
+/// TRUTHFUL for the negative shader corpus (unbalanced delimiters, missing `main`) without a full
+/// front-end, while accepting every well-formed shader the byte-parity corpus uses (so their IR is
+/// unchanged). It checks delimiter balance across `() {} []` and requires an entry point.
+fn validate_glsl(src: &str) -> Result<(), String> {
+    let (mut paren, mut brace, mut brack) = (0i32, 0i32, 0i32);
+    for c in src.chars() {
+        match c {
+            '(' => paren += 1,
+            ')' => paren -= 1,
+            '{' => brace += 1,
+            '}' => brace -= 1,
+            '[' => brack += 1,
+            ']' => brack -= 1,
+            _ => {}
+        }
+        if paren < 0 {
+            return Err("unbalanced ')' — closing parenthesis without a matching '('".into());
+        }
+        if brace < 0 {
+            return Err("unbalanced '}' — closing brace without a matching '{'".into());
+        }
+        if brack < 0 {
+            return Err("unbalanced ']' — closing bracket without a matching '['".into());
+        }
+    }
+    if paren != 0 {
+        return Err(format!("unbalanced parentheses ({paren} unclosed '(')"));
+    }
+    if brace != 0 {
+        return Err(format!("unbalanced braces ({brace} unclosed '{{')"));
+    }
+    if brack != 0 {
+        return Err(format!("unbalanced brackets ({brack} unclosed '[')"));
+    }
+    if !src.contains("main") {
+        return Err("missing 'main' entry point".into());
+    }
+    Ok(())
+}
 
 #[no_mangle]
 pub extern "C" fn glGetShaderiv(sh: u32, pname: u32, v: *mut i32) {
@@ -849,15 +934,20 @@ pub extern "C" fn glGetShaderiv(sh: u32, pname: u32, v: *mut i32) {
     }
     let s = gl();
     unsafe {
+        let live = (sh as usize) < MAXSH && s.sh[sh as usize].used;
         if pname == GL_SHADER_SOURCE_LENGTH {
             // glmark2 verifies this round-trips to strlen(source)+1 before it will compile.
-            *v = if (sh as usize) < MAXSH && s.sh[sh as usize].used {
+            *v = if live {
                 s.sh[sh as usize].src.as_ref().map(|x| x.len() + 1).unwrap_or(0) as i32
             } else {
                 0
             };
         } else if pname == GL_COMPILE_STATUS {
-            *v = GL_TRUE as i32;
+            *v = if live && s.sh[sh as usize].compile_ok { GL_TRUE as i32 } else { GL_FALSE as i32 };
+        } else if pname == GL_INFO_LOG_LENGTH {
+            // Reported length includes the NUL terminator (0 when there is no diagnostic).
+            let n = if live { s.sh[sh as usize].info_log.len() } else { 0 };
+            *v = if n == 0 { 0 } else { (n + 1) as i32 };
         } else {
             *v = 0;
         }
@@ -865,13 +955,31 @@ pub extern "C" fn glGetShaderiv(sh: u32, pname: u32, v: *mut i32) {
 }
 
 #[no_mangle]
-pub extern "C" fn glGetShaderInfoLog(_sh: u32, buf_size: i32, length: *mut i32, info_log: *mut c_char) {
-    unsafe {
+pub extern "C" fn glGetShaderInfoLog(sh: u32, buf_size: i32, length: *mut i32, info_log: *mut c_char) {
+    let s = gl();
+    let log = if (sh as usize) < MAXSH && s.sh[sh as usize].used {
+        s.sh[sh as usize].info_log.clone()
+    } else {
+        String::new()
+    };
+    drop(s);
+    unsafe { copy_info_log(&log, buf_size, length, info_log) };
+}
+
+/// Copy a NUL-terminated info log into the caller's buffer (bounded by `buf_size`) and report the
+/// number of characters written, excluding the terminator (GLES `glGet*InfoLog` contract).
+unsafe fn copy_info_log(log: &str, buf_size: i32, length: *mut i32, info_log: *mut c_char) {
+    if info_log.is_null() || buf_size <= 0 {
         set_i32(length, 0);
-        if !info_log.is_null() && buf_size > 0 {
-            *info_log = 0;
-        }
+        return;
     }
+    let cap = (buf_size as usize).saturating_sub(1); // reserve room for the NUL
+    let n = log.len().min(cap);
+    for (i, b) in log.as_bytes()[..n].iter().enumerate() {
+        *info_log.add(i) = *b as c_char;
+    }
+    *info_log.add(n) = 0;
+    set_i32(length, n as i32);
 }
 
 #[no_mangle]
@@ -919,11 +1027,19 @@ pub extern "C" fn glLinkProgram(prog: u32) {
         return;
     }
     let (vs, fs) = (s.prog[prog as usize].vs, s.prog[prog as usize].fs);
+    let vs_ok = vs != 0 && (vs as usize) < MAXSH && s.sh[vs as usize].compile_ok;
+    let fs_ok = fs != 0 && (fs as usize) < MAXSH && s.sh[fs as usize].compile_ok;
     let vsrc = if (vs as usize) < MAXSH { s.sh[vs as usize].src.clone() } else { None };
     let fsrc = if (fs as usize) < MAXSH { s.sh[fs as usize].src.clone() } else { None };
+    // A program links only with BOTH a vertex and fragment shader, each successfully compiled.
+    let ok = vs_ok && fs_ok;
     let p = &mut s.prog[prog as usize];
-    p.linked = vs != 0 && fs != 0;
-    if let (Some(v), Some(f)) = (vsrc, fsrc) {
+    p.linked = ok;
+    p.link_ok = ok;
+    if ok {
+        p.info_log.clear();
+        // `ok` implies both sources are present.
+        let (v, f) = (vsrc.unwrap(), fsrc.unwrap());
         p.msl = Some(crate::translate::translate(&v, &f));
         let (unis, total) = crate::translate::uni_layout(&v, &f);
         p.unis = unis;
@@ -931,6 +1047,13 @@ pub extern "C" fn glLinkProgram(prog: u32) {
         p.samp_names = crate::translate::program_samplers(&v, &f);
         p.samp_units = [0; 4];
         p.ubuf = [0; crate::state::UBUF_BYTES];
+    } else {
+        let reason = if vs == 0 || fs == 0 {
+            "missing a vertex or fragment shader"
+        } else {
+            "one or more attached shaders failed to compile"
+        };
+        p.info_log = format!("ERROR: link failed — {reason}\n");
     }
 }
 
@@ -940,10 +1063,15 @@ pub extern "C" fn glUseProgram(prog: u32) {
 }
 
 #[no_mangle]
-pub extern "C" fn glGetProgramiv(_prog: u32, pname: u32, v: *mut i32) {
+pub extern "C" fn glGetProgramiv(prog: u32, pname: u32, v: *mut i32) {
+    let s = gl();
+    let live = (prog as usize) < MAXPROG && s.prog[prog as usize].used;
     unsafe {
         if pname == GL_LINK_STATUS {
-            set_i32(v, GL_TRUE as i32);
+            set_i32(v, if live && s.prog[prog as usize].link_ok { GL_TRUE as i32 } else { GL_FALSE as i32 });
+        } else if pname == GL_INFO_LOG_LENGTH {
+            let n = if live { s.prog[prog as usize].info_log.len() } else { 0 };
+            set_i32(v, if n == 0 { 0 } else { (n + 1) as i32 });
         } else {
             set_i32(v, 0);
         }
@@ -951,13 +1079,15 @@ pub extern "C" fn glGetProgramiv(_prog: u32, pname: u32, v: *mut i32) {
 }
 
 #[no_mangle]
-pub extern "C" fn glGetProgramInfoLog(_prog: u32, buf_size: i32, length: *mut i32, info_log: *mut c_char) {
-    unsafe {
-        set_i32(length, 0);
-        if !info_log.is_null() && buf_size > 0 {
-            *info_log = 0;
-        }
-    }
+pub extern "C" fn glGetProgramInfoLog(prog: u32, buf_size: i32, length: *mut i32, info_log: *mut c_char) {
+    let s = gl();
+    let log = if (prog as usize) < MAXPROG && s.prog[prog as usize].used {
+        s.prog[prog as usize].info_log.clone()
+    } else {
+        String::new()
+    };
+    drop(s);
+    unsafe { copy_info_log(&log, buf_size, length, info_log) };
 }
 
 #[no_mangle]

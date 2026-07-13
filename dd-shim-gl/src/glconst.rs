@@ -20,6 +20,7 @@ pub const GL_VERTEX_SHADER: u32 = 0x8B31;
 pub const GL_FRAGMENT_SHADER: u32 = 0x8B30;
 pub const GL_COMPILE_STATUS: u32 = 0x8B81;
 pub const GL_LINK_STATUS: u32 = 0x8B82;
+pub const GL_INFO_LOG_LENGTH: u32 = 0x8B84;
 pub const GL_SHADER_SOURCE_LENGTH: u32 = 0x8B88;
 
 // buffer targets
@@ -169,6 +170,8 @@ pub const GL_RB_SAMPLES: u32 = 0x8CAB;
 pub const EGL_FALSE: u32 = 0;
 pub const EGL_TRUE: u32 = 1;
 pub const EGL_NONE: i32 = 0x3038;
+pub const EGL_DONT_CARE: i32 = -1;
+pub const EGL_CONTEXT_LOST: i32 = 0x300E;
 pub const EGL_SUCCESS: i32 = 0x3000;
 pub const EGL_NOT_INITIALIZED: i32 = 0x3001;
 pub const EGL_BAD_ACCESS: i32 = 0x3002;

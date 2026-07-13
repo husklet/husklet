@@ -109,50 +109,27 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
 // config selection — one RGBA8 + depth24 window config (id 1), as gl_shim.c
 // ===================================================================================================
 
-/// `eglChooseConfig` — always returns the single config (id 1).
-#[no_mangle]
-pub extern "C" fn eglChooseConfig(
-    _dpy: *mut c_void,
-    _attrib_list: *const i32,
-    configs: *mut *mut c_void,
-    config_size: i32,
-    num_config: *mut i32,
-) -> u32 {
-    unsafe {
-        if !configs.is_null() && config_size >= 1 {
-            *configs = 1 as *mut c_void;
-        }
-        if !num_config.is_null() {
-            *num_config = 1;
-        }
-    }
-    EGL_TRUE
+/// The one advertised config's id.
+const CONFIG_ID: i32 = 1;
+
+/// How an attribute participates in `eglChooseConfig` matching (EGL 1.4 §3.4.1).
+enum MatchRule {
+    /// Config value must be >= the requested value (size / sample minimums).
+    AtLeast,
+    /// Requested bits must ALL be present in the config value (bitmask attributes).
+    Mask,
+    /// Config value must equal the requested value.
+    Exact,
+    /// Selection-only or informational — not a filter constraint.
+    Ignore,
 }
 
-/// `eglGetConfigs` — enumerate the single config (id 1).
-#[no_mangle]
-pub extern "C" fn eglGetConfigs(_dpy: *mut c_void, configs: *mut *mut c_void, config_size: i32, num_config: *mut i32) -> u32 {
-    unsafe {
-        if !configs.is_null() && config_size >= 1 {
-            *configs = 1 as *mut c_void;
-        }
-        if !num_config.is_null() {
-            *num_config = 1;
-        }
-    }
-    EGL_TRUE
-}
-
-/// `eglGetConfigAttrib` — real, self-consistent attributes for config 1 (RGBA8, depth24, stencil0),
-/// matching gl_shim.c exactly (incl. stencil=0 so glmark2's config scorer accepts it).
-#[no_mangle]
-pub extern "C" fn eglGetConfigAttrib(_dpy: *mut c_void, _config: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
-    if value.is_null() {
-        return EGL_FALSE;
-    }
+/// The real value config 1 reports for `attribute`, or `None` if the attribute is unknown. Single
+/// source of truth for both `eglGetConfigAttrib` and `eglChooseConfig`.
+fn config_attrib_value(attribute: i32) -> Option<i32> {
     let es3_bit = if shim_es3() { EGL_OPENGL_ES3_BIT_KHR } else { 0 };
-    let r = match attribute {
-        EGL_CONFIG_ID => 1,
+    let v = match attribute {
+        EGL_CONFIG_ID => CONFIG_ID,
         EGL_RED_SIZE | EGL_GREEN_SIZE | EGL_BLUE_SIZE | EGL_ALPHA_SIZE => 8,
         EGL_BUFFER_SIZE => 32,
         EGL_DEPTH_SIZE => 24,
@@ -172,10 +149,114 @@ pub extern "C" fn eglGetConfigAttrib(_dpy: *mut c_void, _config: *mut c_void, at
         EGL_SAMPLES | EGL_SAMPLE_BUFFERS | EGL_LEVEL => 0,
         EGL_TRANSPARENT_TYPE => EGL_NONE,
         EGL_BIND_TO_TEXTURE_RGB | EGL_BIND_TO_TEXTURE_RGBA => EGL_FALSE as i32,
-        _ => 0,
+        _ => return None,
     };
-    unsafe { *value = r };
+    Some(v)
+}
+
+fn match_rule(attribute: i32) -> MatchRule {
+    match attribute {
+        EGL_BUFFER_SIZE | EGL_RED_SIZE | EGL_GREEN_SIZE | EGL_BLUE_SIZE | EGL_ALPHA_SIZE | EGL_DEPTH_SIZE
+        | EGL_STENCIL_SIZE | EGL_LUMINANCE_SIZE | EGL_ALPHA_MASK_SIZE | EGL_SAMPLES | EGL_SAMPLE_BUFFERS => {
+            MatchRule::AtLeast
+        }
+        EGL_SURFACE_TYPE | EGL_RENDERABLE_TYPE | EGL_CONFORMANT => MatchRule::Mask,
+        EGL_CONFIG_ID | EGL_COLOR_BUFFER_TYPE | EGL_CONFIG_CAVEAT | EGL_LEVEL | EGL_TRANSPARENT_TYPE
+        | EGL_MIN_SWAP_INTERVAL | EGL_MAX_SWAP_INTERVAL => MatchRule::Exact,
+        _ => MatchRule::Ignore,
+    }
+}
+
+/// Whether config 1 satisfies every constraint in a (key, value, … , EGL_NONE) attribute list.
+unsafe fn config1_matches(attrib_list: *const i32) -> bool {
+    if attrib_list.is_null() {
+        return true;
+    }
+    let mut p = attrib_list;
+    while *p != EGL_NONE {
+        let key = *p;
+        let want = *p.add(1);
+        p = p.add(2);
+        if want == EGL_DONT_CARE {
+            continue;
+        }
+        let Some(have) = config_attrib_value(key) else { continue };
+        let ok = match match_rule(key) {
+            MatchRule::AtLeast => have >= want,
+            MatchRule::Mask => (have & want) == want,
+            MatchRule::Exact => have == want,
+            MatchRule::Ignore => true,
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
+/// `eglChooseConfig` — a truthful matcher: it returns the single config only when it satisfies the
+/// requested attributes; an impossible/over-constrained request is a valid query with ZERO matches
+/// (the caller's config slot is left untouched), not a silent selection of config 1.
+#[no_mangle]
+pub extern "C" fn eglChooseConfig(
+    _dpy: *mut c_void,
+    attrib_list: *const i32,
+    configs: *mut *mut c_void,
+    config_size: i32,
+    num_config: *mut i32,
+) -> u32 {
+    let matched = unsafe { config1_matches(attrib_list) };
+    unsafe {
+        if matched {
+            if !configs.is_null() && config_size >= 1 {
+                *configs = CONFIG_ID as usize as *mut c_void;
+            }
+            if !num_config.is_null() {
+                *num_config = 1;
+            }
+        } else if !num_config.is_null() {
+            *num_config = 0; // leave the caller's `configs` slot untouched on a zero-match query
+        }
+    }
     EGL_TRUE
+}
+
+/// `eglGetConfigs` — enumerate the single config (id 1).
+#[no_mangle]
+pub extern "C" fn eglGetConfigs(_dpy: *mut c_void, configs: *mut *mut c_void, config_size: i32, num_config: *mut i32) -> u32 {
+    unsafe {
+        if !configs.is_null() && config_size >= 1 {
+            *configs = 1 as *mut c_void;
+        }
+        if !num_config.is_null() {
+            *num_config = 1;
+        }
+    }
+    EGL_TRUE
+}
+
+/// `eglGetConfigAttrib` — real, self-consistent attributes for config 1 (RGBA8, depth24, stencil0). A
+/// forged config handle is EGL_BAD_CONFIG and an unknown attribute is EGL_BAD_ATTRIBUTE; both fail
+/// WITHOUT writing the caller's output.
+#[no_mangle]
+pub extern "C" fn eglGetConfigAttrib(_dpy: *mut c_void, config: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
+    if value.is_null() {
+        return EGL_FALSE;
+    }
+    if config as usize != CONFIG_ID as usize {
+        crate::state::egl_set_error(EGL_BAD_CONFIG);
+        return EGL_FALSE;
+    }
+    match config_attrib_value(attribute) {
+        Some(r) => {
+            unsafe { *value = r };
+            EGL_TRUE
+        }
+        None => {
+            crate::state::egl_set_error(EGL_BAD_ATTRIBUTE);
+            EGL_FALSE
+        }
+    }
 }
 
 // ===================================================================================================
@@ -235,8 +316,8 @@ pub extern "C" fn eglDestroyContext(_dpy: *mut c_void, ctx: *mut c_void) -> u32 
 /// distinct threads may be current on distinct contexts concurrently). A null context unbinds. An
 /// unknown context sets EGL_BAD_CONTEXT and fails.
 #[no_mangle]
-pub extern "C" fn eglMakeCurrent(_dpy: *mut c_void, _draw: *mut c_void, _read: *mut c_void, ctx: *mut c_void) -> u32 {
-    if crate::state::egl_make_current(ctx) {
+pub extern "C" fn eglMakeCurrent(_dpy: *mut c_void, draw: *mut c_void, read: *mut c_void, ctx: *mut c_void) -> u32 {
+    if crate::state::egl_make_current(ctx, draw, read) {
         EGL_TRUE
     } else {
         crate::state::egl_set_error(EGL_BAD_CONTEXT);
@@ -264,36 +345,52 @@ pub extern "C" fn eglQueryContext(_dpy: *mut c_void, ctx: *mut c_void, attribute
 // surface query / destroy (bring-up stays a stub — see module docs)
 // ===================================================================================================
 
-/// `eglQuerySurface` — width/height of the current window surface. The size is populated by surface
-/// bring-up (`eglCreateWindowSurface`), which lands with the present-path work; until then it reports
-/// the tracked logical size (0 by default).
+/// `eglQuerySurface` — per-surface width/height from the typed arena. A stale/forged handle is
+/// EGL_BAD_SURFACE and fails WITHOUT writing the caller's output.
 #[no_mangle]
-pub extern "C" fn eglQuerySurface(_dpy: *mut c_void, _surface: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
+pub extern "C" fn eglQuerySurface(_dpy: *mut c_void, surface: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
     if value.is_null() {
         return EGL_FALSE;
     }
-    let e = egl();
+    let Some((_kind, w, h)) = crate::state::egl_surface_lookup(surface) else {
+        crate::state::egl_set_error(EGL_BAD_SURFACE);
+        return EGL_FALSE;
+    };
     let v = match attribute {
-        EGL_WIDTH => e.surface_logical_w,
-        EGL_HEIGHT => e.surface_logical_h,
+        EGL_WIDTH => w,
+        EGL_HEIGHT => h,
         _ => 0,
     };
     unsafe { *value = v };
     EGL_TRUE
 }
 
+/// `eglDestroySurface` — retire a live surface handle (its arena slot's generation is bumped so the
+/// handle can never validate again). A stale/forged handle is EGL_BAD_SURFACE.
 #[no_mangle]
-pub extern "C" fn eglDestroySurface(_dpy: *mut c_void, _surface: *mut c_void) -> u32 {
-    EGL_TRUE
+pub extern "C" fn eglDestroySurface(_dpy: *mut c_void, surface: *mut c_void) -> u32 {
+    if crate::state::egl_destroy_surface(surface) {
+        EGL_TRUE
+    } else {
+        crate::state::egl_set_error(EGL_BAD_SURFACE);
+        EGL_FALSE
+    }
 }
 
 // ===================================================================================================
 // API selection + misc no-op lifecycle
 // ===================================================================================================
 
+/// `eglBindAPI` — this shim exposes OpenGL ES only. Selecting any other API (desktop OpenGL / OpenVG)
+/// is EGL_BAD_PARAMETER, so a later `eglCreateContext` cannot be steered onto an unsupported client API.
 #[no_mangle]
-pub extern "C" fn eglBindAPI(_api: u32) -> u32 {
-    EGL_TRUE
+pub extern "C" fn eglBindAPI(api: u32) -> u32 {
+    if api == EGL_OPENGL_ES_API {
+        EGL_TRUE
+    } else {
+        crate::state::egl_set_error(EGL_BAD_PARAMETER);
+        EGL_FALSE
+    }
 }
 
 #[no_mangle]
@@ -306,13 +403,14 @@ pub extern "C" fn eglSwapInterval(_dpy: *mut c_void, _interval: i32) -> u32 {
     EGL_TRUE
 }
 
+/// `eglGetCurrentSurface` — THIS thread's bound draw (EGL_DRAW=0x3059) or read (EGL_READ=0x305A)
+/// surface, as set by the last `eglMakeCurrent` (EGL_NO_SURFACE when no context is current).
 #[no_mangle]
-pub extern "C" fn eglGetCurrentSurface(_readdraw: i32) -> *mut c_void {
-    // A surface is meaningful only while a context is current on this thread.
-    if crate::state::egl_current_context().is_null() {
-        core::ptr::null_mut()
-    } else {
-        1 as *mut c_void
+pub extern "C" fn eglGetCurrentSurface(readdraw: i32) -> *mut c_void {
+    match readdraw {
+        0x3059 => crate::state::egl_current_draw_surface(),
+        0x305A => crate::state::egl_current_read_surface(),
+        _ => core::ptr::null_mut(),
     }
 }
 
@@ -521,14 +619,31 @@ pub extern "C" fn eglCreateWindowSurface(_dpy: *mut c_void, _config: *mut c_void
             *wayland_session().lock().unwrap_or_else(|e| e.into_inner()) = Some(wl);
         }
     }
-    1 as *mut c_void
+    // A distinct, generation-checked window-surface handle (no longer the immortal singleton `1`).
+    crate::state::egl_create_surface(crate::state::SurfaceKind::Window, w as i32, h as i32)
 }
 
-/// `eglCreatePbufferSurface` — an inert 1x1 offscreen surface (ANGLE's bootstrap). Swap is a no-op on
-/// it because `eglSwapBuffers` only acts once a window surface is up.
+/// `eglCreatePbufferSurface` — an offscreen surface whose dimensions come from `EGL_WIDTH`/`EGL_HEIGHT`
+/// in the attribute list (defaulting to 1x1). Returns a distinct typed handle; swap is a no-op on it
+/// because `eglSwapBuffers` only presents a window surface.
 #[no_mangle]
-pub extern "C" fn eglCreatePbufferSurface(_dpy: *mut c_void, _config: *mut c_void, _attribs: *const i32) -> *mut c_void {
-    1 as *mut c_void
+pub extern "C" fn eglCreatePbufferSurface(_dpy: *mut c_void, _config: *mut c_void, attribs: *const i32) -> *mut c_void {
+    let (mut w, mut h) = (1i32, 1i32);
+    if !attribs.is_null() {
+        let mut p = attribs;
+        unsafe {
+            while *p != EGL_NONE {
+                let (k, v) = (*p, *p.add(1));
+                if k == EGL_WIDTH {
+                    w = v;
+                } else if k == EGL_HEIGHT {
+                    h = v;
+                }
+                p = p.add(2);
+            }
+        }
+    }
+    crate::state::egl_create_surface(crate::state::SurfaceKind::Pbuffer, w, h)
 }
 
 fn exec_conn() -> &'static Mutex<dd_shim_common::transport::ExecConn> {
@@ -540,12 +655,15 @@ fn exec_conn() -> &'static Mutex<dd_shim_common::transport::ExecConn> {
 /// the file so it can be diffed against gl_shim.c's dump. Otherwise it is submitted to the host
 /// GPU-exec service over the shared transport. (The wayland/dma-buf commit that shows the rendered
 /// IOSurface on screen is the remaining display-side plumbing, tracked separately from IR parity.)
-fn present_frame(surf: &Surface, ir: &[u8]) {
+/// Present a frame's IR, returning the delivery outcome so `eglSwapBuffers` can be TRANSACTIONAL: the
+/// executor submission result is PROPAGATED (never discarded), so a failed submit surfaces as an EGL
+/// error and the caller keeps its queued draw state instead of losing the frame. `DD_IR_DUMP` (host-
+/// tool / parity-harness mode) writes the raw byte-stream so it can be diffed against gl_shim.c.
+fn present_frame(surf: &Surface, ir: &[u8]) -> Result<(), String> {
     if let Some(path) = std::env::var_os("DD_IR_DUMP") {
-        let _ = std::fs::write(path, ir);
-        return;
+        return std::fs::write(path, ir).map_err(|e| format!("DD_IR_DUMP write failed: {e}"));
     }
-    // Submit the frame to the host GPU-exec service...
+    // Submit the frame to the host GPU-exec service, propagating any transport/executor failure.
     let ts = dd_shim_common::transport::Surface {
         id: surf.id,
         width: surf.width,
@@ -553,19 +671,30 @@ fn present_frame(surf: &Surface, ir: &[u8]) {
         stride: if surf.stride != 0 { surf.stride } else { surf.width * 4 },
         fd: surf.fd,
     };
-    let _ = exec_conn().lock().unwrap_or_else(|e| e.into_inner()).submit(&ts, ir);
+    exec_conn()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .submit(&ts, ir)
+        .map_err(|e| format!("executor submit failed: {e}"))?;
     // ...then commit the rendered dma-buf/IOSurface to the compositor (dd-display).
     if let Some(wl) = wayland_session().lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         wl.commit(surf, &surface_geometry(surf));
     }
+    Ok(())
 }
 
 /// `eglSwapBuffers` — the frame boundary: lower the recorded draw-list to IR and present it, then reset
 /// per-frame state (gl_shim.c tail). Returns EGL_FALSE if no surface is up. Frames that need the GLSL
 /// translator (a real draw) produce no IR yet and are a no-op present until that path lands.
 #[no_mangle]
-pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u32 {
-    let (ir, surf) = {
+pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, surface: *mut c_void) -> u32 {
+    // A stale/forged surface handle is EGL_BAD_SURFACE (the frame is not touched).
+    if crate::state::egl_surface_lookup(surface).is_none() {
+        crate::state::egl_set_error(EGL_BAD_SURFACE);
+        return EGL_FALSE;
+    }
+    // Build the frame's IR WITHOUT yet discarding the queued draw state.
+    let (ir, surf, touched_default) = {
         let mut s = gl();
         if !s.surf.have {
             return EGL_FALSE;
@@ -576,7 +705,19 @@ pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u3
         let ir = crate::frame::build_frame_ir(&s);
         let surf = s.surf;
         let touched_default = s.draws.iter().any(|d| d.target_tex == 0);
-        // reset per-frame draw state
+        (ir, surf, touched_default)
+    };
+    // TRANSACTIONAL submit: present BEFORE resetting per-frame state. On a delivery failure the queued
+    // draws are RETAINED and the error is reported (EGL_CONTEXT_LOST) — the frame is not silently lost.
+    if let Some(bytes) = &ir {
+        if let Err(_e) = present_frame(&surf, bytes) {
+            crate::state::egl_set_error(EGL_CONTEXT_LOST);
+            return EGL_FALSE;
+        }
+    }
+    // Delivery succeeded (or there was no IR to send): now reset per-frame draw state.
+    {
+        let mut s = gl();
         s.draws.clear();
         s.draw_mode = -1;
         s.have_draw_snap = false;
@@ -585,10 +726,6 @@ pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u3
             s.default_surface_valid = true;
         }
         s.default_full_clear_since_swap = false;
-        (ir, surf)
-    };
-    if let Some(bytes) = ir {
-        present_frame(&surf, &bytes);
     }
     EGL_TRUE
 }

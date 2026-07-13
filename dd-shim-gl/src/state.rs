@@ -47,6 +47,10 @@ pub struct Shader {
     pub used: bool,
     pub kind: u32, // GL_VERTEX_SHADER / GL_FRAGMENT_SHADER
     pub src: Option<String>,
+    /// Truthful GLSL compile outcome (`glGetShaderiv(GL_COMPILE_STATUS)`): false until a successful
+    /// `glCompileShader`. `info_log` is the human-readable diagnostic on failure (empty on success).
+    pub compile_ok: bool,
+    pub info_log: String,
 }
 
 #[derive(Clone)]
@@ -55,6 +59,10 @@ pub struct Program {
     pub vs: u32,
     pub fs: u32,
     pub linked: bool,
+    /// Truthful link outcome (`glGetProgramiv(GL_LINK_STATUS)`): requires a vertex AND fragment shader
+    /// that both compiled. `info_log` is the diagnostic on failure (empty on success).
+    pub link_ok: bool,
+    pub info_log: String,
     pub ubuf: [u8; UBUF_BYTES], // uniform-block bytes (written by glUniform*)
     pub samp_units: [i32; 4],   // sampler uniform index -> GL texture unit (glUniform1i)
     // populated at glLinkProgram by the GLSL→MSL translator:
@@ -71,6 +79,8 @@ impl Default for Program {
             vs: 0,
             fs: 0,
             linked: false,
+            link_ok: false,
+            info_log: String::new(),
             ubuf: [0; UBUF_BYTES],
             samp_units: [0; 4],
             msl: None,
@@ -454,7 +464,7 @@ impl GlState {
     pub fn gen_shader(&mut self, kind: u32) -> u32 {
         let id = Self::alloc_slot(|i| self.sh[i].used, MAXSH);
         if id != 0 {
-            self.sh[id as usize] = Shader { used: true, kind, src: None };
+            self.sh[id as usize] = Shader { used: true, kind, src: None, ..Default::default() };
         }
         id
     }
@@ -996,6 +1006,9 @@ fn new_group() -> &'static Mutex<GlState> {
 thread_local! {
     /// The calling thread's current `EglCtx` (null == EGL_NO_CONTEXT).
     static CURRENT_CTX: std::cell::Cell<*mut EglCtx> = const { std::cell::Cell::new(core::ptr::null_mut()) };
+    /// The calling thread's bound draw/read surfaces (from `eglMakeCurrent`).
+    static CURRENT_DRAW: std::cell::Cell<*mut c_void> = const { std::cell::Cell::new(core::ptr::null_mut()) };
+    static CURRENT_READ: std::cell::Cell<*mut c_void> = const { std::cell::Cell::new(core::ptr::null_mut()) };
     /// The calling thread's EGL error (first-error retention, cleared on `eglGetError`).
     static EGL_ERROR: std::cell::Cell<i32> = const { std::cell::Cell::new(0x3000 /* EGL_SUCCESS */) };
 }
@@ -1033,23 +1046,35 @@ pub fn egl_ctx_is_live(ctx: *mut c_void) -> bool {
     registry().lock().unwrap_or_else(|e| e.into_inner()).live.contains(&(ctx as usize))
 }
 
-/// Set the calling thread's current context (null == unbind). Returns false only for a non-live,
-/// non-null handle.
-pub fn egl_make_current(ctx: *mut c_void) -> bool {
+/// Bind (or unbind) the calling thread's current context and its draw/read surfaces (null ctx ==
+/// unbind, which also clears the surfaces). Returns false only for a non-live, non-null handle.
+pub fn egl_make_current(ctx: *mut c_void, draw: *mut c_void, read: *mut c_void) -> bool {
     if ctx.is_null() {
         CURRENT_CTX.with(|c| c.set(core::ptr::null_mut()));
+        CURRENT_DRAW.with(|c| c.set(core::ptr::null_mut()));
+        CURRENT_READ.with(|c| c.set(core::ptr::null_mut()));
         return true;
     }
     if !egl_ctx_is_live(ctx) {
         return false;
     }
     CURRENT_CTX.with(|c| c.set(ctx as *mut EglCtx));
+    CURRENT_DRAW.with(|c| c.set(draw));
+    CURRENT_READ.with(|c| c.set(read));
     true
 }
 
 /// The calling thread's current context handle (null == EGL_NO_CONTEXT).
 pub fn egl_current_context() -> *mut c_void {
     CURRENT_CTX.with(|c| c.get()) as *mut c_void
+}
+
+/// The calling thread's current draw / read surface handle (null when no context is current).
+pub fn egl_current_draw_surface() -> *mut c_void {
+    CURRENT_DRAW.with(|c| c.get())
+}
+pub fn egl_current_read_surface() -> *mut c_void {
+    CURRENT_READ.with(|c| c.get())
 }
 
 /// Client major version of a context handle (or the current context if `ctx` is null), defaulting to 2.
@@ -1084,6 +1109,8 @@ pub fn egl_destroy_context(ctx: *mut c_void) -> bool {
     }
     if egl_current_context() == ctx {
         CURRENT_CTX.with(|c| c.set(core::ptr::null_mut()));
+        CURRENT_DRAW.with(|c| c.set(core::ptr::null_mut()));
+        CURRENT_READ.with(|c| c.set(core::ptr::null_mut()));
     }
     unsafe { drop(Box::from_raw(ctx as *mut EglCtx)) };
     true
@@ -1106,6 +1133,97 @@ pub fn egl_take_error() -> i32 {
         c.set(EGL_SUCCESS);
         e
     })
+}
+
+// ===================================================================================================
+// Typed EGL surface arena (audit §11: distinct lifetimes / dimensions / types)
+//
+// `eglCreate{Window,Pbuffer}Surface` allocate a generation-checked handle into an arena (not one
+// immortal singleton). A handle encodes (slot index, generation); destroying a surface bumps its slot
+// generation so the OLD handle no longer validates — a stale or forged handle resolves to `None`, which
+// the EGL entry points report as EGL_BAD_SURFACE. Each entry carries its real type (window/pbuffer) and
+// dimensions, so `eglQuerySurface` returns per-surface size.
+// ===================================================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SurfaceKind {
+    Window,
+    Pbuffer,
+}
+
+struct SurfaceEntry {
+    alive: bool,
+    generation: u32,
+    kind: SurfaceKind,
+    width: i32,
+    height: i32,
+}
+
+fn surface_arena() -> &'static Mutex<Vec<SurfaceEntry>> {
+    static A: OnceLock<Mutex<Vec<SurfaceEntry>>> = OnceLock::new();
+    A.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+// A handle packs (slot+1) in the high bits and the generation in the low 20 bits, so it is always
+// non-null and a destroyed handle (stale generation) fails validation.
+const SURF_GEN_BITS: u32 = 20;
+const SURF_GEN_MASK: usize = (1 << SURF_GEN_BITS) - 1;
+
+fn encode_surface(slot: usize, generation: u32) -> *mut c_void {
+    (((slot + 1) << SURF_GEN_BITS) | (generation as usize & SURF_GEN_MASK)) as *mut c_void
+}
+fn decode_surface(h: *mut c_void) -> Option<(usize, u32)> {
+    let v = h as usize;
+    if v == 0 {
+        return None;
+    }
+    let slot = (v >> SURF_GEN_BITS).checked_sub(1)?;
+    Some((slot, (v & SURF_GEN_MASK) as u32))
+}
+
+/// Allocate a typed surface, returning its unique generation-checked handle.
+pub fn egl_create_surface(kind: SurfaceKind, width: i32, height: i32) -> *mut c_void {
+    let mut arena = surface_arena().lock().unwrap_or_else(|e| e.into_inner());
+    // Reuse a dead slot (bumping its generation) before growing the arena.
+    if let Some(slot) = arena.iter().position(|e| !e.alive) {
+        let e = &mut arena[slot];
+        e.alive = true;
+        e.generation = e.generation.wrapping_add(1) & SURF_GEN_MASK as u32;
+        e.kind = kind;
+        e.width = width;
+        e.height = height;
+        return encode_surface(slot, e.generation);
+    }
+    let slot = arena.len();
+    arena.push(SurfaceEntry { alive: true, generation: 1, kind, width, height });
+    encode_surface(slot, 1)
+}
+
+/// Resolve a live surface handle to `(kind, width, height)`, or `None` if stale/forged.
+pub fn egl_surface_lookup(h: *mut c_void) -> Option<(SurfaceKind, i32, i32)> {
+    let (slot, generation) = decode_surface(h)?;
+    let arena = surface_arena().lock().unwrap_or_else(|e| e.into_inner());
+    let e = arena.get(slot)?;
+    if e.alive && e.generation == generation {
+        Some((e.kind, e.width, e.height))
+    } else {
+        None
+    }
+}
+
+/// Destroy a live surface (bumping its slot generation so the handle can never validate again).
+/// Returns false for a stale/forged handle.
+pub fn egl_destroy_surface(h: *mut c_void) -> bool {
+    let Some((slot, generation)) = decode_surface(h) else { return false };
+    let mut arena = surface_arena().lock().unwrap_or_else(|e| e.into_inner());
+    match arena.get_mut(slot) {
+        Some(e) if e.alive && e.generation == generation => {
+            e.alive = false;
+            e.generation = e.generation.wrapping_add(1) & SURF_GEN_MASK as u32;
+            true
+        }
+        _ => false,
+    }
 }
 
 fn egl_cell() -> &'static Mutex<EglState> {
