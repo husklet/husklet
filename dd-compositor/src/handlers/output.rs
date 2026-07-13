@@ -90,6 +90,7 @@ impl DdState {
         scale: i32,
         position: (i32, i32),
     ) -> Output {
+        let recovering_from_headless = self.headless;
         let output = Output::new(
             name.into(),
             PhysicalProperties {
@@ -114,9 +115,20 @@ impl DdState {
         self.output_globals.insert(output.name(), global);
         if self.headless {
             self.output = output.clone();
-            self.headless = false;
         } else {
             self.extra_outputs.push(output.clone());
+        }
+        if recovering_from_headless {
+            let mut live: Vec<(u32, _)> = self.surface_resources
+                .iter().map(|(sid, surface)| (*sid, surface.clone())).collect();
+            live.sort_by_key(|(sid, _)| *sid);
+            for (sid, surface) in live {
+                output.enter(&surface);
+                self.surface_outputs.insert(sid, output.clone());
+                self.send_preferred_fractional_scale(&surface);
+                self.dirty.insert(sid);
+            }
+            self.headless = false;
         }
         output
     }

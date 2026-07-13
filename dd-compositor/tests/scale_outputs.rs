@@ -389,4 +389,23 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     assert!(state.is_headless());
     assert_eq!(state.surface_output_name(1), None);
     assert_eq!(state.surface_output_name(3), None);
+
+    c.events.clear();
+    state.add_output("dd-2", "replacement", (1600, 900), 2, (0, 0));
+    display.flush_clients().unwrap();
+    c.drain();
+    assert!(!state.is_headless());
+    for (sid, object) in [(1, surface), (2, child), (3, independent)] {
+        assert_eq!(state.surface_output_name(sid).as_deref(), Some("dd-2"));
+        assert_eq!(
+            c.events.iter().filter(|&&(event_object, opcode)| event_object == object && opcode == 0).count(),
+            1,
+            "headless recovery must emit exactly one enter for sid {sid}"
+        );
+        assert_eq!(
+            c.events.iter().filter(|&&(event_object, opcode)| event_object == object && opcode == 1).count(),
+            0,
+            "headless recovery has no old output to leave for sid {sid}"
+        );
+    }
 }
