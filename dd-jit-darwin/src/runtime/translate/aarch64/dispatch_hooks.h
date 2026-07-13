@@ -41,34 +41,6 @@ static uint64_t g_smc_flushes;
 // executes. §B-on (incl. NOSHADOWTUNE=1) -> 0 -> byte-identical to baseline.
 #define G_BLOCK_ALIGN (shadowgate() < 0)
 
-// ARM-B1 (aarch64-only): dispatcher seams for the VDBETRACE meta-trace. The shared jit/dispatch.c calls
-// these; aarch64 keys on c->ic_site (bit0 tag) / c->pc. Both gated at runtime (g_vdbetrace / g_ibprof,
-// default OFF), so default codegen/behaviour is unchanged. x86 defines them empty (different IBTC keying,
-// no ic_site seam) so the shared dispatcher still compiles for the x86_64 engine.
-//   - SDC_FILL: a speculative-direct-chain JT-dispatch site missed -> (re)specialize it to the new target.
-//   - IBPROF_LOG: measurement-only -- record (site -> guest target) for the indirect-traffic study.
-#define G_VDBE_SDC_FILL(c)                                                                                             \
-    do {                                                                                                               \
-        if (g_vdbetrace && ((c)->ic_site & 1)) {                                                                       \
-            sdc_fill((c)->ic_site & ~1ull, (c)->pc);                                                                   \
-            (c)->ic_site = 1;                                                                                          \
-        } else if (g_ctxdisp && ((c)->ic_site & 2)) {                                                                  \
-            /* CTXDISP: a history-keyed ctx stub missed (throttled) -- (re)specialize the stub whose   */              \
-            /* 16B pair addr is ic_site&~3 to the just-resolved target, then fall through with          */             \
-            /* ic_site=1 so G_IBTC_FILL also fills the shared hash. Same SMC gate as the per-site IC:  */              \
-            /* a code-generating guest never gets fresh ctx fills (stale stubs only ever guard-miss).  */              \
-            if (!(g_rwx_guest || g_smc_seen)) ctx_fill((c)->ic_site & ~3ull, (c)->pc);                                 \
-            (c)->ic_site = 1;                                                                                          \
-        }                                                                                                              \
-    } while (0)
-#define G_IBPROF_LOG(c)                                                                                                \
-    do {                                                                                                               \
-        if (g_ibprof && (c)->reason == R_IBLOG) {                                                                      \
-            ib_log((c)->ic_site, (c)->pc);                                                                             \
-            (c)->ic_site = 0;                                                                                          \
-        }                                                                                                              \
-    } while (0)
-
 // (1) IBTC miss fill. aarch64 keys off c->ic_site (0=none, 1=shared-only, else=per-site IC literal addr),
 // stores body-8 (the indirect-entry stub that restores guest x16/x17), and patches the per-site
 // monomorphic IC literals in the W^X cache. Byte-for-byte the prior inline block.

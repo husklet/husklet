@@ -533,9 +533,6 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         G_PROF_EXTRA; // W5B: x86 tier-2 promotion counters
 #endif
         ep_prof_dump(); // w3e: flush epoll kevent-syscall counter (atexit is bypassed by _exit)
-        ib_dump();      // ARM-B1 IBPROF: indirect-branch traffic + stability report (no-op unless IBPROF)
-        vt_dump();      // ARM-B1 VDBETRACE: threading prototype counters (no-op unless VDBETRACE)
-        ctx_dump();     // CTXDISP: history-keyed-dispatch counters (no-op unless CTXDISP)
         md_dump();      // MAPDUMP: translation-map + code-cache dump for offline PC attribution (profiling)
         if (g_noexit) { // W3D fork-server prewarm: don't kill the resident parent; unwind run_guest instead
             c->exited = 1;

@@ -732,10 +732,6 @@ static void emit_bl_ras(uint64_t gpc, uint64_t target) {
 // §B guest ret: if cpu->x[30] == shadow-top guest_ret, pop + real x30=host_ret + host `ret`
 // (hardware-RAS predicted). Else fall back to the dispatcher reading cpu->x[30]. Never lands wrong.
 static void emit_shadow_ret(void) {
-    if (g_ibprof) { // ARM-B1 IBPROF: log the return as an indirect transfer (target = cpu->x[30])
-        emit_iblog(30);
-        return;
-    }
     int M = (int)OFF_MSCRATCH;
     e_stp(0, 1, CPUREG, M);
     // spill x0..x3 (paired)
@@ -1353,7 +1349,7 @@ static void *translate_block(uint64_t gpc) {
 #define STITCH_OK (g_stitch && !in_excl && trace_blk < TRACE_MAX_BLK - 1 && (g_cp - (uint8_t *)host) < TRACE_MAX_BYTES)
     for (;;) {
         uint32_t in = *(uint32_t *)gpc;
-        g_emit_gpc = gpc; // ARM-B1 IBPROF: tag indirect-branch sites with their guest PC
+        g_emit_gpc = gpc; // IRQSLIM: tag the current guest PC for the forward/backward edge test in emit_chain_exit
         // at the FIRST vector-touching instruction of the region, store the (nonzero) cpu pointer
         // into cpu->vdirty so a later (possibly chained-to) syscall exit takes the full V spill. Emitted
         // once per region (g_blk_vdirty latch); flag-neutral `str` runs before the vector write. Regions are
@@ -1406,19 +1402,6 @@ static void *translate_block(uint64_t gpc) {
                 gpc = tgt;
                 continue;
             }
-            // ARM-B1 VDBETRACE: path-specialize the VDBE dispatch. The shared loop-top (jump-table)
-            // block is already translated, so opt4's `!map_body` guard would chain to the ONE shared
-            // dispatch (-> polymorphic `br`, SDC hit rate = order-0 ~6%). Force-inline a PRIVATE copy of
-            // the dispatch into THIS predecessor so its `br` sees only this handler's successor
-            // (order-1+, ~75-98% stable). Re-translation of a mid-region entry self-heals as usual.
-            if (g_vdbetrace && g_stitch && !in_excl && (g_cp - (uint8_t *)host) < TRACE_MAX_BYTES && tgt != start &&
-                !seen_has(seen, nseen, tgt) && nseen < TRACE_MAX_BLK - 1 && is_jt_dispatch_block(tgt)) {
-                g_vt_force_inl++;
-                seen[nseen++] = tgt;
-                trace_blk++;
-                gpc = tgt;
-                continue;
-            }
             emit_chain_exit(tgt);
             break;
         }
@@ -1444,21 +1427,11 @@ static void *translate_block(uint64_t gpc) {
         // br
         if ((in & 0xFFFFFC1Fu) == 0xD61F0000u) {
             int brn = (in >> 5) & 31;
-            // ARM-B1 VDBETRACE: a clang jump-table dispatch `br` -> speculative direct-chain (SDC)
-            // instead of the polymorphic IBTC probe. (brn is a normal reg here -- never 16/17/18/28/30
-            // for a compiler switch dispatch.) Bit-exact: SDC guard falls back to the shared-hash IBTC.
-            if (g_vdbetrace && brn < 16 && is_jt_dispatch_br(gpc))
-                emit_vdbe_sdc(brn);
-            else if (g_steal1617 && !g_noibslim && !g_ibprof && !is_stolen(brn) && is_interp_dispatch_br(gpc, brn)) {
+            if (g_steal1617 && !g_noibslim && !is_stolen(brn) && is_interp_dispatch_br(gpc, brn))
                 // IBSLIM: a recognized interpreter-dispatch site (megamorphic by construction) --
-                // skip the dead per-site IC, go straight to the shared hash. CTXDISP=1 additionally
-                // fronts it with the history-keyed stub array (see emit_ctx_dispatch).
-                int slot = g_ctxdisp ? ctxsite_slot(gpc) : -1;
-                if (slot >= 0)
-                    emit_ctx_dispatch(brn, slot);
-                else
-                    emit_hash_tail(brn);
-            } else
+                // skip the dead per-site IC, go straight to the shared hash.
+                emit_hash_tail(brn);
+            else
                 emit_ibranch(brn);
             break;
         }

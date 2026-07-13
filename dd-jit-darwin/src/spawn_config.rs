@@ -172,7 +172,6 @@ impl SpawnConfig {
                 "NOIBSLIM",
                 "NOMTIBTC",
                 "NOSTWRECLAIM",
-                "IBPROF",
                 "NOSTEAL1617",
                 "NOSTEALFAST",
                 "NOSHADOWTUNE",

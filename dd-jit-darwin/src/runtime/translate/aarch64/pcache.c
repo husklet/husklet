@@ -38,7 +38,7 @@
 //   * POISON-ON-OVERFLOW: a persisted arena MUST have EVERY baked host pointer recorded, or a reload
 //     keeps a stale absolute address -> intermittent ASLR-dependent SIGSEGV. We poison (refuse to save)
 //     when the g_reloc table overflows, and when a NON-default codegen mode that bakes an unrecorded
-//     host pointer is active (PROF / VDBETRACE / IBPROF / VTHITCOUNT).
+//     host pointer is active (PROF).
 //   * NEVER RE-SAVE AFTER LOAD: a warm run keeps translating (tier-2 recompiles, on-demand blocks), so
 //     re-persisting would snowball the file past CACHE_SZ across runs (the x86 overflow-SIGSEGV).
 //     We persist exactly once, on the cold miss.
@@ -232,9 +232,8 @@ static uint64_t pcache_mode_id(void) {
                                  "NOSTITCH", "NOLSE", "NOTIER2",
                                  // perf-wave-2 codegen toggles: IRQSLIM (2-insn poll header + body+8
                                  // forward entries; also mixed into PC_VERSION_EFF via the LIVE
-                                 // g_fwdskip), IBSLIM (set_x30 + hash_tail shapes), CTXDISP (also
-                                 // poisons the save -- its in-cache stubs hold unrecorded pointers).
-                                 "NOIRQSLIM", "NOIRQCHECK", "NOIBSLIM", "CTXDISP"};
+                                 // g_fwdskip), IBSLIM (set_x30 + hash_tail shapes).
+                                 "NOIRQSLIM", "NOIRQCHECK", "NOIBSLIM"};
     uint64_t h = 1469598103934665603ull;
     for (size_t i = 0; i < sizeof envs / sizeof envs[0]; i++) {
         const char *v = getenv(envs[i]);
@@ -530,13 +529,7 @@ static void pcache_save(void) {
 // counters/logs are emitted via raw e_movconst/adrp of BSS addresses with no reloc record). Called once
 // at engine init, after the mode flags are read.
 static void pcache_poison_check(void) {
-    if (g_prof || g_vdbetrace || g_ibprof || g_vt_hitcount) g_pcache_poison = 1;
-    // CTXDISP (experimental, default OFF): its ctx-dispatch sites bake &g_ctxsite[slot] + block_return
-    // raw (unrecorded), and each site's in-cache 64B stub array holds runtime-filled {target,body} pairs
-    // whose bodies are arena pointers -- none of it is relocatable/neutralizable by the current record
-    // kinds, so a CTXDISP arena must never be persisted. (CTXDISP is also folded into the cache id, so a
-    // CTXDISP run can never LOAD a default-mode file either.)
-    if (g_ctxdisp) g_pcache_poison = 1;
+    if (g_prof) g_pcache_poison = 1;
 }
 
 // ---- guest fork hook (proc.c, both clone/fork sites, in the child, right after jit_after_fork) ----

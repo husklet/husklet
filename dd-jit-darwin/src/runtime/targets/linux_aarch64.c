@@ -739,17 +739,12 @@ static int engine_global_init(void) {
     g_dbg_gprdump = getenv("DDDBG_GPRDUMP") != NULL; // debug-only: dump all GPRs per block (register differential)
     g_prof = getenv("PROF") != NULL;
     g_no_stw_reclaim = getenv("NOSTWRECLAIM") != NULL;
-    g_ibprof = getenv("IBPROF") != NULL;          // ARM-B1 feasibility: indirect-branch traffic + stability log
-    g_vdbetrace = getenv("VDBETRACE") != NULL;    // ARM-B1 prototype: VDBE dispatch threading PoC
-    g_vt_hitcount = getenv("VTHITCOUNT") != NULL; // ARM-B1: inline SDC guard-hit counter (diagnostic)
     // A1: steal host x16/x17 for the engine (default on). NOSTEAL1617=1 -> legacy 3-reg stolen set
     // (guest x16/x17 in host regs, per-branch red-zone stash/restore). Read once before any translation.
     if (getenv("NOSTEAL1617")) g_steal1617 = 0;
     // IBSLIM: NOIBSLIM=1 reverts the dispatch/call-path slimming (legacy emit_set_x30 +
-    // the per-site IC at recognized interpreter-dispatch `br`s) for A/B. CTXDISP=1 opts in to the
-    // experimental history-keyed context dispatch at recognized dispatch sites (measurement gate).
+    // the per-site IC at recognized interpreter-dispatch `br`s) for A/B.
     if (getenv("NOIBSLIM")) g_noibslim = 1;
-    if (getenv("CTXDISP")) g_ctxdisp = 1;
     // IRQSLIM: fixed 2-insn poll header + poll-free forward-chain entry at body+8
     // (every cycle still polls via its backward/indirect edge -- see cache.c). Requires the steal
     // layout and an emitted poll. NOIRQSLIM=1 -> legacy poll-on-every-entry for A/B.
@@ -764,7 +759,7 @@ static int engine_global_init(void) {
     g_untrusted = getenv("DDJIT_UNTRUSTED") != NULL;
     g_sentry_sandbox = getenv("DDJIT_SANDBOX") != NULL;
     // pcache_poison_check runs AFTER the codegen-mode flags above so it can refuse to persist an arena
-    // that a non-default mode (PROF/VDBETRACE/IBPROF/VTHITCOUNT/CTXDISP) baked unrecorded host pointers
+    // that a non-default mode (PROF) baked unrecorded host pointers
     // into. (g_pcache itself is read at the top of dd_run -- per-invocation, mirroring linux_x86_64.c,
     // so a fork-server runner honors the CLIENT's DDJIT_PCACHE; the check is mode-only and independent.)
     pcache_poison_check();

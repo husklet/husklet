@@ -16,8 +16,8 @@ static int g_dbg_nochain;
 // register-value differential vs `qemu -d cpu` (isolate a wrong-VALUE miscompile). Zero-cost when unset.
 static int g_dbg_gprdump;
 static const char *g_exe_path = "";
-// ARM-B1 IBPROF: gpc of the guest instruction currently being emitted (set each decode
-// step in translate_block); used to tag indirect-branch sites for the feasibility log.
+// IRQSLIM: gpc of the guest instruction currently being emitted (set each decode step in
+// translate_block); used to classify a direct-branch edge as forward vs backward in emit_chain_exit.
 static uint64_t g_emit_gpc;
 
 // Prologue: entered with x0 = &cpu. Restore flags, load guest sp + ALL GPRs, x0 last.
@@ -230,26 +230,7 @@ static void emit_ibranch_steal(int rn) {
     pc_record_icsite(Lt); // {target,body} cache holds an arena body ptr -> neutralize on reload
 }
 
-// ARM-B1 IBPROF: route an indirect transfer through the C dispatcher (reason R_IBLOG) so
-// ib_log() can record (site -> guest target). The guest target is cpu->x[rn] after the spill;
-// the site (this branch's gpc) is stashed in cpu->ic_site (unused while IBPROF bypasses fills).
-static void emit_iblog(int rn) {
-    emit_spill(); // x0 = cpu
-    e_ldr(9, 0, rn * 8);
-    e_str(9, 0, OFF_PC); // cpu->pc = guest target
-    e_movconst(9, g_emit_gpc);
-    e_str(9, 0, OFF_ICSITE); // cpu->ic_site = branch site gpc
-    e_movconst(9, R_IBLOG);
-    e_str(9, 0, OFF_RSN);
-    emit_blockret(9);
-    e_br(9);
-}
-
 static void emit_ibranch(int rn) {
-    if (g_ibprof) {
-        emit_iblog(rn);
-        return;
-    }
     if (rn == 18 || rn == 28) {
         emit_exit_reg(rn, R_BRANCH);
         return;
@@ -414,103 +395,7 @@ static void emit_ibranch(int rn) {
     pc_record_icsite(Lt); // {target,body} cache holds an arena body ptr -> neutralize on reload
 }
 
-// ARM-B1 VDBETRACE prototype: speculative direct-chain (SDC) for a (path-specific) JT-dispatch `br xN`.
-// This is the new capability B1 needs: thread a STABLE indirect-branch target by chaining DIRECTLY into
-// it behind a cheap equality guard, instead of the polymorphic IBTC probe + data-dependent `br x16`.
-//
-//   stash x16,x17                                  ; (shared-hash fallback needs the scratch pair)
-//   ldr  x16, Lspec_tgt                            ; speculated guest target (0 until first fill)
-//   sub  x16, x16, xRn                             ; guard: computed target == speculated?
-//   cbnz x16, Lhash                                ; no  -> shared-hash IBTC (in-cache fallback)
-//   ldur x16,[sp,#-16] ; ldur x17,[sp,#-24]        ; yes -> restore scratch ...
-//   b    Lspec_body                                ;      ... DIRECT chain into the target body (PREDICTED)
-// Lhash: <exact shared-hash IBTC from emit_ibranch>      ; misses re-resolve & (re)specialize the SDC
-//
-// The guard is an exact 64-bit equality on the real computed target, so it is BIT-EXACT: a misspeculation
-// can never land wrong -- it falls into the normal IBTC. Lspec_tgt starts 0 (no real target is 0), so the
-// direct chain is unreachable until the dispatcher fills it via sdc_fill (ic_site tagged with bit0=1).
-//
-// SCRATCH: x16 = guard scratch, x17 = shared-hash (Lhash) fallback scratch. Under the x16/x17 steal
-// (g_steal1617, the aarch64 default) both host regs are ENGINE-PRIVATE at this block-boundary indirect
-// edge -- the exact invariant emit_ibranch_steal / emit_hash_tail already exploit -- so use them DIRECTLY
-// with NO memory spill. AArch64 has NO architectural red zone, so the old unconditional stash below the
-// guest SP (`stur x16,[sp,#-16]`) only happened to work when the page under SP was mapped+writable; a
-// STABLE JT-dispatch `br` reached with a shallow guest SP (same shape as the pixman NEON self-loop that
-// crashed emit_t2_counter, 6d38d96c) faults on that store -- EXC_BAD_ACCESS. Mirroring that fix, the
-// steal path never writes below SP. The HIT direct chain lands on the regs-live `body` (sdc_fill), so no
-// restore is needed on either path; the Lhash fallback's IBTC hit lands on `body` (steal, bind=body) with
-// x16/x17 engine-private, so it too needs no restore. The legacy NOSTEAL1617 path keeps the [sp,#-16/-24]
-// stash: there x16/x17 hold GUEST values, and that stash location is the IBTC indirect-entry (body_ind)
-// ABI -- the Lhash hit lands on body-8, which reloads the guest x16/x17 from exactly those two slots.
-static void emit_vdbe_sdc(int rn) {
-    g_vt_inline++;
-    // Stash ONLY x16 for the guard; x17 is stashed inside the fallback (Lhash) where the shared hash
-    // needs it. The threaded HIT path thus touches just one red-zone slot. (Legacy NOSTEAL1617 only --
-    // on the steal path x16/x17 are engine-private and never stashed below SP.)
-    if (!g_steal1617) e_stur(16, 31, -16);
-    // --- SDC speculative direct chain (replaces the per-site monomorphic IC) ---
-    uint32_t *p_ldrt = (uint32_t *)g_cp;
-    emit32(0);                                         // ldr x16, Lspec_tgt
-    emit32(0xCB000000u | (rn << 16) | (16 << 5) | 16); // sub x16,x16,xRn
-    uint32_t *p_cbslow = (uint32_t *)g_cp;
-    emit32(0); // cbnz x16, Lhash
-    // HIT (x16==0, dead; x17 untouched/live -- and, on legacy, x16 stashed)
-    if (g_vt_hitcount) {                       // diagnostic: count guard hits (perturbs timing) -- x16 free
-        if (!g_steal1617) e_stur(17, 31, -24); // borrow x17 as the 2nd scratch (legacy)
-        e_adrp_add(16, (uint64_t)&g_vt_hit);
-        e_ldr(17, 16, 0);
-        e_addi(17, 17, 1);
-        e_str(17, 16, 0);
-        if (!g_steal1617) e_ldur(17, 31, -24); // restore x17 (legacy)
-    }
-    if (!g_steal1617) e_ldur(16, 31, -16); // restore x16 (legacy)
-    uint32_t *p_bdir = (uint32_t *)g_cp;
-    emit32(0x14000000u); // b Lspec_body (offset 0 until sdc_fill patches it; guard keeps it unreachable)
-    // --- Lhash: shared-hash IBTC (byte-identical to emit_ibranch's general path) ---
-    uint32_t *Lhash = (uint32_t *)g_cp;
-    if (!g_steal1617) e_stur(17, 31, -24); // stash x17 (legacy; shared hash + miss path need the pair)
-    emit32(0xD3424400u | (rn << 5) | 16);  // ubfx x16,xRn,#2,#16  (IBTC_N=64Ki)
-    emit_ibtcptr(17);
-    emit32(0x8B000000u | (16 << 16) | (4 << 10) | (17 << 5) | 16); // add x16,x17,x16,lsl#4
-    e_ldp(17, 16, 16, 0);                                          // x17=slot.target, x16=slot.body
-    emit32(0xCB000000u | (rn << 16) | (17 << 5) | 17);             // sub x17,x17,xRn
-    uint32_t *p_cbnz = (uint32_t *)g_cp;
-    emit32(0); // cbnz x17, Lmiss
-    e_br(16);  // hit -> body (steal) / body_ind (legacy, restores the guest x16/x17 pair)
-    uint32_t *miss = (uint32_t *)g_cp;
-    if (!g_steal1617) {
-        // legacy: x16/x17 are NON-stolen guest regs here, so emit_spill would store the clobbered
-        // probe values -> reload the guest x16/x17 from their [sp,#-16/-24] stash first.
-        e_ldur(16, 31, -16);
-        e_ldur(17, 31, -24);
-    }
-    emit_spill();
-    e_ldr(9, 0, rn * 8);
-    e_str(9, 0, OFF_PC);
-    e_movconst(9, R_BRANCH);
-    e_str(9, 0, OFF_RSN);
-    uint32_t *p_adr = (uint32_t *)g_cp;
-    emit32(0);       // adr x9, Lrec
-    e_addi(9, 9, 1); // tag bit0=1 -> "SDC fill" (Lrec is 8-aligned, so +1 == |1)
-    e_str(9, 0, OFF_ICSITE);
-    emit_blockret(9);
-    e_br(9);
-    if ((uint64_t)g_cp & 7) emit32(0);
-    uint8_t *Lt = g_cp;
-    *(uint64_t *)g_cp = 0;
-    g_cp += 8; // Lspec_tgt (guard literal)
-    uint8_t *Lbs = g_cp;
-    *(uint64_t *)g_cp = (uint64_t)p_bdir;
-    g_cp += 8; // RW addr of the direct-branch slot (for sdc_fill to patch)
-    *p_ldrt = 0x58000000u | (((uint32_t)((Lt - (uint8_t *)p_ldrt) / 4) & 0x7FFFF) << 5) | 16;
-    *p_cbslow = 0xB5000000u | (((uint32_t)(((uint8_t *)Lhash - (uint8_t *)p_cbslow) / 4) & 0x7FFFF) << 5) | 16;
-    *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 17;
-    int64_t ao = Lt - (uint8_t *)p_adr;
-    *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)(ao >> 2) & 0x7FFFF) << 5) | 9;
-    (void)Lbs;
-}
-
-// ---- IBSLIM + CTXDISP: recognized interpreter-dispatch `br` sites ----
+// ---- IBSLIM: recognized interpreter-dispatch `br` sites ----
 // A site recognized by is_interp_dispatch_br (a `br xN` fed by a load from a table of code
 // pointers -- CPython computed goto, sqlite VDBE, any switch-dispatch interpreter) is megamorphic
 // by construction: its per-site monomorphic IC hits ~5% (measured, CPython-shaped bench) yet costs
@@ -542,76 +427,6 @@ static void emit_hash_tail(int rn) {
     emit_blockret(9); // recorded (see the emit_ibtcptr note above)
     e_br(9);
     *p_cbnz = 0xB5000000u | (((uint32_t)(((uint8_t *)miss - (uint8_t *)p_cbnz) / 4) & 0x7FFFF) << 5) | 17;
-}
-
-// CTXDISP (gated CTXDISP=1): history-keyed context dispatch. Index an in-cache array of CTX_N
-// 64-byte stubs by a hash of the site's last ~3 guest targets (the PRE-update rolling history --
-// never the current target, which is what is being predicted). Each stub owns a PRIVATE
-// {target,body} pair and a PRIVATE final `br`, so the host BTB predicts each history context at its
-// own branch address (the order-3 Markov signal: 83% at the CPython-shaped megamorphic site, vs
-// 5.4% order-0). CORRECTNESS: the stub compares its filled target against the REAL computed target
-// (exact 64-bit equality) before jumping; any mismatch (cold stub, hash collision, phase change)
-// falls into the ordinary shared-hash IBTC probe, and the pair itself is only ever published
-// atomically (16B, LSE2) by the dispatcher (ctx_fill) -- a wrong-target jump is impossible.
-// Refills are throttled: 1 dispatcher round-trip per CTX_REFILL ctx-misses at the site.
-static void emit_ctx_dispatch(int rn, int slot) {
-    uint64_t hist_addr = (uint64_t)&g_ctxsite[slot].hist; // .ctr at +8 (plain RW data, adrp-reachable)
-    // --- main probe: pick the stub from h_pre, then advance the history ---
-    e_adrp_add(17, hist_addr);                                      // x17 = &site.hist
-    e_ldr(16, 17, 0);                                               // x16 = h_pre
-    emit32(0xD342FC00u | (rn << 5) | 30);                           // lsr x30, xRn, #2
-    emit32(0xCA000000u | (16 << 16) | (16 << 10) | (30 << 5) | 30); // eor x30, x30, x16, lsl #16
-    e_str(30, 17, 0);                                               // site.hist = (h_pre << 16) ^ (tgt >> 2)
-    emit32(0xCA400000u | (16 << 16) | (16 << 10) | (16 << 5) | 16); // eor x16, x16, x16, lsr #16
-    emit32(0xCA400000u | (16 << 16) | (32 << 10) | (16 << 5) | 16); // eor x16, x16, x16, lsr #32
-    emit32(0x92401C00u | (16 << 5) | 16);                           // and x16, x16, #0xFF  (CTX_N-1)
-    uint32_t *p_adr = (uint32_t *)g_cp;
-    emit32(0);                                                     // adr x30, stubs[0].code (backpatched)
-    emit32(0x8B000000u | (16 << 16) | (6 << 10) | (30 << 5) | 16); // add x16, x30, x16, lsl #6
-    e_br(16);                                                      // -> the history context's private stub
-    // --- Lctxmiss: guard failed (x16 = stub CODE addr, xRn live). Throttle, then shared hash ---
-    uint8_t *Lctxmiss = g_cp;
-    e_adrp_add(17, hist_addr);
-    e_ldr(30, 17, 8);  // x30 = site.ctr
-    e_subi(30, 30, 1); // (sub, not subs: guest flags stay live)
-    e_str(30, 17, 8);
-    uint32_t *p_cbz = (uint32_t *)g_cp;
-    emit32(0);          // cbz x30, Lfill (every CTX_REFILL'th miss -> dispatcher refill)
-    emit_hash_tail(rn); // ordinary shared-hash IBTC probe (its own miss exit inside)
-    // --- Lfill: dispatcher round-trip that also (re)specializes THIS stub (ic_site = pair|2) ---
-    uint8_t *Lfill = g_cp;
-    e_movz(30, CTX_REFILL, 0);
-    e_str(30, 17, 8); // reset the throttle
-    emit_spill();     // x0 = cpu; x16 (stub code addr) is stolen -> survives the spill
-    e_ldr(9, 0, rn * 8);
-    e_str(9, 0, OFF_PC); // cpu->pc = guest target
-    e_movconst(9, R_BRANCH);
-    e_str(9, 0, OFF_RSN);
-    e_subi(9, 16, 14); // x9 = (stub code - 16) + 2 = the stub's 16B pair addr, tag bit1 = ctx fill
-    e_str(9, 0, OFF_ICSITE);
-    e_movconst(9, (uint64_t)block_return);
-    e_br(9);
-    *p_cbz = 0xB4000000u | (((uint32_t)((Lfill - (uint8_t *)p_cbz) / 4) & 0x7FFFF) << 5) | 30;
-    // --- the stub array: CTX_N entries of {16B {target,body} pair | 5-insn guard} in one 64B line ---
-    while ((uintptr_t)g_cp & 63)
-        emit32(0xD503201Fu); // 64-align (pair 16-aligned for the atomic ldp)
-    uint8_t *stubs = g_cp;
-    for (int i = 0; i < CTX_N; i++) {
-        *(uint64_t *)g_cp = 0; // pair.target: 0 never equals a real target -> cold guard always misses
-        g_cp += 8;
-        *(uint64_t *)g_cp = 0; // pair.body
-        g_cp += 8;
-        emit32(0x10000000u | ((0x7FFFCu) << 5) | 17);      // adr x17, .-16 (this stub's pair)
-        e_ldp(17, 30, 17, 0);                              // {x17,x30} = {target, body} (LSE2 atomic)
-        emit32(0xCB000000u | (rn << 16) | (17 << 5) | 17); // sub x17, x17, xRn
-        int64_t d = (Lctxmiss - g_cp) / 4;
-        emit32(0xB5000000u | (((uint32_t)d & 0x7FFFF) << 5) | 17); // cbnz x17, Lctxmiss
-        e_br(30); // HIT: the context's private branch -> body (host-BTB-predicted per stub)
-        while ((uintptr_t)g_cp & 63)
-            emit32(0xD503201Fu); // pad to the 64B stride
-    }
-    int64_t ao = (stubs + 16) - (uint8_t *)p_adr; // stubs[0].code
-    *p_adr = 0x10000000u | ((uint32_t)(ao & 3) << 29) | (((uint32_t)((ao >> 2) & 0x7FFFF)) << 5) | 30;
 }
 
 // A direct-branch exit to a CONSTANT target. If the target is already translated,
