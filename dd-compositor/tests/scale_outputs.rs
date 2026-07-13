@@ -371,4 +371,22 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
         Some("dd-0"),
         "routing one root must not move an independent root"
     );
+
+    // Hot-unplug dd-1 migrates the complete first tree back to deterministic dd-0 before withdrawal.
+    c.events.clear();
+    assert!(state.remove_output("dd-1"));
+    display.flush_clients().unwrap();
+    c.drain();
+    assert_eq!(state.surface_output_name(1).as_deref(), Some("dd-0"));
+    assert_eq!(state.surface_output_name(2).as_deref(), Some("dd-0"));
+    assert_eq!(state.surface_output_name(3).as_deref(), Some("dd-0"));
+    assert!(c.saw(surface, 0) && c.saw(surface, 1));
+    assert!(c.saw(child, 0) && c.saw(child, 1));
+
+    // Removing the final output has an explicit headless policy: no fallback membership and no
+    // fabricated presentation until a new output is added.
+    assert!(state.remove_output("dd-0"));
+    assert!(state.is_headless());
+    assert_eq!(state.surface_output_name(1), None);
+    assert_eq!(state.surface_output_name(3), None);
 }

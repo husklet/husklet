@@ -535,14 +535,16 @@ and a full two-window Wayland event journey remain unimplemented, while output r
 hotplug row below.
 `compositor_routes_each_surface_through_its_actual_output_membership` pins the required coupling.
 
-Output hotplug is also one-way: extras can be added and retained forever but never removed, their globals cannot be
-retired, and attached surfaces cannot migrate. Add stable `OutputId` records separate from Smithay handles; process
-host display changes as one transaction that updates geometry/modes, migrates affected surfaces, emits leave/enter,
-recomputes scale/fullscreen, sends configure, and only then destroys the old global after queued events are flushed.
-Never strand focus, popup placement or a native presenter target on a removed output. Exercise add→move→fullscreen→
-remove while frames are pending, including removal of the primary and final output; the final-output policy must be
-explicit (headless/offscreen or terminal display loss). `compositor_output_hotplug_migrates_surfaces_and_reconfigures_scale`
-prevents static enumeration from being mistaken for hotplug support.
+Output globals now retain their Smithay `GlobalId` for withdrawal. Removal first migrates every affected complete
+surface tree to a deterministic surviving output through the shared enter→preferred-scale→leave transaction, then
+withdraws the old global. Removing the primary promotes the first surviving extra; presenter routing and presentation
+feedback immediately read the fallback membership, and dirty/pending frames remain dirty across migration. Removing
+the final output explicitly enters headless retry mode: surfaces leave it, membership clears, and presentation is
+withheld rather than fabricated until `add_output` restores an output. The Rust multi-output journey covers complete-
+tree fallback, independent-root isolation and final-output headless transition. Live host display-change discovery and
+fullscreen reconfigure emission remain follow-up integration work.
+`compositor_output_hotplug_migrates_surfaces_and_reconfigures_scale` prevents static enumeration from being mistaken
+for hotplug support.
 
 Color is not represented end to end. Shared IR distinguishes `*Unorm` from `*Srgb`, and Metal/wgpu choose native
 sRGB formats, but the software backend filters and blends the encoded 8-bit channels directly. Correct sRGB
@@ -1102,7 +1104,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use` | partial | generation-tagged uses give shm copy-complete exact-once release and retain zero-copy across failure; Metal has no actual GPU-completion token | Add presenter completion tokens and out-of-order zero-copy retirement tests |
 | `compositor_retains_presentation_feedback_across_retryable_failure_only` | contradictory | failed present retains callbacks for retry but immediately discards its feedback | Typed retry class with coupled callback/feedback/resource terminal policy |
 | `compositor_routes_each_surface_through_its_actual_output_membership` | partial | per-surface membership emits enter/leave and selects scale, fullscreen size, presenter route and feedback output transactionally | Add host-geometry intersection selection and two-independent-window Wayland event journey |
-| `compositor_output_hotplug_migrates_surfaces_and_reconfigures_scale` | missing | extra outputs are append-only globals with no surface migration | Transactional removal, fallback placement, scale/configure and pending-frame tests |
+| `compositor_output_hotplug_migrates_surfaces_and_reconfigures_scale` | partial | globals withdraw after complete-tree fallback migration; primary promotion and explicit final-output headless retry preserve routing/dirty frames | Wire live host display notifications and fullscreen configure ordering |
 | `software_backend_applies_srgb_transfer_functions_around_filtering_and_blending` | contradictory | sRGB formats are sampled/blended as encoded bytes in software | Linear-light transfer helpers and format-specific golden pixel tests |
 | `cocoa_presenter_reports_actual_drawable_presentation_time_and_refresh` | missing | Metal returns Delivered with no drawable completion timestamp or target refresh | Presented-handler serial/timing plumbing plus live macOS ordering test |
 | `compositor_negotiates_surface_color_and_converts_to_the_target_output_profile` | missing | surface/presenter path carries no color description, output profile, or HDR policy | Color protocol plus linear composition and ICC/HDR output conversion fixtures |

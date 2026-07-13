@@ -99,7 +99,7 @@ impl DdState {
                 model: model.into(),
             },
         );
-        output.create_global::<Self>(&self.dh);
+        let global = output.create_global::<Self>(&self.dh);
         let mode = OutMode {
             size: Size::from((mode_px.0.max(1), mode_px.1.max(1))),
             refresh: OUTPUT_REFRESH_MHZ as i32,
@@ -111,7 +111,45 @@ impl DdState {
             Some(Point::from((position.0, position.1))),
         );
         output.set_preferred(mode);
-        self.extra_outputs.push(output.clone());
+        self.output_globals.insert(output.name(), global);
+        if self.headless {
+            self.output = output.clone();
+            self.headless = false;
+        } else {
+            self.extra_outputs.push(output.clone());
+        }
         output
     }
+
+    pub fn remove_output(&mut self, name: &str) -> bool {
+        let Some(global) = self.output_globals.get(name).cloned() else { return false; };
+        let removed = std::iter::once(&self.output).chain(self.extra_outputs.iter())
+            .find(|output| output.name() == name).cloned().expect("output record missing");
+        let fallback = std::iter::once(&self.output).chain(self.extra_outputs.iter())
+            .find(|output| output.name() != name).cloned();
+        let affected: Vec<u32> = self.surface_outputs.iter()
+            .filter_map(|(sid, output)| (output == &removed).then_some(*sid)).collect();
+        if let Some(next) = fallback.as_ref() {
+            for sid in affected { self.route_surface_to_output(sid, &next.name()); }
+        } else {
+            for sid in affected {
+                if let Some(surface) = self.surface_resources.get(&sid) { removed.leave(surface); }
+                self.surface_outputs.remove(&sid);
+                self.dirty.insert(sid);
+            }
+            self.headless = true;
+        }
+        self.dh.remove_global::<Self>(global);
+        self.output_globals.remove(name);
+        self.extra_outputs.retain(|output| output.name() != name);
+        if self.output.name() == name {
+            if let Some(next) = fallback {
+                self.output = next.clone();
+                self.extra_outputs.retain(|output| output != &next);
+            }
+        }
+        true
+    }
+
+    pub fn is_headless(&self) -> bool { self.headless }
 }

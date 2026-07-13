@@ -484,6 +484,10 @@ impl DdState {
     /// model `server.rs` uses); a GPU/IOSurface root is presented as a single zero-copy texture and its
     /// children are not blended (documented limitation). Returns whether the frame reached the screen.
     pub(crate) fn present_render_root(&mut self, root: &WlSurface) -> bool {
+        if self.headless {
+            self.pace_tree(root, FramePacing::Failed, None);
+            return false;
+        }
         let mut evidence = None;
         let pacing = match self.present_tree(root) {
             Some(base) => {

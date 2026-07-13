@@ -54,7 +54,7 @@ use smithay::{
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities,
         wayland_server::{
-            backend::{protocol::ProtocolError, ClientData, ClientId, DisconnectReason, ObjectId},
+            backend::{protocol::ProtocolError, ClientData, ClientId, DisconnectReason, GlobalId, ObjectId},
             protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_surface::WlSurface},
             DisplayHandle, Resource,
         },
@@ -217,6 +217,8 @@ pub struct DdState {
     /// `wl_output` + `zxdg_output_v1` advertised by the shared [`OutputManagerState`]; registered via
     /// [`DdState::add_output`]. Empty in the single-output default — the state is not hard-wired to one.
     pub extra_outputs: Vec<Output>,
+    pub(crate) output_globals: HashMap<String, GlobalId>,
+    pub(crate) headless: bool,
     /// Selected output for each live surface/root. New surfaces start on the primary output.
     pub(crate) surface_outputs: HashMap<u32, Output>,
 
@@ -485,7 +487,7 @@ impl DdState {
                 model: "dd-display".into(),
             },
         );
-        output.create_global::<Self>(&dh);
+        let output_global = output.create_global::<Self>(&dh);
         let mode = OutMode {
             size: Size::from((2560, 1440)),
             refresh: 60_000,
@@ -526,6 +528,8 @@ impl DdState {
             pointer,
             output,
             extra_outputs: Vec::new(),
+            output_globals: HashMap::from([("dd-0".to_string(), output_global)]),
+            headless: false,
             surface_outputs: HashMap::new(),
             text_input,
             presenter,
