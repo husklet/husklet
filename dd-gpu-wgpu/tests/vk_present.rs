@@ -48,7 +48,32 @@ fn shader(dev: *mut c_void, spv: &[u32]) -> u64 {
 
 #[test]
 fn vk_swapchain_present_renders_on_real_metal() {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+
     ddvk::reg::reset();
+
+    // vkQueuePresentKHR ships the frame to the host GPU-exec socket ($DD_GPU_EXEC) and, unless disabled,
+    // to the wayland compositor. Stand up a throwaway acking sink so the present succeeds off-guest; the
+    // test itself replays the render IR on Metal below and checks the pixels.
+    let dir = std::env::temp_dir().join(format!("dd-vkpresent-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("exec.sock");
+    let _ = std::fs::remove_file(&sock);
+    let listener = UnixListener::bind(&sock).unwrap();
+    std::env::set_var("DD_GPU_EXEC", &sock);
+    std::env::set_var("DD_VK_NO_WL_PRESENT", "1");
+    let exec = std::thread::spawn(move || {
+        if let Ok((mut c, _)) = listener.accept() {
+            let mut hdr = [0u8; 16];
+            if c.read_exact(&mut hdr).is_ok() {
+                let len = u32::from_le_bytes(hdr[12..16].try_into().unwrap()) as usize;
+                let mut body = vec![0u8; len];
+                let _ = c.read_exact(&mut body);
+                let _ = c.write_all(&[1u8]); // ACK_OK
+            }
+        }
+    });
 
     // instance / device / queue / command pool
     let mut inst: *mut c_void = core::ptr::null_mut();
@@ -97,9 +122,12 @@ fn vk_swapchain_present_renders_on_real_metal() {
     let mut images = vec![0u64; img_count as usize];
     ddvk::vkGetSwapchainImagesKHR(dev, swapchain, &mut img_count, images.as_mut_ptr());
 
+    // Acquire requires a semaphore or fence to signal (Vulkan spec); use a throwaway fence.
+    let mut acquire_fence = 0u64;
+    assert_eq!(ddvk::vkCreateFence(dev, &vk::FenceCreateInfo::default() as *const _, core::ptr::null(), &mut acquire_fence), 0);
     let mut image_index = 0u32;
     assert_eq!(
-        ddvk::vkAcquireNextImageKHR(dev, swapchain, u64::MAX, 0, 0, &mut image_index),
+        ddvk::vkAcquireNextImageKHR(dev, swapchain, u64::MAX, 0, acquire_fence, &mut image_index),
         0
     );
     let sc_image = images[image_index as usize];
@@ -110,9 +138,16 @@ fn vk_swapchain_present_renders_on_real_metal() {
     let view_ci = vk::ImageViewCreateInfo::default()
         .image(vk::Image::from_raw(sc_image))
         .view_type(vk::ImageViewType::TYPE_2D)
-        .format(vk::Format::B8G8R8A8_UNORM);
+        .format(vk::Format::B8G8R8A8_UNORM)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        });
     let mut view = 0u64;
-    ddvk::vkCreateImageView(dev, &view_ci, core::ptr::null(), &mut view);
+    assert_eq!(ddvk::vkCreateImageView(dev, &view_ci, core::ptr::null(), &mut view), 0);
 
     let att = [vk::AttachmentDescription::default()
         .format(vk::Format::B8G8R8A8_UNORM)
@@ -224,5 +259,7 @@ fn vk_swapchain_present_renders_on_real_metal() {
     assert!(center[1] > 200 && center[0] < 40 && center[2] < 40, "swapchain center should be green, got BGRA {center:?}");
     assert!(green > 200, "expected the presented green triangle, got {green} px");
     assert!(has_present, "vkQueuePresentKHR must have run + terminated the frame with Cmd::Present");
+    let _ = exec.join();
+    let _ = std::fs::remove_dir_all(&dir);
     eprintln!("vk_swapchain_present_renders_on_real_metal: OK (green_px={green})");
 }
