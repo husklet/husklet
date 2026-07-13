@@ -9,30 +9,6 @@
 
 const SPIRV_MAGIC: u32 = 0x0723_0203;
 
-/// Legacy detection: the current GL shim packs MSL-as-bytes into the `spirv` field — `word[0]` is a byte
-/// length, the rest are UTF-8 bytes packed 4-per-word. naga has no MSL front end, so such a payload is
-/// NOT translatable here and the backend must fall back to a builtin pipeline. Returns the decoded MSL
-/// string when the payload is that legacy shape (so the caller can log / recognise it), else `None`.
-#[allow(dead_code)] // diagnostic / recognizes the legacy shim payload; used by the migration path + tests
-pub fn legacy_msl(words: &[u32]) -> Option<String> {
-    let len = *words.first()? as usize;
-    if len == 0 || len > (words.len() - 1) * 4 {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(len);
-    for w in &words[1..] {
-        bytes.extend_from_slice(&w.to_le_bytes());
-    }
-    bytes.truncate(len);
-    let s = String::from_utf8(bytes).ok()?;
-    // Only call it MSL if it actually looks like Metal source (the shim always emits this preamble).
-    if s.contains("metal_stdlib") || s.contains("[[stage_in]]") {
-        Some(s)
-    } else {
-        None
-    }
-}
-
 /// Translate an IR `CreateShader` payload to WGSL. Returns `None` when the payload is not real SPIR-V
 /// (e.g. the legacy MSL-as-bytes shape), so the backend can select a builtin pipeline instead.
 pub fn spirv_to_wgsl(words: &[u32]) -> Result<Option<String>, String> {
@@ -116,7 +92,6 @@ mod tests {
             words.push(u32::from_le_bytes(w));
         }
         assert!(spirv_to_wgsl(&words).unwrap().is_none(), "not spirv");
-        assert!(legacy_msl(&words).is_some(), "recognised legacy MSL");
     }
 
     #[test]
