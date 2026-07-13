@@ -214,6 +214,19 @@ fn partial_note(name: &str) -> Option<&'static str> {
         | "vkGetDeviceMemoryOpaqueCaptureAddress" | "vkGetDeviceMemoryOpaqueCaptureAddressKHR" => {
             "no capture/replay support: opaque capture addresses are 0"
         }
+        // Vulkan 1.3 promoted core — bounded domains:
+        n if n.starts_with("vkCmdSet") && matches!(n,
+            "vkCmdSetCullMode" | "vkCmdSetFrontFace" | "vkCmdSetPrimitiveTopology" | "vkCmdSetPrimitiveRestartEnable"
+            | "vkCmdSetRasterizerDiscardEnable" | "vkCmdSetDepthTestEnable" | "vkCmdSetDepthWriteEnable"
+            | "vkCmdSetDepthCompareOp" | "vkCmdSetDepthBoundsTestEnable" | "vkCmdSetDepthBiasEnable"
+            | "vkCmdSetStencilTestEnable" | "vkCmdSetStencilOp" | "vkCmdSetViewportWithCount" | "vkCmdSetScissorWithCount") => {
+            "extended dynamic state recorded verbatim (observable); not yet lowered into the IR draw state"
+        }
+        "vkCmdBindVertexBuffers2" => "binds via the 1.0 path; per-binding sizes/strides are not modeled",
+        "vkCmdSetEvent2" | "vkCmdResetEvent2" | "vkCmdWaitEvents2" => {
+            "sync2 events reuse the synchronous event + submit-time barrier model (see the 1.0 event notes)"
+        }
+        "vkCmdWriteTimestamp2" => "sync2 timestamp reuses the synchronous timestamp model (host-monotonic serial)",
         _ => return None,
     })
 }
@@ -780,4 +793,25 @@ const IMPLEMENTED: &[&str] = &[
     "vkCmdDrawIndexedIndirectCount",
     "vkResetQueryPool",
     "vkResetQueryPoolEXT",
+    // ---- increment 8: Vulkan 1.3 promoted core (vk13.rs). Ported from MoltenVK: MVKCommandEncoderState
+    // (extended dynamic state), MVKCmdCopy* (copy_commands2), MVKCmdPipelineBarrier/MVKQueue (sync2),
+    // MVKDevice (maintenance4), MVKPrivateDataSlot (private data).
+    // extended dynamic state 1+2
+    "vkCmdSetCullMode", "vkCmdSetFrontFace", "vkCmdSetPrimitiveTopology", "vkCmdSetPrimitiveRestartEnable",
+    "vkCmdSetRasterizerDiscardEnable", "vkCmdSetDepthTestEnable", "vkCmdSetDepthWriteEnable",
+    "vkCmdSetDepthCompareOp", "vkCmdSetDepthBoundsTestEnable", "vkCmdSetDepthBiasEnable",
+    "vkCmdSetStencilTestEnable", "vkCmdSetStencilOp", "vkCmdSetViewportWithCount",
+    "vkCmdSetScissorWithCount", "vkCmdBindVertexBuffers2",
+    // copy commands 2
+    "vkCmdCopyBuffer2", "vkCmdCopyImage2", "vkCmdCopyBufferToImage2", "vkCmdCopyImageToBuffer2",
+    "vkCmdBlitImage2", "vkCmdResolveImage2",
+    // synchronization2
+    "vkCmdSetEvent2", "vkCmdResetEvent2", "vkCmdWaitEvents2", "vkCmdWriteTimestamp2", "vkQueueSubmit2",
+    // maintenance4
+    "vkGetDeviceBufferMemoryRequirements", "vkGetDeviceImageMemoryRequirements",
+    "vkGetDeviceImageSparseMemoryRequirements",
+    // private data
+    "vkCreatePrivateDataSlot", "vkDestroyPrivateDataSlot", "vkSetPrivateData", "vkGetPrivateData",
+    // tool properties
+    "vkGetPhysicalDeviceToolProperties",
 ];

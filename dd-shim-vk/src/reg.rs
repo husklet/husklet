@@ -381,6 +381,23 @@ pub struct DynamicState {
     pub stencil_write_mask: (u32, u32),
     /// `(front, back)` stencil reference values.
     pub stencil_reference: (u32, u32),
+    // ---- Vulkan 1.3 extended dynamic state (EDS1 + EDS2), recorded verbatim (MVKCommandEncoderState) ----
+    pub cull_mode: u32,
+    pub front_face: i32,
+    pub primitive_topology: i32,
+    pub primitive_restart_enable: bool,
+    pub rasterizer_discard_enable: bool,
+    pub depth_test_enable: bool,
+    pub depth_write_enable: bool,
+    pub depth_compare_op: i32,
+    pub depth_bounds_test_enable: bool,
+    pub depth_bias_enable: bool,
+    pub stencil_test_enable: bool,
+    /// `(faceMask, failOp, passOp, depthFailOp, compareOp)` of the last `vkCmdSetStencilOp`.
+    pub stencil_op: (u32, i32, i32, i32, i32),
+    /// The last `vkCmdSetViewportWithCount` / `vkCmdSetScissorWithCount` count.
+    pub viewport_count: u32,
+    pub scissor_count: u32,
 }
 
 impl Default for DynamicState {
@@ -393,6 +410,20 @@ impl Default for DynamicState {
             stencil_compare_mask: (u32::MAX, u32::MAX),
             stencil_write_mask: (u32::MAX, u32::MAX),
             stencil_reference: (0, 0),
+            cull_mode: 0,
+            front_face: 0,
+            primitive_topology: 3, // TRIANGLE_LIST
+            primitive_restart_enable: false,
+            rasterizer_discard_enable: false,
+            depth_test_enable: false,
+            depth_write_enable: false,
+            depth_compare_op: 1, // LESS
+            depth_bounds_test_enable: false,
+            depth_bias_enable: false,
+            stencil_test_enable: false,
+            stencil_op: (0, 0, 0, 0, 0),
+            viewport_count: 0,
+            scissor_count: 0,
         }
     }
 }
@@ -577,6 +608,9 @@ pub struct VkState {
     pub pipeline_caches: HashMap<u64, PipelineCacheRec>, // pipeline-cache handle -> serialized blob
     pub descriptor_update_templates: HashMap<u64, DescriptorUpdateTemplateRec>, // 1.1 update templates
     pub ycbcr_conversions: HashMap<u64, SamplerYcbcrConversionRec>, // 1.1 sampler ycbcr conversions
+    /// Vulkan 1.3 private-data slots (handle set) + the per-`(slot, objectType, objectHandle)` u64 payload.
+    pub private_data_slots: std::collections::HashSet<u64>,
+    pub private_data: HashMap<(u64, i32, u64), u64>,
     pub surfaces: HashMap<u64, SurfaceRec>,
     pub swapchains: HashMap<u64, SwapchainRec>,
     /// Lazily-opened host GPU-exec channel (only when `$DD_GPU_EXEC` is set — the live guest path).

@@ -55,6 +55,7 @@ pub mod reg;
 pub mod state;
 pub mod stub;
 pub mod types;
+pub mod vk13;
 pub mod wl_present;
 pub mod wsi;
 
@@ -71,6 +72,7 @@ pub use memory::*;
 pub use pipeline::*;
 pub use query::*;
 pub use wsi::*;
+pub use vk13::*;
 
 // The generated C-ABI export surface (every `vk*` entry point not in `IMPLEMENTED`) + the name→address
 // DISPATCH table the loader-facing proc-addr resolvers scan.
@@ -185,24 +187,24 @@ mod tests {
     /// stub call (`vkCreateSampler`, a core:1.0 command) and an unadvertised-extension stub.
     #[test]
     fn stub_returns_truthful_error_and_inits_output() {
-        // vkCreatePrivateDataSlot is a still-unimplemented core:1.3 stub (1.0/1.1 and much of 1.2 core is
-        // now bodied): it must null its output handle and return FEATURE_NOT_PRESENT (unimplemented core).
-        let mut rp: u64 = 0xdead_beef; // poison; the stub must overwrite it with VK_NULL_HANDLE (0)
-        let r = vkCreatePrivateDataSlot(
+        // vkTransitionImageLayout is a still-unimplemented core:1.4 stub (1.0-1.3 core is now bodied): a
+        // core VkResult stub returns FEATURE_NOT_PRESENT (unimplemented core), never a false VK_SUCCESS.
+        let r0 = vkTransitionImageLayout(core::ptr::null_mut(), 0, core::ptr::null());
+        assert_eq!(r0, types::VK_ERROR_FEATURE_NOT_PRESENT, "core stub must fail, not succeed");
+        // An unadvertised-extension vkCreate stub reports EXTENSION_NOT_PRESENT AND nulls its output handle.
+        let mut accel: u64 = 0xdead_beef; // poison; the stub must overwrite it with VK_NULL_HANDLE (0)
+        let r2 = vkCreateAccelerationStructureKHR(
             core::ptr::null_mut(),
             core::ptr::null(),
             core::ptr::null(),
-            &mut rp as *mut u64 as *mut core::ffi::c_void,
+            &mut accel as *mut u64 as *mut core::ffi::c_void,
         );
-        assert_eq!(r, types::VK_ERROR_FEATURE_NOT_PRESENT, "core stub must fail, not succeed");
-        assert_eq!(rp, 0, "stub must initialize the output handle to VK_NULL_HANDLE");
-        // A command from an unadvertised extension reports EXTENSION_NOT_PRESENT.
-        let r2 = vkBindBufferMemory2KHR(core::ptr::null_mut(), 0, core::ptr::null());
         assert_eq!(r2, types::VK_ERROR_EXTENSION_NOT_PRESENT);
+        assert_eq!(accel, 0, "stub must initialize the output handle to VK_NULL_HANDLE");
         // And the inventory records exactly those errors for those commands.
         let rec = |n: &str| CAPABILITIES.iter().find(|e| e.name == n).unwrap();
-        assert_eq!(rec("vkCreatePrivateDataSlot").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
-        assert_eq!(rec("vkBindBufferMemory2KHR").vk_error, types::VK_ERROR_EXTENSION_NOT_PRESENT);
+        assert_eq!(rec("vkTransitionImageLayout").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
+        assert_eq!(rec("vkCreateAccelerationStructureKHR").vk_error, types::VK_ERROR_EXTENSION_NOT_PRESENT);
     }
 
     // ---- Phase 0: truthful version advertisement -------------------------------------------------
@@ -283,15 +285,9 @@ mod tests {
     fn strict_mode_trips_abort_on_stub() {
         stub::STRICT_TRIPPED.with(|c| c.set(false));
         std::env::set_var("DD_SHIM_STRICT", "1");
-        // Any generated stub call must trip the strict abort (vkCreatePrivateDataSlot is a still-
-        // unimplemented core:1.3 stub).
-        let mut rp: u64 = 0;
-        let _ = vkCreatePrivateDataSlot(
-            core::ptr::null_mut(),
-            core::ptr::null(),
-            core::ptr::null(),
-            &mut rp as *mut u64 as *mut core::ffi::c_void,
-        );
+        // Any generated stub call must trip the strict abort (vkTransitionImageLayout is a still-
+        // unimplemented core:1.4 stub — 1.0-1.3 core is now bodied).
+        let _ = vkTransitionImageLayout(core::ptr::null_mut(), 0, core::ptr::null());
         std::env::remove_var("DD_SHIM_STRICT");
         assert!(
             stub::STRICT_TRIPPED.with(|c| c.get()),
@@ -772,5 +768,53 @@ mod tests {
         // 1.2 core is materially advanced (was 6/13).
         let impl12 = CAPABILITIES.iter().filter(|e| e.origin == "core:1.2" && e.implemented()).count();
         assert!(impl12 >= 13, "expected the whole 1.2 core bodied, got {impl12}/13");
+    }
+
+    // ---- increment 8: Vulkan 1.3 core ----
+
+    /// The entire Vulkan **1.3** mandatory core now has real bodies — zero generated stubs remain (extended
+    /// dynamic state, copy_commands2, synchronization2, maintenance4, private data, tool properties).
+    #[test]
+    fn vulkan_1_3_core_is_fully_implemented() {
+        use capability::Cap;
+        let core13: Vec<_> = CAPABILITIES.iter().filter(|e| e.origin == "core:1.3").collect();
+        assert_eq!(core13.len(), 37, "Vulkan 1.3 core census size");
+        assert_eq!(core13.iter().filter(|e| e.cap == Cap::Stub).count(), 0, "no mandatory core:1.3 command may remain a stub");
+        for n in ["vkCmdSetCullMode", "vkCmdCopyBuffer2", "vkQueueSubmit2", "vkGetDeviceBufferMemoryRequirements", "vkSetPrivateData", "vkGetPhysicalDeviceToolProperties"] {
+            assert!(dispatch_addr(n).is_some(), "1.3 core {n} not resolvable");
+            assert!(CAPABILITIES.iter().find(|c| c.name == n).unwrap().implemented(), "{n} still a stub");
+        }
+    }
+
+    /// Per-feature: private data round-trips a payload, and extended dynamic state records verbatim.
+    #[test]
+    fn private_data_and_extended_dynamic_state_roundtrip() {
+        let _g = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use ash::vk;
+        use ash::vk::Handle;
+        // Private data: create a slot, set a payload on a (type, handle) key, read it back, then destroy.
+        let mut slot = 0u64;
+        assert_eq!(vkCreatePrivateDataSlot(core::ptr::null_mut(), core::ptr::null(), core::ptr::null(), &mut slot), types::VK_SUCCESS);
+        assert_eq!(vkSetPrivateData(core::ptr::null_mut(), 9 /*BUFFER*/, 0x1234, slot, 0xCAFE), types::VK_SUCCESS);
+        let mut got = 0u64;
+        vkGetPrivateData(core::ptr::null_mut(), 9, 0x1234, slot, &mut got);
+        assert_eq!(got, 0xCAFE, "private data round-trips");
+        vkDestroyPrivateDataSlot(core::ptr::null_mut(), slot, core::ptr::null());
+
+        // Extended dynamic state records verbatim into the command buffer.
+        let cb = 0x8888usize as types::VkCommandBuffer;
+        let bi = vk::CommandBufferBeginInfo::default();
+        assert_eq!(vkBeginCommandBuffer(cb, &bi), types::VK_SUCCESS);
+        vkCmdSetCullMode(cb, vk::CullModeFlags::BACK);
+        vkCmdSetDepthTestEnable(cb, vk::TRUE);
+        vkCmdSetPrimitiveTopology(cb, vk::PrimitiveTopology::TRIANGLE_STRIP);
+        {
+            let s = reg::lock();
+            let d = &s.cmdbufs[&(cb as usize)].dynamic;
+            assert_eq!(d.cull_mode, vk::CullModeFlags::BACK.as_raw());
+            assert!(d.depth_test_enable);
+            assert_eq!(d.primitive_topology, vk::PrimitiveTopology::TRIANGLE_STRIP.as_raw());
+        }
+        vkResetCommandBuffer(cb, 0);
     }
 }

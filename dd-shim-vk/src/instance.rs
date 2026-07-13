@@ -361,6 +361,9 @@ pub extern "C" fn vkGetPhysicalDeviceFeatures2(
             if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceVulkan13Features).as_mut() } {
                 f.dynamic_rendering = vk::TRUE;
                 f.synchronization2 = vk::TRUE;
+                f.private_data = vk::TRUE;
+                f.maintenance4 = vk::TRUE;
+                f.pipeline_creation_cache_control = vk::TRUE;
             }
         } else if s == vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES.as_raw() {
             if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceDescriptorIndexingFeatures).as_mut() } {
