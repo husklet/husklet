@@ -183,7 +183,7 @@ parity with `dd-gpu/cuda/cuda_shim.c`, and the compute core executes PTX end-to-
   `SoftwareBackend` (the same PTX interpreter the oracle mirrors), so alloc / H2D / launch / **DtoH
   readback** / memset / DtoD run end-to-end with numerically correct results and no GPU. On a real host
   the same bytes ship over `$DD_GPU_EXEC` to the host Metal executor (`PTX → SPIR-V → MSL → AIR`,
-  research-grade — see `docs/ideas/CUDA_ON_METAL.md §5`).
+  research-grade — see `docs/codex-rendering.md` §2.3 and §8).
 - **Validation.** `cargo build -p dd-shim-cuda --release` produces a valid aarch64 ELF with
   `SONAME libcuda.so.1` exporting exactly the 132 `cu*` symbols (no duplicates; `.dynsym` matches the
   manifest byte-for-byte). The unit tests cover the completeness census (132 real, 0 stubs), two
@@ -320,7 +320,7 @@ a later increment (the host SPIR-V→Metal seam it targets is already proven in 
 **Everything is ported from the authoritative open-source references, not invented:**
 
 - **The loader↔ICD interface** (`src/icd.rs`, `src/handle.rs`) — ported from the Khronos
-  **Vulkan-Loader** (`docs/LoaderDriverInterface.md` + `include/vulkan/vk_icd.h`) and **MoltenVK**
+  **Vulkan-Loader** (loader/ICD interface and `vk_icd.h`, revision pinned in `reference/LOCK.md`) and **MoltenVK**
   (`MoltenVK/Vulkan/vulkan.mm`, `GPUObjects/MVKVulkanAPIObject.h`). Three exported ICD entry points:
   `vk_icdNegotiateLoaderICDInterfaceVersion` (agree on interface version ≤ 5, exactly as MoltenVK
   does), `vk_icdGetInstanceProcAddr` (resolve the whole `vk*` surface; special-case the two ICD hooks

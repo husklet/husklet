@@ -15,7 +15,8 @@ content tile / missing buffer bridge). Proven live (agent `aaf0a61d`, commit `09
 multi-process GPU compositing shows `sampled_EMPTY=0` and `offscreen_fbo_passes=0` every frame, **zero**
 `eglCreateImage`/`eglBindTexImage` calls, and the content region composited as a solid white `ClearRect`
 placeholder. There is no external tile to bridge — the renderer simply never produces one, because its
-IO thread parks before rasterizing. See `CHROME-TILE-B1-B2-RESOLVED.md`.
+IO thread parks before rasterizing. Historical traces are available in git history; this document retains the
+actionable verdict and fix.
 
 The engine's cross-process IPC primitives are individually correct — every prior micro-gate passes
 (`scm-recv-epoll` 3939762a, `exec-fd-epoll` 769dd2ec, `xproc-inbound`, `scm-futex`, the pump gates). The

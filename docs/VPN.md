@@ -1,8 +1,8 @@
 # VPN.md — route a workspace's network through a VPN
 
 Status: design + **partial implementation landed** (see "Implementation status" below).
-Layers on top of the per-workspace isolated network space (shares the
-`~/.dd/net/<ws>.json` interface with [DOMAINS.md](./DOMAINS.md)).
+Layers on top of the per-workspace isolated network space and its
+`~/.dd/net/<ws>.json` hand-off.
 Owner surface: `dd-cli`, a small userspace-tunnel helper, `dd-jit-darwin` engine
 socket-broker path.
 
@@ -120,7 +120,7 @@ recommended off-the-shelf implementation — it takes a standard `wg-quick` conf
 `openvpn3` + tun2socks is the analog for OpenVPN configs.)
 
 The helper binds `127.<n>.0.1:1080` — a per-workspace loopback endpoint (same
-`loopback_alias` family DOMAINS.md uses, so a workspace's alias is its identity for both
+`loopback_alias` family used by the workspace network layer, so a workspace's alias is its identity for both
 DNS and egress). One process per VPN workspace; direct workspaces spawn nothing.
 
 ### 4.2 Engine redirect (the only engine change)
@@ -264,9 +264,8 @@ VPN workspace spawns the helper but egress still needs step 6). 6 activates redi
 
 ## 8. Interface required from the network-space layer
 
-Reuses the **`~/.dd/net/<ws>.json`** hand-off defined in
-[DOMAINS.md §7](./DOMAINS.md#7-interface-required-from-the-network-space-layer). VPN adds
-one field, written by whoever owns the workspace's egress config (the CLI, projected in):
+Reuses the **`~/.dd/net/<ws>.json`** workspace-network hand-off. VPN adds one field, written by whoever owns the
+workspace's egress config (the CLI, projected in):
 
 ```jsonc
 {
