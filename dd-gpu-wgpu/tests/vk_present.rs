@@ -151,7 +151,7 @@ fn vk_swapchain_present_renders_on_real_metal() {
     let vs = shader(dev, &wgsl_spirv(VS));
     let fs = shader(dev, &wgsl_spirv(FS));
     let mut layout = 0u64;
-    ddvk::vkCreatePipelineLayout(dev, (&vk::PipelineLayoutCreateInfo::default() as *const _) as *const c_void, core::ptr::null(), &mut layout);
+    ddvk::vkCreatePipelineLayout(dev, (&vk::PipelineLayoutCreateInfo::default() as *const _) as *const vk::PipelineLayoutCreateInfo, core::ptr::null(), &mut layout);
     let stages = [
         vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(vk::ShaderModule::from_raw(vs)).name(c"main"),
         vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(vk::ShaderModule::from_raw(fs)).name(c"main"),

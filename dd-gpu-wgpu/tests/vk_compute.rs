@@ -132,7 +132,7 @@ fn vk_vecadd_runs_on_real_metal() {
     let layout_ci = vk::PipelineLayoutCreateInfo::default();
     let mut layout: u64 = 0;
     assert_eq!(
-        ddvk::vkCreatePipelineLayout(dev, (&layout_ci as *const _) as *const c_void, core::ptr::null(), &mut layout),
+        ddvk::vkCreatePipelineLayout(dev, (&layout_ci as *const _) as *const vk::PipelineLayoutCreateInfo, core::ptr::null(), &mut layout),
         0
     );
 
@@ -153,13 +153,13 @@ fn vk_vecadd_runs_on_real_metal() {
     let dsl_ci = vk::DescriptorSetLayoutCreateInfo::default();
     let mut dsl: u64 = 0;
     assert_eq!(
-        ddvk::vkCreateDescriptorSetLayout(dev, (&dsl_ci as *const _) as *const c_void, core::ptr::null(), &mut dsl),
+        ddvk::vkCreateDescriptorSetLayout(dev, (&dsl_ci as *const _) as *const vk::DescriptorSetLayoutCreateInfo, core::ptr::null(), &mut dsl),
         0
     );
     let dp_ci = vk::DescriptorPoolCreateInfo::default();
     let mut pool_d: u64 = 0;
     assert_eq!(
-        ddvk::vkCreateDescriptorPool(dev, (&dp_ci as *const _) as *const c_void, core::ptr::null(), &mut pool_d),
+        ddvk::vkCreateDescriptorPool(dev, (&dp_ci as *const _) as *const vk::DescriptorPoolCreateInfo, core::ptr::null(), &mut pool_d),
         0
     );
     let set_layouts = [vk::DescriptorSetLayout::from_raw(dsl)];

@@ -202,7 +202,7 @@ fn assert_rgba_near(rgba: &[u8], x: u32, y: u32, want: [u8; 4]) {
 }
 
 fn create_chrome_pipeline(be: &mut MetalBackend) {
-    be.create_shader(ShaderId(20), &pack_msl(CHROME_TEXTURED_MSL))
+    be.create_shader(ShaderId(20), dd_gpu::ir::ShaderPayloadKind::LegacyMsl, &pack_msl(CHROME_TEXTURED_MSL))
         .unwrap();
     be.create_render_pipeline(
         PipelineId(30),

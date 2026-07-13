@@ -186,7 +186,7 @@ fn vk_triangle_renders_on_real_metal() {
     let fs = create_shader(dev, &stage_spirv(FS_GLSL, FS_WGSL, naga::ShaderStage::Fragment, "fragment"));
     let mut layout: u64 = 0;
     assert_eq!(
-        ddvk::vkCreatePipelineLayout(dev, (&vk::PipelineLayoutCreateInfo::default() as *const _) as *const c_void, core::ptr::null(), &mut layout),
+        ddvk::vkCreatePipelineLayout(dev, (&vk::PipelineLayoutCreateInfo::default() as *const _) as *const vk::PipelineLayoutCreateInfo, core::ptr::null(), &mut layout),
         0
     );
 

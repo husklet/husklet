@@ -174,7 +174,7 @@ fn create_common_pipeline_state(be: &mut MetalBackend) {
     )
     .unwrap();
     be.write_buffer(BufferId(10), 0, &vertices).unwrap();
-    be.create_shader(ShaderId(20), &pack_msl(QUAD_MSL)).unwrap();
+    be.create_shader(ShaderId(20), ir::ShaderPayloadKind::LegacyMsl, &pack_msl(QUAD_MSL)).unwrap();
     be.create_render_pipeline(PipelineId(30), &pipeline("paint_quadrants"))
         .unwrap();
     be.create_render_pipeline(PipelineId(31), &pipeline("sample_tex"))
@@ -486,7 +486,7 @@ fn chrome_like_rgba_triangle_strip_rtadjust_fills_offscreen_quad() {
     )
     .unwrap();
     be.write_buffer(BufferId(11), 0, &uniforms).unwrap();
-    be.create_shader(ShaderId(20), &pack_msl(CHROME_SOLID_MSL))
+    be.create_shader(ShaderId(20), ir::ShaderPayloadKind::LegacyMsl, &pack_msl(CHROME_SOLID_MSL))
         .unwrap();
     be.create_bind_group(
         BindGroupId(40),
@@ -667,7 +667,7 @@ fn offscreen_render_target_is_stored_bottom_left_like_gl() {
     )
     .unwrap();
     be.write_buffer(BufferId(10), 0, &vertices).unwrap();
-    be.create_shader(ShaderId(20), &pack_msl(QUAD_MSL)).unwrap();
+    be.create_shader(ShaderId(20), ir::ShaderPayloadKind::LegacyMsl, &pack_msl(QUAD_MSL)).unwrap();
     // solid_red, Bgra8Unorm color target (matches both surface and tile).
     be.create_render_pipeline(PipelineId(32), &pipeline("solid_red"))
         .unwrap();

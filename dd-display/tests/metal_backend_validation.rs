@@ -82,7 +82,7 @@ mod macos {
         // `create_shader` leaves no MSL library, so `create_compute_pipeline` must reject with the EXPLICIT
         // routing error — a documented decision (steer compute to DD_GPU_BACKEND=wgpu), never a silent stub.
         // Real SPIR-V words (magic 0x07230203) — decidedly not the MSL-bytes packing the shim uses.
-        be.create_shader(ShaderId(20), &[0x0723_0203, 0, 0, 0, 0]).unwrap();
+        be.create_shader(ShaderId(20), dd_gpu::ir::ShaderPayloadKind::SpirV, &[0x0723_0203, 0, 0, 0, 0]).unwrap();
         let r = be.create_compute_pipeline(
             PipelineId(30),
             &ComputePipelineDesc { compute: ShaderRef { module: 20, entry: "main".into() }, label: String::new() },
@@ -138,7 +138,7 @@ mod macos {
         be.create_buffer(BufferId(3), &BufferDesc { size: sz, usage: buffer_usage::STORAGE, label: String::new() }).unwrap();
         be.write_buffer(BufferId(1), 0, &a).unwrap();
         be.write_buffer(BufferId(2), 0, &b).unwrap();
-        be.create_shader(ShaderId(20), &words).unwrap();
+        be.create_shader(ShaderId(20), dd_gpu::ir::ShaderPayloadKind::LegacyMsl, &words).unwrap();
         be.create_compute_pipeline(
             PipelineId(30),
             &ComputePipelineDesc { compute: ShaderRef { module: 20, entry: "vecadd".into() }, label: String::new() },
