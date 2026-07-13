@@ -282,13 +282,27 @@ extern "C" fn on_global_remove(_data: *mut c_void, _registry: *mut c_void, _name
 /// Commit the executor-rendered IOSurface `surf` (its dma-buf fd + dd surface id) to the app's
 /// `wl_surface` on the app's `wl_display`. Returns false if wayland/dmabuf is unavailable (off-guest).
 pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
+    let dbg = std::env::var_os("DD_SHIM_DEBUG").is_some();
     if display == 0 || surface == 0 || surf.fd < 0 {
+        if dbg {
+            eprintln!("[dd-shim-vk] wl_present: bad args display={display:#x} surface={surface:#x} fd={}", surf.fd);
+        }
         return false;
     }
-    let Some(w) = wl() else { return false };
+    let Some(w) = wl() else {
+        if dbg {
+            eprintln!("[dd-shim-vk] wl_present: libwayland-client dlopen/dlsym FAILED");
+        }
+        return false;
+    };
     let display = display as *mut c_void;
     let wl_surface = surface as *mut c_void;
-    let Some(dmabuf) = ensure_dmabuf(w, display) else { return false };
+    let Some(dmabuf) = ensure_dmabuf(w, display) else {
+        if dbg {
+            eprintln!("[dd-shim-vk] wl_present: zwp_linux_dmabuf_v1 global NOT bound");
+        }
+        return false;
+    };
     let ver = unsafe { (w.proxy_get_version)(dmabuf) };
     unsafe {
         // params = zwp_linux_dmabuf_v1.create_params()
