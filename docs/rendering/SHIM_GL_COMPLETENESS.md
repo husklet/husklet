@@ -421,18 +421,25 @@ shaders to translate to MSL. Status of each:
   `wireenc … vertex_format_wire_matches_c_shim`. The software oracle records draws rather than
   rasterizing vertex fetch (see the software-draw residual), so half-float there is moot until software
   rasterization lands.
-- **(3) ES3 GLSL→MSL translation — the PRIMARY remaining blocker, narrowed to std140 UBO blocks.**
-  `translate.rs` (a byte-for-byte port of `gl_shim.c`'s translator) already handles most ES3 syntax
-  GskGL uses: `in`/`out` stage I/O (collected alongside `attribute`/`varying`), a user `out vec4`
-  fragment output, and the `texture()` built-in (not just `texture2D()`); `#version 300 es` is
-  effectively ignored (the MSL header is rebuilt). The specific gap is **`layout(std140) uniform Block {
-  … }` blocks**: the uniform collector expects `uniform TYPE name;`, so on a block it reads the block
-  name as the type and a member list starting with `{` — the block and all its members are silently
-  dropped, and `layout(...)` qualifiers are not parsed. GskGL binds its per-node state through std140
-  UBOs, so its programs lose all their uniforms and cannot render. Closing this needs a std140
-  uniform-block parsing pass (block detection, member enumeration, std140 offset assignment, the MSL
-  struct + `[[buffer(N)]]` binding) added to BOTH `gl_shim.c` and `translate.rs` in lockstep, plus a
-  `translate_parity` corpus case — a substantial, byte-parity-sensitive translator effort.
+- **(3a) ES3 GLSL→MSL translation of std140 UBO blocks — DONE (byte-parity).** `translate.rs` (and its
+  `gl_shim.c` oracle) already handled the rest of GskGL's ES3 syntax (`in`/`out` stage I/O, a user
+  `out vec4` fragment output, `texture()`); the missing piece was `layout(std140) uniform Block { … }`
+  blocks, which the uniform collector dropped (it read the block name as the type and stopped at `{`).
+  The `collect` parser now DETECTS a block (a `{` after the `uniform` token) and enumerates its members
+  as the collected uniform decls — so a block's members flow through the existing uniform pipeline: one
+  `struct Uniforms` at `[[buffer(1)]]`, members referenced `u.<member>`. Extended identically in BOTH
+  `gl_shim.c`'s `collect` and `translate.rs::collect`, verified byte-identical by `translate_parity`
+  over a new `shader_translate/ubo_std140.{vert,frag}.glsl` corpus pair (a mat4+vec4 GskGL-style block).
+- **(3b) The remaining pieces for a GPU-accelerated GskGL window (precise residual):**
+  - **UBO data routing:** at draw lowering, when the program declares a UBO block, the compositor must
+    bind the guest's `glBindBufferBase(GL_UNIFORM_BUFFER,…)` buffer as `[[buffer(1)]]` (today the
+    `glUniform*`-populated default block is uploaded there). The indexed-binding STATE exists
+    (`glBindBufferBase`, from the ES3-object work) but `frame.rs`'s swap-time lowering (and the
+    `gl_shim.c` draw path, in lockstep) must consume it — the byte-parity-sensitive data-path half.
+  - **std140 padding** for blocks with `vec3`/scalar-packing/arrays (all-`vec4`/`mat4` blocks — the
+    common GskGL case — already match Metal's layout, so the mat4+vec4 corpus needs none).
+  - **`layout(location=N)`** explicit attribute locations (the translator assigns by declaration order).
+  - **(1) ES3 context** advertisement enablement (below) once the data path lands.
 - **(1) ES3 context** is a `DD_SHIM_ES3` opt-in; advertising ES3 by default is gated on (3) so GTK does
   not select GskGL and then fail to compile a shader (it correctly falls back to the software cairo
   renderer today).

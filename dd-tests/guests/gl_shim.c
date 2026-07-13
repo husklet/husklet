@@ -752,6 +752,44 @@ static int collect(const char *src, const char *kw, struct decl *out, int max) {
             ty[i] = 0;
         }
         while (is_space(*q)) q++;
+        // std140 interface block: `uniform Block { TYPE m; ... } [inst];` — enumerate the MEMBERS as
+        // the collected decls (not the block name / not dropped). `ty` held the block name. Members with
+        // no instance name are referenced by bare name in the body, so they flow through the existing
+        // uniform pipeline (one `struct Uniforms` at [[buffer(1)]], `u.<member>`).
+        if (*q == '{') {
+            q++;
+            while (n < max) {
+                while (is_space(*q)) q++;
+                if (*q == '}' || !*q) break;
+                char mty[16] = {0};
+                int mi = 0;
+                while (*q && !is_space(*q) && *q != ';' && mi < 15) mty[mi++] = *q++;
+                mty[mi] = 0;
+                while (is_precision_or_interp(mty)) {
+                    while (is_space(*q)) q++;
+                    mi = 0;
+                    memset(mty, 0, sizeof mty);
+                    while (*q && !is_space(*q) && *q != ';' && mi < 15) mty[mi++] = *q++;
+                    mty[mi] = 0;
+                }
+                while (is_space(*q)) q++;
+                char mnm[32] = {0};
+                mi = 0;
+                while (*q && is_word(*q) && mi < 31) mnm[mi++] = *q++;
+                while (*q && *q != ';' && *q != '}') q++; // skip any array subscript to the member end
+                if (*q == ';') q++;
+                if (mty[0] && mnm[0]) {
+                    strcpy(out[n].type, mty);
+                    strcpy(out[n].name, mnm);
+                    n++;
+                }
+            }
+            if (*q == '}') q++;
+            while (*q && *q != ';') q++; // skip the optional instance name
+            if (*q == ';') q++;
+            p = q;
+            continue;
+        }
         char nm[32] = {0};
         i = 0;
         while (*q && is_word(*q) && i < 31) nm[i++] = *q++;

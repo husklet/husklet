@@ -96,6 +96,54 @@ fn collect(src: &str, kw: &str) -> Vec<Decl> {
         while q < b.len() && is_space(b[q]) {
             q += 1;
         }
+        // std140 interface block: `uniform Block { TYPE m; ... } [inst];` — enumerate the MEMBERS as the
+        // collected decls (not the block name / not dropped). Byte-identical to gl_shim.c `collect`.
+        if q < b.len() && b[q] == b'{' {
+            q += 1;
+            while out.len() < 32 {
+                while q < b.len() && is_space(b[q]) {
+                    q += 1;
+                }
+                if q >= b.len() || b[q] == b'}' {
+                    break;
+                }
+                let mut mty = read_tok(&mut q);
+                while is_precision_or_interp(&mty) {
+                    while q < b.len() && is_space(b[q]) {
+                        q += 1;
+                    }
+                    mty = read_tok(&mut q);
+                }
+                while q < b.len() && is_space(b[q]) {
+                    q += 1;
+                }
+                let mut mnm = String::new();
+                while q < b.len() && is_word(b[q]) && mnm.len() < 31 {
+                    mnm.push(b[q] as char);
+                    q += 1;
+                }
+                while q < b.len() && b[q] != b';' && b[q] != b'}' {
+                    q += 1; // skip any array subscript to the member end
+                }
+                if q < b.len() && b[q] == b';' {
+                    q += 1;
+                }
+                if !mty.is_empty() && !mnm.is_empty() {
+                    out.push(Decl { ty: mty, name: mnm });
+                }
+            }
+            if q < b.len() && b[q] == b'}' {
+                q += 1;
+            }
+            while q < b.len() && b[q] != b';' {
+                q += 1; // skip the optional instance name
+            }
+            if q < b.len() && b[q] == b';' {
+                q += 1;
+            }
+            p = q;
+            continue;
+        }
         let mut nm = String::new();
         while q < b.len() && is_word(b[q]) && nm.len() < 31 {
             nm.push(b[q] as char);
