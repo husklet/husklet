@@ -358,7 +358,7 @@ impl CudaState {
         if std::env::var_os("DD_GPU_EXEC").is_some() {
             let conn = self.conn.get_or_insert_with(ExecConn::from_env);
             // Compute has no present surface; a synthetic zero surface carries the IR-length header.
-            let surf = Surface { id: 0, width: 0, height: 0, stride: 0, fd: -1 };
+            let surf = Surface { id: 0, width: 0, height: 0, stride: 0, fd: -1, generation: 0 };
             let _ = conn.submit(&surf, &bytes);
         } else if std::env::var_os("DD_SHIM_DEBUG").is_some() {
             eprintln!(
