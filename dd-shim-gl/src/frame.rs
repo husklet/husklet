@@ -342,9 +342,9 @@ fn build_single_draw_frame(s: &GlState) -> Option<Vec<u8>> {
     if indexed {
         let ifmt = if d.index_type == crate::glconst::GL_UNSIGNED_INT { IndexFormat::U32 } else { IndexFormat::U16 };
         ops.push(Enc::SetIndexBuffer { buffer: 12, offset: d.index_offset as u64, format: ifmt });
-        ops.push(Enc::DrawIndexed { index_count: d.count as u32, instance_count: 1, first_index: 0, base_vertex: 0, first_instance: 0 });
+        ops.push(Enc::DrawIndexed { index_count: d.count as u32, instance_count: d.instance_count, first_index: 0, base_vertex: d.base_vertex, first_instance: d.first_instance });
     } else {
-        ops.push(Enc::Draw { vertex_count: d.count as u32, instance_count: 1, first_vertex: d.first as u32, first_instance: 0 });
+        ops.push(Enc::Draw { vertex_count: d.count as u32, instance_count: d.instance_count, first_vertex: d.first as u32, first_instance: d.first_instance });
     }
     ops.push(Enc::EndRenderPass);
 
@@ -678,9 +678,9 @@ fn build_replay_frame(s: &GlState) -> Option<Vec<u8>> {
                     300 + frame_ibo.iter().position(|&x| x == d.elem_buf).unwrap_or(0) as u32
                 };
                 ops.push(Enc::SetIndexBuffer { buffer, offset: d.index_offset as u64, format: ifmt });
-                ops.push(Enc::DrawIndexed { index_count: d.count as u32, instance_count: 1, first_index: 0, base_vertex: 0, first_instance: 0 });
+                ops.push(Enc::DrawIndexed { index_count: d.count as u32, instance_count: d.instance_count, first_index: 0, base_vertex: d.base_vertex, first_instance: d.first_instance });
             } else {
-                ops.push(Enc::Draw { vertex_count: d.count as u32, instance_count: 1, first_vertex: d.first as u32, first_instance: 0 });
+                ops.push(Enc::Draw { vertex_count: d.count as u32, instance_count: d.instance_count, first_vertex: d.first as u32, first_instance: d.first_instance });
             }
             d_i += 1;
         }

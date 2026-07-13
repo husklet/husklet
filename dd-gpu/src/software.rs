@@ -353,6 +353,7 @@ impl SoftwareBackend {
         vertex_buffer: Option<(u32, u64)>,
         first_vertex: u32,
         vertex_count: u32,
+        instance_count: u32,
     ) -> Result<()> {
         let (topology, blends, stride) = match self.raster_state(pipeline)? {
             Some(s) => s,
@@ -374,7 +375,12 @@ impl SoftwareBackend {
             }
             out
         };
-        self.raster_draw(targets, &blends, topology, &verts)
+        // The software oracle does not model per-instance vertex-attribute divisors, so each instance
+        // replays the same geometry; N instances = N rasterization passes into the bound targets.
+        for _ in 0..instance_count.max(1) {
+            self.raster_draw(targets, &blends, topology, &verts)?;
+        }
+        Ok(())
     }
 
     /// Execute a `DrawIndexed`: read `index_count` indices from the bound index buffer, add `base_vertex`,
@@ -389,6 +395,7 @@ impl SoftwareBackend {
         first_index: u32,
         index_count: u32,
         base_vertex: i32,
+        instance_count: u32,
     ) -> Result<()> {
         let (topology, blends, stride) = match self.raster_state(pipeline)? {
             Some(s) => s,
@@ -438,7 +445,10 @@ impl SoftwareBackend {
             }
             out
         };
-        self.raster_draw(targets, &blends, topology, &verts)
+        for _ in 0..instance_count.max(1) {
+            self.raster_draw(targets, &blends, topology, &verts)?;
+        }
+        Ok(())
     }
 
     // --- validation helpers -----------------------------------------------------------------------
@@ -1288,16 +1298,16 @@ impl GpuBackend for SoftwareBackend {
                 Enc::SetIndexBuffer { buffer, offset, format } => {
                     cur_index = Some((*buffer, *offset, *format));
                 }
-                Enc::Draw { vertex_count, first_vertex, .. } => {
+                Enc::Draw { vertex_count, first_vertex, instance_count, .. } => {
                     self.draws += 1;
                     let vb = cur_vertex.get(&0).copied();
-                    self.exec_draw(cur_pipeline, &cur_targets, vb, *first_vertex, *vertex_count)?;
+                    self.exec_draw(cur_pipeline, &cur_targets, vb, *first_vertex, *vertex_count, *instance_count)?;
                 }
-                Enc::DrawIndexed { index_count, first_index, base_vertex, .. } => {
+                Enc::DrawIndexed { index_count, first_index, base_vertex, instance_count, .. } => {
                     self.draws += 1;
                     let vb = cur_vertex.get(&0).copied();
                     self.exec_draw_indexed(
-                        cur_pipeline, &cur_targets, vb, cur_index, *first_index, *index_count, *base_vertex,
+                        cur_pipeline, &cur_targets, vb, cur_index, *first_index, *index_count, *base_vertex, *instance_count,
                     )?;
                 }
                 Enc::Dispatch { x, y, z } => {
@@ -1689,5 +1699,98 @@ mod srgb_tests {
         for texel in px.chunks_exact(4) {
             assert_eq!(texel, [149, 181, 107, 255], "each pixel blended exactly once (no diagonal double-blend)");
         }
+    }
+
+    // ---- instanced draws + base-vertex indexed draws (Enc::Draw/DrawIndexed instance/base fields) ----
+
+    /// Submit a single non-indexed draw of `count` vertices with `instances` instances, then read the
+    /// target. Isolates the `instance_count` path (glDrawArraysInstanced lowering).
+    fn draw_instanced_and_read(be: &mut SoftwareBackend, clear: [f32; 4], count: u32, instances: u32) -> Vec<u8> {
+        be.submit(&CommandBuffer {
+            encoder: vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear, store: true }],
+                    depth: None,
+                },
+                Enc::SetPipeline(1),
+                Enc::SetVertexBuffer { slot: 0, buffer: 1, offset: 0 },
+                Enc::Draw { vertex_count: count, instance_count: instances, first_vertex: 0, first_instance: 0 },
+                Enc::EndRenderPass,
+            ],
+            signal: None,
+        }).unwrap();
+        let (w, h) = { let t = be.textures.get(1).unwrap(); (t.desc.width, t.desc.height) };
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        be.read_texture(TextureId(1), &mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn software_instanced_draw_composites_once_per_instance() {
+        // A 50%-alpha source-over triangle drawn with N instances must composite N times: each added
+        // instance pulls the pixel further toward the pure source color. Collapsing instanced draws to a
+        // single instance (the bug this closes) would make every instance count produce the identical pixel.
+        let src = [40.0 / 255.0, 230.0 / 255.0, 140.0 / 255.0, 0.5];
+        let clear = [200.0 / 255.0, 100.0 / 255.0, 50.0 / 255.0, 1.0];
+        let read = |instances: u32| {
+            let mut be = draw_harness(TextureFormat::Rgba8Srgb, Some(over_blend()), 2, 2, &fullscreen_tri(src));
+            draw_instanced_and_read(&mut be, clear, 3, instances)
+        };
+        let px1 = read(1);
+        let px2 = read(2);
+        let px3 = read(3);
+        // Single instance is the established source-over golden.
+        assert_eq!(&px1[0..4], [149, 181, 107, 255]);
+        // Instancing is honored, not collapsed: more instances → strictly more source-saturated (red falls
+        // toward 40, green rises toward 230).
+        assert!(px2[0] < px1[0] && px3[0] < px2[0], "red falls toward source across instances: {} {} {}", px1[0], px2[0], px3[0]);
+        assert!(px2[1] > px1[1] && px3[1] > px2[1], "green rises toward source across instances: {} {} {}", px1[1], px2[1], px3[1]);
+        assert_ne!(&px3[0..4], &px1[0..4], "3 instances must not equal 1 instance (no collapse)");
+    }
+
+    #[test]
+    fn software_base_vertex_offsets_indexed_vertex_fetch() {
+        // Vertex buffer: verts 0..3 = a full-screen tri of color A, verts 3..6 = color B. An indexed draw
+        // of indices [0,1,2] fetches color A at base_vertex 0 and color B at base_vertex 3 — proving
+        // base_vertex is added to every fetched index (glDrawElementsBaseVertex) rather than dropped to 0.
+        let a = [51.0 / 255.0, 102.0 / 255.0, 153.0 / 255.0, 1.0];
+        let b = [204.0 / 255.0, 153.0 / 255.0, 102.0 / 255.0, 1.0];
+        let mut verts: Vec<[f32; 6]> = Vec::new();
+        verts.extend_from_slice(&fullscreen_tri(a));
+        verts.extend_from_slice(&fullscreen_tri(b));
+        // Opaque (no blend) so the fetched vertex color is written straight through.
+        let mut be = draw_harness(TextureFormat::Rgba8Srgb, None, 2, 2, &verts);
+        // Index buffer (buf 2): u16 [0, 1, 2].
+        let idx: [u16; 3] = [0, 1, 2];
+        let ibytes: Vec<u8> = idx.iter().flat_map(|i| i.to_le_bytes()).collect();
+        be.create_buffer(BufferId(2), &BufferDesc {
+            size: ibytes.len() as u64, usage: buffer_usage::INDEX | buffer_usage::COPY_DST, label: String::new(),
+        }).unwrap();
+        be.write_buffer(BufferId(2), 0, &ibytes).unwrap();
+
+        let read_base = |be: &mut SoftwareBackend, base_vertex: i32| {
+            be.submit(&CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::SetVertexBuffer { slot: 0, buffer: 1, offset: 0 },
+                    Enc::SetIndexBuffer { buffer: 2, offset: 0, format: IndexFormat::U16 },
+                    Enc::DrawIndexed { index_count: 3, instance_count: 1, first_index: 0, base_vertex, first_instance: 0 },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }).unwrap();
+            let mut out = vec![0u8; 2 * 2 * 4];
+            be.read_texture(TextureId(1), &mut out).unwrap();
+            out
+        };
+
+        let px0 = read_base(&mut be, 0);
+        assert_eq!(&px0[0..4], [51, 102, 153, 255], "base_vertex 0 fetches vertices 0..3 (color A)");
+        let px3 = read_base(&mut be, 3);
+        assert_eq!(&px3[0..4], [204, 153, 102, 255], "base_vertex 3 fetches vertices 3..6 (color B)");
     }
 }

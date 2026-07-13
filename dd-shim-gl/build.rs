@@ -632,6 +632,9 @@ const IMPLEMENTED: &[&str] = &[
     "glDrawElements",
     "glDrawArraysInstanced",
     "glDrawElementsInstanced",
+    "glDrawElementsBaseVertex",
+    "glDrawElementsInstancedBaseVertex",
+    "glDrawRangeElementsBaseVertex",
     "glCheckFramebufferStatus",
     // ---- GLES: vertex array objects ----
     "glGenVertexArrays",
@@ -797,6 +800,9 @@ const IMPLEMENTED: &[&str] = &[
 const ES3_FULL: &[&str] = &[
     "glDrawArraysInstanced",
     "glDrawElementsInstanced",
+    "glDrawElementsBaseVertex",
+    "glDrawElementsInstancedBaseVertex",
+    "glDrawRangeElementsBaseVertex",
     "glGenVertexArrays",
     "glBindVertexArray",
     "glDeleteVertexArrays",

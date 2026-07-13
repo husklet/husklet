@@ -1658,7 +1658,7 @@ pub extern "C" fn glDisableVertexAttribArray(index: u32) {
 // lowered from it at eglSwapBuffers (see crate::frame).
 // ===================================================================================================
 
-fn draw_error(s: &crate::state::GlState, mode: u32, first: i32, count: i32, indexed: Option<(u32, usize)>) -> Option<u32> {
+fn draw_error(s: &crate::state::GlState, mode: u32, first: i32, count: i32, indexed: Option<(u32, usize)>, base_vertex: i32) -> Option<u32> {
     if !matches!(mode, 0x0000..=0x0006) {
         return Some(GL_INVALID_ENUM);
     }
@@ -1697,6 +1697,12 @@ fn draw_error(s: &crate::state::GlState, mode: u32, first: i32, count: i32, inde
             })
             .max()
             .unwrap_or(0);
+        // glDrawElementsBaseVertex adds base_vertex to every fetched index; the effective vertex a
+        // per-vertex attribute reads is (index + base_vertex). A negative effective index is OOB.
+        match (last as i64).checked_add(base_vertex as i64) {
+            Some(v) if v >= 0 => last = v as usize,
+            _ => return Some(GL_INVALID_OPERATION),
+        }
     }
     for attr in s.attr.iter().filter(|a| a.enabled) {
         let bytes = match attr.kind {
@@ -1752,33 +1758,58 @@ pub extern "C" fn glClear(mask: u32) {
 
 #[no_mangle]
 pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
+    draw_arrays_instanced(mode, first, count, 1);
+}
+
+/// Shared body for glDrawArrays / glDrawArraysInstanced: validate then record `instances` instances.
+/// A conforming driver flags GL_INVALID_VALUE for a negative instance count.
+fn draw_arrays_instanced(mode: u32, first: i32, count: i32, instances: i32) {
     let mut s = gl();
-    if let Some(error) = draw_error(&s, mode, first, count, None) {
+    if let Some(error) = draw_error(&s, mode, first, count, None, 0) {
         if s.error == GL_NO_ERROR {
             s.error = error;
         }
         return;
     }
-    if count == 0 { return; }
+    if instances < 0 {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_VALUE;
+        }
+        return;
+    }
+    if count == 0 || instances == 0 { return; }
     s.draw_mode = mode as i32;
     s.draw_first = first;
     s.draw_count = count;
     s.draw_indexed = false;
     s.attr_snap = s.attr;
     s.have_draw_snap = true;
-    s.record_draw_call(mode, first, count, false, 0, 0);
+    s.record_draw_call(mode, first, count, false, 0, 0, instances, 0);
 }
 
 #[no_mangle]
 pub extern "C" fn glDrawElements(mode: u32, count: i32, typ: u32, indices: *const c_void) {
+    draw_elements_instanced(mode, count, typ, indices, 1, 0);
+}
+
+/// Shared body for glDrawElements / glDrawElementsInstanced / glDrawElementsBaseVertex (and the
+/// instanced-base-vertex combination): validate then record `instances` instances with `base_vertex`
+/// added to every fetched index. GL_INVALID_VALUE for a negative instance count.
+fn draw_elements_instanced(mode: u32, count: i32, typ: u32, indices: *const c_void, instances: i32, base_vertex: i32) {
     let mut s = gl();
-    if let Some(error) = draw_error(&s, mode, 0, count, Some((typ, indices as usize))) {
+    if let Some(error) = draw_error(&s, mode, 0, count, Some((typ, indices as usize)), base_vertex) {
         if s.error == GL_NO_ERROR {
             s.error = error;
         }
         return;
     }
-    if count == 0 { return; }
+    if instances < 0 {
+        if s.error == GL_NO_ERROR {
+            s.error = GL_INVALID_VALUE;
+        }
+        return;
+    }
+    if count == 0 || instances == 0 { return; }
     s.draw_mode = mode as i32;
     s.draw_count = count;
     s.draw_indexed = true;
@@ -1786,7 +1817,7 @@ pub extern "C" fn glDrawElements(mode: u32, count: i32, typ: u32, indices: *cons
     s.index_offset = indices as usize;
     s.attr_snap = s.attr;
     s.have_draw_snap = true;
-    s.record_draw_call(mode, 0, count, true, typ, indices as usize);
+    s.record_draw_call(mode, 0, count, true, typ, indices as usize, instances, base_vertex);
 }
 
 /// `glDrawRangeElements` — the `start`/`end` bounds are advisory; gl_shim.c delegates to glDrawElements.
@@ -1795,14 +1826,28 @@ pub extern "C" fn glDrawRangeElements(mode: u32, _start: u32, _end: u32, count: 
     glDrawElements(mode, count, typ, indices);
 }
 
-// Instanced draws collapse to a single instance (gl_shim.c drops the instance count and delegates).
+// Instanced + base-vertex draws record the faithful IR instance/base-vertex counts (the executors
+// lower them to drawPrimitives(instanceCount:) / drawIndexedPrimitives(baseVertex:...)).
 #[no_mangle]
-pub extern "C" fn glDrawArraysInstanced(mode: u32, first: i32, count: i32, _instances: i32) {
-    glDrawArrays(mode, first, count);
+pub extern "C" fn glDrawArraysInstanced(mode: u32, first: i32, count: i32, instances: i32) {
+    draw_arrays_instanced(mode, first, count, instances);
 }
 #[no_mangle]
-pub extern "C" fn glDrawElementsInstanced(mode: u32, count: i32, typ: u32, indices: *const c_void, _instances: i32) {
-    glDrawElements(mode, count, typ, indices);
+pub extern "C" fn glDrawElementsInstanced(mode: u32, count: i32, typ: u32, indices: *const c_void, instances: i32) {
+    draw_elements_instanced(mode, count, typ, indices, instances, 0);
+}
+#[no_mangle]
+pub extern "C" fn glDrawElementsBaseVertex(mode: u32, count: i32, typ: u32, indices: *const c_void, basevertex: i32) {
+    draw_elements_instanced(mode, count, typ, indices, 1, basevertex);
+}
+#[no_mangle]
+pub extern "C" fn glDrawElementsInstancedBaseVertex(mode: u32, count: i32, typ: u32, indices: *const c_void, instances: i32, basevertex: i32) {
+    draw_elements_instanced(mode, count, typ, indices, instances, basevertex);
+}
+/// `glDrawRangeElementsBaseVertex` — start/end are advisory; delegate to the base-vertex path.
+#[no_mangle]
+pub extern "C" fn glDrawRangeElementsBaseVertex(mode: u32, _start: u32, _end: u32, count: i32, typ: u32, indices: *const c_void, basevertex: i32) {
+    draw_elements_instanced(mode, count, typ, indices, 1, basevertex);
 }
 
 #[no_mangle]

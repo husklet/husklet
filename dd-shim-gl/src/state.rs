@@ -263,6 +263,12 @@ pub struct DrawCall {
     pub indexed: bool,
     pub index_type: u32,
     pub index_offset: usize,
+    /// Instanced-draw parameters (glDrawArraysInstanced / glDrawElementsInstanced[BaseVertex]).
+    /// `instance_count` is 1 for a non-instanced draw. `base_vertex` is added to every fetched
+    /// index (glDrawElementsBaseVertex); 0 for non-indexed or non-base-vertex draws.
+    pub instance_count: u32,
+    pub first_instance: u32,
+    pub base_vertex: i32,
     pub prog: u32,
     pub elem_buf: u32,
     pub target_tex: u32, // 0 = default window surface, else the GL texture on the draw FBO color0
@@ -298,6 +304,9 @@ impl Default for DrawCall {
             indexed: false,
             index_type: 0,
             index_offset: 0,
+            instance_count: 1,
+            first_instance: 0,
+            base_vertex: 0,
             prog: 0,
             elem_buf: 0,
             target_tex: 0,
@@ -898,7 +907,18 @@ impl GlState {
     /// Record a draw into the frame draw-list, snapshotting the state it renders with (gl_shim.c
     /// `record_draw_call`). Vertex-buffer snapshots (the replay path) are omitted — the single-draw
     /// path reads live buffers at swap.
-    pub fn record_draw_call(&mut self, mode: u32, first: i32, count: i32, indexed: bool, index_type: u32, indices: usize) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_draw_call(
+        &mut self,
+        mode: u32,
+        first: i32,
+        count: i32,
+        indexed: bool,
+        index_type: u32,
+        indices: usize,
+        instance_count: i32,
+        base_vertex: i32,
+    ) {
         if self.draws.len() >= MAXDRAWS {
             return;
         }
@@ -946,6 +966,9 @@ impl GlState {
             indexed,
             index_type,
             index_offset: indices,
+            instance_count: instance_count.max(0) as u32,
+            first_instance: 0,
+            base_vertex,
             prog: self.cur_prog,
             elem_buf: self.elem_buf,
             target_tex,
