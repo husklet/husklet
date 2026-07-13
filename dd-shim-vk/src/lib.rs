@@ -56,6 +56,7 @@ pub mod state;
 pub mod stub;
 pub mod types;
 pub mod vk13;
+pub mod vk14;
 pub mod wl_present;
 pub mod wsi;
 
@@ -73,6 +74,7 @@ pub use pipeline::*;
 pub use query::*;
 pub use wsi::*;
 pub use vk13::*;
+pub use vk14::*;
 
 // The generated C-ABI export surface (every `vk*` entry point not in `IMPLEMENTED`) + the name→address
 // DISPATCH table the loader-facing proc-addr resolvers scan.
@@ -187,10 +189,11 @@ mod tests {
     /// stub call (`vkCreateSampler`, a core:1.0 command) and an unadvertised-extension stub.
     #[test]
     fn stub_returns_truthful_error_and_inits_output() {
-        // vkTransitionImageLayout is a still-unimplemented core:1.4 stub (1.0-1.3 core is now bodied): a
-        // core VkResult stub returns FEATURE_NOT_PRESENT (unimplemented core), never a false VK_SUCCESS.
-        let r0 = vkTransitionImageLayout(core::ptr::null_mut(), 0, core::ptr::null());
-        assert_eq!(r0, types::VK_ERROR_FEATURE_NOT_PRESENT, "core stub must fail, not succeed");
+        // Milestone: the entire Vulkan 1.0-1.4 mandatory core is now bodied, so NOT A SINGLE core command
+        // is a generated stub — the remaining stubs are all from unadvertised extensions.
+        for e in CAPABILITIES.iter().filter(|e| e.origin.starts_with("core:")) {
+            assert!(e.implemented(), "core command {} must not be a generated stub", e.name);
+        }
         // An unadvertised-extension vkCreate stub reports EXTENSION_NOT_PRESENT AND nulls its output handle.
         let mut accel: u64 = 0xdead_beef; // poison; the stub must overwrite it with VK_NULL_HANDLE (0)
         let r2 = vkCreateAccelerationStructureKHR(
@@ -201,9 +204,8 @@ mod tests {
         );
         assert_eq!(r2, types::VK_ERROR_EXTENSION_NOT_PRESENT);
         assert_eq!(accel, 0, "stub must initialize the output handle to VK_NULL_HANDLE");
-        // And the inventory records exactly those errors for those commands.
+        // And the inventory records exactly that error for that command.
         let rec = |n: &str| CAPABILITIES.iter().find(|e| e.name == n).unwrap();
-        assert_eq!(rec("vkTransitionImageLayout").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
         assert_eq!(rec("vkCreateAccelerationStructureKHR").vk_error, types::VK_ERROR_EXTENSION_NOT_PRESENT);
     }
 
@@ -212,14 +214,14 @@ mod tests {
     /// The ICD advertises Vulkan **1.0**, consistently across `vkEnumerateInstanceVersion`, the
     /// physical-device `apiVersion`, and the capability profile constant.
     #[test]
-    fn advertises_vulkan_1_1() {
-        assert_eq!(capability::ADVERTISED_API_VERSION, (1, 1));
+    fn advertises_vulkan_1_4() {
+        assert_eq!(capability::ADVERTISED_API_VERSION, (1, 4));
         assert_eq!(ash::vk::api_version_major(state::DD_API_VERSION), 1);
-        assert_eq!(ash::vk::api_version_minor(state::DD_API_VERSION), 1);
+        assert_eq!(ash::vk::api_version_minor(state::DD_API_VERSION), 4);
         let mut v: u32 = 0xffff_ffff;
         assert_eq!(vkEnumerateInstanceVersion(&mut v), types::VK_SUCCESS);
         assert_eq!(ash::vk::api_version_major(v), 1);
-        assert_eq!(ash::vk::api_version_minor(v), 1);
+        assert_eq!(ash::vk::api_version_minor(v), 4);
         // The physical-device properties report the same version.
         let props = state::physical_device_properties();
         assert_eq!(props.api_version, state::DD_API_VERSION);
@@ -238,15 +240,20 @@ mod tests {
             let r = vkCreateInstance(&ci, core::ptr::null(), &mut inst);
             (r, inst)
         };
-        // 1.2, 1.4 and 2.0 are newer than the advertised 1.1 → refused.
-        assert_eq!(create(vk::make_api_version(0, 1, 2, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
-        assert_eq!(create(vk::make_api_version(0, 1, 4, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
+        // Only 2.0+ is newer than the advertised 1.4 → refused.
         assert_eq!(create(vk::make_api_version(0, 2, 0, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
-        // 1.0 and 1.1 (and patch differences, and apiVersion 0 == "1.0 default") are honored — a 1.0 app
-        // (vkcube) and a 1.1 app (wgpu/Zed) both run on the 1.1 driver.
-        for v in [vk::make_api_version(0, 1, 0, 0), vk::make_api_version(0, 1, 1, 0), vk::make_api_version(0, 1, 1, 42)] {
+        assert_eq!(create(vk::make_api_version(0, 3, 1, 0)).0, types::VK_ERROR_INCOMPATIBLE_DRIVER);
+        // Every 1.x request (1.0 vkcube … 1.4 modern), patch differences, and apiVersion 0 are honored —
+        // the full 1.0–1.4 core is backed, so any 1.x app runs on the 1.4 driver.
+        for v in [
+            vk::make_api_version(0, 1, 0, 0),
+            vk::make_api_version(0, 1, 1, 0),
+            vk::make_api_version(0, 1, 3, 0),
+            vk::make_api_version(0, 1, 4, 0),
+            vk::make_api_version(0, 1, 4, 42),
+        ] {
             let (r, inst) = create(v);
-            assert_eq!(r, types::VK_SUCCESS, "a <= 1.1 request must be accepted");
+            assert_eq!(r, types::VK_SUCCESS, "a <= 1.4 request must be accepted");
             assert!(!inst.is_null());
             vkDestroyInstance(inst, core::ptr::null());
         }
@@ -285,9 +292,15 @@ mod tests {
     fn strict_mode_trips_abort_on_stub() {
         stub::STRICT_TRIPPED.with(|c| c.set(false));
         std::env::set_var("DD_SHIM_STRICT", "1");
-        // Any generated stub call must trip the strict abort (vkTransitionImageLayout is a still-
-        // unimplemented core:1.4 stub — 1.0-1.3 core is now bodied).
-        let _ = vkTransitionImageLayout(core::ptr::null_mut(), 0, core::ptr::null());
+        // Any generated stub call must trip the strict abort. The whole 1.0-1.4 core is now bodied, so the
+        // stub example is an unadvertised-extension command (vkCreateAccelerationStructureKHR).
+        let mut h: u64 = 0;
+        let _ = vkCreateAccelerationStructureKHR(
+            core::ptr::null_mut(),
+            core::ptr::null(),
+            core::ptr::null(),
+            &mut h as *mut u64 as *mut core::ffi::c_void,
+        );
         std::env::remove_var("DD_SHIM_STRICT");
         assert!(
             stub::STRICT_TRIPPED.with(|c| c.get()),
@@ -611,7 +624,7 @@ mod tests {
             vkGetPhysicalDeviceProperties2(phys, &mut props2);
             (ash::vk::api_version_minor(props2.properties.api_version), props2.properties.limits.max_per_stage_resources)
         };
-        assert_eq!(api_minor, 1);
+        assert!(api_minor >= 1, "wgpu-hal requires a >= 1.1 device (we now advertise 1.4)");
         assert!(m3.max_per_set_descriptors > 0, "wgpu needs a non-zero maxPerSetDescriptors");
         assert!(max_per_stage >= 128, "real limits, not zero");
 
@@ -816,5 +829,58 @@ mod tests {
             assert_eq!(d.primitive_topology, vk::PrimitiveTopology::TRIANGLE_STRIP.as_raw());
         }
         vkResetCommandBuffer(cb, 0);
+    }
+
+    // ---- increment 9: Vulkan 1.4 core — the FULL core spec surface ----
+
+    /// The entire Vulkan **1.4** mandatory core now has real bodies — zero generated stubs remain. This
+    /// completes the full Vulkan core spec surface: 1.0-1.4 = 137+28+13+37+19 = 234/234 core commands.
+    #[test]
+    fn vulkan_1_4_core_is_fully_implemented() {
+        use capability::Cap;
+        let count = |o: &str| CAPABILITIES.iter().filter(|e| e.origin == o).count();
+        let implemented = |o: &str| CAPABILITIES.iter().filter(|e| e.origin == o && e.cap != Cap::Stub).count();
+        let core14: Vec<_> = CAPABILITIES.iter().filter(|e| e.origin == "core:1.4").collect();
+        assert_eq!(core14.len(), 19, "Vulkan 1.4 core census size");
+        assert_eq!(core14.iter().filter(|e| e.cap == Cap::Stub).count(), 0, "no mandatory core:1.4 command may remain a stub");
+        // The WHOLE core spec surface is bodied — every core version at 100%.
+        let total_core: usize = ["core:1.0", "core:1.1", "core:1.2", "core:1.3", "core:1.4"].iter().map(|o| count(o)).sum();
+        let total_impl: usize = ["core:1.0", "core:1.1", "core:1.2", "core:1.3", "core:1.4"].iter().map(|o| implemented(o)).sum();
+        assert_eq!(total_core, 234, "the pinned registry's full core surface");
+        assert_eq!(total_impl, 234, "FULL Vulkan core spec coverage: every core command has a real body");
+        for n in ["vkTransitionImageLayout", "vkCmdPushDescriptorSet", "vkGetRenderingAreaGranularity", "vkCmdSetLineStipple", "vkCopyMemoryToImage"] {
+            assert!(dispatch_addr(n).is_some(), "1.4 core {n} not resolvable");
+            assert!(CAPABILITIES.iter().find(|c| c.name == n).unwrap().implemented(), "{n} still a stub");
+        }
+    }
+
+    /// Host-side image layout transition (VK_EXT_host_image_copy, promoted 1.4): applies the new layout to
+    /// the tracked subresource state without a queue.
+    #[test]
+    fn host_image_layout_transition_updates_subresource_state() {
+        let _g = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use ash::vk;
+        use ash::vk::Handle;
+        let ci = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D).format(vk::Format::R8G8B8A8_UNORM)
+            .extent(vk::Extent3D { width: 8, height: 8, depth: 1 }).mip_levels(1).array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1).usage(vk::ImageUsageFlags::TRANSFER_DST)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let mut img = 0u64;
+        assert_eq!(vkCreateImage(core::ptr::null_mut(), &ci, core::ptr::null(), &mut img), types::VK_SUCCESS);
+        let t = vk::HostImageLayoutTransitionInfoEXT::default()
+            .image(vk::Image::from_raw(img))
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1,
+            });
+        assert_eq!(vkTransitionImageLayout(core::ptr::null_mut(), 1, &t), types::VK_SUCCESS);
+        {
+            let s = reg::lock();
+            let st = s.images[&img].subresources[&(vk::ImageAspectFlags::COLOR.as_raw(), 0, 0)];
+            assert_eq!(st.layout, vk::ImageLayout::GENERAL.as_raw(), "host transition applied the layout");
+        }
+        vkDestroyImage(core::ptr::null_mut(), img, core::ptr::null());
     }
 }

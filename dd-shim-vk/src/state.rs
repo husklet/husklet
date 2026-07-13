@@ -47,14 +47,15 @@ pub struct CommandPool {
 
 // ---- the reported device -------------------------------------------------------------------------
 
-/// The Vulkan API version we advertise (device + `vkEnumerateInstanceVersion`). **Vulkan 1.1.0.**
-/// Truthfulness gate (`docs/codex-rendering.md` §2.2, §5.1, gui_vk_capability_truth): advertise only the
-/// version whose mandatory core is actually backed. The **entire 1.1 mandatory core** now has real bodies
-/// (bind/requirements2, descriptor update templates, sampler YCbCr, device-groups-minimal, the `...2`
-/// physical-device queries — see `crate::capability` core:1.1 census = 28/28), so 1.1 is honestly
-/// selectable — the version wgpu-on-Vulkan / Zed require. 1.2+ promoted core is still partial, so a 1.2+
-/// request is refused with `VK_ERROR_INCOMPATIBLE_DRIVER`. Raise this again once 1.2 core passes.
-pub const DD_API_VERSION: u32 = vk::API_VERSION_1_1;
+/// The Vulkan API version we advertise (device + `vkEnumerateInstanceVersion`). **Vulkan 1.4.0.**
+/// Truthfulness gate (gui_vk_capability_truth): advertise only the version whose mandatory core is
+/// actually backed. The **entire mandatory core for Vulkan 1.0–1.4 now has real bodies** — the full
+/// 234-command core spec surface (`crate::capability` core census 137+28+13+37+19 = 234/234) — so 1.4 is
+/// honestly selectable. A 2.0+ request is refused with `VK_ERROR_INCOMPATIBLE_DRIVER`. Feature *bits*
+/// (queried via `vkGetPhysicalDeviceFeatures2`) are reported truthfully per what each command actually
+/// materializes; an app enables only the features it detects, so advertising 1.4 never over-promises.
+// `ash` 0.38 (headers 1.3.281) predates the `API_VERSION_1_4` constant, so spell it explicitly.
+pub const DD_API_VERSION: u32 = vk::make_api_version(0, 1, 4, 0);
 /// Apple's PCI vendor id, as MoltenVK reports (`kAppleVendorId` in MVKDevice.mm).
 pub const APPLE_VENDOR_ID: u32 = 0x106b;
 /// `driverVersion` — dd's own driver revision (packed like an api version), increment 1.

@@ -398,6 +398,8 @@ pub struct DynamicState {
     /// The last `vkCmdSetViewportWithCount` / `vkCmdSetScissorWithCount` count.
     pub viewport_count: u32,
     pub scissor_count: u32,
+    /// `vkCmdSetLineStipple` (Vulkan 1.4): `(lineStippleFactor, lineStipplePattern)`.
+    pub line_stipple: (u32, u16),
 }
 
 impl Default for DynamicState {
@@ -424,6 +426,7 @@ impl Default for DynamicState {
             stencil_op: (0, 0, 0, 0, 0),
             viewport_count: 0,
             scissor_count: 0,
+            line_stipple: (1, 0xFFFF),
         }
     }
 }

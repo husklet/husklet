@@ -227,6 +227,19 @@ fn partial_note(name: &str) -> Option<&'static str> {
             "sync2 events reuse the synchronous event + submit-time barrier model (see the 1.0 event notes)"
         }
         "vkCmdWriteTimestamp2" => "sync2 timestamp reuses the synchronous timestamp model (host-monotonic serial)",
+        // Vulkan 1.4 promoted core — bounded domains:
+        "vkCmdBindIndexBuffer2" => "binds via the 1.0 path; the size operand is not modeled",
+        "vkCmdSetLineStipple" => "recorded verbatim (observable); line stipple is not lowered to the IR",
+        "vkCmdSetRenderingAttachmentLocations" | "vkCmdSetRenderingInputAttachmentIndices" => {
+            "validated on the recording buffer; attachment location/index remapping is not modeled (single-attachment)"
+        }
+        "vkCmdPushDescriptorSet" | "vkCmdPushDescriptorSet2" | "vkCmdPushDescriptorSetWithTemplate"
+        | "vkCmdPushDescriptorSetWithTemplate2" => {
+            "push descriptors build a transient set + bind group; buffer descriptors lower, image/texel are retained"
+        }
+        "vkCopyMemoryToImage" => "host memory->image lowers to a deferred IR upload (base 2D color region)",
+        "vkCopyImageToImage" => "host image->image lowers to a deferred IR texture copy (base 2D color region)",
+        "vkCopyImageToMemory" => "host image->memory readback is not materialized (no host-immediate texture read)",
         _ => return None,
     })
 }
@@ -814,4 +827,14 @@ const IMPLEMENTED: &[&str] = &[
     "vkCreatePrivateDataSlot", "vkDestroyPrivateDataSlot", "vkSetPrivateData", "vkGetPrivateData",
     // tool properties
     "vkGetPhysicalDeviceToolProperties",
+    // ---- increment 9: Vulkan 1.4 promoted core (vk14.rs) — COMPLETES the core spec surface (234/234).
+    // Ported from MoltenVK: maintenance5/6 (...Info forms), MVKCmdPushDescriptorSet, MVKImage host layout
+    // transition + host copy, line stipple.
+    "vkCmdBindIndexBuffer2", "vkCmdBindDescriptorSets2", "vkCmdPushConstants2",
+    "vkMapMemory2", "vkUnmapMemory2", "vkGetImageSubresourceLayout2", "vkGetDeviceImageSubresourceLayout",
+    "vkGetRenderingAreaGranularity", "vkCmdSetLineStipple",
+    "vkCmdSetRenderingAttachmentLocations", "vkCmdSetRenderingInputAttachmentIndices",
+    "vkCmdPushDescriptorSet", "vkCmdPushDescriptorSet2",
+    "vkCmdPushDescriptorSetWithTemplate", "vkCmdPushDescriptorSetWithTemplate2",
+    "vkTransitionImageLayout", "vkCopyMemoryToImage", "vkCopyImageToImage", "vkCopyImageToMemory",
 ];

@@ -57,11 +57,12 @@ impl Entry {
     }
 }
 
-/// The Vulkan API version this ICD advertises, as `(major, minor)`. Truthfulness: we advertise **1.1**
-/// now that the entire 1.1 mandatory core has real bodies (`vkEnumerateInstanceVersion` and the
-/// physical-device `apiVersion` both report this; a 1.2+ app request is rejected with
-/// `VK_ERROR_INCOMPATIBLE_DRIVER`). The inventory test cross-checks this against `state::DD_API_VERSION`.
-pub const ADVERTISED_API_VERSION: (u32, u32) = (1, 1);
+/// The Vulkan API version this ICD advertises, as `(major, minor)`. Truthfulness: we advertise **1.4**
+/// now that the entire 1.0–1.4 mandatory core (all 234 commands) has real bodies
+/// (`vkEnumerateInstanceVersion` and the physical-device `apiVersion` both report this; a 2.0+ app
+/// request is rejected with `VK_ERROR_INCOMPATIBLE_DRIVER`). The inventory test cross-checks this
+/// against `state::DD_API_VERSION`.
+pub const ADVERTISED_API_VERSION: (u32, u32) = (1, 4);
 
 /// The instance extensions the ICD advertises (must equal what `vkEnumerateInstanceExtensionProperties`
 /// returns) — the allow-list of what is actually implemented, not everything `vk.xml` lists.

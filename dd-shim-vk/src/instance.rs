@@ -299,10 +299,11 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 d.driver_id = vk::DriverId::MESA_LLVMPIPE; // a valid enum; dd has no registered id
                 write_cstr(&mut d.driver_name, "dd");
                 write_cstr(&mut d.driver_info, "dd Metal (Vulkan) 0.1");
-                // Consistent with the advertised 1.0 profile (we make no CTS-conformance claim).
+                // Matches the advertised 1.4 core level (the API version this ICD targets; dd is not a
+                // formally-submitted CTS-conformant implementation).
                 d.conformance_version = vk::ConformanceVersion {
                     major: 1,
-                    minor: 0,
+                    minor: 4,
                     subminor: 0,
                     patch: 0,
                 };
@@ -314,6 +315,12 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
             if let Some(m) = unsafe { mp.as_mut() } {
                 m.max_per_set_descriptors = 1_000_000;
                 m.max_memory_allocation_size = 1 << 31; // 2 GiB (matches the executor residency budget)
+            }
+        } else if s_type == vk::StructureType::PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR.as_raw() {
+            // Vulkan 1.4 push descriptors: the max descriptors a single vkCmdPushDescriptorSet can push.
+            let pp = node as *mut vk::PhysicalDevicePushDescriptorPropertiesKHR;
+            if let Some(p) = unsafe { pp.as_mut() } {
+                p.max_push_descriptors = 32;
             }
         }
         node = unsafe { (*node).p_next };
@@ -390,6 +397,17 @@ pub extern "C" fn vkGetPhysicalDeviceFeatures2(
         } else if s == vk::StructureType::PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES.as_raw() {
             if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceHostQueryResetFeatures).as_mut() } {
                 f.host_query_reset = vk::TRUE;
+            }
+        } else if s == vk::StructureType::PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES_KHR.as_raw() {
+            // Vulkan 1.4 maintenance5 (vkCmdBindIndexBuffer2, device image subresource layout, rendering-
+            // area granularity) is implemented.
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceMaintenance5FeaturesKHR).as_mut() } {
+                f.maintenance5 = vk::TRUE;
+            }
+        } else if s == vk::StructureType::PHYSICAL_DEVICE_MAINTENANCE_6_FEATURES_KHR.as_raw() {
+            // Vulkan 1.4 maintenance6 (vkCmd{BindDescriptorSets2,PushConstants2,PushDescriptorSet2}) too.
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceMaintenance6FeaturesKHR).as_mut() } {
+                f.maintenance6 = vk::TRUE;
             }
         }
         node = unsafe { (*node).p_next };
