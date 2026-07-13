@@ -317,6 +317,7 @@ pub extern "C" fn glGetIntegerv(pname: u32, v: *mut i32) {
             GL_ACTIVE_TEXTURE => *v = (GL_TEXTURE0 + s.active_unit as u32) as i32,
             GL_ARRAY_BUFFER_BINDING => *v = s.arr_buf as i32,
             GL_ELEMENT_ARRAY_BUFFER_BINDING => *v = s.elem_buf as i32,
+            GL_PIXEL_PACK_BUFFER_BINDING => *v = s.pack_buf as i32,
             GL_TEXTURE_BINDING_2D => *v = s.tex_unit[s.active_unit] as i32,
             GL_RENDERBUFFER_BINDING => *v = s.rbo_bound as i32,
             GL_DRAW_FRAMEBUFFER_BINDING => *v = s.draw_fbo as i32,
@@ -408,6 +409,9 @@ pub extern "C" fn glDeleteBuffers(n: i32, ids: *const u32) {
             }
             if s.elem_buf as usize == id {
                 s.elem_buf = 0;
+            }
+            if s.pack_buf as usize == id {
+                s.pack_buf = 0;
             }
             for attr in &mut s.attr {
                 if attr.buffer as usize == id {
@@ -2161,6 +2165,7 @@ pub extern "C" fn glReadPixels(x: i32, y: i32, w: i32, h: i32, fmt: u32, typ: u3
     if typ != GL_UNSIGNED_BYTE { fail(&mut s, GL_INVALID_ENUM); return; }
     let bpp = match fmt { GL_RGBA | GL_BGRA_EXT => 4usize, GL_RGB => 3, _ => { fail(&mut s, GL_INVALID_ENUM); return; } };
     if s.framebuffer_status(s.read_fbo) != GL_FRAMEBUFFER_COMPLETE { fail(&mut s, GL_INVALID_FRAMEBUFFER_OPERATION); return; }
+    if w == 0 || h == 0 { return; }
     let src_id = s.fbo_color_texture(s.read_fbo);
     if src_id == 0 { fail(&mut s, GL_INVALID_OPERATION); return; }
     let src = &s.tex[src_id as usize];

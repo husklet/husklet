@@ -21,6 +21,13 @@ fn readpixels_validates_pack_layout_and_preserves_output() {
     gles::glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
 
     let mut out = [0xA5u8; 48];
+    let serial_before_zero = gles::submission_serials();
+    gles::glReadPixels(-99, -99, 0, 2, GL_RGBA, GL_UNSIGNED_BYTE, core::ptr::null_mut());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    assert_eq!(gles::submission_serials(), serial_before_zero);
+    assert_eq!(out, [0xA5; 48]);
+    gles::glReadPixels(0, 0, 0, 0, GL_RGBA, GL_FLOAT, core::ptr::null_mut());
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM);
     gles::glReadPixels(0, 0, 2, 2, GL_RGBA, GL_FLOAT, out.as_mut_ptr().cast());
     assert_eq!(gles::glGetError(), GL_INVALID_ENUM);
     assert_eq!(out, [0xA5; 48]);
@@ -57,8 +64,10 @@ fn readpixels_validates_pack_layout_and_preserves_output() {
     gles::glReadPixels(0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, 4usize as *mut core::ffi::c_void);
     assert_eq!(gles::glGetError(), GL_NO_ERROR);
     assert_eq!(unsafe { core::slice::from_raw_parts(mapped.add(4), 16) }, &pixels);
-    gles::glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     gles::glDeleteBuffers(1, &pbo);
+    let mut pack_binding = -1;
+    gles::glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &mut pack_binding);
+    assert_eq!(pack_binding, 0, "deleting a PBO left its pack binding stale");
 
     gles::glPixelStorei(GL_PACK_ALIGNMENT, 3);
     assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
