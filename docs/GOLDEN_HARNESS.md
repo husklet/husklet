@@ -14,8 +14,8 @@ sampling) is caught the moment it changes output.
 | `dd-display/tests/golden_image_regression.rs` | The harness: IR builders, a self-contained PNG decoder, the Metal replay+readback, and the diff. |
 | `run_golden.sh` | One-command runner (`check` / `--update-goldens` / `--seed`). Uses the `mac` runner for Metal from the Linux dev host. |
 | `target-chrome-codex/*.ir` | Captured/synthesized IR streams — one frame each. |
-| `target-chrome-codex/golden/*.png` | Committed reference images. |
-| `target-chrome-codex/oracle/*.png` | Optional external ground-truth screenshots (e.g. Weston). |
+| `dd-display/tests/golden/images/*.png` | Committed reference images. |
+| `dd-display/tests/golden/oracle/*.png` | Optional external ground-truth screenshots (e.g. Weston). |
 | `target-chrome-codex/rendered/`, `diff/` | Per-run output (git-ignored). `diff/` is written only on failure. |
 
 ## Running
@@ -41,6 +41,9 @@ Tuning knobs (env vars):
 
 A failing case prints `maxΔ`, the count/percent of differing pixels, and writes
 `target-chrome-codex/diff/<name>.png` (over-tolerance pixels in red, sub-tolerance diff amplified in gray).
+Goldens live outside ignored `target-*` output so a clean checkout always runs the check instead of reporting
+missing baselines. The orientation case also asserts its four quadrant colors directly before PNG diffing;
+`--update-goldens` cannot bless a vertical flip by itself.
 
 ## The cases
 
@@ -68,10 +71,10 @@ flips, transposes, and 180° rotations all change the golden.
 3. Regenerate the capture and seed the golden:
    ```sh
    ./run_golden.sh --seed              # writes target-chrome-codex/<name>.ir
-   ./run_golden.sh --update-goldens    # renders + writes target-chrome-codex/golden/<name>.png
+   ./run_golden.sh --update-goldens    # renders + writes dd-display/tests/golden/images/<name>.png
    ```
 4. **Inspect the golden PNG** (open it / `Read` it) to confirm it's what you intend, then
-   `./run_golden.sh` to confirm PASS, and commit `<name>.ir` + `golden/<name>.png`.
+   `./run_golden.sh` to confirm PASS, and commit the builder plus `dd-display/tests/golden/images/<name>.png`.
 
 ### A real Chrome capture
 
@@ -87,7 +90,7 @@ the `.ir` in and it activates.
 ## The oracle slot
 
 To cross-check a case against an independent ground truth (e.g. a Weston screenshot of the same Chrome
-frame), drop an 8-bit RGB/RGBA PNG at `target-chrome-codex/oracle/<name>` matching the case's render
+frame), drop an 8-bit RGB/RGBA PNG at `dd-display/tests/golden/oracle/<name>` matching the case's render
 size and point the case's `oracle:` field at it. By default the comparison is informational; set
 `DD_ORACLE_STRICT=1` to gate on it. The harness's PNG decoder handles both our own stored-block goldens
 and arbitrary zlib-compressed, filtered PNGs, so an externally-produced oracle just works.

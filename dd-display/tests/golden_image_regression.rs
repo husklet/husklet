@@ -645,9 +645,12 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> atlas [[texture(0)]
 
     // -------- Case: orientation (2x2 four-color atlas — any flip/transpose permutes quadrants) --------
     pub fn orientation(w: u32, h: u32) -> Vec<u8> {
+        // This fixture deliberately uses Chrome/GL pixel coordinates: rt_adjust maps y=0 to NDC -1,
+        // the bottom of the presented surface. Texture row zero is therefore sampled into the
+        // bottom half. The semantic assertion below pins that contract independently of PNG goldens.
         let atlas = u8_bytes(&[
-            255, 0, 0, 255, /*TL red*/ 0, 255, 0, 255, /*TR green*/
-            0, 0, 255, 255, /*BL blue*/ 255, 255, 255, 255, /*BR white*/
+            255, 0, 0, 255, /*row 0 left: red*/ 0, 255, 0, 255, /*row 0 right: green*/
+            0, 0, 255, 255, /*row 1 left: blue*/ 255, 255, 255, 255, /*row 1 right: white*/
         ]);
         textured_frame(w, h, 2, 2, atlas, [255, 255, 255, 255])
     }
@@ -780,6 +783,21 @@ fn codex_root() -> std::path::PathBuf {
         .join("target-chrome-codex")
 }
 
+fn golden_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
+}
+
+fn assert_orientation_contract(rgba: &[u8], w: u32, h: u32) {
+    let pixel = |x: u32, y: u32| {
+        let offset = ((y * w + x) * 4) as usize;
+        &rgba[offset..offset + 4]
+    };
+    assert_eq!(pixel(w / 4, h / 4), [0, 0, 255, 255], "surface top-left must sample GL row 1");
+    assert_eq!(pixel(3 * w / 4, h / 4), [255, 255, 255, 255], "surface top-right must sample GL row 1");
+    assert_eq!(pixel(w / 4, 3 * h / 4), [255, 0, 0, 255], "surface bottom-left must sample GL row 0");
+    assert_eq!(pixel(3 * w / 4, 3 * h / 4), [0, 255, 0, 255], "surface bottom-right must sample GL row 0");
+}
+
 /// Regenerate the synthesized `.ir` capture files from the builders above. Runs on any host (no Metal),
 /// so a reviewer can reproduce/inspect exactly what each golden draws:
 ///   cargo test -p dd-display --test golden_image_regression -- seed_captures --nocapture
@@ -816,7 +834,7 @@ fn png_codec_roundtrip() {
 
 #[cfg(target_os = "macos")]
 mod metal_suite {
-    use super::{codex_root, png_decode, registry};
+    use super::{assert_orientation_contract, codex_root, golden_root, png_decode, registry};
     use dd_display::metal::MetalCtx;
     use dd_display::metal_backend::MetalBackend;
     use objc2::rc::Retained;
@@ -918,10 +936,11 @@ mod metal_suite {
             return;
         }
         let root = codex_root();
-        let golden_dir = root.join("golden");
+        let golden_root = golden_root();
+        let golden_dir = golden_root.join("images");
         let rendered_dir = root.join("rendered");
         let diff_dir = root.join("diff");
-        let oracle_dir = root.join("oracle");
+        let oracle_dir = golden_root.join("oracle");
         for d in [&golden_dir, &rendered_dir, &diff_dir, &oracle_dir] {
             std::fs::create_dir_all(d).unwrap();
         }
@@ -955,6 +974,9 @@ mod metal_suite {
                     continue;
                 }
             };
+            if c.name == "chrome-orientation" {
+                assert_orientation_contract(&rgba, c.w, c.h);
+            }
             let rendered_png = dd_term_core::png::encode_rgba(c.w, c.h, &rgba);
             std::fs::write(rendered_dir.join(format!("{}.png", c.name)), &rendered_png).unwrap();
 
@@ -1038,7 +1060,7 @@ mod metal_suite {
 /// goldens (DD_UPDATE_GOLDENS=1). Reuses the same `registry()`/`cases` builders, `png_decode`, and diff.
 #[cfg(target_os = "macos")]
 mod wgpu_suite {
-    use super::{codex_root, png_decode, registry};
+    use super::{assert_orientation_contract, codex_root, golden_root, png_decode, registry};
     use dd_gpu::ir::TextureFormat;
     use dd_gpu_wgpu::WgpuBackend;
 
@@ -1086,7 +1108,7 @@ mod wgpu_suite {
             return;
         }
         let root = codex_root();
-        let golden_dir = root.join("golden");
+        let golden_dir = golden_root().join("images");
         let rendered_dir = root.join("rendered-wgpu");
         let diff_dir = root.join("diff-wgpu");
         for d in [&rendered_dir, &diff_dir] {
@@ -1111,6 +1133,9 @@ mod wgpu_suite {
                     continue;
                 }
             };
+            if c.name == "chrome-orientation" {
+                assert_orientation_contract(&rgba, c.w, c.h);
+            }
             std::fs::write(
                 rendered_dir.join(format!("{}.png", c.name)),
                 dd_term_core::png::encode_rgba(c.w, c.h, &rgba),

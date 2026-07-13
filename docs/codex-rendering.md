@@ -207,6 +207,10 @@ Specific correctness gaps:
   identity/history. Existing rendering notes record captures for which a static offscreen flip corrected one
   stream and inverted another. Orientation must be explicit in IR or derived from actual viewport/projection
   state, never guessed from “surface vs texture”.
+  The synthesized Metal golden baselines are now tracked outside ignored `target-*` output, and the asymmetric
+  orientation fixture pins the GL-coordinate quadrant contract with direct pixel assertions before PNG comparison.
+  Current Metal and wgpu replay match all four synthesized cases bit-exactly. This proves current-backend parity for
+  those fixtures; it does not close the data-driven-orientation gap or replace a real captured-stream oracle.
 - The tests are mostly headless state/wire tests. They do not run a Khronos conformance suite, broad GLES3
   samples, context-sharing races, resize/recreate loops, or long-running Chrome GPU workloads.
 
