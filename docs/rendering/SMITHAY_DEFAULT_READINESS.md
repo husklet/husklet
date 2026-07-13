@@ -4,11 +4,17 @@ Status: **audit 2026-07-12; low-risk gaps closed 2026-07-12.** Can `DD_DISPLAY_S
 Smithay-native `dd-compositor`) and `DD_GPU_BACKEND=wgpu` (the wgpu host GPU executor) become the DEFAULT,
 keeping the working legacy Chrome/GTK render as a fallback?
 
-**Verdict: not yet — but the protocol surface is now a strict superset of the legacy path and all
-unit/integration tests pass, and the low-risk pre-flip gaps are now closed.** Remaining blocker: (5) no
-live Chrome/GTK-on-Smithay validation has been run — the coordinated/maintainer-decision step, NOT done
-here. **`zwp_linux_dmabuf` v4 feedback (Gap 1) is now closed** (see below): the compositor advertises the
-feedback-carrying global on macOS, so it no longer trails legacy on any global.
+**Verdict: GTK4 is validated live and renders on Smithay (see Gap 5) — ready to be the default for GTK
+software rendering with commit `20174b15`; Chrome + the wgpu executor remain open.** The protocol surface
+is a strict superset of the legacy path and all unit/integration tests pass, and the low-risk pre-flip
+gaps are closed. **Live GTK4-on-Smithay ran here (Gap 5, 2026-07-12): gtk4-demo renders a full, correct
+GTK Demo window** — but only after fixing a pre-frame SIGSEGV caused by the unconditional dmabuf v4
+feedback global (commit `20174b15`, gate it behind `DD_DISPLAY_DMABUF` like legacy). Remaining before a
+full flip: (5) live **Chrome**-on-Smithay + the Cocoa/Metal (non-PngPresenter) present path are still
+un-run, and `DD_GPU_BACKEND=wgpu` is currently **inert** under `DD_DISPLAY_SMITHAY` (the dd-gpu executor
+is not wired into `dd-compositor` — see Gap 5). **`zwp_linux_dmabuf` v4 feedback (Gap 1)** stays available
+**opt-in** (`DD_DISPLAY_DMABUF`); it must NOT be default-on until the guest-side format-table `mmap` is
+fixed (that fd is what crashed GTK).
 
 **Closed by this pass (all low-risk, defaults unchanged):**
 - **Gap 1 — `zwp_linux_dmabuf` v4 feedback.** `dd-compositor` now advertises the **feedback-carrying
@@ -145,7 +151,11 @@ change silently broke the un-gated compositor.
 
 ## 4. Gaps blocking a safe default flip (ordered)
 
-1. ~~**`zwp_linux_dmabuf` v4 feedback (accelerated Chromium).**~~ **CLOSED.** `dd-compositor` now
+1. ~~**`zwp_linux_dmabuf` v4 feedback (accelerated Chromium).**~~ **CLOSED, but now gated (see Gap 5).**
+   **Correction (2026-07-12 live run):** advertising this global *unconditionally* crashed GTK4 (the
+   guest's `mmap` of the feedback format-table fd → `MAP_FAILED` → SIGSEGV before frame 1), so it is now
+   gated behind `DD_DISPLAY_DMABUF` (commit `20174b15`) exactly like legacy `server.rs` — the default
+   software path advertises no dmabuf global. When `DD_DISPLAY_DMABUF` is set, `dd-compositor`
    advertises the feedback-carrying global (Smithay's version-5 dmabuf global, which serves the v4
    `get_default_feedback` path). Chromium's ozone/GPU derives its DRM render-node path from the
    dmabuf-feedback `main_device` (legacy `server.rs::send_dmabuf_feedback` at ~line 2510); the
@@ -198,10 +208,45 @@ change silently broke the un-gated compositor.
    back to legacy, so the bundle stays shippable. (Not runnable in this Linux-VM audit env; the wiring is
    committed where the packaging lives and the underlying build was verified via `make mac-crates`.)
 
-5. **No live Chrome/GTK-on-Smithay validation.** All green results here are unit/integration
-   (`PngPresenter`, headless). The live NSWindow present/input loop (`main.rs::macos`), the
-   Cocoa/Metal presenter path, HiDPI sharpness, and real Chrome/GTK4 bring-up have **not** been
-   exercised on Smithay. This is the coordinated validation step and is the true gate on flipping.
+5. ~~**No live Chrome/GTK-on-Smithay validation.**~~ **GTK4 DONE — renders (after one fix); see below.**
+   Live GTK4 (`gtk4-demo`, the `gtkself` workspace) was run headfully through the engine on a private
+   `dd-display` socket with `DD_DISPLAY_SMITHAY=1 DD_GPU_BACKEND=wgpu` (the `PngPresenter` headless-dump
+   path). **Result: gtk4-demo renders a full, correct GTK Demo window on the Smithay compositor** —
+   1028×729, 990 unique colours, ~41% non-background, black text + the GTK4 widget grey palette, complete
+   CSD title bar / window controls / sidebar tree / tabs / body text. Pixel- and visually-identical in
+   character to the legacy `server.rs` baseline (`gtk4-demo-legacy-baseline.png`, 800×600, 990 colours,
+   ~44% non-bg). Evidence: `~/.dd/gtkself-wgpu-evidence/gtk4-demo-SMITHAY-WGPU-RENDERED.png`.
+
+   **Blocker found + fixed during this validation (commit `20174b15`):** the first Smithay run
+   **SIGSEGV'd the guest before frame 1** (`[MACH] … hinsn=0xb8616861` → `LDR W1,[X3,X1]` with `X3=-1`,
+   a `MAP_FAILED` deref). Root cause: `dd-compositor` advertised the `zwp_linux_dmabuf_v1` **v4 feedback**
+   global *unconditionally* (Gap 1 close-out), whereas legacy `server.rs` advertises any dmabuf global
+   only under `DD_DISPLAY_DMABUF`. GTK4's libwayland (even on the cairo/`wl_shm` path) eagerly binds the
+   feedback global and `mmap`s the feedback **format-table fd** — a macOS POSIX-shm object routed to the
+   Linux guest through the engine's SCM_RIGHTS bridge, whose guest-side `mmap` returns `MAP_FAILED` → the
+   client dereferences `-1` and crashes. Differential proof (same engine build, same guest): legacy (no
+   dmabuf global) rendered fine; Smithay (dmabuf feedback on) crashed pre-frame. **Fix:** gate
+   `new_dmabuf_state` on `DD_DISPLAY_DMABUF` (parity with legacy) so the default software path advertises
+   no dmabuf global (`wl_shm` renders); the v4 feedback global stays available opt-in. All 8
+   `dd-compositor` tests still pass (the two dmabuf tests now set the env). **After the fix the same run
+   renders.**
+
+   **Still NOT exercised on Smithay:** the live NSWindow present/input loop (`main.rs::macos`) and the
+   Cocoa/Metal presenter (this run used the portable `PngPresenter`); Chrome bring-up; input/cursor/menus.
+
+   **`DD_GPU_BACKEND=wgpu` was inert on this path — a real wiring gap.** `maybe_exec_smithay()` execs
+   `dd-compositor` at the *top* of `dd-display::main` (before the `run_executor` spawn at
+   `main.rs:~269`), and `dd-compositor` never spawns the dd-gpu IR executor itself — so under
+   `DD_DISPLAY_SMITHAY=1` the `DD_GPU_BACKEND` selection (`dd_gpu_wgpu::selected()` → `run_executor_wgpu`)
+   is **never reached**. Irrelevant for GTK4 (pure `wl_shm`/cairo software, no host GPU IR), so "GTK on
+   Smithay+wgpu" is really "GTK on Smithay"; but for an *accelerated* guest (GL/CUDA via dd-gpu) the
+   Smithay path currently has **no host GPU executor at all**. Wiring the dd-gpu executor (metal *or*
+   wgpu) into `dd-compositor` is a prerequisite before `DD_GPU_BACKEND=wgpu` can be a meaningful default
+   alongside `DD_DISPLAY_SMITHAY`.
+
+   **Verdict (GTK): the Smithay compositor is ready to be the default for GTK4 software rendering** with
+   commit `20174b15` in place (without it, it is a hard pre-frame crash). The wgpu *executor* is a
+   separate, still-open item that does not affect GTK.
 
 Non-blocking parity notes: touch (neither path has a real device); DnD drag-icon surface (host cursor
 only, both paths).
