@@ -116,14 +116,6 @@ Specific correctness gaps:
   surfaces retain dimensions/current draw-read identity, and stale handles fail. Both former red gates now run as
   ordinary Rust regressions. Remaining work is broader per-attribute/config compatibility and native-window/backing
   allocation resize/lifetime coverage, not the former singleton-object contradiction.
-- Commit `bf5a1a7f` closes the former singleton-context defect: contexts now have unique typed handles and explicit
-  share groups, GL object namespaces follow the current share group, context currentness/errors are thread-local,
-  and release/destroy/invalid-handle behavior is covered by normal Rust tests. The formerly ignored gate
-  `egl_contexts_are_distinct_shareable_and_current_per_thread` now runs green. Commit `592e65bf` subsequently adds
-  typed EGLSurface identity and current draw/read tracking as another normal green regression.
-  One narrower validation defect remains: `eglQueryContext` does not check whether its handle is live and succeeds
-  after destruction. `egl_query_context_rejects_destroyed_handles_without_mutating_output` preserves that residual
-  without keeping the completed context/share-group work falsely red.
 - Commit `592e65bf` makes EGL swap transactional at the producer boundary: submission precedes draw-list clearing,
   failure preserves queued work and reports context/surface loss. The former red gate is now a green regression.
   End-to-end presentation still needs typed accepted/executed/generation results, reconnect residency replay, and a
@@ -136,29 +128,8 @@ Specific correctness gaps:
   necessary integration coverage rather than reasons to keep the completed symbol-level row red.
 - Object and error semantics are incomplete across unported families: lifetime, namespace, validation,
   `glGetError`, query results, synchronization, and cross-context sharing need systematic coverage.
-- Even core buffer/texture name semantics are inverted. `glGen*` marks slots as live immediately, so `glIsBuffer`
-  and `glIsTexture` return true before first bind; binding a fresh unused name does not create storage; deletion does
-  not detach buffers/textures from context/VAO/texture-unit bindings; and several negative counts return silently
-  instead of `GL_INVALID_VALUE`. Separate reserved names from instantiated objects in a per-share-group namespace.
-  Binding performs typed lazy creation, deletion removes the name and detaches every binding in the deleting context
-  while retaining storage referenced by queued draws, and reuse gets a new generation so stale snapshots cannot
-  alias it. Generate/delete must validate fully before touching outputs/state.
-  `gles_generated_names_binding_and_deletion_follow_object_lifetimes` pins the observable lifecycle.
-- Shader/program ownership is also not GLES-compatible. Programs store at most one vertex and fragment id,
-  `glDetachShader` is empty, shader deletion immediately erases attached source, and program deletion ignores current
-  use. There is no delete-pending state, attachment enumeration/count, or deletion-status query. Store a set of strong
-  shader references on each program; flag shaders/programs for deletion; reclaim only after their last attachment or
-  current-context reference disappears; implement attach/detach duplicate/error rules and all corresponding getters.
-  Linked executables must own an immutable snapshot so later source deletion/recompile cannot mutate them.
-  `gles_shader_program_attachment_detach_and_delete_pending_are_consistent` fixes the minimum ownership model.
-- Pixel-store/upload validation is unsafe and non-atomic. `glPixelStorei` accepts invalid alignment and negative row/
-  skip values; upload byte counts and padded strides use unchecked `usize` arithmetic; `glTexImage2D` ignores target,
-  internal format, type and border; subimages do not reject negative/out-of-bounds rectangles; and immutable storage
-  records neither format nor mip levels, so it can be redefined. Define a format/type table with bytes/block, allowed
-  internal/external pairs and conversion function. Validate all enums/dimensions/levels and compute source layout via
-  checked add/multiply/align before allocating, reading client memory or mutating the texture. Store every mip/layer
-  plus immutable flag/level count and enforce completeness/filter rules. `gles_pixel_store_and_texture_upload_validation_is_atomic_and_checked`
-  pins invalid pixel store, safe arithmetic and immutable state.
+- Two-dimensional byte uploads now validate pixel-store layout, checked sizes, bounds and immutable storage before
+  mutation. Compressed and 3D formats, the full mip/layer vocabulary and format conversion table remain incomplete.
 - User framebuffers now report missing and incomplete color attachments, accept only live typed texture/renderbuffer
   names, and block clear/draw atomically with `GL_INVALID_FRAMEBUFFER_OPERATION`. The default framebuffer remains
   complete. This closes the unconditional-complete and silent-draw contradiction for the implemented color-only
@@ -173,17 +144,9 @@ Specific correctness gaps:
   alignment/row-length/skips before synchronizing and writing only addressed bytes. Invalid calls preserve client/PBO
   storage, and bounded PBO offsets are checked. Remaining work is default-framebuffer backend readback, broader format/
   type conversion, mapped-PBO state and an ABI mechanism for validating raw client allocation size.
-- GLES sync objects are symbol/default-only. Fence creation and waits are unsupported generated stubs while
-  delete/is/query return harmless sentinels; no sync record captures a command-stream point. The shared IR already has
-  fences and submit signals, and software/wgpu have partial backends, but the default Metal executor lacks the fence
-  trait methods and the one-byte socket acknowledgement carries no submission identity. Give each context a monotonic
-  submission serial. `glFenceSync` closes/flushes prior commands and records that serial; executor responses publish
-  accepted/completed serials; `glClientWaitSync` implements zero/finite/infinite timeout plus
-  `GL_SYNC_FLUSH_COMMANDS_BIT`; server-side `glWaitSync` inserts a dependency without CPU blocking. Preserve sync
-  lifetime across pending waits and context sharing, and map device/transport loss to `GL_WAIT_FAILED` plus GL error.
-  Implement the same serial contract in Metal, wgpu and software so parity tests can distinguish already-signaled,
-  condition-satisfied and timeout. `gles_sync_objects_track_real_submission_completion_and_wait_results` pins every
-  layer instead of accepting sentinel returns.
+- GLES sync handles now track shim submission/completion serials and implement lifecycle, timeout, flush and stale-
+  handle behavior. Cross-process accepted/completed acknowledgements and asynchronous Metal/wgpu/software parity
+  remain unresolved.
 - ES3 query objects are names without objects. Generation increments a counter, begin/end are partial no-ops,
   delete/is/get return defaults, and neither IR nor backend capabilities describe occlusion or primitive-count query
   work. Implement typed query records with target, active owner/context, begin/end submission serials, availability,
@@ -193,9 +156,6 @@ Specific correctness gaps:
   fixtures. Timer/disjoint extensions must remain unadvertised until timestamp period, monotonicity, wrap and GPU
   disjoint/reset behavior are real. `gles_query_objects_track_targets_availability_and_asynchronous_results` pins
   lifecycle, observable readiness and negotiation rather than fabricated zero results.
-- Shader handling has two contracts. Vulkan forwards SPIR-V, while captured GL work can carry MSL-shaped bytes;
-  wgpu then substitutes narrow built-in WGSL shaders when naga cannot consume that payload. This is workload
-  pattern matching, not general shader correctness.
 - Commit `592e65bf` makes compile/link status and logs truthful for malformed source and missing compiled stage pairs;
   that former red gate is now green. Its dependency-free validator is not full GLSL ES: production completeness still
   requires a real parser/compiler, interface and precision validation, translation artifacts, and a negative shader
@@ -1071,9 +1031,6 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 |---|---|---|---|
 | `vk_abi_manifest_contains_every_core_command_in_the_pinned_registry` | missing | ABI registry is 19 Vulkan 1.4 core commands behind pinned Khronos XML | Regenerate ABI/types, review signatures, normal + loader census green |
 | `vk_advertised_core_has_real_implementations_for_every_mandatory_command` | partial | truthful Vulkan 1.0 still has 55/137 mandatory generated failures/stubs | Implement all advertised core semantics and pass CTS subset |
-| `vk_wsi_validates_surface_handles_and_swapchain_create_info` | implemented | Shared capability validation rejects stale surfaces and incompatible swapchain requests atomically | Rust ABI negative create/query matrix green; retain as regression |
-| `vk_swapchain_tracks_image_ownership_timeouts_and_retirement` | implemented | Explicit image/swapchain states enforce ownership, timeout results, acquire sync, retirement and loss | Rust ABI multi-frame lifecycle regression green; retain as regression |
-| `vk_present_reports_failures_without_consuming_unsent_frame_state` | implemented | Present validates atomically, maps delivery errors, fills `pResults`, and commits waits/IR/ownership only on success | Rust ABI delivery-fault/retry regression green; retain as regression |
 | `vk_image_layout_barriers_track_subresources_and_queue_ownership` | partial | Legacy color-image barriers and render uses have atomic per-mip/layer state on the single queue; sync2, cross-queue and backend hazards remain | Extend the green Rust ABI lifecycle gate across aspects/queues and both backend barrier models |
 | `vk_transfer_commands_preserve_every_region_subresource_and_layout` | partial | Vulkan lowers validated 2D color buffer/image copies, image copies, forward blits and base clears with exact representable fields; resolve and broader dimensions remain | Extend the green ABI/software gates with rich buffer-texture origins/layers and distinct resolve across both hardware executors |
 | `vk_shader_modules_validate_spirv_entries_specialization_and_interfaces` | partial | Modules validate structure and retain entry/resource/IO/spec reflection; pipelines reject bad entry/spec/layout/interface combinations before allocation | Expand the green ABI corpus to full supported SPIR-V/type/descriptor/push-constant vocabulary and translation diagnostics |
@@ -1081,21 +1038,16 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `opt_in_gles3_has_real_implementations_for_every_mandatory_command` | partial | opt-in GLES3 has 112/246 mandatory stubs | Complete mandatory ES3 groups and relevant CTS |
 | `dmabuf_feedback_serializes_an_explicit_linux_u64_device_id` | partial | explicit Linux-u64 LE serialization and real-wire Rust/C mmap parsers are implemented; the macOS/guest runtime gates have not yet run on this host | Run the Rust recvmsg+mmap regression and C guest probe through the macOS compositor/engine, then retain both green |
 | `x11_only_gui_apps_have_an_xwayland_bridge` | missing | no XWayland/XWM/GLX compatibility path | Supervised XWayland journey with input/clipboard/rendering |
-| `gles_generated_names_binding_and_deletion_follow_object_lifetimes` | contradictory | generated names are prematurely live and deletion leaves stale bindings | Reserved/live generations with lazy bind and complete detachment tests |
-| `gles_shader_program_attachment_detach_and_delete_pending_are_consistent` | missing | shader attachments and deferred deletion are not modeled | Strong attachment sets, delete-pending ownership and query tests |
 | `gles_pixel_store_and_texture_upload_validation_is_atomic_and_checked` | partial | 2D byte uploads validate checked pack layout, bounds and immutable storage before mutation | Compressed/3D formats, full mip vocabulary and conversion table |
 | `gles_framebuffer_completeness_reflects_attachment_state_and_blocks_draws` | partial | color-only FBOs compute missing/undefined attachment status and block clear/draw; broader attachment vocabulary and read/blit guards remain | Depth/stencil/layer/sample compatibility plus read/blit negative matrix |
 | `gles_draw_calls_validate_all_inputs_before_snapshot_or_recording` | partial | core array/index draws validate program, FBO, enabled vertex ranges and index source atomically | Mapped state, negotiated limits and faithful instanced/base-vertex IR fields |
 | `gles_readpixels_validates_pack_layout_and_preserves_output_on_error` | partial | supported color reads validate checked pack layout/PBO bounds, synchronize, and preserve output on error | Default-framebuffer readback, conversions, mapped PBOs and raw client-size contract |
 | `gles_sync_objects_track_real_submission_completion_and_wait_results` | partial | typed sync handles track shim submission/completion serials with timeout, flush, query and stale-handle semantics | Cross-process accepted/completed acknowledgements and asynchronous Metal/wgpu/software parity |
 | `gles_query_objects_track_targets_availability_and_asynchronous_results` | missing | query names have no target lifecycle, readiness or backend result | Typed queries, resolve serials and negotiated backend query types |
-| `egl_query_context_rejects_destroyed_handles_without_mutating_output` | closed | display/context/attribute validation preserves outputs and returns typed EGL errors; live values reflect context state | Normal Rust ABI regression covers live/current/destroyed/release lifecycle |
-| `vulkan_shader_translation_failure_never_falls_back_to_builtin_rendering` | contradictory | Metal/wgpu silently replace failed Vulkan shaders with builtins | Tagged shader payloads and propagated compile/link failure |
 | `executor_reconnect_replays_complete_residency_or_reports_api_loss` | partial | shared transport replays a bounded ACKed residency journal once per new connection generation; capability changes or replay-budget overflow become typed GL/Vulkan loss | Add an external live executor-kill journey that checks recovered pixels plus bounded fd/cache growth; durable cross-process replay remains intentionally unsupported |
 | `executor_enforces_every_negotiated_limit_before_decoding_or_allocating` | partial | shared `ReplayLimits` rejects frame bytes before decode and validates negotiated buffer/texture/format/shader/bind-group/command limits before replay | Negotiate backend-specific alignment and compiled-cache limits instead of conservative fixed charges |
 | `executor_accounts_cumulative_residency_and_object_counts_per_connection` | partial | transactional connection/global budgets charge core resource ids and refund on destroy/disconnect; reconnect history has a separate hard cap | Charge compiled caches, surfaces/fences, external allocations and cross-process journal ownership; add concurrent live Metal-client stress |
 | `compositor_surface_teardown_reclaims_cpu_gpu_window_and_fence_state` | partial | Smithay surface and disconnect destruction now share idempotent CPU/cache/callback/window cleanup; client-owned executor resources and in-flight GPU fences still need ownership teardown | Add executor-owner reclamation and completion-fence retirement to the existing disconnect journey |
-| `compositor_surface_keys_include_client_identity_and_generation` | implemented | live surfaces use Wayland `ObjectId` (client + generation) to allocate monotonic presenter/cache ids; an ordinary two-client protocol test deliberately collides local ids and proves isolation | Keep `compositor_surface_identity_is_client_owned_generational_and_teardown_is_exact_once` green |
 | `compositor_enforces_per_client_render_resource_budgets` | partial | surfaces, callbacks, CPU repacks and mapped shm-pool bytes have checked per-client/global charge/refund; fd counts, imports, presenter objects and executor allocations remain uncharged | Extend owner tokens to remaining domains and add multi-domain isolation/rollback stress |
 | `compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use` | partial | generation-tagged uses give shm copy-complete exact-once release and retain zero-copy across failure; Metal has no actual GPU-completion token | Add presenter completion tokens and out-of-order zero-copy retirement tests |
 | `compositor_retains_presentation_feedback_across_retryable_failure_only` | contradictory | failed present retains callbacks for retry but immediately discards its feedback | Typed retry class with coupled callback/feedback/resource terminal policy |
@@ -1106,7 +1058,6 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `compositor_negotiates_surface_color_and_converts_to_the_target_output_profile` | missing | surface/presenter path carries no color description, output profile, or HDR policy | Color protocol plus linear composition and ICC/HDR output conversion fixtures |
 | `compositor_honors_input_and_opaque_regions_through_surface_transforms` | partial | committed input regions drive logical front-to-back child hit testing with holes/default/empty semantics and scene offsets; opaque regions do not alter pixels | Add conservative opaque-region occlusion/damage optimization and full transformed Wayland journey |
 | `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing` | partial | compositor state suppresses hidden presentation, bounds callback retry, discards unproven feedback, clears focus/popups/idle inhibition and repaints latest content on host reveal; Cocoa hooks lack live AppKit notification wiring | Implement native minimize/show and occlusion callbacks, then run protocol→host→reveal macOS journey |
-| `compositor_presentation_feedback_uses_one_backend_evidence_record_per_output_frame` | implemented | one immutable backend serial/timing/refresh/vsync record is shared across the paced tree; missing timing is discarded without invented evidence | Keep Cocoa completion and surface-output routing as their separate ledger rows |
 | `compositor_explicit_sync_waits_acquire_before_sampling_and_releases_after_gpu_completion` | missing | internal MTLEvent ordering is not a Wayland acquire/release fence contract | Explicit-sync/syncobj state plus Linux-fence↔MTLSharedEvent bridge journey |
 | `dmabuf_feedback_advertises_only_pairs_that_the_importer_can_accept` | partial | feedback now exposes only dd-tagged ARGB/XRGB pairs and rejects malformed/zero ids, but real IOSurface allocation generation and backing metadata are not represented | Share allocation-generation metadata with the importer and run positive/negative GPU-backed guest probes |
 | `compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success` | partial | shared caps enforce single-plane layout/flags/checked fd extent and exact live IOSurface width/height/row bytes/BGRA format; allocation generation is unavailable | Authenticate allocation generation and add stale-id C protocol regression |
