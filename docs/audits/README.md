@@ -50,6 +50,26 @@ confidence.
 - [`deep-runtime-frontends-wave-c-2026-07.md`](deep-runtime-frontends-wave-c-2026-07.md) and
   [`deep-runtime-frontends-wave-f-2026-07.md`](deep-runtime-frontends-wave-f-2026-07.md) — exact GUI symbols, dormant
   terminal hooks, scenario parser false-green paths, CI/package drift, and dependency/target verification.
+- [`jit-ab-fallback-flags-wave-g-2026-07.md`](jit-ab-fallback-flags-wave-g-2026-07.md),
+  [`jit-environment-wire-wave-j-2026-07.md`](jit-environment-wire-wave-j-2026-07.md),
+  [`jit-static-memory-hot-state-wave-m-2026-07.md`](jit-static-memory-hot-state-wave-m-2026-07.md),
+  [`jit-fd-thread-default-off-wave-p-2026-07.md`](jit-fd-thread-default-off-wave-p-2026-07.md), and
+  [`jit-linux-syscall-dispatch-wave-s-2026-07.md`](jit-linux-syscall-dispatch-wave-s-2026-07.md) — cache-key hazards,
+  environment/wire ownership, dense static state, default-off allocations, and one proven unreachable syscall handler.
+- [`render-stack-deep-audit-wave-h.md`](render-stack-deep-audit-wave-h.md),
+  [`render-stack-deep-audit-wave-k.md`](render-stack-deep-audit-wave-k.md), and
+  [`render-stack-deep-audit-wave-n.md`](render-stack-deep-audit-wave-n.md) — generated ABI surfaces, render memory
+  costs, safe internal cuts, and items that only look dead because they are loader- or frame-driven.
+- [`deep-runtime-frontends-wave-i-2026-07.md`](deep-runtime-frontends-wave-i-2026-07.md),
+  [`deep-runtime-tests-wave-l-2026-07.md`](deep-runtime-tests-wave-l-2026-07.md),
+  [`deep-http-frontends-wave-o-2026-07.md`](deep-http-frontends-wave-o-2026-07.md), and
+  [`deep-commentary-wave-t-2026-07.md`](deep-commentary-wave-t-2026-07.md) — runtime launch wires, exact test-only
+  debris, HTTP compatibility stubs versus fabricated behavior, and source commentary that can be removed safely.
+- [`deep-path-artifacts-wave-q-2026-07.md`](deep-path-artifacts-wave-q-2026-07.md) and
+  [`wayland-global-truthfulness-wave-r-2026-07.md`](wayland-global-truthfulness-wave-r-2026-07.md) — hard-coded host
+  paths, checked-in build artifacts, and Wayland globals classified as removable, incomplete, or required.
+- [`compositor-shared-mechanics-wave-v-2026-07.md`](compositor-shared-mechanics-wave-v-2026-07.md) — five exact
+  contracts that can be shared now without merging behavior-divergent compositor state machines.
 
 ## Small high-confidence cleanup
 
