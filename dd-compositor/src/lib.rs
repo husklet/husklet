@@ -322,6 +322,10 @@ pub struct DdState {
     pub(crate) idle_inhibitors: HashSet<u32>,
     /// Per-surface committed `wp_content_type` (sid → wire enum value: photo=1/video=2/game=3).
     pub(crate) content_types: HashMap<u32, u32>,
+    /// `zwp_linux_explicit_synchronization_v1` — per-surface acquire/release fence contract for GPU
+    /// clients (wait acquire before sampling, signal release after GPU completion). See
+    /// [`handlers::explicit_sync`].
+    pub(crate) explicit_sync: handlers::explicit_sync::ExplicitSyncState,
 
     pub seat: Seat<Self>,
     pub keyboard: KeyboardHandle<Self>,
@@ -620,6 +624,7 @@ impl DdState {
         let idle_inhibit = IdleInhibitManagerState::new::<Self>(&dh);
         // wp_content_type_manager_v1: per-surface photo/video/game hint; stored on commit (handlers::content_type).
         let content_type = ContentTypeState::new::<Self>(&dh);
+        let explicit_sync = handlers::explicit_sync::ExplicitSyncState::new(&dh);
         // zxdg_exporter_v2 + zxdg_importer_v2: cross-client toplevel parenting; Smithay issues real handles.
         let xdg_foreign = XdgForeignState::new::<Self>(&dh);
         // zwp_keyboard_shortcuts_inhibit_manager_v1: forward all keys; dd honours it (handlers::keyboard_shortcuts_inhibit).
@@ -684,6 +689,7 @@ impl DdState {
             keyboard_shortcuts_inhibit,
             idle_inhibitors: HashSet::new(),
             content_types: HashMap::new(),
+            explicit_sync,
             seat,
             keyboard,
             pointer,

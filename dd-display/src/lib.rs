@@ -7,6 +7,7 @@
 //! backend lives behind `present_cocoa` (compiled only on macOS) and reuses the same [`present::Presenter`]
 //! seam.
 
+pub mod explicit_sync_bridge;
 pub mod keymap;
 pub mod present;
 pub mod selftest;

@@ -21,6 +21,7 @@ pub mod xdg;
 // Each module supplies dd host policy (state + delegate below + handler/query methods) for a protocol
 // the vendored `third_party/smithay-0.7.0` already implements but dd-compositor did not previously compose.
 pub mod content_type;
+pub mod explicit_sync;
 pub mod idle_inhibit;
 pub mod keyboard_shortcuts_inhibit;
 pub mod pointer_gestures;
