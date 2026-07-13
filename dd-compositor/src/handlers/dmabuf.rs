@@ -79,6 +79,10 @@ impl DmabufHandler for DdState {
         let modifier: u64 = dmabuf.format().modifier.into();
         match dd_iosurface_from_modifier(modifier) {
             Some(_) => {
+                // Phase 6.2 health check: this is an accelerated client — it wants the host GPU to
+                // render/present its frames into a dd IOSurface. If no dd-gpu executor is running,
+                // FAIL VISIBLY (once) rather than accepting the buffer and letting it render white.
+                crate::gpu::warn_if_accel_client_without_executor();
                 let _ = notifier.successful::<DdState>();
             }
             None => notifier.failed(),

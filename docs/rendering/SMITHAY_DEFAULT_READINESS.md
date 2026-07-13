@@ -11,8 +11,11 @@ gaps are closed. **Live GTK4-on-Smithay ran here (Gap 5, 2026-07-12): gtk4-demo 
 GTK Demo window** — but only after fixing a pre-frame SIGSEGV caused by the unconditional dmabuf v4
 feedback global (commit `20174b15`, gate it behind `DD_DISPLAY_DMABUF` like legacy). Remaining before a
 full flip: (5) live **Chrome**-on-Smithay + the Cocoa/Metal (non-PngPresenter) present path are still
-un-run, and `DD_GPU_BACKEND=wgpu` is currently **inert** under `DD_DISPLAY_SMITHAY` (the dd-gpu executor
-is not wired into `dd-compositor` — see Gap 5). **`zwp_linux_dmabuf` v4 feedback (Gap 1)** stays available
+un-run. **`DD_GPU_BACKEND=wgpu` is no longer inert under `DD_DISPLAY_SMITHAY` (Phase 6.1–6.2, addressed):
+`dd-compositor` now starts the dd-gpu IR executor itself** (`dd_compositor::gpu::start`, before the
+compositor mode is selected) so both the default Metal executor and `DD_GPU_BACKEND=wgpu` are reachable
+on the Smithay path; a live accelerated-guest run remains as the closing evidence. **`zwp_linux_dmabuf`
+v4 feedback (Gap 1)** stays available
 **opt-in** (`DD_DISPLAY_DMABUF`); it must NOT be default-on until the guest-side format-table `mmap` is
 fixed (that fd is what crashed GTK).
 
@@ -234,15 +237,22 @@ change silently broke the un-gated compositor.
    **Still NOT exercised on Smithay:** the live NSWindow present/input loop (`main.rs::macos`) and the
    Cocoa/Metal presenter (this run used the portable `PngPresenter`); Chrome bring-up; input/cursor/menus.
 
-   **`DD_GPU_BACKEND=wgpu` was inert on this path — a real wiring gap.** `maybe_exec_smithay()` execs
-   `dd-compositor` at the *top* of `dd-display::main` (before the `run_executor` spawn at
-   `main.rs:~269`), and `dd-compositor` never spawns the dd-gpu IR executor itself — so under
-   `DD_DISPLAY_SMITHAY=1` the `DD_GPU_BACKEND` selection (`dd_gpu_wgpu::selected()` → `run_executor_wgpu`)
-   is **never reached**. Irrelevant for GTK4 (pure `wl_shm`/cairo software, no host GPU IR), so "GTK on
-   Smithay+wgpu" is really "GTK on Smithay"; but for an *accelerated* guest (GL/CUDA via dd-gpu) the
-   Smithay path currently has **no host GPU executor at all**. Wiring the dd-gpu executor (metal *or*
-   wgpu) into `dd-compositor` is a prerequisite before `DD_GPU_BACKEND=wgpu` can be a meaningful default
-   alongside `DD_DISPLAY_SMITHAY`.
+   **`DD_GPU_BACKEND=wgpu` was inert on this path — a real wiring gap, now ADDRESSED (Phase 6.1–6.2).**
+   `maybe_exec_smithay()` execs `dd-compositor` at the *top* of `dd-display::main` (before the
+   `run_executor` spawn at `main.rs:~269`), and `dd-compositor` used to never spawn the dd-gpu IR executor
+   itself — so under `DD_DISPLAY_SMITHAY=1` the `DD_GPU_BACKEND` selection (`dd_gpu_wgpu::selected()` →
+   `run_executor_wgpu`) was **never reached**, and an *accelerated* guest (GL/CUDA/Vulkan via dd-gpu) had
+   **no host GPU executor at all** on the Smithay path. **Fix:** `dd-compositor/src/gpu.rs`
+   (`gpu::start`, called from `dd-compositor::main` before the compositor mode is selected) starts the
+   IOSurface mach bridge + spawns `dd_display::metal_backend::run_executor`, which itself dispatches to
+   the wgpu backend when `dd_gpu_wgpu::selected()` — so BOTH the default Metal executor and
+   `DD_GPU_BACKEND=wgpu` are now reachable on the Smithay path, respecting the same selection as legacy.
+   Phase 6.2 health check: `handlers::dmabuf::dmabuf_imported` calls
+   `gpu::warn_if_accel_client_without_executor`, which logs a prominent once-only ERROR if an accelerated
+   client attaches a GPU buffer while no executor is running (e.g. on a platform with no host GPU) instead
+   of silently rendering white. All behind `DD_DISPLAY_SMITHAY`; no default flipped. **Remaining:** a live
+   accelerated-guest run (GLES/vkcube) on the Smithay path to confirm the executor serves IR end-to-end
+   (the code path is wired; the device-level render is the closing evidence).
 
    **Verdict (GTK): the Smithay compositor is ready to be the default for GTK4 software rendering** with
    commit `20174b15` in place (without it, it is a hard pre-frame crash). The wgpu *executor* is a
@@ -309,6 +319,30 @@ bespoke Metal replay. Both are single-env, no rebuild.
   `dd-compositor` dep, kept out of default-members). Verified: `cargo build` (Linux default-members)
   green offline; `make mac-crates` equivalent (build + `dd-compositor`/`dd-gpu-wgpu` tests) green on the
   macOS host.
+
+### Phase 6.1–6.2 pass — executor/compositor lifecycle (dd-gpu executor reachable on Smithay)
+- **`dd-compositor/src/gpu.rs`** (new): owns the dd-gpu IR executor lifecycle for the Smithay path.
+  `gpu::start(disp_socket)` (idempotent) starts the IOSurface mach bridge and spawns
+  `dd_display::metal_backend::run_executor`, which branches on `DD_GPU_BACKEND` internally
+  (`dd_gpu_wgpu::selected()` → wgpu, else default Metal replay). macOS-gated (the executor is a host-GPU
+  entry point); on non-macOS it logs "no host GPU … executor not started". Exposes `is_running()` +
+  `warn_if_accel_client_without_executor()` for the health check.
+- **`dd-compositor/src/main.rs`:** calls `dd_compositor::gpu::start(&socket)` right after resolving the
+  socket, **before** the compositor mode (native Cocoa/Metal vs headless `--png`) is selected, so both
+  paths get the executor (audit §9.4). Removed the now-redundant `metal::start_gpu_bridge()` from
+  `macos::run` (started once in `gpu::start`).
+- **`dd-compositor/src/handlers/dmabuf.rs`:** `dmabuf_imported` (the accelerated-client signal) calls
+  `gpu::warn_if_accel_client_without_executor()` — Phase 6.2: fail VISIBLY (prominent once-only ERROR) if
+  a GPU/IOSurface buffer arrives with no executor running, instead of silently rendering white.
+- **`dd-compositor/Cargo.toml`:** adds the `dd-gpu-wgpu` path dep for the `DD_GPU_BACKEND` single source
+  of truth (`dd_gpu_wgpu::selected()`); zero new compilation (dd-display already pulls it in).
+- **`dd-display/src/main.rs`:** doc-only — records that the exec-split's executor startup is now owned by
+  `dd_compositor::gpu::start` on the Smithay side (the exec no longer bypasses executor init).
+- Behind `DD_DISPLAY_SMITHAY`; **no default flipped.** Offline: `cargo check -p dd-compositor` +
+  `cargo test -p dd-gpu-wgpu` green on Linux (the non-macOS cfg path + wgpu crate); the dd-compositor
+  library compiles clean (only vendored-smithay warnings). `make mac-crates` (build + `dd-compositor`/
+  `dd-gpu-wgpu` tests) run on the macOS host via the bridge. Live accelerated-guest run on Smithay
+  (GLES/vkcube reaching the executor) is the remaining closing evidence.
 
 Explicitly NOT done (out of scope, per the task): flipping any default
 (`DD_DISPLAY_SMITHAY`/`DD_GPU_BACKEND`/`DD_DISPLAY_POPUP_WINDOWS`); any live Chrome/GTK-on-Smithay run

@@ -77,6 +77,10 @@ use smithay::{
     },
 };
 
+/// GPU IR executor lifecycle (Phase 6.1–6.2): starts the dd-gpu executor for the Smithay path so
+/// accelerated guests reach a host GPU backend, since the `DD_DISPLAY_SMITHAY=1` exec replaces
+/// `dd-display` before it would have started the executor itself.
+pub mod gpu;
 pub mod handlers;
 
 /// `wp_presentation` clock domain reported to the client. The `feedback.presented` timestamp is read

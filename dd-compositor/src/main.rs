@@ -42,6 +42,13 @@ fn main() {
 
     let socket = socket.unwrap_or_else(default_socket_path);
 
+    // Phase 6.1: start the dd-gpu IR executor BEFORE the compositor mode is selected, so BOTH the
+    // native Cocoa/Metal loop and the headless `--png` loop get it. The `DD_DISPLAY_SMITHAY=1` exec
+    // replaced `dd-display` before it could start the executor itself; without this call
+    // `DD_GPU_BACKEND=wgpu` and the default Metal executor are unreachable on the Smithay path and
+    // accelerated guests render white. Respects DD_GPU_BACKEND (the executor branches internally).
+    dd_compositor::gpu::start(&socket);
+
     // On macOS with no --png, run the native present/input loop. Otherwise the portable headless loop.
     #[cfg(target_os = "macos")]
     {
@@ -184,7 +191,9 @@ mod macos {
         app.activateIgnoringOtherApps(true);
 
         let presenter: Box<dyn Presenter> = if metal {
-            dd_display::metal::start_gpu_bridge();
+            // The IOSurface mach bridge + dd-gpu executor were already started in `main` (before the
+            // compositor mode was selected) via `dd_compositor::gpu::start`; do not re-register the
+            // mach service here.
             match MetalPresenter::new(mtm) {
                 Some(mp) => Box::new(mp),
                 None => {

@@ -29,6 +29,10 @@ smithay = { version = "0.7", default-features = false, features = ["wayland_fron
 # backend (present_cocoa/metal), and the XKB keymap. dd-display does NOT depend on dd-compositor, so
 # there is no cycle and the legacy path is unaffected.
 dd-display = { path = "../dd-display" }
+# Single source of truth for the `DD_GPU_BACKEND` selection (`dd_gpu_wgpu::selected()`), used to name
+# the host GPU backend when starting the executor. dd-display already depends on this crate, so it adds
+# no new compilation to `cargo build -p dd-compositor`.
+dd-gpu-wgpu = { path = "../dd-gpu-wgpu" }
 libc = "0.2"
 
 # The native present/input loop reuses the objc2 stack already locked in the workspace (via dd-gui /

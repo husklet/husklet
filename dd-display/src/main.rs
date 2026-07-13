@@ -404,6 +404,12 @@ fn set_nonblock(fd: RawFd) {
 /// land in the same `dd.app` bundle / `target/<profile>` dir). If it cannot be found or exec fails,
 /// we log and fall through to the legacy `server.rs` path so the display never silently dies. This is
 /// an exec, not a link dependency, so `dd-display` itself never pulls in smithay/libxkbcommon.
+///
+/// Phase 6.1: this exec replaces the process BEFORE the executor-startup wiring below (`run_executor`
+/// in the `--metal`/`--window` present paths) would have run. That startup is therefore duplicated on
+/// the Smithay side by `dd_compositor::gpu::start` (called from `dd-compositor`'s `main` before its
+/// compositor mode is selected), so `DD_GPU_BACKEND=wgpu` and the default Metal executor stay
+/// reachable and accelerated guests are not left without a host GPU backend.
 fn maybe_exec_smithay() {
     match std::env::var("DD_DISPLAY_SMITHAY").as_deref() {
         Ok("1") | Ok("true") | Ok("on") => {}

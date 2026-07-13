@@ -541,6 +541,7 @@ name = "dd-compositor"
 version = "0.1.0"
 dependencies = [
  "dd-display",
+ "dd-gpu-wgpu",
  "libc",
  "objc2",
  "objc2-app-kit",
