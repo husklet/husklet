@@ -104,9 +104,25 @@ pub(crate) const OUTPUT_REFRESH_MHZ: i64 = 60_000;
 const INITIAL_TOPLEVEL_SIZE: (i32, i32) = (1000, 700);
 
 /// Per-client data Smithay hands back on every request. `CompositorClientState` is mandatory.
+///
+/// `disconnect_sink` is the seam that makes the Smithay client-disconnect callback observable to the
+/// compositor: when the client's connection drops, [`ClientData::disconnected`] records the [`ClientId`]
+/// here so [`DdState::drain_client_disconnects`] can run [`DdState::drop_client_gpu_state`] and reclaim
+/// any client-owned executor allocations / in-flight GPU fences that were not tied to an individual
+/// surface. Clients created with [`ClientState::default`] get a private (detached) sink — every surface
+/// is still reclaimed individually through `CompositorHandler::destroyed` — so existing tests are
+/// unaffected; the runtime wires [`DdState::new_client_state`] to share the compositor's sink.
 #[derive(Default)]
 pub struct ClientState {
     pub compositor: CompositorClientState,
+    disconnect_sink: Arc<Mutex<Vec<ClientId>>>,
+}
+
+impl ClientState {
+    /// Build a `ClientState` whose disconnect events flow into the compositor's shared `sink`.
+    pub fn new(disconnect_sink: Arc<Mutex<Vec<ClientId>>>) -> ClientState {
+        ClientState { compositor: CompositorClientState::default(), disconnect_sink }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -119,6 +135,18 @@ pub struct RenderLimits {
     pub cpu_cache_bytes_global: usize,
     pub shm_pool_bytes_per_client: usize,
     pub shm_pool_bytes_global: usize,
+    /// dmabuf plane file descriptors held open on behalf of a client's accelerated buffers.
+    pub fds_per_client: usize,
+    pub fds_global: usize,
+    /// Accepted zero-copy dmabuf imports (each references a host IOSurface allocation).
+    pub dmabuf_imports_per_client: usize,
+    pub dmabuf_imports_global: usize,
+    /// Native presenter windows (one host NSWindow / IOSurface-backed target per mapped surface).
+    pub presenter_objects_per_client: usize,
+    pub presenter_objects_global: usize,
+    /// In-flight host-executor allocations (a GPU IOSurface use awaiting render/present completion).
+    pub executor_allocations_per_client: usize,
+    pub executor_allocations_global: usize,
 }
 
 impl Default for RenderLimits {
@@ -132,19 +160,105 @@ impl Default for RenderLimits {
             cpu_cache_bytes_global: 1024 * 1024 * 1024,
             shm_pool_bytes_per_client: 256 * 1024 * 1024,
             shm_pool_bytes_global: 1024 * 1024 * 1024,
+            fds_per_client: 4096,
+            fds_global: 32768,
+            dmabuf_imports_per_client: 1024,
+            dmabuf_imports_global: 8192,
+            presenter_objects_per_client: 1024,
+            presenter_objects_global: 8192,
+            executor_allocations_per_client: 1024,
+            executor_allocations_global: 8192,
         }
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct RenderUsage {
     surfaces: usize,
     retained_callbacks: usize,
     cpu_cache_bytes: usize,
+    /// dmabuf plane file descriptors currently charged to this client.
+    fds: usize,
+    /// Accepted zero-copy dmabuf imports currently charged to this client.
+    dmabuf_imports: usize,
+    /// Native presenter objects (host windows) currently charged to this client.
+    presenter_objects: usize,
+    /// In-flight host-executor allocations currently charged to this client.
+    executor_allocations: usize,
+}
+
+impl RenderUsage {
+    /// Whether every charged dimension is zero — the condition for dropping the per-client record.
+    fn is_empty(&self) -> bool {
+        self.surfaces == 0
+            && self.retained_callbacks == 0
+            && self.cpu_cache_bytes == 0
+            && self.fds == 0
+            && self.dmabuf_imports == 0
+            && self.presenter_objects == 0
+            && self.executor_allocations == 0
+    }
+}
+
+/// Public, totals-only snapshot of the per-client render-resource accounting. Ownership identities stay
+/// private; this reports the whole compositor's charged resources across every dimension the per-client
+/// [`RenderResourceQuota`] tracks, so a behavioral gate can prove that fds, dmabuf imports, presenter
+/// objects, and executor allocations are charged and refunded alongside surfaces/callbacks/cache bytes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderBudgetTotals {
+    pub surfaces: usize,
+    pub retained_callbacks: usize,
+    pub cpu_cache_bytes: usize,
+    pub fds: usize,
+    pub dmabuf_imports: usize,
+    pub presenter_objects: usize,
+    pub executor_allocations: usize,
+}
+
+/// The count-based render-resource dimensions charged with the shared atomic reserve/refund helpers
+/// ([`DdState::charge_budget`] / [`DdState::refund_budget`]). Surfaces, retained callbacks, CPU cache
+/// bytes, and shm-pool bytes keep their bespoke charge paths; these are the dimensions row 2's residual
+/// added (fds, dmabuf imports, presenter objects, executor allocations).
+#[derive(Clone, Copy, Debug)]
+enum BudgetDim {
+    Fds,
+    DmabufImports,
+    PresenterObjects,
+    ExecutorAllocations,
+}
+
+impl BudgetDim {
+    fn limits(self, l: &RenderLimits) -> (usize, usize) {
+        match self {
+            BudgetDim::Fds => (l.fds_per_client, l.fds_global),
+            BudgetDim::DmabufImports => (l.dmabuf_imports_per_client, l.dmabuf_imports_global),
+            BudgetDim::PresenterObjects => {
+                (l.presenter_objects_per_client, l.presenter_objects_global)
+            }
+            BudgetDim::ExecutorAllocations => {
+                (l.executor_allocations_per_client, l.executor_allocations_global)
+            }
+        }
+    }
+    fn slot(self, u: &mut RenderUsage) -> &mut usize {
+        match self {
+            BudgetDim::Fds => &mut u.fds,
+            BudgetDim::DmabufImports => &mut u.dmabuf_imports,
+            BudgetDim::PresenterObjects => &mut u.presenter_objects,
+            BudgetDim::ExecutorAllocations => &mut u.executor_allocations,
+        }
+    }
 }
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+    /// The client's connection dropped. Record its id so the compositor can reclaim any client-owned
+    /// GPU/executor state on the next drain (per-surface state is also reclaimed through
+    /// `CompositorHandler::destroyed`). Never panics on a poisoned lock — a disconnect must not abort.
+    fn disconnected(&self, client_id: ClientId, _reason: DisconnectReason) {
+        if let Ok(mut sink) = self.disconnect_sink.lock() {
+            sink.push(client_id);
+        }
+    }
 }
 
 /// Aggregate compositor protocol state — the Smithay equivalent of `server.rs`'s `Server<P>` struct.
@@ -265,6 +379,10 @@ pub struct DdState {
     pub(crate) dirty: HashSet<u32>,
     /// Toplevel visibility keyed by render-root sid. Absence means visible.
     pub(crate) visibility: HashMap<u32, dd_display::present::SurfaceVisibility>,
+    /// Toplevels the compositor has made fullscreen (by sid), tracked as compositor intent independent of
+    /// the client's ack timing. Drives the output-hotplug reconfigure: a fullscreen toplevel whose output
+    /// is unplugged is re-configured at the fallback output's size. Cleared on unset_fullscreen/teardown.
+    pub(crate) fullscreen_surfaces: HashSet<u32>,
     /// The active `xdg_popup` grab chain (outer→inner). A popup created with `xdg_popup.grab` is dismissed
     /// (with `popup_done`) together with its whole submenu chain when the user clicks outside it; the
     /// input/present loop drives that via [`DdState::dismiss_popup_grabs`]. Tooltips (mapped without a
@@ -313,14 +431,41 @@ pub struct DdState {
     next_surface_id: u32,
     presenter_windows: HashSet<u32>,
     surface_owners: HashMap<u32, ClientId>,
+    /// Client charged a presenter-object (native window) budget unit for surface `sid`, so the charge can
+    /// be refunded on `drop_window` even after the surface's protocol object / owner record is gone.
+    presenter_object_charges: HashMap<u32, ClientId>,
     surface_resources: HashMap<u32, WlSurface>,
     render_usage: HashMap<ClientId, RenderUsage>,
     global_render_usage: RenderUsage,
     render_limits: RenderLimits,
     shm_budget: Arc<Mutex<ShmBudgetLedger>>,
     surface_buffer_uses: HashMap<u32, BufferUse>,
-    retired_zero_copy_uses: Vec<BufferUse>,
+    /// Zero-copy (IOSurface/dmabuf) buffer uses that were PRESENTED and are awaiting host-GPU/present
+    /// completion before their `wl_buffer` may be released. Each carries the presenter completion serial
+    /// (`completion_serial`) it was submitted under; [`DdState::retire_completed_buffer_uses`] releases
+    /// every use whose serial the presenter reports complete — possibly out of submission order.
+    inflight_zero_copy: Vec<BufferUse>,
     next_buffer_use_generation: u64,
+    /// In-flight GPU fence state per surface: the host-executor allocation + presenter completion serial
+    /// a zero-copy surface currently depends on. Reclaimed by [`DdState::fence_drop`] on teardown so a
+    /// destroyed surface / disconnected client never leaks a cross-queue fence or executor allocation.
+    surface_fences: HashMap<u32, GpuFence>,
+    /// Shared sink the per-client [`ClientState::disconnected`] callback pushes disconnected client ids
+    /// into; drained by [`DdState::drain_client_disconnects`].
+    client_disconnects: Arc<Mutex<Vec<ClientId>>>,
+}
+
+/// The in-flight GPU synchronization a zero-copy surface owns while its host-executor render/present is
+/// outstanding: the executor allocation charged for it and the presenter completion serial that must
+/// signal before the fence is safe to drop. This is the compositor-side half of the acquire/release
+/// fence contract — a real Linux-syncobj/`MTLSharedEvent` bridge is a separate ledger row, but the
+/// lifetime tracked here is what teardown must reclaim so a fence/allocation never outlives its surface.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GpuFence {
+    /// Buffer-use generation this fence guards (links the fence to the exact zero-copy [`BufferUse`]).
+    generation: u64,
+    /// Presenter completion serial this surface's outstanding GPU work was submitted under, if presented.
+    completion_serial: Option<u64>,
 }
 
 #[derive(Default)]
@@ -383,6 +528,21 @@ pub(crate) struct BufferUse {
     pub generation: u64,
     pub kind: BufferUseKind,
     released: bool,
+    /// Surface this use belongs to (so a use retired from the in-flight queue can drop its fence).
+    sid: u32,
+    /// Owning client, retained so zero-copy resource charges (import/fds/executor) can be refunded even
+    /// after the surface's protocol object is gone.
+    owner: Option<ClientId>,
+    /// dmabuf plane fds charged for this zero-copy use (refunded exactly on release).
+    fds_charged: usize,
+    /// Whether a dmabuf-import charge is held for this use (refunded exactly on release).
+    charged_import: bool,
+    /// Whether a host-executor-allocation charge is held for this use (refunded exactly on release).
+    charged_executor: bool,
+    /// Presenter completion serial this zero-copy use was submitted under; `None` until it is presented.
+    /// A zero-copy `wl_buffer` is released only once the presenter reports this serial complete
+    /// (`release_after_present`), never merely because `present()` returned (`retain_buffer` until then).
+    completion_serial: Option<u64>,
 }
 
 impl DdState {
@@ -542,6 +702,7 @@ impl DdState {
             repacks: HashMap::new(),
             dirty: HashSet::new(),
             visibility: HashMap::new(),
+            fullscreen_surfaces: HashSet::new(),
             popup_grabs: Vec::new(),
             last_cfg: None,
             start: Instant::now(),
@@ -556,14 +717,17 @@ impl DdState {
             next_surface_id: 1,
             presenter_windows: HashSet::new(),
             surface_owners: HashMap::new(),
+            presenter_object_charges: HashMap::new(),
             surface_resources: HashMap::new(),
             render_usage: HashMap::new(),
             global_render_usage: RenderUsage::default(),
             render_limits,
             shm_budget: Arc::new(Mutex::new(ShmBudgetLedger::default())),
             surface_buffer_uses: HashMap::new(),
-            retired_zero_copy_uses: Vec::new(),
+            inflight_zero_copy: Vec::new(),
             next_buffer_use_generation: 1,
+            surface_fences: HashMap::new(),
+            client_disconnects: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -612,8 +776,12 @@ impl DdState {
         let Some(sid) = self.surface_ids.remove(&surface.id()) else {
             return;
         };
+        // Reclaim the surface's in-flight GPU fence + zero-copy executor allocation (refunding the
+        // import/fd/executor charges) BEFORE `release_surface_resources` drops the owner record those
+        // refunds are keyed on. This closes the row-1 residual: surface destruction reclaims client-owned
+        // executor resources and in-flight GPU fences, not just the CPU/cache/callback/window state.
+        self.fence_drop(sid);
         self.release_surface_resources(sid);
-        self.retire_buffer_use(sid);
         self.surface_resources.remove(&sid);
         if let Some(output) = self.surface_outputs.remove(&sid) {
             output.leave(surface);
@@ -622,6 +790,7 @@ impl DdState {
         self.repacks.remove(&sid);
         self.dirty.remove(&sid);
         self.visibility.remove(&sid);
+        self.fullscreen_surfaces.remove(&sid);
         self.titles.remove(&sid);
         self.retained_callbacks.remove(&sid);
         if let Some(feedback) = self.retained_feedback.remove(&sid) {
@@ -642,8 +811,115 @@ impl DdState {
     }
 
     pub(crate) fn drop_surface_window(&mut self, sid: u32) {
+        // Refund the presenter-object (native window) budget unit charged when the window was created.
+        if let Some(owner) = self.presenter_object_charges.remove(&sid) {
+            self.refund_budget(&owner, BudgetDim::PresenterObjects, 1);
+        }
         if self.presenter_windows.remove(&sid) {
             self.presenter.drop_window(sid);
+        }
+    }
+
+    /// Charge one presenter-object (native window) budget unit for surface `sid` the first time it is
+    /// presented into a host window. Idempotent per surface (a re-present does not re-charge). Best-effort:
+    /// on quota exhaustion the client is disconnected, exactly like the surface/callback/cache paths.
+    pub(crate) fn charge_presenter_window(&mut self, sid: u32) {
+        if self.presenter_object_charges.contains_key(&sid) {
+            return;
+        }
+        let Some(owner) = self.surface_owners.get(&sid).cloned() else { return; };
+        if self.charge_budget(&owner, BudgetDim::PresenterObjects, 1) {
+            self.presenter_object_charges.insert(sid, owner);
+        } else {
+            self.reject_budget_exhaustion(sid, "presenter window");
+        }
+    }
+
+    /// Atomically reserve `n` units of a count-based render-resource dimension against BOTH the per-client
+    /// and global limits, or reserve nothing and return `false`. The single reserve path for fds, dmabuf
+    /// imports, presenter objects, and executor allocations (`try_reserve` semantics).
+    fn charge_budget(&mut self, owner: &ClientId, dim: BudgetDim, n: usize) -> bool {
+        if n == 0 {
+            return true;
+        }
+        let (per_client_limit, global_limit) = dim.limits(&self.render_limits);
+        let cur_client = {
+            let usage = self.render_usage.entry(owner.clone()).or_default();
+            *dim.slot(usage)
+        };
+        let client_next = match cur_client.checked_add(n) {
+            Some(v) if v <= per_client_limit => v,
+            _ => return false,
+        };
+        let cur_global = *dim.slot(&mut self.global_render_usage);
+        let global_next = match cur_global.checked_add(n) {
+            Some(v) if v <= global_limit => v,
+            _ => return false,
+        };
+        *dim.slot(self.render_usage.get_mut(owner).unwrap()) = client_next;
+        *dim.slot(&mut self.global_render_usage) = global_next;
+        true
+    }
+
+    /// Refund `n` units of a count-based render-resource dimension (the `release` half of the atomic
+    /// reserve). Drops the per-client record once every dimension returns to zero.
+    fn refund_budget(&mut self, owner: &ClientId, dim: BudgetDim, n: usize) {
+        if n == 0 {
+            return;
+        }
+        if let Some(usage) = self.render_usage.get_mut(owner) {
+            let slot = dim.slot(usage);
+            *slot = slot.checked_sub(n).expect("per-client budget refund underflow");
+            if usage.is_empty() {
+                self.render_usage.remove(owner);
+            }
+        }
+        let slot = dim.slot(&mut self.global_render_usage);
+        *slot = slot.checked_sub(n).expect("global budget refund underflow");
+    }
+
+    /// Wire the per-client [`ClientState`] to this compositor's shared disconnect sink so a dropped
+    /// connection reaches [`Self::drain_client_disconnects`]. The runtime uses this in place of
+    /// `ClientState::default()` when accepting a client.
+    pub fn new_client_state(&self) -> ClientState {
+        ClientState::new(self.client_disconnects.clone())
+    }
+
+    /// Reclaim GPU/executor state for every client whose connection dropped since the last drain. Called
+    /// from the runtime dispatch loop. Per-surface state is also reclaimed through `destroyed`; this
+    /// guarantees any client-owned executor allocation / in-flight fence is released even if a surface
+    /// destroy did not arrive first.
+    pub fn drain_client_disconnects(&mut self) {
+        let ids: Vec<ClientId> = {
+            let mut sink = self.client_disconnects.lock().unwrap();
+            std::mem::take(&mut *sink)
+        };
+        for id in ids {
+            self.drop_client_gpu_state(&id);
+        }
+    }
+
+    /// Reclaim every surface's in-flight GPU fence and outstanding zero-copy executor allocation for a
+    /// disconnected client. Idempotent — a surface already torn down via `destroyed` contributes nothing.
+    pub(crate) fn drop_client_gpu_state(&mut self, client: &ClientId) {
+        let sids: Vec<u32> = self
+            .surface_owners
+            .iter()
+            .filter(|(_, owner)| *owner == client)
+            .map(|(sid, _)| *sid)
+            .collect();
+        for sid in sids {
+            self.fence_drop(sid);
+        }
+        // Any in-flight zero-copy use whose owner is this client but whose surface record is already gone.
+        let mut i = 0;
+        while i < self.inflight_zero_copy.len() {
+            if self.inflight_zero_copy[i].owner.as_ref() == Some(client) {
+                let use_ = self.inflight_zero_copy.remove(i);
+                self.release_buffer_use(use_);
+            } else {
+                i += 1;
+            }
         }
     }
 
@@ -654,20 +930,125 @@ impl DdState {
             .next_buffer_use_generation
             .checked_add(1)
             .expect("buffer-use generation exhausted");
+        let owner = self.surface_owners.get(&sid).cloned();
+        let (fds_charged, charged_import, charged_executor) = if kind == BufferUseKind::ZeroCopy {
+            // A zero-copy commit takes a real host-executor allocation (the IOSurface the guest asked the
+            // host GPU to render/present into) and holds the dmabuf's plane fds open. Charge all three to
+            // the owning client so accelerated buffers count against the per-client render budget, and
+            // register the in-flight GPU fence this surface now depends on.
+            let planes = smithay::wayland::dmabuf::get_dmabuf(&buffer)
+                .map(|d| d.num_planes())
+                .unwrap_or(0);
+            let (mut fds, mut import, mut exec) = (0usize, false, false);
+            if let Some(owner) = owner.as_ref() {
+                if self.charge_budget(owner, BudgetDim::DmabufImports, 1) {
+                    import = true;
+                }
+                if self.charge_budget(owner, BudgetDim::Fds, planes) {
+                    fds = planes;
+                }
+                if self.charge_budget(owner, BudgetDim::ExecutorAllocations, 1) {
+                    exec = true;
+                }
+            }
+            self.surface_fences.insert(sid, GpuFence { generation, completion_serial: None });
+            (fds, import, exec)
+        } else {
+            (0, false, false)
+        };
         self.surface_buffer_uses.insert(
             sid,
-            BufferUse { buffer, generation, kind, released: false },
+            BufferUse {
+                buffer,
+                generation,
+                kind,
+                released: false,
+                sid,
+                owner,
+                fds_charged,
+                charged_import,
+                charged_executor,
+                completion_serial: None,
+            },
         );
     }
 
+    /// Release a `wl_buffer` after its pixels have been safely copied (shm) — the exact completion point
+    /// for a CPU buffer. Zero-copy buffers are NOT released here (their GPU use is still outstanding); see
+    /// [`Self::submit_zero_copy_use`] / [`Self::retire_completed_buffer_uses`].
     pub(crate) fn complete_buffer_use(&mut self, sid: u32) {
         let Some(use_) = self.surface_buffer_uses.get_mut(&sid) else {
             return;
         };
         debug_assert!(use_.generation > 0);
+        if use_.kind == BufferUseKind::ShmCopy && !use_.released {
+            use_.buffer.release();
+            use_.released = true;
+        }
+    }
+
+    /// A zero-copy surface's tree just reached the screen under presenter completion serial `serial`. Move
+    /// its active use out of the live slot and into the in-flight queue, tagged with the serial that must
+    /// signal (`release_after_present`) before the buffer may be released. The buffer is RETAINED
+    /// (`retain_buffer`) until then — a present() return is not GPU completion.
+    pub(crate) fn submit_zero_copy_use(&mut self, sid: u32, serial: u64) {
+        let Some(use_) = self.surface_buffer_uses.get(&sid) else { return; };
+        if use_.kind != BufferUseKind::ZeroCopy || use_.released {
+            return;
+        }
+        let mut use_ = self.surface_buffer_uses.remove(&sid).unwrap();
+        use_.completion_serial = Some(serial);
+        if let Some(fence) = self.surface_fences.get_mut(&sid) {
+            if fence.generation == use_.generation {
+                fence.completion_serial = Some(serial);
+            }
+        }
+        self.inflight_zero_copy.push(use_);
+    }
+
+    /// Release every in-flight zero-copy buffer whose presenter completion serial appears in `completed`.
+    /// Retirement is by serial membership, NOT submission order, so out-of-order GPU/present completion
+    /// releases exactly the right buffers (a later-submitted frame whose GPU work finishes first is
+    /// retired first, while an earlier still-pending frame keeps its buffer).
+    pub fn retire_completed_buffer_uses(&mut self, completed: &[u64]) {
+        let mut i = 0;
+        while i < self.inflight_zero_copy.len() {
+            let done = matches!(
+                self.inflight_zero_copy[i].completion_serial,
+                Some(s) if completed.contains(&s)
+            );
+            if done {
+                let use_ = self.inflight_zero_copy.remove(i);
+                self.release_buffer_use(use_);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Release a buffer use's `wl_buffer` (if not already) and refund every resource charge it held. The
+    /// single retirement point for both the live and in-flight paths so a charge is refunded exactly once.
+    fn release_buffer_use(&mut self, mut use_: BufferUse) {
+        debug_assert!(use_.generation > 0);
         if !use_.released {
             use_.buffer.release();
             use_.released = true;
+        }
+        if let Some(owner) = use_.owner.clone() {
+            if use_.charged_import {
+                self.refund_budget(&owner, BudgetDim::DmabufImports, 1);
+            }
+            if use_.fds_charged > 0 {
+                self.refund_budget(&owner, BudgetDim::Fds, use_.fds_charged);
+            }
+            if use_.charged_executor {
+                self.refund_budget(&owner, BudgetDim::ExecutorAllocations, 1);
+            }
+        }
+        if let Some(fence) = self.surface_fences.get(&use_.sid) {
+            if fence.generation == use_.generation {
+                self.surface_fences.remove(&use_.sid);
+            }
         }
     }
 
@@ -675,23 +1056,50 @@ impl DdState {
         let Some(use_) = self.surface_buffer_uses.remove(&sid) else {
             return;
         };
-        debug_assert!(use_.generation > 0);
-        if !use_.released {
-            if use_.kind == BufferUseKind::ShmCopy {
-                use_.buffer.release();
+        // A shm use whose pixels were already copied is released; a zero-copy use being replaced/detached
+        // before it was ever presented never reached the host GPU under a completion serial, so releasing
+        // it now is safe (a new buffer supersedes it). Charges are refunded exactly once here.
+        self.release_buffer_use(use_);
+    }
+
+    /// Reclaim a surface's in-flight GPU fence + any outstanding zero-copy executor allocation: retire its
+    /// live use and drain every in-flight use it still owns. Called on surface teardown and client
+    /// disconnect so a destroyed surface never leaves a cross-queue fence or executor allocation live.
+    pub(crate) fn fence_drop(&mut self, sid: u32) {
+        self.surface_fences.remove(&sid);
+        self.retire_buffer_use(sid);
+        let mut i = 0;
+        while i < self.inflight_zero_copy.len() {
+            if self.inflight_zero_copy[i].sid == sid {
+                let use_ = self.inflight_zero_copy.remove(i);
+                self.release_buffer_use(use_);
             } else {
-                // The Presenter ABI has no completion fence for a failed/scheduled zero-copy use. Keep
-                // the proxy alive rather than issuing a premature release; a future completion-token
-                // extension will retire this queue in serial order.
-                self.retired_zero_copy_uses.push(use_);
-                return;
+                i += 1;
             }
         }
     }
 
     pub(crate) fn forget_destroyed_buffer(&mut self, buffer: &WlBuffer) {
-        self.surface_buffer_uses.retain(|_, use_| use_.buffer != *buffer);
-        self.retired_zero_copy_uses.retain(|use_| use_.buffer != *buffer);
+        let live: Vec<u32> = self
+            .surface_buffer_uses
+            .iter()
+            .filter(|(_, use_)| use_.buffer == *buffer)
+            .map(|(sid, _)| *sid)
+            .collect();
+        for sid in live {
+            if let Some(use_) = self.surface_buffer_uses.remove(&sid) {
+                self.release_buffer_use(use_);
+            }
+        }
+        let mut i = 0;
+        while i < self.inflight_zero_copy.len() {
+            if self.inflight_zero_copy[i].buffer == *buffer {
+                let use_ = self.inflight_zero_copy.remove(i);
+                self.release_buffer_use(use_);
+            } else {
+                i += 1;
+            }
+        }
         self.buffers.retain(|_, live| live != buffer);
     }
 
@@ -723,7 +1131,7 @@ impl DdState {
                 .retained_callbacks
                 .checked_sub(callbacks)
                 .expect("callback charge underflow");
-            usage.surfaces == 0 && usage.cpu_cache_bytes == 0 && usage.retained_callbacks == 0
+            usage.is_empty()
         } else {
             false
         };
@@ -847,6 +1255,30 @@ impl DdState {
         )
     }
 
+    /// Totals-only snapshot across EVERY charged render-resource dimension — surfaces, retained
+    /// callbacks, CPU cache bytes, plus the row-2 residual dimensions (fds, dmabuf imports, presenter
+    /// objects, executor allocations). Ownership identities stay private.
+    #[doc(hidden)]
+    pub fn render_budget_totals(&self) -> RenderBudgetTotals {
+        RenderBudgetTotals {
+            surfaces: self.global_render_usage.surfaces,
+            retained_callbacks: self.global_render_usage.retained_callbacks,
+            cpu_cache_bytes: self.global_render_usage.cpu_cache_bytes,
+            fds: self.global_render_usage.fds,
+            dmabuf_imports: self.global_render_usage.dmabuf_imports,
+            presenter_objects: self.global_render_usage.presenter_objects,
+            executor_allocations: self.global_render_usage.executor_allocations,
+        }
+    }
+
+    /// Poll the presenter for completed present serials, then retire every in-flight zero-copy buffer use
+    /// whose GPU/present work has completed. The runtime calls this each dispatch tick so a zero-copy
+    /// `wl_buffer` is released promptly once — and only once — its last GPU use finishes.
+    pub fn retire_completed_presents(&mut self) {
+        let completed = self.presenter.completed_present_serials();
+        self.retire_completed_buffer_uses(&completed);
+    }
+
     pub(crate) fn reserve_shm_pool(
         &self,
         owner: &ClientId,
@@ -932,5 +1364,229 @@ impl DdState {
         // The primary (middle-click) selection follows keyboard focus exactly as the clipboard does, so the
         // focused client is the one offered the current primary selection and allowed to set it.
         set_primary_focus(&dh, &seat, client);
+    }
+}
+
+#[cfg(test)]
+mod zero_copy_release_tests {
+    //! ROW 3 proof (`compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use`) plus the zero-copy
+    //! half of ROW 1/2: a zero-copy buffer's `wl_buffer` is released ONLY once the presenter reports its
+    //! GPU/present completion serial, completion is honoured OUT OF ORDER, the executor/import charges
+    //! refund exactly on release, and a surface teardown / client disconnect reclaims a still-in-flight
+    //! GPU fence. The `zwp_linux_dmabuf` SCM_RIGHTS import wire is unusable on this Linux dev host (the
+    //! pre-existing `dmabuf_present` gate is red on the same path), so this drives the identical public
+    //! zero-copy [`BufferUse`] lifecycle with a committed `wl_shm` buffer re-tagged as `ZeroCopy` — the
+    //! same charge/submit/retire code the real dmabuf commit path runs, minus the untestable fd import.
+
+    use super::*;
+    use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
+    use dd_display::wire::{Conn, Message};
+    use smithay::reexports::wayland_server::Display;
+    use std::os::unix::io::{FromRawFd, RawFd};
+
+    struct NullPresenter;
+    impl Presenter for NullPresenter {
+        fn present(&mut self, _surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
+            Ok(PresentOutcome::Delivered { serial: 1, timing: None })
+        }
+    }
+
+    fn socketpair() -> (RawFd, RawFd) {
+        let mut sv = [0i32; 2];
+        assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) }, 0);
+        for fd in sv {
+            unsafe {
+                let fl = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
+            }
+        }
+        (sv[0], sv[1])
+    }
+
+    struct Cli {
+        conn: Conn,
+        next: u32,
+        globals: HashMap<String, u32>,
+        releases: HashMap<u32, usize>,
+        events: Vec<(u32, u16, Vec<u8>)>,
+    }
+    impl Cli {
+        fn new(fd: RawFd) -> Cli {
+            Cli { conn: Conn::new(fd), next: 2, globals: HashMap::new(), releases: HashMap::new(), events: Vec::new() }
+        }
+        fn alloc(&mut self) -> u32 {
+            let id = self.next;
+            self.next += 1;
+            id
+        }
+        fn drain(&mut self) {
+            loop {
+                match self.conn.fill() {
+                    Ok(0) | Ok(-1) | Err(_) => break,
+                    _ => {}
+                }
+            }
+            while let Some(m) = self.conn.next_message() {
+                self.events.push((m.object, m.opcode, m.body.to_vec()));
+                if m.object == 2 && m.opcode == 0 {
+                    let mut r = m.reader();
+                    let name = r.u32();
+                    let iface = r.string();
+                    let _ = r.u32();
+                    self.globals.entry(iface).or_insert(name);
+                } else if m.opcode == 0 {
+                    // wl_buffer.release is opcode 0 on the buffer object.
+                    *self.releases.entry(m.object).or_default() += 1;
+                }
+            }
+        }
+        fn bind(&mut self, iface: &str, ver: u32) -> u32 {
+            let id = self.alloc();
+            let name = self.globals[iface];
+            self.conn.send(&Message::new(2, 0).u32(name).string(iface).u32(ver).u32(id));
+            id
+        }
+        fn releases(&mut self, buffer: u32) -> usize {
+            self.drain();
+            self.releases.get(&buffer).copied().unwrap_or(0)
+        }
+        /// Latest `xdg_surface.configure(serial)` (opcode 0 on `xdg`).
+        fn xdg_configure_serial(&self, xdg: u32) -> Option<u32> {
+            self.events.iter().rev().find(|(o, op, _)| *o == xdg && *op == 0)
+                .map(|(_, _, b)| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+        }
+    }
+
+    /// Map a toplevel (the proven present path — a roleless surface commit is rejected on this host) and
+    /// commit an shm buffer, so the server registers the surface and retains its `WlBuffer`. Returns the
+    /// client buffer id.
+    fn map_and_commit(
+        c: &mut Cli,
+        display: &mut Display<DdState>,
+        state: &mut DdState,
+        comp: u32,
+        shm: u32,
+        wm: u32,
+    ) -> u32 {
+        fn drive(c: &mut Cli, display: &mut Display<DdState>, state: &mut DdState) {
+            c.conn.flush().unwrap();
+            display.dispatch_clients(state).unwrap();
+            display.flush_clients().unwrap();
+            c.drain();
+        }
+        let surf = c.alloc();
+        c.conn.send(&Message::new(comp, 0).u32(surf)); // create_surface
+        let xdg = c.alloc();
+        c.conn.send(&Message::new(wm, 2).u32(xdg).u32(surf)); // get_xdg_surface
+        let top = c.alloc();
+        c.conn.send(&Message::new(xdg, 1).u32(top)); // get_toplevel
+        c.conn.send(&Message::new(surf, 6)); // commit -> configure
+        drive(c, display, state);
+        let serial = c.xdg_configure_serial(xdg).expect("configure serial");
+        c.conn.send(&Message::new(xdg, 4).u32(serial)); // ack_configure
+        drive(c, display, state);
+        let (w, h) = (8i32, 8i32);
+        let stride = w * 4;
+        let size = (stride * h) as usize;
+        let fd = dd_display::keymap::anon_fd_with(&vec![0x20u8; size]).unwrap();
+        let pool = c.alloc();
+        c.conn.send(&Message::new(shm, 0).u32(pool).u32(size as u32)); // create_pool
+        c.conn.queue_fd(fd);
+        let buffer = c.alloc();
+        c.conn.send(&Message::new(pool, 0).u32(buffer).i32(0).i32(w).i32(h).i32(stride).u32(1)); // create_buffer
+        c.conn.send(&Message::new(surf, 1).u32(buffer).i32(0).i32(0)); // attach
+        c.conn.send(&Message::new(surf, 2).i32(0).i32(0).i32(w).i32(h)); // damage
+        c.conn.send(&Message::new(surf, 6)); // commit -> present
+        drive(c, display, state);
+        unsafe { libc::close(fd) };
+        buffer
+    }
+
+    #[test]
+    fn zero_copy_buffers_release_only_on_out_of_order_gpu_completion_and_reclaim_on_teardown() {
+        let mut display: Display<DdState> = Display::new().unwrap();
+        let mut dh = display.handle();
+        let mut state = DdState::new(dh.clone(), Box::new(NullPresenter));
+        let (cfd, sfd) = socketpair();
+        dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(sfd) }, Arc::new(state.new_client_state())).unwrap();
+        let mut c = Cli::new(cfd);
+        macro_rules! pump {
+            () => {{
+                c.conn.flush().unwrap();
+                display.dispatch_clients(&mut state).unwrap();
+                display.flush_clients().unwrap();
+                c.drain();
+            }};
+        }
+        let reg = c.alloc();
+        c.conn.send(&Message::new(1, 1).u32(reg));
+        pump!();
+        let comp = c.bind("wl_compositor", 4);
+        let shm = c.bind("wl_shm", 1);
+        let wm = c.bind("xdg_wm_base", 1);
+        pump!();
+
+        // Two toplevels (sid 1, sid 2), each with a committed shm buffer the server now retains.
+        let buf1 = map_and_commit(&mut c, &mut display, &mut state, comp, shm, wm);
+        pump!();
+        let buf2 = map_and_commit(&mut c, &mut display, &mut state, comp, shm, wm);
+        pump!();
+        // The shm-copy path released each buffer once already (exact copy completion). Record that base.
+        let base1 = c.releases(buf1);
+        let base2 = c.releases(buf2);
+        assert_eq!((base1, base2), (1, 1), "shm copy completion releases each buffer exactly once");
+
+        let wl1 = state.buffers.get(&1).cloned().expect("surface 1 buffer retained");
+        let wl2 = state.buffers.get(&2).cloned().expect("surface 2 buffer retained");
+
+        // Re-tag both as zero-copy uses and submit them under present serials 1 and 2 (the exact
+        // begin/submit the real dmabuf commit path runs). Nothing is released yet (no completion reported).
+        state.begin_buffer_use(1, wl1, BufferUseKind::ZeroCopy);
+        state.submit_zero_copy_use(1, 1);
+        state.begin_buffer_use(2, wl2, BufferUseKind::ZeroCopy);
+        state.submit_zero_copy_use(2, 2);
+        let totals = state.render_budget_totals();
+        assert_eq!(totals.dmabuf_imports, 2, "two zero-copy imports charged");
+        assert_eq!(totals.executor_allocations, 2, "two in-flight executor allocations charged");
+        pump!();
+        assert_eq!(c.releases(buf1) - base1, 0, "buffer 1 held until its GPU serial completes");
+        assert_eq!(c.releases(buf2) - base2, 0, "buffer 2 held until its GPU serial completes");
+
+        // OUT-OF-ORDER completion: serial 2 (submitted second) completes FIRST.
+        state.retire_completed_buffer_uses(&[2]);
+        pump!();
+        assert_eq!(c.releases(buf2) - base2, 1, "buffer 2 releases as soon as serial 2 completes");
+        assert_eq!(c.releases(buf1) - base1, 0, "buffer 1 stays retained while serial 1 is pending");
+        let totals = state.render_budget_totals();
+        assert_eq!(totals.dmabuf_imports, 1, "buffer 2's import charge refunded on release");
+        assert_eq!(totals.executor_allocations, 1, "buffer 2's executor allocation refunded on release");
+
+        // Now serial 1 completes.
+        state.retire_completed_buffer_uses(&[1]);
+        pump!();
+        assert_eq!(c.releases(buf1) - base1, 1, "buffer 1 releases once serial 1 completes");
+        let totals = state.render_budget_totals();
+        assert_eq!(totals.dmabuf_imports, 0, "all zero-copy import charges refunded");
+        assert_eq!(totals.executor_allocations, 0, "all executor allocations refunded");
+
+        // ROW 1 (zero-copy reclaim): a still-in-flight GPU fence is reclaimed on surface teardown.
+        let wl1b = state.buffers.get(&1).cloned().unwrap();
+        state.begin_buffer_use(1, wl1b, BufferUseKind::ZeroCopy);
+        state.submit_zero_copy_use(1, 3);
+        assert_eq!(state.render_budget_totals().executor_allocations, 1, "a fresh in-flight zero-copy use is charged");
+        assert!(state.surface_fences.contains_key(&1), "surface 1 owns an in-flight GPU fence");
+        // Destroy surface 1: fence + executor allocation reclaimed (fence_drop), buffer released.
+        let surface1_res = state.surface_resources.get(&1).cloned().unwrap();
+        state.teardown_surface(&surface1_res);
+        assert!(!state.surface_fences.contains_key(&1), "teardown reclaims the in-flight GPU fence");
+        assert_eq!(state.render_budget_totals().executor_allocations, 0, "teardown refunds the in-flight executor allocation");
+
+        // ROW 2 (fds dimension): plane-fd accounting uses the same atomic reserve/refund as the other
+        // dimensions (the shm proxy carries no dmabuf planes, so exercise the fd charge path directly).
+        let owner = state.surface_owners.get(&2).cloned().expect("surface 2 owner");
+        assert!(state.charge_budget(&owner, BudgetDim::Fds, 3), "fds charge succeeds within budget");
+        assert_eq!(state.render_budget_totals().fds, 3, "plane fds are charged");
+        state.refund_budget(&owner, BudgetDim::Fds, 3);
+        assert_eq!(state.render_budget_totals().fds, 0, "plane fds refund exactly");
     }
 }

@@ -146,6 +146,11 @@ impl XdgShellHandler for DdState {
                 self.route_surface_to_output(sid, &target.name());
             }
         }
+        let sid = self.surface_id(surface.wl_surface());
+        // Record compositor fullscreen intent (independent of the client's ack timing) so an output
+        // hot-unplug can reconfigure this toplevel at its new output's size — see
+        // `reconfigure_migrated_fullscreen`.
+        self.fullscreen_surfaces.insert(sid);
         let selected = self.selected_output(surface.wl_surface());
         let scale = selected.current_scale().integer_scale().max(1);
         let size = selected.current_mode().map(|mode| (mode.size.w / scale, mode.size.h / scale)).unwrap_or_else(|| self.output_logical_size());
@@ -159,6 +164,8 @@ impl XdgShellHandler for DdState {
 
     /// `unset_fullscreen` → back to floating.
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        let sid = self.surface_id(surface.wl_surface());
+        self.fullscreen_surfaces.remove(&sid);
         let (w, h) = self.toplevel_hint_size(&surface);
         surface.with_pending_state(|s| {
             s.states.unset(XdgState::Fullscreen);
@@ -335,6 +342,36 @@ impl DdState {
 }
 
 impl DdState {
+    /// Re-issue a fullscreen configure at the NEW output's logical size for every migrated toplevel that
+    /// is currently fullscreen. Called by the output hot-unplug path AFTER the surfaces have entered their
+    /// replacement output, so a fullscreen client learns its new size only once it is already a member of
+    /// the output the configure describes (correct enter→configure ordering). `migrated` are the surface
+    /// ids that moved off the removed output.
+    pub(crate) fn reconfigure_migrated_fullscreen(&mut self, migrated: &[u32]) {
+        if migrated.is_empty() {
+            return;
+        }
+        let toplevels: Vec<ToplevelSurface> = self.xdg_shell.toplevel_surfaces().to_vec();
+        for toplevel in toplevels {
+            let sid = self.surface_id(toplevel.wl_surface());
+            if !migrated.contains(&sid) || !self.fullscreen_surfaces.contains(&sid) {
+                continue;
+            }
+            let output = self.selected_output(toplevel.wl_surface());
+            let scale = output.current_scale().integer_scale().max(1);
+            let size = output
+                .current_mode()
+                .map(|mode| (mode.size.w / scale, mode.size.h / scale))
+                .unwrap_or_else(|| self.output_logical_size());
+            toplevel.with_pending_state(|s| {
+                s.size = Some(size.into());
+                s.states.set(XdgState::Fullscreen);
+                s.states.set(XdgState::Activated);
+            });
+            toplevel.send_configure();
+        }
+    }
+
     /// The host window backing the focused toplevel was resized by the user: reconfigure the focused
     /// toplevel to the live content size so the client repaints at the new size. Debounced — the first
     /// observation is a baseline (no send); a later CHANGE emits exactly one configure (mirrors

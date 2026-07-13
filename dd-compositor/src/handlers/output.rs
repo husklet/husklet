@@ -58,6 +58,122 @@ impl DdState {
         true
     }
 
+    /// The advertised (primary + extra) outputs, in a stable order (primary first).
+    fn outputs(&self) -> Vec<Output> {
+        std::iter::once(&self.output).chain(self.extra_outputs.iter()).cloned().collect()
+    }
+
+    /// An output's logical rectangle `(x, y, w, h)`: its `current_location` (logical position set at
+    /// registration) plus its device mode divided by the integer scale. `None` when it has no mode.
+    fn output_logical_rect(output: &Output) -> Option<(i32, i32, i32, i32)> {
+        let mode = output.current_mode()?;
+        let scale = output.current_scale().integer_scale().max(1);
+        let loc = output.current_location();
+        Some((loc.x, loc.y, (mode.size.w / scale).max(1), (mode.size.h / scale).max(1)))
+    }
+
+    /// The advertised output whose logical rectangle a surface at logical rect `(x, y, w, h)` overlaps
+    /// most (largest intersection area). Falls back to [`Self::nearest_output`] when the surface overlaps
+    /// no output (fully off every screen), so routing always resolves to a concrete output. This is the
+    /// geometry-driven analogue of the explicit `route_surface_to_output` membership: a surface is a
+    /// member of the output it actually covers, which drives its `wl_surface.enter`, preferred scale, and
+    /// presentation target.
+    pub fn output_for_geometry(&self, x: i32, y: i32, w: i32, h: i32) -> Option<Output> {
+        let mut best: Option<(i64, Output)> = None;
+        for output in self.outputs() {
+            let Some((ox, oy, ow, oh)) = Self::output_logical_rect(&output) else { continue; };
+            let ix = (x + w).min(ox + ow) - x.max(ox);
+            let iy = (y + h).min(oy + oh) - y.max(oy);
+            let area = if ix > 0 && iy > 0 { ix as i64 * iy as i64 } else { 0 };
+            if area > 0 && best.as_ref().is_none_or(|(a, _)| area > *a) {
+                best = Some((area, output));
+            }
+        }
+        best.map(|(_, output)| output).or_else(|| self.nearest_output(x, y, w, h))
+    }
+
+    /// The advertised output whose logical rectangle center is closest to the surface rect center — the
+    /// deterministic placement target when a surface overlaps no output (e.g. it is dragged entirely into
+    /// a gap, or its only output was hot-unplugged). Primary output wins ties (iteration order).
+    pub fn nearest_output(&self, x: i32, y: i32, w: i32, h: i32) -> Option<Output> {
+        let (cx, cy) = (x + w / 2, y + h / 2);
+        let mut best: Option<(i64, Output)> = None;
+        for output in self.outputs() {
+            let Some((ox, oy, ow, oh)) = Self::output_logical_rect(&output) else { continue; };
+            let (ocx, ocy) = (ox + ow / 2, oy + oh / 2);
+            let d = (cx - ocx) as i64 * (cx - ocx) as i64 + (cy - ocy) as i64 * (cy - ocy) as i64;
+            if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                best = Some((d, output));
+            }
+        }
+        best.map(|(_, output)| output)
+    }
+
+    /// Route a surface tree to the output its on-screen logical rectangle `(x, y, w, h)` actually
+    /// intersects most (geometry-driven membership), migrating enter/leave + preferred scale if it moved.
+    /// Returns whether a migration occurred. This is what a live window-move/resize feeds so a window
+    /// dragged across the seam between two outputs updates its `wl_surface.enter`/`leave` and rescales.
+    pub fn route_surface_by_geometry(&mut self, sid: u32, x: i32, y: i32, w: i32, h: i32) -> bool {
+        let Some(target) = self.output_for_geometry(x, y, w, h) else { return false; };
+        if self.surface_outputs.get(&sid) == Some(&target) {
+            return false;
+        }
+        self.route_surface_to_output(sid, &target.name())
+    }
+
+    /// A deterministic fallback output EXCLUDING `exclude`, primary preferred — the placement target when
+    /// `exclude` is hot-unplugged.
+    fn fallback_output(&self, exclude: &str) -> Option<Output> {
+        self.outputs().into_iter().find(|output| output.name() != exclude)
+    }
+
+    /// Host display-configuration notification: a new physical output was connected. Registers it as an
+    /// advertised output (its `wl_output`/`xdg_output` appear immediately) — the host-driven entry point
+    /// the platform loop calls when the macOS display arrangement changes.
+    pub fn on_host_output_connected(
+        &mut self,
+        name: &str,
+        model: &str,
+        mode_px: (i32, i32),
+        scale: i32,
+        position: (i32, i32),
+    ) -> Output {
+        self.add_output(name, model, mode_px, scale, position)
+    }
+
+    /// Host display-configuration notification: a physical output was disconnected. Atomically retires its
+    /// `wl_output` global, migrates every surface that lived on it to a fallback output (entering the
+    /// replacement BEFORE leaving the removed output and re-sending its preferred scale), and re-issues a
+    /// fullscreen configure at the new output's size for any migrated fullscreen toplevel — so the client
+    /// repaints at the correct size AFTER it has entered the new output. Returns whether the output existed.
+    pub fn on_host_output_disconnected(&mut self, name: &str) -> bool {
+        self.output_disconnected(name)
+    }
+
+    /// The `wl_output` hot-unplug path (see [`Self::on_host_output_disconnected`]). Named for the host
+    /// notification it services.
+    pub fn output_disconnected(&mut self, name: &str) -> bool {
+        // Capture the surfaces on the doomed output before it is removed, so fullscreen toplevels among
+        // them can be reconfigured at their NEW output's size once migrated.
+        let removed = self.outputs().into_iter().find(|output| output.name() == name);
+        let affected: Vec<u32> = match removed.as_ref() {
+            Some(removed) => self
+                .surface_outputs
+                .iter()
+                .filter_map(|(sid, output)| (output == removed).then_some(*sid))
+                .collect(),
+            None => Vec::new(),
+        };
+        if !self.remove_output(name) {
+            return false;
+        }
+        // Migration (enter new → leave old) already happened inside `remove_output`; now, AFTER the
+        // migrated surfaces have entered their replacement output, re-issue the fullscreen configure so a
+        // fullscreen client repaints at the new output's logical size in the correct event order.
+        self.reconfigure_migrated_fullscreen(&affected);
+        true
+    }
+
     pub(crate) fn inherit_output_membership(
         &mut self,
         surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -137,8 +253,7 @@ impl DdState {
         let Some(global) = self.output_globals.get(name).cloned() else { return false; };
         let removed = std::iter::once(&self.output).chain(self.extra_outputs.iter())
             .find(|output| output.name() == name).cloned().expect("output record missing");
-        let fallback = std::iter::once(&self.output).chain(self.extra_outputs.iter())
-            .find(|output| output.name() != name).cloned();
+        let fallback = self.fallback_output(name);
         let affected: Vec<u32> = self.surface_outputs.iter()
             .filter_map(|(sid, output)| (output == &removed).then_some(*sid)).collect();
         if let Some(next) = fallback.as_ref() {

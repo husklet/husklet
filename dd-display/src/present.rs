@@ -247,6 +247,21 @@ pub trait Presenter {
     ) -> Result<PresentOutcome, PresentError> {
         self.present(surf)
     }
+    /// The present serials whose GPU/scanout work the backend has COMPLETED since the last call — the
+    /// completion tokens that gate zero-copy (IOSurface/dmabuf) `wl_buffer` release. A frame is delivered
+    /// under the serial carried by [`PresentOutcome::Delivered`]; the compositor holds that buffer until
+    /// this reports its serial complete, so a shared IOSurface is never recycled while the host GPU/display
+    /// still reads it. Completion may be reported in ANY order (a later-submitted frame whose command
+    /// buffer finishes first releases its buffer first) — the compositor retires by serial, not order.
+    ///
+    /// The default is empty: a presenter that does not present zero-copy (the CPU/copy [`PngPresenter`],
+    /// whose `present()` return already means the pixels are safely consumed) has no outstanding GPU use
+    /// to report, and never accrues in-flight zero-copy buffers to release. A zero-copy backend (the Metal
+    /// presenter) overrides this with its real command-buffer/drawable completion serials so release is
+    /// coupled to actual GPU completion rather than to `present()` returning.
+    fn completed_present_serials(&self) -> Vec<u64> {
+        Vec::new()
+    }
     /// Apply compositor-requested visibility to a native window. Headless presenters keep the default.
     fn set_surface_visibility(&mut self, _sid: u32, _visibility: SurfaceVisibility) {}
     /// Return host-observed visibility when available. Cocoa may override this once live occlusion

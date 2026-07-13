@@ -12,7 +12,7 @@ use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
-use dd_compositor::{ClientState, DdState};
+use dd_compositor::DdState;
 use dd_display::present::{PngPresenter, Presenter};
 
 use smithay::reexports::{
@@ -104,11 +104,10 @@ fn build_loop(
                     }
                     set_nonblock(cfd);
                     let stream = unsafe { UnixStream::from_raw_fd(cfd) };
-                    match data
-                        .display
-                        .handle()
-                        .insert_client(stream, Arc::new(ClientState::default()))
-                    {
+                    // Share the compositor's disconnect sink so a dropped connection reaches
+                    // `drain_client_disconnects` and reclaims the client's GPU/executor state.
+                    let client_state = Arc::new(data.state.new_client_state());
+                    match data.display.handle().insert_client(stream, client_state) {
                         Ok(_) => eprintln!("dd-compositor: client connected"),
                         Err(e) => eprintln!("dd-compositor: insert_client failed: {e}"),
                     }
@@ -135,6 +134,10 @@ fn build_loop(
                 if let Err(e) = data.display.dispatch_clients(&mut data.state) {
                     eprintln!("dd-compositor: dispatch_clients error (continuing): {e}");
                 }
+                // Reclaim GPU/executor state for any client that disconnected this cycle, and release any
+                // zero-copy buffers whose host-GPU/present work has now completed.
+                data.state.drain_client_disconnects();
+                data.state.retire_completed_presents();
                 Ok(PostAction::Continue)
             },
         )

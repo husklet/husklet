@@ -104,6 +104,24 @@ impl PresentedFrame {
             },
         }
     }
+
+    /// Evidence for a Delivered frame whose backend reported no hardware present time: the frame reached
+    /// the screen, so it is answered `presented` on the compositor's own monotonic clock (`time`) and the
+    /// target output's advertised refresh — NOT discarded, and without fabricating a Vsync flag we never
+    /// observed. This is the CPU/copy-presenter path the `present.rs` PresentTiming docs describe.
+    fn from_fallback(
+        output: smithay::output::Output,
+        serial: u64,
+        time: Duration,
+    ) -> Self {
+        let refresh = match output.current_mode() {
+            Some(mode) if mode.refresh > 0 => {
+                Refresh::fixed(Duration::from_nanos(1_000_000_000_000u64 / mode.refresh as u64))
+            }
+            _ => Refresh::Unknown,
+        };
+        Self { output, serial, time, refresh, flags: wp_presentation_feedback::Kind::empty() }
+    }
 }
 
 /// Bounded terminal policy for callbacks retained across failed presents: a permanently-dead presenter
@@ -555,6 +573,8 @@ impl DdState {
             return false;
         }
         let mut evidence = None;
+        let mut delivered_serial: Option<u64> = None;
+        let now = self.start.elapsed();
         let pacing = match self.present_tree(root) {
             Some(base) => {
                 // Map the presenter's structured outcome onto frame pacing. Only a visibly Delivered
@@ -562,14 +582,24 @@ impl DdState {
                 // (both previously hidden behind a `false`) is a FAILED present — pacing is retained.
                 let sid = base.sid;
                 let target_output = self.selected_output(root);
-                self.presenter_windows.insert(sid);
+                if self.presenter_windows.insert(sid) {
+                    // First present into a native window for this surface: charge the presenter-object
+                    // (host window) budget unit to the owning client (row-2 residual).
+                    self.charge_presenter_window(sid);
+                }
                 match self.presenter.present_on_output(&base, &target_output.name()) {
                     Ok(dd_display::present::PresentOutcome::Delivered { serial, timing }) => {
-                        evidence = timing.map(|timing| PresentedFrame::from_timing(
-                            target_output,
-                            serial,
-                            timing,
-                        ));
+                        delivered_serial = Some(serial);
+                        // A Delivered frame ALWAYS answers `presented`. When the backend reports hardware
+                        // timing we use it; when it does not (`timing: None`), fall back to the
+                        // compositor's own monotonic clock and the target output's advertised refresh
+                        // rather than discarding the feedback (see `present.rs` PresentTiming docs).
+                        evidence = Some(match timing {
+                            Some(timing) => {
+                                PresentedFrame::from_timing(target_output, serial, timing)
+                            }
+                            None => PresentedFrame::from_fallback(target_output, serial, now),
+                        });
                         FramePacing::Presented
                     }
                     Ok(dd_display::present::PresentOutcome::Offscreen) => {
@@ -594,10 +624,21 @@ impl DdState {
         // The tree reached the screen — every surface in it is now clean. On a FAILED present we keep the
         // dirty flags so the next commit retries the repaint rather than skipping it.
         if did_present {
-            self.complete_tree_buffer_uses(root);
+            // A zero-copy (IOSurface/dmabuf) surface's buffer is NOT released now — its host-GPU/present
+            // work is still outstanding. Move each zero-copy use to the in-flight queue tagged with the
+            // delivery serial, then release only those whose completion serial the presenter reports done
+            // (shm uses were already released at copy time). This couples zero-copy release to real GPU
+            // completion instead of to `present()` returning (row-3 residual).
+            if let Some(serial) = delivered_serial {
+                self.submit_tree_zero_copy_uses(root, serial);
+            }
             self.clear_tree_dirty(root);
+            let completed = self.presenter.completed_present_serials();
+            self.retire_completed_buffer_uses(&completed);
         } else if policy.terminal_cleanup {
-            self.complete_tree_buffer_uses(root);
+            // A terminal present retires the abandoned frame's uses (releasing + refunding) — the frame
+            // will never reach the screen, so there is no GPU completion to wait for.
+            self.retire_tree_buffer_uses(root);
             self.clear_tree_dirty(root);
         }
         self.pace_tree(root, pacing, evidence.as_ref());
@@ -650,7 +691,10 @@ impl DdState {
         true
     }
 
-    fn complete_tree_buffer_uses(&mut self, root: &WlSurface) {
+    /// Move every zero-copy surface in the presented tree from its live buffer-use slot to the in-flight
+    /// queue, tagged with the delivery `serial` its GPU/present work was submitted under. The buffer is
+    /// retained until the presenter reports `serial` complete.
+    fn submit_tree_zero_copy_uses(&mut self, root: &WlSurface, serial: u64) {
         let mut surfaces = Vec::new();
         self.collect_tree_surfaces(root, &mut surfaces);
         for (popup, _, _) in self.collect_popups_for_root(root) {
@@ -658,7 +702,21 @@ impl DdState {
         }
         for surface in surfaces {
             let sid = self.surface_id(&surface);
-            self.complete_buffer_use(sid);
+            self.submit_zero_copy_use(sid, serial);
+        }
+    }
+
+    /// Retire (release + refund) every surface's live buffer use in the presented tree — the terminal-
+    /// failure path, where the frame will never reach the screen so no GPU completion is awaited.
+    fn retire_tree_buffer_uses(&mut self, root: &WlSurface) {
+        let mut surfaces = Vec::new();
+        self.collect_tree_surfaces(root, &mut surfaces);
+        for (popup, _, _) in self.collect_popups_for_root(root) {
+            self.collect_tree_surfaces(&popup, &mut surfaces);
+        }
+        for surface in surfaces {
+            let sid = self.surface_id(&surface);
+            self.retire_buffer_use(sid);
         }
     }
 
