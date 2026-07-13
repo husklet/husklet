@@ -51,6 +51,15 @@ container configuration, packaging/signing inputs, and golden-update controls ar
 renderer and GUI dead-code claims. Those require `make mac-crates` and a GTK/Nix all-target build without blanket lint
 suppression.
 
+### Stale rebuild warning in the contributor guide
+
+`docs/AGENTS.md` says the C engine's included files are not all tracked by `build.rs` and therefore require a manual
+clean. Current `dd-jit-darwin/build.rs::rerun_dir` recursively emits `cargo:rerun-if-changed` for every `.c` and `.h`
+under `src/runtime`, as well as the entitlements file. The warning describes an old build graph and encourages costly
+full cleans. Verify by touching a nested included C file and observing the engine rebuild once; then replace the stale
+warning with the narrower rule for any genuinely untracked non-C/H generator input. This is documentation cleanup
+with no compatibility risk and can improve developer iteration speed.
+
 ## Dependency and target observations
 
 - `dd-gpu`'s `runtime` feature is live: `dd-cli` enables it and `dd-gpu/src/lib.rs` gates the integration seam.
