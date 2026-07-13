@@ -291,6 +291,9 @@ impl SoftwareBackend {
                         texture_usage::RENDER_TARGET,
                         "color attachment lacks RENDER_TARGET usage",
                     )?;
+                    if t.desc.sample_count != 1 {
+                        return Err(GpuError::Unsupported("software: multisample render attachment"));
+                    }
                     if c.load == LoadOp::Clear {
                         Self::clear_texel(t.desc.format, c.clear)?; // reject unclearable formats up front
                     }
@@ -299,11 +302,14 @@ impl SoftwareBackend {
                 if let Some(dp) = depth {
                     // A depth attachment must name a real texture created with render-target usage;
                     // the software oracle does not fabricate an internal depth buffer.
-                    self.texture_with_usage(
+                    let t = self.texture_with_usage(
                         dp.texture,
                         texture_usage::RENDER_TARGET,
                         "depth attachment lacks RENDER_TARGET usage",
                     )?;
+                    if t.desc.sample_count != 1 {
+                        return Err(GpuError::Unsupported("software: multisample depth attachment"));
+                    }
                 }
                 st.in_render_pass = true;
                 st.color_targets = color.iter().map(|c| c.texture).collect();
@@ -353,7 +359,10 @@ impl SoftwareBackend {
             }
             Enc::SetScissor { .. } => {}
             Enc::ClearRect { texture, .. } => {
-                self.textures.get(*texture)?;
+                let t = self.textures.get(*texture)?;
+                if t.desc.sample_count != 1 {
+                    return Err(GpuError::Unsupported("software: multisample clear"));
+                }
             }
             Enc::Draw { vertex_count, instance_count, first_vertex, first_instance } => {
                 self.validate_draw(st, |layout, slot| {
@@ -427,6 +436,9 @@ impl SoftwareBackend {
                 }
                 let s = self.buffer_with_usage(*src, buffer_usage::COPY_SRC, "copy src lacks COPY_SRC")?;
                 let t = self.texture_with_usage(*dst, texture_usage::COPY_DST, "copy dst lacks COPY_DST")?;
+                if t.desc.sample_count != 1 {
+                    return Err(GpuError::Unsupported("software: buffer copy to multisample texture"));
+                }
                 let (_, _, src_span) = texture_copy_layout(t, *width, *height, *bytes_per_row)?;
                 check_len(s.data.len(), *src_offset, src_span)?;
             }
@@ -435,6 +447,9 @@ impl SoftwareBackend {
                     return Err(GpuError::Unsupported("software: non-zero mip copy"));
                 }
                 let t = self.texture_with_usage(*src, texture_usage::COPY_SRC, "copy src lacks COPY_SRC")?;
+                if t.desc.sample_count != 1 {
+                    return Err(GpuError::Unsupported("software: multisample texture readback copy"));
+                }
                 let bpt = Self::texel_bytes(t.desc.format)?;
                 if *dst_offset % bpt as u64 != 0 {
                     return Err(GpuError::Invalid("texture readback offset not texel-aligned"));
@@ -448,6 +463,9 @@ impl SoftwareBackend {
                 Self::check_copy_subresource(dst_sub, dst_origin, extent.depth)?;
                 let s = self.texture_with_usage(*src, texture_usage::COPY_SRC, "copy src lacks COPY_SRC")?;
                 let d = self.texture_with_usage(*dst, texture_usage::COPY_DST, "copy dst lacks COPY_DST")?;
+                if s.desc.sample_count != 1 || d.desc.sample_count != 1 {
+                    return Err(GpuError::Unsupported("software: multisample texture copy"));
+                }
                 // A texture→texture copy moves raw texels: the two formats must agree on texel size, else
                 // the byte copy is meaningless (Vulkan requires size-compatible formats for vkCmdCopyImage).
                 if Self::texel_bytes(s.desc.format)? != Self::texel_bytes(d.desc.format)? {
@@ -474,6 +492,9 @@ impl SoftwareBackend {
                 }
                 let s = self.texture_with_usage(*src, texture_usage::COPY_SRC, "blit src lacks COPY_SRC")?;
                 let d = self.texture_with_usage(*dst, texture_usage::COPY_DST, "blit dst lacks COPY_DST")?;
+                if s.desc.sample_count != 1 || d.desc.sample_count != 1 {
+                    return Err(GpuError::Unsupported("software: multisample blit"));
+                }
                 // A blit resamples per-texel; the oracle only handles equal-texel-size color formats.
                 if Self::texel_bytes(s.desc.format)? != Self::texel_bytes(d.desc.format)? {
                     return Err(GpuError::Invalid("blit between incompatible texel sizes"));
@@ -1131,6 +1152,9 @@ impl GpuBackend for SoftwareBackend {
     fn present(&mut self, surface: SurfaceId, texture: TextureId) -> Result<PresentToken> {
         let sdesc = self.surfaces.get(surface.0)?.clone();
         let t = self.textures.get(texture.0)?;
+        if t.desc.sample_count != 1 {
+            return Err(GpuError::Unsupported("software: present multisample texture"));
+        }
         // A present must hand over a frame that matches the surface geometry; a size mismatch is a
         // swapchain bug, not a valid present.
         if t.desc.width != sdesc.width || t.desc.height != sdesc.height {

@@ -74,3 +74,59 @@ fn invalid_resolve_subresource_is_atomic() {
     be.read_texture(TextureId(2), &mut out).unwrap();
     assert_eq!(out, [9, 8, 7, 6]);
 }
+
+#[test]
+fn legacy_copy_blit_read_and_clear_reject_multisample_storage_atomically() {
+    use dd_gpu::id::BufferId;
+
+    let mut be = SoftwareBackend::new();
+    be.create_texture(TextureId(1), &desc(4)).unwrap();
+    be.create_texture(TextureId(2), &desc(1)).unwrap();
+    let samples = [
+        1, 2, 3, 4, 11, 12, 13, 14, 21, 22, 23, 24, 31, 32, 33, 34,
+    ];
+    be.write_texture_samples(TextureId(1), &samples).unwrap();
+    be.write_texture_samples(TextureId(2), &[90, 91, 92, 93]).unwrap();
+    be.create_buffer(
+        BufferId(3),
+        &BufferDesc { size: 16, usage: buffer_usage::COPY_SRC | buffer_usage::COPY_DST, label: String::new() },
+    ).unwrap();
+    be.write_buffer(BufferId(3), 0, &[0xaa; 16]).unwrap();
+
+    let base = TextureSubresource::base();
+    let extent = Extent3d { width: 1, height: 1, depth: 1 };
+    let cases = [
+        Enc::ClearRect { texture: 1, x: 0, y: 0, w: 1, h: 1, color: [1.0; 4] },
+        Enc::CopyTextureToTexture {
+            src: 1, src_sub: base, src_origin: Origin3d::default(),
+            dst: 2, dst_sub: base, dst_origin: Origin3d::default(), extent,
+        },
+        Enc::BlitTexture {
+            src: 1, src_sub: base, src_origin: Origin3d::default(), src_extent: extent,
+            dst: 2, dst_sub: base, dst_origin: Origin3d::default(), dst_extent: extent,
+            filter: Filter::Nearest,
+        },
+        Enc::CopyTextureToBuffer {
+            src: 1, mip: 0, width: 1, height: 1, dst: 3, dst_offset: 0, bytes_per_row: 4,
+        },
+        Enc::CopyBufferToTexture {
+            src: 3, src_offset: 0, bytes_per_row: 4, dst: 1, mip: 0, width: 1, height: 1,
+        },
+    ];
+    for op in cases {
+        let result = replay::replay(
+            &mut be,
+            &[Cmd::Submit(CommandBuffer { encoder: vec![op], signal: None })],
+        );
+        assert!(matches!(result, Err(GpuError::Unsupported(_))));
+        let mut src = [0; 16];
+        be.read_texture(TextureId(1), &mut src).unwrap();
+        assert_eq!(src, samples, "rejected operation did not alter a sample plane");
+        let mut dst = [0; 4];
+        be.read_texture(TextureId(2), &mut dst).unwrap();
+        assert_eq!(dst, [90, 91, 92, 93], "rejected operation did not alter destination");
+        let mut buffer = [0; 16];
+        be.read_buffer(BufferId(3), 0, &mut buffer).unwrap();
+        assert_eq!(buffer, [0xaa; 16], "rejected readback did not alter destination buffer");
+    }
+}

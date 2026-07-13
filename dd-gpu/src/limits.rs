@@ -372,6 +372,11 @@ mod tests {
         let mut d3 = texture_desc(crate::ir::TextureDim::D3);
         d3.depth = 4;
         assert_eq!(texture_bytes(&d3).unwrap(), (4 * 4 * 4 + 2 * 2 * 2 + 1) * 4);
+
+        let mut msaa = texture_desc(crate::ir::TextureDim::D2);
+        msaa.depth = 1;
+        msaa.sample_count = 4;
+        assert_eq!(texture_bytes(&msaa).unwrap(), (4 * 4 + 2 * 2 + 1) * 4 * 4);
     }
 
     #[test]
