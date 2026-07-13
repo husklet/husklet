@@ -82,8 +82,11 @@ pub extern "C" fn eglTerminate(_dpy: *mut c_void) -> u32 {
     EGL_TRUE
 }
 
+/// `eglReleaseThread` — release the calling thread's EGL state: unbind its current context and draw/read
+/// surfaces (so `eglGetCurrentContext`/`eglGetCurrentDisplay` report EGL_NO_CONTEXT/EGL_NO_DISPLAY).
 #[no_mangle]
 pub extern "C" fn eglReleaseThread() -> u32 {
+    crate::state::egl_make_current(core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut());
     EGL_TRUE
 }
 

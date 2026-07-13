@@ -26,6 +26,9 @@ pub const GL_SHADER_SOURCE_LENGTH: u32 = 0x8B88;
 // buffer targets
 pub const GL_ARRAY_BUFFER: u32 = 0x8892;
 pub const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
+// glGetBufferParameteriv pnames
+pub const GL_BUFFER_SIZE: u32 = 0x8764;
+pub const GL_BUFFER_USAGE: u32 = 0x8765;
 
 // data types
 pub const GL_BYTE: u32 = 0x1400;

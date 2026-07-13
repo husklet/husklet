@@ -157,6 +157,71 @@ fn egl_swap_of_a_stale_surface_reports_bad_surface() {
 
 // ---- gles_flush_and_finish_have_submission_and_completion_semantics -----------------------------
 
+// ---- egl_contexts_are_distinct_shareable_and_current_per_thread (eglReleaseThread piece) --------
+
+#[test]
+fn egl_release_thread_clears_the_current_context() {
+    let display = egl::eglGetDisplay(core::ptr::null_mut());
+    assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
+    let attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
+    let ctx = egl::eglCreateContext(display, 1usize as *mut c_void, core::ptr::null_mut(), attrs.as_ptr());
+    assert!(!ctx.is_null());
+    assert_eq!(egl::eglMakeCurrent(display, core::ptr::null_mut(), core::ptr::null_mut(), ctx), EGL_TRUE);
+    assert_eq!(egl::eglGetCurrentContext(), ctx);
+
+    // eglReleaseThread must unbind this thread's current context AND display.
+    assert_eq!(egl::eglReleaseThread(), EGL_TRUE);
+    assert!(egl::eglGetCurrentContext().is_null(), "release-thread left a context current");
+    assert!(egl::eglGetCurrentDisplay().is_null(), "release-thread left a display current");
+    egl::eglDestroyContext(display, ctx);
+}
+
+// ---- advertised_gles2_has_real_implementations... (representative newly-full mandatory commands) --
+
+#[test]
+fn mandatory_gles2_queries_return_real_values() {
+    // Pure queries (no bound state) — always safe.
+    let (mut range, mut precision) = ([-1i32; 2], -1i32);
+    gles::glGetShaderPrecisionFormat(GL_VERTEX_SHADER, 0x8DF2 /* HIGH_FLOAT */, range.as_mut_ptr(), &mut precision);
+    assert_eq!((range[0], range[1], precision), (127, 127, 23), "glGetShaderPrecisionFormat");
+
+    let (mut len, mut size, mut typ) = (-1i32, -1i32, 0u32);
+    let mut name = [0 as core::ffi::c_char; 8];
+    gles::glGetActiveUniform(1, 0, 8, &mut len, &mut size, &mut typ, name.as_mut_ptr());
+    assert_eq!((len, size, typ), (0, 1, GL_FLOAT), "glGetActiveUniform spec-default shape");
+
+    // Bound-state queries — run in a guaranteed-isolated share group (any context created after the
+    // first standalone one gets a fresh namespace), so a parallel test can't perturb the binding.
+    let display = egl::eglGetDisplay(core::ptr::null_mut());
+    let attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
+    let _claim = egl::eglCreateContext(display, 1usize as *mut c_void, core::ptr::null_mut(), attrs.as_ptr());
+    let ctx = egl::eglCreateContext(display, 1usize as *mut c_void, core::ptr::null_mut(), attrs.as_ptr());
+    assert_eq!(egl::eglMakeCurrent(display, core::ptr::null_mut(), core::ptr::null_mut(), ctx), EGL_TRUE);
+
+    // glGetTexParameteriv reflects the bound texture's real filter state.
+    let mut tex = 0u32;
+    gles::glGenTextures(1, &mut tex);
+    gles::glActiveTexture(GL_TEXTURE0);
+    gles::glBindTexture(GL_TEXTURE_2D, tex);
+    gles::glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST as i32);
+    let mut minf = -1i32;
+    gles::glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &mut minf);
+    assert_eq!(minf, GL_NEAREST as i32, "glGetTexParameteriv must return the set filter");
+
+    // glGetBufferParameteriv reflects the bound buffer's real size.
+    let mut buf = 0u32;
+    gles::glGenBuffers(1, &mut buf);
+    gles::glBindBuffer(GL_ARRAY_BUFFER, buf);
+    let data = [0u8; 12];
+    gles::glBufferData(GL_ARRAY_BUFFER, data.len() as isize, data.as_ptr() as *const c_void, 0x88E4);
+    let mut sz = -1i32;
+    gles::glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &mut sz);
+    assert_eq!(sz, 12, "glGetBufferParameteriv(GL_BUFFER_SIZE) must return the real size");
+
+    egl::eglMakeCurrent(display, core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut());
+    egl::eglDestroyContext(display, ctx);
+}
+
 #[test]
 fn flush_submits_and_finish_waits_for_completion() {
     let (sub_before, _) = gles::submission_serials();
