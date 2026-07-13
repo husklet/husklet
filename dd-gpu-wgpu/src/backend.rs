@@ -1530,6 +1530,17 @@ impl GpuBackend for WgpuBackend {
         // intentionally different failure/fallback semantics.
         let key = hash_bytes(bytemuck_u32_bytes(spirv)) ^ ((kind as u64) << 56);
         if self.shader_id_hash.get(&id.0) == Some(&key) {
+            // A previously-FAILED SPIR-V translation is recorded in `shader_id_hash` but is NOT actually
+            // installed (its module was removed and the content is in `failed_shader_cache`). Re-submitting
+            // the same id+content must therefore return the SAME typed failure — never silently succeed into
+            // a builtin fallback, which the "translation failure never falls back to builtin" contract forbids.
+            if self.failed_shader_cache.contains(&key) {
+                return if kind == dd_gpu::ir::ShaderPayloadKind::SpirV {
+                    Err(GpuError::Invalid("SPIR-V shader translation failed"))
+                } else {
+                    Ok(())
+                };
+            }
             return Ok(()); // identical content already installed under this id — nothing to do
         }
         self.shader_id_hash.insert(id.0, key);

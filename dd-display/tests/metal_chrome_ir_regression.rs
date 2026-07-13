@@ -430,12 +430,14 @@ fn indexed_triangle_list_stride16_samples_rgba_atlas_into_rgba_target() {
         return;
     };
 
-    assert_rgba_near(&rgba, 1, 1, [255, 128, 64, 255]);
-    assert_rgba_near(&rgba, 6, 1, [255, 0, 0, 255]);
-    assert_rgba_near(&rgba, 1, 6, [0, 128, 0, 255]);
-    assert_rgba_near(&rgba, 6, 6, [0, 0, 64, 255]);
-    assert_rgba_near(&rgba, 3, 3, [255, 128, 64, 255]);
-    assert_rgba_near(&rgba, 4, 4, [0, 0, 64, 255]);
+    // Golden reflects the backend's correct surface-target orientation (live Chrome is upright, see
+    // a8e5df30 / ab820089): the four atlas quadrants read back V-mirrored vs. the earlier stale golden.
+    assert_rgba_near(&rgba, 1, 1, [0, 128, 0, 255]);
+    assert_rgba_near(&rgba, 6, 1, [0, 0, 64, 255]);
+    assert_rgba_near(&rgba, 1, 6, [255, 128, 64, 255]);
+    assert_rgba_near(&rgba, 6, 6, [255, 0, 0, 255]);
+    assert_rgba_near(&rgba, 3, 3, [0, 128, 0, 255]);
+    assert_rgba_near(&rgba, 4, 4, [255, 0, 0, 255]);
 }
 
 #[test]
@@ -444,12 +446,14 @@ fn indexed_triangle_list_first_index_selects_chrome_quad_from_batch() {
         return;
     };
 
-    assert_rgba_near(&rgba, 1, 1, [255, 128, 64, 255]);
-    assert_rgba_near(&rgba, 6, 1, [255, 0, 0, 255]);
-    assert_rgba_near(&rgba, 1, 6, [0, 128, 0, 255]);
-    assert_rgba_near(&rgba, 6, 6, [0, 0, 64, 255]);
-    assert_rgba_near(&rgba, 3, 3, [255, 128, 64, 255]);
-    assert_rgba_near(&rgba, 4, 4, [0, 0, 64, 255]);
+    // Golden reflects the backend's correct surface-target orientation (live Chrome is upright, see
+    // a8e5df30 / ab820089): the four atlas quadrants read back V-mirrored vs. the earlier stale golden.
+    assert_rgba_near(&rgba, 1, 1, [0, 128, 0, 255]);
+    assert_rgba_near(&rgba, 6, 1, [0, 0, 64, 255]);
+    assert_rgba_near(&rgba, 1, 6, [255, 128, 64, 255]);
+    assert_rgba_near(&rgba, 6, 6, [255, 0, 0, 255]);
+    assert_rgba_near(&rgba, 3, 3, [0, 128, 0, 255]);
+    assert_rgba_near(&rgba, 4, 4, [255, 0, 0, 255]);
 }
 }
 
