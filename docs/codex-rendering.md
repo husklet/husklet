@@ -291,15 +291,18 @@ Important gaps and incorrect simplifications:
   compatibility. This remains partial: only color aspects and the single queue family are supported; explicit
   cross-family ownership, synchronization2, depth/stencil/plane aspects, usage legality, swapchain-present transitions
   and concrete Metal/wgpu hazard lowering are not implemented.
-- Commit `aba9a0f4` lands a meaningful Phase-3 shared-IR/backend slice: `TextureSubresource` (mip/layer/aspect),
-  `Origin3d`, `Extent3d`, exact texture-to-texture copy and filtered blit, with software, wgpu and Metal validation
-  tests. Do not remove that implemented progress from the audit. The Vulkan shim still exposes only buffer-to-buffer
-  copy: buffer/image copies, image copies, blits, resolves and image clears remain generated failures/no-ops within
-  Vulkan 1.0. IR also still lacks multi-layer region count, Vulkan buffer row-length/image-height semantics, explicit
-  layouts and multisample resolve. Extend the landed types rather than replacing them; add buffer/texture region
-  structs and a distinct resolve command, then lower every Vulkan region. Validate with checked block/row arithmetic,
-  format/sample compatibility, overlap rules and layout state before mutation.
-  `vk_transfer_commands_preserve_every_region_subresource_and_layout` now guards both the landed slice and residuals.
+- The shared IR/backend slice from `aba9a0f4` retains `TextureSubresource`, `Origin3d`, `Extent3d`, exact texture copy
+  and filtered blit. Vulkan now materializes supported 2D color images as IR textures and lowers representable
+  `vkCmdCopyBufferToImage`, `vkCmdCopyImageToBuffer`, `vkCmdCopyImage`, forward `vkCmdBlitImage` and base-subresource
+  `vkCmdClearColorImage` operations. Buffer offsets and padded row pitch, image offsets/extents, mip/layer/aspect,
+  layouts, filter and clear value are either preserved or the complete call is rejected before recording; multi-region
+  validation is atomic. Transfer uses participate in the submit-time layout/access state machine. The Rust ABI gate
+  `vulkan_transfer_regions_lower_without_field_loss_and_reject_atomically` pins exact lowering and OOB rollback, while
+  shared software tests retain byte/padding, region, nearest/linear and negative validation coverage.
+  This remains partial: buffer/image IR cannot yet address nonzero image origins or array layers, reversed blits need
+  signed endpoints, `bufferImageHeight` matters only once depth/layer copies exist, and resolve has no distinct IR
+  command. Multisample resolve, 3D, compressed, depth/stencil/multiplane, multi-mip/layer clears and synchronization2
+  transfer variants stay unsupported rather than silently flattened.
 - Shader module creation performs no SPIR-V validation: `codeSize` is truncated to words, null code becomes an empty
   successful module, and arbitrary bytes are recorded before any structural check. Pipeline creation substitutes
   entry name `main`, ignores specialization constants, and performs no reflection/interface validation for stages,
@@ -1080,7 +1083,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `vk_swapchain_tracks_image_ownership_timeouts_and_retirement` | implemented | Explicit image/swapchain states enforce ownership, timeout results, acquire sync, retirement and loss | Rust ABI multi-frame lifecycle regression green; retain as regression |
 | `vk_present_reports_failures_without_consuming_unsent_frame_state` | implemented | Present validates atomically, maps delivery errors, fills `pResults`, and commits waits/IR/ownership only on success | Rust ABI delivery-fault/retry regression green; retain as regression |
 | `vk_image_layout_barriers_track_subresources_and_queue_ownership` | partial | Legacy color-image barriers and render uses have atomic per-mip/layer state on the single queue; sync2, cross-queue and backend hazards remain | Extend the green Rust ABI lifecycle gate across aspects/queues and both backend barrier models |
-| `vk_transfer_commands_preserve_every_region_subresource_and_layout` | partial | shared IR/backends have subresource copy+blit, but Vulkan lowering and remaining region/resolve fields are absent | Shim lowering plus buffer/image/resolve/clear validation matrix |
+| `vk_transfer_commands_preserve_every_region_subresource_and_layout` | partial | Vulkan lowers validated 2D color buffer/image copies, image copies, forward blits and base clears with exact representable fields; resolve and broader dimensions remain | Extend the green ABI/software gates with rich buffer-texture origins/layers and distinct resolve across both hardware executors |
 | `vk_shader_modules_validate_spirv_entries_specialization_and_interfaces` | missing | malformed SPIR-V and incompatible interfaces are forwarded unchecked | Validated/reflected module records and negative pipeline corpus |
 | `vk_robust_buffer_access_is_advertised_only_with_zeroing_and_bounds_guarantees` | contradictory | robustBufferAccess is true without complete zero/discard bounds semantics | Disable now or prove every access path across all executors |
 | `opt_in_gles3_has_real_implementations_for_every_mandatory_command` | partial | opt-in GLES3 has 112/246 mandatory stubs | Complete mandatory ES3 groups and relevant CTS |

@@ -85,6 +85,8 @@ pub struct ImageRec {
     pub mip_levels: u32,
     pub array_layers: u32,
     pub aspect_mask: u32,
+    pub usage: u32,
+    pub sample_count: u32,
     pub subresources: HashMap<(u32, u32, u32), ImageSubresourceState>,
     /// The `VkDeviceMemory` this image is bound to (`vkBindImageMemory`), or `None` if unbound. Image
     /// binding is NOT a no-op: it validates and records ownership (MoltenVK `MVKImage::bindDeviceMemory`).
@@ -134,6 +136,12 @@ pub enum ImageEvent {
         range: ImageSubresourceRange,
         subpass_layout: i32,
         final_layout: i32,
+    },
+    TransferUse {
+        image: u64,
+        range: ImageSubresourceRange,
+        required_layout: i32,
+        access: u32,
     },
 }
 

@@ -255,6 +255,8 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 mip_levels: 1,
                 array_layers: 1,
                 aspect_mask: vk::ImageAspectFlags::COLOR.as_raw(),
+                usage: SURFACE_USAGE.as_raw(),
+                sample_count: vk::SampleCountFlags::TYPE_1.as_raw(),
                 subresources: [(
                     (vk::ImageAspectFlags::COLOR.as_raw(), 0, 0),
                     ImageSubresourceState {

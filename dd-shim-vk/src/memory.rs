@@ -38,6 +38,33 @@ fn buffer_usage(u: vk::BufferUsageFlags) -> u32 {
     if u.contains(vk::BufferUsageFlags::INDEX_BUFFER) {
         out |= bu::INDEX;
     }
+    if u.contains(vk::BufferUsageFlags::TRANSFER_SRC) {
+        out |= bu::COPY_SRC;
+    }
+    if u.contains(vk::BufferUsageFlags::TRANSFER_DST) {
+        out |= bu::COPY_DST;
+    }
+    out
+}
+
+fn texture_usage(u: vk::ImageUsageFlags) -> u32 {
+    use dd_shim_common::ir::texture_usage as tu;
+    let mut out = 0;
+    if u.contains(vk::ImageUsageFlags::SAMPLED) {
+        out |= tu::SAMPLED;
+    }
+    if u.contains(vk::ImageUsageFlags::STORAGE) {
+        out |= tu::STORAGE;
+    }
+    if u.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT) {
+        out |= tu::RENDER_TARGET;
+    }
+    if u.contains(vk::ImageUsageFlags::TRANSFER_SRC) {
+        out |= tu::COPY_SRC;
+    }
+    if u.contains(vk::ImageUsageFlags::TRANSFER_DST) {
+        out |= tu::COPY_DST;
+    }
     out
 }
 
@@ -376,6 +403,18 @@ pub extern "C" fn vkCreateImage(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    if ci.image_type != vk::ImageType::TYPE_2D
+        || ci.extent.depth != 1
+        || !matches!(
+            ci.format,
+            vk::Format::R8G8B8A8_UNORM
+                | vk::Format::R8G8B8A8_SRGB
+                | vk::Format::B8G8R8A8_UNORM
+                | vk::Format::B8G8R8A8_SRGB
+        )
+    {
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    }
     let mut s = reg::lock();
     let ir_id = s.alloc_ir();
     let handle = s.alloc_handle();
@@ -395,6 +434,20 @@ pub extern "C" fn vkCreateImage(
             subresources.insert((aspect_mask, mip, layer), initial);
         }
     }
+    s.record(dd_shim_common::ir::Cmd::CreateTexture(
+        ir_id,
+        dd_shim_common::ir::TextureDesc {
+            width: ci.extent.width,
+            height: ci.extent.height,
+            depth: array_layers,
+            mip_levels,
+            sample_count: ci.samples.as_raw(),
+            dim: dd_shim_common::ir::TextureDim::D2,
+            format: tex_format(ci.format),
+            usage: texture_usage(ci.usage),
+            label: format!("vkimg{ir_id}"),
+        },
+    ));
     s.images.insert(
         handle,
         ImageRec {
@@ -406,19 +459,22 @@ pub extern "C" fn vkCreateImage(
             mip_levels,
             array_layers,
             aspect_mask,
+            usage: ci.usage.as_raw(),
+            sample_count: ci.samples.as_raw(),
             subresources,
             bound_mem: None,
         },
     );
-    // A color attachment is host-owned (registered by the host as a render target); non-attachment
-    // sampled/storage images would emit Cmd::CreateTexture in a later increment.
     *out = handle;
     VK_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn vkDestroyImage(_device: VkDevice, image: VkImage, _p_allocator: *const c_void) {
-    reg::lock().images.remove(&image);
+    let mut s = reg::lock();
+    if let Some(image) = s.images.remove(&image) {
+        s.record(dd_shim_common::ir::Cmd::DestroyTexture(image.ir_id));
+    }
 }
 
 /// `vkGetImageSubresourceLayout` — the row/array/depth pitch of a LINEAR image. vkcube maps a linear

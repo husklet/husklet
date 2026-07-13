@@ -100,6 +100,13 @@ fn partial_note(name: &str) -> Option<&'static str> {
         "vkCmdPipelineBarrier" => {
             "legacy color-image subresource layouts on one queue; no sync2 or backend hazard lowering"
         }
+        "vkCmdCopyBufferToImage" | "vkCmdCopyImageToBuffer" => {
+            "2D color/base-layer regions with exact buffer offsets and row pitch; no 3D or multilayer"
+        }
+        "vkCmdCopyImage" | "vkCmdBlitImage" => {
+            "2D uncompressed color regions; blits reject reversed coordinates and aliasing"
+        }
+        "vkCmdClearColorImage" => "base color subresource only; no mip/layer range clear lowering",
         // submit + synchronization: the bring-up dependency model
         "vkQueueSubmit" => "records + ships IR; ignores wait/signal semaphores beyond the bring-up model",
         "vkCreateSemaphore" | "vkDestroySemaphore" => {
@@ -527,6 +534,11 @@ const IMPLEMENTED: &[&str] = &[
     "vkCmdDraw",
     "vkCmdDrawIndexed",
     "vkCmdCopyBuffer",
+    "vkCmdCopyBufferToImage",
+    "vkCmdCopyImageToBuffer",
+    "vkCmdCopyImage",
+    "vkCmdBlitImage",
+    "vkCmdClearColorImage",
     "vkCmdPipelineBarrier",
     "vkQueueSubmit",
     "vkQueueWaitIdle",

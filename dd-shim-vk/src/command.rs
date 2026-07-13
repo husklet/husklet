@@ -629,6 +629,441 @@ pub extern "C" fn vkCmdCopyBuffer(
     }
 }
 
+fn transfer_layout_ok(layout: vk::ImageLayout, write: bool) -> bool {
+    layout == vk::ImageLayout::GENERAL
+        || (write && layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        || (!write && layout == vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+}
+
+fn layers_range(image: &reg::ImageRec, layers: vk::ImageSubresourceLayers) -> Option<ImageSubresourceRange> {
+    let range = ImageSubresourceRange {
+        aspect_mask: layers.aspect_mask.as_raw(),
+        base_mip_level: layers.mip_level,
+        level_count: 1,
+        base_array_layer: layers.base_array_layer,
+        layer_count: layers.layer_count,
+    };
+    (range.aspect_mask == image.aspect_mask
+        && range.layer_count != 0
+        && range.base_mip_level < image.mip_levels
+        && range.base_array_layer.checked_add(range.layer_count).is_some_and(|end| end <= image.array_layers))
+    .then_some(range)
+}
+
+fn mip_extent(image: &reg::ImageRec, mip: u32) -> Option<(u32, u32)> {
+    (mip < image.mip_levels).then(|| ((image.width >> mip).max(1), (image.height >> mip).max(1)))
+}
+
+fn checked_region(
+    image: &reg::ImageRec,
+    layers: vk::ImageSubresourceLayers,
+    offset: vk::Offset3D,
+    extent: vk::Extent3D,
+) -> Option<(ImageSubresourceRange, TextureSubresource, Origin3d, Extent3d)> {
+    let range = layers_range(image, layers)?;
+    if layers.layer_count != 1 || offset.x < 0 || offset.y < 0 || offset.z != 0 || extent.depth != 1 {
+        return None;
+    }
+    let (mw, mh) = mip_extent(image, layers.mip_level)?;
+    let origin = Origin3d { x: offset.x as u32, y: offset.y as u32, z: 0 };
+    if extent.width == 0
+        || extent.height == 0
+        || origin.x.checked_add(extent.width).is_none_or(|end| end > mw)
+        || origin.y.checked_add(extent.height).is_none_or(|end| end > mh)
+    {
+        return None;
+    }
+    Some((
+        range,
+        TextureSubresource {
+            mip: layers.mip_level,
+            layer: layers.base_array_layer,
+            aspect: TextureAspect::All,
+        },
+        origin,
+        Extent3d { width: extent.width, height: extent.height, depth: 1 },
+    ))
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyBufferToImage(
+    command_buffer: VkCommandBuffer,
+    src_buffer: VkBuffer,
+    dst_image: VkImage,
+    dst_image_layout: vk::ImageLayout,
+    region_count: u32,
+    p_regions: *const vk::BufferImageCopy,
+) {
+    if region_count == 0 || p_regions.is_null() || !transfer_layout_ok(dst_image_layout, true) {
+        return;
+    }
+    let regions = unsafe { core::slice::from_raw_parts(p_regions, region_count as usize) };
+    let mut s = reg::lock();
+    let (Some(buffer), Some(image)) = (s.buffers.get(&src_buffer), s.images.get(&dst_image)) else {
+        return;
+    };
+    if buffer.usage & buffer_usage::COPY_SRC == 0
+        || image.usage & vk::ImageUsageFlags::TRANSFER_DST.as_raw() == 0
+        || image.sample_count != 1
+    {
+        return;
+    }
+    let mut encs = Vec::with_capacity(regions.len());
+    let mut events = Vec::with_capacity(regions.len());
+    for region in regions {
+        let Some((range, sub, origin, extent)) =
+            checked_region(image, region.image_subresource, region.image_offset, region.image_extent)
+        else {
+            return;
+        };
+        if origin != Origin3d::default() || sub.layer != 0 {
+            return;
+        }
+        let row_texels = if region.buffer_row_length == 0 { extent.width } else { region.buffer_row_length };
+        let image_rows = if region.buffer_image_height == 0 { extent.height } else { region.buffer_image_height };
+        if row_texels < extent.width || image_rows < extent.height {
+            return;
+        }
+        let bytes_per_row = match row_texels.checked_mul(4) {
+            Some(value) => value,
+            None => return,
+        };
+        let span = match (bytes_per_row as u64)
+            .checked_mul(extent.height.saturating_sub(1) as u64)
+            .and_then(|value| value.checked_add(extent.width as u64 * 4))
+            .and_then(|value| value.checked_add(region.buffer_offset))
+        {
+            Some(value) if value <= buffer.size => value,
+            _ => return,
+        };
+        let _ = span;
+        encs.push(Enc::CopyBufferToTexture {
+            src: buffer.ir_id,
+            src_offset: region.buffer_offset,
+            bytes_per_row,
+            dst: image.ir_id,
+            mip: sub.mip,
+            width: extent.width,
+            height: extent.height,
+        });
+        events.push(ImageEvent::TransferUse {
+            image: dst_image,
+            range,
+            required_layout: dst_image_layout.as_raw(),
+            access: vk::AccessFlags::TRANSFER_WRITE.as_raw(),
+        });
+    }
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.enc.extend(encs);
+        cb.image_events.extend(events);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyImageToBuffer(
+    command_buffer: VkCommandBuffer,
+    src_image: VkImage,
+    src_image_layout: vk::ImageLayout,
+    dst_buffer: VkBuffer,
+    region_count: u32,
+    p_regions: *const vk::BufferImageCopy,
+) {
+    if region_count == 0 || p_regions.is_null() || !transfer_layout_ok(src_image_layout, false) {
+        return;
+    }
+    let regions = unsafe { core::slice::from_raw_parts(p_regions, region_count as usize) };
+    let mut s = reg::lock();
+    let (Some(image), Some(buffer)) = (s.images.get(&src_image), s.buffers.get(&dst_buffer)) else {
+        return;
+    };
+    if image.usage & vk::ImageUsageFlags::TRANSFER_SRC.as_raw() == 0
+        || buffer.usage & buffer_usage::COPY_DST == 0
+        || image.sample_count != 1
+    {
+        return;
+    }
+    let mut encs = Vec::with_capacity(regions.len());
+    let mut events = Vec::with_capacity(regions.len());
+    for region in regions {
+        let Some((range, sub, origin, extent)) =
+            checked_region(image, region.image_subresource, region.image_offset, region.image_extent)
+        else {
+            return;
+        };
+        if origin != Origin3d::default() || sub.layer != 0 {
+            return;
+        }
+        let row_texels = if region.buffer_row_length == 0 { extent.width } else { region.buffer_row_length };
+        let image_rows = if region.buffer_image_height == 0 { extent.height } else { region.buffer_image_height };
+        if row_texels < extent.width || image_rows < extent.height {
+            return;
+        }
+        let bytes_per_row = match row_texels.checked_mul(4) {
+            Some(value) => value,
+            None => return,
+        };
+        let end = (bytes_per_row as u64)
+            .checked_mul(extent.height.saturating_sub(1) as u64)
+            .and_then(|value| value.checked_add(extent.width as u64 * 4))
+            .and_then(|value| value.checked_add(region.buffer_offset));
+        if end.is_none_or(|value| value > buffer.size) {
+            return;
+        }
+        encs.push(Enc::CopyTextureToBuffer {
+            src: image.ir_id,
+            mip: sub.mip,
+            width: extent.width,
+            height: extent.height,
+            dst: buffer.ir_id,
+            dst_offset: region.buffer_offset,
+            bytes_per_row,
+        });
+        events.push(ImageEvent::TransferUse {
+            image: src_image,
+            range,
+            required_layout: src_image_layout.as_raw(),
+            access: vk::AccessFlags::TRANSFER_READ.as_raw(),
+        });
+    }
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.enc.extend(encs);
+        cb.image_events.extend(events);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyImage(
+    command_buffer: VkCommandBuffer,
+    src_image: VkImage,
+    src_image_layout: vk::ImageLayout,
+    dst_image: VkImage,
+    dst_image_layout: vk::ImageLayout,
+    region_count: u32,
+    p_regions: *const vk::ImageCopy,
+) {
+    if region_count == 0
+        || p_regions.is_null()
+        || !transfer_layout_ok(src_image_layout, false)
+        || !transfer_layout_ok(dst_image_layout, true)
+    {
+        return;
+    }
+    let regions = unsafe { core::slice::from_raw_parts(p_regions, region_count as usize) };
+    let mut s = reg::lock();
+    let (Some(src), Some(dst)) = (s.images.get(&src_image), s.images.get(&dst_image)) else {
+        return;
+    };
+    if src.format != dst.format
+        || src.sample_count != 1
+        || dst.sample_count != 1
+        || src.usage & vk::ImageUsageFlags::TRANSFER_SRC.as_raw() == 0
+        || dst.usage & vk::ImageUsageFlags::TRANSFER_DST.as_raw() == 0
+    {
+        return;
+    }
+    let mut encs = Vec::with_capacity(regions.len());
+    let mut events = Vec::with_capacity(regions.len() * 2);
+    for region in regions {
+        let Some((src_range, src_sub, src_origin, extent)) =
+            checked_region(src, region.src_subresource, region.src_offset, region.extent)
+        else {
+            return;
+        };
+        let Some((dst_range, dst_sub, dst_origin, dst_extent)) =
+            checked_region(dst, region.dst_subresource, region.dst_offset, region.extent)
+        else {
+            return;
+        };
+        if extent != dst_extent {
+            return;
+        }
+        if src_image == dst_image
+            && src_sub == dst_sub
+            && src_origin.x < dst_origin.x + extent.width
+            && dst_origin.x < src_origin.x + extent.width
+            && src_origin.y < dst_origin.y + extent.height
+            && dst_origin.y < src_origin.y + extent.height
+        {
+            return;
+        }
+        encs.push(Enc::CopyTextureToTexture {
+            src: src.ir_id,
+            src_sub,
+            src_origin,
+            dst: dst.ir_id,
+            dst_sub,
+            dst_origin,
+            extent,
+        });
+        events.push(ImageEvent::TransferUse {
+            image: src_image,
+            range: src_range,
+            required_layout: src_image_layout.as_raw(),
+            access: vk::AccessFlags::TRANSFER_READ.as_raw(),
+        });
+        events.push(ImageEvent::TransferUse {
+            image: dst_image,
+            range: dst_range,
+            required_layout: dst_image_layout.as_raw(),
+            access: vk::AccessFlags::TRANSFER_WRITE.as_raw(),
+        });
+    }
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.enc.extend(encs);
+        cb.image_events.extend(events);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdBlitImage(
+    command_buffer: VkCommandBuffer,
+    src_image: VkImage,
+    src_image_layout: vk::ImageLayout,
+    dst_image: VkImage,
+    dst_image_layout: vk::ImageLayout,
+    region_count: u32,
+    p_regions: *const vk::ImageBlit,
+    filter: vk::Filter,
+) {
+    if region_count == 0
+        || p_regions.is_null()
+        || !transfer_layout_ok(src_image_layout, false)
+        || !transfer_layout_ok(dst_image_layout, true)
+        || !matches!(filter, vk::Filter::NEAREST | vk::Filter::LINEAR)
+    {
+        return;
+    }
+    let regions = unsafe { core::slice::from_raw_parts(p_regions, region_count as usize) };
+    let mut s = reg::lock();
+    let (Some(src), Some(dst)) = (s.images.get(&src_image), s.images.get(&dst_image)) else {
+        return;
+    };
+    if src.format != dst.format
+        || src.sample_count != 1
+        || dst.sample_count != 1
+        || src_image == dst_image
+        || src.usage & vk::ImageUsageFlags::TRANSFER_SRC.as_raw() == 0
+        || dst.usage & vk::ImageUsageFlags::TRANSFER_DST.as_raw() == 0
+    {
+        return;
+    }
+    let mut encs = Vec::with_capacity(regions.len());
+    let mut events = Vec::with_capacity(regions.len() * 2);
+    for region in regions {
+        let [s0, s1] = region.src_offsets;
+        let [d0, d1] = region.dst_offsets;
+        if s1.x <= s0.x || s1.y <= s0.y || s0.z != 0 || s1.z != 1
+            || d1.x <= d0.x || d1.y <= d0.y || d0.z != 0 || d1.z != 1
+        {
+            return; // reversed/3D blits need signed origins in the shared IR
+        }
+        let src_extent_vk = vk::Extent3D {
+            width: (s1.x - s0.x) as u32,
+            height: (s1.y - s0.y) as u32,
+            depth: 1,
+        };
+        let dst_extent_vk = vk::Extent3D {
+            width: (d1.x - d0.x) as u32,
+            height: (d1.y - d0.y) as u32,
+            depth: 1,
+        };
+        let Some((src_range, src_sub, src_origin, src_extent)) =
+            checked_region(src, region.src_subresource, s0, src_extent_vk)
+        else {
+            return;
+        };
+        let Some((dst_range, dst_sub, dst_origin, dst_extent)) =
+            checked_region(dst, region.dst_subresource, d0, dst_extent_vk)
+        else {
+            return;
+        };
+        encs.push(Enc::BlitTexture {
+            src: src.ir_id,
+            src_sub,
+            src_origin,
+            src_extent,
+            dst: dst.ir_id,
+            dst_sub,
+            dst_origin,
+            dst_extent,
+            filter: if filter == vk::Filter::LINEAR { Filter::Linear } else { Filter::Nearest },
+        });
+        events.push(ImageEvent::TransferUse {
+            image: src_image,
+            range: src_range,
+            required_layout: src_image_layout.as_raw(),
+            access: vk::AccessFlags::TRANSFER_READ.as_raw(),
+        });
+        events.push(ImageEvent::TransferUse {
+            image: dst_image,
+            range: dst_range,
+            required_layout: dst_image_layout.as_raw(),
+            access: vk::AccessFlags::TRANSFER_WRITE.as_raw(),
+        });
+    }
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.enc.extend(encs);
+        cb.image_events.extend(events);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdClearColorImage(
+    command_buffer: VkCommandBuffer,
+    image: VkImage,
+    image_layout: vk::ImageLayout,
+    p_color: *const vk::ClearColorValue,
+    range_count: u32,
+    p_ranges: *const vk::ImageSubresourceRange,
+) {
+    let (Some(color), false) = (unsafe { p_color.as_ref() }, p_ranges.is_null()) else {
+        return;
+    };
+    if range_count == 0 || !transfer_layout_ok(image_layout, true) {
+        return;
+    }
+    let ranges = unsafe { core::slice::from_raw_parts(p_ranges, range_count as usize) };
+    let mut s = reg::lock();
+    let Some(record) = s.images.get(&image) else {
+        return;
+    };
+    if record.usage & vk::ImageUsageFlags::TRANSFER_DST.as_raw() == 0 || record.sample_count != 1 {
+        return;
+    }
+    let mut encs = Vec::with_capacity(ranges.len());
+    let mut events = Vec::with_capacity(ranges.len());
+    for raw in ranges {
+        let Some(range) = resolve_range(record, *raw) else {
+            return;
+        };
+        if range.base_mip_level != 0
+            || range.level_count != 1
+            || range.base_array_layer != 0
+            || range.layer_count != 1
+        {
+            return; // ClearRect currently addresses only the materialized base color view.
+        }
+        encs.push(Enc::ClearRect {
+            texture: record.ir_id,
+            x: 0,
+            y: 0,
+            w: record.width,
+            h: record.height,
+            color: unsafe { color.float32 },
+        });
+        events.push(ImageEvent::TransferUse {
+            image,
+            range,
+            required_layout: image_layout.as_raw(),
+            access: vk::AccessFlags::TRANSFER_WRITE.as_raw(),
+        });
+    }
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        cb.enc.extend(encs);
+        cb.image_events.extend(events);
+    }
+}
+
 // ---- submit + sync -------------------------------------------------------------------------------
 
 fn for_each_subresource_mut(
@@ -715,6 +1150,21 @@ fn validate_image_events(
                         return false;
                     }
                     state.layout = *final_layout;
+                    true
+                }) {
+                    return false;
+                }
+            }
+            ImageEvent::TransferUse { image, range, required_layout, access } => {
+                let Some(image) = images.get_mut(image) else {
+                    return false;
+                };
+                if !for_each_subresource_mut(image, *range, |state| {
+                    if state.layout != *required_layout || state.owner_queue_family != 0 {
+                        return false;
+                    }
+                    state.last_access = *access;
+                    state.last_stage = vk::PipelineStageFlags::TRANSFER.as_raw();
                     true
                 }) {
                     return false;
@@ -1009,6 +1459,8 @@ pub extern "C" fn vkDestroySemaphore(_device: VkDevice, semaphore: VkSemaphore, 
 mod layout_tests {
     use super::*;
 
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn create_image() -> VkImage {
         let ci = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
@@ -1018,7 +1470,11 @@ mod layout_tests {
             .array_layers(2)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
+            .usage(
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST,
+            )
             .initial_layout(vk::ImageLayout::UNDEFINED);
         let mut image = 0;
         assert_eq!(
@@ -1142,6 +1598,7 @@ mod layout_tests {
 
     #[test]
     fn image_layout_barriers_track_subresources_and_apply_atomically_at_submit() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         let image = create_image();
         let cb = 0x1010usize as VkCommandBuffer;
         begin(cb);
@@ -1296,5 +1753,203 @@ mod layout_tests {
         crate::pipeline::vkDestroyRenderPass(core::ptr::null_mut(), render_pass, core::ptr::null());
         crate::memory::vkDestroyImageView(core::ptr::null_mut(), view, core::ptr::null());
         crate::memory::vkDestroyImage(core::ptr::null_mut(), image, core::ptr::null());
+    }
+
+    #[test]
+    fn vulkan_transfer_regions_lower_without_field_loss_and_reject_atomically() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let src = create_image();
+        let dst = create_image();
+        let cb = 0x2020usize as VkCommandBuffer;
+
+        let buffer_ci = vk::BufferCreateInfo::default()
+            .size(512)
+            .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST);
+        let mut upload = 0;
+        let mut readback = 0;
+        assert_eq!(
+            crate::memory::vkCreateBuffer(core::ptr::null_mut(), &buffer_ci, core::ptr::null(), &mut upload),
+            VK_SUCCESS
+        );
+        assert_eq!(
+            crate::memory::vkCreateBuffer(core::ptr::null_mut(), &buffer_ci, core::ptr::null(), &mut readback),
+            VK_SUCCESS
+        );
+
+        begin(cb);
+        barrier(cb, src, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, 0, 1, 0, 1);
+        barrier(cb, dst, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, 0, 1, 0, 1);
+        let buffer_region = vk::BufferImageCopy {
+            buffer_offset: 16,
+            buffer_row_length: 8,
+            buffer_image_height: 5,
+            image_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+            image_extent: vk::Extent3D { width: 4, height: 3, depth: 1 },
+        };
+        vkCmdCopyBufferToImage(
+            cb,
+            upload,
+            src,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            1,
+            &buffer_region,
+        );
+        barrier(
+            cb,
+            src,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            0,
+            1,
+            0,
+            1,
+        );
+        let image_region = vk::ImageCopy {
+            src_subresource: buffer_region.image_subresource,
+            src_offset: vk::Offset3D { x: 1, y: 1, z: 0 },
+            dst_subresource: buffer_region.image_subresource,
+            dst_offset: vk::Offset3D { x: 3, y: 2, z: 0 },
+            extent: vk::Extent3D { width: 2, height: 2, depth: 1 },
+        };
+        vkCmdCopyImage(
+            cb,
+            src,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            dst,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            1,
+            &image_region,
+        );
+        let blit_region = vk::ImageBlit {
+            src_subresource: buffer_region.image_subresource,
+            src_offsets: [vk::Offset3D { x: 0, y: 0, z: 0 }, vk::Offset3D { x: 2, y: 2, z: 1 }],
+            dst_subresource: buffer_region.image_subresource,
+            dst_offsets: [vk::Offset3D { x: 4, y: 4, z: 0 }, vk::Offset3D { x: 8, y: 8, z: 1 }],
+        };
+        vkCmdBlitImage(
+            cb,
+            src,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            dst,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            1,
+            &blit_region,
+            vk::Filter::LINEAR,
+        );
+        let clear = vk::ClearColorValue { float32: [0.25, 0.5, 0.75, 1.0] };
+        let clear_range = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        vkCmdClearColorImage(
+            cb,
+            dst,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &clear,
+            1,
+            &clear_range,
+        );
+        barrier(
+            cb,
+            dst,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            0,
+            1,
+            0,
+            1,
+        );
+        vkCmdCopyImageToBuffer(
+            cb,
+            dst,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            readback,
+            1,
+            &buffer_region,
+        );
+
+        let key = cb as usize;
+        let enc = reg::lock().cmdbufs[&key].enc.clone();
+        assert!(enc.iter().any(|op| matches!(
+            op,
+            Enc::CopyBufferToTexture {
+                src_offset: 16,
+                bytes_per_row: 32,
+                mip: 0,
+                width: 4,
+                height: 3,
+                ..
+            }
+        )));
+        assert!(enc.iter().any(|op| matches!(
+            op,
+            Enc::BlitTexture {
+                src_origin: Origin3d { x: 0, y: 0, z: 0 },
+                src_extent: Extent3d { width: 2, height: 2, depth: 1 },
+                dst_origin: Origin3d { x: 4, y: 4, z: 0 },
+                dst_extent: Extent3d { width: 4, height: 4, depth: 1 },
+                filter: Filter::Linear,
+                ..
+            }
+        )));
+        assert!(enc.iter().any(|op| matches!(
+            op,
+            Enc::ClearRect { x: 0, y: 0, w: 8, h: 8, color, .. }
+                if *color == [0.25, 0.5, 0.75, 1.0]
+        )));
+        assert!(enc.iter().any(|op| matches!(
+            op,
+            Enc::CopyTextureToTexture {
+                src_origin: Origin3d { x: 1, y: 1, z: 0 },
+                dst_origin: Origin3d { x: 3, y: 2, z: 0 },
+                extent: Extent3d { width: 2, height: 2, depth: 1 },
+                ..
+            }
+        )));
+        assert!(enc.iter().any(|op| matches!(
+            op,
+            Enc::CopyTextureToBuffer {
+                dst_offset: 16,
+                bytes_per_row: 32,
+                width: 4,
+                height: 3,
+                ..
+            }
+        )));
+
+        // A multi-region call with an OOB tail records neither its valid head nor its invalid tail.
+        let before = reg::lock().cmdbufs[&key].enc.len();
+        let invalid = vk::ImageCopy {
+            dst_offset: vk::Offset3D { x: 7, y: 7, z: 0 },
+            extent: vk::Extent3D { width: 2, height: 2, depth: 1 },
+            ..image_region
+        };
+        let regions = [image_region, invalid];
+        vkCmdCopyImage(
+            cb,
+            src,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            dst,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            2,
+            regions.as_ptr(),
+        );
+        assert_eq!(reg::lock().cmdbufs[&key].enc.len(), before);
+
+        assert_eq!(vkEndCommandBuffer(cb), VK_SUCCESS);
+        assert_eq!(submit(cb), VK_SUCCESS);
+        crate::memory::vkDestroyBuffer(core::ptr::null_mut(), upload, core::ptr::null());
+        crate::memory::vkDestroyBuffer(core::ptr::null_mut(), readback, core::ptr::null());
+        crate::memory::vkDestroyImage(core::ptr::null_mut(), src, core::ptr::null());
+        crate::memory::vkDestroyImage(core::ptr::null_mut(), dst, core::ptr::null());
     }
 }
