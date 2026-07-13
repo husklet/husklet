@@ -36,11 +36,19 @@ pub struct BufferRec {
 
 pub struct MemRec {
     pub data: Vec<u8>,
+    /// The `VkMemoryAllocateInfo::allocationSize` this was created with (the valid bind/map range).
+    pub size: u64,
+    /// The `VkMemoryAllocateInfo::memoryTypeIndex` (our single unified type is 0). Retained so bind can
+    /// validate a buffer/image's `memoryTypeBits` against it (MoltenVK `MVKDeviceMemory` records this).
+    pub memory_type_index: u32,
     pub bound_buffer: Option<u64>,
     /// Currently mapped (vkMapMemory without vkUnmapMemory). HOST_COHERENT memory is often mapped
     /// persistently and written every frame WITHOUT an unmap (vkcube's rotating MVP uniform buffer),
     /// so such buffers must be re-uploaded to the host each submit — see `flush_mapped` at vkQueueSubmit.
     pub mapped: bool,
+    /// The currently-mapped byte range `[offset, offset+len)` (validated in `vkMapMemory`); `None` when
+    /// unmapped. Ported from `MVKDeviceMemory::_mappedRange`.
+    pub mapped_range: Option<(u64, u64)>,
 }
 
 pub struct ShaderRec {
@@ -65,6 +73,9 @@ pub struct ImageRec {
     pub height: u32,
     pub format: TextureFormat,
     pub is_render_target: bool,
+    /// The `VkDeviceMemory` this image is bound to (`vkBindImageMemory`), or `None` if unbound. Image
+    /// binding is NOT a no-op: it validates and records ownership (MoltenVK `MVKImage::bindDeviceMemory`).
+    pub bound_mem: Option<u64>,
 }
 
 pub struct ImageViewRec {
@@ -118,15 +129,79 @@ pub struct SwapchainRec {
     pub next: usize,
 }
 
-/// Command-buffer recording state.
+/// The Vulkan command-buffer lifecycle state (spec §6 "Command Buffer Lifecycle"). Ported from
+/// MoltenVK's `MVKCommandBuffer` flag model (`_canAcceptCommands` / `_isReusable` / `_wasExecuted` /
+/// `_isExecutingNonConcurrently`) into the explicit enum the audit (§9.2) recommends:
+///
+/// * `Initial`    — freshly allocated or reset; can only be begun.
+/// * `Recording`  — inside `vkBeginCommandBuffer`; accepts `vkCmd*`.
+/// * `Executable` — `vkEndCommandBuffer` succeeded; can be submitted (and re-submitted if reusable).
+/// * `Pending`    — submitted to a queue and not yet completed; must NOT be touched (external sync).
+/// * `Invalid`    — a one-time-submit buffer that has executed, or a recording error; must be reset.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum CommandBufferState {
+    #[default]
+    Initial,
+    Recording,
+    Executable,
+    Pending,
+    Invalid,
+}
+
+/// Command-buffer recording state + its lifecycle state machine.
 #[derive(Default)]
 pub struct CmdBufRec {
+    /// The lifecycle state (Initial/Recording/Executable/Pending/Invalid).
+    pub state: CommandBufferState,
+    /// `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT` was set at begin: the buffer becomes `Invalid`
+    /// after one execution (MoltenVK `_isReusable = !ONE_TIME_SUBMIT`).
+    pub one_time_submit: bool,
+    /// `VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT` was set at begin (MoltenVK
+    /// `_supportsConcurrentExecution`): the buffer may be resubmitted while still `Pending`.
+    pub simultaneous_use: bool,
+    /// Whether the buffer has been executed at least once (MoltenVK `_wasExecuted`).
+    pub was_executed: bool,
     pub enc: Vec<Enc>,
     pub bound_pipeline: Option<u32>,
     pub bound_pipeline_kind: Option<u8>, // 0 = graphics, 1 = compute
     pub pending_bind_groups: Vec<(u32, u32)>, // (set index, bind-group IR id)
     pub in_render_pass: bool,
     pub pipeline_set_in_pass: bool,
+}
+
+impl CmdBufRec {
+    /// A freshly-allocated command buffer (MoltenVK: pool-owned, `Initial`).
+    pub fn initial() -> Self {
+        CmdBufRec::default()
+    }
+
+    /// Clear the recorded contents back to a just-begun state, preserving the usage flags parsed at
+    /// begin. Ported from `MVKCommandBuffer::reset` (called at the start of `begin`).
+    pub fn reset_recording(&mut self) {
+        self.enc.clear();
+        self.bound_pipeline = None;
+        self.bound_pipeline_kind = None;
+        self.pending_bind_groups.clear();
+        self.in_render_pass = false;
+        self.pipeline_set_in_pass = false;
+    }
+}
+
+/// A `VkFence`: its guest-side signaled state. The host Metal executor renders synchronously and does
+/// not model fences, so the fence is a guest-side state machine (MoltenVK `MVKFence`): unsignaled at
+/// creation (unless `VK_FENCE_CREATE_SIGNALED_BIT`), signaled when the submission it guards completes,
+/// reset by `vkResetFences`.
+pub struct FenceRec {
+    pub ir_id: u32,
+    pub signaled: bool,
+}
+
+/// A binary `VkSemaphore`: its guest-side signaled state (MoltenVK `MVKSemaphore` binary model). A
+/// submit's wait-semaphores must be signaled and are consumed (reset); its signal-semaphores are
+/// signaled on completion.
+#[derive(Default)]
+pub struct SemaphoreRec {
+    pub signaled: bool,
 }
 
 // ---- the global state ----------------------------------------------------------------------------
@@ -146,7 +221,8 @@ pub struct VkState {
     pub render_passes: HashMap<u64, RenderPassRec>,
     pub framebuffers: HashMap<u64, FramebufferRec>,
     pub cmdbufs: HashMap<usize, CmdBufRec>,
-    pub fences: HashMap<u64, u32>, // fence handle -> IR fence id
+    pub fences: HashMap<u64, FenceRec>, // fence handle -> guest-side fence state
+    pub semaphores: HashMap<u64, SemaphoreRec>, // binary semaphore handle -> signaled state
     pub surfaces: HashMap<u64, SurfaceRec>,
     pub swapchains: HashMap<u64, SwapchainRec>,
     /// Lazily-opened host GPU-exec channel (only when `$DD_GPU_EXEC` is set — the live guest path).
@@ -172,6 +248,17 @@ impl VkState {
     /// Append a resource-level IR command to the log.
     pub fn record(&mut self, cmd: Cmd) {
         self.ir_log.push(cmd);
+    }
+
+    /// Borrow a command buffer's record ONLY if it is currently `Recording` — the Vulkan rule that a
+    /// `vkCmd*` outside an active `vkBegin/End` recording is invalid and must not mutate the buffer
+    /// (MoltenVK `MVKCommandBuffer::addCommand` rejects commands unless `_canAcceptCommands`). Returns
+    /// `None` (command dropped) otherwise, so out-of-recording commands cannot corrupt the stream.
+    pub fn recording_mut(&mut self, key: usize) -> Option<&mut CmdBufRec> {
+        match self.cmdbufs.get_mut(&key) {
+            Some(cb) if cb.state == CommandBufferState::Recording => Some(cb),
+            _ => None,
+        }
     }
 
     /// Re-upload every currently-mapped, buffer-bound memory to the host as a `WriteBuffer` — the

@@ -139,6 +139,17 @@ pub extern "C" fn vkGetImageMemoryRequirements(
 
 // ---- device memory -------------------------------------------------------------------------------
 
+/// Our single unified memory type (index 0): DEVICE_LOCAL|HOST_VISIBLE|HOST_COHERENT (`state::memory_properties`).
+const UNIFIED_MEMORY_TYPE_INDEX: u32 = 0;
+/// The alignment `vkGetBufferMemoryRequirements` reports; bind offsets must be a multiple of it.
+const BUFFER_ALIGNMENT: u64 = 256;
+/// `VK_WHOLE_SIZE` sentinel (map/flush a range from `offset` to the end of the allocation).
+const VK_WHOLE_SIZE: u64 = u64::MAX;
+
+/// `vkAllocateMemory` — validate the requested `memoryTypeIndex` against our single exposed type and
+/// allocate the backing store **fallibly** (never convert an arbitrary `u64` to an infallible `Vec`,
+/// which would abort on a huge request). Ported from MoltenVK `MVKDeviceMemory` (records size + type;
+/// a failed host allocation surfaces as `VK_ERROR_OUT_OF_DEVICE_MEMORY`, not a crash).
 #[no_mangle]
 pub extern "C" fn vkAllocateMemory(
     _device: VkDevice,
@@ -151,14 +162,29 @@ pub extern "C" fn vkAllocateMemory(
     else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    let memory_type_index = ai.memory_type_index;
+    if memory_type_index != UNIFIED_MEMORY_TYPE_INDEX {
+        // We advertise exactly one memory type; any other index is not backed.
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    let size = ai.allocation_size;
+    // Fallible allocation: a genuinely huge (or attacker-chosen) allocationSize must fail, not abort.
+    let mut data: Vec<u8> = Vec::new();
+    if data.try_reserve_exact(size as usize).is_err() {
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    }
+    data.resize(size as usize, 0);
     let mut s = reg::lock();
     let handle = s.alloc_handle();
     s.memories.insert(
         handle,
         MemRec {
-            data: vec![0u8; ai.allocation_size as usize],
+            data,
+            size,
+            memory_type_index,
             bound_buffer: None,
             mapped: false,
+            mapped_range: None,
         },
     );
     *out = handle;
@@ -170,6 +196,11 @@ pub extern "C" fn vkFreeMemory(_device: VkDevice, memory: VkDeviceMemory, _p_all
     reg::lock().memories.remove(&memory);
 }
 
+/// `vkBindBufferMemory` — bind a buffer to a range of a device allocation, **validating** the Vulkan
+/// requirements before mutating any state (MoltenVK `MVKBuffer::bindDeviceMemory` + the spec's bind
+/// VUIDs): the objects exist, the buffer is not already bound, the offset is aligned to the buffer's
+/// required alignment, the memory type is compatible with the buffer's `memoryTypeBits`, and
+/// `offset + size` fits inside the allocation. It is NOT an unconditional success.
 #[no_mangle]
 pub extern "C" fn vkBindBufferMemory(
     _device: VkDevice,
@@ -178,6 +209,34 @@ pub extern "C" fn vkBindBufferMemory(
     memory_offset: u64,
 ) -> VkResult {
     let mut s = reg::lock();
+    // The buffer must exist and must not already be bound (a buffer binds exactly once).
+    let Some(b) = s.buffers.get(&buffer) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if b.bound_mem.is_some() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    let buf_size = b.size;
+    // `vkGetBufferMemoryRequirements` reports memoryTypeBits = 0b1 (only our type 0 is compatible).
+    let buffer_memory_type_bits = 0b1u32;
+    // The memory must exist; read its allocation size + type for the range/compat checks.
+    let Some(m) = s.memories.get(&memory) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let allocation_size = m.size;
+    if (buffer_memory_type_bits >> m.memory_type_index) & 1 == 0 {
+        return VK_ERROR_INITIALIZATION_FAILED; // memory type incompatible with the buffer
+    }
+    // Offset must be a multiple of the buffer's required alignment.
+    if memory_offset % BUFFER_ALIGNMENT != 0 {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    // The bound range must fit within the allocation (checked arithmetic — no wraparound).
+    match memory_offset.checked_add(buf_size) {
+        Some(end) if end <= allocation_size => {}
+        _ => return VK_ERROR_OUT_OF_DEVICE_MEMORY,
+    }
+    // All checks passed — record the binding on both sides.
     if let Some(b) = s.buffers.get_mut(&buffer) {
         b.bound_mem = Some(memory);
         b.bound_offset = memory_offset;
@@ -186,6 +245,25 @@ pub extern "C" fn vkBindBufferMemory(
         m.bound_buffer = Some(buffer);
     }
     VK_SUCCESS
+}
+
+/// Validate a `vkMapMemory` range against an allocation, returning the mapped length in bytes or
+/// `VK_ERROR_MEMORY_MAP_FAILED`. `VK_WHOLE_SIZE` maps from `offset` to the end. Ported from the range
+/// checks in `MVKDeviceMemory::map`. (Placed here, with the binding entry points, as the shared memory
+/// range validator.)
+fn mapped_len(allocation_size: u64, offset: u64, size: u64) -> Result<usize, VkResult> {
+    if offset > allocation_size {
+        return Err(VK_ERROR_MEMORY_MAP_FAILED);
+    }
+    let end = if size == VK_WHOLE_SIZE {
+        allocation_size
+    } else {
+        match offset.checked_add(size) {
+            Some(e) if e <= allocation_size => e,
+            _ => return Err(VK_ERROR_MEMORY_MAP_FAILED),
+        }
+    };
+    Ok((end - offset) as usize)
 }
 
 /// `vkMapMemory` — hand the app a pointer into the host staging allocation (host-visible|coherent, the
@@ -200,7 +278,7 @@ pub extern "C" fn vkMapMemory(
     _device: VkDevice,
     memory: VkDeviceMemory,
     offset: u64,
-    _size: u64,
+    size: u64,
     _flags: u32,
     pp_data: *mut *mut c_void,
 ) -> VkResult {
@@ -209,11 +287,29 @@ pub extern "C" fn vkMapMemory(
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     let mut s = reg::lock();
+    // The memory must exist and be host-visible (our single type is HOST_VISIBLE|COHERENT).
     let Some(m) = s.memories.get_mut(&memory) else {
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_MEMORY_MAP_FAILED;
     };
+    // Vulkan forbids mapping an already-mapped allocation.
+    if m.mapped {
+        return VK_ERROR_MEMORY_MAP_FAILED;
+    }
+    // Validate the [offset, offset+size) range against the allocation (VK_WHOLE_SIZE → to the end).
+    let len = match mapped_len(m.size, offset, size) {
+        Ok(l) => l,
+        Err(e) => return e,
+    };
+    // Bounds-check the pointer arithmetic itself (checked; no unchecked `add` past the buffer).
+    let base = m.data.as_mut_ptr();
+    if (offset as usize).checked_add(len).map(|e| e as u64 > m.size).unwrap_or(true) {
+        return VK_ERROR_MEMORY_MAP_FAILED;
+    }
     m.mapped = true;
-    *out = unsafe { m.data.as_mut_ptr().add(offset as usize) } as *mut c_void;
+    m.mapped_range = Some((offset, len as u64));
+    // SAFETY: offset+len ≤ allocation size (validated above) and the Vec is not reallocated while
+    // mapped (Vulkan external-sync rules), so this pointer stays valid until vkUnmapMemory/vkFreeMemory.
+    *out = unsafe { base.add(offset as usize) } as *mut c_void;
     VK_SUCCESS
 }
 
@@ -222,7 +318,10 @@ pub extern "C" fn vkMapMemory(
 #[no_mangle]
 pub extern "C" fn vkUnmapMemory(_device: VkDevice, memory: VkDeviceMemory) {
     let mut s = reg::lock();
-    if let Some(m) = s.memories.get_mut(&memory) { m.mapped = false; }
+    if let Some(m) = s.memories.get_mut(&memory) {
+        m.mapped = false;
+        m.mapped_range = None;
+    }
     let Some(m) = s.memories.get(&memory) else {
         return;
     };
@@ -287,6 +386,7 @@ pub extern "C" fn vkCreateImage(
             height: ci.extent.height,
             format: tex_format(ci.format),
             is_render_target: is_rt,
+            bound_mem: None,
         },
     );
     // A color attachment is host-owned (registered by the host as a render target); non-attachment
@@ -328,13 +428,35 @@ pub extern "C" fn vkGetImageSubresourceLayout(
     }
 }
 
+/// `vkBindImageMemory` — bind an image to device memory. This is **NOT** a success no-op: it validates
+/// that both objects exist, the image is not already bound, and the required extent fits within the
+/// allocation at the offset, then records the ownership. Ported from `MVKImage::bindDeviceMemory`.
 #[no_mangle]
 pub extern "C" fn vkBindImageMemory(
     _device: VkDevice,
-    _image: VkImage,
-    _memory: VkDeviceMemory,
-    _offset: u64,
+    image: VkImage,
+    memory: VkDeviceMemory,
+    offset: u64,
 ) -> VkResult {
+    let mut s = reg::lock();
+    // The memory must exist; capture its allocation size (immutable borrow ends before the mut borrow).
+    let allocation_size = match s.memories.get(&memory) {
+        Some(m) => m.size,
+        None => return VK_ERROR_INITIALIZATION_FAILED,
+    };
+    let Some(img) = s.images.get_mut(&image) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if img.bound_mem.is_some() {
+        return VK_ERROR_INITIALIZATION_FAILED; // an image binds exactly once
+    }
+    // Tightly-packed RGBA8 required size (matches vkGetImageMemoryRequirements); must fit in the range.
+    let need = (img.width as u64) * (img.height as u64) * 4;
+    match offset.checked_add(need) {
+        Some(end) if end <= allocation_size => {}
+        _ => return VK_ERROR_OUT_OF_DEVICE_MEMORY,
+    }
+    img.bound_mem = Some(memory);
     VK_SUCCESS
 }
 

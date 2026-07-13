@@ -14,7 +14,7 @@
 //!     and commits. Our `vkQueueSubmit` wraps each recorded encoder in `Cmd::Submit(CommandBuffer{ .. })`
 //!     and appends it to the IR log the host executor replays.
 
-use crate::reg::{self, RenderPassRec};
+use crate::reg::{self, CommandBufferState, RenderPassRec};
 use crate::types::*;
 use ash::vk;
 use ash::vk::Handle;
@@ -27,32 +27,78 @@ fn cb_key(cb: VkCommandBuffer) -> usize {
     cb as usize
 }
 
-// ---- command-buffer lifecycle --------------------------------------------------------------------
+// ---- command-buffer lifecycle (ported from MVKCommandBuffer.mm) ----------------------------------
 
+/// `vkBeginCommandBuffer` — transition a command buffer into the `Recording` state and parse its usage
+/// flags. Ported from `MVKCommandBuffer::begin`: `begin` resets the buffer, then reads
+/// `ONE_TIME_SUBMIT` (→ not reusable: becomes `Invalid` after one execution) and `SIMULTANEOUS_USE`
+/// (→ may be resubmitted while `Pending`). A buffer that is currently `Pending` (in flight) may not be
+/// begun (`VK_NOT_READY`).
 #[no_mangle]
 pub extern "C" fn vkBeginCommandBuffer(
     command_buffer: VkCommandBuffer,
-    _p_begin_info: *const c_void,
+    p_begin_info: *const vk::CommandBufferBeginInfo,
 ) -> VkResult {
-    reg::lock()
-        .cmdbufs
-        .insert(cb_key(command_buffer), reg::CmdBufRec::default());
+    let flags = unsafe { p_begin_info.as_ref() }
+        .map(|bi| bi.flags)
+        .unwrap_or_default();
+    let one_time_submit = flags.contains(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    let simultaneous_use = flags.contains(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE);
+    let mut s = reg::lock();
+    let cb = s.cmdbufs.entry(cb_key(command_buffer)).or_insert_with(reg::CmdBufRec::initial);
+    if cb.state == CommandBufferState::Pending {
+        return VK_NOT_READY; // cannot record a command buffer still in flight
+    }
+    cb.reset_recording(); // MVKCommandBuffer::begin calls reset(0) first
+    cb.state = CommandBufferState::Recording;
+    cb.one_time_submit = one_time_submit;
+    cb.simultaneous_use = simultaneous_use;
+    cb.was_executed = false;
     VK_SUCCESS
 }
 
+/// `vkEndCommandBuffer` — finish recording: `Recording` → `Executable`. Ending a buffer that is not
+/// recording is an error (`VK_NOT_READY`), matching `MVKCommandBuffer`'s `_canAcceptCommands` gate.
 #[no_mangle]
-pub extern "C" fn vkEndCommandBuffer(_command_buffer: VkCommandBuffer) -> VkResult {
-    VK_SUCCESS
+pub extern "C" fn vkEndCommandBuffer(command_buffer: VkCommandBuffer) -> VkResult {
+    let mut s = reg::lock();
+    match s.recording_mut(cb_key(command_buffer)) {
+        Some(cb) if cb.state == CommandBufferState::Recording => {
+            cb.state = CommandBufferState::Executable;
+            VK_SUCCESS
+        }
+        _ => VK_NOT_READY,
+    }
 }
 
+/// `vkResetCommandBuffer` — return a buffer to `Initial`, dropping its recorded commands. A `Pending`
+/// buffer must not be reset (external synchronization); we reject it rather than corrupt in-flight work.
 #[no_mangle]
 pub extern "C" fn vkResetCommandBuffer(command_buffer: VkCommandBuffer, _flags: u32) -> VkResult {
-    reg::lock().cmdbufs.remove(&cb_key(command_buffer));
+    let mut s = reg::lock();
+    if let Some(cb) = s.cmdbufs.get_mut(&cb_key(command_buffer)) {
+        if cb.state == CommandBufferState::Pending {
+            return VK_NOT_READY;
+        }
+        cb.reset_recording();
+        cb.state = CommandBufferState::Initial;
+        cb.was_executed = false;
+    }
     VK_SUCCESS
 }
 
+/// `vkResetCommandPool` — reset every command buffer recorded under this device back to `Initial`
+/// (the pool-wide reset). Pending buffers are left in flight. Ported from `MVKCommandPool::reset`.
 #[no_mangle]
 pub extern "C" fn vkResetCommandPool(_device: VkDevice, _command_pool: VkCommandPool, _flags: u32) -> VkResult {
+    let mut s = reg::lock();
+    for cb in s.cmdbufs.values_mut() {
+        if cb.state != CommandBufferState::Pending {
+            cb.reset_recording();
+            cb.state = CommandBufferState::Initial;
+            cb.was_executed = false;
+        }
+    }
     VK_SUCCESS
 }
 
@@ -71,7 +117,7 @@ pub extern "C" fn vkCmdBindPipeline(
     } else {
         0u8
     };
-    if let (Some(ir), Some(cb)) = (ir, s.cmdbufs.get_mut(&cb_key(command_buffer))) {
+    if let (Some(ir), Some(cb)) = (ir, s.recording_mut(cb_key(command_buffer))) {
         cb.bound_pipeline = Some(ir);
         cb.bound_pipeline_kind = Some(kind);
         // Graphics: emit SetPipeline as soon as it's bound inside a render pass (matches the host order).
@@ -126,7 +172,7 @@ pub extern "C" fn vkCmdBindDescriptorSets(
                 entries,
             },
         ));
-        if let Some(cb) = s.cmdbufs.get_mut(&cb_key(command_buffer)) {
+        if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
             cb.pending_bind_groups.push((set_index, ir_id));
         }
     }
@@ -152,7 +198,7 @@ pub extern "C" fn vkCmdBindVertexBuffers(
         } else {
             unsafe { *p_offsets.add(i) }
         };
-        if let Some(cb) = s.cmdbufs.get_mut(&cb_key(command_buffer)) {
+        if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
             cb.enc.push(Enc::SetVertexBuffer {
                 slot: first_binding + i as u32,
                 buffer: ir,
@@ -177,7 +223,7 @@ pub extern "C" fn vkCmdBindIndexBuffer(
     } else {
         IndexFormat::U32
     };
-    if let Some(cb) = s.cmdbufs.get_mut(&cb_key(command_buffer)) {
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
         cb.enc.push(Enc::SetIndexBuffer {
             buffer: ir,
             offset,
@@ -197,7 +243,7 @@ pub extern "C" fn vkCmdSetViewport(
         return;
     }
     let v = unsafe { &*p_viewports };
-    if let Some(cb) = reg::lock().cmdbufs.get_mut(&cb_key(command_buffer)) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
         cb.enc.push(Enc::SetViewport {
             x: v.x,
             y: v.y,
@@ -220,7 +266,7 @@ pub extern "C" fn vkCmdSetScissor(
         return;
     }
     let r = unsafe { &*p_scissors };
-    if let Some(cb) = reg::lock().cmdbufs.get_mut(&cb_key(command_buffer)) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
         cb.enc.push(Enc::SetScissor {
             x: r.offset.x.max(0) as u32,
             y: r.offset.y.max(0) as u32,
@@ -240,7 +286,7 @@ pub extern "C" fn vkCmdDispatch(
     group_count_z: u32,
 ) {
     let mut s = reg::lock();
-    if let Some(cb) = s.cmdbufs.get_mut(&cb_key(command_buffer)) {
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
         let pipeline = cb.bound_pipeline;
         let groups: Vec<(u32, u32)> = cb.pending_bind_groups.clone();
         cb.enc.push(Enc::BeginComputePass);
@@ -300,7 +346,7 @@ pub extern "C" fn vkCmdBeginRenderPass(
     };
     let store = rp.as_ref().map(|r| r.color_store).unwrap_or(true);
 
-    if let (Some(tex), Some(cb)) = (attach_ir, s.cmdbufs.get_mut(&cb_key(command_buffer))) {
+    if let (Some(tex), Some(cb)) = (attach_ir, s.recording_mut(cb_key(command_buffer))) {
         cb.enc.push(Enc::BeginRenderPass {
             color: vec![ColorAttachment {
                 texture: tex,
@@ -333,7 +379,7 @@ pub extern "C" fn vkCmdBeginRenderPass(
 
 #[no_mangle]
 pub extern "C" fn vkCmdEndRenderPass(command_buffer: VkCommandBuffer) {
-    if let Some(cb) = reg::lock().cmdbufs.get_mut(&cb_key(command_buffer)) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
         cb.enc.push(Enc::EndRenderPass);
         cb.in_render_pass = false;
     }
@@ -347,7 +393,7 @@ pub extern "C" fn vkCmdDraw(
     first_vertex: u32,
     first_instance: u32,
 ) {
-    if let Some(cb) = reg::lock().cmdbufs.get_mut(&cb_key(command_buffer)) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
         if let (false, Some(p)) = (cb.pipeline_set_in_pass, cb.bound_pipeline) {
             cb.enc.push(Enc::SetPipeline(p));
             cb.pipeline_set_in_pass = true;
@@ -370,7 +416,7 @@ pub extern "C" fn vkCmdDrawIndexed(
     vertex_offset: i32,
     first_instance: u32,
 ) {
-    if let Some(cb) = reg::lock().cmdbufs.get_mut(&cb_key(command_buffer)) {
+    if let Some(cb) = reg::lock().recording_mut(cb_key(command_buffer)) {
         if let (false, Some(p)) = (cb.pipeline_set_in_pass, cb.bound_pipeline) {
             cb.enc.push(Enc::SetPipeline(p));
             cb.pipeline_set_in_pass = true;
@@ -416,13 +462,23 @@ pub extern "C" fn vkCmdCopyBuffer(
             size: r.size,
         })
         .collect();
-    if let Some(cb) = s.cmdbufs.get_mut(&cb_key(command_buffer)) {
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
         cb.enc.extend(encs);
     }
 }
 
 // ---- submit + sync -------------------------------------------------------------------------------
 
+/// `vkQueueSubmit` — the real submission state machine, ported from `MVKQueue::submit` +
+/// `MVKQueueCommandBufferSubmission` (`GPUObjects/MVKQueue.mm`):
+///  1. Validate the ENTIRE batch atomically before mutating anything: every command buffer must be
+///     `Executable` (a one-time-submit buffer already executed is `Invalid` and rejected — MoltenVK
+///     `canExecute()`); every wait semaphore must exist and be signaled.
+///  2. Consume the wait semaphores (binary semaphores reset on wait), flush persistently-mapped
+///     coherent memory, ship the recorded encoders as `Cmd::Submit`, and move each buffer to `Pending`.
+///  3. On completion — synchronous here, since the host replays the shipped IR — signal the fence and
+///     the signal semaphores, and retire each buffer (`Pending` → `Executable`, or `Invalid` if
+///     one-time-submit). The fence-only submission form (`submitCount == 0 && fence`) just signals.
 #[no_mangle]
 pub extern "C" fn vkQueueSubmit(
     _queue: VkQueue,
@@ -430,21 +486,43 @@ pub extern "C" fn vkQueueSubmit(
     p_submits: *const vk::SubmitInfo,
     fence: VkFence,
 ) -> VkResult {
-    if p_submits.is_null() {
+    let mut s = reg::lock();
+    // Fence-only submission: nothing to execute, just signal the fence on (immediate) completion.
+    if submit_count == 0 || p_submits.is_null() {
+        if fence != 0 {
+            if let Some(f) = s.fences.get_mut(&fence) {
+                f.signaled = true;
+            }
+        }
         return VK_SUCCESS;
     }
     let submits = unsafe { core::slice::from_raw_parts(p_submits, submit_count as usize) };
-    let mut s = reg::lock();
-    // Flush persistently-mapped HOST_COHERENT buffers (vkcube writes its rotating MVP UBO every frame
-    // without unmapping) so the host sees this frame's uniform data before the draw replays.
-    s.flush_mapped();
-    // Present replay is synchronous on the host, and the Metal executor does not model fence objects,
-    // so we never signal a fence in the shipped IR (the guest fence/wait is a no-op below).
-    let signal: Option<(u32, u64)> = None;
-    let _ = fence;
-    // Collect the recorded encoders first (immutable borrow), then record the Submit commands.
-    let mut encoders: Vec<Vec<Enc>> = Vec::new();
+
+    // ---- phase 1: validate the whole batch before any mutation (atomic accept/reject) ----
+    let mut cb_keys: Vec<usize> = Vec::new();
+    let mut wait_sems: Vec<u64> = Vec::new();
+    let mut signal_sems: Vec<u64> = Vec::new();
     for sub in submits {
+        // Wait semaphores must all exist and be signaled (else the batch cannot proceed).
+        if !sub.p_wait_semaphores.is_null() {
+            let waits = unsafe {
+                core::slice::from_raw_parts(sub.p_wait_semaphores, sub.wait_semaphore_count as usize)
+            };
+            for &w in waits {
+                match s.semaphores.get(&w.as_raw()) {
+                    Some(sm) if sm.signaled => wait_sems.push(w.as_raw()),
+                    _ => return VK_ERROR_INITIALIZATION_FAILED,
+                }
+            }
+        }
+        if !sub.p_signal_semaphores.is_null() {
+            let sigs = unsafe {
+                core::slice::from_raw_parts(sub.p_signal_semaphores, sub.signal_semaphore_count as usize)
+            };
+            for &sg in sigs {
+                signal_sems.push(sg.as_raw());
+            }
+        }
         if sub.p_command_buffers.is_null() {
             continue;
         }
@@ -452,50 +530,114 @@ pub extern "C" fn vkQueueSubmit(
             unsafe { core::slice::from_raw_parts(sub.p_command_buffers, sub.command_buffer_count as usize) };
         for cb in cbs {
             let key = cb.as_raw() as usize;
-            if let Some(rec) = s.cmdbufs.get(&key) {
-                encoders.push(rec.enc.clone());
+            match s.cmdbufs.get(&key) {
+                // Executable, and not a spent one-time-submit buffer (MoltenVK canExecute()).
+                Some(rec)
+                    if rec.state == CommandBufferState::Executable
+                        && !(rec.one_time_submit && rec.was_executed) => {}
+                _ => return VK_ERROR_INITIALIZATION_FAILED,
             }
+            cb_keys.push(key);
         }
     }
-    for (i, encoder) in encoders.into_iter().enumerate() {
-        // Signal the fence only on the last command buffer of the batch.
-        let sig = if i + 1 == submit_count as usize { signal } else { None };
-        s.record(Cmd::Submit(CommandBuffer {
-            encoder,
-            signal: sig,
-        }));
+
+    // ---- phase 2: consume waits, ship the IR, move buffers Pending ----
+    for w in &wait_sems {
+        if let Some(sm) = s.semaphores.get_mut(w) {
+            sm.signaled = false; // binary semaphore reset on wait
+        }
+    }
+    // Flush persistently-mapped HOST_COHERENT buffers (vkcube writes its rotating MVP UBO every frame
+    // without unmapping) so the host sees this frame's uniform data before the draw replays.
+    s.flush_mapped();
+    // The host Metal executor renders synchronously and does not model fence objects, so we never
+    // signal a fence *in the shipped IR* — the fence/semaphore state machine is guest-side (below).
+    let mut encoders: Vec<Vec<Enc>> = Vec::new();
+    for &key in &cb_keys {
+        if let Some(rec) = s.cmdbufs.get(&key) {
+            encoders.push(rec.enc.clone());
+        }
+    }
+    for encoder in encoders {
+        s.record(Cmd::Submit(CommandBuffer { encoder, signal: None }));
+    }
+    for &key in &cb_keys {
+        if let Some(cb) = s.cmdbufs.get_mut(&key) {
+            cb.state = CommandBufferState::Pending;
+            cb.was_executed = true;
+        }
+    }
+
+    // ---- phase 3: completion (synchronous) — retire buffers, signal semaphores + fence ----
+    for &key in &cb_keys {
+        if let Some(cb) = s.cmdbufs.get_mut(&key) {
+            cb.state = if cb.one_time_submit {
+                CommandBufferState::Invalid
+            } else {
+                CommandBufferState::Executable
+            };
+        }
+    }
+    for sg in &signal_sems {
+        if let Some(sm) = s.semaphores.get_mut(sg) {
+            sm.signaled = true;
+        }
+    }
+    if fence != 0 {
+        if let Some(f) = s.fences.get_mut(&fence) {
+            f.signaled = true;
+        }
     }
     VK_SUCCESS
 }
 
+/// `vkQueueWaitIdle` — wait for all submitted work on the queue to complete. Our host replay is
+/// synchronous, so any `Pending` command buffer has already completed by the time control returns;
+/// retire them (`Pending` → `Executable`/`Invalid`) and report success. Ported from `MVKQueue::waitIdle`.
 #[no_mangle]
-pub extern "C" fn vkQueueWaitIdle(_queue: VkQueue) -> VkResult {
+pub extern "C" fn vkQueueWaitIdle(queue: VkQueue) -> VkResult {
+    let _ = queue;
+    let mut s = reg::lock();
+    for cb in s.cmdbufs.values_mut() {
+        if cb.state == CommandBufferState::Pending {
+            cb.state = if cb.one_time_submit {
+                CommandBufferState::Invalid
+            } else {
+                CommandBufferState::Executable
+            };
+        }
+    }
     VK_SUCCESS
 }
 
+/// `vkDeviceWaitIdle` — wait for all queues. Delegates to the same synchronous drain as the queue.
 #[no_mangle]
 pub extern "C" fn vkDeviceWaitIdle(_device: VkDevice) -> VkResult {
-    VK_SUCCESS
+    vkQueueWaitIdle(core::ptr::null_mut())
 }
 
 // ---- fences + semaphores -------------------------------------------------------------------------
 
+/// `vkCreateFence` — a guest-side fence, unsignaled unless `VK_FENCE_CREATE_SIGNALED_BIT` is set
+/// (MoltenVK `MVKFence`). The host Metal executor renders synchronously and doesn't model fences, so we
+/// don't emit `Cmd::CreateFence`; the fence's signaled state is a guest-side machine (see `vkQueueSubmit`).
 #[no_mangle]
 pub extern "C" fn vkCreateFence(
     _device: VkDevice,
-    _p_create_info: *const c_void,
+    p_create_info: *const vk::FenceCreateInfo,
     _p_allocator: *const c_void,
     p_fence: *mut VkFence,
 ) -> VkResult {
     let Some(out) = (unsafe { p_fence.as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    let signaled = unsafe { p_create_info.as_ref() }
+        .map(|ci| ci.flags.contains(vk::FenceCreateFlags::SIGNALED))
+        .unwrap_or(false);
     let mut s = reg::lock();
     let ir_id = s.alloc_ir();
     let handle = s.alloc_handle();
-    // The host Metal executor renders synchronously and doesn't model fences, so we DON'T emit
-    // Cmd::CreateFence (it rejects it); the fence handle is tracked guest-side for the sync stubs.
-    s.fences.insert(handle, ir_id);
+    s.fences.insert(handle, reg::FenceRec { ir_id, signaled });
     *out = handle;
     VK_SUCCESS
 }
@@ -505,29 +647,68 @@ pub extern "C" fn vkDestroyFence(_device: VkDevice, fence: VkFence, _p_allocator
     reg::lock().fences.remove(&fence);
 }
 
+/// `vkWaitForFences` — wait for the requested fences. Because submission completion is synchronous, a
+/// fence guarding completed work is already signaled. Honestly report `VK_TIMEOUT` when the
+/// (`wait_all` ? all : any) requested fences are NOT signaled and the caller asked not to block past
+/// `timeout == 0`; otherwise success. Never blocks (the work is already done or was never submitted).
 #[no_mangle]
 pub extern "C" fn vkWaitForFences(
     _device: VkDevice,
     fence_count: u32,
     p_fences: *const VkFence,
-    _wait_all: u32,
-    _timeout: u64,
+    wait_all: u32,
+    timeout: u64,
 ) -> VkResult {
-    // Host render is synchronous, so all fences are already signaled (no WaitFence in the IR).
-    let _ = (fence_count, p_fences);
-    VK_SUCCESS
+    if p_fences.is_null() || fence_count == 0 {
+        return VK_SUCCESS;
+    }
+    let fences = unsafe { core::slice::from_raw_parts(p_fences, fence_count as usize) };
+    let s = reg::lock();
+    let is_signaled = |h: &VkFence| s.fences.get(h).map(|f| f.signaled).unwrap_or(false);
+    let satisfied = if wait_all != 0 {
+        fences.iter().all(is_signaled)
+    } else {
+        fences.iter().any(is_signaled)
+    };
+    if satisfied {
+        VK_SUCCESS
+    } else if timeout == 0 {
+        VK_TIMEOUT
+    } else {
+        // Synchronous model: any submitted work has already completed. An unsignaled fence here means
+        // no submission signals it, so waiting can never succeed — report the timeout truthfully.
+        VK_TIMEOUT
+    }
 }
 
+/// `vkResetFences` — return the fences to the unsignaled state.
 #[no_mangle]
-pub extern "C" fn vkResetFences(_device: VkDevice, _fence_count: u32, _p_fences: *const VkFence) -> VkResult {
+pub extern "C" fn vkResetFences(_device: VkDevice, fence_count: u32, p_fences: *const VkFence) -> VkResult {
+    if p_fences.is_null() {
+        return VK_SUCCESS;
+    }
+    let fences = unsafe { core::slice::from_raw_parts(p_fences, fence_count as usize) };
+    let mut s = reg::lock();
+    for h in fences {
+        if let Some(f) = s.fences.get_mut(h) {
+            f.signaled = false;
+        }
+    }
     VK_SUCCESS
 }
 
+/// `vkGetFenceStatus` — `VK_SUCCESS` if the fence is signaled, `VK_NOT_READY` if not (spec §7.3).
 #[no_mangle]
-pub extern "C" fn vkGetFenceStatus(_device: VkDevice, _fence: VkFence) -> VkResult {
-    VK_SUCCESS
+pub extern "C" fn vkGetFenceStatus(_device: VkDevice, fence: VkFence) -> VkResult {
+    match reg::lock().fences.get(&fence) {
+        Some(f) if f.signaled => VK_SUCCESS,
+        Some(_) => VK_NOT_READY,
+        None => VK_ERROR_INITIALIZATION_FAILED,
+    }
 }
 
+/// `vkCreateSemaphore` — a guest-side binary semaphore, unsignaled at creation (MoltenVK `MVKSemaphore`).
+/// Its signaled state is driven by `vkQueueSubmit` waits/signals (and WSI acquire in a later increment).
 #[no_mangle]
 pub extern "C" fn vkCreateSemaphore(
     _device: VkDevice,
@@ -535,11 +716,17 @@ pub extern "C" fn vkCreateSemaphore(
     _p_allocator: *const c_void,
     p_semaphore: *mut VkSemaphore,
 ) -> VkResult {
-    if let Some(out) = unsafe { p_semaphore.as_mut() } {
-        *out = reg::lock().alloc_handle();
-    }
+    let Some(out) = (unsafe { p_semaphore.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let mut s = reg::lock();
+    let handle = s.alloc_handle();
+    s.semaphores.insert(handle, reg::SemaphoreRec::default());
+    *out = handle;
     VK_SUCCESS
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroySemaphore(_device: VkDevice, _semaphore: VkSemaphore, _p_allocator: *const c_void) {}
+pub extern "C" fn vkDestroySemaphore(_device: VkDevice, semaphore: VkSemaphore, _p_allocator: *const c_void) {
+    reg::lock().semaphores.remove(&semaphore);
+}

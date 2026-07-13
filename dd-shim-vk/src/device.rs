@@ -7,6 +7,7 @@
 //! and the ABI-correct lifecycle (see `crate::ir_seam` for the IR mapping sketch + round-trip test).
 
 use crate::handle::{self, Dispatchable};
+use crate::reg;
 use crate::state::{CommandBuffer, CommandPool, Device, Instance, PhysicalDevice, Queue};
 use crate::types::*;
 use ash::vk;
@@ -111,14 +112,20 @@ pub extern "C" fn vkAllocateCommandBuffers(
     }
     let pool = ai.command_pool.as_raw();
     let count = ai.command_buffer_count as usize;
+    // Register each buffer pool-owned in the `Initial` state (MoltenVK `MVKCommandPool::allocate`), so
+    // the command-buffer lifecycle state machine (crate::command) has a record from the moment of
+    // allocation — begin/end/submit validate against it, and free removes it (below).
+    let mut s = reg::lock();
     for i in 0..count {
         let cb = Dispatchable::new(CommandBuffer { pool });
+        s.cmdbufs.insert(cb as usize, reg::CmdBufRec::initial());
         unsafe { *p_command_buffers.add(i) = cb };
     }
     VK_SUCCESS
 }
 
-/// Free command buffers allocated from a pool.
+/// Free command buffers allocated from a pool — remove the pool-owned recording record (so the address
+/// is not left dangling/reusable) and release the dispatchable object.
 #[no_mangle]
 pub extern "C" fn vkFreeCommandBuffers(
     _device: VkDevice,
@@ -129,8 +136,11 @@ pub extern "C" fn vkFreeCommandBuffers(
     if p_command_buffers.is_null() {
         return;
     }
+    let mut s = reg::lock();
     for i in 0..command_buffer_count as usize {
-        unsafe { Dispatchable::<CommandBuffer>::free(*p_command_buffers.add(i)) };
+        let cb = unsafe { *p_command_buffers.add(i) };
+        s.cmdbufs.remove(&(cb as usize));
+        unsafe { Dispatchable::<CommandBuffer>::free(cb) };
     }
 }
 

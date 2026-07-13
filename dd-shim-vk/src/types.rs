@@ -41,9 +41,17 @@ pub type VkBool32 = u32;
 // A couple of VkResult values the bring-up path returns, spelled numerically to avoid depending on
 // ash enum-to-i32 casts at every call site. Values are the stable Vulkan ABI (from `vk.xml`).
 pub const VK_SUCCESS: VkResult = 0;
+/// A fence is unsignaled, or a command buffer is not ready to record/execute (spec: `VK_NOT_READY` = 1).
+pub const VK_NOT_READY: VkResult = 1;
+/// `vkWaitForFences` reached its timeout before the fence(s) signaled (spec: `VK_TIMEOUT` = 2).
+pub const VK_TIMEOUT: VkResult = 2;
 pub const VK_INCOMPLETE: VkResult = 5;
 pub const VK_ERROR_OUT_OF_HOST_MEMORY: VkResult = -1;
+/// An allocation or binding could not be satisfied from device memory (spec: `-2`).
+pub const VK_ERROR_OUT_OF_DEVICE_MEMORY: VkResult = -2;
 pub const VK_ERROR_INITIALIZATION_FAILED: VkResult = -3;
+/// `vkMapMemory` could not map the requested range — bad range / already mapped / not host-visible (`-5`).
+pub const VK_ERROR_MEMORY_MAP_FAILED: VkResult = -5;
 /// The truthful failure a generated stub returns for a command from an extension the ICD does not
 /// advertise (Phase-0 truthfulness; see `build.rs` + `crate::capability`).
 pub const VK_ERROR_EXTENSION_NOT_PRESENT: VkResult = -7;

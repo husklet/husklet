@@ -175,6 +175,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 height,
                 format,
                 is_render_target: true,
+                bound_mem: None, // presentable images are host-owned; app never vkBindImageMemory's them
             },
         );
         // Mint the rung-2 IOSurface/dma-buf the host renders into (falls back to an unbacked surface
