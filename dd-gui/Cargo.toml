@@ -28,7 +28,11 @@ dd-term-core = { path = "../dd-term-core" }
 # NOTE: libadwaita is intentionally NOT used: its `appstream` dependency fails to build under
 # nixpkgs on aarch64-darwin. GTK4 ships the Adwaita *theme* internally, so the UI still looks
 # native without the libadwaita *library*.
-relm4 = "0.9"
+# Relm4's DEFAULT features include `css` (the separate `relm4-css` crate of predefined
+# CSS-class-name constants). dd-gui styles exclusively via gtk4's own `gtk::CssProvider`
+# (see src/ui/theme.rs / src/bin/term.rs) and never references relm4-css, so `css` is dropped.
+# Keep `macros` + `gnome_42` (the other default features) unchanged.
+relm4 = { version = "0.9", default-features = false, features = ["macros", "gnome_42"] }
 gtk = { version = "0.9", package = "gtk4", features = ["v4_10"] }
 # VTE terminal widget (for the container exec terminal). 0.8 pairs with gtk4 0.9 (both on glib 0.20).
 # C lib `vte-2.91-gtk4` comes from the nix devShell (pkgs.vte-gtk4, darwin-supported; 0.84 there).
