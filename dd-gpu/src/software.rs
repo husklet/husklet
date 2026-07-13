@@ -49,6 +49,11 @@ enum Pipeline {
     Render {
         color_formats: Vec<TextureFormat>,
         vertex_layouts: Vec<VertexLayout>,
+        /// Primitive assembly for a draw's vertex stream (triangle list/strip supported by the raster path).
+        topology: Topology,
+        /// Per-color-target blend: `Some(_)` selects premultiplied linear-light source-over; `None` is an
+        /// opaque replace. Aligned with `color_formats`.
+        blends: Vec<Option<BlendState>>,
     },
     Compute {
         shader: u32,
@@ -221,6 +226,219 @@ impl SoftwareBackend {
             }
         }
         Ok(())
+    }
+
+    /// Rasterize one draw's assembled triangles into every bound color attachment, compositing with
+    /// premultiplied source-over performed in LINEAR light. For each covered pixel the source and
+    /// destination colors are decoded through the target's transfer function (sRGB EOTF for an sRGB
+    /// format, identity for Unorm), the source is premultiplied by its alpha and composited `over` the
+    /// destination, and the result is re-encoded — so an sRGB target blends gamma-correctly rather than
+    /// naively in sRGB space. A target whose blend is `None` gets an opaque replace (straight source).
+    fn raster_draw(
+        &mut self,
+        targets: &[(u32, TextureFormat)],
+        blends: &[Option<BlendState>],
+        topology: Topology,
+        verts: &[DrawVertex],
+    ) -> Result<()> {
+        // Assemble triangle index triples. Only triangle primitives rasterize; other topologies are
+        // recorded by the draw counter but produce no pixels in the oracle.
+        let tris: Vec<[usize; 3]> = match topology {
+            Topology::TriangleList => (0..verts.len() / 3).map(|t| [3 * t, 3 * t + 1, 3 * t + 2]).collect(),
+            Topology::TriangleStrip => (0..verts.len().saturating_sub(2))
+                .map(|i| if i % 2 == 0 { [i, i + 1, i + 2] } else { [i + 1, i, i + 2] })
+                .collect(),
+            _ => return Ok(()),
+        };
+        if tris.is_empty() {
+            return Ok(());
+        }
+
+        for (ti, (tex_id, fmt)) in targets.iter().enumerate() {
+            let order = rgba_channel_order(*fmt)
+                .ok_or(GpuError::Unsupported("software: draw into a non-4-channel color format"))?;
+            let srgb = is_srgb(*fmt);
+            let blend_enabled = blends.get(ti).map(|b| b.is_some()).unwrap_or(false);
+            let (w, h, bpt) = {
+                let t = self.textures.get(*tex_id)?;
+                (t.desc.width as usize, t.desc.height as usize, Self::texel_bytes(t.desc.format)?)
+            };
+            if w == 0 || h == 0 {
+                continue;
+            }
+            // At most one composite per pixel per draw: a quad's two triangles share a diagonal, and a
+            // pixel center that lands exactly on it must not be blended twice. First triangle wins.
+            let mut covered = vec![false; w * h];
+            let t = self.textures.get_mut(*tex_id)?;
+            for tri in &tris {
+                let v = [verts[tri[0]], verts[tri[1]], verts[tri[2]]];
+                let fb = [ndc_to_fb(v[0].pos, w, h), ndc_to_fb(v[1].pos, w, h), ndc_to_fb(v[2].pos, w, h)];
+                let area = edge(fb[0], fb[1], fb[2]);
+                if area == 0.0 {
+                    continue; // degenerate triangle covers nothing
+                }
+                let (minx, miny, maxx, maxy) = tri_bbox(&fb, w, h);
+                for py in miny..maxy {
+                    for px in minx..maxx {
+                        let idx = py * w + px;
+                        if covered[idx] {
+                            continue;
+                        }
+                        let c = [px as f32 + 0.5, py as f32 + 0.5];
+                        let e0 = edge(fb[1], fb[2], c);
+                        let e1 = edge(fb[2], fb[0], c);
+                        let e2 = edge(fb[0], fb[1], c);
+                        let inside = (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0)
+                            || (e0 <= 0.0 && e1 <= 0.0 && e2 <= 0.0);
+                        if !inside {
+                            continue;
+                        }
+                        // Barycentric interpolation of the straight source color (flat for a solid fill).
+                        let (l0, l1, l2) = (e0 / area, e1 / area, e2 / area);
+                        let mut src = [0f32; 4];
+                        for k in 0..4 {
+                            src[k] = l0 * v[0].color[k] + l1 * v[1].color[k] + l2 * v[2].color[k];
+                        }
+                        let texel = &mut t.pixels[idx * bpt..idx * bpt + bpt];
+                        if blend_enabled {
+                            let a = src[3].clamp(0.0, 1.0);
+                            // Decode source color into linear light (sRGB values pass the EOTF).
+                            let s_lin = |k: usize| if srgb { srgb_to_linear(src[k].clamp(0.0, 1.0)) } else { src[k].clamp(0.0, 1.0) };
+                            let dst = load_texel_linear(texel, order, srgb);
+                            let out = [
+                                s_lin(0) * a + dst[0] * (1.0 - a),
+                                s_lin(1) * a + dst[1] * (1.0 - a),
+                                s_lin(2) * a + dst[2] * (1.0 - a),
+                                a + dst[3] * (1.0 - a),
+                            ];
+                            store_texel_linear(texel, order, srgb, out);
+                        } else {
+                            // Opaque replace: the straight source is already in the target encoding.
+                            let bytes = Self::clear_texel(*fmt, src)?;
+                            texel.copy_from_slice(&bytes);
+                        }
+                        covered[idx] = true;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Fetch the pipeline's raster state (topology, per-target blend, slot-0 vertex stride) if it is a
+    /// render pipeline whose first vertex layout can carry positions. `None` => nothing to rasterize.
+    fn raster_state(&self, pipeline: Option<u32>) -> Result<Option<(Topology, Vec<Option<BlendState>>, usize)>> {
+        let pid = match pipeline {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        match self.pipelines.get(pid)? {
+            Pipeline::Render { vertex_layouts, topology, blends, .. } => {
+                let stride = match vertex_layouts.first() {
+                    Some(l) if l.stride as usize >= 8 => l.stride as usize,
+                    _ => return Ok(None), // no position-bearing vertex layout
+                };
+                Ok(Some((*topology, blends.clone(), stride)))
+            }
+            Pipeline::Compute { .. } => Ok(None),
+        }
+    }
+
+    /// Execute a non-indexed `Draw`: fetch `[first_vertex, first_vertex+vertex_count)` from slot-0's
+    /// vertex buffer and rasterize into the bound color attachments.
+    fn exec_draw(
+        &mut self,
+        pipeline: Option<u32>,
+        targets: &[(u32, TextureFormat)],
+        vertex_buffer: Option<(u32, u64)>,
+        first_vertex: u32,
+        vertex_count: u32,
+    ) -> Result<()> {
+        let (topology, blends, stride) = match self.raster_state(pipeline)? {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let (vbuf, voff) = match vertex_buffer {
+            Some(x) => x,
+            None => return Ok(()),
+        };
+        let verts = {
+            let b = self.buffers.get(vbuf)?;
+            let mut out = Vec::with_capacity(vertex_count as usize);
+            for i in first_vertex..first_vertex.saturating_add(vertex_count) {
+                let base = voff as usize + i as usize * stride;
+                if base + 8 > b.data.len() {
+                    return Err(GpuError::OutOfBounds);
+                }
+                out.push(read_vertex(&b.data, base, stride));
+            }
+            out
+        };
+        self.raster_draw(targets, &blends, topology, &verts)
+    }
+
+    /// Execute a `DrawIndexed`: read `index_count` indices from the bound index buffer, add `base_vertex`,
+    /// gather the referenced slot-0 vertices, and rasterize.
+    #[allow(clippy::too_many_arguments)]
+    fn exec_draw_indexed(
+        &mut self,
+        pipeline: Option<u32>,
+        targets: &[(u32, TextureFormat)],
+        vertex_buffer: Option<(u32, u64)>,
+        index_buffer: Option<(u32, u64, IndexFormat)>,
+        first_index: u32,
+        index_count: u32,
+        base_vertex: i32,
+    ) -> Result<()> {
+        let (topology, blends, stride) = match self.raster_state(pipeline)? {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let (vbuf, voff) = match vertex_buffer {
+            Some(x) => x,
+            None => return Ok(()),
+        };
+        let (ibuf, ioff, ifmt) = match index_buffer {
+            Some(x) => x,
+            None => return Ok(()),
+        };
+        let indices: Vec<u32> = {
+            let b = self.buffers.get(ibuf)?;
+            let isz = match ifmt {
+                IndexFormat::U16 => 2usize,
+                IndexFormat::U32 => 4usize,
+            };
+            let mut out = Vec::with_capacity(index_count as usize);
+            for i in first_index..first_index.saturating_add(index_count) {
+                let base = ioff as usize + i as usize * isz;
+                if base + isz > b.data.len() {
+                    return Err(GpuError::OutOfBounds);
+                }
+                let raw = match ifmt {
+                    IndexFormat::U16 => u16::from_le_bytes([b.data[base], b.data[base + 1]]) as u32,
+                    IndexFormat::U32 => u32::from_le_bytes([b.data[base], b.data[base + 1], b.data[base + 2], b.data[base + 3]]),
+                };
+                out.push(raw);
+            }
+            out
+        };
+        let verts = {
+            let b = self.buffers.get(vbuf)?;
+            let mut out = Vec::with_capacity(indices.len());
+            for raw in indices {
+                let vidx = (raw as i64) + base_vertex as i64;
+                if vidx < 0 {
+                    return Err(GpuError::OutOfBounds);
+                }
+                let base = voff as usize + vidx as usize * stride;
+                if base + 8 > b.data.len() {
+                    return Err(GpuError::OutOfBounds);
+                }
+                out.push(read_vertex(&b.data, base, stride));
+            }
+            out
+        };
+        self.raster_draw(targets, &blends, topology, &verts)
     }
 
     // --- validation helpers -----------------------------------------------------------------------
@@ -551,7 +769,7 @@ impl SoftwareBackend {
         }
         let pid = st.pipeline.ok_or(GpuError::Invalid("draw with no pipeline bound"))?;
         let (color_formats, vertex_layouts) = match self.pipelines.get(pid)? {
-            Pipeline::Render { color_formats, vertex_layouts } => (color_formats, vertex_layouts),
+            Pipeline::Render { color_formats, vertex_layouts, .. } => (color_formats, vertex_layouts),
             Pipeline::Compute { .. } => return Err(GpuError::Unsupported("draw on a compute pipeline")),
         };
         // Pipeline color-target formats must be compatible with the render pass attachments.
@@ -688,9 +906,12 @@ fn texel_at(pixels: &[u8], tex_w: usize, x: usize, y: usize, bpt: usize) -> &[u8
     &pixels[off..off + bpt]
 }
 
-fn srgb_decode(v: u8) -> f32 {
-    let x = v as f32 / 255.0;
+/// The IEC 61966-2-1 sRGB EOTF on a normalized [0,1] value (electrical → linear-light optical).
+fn srgb_to_linear(x: f32) -> f32 {
     if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) }
+}
+fn srgb_decode(v: u8) -> f32 {
+    srgb_to_linear(v as f32 / 255.0)
 }
 fn srgb_encode(v: f32) -> u8 {
     let x = v.clamp(0.0, 1.0);
@@ -699,6 +920,78 @@ fn srgb_encode(v: f32) -> u8 {
 }
 fn is_srgb(f: TextureFormat) -> bool {
     matches!(f, TextureFormat::Rgba8Srgb | TextureFormat::Bgra8Srgb)
+}
+
+/// Logical-RGBA → byte-offset permutation for the oracle's 4-channel color formats. `Bgra*` stores
+/// blue and red swapped; alpha is always the last byte. Returns `None` for a non-4-channel format.
+fn rgba_channel_order(f: TextureFormat) -> Option<[usize; 4]> {
+    match f {
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => Some([0, 1, 2, 3]),
+        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => Some([2, 1, 0, 3]),
+        _ => None,
+    }
+}
+
+/// Decode a stored 4-byte texel into straight (non-premultiplied) linear-light RGBA in [0,1]. Color
+/// channels pass through the sRGB EOTF for an sRGB format; alpha is always linear (a coverage value, so
+/// it is never gamma-encoded — matching the filtering path).
+fn load_texel_linear(bytes: &[u8], order: [usize; 4], srgb: bool) -> [f32; 4] {
+    let dec = |b: u8| if srgb { srgb_decode(b) } else { b as f32 / 255.0 };
+    [dec(bytes[order[0]]), dec(bytes[order[1]]), dec(bytes[order[2]]), bytes[order[3]] as f32 / 255.0]
+}
+
+/// Encode straight linear-light RGBA back into a stored 4-byte texel (inverse of [`load_texel_linear`]).
+fn store_texel_linear(bytes: &mut [u8], order: [usize; 4], srgb: bool, rgba: [f32; 4]) {
+    let enc = |v: f32| if srgb { srgb_encode(v) } else { (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8 };
+    bytes[order[0]] = enc(rgba[0]);
+    bytes[order[1]] = enc(rgba[1]);
+    bytes[order[2]] = enc(rgba[2]);
+    bytes[order[3]] = (rgba[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+}
+
+/// One vertex the software oracle's draw path consumes. The oracle's fixed draw ABI is
+/// `[x, y, r, g, b, a]` little-endian `f32` per vertex: position at byte offset 0, straight-alpha color
+/// at byte offset 8. `pos` is NDC clip space (x right, y up, both in [-1,1]); `color` is straight
+/// (non-premultiplied) RGBA in [0,1] expressed in the target attachment's OWN encoding (i.e. sRGB
+/// electrical values for an sRGB target). A vertex stride < 24 carries position only and color defaults
+/// to opaque white.
+#[derive(Clone, Copy)]
+struct DrawVertex {
+    pos: [f32; 2],
+    color: [f32; 4],
+}
+
+/// Read one [`DrawVertex`] out of a tight/strided vertex buffer at byte `base` (caller guarantees the
+/// position bytes are in-bounds; color is read only when the stride carries it).
+fn read_vertex(data: &[u8], base: usize, stride: usize) -> DrawVertex {
+    let f = |o: usize| f32::from_le_bytes([data[base + o], data[base + o + 1], data[base + o + 2], data[base + o + 3]]);
+    let pos = [f(0), f(4)];
+    let color = if stride >= 24 { [f(8), f(12), f(16), f(20)] } else { [1.0, 1.0, 1.0, 1.0] };
+    DrawVertex { pos, color }
+}
+
+/// Map an NDC position (x right, y up, in [-1,1]) to framebuffer pixel space (origin top-left, y down).
+fn ndc_to_fb(p: [f32; 2], w: usize, h: usize) -> [f32; 2] {
+    [(p[0] * 0.5 + 0.5) * w as f32, (0.5 - p[1] * 0.5) * h as f32]
+}
+
+/// Signed area (×2) of triangle `a,b,c` — the edge function used for barycentric coverage.
+fn edge(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+/// Integer pixel bounding box `[minx,maxx) × [miny,maxy)` of a framebuffer-space triangle, clamped to
+/// the target dimensions.
+fn tri_bbox(fb: &[[f32; 2]; 3], w: usize, h: usize) -> (usize, usize, usize, usize) {
+    let minxf = fb[0][0].min(fb[1][0]).min(fb[2][0]);
+    let maxxf = fb[0][0].max(fb[1][0]).max(fb[2][0]);
+    let minyf = fb[0][1].min(fb[1][1]).min(fb[2][1]);
+    let maxyf = fb[0][1].max(fb[1][1]).max(fb[2][1]);
+    let minx = (minxf.floor().max(0.0) as i64).clamp(0, w as i64) as usize;
+    let miny = (minyf.floor().max(0.0) as i64).clamp(0, h as i64) as usize;
+    let maxx = (maxxf.ceil() as i64).clamp(0, w as i64) as usize;
+    let maxy = (maxyf.ceil() as i64).clamp(0, h as i64) as usize;
+    (minx, miny, maxx, maxy)
 }
 
 /// Bilinearly sample a tight-packed color plane at fractional `(fx, fy)` (in absolute texel space),
@@ -884,6 +1177,8 @@ impl GpuBackend for SoftwareBackend {
             Pipeline::Render {
                 color_formats: desc.color_targets.iter().map(|c| c.format).collect(),
                 vertex_layouts: desc.vertex_buffers.clone(),
+                topology: desc.topology,
+                blends: desc.color_targets.iter().map(|c| c.blend.clone()).collect(),
             },
         )
     }
@@ -955,15 +1250,21 @@ impl GpuBackend for SoftwareBackend {
 
         let mut cur_pipeline: Option<u32> = None;
         let mut cur_bind_group: Option<u32> = None;
+        // Live raster state carried across the encoder (mirrors the fixed-function pipeline a draw reads).
+        let mut cur_targets: Vec<(u32, TextureFormat)> = Vec::new();
+        let mut cur_vertex: HashMap<u32, (u32, u64)> = HashMap::new();
+        let mut cur_index: Option<(u32, u64, IndexFormat)> = None;
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, .. } => {
+                    cur_targets.clear();
                     for c in color {
+                        let (fmt, w, h) = {
+                            let t = self.textures.get(c.texture)?;
+                            (t.desc.format, t.desc.width, t.desc.height)
+                        };
+                        cur_targets.push((c.texture, fmt));
                         if c.load == LoadOp::Clear {
-                            let (fmt, w, h) = {
-                                let t = self.textures.get(c.texture)?;
-                                (t.desc.format, t.desc.width, t.desc.height)
-                            };
                             let texel = Self::clear_texel(fmt, c.clear)?;
                             let t = self.textures.get_mut(c.texture)?;
                             let n = (w * h) as usize;
@@ -975,13 +1276,29 @@ impl GpuBackend for SoftwareBackend {
                         }
                     }
                 }
+                Enc::EndRenderPass => cur_targets.clear(),
                 Enc::ClearRect { texture, x, y, w, h, color } => {
                     self.clear_rect(*texture, *x, *y, *w, *h, *color)?;
                 }
                 Enc::SetPipeline(p) => cur_pipeline = Some(*p),
                 Enc::SetBindGroup { group, .. } => cur_bind_group = Some(*group),
-                Enc::Draw { .. } | Enc::DrawIndexed { .. } => {
+                Enc::SetVertexBuffer { slot, buffer, offset } => {
+                    cur_vertex.insert(*slot, (*buffer, *offset));
+                }
+                Enc::SetIndexBuffer { buffer, offset, format } => {
+                    cur_index = Some((*buffer, *offset, *format));
+                }
+                Enc::Draw { vertex_count, first_vertex, .. } => {
                     self.draws += 1;
+                    let vb = cur_vertex.get(&0).copied();
+                    self.exec_draw(cur_pipeline, &cur_targets, vb, *first_vertex, *vertex_count)?;
+                }
+                Enc::DrawIndexed { index_count, first_index, base_vertex, .. } => {
+                    self.draws += 1;
+                    let vb = cur_vertex.get(&0).copied();
+                    self.exec_draw_indexed(
+                        cur_pipeline, &cur_targets, vb, cur_index, *first_index, *index_count, *base_vertex,
+                    )?;
                 }
                 Enc::Dispatch { x, y, z } => {
                     self.dispatches += 1;
@@ -1186,5 +1503,191 @@ mod srgb_tests {
     fn unorm_math_and_raw_copies_remain_byte_domain() {
         let p = [0, 0, 0, 0, 255, 255, 255, 255];
         assert_eq!(sample_bilinear(&p, 2, 4, 1.0, 0.5, 0, 1, 0, 0, TextureFormat::Rgba8Unorm), [128, 128, 128, 128]);
+    }
+
+    // ---- software draw rasterization + linear-light premultiplied blending (golden pixels) ---------
+
+    /// A straight-alpha source-over blend factor set (One, OneMinusSrcAlpha). The oracle keys off
+    /// `blend.is_some()` — the exact factor enum values are not interpreted — but realistic values keep
+    /// the fixture honest.
+    fn over_blend() -> BlendState {
+        BlendState { src_color: 1, dst_color: 6, op_color: 0, src_alpha: 1, dst_alpha: 6, op_alpha: 0 }
+    }
+
+    fn draw_pipeline(fmt: TextureFormat, blend: Option<BlendState>) -> RenderPipelineDesc {
+        RenderPipelineDesc {
+            vertex: ShaderRef { module: 1, entry: "vs".into() },
+            fragment: Some(ShaderRef { module: 1, entry: "fs".into() }),
+            // stride 24 = [pos.xy, color.rgba] as 6×f32 — the oracle's fixed software draw ABI.
+            vertex_buffers: vec![VertexLayout {
+                stride: 24,
+                step_mode: 0,
+                attrs: vec![
+                    VertexAttr { location: 0, format: 0, offset: 0 },
+                    VertexAttr { location: 1, format: 0, offset: 8 },
+                ],
+            }],
+            color_targets: vec![ColorTargetState { format: fmt, blend, write_mask: 0xF }],
+            depth: None,
+            topology: Topology::TriangleList,
+            cull: 0,
+            front_face: 0,
+            label: String::new(),
+        }
+    }
+
+    /// Pack `[x, y, r, g, b, a]` vertices into little-endian f32 vertex-buffer bytes.
+    fn vbytes(verts: &[[f32; 6]]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for v in verts {
+            for f in v {
+                out.extend_from_slice(&f.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// Build a backend with a render pipeline (id 1), a `w`×`h` target (tex 1, `fmt`), and a vertex
+    /// buffer (buf 1) holding `verts`. Ready to receive a draw into tex 1.
+    fn draw_harness(fmt: TextureFormat, blend: Option<BlendState>, w: u32, h: u32, verts: &[[f32; 6]]) -> SoftwareBackend {
+        let mut be = SoftwareBackend::new();
+        be.create_shader(ShaderId(1), ShaderPayloadKind::DemoBuiltin, &[1, 2, 3]).unwrap();
+        be.create_render_pipeline(PipelineId(1), &draw_pipeline(fmt, blend)).unwrap();
+        be.create_texture(TextureId(1), &TextureDesc {
+            width: w, height: h, depth: 1, mip_levels: 1, sample_count: 1, dim: TextureDim::D2,
+            format: fmt, usage: texture_usage::RENDER_TARGET | texture_usage::COPY_SRC, label: String::new(),
+        }).unwrap();
+        let data = vbytes(verts);
+        be.create_buffer(BufferId(1), &BufferDesc {
+            size: data.len() as u64, usage: buffer_usage::VERTEX | buffer_usage::COPY_DST, label: String::new(),
+        }).unwrap();
+        be.write_buffer(BufferId(1), 0, &data).unwrap();
+        be
+    }
+
+    /// A single full-screen triangle (NDC) that covers every pixel of the target, carrying `color`.
+    fn fullscreen_tri(color: [f32; 4]) -> [[f32; 6]; 3] {
+        let c = color;
+        [
+            [-1.0, -1.0, c[0], c[1], c[2], c[3]],
+            [3.0, -1.0, c[0], c[1], c[2], c[3]],
+            [-1.0, 3.0, c[0], c[1], c[2], c[3]],
+        ]
+    }
+
+    fn draw_and_read(be: &mut SoftwareBackend, clear: [f32; 4], count: u32) -> Vec<u8> {
+        be.submit(&CommandBuffer {
+            encoder: vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear, store: true }],
+                    depth: None,
+                },
+                Enc::SetPipeline(1),
+                Enc::SetVertexBuffer { slot: 0, buffer: 1, offset: 0 },
+                Enc::Draw { vertex_count: count, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                Enc::EndRenderPass,
+            ],
+            signal: None,
+        }).unwrap();
+        let (w, h) = { let t = be.textures.get(1).unwrap(); (t.desc.width, t.desc.height) };
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        be.read_texture(TextureId(1), &mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn software_draw_blends_semi_transparent_over_srgb_in_linear_light() {
+        // Background sRGB(200,100,50,255); a 50%-alpha source sRGB(40,230,140) drawn over it. A correct
+        // sRGB-aware compositor decodes BOTH to linear light, composites premultiplied source-over, and
+        // re-encodes. That is byte-exactly (149,181,107,255) — and it is NOT the value a naive blend
+        // done directly in sRGB space (120,165,95,255) would give.
+        let src = [40.0 / 255.0, 230.0 / 255.0, 140.0 / 255.0, 0.5];
+        let mut be = draw_harness(TextureFormat::Rgba8Srgb, Some(over_blend()), 2, 2, &fullscreen_tri(src));
+        let px = draw_and_read(&mut be, [200.0 / 255.0, 100.0 / 255.0, 50.0 / 255.0, 1.0], 3);
+        for texel in px.chunks_exact(4) {
+            assert_eq!(texel, [149, 181, 107, 255], "linear-light premultiplied source-over golden");
+            assert_ne!(texel, [120, 165, 95, 255], "must NOT be the naive sRGB-space blend");
+        }
+    }
+
+    #[test]
+    fn software_draw_on_unorm_target_blends_in_the_byte_domain() {
+        // The SAME numeric colors on a linear (Unorm) target: no transfer function is applied, so the
+        // premultiplied source-over is done directly on the stored values → (120,165,95,255). This is
+        // exactly the value the sRGB target must AVOID, proving the transfer functions are applied only
+        // around the blend for sRGB formats.
+        let src = [40.0 / 255.0, 230.0 / 255.0, 140.0 / 255.0, 0.5];
+        let mut be = draw_harness(TextureFormat::Rgba8Unorm, Some(over_blend()), 2, 2, &fullscreen_tri(src));
+        let px = draw_and_read(&mut be, [200.0 / 255.0, 100.0 / 255.0, 50.0 / 255.0, 1.0], 3);
+        for texel in px.chunks_exact(4) {
+            assert_eq!(texel, [120, 165, 95, 255], "linear-target premultiplied over is byte-domain");
+        }
+    }
+
+    #[test]
+    fn software_draw_respects_bgra_channel_order() {
+        // A Bgra8Srgb target stores blue and red swapped; the same linear-light blend result must land
+        // in B,G,R,A byte order.
+        let src = [40.0 / 255.0, 230.0 / 255.0, 140.0 / 255.0, 0.5];
+        let mut be = draw_harness(TextureFormat::Bgra8Srgb, Some(over_blend()), 2, 2, &fullscreen_tri(src));
+        let px = draw_and_read(&mut be, [200.0 / 255.0, 100.0 / 255.0, 50.0 / 255.0, 1.0], 3);
+        // Logical RGBA (149,181,107,255) stored BGRA → (107,181,149,255).
+        for texel in px.chunks_exact(4) {
+            assert_eq!(texel, [107, 181, 149, 255]);
+        }
+    }
+
+    #[test]
+    fn software_draw_opaque_replace_writes_the_straight_source() {
+        // With blend disabled the draw is an opaque replace: the full straight source RGBA (including its
+        // alpha, 0.5 → 128) is written directly, byte-for-byte, with no linear round-trip and no
+        // compositing against the background.
+        let src = [40.0 / 255.0, 230.0 / 255.0, 140.0 / 255.0, 0.5];
+        let mut be = draw_harness(TextureFormat::Rgba8Srgb, None, 2, 2, &fullscreen_tri(src));
+        let px = draw_and_read(&mut be, [200.0 / 255.0, 100.0 / 255.0, 50.0 / 255.0, 1.0], 3);
+        for texel in px.chunks_exact(4) {
+            assert_eq!(texel, [40, 230, 140, 128], "opaque draw replaces with the straight source color");
+        }
+    }
+
+    #[test]
+    fn software_draw_rasterizes_only_covered_pixels() {
+        // A triangle that maps to framebuffer vertices (0,0),(4,0),(0,4) covers the upper-left half of a
+        // 4×4 target. The top-left pixel is blended; the bottom-right pixel keeps the cleared background —
+        // proving the draw actually rasterizes a shape rather than filling the whole attachment.
+        let src = [40.0 / 255.0, 230.0 / 255.0, 140.0 / 255.0, 0.5];
+        let c = src;
+        // NDC vertices that map to fb (0,0),(4,0),(0,4) on a 4×4 target.
+        let verts = [
+            [-1.0, 1.0, c[0], c[1], c[2], c[3]],
+            [1.0, 1.0, c[0], c[1], c[2], c[3]],
+            [-1.0, -1.0, c[0], c[1], c[2], c[3]],
+        ];
+        let mut be = draw_harness(TextureFormat::Rgba8Srgb, Some(over_blend()), 4, 4, &verts);
+        let px = draw_and_read(&mut be, [200.0 / 255.0, 100.0 / 255.0, 50.0 / 255.0, 1.0], 3);
+        let at = |x: usize, y: usize| &px[(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
+        assert_eq!(at(0, 0), [149, 181, 107, 255], "covered pixel is blended in linear light");
+        assert_eq!(at(3, 3), [200, 100, 50, 255], "uncovered pixel keeps the cleared background");
+    }
+
+    #[test]
+    fn software_draw_quad_of_two_triangles_composites_each_pixel_once() {
+        // A full quad drawn as TWO triangles sharing a diagonal must composite each pixel exactly once
+        // (no double blend on the shared edge): the result equals the single-triangle full-screen blend.
+        let c = [40.0 / 255.0, 230.0 / 255.0, 140.0 / 255.0, 0.5];
+        // Two triangles covering the whole [-1,1]² quad, sharing the (-1,-1)-(1,1) diagonal.
+        let verts = [
+            [-1.0, -1.0, c[0], c[1], c[2], c[3]],
+            [1.0, -1.0, c[0], c[1], c[2], c[3]],
+            [1.0, 1.0, c[0], c[1], c[2], c[3]],
+            [-1.0, -1.0, c[0], c[1], c[2], c[3]],
+            [1.0, 1.0, c[0], c[1], c[2], c[3]],
+            [-1.0, 1.0, c[0], c[1], c[2], c[3]],
+        ];
+        let mut be = draw_harness(TextureFormat::Rgba8Srgb, Some(over_blend()), 2, 2, &verts);
+        let px = draw_and_read(&mut be, [200.0 / 255.0, 100.0 / 255.0, 50.0 / 255.0, 1.0], 6);
+        for texel in px.chunks_exact(4) {
+            assert_eq!(texel, [149, 181, 107, 255], "each pixel blended exactly once (no diagonal double-blend)");
+        }
     }
 }
