@@ -771,7 +771,7 @@ impl GpuBackend for SoftwareBackend {
         self.samplers.remove(id.0).map(|_| ())
     }
 
-    fn create_shader(&mut self, id: ShaderId, spirv: &[u32]) -> Result<()> {
+    fn create_shader(&mut self, id: ShaderId, kind: crate::ir::ShaderPayloadKind, spirv: &[u32]) -> Result<()> {
         // An empty shader module is never valid — reject it rather than record an unusable module
         // that would later fall through to a builtin or a no-op draw.
         if spirv.is_empty() {
@@ -779,13 +779,23 @@ impl GpuBackend for SoftwareBackend {
         }
         // A dd-GPU kernel descriptor (forwarded PTX + launch config) is compiled to an executable
         // kernel program here; anything else is treated as opaque SPIR-V (recorded, not run).
-        let module = match KernelDescriptor::from_words(spirv) {
-            Some(desc) => {
+        let module = match kind {
+            crate::ir::ShaderPayloadKind::PtxKernel => {
+                let desc = KernelDescriptor::from_words(spirv)
+                    .ok_or(GpuError::Invalid("malformed PTX kernel shader payload"))?;
                 let desc = desc?;
                 let prog = ptx::compile(&desc.ptx, &desc.entry, desc.block)?;
                 ShaderModule::Kernel(Box::new(prog))
             }
-            None => ShaderModule::Spirv(spirv.to_vec()),
+            crate::ir::ShaderPayloadKind::SpirV => {
+                if spirv.first() != Some(&0x0723_0203) {
+                    return Err(GpuError::Invalid("malformed SPIR-V shader payload"));
+                }
+                ShaderModule::Spirv(spirv.to_vec())
+            }
+            crate::ir::ShaderPayloadKind::LegacyMsl | crate::ir::ShaderPayloadKind::DemoBuiltin => {
+                ShaderModule::Spirv(spirv.to_vec())
+            }
         };
         self.shaders.insert(id.0, module)
     }

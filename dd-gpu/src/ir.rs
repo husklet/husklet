@@ -443,6 +443,32 @@ pub struct CommandBuffer {
     pub signal: Option<(u32, u64)>, // (FenceId, timeline value)
 }
 
+/// Declares the origin and required handling of a shader word payload.
+///
+/// In particular, `SpirV` is strict: an executor must translate it or return an error.  It must
+/// never silently substitute a built-in shader.  Legacy/demo payloads opt into compatibility
+/// handling explicitly, while CUDA kernel descriptors remain a separate, typed channel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum ShaderPayloadKind {
+    SpirV = 1,
+    LegacyMsl = 2,
+    PtxKernel = 3,
+    DemoBuiltin = 4,
+}
+
+impl ShaderPayloadKind {
+    fn decode(tag: u8) -> Result<Self> {
+        match tag {
+            1 => Ok(Self::SpirV),
+            2 => Ok(Self::LegacyMsl),
+            3 => Ok(Self::PtxKernel),
+            4 => Ok(Self::DemoBuiltin),
+            _ => Err(GpuError::BadTag(tag.into())),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------
 // top-level command stream
 // ---------------------------------------------------------------------------------------------------
@@ -458,7 +484,7 @@ pub enum Cmd {
     DestroyTexture(u32),
     CreateSampler(u32, SamplerDesc),
     DestroySampler(u32),
-    CreateShader { id: u32, spirv: Vec<u32> },
+    CreateShader { id: u32, kind: ShaderPayloadKind, spirv: Vec<u32> },
     DestroyShader(u32),
     CreateRenderPipeline(u32, RenderPipelineDesc),
     CreateComputePipeline(u32, ComputePipelineDesc),
@@ -482,7 +508,8 @@ pub enum Cmd {
 ///
 /// - v1: the original command/encoder set (tags ≤ 21 / etags ≤ 17).
 /// - v2: adds texture subresources + `CopyTextureToTexture` (etag 18) and `BlitTexture` (etag 19).
-pub const WIRE_VERSION: u32 = 2;
+/// - v3: makes every shader payload's origin explicit; strict SPIR-V may not fall back to built-ins.
+pub const WIRE_VERSION: u32 = 3;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 pub(crate) mod tag {
@@ -1188,9 +1215,10 @@ impl Cmd {
                 e.u8(tag::DESTROY_SAMPLER);
                 e.u32(*id);
             }
-            Cmd::CreateShader { id, spirv } => {
+            Cmd::CreateShader { id, kind, spirv } => {
                 e.u8(tag::CREATE_SHADER);
                 e.u32(*id);
+                e.u8(*kind as u8);
                 e.words(spirv);
             }
             Cmd::DestroyShader(id) => {
@@ -1274,6 +1302,7 @@ impl Cmd {
             tag::DESTROY_SAMPLER => Cmd::DestroySampler(d.u32()?),
             tag::CREATE_SHADER => Cmd::CreateShader {
                 id: d.u32()?,
+                kind: ShaderPayloadKind::decode(d.u8()?)?,
                 spirv: d.words()?,
             },
             tag::DESTROY_SHADER => Cmd::DestroyShader(d.u32()?),

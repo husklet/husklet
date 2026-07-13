@@ -147,8 +147,8 @@ fn spirv_triangle_renders_on_real_metal() {
     let cmds = vec![
         Cmd::CreateBuffer(10, BufferDesc { size: verts.len() as u64, usage: buffer_usage::VERTEX, label: "v".into() }),
         Cmd::WriteBuffer { id: 10, offset: 0, data: verts },
-        Cmd::CreateShader { id: 20, spirv: vs },
-        Cmd::CreateShader { id: 21, spirv: fs },
+        Cmd::CreateShader { id: 20, kind: dd_gpu::ir::ShaderPayloadKind::SpirV, spirv: vs },
+        Cmd::CreateShader { id: 21, kind: dd_gpu::ir::ShaderPayloadKind::SpirV, spirv: fs },
         Cmd::CreateRenderPipeline(30, RenderPipelineDesc {
             vertex: ShaderRef { module: 20, entry: "main".into() },
             fragment: Some(ShaderRef { module: 21, entry: "main".into() }),

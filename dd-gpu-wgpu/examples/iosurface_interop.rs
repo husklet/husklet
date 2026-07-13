@@ -268,7 +268,7 @@ mod imp {
             Cmd::WriteBuffer { id: 10, offset: 0, data: verts },
             Cmd::CreateBuffer(12, BufferDesc { size: unif.len() as u64, usage: buffer_usage::UNIFORM, label: "u".into() }),
             Cmd::WriteBuffer { id: 12, offset: 0, data: unif.clone() },
-            Cmd::CreateShader { id: 20, spirv: pack_msl("#include <metal_stdlib>\n[[stage_in]] flat") },
+            Cmd::CreateShader { id: 20, kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl, spirv: pack_msl("#include <metal_stdlib>\n[[stage_in]] flat") },
             Cmd::CreateRenderPipeline(30, RenderPipelineDesc {
                 vertex: ShaderRef { module: 20, entry: "vmain".into() },
                 fragment: Some(ShaderRef { module: 20, entry: "fmain".into() }),

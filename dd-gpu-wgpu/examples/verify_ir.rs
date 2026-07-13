@@ -86,7 +86,7 @@ fn main() {
             Cmd::WriteBuffer { id: 10, offset: 0, data: verts },
             Cmd::CreateBuffer(12, BufferDesc { size: unif.len() as u64, usage: buffer_usage::UNIFORM, label: "u".into() }),
             Cmd::WriteBuffer { id: 12, offset: 0, data: unif.clone() },
-            Cmd::CreateShader { id: 20, spirv: pack_msl(FLAT_MSL) },
+            Cmd::CreateShader { id: 20, kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl, spirv: pack_msl(FLAT_MSL) },
             Cmd::CreateRenderPipeline(30, RenderPipelineDesc {
                 vertex: ShaderRef { module: 20, entry: "vmain".into() },
                 fragment: Some(ShaderRef { module: 20, entry: "fmain".into() }),
@@ -192,7 +192,7 @@ fn main() {
                 min_filter: Filter::Nearest, mag_filter: Filter::Nearest, mip_filter: Filter::Nearest,
                 address_u: AddressMode::ClampToEdge, address_v: AddressMode::ClampToEdge, address_w: AddressMode::ClampToEdge,
             }),
-            Cmd::CreateShader { id: 20, spirv: pack_msl(TEX_MSL) },
+            Cmd::CreateShader { id: 20, kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl, spirv: pack_msl(TEX_MSL) },
             Cmd::CreateRenderPipeline(30, RenderPipelineDesc {
                 vertex: ShaderRef { module: 20, entry: "vmain".into() },
                 fragment: Some(ShaderRef { module: 20, entry: "fmain".into() }),

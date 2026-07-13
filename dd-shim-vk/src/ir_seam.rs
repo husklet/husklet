@@ -69,7 +69,7 @@ pub fn create_image(id: u32, width: u32, height: u32, format: TextureFormat, usa
 /// Map a `VkShaderModule` — whose `pCode` is SPIR-V words — to the IR shader-create command with NO
 /// translation (SPIR-V is the IR shader ABI). This is the seam's keystone.
 pub fn create_shader_module(id: u32, spirv: Vec<u32>) -> Cmd {
-    Cmd::CreateShader { id, spirv }
+    Cmd::CreateShader { id, kind: dd_gpu::ir::ShaderPayloadKind::SpirV, spirv }
 }
 
 /// Map a compute `VkPipeline` (its `VkShaderModule` + entry point) to the IR compute pipeline.
@@ -153,13 +153,14 @@ mod tests {
         assert_eq!(decoded, cmds, "round-tripped IR must be byte-for-byte identical");
 
         // The keystone: the SPIR-V survived the seam untouched (no translation on the guest side).
-        let shader = decoded
+        let (kind, shader) = decoded
             .iter()
             .find_map(|c| match c {
-                Cmd::CreateShader { spirv, .. } => Some(spirv.clone()),
+                Cmd::CreateShader { kind, spirv, .. } => Some((*kind, spirv.clone())),
                 _ => None,
             })
             .expect("stream carries a CreateShader");
+        assert_eq!(kind, dd_shim_common::ir::ShaderPayloadKind::SpirV);
         assert_eq!(shader, spirv, "VkShaderModule SPIR-V forwards to IR verbatim");
 
         // And a compute pipeline + dispatch + fence made it through intact.

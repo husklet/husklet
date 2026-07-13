@@ -344,6 +344,7 @@ pub extern "C" fn vkCreateShaderModule(
     let handle = s.alloc_handle();
     s.record(Cmd::CreateShader {
         id: ir_id,
+        kind: dd_gpu::ir::ShaderPayloadKind::SpirV,
         spirv: spirv.clone(),
     });
     s.shaders.insert(

@@ -39,9 +39,9 @@ fn main() {
                     desc.width, desc.height, desc.format, desc.usage
                 );
             }
-            Cmd::CreateShader { id, spirv } => {
+            Cmd::CreateShader { id, kind, spirv } => {
                 let len = spirv.first().copied().unwrap_or(0);
-                println!("{i:04} CreateShader id={id} bytes={len}");
+                println!("{i:04} CreateShader id={id} kind={kind:?} bytes={len}");
             }
             Cmd::CreateRenderPipeline(id, desc) => {
                 println!(

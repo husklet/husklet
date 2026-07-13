@@ -294,7 +294,7 @@ impl CudaContext {
                 })
                 .unwrap_or_default();
             let desc = KernelDescriptor { ptx: ptx_src, entry: entry_name.clone(), block: block_arr };
-            out.push(Cmd::CreateShader { id: shader, spirv: desc.to_words() });
+            out.push(Cmd::CreateShader { id: shader, kind: crate::ir::ShaderPayloadKind::PtxKernel, spirv: desc.to_words() });
             out.push(Cmd::CreateComputePipeline(
                 pipeline,
                 ComputePipelineDesc {

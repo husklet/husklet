@@ -534,7 +534,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> atlas [[texture(0)]
             Cmd::WriteBuffer { id: 10, offset: 0, data: verts },
             Cmd::CreateBuffer(12, BufferDesc { size: unif.len() as u64, usage: buffer_usage::UNIFORM, label: "rtadjust".into() }),
             Cmd::WriteBuffer { id: 12, offset: 0, data: unif.clone() },
-            Cmd::CreateShader { id: 20, spirv: pack_msl(FLAT_MSL) },
+            Cmd::CreateShader { id: 20, kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl, spirv: pack_msl(FLAT_MSL) },
             flat_pipeline(30, 20, "flat"),
             Cmd::CreateBindGroup(40, BindGroupDesc {
                 set: 0,
@@ -584,7 +584,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> atlas [[texture(0)]
                 min_filter: Filter::Nearest, mag_filter: Filter::Nearest, mip_filter: Filter::Nearest,
                 address_u: AddressMode::ClampToEdge, address_v: AddressMode::ClampToEdge, address_w: AddressMode::ClampToEdge,
             }),
-            Cmd::CreateShader { id: 20, spirv: pack_msl(TEX_MSL) },
+            Cmd::CreateShader { id: 20, kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl, spirv: pack_msl(TEX_MSL) },
             tex_pipeline(30, 20, "textured"),
             Cmd::CreateBindGroup(40, BindGroupDesc {
                 set: 0,
@@ -684,7 +684,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> atlas [[texture(0)]
             Cmd::WriteBuffer { id: 10, offset: 0, data: verts },
             Cmd::CreateBuffer(12, BufferDesc { size: unif0.len() as u64, usage: buffer_usage::UNIFORM, label: "fbo-unif".into() }),
             Cmd::WriteBuffer { id: 12, offset: 0, data: unif0.clone() },
-            Cmd::CreateShader { id: 20, spirv: pack_msl(FLAT_MSL) },
+            Cmd::CreateShader { id: 20, kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl, spirv: pack_msl(FLAT_MSL) },
             flat_pipeline(30, 20, "flat"),
             Cmd::CreateBindGroup(40, BindGroupDesc {
                 set: 0,
@@ -717,7 +717,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> atlas [[texture(0)]
                 min_filter: Filter::Nearest, mag_filter: Filter::Nearest, mip_filter: Filter::Nearest,
                 address_u: AddressMode::ClampToEdge, address_v: AddressMode::ClampToEdge, address_w: AddressMode::ClampToEdge,
             }),
-            Cmd::CreateShader { id: 21, spirv: pack_msl(TEX_MSL) },
+            Cmd::CreateShader { id: 21, kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl, spirv: pack_msl(TEX_MSL) },
             tex_pipeline(31, 21, "textured"),
             Cmd::CreateBindGroup(41, BindGroupDesc {
                 set: 0,

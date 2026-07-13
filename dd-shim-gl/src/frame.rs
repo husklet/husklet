@@ -216,7 +216,7 @@ fn build_single_draw_frame(s: &GlState) -> Option<Vec<u8>> {
         cmds.extend(texture_staging_cmds(t, tex));
     }
     // 2. shader (20) + pipeline (30)
-    cmds.push(Cmd::CreateShader { id: 20, spirv: msl_words(msl) });
+    cmds.push(Cmd::CreateShader { id: 20, kind: crate::common::ir::ShaderPayloadKind::LegacyMsl, spirv: msl_words(msl) });
     let nvb = nslot.max(1);
     let mut vbs: Vec<VertexLayout> = Vec::with_capacity(nvb);
     for sl in 0..nvb {
@@ -503,7 +503,7 @@ fn build_replay_frame(s: &GlState) -> Option<Vec<u8>> {
             Some(m) => m,
             None => continue,
         };
-        cmds.push(Cmd::CreateShader { id: 20 + d_i as u32, spirv: msl_words(msl) });
+        cmds.push(Cmd::CreateShader { id: 20 + d_i as u32, kind: crate::common::ir::ShaderPayloadKind::LegacyMsl, spirv: msl_words(msl) });
         let vbs = replay_vertex_layouts(s, d, dpr);
         let blend = if d.blend {
             Some(BlendState {

@@ -772,6 +772,7 @@ pub fn selftest_shader(out: &str) -> ! {
             },
             Cmd::CreateShader {
                 id: 20,
+                kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl,
                 spirv: words,
             },
             Cmd::CreateRenderPipeline(
@@ -1067,6 +1068,7 @@ pub fn selftest_texture(out: &str) -> ! {
             ),
             Cmd::CreateShader {
                 id: 20,
+                kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl,
                 spirv: pack_msl(MSL),
             },
             Cmd::CreateRenderPipeline(
@@ -1239,6 +1241,7 @@ pub fn selftest_indexed(out: &str) -> ! {
             },
             Cmd::CreateShader {
                 id: 20,
+                kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl,
                 spirv: pack_msl(MSL),
             },
             Cmd::CreateRenderPipeline(
@@ -1717,6 +1720,7 @@ pub fn selftest_replay(out: &str) -> ! {
             },
             Cmd::CreateShader {
                 id: 20,
+                kind: dd_gpu::ir::ShaderPayloadKind::DemoBuiltin,
                 spirv: vec![],
             },
             Cmd::CreateRenderPipeline(
@@ -1992,7 +1996,15 @@ impl GpuBackend for MetalBackend {
         Ok(())
     }
 
-    fn create_shader(&mut self, id: ShaderId, spirv: &[u32]) -> Result<()> {
+    fn create_shader(&mut self, id: ShaderId, kind: dd_gpu::ir::ShaderPayloadKind, spirv: &[u32]) -> Result<()> {
+        if kind == dd_gpu::ir::ShaderPayloadKind::SpirV {
+            self.shaders.remove(&id.0);
+            self.shader_id_hash.remove(&id.0);
+            return Err(GpuError::Unsupported("SPIR-V translation in Metal executor"));
+        }
+        if kind == dd_gpu::ir::ShaderPayloadKind::PtxKernel {
+            return Err(GpuError::Unsupported("PTX shader in Metal render executor"));
+        }
         // The guest's GLSL, translated to MSL by the shim, arrives packed as bytes. Compile it to a
         // library; if the payload isn't MSL (empty/real SPIR-V), leave it unset → builtin pipeline.
         if let Some(src) = msl_from_words(spirv) {
@@ -2039,7 +2051,7 @@ impl GpuBackend for MetalBackend {
                         self.failed_shader_cache.insert(key);
                         self.shaders.remove(&id.0);
                         self.shader_id_hash.insert(id.0, key);
-                        return Ok(());
+                        return Err(GpuError::Invalid("MSL shader compilation failed"));
                     }
                 }
             };

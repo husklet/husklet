@@ -118,4 +118,12 @@ mod tests {
         assert!(spirv_to_wgsl(&words).unwrap().is_none(), "not spirv");
         assert!(legacy_msl(&words).is_some(), "recognised legacy MSL");
     }
+
+    #[test]
+    fn malformed_spirv_is_a_translation_error() {
+        // Correct magic means this is explicitly on the SPIR-V path; the truncated instruction
+        // stream must fail translation instead of being classified as a legacy/builtin payload.
+        let words = [SPIRV_MAGIC, 0x0001_0000, 0, 2, 0, 0xffff_ffff];
+        assert!(spirv_to_wgsl(&words).is_err());
+    }
 }

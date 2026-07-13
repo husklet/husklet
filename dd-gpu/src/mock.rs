@@ -122,7 +122,7 @@ impl GpuBackend for RecordingBackend {
         Ok(())
     }
 
-    fn create_shader(&mut self, id: ShaderId, spirv: &[u32]) -> Result<()> {
+    fn create_shader(&mut self, id: ShaderId, _kind: crate::ir::ShaderPayloadKind, spirv: &[u32]) -> Result<()> {
         self.shaders.insert(id.0, ())?;
         self.log.push(Rec::CreateShader(id.0, spirv.len()));
         Ok(())

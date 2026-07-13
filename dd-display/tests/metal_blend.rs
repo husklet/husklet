@@ -86,6 +86,7 @@ fragment float4 fmain(VOut in [[stage_in]]) {
             },
             Cmd::CreateShader {
                 id: 20,
+                kind: dd_gpu::ir::ShaderPayloadKind::LegacyMsl,
                 spirv: pack_msl(MSL),
             },
             Cmd::CreateRenderPipeline(

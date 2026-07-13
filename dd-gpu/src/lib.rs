@@ -151,8 +151,8 @@ mod tests {
                     usage: texture_usage::RENDER_TARGET | texture_usage::PRESENT, label: "rt".into(),
                 },
             ),
-            Cmd::CreateShader { id: 3, spirv: vec![0x0723_0203, 0x0001_0000, 42, 7] },
-            Cmd::CreateShader { id: 4, spirv: vec![0x0723_0203, 0x0001_0000, 99] },
+            Cmd::CreateShader { id: 3, kind: ShaderPayloadKind::SpirV, spirv: vec![0x0723_0203, 0x0001_0000, 42, 7] },
+            Cmd::CreateShader { id: 4, kind: ShaderPayloadKind::SpirV, spirv: vec![0x0723_0203, 0x0001_0000, 99] },
             Cmd::CreateRenderPipeline(
                 5,
                 RenderPipelineDesc {

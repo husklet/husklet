@@ -122,7 +122,7 @@ fn spirv_vecadd_runs_on_real_metal() {
         Cmd::CreateBuffer(3, BufferDesc { size: (N * 4) as u64, usage: store, label: "c".into() }),
         Cmd::WriteBuffer { id: 1, offset: 0, data: bytes(&ha) },
         Cmd::WriteBuffer { id: 2, offset: 0, data: bytes(&hb) },
-        Cmd::CreateShader { id: 20, spirv: words },
+        Cmd::CreateShader { id: 20, kind: dd_gpu::ir::ShaderPayloadKind::SpirV, spirv: words },
         Cmd::CreateComputePipeline(30, ComputePipelineDesc {
             compute: ShaderRef { module: 20, entry: "main".into() },
             label: "vecadd".into(),

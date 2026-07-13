@@ -102,13 +102,13 @@ fn non_2d_texture_is_rejected_not_flattened() {
 #[test]
 fn empty_shader_module_is_rejected() {
     let mut be = SoftwareBackend::new();
-    assert_eq!(be.create_shader(ShaderId(1), &[]), Err(GpuError::Invalid("empty shader module")));
+    assert_eq!(be.create_shader(ShaderId(1), dd_gpu::ir::ShaderPayloadKind::SpirV, &[]), Err(GpuError::Invalid("empty shader module")));
 }
 
 #[test]
 fn vertex_attribute_outside_stride_is_rejected() {
     let mut be = SoftwareBackend::new();
-    be.create_shader(ShaderId(1), &[1, 2, 3]).unwrap();
+    be.create_shader(ShaderId(1), dd_gpu::ir::ShaderPayloadKind::DemoBuiltin, &[1, 2, 3]).unwrap();
     let desc = RenderPipelineDesc {
         vertex: ShaderRef { module: 1, entry: "vs".into() },
         fragment: None,
@@ -397,8 +397,8 @@ fn failed_submit_does_not_partially_mutate() {
 /// referencing tex 2 + buf 2. Returns the backend ready to receive a draw submit.
 fn render_harness() -> SoftwareBackend {
     let mut be = SoftwareBackend::new();
-    be.create_shader(ShaderId(1), &[1, 2, 3]).unwrap();
-    be.create_shader(ShaderId(2), &[4, 5, 6]).unwrap();
+    be.create_shader(ShaderId(1), dd_gpu::ir::ShaderPayloadKind::DemoBuiltin, &[1, 2, 3]).unwrap();
+    be.create_shader(ShaderId(2), dd_gpu::ir::ShaderPayloadKind::DemoBuiltin, &[4, 5, 6]).unwrap();
     let desc = RenderPipelineDesc {
         vertex: ShaderRef { module: 1, entry: "vs".into() },
         fragment: Some(ShaderRef { module: 2, entry: "fs".into() }),

@@ -320,7 +320,12 @@ pub trait GpuBackend {
 
     /// Register a shader module. `spirv` is the committed shader ABI; the Metal backend transpiles it
     /// to MSL/AIR (via SPIRV-Cross/naga) and the CUDA/Vulkan backend consumes it natively.
-    fn create_shader(&mut self, id: ShaderId, spirv: &[u32]) -> Result<()>;
+    fn create_shader(
+        &mut self,
+        id: ShaderId,
+        kind: crate::ir::ShaderPayloadKind,
+        words: &[u32],
+    ) -> Result<()>;
     fn destroy_shader(&mut self, id: ShaderId) -> Result<()>;
 
     fn create_render_pipeline(&mut self, _id: PipelineId, _desc: &RenderPipelineDesc) -> Result<()> {

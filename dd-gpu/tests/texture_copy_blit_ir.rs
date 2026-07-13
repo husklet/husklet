@@ -41,8 +41,8 @@ fn submit_frame(ops: Vec<Enc>) -> Vec<u8> {
 }
 
 #[test]
-fn wire_version_reflects_the_v2_ops() {
-    assert_eq!(WIRE_VERSION, 2, "the copy/blit slice adds the second wire version");
+fn wire_version_includes_typed_shader_payloads_after_v2_copy_ops() {
+    assert_eq!(WIRE_VERSION, 3, "typed shader payload origins add the third wire version");
 }
 
 #[test]

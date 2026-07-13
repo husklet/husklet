@@ -20,7 +20,7 @@ pub fn apply(be: &mut dyn GpuBackend, cmd: &Cmd) -> Result<Option<PresentToken>>
         Cmd::DestroyTexture(id) => be.destroy_texture(TextureId(*id))?,
         Cmd::CreateSampler(id, d) => be.create_sampler(SamplerId(*id), d)?,
         Cmd::DestroySampler(id) => be.destroy_sampler(SamplerId(*id))?,
-        Cmd::CreateShader { id, spirv } => be.create_shader(ShaderId(*id), spirv)?,
+        Cmd::CreateShader { id, kind, spirv } => be.create_shader(ShaderId(*id), *kind, spirv)?,
         Cmd::DestroyShader(id) => be.destroy_shader(ShaderId(*id))?,
         Cmd::CreateRenderPipeline(id, d) => be.create_render_pipeline(PipelineId(*id), d)?,
         Cmd::CreateComputePipeline(id, d) => be.create_compute_pipeline(PipelineId(*id), d)?,

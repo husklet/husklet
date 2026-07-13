@@ -1332,11 +1332,13 @@ impl GpuBackend for WgpuBackend {
         Ok(())
     }
 
-    fn create_shader(&mut self, id: ShaderId, spirv: &[u32]) -> Result<()> {
+    fn create_shader(&mut self, id: ShaderId, kind: dd_gpu::ir::ShaderPayloadKind, spirv: &[u32]) -> Result<()> {
         // L3 content-key: the shim re-emits identical SPIR-V under the same id every frame. Hash the bytes
         // and skip all work when this id already has this content installed; otherwise consult the shared
         // content cache before paying for a naga translation.
-        let key = hash_bytes(bytemuck_u32_bytes(spirv));
+        // Payload origin is part of identity: identical words tagged LegacyMsl and SpirV have
+        // intentionally different failure/fallback semantics.
+        let key = hash_bytes(bytemuck_u32_bytes(spirv)) ^ ((kind as u64) << 56);
         if self.shader_id_hash.get(&id.0) == Some(&key) {
             return Ok(()); // identical content already installed under this id — nothing to do
         }
@@ -1350,7 +1352,11 @@ impl GpuBackend for WgpuBackend {
         // Cached failure → fall back to the builtin WGSL pipeline without retrying naga.
         if self.failed_shader_cache.contains(&key) {
             self.shaders.remove(&id.0);
-            return Ok(());
+            return if kind == dd_gpu::ir::ShaderPayloadKind::SpirV {
+                Err(GpuError::Invalid("SPIR-V shader translation failed"))
+            } else {
+                Ok(())
+            };
         }
 
         // CUDA compute path: the `spirv` field may carry a dd-GPU **kernel descriptor** (forwarded PTX +
@@ -1358,7 +1364,9 @@ impl GpuBackend for WgpuBackend {
         // the PTX to the shared kernel IR and lower it to a WGSL compute entry point, so the existing
         // `create_compute_pipeline` + dispatch path runs the kernel on the real Metal GPU (PTX → WGSL →
         // naga → MSL). This reuses dd-gpu's single, tested PTX front-end; only the code-gen tail is WGSL.
-        if let Some(desc) = dd_gpu::ptx::KernelDescriptor::from_words(spirv) {
+        if kind == dd_gpu::ir::ShaderPayloadKind::PtxKernel {
+            let desc = dd_gpu::ptx::KernelDescriptor::from_words(spirv)
+                .ok_or(GpuError::Invalid("malformed PTX kernel shader payload"))?;
             let desc = desc?;
             let prog = dd_gpu::ptx::compile(&desc.ptx, &desc.entry, desc.block)?;
             let wgsl = dd_gpu::ptx::kernel_to_wgsl(&prog)?;
@@ -1369,6 +1377,11 @@ impl GpuBackend for WgpuBackend {
             self.shader_content_cache.insert(key, module.clone());
             self.shaders.insert(id.0, module);
             self.shader_compiles += 1;
+            return Ok(());
+        }
+
+        if matches!(kind, dd_gpu::ir::ShaderPayloadKind::LegacyMsl | dd_gpu::ir::ShaderPayloadKind::DemoBuiltin) {
+            self.shaders.remove(&id.0);
             return Ok(());
         }
 
@@ -1384,14 +1397,12 @@ impl GpuBackend for WgpuBackend {
             }
             // Not SPIR-V (legacy MSL-as-bytes / opaque): drop any prior module so pipelines fall back to
             // the builtin WGSL. Not an error — the guest is mid-migration to the SPIR-V ABI.
-            Ok(None) => {
-                self.failed_shader_cache.insert(key);
-                self.shaders.remove(&id.0);
-            }
+            Ok(None) => return Err(GpuError::Invalid("SPIR-V payload has invalid magic")),
             Err(e) => {
                 eprintln!("dd-gpu-wgpu: shader {} translation failed: {e}", id.0);
                 self.failed_shader_cache.insert(key);
                 self.shaders.remove(&id.0);
+                return Err(GpuError::Invalid("SPIR-V shader translation failed"));
             }
         }
         Ok(())
