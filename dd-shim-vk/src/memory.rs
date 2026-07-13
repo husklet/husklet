@@ -293,6 +293,34 @@ pub extern "C" fn vkDestroyImage(_device: VkDevice, image: VkImage, _p_allocator
     reg::lock().images.remove(&image);
 }
 
+/// `vkGetImageSubresourceLayout` — the row/array/depth pitch of a LINEAR image. vkcube maps a linear
+/// staging texture and writes it row-by-row using `rowPitch`; a stubbed (garbage) layout makes it
+/// write at wild offsets and corrupt the heap (surfaced as a later glibc `%n` FORTIFY abort). Report a
+/// tightly-packed RGBA8 layout. Ported from MoltenVK `MVKImage::getSubresourceLayout`.
+#[no_mangle]
+pub extern "C" fn vkGetImageSubresourceLayout(
+    _device: VkDevice,
+    image: VkImage,
+    _p_subresource: *const vk::ImageSubresource,
+    p_layout: *mut vk::SubresourceLayout,
+) {
+    let (w, h) = reg::lock()
+        .images
+        .get(&image)
+        .map(|i| (i.width, i.height))
+        .unwrap_or((1, 1));
+    if let Some(out) = unsafe { p_layout.as_mut() } {
+        let row_pitch = (w.max(1) * 4) as u64;
+        *out = vk::SubresourceLayout {
+            offset: 0,
+            size: row_pitch * h.max(1) as u64,
+            row_pitch,
+            array_pitch: row_pitch * h.max(1) as u64,
+            depth_pitch: row_pitch * h.max(1) as u64,
+        };
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn vkBindImageMemory(
     _device: VkDevice,

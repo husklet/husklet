@@ -297,6 +297,7 @@ const IMPLEMENTED: &[&str] = &[
     "vkInvalidateMappedMemoryRanges",
     "vkCreateImage",
     "vkDestroyImage",
+    "vkGetImageSubresourceLayout",
     "vkBindImageMemory",
     "vkCreateImageView",
     "vkDestroyImageView",
