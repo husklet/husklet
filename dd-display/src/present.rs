@@ -183,6 +183,8 @@ pub trait Presenter {
     /// whether to advance frame pacing: only a `Delivered` frame fires `wl_surface.frame` callbacks and a
     /// `presented` feedback; an `Offscreen`/`Err` present must NOT advance pacing (the client would think
     /// its frame shipped and recycle a buffer the compositor still needs to retry).
+    /// `Err(PresentError)` is terminal for this frame. Transient failures MUST be returned as
+    /// `Ok(PresentOutcome::RetryableFailure)` so the compositor retains pacing objects and resources.
     fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError>;
     /// Present on the named host output. Existing single-output presenters remain compatible.
     fn present_on_output(

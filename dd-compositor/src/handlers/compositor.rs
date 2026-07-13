@@ -55,6 +55,25 @@ pub(crate) enum FramePacing {
     TerminalFailure,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PacingPolicy {
+    complete_callbacks: bool,
+    retain: bool,
+    present_feedback: bool,
+    terminal_cleanup: bool,
+}
+
+impl FramePacing {
+    fn policy(self) -> PacingPolicy {
+        match self {
+            Self::Presented => PacingPolicy { complete_callbacks: true, retain: false, present_feedback: true, terminal_cleanup: false },
+            Self::Skipped => PacingPolicy { complete_callbacks: true, retain: false, present_feedback: false, terminal_cleanup: false },
+            Self::RetryableFailure => PacingPolicy { complete_callbacks: false, retain: true, present_feedback: false, terminal_cleanup: false },
+            Self::TerminalFailure => PacingPolicy { complete_callbacks: false, retain: false, present_feedback: false, terminal_cleanup: true },
+        }
+    }
+}
+
 struct PresentedFrame {
     output: smithay::output::Output,
     serial: u64,
@@ -571,12 +590,13 @@ impl DdState {
             None => FramePacing::TerminalFailure,
         };
         let did_present = pacing == FramePacing::Presented;
+        let policy = pacing.policy();
         // The tree reached the screen — every surface in it is now clean. On a FAILED present we keep the
         // dirty flags so the next commit retries the repaint rather than skipping it.
         if did_present {
             self.complete_tree_buffer_uses(root);
             self.clear_tree_dirty(root);
-        } else if pacing == FramePacing::TerminalFailure {
+        } else if policy.terminal_cleanup {
             self.complete_tree_buffer_uses(root);
             self.clear_tree_dirty(root);
         }
@@ -926,12 +946,13 @@ impl DdState {
         });
         let sid = self.surface_id(surface);
         let t = self.now_ms();
+        let policy = pacing.policy();
         // A frame callback tells the client "your frame is on screen, draw the next one". Fire it only
         // when the surface's content actually reached (or still stands on) the screen — a fresh Present
         // or a clean Skip. On a FAILED present the client's frame did NOT ship, so its callbacks are
         // RETAINED (re-fired on the next accepted present) instead of completed; completing them here
         // would let the client recycle a buffer the compositor still needs to retry.
-        if matches!(pacing, FramePacing::Presented | FramePacing::Skipped) {
+        if policy.complete_callbacks {
             // Fire any callbacks retained from a prior failed present of this surface, then this cycle's.
             for cb in self.take_retained_callbacks(sid) {
                 cb.done(t);
@@ -939,25 +960,23 @@ impl DdState {
             for cb in callbacks {
                 cb.done(t);
             }
-        } else if pacing == FramePacing::RetryableFailure {
+        } else if policy.retain {
             self.retain_frame_callbacks(sid, callbacks);
         } else {
             // Terminal: destroy retained and current callbacks without `done`.
             drop(self.take_retained_callbacks(sid));
             drop(callbacks);
         }
-        match pacing {
-            FramePacing::RetryableFailure => self.retain_presentation_feedback(sid, feedback),
-            FramePacing::Presented => {
+        if policy.retain {
+            self.retain_presentation_feedback(sid, feedback);
+        } else if policy.present_feedback {
                 let mut all = self.take_retained_feedback(sid);
                 all.extend(feedback);
                 self.send_presentation_feedback(all, evidence);
-            }
-            FramePacing::Skipped | FramePacing::TerminalFailure => {
+        } else {
                 let mut all = self.take_retained_feedback(sid);
                 all.extend(feedback);
                 self.send_presentation_feedback(all, None);
-            }
         }
     }
 
@@ -1458,9 +1477,46 @@ mod presentation_evidence_tests {
     }
 
     #[test]
-    fn presentation_failure_state_machine_distinguishes_retry_from_terminal() {
-        assert_ne!(FramePacing::RetryableFailure, FramePacing::TerminalFailure);
-        assert!(matches!(FramePacing::RetryableFailure, FramePacing::RetryableFailure));
-        assert!(matches!(FramePacing::TerminalFailure, FramePacing::TerminalFailure));
+    fn presentation_failure_policy_drives_retry_delivery_terminal_and_bounds() {
+        #[derive(Default)]
+        struct Machine { callbacks: Vec<u8>, feedback: Vec<u8>, completed: Vec<u8>, presented: Vec<u8>, discarded: Vec<u8>, dirty: bool, resources: bool }
+        impl Machine {
+            fn drive(&mut self, pacing: FramePacing, callbacks: &[u8], feedback: &[u8], cap: usize) {
+                let p = pacing.policy();
+                self.dirty = true; self.resources = true;
+                if p.retain {
+                    self.callbacks.extend(callbacks); self.feedback.extend(feedback);
+                    while self.callbacks.len() > cap { self.callbacks.remove(0); }
+                    while self.feedback.len() > cap { self.discarded.push(self.feedback.remove(0)); }
+                } else {
+                    if p.complete_callbacks { self.completed.append(&mut self.callbacks); self.completed.extend(callbacks); }
+                    else { self.callbacks.clear(); }
+                    if p.present_feedback { self.presented.append(&mut self.feedback); self.presented.extend(feedback); }
+                    else { self.discarded.append(&mut self.feedback); self.discarded.extend(feedback); }
+                    if p.terminal_cleanup || pacing == FramePacing::Presented { self.dirty = false; self.resources = false; }
+                }
+            }
+        }
+        let mut retry = Machine::default();
+        retry.drive(FramePacing::RetryableFailure, &[1, 2], &[11, 12], 8);
+        retry.drive(FramePacing::RetryableFailure, &[3], &[13], 8);
+        assert!(retry.dirty && retry.resources && retry.completed.is_empty() && retry.discarded.is_empty());
+        retry.drive(FramePacing::Presented, &[4], &[14], 8);
+        assert_eq!(retry.completed, [1, 2, 3, 4]);
+        assert_eq!(retry.presented, [11, 12, 13, 14]);
+        assert!(!retry.dirty && !retry.resources);
+
+        let mut terminal = Machine::default();
+        terminal.drive(FramePacing::RetryableFailure, &[1], &[11], 8);
+        terminal.drive(FramePacing::TerminalFailure, &[2], &[12], 8);
+        assert!(terminal.completed.is_empty() && terminal.callbacks.is_empty());
+        assert_eq!(terminal.discarded, [11, 12]);
+        assert!(!terminal.dirty && !terminal.resources);
+
+        let mut bounded = Machine::default();
+        bounded.drive(FramePacing::RetryableFailure, &[1, 2, 3], &[11, 12, 13], 2);
+        assert_eq!(bounded.callbacks, [2, 3]);
+        assert_eq!(bounded.feedback, [12, 13]);
+        assert_eq!(bounded.discarded, [11]);
     }
 }
