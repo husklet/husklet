@@ -83,6 +83,11 @@ pub const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;
 pub const GL_UNPACK_ROW_LENGTH: u32 = 0x0CF2;
 pub const GL_UNPACK_SKIP_ROWS: u32 = 0x0CF3;
 pub const GL_UNPACK_SKIP_PIXELS: u32 = 0x0CF4;
+pub const GL_PACK_ALIGNMENT: u32 = 0x0D05;
+pub const GL_PACK_ROW_LENGTH: u32 = 0x0D02;
+pub const GL_PACK_SKIP_ROWS: u32 = 0x0D03;
+pub const GL_PACK_SKIP_PIXELS: u32 = 0x0D04;
+pub const GL_PIXEL_PACK_BUFFER: u32 = 0x88EB;
 
 // blend factors
 pub const GL_ZERO: u32 = 0;

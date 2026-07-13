@@ -283,6 +283,13 @@ pub extern "C" fn glPixelStorei(pname: u32, v: i32) {
         GL_UNPACK_ROW_LENGTH => s.unpack_row_length = v,
         GL_UNPACK_SKIP_ROWS => s.unpack_skip_rows = v,
         GL_UNPACK_SKIP_PIXELS => s.unpack_skip_pixels = v,
+        GL_PACK_ALIGNMENT if matches!(v, 1 | 2 | 4 | 8) => s.pack_alignment = v,
+        GL_PACK_ROW_LENGTH if v >= 0 => s.pack_row_length = v,
+        GL_PACK_SKIP_ROWS if v >= 0 => s.pack_skip_rows = v,
+        GL_PACK_SKIP_PIXELS if v >= 0 => s.pack_skip_pixels = v,
+        GL_PACK_ALIGNMENT | GL_PACK_ROW_LENGTH | GL_PACK_SKIP_ROWS | GL_PACK_SKIP_PIXELS => {
+            if s.error == GL_NO_ERROR { s.error = GL_INVALID_VALUE; }
+        }
         _ => {}
     }
 }
@@ -424,7 +431,7 @@ pub extern "C" fn glDeleteBuffers(n: i32, ids: *const u32) {
 #[no_mangle]
 pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
     // An invalid target is GL_INVALID_ENUM and must neither bind the object nor mutate any binding.
-    if target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER {
+    if target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER && target != GL_PIXEL_PACK_BUFFER {
         crate::state::set_gl_error(GL_INVALID_ENUM);
         return;
     }
@@ -441,6 +448,8 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
     }
     if target == GL_ARRAY_BUFFER {
         s.arr_buf = buffer;
+    } else if target == GL_PIXEL_PACK_BUFFER {
+        s.pack_buf = buffer;
     } else {
         s.elem_buf = buffer;
         s.vao_store_current();
@@ -450,8 +459,9 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
 #[no_mangle]
 pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, usage: u32) {
     let mut s = gl();
-    let b = if target == GL_ELEMENT_ARRAY_BUFFER { s.elem_buf } else { s.arr_buf } as usize;
-    if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER) || b >= MAXBUF || !s.buf[b].used || size < 0 {
+    let b = match target { GL_ELEMENT_ARRAY_BUFFER => s.elem_buf, GL_PIXEL_PACK_BUFFER => s.pack_buf, _ => s.arr_buf } as usize;
+    if (target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER && target != GL_PIXEL_PACK_BUFFER)
+        || b >= MAXBUF || !s.buf[b].used || size < 0 {
         return;
     }
     let n = size as usize;
@@ -467,7 +477,11 @@ pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, us
 #[no_mangle]
 pub extern "C" fn glBufferSubData(target: u32, offset: isize, size: isize, data: *const c_void) {
     let mut s = gl();
-    let b = if target == GL_ELEMENT_ARRAY_BUFFER { s.elem_buf } else { s.arr_buf } as usize;
+    let b = match target {
+        GL_ELEMENT_ARRAY_BUFFER => s.elem_buf,
+        GL_PIXEL_PACK_BUFFER => s.pack_buf,
+        _ => s.arr_buf,
+    } as usize;
     if b >= MAXBUF || !s.buf[b].used || s.buf[b].data.is_empty() || offset < 0 || size < 0 {
         return;
     }
@@ -494,7 +508,11 @@ pub extern "C" fn glMapBufferRange(target: u32, offset: isize, length: isize, _a
         return core::ptr::null_mut();
     }
     let mut s = gl();
-    let b = if target == GL_ELEMENT_ARRAY_BUFFER { s.elem_buf } else { s.arr_buf } as usize;
+    let b = match target {
+        GL_ELEMENT_ARRAY_BUFFER => s.elem_buf,
+        GL_PIXEL_PACK_BUFFER => s.pack_buf,
+        _ => s.arr_buf,
+    } as usize;
     if b >= MAXBUF || !s.buf[b].used {
         return core::ptr::null_mut();
     }
@@ -2133,47 +2151,76 @@ pub extern "C" fn glBlitFramebuffer(sx0: i32, sy0: i32, sx1: i32, sy1: i32, dx0:
     s.copy_texture_rect(src, dst, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1);
 }
 
-/// `glReadPixels` — CPU-side readback of the read-FBO's color texture (gl_shim.c). Zero-fills first,
-/// then copies from the texture's uploaded RGBA8 data (only for GL_UNSIGNED_BYTE).
+/// Checked CPU-side readback of the read-FBO's RGBA8 texture.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glReadPixels(x: i32, y: i32, w: i32, h: i32, fmt: u32, typ: u32, dst: *mut c_void) {
-    if dst.is_null() || w <= 0 || h <= 0 {
-        return;
-    }
-    let bpp = crate::state::GlState::tex_bpp(fmt);
-    let out = unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, (w as usize) * (h as usize) * bpp) };
-    out.fill(0);
-    if typ != GL_UNSIGNED_BYTE {
-        return;
-    }
-    let s = gl();
+    let mut s = gl();
+    let fail = |s: &mut crate::state::GlState, e| { if s.error == GL_NO_ERROR { s.error = e; } };
+    if w < 0 || h < 0 { fail(&mut s, GL_INVALID_VALUE); return; }
+    if typ != GL_UNSIGNED_BYTE { fail(&mut s, GL_INVALID_ENUM); return; }
+    let bpp = match fmt { GL_RGBA | GL_BGRA_EXT => 4usize, GL_RGB => 3, _ => { fail(&mut s, GL_INVALID_ENUM); return; } };
+    if s.framebuffer_status(s.read_fbo) != GL_FRAMEBUFFER_COMPLETE { fail(&mut s, GL_INVALID_FRAMEBUFFER_OPERATION); return; }
     let src_id = s.fbo_color_texture(s.read_fbo);
-    if src_id == 0 {
-        return;
-    }
+    if src_id == 0 { fail(&mut s, GL_INVALID_OPERATION); return; }
     let src = &s.tex[src_id as usize];
+    if x < 0 || y < 0 || x.checked_add(w).is_none_or(|v| v > src.w) || y.checked_add(h).is_none_or(|v| v > src.h) {
+        fail(&mut s, GL_INVALID_VALUE); return;
+    }
+    let row_pixels = if s.pack_row_length == 0 { w } else { s.pack_row_length };
+    if row_pixels < w { fail(&mut s, GL_INVALID_VALUE); return; }
+    let row_bytes = (row_pixels as usize).checked_mul(bpp);
+    let stride = row_bytes.and_then(|n| n.checked_add(s.pack_alignment as usize - 1)).map(|n| n & !(s.pack_alignment as usize - 1));
+    let start = stride.and_then(|st| (s.pack_skip_rows as usize).checked_mul(st))
+        .and_then(|n| (s.pack_skip_pixels as usize).checked_mul(bpp).and_then(|p| n.checked_add(p)));
+    let need = start.and_then(|st| if h == 0 { Some(st) } else { stride.and_then(|rs| (h as usize - 1).checked_mul(rs)).and_then(|n| n.checked_add(w as usize * bpp)).and_then(|n| st.checked_add(n)) });
+    let (start, need, stride) = match (start, need, stride) { (Some(a), Some(b), Some(c)) => (a,b,c), _ => { fail(&mut s, GL_INVALID_VALUE); return; } };
+    if s.pack_buf == 0 && dst.is_null() { fail(&mut s, GL_INVALID_VALUE); return; }
+    if s.pack_buf != 0 {
+        let b = s.pack_buf as usize;
+        let off = dst as usize;
+        if b >= MAXBUF || off.checked_add(need).is_none_or(|n| n > s.buf[b].data.len()) { fail(&mut s, GL_INVALID_OPERATION); return; }
+    }
+    // Validation is complete; synchronize before observing producer storage.
+    drop(s);
+    glFinish();
+    let mut s = gl();
+    let src = &s.tex[src_id as usize];
+    let tight_row = w as usize * bpp;
+    let mut packed = vec![0u8; h as usize * tight_row];
     for yy in 0..h {
-        let sy = y + yy;
         for xx in 0..w {
-            let sx = x + xx;
-            if sx < 0 || sx >= src.w || sy < 0 || sy >= src.h {
-                continue;
-            }
-            let sp = (sy as usize * src.w as usize + sx as usize) * 4;
-            let dp = (yy as usize * w as usize + xx as usize) * bpp;
+            let sp = ((y + yy) as usize * src.w as usize + (x + xx) as usize) * 4;
+            let dp = yy as usize * tight_row + xx as usize * bpp;
             let sc = &src.data[sp..sp + 4];
             match fmt {
-                GL_RGBA => out[dp..dp + 4].copy_from_slice(sc),
+                GL_RGBA => packed[dp..dp + 4].copy_from_slice(sc),
                 GL_BGRA_EXT => {
-                    out[dp] = sc[2];
-                    out[dp + 1] = sc[1];
-                    out[dp + 2] = sc[0];
-                    out[dp + 3] = sc[3];
+                    packed[dp] = sc[2];
+                    packed[dp + 1] = sc[1];
+                    packed[dp + 2] = sc[0];
+                    packed[dp + 3] = sc[3];
                 }
-                GL_RGB => out[dp..dp + 3].copy_from_slice(&sc[..3]),
-                _ => out[dp] = sc[0],
+                GL_RGB => packed[dp..dp + 3].copy_from_slice(&sc[..3]),
+                _ => unreachable!(),
             }
+        }
+    }
+    if s.pack_buf != 0 {
+        let b = s.pack_buf as usize;
+        for row in 0..h as usize {
+            let off = dst as usize + start + row * stride;
+            s.buf[b].data[off..off + tight_row].copy_from_slice(&packed[row * tight_row..(row + 1) * tight_row]);
+        }
+    } else {
+        for row in 0..h as usize {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    packed.as_ptr().add(row * tight_row),
+                    (dst as *mut u8).add(start + row * stride),
+                    tight_row,
+                )
+            };
         }
     }
 }

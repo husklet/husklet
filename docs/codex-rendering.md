@@ -169,13 +169,10 @@ Specific correctness gaps:
   enabled attribute's type/shape/stride/source range with checked arithmetic. Invalid draws report the appropriate GL
   error without replacing the pending first error. Remaining work is mapped-buffer state, backend-derived limits,
   restart/base-vertex forms, and preserving rather than collapsing instance/base-instance counts in IR.
-- `glReadPixels` constructs and zero-fills the caller slice before validating type or framebuffer, so an invalid call
-  corrupts output while reporting no error. It ignores all pack state and uses unchecked width×height×bpp arithmetic;
-  default-framebuffer readback is not a synchronized backend read. Validate format/type/dimensions/FBO and calculate
-  checked pack row/skip layout before touching output. Synchronize the producing serial, read the selected attachment,
-  convert/clamp according to its format, and write only addressed pixels/rows while respecting pack alignment,
-  row length and skips. `gles_readpixels_validates_pack_layout_and_preserves_output_on_error` fixes non-mutation and
-  the missing pack vocabulary before pixel parity is trusted.
+- `glReadPixels` now validates its supported unsigned-byte RGB/RGBA/BGRA subset, rectangle, color FBO and checked pack
+  alignment/row-length/skips before synchronizing and writing only addressed bytes. Invalid calls preserve client/PBO
+  storage, and bounded PBO offsets are checked. Remaining work is default-framebuffer backend readback, broader format/
+  type conversion, mapped-PBO state and an ABI mechanism for validating raw client allocation size.
 - GLES sync objects are symbol/default-only. Fence creation and waits are unsupported generated stubs while
   delete/is/query return harmless sentinels; no sync record captures a command-stream point. The shared IR already has
   fences and submit signals, and software/wgpu have partial backends, but the default Metal executor lacks the fence
@@ -1094,7 +1091,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `gles_pixel_store_and_texture_upload_validation_is_atomic_and_checked` | contradictory | invalid pixel-store/upload state uses unchecked arithmetic and mutates textures | Checked format/layout table, immutable mip storage and negative corpus |
 | `gles_framebuffer_completeness_reflects_attachment_state_and_blocks_draws` | partial | color-only FBOs compute missing/undefined attachment status and block clear/draw; broader attachment vocabulary and read/blit guards remain | Depth/stencil/layer/sample compatibility plus read/blit negative matrix |
 | `gles_draw_calls_validate_all_inputs_before_snapshot_or_recording` | partial | core array/index draws validate program, FBO, enabled vertex ranges and index source atomically | Mapped state, negotiated limits and faithful instanced/base-vertex IR fields |
-| `gles_readpixels_validates_pack_layout_and_preserves_output_on_error` | contradictory | invalid readback zero-fills output and ignores pack layout | Checked pack-state readback after completion synchronization |
+| `gles_readpixels_validates_pack_layout_and_preserves_output_on_error` | partial | supported color reads validate checked pack layout/PBO bounds, synchronize, and preserve output on error | Default-framebuffer readback, conversions, mapped PBOs and raw client-size contract |
 | `gles_sync_objects_track_real_submission_completion_and_wait_results` | missing | sync APIs have no objects or cross-process completion serial | Context serials, typed acknowledgements and timeout/lifetime parity tests |
 | `gles_query_objects_track_targets_availability_and_asynchronous_results` | missing | query names have no target lifecycle, readiness or backend result | Typed queries, resolve serials and negotiated backend query types |
 | `egl_query_context_rejects_destroyed_handles_without_mutating_output` | contradictory | context query accepts destroyed handles and fabricates values | Live-handle validation, preserved outputs and `EGL_BAD_CONTEXT` |

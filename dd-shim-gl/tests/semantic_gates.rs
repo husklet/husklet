@@ -7,6 +7,66 @@ use core::ffi::c_void;
 use dd_shim_gl::glconst::*;
 use dd_shim_gl::{egl, gles};
 
+#[test]
+fn readpixels_validates_pack_layout_and_preserves_output() {
+    while gles::glGetError() != GL_NO_ERROR {}
+    let mut tex = 0;
+    gles::glGenTextures(1, &mut tex);
+    gles::glBindTexture(GL_TEXTURE_2D, tex);
+    let pixels: [u8; 16] = [1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16];
+    gles::glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA as i32, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.as_ptr().cast());
+    let mut fbo = 0;
+    gles::glGenFramebuffers(1, &mut fbo);
+    gles::glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    gles::glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+
+    let mut out = [0xA5u8; 48];
+    gles::glReadPixels(0, 0, 2, 2, GL_RGBA, GL_FLOAT, out.as_mut_ptr().cast());
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM);
+    assert_eq!(out, [0xA5; 48]);
+    gles::glReadPixels(-1, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, out.as_mut_ptr().cast());
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    assert_eq!(out, [0xA5; 48]);
+
+    gles::glPixelStorei(GL_PACK_ALIGNMENT, 8);
+    gles::glPixelStorei(GL_PACK_ROW_LENGTH, 3);
+    gles::glPixelStorei(GL_PACK_SKIP_ROWS, 1);
+    gles::glPixelStorei(GL_PACK_SKIP_PIXELS, 1);
+    let before = gles::submission_serials().0;
+    gles::glReadPixels(0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, out.as_mut_ptr().cast());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    assert!(gles::submission_serials().1 > before, "readback did not synchronize completion");
+    assert_eq!(&out[20..28], &pixels[0..8]);
+    assert_eq!(&out[36..44], &pixels[8..16]);
+    assert!(out[..20].iter().all(|&b| b == 0xA5));
+    assert!(out[28..36].iter().all(|&b| b == 0xA5), "row padding was overwritten");
+
+    gles::glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    gles::glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    gles::glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    gles::glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    let mut pbo = 0;
+    gles::glGenBuffers(1, &mut pbo);
+    gles::glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+    let initial = [0xCCu8; 20];
+    gles::glBufferData(GL_PIXEL_PACK_BUFFER, 20, initial.as_ptr().cast(), 0x88E4);
+    gles::glReadPixels(0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, 8usize as *mut core::ffi::c_void);
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION, "out-of-range PBO write succeeded");
+    let mapped = gles::glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 20, 0) as *const u8;
+    assert_eq!(unsafe { core::slice::from_raw_parts(mapped, 20) }, &initial);
+    gles::glReadPixels(0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, 4usize as *mut core::ffi::c_void);
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    assert_eq!(unsafe { core::slice::from_raw_parts(mapped.add(4), 16) }, &pixels);
+    gles::glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    gles::glDeleteBuffers(1, &pbo);
+
+    gles::glPixelStorei(GL_PACK_ALIGNMENT, 3);
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    gles::glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    gles::glDeleteFramebuffers(1, &fbo);
+    gles::glDeleteTextures(1, &tex);
+}
+
 fn linked_test_program() -> u32 {
     fn compile(kind: u32, source: &str) -> u32 {
         let shader = gles::glCreateShader(kind);
