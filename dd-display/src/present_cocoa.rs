@@ -32,7 +32,7 @@ use objc2_foundation::{
 };
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
-    MTLDevice, MTLLibrary, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType,
+    MTLDevice, MTLDrawable, MTLLibrary, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineDescriptor,
     MTLRenderPipelineState, MTLStoreAction, MTLTexture,
 };
@@ -1080,7 +1080,24 @@ impl Presenter for MetalPresenter {
             cmd.presentDrawable(objc2::runtime::ProtocolObject::from_ref(&**drawable));
         }
         cmd.commit();
+        // The objc2 build does not enable block2's addPresentedHandler API. Keep the retained drawable
+        // owned on this presenter/main thread and wait for this command buffer before reading the actual
+        // MTLDrawable.presentedTime. This is synchronous but makes lifetime/thread ownership explicit and
+        // never reports submission time as presentation time.
+        if drawable.is_some() {
+            unsafe { cmd.waitUntilCompleted() };
+        }
         win.last_tex = Some(composite); // keep opaque compositor output for SIGUSR1 readback
+        let serial = self.frames as u64 + 1;
+        let refresh_hz = win
+            .window
+            .screen()
+            .map(|screen| unsafe { screen.maximumFramesPerSecond() as i64 })
+            .unwrap_or(0);
+        let timing = drawable.as_ref().and_then(|drawable| {
+            let seconds = unsafe { drawable.presentedTime() };
+            crate::present::present_evidence_from_device(serial, seconds, refresh_hz).map(|e| e.timing)
+        });
 
         // Headless capture of the LIVE composited frame (opt-in), so a short-lived app's on-screen pixels
         // can be Read back even after its window is gone.
@@ -1125,10 +1142,7 @@ impl Presenter for MetalPresenter {
         // its way to the display. Report Delivered with the pacing serial; hardware present-time evidence
         // (a CAMetalLayer/`MTLDrawable` presented-handler timestamp) is not plumbed here yet, so timing is
         // left `None` and the compositor falls back to its monotonic clock for feedback.
-        Ok(PresentOutcome::Delivered {
-            serial: self.frames as u64,
-            timing: None,
-        })
+        Ok(PresentOutcome::Delivered { serial, timing })
     }
 
     fn iosurface_metadata(&self, id: u32) -> Option<crate::present::IOSurfaceMetadata> {

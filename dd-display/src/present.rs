@@ -88,6 +88,33 @@ pub struct PresentTiming {
     pub vsync: bool,
 }
 
+/// Associate one backend presentation serial with its measured timing evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentEvidence {
+    pub serial: u64,
+    pub timing: PresentTiming,
+}
+
+/// Convert Core Animation's monotonic seconds and the target display rate into evidence. Invalid or
+/// unavailable device values deliberately produce no evidence.
+pub fn present_evidence_from_device(serial: u64, presented_seconds: f64, refresh_hz: i64) -> Option<PresentEvidence> {
+    if !presented_seconds.is_finite() || presented_seconds <= 0.0 {
+        return None;
+    }
+    let present_ns = (presented_seconds * 1_000_000_000.0).round();
+    if !(0.0..=u64::MAX as f64).contains(&present_ns) {
+        return None;
+    }
+    Some(PresentEvidence {
+        serial,
+        timing: PresentTiming {
+            present_ns: present_ns as u64,
+            refresh_ns: if refresh_hz > 0 { 1_000_000_000u64 / refresh_hz as u64 } else { 0 },
+            vsync: refresh_hz > 0,
+        },
+    })
+}
+
 /// Host visibility of a native toplevel. Hidden states must not be reported as presented.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SurfaceVisibility {
@@ -154,6 +181,32 @@ impl std::error::Error for PresentError {}
 impl From<std::io::Error> for PresentError {
     fn from(e: std::io::Error) -> Self {
         PresentError::Output(e)
+    }
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+
+    #[test]
+    fn device_evidence_preserves_serial_order_and_refresh_association() {
+        let a = present_evidence_from_device(40, 10.25, 60).unwrap();
+        let b = present_evidence_from_device(41, 10.266_666_667, 120).unwrap();
+        assert_eq!(a.serial, 40);
+        assert_eq!(b.serial, 41);
+        assert!(b.timing.present_ns > a.timing.present_ns);
+        assert_eq!(a.timing.refresh_ns, 16_666_666);
+        assert_eq!(b.timing.refresh_ns, 8_333_333);
+        assert!(a.timing.vsync && b.timing.vsync);
+    }
+
+    #[test]
+    fn unavailable_or_invalid_device_time_never_fabricates_evidence() {
+        assert_eq!(present_evidence_from_device(1, 0.0, 60), None);
+        assert_eq!(present_evidence_from_device(1, f64::NAN, 60), None);
+        let unknown_refresh = present_evidence_from_device(2, 1.0, 0).unwrap();
+        assert_eq!(unknown_refresh.timing.refresh_ns, 0);
+        assert!(!unknown_refresh.timing.vsync);
     }
 }
 
