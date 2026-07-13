@@ -276,11 +276,11 @@ pub extern "C" fn vkQueuePresentKHR(_queue: VkQueue, p_present_info: *const vk::
         let Some(sc) = s.swapchains.get(&sc_handle.as_raw()) else { continue };
         let Some(img) = sc.images.get(img_idx as usize) else { continue };
         let (surface, tex, sc_surface) = (img.surface, img.ir_id, sc.surface);
-        // Terminate this frame with a Present mapping the rendered swapchain texture to the surface.
-        s.record(Cmd::Present {
-            surface: surface.id,
-            texture: tex,
-        });
+        let _ = tex;
+        // No explicit Cmd::Present: the render pass already targets texture id 1, which the host
+        // executor re-points at THIS frame's IOSurface (via the ExecConn header's surface.id), so the
+        // render lands directly in the presented IOSurface. (dd-display's Metal executor returns
+        // "backend does not support present" for a Cmd::Present — the GL shim likewise omits it.)
         // Ship the frame's IR (everything recorded since the last present) to the host executor, which
         // renders it on Metal INTO the surface.id IOSurface.
         let from = s.present_flushed;
