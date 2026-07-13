@@ -122,14 +122,28 @@ const MAX_REPLAY_BYTES: usize = 64 << 20;
 /// executor. Keeping the ordered command history is deliberate: uploads and GPU copies/draws can
 /// mutate resources, so a create-only cache is not authoritative. Presents and waits are observations,
 /// not residency, and are never repeated.
-#[derive(Default)]
 struct ResidencyJournal {
     cmds: Vec<ir::Cmd>,
     bytes: usize,
     replayable: bool,
+    /// Maximum encoded residency the channel will replay on reconnect. Past this the journal drops
+    /// `replayable` and a reconnect reports a clean API loss instead of silently recovering a truncated
+    /// resource set. Configurable so the over-budget transition is testable without a multi-MB fixture.
+    max_bytes: usize,
+}
+
+impl Default for ResidencyJournal {
+    fn default() -> Self {
+        Self { cmds: Vec::new(), bytes: 0, replayable: false, max_bytes: MAX_REPLAY_BYTES }
+    }
 }
 
 impl ResidencyJournal {
+    #[cfg(test)]
+    fn with_budget(max_bytes: usize) -> Self {
+        Self { max_bytes, ..Self::default() }
+    }
+
     fn record(&mut self, cmds: &[ir::Cmd]) {
         if !self.replayable && !self.cmds.is_empty() {
             return;
@@ -140,7 +154,7 @@ impl ResidencyJournal {
             }
             let encoded = ir::encode_stream(core::slice::from_ref(cmd));
             self.bytes = self.bytes.saturating_add(encoded.len());
-            if self.bytes > MAX_REPLAY_BYTES {
+            if self.bytes > self.max_bytes {
                 self.replayable = false;
                 return;
             }
@@ -577,6 +591,134 @@ mod tests {
         let mut changed = caps;
         changed.wire_version += 1;
         let err = conn.set_negotiated_capabilities(&changed).expect_err("live profile change is loss");
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
+        assert!(err.to_string().contains("API/device/context lost"));
+    }
+
+    #[test]
+    fn killed_executor_reconnect_replays_complete_residency_recovers_pixels_and_stays_bounded() {
+        // Row `executor_reconnect_replays_complete_residency_or_reports_api_loss`: kill a LIVE executor
+        // mid-stream (after it acknowledges residency, before the dependent draw), then prove the
+        // reconnected executor recovers byte-identical pixels from the replayed residency while its
+        // resource footprint stays bounded.
+        use dd_gpu::backend::GpuBackend;
+        use dd_gpu::ir::{buffer_usage, BufferDesc, Cmd, CommandBuffer, Enc};
+        use dd_gpu::limits::{ExecutorBudget, GlobalBudget, ReplayLimits};
+        use dd_gpu::software::SoftwareBackend;
+
+        const DATA: [u8; 16] = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 11, 22, 33, 44, 55, 66];
+
+        fn read_frame(c: &mut UnixStream) -> Vec<u8> {
+            let mut hdr = [0u8; 16];
+            c.read_exact(&mut hdr).unwrap();
+            let len = u32::from_le_bytes(hdr[12..16].try_into().unwrap()) as usize;
+            let mut body = vec![0; len];
+            c.read_exact(&mut body).unwrap();
+            body
+        }
+
+        let dir = std::env::temp_dir().join(format!("dd-shim-kill-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("exec.sock");
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        // Residency the later copy depends on: two buffers + an upload into `src`.
+        let residency = vec![
+            Cmd::CreateBuffer(1, BufferDesc {
+                size: 16,
+                usage: buffer_usage::COPY_SRC | buffer_usage::COPY_DST,
+                label: "src".into(),
+            }),
+            Cmd::CreateBuffer(2, BufferDesc {
+                size: 16,
+                usage: buffer_usage::COPY_SRC | buffer_usage::COPY_DST,
+                label: "dst".into(),
+            }),
+            Cmd::WriteBuffer { id: 1, offset: 0, data: DATA.to_vec() },
+        ];
+        // New work that only produces the right bytes if residency was FULLY recovered: copy src -> dst.
+        let new_work = vec![Cmd::Submit(CommandBuffer {
+            encoder: vec![Enc::CopyBufferToBuffer { src: 1, src_offset: 0, dst: 2, dst_offset: 0, size: 16 }],
+            signal: None,
+        })];
+        let residency_bytes = ir::encode_stream(&residency);
+        let new_work_bytes = ir::encode_stream(&new_work);
+
+        // Sanity: the new work alone — WITHOUT the replayed residency — cannot recover the pixels, since
+        // the copy references a buffer a fresh executor never created. This is what makes replay
+        // load-bearing rather than incidental.
+        {
+            let mut empty = SoftwareBackend::new();
+            assert!(
+                dd_gpu::replay::replay_stream(&mut empty, &new_work_bytes).is_err(),
+                "copy must fail against an executor that lost residency"
+            );
+        }
+
+        let server = std::thread::spawn(move || {
+            // Connection #1: accept residency, ACK, then DIE before the copy arrives (executor killed).
+            let (mut first, _) = listener.accept().unwrap();
+            let first_body = read_frame(&mut first);
+            first.write_all(&[ACK_OK]).unwrap();
+            drop(first);
+
+            // Connection #2: a brand-new executor (empty cache + fresh residency accounting). It must get
+            // the complete residency replayed ahead of the new work, rebuild `dst`, and stay bounded.
+            let (mut second, _) = listener.accept().unwrap();
+            let recovered = read_frame(&mut second);
+
+            let global = GlobalBudget::new(1 << 20, 64);
+            let limits = ReplayLimits::from_capabilities(SoftwareBackend::new().capabilities());
+            let mut budget = ExecutorBudget::new(limits, global);
+            let mut backend = SoftwareBackend::new();
+            let replayed = dd_gpu::replay::replay_stream_limited(&mut backend, &recovered, &mut budget);
+
+            let mut dst = [0u8; 16];
+            let readback = backend.read_buffer(dd_gpu::id::BufferId(2), 0, &mut dst);
+
+            // Bounded: exactly the two live buffers (32 bytes) are charged — reconnect recovery does not
+            // inflate the object count or leak bytes.
+            let bounded = budget.object_count() == 2 && budget.residency_bytes() == 32;
+            let ok = replayed.is_ok() && readback.is_ok() && dst == DATA && bounded;
+            second.write_all(&[if ok { ACK_OK } else { ACK_FAIL }]).unwrap();
+            (first_body, recovered, dst, budget.object_count(), budget.residency_bytes(), ok)
+        });
+
+        let surf = Surface { id: 9, width: 4, height: 4, stride: 16, fd: -1 };
+        let mut conn = ExecConn::new(sock.to_string_lossy());
+        conn.submit(&surf, &residency_bytes).expect("residency frame acknowledged");
+        // The executor died; this submit transparently reconnects, replays residency, then sends new work.
+        // It only returns Ok because the reconnected executor verified recovery + bounded resources in its ACK.
+        conn.submit(&surf, &new_work_bytes).expect("reconnect recovered residency and executor ACKed");
+
+        let (first_body, recovered, dst, objects, bytes, ok) = server.join().unwrap();
+        assert_eq!(ir::decode_stream(&first_body).unwrap(), residency, "first executor saw the residency frame");
+        let recovered_cmds = ir::decode_stream(&recovered).unwrap();
+        assert_eq!(&recovered_cmds[..residency.len()], residency.as_slice(), "complete residency replayed first");
+        assert_eq!(&recovered_cmds[residency.len()..], new_work.as_slice(), "new work follows the replay");
+        assert_eq!(dst, DATA, "recovered pixels are byte-identical to the pre-kill upload");
+        assert_eq!((objects, bytes), (2, 32), "reconnect recovery stayed bounded");
+        assert!(ok, "executor verified recovered pixels + bounded resources");
+        assert_eq!(conn.connects(), 2, "exactly one reconnect after the kill");
+        assert_eq!(conn.generation(), 2);
+        assert!(!conn.take_residency_reset(), "successful replay consumed the reset generation");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn residency_over_replay_budget_reports_clean_api_loss() {
+        // The other side of the row: when acknowledged residency exceeds the channel's replay budget, a
+        // reconnect must report a clean, typed API loss instead of silently recovering a truncated set.
+        use dd_gpu::ir::{buffer_usage, BufferDesc, Cmd};
+        let mk = |id| {
+            Cmd::CreateBuffer(id, BufferDesc { size: 16, usage: buffer_usage::COPY_DST, label: String::new() })
+        };
+        let mut journal = ResidencyJournal::with_budget(30);
+        journal.record(&[mk(1)]);
+        assert!(journal.replay_bytes().is_ok(), "residency within budget replays");
+        journal.record(&[mk(2)]); // pushes the encoded journal past the replay budget
+        let err = journal.replay_bytes().expect_err("over-budget residency must not silently truncate");
         assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
         assert!(err.to_string().contains("API/device/context lost"));
     }
