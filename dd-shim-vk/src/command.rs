@@ -2663,3 +2663,41 @@ mod layout_tests {
         crate::memory::vkDestroyImage(core::ptr::null_mut(), dst, core::ptr::null());
     }
 }
+
+// ---- Vulkan 1.1: device-group command scope -----------------------------------------------------
+
+/// `vkCmdSetDeviceMask` (Vulkan 1.1): select which devices of a group subsequent commands run on. We
+/// expose a single-device group (mask 0x1), so this validates the recording state and is a no-op.
+#[no_mangle]
+pub extern "C" fn vkCmdSetDeviceMask(command_buffer: VkCommandBuffer, _device_mask: u32) {
+    let _ = reg::lock().recording_mut(cb_key(command_buffer));
+}
+
+/// `vkCmdDispatchBase` (Vulkan 1.1): a compute dispatch with a base workgroup offset. With base (0,0,0)
+/// it is exactly `vkCmdDispatch`; a non-zero base is not expressible in the current IR (no base-group
+/// field), so it is recorded as an ordinary dispatch of `groupCount` groups (bounded — `partial`).
+#[no_mangle]
+pub extern "C" fn vkCmdDispatchBase(
+    command_buffer: VkCommandBuffer,
+    _base_group_x: u32,
+    _base_group_y: u32,
+    _base_group_z: u32,
+    group_count_x: u32,
+    group_count_y: u32,
+    group_count_z: u32,
+) {
+    let mut s = reg::lock();
+    if let Some(cb) = s.recording_mut(cb_key(command_buffer)) {
+        let pipeline = cb.bound_pipeline;
+        let groups: Vec<(u32, u32)> = cb.pending_bind_groups.clone();
+        cb.enc.push(Enc::BeginComputePass);
+        if let Some(p) = pipeline {
+            cb.enc.push(Enc::SetPipeline(p));
+        }
+        for (index, group) in groups {
+            cb.enc.push(Enc::SetBindGroup { index, group });
+        }
+        cb.enc.push(Enc::Dispatch { x: group_count_x, y: group_count_y, z: group_count_z });
+        cb.enc.push(Enc::EndComputePass);
+    }
+}

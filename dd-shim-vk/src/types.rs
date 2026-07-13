@@ -36,6 +36,8 @@ pub type VkEvent = u64;
 pub type VkQueryPool = u64;
 pub type VkBufferView = u64;
 pub type VkPipelineCache = u64;
+pub type VkSamplerYcbcrConversion = u64;
+pub type VkDescriptorUpdateTemplate = u64;
 
 // ---- scalars -------------------------------------------------------------------------------------
 pub type VkResult = i32;

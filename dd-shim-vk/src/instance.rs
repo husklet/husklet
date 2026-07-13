@@ -8,6 +8,7 @@ use crate::handle::Dispatchable;
 use crate::state::{self, Device, Instance, PhysicalDevice, Queue};
 use crate::types::*;
 use ash::vk;
+use ash::vk::Handle;
 use core::ffi::{c_char, c_void};
 
 /// The classic two-call enumeration idiom: `(pCount, pData)`. Writes up to `*pCount` items, sets
@@ -443,3 +444,115 @@ pub extern "C" fn vkGetPhysicalDeviceSparseImageFormatProperties(
 // Silence an unused-type lint if these aliases aren't otherwise named.
 const _: Option<&Device> = None;
 const _: Option<&Queue> = None;
+
+// ---- Vulkan 1.1: physical-device groups, external caps, ...2 format queries ----------------------
+
+/// `vkEnumeratePhysicalDeviceGroups` (Vulkan 1.1): report the one device group containing our single
+/// physical device. Ported from `MVKInstance::getPhysicalDeviceGroups` (each MVK physical device is its
+/// own single-device group).
+#[no_mangle]
+pub extern "C" fn vkEnumeratePhysicalDeviceGroups(
+    instance: VkInstance,
+    p_physical_device_group_count: *mut u32,
+    p_physical_device_group_properties: *mut vk::PhysicalDeviceGroupProperties,
+) -> VkResult {
+    let Some(count) = (unsafe { p_physical_device_group_count.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if p_physical_device_group_properties.is_null() {
+        *count = 1;
+        return VK_SUCCESS;
+    }
+    if *count == 0 {
+        return VK_INCOMPLETE;
+    }
+    let pd = match unsafe { Dispatchable::<Instance>::inner(instance) } {
+        Some(inst) => inst.physical_device,
+        None => return VK_ERROR_INITIALIZATION_FAILED,
+    };
+    if let Some(out) = unsafe { p_physical_device_group_properties.as_mut() } {
+        out.physical_device_count = 1;
+        out.physical_devices[0] = vk::PhysicalDevice::from_raw(pd as u64);
+        out.subset_allocation = vk::FALSE;
+    }
+    *count = 1;
+    VK_SUCCESS
+}
+
+/// `vkGetPhysicalDeviceExternalBufferProperties` (Vulkan 1.1): we support no external memory handle
+/// types, so report none creatable (features/compatible/exportable all zero — truthful).
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceExternalBufferProperties(
+    _physical_device: VkPhysicalDevice,
+    _p_external_buffer_info: *const c_void,
+    p_external_buffer_properties: *mut vk::ExternalBufferProperties,
+) {
+    if let Some(out) = unsafe { p_external_buffer_properties.as_mut() } {
+        out.external_memory_properties = vk::ExternalMemoryProperties::default();
+    }
+}
+
+/// `vkGetPhysicalDeviceExternalFenceProperties` (Vulkan 1.1): no external fence handle types supported.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceExternalFenceProperties(
+    _physical_device: VkPhysicalDevice,
+    _p_external_fence_info: *const c_void,
+    p_external_fence_properties: *mut vk::ExternalFenceProperties,
+) {
+    if let Some(out) = unsafe { p_external_fence_properties.as_mut() } {
+        out.export_from_imported_handle_types = vk::ExternalFenceHandleTypeFlags::empty();
+        out.compatible_handle_types = vk::ExternalFenceHandleTypeFlags::empty();
+        out.external_fence_features = vk::ExternalFenceFeatureFlags::empty();
+    }
+}
+
+/// `vkGetPhysicalDeviceExternalSemaphoreProperties` (Vulkan 1.1): no external semaphore handle types.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceExternalSemaphoreProperties(
+    _physical_device: VkPhysicalDevice,
+    _p_external_semaphore_info: *const c_void,
+    p_external_semaphore_properties: *mut vk::ExternalSemaphoreProperties,
+) {
+    if let Some(out) = unsafe { p_external_semaphore_properties.as_mut() } {
+        out.export_from_imported_handle_types = vk::ExternalSemaphoreHandleTypeFlags::empty();
+        out.compatible_handle_types = vk::ExternalSemaphoreHandleTypeFlags::empty();
+        out.external_semaphore_features = vk::ExternalSemaphoreFeatureFlags::empty();
+    }
+}
+
+/// `vkGetPhysicalDeviceImageFormatProperties2` (Vulkan 1.1): the `...2` wrapper delegating to the 1.0
+/// image-format query (the supported 2D color subset; else `VK_ERROR_FORMAT_NOT_SUPPORTED`).
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties2(
+    physical_device: VkPhysicalDevice,
+    p_image_format_info: *const vk::PhysicalDeviceImageFormatInfo2,
+    p_image_format_properties: *mut vk::ImageFormatProperties2,
+) -> VkResult {
+    let (Some(info), Some(out)) =
+        (unsafe { p_image_format_info.as_ref() }, unsafe { p_image_format_properties.as_mut() })
+    else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    vkGetPhysicalDeviceImageFormatProperties(
+        physical_device,
+        info.format,
+        info.ty,
+        info.tiling,
+        info.usage,
+        info.flags,
+        &mut out.image_format_properties,
+    )
+}
+
+/// `vkGetPhysicalDeviceSparseImageFormatProperties2` (Vulkan 1.1): no sparse residency → zero properties.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceSparseImageFormatProperties2(
+    _physical_device: VkPhysicalDevice,
+    _p_format_info: *const c_void,
+    p_property_count: *mut u32,
+    _p_properties: *mut c_void,
+) {
+    if let Some(count) = unsafe { p_property_count.as_mut() } {
+        *count = 0;
+    }
+}

@@ -732,3 +732,116 @@ pub extern "C" fn vkGetImageSparseMemoryRequirements(
         *count = 0;
     }
 }
+
+// ---- Vulkan 1.1: bind/requirements 2, sampler YCbCr conversion ------------------------------------
+
+/// `vkBindBufferMemory2` (Vulkan 1.1): batch buffer binds. Each `VkBindBufferMemoryInfo` delegates to the
+/// validated single-bind path; the first failure is returned. Ported from `MVKBuffer::bindDeviceMemory2`.
+#[no_mangle]
+pub extern "C" fn vkBindBufferMemory2(
+    device: VkDevice,
+    bind_info_count: u32,
+    p_bind_infos: *const vk::BindBufferMemoryInfo,
+) -> VkResult {
+    if bind_info_count == 0 || p_bind_infos.is_null() {
+        return VK_SUCCESS;
+    }
+    let infos = unsafe { core::slice::from_raw_parts(p_bind_infos, bind_info_count as usize) };
+    for info in infos {
+        let r = vkBindBufferMemory(device, info.buffer.as_raw(), info.memory.as_raw(), info.memory_offset);
+        if r != VK_SUCCESS {
+            return r;
+        }
+    }
+    VK_SUCCESS
+}
+
+/// `vkBindImageMemory2` (Vulkan 1.1): batch image binds, delegating to the validated single-bind path.
+#[no_mangle]
+pub extern "C" fn vkBindImageMemory2(
+    device: VkDevice,
+    bind_info_count: u32,
+    p_bind_infos: *const vk::BindImageMemoryInfo,
+) -> VkResult {
+    if bind_info_count == 0 || p_bind_infos.is_null() {
+        return VK_SUCCESS;
+    }
+    let infos = unsafe { core::slice::from_raw_parts(p_bind_infos, bind_info_count as usize) };
+    for info in infos {
+        let r = vkBindImageMemory(device, info.image.as_raw(), info.memory.as_raw(), info.memory_offset);
+        if r != VK_SUCCESS {
+            return r;
+        }
+    }
+    VK_SUCCESS
+}
+
+/// `vkGetBufferMemoryRequirements2` (Vulkan 1.1): the `...2` wrapper around the 1.0 query — fills the
+/// nested `memoryRequirements` of `VkMemoryRequirements2`. Ported from `MVKBuffer::getMemoryRequirements`.
+#[no_mangle]
+pub extern "C" fn vkGetBufferMemoryRequirements2(
+    device: VkDevice,
+    p_info: *const vk::BufferMemoryRequirementsInfo2,
+    p_mem_reqs: *mut vk::MemoryRequirements2,
+) {
+    let (Some(info), Some(out)) = (unsafe { p_info.as_ref() }, unsafe { p_mem_reqs.as_mut() }) else {
+        return;
+    };
+    vkGetBufferMemoryRequirements(device, info.buffer.as_raw(), &mut out.memory_requirements);
+}
+
+/// `vkGetImageMemoryRequirements2` (Vulkan 1.1): the `...2` wrapper around the 1.0 image query.
+#[no_mangle]
+pub extern "C" fn vkGetImageMemoryRequirements2(
+    device: VkDevice,
+    p_info: *const vk::ImageMemoryRequirementsInfo2,
+    p_mem_reqs: *mut vk::MemoryRequirements2,
+) {
+    let (Some(info), Some(out)) = (unsafe { p_info.as_ref() }, unsafe { p_mem_reqs.as_mut() }) else {
+        return;
+    };
+    vkGetImageMemoryRequirements(device, info.image.as_raw(), &mut out.memory_requirements);
+}
+
+/// `vkGetImageSparseMemoryRequirements2` (Vulkan 1.1): no sparse residency → zero requirements.
+#[no_mangle]
+pub extern "C" fn vkGetImageSparseMemoryRequirements2(
+    _device: VkDevice,
+    _p_info: *const c_void,
+    p_sparse_memory_requirement_count: *mut u32,
+    _p_sparse_memory_requirements: *mut c_void,
+) {
+    if let Some(count) = unsafe { p_sparse_memory_requirement_count.as_mut() } {
+        *count = 0;
+    }
+}
+
+/// `vkCreateSamplerYcbcrConversion` (Vulkan 1.1, MoltenVK `MVKSamplerYcbcrConversion`): create the
+/// conversion object. We do not materialize multi-planar YCbCr formats, so the object's lifetime is
+/// observable but only the identity/pass-through case is meaningful (bounded — `partial`).
+#[no_mangle]
+pub extern "C" fn vkCreateSamplerYcbcrConversion(
+    _device: VkDevice,
+    p_create_info: *const vk::SamplerYcbcrConversionCreateInfo,
+    _p_allocator: *const c_void,
+    p_ycbcr_conversion: *mut VkSamplerYcbcrConversion,
+) -> VkResult {
+    let Some(out) = (unsafe { p_ycbcr_conversion.as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let format = unsafe { p_create_info.as_ref() }.map(|ci| ci.format.as_raw()).unwrap_or(0);
+    let mut s = reg::lock();
+    let handle = s.alloc_handle();
+    s.ycbcr_conversions.insert(handle, reg::SamplerYcbcrConversionRec { format });
+    *out = handle;
+    VK_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn vkDestroySamplerYcbcrConversion(
+    _device: VkDevice,
+    ycbcr_conversion: VkSamplerYcbcrConversion,
+    _p_allocator: *const c_void,
+) {
+    reg::lock().ycbcr_conversions.remove(&ycbcr_conversion);
+}

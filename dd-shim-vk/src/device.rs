@@ -156,3 +156,41 @@ pub extern "C" fn vkFreeCommandBuffers(
 // Silence unused-type lints for aliases referenced only in signatures elsewhere.
 const _: Option<&Instance> = None;
 const _: Option<&PhysicalDevice> = None;
+
+// ---- Vulkan 1.1: device queue 2, command-pool trim, device-group peer memory ---------------------
+
+/// `vkGetDeviceQueue2` (Vulkan 1.1): retrieve the device's queue via `VkDeviceQueueInfo2`. We expose one
+/// queue on one family, so this returns the same queue as `vkGetDeviceQueue`. Ported from `MVKDevice::getQueue2`.
+#[no_mangle]
+pub extern "C" fn vkGetDeviceQueue2(
+    device: VkDevice,
+    _p_queue_info: *const vk::DeviceQueueInfo2,
+    p_queue: *mut VkQueue,
+) {
+    if let (Some(dev), Some(out)) = unsafe { (Dispatchable::<Device>::inner(device), p_queue.as_mut()) } {
+        *out = dev.queue;
+    }
+}
+
+/// `vkTrimCommandPool` (Vulkan 1.1): return unused pool memory to the system. Our command pools hold no
+/// spare backing allocation (recordings are `Vec`s freed on reset), so trimming is a no-op success.
+#[no_mangle]
+pub extern "C" fn vkTrimCommandPool(_device: VkDevice, _command_pool: VkCommandPool, _flags: u32) {}
+
+/// `vkGetDeviceGroupPeerMemoryFeatures` (Vulkan 1.1): the peer-access features between two devices of a
+/// group. We expose a single-device group, so the only valid query is the device with itself; report the
+/// full local feature set (COPY_SRC|COPY_DST|GENERIC_SRC|GENERIC_DST). Ported from the single-device path
+/// in `MVKDevice::getPeerMemoryFeatures`.
+#[no_mangle]
+pub extern "C" fn vkGetDeviceGroupPeerMemoryFeatures(
+    _device: VkDevice,
+    _heap_index: u32,
+    _local_device_index: u32,
+    _remote_device_index: u32,
+    p_peer_memory_features: *mut u32,
+) {
+    if let Some(out) = unsafe { p_peer_memory_features.as_mut() } {
+        // COPY_SRC(1)|COPY_DST(2)|GENERIC_SRC(4)|GENERIC_DST(8).
+        *out = 0xF;
+    }
+}

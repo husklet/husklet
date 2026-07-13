@@ -176,6 +176,22 @@ fn partial_note(name: &str) -> Option<&'static str> {
         "vkQueueBindSparse" => {
             "binary-semaphore + fence synchronization only; no sparse residency (no sparse resources exposed)"
         }
+        // Vulkan 1.1 promoted core — bounded domains:
+        "vkCreateSamplerYcbcrConversion" | "vkDestroySamplerYcbcrConversion" => {
+            "the conversion object exists (lifetime observable), but multi-planar YCbCr formats are not materialized"
+        }
+        "vkCmdDispatchBase" => {
+            "base (0,0,0) is a normal dispatch; a non-zero base group is not expressible in the current IR"
+        }
+        "vkGetDescriptorSetLayoutSupport" => {
+            "reports supported for a well-formed layout; the descriptor-count tail is not per-type budgeted"
+        }
+        "vkGetDeviceGroupPeerMemoryFeatures" | "vkCmdSetDeviceMask" => {
+            "single-device group model (mask 0x1); no real multi-device peer access"
+        }
+        "vkGetPhysicalDeviceImageFormatProperties2" => {
+            "the ...2 wrapper over the bounded 1.0 query: supported 2D color subset, else FORMAT_NOT_SUPPORTED"
+        }
         _ => return None,
     })
 }
@@ -677,4 +693,35 @@ const IMPLEMENTED: &[&str] = &[
     "vkQueueBindSparse",
     // synchronization2 image barriers (core 1.3) share the legacy submit-time subresource/ownership model
     "vkCmdPipelineBarrier2",
+    // ---- increment 5: Vulkan 1.1 promoted-core (28/28). Ported from MoltenVK: MVKBuffer/MVKImage
+    // bind+requirements2, MVKDescriptorUpdateTemplate, MVKSamplerYcbcrConversion, MVKDevice queue2/
+    // device-group/peer-memory, MVKInstance physical-device groups + external-capability queries.
+    // bind / memory requirements 2 (memory.rs)
+    "vkBindBufferMemory2",
+    "vkBindImageMemory2",
+    "vkGetBufferMemoryRequirements2",
+    "vkGetImageMemoryRequirements2",
+    "vkGetImageSparseMemoryRequirements2",
+    // sampler YCbCr conversion (memory.rs)
+    "vkCreateSamplerYcbcrConversion",
+    "vkDestroySamplerYcbcrConversion",
+    // descriptor update templates + layout support (descriptor.rs)
+    "vkCreateDescriptorUpdateTemplate",
+    "vkDestroyDescriptorUpdateTemplate",
+    "vkUpdateDescriptorSetWithTemplate",
+    "vkGetDescriptorSetLayoutSupport",
+    // device queue2 / command-pool trim / device-group peer memory (device.rs)
+    "vkGetDeviceQueue2",
+    "vkTrimCommandPool",
+    "vkGetDeviceGroupPeerMemoryFeatures",
+    // device-group command scope (command.rs)
+    "vkCmdSetDeviceMask",
+    "vkCmdDispatchBase",
+    // physical-device groups + external capabilities + ...2 format queries (instance.rs)
+    "vkEnumeratePhysicalDeviceGroups",
+    "vkGetPhysicalDeviceExternalBufferProperties",
+    "vkGetPhysicalDeviceExternalFenceProperties",
+    "vkGetPhysicalDeviceExternalSemaphoreProperties",
+    "vkGetPhysicalDeviceImageFormatProperties2",
+    "vkGetPhysicalDeviceSparseImageFormatProperties2",
 ];

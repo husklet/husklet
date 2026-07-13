@@ -21,17 +21,17 @@ use core::ffi::c_void;
 use std::collections::HashMap;
 
 /// Whether a `VkDescriptorType` (raw) names a buffer descriptor (uniform/storage, incl. dynamic).
-fn is_buffer_descriptor(ty: i32) -> bool {
+pub(crate) fn is_buffer_descriptor(ty: i32) -> bool {
     // 6 UNIFORM_BUFFER, 7 STORAGE_BUFFER, 8 UNIFORM_BUFFER_DYNAMIC, 9 STORAGE_BUFFER_DYNAMIC.
     matches!(ty, 6 | 7 | 8 | 9)
 }
 /// Whether a `VkDescriptorType` (raw) names an image/sampler descriptor.
-fn is_image_descriptor(ty: i32) -> bool {
+pub(crate) fn is_image_descriptor(ty: i32) -> bool {
     // 0 SAMPLER, 1 COMBINED_IMAGE_SAMPLER, 2 SAMPLED_IMAGE, 3 STORAGE_IMAGE, 10 INPUT_ATTACHMENT.
     matches!(ty, 0 | 1 | 2 | 3 | 10)
 }
 /// Whether a `VkDescriptorType` (raw) names a texel-buffer descriptor.
-fn is_texel_descriptor(ty: i32) -> bool {
+pub(crate) fn is_texel_descriptor(ty: i32) -> bool {
     // 4 UNIFORM_TEXEL_BUFFER, 5 STORAGE_TEXEL_BUFFER.
     matches!(ty, 4 | 5)
 }
@@ -333,5 +333,129 @@ pub extern "C" fn vkUpdateDescriptorSets(
                 d.texel_writes.insert(c.dst_binding, tx);
             }
         }
+    }
+}
+
+// ---- Vulkan 1.1: descriptor update templates + layout support ------------------------------------
+
+/// `vkCreateDescriptorUpdateTemplate` (Vulkan 1.1, ported from MoltenVK `MVKDescriptorUpdateTemplate`):
+/// retain the immutable entry table (offset/stride/binding/type) the app pushes descriptors through.
+/// Only the `DESCRIPTOR_SET` template type is supported (push-descriptor templates need the KHR path).
+#[no_mangle]
+pub extern "C" fn vkCreateDescriptorUpdateTemplate(
+    _device: VkDevice,
+    p_create_info: *const vk::DescriptorUpdateTemplateCreateInfo,
+    _p_allocator: *const c_void,
+    p_template: *mut VkDescriptorUpdateTemplate,
+) -> VkResult {
+    let (Some(ci), Some(out)) = (unsafe { p_create_info.as_ref() }, unsafe { p_template.as_mut() })
+    else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    // 0 = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET (the only kind without VK_KHR_push_descriptor).
+    if ci.template_type.as_raw() != 0 {
+        unsafe { *(p_template as *mut u64) = 0 };
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    }
+    let entries = if ci.descriptor_update_entry_count == 0 || ci.p_descriptor_update_entries.is_null() {
+        Vec::new()
+    } else {
+        unsafe {
+            core::slice::from_raw_parts(ci.p_descriptor_update_entries, ci.descriptor_update_entry_count as usize)
+        }
+        .iter()
+        .map(|e| reg::DescriptorTemplateEntry {
+            dst_binding: e.dst_binding,
+            dst_array_element: e.dst_array_element,
+            descriptor_count: e.descriptor_count,
+            descriptor_type: e.descriptor_type.as_raw(),
+            offset: e.offset,
+            stride: e.stride,
+        })
+        .collect()
+    };
+    let mut s = reg::lock();
+    let handle = s.alloc_handle();
+    s.descriptor_update_templates.insert(handle, reg::DescriptorUpdateTemplateRec { entries });
+    *out = handle;
+    VK_SUCCESS
+}
+
+#[no_mangle]
+pub extern "C" fn vkDestroyDescriptorUpdateTemplate(
+    _device: VkDevice,
+    descriptor_update_template: VkDescriptorUpdateTemplate,
+    _p_allocator: *const c_void,
+) {
+    reg::lock().descriptor_update_templates.remove(&descriptor_update_template);
+}
+
+/// `vkUpdateDescriptorSetWithTemplate` (Vulkan 1.1): walk the template entries, reading each descriptor
+/// out of `pData` at `entry.offset + i*entry.stride` and applying it to the set exactly as
+/// `vkUpdateDescriptorSets` does (every array element; buffer/image/texel by descriptor class). Ported
+/// from `MVKDescriptorSet::writeWithTemplate`.
+#[no_mangle]
+pub extern "C" fn vkUpdateDescriptorSetWithTemplate(
+    _device: VkDevice,
+    descriptor_set: VkDescriptorSet,
+    descriptor_update_template: VkDescriptorUpdateTemplate,
+    p_data: *const c_void,
+) {
+    if p_data.is_null() {
+        return;
+    }
+    let base = p_data as *const u8;
+    let mut s = reg::lock();
+    // Snapshot the entries (immutable borrow ends before we mutate the set).
+    let Some(tmpl) = s.descriptor_update_templates.get(&descriptor_update_template) else {
+        return;
+    };
+    let entries = tmpl.entries.clone();
+    if !s.dsets.contains_key(&descriptor_set) {
+        return;
+    }
+    for e in &entries {
+        for i in 0..e.descriptor_count as usize {
+            let p = unsafe { base.add(e.offset + i * e.stride) };
+            let binding = e.dst_binding; // array element folds into binding 0 (see vkUpdateDescriptorSets)
+            if is_buffer_descriptor(e.descriptor_type) {
+                let bi = unsafe { core::ptr::read_unaligned(p as *const vk::DescriptorBufferInfo) };
+                let buffer_handle = bi.buffer.as_raw();
+                let range = if bi.range == vk::WHOLE_SIZE {
+                    s.buffers.get(&buffer_handle).map(|b| b.size).unwrap_or(0)
+                } else {
+                    bi.range
+                };
+                if let Some(d) = s.dsets.get_mut(&descriptor_set) {
+                    d.buffers.insert(binding, (buffer_handle, bi.offset, range));
+                }
+            } else if is_image_descriptor(e.descriptor_type) {
+                let ii = unsafe { core::ptr::read_unaligned(p as *const vk::DescriptorImageInfo) };
+                let entry = (ii.image_view.as_raw(), ii.sampler.as_raw(), ii.image_layout.as_raw());
+                if let Some(d) = s.dsets.get_mut(&descriptor_set) {
+                    d.image_writes.entry(binding).or_default().push(entry);
+                }
+            } else if is_texel_descriptor(e.descriptor_type) {
+                let view = unsafe { core::ptr::read_unaligned(p as *const vk::BufferView) };
+                if let Some(d) = s.dsets.get_mut(&descriptor_set) {
+                    d.texel_writes.entry(binding).or_default().push(view.as_raw());
+                }
+            }
+        }
+    }
+}
+
+/// `vkGetDescriptorSetLayoutSupport` (Vulkan 1.1): report whether a set layout is creatable. Our layouts
+/// impose no allocation ceiling beyond the advertised limits, so a well-formed layout is supported.
+/// Ported from `MVKDescriptorSetLayout::getDescriptorSetLayoutSupport` (bounded: the descriptor-count
+/// long tail is not per-type-budgeted).
+#[no_mangle]
+pub extern "C" fn vkGetDescriptorSetLayoutSupport(
+    _device: VkDevice,
+    _p_create_info: *const vk::DescriptorSetLayoutCreateInfo,
+    p_support: *mut vk::DescriptorSetLayoutSupport,
+) {
+    if let Some(out) = unsafe { p_support.as_mut() } {
+        out.supported = vk::TRUE;
     }
 }

@@ -480,6 +480,31 @@ pub struct PipelineCacheRec {
     pub data: Vec<u8>,
 }
 
+/// One entry of a `VkDescriptorUpdateTemplate` (MoltenVK `MVKDescriptorUpdateTemplate`): where in the
+/// pushed data blob each descriptor lives and which `(binding, arrayElement)` it targets.
+#[derive(Clone, Copy)]
+pub struct DescriptorTemplateEntry {
+    pub dst_binding: u32,
+    pub dst_array_element: u32,
+    pub descriptor_count: u32,
+    pub descriptor_type: i32,
+    pub offset: usize,
+    pub stride: usize,
+}
+
+/// A `VkDescriptorUpdateTemplate` (Vulkan 1.1): the immutable entry table `vkUpdateDescriptorSetWithTemplate`
+/// walks to read descriptors out of the app's data blob at fixed offsets/strides.
+pub struct DescriptorUpdateTemplateRec {
+    pub entries: Vec<DescriptorTemplateEntry>,
+}
+
+/// A `VkSamplerYcbcrConversion` (Vulkan 1.1 / MoltenVK `MVKSamplerYcbcrConversion`): an opaque handle
+/// wrapping the requested YCbCr model/range/swizzle. We do not materialize YCbCr *formats*, so the
+/// object exists (lifetime is observable) but only the identity/pass-through case is meaningful.
+pub struct SamplerYcbcrConversionRec {
+    pub format: i32,
+}
+
 /// A device-side query/event/buffer-write op recorded into a command buffer and applied at
 /// `vkQueueSubmit` completion (our host replay is synchronous). Kept out of the `Vec<Enc>` encoder so
 /// the shipped `Cmd::Submit` byte stream for an existing draw/dispatch input is unchanged.
@@ -535,6 +560,8 @@ pub struct VkState {
     pub buffer_views: HashMap<u64, BufferViewRec>, // buffer-view handle -> typed buffer window
     pub query_pools: HashMap<u64, QueryPoolRec>, // query-pool handle -> typed slot array
     pub pipeline_caches: HashMap<u64, PipelineCacheRec>, // pipeline-cache handle -> serialized blob
+    pub descriptor_update_templates: HashMap<u64, DescriptorUpdateTemplateRec>, // 1.1 update templates
+    pub ycbcr_conversions: HashMap<u64, SamplerYcbcrConversionRec>, // 1.1 sampler ycbcr conversions
     pub surfaces: HashMap<u64, SurfaceRec>,
     pub swapchains: HashMap<u64, SwapchainRec>,
     /// Lazily-opened host GPU-exec channel (only when `$DD_GPU_EXEC` is set — the live guest path).

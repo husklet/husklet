@@ -183,23 +183,23 @@ mod tests {
     /// stub call (`vkCreateSampler`, a core:1.0 command) and an unadvertised-extension stub.
     #[test]
     fn stub_returns_truthful_error_and_inits_output() {
-        // vkCreateSamplerYcbcrConversion is a still-unimplemented core:1.1 stub (the whole 1.0 core is
-        // now bodied): it must null its output handle and return FEATURE_NOT_PRESENT (unimplemented core).
-        let mut ycbcr: u64 = 0xdead_beef; // poison; the stub must overwrite it with VK_NULL_HANDLE (0)
-        let r = vkCreateSamplerYcbcrConversion(
+        // vkCreateRenderPass2 is a still-unimplemented core:1.2 stub (the whole 1.0 and 1.1 core is now
+        // bodied): it must null its output handle and return FEATURE_NOT_PRESENT (unimplemented core).
+        let mut rp: u64 = 0xdead_beef; // poison; the stub must overwrite it with VK_NULL_HANDLE (0)
+        let r = vkCreateRenderPass2(
             core::ptr::null_mut(),
             core::ptr::null(),
             core::ptr::null(),
-            &mut ycbcr as *mut u64 as *mut core::ffi::c_void,
+            &mut rp as *mut u64 as *mut core::ffi::c_void,
         );
         assert_eq!(r, types::VK_ERROR_FEATURE_NOT_PRESENT, "core stub must fail, not succeed");
-        assert_eq!(ycbcr, 0, "stub must initialize the output handle to VK_NULL_HANDLE");
+        assert_eq!(rp, 0, "stub must initialize the output handle to VK_NULL_HANDLE");
         // A command from an unadvertised extension reports EXTENSION_NOT_PRESENT.
         let r2 = vkBindBufferMemory2KHR(core::ptr::null_mut(), 0, core::ptr::null());
         assert_eq!(r2, types::VK_ERROR_EXTENSION_NOT_PRESENT);
         // And the inventory records exactly those errors for those commands.
         let rec = |n: &str| CAPABILITIES.iter().find(|e| e.name == n).unwrap();
-        assert_eq!(rec("vkCreateSamplerYcbcrConversion").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
+        assert_eq!(rec("vkCreateRenderPass2").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
         assert_eq!(rec("vkBindBufferMemory2KHR").vk_error, types::VK_ERROR_EXTENSION_NOT_PRESENT);
     }
 
@@ -281,14 +281,14 @@ mod tests {
     fn strict_mode_trips_abort_on_stub() {
         stub::STRICT_TRIPPED.with(|c| c.set(false));
         std::env::set_var("DD_SHIM_STRICT", "1");
-        // Any generated stub call must trip the strict abort (vkCreateSamplerYcbcrConversion is a
-        // still-unimplemented core:1.1 stub — vkCreateEvent is now a real body).
-        let mut ycbcr: u64 = 0;
-        let _ = vkCreateSamplerYcbcrConversion(
+        // Any generated stub call must trip the strict abort (vkCreateRenderPass2 is a still-unimplemented
+        // core:1.2 stub — the whole 1.0 + 1.1 core is now bodied).
+        let mut rp: u64 = 0;
+        let _ = vkCreateRenderPass2(
             core::ptr::null_mut(),
             core::ptr::null(),
             core::ptr::null(),
-            &mut ycbcr as *mut u64 as *mut core::ffi::c_void,
+            &mut rp as *mut u64 as *mut core::ffi::c_void,
         );
         std::env::remove_var("DD_SHIM_STRICT");
         assert!(
@@ -345,5 +345,79 @@ mod tests {
             assert!(DISPATCH_NAMES.contains(&name), "1.4 core command {name} missing from the ABI");
             assert!(dispatch_addr(name).is_some(), "1.4 core command {name} not resolvable");
         }
+    }
+
+    /// Every mandatory Vulkan **1.1** core command now has a real (full or partial) body — zero generated
+    /// stubs remain in the 1.1 promoted core (bind/requirements2, descriptor update templates, sampler
+    /// YCbCr, device groups minimal, external-capability queries, the `...2` physical-device queries).
+    #[test]
+    fn vulkan_1_1_mandatory_core_is_fully_implemented() {
+        use capability::Cap;
+        let core11: Vec<_> = CAPABILITIES.iter().filter(|e| e.origin == "core:1.1").collect();
+        assert_eq!(core11.len(), 28, "Vulkan 1.1 core census size");
+        let stubs = core11.iter().filter(|e| e.cap == Cap::Stub).count();
+        assert_eq!(stubs, 0, "no mandatory core:1.1 command may remain a generated stub");
+        // A couple of the promoted commands resolve and are non-stub in the inventory.
+        for name in ["vkBindBufferMemory2", "vkCreateDescriptorUpdateTemplate", "vkGetDeviceQueue2"] {
+            assert!(dispatch_addr(name).is_some(), "1.1 core {name} not resolvable");
+            assert!(CAPABILITIES.iter().find(|e| e.name == name).unwrap().implemented(), "{name} still a stub");
+        }
+    }
+
+    /// Per-feature: a `VkDescriptorUpdateTemplate` writes the app's pushed `VkDescriptorBufferInfo` into
+    /// the target set exactly as `vkUpdateDescriptorSets` would (the buffer binding lands in the set's
+    /// resolved table). Drives the real 1.1 bodies end to end.
+    #[test]
+    fn descriptor_update_template_writes_buffer_binding() {
+        // No reg::reset() — this test only reads back its own freshly-allocated set handle, so it must not
+        // wipe global state that a concurrent test (e.g. the ir_seam IR contract test) depends on.
+        let _guard = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use ash::vk;
+        use ash::vk::Handle;
+
+        // A storage buffer.
+        let bci = vk::BufferCreateInfo::default().size(256).usage(vk::BufferUsageFlags::STORAGE_BUFFER);
+        let mut buffer = 0u64;
+        assert_eq!(vkCreateBuffer(core::ptr::null_mut(), &bci, core::ptr::null(), &mut buffer), types::VK_SUCCESS);
+
+        // A set layout (binding 0 = STORAGE_BUFFER), pool, and one allocated set.
+        let binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE);
+        let set_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(core::slice::from_ref(&binding));
+        let mut set_layout = 0u64;
+        assert_eq!(vkCreateDescriptorSetLayout(core::ptr::null_mut(), &set_ci, core::ptr::null(), &mut set_layout), types::VK_SUCCESS);
+        let pool_size = vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 1 };
+        let pool_ci = vk::DescriptorPoolCreateInfo::default().max_sets(1).pool_sizes(core::slice::from_ref(&pool_size));
+        let mut pool = 0u64;
+        assert_eq!(vkCreateDescriptorPool(core::ptr::null_mut(), &pool_ci, core::ptr::null(), &mut pool), types::VK_SUCCESS);
+        let set_layout_h = vk::DescriptorSetLayout::from_raw(set_layout);
+        let alloc = vk::DescriptorSetAllocateInfo::default().descriptor_pool(vk::DescriptorPool::from_raw(pool)).set_layouts(core::slice::from_ref(&set_layout_h));
+        let mut set = 0u64;
+        assert_eq!(vkAllocateDescriptorSets(core::ptr::null_mut(), &alloc, &mut set), types::VK_SUCCESS);
+
+        // A template with one entry: binding 0, STORAGE_BUFFER, offset 0, stride = sizeof(VkDescriptorBufferInfo).
+        let entry = vk::DescriptorUpdateTemplateEntry {
+            dst_binding: 0, dst_array_element: 0, descriptor_count: 1,
+            descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+            offset: 0, stride: core::mem::size_of::<vk::DescriptorBufferInfo>(),
+        };
+        let tci = vk::DescriptorUpdateTemplateCreateInfo::default()
+            .descriptor_update_entries(core::slice::from_ref(&entry))
+            .template_type(vk::DescriptorUpdateTemplateType::DESCRIPTOR_SET);
+        let mut template = 0u64;
+        assert_eq!(vkCreateDescriptorUpdateTemplate(core::ptr::null_mut(), &tci, core::ptr::null(), &mut template), types::VK_SUCCESS);
+
+        // Push a VkDescriptorBufferInfo through the template.
+        let info = vk::DescriptorBufferInfo { buffer: vk::Buffer::from_raw(buffer), offset: 0, range: vk::WHOLE_SIZE };
+        vkUpdateDescriptorSetWithTemplate(core::ptr::null_mut(), set, template, &info as *const _ as *const core::ffi::c_void);
+
+        // The set's resolved buffer table now carries binding 0 → (buffer, offset 0, range == buffer size).
+        let s = reg::lock();
+        let d = s.dsets.get(&set).expect("descriptor set");
+        let (b, off, range) = *d.buffers.get(&0).expect("binding 0 written by the template");
+        assert_eq!(b, buffer);
+        assert_eq!(off, 0);
+        assert_eq!(range, 256, "WHOLE_SIZE resolves to the buffer size");
     }
 }
