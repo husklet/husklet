@@ -280,13 +280,6 @@ Important gaps and incorrect simplifications:
   pipeline kind, never an implicit failure path. Shader creation/pipeline linking must return a backend error that
   propagates through the typed executor acknowledgement to Vulkan. Add negative shaders whose output differs visibly
   from every builtin. `vulkan_shader_translation_failure_never_falls_back_to_builtin_rendering` enforces both backends.
-- Vulkan advertises `robustBufferAccess = VK_TRUE`, but descriptor ranges, vertex/index fetches and many resource
-  bounds are not validated, and the backends have no shared zero-out-of-bounds-read/discard-write policy. Set the
-  feature false immediately. Re-enable it only after every shader-visible buffer path is either instrumented during
-  translation or uses backend-native robustness with identical semantics, including dynamic offsets and partially
-  bound ranges. Use adversarial shaders and guard regions to prove zero reads, discarded writes and no neighboring
-  resource corruption on all executors. `vk_robust_buffer_access_is_advertised_only_with_zeroing_and_bounds_guarantees`
-  prevents a capability bit from standing in for the guarantee.
 - The checked-in C smoke file is not a loader-level conformance or live-present suite. The Rust Vulkan crate has
   only three unit tests: census/dispatch and a synthetic IR seam round-trip.
 
@@ -1034,7 +1027,6 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `vk_image_layout_barriers_track_subresources_and_queue_ownership` | partial | Legacy color-image barriers and render uses have atomic per-mip/layer state on the single queue; sync2, cross-queue and backend hazards remain | Extend the green Rust ABI lifecycle gate across aspects/queues and both backend barrier models |
 | `vk_transfer_commands_preserve_every_region_subresource_and_layout` | partial | Vulkan lowers validated 2D color buffer/image copies, image copies, forward blits and base clears with exact representable fields; resolve and broader dimensions remain | Extend the green ABI/software gates with rich buffer-texture origins/layers and distinct resolve across both hardware executors |
 | `vk_shader_modules_validate_spirv_entries_specialization_and_interfaces` | partial | Modules validate structure and retain entry/resource/IO/spec reflection; pipelines reject bad entry/spec/layout/interface combinations before allocation | Expand the green ABI corpus to full supported SPIR-V/type/descriptor/push-constant vocabulary and translation diagnostics |
-| `vk_robust_buffer_access_is_advertised_only_with_zeroing_and_bounds_guarantees` | contradictory | robustBufferAccess is true without complete zero/discard bounds semantics | Disable now or prove every access path across all executors |
 | `opt_in_gles3_has_real_implementations_for_every_mandatory_command` | partial | opt-in GLES3 has 112/246 mandatory stubs | Complete mandatory ES3 groups and relevant CTS |
 | `dmabuf_feedback_serializes_an_explicit_linux_u64_device_id` | partial | explicit Linux-u64 LE serialization and real-wire Rust/C mmap parsers are implemented; the macOS/guest runtime gates have not yet run on this host | Run the Rust recvmsg+mmap regression and C guest probe through the macOS compositor/engine, then retain both green |
 | `x11_only_gui_apps_have_an_xwayland_bridge` | missing | no XWayland/XWM/GLX compatibility path | Supervised XWayland journey with input/clipboard/rendering |

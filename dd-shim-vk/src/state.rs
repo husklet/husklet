@@ -115,11 +115,12 @@ fn physical_device_limits() -> vk::PhysicalDeviceLimits {
     }
 }
 
-/// Fill a `VkPhysicalDeviceFeatures` — a conservative "safe subset" on by default (the common set an
-/// app expects available). Refined as real bodies land.
+/// Fill a `VkPhysicalDeviceFeatures` with only guarantees implemented across every executor path.
 pub fn physical_device_features() -> vk::PhysicalDeviceFeatures {
     vk::PhysicalDeviceFeatures {
-        robust_buffer_access: vk::TRUE,
+        // Descriptor, vertex/index and translated shader accesses do not yet share Vulkan's required
+        // zero-read/discard-write robustness semantics. Advertising this would be unsafe.
+        robust_buffer_access: vk::FALSE,
         full_draw_index_uint32: vk::TRUE,
         image_cube_array: vk::TRUE,
         independent_blend: vk::TRUE,

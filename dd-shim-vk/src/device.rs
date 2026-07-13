@@ -18,15 +18,24 @@ use core::ffi::c_void;
 #[no_mangle]
 pub extern "C" fn vkCreateDevice(
     physical_device: VkPhysicalDevice,
-    _p_create_info: *const vk::DeviceCreateInfo,
+    p_create_info: *const vk::DeviceCreateInfo,
     _p_allocator: *const c_void,
     p_device: *mut VkDevice,
 ) -> VkResult {
     let Some(out) = (unsafe { p_device.as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    *out = core::ptr::null_mut();
     if physical_device.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    let Some(create_info) = (unsafe { p_create_info.as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if let Some(features) = unsafe { create_info.p_enabled_features.as_ref() } {
+        if features.robust_buffer_access == vk::TRUE {
+            return VK_ERROR_FEATURE_NOT_PRESENT;
+        }
     }
     let queue = Dispatchable::new(Queue {
         family_index: crate::state::QUEUE_FAMILY_INDEX,
