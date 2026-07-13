@@ -748,9 +748,13 @@ pub extern "C" fn glTexSubImage2D(
     if target != GL_TEXTURE_2D || !matches!(fmt, GL_RGB | GL_RGBA | GL_BGRA_EXT) || typ != GL_UNSIGNED_BYTE { if s.error==GL_NO_ERROR{s.error=GL_INVALID_ENUM}; return; }
     if level != 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || t==0 || t as usize>=MAXTEX || !s.tex[t as usize].used || xo.checked_add(w).is_none_or(|v|v>s.tex[t as usize].w) || yo.checked_add(h).is_none_or(|v|v>s.tex[t as usize].h) { if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE}; return; }
     let bpp=if fmt==GL_RGB{3usize}else{4}; let rp=if s.unpack_row_length==0{w}else{s.unpack_row_length};
-    if rp<w || (rp as usize).checked_mul(bpp).and_then(|n|n.checked_add(s.unpack_alignment as usize-1)).is_none(){if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE};return;}
-    let src = unsafe { pixels_slice(pixels, w, h, fmt, &s) };
-    s.tex_store_pixels(t, xo, yo, w, h, fmt, src.as_deref());
+    let stride=(rp as usize).checked_mul(bpp).and_then(|n|n.checked_add(s.unpack_alignment as usize-1)).map(|n|n&!(s.unpack_alignment as usize-1));
+    let start=stride.and_then(|st|(s.unpack_skip_rows as usize).checked_mul(st)).and_then(|n|(s.unpack_skip_pixels as usize).checked_mul(bpp).and_then(|p|n.checked_add(p)));
+    let need=start.and_then(|st|stride.and_then(|rs|(h.saturating_sub(1) as usize).checked_mul(rs)).and_then(|n|(w as usize).checked_mul(bpp).and_then(|p|n.checked_add(p))).and_then(|n|st.checked_add(n)));
+    let (stride,start,need)=match(stride,start,need){(Some(a),Some(b),Some(c)) if rp>=w=>(a,b,c),_=>{if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE};return;}};
+    let mut rgba=vec![0u8;(w as usize).checked_mul(h as usize).and_then(|n|n.checked_mul(4)).unwrap_or(0)];
+    if !pixels.is_null(){let src=unsafe{core::slice::from_raw_parts(pixels as *const u8,need)};for yy in 0..h as usize{for xx in 0..w as usize{let sp=start+yy*stride+xx*bpp;let dp=(yy*w as usize+xx)*4;match fmt{GL_RGB=>{rgba[dp..dp+3].copy_from_slice(&src[sp..sp+3]);rgba[dp+3]=255},GL_RGBA=>rgba[dp..dp+4].copy_from_slice(&src[sp..sp+4]),_=>{rgba[dp]=src[sp+2];rgba[dp+1]=src[sp+1];rgba[dp+2]=src[sp];rgba[dp+3]=src[sp+3]}}}}}
+    for yy in 0..h as usize{let dp=((yo as usize+yy)*s.tex[t as usize].w as usize+xo as usize)*4;let sp=yy*w as usize*4;s.tex[t as usize].data[dp..dp+w as usize*4].copy_from_slice(&rgba[sp..sp+w as usize*4]);}
     s.tex[t as usize].gen += 1;
 }
 
@@ -760,7 +764,10 @@ pub extern "C" fn glTexSubImage2D(
 pub extern "C" fn glTexStorage2D(target: u32, levels: i32, ifmt: u32, w: i32, h: i32) {
     let mut s = gl();
     let t = s.bound_tex();
-    if target == GL_TEXTURE_2D && (t as usize) < MAXTEX && t != 0 && s.tex[t as usize].used && !s.tex[t as usize].immutable && levels > 0 && matches!(ifmt, GL_RGB | GL_RGBA) && w > 0 && h > 0 {
+    if target!=GL_TEXTURE_2D {if s.error==GL_NO_ERROR{s.error=GL_INVALID_ENUM};return;}
+    if levels!=1||w<=0||h<=0||!matches!(ifmt,GL_RGB|GL_RGBA){if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE};return;}
+    if t==0||t as usize>=MAXTEX||!s.tex[t as usize].used||s.tex[t as usize].immutable{if s.error==GL_NO_ERROR{s.error=GL_INVALID_OPERATION};return;}
+    {
         let Some(size)=(w as usize).checked_mul(h as usize).and_then(|n|n.checked_mul(4)) else { if s.error==GL_NO_ERROR{s.error=GL_INVALID_VALUE}; return; };
         let tex = &mut s.tex[t as usize];
         tex.w = w;
