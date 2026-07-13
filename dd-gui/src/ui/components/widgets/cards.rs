@@ -25,24 +25,6 @@ pub(crate) fn setting_card(rows: &[(&str, &str)]) -> gtk::Box {
     card
 }
 
-pub(crate) fn stat_card(value: &str, name: &str, accent: bool) -> gtk::Widget {
-    let v = gtk::Label::new(Some(value));
-    v.set_xalign(0.0);
-    v.add_css_class("dd-stat-value");
-    if accent {
-        v.add_css_class("accent");
-    }
-    let n = gtk::Label::new(Some(name));
-    n.set_xalign(0.0);
-    n.add_css_class("dd-stat-name");
-    let c = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    c.add_css_class("dd-stat-card");
-    c.set_size_request(132, -1);
-    c.append(&v);
-    c.append(&n);
-    c.upcast()
-}
-
 // ---- sparkline stat card --------------------------------------------------------------------------
 
 /// A dashboard card: a big current value, a caption, and a sparkline of its recent history.

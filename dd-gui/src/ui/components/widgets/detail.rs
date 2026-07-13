@@ -57,13 +57,3 @@ pub(crate) fn section(title: &str, lines: &[String]) -> gtk::Widget {
     }
     b.upcast()
 }
-
-pub(crate) fn section_caption(text: &str) -> gtk::Label {
-    let l = gtk::Label::new(Some(&text.to_uppercase()));
-    l.set_xalign(0.0);
-    l.add_css_class("dd-section-title");
-    l.set_margin_top(10);
-    l.set_margin_bottom(2);
-    l.set_margin_start(12);
-    l
-}
