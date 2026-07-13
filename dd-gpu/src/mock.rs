@@ -67,6 +67,7 @@ impl RecordingBackend {
 
 impl GpuBackend for RecordingBackend {
     fn capabilities(&self) -> Capabilities {
+        use crate::backend::{command_bits, format_bits, shader_payload, ALL_COMMANDS, COLOR_FORMATS};
         Capabilities {
             name: "dd-mock".into(),
             unified_memory: true,
@@ -74,6 +75,14 @@ impl GpuBackend for RecordingBackend {
             supports_graphics: true,
             max_texture_2d: 16384,
             present_kinds: vec![PresentKind::Shm],
+            wire_version: crate::ir::WIRE_VERSION,
+            command_bits: command_bits(ALL_COMMANDS),
+            shader_payloads: shader_payload::SPIRV | shader_payload::PTX,
+            texture_formats: format_bits(COLOR_FORMATS),
+            max_frame_bytes: 64 << 20,
+            max_buffer_bytes: 256 << 20,
+            max_bind_groups: 4,
+            supports_timeline_fences: false,
         }
     }
 

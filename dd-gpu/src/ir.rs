@@ -509,7 +509,9 @@ pub(crate) mod tag {
     pub const PRESENT: u8 = 21;
 }
 
-mod etag {
+/// Encoder-op (command-buffer) tag numbers. Public so the capability handshake ([`crate::backend`]) can
+/// build a per-backend supported-command bitset and a guest can negotiate a required command against it.
+pub mod etag {
     pub const BEGIN_RENDER_PASS: u8 = 1;
     pub const END_RENDER_PASS: u8 = 2;
     pub const SET_PIPELINE: u8 = 3;

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
 
-use dd_gpu::backend::{Capabilities, GpuBackend, PresentKind, PresentToken};
+use dd_gpu::backend::{Capabilities, GpuBackend, PresentToken};
 use dd_gpu::id::*;
 use dd_gpu::ir::*;
 use dd_gpu::{GpuError, Result};
@@ -1197,13 +1197,32 @@ impl WgpuBackend {
 
 impl GpuBackend for WgpuBackend {
     fn capabilities(&self) -> Capabilities {
+        use dd_gpu::backend::{command_bits, format_bits, shader_payload, ALL_COMMANDS, COLOR_FORMATS};
+        let limits = self.device.limits();
         Capabilities {
             name: "dd-gpu-wgpu (Metal)".into(),
             unified_memory: true,
             supports_compute: true,
             supports_graphics: true,
-            max_texture_2d: self.device.limits().max_texture_dimension_2d,
-            present_kinds: vec![PresentKind::IoSurface],
+            max_texture_2d: limits.max_texture_dimension_2d,
+            // TRUTHFUL PRESENT ADVERTISEMENT: `GpuBackend::present` is not implemented here — the live
+            // present path is the executor's private `set_render_target` + IOSurface readback/wrap seam, not
+            // a `PresentToken`. Advertising `PresentKind::IoSurface` while `present()` returns Unsupported
+            // was the contradiction the capability gate flagged; until a real public present op lands (with a
+            // valid token + completion ordering), the handshake advertises NO present kind.
+            present_kinds: vec![],
+            wire_version: dd_gpu::ir::WIRE_VERSION,
+            command_bits: command_bits(ALL_COMMANDS),
+            // naga translates SPIR-V and GLSL to WGSL, and PTX→WGSL for CUDA; WGSL is native. MSL is NOT
+            // consumable (naga can't ingest it) — that payload routes to the bespoke Metal backend.
+            shader_payloads: shader_payload::SPIRV | shader_payload::GLSL | shader_payload::WGSL | shader_payload::PTX,
+            // Color formats plus the depth formats wgpu materializes as real depth textures.
+            texture_formats: format_bits(COLOR_FORMATS)
+                | format_bits(&[TextureFormat::Depth32Float, TextureFormat::Depth24PlusStencil8]),
+            max_frame_bytes: 64 << 20,
+            max_buffer_bytes: limits.max_buffer_size,
+            max_bind_groups: limits.max_bind_groups,
+            supports_timeline_fences: false, // fences are emulated with submission completion (no timeline)
         }
     }
 

@@ -24,6 +24,7 @@
 // ---- The shared IR contract, re-exported verbatim from the host crate. -----------------------------
 // A guest shim `use dd_shim_common::ir::Cmd;` gets the exact type the host replays. There is no second
 // definition to keep in sync — the "one source of truth" the architecture demands.
+pub use dd_gpu::backend;
 pub use dd_gpu::id;
 pub use dd_gpu::ir;
 pub use dd_gpu::wire;

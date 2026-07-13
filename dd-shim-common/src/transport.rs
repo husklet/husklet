@@ -195,6 +195,22 @@ impl ExecConn {
     }
 }
 
+/// Guest-side capability negotiation: decode the host executor's serialized capability descriptor and
+/// check the guest's required [`FeatureRequest`](dd_gpu::backend::FeatureRequest) against it BEFORE the
+/// guest advertises the matching API version/extension/format to the app. A clean typed error here lets
+/// the guest advertise a lower coherent profile (or reject the backend) instead of emitting a command the
+/// host would later reject as a runtime `BadTag`/`Unsupported` — the Phase-1 "negotiate before advertise"
+/// contract. On success the fully-decoded [`Capabilities`](dd_gpu::backend::Capabilities) is returned so
+/// the guest can build its advertised surface from the intersection of its front end and the backend.
+pub fn negotiate_host_capabilities(
+    handshake: &[u8],
+    req: &dd_gpu::backend::FeatureRequest,
+) -> crate::Result<dd_gpu::backend::Capabilities> {
+    let caps = dd_gpu::backend::Capabilities::from_handshake(handshake)?;
+    caps.negotiate(req)?;
+    Ok(caps)
+}
+
 /// A frame's IR accumulator over the shared [`ir::Cmd`] contract.
 ///
 /// The guest front-end pushes host-agnostic commands; [`finish`](FrameBuilder::finish) serializes them
@@ -370,5 +386,33 @@ mod tests {
     fn ir_wire_version_tracks_dd_gpu() {
         // IR_WIRE_VERSION is bound to the source of truth so guest/host can't disagree on the tag set.
         assert_eq!(crate::IR_WIRE_VERSION, dd_gpu::ir::WIRE_VERSION);
+    }
+
+    #[test]
+    fn guest_negotiates_a_serialized_host_capability_descriptor() {
+        use dd_gpu::backend::{command_bits, format_bits, shader_payload, FeatureRequest, GpuBackend};
+        use dd_gpu::ir::{etag, TextureFormat, WIRE_VERSION};
+
+        // A real host advertisement (the software oracle: PTX shaders, color formats, all commands),
+        // serialized to the handshake wire form the guest would read off the connection.
+        let handshake = dd_gpu::software::SoftwareBackend::new().capabilities().to_handshake();
+
+        // Compatible request → negotiation succeeds and returns the decoded descriptor.
+        let ok = FeatureRequest {
+            wire_version: WIRE_VERSION,
+            shader_payloads: shader_payload::PTX,
+            command_bits: command_bits(&[etag::COPY_T2T, etag::DISPATCH]),
+            texture_formats: format_bits(&[TextureFormat::Rgba8Unorm]),
+        };
+        let caps = negotiate_host_capabilities(&handshake, &ok).expect("compatible negotiation");
+        assert_eq!(caps.wire_version, WIRE_VERSION);
+
+        // Incompatible: guest needs an MSL shader payload the software backend cannot execute → clean error.
+        let wants_msl = FeatureRequest { shader_payloads: shader_payload::MSL, ..ok.clone() };
+        assert!(negotiate_host_capabilities(&handshake, &wants_msl).is_err());
+
+        // Incompatible: guest needs a depth format the software oracle does not materialize → clean error.
+        let wants_depth = FeatureRequest { texture_formats: format_bits(&[TextureFormat::Depth32Float]), ..ok };
+        assert!(negotiate_host_capabilities(&handshake, &wants_depth).is_err());
     }
 }

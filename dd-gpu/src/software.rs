@@ -680,6 +680,7 @@ fn sample_bilinear(
 
 impl GpuBackend for SoftwareBackend {
     fn capabilities(&self) -> Capabilities {
+        use crate::backend::{command_bits, format_bits, shader_payload, ALL_COMMANDS, COLOR_FORMATS};
         Capabilities {
             name: "dd-software".into(),
             unified_memory: true, // it's all host memory
@@ -687,6 +688,18 @@ impl GpuBackend for SoftwareBackend {
             supports_graphics: true, // clear/copy only
             max_texture_2d: 8192,
             present_kinds: vec![PresentKind::Shm],
+            wire_version: crate::ir::WIRE_VERSION,
+            // Validates/replays every encoder op (clears + copies + dispatch; draws are recorded).
+            command_bits: command_bits(ALL_COMMANDS),
+            // Executes compiled PTX kernels; it cannot run a graphics (SPIR-V/MSL) shader, so PTX is the
+            // only payload it truthfully executes.
+            shader_payloads: shader_payload::PTX,
+            // Color formats only — the CPU oracle does not materialize depth/stencil.
+            texture_formats: format_bits(COLOR_FORMATS),
+            max_frame_bytes: 64 << 20,
+            max_buffer_bytes: 256 << 20,
+            max_bind_groups: 4,
+            supports_timeline_fences: false, // synchronous; a fence only reaches a value a submit signalled
         }
     }
 

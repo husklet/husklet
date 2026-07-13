@@ -1835,7 +1835,20 @@ impl GpuBackend for MetalBackend {
             supports_compute: true,
             supports_graphics: true,
             max_texture_2d: 16384,
+            // The bespoke Metal executor's public present is the IOSurface path the dd-display compositor
+            // drives via `set_render_target` + the tearing fence, not a `GpuBackend::present` token, so it
+            // advertises no PresentKind here (the executor owns the surface handoff).
             present_kinds: vec![],
+            wire_version: dd_gpu::ir::WIRE_VERSION,
+            command_bits: dd_gpu::backend::command_bits(dd_gpu::backend::ALL_COMMANDS),
+            // Metal consumes MSL (the shim's GLSL→MSL / compute kernels); SPIR-V/PTX route to wgpu.
+            shader_payloads: dd_gpu::backend::shader_payload::MSL,
+            // Guest-creatable textures are the color formats; depth is an attachment-internal texture.
+            texture_formats: dd_gpu::backend::format_bits(dd_gpu::backend::COLOR_FORMATS),
+            max_frame_bytes: 64 << 20, // matches run_executor's per-frame length cap
+            max_buffer_bytes: 256 << 20,
+            max_bind_groups: 4,
+            supports_timeline_fences: false, // MTLEvent is device-internal, not a guest cross-process timeline
         }
     }
 
