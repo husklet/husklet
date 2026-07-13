@@ -29,13 +29,22 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let mut socket: Option<String> = None;
     let mut png_dir: Option<String> = None;
-    let mut metal = false;
+    // Parity with the legacy `dd-display` LIVE path: its first-class `--window` mode is Metal-accelerated
+    // (CAMetalLayer) BY DEFAULT (`win_metal = !no_metal`), forced to the CPU NSImageView blit only by
+    // `--no-metal`. Chrome's GPU (IOSurface-backed dmabuf) content only composites zero-copy through the
+    // MetalPresenter, so the live path must default to Metal — a CPU CocoaPresenter would render Chrome's
+    // accelerated surfaces white. `dd-display` forwards its args to us unchanged (`maybe_exec_smithay`),
+    // so we must honour `--window` (the live mode; equivalent to no `--png` here) and default to Metal.
+    let mut metal = true;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--socket" => socket = args.next(),
             "--png" => png_dir = args.next(),
             "--metal" => metal = true,
             "--no-metal" => metal = false,
+            // The legacy live mode; here the native present/input loop already runs whenever `--png` is
+            // absent, so this is accepted (not "ignored") to keep the forwarded CLI contract explicit.
+            "--window" => {}
             other => eprintln!("dd-compositor: ignoring unknown arg {other:?}"),
         }
     }
@@ -190,9 +199,31 @@ fn set_nonblock(fd: RawFd) {
 mod macos {
     use std::os::fd::{FromRawFd, OwnedFd};
 
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::{build_loop, LoopData};
     use dd_display::present::Presenter;
     use dd_display::present_cocoa::{CocoaPresenter, MetalPresenter};
+
+    /// Set by the SIGUSR1 handler; the live loop then dumps every window to the dump dir. A headless
+    /// driver sends SIGUSR1 and reads the PNG back (the Mac screen cannot be recorded). Mirrors the
+    /// legacy `present_cocoa` SIGUSR1 path so the same validation harness drives both compositors.
+    static DUMP_REQ: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn on_sigusr1(_sig: i32) {
+        DUMP_REQ.store(true, Ordering::SeqCst);
+    }
+
+    /// If a dump was requested, write every live window's current pixels to `DD_DISPLAY_DUMP`
+    /// (else `/tmp/dd-display-live`), via the reused `Presenter::dump_pngs` hook.
+    fn service_dump(data: &mut LoopData) {
+        if !DUMP_REQ.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let dir = std::env::var("DD_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-live".into());
+        let n = data.state.presenter.dump_pngs(&dir);
+        eprintln!("dd-compositor[cocoa]: SIGUSR1 dumped {n} live window(s) -> {dir}/live-surface-*.png");
+    }
     use objc2::rc::Retained;
     use objc2_app_kit::{
         NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventMask, NSEventModifierFlags,
@@ -226,9 +257,16 @@ mod macos {
             Box::new(CocoaPresenter::new(mtm))
         };
 
+        // SIGUSR1 → PNG dump, matching the legacy live loop so the SAME headless validation harness
+        // (`target-mac/live-window.sh` sends SIGUSR1 and reads the PNG back, since the Mac screen cannot
+        // be recorded) works on the Smithay path — needed to gather the visible-render evidence before
+        // making DD_DISPLAY_SMITHAY the default. Dumps to `DD_DISPLAY_DUMP` (else /tmp/dd-display-live).
+        unsafe { libc::signal(libc::SIGUSR1, on_sigusr1 as usize) };
+
         let (mut event_loop, mut data) = build_loop(socket, presenter);
         eprintln!("dd-compositor[cocoa]: entering calloop (metal={metal})");
         loop {
+            service_dump(&mut data);
             // CRITICAL: service AppKit input BEFORE the calloop dispatch (which runs commit→present).
             // Input must never be gated behind a present — this is the same latency lesson being fixed
             // on the legacy path (dd-display: "service NSEvents before pump"). Present is non-blocking
@@ -323,10 +361,11 @@ mod macos {
         // `surface_scale` is device-pixels-per-point for the input path (1.0 for the point-space present,
         // matching the legacy dd-display live loop); threading both keeps clicks landing correctly on a
         // 2x Retina backing store instead of assuming a fixed 1.0 scale.
-        let sid = data.state.focus.as_ref().map(|s| {
-            use smithay::reexports::wayland_server::Resource;
-            s.id().protocol_id()
-        });
+        // The presenter is keyed by the compositor's monotonic HOST surface id, not the client-local
+        // `wl_surface` protocol object id, so resolve the focused surface's host sid to look up its
+        // on-screen size + input scale (see `DdState::focused_surface_sid`). Using the protocol id here
+        // silently missed the lookup and left pointer Y un-flipped on the focused window.
+        let sid = data.state.focused_surface_sid();
         let flip_h = sid
             .and_then(|sid| data.state.presenter.surface_size(sid))
             .map(|(_, h)| h);

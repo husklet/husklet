@@ -760,6 +760,16 @@ impl DdState {
         self.x11_windows.contains(&sid)
     }
 
+    /// Host surface id of the currently keyboard-focused surface, if any. The macOS present/input loop
+    /// uses this to look up the focused window's size + input scale in the presenter — which is keyed by
+    /// the monotonic HOST sid, NOT the client-local `wl_surface` protocol object id — so pointer
+    /// coordinates flip (bottom-left → top-left) and scale correctly. Using the protocol id here silently
+    /// misses the lookup and leaves input un-flipped on a Retina backing store.
+    #[doc(hidden)]
+    pub fn focused_surface_sid(&self) -> Option<u32> {
+        self.focus.as_ref().and_then(|s| self.surface_id_opt(s))
+    }
+
     /// Move every zero-copy surface in the presented tree from its live buffer-use slot to the in-flight
     /// queue, tagged with the delivery `serial` its GPU/present work was submitted under. The buffer is
     /// retained until the presenter reports `serial` complete.
