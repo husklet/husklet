@@ -98,7 +98,10 @@ impl DdState {
         };
         self.ptr_loc = (x, y);
         let ptr = self.pointer.clone();
-        let focus = self.focus.clone().map(|s| (s, (0.0, 0.0).into()));
+        let focus = self.focus.clone().and_then(|root| {
+            self.input_surface_at(&root, x, y)
+                .map(|(surface, offset)| (surface, offset.into()))
+        });
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.now_ms();
         ptr.motion(

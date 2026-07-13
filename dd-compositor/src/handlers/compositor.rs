@@ -133,6 +133,50 @@ impl ShmHandler for DdState {
 }
 
 impl DdState {
+    /// Topmost input-sensitive surface at root-local logical coordinates. Region coordinates are
+    /// already surface-local after viewport/scale/buffer-transform interpretation.
+    pub(crate) fn input_surface_at(
+        &self,
+        root: &WlSurface,
+        x: f64,
+        y: f64,
+    ) -> Option<(WlSurface, (f64, f64))> {
+        self.input_surface_at_offset(root, x, y, 0.0, 0.0)
+    }
+
+    fn input_surface_at_offset(
+        &self,
+        surface: &WlSurface,
+        x: f64,
+        y: f64,
+        ox: f64,
+        oy: f64,
+    ) -> Option<(WlSurface, (f64, f64))> {
+        let mut children = get_children(surface);
+        children.reverse();
+        for child in children {
+            let (cx, cy) = with_states(&child, |states| {
+                let pos = states.cached_state.get::<SubsurfaceCachedState>().current().location;
+                (pos.x as f64, pos.y as f64)
+            });
+            if let Some(hit) = self.input_surface_at_offset(&child, x, y, ox + cx, oy + cy) {
+                return Some(hit);
+            }
+        }
+        let lx = x - ox;
+        let ly = y - oy;
+        let snapshot = self.snapshot_surface(surface)?;
+        if lx < 0.0 || ly < 0.0 || lx >= snapshot.width as f64 || ly >= snapshot.height as f64 {
+            return None;
+        }
+        let accepts = with_states(surface, |states| logical_region_accepts(
+            states.cached_state.get::<SurfaceAttributes>().current().input_region.as_ref(),
+            lx,
+            ly,
+        ));
+        accepts.then(|| (surface.clone(), (ox, oy)))
+    }
+
     /// The commit → present path. Smithay has already applied the surface's double-buffered state (and, on
     /// a parent commit, its synchronized subsurface children's cached state) before calling this. We:
     ///   1. remember the surface's latest `wl_shm` buffer, so a later re-composite can redraw a
@@ -975,6 +1019,14 @@ impl DdState {
 
 }
 
+fn logical_region_accepts(
+    region: Option<&smithay::wayland::compositor::RegionAttributes>,
+    x: f64,
+    y: f64,
+) -> bool {
+    region.is_none_or(|region| region.contains((x.floor() as i32, y.floor() as i32)))
+}
+
 fn visibility_allows_present(visibility: dd_display::present::SurfaceVisibility) -> bool {
     visibility == dd_display::present::SurfaceVisibility::Visible
 }
@@ -1346,5 +1398,21 @@ mod presentation_evidence_tests {
         assert!(visibility_allows_present(Visible));
         assert!(!visibility_allows_present(Minimized));
         assert!(!visibility_allows_present(Occluded));
+    }
+
+    #[test]
+    fn committed_input_region_holes_are_pass_through_in_logical_space() {
+        use smithay::utils::{Logical, Rectangle};
+        use smithay::wayland::compositor::{RectangleKind, RegionAttributes};
+        let region = RegionAttributes {
+            rects: vec![
+                (RectangleKind::Add, Rectangle::<i32, Logical>::from_loc_and_size((0, 0), (20, 20))),
+                (RectangleKind::Subtract, Rectangle::<i32, Logical>::from_loc_and_size((5, 5), (10, 10))),
+            ],
+        };
+        assert!(logical_region_accepts(None, -50.0, 12.0));
+        assert!(logical_region_accepts(Some(&region), 2.0, 2.0));
+        assert!(!logical_region_accepts(Some(&region), 7.0, 7.0));
+        assert!(!logical_region_accepts(Some(&RegionAttributes::default()), 1.0, 1.0));
     }
 }

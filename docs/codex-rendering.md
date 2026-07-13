@@ -566,15 +566,13 @@ Test tagged sRGB, Display-P3 and PQ fixtures on SDR and HDR targets, profile hot
 subsurfaces and alpha edges. `compositor_negotiates_surface_color_and_converts_to_the_target_output_profile` pins
 the protocol-to-presenter metadata path.
 
-Wayland region state is decoded by Smithay but effectively absent from dd's policy. Host events are routed by native
-window/surface id and rectangular coordinates without testing the committed `wl_surface.set_input_region`; holes and
-shaped child surfaces therefore intercept clicks they must pass through. `set_opaque_region` is likewise not carried
-into the tree snapshot, so the compositor cannot safely cull covered nodes or distinguish proven-opaque pixels from
-alpha content. Build one region algebra over normalized non-overlapping rectangles with checked union/subtract/
-intersection. Map regions from surface logical coordinates through viewport destination, scale, all buffer transforms
-and parent/popup offsets. Hit-test the scene front-to-back against input regions (null means infinite, empty means no
-input); use opaque regions only for occlusion/damage optimization, never to change pixels. Test holes, disjoint rects,
-negative child offsets, transformed/scaled regions and region destruction after commit.
+Committed Smithay region snapshots now participate in front-to-back subsurface hit testing. Child offsets, including
+negative positions, map root pointer coordinates into each surface's logical coordinate system; viewport destination,
+buffer scale and buffer transform are already resolved into the snapshot's logical dimensions, so regions are not
+incorrectly transformed twice. Null input regions mean the whole logical surface, empty regions pass through, and
+ordered add/subtract holes use Smithay's committed clone (safe after the protocol region object is destroyed). Pointer
+focus now targets the topmost accepting child with its scene offset. Opaque-region snapshots remain available in
+committed `SurfaceAttributes` but are not yet consumed for occlusion/damage optimization; blending remains unchanged.
 `compositor_honors_input_and_opaque_regions_through_surface_transforms` pins both consumers.
 
 Visibility now has compositor-owned `Visible`, `Occluded`, and `Minimized` states plus presenter set/query hooks.
@@ -1106,7 +1104,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `software_backend_applies_srgb_transfer_functions_around_filtering_and_blending` | contradictory | sRGB formats are sampled/blended as encoded bytes in software | Linear-light transfer helpers and format-specific golden pixel tests |
 | `cocoa_presenter_reports_actual_drawable_presentation_time_and_refresh` | missing | Metal returns Delivered with no drawable completion timestamp or target refresh | Presented-handler serial/timing plumbing plus live macOS ordering test |
 | `compositor_negotiates_surface_color_and_converts_to_the_target_output_profile` | missing | surface/presenter path carries no color description, output profile, or HDR policy | Color protocol plus linear composition and ICC/HDR output conversion fixtures |
-| `compositor_honors_input_and_opaque_regions_through_surface_transforms` | missing | decoded surface regions do not affect hit-testing, clipping, or occlusion | Shared transformed-region algebra with shaped-surface input/pixel tests |
+| `compositor_honors_input_and_opaque_regions_through_surface_transforms` | partial | committed input regions drive logical front-to-back child hit testing with holes/default/empty semantics and scene offsets; opaque regions do not alter pixels | Add conservative opaque-region occlusion/damage optimization and full transformed Wayland journey |
 | `compositor_minimize_and_occlusion_control_native_visibility_and_frame_pacing` | partial | compositor state suppresses hidden presentation, bounds callback retry, discards unproven feedback, clears focus/popups/idle inhibition and repaints latest content on host reveal; Cocoa hooks lack live AppKit notification wiring | Implement native minimize/show and occlusion callbacks, then run protocol→host→reveal macOS journey |
 | `compositor_presentation_feedback_uses_one_backend_evidence_record_per_output_frame` | implemented | one immutable backend serial/timing/refresh/vsync record is shared across the paced tree; missing timing is discarded without invented evidence | Keep Cocoa completion and surface-output routing as their separate ledger rows |
 | `compositor_explicit_sync_waits_acquire_before_sampling_and_releases_after_gpu_completion` | missing | internal MTLEvent ordering is not a Wayland acquire/release fence contract | Explicit-sync/syncobj state plus Linux-fence↔MTLSharedEvent bridge journey |
