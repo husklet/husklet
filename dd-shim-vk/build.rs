@@ -42,6 +42,8 @@ fn advertised_extensions() -> HashSet<&'static str> {
         "VK_KHR_timeline_semaphore",
         "VK_KHR_dynamic_rendering",
         "VK_KHR_buffer_device_address",
+        "VK_EXT_descriptor_indexing",
+        "VK_EXT_host_query_reset",
     ]
     .into_iter()
     .collect()
@@ -204,6 +206,9 @@ fn partial_note(name: &str) -> Option<&'static str> {
         }
         "vkGetBufferDeviceAddress" | "vkGetBufferDeviceAddressKHR" | "vkGetBufferDeviceAddressEXT" => {
             "a stable unique synthetic address per buffer; a shader cannot yet dereference it (no mapped GPU VA)"
+        }
+        "vkCmdDrawIndirectCount" | "vkCmdDrawIndexedIndirectCount" => {
+            "count + parameter buffers are validated; the IR has no indirect encoder op yet"
         }
         "vkGetBufferOpaqueCaptureAddress" | "vkGetBufferOpaqueCaptureAddressKHR"
         | "vkGetDeviceMemoryOpaqueCaptureAddress" | "vkGetDeviceMemoryOpaqueCaptureAddressKHR" => {
@@ -764,4 +769,15 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetBufferOpaqueCaptureAddressKHR",
     "vkGetDeviceMemoryOpaqueCaptureAddress",
     "vkGetDeviceMemoryOpaqueCaptureAddressKHR",
+    // ---- increment 7: Vulkan 1.2 promoted core toward complete + descriptor indexing / host query reset.
+    // Ported from MoltenVK: MVKRenderPass (create_renderpass2), MVKCmdDraw (indirect-count), MVKQueryPool
+    // (host reset), MVKDescriptorSetLayout/Pool (descriptor-indexing flags).
+    "vkCreateRenderPass2",
+    "vkCmdBeginRenderPass2",
+    "vkCmdEndRenderPass2",
+    "vkCmdNextSubpass2",
+    "vkCmdDrawIndirectCount",
+    "vkCmdDrawIndexedIndirectCount",
+    "vkResetQueryPool",
+    "vkResetQueryPoolEXT",
 ];

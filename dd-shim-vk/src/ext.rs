@@ -23,7 +23,10 @@ const SEMAPHORE_TYPE_CREATE_INFO: i32 = 1_000_207_002;
 const TIMELINE_SEMAPHORE_SUBMIT_INFO: i32 = 1_000_207_003;
 
 /// Walk a `pNext` chain (each node begins with `VkBaseInStructure { sType, pNext }`) for a target sType.
-unsafe fn find_pnext(mut p: *const c_void, target: i32) -> *const c_void {
+///
+/// # Safety
+/// `p` must be null or a valid pNext chain head whose nodes each begin with `VkBaseInStructure`.
+pub(crate) unsafe fn find_pnext(mut p: *const c_void, target: i32) -> *const c_void {
     while !p.is_null() {
         let base = &*(p as *const vk::BaseInStructure);
         if base.s_type.as_raw() == target {

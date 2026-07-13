@@ -2721,3 +2721,74 @@ pub extern "C" fn vkCmdDispatchBase(
         cb.enc.push(Enc::EndComputePass);
     }
 }
+
+// ---- Vulkan 1.2: render-pass-2 recording + draw-indirect-count ------------------------------------
+
+/// `vkCmdBeginRenderPass2` (Vulkan 1.2): the `...2` begin — delegates to the 1.0 body using the
+/// `VkSubpassBeginInfo::contents`. Ported from `MVKCmdBeginRenderPass` (shared 1.0/2 path).
+#[no_mangle]
+pub extern "C" fn vkCmdBeginRenderPass2(
+    command_buffer: VkCommandBuffer,
+    p_render_pass_begin: *const vk::RenderPassBeginInfo,
+    p_subpass_begin_info: *const vk::SubpassBeginInfo,
+) {
+    let contents = unsafe { p_subpass_begin_info.as_ref() }.map(|s| s.contents.as_raw()).unwrap_or(0);
+    vkCmdBeginRenderPass(command_buffer, p_render_pass_begin, contents);
+}
+
+/// `vkCmdEndRenderPass2` (Vulkan 1.2): delegates to the 1.0 end.
+#[no_mangle]
+pub extern "C" fn vkCmdEndRenderPass2(command_buffer: VkCommandBuffer, _p_subpass_end_info: *const c_void) {
+    vkCmdEndRenderPass(command_buffer);
+}
+
+/// `vkCmdNextSubpass2` (Vulkan 1.2): delegates to the 1.0 subpass advance (single-subpass model).
+#[no_mangle]
+pub extern "C" fn vkCmdNextSubpass2(
+    command_buffer: VkCommandBuffer,
+    p_subpass_begin_info: *const vk::SubpassBeginInfo,
+    _p_subpass_end_info: *const c_void,
+) {
+    let contents = unsafe { p_subpass_begin_info.as_ref() }.map(|s| s.contents.as_raw()).unwrap_or(0);
+    vkCmdNextSubpass(command_buffer, contents);
+}
+
+/// `vkCmdDrawIndirectCount` (Vulkan 1.2 / VK_KHR_draw_indirect_count): draw with the draw count read
+/// from `countBuffer`. Both parameter buffers are validated (INDIRECT usage, in-bounds read spans); the
+/// IR has no indirect encoder op yet, so the draw itself is not lowered (bounded — `partial`).
+#[no_mangle]
+pub extern "C" fn vkCmdDrawIndirectCount(
+    command_buffer: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    count_buffer: VkBuffer,
+    count_buffer_offset: u64,
+    max_draw_count: u32,
+    stride: u32,
+) {
+    let _ = command_buffer;
+    let s = reg::lock();
+    let _ok = indirect_ok(&s, buffer, offset, max_draw_count.max(1), stride, 16)
+        && s.buffers.get(&count_buffer).is_some_and(|b| {
+            b.usage & buffer_usage::INDIRECT != 0 && count_buffer_offset.checked_add(4).is_some_and(|e| e <= b.size)
+        });
+}
+
+/// `vkCmdDrawIndexedIndirectCount` (Vulkan 1.2): as above for indexed draws (20-byte command struct).
+#[no_mangle]
+pub extern "C" fn vkCmdDrawIndexedIndirectCount(
+    command_buffer: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    count_buffer: VkBuffer,
+    count_buffer_offset: u64,
+    max_draw_count: u32,
+    stride: u32,
+) {
+    let _ = command_buffer;
+    let s = reg::lock();
+    let _ok = indirect_ok(&s, buffer, offset, max_draw_count.max(1), stride, 20)
+        && s.buffers.get(&count_buffer).is_some_and(|b| {
+            b.usage & buffer_usage::INDIRECT != 0 && count_buffer_offset.checked_add(4).is_some_and(|e| e <= b.size)
+        });
+}

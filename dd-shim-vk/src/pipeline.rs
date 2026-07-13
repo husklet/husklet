@@ -1398,3 +1398,67 @@ mod shader_validation_tests {
         assert_ne!(pipeline, 0);
     }
 }
+
+// ---- Vulkan 1.2: create render pass 2 ------------------------------------------------------------
+
+/// `vkCreateRenderPass2` (Vulkan 1.2 / VK_KHR_create_renderpass2): the `...2` render-pass constructor.
+/// `VkRenderPassCreateInfo2`'s attachment/subpass/reference structs carry the same load/store/layout
+/// fields as the 1.0 form (plus sType/pNext + multiview), so it folds into the same `RenderPassRec`.
+/// Ported from `MVKRenderPass` (which shares one implementation across the 1.0 and 2 create paths).
+#[no_mangle]
+pub extern "C" fn vkCreateRenderPass2(
+    _device: VkDevice,
+    p_create_info: *const vk::RenderPassCreateInfo2,
+    _p_allocator: *const c_void,
+    p_render_pass: *mut VkRenderPass,
+) -> VkResult {
+    let (Some(ci), Some(out)) = (unsafe { p_create_info.as_ref() }, unsafe { p_render_pass.as_mut() })
+    else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let (fmt, load_clear, store, initial_layout, final_layout) =
+        if ci.attachment_count > 0 && !ci.p_attachments.is_null() {
+            let a0 = unsafe { &*ci.p_attachments };
+            (
+                crate::memory::tex_format(a0.format),
+                a0.load_op == vk::AttachmentLoadOp::CLEAR,
+                a0.store_op == vk::AttachmentStoreOp::STORE,
+                a0.initial_layout.as_raw(),
+                a0.final_layout.as_raw(),
+            )
+        } else {
+            (
+                TextureFormat::Rgba8Unorm,
+                true,
+                true,
+                vk::ImageLayout::UNDEFINED.as_raw(),
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw(),
+            )
+        };
+    let subpass_layout = if ci.subpass_count > 0 && !ci.p_subpasses.is_null() {
+        let subpass = unsafe { &*ci.p_subpasses };
+        if subpass.color_attachment_count > 0 && !subpass.p_color_attachments.is_null() {
+            unsafe { (*subpass.p_color_attachments).layout.as_raw() }
+        } else {
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw()
+        }
+    } else {
+        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw()
+    };
+    let mut s = reg::lock();
+    let handle = s.alloc_handle();
+    s.render_passes.insert(
+        handle,
+        RenderPassRec {
+            color_format: fmt,
+            color_load_clear: load_clear,
+            clear: [0.0; 4],
+            color_store: store,
+            initial_layout,
+            subpass_layout,
+            final_layout,
+        },
+    );
+    *out = handle;
+    VK_SUCCESS
+}

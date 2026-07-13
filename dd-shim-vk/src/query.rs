@@ -341,3 +341,29 @@ pub extern "C" fn vkCmdCopyQueryPoolResults(
         });
     }
 }
+
+/// `vkResetQueryPool` (Vulkan 1.2 / VK_EXT_host_query_reset): host-side reset of a query pool's
+/// `[firstQuery, firstQuery+queryCount)` slots to unavailable/zero (no command buffer). Ported from
+/// `MVKQueryPool::resetResults`.
+#[no_mangle]
+pub extern "C" fn vkResetQueryPool(
+    _device: VkDevice,
+    query_pool: VkQueryPool,
+    first_query: u32,
+    query_count: u32,
+) {
+    let mut s = reg::lock();
+    if let Some(p) = s.query_pools.get_mut(&query_pool) {
+        for i in first_query..first_query.saturating_add(query_count) {
+            if let Some(slot) = p.results.get_mut(i as usize) {
+                *slot = reg::QueryResult::default();
+            }
+        }
+    }
+}
+
+/// `vkResetQueryPoolEXT` (VK_EXT_host_query_reset alias for `vkResetQueryPool`).
+#[no_mangle]
+pub extern "C" fn vkResetQueryPoolEXT(device: VkDevice, query_pool: VkQueryPool, first_query: u32, query_count: u32) {
+    vkResetQueryPool(device, query_pool, first_query, query_count);
+}

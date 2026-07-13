@@ -185,10 +185,10 @@ mod tests {
     /// stub call (`vkCreateSampler`, a core:1.0 command) and an unadvertised-extension stub.
     #[test]
     fn stub_returns_truthful_error_and_inits_output() {
-        // vkCreateRenderPass2 is a still-unimplemented core:1.2 stub (the whole 1.0 and 1.1 core is now
-        // bodied): it must null its output handle and return FEATURE_NOT_PRESENT (unimplemented core).
+        // vkCreatePrivateDataSlot is a still-unimplemented core:1.3 stub (1.0/1.1 and much of 1.2 core is
+        // now bodied): it must null its output handle and return FEATURE_NOT_PRESENT (unimplemented core).
         let mut rp: u64 = 0xdead_beef; // poison; the stub must overwrite it with VK_NULL_HANDLE (0)
-        let r = vkCreateRenderPass2(
+        let r = vkCreatePrivateDataSlot(
             core::ptr::null_mut(),
             core::ptr::null(),
             core::ptr::null(),
@@ -201,7 +201,7 @@ mod tests {
         assert_eq!(r2, types::VK_ERROR_EXTENSION_NOT_PRESENT);
         // And the inventory records exactly those errors for those commands.
         let rec = |n: &str| CAPABILITIES.iter().find(|e| e.name == n).unwrap();
-        assert_eq!(rec("vkCreateRenderPass2").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
+        assert_eq!(rec("vkCreatePrivateDataSlot").vk_error, types::VK_ERROR_FEATURE_NOT_PRESENT);
         assert_eq!(rec("vkBindBufferMemory2KHR").vk_error, types::VK_ERROR_EXTENSION_NOT_PRESENT);
     }
 
@@ -283,10 +283,10 @@ mod tests {
     fn strict_mode_trips_abort_on_stub() {
         stub::STRICT_TRIPPED.with(|c| c.set(false));
         std::env::set_var("DD_SHIM_STRICT", "1");
-        // Any generated stub call must trip the strict abort (vkCreateRenderPass2 is a still-unimplemented
-        // core:1.2 stub — the whole 1.0 + 1.1 core is now bodied).
+        // Any generated stub call must trip the strict abort (vkCreatePrivateDataSlot is a still-
+        // unimplemented core:1.3 stub).
         let mut rp: u64 = 0;
-        let _ = vkCreateRenderPass2(
+        let _ = vkCreatePrivateDataSlot(
             core::ptr::null_mut(),
             core::ptr::null(),
             core::ptr::null(),
@@ -530,5 +530,82 @@ mod tests {
         vkResetCommandBuffer(cb, 0);
         vkDestroyImageView(core::ptr::null_mut(), view, core::ptr::null());
         vkDestroyImage(core::ptr::null_mut(), img, core::ptr::null());
+    }
+
+    // ---- increment 7: 1.2 feature reporting + descriptor indexing ----
+
+    /// `vkGetPhysicalDeviceFeatures2` fills the promoted-feature structs a modern app (wgpu-hal) chains
+    /// on, reporting ONLY features with real bodies: timeline semaphore, buffer device address, host
+    /// query reset, dynamic rendering, synchronization2, and the descriptor-indexing subset we honor —
+    /// while truthfully leaving update-after-bind FALSE.
+    #[test]
+    fn features2_reports_modern_features_truthfully() {
+        use ash::vk;
+        let mut vk12 = vk::PhysicalDeviceVulkan12Features::default();
+        let mut vk13 = vk::PhysicalDeviceVulkan13Features::default();
+        let mut f2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut vk12).push_next(&mut vk13);
+        vkGetPhysicalDeviceFeatures2(core::ptr::null_mut(), &mut f2);
+        assert_eq!(vk12.timeline_semaphore, vk::TRUE);
+        assert_eq!(vk12.buffer_device_address, vk::TRUE);
+        assert_eq!(vk12.host_query_reset, vk::TRUE);
+        assert_eq!(vk12.descriptor_indexing, vk::TRUE);
+        assert_eq!(vk12.descriptor_binding_variable_descriptor_count, vk::TRUE);
+        assert_eq!(vk12.descriptor_binding_partially_bound, vk::TRUE);
+        assert_eq!(vk12.runtime_descriptor_array, vk::TRUE);
+        // Truthfully NOT honored in our bind-at-record IR model:
+        assert_eq!(vk12.descriptor_binding_uniform_buffer_update_after_bind, vk::FALSE);
+        assert_eq!(vk12.descriptor_binding_sampled_image_update_after_bind, vk::FALSE);
+        assert_eq!(vk13.dynamic_rendering, vk::TRUE);
+        assert_eq!(vk13.synchronization2, vk::TRUE);
+    }
+
+    /// Descriptor indexing: a VARIABLE_DESCRIPTOR_COUNT | PARTIALLY_BOUND binding, an UPDATE_AFTER_BIND
+    /// pool, and a variable-count allocation are all accepted and recorded (bindless creation succeeds).
+    #[test]
+    fn descriptor_indexing_flags_pool_and_variable_count_are_recorded() {
+        let _g = reg::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use ash::vk;
+        use ash::vk::Handle;
+        let binding = vk::DescriptorSetLayoutBinding::default()
+            .binding(0).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(100).stage_flags(vk::ShaderStageFlags::FRAGMENT);
+        let flags = [vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT | vk::DescriptorBindingFlags::PARTIALLY_BOUND];
+        let mut bf = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&flags);
+        let set_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(core::slice::from_ref(&binding)).push_next(&mut bf);
+        let mut layout = 0u64;
+        assert_eq!(vkCreateDescriptorSetLayout(core::ptr::null_mut(), &set_ci, core::ptr::null(), &mut layout), types::VK_SUCCESS);
+
+        let pool_size = vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 100 };
+        let pool_ci = vk::DescriptorPoolCreateInfo::default().max_sets(1).flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND).pool_sizes(core::slice::from_ref(&pool_size));
+        let mut pool = 0u64;
+        assert_eq!(vkCreateDescriptorPool(core::ptr::null_mut(), &pool_ci, core::ptr::null(), &mut pool), types::VK_SUCCESS);
+
+        let layout_h = vk::DescriptorSetLayout::from_raw(layout);
+        let counts = [42u32];
+        let mut var = vk::DescriptorSetVariableDescriptorCountAllocateInfo::default().descriptor_counts(&counts);
+        let alloc = vk::DescriptorSetAllocateInfo::default().descriptor_pool(vk::DescriptorPool::from_raw(pool)).set_layouts(core::slice::from_ref(&layout_h)).push_next(&mut var);
+        let mut set = 0u64;
+        assert_eq!(vkAllocateDescriptorSets(core::ptr::null_mut(), &alloc, &mut set), types::VK_SUCCESS);
+
+        let s = reg::lock();
+        // VARIABLE_DESCRIPTOR_COUNT = 0x8, PARTIALLY_BOUND = 0x4.
+        assert!(s.descriptor_set_layouts[&layout].bindings[0].binding_flags & 0x8 != 0, "variable-count flag recorded");
+        assert!(s.descriptor_set_layouts[&layout].bindings[0].binding_flags & 0x4 != 0, "partially-bound flag recorded");
+        assert!(s.descriptor_pools[&pool].update_after_bind, "UPDATE_AFTER_BIND pool recorded");
+        assert_eq!(s.dsets[&set].variable_count, Some(42), "variable descriptor count recorded");
+    }
+
+    /// Vulkan 1.2 core progress + the two EXT extensions are advertised and their commands non-stub.
+    #[test]
+    fn vulkan_1_2_core_progress_and_ext_extensions() {
+        for e in ["VK_EXT_descriptor_indexing", "VK_EXT_host_query_reset"] {
+            assert!(capability::ADVERTISED_DEVICE_EXTENSIONS.contains(&e), "{e} not advertised");
+        }
+        for n in ["vkCreateRenderPass2", "vkCmdBeginRenderPass2", "vkResetQueryPool", "vkResetQueryPoolEXT", "vkCmdDrawIndirectCount"] {
+            assert!(dispatch_addr(n).is_some(), "{n} not resolvable");
+            assert!(CAPABILITIES.iter().find(|c| c.name == n).unwrap().implemented(), "{n} still a stub");
+        }
+        // 1.2 core is materially advanced (was 6/13).
+        let impl12 = CAPABILITIES.iter().filter(|e| e.origin == "core:1.2" && e.implemented()).count();
+        assert!(impl12 >= 13, "expected the whole 1.2 core bodied, got {impl12}/13");
     }
 }

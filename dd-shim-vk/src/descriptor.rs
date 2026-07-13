@@ -51,9 +51,24 @@ pub extern "C" fn vkCreateDescriptorSetLayout(
     // Retain the immutable binding table (MVKDescriptorSetLayout): type/count/stages/immutable samplers.
     let mut bindings: Vec<DescriptorLayoutBinding> = Vec::new();
     if let Some(ci) = unsafe { p_create_info.as_ref() } {
+        // VK_EXT_descriptor_indexing: per-binding flags via VkDescriptorSetLayoutBindingFlagsCreateInfo
+        // (sType 1000161000) in the pNext chain, aligned index-for-index with pBindings.
+        let flags: &[vk::DescriptorBindingFlags] = {
+            let node = unsafe { crate::ext::find_pnext(ci.p_next as *const c_void, 1_000_161_000) };
+            if node.is_null() {
+                &[]
+            } else {
+                let bf = unsafe { &*(node as *const vk::DescriptorSetLayoutBindingFlagsCreateInfo) };
+                if bf.p_binding_flags.is_null() {
+                    &[]
+                } else {
+                    unsafe { core::slice::from_raw_parts(bf.p_binding_flags, bf.binding_count as usize) }
+                }
+            }
+        };
         if !ci.p_bindings.is_null() {
             let src = unsafe { core::slice::from_raw_parts(ci.p_bindings, ci.binding_count as usize) };
-            for b in src {
+            for (i, b) in src.iter().enumerate() {
                 let immutable_samplers = if b.p_immutable_samplers.is_null() || b.descriptor_count == 0 {
                     Vec::new()
                 } else {
@@ -68,6 +83,7 @@ pub extern "C" fn vkCreateDescriptorSetLayout(
                     descriptor_count: b.descriptor_count,
                     stage_flags: b.stage_flags.as_raw(),
                     immutable_samplers,
+                    binding_flags: flags.get(i).map(|f| f.as_raw()).unwrap_or(0),
                 });
             }
         }
@@ -100,14 +116,15 @@ pub extern "C" fn vkCreateDescriptorPool(
     let Some(out) = (unsafe { p_descriptor_pool.as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    let (max_sets, free_descriptor_set) = unsafe { p_create_info.as_ref() }
+    let (max_sets, free_descriptor_set, update_after_bind) = unsafe { p_create_info.as_ref() }
         .map(|ci| {
             (
                 ci.max_sets,
                 ci.flags.contains(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET),
+                ci.flags.contains(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND),
             )
         })
-        .unwrap_or((0, false));
+        .unwrap_or((0, false, false));
     let mut s = reg::lock();
     let handle = s.alloc_handle();
     s.descriptor_pools.insert(
@@ -116,6 +133,7 @@ pub extern "C" fn vkCreateDescriptorPool(
             max_sets,
             allocated: 0,
             free_descriptor_set,
+            update_after_bind,
         },
     );
     *out = handle;
@@ -174,6 +192,22 @@ pub extern "C" fn vkAllocateDescriptorSets(
     } else {
         unsafe { core::slice::from_raw_parts(ai.p_set_layouts, count) }
     };
+    // VK_EXT_descriptor_indexing: the runtime size of each set's VARIABLE_DESCRIPTOR_COUNT binding, from
+    // VkDescriptorSetVariableDescriptorCountAllocateInfo (sType 1000161003) in the pNext chain (aligned
+    // with pSetLayouts).
+    let var_counts: &[u32] = {
+        let node = unsafe { crate::ext::find_pnext(ai.p_next as *const c_void, 1_000_161_003) };
+        if node.is_null() {
+            &[]
+        } else {
+            let vc = unsafe { &*(node as *const vk::DescriptorSetVariableDescriptorCountAllocateInfo) };
+            if vc.p_descriptor_counts.is_null() {
+                &[]
+            } else {
+                unsafe { core::slice::from_raw_parts(vc.p_descriptor_counts, vc.descriptor_set_count as usize) }
+            }
+        }
+    };
     let mut s = reg::lock();
     // Pool must exist, and (when it declares a positive maxSets) have room — MVKDescriptorPool::
     // allocateDescriptorSets returns VK_ERROR_OUT_OF_POOL_MEMORY when the bump allocator is exhausted.
@@ -199,6 +233,7 @@ pub extern "C" fn vkAllocateDescriptorSets(
                 buffers: HashMap::new(),
                 image_writes: HashMap::new(),
                 texel_writes: HashMap::new(),
+                variable_count: var_counts.get(i).copied(),
             },
         );
         unsafe { *p_descriptor_sets.add(i) = handle };

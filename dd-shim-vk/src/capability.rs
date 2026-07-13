@@ -77,6 +77,10 @@ pub const ADVERTISED_DEVICE_EXTENSIONS: &[&str] = &[
     "VK_KHR_timeline_semaphore",
     "VK_KHR_dynamic_rendering",
     "VK_KHR_buffer_device_address",
+    // descriptor indexing (bindless feature reporting + flag acceptance) + host query reset (timestamp
+    // query reset) — features/commands wgpu-hal uses.
+    "VK_EXT_descriptor_indexing",
+    "VK_EXT_host_query_reset",
 ];
 
 // The generated inventory (`CAPABILITIES`, `CAP_FULL`, `CAP_PARTIAL`, `CAP_STUB`, and the

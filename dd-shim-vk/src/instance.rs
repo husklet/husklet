@@ -299,8 +299,60 @@ pub extern "C" fn vkGetPhysicalDeviceFeatures2(
     _physical_device: VkPhysicalDevice,
     p_features: *mut vk::PhysicalDeviceFeatures2,
 ) {
-    if let Some(out) = unsafe { p_features.as_mut() } {
-        out.features = state::physical_device_features();
+    let Some(out) = (unsafe { p_features.as_mut() }) else { return };
+    out.features = state::physical_device_features();
+    // Truthfully fill the promoted-feature structs a modern app (wgpu-hal / Zed) chains onto the query.
+    // We report ONLY features with real bodies (see `crate::ext`, `crate::query`, the sync2 barrier): a
+    // false `TRUE` here would let the app enable a path that does nothing. Apps zero-init these structs
+    // (per the spec), so setting the supported bits to `TRUE` and leaving the rest is the truthful fill.
+    let mut node = out.p_next as *mut ChainHeader;
+    while !node.is_null() {
+        let s = unsafe { (*node).s_type };
+        if s == vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES.as_raw() {
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceVulkan12Features).as_mut() } {
+                f.timeline_semaphore = vk::TRUE;
+                f.buffer_device_address = vk::TRUE;
+                f.host_query_reset = vk::TRUE;
+                // Descriptor-indexing subset we structurally honor (no update-after-bind, no non-uniform
+                // indexing — those depend on IR emission timing / host shader translation we don't guarantee).
+                f.descriptor_indexing = vk::TRUE;
+                f.runtime_descriptor_array = vk::TRUE;
+                f.descriptor_binding_variable_descriptor_count = vk::TRUE;
+                f.descriptor_binding_partially_bound = vk::TRUE;
+            }
+        } else if s == vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_3_FEATURES.as_raw() {
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceVulkan13Features).as_mut() } {
+                f.dynamic_rendering = vk::TRUE;
+                f.synchronization2 = vk::TRUE;
+            }
+        } else if s == vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES.as_raw() {
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceDescriptorIndexingFeatures).as_mut() } {
+                f.runtime_descriptor_array = vk::TRUE;
+                f.descriptor_binding_variable_descriptor_count = vk::TRUE;
+                f.descriptor_binding_partially_bound = vk::TRUE;
+            }
+        } else if s == vk::StructureType::PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES.as_raw() {
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceTimelineSemaphoreFeatures).as_mut() } {
+                f.timeline_semaphore = vk::TRUE;
+            }
+        } else if s == vk::StructureType::PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES.as_raw() {
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceBufferDeviceAddressFeatures).as_mut() } {
+                f.buffer_device_address = vk::TRUE;
+            }
+        } else if s == vk::StructureType::PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES.as_raw() {
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceDynamicRenderingFeatures).as_mut() } {
+                f.dynamic_rendering = vk::TRUE;
+            }
+        } else if s == vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES.as_raw() {
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceSynchronization2Features).as_mut() } {
+                f.synchronization2 = vk::TRUE;
+            }
+        } else if s == vk::StructureType::PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES.as_raw() {
+            if let Some(f) = unsafe { (node as *mut vk::PhysicalDeviceHostQueryResetFeatures).as_mut() } {
+                f.host_query_reset = vk::TRUE;
+            }
+        }
+        node = unsafe { (*node).p_next };
     }
 }
 
@@ -361,6 +413,8 @@ pub extern "C" fn vkEnumerateDeviceExtensionProperties(
         ext_prop("VK_KHR_timeline_semaphore", 2),
         ext_prop("VK_KHR_dynamic_rendering", 1),
         ext_prop("VK_KHR_buffer_device_address", 1),
+        ext_prop("VK_EXT_descriptor_indexing", 2),
+        ext_prop("VK_EXT_host_query_reset", 1),
     ];
     unsafe { write_enumeration(&exts, p_count, p_props) }
 }

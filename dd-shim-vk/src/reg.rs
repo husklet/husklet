@@ -189,6 +189,9 @@ pub struct DescriptorLayoutBinding {
     pub descriptor_count: u32, // array size (0 disables the binding)
     pub stage_flags: u32, // VkShaderStageFlags
     pub immutable_samplers: Vec<u64>, // VkSampler handles baked into the layout, if any
+    /// `VkDescriptorBindingFlags` (VK_EXT_descriptor_indexing): UPDATE_AFTER_BIND(1) / UPDATE_UNUSED_WHILE_
+    /// PENDING(2) / PARTIALLY_BOUND(4) / VARIABLE_DESCRIPTOR_COUNT(8). Parsed from the layout's pNext.
+    pub binding_flags: u32,
 }
 
 /// A `VkDescriptorSetLayout` (MoltenVK `MVKDescriptorSetLayout`): its immutable binding table.
@@ -222,6 +225,9 @@ pub struct DescriptorPoolRec {
     /// `VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT`: whether `vkFreeDescriptorSets` may return
     /// individual sets (else free is a no-op per the spec).
     pub free_descriptor_set: bool,
+    /// `VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT` (VK_EXT_descriptor_indexing): the pool may allocate
+    /// UPDATE_AFTER_BIND sets. Accepted + recorded (bindless creation succeeds).
+    pub update_after_bind: bool,
 }
 
 /// A descriptor set: the layout + owning pool it was allocated with, and the `binding -> (buffer,
@@ -237,6 +243,9 @@ pub struct DsetRec {
     pub image_writes: HashMap<u32, Vec<(u64, u64, i32)>>,
     /// binding -> [bufferView] texel-buffer descriptor writes (retained).
     pub texel_writes: HashMap<u32, Vec<u64>>,
+    /// The runtime array size of the layout's VARIABLE_DESCRIPTOR_COUNT binding (VK_EXT_descriptor_indexing),
+    /// from `VkDescriptorSetVariableDescriptorCountAllocateInfo`; `None` when the set has no variable binding.
+    pub variable_count: Option<u32>,
 }
 
 /// A render pass: the single color attachment's format + load/clear/store (the subset bring-up needs).
