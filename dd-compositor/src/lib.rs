@@ -308,6 +308,22 @@ pub struct DdState {
     render_usage: HashMap<ClientId, RenderUsage>,
     global_render_usage: RenderUsage,
     render_limits: RenderLimits,
+    surface_buffer_uses: HashMap<u32, BufferUse>,
+    retired_zero_copy_uses: Vec<BufferUse>,
+    next_buffer_use_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BufferUseKind {
+    ShmCopy,
+    ZeroCopy,
+}
+
+pub(crate) struct BufferUse {
+    pub buffer: WlBuffer,
+    pub generation: u64,
+    pub kind: BufferUseKind,
+    released: bool,
 }
 
 impl DdState {
@@ -481,6 +497,9 @@ impl DdState {
             render_usage: HashMap::new(),
             global_render_usage: RenderUsage::default(),
             render_limits,
+            surface_buffer_uses: HashMap::new(),
+            retired_zero_copy_uses: Vec::new(),
+            next_buffer_use_generation: 1,
         }
     }
 
@@ -528,6 +547,7 @@ impl DdState {
             return;
         };
         self.release_surface_resources(sid);
+        self.retire_buffer_use(sid);
         self.surface_resources.remove(&sid);
         self.buffers.remove(&sid);
         self.repacks.remove(&sid);
@@ -552,6 +572,54 @@ impl DdState {
         if self.presenter_windows.remove(&sid) {
             self.presenter.drop_window(sid);
         }
+    }
+
+    pub(crate) fn begin_buffer_use(&mut self, sid: u32, buffer: WlBuffer, kind: BufferUseKind) {
+        self.retire_buffer_use(sid);
+        let generation = self.next_buffer_use_generation;
+        self.next_buffer_use_generation = self
+            .next_buffer_use_generation
+            .checked_add(1)
+            .expect("buffer-use generation exhausted");
+        self.surface_buffer_uses.insert(
+            sid,
+            BufferUse { buffer, generation, kind, released: false },
+        );
+    }
+
+    pub(crate) fn complete_buffer_use(&mut self, sid: u32) {
+        let Some(use_) = self.surface_buffer_uses.get_mut(&sid) else {
+            return;
+        };
+        debug_assert!(use_.generation > 0);
+        if !use_.released {
+            use_.buffer.release();
+            use_.released = true;
+        }
+    }
+
+    pub(crate) fn retire_buffer_use(&mut self, sid: u32) {
+        let Some(use_) = self.surface_buffer_uses.remove(&sid) else {
+            return;
+        };
+        debug_assert!(use_.generation > 0);
+        if !use_.released {
+            if use_.kind == BufferUseKind::ShmCopy {
+                use_.buffer.release();
+            } else {
+                // The Presenter ABI has no completion fence for a failed/scheduled zero-copy use. Keep
+                // the proxy alive rather than issuing a premature release; a future completion-token
+                // extension will retire this queue in serial order.
+                self.retired_zero_copy_uses.push(use_);
+                return;
+            }
+        }
+    }
+
+    pub(crate) fn forget_destroyed_buffer(&mut self, buffer: &WlBuffer) {
+        self.surface_buffer_uses.retain(|_, use_| use_.buffer != *buffer);
+        self.retired_zero_copy_uses.retain(|use_| use_.buffer != *buffer);
+        self.buffers.retain(|_, live| live != buffer);
     }
 
     fn reserve_surface(&mut self, owner: &ClientId) -> bool {

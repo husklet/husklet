@@ -26,13 +26,11 @@
 //!    bridge and composites it zero-copy — identical to the legacy GL path.
 //!
 //! ## Buffer release / fencing
-//! We do NOT release buffers by hand. Smithay's compositor core already sends `wl_buffer.release`
-//! when a surface attaches a *new* buffer over an old one (release-on-next-attach) and on surface
-//! destroy — the correct double-buffering signal a mesa/EGL swapchain waits on to recycle a buffer.
-//! GPU serialization is the `Presenter`'s job: `blit_fenced_ex` fences the IOSurface read against
-//! the guest's next write by IOSurface id, so a recycled surface never tears. This matches the shm
-//! path (which also relies on Smithay's automatic release) — we add no release logic that could
-//! double-release and trip a protocol error.
+//! The commit path takes Smithay's buffer assignment and creates an explicit generation-tagged use,
+//! preventing Smithay's generic release-on-next-attach policy from recycling an IOSurface after a
+//! failed present. Accepted delivery completes the active use exactly once; failed/offscreen uses are
+//! retained. The Presenter ABI still lacks a true GPU-completion fence, so scheduled Metal delivery is
+//! documented as a residual rather than pretending `present()` return proves command-buffer completion.
 
 use dd_display::present::SurfaceBuffer;
 

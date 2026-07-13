@@ -35,7 +35,7 @@ use smithay::{
     },
 };
 
-use crate::{ClientState, DdState, OUTPUT_REFRESH_MHZ};
+use crate::{BufferUseKind, ClientState, DdState, OUTPUT_REFRESH_MHZ};
 
 /// How a presented tree should advance its per-surface frame pacing, derived from what actually
 /// happened to the frame. Replaces the old `did_present: bool` that conflated "nothing to present"
@@ -81,7 +81,9 @@ impl CompositorHandler for DdState {
 }
 
 impl BufferHandler for DdState {
-    fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
+    fn buffer_destroyed(&mut self, buffer: &WlBuffer) {
+        self.forget_destroyed_buffer(buffer);
+    }
 }
 
 impl ShmHandler for DdState {
@@ -175,21 +177,17 @@ impl DdState {
     /// a commit that changed nothing — e.g. one made only to request a frame callback — returns `false` so
     /// the present can be skipped.
     ///
-    /// Smithay's `SurfaceAttributes` are cumulative, not per-commit: `current().buffer` PERSISTS across
-    /// commits (its `merge_into` only overwrites it on a fresh attach, so it reads `Some(NewBuffer)` on
-    /// every commit once a buffer is attached) and `current().damage` only ever ACCUMULATES. So a genuinely
-    /// new buffer is detected by object identity against the last one we stored, and the damage is DRAINED
-    /// here (like the frame callbacks are drained when pacing) so it reflects only this commit.
+    /// We take Smithay's committed buffer assignment so its generic release-on-next-attach policy cannot
+    /// race our CPU/GPU use. `self.buffers` retains the last content for bufferless commits; damage is
+    /// drained here so it reflects only this commit.
     fn ingest_buffer(&mut self, surface: &WlSurface) -> bool {
         let sid = self.surface_id(surface);
         let (buffer, removed, damage, scale, surface_safe) = with_states(surface, |states| {
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
             let cur = attrs.current();
-            // Read the persistent buffer assignment WITHOUT clearing it — Smithay uses `current().buffer`
-            // for its own `wl_buffer.release` bookkeeping on the next attach, so clearing it would leak the
-            // release and stall a multi-buffered client.
-            let (buffer, removed) = match &cur.buffer {
-                Some(BufferAssignment::NewBuffer(b)) => (Some(b.clone()), false),
+            // Take ownership: release is emitted only by the explicit BufferUse completion path.
+            let (buffer, removed) = match cur.buffer.take() {
+                Some(BufferAssignment::NewBuffer(b)) => (Some(b), false),
                 Some(BufferAssignment::Removed) => (None, true),
                 None => (None, false),
             };
@@ -220,6 +218,7 @@ impl DdState {
             // Explicit detach. Only a change the first time (the assignment persists, so later commits keep
             // reporting `Removed` — treat those as no-ops).
             let had = self.buffers.remove(&sid).is_some();
+            self.retire_buffer_use(sid);
             self.remove_repack_cache(sid);
             if had {
                 self.dirty.insert(sid);
@@ -228,17 +227,25 @@ impl DdState {
         }
         match buffer {
             Some(b) => {
-                // A genuinely new buffer object, or damage against the current one, is a real content
-                // change; the same buffer re-committed with no damage (e.g. a frame-callback-only commit)
-                // is not.
-                let new_buffer = self.buffers.get(&sid) != Some(&b);
-                let changed = new_buffer || !damage.is_empty();
                 self.buffers.insert(sid, b.clone());
-                if changed {
-                    self.repack_shm(sid, &b, &damage, scale, surface_safe);
-                    self.dirty.insert(sid);
+                let kind = if smithay::wayland::dmabuf::get_dmabuf(&b).is_ok() {
+                    BufferUseKind::ZeroCopy
+                } else {
+                    BufferUseKind::ShmCopy
+                };
+                self.begin_buffer_use(sid, b.clone(), kind);
+                match kind {
+                    BufferUseKind::ShmCopy => {
+                        if self.repack_shm(sid, &b, &damage, scale, surface_safe) {
+                            self.complete_buffer_use(sid);
+                        } else {
+                            self.retire_buffer_use(sid);
+                        }
+                    }
+                    BufferUseKind::ZeroCopy => self.remove_repack_cache(sid),
                 }
-                changed
+                self.dirty.insert(sid);
+                true
             }
             // No buffer has ever been attached (bufferless pre-map commit) — nothing to present, and
             // damage against a non-existent buffer changes nothing visible.
@@ -260,7 +267,8 @@ impl DdState {
         damage: &[(i32, i32, bool)],
         scale: i32,
         surface_safe: bool,
-    ) {
+    ) -> bool {
+        let mut copied = false;
         let res = with_buffer_contents(buffer, |ptr, len, data| {
             let w = data.width;
             let h = data.height;
@@ -319,6 +327,7 @@ impl DdState {
                         }
                     }
                     cache.damage = Some((0, y0, w, y1 - y0));
+                    copied = true;
                 }
                 // Full repack (first upload / resize / format change / unmappable damage).
                 None => {
@@ -348,6 +357,7 @@ impl DdState {
                         sid,
                         RepackCache { bgra, tex_w: w, tex_h: h, format: fmt, damage: None },
                     );
+                    copied = true;
                 }
             }
         });
@@ -355,6 +365,7 @@ impl DdState {
             // Not a `wl_shm` buffer (e.g. a dmabuf) — no CPU pixels to cache.
             self.remove_repack_cache(sid);
         }
+        res.is_ok() && copied
     }
 
     /// The toplevel that owns `surface`'s composite tree: walk up subsurface parents, then popup parents,
@@ -444,10 +455,23 @@ impl DdState {
         // The tree reached the screen — every surface in it is now clean. On a FAILED present we keep the
         // dirty flags so the next commit retries the repaint rather than skipping it.
         if did_present {
+            self.complete_tree_buffer_uses(root);
             self.clear_tree_dirty(root);
         }
         self.pace_tree(root, pacing);
         did_present
+    }
+
+    fn complete_tree_buffer_uses(&mut self, root: &WlSurface) {
+        let mut surfaces = Vec::new();
+        self.collect_tree_surfaces(root, &mut surfaces);
+        for (popup, _, _) in self.collect_popups_for_root(root) {
+            self.collect_tree_surfaces(&popup, &mut surfaces);
+        }
+        for surface in surfaces {
+            let sid = self.surface_id(&surface);
+            self.complete_buffer_use(sid);
+        }
     }
 
     /// Compose the full window tree rooted at `root` into a single present-ready [`SurfaceBuffer`],

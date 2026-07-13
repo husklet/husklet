@@ -95,6 +95,22 @@ impl Cli {
             .send(&Message::new(2, 0).u32(name).string(iface).u32(ver).u32(id));
         id
     }
+
+    fn release_count(&mut self, buffer: u32) -> usize {
+        loop {
+            match self.conn.fill() {
+                Ok(0) | Ok(-1) | Err(_) => break,
+                _ => {}
+            }
+        }
+        let mut count = 0;
+        while let Some(message) = self.conn.next_message() {
+            if message.object == buffer && message.opcode == 0 {
+                count += 1;
+            }
+        }
+        count
+    }
 }
 
 fn socketpair_nonblocking() -> (RawFd, RawFd) {
@@ -171,8 +187,22 @@ fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exac
     let (ac, ash, awm) = bind_core(&mut a, &mut display, &mut state);
     let (asurf, axdg, atop) = map(&mut a, ac, awm);
     dispatch!();
-    commit_buffer(&mut a, ash, asurf, 4, 4);
+    let abuf = commit_buffer(&mut a, ash, asurf, 4, 4);
     dispatch!();
+    assert_eq!(
+        a.release_count(abuf),
+        1,
+        "shm buffer must release exactly once after its pixels are copied"
+    );
+    a.conn.send(&Message::new(asurf, 1).u32(abuf).i32(0).i32(0));
+    a.conn.send(&Message::new(asurf, 6));
+    a.conn.flush().unwrap();
+    dispatch!();
+    assert_eq!(
+        a.release_count(abuf),
+        1,
+        "reattaching the same proxy creates one new use and one new release"
+    );
 
     let mut b = connect(&mut display);
     let (bc, bsh, bwm) = bind_core(&mut b, &mut display, &mut state);
@@ -182,17 +212,17 @@ fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exac
         "fixture must exercise equal client-local protocol ids"
     );
     dispatch!();
-    commit_buffer(&mut b, bsh, bsurf, 4, 4);
+    let bbuf = commit_buffer(&mut b, bsh, bsurf, 4, 4);
     dispatch!();
+    assert_eq!(b.release_count(bbuf), 1);
 
     let ids = log.lock().unwrap().presented.clone();
     assert!(ids.len() >= 2);
-    assert_ne!(
-        ids[0], ids[1],
-        "equal protocol ids from different clients must not alias"
-    );
     let a_host = ids[0];
-    let b_host = ids[1];
+    let b_host = *ids
+        .iter()
+        .find(|&&sid| sid != a_host)
+        .expect("equal protocol ids from different clients must not alias");
     assert_eq!(state.render_usage_totals(), (2, 0, 128));
 
     a.conn.send(&Message::new(atop, 0));

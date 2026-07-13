@@ -493,15 +493,16 @@ subsurfaces and popups through a common composition representation, with ordinar
 proof is live Metal pixel parity for mixed roots, deep synchronized/desynchronized nesting, clipping/occlusion and
 failure/release ordering; those integration requirements remain in the matrix rather than keeping landed code red.
 
-Buffer lifetime remains separate from callback pacing. dd retains `WlBuffer` objects and copied repacks, but has no
-explicit record of the last CPU/GPU use and no release operation tied to it. For shm, release is legal immediately
-after the validated pixels have been copied into the owned repack cache. For dmabuf/IOSurface zero-copy, retain the
-buffer until the present/composite command's GPU completion serial or fence—not merely until `present()` returns—and
-retain it across retryable failure. Track `BufferUse { owner, generation, kind, last_serial }`, make replacement and
-surface destruction retire rather than prematurely drop in-flight uses, and emit exactly one `wl_buffer.release`
-after the final use. Test triple buffering, same-buffer reattach, detach, destroyed buffer proxies, failed/offscreen
-presentation and out-of-order GPU completion. `compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use` pins
-the two release domains.
+Buffer lifetime is now explicit rather than inherited from Smithay's release-on-next-attach policy. Each attachment
+creates a generation-tagged `BufferUse`: shm emits exactly one release only after its validated pixels are copied into
+the owned cache, including same-proxy reuse; zero-copy buffers remain retained across failed/offscreen presentation
+and accepted delivery completes the active use exactly once. Replacement, detach and surface teardown retire the
+active generation without double release. The remaining gap is real GPU completion: Metal currently reports
+`Delivered` after scheduling `presentDrawable`, and the Presenter ABI exposes no completion fence/poll token. Failed
+zero-copy generations are therefore retained rather than prematurely released, but cannot yet be reclaimed in serial
+order. Extend `PresentOutcome` with a completion token plus polling/callback delivery, then test triple buffering,
+destroyed proxies and out-of-order completion. `compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use`
+remains partial until that device evidence exists.
 
 Presentation failure classification is still internally contradictory. `FramePacing::Failed` retains frame
 callbacks so the same dirty frame can retry, but drains and discards that commit's one-shot `wp_presentation`
@@ -1101,7 +1102,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `compositor_surface_teardown_reclaims_cpu_gpu_window_and_fence_state` | partial | Smithay surface and disconnect destruction now share idempotent CPU/cache/callback/window cleanup; client-owned executor resources and in-flight GPU fences still need ownership teardown | Add executor-owner reclamation and completion-fence retirement to the existing disconnect journey |
 | `compositor_surface_keys_include_client_identity_and_generation` | implemented | live surfaces use Wayland `ObjectId` (client + generation) to allocate monotonic presenter/cache ids; an ordinary two-client protocol test deliberately collides local ids and proves isolation | Keep `compositor_surface_identity_is_client_owned_generational_and_teardown_is_exact_once` green |
 | `compositor_enforces_per_client_render_resource_budgets` | partial | checked per-client/global surface, retained-callback and CPU repack-cache accounting now reserves and refunds by owner; shm mappings/fds, imports, presenter objects and executor allocations remain uncharged | Extend owner tokens to remaining domains and add multi-domain isolation/rollback stress |
-| `compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use` | missing | buffer release is not explicitly coupled to shm copy or zero-copy GPU completion | Per-buffer use records and exact-once release completion tests |
+| `compositor_releases_buffers_only_after_the_last_cpu_or_gpu_use` | partial | generation-tagged uses give shm copy-complete exact-once release and retain zero-copy across failure; Metal has no actual GPU-completion token | Add presenter completion tokens and out-of-order zero-copy retirement tests |
 | `compositor_retains_presentation_feedback_across_retryable_failure_only` | contradictory | failed present retains callbacks for retry but immediately discards its feedback | Typed retry class with coupled callback/feedback/resource terminal policy |
 | `compositor_routes_each_surface_through_its_actual_output_membership` | contradictory | outputs are advertised but surfaces have no enter/leave, selected scale, fullscreen target, or present route | Per-surface membership state and two-output event/render journey |
 | `compositor_output_hotplug_migrates_surfaces_and_reconfigures_scale` | missing | extra outputs are append-only globals with no surface migration | Transactional removal, fallback placement, scale/configure and pending-frame tests |
