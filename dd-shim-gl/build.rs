@@ -149,12 +149,8 @@ fn main() {
     writeln!(out, "pub const ADVERTISED_GL_VERSION_STR: &str = {ADVERTISED_GL_VERSION:?};").unwrap();
     writeln!(out, "/// Advertised `glGetString(GL_SHADING_LANGUAGE_VERSION)` — NUL-terminated.").unwrap();
     writeln!(out, "pub const ADVERTISED_GLSL_VERSION: &[u8] = b\"{ADVERTISED_GLSL_VERSION}\\0\";").unwrap();
-    writeln!(out, "/// Advertised GLSL version as a Rust str (no NUL).").unwrap();
-    writeln!(out, "pub const ADVERTISED_GLSL_VERSION_STR: &str = {ADVERTISED_GLSL_VERSION:?};").unwrap();
     writeln!(out, "/// Advertised `glGetString(GL_EXTENSIONS)` — only host-backed extensions, NUL-terminated.").unwrap();
     writeln!(out, "pub const ADVERTISED_GL_EXTENSIONS: &[u8] = b\"{ext_join}\\0\";").unwrap();
-    writeln!(out, "/// Advertised extension string as a Rust str (no NUL).").unwrap();
-    writeln!(out, "pub const ADVERTISED_GL_EXTENSIONS_STR: &str = {ext_join:?};").unwrap();
     writeln!(out, "/// Number of advertised extensions (`glGetIntegerv(GL_NUM_EXTENSIONS)`).").unwrap();
     writeln!(out, "pub const ADVERTISED_GL_EXTENSION_COUNT: usize = {};", BACKED_GL_EXTENSIONS.len()).unwrap();
     writeln!(out, "/// The advertised extensions as individual NUL-terminated byte strings, for the indexed").unwrap();
