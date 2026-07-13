@@ -38,8 +38,9 @@ struct Texture {
 enum ShaderModule {
     /// A compiled compute kernel this backend can actually execute on the CPU.
     Kernel(Box<KernelProgram>),
-    /// Opaque SPIR-V words — recorded but not run here (needs a Metal/Vulkan backend).
-    Spirv(#[allow(dead_code)] Vec<u32>),
+    /// Opaque SPIR-V — accepted but not run here (needs a Metal/Vulkan backend). The words are
+    /// validated at create time and then discarded; this backend never reads them back.
+    Spirv,
 }
 
 /// A created pipeline. Compute pipelines remember their kernel shader so a `Dispatch` can run it;
@@ -148,7 +149,7 @@ impl SoftwareBackend {
         // Clone the program out so the shader-table borrow is released before we touch buffers.
         let prog = match self.shaders.get(shader_id)? {
             ShaderModule::Kernel(p) => (**p).clone(),
-            ShaderModule::Spirv(_) => return Ok(()), // software oracle cannot run SPIR-V
+            ShaderModule::Spirv => return Ok(()), // software oracle cannot run SPIR-V
         };
         let bg = self.bind_groups.get(bgid)?.desc.clone();
         self.run_kernel(&prog, &bg, grid)
@@ -1157,10 +1158,10 @@ impl GpuBackend for SoftwareBackend {
                 if spirv.first() != Some(&0x0723_0203) {
                     return Err(GpuError::Invalid("malformed SPIR-V shader payload"));
                 }
-                ShaderModule::Spirv(spirv.to_vec())
+                ShaderModule::Spirv
             }
             crate::ir::ShaderPayloadKind::LegacyMsl | crate::ir::ShaderPayloadKind::DemoBuiltin => {
-                ShaderModule::Spirv(spirv.to_vec())
+                ShaderModule::Spirv
             }
         };
         self.shaders.insert(id.0, module)
