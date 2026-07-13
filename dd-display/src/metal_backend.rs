@@ -3261,12 +3261,11 @@ impl GpuBackend for MetalBackend {
                     dst_origin,
                     extent,
                 } => {
-                    // Multisample color resolve (glBlitFramebuffer of an MSAA FBO / VkCmdResolveImage). Close
-                    // any open encoder first. Metal resolves via a load/MultisampleResolve render pass on the
-                    // MSAA source; when the source is single-sampled a resolve degenerates to an exact copy,
-                    // which is what this path emits (the common case here — the ANGLE gl-egl backend Chrome
-                    // uses on dd does not drive the multisampled resolve op). A true >1-sample resolve is a
-                    // follow-up; guard it so an MSAA source is rejected rather than mis-copied.
+                    // Multisample color resolve (VkCmdResolveImage / glBlitFramebuffer of an MSAA FBO).
+                    // Close any open encoder first. A genuine MSAA source (sampleCount > 1) is resolved by
+                    // averaging every sample into the dest region via the RESOLVE_MSL fullscreen pass
+                    // (VK_RESOLVE_MODE_AVERAGE — matches the software oracle + the wgpu backend); a
+                    // single-sampled source degenerates to an exact blit copy (the ANGLE gl-egl path).
                     if let Some(e) = enc.take() {
                         e.endEncoding();
                     }
@@ -3289,10 +3288,53 @@ impl GpuBackend for MetalBackend {
                         return Err(GpuError::OutOfBounds);
                     }
                     if stex.sampleCount() > 1 {
-                        // A genuine MSAA source needs Metal's resolve store action, not a blit copy.
-                        return Err(GpuError::Unsupported("multisample resolve"));
-                    }
-                    if let Some(blit) = cmd.blitCommandEncoder() {
+                        // Real multisample resolve: average the source samples into the dest region. A
+                        // single-sampled fullscreen pass reads `texture2d_ms` and writes the mean, clipped
+                        // by viewport/scissor to [dst_origin, extent); `off = src_origin - dst_origin` maps
+                        // a dest pixel back to its source texel (RESOLVE_MSL).
+                        let state = self.resolve_pipeline(dtex.pixelFormat())?;
+                        let off: [i32; 2] = [
+                            src_origin.x as i32 - dst_origin.x as i32,
+                            src_origin.y as i32 - dst_origin.y as i32,
+                        ];
+                        let obuf = self
+                            .device
+                            .newBufferWithLength_options(8, MTLResourceOptions::MTLResourceStorageModeShared)
+                            .ok_or(GpuError::Unsupported("resolve offset buffer"))?;
+                        let pass = unsafe { MTLRenderPassDescriptor::renderPassDescriptor() };
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(off.as_ptr() as *const u8, obuf.contents().as_ptr() as *mut u8, 8);
+                            let att = pass.colorAttachments().objectAtIndexedSubscript(0);
+                            att.setTexture(Some(&dtex));
+                            att.setLoadAction(MTLLoadAction::Load);
+                            att.setStoreAction(MTLStoreAction::Store);
+                        }
+                        let e = cmd
+                            .renderCommandEncoderWithDescriptor(&pass)
+                            .ok_or(GpuError::Unsupported("resolve encoder"))?;
+                        e.setRenderPipelineState(&state);
+                        e.setViewport(MTLViewport {
+                            originX: dst_origin.x as f64,
+                            originY: dst_origin.y as f64,
+                            width: extent.width as f64,
+                            height: extent.height as f64,
+                            znear: 0.0,
+                            zfar: 1.0,
+                        });
+                        e.setScissorRect(MTLScissorRect {
+                            x: dst_origin.x as usize,
+                            y: dst_origin.y as usize,
+                            width: extent.width as usize,
+                            height: extent.height as usize,
+                        });
+                        unsafe {
+                            e.setFragmentTexture_atIndex(Some(&stex), 0);
+                            e.setFragmentBuffer_offset_atIndex(Some(&obuf), 0, 0);
+                            e.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+                        }
+                        e.endEncoding();
+                    } else if let Some(blit) = cmd.blitCommandEncoder() {
+                        // Single-sample resolve == exact copy (ANGLE gl-egl path).
                         unsafe {
                             blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
                                 &stex,
@@ -3426,76 +3468,6 @@ impl GpuBackend for MetalBackend {
                         }
                         e.endEncoding();
                     }
-                }
-                Enc::ResolveTexture { src, src_origin, dst, dst_origin, extent, .. } => {
-                    // Average the MS source's samples into the dest region: a single-sampled fullscreen
-                    // pass reads `texture2d_ms` and writes the mean (RESOLVE_MSL). Close any open encoder;
-                    // this runs on its own render encoder.
-                    if let Some(e) = enc.take() {
-                        e.endEncoding();
-                    }
-                    if let Some(ce) = compute_enc.take() {
-                        unsafe {
-                            let _: () = msg_send![&*ce, endEncoding];
-                        }
-                    }
-                    let Some(stex) = self.resolve_texture(*src).cloned() else {
-                        return Err(GpuError::UnknownId { kind: "texture", id: *src });
-                    };
-                    let Some(dtex) = self.resolve_texture(*dst).cloned() else {
-                        return Err(GpuError::UnknownId { kind: "texture", id: *dst });
-                    };
-                    let (sw, sh) = (stex.width() as u32, stex.height() as u32);
-                    let (dw, dh) = (dtex.width() as u32, dtex.height() as u32);
-                    if !region_in_bounds(src_origin.x, extent.width, sw)
-                        || !region_in_bounds(src_origin.y, extent.height, sh)
-                        || !region_in_bounds(dst_origin.x, extent.width, dw)
-                        || !region_in_bounds(dst_origin.y, extent.height, dh)
-                    {
-                        return Err(GpuError::OutOfBounds);
-                    }
-                    let state = self.resolve_pipeline(dtex.pixelFormat())?;
-                    // off = src_origin - dst_origin (a fragment at dest pixel p reads src texel p + off).
-                    let off: [i32; 2] = [
-                        src_origin.x as i32 - dst_origin.x as i32,
-                        src_origin.y as i32 - dst_origin.y as i32,
-                    ];
-                    let obuf = self
-                        .device
-                        .newBufferWithLength_options(8, MTLResourceOptions::MTLResourceStorageModeShared)
-                        .ok_or(GpuError::Unsupported("resolve offset buffer"))?;
-                    let pass = unsafe { MTLRenderPassDescriptor::renderPassDescriptor() };
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(off.as_ptr() as *const u8, obuf.contents().as_ptr() as *mut u8, 8);
-                        let att = pass.colorAttachments().objectAtIndexedSubscript(0);
-                        att.setTexture(Some(&dtex));
-                        att.setLoadAction(MTLLoadAction::Load);
-                        att.setStoreAction(MTLStoreAction::Store);
-                    }
-                    let e = cmd
-                        .renderCommandEncoderWithDescriptor(&pass)
-                        .ok_or(GpuError::Unsupported("resolve encoder"))?;
-                    e.setRenderPipelineState(&state);
-                    e.setViewport(MTLViewport {
-                        originX: dst_origin.x as f64,
-                        originY: dst_origin.y as f64,
-                        width: extent.width as f64,
-                        height: extent.height as f64,
-                        znear: 0.0,
-                        zfar: 1.0,
-                    });
-                    e.setScissorRect(MTLScissorRect {
-                        x: dst_origin.x as usize,
-                        y: dst_origin.y as usize,
-                        width: extent.width as usize,
-                        height: extent.height as usize,
-                    });
-                    unsafe {
-                        e.setFragmentTexture_atIndex(Some(&stex), 0);
-                        e.setFragmentBuffer_offset_atIndex(Some(&obuf), 0, 0);
-                        e.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
-                    }
-                    e.endEncoding();
                 }
             }
         }
