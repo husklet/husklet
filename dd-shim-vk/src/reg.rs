@@ -78,6 +78,11 @@ pub struct ShaderRec {
     pub spirv: Vec<u32>,
     pub entries: HashMap<String, ShaderEntry>,
     pub descriptors: Vec<(u32, u32)>,
+    /// The `VkDescriptorType` (raw) inferred from each `(set, binding)` resource's SPIR-V type +
+    /// storage class (sampler / sampled|storage image / (texel) buffer / input attachment). Absent for
+    /// a binding whose type could not be classified (then no type check is enforced). Consumed by
+    /// `pipeline::layout_supports_shader` to reject a descriptor-set-layout type mismatch.
+    pub descriptor_types: HashMap<(u32, u32), i32>,
     pub push_constant: bool,
     pub spec_constants: HashMap<u32, SpecConstantRec>,
 }

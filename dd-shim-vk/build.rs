@@ -108,10 +108,12 @@ fn partial_note(name: &str) -> Option<&'static str> {
         }
         "vkCmdClearColorImage" => "base color subresource only; no mip/layer range clear lowering",
         "vkCreateShaderModule" => {
-            "validated SPIR-V 1.0-1.6 Shader/Matrix subset with entry/interface/resource reflection"
+            "validated SPIR-V 1.0-1.6 subset: entry/interface/spec-constant reflection plus descriptor-type \
+             inference (sampler/image/sampled-image/(texel|storage) buffer/input-attachment, incl. arrays)"
         }
         "vkCreateComputePipelines" | "vkCreateGraphicsPipelines" => {
-            "validated entry/spec/interface/layout subset; unsupported SPIR-V vocabulary is rejected"
+            "validated entry/spec/interface/layout subset; a set-layout descriptor-type mismatch and \
+             unsupported SPIR-V vocabulary are rejected before IR mutation"
         }
         // submit + synchronization: the bring-up dependency model
         "vkQueueSubmit" => "records + ships IR; ignores wait/signal semaphores beyond the bring-up model",

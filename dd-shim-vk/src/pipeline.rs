@@ -55,6 +55,10 @@ struct Decorations {
     set: Option<u32>,
     spec_id: Option<u32>,
     builtin: bool,
+    /// `OpDecorate %struct Block` (2) — a uniform-buffer interface block.
+    block: bool,
+    /// `OpDecorate %struct BufferBlock` (3) — a (legacy) storage-buffer interface block.
+    buffer_block: bool,
 }
 
 enum TypeNode {
@@ -64,7 +68,65 @@ enum TypeNode {
     Vector(u32, u32),
     Matrix(u32, u32),
     Pointer(u32),
+    /// `OpTypeImage`: `(dim, sampled)` — Dim (2=2D, 5=Buffer, 6=SubpassData, …) and the Sampled operand
+    /// (1 = sampled image, 2 = storage image). Drives the SAMPLED/STORAGE_IMAGE / *_TEXEL_BUFFER /
+    /// INPUT_ATTACHMENT descriptor classification.
+    Image(u32, u32),
+    Sampler,
+    /// `OpTypeSampledImage` (→ COMBINED_IMAGE_SAMPLER).
+    SampledImage,
+    Struct,
+    /// `OpTypeArray` / `OpTypeRuntimeArray`: the element type id (a descriptor array).
+    Array(u32),
     Other,
+}
+
+/// Infer the `VkDescriptorType` (raw) a resource `(type_id, storage class)` requires, walking descriptor
+/// arrays to their element type. `None` when the type is not a classifiable descriptor (then no type
+/// check is enforced). Mirrors `SPIRVReflection`/`MVKShaderStageResourceBinding` resource classification.
+fn infer_descriptor_type(
+    type_id: u32,
+    storage: u32,
+    nodes: &std::collections::HashMap<u32, TypeNode>,
+    decorations: &std::collections::HashMap<u32, Decorations>,
+    depth: u32,
+) -> Option<i32> {
+    if depth > 8 {
+        return None;
+    }
+    match nodes.get(&type_id)? {
+        // A descriptor array (e.g. `sampler2D tex[4]`) has the element's descriptor type.
+        TypeNode::Array(elem) => infer_descriptor_type(*elem, storage, nodes, decorations, depth + 1),
+        TypeNode::Sampler => Some(0), // VK_DESCRIPTOR_TYPE_SAMPLER
+        TypeNode::SampledImage => Some(1), // COMBINED_IMAGE_SAMPLER
+        TypeNode::Image(dim, sampled) => Some(match (*dim, *sampled) {
+            (5, 2) => 5,  // Buffer + storage  → STORAGE_TEXEL_BUFFER
+            (5, _) => 4,  // Buffer + sampled  → UNIFORM_TEXEL_BUFFER
+            (6, _) => 10, // SubpassData       → INPUT_ATTACHMENT
+            (_, 2) => 3,  // storage image     → STORAGE_IMAGE
+            _ => 2,       // sampled image     → SAMPLED_IMAGE
+        }),
+        TypeNode::Struct => match storage {
+            // Uniform(2): Block → UNIFORM_BUFFER, BufferBlock → STORAGE_BUFFER (legacy).
+            2 => Some(if decorations.get(&type_id).is_some_and(|d| d.buffer_block) { 7 } else { 6 }),
+            // StorageBuffer(12) storage class → STORAGE_BUFFER.
+            12 => Some(7),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether a descriptor-set-layout binding of `layout_type` (raw `VkDescriptorType`) satisfies a shader
+/// resource inferred as `shader_type`. Exact match, with the dynamic buffer types (8/9) accepted for a
+/// plain uniform/storage buffer (a shader cannot distinguish dynamic from non-dynamic).
+fn descriptor_type_compatible(layout_type: i32, shader_type: i32) -> bool {
+    let norm = |t: i32| match t {
+        8 => 6, // UNIFORM_BUFFER_DYNAMIC → UNIFORM_BUFFER
+        9 => 7, // STORAGE_BUFFER_DYNAMIC → STORAGE_BUFFER
+        other => other,
+    };
+    norm(layout_type) == norm(shader_type)
 }
 
 fn spirv_string(words: &[u32]) -> Option<String> {
@@ -101,7 +163,15 @@ fn resolve_type(id: u32, nodes: &std::collections::HashMap<u32, TypeNode>, depth
     }
 }
 
-fn parse_spirv(words: &[u32]) -> Option<(std::collections::HashMap<String, ShaderEntry>, Vec<(u32, u32)>, bool, std::collections::HashMap<u32, SpecConstantRec>)> {
+type ParsedSpirv = (
+    std::collections::HashMap<String, ShaderEntry>,
+    Vec<(u32, u32)>,
+    std::collections::HashMap<(u32, u32), i32>,
+    bool,
+    std::collections::HashMap<u32, SpecConstantRec>,
+);
+
+fn parse_spirv(words: &[u32]) -> Option<ParsedSpirv> {
     if words.len() < 5
         || words[0] != 0x0723_0203
         || !(0x0001_0000..=0x0001_0600).contains(&words[1])
@@ -170,7 +240,30 @@ fn parse_spirv(words: &[u32]) -> Option<(std::collections::HashMap<String, Shade
             32 if inst.len() == 3 && valid_id(inst[0]) && valid_id(inst[2]) => {
                 nodes.insert(inst[0], TypeNode::Pointer(inst[2]));
             }
-            25..=31 if !inst.is_empty() && valid_id(inst[0]) => {
+            // OpTypeImage %r sampledType Dim Depth Arrayed MS Sampled Format [Access]
+            25 if inst.len() >= 8 && valid_id(inst[0]) => {
+                nodes.insert(inst[0], TypeNode::Image(inst[2], inst[6]));
+            }
+            26 if inst.len() == 1 && valid_id(inst[0]) => {
+                nodes.insert(inst[0], TypeNode::Sampler);
+            }
+            // OpTypeSampledImage %r imageType
+            27 if inst.len() == 2 && valid_id(inst[0]) && valid_id(inst[1]) => {
+                nodes.insert(inst[0], TypeNode::SampledImage);
+            }
+            // OpTypeArray %r elementType lengthId
+            28 if inst.len() == 3 && valid_id(inst[0]) && valid_id(inst[1]) => {
+                nodes.insert(inst[0], TypeNode::Array(inst[1]));
+            }
+            // OpTypeRuntimeArray %r elementType
+            29 if inst.len() == 2 && valid_id(inst[0]) && valid_id(inst[1]) => {
+                nodes.insert(inst[0], TypeNode::Array(inst[1]));
+            }
+            // OpTypeStruct %r members...
+            30 if !inst.is_empty() && valid_id(inst[0]) => {
+                nodes.insert(inst[0], TypeNode::Struct);
+            }
+            31 if !inst.is_empty() && valid_id(inst[0]) => {
                 nodes.insert(inst[0], TypeNode::Other);
             }
             59 if inst.len() >= 3 && valid_id(inst[0]) && valid_id(inst[1]) => {
@@ -183,6 +276,8 @@ fn parse_spirv(words: &[u32]) -> Option<(std::collections::HashMap<String, Shade
                 let d = decorations.entry(inst[0]).or_default();
                 match inst[1] {
                     1 if inst.len() == 3 => d.spec_id = Some(inst[2]),
+                    2 => d.block = true,        // Block (uniform interface block)
+                    3 => d.buffer_block = true, // BufferBlock (legacy storage interface block)
                     11 => d.builtin = true,
                     30 if inst.len() == 3 => d.location = Some(inst[2]),
                     33 if inst.len() == 3 => d.binding = Some(inst[2]),
@@ -234,14 +329,26 @@ fn parse_spirv(words: &[u32]) -> Option<(std::collections::HashMap<String, Shade
         }
     }
     let mut descriptors = Vec::new();
+    let mut descriptor_types: std::collections::HashMap<(u32, u32), i32> = std::collections::HashMap::new();
     let mut push_constant = false;
-    for (id, (_, storage)) in &variables {
+    for (id, (ptr_ty, storage)) in &variables {
         if *storage == 9 {
             push_constant = true;
         }
         if matches!(*storage, 0 | 2 | 12) {
             let deco = decorations.get(id)?;
-            descriptors.push((deco.set?, deco.binding?));
+            let key = (deco.set?, deco.binding?);
+            descriptors.push(key);
+            // Infer the descriptor type from the variable's pointee type (the pointer's pointee) and
+            // its storage class. A binding we cannot classify simply carries no inferred type.
+            if let Some(TypeNode::Pointer(pointee)) = nodes.get(ptr_ty) {
+                if let Some(dt) = infer_descriptor_type(*pointee, *storage, &nodes, &decorations, 0) {
+                    // Conflicting inferences for the same (set,binding) → reject the module.
+                    if descriptor_types.insert(key, dt).is_some_and(|prev| prev != dt) {
+                        return None;
+                    }
+                }
+            }
         }
     }
     descriptors.sort_unstable();
@@ -254,7 +361,7 @@ fn parse_spirv(words: &[u32]) -> Option<(std::collections::HashMap<String, Shade
             return None;
         }
     }
-    Some((entries, descriptors, push_constant, spec_constants))
+    Some((entries, descriptors, descriptor_types, push_constant, spec_constants))
 }
 
 fn specialization_size(ty: &ShaderType) -> Option<usize> {
@@ -310,8 +417,15 @@ fn layout_supports_shader(state: &reg::VkState, layout: u64, shader: &ShaderRec,
         let Some(set_layout) = state.descriptor_set_layouts.get(set_layout_handle) else {
             return false;
         };
+        // The declared binding must exist, be non-empty, be visible to this stage, AND — when the SPIR-V
+        // resource type was classifiable — declare a compatible descriptor type. A sampled image bound
+        // where the layout declares a storage buffer (etc.) is a real interface mismatch, not a warning.
+        let want_type = shader.descriptor_types.get(&(set, binding)).copied();
         if !set_layout.bindings.iter().any(|decl| {
-            decl.binding == binding && decl.descriptor_count != 0 && decl.stage_flags & stage != 0
+            decl.binding == binding
+                && decl.descriptor_count != 0
+                && decl.stage_flags & stage != 0
+                && want_type.is_none_or(|t| descriptor_type_compatible(decl.descriptor_type, t))
         }) {
             return false;
         }
@@ -336,7 +450,8 @@ pub extern "C" fn vkCreateShaderModule(
         return VK_ERROR_UNKNOWN;
     }
     let spirv = unsafe { core::slice::from_raw_parts(ci.p_code, ci.code_size / 4) }.to_vec();
-    let Some((entries, descriptors, push_constant, spec_constants)) = parse_spirv(&spirv) else {
+    let Some((entries, descriptors, descriptor_types, push_constant, spec_constants)) = parse_spirv(&spirv)
+    else {
         return VK_ERROR_UNKNOWN;
     };
     let mut s = reg::lock();
@@ -349,7 +464,7 @@ pub extern "C" fn vkCreateShaderModule(
     });
     s.shaders.insert(
         handle,
-        ShaderRec { ir_id, spirv, entries, descriptors, push_constant, spec_constants },
+        ShaderRec { ir_id, spirv, entries, descriptors, descriptor_types, push_constant, spec_constants },
     );
     *out = handle;
     VK_SUCCESS
@@ -1191,6 +1306,91 @@ mod shader_validation_tests {
                 core::ptr::null(),
                 &mut pipeline,
             ),
+            VK_SUCCESS
+        );
+        assert_ne!(pipeline, 0);
+    }
+
+    /// A `UniformConstant` variable typed `OpTypeImage(2D, Sampled=1)` at (set 0, binding 0) is a
+    /// SAMPLED_IMAGE descriptor: a pipeline layout that declares a STORAGE_BUFFER there is a real
+    /// interface mismatch and must be rejected; declaring SAMPLED_IMAGE is accepted.
+    #[test]
+    fn spirv_descriptor_type_must_match_the_set_layout() {
+        fn image_module() -> Vec<u32> {
+            let mut w = vec![0x0723_0203u32, 0x0001_0000, 0, 32, 0];
+            inst(17, &[1], &mut w); // OpCapability Shader
+            inst(14, &[0, 1], &mut w); // OpMemoryModel Logical GLSL450
+            inst(22, &[1, 32], &mut w); // %1 = OpTypeFloat 32 (image sampled type)
+            inst(25, &[5, 1, 1, 0, 0, 0, 1, 0], &mut w); // %5 = OpTypeImage 2D Sampled=1
+            inst(32, &[6, 0, 5], &mut w); // %6 = OpTypePointer UniformConstant %5
+            inst(59, &[6, 7, 0], &mut w); // %7 = OpVariable %6 UniformConstant
+            inst(71, &[7, 34, 0], &mut w); // DescriptorSet 0
+            inst(71, &[7, 33, 0], &mut w); // Binding 0
+            let mut entry = vec![5u32, 10]; // GLCompute, %main = 10
+            entry.extend(string_words("img"));
+            inst(15, &entry, &mut w);
+            w
+        }
+
+        fn layout_with(binding0: vk::DescriptorType) -> VkPipelineLayout {
+            let binding = vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(binding0)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE);
+            let set_ci =
+                vk::DescriptorSetLayoutCreateInfo::default().bindings(core::slice::from_ref(&binding));
+            let mut set_layout = 0;
+            assert_eq!(
+                crate::descriptor::vkCreateDescriptorSetLayout(core::ptr::null_mut(), &set_ci, core::ptr::null(), &mut set_layout),
+                VK_SUCCESS
+            );
+            let set_handle = vk::DescriptorSetLayout::from_raw(set_layout);
+            let layout_ci =
+                vk::PipelineLayoutCreateInfo::default().set_layouts(core::slice::from_ref(&set_handle));
+            let mut layout = 0;
+            assert_eq!(
+                vkCreatePipelineLayout(core::ptr::null_mut(), &layout_ci, core::ptr::null(), &mut layout),
+                VK_SUCCESS
+            );
+            layout
+        }
+
+        // The module must reflect a SAMPLED_IMAGE at (0,0).
+        let mut module_handle = 0;
+        assert_eq!(create_module(&image_module(), &mut module_handle), VK_SUCCESS);
+        {
+            let state = reg::lock();
+            assert_eq!(state.shaders[&module_handle].descriptor_types.get(&(0, 0)).copied(), Some(2));
+        }
+        let name = CString::new("img").unwrap();
+        let stage = |layout| {
+            vk::ComputePipelineCreateInfo::default()
+                .stage(
+                    vk::PipelineShaderStageCreateInfo::default()
+                        .stage(vk::ShaderStageFlags::COMPUTE)
+                        .module(vk::ShaderModule::from_raw(module_handle))
+                        .name(&name),
+                )
+                .layout(vk::PipelineLayout::from_raw(layout))
+        };
+
+        // Wrong descriptor type at the binding → interface mismatch → rejected.
+        let wrong = layout_with(vk::DescriptorType::STORAGE_BUFFER);
+        let wrong_ci = stage(wrong);
+        let mut pipeline = 0xbeef_u64;
+        assert_eq!(
+            vkCreateComputePipelines(core::ptr::null_mut(), 0, 1, &wrong_ci, core::ptr::null(), &mut pipeline),
+            VK_ERROR_UNKNOWN,
+            "a SAMPLED_IMAGE shader resource must not bind to a STORAGE_BUFFER layout slot"
+        );
+        assert_eq!(pipeline, 0);
+
+        // Matching descriptor type → accepted.
+        let right = layout_with(vk::DescriptorType::SAMPLED_IMAGE);
+        let right_ci = stage(right);
+        assert_eq!(
+            vkCreateComputePipelines(core::ptr::null_mut(), 0, 1, &right_ci, core::ptr::null(), &mut pipeline),
             VK_SUCCESS
         );
         assert_ne!(pipeline, 0);
