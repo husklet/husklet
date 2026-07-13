@@ -310,7 +310,16 @@ fn parse_spirv(words: &[u32]) -> Option<ParsedSpirv> {
             if deco.is_some_and(|d| d.builtin) {
                 continue;
             }
-            let location = deco.and_then(|d| d.location)?;
+            // A non-builtin interface variable without a `Location` is a built-in *block* — most
+            // commonly `gl_PerVertex` (the vertex shader's `gl_Position` output), whose `BuiltIn`
+            // decorations sit on the struct MEMBERS (`OpMemberDecorate … BuiltIn`), not on the
+            // variable. Such a block carries no user location and is not part of the location
+            // interface, so skip it rather than rejecting the whole module (which broke vkcube:
+            // its `gl_PerVertex` output has no variable-level Location/BuiltIn → the module was
+            // wrongly rejected and `vkCreateShaderModule` failed).
+            let Some(location) = deco.and_then(|d| d.location) else {
+                continue;
+            };
             let ty = resolve_type(*ty, &nodes, 0);
             if ty == ShaderType::Other {
                 return None;

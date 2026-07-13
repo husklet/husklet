@@ -2160,8 +2160,14 @@ impl GpuBackend for MetalBackend {
             // via the host SPIRV-Cross→MSL path in `create_shader` (real combined-image-sampler support
             // that naga lacks). PTX still routes to wgpu.
             shader_payloads: dd_gpu::backend::shader_payload::MSL | dd_gpu::backend::shader_payload::SPIRV,
-            // Guest-creatable textures are the color formats; depth is an attachment-internal texture.
-            texture_formats: dd_gpu::backend::format_bits(dd_gpu::backend::COLOR_FORMATS),
+            // Guest-creatable textures are the color formats plus the depth/stencil attachment formats
+            // (vkcube creates a depth image via vkCreateImage → Cmd::CreateTexture; the executor
+            // materializes a real Metal depth texture for it, matching the render pass's depth attachment).
+            texture_formats: dd_gpu::backend::format_bits(dd_gpu::backend::COLOR_FORMATS)
+                | dd_gpu::backend::format_bits(&[
+                    dd_gpu::ir::TextureFormat::Depth32Float,
+                    dd_gpu::ir::TextureFormat::Depth24PlusStencil8,
+                ]),
             max_frame_bytes: 64 << 20, // matches run_executor's per-frame length cap
             max_buffer_bytes: 256 << 20,
             max_bind_groups: 4,

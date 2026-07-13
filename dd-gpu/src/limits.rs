@@ -146,10 +146,11 @@ fn texture_bytes(d: &TextureDesc) -> Result<u64> {
     if d.mip_levels > max_mips {
         return Err(GpuError::ResourceLimit("texture mip levels exceed dimensions"));
     }
-    let texel = d
-        .format
-        .bytes_per_texel()
-        .ok_or(GpuError::ResourceLimit("texture format footprint"))? as u64;
+    // Depth/stencil formats report `bytes_per_texel() == None` (the software backend can't clear-fill
+    // them), but for memory-footprint accounting they occupy a real 4-byte-per-texel target. Charge
+    // that (matching the depth-tolerant accounting elsewhere in this module) instead of rejecting the
+    // allocation — a depth attachment is a valid render target (vkcube binds one).
+    let texel = d.format.bytes_per_texel().unwrap_or(4) as u64;
     let mut total = 0u64;
     let mut w = d.width as u64;
     let mut h = d.height as u64;
