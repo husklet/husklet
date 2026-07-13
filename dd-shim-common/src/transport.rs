@@ -104,14 +104,61 @@ pub mod renderd {
 /// One connection lives for the surface's whole lifetime — a frame is just `[hdr][ir]`+ack on the same
 /// fd, so the host keeps its per-connection backend (shader/PSO/resource caches) warm across frames
 /// (gl_shim.c's L2/L7.1). A dropped connection reconnects lazily on the next [`submit`](ExecConn::submit),
-/// and any reconnect after the first flips [`residency_reset`](ExecConn::take_residency_reset): the
-/// fresh host backend has an empty resource cache, so the producer must re-emit every resident buffer
-/// and texture.
+/// and any reconnect after the first advances [`ExecConn::generation`]. The connection consumes that
+/// reset internally by replaying all acknowledged residency before it sends new work.
 pub struct ExecConn {
     path: String,
     sock: Option<UnixStream>,
     connects: u64,
     residency_reset: bool,
+    generation: u64,
+    residency: ResidencyJournal,
+    negotiated_capabilities: Option<Vec<u8>>,
+}
+
+const MAX_REPLAY_BYTES: usize = 64 << 20;
+
+/// Commands acknowledged by the current executor and therefore required to reconstruct the next
+/// executor. Keeping the ordered command history is deliberate: uploads and GPU copies/draws can
+/// mutate resources, so a create-only cache is not authoritative. Presents and waits are observations,
+/// not residency, and are never repeated.
+#[derive(Default)]
+struct ResidencyJournal {
+    cmds: Vec<ir::Cmd>,
+    bytes: usize,
+    replayable: bool,
+}
+
+impl ResidencyJournal {
+    fn record(&mut self, cmds: &[ir::Cmd]) {
+        if !self.replayable && !self.cmds.is_empty() {
+            return;
+        }
+        for cmd in cmds {
+            if matches!(cmd, ir::Cmd::Present { .. } | ir::Cmd::WaitFence { .. }) {
+                continue;
+            }
+            let encoded = ir::encode_stream(core::slice::from_ref(cmd));
+            self.bytes = self.bytes.saturating_add(encoded.len());
+            if self.bytes > MAX_REPLAY_BYTES {
+                self.replayable = false;
+                return;
+            }
+            self.cmds.push(cmd.clone());
+        }
+        self.replayable = true;
+    }
+
+    fn replay_bytes(&self) -> std::io::Result<Vec<u8>> {
+        if !self.replayable && !self.cmds.is_empty() {
+            return Err(api_loss("executor residency exceeded replay budget"));
+        }
+        Ok(ir::encode_stream(&self.cmds))
+    }
+}
+
+fn api_loss(message: &'static str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::ConnectionAborted, format!("API/device/context lost: {message}"))
 }
 
 impl ExecConn {
@@ -122,7 +169,15 @@ impl ExecConn {
     }
 
     pub fn new(path: impl Into<String>) -> Self {
-        ExecConn { path: path.into(), sock: None, connects: 0, residency_reset: false }
+        ExecConn {
+            path: path.into(),
+            sock: None,
+            connects: 0,
+            residency_reset: false,
+            generation: 0,
+            residency: ResidencyJournal::default(),
+            negotiated_capabilities: None,
+        }
     }
 
     /// Total successful connects over this channel's life; should be 1 for a healthy run.
@@ -130,8 +185,30 @@ impl ExecConn {
         self.connects
     }
 
-    /// Take (and clear) the "host backend was replaced, re-emit all residency" flag. The producer
-    /// checks this once per frame before encoding.
+    /// Monotonic executor generation. It advances only after a successful socket connection.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Pin the negotiated backend profile to this connection. A changed profile while objects are
+    /// resident cannot be recovered safely and is reported as API loss instead of replaying commands
+    /// under different wire/shader/format semantics.
+    pub fn set_negotiated_capabilities(
+        &mut self,
+        caps: &dd_gpu::backend::Capabilities,
+    ) -> std::io::Result<()> {
+        let signature = caps.to_handshake();
+        if self.negotiated_capabilities.as_ref().is_some_and(|old| old != &signature)
+            && !self.residency.cmds.is_empty()
+        {
+            return Err(api_loss("executor capabilities changed with live residency"));
+        }
+        self.negotiated_capabilities = Some(signature);
+        Ok(())
+    }
+
+    /// Compatibility observer for callers predating internal replay. Successful reconnect recovery
+    /// consumes this flag before `submit` returns, so producers normally observe `false`.
     pub fn take_residency_reset(&mut self) -> bool {
         core::mem::replace(&mut self.residency_reset, false)
     }
@@ -144,6 +221,7 @@ impl ExecConn {
                 self.residency_reset = true;
             }
             self.connects += 1;
+            self.generation += 1;
             self.sock = Some(s);
         }
         Ok(self.sock.as_mut().unwrap())
@@ -156,11 +234,9 @@ impl ExecConn {
     /// host replies with a single ack byte. On any I/O error the connection is torn down and retried
     /// once (the executor may have restarted).
     pub fn submit(&mut self, surface: &Surface, ir: &[u8]) -> std::io::Result<()> {
-        let mut hdr = [0u8; 16];
-        hdr[0..4].copy_from_slice(&surface.id.to_le_bytes());
-        hdr[4..8].copy_from_slice(&surface.width.to_le_bytes());
-        hdr[8..12].copy_from_slice(&surface.height.to_le_bytes());
-        hdr[12..16].copy_from_slice(&(ir.len() as u32).to_le_bytes());
+        let current = ir::decode_stream(ir).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid GPU IR: {e}"))
+        })?;
 
         let mut last_err = None;
         for _ in 0..2 {
@@ -168,15 +244,30 @@ impl ExecConn {
             // fresh connection; a NACK is NOT — the host received the frame and reported failure, so the
             // connection is healthy and re-sending would double-submit.
             let r = (|| -> std::io::Result<u8> {
-                let s = self.ensure()?;
+                self.ensure()?;
+                let mut payload = Vec::new();
+                if self.residency_reset {
+                    payload = self.residency.replay_bytes()?;
+                }
+                payload.extend_from_slice(ir);
+                let mut hdr = [0u8; 16];
+                hdr[0..4].copy_from_slice(&surface.id.to_le_bytes());
+                hdr[4..8].copy_from_slice(&surface.width.to_le_bytes());
+                hdr[8..12].copy_from_slice(&surface.height.to_le_bytes());
+                hdr[12..16].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+                let s = self.sock.as_mut().expect("ensure installed executor socket");
                 s.write_all(&hdr)?;
-                s.write_all(ir)?;
+                s.write_all(&payload)?;
                 let mut ack = [0u8; 1];
                 s.read_exact(&mut ack)?;
                 Ok(ack[0])
             })();
             match r {
-                Ok(ACK_OK) => return Ok(()),
+                Ok(ACK_OK) => {
+                    self.residency_reset = false;
+                    self.residency.record(&current);
+                    return Ok(());
+                }
                 // The executor NACKed this frame (replay failed / surface missing). Surface it as an error
                 // rather than letting the guest commit a stale or partly-rendered frame as if it presented.
                 Ok(nack) => {
@@ -376,9 +467,67 @@ mod tests {
         });
         let mut conn = ExecConn::new(sock.to_string_lossy().into_owned());
         let surf = Surface { id: 7, width: 16, height: 9, stride: 64, fd: -1 };
-        let result = conn.submit(&surf, &[1, 2, 3, 4]);
+        let valid_ir = ir::encode_stream(&[ir::Cmd::CreateFence(1)]);
+        let result = conn.submit(&surf, &valid_ir);
         server.join().unwrap();
         assert!(result.is_err(), "ExecConn treated ACK_FAIL as success");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reconnect_replays_acknowledged_residency_once_before_new_work() {
+        use crate::ir::{buffer_usage, BufferDesc, Cmd, CommandBuffer};
+
+        fn read_frame(c: &mut UnixStream) -> Vec<u8> {
+            let mut hdr = [0u8; 16];
+            c.read_exact(&mut hdr).unwrap();
+            let len = u32::from_le_bytes(hdr[12..16].try_into().unwrap()) as usize;
+            let mut body = vec![0; len];
+            c.read_exact(&mut body).unwrap();
+            body
+        }
+
+        let dir = std::env::temp_dir().join(format!("dd-shim-reconnect-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("exec.sock");
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let upload = vec![
+            Cmd::CreateBuffer(
+                4,
+                BufferDesc { size: 4, usage: buffer_usage::COPY_DST, label: "resident".into() },
+            ),
+            Cmd::WriteBuffer { id: 4, offset: 0, data: vec![1, 2, 3, 4] },
+        ];
+        let draw = vec![Cmd::Submit(CommandBuffer::default()), Cmd::Present { surface: 9, texture: 8 }];
+        let upload_bytes = ir::encode_stream(&upload);
+        let draw_bytes = ir::encode_stream(&draw);
+
+        let server = std::thread::spawn(move || {
+            let (mut first, _) = listener.accept().unwrap();
+            let first_body = read_frame(&mut first);
+            first.write_all(&[ACK_OK]).unwrap();
+            drop(first); // fault after upload acknowledgement, before the draw
+
+            let (mut second, _) = listener.accept().unwrap();
+            let recovered = read_frame(&mut second);
+            second.write_all(&[ACK_OK]).unwrap();
+            (first_body, recovered)
+        });
+
+        let surf = Surface { id: 9, width: 8, height: 8, stride: 32, fd: -1 };
+        let mut conn = ExecConn::new(sock.to_string_lossy());
+        conn.submit(&surf, &upload_bytes).unwrap();
+        conn.submit(&surf, &draw_bytes).unwrap();
+
+        let (first, recovered) = server.join().unwrap();
+        assert_eq!(ir::decode_stream(&first).unwrap(), upload);
+        let recovered = ir::decode_stream(&recovered).unwrap();
+        assert_eq!(&recovered[..upload.len()], upload.as_slice(), "residency first, exactly once");
+        assert_eq!(&recovered[upload.len()..], draw.as_slice(), "new work follows replay");
+        assert_eq!(conn.generation(), 2);
+        assert!(!conn.take_residency_reset(), "successful replay consumed the reset generation");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -414,5 +563,21 @@ mod tests {
         // Incompatible: guest needs a depth format the software oracle does not materialize → clean error.
         let wants_depth = FeatureRequest { texture_formats: format_bits(&[TextureFormat::Depth32Float]), ..ok };
         assert!(negotiate_host_capabilities(&handshake, &wants_depth).is_err());
+    }
+
+    #[test]
+    fn capability_change_with_live_residency_is_typed_api_loss() {
+        use dd_gpu::backend::GpuBackend;
+
+        let mut conn = ExecConn::new("unused");
+        let caps = dd_gpu::software::SoftwareBackend::new().capabilities();
+        conn.set_negotiated_capabilities(&caps).unwrap();
+        conn.residency.record(&[ir::Cmd::CreateFence(1)]);
+
+        let mut changed = caps;
+        changed.wire_version += 1;
+        let err = conn.set_negotiated_capabilities(&changed).expect_err("live profile change is loss");
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
+        assert!(err.to_string().contains("API/device/context lost"));
     }
 }
