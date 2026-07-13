@@ -744,6 +744,7 @@ fn present_frame(surf: &Surface, ir: &[u8]) -> Result<(), String> {
         height: surf.height,
         stride: if surf.stride != 0 { surf.stride } else { surf.width * 4 },
         fd: surf.fd,
+        ..Default::default()
     };
     exec_conn()
         .lock()

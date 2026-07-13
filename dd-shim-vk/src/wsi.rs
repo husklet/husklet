@@ -281,6 +281,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 height,
                 stride: width * 4,
                 fd: -1,
+                ..Default::default()
             },
         };
         images.push(SwapImage { image: handle, ir_id, surface, state: SwapImageState::Available });

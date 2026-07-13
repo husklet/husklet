@@ -95,6 +95,36 @@ fn gpu_map() -> &'static std::sync::Mutex<std::collections::HashMap<u32, usize>>
     GPU_SURFACES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
+// id → allocation generation. The IOSurface id is a macOS-minted `IOSurfaceGetID` that dd RECYCLES
+// (a retired pool surface is re-handed to the next same-size alloc; a released legacy id is
+// OS-recyclable), so the bare id cannot distinguish a live allocation from a stale reference. This
+// table stamps each id's current allocation: set to 1 on first registration and bumped every time the
+// id's cached surface is replaced by a different one. It is read into `IOSurfaceMetadata::generation`
+// so the compositor can reject a guest dmabuf whose modifier carries a retired generation. Values stay
+// in the 15-bit modifier field range (1..=0x7fff); 0 is reserved as "unversioned".
+static GPU_GENERATIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u32, u32>>> =
+    std::sync::OnceLock::new();
+
+fn gpu_generations() -> &'static std::sync::Mutex<std::collections::HashMap<u32, u32>> {
+    GPU_GENERATIONS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Next generation for an id, staying in the wire's 15-bit range and never landing on 0 (reserved).
+fn next_generation(prev: u32) -> u32 {
+    let n = prev.wrapping_add(1) & 0x7fff;
+    if n == 0 {
+        1
+    } else {
+        n
+    }
+}
+
+/// The current allocation generation stamped for `id` (0 if the host is not tracking this id, e.g. a
+/// legacy `IOSurfaceLookup` fallback). Exposed for the compositor's authentication path and tests.
+pub fn iosurface_generation(id: u32) -> u32 {
+    gpu_generations().lock().unwrap().get(&id).copied().unwrap_or(0)
+}
+
 /// Start the mach service + a background receive thread that caches every `(id → IOSurface)` the engine
 /// sends. Returns true if the service registered. Call once before serving dmabuf clients.
 pub fn start_gpu_bridge() -> bool {
@@ -116,9 +146,17 @@ pub fn start_gpu_bridge() -> bool {
             }
             continue;
         }
-        // Replace any prior surface for this id (release the old one).
+        // Replace any prior surface for this id (release the old one) and advance the id's allocation
+        // generation so a stale guest reference (a modifier stamped with the retired generation) can be
+        // rejected at import. A first registration starts at generation 1; a replacement bumps it.
         let mut m = gpu_map().lock().unwrap();
-        if let Some(old) = m.insert(id, surf as usize) {
+        let replaced = m.insert(id, surf as usize);
+        {
+            let mut gens = gpu_generations().lock().unwrap();
+            let entry = gens.entry(id).or_insert(0);
+            *entry = if replaced.is_some() { next_generation(*entry) } else { (*entry).max(1) };
+        }
+        if let Some(old) = replaced {
             unsafe { cfrelease(old as IOSurfaceRef) };
         }
         eprintln!("dd-display: GPU bridge cached IOSurface id={id}");
@@ -152,6 +190,7 @@ pub fn iosurface_metadata(id: u32) -> Option<crate::present::IOSurfaceMetadata> 
         height: height.try_into().ok()?,
         bytes_per_row: bytes_per_row.try_into().ok()?,
         pixel_format,
+        generation: iosurface_generation(id),
     })
 }
 

@@ -68,11 +68,27 @@ pub struct Surface {
     pub stride: u32,
     /// The dma-buf fd the ioctl handed back (for the wayland `SCM_RIGHTS` commit); -1 when unset.
     pub fd: i32,
+    /// The allocation generation for [`id`](Self::id), stamped by the host at allocation time. Because
+    /// the engine recycles a macOS IOSurface id across allocations, the guest echoes this generation in
+    /// the dmabuf modifier (`modifier_hi` bits 17..=31) so the compositor can reject a stale reference
+    /// (a modifier whose generation no longer matches the id's live allocation). 0 == unversioned: the
+    /// current ioctl ABI (`GpuAlloc`) does not yet carry a generation, so this is 0 until the engine's
+    /// `dd_gpu_alloc` handler sources it — at which point `from_alloc` starts propagating it and the
+    /// compositor's generation authentication engages for real guests with no wire change.
+    pub generation: u32,
 }
 
 impl Surface {
     pub fn from_alloc(a: &GpuAlloc) -> Self {
-        Surface { id: a.id, width: a.width, height: a.height, stride: a.stride, fd: a.fd }
+        Surface {
+            id: a.id,
+            width: a.width,
+            height: a.height,
+            stride: a.stride,
+            fd: a.fd,
+            // GpuAlloc has no generation field yet (32-byte packed ioctl ABI); default to unversioned.
+            generation: 0,
+        }
     }
 }
 
@@ -451,7 +467,7 @@ mod tests {
         });
 
         let mut conn = ExecConn::new(sock2.to_string_lossy().into_owned());
-        let surf = Surface { id: 42, width: 640, height: 480, stride: 2560, fd: -1 };
+        let surf = Surface { id: 42, width: 640, height: 480, stride: 2560, fd: -1, ..Default::default() };
         conn.submit(&surf, &ir_clone).unwrap();
         let (id, w, h, body) = server.join().unwrap();
         assert_eq!((id, w, h), (42, 640, 480));
@@ -480,7 +496,7 @@ mod tests {
             c.write_all(&[super::ACK_FAIL]).unwrap(); // documented failure ack
         });
         let mut conn = ExecConn::new(sock.to_string_lossy().into_owned());
-        let surf = Surface { id: 7, width: 16, height: 9, stride: 64, fd: -1 };
+        let surf = Surface { id: 7, width: 16, height: 9, stride: 64, fd: -1, ..Default::default() };
         let valid_ir = ir::encode_stream(&[ir::Cmd::CreateFence(1)]);
         let result = conn.submit(&surf, &valid_ir);
         server.join().unwrap();
@@ -530,7 +546,7 @@ mod tests {
             (first_body, recovered)
         });
 
-        let surf = Surface { id: 9, width: 8, height: 8, stride: 32, fd: -1 };
+        let surf = Surface { id: 9, width: 8, height: 8, stride: 32, fd: -1, ..Default::default() };
         let mut conn = ExecConn::new(sock.to_string_lossy());
         conn.submit(&surf, &upload_bytes).unwrap();
         conn.submit(&surf, &draw_bytes).unwrap();
@@ -685,7 +701,7 @@ mod tests {
             (first_body, recovered, dst, budget.object_count(), budget.residency_bytes(), ok)
         });
 
-        let surf = Surface { id: 9, width: 4, height: 4, stride: 16, fd: -1 };
+        let surf = Surface { id: 9, width: 4, height: 4, stride: 16, fd: -1, ..Default::default() };
         let mut conn = ExecConn::new(sock.to_string_lossy());
         conn.submit(&surf, &residency_bytes).expect("residency frame acknowledged");
         // The executor died; this submit transparently reconnects, replays residency, then sends new work.

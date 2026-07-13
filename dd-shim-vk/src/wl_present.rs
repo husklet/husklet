@@ -322,7 +322,10 @@ pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
         if params.is_null() {
             return false;
         }
-        // params.add(fd, plane_idx=0, offset=0, stride, modifier_hi=DD_DMABUF_MOD_MAGIC, modifier_lo=id)
+        // params.add(fd, plane_idx=0, offset=0, stride, modifier_hi=magic|generation, modifier_lo=id).
+        // The generation (modifier_hi bits 17..=31) lets the compositor reject a stale reference whose
+        // id was retired and reissued; 0 == unversioned (see transport::Surface::generation).
+        let modifier_hi = DD_DMABUF_MOD_MAGIC | ((surf.generation & 0x7fff) << 17);
         (w.marshal_flags)(
             params,
             PARAMS_ADD,
@@ -333,7 +336,7 @@ pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
             0u32,
             0u32,
             surf.stride,
-            DD_DMABUF_MOD_MAGIC,
+            modifier_hi,
             surf.id,
         );
         // buffer = params.create_immed(width, height, DRM_FORMAT_XRGB8888, flags=0) — NULL placeholder

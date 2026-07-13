@@ -123,13 +123,19 @@ pub enum SurfaceVisibility {
     Minimized,
 }
 
-/// Metadata read from a live host IOSurface allocation before accepting a guest import.
+/// Metadata read from a live host IOSurface allocation before accepting a guest import — the
+/// authenticated allocation record the compositor checks a guest dmabuf against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IOSurfaceMetadata {
     pub width: u32,
     pub height: u32,
     pub bytes_per_row: u32,
     pub pixel_format: u32,
+    /// The id's current allocation generation, stamped by the host and bumped each time the id's
+    /// backing surface is replaced (see `dd-display::metal` and the dmabuf modifier generation). A
+    /// guest dmabuf whose modifier carries a non-zero generation is imported only if it equals this;
+    /// a stale (retired) generation is rejected. 0 means the host does not version this id.
+    pub generation: u32,
 }
 
 /// The structured result of a [`Presenter::present`] call. Replaces the old `bool` that conflated

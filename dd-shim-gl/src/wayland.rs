@@ -31,6 +31,16 @@ const OBJ_FRAME_CB: u32 = 12;
 
 const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
 const DRM_FMT_XRGB8888: u32 = 0x3432_5258;
+/// Allocation generation packed into `modifier_hi` bits 17..=31 (15 bits); see the dmabuf modifier
+/// layout in `dd-compositor::handlers::dmabuf`. The compositor rejects a stale (retired) generation.
+const DD_DMABUF_GEN_SHIFT: u32 = 17;
+const DD_DMABUF_GEN_MASK: u32 = 0x7fff;
+
+/// `modifier_hi` for a dd IOSurface buffer: the magic tag plus the allocation generation the host gave
+/// this surface (0 == unversioned; see [`dd_shim_common::transport::Surface::generation`]).
+fn dd_modifier_hi(generation: u32) -> u32 {
+    DD_DMABUF_MOD_MAGIC | ((generation & DD_DMABUF_GEN_MASK) << DD_DMABUF_GEN_SHIFT)
+}
 
 /// How long to wait for the compositor's per-frame callback before reporting a pacing failure.
 const FRAME_DEADLINE_MS: u64 = 100;
@@ -430,8 +440,12 @@ impl Wayland {
         self.frame_done = false;
         self.wmsg(OBJ_DMABUF, 1, &[OBJ_PARAMS]); // zwp_linux_dmabuf_v1.create_params
         self.wflush()?;
-        // params.add(fd, plane=0, offset=0, stride, mod_hi=magic, mod_lo=surface id)
-        self.wmsg(OBJ_PARAMS, 1, &[0, 0, surf.stride, DD_DMABUF_MOD_MAGIC, surf.id]);
+        // params.add(fd, plane=0, offset=0, stride, mod_hi=magic|generation, mod_lo=surface id). The
+        // GL shim does not yet source a per-allocation generation from the engine, so it emits an
+        // unversioned (generation 0) modifier — byte-identical to the bare magic — via the shared
+        // encoder, which the compositor treats as legacy and accepts. Wired through `dd_modifier_hi` so
+        // it versions automatically once `state::Surface` carries the engine's generation.
+        self.wmsg(OBJ_PARAMS, 1, &[0, 0, surf.stride, dd_modifier_hi(0), surf.id]);
         self.wflush_fd(surf.fd)?;
         self.wmsg(OBJ_PARAMS, 3, &[OBJ_WL_BUFFER, surf.width, surf.height, DRM_FMT_XRGB8888, 0]); // create_immed
         self.wmsg(OBJ_WL_SURFACE, 1, &[OBJ_WL_BUFFER, g.attach_x as u32, g.attach_y as u32]); // attach

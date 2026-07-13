@@ -16,7 +16,9 @@
 use std::sync::{Arc, Mutex};
 
 use dd_compositor::{ClientState, DdState};
-use dd_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
+use dd_display::present::{
+    IOSurfaceMetadata, PresentError, PresentOutcome, Presenter, SurfaceBuffer,
+};
 use dd_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 
@@ -65,6 +67,17 @@ impl Presenter for RecordingPresenter {
     }
     fn frame_count(&self) -> u32 {
         self.frames
+    }
+    /// Authenticate the id this test imports as a live 64x64 BGRA allocation so it passes the import
+    /// metadata check. Generation 0 (unversioned) matches the test's unversioned modifier.
+    fn iosurface_metadata(&self, id: u32) -> Option<IOSurfaceMetadata> {
+        (id == 0x00AB_CDEF).then_some(IOSurfaceMetadata {
+            width: 64,
+            height: 64,
+            bytes_per_row: 64 * 4,
+            pixel_format: 0x4247_5241, // 'BGRA'
+            generation: 0,
+        })
     }
 }
 

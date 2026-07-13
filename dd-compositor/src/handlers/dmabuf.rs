@@ -51,11 +51,36 @@ use smithay::{
 
 use crate::{handlers::compositor::logical_size_and_uv, DdState};
 
-/// dd-private dmabuf modifier layout (shared with `dd-display/src/server.rs`): `modifier_lo` = the
-/// host IOSurface id; `modifier_hi & 0xffff` = this magic tag identifying a dd IOSurface-backed
-/// buffer; `modifier_hi & DD_DMABUF_RENDER_BIT` = the guest asked the host GPU to render into it.
+/// dd-private dmabuf modifier layout (shared with `dd-display/src/server.rs` and the guest shims'
+/// modifier producers). `modifier_lo` = the host IOSurface id. `modifier_hi` packs:
+///   - bits 0..=15  `DD_DMABUF_MOD_MAGIC` — the tag identifying a dd IOSurface-backed buffer;
+///   - bit  16      `DD_DMABUF_RENDER_BIT` — the guest asked the host GPU to render into it;
+///   - bits 17..=31 the **allocation generation** (`DD_DMABUF_GEN_*`) — see below.
+///
+/// The IOSurface `id` (`modifier_lo`) is a macOS-minted `IOSurfaceGetID` that dd RECYCLES: a retired
+/// pool surface is re-handed to the next same-size allocation, and a released legacy id becomes
+/// OS-recyclable. So an id alone cannot distinguish a live allocation from a stale reference whose
+/// backing surface was retired and reissued under the same id. The generation authenticates that: the
+/// host stamps each id's current allocation with a monotonically bumped generation, the guest echoes
+/// the generation it was given in `modifier_hi`, and import rejects a generation that no longer matches
+/// the id's live allocation (`DmabufValidationError::StaleGeneration`).
+///
+/// Generation `0` is reserved as "unversioned": a guest that does not source a generation sends 0, and
+/// the check is skipped for it (backward compatibility — no false rejections for legacy producers).
 pub(crate) const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
 pub(crate) const DD_DMABUF_RENDER_BIT: u32 = 0x1_0000;
+/// Bit offset of the allocation generation within `modifier_hi`.
+pub(crate) const DD_DMABUF_GEN_SHIFT: u32 = 17;
+/// 15-bit generation field mask (post-shift): values 1..=0x7fff cycle; 0 == unversioned.
+pub(crate) const DD_DMABUF_GEN_MASK: u32 = 0x7fff;
+
+/// Compose `modifier_hi` from its parts (used by the guest producers and tests). `generation` is masked
+/// to the 15-bit field; pass 0 for an unversioned (legacy) buffer.
+pub(crate) fn compose_modifier_hi(gpu_render: bool, generation: u32) -> u32 {
+    DD_DMABUF_MOD_MAGIC
+        | if gpu_render { DD_DMABUF_RENDER_BIT } else { 0 }
+        | ((generation & DD_DMABUF_GEN_MASK) << DD_DMABUF_GEN_SHIFT)
+}
 
 #[derive(Clone, Copy)]
 struct DmabufImportCaps {
@@ -79,6 +104,9 @@ pub(crate) enum DmabufValidationError {
     BackingTooSmall,
     MissingMetadata,
     MetadataMismatch,
+    /// The modifier's allocation generation does not match the id's live host allocation — a stale
+    /// reference to a surface that was retired and whose id was reissued.
+    StaleGeneration,
 }
 
 fn modifier_has_dd_layout(modifier: u64) -> bool {
@@ -87,6 +115,11 @@ fn modifier_has_dd_layout(modifier: u64) -> bool {
 
 fn supports_pair(format: Fourcc, modifier: u64) -> bool {
     modifier_has_dd_layout(modifier) && DMABUF_IMPORT_CAPS.iter().any(|caps| caps.format == format)
+}
+
+/// The allocation generation stamped in `modifier_hi` (0 == unversioned/legacy).
+pub(crate) fn modifier_generation(modifier: u64) -> u32 {
+    ((modifier >> 32) as u32 >> DD_DMABUF_GEN_SHIFT) & DD_DMABUF_GEN_MASK
 }
 
 /// Decode a DRM format modifier into `(iosurface_id, gpu_render)` when it carries the dd IOSurface
@@ -202,6 +235,14 @@ fn validate_dmabuf(
         || metadata.pixel_format != 0x4247_5241
     {
         return Err(DmabufValidationError::MetadataMismatch);
+    }
+    // Allocation-generation authentication: a versioned guest (non-zero generation) must match the id's
+    // CURRENT live allocation generation. A mismatch is a stale reference — the surface this id named
+    // was retired and its id reissued — so reject before the buffer is accepted (no partial state; the
+    // caller has not bound the wl_buffer yet). Generation 0 is unversioned (legacy) and skips the check.
+    let guest_generation = modifier_generation(modifier);
+    if guest_generation != 0 && guest_generation != metadata.generation {
+        return Err(DmabufValidationError::StaleGeneration);
     }
     Ok(())
 }
@@ -343,10 +384,22 @@ mod tests {
     use super::*;
     use std::os::fd::{FromRawFd, OwnedFd};
 
+    /// A plane fd of EXACTLY `size` bytes for the backing-size validation. Backed by an unlinked regular
+    /// temp file, not a POSIX shm object: macOS rounds a shm `ftruncate` up to the page size, so an shm
+    /// fd's `fstat` over-reports and the `BackingTooSmall` guard (which `fstat`s the plane fd) could not
+    /// be exercised with a sub-page size. A regular file reports its exact `ftruncate` size.
     fn plane_fd(size: usize) -> OwnedFd {
-        let raw = dd_display::keymap::anon_fd_with(&vec![0u8; size.saturating_sub(1)])
-            .expect("anonymous plane fd");
-        unsafe { OwnedFd::from_raw_fd(raw) }
+        let dir = std::env::var_os("TMPDIR")
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/tmp".into());
+        let mut templ: Vec<u8> =
+            format!("{}/dd-plane-XXXXXX", dir.trim_end_matches('/')).into_bytes();
+        templ.push(0);
+        let fd = unsafe { libc::mkstemp(templ.as_mut_ptr() as *mut libc::c_char) };
+        assert!(fd >= 0, "mkstemp plane fd");
+        assert_eq!(unsafe { libc::ftruncate(fd, size as libc::off_t) }, 0, "ftruncate plane fd");
+        unsafe { libc::unlink(templ.as_ptr() as *const libc::c_char) };
+        unsafe { OwnedFd::from_raw_fd(fd) }
     }
 
     fn fixture(
@@ -373,7 +426,17 @@ mod tests {
             height: 8,
             bytes_per_row: 64,
             pixel_format: 0x4247_5241,
+            generation: 0,
         }
+    }
+
+    /// A valid Argb8888 fixture whose modifier carries the given allocation `generation` (id `mod_lo`=7).
+    fn fixture_generation(generation: u32) -> Dmabuf {
+        let modifier =
+            Modifier::from(((compose_modifier_hi(false, generation) as u64) << 32) | 7);
+        let mut builder = Dmabuf::builder((16, 8), Fourcc::Argb8888, modifier, DmabufFlags::empty());
+        assert!(builder.add_plane(plane_fd(512), 0, 0, 64));
+        builder.build().unwrap()
     }
 
     /// The v4/v5 dmabuf-feedback format-table must build on the host without a `PSHMNAMLEN`/
@@ -444,5 +507,38 @@ mod tests {
         for (dmabuf, expected) in cases {
             assert_eq!(validate_dmabuf(&dmabuf, 7, Some(metadata())), Err(expected));
         }
+    }
+
+    #[test]
+    fn dmabuf_import_authenticates_the_allocation_generation() {
+        // The id's live host allocation is at generation 5.
+        let live = IOSurfaceMetadata { generation: 5, ..metadata() };
+
+        // A matching versioned reference imports.
+        assert_eq!(validate_dmabuf(&fixture_generation(5), 7, Some(live)), Ok(()));
+
+        // A STALE reference — the id was retired and reissued, so its live generation moved on — is
+        // rejected before the buffer is accepted (no partial state).
+        assert_eq!(
+            validate_dmabuf(&fixture_generation(4), 7, Some(live)),
+            Err(DmabufValidationError::StaleGeneration),
+        );
+        assert_eq!(
+            validate_dmabuf(&fixture_generation(6), 7, Some(live)),
+            Err(DmabufValidationError::StaleGeneration),
+        );
+
+        // An unversioned reference (generation 0) skips the check — legacy producers are unaffected, so
+        // there are no false rejections while the guest side does not yet source a generation.
+        assert_eq!(validate_dmabuf(&fixture_generation(0), 7, Some(live)), Ok(()));
+        // ...and it also imports against an untracked (generation-0) host allocation.
+        assert_eq!(validate_dmabuf(&fixture_generation(0), 7, Some(metadata())), Ok(()));
+
+        // The modifier generation round-trips through the encode/decode helpers.
+        assert_eq!(modifier_generation((compose_modifier_hi(false, 5) as u64) << 32), 5);
+        assert_eq!(modifier_generation((compose_modifier_hi(true, 0x7fff) as u64) << 32), 0x7fff);
+        // The render bit and generation are independent fields.
+        assert!(compose_modifier_hi(true, 3) & DD_DMABUF_RENDER_BIT != 0);
+        assert_eq!(modifier_generation((compose_modifier_hi(true, 3) as u64) << 32), 3);
     }
 }

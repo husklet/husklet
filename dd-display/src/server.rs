@@ -271,6 +271,9 @@ enum Obj {
         iosurface_id: Option<u32>,
         stride: i32,
         gpu_render: bool,
+        /// Allocation generation from `modifier_hi` bits 17..=31 (0 == unversioned); authenticated at
+        /// create_immed so a stale reference to a retired/reissued IOSurface id is rejected.
+        generation: u32,
     }, // accrues add()
     DmaBuffer {
         width: i32,
@@ -2507,6 +2510,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                         iosurface_id: None,
                         stride: 0,
                         gpu_render: false,
+                        generation: 0,
                     },
                 );
             }
@@ -2580,12 +2584,15 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                     iosurface_id,
                     stride: s,
                     gpu_render,
+                    generation,
                 }) = self.objs.get_mut(&m.object)
                 {
                     *s = stride;
                     if mod_hi & 0xffff == DD_DMABUF_MOD_MAGIC {
                         *iosurface_id = Some(mod_lo);
                         *gpu_render = mod_hi & DD_DMABUF_RENDER_BIT != 0;
+                        // Allocation generation (modifier_hi bits 17..=31); authenticated at create_immed.
+                        *generation = (mod_hi >> 17) & 0x7fff;
                     }
                 }
             }
@@ -2595,15 +2602,33 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                 let w = r.i32();
                 let h = r.i32();
                 let format = r.u32();
-                let (iosurface_id, gpu_render) = match self.objs.get(&m.object) {
+                let (iosurface_id, gpu_render, generation) = match self.objs.get(&m.object) {
                     Some(Obj::DmabufParams {
                         iosurface_id,
                         gpu_render,
+                        generation,
                         ..
-                    }) => (*iosurface_id, *gpu_render),
-                    _ => (None, false),
+                    }) => (*iosurface_id, *gpu_render, *generation),
+                    _ => (None, false, 0),
+                };
+                // Authenticate the allocation generation (mirrors the Smithay compositor's import check):
+                // a versioned reference (non-zero generation) whose generation no longer matches the id's
+                // live host allocation is a stale reference to a retired/reissued IOSurface — reject it.
+                // Only macOS resolves real IOSurfaces (and tracks their generations), so the check is a
+                // no-op elsewhere.
+                #[cfg(target_os = "macos")]
+                let stale = iosurface_id.is_some_and(|id| {
+                    generation != 0 && generation != crate::metal::iosurface_generation(id)
+                });
+                #[cfg(not(target_os = "macos"))]
+                let stale = {
+                    let _ = generation;
+                    false
                 };
                 match iosurface_id {
+                    _ if stale => {
+                        self.post_error(m.object, 4 /* invalid_format */, "stale dmabuf allocation generation (the IOSurface id was retired and reissued)");
+                    }
                     Some(id) => {
                         self.objs.insert(
                             buffer_id,
@@ -4934,7 +4959,7 @@ mod tests {
         // A dmabuf buffer created without the dd IOSurface tag (e.g. the advertised LINEAR modifier)
         // cannot be presented — create_immed must post a protocol error, not hand back an inert object.
         let mut h = Harness::new();
-        h.server.objs.insert(50, Obj::DmabufParams { iosurface_id: None, stride: 0, gpu_render: false });
+        h.server.objs.insert(50, Obj::DmabufParams { iosurface_id: None, stride: 0, gpu_render: false, generation: 0 });
         // create_immed(buffer_id=60, w=4, h=4, format=0x3432_5241, flags=0)
         h.req(50, 3, body().u32(60).i32(4).i32(4).u32(0x3432_5241).u32(0));
         let msgs = h.drain();
