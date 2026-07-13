@@ -353,17 +353,17 @@ render and compute pipelines, bind groups, surfaces/fences, submit/wait/present,
 draw/dispatch, and three copy directions. Encoding/decoding and the CPU/mock backends provide good headless
 validation.
 
-Executor recovery currently has a disconnected contract. `ExecConn` correctly detects a reconnect and exposes
-`take_residency_reset`, because a new per-connection backend has empty buffers, textures, shaders, pipelines and bind
-groups. No GL or Vulkan producer calls it. Vulkan then sends only IR after `present_flushed`, so the replacement
-executor sees references to nonexistent resources; GL may happen to re-emit some frame-local snapshots but has no
-complete generation proof. Add an executor generation to typed acknowledgements and every resident object. On a new
-generation, transactionally replay dependency-ordered creation/content/state before the next submission, or mark the
-GLES context/Vulkan device lost when reconstruction is impossible. Once lost, reject all relevant later calls with
-`GL_CONTEXT_LOST`/`EGL_CONTEXT_LOST` or `VK_ERROR_DEVICE_LOST`, preserve destroy/query safety, and never present stale
-pixels as recovery. Fault-injection must kill/restart the executor between upload, draw, ack and present and compare
-the recovered frame plus bounded cache/fd growth. `executor_reconnect_replays_complete_residency_or_reports_api_loss`
-pins both producers and their API loss states.
+Executor reconnect recovery is now implemented at the shared transport boundary. `ExecConn` owns a monotonic
+connection generation and a bounded journal of acknowledged residency mutations. A replacement executor receives
+that journal in original dependency order exactly once before new work; present/wait observations are not replayed,
+and current commands enter the journal only after a successful acknowledgement. If the journal exceeds its replay
+budget, or the negotiated capability/wire profile changes while residency is live, submission returns explicit
+API/device/context loss rather than continuing with missing resources or fallback pixels. Rust socket fault tests
+cover an executor disconnect after upload acknowledgement and prove that generation two receives residency once
+before the pending draw/present work. Residual work is operational rather than silent-recovery correctness: history
+replay has a bounded cost and deliberately becomes loss at the limit, the journal is not durable across guest-process
+restart, and an external live GL/Vulkan executor-kill journey must still validate rendered pixels and fd/cache bounds.
+`executor_reconnect_replays_complete_residency_or_reports_api_loss` remains partial until that live journey exists.
 
 It is not expressive enough for the API versions exported by the shims. Missing concepts include explicit
 barriers and resource states, queue ownership, events/queries/timestamps, indirect execution, push constants,
@@ -1096,7 +1096,7 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `gles_query_objects_track_targets_availability_and_asynchronous_results` | missing | query names have no target lifecycle, readiness or backend result | Typed queries, resolve serials and negotiated backend query types |
 | `egl_query_context_rejects_destroyed_handles_without_mutating_output` | contradictory | context query accepts destroyed handles and fabricates values | Live-handle validation, preserved outputs and `EGL_BAD_CONTEXT` |
 | `vulkan_shader_translation_failure_never_falls_back_to_builtin_rendering` | contradictory | Metal/wgpu silently replace failed Vulkan shaders with builtins | Tagged shader payloads and propagated compile/link failure |
-| `executor_reconnect_replays_complete_residency_or_reports_api_loss` | contradictory | reconnect reset is never consumed, so new executor lacks resident resources | Generation replay or explicit GL/Vulkan loss with restart fault tests |
+| `executor_reconnect_replays_complete_residency_or_reports_api_loss` | partial | shared transport replays a bounded ACKed residency journal once per new connection generation; capability changes or replay-budget overflow become typed GL/Vulkan loss | Add an external live executor-kill journey that checks recovered pixels plus bounded fd/cache growth; durable cross-process replay remains intentionally unsupported |
 | `executor_enforces_every_negotiated_limit_before_decoding_or_allocating` | contradictory | handshake limits other than frame bytes do not constrain replay/backend allocation | Shared ReplayLimits validation and fallible exact-boundary tests |
 | `executor_accounts_cumulative_residency_and_object_counts_per_connection` | missing | unlimited individually legal GPU resources can exhaust a connection/process | Per-connection and global charge/refund budgets with disconnect stress |
 | `compositor_surface_teardown_reclaims_cpu_gpu_window_and_fence_state` | partial | Smithay surface and disconnect destruction now share idempotent CPU/cache/callback/window cleanup; client-owned executor resources and in-flight GPU fences still need ownership teardown | Add executor-owner reclamation and completion-fence retirement to the existing disconnect journey |
