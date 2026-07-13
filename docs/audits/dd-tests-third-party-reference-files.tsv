@@ -1,0 +1,1461 @@
+path	classification	evidence
+dd-tests/Cargo.toml	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/compliance/ltp/.gitignore	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/compliance/ltp/build.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/compliance/ltp/config.h	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/compliance/ltp/results-baseline-v0.9.25.tsv	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/compliance/ltp/run.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/compliance/ltp/tests.list	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/arm/go_cgo_stackgrow.go	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/arm/go_cgo_stackgrow_arm	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/atexit.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/atomics.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/bench/b_base64.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_float.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_hash.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_int.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_mandel.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_matmul.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_memcpy.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_sort.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_sqlite.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_sqlselect.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/b_strings.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/cryptobench.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/ctxbench.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/microbench.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/regrbench.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bench/whichfunc.c	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/guests/bigarr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/bigmem.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/bitops.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/busyloop.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ccmp_test.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/clockefault.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/clockelapsed.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/clockmono.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_bf16.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_bitfield.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_crc32.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_crypto_aes.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_crypto_sha1.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_crypto_sha256.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_dotprod.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_fp16.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_i8mm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_ldpstp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_lse.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_abs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_cmp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_cvt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_fp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_int.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_minmax.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_perm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_reduce.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_shift.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_tbl.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/arm_neon_widen.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/compat.h	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/exec_newline_env.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/exec_null_env.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_argv.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_cgroup_files.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_devseed.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_dirs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_environ.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_fdclose.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_fdinfo.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_maps_relro.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_net_unix.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_proc_files.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_procstat_forks.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_selfdir.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_smaps.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_statfs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_status_meta.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_taskdir.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/pf_tty.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/s3db_durability.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_adjtimex.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_auxval.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_capget.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_clock_getres.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_clock_variants.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_clone3.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_close_range.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_close_range_flags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_copy_file_range.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_faccessat2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_fadvise.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_fallocate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_fchmodat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_flock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_fsops.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_fstatfs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_getcpu.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_getentropy.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_getgroups.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_getrandom_flags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_getresuid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_getresuid_null.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_getrusage.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_ioctl_fio.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_itimer.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_madvise2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_membarrier.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_mincore.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_mlock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_mremap.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_name_to_handle_at.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_openat2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_passcred_badfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_pidfd_cap.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_pidfd_flags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_pidfd_signal.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_priority.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_prlimit64.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_process_vm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_readlinkat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_rt_sigpending.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_rt_sigtimedwait.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_sched_affinity.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_sched_attr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_seccomp_filter.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_set_tid_address.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_setfsuid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_sigaltstack.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_statx.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_sync_family.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_sysconf_nproc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_timer_create.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_truncate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_unshare_setns.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/sys_utimensat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_adx.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_aesni.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_avx.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_avx2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_avx_sigreturn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_bittest.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_bmi1.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_bmi2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_bycl.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_cmpxchg16b.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_crc32.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_div.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_f16c.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_flags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_fma.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_fxsave_mxcsr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_lzcnt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_memshift.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_mmx_width.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_movbe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_movnt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_movntps.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_movseg.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_ntload.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_parity_edge.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_pclmul.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_pfaf.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_popcnt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_rcl.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_rdtsc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_repstring.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_sbb.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_sha.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_sha_kat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_shflag.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_shld.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_shuffle.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_sse2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_sse3.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_sse41.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_sse42.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_sse4x.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_ssse3.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_trap_signals.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_vdsoclk.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_vmov_scalar_merge.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_x87.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_x87_control.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_x87b.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_xflags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/completeness/x86_xflags_sig.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/cpuid_features.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/adrp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_arc4random.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_copyfile.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_getattrlist.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_getpath.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_gettimeofday.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_procpath.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_progname.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_realpath.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_spawn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/bsd_statfs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/dispatch_apply.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/dispatch_async.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/dispatch_group.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/dispatch_once.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/dispatch_sem.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/dispatch_sync.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/hello	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/hello.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/kqueue.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/kqueue_signal.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/kqueue_timer.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/kqueue_user.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/kqueue_vnode.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/kqueue_write.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/mach_clock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/mach_host.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/mach_hoststats.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/mach_port.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/mach_self.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/mach_task.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/mach_time.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/mach_vm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/macho_ctor.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/macho_data.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/macho_hfa.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/macho_setjmp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/macho_static.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/macho_stub.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/macho_tls.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/macho_varargs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/mmap_jit.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/pthread_basic.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/pthread_cond.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/pthread_mutex.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/pthread_once.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/pthread_tsd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/raw_pid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/raw_pipe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/sysctl.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/sysctl_kernproc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/sysctl_memsize.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/darwin/sysctl_mib.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/dbserver.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/dentry/storm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/dup2redir.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_abstract.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_clockabstime.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_efault.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_fallocate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_lseekhole.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_madvise.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_mprotect.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_msgpeek.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_otmpfile.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_pipepacket.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_pipesz.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_procfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_proctask.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_renameat2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_scmrights.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_sigpipe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_statfs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/edge_times.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/elf210.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/environ.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/epoll.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/epoll_dup_lifetime.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/epoll_edge.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/epoll_fork_inherit.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/epoll_highfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/es2depth.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/es2tex.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/es2tri.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/es2uniform.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/eventfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/eventfd_sema.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/execfault.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/alloca.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/atomics_st.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/bigswitch.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/boolconv.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/bswap.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/charmath.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/clmul.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/cmpchain.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/computed_goto.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/deep_recursion.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/divmod.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/endian.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/float32.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/fnptr_many.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/fp_classify.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/fp_cmp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/fp_conv.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/fp_fma.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/fp_minmax.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/fp_round.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/fp_special.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/globalinit.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/hash.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/int128.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/intwrap.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/longdouble.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/manyargs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/memops.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/mixedargs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/mul64.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/nested_loops.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/overflow_builtin.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/popcnt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/printf_formats.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/ptr_arith.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/qsort_cb.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/rettypes.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/rotate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/setjmp_longjmp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/shifts.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/signext.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/simd_syscall.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/simd_syscall_crypto.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/struct_hfa.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/struct_large.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/struct_mixed.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/struct_ret.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/struct_small.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/tailcall.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/union_pun.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/varargs_float.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/varargs_mixed.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/vla.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_abi/vtable.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fs/mountpseudo.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fs/mounttab.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fs/shm_visible.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fs/statfs_type.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/atflags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/closerange.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/devfull.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/fadvise.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/linkat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/mkfifoat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/opath.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/procself.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/xattr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_fsx/xattr_edge.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_bootstrap_handle.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_chrome_procfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_credpid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_dup_offset.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_epoll_shared_xthread.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_eventfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_exec_fd_epoll.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_fifo_multi_writer.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_fifo_nonblock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_fifo_twoway.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_flock_fork.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_lockf.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_mq.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_mq_edge.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_mq_notify.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_msgget_ftok.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_pipe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_pipe_eof.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_pipe_poll.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_posix_sem_named.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_posix_shm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_poslk_xproc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_pump_epollout_rearm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_pump_primary_channel.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_pump_worker_dispatch.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_pump_xproc_et.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_pump_xproc_oneshot.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_scm_eventfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_scm_eventfd_dense.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_scm_futex.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_scm_memfd_seal.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_scm_recv_epoll.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_scm_rights.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_seqbystander.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_seqcred.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_seqpacket.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_seqpacket_epoll_drain.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_seqpacket_flags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_seqpacket_passcred_ctrunc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_seqpacket_passcred_full.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_sockpair_dgram.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_sysv_edge.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_sysv_msg.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_sysv_sem.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_sysv_shm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_sysv_stress.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_xproc_inbound.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_xproc_prearm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/ipc_zygote_inbound.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/shm_dsm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_ipc/sysv_ctl.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_iso/cgroup.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_iso/cpucount.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_iso/cpudefault.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_iso/cpusysfs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_iso/cputopo.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_iso/procstat_percpu.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_iso/rofs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_iso/ulimit.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/absdiv.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/assert_off.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/atox.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/bsearch.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/ctype_class.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/ctype_conv.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/errno_sym.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/fgets_fputs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/fread_fwrite.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/fscanf.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/fseek_ftell.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/getline.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/locale_c.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/math_class.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/math_explog.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/math_frexp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/math_gamma.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/math_hyper.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/math_misc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/math_mod.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/math_round.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/math_trig.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/mbs_wcs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/mem_move.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/printf_flags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/printf_float.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/printf_hexfloat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/printf_int.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/printf_len.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/printf_neg.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/printf_pos.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/printf_str.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/qsort_int.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/qsort_str.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/qsort_struct.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/rand_seq.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/setjmp_val.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/setvbuf.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/snprintf_ret.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/sscanf_mix.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/sscanf_num.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/sscanf_str.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/str_cmp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/str_copy.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/str_dup.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/str_search.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/str_tok.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/str_xfrm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/strerror.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/strto_float.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/strtol.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/strtoll.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/strtoul.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/time_asctime.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/time_diff.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/time_gmtime.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/time_mktime.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/time_strftime.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/time_strftime_num.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/ungetc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/wchar_str.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_libc/wctype_class.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/aio_pread.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/clock_linux.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/copy_file_range.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/epoll_et.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/epoll_mod.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/epoll_oneshot.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/epoll_pwait.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/epoll_reblock_fin.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/epoll_reblock_inf.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/eventfd_nonblock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/fanotify.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/fd_reuse_guard.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/fstatfs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/getcpu.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/getrandom_flags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/gettid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/high_fd_emul.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/inotify_modify.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/inotify_moves.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/io_uring.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/ioprio.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/membarrier.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/memfd_seal.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/personality.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/pidfd_open.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/pidfd_signal.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/poll_select_epoll.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/prctl_dumpable.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/prctl_guard.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/prctl_nnp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/prctl_pdeathsig.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/proc_bootid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/proc_fork_registry.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/process_vm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/sched_affinity.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/sched_yield.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/signalfd_rt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/syncfs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/tee.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/timerfd_gettime.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/timerfd_interval.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/unshare_files.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_linuxsys/vmsplice.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mem/fdrss.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mem/forkrss.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mem/mallocfree.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mem/memrss.h	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mem/mmapfilerss.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mem/mmapfree.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mem/threadrss.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mm/mapfixed.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mm/mincore.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mm/mlock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mm/mmerr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mm/mmsem.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_mm/mremap.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_accept4.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_connect_refused.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_dns.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_getaddrinfo.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_gethostname.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_getpeername.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_ifaces.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_inet_pton.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_listen_tcp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_lo_any.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_msg_dontwait.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_msg_peek.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_msg_waitall.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_peercred.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_poll_accept.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_select_multi.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_sendmsg_addr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_so_linger.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_socket_cloexec.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_sockopt_buf.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_tcp_bulk.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_tcp_multi.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_tcp_shutdown.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_udp_connected.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_unix_dgram.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_unix_dgram_abstract.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_unix_stream.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_v6_unreach.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_net/net_writev.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/access.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/apt_pty.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/apt_pty_devpts.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/chmodchown.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/clockid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/dup.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/dup3.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/execself.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/fcntlmisc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/fstatat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/fsync.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/ftruncate_lock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/getcwdchdir.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/getdents64.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/getids.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/getrlimit.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/iovec.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/killraise.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/linksym.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/lseek.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/madvise.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/mkdirrmdir.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/mmapanon2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/mmapfile.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/nanosleep.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/openat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/openflags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/pipe2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/pipe2way.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/pollpipe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/ppoll.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/preadwrite.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/pts_fork.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/pty.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/pty_devpts.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/pty_devpts_ls.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/readdir_dtype.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/rename.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/rw.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/selectpipe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/sendfile.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/setpgid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/sigmask.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/statfam.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/statx.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/sysconf.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/truncate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/umask.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/uname.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/utimensat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_posix/waitstatus.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/clone3.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/futex.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/futex_shared_key.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/futex_xproc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/getrusage.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/nonpie_ptrargs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/pi_robust.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/posix_spawn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/prlimit.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/ptrace_exec.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/ptrace_tracer.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/vfork.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/waitid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_proc/waitsig.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/bindmount.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/cpuinfo.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/devnodes.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/futexstate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/maps.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/meminfo.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/miscfiles.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/netfiles.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/netfiles2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/netnone.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/peerfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/peerns.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/permbits.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/pf.h	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/procstate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/pstat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/selfcaps.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/selfrss.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/selfstat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/selfstatus.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/sysctl.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/sysfs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_procfs/ttynonblock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/itimer.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/pausesig.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/pausewake.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/sarestart.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/sigactedge.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/sigaltstack.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/siginfo.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/sigpendingx.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/sigspin.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/sigsuspendmask.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/sigwait.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_sig/tgkill.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/atomicchurn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/bitchurn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/callgraph.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/divchurn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/forkpipe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/fpaccum.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/longjmp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/manyblocks.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/mmapchurn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/pagefault.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/reallocchurn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/recursion.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/signalload.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/smc2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/threadpool.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/vtable.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_soak/workingset.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_atomic_cas_ptr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_atomic_flag.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_atomics_ops.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_atomics_orders.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_attr_stack.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_barrier.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_cancel.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_cas_contention.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_cond_signal_wins.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_condvar_broadcast.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_condvar_timedwait.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_detach.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_join_retval.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_key.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_key_dtor.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_mutex_errorcheck.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_mutex_recursive.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_mutex_stress.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_mutex_trylock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_once.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_rwlock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_rwlock_try.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_sched.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_self.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_sem_named.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_sem_unnamed.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_threads/th_spinlock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_timex/clockids.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_timex/clocknanosleep.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_timex/clockres.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_timex/gettimeofday.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_timex/posixtimer.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ext_timex/timerfdx.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/fcntlflags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/filelock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/files.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/floatmath.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/fnptr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/forkserver/probe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/forkstorm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/forkwait.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/fpdnan.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/fpedge.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/getaffinity_tid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/getdents.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/getrandom.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/gl_shim.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/globmatch.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/gpu_compositor_multipass_ir.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/gpu_dmabuf_client.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/gui_matrix/Makefile	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/README.md	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/chrome_coverage_path	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/chrome_coverage_path.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_dmabuf_feedback_guest.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_dmabuf_frame	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_dmabuf_frame.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_alpha_composite_readback.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_blit_framebuffer	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_blit_framebuffer.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_clear_only_swap.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_compositor_stress	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_compositor_stress.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_content_composite_damage.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_content_composite_layer	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_content_composite_layer.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_copy_texture_bridge.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_copytex_sample	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_copytex_sample.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_damage_scissor_readback.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_draw_count_sentinel.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_dynamic_buffer_reuse	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_dynamic_buffer_reuse.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_fbo_texture_sample	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_fbo_texture_sample.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_fifth_sampler.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_premul_blend	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_premul_blend.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_probe.h	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_r8_alpha_orientation.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_render_probe.h	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_renderbuffer_msaa_resolve.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_resize_lifecycle	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_resize_lifecycle.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_scissored_quad	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_scissored_quad.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_state_churn_pipeline.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_state_churn_vao_elements.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_surfaceless	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_surfaceless.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_swap_lifecycle_repeated.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_swap_lifecycle_resize_recreate.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_texture_formats_fbo_readback.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_texture_upload_formats	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_texture_upload_formats.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_textured_quad	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_textured_quad.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_vao_state.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_vertex_formats	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_vertex_formats.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_viewport_scale_clip.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_window_swap	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_egl_window_swap.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_frame_nil	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_frame_nil.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_probe_wayland.h	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_shm_frame	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_shm_frame.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_xdg_ack	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/gui_xdg_ack.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/retained_frame_partial_load.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/run_gui_matrix.sh	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/gui_matrix/single_channel_texture_probe.c	KEEP_GATED_INDIRECT	Makefile token gating plus gate_invariants orphan check
+dd-tests/guests/heap.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/hello.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ibtc_dispatch.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/inotify.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/jumptable.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ldrsw_literal.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/longjmp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/lse_atomics.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/lseek_read.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ltp_aterr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ltp_checkpoint.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ltp_dupfcntl.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ltp_linkstat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ltp_neterr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/ltp_procmisc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/math.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/memfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/mkfifo.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/mmapanon.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/mmapshared.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/moffs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/msg.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/munmap_partial.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/neonshm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/net_nonblock.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/net_sendmsg.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/net_sockopt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/net_tcp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/net_udp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/net_unix.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/nonpie_dladdr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/nonpie_ldapr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/nonpie_pairatomics.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/nonpie_v8blob.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/nonpie_vec.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/offset_track.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/overlay/probe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pcachex/execchain.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pcachex/forkoutlive.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pcachex/forkpipe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pcachex/libmap.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pcachex/selfexec.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pipe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pipeproc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pollselect.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pollselect_eintr.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pollselect_ext.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/prctl.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/procexe/selfexe.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/procreap.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/pump_wakeup.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/qsort.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/realpath.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/recursion.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/regex.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/repcmps_nopie.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/repmovsdf.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/rflags_id.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/scratch_exec.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sem.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sendfile.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sentry_fork.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sentry_fs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sentry_net.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sha512_kat.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_builtins.frag.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_builtins.vert.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_fragcoord_relational.frag.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_fragcoord_relational.vert.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_local_decl.frag.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_local_decl.vert.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_mat3_uniforms.frag.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_mat3_uniforms.vert.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_matrix_types.frag.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_matrix_types.vert.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_uniform_layout.frag.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/chrome_uniform_layout.vert.glsl	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/layout_proof.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/run_shader_translate.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shader_translate/run_uniform_layout_proof.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shldflags.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/shmposix.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sigaction2.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sigjmp.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/signalfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/signalfd_multi.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/signals.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sigqueue.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sigurg_preempt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/smc_mprotect.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/smc_mremap.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/smc_remap_reuse.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/smc_selfflush.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/smc_table_overflow.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/smc_threads.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/soak_allocchurn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/soak_codecache.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/soak_forkchurn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/soak_indirect.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/soak_smc.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/soak_threadchurn.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sortbig.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/splice.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sqlite.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/stackoverflow.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/stackoverflow_catch.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/statfile.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/statvfs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/statx_agree.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/stolen_regs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/strings.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/strtod.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/badtimeout.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/eventfd_nullread.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/eventfd_overflow.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/flag_einval.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/getresid_efault.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/inotify_rm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/kill_zero_group.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/mem_validate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/mlock_rlimit.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/prlimit_invalid.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/sched_rt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/sentry_cloexec_exec.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/shortread_inotify.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/shortread_signalfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/shortread_timerfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/sigaltstack_validate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/sigkill_unmaskable.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/sigprocmask_validate.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/syscallbug/timerfd_first_interval.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sysfault.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sysinfo.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/sysvshm.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/threads.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/threads_many.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/threads_mutex.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/threads_nopie_tls.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/thrfork.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/timefmt.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/timerfd.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/tls.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/tlsmodels.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/tlsmodels_main.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/tmpfile.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/utimes_family.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/varargs.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/waitcore.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/wlshm_pool.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/build.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/ctest_x64	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/ctest_x64.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/g_x64	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/g_x64.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/go_goro.go	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/go_goro_x86	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/go_heapgc.go	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/go_heapgc_x86	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/gw	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/gw.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/hello_x86	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/hello_x86.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/hx	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x86/hx.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/guests/x87m80.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/scenarios/compose-multinet.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/scenarios/compose.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/scenarios/docker-full.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/scenarios/docker-net.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/scenarios/docker.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/scenarios/macos-container.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/scenarios/pty-conformance.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/scenarios/realsw.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/scenarios/smoke-realimage.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/bench_gates.rs	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/src/bin/bench.rs	REMOVE_HIGH	Dedicated make bench island; not correctness coverage
+dd-tests/src/bin/scenarios.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/abi.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/container.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/abi.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/clitools.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/op_arm_ext.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/op_arm_neon.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/op_x86_avx.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/op_x86_bit.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/op_x86_crypto.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/op_x86_misc.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/op_x86_sse.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/sys_cred.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/sys_file.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/sys_fs.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/sys_mem.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/sys_misc.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/sys_proc.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/sys_signal.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/completeness/sys_time.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/darwin.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/dentry.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/elf210.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/execfaultx.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/forkx.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/fs.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/fsx.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/gpu_render_ir.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/gui.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/ipc.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/isolation.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/libc.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/linuxsys.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/ltpgaps.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/memory.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/memx.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/net.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/pcachex.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/posix.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/processx.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/procexe.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/procfs.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/scratchx.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/signalx.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/soak.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/syscallcompat.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/threads.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/ext/timex.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/net.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/proc.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/regress.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/syscall.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/cases/workload.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/diag.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/model.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/perf.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/provision/compile.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/provision/darwin.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/provision/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/provision/select.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/run/config.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/run/eval.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/run/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/harness/run/util.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/lib.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/main.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/report.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenario/arch.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenario/daemon.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenario/drive/cache.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenario/drive/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenario/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenario/model.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/buildcmd/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/cpcmd/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/cpcoherence/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/databases/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/distros/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/dockernet/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/dockervol/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/execcmd/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/filesystem/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/imagescmd/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/dotnet.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/golang.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/java.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/node.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/php.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/python.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/ruby.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/rust.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/languages/scripting.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/lifecycle/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/netcontainer/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/netinstall/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/networking/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/observe/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/permissions/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/process/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/runflags/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/terminal/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/toolchains/banners.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/toolchains/compile_c.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/toolchains/compile_gorust.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/toolchains/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/toolchains/sanity.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/archives.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/arithmetic.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/bash.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/busybox.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/crypto.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/fork.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/git.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/jq.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/net.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/overlay.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/staticexec.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/utilities/text.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/volumes/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/web/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/weird/codegen.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/weird/cpu.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/weird/gaps.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/weird/mod.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/weird/native.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/src/scenarios/weird/runtimes.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tests/forkserver.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tests/gate_invariants.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tests/nonpie_dladdr.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tests/overlay.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tests/pcache.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tests/suite.rs	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tools/chrome_pulse_regression.py	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tools/coverage.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tools/fclient.c	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+dd-tests/tools/memwatch.sh	KEEP_ACTIVE_TEST	Cargo/Make/harness/fixture surface; no high-confidence orphan evidence
+reference/LOCK.md	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/README.md	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/alacritty	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/criu	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/DD-README.md	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/LICENSE.md	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/API/mvk_config.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/API/mvk_datatypes.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/API/mvk_deprecated_api.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/API/mvk_private_api.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/API/mvk_vulkan.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/API/vk_mvk_moltenvk.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdDebug.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdDebug.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdDispatch.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdDispatch.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdDraw.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdQueries.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdQueries.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdRendering.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdRendering.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCmdTransfer.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommand.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandBuffer.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandEncoderState.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandEncodingPool.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandEncodingPool.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandPipelineStateFactoryShaderSource.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandPool.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandPool.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandResourceFactory.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKCommandTypePools.def	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKMTLBufferAllocation.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKMTLBufferAllocation.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Commands/MVKMTLResourceBindings.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKBuffer.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKBuffer.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKDevice.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKDeviceFeatureStructs.def	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKDeviceMemory.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKFramebuffer.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKFramebuffer.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKImage.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKImage.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKInstance.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKInstance.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKPixelFormats.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKQueryPool.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKQueryPool.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKQueue.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKRenderPass.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKRenderPass.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKResource.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKResource.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKShaderModule.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKSurface.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKSurface.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKSwapchain.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKSync.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKSync.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKVulkanAPIObject.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKVulkanAPIObject.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVK/MoltenVK/Vulkan/vulkan.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/CMakeLists.txt	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/FileSupport.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/FileSupport.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVConversion.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVConversion.mm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVReflection.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVSupport.cpp	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVSupport.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/include/MoltenVKShaderConverter/SPIRVConversion.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/MoltenVKShaderConverter/include/MoltenVKShaderConverter/SPIRVToMSLConverter.h	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/moltenvk/README.md	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/wezterm	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+reference/zluda	KEEP_REFERENCE_PINNED	Reference-only pinned source/gitlink; not runtime input
+third_party/smithay-0.7.0/.cargo_vcs_info.json	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/.github/workflows/ci.yml	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/.gitignore	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/.rustfmt.toml	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/CHANGELOG.md	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/CONTRIBUTING.md	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/Cargo.toml	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/LICENSE.txt	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/README.md	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/benches/benchmark.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/benches/geometry.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/build.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/clippy.toml	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/compile_wlcs.sh	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/doc_index.html	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/examples/buffer_test.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/examples/compositor.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/examples/minimal.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/examples/seat.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/examples/vulkan.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/allocator/dmabuf.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/allocator/dumb.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/allocator/format.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/allocator/gbm.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/allocator/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/allocator/swapchain.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/allocator/vulkan/format.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/allocator/vulkan/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/compositor/elements.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/compositor/frame_result.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/compositor/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/device/atomic.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/device/fd.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/device/legacy.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/device/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/dumb.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/error.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/exporter/dumb.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/exporter/gbm.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/exporter/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/gbm.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/output.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/surface/atomic.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/surface/gbm.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/surface/legacy.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/drm/surface/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/egl/context.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/egl/device.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/egl/display.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/egl/error.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/egl/fence.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/egl/ffi.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/egl/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/egl/native.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/egl/surface.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/input/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/input/tablet.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/libinput/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/libinput/tablet.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/color.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/damage/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/damage/shaper.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/element/memory.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/element/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/element/solid.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/element/surface.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/element/tests.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/element/texture.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/element/utils/elements.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/element/utils/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/element/utils/wayland.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/element.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/error.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/format.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/shaders/implicit/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/shaders/implicit/solid.frag	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/shaders/implicit/solid.vert	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/shaders/implicit/texture.frag	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/shaders/implicit/texture.vert	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/shaders/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/texture.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/uniform.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/gles/version.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/glow.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/multigpu/gbm.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/multigpu/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/pixman/error.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/pixman/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/sync/egl.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/sync/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/test.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/utils/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/renderer/utils/wayland.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/session/libseat.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/session/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/udev.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/vulkan/inner.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/vulkan/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/vulkan/phd.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/vulkan/version.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/winit/input.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/winit/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/x11/buffer.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/x11/error.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/x11/extension.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/x11/input.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/x11/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/x11/surface.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/backend/x11/window_inner.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/space/element/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/space/element/wayland.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/space/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/space/output.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/space/utils.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/space/wayland/layer.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/space/wayland/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/space/wayland/window.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/space/wayland/x11.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/wayland/layer.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/wayland/popup/grab.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/wayland/popup/manager.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/wayland/popup/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/wayland/utils.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/desktop/wayland/window.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/keyboard/keymap_file.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/keyboard/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/keyboard/modifiers_state.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/keyboard/xkb_config.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/pointer/cursor_image.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/pointer/grab.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/pointer/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/touch/grab.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/input/touch/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/lib.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/output.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/reexports.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/alive_tracker.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/clock.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/fd.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/geometry.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/hook.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/ids.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/iter.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/sealed_file.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/serial.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/signaling.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/user_data.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/utils/x11rb.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/alpha_modifier/dispatch.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/alpha_modifier/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/buffer/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/commit_timing/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/compositor/cache.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/compositor/handlers.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/compositor/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/compositor/transaction.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/compositor/tree.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/content_type/dispatch.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/content_type/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/cursor_shape.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/dmabuf/dispatch.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/dmabuf/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/drm_lease/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/drm_syncobj/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/drm_syncobj/sync_point.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/fifo/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/foreign_toplevel_list/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/fractional_scale/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/idle_inhibit/inhibitor.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/idle_inhibit/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/idle_notify/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/input_method/input_method_handle.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/input_method/input_method_keyboard_grab.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/input_method/input_method_popup_surface.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/input_method/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/keyboard_shortcuts_inhibit/dispatch.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/keyboard_shortcuts_inhibit/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/output/handlers.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/output/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/output/xdg.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/pointer_constraints.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/pointer_gestures.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/presentation/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/relative_pointer.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/seat/keyboard.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/seat/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/seat/pointer.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/seat/touch.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/security_context/listener_source.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/security_context/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/data_device/device.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/data_device/dnd_grab.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/data_device/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/data_device/server_dnd_grab.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/data_device/source.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/device.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/ext_data_control/device.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/ext_data_control/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/ext_data_control/source.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/offer.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/primary_selection/device.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/primary_selection/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/primary_selection/source.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/seat_data.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/source.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/wlr_data_control/device.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/wlr_data_control/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/selection/wlr_data_control/source.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/session_lock/lock.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/session_lock/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/session_lock/surface.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/kde/decoration.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/kde/handlers.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/kde/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/wlr_layer/handlers.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/wlr_layer/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/wlr_layer/types.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/xdg/decoration.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/xdg/dialog.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/xdg/handlers.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/xdg/handlers/positioner.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/xdg/handlers/surface.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/xdg/handlers/surface/popup.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/xdg/handlers/surface/toplevel.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/xdg/handlers/wm_base.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shell/xdg/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shm/handlers.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shm/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/shm/pool.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/single_pixel_buffer/handlers.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/single_pixel_buffer/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/socket.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/tablet_manager/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/tablet_manager/tablet.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/tablet_manager/tablet_seat.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/tablet_manager/tablet_tool.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/text_input/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/text_input/text_input_handle.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/viewporter/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/virtual_keyboard/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/virtual_keyboard/virtual_keyboard_handle.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/xdg_activation/dispatch.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/xdg_activation/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/xdg_foreign/handlers.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/xdg_foreign/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/xdg_system_bell.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/xdg_toplevel_icon.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/xdg_toplevel_tag.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/xwayland_keyboard_grab.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/wayland/xwayland_shell.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/xwayland/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/xwayland/x11_sockets.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/xwayland/xserver.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/xwayland/xwm/mod.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/xwayland/xwm/settings.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/src/xwayland/xwm/surface.rs	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/test_gbm_bo_create_with_modifiers2.c	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
+third_party/smithay-0.7.0/test_gbm_bo_get_fd_for_plane.c	KEEP_VENDOR_REQUIRED	Path dependency third_party/smithay-0.7.0; classify modules only with feature/compiler evidence
