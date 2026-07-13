@@ -6,6 +6,8 @@
 //!
 //! Run: `cargo run -p dd-display --example render_pattern -- /path/out.png`
 
+#![allow(unused_imports, dead_code)] // imports/consts are used only by the Linux `main` below
+
 use dd_display::present::PngPresenter;
 use dd_display::server::Server;
 use dd_display::wire::{Conn, Message};
@@ -13,6 +15,14 @@ use std::os::unix::io::RawFd;
 
 const WL_DISPLAY: u32 = 1;
 
+// This "first pixels" demo builds a `wl_shm` pool from a Linux `memfd`; `memfd_create` is Linux-only, so
+// the demo is gated to Linux and stubbed elsewhere (keeps the macOS build of the crate's examples green).
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("render_pattern is a Linux-only memfd/shm demo; not built on this platform");
+}
+
+#[cfg(target_os = "linux")]
 fn main() {
     let out = std::env::args()
         .nth(1)
