@@ -86,6 +86,15 @@ pub struct PresentTiming {
     pub refresh_ns: u64,
 }
 
+/// Metadata read from a live host IOSurface allocation before accepting a guest import.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IOSurfaceMetadata {
+    pub width: u32,
+    pub height: u32,
+    pub bytes_per_row: u32,
+    pub pixel_format: u32,
+}
+
 /// The structured result of a [`Presenter::present`] call. Replaces the old `bool` that conflated
 /// "rendered somewhere" with "visibly on screen" and silently swallowed output errors: a presenter now
 /// says exactly what happened to the frame, and real output/device/filesystem failures propagate as the
@@ -161,6 +170,11 @@ pub trait Presenter {
     /// `presented` feedback; an `Offscreen`/`Err` present must NOT advance pacing (the client would think
     /// its frame shipped and recycle a buffer the compositor still needs to retry).
     fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError>;
+    /// Resolve and describe a live IOSurface allocation. `None` means the id is stale, unavailable, or
+    /// this presenter cannot authenticate IOSurface-backed imports.
+    fn iosurface_metadata(&self, _id: u32) -> Option<IOSurfaceMetadata> {
+        None
+    }
     /// Number of frames presented so far (for a generic multiplexer's disconnect log). Default 0.
     fn frame_count(&self) -> u32 {
         0

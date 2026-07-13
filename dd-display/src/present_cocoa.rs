@@ -1131,6 +1131,10 @@ impl Presenter for MetalPresenter {
         })
     }
 
+    fn iosurface_metadata(&self, id: u32) -> Option<crate::present::IOSurfaceMetadata> {
+        crate::metal::iosurface_metadata(id)
+    }
+
     fn frame_count(&self) -> u32 {
         self.frames
     }

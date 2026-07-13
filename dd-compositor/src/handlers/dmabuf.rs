@@ -32,10 +32,15 @@
 //! retained. The Presenter ABI still lacks a true GPU-completion fence, so scheduled Metal delivery is
 //! documented as a residual rather than pretending `present()` return proves command-buffer completion.
 
-use dd_display::present::SurfaceBuffer;
+use std::os::fd::AsRawFd;
+
+use dd_display::present::{IOSurfaceMetadata, SurfaceBuffer};
 
 use smithay::{
-    backend::allocator::{dmabuf::Dmabuf, Buffer as _, Format, Fourcc, Modifier},
+    backend::allocator::{
+        dmabuf::{Dmabuf, DmabufFlags},
+        Buffer as _, Format, Fourcc, Modifier,
+    },
     reexports::wayland_server::{protocol::wl_buffer::WlBuffer, DisplayHandle},
     utils::{Logical, Size},
     wayland::dmabuf::{
@@ -51,6 +56,38 @@ use crate::{handlers::compositor::logical_size_and_uv, DdState};
 /// buffer; `modifier_hi & DD_DMABUF_RENDER_BIT` = the guest asked the host GPU to render into it.
 pub(crate) const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
 pub(crate) const DD_DMABUF_RENDER_BIT: u32 = 0x1_0000;
+
+#[derive(Clone, Copy)]
+struct DmabufImportCaps {
+    format: Fourcc,
+}
+
+const DMABUF_IMPORT_CAPS: [DmabufImportCaps; 2] = [
+    DmabufImportCaps { format: Fourcc::Argb8888 },
+    DmabufImportCaps { format: Fourcc::Xrgb8888 },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DmabufValidationError {
+    UnsupportedPair,
+    InvalidIdentity,
+    InvalidFlags,
+    InvalidPlaneCount,
+    InvalidPlaneIndex,
+    InvalidOffset,
+    InvalidStride,
+    BackingTooSmall,
+    MissingMetadata,
+    MetadataMismatch,
+}
+
+fn modifier_has_dd_layout(modifier: u64) -> bool {
+    ((modifier >> 32) as u32) & 0xffff == DD_DMABUF_MOD_MAGIC
+}
+
+fn supports_pair(format: Fourcc, modifier: u64) -> bool {
+    modifier_has_dd_layout(modifier) && DMABUF_IMPORT_CAPS.iter().any(|caps| caps.format == format)
+}
 
 /// Decode a DRM format modifier into `(iosurface_id, gpu_render)` when it carries the dd IOSurface
 /// tag, else `None` (a modifier we cannot back — e.g. a genuine `LINEAR` allocation).
@@ -93,10 +130,10 @@ impl DmabufHandler for DdState {
                     notifier.failed();
                     return;
                 }
-                if !self.validate_iosurface(&dmabuf, iosurface_id) {
+                if let Err(reason) = self.validate_iosurface(&dmabuf, iosurface_id) {
                     eprintln!(
                         "dd-compositor: rejecting accelerated dmabuf import: IOSurface id \
-                         {iosurface_id} failed validation ({}x{}, code {:?})",
+                         {iosurface_id} failed validation ({reason:?}, {}x{}, code {:?})",
                         dmabuf.width(),
                         dmabuf.height(),
                         dmabuf.format().code
@@ -111,6 +148,64 @@ impl DmabufHandler for DdState {
     }
 }
 
+fn validate_dmabuf(
+    dmabuf: &Dmabuf,
+    iosurface_id: u32,
+    metadata: Option<IOSurfaceMetadata>,
+) -> Result<(), DmabufValidationError> {
+    let modifier: u64 = dmabuf.format().modifier.into();
+    if !supports_pair(dmabuf.format().code, modifier) {
+        return Err(DmabufValidationError::UnsupportedPair);
+    }
+    if iosurface_id == 0 {
+        return Err(DmabufValidationError::InvalidIdentity);
+    }
+    if dmabuf.flags() != DmabufFlags::empty() {
+        return Err(DmabufValidationError::InvalidFlags);
+    }
+    if dmabuf.num_planes() != 1 {
+        return Err(DmabufValidationError::InvalidPlaneCount);
+    }
+    if dmabuf.plane_indices().next() != Some(0) {
+        return Err(DmabufValidationError::InvalidPlaneIndex);
+    }
+    let offset = dmabuf.offsets().next().ok_or(DmabufValidationError::InvalidPlaneCount)?;
+    if offset != 0 {
+        return Err(DmabufValidationError::InvalidOffset);
+    }
+    let (width, height) = (dmabuf.width(), dmabuf.height());
+    if width == 0 || height == 0 {
+        return Err(DmabufValidationError::InvalidStride);
+    }
+    let min_stride = width.checked_mul(4).ok_or(DmabufValidationError::InvalidStride)?;
+    let stride = dmabuf.strides().next().ok_or(DmabufValidationError::InvalidPlaneCount)?;
+    if stride < min_stride {
+        return Err(DmabufValidationError::InvalidStride);
+    }
+    let required = (stride as u64)
+        .checked_mul(height as u64)
+        .and_then(|bytes| bytes.checked_add(offset as u64))
+        .ok_or(DmabufValidationError::BackingTooSmall)?;
+    let plane = dmabuf.handles().next().ok_or(DmabufValidationError::InvalidPlaneCount)?;
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    if unsafe { libc::fstat(plane.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return Err(DmabufValidationError::BackingTooSmall);
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_size < 0 || (stat.st_size as u64) < required {
+        return Err(DmabufValidationError::BackingTooSmall);
+    }
+    let metadata = metadata.ok_or(DmabufValidationError::MissingMetadata)?;
+    if metadata.width != width
+        || metadata.height != height
+        || metadata.bytes_per_row != stride
+        || metadata.pixel_format != 0x4247_5241
+    {
+        return Err(DmabufValidationError::MetadataMismatch);
+    }
+    Ok(())
+}
+
 impl DdState {
     /// Validate a dd IOSurface-backed dmabuf at IMPORT time, before the buffer is accepted. Offline this
     /// proves the reference is structurally sound — a non-zero IOSurface id and a representable
@@ -119,15 +214,12 @@ impl DdState {
     /// dimensions) needs the live GPU bridge and is revalidated at present time: the Metal presenter
     /// resolves the id and returns a `PresentError::Device` if it is gone, which the compositor then
     /// paces as a failed present. Returns `false` to reject the import.
-    pub(crate) fn validate_iosurface(&self, dmabuf: &Dmabuf, iosurface_id: u32) -> bool {
-        if iosurface_id == 0 {
-            return false;
-        }
-        let (w, h) = (dmabuf.width() as i32, dmabuf.height() as i32);
-        if w <= 0 || h <= 0 {
-            return false;
-        }
-        matches!(dmabuf.format().code, Fourcc::Argb8888 | Fourcc::Xrgb8888)
+    pub(crate) fn validate_iosurface(
+        &self,
+        dmabuf: &Dmabuf,
+        iosurface_id: u32,
+    ) -> Result<(), DmabufValidationError> {
+        validate_dmabuf(dmabuf, iosurface_id, self.presenter.iosurface_metadata(iosurface_id))
     }
 
     /// Build a [`SurfaceBuffer`] from a committed dmabuf `wl_buffer`: no CPU pixels, just the host
@@ -195,10 +287,7 @@ const DD_MAIN_DEVICE: DmabufDeviceId = DmabufDeviceId::from_linux_dev_t((226u64 
 /// feedback format-table's main tranche.
 fn dd_dmabuf_formats() -> [Format; 2] {
     let magic = Modifier::from((DD_DMABUF_MOD_MAGIC as u64) << 32);
-    [
-        Format { code: Fourcc::Argb8888, modifier: magic },
-        Format { code: Fourcc::Xrgb8888, modifier: magic },
-    ]
+    DMABUF_IMPORT_CAPS.map(|caps| Format { code: caps.format, modifier: magic })
 }
 
 /// Build the default [`DmabufFeedback`] for the v4/v5 global: a single main tranche of
@@ -252,6 +341,40 @@ pub(crate) fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    fn plane_fd(size: usize) -> OwnedFd {
+        let raw = dd_display::keymap::anon_fd_with(&vec![0u8; size.saturating_sub(1)])
+            .expect("anonymous plane fd");
+        unsafe { OwnedFd::from_raw_fd(raw) }
+    }
+
+    fn fixture(
+        format: Fourcc,
+        flags: DmabufFlags,
+        plane_idx: u32,
+        offset: u32,
+        stride: u32,
+        backing: usize,
+        second_plane: bool,
+    ) -> Dmabuf {
+        let modifier = Modifier::from(((DD_DMABUF_MOD_MAGIC as u64) << 32) | 7);
+        let mut builder = Dmabuf::builder((16, 8), format, modifier, flags);
+        assert!(builder.add_plane(plane_fd(backing), plane_idx, offset, stride));
+        if second_plane {
+            assert!(builder.add_plane(plane_fd(backing), 1, 0, stride));
+        }
+        builder.build().unwrap()
+    }
+
+    fn metadata() -> IOSurfaceMetadata {
+        IOSurfaceMetadata {
+            width: 16,
+            height: 8,
+            bytes_per_row: 64,
+            pixel_format: 0x4247_5241,
+        }
+    }
 
     /// The v4/v5 dmabuf-feedback format-table must build on the host without a `PSHMNAMLEN`/
     /// `ENAMETOOLONG` failure — the macOS limitation the vendored smithay patch (shortening the
@@ -265,5 +388,61 @@ mod tests {
             "dmabuf-feedback format-table SealedFile failed to build (macOS PSHMNAMLEN regression?): {:?}",
             feedback.err()
         );
+    }
+
+    #[test]
+    fn dmabuf_import_validation_rejects_every_untrusted_plane_and_metadata_dimension() {
+        let valid = fixture(Fourcc::Argb8888, DmabufFlags::empty(), 0, 0, 64, 512, false);
+        assert_eq!(validate_dmabuf(&valid, 7, Some(metadata())), Ok(()));
+        assert_eq!(
+            validate_dmabuf(&valid, 0, Some(metadata())),
+            Err(DmabufValidationError::InvalidIdentity)
+        );
+        assert_eq!(
+            validate_dmabuf(&valid, 7, None),
+            Err(DmabufValidationError::MissingMetadata)
+        );
+        assert_eq!(
+            validate_dmabuf(
+                &valid,
+                7,
+                Some(IOSurfaceMetadata { width: 15, ..metadata() }),
+            ),
+            Err(DmabufValidationError::MetadataMismatch)
+        );
+
+        let cases = [
+            (
+                fixture(Fourcc::Nv12, DmabufFlags::empty(), 0, 0, 64, 512, false),
+                DmabufValidationError::UnsupportedPair,
+            ),
+            (
+                fixture(Fourcc::Argb8888, DmabufFlags::Y_INVERT, 0, 0, 64, 512, false),
+                DmabufValidationError::InvalidFlags,
+            ),
+            (
+                fixture(Fourcc::Argb8888, DmabufFlags::empty(), 0, 0, 64, 512, true),
+                DmabufValidationError::InvalidPlaneCount,
+            ),
+            (
+                fixture(Fourcc::Argb8888, DmabufFlags::empty(), 2, 0, 64, 512, false),
+                DmabufValidationError::InvalidPlaneIndex,
+            ),
+            (
+                fixture(Fourcc::Argb8888, DmabufFlags::empty(), 0, 4, 64, 516, false),
+                DmabufValidationError::InvalidOffset,
+            ),
+            (
+                fixture(Fourcc::Argb8888, DmabufFlags::empty(), 0, 0, 60, 480, false),
+                DmabufValidationError::InvalidStride,
+            ),
+            (
+                fixture(Fourcc::Argb8888, DmabufFlags::empty(), 0, 0, 64, 511, false),
+                DmabufValidationError::BackingTooSmall,
+            ),
+        ];
+        for (dmabuf, expected) in cases {
+            assert_eq!(validate_dmabuf(&dmabuf, 7, Some(metadata())), Err(expected));
+        }
     }
 }

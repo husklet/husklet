@@ -57,6 +57,10 @@ extern "C" {
     fn IOSurfaceGetWidth(s: IOSurfaceRef) -> usize;
     fn IOSurfaceGetHeight(s: IOSurfaceRef) -> usize;
     fn IOSurfaceLookup(id: u32) -> IOSurfaceRef; // resolve a global IOSurface id (the engine's alloc id)
+    fn IOSurfaceGetWidth(buffer: IOSurfaceRef) -> usize;
+    fn IOSurfaceGetHeight(buffer: IOSurfaceRef) -> usize;
+    fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
+    fn IOSurfaceGetPixelFormat(buffer: IOSurfaceRef) -> u32;
     fn CFRelease(cf: *const c_void);
 }
 
@@ -135,6 +139,23 @@ pub unsafe fn resolve_iosurface(id: u32) -> IOSurfaceRef {
         return s;
     }
     IOSurfaceLookup(id)
+}
+
+pub fn iosurface_metadata(id: u32) -> Option<crate::present::IOSurfaceMetadata> {
+    let surface = unsafe { resolve_iosurface(id) };
+    if surface.is_null() {
+        return None;
+    }
+    let width = unsafe { IOSurfaceGetWidth(surface) };
+    let height = unsafe { IOSurfaceGetHeight(surface) };
+    let bytes_per_row = unsafe { IOSurfaceGetBytesPerRow(surface) };
+    let pixel_format = unsafe { IOSurfaceGetPixelFormat(surface) };
+    Some(crate::present::IOSurfaceMetadata {
+        width: width.try_into().ok()?,
+        height: height.try_into().ok()?,
+        bytes_per_row: bytes_per_row.try_into().ok()?,
+        pixel_format,
+    })
 }
 
 const PIXEL_FORMAT_BGRA: i32 = 0x4247_5241; // 'BGRA'

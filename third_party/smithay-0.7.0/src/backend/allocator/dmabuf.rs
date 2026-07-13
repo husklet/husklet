@@ -246,6 +246,16 @@ impl Dmabuf {
         self.0.planes.iter().map(|p| p.stride)
     }
 
+    /// Returns the protocol plane indices in normalized order.
+    pub fn plane_indices(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.planes.iter().map(|p| p.plane_idx)
+    }
+
+    /// Returns the creation flags supplied by the client.
+    pub fn flags(&self) -> DmabufFlags {
+        self.0.flags
+    }
+
     /// Returns if this buffer format has any vendor-specific modifiers set or is implicit/linear
     pub fn has_modifier(&self) -> bool {
         self.0.modifier != Modifier::Invalid && self.0.modifier != Modifier::Linear

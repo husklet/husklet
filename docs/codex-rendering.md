@@ -636,16 +636,15 @@ fd-backed bridge object or an explicitly versioned private protocol/metadata cha
 stable advertised layout. Never advertise the private pair to clients that cannot create that bridge.
 `dmabuf_feedback_advertises_only_pairs_that_the_importer_can_accept` pins negotiation closure.
 
-Accepted buffers are also under-validated. `validate_iosurface` checks only nonzero id, positive dimensions and
-ARGB/XRGB code; it does not enforce one plane, offset/stride, checked last-byte bounds, create flags, Y inversion, or
-that the resolved IOSurface's true width/height/format/bytes-per-row match the claim. Define per-format plane rules
-(ARGB/XRGB are exactly one plane, offset policy explicit, stride at least width×4 and representable), reject duplicate/
-missing indices and unsupported interlaced/bottom-first/Y-invert flags before `notifier.successful`, and use checked
-arithmetic throughout. Resolve immutable `IOSurfaceMetadata` at import, compare every field and retain allocation
-generation so id reuse cannot substitute another surface. Multi-plane YUV should remain absent from feedback until
-subsampling, chroma siting, color range/matrix and Metal plane textures are implemented end to end. Add a Rust negative
-matrix and C params/create_immed tests for reordered/duplicate planes, huge offsets/strides, mismatched allocation and
-every flag. `compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success` pins this trust boundary.
+Accepted buffers now pass a shared-capability validator before `notifier.successful`: ARGB/XRGB require exactly one
+plane at index zero, empty flags, zero offset, a checked minimum stride and checked u64 extent within the real fd. The
+Metal presenter resolves the IOSurface id and reports its live width, height, bytes-per-row and BGRA pixel format; all must exactly
+match the guest declaration, so zero, stale and mismatched ids fail. A Rust state matrix covers format, flags, plane
+count/index, offset, stride, truncated backing, missing metadata and mismatch. Remaining authenticity is allocation
+generation: a newly allocated IOSurface reusing the same numeric id could satisfy old dimensions, because the private
+modifier carries no generation/token. Move identity into authenticated fd metadata or a versioned channel, then add C
+params/create_immed cases for duplicate/reordered planes and stale-generation reuse.
+`compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success` remains partial on that boundary.
 
 The Smithay shm path has meaningful SIGBUS protection already: mapped accesses install a scoped handler and convert
 a fault in the active pool into `InvalidFd`, so this is not a wholly missing feature. The surrounding validation still
@@ -1117,6 +1116,6 @@ pixels, and fails against the broken behavior. Do not add tests that read implem
 | `compositor_presentation_feedback_uses_one_backend_evidence_record_per_output_frame` | contradictory | presenter timing/serial are discarded and MSC/60Hz/vsync are invented per surface | Shared per-output delivered-frame evidence across the paced tree |
 | `compositor_explicit_sync_waits_acquire_before_sampling_and_releases_after_gpu_completion` | missing | internal MTLEvent ordering is not a Wayland acquire/release fence contract | Explicit-sync/syncobj state plus Linux-fence↔MTLSharedEvent bridge journey |
 | `dmabuf_feedback_advertises_only_pairs_that_the_importer_can_accept` | partial | feedback now exposes only dd-tagged ARGB/XRGB pairs and rejects malformed/zero ids, but real IOSurface allocation generation and backing metadata are not represented | Share allocation-generation metadata with the importer and run positive/negative GPU-backed guest probes |
-| `compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success` | contradictory | import ignores plane layout, flags and real IOSurface metadata | Checked per-format plane rules plus allocation-generation metadata validation |
+| `compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success` | partial | shared caps enforce single-plane layout/flags/checked fd extent and exact live IOSurface width/height/row bytes/BGRA format; allocation generation is unavailable | Authenticate allocation generation and add stale-id C protocol regression |
 | `smithay_shm_pool_validation_prevents_oversized_mapping_truncation_and_sigbus_escape` | partial | SIGBUS guard exists, but fd extent, invalid resize and checked bounds remain unsafe | fstat/caps/checked mapping plus isolated truncation-race regression |
 <!-- rendering-gap-ledger:end -->
