@@ -406,6 +406,9 @@ pub struct MetalBackend {
         ),
     >,
     shader_id_hash: HashMap<u32, u64>, // shader id → MSL hash currently installed
+    // shader id → the MSL entry-point name SPIRV-Cross produced for a SPIR-V module (renames `main`→
+    // `main0`). `create_render_pipeline` requests THIS instead of the guest's SPIR-V entry name.
+    shader_msl_entry: HashMap<u32, String>,
     pipeline_id_hash: HashMap<u32, u64>, // pipeline id → desc hash currently installed
     clear_pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     // Scaled-blit (`Enc::BlitTexture` when src/dst extents differ) resources: a textured-quad library
@@ -459,6 +462,95 @@ fn msl_from_words(words: &[u32]) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
+/// Transpile a Vulkan SPIR-V shader module to MSL (SPIRV-Cross), the way MoltenVK does. Returns the MSL
+/// source plus the cleansed MSL entry-point name (SPIRV-Cross renames `main`→`main0`), which
+/// `create_render_pipeline` must request instead of the guest's SPIR-V entry name.
+///
+/// naga (the wgpu executor's frontend) cannot represent combined image-samplers — glslang's default
+/// `sampler2D` output loads an `OpTypeSampledImage` and samples it directly, with no `OpSampledImage`,
+/// which naga rejects (`InvalidId`). SPIRV-Cross handles it natively, splitting the combined sampler into
+/// a separate `texture2d` + `sampler` exactly as MSL requires. So the DEFAULT Metal executor gains real
+/// textured-Vulkan support without routing through wgpu.
+///
+/// Resource binding alignment (the critical contract): the executor binds textures/samplers/buffers at
+/// `atIndex: <IR BindEntry.binding>`, and the IR binding IS the guest's Vulkan `binding` number (the shim
+/// keys descriptor writes by `dst_binding`). SPIRV-Cross's automatic MSL indices do NOT match that (it
+/// assigns a per-type 0-based counter), so we install a `resource_binding_override` per resource forcing
+/// the MSL index == the SPIR-V `Binding` decoration. Vertex-attribute buffers live at `VBUF_BASE` (16) and
+/// SPIRV-Cross's auxiliary buffers at 25–30, so low binding numbers do not collide.
+#[cfg(target_os = "macos")]
+fn spirv_to_msl(words: &[u32]) -> Option<(String, String)> {
+    match spirv_to_msl_inner(words) {
+        Ok(v) => {
+            if let Some(dir) = std::env::var_os("DD_GPU_DUMP_SPIRV") {
+                let bytes: &[u8] = unsafe {
+                    std::slice::from_raw_parts(words.as_ptr() as *const u8, std::mem::size_of_val(words))
+                };
+                let path = std::path::Path::new(&dir).join(format!("msl-{}-{}.metal", bytes.len(), v.1));
+                let _ = std::fs::write(&path, &v.0);
+            }
+            Some(v)
+        }
+        Err(e) => {
+            eprintln!("dd-metal: SPIR-V→MSL failed ({} words): {e:?}", words.len());
+            if let Some(dir) = std::env::var_os("DD_GPU_DUMP_SPIRV") {
+                let bytes: &[u8] = unsafe {
+                    std::slice::from_raw_parts(words.as_ptr() as *const u8, std::mem::size_of_val(words))
+                };
+                let path = std::path::Path::new(&dir).join(format!("spirv-fail-{}.spv", bytes.len()));
+                let _ = std::fs::write(&path, bytes);
+                eprintln!("dd-metal: dumped failing SPIR-V to {}", path.display());
+            }
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn spirv_to_msl_inner(
+    words: &[u32],
+) -> std::result::Result<(String, String), spirv_cross::ErrorCode> {
+    use spirv_cross::{msl, spirv};
+    let module = spirv::Module::from_words(words);
+    let mut ast = spirv::Ast::<msl::Target>::parse(&module)?;
+
+    // The single entry point of this module (a VkShaderModule stage) — vertex or fragment.
+    let eps = ast.get_entry_points()?;
+    let ep = eps.into_iter().next().ok_or(spirv_cross::ErrorCode::Unhandled)?;
+    let exec_model = ep.execution_model;
+    let ep_name = ep.name;
+
+    // Force every resource's MSL index to its Vulkan `binding`, so it matches the executor's `atIndex`.
+    // Reflection (`get_shader_resources`/`get_decoration`) is valid straight after parse.
+    let res = ast.get_shader_resources()?;
+    let mut overrides = std::collections::BTreeMap::new();
+    let mut add = |ast: &spirv::Ast<msl::Target>, r: &spirv::Resource| {
+        let desc_set = ast.get_decoration(r.id, spirv::Decoration::DescriptorSet).unwrap_or(0);
+        let binding = ast.get_decoration(r.id, spirv::Decoration::Binding).unwrap_or(0);
+        overrides.insert(
+            msl::ResourceBindingLocation { stage: exec_model, desc_set, binding },
+            msl::ResourceBinding { buffer_id: binding, texture_id: binding, sampler_id: binding, count: 1 },
+        );
+    };
+    for r in res.uniform_buffers.iter().chain(&res.storage_buffers) {
+        add(&ast, r);
+    }
+    for r in res.sampled_images.iter().chain(&res.separate_images).chain(&res.storage_images) {
+        add(&ast, r);
+    }
+    for r in &res.separate_samplers {
+        add(&ast, r);
+    }
+
+    let mut opts = msl::CompilerOptions::default();
+    opts.resource_binding_overrides = overrides;
+    ast.set_compiler_options(&opts)?;
+    let src = ast.compile()?;
+    // The cleansed (MSL-renamed, e.g. `main`→`main0`) entry name is only defined AFTER `compile`.
+    let cleansed = ast.get_cleansed_entry_point_name(&ep_name, exec_model)?;
+    Ok((src, cleansed))
+}
+
 impl MetalBackend {
     pub fn new(ctx: &MetalCtx) -> Self {
         let lib = ctx
@@ -493,6 +585,7 @@ impl MetalBackend {
             failed_shader_cache: HashSet::new(),
             pipeline_cache: HashMap::new(),
             shader_id_hash: HashMap::new(),
+            shader_msl_entry: HashMap::new(),
             pipeline_id_hash: HashMap::new(),
             clear_pipeline: None,
             blit_lib: None,
@@ -1579,6 +1672,17 @@ pub fn run_executor(sock_path: String) {
                 }
             };
             s.write_all(&[rendered as u8])?; // ack: 1 = rendered, 0 = replay failed
+            // Debug: dump the executor's actual render target (the guest IOSurface) to PNG — direct proof
+            // the GPU drew the frame, independent of the compositor present path. Overwrites per id so the
+            // last frame of each surface survives.
+            if rendered {
+                if let Some(dir) = std::env::var_os("DD_GPU_DUMP_FRAME") {
+                    if let Some(tex) = rt_cache.get(&id) {
+                        let path = std::path::Path::new(&dir).join(format!("exec-{id}.png"));
+                        readback_png(ctx, tex, w, h, &path.to_string_lossy());
+                    }
+                }
+            }
             if let Some(p) = prof.as_mut() {
                 let replay_us = t_rx.elapsed().as_micros() as u64;
                 let gpu_us = be.gpu_wait_ns / 1000;
@@ -2022,8 +2126,10 @@ impl GpuBackend for MetalBackend {
             present_kinds: vec![],
             wire_version: dd_gpu::ir::WIRE_VERSION,
             command_bits: dd_gpu::backend::command_bits(dd_gpu::backend::HARDWARE_COMMANDS),
-            // Metal consumes MSL (the shim's GLSL→MSL / compute kernels); SPIR-V/PTX route to wgpu.
-            shader_payloads: dd_gpu::backend::shader_payload::MSL,
+            // Metal consumes MSL (the GL shim's GLSL→MSL / compute kernels) directly, and Vulkan SPIR-V
+            // via the host SPIRV-Cross→MSL path in `create_shader` (real combined-image-sampler support
+            // that naga lacks). PTX still routes to wgpu.
+            shader_payloads: dd_gpu::backend::shader_payload::MSL | dd_gpu::backend::shader_payload::SPIRV,
             // Guest-creatable textures are the color formats; depth is an attachment-internal texture.
             texture_formats: dd_gpu::backend::format_bits(dd_gpu::backend::COLOR_FORMATS),
             max_frame_bytes: 64 << 20, // matches run_executor's per-frame length cap
@@ -2184,17 +2290,32 @@ impl GpuBackend for MetalBackend {
     }
 
     fn create_shader(&mut self, id: ShaderId, kind: dd_gpu::ir::ShaderPayloadKind, spirv: &[u32]) -> Result<()> {
-        if kind == dd_gpu::ir::ShaderPayloadKind::SpirV {
-            self.shaders.remove(&id.0);
-            self.shader_id_hash.remove(&id.0);
-            return Err(GpuError::Unsupported("SPIR-V translation in Metal executor"));
-        }
         if kind == dd_gpu::ir::ShaderPayloadKind::PtxKernel {
             return Err(GpuError::Unsupported("PTX shader in Metal render executor"));
         }
-        // The guest's GLSL, translated to MSL by the shim, arrives packed as bytes. Compile it to a
-        // library; if the payload isn't MSL (empty/real SPIR-V), leave it unset → builtin pipeline.
-        if let Some(src) = msl_from_words(spirv) {
+        // Resolve the MSL source. Two shapes arrive here:
+        //   * SpirV — a real Vulkan shader module. Transpile it to MSL via SPIRV-Cross (MoltenVK's path),
+        //     recording the cleansed entry name so `create_render_pipeline` requests it.
+        //   * else — the GL shim's own GLSL→MSL output, packed as bytes (`msl_from_words`).
+        let src: Option<String> = if kind == dd_gpu::ir::ShaderPayloadKind::SpirV {
+            match spirv_to_msl(spirv) {
+                Some((msl, entry)) => {
+                    self.shader_msl_entry.insert(id.0, entry);
+                    Some(msl)
+                }
+                None => {
+                    self.shader_msl_entry.remove(&id.0);
+                    self.shaders.remove(&id.0);
+                    self.shader_id_hash.remove(&id.0);
+                    return Err(GpuError::Invalid("SPIR-V→MSL translation failed"));
+                }
+            }
+        } else {
+            self.shader_msl_entry.remove(&id.0);
+            msl_from_words(spirv)
+        };
+        // Compile the MSL to a library; if there is none (empty payload), leave it unset → builtin pipeline.
+        if let Some(src) = src {
             let key = hash_bytes(src.as_bytes());
             // L3: identical MSL already installed for this id → nothing to compile (steady state).
             if self.shader_id_hash.get(&id.0) == Some(&key)
@@ -2256,6 +2377,7 @@ impl GpuBackend for MetalBackend {
     fn destroy_shader(&mut self, id: ShaderId) -> Result<()> {
         self.shaders.remove(&id.0);
         self.shader_id_hash.remove(&id.0);
+        self.shader_msl_entry.remove(&id.0);
         Ok(())
     }
 
@@ -2282,8 +2404,13 @@ impl GpuBackend for MetalBackend {
         // Prefer the guest's own translated shaders (per module); fall back to the builtin vertex-color
         // library + its vcmain/fcmain entry points when the app didn't ship MSL.
         let vlib = self.shaders.get(&desc.vertex.module).unwrap_or(&self.lib);
+        // A SPIR-V module's MSL entry is the SPIRV-Cross cleansed name (`main`→`main0`), not the guest's
+        // SPIR-V entry string; prefer the recorded name, else the guest entry (GL shim MSL), else builtin.
         let ventry = if self.shaders.contains_key(&desc.vertex.module) {
-            desc.vertex.entry.as_str()
+            self.shader_msl_entry
+                .get(&desc.vertex.module)
+                .map(|s| s.as_str())
+                .unwrap_or(desc.vertex.entry.as_str())
         } else {
             "vcmain"
         };
@@ -2291,9 +2418,10 @@ impl GpuBackend for MetalBackend {
             .newFunctionWithName(&NSString::from_str(ventry))
             .ok_or(GpuError::Unsupported("vertex fn"))?;
         let (flib, fentry) = match &desc.fragment {
-            Some(f) if self.shaders.contains_key(&f.module) => {
-                (self.shaders.get(&f.module).unwrap(), f.entry.as_str())
-            }
+            Some(f) if self.shaders.contains_key(&f.module) => (
+                self.shaders.get(&f.module).unwrap(),
+                self.shader_msl_entry.get(&f.module).map(|s| s.as_str()).unwrap_or(f.entry.as_str()),
+            ),
             _ => (&self.lib, "fcmain"),
         };
         let ffn = flib

@@ -48,3 +48,8 @@ objc2-metal = { version = "0.2", features = [
     "MTLDepthStencil", "MTLSampler", "MTLStageInputOutputDescriptor", "MTLEvent",
 ] }
 objc2-quartz-core = { version = "0.2", features = ["CALayer", "CAMetalLayer", "CATransaction", "objc2-metal"] }
+# Host SPIR-V→MSL lowering (MoltenVK's approach): the Metal executor consumes Vulkan SPIR-V shader
+# modules by transpiling them to MSL via SPIRV-Cross. naga's SPIR-V frontend cannot represent combined
+# image-samplers (glslang's default `sampler2D` output), so real textured Vulkan apps route through this.
+# macOS-only: builds SPIRV-Cross C++ for the host, matching where the Metal executor runs.
+spirv_cross = { version = "0.23", features = ["msl"] }
