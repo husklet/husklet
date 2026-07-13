@@ -33,7 +33,7 @@ impl Presenter for NullPresenter {
 
 fn guest_probe_src() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../dd-tests/guests/gui_matrix/gui_dmabuf_feedback_guest.c")
+        .join("../dd-jit-darwin/testdata/guests/gui_matrix/gui_dmabuf_feedback_guest.c")
 }
 
 /// Compile the guest probe to a native host binary. Returns None (skip) on any toolchain failure.

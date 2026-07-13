@@ -49,7 +49,7 @@ fn diff_ir(c_shim: &[u8], rust_shim: &[u8]) -> Result<(), String> {
 }
 
 fn gl_shim_c_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../dd-tests/guests/gl_shim.c")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../dd-jit-darwin/testdata/guests/gl_shim.c")
 }
 
 /// Locate dd-shim-gl's built cdylib (target/<profile>/libdd_shim_gl.so), next to the test binary.

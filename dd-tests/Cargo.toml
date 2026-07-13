@@ -2,14 +2,11 @@
 name = "dd-tests"
 version = "0.4.0"
 edition = "2021"
-default-run = "dd-tests"   # `cargo run -p dd-tests` → the basics matrix (the real-software scenario runner moved to dd-daemon: `cargo test -p dd-daemon --test scenarios`)
-description = "dd engine test harness — declarative groups of guest tests, run across every JIT engine."
+description = "dd product-neutral test harness helper — engine/process test model, provisioning, result normalization and JIT diagnostics, consumed as a dev-dependency by product crates."
 
-# The harness is a runner binary (great DX: grouped/colored output, filtering, summary). The same
-# matrix is also exposed to `cargo test` via tests/suite.rs.
-[[bin]]
-name = "dd-tests"
-path = "src/main.rs"
+# The engine × case matrix product (case registry, C guest corpus, aggregate runner and its cargo-test
+# entry) moved to its owner `dd-jit-darwin` (ownership-matrix Step 2). What remains here is the reusable
+# harness library plus the `bench` micro-benchmark bin.
 
 [lib]
 name = "dd_tests"

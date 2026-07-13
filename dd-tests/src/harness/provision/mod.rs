@@ -17,7 +17,7 @@ use select::{elf_machine, image_name_tier, rootfs_machine};
 /// Shared paths/config for a run.
 pub struct Ctx {
     pub repo: PathBuf,   // dd repo root (shared mount, visible to the mac-side JIT)
-    pub guests: PathBuf, // dd-tests/guests
+    pub guests: PathBuf, // dd-jit-darwin/testdata/guests (the JIT engine owns the C guest corpus)
     pub cache: PathBuf,  // compiled-guest cache (under target/, shared)
     pub images: PathBuf, // image rootfs dir (default the poc images)
 }
@@ -31,7 +31,10 @@ impl Ctx {
         let cache = repo.join("target/dd-tests");
         std::fs::create_dir_all(cache.join("aarch64")).ok();
         Ctx {
-            guests: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("guests"),
+            // The C guest corpus is owned by the engine crate (ownership-matrix Step 2), so it now
+            // lives at dd-jit-darwin/testdata/guests, resolved from the shared repo root rather than
+            // this helper crate's manifest dir.
+            guests: repo.join("dd-jit-darwin/testdata/guests"),
             images: std::env::var("DD_IMAGES")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/Users/x/dd/poc/images")),
@@ -105,7 +108,7 @@ pub(crate) fn provision(ctx: &Ctx, c: &Case, e: Engine) -> Result<Option<String>
 }
 
 /// Resolve a prebuilt-fixture path. Absolute paths pass through. A relative path (e.g.
-/// `guests/arm/go_cgo_stackgrow_arm`) is tried IN-REPO first — `dd-tests/<p>`, so a fixture committed
+/// `guests/arm/go_cgo_stackgrow_arm`) is tried IN-REPO first — `dd-jit-darwin/testdata/<p>`, so a fixture committed
 /// next to the compiled-guest sources is found from any checkout, including a `.claude/worktrees/*`
 /// worktree — then against a `poc/` sidecar dir walking UP from the repo root (the historical layout,
 /// `<repo-parent>/poc/<p>`; the ancestor walk makes it work from a worktree too, whose parent is
@@ -115,7 +118,7 @@ fn resolve(ctx: &Ctx, p: &str) -> String {
     if p.starts_with('/') {
         return p.into();
     }
-    let in_repo = ctx.repo.join("dd-tests").join(p);
+    let in_repo = ctx.repo.join("dd-jit-darwin/testdata").join(p);
     if in_repo.is_file() {
         return in_repo.to_string_lossy().into_owned();
     }

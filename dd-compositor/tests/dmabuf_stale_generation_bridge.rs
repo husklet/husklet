@@ -48,7 +48,7 @@ impl Presenter for GenPresenter {
 
 fn probe_src() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../dd-tests/guests/gui_matrix/gui_dmabuf_stale_generation_guest.c")
+        .join("../dd-jit-darwin/testdata/guests/gui_matrix/gui_dmabuf_stale_generation_guest.c")
 }
 
 fn build_probe(out: &Path) -> Option<PathBuf> {

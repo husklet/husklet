@@ -40,7 +40,7 @@ impl Presenter for MetalDelegatingPresenter {
 }
 
 fn guest(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../dd-tests/guests/gui_matrix").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../dd-jit-darwin/testdata/guests/gui_matrix").join(name)
 }
 
 fn cc(src: &Path, out: &Path, extra: &[&str]) -> Option<PathBuf> {

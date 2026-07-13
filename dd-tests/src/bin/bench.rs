@@ -166,7 +166,8 @@ fn main() {
     let repo = manifest.parent().unwrap().to_path_buf(); // <repo> (under the /Users/x/dd shared tree)
     ensure_ddjit_dir(&repo);
 
-    let src = manifest.join("guests/bench/microbench.c");
+    // The guest corpus moved to the engine crate (ownership-matrix Step 2).
+    let src = repo.join("dd-jit-darwin/testdata/guests/bench/microbench.c");
     let bench_dir = repo.join("target/bench"); // guest binaries — MUST be in the shared tree so the mac engine sees them
     std::fs::create_dir_all(&bench_dir).ok();
     let g_arm = bench_dir.join("microbench.aarch64");

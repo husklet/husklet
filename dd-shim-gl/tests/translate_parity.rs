@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn shader_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../dd-tests/guests/shader_translate")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../dd-jit-darwin/testdata/guests/shader_translate")
 }
 fn gl_shim_c() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../dd-tests/guests/gl_shim.c")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../dd-jit-darwin/testdata/guests/gl_shim.c")
 }
 
 /// Build gl_shim.c's translator tool (`cc -DDD_TR_TOOL`). Returns the binary path, or None to skip.

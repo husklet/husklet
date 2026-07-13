@@ -173,7 +173,7 @@ const GUI_MATRIX_EXCLUSIONS: &[(&str, &str)] = &[
 
 #[test]
 fn test_every_gui_matrix_probe_is_gated_or_documented() {
-    let dir = repo_root().join("dd-tests/guests/gui_matrix");
+    let dir = repo_root().join("dd-jit-darwin/testdata/guests/gui_matrix");
     let makefile = std::fs::read_to_string(dir.join("Makefile")).expect("read gui_matrix Makefile");
     // Collect every token that appears in the Makefile (probe names appear in the *_PROBES lists and
     // their build rules), so a probe listed anywhere in the matrix counts as gated.

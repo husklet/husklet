@@ -9,9 +9,9 @@ all: jit
 jit:            ## build + codesign both guest-arch JITs (via cargo build.rs) + the crates
 	cargo build --release
 test: jit       ## run the engine × case matrix (grouped report); FILTER=name ENGINE=x86_64 to narrow
-	cargo run -q -p dd-tests -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
+	cargo run -q -p dd-jit-darwin --example matrix -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
 test-ci: jit    ## the cargo-test path (one matrix test; for CI)
-	cargo test -p dd-tests
+	cargo test -p dd-jit-darwin
 mac-crates:     ## POST-MERGE GATE (macOS): build+test the mac-only Wayland-renderer crates (dd-display/dd-gpu-wgpu/dd-compositor). They are NOT in workspace default-members, so a plain `cargo build` never compiles them — run this after any merge that touches shared types they use (present.rs SurfaceBuffer, the GPU IR, …) so a cross-cutting change can't silently break the Smithay/wgpu path. Needs macOS + the nix dev shell (provides libxkbcommon).
 	@[ "$$(uname)" = "Darwin" ] || { echo "mac-crates: macOS-only (dd-compositor links libxkbcommon + the Cocoa/Metal present path) — skipping on $$(uname). Maintainer: run via the mac bridge."; exit 0; }
 	$(NIX_DEV) bash -euc '\
@@ -20,7 +20,7 @@ mac-crates:     ## POST-MERGE GATE (macOS): build+test the mac-only Wayland-rend
 	  cargo build -p dd-display -p dd-gpu-wgpu -p dd-compositor; \
 	  cargo test  -p dd-compositor -p dd-gpu-wgpu'
 perf: jit       ## same matrix + an oracle-vs-JIT slowdown table & summary (PERF_N=median runs; writes target/dd-tests/perf.{csv,json}); FILTER/ENGINE narrow
-	PERF=1 cargo run -q -p dd-tests -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
+	PERF=1 cargo run -q -p dd-jit-darwin --example matrix -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
 test-docker: jit ## end-to-end Docker-CLI scenarios against dd-daemon (run/logs/stop/kill/volumes/networks)
 	bash dd-daemon/testdata/scenarios/docker.sh
 test-docker-full: jit ## FULL Docker CLI/API compliance matrix (every command; maps each failure to a non-compliant verb)

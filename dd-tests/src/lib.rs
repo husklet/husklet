@@ -14,8 +14,12 @@
 //! ```
 
 pub mod bench_gates; // guard helpers for `bin/bench` (BENCH_N / dd-lane / artifact-write gates)
-pub mod cases;
 pub mod diag; // turn a failed run into an actionable JIT bug report (signals/buckets/crash details); still consumed by the daemon scenario runner (now in dd-daemon) via the dd-tests dev-dep
+
+// The engine × case matrix product (case registry, C guest corpus, aggregate runner and engine
+// integration tests) moved to its owner `dd-jit-darwin` (ownership-matrix Step 2). This crate keeps
+// only the product-neutral harness helper (`harness`, `diag`, `bench_gates`) that dd-jit-darwin and
+// dd-daemon consume as a dev-dependency.
 
 // The real-software scenario surface (`scenario`/`scenarios` + the `scenarios` bin) moved to its owner
 // `dd-daemon` (ownership-matrix Step 3): `cargo test -p dd-daemon --test scenarios`.

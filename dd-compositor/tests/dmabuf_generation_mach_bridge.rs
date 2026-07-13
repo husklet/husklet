@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 fn sender_src() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../dd-tests/guests/gui_matrix/gui_dmabuf_gen_sender.c")
+        .join("../dd-jit-darwin/testdata/guests/gui_matrix/gui_dmabuf_gen_sender.c")
 }
 
 fn build_sender(out: &Path) -> Option<PathBuf> {
