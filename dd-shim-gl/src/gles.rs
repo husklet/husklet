@@ -2491,14 +2491,89 @@ pub extern "C" fn glVertexAttrib3fv(_index: u32, _v: *const f32) {}
 #[no_mangle]
 pub extern "C" fn glVertexAttrib4fv(_index: u32, _v: *const f32) {}
 
-/// Compressed-texture upload is not decoded by the executor (gl_shim.c no-ops it, leaving the RGBA8
-/// plane); a faithful no-op keeps parity.
+/// The highest mip level a `MAX_TEXTURE_SIZE`=4096 texture can have: `log2(4096)` (gl_shim.c advertises
+/// 4096, so levels beyond 12 are out of range).
+const MAX_TEXTURE_LEVEL: i32 = 12;
+
+/// Bytes per 4x4 block for a supported ETC2/EAC compressed `internalformat`, or `None` if the format is
+/// not a recognized compressed format (→ `GL_INVALID_ENUM`). ETC2-RGB / punch-through-alpha and the
+/// single-channel R11-EAC formats pack 8 bytes/block; ETC2-RGBA8 and the two-channel RG11-EAC pack 16.
+/// These are the ES 3.0 mandatory compressed formats (table 8.14).
+fn compressed_block_bytes(internalformat: u32) -> Option<usize> {
+    match internalformat {
+        // R11_EAC, SIGNED_R11_EAC, RGB8_ETC2, SRGB8_ETC2, RGB8_PUNCHTHROUGH_ALPHA1_ETC2, SRGB8_…_ETC2
+        0x9270 | 0x9271 | 0x9274 | 0x9275 | 0x9276 | 0x9277 => Some(8),
+        // RG11_EAC, SIGNED_RG11_EAC, RGBA8_ETC2_EAC, SRGB8_ALPHA8_ETC2_EAC
+        0x9272 | 0x9273 | 0x9278 | 0x9279 => Some(16),
+        _ => None,
+    }
+}
+
+/// The exact tightly-packed byte count a `w`x`h`x`d` 4x4-block compressed image occupies:
+/// `ceil(w/4) * ceil(h/4) * max(d,1) * block_bytes`. `None` on overflow. `glCompressedTexImage*`
+/// requires the caller's `imageSize` to equal this (else `GL_INVALID_VALUE`).
+fn compressed_image_size(w: i32, h: i32, d: i32, block: usize) -> Option<usize> {
+    let bw = (w as usize).checked_add(3)? / 4;
+    let bh = (h as usize).checked_add(3)? / 4;
+    bw.checked_mul(bh)?.checked_mul((d.max(1)) as usize)?.checked_mul(block)
+}
+
+/// `glCompressedTexImage2D` — ATOMIC, CHECKED compressed upload. The executor has no ETC decoder (like
+/// gl_shim.c it does not decode the payload — the honest residual is GPU-side block decode), but unlike
+/// the old silent no-op this validates every input a conforming driver checks and, on any violation,
+/// raises the API-correct error while leaving the bound texture completely untouched:
+///   * unsupported target / non-compressed `internalformat` → `GL_INVALID_ENUM`
+///   * bad level / border≠0 / negative dims / `imageSize` ≠ the format's 4x4-block byte count
+///     → `GL_INVALID_VALUE`
+///   * no live texture bound, or the texture is immutable → `GL_INVALID_OPERATION`
+/// No IR is emitted (gl_shim.c emits none for compressed uploads, and no byte-parity workload uses one),
+/// so the frame IR and the byte-parity gates are unchanged.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn glCompressedTexImage2D(_target: u32, _level: i32, _internalformat: u32, _width: i32, _height: i32, _border: i32, _image_size: i32, _data: *const c_void) {}
+pub extern "C" fn glCompressedTexImage2D(target: u32, level: i32, internalformat: u32, width: i32, height: i32, border: i32, image_size: i32, _data: *const c_void) {
+    let mut s = gl();
+    let bad = |s: &mut crate::state::GlState, e| if s.error == GL_NO_ERROR { s.error = e; };
+    let t = s.bound_tex();
+    if target != GL_TEXTURE_2D { bad(&mut s, GL_INVALID_ENUM); return; }
+    let Some(block) = compressed_block_bytes(internalformat) else { bad(&mut s, GL_INVALID_ENUM); return; };
+    if level < 0 || level > MAX_TEXTURE_LEVEL || border != 0 || width < 0 || height < 0 || image_size < 0 { bad(&mut s, GL_INVALID_VALUE); return; }
+    let Some(expected) = compressed_image_size(width, height, 1, block) else { bad(&mut s, GL_INVALID_VALUE); return; };
+    if image_size as usize != expected { bad(&mut s, GL_INVALID_VALUE); return; }
+    if t == 0 || t as usize >= MAXTEX || !s.tex[t as usize].used { bad(&mut s, GL_INVALID_OPERATION); return; }
+    if s.tex[t as usize].immutable { bad(&mut s, GL_INVALID_OPERATION); return; }
+    // Validated. Payload undecoded (no ETC decoder) — matches gl_shim.c's no-op, so parity holds.
+}
+
+/// `glCompressedTexSubImage2D` — ATOMIC, CHECKED compressed sub-image. Validates the same format/level
+/// rules as the full image, plus block-aligned offsets and in-bounds region against the bound texture:
+///   * unsupported target / format → `GL_INVALID_ENUM`
+///   * bad level / negative offset or dims / `imageSize` mismatch → `GL_INVALID_VALUE`
+///   * no live texture / offset+extent outside the texture / non-block-aligned offset or extent (except
+///     at the texture edge) → `GL_INVALID_OPERATION`
+/// Undecoded like the full-image path (parity-preserving no-op on success).
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn glCompressedTexSubImage2D(_target: u32, _level: i32, _xoffset: i32, _yoffset: i32, _width: i32, _height: i32, _format: u32, _image_size: i32, _data: *const c_void) {}
+pub extern "C" fn glCompressedTexSubImage2D(target: u32, level: i32, xoffset: i32, yoffset: i32, width: i32, height: i32, format: u32, image_size: i32, _data: *const c_void) {
+    let mut s = gl();
+    let bad = |s: &mut crate::state::GlState, e| if s.error == GL_NO_ERROR { s.error = e; };
+    let t = s.bound_tex();
+    if target != GL_TEXTURE_2D { bad(&mut s, GL_INVALID_ENUM); return; }
+    let Some(block) = compressed_block_bytes(format) else { bad(&mut s, GL_INVALID_ENUM); return; };
+    if level < 0 || level > MAX_TEXTURE_LEVEL || xoffset < 0 || yoffset < 0 || width < 0 || height < 0 || image_size < 0 { bad(&mut s, GL_INVALID_VALUE); return; }
+    let Some(expected) = compressed_image_size(width, height, 1, block) else { bad(&mut s, GL_INVALID_VALUE); return; };
+    if image_size as usize != expected { bad(&mut s, GL_INVALID_VALUE); return; }
+    if t == 0 || t as usize >= MAXTEX || !s.tex[t as usize].used { bad(&mut s, GL_INVALID_OPERATION); return; }
+    let (tw, th) = (s.tex[t as usize].w, s.tex[t as usize].h);
+    // The region must lie inside the texture, and (per the compressed sub-image rule) each offset and
+    // each extent must be a multiple of 4 unless the extent reaches the texture edge.
+    let x_edge = xoffset.checked_add(width).is_some_and(|v| v == tw);
+    let y_edge = yoffset.checked_add(height).is_some_and(|v| v == th);
+    if xoffset.checked_add(width).is_none_or(|v| v > tw) || yoffset.checked_add(height).is_none_or(|v| v > th)
+        || xoffset % 4 != 0 || yoffset % 4 != 0 || (width % 4 != 0 && !x_edge) || (height % 4 != 0 && !y_edge) {
+        bad(&mut s, GL_INVALID_OPERATION); return;
+    }
+    // Validated; payload undecoded (parity-preserving no-op on success).
+}
 
 /// `glReleaseShaderCompiler` / `glShaderBinary` — no online shader-binary path (gl_shim.c no-ops). The
 /// shim advertises no binary formats, so a conformant app compiles from source via `glShaderSource`.
@@ -3330,13 +3405,55 @@ pub extern "C" fn glGetVertexAttribIuiv(_index: u32, _pname: u32, params: *mut u
     }
 }
 
-// ---- compressed / 3D-copy texture (not decoded by the executor; no-op, as gl_shim.c) ----
+// ---- compressed / 3D-copy texture (payload not decoded by the executor; validated then no-op) ----
+
+/// `glCompressedTexImage3D` — ATOMIC, CHECKED 2D-array / 3D compressed upload. Same format/level/border/
+/// `imageSize` rules as the 2D path, extended over `depth`:
+///   * unsupported target (only `GL_TEXTURE_2D_ARRAY` / `GL_TEXTURE_3D`) / non-compressed format
+///     → `GL_INVALID_ENUM`
+///   * bad level / border≠0 / negative dims / `imageSize` ≠ `ceil(w/4)*ceil(h/4)*depth*block`
+///     → `GL_INVALID_VALUE`
+///   * no live texture / immutable → `GL_INVALID_OPERATION`
+/// Payload undecoded (parity-preserving no-op on success).
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn glCompressedTexImage3D(_target: u32, _level: i32, _internalformat: u32, _width: i32, _height: i32, _depth: i32, _border: i32, _image_size: i32, _data: *const c_void) {}
+pub extern "C" fn glCompressedTexImage3D(target: u32, level: i32, internalformat: u32, width: i32, height: i32, depth: i32, border: i32, image_size: i32, _data: *const c_void) {
+    let mut s = gl();
+    let bad = |s: &mut crate::state::GlState, e| if s.error == GL_NO_ERROR { s.error = e; };
+    let t = s.bound_tex();
+    if target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D { bad(&mut s, GL_INVALID_ENUM); return; }
+    let Some(block) = compressed_block_bytes(internalformat) else { bad(&mut s, GL_INVALID_ENUM); return; };
+    if level < 0 || level > MAX_TEXTURE_LEVEL || border != 0 || width < 0 || height < 0 || depth < 0 || image_size < 0 { bad(&mut s, GL_INVALID_VALUE); return; }
+    let Some(expected) = compressed_image_size(width, height, depth, block) else { bad(&mut s, GL_INVALID_VALUE); return; };
+    if image_size as usize != expected { bad(&mut s, GL_INVALID_VALUE); return; }
+    if t == 0 || t as usize >= MAXTEX || !s.tex[t as usize].used { bad(&mut s, GL_INVALID_OPERATION); return; }
+    if s.tex[t as usize].immutable { bad(&mut s, GL_INVALID_OPERATION); return; }
+    // Validated; payload undecoded (parity-preserving no-op on success).
+}
+
+/// `glCompressedTexSubImage3D` — ATOMIC, CHECKED 2D-array / 3D compressed sub-image (block-aligned,
+/// in-bounds region; same error taxonomy as the 2D sub-image). Payload undecoded on success.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn glCompressedTexSubImage3D(_target: u32, _level: i32, _xoffset: i32, _yoffset: i32, _zoffset: i32, _width: i32, _height: i32, _depth: i32, _format: u32, _image_size: i32, _data: *const c_void) {}
+pub extern "C" fn glCompressedTexSubImage3D(target: u32, level: i32, xoffset: i32, yoffset: i32, zoffset: i32, width: i32, height: i32, depth: i32, format: u32, image_size: i32, _data: *const c_void) {
+    let mut s = gl();
+    let bad = |s: &mut crate::state::GlState, e| if s.error == GL_NO_ERROR { s.error = e; };
+    let t = s.bound_tex();
+    if target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D { bad(&mut s, GL_INVALID_ENUM); return; }
+    let Some(block) = compressed_block_bytes(format) else { bad(&mut s, GL_INVALID_ENUM); return; };
+    if level < 0 || level > MAX_TEXTURE_LEVEL || xoffset < 0 || yoffset < 0 || zoffset < 0 || width < 0 || height < 0 || depth < 0 || image_size < 0 { bad(&mut s, GL_INVALID_VALUE); return; }
+    let Some(expected) = compressed_image_size(width, height, depth, block) else { bad(&mut s, GL_INVALID_VALUE); return; };
+    if image_size as usize != expected { bad(&mut s, GL_INVALID_VALUE); return; }
+    if t == 0 || t as usize >= MAXTEX || !s.tex[t as usize].used { bad(&mut s, GL_INVALID_OPERATION); return; }
+    let (tw, th) = (s.tex[t as usize].w, s.tex[t as usize].h);
+    let x_edge = xoffset.checked_add(width).is_some_and(|v| v == tw);
+    let y_edge = yoffset.checked_add(height).is_some_and(|v| v == th);
+    if xoffset.checked_add(width).is_none_or(|v| v > tw) || yoffset.checked_add(height).is_none_or(|v| v > th)
+        || xoffset % 4 != 0 || yoffset % 4 != 0 || (width % 4 != 0 && !x_edge) || (height % 4 != 0 && !y_edge) {
+        bad(&mut s, GL_INVALID_OPERATION); return;
+    }
+    // Validated; payload undecoded (parity-preserving no-op on success).
+}
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCopyTexSubImage3D(_target: u32, _level: i32, _xoffset: i32, _yoffset: i32, _zoffset: i32, _x: i32, _y: i32, _width: i32, _height: i32) {}

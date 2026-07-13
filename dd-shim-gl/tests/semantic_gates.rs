@@ -148,6 +148,68 @@ fn readpixels_validates_pack_layout_and_preserves_output() {
     gles::glDeleteTextures(1, &tex);
 }
 
+// ---- gles_pixel_store_and_texture_upload_validation_is_atomic_and_checked (compressed/3D) --------
+
+#[test]
+fn compressed_texture_upload_is_atomically_validated() {
+    let _serial = serial_guard();
+    while gles::glGetError() != GL_NO_ERROR {}
+    const ETC2_RGB8: u32 = 0x9274; // 8 bytes / 4x4 block
+    const ETC2_RGBA8: u32 = 0x9278; // 16 bytes / 4x4 block
+
+    let mut tex = 0;
+    gles::glGenTextures(1, &mut tex);
+    gles::glBindTexture(GL_TEXTURE_2D, tex);
+    // A defined 8x8 RGBA8 base gives the sub-image bounds/atomicity checks something to reference.
+    gles::glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA as i32, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    let gen0 = gles::texture_generation(tex);
+
+    // Non-compressed internalformat → GL_INVALID_ENUM.
+    gles::glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 8, 8, 0, 128, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM);
+    // Wrong imageSize (8x8 ETC2-RGB8 must be ceil(8/4)*ceil(8/4)*8 = 32) → GL_INVALID_VALUE.
+    gles::glCompressedTexImage2D(GL_TEXTURE_2D, 0, ETC2_RGB8, 8, 8, 0, 31, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    // border != 0 → GL_INVALID_VALUE.
+    gles::glCompressedTexImage2D(GL_TEXTURE_2D, 0, ETC2_RGB8, 8, 8, 1, 32, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+    // Correct 8x8 ETC2-RGB8 (32 bytes) and 4x4 ETC2-RGBA8 (16 bytes) uploads are accepted.
+    gles::glCompressedTexImage2D(GL_TEXTURE_2D, 0, ETC2_RGB8, 8, 8, 0, 32, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    gles::glCompressedTexImage2D(GL_TEXTURE_2D, 0, ETC2_RGBA8, 4, 4, 0, 16, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+
+    // No live texture bound → GL_INVALID_OPERATION.
+    gles::glBindTexture(GL_TEXTURE_2D, 0);
+    gles::glCompressedTexImage2D(GL_TEXTURE_2D, 0, ETC2_RGB8, 8, 8, 0, 32, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION);
+    gles::glBindTexture(GL_TEXTURE_2D, tex);
+
+    // Sub-image: interior offset not a multiple of 4 → GL_INVALID_OPERATION.
+    gles::glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 2, 0, 4, 4, ETC2_RGB8, 8, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION);
+    // Sub-image out of bounds (8 + 4 > 8) → GL_INVALID_OPERATION.
+    gles::glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 8, 0, 4, 4, ETC2_RGB8, 8, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_OPERATION);
+    // Valid block-aligned in-bounds sub-image (4x4 at (4,4), 8 bytes) accepted.
+    gles::glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 4, 4, 4, 4, ETC2_RGB8, 8, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+
+    // 3D: a 2D target is rejected for the array/3D entry point → GL_INVALID_ENUM.
+    gles::glCompressedTexImage3D(GL_TEXTURE_2D, 0, ETC2_RGBA8, 4, 4, 2, 0, 32, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_ENUM);
+    // Correct 4x4x2 ETC2-RGBA8 (16 * 2 = 32) on the array target; wrong size rejected.
+    gles::glCompressedTexImage3D(GL_TEXTURE_2D_ARRAY, 0, ETC2_RGBA8, 4, 4, 2, 0, 32, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_NO_ERROR);
+    gles::glCompressedTexImage3D(GL_TEXTURE_2D_ARRAY, 0, ETC2_RGBA8, 4, 4, 2, 0, 33, core::ptr::null());
+    assert_eq!(gles::glGetError(), GL_INVALID_VALUE);
+
+    // Atomicity: no rejected (or undecoded) compressed upload mutated the base texture's storage.
+    assert_eq!(gles::texture_generation(tex), gen0, "a compressed upload perturbed texture storage");
+    gles::glDeleteTextures(1, &tex);
+}
+
 fn linked_test_program() -> u32 {
     fn compile(kind: u32, source: &str) -> u32 {
         let shader = gles::glCreateShader(kind);
