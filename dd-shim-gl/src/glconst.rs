@@ -40,6 +40,10 @@ pub const GL_UNSIGNED_SHORT: u32 = 0x1403;
 pub const GL_INT: u32 = 0x1404;
 pub const GL_UNSIGNED_INT: u32 = 0x1405;
 pub const GL_FLOAT: u32 = 0x1406;
+/// ES3 half-precision (16-bit) float vertex/pixel type. GTK4's GskGL renderer packs its vertex data as
+/// `GL_HALF_FLOAT` (`node.glsl` / `gskglprograms`), so the vertex-format lowering must carry it distinctly
+/// (not collapse it to 32-bit `GL_FLOAT`) for the Metal vertex descriptor to fetch 2-byte halves.
+pub const GL_HALF_FLOAT: u32 = 0x140B;
 
 // primitive topology + clear mask
 pub const GL_TRIANGLES: u32 = 0x0004;

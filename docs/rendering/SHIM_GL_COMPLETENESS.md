@@ -407,9 +407,36 @@ GL stubs raise `GL_INVALID_OPERATION`; EGL stubs raise `EGL_BAD_ACCESS`. Remaini
   `eglCreatePixmapSurface`, `eglBindTexImage`, …): reported as a *lower coherent EGL surface* (truthful
   failure) per audit section 2.1, rather than gl_shim.c's fake success handles.
 
-## GLES 3.0 assessment (cross-cutting)
+## GLES 3.0 assessment — GskGL / GPU-accelerated GTK4 (cross-cutting)
 
-GTK4's `GskGLRenderer` needs an ES3 context + half-float vertex data. The guest advertises ES3 under
-`DD_SHIM_ES3`; making it real still requires host-side work (a coordinated dd-gpu `VertexFormat`
-half-float addition + Metal descriptor) and the remaining ES3 stub families above. Until then the shim
-advertises ES2 by default (GTK falls back to software, correctly).
+GTK4's `GskGLRenderer` needs (1) an ES3 context, (2) half-float vertex data, and (3) its ES3 GLSL
+shaders to translate to MSL. Status of each:
+
+- **(2) Half-float vertex format — DONE.** `GL_HALF_FLOAT` (0x140B) now lowers distinctly instead of
+  collapsing to 32-bit `GL_FLOAT`: the vertex-format wire encoding carries a new `kind = 7`
+  (`wireenc::vertex_format_wire`, byte-parity with `gl_shim.c`'s `vertex_format_wire` +
+  `attr_elem_size` + the half→float attribute readback, both extended in lockstep), and the Metal
+  executor maps `kind 7 → MTLVertexFormat::Half{,2,3,4}` (`dd-display::metal_backend::metal_vertex_format`),
+  which Metal fetches natively into the shader's `float` inputs (no shader change). Gated by
+  `wireenc … vertex_format_wire_matches_c_shim`. The software oracle records draws rather than
+  rasterizing vertex fetch (see the software-draw residual), so half-float there is moot until software
+  rasterization lands.
+- **(3) ES3 GLSL→MSL translation — the PRIMARY remaining blocker, narrowed to std140 UBO blocks.**
+  `translate.rs` (a byte-for-byte port of `gl_shim.c`'s translator) already handles most ES3 syntax
+  GskGL uses: `in`/`out` stage I/O (collected alongside `attribute`/`varying`), a user `out vec4`
+  fragment output, and the `texture()` built-in (not just `texture2D()`); `#version 300 es` is
+  effectively ignored (the MSL header is rebuilt). The specific gap is **`layout(std140) uniform Block {
+  … }` blocks**: the uniform collector expects `uniform TYPE name;`, so on a block it reads the block
+  name as the type and a member list starting with `{` — the block and all its members are silently
+  dropped, and `layout(...)` qualifiers are not parsed. GskGL binds its per-node state through std140
+  UBOs, so its programs lose all their uniforms and cannot render. Closing this needs a std140
+  uniform-block parsing pass (block detection, member enumeration, std140 offset assignment, the MSL
+  struct + `[[buffer(N)]]` binding) added to BOTH `gl_shim.c` and `translate.rs` in lockstep, plus a
+  `translate_parity` corpus case — a substantial, byte-parity-sensitive translator effort.
+- **(1) ES3 context** is a `DD_SHIM_ES3` opt-in; advertising ES3 by default is gated on (3) so GTK does
+  not select GskGL and then fail to compile a shader (it correctly falls back to the software cairo
+  renderer today).
+
+So the two prerequisites the vertex path needed — the ES3 object families (VAO/UBO/sampler/query/TF,
+above) and half-float vertex format — are now real; the remaining gap to a GPU-accelerated GskGL GTK4
+window is the ES3 GLSL→MSL translator.

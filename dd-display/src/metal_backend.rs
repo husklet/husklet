@@ -165,6 +165,14 @@ fn metal_vertex_format(format: u32) -> MTLVertexFormat {
             3 => MTLVertexFormat::Int3,
             _ => MTLVertexFormat::Int4,
         },
+        // ES3 GL_HALF_FLOAT (GskGL vertex data): 16-bit floats. Metal fetches them natively into the
+        // shader's `float` inputs, so no shader change is needed — only the vertex descriptor's format.
+        7 => match comps {
+            1 => MTLVertexFormat::Half,
+            2 => MTLVertexFormat::Half2,
+            3 => MTLVertexFormat::Half3,
+            _ => MTLVertexFormat::Half4,
+        },
         _ => match comps {
             1 => MTLVertexFormat::Float,
             2 => MTLVertexFormat::Float2,

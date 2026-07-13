@@ -116,6 +116,7 @@ typedef intptr_t GLsizeiptr;
 #define GL_ARRAY_BUFFER 0x8892
 #define GL_ELEMENT_ARRAY_BUFFER 0x8893
 #define GL_FLOAT 0x1406
+#define GL_HALF_FLOAT 0x140B
 #define GL_BYTE 0x1400
 #define GL_UNSIGNED_BYTE 0x1401
 #define GL_SHORT 0x1402
@@ -552,6 +553,7 @@ static uint32_t vertex_format_wire(GLenum type, int comps, int normalized, int i
         case GL_SHORT: kind = 4; break;
         case GL_UNSIGNED_INT: kind = 5; break;
         case GL_INT: kind = 6; break;
+        case GL_HALF_FLOAT: kind = 7; break; /* ES3 16-bit float (GskGL); host maps kind 7 → half */
         case GL_FLOAT:
         default: kind = 0; break;
     }
@@ -3038,7 +3040,28 @@ static int read_draw_index(const struct draw_call *d, int n, uint32_t *out) {
 }
 static size_t attr_elem_size(GLenum type) {
     return (type == GL_FLOAT || type == GL_UNSIGNED_INT || type == GL_INT) ? 4u :
-           (type == GL_UNSIGNED_SHORT || type == GL_SHORT) ? 2u : 1u;
+           (type == GL_UNSIGNED_SHORT || type == GL_SHORT || type == GL_HALF_FLOAT) ? 2u : 1u;
+}
+/* IEEE-754 binary16 → binary32 (for GL_HALF_FLOAT vertex attribute readback). */
+static float half_to_float(uint16_t h) {
+    uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1F, man = h & 0x3FF, bits;
+    if (exp == 0) {
+        if (man == 0) bits = sign; /* ±0 */
+        else { /* subnormal → normalized float */
+            exp = 127 - 15 + 1;
+            while (!(man & 0x400)) { man <<= 1; exp--; }
+            man &= 0x3FF;
+            bits = sign | (exp << 23) | (man << 13);
+        }
+    } else if (exp == 0x1F) {
+        bits = sign | 0x7F800000u | (man << 13); /* inf/nan */
+    } else {
+        bits = sign | ((exp - 15 + 127) << 23) | (man << 13);
+    }
+    float f;
+    memcpy(&f, &bits, 4);
+    return f;
 }
 static int draw_vbo_snapshot_index(const struct draw_call *d, GLuint src) {
     if (!d || src == 0) return -1;
@@ -3144,6 +3167,7 @@ static int read_attr_float(const struct attr *a, uint32_t vertex, int comp, floa
     else if (a->type == GL_SHORT) { int16_t v; memcpy(&v, p, 2); *out = a->normalized ? (float)v / 32767.0f : (float)v; }
     else if (a->type == GL_UNSIGNED_INT) { uint32_t v; memcpy(&v, p, 4); *out = (float)v; }
     else if (a->type == GL_INT) { int32_t v; memcpy(&v, p, 4); *out = (float)v; }
+    else if (a->type == GL_HALF_FLOAT) { uint16_t h; memcpy(&h, p, 2); *out = half_to_float(h); }
     else return 0;
     return 1;
 }

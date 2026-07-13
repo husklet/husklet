@@ -82,6 +82,7 @@ pub fn vertex_format_wire(kind_enum: u32, comps: i32, normalized: bool, integer:
         GL_SHORT => 4,
         GL_UNSIGNED_INT => 5,
         GL_INT => 6,
+        GL_HALF_FLOAT => 7, // ES3 16-bit float (GskGL vertex data); executor maps kind 7 → MTLVertexFormat::HalfN
         _ => 0, // GL_FLOAT and unknown
     };
     comps | (kind << 8) | ((normalized as u32) << 16) | ((integer as u32) << 17)
@@ -165,6 +166,9 @@ mod tests {
         assert_eq!(vertex_format_wire(GL_UNSIGNED_BYTE, 4, true, false), 4 | (1 << 8) | (1 << 16));
         // int2 integer.
         assert_eq!(vertex_format_wire(GL_INT, 2, false, true), 2 | (6 << 8) | (1 << 17));
+        // half2 / half4 (GskGL vertex data) → kind 7, matching gl_shim.c's vertex_format_wire.
+        assert_eq!(vertex_format_wire(GL_HALF_FLOAT, 2, false, false), 2 | (7 << 8));
+        assert_eq!(vertex_format_wire(GL_HALF_FLOAT, 4, false, false), 4 | (7 << 8));
         // comps clamp.
         assert_eq!(vertex_format_wire(GL_FLOAT, 9, false, false), 4);
         assert_eq!(vertex_format_wire(GL_FLOAT, 0, false, false), 1);
