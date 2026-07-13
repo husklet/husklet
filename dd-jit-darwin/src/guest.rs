@@ -108,12 +108,11 @@ fn resolve_bundled(name: &str, baked: &str) -> Option<String> {
     }
 }
 
-/// True if the JIT binary for `guest` was built and exists.
+/// True if the JIT binary for `guest` was built and exists. Defers to [`Guest::jit_path`], which
+/// existence-checks every candidate before returning it (see [`resolve_bundled`]) — so a `Some`
+/// path is already known to exist, and no second check is needed here.
 pub fn available(guest: Guest) -> bool {
-    guest
-        .jit_path()
-        .map(|p| Path::new(&p).exists())
-        .unwrap_or(false)
+    guest.jit_path().is_some()
 }
 
 #[cfg(test)]
