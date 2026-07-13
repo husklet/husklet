@@ -70,6 +70,39 @@ impl ReplayLimits {
 }
 
 fn texture_bytes(d: &TextureDesc) -> Result<u64> {
+    use crate::ir::TextureDim;
+
+    if d.width == 0 || d.height == 0 || d.depth == 0 {
+        return Err(GpuError::ResourceLimit("zero texture dimension"));
+    }
+    if d.mip_levels == 0 {
+        return Err(GpuError::ResourceLimit("zero texture mip levels"));
+    }
+    if d.sample_count == 0 {
+        return Err(GpuError::ResourceLimit("zero texture sample count"));
+    }
+    match d.dim {
+        TextureDim::D1 if d.height != 1 || d.sample_count != 1 => {
+            return Err(GpuError::ResourceLimit("invalid 1D texture shape"));
+        }
+        TextureDim::D2 => {}
+        TextureDim::D3 if d.sample_count != 1 => {
+            return Err(GpuError::ResourceLimit("invalid 3D texture sample count"));
+        }
+        TextureDim::Cube if d.width != d.height || d.depth % 6 != 0 || d.sample_count != 1 => {
+            return Err(GpuError::ResourceLimit("invalid cube texture shape"));
+        }
+        _ => {}
+    }
+    let max_mip_dimension = match d.dim {
+        TextureDim::D1 => d.width,
+        TextureDim::D2 | TextureDim::Cube => d.width.max(d.height),
+        TextureDim::D3 => d.width.max(d.height).max(d.depth),
+    };
+    let max_mips = u32::BITS - max_mip_dimension.leading_zeros();
+    if d.mip_levels > max_mips {
+        return Err(GpuError::ResourceLimit("texture mip levels exceed dimensions"));
+    }
     let texel = d
         .format
         .bytes_per_texel()
@@ -89,7 +122,9 @@ fn texture_bytes(d: &TextureDesc) -> Result<u64> {
         total = total.checked_add(level).ok_or(GpuError::ResourceLimit("texture footprint overflow"))?;
         w >>= 1;
         h >>= 1;
-        depth >>= 1;
+        if d.dim == TextureDim::D3 {
+            depth >>= 1;
+        }
     }
     Ok(total)
 }
@@ -279,7 +314,7 @@ mod tests {
             height: u32::MAX,
             depth: u32::MAX,
             mip_levels: 1,
-            sample_count: u32::MAX,
+            sample_count: 1,
             dim: crate::ir::TextureDim::D3,
             format: crate::ir::TextureFormat::Rgba8Unorm,
             usage: 0,
@@ -313,5 +348,70 @@ mod tests {
         );
         assert!(backend.log.is_empty(), "limit rejection happened before backend mutation");
         assert_eq!(budget.totals, Totals::default());
+    }
+
+    fn texture_desc(dim: crate::ir::TextureDim) -> TextureDesc {
+        TextureDesc {
+            width: 4,
+            height: 4,
+            depth: 3,
+            mip_levels: 3,
+            sample_count: 1,
+            dim,
+            format: crate::ir::TextureFormat::Rgba8Unorm,
+            usage: 0,
+            label: String::new(),
+        }
+    }
+
+    #[test]
+    fn d2_array_layers_stay_constant_while_d3_depth_halves_per_mip() {
+        let d2 = texture_desc(crate::ir::TextureDim::D2);
+        assert_eq!(texture_bytes(&d2).unwrap(), (4 * 4 + 2 * 2 + 1) * 3 * 4);
+
+        let mut d3 = texture_desc(crate::ir::TextureDim::D3);
+        d3.depth = 4;
+        assert_eq!(texture_bytes(&d3).unwrap(), (4 * 4 * 4 + 2 * 2 * 2 + 1) * 4);
+    }
+
+    #[test]
+    fn zero_and_invalid_texture_shapes_are_rejected_before_charge() {
+        let base = texture_desc(crate::ir::TextureDim::D2);
+        for (mut desc, expected) in [
+            ({ let mut d = base.clone(); d.width = 0; d }, "zero texture dimension"),
+            ({ let mut d = base.clone(); d.height = 0; d }, "zero texture dimension"),
+            ({ let mut d = base.clone(); d.depth = 0; d }, "zero texture dimension"),
+            ({ let mut d = base.clone(); d.mip_levels = 0; d }, "zero texture mip levels"),
+            ({ let mut d = base.clone(); d.sample_count = 0; d }, "zero texture sample count"),
+            ({ let mut d = base.clone(); d.mip_levels = 4; d }, "texture mip levels exceed dimensions"),
+            ({ let mut d = base.clone(); d.dim = crate::ir::TextureDim::D1; d }, "invalid 1D texture shape"),
+            ({ let mut d = base.clone(); d.dim = crate::ir::TextureDim::Cube; d.depth = 5; d }, "invalid cube texture shape"),
+        ] {
+            assert_eq!(texture_bytes(&desc), Err(GpuError::ResourceLimit(expected)));
+            desc.label.clear();
+        }
+    }
+
+    #[test]
+    fn texture_global_exact_boundary_and_plus_one_are_atomic() {
+        let mut l = limits(1024, 4);
+        l.caps.max_buffer_bytes = 1024;
+        let global = GlobalBudget::new(252, 4);
+        let mut exact = ExecutorBudget::new(l.clone(), global.clone());
+        exact.preflight(64, &[Cmd::CreateTexture(1, texture_desc(crate::ir::TextureDim::D2))])
+            .expect("exact global texture byte boundary");
+
+        let mut over = ExecutorBudget::new(l, global);
+        let before = over.totals;
+        assert_eq!(
+            over.preflight(64, &[Cmd::CreateBuffer(2, BufferDesc {
+                size: 1,
+                usage: buffer_usage::COPY_DST,
+                label: String::new(),
+            })]),
+            Err(GpuError::ResourceLimit("global residency"))
+        );
+        assert_eq!(over.totals, before, "global +1 rejection did not partially charge connection");
+        assert_eq!(exact.totals, Totals { bytes: 252, objects: 1 });
     }
 }
