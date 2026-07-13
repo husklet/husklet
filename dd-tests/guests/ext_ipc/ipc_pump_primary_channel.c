@@ -60,8 +60,10 @@
 
 #define CH_NODE 3      // primordial node channel — child end, placed by the parent at a fixed fd (Mojo launch)
 #define ROUNDS  12000  // messages the browser streams over the primary channel
-#define NFILLER 1200   // idle watched fds on the SAME epoll — the high-fd regime (>=1024)
-#define CHURN   96     // fds the churn thread cycles ADD/DEL on the live epoll
+#define NFILLER 3000   // idle watched fds on the SAME epoll — the high-fd regime (>=1024)
+#define CHURN   96     // fds each churn thread cycles ADD/DEL on the live epoll
+#define NCHURN  2      // concurrent churn threads (more changelist pressure on the live instance)
+#define REARM   37     // every Nth message, StopWatch->Watch the primary (DEL+ADD) racing pending data
 #define MSGSZ   8      // one primary-channel message = an 8-byte sequence number
 
 static int g_primary;                 // SCM_RIGHTS-received SOCK_STREAM (the Mojo primary channel)
@@ -208,9 +210,9 @@ static int child_main(void) {
     struct epoll_event we = {.events = EPOLLIN, .data.fd = g_waitable};
     epoll_ctl(g_main_ep, EPOLL_CTL_ADD, g_waitable, &we);
 
-    pthread_t mp, ch, wd;
+    pthread_t mp, ch[NCHURN], wd;
     pthread_create(&mp, NULL, main_pump, NULL);
-    pthread_create(&ch, NULL, churn_thread, NULL);
+    for (int i = 0; i < NCHURN; i++) pthread_create(&ch[i], NULL, churn_thread, NULL);
     pthread_create(&wd, NULL, watchdog, NULL);
 
     // Tell the browser the primary channel is received + armed and both pumps are up.
@@ -240,10 +242,21 @@ static int child_main(void) {
                 if (r < 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) continue; return 28; }
                 long msgs = r / MSGSZ;
                 if (msgs <= 0) msgs = 0;
-                atomic_fetch_add(&g_recvd, msgs);
+                long total = atomic_fetch_add(&g_recvd, msgs) + msgs;
                 // Cross-thread WaitableEvent signal (IO -> main): one unit per decoded message.
                 uint64_t add = (uint64_t)msgs;
                 if (add && write(g_waitable, &add, 8) != 8) return 29;
+                // base::MessagePumpEpoll StopWatch -> Watch: periodically DE-register then RE-register the
+                // RECEIVED primary channel. Because we read only ONE syscall's worth per wake (level pump)
+                // and the browser bursts, the socket buffer is often NON-EMPTY at this point — so the re-ADD
+                // of an already-readable SCM_RIGHTS-received socket MUST re-prime level readiness (the exact
+                // "readiness never re-armed after the handle lands" hypothesis, now on RE-registration under
+                // the high-fd + concurrent-ctl load). A lost prime parks the pump with data pending.
+                if (total % REARM == 0) {
+                    epoll_ctl(g_io_ep, EPOLL_CTL_DEL, g_primary, NULL);
+                    struct epoll_event re = {.events = EPOLLIN, .data.fd = g_primary};
+                    if (epoll_ctl(g_io_ep, EPOLL_CTL_ADD, g_primary, &re) != 0) return 31;
+                }
             }
         }
     }
@@ -308,6 +321,14 @@ int main(int argc, char **argv) {
         ssize_t w = write(primary[0], msg, MSGSZ);
         if (w != MSGSZ) { perror("parent write primary"); return 4; }
         sent++;
+        // occasional 2-message burst: guarantees the socket buffer is NON-EMPTY when the IO pump (one read
+        // per level wake) hits its StopWatch->Watch window, so the re-ADD must re-prime a readable socket.
+        if (phase == 1 && i + 1 < ROUNDS) {
+            i++;
+            memcpy(msg, &i, MSGSZ);
+            if (write(primary[0], msg, MSGSZ) != MSGSZ) { perror("parent burst write"); return 4; }
+            sent++;
+        }
         // drain any pending ACK bytes (backpressure): keep outstanding bounded
         char a[64];
         ssize_t ar = read(node[0], a, sizeof a);
