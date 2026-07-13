@@ -435,6 +435,9 @@ pub extern "C" fn vkQueueSubmit(
     }
     let submits = unsafe { core::slice::from_raw_parts(p_submits, submit_count as usize) };
     let mut s = reg::lock();
+    // Flush persistently-mapped HOST_COHERENT buffers (vkcube writes its rotating MVP UBO every frame
+    // without unmapping) so the host sees this frame's uniform data before the draw replays.
+    s.flush_mapped();
     // Present replay is synchronous on the host, and the Metal executor does not model fence objects,
     // so we never signal a fence in the shipped IR (the guest fence/wait is a no-op below).
     let signal: Option<(u32, u64)> = None;

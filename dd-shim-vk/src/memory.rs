@@ -158,6 +158,7 @@ pub extern "C" fn vkAllocateMemory(
         MemRec {
             data: vec![0u8; ai.allocation_size as usize],
             bound_buffer: None,
+            mapped: false,
         },
     );
     *out = handle;
@@ -211,6 +212,7 @@ pub extern "C" fn vkMapMemory(
     let Some(m) = s.memories.get_mut(&memory) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
+    m.mapped = true;
     *out = unsafe { m.data.as_mut_ptr().add(offset as usize) } as *mut c_void;
     VK_SUCCESS
 }
@@ -220,6 +222,7 @@ pub extern "C" fn vkMapMemory(
 #[no_mangle]
 pub extern "C" fn vkUnmapMemory(_device: VkDevice, memory: VkDeviceMemory) {
     let mut s = reg::lock();
+    if let Some(m) = s.memories.get_mut(&memory) { m.mapped = false; }
     let Some(m) = s.memories.get(&memory) else {
         return;
     };

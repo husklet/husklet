@@ -37,6 +37,10 @@ pub struct BufferRec {
 pub struct MemRec {
     pub data: Vec<u8>,
     pub bound_buffer: Option<u64>,
+    /// Currently mapped (vkMapMemory without vkUnmapMemory). HOST_COHERENT memory is often mapped
+    /// persistently and written every frame WITHOUT an unmap (vkcube's rotating MVP uniform buffer),
+    /// so such buffers must be re-uploaded to the host each submit — see `flush_mapped` at vkQueueSubmit.
+    pub mapped: bool,
 }
 
 pub struct ShaderRec {
@@ -168,6 +172,26 @@ impl VkState {
     /// Append a resource-level IR command to the log.
     pub fn record(&mut self, cmd: Cmd) {
         self.ir_log.push(cmd);
+    }
+
+    /// Re-upload every currently-mapped, buffer-bound memory to the host as a `WriteBuffer` — the
+    /// per-frame flush of persistently-mapped HOST_COHERENT buffers (e.g. vkcube's rotating MVP UBO),
+    /// which are written each frame with NO vkUnmapMemory. Called at `vkQueueSubmit`.
+    pub fn flush_mapped(&mut self) {
+        let uploads: Vec<(u32, Vec<u8>)> = self
+            .memories
+            .values()
+            .filter(|m| m.mapped)
+            .filter_map(|m| {
+                let bh = m.bound_buffer?;
+                let b = self.buffers.get(&bh)?;
+                let n = (b.size as usize).min(m.data.len());
+                Some((b.ir_id, m.data[..n].to_vec()))
+            })
+            .collect();
+        for (id, data) in uploads {
+            self.ir_log.push(Cmd::WriteBuffer { id, offset: 0, data });
+        }
     }
 }
 
