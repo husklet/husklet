@@ -131,6 +131,53 @@ fn vs(@builtin(vertex_index) vi: u32) -> VOut {
 fn fs(i: VOut) -> @location(0) vec4<f32> { return textureSample(src, samp, i.uv); }
 "#;
 
+// Multisample resolve: average all samples of a `texture_multisampled_2d` source into a single-sampled
+// dest region. `off.xy` carries `src_origin - dst_origin`, so a fragment at dest pixel `pos` reads the
+// source texel `pos + off`. The viewport/scissor clip output to the dest region; other dest texels keep
+// their loaded contents. `textureNumSamples` gives the sample count at runtime, so one pipeline per dest
+// format handles 2x/4x/8x. The plain arithmetic mean matches `VkCmdResolveImage` VK_RESOLVE_MODE_AVERAGE
+// and the software oracle's sample averaging — the same fallback `MVKCmdResolveImage` uses when Metal's
+// fixed-function attachment resolve cannot express the (offset / standalone-texture) case.
+const RESOLVE_WGSL: &str = r#"
+struct R { off: vec4<i32> };
+@group(0) @binding(0) var<uniform> r: R;
+@group(0) @binding(1) var src: texture_multisampled_2d<f32>;
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(-1.0, 1.0), vec2<f32>(3.0, 1.0));
+    return vec4<f32>(p[vi], 0.0, 1.0);
+}
+@fragment
+fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let sc = vec2<i32>(i32(pos.x), i32(pos.y)) + r.off.xy;
+    let n = i32(textureNumSamples(src));
+    var acc = vec4<f32>(0.0);
+    for (var s: i32 = 0; s < n; s = s + 1) {
+        acc = acc + textureLoad(src, sc, s);
+    }
+    return acc / f32(max(n, 1));
+}
+"#;
+
+// Test/interop seed for a multisampled texture: render every texel so sample `s` takes the uniform color
+// `c[s]`. Reading `@builtin(sample_index)` forces per-sample shading, so each of the target's samples is
+// written independently — the only portable way to place known, distinct per-sample data into a hardware
+// MS texture (which cannot be a copy destination). Used by the resolve conformance test to seed the exact
+// same per-sample values the software oracle's `write_texture_samples` uses.
+const SEED_WGSL: &str = r#"
+struct Samples { c: array<vec4<f32>, 8> };
+@group(0) @binding(0) var<uniform> s: Samples;
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(-1.0, 1.0), vec2<f32>(3.0, 1.0));
+    return vec4<f32>(p[vi], 0.0, 1.0);
+}
+@fragment
+fn fs(@builtin(sample_index) si: u32) -> @location(0) vec4<f32> {
+    return s.c[si];
+}
+"#;
+
 // ---------------------------------------------------------------------------------------------------
 // enum / bit mapping helpers (IR -> wgpu)
 // ---------------------------------------------------------------------------------------------------
@@ -404,6 +451,14 @@ pub struct WgpuBackend {
     blit_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     blit_sampler_nearest: wgpu::Sampler,
     blit_sampler_linear: wgpu::Sampler,
+    /// Multisample-resolve (`Enc::ResolveTexture`) resources: a per-sample averaging module and one
+    /// single-sampled render pipeline per destination format (color-target format must match). wgpu has
+    /// no standalone-resolve primitive, so a resolve is a fullscreen pass that averages the MS source's
+    /// samples into the dest region — the general fallback `MVKCmdResolveImage` uses.
+    resolve_module: wgpu::ShaderModule,
+    resolve_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    /// Per-sample MS seed module (test/interop only — seeds known per-sample data into a MS texture).
+    seed_module: wgpu::ShaderModule,
     /// Per offscreen-target scratch textures the flip renders through (reused across frames by target id).
     flip_scratch: HashMap<u32, TexEntry>,
 
@@ -514,6 +569,14 @@ impl WgpuBackend {
             label: Some("dd-blit"),
             source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
         });
+        let resolve_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("dd-resolve"),
+            source: wgpu::ShaderSource::Wgsl(RESOLVE_WGSL.into()),
+        });
+        let seed_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("dd-ms-seed"),
+            source: wgpu::ShaderSource::Wgsl(SEED_WGSL.into()),
+        });
         let blit_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("dd-blit-samp-nearest"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -559,6 +622,9 @@ impl WgpuBackend {
             flip_sampler,
             blit_module,
             blit_pipelines: HashMap::new(),
+            resolve_module,
+            resolve_pipelines: HashMap::new(),
+            seed_module,
             blit_sampler_nearest,
             blit_sampler_linear,
             flip_scratch: HashMap::new(),
@@ -761,6 +827,121 @@ impl WgpuBackend {
         self.blit_pipelines
             .get(&wf)
             .unwrap_or_else(|| &self.blit_pipelines[&wgpu::TextureFormat::Rgba8Unorm])
+    }
+
+    /// Build a single-sampled resolve pipeline that averages a `texture_multisampled_2d` source into a
+    /// `format` color target (see `RESOLVE_WGSL`).
+    fn make_resolve_pipeline(
+        device: &wgpu::Device,
+        module: &wgpu::ShaderModule,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("dd-resolve-pipe"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(), // output is single-sampled
+            multiview: None,
+            cache: None,
+        })
+    }
+
+    fn ensure_resolve_pipeline_for(&mut self, format: TextureFormat) {
+        let wf = tex_format(format);
+        if is_depth(format) || self.resolve_pipelines.contains_key(&wf) {
+            return;
+        }
+        let p = Self::make_resolve_pipeline(&self.device, &self.resolve_module, wf);
+        self.resolve_pipelines.insert(wf, p);
+    }
+
+    fn resolve_pipeline_for(&self, format: TextureFormat) -> &wgpu::RenderPipeline {
+        let wf = tex_format(format);
+        self.resolve_pipelines
+            .get(&wf)
+            .unwrap_or_else(|| &self.resolve_pipelines[&wgpu::TextureFormat::Rgba8Unorm])
+    }
+
+    /// Test/interop: seed a multisampled texture so every texel's sample `s` holds `samples[s]` (RGBA in
+    /// 0..1). This is the only portable way to place known, distinct per-sample data into a hardware MS
+    /// texture (a MS texture cannot be a copy destination); it renders a fullscreen pass with per-sample
+    /// shading (`SEED_WGSL`). Used to seed the resolve conformance test with the SAME per-sample values the
+    /// software oracle's `write_texture_samples` uses, enabling a direct resolved-pixel parity check.
+    pub fn seed_multisample_uniform(&mut self, id: u32, samples: &[[f32; 4]]) -> Result<()> {
+        let (view, format, sample_count) = {
+            let t = self.resolve_tex(id)?;
+            (t.texture.create_view(&wgpu::TextureViewDescriptor::default()), t.format, t.texture.sample_count())
+        };
+        if sample_count <= 1 {
+            return Err(GpuError::Invalid("seed_multisample_uniform: not a multisampled texture"));
+        }
+        // Uniform block: array<vec4<f32>, 8> = 8 * 16 bytes.
+        let mut u = [0f32; 32];
+        for (i, c) in samples.iter().take(8).enumerate() {
+            u[i * 4..i * 4 + 4].copy_from_slice(c);
+        }
+        let ubuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("dd-ms-seed-u"),
+            contents: unsafe { std::slice::from_raw_parts(u.as_ptr() as *const u8, 128) },
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("dd-ms-seed-pipe"),
+            layout: None,
+            vertex: wgpu::VertexState { module: &self.seed_module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.seed_module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: tex_format(format), blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: sample_count, mask: !0, alpha_to_coverage_enabled: false },
+            multiview: None,
+            cache: None,
+        });
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("dd-ms-seed-bg"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }],
+        });
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("dd-ms-seed") });
+        {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("dd-ms-seed-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rp.set_pipeline(&pipeline);
+            rp.set_bind_group(0, &bg, &[]);
+            rp.draw(0..3, 0..1);
+        }
+        self.queue.submit([enc.finish()]);
+        Ok(())
     }
 
     fn blit_sampler(&self, filter: Filter) -> &wgpu::Sampler {
@@ -1276,6 +1457,15 @@ impl GpuBackend for WgpuBackend {
         if self.textures.contains_key(&id.0) {
             return Err(GpuError::DuplicateId { kind: "texture", id: id.0 });
         }
+        let samples = desc.sample_count.max(1);
+        // A multisampled texture in wgpu/WebGPU may only be a RENDER_ATTACHMENT and a TEXTURE_BINDING —
+        // it cannot be a copy source/dest (the usual COPY_SRC/DST the color path adds would be rejected).
+        // TEXTURE_BINDING lets it be the `texture_multisampled_2d` source of the resolve averaging pass.
+        let usage = if samples > 1 {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+        } else {
+            texture_usages(desc.usage, desc.format)
+        };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(desc.label.as_str()),
             size: wgpu::Extent3d {
@@ -1284,10 +1474,10 @@ impl GpuBackend for WgpuBackend {
                 depth_or_array_layers: desc.depth.max(1),
             },
             mip_level_count: desc.mip_levels.max(1),
-            sample_count: desc.sample_count.max(1),
+            sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format: tex_format(desc.format),
-            usage: texture_usages(desc.usage, desc.format),
+            usage,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1656,6 +1846,7 @@ impl GpuBackend for WgpuBackend {
         let mut scratch_needed: Vec<(u32, u32, u32, TextureFormat)> = Vec::new();
         let mut clear_fmts: Vec<TextureFormat> = Vec::new();
         let mut blit_fmts: Vec<TextureFormat> = Vec::new();
+        let mut resolve_fmts: Vec<TextureFormat> = Vec::new();
         for op in ops.iter() {
             match op {
                 Enc::BeginRenderPass { color, .. } => {
@@ -1676,6 +1867,10 @@ impl GpuBackend for WgpuBackend {
                     // A scaled blit renders into the dest via a per-format textured-quad pipeline.
                     blit_fmts.push(self.resolve_tex(*dst)?.format);
                 }
+                Enc::ResolveTexture { dst, .. } => {
+                    // A resolve averages the MS source into the dest via a per-format averaging pipeline.
+                    resolve_fmts.push(self.resolve_tex(*dst)?.format);
+                }
                 _ => {}
             }
         }
@@ -1684,6 +1879,9 @@ impl GpuBackend for WgpuBackend {
         }
         for f in blit_fmts {
             self.ensure_blit_pipeline_for(f);
+        }
+        for f in resolve_fmts {
+            self.ensure_resolve_pipeline_for(f);
         }
         for (id, w, h, f) in scratch_needed {
             self.ensure_flip_scratch(id, w, h, f);
@@ -1696,6 +1894,8 @@ impl GpuBackend for WgpuBackend {
         let mut clear_uniforms: HashMap<usize, (wgpu::Buffer, wgpu::BindGroup)> = HashMap::new();
         // Scaled-blit uniform (src-region mapping) + bind group (region/src/sampler), keyed by op index.
         let mut blit_binds: HashMap<usize, (wgpu::Buffer, wgpu::BindGroup)> = HashMap::new();
+        // Resolve uniform (src/dst origin delta) + bind group (offset/MS-src), keyed by op index.
+        let mut resolve_binds: HashMap<usize, (wgpu::Buffer, wgpu::BindGroup)> = HashMap::new();
         let mut cur_pipe: Option<u32> = None;
         for (k, op) in ops.iter().enumerate() {
             match op {
@@ -1799,6 +1999,32 @@ impl GpuBackend for WgpuBackend {
                         ],
                     });
                     blit_binds.insert(k, (buf, bg));
+                }
+                Enc::ResolveTexture { src, src_origin, dst, dst_origin, .. } => {
+                    // Uniform: off.xy = src_origin - dst_origin (a fragment at dest pixel p reads src p+off).
+                    let off: [i32; 4] = [
+                        src_origin.x as i32 - dst_origin.x as i32,
+                        src_origin.y as i32 - dst_origin.y as i32,
+                        0,
+                        0,
+                    ];
+                    let buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("dd-resolve-off"),
+                        contents: unsafe { std::slice::from_raw_parts(off.as_ptr() as *const u8, 16) },
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+                    let dst_fmt = self.resolve_tex(*dst)?.format;
+                    let src_view = &self.resolve_tex(*src)?.view; // default view of a MS texture is multisampled
+                    let layout = self.resolve_pipeline_for(dst_fmt).get_bind_group_layout(0);
+                    let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("dd-resolve-bg"),
+                        layout: &layout,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src_view) },
+                        ],
+                    });
+                    resolve_binds.insert(k, (buf, bg));
                 }
                 _ => {}
             }
@@ -2168,6 +2394,38 @@ impl GpuBackend for WgpuBackend {
                         rp.set_bind_group(0, bg, &[]);
                         rp.draw(0..3, 0..1);
                     }
+                }
+                Enc::ResolveTexture { dst, dst_origin, extent, .. } => {
+                    // Average the MS source's samples into the dest region: a single-sampled fullscreen
+                    // pass clipped by viewport/scissor to [dst_origin, extent); other dest texels keep
+                    // their loaded contents (LoadOp::Load). Prebuilt bind group carries the src view + offset.
+                    let dst_fmt = self.resolve_tex(*dst)?.format;
+                    let target = self.resolve_tex(*dst)?;
+                    let pipeline = self.resolve_pipeline_for(dst_fmt);
+                    let (_buf, bg) = resolve_binds.get(&i).expect("resolve bind prebuilt");
+                    let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("dd-resolve-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &target.view,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    rp.set_viewport(
+                        dst_origin.x as f32,
+                        dst_origin.y as f32,
+                        extent.width as f32,
+                        extent.height as f32,
+                        0.0,
+                        1.0,
+                    );
+                    rp.set_scissor_rect(dst_origin.x, dst_origin.y, extent.width, extent.height);
+                    rp.set_pipeline(pipeline);
+                    rp.set_bind_group(0, bg, &[]);
+                    rp.draw(0..3, 0..1);
                 }
                 Enc::BeginComputePass => {
                     let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
