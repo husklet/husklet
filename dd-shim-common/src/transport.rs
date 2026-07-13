@@ -71,10 +71,7 @@ pub struct Surface {
     /// The allocation generation for [`id`](Self::id), stamped by the host at allocation time. Because
     /// the engine recycles a macOS IOSurface id across allocations, the guest echoes this generation in
     /// the dmabuf modifier (`modifier_hi` bits 17..=31) so the compositor can reject a stale reference
-    /// (a modifier whose generation no longer matches the id's live allocation). 0 == unversioned: the
-    /// current ioctl ABI (`GpuAlloc`) does not yet carry a generation, so this is 0 until the engine's
-    /// `dd_gpu_alloc` handler sources it — at which point `from_alloc` starts propagating it and the
-    /// compositor's generation authentication engages for real guests with no wire change.
+    /// (a modifier whose generation no longer matches the id's live allocation). 0 == unversioned.
     pub generation: u32,
 }
 
@@ -86,8 +83,10 @@ impl Surface {
             height: a.height,
             stride: a.stride,
             fd: a.fd,
-            // GpuAlloc has no generation field yet (32-byte packed ioctl ABI); default to unversioned.
-            generation: 0,
+            // The engine returns the allocation generation in the `format` field on OUTPUT (it is an
+            // input-only field otherwise), keeping the 32-byte ioctl ABI unchanged. Mask to the 15-bit
+            // modifier field. 0 (an old engine / the gl_shim oracle) stays unversioned.
+            generation: a.format & 0x7fff,
         }
     }
 }

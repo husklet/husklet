@@ -688,6 +688,8 @@ pub extern "C" fn eglCreateWindowSurface(_dpy: *mut c_void, _config: *mut c_void
             s.surf.fd = a.fd;
             s.surf.width = a.width;
             s.surf.height = a.height;
+            // The engine returns the allocation generation in the alloc reply's `format` field (output).
+            s.surf.generation = a.format & 0x7fff;
         }
         if let Some(wl) = crate::wayland::Wayland::connect_and_handshake(&geom) {
             *wayland_session().lock().unwrap_or_else(|e| e.into_inner()) = Some(wl);

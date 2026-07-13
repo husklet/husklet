@@ -441,11 +441,9 @@ impl Wayland {
         self.wmsg(OBJ_DMABUF, 1, &[OBJ_PARAMS]); // zwp_linux_dmabuf_v1.create_params
         self.wflush()?;
         // params.add(fd, plane=0, offset=0, stride, mod_hi=magic|generation, mod_lo=surface id). The
-        // GL shim does not yet source a per-allocation generation from the engine, so it emits an
-        // unversioned (generation 0) modifier — byte-identical to the bare magic — via the shared
-        // encoder, which the compositor treats as legacy and accepts. Wired through `dd_modifier_hi` so
-        // it versions automatically once `state::Surface` carries the engine's generation.
-        self.wmsg(OBJ_PARAMS, 1, &[0, 0, surf.stride, dd_modifier_hi(0), surf.id]);
+        // generation (modifier_hi bits 17..=31) is the engine's per-allocation stamp from the renderD128
+        // alloc reply; the compositor rejects a stale reference whose id was recycled. 0 == unversioned.
+        self.wmsg(OBJ_PARAMS, 1, &[0, 0, surf.stride, dd_modifier_hi(surf.generation), surf.id]);
         self.wflush_fd(surf.fd)?;
         self.wmsg(OBJ_PARAMS, 3, &[OBJ_WL_BUFFER, surf.width, surf.height, DRM_FMT_XRGB8888, 0]); // create_immed
         self.wmsg(OBJ_WL_SURFACE, 1, &[OBJ_WL_BUFFER, g.attach_x as u32, g.attach_y as u32]); // attach

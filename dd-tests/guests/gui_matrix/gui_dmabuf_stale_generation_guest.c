@@ -27,7 +27,6 @@
 #define GEN_SHIFT 17u
 #define GEN_MASK 0x7fffu
 #define XRGB8888 0x34325258u
-#define IOSURF_ID 7u
 #define W 16
 #define H 8
 #define STRIDE 64u
@@ -125,6 +124,9 @@ static int make_plane_fd(void) {
 
 int main(int argc, char **argv) {
     uint32_t generation = (argc > 1) ? (uint32_t)strtoul(argv[1], NULL, 10) : 0;
+    // argv[2] = the IOSurface id to reference (default 7); lets the harness point the import at a real
+    // engine/mach-seeded id whose live generation the compositor authenticates against.
+    uint32_t iosurf_id = (argc > 2) ? (uint32_t)strtoul(argv[2], NULL, 10) : 7u;
     uint32_t mod_hi = DD_MAGIC | ((generation & GEN_MASK) << GEN_SHIFT);
 
     int fd = connect_wayland();
@@ -162,7 +164,7 @@ int main(int argc, char **argv) {
     if (plane < 0) return 5;
     if (send_bind(fd, dmabuf_name, bind_ver, dmabuf) != 0) return 6;
     if (send_create_params(fd, dmabuf, params) != 0) return 6;
-    if (send_add(fd, params, plane, mod_hi, IOSURF_ID) != 0) return 6;
+    if (send_add(fd, params, plane, mod_hi, iosurf_id) != 0) return 6;
     if (send_create(fd, params) != 0) return 6;
     close(plane);
 

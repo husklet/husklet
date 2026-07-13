@@ -15,12 +15,14 @@
 #include <stdint.h>
 #include <string.h>
 
-// The wire message: a complex message carrying one port descriptor + the surface id.
+// The wire message: a complex message carrying one port descriptor + the surface id + its allocation
+// generation. MUST match the engine's dd_gpu_msg_t in dd-jit-darwin vfs.c exactly.
 typedef struct {
     mach_msg_header_t header;
     mach_msg_body_t body;
     mach_msg_port_descriptor_t port;
     uint32_t id;
+    uint32_t generation;
 } dd_gpu_msg_t;
 
 static mach_port_t g_recv = MACH_PORT_NULL;
@@ -39,7 +41,7 @@ int dd_mach_server_start(const char *name) {
 
 // Block until one (id, IOSurface) message arrives. On success returns 0, sets *out_id and returns the
 // IOSurfaceRef as an opaque pointer (caller owns it, CFRelease when done). Non-zero = a mach/lookup error.
-int dd_mach_recv(uint32_t *out_id, void **out_surface) {
+int dd_mach_recv(uint32_t *out_id, uint32_t *out_generation, void **out_surface) {
     struct {
         dd_gpu_msg_t msg;
         mach_msg_trailer_t trailer;
@@ -49,6 +51,7 @@ int dd_mach_recv(uint32_t *out_id, void **out_surface) {
         mach_msg(&r.msg.header, MACH_RCV_MSG, 0, sizeof r, g_recv, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
     if (kr != KERN_SUCCESS) return (int)kr;
     *out_id = r.msg.id;
+    *out_generation = r.msg.generation;
     IOSurfaceRef s = IOSurfaceLookupFromMachPort(r.msg.port.name);
     mach_port_deallocate(mach_task_self(), r.msg.port.name); // done with the transferred send-right
     if (!s) return -1;

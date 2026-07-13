@@ -336,6 +336,9 @@ pub struct Surface {
     pub height: u32,
     pub stride: u32,
     pub fd: i32,
+    /// Allocation generation from the engine (renderD128 alloc reply); stamped into the dmabuf modifier
+    /// so the compositor rejects a stale reference to a recycled IOSurface id. 0 == unversioned.
+    pub generation: u32,
     pub logical_w: i32,
     pub logical_h: i32,
     pub geom_x: i32,
@@ -1080,6 +1083,7 @@ impl GlState {
             height: h,
             stride: 0,
             fd: -1,
+            generation: 0, // host-tool / DD_IR_DUMP path (no engine alloc) → unversioned
             logical_w: lw,
             logical_h: lh,
             geom_x: gx,

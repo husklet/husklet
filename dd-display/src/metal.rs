@@ -71,7 +71,11 @@ pub unsafe fn cfrelease(s: IOSurfaceRef) {
 // ---- GPU rung 2 mach-port handle bridge (see mach_bridge.c) ----
 extern "C" {
     fn dd_mach_server_start(name: *const std::os::raw::c_char) -> std::os::raw::c_int;
-    fn dd_mach_recv(out_id: *mut u32, out_surface: *mut *mut c_void) -> std::os::raw::c_int;
+    fn dd_mach_recv(
+        out_id: *mut u32,
+        out_generation: *mut u32,
+        out_surface: *mut *mut c_void,
+    ) -> std::os::raw::c_int;
     fn CFRetain(cf: *const c_void) -> *const c_void;
 }
 
@@ -109,16 +113,6 @@ fn gpu_generations() -> &'static std::sync::Mutex<std::collections::HashMap<u32,
     GPU_GENERATIONS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-/// Next generation for an id, staying in the wire's 15-bit range and never landing on 0 (reserved).
-fn next_generation(prev: u32) -> u32 {
-    let n = prev.wrapping_add(1) & 0x7fff;
-    if n == 0 {
-        1
-    } else {
-        n
-    }
-}
-
 /// The current allocation generation stamped for `id` (0 if the host is not tracking this id, e.g. a
 /// legacy `IOSurfaceLookup` fallback). Exposed for the compositor's authentication path and tests.
 pub fn iosurface_generation(id: u32) -> u32 {
@@ -138,28 +132,27 @@ pub fn start_gpu_bridge() -> bool {
     eprintln!("dd-display: GPU mach bridge listening ({svc})");
     std::thread::spawn(|| loop {
         let mut id: u32 = 0;
+        let mut generation: u32 = 0;
         let mut surf: *mut c_void = std::ptr::null_mut();
-        let rc = unsafe { dd_mach_recv(&mut id, &mut surf) };
+        let rc = unsafe { dd_mach_recv(&mut id, &mut generation, &mut surf) };
         if rc != 0 || surf.is_null() {
             if rc != 0 {
                 eprintln!("dd-display: GPU mach recv error rc={rc}");
             }
             continue;
         }
-        // Replace any prior surface for this id (release the old one) and advance the id's allocation
-        // generation so a stale guest reference (a modifier stamped with the retired generation) can be
-        // rejected at import. A first registration starts at generation 1; a replacement bumps it.
+        // Cache the id's current surface, and record the ENGINE-supplied allocation generation. The
+        // engine is the single authority: it stamps the generation at creation and bumps it on each pool
+        // re-checkout (a recycled id handed to a fresh allocation), re-announcing here. Storing the
+        // engine's value (rather than a locally-derived counter) keeps the guest's modifier generation
+        // and the compositor's authenticated generation in lockstep, so a stale reference is rejected.
         let mut m = gpu_map().lock().unwrap();
         let replaced = m.insert(id, surf as usize);
-        {
-            let mut gens = gpu_generations().lock().unwrap();
-            let entry = gens.entry(id).or_insert(0);
-            *entry = if replaced.is_some() { next_generation(*entry) } else { (*entry).max(1) };
-        }
+        gpu_generations().lock().unwrap().insert(id, generation);
         if let Some(old) = replaced {
             unsafe { cfrelease(old as IOSurfaceRef) };
         }
-        eprintln!("dd-display: GPU bridge cached IOSurface id={id}");
+        eprintln!("dd-display: GPU bridge cached IOSurface id={id} gen={generation}");
     });
     true
 }

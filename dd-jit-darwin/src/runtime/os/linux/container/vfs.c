@@ -4583,11 +4583,13 @@ typedef struct {
     mach_msg_body_t body;
     mach_msg_port_descriptor_t port;
     uint32_t id;
+    uint32_t generation; // allocation generation for `id` (0 = unversioned); the compositor stores it
+                         // and rejects a guest dmabuf whose modifier carries a stale generation.
 } dd_gpu_msg_t;
 
 // Send the IOSurface's send-right + id to dd-display's bootstrap mach service. Best-effort: if the
 // compositor isn't up (no service), silently skip — the alloc still succeeds for the guest.
-static void dd_gpu_send_port(uint32_t id, IOSurfaceRef surf) {
+static void dd_gpu_send_port(uint32_t id, uint32_t generation, IOSurfaceRef surf) {
     mach_port_t server = MACH_PORT_NULL;
     // DD_GPU_BRIDGE_NAME lets multiple dd-display instances coexist (one per agent/benchmark); the
     // compositor registers under the SAME name. Unset → the historical singleton "com.dd.display.gpu".
@@ -4611,6 +4613,7 @@ static void dd_gpu_send_port(uint32_t id, IOSurfaceRef surf) {
     msg.port.disposition = MACH_MSG_TYPE_COPY_SEND;
     msg.port.type = MACH_MSG_PORT_DESCRIPTOR;
     msg.id = id;
+    msg.generation = generation;
     mach_msg(&msg.header, MACH_SEND_MSG, sizeof msg, 0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
     mach_port_deallocate(mach_task_self(), port);   // release our COPY_SEND source ref
     mach_port_deallocate(mach_task_self(), server); // release the looked-up service port
@@ -4661,6 +4664,9 @@ static struct dd_gpu_reg_ent {
     int owner_fd;  // the render-node fd that checked this surface out, or -1 = a FREE pool surface
     int pool;      // 1 = a pre-created, VM_INHERIT_SHARE'd pool surface (never per-fd CFRelease'd)
     uint32_t id, w, h, stride;
+    uint32_t gen;  // allocation generation for this surface's id: 1 at creation, bumped on each pool
+                   // re-checkout (a fresh logical allocation reusing a recycled id). Carried to the
+                   // guest (ioctl reply) and the compositor (mach) so a stale reference is rejected.
     IOSurfaceRef surf;
     void *base;
 } g_gpu_reg[DD_GPU_REG_MAX];
@@ -4679,17 +4685,27 @@ static int dd_gpu_reg_take_pool(int fd, uint32_t w, uint32_t h) {
         if (g_gpu_reg[i].surf && g_gpu_reg[i].pool && g_gpu_reg[i].owner_fd == -1 && g_gpu_reg[i].w == w &&
             g_gpu_reg[i].h == h) {
             g_gpu_reg[i].owner_fd = fd;
+            // A re-checkout of a recycled id is a fresh logical allocation → advance the generation so a
+            // stale reference to the previous checkout is rejected. Only the non-forked path bumps: a
+            // forked child cannot re-announce the new generation to the compositor over mach (see
+            // dd_gpu_surface), so it keeps the inherited generation the compositor already knows (no
+            // versioning, but also no false rejection of the child's own frames). 15-bit field, never 0.
+            if (!g_gpu_fork_child) {
+                uint32_t g = (g_gpu_reg[i].gen + 1) & 0x7fff;
+                g_gpu_reg[i].gen = g ? g : 1;
+            }
             return i;
         }
     return -1;
 }
-static void dd_gpu_reg_add(int fd, int pool, uint32_t id, uint32_t w, uint32_t h, uint32_t stride,
-                           IOSurfaceRef surf, void *base) {
+static void dd_gpu_reg_add(int fd, int pool, uint32_t id, uint32_t gen, uint32_t w, uint32_t h,
+                           uint32_t stride, IOSurfaceRef surf, void *base) {
     for (int i = 0; i < DD_GPU_REG_MAX; i++)
         if (!g_gpu_reg[i].surf) {
             g_gpu_reg[i].owner_fd = fd;
             g_gpu_reg[i].pool = pool;
             g_gpu_reg[i].id = id;
+            g_gpu_reg[i].gen = gen;
             g_gpu_reg[i].w = w;
             g_gpu_reg[i].h = h;
             g_gpu_reg[i].stride = stride;
@@ -4787,8 +4803,8 @@ static int dd_gpu_pool_make_one(uint32_t w, uint32_t h) {
     IOSurfaceUnlock(surf, 0, NULL);
     uint32_t astride = (uint32_t)IOSurfaceGetBytesPerRow(surf);
     dd_gpu_share_inherit(base, (size_t)astride * h); // <-- make it survive fork as SHARED memory
-    dd_gpu_send_port(id, surf);                      // dd-display caches it by id for compositing
-    dd_gpu_reg_add(-1, 1, id, w, h, astride, surf, base); // free pool entry (owner_fd=-1, pool=1)
+    dd_gpu_send_port(id, 1, surf);                   // dd-display caches it by id + generation 1
+    dd_gpu_reg_add(-1, 1, id, 1, w, h, astride, surf, base); // free pool entry (owner_fd=-1, pool=1, gen=1)
     if (gpu_alloc_dbg())
         fprintf(stderr, "[gpu-alloc-dbg] pool+ %ux%u id=%u stride=%u base=%p pid=%d\n", w, h, id, astride, base,
                 (int)getpid());
@@ -4797,15 +4813,16 @@ static int dd_gpu_pool_make_one(uint32_t w, uint32_t h) {
 #endif
 
 static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint32_t *out_id,
-                          uint32_t *out_stride, void **out_base) {
+                          uint32_t *out_stride, void **out_base, uint32_t *out_gen) {
     if (w == 0 || h == 0 || w > 16384 || h > 16384) return -EINVAL;
     uint32_t stride = dd_gpu_align_u32(w * 4, 16);
     size_t size = (size_t)stride * h;
     (void)size;
     void *base = NULL;
-    uint32_t id = 0;
+    uint32_t id = 0, gen = 0;
 #ifdef __APPLE__
-    // reuse=1 (EGL shim redraw-in-place): if this fd already holds a same-size surface, return it.
+    // reuse=1 (EGL shim redraw-in-place): if this fd already holds a same-size surface, return it. Same
+    // live allocation → same generation, no re-announce.
     if (reuse) {
         int r = dd_gpu_reg_find(owner_fd, w, h);
         if (r >= 0) {
@@ -4813,6 +4830,7 @@ static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint3
             *out_id = e->id;
             *out_stride = e->stride;
             *out_base = e->base;
+            *out_gen = e->gen;
             return 0;
         }
     }
@@ -4840,20 +4858,28 @@ static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint3
     id = e->id;
     stride = e->stride;
     base = e->base;
+    gen = e->gen; // bumped by dd_gpu_reg_take_pool on the non-forked path
+    // Re-announce the id's new generation to the compositor so its authentication matches this fresh
+    // checkout. Only the non-forked path can do this (it re-creates the send-right via an IOSurface API,
+    // fork-unsafe in a child); a forked child left `gen` unbumped and the compositor keeps the generation
+    // it already has, so the child's own frames still validate.
+    if (!g_gpu_fork_child) dd_gpu_send_port(id, gen, e->surf);
     if (gpu_alloc_dbg())
-        fprintf(stderr, "[gpu-alloc-dbg] take %ux%u id=%u stride=%u base=%p reuse=%d fork_child=%d pid=%d\n", w, h,
-                id, stride, base, reuse, g_gpu_fork_child, (int)getpid());
+        fprintf(stderr, "[gpu-alloc-dbg] take %ux%u id=%u gen=%u stride=%u base=%p reuse=%d fork_child=%d pid=%d\n",
+                w, h, id, gen, stride, base, reuse, g_gpu_fork_child, (int)getpid());
 #else
     base = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if (base == MAP_FAILED) return -ENOMEM;
     static uint32_t fake_id = 1;
     id = fake_id++;
+    gen = 1;
     (void)reuse;
 #endif
     if (!base) return -ENOMEM;
     *out_id = id;
     *out_stride = stride;
     *out_base = base;
+    *out_gen = gen;
     return 0;
 }
 
@@ -4863,10 +4889,10 @@ static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint3
 static int64_t dd_gpu_alloc(int owner_fd, void *arg) {
     struct dd_gpu_alloc *r = (struct dd_gpu_alloc *)arg;
     if (!r) return -EFAULT;
-    uint32_t id = 0, stride = 0;
+    uint32_t id = 0, stride = 0, gen = 0;
     void *base = NULL;
     // reuse=1: redraw-in-place across frames (the EGL shim redraws the same-size surface each frame).
-    int rc = (int)dd_gpu_surface(owner_fd, r->width, r->height, 1, &id, &stride, &base);
+    int rc = (int)dd_gpu_surface(owner_fd, r->width, r->height, 1, &id, &stride, &base, &gen);
     if (rc) return rc;
     size_t size = (size_t)stride * r->height;
     // A throwaway anonymous fd to satisfy linux-dmabuf's params.add (its pages are unused; dd-display
@@ -4882,6 +4908,11 @@ static int64_t dd_gpu_alloc(int owner_fd, void *arg) {
     r->id = id;
     r->fd = fd;
     r->ptr = (uint64_t)(uintptr_t)base;
+    // The `format` field is input-only (the requested pixel format, already consumed above); reuse it on
+    // OUTPUT to carry the allocation generation back to the guest, which stamps it into the dmabuf
+    // modifier so the compositor can reject a stale reference. This keeps the 32-byte ioctl ABI (and the
+    // gl_shim.c oracle, which ignores it and sends an unversioned generation-0 modifier) unchanged.
+    r->format = gen;
     return 0;
 }
 
@@ -5321,10 +5352,13 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
         uint32_t height, width;
         memcpy(&height, d + 0, 4);
         memcpy(&width, d + 4, 4);
-        uint32_t id = 0, stride = 0;
+        uint32_t id = 0, stride = 0, gen = 0;
         void *base = NULL;
-        int rc = (int)dd_gpu_surface(fd, width, height, 0, &id, &stride, &base);
+        // The DRM dumb-buffer (Mesa/gbm) path builds its dmabuf modifier in the guest's Mesa winsys, not
+        // dd's shim, so it does not carry the dd generation; `gen` is captured but unused here.
+        int rc = (int)dd_gpu_surface(fd, width, height, 0, &id, &stride, &base, &gen);
         if (rc) return rc;
+        (void)gen;
         uint64_t size = (uint64_t)stride * height;
         memcpy(d + 16, &id, 4);     // handle
         memcpy(d + 20, &stride, 4); // pitch
