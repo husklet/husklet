@@ -45,11 +45,28 @@ fn dev_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option
 #[no_mangle]
 pub extern "C" fn vkFlushMappedMemoryRanges(
     _device: *mut c_void,
-    _memory_range_count: u32,
-    _p_memory_ranges: *const c_void,
+    memory_range_count: u32,
+    p_memory_ranges: *const c_void,
 ) -> VkResult {
-    // The model's device memory is host-visible + HOST_COHERENT unified memory; an explicit flush is a
-    // guaranteed-successful no-op (the write is already visible).
+    // The model's device memory is host-visible + HOST_COHERENT, so no host-side flush is needed. But the
+    // host→device DIRECTION still matters: an app that stages into a mapped buffer, flushes, then UNMAPs
+    // before submitting must not lose the write. Capture each flushed range as a pending upload keyed by
+    // its memory (honoring offset/size); the next vkQueueSubmit ships it as a Cmd::WriteBuffer even if the
+    // memory has since been unmapped. Bound buffers only (unbound host-only staging is the true no-op the
+    // coherent contract promises); coalesced with the still-mapped flush so nothing is written twice.
+    if !p_memory_ranges.is_null() && memory_range_count != 0 {
+        let ranges = unsafe {
+            core::slice::from_raw_parts(
+                p_memory_ranges as *const VkMappedMemoryRange,
+                memory_range_count as usize,
+            )
+        };
+        dev(|d| {
+            for r in ranges {
+                create::capture_pending_upload(d, r.memory, r.offset, r.size);
+            }
+        });
+    }
     VK_SUCCESS
 }
 

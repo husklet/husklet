@@ -131,21 +131,55 @@ impl Device {
 
     // ---- convenience helpers ----------------------------------------------------------------------
 
-    /// The (ir buffer id, offset=0, bytes) upload for every currently-mapped, buffer-bound memory — the
-    /// per-frame flush of persistently-mapped HOST_COHERENT buffers (e.g. vkcube's rotating MVP UBO,
-    /// written each frame with NO `vkUnmapMemory`). Emitted as `Cmd::WriteBuffer` at `vkQueueSubmit`
-    /// by [`crate::service::submit`]. Ported from `VkState::flush_mapped` (kept `Cmd`-free here — the
-    /// model never builds a `Cmd`).
+    /// The `(ir buffer id, buffer offset, bytes)` host→device upload for every buffer-bound memory that
+    /// needs one this submit: either it is currently mapped (the per-frame flush of persistently-mapped
+    /// HOST_COHERENT buffers — e.g. vkcube's rotating MVP UBO, written each frame with NO
+    /// `vkUnmapMemory`), OR it has a captured `pending_flush` from a `vkUnmapMemory` /
+    /// `vkFlushMappedMemoryRanges` (the app staged bytes and unmapped BEFORE submitting — those writes
+    /// must still reach the device). Emitted as `Cmd::WriteBuffer` at `vkQueueSubmit` by
+    /// [`crate::service::submit`], which then calls [`Self::clear_pending_uploads`].
+    ///
+    /// The two paths are coalesced: each memory yields AT MOST ONE upload, so a buffer that is submitted
+    /// while still mapped (with a pending range also set) is never written twice. A still-mapped memory
+    /// keeps the original whole-buffer-from-offset-0 flush byte-for-byte; a pending-only (unmapped)
+    /// memory honors its captured range, intersected with the bound buffer's footprint in the allocation
+    /// (the same math as `service::create::read_mapped`, offset `mem - bound_offset`). Unbound host-only
+    /// staging is never uploaded (no device buffer). Ported from `VkState::flush_mapped` (kept `Cmd`-free
+    /// here — the model never builds a `Cmd`).
     pub fn mapped_uploads(&self) -> Vec<(u32, u64, Vec<u8>)> {
         self.memories
             .values()
-            .filter(|m| m.mapped)
             .filter_map(|m| {
-                let bh = m.bound_buffer?;
-                let b = self.buffers.get(&bh)?;
-                let n = (b.size as usize).min(m.data.len());
-                Some((b.ir_id, 0u64, m.data[..n].to_vec()))
+                let b = self.buffers.get(&m.bound_buffer?)?;
+                if m.mapped {
+                    // Still-mapped coherent flush: whole buffer from offset 0 (unchanged behavior).
+                    let n = (b.size as usize).min(m.data.len());
+                    return Some((b.ir_id, 0u64, m.data[..n].to_vec()));
+                }
+                // Unmapped, but a pending host→device upload was captured — flush the honored range.
+                let (offset, size) = m.pending_flush?;
+                let mem_len = m.data.len() as u64;
+                let map_start = offset.min(mem_len);
+                let map_end =
+                    if size == u64::MAX { mem_len } else { offset.saturating_add(size).min(mem_len) };
+                // Intersect the dirtied range with the buffer's footprint in the allocation.
+                let start = map_start.max(b.bound_offset);
+                let end = map_end.min(b.bound_offset.saturating_add(b.size));
+                if end <= start {
+                    return None; // the pending range does not overlap the bound buffer
+                }
+                let buf_off = start - b.bound_offset;
+                Some((b.ir_id, buf_off, m.data[start as usize..end as usize].to_vec()))
             })
             .collect()
+    }
+
+    /// Clear every captured `pending_flush` after a `vkQueueSubmit` has flushed it — the pending
+    /// host→device upload is one-shot (it reaches the device exactly once, at the next submit). The
+    /// still-mapped `mapped` flag is untouched (a persistently-mapped buffer keeps re-flushing).
+    pub fn clear_pending_uploads(&mut self) {
+        for m in self.memories.values_mut() {
+            m.pending_flush = None;
+        }
     }
 }

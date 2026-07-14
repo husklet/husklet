@@ -86,6 +86,10 @@ pub fn queue_submit(
 
     sink.submit(&batch)?;
 
+    // The captured pending host→device uploads (from vkUnmapMemory / vkFlushMappedMemoryRanges) have now
+    // reached the device in this frame — retire them so they are not re-flushed on the next submit.
+    dev.clear_pending_uploads();
+
     // Advance model state: command buffers pending, fence armed at its signal value.
     for &cb in command_buffers {
         if let Some(rec) = dev.command_buffers.get_mut(&cb) {

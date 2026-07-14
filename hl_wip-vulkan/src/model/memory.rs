@@ -24,12 +24,24 @@ pub struct BufferRec {
 /// One `VkDeviceMemory`: the host-visible bytes (unified memory), its size, the buffer bound into it,
 /// and whether it is currently mapped. A persistently-mapped HOST_COHERENT allocation is re-uploaded
 /// to the host each `vkQueueSubmit` (MoltenVK/vkcube pattern). Mirrors `MVKDeviceMemory`.
+///
+/// `pending_flush` closes the map → write → **unmap** → submit data-loss edge: a real app that stages
+/// into a mapped buffer and then `vkUnmapMemory`s BEFORE submitting would otherwise lose the upload,
+/// because `mapped` is now `false` and the still-mapped flush no longer sees it. `vkUnmapMemory` (and
+/// `vkFlushMappedMemoryRanges` for the non-coherent contract) instead record the dirtied `(offset,
+/// size)` range here; the next `vkQueueSubmit` flushes it as a `Cmd::WriteBuffer` and clears it. The
+/// still-mapped path and this pending path are coalesced (a memory yields at most one upload per
+/// submit — see [`super::device::Device::mapped_uploads`]), so no byte is written twice.
 #[derive(Clone, PartialEq, Debug)]
 pub struct MemRec {
     pub data: Vec<u8>,
     pub size: u64,
     pub bound_buffer: Option<VkBuffer>,
     pub mapped: bool,
+    /// A captured host→device upload range `(offset, size)` (allocation coordinates; `size ==
+    /// VK_WHOLE_SIZE` → to the end) that must still flush at the next submit even though the app may
+    /// have unmapped. `None` when there is nothing pending. Only meaningful for buffer-bound memory.
+    pub pending_flush: Option<(u64, u64)>,
 }
 
 /// One `VkImage`: its backing hl-GPU texture id + geometry/format/(translated) usage. Mirrors `MVKImage`.

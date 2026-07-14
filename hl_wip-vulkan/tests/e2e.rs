@@ -220,3 +220,48 @@ fn map_memory_reflects_device_output_end_to_end() {
         "mapped memory reflects device output after the readback"
     );
 }
+
+/// The host→device upload survives an UNMAP-before-submit, end-to-end: an app maps a buffer, writes a
+/// staging pattern, `vkUnmapMemory`s, and only THEN `vkQueueSubmit`s — the classic real-app staging
+/// sequence. The written bytes must land in the DEVICE buffer. Before the fix, `vkUnmapMemory` cleared
+/// the mapped flag and the submit's flush skipped the memory, silently dropping the upload. Here we read
+/// the device buffer straight off the runtime resources after submit and assert it holds the pattern.
+#[test]
+fn unmapped_host_write_reaches_the_device_end_to_end() {
+    use hl_gpu::BufferId;
+
+    let exec = CpuExecutor::new();
+    let session = Session::new(
+        Limits::from_capabilities(Capabilities::full("hl-cpu-unmapupload")),
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+    let mut sink = InProcessCommandSink::with_session(session, exec);
+
+    let inst = create::create_instance(HL_API_VERSION);
+    let mut d = create::create_device(&inst);
+
+    const N: u64 = 16;
+    let payload: Vec<u8> = (0..N as u8).collect();
+
+    // A host-visible buffer the app stages into (TRANSFER_DST so the device accepts the write).
+    let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, N).unwrap();
+    let buf_ir = d.buffers.get(&buf).unwrap().ir_id;
+    let mem = create::allocate_memory(&mut d, N);
+    create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
+
+    // map → write → UNMAP, all BEFORE any submit.
+    create::map_memory(&mut d, mem).unwrap();
+    create::write_mapped(&mut d, mem, 0, &payload).unwrap();
+    create::unmap_memory(&mut d, mem);
+
+    // An empty submit — the only device traffic is the pending host→device flush of the unmapped write.
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    // The device buffer now holds exactly the bytes the app wrote before unmapping.
+    let device_bytes = sink.read_buffer(BufferId(buf_ir), 0, N as usize).unwrap();
+    assert_eq!(device_bytes, payload, "the pre-unmap host write reached the device buffer");
+}

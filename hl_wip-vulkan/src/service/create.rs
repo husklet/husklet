@@ -71,7 +71,7 @@ pub fn allocate_memory(dev: &mut Device, size: u64) -> VkDeviceMemory {
     let handle = dev.alloc_handle();
     dev.memories.insert(
         handle,
-        MemRec { data: vec![0u8; size as usize], size, bound_buffer: None, mapped: false },
+        MemRec { data: vec![0u8; size as usize], size, bound_buffer: None, mapped: false, pending_flush: None },
     );
     handle
 }
@@ -178,11 +178,51 @@ pub fn read_mapped(
     Ok(())
 }
 
-/// `vkUnmapMemory` — clear the mapped flag (no further per-submit flush).
+/// `vkUnmapMemory` — clear the mapped flag, but CAPTURE the still-mapped bytes as a pending host→device
+/// upload so the app's writes survive the unmap. Without this, a real app doing map → write → UNMAP
+/// (staging before submit) would silently drop its upload: the still-mapped submit flush no longer sees
+/// the memory, so the bytes never reach the device. The whole allocation is marked dirty `(0,
+/// VK_WHOLE_SIZE)`; the next `vkQueueSubmit` flushes it (intersected with the bound buffer's footprint)
+/// as a `Cmd::WriteBuffer` and clears the record. Unbound host-only staging has no device buffer to
+/// upload to, so nothing is captured (a truthful no-op). Coalesced with the still-mapped path so a
+/// buffer that is submitted while still mapped is never written twice.
 pub fn unmap_memory(dev: &mut Device, memory: VkDeviceMemory) {
     if let Some(m) = dev.memories.get_mut(&memory) {
         m.mapped = false;
+        if m.bound_buffer.is_some() {
+            m.pending_flush = Some((0, VK_WHOLE_SIZE));
+        }
     }
+}
+
+/// Capture a dirtied mapped range `(offset, size)` as a pending host→device upload that must reach the
+/// device at the next `vkQueueSubmit` even if the app unmaps first — the `vkFlushMappedMemoryRanges`
+/// signal for the non-coherent contract. Only buffer-bound memory is captured (unbound host-only
+/// staging has no device buffer, so it stays a truthful no-op); an unknown handle is ignored. Any range
+/// already pending this submit is widened to cover both, so a sub-range flush followed by an unmap (or
+/// another flush) never loses the earlier bytes.
+pub fn capture_pending_upload(dev: &mut Device, memory: VkDeviceMemory, offset: u64, size: u64) {
+    if let Some(m) = dev.memories.get_mut(&memory) {
+        if m.bound_buffer.is_some() {
+            m.pending_flush = Some(match m.pending_flush {
+                Some(prev) => widen_range(prev, (offset, size)),
+                None => (offset, size),
+            });
+        }
+    }
+}
+
+/// Merge two `(offset, size)` upload ranges into one that covers both (`size == VK_WHOLE_SIZE` extends
+/// to the end of the allocation, so any whole-size operand yields a whole-size result from the smaller
+/// offset). The result is always a superset of both inputs — the flush intersects it with the buffer's
+/// footprint at submit, so over-covering is safe (`data` is the source of truth) and never drops bytes.
+fn widen_range(a: (u64, u64), b: (u64, u64)) -> (u64, u64) {
+    let start = a.0.min(b.0);
+    if a.1 == VK_WHOLE_SIZE || b.1 == VK_WHOLE_SIZE {
+        return (start, VK_WHOLE_SIZE);
+    }
+    let end = a.0.saturating_add(a.1).max(b.0.saturating_add(b.1));
+    (start, end - start)
 }
 
 // ---- images / samplers ---------------------------------------------------------------------------

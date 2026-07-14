@@ -646,6 +646,98 @@ fn mapped_memory_flushes_as_write_buffer_at_submit() {
 }
 
 #[test]
+fn unmapped_memory_still_flushes_its_write_at_submit() {
+    // The data-loss edge: a real app stages into a mapped buffer, then vkUnmapMemory BEFORE submitting.
+    // The upload must survive the unmap and still reach the device as a WriteBuffer at the next submit.
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 256).unwrap();
+    let buf_ir = d.buffers.get(&buf).unwrap().ir_id;
+    let mem = create::allocate_memory(&mut d, 256);
+    create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
+    create::map_memory(&mut d, mem).unwrap();
+    create::write_mapped(&mut d, mem, 0, &[9, 8, 7, 6]).unwrap();
+    create::unmap_memory(&mut d, mem); // <-- unmap before submit; the write must not be dropped
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    // Exactly one WriteBuffer carrying the written bytes flushes despite the unmap.
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::WriteBuffer { id, offset, data }, Cmd::Submit(_)] => {
+            assert_eq!((*id, *offset), (buf_ir, 0));
+            assert_eq!(data.len(), 256);
+            assert_eq!(&data[..4], &[9, 8, 7, 6], "the unmapped write reached the device");
+        }
+        other => panic!("expected [WriteBuffer, Submit] after unmap, got {other:?}"),
+    }
+
+    // The pending upload is one-shot: a SECOND submit (no re-map/re-write) flushes nothing more.
+    let cb2 = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb2).unwrap();
+    record::end(&mut d, cb2).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb2], None).unwrap();
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::Submit(_)] => {}
+        other => panic!("expected a bare [Submit] on the second frame, got {other:?}"),
+    }
+}
+
+#[test]
+fn mapped_write_without_unmap_flushes_exactly_once() {
+    // No-regression / no-double-write: map → write → submit WITHOUT unmapping must still upload the bytes,
+    // and exactly once (the still-mapped path and the pending path are coalesced — a mapped memory yields
+    // a single WriteBuffer even if a flush also captured a pending range).
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 256).unwrap();
+    let mem = create::allocate_memory(&mut d, 256);
+    create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
+    create::map_memory(&mut d, mem).unwrap();
+    create::write_mapped(&mut d, mem, 0, &[1, 2, 3, 4]).unwrap();
+    // A flush of a sub-range while still mapped captures a pending record too — it must NOT double the write.
+    create::capture_pending_upload(&mut d, mem, 0, 4);
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    let writes = sink
+        .batches
+        .last()
+        .unwrap()
+        .iter()
+        .filter(|c| matches!(c, Cmd::WriteBuffer { .. }))
+        .count();
+    assert_eq!(writes, 1, "still-mapped + pending coalesce to a single WriteBuffer (no double-write)");
+}
+
+#[test]
+fn unmapped_unbound_host_staging_flushes_nothing() {
+    // Host-only staging with no buffer bound has no device buffer to upload to; unmapping it must capture
+    // nothing (a truthful no-op) so the submit emits no WriteBuffer.
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let mem = create::allocate_memory(&mut d, 128);
+    create::map_memory(&mut d, mem).unwrap();
+    create::write_mapped(&mut d, mem, 0, &[1, 2, 3, 4]).unwrap();
+    create::unmap_memory(&mut d, mem);
+    assert!(d.memories.get(&mem).unwrap().pending_flush.is_none(), "unbound staging captures nothing");
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::Submit(_)] => {}
+        other => panic!("expected a bare [Submit] (no upload), got {other:?}"),
+    }
+}
+
+#[test]
 fn map_memory_reads_bound_buffer_back_over_the_sink() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
