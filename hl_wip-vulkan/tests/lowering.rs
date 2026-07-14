@@ -542,15 +542,17 @@ fn combined_image_sampler_descriptor_lowers_to_texture_and_sampler_binds() {
     record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
     record::end(&mut d, cb).unwrap();
 
-    // The bind emits one CreateBindGroup (the last batch): a Texture(image) + Sampler(sampler), both at
-    // binding 0 (the combined-sampler layout the wgpu executor's WGSL declares).
+    // The bind emits one CreateBindGroup (the last batch): a Texture(image) at the descriptor's binding 0
+    // and a Sampler(sampler) at binding 0 + 16, the split the wgpu executor's `spirv_split` performs on
+    // glslang's combined `sampler2D` (naga rejects the combined image-sampler model, so the image and its
+    // sampler must occupy DISTINCT bind-group bindings).
     match &sink.batches.last().unwrap()[0] {
         Cmd::CreateBindGroup(_, desc) => {
             assert_eq!(desc.set, 0);
             assert_eq!(desc.entries.len(), 2);
             assert_eq!(desc.entries[0].binding, 0);
             assert_eq!(desc.entries[0].resource, BindResource::Texture { id: img_ir(&d, image) });
-            assert_eq!(desc.entries[1].binding, 0);
+            assert_eq!(desc.entries[1].binding, 16);
             assert_eq!(desc.entries[1].resource, BindResource::Sampler { id: samp_ir(&d, sampler) });
         }
         other => panic!("expected CreateBindGroup, got {other:?}"),

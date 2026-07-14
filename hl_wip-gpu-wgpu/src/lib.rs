@@ -29,6 +29,7 @@ mod pipeline;
 mod present;
 mod sampler;
 mod shader;
+mod spirv_split;
 mod submit;
 mod texture;
 mod wgsl;

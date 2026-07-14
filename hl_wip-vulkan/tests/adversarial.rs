@@ -521,8 +521,10 @@ fn separate_image_and_sampler_writes_compose_on_one_binding() {
     record::cmd_bind_descriptor_sets(&mut d, &mut s, cb, 0, &[set], &[]).unwrap();
     use hl_gpu::protocol::model::descriptor::BindResource;
     let bg = last_bind_group(&s);
+    // Combined descriptor at binding 3: the image stays at binding 3, the sampler splits to binding 3 + 16
+    // (the executor's `spirv_split` scheme — a combined image-sampler occupies two distinct bind-group slots).
     assert!(bg.entries.iter().any(|e| e.binding == 3 && matches!(e.resource, BindResource::Texture { id } if id == img_ir)));
-    assert!(bg.entries.iter().any(|e| e.binding == 3 && matches!(e.resource, BindResource::Sampler { id } if id == samp_ir)));
+    assert!(bg.entries.iter().any(|e| e.binding == 19 && matches!(e.resource, BindResource::Sampler { id } if id == samp_ir)));
 }
 
 // =====================================================================================================

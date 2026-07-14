@@ -132,9 +132,15 @@ pub fn format_features(vk_format: u32) -> FormatFeatures {
         _ => 0,
     };
     FormatFeatures {
-        // Depth is never linear-tileable; a color format reports the same materializable set for both
-        // tilings (the bring-up path treats tiling uniformly).
-        linear_tiling: if depth { 0 } else { optimal },
+        // LINEAR tiling advertises NOTHING materializable. Vulkan's linear tiling exists so an app can
+        // populate an image through host-mapped memory (`vkMapMemory` + memcpy) — but this backend stores
+        // every image as a device-only wgpu texture and materializes texel content solely through device
+        // commands (`vkCmdCopyBufferToImage` / render passes), never from host-mapped image memory. So
+        // advertising e.g. SAMPLED for a linear image would be a capability lie: it steers an app (vkcube's
+        // default texture path keys on `linearTilingFeatures & SAMPLED_IMAGE`) into a host-mapped upload
+        // whose texels never reach the sampled texture — the cube then samples black. Reporting 0 forces the
+        // staging-buffer + `vkCmdCopyBufferToImage` → optimal-image path this backend actually materializes.
+        linear_tiling: 0,
         optimal_tiling: optimal,
         buffer,
     }
@@ -175,6 +181,9 @@ mod tests {
         assert_ne!(ff.optimal_tiling & format_feature::SAMPLED_IMAGE, 0);
         // A color format is never depth-stencil-capable.
         assert_eq!(ff.optimal_tiling & format_feature::DEPTH_STENCIL_ATTACHMENT, 0);
+        // LINEAR tiling advertises nothing: host-mapped linear image content is not materialized by this
+        // backend, so a color format is sampleable only when OPTIMAL-tiled (uploaded via a device copy).
+        assert_eq!(ff.linear_tiling, 0, "linear tiling must claim no materializable feature");
     }
 
     #[test]

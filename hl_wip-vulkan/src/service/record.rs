@@ -20,6 +20,13 @@ use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, Filter, IndexF
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
 use std::collections::HashMap;
 
+/// The bind-group offset the sampler half of a split `COMBINED_IMAGE_SAMPLER` is placed at: the image keeps
+/// the descriptor's Vulkan binding `B`, the sampler goes to `B + SAMPLER_BINDING_OFFSET`. MUST equal
+/// `hl_wip-gpu-wgpu::spirv_split::SAMPLER_BINDING_OFFSET` — the executor rewrites glslang's combined
+/// `sampler2D` into a separate texture + sampler at exactly these bindings, and this is where the driver
+/// binds the matching resources. (Duplicated, not shared, because the two crates only share the protocol.)
+const SAMPLER_BINDING_OFFSET: u32 = 16;
+
 /// `vkAllocateCommandBuffers` (one buffer) — mint an `Initial` command buffer.
 pub fn allocate_command_buffer(dev: &mut Device) -> VkCommandBuffer {
     let handle = dev.alloc_handle();
@@ -128,10 +135,14 @@ pub fn cmd_bind_descriptor_sets(
             }
         }
         // Resolve each sampled-image / sampler descriptor to its hl-GPU id: a bound image → a
-        // `BindResource::Texture` and a bound sampler → a `BindResource::Sampler`, both at the same
-        // binding index (a `COMBINED_IMAGE_SAMPLER` thus emits both — the layout the wgpu executor's
-        // WGSL declares for a combined binding). An unresolvable handle is skipped (never faked).
+        // `BindResource::Texture` and a bound sampler → a `BindResource::Sampler`. A `COMBINED_IMAGE_SAMPLER`
+        // (both set on one binding) must land on TWO DISTINCT bind-group bindings, because the wgpu executor
+        // splits glslang's combined `sampler2D` into a separate `texture_2d` + `sampler` (naga rejects the
+        // combined model): the image keeps binding `B`, the sampler moves to `B + SAMPLER_BINDING_OFFSET`,
+        // matching `hl_wip-gpu-wgpu::spirv_split`. A SEPARATE `SAMPLED_IMAGE`/`SAMPLER` keeps its own binding
+        // (the shader already declares it separately). An unresolvable handle is skipped (never faked).
         for (binding, img) in img_pairs {
+            let combined = img.image.is_some() && img.sampler.is_some();
             if let Some(image) = img.image {
                 if let Some(i) = dev.images.get(&image) {
                     entries.push(BindEntry { binding, resource: BindResource::Texture { id: i.ir_id } });
@@ -139,7 +150,8 @@ pub fn cmd_bind_descriptor_sets(
             }
             if let Some(sampler) = img.sampler {
                 if let Some(s) = dev.samplers.get(&sampler) {
-                    entries.push(BindEntry { binding, resource: BindResource::Sampler { id: s.ir_id } });
+                    let sampler_binding = if combined { binding + SAMPLER_BINDING_OFFSET } else { binding };
+                    entries.push(BindEntry { binding: sampler_binding, resource: BindResource::Sampler { id: s.ir_id } });
                 }
             }
         }

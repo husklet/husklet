@@ -43,7 +43,11 @@ pub fn spirv_to_wgsl(words: &[u32]) -> Result<String> {
     if words.first().copied() != Some(SPIRV_MAGIC) {
         return Err(GpuError::Invalid("wgpu: shader payload is not SPIR-V"));
     }
-    let bytes: &[u8] = bytemuck::cast_slice(words);
+    // glslang emits GLSL `sampler2D` as a COMBINED image-sampler (an `OpTypeSampledImage` global sampled
+    // with no `OpSampledImage`), which naga's spv-in rejects. Rewrite it to the SEPARATE image+sampler
+    // model naga accepts before parsing (a shader without a combined sampler passes through unchanged).
+    let split = crate::spirv_split::split_combined_image_samplers(words)?;
+    let bytes: &[u8] = bytemuck::cast_slice(&split);
     let module = naga::front::spv::parse_u8_slice(bytes, &naga::front::spv::Options::default())
         .map_err(|e| err(format!("spirv-in: {e:?}")))?;
     module_to_wgsl(&module)
