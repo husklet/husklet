@@ -16,8 +16,11 @@ use core::ffi::{c_char, c_void};
 
 use hl_gl::model::context::GlSurface;
 use hl_gl::model::glconst::*;
-use hl_gl::result::{egl_error_from_gpu_error, EGL_FALSE, EGL_TRUE};
-use hl_gl::service::{record, swap};
+use hl_gl::result::{
+    egl_error_from_gpu_error, EGL_FALSE, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE, GL_NO_ERROR,
+    GL_OUT_OF_MEMORY,
+};
+use hl_gl::service::{readpixels, record, swap};
 
 use crate::state::{with, CONFIG_TOKEN, DISPLAY_TOKEN};
 
@@ -221,19 +224,45 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "glLinkProgram" => p!(glLinkProgram),
         "glUseProgram" => p!(glUseProgram),
         "glUniform1i" => p!(glUniform1i),
+        "glUniform2i" => p!(glUniform2i),
+        "glUniform3i" => p!(glUniform3i),
+        "glUniform4i" => p!(glUniform4i),
+        "glUniform1iv" => p!(glUniform1iv),
+        "glUniform2iv" => p!(glUniform2iv),
+        "glUniform3iv" => p!(glUniform3iv),
+        "glUniform4iv" => p!(glUniform4iv),
+        "glUniform1f" => p!(glUniform1f),
+        "glUniform2f" => p!(glUniform2f),
+        "glUniform3f" => p!(glUniform3f),
+        "glUniform4f" => p!(glUniform4f),
+        "glUniform1fv" => p!(glUniform1fv),
+        "glUniform2fv" => p!(glUniform2fv),
+        "glUniform3fv" => p!(glUniform3fv),
+        "glUniform4fv" => p!(glUniform4fv),
+        "glUniformMatrix2fv" => p!(glUniformMatrix2fv),
+        "glUniformMatrix3fv" => p!(glUniformMatrix3fv),
+        "glUniformMatrix4fv" => p!(glUniformMatrix4fv),
         // ---- GLES: vertex attributes + fixed-function state ----
         "glVertexAttribPointer" => p!(glVertexAttribPointer),
         "glEnableVertexAttribArray" => p!(glEnableVertexAttribArray),
         "glDisableVertexAttribArray" => p!(glDisableVertexAttribArray),
         "glClearColor" => p!(glClearColor),
+        "glClearDepthf" => p!(glClearDepthf),
         "glViewport" => p!(glViewport),
         "glScissor" => p!(glScissor),
         "glEnable" => p!(glEnable),
         "glDisable" => p!(glDisable),
+        "glBlendFunc" => p!(glBlendFunc),
+        "glBlendFuncSeparate" => p!(glBlendFuncSeparate),
+        "glDepthFunc" => p!(glDepthFunc),
+        "glDepthMask" => p!(glDepthMask),
+        "glCullFace" => p!(glCullFace),
+        "glFrontFace" => p!(glFrontFace),
         // ---- GLES: draw recording ----
         "glClear" => p!(glClear),
         "glDrawArrays" => p!(glDrawArrays),
         "glDrawElements" => p!(glDrawElements),
+        "glReadPixels" => p!(glReadPixels),
         // Unknown / extension name we do not advertise → spec-legal "not found".
         _ => core::ptr::null_mut(),
     }
@@ -586,6 +615,154 @@ pub extern "C" fn glUniform1i(location: i32, v0: i32) {
     with(|s| record::uniform_sampler(&mut s.ctx, location as usize, v0));
 }
 
+// ---- data uniforms (record into the bound program's uniform block; shipped at binding 1 at draw) -----
+//
+// `location` is the uniform's declaration index — the same convention `glUniform1i`/`uniform_sampler`
+// use for samplers. `glUniform1i` stays sampler-only (above); the integer variants below and every float
+// variant write the value's little-endian bytes into the uniform block at the member's reflected offset.
+
+/// Write `bytes` into data uniform `location` of the bound program (no-op for a negative location).
+fn set_uniform(location: i32, bytes: &[u8]) {
+    if location < 0 {
+        return;
+    }
+    with(|s| record::uniform_at(&mut s.ctx, location as usize, bytes));
+}
+
+/// Marshal a slice of scalars into little-endian bytes.
+fn le_f32(vs: &[f32]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(vs.len() * 4);
+    for v in vs {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b
+}
+fn le_i32(vs: &[i32]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(vs.len() * 4);
+    for v in vs {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b
+}
+
+/// Borrow a `count`×`n` scalar array (`glUniform{N}{f,i}v` value), empty if null / non-positive count.
+unsafe fn slice_f32<'a>(value: *const f32, count: i32, n: usize) -> &'a [f32] {
+    if value.is_null() || count <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(value, count as usize * n)
+    }
+}
+unsafe fn slice_i32<'a>(value: *const i32, count: i32, n: usize) -> &'a [i32] {
+    if value.is_null() || count <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(value, count as usize * n)
+    }
+}
+
+/// Marshal a column-major GL matrix array into MSL `floatNxN` struct layout: `count` matrices, each `n`
+/// columns; every column is padded to 4 floats for `n == 3` (MSL `float3x3` has a 16-byte column stride),
+/// else `n` floats. `transpose` swaps row/column when reading the GL source.
+unsafe fn mat_bytes(n: usize, count: i32, transpose: bool, value: *const f32) -> Vec<u8> {
+    if value.is_null() || count <= 0 {
+        return Vec::new();
+    }
+    let src = std::slice::from_raw_parts(value, count as usize * n * n);
+    let col_floats = if n == 3 { 4 } else { n };
+    let mut out = Vec::with_capacity(count as usize * n * col_floats * 4);
+    for m in 0..count as usize {
+        let base = m * n * n;
+        for col in 0..n {
+            for row in 0..n {
+                let v = if transpose { src[base + row * n + col] } else { src[base + col * n + row] };
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            for _ in n..col_floats {
+                out.extend_from_slice(&0f32.to_le_bytes());
+            }
+        }
+    }
+    out
+}
+
+#[no_mangle]
+pub extern "C" fn glUniform1f(location: i32, v0: f32) {
+    set_uniform(location, &le_f32(&[v0]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform2f(location: i32, v0: f32, v1: f32) {
+    set_uniform(location, &le_f32(&[v0, v1]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform3f(location: i32, v0: f32, v1: f32, v2: f32) {
+    set_uniform(location, &le_f32(&[v0, v1, v2]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform4f(location: i32, v0: f32, v1: f32, v2: f32, v3: f32) {
+    set_uniform(location, &le_f32(&[v0, v1, v2, v3]));
+}
+
+#[no_mangle]
+pub extern "C" fn glUniform2i(location: i32, v0: i32, v1: i32) {
+    set_uniform(location, &le_i32(&[v0, v1]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform3i(location: i32, v0: i32, v1: i32, v2: i32) {
+    set_uniform(location, &le_i32(&[v0, v1, v2]));
+}
+#[no_mangle]
+pub extern "C" fn glUniform4i(location: i32, v0: i32, v1: i32, v2: i32, v3: i32) {
+    set_uniform(location, &le_i32(&[v0, v1, v2, v3]));
+}
+
+#[no_mangle]
+pub extern "C" fn glUniform1fv(location: i32, count: i32, value: *const f32) {
+    set_uniform(location, &le_f32(unsafe { slice_f32(value, count, 1) }));
+}
+#[no_mangle]
+pub extern "C" fn glUniform2fv(location: i32, count: i32, value: *const f32) {
+    set_uniform(location, &le_f32(unsafe { slice_f32(value, count, 2) }));
+}
+#[no_mangle]
+pub extern "C" fn glUniform3fv(location: i32, count: i32, value: *const f32) {
+    set_uniform(location, &le_f32(unsafe { slice_f32(value, count, 3) }));
+}
+#[no_mangle]
+pub extern "C" fn glUniform4fv(location: i32, count: i32, value: *const f32) {
+    set_uniform(location, &le_f32(unsafe { slice_f32(value, count, 4) }));
+}
+
+#[no_mangle]
+pub extern "C" fn glUniform1iv(location: i32, count: i32, value: *const i32) {
+    set_uniform(location, &le_i32(unsafe { slice_i32(value, count, 1) }));
+}
+#[no_mangle]
+pub extern "C" fn glUniform2iv(location: i32, count: i32, value: *const i32) {
+    set_uniform(location, &le_i32(unsafe { slice_i32(value, count, 2) }));
+}
+#[no_mangle]
+pub extern "C" fn glUniform3iv(location: i32, count: i32, value: *const i32) {
+    set_uniform(location, &le_i32(unsafe { slice_i32(value, count, 3) }));
+}
+#[no_mangle]
+pub extern "C" fn glUniform4iv(location: i32, count: i32, value: *const i32) {
+    set_uniform(location, &le_i32(unsafe { slice_i32(value, count, 4) }));
+}
+
+#[no_mangle]
+pub extern "C" fn glUniformMatrix2fv(location: i32, count: i32, transpose: u8, value: *const f32) {
+    set_uniform(location, &unsafe { mat_bytes(2, count, transpose != 0, value) });
+}
+#[no_mangle]
+pub extern "C" fn glUniformMatrix3fv(location: i32, count: i32, transpose: u8, value: *const f32) {
+    set_uniform(location, &unsafe { mat_bytes(3, count, transpose != 0, value) });
+}
+#[no_mangle]
+pub extern "C" fn glUniformMatrix4fv(location: i32, count: i32, transpose: u8, value: *const f32) {
+    set_uniform(location, &unsafe { mat_bytes(4, count, transpose != 0, value) });
+}
+
 // ==================================================================================================
 // GLES: vertex attributes + fixed-function state
 // ==================================================================================================
@@ -647,6 +824,41 @@ pub extern "C" fn glDisable(cap: u32) {
     with(|s| record::disable(&mut s.ctx, cap));
 }
 
+#[no_mangle]
+pub extern "C" fn glClearDepthf(d: f32) {
+    with(|s| record::clear_depth(&mut s.ctx, d));
+}
+
+#[no_mangle]
+pub extern "C" fn glBlendFunc(sfactor: u32, dfactor: u32) {
+    with(|s| record::blend_func(&mut s.ctx, sfactor, dfactor));
+}
+
+#[no_mangle]
+pub extern "C" fn glBlendFuncSeparate(src_rgb: u32, dst_rgb: u32, src_alpha: u32, dst_alpha: u32) {
+    with(|s| record::blend_func_separate(&mut s.ctx, src_rgb, dst_rgb, src_alpha, dst_alpha));
+}
+
+#[no_mangle]
+pub extern "C" fn glDepthFunc(func: u32) {
+    with(|s| record::depth_func(&mut s.ctx, func));
+}
+
+#[no_mangle]
+pub extern "C" fn glDepthMask(flag: u8) {
+    with(|s| record::depth_mask(&mut s.ctx, flag != 0));
+}
+
+#[no_mangle]
+pub extern "C" fn glCullFace(mode: u32) {
+    with(|s| record::cull_face(&mut s.ctx, mode));
+}
+
+#[no_mangle]
+pub extern "C" fn glFrontFace(mode: u32) {
+    with(|s| record::front_face(&mut s.ctx, mode));
+}
+
 // ==================================================================================================
 // GLES: draw recording (frame draw-list; IR lowered at eglSwapBuffers)
 // ==================================================================================================
@@ -664,4 +876,67 @@ pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
 #[no_mangle]
 pub extern "C" fn glDrawElements(mode: u32, count: i32, type_: u32, indices: *const c_void) {
     with(|s| record::draw_elements(&mut s.ctx, mode, count, type_, indices as usize));
+}
+
+// ==================================================================================================
+// GLES: readback (device→host — the GL equivalent of cuMemcpyDtoH)
+// ==================================================================================================
+
+/// `glReadPixels(x, y, w, h, format, type, pixels)` — render the recorded frame and read the requested
+/// rectangle of the resulting render target back into `pixels`. Only `GL_UNSIGNED_BYTE` RGBA/BGRA/RGB is
+/// modeled; the readback goes through the `hl_gl` service (render → `CopyTextureToBuffer` → `read_buffer`),
+/// the same device→host port as cuda's DtoH.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glReadPixels(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    format: u32,
+    type_: u32,
+    pixels: *mut c_void,
+) {
+    // Record the first GL error and bail (GL keeps the first error until glGetError clears it).
+    let fail = |e: u32| with(|s| {
+        if s.gl_error == GL_NO_ERROR {
+            s.gl_error = e;
+        }
+    });
+    if type_ != GL_UNSIGNED_BYTE {
+        fail(GL_INVALID_ENUM);
+        return;
+    }
+    let bpp = match format {
+        GL_RGBA | GL_BGRA_EXT => 4usize,
+        GL_RGB => 3,
+        _ => {
+            fail(GL_INVALID_ENUM);
+            return;
+        }
+    };
+    if width < 0 || height < 0 {
+        fail(GL_INVALID_VALUE);
+        return;
+    }
+    if width == 0 || height == 0 {
+        return;
+    }
+    if pixels.is_null() {
+        fail(GL_INVALID_VALUE);
+        return;
+    }
+    let packed = with(|s| readpixels::read_pixels(&mut s.ctx, &mut s.sink, x, y, width, height, format));
+    match packed {
+        Ok(bytes) => {
+            let n = bytes.len().min(width as usize * height as usize * bpp);
+            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), pixels as *mut u8, n) };
+        }
+        Err(e) => with(|s| {
+            if s.gl_error == GL_NO_ERROR {
+                s.gl_error = GL_OUT_OF_MEMORY;
+            }
+            s.set_egl_error(egl_error_from_gpu_error(&e));
+        }),
+    }
 }

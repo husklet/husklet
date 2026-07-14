@@ -12,6 +12,7 @@
 
 use super::buffer::Buffers;
 use super::framebuffer::Framebuffers;
+use super::glconst;
 use super::program::{Attr, DrawCall, Programs, MAX_ATTR};
 use super::texture::Textures;
 use std::collections::HashMap;
@@ -52,11 +53,28 @@ pub struct GlContext {
     /// Per-location vertex-attribute pointer state.
     pub attr: [Attr; MAX_ATTR],
     pub clear_color: [f32; 4],
+    /// The depth-buffer clear value (`glClearDepthf`). Recorded for completeness; the default framebuffer
+    /// models no depth attachment, so it is not lowered to a pass clear (honest no-op — see `service::frame`).
+    pub clear_depth: f32,
     pub viewport: [i32; 4],
     pub scissor_enabled: bool,
     pub scissor: [i32; 4],
+    /// `GL_BLEND` enabled + its factors/equations (`glBlendFunc`/`glBlendFuncSeparate`/`glBlendEquation`).
     pub blend: bool,
+    pub blend_src_rgb: u32,
+    pub blend_dst_rgb: u32,
+    pub blend_src_alpha: u32,
+    pub blend_dst_alpha: u32,
+    pub blend_eq_rgb: u32,
+    pub blend_eq_alpha: u32,
+    /// `GL_DEPTH_TEST` enabled + its compare func (`glDepthFunc`) and write mask (`glDepthMask`).
     pub depth: bool,
+    pub depth_func: u32,
+    pub depth_write: bool,
+    /// `GL_CULL_FACE` enabled + the culled face (`glCullFace`) and front-face winding (`glFrontFace`).
+    pub cull_enabled: bool,
+    pub cull_face: u32,
+    pub front_face: u32,
     /// The framebuffer bound by `glBindFramebuffer` (`0` = the default window framebuffer).
     pub bound_fbo: u32,
 
@@ -104,11 +122,23 @@ impl GlContext {
             tex_unit: [0; 8],
             attr: [Attr::default(); MAX_ATTR],
             clear_color: [0.0; 4],
+            clear_depth: 1.0,
             viewport: [0; 4],
             scissor_enabled: false,
             scissor: [0; 4],
             blend: false,
+            blend_src_rgb: glconst::GL_ONE,
+            blend_dst_rgb: glconst::GL_ZERO,
+            blend_src_alpha: glconst::GL_ONE,
+            blend_dst_alpha: glconst::GL_ZERO,
+            blend_eq_rgb: glconst::GL_FUNC_ADD,
+            blend_eq_alpha: glconst::GL_FUNC_ADD,
             depth: false,
+            depth_func: glconst::GL_LESS,
+            depth_write: true,
+            cull_enabled: false,
+            cull_face: glconst::GL_BACK,
+            front_face: glconst::GL_CCW,
             bound_fbo: 0,
             draws: Vec::new(),
             next_buffer: 1,

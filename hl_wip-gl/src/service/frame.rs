@@ -30,7 +30,8 @@ use crate::model::program::DrawCall;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment, ColorTargetState,
-    RenderPipelineDesc, SamplerDesc, ShaderRef, SurfaceDesc, TextureDesc, VertexAttr, VertexLayout,
+    DepthState, RenderPipelineDesc, SamplerDesc, ShaderRef, SurfaceDesc, TextureDesc, VertexAttr,
+    VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, AddressMode, Filter, LoadOp, TextureDim, TextureFormat, Topology,
@@ -44,6 +45,11 @@ pub struct Frame {
     pub cmds: Vec<Cmd>,
     /// The default-surface + its render-target texture IR ids to `Present`.
     pub present: (u32, u32),
+    /// The presented render target's pixel dimensions + texel format — what a `glReadPixels` readback of
+    /// this frame ([`crate::service::readpixels`]) copies out of the render-target texture.
+    pub target_width: i32,
+    pub target_height: i32,
+    pub target_format: TextureFormat,
 }
 
 /// Assemble the frame's `Cmd` stream from the recorded draw-list, or `None` if there is nothing (or
@@ -103,7 +109,9 @@ fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, 
             sample_count: 1,
             dim: TextureDim::D2,
             format: fmt,
-            usage: texture_usage::RENDER_TARGET | texture_usage::PRESENT,
+            // COPY_SRC so a `glReadPixels` can copy the rendered target back to a host-readable buffer
+            // (the CPU executor requires COPY_SRC on a `CopyTextureToBuffer` source).
+            usage: texture_usage::RENDER_TARGET | texture_usage::PRESENT | texture_usage::COPY_SRC,
             label: label.into(),
         },
     ));
@@ -117,7 +125,7 @@ fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, 
 fn build_clear_frame(ctx: &mut GlContext) -> Frame {
     let mut cmds: Vec<Cmd> = Vec::new();
     let fbo = ctx.draws.last().map(|d| d.fbo).unwrap_or(0);
-    let (surface, texture, _w, _h, _fmt) = resolve_target(ctx, fbo, &mut cmds);
+    let (surface, texture, w, h, fmt) = resolve_target(ctx, fbo, &mut cmds);
     let clear = ctx.draws.last().map(|d| d.clear).unwrap_or([0.0; 4]);
     let ops = vec![
         Enc::BeginRenderPass {
@@ -127,7 +135,7 @@ fn build_clear_frame(ctx: &mut GlContext) -> Frame {
         Enc::EndRenderPass,
     ];
     cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
-    Frame { cmds, present: (surface, texture) }
+    Frame { cmds, present: (surface, texture), target_width: w, target_height: h, target_format: fmt }
 }
 
 /// The per-draw lowering result: the texture staging copies (hoisted before `BeginRenderPass`) and the
@@ -174,7 +182,13 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
     ops.push(Enc::EndRenderPass);
 
     cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
-    Some(Frame { cmds, present: (surface, target_tex) })
+    Some(Frame {
+        cmds,
+        present: (surface, target_tex),
+        target_width: tw,
+        target_height: th,
+        target_format: target_fmt,
+    })
 }
 
 /// Lower one geometry draw against a render target of format `target_fmt`: emit its resource creates +
@@ -318,10 +332,29 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
         let stride = if sl < nslot { slot_stride[sl] } else { 16 };
         vbs.push(VertexLayout { stride, step_mode: 0, attrs });
     }
+    // Fixed-function state → the pipeline's blend / depth / cull descriptor (the values a real app set via
+    // glBlendFunc / glDepthFunc / glCullFace / glFrontFace, mapped to their opaque WebGPU wire enums).
     let blend = if d.blend {
-        // Default GL_FUNC_ADD SRC_ALPHA/ONE_MINUS_SRC_ALPHA-style state; the wire values are opaque
-        // WebGPU factors (1 = One as a neutral default for this pass).
-        Some(BlendState { src_color: 1, dst_color: 1, op_color: 0, src_alpha: 1, dst_alpha: 1, op_alpha: 0 })
+        Some(BlendState {
+            src_color: blend_factor_wire(d.blend_src_rgb),
+            dst_color: blend_factor_wire(d.blend_dst_rgb),
+            op_color: blend_op_wire(d.blend_eq_rgb),
+            src_alpha: blend_factor_wire(d.blend_src_alpha),
+            dst_alpha: blend_factor_wire(d.blend_dst_alpha),
+            op_alpha: blend_op_wire(d.blend_eq_alpha),
+        })
+    } else {
+        None
+    };
+    // Depth test → a pipeline depth state carrying the compare func + write mask. NOTE: no depth
+    // ATTACHMENT is emitted (this model has no depth buffer), so the state is recorded in the pipeline but
+    // is not observable on the CPU oracle — an honest partial lowering, asserted at the Cmd level.
+    let depth = if d.depth {
+        Some(DepthState {
+            format: TextureFormat::Depth32Float,
+            depth_write: d.depth_write,
+            depth_compare: compare_wire(d.depth_func),
+        })
     } else {
         None
     };
@@ -334,10 +367,10 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
             fragment: Some(ShaderRef { module: shader_ir_id, entry: "fmain".into() }),
             vertex_buffers: vbs,
             color_targets: vec![ColorTargetState { format: target_fmt, blend, write_mask: 0xf }],
-            depth: None,
+            depth,
             topology,
-            cull: 0,
-            front_face: 0,
+            cull: if d.cull_enabled { cull_wire(d.cull_face) } else { 0 },
+            front_face: front_face_wire(d.front_face),
             label: String::new(),
         },
     ));
@@ -449,6 +482,68 @@ fn vertex_format_wire(kind_enum: u32, comps: i32, normalized: bool, integer: boo
         _ => 0, // GL_FLOAT and unknown
     };
     comps | (kind << 8) | ((normalized as u32) << 16) | ((integer as u32) << 17)
+}
+
+/// GL blend factor enum → opaque WebGPU blend-factor wire value (`gl_shim.c` `blend_factor_wire`).
+fn blend_factor_wire(f: u32) -> u32 {
+    match f {
+        GL_ZERO => 0,
+        GL_ONE => 1,
+        GL_SRC_COLOR => 2,
+        GL_ONE_MINUS_SRC_COLOR => 3,
+        GL_SRC_ALPHA => 4,
+        GL_ONE_MINUS_SRC_ALPHA => 5,
+        GL_DST_COLOR => 6,
+        GL_ONE_MINUS_DST_COLOR => 7,
+        GL_DST_ALPHA => 8,
+        GL_ONE_MINUS_DST_ALPHA => 9,
+        GL_SRC_ALPHA_SATURATE => 10,
+        _ => 1, // GL_ONE default for an unmodeled factor.
+    }
+}
+
+/// GL blend equation enum → opaque WebGPU blend-op wire value (`gl_shim.c` `blend_op_wire`).
+fn blend_op_wire(e: u32) -> u32 {
+    match e {
+        GL_FUNC_SUBTRACT => 1,
+        GL_FUNC_REVERSE_SUBTRACT => 2,
+        GL_MIN => 3,
+        GL_MAX => 4,
+        _ => 0, // GL_FUNC_ADD and unknown.
+    }
+}
+
+/// GL depth-compare enum → opaque WebGPU compare-function wire value (WebGPU `CompareFunction`, 1..=8).
+fn compare_wire(func: u32) -> u32 {
+    match func {
+        GL_NEVER => 1,
+        GL_LESS => 2,
+        GL_EQUAL => 3,
+        GL_LEQUAL => 4,
+        GL_GREATER => 5,
+        GL_NOTEQUAL => 6,
+        GL_GEQUAL => 7,
+        GL_ALWAYS => 8,
+        _ => 2, // GL_LESS default.
+    }
+}
+
+/// GL cull-face enum → pipeline cull mode (`0` none, `1` front, `2` back). `GL_FRONT_AND_BACK` has no
+/// single-face WebGPU equivalent, so it maps to back (the conservative common case).
+fn cull_wire(face: u32) -> u32 {
+    match face {
+        GL_FRONT => 1,
+        _ => 2, // GL_BACK / GL_FRONT_AND_BACK.
+    }
+}
+
+/// GL front-face winding enum → pipeline front-face (`0` CCW, `1` CW).
+fn front_face_wire(mode: u32) -> u32 {
+    if mode == GL_CW {
+        1
+    } else {
+        0
+    }
 }
 
 /// Vertex-attribute format from a GLSL declaration type string (`gl_shim.c` `decl_format_wire`).

@@ -119,7 +119,21 @@ pub struct DrawCall {
     pub scissor_enabled: bool,
     pub scissor: [i32; 4],
     pub blend: bool,
+    /// Blend factors/equations in force (GL enums), lowered to the pipeline blend state when `blend`.
+    pub blend_src_rgb: u32,
+    pub blend_dst_rgb: u32,
+    pub blend_src_alpha: u32,
+    pub blend_dst_alpha: u32,
+    pub blend_eq_rgb: u32,
+    pub blend_eq_alpha: u32,
     pub depth: bool,
+    /// Depth-compare function (GL enum) + depth-write mask, lowered to the pipeline depth state.
+    pub depth_func: u32,
+    pub depth_write: bool,
+    /// Face culling: whether `GL_CULL_FACE` is enabled, the culled face, and the front-face winding.
+    pub cull_enabled: bool,
+    pub cull_face: u32,
+    pub front_face: u32,
     /// The clear color in force for this draw / clear.
     pub clear: [f32; 4],
     /// For a clear call: the (x, y, w, h) rect being cleared.
@@ -149,7 +163,18 @@ impl Default for DrawCall {
             scissor_enabled: false,
             scissor: [0; 4],
             blend: false,
+            blend_src_rgb: crate::model::glconst::GL_ONE,
+            blend_dst_rgb: crate::model::glconst::GL_ZERO,
+            blend_src_alpha: crate::model::glconst::GL_ONE,
+            blend_dst_alpha: crate::model::glconst::GL_ZERO,
+            blend_eq_rgb: crate::model::glconst::GL_FUNC_ADD,
+            blend_eq_alpha: crate::model::glconst::GL_FUNC_ADD,
             depth: false,
+            depth_func: crate::model::glconst::GL_LESS,
+            depth_write: true,
+            cull_enabled: false,
+            cull_face: crate::model::glconst::GL_BACK,
+            front_face: crate::model::glconst::GL_CCW,
             clear: [0.0; 4],
             clear_rect: [0; 4],
         }

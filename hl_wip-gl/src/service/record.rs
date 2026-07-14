@@ -205,6 +205,26 @@ pub fn uniform_data(ctx: &mut GlContext, name: &str, bytes: &[u8]) {
     }
 }
 
+/// `glUniform*`/`glUniformMatrix*` — write the already-marshalled little-endian `bytes` of a data uniform
+/// into the bound program's uniform-block buffer. `location` is the uniform's declaration index (its
+/// position in the program's reflected `unis`), matching the sampler-location convention used by
+/// [`uniform_sampler`]; the frame builder ships the resulting `ubuf` at binding 1 so the draw's shader
+/// reads the value. Out-of-range writes (bad location / oversized payload) are truncated to the slot.
+pub fn uniform_at(ctx: &mut GlContext, location: usize, bytes: &[u8]) {
+    if let Some(p) = ctx.programs.program_mut(ctx.cur_prog) {
+        let (off, sz) = match p.unis.get(location) {
+            Some(u) => (u.off as usize, u.sz as usize),
+            None => return,
+        };
+        if off >= p.ubuf.len() {
+            return;
+        }
+        // Clamp to both the member's declared size and the block's byte length.
+        let n = bytes.len().min(sz).min(p.ubuf.len() - off);
+        p.ubuf[off..off + n].copy_from_slice(&bytes[..n]);
+    }
+}
+
 // ---- fixed-function state ------------------------------------------------------------------------
 
 /// `glVertexAttribPointer` + implicit `glEnableVertexAttribArray` is separate.
@@ -249,6 +269,47 @@ pub fn clear_color(ctx: &mut GlContext, rgba: [f32; 4]) {
     ctx.clear_color = rgba;
 }
 
+/// `glClearDepthf(d)` — recorded for completeness (no depth attachment is modeled, so it is not lowered).
+pub fn clear_depth(ctx: &mut GlContext, d: f32) {
+    ctx.clear_depth = d;
+}
+
+/// `glBlendFunc(src, dst)` — set the same factor pair for RGB and alpha.
+pub fn blend_func(ctx: &mut GlContext, src: u32, dst: u32) {
+    ctx.blend_src_rgb = src;
+    ctx.blend_dst_rgb = dst;
+    ctx.blend_src_alpha = src;
+    ctx.blend_dst_alpha = dst;
+}
+
+/// `glBlendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha)`.
+pub fn blend_func_separate(ctx: &mut GlContext, src_rgb: u32, dst_rgb: u32, src_a: u32, dst_a: u32) {
+    ctx.blend_src_rgb = src_rgb;
+    ctx.blend_dst_rgb = dst_rgb;
+    ctx.blend_src_alpha = src_a;
+    ctx.blend_dst_alpha = dst_a;
+}
+
+/// `glDepthFunc(func)` — set the depth-compare function.
+pub fn depth_func(ctx: &mut GlContext, func: u32) {
+    ctx.depth_func = func;
+}
+
+/// `glDepthMask(flag)` — enable/disable depth writes.
+pub fn depth_mask(ctx: &mut GlContext, write: bool) {
+    ctx.depth_write = write;
+}
+
+/// `glCullFace(mode)` — select the culled face (`GL_FRONT` / `GL_BACK` / `GL_FRONT_AND_BACK`).
+pub fn cull_face(ctx: &mut GlContext, mode: u32) {
+    ctx.cull_face = mode;
+}
+
+/// `glFrontFace(mode)` — select the front-face winding (`GL_CW` / `GL_CCW`).
+pub fn front_face(ctx: &mut GlContext, mode: u32) {
+    ctx.front_face = mode;
+}
+
 /// `glViewport(x, y, w, h)`.
 pub fn viewport(ctx: &mut GlContext, vp: [i32; 4]) {
     ctx.viewport = vp;
@@ -274,6 +335,7 @@ fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
         GL_BLEND => ctx.blend = on,
         GL_DEPTH_TEST => ctx.depth = on,
         GL_SCISSOR_TEST => ctx.scissor_enabled = on,
+        GL_CULL_FACE => ctx.cull_enabled = on,
         _ => {}
     }
 }
@@ -320,7 +382,18 @@ fn snapshot(ctx: &GlContext) -> DrawCall {
         scissor_enabled: ctx.scissor_enabled,
         scissor: ctx.scissor,
         blend: ctx.blend,
+        blend_src_rgb: ctx.blend_src_rgb,
+        blend_dst_rgb: ctx.blend_dst_rgb,
+        blend_src_alpha: ctx.blend_src_alpha,
+        blend_dst_alpha: ctx.blend_dst_alpha,
+        blend_eq_rgb: ctx.blend_eq_rgb,
+        blend_eq_alpha: ctx.blend_eq_alpha,
         depth: ctx.depth,
+        depth_func: ctx.depth_func,
+        depth_write: ctx.depth_write,
+        cull_enabled: ctx.cull_enabled,
+        cull_face: ctx.cull_face,
+        front_face: ctx.front_face,
         clear: ctx.clear_color,
         elem_buf: ctx.element_buffer,
         ..DrawCall::default()

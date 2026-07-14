@@ -11,5 +11,6 @@
 //!   lowering surface (a driver test drives it against a `hl_gpu::RecordingSink`).
 
 pub mod frame;
+pub mod readpixels;
 pub mod record;
 pub mod swap;
