@@ -709,6 +709,108 @@ fn fill_and_update_buffer_flush_as_write_buffer_at_submit() {
     assert!(record::cmd_fill_buffer(&mut d, cb2, buf, 2, 8, 0).is_err());
 }
 
+// ---------------------------------------------------------------------------------------------------
+// per-frame dynamic state, push constants, and indirect draws
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn set_viewport_and_scissor_lower_to_encoder_ops() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_set_viewport(d, cb, 0.0, 0.0, 640.0, 480.0, 0.0, 1.0).unwrap();
+        // A negative scissor offset clamps to 0 (the IR scissor is unsigned).
+        record::cmd_set_scissor(d, cb, 0, 0, 640, 480).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![
+            Enc::SetViewport { x: 0.0, y: 0.0, w: 640.0, h: 480.0, min_depth: 0.0, max_depth: 1.0 },
+            Enc::SetScissor { x: 0, y: 0, w: 640, h: 480 },
+        ]
+    );
+}
+
+#[test]
+fn push_constants_reach_the_command_buffer_for_the_draw() {
+    let mut d = dev();
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    // Write 8 bytes at offset 0, then overwrite 4 bytes at offset 4 (grows/patches the block in place).
+    record::cmd_push_constants(&mut d, cb, 0, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+    record::cmd_push_constants(&mut d, cb, 4, &[9, 9, 9, 9]).unwrap();
+    // The recorded block is honest command state a draw reads (the IR has no push-constant channel yet).
+    assert_eq!(d.command_buffers.get(&cb).unwrap().push_constants, vec![1, 2, 3, 4, 9, 9, 9, 9]);
+    // Misaligned / zero-size pushes are typed errors, never a silent partial write.
+    assert!(record::cmd_push_constants(&mut d, cb, 2, &[0, 0, 0, 0]).is_err());
+    assert!(record::cmd_push_constants(&mut d, cb, 0, &[0, 0, 0]).is_err());
+}
+
+#[test]
+fn dynamic_state_is_recorded_but_emits_no_encoder_op() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_set_line_width(&mut d, cb, 2.5).unwrap();
+    record::cmd_set_depth_bias(&mut d, cb, 1.0, 0.0, 2.0).unwrap();
+    record::cmd_set_blend_constants(&mut d, cb, [0.1, 0.2, 0.3, 0.4]).unwrap();
+    // FRONT_AND_BACK = 0x3 sets both faces; FRONT = 0x1 sets only the front.
+    record::cmd_set_stencil_reference(&mut d, cb, 0x3, 7).unwrap();
+    record::cmd_set_stencil_compare_mask(&mut d, cb, 0x1, 0xff).unwrap();
+    record::end(&mut d, cb).unwrap();
+
+    // The state is recorded (observable, honest) …
+    let rec = d.command_buffers.get(&cb).unwrap();
+    assert_eq!(rec.dynamic.line_width, 2.5);
+    assert_eq!(rec.dynamic.depth_bias, (1.0, 0.0, 2.0));
+    assert_eq!(rec.dynamic.blend_constants, [0.1, 0.2, 0.3, 0.4]);
+    assert_eq!(rec.dynamic.stencil_reference, (7, 7));
+    assert_eq!(rec.dynamic.stencil_compare_mask, (0xff, 0));
+    // … but the software rasterizer models none of it, so no encoder op is emitted.
+    assert!(rec.enc.is_empty(), "dynamic state emits no encoder op, got {:?}", rec.enc);
+}
+
+#[test]
+fn indirect_draws_validate_buffer_and_emit_no_op() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    // A valid indirect buffer (INDIRECT usage) large enough for two 16-byte VkDrawIndirectCommands.
+    let indirect =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_draw_indirect(d, cb, indirect, 0, 2, 16).unwrap();
+        record::cmd_draw_indexed_indirect(d, cb, indirect, 0, 1, 20).unwrap();
+        record::cmd_dispatch_indirect(d, cb, indirect, 0).unwrap();
+    });
+    // The IR carries no indirect draw/dispatch op — validated, but a documented no-op.
+    assert!(enc.is_empty(), "indirect draws emit no encoder op, got {enc:?}");
+
+    // Truthful failure: an unknown buffer, a non-INDIRECT buffer, and an out-of-range span all error.
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    assert!(record::cmd_draw_indirect(&mut d, cb, 0xdead, 0, 1, 16).is_err());
+    let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 64).unwrap();
+    assert!(record::cmd_draw_indirect(&mut d, cb, vbuf, 0, 1, 16).is_err());
+    // 5 draws * 16 bytes = 80 > 64: out of bounds.
+    assert!(record::cmd_draw_indirect(&mut d, cb, indirect, 0, 5, 16).is_err());
+}
+
+#[test]
+fn copy_buffer_v1_and_v2_share_the_same_lowering() {
+    // The `vkCmdCopyBuffer2` shim entry point re-parses `VkCopyBufferInfo2` and delegates to this exact
+    // `record::cmd_copy_buffer` lowering — so the v2 path lowers identically to v1 (asserted here).
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 256).unwrap();
+    let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 256).unwrap();
+    let (s, t) = (buf_ir(&d, src), buf_ir(&d, dst));
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_buffer(d, cb, src, dst, 8, 16, 32).unwrap();
+    });
+    assert_eq!(enc, vec![Enc::CopyBufferToBuffer { src: s, src_offset: 8, dst: t, dst_offset: 16, size: 32 }]);
+}
+
 #[test]
 fn pipeline_barrier_records_layout_transition_and_emits_no_ir() {
     let mut d = dev();

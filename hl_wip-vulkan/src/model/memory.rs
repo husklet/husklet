@@ -60,6 +60,7 @@ pub mod vk_buffer_usage {
     pub const STORAGE_BUFFER: u32 = 0x0000_0020;
     pub const INDEX_BUFFER: u32 = 0x0000_0040;
     pub const VERTEX_BUFFER: u32 = 0x0000_0080;
+    pub const INDIRECT_BUFFER: u32 = 0x0000_0100;
 }
 
 /// `VkImageUsageFlagBits` (stable bit values from vk.xml).
@@ -109,6 +110,9 @@ pub fn buffer_usage_from_vk(u: u32) -> u32 {
     }
     if u & vk_buffer_usage::TRANSFER_DST != 0 {
         out |= bu::COPY_DST;
+    }
+    if u & vk_buffer_usage::INDIRECT_BUFFER != 0 {
+        out |= bu::INDIRECT;
     }
     out
 }

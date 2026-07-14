@@ -941,6 +941,82 @@ pub struct VkClearRect {
     pub layer_count: u32,
 }
 
+// ---- the `...2` copy/blit wrappers (core 1.3 / VK_KHR_copy_commands2) ----------------------------
+// Each `vkCmd*2` takes a single `Vk*Info2` aggregate whose `pRegions` array holds `Vk*Copy2`/`Vk*Blit2`
+// structs — the same region payload as the v1 command, prefixed by a `{ sType, pNext }` node header. The
+// `...2` entry points read these and delegate to the identical v1 lowering. Layout from vk.xml.
+
+/// `VkBufferCopy2` — one `vkCmdCopyBuffer2` region ( `VkBufferCopy` + chain header).
+#[repr(C)]
+pub struct VkBufferCopy2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_offset: VkDeviceSize,
+    pub dst_offset: VkDeviceSize,
+    pub size: VkDeviceSize,
+}
+
+/// `VkCopyBufferInfo2` — the `vkCmdCopyBuffer2` argument aggregate.
+#[repr(C)]
+pub struct VkCopyBufferInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_buffer: u64,
+    pub dst_buffer: u64,
+    pub region_count: u32,
+    pub p_regions: *const VkBufferCopy2,
+}
+
+/// `VkBufferImageCopy2` — one `vkCmdCopyBufferToImage2` region (`VkBufferImageCopy` + chain header).
+#[repr(C)]
+pub struct VkBufferImageCopy2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub buffer_offset: VkDeviceSize,
+    pub buffer_row_length: u32,
+    pub buffer_image_height: u32,
+    pub image_subresource: VkImageSubresourceLayers,
+    pub image_offset: VkOffset3D,
+    pub image_extent: VkExtent3D,
+}
+
+/// `VkCopyBufferToImageInfo2` — the `vkCmdCopyBufferToImage2` argument aggregate.
+#[repr(C)]
+pub struct VkCopyBufferToImageInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_buffer: u64,
+    pub dst_image: u64,
+    pub dst_image_layout: i32,
+    pub region_count: u32,
+    pub p_regions: *const VkBufferImageCopy2,
+}
+
+/// `VkImageBlit2` — one `vkCmdBlitImage2` region (`VkImageBlit` + chain header).
+#[repr(C)]
+pub struct VkImageBlit2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_subresource: VkImageSubresourceLayers,
+    pub src_offsets: [VkOffset3D; 2],
+    pub dst_subresource: VkImageSubresourceLayers,
+    pub dst_offsets: [VkOffset3D; 2],
+}
+
+/// `VkBlitImageInfo2` — the `vkCmdBlitImage2` argument aggregate.
+#[repr(C)]
+pub struct VkBlitImageInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_image: u64,
+    pub src_image_layout: i32,
+    pub dst_image: u64,
+    pub dst_image_layout: i32,
+    pub region_count: u32,
+    pub p_regions: *const VkImageBlit2,
+    pub filter: i32,
+}
+
 /// `VkImageMemoryBarrier` (legacy / core 1.0) — an image's `oldLayout → newLayout` transition.
 #[repr(C)]
 pub struct VkImageMemoryBarrier {

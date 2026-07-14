@@ -24,6 +24,42 @@ pub enum CommandBufferState {
     Pending,
 }
 
+/// The pipeline dynamic state a command buffer records via `vkCmdSet*` that the hl-GPU IR / CPU
+/// rasterizer does NOT model (line width, depth bias, blend constants, stencil masks/reference). These
+/// are recorded verbatim here — observable, honest command state — but carry no encoder op, because the
+/// software rasterizer draws hairline-width, unbiased, blend-const-free, stencil-less triangles. Ported
+/// from MoltenVK's `MVKCommandEncoderState`; viewport/scissor are the exception (they DO lower to
+/// [`Enc::SetViewport`]/[`Enc::SetScissor`], so they are not held here).
+#[derive(Clone, PartialEq, Debug)]
+pub struct DynamicState {
+    /// `vkCmdSetLineWidth` (default 1.0). The rasterizer fills triangles; wide lines are not modeled.
+    pub line_width: f32,
+    /// `vkCmdSetDepthBias` `(constantFactor, clamp, slopeFactor)`. No depth buffer in the color oracle.
+    pub depth_bias: (f32, f32, f32),
+    /// `vkCmdSetBlendConstants` RGBA. Constant-color blend factors are not modeled.
+    pub blend_constants: [f32; 4],
+    /// `vkCmdSetStencilCompareMask` `(front, back)`. No stencil buffer in the color oracle.
+    pub stencil_compare_mask: (u32, u32),
+    /// `vkCmdSetStencilWriteMask` `(front, back)`.
+    pub stencil_write_mask: (u32, u32),
+    /// `vkCmdSetStencilReference` `(front, back)`.
+    pub stencil_reference: (u32, u32),
+}
+
+impl Default for DynamicState {
+    fn default() -> Self {
+        // Vulkan's initial dynamic state: line width 1.0, everything else zero.
+        DynamicState {
+            line_width: 1.0,
+            depth_bias: (0.0, 0.0, 0.0),
+            blend_constants: [0.0; 4],
+            stencil_compare_mask: (0, 0),
+            stencil_write_mask: (0, 0),
+            stencil_reference: (0, 0),
+        }
+    }
+}
+
 /// A command buffer's recorded encoder + the transient recording state (bound pipeline, pending bind
 /// groups, render-pass depth) needed to lower the next `vkCmd*`. Mirrors `MVKCommandBuffer`.
 #[derive(Clone, PartialEq, Debug, Default)]
@@ -50,6 +86,12 @@ pub struct CmdBufRec {
     /// Device event/query ops (`vkCmdSetEvent`/`vkCmdResetEvent`/`vkCmdResetQueryPool`/`vkCmdEndQuery`/
     /// `vkCmdWriteTimestamp`/`vkCmdCopyQueryPoolResults`) applied at (synchronous) submit completion.
     pub deferred: Vec<DeferredOp>,
+    /// Pipeline dynamic state recorded by `vkCmdSet*` that the IR does not model (see [`DynamicState`]).
+    pub dynamic: DynamicState,
+    /// The push-constant block bytes recorded by `vkCmdPushConstants` (offset-indexed, grown on demand).
+    /// The hl-GPU IR has no push-constant channel yet, so this is honest recorded command state a later
+    /// increment can stage into a per-draw uniform bind — the bytes are retained, never silently dropped.
+    pub push_constants: Vec<u8>,
 }
 
 impl CmdBufRec {
@@ -69,5 +111,7 @@ impl CmdBufRec {
         self.active_query = None;
         self.buffer_writes.clear();
         self.deferred.clear();
+        self.dynamic = DynamicState::default();
+        self.push_constants.clear();
     }
 }

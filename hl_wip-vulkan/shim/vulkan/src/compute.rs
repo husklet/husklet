@@ -555,6 +555,18 @@ pub extern "C" fn vkCmdDispatch(command_buffer: *mut c_void, group_count_x: u32,
     });
 }
 
+/// `vkCmdDispatchIndirect` — validate the indirect buffer; the IR has no indirect dispatch op, so this
+/// records no encoder op (a documented bring-up limit), erroring only on a bad buffer.
+#[no_mangle]
+pub extern "C" fn vkCmdDispatchIndirect(command_buffer: *mut c_void, buffer: u64, offset: u64) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+        return;
+    };
+    dev_sink(|dev, _| {
+        let _ = record::cmd_dispatch_indirect(dev, cb, buffer, offset);
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn vkQueueSubmit(
     _queue: *mut c_void,

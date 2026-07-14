@@ -205,6 +205,122 @@ pub extern "C" fn vkCmdBlitImage(
     });
 }
 
+// ---- the `...2` copy/blit variants (core 1.3 / VK_KHR_copy_commands2) -----------------------------
+// Each reads its single `Vk*Info2` aggregate and delegates to the identical v1 lowering — the region
+// payload is byte-identical to the v1 struct plus a chain header. The base and `KHR` names are the same
+// command, so both alias the shared body. Ported (delegated) from the v1 transfer commands above.
+
+/// Shared body for `vkCmdCopyBuffer2` / `vkCmdCopyBuffer2KHR`.
+fn copy_buffer2(command_buffer: *mut c_void, p_copy_buffer_info: *const c_void) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(info) = (unsafe { (p_copy_buffer_info as *const VkCopyBufferInfo2).as_ref() }) else { return };
+    if info.p_regions.is_null() {
+        return;
+    }
+    let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
+    dev(|d| {
+        for r in regions {
+            let _ = record::cmd_copy_buffer(d, cb, info.src_buffer, info.dst_buffer, r.src_offset, r.dst_offset, r.size);
+        }
+    });
+}
+
+/// Shared body for `vkCmdCopyBufferToImage2` / `vkCmdCopyBufferToImage2KHR`.
+fn copy_buffer_to_image2(command_buffer: *mut c_void, p_copy_info: *const c_void) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(info) = (unsafe { (p_copy_info as *const VkCopyBufferToImageInfo2).as_ref() }) else { return };
+    if info.p_regions.is_null() {
+        return;
+    }
+    let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
+    dev(|d| {
+        for r in regions {
+            if r.image_subresource.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0
+                || r.image_subresource.mip_level != 0
+                || r.image_subresource.base_array_layer != 0
+                || r.image_offset.x != 0
+                || r.image_offset.y != 0
+            {
+                continue;
+            }
+            let _ = record::cmd_copy_buffer_to_image(
+                d,
+                cb,
+                info.src_buffer,
+                info.dst_image,
+                r.buffer_offset,
+                r.buffer_row_length,
+                r.buffer_image_height,
+                r.image_extent.width,
+                r.image_extent.height.max(1),
+            );
+        }
+    });
+}
+
+/// Shared body for `vkCmdBlitImage2` / `vkCmdBlitImage2KHR`.
+fn blit_image2(command_buffer: *mut c_void, p_blit_info: *const c_void) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(info) = (unsafe { (p_blit_info as *const VkBlitImageInfo2).as_ref() }) else { return };
+    if info.p_regions.is_null() {
+        return;
+    }
+    let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
+    let linear = info.filter == VK_FILTER_LINEAR;
+    dev(|d| {
+        for r in regions {
+            let [s0, s1] = r.src_offsets;
+            let [d0, d1] = r.dst_offsets;
+            if s1.x <= s0.x || s1.y <= s0.y || s0.z != 0 || s1.z != 1
+                || d1.x <= d0.x || d1.y <= d0.y || d0.z != 0 || d1.z != 1
+            {
+                continue;
+            }
+            let _ = record::cmd_blit_image(
+                d,
+                cb,
+                info.src_image,
+                info.dst_image,
+                (s0.x as u32, s0.y as u32),
+                ((s1.x - s0.x) as u32, (s1.y - s0.y) as u32),
+                (d0.x as u32, d0.y as u32),
+                ((d1.x - d0.x) as u32, (d1.y - d0.y) as u32),
+                linear,
+            );
+        }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyBuffer2(command_buffer: *mut c_void, p_copy_buffer_info: *const c_void) {
+    copy_buffer2(command_buffer, p_copy_buffer_info);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyBuffer2KHR(command_buffer: *mut c_void, p_copy_buffer_info: *const c_void) {
+    copy_buffer2(command_buffer, p_copy_buffer_info);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyBufferToImage2(command_buffer: *mut c_void, p_copy_buffer_to_image_info: *const c_void) {
+    copy_buffer_to_image2(command_buffer, p_copy_buffer_to_image_info);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyBufferToImage2KHR(command_buffer: *mut c_void, p_copy_buffer_to_image_info: *const c_void) {
+    copy_buffer_to_image2(command_buffer, p_copy_buffer_to_image_info);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdBlitImage2(command_buffer: *mut c_void, p_blit_image_info: *const c_void) {
+    blit_image2(command_buffer, p_blit_image_info);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdBlitImage2KHR(command_buffer: *mut c_void, p_blit_image_info: *const c_void) {
+    blit_image2(command_buffer, p_blit_image_info);
+}
+
 // ---- clears --------------------------------------------------------------------------------------
 
 #[no_mangle]

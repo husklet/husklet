@@ -277,6 +277,185 @@ pub fn cmd_end_render_pass(dev: &mut Device, cb: VkCommandBuffer) -> Result<()> 
     Ok(())
 }
 
+// ---- dynamic state -----------------------------------------------------------------------------
+// Viewport + scissor are modeled by the IR (etag 7 / 16) and lower to real encoder ops. The remaining
+// `vkCmdSet*` dynamic state is recorded into the command buffer's [`DynamicState`] (observable, honest)
+// but carries no encoder op — the software color rasterizer does not model wide lines, depth bias,
+// constant-color blend, or stencil. Ported from `command.rs`'s state-setting commands.
+
+/// `vkCmdSetViewport` (one viewport) — record `Enc::SetViewport`. The viewport transform is applied by
+/// the pass/rasterizer that consumes it.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_set_viewport(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    min_depth: f32,
+    max_depth: f32,
+) -> Result<()> {
+    recording_mut(dev, cb)?.enc.push(Enc::SetViewport { x, y, w, h, min_depth, max_depth });
+    Ok(())
+}
+
+/// `vkCmdSetScissor` (one rect) — record `Enc::SetScissor`. A negative `VkRect2D` offset is clamped to 0
+/// by the caller (the IR scissor is unsigned).
+pub fn cmd_set_scissor(dev: &mut Device, cb: VkCommandBuffer, x: u32, y: u32, w: u32, h: u32) -> Result<()> {
+    recording_mut(dev, cb)?.enc.push(Enc::SetScissor { x, y, w, h });
+    Ok(())
+}
+
+/// `vkCmdSetLineWidth` — record the dynamic line width (honest command state; the fill rasterizer draws
+/// no wide lines, so this emits no encoder op — documented in [`DynamicState`]).
+pub fn cmd_set_line_width(dev: &mut Device, cb: VkCommandBuffer, line_width: f32) -> Result<()> {
+    recording_mut(dev, cb)?.dynamic.line_width = line_width;
+    Ok(())
+}
+
+/// `vkCmdSetDepthBias` — record `(constantFactor, clamp, slopeFactor)` (no depth buffer; no encoder op).
+pub fn cmd_set_depth_bias(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    constant_factor: f32,
+    clamp: f32,
+    slope_factor: f32,
+) -> Result<()> {
+    recording_mut(dev, cb)?.dynamic.depth_bias = (constant_factor, clamp, slope_factor);
+    Ok(())
+}
+
+/// `vkCmdSetBlendConstants` — record the RGBA blend constants (no constant-color blend; no encoder op).
+pub fn cmd_set_blend_constants(dev: &mut Device, cb: VkCommandBuffer, constants: [f32; 4]) -> Result<()> {
+    recording_mut(dev, cb)?.dynamic.blend_constants = constants;
+    Ok(())
+}
+
+/// Apply `value` to the stencil-face pair selected by `face_mask` (VkStencilFaceFlags: FRONT = 0x1,
+/// BACK = 0x2, FRONT_AND_BACK = 0x3).
+fn set_stencil_faces(pair: &mut (u32, u32), face_mask: u32, value: u32) {
+    if face_mask & 0x1 != 0 {
+        pair.0 = value;
+    }
+    if face_mask & 0x2 != 0 {
+        pair.1 = value;
+    }
+}
+
+/// `vkCmdSetStencilCompareMask` — record the compare mask for the selected face(s) (no stencil buffer).
+pub fn cmd_set_stencil_compare_mask(dev: &mut Device, cb: VkCommandBuffer, face_mask: u32, mask: u32) -> Result<()> {
+    set_stencil_faces(&mut recording_mut(dev, cb)?.dynamic.stencil_compare_mask, face_mask, mask);
+    Ok(())
+}
+
+/// `vkCmdSetStencilWriteMask` — record the write mask for the selected face(s) (no stencil buffer).
+pub fn cmd_set_stencil_write_mask(dev: &mut Device, cb: VkCommandBuffer, face_mask: u32, mask: u32) -> Result<()> {
+    set_stencil_faces(&mut recording_mut(dev, cb)?.dynamic.stencil_write_mask, face_mask, mask);
+    Ok(())
+}
+
+/// `vkCmdSetStencilReference` — record the reference value for the selected face(s) (no stencil buffer).
+pub fn cmd_set_stencil_reference(dev: &mut Device, cb: VkCommandBuffer, face_mask: u32, reference: u32) -> Result<()> {
+    set_stencil_faces(&mut recording_mut(dev, cb)?.dynamic.stencil_reference, face_mask, reference);
+    Ok(())
+}
+
+// ---- push constants ----------------------------------------------------------------------------
+
+/// `vkCmdPushConstants` — write `bytes` at `offset` into the command buffer's push-constant block. The
+/// bytes are retained as honest command state (grown on demand): the hl-GPU IR has no push-constant
+/// channel yet, so a draw/dispatch cannot bind them, but they are never silently dropped (a later
+/// increment stages them as a per-draw uniform bind). `offset`/size must be 4-byte aligned + nonzero
+/// (spec §17.1). Ported from `command.rs::vkCmdPushConstants` (range-vs-layout validation omitted — the
+/// bring-up pipeline-layout model does not carry push-constant ranges).
+pub fn cmd_push_constants(dev: &mut Device, cb: VkCommandBuffer, offset: u32, bytes: &[u8]) -> Result<()> {
+    if offset % 4 != 0 || bytes.is_empty() || bytes.len() % 4 != 0 {
+        return Err(GpuError::Invalid("vkCmdPushConstants: offset/size must be nonzero and 4-byte aligned"));
+    }
+    let rec = recording_mut(dev, cb)?;
+    let end = offset as usize + bytes.len();
+    if rec.push_constants.len() < end {
+        rec.push_constants.resize(end, 0);
+    }
+    rec.push_constants[offset as usize..end].copy_from_slice(bytes);
+    Ok(())
+}
+
+// ---- indirect draws / dispatch -----------------------------------------------------------------
+// The indirect commands read their draw/dispatch arguments from a device buffer at execution time. The
+// hl-GPU IR carries only direct `Draw`/`Dispatch`/`DrawIndexed` (the argument words are not available at
+// record time and there is no indirect encoder op), so these validate the indirect buffer (handle,
+// INDIRECT usage, in-bounds argument span) and record NO encoder op — an honest, documented limit. A bad
+// handle / missing usage / out-of-range span is a truthful error, never a false success. Ported from
+// `command.rs::vkCmdDrawIndirect`/`indirect_ok`.
+
+/// Validate that `buffer` is a valid INDIRECT source holding `draw_count` argument structs of
+/// `struct_size` bytes at `stride`, starting at `offset`, all within the buffer.
+fn validate_indirect(
+    dev: &Device,
+    buffer: VkBuffer,
+    offset: u64,
+    draw_count: u32,
+    stride: u32,
+    struct_size: u64,
+) -> Result<()> {
+    let b = dev
+        .buffers
+        .get(&buffer)
+        .ok_or(GpuError::Invalid("vkCmd*Indirect: unknown VkBuffer"))?;
+    if b.usage & buffer_usage::INDIRECT == 0 {
+        return Err(GpuError::Invalid("vkCmd*Indirect: buffer missing INDIRECT usage"));
+    }
+    if draw_count == 0 {
+        return Ok(()); // a zero-count indirect draw is a valid no-op.
+    }
+    // Span from `offset` through the last argument struct's end.
+    let last = (draw_count as u64 - 1).checked_mul(stride as u64).ok_or(GpuError::OutOfBounds)?;
+    match last.checked_add(struct_size).and_then(|span| offset.checked_add(span)) {
+        Some(end) if end <= b.size => Ok(()),
+        _ => Err(GpuError::OutOfBounds),
+    }
+}
+
+/// `vkCmdDrawIndirect` — validate the indirect buffer (`VkDrawIndirectCommand` is 16 bytes) then record
+/// no encoder op (documented limit: the IR has no indirect draw). Truthful error on a bad buffer.
+pub fn cmd_draw_indirect(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    draw_count: u32,
+    stride: u32,
+) -> Result<()> {
+    validate_indirect(dev, buffer, offset, draw_count, stride, 16)?;
+    let _ = recording_mut(dev, cb)?;
+    Ok(())
+}
+
+/// `vkCmdDrawIndexedIndirect` — validate the indirect buffer (`VkDrawIndexedIndirectCommand` is 20 bytes)
+/// then record no encoder op (documented limit). Truthful error on a bad buffer.
+pub fn cmd_draw_indexed_indirect(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    draw_count: u32,
+    stride: u32,
+) -> Result<()> {
+    validate_indirect(dev, buffer, offset, draw_count, stride, 20)?;
+    let _ = recording_mut(dev, cb)?;
+    Ok(())
+}
+
+/// `vkCmdDispatchIndirect` — validate the indirect buffer (`VkDispatchIndirectCommand` is 12 bytes) then
+/// record no encoder op (documented limit). Truthful error on a bad buffer.
+pub fn cmd_dispatch_indirect(dev: &mut Device, cb: VkCommandBuffer, buffer: VkBuffer, offset: u64) -> Result<()> {
+    validate_indirect(dev, buffer, offset, 1, 0, 12)?;
+    let _ = recording_mut(dev, cb)?;
+    Ok(())
+}
+
 /// `vkCmdCopyBuffer` (one region) — record a `CopyBufferToBuffer`. Ported from
 /// `command.rs::vkCmdCopyBuffer`.
 pub fn cmd_copy_buffer(
