@@ -3,7 +3,7 @@
 // with the kernel's access_ok() contract — INCLUDING through the x86 vDSO fast-syscall inline path
 // (translate/x86_64/emit.c emit_fast_syscall), which previously stored the result UNGUARDED and crashed the
 // engine on a bad pointer. RAW syscalls (SYS_*) so we hit that fast path directly, bypassing any libc
-// pointer check. The registered sibling case runs this same binary under DDJIT_NOFASTSYS=1 to also cover the
+// pointer check. The registered sibling case runs this same binary under HL_JIT_NOFASTSYS=1 to also cover the
 // slow (svc_time) path. Per-syscall NULL policy matches Linux exactly: clock_gettime(NULL) = EFAULT (the
 // kernel always copies the result out), gettimeofday(NULL,·) = 0 (a legal no-op). Diffed vs the native/qemu
 // oracle (.oracle()).

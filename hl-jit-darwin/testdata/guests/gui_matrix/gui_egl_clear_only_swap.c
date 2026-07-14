@@ -12,7 +12,7 @@
  * Run examples:
  *   ./gui_egl_clear_only_swap
  *   ./single_channel_texture_probe
- *   DD_IR_DUMP=/tmp/retained-frame.ir ./retained_frame_partial_load
+ *   HL_IR_DUMP=/tmp/retained-frame.ir ./retained_frame_partial_load
  *
  * This probe validates the center pixel when default-FBO glReadPixels works.
  * If readback reports a GL error, a successful EGL clear/swap is still a PASS,

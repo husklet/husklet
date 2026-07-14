@@ -15,10 +15,10 @@
 //!   oracle/<name>.png     optional external oracle (e.g. Weston screenshot) — compared when present
 //!
 //! Modes (env vars):
-//!   DD_UPDATE_GOLDENS=1   (re)write golden/<name>.png from this run instead of asserting — seeds goldens
+//!   HL_UPDATE_GOLDENS=1   (re)write golden/<name>.png from this run instead of asserting — seeds goldens
 //!   DD_GOLDEN_TOL=<u8>    per-channel abs tolerance (default 4)
 //!   DD_GOLDEN_MAXPCT=<f>  max fraction of pixels allowed to exceed tol (default 0.0 = strict)
-//!   DD_ORACLE_STRICT=1    fail the suite if a present oracle image mismatches (default: informational)
+//!   HL_ORACLE_STRICT=1    fail the suite if a present oracle image mismatches (default: informational)
 //!
 //! The IR builders and the PNG codec are platform-agnostic (pure Rust); only the replay+readback step is
 //! macOS/Metal. `seed_captures` regenerates the `.ir` files from source on any host, so a reviewer can
@@ -392,7 +392,7 @@ fragment float4 fmain(VOut in [[stage_in]]) { return in.color; }
 "#;
 
     /// Textured shader (Chrome's UI atlas path): samples an atlas at ushort texcoords * invAtlasSize,
-    /// modulated by the per-vertex tint. Identical to metal_chrome_ir_regression's CHROME_TEXTURED_MSL.
+    /// modulated by the per-vertex tint. Identical to metal_chrome_ir_regression's HL_TEXTURED_MSL.
     const TEX_MSL: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
@@ -769,7 +769,7 @@ fn registry() -> Vec<Case> {
         Case { name: "chrome-textured-glyph", w: 64, h: 64, build: Some(cases::textured_glyph), oracle: None },
         Case { name: "chrome-offscreen-fbo", w: 64, h: 64, build: Some(cases::offscreen_fbo), oracle: None },
         Case { name: "chrome-orientation", w: 64, h: 64, build: Some(cases::orientation), oracle: None },
-        // External-capture slot: drop a real GL-shim capture here (DD_IR_DUMP) as
+        // External-capture slot: drop a real GL-shim capture here (HL_IR_DUMP) as
         // target-chrome-codex/chrome-stream-ir-000.ir + a golden, and (when it lands) the Weston oracle
         // screenshot at oracle/chrome-weston.png. Skipped cleanly until the .ir is present.
         Case { name: "chrome-stream-ir-000", w: 1280, h: 720, build: None, oracle: Some("chrome-weston.png") },
@@ -945,10 +945,10 @@ mod metal_suite {
             std::fs::create_dir_all(d).unwrap();
         }
 
-        let update = std::env::var("DD_UPDATE_GOLDENS").is_ok();
+        let update = std::env::var("HL_UPDATE_GOLDENS").is_ok();
         let tol = env_u8("DD_GOLDEN_TOL", 4);
         let max_pct = env_f64("DD_GOLDEN_MAXPCT", 0.0);
-        let oracle_strict = std::env::var("DD_ORACLE_STRICT").is_ok();
+        let oracle_strict = std::env::var("HL_ORACLE_STRICT").is_ok();
 
         let mut failures = Vec::new();
         println!(
@@ -985,7 +985,7 @@ mod metal_suite {
                 std::fs::write(&golden_path, &rendered_png).unwrap();
                 println!("  UPDATE {:<24} -> {}", c.name, golden_path.display());
             } else if !golden_path.exists() {
-                println!("  FAIL  {:<24} (no golden; run with DD_UPDATE_GOLDENS=1)", c.name);
+                println!("  FAIL  {:<24} (no golden; run with HL_UPDATE_GOLDENS=1)", c.name);
                 failures.push(c.name);
             } else {
                 match png_decode::decode(&std::fs::read(&golden_path).unwrap()) {
@@ -1019,7 +1019,7 @@ mod metal_suite {
                 }
             }
 
-            // Optional external oracle (informational unless DD_ORACLE_STRICT).
+            // Optional external oracle (informational unless HL_ORACLE_STRICT).
             if let Some(oracle_name) = c.oracle {
                 let op = oracle_dir.join(oracle_name);
                 if op.exists() {
@@ -1057,7 +1057,7 @@ mod metal_suite {
 /// wgpu-backend golden parity: replay the SAME captured IR through `hl_gpu_wgpu::WgpuBackend` and diff the
 /// readback against the Metal-produced golden PNGs (`golden/<name>.png`). This is the metal-vs-wgpu pixel
 /// comparison the wgpu present-path wiring is validated by — run after the Metal `golden_suite` has seeded
-/// goldens (DD_UPDATE_GOLDENS=1). Reuses the same `registry()`/`cases` builders, `png_decode`, and diff.
+/// goldens (HL_UPDATE_GOLDENS=1). Reuses the same `registry()`/`cases` builders, `png_decode`, and diff.
 #[cfg(target_os = "macos")]
 mod wgpu_suite {
     use super::{assert_orientation_contract, codex_root, golden_root, png_decode, registry};

@@ -1,4 +1,4 @@
-//! Flag-gated content-tile tracer (`DD_TILE_TRACE`) — INSTRUMENTATION ONLY, no behavior change.
+//! Flag-gated content-tile tracer (`HL_TILE_TRACE`) — INSTRUMENTATION ONLY, no behavior change.
 //!
 //! Purpose: pin, on a live multi-process Chrome run, WHERE the renderer's rastered web content is lost
 //! before the viz/GPU process composites it. The GL shim's frame lowering (`frame.rs`) only binds a
@@ -14,8 +14,8 @@
 //!   * for every sampler-bound texture the compositor draws, whether it carries pixel `data` or is
 //!     EMPTY (would be dropped → the "sampled empty tile"), with its GL id + dimensions.
 //!
-//! It never mutates state and emits nothing unless `DD_TILE_TRACE` is set, so it is safe to leave in.
-//! Correlate its "EMPTY tile" lines with `DD_SHIM_DEBUG` "unimplemented entry point: eglCreateImage /
+//! It never mutates state and emits nothing unless `HL_TILE_TRACE` is set, so it is safe to leave in.
+//! Correlate its "EMPTY tile" lines with `HL_SHIM_DEBUG` "unimplemented entry point: eglCreateImage /
 //! eglBindTexImage" lines: an EMPTY tile plus a stubbed image-import verb is the buffer-bridge gap.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,7 +26,7 @@ static FRAME: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn enabled() -> bool {
-    std::env::var_os("DD_TILE_TRACE").is_some()
+    std::env::var_os("HL_TILE_TRACE").is_some()
 }
 
 /// The program a draw renders with (mirrors `frame.rs::dpr_idx` without changing its visibility).
@@ -113,9 +113,9 @@ pub fn trace_frame(s: &GlState) {
         eprintln!("[tiletrace]   offscreen FBO render-target: glTex={t} {w}x{h} data={len}B (in-process raster the shim sees)");
     }
 
-    // Optional per-frame dump to $DD_TEXTURE_DUMP_DIR: a manifest of every live texture + its data len,
+    // Optional per-frame dump to $HL_TEXTURE_DUMP_DIR: a manifest of every live texture + its data len,
     // and the raw RGBA of any non-empty sampler tile, so a live run yields inspectable evidence.
-    if let Some(dir) = std::env::var_os("DD_TEXTURE_DUMP_DIR") {
+    if let Some(dir) = std::env::var_os("HL_TEXTURE_DUMP_DIR") {
         let dir = std::path::PathBuf::from(dir);
         let _ = std::fs::create_dir_all(&dir);
         let mut manifest = format!(

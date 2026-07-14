@@ -152,7 +152,7 @@ mod headless {
         }
 
         let dir =
-            std::env::var("DD_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-selftest".into());
+            std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-selftest".into());
         let mut server = Server::new(server_fd, PngPresenter::new(&dir));
 
         let mut c = Client::new(client_fd);

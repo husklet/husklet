@@ -11,7 +11,7 @@
 //!    gl_shim.c's hand-rolled `iu8/iu32/istr` and its magic tag numbers `iu8(8)` used to duplicate.)
 //!
 //! 2. **The host-exec transport** ([`transport`]) — the persistent Unix-socket channel to the host
-//!    GPU-exec service (`$DD_GPU_EXEC`), the `[hdr][ir]`+ack frame protocol, lazy reconnect with the
+//!    GPU-exec service (`$HL_GPU_EXEC`), the `[hdr][ir]`+ack frame protocol, lazy reconnect with the
 //!    residency-reset signal, and the completion-wake seam (eventfd/futex doorbell for the future
 //!    shared-memory ring).
 //!

@@ -7,7 +7,7 @@
 //! `vkCmd*` records an [`Enc`] into the target command buffer; `vkQueueSubmit` wraps the recorded
 //! encoder in a [`Cmd::Submit`]. The accumulated IR is the exact stream the host SPIR-V→Metal executor
 //! (`dd-gpu-wgpu`, proven in `spirv_compute.rs`/`spirv_triangle.rs`) replays — in production shipped
-//! over `hl_shim::transport` to `$DD_GPU_EXEC`; in the validation tests drained via
+//! over `hl_shim::transport` to `$HL_GPU_EXEC`; in the validation tests drained via
 //! [`take_ir`] and replayed on a real-Metal `WgpuBackend` (the test playing the host exec service,
 //! exactly as dd-shim-cuda's tests replay on an embedded backend).
 //!
@@ -616,7 +616,7 @@ pub struct VkState {
     pub private_data: HashMap<(u64, i32, u64), u64>,
     pub surfaces: HashMap<u64, SurfaceRec>,
     pub swapchains: HashMap<u64, SwapchainRec>,
-    /// Lazily-opened host GPU-exec channel (only when `$DD_GPU_EXEC` is set — the live guest path).
+    /// Lazily-opened host GPU-exec channel (only when `$HL_GPU_EXEC` is set — the live guest path).
     pub exec: Option<hl_shim::transport::ExecConn>,
     /// Cursor into `ir_log` up to which frames have been shipped to the host at `vkQueuePresentKHR`.
     pub present_flushed: usize,
@@ -705,10 +705,10 @@ pub fn reset() {
     *lock() = VkState::default();
 }
 
-/// DD_SHIM_DEBUG entry-point tracer (localizes which real body an app is in). Cheap when off.
+/// HL_SHIM_DEBUG entry-point tracer (localizes which real body an app is in). Cheap when off.
 #[inline]
 pub fn trace(name: &str) {
-    if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+    if std::env::var_os("HL_SHIM_DEBUG").is_some() {
         eprintln!("[dd-shim-vk] -> {name}");
     }
 }

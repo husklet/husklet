@@ -71,7 +71,7 @@ static int ip_opt_l2m(int o) {
 // (caller sends via unix_dgram_sendmsg_at); 0 otherwise (AF_INET, unnamed, or a non-jail pathname whose raw
 // sockaddr already round-trips -> caller sends unchanged, keeping the bare-metal AF_UNIX dgram path intact).
 static int unix_dgram_dest(const uint8_t *sa, socklen_t l, char *host, size_t hn) {
-    if (abs_is(sa, l)) { // abstract namespace (sun_path[0]==0): DD_NETNS-keyed fs socket (same as bind/connect)
+    if (abs_is(sa, l)) { // abstract namespace (sun_path[0]==0): HL_NETNS-keyed fs socket (same as bind/connect)
         abs_path(sa, l, host, hn);
         return 1;
     }
@@ -433,7 +433,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             break;
         }
         // abstract AF_UNIX (sun_path[0]==0): macOS has no abstract ns -> bind a real fs socket keyed by
-        // DD_NETNS. Must run BEFORE any general AF_UNIX passthrough below.
+        // HL_NETNS. Must run BEFORE any general AF_UNIX passthrough below.
         if (abs_is(sa, (socklen_t)a2)) {
             char up[200];
             abs_path(sa, (socklen_t)a2, up, sizeof up);
@@ -609,10 +609,10 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
                 return svc_done(c);
             }
         }
-        // --network none: no external egress (DD_NET_ISOLATE). Loopback is redirected by the lo_* path
+        // --network none: no external egress (HL_NET_ISOLATE). Loopback is redirected by the lo_* path
         // below; any non-127/8 AF_INET destination is refused, matching docker's null network.
         static int net_isolate = -1;
-        if (net_isolate < 0) net_isolate = getenv("DD_NET_ISOLATE") != NULL;
+        if (net_isolate < 0) net_isolate = getenv("HL_NET_ISOLATE") != NULL;
         uint8_t *sa = (uint8_t *)a1;
         // A bad address POINTER must return EFAULT, not fault the engine: the DNS/loopback/AF_UNIX
         // classifiers below deref `sa` directly (Linux copies the sockaddr in before any routing).
@@ -733,7 +733,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             if (r == 0 && (int)a0 >= 0 && (int)a0 < DD_NFD) g_sock_conn[(int)a0] = 1; // sticky-connected
             break;
         }
-        // abstract AF_UNIX (sun_path[0]==0): dial the same DD_NETNS-keyed fs socket bind used. Must run
+        // abstract AF_UNIX (sun_path[0]==0): dial the same HL_NETNS-keyed fs socket bind used. Must run
         // BEFORE the general AF_UNIX passthrough below.
         if (abs_is(sa, (socklen_t)a2)) {
             char up[200];
@@ -767,7 +767,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         {
             struct sockaddr_storage ss;
             socklen_t hl = sa_l2m(sa, (socklen_t)a2, &ss);
-            // Per-workspace VPN (docs/VPN.md): when DD_EGRESS_SOCKS is armed, funnel a genuine external TCP
+            // Per-workspace VPN (docs/VPN.md): when HL_EGRESS_SOCKS is armed, funnel a genuine external TCP
             // connect through the SOCKS5 proxy instead of dialing directly. INERT when unset — egress_should_
             // redirect() short-circuits to 0, so control falls straight to the direct connect() below with no
             // behavior change. Streams only; UDP/raw and non-INET dests use the direct path.

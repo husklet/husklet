@@ -42,9 +42,9 @@
 //     cpu    : the whole per-thread struct cpu (host-transient fields zeroed on restore)
 //     fds    : n_fds * struct ckpt_fd (TTY | FILE by host path + seek offset + open flags)
 //
-// TRIGGER (checkpoint): DDJIT_CHECKPOINT_DIR=<dir> arms a SIGUSR1 control handler (inherited by every forked
+// TRIGGER (checkpoint): HL_JIT_CHECKPOINT_DIR=<dir> arms a SIGUSR1 control handler (inherited by every forked
 // guest process); SIGUSR1 to the container init checkpoints the whole tree then _exit()s each process.
-// RESTORE: DDJIT_RESTORE_DIR=<dir> (or the `--restore <dir>` engine flag) -> hl_restore(rootfs, dir).
+// RESTORE: HL_JIT_RESTORE_DIR=<dir> (or the `--restore <dir>` engine flag) -> hl_restore(rootfs, dir).
 // hl_jit::Runtime layers checkpoint(dir)/restore(dir) on this; the GUI calls it on window close/reopen.
 
 #include <libproc.h>   // proc_pidpath: filter session members to engine processes
@@ -100,7 +100,7 @@ struct ckpt_fd {
     char path[512];
 };
 
-// ---- control channel (armed only when DDJIT_CHECKPOINT_DIR / DDJIT_RESTORE_DIR is set) ----
+// ---- control channel (armed only when HL_JIT_CHECKPOINT_DIR / HL_JIT_RESTORE_DIR is set) ----
 // The checkpoint request is conveyed by a SHARED-MEMORY generation counter, NOT a signal: a MAP_SHARED
 // mmap of "<checkpoint-dir>.trigger" (a sibling of the checkpoint dir, so the coordinator's rm of the dir
 // never touches it). Every engine process maps it (inherited across fork, remapped after exec). ckpt_poll
@@ -169,13 +169,13 @@ static void ckpt_poll(struct cpu *c) {
     _exit(rc == 0 ? 0 : 70);
 }
 
-// Arm checkpoint/restore if DDJIT_CHECKPOINT_DIR / DDJIT_RESTORE_DIR is set. Called from engine_global_init
+// Arm checkpoint/restore if HL_JIT_CHECKPOINT_DIR / HL_JIT_RESTORE_DIR is set. Called from engine_global_init
 // (in every process, so a forked child is armed too). Maps the shared trigger and records the CURRENT
 // generation as already-seen, so a stale trigger from a previous run never false-fires on a fresh launch or a
 // restore (only a later increment triggers a checkpoint).
 static void ckpt_control_init(void) {
-    const char *rd = getenv("DDJIT_RESTORE_DIR");
-    const char *d = getenv("DDJIT_CHECKPOINT_DIR");
+    const char *rd = getenv("HL_JIT_RESTORE_DIR");
+    const char *d = getenv("HL_JIT_CHECKPOINT_DIR");
     if ((d && d[0]) || (rd && rd[0])) g_ckpt_armed = 1;
     if (!d || !d[0]) return;
     snprintf(g_ckpt_dir, sizeof g_ckpt_dir, "%s", d);

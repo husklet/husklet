@@ -14,9 +14,9 @@
 //!   return the spec's failure value. They NEVER report success-by-default.
 //!
 //! Two debugging aids sit on top:
-//! - `DD_SHIM_DEBUG` (lenient, default): logs each unimplemented entry point once, the first time an
+//! - `HL_SHIM_DEBUG` (lenient, default): logs each unimplemented entry point once, the first time an
 //!   app calls it — for exploratory "what does this app actually use" runs.
-//! - `DD_SHIM_STRICT=1`: aborts at the FIRST `stub` call, printing the command, thread, and recent call
+//! - `HL_SHIM_STRICT=1`: aborts at the FIRST `stub` call, printing the command, thread, and recent call
 //!   history, so an unsupported call fails loudly instead of silently degrading.
 
 use std::collections::VecDeque;
@@ -37,12 +37,12 @@ fn history() -> &'static Mutex<VecDeque<&'static str>> {
 
 fn strict() -> bool {
     static STRICT: OnceLock<bool> = OnceLock::new();
-    *STRICT.get_or_init(|| std::env::var_os("DD_SHIM_STRICT").is_some())
+    *STRICT.get_or_init(|| std::env::var_os("HL_SHIM_STRICT").is_some())
 }
 
 fn debug() -> bool {
-    // Not cached: exploratory runs may set DD_SHIM_DEBUG after the first calls; keep it cheap-but-live.
-    std::env::var_os("DD_SHIM_DEBUG").is_some()
+    // Not cached: exploratory runs may set HL_SHIM_DEBUG after the first calls; keep it cheap-but-live.
+    std::env::var_os("HL_SHIM_DEBUG").is_some()
 }
 
 fn record(name: &'static str) {
@@ -66,7 +66,7 @@ fn trace_once(name: &'static str, kind: &str) {
 }
 
 /// Called by every generated **stub** (an unsupported operation). Records the call, once-logs it under
-/// `DD_SHIM_DEBUG`, and — under `DD_SHIM_STRICT` — aborts the process with a diagnostic. Returns so the
+/// `HL_SHIM_DEBUG`, and — under `HL_SHIM_STRICT` — aborts the process with a diagnostic. Returns so the
 /// generated body can then set the error state and initialize outputs (in lenient mode).
 #[inline]
 pub fn stub_call(name: &'static str) {
@@ -78,7 +78,7 @@ pub fn stub_call(name: &'static str) {
 }
 
 /// Called by every generated **partial** (a spec-legitimate no-op / default query). Records the call
-/// and once-logs it under `DD_SHIM_DEBUG`, but never aborts — a no-op is the correct degraded behavior.
+/// and once-logs it under `HL_SHIM_DEBUG`, but never aborts — a no-op is the correct degraded behavior.
 #[inline]
 pub fn partial_call(name: &'static str) {
     record(name);
@@ -122,7 +122,7 @@ fn strict_abort(name: &'static str) -> ! {
     let ctx = crate::state::egl_current_context();
     let (major, minor) = (crate::state::egl_ctx_major(ctx), crate::state::egl_ctx_minor(ctx));
     eprintln!("========================================================================");
-    eprintln!("[dd-shim-gl] DD_SHIM_STRICT: aborting on unsupported entry point");
+    eprintln!("[dd-shim-gl] HL_SHIM_STRICT: aborting on unsupported entry point");
     eprintln!("  command : {name}");
     eprintln!("  object  : (unsupported capability — no backing object)");
     eprintln!("  thread  : {:?}", std::thread::current().id());
@@ -131,7 +131,7 @@ fn strict_abort(name: &'static str) -> ! {
     for n in &recent {
         eprintln!("            {n}");
     }
-    eprintln!("  Set DD_SHIM_DEBUG=1 (without DD_SHIM_STRICT) to log unsupported calls without aborting.");
+    eprintln!("  Set HL_SHIM_DEBUG=1 (without HL_SHIM_STRICT) to log unsupported calls without aborting.");
     eprintln!("========================================================================");
     std::process::abort();
 }

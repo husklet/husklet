@@ -28,8 +28,8 @@ use crate::DdState;
 /// backing store reports an *integer* `backingScaleFactor` (2 on Retina), so a non-integer "logical"
 /// scale is a compositor *policy* choice rather than something the platform hands us; this override
 /// lets that policy — and the headless tests — drive a true fractional value without a live display.
-/// Mirrors the existing `DD_DISPLAY_*` knobs (`DD_DISPLAY_HIDPI`, `DD_DISPLAY_WINDOW_DECORATIONS`).
-const FRACTIONAL_SCALE_ENV: &str = "DD_DISPLAY_FRACTIONAL_SCALE";
+/// Mirrors the existing `DD_DISPLAY_*` knobs (`HL_DISPLAY_HIDPI`, `HL_DISPLAY_WINDOW_DECORATIONS`).
+const FRACTIONAL_SCALE_ENV: &str = "HL_DISPLAY_FRACTIONAL_SCALE";
 
 impl DdState {
     /// The fractional buffer scale the compositor prefers for surfaces on the primary output — the value

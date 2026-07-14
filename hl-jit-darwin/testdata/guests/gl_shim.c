@@ -2,7 +2,7 @@
 // runs UNMODIFIED against these symbols (mount-injected as libEGL.so.1 + libGLESv2.so.2, like libwayland
 // — NOT a specialized image). Each GL/EGL call drives a small state machine; on eglSwapBuffers the shim
 // translates the accumulated GL state into a dd-gpu IR command stream, ships it to the host Metal executor
-// ($DD_GPU_EXEC) which renders it into a rung-2 IOSurface, and commits that IOSurface to dd-display
+// ($HL_GPU_EXEC) which renders it into a rung-2 IOSurface, and commits that IOSurface to dd-display
 // (linux-dmabuf) for zero-copy compositing.
 //
 // SUBSET (see RENDERING_PLAN.md M5 for the coverage map): eglGetDisplay/Initialize/ChooseConfig/
@@ -403,7 +403,7 @@ static uint64_t g_exec_connects; // count of connect()s — should be 1 for a wh
 // changed content, or a different source). Static geometry then uploads exactly ONCE → steady-state IR
 // bytes/frame collapse from ~1 MB toward a few KB. Correctness rests on the content `gen` (any
 // glBufferData/glBufferSubData/glTexImage2D bumps it → forced re-upload) and `g_res_reset` on reconnect
-// (a fresh host backend has an empty cache → re-emit everything). A/B: DD_NO_DELTA=1 forces full re-upload.
+// (a fresh host backend has an empty cache → re-emit everything). A/B: HL_NO_DELTA=1 forces full re-upload.
 struct residency { int valid, src; uint64_t gen; };
 static struct residency g_res_vbuf[MAXATTR]; // IR ids 200+slot (one per distinct source VBO this frame)
 static struct residency g_res_index;         // IR id 12 (the element/index buffer)
@@ -414,9 +414,9 @@ static struct residency g_res_replay_ibo[MAXDRAWS];           // replay draw ids
 static struct residency g_res_frame_vbuf[MAXDRAWS];           // replay fallback ids 200+k
 static struct residency g_res_frame_ibo[MAXDRAWS];            // replay fallback ids 300+k
 static int g_res_reset;                       // set on a host RE-connect (cache went empty) → re-emit all
-static int g_no_delta = -1;                   // DD_NO_DELTA A/B gate (−1 unresolved)
+static int g_no_delta = -1;                   // HL_NO_DELTA A/B gate (−1 unresolved)
 static int delta_on(void) {
-    if (g_no_delta < 0) g_no_delta = getenv("DD_NO_DELTA") ? 1 : 0;
+    if (g_no_delta < 0) g_no_delta = getenv("HL_NO_DELTA") ? 1 : 0;
     return !g_no_delta;
 }
 static void l5_reset_residency(void) {
@@ -430,7 +430,7 @@ static void l5_reset_residency(void) {
     memset(g_res_frame_ibo, 0, sizeof g_res_frame_ibo);
 }
 
-// ---- DD_RENDER_PROF: env-gated per-frame frame-time ledger (mirrors DD_SHIM_DEBUG getenv-once) ----
+// ---- HL_RENDER_PROF: env-gated per-frame frame-time ledger (mirrors HL_SHIM_DEBUG getenv-once) ----
 static int g_prof = -1;      // -1 = unresolved, 0 = off, 1 = on
 static FILE *g_prof_f;
 static uint64_t g_prof_seq;
@@ -442,9 +442,9 @@ static uint64_t now_us(void) {
 }
 static int prof_on(void) {
     if (g_prof < 0) {
-        g_prof = getenv("DD_RENDER_PROF") ? 1 : 0;
+        g_prof = getenv("HL_RENDER_PROF") ? 1 : 0;
         if (g_prof) {
-            const char *dir = getenv("DD_RENDER_PROF_DIR");
+            const char *dir = getenv("HL_RENDER_PROF_DIR");
             if (!dir) dir = "/tmp";
             char path[512];
             snprintf(path, sizeof path, "%s/shim-%d.csv", dir, (int)getpid());
@@ -1125,7 +1125,7 @@ static void dump_text_file(const char *dir, const char *name, const char *text) 
     fclose(f);
 }
 static void dump_tex_ppm(GLuint id, const struct tex *t, const char *tag) {
-    const char *dir = getenv("DD_TEXTURE_DUMP_DIR");
+    const char *dir = getenv("HL_TEXTURE_DUMP_DIR");
     static int seq;
     if (!dir || !dir[0] || !t || !t->data || t->w <= 0 || t->h <= 0 || seq >= 96) return;
     char path[512];
@@ -1402,9 +1402,9 @@ static int parse_size_pair(const char *s, int *w, int *h) {
     return 1;
 }
 static int env_logical_size(int *w, int *h) {
-    const char *s = getenv("DD_SHIM_LOGICAL_SIZE");
+    const char *s = getenv("HL_SHIM_LOGICAL_SIZE");
     if (parse_size_pair(s, w, h)) return 1;
-    s = getenv("CHROME_WINDOW_SIZE");
+    s = getenv("HL_WINDOW_SIZE");
     return parse_size_pair(s, w, h);
 }
 static int cmdline_window_size(int *w, int *h) {
@@ -1487,7 +1487,7 @@ static void surface_up(uint32_t w, uint32_t h) {
     g_default_surface_valid = 0;
     g_default_full_clear_since_swap = 0;
     resolve_surface_geometry(w, h);
-    if (getenv("DD_SHIM_DEBUG")) {
+    if (getenv("HL_SHIM_DEBUG")) {
         fprintf(stderr, "[shim] surface_up backing=%ux%u logical_geom=%d,%d %dx%d source=%s attach=%d,%d\n",
                 w, h, g_surface_geom_x, g_surface_geom_y, g_surface_logical_w, g_surface_logical_h,
                 geom_source_name(g_surface_geom_source), g_pending_attach_x, g_pending_attach_y);
@@ -1499,9 +1499,9 @@ static void surface_up(uint32_t w, uint32_t h) {
     if (g_scissor[2] <= 0 || g_scissor[3] <= 0) {
         g_scissor[0] = 0; g_scissor[1] = 0; g_scissor[2] = (int)w; g_scissor[3] = (int)h;
     }
-    // DD_IR_DUMP: host-tool mode — no renderD128/wayland; just record the surface so eglSwapBuffers builds
+    // HL_IR_DUMP: host-tool mode — no renderD128/wayland; just record the surface so eglSwapBuffers builds
     // the IR and exec_stream writes it to the dump file. Proves the shim's IR byte-stream on any host.
-    if (getenv("DD_IR_DUMP")) {
+    if (getenv("HL_IR_DUMP")) {
         g_surf.width = w; g_surf.height = h; g_surf.id = 1; g_have_surf = 1;
         return;
     }
@@ -1544,7 +1544,7 @@ static void surface_up(uint32_t w, uint32_t h) {
     wmsg(wm, 2, xw, 2);                     // get_xdg_surface
     wmsg(g_xdg_surface, 1, &toplevel, 1);   // get_toplevel
     int geom_sent = wl_send_window_geometry();
-    if (getenv("DD_SHIM_DEBUG")) {
+    if (getenv("HL_SHIM_DEBUG")) {
         fprintf(stderr, "[shim] initial_commit backing=%ux%u logical_geom=%d,%d %dx%d attach=%d,%d geometry_sent=%d\n",
                 g_surf.width, g_surf.height, g_surface_geom_x, g_surface_geom_y,
                 g_surface_logical_w, g_surface_logical_h, g_pending_attach_x, g_pending_attach_y, geom_sent);
@@ -1561,14 +1561,14 @@ static void surface_up(uint32_t w, uint32_t h) {
 }
 // Stream the current IR to the executor and wait for the render ack.
 static void exec_stream(void) {
-    const char *dump = getenv("DD_IR_DUMP");
+    const char *dump = getenv("HL_IR_DUMP");
     if (dump) { // host-tool mode: write the raw IR byte-stream to the dump file (proof harness)
         int fd = open(dump, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) { if (write(fd, ir, irn) < 0) perror("ir dump"); close(fd); }
         fprintf(stderr, "gl_shim: dumped %zu IR bytes to %s\n", irn, dump);
         return;
     }
-    const char *tee = getenv("DD_IR_TEE_DUMP");
+    const char *tee = getenv("HL_IR_TEE_DUMP");
     if (tee && *tee) {
         static unsigned tee_seq;
         char path[512];
@@ -1579,7 +1579,7 @@ static void exec_stream(void) {
             close(fd);
         }
     }
-    const char *ep = getenv("DD_GPU_EXEC");
+    const char *ep = getenv("HL_GPU_EXEC");
     if (!ep) ep = "/run/user/0/dd-gpu-0";
     // L2/L7.1: keep ONE executor connection open for the surface's lifetime — a frame is just
     // [hdr][ir]+ack on the same fd (no socket()/connect()/close() per frame). The executor holds a
@@ -1653,7 +1653,7 @@ static void wl_drain_until_frame(uint32_t cb) {
 }
 // Commit the (executor-rendered) IOSurface to dd-display via linux-dmabuf.
 static void wl_commit(void) {
-    if (getenv("DD_IR_DUMP")) return; // host-tool mode: no wayland commit
+    if (getenv("HL_IR_DUMP")) return; // host-tool mode: no wayland commit
     if (g_wl < 0 || !g_wl_ready) return;
     uint32_t dmabuf = 4, params = 9;
     wmsg(dmabuf, 1, &params, 1); // create_params
@@ -1668,7 +1668,7 @@ static void wl_commit(void) {
     uint32_t dm[4] = {0, 0, g_surf.width, g_surf.height};
     wmsg(g_wl_surface, 2, dm, 4); // damage
     int geom_sent = wl_send_window_geometry();
-    if (getenv("DD_SHIM_DEBUG")) {
+    if (getenv("HL_SHIM_DEBUG")) {
         fprintf(stderr, "[shim] wl_commit backing=%ux%u logical_geom=%d,%d %dx%d attach=%d,%d geometry_sent=%d source=%s\n",
                 g_surf.width, g_surf.height, g_surface_geom_x, g_surface_geom_y,
                 g_surface_logical_w, g_surface_logical_h, g_pending_attach_x, g_pending_attach_y,
@@ -1716,7 +1716,7 @@ struct hl_wl_egl_window *wl_egl_window_create(void *surface, int width, int heig
     g_pending_logical_h = height;
     g_pending_attach_x = 0;
     g_pending_attach_y = 0;
-    if (getenv("DD_SHIM_DEBUG")) {
+    if (getenv("HL_SHIM_DEBUG")) {
         fprintf(stderr, "[shim] wl_egl_window_create surface=%p size=%dx%d\n", surface, width, height);
         fflush(stderr);
     }
@@ -1740,7 +1740,7 @@ void wl_egl_window_resize(struct hl_wl_egl_window *w, int width, int height, int
         g_surface_geom_source = 1;
         g_surface_geom_sent = 0;
     }
-    if (getenv("DD_SHIM_DEBUG")) {
+    if (getenv("HL_SHIM_DEBUG")) {
         fprintf(stderr, "[shim] wl_egl_window_resize window=%p size=%dx%d attach=%d,%d\n", (void *)w, width, height, dx, dy);
         fflush(stderr);
     }
@@ -1753,9 +1753,9 @@ void wl_egl_window_get_attached_size(struct hl_wl_egl_window *w, int *width, int
 void wl_egl_window_destroy(struct hl_wl_egl_window *w) { free(w); }
 
 // ======================= EGL entry points =======================
-#define EGLDBG(...) do { if (getenv("DD_SHIM_DEBUG")) { fprintf(stderr, "[shim] " __VA_ARGS__); fflush(stderr); } } while (0)
+#define EGLDBG(...) do { if (getenv("HL_SHIM_DEBUG")) { fprintf(stderr, "[shim] " __VA_ARGS__); fflush(stderr); } } while (0)
 static int shim_es3(void) {
-    const char *e = getenv("DD_SHIM_ES3");
+    const char *e = getenv("HL_SHIM_ES3");
     return e && e[0] && e[0] != '0';
 }
 static EGLint g_egl_error = EGL_SUCCESS;
@@ -1794,7 +1794,7 @@ const char *eglQueryString(EGLDisplay dpy, EGLint name) {
 // and eglGetConfigs both return it, so glmark2's "best config" selection always lands on it.
 EGLBoolean eglChooseConfig(EGLDisplay dpy, const EGLint *a, EGLConfig *c, EGLint n, EGLint *num) {
     (void)dpy;
-    if (getenv("DD_SHIM_DEBUG")) {
+    if (getenv("HL_SHIM_DEBUG")) {
         fprintf(stderr, "[shim] eglChooseConfig n=%d attribs:", n);
         if (a) for (const EGLint *p = a; *p != EGL_NONE; p += 2) fprintf(stderr, " 0x%x=%d", p[0], p[1]);
         fprintf(stderr, "\n");
@@ -1852,7 +1852,7 @@ EGLBoolean eglGetConfigAttrib(EGLDisplay dpy, EGLConfig c, EGLint a, EGLint *v) 
         default: r = 0; break;
     }
     *v = r;
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] eglGetConfigAttrib cfg=%p attr=0x%x -> %d\n", c, a, r);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] eglGetConfigAttrib cfg=%p attr=0x%x -> %d\n", c, a, r);
     return EGL_TRUE;
 }
 EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig c, EGLContext s, const EGLint *a) {
@@ -1866,19 +1866,19 @@ EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig c, EGLContext s, const EGL
     }
     int max_major = shim_es3() ? 3 : 2;
     int max_minor = 0;
-    if (getenv("DD_SHIM_DEBUG")) {
+    if (getenv("HL_SHIM_DEBUG")) {
         fprintf(stderr, "[shim] eglCreateContext cfg=%p share=%p attribs:", c, s);
         if (a) for (const EGLint *p = a; *p != EGL_NONE; p += 2) fprintf(stderr, " 0x%x=%d", p[0], p[1]);
         fprintf(stderr, " requested=%d.%d max=%d.%d", req_major, req_minor, max_major, max_minor);
     }
     if (req_major > max_major || (req_major == max_major && req_minor > max_minor)) {
         g_egl_error = EGL_BAD_MATCH;
-        if (getenv("DD_SHIM_DEBUG")) { fprintf(stderr, " -> EGL_NO_CONTEXT (BAD_MATCH)\n"); fflush(stderr); }
+        if (getenv("HL_SHIM_DEBUG")) { fprintf(stderr, " -> EGL_NO_CONTEXT (BAD_MATCH)\n"); fflush(stderr); }
         return EGL_NO_CONTEXT;
     }
     g_ctx_major = req_major;
     g_ctx_minor = req_minor;
-    if (getenv("DD_SHIM_DEBUG")) { fprintf(stderr, " -> 1\n"); fflush(stderr); }
+    if (getenv("HL_SHIM_DEBUG")) { fprintf(stderr, " -> 1\n"); fflush(stderr); }
     return (EGLContext)1;
 }
 EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig c, EGLNativeWindowType w, const EGLint *a) {
@@ -1902,7 +1902,7 @@ EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig c, EGLNativeWindowTy
                 if (win->attached_width > ww) ww = win->attached_width;
                 if (win->attached_height > hh) hh = win->attached_height;
             }
-            if (getenv("DD_SHIM_DEBUG"))
+            if (getenv("HL_SHIM_DEBUG"))
                 fprintf(stderr, "[shim] native_window=%p ddwlegl width=%d height=%d attached=%d,%d attach=%d,%d\n",
                         w, win->width, win->height, win->attached_width, win->attached_height, attach_x, attach_y);
         } else {
@@ -1910,10 +1910,10 @@ EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig c, EGLNativeWindowTy
             // may instead hand us Mesa's wl_egl_window ({version,width,height,...}); detect that narrow
             // version-looking first word before accepting the two-int shape. Only that case reads p[2].
             int *p = (int *)w;
-            if (getenv("DD_SHIM_DEBUG"))
+            if (getenv("HL_SHIM_DEBUG"))
                 fprintf(stderr, "[shim] native_window=%p words=%d,%d,%d,%d\n", w, p[0], p[1], p[2], p[3]);
             if (p[0] > 0 && p[0] <= 16 && p[2] > 16 && p[2] <= 8192 && p[3] > 16 && p[3] <= 8192) {
-                if (getenv("DD_SHIM_DEBUG"))
+                if (getenv("HL_SHIM_DEBUG"))
                     fprintf(stderr, "[shim] native_window=%p mesa_words=%d,%d,%d,%d,%d,%d,%d,%d\n",
                             w, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
                 ww = p[2];
@@ -1950,7 +1950,7 @@ EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig c, EGLNativeWindowTy
     g_pending_logical_h = logical_h;
     g_pending_attach_x = attach_x;
     g_pending_attach_y = attach_y;
-    if (getenv("DD_SHIM_DEBUG")) {
+    if (getenv("HL_SHIM_DEBUG")) {
         fprintf(stderr, "[shim] eglCreateWindowSurface backing=%ux%u pending_logical=%dx%d attach=%d,%d\n",
                 W, H, g_pending_logical_w, g_pending_logical_h, g_pending_attach_x, g_pending_attach_y);
         fflush(stderr);
@@ -2045,7 +2045,7 @@ void (*eglGetProcAddress(const char *n))(void) {
     if (self == (void *)-1) self = dlopen("libEGL.so.1", RTLD_NOLOAD | RTLD_NOW);
     void *p = self ? dlsym(self, n) : NULL;
     if (!p) p = dlsym(RTLD_DEFAULT, n);
-    if (!p && getenv("DD_SHIM_DEBUG")) { fprintf(stderr, "[shim] eglGetProcAddress(\"%s\") -> NULL\n", n); fflush(stderr); }
+    if (!p && getenv("HL_SHIM_DEBUG")) { fprintf(stderr, "[shim] eglGetProcAddress(\"%s\") -> NULL\n", n); fflush(stderr); }
     return (void (*)(void))p;
 }
 
@@ -2277,7 +2277,7 @@ EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface s) {
     } else {
         for (int i = 0; i < MAXATTR; i++) if (g_attr[i].enabled && i + 1 > nvd) nvd = i + 1;
     }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] eglSwapBuffers draw_mode=%d ndraws=%d replay=%d prog=%d msl=%s nslot=%d nvd=%d ntex=%d vbos=%d ibos=%d\n",
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] eglSwapBuffers draw_mode=%d ndraws=%d replay=%d prog=%d msl=%s nslot=%d nvd=%d ntex=%d vbos=%d ibos=%d\n",
         g_draw_mode, g_ndraws, replay_draws, g_cur_prog, (pr&&pr->msl)?"OK":"none", nslot, nvd, ntex, nframe_vbo, nframe_ibo);
 
     // 2. program → shader (combined MSL) + pipeline
@@ -2537,7 +2537,7 @@ EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface s) {
             if (!target && !seen && g_default_surface_valid && !g_default_full_clear_since_swap)
                 load = 1;
             if (!target) frame_default_touched = 1;
-            if (getenv("DD_SHIM_DEBUG"))
+            if (getenv("HL_SHIM_DEBUG"))
                 fprintf(stderr, "[shim] replay_pass target=%u load=%d seen=%d seg_clear=%d last_clear=%d default_valid=%d default_full_clear=%d sc=%d %d,%d %dx%d\n",
                         target, load, seen, seg_clear, last_clear, g_default_surface_valid,
                         g_default_full_clear_since_swap, g_draws[d].scissor_enabled,
@@ -2596,7 +2596,7 @@ EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface s) {
         if (target >= MAXTEX || !g_tex[target].used) target = 0;
         int load = (!target && g_default_surface_valid && !g_default_full_clear_since_swap);
         if (!target) frame_default_touched = 1;
-        if (getenv("DD_SHIM_DEBUG"))
+        if (getenv("HL_SHIM_DEBUG"))
             fprintf(stderr, "[shim] single_pass target=%u load=%d default_valid=%d default_full_clear=%d sc=%d %d,%d %dx%d\n",
                     target, load, g_default_surface_valid, g_default_full_clear_since_swap,
                     g_scissor_enabled, g_scissor[0], g_scissor[1], g_scissor[2], g_scissor[3]);
@@ -2695,12 +2695,12 @@ static void clear_bound_color_texture(const float color[4]) {
 void glClear(GLbitfield m) {
     int sx, sy, sw, sh;
     int scissored_clear = clear_scissor_rect(&sx, &sy, &sw, &sh);
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glClear mask=0x%x fbo=%u color=%g,%g,%g,%g sc=%d %d,%d %dx%d\n",
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glClear mask=0x%x fbo=%u color=%g,%g,%g,%g sc=%d %d,%d %dx%d\n",
         m, g_draw_fbo, g_clear[0], g_clear[1], g_clear[2], g_clear[3], g_scissor_enabled, sx, sy, sw, sh);
     if (m & GL_COLOR_BUFFER_BIT) {
         // Metal render-pass load clears are full-target, while GLES glClear obeys GL_SCISSOR_TEST.
         if (scissored_clear) {
-            if (!(g_draw_fbo == 0 && getenv("DD_SKIP_DEFAULT_SCISSOR_CLEAR"))) {
+            if (!(g_draw_fbo == 0 && getenv("HL_SKIP_DEFAULT_SCISSOR_CLEAR"))) {
                 record_clear_call(sx, sy, sw, sh);
             }
         }
@@ -2709,7 +2709,7 @@ void glClear(GLbitfield m) {
             if (g_draw_fbo == 0) {
                 g_default_full_clear_since_swap = 1;
                 record_clear_call(sx, sy, sw, sh);
-                if (getenv("DD_SHIM_DEBUG"))
+                if (getenv("HL_SHIM_DEBUG"))
                     fprintf(stderr, "[shim] default_full_clear_recorded serial=%d rect=%d,%d %dx%d\n",
                             g_clear_serial, sx, sy, sw, sh);
             }
@@ -2737,7 +2737,7 @@ const unsigned char *glGetString(GLenum n) {
     const unsigned char *r;
     switch (n) {
         // ES2 by default so glmark2 (GLSL ES 1.00 shaders) stays on the known-good path. Chromium's ANGLE
-        // asks for an ES3 context; DD_SHIM_ES3 opts that run into the ES3 caps and exported stubs below.
+        // asks for an ES3 context; HL_SHIM_ES3 opts that run into the ES3 caps and exported stubs below.
         case GL_VERSION:
             r = (const unsigned char *)(g_ctx_major >= 3 ? "OpenGL ES 3.0 dd-shim" : "OpenGL ES 2.0 dd-shim");
             break;
@@ -2757,12 +2757,12 @@ const unsigned char *glGetString(GLenum n) {
 GLuint glCreateShader(GLenum type) {
     for (int i = 1; i < MAXSH; i++)
         if (!g_sh[i].used) { g_sh[i].used = 1; g_sh[i].type = type; g_sh[i].src = NULL;
-            if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glCreateShader(0x%x) -> %d\n", type, i); return i; }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glCreateShader(0x%x) EXHAUSTED -> 0\n", type);
+            if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glCreateShader(0x%x) -> %d\n", type, i); return i; }
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glCreateShader(0x%x) EXHAUSTED -> 0\n", type);
     return 0;
 }
 void glShaderSource(GLuint sh, GLsizei count, const GLchar *const *str, const GLint *len) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glShaderSource ENTRY sh=%u count=%d used=%d\n", sh, count, (sh<MAXSH)?g_sh[sh].used:-1);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glShaderSource ENTRY sh=%u count=%d used=%d\n", sh, count, (sh<MAXSH)?g_sh[sh].used:-1);
     if (sh >= MAXSH || !g_sh[sh].used) return;
     size_t tot = 0;
     for (int i = 0; i < count; i++) tot += (len && len[i] >= 0) ? (size_t)len[i] : strlen(str[i]);
@@ -2777,7 +2777,7 @@ void glShaderSource(GLuint sh, GLsizei count, const GLchar *const *str, const GL
     s[o] = 0;
     free(g_sh[sh].src);
     g_sh[sh].src = s;
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glShaderSource sh=%u count=%d stored len=%zu\n", sh, count, o);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glShaderSource sh=%u count=%d stored len=%zu\n", sh, count, o);
 }
 void glCompileShader(GLuint sh) { (void)sh; }
 void glGetShaderiv(GLuint sh, GLenum p, GLint *v) {
@@ -2785,7 +2785,7 @@ void glGetShaderiv(GLuint sh, GLenum p, GLint *v) {
     // GL_SHADER_SOURCE_LENGTH (0x8B88): glmark2 sets the source then verifies this round-trips to
     // strlen(source)+1 (incl. NUL) before it will compile — returning 0 aborted "Failed to add shader".
     if (p == 0x8B88) { *v = (sh < MAXSH && g_sh[sh].used && g_sh[sh].src) ? (GLint)(strlen(g_sh[sh].src) + 1) : 0;
-        if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glGetShaderiv sh=%u SOURCE_LENGTH -> %d (src=%p)\n", sh, *v, (sh<MAXSH)?(void*)g_sh[sh].src:0); return; }
+        if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glGetShaderiv sh=%u SOURCE_LENGTH -> %d (src=%p)\n", sh, *v, (sh<MAXSH)?(void*)g_sh[sh].src:0); return; }
     if (p == GL_COMPILE_STATUS) { *v = GL_TRUE; return; }
     *v = 0;
 }
@@ -2813,12 +2813,12 @@ void glLinkProgram(GLuint p) {
     if (pr->vs && pr->fs && g_sh[pr->vs].src && g_sh[pr->fs].src) {
         free(pr->msl);
         pr->msl = translate(g_sh[pr->vs].src, g_sh[pr->fs].src);
-        if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glLinkProgram p=%u msl=%s (len=%zu)\n", p, pr->msl?"OK":"NULL", pr->msl?strlen(pr->msl):0);
-        if (getenv("DD_SHADER_LOG") && pr->msl) {
+        if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glLinkProgram p=%u msl=%s (len=%zu)\n", p, pr->msl?"OK":"NULL", pr->msl?strlen(pr->msl):0);
+        if (getenv("HL_SHADER_LOG") && pr->msl) {
             fprintf(stderr, "[shader-msl-begin program=%u]\n%s\n[shader-msl-end program=%u]\n", p, pr->msl, p);
         }
-        if (getenv("DD_SHADER_DUMP_DIR")) {
-            const char *dir = getenv("DD_SHADER_DUMP_DIR");
+        if (getenv("HL_SHADER_DUMP_DIR")) {
+            const char *dir = getenv("HL_SHADER_DUMP_DIR");
             char name[64];
             snprintf(name, sizeof name, "program-%u.vert.glsl", p);
             dump_text_file(dir, name, g_sh[pr->vs].src);
@@ -2857,7 +2857,7 @@ static void uni_write(GLint loc, const void *data, int n) {
         if (g_cur_prog < MAXPROG && g_prog[g_cur_prog].used) {
             memcpy(g_prog[g_cur_prog].ubuf + loc, data, n);
         }
-        if (getenv("DD_DRAW_DEBUG")) {
+        if (getenv("HL_DRAW_DEBUG")) {
             const float *f = (const float *)data;
             fprintf(stderr, "[uniform] prog=%u loc=%d bytes=%d f=%g,%g,%g,%g\n",
                     g_cur_prog, loc, n, n >= 4 ? f[0] : 0.0f, n >= 8 ? f[1] : 0.0f,
@@ -2885,7 +2885,7 @@ void glUniform1i(GLint l, GLint a) {
         int si = l - 100000;
         if (g_cur_prog < MAXPROG && g_prog[g_cur_prog].used && si < g_prog[g_cur_prog].nsamp) {
             g_prog[g_cur_prog].samp_units[si] = a;
-            if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glUniform1i sampler prog=%u idx=%d unit=%d\n", g_cur_prog, si, a);
+            if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glUniform1i sampler prog=%u idx=%d unit=%d\n", g_cur_prog, si, a);
         }
         return;
     }
@@ -2893,16 +2893,16 @@ void glUniform1i(GLint l, GLint a) {
 }
 void glGetProgramiv(GLuint p, GLenum pn, GLint *v) { (void)p; if (pn == GL_LINK_STATUS && v) *v = GL_TRUE; else if (v) *v = 0; }
 void glGetProgramInfoLog(GLuint p, GLsizei bufSize, GLsizei *length, GLchar *infoLog) { (void)p; (void)bufSize; if (length) *length = 0; if (infoLog && bufSize) infoLog[0] = 0; }
-void glUseProgram(GLuint p) { if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glUseProgram(%u)\n", p); g_cur_prog = p; }
+void glUseProgram(GLuint p) { if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glUseProgram(%u)\n", p); g_cur_prog = p; }
 GLint glGetAttribLocation(GLuint p, const GLchar *name) {
     // declaration-order index in the vertex shader (matches our VIn attribute() numbering)
     if (p < MAXPROG && g_prog[p].used && g_prog[p].vs && g_sh[g_prog[p].vs].src) {
         struct decl at[16];
         int na = collect_vertex_attrs(g_sh[g_prog[p].vs].src, at, 16);
         for (int i = 0; i < na; i++)
-            if (!strcmp(at[i].name, name)) { if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glGetAttribLocation(%s) -> %d\n", name, i); return i; }
+            if (!strcmp(at[i].name, name)) { if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glGetAttribLocation(%s) -> %d\n", name, i); return i; }
     }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glGetAttribLocation(%s) -> -1\n", name);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glGetAttribLocation(%s) -> -1\n", name);
     return -1;
 }
 void glGenBuffers(GLsizei n, GLuint *b) {
@@ -2913,7 +2913,7 @@ void glGenBuffers(GLsizei n, GLuint *b) {
     }
 }
 void glBindBuffer(GLenum t, GLuint b) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindBuffer t=0x%x b=%u\n", t, b);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindBuffer t=0x%x b=%u\n", t, b);
     if (t == GL_ARRAY_BUFFER) g_arr_buf = b;
     else if (t == GL_ELEMENT_ARRAY_BUFFER) {
         g_elem_buf = b;
@@ -2960,7 +2960,7 @@ void glDeleteTextures(GLsizei n, const GLuint *t) {
 }
 void glActiveTexture(GLenum unit) { int u = (int)unit - GL_TEXTURE0; if (u >= 0 && u < 8) g_active_unit = u; }
 void glBindTexture(GLenum target, GLuint t) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindTexture target=0x%x unit=%d tex=%u\n", target, g_active_unit, t);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindTexture target=0x%x unit=%d tex=%u\n", target, g_active_unit, t);
     if (g_active_unit < 8) g_tex_unit[g_active_unit] = t;
 }
 static int tex_bpp(GLenum fmt) {
@@ -2993,7 +2993,7 @@ static void tex_store_pixels(struct tex *t, int xo, int yo, int w, int h, GLenum
                 else if (fmt == GL_LUMINANCE) { r = gg = b = s[0]; }
                 else { r = gg = b = s[0]; }
             }
-            if (getenv("DD_PREMULTIPLY_UPLOAD") && a < 255) {
+            if (getenv("HL_PREMULTIPLY_UPLOAD") && a < 255) {
                 r = (uint8_t)(((unsigned)r * (unsigned)a + 127u) / 255u);
                 gg = (uint8_t)(((unsigned)gg * (unsigned)a + 127u) / 255u);
                 b = (uint8_t)(((unsigned)b * (unsigned)a + 127u) / 255u);
@@ -3233,7 +3233,7 @@ static void texture_stats(GLuint tex, int *w, int *h, int *mean_rgb, int *mean_a
     }
 }
 static void debug_draw_call(const struct draw_call *d, int draw_index) {
-    if (!getenv("DD_DRAW_DEBUG") || !d) return;
+    if (!getenv("HL_DRAW_DEBUG") || !d) return;
     uint32_t sample_tex = 0;
     int unit = (d->samp_units[0] >= 0 && d->samp_units[0] < 8) ? d->samp_units[0] : 0;
     sample_tex = d->tex_units[unit];
@@ -3273,7 +3273,7 @@ void glTexImage2D(GLenum target, GLint level, GLint ifmt, GLsizei w, GLsizei h, 
     (void)target; (void)ifmt; (void)border; (void)type;
     GLuint t = g_tex_unit[g_active_unit];
     if (level != 0 || t >= MAXTEX || !g_tex[t].used) return;
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexImage2D unit=%d tex=%u ifmt=0x%x %dx%d fmt=0x%x type=0x%x pixels=%p\n", g_active_unit, t, ifmt, w, h, fmt, type, pixels);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexImage2D unit=%d tex=%u ifmt=0x%x %dx%d fmt=0x%x type=0x%x pixels=%p\n", g_active_unit, t, ifmt, w, h, fmt, type, pixels);
     free(g_tex[t].data);
     g_tex[t].w = w; g_tex[t].h = h;
     g_tex[t].size = (size_t)w * h * 4;
@@ -3297,7 +3297,7 @@ void glPixelStorei(GLenum p, GLint v) {
     else if (p == 0x0CF2) g_unpack_row_length = v;        // GL_UNPACK_ROW_LENGTH
     else if (p == 0x0CF3) g_unpack_skip_rows = v;         // GL_UNPACK_SKIP_ROWS
     else if (p == 0x0CF4) g_unpack_skip_pixels = v;       // GL_UNPACK_SKIP_PIXELS
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glPixelStorei 0x%x=%d row=%d skip=%d,%d align=%d\n", p, v, g_unpack_row_length, g_unpack_skip_pixels, g_unpack_skip_rows, g_unpack_alignment);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glPixelStorei 0x%x=%d row=%d skip=%d,%d align=%d\n", p, v, g_unpack_row_length, g_unpack_skip_pixels, g_unpack_skip_rows, g_unpack_alignment);
 }
 void glGenerateMipmap(GLenum target) { (void)target; }
 static void record_draw_call(int mode, int first, int count, int indexed, GLenum type, const void *indices) {
@@ -3332,7 +3332,7 @@ static void record_draw_call(int mode, int first, int count, int indexed, GLenum
     if (g_cur_prog < MAXPROG && g_prog[g_cur_prog].used) memcpy(d->ubuf, g_prog[g_cur_prog].ubuf, sizeof d->ubuf);
     else memcpy(d->ubuf, g_ubuf, sizeof d->ubuf);
     snapshot_draw_buffers(d);
-    if (getenv("DD_SHIM_DEBUG")) {
+    if (getenv("HL_SHIM_DEBUG")) {
         fprintf(stderr, "[shim] record_draw #%d prog=%u target_tex=%u mode=0x%x count=%d samp_units=%d,%d,%d,%d tex_units=%u,%u,%u,%u\n",
                 g_ndraws - 1, d->prog, d->target_tex, mode, count, d->samp_units[0], d->samp_units[1], d->samp_units[2], d->samp_units[3],
                 d->tex_units[0], d->tex_units[1], d->tex_units[2], d->tex_units[3]);
@@ -3351,12 +3351,12 @@ static void record_clear_call(int x, int y, int w, int h) {
     d->clear_rect[3] = h;
     memcpy(d->clear, g_clear, sizeof d->clear);
     d->clear_serial = g_clear_serial;
-    if (getenv("DD_SHIM_DEBUG"))
+    if (getenv("HL_SHIM_DEBUG"))
         fprintf(stderr, "[shim] record_clear #%d target_tex=%u rect=%d,%d %dx%d color=%g,%g,%g,%g\n",
                 g_ndraws - 1, d->target_tex, x, y, w, h, d->clear[0], d->clear[1], d->clear[2], d->clear[3]);
 }
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glDrawElements mode=0x%x count=%d type=0x%x\n", mode, count, type);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glDrawElements mode=0x%x count=%d type=0x%x\n", mode, count, type);
     g_draw_mode = mode;
     g_draw_count = count;
     g_draw_indexed = 1;
@@ -3366,7 +3366,7 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices
     record_draw_call(mode, 0, count, 1, type, indices);
 }
 void glVertexAttribPointer(GLuint i, GLint size, GLenum type, GLboolean norm, GLsizei stride, const void *ptr) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glVertexAttribPointer i=%u size=%d type=0x%x norm=%u stride=%d off=%zu arrbuf=%d\n", i, size, type, (unsigned)norm, stride, (size_t)ptr, g_arr_buf);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glVertexAttribPointer i=%u size=%d type=0x%x norm=%u stride=%d off=%zu arrbuf=%d\n", i, size, type, (unsigned)norm, stride, (size_t)ptr, g_arr_buf);
     if (i >= MAXATTR) return;
     g_attr[i].size = size;
     g_attr[i].type = type;
@@ -3378,7 +3378,7 @@ void glVertexAttribPointer(GLuint i, GLint size, GLenum type, GLboolean norm, GL
     vao_store_current();
 }
 void glEnableVertexAttribArray(GLuint i) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glEnableVertexAttribArray(%u) [MAXATTR=%d]\n", i, MAXATTR);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glEnableVertexAttribArray(%u) [MAXATTR=%d]\n", i, MAXATTR);
     if (i < MAXATTR) {
         g_attr[i].enabled = 1;
         vao_store_current();
@@ -3390,7 +3390,7 @@ void glDisableVertexAttribArray(GLuint i) {
         vao_store_current();
     }
 }
-void glDrawArrays(GLenum mode, GLint first, GLsizei count) { if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glDrawArrays(0x%x,%d,%d)\n", mode, first, count); g_draw_mode = mode; g_draw_first = first; g_draw_count = count; g_draw_indexed = 0; memcpy(g_attr_snap, g_attr, sizeof g_attr); g_have_draw_snap = 1; record_draw_call(mode, first, count, 0, 0, NULL); }
+void glDrawArrays(GLenum mode, GLint first, GLsizei count) { if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glDrawArrays(0x%x,%d,%d)\n", mode, first, count); g_draw_mode = mode; g_draw_first = first; g_draw_count = count; g_draw_indexed = 0; memcpy(g_attr_snap, g_attr, sizeof g_attr); g_have_draw_snap = 1; record_draw_call(mode, first, count, 0, 0, NULL); }
 
 // ---- state setters (no-ops for our forward-renderer) + getters glmark2 queries ----
 #define GL_MAX_TEXTURE_SIZE 0x0D33
@@ -3499,12 +3499,12 @@ void glStencilFunc(GLenum f, GLint r, GLuint m) { (void)f; (void)r; (void)m; }
 void glStencilOp(GLenum a, GLenum b, GLenum c) { (void)a; (void)b; (void)c; }
 void glStencilMask(GLuint m) { (void)m; }
 void glBlendFunc(GLenum s, GLenum d) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlendFunc s=0x%x d=0x%x\n", s, d);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlendFunc s=0x%x d=0x%x\n", s, d);
     g_blend_src_rgb = s; g_blend_dst_rgb = d;
     g_blend_src_alpha = s; g_blend_dst_alpha = d;
 }
 void glBlendFuncSeparate(GLenum a, GLenum b, GLenum c, GLenum d) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlendFuncSeparate rgb=0x%x,0x%x a=0x%x,0x%x\n", a, b, c, d);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlendFuncSeparate rgb=0x%x,0x%x a=0x%x,0x%x\n", a, b, c, d);
     g_blend_src_rgb = a; g_blend_dst_rgb = b;
     g_blend_src_alpha = c; g_blend_dst_alpha = d;
 }
@@ -3513,11 +3513,11 @@ void glBlendFuncSeparatei(GLuint buf, GLenum a, GLenum b, GLenum c, GLenum d) { 
 void glBlendFunciEXT(GLuint buf, GLenum s, GLenum d) { glBlendFunci(buf, s, d); }
 void glBlendFuncSeparateiEXT(GLuint buf, GLenum a, GLenum b, GLenum c, GLenum d) { glBlendFuncSeparatei(buf, a, b, c, d); }
 void glBlendEquation(GLenum m) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlendEquation m=0x%x\n", m);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlendEquation m=0x%x\n", m);
     g_blend_eq_rgb = m; g_blend_eq_alpha = m;
 }
 void glBlendEquationSeparate(GLenum a, GLenum b) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlendEquationSeparate rgb=0x%x a=0x%x\n", a, b);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlendEquationSeparate rgb=0x%x a=0x%x\n", a, b);
     g_blend_eq_rgb = a; g_blend_eq_alpha = b;
 }
 void glBlendEquationi(GLuint buf, GLenum m) { if (buf == 0) glBlendEquation(m); }
@@ -3595,7 +3595,7 @@ void glBindFramebuffer(GLenum t, GLuint f) {
     } else if (t == GL_READ_FRAMEBUFFER) {
         g_read_fbo = f;
     }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindFramebuffer target=0x%x fbo=%u\n", t, f);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindFramebuffer target=0x%x fbo=%u\n", t, f);
 }
 void glDeleteFramebuffers(GLsizei n, const GLuint *f) {
     for (int i = 0; i < n; i++) {
@@ -3618,7 +3618,7 @@ void glFramebufferTexture2D(GLenum a, GLenum b, GLenum c, GLuint d, GLint e) {
         g_fbo[f].color_level = e;
         g_fbo[f].color_layer = 0;
     }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glFramebufferTexture2D target=0x%x attachment=0x%x textarget=0x%x tex=%u level=%d\n", a, b, c, d, e);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glFramebufferTexture2D target=0x%x attachment=0x%x textarget=0x%x tex=%u level=%d\n", a, b, c, d, e);
 }
 void glFramebufferRenderbuffer(GLenum a, GLenum b, GLenum c, GLuint d) {
     GLuint f = (a == GL_READ_FRAMEBUFFER) ? g_read_fbo : g_draw_fbo;
@@ -3630,7 +3630,7 @@ void glFramebufferRenderbuffer(GLenum a, GLenum b, GLenum c, GLuint d) {
         g_fbo[f].color_level = 0;
         g_fbo[f].color_layer = 0;
     }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glFramebufferRenderbuffer target=0x%x attachment=0x%x rbtarget=0x%x rbo=%u\n", a, b, c, d);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glFramebufferRenderbuffer target=0x%x attachment=0x%x rbtarget=0x%x rbo=%u\n", a, b, c, d);
 }
 void glGenRenderbuffers(GLsizei n, GLuint *r) {
     for (int k = 0; k < n; k++) {
@@ -3650,7 +3650,7 @@ void glBindRenderbuffer(GLenum t, GLuint r) {
         g_rbo_bound = r;
         if (r > 0 && r < MAXRBO) g_rbo[r].used = 1;
     }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindRenderbuffer target=0x%x rbo=%u\n", t, r);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindRenderbuffer target=0x%x rbo=%u\n", t, r);
 }
 void glDeleteRenderbuffers(GLsizei n, const GLuint *r) {
     for (int i = 0; i < n; i++) {
@@ -3673,10 +3673,10 @@ void glRenderbufferStorage(GLenum a, GLenum b, GLsizei w, GLsizei h) {
         g_rbo[g_rbo_bound].samples = 0;
         g_rbo[g_rbo_bound].gen++;
     }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glRenderbufferStorage target=0x%x ifmt=0x%x %dx%d\n", a, b, w, h);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glRenderbufferStorage target=0x%x ifmt=0x%x %dx%d\n", a, b, w, h);
 }
 void glReadPixels(GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum t, void *d) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glReadPixels xy=%d,%d %dx%d fmt=0x%x type=0x%x dst=%p\n", x, y, w, h, f, t, d);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glReadPixels xy=%d,%d %dx%d fmt=0x%x type=0x%x dst=%p\n", x, y, w, h, f, t, d);
     if (!d || w <= 0 || h <= 0) return;
     int bpp = tex_bpp(f);
     memset(d, 0, (size_t)w * (size_t)h * (size_t)bpp);
@@ -3719,7 +3719,7 @@ void glValidateProgram(GLuint p) { (void)p; }
 void glCompressedTexImage2D(GLenum t, GLint l, GLenum ifmt, GLsizei w, GLsizei h, GLint b, GLsizei sz, const void *d) { (void)t; (void)l; (void)ifmt; (void)w; (void)h; (void)b; (void)sz; (void)d; }
 void glCompressedTexSubImage2D(GLenum t, GLint l, GLint xo, GLint yo, GLsizei w, GLsizei h, GLenum fmt, GLsizei sz, const void *d) { (void)t; (void)l; (void)xo; (void)yo; (void)w; (void)h; (void)fmt; (void)sz; (void)d; }
 void glCopyTexImage2D(GLenum t, GLint l, GLenum ifmt, GLint x, GLint y, GLsizei w, GLsizei h, GLint b) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glCopyTexImage2D target=0x%x level=%d ifmt=0x%x src=%d,%d %dx%d border=%d dsttex=%u\n", t, l, ifmt, x, y, w, h, b, g_tex_unit[g_active_unit]);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glCopyTexImage2D target=0x%x level=%d ifmt=0x%x src=%d,%d %dx%d border=%d dsttex=%u\n", t, l, ifmt, x, y, w, h, b, g_tex_unit[g_active_unit]);
     (void)ifmt;
     if (t != GL_TEXTURE_2D || l != 0 || b != 0) return;
     GLuint dst = g_tex_unit[g_active_unit];
@@ -3729,7 +3729,7 @@ void glCopyTexImage2D(GLenum t, GLint l, GLenum ifmt, GLint x, GLint y, GLsizei 
     dump_tex_ppm(dst, &g_tex[dst], "copy-image");
 }
 void glCopyTexSubImage2D(GLenum t, GLint l, GLint xo, GLint yo, GLint x, GLint y, GLsizei w, GLsizei h) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glCopyTexSubImage2D target=0x%x level=%d dst=%d,%d src=%d,%d %dx%d dsttex=%u\n", t, l, xo, yo, x, y, w, h, g_tex_unit[g_active_unit]);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glCopyTexSubImage2D target=0x%x level=%d dst=%d,%d src=%d,%d %dx%d dsttex=%u\n", t, l, xo, yo, x, y, w, h, g_tex_unit[g_active_unit]);
     if (t != GL_TEXTURE_2D || l != 0 || w <= 0 || h <= 0) return;
     GLuint dst = g_tex_unit[g_active_unit];
     GLuint src = fbo_color_texture(g_read_fbo);
@@ -3742,7 +3742,7 @@ void glTexParameteriv(GLenum target, GLenum p, const GLint *v) { if (v) glTexPar
 void glTexSubImage2D(GLenum target, GLint level, GLint xo, GLint yo, GLsizei w, GLsizei h, GLenum fmt, GLenum type, const void *pixels) {
     (void)target; (void)type;
     GLuint t = g_tex_unit[g_active_unit];
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexSubImage2D unit=%d tex=%u level=%d xy=%d,%d %dx%d fmt=0x%x type=0x%x pixels=%p\n", g_active_unit, t, level, xo, yo, w, h, fmt, type, pixels);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexSubImage2D unit=%d tex=%u level=%d xy=%d,%d %dx%d fmt=0x%x type=0x%x pixels=%p\n", g_active_unit, t, level, xo, yo, w, h, fmt, type, pixels);
     if (level != 0 || t >= MAXTEX || !g_tex[t].used || !g_tex[t].data) return;
     tex_store_pixels(&g_tex[t], xo, yo, w, h, fmt, pixels);
     g_tex[t].gen++;
@@ -3904,7 +3904,7 @@ void glGenVertexArrays(GLsizei n, GLuint *a) {
     }
 }
 void glBindVertexArray(GLuint a) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindVertexArray(%u)\n", a);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBindVertexArray(%u)\n", a);
     vao_store_current();
     if (a >= MAXVAO) return;
     g_cur_vao = a;
@@ -3992,7 +3992,7 @@ void glDrawBuffers(GLsizei n, const GLenum *b) { (void)n; (void)b; }
 void glReadBuffer(GLenum m) { (void)m; }
 void glVertexAttribDivisor(GLuint i, GLuint d) { (void)i; (void)d; }
 void glVertexAttribIPointer(GLuint i, GLint size, GLenum type, GLsizei stride, const void *ptr) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glVertexAttribIPointer i=%u size=%d type=0x%x stride=%d off=%zu arrbuf=%d\n", i, size, type, stride, (size_t)ptr, g_arr_buf);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glVertexAttribIPointer i=%u size=%d type=0x%x stride=%d off=%zu arrbuf=%d\n", i, size, type, stride, (size_t)ptr, g_arr_buf);
     if (i >= MAXATTR) return;
     g_attr[i].size = size;
     g_attr[i].type = type;
@@ -4063,7 +4063,7 @@ void glProgramParameteri(GLuint p, GLenum pn, GLint v) { (void)p; (void)pn; (voi
 void glTexImage3D(GLenum t, GLint l, GLint ifmt, GLsizei w, GLsizei h, GLsizei d, GLint b, GLenum fmt, GLenum ty, const void *px) {
     (void)ifmt; (void)b; (void)ty;
     GLuint tex = g_tex_unit[g_active_unit];
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexImage3D target=0x%x unit=%d tex=%u level=%d %dx%dx%d fmt=0x%x type=0x%x pixels=%p\n", t, g_active_unit, tex, l, w, h, d, fmt, ty, px);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexImage3D target=0x%x unit=%d tex=%u level=%d %dx%dx%d fmt=0x%x type=0x%x pixels=%p\n", t, g_active_unit, tex, l, w, h, d, fmt, ty, px);
     if (l != 0 || (t != GL_TEXTURE_2D_ARRAY && t != GL_TEXTURE_3D) || tex >= MAXTEX || !g_tex[tex].used) return;
     if (!tex_alloc_rgba(tex, w, h)) return;
     if (px && d > 0) tex_store_pixels(&g_tex[tex], 0, 0, w, h, fmt, px);
@@ -4072,7 +4072,7 @@ void glTexImage3D(GLenum t, GLint l, GLint ifmt, GLsizei w, GLsizei h, GLsizei d
 void glTexSubImage3D(GLenum t, GLint l, GLint xo, GLint yo, GLint zo, GLsizei w, GLsizei h, GLsizei d, GLenum fmt, GLenum ty, const void *px) {
     (void)ty;
     GLuint tex = g_tex_unit[g_active_unit];
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexSubImage3D target=0x%x unit=%d tex=%u level=%d xyz=%d,%d,%d %dx%dx%d fmt=0x%x type=0x%x pixels=%p\n", t, g_active_unit, tex, l, xo, yo, zo, w, h, d, fmt, ty, px);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexSubImage3D target=0x%x unit=%d tex=%u level=%d xyz=%d,%d,%d %dx%dx%d fmt=0x%x type=0x%x pixels=%p\n", t, g_active_unit, tex, l, xo, yo, zo, w, h, d, fmt, ty, px);
     if (l != 0 || zo != 0 || d <= 0 || (t != GL_TEXTURE_2D_ARRAY && t != GL_TEXTURE_3D) ||
         tex >= MAXTEX || !g_tex[tex].used || !g_tex[tex].data) return;
     tex_store_pixels(&g_tex[tex], xo, yo, w, h, fmt, px);
@@ -4093,7 +4093,7 @@ void glTexStorage2D(GLenum t, GLsizei levels, GLenum ifmt, GLsizei w, GLsizei h)
 void glTexStorage3D(GLenum t, GLsizei levels, GLenum ifmt, GLsizei w, GLsizei h, GLsizei d) {
     (void)levels; (void)ifmt;
     GLuint tex = g_tex_unit[g_active_unit];
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexStorage3D target=0x%x unit=%d tex=%u ifmt=0x%x %dx%dx%d\n", t, g_active_unit, tex, ifmt, w, h, d);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glTexStorage3D target=0x%x unit=%d tex=%u ifmt=0x%x %dx%dx%d\n", t, g_active_unit, tex, ifmt, w, h, d);
     if ((t == GL_TEXTURE_2D_ARRAY || t == GL_TEXTURE_3D) && tex < MAXTEX && g_tex[tex].used) {
         tex_alloc_rgba(tex, w, h);
     }
@@ -4101,7 +4101,7 @@ void glTexStorage3D(GLenum t, GLsizei levels, GLenum ifmt, GLsizei w, GLsizei h,
 void glTexStorage2DEXT(GLenum t, GLsizei levels, GLenum ifmt, GLsizei w, GLsizei h) { glTexStorage2D(t, levels, ifmt, w, h); }
 void glTexStorage3DEXT(GLenum t, GLsizei levels, GLenum ifmt, GLsizei w, GLsizei h, GLsizei d) { glTexStorage3D(t, levels, ifmt, w, h, d); }
 void glBlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlitFramebuffer src=%d,%d-%d,%d dst=%d,%d-%d,%d mask=0x%x filter=0x%x\n", sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glBlitFramebuffer src=%d,%d-%d,%d dst=%d,%d-%d,%d mask=0x%x filter=0x%x\n", sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter);
     (void)filter;
     if (!(mask & GL_COLOR_BUFFER_BIT)) return;
     GLuint src = fbo_color_texture(g_read_fbo);
@@ -4123,7 +4123,7 @@ void glFramebufferTextureLayer(GLenum t, GLenum att, GLuint tex, GLint l, GLint 
         g_fbo[f].color_level = l;
         g_fbo[f].color_layer = layer;
     }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glFramebufferTextureLayer target=0x%x attachment=0x%x tex=%u level=%d layer=%d fbo=%u\n", t, att, tex, l, layer, f);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glFramebufferTextureLayer target=0x%x attachment=0x%x tex=%u level=%d layer=%d fbo=%u\n", t, att, tex, l, layer, f);
 }
 void glRenderbufferStorageMultisample(GLenum t, GLsizei s, GLenum ifmt, GLsizei w, GLsizei h) {
     if (t == GL_RENDERBUFFER && g_rbo_bound > 0 && g_rbo_bound < MAXRBO) {
@@ -4134,7 +4134,7 @@ void glRenderbufferStorageMultisample(GLenum t, GLsizei s, GLenum ifmt, GLsizei 
         g_rbo[g_rbo_bound].samples = s;
         g_rbo[g_rbo_bound].gen++;
     }
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glRenderbufferStorageMultisample target=0x%x samples=%d ifmt=0x%x %dx%d\n", t, s, ifmt, w, h);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glRenderbufferStorageMultisample target=0x%x samples=%d ifmt=0x%x %dx%d\n", t, s, ifmt, w, h);
 }
 void glRenderbufferStorageMultisampleANGLE(GLenum t, GLsizei s, GLenum ifmt, GLsizei w, GLsizei h) { glRenderbufferStorageMultisample(t, s, ifmt, w, h); }
 void glRenderbufferStorageMultisampleEXT(GLenum t, GLsizei s, GLenum ifmt, GLsizei w, GLsizei h) { glRenderbufferStorageMultisample(t, s, ifmt, w, h); }
@@ -4143,7 +4143,7 @@ void glInvalidateSubFramebuffer(GLenum t, GLsizei n, const GLenum *att, GLint x,
 void glClearBufferiv(GLenum b, GLint d, const GLint *v) { (void)b; (void)d; (void)v; }
 void glClearBufferuiv(GLenum b, GLint d, const GLuint *v) { (void)b; (void)d; (void)v; }
 void glClearBufferfv(GLenum b, GLint d, const GLfloat *v) {
-    if (getenv("DD_SHIM_DEBUG")) fprintf(stderr, "[shim] glClearBufferfv buffer=0x%x drawbuffer=%d fbo=%u\n", b, d, g_draw_fbo);
+    if (getenv("HL_SHIM_DEBUG")) fprintf(stderr, "[shim] glClearBufferfv buffer=0x%x drawbuffer=%d fbo=%u\n", b, d, g_draw_fbo);
     if (b == GL_COLOR && d == 0 && v) clear_bound_color_texture(v);
 }
 void glClearBufferfi(GLenum b, GLint d, GLfloat depth, GLint stencil) { (void)b; (void)d; (void)depth; (void)stencil; }

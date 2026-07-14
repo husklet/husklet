@@ -97,8 +97,8 @@ impl Daemon {
         std::fs::write(
             &boot_sh,
             format!(
-                "echo $$ > {dir}/daemon.pid\nexport DD_IMAGES={img}\nexport DDOCKERD_SOCK={sock}\n\
-             export DD_STATE={state}\nexport DD_VOLUMES={vol}\nexec {bin} > {log} 2>&1\n",
+                "echo $$ > {dir}/daemon.pid\nexport HL_IMAGES={img}\nexport HL_DOCKER_SOCK={sock}\n\
+             export HL_STATE={state}\nexport HL_VOLUMES={vol}\nexec {bin} > {log} 2>&1\n",
                 dir = sh_quote(&dir.to_string_lossy()),
                 img = sh_quote(&cfg.images.to_string_lossy()),
                 sock = sh_quote(&sock.to_string_lossy()),

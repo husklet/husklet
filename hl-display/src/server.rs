@@ -11,12 +11,12 @@ use crate::wire::{Conn, Message};
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
 
-/// Opt-in wire trace (DD_DISPLAY_DEBUG): logs each dispatched request + registry binds, so a complex
+/// Opt-in wire trace (HL_DISPLAY_DEBUG): logs each dispatched request + registry binds, so a complex
 /// client (chromium's ozone-wayland) can be watched request-by-request. Zero cost when unset.
 pub fn dbg_on() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("DD_DISPLAY_DEBUG").is_ok())
+    *ON.get_or_init(|| std::env::var("HL_DISPLAY_DEBUG").is_ok())
 }
 
 // --- global names advertised by wl_registry ---
@@ -915,10 +915,10 @@ impl<P: Presenter> Server<P> {
             // this instead of committing a cursor buffer, so we can map them to host NSCursors.
             (G_CURSOR_SHAPE, "wp_cursor_shape_manager_v1", 1),
         ];
-        // zwp_linux_dmabuf_v1 (GPU rung 2) is advertised only when DD_DISPLAY_DMABUF is set — until the
+        // zwp_linux_dmabuf_v1 (GPU rung 2) is advertised only when HL_DISPLAY_DMABUF is set — until the
         // cross-process IOSurface handle bridge (mach port) is wired, a toolkit that PREFERS dmabuf could
         // commit buffers we can't resolve, so keep the proven shm path the default.
-        let dmabuf_on = std::env::var("DD_DISPLAY_DMABUF").is_ok();
+        let dmabuf_on = std::env::var("HL_DISPLAY_DMABUF").is_ok();
         for (name, iface, ver) in globals {
             self.conn
                 .send(&Message::new(reg, 0).u32(*name).string(iface).u32(*ver));
@@ -926,8 +926,8 @@ impl<P: Presenter> Server<P> {
         // surface_augmenter is a ChromeOS-only global that stock compositors (Weston) never advertise.
         // The oracle trace shows the real client probes for it and tolerates its absence, so advertising
         // it can steer Chrome onto an augmented path a real compositor never exposes. Default OFF to match
-        // Weston; DD_DISPLAY_AUGMENTER=1 re-enables it for debugging the augmented path.
-        if std::env::var("DD_DISPLAY_AUGMENTER").is_ok() {
+        // Weston; HL_DISPLAY_AUGMENTER=1 re-enables it for debugging the augmented path.
+        if std::env::var("HL_DISPLAY_AUGMENTER").is_ok() {
             self.conn.send(
                 &Message::new(reg, 0)
                     .u32(G_SURFACE_AUGMENTER)
@@ -1735,7 +1735,7 @@ impl<P: Presenter> Server<P> {
         }
     }
 
-    /// DD_DISPLAY_DEBUG: enumerate the surface subtree being presented (root + every composite subsurface),
+    /// HL_DISPLAY_DEBUG: enumerate the surface subtree being presented (root + every composite subsurface),
     /// each with its committed buffer's KIND (dmabuf/IOSurface vs shm vs solid) and size + offset. This
     /// localizes the multi-proc content-white wall: if Chrome's rendered page arrives as a subsurface under
     /// an IOSurface toplevel, present_root's CPU-blend (gated on a non-IOSurface root) drops it here.
@@ -3381,7 +3381,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
     /// the coordinate the client receives is full-surface-local (see `focused_geometry_origin`).
     pub fn pointer_motion(&mut self, x: i32, y: i32) {
         let (ox, oy) = self.focused_geometry_origin();
-        if std::env::var_os("DD_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
+        if std::env::var_os("HL_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
             eprintln!(
                 "dd-display[input]: pointer_motion content=({x},{y}) geometry_origin=({ox},{oy}) surface_local=({},{}) focus={:?}",
                 x + ox,

@@ -29,7 +29,7 @@ use std::ffi::c_void;
 
 fn display_debug() -> bool {
     static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *D.get_or_init(|| std::env::var_os("DD_DISPLAY_DEBUG").is_some())
+    *D.get_or_init(|| std::env::var_os("HL_DISPLAY_DEBUG").is_some())
 }
 
 #[link(name = "Metal", kind = "framework")]
@@ -82,12 +82,12 @@ extern "C" {
 /// The well-known bootstrap service name the engine sends IOSurface handles to.
 pub const GPU_BRIDGE_SERVICE: &str = "com.dd.display.gpu";
 
-/// The bootstrap service name for the IOSurface handle bridge. `DD_GPU_BRIDGE_NAME` overrides the
+/// The bootstrap service name for the IOSurface handle bridge. `HL_GPU_BRIDGE_NAME` overrides the
 /// default so multiple dd-display instances can run concurrently (e.g. one per agent/benchmark) —
 /// the engine reads the SAME env, so a guest's IOSurfaces reach the matching compositor. Default is
 /// the historical `com.dd.display.gpu` (fully backward-compatible when the env is unset).
 pub fn gpu_bridge_service() -> String {
-    std::env::var("DD_GPU_BRIDGE_NAME").unwrap_or_else(|_| GPU_BRIDGE_SERVICE.to_string())
+    std::env::var("HL_GPU_BRIDGE_NAME").unwrap_or_else(|_| GPU_BRIDGE_SERVICE.to_string())
 }
 
 // id → IOSurfaceRef (as usize; a raw pointer isn't Send). Populated by the mach-receive thread; read by
@@ -235,7 +235,7 @@ pub unsafe fn create_iosurface(w: u32, h: u32) -> IOSurfaceRef {
 // The guest is paced ~1 frame ahead by the wl frame callback (it renders N+1 only after the compositor
 // committed present N), so render_gen and the display gen stay in lockstep and no ring is needed: the
 // two events serialize S's single producer/consumer precisely while the overlap comes from the async ack.
-// Gated by env: default ON; set DD_RENDER_NOASYNC=1 to fall back to the old synchronous path (A/B).
+// Gated by env: default ON; set HL_RENDER_NOASYNC=1 to fall back to the old synchronous path (A/B).
 
 /// One process-wide `MTLDevice` so the executor's and compositor's queues can share `MTLEvent`s. Stored
 /// as a raw +1-retained pointer (leaked for process lifetime; a raw ptr isn't `Send`). `0` = no GPU.
@@ -253,10 +253,10 @@ pub fn shared_device() -> Option<Retained<ProtocolObject<dyn MTLDevice>>> {
     unsafe { Retained::retain(raw as *mut ProtocolObject<dyn MTLDevice>) }
 }
 
-/// L4 async submit + fence gate. Default ON; `DD_RENDER_NOASYNC=1` restores the synchronous baseline.
+/// L4 async submit + fence gate. Default ON; `HL_RENDER_NOASYNC=1` restores the synchronous baseline.
 pub fn async_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("DD_RENDER_NOASYNC").is_none())
+    *ON.get_or_init(|| std::env::var_os("HL_RENDER_NOASYNC").is_none())
 }
 
 struct SurfFence {
@@ -625,7 +625,7 @@ pub struct MetalPngPresenter {
     dir: std::path::PathBuf,
     pub frames: u32,
     pub last: Option<(u32, u32, u32, Vec<u8>)>, // (sid, w, h, rgba) — asserted by the selftest
-    /// `DD_DISPLAY_PNG_EVERY`: readback+encode+write a PNG only every Nth committed frame (default 1 =
+    /// `HL_DISPLAY_PNG_EVERY`: readback+encode+write a PNG only every Nth committed frame (default 1 =
     /// every frame). The GPU composite blit (hop 15) still runs every frame — sampling only elides the
     /// expensive CPU readback+PNG so the compositor keeps pace with the render pipeline during benchmarks
     /// (otherwise per-frame PNG encoding, not the pipeline, would bound the measured FPS).
@@ -634,19 +634,19 @@ pub struct MetalPngPresenter {
     /// a zero-allocation fenced blit (the old per-frame `new_bgra_texture` was a benchmark artifact — the
     /// real windowed present blits into a persistent CAMetalLayer drawable, never a fresh texture/frame).
     dst_cache: std::collections::HashMap<u32, (u32, u32, Retained<ProtocolObject<dyn MTLTexture>>)>,
-    /// `DD_DISPLAY_SYNC_PRESENT=1` restores the old synchronous compositor blit (CPU stalls on GPU
+    /// `HL_DISPLAY_SYNC_PRESENT=1` restores the old synchronous compositor blit (CPU stalls on GPU
     /// completion every frame) for A/B attribution of the present hop. Default OFF (async, fence-gated).
     sync_present: bool,
 }
 
 impl MetalPngPresenter {
     pub fn new(dir: impl Into<std::path::PathBuf>) -> Option<MetalPngPresenter> {
-        let png_every = std::env::var("DD_DISPLAY_PNG_EVERY")
+        let png_every = std::env::var("HL_DISPLAY_PNG_EVERY")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1u32)
             .max(1);
-        let sync_present = std::env::var_os("DD_DISPLAY_SYNC_PRESENT").is_some();
+        let sync_present = std::env::var_os("HL_DISPLAY_SYNC_PRESENT").is_some();
         Some(MetalPngPresenter {
             ctx: MetalCtx::new()?,
             dir: dir.into(),
@@ -681,7 +681,7 @@ impl crate::present::Presenter for MetalPngPresenter {
                     )));
                 }
                 let src = self.ctx.texture_from_iosurface(surface, w, h);
-                if surf.gpu_render && std::env::var_os("DD_DISPLAY_TEST_TRIANGLE").is_some() {
+                if surf.gpu_render && std::env::var_os("HL_DISPLAY_TEST_TRIANGLE").is_some() {
                     self.ctx.render_triangle_into(&src); // rung 3: host GPU renders into the guest IOSurface
                 }
                 // Reuse a persistent composite target for this surface (zero per-frame allocation).
@@ -695,7 +695,7 @@ impl crate::present::Presenter for MetalPngPresenter {
                 };
                 // L4/L6: fenced blit. Async (default) — the frame-callback that paces the guest fires as
                 // soon as the blit is ENCODED, not GPU-finished; the cross-queue fence keeps it tearing-free.
-                // Sync only on a PNG-sample frame (a CPU readback follows) or under DD_DISPLAY_SYNC_PRESENT.
+                // Sync only on a PNG-sample frame (a CPU readback follows) or under HL_DISPLAY_SYNC_PRESENT.
                 let wait = dump || self.sync_present;
                 self.ctx.blit_fenced_ex(&src, &dst, id, wait);
                 unsafe { cfrelease(surface) };

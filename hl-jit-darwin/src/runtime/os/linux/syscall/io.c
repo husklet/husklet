@@ -1119,7 +1119,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             int proc_text_for_log = ((int)a0 >= 0 && (int)a0 < DD_NFD && g_proc_text_ro[(int)a0]) ||
                                     (have_fgetpath && proc_text_host_path(fgetpath_buf));
-            if (getenv("DD_FATALSIG_LOG") && proc_text_for_log) {
+            if (getenv("HL_FATALSIG_LOG") && proc_text_for_log) {
                 char p[4096] = {0};
                 if (have_fgetpath) {
                     snprintf(p, sizeof p, "%s", fgetpath_buf);

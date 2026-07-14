@@ -37,7 +37,7 @@ impl Container {
     /// Map this container into the typed, env-free [`hl_jit_darwin::LaunchConfig`] the FFI spawn path
     /// consumes. The builder stores some knobs as `DD_*`/`DDJIT_*` env pairs (docker-parity encoding);
     /// this translates each known key into its typed wire field, so nothing crosses the FFI as loose
-    /// environment. Pure engine *tuning* knobs (CRASHDBG/COLDPROF/DDJIT_NOPCACHE) are not part of the
+    /// environment. Pure engine *tuning* knobs (CRASHDBG/COLDPROF/HL_JIT_NOPCACHE) are not part of the
     /// container contract and are intentionally dropped here — a follow-up can carry them if needed.
     pub(crate) fn launch_config(&self) -> hl_jit_darwin::LaunchConfig {
         let c = &self.cfg;
@@ -62,24 +62,24 @@ impl Container {
         // back internally from the wire, so the API carries zero environment).
         for (k, v) in &c.env {
             match k.as_str() {
-                "DD_CWD" => lc.cwd = v.clone(),
-                "DD_GUEST_ENV" => lc.guest_env = v.split('\n').map(str::to_string).collect(),
-                "DDJIT_PCACHE_DIR" => lc.pcache_dir = v.clone(),
-                "DDJIT_SANDBOX" | "DDJIT_UNTRUSTED" => lc.sandbox = true,
-                "DD_NET_ISOLATE" => lc.net_isolate = true,
-                "DD_NETBR" => lc.netbr = v.clone(),
-                "DD_IP" => lc.ip = v.clone(),
-                "DD_FSGEN_FILE" => lc.fsgen_file = v.clone(),
+                "HL_CWD" => lc.cwd = v.clone(),
+                "HL_GUEST_ENV" => lc.guest_env = v.split('\n').map(str::to_string).collect(),
+                "HL_JIT_PCACHE_DIR" => lc.pcache_dir = v.clone(),
+                "HL_JIT_SANDBOX" | "HL_JIT_UNTRUSTED" => lc.sandbox = true,
+                "HL_NET_ISOLATE" => lc.net_isolate = true,
+                "HL_NETBR" => lc.netbr = v.clone(),
+                "HL_IP" => lc.ip = v.clone(),
+                "HL_FSGEN_FILE" => lc.fsgen_file = v.clone(),
                 // Per-workspace VPN egress (docs/VPN.md): the builder's egress_socks() records the SOCKS5
                 // endpoint here; carry it into the typed launch so the engine's egress redirect actually
                 // arms. It was silently dropped, so a workspace configured with VPN egress ran DIRECT.
-                "DD_EGRESS_SOCKS" => lc.egress_socks = v.clone(),
-                "DD_PUBLISH_DAEMON" => lc.publish_daemon = true,
-                "DD_GPU_IOSURFACE" => lc.gpu_iosurface = true,
-                // "DDJIT_PCACHE" is a bare enable gate; the pcache dir's presence enables it engine-side.
-                // DDJIT_NOPCACHE is a per-container pcache kill switch — carried through so an operator can opt
+                "HL_EGRESS_SOCKS" => lc.egress_socks = v.clone(),
+                "HL_PUBLISH_DAEMON" => lc.publish_daemon = true,
+                "HL_GPU_IOSURFACE" => lc.gpu_iosurface = true,
+                // "HL_JIT_PCACHE" is a bare enable gate; the pcache dir's presence enables it engine-side.
+                // HL_JIT_NOPCACHE is a per-container pcache kill switch — carried through so an operator can opt
                 // one container out even under global pcache defaults. CRASHDBG/COLDPROF stay tuning-only.
-                "DDJIT_NOPCACHE" => lc.nopcache = true,
+                "HL_JIT_NOPCACHE" => lc.nopcache = true,
                 _ => {}
             }
         }
@@ -144,29 +144,29 @@ mod tests {
 
         // DD_*/DDJIT_* env-pair translation.
         assert_eq!(lc.cwd, "/work");
-        // DD_GUEST_ENV is newline-joined at the builder and split back into a Vec here.
+        // HL_GUEST_ENV is newline-joined at the builder and split back into a Vec here.
         assert_eq!(lc.guest_env, vec!["FOO=bar".to_string(), DEFAULT_GUEST_PATH.to_string(), "TERM=xterm".to_string()]);
-        assert!(lc.sandbox); // DDJIT_SANDBOX / DDJIT_UNTRUSTED -> sandbox
-        assert!(lc.net_isolate); // DD_NET_ISOLATE
-        assert!(lc.publish_daemon); // DD_PUBLISH_DAEMON
-        assert_eq!(lc.netbr, "net123"); // DD_NETBR
-        assert_eq!(lc.ip, "10.0.0.5"); // DD_IP
-        assert_eq!(lc.fsgen_file, "/run/fsgen"); // DD_FSGEN_FILE
-        assert_eq!(lc.egress_socks, "127.30.0.1:1080"); // DD_EGRESS_SOCKS
-        assert_eq!(lc.pcache_dir, "/home/dd/pcache"); // DDJIT_PCACHE_DIR
-        assert!(lc.gpu_iosurface); // DD_GPU_IOSURFACE
+        assert!(lc.sandbox); // HL_JIT_SANDBOX / HL_JIT_UNTRUSTED -> sandbox
+        assert!(lc.net_isolate); // HL_NET_ISOLATE
+        assert!(lc.publish_daemon); // HL_PUBLISH_DAEMON
+        assert_eq!(lc.netbr, "net123"); // HL_NETBR
+        assert_eq!(lc.ip, "10.0.0.5"); // HL_IP
+        assert_eq!(lc.fsgen_file, "/run/fsgen"); // HL_FSGEN_FILE
+        assert_eq!(lc.egress_socks, "127.30.0.1:1080"); // HL_EGRESS_SOCKS
+        assert_eq!(lc.pcache_dir, "/home/dd/pcache"); // HL_JIT_PCACHE_DIR
+        assert!(lc.gpu_iosurface); // HL_GPU_IOSURFACE
     }
 
     #[test]
     fn launch_config_carries_per_container_nopcache() {
-        // A per-container DDJIT_NOPCACHE (pcache kill switch) must reach the typed LaunchConfig, so an
+        // A per-container HL_JIT_NOPCACHE (pcache kill switch) must reach the typed LaunchConfig, so an
         // operator can opt ONE container out even under global pcache defaults. It was silently dropped.
         let c = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
             .cmd(["/bin/true"])
-            .env("DDJIT_NOPCACHE", "1")
+            .env("HL_JIT_NOPCACHE", "1")
             .build()
             .unwrap();
-        assert!(c.launch_config().nopcache, "per-container DDJIT_NOPCACHE must carry through typed launch");
+        assert!(c.launch_config().nopcache, "per-container HL_JIT_NOPCACHE must carry through typed launch");
 
         // A container that did NOT set it keeps pcache following the global gate.
         let d = Container::builder(Image::from_rootfs("/img").guest(Guest::LinuxAarch64))
@@ -246,10 +246,10 @@ mod tests {
         assert_eq!(lc.pcache_dir, "");
     }
 
-    // "Workspace VPN Egress Is Dropped" (P1): the builder's egress_socks() records DD_EGRESS_SOCKS, but
+    // "Workspace VPN Egress Is Dropped" (P1): the builder's egress_socks() records HL_EGRESS_SOCKS, but
     // launch_config() used to drop it, so a workspace configured with VPN/SOCKS egress launched the engine
     // with NO egress redirect — the guest's external TCP went DIRECT, defeating the VPN. This locks the
-    // key through to the typed LaunchConfig (the engine setenv's DD_EGRESS_SOCKS back from the wire and
+    // key through to the typed LaunchConfig (the engine setenv's HL_EGRESS_SOCKS back from the wire and
     // netns.c's egress_socks() arms the redirect). An empty/absent VPN carries nothing (direct, unchanged).
     #[test]
     fn launch_config_carries_egress_socks() {
@@ -259,12 +259,12 @@ mod tests {
             .build()
             .unwrap();
         // Precondition: the builder really recorded the SOCKS endpoint env pair.
-        assert!(has(&c, "DD_EGRESS_SOCKS", "10.8.0.1:1080"));
+        assert!(has(&c, "HL_EGRESS_SOCKS", "10.8.0.1:1080"));
         // The fix: it now reaches the typed launch config instead of being silently dropped.
         assert_eq!(
             c.launch_config().egress_socks,
             "10.8.0.1:1080",
-            "DD_EGRESS_SOCKS must carry through to the typed LaunchConfig so the VPN redirect actually arms"
+            "HL_EGRESS_SOCKS must carry through to the typed LaunchConfig so the VPN redirect actually arms"
         );
 
         // No VPN configured: egress stays empty (direct host egress, byte-for-byte unchanged).
@@ -295,18 +295,18 @@ mod tests {
             .cmd(["/bin/true"])
             .env("CRASHDBG", "1")
             .env("COLDPROF", "1")
-            .env("DDJIT_NOPCACHE", "1")
-            .persistent_cache("/pc") // also emits the bare DDJIT_PCACHE gate, which is likewise dropped
+            .env("HL_JIT_NOPCACHE", "1")
+            .persistent_cache("/pc") // also emits the bare HL_JIT_PCACHE gate, which is likewise dropped
             .build()
             .unwrap();
         // Precondition: those keys really are stored on the spawn config.
         assert!(has(&c, "CRASHDBG", "1"));
         assert!(has(&c, "COLDPROF", "1"));
-        assert!(has(&c, "DDJIT_NOPCACHE", "1"));
-        assert!(has(&c, "DDJIT_PCACHE", "1"));
+        assert!(has(&c, "HL_JIT_NOPCACHE", "1"));
+        assert!(has(&c, "HL_JIT_PCACHE", "1"));
 
         let lc = c.launch_config();
-        // The only DDJIT_* key that maps is DDJIT_PCACHE_DIR; the bare gate + tuning keys leave no trace.
+        // The only DDJIT_* key that maps is HL_JIT_PCACHE_DIR; the bare gate + tuning keys leave no trace.
         assert_eq!(lc.pcache_dir, "/pc");
         assert!(!lc.sandbox);
         assert!(!lc.net_isolate);

@@ -46,14 +46,14 @@ impl Guest {
 
     /// Absolute path to the JIT binary, or `None` if it can't be located.
     ///
-    /// Resolution order (see [`resolve_bundled`]): `$DDJIT_DIR/ddjit-<target>`, then beside the running
+    /// Resolution order (see [`resolve_bundled`]): `$HL_JIT_DIR/ddjit-<target>`, then beside the running
     /// executable, then the `build.rs`-baked compile-time path (dev/`cargo` layout). `None` if none exist.
     pub fn jit_path(self) -> Option<String> {
         resolve_bundled(
             &format!("ddjit-{}", self.target()),
             match self {
-                Guest::LinuxAarch64 => env!("DDJIT_LINUX_AARCH64"),
-                Guest::LinuxX86_64 => env!("DDJIT_LINUX_X86_64"),
+                Guest::LinuxAarch64 => env!("HL_JIT_LINUX_AARCH64"),
+                Guest::LinuxX86_64 => env!("HL_JIT_LINUX_X86_64"),
             },
         )
     }
@@ -61,15 +61,15 @@ impl Guest {
 
 /// Resolve a shipped artifact (a `ddjit-<target>` engine or `darwinjail.dylib`) at runtime. The backend
 /// knows nothing about any particular deployment (GUI app, LaunchAgent, install location) — an embedder
-/// that relocates the engines just points `$DDJIT_DIR` at them. Resolution order:
-///   1. `$DDJIT_DIR/<name>` — an explicit override for a relocated/bundled layout,
+/// that relocates the engines just points `$HL_JIT_DIR` at them. Resolution order:
+///   1. `$HL_JIT_DIR/<name>` — an explicit override for a relocated/bundled layout,
 ///   2. `<dir of the running executable>/<name>` — engines sitting beside the host binary (the common
 ///      packaged layout), so a plain run works with no env set,
 ///   3. the `build.rs`-baked compile-time path (cargo/dev layout).
 /// Every candidate is existence-checked, so a stale baked CI path is never returned.
 fn resolve_bundled(name: &str, baked: &str) -> Option<String> {
     let mut dirs: Vec<std::path::PathBuf> = Vec::new();
-    if let Ok(d) = std::env::var("DDJIT_DIR") {
+    if let Ok(d) = std::env::var("HL_JIT_DIR") {
         dirs.push(std::path::PathBuf::from(d));
     }
     if let Ok(exe) = std::env::current_exe() {

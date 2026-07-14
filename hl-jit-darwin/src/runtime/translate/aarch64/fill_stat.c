@@ -4,7 +4,7 @@
 // container uid/gid virtualization (cuid/cgid defined in os/linux/container/state.c, included later in
 // the unity TU): files the container creates live in the writable upper owned by the engine's REAL host
 // uid -- report them as the container's uid/gid so guest ownership checks pass (e.g. postgres initdb
-// "data directory has wrong ownership" when running as a non-root DD_UID).
+// "data directory has wrong ownership" when running as a non-root HL_UID).
 static int cuid(void);
 static int cgid(void);
 // a guest chown is persisted as a host xattr on the overlay-upper file; prefer it over the

@@ -38,12 +38,12 @@ fn ext_net() -> Group {
             src("unix-dgram-abstract", "ext_net/net_unix_dgram_abstract.c").oracle(),
             // a server that binds 0.0.0.0 must answer a 127.0.0.1 client in the SAME container even with a
             // user network (bridge) attached. The 0.0.0.0 bind lands on the per-network AF_UNIX switch (our IP);
-            // the 127.0.0.1 dial must fall back there on a FRESH socket. Enable the switch via DD_NETNS/DD_NETBR/
-            // DD_IP (as the daemon does for a user network); golden PONG. Linux-only (the switch is Linux).
+            // the 127.0.0.1 dial must fall back there on a FRESH socket. Enable the switch via HL_NETNS/HL_NETBR/
+            // HL_IP (as the daemon does for a user network); golden PONG. Linux-only (the switch is Linux).
             src("lo-any-bridge", "ext_net/net_lo_any.c")
-                .env("DD_NETNS", "ddc228")
-                .env("DD_NETBR", "ddc228br")
-                .env("DD_IP", "172.28.0.5")
+                .env("HL_NETNS", "ddc228")
+                .env("HL_NETBR", "ddc228br")
+                .env("HL_IP", "172.28.0.5")
                 .out("lo_any reply=PONG\n"),
             // ---- socket options ----
             port("sockopt-buf", "ext_net/net_sockopt_buf.c")
@@ -81,7 +81,7 @@ fn ext_net() -> Group {
                 .out("inet_pton v4=192.168.1.42 v6=2001:db8::1 bad=0\n"),
             port("gethostname", "ext_net/net_gethostname.c").out("gethostname r=0 nonempty=1\n"),
             // ---- interface introspection — Linux-only synth (getifaddrs/netlink/procfs/sysfs) ----
-            // dd models lo + eth0; with no DD_IP in the bare matrix eth0 is the synthetic 172.17.0.2/16.
+            // dd models lo + eth0; with no HL_IP in the bare matrix eth0 is the synthetic 172.17.0.2/16.
             // Covers getifaddrs, AF_NETLINK RTM_GETADDR (glibc/go-sockaddr/minio/consul path), /proc/net/dev
             // and /sys/class/net. Fixed golden (differs from a native-macOS host) -> src, both Linux engines.
             src("ifaces", "ext_net/net_ifaces.c").out(

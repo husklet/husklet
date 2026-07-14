@@ -42,9 +42,9 @@ gcc -O2 -fPIC -shared -Wl,-soname,libcudart.so.1 -Wl,--version-script,libcudart.
 ln -sf libcuda.so.1   "$OUT/native/libcuda.so"
 ln -sf libcudart.so.1 "$OUT/native/libcudart.so"
 
-export DD_CUDA_NAME="${DD_CUDA_NAME:-dd Metal (CUDA-sim) Device}"
-export DD_CUDA_CC="${DD_CUDA_CC:-8.6}"
-export DD_CUDA_VRAM="${DD_CUDA_VRAM:-4096}"
+export HL_CUDA_NAME="${HL_CUDA_NAME:-dd Metal (CUDA-sim) Device}"
+export HL_CUDA_CC="${HL_CUDA_CC:-8.6}"
+export HL_CUDA_VRAM="${HL_CUDA_VRAM:-4096}"
 
 echo "[test] native driver-API ABI test ($HOST_ARCH)"
 gcc -O2 -o "$OUT/test_cuda" test_cuda.c -ldl -lm

@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- opt8 persistent translated-code cache (DDJIT_PCACHE=1; default OFF).
+// dd/runtime/frontend/x86_64 -- opt8 persistent translated-code cache (HL_JIT_PCACHE=1; default OFF).
 //
 // Idea: cold start of a short-lived container is dominated by translating the dynamic linker (musl
 // ld.so) + the program's startup path -- ~1000 blocks for `busybox echo`. That work is identical on
@@ -57,7 +57,7 @@
       // v6: exec re-key, argv0 key, full-width (JIT_MAP_N) map persistence,
       // library manifest + deferred activation, warm-stat sidecar.
 // Every env var that changes the EMITTED BYTES must also key the persistent cache, or a warm load with
-// DDJIT_PCACHE=1 can dispatch translations produced under a DIFFERENT codegen mode (silently making the
+// HL_JIT_PCACHE=1 can dispatch translations produced under a DIFFERENT codegen mode (silently making the
 // env-driven compat/debug switch ineffective, or worse, dispatching a mismatched block layout). IRQSLIM
 // (g_fwdskip) changes the block-entry layout; the rest gate distinct emitted sequences. Read the env vars
 // directly (they are process-global + immutable for the run) with the SAME truthiness each codegen site
@@ -95,9 +95,9 @@ static uint64_t pcache_codegen_mode_bits(void) {
     // (not the codegen's lazily-cached `-1` statics, which may be uninitialized this early and live in
     // other translation units) is the file's own established doctrine (see the header comment) and is
     // exact because every one of those statics is a pure deterministic function of exactly this getenv.
-    if (getenv("DDJIT_NOSLIMSYS")) b |= 1ull << 18;      // emit.c: `getenv?0:1` (presence) -> spill layout
-    if (pcache_env_fcnz("DDJIT_NOFASTSYS")) b |= 1ull << 19;  // emit.c s1_calibrate: fast-syscall inline arms
-    if (pcache_env_fcnz("DDJIT_NOSIGINLINE")) b |= 1ull << 20; // emit.c: W4F signal-inline arms
+    if (getenv("HL_JIT_NOSLIMSYS")) b |= 1ull << 18;      // emit.c: `getenv?0:1` (presence) -> spill layout
+    if (pcache_env_fcnz("HL_JIT_NOFASTSYS")) b |= 1ull << 19;  // emit.c s1_calibrate: fast-syscall inline arms
+    if (pcache_env_fcnz("HL_JIT_NOSIGINLINE")) b |= 1ull << 20; // emit.c: W4F signal-inline arms
     if (getenv("NOTIER2X")) b |= 1ull << 21;             // engine_glue/linux_x86_64: presence -> tier-2 codegen
     if (getenv("NOFLAGELIDE")) b |= 1ull << 22;          // master flag-elide gate (shift/xblock/loop): presence
     if (getenv("NOSHIFTFLAGELIDE")) b |= 1ull << 23;     // shift.c: presence -> shift flag synthesis elision
@@ -109,7 +109,7 @@ static uint64_t pcache_codegen_mode_bits(void) {
     if (pcache_env_fcnz("NOREP")) b |= 1ull << 29;       // repstr.c norep_disabled: rep movs/stos fast path
     if (getenv("IBTC1WAY")) b |= 1ull << 30;             // engine_glue g_ibtc1way: presence -> IBTC probe codegen
     // SAFETY: pcache_codegen_mode_bits() is consulted ONLY when the persistent pcache is ACTIVE
-    // (DDJIT_PCACHE=1, DEFAULT-OFF). With it off, no cache is loaded or stored, so these bits are never
+    // (HL_JIT_PCACHE=1, DEFAULT-OFF). With it off, no cache is loaded or stored, so these bits are never
     // read -> BYTE-IDENTICAL default behavior. With it on, adding bits only makes cache-ids MORE distinct:
     // worst case is an extra cache miss + in-memory recompile (safe), never a wrong load. This change can
     // only FIX the stale-warm-load bug (a warm arena built under a flag reloaded without it), never add one.
@@ -256,7 +256,7 @@ static uint64_t pcache_make_id(const char *prog_host, const char *interp_host, c
 }
 
 static void pcache_file(char *out, size_t n) {
-    const char *dir = getenv("DDJIT_PCACHE_DIR");
+    const char *dir = getenv("HL_JIT_PCACHE_DIR");
     if (!dir || !dir[0]) dir = "/tmp/ddjit-pcache";
     mkdir(dir, 0700);
     snprintf(out, n, "%s/%016llx.pcache", dir, (unsigned long long)g_pc_binid);

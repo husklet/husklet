@@ -60,7 +60,7 @@ fragment float4 sample_tex(
 }
 "#;
 
-const CHROME_SOLID_MSL: &str = r#"
+const HL_SOLID_MSL: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
 
@@ -486,7 +486,7 @@ fn chrome_like_rgba_triangle_strip_rtadjust_fills_offscreen_quad() {
     )
     .unwrap();
     be.write_buffer(BufferId(11), 0, &uniforms).unwrap();
-    be.create_shader(ShaderId(20), ir::ShaderPayloadKind::LegacyMsl, &pack_msl(CHROME_SOLID_MSL))
+    be.create_shader(ShaderId(20), ir::ShaderPayloadKind::LegacyMsl, &pack_msl(HL_SOLID_MSL))
         .unwrap();
     be.create_bind_group(
         BindGroupId(40),

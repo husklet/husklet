@@ -124,7 +124,7 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
 #[test]
 fn resource_output_cluster_behavioral_proof() {
     // dmabuf global is opt-in; set before any DdState::new so the zero-copy block advertises it.
-    std::env::set_var("DD_DISPLAY_DMABUF", "1");
+    std::env::set_var("HL_DISPLAY_DMABUF", "1");
 
     // Rows 1 (shm teardown), 2 (budget incl. presenter objects), 4 (geometry routing), 5 (hotplug +
     // fullscreen reconfigure) are proven here over the wire. Row 3 (zero-copy completion tokens) and the

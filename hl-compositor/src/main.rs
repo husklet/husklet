@@ -1,4 +1,4 @@
-//! `dd-compositor` binary: the Smithay-native compositor endpoint, gated behind `DD_DISPLAY_SMITHAY=1`
+//! `dd-compositor` binary: the Smithay-native compositor endpoint, gated behind `HL_DISPLAY_SMITHAY=1`
 //! (see `dd-display`'s launcher, which execs this binary when the flag is set). It binds the Wayland
 //! socket, accepts guest clients, and composites their surfaces through the reused `Presenter` seam:
 //!   - default on macOS: the native Cocoa/Metal window backend (one NSWindow per surface, HiDPI);
@@ -52,7 +52,7 @@ fn main() {
     let socket = socket.unwrap_or_else(default_socket_path);
 
     // Phase 6.1: start the dd-gpu IR executor BEFORE the compositor mode is selected, so BOTH the
-    // native Cocoa/Metal loop and the headless `--png` loop get it. The `DD_DISPLAY_SMITHAY=1` exec
+    // native Cocoa/Metal loop and the headless `--png` loop get it. The `HL_DISPLAY_SMITHAY=1` exec
     // replaced `dd-display` before it could start the executor itself; without this call
     // `DD_GPU_BACKEND=wgpu` and the default Metal executor are unreachable on the Smithay path and
     // accelerated guests render white. Respects DD_GPU_BACKEND (the executor branches internally).
@@ -152,8 +152,8 @@ fn build_loop(
         )
         .expect("insert display source");
 
-    // XWayland bridge activation (opt-in, behind `--features xwayland` AND the DD_XWAYLAND runtime flag;
-    // the whole binary is already behind DD_DISPLAY_SMITHAY). `DdState::start_xwayland` (handlers/xwayland.rs)
+    // XWayland bridge activation (opt-in, behind `--features xwayland` AND the HL_XWAYLAND runtime flag;
+    // the whole binary is already behind HL_DISPLAY_SMITHAY). `DdState::start_xwayland` (handlers/xwayland.rs)
     // composes Smithay's Xwayland server + X11 window manager so X11-only guest apps present + get input
     // through the SAME path as native toplevels. RUNTIME wiring note: `X11Wm::start_wm` inserts the X11
     // socket source into the calloop with the `XwmHandler` type as its data — here that is `DdState`, but
@@ -161,9 +161,9 @@ fn build_loop(
     // calloop data type with `DdState` (a mechanical main.rs refactor done when the feature is enabled on a
     // host that can build it — the `x11rb` deps are unfetchable on the offline dev host; see Cargo.toml).
     #[cfg(feature = "xwayland")]
-    if std::env::var("DD_XWAYLAND").is_ok() {
+    if std::env::var("HL_XWAYLAND").is_ok() {
         eprintln!(
-            "dd-compositor: DD_XWAYLAND set — XWayland bridge is composed (handlers::xwayland::start_xwayland); \
+            "dd-compositor: HL_XWAYLAND set — XWayland bridge is composed (handlers::xwayland::start_xwayland); \
              its X11 window manager, present/input adoption, and clipboard callbacks are implemented. Runtime \
              activation of the X11 event source is pending the calloop-data unification noted above."
         );
@@ -214,13 +214,13 @@ mod macos {
         DUMP_REQ.store(true, Ordering::SeqCst);
     }
 
-    /// If a dump was requested, write every live window's current pixels to `DD_DISPLAY_DUMP`
+    /// If a dump was requested, write every live window's current pixels to `HL_DISPLAY_DUMP`
     /// (else `/tmp/dd-display-live`), via the reused `Presenter::dump_pngs` hook.
     fn service_dump(data: &mut LoopData) {
         if !DUMP_REQ.swap(false, Ordering::SeqCst) {
             return;
         }
-        let dir = std::env::var("DD_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-live".into());
+        let dir = std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-live".into());
         let n = data.state.presenter.dump_pngs(&dir);
         eprintln!("dd-compositor[cocoa]: SIGUSR1 dumped {n} live window(s) -> {dir}/live-surface-*.png");
     }
@@ -260,7 +260,7 @@ mod macos {
         // SIGUSR1 → PNG dump, matching the legacy live loop so the SAME headless validation harness
         // (`target-mac/live-window.sh` sends SIGUSR1 and reads the PNG back, since the Mac screen cannot
         // be recorded) works on the Smithay path — needed to gather the visible-render evidence before
-        // making DD_DISPLAY_SMITHAY the default. Dumps to `DD_DISPLAY_DUMP` (else /tmp/dd-display-live).
+        // making HL_DISPLAY_SMITHAY the default. Dumps to `HL_DISPLAY_DUMP` (else /tmp/dd-display-live).
         unsafe { libc::signal(libc::SIGUSR1, on_sigusr1 as usize) };
 
         let (mut event_loop, mut data) = build_loop(socket, presenter);

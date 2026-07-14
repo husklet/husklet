@@ -14,13 +14,13 @@
 use crate::metal::MetalCtx;
 use hl_gpu::backend::{Capabilities, GpuBackend};
 
-/// Per-frame executor logging is off the hot path unless `DD_DISPLAY_DEBUG` is set. At native frame
+/// Per-frame executor logging is off the hot path unless `HL_DISPLAY_DEBUG` is set. At native frame
 /// rates (~9k fps) a per-frame `eprintln!` (format + `write()` syscall) sits on the guest's critical
 /// path — the ack that unblocks the guest follows it — so gating it is a real steady-state win.
 fn exec_debug() -> bool {
     use std::sync::OnceLock;
     static D: OnceLock<bool> = OnceLock::new();
-    *D.get_or_init(|| std::env::var_os("DD_DISPLAY_DEBUG").is_some())
+    *D.get_or_init(|| std::env::var_os("HL_DISPLAY_DEBUG").is_some())
 }
 use hl_gpu::id::{BindGroupId, BufferId, PipelineId, SamplerId, ShaderId, TextureId};
 use hl_gpu::ir::{
@@ -429,7 +429,7 @@ pub struct MetalBackend {
     resolve_pipelines: HashMap<usize, Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     blit_sampler_nearest: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
     blit_sampler_linear: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
-    // Prof counters (read + reset per frame by the executor when DD_RENDER_PROF is on). `*_compiles`
+    // Prof counters (read + reset per frame by the executor when HL_RENDER_PROF is on). `*_compiles`
     // count only ACTUAL Metal compiles (cache misses) — the key steady-state regression guard is that
     // they read 0 after warmup.
     pub shader_compiles: u32,
@@ -487,7 +487,7 @@ fn msl_from_words(words: &[u32]) -> Option<String> {
 fn spirv_to_msl(words: &[u32]) -> Option<(String, String)> {
     match spirv_to_msl_inner(words) {
         Ok(v) => {
-            if let Some(dir) = std::env::var_os("DD_GPU_DUMP_SPIRV") {
+            if let Some(dir) = std::env::var_os("HL_GPU_DUMP_SPIRV") {
                 let bytes: &[u8] = unsafe {
                     std::slice::from_raw_parts(words.as_ptr() as *const u8, std::mem::size_of_val(words))
                 };
@@ -498,7 +498,7 @@ fn spirv_to_msl(words: &[u32]) -> Option<(String, String)> {
         }
         Err(e) => {
             eprintln!("dd-metal: SPIR-V→MSL failed ({} words): {e:?}", words.len());
-            if let Some(dir) = std::env::var_os("DD_GPU_DUMP_SPIRV") {
+            if let Some(dir) = std::env::var_os("HL_GPU_DUMP_SPIRV") {
                 let bytes: &[u8] = unsafe {
                     std::slice::from_raw_parts(words.as_ptr() as *const u8, std::mem::size_of_val(words))
                 };
@@ -1116,7 +1116,7 @@ pub fn selftest_shader(out: &str) -> ! {
 }
 
 /// `dd-display selftest-shim-ir <ir.bin> <out.png>`: replay a raw dd-gpu IR byte-stream (exactly what the
-/// GL shim emits for one frame, captured via `DD_IR_DUMP`) through the real `MetalBackend` into an
+/// GL shim emits for one frame, captured via `HL_IR_DUMP`) through the real `MetalBackend` into an
 /// IOSurface → PNG. Closes the loop on the shim's RUNTIME IR (CreateTexture/CreateSampler/
 /// CopyBufferToTexture/SetIndexBuffer/DrawIndexed/bind-group) without needing the container executor socket.
 pub fn selftest_shim_ir(irfile: &str, out: &str, w: u32, h: u32, target_id: u32) -> ! {
@@ -1645,7 +1645,7 @@ pub fn run_executor(sock_path: String) {
             }
             let mut bytes = vec![0u8; len];
             s.read_exact(&mut bytes)?;
-            if std::env::var_os("DD_GPU_TRACE_IR").is_some() {
+            if std::env::var_os("HL_GPU_TRACE_IR").is_some() {
                 if let Ok(cmds) = hl_gpu::ir::decode_stream(&bytes) {
                     let mut summary: Vec<String> = Vec::new();
                     for c in &cmds {
@@ -1711,7 +1711,7 @@ pub fn run_executor(sock_path: String) {
             // the GPU drew the frame, independent of the compositor present path. Overwrites per id so the
             // last frame of each surface survives.
             if rendered {
-                if let Some(dir) = std::env::var_os("DD_GPU_DUMP_FRAME") {
+                if let Some(dir) = std::env::var_os("HL_GPU_DUMP_FRAME") {
                     if let Some(tex) = rt_cache.get(&id) {
                         let path = std::path::Path::new(&dir).join(format!("exec-{id}.png"));
                         readback_png(ctx, tex, w, h, &path.to_string_lossy());
@@ -1773,7 +1773,7 @@ pub fn run_executor(sock_path: String) {
 /// is then acked immediately (no `poll_wait`), so it builds frame N+1 while N renders. Fences are keyed by
 /// IOSurface id, so multiple guest surfaces on one connection are each fenced independently.
 ///
-/// The fence is on ONLY under `crate::metal::async_on()` (default). `DD_RENDER_NOASYNC=1` restores the old
+/// The fence is on ONLY under `crate::metal::async_on()` (default). `HL_RENDER_NOASYNC=1` restores the old
 /// synchronous baseline: no fence, `poll_wait` for GPU completion before the ack.
 ///
 /// Each connection gets its own `WgpuBackend`, isolating guest id namespaces, the same way the Metal path
@@ -1915,7 +1915,7 @@ fn run_executor_wgpu(sock_path: String) {
                                 cmd.commit();
                             }
                         }
-                        // NOASYNC baseline (DD_RENDER_NOASYNC): no fence — block on GPU completion before the
+                        // NOASYNC baseline (HL_RENDER_NOASYNC): no fence — block on GPU completion before the
                         // ack so the unfenced compositor blit reads a finished IOSurface, not a torn one.
                         None => be.poll_wait(),
                     }
@@ -1951,18 +1951,18 @@ fn run_executor_wgpu(sock_path: String) {
     }
 }
 
-/// `DD_RENDER_PROF` per-hop ledger writer (executor + compositor). Zero-cost when the env is unset
-/// (mirrors the `DD_DISPLAY_DEBUG`/`DD_SHIM_DEBUG` getenv-once pattern): `open` returns `None` and no
-/// file is created. When set, appends one CSV line per frame to `$DD_RENDER_PROF_DIR/<who>-<pid>.csv`.
+/// `HL_RENDER_PROF` per-hop ledger writer (executor + compositor). Zero-cost when the env is unset
+/// (mirrors the `HL_DISPLAY_DEBUG`/`HL_SHIM_DEBUG` getenv-once pattern): `open` returns `None` and no
+/// file is created. When set, appends one CSV line per frame to `$HL_RENDER_PROF_DIR/<who>-<pid>.csv`.
 pub struct RenderProf {
     f: std::fs::File,
 }
 impl RenderProf {
     pub fn open(who: &str) -> Option<RenderProf> {
-        if std::env::var_os("DD_RENDER_PROF").is_none() {
+        if std::env::var_os("HL_RENDER_PROF").is_none() {
             return None;
         }
-        let dir = std::env::var("DD_RENDER_PROF_DIR").unwrap_or_else(|_| "/tmp".into());
+        let dir = std::env::var("HL_RENDER_PROF_DIR").unwrap_or_else(|_| "/tmp".into());
         let _ = std::fs::create_dir_all(&dir);
         let path = format!("{dir}/{who}-{}.csv", std::process::id());
         let mut f = std::fs::File::create(&path).ok()?;
@@ -2384,7 +2384,7 @@ impl GpuBackend for MetalBackend {
                     }
                     Err(e) => {
                         eprintln!("dd-metal: shader {} MSL compile failed: {e:?}", id.0);
-                        let dir = std::env::var("DD_SHADER_DUMP_DIR")
+                        let dir = std::env::var("HL_SHADER_DUMP_DIR")
                             .unwrap_or_else(|_| "/tmp/dd-metal-shaders".into());
                         if let Err(err) = std::fs::create_dir_all(&dir) {
                             eprintln!("dd-metal: shader dump mkdir {dir}: {err}");
@@ -2729,7 +2729,7 @@ impl GpuBackend for MetalBackend {
         // across the FULL tile height, not just within a sub-band, so a partial sub-viewport (e.g. a CSS
         // opacity/clip child render pass) lands and clips consistently with full-tile passes.
         let mut cur_target_h: u32 = 0;
-        // RENDER-TARGET TRACE (DD_DISPLAY_DEBUG): pre-scan this frame's encoder and log the FULL set of
+        // RENDER-TARGET TRACE (HL_DISPLAY_DEBUG): pre-scan this frame's encoder and log the FULL set of
         // render-target texture ids bound, split into OFFSCREEN (content tiles — not the present surface)
         // vs SURFACE (the presented IOSurface), plus the pass/draw counts. This splits the multi-proc
         // content-white wall: if the gpu-process ever binds an offscreen content target WITH draws, the
@@ -3647,7 +3647,7 @@ impl GpuBackend for MetalBackend {
                 let _: () = msg_send![&*ce, endEncoding];
             }
         }
-        let dump_ids = std::env::var("DD_GPU_DUMP_TEXTURES").ok().map(|s| {
+        let dump_ids = std::env::var("HL_GPU_DUMP_TEXTURES").ok().map(|s| {
             s.split(',')
                 .filter_map(|p| p.trim().parse::<u32>().ok())
                 .collect::<Vec<_>>()
@@ -3670,14 +3670,14 @@ impl GpuBackend for MetalBackend {
             }
         } else {
             cmd.commit();
-            // Baseline (DD_RENDER_NOASYNC): CPU stalls on GPU completion — the only hop that overlaps nothing.
+            // Baseline (HL_RENDER_NOASYNC): CPU stalls on GPU completion — the only hop that overlaps nothing.
             let t = std::time::Instant::now();
             unsafe { cmd.waitUntilCompleted() };
             self.gpu_wait_ns = t.elapsed().as_nanos() as u64;
         }
         if let Some(ids) = dump_ids {
             if !ids.is_empty() {
-                let dir = std::env::var("DD_GPU_DUMP_DIR")
+                let dir = std::env::var("HL_GPU_DUMP_DIR")
                     .unwrap_or_else(|_| "/tmp/dd-gpu-textures".into());
                 let seq = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

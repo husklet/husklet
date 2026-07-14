@@ -2,7 +2,7 @@
  *
  * Proves the shim answers the exact NVML call sequence `nvidia-smi` uses, with the
  * seeded (env) values, WITHOUT any GPU — mirroring how the real closed nvidia-smi
- * binary links against our .so. Run under `DD_CUDA_NAME=... DD_CUDA_CC=... DD_CUDA_VRAM=...`.
+ * binary links against our .so. Run under `HL_CUDA_NAME=... HL_CUDA_CC=... HL_CUDA_VRAM=...`.
  *
  * Exit 0 = all assertions pass; nonzero = a mismatch (prints which).
  */
@@ -59,9 +59,9 @@ int main(int argc, char** argv) {
     if (failures) return 3;
 
     /* expected seeded values (env, with defaults matching the shim) */
-    const char* exp_name = getenv("DD_CUDA_NAME"); if (!exp_name || !*exp_name) exp_name = "dd Metal (CUDA-sim) Device";
-    const char* exp_cc   = getenv("DD_CUDA_CC");   if (!exp_cc   || !*exp_cc)   exp_cc   = "8.6";
-    const char* exp_vram = getenv("DD_CUDA_VRAM"); if (!exp_vram || !*exp_vram) exp_vram = "4096";
+    const char* exp_name = getenv("HL_CUDA_NAME"); if (!exp_name || !*exp_name) exp_name = "dd Metal (CUDA-sim) Device";
+    const char* exp_cc   = getenv("HL_CUDA_CC");   if (!exp_cc   || !*exp_cc)   exp_cc   = "8.6";
+    const char* exp_vram = getenv("HL_CUDA_VRAM"); if (!exp_vram || !*exp_vram) exp_vram = "4096";
     int exp_maj = 8, exp_min = 6; sscanf(exp_cc, "%d.%d", &exp_maj, &exp_min);
     unsigned long long exp_bytes = strtoull(exp_vram, NULL, 10) * 1024ULL * 1024ULL;
 

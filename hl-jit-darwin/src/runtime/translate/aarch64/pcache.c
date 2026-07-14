@@ -67,8 +67,8 @@
 //
 // Keyed by (engine build id, codegen-mode env flags, cpu-struct size, map/ibtc sizes, both fixed bases,
 // entry PC, argv[0] basename, and the identity -- dev/ino/size/mtime(ns) -- of the guest binary AND its
-// interpreter). OPT-IN via DDJIT_PCACHE=1 (byte-identical matrix when off, exactly like the x86 pcache);
-// DDJIT_NOPCACHE=1 is the kill-switch that wins over everything.
+// interpreter). OPT-IN via HL_JIT_PCACHE=1 (byte-identical matrix when off, exactly like the x86 pcache);
+// HL_JIT_NOPCACHE=1 is the kill-switch that wins over everything.
 
 #define PC_MAGIC 0x3436414350544a44ull // "DDJTPCA4" (LE tag)
 #define PC_VERSION 3 // BUMP on ANY aarch64 codegen/layout change. v3: IRQSLIM/IBSLIM layout + pend.fwd.
@@ -94,7 +94,7 @@ struct pc_reloc {
 };
 
 // ---- engine state (defined here; used by the recorded emitters + load/save) ----
-static int g_pcache;            // persistent cache active (DDJIT_PCACHE=1; DDJIT_NOPCACHE=1 kills)
+static int g_pcache;            // persistent cache active (HL_JIT_PCACHE=1; HL_JIT_NOPCACHE=1 kills)
 static int g_coldprof;          // COLDPROF=1: print pcache hit/miss + save timing
 static uint64_t g_force_base;   // if nonzero, load_elf() maps the NEXT image MAP_FIXED here (one-shot; elf.c)
 static int g_force_base_failed; // a fixed-VA map fell back to a kernel base -> this image can't hit OR save
@@ -264,7 +264,7 @@ static uint64_t pcache_make_id(const char *prog_host, const char *interp_host, c
 }
 
 static void pcache_file(char *out, size_t n) {
-    const char *dir = getenv("DDJIT_PCACHE_DIR");
+    const char *dir = getenv("HL_JIT_PCACHE_DIR");
     if (!dir || !dir[0]) dir = "/tmp/ddjit-pcache-arm64";
     mkdir(dir, 0700);
     snprintf(out, n, "%s/%016llx.pcache", dir, (unsigned long long)g_pc_binid);

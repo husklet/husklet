@@ -2,7 +2,7 @@
 name = "hl-compositor"
 version = "0.1.0"
 edition = "2021"
-description = "dd-compositor — a Smithay-native Wayland compositor for the dd host renderer. It replaces the hand-written dd-display protocol machine (hl-display/src/server.rs) with Smithay's maintained wayland_frontend state cores, while reusing dd-display's platform present/input seam (the Presenter trait + the Cocoa/Metal window backend). Gated behind DD_DISPLAY_SMITHAY=1; the legacy server.rs path is untouched when the flag is unset."
+description = "dd-compositor — a Smithay-native Wayland compositor for the dd host renderer. It replaces the hand-written dd-display protocol machine (hl-display/src/server.rs) with Smithay's maintained wayland_frontend state cores, while reusing dd-display's platform present/input seam (the Presenter trait + the Cocoa/Metal window backend). Gated behind HL_DISPLAY_SMITHAY=1; the legacy server.rs path is untouched when the flag is unset."
 license = "MIT"
 autobins = false
 
@@ -28,7 +28,7 @@ autobins = false
 #   1. add `"xwayland"` to the `smithay` `features` list in `[dependencies]` below;
 #   2. add a `[features]` section with `xwayland = ["smithay/xwayland"]`;
 #   3. build with `--features xwayland`.
-# The bridge is additionally gated at RUNTIME behind DD_XWAYLAND (only reachable under DD_DISPLAY_SMITHAY).
+# The bridge is additionally gated at RUNTIME behind HL_XWAYLAND (only reachable under HL_DISPLAY_SMITHAY).
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("xwayland"))'] }
 

@@ -1,7 +1,7 @@
 use crate::{Guest, PortMap, Volume};
 
 /// Everything needed to launch one container in the JIT. Mirrors the JIT's flag/env contract:
-/// `--rootfs/--lower/--hostname/--mem-max/--pids-max/--uid/--gid/--publish` + `DDVOL`/`DD_NETNS` env.
+/// `--rootfs/--lower/--hostname/--mem-max/--pids-max/--uid/--gid/--publish` + `HL_VOL`/`HL_NETNS` env.
 #[derive(Clone, Debug, Default)]
 pub struct SpawnConfig {
     /// Working directory on the host (where relative image/rootfs paths resolve).
@@ -26,7 +26,7 @@ pub struct SpawnConfig {
     pub cpus: u32,
     /// docker `--read-only`: writes to the rootfs/overlay-upper fail EROFS (/proc /dev /sys /tmp /run stay rw).
     pub read_only: bool,
-    /// docker `--ulimit`: (name, soft, hard) triples, e.g. ("nofile", 1024, 2048). Serialized to DD_ULIMITS.
+    /// docker `--ulimit`: (name, soft, hard) triples, e.g. ("nofile", 1024, 2048). Serialized to HL_ULIMITS.
     pub ulimits: Vec<(String, u64, u64)>,
     /// USER-ns uid / gid (default: root = 0).
     pub uid: Option<u32>,
@@ -49,17 +49,17 @@ impl SpawnConfig {
     }
 
     /// Serialize the docker resource knobs (`--cpus`/`--read-only`/`--ulimit`) into the engine's env
-    /// contract (DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS). Env, not flags, so it survives the mac bridge +
+    /// contract (HL_CPUS / HL_ROOTFS_RO / HL_ULIMITS). Env, not flags, so it survives the mac bridge +
     /// the x86 fork-server and is read identically by both engines (the linux frontends'
     /// container_read_resource_env()). Empty when unset -> byte-identical launch for containers that use
     /// none of these.
     fn resource_env(&self) -> String {
         let mut s = String::new();
         if self.cpus > 0 {
-            s += &format!("DD_CPUS={} ", self.cpus);
+            s += &format!("HL_CPUS={} ", self.cpus);
         }
         if self.read_only {
-            s += "DD_ROOTFS_RO=1 ";
+            s += "HL_ROOTFS_RO=1 ";
         }
         if !self.ulimits.is_empty() {
             let u = self
@@ -68,13 +68,13 @@ impl SpawnConfig {
                 .map(|(n, soft, hard)| format!("{}={}:{}", n, soft, hard))
                 .collect::<Vec<_>>()
                 .join(",");
-            s += &format!("DD_ULIMITS={} ", shq(&u));
+            s += &format!("HL_ULIMITS={} ", shq(&u));
         }
         s
     }
 
     /// The `bash -lc` script that launches the container in the given guest's JIT. Linux (jit/jit86)
-    /// takes the full container flag set + `DDVOL`/`DD_NETNS` env. Returns `None` if not built.
+    /// takes the full container flag set + `HL_VOL`/`HL_NETNS` env. Returns `None` if not built.
     pub fn script(&self, guest: Guest) -> Option<String> {
         let cd = if self.work_dir.is_empty() {
             String::new()
@@ -97,20 +97,20 @@ impl SpawnConfig {
             }
             // forward the persistent-translated-code-cache controls the same way (opt-in; each is a
             // plain getenv() in the engine). Lets `docker run`/tests enable the cross-process cache.
-            // Also forward the block/syscall/translator trace + debug knobs (JT/JTS/DDDBG_GPRDUMP/MAPDUMP
+            // Also forward the block/syscall/translator trace + debug knobs (JT/JTS/HL_DBG_GPRDUMP/MAPDUMP
             // and the translator A/B gates NOSTITCH/NOLSE) -- each a plain getenv() in the engine -- so a
             // host `JT=1 docker run ...` reaches the JIT through the mac bridge (which drops ambient env).
             for k in [
-                "DDJIT_PCACHE",
-                "DDJIT_PCACHE_DIR",
-                "DDJIT_NOPCACHE",
+                "HL_JIT_PCACHE",
+                "HL_JIT_PCACHE_DIR",
+                "HL_JIT_NOPCACHE",
                 "COLDPROF",
                 "JT",
                 "JTS",
-                "DD_NOPATHCACHE",
+                "HL_NOPATHCACHE",
                 "W4_NOOPENCACHE",
-                "DDDBG_GPRDUMP",
-                "DDDBG_NOCHAIN",
+                "HL_DBG_GPRDUMP",
+                "HL_DBG_NOCHAIN",
                 "MAPDUMP",
                 "NOSTITCH",
                 "NOLSE",
@@ -148,12 +148,12 @@ impl SpawnConfig {
                     })
                     .collect::<Vec<_>>()
                     .join(",");
-                env += &format!("DDVOL={} ", shq(&v));
+                env += &format!("HL_VOL={} ", shq(&v));
             }
             if let Some(ns) = &self.netns {
-                env += &format!("DD_NETNS={} ", shq(ns));
+                env += &format!("HL_NETNS={} ", shq(ns));
             }
-            env += &self.resource_env(); // DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS (docker --cpus/--read-only/--ulimit)
+            env += &self.resource_env(); // HL_CPUS / HL_ROOTFS_RO / HL_ULIMITS (docker --cpus/--read-only/--ulimit)
             for (k, val) in &self.env {
                 env += &format!("{}={} ", k, shq(val));
             }
@@ -253,7 +253,7 @@ mod tests {
         if let Some(s) = c.script(Guest::LinuxAarch64) {
             assert!(s.contains("--rootfs 'img/upper'") && s.contains("--lower 'img/l0'"));
             assert!(s.contains("--hostname 'box'") && s.contains("--mem-max 268435456"));
-            assert!(s.contains("--publish '18080:80'") && s.contains("DDVOL='/data:/h'"));
+            assert!(s.contains("--publish '18080:80'") && s.contains("HL_VOL='/data:/h'"));
         }
     }
     #[test]
@@ -274,7 +274,7 @@ mod tests {
         ];
         c.argv = vec!["/bin/sh".into()];
         if let Some(s) = c.script(Guest::LinuxAarch64) {
-            assert!(s.contains("DDVOL='/rw:/h1,ro:/ro:/h2'"));
+            assert!(s.contains("HL_VOL='/rw:/h1,ro:/ro:/h2'"));
         }
     }
     #[test]
@@ -286,15 +286,15 @@ mod tests {
         c.ulimits = vec![("nofile".into(), 1024, 2048), ("nproc".into(), 512, 1024)];
         // env contract is engine-agnostic (the linux flags path emits it).
         let re = c.resource_env();
-        assert!(re.contains("DD_CPUS=2"));
-        assert!(re.contains("DD_ROOTFS_RO=1"));
-        assert!(re.contains("DD_ULIMITS='nofile=1024:2048,nproc=512:1024'"));
+        assert!(re.contains("HL_CPUS=2"));
+        assert!(re.contains("HL_ROOTFS_RO=1"));
+        assert!(re.contains("HL_ULIMITS='nofile=1024:2048,nproc=512:1024'"));
         for g in [Guest::LinuxAarch64, Guest::LinuxX86_64] {
             if let Some(s) = c.script(g) {
                 assert!(
-                    s.contains("DD_CPUS=2")
-                        && s.contains("DD_ROOTFS_RO=1")
-                        && s.contains("DD_ULIMITS=")
+                    s.contains("HL_CPUS=2")
+                        && s.contains("HL_ROOTFS_RO=1")
+                        && s.contains("HL_ULIMITS=")
                 );
             }
         }

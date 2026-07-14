@@ -975,7 +975,7 @@ static void ep_prof_dump(void) {
 
 static void ep_count(void) {
     if (g_epprof < 0) {
-        const char *e = getenv("DDEPOLLPROF");
+        const char *e = getenv("HL_EPOLLPROF");
         g_epprof = (e && e[0] == '1') ? 1 : 0;
         if (g_epprof) atexit(ep_prof_dump);
     }

@@ -47,7 +47,7 @@ static int svc_misc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // reads as "Too small maximum heap" -> abort. 64-bit struct sysinfo byte offsets: uptime@0,
         // loads@8, totalram@32, freeram@40, procs@80, mem_unit@104.
         char *si = (char *)a0;
-        // Honor the container memory cap (--memory / DD_MEM_MAX): a runtime that sizes heaps/workers from
+        // Honor the container memory cap (--memory / HL_MEM_MAX): a runtime that sizes heaps/workers from
         // sysinfo (rather than cgroups) otherwise oversizes them against an 8 GiB fiction under a small cap.
         unsigned long total = g_mem_max ? (unsigned long)g_mem_max : (8UL << 30);
         unsigned long charged = (unsigned long)atomic_load(&g_mem_charged);

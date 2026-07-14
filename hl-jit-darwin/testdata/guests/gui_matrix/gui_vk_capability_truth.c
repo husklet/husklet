@@ -66,9 +66,9 @@ static VkResult create_for_version(PFN_vkCreateInstance create, uint32_t api, Vk
 }
 
 int main(int argc, char **argv) {
-    const char *library = argc > 1 ? argv[1] : getenv("DD_VK_ICD_LIBRARY");
+    const char *library = argc > 1 ? argv[1] : getenv("HL_VK_ICD_LIBRARY");
     if (!library || !*library) {
-        printf("gui_vk_capability_truth SKIP set DD_VK_ICD_LIBRARY=/path/to/libvk_dd.so\n");
+        printf("gui_vk_capability_truth SKIP set HL_VK_ICD_LIBRARY=/path/to/libvk_dd.so\n");
         return 77;
     }
     void *handle = dlopen(library, RTLD_NOW | RTLD_LOCAL);

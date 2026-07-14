@@ -29,12 +29,12 @@ static int cfd_read_full(int fd, void *buf, size_t n) {
         ssize_t r = read(fd, p + got, n - got);
         if (r < 0) {
             if (errno == EINTR) continue;
-            if (getenv("DD_CONFIGFD_DEBUG"))
+            if (getenv("HL_CONFIGFD_DEBUG"))
                 fprintf(stderr, "[DDCONFIGFD] fd=%d read error got=%zu want=%zu errno=%d\n", fd, got, n, errno);
             return -1;
         }
         if (r == 0) {
-            if (getenv("DD_CONFIGFD_DEBUG")) {
+            if (getenv("HL_CONFIGFD_DEBUG")) {
                 int fl = fcntl(fd, F_GETFD, 0);
                 fprintf(stderr, "[DDCONFIGFD] fd=%d eof got=%zu want=%zu fdflags=%d errno=%d\n", fd, got, n, fl, errno);
             }
@@ -85,7 +85,7 @@ int hl_run_configfd(int fd) {
         fprintf(stderr,
                 "dd: --configfd: incompatible config ABI (writer abi=%u header_len=%u; reader abi=%u sizeof=%zu). "
                 "The engine and launcher were built from different commits — rebuild both from the same tree and "
-                "point DDJIT_DIR at that engine.\n",
+                "point HL_JIT_DIR at that engine.\n",
                 abi, header_len, HL_CONFIG_ABI, sizeof cfg);
         return 78;
     }
@@ -133,74 +133,74 @@ int hl_run_configfd(int fd) {
     // scalars -> the same env vars container_init()/container_read_resource_env() read.
     if (cfg.mem_max) {
         snprintf(num, sizeof num, "%llu", (unsigned long long)cfg.mem_max);
-        setenv("DD_MEM_MAX", num, 1);
+        setenv("HL_MEM_MAX", num, 1);
     }
     if (cfg.pids_max) {
         snprintf(num, sizeof num, "%u", cfg.pids_max);
-        setenv("DD_PIDS_MAX", num, 1);
+        setenv("HL_PIDS_MAX", num, 1);
     }
     if (cfg.cpus) {
         snprintf(num, sizeof num, "%u", cfg.cpus);
-        setenv("DD_CPUS", num, 1);
+        setenv("HL_CPUS", num, 1);
     }
-    if (cfg.rootfs_ro) setenv("DD_ROOTFS_RO", "1", 1);
-    if (cfg.net_isolate) setenv("DD_NET_ISOLATE", "1", 1);
-    if (cfg.publish_daemon) setenv("DD_PUBLISH_DAEMON", "1", 1);
+    if (cfg.rootfs_ro) setenv("HL_ROOTFS_RO", "1", 1);
+    if (cfg.net_isolate) setenv("HL_NET_ISOLATE", "1", 1);
+    if (cfg.publish_daemon) setenv("HL_PUBLISH_DAEMON", "1", 1);
     // GPU rung 2/3 (--gui): opt-in the host-IOSurface path. The engine getenv()s this (vfs.c
     // gpu_iosurface_on()); carrying it in the typed config — not the ambient host env — is what makes it
     // reach the engine reliably (the FFI/bridge does not forward the launcher's ambient environment).
-    if (cfg.gpu_iosurface) setenv("DD_GPU_IOSURFACE", "1", 1);
+    if (cfg.gpu_iosurface) setenv("HL_GPU_IOSURFACE", "1", 1);
     if (cfg.uid >= 0) {
         snprintf(num, sizeof num, "%d", cfg.uid);
-        setenv("DD_UID", num, 1);
+        setenv("HL_UID", num, 1);
     }
     if (cfg.gid >= 0) {
         snprintf(num, sizeof num, "%d", cfg.gid);
-        setenv("DD_GID", num, 1);
+        setenv("HL_GID", num, 1);
     }
 
     // pooled strings -> the same env vars (decode via offsets; "" means unset -> leave the env untouched).
     s = cfd_str(pool, cfg.pool_len, cfg.hostname_off);
-    if (s[0]) setenv("DD_HOSTNAME", s, 1);
+    if (s[0]) setenv("HL_HOSTNAME", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.ulimits_off);
-    if (s[0]) setenv("DD_ULIMITS", s, 1);
+    if (s[0]) setenv("HL_ULIMITS", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.publish_off);
-    if (s[0]) setenv("DD_PUBLISH", s, 1);
+    if (s[0]) setenv("HL_PUBLISH", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.lowers_off);
-    if (s[0]) setenv("DD_LOWER", s, 1);
+    if (s[0]) setenv("HL_LOWER", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.netns_off);
-    if (s[0]) setenv("DD_NETNS", s, 1);
+    if (s[0]) setenv("HL_NETNS", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.volumes_off);
-    if (s[0]) setenv("DDVOL", s, 1);
+    if (s[0]) setenv("HL_VOL", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.cwd_off);
-    if (s[0]) setenv("DD_CWD", s, 1);
+    if (s[0]) setenv("HL_CWD", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.guest_env_off);
-    if (s[0]) setenv("DD_GUEST_ENV", s, 1);
+    if (s[0]) setenv("HL_GUEST_ENV", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.netbr_off);
-    if (s[0]) setenv("DD_NETBR", s, 1);
+    if (s[0]) setenv("HL_NETBR", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.ip_off);
-    if (s[0]) setenv("DD_IP", s, 1);
+    if (s[0]) setenv("HL_IP", s, 1);
     s = cfd_str(pool, cfg.pool_len, cfg.fsgen_off);
-    if (s[0]) setenv("DD_FSGEN_FILE", s, 1);
-    // Per-workspace VPN egress: the engine's netns.c egress_socks() getenv()s DD_EGRESS_SOCKS to funnel the
+    if (s[0]) setenv("HL_FSGEN_FILE", s, 1);
+    // Per-workspace VPN egress: the engine's netns.c egress_socks() getenv()s HL_EGRESS_SOCKS to funnel the
     // guest's genuine external TCP connects through this SOCKS5 proxy. Carried in the typed wire (not the
     // ambient host env, which the FFI spawn never forwards) — "" leaves it unset so direct egress is unchanged.
     s = cfd_str(pool, cfg.pool_len, cfg.egress_off);
-    if (s[0]) setenv("DD_EGRESS_SOCKS", s, 1);
+    if (s[0]) setenv("HL_EGRESS_SOCKS", s, 1);
 
-    // persistent translated-code cache: presence of a dir enables it (DDJIT_PCACHE gate + dir).
+    // persistent translated-code cache: presence of a dir enables it (HL_JIT_PCACHE gate + dir).
     s = cfd_str(pool, cfg.pool_len, cfg.pcache_off);
     if (s[0]) {
-        setenv("DDJIT_PCACHE", "1", 1);
-        setenv("DDJIT_PCACHE_DIR", s, 1);
+        setenv("HL_JIT_PCACHE", "1", 1);
+        setenv("HL_JIT_PCACHE_DIR", s, 1);
     }
     // per-container persistent-cache kill switch: carried through typed launch so a single container can opt
-    // out even when the runtime enables pcache defaults globally (DDJIT_NOPCACHE wins over DDJIT_PCACHE).
-    if (cfg.nopcache) setenv("DDJIT_NOPCACHE", "1", 1);
+    // out even when the runtime enables pcache defaults globally (HL_JIT_NOPCACHE wins over HL_JIT_PCACHE).
+    if (cfg.nopcache) setenv("HL_JIT_NOPCACHE", "1", 1);
     // untrusted-guest sentry: both gates as the engine reads them.
     if (cfg.sandbox) {
-        setenv("DDJIT_UNTRUSTED", "1", 1);
-        setenv("DDJIT_SANDBOX", "1", 1);
+        setenv("HL_JIT_UNTRUSTED", "1", 1);
+        setenv("HL_JIT_SANDBOX", "1", 1);
     }
 
     // guest argv: NUL-separated, double-NUL terminated, at argv_off. Count, then point argv2[] into the pool.

@@ -1,6 +1,6 @@
 //! persistent translated-code cache — LIFECYCLE lane (aarch64 engine).
 //!
-//! The matrix cases (`cases/ext/pcachex.rs`) prove single-run correctness under DDJIT_PCACHE=1; this lane
+//! The matrix cases (`cases/ext/pcachex.rs`) prove single-run correctness under HL_JIT_PCACHE=1; this lane
 //! drives the multi-invocation protocol end to end against a private cache dir:
 //!   1. cold run  -> saves a cache file; warm run -> HIT, byte-identical stdout/exit.
 //!   2. EIGHT CONCURRENT processes on the same key (the crash that blocked the first attempt: a fork
@@ -9,7 +9,7 @@
 //!   3. fork child OUTLIVES the parent (the poisoned-save repro shape) -> the file must stay clean and
 //!      later runs must still HIT and succeed.
 //!   4. stale guest binary (recompiled -> new inode/mtime) -> the old entry must NOT be used (MISS).
-//!   5. kill-switch (DDJIT_NOPCACHE=1) -> the cache is fully inert.
+//!   5. kill-switch (HL_JIT_NOPCACHE=1) -> the cache is fully inert.
 //!   6. corrupt / truncated cache file -> checksum/validation MISS, correct output, self-healing re-save.
 //!
 //! Engine invocations mirror the matrix harness (hl_jit::SpawnConfig -> `mac bash -lc` off-macOS), with
@@ -52,7 +52,7 @@ struct Run {
     code: i32,
 }
 
-/// One engine run of `guest` with the given extra env (DDJIT_PCACHE etc.), hang-guarded by `timeout`.
+/// One engine run of `guest` with the given extra env (HL_JIT_PCACHE etc.), hang-guarded by `timeout`.
 fn run_engine(guest: &PathBuf, env: &[(&str, &str)]) -> Run {
     let mut cfg = hl_jit::SpawnConfig::new(String::new(), String::new());
     for (k, v) in env {
@@ -123,7 +123,7 @@ fn cache_files(dir: &PathBuf) -> Vec<PathBuf> {
 #[test]
 fn pcache_lifecycle_aarch64() {
     if !hl_jit::available(hl_jit::Guest::LinuxAarch64) {
-        eprintln!("linux/aarch64 engine not built — skipping (pin DDJIT_DIR to a built engine)");
+        eprintln!("linux/aarch64 engine not built — skipping (pin HL_JIT_DIR to a built engine)");
         return;
     }
     let dir = repo().join("target/dd-tests/pcache/dir");
@@ -131,8 +131,8 @@ fn pcache_lifecycle_aarch64() {
     std::fs::create_dir_all(&dir).unwrap();
     let dirs = dir.to_string_lossy().into_owned();
     let base: Vec<(&str, &str)> = vec![
-        ("DDJIT_PCACHE", "1"),
-        ("DDJIT_PCACHE_DIR", &dirs),
+        ("HL_JIT_PCACHE", "1"),
+        ("HL_JIT_PCACHE_DIR", &dirs),
         ("COLDPROF", "1"),
     ];
 
@@ -277,9 +277,9 @@ fn pcache_lifecycle_aarch64() {
     );
     assert_eq!(back.stdout, cold.stdout);
 
-    // ---- 5. kill-switch: DDJIT_NOPCACHE=1 wins over DDJIT_PCACHE=1 (cache fully inert) ----
+    // ---- 5. kill-switch: HL_JIT_NOPCACHE=1 wins over HL_JIT_PCACHE=1 (cache fully inert) ----
     let mut kenv = base.clone();
-    kenv.push(("DDJIT_NOPCACHE", "1"));
+    kenv.push(("HL_JIT_NOPCACHE", "1"));
     let k = run_engine(&hello, &kenv);
     assert_eq!(k.code, 0);
     assert_eq!(k.stdout, cold.stdout);
@@ -337,7 +337,7 @@ fn pcache_lifecycle_aarch64() {
 #[test]
 fn pcache_policy_aarch64() {
     if !hl_jit::available(hl_jit::Guest::LinuxAarch64) {
-        eprintln!("linux/aarch64 engine not built — skipping (pin DDJIT_DIR to a built engine)");
+        eprintln!("linux/aarch64 engine not built — skipping (pin HL_JIT_DIR to a built engine)");
         return;
     }
     let dir = repo().join("target/dd-tests/pcache/dir-policy");
@@ -345,8 +345,8 @@ fn pcache_policy_aarch64() {
     std::fs::create_dir_all(&dir).unwrap();
     let dirs = dir.to_string_lossy().into_owned();
     let base: Vec<(&str, &str)> = vec![
-        ("DDJIT_PCACHE", "1"),
-        ("DDJIT_PCACHE_DIR", &dirs),
+        ("HL_JIT_PCACHE", "1"),
+        ("HL_JIT_PCACHE_DIR", &dirs),
         ("COLDPROF", "1"),
     ];
 
@@ -499,7 +499,7 @@ fn run_engine_x86(guest: &PathBuf, guest_args: &[&str], env: &[(&str, &str)]) ->
 #[test]
 fn pcache_policy_x86_64() {
     if !hl_jit::available(hl_jit::Guest::LinuxX86_64) {
-        eprintln!("linux/x86_64 engine not built — skipping (pin DDJIT_DIR to a built engine)");
+        eprintln!("linux/x86_64 engine not built — skipping (pin HL_JIT_DIR to a built engine)");
         return;
     }
     let dir = repo().join("target/dd-tests/pcache/dir-policy-x86");
@@ -507,8 +507,8 @@ fn pcache_policy_x86_64() {
     std::fs::create_dir_all(&dir).unwrap();
     let dirs = dir.to_string_lossy().into_owned();
     let base: Vec<(&str, &str)> = vec![
-        ("DDJIT_PCACHE", "1"),
-        ("DDJIT_PCACHE_DIR", &dirs),
+        ("HL_JIT_PCACHE", "1"),
+        ("HL_JIT_PCACHE_DIR", &dirs),
         ("COLDPROF", "1"),
     ];
 
@@ -571,8 +571,8 @@ fn pcache_policy_x86_64() {
     std::fs::create_dir_all(&ldir).unwrap();
     let ldirs = ldir.to_string_lossy().into_owned();
     let lbase: Vec<(&str, &str)> = vec![
-        ("DDJIT_PCACHE", "1"),
-        ("DDJIT_PCACHE_DIR", &ldirs),
+        ("HL_JIT_PCACHE", "1"),
+        ("HL_JIT_PCACHE_DIR", &ldirs),
         ("COLDPROF", "1"),
     ];
     let blob = ldir.join("blob.bin").to_string_lossy().into_owned();

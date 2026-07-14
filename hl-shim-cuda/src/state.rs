@@ -55,7 +55,7 @@ pub struct CudaState {
     /// device-buffer bytes for `cuMemcpyDtoH` readback. This is the in-process analog of
     /// `hl-gpu/cuda/cuda_shim.c`'s embedded interpreter (the parity oracle): it makes the shim
     /// FUNCTIONAL end-to-end on this host with no GPU. On a real Apple-silicon host the same IR is
-    /// shipped over `$DD_GPU_EXEC` to the host Metal executor instead (see docs).
+    /// shipped over `$HL_GPU_EXEC` to the host Metal executor instead (see docs).
     pub backend: SoftwareBackend,
     /// `CUfunction` handle table: an opaque handle is `index + 1` (never null).
     functions: Vec<Function>,
@@ -98,15 +98,15 @@ pub struct CudaState {
     pub next_event: usize,
     /// Per-event record state, for `cuEventQuery`/`cuEventElapsedTime`.
     events: HashMap<usize, EventState>,
-    /// Lazily-opened transport to the host GPU-exec service (only used when `$DD_GPU_EXEC` is set).
+    /// Lazily-opened transport to the host GPU-exec service (only used when `$HL_GPU_EXEC` is set).
     conn: Option<ExecConn>,
 }
 
 impl CudaState {
     fn new() -> Self {
         // VRAM the simulated device advertises (carved from unified memory on the real host); override
-        // with `$DD_CUDA_VRAM_BYTES`. Default 8 GiB.
-        let vram = std::env::var("DD_CUDA_VRAM_BYTES")
+        // with `$HL_CUDA_VRAM_BYTES`. Default 8 GiB.
+        let vram = std::env::var("HL_CUDA_VRAM_BYTES")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(8u64 << 30);
@@ -339,7 +339,7 @@ impl CudaState {
     /// held in [`backend`](CudaState::backend). The buffer bytes persist across flushes (they are only
     /// dropped on `cuMemFree`), so a later `cuMemcpyDtoH` reads the real, kernel-produced results.
     ///
-    /// When `$DD_GPU_EXEC` is set the SAME bytes are also shipped to the host GPU-exec service (the
+    /// When `$HL_GPU_EXEC` is set the SAME bytes are also shipped to the host GPU-exec service (the
     /// real Apple-silicon deployment path; best-effort). Then the frame is cleared.
     pub fn flush(&mut self) {
         if self.frame.is_empty() {
@@ -351,16 +351,16 @@ impl CudaState {
         // host's own `dd_gpu` code (no second implementation), so what runs here is byte-for-byte what
         // a host executor would run — the anti-drift guarantee, now covering execution, not just shape.
         if let Err(e) = replay_stream(&mut self.backend, &bytes) {
-            if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+            if std::env::var_os("HL_SHIM_DEBUG").is_some() {
                 eprintln!("[dd-shim-cuda] flush: embedded backend replay error ({ncmds} cmds): {e}");
             }
         }
-        if std::env::var_os("DD_GPU_EXEC").is_some() {
+        if std::env::var_os("HL_GPU_EXEC").is_some() {
             let conn = self.conn.get_or_insert_with(ExecConn::from_env);
             // Compute has no present surface; a synthetic zero surface carries the IR-length header.
             let surf = Surface { id: 0, width: 0, height: 0, stride: 0, fd: -1, generation: 0 };
             let _ = conn.submit(&surf, &bytes);
-        } else if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+        } else if std::env::var_os("HL_SHIM_DEBUG").is_some() {
             eprintln!(
                 "[dd-shim-cuda] flush: executed {} IR bytes ({ncmds} cmds) on the embedded software \
                  backend (dispatches so far: {})",

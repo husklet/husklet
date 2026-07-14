@@ -13,10 +13,10 @@
 #
 # Oracle:  arm64 -> run the SAME static binary natively (this host is arm64);
 #          x86_64 -> run it under qemu-x86_64 (user-mode).
-# dd:      run the binary under $DDJIT_DIR/ddjit-linux_<arch> via the `mac`
+# dd:      run the binary under $HL_JIT_DIR/ddjit-linux_<arch> via the `mac`
 #          bridge (the engine is a macOS arm64 binary; see dd-jit SpawnConfig).
 #
-# Requires: DDJIT_DIR pinned to an engine out-dir (contains ddjit-linux_{aarch64,
+# Requires: HL_JIT_DIR pinned to an engine out-dir (contains ddjit-linux_{aarch64,
 # x86_64}); qemu-x86_64 for the x86 oracle. Results: $OUT/results.tsv (+ stdout).
 set -uo pipefail
 
@@ -25,12 +25,12 @@ OUT="${LTP_OUT:-$HERE/out}"
 TIMEOUT="${LTP_TIMEOUT:-20}"
 ARCHES="${LTP_ARCHES:-arm64 x86_64}"
 
-if [ -z "${DDJIT_DIR:-}" ]; then
+if [ -z "${HL_JIT_DIR:-}" ]; then
   # Best-effort autodiscover: newest ddjit-*/out under a sibling target*/ dir.
-  DDJIT_DIR="$(ls -dt "$HERE"/../../../target*/release/build/ddjit-*/out 2>/dev/null | head -1)"
+  HL_JIT_DIR="$(ls -dt "$HERE"/../../../target*/release/build/ddjit-*/out 2>/dev/null | head -1)"
 fi
-[ -n "${DDJIT_DIR:-}" ] && [ -d "$DDJIT_DIR" ] || { echo "ERROR: pin DDJIT_DIR to an engine out-dir"; exit 2; }
-echo "[ltp] engine dir: $DDJIT_DIR"
+[ -n "${HL_JIT_DIR:-}" ] && [ -d "$HL_JIT_DIR" ] || { echo "ERROR: pin HL_JIT_DIR to an engine out-dir"; exit 2; }
+echo "[ltp] engine dir: $HL_JIT_DIR"
 
 # On a Linux dev host the engine runs mac-side through the `mac` bridge; on a real
 # Mac it runs directly. Mirror dd-jit::SpawnConfig::command.
@@ -97,7 +97,7 @@ while read -r cat sys rel; do
 done < "$HERE/tests.list"
 
 for arch in $ARCHES; do
-  eng="$DDJIT_DIR/ddjit-linux_$([ "$arch" = x86_64 ] && echo x86_64 || echo aarch64)"
+  eng="$HL_JIT_DIR/ddjit-linux_$([ "$arch" = x86_64 ] && echo x86_64 || echo aarch64)"
   [ -x "$eng" ] || { echo "[ltp] no engine for $arch ($eng) — skipping arch"; continue; }
   bd="$OUT/bin/$arch"
   [ -d "$bd" ] || { echo "[ltp] no built tests for $arch — run build.sh"; continue; }

@@ -1,6 +1,6 @@
 //! Linux platform impl. Service management is a `systemd --user` unit (no root): it writes
 //! `~/.config/systemd/user/com.dd.daemon.service` with the same daemon exec + env as the
-//! macOS LaunchAgent (`DDOCKERD_SOCK` / `DD_IMAGES` / `DDJIT_DIR` — names unchanged) and drives
+//! macOS LaunchAgent (`HL_DOCKER_SOCK` / `HL_IMAGES` / `HL_JIT_DIR` — names unchanged) and drives
 //! it with `systemctl --user`. There is no Gatekeeper and no `.app` bundle on Linux, so
 //! quarantine is always `false` and `app_bundle()` is `None`. Logs live under `~/.dd/logs`.
 //!
@@ -42,9 +42,9 @@ fn render_unit() -> String {
          \n\
          [Service]\n\
          ExecStart={daemon}\n\
-         Environment=DDOCKERD_SOCK={sock}\n\
-         Environment=DD_IMAGES={images}\n\
-         Environment=DDJIT_DIR={jit_dir}\n\
+         Environment=HL_DOCKER_SOCK={sock}\n\
+         Environment=HL_IMAGES={images}\n\
+         Environment=HL_JIT_DIR={jit_dir}\n\
          Restart=always\n\
          StandardOutput=append:{out}\n\
          StandardError=append:{err}\n\

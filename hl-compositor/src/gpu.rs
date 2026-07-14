@@ -1,7 +1,7 @@
 //! GPU IR executor lifecycle for the Smithay compositor path (Phase 6.1–6.2).
 //!
 //! ## Why this module exists
-//! `hl-display/src/main.rs` execs THIS binary when `DD_DISPLAY_SMITHAY=1`, *replacing* the process
+//! `hl-display/src/main.rs` execs THIS binary when `HL_DISPLAY_SMITHAY=1`, *replacing* the process
 //! before it ever starts the GPU executor thread. The legacy hand-written compositor
 //! (`hl-display/src/server.rs`) starts the dd-gpu IR executor itself — see `serve_loop_metal` and
 //! `run_window` in `dd-display`, which call `metal::start_gpu_bridge()` + spawn
@@ -72,7 +72,7 @@ pub fn set_executor_health(healthy: bool) {
 /// Start the dd-gpu IR executor (and the IOSurface mach bridge) for the Smithay compositor, once.
 ///
 /// `disp_socket` is the Wayland socket path; the executor socket is derived beside it (or taken from
-/// `DD_GPU_EXEC_SOCK`) so a guest built for the legacy path finds the same endpoint on the Smithay
+/// `HL_GPU_EXEC_SOCK`) so a guest built for the legacy path finds the same endpoint on the Smithay
 /// path. Idempotent — subsequent calls return immediately.
 pub fn start(disp_socket: &str) {
     if START_ONCE.swap(true, Ordering::SeqCst) {
@@ -81,12 +81,12 @@ pub fn start(disp_socket: &str) {
     start_impl(disp_socket);
 }
 
-/// The dd-gpu IR executor socket: `DD_GPU_EXEC_SOCK` if set, else `dd-gpu.sock` beside the display
+/// The dd-gpu IR executor socket: `HL_GPU_EXEC_SOCK` if set, else `dd-gpu.sock` beside the display
 /// socket. Mirrors `dd-display`'s `gpu_exec_sock` so the Smithay and legacy paths agree on the
 /// endpoint. `None` only when the display socket has no parent directory.
 #[cfg(target_os = "macos")]
 fn exec_sock(disp_socket: &str) -> Option<String> {
-    if let Ok(p) = std::env::var("DD_GPU_EXEC_SOCK") {
+    if let Ok(p) = std::env::var("HL_GPU_EXEC_SOCK") {
         return Some(p);
     }
     let dir = std::path::Path::new(disp_socket).parent()?;

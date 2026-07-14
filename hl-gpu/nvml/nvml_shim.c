@@ -8,9 +8,9 @@
  * provide CUDA compute (that is libcuda/libcudart + PTX->Metal, separate tiers).
  *
  * Device values are seeded at nvmlInit from environment set by dd's launcher:
- *   DD_CUDA_NAME   reported device name        (default "dd Metal (CUDA-sim) Device")
- *   DD_CUDA_CC     compute capability "maj.min" (default "8.6")
- *   DD_CUDA_VRAM   reported VRAM in MB          (default 4096)
+ *   HL_CUDA_NAME   reported device name        (default "dd Metal (CUDA-sim) Device")
+ *   HL_CUDA_CC     compute capability "maj.min" (default "8.6")
+ *   HL_CUDA_VRAM   reported VRAM in MB          (default 4096)
  *
  * Exactly ONE device is presented. Unimplemented queries return
  * NVML_ERROR_NOT_SUPPORTED (never crash) so nvidia-smi degrades to "N/A".
@@ -31,7 +31,7 @@ static char        g_uuid[NVML_DEVICE_UUID_BUFFER_SIZE] = "GPU-dd000000-0000-4d6
 static char        g_serial[NVML_DEVICE_SERIAL_BUFFER_SIZE] = "DD-SIM-00000001";
 /* nvidia-smi refuses to run if the NVML-reported DRIVER version's major differs from the driver the
  * nvidia-smi binary itself was built for ("Mismatch in versions between nvidia-smi and NVML"). So the
- * driver/NVML version strings are seeded from env (DD_CUDA_DRIVER / DD_CUDA_NVML) — dd's launcher can
+ * driver/NVML version strings are seeded from env (HL_CUDA_DRIVER / HL_CUDA_NVML) — dd's launcher can
  * set them to match whichever real nvidia-smi is injected. Defaults track a common LTS driver. */
 static char        g_driver_version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE] = "535.230.02";
 static char        g_nvml_version[NVML_SYSTEM_NVML_VERSION_BUFFER_SIZE]     = "12.535.230.02";
@@ -43,33 +43,33 @@ static int g_device_obj;
 #define DD_DEVICE_HANDLE ((nvmlDevice_t)&g_device_obj)
 
 static void seed_from_env(void) {
-    const char* n = getenv("DD_CUDA_NAME");
+    const char* n = getenv("HL_CUDA_NAME");
     if (n && *n) { strncpy(g_name, n, sizeof(g_name) - 1); g_name[sizeof(g_name) - 1] = 0; }
-    const char* cc = getenv("DD_CUDA_CC");
+    const char* cc = getenv("HL_CUDA_CC");
     if (cc && *cc) {
         int maj = 0, min = 0;
         if (sscanf(cc, "%d.%d", &maj, &min) >= 1) { g_cc_major = maj; g_cc_minor = min; }
     }
-    const char* v = getenv("DD_CUDA_VRAM");
+    const char* v = getenv("HL_CUDA_VRAM");
     if (v && *v) {
         char* end = 0;
         unsigned long long mb = strtoull(v, &end, 10);
         if (mb > 0) g_vram_bytes = mb * 1024ULL * 1024ULL;
     }
     /* Driver / NVML version handshake (see comment at g_driver_version). */
-    const char* drv = getenv("DD_CUDA_DRIVER");
+    const char* drv = getenv("HL_CUDA_DRIVER");
     if (drv && *drv) {
         strncpy(g_driver_version, drv, sizeof(g_driver_version) - 1);
         g_driver_version[sizeof(g_driver_version) - 1] = 0;
         /* Default the NVML version string to "12.<driver>" unless explicitly overridden below. */
         snprintf(g_nvml_version, sizeof(g_nvml_version), "12.%s", drv);
     }
-    const char* nv = getenv("DD_CUDA_NVML");
+    const char* nv = getenv("HL_CUDA_NVML");
     if (nv && *nv) {
         strncpy(g_nvml_version, nv, sizeof(g_nvml_version) - 1);
         g_nvml_version[sizeof(g_nvml_version) - 1] = 0;
     }
-    const char* cd = getenv("DD_CUDA_DRIVER_CUDA");
+    const char* cd = getenv("HL_CUDA_DRIVER_CUDA");
     if (cd && *cd) {
         int maj = 0, min = 0;
         if (sscanf(cd, "%d.%d", &maj, &min) >= 1) g_cuda_driver_version = maj * 1000 + min * 10;

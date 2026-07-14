@@ -44,7 +44,7 @@ pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String
         }
         (c, g.volumes.clone(), live)
     };
-    if std::env::var("DD_DEBUG").is_ok() {
+    if std::env::var("HL_DEBUG").is_ok() {
         eprintln!("[start] {} cmd={:?}", &c.id[..12], c.cmd);
     }
     // Emit `start` BEFORE spawning: spawn_live launches the reaper on a concurrent task, and a very
@@ -254,7 +254,7 @@ pub(crate) async fn containers_restart(
         }
         (c, g.volumes.clone(), live)
     };
-    if std::env::var("DD_DEBUG").is_ok() {
+    if std::env::var("HL_DEBUG").is_ok() {
         eprintln!("[restart] {} cmd={:?}", &c.id[..12], c.cmd);
     }
     spawn_live(&a, &c, &vols, live).await;

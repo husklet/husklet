@@ -22,7 +22,7 @@ const TARGET_H: u32 = 8;
 const ATLAS_W: u32 = 4;
 const ATLAS_H: u32 = 4;
 
-const CHROME_TEXTURED_MSL: &str = r#"
+const HL_TEXTURED_MSL: &str = r#"
 #include <metal_stdlib>
 using namespace metal;
 
@@ -202,7 +202,7 @@ fn assert_rgba_near(rgba: &[u8], x: u32, y: u32, want: [u8; 4]) {
 }
 
 fn create_chrome_pipeline(be: &mut MetalBackend) {
-    be.create_shader(ShaderId(20), hl_gpu::ir::ShaderPayloadKind::LegacyMsl, &pack_msl(CHROME_TEXTURED_MSL))
+    be.create_shader(ShaderId(20), hl_gpu::ir::ShaderPayloadKind::LegacyMsl, &pack_msl(HL_TEXTURED_MSL))
         .unwrap();
     be.create_render_pipeline(
         PipelineId(30),

@@ -11,8 +11,8 @@
 //!
 //! Every stub call funnels through [`hit`], which:
 //!   * records the call in a recent-history ring (for the strict-mode report),
-//!   * once-per-name logs "unimplemented entry point" under `DD_SHIM_DEBUG` (exploratory runs),
-//!   * and — under `DD_SHIM_STRICT=1` — prints command + object + recent history and aborts the
+//!   * once-per-name logs "unimplemented entry point" under `HL_SHIM_DEBUG` (exploratory runs),
+//!   * and — under `HL_SHIM_STRICT=1` — prints command + object + recent history and aborts the
 //!     process at the FIRST unsupported call, so an app run stops exactly where dd cannot honestly act
 //!     instead of silently mis-executing.
 //!
@@ -38,9 +38,9 @@ fn history_snapshot() -> Vec<&'static str> {
     history().lock().map(|h| h.iter().copied().collect()).unwrap_or_default()
 }
 
-/// `DD_SHIM_STRICT=1` (any non-empty value) is set — abort at the first unsupported Vulkan call.
+/// `HL_SHIM_STRICT=1` (any non-empty value) is set — abort at the first unsupported Vulkan call.
 pub fn strict_enabled() -> bool {
-    std::env::var_os("DD_SHIM_STRICT").is_some()
+    std::env::var_os("HL_SHIM_STRICT").is_some()
 }
 
 /// Build the strict-mode abort report: the command, its object/context detail, and the recent-call
@@ -81,7 +81,7 @@ fn trigger_abort(_cmd: &str) {
 }
 
 /// Called by every generated stub. Records the call in the strict-mode history ring; first hit of each
-/// name (when `DD_SHIM_DEBUG` is set) logs "unimplemented entry point"; and under `DD_SHIM_STRICT=1`
+/// name (when `HL_SHIM_DEBUG` is set) logs "unimplemented entry point"; and under `HL_SHIM_STRICT=1`
 /// aborts the process at this first unsupported call (Phase-0 strict gate). The stub itself returns the
 /// truthful API error (chosen by `build.rs` from the command's return type + origin). Cheap when off.
 #[inline]
@@ -92,7 +92,7 @@ pub fn hit(name: &'static str) {
         }
         h.push_back(name);
     }
-    if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+    if std::env::var_os("HL_SHIM_DEBUG").is_some() {
         if let Ok(mut s) = seen().lock() {
             if s.insert(name) {
                 eprintln!("[dd-shim-vk] unimplemented entry point: {name} (default stub)");

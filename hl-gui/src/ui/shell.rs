@@ -47,7 +47,7 @@ pub(crate) fn set_if_absent(key: &str, val: &OsStr) {
 
 // ---- headless verification ------------------------------------------------------------------------
 // Render the live window to a PNG offscreen so the UI can be verified without an interactive session
-// (`DD_SHOT=/path/out.png dd-app` screenshots once, then quits). Uses the window's own GSK renderer
+// (`HL_SHOT=/path/out.png dd-app` screenshots once, then quits). Uses the window's own GSK renderer
 // against a WidgetPaintable — no extra window, no user input. Pair with `GSK_RENDERER=cairo` for a
 // deterministic software render.
 pub fn screenshot(win: &gtk::ApplicationWindow, path: &str) -> Result<(), String> {

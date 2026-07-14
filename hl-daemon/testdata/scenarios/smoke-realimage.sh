@@ -8,10 +8,10 @@
 #
 #   bash dd-tests/scenarios/smoke-realimage.sh
 #
-# Env: DD_DAEMON (default target/release/dd-daemon). Build it: cargo build --release -p hl-daemon.
+# Env: HL_DAEMON (default target/release/dd-daemon). Build it: cargo build --release -p hl-daemon.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-DAEMON="${DD_DAEMON:-$ROOT/target/release/dd-daemon}"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
 [ -x "$DAEMON" ] || { echo "build dd-daemon first: cargo build --release -p hl-daemon" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "needs the docker CLI on PATH (e.g. 'brew install docker')" >&2; exit 1; }
 
@@ -19,7 +19,7 @@ SOCK="$ROOT/dd-smoke.sock"; LOG="$ROOT/dd-smoke.log"
 export DOCKER_HOST="unix://$SOCK"
 pkill -x dd-daemon 2>/dev/null; rm -f "$SOCK"
 ST="$(mktemp -d)"; IMG="$(mktemp -d)"   # fresh, empty image dir -> forces real Docker Hub pulls
-export DD_IMAGES="$IMG" DDOCKERD_SOCK="$SOCK" DD_STATE="$ST/state.json" DD_VOLUMES="$ST/vol"
+export HL_IMAGES="$IMG" HL_DOCKER_SOCK="$SOCK" HL_STATE="$ST/state.json" HL_VOLUMES="$ST/vol"
 "$DAEMON" >"$LOG" 2>&1 &
 DPID=$!; trap 'kill -9 $DPID 2>/dev/null; rm -f "$SOCK" "$LOG"; rm -rf "$ST" "$IMG"' EXIT
 n=0; until [ -S "$SOCK" ] || [ "$n" -ge 80 ]; do sleep 0.25; n=$((n+1)); done

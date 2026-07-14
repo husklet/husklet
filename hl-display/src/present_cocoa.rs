@@ -218,13 +218,13 @@ fn make_focusable_window(
 }
 
 /// Integer `wl_output.scale` to advertise, derived from the Mac's backing store. Retina HiDPI (advertising
-/// `backingScaleFactor`, 2 on a Retina display) is now OPT-IN via `DD_DISPLAY_HIDPI=1`; the default is
+/// `backingScaleFactor`, 2 on a Retina display) is now OPT-IN via `HL_DISPLAY_HIDPI=1`; the default is
 /// scale 1. Advertising scale 2 makes the guest commit a `logical * 2` buffer (e.g. 1024x768 for a 512x384
 /// window), and the guest's GPU allocator (`DD_IOCTL_GPU_ALLOC` in the GL shim) FAILS that larger surface —
 /// `gl_shim: alloc failed` → `eglSwapBuffers failed` → Chrome's GL context is "marked as lost" and it never
 /// renders. The headless `--png` present path (which never overrode this, so advertised scale 1) is exactly
 /// why it renders perfectly at 512x384. Until the guest allocator handles the HiDPI size, the on-screen
-/// present path advertises the same scale the `--png` path proved works (1). Set `DD_DISPLAY_HIDPI=1` to
+/// present path advertises the same scale the `--png` path proved works (1). Set `HL_DISPLAY_HIDPI=1` to
 /// re-enable the crisp Retina buffer once the allocator supports it.
 fn host_output_scale(mtm: MainThreadMarker) -> i32 {
     if !hidpi_enabled() {
@@ -236,11 +236,11 @@ fn host_output_scale(mtm: MainThreadMarker) -> i32 {
         .max(1)
 }
 
-/// Retina HiDPI present is OPT-IN: `DD_DISPLAY_HIDPI=1`/`on`/`true`/`yes` advertises `backingScaleFactor`
+/// Retina HiDPI present is OPT-IN: `HL_DISPLAY_HIDPI=1`/`on`/`true`/`yes` advertises `backingScaleFactor`
 /// (present 2x); anything else (including unset) advertises scale 1 (present 1x — the proven Chrome path).
 fn hidpi_enabled() -> bool {
     matches!(
-        std::env::var("DD_DISPLAY_HIDPI").ok().as_deref(),
+        std::env::var("HL_DISPLAY_HIDPI").ok().as_deref(),
         Some("1") | Some("on") | Some("true") | Some("yes")
     )
 }
@@ -531,8 +531,8 @@ pub struct MetalPresenter {
     composite_pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     wins: HashMap<u32, MetalWin>,
     frames: u32,
-    /// `DD_DISPLAY_DUMP_EVERY`: when set to N>0, read back + PNG-dump every Nth composited frame to
-    /// `DD_DISPLAY_DUMP` — a headless way to capture what a short-lived app actually put on screen
+    /// `HL_DISPLAY_DUMP_EVERY`: when set to N>0, read back + PNG-dump every Nth composited frame to
+    /// `HL_DISPLAY_DUMP` — a headless way to capture what a short-lived app actually put on screen
     /// (the window itself is torn down when the client exits, faster than a human/SIGUSR1 can look).
     dump_every: u32,
     dump_dir: String,
@@ -545,12 +545,12 @@ pub struct MetalPresenter {
 
 impl MetalPresenter {
     pub fn new(mtm: MainThreadMarker) -> Option<MetalPresenter> {
-        let dump_every = std::env::var("DD_DISPLAY_DUMP_EVERY")
+        let dump_every = std::env::var("HL_DISPLAY_DUMP_EVERY")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         let dump_dir =
-            std::env::var("DD_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-live".into());
+            std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-live".into());
         let present_debug = Self::present_debug_mode();
         let ctx = MetalCtx::new()?;
         let composite_pipeline = Self::make_composite_pipeline(&ctx)?;
@@ -569,7 +569,7 @@ impl MetalPresenter {
     }
 
     fn present_debug_mode() -> PresentDebugMode {
-        match std::env::var("DD_DISPLAY_PRESENT_DEBUG") {
+        match std::env::var("HL_DISPLAY_PRESENT_DEBUG") {
             Ok(v) => match v.to_ascii_lowercase().as_str() {
                 "" | "0" | "false" | "off" | "no" => PresentDebugMode::Off,
                 "changes" | "change" | "summary" => PresentDebugMode::Changes,
@@ -753,7 +753,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
             NSPoint::new(140.0 + sid as f64 * 24.0, 140.0),
             NSSize::new(w as f64, h as f64),
         );
-        let borderless = std::env::var_os("DD_DISPLAY_WINDOW_DECORATIONS").is_none();
+        let borderless = std::env::var_os("HL_DISPLAY_WINDOW_DECORATIONS").is_none();
         let style = if borderless {
             NSWindowStyleMask::Borderless
         } else {
@@ -770,7 +770,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         // window with an opaque surface. Drop the macOS drop shadow (a borderless window still gets the
         // system shadow, which otherwise shows as an "ugly halo/background" around the content) and clear
         // the window's default gray background color so nothing dd-side can bleed at the edges/corners behind
-        // the content. Setting DD_DISPLAY_WINDOW_DECORATIONS opts into a titled AppKit window (server-side
+        // the content. Setting HL_DISPLAY_WINDOW_DECORATIONS opts into a titled AppKit window (server-side
         // decorations) for clients that expect them. Any titlebar the content itself paints is the client's
         // OWN CSD — not ours.
         if borderless {
@@ -841,7 +841,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         unsafe { window.disableCursorRects() };
         window.makeKeyAndOrderFront(None);
         let _ = window.makeFirstResponder(Some(&view));
-        if std::env::var_os("DD_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
+        if std::env::var_os("HL_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
             let f = window.frame();
             eprintln!(
                 "dd-display[window]: created sid={sid} size={w}x{h} popup={} frame=(x={:.0} y={:.0} w={:.0} h={:.0})",
@@ -895,7 +895,7 @@ impl Presenter for MetalPresenter {
                     )));
                 }
                 let tex = self.ctx.texture_from_iosurface(surface, tex_w, tex_h);
-                if surf.gpu_render && std::env::var_os("DD_DISPLAY_TEST_TRIANGLE").is_some() {
+                if surf.gpu_render && std::env::var_os("HL_DISPLAY_TEST_TRIANGLE").is_some() {
                     self.ctx.render_triangle_into(&tex); // rung 3: host GPU renders into the guest IOSurface
                 }
                 unsafe { crate::metal::cfrelease(surface) };
@@ -933,7 +933,7 @@ impl Presenter for MetalPresenter {
             if let Some(parent) = &parent_window {
                 unsafe { parent.addChildWindow_ordered(&win.window, NSWindowOrderingMode::NSWindowAbove) };
                 if let (Some(pp), Some(tl)) = (surf.popup, popup_top_left) {
-                    if std::env::var_os("DD_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
+                    if std::env::var_os("HL_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
                         eprintln!(
                             "dd-display[popup]: placed sid={sid} parent_sid={} offset=({},{}) window_top_left=({:.0},{:.0})",
                             pp.parent_sid, pp.x, pp.y, tl.x, tl.y
@@ -1715,9 +1715,9 @@ extern "C" fn on_sigusr1(_sig: i32) {
     DUMP_REQ.store(true, Ordering::SeqCst);
 }
 
-/// Where `SIGUSR1` dumps land: `DD_DISPLAY_DUMP` if set, else `/tmp/dd-display-live`.
+/// Where `SIGUSR1` dumps land: `HL_DISPLAY_DUMP` if set, else `/tmp/dd-display-live`.
 fn dump_dir() -> String {
-    std::env::var("DD_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-live".into())
+    std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-live".into())
 }
 
 fn install_dump_handler() {
@@ -1984,9 +1984,9 @@ pub fn run_window(lfd: RawFd, socket: String, metal: bool) -> ! {
     run_multi(app, lfd, "window", move || Some(CocoaPresenter::new(mtm)))
 }
 
-/// The dd-gpu IR executor socket beside the display socket (or `DD_GPU_EXEC_SOCK`).
+/// The dd-gpu IR executor socket beside the display socket (or `HL_GPU_EXEC_SOCK`).
 fn gpu_exec_sock(disp: &str) -> Option<String> {
-    if let Ok(p) = std::env::var("DD_GPU_EXEC_SOCK") {
+    if let Ok(p) = std::env::var("HL_GPU_EXEC_SOCK") {
         return Some(p);
     }
     let dir = std::path::Path::new(disp).parent()?;
@@ -2148,7 +2148,7 @@ fn run_multi<P: Presenter>(
 fn mirror_input_geometry_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var_os("DD_DISPLAY_MIRROR_INPUT_GEOMETRY")
+        std::env::var_os("HL_DISPLAY_MIRROR_INPUT_GEOMETRY")
             .map(|v| !v.is_empty() && v != "0")
             .unwrap_or(false)
     })
@@ -2306,7 +2306,7 @@ fn route_input<P: Presenter>(clients: &mut [Server<P>], ev: &NSEvent) {
 fn input_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var_os("DD_DISPLAY_INPUT_DEBUG")
+        std::env::var_os("HL_DISPLAY_INPUT_DEBUG")
             .map(|v| !v.is_empty() && v != "0")
             .unwrap_or(false)
     })

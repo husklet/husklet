@@ -143,7 +143,7 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
 fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     // Drive the compositor's fractional backing scale to a true non-integer (1.5×) so the wire value is
     // unambiguously 180 (round(1.5 × 120)) rather than an integer fallback. Set before DdState::new.
-    std::env::set_var("DD_DISPLAY_FRACTIONAL_SCALE", "1.5");
+    std::env::set_var("HL_DISPLAY_FRACTIONAL_SCALE", "1.5");
 
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();

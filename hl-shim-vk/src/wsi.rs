@@ -15,7 +15,7 @@
 //!
 //! Off-guest (no `/dev/dri/renderD128`, e.g. the macOS validation host) `renderd::alloc` fails, so the
 //! swapchain falls back to plain offscreen images — the render path still exercises + the Metal
-//! validation replays it via the backend. The live guest path uses the real IOSurface + `$DD_GPU_EXEC`.
+//! validation replays it via the backend. The live guest path uses the real IOSurface + `$HL_GPU_EXEC`.
 
 use crate::reg::{
     self, ImageRec, ImageSubresourceState, SurfaceRec, SwapImage, SwapImageState, SwapchainRec,
@@ -286,7 +286,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
         };
         images.push(SwapImage { image: handle, ir_id, surface, state: SwapImageState::Available });
     }
-    if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+    if std::env::var_os("HL_SHIM_DEBUG").is_some() {
         let ids: Vec<u32> = images.iter().map(|i| i.surface.id).collect();
         let fds: Vec<i32> = images.iter().map(|i| i.surface.fd).collect();
         eprintln!("[dd-shim-vk] vkCreateSwapchainKHR: {count} imgs {width}x{height} surf_ids={ids:?} fds={fds:?}");
@@ -525,7 +525,7 @@ fn deliver_present(
         if conn.submit(surface, bytes).is_err() {
             return VK_ERROR_DEVICE_LOST;
         }
-        if std::env::var_os("DD_VK_NO_WL_PRESENT").is_none()
+        if std::env::var_os("HL_VK_NO_WL_PRESENT").is_none()
             && !crate::wl_present::present(display, wl_surface, surface)
         {
             return VK_ERROR_SURFACE_LOST_KHR;

@@ -117,7 +117,7 @@ impl ContainerBuilder {
     pub fn cwd(mut self, dir: impl Into<String>) -> Self {
         let dir = dir.into();
         if !dir.is_empty() {
-            self.cfg.env.push(("DD_CWD".into(), dir));
+            self.cfg.env.push(("HL_CWD".into(), dir));
         }
         self
     }
@@ -128,7 +128,7 @@ impl ContainerBuilder {
     pub fn guest_env(mut self, env: &[String], tty: bool) -> Self {
         let genv = guest_env(env, tty);
         if !genv.is_empty() {
-            self.cfg.env.push(("DD_GUEST_ENV".into(), genv.join("\n")));
+            self.cfg.env.push(("HL_GUEST_ENV".into(), genv.join("\n")));
         }
         self
     }
@@ -148,8 +148,8 @@ impl ContainerBuilder {
     /// Run the guest under the untrusted-guest sentry / OS sandbox (docker `--security-opt sandbox`).
     pub fn sandbox(mut self, on: bool) -> Self {
         if on {
-            self.cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into()));
-            self.cfg.env.push(("DDJIT_SANDBOX".into(), "1".into()));
+            self.cfg.env.push(("HL_JIT_UNTRUSTED".into(), "1".into()));
+            self.cfg.env.push(("HL_JIT_SANDBOX".into(), "1".into()));
         }
         self
     }
@@ -157,18 +157,18 @@ impl ContainerBuilder {
     /// `--network none`: refuse all non-loopback egress.
     pub fn net_isolate(mut self, on: bool) -> Self {
         if on {
-            self.cfg.env.push(("DD_NET_ISOLATE".into(), "1".into()));
+            self.cfg.env.push(("HL_NET_ISOLATE".into(), "1".into()));
         }
         self
     }
 
     /// Per-workspace VPN egress: funnel the guest's genuine external TCP connects through the SOCKS5 proxy
-    /// at `addr` (`host:port`) instead of a direct host connect (see `docs/VPN.md`). Sets `DD_EGRESS_SOCKS`,
+    /// at `addr` (`host:port`) instead of a direct host connect (see `docs/VPN.md`). Sets `HL_EGRESS_SOCKS`,
     /// the engine's egress-redirect switch; an empty `addr` emits nothing (direct egress, unchanged).
     pub fn egress_socks(mut self, addr: impl Into<String>) -> Self {
         let addr = addr.into();
         if !addr.is_empty() {
-            self.cfg.env.push(("DD_EGRESS_SOCKS".into(), addr));
+            self.cfg.env.push(("HL_EGRESS_SOCKS".into(), addr));
         }
         self
     }
@@ -185,7 +185,7 @@ impl ContainerBuilder {
     /// [`DeviceRequest::render_node`]: crate::DeviceRequest::render_node
     pub fn render_node(mut self, on: bool) -> Self {
         if on {
-            self.cfg.env.push(("DD_GPU_IOSURFACE".into(), "1".into()));
+            self.cfg.env.push(("HL_GPU_IOSURFACE".into(), "1".into()));
         }
         self
     }
@@ -212,23 +212,23 @@ impl ContainerBuilder {
     /// Join a user-defined network's virtual switch: the network id (switch key) and this container's IP,
     /// so in-subnet peers reach each other by container<->container TCP.
     pub fn bridge(mut self, netid: impl Into<String>, ip: impl Into<String>) -> Self {
-        self.cfg.env.push(("DD_NETBR".into(), netid.into()));
-        self.cfg.env.push(("DD_IP".into(), ip.into()));
+        self.cfg.env.push(("HL_NETBR".into(), netid.into()));
+        self.cfg.env.push(("HL_IP".into(), ip.into()));
         self
     }
 
     /// Hand the guest the shared external-writer generation file so daemon-side writes into the live fs
     /// (docker cp, /etc rewrites) invalidate the engine's path/metadata caches and become guest-visible.
     pub fn write_coherence_file(mut self, path: impl Into<String>) -> Self {
-        self.cfg.env.push(("DD_FSGEN_FILE".into(), path.into()));
+        self.cfg.env.push(("HL_FSGEN_FILE".into(), path.into()));
         self
     }
 
     /// Enable the persistent translated-code cache in `dir` (2nd+ run of an image skips translation).
     /// Self-invalidating (keyed by image hash + engine version) and graceful-miss safe.
     pub fn persistent_cache(mut self, dir: impl Into<String>) -> Self {
-        self.cfg.env.push(("DDJIT_PCACHE".into(), "1".into()));
-        self.cfg.env.push(("DDJIT_PCACHE_DIR".into(), dir.into()));
+        self.cfg.env.push(("HL_JIT_PCACHE".into(), "1".into()));
+        self.cfg.env.push(("HL_JIT_PCACHE_DIR".into(), dir.into()));
         self
     }
 
@@ -236,7 +236,7 @@ impl ContainerBuilder {
     /// process-independent host forwarder for published ports (still passes the port map for getsockname).
     pub fn external_port_forwarder(mut self, on: bool) -> Self {
         if on {
-            self.cfg.env.push(("DD_PUBLISH_DAEMON".into(), "1".into()));
+            self.cfg.env.push(("HL_PUBLISH_DAEMON".into(), "1".into()));
         }
         self
     }
@@ -301,25 +301,25 @@ mod tests {
             .external_port_forwarder(true)
             .build()
             .unwrap();
-        assert!(has(&c, "DD_CWD", "/work"));
+        assert!(has(&c, "HL_CWD", "/work"));
         // guest_env injects the default PATH (FOO=bar set none) then TERM=xterm under the tty.
-        assert!(has(&c, "DD_GUEST_ENV", &format!("FOO=bar\n{DEFAULT_GUEST_PATH}\nTERM=xterm")));
-        assert!(has(&c, "DDJIT_UNTRUSTED", "1"));
-        assert!(has(&c, "DDJIT_SANDBOX", "1"));
-        assert!(has(&c, "DD_NET_ISOLATE", "1"));
-        assert!(has(&c, "DD_NETBR", "net123"));
-        assert!(has(&c, "DD_IP", "10.0.0.5"));
-        assert!(has(&c, "DD_EGRESS_SOCKS", "127.30.0.1:1080"));
-        assert!(has(&c, "DD_FSGEN_FILE", "/run/fsgen"));
-        assert!(has(&c, "DDJIT_PCACHE", "1"));
-        assert!(has(&c, "DDJIT_PCACHE_DIR", "/home/dd/pcache"));
-        assert!(has(&c, "DD_PUBLISH_DAEMON", "1"));
+        assert!(has(&c, "HL_GUEST_ENV", &format!("FOO=bar\n{DEFAULT_GUEST_PATH}\nTERM=xterm")));
+        assert!(has(&c, "HL_JIT_UNTRUSTED", "1"));
+        assert!(has(&c, "HL_JIT_SANDBOX", "1"));
+        assert!(has(&c, "HL_NET_ISOLATE", "1"));
+        assert!(has(&c, "HL_NETBR", "net123"));
+        assert!(has(&c, "HL_IP", "10.0.0.5"));
+        assert!(has(&c, "HL_EGRESS_SOCKS", "127.30.0.1:1080"));
+        assert!(has(&c, "HL_FSGEN_FILE", "/run/fsgen"));
+        assert!(has(&c, "HL_JIT_PCACHE", "1"));
+        assert!(has(&c, "HL_JIT_PCACHE_DIR", "/home/dd/pcache"));
+        assert!(has(&c, "HL_PUBLISH_DAEMON", "1"));
     }
 
     #[test]
     fn apply_device_binds_mounts_and_render_node() {
         // A runtime-neutral DeviceRequest binds its mounts (in order) and, when render_node is set, arms
-        // the same DD_GPU_IOSURFACE flag as .render_node(true) — with NO device-specific vocabulary.
+        // the same HL_GPU_IOSURFACE flag as .render_node(true) — with NO device-specific vocabulary.
         use crate::{DeviceMount, DeviceRequest};
         let req = DeviceRequest {
             mounts: vec![
@@ -344,10 +344,10 @@ mod tests {
                 ("/usr/lib/x/lib.so".to_string(), "/host/lib.so".to_string(), true),
             ]
         );
-        // render_node → the DD_GPU_IOSURFACE transport flag (unchanged wire).
-        assert!(has(&c, "DD_GPU_IOSURFACE", "1"));
+        // render_node → the HL_GPU_IOSURFACE transport flag (unchanged wire).
+        assert!(has(&c, "HL_GPU_IOSURFACE", "1"));
         // apply_device does NOT touch the guest env — that is the caller's job via guest_env().
-        assert!(!c.cfg.env.iter().any(|(k, _)| k == "DD_GUEST_ENV"));
+        assert!(!c.cfg.env.iter().any(|(k, _)| k == "HL_GUEST_ENV"));
         assert!(!c.cfg.env.iter().any(|(k, _)| k == "IGNORED_BY_APPLY_DEVICE"));
     }
 

@@ -618,10 +618,10 @@ static void emit_prologue(void) {
 // clears it. Runtime rather than a static per-block flag because blocks CHAIN without spilling, so a
 // vector-dirty region can reach a statically-"clean" syscall block with host xmm != cpu->V. A syscall that
 // writes cpu->V (sigreturn) is republished by the prologue reload, so xmm state is never lost.
-static int g_slimsys = -1; // DDJIT_NOSLIMSYS=1 -> 0 = byte-identical full-spill baseline (A/B kill switch)
+static int g_slimsys = -1; // HL_JIT_NOSLIMSYS=1 -> 0 = byte-identical full-spill baseline (A/B kill switch)
 
 static int slimsys_on(void) {
-    if (g_slimsys < 0) g_slimsys = getenv("DDJIT_NOSLIMSYS") ? 0 : 1;
+    if (g_slimsys < 0) g_slimsys = getenv("HL_JIT_NOSLIMSYS") ? 0 : 1;
     return g_slimsys;
 }
 
@@ -632,7 +632,7 @@ static int slimsys_on(void) {
 // LINEAR trace entered only at its head: emission order == execution order, so the mark at the first xmm
 // write dominates every later xmm write in the region. The one mid-trace runtime clear of cpu->vdirty is
 // emit_rep_string's full spill; it resets the latch (repstr.c), so a later xmm write re-marks. Also gated
-// on slimsys_on(): with DDJIT_NOSLIMSYS=1 every exit full-spills and never reads cpu->vdirty, so the
+// on slimsys_on(): with HL_JIT_NOSLIMSYS=1 every exit full-spills and never reads cpu->vdirty, so the
 // kill-switch now truly restores the pre-lever baseline (as shipped it left the marking stores in place).
 static int g_vmark_done; // translate-time latch; reset at translate_block entry + after emit_rep_string
 
@@ -690,7 +690,7 @@ static void emit_exit_const(uint64_t rip, uint64_t reason) {
 // then emit inline ARM64 at the guest `syscall` site that reads CNTVCT and converts to a Linux
 // timespec/timeval WITHOUT entering service() -- the guest's clock_gettime/gettimeofday never
 // trap. ns = base_ns + ((ticks-base_ticks)*mult)>>FAST_SHIFT (Q30, overflow-safe 128-bit).
-static int g_fastsys = 1;         // master switch (DDJIT_NOFASTSYS=1 -> 0 = byte-identical old path)
+static int g_fastsys = 1;         // master switch (HL_JIT_NOFASTSYS=1 -> 0 = byte-identical old path)
 static int g_fastclk = 1;         // gates ONLY the clock_gettime/gettimeofday time arms. Auto-0 on
                                   // a host whose effective CNTVCT rate is decoupled from cntfrq_el0 (the
                                   // vDSO time math is then unsound); the W4F rt_sigprocmask/sched_yield
@@ -710,17 +710,17 @@ static uint64_t g_cal_mult;       // tick->ns multiplier (Q30): round(1e9 * 2^FA
 // address. Two `static` tentative defs of the same object coalesce into one (standard C) -- no
 // second storage, no link conflict; the bare-`static` real def in signal.c is unchanged.
 static volatile uint64_t g_pending;   // FORWARD decl; real (identical) def lives in os/linux/signal.c
-static int g_siginline = 1;           // W4F switch (DDJIT_NOSIGINLINE=1 disables ONLY the W4F arms)
+static int g_siginline = 1;           // W4F switch (HL_JIT_NOSIGINLINE=1 disables ONLY the W4F arms)
 static uint64_t g_sig_inline_count;   // # rt_sigprocmask served inline (written by emitted code)
 static uint64_t g_yield_inline_count; // # sched_yield served inline
 
 static void s1_calibrate(void) {
-    const char *off = getenv("DDJIT_NOFASTSYS");
+    const char *off = getenv("HL_JIT_NOFASTSYS");
     if (off && off[0] && off[0] != '0') {
         g_fastsys = 0;
         return;
     }
-    const char *nosi = getenv("DDJIT_NOSIGINLINE");
+    const char *nosi = getenv("HL_JIT_NOSIGINLINE");
     if (nosi && nosi[0] && nosi[0] != '0') g_siginline = 0;
     uint64_t freq;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(freq));
@@ -734,7 +734,7 @@ static void s1_calibrate(void) {
     // test hook: force the fast path ON with the cntfrq-only scale even on a host the mach cross-
     // check below would reject. Lets the guarded-store / EFAULT / tz paths be exercised on a virtualized
     // dev/CI host where the fast path is otherwise auto-disabled. NOT for production use.
-    if (getenv("DDJIT_FASTSYS_FORCE")) goto anchor;
+    if (getenv("HL_JIT_FASTSYS_FORCE")) goto anchor;
 #ifdef __APPLE__
     // guard against a host that virtualizes CNTVCT inconsistently. mach_timebase_info gives the
     // AUTHORITATIVE tick->ns for the generic-timer counter mach_absolute_time reads (ns = ticks*numer/
@@ -990,7 +990,7 @@ static void emit_fast_syscall(uint64_t next) {
         after[na++] = (uint32_t *)g_cp;
         emit32(0x14000000u); // b L_after
     } else {
-        to_slow[nsl++] = gtod_miss; // W4F off (DDJIT_NOSIGINLINE): gtod miss -> slow, exactly as S1
+        to_slow[nsl++] = gtod_miss; // W4F off (HL_JIT_NOSIGINLINE): gtod miss -> slow, exactly as S1
     }
 
     // ---- slow path: restore guest flags, take the unchanged full R_SYSCALL exit ----

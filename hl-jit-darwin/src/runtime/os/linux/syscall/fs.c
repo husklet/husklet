@@ -2194,7 +2194,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 }
             }
             // GPU rung 2 (opt-in): the DRM render-node discovery + allocation path. Inert unless
-            // DD_GPU_IOSURFACE is set (existing workloads never touch /dev/dri or the DRM sysfs).
+            // HL_GPU_IOSURFACE is set (existing workloads never touch /dev/dri or the DRM sysfs).
             if (rp && gpu_iosurface_on()) {
                 int drm_minor = -1;
                 // synthesize /dev/dri/{renderD128,card0} as a placeholder fd tagged as a render node; its

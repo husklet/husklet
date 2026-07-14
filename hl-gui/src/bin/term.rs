@@ -346,10 +346,10 @@ fn open_manager(app: &gtk::Application) {
     maybe_shot(&window, "manager");
 
     // Debug: jump straight to a surface for headless screenshotting.
-    match std::env::var("DD_TERM_VIEW").as_deref() {
+    match std::env::var("HL_TERM_VIEW").as_deref() {
         Ok("terminal") => {
             let store = WorkspaceStore::load(workspaces_conf());
-            let want = std::env::var("DD_TERM_WS").ok();
+            let want = std::env::var("HL_TERM_WS").ok();
             let ws = want
                 .as_deref()
                 .and_then(|n| store.get(n))
@@ -794,8 +794,8 @@ fn open_settings_window(app: &gtk::Application) {
         });
     }
 
-    // Debug: DD_TERM_SETTINGS_PANE selects a section for headless screenshotting.
-    if let Ok(p) = std::env::var("DD_TERM_SETTINGS_PANE") {
+    // Debug: HL_TERM_SETTINGS_PANE selects a section for headless screenshotting.
+    if let Ok(p) = std::env::var("HL_TERM_SETTINGS_PANE") {
         pages.set_visible_child_name(&p);
         for l in nav_labels.borrow().iter() {
             if l.text() == p {
@@ -1227,8 +1227,8 @@ fn open_new_workspace(app: &gtk::Application, on_created: Rc<dyn Fn()>) {
         });
     }
 
-    // Debug: DD_TERM_NEWWS_PANE selects a config pane for screenshotting.
-    if let Ok(p) = std::env::var("DD_TERM_NEWWS_PANE") {
+    // Debug: HL_TERM_NEWWS_PANE selects a config pane for screenshotting.
+    if let Ok(p) = std::env::var("HL_TERM_NEWWS_PANE") {
         pages.set_visible_child_name(&p);
         for l in nav_labels.borrow().iter() {
             if l.text() == p {
@@ -2045,22 +2045,22 @@ fn open_terminal_window(app: &gtk::Application, ws: &WorkspaceConfig) {
     } else {
         restore_session(&tw, &saved);
     }
-    // Debug: DD_TERM_TABS=N opens N total shell tabs (to verify exact equal-width tabs).
-    if let Some(n) = std::env::var("DD_TERM_TABS").ok().and_then(|s| s.parse::<usize>().ok()) {
+    // Debug: HL_TERM_TABS=N opens N total shell tabs (to verify exact equal-width tabs).
+    if let Some(n) = std::env::var("HL_TERM_TABS").ok().and_then(|s| s.parse::<usize>().ok()) {
         for _ in 1..n {
             add_terminal_tab(&tw);
         }
     }
-    // Debug: DD_TERM_SPLIT=h|v splits the current shell tab (to screenshot the split separator).
-    if let Ok(dir) = std::env::var("DD_TERM_SPLIT") {
+    // Debug: HL_TERM_SPLIT=h|v splits the current shell tab (to screenshot the split separator).
+    if let Ok(dir) = std::env::var("HL_TERM_SPLIT") {
         if let Some(t) = tw.stack.visible_child().and_then(|c| first_terminal_in(&c)) {
             *tw.focused.borrow_mut() = Some(t);
             let o = if dir == "v" { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal };
             split_focused(&tw, o);
         }
     }
-    // Debug: DD_TERM_DASH selects the dashboard (first) tab for screenshotting.
-    if std::env::var("DD_TERM_DASH").is_ok() {
+    // Debug: HL_TERM_DASH selects the dashboard (first) tab for screenshotting.
+    if std::env::var("HL_TERM_DASH").is_ok() {
         let first = tw.entries.borrow().first().map(|e| e.name.clone());
         if let Some(n) = first {
             select_page(&tw, &n);
@@ -2545,7 +2545,7 @@ fn add_terminal_tab(tw: &Rc<TermWin>) {
     term.grab_focus();
 }
 
-/// Find the first VTE terminal in `w`'s subtree (used by the DD_TERM_SPLIT screenshot hook).
+/// Find the first VTE terminal in `w`'s subtree (used by the HL_TERM_SPLIT screenshot hook).
 fn first_terminal_in(w: &gtk::Widget) -> Option<vte4::Terminal> {
     if let Some(t) = w.downcast_ref::<vte4::Terminal>() {
         return Some(t.clone());
@@ -2702,10 +2702,10 @@ fn make_terminal_ex(tw: &Rc<TermWin>, cwd: Option<String>, history: Option<Strin
     // own slot, and `save_session` can record which slot each pane owns.
     tw.panes.borrow_mut().push((term.downgrade(), slot.clone(), pid.clone()));
     let ddcli = ddcli_path();
-    // DEBUG: DD_TERM_CMD overrides the whole command (isolate VTE-spawn vs ddcli); DD_TERM_DEBUG_LOG
+    // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs ddcli); HL_TERM_DEBUG_LOG
     // captures ddcli's output to a file to diagnose the early exit.
-    let testcmd = std::env::var("DD_TERM_CMD").ok();
-    let dbg = std::env::var("DD_TERM_DEBUG_LOG").ok();
+    let testcmd = std::env::var("HL_TERM_CMD").ok();
+    let dbg = std::env::var("HL_TERM_DEBUG_LOG").ok();
     let dbgcmd = dbg
         .as_ref()
         .map(|p| format!("exec '{}' workspace launch '{}' --slot '{}' > '{}' 2>&1", ddcli, tw.ws.name, slot, p));
@@ -2785,7 +2785,7 @@ fn make_terminal_ex(tw: &Rc<TermWin>, cwd: Option<String>, history: Option<Strin
                 }
                 close_terminal_pane(&tw2, &te);
             });
-            if let Ok(text) = std::env::var("DD_TERM_TYPE") {
+            if let Ok(text) = std::env::var("HL_TERM_TYPE") {
                 let t2 = term.clone();
                 glib::timeout_add_local_once(std::time::Duration::from_millis(3000), move || {
                     t2.feed_child(format!("{text}\n").as_bytes());
@@ -2935,8 +2935,8 @@ fn build_dashboard(ws: &WorkspaceConfig) -> gtk::Box {
         labels.borrow_mut().push(item);
     }
 
-    // Debug: DD_TERM_DASHPANE selects a dashboard pane for screenshotting.
-    if let Ok(p) = std::env::var("DD_TERM_DASHPANE") {
+    // Debug: HL_TERM_DASHPANE selects a dashboard pane for screenshotting.
+    if let Ok(p) = std::env::var("HL_TERM_DASHPANE") {
         pages.set_visible_child_name(&p);
         for (j, b) in labels.borrow().iter().enumerate() {
             if names[j] == p {
@@ -3536,15 +3536,15 @@ fn style_terminal(term: &vte4::Terminal, cfg: &TermConfig) {
     term.set_color_highlight_foreground(Some(&hex("#ffffff")));
 }
 
-/// Debug self-capture: with `DD_TERM_SHOT=<png>` (and `DD_TERM_VIEW=manager|terminal|newws` to pick the
+/// Debug self-capture: with `HL_TERM_SHOT=<png>` (and `HL_TERM_VIEW=manager|terminal|newws` to pick the
 /// surface), render this window to a PNG via GTK's own snapshot pipeline and exit — no OS screen-capture
 /// permission needed. Used to verify the UI headlessly.
 fn maybe_shot(window: &gtk::ApplicationWindow, tag: &str) {
-    let Ok(path) = std::env::var("DD_TERM_SHOT") else { return };
-    if std::env::var("DD_TERM_VIEW").unwrap_or_else(|_| "manager".into()) != tag {
+    let Ok(path) = std::env::var("HL_TERM_SHOT") else { return };
+    if std::env::var("HL_TERM_VIEW").unwrap_or_else(|_| "manager".into()) != tag {
         return;
     }
-    let ms: u64 = std::env::var("DD_TERM_SHOT_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(2500);
+    let ms: u64 = std::env::var("HL_TERM_SHOT_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(2500);
     let win = window.clone();
     glib::timeout_add_local_once(std::time::Duration::from_millis(ms), move || {
         let w = win.width().max(400);

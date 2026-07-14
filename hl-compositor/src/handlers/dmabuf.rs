@@ -9,7 +9,7 @@
 //! MODIFIER: `modifier_lo` is the IOSurface id and `modifier_hi`'s low 16 bits are a dd magic tag
 //! (bit 16 = "the host GPU should also RENDER into this surface" — rung 3). This is the exact
 //! contract the legacy hand-written `hl-display/src/server.rs` uses; this module is its Smithay
-//! equivalent, so a guest built for the legacy path presents unchanged on `DD_DISPLAY_SMITHAY=1`.
+//! equivalent, so a guest built for the legacy path presents unchanged on `HL_DISPLAY_SMITHAY=1`.
 //!
 //! ## The bridge
 //! 1. We advertise `zwp_linux_dmabuf_v1` (Smithay's [`DmabufState`], v4/v5 with feedback) exporting
@@ -340,7 +340,7 @@ pub(crate) fn build_default_feedback() -> std::io::Result<DmabufFeedback> {
 }
 
 /// Stand up the `zwp_linux_dmabuf_v1` global and return the [`DmabufState`] delegate. Called once from
-/// [`DdState::new`] (only under `DD_DISPLAY_SMITHAY=1`, since that flag is what execs this compositor,
+/// [`DdState::new`] (only under `HL_DISPLAY_SMITHAY=1`, since that flag is what execs this compositor,
 /// so the whole path — v3 or v4 — is already behind it; the legacy `server.rs` default is untouched).
 ///
 /// Preferred: a **version 5** global carrying a default dmabuf-**feedback** (which serves the v4
@@ -358,7 +358,7 @@ pub(crate) fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
     // The table is now guest-mappable and byte-correct, but the private modifier still embeds a dynamic
     // IOSurface id while Wayland feedback describes exact stable format/modifier pairs. Keep the global
     // opt-in until allocation identity moves to validated fd metadata or a versioned private channel.
-    if std::env::var("DD_DISPLAY_DMABUF").is_err() {
+    if std::env::var("HL_DISPLAY_DMABUF").is_err() {
         return state;
     }
     match build_default_feedback() {

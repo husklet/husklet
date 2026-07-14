@@ -10,24 +10,24 @@
 #define G_FORK_PRESERVE(c) ((void)0)
 #endif
 
-// execve env forwarding: serialize the guest's envp array into DD_GUEST_ENV (the "K=V\nK=V..." string
+// execve env forwarding: serialize the guest's envp array into HL_GUEST_ENV (the "K=V\nK=V..." string
 // build_stack reads when laying out the new process stack), so the guest's actual environment crosses the
 // re-exec. A guest-initiated exec makes the guest's envp AUTHORITATIVE (like Linux): whatever the guest
 // passes -- including an EMPTY set for envp==NULL -- is EXACTLY what the new program sees. We mark it with
-// DD_GUEST_ENV_EXACT so build_stack injects NONE of the engine's fallback defaults (PATH/HOME/LANG/
+// HL_GUEST_ENV_EXACT so build_stack injects NONE of the engine's fallback defaults (PATH/HOME/LANG/
 // GLIBC_TUNABLES). Those defaults are only appropriate on the INITIAL container launch (the daemon never
-// sets DD_GUEST_ENV_EXACT); a guest execve that curates its env -- or clears it -- must match Linux, where
+// sets HL_GUEST_ENV_EXACT); a guest execve that curates its env -- or clears it -- must match Linux, where
 // `execve(path, argv, NULL)` yields an empty environment and `execve(path,argv,["FOO=bar"])` yields exactly
 // one entry. Each pointer may be a low non-PIE address, so rebase the array base and every element with
 // nonpie_p(), exactly as the argv loop does. setenv() copies the buffer, so it survives the teardown.
 static void exec_forward_env(uint64_t envp_guest) {
     if (!envp_guest) {
         // Linux: NULL envp -> the new program runs with an EMPTY environment. Publish an empty, authoritative
-        // env (do NOT leak the container's stale/default DD_GUEST_ENV) and flag it EXACT so build_stack adds
+        // env (do NOT leak the container's stale/default HL_GUEST_ENV) and flag it EXACT so build_stack adds
         // no defaults -> the guest sees envc==0, byte-exact with the native oracle.
-        setenv("DD_GUEST_ENV", "", 1);
-        setenv("DD_GUEST_ENV_ESC", "1", 1);
-        setenv("DD_GUEST_ENV_EXACT", "1", 1);
+        setenv("HL_GUEST_ENV", "", 1);
+        setenv("HL_GUEST_ENV_ESC", "1", 1);
+        setenv("HL_GUEST_ENV_EXACT", "1", 1);
         return;
     }
     uint64_t *ev = (uint64_t *)nonpie_p(envp_guest);
@@ -38,9 +38,9 @@ static void exec_forward_env(uint64_t envp_guest) {
     for (int i = 0; ev[i]; i++) {
         const char *e = (const char *)nonpie_p(ev[i]);
         size_t el = strlen(e);
-        // '\n' is DD_GUEST_ENV's record separator, but Linux permits newline (and any non-NUL byte) INSIDE an
+        // '\n' is HL_GUEST_ENV's record separator, but Linux permits newline (and any non-NUL byte) INSIDE an
         // env value. Escape '\\'->"\\\\" and '\n'->"\\n" so a raw '\n' only ever marks a record boundary;
-        // build_stack unescapes when DD_GUEST_ENV_ESC=1. Worst case each byte becomes 2 -> reserve 2*el+2.
+        // build_stack unescapes when HL_GUEST_ENV_ESC=1. Worst case each byte becomes 2 -> reserve 2*el+2.
         if (len + 2 * el + 2 > cap) {
             cap = (len + 2 * el + 2) * 2;
             char *nb = realloc(buf, cap);
@@ -62,12 +62,12 @@ static void exec_forward_env(uint64_t envp_guest) {
                 buf[len++] = ch;
             }
         }
-        buf[len++] = '\n'; // DD_GUEST_ENV record separator (build_stack splits on '\n')
+        buf[len++] = '\n'; // HL_GUEST_ENV record separator (build_stack splits on '\n')
         buf[len] = 0;
     }
-    setenv("DD_GUEST_ENV", buf, 1);
-    setenv("DD_GUEST_ENV_ESC", "1", 1);   // tell build_stack the records are escape-encoded
-    setenv("DD_GUEST_ENV_EXACT", "1", 1); // guest-initiated exec: this env is authoritative, inject no defaults
+    setenv("HL_GUEST_ENV", buf, 1);
+    setenv("HL_GUEST_ENV_ESC", "1", 1);   // tell build_stack the records are escape-encoded
+    setenv("HL_GUEST_ENV_EXACT", "1", 1); // guest-initiated exec: this env is authoritative, inject no defaults
     free(buf);
 }
 
@@ -77,7 +77,7 @@ static void exec_forward_env(uint64_t envp_guest) {
 // RLIMIT_NOFILE(7) reports a finite fd cap (soft 20480 / hard 1048576, the docker container default) -- a
 // guest like memcached does calloc(rlim_cur, sizeof(conn)), which overflows if the soft limit is RLIM_INFINITY.
 static void svc_fill_rlimit(int resource, uint64_t *o) {
-    // docker --ulimit override wins (g_ulimit, seeded from DD_ULIMITS in state.c): a guest that reads its
+    // docker --ulimit override wins (g_ulimit, seeded from HL_ULIMITS in state.c): a guest that reads its
     // limits (memcached calloc's off RLIMIT_NOFILE, the JVM sizes threads off RLIMIT_NPROC) must see the
     // requested value, not the dd default. `set` gates each resource so unspecified ones keep the defaults.
     if (resource >= 0 && resource < DD_RLIM_MAX && g_ulimit[resource].set) {
@@ -192,12 +192,12 @@ static void exec_close_cloexec(void) {
 // ---- fork child-side engine hooks (shared by clone/case-220 and clone3/case-435) -----------------
 // Everything the CHILD must reset before it re-enters guest code. Factored so the two fork sites can
 // never drift (clone3 was missing the W^X re-assert and the DIR*-cache drop), and instrumented:
-// fork-cost histogram (DD_FORKPROF=1, read once) prints one stderr line per fork with per-hook wall-ns
+// fork-cost histogram (HL_FORKPROF=1, read once) prints one stderr line per fork with per-hook wall-ns
 // deltas so a regression in the fork path is measurable, at zero cost when unset.
 static int forkprof_on(void) {
     static int on = -1;
     if (on < 0) {
-        const char *e = getenv("DD_FORKPROF");
+        const char *e = getenv("HL_FORKPROF");
         on = (e && e[0] == '1') ? 1 : 0;
     }
     return on;
@@ -540,7 +540,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
 #ifdef PCACHE_SAVE_HOOK
-        PCACHE_SAVE_HOOK; // opt8: persist the translated arena before the one-shot _exit (DDJIT_PCACHE only)
+        PCACHE_SAVE_HOOK; // opt8: persist the translated arena before the one-shot _exit (HL_JIT_PCACHE only)
 #endif
         futex_robust_exit(c); // robust mutexes still held by the calling thread -> OWNER_DIED + wake waiters
         acct_proc_leave();    // release this process's cgroup accounting slot (_exit bypasses atexit)
@@ -1419,7 +1419,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         memf_materialize_all();
         sigexit_init(); // create the shared guest-signal-death relay in the PARENT before forking, so
                         // this child (and its descendants) inherit the same MAP_SHARED page it may die into.
-        uint64_t fk0 = forkprof_on() ? now_ns() : 0; // parent-side fork latency (DD_FORKPROF=1)
+        uint64_t fk0 = forkprof_on() ? now_ns() : 0; // parent-side fork latency (HL_FORKPROF=1)
         pid_t pid = fork();
         if (pid == 0) {
             // clone(CLONE_VM, child_stack): glibc posix_spawn/popen/vfork pass a separate child stack in a1
@@ -1581,9 +1581,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             w7_trace("execve type=%s argc=%d argv0=%s", ty, ac, (ac > 0 && argv[0]) ? argv[0] : "");
         }
         // Forward the guest's ACTUAL environment across the exec: build_stack rebuilds the new process env
-        // from DD_GUEST_ENV, so serialize envp (a2) into it NOW while guest memory is still mapped. A guest
+        // from HL_GUEST_ENV, so serialize envp (a2) into it NOW while guest memory is still mapped. A guest
         // that set/modified env vars (FOO=bar, a tweaked PATH) thus sees them survive; a NULL envp keeps the
-        // container's DD_GUEST_ENV defaults (a2 is NOT rebased by the dispatch redirect, unlike a0/a1).
+        // container's HL_GUEST_ENV defaults (a2 is NOT rebased by the dispatch redirect, unlike a0/a1).
         exec_forward_env(a2);
         // Capture the guest-absolute exec path NOW (a0 is still mapped) so /proc/self/exe can name the new
         // image after the teardown below. ld.so resolves a binary's $ORIGIN (DT_RUNPATH) via readlink of

@@ -64,7 +64,7 @@ static inline uint64_t coldprof_now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// ---- opt8 persistent translated-code cache (DDJIT_PCACHE=1; default OFF) ----
+// ---- opt8 persistent translated-code cache (HL_JIT_PCACHE=1; default OFF) ----
 // Deterministic guest/arena bases let us persist the translated arena + block map and mmap it back on
 // the next run of the same binary, skipping retranslation. Emitted blocks bake a handful of HOST pointers
 // (block_return, &g_ibtc, &g_fast_count, &g_pending, &g_t2cnt[], &hl_rep_movs/stos, the inline-fastsys
@@ -72,7 +72,7 @@ static inline uint64_t coldprof_now_ns(void) {
 // We record each baked slot's arena offset (g_reloc; emitted as a fixed 4-insn movz/movk so it is
 // rewritable to any address) and, on load, add (block_return_now - block_return_at_save) -- the single
 // image slide -- to each. All x86-only, all gated by g_pcache; default OFF -> emit is byte-identical.
-static int g_pcache;          // persistent cache feature on (DDJIT_PCACHE set)
+static int g_pcache;          // persistent cache feature on (HL_JIT_PCACHE set)
 static int g_pcache_loaded;   // cache hit this run (translation skipped)
 static uint64_t g_pc_binid;   // identity of (guest binary + interp)
 static uint64_t g_pc_entry;   // initial guest rip (cache-validity sanity)
@@ -109,8 +109,8 @@ static int g_pcache_poison; // set if a baked host pointer could not be recorded
 static uint64_t g_tracecap; // if >0 under trace: stop after this many blocks (runaway guard)
 int g_diag;                 // diagnostics (FAULT_ON): print LOADED bases etc. (extern'd by elf.c)
 static int g_nochain;       // WATCH file: disable chaining (exact per-block rip attribution)
-static int g_dbg_nochain;   // aarch64 DDDBG_NOCHAIN gate in the SHARED dispatch.c; inert on x86 (chain hook is a no-op)
-static int g_dbg_gprdump;   // aarch64 DDDBG_GPRDUMP gate in the SHARED dispatch.c; inert on x86 (aarch64 dump only)
+static int g_dbg_nochain;   // aarch64 HL_DBG_NOCHAIN gate in the SHARED dispatch.c; inert on x86 (chain hook is a no-op)
+static int g_dbg_gprdump;   // aarch64 HL_DBG_GPRDUMP gate in the SHARED dispatch.c; inert on x86 (aarch64 dump only)
 static uint64_t g_loadbase; // main program load base (for file-offset mapping)
 static uint8_t *g_w8;
 static uint8_t g_w8v;       // debug byte-watchpoint (armed via magic syscall 500)

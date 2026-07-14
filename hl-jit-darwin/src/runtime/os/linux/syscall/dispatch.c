@@ -106,7 +106,7 @@ static void pt_wait_disarm(int armed, const struct sigaction *saved);
 static void fd_reset_emul(int fd);
 
 // ==================== Wall 7 renderer-stall instrumentation (flag-gated) =========================
-// Guarded by env DD_WALL7_TRACE=1. When unset this is a single cached-int compare per call site, so
+// Guarded by env HL_WALL7_TRACE=1. When unset this is a single cached-int compare per call site, so
 // the whole facility is inert for the normal test matrix. When set it emits one-line, pid-tagged
 // traces to stderr for the exact primitives the multi-process-Chrome renderer's Mojo bring-up rides
 // on: AF_UNIX socketpair/eventfd creation, epoll_ctl registration, epoll_wait block/wake on those
@@ -117,7 +117,7 @@ static void fd_reset_emul(int fd);
 #include <stdarg.h>
 static int g_w7_trace = -1;
 static inline int w7_on(void) {
-    if (__builtin_expect(g_w7_trace < 0, 0)) g_w7_trace = getenv("DD_WALL7_TRACE") ? 1 : 0;
+    if (__builtin_expect(g_w7_trace < 0, 0)) g_w7_trace = getenv("HL_WALL7_TRACE") ? 1 : 0;
     return g_w7_trace;
 }
 __attribute__((format(printf, 1, 2))) static void w7_trace(const char *fmt, ...) {

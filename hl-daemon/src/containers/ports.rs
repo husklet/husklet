@@ -14,7 +14,7 @@
 //! uses) and pump bytes both ways. The guest can re-`listen()` as often as it likes: the daemon's dial is
 //! gap-tolerant (retries across the re-bind window, exactly like the engine's `switch_dial`), so a
 //! re-listening server stays continuously reachable. The engine's in-process TCP host listener is disabled
-//! (`DD_PUBLISH_DAEMON=1`) so the two never fight over the port; the engine keeps only the guest-side
+//! (`HL_PUBLISH_DAEMON=1`) so the two never fight over the port; the engine keeps only the guest-side
 //! bind/listen→switch redirect + `getsockname`→cport reporting.
 //!
 //! The switch path is byte-identical to what the engine binds (`netns.c`):

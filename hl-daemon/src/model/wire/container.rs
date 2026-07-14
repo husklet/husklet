@@ -24,7 +24,7 @@ pub(crate) struct DeviceMapping {
 }
 
 /// `--ulimit` entry (HostConfig.Ulimits[]). `name` is docker's resource name (nofile/nproc/stack/...),
-/// `soft`/`hard` the limits. Reflected in the container's getrlimit via the engine's DD_ULIMITS contract.
+/// `soft`/`hard` the limits. Reflected in the container's getrlimit via the engine's HL_ULIMITS contract.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Ulimit {
     #[serde(rename = "Name", default)]
@@ -93,11 +93,11 @@ pub(crate) struct Container {
     pub(crate) memory: i64,
     pub(crate) pids_limit: i64,
     // `--cpus` (HostConfig.NanoCpus, billionths of a CPU): the container's CPU allotment. Threaded to the
-    // engine as DD_CPUS=ceil(NanoCpus/1e9) so nproc / GOMAXPROCS / the JVM self-size to the allotment.
+    // engine as HL_CPUS=ceil(NanoCpus/1e9) so nproc / GOMAXPROCS / the JVM self-size to the allotment.
     #[serde(default)]
     pub(crate) nano_cpus: i64,
     // `--read-only` (HostConfig.ReadonlyRootfs): the rootfs is EROFS (writes to /proc /dev /sys /tmp /run
-    // stay allowed). Threaded to the engine as DD_ROOTFS_RO=1.
+    // stay allowed). Threaded to the engine as HL_ROOTFS_RO=1.
     #[serde(default)]
     pub(crate) readonly_rootfs: bool,
     // `--ulimit` (HostConfig.Ulimits): (name, soft, hard) triples reflected in the container's getrlimit.
@@ -145,7 +145,7 @@ pub(crate) struct Container {
     #[serde(default)]
     pub(crate) network_mode: String,
     #[serde(default)]
-    pub(crate) user: String, // `docker run --user` / `docker exec -u` -> DD_UID/DD_GID
+    pub(crate) user: String, // `docker run --user` / `docker exec -u` -> HL_UID/HL_GID
     #[serde(default)]
     pub(crate) started_at: i64, // unix secs, set on start (ps sort / logs since-until / human status)
     #[serde(default)]
@@ -214,7 +214,7 @@ pub(crate) struct Container {
     // engine). See `load_state`: the persisted value is the fallback when no image resolves.
     #[serde(default, with = "arch_serde")]
     pub(crate) arch: Option<Guest>,
-    // `docker exec` only: overrides the id-derived DD_NETNS loopback key so the exec'd process SHARES the
+    // `docker exec` only: overrides the id-derived HL_NETNS loopback key so the exec'd process SHARES the
     // TARGET container's 127.0.0.1 address space instead of getting its own isolated loopback. Set to the
     // parent container's id in exec_start; None for a normal container (which keys off its own id).
     // Runtime-only (lives on the throwaway exec temp), never persisted.

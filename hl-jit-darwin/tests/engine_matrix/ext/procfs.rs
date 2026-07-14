@@ -100,15 +100,15 @@ fn dev_sys() -> Group {
         vec![
             src("pf-devnodes", "ext_procfs/devnodes.c").out("devnodes ok=1\n"),
             src("pf-sysfs", "ext_procfs/sysfs.c").out("sysfs ok=1\n"),
-            // --network none (DD_NET_ISOLATE): eth0 is hidden by readdir AND by direct stat/open, so a
+            // --network none (HL_NET_ISOLATE): eth0 is hidden by readdir AND by direct stat/open, so a
             // direct /sys/class/net/eth0 probe can't contradict the interface listing. lo stays visible.
             src("pf-netnone-direct", "ext_procfs/netnone.c")
-                .env("DD_NET_ISOLATE", "1")
+                .env("HL_NET_ISOLATE", "1")
                 .out("netnone ok=1\n"),
-            // -v/--mount binds (DDVOL) appear in /proc/mounts + /proc/self/mountinfo so findmnt/df/JVM
+            // -v/--mount binds (HL_VOL) appear in /proc/mounts + /proc/self/mountinfo so findmnt/df/JVM
             // mount discovery see the guest's binds, not a false namespace.
             src("pf-mountinfo-bind", "ext_procfs/bindmount.c")
-                .env("DDVOL", "/mnt:/tmp")
+                .env("HL_VOL", "/mnt:/tmp")
                 .out("bindmount ok=1\n"),
             // lsns/nsenter inspect a live peer's /proc/<pid>/ns: a container shares one namespace set, so
             // the peer ns links readlink to the same "<name>:[<inode>]" values as self.

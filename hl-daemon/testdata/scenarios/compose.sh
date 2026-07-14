@@ -11,12 +11,12 @@
 # Requires the compose v2 plugin (`docker compose`) or the v1 binary (`docker-compose`). If neither is
 # installed this self-skips with rc=0 (so CI on a compose-less host stays green). Run after `make jit`.
 #
-# Env: DD_IMAGES (image dir, default poc/images), DD_DAEMON (daemon binary, default target/release/dd-daemon).
+# Env: HL_IMAGES (image dir, default poc/images), HL_DAEMON (daemon binary, default target/release/dd-daemon).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-IMAGES="${DD_IMAGES:-/Users/x/dd/poc/images}"
-DAEMON="${DD_DAEMON:-$ROOT/target/release/dd-daemon}"
+IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
 SOCK="$ROOT/dd-compose.sock"
 export DOCKER_HOST="unix://$SOCK"
 
@@ -41,7 +41,7 @@ rm -f "$SOCK"
 # Fully isolate this daemon: private socket AND private state/volumes (a fresh per-scenario temp
 # dir), so it starts from empty state and never reads or mutates the developer's real ~/.dd.
 STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dd-compose.XXXXXX")"
-export DD_IMAGES="$IMAGES" DDOCKERD_SOCK="$SOCK" DD_STATE="$STATE_DIR/state.json" DD_VOLUMES="$STATE_DIR/volumes"
+export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!
 PROJ="ddcompose"

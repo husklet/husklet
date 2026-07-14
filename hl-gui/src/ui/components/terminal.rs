@@ -226,9 +226,9 @@ fn style_terminal(term: &vte4::Terminal) {
     term.set_colors(Some(&fg), Some(&bg), &[]);
 }
 
-/// `unix://<socket>` for `docker --host` ( `$DDOCKERD_SOCK`, else `~/.dd/run/docker.sock` ).
+/// `unix://<socket>` for `docker --host` ( `$HL_DOCKER_SOCK`, else `~/.dd/run/docker.sock` ).
 fn daemon_host() -> String {
-    let sock = std::env::var("DDOCKERD_SOCK").unwrap_or_else(|_| {
+    let sock = std::env::var("HL_DOCKER_SOCK").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         format!("{home}/.dd/run/docker.sock")
     });

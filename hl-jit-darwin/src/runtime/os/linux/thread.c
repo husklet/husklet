@@ -436,12 +436,12 @@ static void uninstall_host_sigaltstack(void) {
 // lazy-map budget, and never reaches guest-signal delivery. PROT_NONE pages now probe as UNMAPPED ->
 // -EFAULT, which is what a real Linux copy_from_user() returns (the old region query called them mapped
 // and the later engine deref crashed) -- strictly closer to the oracle. CRASHDBG runs (whose Mach
-// exception port intercepts EXC_BAD_ACCESS before the POSIX guards) and DDJIT_NOFASTHRM=1 keep the
+// exception port intercepts EXC_BAD_ACCESS before the POSIX guards) and HL_JIT_NOFASTHRM=1 keep the
 // byte-identical mach_vm_region path.
 #include <setjmp.h>
 static _Thread_local sigjmp_buf g_hrm_jb;                   // probe return point (valid while g_hrm_hi != 0)
 static _Thread_local volatile uintptr_t g_hrm_lo, g_hrm_hi; // page range being probed; probing iff hi != 0
-static int g_hrm_slow = -1; // DDJIT_NOFASTHRM=1 / CRASHDBG -> per-page mach_vm_region (A/B kill switch)
+static int g_hrm_slow = -1; // HL_JIT_NOFASTHRM=1 / CRASHDBG -> per-page mach_vm_region (A/B kill switch)
 
 // Called FIRST by every SIGSEGV/SIGBUS handler on the run path: when the fault is this thread's own probe
 // load, long-jump back to host_range_mapped ("unmapped"). The faulting signal was auto-blocked at handler
@@ -467,7 +467,7 @@ static int host_range_mapped(uintptr_t a, size_t len) {
     // probe below would call it mapped; the kernel's copy_to/from_user faults it. Reject up front.
     if (gna_hit((uint64_t)a, (uint64_t)len)) return 0;
     uintptr_t lo = a & ~(uintptr_t)0xfff;
-    if (g_hrm_slow < 0) g_hrm_slow = (getenv("DDJIT_NOFASTHRM") || getenv("CRASHDBG")) ? 1 : 0;
+    if (g_hrm_slow < 0) g_hrm_slow = (getenv("HL_JIT_NOFASTHRM") || getenv("CRASHDBG")) ? 1 : 0;
     if (g_hrm_slow) {
         for (uintptr_t p = lo; p < end; p += 0x1000)
             if (!host_addr_mapped(p)) return 0;

@@ -14,7 +14,7 @@ use hl_display::server::Server;
 use std::os::unix::io::RawFd;
 
 fn main() {
-    // Flag-gated Smithay-native compositor path. When `DD_DISPLAY_SMITHAY=1`, replace the hand-written
+    // Flag-gated Smithay-native compositor path. When `HL_DISPLAY_SMITHAY=1`, replace the hand-written
     // protocol machine below with the Smithay-based `dd-compositor` binary (same CLI + socket), execing
     // it in place so the daemon's launch semantics are preserved. When the flag is unset, everything
     // below runs unchanged — the legacy `server.rs` path is the untouched default, and this crate never
@@ -265,7 +265,7 @@ fn serve_loop_metal(lfd: RawFd, dir: &str) {
     // Start the mach-port IOSurface handle bridge so guest dmabuf buffers resolve cross-process.
     hl_display::metal::start_gpu_bridge();
     // Start the dd-gpu IR executor (rung 3): the guest streams GPU commands here; we replay them on Metal
-    // into the resolved IOSurface. Socket path: DD_GPU_EXEC_SOCK, else alongside the display socket.
+    // into the resolved IOSurface. Socket path: HL_GPU_EXEC_SOCK, else alongside the display socket.
     if let Some(p) = gpu_exec_sock() {
         std::thread::spawn(move || hl_display::metal_backend::run_executor(p));
     }
@@ -370,11 +370,11 @@ fn serve_multiplex<P: Presenter>(
     }
 }
 
-/// The dd-gpu IR executor socket path: `DD_GPU_EXEC_SOCK` if set, else `dd-gpu.sock` beside the display
+/// The dd-gpu IR executor socket path: `HL_GPU_EXEC_SOCK` if set, else `dd-gpu.sock` beside the display
 /// socket. `None` only if no runtime dir is resolvable.
 #[cfg(target_os = "macos")]
 fn gpu_exec_sock() -> Option<String> {
-    if let Ok(p) = std::env::var("DD_GPU_EXEC_SOCK") {
+    if let Ok(p) = std::env::var("HL_GPU_EXEC_SOCK") {
         return Some(p);
     }
     let disp = default_socket();
@@ -399,7 +399,7 @@ fn set_nonblock(fd: RawFd) {
     }
 }
 
-/// If `DD_DISPLAY_SMITHAY=1`, exec the `dd-compositor` binary (the Smithay-native path) in place of
+/// If `HL_DISPLAY_SMITHAY=1`, exec the `dd-compositor` binary (the Smithay-native path) in place of
 /// this process, forwarding all CLI args. `dd-compositor` is expected next to this executable (both
 /// land in the same `dd.app` bundle / `target/<profile>` dir). If it cannot be found or exec fails,
 /// we log and fall through to the legacy `server.rs` path so the display never silently dies. This is
@@ -411,7 +411,7 @@ fn set_nonblock(fd: RawFd) {
 /// compositor mode is selected), so `DD_GPU_BACKEND=wgpu` and the default Metal executor stay
 /// reachable and accelerated guests are not left without a host GPU backend.
 fn maybe_exec_smithay() {
-    match std::env::var("DD_DISPLAY_SMITHAY").as_deref() {
+    match std::env::var("HL_DISPLAY_SMITHAY").as_deref() {
         Ok("1") | Ok("true") | Ok("on") => {}
         _ => return,
     }
@@ -419,7 +419,7 @@ fn maybe_exec_smithay() {
     let self_exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("dd-display: DD_DISPLAY_SMITHAY set but current_exe failed: {e}; using legacy path");
+            eprintln!("dd-display: HL_DISPLAY_SMITHAY set but current_exe failed: {e}; using legacy path");
             return;
         }
     };
@@ -429,12 +429,12 @@ fn maybe_exec_smithay() {
         .unwrap_or_else(|| std::path::PathBuf::from("dd-compositor"));
     if !bin.exists() {
         eprintln!(
-            "dd-display: DD_DISPLAY_SMITHAY set but {} not found; using legacy path",
+            "dd-display: HL_DISPLAY_SMITHAY set but {} not found; using legacy path",
             bin.display()
         );
         return;
     }
-    eprintln!("dd-display: DD_DISPLAY_SMITHAY=1 -> exec {}", bin.display());
+    eprintln!("dd-display: HL_DISPLAY_SMITHAY=1 -> exec {}", bin.display());
     let err = std::process::Command::new(&bin)
         .args(std::env::args_os().skip(1))
         .exec(); // only returns on failure

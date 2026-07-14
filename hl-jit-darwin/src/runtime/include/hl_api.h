@@ -59,14 +59,14 @@ struct hl_config {
     uint32_t cwd_off;       // initial working dir inside the container
     uint32_t guest_env_off; // '\n'-joined KEY=VAL guest environment (never the host env)
     uint32_t pcache_off;    // persistent translated-code cache dir ("" = disabled)
-    uint32_t netbr_off;     // user-network virtual-switch id (DD_NETBR); "" = none
-    uint32_t ip_off;        // this container's IP on that switch (DD_IP); "" = none
-    uint32_t fsgen_off;     // shared external-writer generation file (DD_FSGEN_FILE); "" = none
+    uint32_t netbr_off;     // user-network virtual-switch id (HL_NETBR); "" = none
+    uint32_t ip_off;        // this container's IP on that switch (HL_IP); "" = none
+    uint32_t fsgen_off;     // shared external-writer generation file (HL_FSGEN_FILE); "" = none
     uint32_t argv_off;      // the guest argv: NUL-separated, double-NUL terminated
 
     uint32_t gpu_iosurface; // bool: opt-in the host-IOSurface GPU path (--gui); render-node synth + DD_IOCTL_GPU_ALLOC
-    uint32_t nopcache;      // bool: per-container persistent-cache kill switch (DDJIT_NOPCACHE) — was reserved pad
-    uint32_t egress_off;    // per-workspace VPN egress SOCKS5 endpoint (DD_EGRESS_SOCKS), "host:port"; "" = direct
+    uint32_t nopcache;      // bool: per-container persistent-cache kill switch (HL_JIT_NOPCACHE) — was reserved pad
+    uint32_t egress_off;    // per-workspace VPN egress SOCKS5 endpoint (HL_EGRESS_SOCKS), "host:port"; "" = direct
     uint32_t reserved0;     // explicit tail pad: keeps the struct 8-aligned (sizeof == 128), no implicit padding.
                             // Future fields append HERE (before/replacing this pad): header_len makes tail
                             // growth skew-safe, so no ABI bump is needed for a pure append.

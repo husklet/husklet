@@ -20,9 +20,9 @@
  * production. Unimplemented Driver-API tail returns CUDA_ERROR_NOT_SUPPORTED (never crashes).
  *
  * Device presence values are seeded from environment (dd's launcher sets these), matching dd-nvml:
- *   DD_CUDA_NAME  device name        (default "dd Metal (CUDA-sim) Device")
- *   DD_CUDA_CC    compute capability (default "8.6")
- *   DD_CUDA_VRAM  reported VRAM (MB)  (default 4096)
+ *   HL_CUDA_NAME  device name        (default "dd Metal (CUDA-sim) Device")
+ *   HL_CUDA_CC    compute capability (default "8.6")
+ *   HL_CUDA_VRAM  reported VRAM (MB)  (default 4096)
  */
 #define _GNU_SOURCE
 #include "cuda_min.h"
@@ -44,11 +44,11 @@ static unsigned long long g_vram = 4096ULL * 1024 * 1024;
 static const int    g_driver_version = 12020; /* 12.2 -> maj*1000 + min*10 */
 
 static void seed_from_env(void) {
-    const char* n = getenv("DD_CUDA_NAME");
+    const char* n = getenv("HL_CUDA_NAME");
     if (n && *n) { strncpy(g_name, n, sizeof(g_name) - 1); g_name[sizeof(g_name) - 1] = 0; }
-    const char* cc = getenv("DD_CUDA_CC");
+    const char* cc = getenv("HL_CUDA_CC");
     if (cc && *cc) { int a = 8, b = 6; if (sscanf(cc, "%d.%d", &a, &b) >= 1) { g_cc_major = a; g_cc_minor = b; } }
-    const char* v = getenv("DD_CUDA_VRAM");
+    const char* v = getenv("HL_CUDA_VRAM");
     if (v && *v) { unsigned long long mb = strtoull(v, NULL, 10); if (mb) g_vram = mb * 1024ULL * 1024ULL; }
 }
 

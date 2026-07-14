@@ -3,7 +3,7 @@
 //! though the engine's path/metadata caches (fscache.c) hold negative/positive entries for the paths.
 //! Unlike cpcmd (which reads back via a FRESH `docker exec`, whose new engine process has cold caches),
 //! every case here makes the ORIGINAL long-running guest process poll — the process whose warm caches
-//! the daemon's write must invalidate (DD_FSGEN_FILE / fsgen_bump). The fix lives in the SHARED syscall
+//! the daemon's write must invalidate (HL_FSGEN_FILE / fsgen_bump). The fix lives in the SHARED syscall
 //! dispatch, so it must hold on BOTH engines: each recipe runs on the arch whose alpine the single-arch
 //! image store can serve (alpine:latest = arm64, alpine:3.18 = amd64). Verified GREEN on the Real docker
 //! oracle. Owner: dockercp-epoch agent.

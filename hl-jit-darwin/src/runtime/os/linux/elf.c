@@ -572,7 +572,7 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
     // DIAGNOSTIC (gated, async-signal-safe, NO user-pointer deref): every no-handler fault about to be
     // turned into a fatal guest termination or re-raised. Prints sig / host PC / fault addr / host SP +
     // whether the host PC is inside the RX code cache (1 = a wild jump in translated guest code).
-    if (getenv("DDDBG_ENGFAULT")) {
+    if (getenv("HL_DBG_ENGFAULT")) {
         extern int jit_pc_in_cache(uint64_t pc, uint64_t *base);
         ucontext_t *u = (ucontext_t *)uc;
         uint64_t hpc = u ? (uint64_t)u->uc_mcontext->__ss.__pc : 0;
@@ -602,7 +602,7 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
         b[o++] = '\n';
         if (write(2, b, o) < 0) {}
         // Name the faulting engine function (dladdr is not strictly async-signal-safe, but we _exit right
-        // after, so a rare lock stall is acceptable — this only runs under the DDDBG_ENGFAULT gate).
+        // after, so a rare lock stall is acceptable — this only runs under the HL_DBG_ENGFAULT gate).
         Dl_info di;
         if (hpc && dladdr((void *)hpc, &di) && di.dli_sname) {
             char c[160];
@@ -900,7 +900,7 @@ static void load_elf(const char *path, struct loaded *out) {
 extern char **environ;
 static char *g_guest_env[] = {
     // No TERM default: docker leaves TERM unset for a non-tty container and injects TERM=xterm (via the
-    // daemon's DD_GUEST_ENV) for a `-t` one. A hardcoded TERM=dumb here shadowed both -> node/debconf/ncurses
+    // daemon's HL_GUEST_ENV) for a `-t` one. A hardcoded TERM=dumb here shadowed both -> node/debconf/ncurses
     // degraded. Keep PATH/HOME/LANG as harmless fallbacks the image usually overrides.
     "PATH=/usr/bin:/bin", "HOME=/root", "LANG=C", "GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=0", NULL,
 };
@@ -932,20 +932,20 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
     set_guest_cmdline(argc, argv); // capture the full argv for /proc/self/cmdline (bare-mode fallback)
     int envc = 0;
     // Resolve the env string list WITHOUT placing it yet (the placement order below is what matters). The
-    // container's env arrives as DD_GUEST_ENV="K=V\nK=V\n…" (set by the daemon) -- forward EXACTLY these to
+    // container's env arrives as HL_GUEST_ENV="K=V\nK=V\n…" (set by the daemon) -- forward EXACTLY these to
     // the guest FIRST so they override the defaults, NOT the daemon/host environment. Then the built-in
     // defaults fill ONLY the keys the container didn't set.
     const char *estr[256];
-    char *ge = getenv("DD_GUEST_ENV"), *gecopy = NULL;
-    // execve() escape-encodes records (DD_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
+    char *ge = getenv("HL_GUEST_ENV"), *gecopy = NULL;
+    // execve() escape-encodes records (HL_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
     // record separator -- unescape "\\n"->'\n' and "\\\\"->'\\' after splitting. The daemon-launch path sets
-    // DD_GUEST_ENV plain (no marker) and is left byte-for-byte unchanged.
-    int env_escaped = (getenv("DD_GUEST_ENV_ESC") != NULL);
+    // HL_GUEST_ENV plain (no marker) and is left byte-for-byte unchanged.
+    int env_escaped = (getenv("HL_GUEST_ENV_ESC") != NULL);
     // A guest-initiated execve makes its envp AUTHORITATIVE (proc.c exec_forward_env sets this): forward
     // EXACTLY what the guest passed and inject NONE of the engine's fallback defaults below, so an empty
     // envp yields an empty environment and a curated envp is passed verbatim -- byte-exact with Linux. The
-    // INITIAL container launch never sets this (the daemon's DD_GUEST_ENV path), so defaults still fill gaps.
-    int env_exact = (getenv("DD_GUEST_ENV_EXACT") != NULL);
+    // INITIAL container launch never sets this (the daemon's HL_GUEST_ENV path), so defaults still fill gaps.
+    int env_exact = (getenv("HL_GUEST_ENV_EXACT") != NULL);
     if (ge) {
         gecopy = strdup(ge);
         char *save = NULL;
@@ -1004,7 +1004,7 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         memcpy(top, argv[i], l);
         argp[i] = (uint64_t)top;
     }
-    free(gecopy); // the DD_GUEST_ENV tokens (estr[..]) were copied onto the stack above; safe to release now
+    free(gecopy); // the HL_GUEST_ENV tokens (estr[..]) were copied onto the stack above; safe to release now
     top -= 8;
     memcpy(top, "aarch64", 8);
     uint64_t plat = (uint64_t)top;

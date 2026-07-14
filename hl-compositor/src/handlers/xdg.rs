@@ -281,7 +281,7 @@ impl XdgShellHandler for DdState {
 // Toolkits split on decorations: Chrome and GTK draw their own client-side decorations (CSD — the app
 // paints its title bar into the surface), while many Qt/GTK apps ask the compositor for server-side
 // decorations (SSD). Our host window is borderless by default (the guest's CSD fills it), and opts into a
-// native macOS title bar only when DD_DISPLAY_WINDOW_DECORATIONS is set (the `present_cocoa` seam). So our
+// native macOS title bar only when HL_DISPLAY_WINDOW_DECORATIONS is set (the `present_cocoa` seam). So our
 // policy honours the client's requested mode WHERE THE HOST WINDOW CAN RENDER IT: CSD is always granted
 // (the borderless window shows the client's own decorations); SSD is granted only when the native title
 // bar exists, otherwise we answer CSD (a truthful mode the client can actually draw) rather than promising
@@ -331,7 +331,7 @@ impl DdState {
     /// `configure(mode)` (Smithay emits it from `send_configure` when `decoration_mode` changes). See the
     /// policy note above the [`XdgDecorationHandler`] impl.
     fn configure_decoration(&mut self, toplevel: &ToplevelSurface, requested: Option<DecorationMode>) {
-        let ssd_available = std::env::var_os("DD_DISPLAY_WINDOW_DECORATIONS").is_some();
+        let ssd_available = std::env::var_os("HL_DISPLAY_WINDOW_DECORATIONS").is_some();
         let mode = match requested {
             Some(DecorationMode::ClientSide) => DecorationMode::ClientSide,
             Some(DecorationMode::ServerSide) if ssd_available => DecorationMode::ServerSide,

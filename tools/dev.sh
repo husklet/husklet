@@ -6,13 +6,13 @@
 # Builds dd-daemon + ddcli, puts `ddcli` on your PATH (~/.local/bin, added to your shell rc), and runs
 # the daemon in the background. Then open a NEW terminal window and run `ddcli ubuntu`.
 #
-# Env: DD_IMAGES (image dir, default ~/.dd/images -- pulls land here on demand).
+# Env: HL_IMAGES (image dir, default ~/.dd/images -- pulls land here on demand).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 SOCK="$HOME/.dd/run/docker.sock"
-IMAGES="${DD_IMAGES:-$HOME/.dd/images}"
+IMAGES="${HL_IMAGES:-$HOME/.dd/images}"
 LOG="$HOME/.dd/daemon.log"
 BIN="$HOME/.local/bin"
 mkdir -p "$HOME/.dd/run" "$IMAGES" "$BIN"
@@ -21,7 +21,7 @@ echo "==> building dd-daemon + ddcli (release) ..."
 cargo build --release -p hl-daemon -p hl-cli
 
 echo "==> building the macOS-container userland (for 'ddcli mac') ..."
-if DD_IMAGES="$IMAGES" bash "$ROOT/hl-gui/mac/mac-userland.sh" >/dev/null 2>&1; then
+if HL_IMAGES="$IMAGES" bash "$ROOT/hl-gui/mac/mac-userland.sh" >/dev/null 2>&1; then
   echo "    macos image ready in $IMAGES/macos"
 else
   echo "    (skipped -- needs a nix arm64 toolchain; 'ddcli mac' will be unavailable)"
@@ -49,7 +49,7 @@ fi
 echo "==> (re)starting the daemon in the background (log: $LOG)"
 pkill -x dd-daemon 2>/dev/null || true
 rm -f "$SOCK"
-DDOCKERD_SOCK="$SOCK" DD_IMAGES="$IMAGES" nohup "$ROOT/target/release/dd-daemon" >"$LOG" 2>&1 &
+HL_DOCKER_SOCK="$SOCK" HL_IMAGES="$IMAGES" nohup "$ROOT/target/release/dd-daemon" >"$LOG" 2>&1 &
 disown 2>/dev/null || true
 for _ in $(seq 1 40); do [ -S "$SOCK" ] && break; sleep 0.25; done
 [ -S "$SOCK" ] || { echo "daemon failed to start; see $LOG"; tail -20 "$LOG"; exit 1; }

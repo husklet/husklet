@@ -158,7 +158,7 @@ pub struct CudartState {
     /// The embedded host executor: a real CPU backend that runs the accumulated IR — including the
     /// compute `Dispatch` (the PTX interpreter in `hl_gpu::ptx`) — and holds the resulting
     /// device-buffer bytes for `cudaMemcpy(...DeviceToHost)` readback. On a real Apple-silicon host the
-    /// same IR is shipped over `$DD_GPU_EXEC` to the host Metal executor instead.
+    /// same IR is shipped over `$HL_GPU_EXEC` to the host Metal executor instead.
     pub backend: SoftwareBackend,
     /// `CUfunction` handle table: an opaque handle is `index + 1` (never null).
     functions: Vec<Function>,
@@ -176,14 +176,14 @@ pub struct CudartState {
     pub next_event: usize,
     /// Per-event record state, for `cudaEventQuery`/`cudaEventElapsedTime`.
     events: HashMap<usize, EventState>,
-    /// Lazily-opened transport to the host GPU-exec service (only used when `$DD_GPU_EXEC` is set).
+    /// Lazily-opened transport to the host GPU-exec service (only used when `$HL_GPU_EXEC` is set).
     conn: Option<ExecConn>,
 }
 
 impl CudartState {
     fn new() -> Self {
-        // VRAM the simulated device advertises; override with `$DD_CUDA_VRAM_BYTES`. Default 8 GiB.
-        let vram = std::env::var("DD_CUDA_VRAM_BYTES")
+        // VRAM the simulated device advertises; override with `$HL_CUDA_VRAM_BYTES`. Default 8 GiB.
+        let vram = std::env::var("HL_CUDA_VRAM_BYTES")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(8u64 << 30);
@@ -313,7 +313,7 @@ impl CudartState {
     /// Flush accumulated IR at a synchronization point: encode it with the shared contract, then
     /// EXECUTE it on the embedded software backend (buffers, uploads, and the compute `Dispatch` all
     /// take effect). The buffer bytes persist across flushes, so a later `cudaMemcpy(...DeviceToHost)`
-    /// reads the real, kernel-produced results. When `$DD_GPU_EXEC` is set the SAME bytes ship to the
+    /// reads the real, kernel-produced results. When `$HL_GPU_EXEC` is set the SAME bytes ship to the
     /// host GPU-exec service (best-effort). Then the frame is cleared.
     pub fn flush(&mut self) {
         if self.frame.is_empty() {
@@ -322,15 +322,15 @@ impl CudartState {
         let bytes = self.frame.finish();
         let ncmds = self.frame.cmds().len();
         if let Err(e) = replay_stream(&mut self.backend, &bytes) {
-            if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+            if std::env::var_os("HL_SHIM_DEBUG").is_some() {
                 eprintln!("[dd-shim-cudart] flush: embedded backend replay error ({ncmds} cmds): {e}");
             }
         }
-        if std::env::var_os("DD_GPU_EXEC").is_some() {
+        if std::env::var_os("HL_GPU_EXEC").is_some() {
             let conn = self.conn.get_or_insert_with(ExecConn::from_env);
             let surf = Surface { id: 0, width: 0, height: 0, stride: 0, fd: -1, generation: 0 };
             let _ = conn.submit(&surf, &bytes);
-        } else if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+        } else if std::env::var_os("HL_SHIM_DEBUG").is_some() {
             eprintln!(
                 "[dd-shim-cudart] flush: executed {} IR bytes ({ncmds} cmds) on the embedded software \
                  backend (dispatches so far: {})",

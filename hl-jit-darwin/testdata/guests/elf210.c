@@ -1,6 +1,6 @@
 // #210 — deterministic guest for the x86_64 ELF-loader fixed-base collision fallback.
 // The workload is irrelevant; what matters is that the image LOADS and RUNS byte-exact when the
-// loader's fixed-VA (PC_IMG_BASE) map is forced to collide (DDX_FORCE_BASE_COLLIDE) and falls back to a
+// loader's fixed-VA (PC_IMG_BASE) map is forced to collide (HL_X_FORCE_BASE_COLLIDE) and falls back to a
 // kernel-chosen base. A little compute + a stdout line proves the biased/rebased image executes correctly.
 #include <stdio.h>
 

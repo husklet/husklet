@@ -21,9 +21,9 @@ pub(crate) fn install_cli() -> Result<(PathBuf, bool), String> {
     Ok((link, on_path))
 }
 
-/// Locate the bundled `dd` CLI: `$DD_CLI_BIN`, the app bundle, or a sibling of this binary (dev).
+/// Locate the bundled `dd` CLI: `$HL_CLI_BIN`, the app bundle, or a sibling of this binary (dev).
 fn resolve_cli() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("DD_CLI_BIN") {
+    if let Some(p) = std::env::var_os("HL_CLI_BIN") {
         return Some(PathBuf::from(p));
     }
     let names = ["ddcli", "dd"]; // whichever the CLI is built as

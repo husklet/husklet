@@ -1,7 +1,7 @@
 // --network none: eth0 must be ABSENT on EVERY access path, not just readdir. A tool that probes
 // /sys/class/net/eth0 directly (stat, or open of an attribute file) must also see ENOENT -- otherwise
 // direct lookup contradicts the readdir listing that already hides eth0 under isolation. lo stays.
-// Runs under DD_NET_ISOLATE=1 (docker --network none). Verdict ok=1 iff isolation is path-consistent.
+// Runs under HL_NET_ISOLATE=1 (docker --network none). Verdict ok=1 iff isolation is path-consistent.
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>

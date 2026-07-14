@@ -21,13 +21,13 @@
 //! The exported `vk*` *surface* is code-generated from `vk.xml` (`build.rs` + `registry/`) — the full
 //! core + extension command set (693 commands). Entry points in [`build::IMPLEMENTED`](../build.rs)
 //! have real hand-written bodies; the rest are generated **truthful-failure** stubs (correct ABI, a
-//! `DD_SHIM_DEBUG` trace, and — crucially — the API-defined error, never a false `VK_SUCCESS`): a
+//! `HL_SHIM_DEBUG` trace, and — crucially — the API-defined error, never a false `VK_SUCCESS`): a
 //! `VkResult` stub returns `VK_ERROR_FEATURE_NOT_PRESENT` (unimplemented core) or
 //! `VK_ERROR_EXTENSION_NOT_PRESENT` (command from an unadvertised extension) and nulls its output
 //! handle; a `void`/`VkBool32`/pointer stub returns the truthful no-op/`VK_FALSE`/NULL. Every command
 //! carries a [`capability`] inventory record (full/partial/stub + the error + core-version/extension
 //! origin). The ICD advertises **Vulkan 1.0** and rejects a newer request with
-//! `VK_ERROR_INCOMPATIBLE_DRIVER`. `DD_SHIM_STRICT=1` aborts at the first stub call. The [`ir_seam`]
+//! `VK_ERROR_INCOMPATIBLE_DRIVER`. `HL_SHIM_STRICT=1` aborts at the first stub call. The [`ir_seam`]
 //! module sketches the Vulkan→IR mapping and round-trips what it encodes.
 
 // The generated + hand-written entry-point surface uses the Vulkan C names verbatim (vkCreateInstance,
@@ -286,12 +286,12 @@ mod tests {
         assert_eq!(dev, capability::ADVERTISED_DEVICE_EXTENSIONS);
     }
 
-    /// `DD_SHIM_STRICT=1`: the shim aborts at the first stub call. Under `cfg(test)` the strict path
+    /// `HL_SHIM_STRICT=1`: the shim aborts at the first stub call. Under `cfg(test)` the strict path
     /// records that it *would* have aborted (instead of killing the test process) so it is assertable.
     #[test]
     fn strict_mode_trips_abort_on_stub() {
         stub::STRICT_TRIPPED.with(|c| c.set(false));
-        std::env::set_var("DD_SHIM_STRICT", "1");
+        std::env::set_var("HL_SHIM_STRICT", "1");
         // Any generated stub call must trip the strict abort. The whole 1.0-1.4 core is now bodied, so the
         // stub example is an unadvertised-extension command (vkCreateAccelerationStructureKHR).
         let mut h: u64 = 0;
@@ -301,10 +301,10 @@ mod tests {
             core::ptr::null(),
             &mut h as *mut u64 as *mut core::ffi::c_void,
         );
-        std::env::remove_var("DD_SHIM_STRICT");
+        std::env::remove_var("HL_SHIM_STRICT");
         assert!(
             stub::STRICT_TRIPPED.with(|c| c.get()),
-            "DD_SHIM_STRICT=1 must trip the abort at the first stub call"
+            "HL_SHIM_STRICT=1 must trip the abort at the first stub call"
         );
     }
 

@@ -1,6 +1,6 @@
 // sentry_net -- a single-process AF_INET/UDP loopback echo used to validate the untrusted-guest SENTRY
 // split's SOCKET family. socket/bind/getsockname/sendto/recvfrom all live in the sentry's forwarded set,
-// so DDJIT_UNTRUSTED=1 forces the socket lifecycle + the sockaddr/data marshaling across the ring (the
+// so HL_JIT_UNTRUSTED=1 forces the socket lifecycle + the sockaddr/data marshaling across the ring (the
 // real socket fd is sentry-owned and never visible to the worker). No fork: the socket sends a datagram
 // to its OWN bound loopback address and reads it back, isolating the socket-forwarding path from the
 // fork/clone lane. Registered TWICE (trusted baseline + .untrusted()) against the SAME golden line, so

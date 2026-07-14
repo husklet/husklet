@@ -94,7 +94,7 @@ pub(super) fn edge() -> Group {
             src("otmpfile", "edge_otmpfile.c").oracle(),   // O_TMPFILE unnamed file
             src("pipepacket", "edge_pipepacket.c").oracle(), // pipe2(O_DIRECT) packet boundaries
             src("msgflags", "edge_msgpeek.c").oracle(),    // recv MSG_PEEK + MSG_DONTWAIT — WORKS
-            src("abstract", "edge_abstract.c").oracle(), // abstract-namespace AF_UNIX — FIXED (DD_NETNS fs-socket map)
+            src("abstract", "edge_abstract.c").oracle(), // abstract-namespace AF_UNIX — FIXED (HL_NETNS fs-socket map)
             src("pipesz", "edge_pipesz.c").oracle(), // F_SET/GETPIPE_SZ (shadow-table emulation) + dup3 self-dup — FIXED
             // mprotect: portable — darwin (native) FAULTS correctly, the JIT no-ops it; xfail only Linux so
             // the darwin pass / Linux fail contrast is explicit.
@@ -134,28 +134,28 @@ pub(super) fn edge() -> Group {
             // wall-clock RATE: REALTIME/MONOTONIC/gettimeofday must advance at the real host rate across a
             // nanosleep (regression guard for the x86 vDSO fast-syscall timebase — a 40x-slow REALTIME read
             // would fail real_ok/agree). Portable golden. The `-slow` sibling forces the svc_time slow path
-            // (DDJIT_NOFASTSYS) so both the inline and the syscall computations are covered.
+            // (HL_JIT_NOFASTSYS) so both the inline and the syscall computations are covered.
             port("clockelapsed", "clockelapsed.c")
                 .out("clockelapsed real_ok=1 mono_ok=1 gtod_ok=1 mono_fwd=1 agree=1\n"),
             port("clockelapsed-slow", "clockelapsed.c")
-                .env("DDJIT_NOFASTSYS", "1")
+                .env("HL_JIT_NOFASTSYS", "1")
                 .out("clockelapsed real_ok=1 mono_ok=1 gtod_ok=1 mono_fwd=1 agree=1\n")
                 .only(lin),
             // bad/NULL RESULT pointer -> -EFAULT (never crash), via the x86 vDSO fast path AND the
-            // slow path (the `-slow` sibling under DDJIT_NOFASTSYS). Per-syscall NULL policy matches the kernel.
+            // slow path (the `-slow` sibling under HL_JIT_NOFASTSYS). Per-syscall NULL policy matches the kernel.
             // Diffed byte-exact vs the native/qemu oracle; before the fix the fast-path variant crashed (exit 255).
             src("clockefault", "clockefault.c").oracle(),
             src("clockefault-slow", "clockefault.c")
-                .env("DDJIT_NOFASTSYS", "1")
+                .env("HL_JIT_NOFASTSYS", "1")
                 .oracle(),
             // generic slow-path syscall ARGUMENT validation: a bad/unmapped guest pointer to a syscall
             // whose result the ENGINE fills via memcpy/struct-write (nanosleep/getrusage/mincore/fstat/
             // newfstatat/rt_sigaction) must return -EFAULT, exactly as native — never crash the engine, never
             // wrongly succeed. Complements clockefault.c (the clock family) and edge_efault.c (fcntl). RAW
-            // syscalls hit dd's dispatch directly; the `-slow` sibling forces DDJIT_NOFASTSYS. Byte-exact oracle.
+            // syscalls hit dd's dispatch directly; the `-slow` sibling forces HL_JIT_NOFASTSYS. Byte-exact oracle.
             src("sysfault", "sysfault.c").oracle(),
             src("sysfault-slow", "sysfault.c")
-                .env("DDJIT_NOFASTSYS", "1")
+                .env("HL_JIT_NOFASTSYS", "1")
                 .oracle()
                 .only(lin),
         ],

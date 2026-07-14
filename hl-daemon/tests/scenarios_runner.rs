@@ -127,10 +127,10 @@ fn main() {
         category: category.clone(),
         offline: class == Class::Quick, // quick = cache-only
         count,
-        images: std::env::var("DD_IMAGES")
+        images: std::env::var("HL_IMAGES")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/Users/x/dd/poc/images")),
-        daemon_bin: std::env::var("DD_DAEMON")
+        daemon_bin: std::env::var("HL_DAEMON")
             .map(PathBuf::from)
             .unwrap_or_else(|_| repo.join("target/release/dd-daemon")),
     };
@@ -182,8 +182,8 @@ fn main() {
     );
 
     // Worker pool size: env override, else ≈cores capped at 6 (modest — too many concurrent `mac`-bridge
-    // children invite SIGTERM contention). `DD_SCEN_JOBS=1` forces the old fully-serial behaviour.
-    let jobs_n = std::env::var("DD_SCEN_JOBS")
+    // children invite SIGTERM contention). `HL_SCEN_JOBS=1` forces the old fully-serial behaviour.
+    let jobs_n = std::env::var("HL_SCEN_JOBS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n >= 1)

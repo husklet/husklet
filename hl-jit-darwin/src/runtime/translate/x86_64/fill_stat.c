@@ -3,7 +3,7 @@
 
 // container uid/gid virtualization (cuid/cgid in os/linux/container/state.c, included later in the TU):
 // report files owned by the engine's REAL host uid as the container's uid/gid so guest ownership checks
-// pass (postgres initdb "data directory has wrong ownership" under a non-root DD_UID).
+// pass (postgres initdb "data directory has wrong ownership" under a non-root HL_UID).
 static int cuid(void);
 static int cgid(void);
 // a guest chown is persisted as a host xattr on the overlay-upper file; prefer it over the

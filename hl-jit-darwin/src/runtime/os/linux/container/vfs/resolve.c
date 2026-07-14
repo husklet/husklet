@@ -124,7 +124,7 @@ restart:;
     //   * volumes (volidx >= 0) are never cached; a failed open falls through to the walk.
     // The caller's openat(pfd, final, ...) still runs -- existence/contents are never fabricated; a
     // stale path is impossible while the epoch matches (see the dc_ model in fscache.c). Kill switch:
-    // DD_NOPATHCACHE=1 disables dc_lookup itself.
+    // HL_NOPATHCACHE=1 disables dc_lookup itself.
     if (volidx < 0 && !path_has_dotdot(gbuf)) {
         char dnorm[4200];
         confine(gbuf, dnorm, sizeof dnorm);

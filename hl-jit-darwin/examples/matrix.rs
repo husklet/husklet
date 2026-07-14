@@ -210,7 +210,7 @@ fn main() {
     for &e in &missing {
         fail += 1;
         failures.push(format!(
-            "engine {} MISSING — its JIT binary was not built (failed dd-jit compile / empty DDJIT_{} env); \
+            "engine {} MISSING — its JIT binary was not built (failed dd-jit compile / empty HL_JIT_{} env); \
              the ENTIRE {} lane was DARK (every case on it skipped, NOT tested)",
             e.label(), ekey(e).to_uppercase(), e.label()));
     }

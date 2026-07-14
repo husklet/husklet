@@ -4,7 +4,7 @@
 // over linux-dmabuf carrying the IOSurface id in the modifier. dd-display resolves the id → IOSurface →
 // MTLTexture and composites ZERO-copy. Proves the no-VM guest→host GPU-buffer path.
 //
-// Runs under the dd engine with DD_GPU_IOSURFACE set (the --gui launcher sets it). Hand-rolls the Wayland
+// Runs under the dd engine with HL_GPU_IOSURFACE set (the --gui launcher sets it). Hand-rolls the Wayland
 // wire (no libwayland) so it needs no client libs. Connects to $WAYLAND_DISPLAY under $XDG_RUNTIME_DIR.
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -86,9 +86,9 @@ static size_t build_ir_quad(void) {
     return irn;
 }
 
-// Stream the IR to the dd-gpu executor ($DD_GPU_EXEC) and wait for its 1-byte ack. Returns 0 on success.
+// Stream the IR to the dd-gpu executor ($HL_GPU_EXEC) and wait for its 1-byte ack. Returns 0 on success.
 static int stream_ir(uint32_t id, uint32_t w, uint32_t h) {
-    const char *ep = getenv("DD_GPU_EXEC");
+    const char *ep = getenv("HL_GPU_EXEC");
     if (!ep) ep = "/run/user/0/dd-gpu-0";
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un un = {0};
@@ -176,10 +176,10 @@ int main(void) {
         return 3;
     }
 
-    // rung 3: DD_GPU_IR streams a real dd-gpu IR command stream to the host executor (which replays it on
-    // Metal into this IOSurface); DD_GPU_RENDER is the older 1-op flag; else CPU-fill (rung 2).
-    int want_ir = getenv("DD_GPU_IR") != NULL;
-    int want_render = !want_ir && getenv("DD_GPU_RENDER") != NULL;
+    // rung 3: HL_GPU_IR streams a real dd-gpu IR command stream to the host executor (which replays it on
+    // Metal into this IOSurface); HL_GPU_RENDER is the older 1-op flag; else CPU-fill (rung 2).
+    int want_ir = getenv("HL_GPU_IR") != NULL;
+    int want_render = !want_ir && getenv("HL_GPU_RENDER") != NULL;
     if (want_ir) {
         if (stream_ir(a.id, a.width, a.height) != 0) return 5;
     }

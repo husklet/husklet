@@ -190,7 +190,7 @@ pub(crate) fn render_workspaces(
 /// (mirroring `install::resolve_cli`) prefer an explicit override, then the installed/dev app bundle's
 /// `Contents/Resources`, then a sibling of this executable; fall back to the bare name (PATH) for dev.
 fn ddcli_bin() -> PathBuf {
-    if let Some(p) = std::env::var_os("DD_CLI_BIN") {
+    if let Some(p) = std::env::var_os("HL_CLI_BIN") {
         return PathBuf::from(p);
     }
     let names = ["ddcli", "dd"];

@@ -12,7 +12,7 @@
 //! `registry/`), extracted from dd's clean-room `hl-gpu/cuda/cuda_shim.c` driver-API surface, so it is
 //! the full `cu*` set dd ships (132 entry points), not a hand-picked few. Entry points in
 //! [`build::IMPLEMENTED`](../build.rs) have real hand-written bodies in [`driver`]; the rest are
-//! generated spec-faithful default stubs (correct ABI, `CUDA_SUCCESS` return, `DD_SHIM_DEBUG`-traced)
+//! generated spec-faithful default stubs (correct ABI, `CUDA_SUCCESS` return, `HL_SHIM_DEBUG`-traced)
 //! ported to real bodies incrementally — the shrinking long tail.
 //!
 //! ## What is real (functional)
@@ -24,7 +24,7 @@
 //! [`hl_gpu::software::SoftwareBackend`] (the CPU PTX interpreter — the same executor `dd-gpu`'s oracle
 //! and `hl-gpu/cuda/cuda_shim.c` use), so a real vector-add PTX kernel runs end-to-end and reads back
 //! numerically correct results with NO GPU. On a real Apple-silicon host the same IR is shipped over
-//! `$DD_GPU_EXEC` to the host Metal executor instead. See `docs/rendering/SHIM_RUST_ARCHITECTURE.md`.
+//! `$HL_GPU_EXEC` to the host Metal executor instead. See `docs/rendering/SHIM_RUST_ARCHITECTURE.md`.
 
 // The generated + hand-written entry-point surface uses the CUDA C names verbatim (cuInit, …).
 #![allow(non_snake_case)]
@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(coop, result::CUDA_ERROR_NOT_SUPPORTED);
     }
 
-    /// DD_SHIM_STRICT=1: the shim aborts at the first unsupported CUDA call. Under `cfg(test)` the strict
+    /// HL_SHIM_STRICT=1: the shim aborts at the first unsupported CUDA call. Under `cfg(test)` the strict
     /// path records that it *would* have aborted (a thread-local trip flag) instead of killing the test
     /// process, so the abort decision and its report are assertable.
     #[test]
@@ -584,17 +584,17 @@ mod tests {
         let _serial = serial();
         state::reset();
         stub::STRICT_TRIPPED.with(|c| c.set(false));
-        std::env::set_var("DD_SHIM_STRICT", "1");
+        std::env::set_var("HL_SHIM_STRICT", "1");
         let func = load_unsupported_fn();
         let r = driver::cuLaunchKernel(
             func, 2, 1, 1, 64, 1, 1, 0, core::ptr::null_mut(),
             core::ptr::null_mut(), core::ptr::null_mut(),
         );
-        std::env::remove_var("DD_SHIM_STRICT");
+        std::env::remove_var("HL_SHIM_STRICT");
         assert_eq!(r, result::CUDA_ERROR_NOT_SUPPORTED);
         assert!(
             stub::STRICT_TRIPPED.with(|c| c.get()),
-            "DD_SHIM_STRICT=1 must trip the abort at the first unsupported call"
+            "HL_SHIM_STRICT=1 must trip the abort at the first unsupported call"
         );
         // The report carries the command, the object/context detail, and the recent-call history.
         let report = stub::strict_report("cuLaunchKernel", "entry `unsup`");

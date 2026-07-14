@@ -698,7 +698,7 @@ pub fn build_frame_ir(s: &GlState) -> Option<Vec<u8>> {
     if !s.surf.have || s.draws.is_empty() {
         return None;
     }
-    crate::tiletrace::trace_frame(s); // DD_TILE_TRACE instrumentation (no-op unless the env var is set)
+    crate::tiletrace::trace_frame(s); // HL_TILE_TRACE instrumentation (no-op unless the env var is set)
     // gl_shim.c: replay_draws = ndraws>1 || (ndraws==1 && draws[0].is_clear).
     let replay = s.draws.len() > 1 || (s.draws.len() == 1 && s.draws[0].is_clear);
     if replay {

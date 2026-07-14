@@ -34,10 +34,10 @@ fn daemon_run() -> i32 {
         return 1;
     }
     let mut cmd = Command::new(&bin);
-    cmd.env("DDOCKERD_SOCK", paths::socket())
-        .env("DD_IMAGES", paths::images_dir());
+    cmd.env("HL_DOCKER_SOCK", paths::socket())
+        .env("HL_IMAGES", paths::images_dir());
     if let Some(dir) = bin.parent() {
-        cmd.env("DDJIT_DIR", dir); // find ddjit-* next to the daemon (bundle Resources)
+        cmd.env("HL_JIT_DIR", dir); // find ddjit-* next to the daemon (bundle Resources)
     }
     let err = cmd.exec(); // only returns on failure
     eprintln!("exec {} failed: {err}", bin.display());

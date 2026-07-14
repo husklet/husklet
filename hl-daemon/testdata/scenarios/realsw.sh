@@ -7,12 +7,12 @@
 #   bash dd-tests/scenarios/realsw.sh        # run after `make jit`; needs network to pull
 #
 # Each app self-skips if its image can't be pulled. A FAIL is a real gap (the workload is deterministic).
-# Env: DD_IMAGES, DD_DAEMON.
+# Env: HL_IMAGES, HL_DAEMON.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-IMAGES="${DD_IMAGES:-/Users/x/dd/poc/images}"
-DAEMON="${DD_DAEMON:-$ROOT/target/release/dd-daemon}"
+IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
 SOCK="$ROOT/dd-realsw.sock"
 export DOCKER_HOST="unix://$SOCK"
 
@@ -29,7 +29,7 @@ pkill -x dd-daemon 2>/dev/null; rm -f "$SOCK"
 # Fully isolate this daemon: private socket AND private state/volumes (a fresh per-scenario temp
 # dir), so it starts from empty state and never reads or mutates the developer's real ~/.dd.
 STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dd-realsw.XXXXXX")"
-export DD_IMAGES="$IMAGES" DDOCKERD_SOCK="$SOCK" DD_STATE="$STATE_DIR/state.json" DD_VOLUMES="$STATE_DIR/volumes"
+export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!
 trap 'docker rm -f rsw-pg rsw-nats >/dev/null 2>&1; kill -9 $DPID 2>/dev/null; rm -f "$SOCK" "$SCEN_LOG"; rm -rf "$STATE_DIR"' EXIT

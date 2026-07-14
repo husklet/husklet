@@ -24,7 +24,7 @@ log() { printf '\033[1;34m[bundle]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[bundle] %s\033[0m\n' "$*" >&2; exit 1; }
 
 [ "$(uname)" = "Darwin" ] || die "must run on macOS"
-[ -n "${DD_GTK4:-}" ] || die "run inside the nix dev shell: nix develop \"path:$ROOT/nix\" --command tools/bundle.sh"
+[ -n "${HL_GTK4:-}" ] || die "run inside the nix dev shell: nix develop \"path:$ROOT/nix\" --command tools/bundle.sh"
 command -v dylibbundler >/dev/null || die "dylibbundler not found (nix dev shell)"
 
 # 1. Release GUI binary. The daemon + ddjit-* engines are built OUTSIDE this dev shell (by the
@@ -50,7 +50,7 @@ sed "s/@VERSION@/$VERSION/g" "$ROOT/hl-gui/package/Info.plist.in" > "$C/Info.pli
 [ -f "$ROOT/assets/logo.png" ] && cp "$ROOT/assets/logo.png" "$RES/logo.png" || true # onboarding logo
 [ -d "$ROOT/assets/images" ] && cp -R "$ROOT/assets/images" "$RES/images" || true # bundled starter images (hello-dd)
 
-# JIT engines, copied next to the daemon (resolved at runtime next to the executable / via DDJIT_DIR).
+# JIT engines, copied next to the daemon (resolved at runtime next to the executable / via HL_JIT_DIR).
 # Every guest engine is REQUIRED: a bundle missing ddjit-linux_* installs and pulls images fine, then HANGS
 # the instant you `docker run` a Linux container (no engine -> the daemon can't spawn the guest). build.rs
 # silently downgrades a failed engine compile to a cargo:warning, so guard HERE and fail the build loudly
@@ -66,17 +66,17 @@ djf="$(find "$ROOT/target/release/build" -name "darwinjail.dylib" -type f 2>/dev
 if [ -n "$djf" ]; then cp "$djf" "$RES/darwinjail.dylib"; log "  + darwinjail.dylib"; else log "  ! darwinjail.dylib not built (skipping)"; fi
 
 # dd-display + dd-compositor — the host Wayland renderer for `--gui` workspaces. dd-display is the legacy
-# compositor; with DD_DISPLAY_SMITHAY=1 it execs the sibling dd-compositor (Smithay-native). Both resolve
+# compositor; with HL_DISPLAY_SMITHAY=1 it execs the sibling dd-compositor (Smithay-native). Both resolve
 # each other and their dylibs via @executable_path, so they ship in Resources next to the daemon.
 # dd-compositor links the system libxkbcommon at link+run time (its Smithay keymap seat); the nix dev
-# shell provides it via $DD_LIBXKBCOMMON, and dylibbundler (step 4) relocates it into Contents/Frameworks
+# shell provides it via $HL_LIBXKBCOMMON, and dylibbundler (step 4) relocates it into Contents/Frameworks
 # with an @executable_path/../Frameworks install name so the compositor loads it on the user's machine.
-# Guarded: if $DD_LIBXKBCOMMON is absent (older dev shell) the compositor is skipped and DD_DISPLAY_SMITHAY
+# Guarded: if $HL_LIBXKBCOMMON is absent (older dev shell) the compositor is skipped and HL_DISPLAY_SMITHAY
 # transparently falls back to the legacy path — the bundle stays shippable either way.
 COMPOSITOR_XARGS=()
-if [ -n "${DD_LIBXKBCOMMON:-}" ]; then
+if [ -n "${HL_LIBXKBCOMMON:-}" ]; then
   log "building dd-display + dd-compositor (smithay renderer; libxkbcommon from nix)"
-  if ( cd "$ROOT" && RUSTFLAGS="-L native=$DD_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" \
+  if ( cd "$ROOT" && RUSTFLAGS="-L native=$HL_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" \
          cargo build --release -p hl-display -p hl-compositor ); then
     for b in dd-display dd-compositor; do
       if [ -f "$ROOT/target/release/$b" ]; then
@@ -88,7 +88,7 @@ if [ -n "${DD_LIBXKBCOMMON:-}" ]; then
     log "  ! dd-compositor build failed — shipping without the Smithay renderer (legacy path still works)"
   fi
 else
-  log "  ! DD_LIBXKBCOMMON unset — skipping dd-compositor (Smithay renderer absent; DD_DISPLAY_SMITHAY falls back to legacy)"
+  log "  ! HL_LIBXKBCOMMON unset — skipping dd-compositor (Smithay renderer absent; HL_DISPLAY_SMITHAY falls back to legacy)"
 fi
 
 # 3. Stage gdk-pixbuf loaders (png from gdk-pixbuf, svg from librsvg) with a RELATIVE cache.
@@ -96,13 +96,13 @@ fi
 #    codesign refuses to seal a bundle whose Frameworks holds bare non-code directories. Their
 #    own dependency paths are @executable_path-relative, so they still find Frameworks/*.dylib.
 log "staging gdk-pixbuf loaders"
-PIXVER="$(basename "$(ls -d "$DD_GDK_PIXBUF"/lib/gdk-pixbuf-2.0/*/ | head -1)")"
+PIXVER="$(basename "$(ls -d "$HL_GDK_PIXBUF"/lib/gdk-pixbuf-2.0/*/ | head -1)")"
 DEST_LOADERS="$RES/lib/gdk-pixbuf-2.0/$PIXVER/loaders"
 mkdir -p "$DEST_LOADERS"
 # Copy every gdk-pixbuf loader present (png/jpeg are built into core, so none is required for our
 # UI; we ship what exists for completeness) plus librsvg's svg loader if this build provides one.
-cp -L "$DD_GDK_PIXBUF"/lib/gdk-pixbuf-2.0/"$PIXVER"/loaders/*.so "$DEST_LOADERS"/ 2>/dev/null || true
-find "$DD_LIBRSVG" -name libpixbufloader-svg.so -exec cp -L {} "$DEST_LOADERS"/ \; 2>/dev/null || true
+cp -L "$HL_GDK_PIXBUF"/lib/gdk-pixbuf-2.0/"$PIXVER"/loaders/*.so "$DEST_LOADERS"/ 2>/dev/null || true
+find "$HL_LIBRSVG" -name libpixbufloader-svg.so -exec cp -L {} "$DEST_LOADERS"/ \; 2>/dev/null || true
 
 shopt -s nullglob
 LOADER_SOS=( "$DEST_LOADERS"/*.so )
@@ -131,15 +131,15 @@ fi
 log "compiling gsettings schemas"
 SCHEMA_DEST="$RES/glib-2.0/schemas"
 mkdir -p "$SCHEMA_DEST"
-cp -L "$DD_GTK4"/share/glib-2.0/schemas/*.xml "$SCHEMA_DEST"/ 2>/dev/null || true
-cp -L "$DD_GSETTINGS_SCHEMAS"/share/glib-2.0/schemas/*.xml "$SCHEMA_DEST"/ 2>/dev/null || true
+cp -L "$HL_GTK4"/share/glib-2.0/schemas/*.xml "$SCHEMA_DEST"/ 2>/dev/null || true
+cp -L "$HL_GSETTINGS_SCHEMAS"/share/glib-2.0/schemas/*.xml "$SCHEMA_DEST"/ 2>/dev/null || true
 glib-compile-schemas "$SCHEMA_DEST" >/dev/null
 
 # 6. Icon themes (Adwaita symbolic icons used by the toolbar + hicolor fallback).
 log "staging icon themes"
 mkdir -p "$RES/icons"
-cp -RL "$DD_ADWAITA_ICONS"/share/icons/Adwaita "$RES/icons"/ 2>/dev/null || true
-cp -RL "$DD_HICOLOR_ICONS"/share/icons/hicolor "$RES/icons"/ 2>/dev/null || true
+cp -RL "$HL_ADWAITA_ICONS"/share/icons/Adwaita "$RES/icons"/ 2>/dev/null || true
+cp -RL "$HL_HICOLOR_ICONS"/share/icons/hicolor "$RES/icons"/ 2>/dev/null || true
 command -v gtk4-update-icon-cache >/dev/null && gtk4-update-icon-cache -q -f -t "$RES/icons/Adwaita" 2>/dev/null || true
 
 # 7. Fontconfig.
@@ -182,16 +182,16 @@ if [ "$needgnu" = 1 ] && ! nm -gU "$FW/libiconv.2.dylib" 2>/dev/null | grep -qw 
 fi
 
 # 8. Strip + codesign, deepest first (any later edit invalidates a signature).
-#    DD_SIGN_ID unset/"-" = ad-hoc (default). A "Developer ID Application: …" identity name turns on real
-#    signing with hardened runtime + secure timestamp; DD_SIGN_KEYCHAIN[/_PW] selects the keychain holding it.
+#    HL_SIGN_ID unset/"-" = ad-hoc (default). A "Developer ID Application: …" identity name turns on real
+#    signing with hardened runtime + secure timestamp; HL_SIGN_KEYCHAIN[/_PW] selects the keychain holding it.
 #    The JIT engines + daemon keep the allow-jit entitlement ($ENT) so they run under the hardened runtime.
-SIGN_ID="${DD_SIGN_ID:--}"
+SIGN_ID="${HL_SIGN_ID:--}"
 SIGN_FLAGS=""
 if [ "$SIGN_ID" != "-" ]; then
   SIGN_FLAGS="--options runtime --timestamp"
-  if [ -n "${DD_SIGN_KEYCHAIN:-}" ]; then
-    security unlock-keychain ${DD_SIGN_KEYCHAIN_PW:+-p "$DD_SIGN_KEYCHAIN_PW"} "$DD_SIGN_KEYCHAIN" 2>/dev/null || true
-    SIGN_FLAGS="$SIGN_FLAGS --keychain $DD_SIGN_KEYCHAIN"
+  if [ -n "${HL_SIGN_KEYCHAIN:-}" ]; then
+    security unlock-keychain ${HL_SIGN_KEYCHAIN_PW:+-p "$HL_SIGN_KEYCHAIN_PW"} "$HL_SIGN_KEYCHAIN" 2>/dev/null || true
+    SIGN_FLAGS="$SIGN_FLAGS --keychain $HL_SIGN_KEYCHAIN"
   fi
   log "stripping + signing (Developer ID: $SIGN_ID)"
 else

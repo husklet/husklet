@@ -1,7 +1,7 @@
 // runc/Docker list every -v/--mount bind (and --tmpfs) as its own line in /proc/mounts and
 // /proc/self/mountinfo. findmnt, df, and the JVM/container mount-discovery scan those tables; a bind
 // that resolves for reads but is missing from the mount tables makes them see a false mount namespace.
-// Driven with DDVOL=/mnt:<hostdir>. Verdict ok=1 iff the bind mountpoint appears in BOTH tables.
+// Driven with HL_VOL=/mnt:<hostdir>. Verdict ok=1 iff the bind mountpoint appears in BOTH tables.
 #include <stdio.h>
 #include <string.h>
 #include "pf.h"

@@ -8,14 +8,14 @@
 extern char **environ;
 
 int main(void) {
-    setenv("DD_TEST_KEY", "first", 1);
-    int v1 = strcmp(getenv("DD_TEST_KEY"), "first") == 0;
-    setenv("DD_TEST_KEY", "second", 0); // no-overwrite -> stays "first"
-    int v2 = strcmp(getenv("DD_TEST_KEY"), "first") == 0;
-    setenv("DD_TEST_KEY", "third", 1); // overwrite
-    int v3 = strcmp(getenv("DD_TEST_KEY"), "third") == 0;
-    unsetenv("DD_TEST_KEY");
-    int v4 = getenv("DD_TEST_KEY") == NULL;
+    setenv("HL_TEST_KEY", "first", 1);
+    int v1 = strcmp(getenv("HL_TEST_KEY"), "first") == 0;
+    setenv("HL_TEST_KEY", "second", 0); // no-overwrite -> stays "first"
+    int v2 = strcmp(getenv("HL_TEST_KEY"), "first") == 0;
+    setenv("HL_TEST_KEY", "third", 1); // overwrite
+    int v3 = strcmp(getenv("HL_TEST_KEY"), "third") == 0;
+    unsetenv("HL_TEST_KEY");
+    int v4 = getenv("HL_TEST_KEY") == NULL;
 
     int count = 0;
     for (char **e = environ; *e; e++) count += (strchr(*e, '=') != NULL);

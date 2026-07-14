@@ -19,8 +19,8 @@
 //! hit-testing (`input_surface_at`) as any other window. No X11-specific present or input path exists.
 //!
 //! ## Runtime gating
-//! [`DdState::start_xwayland`] is called only under `DD_XWAYLAND` (itself only reachable under
-//! `DD_DISPLAY_SMITHAY`). On macOS the `Xwayland` binary is a Linux ELF, so it must be launched through
+//! [`DdState::start_xwayland`] is called only under `HL_XWAYLAND` (itself only reachable under
+//! `HL_DISPLAY_SMITHAY`). On macOS the `Xwayland` binary is a Linux ELF, so it must be launched through
 //! the dd JIT engine (a host-runtime concern); on the Linux dev host a native `/usr/bin/Xwayland` is used.
 //!
 //! ## Validation status
@@ -63,7 +63,7 @@ pub struct XwaylandState {
 
 impl DdState {
     /// Spawn and wire the Xwayland server + X11 window manager into `loop_handle`. Called once at startup
-    /// under `DD_XWAYLAND`. Creates the `xwayland_shell_v1` global, spawns `Xwayland`, and inserts its
+    /// under `HL_XWAYLAND`. Creates the `xwayland_shell_v1` global, spawns `Xwayland`, and inserts its
     /// event source; the `Ready` event starts the [`X11Wm`]. Idempotent-ish: a second call replaces state.
     pub fn start_xwayland(&mut self, loop_handle: LoopHandle<'static, DdState>) -> std::io::Result<()> {
         let shell = XWaylandShellState::new::<DdState>(&self.dh);

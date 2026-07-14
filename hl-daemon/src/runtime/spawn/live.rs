@@ -19,8 +19,8 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     }
     // Reach-by-name identity key. A `docker exec` runs with `c.id` set to the EXEC id (not a network
     // endpoint), but it JOINS the target container's network (`netns_key`), so it must inherit that
-    // container's bridge (netid, ip) + /etc/hosts view — otherwise the exec'd process gets no DD_NETBR/
-    // DD_IP and can neither reach peers by IP nor consult the live resolver. A normal container has
+    // container's bridge (netid, ip) + /etc/hosts view — otherwise the exec'd process gets no HL_NETBR/
+    // HL_IP and can neither reach peers by IP nor consult the live resolver. A normal container has
     // `netns_key == None` and this resolves to its own id (unchanged behaviour).
     let lookup_id = c.netns_key.clone().unwrap_or_else(|| c.id.clone());
     // netstack PR2: this container's (network-id, assigned-ip) from PR1's per-network endpoints map,
@@ -93,7 +93,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             }
         }
         if let Err(e) = std::fs::write(format!("{etc}/hosts"), &hosts) {
-            if std::env::var("DD_DEBUG").is_ok() {
+            if std::env::var("HL_DEBUG").is_ok() {
                 eprintln!(
                     "[live] {} write /etc/hosts failed: {e}",
                     &c.id[..c.id.len().min(12)]
@@ -108,7 +108,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // like the ddcli-mac container. `ndots:0` matches Docker's embedded-DNS resolv.conf (names are tried
         // as-is first; we have no search domains to append). Written into the SAME writable layer as
         // /etc/hosts so it shadows the image's file via the overlay. --network none still gets the file, but
-        // the engine leaves :53 un-intercepted under DD_NET_ISOLATE, so name resolution fails as Docker's
+        // the engine leaves :53 un-intercepted under HL_NET_ISOLATE, so name resolution fails as Docker's
         // null network does. Best-effort: never fail the spawn on an I/O error.
         // Honor `--dns`/`--dns-search`/`--dns-option` (HostConfig.Dns*) when the user set them: those
         // nameservers/search/options are written verbatim (Docker parity). With none set, fall back to
@@ -134,7 +134,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             s
         };
         if let Err(e) = std::fs::write(format!("{etc}/resolv.conf"), resolv) {
-            if std::env::var("DD_DEBUG").is_ok() {
+            if std::env::var("HL_DEBUG").is_ok() {
                 eprintln!(
                     "[live] {} write /etc/resolv.conf failed: {e}",
                     &c.id[..c.id.len().min(12)]
@@ -143,10 +143,10 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         }
         // /etc/hostname: Docker generates this beside /etc/hosts and /etc/resolv.conf (the container's UTS
         // name + newline), shadowing any image copy via the overlay upper. Same value spawn_cfg passes as
-        // DD_HOSTNAME -> gethostname(), so the two agree (user --hostname, else the 12-char short id).
+        // HL_HOSTNAME -> gethostname(), so the two agree (user --hostname, else the 12-char short id).
         let eff_hostname = eff_hostname(&c.id, &c.hostname);
         if let Err(e) = std::fs::write(format!("{etc}/hostname"), format!("{eff_hostname}\n")) {
-            if std::env::var("DD_DEBUG").is_ok() {
+            if std::env::var("HL_DEBUG").is_ok() {
                 eprintln!(
                     "[live] {} write /etc/hostname failed: {e}",
                     &c.id[..c.id.len().min(12)]
@@ -233,7 +233,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     let app = app.clone();
     let cid = c.id.clone();
     let auto_remove = c.auto_remove; // `--rm`: drop the container from state once it exits (see below)
-    let dbg = std::env::var("DD_DEBUG").is_ok();
+    let dbg = std::env::var("HL_DEBUG").is_ok();
     tokio::spawn(async move {
         let code = launched.wait().await;
         if dbg {

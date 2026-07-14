@@ -771,7 +771,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     // distinguishable (otherwise the borderless-host policy always answers CSD, and Smithay never re-sends
     // an unchanged mode, so a set_mode round-trip would be unobservable). With SSD available: new_decoration
     // defaults to server_side; set_mode(client_side) is honoured as CSD; set_mode(server_side) as SSD.
-    std::env::set_var("DD_DISPLAY_WINDOW_DECORATIONS", "1");
+    std::env::set_var("HL_DISPLAY_WINDOW_DECORATIONS", "1");
     let deco_mgr = bind(&mut c, "zxdg_decoration_manager_v1", 1);
     let deco = c.alloc();
     c.conn

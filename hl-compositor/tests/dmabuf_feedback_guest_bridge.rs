@@ -61,8 +61,8 @@ fn build_probe(out: &Path) -> Option<PathBuf> {
 
 #[test]
 fn dmabuf_feedback_guest_reads_device_id_and_format_table_over_a_real_socket() {
-    // The v4/v5 feedback global is opt-in behind DD_DISPLAY_DMABUF (see new_dmabuf_state).
-    std::env::set_var("DD_DISPLAY_DMABUF", "1");
+    // The v4/v5 feedback global is opt-in behind HL_DISPLAY_DMABUF (see new_dmabuf_state).
+    std::env::set_var("HL_DISPLAY_DMABUF", "1");
 
     let tmp = std::env::temp_dir().join(format!("dd-dmabuf-bridge-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);

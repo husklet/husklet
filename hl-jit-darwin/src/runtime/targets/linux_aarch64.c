@@ -494,7 +494,7 @@ static void install_mach_exc(void) {
     pthread_create(&t, NULL, exc_thread, NULL);
 }
 
-// DD_FAULTCOUNT=1: measurement-only wrapper around nonpie_guard that tallies served low-address faults
+// HL_FAULTCOUNT=1: measurement-only wrapper around nonpie_guard that tallies served low-address faults
 // (the guest_base bias-fold's whole point is to drive this to ~0). Per-process; printed at hl_run exit.
 static volatile uint64_t g_nonpie_faults;
 static volatile uint64_t g_fhist[16];
@@ -554,17 +554,17 @@ static void container_init(const char *rootfs) {
     // by every guest fork (see state.c). Per-container so sibling forkserver workers never share a total.
     if (rootfs) acct_container_reset();
     {
-        const char *h = getenv("DD_HOSTNAME");
+        const char *h = getenv("HL_HOSTNAME");
         // ddockerd -> jit config
         if (h && !g_hostname[0]) { strncpy(g_hostname, h, 64); }
-        const char *m = getenv("DD_MEM_MAX");
+        const char *m = getenv("HL_MEM_MAX");
         if (m && !g_mem_max) g_mem_max = parse_size(m);
-        const char *p = getenv("DD_PIDS_MAX");
-        if (p && !g_pids_max) g_pids_max = hl_parse_id("DD_PIDS_MAX", p);
-        container_read_resource_env(); // docker --cpus / --read-only / --ulimit (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS)
-        const char *pub = getenv("DD_PUBLISH");
+        const char *p = getenv("HL_PIDS_MAX");
+        if (p && !g_pids_max) g_pids_max = hl_parse_id("HL_PIDS_MAX", p);
+        container_read_resource_env(); // docker --cpus / --read-only / --ulimit (HL_CPUS/HL_ROOTFS_RO/HL_ULIMITS)
+        const char *pub = getenv("HL_PUBLISH");
         if (pub && !g_nportmap) parse_publish(pub);
-        const char *low = getenv("DD_LOWER");
+        const char *low = getenv("HL_LOWER");
         if (low && !g_nlower) {
             char tb[8192];
             // ro lowers, colon-sep (highest first)
@@ -573,15 +573,15 @@ static void container_init(const char *rootfs) {
             for (char *t = strtok_r(tb, ":", &sv); t; t = strtok_r(NULL, ":", &sv))
                 add_lower(t);
         }
-        // Private-loopback netns: derive g_netns from the DD_NETNS KEY (set per-container by the
+        // Private-loopback netns: derive g_netns from the HL_NETNS KEY (set per-container by the
         // daemon; a `docker exec` reuses the target container's key so the exec shares its 127.0.0.1).
-        // When DD_NETNS is UNSET (a bare engine launch / the basics matrix), MINT a per-process key and
+        // When HL_NETNS is UNSET (a bare engine launch / the basics matrix), MINT a per-process key and
         // export it — so loopback isolation is ALWAYS on. Otherwise g_netns stayed empty, lo_on() was
         // false, and 127.0.0.1 fell through to the REAL host TCP stack shared by every concurrent guest,
         // so two containers' 127.0.0.1:PORT collided (nc-loopback intermittently reached another
-        // container's published listener). Mirrors linux_x86_64.c. Opt out via DD_NONETNS.
-        if (!getenv("DD_NONETNS") && !g_netns[0]) {
-            const char *nn = getenv("DD_NETNS");
+        // container's published listener). Mirrors linux_x86_64.c. Opt out via HL_NONETNS.
+        if (!getenv("HL_NONETNS") && !g_netns[0]) {
+            const char *nn = getenv("HL_NETNS");
             char key[40];
             if (nn && nn[0])
                 snprintf(key, sizeof key, "%.39s", nn);
@@ -589,13 +589,13 @@ static void container_init(const char *rootfs) {
                 snprintf(key, sizeof key, "%d", (int)getpid());
             snprintf(g_netns, sizeof g_netns, "/tmp/.ddnet-%.40s", key);
             // Export the minted key so children/exec + abstract-AF_UNIX/IPC/bridge share this
-            // container's namespace (getenv("DD_NETNS")); a daemon-supplied key is already in the env.
-            if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(nn && nn[0])) setenv("DD_NETNS", key, 1);
+            // container's namespace (getenv("HL_NETNS")); a daemon-supplied key is already in the env.
+            if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(nn && nn[0])) setenv("HL_NETNS", key, 1);
         }
-        const char *eu = getenv("DD_UID");
-        if (eu && g_uid < 0) g_uid = hl_parse_id("DD_UID", eu);
-        const char *eg = getenv("DD_GID");
-        if (eg && g_gid < 0) g_gid = hl_parse_id("DD_GID", eg);
+        const char *eu = getenv("HL_UID");
+        if (eu && g_uid < 0) g_uid = hl_parse_id("HL_UID", eu);
+        const char *eg = getenv("HL_GID");
+        if (eg && g_gid < 0) g_gid = hl_parse_id("HL_GID", eg);
         // USER ns (process.user)
     }
     if (rootfs && rootfs[0]) {
@@ -609,18 +609,18 @@ static void container_init(const char *rootfs) {
         container_populate_dev();        // /dev/{fd,stdin,stdout,stderr,ptmx,pts,shm,console,...} the unpacker stripped
         container_populate_machine_id(); // /etc/machine-id agreeing with boot_id (if image ships none)
         if (g_uid < 0) g_uid = 0;
-        // container default: run as root (0); unless DD_UID/--uid set
+        // container default: run as root (0); unless HL_UID/--uid set
         if (g_gid < 0) g_gid = 0;
-        // docker -w / initial working directory: start the guest in DD_CWD (must be reachable inside the
+        // docker -w / initial working directory: start the guest in HL_CWD (must be reachable inside the
         // container -- typically a bind-mounted volume). confine() normalizes + clamps it to the rootfs.
-        const char *icwd = getenv("DD_CWD");
+        const char *icwd = getenv("HL_CWD");
         if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
     }
     // bind-mount volumes: "[ro:]guestpath:hostdir,..." -- delegate to add_vol() (the shared vfs.c parser)
     // so the optional `ro:` read-only marker is handled in ONE place for both engines. Ingested regardless
     // of whether a rootfs is set (matching linux_x86_64.c): add_vol opens the HOST dir directly and the
     // registration is what surfaces the bind in /proc/self/mountinfo + /proc/mounts.
-    const char *vspec = getenv("DDVOL");
+    const char *vspec = getenv("HL_VOL");
     if (vspec && vspec[0]) {
         char tmp[4096];
         snprintf(tmp, sizeof tmp, "%s", vspec);
@@ -663,7 +663,7 @@ static int engine_global_init(void) {
         // load_elf below); a fault it doesn't own re-raises with the default action.
         struct sigaction sa;
         memset(&sa, 0, sizeof sa);
-        sa.sa_sigaction = getenv("DD_FAULTCOUNT") ? nonpie_guard_count : nonpie_guard;
+        sa.sa_sigaction = getenv("HL_FAULTCOUNT") ? nonpie_guard_count : nonpie_guard;
         sa.sa_flags = SA_SIGINFO | SA_ONSTACK; // run on the per-thread altstack so a guest stack
                                                // overflow's guard fault is deliverable (host SP == guest SP)
         sigaction(SIGSEGV, &sa, NULL);
@@ -735,8 +735,8 @@ static int engine_global_init(void) {
 
     g_trace = getenv("JT") != NULL;
     g_systrace = getenv("JTS") != NULL;
-    g_dbg_nochain = getenv("DDDBG_NOCHAIN") != NULL; // debug-only: force every block through the dispatcher
-    g_dbg_gprdump = getenv("DDDBG_GPRDUMP") != NULL; // debug-only: dump all GPRs per block (register differential)
+    g_dbg_nochain = getenv("HL_DBG_NOCHAIN") != NULL; // debug-only: force every block through the dispatcher
+    g_dbg_gprdump = getenv("HL_DBG_GPRDUMP") != NULL; // debug-only: dump all GPRs per block (register differential)
     g_prof = getenv("PROF") != NULL;
     g_no_stw_reclaim = getenv("NOSTWRECLAIM") != NULL;
     // A1: steal host x16/x17 for the engine (default on). NOSTEAL1617=1 -> legacy 3-reg stolen set
@@ -756,23 +756,23 @@ static int engine_global_init(void) {
     if (getenv("NOMTIBTC")) g_mtibtc = 0; // W5C: disable race-free threaded IBTC fill (A/B kill-switch)
     if (getenv("NOFUTEXQ")) g_futexq = 0; // W5C: disable per-address futex wait queues (A/B kill-switch)
     // Untrusted-guest isolation (the sentry process-split). OFF by default -> trusted path unchanged.
-    g_untrusted = getenv("DDJIT_UNTRUSTED") != NULL;
-    g_sentry_sandbox = getenv("DDJIT_SANDBOX") != NULL;
+    g_untrusted = getenv("HL_JIT_UNTRUSTED") != NULL;
+    g_sentry_sandbox = getenv("HL_JIT_SANDBOX") != NULL;
     // pcache_poison_check runs AFTER the codegen-mode flags above so it can refuse to persist an arena
     // that a non-default mode (PROF) baked unrecorded host pointers
     // into. (g_pcache itself is read at the top of hl_run -- per-invocation, mirroring linux_x86_64.c,
-    // so a fork-server runner honors the CLIENT's DDJIT_PCACHE; the check is mode-only and independent.)
+    // so a fork-server runner honors the CLIENT's HL_JIT_PCACHE; the check is mode-only and independent.)
     pcache_poison_check();
     // ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
     // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
     ptrace_arena_init();
-    // Arm the SIGUSR1 checkpoint control handler when DDJIT_CHECKPOINT_DIR is set (harmless no-op otherwise).
+    // Arm the SIGUSR1 checkpoint control handler when HL_JIT_CHECKPOINT_DIR is set (harmless no-op otherwise).
     // Runs in every process (init + forked children) so the whole tree is checkpointable.
     ckpt_control_init();
     // Host-IOSurface GPU bridge (--gui): force its one-time ObjC/CoreFoundation/Foundation/IOSurface class
     // inits to completion HERE, single-threaded and BEFORE any guest thread/fork, so a lazy +initialize can
     // never be mid-flight when Chrome forks its zygote/broker (which would abort the child via libobjc's
-    // fork-safety guard -> chromium EXIT=137). Gated on DD_GPU_IOSURFACE; a no-op for every other workload.
+    // fork-safety guard -> chromium EXIT=137). Gated on HL_GPU_IOSURFACE; a no-op for every other workload.
     hl_gpu_prewarm_fork_safety();
     g_engine_inited = 1;
     return 0;
@@ -806,7 +806,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     // (block-map keys + baked guest addresses) is byte-identical across runs -> reusable from the cache.
     if (g_pcache) g_force_base = PC_IMG_BASE;
     {
-        const char *e = getenv("DDDBG_IMGBASE");
+        const char *e = getenv("HL_DBG_IMGBASE");
         if (e) g_force_base = strtoull(e, 0, 16);
     } // debug: pin img base (trace alignment)
     load_elf(prog_host, lm);
@@ -823,7 +823,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
         interp_host = xresolve_overlay(interp, ib, sizeof ib);
         if (g_pcache) g_force_base = PC_INTERP_BASE;
         {
-            const char *e = getenv("DDDBG_INTERPBASE");
+            const char *e = getenv("HL_DBG_INTERPBASE");
             if (e) g_force_base = strtoull(e, 0, 16);
         } // debug: pin interp base
         load_elf(interp_host, li);
@@ -865,22 +865,22 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 // Rebuilds the checkpointed process tree from `dir` and resumes it. Guest memory for the init is rebuilt
 // FIRST -- before container_init/engine_global_init allocate anything -- inside ckpt_restore_tree.
 int hl_restore(const char *rootfs, const char *dir) {
-    g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
+    g_pcache = getenv("HL_JIT_PCACHE") != NULL && getenv("HL_JIT_NOPCACHE") == NULL;
     return ckpt_restore_tree(rootfs, dir);
 }
 
 int hl_run(const char *rootfs, int argc, char *const argv[]) {
     // Resume a previously checkpointed workspace instead of launching a program (the GUI sets this on
     // window reopen; the container config/env is otherwise identical to the original launch).
-    const char *rdir = getenv("DDJIT_RESTORE_DIR");
+    const char *rdir = getenv("HL_JIT_RESTORE_DIR");
     if (rdir && rdir[0]) return hl_restore(rootfs, rdir);
     if (argc < 1 || !argv || !argv[0]) return 2;
-    // persistent cross-process translated-code cache. Landed OPT-IN (DDJIT_PCACHE=1, same gating as
+    // persistent cross-process translated-code cache. Landed OPT-IN (HL_JIT_PCACHE=1, same gating as
     // the x86 opt8 pcache) so the default correctness matrix stays byte-identical to the baseline; the
-    // one-line flip to default-on (`getenv("DDJIT_NOPCACHE") == NULL`) is gated on a green full pcache-on
-    // matrix soak (see plan). DDJIT_NOPCACHE=1 is the kill-switch and always wins. Read here (per
+    // one-line flip to default-on (`getenv("HL_JIT_NOPCACHE") == NULL`) is gated on a green full pcache-on
+    // matrix soak (see plan). HL_JIT_NOPCACHE=1 is the kill-switch and always wins. Read here (per
     // hl_run, like linux_x86_64.c) so a fork-server cold runner honors the CLIENT's env.
-    g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
+    g_pcache = getenv("HL_JIT_PCACHE") != NULL && getenv("HL_JIT_NOPCACHE") == NULL;
     g_coldprof = getenv("COLDPROF") != NULL;
     container_init(rootfs);
     int irc = engine_global_init();
@@ -939,7 +939,7 @@ int hl_run(const char *rootfs, int argc, char *const argv[]) {
     }
     int ec = run_loaded(argc, argv, &lm, jump, at_base);
     pcache_save(); // persist on a cold miss (guest exit via case 93 returns here; case 94 saves + _exit)
-    if (getenv("DD_FAULTCOUNT"))
+    if (getenv("HL_FAULTCOUNT"))
         fprintf(stderr, "[faultcount] pid=%d nonpie_served=%llu\n", getpid(), (unsigned long long)g_nonpie_faults);
     return ec;
 }
@@ -981,12 +981,12 @@ static void fsrv_restore_done_a64(const struct loaded *L, uint64_t span) {
 #define FSRV_RESTORE_DONE(L, span) fsrv_restore_done_a64((L), (span))
 #include "../os/linux/forkserver.c"
 
-#ifndef DDJIT_LIB
+#ifndef HL_JIT_LIB
 // The engine entry point. Named `hl_entry` so the runtime can be linked as a library and launched
 // by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
-// harness) launching identically. The static-lib build defines DDJIT_NO_MAIN to drop the shim.
+// harness) launching identically. The static-lib build defines HL_JIT_NO_MAIN to drop the shim.
 int hl_entry(int argc, char **argv);
-#ifndef DDJIT_NO_MAIN
+#ifndef HL_JIT_NO_MAIN
 int main(int argc, char **argv) {
     return hl_entry(argc, argv);
 }
@@ -1011,7 +1011,7 @@ int hl_entry(int argc, char **argv) {
             rootfs = argv[ai + 1];
             ai += 2;
         } else if (!strcmp(argv[ai], "--restore") && ai + 1 < argc) {
-            setenv("DDJIT_RESTORE_DIR", argv[ai + 1], 1); // hl_run() dispatches to hl_restore() (no <elf> arg)
+            setenv("HL_JIT_RESTORE_DIR", argv[ai + 1], 1); // hl_run() dispatches to hl_restore() (no <elf> arg)
             ai += 2;
         } else if (!strcmp(argv[ai], "--hostname") && ai + 1 < argc) {
             strncpy(g_hostname, argv[ai + 1], 64);
@@ -1044,13 +1044,13 @@ int hl_entry(int argc, char **argv) {
         } else
             break;
     }
-    if (getenv("DDJIT_RESTORE_DIR")) return hl_run(rootfs, 0, NULL); // resume a checkpoint (no <elf> needed)
+    if (getenv("HL_JIT_RESTORE_DIR")) return hl_run(rootfs, 0, NULL); // resume a checkpoint (no <elf> needed)
     if (ai >= argc) {
         fprintf(stderr,
                 "usage: %s [--rootfs DIR] [--hostname NAME] [--mem-max BYTES] [--pids-max N] [--publish H:C] "
                 "<aarch64-elf> [args...]\n"
                 "       %s [--rootfs DIR] --restore <checkpoint-dir>\n"
-                "  checkpoint a running guest: launch with DDJIT_CHECKPOINT_DIR=<dir> and send it SIGUSR1\n",
+                "  checkpoint a running guest: launch with HL_JIT_CHECKPOINT_DIR=<dir> and send it SIGUSR1\n",
                 argv[0], argv[0]);
         return 2;
     }

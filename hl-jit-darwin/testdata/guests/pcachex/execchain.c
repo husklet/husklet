@@ -1,7 +1,7 @@
 // pcachex/execchain.c -- #373b exec re-key: the busybox `sh -c tar`-shaped chain in one binary.
 // The driver epoch (argv[0] basename != "pcapplet") does a deterministic compute slice, then execve's
 // ITSELF with argv[0] rewritten to "pcapplet" -- the same file identity but a different argv[0] basename,
-// exactly a multicall applet switch. Under DDJIT_PCACHE=1 the engine must (a) persist the DRIVER epoch's
+// exactly a multicall applet switch. Under HL_JIT_PCACHE=1 the engine must (a) persist the DRIVER epoch's
 // arena under the DRIVER key at the exec boundary (the exec-time save -- pre-#373 that epoch was never
 // cached because the process never reaches exit in it), and (b) re-key + reload for the APPLET epoch, so
 // the two epochs land in TWO distinct cache files and a save keyed to the wrong binary is impossible.

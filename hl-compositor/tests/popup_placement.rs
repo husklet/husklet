@@ -1,6 +1,6 @@
 //! Native popup-window placement parity (readiness Gap 2).
 //!
-//! With `DD_DISPLAY_POPUP_WINDOWS=1` the Smithay-native compositor presents an `xdg_popup` as its OWN
+//! With `HL_DISPLAY_POPUP_WINDOWS=1` the Smithay-native compositor presents an `xdg_popup` as its OWN
 //! window (a menu/dropdown/tooltip) at the positioner-resolved anchor, instead of compositing it into —
 //! and clipping it to — the owning toplevel's frame. This mirrors the legacy `server.rs`/`present_cocoa`
 //! native-popup path (`SurfaceBuffer::popup` / `PopupPlacement`, commit 48f9bfe1).
@@ -123,7 +123,7 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
 #[test]
 fn popup_presents_as_own_window_at_positioner_anchor() {
     // Enable the native popup-window path for this (isolated) test binary.
-    std::env::set_var("DD_DISPLAY_POPUP_WINDOWS", "1");
+    std::env::set_var("HL_DISPLAY_POPUP_WINDOWS", "1");
 
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
@@ -231,7 +231,7 @@ fn popup_presents_as_own_window_at_positioner_anchor() {
     let pserial = c.last_xdg_serial.expect("popup xdg_surface.configure serial");
     c.conn.send(&Message::new(pxdg, 4).u32(pserial)); // ack_configure
 
-    // Commit a buffer to the popup → with DD_DISPLAY_POPUP_WINDOWS it presents as its OWN window.
+    // Commit a buffer to the popup → with HL_DISPLAY_POPUP_WINDOWS it presents as its OWN window.
     let (pw, ph): (i32, i32) = (8, 8);
     let ppixels = vec![0x90u8; (pw * ph * 4) as usize];
     let pmfd = hl_display::keymap::anon_fd_with(&ppixels).expect("popup anon shm fd");

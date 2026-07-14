@@ -282,8 +282,8 @@ static void load_elf(const char *path, struct loaded *out) {
         base = mmap(want, span, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
         // #210 test hook: deterministically simulate a fixed-VA collision (unreachable naturally -- the two
         // fixed bases sit 512GB apart) so the fallback path below is exercised byte-exact. Drops the map we
-        // just made and forces MAP_FAILED. Inert unless DDX_FORCE_BASE_COLLIDE is set.
-        if (base != MAP_FAILED && getenv("DDX_FORCE_BASE_COLLIDE")) {
+        // just made and forces MAP_FAILED. Inert unless HL_X_FORCE_BASE_COLLIDE is set.
+        if (base != MAP_FAILED && getenv("HL_X_FORCE_BASE_COLLIDE")) {
             munmap(base, span);
             base = MAP_FAILED;
         }
@@ -316,7 +316,7 @@ static void load_elf(const char *path, struct loaded *out) {
     // original link range + bias so the dispatcher can redirect absolute CODE jumps and the SIGSEGV
     // handler (nonpie_fixup) can serve absolute DATA loads/stores at +bias. PIE/static-PIE leave these
     // 0 -> no redirect, no fixup, byte-identical. Coexists with the opt8 g_force_base path above (that
-    // only fires for PIE images under DDJIT_PCACHE; a non-PIE ET_EXEC takes the NULL-hint branch).
+    // only fires for PIE images under HL_JIT_PCACHE; a non-PIE ET_EXEC takes the NULL-hint branch).
     // NONPIE_NOFIXUP=1 disables (legacy: code jump still faults on the low vaddr). g_nonpie_* live in the
     // shared os/linux/container/vfs.c; service.c resets them across execve (case 221) for re-loaded images.
     int etype = rd16(f + 16);
@@ -364,14 +364,14 @@ static void load_elf(const char *path, struct loaded *out) {
     // materializes those same pointers as LOW link addresses in code (mov-imm / data loads that dd's
     // ea_bias17 folds on access), so it compares LOW==LOW natively -- rebasing its words HIGH is what broke
     // gcc's set_static_spec pointer-identity check (gcc_unreachable ICE). Gating on static cleanly separates
-    // the two: jq/busybox stay rebased, gcc/cc1 stay low-consistent. DDRELRODYN=1 forces the old behavior.
+    // the two: jq/busybox stay rebased, gcc/cc1 stay low-consistent. HL_RELRODYN=1 forces the old behavior.
     int has_interp = 0;
     for (int i = 0; i < phnum; i++)
         if (rd32(f + phoff + (uint64_t)i * phentsize) == 3) {
             has_interp = 1;
             break;
         } // PT_INTERP
-    if (g_nonpie_lo && !getenv("NORELRO") && (!has_interp || getenv("DDRELRODYN")) &&
+    if (g_nonpie_lo && !getenv("NORELRO") && (!has_interp || getenv("HL_RELRODYN")) &&
         !go_section_by_name(f, st.st_size, ".gopclntab", NULL, NULL, NULL)) {
         uint64_t shoff = rd64(f + 40);
         uint16_t shentsize = rd16(f + 58), shnum = rd16(f + 60), shstrndx = rd16(f + 62);
@@ -436,18 +436,18 @@ static uint64_t build_stack(int argc, char **argv, struct loaded *lm, uint64_t a
         memcpy(top, argv[i], l);
         argp[i] = (uint64_t)top;
     }
-    // The container's env arrives as DD_GUEST_ENV="K=V\nK=V\n…" (set by the daemon / forwarded across
+    // The container's env arrives as HL_GUEST_ENV="K=V\nK=V\n…" (set by the daemon / forwarded across
     // execve by exec_forward_env). Forward EXACTLY those FIRST so they override the built-in defaults; the
     // defaults then fill ONLY the keys the container didn't set (match on the "KEY=" prefix). Mirrors the
     // shared aarch64 build_stack (os/linux/elf.c) -- without this, x86 guests ignored the container env.
     const char *estr[256];
-    char *ge = getenv("DD_GUEST_ENV"), *gecopy = NULL;
-    // execve() escape-encodes records (DD_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
+    char *ge = getenv("HL_GUEST_ENV"), *gecopy = NULL;
+    // execve() escape-encodes records (HL_GUEST_ENV_ESC=1) so a value's own newline isn't mistaken for a
     // record separator -- unescape "\\n"->'\n' and "\\\\"->'\\' after splitting. Mirrors os/linux/elf.c.
-    int env_escaped = (getenv("DD_GUEST_ENV_ESC") != NULL);
-    // Guest-initiated execve makes its envp authoritative (exec_forward_env sets DD_GUEST_ENV_EXACT): forward
+    int env_escaped = (getenv("HL_GUEST_ENV_ESC") != NULL);
+    // Guest-initiated execve makes its envp authoritative (exec_forward_env sets HL_GUEST_ENV_EXACT): forward
     // it verbatim and inject NO fallback defaults, so NULL/curated envp matches Linux. Mirrors os/linux/elf.c.
-    int env_exact = (getenv("DD_GUEST_ENV_EXACT") != NULL);
+    int env_exact = (getenv("HL_GUEST_ENV_EXACT") != NULL);
     if (ge) {
         gecopy = strdup(ge);
         char *save = NULL;

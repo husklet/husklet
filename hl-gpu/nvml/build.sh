@@ -31,7 +31,7 @@ esac
 echo "[test] native ABI test ($HOST_ARCH)"
 gcc -O2 -fPIC -shared -o "$OUT/native-libnvidia-ml.so.1" nvml_shim.c
 gcc -O2 -o "$OUT/test_nvml" test_nvml.c -ldl
-DD_CUDA_NAME="${DD_CUDA_NAME:-Tesla dd-Metal 4C}" DD_CUDA_CC="${DD_CUDA_CC:-8.9}" DD_CUDA_VRAM="${DD_CUDA_VRAM:-16384}" \
+HL_CUDA_NAME="${HL_CUDA_NAME:-Tesla dd-Metal 4C}" HL_CUDA_CC="${HL_CUDA_CC:-8.9}" HL_CUDA_VRAM="${HL_CUDA_VRAM:-16384}" \
   "$OUT/test_nvml" "$OUT/native-libnvidia-ml.so.1"
 
 if [ "${1:-}" = "install" ]; then

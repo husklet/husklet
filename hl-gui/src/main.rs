@@ -145,8 +145,8 @@ impl Component for AppModel {
             history: std::collections::VecDeque::new(),
             removing: std::collections::HashSet::new(),
             shells: None,
-            // `DD_SHOT_VIEW` lets the screenshot harness open a specific panel for verification.
-            category: match std::env::var("DD_SHOT_VIEW").as_deref() {
+            // `HL_SHOT_VIEW` lets the screenshot harness open a specific panel for verification.
+            category: match std::env::var("HL_SHOT_VIEW").as_deref() {
                 Ok("containers") => Category::Containers,
                 Ok("images") => Category::Images,
                 Ok("networks") => Category::Networks,
@@ -173,7 +173,7 @@ impl Component for AppModel {
         {
             let sender = sender.clone();
             std::thread::spawn(move || {
-                if let Some(rel) = update::check(env!("DD_VERSION")) {
+                if let Some(rel) = update::check(env!("HL_VERSION")) {
                     sender.input(Msg::UpdateFound(rel));
                 }
             });
@@ -196,12 +196,12 @@ impl Component for AppModel {
                 .drop_on_shutdown()
         });
 
-        // Headless verification: `DD_SHOT=/path.png` renders the live window to PNG once the daemon
+        // Headless verification: `HL_SHOT=/path.png` renders the live window to PNG once the daemon
         // snapshot has painted, then quits — so the UI can be checked without an interactive session.
-        if let Ok(shot) = std::env::var("DD_SHOT") {
+        if let Ok(shot) = std::env::var("HL_SHOT") {
             root.set_default_size(1040, 680); // skip the compact onboarding size for the capture
             let win = root.clone();
-            let delay = std::env::var("DD_SHOT_DELAY_MS")
+            let delay = std::env::var("HL_SHOT_DELAY_MS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1800);

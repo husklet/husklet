@@ -100,7 +100,7 @@ pub(crate) async fn containers_create(
         .working_dir
         .filter(|w| !w.is_empty())
         .unwrap_or_else(|| img.workdir.clone());
-    // Run user = `docker run --user` if given, else the image's default Config.User (dropped to DD_UID/DD_GID
+    // Run user = `docker run --user` if given, else the image's default Config.User (dropped to HL_UID/HL_GID
     // in runtime.rs). Computed before `img` is partially moved into the Container below.
     let user = body
         .user

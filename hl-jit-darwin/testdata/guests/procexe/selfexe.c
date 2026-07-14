@@ -15,7 +15,7 @@
 //                  host kernel/binfmt sets comm differently, so the truth here is native-Linux
 //                  semantics (verified against a native aarch64 run) enforced as a golden.
 // Stages re-enter main with argv[1] = "s2:<name>" (exe check) or "s2c:<name>" (comm print); the
-// expected canonical self path travels in $DD_T_EXP (execve must forward the guest environment).
+// expected canonical self path travels in $HL_T_EXP (execve must forward the guest environment).
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -54,7 +54,7 @@ static void read_comm(char *out, size_t n) {
     char *nl = strchr(out, '\n');
     if (nl) *nl = 0;
 }
-// child stage: assert /proc/self/exe == $DD_T_EXP (absolute canonical), or print comm
+// child stage: assert /proc/self/exe == $HL_T_EXP (absolute canonical), or print comm
 static int stage(const char *tag) {
     const char *name = tag + (tag[2] == ':' ? 3 : 4);
     char e[PATH_MAX];
@@ -64,7 +64,7 @@ static int stage(const char *tag) {
         printf("stage %s comm=%s\n", name, c);
         return 0;
     }
-    const char *exp = getenv("DD_T_EXP");
+    const char *exp = getenv("HL_T_EXP");
     int ok = rl("/proc/self/exe", e, sizeof e) > 0 && exp && !strcmp(e, exp);
     printf("stage %s exe=%d\n", name, ok);
     return 0;
@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
         printf("procexe: realpath(argv0) failed\n");
         return 1;
     }
-    setenv("DD_T_EXP", self, 1);
+    setenv("HL_T_EXP", self, 1);
     char td[] = "/tmp/procexeXXXXXX";
     if (!mkdtemp(td)) {
         printf("procexe: mkdtemp failed\n");

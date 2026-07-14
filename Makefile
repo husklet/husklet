@@ -15,7 +15,7 @@ test-ci: jit    ## the cargo-test path (one matrix test; for CI)
 mac-crates:     ## POST-MERGE GATE (macOS): build+test the mac-only Wayland-renderer crates (hl-display/hl-gpu-wgpu/dd-compositor). They are NOT in workspace default-members, so a plain `cargo build` never compiles them — run this after any merge that touches shared types they use (present.rs SurfaceBuffer, the GPU IR, …) so a cross-cutting change can't silently break the Smithay/wgpu path. Needs macOS + the nix dev shell (provides libxkbcommon).
 	@[ "$$(uname)" = "Darwin" ] || { echo "mac-crates: macOS-only (dd-compositor links libxkbcommon + the Cocoa/Metal present path) — skipping on $$(uname). Maintainer: run via the mac bridge."; exit 0; }
 	$(NIX_DEV) bash -euc '\
-	  X="$$DD_LIBXKBCOMMON"; [ -n "$$X" ] || { echo "mac-crates: DD_LIBXKBCOMMON not exported by the dev shell — update nix/flake.nix"; exit 1; }; \
+	  X="$$HL_LIBXKBCOMMON"; [ -n "$$X" ] || { echo "mac-crates: HL_LIBXKBCOMMON not exported by the dev shell — update nix/flake.nix"; exit 1; }; \
 	  export RUSTFLAGS="-L native=$$X/lib $${RUSTFLAGS:-}" DYLD_LIBRARY_PATH="$$X/lib:$${DYLD_LIBRARY_PATH:-}"; \
 	  cargo build -p hl-display -p hl-gpu-wgpu -p hl-compositor; \
 	  cargo test  -p hl-compositor -p hl-gpu-wgpu'
@@ -66,7 +66,7 @@ app:            ## build + assemble & ad-hoc-sign build/dd.app (the GTK GUI bund
 	@chmod +x hl-gui/package/bundle.sh hl-gui/package/make-dmg.sh
 	cargo clean -p hl-jit-darwin --release                 # FORCE a fresh C engine: build.rs's .c rerun-if-changed is unreliable under CI rust-cache, so a stale engine could otherwise ship (Rust/daemon fixes shipped while engine/C fixes silently didn't)
 	cargo build --release -p hl-daemon -p hl-cli   # native toolchain: builds + allow-jit-signs the ddjit-* engines
-	DD_VERSION=$(VERSION) $(NIX_DEV) hl-gui/package/bundle.sh $(VERSION)   # DD_VERSION -> baked into the dd-app binary
+	HL_VERSION=$(VERSION) $(NIX_DEV) hl-gui/package/bundle.sh $(VERSION)   # HL_VERSION -> baked into the dd-app binary
 dmg: app        ## build dist/dd-<ver>-<arch>.dmg from the app bundle (macOS)
 	$(NIX_DEV) hl-gui/package/make-dmg.sh $(VERSION)
 install: app    ## copy the app to /Applications and run `dd install` (per-user, no root)

@@ -42,19 +42,19 @@ fi
 rm -f "$DIST"/rw.*.dmg
 
 # Sign + notarize + staple when notarization creds are configured — either a notarytool keychain profile
-# (DD_NOTARY_PROFILE, e.g. "dd-notary", local) OR inline App Store Connect creds (DD_NOTARY_APPLE_ID +
-# DD_NOTARY_TEAM_ID + DD_NOTARY_PW, used by CI from secrets). The app inside must already be Developer
-# ID-signed with hardened runtime (tools/bundle.sh + DD_SIGN_ID).
-if [ -n "${DD_NOTARY_PROFILE:-}" ] || [ -n "${DD_NOTARY_APPLE_ID:-}" ]; then
-  if [ -n "${DD_SIGN_ID:-}" ] && [ "${DD_SIGN_ID}" != "-" ]; then
+# (HL_NOTARY_PROFILE, e.g. "dd-notary", local) OR inline App Store Connect creds (HL_NOTARY_APPLE_ID +
+# HL_NOTARY_TEAM_ID + HL_NOTARY_PW, used by CI from secrets). The app inside must already be Developer
+# ID-signed with hardened runtime (tools/bundle.sh + HL_SIGN_ID).
+if [ -n "${HL_NOTARY_PROFILE:-}" ] || [ -n "${HL_NOTARY_APPLE_ID:-}" ]; then
+  if [ -n "${HL_SIGN_ID:-}" ] && [ "${HL_SIGN_ID}" != "-" ]; then
     KCFLAG=""
-    [ -n "${DD_SIGN_KEYCHAIN:-}" ] && { security unlock-keychain ${DD_SIGN_KEYCHAIN_PW:+-p "$DD_SIGN_KEYCHAIN_PW"} "$DD_SIGN_KEYCHAIN" 2>/dev/null || true; KCFLAG="--keychain $DD_SIGN_KEYCHAIN"; }
-    codesign -s "$DD_SIGN_ID" --timestamp $KCFLAG -f "$OUT"
+    [ -n "${HL_SIGN_KEYCHAIN:-}" ] && { security unlock-keychain ${HL_SIGN_KEYCHAIN_PW:+-p "$HL_SIGN_KEYCHAIN_PW"} "$HL_SIGN_KEYCHAIN" 2>/dev/null || true; KCFLAG="--keychain $HL_SIGN_KEYCHAIN"; }
+    codesign -s "$HL_SIGN_ID" --timestamp $KCFLAG -f "$OUT"
   fi
-  if [ -n "${DD_NOTARY_APPLE_ID:-}" ]; then
-    NAUTH=(--apple-id "$DD_NOTARY_APPLE_ID" --team-id "$DD_NOTARY_TEAM_ID" --password "$DD_NOTARY_PW")
+  if [ -n "${HL_NOTARY_APPLE_ID:-}" ]; then
+    NAUTH=(--apple-id "$HL_NOTARY_APPLE_ID" --team-id "$HL_NOTARY_TEAM_ID" --password "$HL_NOTARY_PW")
   else
-    NAUTH=(--keychain-profile "$DD_NOTARY_PROFILE")
+    NAUTH=(--keychain-profile "$HL_NOTARY_PROFILE")
   fi
   echo "[make-dmg] notarizing $OUT — Apple round-trip, ~1-5 min..."
   # Apple's /usr/bin/xcrun, NOT the nix-shell xcrun (which can't resolve notarytool/stapler).

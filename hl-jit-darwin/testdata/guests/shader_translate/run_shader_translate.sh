@@ -5,8 +5,8 @@ cd "$(dirname "$0")"
 
 ROOT="$(cd ../../.. && pwd)"
 GL_SHIM="$ROOT/dd-tests/guests/gl_shim.c"
-DD_DISPLAY="${DD_DISPLAY:-$ROOT/target/release/dd-display}"
-TMPBASE="${DD_SHADER_TRANSLATE_TMP:-$ROOT/target-chrome-codex/shader-translate-tmp}"
+HL_DISPLAY="${HL_DISPLAY:-$ROOT/target/release/dd-display}"
+TMPBASE="${HL_SHADER_TRANSLATE_TMP:-$ROOT/target-chrome-codex/shader-translate-tmp}"
 TMPDIR="$TMPBASE/dd-shader-translate.$$"
 
 cleanup() {
@@ -24,7 +24,7 @@ run_pair() {
     out="$TMPDIR/$name.metal"
 
     "$TMPDIR/gl_tr" "$vert" "$frag" > "$out"
-    "$DD_DISPLAY" selftest-msl "$out"
+    "$HL_DISPLAY" selftest-msl "$out"
 }
 
 run_pair chrome_local_decl chrome_local_decl.vert.glsl chrome_local_decl.frag.glsl

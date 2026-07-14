@@ -34,7 +34,7 @@ pub struct LaunchConfig {
     pub uid: Option<u32>,
     /// USER-ns gid the guest process runs as (`None` = root = 0).
     pub gid: Option<u32>,
-    /// Run the guest under the JIT's syscall sandbox (`DDJIT_SANDBOX`).
+    /// Run the guest under the JIT's syscall sandbox (`HL_JIT_SANDBOX`).
     pub sandbox: bool,
     /// `--network none`: refuse all non-loopback egress.
     pub net_isolate: bool,
@@ -47,7 +47,7 @@ pub struct LaunchConfig {
     /// shared external-writer generation file for daemon-write coherence (empty = none)
     pub fsgen_file: String,
     /// per-workspace VPN egress: funnel the guest's genuine external TCP connects through this SOCKS5 proxy
-    /// (`host:port`, the engine's `DD_EGRESS_SOCKS` switch). Empty = direct host egress (unchanged).
+    /// (`host:port`, the engine's `HL_EGRESS_SOCKS` switch). Empty = direct host egress (unchanged).
     pub egress_socks: String,
     /// (host_port, container_port) tcp publishes
     pub publish: Vec<(u16, u16)>,
@@ -66,7 +66,7 @@ pub struct LaunchConfig {
     /// opt-in the host-IOSurface GPU path (`--gui`): the engine synthesizes `/dev/dri/renderD128` + services
     /// `DD_IOCTL_GPU_ALLOC`. Off = the whole GPU path is inert (existing workloads/the gate never see it).
     pub gpu_iosurface: bool,
-    /// per-container persistent-cache kill switch (`DDJIT_NOPCACHE`): disables pcache for THIS container even
+    /// per-container persistent-cache kill switch (`HL_JIT_NOPCACHE`): disables pcache for THIS container even
     /// when the runtime enables pcache defaults globally. Off = pcache follows the global gate.
     pub nopcache: bool,
     /// the guest argv (entrypoint + args)

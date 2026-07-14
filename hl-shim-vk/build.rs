@@ -7,7 +7,7 @@
 //! Output: `$OUT_DIR/generated_entrypoints.rs`, `include!`d by `src/lib.rs`.
 //!
 //! For every command NOT hand-implemented in `src/` (`IMPLEMENTED` below), we emit a spec-faithful
-//! *default* stub: correct C-ABI signature (so the loader/app resolves the symbol), a DD_SHIM_DEBUG
+//! *default* stub: correct C-ABI signature (so the loader/app resolves the symbol), a HL_SHIM_DEBUG
 //! "unimplemented entry point" trace, and a benign default return (`VK_SUCCESS` = 0 for the `VkResult`
 //! most Vulkan entry points return). Real bodies replace stubs incrementally without ever changing the
 //! exported surface — the shrinking long tail, exactly like the GL/CUDA siblings.

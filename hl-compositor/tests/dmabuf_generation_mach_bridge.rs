@@ -45,7 +45,7 @@ fn engine_supplied_generation_reaches_the_compositor_over_the_mach_bridge() {
 
     // A per-process bridge name so concurrent test binaries don't collide on the bootstrap service.
     let bridge = format!("com.dd.display.gpu.test.{}", std::process::id());
-    std::env::set_var("DD_GPU_BRIDGE_NAME", &bridge);
+    std::env::set_var("HL_GPU_BRIDGE_NAME", &bridge);
     assert!(
         hl_display::metal::start_gpu_bridge(),
         "GPU mach bridge failed to register under {bridge}"
@@ -54,7 +54,7 @@ fn engine_supplied_generation_reaches_the_compositor_over_the_mach_bridge() {
     const GENERATION: u32 = 0x1234; // a distinctive non-trivial value (within the 15-bit field)
     let out = Command::new(&sender)
         .arg(GENERATION.to_string())
-        .env("DD_GPU_BRIDGE_NAME", &bridge)
+        .env("HL_GPU_BRIDGE_NAME", &bridge)
         .output()
         .expect("run gen sender");
     let stdout = String::from_utf8_lossy(&out.stdout);

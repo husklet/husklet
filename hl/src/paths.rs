@@ -25,12 +25,12 @@ pub fn run_dir() -> PathBuf {
     hl_root().join("run")
 }
 
-/// `~/.dd/run/docker.sock` — the daemon's listen socket (== `DDOCKERD_SOCK`).
+/// `~/.dd/run/docker.sock` — the daemon's listen socket (== `HL_DOCKER_SOCK`).
 pub fn socket() -> PathBuf {
     run_dir().join("docker.sock")
 }
 
-/// `~/.dd/images` — image rootfs dirs (== `DD_IMAGES`).
+/// `~/.dd/images` — image rootfs dirs (== `HL_IMAGES`).
 pub fn images_dir() -> PathBuf {
     hl_root().join("images")
 }
@@ -40,10 +40,10 @@ pub fn logs_dir() -> PathBuf {
     crate::platform::logs_dir()
 }
 
-/// The `dd-daemon` binary the agent should launch. Order: `$DD_DAEMON_BIN`, the installed app
+/// The `dd-daemon` binary the agent should launch. Order: `$HL_DAEMON_BIN`, the installed app
 /// bundle (macOS only), then a binary sitting next to this `dd` executable (the dev/`cargo` layout).
 pub fn daemon_bin() -> PathBuf {
-    if let Some(p) = std::env::var_os("DD_DAEMON_BIN") {
+    if let Some(p) = std::env::var_os("HL_DAEMON_BIN") {
         return PathBuf::from(p);
     }
     if let Some(bundle) = crate::platform::app_bundle() {

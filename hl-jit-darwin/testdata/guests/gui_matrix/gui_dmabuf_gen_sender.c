@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
     if (!surf) return 3;
     uint32_t id = IOSurfaceGetID(surf);
 
-    const char *bridge = getenv("DD_GPU_BRIDGE_NAME");
+    const char *bridge = getenv("HL_GPU_BRIDGE_NAME");
     if (!bridge || !*bridge) bridge = "com.dd.display.gpu";
     mach_port_t server = MACH_PORT_NULL;
     if (bootstrap_look_up(bootstrap_port, (char *)bridge, &server) != KERN_SUCCESS) return 4;

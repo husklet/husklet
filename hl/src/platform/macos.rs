@@ -60,9 +60,9 @@ fn render_plist() -> String {
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>DDOCKERD_SOCK</key>  <string>{sock}</string>
-    <key>DD_IMAGES</key>      <string>{images}</string>
-    <key>DDJIT_DIR</key>      <string>{jit_dir}</string>
+    <key>HL_DOCKER_SOCK</key>  <string>{sock}</string>
+    <key>HL_IMAGES</key>      <string>{images}</string>
+    <key>HL_JIT_DIR</key>      <string>{jit_dir}</string>
   </dict>
   <key>RunAtLoad</key>        <true/>
   <key>KeepAlive</key>        <true/>

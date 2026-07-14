@@ -33,7 +33,7 @@ impl Ctx {
             // lives at hl-jit-darwin/testdata/guests, resolved from the shared repo root rather than
             // this helper crate's manifest dir.
             guests: repo.join("hl-jit-darwin/testdata/guests"),
-            images: std::env::var("DD_IMAGES")
+            images: std::env::var("HL_IMAGES")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/Users/x/dd/poc/images")),
             cache,

@@ -334,7 +334,7 @@ impl Default for DrawCall {
 }
 
 /// The presented default framebuffer / window surface (gl_shim.c `g_surf` + geometry). `id` is the
-/// engine surface/IOSurface id the frame renders into (1 in DD_IR_DUMP/host-tool mode); `stride`/`fd`
+/// engine surface/IOSurface id the frame renders into (1 in HL_IR_DUMP/host-tool mode); `stride`/`fd`
 /// come from the renderD128 alloc and drive the wayland dma-buf commit. The `logical_*`/`geom_*`/
 /// `attach_*` fields are the compositor-facing geometry resolved at bring-up.
 #[derive(Clone, Copy, Default)]
@@ -1066,7 +1066,7 @@ impl GlState {
             lh = bh as i32;
             source = 0;
         }
-        // env override (DD_SHIM_LOGICAL_SIZE / CHROME_WINDOW_SIZE), only when logical == backing.
+        // env override (HL_SHIM_LOGICAL_SIZE / HL_WINDOW_SIZE), only when logical == backing.
         if lw == bw as i32 && lh == bh as i32 {
             if let Some((fw, fh)) = env_logical_size() {
                 if fw > 0 && fh > 0 && fw <= bw as i32 && fh <= bh as i32 {
@@ -1088,7 +1088,7 @@ impl GlState {
 
     /// Bring up the presented surface (gl_shim.c `surface_up`). Sets the surface dimensions + resolved
     /// geometry and default viewport/scissor. The renderD128 alloc + wayland handshake (deployed path)
-    /// and the DD_IR_DUMP id=1 shortcut are driven by `eglCreateWindowSurface`.
+    /// and the HL_IR_DUMP id=1 shortcut are driven by `eglCreateWindowSurface`.
     pub fn surface_up(&mut self, w: u32, h: u32) {
         self.default_surface_valid = false;
         self.default_full_clear_since_swap = false;
@@ -1106,7 +1106,7 @@ impl GlState {
             height: h,
             stride: 0,
             fd: -1,
-            generation: 0, // host-tool / DD_IR_DUMP path (no engine alloc) → unversioned
+            generation: 0, // host-tool / HL_IR_DUMP path (no engine alloc) → unversioned
             logical_w: lw,
             logical_h: lh,
             geom_x: gx,
@@ -1129,7 +1129,7 @@ impl GlState {
 
     /// Store `pixels` (in upload `fmt`) into texture `id`'s RGBA8 backing at (xo,yo)-(w,h), honoring
     /// the unpack alignment / row-length / skip state. Faithful port of gl_shim.c `tex_store_pixels`
-    /// (minus the DD_PREMULTIPLY_UPLOAD debug knob). `pixels == None` clears to (0,0,0,255)-shaped
+    /// (minus the HL_PREMULTIPLY_UPLOAD debug knob). `pixels == None` clears to (0,0,0,255)-shaped
     /// default per the C code (r=g=b=0, a=255).
     pub fn tex_store_pixels(&mut self, id: u32, xo: i32, yo: i32, w: i32, h: i32, fmt: u32, pixels: Option<&[u8]>) {
         let (tw, th) = {
@@ -1515,9 +1515,9 @@ pub fn take_gl_error() -> u32 {
     e
 }
 
-/// Whether the shim advertises ES3 (env `DD_SHIM_ES3`), matching gl_shim.c `shim_es3()`.
+/// Whether the shim advertises ES3 (env `HL_SHIM_ES3`), matching gl_shim.c `shim_es3()`.
 pub fn shim_es3() -> bool {
-    std::env::var_os("DD_SHIM_ES3").is_some()
+    std::env::var_os("HL_SHIM_ES3").is_some()
 }
 
 /// Parse a `WxH` / `W,H` size (gl_shim.c `parse_size_pair`): both in (0, 8192].
@@ -1532,11 +1532,11 @@ fn parse_size_pair(s: &str) -> Option<(i32, i32)> {
     }
 }
 
-/// The logical window size from env (gl_shim.c `env_logical_size`): `DD_SHIM_LOGICAL_SIZE`, else
-/// `CHROME_WINDOW_SIZE`.
+/// The logical window size from env (gl_shim.c `env_logical_size`): `HL_SHIM_LOGICAL_SIZE`, else
+/// `HL_WINDOW_SIZE`.
 fn env_logical_size() -> Option<(i32, i32)> {
-    std::env::var("DD_SHIM_LOGICAL_SIZE")
+    std::env::var("HL_SHIM_LOGICAL_SIZE")
         .ok()
         .and_then(|s| parse_size_pair(&s))
-        .or_else(|| std::env::var("CHROME_WINDOW_SIZE").ok().and_then(|s| parse_size_pair(&s)))
+        .or_else(|| std::env::var("HL_WINDOW_SIZE").ok().and_then(|s| parse_size_pair(&s)))
 }

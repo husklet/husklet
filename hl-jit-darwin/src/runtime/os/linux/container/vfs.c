@@ -126,13 +126,13 @@ static void unix_bind_clear(int fd) {
     if (fd >= 0 && fd < DD_NFD) g_unix_bind[fd][0] = 0;
 }
 // /dev/dri/renderD128: the synthesized GPU render node (GPU rung 2). 1 = this fd is the render node, so
-// its ioctl routes to the dd GPU allocator. Set only when DD_GPU_IOSURFACE gates the path on.
+// its ioctl routes to the dd GPU allocator. Set only when HL_GPU_IOSURFACE gates the path on.
 static uint8_t g_devdri[DD_NFD];
-// DD_GPU_IOSURFACE opt-in: the whole host-IOSurface GPU path (render-node synth + alloc ioctl) is inert
+// HL_GPU_IOSURFACE opt-in: the whole host-IOSurface GPU path (render-node synth + alloc ioctl) is inert
 // unless this is set in the engine env (the --gui launcher sets it). Cached; -1 = unqueried.
 static int g_gpu_iosurface = -1;
 static int gpu_iosurface_on(void) {
-    if (g_gpu_iosurface < 0) g_gpu_iosurface = getenv("DD_GPU_IOSURFACE") != NULL ? 1 : 0;
+    if (g_gpu_iosurface < 0) g_gpu_iosurface = getenv("HL_GPU_IOSURFACE") != NULL ? 1 : 0;
     return g_gpu_iosurface;
 }
 // Overlay merged-getdents snapshot cursor reset (rewinddir/seekdir on an overlay dir). Defined in fs.c
@@ -745,7 +745,7 @@ static int g_nvols;
 // in no layer. Creating /x (and /x/y) in the upper lets the merged readdir list `/x` -> `y`; the mount
 // itself still wins in jail_pick(), so `/x/y` shows the host files, not the empty placeholder. The rootfs
 // is the per-container overlay upper (daemon) or the plain rootfs (manual) -- both writable & private.
-// No-op until the rootfs is known (the bridge sets DDVOL after container_init resolves g_rootfs_canon).
+// No-op until the rootfs is known (the bridge sets HL_VOL after container_init resolves g_rootfs_canon).
 // A file mount's leaf is created as an empty placeholder FILE (not a dir) so a parent `ls` shows it as a
 // file, exactly as Docker materializes a single-file bind target inside the rootfs.
 static void vol_mkmountpoint(const char *guest, int isfile) {
@@ -925,7 +925,7 @@ static int jail_pick(const char *abs, const char **canon, size_t *clen, const ch
 // Memoizes confine_in_m's realpath climb per DIRECTORY: key = the exact pre-realpath host string
 // (jail canon + normalized rel, final component peeled in nofollow mode); value = (canonical deepest
 // EXISTING prefix, #trailing components missing). Epoch-gated on the container-shared g_res_epoch,
-// hard-reset on fork/chroot (rc_reset), volumes never cached, DD_NOPATHCACHE=1 kills it. See the full
+// hard-reset on fork/chroot (rc_reset), volumes never cached, HL_NOPATHCACHE=1 kills it. See the full
 // correctness model at the impl. DC_KEYMAX bounds the fixed-size slots (longer paths bypass, safely).
 #define DC_KEYMAX 320
 static int dc_lookup(const char *key, char *canon, size_t n, int *nmiss);
@@ -1127,12 +1127,12 @@ static const char *xresolve_exec(const char *p, char *buf, size_t n) {
     return buf;
 }
 
-// Copy the container's PATH value (from the daemon-forwarded DD_GUEST_ENV, "K=V\nK=V") into `out`, or
+// Copy the container's PATH value (from the daemon-forwarded HL_GUEST_ENV, "K=V\nK=V") into `out`, or
 // leave "" if PATH is unset/empty. This is the image-config PATH (e.g. golang's /usr/local/go/bin:...)
 // merged with any `docker run/exec -e PATH=` override -- the authoritative search path for bare commands.
 static void container_path_env(char *out, size_t n) {
     out[0] = 0;
-    const char *ge = getenv("DD_GUEST_ENV");
+    const char *ge = getenv("HL_GUEST_ENV");
     if (!ge) return;
     for (const char *s = ge; *s;) {
         const char *e = s;
@@ -1685,11 +1685,11 @@ static int proc_stat_text(char *b, size_t n) {
 }
 
 // /proc/[pid]/environ -- the guest environment as NUL-separated KEY=VALUE. The authoritative source is
-// DD_GUEST_ENV (the container env the daemon forwards, "K=V\nK=V"); absent it (manual/direct mode), fall
+// HL_GUEST_ENV (the container env the daemon forwards, "K=V\nK=V"); absent it (manual/direct mode), fall
 // back to the same defaults build_stack hands the guest. Returns the byte count written.
 // The running process's FINAL environment (container env + merged engine defaults), captured by build_stack
 // -- the exact set placed on the guest stack, i.e. what getenv() sees. /proc/self/environ was generated from
-// the RAW DD_GUEST_ENV instead, omitting the defaults (HOME/LANG/…) build_stack adds, so procfs disagreed
+// the RAW HL_GUEST_ENV instead, omitting the defaults (HOME/LANG/…) build_stack adds, so procfs disagreed
 // with getenv. Using this blob makes them consistent. (build_stack in elf.c is compiled after vfs.c.)
 static char g_self_environ[16384];
 static int g_self_environ_len = 0;
@@ -1708,13 +1708,13 @@ static void set_guest_environ(const char *const *env, int envc) {
 static int proc_environ_text(char *b, size_t n) {
     int o = 0;
     // Prefer the FINAL environment build_stack placed (== getenv), so procfs and getenv agree; this includes
-    // the engine defaults (HOME/LANG/GLIBC_TUNABLES) the raw DD_GUEST_ENV path below omitted.
+    // the engine defaults (HOME/LANG/GLIBC_TUNABLES) the raw HL_GUEST_ENV path below omitted.
     if (g_self_environ_len > 0) {
         int L = g_self_environ_len > (int)n ? (int)n : g_self_environ_len;
         memcpy(b, g_self_environ, (size_t)L);
         return L;
     }
-    const char *ge = getenv("DD_GUEST_ENV");
+    const char *ge = getenv("HL_GUEST_ENV");
     if (ge && ge[0]) {
         for (const char *s = ge; *s;) {
             const char *e = s;
@@ -1993,12 +1993,12 @@ static int proc_mountinfo_text(char *b, size_t n) {
 #include <mach/processor_info.h> // host_processor_info(PROCESSOR_CPU_LOAD_INFO) — real PER-CORE ticks
 #include <mach/vm_map.h>         // vm_deallocate for the processor_info array
 
-// The registry directory is keyed per-container (DD_NETNS / DD_HOSTNAME are set once by the daemon and
+// The registry directory is keyed per-container (HL_NETNS / HL_HOSTNAME are set once by the daemon and
 // inherited across fork + survive guest execve), so two containers on the same host never collide; a
 // direct-mode run with neither falls back to the host session id. All peers compute the SAME key.
 static void proc_reg_key(char *out, size_t n) {
-    const char *k = getenv("DD_NETNS");
-    if (!k || !k[0]) k = getenv("DD_HOSTNAME");
+    const char *k = getenv("HL_NETNS");
+    if (!k || !k[0]) k = getenv("HL_HOSTNAME");
     if (k && k[0]) {
         char s[48];
         int o = 0;
@@ -2570,7 +2570,7 @@ static int ns_link_target(const char *name, char *out, size_t cap) {
 // the guest pid. That let a guest kill(2)/pidfd_send_signal an ARBITRARY same-user HOST pid -- a sibling
 // engine (another container), the launcher, or any of the dd user's processes -- because the target was
 // resolved straight to the host with no namespace boundary. The per-container process REGISTRY (proc_reg_*,
-// keyed by DD_NETNS/DD_HOSTNAME so every engine process of ONE container agrees and two containers never
+// keyed by HL_NETNS/HL_HOSTNAME so every engine process of ONE container agrees and two containers never
 // collide) is that boundary: a host pid belongs to this container iff it published a `<dir>/<hostpid>`
 // record. The signal syscalls resolve the guest target to a host pid and then require membership here,
 // turning "any host pid" into "only a process inside THIS container" (a non-member -> ESRCH), exactly like
@@ -3375,12 +3375,12 @@ static int uuid_fmt(char *out, size_t cap, uint8_t b[16]) {
 // The 16 raw bytes of the container's boot identity. Must be STABLE for the container's whole life AND
 // IDENTICAL across every process in it (each guest process is a separate host engine, so a per-process
 // arc4random value would disagree between peers). Derived DETERMINISTICALLY from the per-container
-// registry key (DD_NETNS, minted+exported at startup and inherited across fork/execve so every peer
+// registry key (HL_NETNS, minted+exported at startup and inherited across fork/execve so every peer
 // agrees -- see proc_reg_key) via FNV-1a expanded to 16 bytes. Same container -> same bytes everywhere;
 // different containers -> different bytes. Backs both boot_id (UUID) and machine-id (32 hex).
 static void boot_id_bytes(uint8_t b[16]) {
     char key[80];
-    proc_reg_key(key, sizeof key);       // DD_NETNS -> DD_HOSTNAME -> session id fallback
+    proc_reg_key(key, sizeof key);       // HL_NETNS -> HL_HOSTNAME -> session id fallback
     uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis
     for (const char *p = key; *p; p++) {
         h ^= (uint8_t)*p;
@@ -4581,7 +4581,7 @@ static const char *dev_node_hostpath(const char *gp) {
 }
 
 // ================= dd GPU rung 2: host-IOSurface-backed guest buffer =================
-// See include/dd_gpu.h. Entirely gated behind DD_GPU_IOSURFACE (gpu_iosurface_on()); the code compiles
+// See include/dd_gpu.h. Entirely gated behind HL_GPU_IOSURFACE (gpu_iosurface_on()); the code compiles
 // always (the engine is always a macOS binary) but never runs for existing workloads / the gate.
 #include "../../../include/dd_gpu.h"
 #ifdef __APPLE__
@@ -4606,9 +4606,9 @@ typedef struct {
 // compositor isn't up (no service), silently skip — the alloc still succeeds for the guest.
 static void hl_gpu_send_port(uint32_t id, uint32_t generation, IOSurfaceRef surf) {
     mach_port_t server = MACH_PORT_NULL;
-    // DD_GPU_BRIDGE_NAME lets multiple dd-display instances coexist (one per agent/benchmark); the
+    // HL_GPU_BRIDGE_NAME lets multiple dd-display instances coexist (one per agent/benchmark); the
     // compositor registers under the SAME name. Unset → the historical singleton "com.dd.display.gpu".
-    const char *bridge = getenv("DD_GPU_BRIDGE_NAME");
+    const char *bridge = getenv("HL_GPU_BRIDGE_NAME");
     if (!bridge || !*bridge) bridge = "com.dd.display.gpu";
     if (bootstrap_look_up(bootstrap_port, (char *)bridge, &server) != KERN_SUCCESS) return;
     mach_port_t port = IOSurfaceCreateMachPort(surf);
@@ -4779,7 +4779,7 @@ static uint32_t hl_gpu_align_u32(uint32_t v, uint32_t align) {
 #ifdef __APPLE__
 static int gpu_alloc_dbg(void) {
     static int v = -1;
-    if (v < 0) v = getenv("DD_GPU_ALLOC_DEBUG") != NULL ? 1 : 0;
+    if (v < 0) v = getenv("HL_GPU_ALLOC_DEBUG") != NULL ? 1 : 0;
     return v;
 }
 
@@ -4933,7 +4933,7 @@ static int64_t hl_gpu_alloc(int owner_fd, void *arg) {
 
 // Fork-safety prewarm for the host-IOSurface GPU bridge. Called ONCE from engine_global_init(), on the
 // single engine startup thread, BEFORE the guest's first instruction runs (hence before any guest thread
-// exists and before Chrome's mandatory zygote/broker fork()). Gated on DD_GPU_IOSURFACE, so inert for
+// exists and before Chrome's mandatory zygote/broker fork()). Gated on HL_GPU_IOSURFACE, so inert for
 // every non-GUI workload / the test gate.
 //
 // Why this is needed: the bridge's CoreFoundation/IOSurface/mach calls (CFDictionary/CFNumber build,
@@ -4983,7 +4983,7 @@ static void hl_gpu_prewarm_fork_safety(void) {
     mach_port_t port = IOSurfaceCreateMachPort(surf);
     if (port != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), port);
     mach_port_t server = MACH_PORT_NULL;
-    const char *bridge = getenv("DD_GPU_BRIDGE_NAME");
+    const char *bridge = getenv("HL_GPU_BRIDGE_NAME");
     if (!bridge || !*bridge) bridge = "com.dd.display.gpu";
     if (bootstrap_look_up(bootstrap_port, (char *)bridge, &server) == KERN_SUCCESS && server != MACH_PORT_NULL)
         mach_port_deallocate(mach_task_self(), server);
@@ -4995,16 +4995,16 @@ static void hl_gpu_prewarm_fork_safety(void) {
 
     // Pre-fill the share-inherited pool for the sizes the GUI will render, BEFORE any guest fork. Chrome's
     // GPU/render process forks WITHOUT exec and cannot create/map an IOSurface at all, so every surface it
-    // will use must exist, mapped SHARED, at fork time. DD_GPU_POOL="WxH[,WxH...]" names the sizes (the
-    // --gui launcher passes the window size); DD_GPU_POOL_N sets how many per size (default 6 — covers a
+    // will use must exist, mapped SHARED, at fork time. HL_GPU_POOL="WxH[,WxH...]" names the sizes (the
+    // --gui launcher passes the window size); HL_GPU_POOL_N sets how many per size (default 6 — covers a
     // gbm 2-4 bo pool plus slack). Unset → no prefill (root-side on-demand batch-create still amplifies).
     int per = 6;
-    const char *pn = getenv("DD_GPU_POOL_N");
+    const char *pn = getenv("HL_GPU_POOL_N");
     if (pn && *pn) {
         int v = atoi(pn);
         if (v > 0 && v <= 64) per = v;
     }
-    const char *pool = getenv("DD_GPU_POOL");
+    const char *pool = getenv("HL_GPU_POOL");
     if (pool && *pool) {
         // Explicit "WxH[,WxH...]" list.
         char buf[256];
@@ -5016,9 +5016,9 @@ static void hl_gpu_prewarm_fork_safety(void) {
                     if (hl_gpu_pool_make_one(pw, ph) != 0) break;
         }
     } else {
-        // Fallback: the --gui launcher already exports the window geometry as CHROME_WINDOW_SIZE="W,H";
-        // seed the pool from it so the fix works without a dedicated DD_GPU_POOL env.
-        const char *ws = getenv("CHROME_WINDOW_SIZE");
+        // Fallback: the --gui launcher already exports the window geometry as HL_WINDOW_SIZE="W,H";
+        // seed the pool from it so the fix works without a dedicated HL_GPU_POOL env.
+        const char *ws = getenv("HL_WINDOW_SIZE");
         unsigned pw = 0, ph = 0;
         if (ws && sscanf(ws, "%u,%u", &pw, &ph) == 2 && pw && ph)
             for (int k = 0; k < per; k++)
@@ -5076,7 +5076,7 @@ static void container_populate_dev(void) {
     // GPU rung 2 (opt-in): a /dev/dri directory with card0 + renderD128 placeholder nodes so opendir/
     // readdir (libdrm's drmGetDevices2 enumeration) lists them via the real overlay; stat()/open() of the
     // two nodes are intercepted (drm_synth_stat -> char dev 226:0/226:128, fs.c open -> render-node tag).
-    // Inert unless DD_GPU_IOSURFACE is set (existing workloads never see /dev/dri).
+    // Inert unless HL_GPU_IOSURFACE is set (existing workloads never see /dev/dri).
     if (gpu_iosurface_on()) {
         mkdir(DEVP("dri"), 0755);
         static const char *const dri[] = {"card0", "renderD128"};
@@ -5206,7 +5206,7 @@ static void container_populate_machine_id(void) {
 
 // -> macOS struct stat for a synth file
 // ================= DRM render-node synthesis (chromium ozone GPU discovery) =================
-// Gated on DD_GPU_IOSURFACE. libdrm's drmGetDevices2() enumerates /dev/dri, stats each node's st_rdev ->
+// Gated on HL_GPU_IOSURFACE. libdrm's drmGetDevices2() enumerates /dev/dri, stats each node's st_rdev ->
 // major:minor, then walks /sys/dev/char/<maj>:<min>/... to classify the DRM device's bus. We advertise
 // ONE platform DRM device with a primary node (card0 = 226:0) and a render node (renderD128 = 226:128),
 // both parented to a single platform device ("dd-gpu") so libdrm MERGES them into one drmDevice exposing a
@@ -5534,7 +5534,7 @@ static int synth_stat_raw(const char *gp, struct stat *s) {
         s->st_nlink = 2;
         return 1;
     }
-    if (drm_synth_stat(gp, s)) return 1; // /dev/dri + DRM sysfs (DD_GPU_IOSURFACE)
+    if (drm_synth_stat(gp, s)) return 1; // /dev/dri + DRM sysfs (HL_GPU_IOSURFACE)
     // The controlling terminal, named /dev/pts/0 in the container: fstat the real pty slave so it reports as
     // a character device with the correct rdev. ttyname(3) reads /proc/self/fd/0 -> "/dev/pts/0", then
     // stat()s it and checks S_ISCHR + rdev == fstat(0).rdev; this makes that check pass so `tty` prints

@@ -85,7 +85,7 @@ use smithay::{
 };
 
 /// GPU IR executor lifecycle (Phase 6.1–6.2): starts the dd-gpu executor for the Smithay path so
-/// accelerated guests reach a host GPU backend, since the `DD_DISPLAY_SMITHAY=1` exec replaces
+/// accelerated guests reach a host GPU backend, since the `HL_DISPLAY_SMITHAY=1` exec replaces
 /// `dd-display` before it would have started the executor itself.
 pub mod gpu;
 pub mod handlers;
@@ -303,7 +303,7 @@ pub struct DdState {
     pub single_pixel_buffer: SinglePixelBufferState,
 
     // ---- Modern GUI protocol groups composed from the vendored Smithay tree (codex-rendering §5.2/§9.4) ----
-    // Each state holds a global advertised behind DD_DISPLAY_SMITHAY (the whole binary is gated on it).
+    // Each state holds a global advertised behind HL_DISPLAY_SMITHAY (the whole binary is gated on it).
     // Policy + delegates live in the same-named `handlers::*` submodules. tearing-control is absent from
     // vendored smithay-0.7.0 and is therefore NOT composed.
     /// `zwp_pointer_gestures_v1` — touchpad swipe/pinch/hold (see [`handlers::pointer_gestures`]).
@@ -477,7 +477,7 @@ pub struct DdState {
 
     /// XWayland bridge state (Xwayland server handle, `wl_surface`↔X11 shell global, and the running X11
     /// window manager), present only when built with `--features xwayland` and started at runtime under
-    /// DD_XWAYLAND. `None` until [`handlers::xwayland::DdState::start_xwayland`] runs. See
+    /// HL_XWAYLAND. `None` until [`handlers::xwayland::DdState::start_xwayland`] runs. See
     /// `handlers/xwayland.rs`.
     #[cfg(feature = "xwayland")]
     pub(crate) xwayland: Option<handlers::xwayland::XwaylandState>,
@@ -603,7 +603,7 @@ impl DdState {
         );
         // zxdg_decoration_manager_v1: lets a client (Qt/GTK) negotiate server-side vs client-side window
         // decorations. Our policy honours the client's request within what the host window can render and
-        // defaults to the native macOS titlebar seam (DD_DISPLAY_WINDOW_DECORATIONS) — see handlers/xdg.rs.
+        // defaults to the native macOS titlebar seam (HL_DISPLAY_WINDOW_DECORATIONS) — see handlers/xdg.rs.
         let xdg_decoration = XdgDecorationState::new::<Self>(&dh);
         // xdg_activation_v1: an app can present an activation token to ask the compositor to focus/raise a
         // toplevel (e.g. a launcher activating the window it spawned, or a background tab raising itself).
@@ -2279,9 +2279,9 @@ mod input_routing_tests {
         let geo = state.focused_logical_geometry(1).expect("A has geometry");
         assert_eq!((geo.w, geo.h, geo.source), (800, 600, "xdg_window_geometry"));
 
-        // Geometry mirror is gated on the env knob (parity with legacy DD_DISPLAY_MIRROR_INPUT_GEOMETRY).
+        // Geometry mirror is gated on the env knob (parity with legacy HL_DISPLAY_MIRROR_INPUT_GEOMETRY).
         assert_eq!(state.mirrored_input_crop(2), None, "mirror off by default");
-        std::env::set_var("DD_DISPLAY_MIRROR_INPUT_GEOMETRY", "1");
+        std::env::set_var("HL_DISPLAY_MIRROR_INPUT_GEOMETRY", "1");
         assert_eq!(
             state.mirrored_input_crop(2),
             Some(ExternalLogicalCrop { source_sid: 1, x: 0, y: 0, w: 800, h: 600, source: "xdg_window_geometry" }),
@@ -2289,7 +2289,7 @@ mod input_routing_tests {
         );
         // The mirror never crops the input surface itself.
         assert_eq!(state.mirrored_input_crop(1), None);
-        std::env::remove_var("DD_DISPLAY_MIRROR_INPUT_GEOMETRY");
+        std::env::remove_var("HL_DISPLAY_MIRROR_INPUT_GEOMETRY");
 
         // apply_external_crop narrows the visible (gpu) surface's presented region to the mirrored window.
         state.set_external_logical_crop(Some(ExternalLogicalCrop { source_sid: 1, x: 0, y: 0, w: 800, h: 600, source: "xdg_window_geometry" }));

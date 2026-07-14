@@ -3,7 +3,7 @@
 //! These prove the exit-gate behavior for GL: no unsupported entry point silently reports success.
 //!   (a) a representative `stub` raises the API-correct GL/EGL error (not success) and initializes its
 //!       outputs; a `partial` no-op initializes outputs but raises no error.
-//!   (b) `DD_SHIM_STRICT=1` aborts the process on the FIRST stub call.
+//!   (b) `HL_SHIM_STRICT=1` aborts the process on the FIRST stub call.
 //!   (c) the advertised `glGetString(GL_VERSION)` matches the inventory's coherent (ES 2.0) profile.
 
 use hl_shim_gl::glconst::*;
@@ -105,10 +105,10 @@ fn advertised_gl_version_matches_inventory_profile() {
     assert_eq!(oob, "");
 }
 
-// ---- (b) DD_SHIM_STRICT aborts on the first stub call ------------------------------------------
+// ---- (b) HL_SHIM_STRICT aborts on the first stub call ------------------------------------------
 //
 // Driven by re-executing this test binary: the parent spawns the `strict_child_aborts_on_stub` test
-// with DD_SHIM_STRICT=1 and a marker env var; the child calls a stub, which aborts (SIGABRT). The
+// with HL_SHIM_STRICT=1 and a marker env var; the child calls a stub, which aborts (SIGABRT). The
 // parent asserts the child did NOT exit successfully.
 
 const CHILD_MARKER: &str = "DD_SHIM_GL_STRICT_CHILD";
@@ -119,7 +119,7 @@ fn strict_child_aborts_on_stub() {
         // Normal test run: this is the no-op guard. The real behavior is exercised by the parent below.
         return;
     }
-    // In the child (DD_SHIM_STRICT=1): the first stub call must abort before we reach the line after it.
+    // In the child (HL_SHIM_STRICT=1): the first stub call must abort before we reach the line after it.
     hl_shim_gl::glDispatchCompute(1, 1, 1);
     // If strict mode did NOT abort, exit 0 so the parent's `!success()` assertion fails loudly.
     std::process::exit(0);
@@ -130,13 +130,13 @@ fn hl_shim_strict_aborts_on_first_stub_call() {
     let exe = std::env::current_exe().expect("current_exe");
     let status = std::process::Command::new(exe)
         .args(["--exact", "strict_child_aborts_on_stub", "--nocapture"])
-        .env("DD_SHIM_STRICT", "1")
+        .env("HL_SHIM_STRICT", "1")
         .env(CHILD_MARKER, "1")
         .status()
         .expect("spawn child");
     assert!(
         !status.success(),
-        "DD_SHIM_STRICT must abort the process on the first stub call (child exited successfully): {status:?}"
+        "HL_SHIM_STRICT must abort the process on the first stub call (child exited successfully): {status:?}"
     );
     // On unix, an abort() is delivered as SIGABRT (signal 6), never a normal exit code.
     #[cfg(unix)]

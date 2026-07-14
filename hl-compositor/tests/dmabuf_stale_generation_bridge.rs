@@ -70,7 +70,7 @@ fn build_probe(out: &Path) -> Option<PathBuf> {
 
 #[test]
 fn dmabuf_import_rejects_a_stale_allocation_generation_over_the_wire() {
-    std::env::set_var("DD_DISPLAY_DMABUF", "1");
+    std::env::set_var("HL_DISPLAY_DMABUF", "1");
     // The accelerated-import readiness gate must be up so a rejection is attributable to the generation
     // check rather than to a missing executor.
     hl_compositor::gpu::set_executor_health(true);

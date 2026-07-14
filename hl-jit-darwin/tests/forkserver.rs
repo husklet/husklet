@@ -7,13 +7,13 @@
 //! drives that battery end to end on linux/aarch64 AND linux/x86_64 (the shared implementation lives in
 //! `hl-jit/src/runtime/os/linux/forkserver.c`, parameterized by the per-target
 //! container_init/engine_global_init/load_program/run_loaded/hl_run seam):
-//!   1. identity probe — argv, guest env (DD_GUEST_ENV), cwd, tty triple, exit code.
+//!   1. identity probe — argv, guest env (HL_GUEST_ENV), cwd, tty triple, exit code.
 //!   2. stdio plumbing — stdin reaches the guest, stdout comes back byte-identical.
 //!   3. exit codes — arbitrary codes round-trip.
 //!   4. fatal guest signal — a SIGSEGV death reproduces as a SIGSEGV death of the client (bash: 139).
 //!   5. signal forwarding — SIGTERM sent to the CLIENT reaches the guest's handler (exit 7, "TERM").
 //!   6. warm prewarm path — a `--prewarm` server serves the SAME golden output (pristine-image restore).
-//!   7. pcache discipline — with DDJIT_PCACHE=1 in the CLIENT env: golden output, the fork-without-exec
+//!   7. pcache discipline — with HL_JIT_PCACHE=1 in the CLIENT env: golden output, the fork-without-exec
 //!      guest must NOT save (the never-save-from-fork-child latch), and a cold-populated cache must
 //!      load warm inside a runner with identical output.
 //!
@@ -179,7 +179,7 @@ fn engine_lane(guest: hl_jit::Guest) {
         "identity",
         &engine,
         &sock,
-        "cd /tmp && DD_GUEST_ENV=FSRV_TEST_ENV=hello",
+        "cd /tmp && HL_GUEST_ENV=FSRV_TEST_ENV=hello",
         &format!("{probe} id one two"),
     );
     assert_eq!(rc, 42, "[identity {arch}] exit code");
@@ -274,7 +274,7 @@ fn engine_lane(guest: hl_jit::Guest) {
             "warm",
             &engine,
             &wsock,
-            "DD_GUEST_ENV=FSRV_TEST_ENV=warmy",
+            "HL_GUEST_ENV=FSRV_TEST_ENV=warmy",
             &format!("{probe} id"),
         );
         assert_eq!(rcw, 42, "[warm {arch} r{round}]");
@@ -321,12 +321,12 @@ fn engine_lane(guest: hl_jit::Guest) {
     drop(lsrv);
     mac_sh(&format!("rm -f {link} /tmp/{tag}-link.log"), 20);
 
-    // ---- 7. pcache discipline through the fork-server (client env carries DDJIT_PCACHE) ----
+    // ---- 7. pcache discipline through the fork-server (client env carries HL_JIT_PCACHE) ----
     let pcdir = format!("/tmp/{tag}-pcache");
     let sock2 = format!("/tmp/{tag}-pc.sock");
     let srv2 = Server::start(&engine, &sock2, "", &format!("/tmp/{tag}-pc.log"))
         .unwrap_or_else(|| panic!("pcache server failed to start for {arch}"));
-    let pfx = format!("DDJIT_PCACHE=1 DDJIT_PCACHE_DIR={pcdir} COLDPROF=1");
+    let pfx = format!("HL_JIT_PCACHE=1 HL_JIT_PCACHE_DIR={pcdir} COLDPROF=1");
     mac_sh(&format!("rm -rf {pcdir}; mkdir -p {pcdir}"), 20);
     // 7a. a runner is a fork child: it must produce golden output and must NOT save (no cache files).
     let f1 = mac_sh(

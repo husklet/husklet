@@ -1,6 +1,6 @@
 // sentry_fs -- a pure file-IO round-trip used to validate the untrusted-guest SENTRY split.
 // Every syscall here is in the sentry's forwarded fs set (openat/write/lseek/read/pread64/fstat/
-// getdents64/close), so running it with DDJIT_UNTRUSTED=1 forces each one across the worker->sentry
+// getdents64/close), so running it with HL_JIT_UNTRUSTED=1 forces each one across the worker->sentry
 // ring and back. Registered TWICE (trusted baseline + .untrusted()) against the SAME golden line, so
 // the marshaled+copied-back bytes must reproduce the trusted result exactly. Output is independent of
 // the (pid-unique) path -> deterministic. No fork/exec: isolates the plain fs forwarding path.
@@ -53,7 +53,7 @@ int main(void) {
     }
 
     close(fd);
-    unlink(path); // cleanup (unlinkat stays worker-local; harmless with DDJIT_SANDBOX off)
+    unlink(path); // cleanup (unlinkat stays worker-local; harmless with HL_JIT_SANDBOX off)
 
     printf("sentry_fs sum=%lu size=%lld found=%d\n", sum, (long long)st.st_size, found);
     return 0;

@@ -9,7 +9,7 @@
 // STABLE file (written once; unchanged identity across runs), maps it file-backed+exec, and calls it.
 //
 // Output is deterministic (the accumulator), so the case is golden-checkable cold or warm. Under
-// DDJIT_PCACHE=1 with COLDPROF the cold run logs `deferred-lib=0` (nothing to defer yet) and saves a
+// HL_JIT_PCACHE=1 with COLDPROF the cold run logs `deferred-lib=0` (nothing to defer yet) and saves a
 // manifest; a warm run logs `deferred-lib=N` then activates all N on the re-map (`warm-note waste=0`).
 #include <fcntl.h>
 #include <stdio.h>

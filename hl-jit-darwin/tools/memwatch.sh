@@ -7,17 +7,17 @@
 #   WORKLOAD=exec N=300 bash dd-tests/tools/memwatch.sh        # docker exec churn (D1)
 #   WORKLOAD=create-rm N=300 bash dd-tests/tools/memwatch.sh   # create+rm churn (daemon record leak)
 #
-# Env: DD_DAEMON, DD_IMAGES, N (iters), THRESH_KB (growth budget). Drives the daemon via the mac bridge.
+# Env: HL_DAEMON, HL_IMAGES, N (iters), THRESH_KB (growth budget). Drives the daemon via the mac bridge.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-DAEMON="${DD_DAEMON:-$ROOT/target/release/dd-daemon}"
-IMAGES="${DD_IMAGES:-/Users/x/dd/poc/images}"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
+IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
 N="${N:-300}"; THRESH_KB="${THRESH_KB:-20480}"; WORKLOAD="${WORKLOAD:-exec}"
 
 DIR="$ROOT/target/dd-scen/memwatch-$$"; mkdir -p "$DIR"; SOCK="$DIR/dd.sock"
 cat > "$DIR/boot.sh" <<EOF
 echo \$\$ > "$DIR/daemon.pid"
-export DD_IMAGES="$IMAGES" DDOCKERD_SOCK="$SOCK" DD_STATE="$DIR/state.json" DD_VOLUMES="$DIR/vol"
+export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$DIR/state.json" HL_VOLUMES="$DIR/vol"
 exec "$DAEMON" > "$DIR/daemon.log" 2>&1
 EOF
 mac bash "$DIR/boot.sh" </dev/null & BPID=$!

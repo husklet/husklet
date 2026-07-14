@@ -267,7 +267,7 @@ pub extern "C" fn eglGetConfigAttrib(_dpy: *mut c_void, config: *mut c_void, att
 // ===================================================================================================
 
 /// `eglCreateContext` — validates the requested client version against the shim's max (ES3 iff
-/// `DD_SHIM_ES3`) and returns a UNIQUE context handle. If `share` is a live context, the new context
+/// `HL_SHIM_ES3`) and returns a UNIQUE context handle. If `share` is a live context, the new context
 /// JOINS that context's share group (shared GL object namespace); otherwise it gets an independent
 /// group. On too-high a version request it sets EGL_BAD_MATCH and returns EGL_NO_CONTEXT (null).
 #[no_mangle]
@@ -642,7 +642,7 @@ pub extern "C" fn wl_egl_window_destroy(w: *mut DdWlEglWindow) {
     }
 }
 
-/// The process-global wayland session (deployed present path). None in DD_IR_DUMP/host-tool mode.
+/// The process-global wayland session (deployed present path). None in HL_IR_DUMP/host-tool mode.
 fn wayland_session() -> &'static Mutex<Option<crate::wayland::Wayland>> {
     static W: OnceLock<Mutex<Option<crate::wayland::Wayland>>> = OnceLock::new();
     W.get_or_init(|| Mutex::new(None))
@@ -662,7 +662,7 @@ fn surface_geometry(s: &Surface) -> crate::wayland::Geometry {
 }
 
 /// `eglCreateWindowSurface` — bring up the presented default framebuffer from the native window size.
-/// In DD_IR_DUMP/host-tool mode this only records the surface (id 1); the renderD128 IOSurface
+/// In HL_IR_DUMP/host-tool mode this only records the surface (id 1); the renderD128 IOSurface
 /// registration + wayland handshake are the deployed-path plumbing (see `present_frame`).
 #[no_mangle]
 pub extern "C" fn eglCreateWindowSurface(_dpy: *mut c_void, _config: *mut c_void, win: *mut c_void, _attribs: *const i32) -> *mut c_void {
@@ -679,8 +679,8 @@ pub extern "C" fn eglCreateWindowSurface(_dpy: *mut c_void, _config: *mut c_void
         egl().surface_logical_h = s.surf.logical_h;
         surface_geometry(&s.surf)
     };
-    // Deployed path (not host-tool DD_IR_DUMP): register the GPU buffer + bring up the wayland surface.
-    if std::env::var_os("DD_IR_DUMP").is_none() {
+    // Deployed path (not host-tool HL_IR_DUMP): register the GPU buffer + bring up the wayland surface.
+    if std::env::var_os("HL_IR_DUMP").is_none() {
         if let Ok(a) = hl_shim::transport::renderd::alloc(w, h, 0) {
             let mut s = gl();
             s.surf.id = a.id;
@@ -727,17 +727,17 @@ fn exec_conn() -> &'static Mutex<hl_shim::transport::ExecConn> {
     C.get_or_init(|| Mutex::new(hl_shim::transport::ExecConn::from_env()))
 }
 
-/// Present a frame's IR. `DD_IR_DUMP` (host-tool / parity-harness mode) writes the raw byte-stream to
+/// Present a frame's IR. `HL_IR_DUMP` (host-tool / parity-harness mode) writes the raw byte-stream to
 /// the file so it can be diffed against gl_shim.c's dump. Otherwise it is submitted to the host
 /// GPU-exec service over the shared transport. (The wayland/dma-buf commit that shows the rendered
 /// IOSurface on screen is the remaining display-side plumbing, tracked separately from IR parity.)
 /// Present a frame's IR, returning the delivery outcome so `eglSwapBuffers` can be TRANSACTIONAL: the
 /// executor submission result is PROPAGATED (never discarded), so a failed submit surfaces as an EGL
-/// error and the caller keeps its queued draw state instead of losing the frame. `DD_IR_DUMP` (host-
+/// error and the caller keeps its queued draw state instead of losing the frame. `HL_IR_DUMP` (host-
 /// tool / parity-harness mode) writes the raw byte-stream so it can be diffed against gl_shim.c.
 fn present_frame(surf: &Surface, ir: &[u8]) -> Result<(), String> {
-    if let Some(path) = std::env::var_os("DD_IR_DUMP") {
-        return std::fs::write(path, ir).map_err(|e| format!("DD_IR_DUMP write failed: {e}"));
+    if let Some(path) = std::env::var_os("HL_IR_DUMP") {
+        return std::fs::write(path, ir).map_err(|e| format!("HL_IR_DUMP write failed: {e}"));
     }
     // Submit the frame to the host GPU-exec service, propagating any transport/executor failure.
     let ts = hl_shim::transport::Surface {

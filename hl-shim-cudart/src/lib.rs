@@ -408,22 +408,22 @@ mod tests {
         runtime::__cudaUnregisterFatBinary(handle);
     }
 
-    /// DD_SHIM_STRICT=1: cudart aborts at the first unsupported CUDA call. Under `cfg(test)` the strict
+    /// HL_SHIM_STRICT=1: cudart aborts at the first unsupported CUDA call. Under `cfg(test)` the strict
     /// path records that it would abort (a thread-local trip flag) rather than killing the test process.
     #[test]
     fn strict_mode_trips_abort_on_unsupported_launch() {
         let _g = serial();
         stub::STRICT_TRIPPED.with(|c| c.set(false));
-        std::env::set_var("DD_SHIM_STRICT", "1");
+        std::env::set_var("HL_SHIM_STRICT", "1");
         let (host_stub, handle) = register_unsupported();
         let one = Dim3 { x: 1, y: 1, z: 1 };
         let mut noargs: [*mut c_void; 1] = [core::ptr::null_mut()];
         let r = runtime::cudaLaunchKernel(host_stub, one, one, noargs.as_mut_ptr(), 0, core::ptr::null_mut());
-        std::env::remove_var("DD_SHIM_STRICT");
+        std::env::remove_var("HL_SHIM_STRICT");
         assert_eq!(r, result::CUDA_ERROR_NOT_SUPPORTED_RT);
         assert!(
             stub::STRICT_TRIPPED.with(|c| c.get()),
-            "DD_SHIM_STRICT=1 must trip the abort at the first unsupported call"
+            "HL_SHIM_STRICT=1 must trip the abort at the first unsupported call"
         );
         let report = stub::strict_report("cudaLaunchKernel", "kernel `unsup`");
         assert!(report.contains("cudaLaunchKernel"));

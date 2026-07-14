@@ -8,7 +8,7 @@
 //! `spirv_compute.rs`, but every GPU action goes through the guest driver's `vk*` surface.
 //!
 //! The test plays the role of the host GPU-exec service: it drains the shim-recorded IR
-//! (`reg::take_ir`) and replays it on the backend, exactly as `$DD_GPU_EXEC` would in production
+//! (`reg::take_ir`) and replays it on the backend, exactly as `$HL_GPU_EXEC` would in production
 //! (and as dd-shim-cuda's tests replay on an embedded backend). Needs a Metal device → macOS only.
 //! Run: `cargo test -p hl-shim-vk --test vk_compute`.
 

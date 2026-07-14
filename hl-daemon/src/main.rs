@@ -8,11 +8,11 @@
 //!   cargo run --release -p hl-daemon            # build.rs builds the JITs first
 //!   DOCKER_HOST=unix://$PWD/dd.sock docker run -p 8080:80 -m 256m alpine echo hi
 //!
-//! Containers, volumes and networks are persisted to `DD_STATE` (default `~/.dd/state.json`) so
-//! they survive daemon restarts. Images are re-discovered from `DD_IMAGES` each startup.
+//! Containers, volumes and networks are persisted to `HL_STATE` (default `~/.dd/state.json`) so
+//! they survive daemon restarts. Images are re-discovered from `HL_IMAGES` each startup.
 //!
-//! Env: DD_IMAGES (image dirs; default "./images"), DDOCKERD_SOCK (listen socket),
-//!      DD_STATE (state file), DD_VOLUMES (named-volume root).
+//! Env: HL_IMAGES (image dirs; default "./images"), HL_DOCKER_SOCK (listen socket),
+//!      HL_STATE (state file), HL_VOLUMES (named-volume root).
 
 use hl_jit::Guest;
 use std::sync::Arc;
@@ -62,14 +62,14 @@ fn bundled_image_dirs(images_dir: &str) -> Vec<String> {
 
 #[tokio::main]
 async fn main() {
-    let images_dir = std::env::var("DD_IMAGES").unwrap_or_else(|_| "./images".into());
-    let sock = std::env::var("DDOCKERD_SOCK").unwrap_or_else(|_| "./dd.sock".into());
-    let state_path = std::env::var("DD_STATE")
+    let images_dir = std::env::var("HL_IMAGES").unwrap_or_else(|_| "./images".into());
+    let sock = std::env::var("HL_DOCKER_SOCK").unwrap_or_else(|_| "./dd.sock".into());
+    let state_path = std::env::var("HL_STATE")
         .unwrap_or_else(|_| hl_home().join("state.json").to_string_lossy().into_owned());
-    let volumes_dir = std::env::var("DD_VOLUMES")
+    let volumes_dir = std::env::var("HL_VOLUMES")
         .unwrap_or_else(|_| hl_home().join("volumes").to_string_lossy().into_owned());
     // Only unlink the configured socket path when it is actually a (stale) unix socket — an env-only
-    // override must NOT blindly delete an arbitrary regular file/dir a misconfigured DDOCKERD_SOCK points
+    // override must NOT blindly delete an arbitrary regular file/dir a misconfigured HL_DOCKER_SOCK points
     // at. A non-socket is left in place (the bind below then fails loudly instead of eating user data).
     match std::fs::symlink_metadata(&sock) {
         Ok(meta) => {
@@ -78,7 +78,7 @@ async fn main() {
                 let _ = std::fs::remove_file(&sock);
             } else {
                 eprintln!(
-                    "[dd-daemon] refusing to remove non-socket DDOCKERD_SOCK path {sock:?} \
+                    "[dd-daemon] refusing to remove non-socket HL_DOCKER_SOCK path {sock:?} \
                      (not a stale socket); bind will fail if it is occupied"
                 );
             }
@@ -88,7 +88,7 @@ async fn main() {
     let _ = std::fs::create_dir_all(&volumes_dir);
 
     let mut inner = Inner::default();
-    // Discover the writable user image store (DD_IMAGES = ~/.dd/images) PLUS any read-only bundled
+    // Discover the writable user image store (HL_IMAGES = ~/.dd/images) PLUS any read-only bundled
     // starter images shipped inside the app (Resources/images, beside this binary). Serving the bundled
     // set straight from the bundle -- instead of copying it into ~/.dd -- means an app update always
     // carries the current starter images and nothing in ~/.dd ever needs refreshing. User pulls win on
@@ -158,7 +158,7 @@ async fn main() {
             let hsvc = hyper::service::service_fn(
                 move |mut req: hyper::Request<hyper::body::Incoming>| {
                     strip_api_version(&mut req);
-                    if std::env::var("DD_DEBUG").is_ok() {
+                    if std::env::var("HL_DEBUG").is_ok() {
                         eprintln!("[req] {} {}", req.method(), req.uri().path());
                     }
                     tower::ServiceExt::oneshot(svc.clone(), req)

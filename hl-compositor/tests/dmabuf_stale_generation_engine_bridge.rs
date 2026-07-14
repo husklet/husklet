@@ -66,15 +66,15 @@ fn stale_engine_generation_is_rejected_and_the_live_one_imports() {
         return; // no toolchain: skip
     };
 
-    std::env::set_var("DD_DISPLAY_DMABUF", "1");
+    std::env::set_var("HL_DISPLAY_DMABUF", "1");
     hl_compositor::gpu::set_executor_health(true);
     let bridge = format!("com.dd.display.gpu.test.{}", std::process::id());
-    std::env::set_var("DD_GPU_BRIDGE_NAME", &bridge);
+    std::env::set_var("HL_GPU_BRIDGE_NAME", &bridge);
     assert!(hl_display::metal::start_gpu_bridge(), "mach bridge register");
 
     // (2) Send a real IOSurface + a real generation over the mach ABI; learn the id it minted.
     const GEN: u32 = 9; // the id's live allocation generation
-    let out = Command::new(&sender).arg(GEN.to_string()).env("DD_GPU_BRIDGE_NAME", &bridge).output().unwrap();
+    let out = Command::new(&sender).arg(GEN.to_string()).env("HL_GPU_BRIDGE_NAME", &bridge).output().unwrap();
     let so = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "sender failed: {so:?}");
     let id: u32 = so

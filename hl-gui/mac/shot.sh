@@ -13,7 +13,7 @@ OUT="${2:-$REPO/target-mac/shots/$VIEW.png}"
 mkdir -p "$(dirname "$OUT")"
 cd "$REPO"
 nix develop "path:$REPO/nix" --command bash -lc "
-  CARGO_TARGET_DIR=target-mac DD_VERSION=0.0.0-dev cargo build -p hl-gui 2>&1 | tail -2
-  GSK_RENDERER=cairo DD_SHOT='$OUT' DD_SHOT_VIEW='$VIEW' DD_SHOT_DELAY_MS=2600 ./target-mac/debug/dd-app 2>&1 | tail -3
+  CARGO_TARGET_DIR=target-mac HL_VERSION=0.0.0-dev cargo build -p hl-gui 2>&1 | tail -2
+  GSK_RENDERER=cairo HL_SHOT='$OUT' HL_SHOT_VIEW='$VIEW' HL_SHOT_DELAY_MS=2600 ./target-mac/debug/dd-app 2>&1 | tail -3
 "
 echo "shot -> $OUT"

@@ -55,7 +55,7 @@ fn sync_completion_advances_on_real_frame_submission_ack() {
     let _serial = serial_guard();
     // Host-tool mode: present_frame writes the IR and returns Ok (a synchronous stand-in for the
     // transport's ACK_OK), so the completion boundary is exercised without a live executor socket.
-    std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-sync-present-mirror.ir"));
+    std::env::set_var("HL_IR_DUMP", std::env::temp_dir().join("dd-sync-present-mirror.ir"));
     while gles::glGetError() != GL_NO_ERROR {}
     let display = egl::eglGetDisplay(core::ptr::null_mut());
     assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
@@ -731,7 +731,7 @@ fn egl_config_selection_and_invalid_attributes_are_truthful() {
 fn egl_surfaces_have_distinct_lifetimes_dimensions_and_types() {
     let _serial = serial_guard();
     // Host-tool mode avoids opening renderd/Wayland connections.
-    std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-egl-surface-mirror.ir"));
+    std::env::set_var("HL_IR_DUMP", std::env::temp_dir().join("dd-egl-surface-mirror.ir"));
     let display = egl::eglGetDisplay(core::ptr::null_mut());
     assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
     let config = 1usize as *mut c_void;
@@ -777,7 +777,7 @@ fn egl_swap_of_a_stale_surface_reports_bad_surface() {
     let _serial = serial_guard();
     // The transactional-submit ordering (present before draw-list reset; retained frame on failure) is
     // enforced by the source-shape gate. Here we exercise the observable surface-validation path.
-    std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-egl-swap-mirror.ir"));
+    std::env::set_var("HL_IR_DUMP", std::env::temp_dir().join("dd-egl-swap-mirror.ir"));
     let display = egl::eglGetDisplay(core::ptr::null_mut());
     assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
     let window = egl::eglCreateWindowSurface(display, 1usize as *mut c_void, core::ptr::null_mut(), core::ptr::null());
@@ -862,7 +862,7 @@ fn mandatory_gles2_queries_return_real_values() {
 #[test]
 fn egl14_mandatory_tail_is_truthful() {
     let _serial = serial_guard();
-    std::env::set_var("DD_IR_DUMP", std::env::temp_dir().join("dd-egl14-mirror.ir"));
+    std::env::set_var("HL_IR_DUMP", std::env::temp_dir().join("dd-egl14-mirror.ir"));
     let display = egl::eglGetDisplay(core::ptr::null_mut());
     assert_eq!(egl::eglInitialize(display, core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
     let config = 1usize as *mut c_void;

@@ -50,7 +50,7 @@ fn socketpair_nonblocking() -> (i32, i32) {
 
 #[test]
 fn dmabuf_global_advertises_v4_feedback() {
-    std::env::set_var("DD_DISPLAY_DMABUF", "1");
+    std::env::set_var("HL_DISPLAY_DMABUF", "1");
     let mut display: Display<DdState> = Display::new().unwrap();
     let mut dh = display.handle();
     let mut state = DdState::new(dh.clone(), Box::new(NullPresenter));

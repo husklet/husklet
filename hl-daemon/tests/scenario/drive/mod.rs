@@ -39,9 +39,9 @@ fn slug(s: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
 }
-/// Phase timing is opt-in (`DD_SCEN_PROFILE=1`) so it never pollutes normal output.
+/// Phase timing is opt-in (`HL_SCEN_PROFILE=1`) so it never pollutes normal output.
 fn profiling() -> bool {
-    std::env::var_os("DD_SCEN_PROFILE").is_some()
+    std::env::var_os("HL_SCEN_PROFILE").is_some()
 }
 
 // ---- generated per-operation scripts -------------------------------------------------------------

@@ -3,7 +3,7 @@
 //! The JIT needs the macOS toolchain (arm64 codegen + MAP_JIT + a codesigned `allow-jit` entitlement),
 //! so on a non-macOS dev host we drive clang/codesign through the `mac` bridge. On a real macOS host we
 //! invoke them directly. Each guest target is one unity TU (src/runtime/targets/<target>.c) -> one
-//! executable in OUT_DIR, whose path is exported to the crate via `cargo:rustc-env=DDJIT_<TARGET>`.
+//! executable in OUT_DIR, whose path is exported to the crate via `cargo:rustc-env=HL_JIT_<TARGET>`.
 //! Targets span the guest-ISA matrix: linux_aarch64 (jit), linux_x86_64 (jit86).
 use std::env;
 use std::path::PathBuf;
@@ -67,7 +67,7 @@ fn main() {
         let script = format!(
             // -framework IOSurface/CoreFoundation: the GPU rung 2 host-IOSurface allocator (dd_gpu.h /
             // vfs.c hl_gpu_alloc). Always linked (the engine is always a macOS binary); the code path is
-            // runtime-gated behind DD_GPU_IOSURFACE so it's inert for every existing workload.
+            // runtime-gated behind HL_GPU_IOSURFACE so it's inert for every existing workload.
             "clang -O2 -framework IOSurface -framework CoreFoundation -o {bin} {tu} && codesign -s - --entitlements {ent} -f {bin}",
             bin = sh(&bin),
             tu = sh(&tu),
@@ -85,7 +85,7 @@ fn main() {
         };
         match status {
             Ok(s) if s.success() => {
-                println!("cargo:rustc-env=DDJIT_{}={}", t.to_uppercase(), bin.display());
+                println!("cargo:rustc-env=HL_JIT_{}={}", t.to_uppercase(), bin.display());
                 built.push(*t);
             }
             // On a real macOS host the engine MUST compile -- a missing ddjit-<t> ships a bundle that hangs the
@@ -101,7 +101,7 @@ fn main() {
     // Always define the env vars (empty if a build failed) so lib.rs `env!` compiles.
     for t in TARGETS {
         if !built.contains(t) {
-            println!("cargo:rustc-env=DDJIT_{}=", t.to_uppercase());
+            println!("cargo:rustc-env=HL_JIT_{}=", t.to_uppercase());
         }
     }
 }

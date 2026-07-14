@@ -85,7 +85,7 @@ int main(void) {
     if (!es2) return fail("es2_context", eglGetError());
     if (!eglDestroyContext(dpy, es2)) return fail("destroy_es2", eglGetError());
 
-    int es3_enabled = getenv("DD_SHIM_ES3") != NULL;
+    int es3_enabled = getenv("HL_SHIM_ES3") != NULL;
     int advertises_es3 = (renderable & EGL_OPENGL_ES3_BIT_KHR) != 0 &&
                          (conformant & EGL_OPENGL_ES3_BIT_KHR) != 0;
     if (advertises_es3 != es3_enabled) return fail("es3_advertisement_env_mismatch", renderable);

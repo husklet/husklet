@@ -152,7 +152,7 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     if out.status.code() == Some(124) {
         return fail(format!("timeout (>25s) [{}]", e.label()));
     }
-    if std::env::var("DD_DEBUG").is_ok() {
+    if std::env::var("HL_DEBUG").is_ok() {
         eprintln!(
             "\n[dbg] {} {:?}\n[dbg] out={:?}\n[dbg] err={:?}\n[dbg] code={:?}",
             prog,

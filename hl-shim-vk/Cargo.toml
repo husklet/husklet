@@ -12,7 +12,7 @@
 # docs/LoaderDriverInterface.md + include/vulkan/vk_icd.h; MoltenVK vulkan.mm for the negotiation +
 # dispatch shape); the exported `vk*` SURFACE is code-generated from the Khronos `vk.xml` registry
 # (see build.rs + registry/). Bring-up entry points have real bodies (instance/physical-device/device/
-# queue/command-pool); the long tail are spec-faithful correct-ABI DD_SHIM_DEBUG-traced stubs, ported
+# queue/command-pool); the long tail are spec-faithful correct-ABI HL_SHIM_DEBUG-traced stubs, ported
 # incrementally in later increments. See docs/rendering/SHIM_RUST_ARCHITECTURE.md.
 [package]
 name = "hl-shim-vk"

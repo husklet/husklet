@@ -111,13 +111,13 @@ pub(super) fn regress() -> Group {
         // byte-exact vs the native aarch64 oracle. Literal loads are aarch64-only (no x86 analogue).
         src("ldrsw-literal", "ldrsw_literal.c").oracle()
             .only(&[Engine::LinuxAarch64]),
-        // Same guest under the persistent translation cache (DDJIT_PCACHE): the matrix alternates cold(save)
+        // Same guest under the persistent translation cache (HL_JIT_PCACHE): the matrix alternates cold(save)
         // and warm(load) on a fixed dir, so successive runs exercise the WARM path — exactly where the old
         // accidental-host-placement bug bit (a restored arena at a different base would resolve the literal
         // to the wrong host-relative bytes). The literal must resolve to the identical guest value cold or
         // warm; diffed byte-exact vs native either way.
         src("ldrsw-literal-pcache", "ldrsw_literal.c")
-            .env("DDJIT_PCACHE", "1").env("DDJIT_PCACHE_DIR", "/tmp/ddjit-pcache-ldrsw")
+            .env("HL_JIT_PCACHE", "1").env("HL_JIT_PCACHE_DIR", "/tmp/ddjit-pcache-ldrsw")
             .oracle().only(&[Engine::LinuxAarch64]),
         // V8's embedded-builtins CODE base (symbol v8_Default_embedded_blob_code_) is a baked LOW.text
         // address loaded via `mov r,imm`; the builtins execute at the HIGH mapping, so V8's

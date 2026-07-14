@@ -47,9 +47,9 @@ impl Client {
         }
     }
 
-    /// Resolve the default socket: `$DDOCKERD_SOCK`, else `~/.dd/run/docker.sock`.
+    /// Resolve the default socket: `$HL_DOCKER_SOCK`, else `~/.dd/run/docker.sock`.
     pub fn default_socket() -> PathBuf {
-        if let Ok(s) = std::env::var("DDOCKERD_SOCK") {
+        if let Ok(s) = std::env::var("HL_DOCKER_SOCK") {
             return PathBuf::from(s);
         }
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());

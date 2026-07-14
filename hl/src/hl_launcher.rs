@@ -87,9 +87,9 @@ fn split_ref(image: &str) -> (String, String) {
 /// Launch `ws` as an in-process dd-jit container and return a [`PtyBackend`] over its shell. Errors
 /// (including "this host's engine can't run that arch") let the caller fall back to a local shell.
 /// Launch (or, when `restore`, RESUME from the last whole-workspace checkpoint) `ws`. Checkpointing is always
-/// armed: the engine's `DDJIT_CHECKPOINT_DIR` is exported (inherited by the posix_spawn'd engine and every
+/// armed: the engine's `HL_JIT_CHECKPOINT_DIR` is exported (inherited by the posix_spawn'd engine and every
 /// guest process it forks), so the running tree can be frozen later with `Runtime::checkpoint`. When
-/// `restore`, `DDJIT_RESTORE_DIR` is set too, so the engine rebuilds the saved process tree instead of
+/// `restore`, `HL_JIT_RESTORE_DIR` is set too, so the engine rebuilds the saved process tree instead of
 /// starting a fresh shell. The container init's host pid is recorded so a separate `workspace checkpoint`
 /// invocation can signal the live tree.
 pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd: Option<&str>, slot: Option<&str>) -> io::Result<Box<dyn PtyBackend>> {
@@ -110,7 +110,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
     }
     // Arm checkpoint/restore for the engine this process spawns (ffi.c execve()s with our environ). Each
     // `ddcli workspace launch` is its own process, so these process-global vars never race across workspaces.
-    std::env::set_var("DDJIT_CHECKPOINT_DIR", &ckpt_dir);
+    std::env::set_var("HL_JIT_CHECKPOINT_DIR", &ckpt_dir);
     // The engine implements guest fork() as a real host fork() of a multithreaded, objc-using process
     // (Metal/IOSurface/NSString on the GPU path), and a guest execve() reloads the image IN-PLACE (no
     // host exec), so libobjc's initialize-fork-safety poison survives into every guest process. If a
@@ -123,9 +123,9 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
         std::env::set_var("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES");
     }
     if restore && ckpt_dir.join("MANIFEST").exists() {
-        std::env::set_var("DDJIT_RESTORE_DIR", &ckpt_dir);
+        std::env::set_var("HL_JIT_RESTORE_DIR", &ckpt_dir);
     } else {
-        std::env::remove_var("DDJIT_RESTORE_DIR");
+        std::env::remove_var("HL_JIT_RESTORE_DIR");
         if restore {
             eprintln!("[dd] no checkpoint to restore for {:?}; starting a fresh workspace", ws.name);
         }
@@ -146,8 +146,8 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
         // cold at the current session's base (then reusing it in-session, where the base stays available) is
         // 100% reliable and costs only a one-time re-translation at startup (negligible for an interactive
         // GUI app). A `restore` keeps the cache (its MAP_FIXED placement needs it) — this only fires on a
-        // fresh gui launch. Opt out of the wipe (keep the persistent cache) with `DD_GUI_KEEP_PCACHE=1`.
-        let keep_gui_pcache = std::env::var("DD_GUI_KEEP_PCACHE").ok().as_deref() == Some("1");
+        // fresh gui launch. Opt out of the wipe (keep the persistent cache) with `HL_GUI_KEEP_PCACHE=1`.
+        let keep_gui_pcache = std::env::var("HL_GUI_KEEP_PCACHE").ok().as_deref() == Some("1");
         if ws.gui && !keep_gui_pcache {
             let _ = std::fs::remove_dir_all(&pcache_dir);
             let _ = std::fs::create_dir_all(&pcache_dir);
@@ -227,7 +227,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
     // They are consumed by the injected GL shim (libEGL/libGLESv2) and libwayland — no application is
     // special-cased; any Wayland client honors them. App-specific launch tuning (flags, profile dirs,
     // timeouts) belongs in the workspace's own configured env, never hard-coded here.
-    for k in ["WAYLAND_DEBUG", "DD_SHIM_DEBUG", "DD_SHADER_DUMP_DIR", "DD_TEXTURE_DUMP_DIR"] {
+    for k in ["WAYLAND_DEBUG", "HL_SHIM_DEBUG", "HL_SHADER_DUMP_DIR", "HL_TEXTURE_DUMP_DIR"] {
         if let Ok(v) = std::env::var(k) {
             env.push(format!("{k}={v}"));
         }
@@ -281,7 +281,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
     // resolves *where the host artifacts live* (the `~/.dd/...` drop-ins, the socket paths, the guest ISA)
     // and hands a `hl_gpu::integration::GpuIntegration` to the dd-jit builder as a `DeviceProvider`. The
     // provider (in dd-gpu) owns *how a GPU maps into a guest* — target multiarch lib dir, guest socket
-    // paths, the WAYLAND_DISPLAY/DD_GPU_EXEC/DD_CUDA_* env contract, the LD_LIBRARY_PATH composition, and
+    // paths, the WAYLAND_DISPLAY/HL_GPU_EXEC/DD_CUDA_* env contract, the LD_LIBRARY_PATH composition, and
     // the render-node request — while dd-jit / the engine stay device-agnostic (they only see mounts +
     // env + a render-node bool; no CUDA/IOSurface/Wayland vocabulary crosses the runtime boundary). Inert
     // unless the workspace is `gui` and/or configures a `cuda` device → headless workspaces byte-identical.
@@ -290,13 +290,13 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
         _ => hl_gpu::integration::GuestArch::Aarch64,
     });
     if ws.gui {
-        // Host socket paths: `DD_DISPLAY_SOCK`/`DD_GPU_EXEC_SOCK` overrides (tests / bespoke layouts), else
+        // Host socket paths: `HL_DISPLAY_SOCK`/`HL_GPU_EXEC_SOCK` overrides (tests / bespoke layouts), else
         // the per-session shared endpoints under the dd root (`dd-display`, spawned lazily elsewhere,
         // creates + listens on them). Drop-in dirs (client libs / demo bins) are passed only when present,
         // so a bare image needs no "dd-gpu image".
-        let host_sock = std::env::var("DD_DISPLAY_SOCK")
+        let host_sock = std::env::var("HL_DISPLAY_SOCK")
             .unwrap_or_else(|_| paths::hl_root().join("run").join("wayland-0").to_string_lossy().into_owned());
-        let host_gpu_sock = std::env::var("DD_GPU_EXEC_SOCK").unwrap_or_else(|_| {
+        let host_gpu_sock = std::env::var("HL_GPU_EXEC_SOCK").unwrap_or_else(|_| {
             std::path::Path::new(&host_sock)
                 .parent()
                 .map(|d| d.join("dd-gpu.sock").to_string_lossy().into_owned())
@@ -343,15 +343,15 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
         // is a host fork()-WITHOUT-exec child that can NEITHER create an IOSurface nor receive one over a
         // mach port — it can only reuse surfaces the non-forked ROOT engine pre-created, marked
         // VM_INHERIT_SHARE, BEFORE the fork. The engine seeds that pool in `hl_gpu_prewarm_fork_safety`
-        // (vfs.c) from `DD_GPU_POOL="WxH[,WxH…]"` read from ITS OWN process env — and ffi.c forwards our
-        // `environ` to the engine's execve (the very same channel as the `DDJIT_CHECKPOINT_DIR` /
+        // (vfs.c) from `HL_GPU_POOL="WxH[,WxH…]"` read from ITS OWN process env — and ffi.c forwards our
+        // `environ` to the engine's execve (the very same channel as the `HL_JIT_CHECKPOINT_DIR` /
         // `OBJC_DISABLE_INITIALIZE_FORK_SAFETY` vars set above). On a plain launch nothing exports it, so
         // the forked GPU child MISSes every size and cold Chrome renders 0 frames on an idle Mac. Derive
         // the geometry here and export it so a true no-arg launch pre-seeds automatically. An explicit
-        // caller-provided `DD_GPU_POOL` (e.g. the validation harness) is honored untouched.
-        if std::env::var_os("DD_GPU_POOL").is_none() {
+        // caller-provided `HL_GPU_POOL` (e.g. the validation harness) is honored untouched.
+        if std::env::var_os("HL_GPU_POOL").is_none() {
             // The size the guest's Chrome launcher passes to `--window-size`: our process env first (a
-            // harness/user `CHROME_WINDOW_SIZE=W,H`), else the workspace's configured value. The guest
+            // harness/user `HL_WINDOW_SIZE=W,H`), else the workspace's configured value. The guest
             // `ddrun` script defaults to 512x384 when unset, so we match that default below. The wire form
             // is "W,H"; the pool wants "WxH". `x`-separated input is accepted too, for convenience.
             fn parse_wh(s: &str) -> Option<(u32, u32)> {
@@ -360,26 +360,26 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
                 let h: u32 = b.trim().parse().ok()?;
                 if w == 0 || h == 0 || w > 16384 || h > 16384 { None } else { Some((w, h)) }
             }
-            let configured = std::env::var("CHROME_WINDOW_SIZE")
+            let configured = std::env::var("HL_WINDOW_SIZE")
                 .ok()
-                .or_else(|| ws.env.iter().find(|(k, _)| k == "CHROME_WINDOW_SIZE").map(|(_, v)| v.clone()));
+                .or_else(|| ws.env.iter().find(|(k, _)| k == "HL_WINDOW_SIZE").map(|(_, v)| v.clone()));
             let mut sizes: Vec<(u32, u32)> = Vec::new();
             if let Some((w, h)) = configured.as_deref().and_then(parse_wh) {
                 sizes.push((w, h));
             }
-            // The guest default (`${CHROME_WINDOW_SIZE:-512,384}`) plus a compact set of common desktop
+            // The guest default (`${HL_WINDOW_SIZE:-512,384}`) plus a compact set of common desktop
             // sizes. The GPU child inherits the pool ONLY at fork time, so any size it may later scan out
             // on a window RESIZE must be pre-seeded NOW (a surface the root creates AFTER the child forked
             // is not in that child's address space). This covers a resize to a typical target; an arbitrary
             // drag to an unseeded size is the documented limitation (needs a root-services-child bridge).
-            // `DD_GPU_POOL_N` (engine side, default 6) bounds how many per size.
+            // `HL_GPU_POOL_N` (engine side, default 6) bounds how many per size.
             for (w, h) in [(512u32, 384u32), (800, 600), (1280, 720)] {
                 if !sizes.contains(&(w, h)) {
                     sizes.push((w, h));
                 }
             }
             let pool = sizes.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(",");
-            std::env::set_var("DD_GPU_POOL", pool);
+            std::env::set_var("HL_GPU_POOL", pool);
         }
     }
     if let Some(cuda) = &ws.cuda {
@@ -436,7 +436,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
         // Ask the provider what it needs (composing its LD_LIBRARY_PATH against the current guest `env`),
         // apply the mounts + render-node generically, fold its env in, and re-apply the guest env once so
         // the added K=V lines go through the normal docker last-wins dedup — byte-identical to the old
-        // inline gui+cuda blocks (same volumes, same env order, same DD_GPU_IOSURFACE flag).
+        // inline gui+cuda blocks (same volumes, same env order, same HL_GPU_IOSURFACE flag).
         let req = gpu.device_request(&env);
         builder = builder.apply_device(&req);
         env.extend(req.env);

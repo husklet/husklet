@@ -307,7 +307,7 @@ pub(super) async fn run_step(
     let shell_desc = shell.join(" ");
     // Build the RUN step's container spec through the typed dd-jit API. CRITICAL: route the step's env
     // (loose `K=V` lines: image ENV + Dockerfile ENV/ARG) through `.guest_env`, which encodes it into
-    // `DD_GUEST_ENV` — the launch_config mapper only translates known `DD_*`/`DDJIT_*` keys and would drop
+    // `HL_GUEST_ENV` — the launch_config mapper only translates known `DD_*`/`DDJIT_*` keys and would drop
     // arbitrary RUN env otherwise, so a plain `.env()` per pair would silently lose the step's environment.
     let mut builder = hl_jit::Container::builder(
         hl_jit::Image::from_rootfs(rootfs.to_string_lossy().into_owned()).guest(arch),

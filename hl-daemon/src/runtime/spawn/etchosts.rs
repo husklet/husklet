@@ -29,7 +29,7 @@ pub(super) fn render_etc_hosts(own: Option<(&str, &str)>, peers: &[(String, Stri
     hosts
 }
 
-/// The effective UTS hostname written to `/etc/hostname` (and handed to the engine as `DD_HOSTNAME`):
+/// The effective UTS hostname written to `/etc/hostname` (and handed to the engine as `HL_HOSTNAME`):
 /// the user's `--hostname` when set, else Docker's default 12-char short id derived from the full id.
 pub(super) fn eff_hostname(id: &str, hostname: &str) -> String {
     if hostname.is_empty() {

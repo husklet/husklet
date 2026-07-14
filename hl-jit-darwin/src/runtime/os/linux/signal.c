@@ -21,7 +21,7 @@ static struct {
 // Go's scheduler asynchronously preempts a running goroutine by sending itself SIGURG (23) and injecting a
 // call to runtime.asyncPreempt from the signal handler. For an EXTERNALLY-LINKED / cgo (runtime.iscgo==1)
 // aarch64 Go binary, delivering SIGURG into the guest crashes it -- but NOT via a sigframe/SP overlap (that
-// hypothesis was investigated with the go_cgo_stackgrow_arm fixture under DD_SIGURG=deliver + CRASHDBG and
+// hypothesis was investigated with the go_cgo_stackgrow_arm fixture under HL_SIGURG=deliver + CRASHDBG and
 // DISPROVEN: build_signal_frame captures a correct, consistent guest SP/PC/LR and the frame sits strictly
 // below SP). The real defect is ASYNC-PREEMPT SAFETY: dd delivers the caught signal at TRANSLATION-BLOCK
 // boundaries (the cpu->irq poll), which do NOT coincide with Go's compiler-inserted async-safe points. Go's
@@ -39,8 +39,8 @@ static struct {
 // Scoped TIGHTLY on purpose: g_go_iscgo (set once by the aarch64 load_elf in os/linux/elf.c) is 1 ONLY for a
 // cgo-enabled aarch64 Go main image. It stays 0 for non-Go guests (some legitimately use SIGURG for OOB TCP
 // data), for internal-linked / CGO_ENABLED=0 Go, and for the entire x86 engine (that TU never includes the
-// aarch64 elf.c, and no x86 path sets it). Env override DD_SIGURG forces it: `drop`/`off` = always suppress,
-// `deliver`/`async`/`on` = always deliver (disable the mitigation); legacy DDDBG_DROPURG=1 = force suppress.
+// aarch64 elf.c, and no x86 path sets it). Env override HL_SIGURG forces it: `drop`/`off` = always suppress,
+// `deliver`/`async`/`on` = always deliver (disable the mitigation); legacy HL_DBG_DROPURG=1 = force suppress.
 int g_go_iscgo; // 1 iff the loaded aarch64 main image is a cgo (iscgo) Go binary; owned here, set by load_elf
 
 // Should SIGURG (Go async-preempt) delivery be dropped for this process? Env override wins; else auto on the
@@ -48,12 +48,12 @@ int g_go_iscgo; // 1 iff the loaded aarch64 main image is a cgo (iscgo) Go binar
 static int sigurg_drop_enabled(void) {
     static int cached = -2; // -2 uncomputed; -1 auto; 0 force-deliver; 1 force-drop
     if (cached == -2) {
-        const char *e = getenv("DD_SIGURG");
+        const char *e = getenv("HL_SIGURG");
         if (e && (!strcmp(e, "deliver") || !strcmp(e, "async") || !strcmp(e, "on")))
             cached = 0;
         else if (e && (!strcmp(e, "drop") || !strcmp(e, "off")))
             cached = 1;
-        else if (getenv("DDDBG_DROPURG"))
+        else if (getenv("HL_DBG_DROPURG"))
             cached = 1; // legacy repro/debug knob
         else
             cached = -1; // auto
@@ -604,7 +604,7 @@ static int sig_diag_put_hex(char *b, int n, const char *k, uint64_t v) {
 }
 
 static void sig_diag_fatal_fault(int sig, int hostsig, siginfo_t *si, struct cpu *c) {
-    if (!getenv("DD_FATALSIG_LOG")) return;
+    if (!getenv("HL_FATALSIG_LOG")) return;
     char b[384];
     int n = 0;
     n = sig_diag_put(b, n, "[DDFATAL]");
@@ -626,7 +626,7 @@ static void sig_diag_fatal_fault(int sig, int hostsig, siginfo_t *si, struct cpu
 }
 
 static void sig_diag_sync_reraise(int sig, int ls, siginfo_t *si, void *ucv) {
-    if (!getenv("DD_FATALSIG_LOG")) return;
+    if (!getenv("HL_FATALSIG_LOG")) return;
     ucontext_t *u = (ucontext_t *)ucv;
 #if defined(__aarch64__)
     uint64_t hpc = u ? (uint64_t)u->uc_mcontext->__ss.__pc : 0;
@@ -665,7 +665,7 @@ static void sig_diag_sync_reraise(int sig, int ls, siginfo_t *si, void *ucv) {
 }
 
 static void sig_diag_raise_default(struct cpu *c, int sig) {
-    if (!getenv("DD_FATALSIG_LOG")) return;
+    if (!getenv("HL_FATALSIG_LOG")) return;
     char b[384];
     int n = 0;
     n = sig_diag_put(b, n, "[DDRAISE]");

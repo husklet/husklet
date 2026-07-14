@@ -27,8 +27,8 @@ static void draw_frame(const char *name, struct ge_egl *egl, EGLSurface surface,
 
 int main(void) {
     const char *name = "retained_frame_partial_load";
-    if (!getenv("DD_IR_DUMP")) {
-        printf("%s SKIP set DD_IR_DUMP=/tmp/retained-frame.ir to inspect the second-frame load op\n", name);
+    if (!getenv("HL_IR_DUMP")) {
+        printf("%s SKIP set HL_IR_DUMP=/tmp/retained-frame.ir to inspect the second-frame load op\n", name);
         return 77;
     }
 

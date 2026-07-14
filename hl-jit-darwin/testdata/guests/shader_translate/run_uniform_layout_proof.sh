@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 ROOT="$(cd ../../.. && pwd)"
 GL_SHIM="$ROOT/dd-tests/guests/gl_shim.c"
-TMPBASE="${DD_SHADER_TRANSLATE_TMP:-$ROOT/target-chrome-codex/shader-translate-tmp}"
+TMPBASE="${HL_SHADER_TRANSLATE_TMP:-$ROOT/target-chrome-codex/shader-translate-tmp}"
 TMPDIR="$TMPBASE/dd-uniform-layout.$$"
 
 cleanup() { rm -rf "$TMPDIR"; }

@@ -118,9 +118,9 @@ def run_chrome(duration: int) -> Path:
     env = os.environ.copy()
     env.update(
         {
-            "CHROME_APP_MODE": "0",
-            "CHROME_APP_URL": PULSE_URL,
-            "CHROME_EXTRA_FLAGS": (
+            "HL_APP_MODE": "0",
+            "HL_APP_URL": PULSE_URL,
+            "HL_EXTRA_FLAGS": (
                 "--no-zygote --renderer-process-limit=1 --disable-site-isolation-trials "
                 "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding "
                 "--disable-background-timer-throttling --ipc-connection-timeout=120 "

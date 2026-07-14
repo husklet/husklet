@@ -52,7 +52,7 @@
 //
 // CONFIG MODEL: engine-level env (JT/PROF/DDJIT_*/NODUALMAP...) and the container rootfs are SERVER
 // launch config, read once at --server startup. Guest-visible env + the per-request container env the
-// cold path re-parses (DDVOL/DD_NETNS/DD_CWD/DD_PUBLISH...) come from the CLIENT per request.
+// cold path re-parses (HL_VOL/HL_NETNS/HL_CWD/HL_PUBLISH...) come from the CLIENT per request.
 
 #include <sys/wait.h> // waitpid + W* status macros (also pulled in by sentry.c; idempotent)
 
@@ -311,19 +311,19 @@ static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, ch
         // worker inherited the SERVER's table on fork, but each launch is its own container (state.c).
         if (g_srv_rootfs[0]) acct_container_reset();
         FSRV_WARM_CHDIR_ROOTFS();
-        const char *icwd = getenv("DD_CWD"); // docker -w from the CLIENT's env
+        const char *icwd = getenv("HL_CWD"); // docker -w from the CLIENT's env
         if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
         _exit(run_loaded(argc, argv, &g_wmain, g_wjump, g_wat_base));
     }
     // Cold: no matching prewarm. Pay a full per-launch load + translate in the runner (still no
     // spawn/dyld/engine-init -- those were paid by the resident parent). container_init re-runs
-    // against the CLIENT's env (DDVOL/DD_NETNS/DD_CWD...); engine_global_init is a no-op
+    // against the CLIENT's env (HL_VOL/HL_NETNS/HL_CWD...); engine_global_init is a no-op
     // (g_engine_inited). Translations are COW-private to this runner and discarded on exit.
     // A PREWARMED arena bars the persistent cache in a cold runner: pcache_load() restores over the
     // arena from offset 0 WITHOUT clearing the prewarm block map (stale entries would point into the
     // clobbered bytes), and the pcache fixed-VA image base (PC_IMG_BASE) is already occupied by the
-    // prewarm image. DDJIT_NOPCACHE is the engine's own kill-switch and always wins inside hl_run.
-    if (g_warm_ready) setenv("DDJIT_NOPCACHE", "1", 1);
+    // prewarm image. HL_JIT_NOPCACHE is the engine's own kill-switch and always wins inside hl_run.
+    if (g_warm_ready) setenv("HL_JIT_NOPCACHE", "1", 1);
     _exit(hl_run(g_srv_rootfs[0] ? g_srv_rootfs : NULL, argc, argv));
 }
 

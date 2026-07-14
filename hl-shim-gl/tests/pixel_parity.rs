@@ -7,7 +7,7 @@
 //! * `full_frame_clear_*` drives an isolated `GlState` (unit-level) against the real gl_shim.c dump.
 //! * `full_frame_textured_triangle_*` is the flagship **black-box** test: it compiles the SAME GLES
 //!   workload against BOTH shims' `.so` (gl_shim.c's `libEGL.so.1` and hl-shim-gl's cdylib), runs each
-//!   with `DD_IR_DUMP`, and asserts the emitted IR byte-streams are identical.
+//!   with `HL_IR_DUMP`, and asserts the emitted IR byte-streams are identical.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -76,7 +76,7 @@ fn build_gl_shim_so(dir: &Path) -> Option<PathBuf> {
     ok.then_some(so)
 }
 
-/// Compile `workload` against `shim_so` (staged as libEGL.so.1) and run it with DD_IR_DUMP; return the
+/// Compile `workload` against `shim_so` (staged as libEGL.so.1) and run it with HL_IR_DUMP; return the
 /// emitted IR bytes. `tag` disambiguates the temp dir. None on any toolchain failure (skip).
 fn run_workload_against(shim_so: &Path, workload: &str, tag: &str) -> Option<Vec<u8>> {
     let dir = std::env::temp_dir().join(format!("dd-shim-parity-{}-{tag}", std::process::id()));
@@ -101,7 +101,7 @@ fn run_workload_against(shim_so: &Path, workload: &str, tag: &str) -> Option<Vec
         eprintln!("[parity] workload compile failed ({tag}); skipping");
         return None;
     }
-    if !Command::new(&wl).env("DD_IR_DUMP", &ir).status().map(|s| s.success()).unwrap_or(false) {
+    if !Command::new(&wl).env("HL_IR_DUMP", &ir).status().map(|s| s.success()).unwrap_or(false) {
         eprintln!("[parity] workload run failed ({tag}); skipping");
         return None;
     }

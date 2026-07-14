@@ -5,7 +5,7 @@ use super::*;
 /// resolver reads this file per DNS query (net.c `dns_local_lookup`) BEFORE falling through to the macOS
 /// host resolver, so a container resolves a same-network peer by name even if that peer joined AFTER this
 /// container launched (its `/etc/hosts` snapshot, seeded once at start, can't see it). The `.40s`
-/// truncation matches the engine's `snprintf` for `DD_NETBR`, so the path byte-matches what the engine
+/// truncation matches the engine's `snprintf` for `HL_NETBR`, so the path byte-matches what the engine
 /// computes. Best-effort: never fail a spawn on an I/O error.
 pub(crate) fn write_net_names(netid: &str, endpoints: &HashMap<String, Endpoint>) {
     let dir = format!("/tmp/.ddbr-{}", &netid[..netid.len().min(40)]);

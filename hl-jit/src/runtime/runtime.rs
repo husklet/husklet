@@ -11,30 +11,30 @@ use hl_jit_darwin::{Guest, SpawnConfig};
 ///
 /// The runtime owns the host/operator-level defaults that apply to EVERY container it launches, so a
 /// container manager (e.g. `dd-daemon`) never handles them itself: the persistent translated-code cache
-/// (on unless `DD_PCACHE=0`) and the default guest sandbox (`DD_SANDBOX=1`). Set the cache location with
+/// (on unless `HL_PCACHE=0`) and the default guest sandbox (`HL_SANDBOX=1`). Set the cache location with
 /// [`Runtime::cache_dir`].
 pub struct Runtime {
-    /// Enable the persistent translated-code cache by default (operator env `DD_PCACHE`, on unless "0").
+    /// Enable the persistent translated-code cache by default (operator env `HL_PCACHE`, on unless "0").
     pcache: bool,
     /// Where the persistent cache lives (created on demand). `None` ⇒ the cache stays off even if `pcache`.
     pcache_dir: Option<String>,
-    /// Run every guest under the sandbox by default (operator env `DD_SANDBOX == "1"`).
+    /// Run every guest under the sandbox by default (operator env `HL_SANDBOX == "1"`).
     sandbox_default: bool,
 }
 
 impl Runtime {
     /// Create a runtime bound to this host's backend (`dd-jit-darwin` on macOS), reading the operator
-    /// env defaults (`DD_PCACHE`, `DD_SANDBOX`, `DDJIT_PCACHE_DIR`).
+    /// env defaults (`HL_PCACHE`, `HL_SANDBOX`, `HL_JIT_PCACHE_DIR`).
     pub fn new() -> Result<Self, Error> {
         Ok(Runtime {
-            pcache: std::env::var("DD_PCACHE").as_deref() != Ok("0"),
-            pcache_dir: std::env::var("DDJIT_PCACHE_DIR").ok(),
-            sandbox_default: std::env::var("DD_SANDBOX").as_deref() == Ok("1"),
+            pcache: std::env::var("HL_PCACHE").as_deref() != Ok("0"),
+            pcache_dir: std::env::var("HL_JIT_PCACHE_DIR").ok(),
+            sandbox_default: std::env::var("HL_SANDBOX").as_deref() == Ok("1"),
         })
     }
 
     /// Set the directory backing the persistent translated-code cache (the host storage location). The
-    /// cache is only enabled when both this is set and `DD_PCACHE` is not "0".
+    /// cache is only enabled when both this is set and `HL_PCACHE` is not "0".
     pub fn cache_dir(mut self, dir: impl Into<String>) -> Self {
         self.pcache_dir = Some(dir.into());
         self
@@ -50,16 +50,16 @@ impl Runtime {
     pub(crate) fn with_defaults(&self, c: &Container) -> Container {
         let mut c = c.clone();
         let has = |cfg: &SpawnConfig, k: &str| cfg.env.iter().any(|(ek, _)| ek == k);
-        if self.pcache && !has(&c.cfg, "DDJIT_PCACHE") {
+        if self.pcache && !has(&c.cfg, "HL_JIT_PCACHE") {
             if let Some(dir) = &self.pcache_dir {
                 let _ = std::fs::create_dir_all(dir);
-                c.cfg.env.push(("DDJIT_PCACHE".into(), "1".into()));
-                c.cfg.env.push(("DDJIT_PCACHE_DIR".into(), dir.clone()));
+                c.cfg.env.push(("HL_JIT_PCACHE".into(), "1".into()));
+                c.cfg.env.push(("HL_JIT_PCACHE_DIR".into(), dir.clone()));
             }
         }
-        if self.sandbox_default && !has(&c.cfg, "DDJIT_SANDBOX") {
-            c.cfg.env.push(("DDJIT_UNTRUSTED".into(), "1".into()));
-            c.cfg.env.push(("DDJIT_SANDBOX".into(), "1".into()));
+        if self.sandbox_default && !has(&c.cfg, "HL_JIT_SANDBOX") {
+            c.cfg.env.push(("HL_JIT_UNTRUSTED".into(), "1".into()));
+            c.cfg.env.push(("HL_JIT_SANDBOX".into(), "1".into()));
         }
         c
     }
@@ -67,10 +67,10 @@ impl Runtime {
     /// Checkpoint a RUNNING container's whole process tree (all shells, background jobs, and their children)
     /// to `dir`, freeing its memory, and wait for the freeze to complete. `pid` is the container init the
     /// launch returned; the container must have been launched with checkpointing armed for the SAME `dir`
-    /// (the launcher exports `DDJIT_CHECKPOINT_DIR`). This sends the engine's checkpoint control signal
+    /// (the launcher exports `HL_JIT_CHECKPOINT_DIR`). This sends the engine's checkpoint control signal
     /// (SIGUSR1) — the init coordinates a tree-wide freeze at the next safe guest-block boundary, each
     /// process snapshots its RAM+CPU+fds to `dir/proc.<gpid>/`, then the `dir/MANIFEST` is published and
-    /// every process exits. Resume later with a launch that sets `DDJIT_RESTORE_DIR` to the same `dir`.
+    /// every process exits. Resume later with a launch that sets `HL_JIT_RESTORE_DIR` to the same `dir`.
     pub fn checkpoint(&self, pid: u32, dir: &str, timeout: std::time::Duration) -> Result<(), Error> {
         use std::time::Instant;
         // Prepare a fresh, empty checkpoint dir BEFORE advancing the trigger: every engine process sees the

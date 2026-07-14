@@ -185,7 +185,7 @@ static size_t build_ir(uint32_t w, uint32_t h) {
 }
 
 static int stream_ir(uint32_t surface_id, uint32_t w, uint32_t h, const uint8_t *body, size_t len) {
-    const char *ep = getenv("DD_GPU_EXEC");
+    const char *ep = getenv("HL_GPU_EXEC");
     if (!ep) ep = "/run/user/0/dd-gpu-0";
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {

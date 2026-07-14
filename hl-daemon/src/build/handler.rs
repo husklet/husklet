@@ -341,7 +341,7 @@ pub(crate) async fn images_build(
         }
     }
 
-    // the new image's rootfs dir under DD_IMAGES — derived from the user's raw `-t` so a bare tag keeps a
+    // the new image's rootfs dir under HL_IMAGES — derived from the user's raw `-t` so a bare tag keeps a
     // predictable dir name (`scen-built`), while a namespaced/tagged build still gets a distinct dir.
     let safe: String = safe_dir_name(&raw_tag);
     let img_dir = std::path::PathBuf::from(format!("{}/{}", a.images_dir, safe));

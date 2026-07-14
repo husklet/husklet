@@ -118,10 +118,10 @@ pub(crate) async fn fetch(c: &Client) -> Snapshot {
     }
 }
 
-/// The daemon's own log: `$DD_DAEMON_LOG`, else `~/Library/Logs/dd/daemon.err.log`. Returns the last
+/// The daemon's own log: `$HL_DAEMON_LOG`, else `~/Library/Logs/dd/daemon.err.log`. Returns the last
 /// ~400 lines so the System view shows what the daemon is logging without unbounded growth.
 fn read_daemon_log() -> String {
-    let path = std::env::var("DD_DAEMON_LOG")
+    let path = std::env::var("HL_DAEMON_LOG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());

@@ -20,7 +20,7 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
     // About + locations.
     let home = std::env::var("HOME").unwrap_or_default();
     let about = setting_card(&[
-        ("Version", env!("DD_VERSION")),
+        ("Version", env!("HL_VERSION")),
         ("Socket", &m.socket.to_string_lossy()),
         ("Images", &format!("{home}/.dd/images")),
         ("State", &format!("{home}/.dd/state.json")),

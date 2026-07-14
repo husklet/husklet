@@ -156,9 +156,9 @@ impl Client {
 // One test, one Display/client (wayland-server keeps process-global state; see client_roundtrip.rs).
 #[test]
 fn dmabuf_global_and_iosurface_commit_presents() {
-    // The dmabuf global is advertised only under `DD_DISPLAY_DMABUF` (parity with legacy `server.rs`;
+    // The dmabuf global is advertised only under `HL_DISPLAY_DMABUF` (parity with legacy `server.rs`;
     // the default software path must not advertise it — see handlers/dmabuf.rs::new_dmabuf_state).
-    std::env::set_var("DD_DISPLAY_DMABUF", "1");
+    std::env::set_var("HL_DISPLAY_DMABUF", "1");
     // Accelerated import now REQUIRES a healthy host executor (dmabuf.rs's readiness gate rejects a
     // dd-tagged dmabuf when none is running, so the client can't render into a surface nothing presents).
     // This test simulates that healthy environment; without it the import would be correctly rejected.

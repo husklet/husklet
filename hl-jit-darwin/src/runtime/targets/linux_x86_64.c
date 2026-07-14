@@ -70,7 +70,7 @@
 #include "../translate/x86_64/emit.c"        // x86 engine: arm64 emitters + SSE + x87
 #include "../translate/x86_64/decode.c"      // x86-64 decoder
 #include "../translate/x86_64/translate.c"   // x86-64 translate_block + trampolines
-#include "../translate/x86_64/pcache.c"      // opt8: persistent translated-code cache (DDJIT_PCACHE=1)
+#include "../translate/x86_64/pcache.c"      // opt8: persistent translated-code cache (HL_JIT_PCACHE=1)
 #include "../os/linux/thread.c"              // SHARED: clone->pthread, per-thread cpu, futex
 #include "../os/linux/signal.c"              // SHARED: signal delivery driver + translation
 #include "../translate/x86_64/sigframe.c"    // x86-64 rt_sigframe build/restore (uses signal.c state)
@@ -109,7 +109,7 @@ static void container_init(const char *rootfs) {
     // cross-engine-process cgroup accounting: a FRESH shared slot table for THIS container init, inherited
     // by every guest fork (see state.c). Per-container so sibling forkserver workers never share a total.
     if (rootfs) acct_container_reset();
-    container_read_resource_env(); // docker --cpus / --read-only / --ulimit (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS)
+    container_read_resource_env(); // docker --cpus / --read-only / --ulimit (HL_CPUS/HL_ROOTFS_RO/HL_ULIMITS)
     // #353: the daemon's DEFAULT launch path is the typed --configfd bridge, which hands the container
     // model to the engine as DD_* ENV (hl_configfd.c), NOT as the --hostname/--mem-max/--pids-max CLI
     // flags that hl_entry() parses. aarch64's container_init() already re-reads these from the env
@@ -119,15 +119,15 @@ static void container_init(const char *rootfs) {
     // matrix missed this. Guard on the CLI value (only fill when the flag path left it unset), matching
     // aarch64, so a genuine --hostname flag still wins.
     {
-        const char *h = getenv("DD_HOSTNAME");
+        const char *h = getenv("HL_HOSTNAME");
         if (h && h[0] && !g_hostname[0]) {
             strncpy(g_hostname, h, 64);
             g_hostname[64] = 0;
         }
-        const char *m = getenv("DD_MEM_MAX");
+        const char *m = getenv("HL_MEM_MAX");
         if (m && m[0] && !g_mem_max) g_mem_max = parse_size(m);
-        const char *p = getenv("DD_PIDS_MAX");
-        if (p && p[0] && !g_pids_max) g_pids_max = hl_parse_id("DD_PIDS_MAX", p);
+        const char *p = getenv("HL_PIDS_MAX");
+        if (p && p[0] && !g_pids_max) g_pids_max = hl_parse_id("HL_PIDS_MAX", p);
     }
     if (rootfs && rootfs[0]) {     // the shared container jails against the canonical rootfs + its dir fd
         g_rootfs = (char *)rootfs;
@@ -137,33 +137,33 @@ static void container_init(const char *rootfs) {
         g_root_fd = engine_fd_hoist(g_root_fd); // keep it off the guest's low fds (else it squats fd 3)
         container_populate_dev();        // /dev/{fd,stdin,stdout,stderr,ptmx,pts,shm,console,...} the unpacker stripped
         container_populate_machine_id(); // /etc/machine-id agreeing with boot_id (if image ships none)
-        // Container identity = root (0) by default, matching linux_aarch64.c; DD_UID/DD_GID (or --uid/--gid)
+        // Container identity = root (0) by default, matching linux_aarch64.c; HL_UID/HL_GID (or --uid/--gid)
         // override. Without this g_uid stayed -1 and cuid() fell back to the HOST uid -> the guest saw
         // getuid()/geteuid() == the host's 501 ("I have no name!", non-root shell) on x86-64 only.
-        const char *eu = getenv("DD_UID");
-        if (eu && g_uid < 0) g_uid = hl_parse_id("DD_UID", eu);
-        const char *eg = getenv("DD_GID");
-        if (eg && g_gid < 0) g_gid = hl_parse_id("DD_GID", eg);
+        const char *eu = getenv("HL_UID");
+        if (eu && g_uid < 0) g_uid = hl_parse_id("HL_UID", eu);
+        const char *eg = getenv("HL_GID");
+        if (eg && g_gid < 0) g_gid = hl_parse_id("HL_GID", eg);
         if (g_uid < 0) g_uid = 0;
         if (g_gid < 0) g_gid = 0;
     }
-    if (!getenv("DD_NONETNS")) { // opt-out: leave g_netns empty -> 127/8 uses the REAL host TCP stack
-        // DD_NETNS is a short KEY (not a path) -- the SAME key netns.c derives the abstract-socket / IPC
+    if (!getenv("HL_NONETNS")) { // opt-out: leave g_netns empty -> 127/8 uses the REAL host TCP stack
+        // HL_NETNS is a short KEY (not a path) -- the SAME key netns.c derives the abstract-socket / IPC
         // namespace dirs from (/tmp/.ddabs-<key>, ...) and that the daemon + aarch64 engine use. The
         // private-loopback dir is derived FROM it. Inherit the key across exec / from the daemon, else
-        // mint one from our pid. (Setting DD_NETNS to the full loopback path put slashes in those derived
+        // mint one from our pid. (Setting HL_NETNS to the full loopback path put slashes in those derived
         // dir names -> mkdir failed -> abstract-socket bind broke.)
-        const char *ns = getenv("DD_NETNS");
+        const char *ns = getenv("HL_NETNS");
         char key[40];
         if (ns && ns[0])
             snprintf(key, sizeof key, "%.39s", ns);
         else
             snprintf(key, sizeof key, "%d", (int)getpid());
         snprintf(g_netns, sizeof g_netns, "/tmp/dd-lo-%s", key);
-        if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(ns && ns[0])) setenv("DD_NETNS", key, 1);
+        if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(ns && ns[0])) setenv("HL_NETNS", key, 1);
     }
     {
-        const char *vs = getenv("DDVOL"); // bind-mount volumes (env path; bridge usually can't pass env, so --vol too)
+        const char *vs = getenv("HL_VOL"); // bind-mount volumes (env path; bridge usually can't pass env, so --vol too)
         if (vs && vs[0]) {
             char tmp[2048];
             snprintf(tmp, sizeof tmp, "%s", vs);
@@ -173,11 +173,11 @@ static void container_init(const char *rootfs) {
         }
     }
     {
-        const char *pub = getenv("DD_PUBLISH");
+        const char *pub = getenv("HL_PUBLISH");
         if (pub && pub[0] && !g_nportmap) parse_publish(pub);
     } // docker -p (inherit across exec)
     {
-        const char *ls = getenv("DD_LOWER"); // overlay lower layers (inherit across exec)
+        const char *ls = getenv("HL_LOWER"); // overlay lower layers (inherit across exec)
         if (ls && ls[0] && !g_nlower) {
             char tmp[4096];
             snprintf(tmp, sizeof tmp, "%s", ls);
@@ -190,9 +190,9 @@ static void container_init(const char *rootfs) {
         }
     }
     if (g_rootfs) chdir(g_rootfs); // container model: guest cwd "/" maps to the rootfs root
-    // docker -w / initial working directory: start the guest in DD_CWD (must be reachable inside the
+    // docker -w / initial working directory: start the guest in HL_CWD (must be reachable inside the
     // container -- typically a bind-mounted volume). confine() normalizes + clamps it to the rootfs.
-    const char *icwd = getenv("DD_CWD");
+    const char *icwd = getenv("HL_CWD");
     if (icwd && icwd[0]) confine(icwd, g_cwd, sizeof g_cwd);
     // derive the run user's supplementary group set from the image rootfs (runc additionalGids), after
     // g_uid/g_gid + the overlay lowers are resolved, so getgroups(2) and /proc/self/status Groups: report it.
@@ -294,15 +294,15 @@ static int engine_global_init(void) {
         sigaction(SIGBUS, &sa, NULL);
     }
     // Untrusted-guest isolation (the sentry process-split). OFF by default -> trusted path unchanged.
-    g_untrusted = getenv("DDJIT_UNTRUSTED") != NULL;
-    g_sentry_sandbox = getenv("DDJIT_SANDBOX") != NULL;
+    g_untrusted = getenv("HL_JIT_UNTRUSTED") != NULL;
+    g_sentry_sandbox = getenv("HL_JIT_SANDBOX") != NULL;
     // ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
     // fork, so every descendant guest process inherits the same physical pages. Inert until a guest ptraces.
     ptrace_arena_init();
     // Host-IOSurface GPU bridge (--gui): force its one-time ObjC/CoreFoundation/Foundation/IOSurface class
     // inits to completion HERE, single-threaded and BEFORE any guest thread/fork, so a lazy +initialize can
     // never be mid-flight when a guest forks (which would abort the child via libobjc's fork-safety guard).
-    // Gated on DD_GPU_IOSURFACE; a no-op for every other workload. Mirrors targets/linux_aarch64.c.
+    // Gated on HL_GPU_IOSURFACE; a no-op for every other workload. Mirrors targets/linux_aarch64.c.
     hl_gpu_prewarm_fork_safety();
     g_engine_inited = 1;
     return 0;
@@ -374,12 +374,12 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     c.rip = jump;
 
     s1_calibrate(); // S1: anchor CNTVCT vs host REALTIME/MONOTONIC for the inline time fast path
-                    // (also honors DDJIT_NOFASTSYS=1 kill-switch -> byte-identical old syscall path)
+                    // (also honors HL_JIT_NOFASTSYS=1 kill-switch -> byte-identical old syscall path)
     proc_reg_publish(g_exe_path, argc, argv); // publish this process into the /proc table
     if (g_untrusted) sentry_init();           // fork the host-authority sentry + (optionally) confine the worker
     run_guest(&c);
     if (g_untrusted) sentry_shutdown(); // signal quit + waitpid (reap, no orphan)
-    if (getenv("DDJIT_FASTSTAT") || g_fast_count)
+    if (getenv("HL_JIT_FASTSTAT") || g_fast_count)
         fprintf(stderr, "[fastsys] enabled=%d inline-served=%llu\n", g_fastsys, (unsigned long long)g_fast_count);
     if (g_prof)
         fprintf(stderr, "[prof] dispatcher round-trips=%llu  IBTC fills=%llu  (IBTC %s)\n",
@@ -389,11 +389,11 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
 
 int hl_run(const char *rootfs, int argc, char *const argv[]) {
     if (argc < 1 || !argv || !argv[0]) return 2;
-    // opt8 persistent translated-code cache: OPT-IN via DDJIT_PCACHE (default OFF -> byte-identical to the
-    // baseline; the cross-engine matrix never sets it, so it is unaffected). DDJIT_NOPCACHE=1 is the
+    // opt8 persistent translated-code cache: OPT-IN via HL_JIT_PCACHE (default OFF -> byte-identical to the
+    // baseline; the cross-engine matrix never sets it, so it is unaffected). HL_JIT_NOPCACHE=1 is the
     // kill-switch and always wins (same contract as the aarch64 pcache). Read once.
     g_coldprof = getenv("COLDPROF") != NULL;
-    g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
+    g_pcache = getenv("HL_JIT_PCACHE") != NULL && getenv("HL_JIT_NOPCACHE") == NULL;
     container_init(rootfs);
     int rc = engine_global_init();
     if (rc) return rc;
@@ -453,12 +453,12 @@ int hl_run(const char *rootfs, int argc, char *const argv[]) {
     } while (0)
 #include "../os/linux/forkserver.c"
 
-#ifndef DDJIT_LIB
+#ifndef HL_JIT_LIB
 // The engine entry point. Named `hl_entry` so the runtime can be linked as a library and launched
 // by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
-// harness) launching identically. The static-lib build defines DDJIT_NO_MAIN to drop the shim.
+// harness) launching identically. The static-lib build defines HL_JIT_NO_MAIN to drop the shim.
 int hl_entry(int argc, char **argv);
-#ifndef DDJIT_NO_MAIN
+#ifndef HL_JIT_NO_MAIN
 int main(int argc, char **argv) {
     return hl_entry(argc, argv);
 }
@@ -491,7 +491,7 @@ int hl_entry(int argc, char **argv) {
             ai += 2;
         } else if (strcmp(argv[ai], "--publish") == 0 || strcmp(argv[ai], "-p") == 0) { // docker -p H:C (port-map)
             parse_publish(argv[ai + 1]);
-            setenv("DD_PUBLISH", argv[ai + 1], 1);
+            setenv("HL_PUBLISH", argv[ai + 1], 1);
             ai += 2;
         } else if (strcmp(argv[ai], "--lower") == 0) {
             add_lower(argv[ai + 1]);

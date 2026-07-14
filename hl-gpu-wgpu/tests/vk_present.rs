@@ -5,7 +5,7 @@
 //! `vkGetSwapchainImagesKHR` → `vkAcquireNextImageKHR` → render into the acquired presentable image →
 //! `vkQueuePresentKHR` — produces the correct rendered frame in the swapchain image on a live Metal
 //! device. This is the same render→present IR a live `vkcube-wayland` emits; the live guest ships it to
-//! the host GPU-exec over `$DD_GPU_EXEC` and commits the IOSurface dma-buf to dd-display, whereas this
+//! the host GPU-exec over `$HL_GPU_EXEC` and commits the IOSurface dma-buf to dd-display, whereas this
 //! test (playing the host exec service) replays the render on the WgpuBackend and reads the presentable
 //! image back. `Cmd::Present` is the live wayland/dd-display step, so it is filtered before the
 //! backend replay. Needs a Metal device → macOS only. Run: `cargo test -p hl-gpu-wgpu --test vk_present`.
@@ -53,7 +53,7 @@ fn vk_swapchain_present_renders_on_real_metal() {
 
     ddvk::reg::reset();
 
-    // vkQueuePresentKHR ships the frame to the host GPU-exec socket ($DD_GPU_EXEC) and, unless disabled,
+    // vkQueuePresentKHR ships the frame to the host GPU-exec socket ($HL_GPU_EXEC) and, unless disabled,
     // to the wayland compositor. Stand up a throwaway acking sink so the present succeeds off-guest; the
     // test itself replays the render IR on Metal below and checks the pixels.
     let dir = std::env::temp_dir().join(format!("dd-vkpresent-{}", std::process::id()));
@@ -61,8 +61,8 @@ fn vk_swapchain_present_renders_on_real_metal() {
     let sock = dir.join("exec.sock");
     let _ = std::fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock).unwrap();
-    std::env::set_var("DD_GPU_EXEC", &sock);
-    std::env::set_var("DD_VK_NO_WL_PRESENT", "1");
+    std::env::set_var("HL_GPU_EXEC", &sock);
+    std::env::set_var("HL_VK_NO_WL_PRESENT", "1");
     let exec = std::thread::spawn(move || {
         if let Ok((mut c, _)) = listener.accept() {
             let mut hdr = [0u8; 16];
@@ -229,7 +229,7 @@ fn vk_swapchain_present_renders_on_real_metal() {
     let submit = vk::SubmitInfo { command_buffer_count: 1, p_command_buffers: cbs.as_ptr() as *const vk::CommandBuffer, ..Default::default() };
     ddvk::vkQueueSubmit(queue, 1, &submit, 0);
 
-    // present (adds Cmd::Present; on the live guest this ships to $DD_GPU_EXEC + commits the dma-buf)
+    // present (adds Cmd::Present; on the live guest this ships to $HL_GPU_EXEC + commits the dma-buf)
     let scs = [vk::SwapchainKHR::from_raw(swapchain)];
     let idxs = [image_index];
     let present = vk::PresentInfoKHR::default().swapchains(&scs).image_indices(&idxs);

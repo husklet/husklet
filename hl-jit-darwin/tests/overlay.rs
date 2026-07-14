@@ -150,7 +150,7 @@ fn run_probe(arch: &str) -> std::collections::HashMap<String, String> {
         .output()
         .expect("spawn engine");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    if std::env::var("DD_DEBUG").is_ok() {
+    if std::env::var("HL_DEBUG").is_ok() {
         eprintln!(
             "[{arch}] code={:?}\nstdout=\n{stdout}\nstderr=\n{}",
             out.status.code(),
@@ -483,7 +483,7 @@ fn check(arch: &str) {
 #[test]
 fn overlay_correctness_aarch64() {
     if !hl_jit::available(hl_jit::Guest::LinuxAarch64) {
-        eprintln!("linux/aarch64 engine not built — skipping (pin DDJIT_DIR to a built engine)");
+        eprintln!("linux/aarch64 engine not built — skipping (pin HL_JIT_DIR to a built engine)");
         return;
     }
     check("aarch64");
@@ -492,7 +492,7 @@ fn overlay_correctness_aarch64() {
 #[test]
 fn overlay_correctness_x86_64() {
     if !hl_jit::available(hl_jit::Guest::LinuxX86_64) {
-        eprintln!("linux/x86_64 engine not built — skipping (pin DDJIT_DIR to a built engine)");
+        eprintln!("linux/x86_64 engine not built — skipping (pin HL_JIT_DIR to a built engine)");
         return;
     }
     check("x86_64");

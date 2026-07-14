@@ -10,7 +10,7 @@
 # & event sync execute end-to-end in-process on an embedded dd-gpu SoftwareBackend (the CPU PTX
 # interpreter — the same executor dd-gpu's oracle and hl-gpu/cuda/cuda_shim.c use), so a real vecadd
 # kernel runs and reads back correct results with no GPU. On a real host the same IR ships over
-# $DD_GPU_EXEC to the host Metal executor. The exported `cu*` SURFACE is code-generated from a committed
+# $HL_GPU_EXEC to the host Metal executor. The exported `cu*` SURFACE is code-generated from a committed
 # manifest (see `build.rs` + `registry/`); the bring-up + IR-wiring entry points have real bodies, the
 # long tail are spec-faithful correct-ABI traced stubs. See docs/rendering/SHIM_RUST_ARCHITECTURE.md.
 [package]

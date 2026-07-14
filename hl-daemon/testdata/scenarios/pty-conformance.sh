@@ -20,14 +20,14 @@
 #   BACKEND=real bash dd-tests/scenarios/pty-conformance.sh     # against the docker oracle (ground truth)
 #   BACKEND=both bash dd-tests/scenarios/pty-conformance.sh     # run dd AND oracle, DIFF every transcript
 #
-# Env: DD_IMAGES, DD_DAEMON (the dd-daemon binary), DDJIT_DIR, REAL_CONTEXT (oracle docker context).
+# Env: HL_IMAGES, HL_DAEMON (the dd-daemon binary), HL_JIT_DIR, REAL_CONTEXT (oracle docker context).
 # Self-skips cleanly if python3 / the images / the backend aren't available.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BACKEND="${BACKEND:-dd}"
 REAL_CONTEXT="${REAL_CONTEXT:-default}"
-IMAGES="${DD_IMAGES:-$HOME/.dd/images}"
-DAEMON="${DD_DAEMON:-$ROOT/target/release/dd-daemon}"
+IMAGES="${HL_IMAGES:-$HOME/.dd/images}"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
 PY="$(command -v python3 || true)"
 NODE_IMG="${NODE_IMG:-node:20-alpine}"
 PY_IMG="${PY_IMG:-python:3.12-alpine}"
@@ -80,17 +80,17 @@ PYEOF
 BS_KEYS='[["1",0.3],["2",0.3],["8",0.3],["",0.5],["3",0.3],["\r",1.2]]'
 
 # ---- bring up whichever backend(s) we diff against -----------------------------------------------------
-DD_DOCKER=""; REAL_DOCKER=""
+HL_DOCKER=""; REAL_DOCKER=""
 start_dd() {
   [ -x "$DAEMON" ] || { echo "SKIP: dd-daemon not built ($DAEMON)"; return 1; }
   SOCK="$ROOT/target/dd-ptyconf.sock"; STATE="$(mktemp -d "${TMPDIR:-/tmp}/dd-ptyc.XXXXXX")"
   rm -f "$SOCK"
-  env DD_IMAGES="$IMAGES" DDOCKERD_SOCK="$SOCK" DD_STATE="$STATE/state.json" DD_VOLUMES="$STATE/vol" \
-    ${DDJIT_DIR:+DDJIT_DIR="$DDJIT_DIR"} "$DAEMON" >"$ROOT/target/dd-ptyconf.log" 2>&1 &
+  env HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE/state.json" HL_VOLUMES="$STATE/vol" \
+    ${HL_JIT_DIR:+HL_JIT_DIR="$HL_JIT_DIR"} "$DAEMON" >"$ROOT/target/dd-ptyconf.log" 2>&1 &
   DPID=$!; trap 'kill -9 $DPID 2>/dev/null; rm -rf "$STATE" "$SOCK"' EXIT
   n=0; until [ -S "$SOCK" ] || [ $n -ge 60 ]; do sleep 0.25; n=$((n+1)); done
   [ -S "$SOCK" ] || { echo "SKIP: dd daemon failed to start"; return 1; }
-  DD_DOCKER="docker --host unix://$SOCK"; return 0
+  HL_DOCKER="docker --host unix://$SOCK"; return 0
 }
 [ "$BACKEND" = dd ]   || [ "$BACKEND" = both ] && start_dd || true
 [ "$BACKEND" = real ] || [ "$BACKEND" = both ] && REAL_DOCKER="docker --context $REAL_CONTEXT" || true
@@ -102,9 +102,9 @@ have_img() { $1 image inspect "$2" >/dev/null 2>&1; }
 icase() {  # icase <name> <img> <keys> <want-substr-in-repr> -- <cmd...>
   local name="$1" img="$2" keys="$3" want="$4"; shift 4; shift
   local dd_out="" real_out=""
-  if [ -n "$DD_DOCKER" ]; then
-    have_img "$DD_DOCKER" "$img" || { skipc "$name (dd)" "image $img absent"; return; }
-    dd_out="$(drive "$DD_DOCKER" "$img" "$keys" -- "$@")"
+  if [ -n "$HL_DOCKER" ]; then
+    have_img "$HL_DOCKER" "$img" || { skipc "$name (dd)" "image $img absent"; return; }
+    dd_out="$(drive "$HL_DOCKER" "$img" "$keys" -- "$@")"
     case "$dd_out" in *"$want"*) ok "$name (dd)";; *) bad "$name (dd)" "want [$want] in $dd_out";; esac
   fi
   if [ -n "$REAL_DOCKER" ]; then

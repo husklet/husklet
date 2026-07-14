@@ -12,7 +12,7 @@
 //!     error, but ALWAYS initializes its output parameters.
 //!   - **stub**    — generated, an operation a conforming driver performs and the shim does NOT: sets
 //!     the API-correct GL/EGL error, zero-initializes every output, returns the spec failure value, and
-//!     (under `DD_SHIM_STRICT`) aborts. NEVER a success-by-default.
+//!     (under `HL_SHIM_STRICT`) aborts. NEVER a success-by-default.
 //!
 //! The classification and its per-symbol records are emitted as [`crate::CAPABILITIES`], the machine-
 //! checkable inventory that keeps the exported surface and the completeness census in sync.
@@ -42,7 +42,7 @@ const BACKED_GL_EXTENSIONS: &[&str] = &[
 
 /// The lowest coherent GLES profile the real bodies back. NOT ES3: the ES3 core additions (UBO
 /// binding, transform feedback, fence sync, sampler objects, immutable/3D textures, MRT) are all
-/// `stub`s, so advertising ES3 would be a false claim. ES3 stays an explicit `DD_SHIM_ES3` opt-in.
+/// `stub`s, so advertising ES3 would be a false claim. ES3 stays an explicit `HL_SHIM_ES3` opt-in.
 const ADVERTISED_GL_VERSION: &str = "OpenGL ES 2.0 dd-shim";
 const ADVERTISED_GLSL_VERSION: &str = "OpenGL ES GLSL ES 1.00";
 const ADVERTISED_GL_MAJOR: i32 = 2;

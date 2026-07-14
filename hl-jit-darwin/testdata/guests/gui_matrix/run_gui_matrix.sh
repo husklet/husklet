@@ -42,7 +42,7 @@ run_one() {
 
 echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}"
 echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}"
-echo "DD_GPU_EXEC=${DD_GPU_EXEC:-/run/user/0/dd-gpu-0}"
+echo "HL_GPU_EXEC=${HL_GPU_EXEC:-/run/user/0/dd-gpu-0}"
 echo "GUI_MATRIX_TIMEOUT=${TIMEOUT_SEC}"
 echo
 

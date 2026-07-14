@@ -74,7 +74,7 @@ static uint8_t g_ep_wake_armed[DD_NFD];          // per epoll fd: EVFILT_USER wa
 static pthread_mutex_t g_ep_mtx = PTHREAD_MUTEX_INITIALIZER;
 // Wall 7 trace focus: sticky per-epoll flag set the first time an AF_UNIX/eventfd (a Mojo channel/wake
 // fd) is registered on this instance, so epoll_wait tracing is confined to the renderer's Mojo IO-pump
-// epoll and not the timer/signal epolls. Touched only under DD_WALL7_TRACE.
+// epoll and not the timer/signal epolls. Touched only under HL_WALL7_TRACE.
 static uint8_t g_ep_has_mojo[DD_NFD];
 
 // per-epoll-instance registered-fd membership (lazily allocated DD_NFD-bit bitmap indexed by the

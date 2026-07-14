@@ -5,7 +5,7 @@
 // returns the IOSurface's global id, which the guest carries to `dd-display` in the linux-dmabuf modifier
 // so the compositor resolves the same IOSurface and wraps it as an MTLTexture (zero readback).
 //
-// This whole path is inert unless DD_GPU_IOSURFACE is set in the engine's environment (the --gui launcher
+// This whole path is inert unless HL_GPU_IOSURFACE is set in the engine's environment (the --gui launcher
 // sets it), so every existing workload — and the test gate — is byte-for-byte unaffected.
 #ifndef HL_GPU_H
 #define HL_GPU_H
@@ -16,7 +16,7 @@
 #define DD_IOCTL_GPU_ALLOC 0xC020DD01u
 
 // Formats (match DRM fourccs' intent). 0 = BGRA8888 (little-endian ARGB), the wl_shm/Metal default.
-#define DD_GPU_FMT_BGRA8888 0u
+#define HL_GPU_FMT_BGRA8888 0u
 
 struct hl_gpu_alloc {
     uint32_t width;   // in

@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 /// Spawn the dd-daemon binary detached, with the canonical socket/images/JIT env, and return the
-/// child so we can stop it later. Resolves the binary from `$DD_DAEMON_BIN`, the app bundle
+/// child so we can stop it later. Resolves the binary from `$HL_DAEMON_BIN`, the app bundle
 /// (`Contents/Resources/dd-daemon`), or a sibling of this executable (the dev/`cargo` layout).
 pub(crate) fn spawn_daemon() -> Option<std::process::Child> {
     use std::process::{Command, Stdio};
@@ -33,9 +33,9 @@ pub(crate) fn spawn_daemon() -> Option<std::process::Child> {
 
     let (bin, jit_dir) = resolve_daemon()?;
     Command::new(&bin)
-        .env("DDOCKERD_SOCK", run.join("docker.sock"))
-        .env("DD_IMAGES", &images)
-        .env("DDJIT_DIR", &jit_dir)
+        .env("HL_DOCKER_SOCK", run.join("docker.sock"))
+        .env("HL_IMAGES", &images)
+        .env("HL_JIT_DIR", &jit_dir)
         .stdin(Stdio::null())
         .stdout(out)
         .stderr(err)
@@ -56,7 +56,7 @@ pub(crate) fn stop_external_daemon() {
 
 /// Locate the daemon binary and the dir holding the `ddjit-*` engines.
 fn resolve_daemon() -> Option<(PathBuf, PathBuf)> {
-    if let Some(p) = std::env::var_os("DD_DAEMON_BIN") {
+    if let Some(p) = std::env::var_os("HL_DAEMON_BIN") {
         let p = PathBuf::from(p);
         let dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
         return Some((p, dir));

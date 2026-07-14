@@ -219,7 +219,7 @@ extern "C" fn on_global(
         return;
     }
     let ifc = unsafe { core::ffi::CStr::from_ptr(interface) };
-    if std::env::var_os("DD_SHIM_DEBUG").is_some() {
+    if std::env::var_os("HL_SHIM_DEBUG").is_some() {
         eprintln!("[dd-shim-vk] wl global: name={name} iface={:?} v{version}", ifc);
     }
     if ifc.to_bytes() != b"zwp_linux_dmabuf_v1" {
@@ -262,7 +262,7 @@ fn ensure_dmabuf(w: &Wl, display: *mut c_void) -> Option<*mut c_void> {
             0,
             core::ptr::null::<c_void>(),
         );
-        let dbg = std::env::var_os("DD_SHIM_DEBUG").is_some();
+        let dbg = std::env::var_os("HL_SHIM_DEBUG").is_some();
         if registry.is_null() {
             if dbg {
                 eprintln!("[dd-shim-vk] ensure_dmabuf: get_registry returned NULL");
@@ -288,7 +288,7 @@ extern "C" fn on_global_remove(_data: *mut c_void, _registry: *mut c_void, _name
 /// Commit the executor-rendered IOSurface `surf` (its dma-buf fd + dd surface id) to the app's
 /// `wl_surface` on the app's `wl_display`. Returns false if wayland/dmabuf is unavailable (off-guest).
 pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
-    let dbg = std::env::var_os("DD_SHIM_DEBUG").is_some();
+    let dbg = std::env::var_os("HL_SHIM_DEBUG").is_some();
     if display == 0 || surface == 0 || surf.fd < 0 {
         if dbg {
             eprintln!("[dd-shim-vk] wl_present: bad args display={display:#x} surface={surface:#x} fd={}", surf.fd);

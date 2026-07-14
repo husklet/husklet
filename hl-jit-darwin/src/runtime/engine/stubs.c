@@ -8,11 +8,11 @@ static void block_return(void);
 // global only at block boundaries (set by the dispatcher before each run_block).
 static int g_trace;
 static int g_systrace; // JTS=1: syscall-entry trace only (no per-block dump) -- debug aid
-// DDDBG_NOCHAIN=1 (debug-only, default OFF, read once at init): skip direct block chaining so EVERY
+// HL_DBG_NOCHAIN=1 (debug-only, default OFF, read once at init): skip direct block chaining so EVERY
 // block re-enters the dispatcher -> the JT per-block trace logs every execution (exact per-block PC
 // attribution, alignable with `qemu -d exec,nochain`). Mirrors x86's g_nochain. Zero-cost when unset.
 static int g_dbg_nochain;
-// DDDBG_GPRDUMP=1 (debug-only, default OFF): with JT, dump ALL guest GPRs (x0..x30 + sp) per block for a
+// HL_DBG_GPRDUMP=1 (debug-only, default OFF): with JT, dump ALL guest GPRs (x0..x30 + sp) per block for a
 // register-value differential vs `qemu -d cpu` (isolate a wrong-VALUE miscompile). Zero-cost when unset.
 static int g_dbg_gprdump;
 static const char *g_exe_path = "";
@@ -59,10 +59,10 @@ static void emit_prologue(void) {
 // so a vector-dirty region can reach a statically-"clean" syscall block with host V != cpu->V. A syscall
 // that itself writes cpu->V (sigreturn) is republished by the prologue reload, so V state is never lost.
 static int g_blk_vdirty;   // per-region latch: has the vdirty-set store already been emitted this region?
-static int g_slimsys = -1; // DDJIT_NOSLIMSYS=1 -> 0 = byte-identical full-spill baseline (A/B kill switch)
+static int g_slimsys = -1; // HL_JIT_NOSLIMSYS=1 -> 0 = byte-identical full-spill baseline (A/B kill switch)
 
 static int slimsys_on(void) {
-    if (g_slimsys < 0) g_slimsys = getenv("DDJIT_NOSLIMSYS") ? 0 : 1;
+    if (g_slimsys < 0) g_slimsys = getenv("HL_JIT_NOSLIMSYS") ? 0 : 1;
     return g_slimsys;
 }
 

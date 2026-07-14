@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 /* /proc/self/environ must match getenv(): programs compare the two, and helper processes scrape procfs.
-   dd generated environ from raw DD_GUEST_ENV, omitting the engine defaults (HOME/LANG/…) it actually
+   dd generated environ from raw HL_GUEST_ENV, omitting the engine defaults (HOME/LANG/…) it actually
    places on the stack. Check consistency for a few keys; native is trivially consistent, so is a fixed dd. */
 
 static int environ_has(const char *key) {

@@ -91,7 +91,7 @@ pub extern "C" fn glGetError() -> u32 {
 /// inventory ([`crate::ADVERTISED_GL_VERSION`], …), so the shim advertises the LOWEST coherent GLES
 /// profile its real bodies actually back — it does NOT claim ES 3.x just because the ES3 symbols exist
 /// (they are truthful-failure stubs). ES3 remains an explicit opt-in: a context created with major>=3
-/// (only accepted under `DD_SHIM_ES3`) advertises the ES3 identity strings.
+/// (only accepted under `HL_SHIM_ES3`) advertises the ES3 identity strings.
 #[no_mangle]
 pub extern "C" fn glGetString(name: u32) -> *const u8 {
     let es3 = crate::state::egl_ctx_major(core::ptr::null_mut()) >= 3;
@@ -326,7 +326,7 @@ pub fn submission_serials() -> (u64, u64) {
 
 /// A frame was submitted to the host GPU-exec service AND acknowledged as complete — the real
 /// cross-process boundary. The transport's `submit` returns only on `ACK_OK` (the host replayed and
-/// committed the render; the host-tool / `DD_IR_DUMP` path is a synchronous successful write), so on
+/// committed the render; the host-tool / `HL_IR_DUMP` path is a synchronous successful write), so on
 /// return the frame is genuinely accepted+completed. Advance the submission serial for the frame and
 /// catch completion up to it, so every fence/sync (`glFenceSync`) created during the frame is now
 /// signaled by an ACTUAL host acknowledgement rather than a local `glFinish`. Called by `eglSwapBuffers`
@@ -2709,7 +2709,7 @@ pub extern "C" fn glValidateProgram(_program: u32) {}
 // ===================================================================================================
 // GLES3 mandatory-command completeness — real bodies ported at gl_shim.c byte-parity (the oracle).
 //
-// The DD_SHIM_ES3 opt-in advertises an ES 3.0 context; these are its remaining mandatory entry points.
+// The HL_SHIM_ES3 opt-in advertises an ES 3.0 context; these are its remaining mandatory entry points.
 // Every one is IR-free — a query returning the oracle's default, an object-name lifecycle op, or a
 // spec-legitimate no-op the executor doesn't back (UBO binding, transform feedback, sync, sampler
 // objects, MRT clears, instanced divisor, compressed/3D-copy texture) — so the frame IR (and the

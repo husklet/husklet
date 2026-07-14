@@ -35,7 +35,7 @@ pub(crate) struct CreateBody {
     #[serde(rename = "Labels")]
     pub(super) labels: Option<HashMap<String, String>>,
     // `docker run --user U[:G]` — docker puts the "uid:gid" / "name" string in Config.User (top-level
-    // of the create body, alongside Image/Cmd/Env). Stored on the Container and turned into DD_UID/DD_GID.
+    // of the create body, alongside Image/Cmd/Env). Stored on the Container and turned into HL_UID/HL_GID.
     #[serde(rename = "User")]
     pub(super) user: Option<String>,
     #[serde(rename = "HostConfig")]

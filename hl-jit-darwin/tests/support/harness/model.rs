@@ -80,27 +80,27 @@ pub struct Case {
     /// Engines where this case is a KNOWN failure (jit86 translator/service bugs under debugging) — a
     /// fail there is reported `xfail`, not a regression.
     pub xfail: Vec<Engine>,
-    /// Run the guest with the untrusted-guest SENTRY split enabled (sets `DDJIT_UNTRUSTED=1` in the
+    /// Run the guest with the untrusted-guest SENTRY split enabled (sets `HL_JIT_UNTRUSTED=1` in the
     /// engine's env so fs/net/proc syscalls route through the forked sentry over the SPSC ring). OFF by
-    /// default → the existing matrix is byte-identical. Sets ONLY `DDJIT_UNTRUSTED` (the ring
-    /// marshaling/forwarding); the stronger `DDJIT_SANDBOX` public mode is driven by `.sandbox()` below.
+    /// default → the existing matrix is byte-identical. Sets ONLY `HL_JIT_UNTRUSTED` (the ring
+    /// marshaling/forwarding); the stronger `HL_JIT_SANDBOX` public mode is driven by `.sandbox()` below.
     pub untrusted: bool,
     /// Run the guest under the PUBLIC sandbox mode (`docker run --security-opt sandbox`, i.e.
-    /// `Container::builder().sandbox(true)`): sets BOTH `DDJIT_UNTRUSTED=1` and `DDJIT_SANDBOX=1` in the
+    /// `Container::builder().sandbox(true)`): sets BOTH `HL_JIT_UNTRUSTED=1` and `HL_JIT_SANDBOX=1` in the
     /// engine's env, exactly as the public builder emits. On macOS this additionally confines the JIT
     /// worker under the deny-default Seatbelt profile (sentry.c `worker_sandbox`); on Linux the Seatbelt
     /// step is a no-op, so the case pins that the public-mode env combo launches and a fully-forwarded
     /// guest still produces the trusted golden. OFF by default. Implies untrusted (sandbox is only sound
     /// once fs/net/proc are forwarded).
     pub sandbox: bool,
-    /// docker `--cpus` online-CPU cap (0 = unset). Threads to SpawnConfig.cpus -> DD_CPUS.
+    /// docker `--cpus` online-CPU cap (0 = unset). Threads to SpawnConfig.cpus -> HL_CPUS.
     pub cpus: u32,
-    /// docker `--read-only` rootfs. Threads to SpawnConfig.read_only -> DD_ROOTFS_RO.
+    /// docker `--read-only` rootfs. Threads to SpawnConfig.read_only -> HL_ROOTFS_RO.
     pub read_only: bool,
-    /// docker `--ulimit` (name, soft, hard) triples. Threads to SpawnConfig.ulimits -> DD_ULIMITS.
+    /// docker `--ulimit` (name, soft, hard) triples. Threads to SpawnConfig.ulimits -> HL_ULIMITS.
     pub ulimits: Vec<(String, u64, u64)>,
     /// Extra engine env (`(KEY, VALUE)`) baked into the launch script — used to exercise the container
-    /// network model in-process (e.g. `DD_NETNS`/`DD_NETBR`/`DD_IP` turn on the private-loopback + per-
+    /// network model in-process (e.g. `HL_NETNS`/`HL_NETBR`/`HL_IP` turn on the private-loopback + per-
     /// network AF_UNIX switch a bare guest otherwise never sees). Inert on the native oracle run.
     pub env: Vec<(String, String)>,
     pub checks: Vec<Check>,
@@ -219,7 +219,7 @@ impl Case {
         self.ulimits.push((name.into(), soft, hard));
         self
     }
-    /// Set an extra engine env var for this case (e.g. `DD_NETNS`/`DD_NETBR`/`DD_IP` to enable the
+    /// Set an extra engine env var for this case (e.g. `HL_NETNS`/`HL_NETBR`/`HL_IP` to enable the
     /// container network switch). Baked into the JIT launch env; not passed to the native oracle.
     pub fn env(mut self, k: &str, v: &str) -> Self {
         self.env.push((k.into(), v.into()));
@@ -251,7 +251,7 @@ impl Case {
         self.xfail = e.to_vec();
         self
     }
-    /// Enable the untrusted-guest SENTRY split for this case (`DDJIT_UNTRUSTED=1` in the engine's env):
+    /// Enable the untrusted-guest SENTRY split for this case (`HL_JIT_UNTRUSTED=1` in the engine's env):
     /// fs/net/proc syscalls are marshaled to the forked sentry over the ring instead of run in the JIT
     /// worker. Used to re-run a guest under the split and assert the SAME golden output as the trusted
     /// baseline. Linux-engine only in effect (the sentry is Linux-only); the env is inert on darwin.
@@ -259,7 +259,7 @@ impl Case {
         self.untrusted = true;
         self
     }
-    /// Enable the PUBLIC sandbox mode for this case (`DDJIT_UNTRUSTED=1` + `DDJIT_SANDBOX=1`, the exact
+    /// Enable the PUBLIC sandbox mode for this case (`HL_JIT_UNTRUSTED=1` + `HL_JIT_SANDBOX=1`, the exact
     /// env combo `Container::builder().sandbox(true)` / `docker run --security-opt sandbox` emit). Drives
     /// the sentry split AND the (macOS) Seatbelt worker confinement, so the public mode is no longer
     /// avoided by the matrix. Re-run a fully-forwarded guest under it and assert the trusted golden.
@@ -322,7 +322,7 @@ pub fn gate_failures(
         if !available(e) {
             failures.push(format!(
                 "engine {} MISSING — its JIT binary was not built (failed dd-jit compile / empty \
-                 DDJIT_{} env); the ENTIRE {} lane was DARK (every case on it skipped, NOT tested)",
+                 HL_JIT_{} env); the ENTIRE {} lane was DARK (every case on it skipped, NOT tested)",
                 e.label(),
                 e.label().replace('/', "_").to_uppercase(),
                 e.label()

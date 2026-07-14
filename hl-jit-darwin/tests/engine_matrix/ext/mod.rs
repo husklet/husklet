@@ -28,7 +28,7 @@ pub mod gui; // EGL/Wayland GL-shim probes for renderer debugging
 pub mod isolation; // container isolation + resource fidelity: --cpus/--read-only/--ulimit, masked/ro /proc paths
 pub mod ltpgaps; // LTP gap cluster: dup/fcntl flags, link/lstat, socket error paths, prctl/nanosleep/sched/read
 pub mod memx; // vm: MAP_FIXED, mlock, mremap, mincore
-pub mod pcachex; // persistent translated-code cache: fork/exec/thread lifecycle under DDJIT_PCACHE=1
+pub mod pcachex; // persistent translated-code cache: fork/exec/thread lifecycle under HL_JIT_PCACHE=1
 pub mod processx; // process: posix_spawn/vfork/waitid/getrusage/prlimit/clone3/futex
 pub mod procexe; // /proc/self/exe + readlink/readlinkat surface: exe canonicalization, magic links, execveat
 pub mod procfs; // /proc /sys /dev pseudo-file CONTENT conformance + permission/mode fidelity (zero-stub gate)

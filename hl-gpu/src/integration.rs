@@ -62,11 +62,11 @@ pub struct DisplayIntegration {
 /// simply not injected (the caller is responsible for any user-facing warning).
 #[derive(Clone, Debug, Default)]
 pub struct CudaIntegration {
-    /// Reported device name (→ `DD_CUDA_NAME`).
+    /// Reported device name (→ `HL_CUDA_NAME`).
     pub name: String,
-    /// Reported compute capability `"major.minor"` (→ `DD_CUDA_CC`).
+    /// Reported compute capability `"major.minor"` (→ `HL_CUDA_CC`).
     pub compute_capability: String,
-    /// Reported VRAM in MB (→ `DD_CUDA_VRAM`).
+    /// Reported VRAM in MB (→ `HL_CUDA_VRAM`).
     pub vram_mb: u32,
     /// Host path of `libnvidia-ml.so.1` (bound at the guest lib dir under both the versioned and
     /// unversioned names). Empty = not injected.
@@ -262,7 +262,7 @@ impl DeviceProvider for GpuIntegration {
             req.env.push("XDG_RUNTIME_DIR=/run/user/0".to_string());
             // The dd-gpu IR executor socket the guest streams GPU commands to.
             req.mounts.push(DeviceMount::rw(d.gpu_exec_sock.clone(), "/run/user/0/dd-gpu-0"));
-            req.env.push("DD_GPU_EXEC=/run/user/0/dd-gpu-0".to_string());
+            req.env.push("HL_GPU_EXEC=/run/user/0/dd-gpu-0".to_string());
             // Mount-not-bake the shim's OWN runtime libs (the GPU/GL render stack + the Wayland client
             // transport it speaks to dd-display with): each such *.so* in the drop-in dir is bound over the
             // guest multiarch lib dir, and that dir is prepended to LD_LIBRARY_PATH so a bare image works.
@@ -326,9 +326,9 @@ impl DeviceProvider for GpuIntegration {
         if let Some(c) = &self.cuda {
             // The shim seeds its reported device from these (always advertised, even if the shim itself is
             // missing — matching the launcher's original ordering).
-            req.env.push(format!("DD_CUDA_NAME={}", c.name));
-            req.env.push(format!("DD_CUDA_CC={}", c.compute_capability));
-            req.env.push(format!("DD_CUDA_VRAM={}", c.vram_mb));
+            req.env.push(format!("HL_CUDA_NAME={}", c.name));
+            req.env.push(format!("HL_CUDA_CC={}", c.compute_capability));
+            req.env.push(format!("HL_CUDA_VRAM={}", c.vram_mb));
             if !c.nvml_so.is_empty() {
                 // Inject the NVML shim under both the versioned and unversioned names (some callers dlopen
                 // the bare name), and point the loader at OUR lib dir first.
@@ -384,7 +384,7 @@ mod tests {
             vec![
                 "WAYLAND_DISPLAY=wayland-0".to_string(),
                 "XDG_RUNTIME_DIR=/run/user/0".to_string(),
-                "DD_GPU_EXEC=/run/user/0/dd-gpu-0".to_string(),
+                "HL_GPU_EXEC=/run/user/0/dd-gpu-0".to_string(),
             ]
         );
     }
@@ -412,9 +412,9 @@ mod tests {
         assert_eq!(
             req.env,
             vec![
-                "DD_CUDA_NAME=dd Metal (CUDA-sim) Device".to_string(),
-                "DD_CUDA_CC=8.6".to_string(),
-                "DD_CUDA_VRAM=4096".to_string(),
+                "HL_CUDA_NAME=dd Metal (CUDA-sim) Device".to_string(),
+                "HL_CUDA_CC=8.6".to_string(),
+                "HL_CUDA_VRAM=4096".to_string(),
                 "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu".to_string(),
             ]
         );
@@ -435,7 +435,7 @@ mod tests {
         assert!(req.mounts.is_empty());
         assert_eq!(
             req.env,
-            vec!["DD_CUDA_NAME=X".to_string(), "DD_CUDA_CC=7.5".to_string(), "DD_CUDA_VRAM=2048".to_string()]
+            vec!["HL_CUDA_NAME=X".to_string(), "HL_CUDA_CC=7.5".to_string(), "HL_CUDA_VRAM=2048".to_string()]
         );
     }
 

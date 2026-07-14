@@ -62,14 +62,14 @@ pub(crate) async fn exec_start(
         temp.id = id.clone();
         // Share the TARGET container's loopback network: `docker exec` joins the container's netns, so the
         // exec'd process must reach 127.0.0.1 servers the container's init is listening on (redis-cli ping,
-        // psql -h 127.0.0.1, etc.). Without this the id-derived DD_NETNS key would isolate the exec in its
+        // psql -h 127.0.0.1, etc.). Without this the id-derived HL_NETNS key would isolate the exec in its
         // own loopback and those connects would fail. `exec.container_id` is the parent container's id.
         temp.netns_key = Some(exec.container_id.clone());
         temp.cmd = exec.cmd.clone();
         temp.tty = exec.tty;
         // `docker exec -e/-w/-u`: the exec inherits the container's env and adds `-e` overrides (later
         // wins), `-w` overrides the working dir, and `-u U[:G]` overrides the run user. spawn_cfg reads
-        // temp.env / temp.working_dir / temp.user (-> DD_UID/DD_GID), so set them on the temp here.
+        // temp.env / temp.working_dir / temp.user (-> HL_UID/HL_GID), so set them on the temp here.
         temp.env.extend(exec.env.iter().cloned());
         if !exec.working_dir.is_empty() {
             temp.working_dir = exec.working_dir.clone();

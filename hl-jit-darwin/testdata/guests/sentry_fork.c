@@ -1,5 +1,5 @@
 // sentry_fork -- a single-fork file round-trip that validates the untrusted-guest SENTRY split's
-// CLONE-FORK lane (the riskiest, previously-untested path). With DDJIT_UNTRUSTED=1 a guest fork() is a
+// CLONE-FORK lane (the riskiest, previously-untested path). With HL_JIT_UNTRUSTED=1 a guest fork() is a
 // real worker fork() done locally by service_local; the CHILD detects getpid()!=g_worker_pid, drops the
 // inherited ring lane and CAS-claims a FRESH one (sentry_fork_child), and its forwarded fs syscalls are
 // serviced by a DIFFERENT sentry thread than the parent's -- so this exercises lane-reclaim + the
@@ -82,7 +82,7 @@ int main(void) {
         ok = (got == sizeof rd) && (memcmp(rd, want, sizeof rd) == 0);
         close(fd);
     }
-    unlink(path); // cleanup (unlinkat stays worker-local; harmless with DDJIT_SANDBOX off)
+    unlink(path); // cleanup (unlinkat stays worker-local; harmless with HL_JIT_SANDBOX off)
 
     printf("sentry_fork child_exit=%d readback=%s sum=%lu\n", child_exit, ok ? "ok" : "bad", sum);
     return 0;

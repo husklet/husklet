@@ -10,7 +10,7 @@ use std::os::unix::net::UnixStream;
 
 use crate::ir;
 
-/// Default host GPU-exec socket path (overridable via `$DD_GPU_EXEC`); matches gl_shim.c.
+/// Default host GPU-exec socket path (overridable via `$HL_GPU_EXEC`); matches gl_shim.c.
 pub const DEFAULT_EXEC_SOCK: &str = "/run/user/0/dd-gpu-0";
 
 /// Per-frame execution-response bytes the host executor writes after replaying a submit (see
@@ -191,9 +191,9 @@ fn api_loss(message: &'static str) -> std::io::Error {
 }
 
 impl ExecConn {
-    /// Connect target from `$DD_GPU_EXEC`, falling back to [`DEFAULT_EXEC_SOCK`].
+    /// Connect target from `$HL_GPU_EXEC`, falling back to [`DEFAULT_EXEC_SOCK`].
     pub fn from_env() -> Self {
-        let path = std::env::var("DD_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_string());
+        let path = std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_string());
         Self::new(path)
     }
 

@@ -7,7 +7,7 @@
 //
 //   WORKER  (this process)  -- runs the JIT + translated (untrusted) guest. Keeps ONLY compute/
 //                              memory authority: brk, anonymous mmap, futex, clocks, the inline
-//                              fast-paths. Holds NO real fs/net fds. Under DDJIT_SANDBOX it is also
+//                              fast-paths. Holds NO real fs/net fds. Under HL_JIT_SANDBOX it is also
 //                              wrapped in a deny-default macOS Seatbelt profile, so even a fully
 //                              hijacked worker cannot reach the host fs/net directly -- only the ring.
 //   SENTRY  (forked child)  -- holds host fs/net/proc authority. It owns the real fds and runs the
@@ -31,7 +31,7 @@
 // lvalue accessor is the raw syscall-number register (G_NR wraps it in canon_x86() on x86), so we
 // add G_RAWNR, discriminated by G_PROF_EXTRA -- the same x86-vs-aarch64 switch service.c already uses.
 //
-// GATE. Everything here is dormant unless g_untrusted (env DDJIT_UNTRUSTED) is set. With the gate OFF
+// GATE. Everything here is dormant unless g_untrusted (env HL_JIT_UNTRUSTED) is set. With the gate OFF
 // (the default + the whole matrix) service() never calls syscall_route(); this TU contributes only a
 // statically-predicted-not-taken branch. Byte-identical to baseline by construction.
 
@@ -39,8 +39,8 @@
 #include <sys/wait.h>
 #include <stdatomic.h>
 
-static int g_untrusted = 0;      // DDJIT_UNTRUSTED: route fs/net/proc syscalls through the sentry
-static int g_sentry_sandbox = 0; // DDJIT_SANDBOX:   wrap the worker in a deny-default Seatbelt profile
+static int g_untrusted = 0;      // HL_JIT_UNTRUSTED: route fs/net/proc syscalls through the sentry
+static int g_sentry_sandbox = 0; // HL_JIT_SANDBOX:   wrap the worker in a deny-default Seatbelt profile
 
 // The raw syscall-number register. G_NR is not an lvalue on x86 (it wraps the rax read in canon_x86),
 // so to RECONSTRUCT the call in the sentry we marshal the raw number register verbatim; the sentry's
@@ -441,7 +441,7 @@ static int sentry_forwarded(uint64_t nr) {
 //
 // SOUNDNESS: enabling this is only correct once the FULL fs/net/proc set is forwarded. With just the
 // read/write/open family forwarded (this PR), any still-local fs syscall (uname/readlink/getcwd-on-
-// host/...) would be denied and break a general guest. So DDJIT_SANDBOX is OFF by default and is
+// host/...) would be denied and break a general guest. So HL_JIT_SANDBOX is OFF by default and is
 // currently sound only for guests whose entire syscall surface is the forwarded family.
 static const char *k_worker_sbpl =
     "(version 1)\n"
@@ -472,7 +472,7 @@ static void worker_sandbox(void) {
         fprintf(stderr, "[sentry] worker Seatbelt sandbox_init failed: %s\n", err ? err : "(null)");
         if (err) sandbox_free_error(err);
         // FAIL CLOSED: an untrusted worker that could not be confined must NOT run unconfined -- abort it
-        // rather than expose the host fs/net directly. (DDJIT_SANDBOX is opt-in; the operator asked for it.)
+        // rather than expose the host fs/net directly. (HL_JIT_SANDBOX is opt-in; the operator asked for it.)
         _exit(72);
     }
     fprintf(stderr, "[sentry] worker confined under deny-default Seatbelt profile\n");

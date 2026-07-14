@@ -5,12 +5,12 @@ use crate::prelude::*;
 
 /// The built daemon version, tracked from the crate version so `/version`, `/info` ServerVersion, and
 /// the `Server` response header all report the same real identity (previously a stale hardcoded `0.1.0`).
-pub(crate) const DD_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const HL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) async fn version() -> Json<crate::api::Version> {
     use crate::api::{Component, ComponentDetails, Platform, Version};
     Json(Version {
-        version: DD_VERSION.into(),
+        version: HL_VERSION.into(),
         api_version: API_VERSION,
         min_api_version: "1.24",
         os: "linux",
@@ -23,7 +23,7 @@ pub(crate) async fn version() -> Json<crate::api::Version> {
         platform: Platform { name: "dd" },
         components: vec![Component {
             name: "Engine",
-            version: DD_VERSION.into(),
+            version: HL_VERSION.into(),
             details: ComponentDetails {
                 api_version: API_VERSION,
                 os: "linux",
@@ -98,7 +98,7 @@ pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
         ncpu: host_ncpu(),
         mem_total: host_mem_total(),
         kernel_version: "6.1.0-dd",
-        server_version: DD_VERSION,
+        server_version: HL_VERSION,
         docker_root_dir: hl_home().to_string_lossy().into_owned(),
         cgroup_driver: "none",
         default_runtime: DEFAULT_RUNTIME,

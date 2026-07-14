@@ -70,11 +70,11 @@ pub enum PointerRoute {
     Drop,
 }
 
-/// Whether the split-client geometry mirror is enabled (`DD_DISPLAY_MIRROR_INPUT_GEOMETRY`), matching the
+/// Whether the split-client geometry mirror is enabled (`HL_DISPLAY_MIRROR_INPUT_GEOMETRY`), matching the
 /// legacy env knob so the two paths gate identically.
 pub fn mirror_input_geometry_enabled() -> bool {
     matches!(
-        std::env::var("DD_DISPLAY_MIRROR_INPUT_GEOMETRY").as_deref(),
+        std::env::var("HL_DISPLAY_MIRROR_INPUT_GEOMETRY").as_deref(),
         Ok(v) if !v.is_empty() && v != "0"
     )
 }

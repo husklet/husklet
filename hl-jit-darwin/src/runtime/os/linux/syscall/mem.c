@@ -422,7 +422,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // maps the dumb buffer for CPU software rendering; the buffer is an IOSurface that already lives at
         // a host VA (== guest VA in this in-process JIT), so decode the handle from the fake offset MAP_DUMB
         // handed back, look up the surface, and return its base VA directly — no real mmap. Gated on the
-        // render-node tag, so no other mmap is affected (inert unless DD_GPU_IOSURFACE).
+        // render-node tag, so no other mmap is affected (inert unless HL_GPU_IOSURFACE).
         if (gpu_iosurface_on() && !(a3 & 0x20) && (int)a4 >= 0 && (int)a4 < 1024 && g_devdri[(int)a4]) {
             uint32_t handle = (uint32_t)((uint64_t)a5 >> 12);
             int gi = hl_gpu_reg_by_handle(handle);
@@ -510,7 +510,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // binary. A plain hint, never MAP_FIXED: if the range is busy the kernel places it elsewhere and
         // the map simply isn't cacheable this run (pcache_note_libmap below only records hint-honored
         // maps, and a warm run only ACTIVATES restored blocks when the same file identity lands on the
-        // same base). No-op unless DDJIT_PCACHE is on.
+        // same base). No-op unless HL_JIT_PCACHE is on.
         if (a0 == 0 && !(a3 & 0x10) && !(a3 & 0x20) && (int)a4 >= 0) {
             pc_hint = pcache_mmap_hint((uint64_t)a1);
             a0 = pc_hint;

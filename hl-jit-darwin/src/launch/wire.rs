@@ -48,8 +48,8 @@ struct WireHeader {
     fsgen_off: u32,
     argv_off: u32,
     gpu_iosurface: u32,
-    nopcache: u32,   // bool: per-container DDJIT_NOPCACHE kill switch (was reserved tail pad)
-    egress_off: u32, // per-workspace VPN egress SOCKS5 endpoint (DD_EGRESS_SOCKS); "" = direct
+    nopcache: u32,   // bool: per-container HL_JIT_NOPCACHE kill switch (was reserved tail pad)
+    egress_off: u32, // per-workspace VPN egress SOCKS5 endpoint (HL_EGRESS_SOCKS); "" = direct
     reserved0: u32,  // explicit tail pad (keeps the struct 8-aligned, no implicit padding); future use
 }
 

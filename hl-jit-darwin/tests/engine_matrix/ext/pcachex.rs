@@ -1,7 +1,7 @@
 //! pcachex — persistent cross-process translated-code cache (aarch64 + opt8 x86_64), matrix lane.
 //! Owner: arm-pcache agent. Edit ONLY this file.
 //!
-//! These cases run with `DDJIT_PCACHE=1` against a FIXED cache dir, so successive matrix runs alternate
+//! These cases run with `HL_JIT_PCACHE=1` against a FIXED cache dir, so successive matrix runs alternate
 //! cold (save) and warm (load) on the same files — the golden output must be byte-identical either way,
 //! which is exactly the cache's correctness contract. The guests cover the three lifecycle shapes the
 //! hardening exists for:
@@ -12,7 +12,7 @@
 //! invalidation, kill-switch, corrupt-file rejection) lives in `hl-jit-darwin/tests/pcache.rs`.
 //!
 //! Cache keys include the engine build id, so parallel worktrees / rebuilds never share entries; the
-//! fixed dir only makes REPEATED runs of one build warm. DDJIT_NOPCACHE=1 in the ambient env would
+//! fixed dir only makes REPEATED runs of one build warm. HL_JIT_NOPCACHE=1 in the ambient env would
 //! disable the engine's cache, but the per-case env here is baked into the launch script and the `mac`
 //! bridge drops ambient env, so these cases always exercise the cache path as written.
 #![allow(unused_imports)]
@@ -23,8 +23,8 @@ pub fn groups() -> Vec<Group> {
 }
 
 fn pc(c: Case) -> Case {
-    c.env("DDJIT_PCACHE", "1")
-        .env("DDJIT_PCACHE_DIR", "/tmp/ddjit-pcache-matrix")
+    c.env("HL_JIT_PCACHE", "1")
+        .env("HL_JIT_PCACHE_DIR", "/tmp/ddjit-pcache-matrix")
 }
 
 fn pcachex() -> Group {

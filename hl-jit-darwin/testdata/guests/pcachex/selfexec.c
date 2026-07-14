@@ -2,7 +2,7 @@
 // Parent forks N children; each child execve's this same binary with argv[1]="child <i>"; a child does a
 // deterministic compute slice and exits with a code derived from its index. The parent reaps everything
 // and prints ONE deterministic line (children write nothing), so the case is golden-checkable no matter
-// how the children interleave. Under DDJIT_PCACHE=1 every child exercises the engine's in-process execve
+// how the children interleave. Under HL_JIT_PCACHE=1 every child exercises the engine's in-process execve
 // cache reload (proc.c case 221) and the fork-child save bar; concurrent matrix runs exercise the
 // same-key load/save races the #339 hardening exists for.
 #include <stdio.h>

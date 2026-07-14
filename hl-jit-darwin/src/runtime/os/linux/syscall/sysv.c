@@ -11,7 +11,7 @@
 // with Linux-like limits:
 //
 //   * A per-container CONTROL BLOCK, a named POSIX shared-memory object (shm_open) keyed by the container
-//     identity (DD_NETNS, else the container init / engine-root pid) so two containers never collide and a
+//     identity (HL_NETNS, else the container init / engine-root pid) so two containers never collide and a
 //     leak in one namespace can never break another. It holds a robust cross-process spinlock plus the
 //     descriptor tables for shm segments, semaphore sets (values inline) and message queues. Every process
 //     in the container mmap()s the SAME object MAP_SHARED, so they all see one coherent id<->key table --
@@ -289,14 +289,14 @@ static size_t hl_pground(size_t n) {
 }
 
 // ---- namespace + object names --------------------------------------------------------------------
-// Key the namespace by DD_NETNS (per-IPC-ns isolation; --network host leaves it unset -> shared). When
+// Key the namespace by HL_NETNS (per-IPC-ns isolation; --network host leaves it unset -> shared). When
 // unset we fall back to the container init pid (daemon path) or the engine-root pid (single-binary/test
 // path, captured by the constructor and COW-inherited by every child) -- unique per run, shared by the
 // whole process tree, so a leak is per-run and cross-run runs never collide.
 static uint32_t ipc_ns(void) {
     if (g_ns_hash) return g_ns_hash;
     char buf[80];
-    const char *ns = getenv("DD_NETNS");
+    const char *ns = getenv("HL_NETNS");
     if (ns && ns[0])
         snprintf(buf, sizeof buf, "n:%s", ns);
     else
