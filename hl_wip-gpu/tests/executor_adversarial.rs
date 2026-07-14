@@ -10,7 +10,9 @@
 
 use hl_gpu::protocol::model::descriptor::*;
 use hl_gpu::protocol::model::enums::*;
-use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
+use hl_gpu::protocol::model::kernel::{
+    glsl_stage, gty, GlslDescriptor, Inst, KernelProgram, Op, Param, KERNEL_MAGIC,
+};
 use hl_gpu::{
     BufferId, Cmd, CommandBuffer, CpuExecutor, Enc, GpuError, GpuExecutor, InProcessCommandSink,
     SessionResources, ShaderPayloadKind, TextureId,
@@ -385,6 +387,106 @@ fn huge_dispatch_grid_over_a_spirv_pipeline_short_circuits() {
         ])],
     )
     .expect("huge grid over a SPIR-V pipeline returns cleanly (no kernel to run)");
+}
+
+/// A trivial real kernel (block 1x1x1): store the constant `1.0f` into region 0 (binding 1), driven via
+/// `define_kernel`. Used to exercise the dispatch grid-block ceiling over a REAL program (a SPIR-V module
+/// would short-circuit before the kernel runs).
+fn store_one_program() -> KernelProgram {
+    KernelProgram {
+        entry: "store_one".into(),
+        block: [1, 1, 1],
+        params: vec![Param { width: 8, offset: 0, is_ptr: true, region: 0 }],
+        param_bytes: 8,
+        num_regions: 1,
+        shared_bytes: 0,
+        reg_count: 3,
+        insts: vec![
+            Inst::LdParam { d: 0, param: 0 },
+            Inst::Cvta { d: 1, s: 0 },
+            Inst::MovImmF { d: 2, bits: 0x3F80_0000 }, // 1.0f
+            Inst::StGlobal { addr: 1, off: 0, src: Op::Reg(2), ty: gty::F32 },
+            Inst::Ret,
+        ],
+    }
+}
+
+/// The dispatch setup commands for [`store_one_program`]: shader + compute pipeline + a param buffer
+/// (binding 0) and a 4-byte output buffer (binding 1 -> region 0).
+fn store_one_setup() -> Vec<Cmd> {
+    vec![
+        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::PtxKernel, spirv: vec![KERNEL_MAGIC, 0] },
+        Cmd::CreateComputePipeline(
+            1,
+            ComputePipelineDesc { compute: ShaderRef { module: 1, entry: "store_one".into() }, label: String::new() },
+        ),
+        Cmd::CreateBuffer(1, buf(8, buffer_usage::STORAGE)),
+        Cmd::CreateBuffer(2, buf(4, buffer_usage::STORAGE | buffer_usage::COPY_SRC)),
+        Cmd::CreateBindGroup(
+            1,
+            BindGroupDesc {
+                set: 0,
+                entries: vec![
+                    BindEntry { binding: 0, resource: BindResource::Buffer { id: 1, offset: 0, size: 8 } },
+                    BindEntry { binding: 1, resource: BindResource::Buffer { id: 2, offset: 0, size: 4 } },
+                ],
+            },
+        ),
+    ]
+}
+
+#[test]
+fn over_cap_dispatch_grid_over_a_real_kernel_errors_before_iterating() {
+    // DoS gap: a validated Dispatch with a huge grid over a REAL KernelProgram iterated blocks unbounded
+    // (the 1M per-thread step cap bounds work WITHIN a block, but the block COUNT was uncapped). A maximal
+    // grid must now be rejected with a typed ResourceLimit BEFORE a single block iterates — the checked
+    // grid-product (u32::MAX^3) overflows u64 and trips the ceiling.
+    let mut exec = CpuExecutor::new();
+    exec.define_kernel(1, store_one_program());
+    let mut res = SessionResources::new();
+    exec.execute(&mut res, &store_one_setup()).expect("setup must run cleanly");
+    let err = exec
+        .execute(
+            &mut res,
+            &[submit(vec![
+                Enc::BeginComputePass,
+                Enc::SetPipeline(1),
+                Enc::SetBindGroup { index: 0, group: 1 },
+                Enc::Dispatch { x: u32::MAX, y: u32::MAX, z: u32::MAX },
+                Enc::EndComputePass,
+            ])],
+        )
+        .expect_err("an over-cap grid over a real kernel must error, not iterate");
+    assert_eq!(err, GpuError::ResourceLimit("dispatch grid blocks"));
+    // The dispatch was rejected before touching memory: the output buffer is still its zero-initialized
+    // value (the kernel's 1.0f store never ran).
+    let mut out = [0u8; 4];
+    exec.read_buffer(&res, BufferId(2), 0, &mut out).unwrap();
+    assert_eq!(out, [0u8; 4], "over-cap dispatch left no partial effect");
+}
+
+#[test]
+fn normal_dispatch_grid_over_a_real_kernel_still_computes() {
+    // The companion to the cap test: a normal grid (well under the ceiling) over the same real kernel runs
+    // unchanged and produces the correct result — the ceiling never perturbs a legitimate dispatch.
+    let mut exec = CpuExecutor::new();
+    exec.define_kernel(1, store_one_program());
+    let mut res = SessionResources::new();
+    exec.execute(&mut res, &store_one_setup()).expect("setup must run cleanly");
+    exec.execute(
+        &mut res,
+        &[submit(vec![
+            Enc::BeginComputePass,
+            Enc::SetPipeline(1),
+            Enc::SetBindGroup { index: 0, group: 1 },
+            Enc::Dispatch { x: 4, y: 1, z: 1 },
+            Enc::EndComputePass,
+        ])],
+    )
+    .expect("a normal grid runs cleanly");
+    let mut out = [0u8; 4];
+    exec.read_buffer(&res, BufferId(2), 0, &mut out).unwrap();
+    assert_eq!(f32::from_le_bytes(out), 1.0, "the kernel stored 1.0f under a normal grid");
 }
 
 #[test]

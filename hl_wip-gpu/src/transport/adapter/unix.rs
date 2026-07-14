@@ -20,6 +20,20 @@ use crate::transport::model::readback::{ReadbackRequest, READBACK_MAGIC, READBAC
 // framed submit IO (byte-identical to gl_shim.c's exec_stream)
 // ---------------------------------------------------------------------------------------------------
 
+/// Hard ceiling on a single frame's (or handshake's) declared payload length, enforced BEFORE the
+/// receive buffer is allocated. The header carries a raw untrusted `u32` length (up to 4 GiB); without
+/// this cap a hostile/buggy peer could make the reader `vec![0u8; 4 GiB]` per frame — a pure
+/// memory-exhaustion DoS — before a single body byte is read.
+///
+/// This is a RUNTIME transport cap, not a wire-format change: no bytes are added to any frame, and every
+/// legitimate frame stays byte-identical. It is set comfortably above the largest legitimate frame: the
+/// negotiated [`Capabilities::max_frame_bytes`](crate::protocol::model::capability::Capabilities) default
+/// is 64 MiB (`64 << 20`) and the runtime validation pass rejects any decoded frame above that negotiated
+/// ceiling, so this 256 MiB transport cap sits well above anything the negotiated limits would accept — it
+/// only refuses the pathological hundreds-of-MB/GB preallocation. Exceeding it yields a typed
+/// `InvalidData` IO error (a "FrameTooLarge"/protocol rejection) instead of a giant allocation.
+pub const MAX_FRAME_BYTES: u32 = 256 << 20; // 256 MiB
+
 /// `write(2)` all of `buf`, retrying short writes and `EINTR` (the `write_full` of `gl_shim.c`).
 pub fn write_full(stream: &UnixStream, buf: &[u8]) -> io::Result<()> {
     let mut s = stream;
@@ -38,14 +52,39 @@ pub fn write_frame(stream: &UnixStream, header: &SubmitHeader, payload: &[u8]) -
 /// peer closed the connection), and `Err` on a partial/truncated frame.
 pub fn read_frame(stream: &UnixStream) -> io::Result<Option<Frame>> {
     let mut s = stream;
+    // Read the fixed header by hand so we can distinguish a CLEAN end-of-stream (no bytes at all at a
+    // frame boundary) from a TRUNCATED header (some header bytes then EOF). `read_exact` collapses both
+    // into `UnexpectedEof`, which would silently treat a torn header as a clean close.
     let mut hdr = [0u8; SubmitHeader::SIZE];
-    match s.read_exact(&mut hdr) {
-        Ok(()) => {}
-        // A clean close exactly at the header boundary is end-of-stream, not an error.
-        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e),
+    let mut filled = 0usize;
+    while filled < hdr.len() {
+        match s.read(&mut hdr[filled..]) {
+            Ok(0) => {
+                // A clean close exactly at the header boundary is end-of-stream, not an error.
+                if filled == 0 {
+                    return Ok(None);
+                }
+                // Some header bytes arrived then EOF: a truncated frame, surfaced like a truncated
+                // payload (below), never a silent clean-boundary `Ok(None)`.
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "truncated submit header (EOF mid-header)",
+                ));
+            }
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
     }
     let header = SubmitHeader::from_bytes(&hdr);
+    // Cap the declared payload length BEFORE allocating so an untrusted `u32` length cannot force a
+    // multi-GB preallocation (a memory-exhaustion DoS) ahead of reading any body bytes.
+    if header.len > MAX_FRAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame payload length {} exceeds cap {MAX_FRAME_BYTES} (FrameTooLarge)", header.len),
+        ));
+    }
     let mut payload = vec![0u8; header.len as usize];
     s.read_exact(&mut payload)?;
     Ok(Some(Frame { header, payload }))
@@ -129,7 +168,16 @@ pub fn read_handshake(stream: &UnixStream) -> io::Result<Capabilities> {
     let mut s = stream;
     let mut len_bytes = [0u8; 4];
     s.read_exact(&mut len_bytes)?;
-    let len = u32::from_le_bytes(len_bytes) as usize;
+    let len_u32 = u32::from_le_bytes(len_bytes);
+    // Same untrusted-length cap as `read_frame`: refuse an absurd handshake length before allocating its
+    // body buffer, so a hostile peer cannot force a multi-GB preallocation at connect time.
+    if len_u32 > MAX_FRAME_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("handshake length {len_u32} exceeds cap {MAX_FRAME_BYTES} (FrameTooLarge)"),
+        ));
+    }
+    let len = len_u32 as usize;
     // Reconstruct the full `[len][body]` frame so we reuse `Capabilities::from_handshake` verbatim.
     let mut full = Vec::with_capacity(4 + len);
     full.extend_from_slice(&len_bytes);

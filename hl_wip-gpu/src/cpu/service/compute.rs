@@ -12,6 +12,17 @@ use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::kernel::KernelProgram;
 use crate::runtime::model::resources::SessionResources;
 
+/// Hard ceiling on the total launch-block count (grid_x * grid_y * grid_z) for a single dispatch over a
+/// REAL kernel program. The per-thread step cap (1M, in [`crate::cpu::interp`]) bounds work WITHIN a
+/// block, but the block COUNT was uncapped: a validated `Dispatch` with a huge grid over a real kernel
+/// would iterate blocks unbounded (up to `u32::MAX^3`), a compute-time DoS.
+///
+/// It is a RUNTIME cap only — no wire bytes change — and is set far above any legitimate dispatch: the
+/// largest real grid the oracle ever runs is ~262k blocks (a 1<<20-element vecadd with a 4-wide block),
+/// so this 1<<26 (67,108,864) ceiling is ~256x that headroom. Every valid dispatch runs unchanged; only
+/// a pathological grid is rejected — BEFORE any block iterates — with a typed `ResourceLimit`.
+pub(crate) const MAX_DISPATCH_BLOCKS: u64 = 1 << 26;
+
 /// Execute a compute `Dispatch`. A dispatch with no pipeline/bind group bound is a no-op (a malformed
 /// stream the validation pass already rejected); a SPIR-V (non-kernel) module is recorded but not run.
 pub(crate) fn run_dispatch(
@@ -43,6 +54,16 @@ fn run_kernel(
     bg: &BindGroupDesc,
     grid: (u32, u32, u32),
 ) -> Result<()> {
+    // Reject a pathological grid BEFORE iterating a single block. The block loop in `interp::execute`
+    // visits `gx.max(1) * gy.max(1) * gz.max(1)` blocks, so cap that exact product (via checked mul, so a
+    // `u32^3` grid that overflows `u64` is treated as over-cap).
+    let blocks = (grid.0.max(1) as u64)
+        .checked_mul(grid.1.max(1) as u64)
+        .and_then(|v| v.checked_mul(grid.2.max(1) as u64));
+    match blocks {
+        Some(b) if b <= MAX_DISPATCH_BLOCKS => {}
+        _ => return Err(GpuError::ResourceLimit("dispatch grid blocks")),
+    }
     // Gather the parameter blob (binding 0) and each pointer region (binding r+1 → region r).
     let mut param_blob: Vec<u8> = Vec::new();
     let mut regions: Vec<Vec<u8>> = vec![Vec::new(); prog.num_regions as usize];

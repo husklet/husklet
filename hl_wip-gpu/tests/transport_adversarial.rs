@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use hl_gpu::transport::adapter::unix::{
     read_ack, read_frame, read_readback_response, write_frame, write_readback_request,
-    write_readback_response,
+    write_readback_response, MAX_FRAME_BYTES,
 };
 use hl_gpu::transport::model::header::{SubmitHeader, ACK_FAIL, ACK_OK};
 use hl_gpu::transport::model::readback::{ReadbackRequest, READBACK_FAIL, READBACK_MAGIC, READBACK_OK};
@@ -76,6 +76,52 @@ fn read_frame_reassembles_across_interleaved_partial_writes() {
     assert_eq!(frame.header.len, 8);
     assert_eq!(frame.payload, vec![9, 9, 9, 9, 8, 8, 8, 8]);
     writer.join().unwrap();
+}
+
+#[test]
+fn read_frame_caps_an_untrusted_over_cap_length_but_still_passes_legit_frames() {
+    // DoS gap: `read_frame` did `vec![0u8; header.len]` from an untrusted `u32` length (up to 4 GiB)
+    // BEFORE reading the body. 1) A header declaring a payload above MAX_FRAME_BYTES must be refused at
+    // header inspection — a typed InvalidData "FrameTooLarge" error — WITHOUT preallocating: we send ONLY
+    // the 16-byte header (never a giant body) and the reader must still error rather than block on a
+    // hundreds-of-MB allocation.
+    let (a, b) = UnixStream::pair().unwrap();
+    let huge = SubmitHeader { surface_id: 1, width: 0, height: 0, len: MAX_FRAME_BYTES + 1 };
+    let mut w = a;
+    w.write_all(&huge.to_bytes()).unwrap(); // header only; the promised giant payload is never sent
+    drop(w);
+    let err = read_frame(&b).expect_err("an over-cap frame length must error, not preallocate");
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::InvalidData,
+        "over-cap frame is a FrameTooLarge/protocol rejection"
+    );
+
+    // 2) A legitimately-sized frame (well under the cap) still round-trips byte-for-byte — the cap does
+    //    not change framing for valid inputs.
+    let (c, d) = UnixStream::pair().unwrap();
+    let header = SubmitHeader { surface_id: 9, width: 4, height: 4, len: 6 };
+    write_frame(&c, &header, &[1, 2, 3, 4, 5, 6]).unwrap();
+    let frame = read_frame(&d).unwrap().expect("a legit frame round-trips under the cap");
+    assert_eq!(frame.header, header);
+    assert_eq!(frame.payload, vec![1, 2, 3, 4, 5, 6]);
+}
+
+#[test]
+fn read_frame_errors_on_a_truncated_header_but_ok_none_on_a_clean_boundary() {
+    // Clean boundary: the peer closes having sent NOTHING -> end-of-stream is still Ok(None) (unchanged).
+    let (a, b) = UnixStream::pair().unwrap();
+    drop(a);
+    assert!(read_frame(&b).unwrap().is_none(), "a clean close at a frame boundary is still Ok(None)");
+
+    // Truncated header: SOME header bytes then EOF is a torn frame, NOT a clean boundary — it must error
+    // like a truncated payload does, instead of being silently swallowed as Ok(None).
+    let (c, d) = UnixStream::pair().unwrap();
+    let mut w = c;
+    w.write_all(&[0xAB; 8]).unwrap(); // only 8 of the 16 header bytes, then close
+    drop(w);
+    let err = read_frame(&d).expect_err("a partial header then EOF is a truncated-frame error");
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
 }
 
 // ---------------------------------------------------------------------------------------------------
