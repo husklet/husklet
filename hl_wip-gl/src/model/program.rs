@@ -104,6 +104,9 @@ pub struct DrawCall {
     pub first_instance: u32,
     /// GL program name this draw renders with.
     pub prog: u32,
+    /// The framebuffer bound when the draw was recorded (`0` = default window framebuffer; non-zero =
+    /// render into that FBO's color attachment instead of the default surface).
+    pub fbo: u32,
     /// Bound element-array-buffer name (for an indexed draw).
     pub elem_buf: u32,
     /// Per-location vertex-attribute snapshot.
@@ -137,6 +140,7 @@ impl Default for DrawCall {
             base_vertex: 0,
             first_instance: 0,
             prog: 0,
+            fbo: 0,
             elem_buf: 0,
             attrs: [Attr::default(); MAX_ATTR],
             tex_units: [0; 8],

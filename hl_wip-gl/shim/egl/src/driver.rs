@@ -151,11 +151,92 @@ pub extern "C" fn eglQueryString(_dpy: *mut c_void, name: i32) -> *const c_char 
     text.as_ptr() as *const c_char
 }
 
+/// `eglGetProcAddress(name)` — resolve a core `egl*`/`gl*` entry point to its real function pointer.
+///
+/// A GLES app commonly loads its entry points dynamically through this call rather than relying on the
+/// dynamic linker; returning null for a core name it then calls would crash it. So we resolve every core
+/// `egl*`/`gl*` symbol this object hand-implements to its actual address (cast through `usize` so the
+/// `fn` → `*mut c_void` cast is legal). An unknown name (an extension trampoline we do not advertise)
+/// still returns null — the spec-legal "not found".
 #[no_mangle]
-pub extern "C" fn eglGetProcAddress(_procname: *const c_char) -> *mut c_void {
-    // Core `egl*`/`gl*` symbols resolve by dynamic linking against this object; no extension trampolines
-    // are advertised, so the lookup path returns null (a benign, spec-legal "not found").
-    core::ptr::null_mut()
+pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
+    if procname.is_null() {
+        return core::ptr::null_mut();
+    }
+    let name = match unsafe { core::ffi::CStr::from_ptr(procname) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return core::ptr::null_mut(),
+    };
+    // Map each core entry point name to its address. `f as usize as *mut c_void` erases the specific
+    // `extern "C"` fn type to the opaque function pointer EGL hands back.
+    macro_rules! p {
+        ($f:path) => {
+            $f as usize as *mut c_void
+        };
+    }
+    match name {
+        // ---- EGL: display / config / context / surface lifecycle + present ----
+        "eglGetError" => p!(eglGetError),
+        "eglGetDisplay" => p!(eglGetDisplay),
+        "eglInitialize" => p!(eglInitialize),
+        "eglTerminate" => p!(eglTerminate),
+        "eglQueryString" => p!(eglQueryString),
+        "eglGetProcAddress" => p!(eglGetProcAddress),
+        "eglBindAPI" => p!(eglBindAPI),
+        "eglChooseConfig" => p!(eglChooseConfig),
+        "eglGetConfigs" => p!(eglGetConfigs),
+        "eglGetConfigAttrib" => p!(eglGetConfigAttrib),
+        "eglCreateContext" => p!(eglCreateContext),
+        "eglDestroyContext" => p!(eglDestroyContext),
+        "eglMakeCurrent" => p!(eglMakeCurrent),
+        "eglCreateWindowSurface" => p!(eglCreateWindowSurface),
+        "eglDestroySurface" => p!(eglDestroySurface),
+        "eglSwapBuffers" => p!(eglSwapBuffers),
+        "eglSwapInterval" => p!(eglSwapInterval),
+        "eglGetCurrentDisplay" => p!(eglGetCurrentDisplay),
+        "eglGetCurrentContext" => p!(eglGetCurrentContext),
+        "eglGetCurrentSurface" => p!(eglGetCurrentSurface),
+        // ---- GLES: error / string ----
+        "glGetError" => p!(glGetError),
+        "glGetString" => p!(glGetString),
+        // ---- GLES: buffers ----
+        "glGenBuffers" => p!(glGenBuffers),
+        "glBindBuffer" => p!(glBindBuffer),
+        "glBufferData" => p!(glBufferData),
+        "glBufferSubData" => p!(glBufferSubData),
+        "glDeleteBuffers" => p!(glDeleteBuffers),
+        // ---- GLES: textures ----
+        "glGenTextures" => p!(glGenTextures),
+        "glActiveTexture" => p!(glActiveTexture),
+        "glBindTexture" => p!(glBindTexture),
+        "glTexImage2D" => p!(glTexImage2D),
+        "glTexParameteri" => p!(glTexParameteri),
+        "glDeleteTextures" => p!(glDeleteTextures),
+        // ---- GLES: shaders + programs ----
+        "glCreateShader" => p!(glCreateShader),
+        "glShaderSource" => p!(glShaderSource),
+        "glCompileShader" => p!(glCompileShader),
+        "glCreateProgram" => p!(glCreateProgram),
+        "glAttachShader" => p!(glAttachShader),
+        "glLinkProgram" => p!(glLinkProgram),
+        "glUseProgram" => p!(glUseProgram),
+        "glUniform1i" => p!(glUniform1i),
+        // ---- GLES: vertex attributes + fixed-function state ----
+        "glVertexAttribPointer" => p!(glVertexAttribPointer),
+        "glEnableVertexAttribArray" => p!(glEnableVertexAttribArray),
+        "glDisableVertexAttribArray" => p!(glDisableVertexAttribArray),
+        "glClearColor" => p!(glClearColor),
+        "glViewport" => p!(glViewport),
+        "glScissor" => p!(glScissor),
+        "glEnable" => p!(glEnable),
+        "glDisable" => p!(glDisable),
+        // ---- GLES: draw recording ----
+        "glClear" => p!(glClear),
+        "glDrawArrays" => p!(glDrawArrays),
+        "glDrawElements" => p!(glDrawElements),
+        // Unknown / extension name we do not advertise → spec-legal "not found".
+        _ => core::ptr::null_mut(),
+    }
 }
 
 #[no_mangle]

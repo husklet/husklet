@@ -11,8 +11,10 @@
 //! through a [`hl_gpu::CommandSink`].
 
 use super::buffer::Buffers;
+use super::framebuffer::Framebuffers;
 use super::program::{Attr, DrawCall, Programs, MAX_ATTR};
 use super::texture::Textures;
+use std::collections::HashMap;
 
 /// The presented window surface (the default framebuffer). Ported from `hl-shim-gl`'s `Surface`.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -33,6 +35,8 @@ pub struct GlContext {
     pub textures: Textures,
     /// GL shader + program objects (`glCreateShader`/`glCreateProgram`/`glLinkProgram`).
     pub programs: Programs,
+    /// GL framebuffer objects (`glGenFramebuffers`/`glFramebufferTexture2D`) — offscreen render targets.
+    pub framebuffers: Framebuffers,
 
     // ---- currently-bound GL state ----------------------------------------------------------------
     /// The program bound by `glUseProgram`.
@@ -53,6 +57,8 @@ pub struct GlContext {
     pub scissor: [i32; 4],
     pub blend: bool,
     pub depth: bool,
+    /// The framebuffer bound by `glBindFramebuffer` (`0` = the default window framebuffer).
+    pub bound_fbo: u32,
 
     /// The recorded draw-list, replayed into IR at `eglSwapBuffers`.
     pub draws: Vec<DrawCall>,
@@ -70,6 +76,11 @@ pub struct GlContext {
     /// not yet created). The frame builder emits their `CreateTexture`/`CreateSurface` on first use.
     default_tex_ir: u32,
     default_surface_ir: u32,
+
+    /// Per-FBO offscreen render-target IR ids, keyed by the FBO's color-attachment GL texture name →
+    /// `(surface_ir, texture_ir)`. Minted + `CreateTexture`/`CreateSurface`d on first use and reused on
+    /// later frames (so re-rendering the same FBO does not re-create the target).
+    fbo_targets: HashMap<u32, (u32, u32)>,
 }
 
 impl Default for GlContext {
@@ -85,6 +96,7 @@ impl GlContext {
             buffers: Buffers::new(),
             textures: Textures::new(),
             programs: Programs::new(),
+            framebuffers: Framebuffers::new(),
             cur_prog: 0,
             array_buffer: 0,
             element_buffer: 0,
@@ -97,6 +109,7 @@ impl GlContext {
             scissor: [0; 4],
             blend: false,
             depth: false,
+            bound_fbo: 0,
             draws: Vec::new(),
             next_buffer: 1,
             next_texture: 1,
@@ -107,6 +120,7 @@ impl GlContext {
             next_surface: 1,
             default_tex_ir: 0,
             default_surface_ir: 0,
+            fbo_targets: HashMap::new(),
         }
     }
 
@@ -157,7 +171,23 @@ impl GlContext {
         }
     }
 
-    /// The draw-target width/height in pixels (the surface size for the default framebuffer).
+    /// The offscreen render-target texture + presentable surface IR ids for the FBO whose color
+    /// attachment is GL texture `gl_tex`. Returns `(surface, texture, needs_create)`: `needs_create` is
+    /// true exactly on the first request for this attachment, so the frame builder emits the
+    /// `CreateTexture`/`CreateSurface` once and reuses the ids on later frames.
+    pub fn fbo_target(&mut self, gl_tex: u32) -> (u32, u32, bool) {
+        if let Some(&(surface, texture)) = self.fbo_targets.get(&gl_tex) {
+            (surface, texture, false)
+        } else {
+            let texture = self.alloc_texture_ir();
+            let surface = self.next_surface;
+            self.next_surface += 1;
+            self.fbo_targets.insert(gl_tex, (surface, texture));
+            (surface, texture, true)
+        }
+    }
+
+    /// The default-framebuffer draw-target width/height in pixels (the window-surface size).
     pub fn target_wh(&self) -> (i32, i32) {
         (self.surf.width as i32, self.surf.height as i32)
     }

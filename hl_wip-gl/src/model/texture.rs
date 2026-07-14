@@ -7,7 +7,7 @@
 //! `CopyBufferToTexture`, exactly as `gl_shim.c` does at swap.
 
 use super::glconst::*;
-use hl_gpu::protocol::model::enums::{AddressMode, Filter};
+use hl_gpu::protocol::model::enums::{AddressMode, Filter, TextureFormat};
 use std::collections::HashMap;
 
 /// One live GL texture object: RGBA8 pixels + the min/mag filter + S/T wrap GL enums.
@@ -22,6 +22,10 @@ pub struct GlTexture {
     pub wrap_s: u32,
     pub wrap_t: u32,
     pub gen: u64,
+    /// The neutral-IR texel format this texture lowers to (a `CreateTexture` `format`, and — when the
+    /// texture is a framebuffer color attachment — the render-target + surface format). Chosen from the
+    /// `glTexImage2D` internal format; defaults to `Rgba8Unorm` (the RGBA8 upload the model materializes).
+    pub ir_format: TextureFormat,
 }
 
 impl Default for GlTexture {
@@ -36,6 +40,7 @@ impl Default for GlTexture {
             wrap_s: GL_REPEAT,
             wrap_t: GL_REPEAT,
             gen: 0,
+            ir_format: TextureFormat::Rgba8Unorm,
         }
     }
 }
@@ -104,12 +109,14 @@ impl Textures {
         name
     }
 
-    /// `glTexImage2D` — (re)define the texture's RGBA8 pixels + extent, bumping its generation. `pixels`
-    /// is the already-converted RGBA8 image (`w*h*4` bytes) or empty for a storage-only define.
-    pub fn image_2d(&mut self, name: u32, w: i32, h: i32, pixels: &[u8]) {
+    /// `glTexImage2D` — (re)define the texture's RGBA8 pixels + extent + neutral texel `format`, bumping
+    /// its generation. `pixels` is the already-converted RGBA8 image (`w*h*4` bytes) or empty for a
+    /// storage-only define (e.g. an FBO color attachment allocated before it is rendered into).
+    pub fn image_2d(&mut self, name: u32, w: i32, h: i32, pixels: &[u8], format: TextureFormat) {
         let t = self.map.entry(name).or_default();
         t.w = w;
         t.h = h;
+        t.ir_format = format;
         if !pixels.is_empty() {
             t.data = pixels.to_vec();
         } else if t.data.len() != (w * h * 4) as usize {

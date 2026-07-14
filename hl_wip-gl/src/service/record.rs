@@ -8,6 +8,7 @@
 use crate::model::context::GlContext;
 use crate::model::glconst::*;
 use crate::model::program::DrawCall;
+use hl_gpu::protocol::model::enums::TextureFormat;
 
 // ---- buffers -------------------------------------------------------------------------------------
 
@@ -82,11 +83,19 @@ pub fn bind_texture(ctx: &mut GlContext, _target: u32, name: u32) {
     }
 }
 
-/// `glTexImage2D` — `pixels` is the already-RGBA8-converted image (`w*h*4`) bound to the active unit.
+/// `glTexImage2D` — `pixels` is the already-RGBA8-converted image (`w*h*4`) bound to the active unit; the
+/// texture lowers to the default `Rgba8Unorm` neutral format.
 pub fn tex_image_2d(ctx: &mut GlContext, w: i32, h: i32, pixels: &[u8]) {
+    tex_image_2d_format(ctx, w, h, pixels, TextureFormat::Rgba8Unorm);
+}
+
+/// `glTexImage2D` with an explicit neutral texel `format` selected from the GL internal format — used for
+/// FBO color attachments (which are rendered into, so the format becomes the render-target + surface
+/// format) and for non-RGBA8 sampled uploads (e.g. a `GL_BGRA_EXT` image → `Bgra8Unorm`).
+pub fn tex_image_2d_format(ctx: &mut GlContext, w: i32, h: i32, pixels: &[u8], format: TextureFormat) {
     let name = ctx.tex_unit[ctx.active_texture];
     if name != 0 {
-        ctx.textures.image_2d(name, w, h, pixels);
+        ctx.textures.image_2d(name, w, h, pixels, format);
     }
 }
 
@@ -106,6 +115,33 @@ pub fn delete_texture(ctx: &mut GlContext, name: u32) -> bool {
         }
     }
     ctx.textures.delete(name)
+}
+
+// ---- framebuffers (offscreen render targets) -----------------------------------------------------
+
+/// `glGenFramebuffers` (one name).
+pub fn gen_framebuffer(ctx: &mut GlContext) -> u32 {
+    ctx.framebuffers.gen()
+}
+
+/// `glBindFramebuffer(target, name)` — bind `name` as the current draw framebuffer (`0` = default).
+pub fn bind_framebuffer(ctx: &mut GlContext, _target: u32, name: u32) {
+    ctx.bound_fbo = name;
+}
+
+/// `glFramebufferTexture2D(GL_COLOR_ATTACHMENT0, tex)` — attach `tex` as the bound FBO's color target.
+/// Attaches to whichever FBO is currently bound (the default framebuffer `0` has no attachable slot).
+pub fn framebuffer_texture_2d(ctx: &mut GlContext, tex: u32) {
+    let fbo = ctx.bound_fbo;
+    ctx.framebuffers.attach_color(fbo, tex);
+}
+
+/// `glDeleteFramebuffers` (one name).
+pub fn delete_framebuffer(ctx: &mut GlContext, name: u32) -> bool {
+    if ctx.bound_fbo == name {
+        ctx.bound_fbo = 0;
+    }
+    ctx.framebuffers.delete(name)
 }
 
 // ---- shaders + programs --------------------------------------------------------------------------
@@ -277,6 +313,7 @@ pub fn draw_elements(ctx: &mut GlContext, mode: u32, count: i32, index_type: u32
 fn snapshot(ctx: &GlContext) -> DrawCall {
     let mut d = DrawCall {
         prog: ctx.cur_prog,
+        fbo: ctx.bound_fbo,
         attrs: ctx.attr,
         tex_units: ctx.tex_unit,
         viewport: ctx.viewport,

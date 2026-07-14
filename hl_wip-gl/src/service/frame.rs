@@ -5,15 +5,24 @@
 //! produces a `Vec<hl_gpu::Cmd>` so [`crate::service::swap`] can submit it through a
 //! [`hl_gpu::CommandSink`] (the tested seam), exactly as cuda's services submit `Cmd`s.
 //!
-//! Two frame shapes are FULLY lowered this pass:
-//! * **clear-only** — a frame whose draw-list is all `glClear`s → a render pass that clears the default
-//!   target (mirrors gl_shim.c's `ClearRect`-only submit).
-//! * **single-draw** — one geometry draw against the default framebuffer → the VBO/index/texture/uniform
-//!   uploads + the translated shader + pipeline + bind group + the render pass.
+//! Frame shapes FULLY lowered:
+//! * **clear-only** — a frame whose draw-list is all `glClear`s → a render pass that clears the target
+//!   (mirrors gl_shim.c's `ClearRect`-only submit).
+//! * **single-draw** — one geometry draw → the VBO/index/texture/uniform uploads + the translated shader
+//!   + pipeline + bind group + the render pass.
+//! * **multi-draw / clear-then-draw** — any mix of a leading `glClear` and one-or-more geometry draws →
+//!   a single render pass that clears once (`LoadOp::Clear`) then replays every geometry draw's
+//!   `SetPipeline`/bindings/`Draw` in order into that pass. Each draw's texture staging copies are hoisted
+//!   ahead of `BeginRenderPass` (copies are illegal inside a render pass).
+//! * **offscreen FBO** — geometry recorded while a non-default framebuffer is bound renders into a
+//!   `CreateTexture(RENDER_TARGET)` for that FBO's color attachment (sized + formatted from the attached
+//!   GL texture) instead of the default window surface; that render-target texture is what the frame
+//!   presents.
 //!
-//! Deferred (returns `None`, the caller no-ops the present): multi-draw / clear+draw **replay** frames,
-//! offscreen-FBO render targets, and residency-delta upload skipping — the `hl-shim-gl` `build_replay_frame`
-//! path, which is wiring on top of this same lowering and lands in a later pass.
+//! Still deferred: residency-delta upload skipping (re-uploading every bound buffer/texture each frame —
+//! the `hl-shim-gl` `build_replay_frame` dirty-tracking path) and interleaved clear-between-draws within a
+//! single frame (a leading clear is honored; a `glClear` recorded *after* a draw is folded into the one
+//! pass-clear rather than re-clearing mid-pass).
 
 use crate::model::context::GlContext;
 use crate::model::glconst::*;
@@ -43,49 +52,72 @@ pub fn build_frame_ir(ctx: &mut GlContext) -> Option<Frame> {
     if !ctx.surf.have || ctx.draws.is_empty() {
         return None;
     }
-    let all_clears = ctx.draws.iter().all(|d| d.is_clear);
-    if all_clears {
+    if ctx.draws.iter().all(|d| d.is_clear) {
         return Some(build_clear_frame(ctx));
     }
-    // A single non-clear draw → the core single-draw path. Multi-draw/replay is deferred.
-    if ctx.draws.len() == 1 && !ctx.draws[0].is_clear {
-        return build_single_draw_frame(ctx);
-    }
-    None
+    // One or more geometry draws (optionally led by a clear) → the single/multi-draw path.
+    build_geometry_frame(ctx)
 }
 
-/// The default render target (mint its `CreateTexture` + `CreateSurface` on first use). Returns
-/// `(surface_ir, texture_ir)` and pushes the create commands into `cmds` when they are first needed.
-fn ensure_default_target(ctx: &mut GlContext, cmds: &mut Vec<Cmd>) -> (u32, u32) {
+/// The render target + presentable surface for a frame whose draws target framebuffer `fbo`. Mints the
+/// target's `CreateTexture` + `CreateSurface` (once, cached in the context) and pushes them into `cmds`.
+/// Returns `(surface_ir, texture_ir, width, height, format)`.
+///
+/// * `fbo == 0` (or an FBO with no usable color attachment) → the default window target: `Bgra8Unorm`,
+///   sized to the window surface.
+/// * a non-default `fbo` with a sized color-attachment texture → an offscreen render target sized to and
+///   formatted as that attachment (the "render to a texture instead of the default surface" path).
+fn resolve_target(ctx: &mut GlContext, fbo: u32, cmds: &mut Vec<Cmd>) -> (u32, u32, i32, i32, TextureFormat) {
+    // Try the FBO's color attachment; fall back to the default target if it is missing/unsized.
+    if fbo != 0 {
+        let attach = ctx.framebuffers.color_attachment(fbo);
+        if attach != 0 {
+            if let Some((w, h, fmt)) = ctx.textures.get(attach).filter(|t| t.w > 0 && t.h > 0).map(|t| (t.w, t.h, t.ir_format)) {
+                let (surface, texture, needs_create) = ctx.fbo_target(attach);
+                if needs_create {
+                    push_target_creates(cmds, surface, texture, w, h, fmt, "offscreen-fbo");
+                }
+                return (surface, texture, w, h, fmt);
+            }
+        }
+    }
     let (w, h) = ctx.target_wh();
+    let fmt = TextureFormat::Bgra8Unorm;
     let (surface, texture, needs_create) = ctx.default_target();
     if needs_create {
-        cmds.push(Cmd::CreateTexture(
-            texture,
-            TextureDesc {
-                width: w.max(1) as u32,
-                height: h.max(1) as u32,
-                depth: 1,
-                mip_levels: 1,
-                sample_count: 1,
-                dim: TextureDim::D2,
-                format: TextureFormat::Bgra8Unorm,
-                usage: texture_usage::RENDER_TARGET | texture_usage::PRESENT,
-                label: "default-fbo".into(),
-            },
-        ));
-        cmds.push(Cmd::CreateSurface(
-            surface,
-            SurfaceDesc { width: w.max(1) as u32, height: h.max(1) as u32, format: TextureFormat::Bgra8Unorm, hlp_surface: 0 },
-        ));
+        push_target_creates(cmds, surface, texture, w, h, fmt, "default-fbo");
     }
-    (surface, texture)
+    (surface, texture, w, h, fmt)
 }
 
-/// Clear-only frame: a render pass over the default target that clears it (`LoadOp::Clear`).
+/// Emit the `CreateTexture(RENDER_TARGET | PRESENT)` + matching `CreateSurface` for a render target.
+fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, h: i32, fmt: TextureFormat, label: &str) {
+    let (w, h) = (w.max(1) as u32, h.max(1) as u32);
+    cmds.push(Cmd::CreateTexture(
+        texture,
+        TextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            dim: TextureDim::D2,
+            format: fmt,
+            usage: texture_usage::RENDER_TARGET | texture_usage::PRESENT,
+            label: label.into(),
+        },
+    ));
+    cmds.push(Cmd::CreateSurface(
+        surface,
+        SurfaceDesc { width: w, height: h, format: fmt, hlp_surface: 0 },
+    ));
+}
+
+/// Clear-only frame: a render pass over the target that clears it (`LoadOp::Clear`).
 fn build_clear_frame(ctx: &mut GlContext) -> Frame {
     let mut cmds: Vec<Cmd> = Vec::new();
-    let (surface, texture) = ensure_default_target(ctx, &mut cmds);
+    let fbo = ctx.draws.last().map(|d| d.fbo).unwrap_or(0);
+    let (surface, texture, _w, _h, _fmt) = resolve_target(ctx, fbo, &mut cmds);
     let clear = ctx.draws.last().map(|d| d.clear).unwrap_or([0.0; 4]);
     let ops = vec![
         Enc::BeginRenderPass {
@@ -98,18 +130,63 @@ fn build_clear_frame(ctx: &mut GlContext) -> Frame {
     Frame { cmds, present: (surface, texture) }
 }
 
-/// Single-draw frame: the full textured-geometry lowering (VBO + index + textures + shader + pipeline +
-/// bind group + the render pass). Byte-shape mirrors gl_shim.c's non-replay `eglSwapBuffers`.
-fn build_single_draw_frame(ctx: &mut GlContext) -> Option<Frame> {
-    let d = ctx.draws[0].clone();
+/// The per-draw lowering result: the texture staging copies (hoisted before `BeginRenderPass`) and the
+/// in-pass encoder ops (`SetPipeline` … `Draw`) for one geometry draw.
+struct DrawLowering {
+    copies: Vec<Enc>,
+    ops: Vec<Enc>,
+}
+
+/// Geometry frame: clear once, then replay every geometry draw into a single render pass over the target.
+/// Handles single-draw, multi-draw, and clear-then-draw, against the default surface or an offscreen FBO.
+fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
+    let geom: Vec<DrawCall> = ctx.draws.iter().filter(|d| !d.is_clear).cloned().collect();
+    if geom.is_empty() {
+        return None;
+    }
+    // The render target follows the first geometry draw's framebuffer binding; the clear color is the
+    // frame's first recorded draw (a leading glClear if present, else the first draw's snapshot).
+    let fbo = geom[0].fbo;
+    let clear = ctx.draws.first().map(|d| d.clear).unwrap_or([0.0; 4]);
+
+    let mut cmds: Vec<Cmd> = Vec::new();
+    let (surface, target_tex, tw, th, target_fmt) = resolve_target(ctx, fbo, &mut cmds);
+
+    let mut copies: Vec<Enc> = Vec::new();
+    let mut draw_ops: Vec<Enc> = Vec::new();
+    for d in &geom {
+        if let Some(lowered) = lower_draw(ctx, d, target_fmt, tw, th, &mut cmds) {
+            copies.extend(lowered.copies);
+            draw_ops.extend(lowered.ops);
+        }
+    }
+    // Not one geometry draw could be lowered (e.g. every program was unlinked) → present nothing.
+    if draw_ops.is_empty() {
+        return None;
+    }
+
+    let mut ops: Vec<Enc> = copies;
+    ops.push(Enc::BeginRenderPass {
+        color: vec![ColorAttachment { texture: target_tex, load: LoadOp::Clear, clear, store: true }],
+        depth: None,
+    });
+    ops.extend(draw_ops);
+    ops.push(Enc::EndRenderPass);
+
+    cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
+    Some(Frame { cmds, present: (surface, target_tex) })
+}
+
+/// Lower one geometry draw against a render target of format `target_fmt`: emit its resource creates +
+/// uploads into `cmds` and return the staging copies + in-pass encoder ops. `None` if the draw's program
+/// is unknown/unlinked (the caller skips it). The byte-shape mirrors gl_shim.c's per-draw lowering.
+fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: i32, th: i32, cmds: &mut Vec<Cmd>) -> Option<DrawLowering> {
+    let d = d.clone();
     let prog_name = if d.prog != 0 { d.prog } else { ctx.cur_prog };
     let prog = ctx.programs.program(prog_name)?.clone();
     let shader_ir = prog.shader_ir.clone()?;
     let vdecl = crate::adapter::glsl::collect_vertex_attrs(&prog.vs_src);
     let ndecl = vdecl.len();
-
-    let mut cmds: Vec<Cmd> = Vec::new();
-    let (surface, target_tex) = ensure_default_target(ctx, &mut cmds);
 
     // ---- vertex-buffer slot analysis (dedup bound buffers into slots) ----
     let mut slot_gl_buf: Vec<u32> = Vec::new();
@@ -193,7 +270,7 @@ fn build_single_draw_frame(ctx: &mut GlContext) -> Option<Frame> {
                 mip_levels: 1,
                 sample_count: 1,
                 dim: TextureDim::D2,
-                format: TextureFormat::Rgba8Unorm,
+                format: t.ir_format,
                 usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
                 label: String::new(),
             },
@@ -256,7 +333,7 @@ fn build_single_draw_frame(ctx: &mut GlContext) -> Option<Frame> {
             vertex: ShaderRef { module: shader_ir_id, entry: "vmain".into() },
             fragment: Some(ShaderRef { module: shader_ir_id, entry: "fmain".into() }),
             vertex_buffers: vbs,
-            color_targets: vec![ColorTargetState { format: TextureFormat::Bgra8Unorm, blend, write_mask: 0xf }],
+            color_targets: vec![ColorTargetState { format: target_fmt, blend, write_mask: 0xf }],
             depth: None,
             topology,
             cull: 0,
@@ -287,10 +364,10 @@ fn build_single_draw_frame(ctx: &mut GlContext) -> Option<Frame> {
         cmds.push(Cmd::CreateBindGroup(bind_group_ir, BindGroupDesc { set: 0, entries }));
     }
 
-    // ---- submit: texture copies + the render pass ----
-    let mut ops: Vec<Enc> = Vec::new();
+    // ---- staging copies (hoisted before BeginRenderPass) + the in-pass draw ops ----
+    let mut copies: Vec<Enc> = Vec::new();
     for tb in &texbinds {
-        ops.push(Enc::CopyBufferToTexture {
+        copies.push(Enc::CopyBufferToTexture {
             src: tb.stage_ir,
             src_offset: 0,
             bytes_per_row: tb.w * 4,
@@ -300,13 +377,10 @@ fn build_single_draw_frame(ctx: &mut GlContext) -> Option<Frame> {
             height: tb.h,
         });
     }
-    ops.push(Enc::BeginRenderPass {
-        color: vec![ColorAttachment { texture: target_tex, load: LoadOp::Clear, clear: d.clear, store: true }],
-        depth: None,
-    });
+    let mut ops: Vec<Enc> = Vec::new();
     ops.push(Enc::SetPipeline(pipeline_ir));
-    ops.push(emit_viewport(ctx, &d));
-    ops.push(emit_scissor(ctx, &d));
+    ops.push(emit_viewport(&d, tw, th));
+    ops.push(emit_scissor(&d, tw, th));
     if has_bg {
         ops.push(Enc::SetBindGroup { index: 0, group: bind_group_ir });
     }
@@ -324,16 +398,13 @@ fn build_single_draw_frame(ctx: &mut GlContext) -> Option<Frame> {
     } else {
         ops.push(Enc::Draw { vertex_count: d.count as u32, instance_count: d.instance_count, first_vertex: d.first as u32, first_instance: d.first_instance });
     }
-    ops.push(Enc::EndRenderPass);
 
-    cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
-    Some(Frame { cmds, present: (surface, target_tex) })
+    Some(DrawLowering { copies, ops })
 }
 
-/// `SetViewport` with the GL→Metal Y-flip (`gl_shim.c` `emit_viewport_h`).
-fn emit_viewport(ctx: &GlContext, d: &DrawCall) -> Enc {
-    let (_, th) = ctx.target_wh();
-    let (mut x, mut y, mut w, mut h) = (0.0f32, 0.0f32, ctx.surf.width as f32, th as f32);
+/// `SetViewport` with the GL→Metal Y-flip (`gl_shim.c` `emit_viewport_h`), against a `tw`×`th` target.
+fn emit_viewport(d: &DrawCall, tw: i32, th: i32) -> Enc {
+    let (mut x, mut y, mut w, mut h) = (0.0f32, 0.0f32, tw as f32, th as f32);
     if d.viewport[2] > 0 && d.viewport[3] > 0 {
         x = d.viewport[0] as f32;
         w = d.viewport[2] as f32;
@@ -343,9 +414,8 @@ fn emit_viewport(ctx: &GlContext, d: &DrawCall) -> Enc {
     Enc::SetViewport { x, y, w, h, min_depth: 0.0, max_depth: 1.0 }
 }
 
-/// `SetScissor` with the Y-flip + clamp (`gl_shim.c` `emit_scissor_h`).
-fn emit_scissor(ctx: &GlContext, d: &DrawCall) -> Enc {
-    let (tw, th) = ctx.target_wh();
+/// `SetScissor` with the Y-flip + clamp (`gl_shim.c` `emit_scissor_h`), against a `tw`×`th` target.
+fn emit_scissor(d: &DrawCall, tw: i32, th: i32) -> Enc {
     let (mut x, mut y, mut w, mut h) = (0, 0, tw, th);
     if d.scissor_enabled && d.scissor[2] > 0 && d.scissor[3] > 0 {
         x = d.scissor[0];
