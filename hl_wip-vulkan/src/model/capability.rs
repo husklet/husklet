@@ -20,12 +20,17 @@ pub struct ExtensionProp {
     pub spec_version: u32,
 }
 
-/// Instance-level extensions the ICD really backs: the WSI base (`VK_KHR_surface`) + the `...2`
-/// physical-device property queries (`VK_KHR_get_physical_device_properties2`). A real app (wgpu/ash/
-/// vkcube) gates its init on these being enumerated and aborts otherwise, so advertising them is the
-/// key unblock past instance setup.
+/// Instance-level extensions the ICD really backs: the WSI base (`VK_KHR_surface`), the Wayland WSI
+/// surface platform (`VK_KHR_wayland_surface`, really backed by `vkCreateWaylandSurfaceKHR` +
+/// `vkGetPhysicalDeviceWaylandPresentationSupportKHR` in [`crate::shim`]'s `surface` + the present path in
+/// [`crate::adapter::wayland_app`]), and the `...2` physical-device property queries
+/// (`VK_KHR_get_physical_device_properties2`). A real app (wgpu/ash/vkcube-wayland) gates its init on
+/// these being enumerated and aborts otherwise — and the Vulkan loader only reports a platform WSI
+/// surface extension when an ICD advertises it — so advertising them is the key unblock past instance
+/// setup + Wayland-surface creation.
 pub const INSTANCE_EXTENSIONS: &[ExtensionProp] = &[
     ExtensionProp { name: "VK_KHR_surface", spec_version: 25 },
+    ExtensionProp { name: "VK_KHR_wayland_surface", spec_version: 6 },
     ExtensionProp { name: "VK_KHR_get_physical_device_properties2", spec_version: 2 },
 ];
 
@@ -143,6 +148,7 @@ mod tests {
     fn instance_extensions_advertise_surface_and_pdp2() {
         let names: Vec<&str> = INSTANCE_EXTENSIONS.iter().map(|e| e.name).collect();
         assert!(names.contains(&"VK_KHR_surface"));
+        assert!(names.contains(&"VK_KHR_wayland_surface"));
         assert!(names.contains(&"VK_KHR_get_physical_device_properties2"));
         assert!(INSTANCE_EXTENSIONS.iter().all(|e| e.spec_version >= 1));
     }

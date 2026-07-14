@@ -38,8 +38,14 @@ fn main() {
     }
 
     let manifest_dir = PathBuf::from(env("CARGO_MANIFEST_DIR"));
-    // Rerun only when the shim's sources / manifest / this script / the icd.json change.
+    // Rerun when the shim's sources / manifest / this script / the icd.json change — AND when this
+    // crate's own `src/` changes: the guest ICD cdylib links this crate (e.g. the shim's
+    // `vkEnumerateInstanceExtensionProperties` reads `capability::INSTANCE_EXTENSIONS`), so a change to
+    // `src/` must restage the guest ICD or the staged `.so` goes stale (a real bug: an added instance
+    // extension never reached the loader until the shim src happened to change).
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed={}", manifest_dir.join("src").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("src").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("registry").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("build.rs").display());
