@@ -37,3 +37,8 @@ pub use runtime::{
     Container, ContainerBuilder, DeviceMount, DeviceProvider, DeviceRequest, Error, ExitStatus, Image,
     Launched, LogChunk, RunHandle, RunningContainer, Runtime, Stdio3, DEFAULT_GUEST_PATH,
 };
+
+/// Boundary ports — runtime-neutral seams where external backends plug in (see [`port::driver`] for the
+/// GPU/accelerator driver-plugin registry).
+pub mod port;
+pub use port::{Driver, Drivers, ProviderDriver};
