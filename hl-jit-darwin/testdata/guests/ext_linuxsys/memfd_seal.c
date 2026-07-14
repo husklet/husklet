@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 int main(void) {
-    int fd = memfd_create("dd_seal", MFD_ALLOW_SEALING);
+    int fd = memfd_create("hl_seal", MFD_ALLOW_SEALING);
     int created = fd >= 0;
     write(fd, "hello", 5);
     int seal = fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == 0;

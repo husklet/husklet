@@ -15,12 +15,12 @@ pub(crate) async fn version() -> Json<crate::api::Version> {
         min_api_version: "1.24",
         os: "linux",
         arch: "arm64",
-        kernel_version: "6.1.0-dd",
+        kernel_version: "6.1.0-hl",
         git_commit: "dd00000",
         go_version: "rustc",
         build_time: "2024-01-01T00:00:00Z",
         experimental: false,
-        platform: Platform { name: "dd" },
+        platform: Platform { name: "hl" },
         components: vec![Component {
             name: "Engine",
             version: HL_VERSION.into(),
@@ -59,7 +59,7 @@ pub(crate) fn host_mem_total() -> i64 {
 
 /// dd's only container runtime. `/info` advertises it as `DefaultRuntime` AND lists it in `Runtimes`
 /// (via [`runtimes`]) so the two stay consistent — Docker clients validate the default against that map.
-pub(crate) const DEFAULT_RUNTIME: &str = "dd-jit";
+pub(crate) const DEFAULT_RUNTIME: &str = "hl-jit";
 
 /// The `Runtimes` map for `/info`. Always contains [`DEFAULT_RUNTIME`] so runtime validation/capability
 /// discovery sees a well-formed shape (dd previously omitted `Runtimes` while advertising a default).
@@ -82,8 +82,8 @@ pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
         .count();
     let stopped = g.containers.len() - running - paused;
     Json(Info {
-        id: "DD",
-        name: "dd",
+        id: "HL",
+        name: "hl",
         containers: g.containers.len(),
         containers_running: running,
         containers_paused: paused,
@@ -97,7 +97,7 @@ pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
         architecture: "aarch64",
         ncpu: host_ncpu(),
         mem_total: host_mem_total(),
-        kernel_version: "6.1.0-dd",
+        kernel_version: "6.1.0-hl",
         server_version: HL_VERSION,
         docker_root_dir: hl_home().to_string_lossy().into_owned(),
         cgroup_driver: "none",
@@ -229,7 +229,7 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
         containers.len() as i64,
         volumes.len() as i64,
     );
-    // Persistent JIT translated-code cache (~/.dd/pcache, one <binid>.pcache per guest binary). It's the
+    // Persistent JIT translated-code cache (~/.hl/pcache, one <binid>.pcache per guest binary). It's the
     // closest analogue to Docker's build cache, so we surface it in that slot: shown by `system df`,
     // reclaimed by `system prune` / `builder prune` (see build_prune). Fully reclaimable (rebuilds on demand).
     // Materialize one build-cache ITEM per pcache file so the reported TotalCount always matches the
@@ -253,7 +253,7 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
                         "LastUsedAt": null,
                         "UsageCount": 0,
                         "Parent": "",
-                        "Description": "dd JIT translated-code cache",
+                        "Description": "hl JIT translated-code cache",
                     }))
                 })
                 .collect()

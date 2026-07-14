@@ -1,4 +1,4 @@
-//! Hand-rolled little-endian wire primitives (no serde — the `dd-term-core` discipline).
+//! Hand-rolled little-endian wire primitives (no serde — the `hl-term-core` discipline).
 //!
 //! Everything on dd's GPU channel is framed with these: a length-prefixed byte stream carried in the
 //! shared-memory command ring ([`crate::ring`]), with out-of-band handles (shm fd via `SCM_RIGHTS`,

@@ -13,7 +13,7 @@ int main(void) {
     struct sockaddr_un a = {0};
     a.sun_family = AF_UNIX;
     a.sun_path[0] = '\0';                     // abstract namespace
-    memcpy(a.sun_path + 1, "dd_abstract", 11);
+    memcpy(a.sun_path + 1, "hl_abstract", 11);
     socklen_t alen = (socklen_t)(sizeof(a.sun_family) + 1 + 11);
 
     int ls = socket(AF_UNIX, SOCK_STREAM, 0);

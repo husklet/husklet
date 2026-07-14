@@ -8,14 +8,14 @@
 //! recycle the buffer without a data race.
 //!
 //! Smithay's own `drm_syncobj` implementation is gated behind the DRM backend (a real `DrmDeviceFd`),
-//! which the `wayland_frontend`-only dd-compositor build does not link. So this module implements the
+//! which the `wayland_frontend`-only hl-compositor build does not link. So this module implements the
 //! older, device-independent `zwp_linux_explicit_synchronization_v1` protocol directly (manual
-//! `Dispatch`/`GlobalDispatch` on [`DdState`]), storing the per-commit acquire fence + release object and
+//! `Dispatch`/`GlobalDispatch` on [`HlState`]), storing the per-commit acquire fence + release object and
 //! exposing the two contract methods the present path drives:
 //!
-//!   * [`DdState::take_acquire_fence`] — call BEFORE sampling a surface's buffer; returns the committed
+//!   * [`HlState::take_acquire_fence`] — call BEFORE sampling a surface's buffer; returns the committed
 //!     acquire fence to wait on (see [`wait_acquire_fence`], a real pollable-fd wait, Linux-testable).
-//!   * [`DdState::signal_buffer_release`] — call AFTER the compositor's GPU work on the buffer completes;
+//!   * [`HlState::signal_buffer_release`] — call AFTER the compositor's GPU work on the buffer completes;
 //!     sends `fenced_release`(completion fence) or `immediate_release` to the client.
 //!
 //! On macOS the acquire wait and the release fence bridge to Metal via
@@ -36,7 +36,7 @@ use smithay::reexports::wayland_server::{
 };
 use smithay::wayland::compositor::{add_pre_commit_hook, with_states, BufferAssignment, SurfaceAttributes};
 
-use crate::DdState;
+use crate::HlState;
 
 /// The `zwp_linux_explicit_synchronization_v1` version advertised (v2; the requests this compositor
 /// handles — `get_synchronization`/`set_acquire_fence`/`get_release` — are all present since v1).
@@ -63,7 +63,7 @@ struct CommittedSync {
     release: Option<ZwpLinuxBufferReleaseV1>,
 }
 
-/// Aggregate explicit-sync state, held in [`DdState`].
+/// Aggregate explicit-sync state, held in [`HlState`].
 pub struct ExplicitSyncState {
     #[allow(dead_code)]
     global: GlobalId,
@@ -80,7 +80,7 @@ pub struct ExplicitSyncState {
 
 impl ExplicitSyncState {
     pub fn new(dh: &DisplayHandle) -> Self {
-        let global = dh.create_global::<DdState, ZwpLinuxExplicitSynchronizationV1, ()>(
+        let global = dh.create_global::<HlState, ZwpLinuxExplicitSynchronizationV1, ()>(
             EXPLICIT_SYNC_VERSION,
             (),
         );
@@ -94,7 +94,7 @@ impl ExplicitSyncState {
     }
 }
 
-impl DdState {
+impl HlState {
     /// Surfaces (by sid) that currently have committed explicit-sync fences — the present path iterates
     /// these to wait each acquire fence before sampling and to signal each release after GPU completion.
     pub fn explicit_sync_committed_sids(&self) -> Vec<u32> {
@@ -171,7 +171,7 @@ impl DdState {
             return;
         }
         let obj = obj.downgrade();
-        add_pre_commit_hook::<DdState, _>(surface, move |state, _dh, surface| {
+        add_pre_commit_hook::<HlState, _>(surface, move |state, _dh, surface| {
             if let Ok(resource) = obj.upgrade() {
                 state.explicit_sync_pre_commit(surface, &resource);
             }
@@ -181,7 +181,7 @@ impl DdState {
 
 // ---- zwp_linux_explicit_synchronization_v1 (the manager global) ------------------------------------
 
-impl GlobalDispatch<ZwpLinuxExplicitSynchronizationV1, ()> for DdState {
+impl GlobalDispatch<ZwpLinuxExplicitSynchronizationV1, ()> for HlState {
     fn bind(
         _state: &mut Self,
         _dh: &DisplayHandle,
@@ -194,7 +194,7 @@ impl GlobalDispatch<ZwpLinuxExplicitSynchronizationV1, ()> for DdState {
     }
 }
 
-impl Dispatch<ZwpLinuxExplicitSynchronizationV1, ()> for DdState {
+impl Dispatch<ZwpLinuxExplicitSynchronizationV1, ()> for HlState {
     fn request(
         state: &mut Self,
         _client: &Client,
@@ -233,7 +233,7 @@ impl Dispatch<ZwpLinuxExplicitSynchronizationV1, ()> for DdState {
 
 // ---- zwp_linux_surface_synchronization_v1 (per-surface acquire/release) -----------------------------
 
-impl Dispatch<ZwpLinuxSurfaceSynchronizationV1, SurfaceSyncData> for DdState {
+impl Dispatch<ZwpLinuxSurfaceSynchronizationV1, SurfaceSyncData> for HlState {
     fn request(
         state: &mut Self,
         _client: &Client,
@@ -282,7 +282,7 @@ impl Dispatch<ZwpLinuxSurfaceSynchronizationV1, SurfaceSyncData> for DdState {
 
 // ---- zwp_linux_buffer_release_v1 (server→client only; no requests) ----------------------------------
 
-impl Dispatch<ZwpLinuxBufferReleaseV1, ()> for DdState {
+impl Dispatch<ZwpLinuxBufferReleaseV1, ()> for HlState {
     fn request(
         _state: &mut Self,
         _client: &Client,

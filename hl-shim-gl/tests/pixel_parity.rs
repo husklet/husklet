@@ -1,5 +1,5 @@
 //! Pixel-/IR-parity harness: run a GLES frame through the C shim (`gl_shim.c`) and the Rust shim
-//! (`dd-shim-gl`) and diff the dd-gpu IR they emit. Both streams feed the *same* host backend, so
+//! (`hl-shim-gl`) and diff the hl-gpu IR they emit. Both streams feed the *same* host backend, so
 //! byte-identical IR ⇒ identical pixels — and the diff pinpoints the exact diverging `Cmd` rather than
 //! an opaque image delta. This is the cutover gate.
 //!
@@ -35,11 +35,11 @@ fn diff_ir(c_shim: &[u8], rust_shim: &[u8]) -> Result<(), String> {
     let b = decode_stream(rust_shim)?;
     for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
         if x != y {
-            return Err(format!("IR diverges at command #{i}:\n  gl_shim.c : {x:?}\n  dd-shim-gl: {y:?}"));
+            return Err(format!("IR diverges at command #{i}:\n  gl_shim.c : {x:?}\n  hl-shim-gl: {y:?}"));
         }
     }
     Err(format!(
-        "IR command count differs: gl_shim.c={} dd-shim-gl={} (first {} match); raw lens {}/{}",
+        "IR command count differs: gl_shim.c={} hl-shim-gl={} (first {} match); raw lens {}/{}",
         a.len(),
         b.len(),
         a.len().min(b.len()),
@@ -79,7 +79,7 @@ fn build_gl_shim_so(dir: &Path) -> Option<PathBuf> {
 /// Compile `workload` against `shim_so` (staged as libEGL.so.1) and run it with HL_IR_DUMP; return the
 /// emitted IR bytes. `tag` disambiguates the temp dir. None on any toolchain failure (skip).
 fn run_workload_against(shim_so: &Path, workload: &str, tag: &str) -> Option<Vec<u8>> {
-    let dir = std::env::temp_dir().join(format!("dd-shim-parity-{}-{tag}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-shim-parity-{}-{tag}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let egl = dir.join("libEGL.so.1");
     std::fs::copy(shim_so, &egl).ok()?;
@@ -132,7 +132,7 @@ fn diff_engine_detects_divergence_and_agreement() {
 #[test]
 fn full_frame_clear_is_byte_identical_to_gl_shim_c() {
     let workload = CLEAR_WORKLOAD;
-    let dir = std::env::temp_dir().join(format!("dd-shim-clear-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-shim-clear-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let so = match build_gl_shim_so(&dir) {
         Some(s) => s,
@@ -158,7 +158,7 @@ fn full_frame_clear_is_byte_identical_to_gl_shim_c() {
 /// green light for a flagged live glmark2 cutover test.
 #[test]
 fn full_frame_textured_triangle_is_byte_identical() {
-    let dir = std::env::temp_dir().join(format!("dd-shim-tt-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-shim-tt-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let gl_shim_so = match build_gl_shim_so(&dir) {
         Some(s) => s,
@@ -170,7 +170,7 @@ fn full_frame_textured_triangle_is_byte_identical() {
     let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => {
-            eprintln!("[parity] SKIP textured-triangle: dd-shim-gl cdylib not found");
+            eprintln!("[parity] SKIP textured-triangle: hl-shim-gl cdylib not found");
             return;
         }
     };
@@ -184,7 +184,7 @@ fn full_frame_textured_triangle_is_byte_identical() {
     };
     let _ = std::fs::remove_dir_all(&dir);
     match diff_ir(&c_ir, &rust_ir) {
-        Ok(()) => eprintln!("[parity] PASS textured-triangle: dd-shim-gl IR byte-identical to gl_shim.c ({} bytes)", c_ir.len()),
+        Ok(()) => eprintln!("[parity] PASS textured-triangle: hl-shim-gl IR byte-identical to gl_shim.c ({} bytes)", c_ir.len()),
         Err(e) => panic!("textured-triangle parity FAILED:\n{e}"),
     }
 }
@@ -194,7 +194,7 @@ fn full_frame_textured_triangle_is_byte_identical() {
 /// BOTH shims; the full multi-draw IR must be byte-identical. This green closes IR parity for real apps.
 #[test]
 fn full_frame_multi_draw_replay_is_byte_identical() {
-    let dir = std::env::temp_dir().join(format!("dd-shim-md-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-shim-md-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let gl_shim_so = match build_gl_shim_so(&dir) {
         Some(s) => s,
@@ -206,7 +206,7 @@ fn full_frame_multi_draw_replay_is_byte_identical() {
     let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => {
-            eprintln!("[parity] SKIP multi-draw: dd-shim-gl cdylib not found");
+            eprintln!("[parity] SKIP multi-draw: hl-shim-gl cdylib not found");
             return;
         }
     };
@@ -220,7 +220,7 @@ fn full_frame_multi_draw_replay_is_byte_identical() {
     };
     let _ = std::fs::remove_dir_all(&dir);
     match diff_ir(&c_ir, &rust_ir) {
-        Ok(()) => eprintln!("[parity] PASS multi-draw replay: dd-shim-gl IR byte-identical to gl_shim.c ({} bytes)", c_ir.len()),
+        Ok(()) => eprintln!("[parity] PASS multi-draw replay: hl-shim-gl IR byte-identical to gl_shim.c ({} bytes)", c_ir.len()),
         Err(e) => panic!("multi-draw replay parity FAILED:\n{e}"),
     }
 }
@@ -229,7 +229,7 @@ fn full_frame_multi_draw_replay_is_byte_identical() {
 /// window struct → `eglCreateWindowSurface`. Compiled against both shims; IR must be byte-identical.
 #[test]
 fn full_frame_wl_egl_window_is_byte_identical() {
-    let dir = std::env::temp_dir().join(format!("dd-shim-wl-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-shim-wl-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let gl_shim_so = match build_gl_shim_so(&dir) {
         Some(s) => s,
@@ -241,7 +241,7 @@ fn full_frame_wl_egl_window_is_byte_identical() {
     let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => {
-            eprintln!("[parity] SKIP wl_egl_window: dd-shim-gl cdylib not found");
+            eprintln!("[parity] SKIP wl_egl_window: hl-shim-gl cdylib not found");
             return;
         }
     };
@@ -266,7 +266,7 @@ fn full_frame_wl_egl_window_is_byte_identical() {
 /// shims; the full multi-pass IR must be byte-identical. This closes real-app IR parity.
 #[test]
 fn full_frame_fbo_render_to_texture_is_byte_identical() {
-    let dir = std::env::temp_dir().join(format!("dd-shim-fbo-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-shim-fbo-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let gl_shim_so = match build_gl_shim_so(&dir) {
         Some(s) => s,
@@ -388,7 +388,7 @@ int main(void) {
 /// (incl. the uniform buffer bytes) must be byte-identical to gl_shim.c.
 #[test]
 fn full_frame_mat3_uniform_is_byte_identical() {
-    let dir = std::env::temp_dir().join(format!("dd-shim-u3-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-shim-u3-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let gl_shim_so = match build_gl_shim_so(&dir) {
         Some(s) => s,
@@ -422,7 +422,7 @@ fn full_frame_mat3_uniform_is_byte_identical() {
 /// be byte-identical, proving the new real bodies produce exactly gl_shim.c's texture + buffer bytes.
 #[test]
 fn full_frame_texstorage_and_mapbuffer_is_byte_identical() {
-    let dir = std::env::temp_dir().join(format!("dd-shim-ts-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-shim-ts-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let gl_shim_so = match build_gl_shim_so(&dir) {
         Some(s) => s,
@@ -434,7 +434,7 @@ fn full_frame_texstorage_and_mapbuffer_is_byte_identical() {
     let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => {
-            eprintln!("[parity] SKIP texstorage/mapbuffer: dd-shim-gl cdylib not found");
+            eprintln!("[parity] SKIP texstorage/mapbuffer: hl-shim-gl cdylib not found");
             return;
         }
     };

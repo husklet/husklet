@@ -207,7 +207,7 @@ pub fn run_one(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> Status {
     }
     // Single-arch store: don't manufacture a false gap by serving a wrong-arch rootfs under the Dd
     // daemon — skip the cell whose arch the store provably can't serve (Real pulls the right arch).
-    if cfg.backend == Backend::Dd {
+    if cfg.backend == Backend::Hl {
         if let Some(a) = store_arch(cfg, s.image) {
             if a != target_arch(t) {
                 return Status::Skip(format!(
@@ -219,7 +219,7 @@ pub fn run_one(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> Status {
         }
     }
     let ensure_ms = t0.elapsed().as_millis();
-    let xfail = cfg.backend == Backend::Dd && s.xfail.contains(&t);
+    let xfail = cfg.backend == Backend::Hl && s.xfail.contains(&t);
     let t1 = Instant::now();
     let (out, code) = drive(d, s, t, cfg);
     if prof {

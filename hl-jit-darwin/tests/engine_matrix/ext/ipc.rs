@@ -34,7 +34,7 @@ fn ext_ipc() -> Group {
         port("sysv-sem", "ext_ipc/ipc_sysv_sem.c").out("sysv_sem v0=3 v1=13 v2=10 all=3,13,10\n"),
         port("sysv-msg", "ext_ipc/ipc_sysv_msg.c").out("sysv_msg t2=type2 any=type1 t3=type3\n"),
         port("msgget-ftok", "ext_ipc/ipc_msgget_ftok.c").out("ftok key_ok=1 msg=ftok-msg\n"),
-        // the dd-internal per-container SysV registry (was: the macOS host 32-slot table). Allocates
+        // the hl-internal per-container SysV registry (was: the macOS host 32-slot table). Allocates
         // >32 shm segments concurrently, a cross-fork shmat shared-memory write, and cross-process BLOCKING
         // semop + msgsnd/msgrcv round-trips — every one of which the old host-backed path could not do
         // (shmmni=32, no cross-process shm). Confirmed byte-exact vs the native Linux oracle during bring-up;

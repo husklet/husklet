@@ -114,7 +114,7 @@ pub fn group() -> ScenGroup {
             .exec("export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null 2>&1; apt-get install -y zsh >/dev/null 2>&1; zsh --version")
             .has("zsh 5").timeout(240).long(),
 
-        // ---- job control (the highest dd-risk path: pgrp / SIGTTIN-TTOU / TIOCSPGRP) --------------
+        // ---- job control (the highest hl-risk path: pgrp / SIGTTIN-TTOU / TIOCSPGRP) --------------
         scen("terminal/jobctl-jobs", "ubuntu:latest").tty()
             .exec("set -m; sleep 0.4 & jobs | grep -c Running").has("1").timeout(60),
         scen("terminal/jobctl-wait-rc", "ubuntu:latest").tty()

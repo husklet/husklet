@@ -1,9 +1,9 @@
-//! Deterministic golden-image regression harness for the dd-display Metal renderer.
+//! Deterministic golden-image regression harness for the hl-display Metal renderer.
 //!
 //! Motivation: rendering correctness (orientation/flip, blend, FBO compositing, glyph sampling) used to
 //! be verified by driving a LIVE Chrome through the container — flaky, slow, and non-reproducible. This
-//! harness replays *captured* dd-gpu IR streams (exactly the bytes the GL shim forwards for one frame,
-//! the same input `dd-display selftest-shim-ir` consumes) through the REAL [`MetalBackend`], reads the
+//! harness replays *captured* hl-gpu IR streams (exactly the bytes the GL shim forwards for one frame,
+//! the same input `hl-display selftest-shim-ir` consumes) through the REAL [`MetalBackend`], reads the
 //! composited surface back to RGBA, and pixel-diffs it against a stored golden PNG. Every rendering
 //! change is then checked deterministically, with no Chrome and no window server.
 //!
@@ -16,8 +16,8 @@
 //!
 //! Modes (env vars):
 //!   HL_UPDATE_GOLDENS=1   (re)write golden/<name>.png from this run instead of asserting — seeds goldens
-//!   DD_GOLDEN_TOL=<u8>    per-channel abs tolerance (default 4)
-//!   DD_GOLDEN_MAXPCT=<f>  max fraction of pixels allowed to exceed tol (default 0.0 = strict)
+//!   HL_GOLDEN_TOL=<u8>    per-channel abs tolerance (default 4)
+//!   HL_GOLDEN_MAXPCT=<f>  max fraction of pixels allowed to exceed tol (default 0.0 = strict)
 //!   HL_ORACLE_STRICT=1    fail the suite if a present oracle image mismatches (default: informational)
 //!
 //! The IR builders and the PNG codec are platform-agnostic (pure Rust); only the replay+readback step is
@@ -779,7 +779,7 @@ fn registry() -> Vec<Case> {
 fn codex_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("dd-display has a parent dir")
+        .expect("hl-display has a parent dir")
         .join("target-chrome-codex")
 }
 
@@ -946,8 +946,8 @@ mod metal_suite {
         }
 
         let update = std::env::var("HL_UPDATE_GOLDENS").is_ok();
-        let tol = env_u8("DD_GOLDEN_TOL", 4);
-        let max_pct = env_f64("DD_GOLDEN_MAXPCT", 0.0);
+        let tol = env_u8("HL_GOLDEN_TOL", 4);
+        let max_pct = env_f64("HL_GOLDEN_MAXPCT", 0.0);
         let oracle_strict = std::env::var("HL_ORACLE_STRICT").is_ok();
 
         let mut failures = Vec::new();
@@ -1114,11 +1114,11 @@ mod wgpu_suite {
         for d in [&rendered_dir, &diff_dir] {
             std::fs::create_dir_all(d).unwrap();
         }
-        let tol = env_u8("DD_GOLDEN_TOL", 4);
-        let max_pct = env_f64("DD_GOLDEN_MAXPCT", 0.0);
+        let tol = env_u8("HL_GOLDEN_TOL", 4);
+        let max_pct = env_f64("HL_GOLDEN_MAXPCT", 0.0);
         // The wgpu path is a distinct rasterizer; sub-pixel edges of rotated/offscreen quads can differ
         // from Metal by a texel. Allow a looser default just for wgpu-vs-Metal parity unless overridden.
-        let wgpu_max_pct = env_f64("DD_WGPU_MAXPCT", max_pct.max(0.02));
+        let wgpu_max_pct = env_f64("HL_WGPU_MAXPCT", max_pct.max(0.02));
 
         let mut failures = Vec::new();
         let mut skipped = Vec::new();

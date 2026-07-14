@@ -1,4 +1,4 @@
-//! PTX → dd-GPU **kernel IR** front-end + a CPU interpreter — the compute core that lets a real
+//! PTX → hl-GPU **kernel IR** front-end + a CPU interpreter — the compute core that lets a real
 //! CUDA PTX kernel execute end-to-end through dd's stack on the [`crate::software::SoftwareBackend`]
 //! with **no GPU**, as the standing correctness oracle for the future Metal backend.
 //!
@@ -313,10 +313,10 @@ pub struct KernelProgram {
 }
 
 // ===================================================================================================
-// descriptor codec — how a compiled kernel crosses the dd-GPU IR shader channel (`CreateShader` words)
+// descriptor codec — how a compiled kernel crosses the hl-GPU IR shader channel (`CreateShader` words)
 // ===================================================================================================
 
-/// Magic leading word marking `CreateShader.spirv` words as a dd-GPU **kernel descriptor** (PTX text +
+/// Magic leading word marking `CreateShader.spirv` words as a hl-GPU **kernel descriptor** (PTX text +
 /// launch config) rather than SPIR-V. A software/oracle backend compiles it here; a Metal backend would
 /// instead carry real SPIR-V. This is the honest per-backend shader-ABI seam.
 pub const KERNEL_MAGIC: u32 = 0xDD6B_0001;
@@ -1682,7 +1682,7 @@ fn write_scalar(mem: &mut [u8], at: usize, width: usize, val: u64) -> Result<()>
 // ===================================================================================================
 //
 // The software interpreter above is the CPU oracle. For the real Metal GPU we lower the SAME
-// [`KernelProgram`] to a WGSL compute entry point that `dd-gpu-wgpu` hands to naga → wgpu → MSL. This
+// [`KernelProgram`] to a WGSL compute entry point that `hl-gpu-wgpu` hands to naga → wgpu → MSL. This
 // keeps ONE PTX front-end (`compile`) feeding both backends; only the code-gen tail differs (CPU
 // interpret vs. WGSL emit), exactly the `software.rs` / `metal.rs` seam the module header describes.
 //
@@ -1831,7 +1831,7 @@ fn op_f32(op: &Op) -> String {
 }
 
 /// Lower a compiled [`KernelProgram`] to a WGSL compute shader whose entry point is `prog.entry`. The
-/// emitted module is what `dd-gpu-wgpu` compiles to a real `wgpu::ComputePipeline` (naga WGSL→MSL). See
+/// emitted module is what `hl-gpu-wgpu` compiles to a real `wgpu::ComputePipeline` (naga WGSL→MSL). See
 /// the section header for the ABI and control-flow model. Returns [`GpuError::Ptx`] for any instruction
 /// outside the elementwise subset this lowering supports (e.g. a 64-bit global access, or a global
 /// access through a register with no statically-known region).

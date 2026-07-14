@@ -7,7 +7,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_dup3_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_dup3_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR, 0644);
     int nf = dup3(fd, 50, O_CLOEXEC);
     int dup3ok = nf == 50;

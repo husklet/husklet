@@ -19,7 +19,7 @@ pub(crate) fn render_system(s: &gtk::Box, m: &AppModel, _sender: &ComponentSende
             "Daemon not running — start it to see engine details and logs.",
         ));
         l.set_xalign(0.0);
-        l.add_css_class("dd-empty");
+        l.add_css_class("hl-empty");
         s.append(&l);
         return;
     }
@@ -68,7 +68,7 @@ pub(crate) fn render_system(s: &gtk::Box, m: &AppModel, _sender: &ComponentSende
     tv.set_editable(false);
     tv.set_cursor_visible(false);
     tv.set_monospace(true);
-    tv.add_css_class("dd-logs");
+    tv.add_css_class("hl-logs");
     tv.set_left_margin(10);
     tv.set_top_margin(8);
     tv.set_bottom_margin(8);
@@ -86,7 +86,7 @@ pub(crate) fn render_system(s: &gtk::Box, m: &AppModel, _sender: &ComponentSende
         .hexpand(true)
         .min_content_height(260)
         .build();
-    sw.add_css_class("dd-content");
+    sw.add_css_class("hl-content");
     s.append(&sw);
 }
 
@@ -94,6 +94,6 @@ pub(crate) fn render_system(s: &gtk::Box, m: &AppModel, _sender: &ComponentSende
 fn h2(text: &str) -> gtk::Label {
     let l = gtk::Label::new(Some(text));
     l.set_xalign(0.0);
-    l.add_css_class("dd-h2");
+    l.add_css_class("hl-h2");
     l
 }

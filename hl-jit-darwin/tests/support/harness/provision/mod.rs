@@ -26,7 +26,7 @@ impl Ctx {
             .parent()
             .unwrap()
             .to_path_buf();
-        let cache = repo.join("target/dd-tests");
+        let cache = repo.join("target/hl-tests");
         std::fs::create_dir_all(cache.join("aarch64")).ok();
         Ctx {
             // The C guest corpus is owned by the engine crate (ownership-matrix Step 2), so it now

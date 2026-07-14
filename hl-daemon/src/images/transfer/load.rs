@@ -1,11 +1,11 @@
-//! `docker load` -- extract a dd save archive (rootfs/ + dd-manifest.json) into a new image.
+//! `docker load` -- extract a dd save archive (rootfs/ + hl-manifest.json) into a new image.
 use super::*;
 
-/// POST /images/load -- `docker load`. Extracts a dd save archive (rootfs/ + dd-manifest.json) from
+/// POST /images/load -- `docker load`. Extracts a dd save archive (rootfs/ + hl-manifest.json) from
 /// the request body into a new image directory and registers the image.
 pub(crate) async fn image_load(State(a): State<App>, body: axum::body::Bytes) -> Response {
-    // dd-images owns the archive extraction + manifest + on-disk placement (`rootfs/` under the store, a
-    // `dd-image.json` sidecar so it round-trips through discovery). The handler maps the materialized
+    // hl-images owns the archive extraction + manifest + on-disk placement (`rootfs/` under the store, a
+    // `hl-image.json` sidecar so it round-trips through discovery). The handler maps the materialized
     // `LoadedImage` onto the daemon's `Image`, registers it, and emits the load event.
     let loaded = match hl_images::Store::new(&a.images_dir)
         .load_archive(&body)

@@ -1,9 +1,9 @@
 //! CUDA compute on the REAL Metal GPU through wgpu.
 //!
 //! The milestone this proves: a real CUDA PTX kernel (vector-add, `c[i] = a[i] + b[i]` — the exact
-//! kernel `dd-shim-cuda` / the software oracle run on the CPU) executes end-to-end on a live Metal
+//! kernel `hl-shim-cuda` / the software oracle run on the CPU) executes end-to-end on a live Metal
 //! device via the wgpu backend, and the readback matches `a + b`. The path is
-//! `PTX → dd-GPU kernel IR → WGSL → naga → MSL → wgpu::ComputePipeline → dispatch → storage buffer readback`.
+//! `PTX → hl-GPU kernel IR → WGSL → naga → MSL → wgpu::ComputePipeline → dispatch → storage buffer readback`.
 //!
 //! Needs a Metal device, so it only runs on macOS (empty elsewhere). Run on the mac:
 //! `cargo test -p hl-gpu-wgpu --test cuda_compute`.
@@ -14,7 +14,7 @@ use hl_gpu::cuda::{CudaContext, CudaDeviceDesc, KernelArg};
 use hl_gpu::replay;
 use hl_gpu_wgpu::WgpuBackend;
 
-/// Generate the CUDA vecadd command stream via the CUDA→dd-GPU-IR translation, replay it through the
+/// Generate the CUDA vecadd command stream via the CUDA→hl-GPU-IR translation, replay it through the
 /// real wgpu/Metal backend, and assert the device readback equals `a + b` element-wise.
 #[test]
 fn cuda_vecadd_runs_on_real_metal() {

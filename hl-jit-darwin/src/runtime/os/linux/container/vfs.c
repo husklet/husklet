@@ -92,7 +92,7 @@ static void chroot_strip(char *guest, size_t n) {
 static char g_rootfs_canon[4200];
 static size_t g_rootfs_canon_len;
 // fd -> host path it was opened with (dir-fd confinement + cache)
-static char g_fdpath[DD_NFD][192];
+static char g_fdpath[HL_NFD][192];
 // overlay: dir-fd -> its GUEST path (for merged getdents); "" = not an overlay dir
 static char g_ovldir[1024][192];
 // O_PATH: fd opened with Linux O_PATH -- it names a file (fstat / *at dirfd / fchdir) but is NOT open for
@@ -101,33 +101,33 @@ static char g_ovldir[1024][192];
 static uint8_t g_opath[1024];
 // Synthesized /proc text files are backed by mkstemp(), so the host fd is O_RDWR even though Linux exposes
 // procfs regular files as read-only for file-status queries. 1 = force F_GETFL access mode to O_RDONLY.
-static uint8_t g_proc_text_ro[DD_NFD];
+static uint8_t g_proc_text_ro[HL_NFD];
 // /dev/full: reads return zeros (backed by /dev/zero) but every WRITE fails ENOSPC. macOS has no
 // /dev/full, so we flag the fd here and gate the write family in svc_io. 1 = /dev/full.
-static uint8_t g_devfull[DD_NFD];
+static uint8_t g_devfull[HL_NFD];
 // /dev/urandom + /dev/random accept WRITEs on Linux as entropy-pool seeding (returning the byte count);
 // macOS rejects them with EPERM. 1 = this fd is such a device, so svc_io swallows its writes as a no-op
 // success -- entropy-seeding probes (libgcrypt, some init scripts) then behave as on Linux.
-static uint8_t g_devseed[DD_NFD];
+static uint8_t g_devseed[HL_NFD];
 // /dev/tty (and the console we back with /dev/null): a controlling terminal NEVER reports EOF because it
 // has no input -- a nonblocking read with nothing pending returns EAGAIN, and a blocking read waits. But dd
 // may back /dev/tty with a host device (or /dev/null for /dev/console) that returns 0 (EOF) when empty, so
 // readline/TUI/event-loop code treats "no input" as terminal closure and tears down. 1 = this fd carries
 // tty read semantics: a 0-byte (EOF) read on a NONBLOCKING such fd is reported as EAGAIN instead (svc_io).
-static uint8_t g_devtty[DD_NFD];
+static uint8_t g_devtty[HL_NFD];
 // Guest-visible bound AF_UNIX socket names, for /proc/net/unix enumeration (`ss -x`, socket-inventory
 // tools). Recorded on a successful AF_UNIX bind (net.c); a pathname keeps its guest path, an abstract name
 // is stored as "@name". Empty slot = not a bound unix socket. Process-local (one net-namespace per engine).
-static char g_unix_bind[DD_NFD][108];
+static char g_unix_bind[HL_NFD][108];
 static void unix_bind_note(int fd, const char *guestname) {
-    if (fd >= 0 && fd < DD_NFD && guestname) snprintf(g_unix_bind[fd], sizeof g_unix_bind[fd], "%s", guestname);
+    if (fd >= 0 && fd < HL_NFD && guestname) snprintf(g_unix_bind[fd], sizeof g_unix_bind[fd], "%s", guestname);
 }
 static void unix_bind_clear(int fd) {
-    if (fd >= 0 && fd < DD_NFD) g_unix_bind[fd][0] = 0;
+    if (fd >= 0 && fd < HL_NFD) g_unix_bind[fd][0] = 0;
 }
 // /dev/dri/renderD128: the synthesized GPU render node (GPU rung 2). 1 = this fd is the render node, so
 // its ioctl routes to the dd GPU allocator. Set only when HL_GPU_IOSURFACE gates the path on.
-static uint8_t g_devdri[DD_NFD];
+static uint8_t g_devdri[HL_NFD];
 // HL_GPU_IOSURFACE opt-in: the whole host-IOSurface GPU path (render-node synth + alloc ioctl) is inert
 // unless this is set in the engine env (the --gui launcher sets it). Cached; -1 = unqueried.
 static int g_gpu_iosurface = -1;
@@ -139,7 +139,7 @@ static int gpu_iosurface_on(void) {
 // where g_ovldents lives, but the lseek handler (io.c) is included before fs.c, so forward-declare it.
 static void ovldents_rewind(int fd, int pos);
 // eventfd(read-end) -> pipe write-end + 1 (0 = not an eventfd)
-static int g_eventfd_peer[DD_NFD];
+static int g_eventfd_peer[HL_NFD];
 // eventfd accumulating counter: write() adds, read() returns + resets (the pipe is only readiness).
 // _xproc-eventfd-lockf_: the counter array lives in a MAP_SHARED anonymous region so a child created by
 // dd's real host fork() updates the SAME physical counters the parent reads -- the readiness pipe is
@@ -150,7 +150,7 @@ static int g_eventfd_peer[DD_NFD];
 static uint64_t *g_eventfd_count;
 // eventfd public fd -> counter slot + 1. Normally the slot is the fd number, but an eventfd imported via
 // SCM_RIGHTS may land on a different fd number while still needing to update the sender's shared counter.
-static int g_eventfd_cslot[DD_NFD];
+static int g_eventfd_cslot[HL_NFD];
 
 static void eventfd_count_init(void) {
     if (g_eventfd_count) return;
@@ -158,7 +158,7 @@ static void eventfd_count_init(void) {
     // SCM_RIGHTS-imported eventfd's sender-fd slot), and Chrome opens FAR more than 1024 fds — a 1024-slot
     // array is a cross-process out-of-bounds write for any eventfd whose fd number exceeds it (silent
     // counter corruption / heap clobber past the mapped page). Size it to the whole fd space.
-    size_t sz = sizeof(uint64_t) * DD_NFD;
+    size_t sz = sizeof(uint64_t) * HL_NFD;
     void *mem = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
     if (mem == MAP_FAILED) // cross-process counters degrade, but in-process eventfd still works
         mem = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -174,8 +174,8 @@ static void eventfd_count_init(void) {
 // EAGAIN on a BLOCKING eventfd (Chrome's renderer↔gpu-process command-buffer / ScheduleWork wake fd). The
 // guest's REAL blocking/non-blocking intent lives here instead; the read path consults it and blocks via
 // poll() when the guest asked to block. Propagated on dup + SCM_RIGHTS import alongside the peer/slot.
-static uint8_t g_eventfd_gnb[DD_NFD];
-static int eventfd_guest_nb(int fd) { return (fd >= 0 && fd < DD_NFD) ? g_eventfd_gnb[fd] : 0; }
+static uint8_t g_eventfd_gnb[HL_NFD];
+static int eventfd_guest_nb(int fd) { return (fd >= 0 && fd < HL_NFD) ? g_eventfd_gnb[fd] : 0; }
 
 __attribute__((constructor)) static void eventfd_count_ctor(void) {
     eventfd_count_init();
@@ -195,20 +195,20 @@ __attribute__((constructor)) static void eventfd_count_ctor(void) {
 static pthread_mutex_t g_eventfd_lock = PTHREAD_MUTEX_INITIALIZER;
 static void eventfd_after_fork(void) { pthread_mutex_init(&g_eventfd_lock, NULL); }
 
-static uint8_t g_eventfd_sema[DD_NFD]; // EFD_SEMAPHORE: read() returns 1 and decrements by 1, not the whole counter
+static uint8_t g_eventfd_sema[HL_NFD]; // EFD_SEMAPHORE: read() returns 1 and decrements by 1, not the whole counter
 // Alias refcount per counter-slot: a dup() of an eventfd creates a second guest fd that shares the SAME
 // eventfd object (peer write end + counter slot). Keyed by eventfd_counter_slot(); the creator sets it to 1
 // and each dup increments it. fd_reset_emul only closes the shared peer / zeroes the shared counter when the
 // LAST alias closes, so closing one duplicate never tears the object out from under the others. A non-dup'd
 // eventfd keeps refs==1, so its close path is byte-identical to before.
-static int g_eventfd_refs[DD_NFD];
+static int g_eventfd_refs[HL_NFD];
 static int eventfd_counter_slot(int fd) {
-    if (fd >= 0 && fd < DD_NFD && g_eventfd_cslot[fd] > 0) return g_eventfd_cslot[fd] - 1;
+    if (fd >= 0 && fd < HL_NFD && g_eventfd_cslot[fd] > 0) return g_eventfd_cslot[fd] - 1;
     return fd;
 }
 static int eventfd_hidden_peer_fd(int fd) {
     if (fd < 0) return 0;
-    for (int i = 0; i < DD_NFD; i++)
+    for (int i = 0; i < HL_NFD; i++)
         if (g_eventfd_peer[i] == fd + 1) return 1;
     return 0;
 }
@@ -217,7 +217,7 @@ static int eventfd_hidden_peer_fd(int fd) {
 // vaddr/pagesize*8), so it can't be materialized as static text. We back it with a real empty seekable fd
 // (lseek to any offset works natively) and synthesize the 8-byte entries in the read path (io.c). This
 // marks which fds are pagemap backings; cleared on close (fd_reset_emul).
-static uint8_t g_pagemap_fd[DD_NFD];
+static uint8_t g_pagemap_fd[HL_NFD];
 
 // ===================== cross-process guest task-state table =====================
 // Linux's /proc/<pid>/stat field 3 is the task run state (R/S/D/T/Z). dd used to synthesize it from the
@@ -349,7 +349,7 @@ struct memf {
     size_t cap;  // allocated bytes of buf
     off_t pos;   // current file offset (for read/write/lseek SEEK_CUR)
 };
-static struct memf *g_memf[DD_NFD];
+static struct memf *g_memf[HL_NFD];
 static _Atomic uint64_t g_memf_total; // sum of logical sizes of all backed files
 
 static int memf_disabled(void) {
@@ -359,7 +359,7 @@ static int memf_disabled(void) {
 }
 
 static inline struct memf *memf_get(int fd) {
-    return (fd >= 0 && fd < DD_NFD) ? g_memf[fd] : NULL;
+    return (fd >= 0 && fd < HL_NFD) ? g_memf[fd] : NULL;
 }
 
 // grow buf to >= need bytes, zero-filling the new tail (so a sparse write reads back as zeros).
@@ -379,7 +379,7 @@ static int memf_reserve(struct memf *m, size_t need) {
 // Attach a RAM cache to real host fd `fd`, slurping `init` bytes already present in the fd. Returns 1 if
 // backed, 0 if left as a plain host fd (kill switch / over cap / OOM). The fd becomes anonymous.
 static int memf_attach(int fd, off_t init, off_t pos) {
-    if (memf_disabled() || fd < 0 || fd >= DD_NFD || g_memf[fd]) return 0;
+    if (memf_disabled() || fd < 0 || fd >= HL_NFD || g_memf[fd]) return 0;
     if (init < 0 || (uint64_t)init > MEMF_CAP) return 0;
     if (atomic_load(&g_memf_total) + (uint64_t)init > MEMF_TOTAL_CAP) return 0;
     struct memf *m = calloc(1, sizeof *m);
@@ -430,7 +430,7 @@ static void memf_materialize(int fd) {
 }
 
 static void memf_materialize_all(void) {
-    for (int fd = 0; fd < DD_NFD; fd++)
+    for (int fd = 0; fd < HL_NFD; fd++)
         if (g_memf[fd]) memf_materialize(fd);
 }
 
@@ -547,7 +547,7 @@ static int memf_room_or_spill(int fd, off_t end) {
 static void memf_try_adopt(uint64_t dev, uint64_t ino) {
     if (memf_disabled() || !ino) return;
     int found = -1;
-    for (int fd = 0; fd < DD_NFD; fd++) {
+    for (int fd = 0; fd < HL_NFD; fd++) {
         if (g_memf[fd]) continue;
         struct stat s;
         if (fstat(fd, &s) != 0) continue;
@@ -571,35 +571,35 @@ static void memf_try_adopt(uint64_t dev, uint64_t ino) {
 // on the unmapped low address. [lo,hi) is the un-biased link span of the current main image (0 if PIE).
 static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias;
 // fd is a timerfd (a kqueue with an EVFILT_TIMER) -> read() drains it
-static uint8_t g_timerfd[DD_NFD];
+static uint8_t g_timerfd[HL_NFD];
 // fd is an inotify (a kqueue with EVFILT_VNODE watches) -> read() drains it
-static uint8_t g_inotify[DD_NFD];
+static uint8_t g_inotify[HL_NFD];
 // per inotify instance: IN_NONBLOCK was requested. macOS kqueue fds don't survive fork, so the child's
 // rebuilt kqueue must re-apply O_NONBLOCK (else a blocking read on the inherited instance can hang).
-static uint8_t g_inotify_nb[DD_NFD];
+static uint8_t g_inotify_nb[HL_NFD];
 // inotify-on-a-directory emulation: kqueue says "the dir changed" but not which entry, so we keep the
 // watched dir's path + a snapshot of its names and diff on read() to synthesize IN_CREATE/IN_DELETE+name.
-static char g_inotify_wpath[DD_NFD][512];
-static char *g_inotify_snap[DD_NFD]; // newline-joined entry names of the last snapshot (malloc'd)
+static char g_inotify_wpath[HL_NFD][512];
+static char *g_inotify_snap[HL_NFD]; // newline-joined entry names of the last snapshot (malloc'd)
 // inotify: which inotify-instance fd owns each watch fd (wd) -> read(instance) drains that wd's move queue.
-static int g_inotify_owner[DD_NFD];
+static int g_inotify_owner[HL_NFD];
 // timerfd remaining-time tracking (lsys-timerfd-gettime): absolute CLOCK_MONOTONIC deadline (ns) of the
 // next expiry + the interval (ns). timerfd_settime records them so timerfd_gettime reports it_value/interval.
-static int64_t g_tfd_deadline[DD_NFD];
-static int64_t g_tfd_interval[DD_NFD];
+static int64_t g_tfd_deadline[HL_NFD];
+static int64_t g_tfd_interval[HL_NFD];
 // A periodic timerfd whose FIRST expiry (it_value) differs from its interval (it_interval) can't be
 // expressed in a single kqueue EVFILT_TIMER (which fires first only after its period). So we arm a
 // ONE-SHOT at the first delay and set this flag; on the first read() drain the timer is re-armed as a
 // recurring periodic at g_tfd_interval. 1 = currently armed one-shot for the distinct first deadline.
-static uint8_t g_tfd_first_oneshot[DD_NFD];
+static uint8_t g_tfd_first_oneshot[HL_NFD];
 // The clockid the timerfd was created with (Linux CLOCK_REALTIME=0/MONOTONIC=1/BOOTTIME=7/REALTIME_ALARM=8/
 // ...). A TFD_TIMER_ABSTIME deadline is expressed in THIS clock, so timerfd_settime must convert against it.
-static int g_tfd_clock[DD_NFD];
+static int g_tfd_clock[HL_NFD];
 // memfd sealing (lsys-memfd-seal): g_memfd_is[fd]=1 marks an anonymous memfd; g_memfd_seal[fd] carries the
 // F_SEAL_* bitmask (F_SEAL_SEAL=1,SHRINK=2,GROW=4,WRITE=8,FUTURE_WRITE=16). A non-ALLOW_SEALING memfd starts
 // already F_SEAL_SEAL'd, so further F_ADD_SEALS fail EPERM exactly as on Linux.
-static uint8_t g_memfd_is[DD_NFD];
-static int g_memfd_seal[DD_NFD];
+static uint8_t g_memfd_is[HL_NFD];
+static int g_memfd_seal[HL_NFD];
 
 #define MEMFD_REG_MAX 4096
 struct memfd_reg_ent {
@@ -683,7 +683,7 @@ static int memfd_reg_get_fd(int fd, int *seals) {
 }
 
 static int memfd_ensure_fd(int fd) {
-    if (fd < 0 || fd >= DD_NFD) return 0;
+    if (fd < 0 || fd >= HL_NFD) return 0;
     if (g_memfd_is[fd]) return 1;
     int seals = 0;
     if (!memfd_reg_get_fd(fd, &seals)) return 0;
@@ -694,12 +694,12 @@ static int memfd_ensure_fd(int fd) {
 
 static int memfd_seals_fd(int fd) {
     if (!memfd_ensure_fd(fd)) return 0;
-    return (fd >= 0 && fd < DD_NFD) ? g_memfd_seal[fd] : 0;
+    return (fd >= 0 && fd < HL_NFD) ? g_memfd_seal[fd] : 0;
 }
 // pipe read-pushback (tee(2)): tee() consumes bytes from the source pipe to copy them, then re-queues them
 // here so the next read()/readv() on that fd re-serves them -> tee leaves the source pipe intact.
-static uint8_t *g_fd_pushback[DD_NFD];
-static size_t g_fd_pb_len[DD_NFD];
+static uint8_t *g_fd_pushback[HL_NFD];
+static size_t g_fd_pb_len[HL_NFD];
 // pinned O_DIRECTORY fd to the rootfs (set at startup)
 static int g_root_fd = -1;
 
@@ -1215,16 +1215,16 @@ static int proc_text_fd(const char *buf, int n) {
         unlink(tn);
         if (write(fd, buf, (size_t)n) < 0) {}
         lseek(fd, 0, SEEK_SET);
-        if (fd < DD_NFD) g_proc_text_ro[fd] = 1;
+        if (fd < HL_NFD) g_proc_text_ro[fd] = 1;
     }
     return fd;
 }
 
-static char g_proc_text_desc[DD_NFD][64];
+static char g_proc_text_desc[HL_NFD][64];
 
 static int proc_text_fd_tagged(const char *buf, int n, const char *desc) {
     int fd = proc_text_fd(buf, n);
-    if (fd >= 0 && fd < DD_NFD && desc) {
+    if (fd >= 0 && fd < HL_NFD && desc) {
         snprintf(g_proc_text_desc[fd], sizeof g_proc_text_desc[fd], "%s", desc);
     }
     return fd;
@@ -1521,7 +1521,7 @@ static int proc_maps_fd(int smaps) {
     char tn[] = "/tmp/.ddprocXXXXXX";
     int fd = mkstemp(tn);
     if (fd < 0) return -1;
-    if (fd < DD_NFD) g_proc_text_ro[fd] = 1;
+    if (fd < HL_NFD) g_proc_text_ro[fd] = 1;
     unlink(tn);
     char b[768];
     // Collect every row on the heap (g_ngmap can be thousands) so the file can be address-sorted before
@@ -1657,7 +1657,7 @@ static int proc_status_text(char *b, size_t n) {
         "Cpus_allowed:\t%s\nCpus_allowed_list:\t%s\nvoluntary_ctxt_switches:\t1\n"
         "nonvoluntary_ctxt_switches:\t0\n",
         comm, pid, pid, ppid, uid_r, uid_e, uid_s, uid_fs, gid_r, gid_e, gid_s, gid_fs, groups, vsz, vsz, vmlck,
-        rss, rss, rss, threads, (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)g_cap_eff,
+        rss, rss, rss, threads, (unsigned long long)HL_CAP_DEFAULT, (unsigned long long)g_cap_eff,
         (unsigned long long)g_cap_bnd, g_nnp, cpumask, cpulist);
 }
 
@@ -1794,7 +1794,7 @@ static int proc_fd_dir_open(void) {
     procfd_dirs_reap(0);
     char tmpl[] = "/tmp/.ddfddirXXXXXX";
     if (!mkdtemp(tmpl)) return -1;
-    for (int fd = 0; fd < DD_NFD; fd++) {
+    for (int fd = 0; fd < HL_NFD; fd++) {
         if (eventfd_hidden_peer_fd(fd)) continue;
         if (fcntl(fd, F_GETFD) == -1) continue; // not open
         char tgt[4200];
@@ -1840,7 +1840,7 @@ static int proc_fdinfo_dir_open(const char *guestpath) {
     procfd_dirs_reap(0);
     char tmpl[] = "/tmp/.ddfdinfoXXXXXX";
     if (!mkdtemp(tmpl)) return -1;
-    for (int fd = 0; fd < DD_NFD; fd++) {
+    for (int fd = 0; fd < HL_NFD; fd++) {
         if (eventfd_hidden_peer_fd(fd)) continue;
         if (fcntl(fd, F_GETFD) == -1) continue; // not open
         char p[96];
@@ -2364,7 +2364,7 @@ static int proc_fd_dir_pid_open(int host) {
 
 // Resident footprint (bytes) for OUR OWN pid's VmRSS / statm-resident / stat-rss. The guest's tracked anon
 // charge (g_mem_charged) is 0 for a process that has only faulted its static image, but a real Linux process
-// ALWAYS has a non-zero VmRSS -- top/htop/ps would otherwise show this process at RES=0, a dd-only divergence
+// ALWAYS has a non-zero VmRSS -- top/htop/ps would otherwise show this process at RES=0, a hl-only divergence
 // (a PEER pid already reports a live resident size via libproc; self must not read 0). Floor the tracked
 // charge with this engine process's real resident size so the reported RSS is non-zero and plausible.
 static unsigned long long self_rss_bytes(void) {
@@ -2753,7 +2753,7 @@ static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
         "Cpus_allowed:\t%s\nCpus_allowed_list:\t%s\nvoluntary_ctxt_switches:\t1\n"
         "nonvoluntary_ctxt_switches:\t0\n",
         comm, state, state_name, gp, gp, ppid, groups, vsz, vsz, rss, rss, rss, 1,
-        (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT, (unsigned long long)DD_CAP_DEFAULT,
+        (unsigned long long)HL_CAP_DEFAULT, (unsigned long long)HL_CAP_DEFAULT, (unsigned long long)HL_CAP_DEFAULT,
         cpumask, cpulist);
 }
 
@@ -3323,7 +3323,7 @@ static void cpumask_hex(char *out, size_t n, int nc, int all, int bit, int ndig)
 // The CONTENT of one /sys/devices/system/cpu/cpuN/topology/<leaf> attribute. dd advertises a FLAT topology:
 // single socket (physical_package_id 0), no SMT (each logical CPU is its own core -> core_id = cpuN, thread
 // siblings = {cpuN}), all online CPUs in one package. lscpu/util-linux reconstruct sockets/cores/threads
-// from exactly these files; real docker always serves them, so an ENOENT here is a dd-only divergence that
+// from exactly these files; real docker always serves them, so an ENOENT here is a hl-only divergence that
 // makes lscpu mis-count or error. Returns the NUL-terminated length, or -1 if `leaf` is not one we serve.
 static int syscpu_topology_str(const char *leaf, int cpuN, int nc, char *out, size_t n) {
     int ndig = (nc + 3) / 4;
@@ -3431,7 +3431,7 @@ static int proc_limits_text(char *buf, size_t cap) {
         // docker --ulimit override (g_ulimit, resource number == table index): render the requested values
         // so /proc/self/limits agrees with getrlimit (svc_fill_rlimit). RLIM_INFINITY -> "unlimited".
         char sb[24], hb[24];
-        if (i < DD_RLIM_MAX && g_ulimit[i].set) {
+        if (i < HL_RLIM_MAX && g_ulimit[i].set) {
             if (g_ulimit[i].cur == ~0ull)
                 soft = "unlimited";
             else {
@@ -3654,7 +3654,7 @@ static int proc_open(const char *rp) {
             // VA-indexed binary pagemap: back it with an empty seekable regular fd (lseek to vaddr/pg*8
             // works natively) and synthesize the 8-byte-per-page entries on read (io.c). LTP mmap12.
             int fd = proc_text_fd("", 0);
-            if (fd >= 0 && fd < DD_NFD) g_pagemap_fd[fd] = 1;
+            if (fd >= 0 && fd < HL_NFD) g_pagemap_fd[fd] = 1;
             return fd;
         }
         if (!strcmp(leaf, "maps") || !strcmp(leaf, "task/1/maps")) return proc_maps_fd(0);
@@ -3877,14 +3877,14 @@ static int proc_open(const char *rp) {
     } else if (!strcmp(rp, "/proc/sys/kernel/osrelease")) {
         n = snprintf(buf, sizeof buf, "6.1.0\n");
     } else if (!strcmp(rp, "/proc/sys/kernel/version")) {
-        n = snprintf(buf, sizeof buf, "#1 SMP ddockerd\n");
+        n = snprintf(buf, sizeof buf, "#1 SMP hl-dockerd\n");
     } else if (!strcmp(rp, "/proc/self/cgroup")) {
         // cgroup v2 unified
         n = snprintf(buf, sizeof buf, "0::/\n");
     } else if (!strcmp(rp, "/proc/version")) {
         // The version banner embeds the build ISA; x86_64 guests see `uname -m`=x86_64, so /proc/version
         // must agree (a mismatched aarch64 token here confuses platform probes and diagnostics).
-        n = snprintf(buf, sizeof buf, "Linux version 6.1.0 (ddockerd) %s\n",
+        n = snprintf(buf, sizeof buf, "Linux version 6.1.0 (hl-dockerd) %s\n",
                      guest_is_x86() ? "x86_64" : "aarch64");
         // ---- container network introspection: lo + eth0 (see netif_* in state.c) --------------
     } else if (!strcmp(rp, "/proc/net/dev")) {
@@ -3923,7 +3923,7 @@ static int proc_open(const char *rp) {
         n += netns_tcp_emit(buf + n, sizeof buf - n, 0);
     } else if (!strcmp(rp, "/proc/net/tcp6")) {
         // tcp6 has a DISTINCT header from tcp4: the v6 address columns are 32 hex wide and the second column
-        // is "remote_address" (not "rem_address"). Reusing the v4 header here was a dd-only divergence.
+        // is "remote_address" (not "rem_address"). Reusing the v4 header here was a hl-only divergence.
         n = snprintf(buf, sizeof buf,
                      "  sl  local_address                         remote_address                        st "
                      "tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
@@ -4177,7 +4177,7 @@ static int proc_open(const char *rp) {
         n = snprintf(buf, sizeof buf, "Num       RefCount Protocol Flags    Type St Inode Path\n");
         // One row per live guest-bound AF_UNIX socket (socket-inventory tools read this). Columns match the
         // kernel: a bound listener is Flags 00010000, St 01 (LISTEN); the inode is a stable synthetic id.
-        for (int fd = 0; fd < DD_NFD && n < (int)sizeof buf - 128; fd++) {
+        for (int fd = 0; fd < HL_NFD && n < (int)sizeof buf - 128; fd++) {
             if (!g_unix_bind[fd][0]) continue;
             if (fcntl(fd, F_GETFD) == -1) { g_unix_bind[fd][0] = 0; continue; } // closed -> drop
             n += snprintf(buf + n, sizeof buf - (size_t)n,
@@ -4458,8 +4458,8 @@ static char g_pts_slavename[DEVPTS_MAX][64]; // pts index N -> host slave device
                                              // (e.g. the parent) holds the master -- so /dev/pts/N must resolve
                                              // by this cached host path. A host open() of it naturally succeeds
                                              // iff the pty is still alive and fails once it is truly gone.
-static int g_fd_ptsn[DD_NFD];                  // host fd -> (pts index + 1); 0 = not a pty fd
-static uint8_t g_fd_ptsmaster[DD_NFD];         // 1 = this fd is the MASTER end, 0 = a slave
+static int g_fd_ptsn[HL_NFD];                  // host fd -> (pts index + 1); 0 = not a pty fd
+static uint8_t g_fd_ptsmaster[HL_NFD];         // 1 = this fd is the MASTER end, 0 = a slave
 
 // Materialize/remove the on-disk /dev/pts/<N> node so `ls /dev/pts` reflects the live slaves (devpts
 // creates the node when a slave is allocated and drops it when the pty is gone). Backed by an empty upper
@@ -4490,7 +4490,7 @@ static int pts_alloc(int masterfd) {
     for (int n = start; n < DEVPTS_MAX; n++) {
         if (!g_pts_master[n]) {
             g_pts_master[n] = masterfd + 1;
-            if (masterfd >= 0 && masterfd < DD_NFD) {
+            if (masterfd >= 0 && masterfd < HL_NFD) {
                 g_fd_ptsn[masterfd] = n + 1;
                 g_fd_ptsmaster[masterfd] = 1;
             }
@@ -4513,15 +4513,15 @@ static int pts_master_fd(int n) {
 }
 
 static int pts_index_of_master(int fd) {
-    return (fd >= 0 && fd < DD_NFD && g_fd_ptsmaster[fd]) ? g_fd_ptsn[fd] - 1 : -1;
+    return (fd >= 0 && fd < HL_NFD && g_fd_ptsmaster[fd]) ? g_fd_ptsn[fd] - 1 : -1;
 }
 
 static int pts_index_of_fd(int fd) {
-    return (fd >= 0 && fd < DD_NFD && g_fd_ptsn[fd]) ? g_fd_ptsn[fd] - 1 : -1;
+    return (fd >= 0 && fd < HL_NFD && g_fd_ptsn[fd]) ? g_fd_ptsn[fd] - 1 : -1;
 }
 
 static int pts_fd_is_master(int fd) {
-    return fd >= 0 && fd < DD_NFD && g_fd_ptsmaster[fd];
+    return fd >= 0 && fd < HL_NFD && g_fd_ptsmaster[fd];
 }
 
 // the cached host slave device path for index N (empty string -> NULL). Used to resolve /dev/pts/N
@@ -4532,7 +4532,7 @@ static const char *pts_slave_name(int n) {
 
 // Record a freshly-opened slave fd's pts index and publish its /dev/pts/N node.
 static void pts_note_slave(int slavefd, int n) {
-    if (slavefd >= 0 && slavefd < DD_NFD) {
+    if (slavefd >= 0 && slavefd < HL_NFD) {
         g_fd_ptsn[slavefd] = n + 1;
         g_fd_ptsmaster[slavefd] = 0;
     }
@@ -4542,7 +4542,7 @@ static void pts_note_slave(int slavefd, int n) {
 // close(2) / CLOEXEC-sweep teardown: a master frees its index (and its /dev/pts/N node); a slave clears
 // only its own entry (other slaves / the master keep the pty alive).
 static void pts_on_close(int fd) {
-    if (fd < 0 || fd >= DD_NFD || !g_fd_ptsn[fd]) return;
+    if (fd < 0 || fd >= HL_NFD || !g_fd_ptsn[fd]) return;
     if (g_fd_ptsmaster[fd]) {
         int n = g_fd_ptsn[fd] - 1;
         if (n >= 0 && n < DEVPTS_MAX) g_pts_master[n] = 0;
@@ -4581,9 +4581,9 @@ static const char *dev_node_hostpath(const char *gp) {
 }
 
 // ================= dd GPU rung 2: host-IOSurface-backed guest buffer =================
-// See include/dd_gpu.h. Entirely gated behind HL_GPU_IOSURFACE (gpu_iosurface_on()); the code compiles
+// See include/hl_gpu.h. Entirely gated behind HL_GPU_IOSURFACE (gpu_iosurface_on()); the code compiles
 // always (the engine is always a macOS binary) but never runs for existing workloads / the gate.
-#include "../../../include/dd_gpu.h"
+#include "../../../include/hl_gpu.h"
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOSurface/IOSurface.h>
@@ -4591,7 +4591,7 @@ static const char *dev_node_hostpath(const char *gp) {
 #include <mach/vm_map.h> // vm_inherit + VM_INHERIT_SHARE (pre-fork share-inherited IOSurface pool)
 #include <servers/bootstrap.h>
 
-// Mach message carrying an IOSurface send-right + its id to dd-display (must match dd-display's
+// Mach message carrying an IOSurface send-right + its id to hl-display (must match hl-display's
 // mach_bridge.c hl_gpu_msg_t exactly).
 typedef struct {
     mach_msg_header_t header;
@@ -4602,14 +4602,14 @@ typedef struct {
                          // and rejects a guest dmabuf whose modifier carries a stale generation.
 } hl_gpu_msg_t;
 
-// Send the IOSurface's send-right + id to dd-display's bootstrap mach service. Best-effort: if the
+// Send the IOSurface's send-right + id to hl-display's bootstrap mach service. Best-effort: if the
 // compositor isn't up (no service), silently skip — the alloc still succeeds for the guest.
 static void hl_gpu_send_port(uint32_t id, uint32_t generation, IOSurfaceRef surf) {
     mach_port_t server = MACH_PORT_NULL;
-    // HL_GPU_BRIDGE_NAME lets multiple dd-display instances coexist (one per agent/benchmark); the
-    // compositor registers under the SAME name. Unset → the historical singleton "com.dd.display.gpu".
+    // HL_GPU_BRIDGE_NAME lets multiple hl-display instances coexist (one per agent/benchmark); the
+    // compositor registers under the SAME name. Unset → the historical singleton "com.hl.display.gpu".
     const char *bridge = getenv("HL_GPU_BRIDGE_NAME");
-    if (!bridge || !*bridge) bridge = "com.dd.display.gpu";
+    if (!bridge || !*bridge) bridge = "com.hl.display.gpu";
     if (bootstrap_look_up(bootstrap_port, (char *)bridge, &server) != KERN_SUCCESS) return;
     mach_port_t port = IOSurfaceCreateMachPort(surf);
     if (port == MACH_PORT_NULL) {
@@ -4645,9 +4645,9 @@ static void hl_gpu_send_port(uint32_t id, uint32_t generation, IOSurfaceRef surf
 // The only memory a fork()-no-exec child can touch is memory that was mapped, as SHARED-inherited, at the
 // instant IT was forked. So we PRE-CREATE the IOSurfaces in the non-forked ROOT engine (a valid
 // WindowServer session), mark each surface's backing pages VM_INHERIT_SHARE so children inherit the SAME
-// physical pages, announce them to dd-display (which composites by id), and register them. A forked child
+// physical pages, announce them to hl-display (which composites by id), and register them. A forked child
 // then hands out a distinct pre-created surface from the COW-inherited registry using ONLY plain data
-// (base VA / id / stride) — never an IOSurface API call. dd-display composites the same surface by id.
+// (base VA / id / stride) — never an IOSurface API call. hl-display composites the same surface by id.
 //
 // g_gpu_root_pid: the pid of the non-forked root (recorded before any guest fork); only it may create.
 // g_gpu_fork_child: set in fork_child_hooks so the child never attempts a (fatal) create.
@@ -4674,7 +4674,7 @@ static void hl_gpu_share_inherit(void *base, size_t size) {
 // Per-render-node IOSurface registry: reuse a same-size surface across frames (a guest redraws into the
 // same buffer each frame) and release every surface a render-node fd owns when it closes — so a
 // long-running GUI app doesn't accumulate IOSurfaces. Bounded, gated (only the GPU path touches it).
-#define DD_GPU_REG_MAX 256
+#define HL_GPU_REG_MAX 256
 static struct hl_gpu_reg_ent {
     int owner_fd;  // the render-node fd that checked this surface out, or -1 = a FREE pool surface
     int pool;      // 1 = a pre-created, VM_INHERIT_SHARE'd pool surface (never per-fd CFRelease'd)
@@ -4684,10 +4684,10 @@ static struct hl_gpu_reg_ent {
                    // guest (ioctl reply) and the compositor (mach) so a stale reference is rejected.
     IOSurfaceRef surf;
     void *base;
-} g_gpu_reg[DD_GPU_REG_MAX];
+} g_gpu_reg[HL_GPU_REG_MAX];
 
 static int hl_gpu_reg_find(int fd, uint32_t w, uint32_t h) {
-    for (int i = 0; i < DD_GPU_REG_MAX; i++)
+    for (int i = 0; i < HL_GPU_REG_MAX; i++)
         if (g_gpu_reg[i].surf && g_gpu_reg[i].owner_fd == fd && g_gpu_reg[i].w == w && g_gpu_reg[i].h == h)
             return i;
     return -1;
@@ -4696,7 +4696,7 @@ static int hl_gpu_reg_find(int fd, uint32_t w, uint32_t h) {
 // inherited plain data and writes owner_fd in the child's own COW copy — no IOSurface API call. Returns the
 // index or -1 if the pool has no free surface of that size.
 static int hl_gpu_reg_take_pool(int fd, uint32_t w, uint32_t h) {
-    for (int i = 0; i < DD_GPU_REG_MAX; i++)
+    for (int i = 0; i < HL_GPU_REG_MAX; i++)
         if (g_gpu_reg[i].surf && g_gpu_reg[i].pool && g_gpu_reg[i].owner_fd == -1 && g_gpu_reg[i].w == w &&
             g_gpu_reg[i].h == h) {
             g_gpu_reg[i].owner_fd = fd;
@@ -4715,7 +4715,7 @@ static int hl_gpu_reg_take_pool(int fd, uint32_t w, uint32_t h) {
 }
 static void hl_gpu_reg_add(int fd, int pool, uint32_t id, uint32_t gen, uint32_t w, uint32_t h,
                            uint32_t stride, IOSurfaceRef surf, void *base) {
-    for (int i = 0; i < DD_GPU_REG_MAX; i++)
+    for (int i = 0; i < HL_GPU_REG_MAX; i++)
         if (!g_gpu_reg[i].surf) {
             g_gpu_reg[i].owner_fd = fd;
             g_gpu_reg[i].pool = pool;
@@ -4735,7 +4735,7 @@ static void hl_gpu_reg_add(int fd, int pool, uint32_t id, uint32_t gen, uint32_t
 // the process lifetime. Only a legacy (non-pool) surface is CFRelease'd, and never from a forked child
 // (CFRelease could run a fork-unsafe IOSurface dealloc).
 static void hl_gpu_free_fd(int fd) {
-    for (int i = 0; i < DD_GPU_REG_MAX; i++)
+    for (int i = 0; i < HL_GPU_REG_MAX; i++)
         if (g_gpu_reg[i].surf && g_gpu_reg[i].owner_fd == fd) {
             if (g_gpu_reg[i].pool) {
                 g_gpu_reg[i].owner_fd = -1; // back to the free pool
@@ -4748,7 +4748,7 @@ static void hl_gpu_free_fd(int fd) {
 // Locate a registered surface by its DRM handle (== IOSurface global id). Used by the dumb-buffer
 // ioctls (MAP/DESTROY/GEM_CLOSE/PRIME) and the mem.c MAP_DUMB mmap branch. Returns index or -1.
 static int hl_gpu_reg_by_handle(uint32_t handle) {
-    for (int i = 0; i < DD_GPU_REG_MAX; i++)
+    for (int i = 0; i < HL_GPU_REG_MAX; i++)
         if (g_gpu_reg[i].surf && g_gpu_reg[i].id == handle) return i;
     return -1;
 }
@@ -4767,9 +4767,9 @@ static void hl_gpu_free_handle(uint32_t handle) {
 }
 #endif
 
-// Core IOSurface allocator shared by DD_IOCTL_GPU_ALLOC (glmark2/EGL shim path) and the DRM
+// Core IOSurface allocator shared by HL_IOCTL_GPU_ALLOC (glmark2/EGL shim path) and the DRM
 // CREATE_DUMB ioctl (chromium/Mesa kms_swrast path). Reuse-or-create a host IOSurface for
-// (owner_fd,w,h), announce it to dd-display over mach, register it under owner_fd, and hand back its
+// (owner_fd,w,h), announce it to hl-display over mach, register it under owner_fd, and hand back its
 // id/stride/base. `reuse` selects redraw-in-place (glmark2) vs a fresh distinct surface per call
 // (gbm bo pool). Returns 0 or -errno. Gated: only ever reached on a render-node fd with the GPU path on.
 static uint32_t hl_gpu_align_u32(uint32_t v, uint32_t align) {
@@ -4785,7 +4785,7 @@ static int gpu_alloc_dbg(void) {
 
 // Create ONE pool surface of (w,h) in the NON-forked root: IOSurfaceCreate, capture its mapped base,
 // mark the backing pages VM_INHERIT_SHARE so every future fork() child inherits the SAME physical memory,
-// announce it to dd-display (composites by id), and register it as a FREE pool entry. Returns 0 or -errno.
+// announce it to hl-display (composites by id), and register it as a FREE pool entry. Returns 0 or -errno.
 // MUST run in the root (a forked child's IOSurfaceCreate returns NULL).
 static int hl_gpu_pool_make_one(uint32_t w, uint32_t h) {
     uint32_t stride = hl_gpu_align_u32(w * 4, 16);
@@ -4818,7 +4818,7 @@ static int hl_gpu_pool_make_one(uint32_t w, uint32_t h) {
     IOSurfaceUnlock(surf, 0, NULL);
     uint32_t astride = (uint32_t)IOSurfaceGetBytesPerRow(surf);
     hl_gpu_share_inherit(base, (size_t)astride * h); // <-- make it survive fork as SHARED memory
-    hl_gpu_send_port(id, 1, surf);                   // dd-display caches it by id + generation 1
+    hl_gpu_send_port(id, 1, surf);                   // hl-display caches it by id + generation 1
     hl_gpu_reg_add(-1, 1, id, 1, w, h, astride, surf, base); // free pool entry (owner_fd=-1, pool=1, gen=1)
     if (gpu_alloc_dbg())
         fprintf(stderr, "[gpu-alloc-dbg] pool+ %ux%u id=%u stride=%u base=%p pid=%d\n", w, h, id, astride, base,
@@ -4898,7 +4898,7 @@ static int hl_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint3
     return 0;
 }
 
-// Service DD_IOCTL_GPU_ALLOC: host-allocate (or reuse) an IOSurface, return its base pointer
+// Service HL_IOCTL_GPU_ALLOC: host-allocate (or reuse) an IOSurface, return its base pointer
 // (guest==host VA), its global id, stride, and a throwaway dmabuf fd. `owner_fd` is the render node so
 // the surface's lifetime is tied to it. Returns 0 on success, a negative errno otherwise.
 static int64_t hl_gpu_alloc(int owner_fd, void *arg) {
@@ -4910,7 +4910,7 @@ static int64_t hl_gpu_alloc(int owner_fd, void *arg) {
     int rc = (int)hl_gpu_surface(owner_fd, r->width, r->height, 1, &id, &stride, &base, &gen);
     if (rc) return rc;
     size_t size = (size_t)stride * r->height;
-    // A throwaway anonymous fd to satisfy linux-dmabuf's params.add (its pages are unused; dd-display
+    // A throwaway anonymous fd to satisfy linux-dmabuf's params.add (its pages are unused; hl-display
     // resolves the IOSurface by id from the modifier).
     char tn[] = "/tmp/.ddgpuXXXXXX";
     int fd = mkstemp(tn);
@@ -4938,7 +4938,7 @@ static int64_t hl_gpu_alloc(int owner_fd, void *arg) {
 //
 // Why this is needed: the bridge's CoreFoundation/IOSurface/mach calls (CFDictionary/CFNumber build,
 // IOSurfaceCreate, IOSurfaceCreateMachPort, bootstrap_look_up) lazily run one-time ObjC class
-// +initialize's the FIRST time the guest allocates a surface (DD_IOCTL_GPU_ALLOC / DRM CREATE_DUMB). That
+// +initialize's the FIRST time the guest allocates a surface (HL_IOCTL_GPU_ALLOC / DRM CREATE_DUMB). That
 // first alloc is serviced on whatever host thread runs the guest ioctl, and can land WHILE another host
 // thread is mid guest-fork() (libc fork() in os/linux/syscall/proc.c, which runs libobjc's pthread_atfork
 // handlers). If an ObjC +initialize is in progress at fork() — e.g. +[NSPlaceholderString initialize],
@@ -4974,7 +4974,7 @@ static void hl_gpu_prewarm_fork_safety(void) {
     if (!surf) return;
     // Exercise the accessors AND the mach-port announce path (IOSurfaceCreateMachPort + bootstrap_look_up)
     // that hl_gpu_send_port() uses, so THEIR one-time inits are warmed too — done directly here (not via
-    // hl_gpu_send_port) so it is independent of whether dd-display's mach service is already registered.
+    // hl_gpu_send_port) so it is independent of whether hl-display's mach service is already registered.
     (void)IOSurfaceGetID(surf);
     IOSurfaceLock(surf, 0, NULL);
     (void)IOSurfaceGetBaseAddress(surf);
@@ -4984,7 +4984,7 @@ static void hl_gpu_prewarm_fork_safety(void) {
     if (port != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), port);
     mach_port_t server = MACH_PORT_NULL;
     const char *bridge = getenv("HL_GPU_BRIDGE_NAME");
-    if (!bridge || !*bridge) bridge = "com.dd.display.gpu";
+    if (!bridge || !*bridge) bridge = "com.hl.display.gpu";
     if (bootstrap_look_up(bootstrap_port, (char *)bridge, &server) == KERN_SUCCESS && server != MACH_PORT_NULL)
         mach_port_deallocate(mach_task_self(), server);
     CFRelease(surf); // drop the throwaway surface; nothing else references it
@@ -5209,11 +5209,11 @@ static void container_populate_machine_id(void) {
 // Gated on HL_GPU_IOSURFACE. libdrm's drmGetDevices2() enumerates /dev/dri, stats each node's st_rdev ->
 // major:minor, then walks /sys/dev/char/<maj>:<min>/... to classify the DRM device's bus. We advertise
 // ONE platform DRM device with a primary node (card0 = 226:0) and a render node (renderD128 = 226:128),
-// both parented to a single platform device ("dd-gpu") so libdrm MERGES them into one drmDevice exposing a
+// both parented to a single platform device ("hl-gpu") so libdrm MERGES them into one drmDevice exposing a
 // render node -- which chromium opens instead of hold-and-wait deadlocking in its viz buffer-manager
 // fallback. Every sysfs path is matched EXACTLY (no real /sys tree); /dev/dri itself is a real placeholder
 // dir in the writable upper (container_populate_dev) so opendir/readdir just work through the overlay.
-#define DD_DRM_MAJOR 226
+#define HL_DRM_MAJOR 226
 
 // Map a /dev/dri child name to its DRM minor. 1 (+ *minor) on hit, 0 on miss.
 static int drm_dev_minor(const char *name, int *minor) {
@@ -5245,7 +5245,7 @@ static int drm_synth_stat(const char *gp, struct stat *s) {
     if (!strncmp(gp, "/dev/dri/", 9) && drm_dev_minor(gp + 9, &minor)) {
         memset(s, 0, sizeof *s);
         s->st_mode = S_IFCHR | 0666;
-        s->st_rdev = (dev_t)(((uint64_t)DD_DRM_MAJOR << 8) | (unsigned)minor); // gnu_dev-decodable 226:minor
+        s->st_rdev = (dev_t)(((uint64_t)HL_DRM_MAJOR << 8) | (unsigned)minor); // gnu_dev-decodable 226:minor
         s->st_nlink = 1;
         return 1;
     }
@@ -5266,10 +5266,10 @@ static int drm_synth_stat(const char *gp, struct stat *s) {
 // fails. Overwrite `s` to the char device (S_IFCHR, rdev 226:<minor>) matching drm_synth_stat's by-path
 // answer. `g_devdri[fd]` holds minor+1 (renderD128 -> 129, card0 -> 1). Returns 1 if it patched.
 static int drm_fd_stat_fixup(int fd, struct stat *s) {
-    if (!gpu_iosurface_on() || fd < 0 || fd >= DD_NFD || !g_devdri[fd]) return 0;
+    if (!gpu_iosurface_on() || fd < 0 || fd >= HL_NFD || !g_devdri[fd]) return 0;
     int minor = g_devdri[fd] - 1;
     s->st_mode = S_IFCHR | 0666;
-    s->st_rdev = (dev_t)(((uint64_t)DD_DRM_MAJOR << 8) | (unsigned)minor); // gnu_dev-decodable 226:minor
+    s->st_rdev = (dev_t)(((uint64_t)HL_DRM_MAJOR << 8) | (unsigned)minor); // gnu_dev-decodable 226:minor
     s->st_nlink = 1;
     return 1;
 }
@@ -5286,7 +5286,7 @@ static int drm_synth_readlink(const char *gp, char *buf, size_t bs) {
         if (*tail == 0)
             l = snprintf(t, sizeof t, "/sys/devices/platform/hl-gpu/drm/%s", node); // node -> its drm sysdir
         else if (!strcmp(tail, "/device"))
-            l = snprintf(t, sizeof t, "/sys/devices/platform/dd-gpu"); // -> parent platform device (fullname)
+            l = snprintf(t, sizeof t, "/sys/devices/platform/hl-gpu"); // -> parent platform device (fullname)
         else if (!strcmp(tail, "/device/subsystem"))
             l = snprintf(t, sizeof t, "/sys/bus/platform"); // -> bus type "platform"
     } else if (!strcmp(gp, "/sys/class/drm/renderD128"))
@@ -5294,7 +5294,7 @@ static int drm_synth_readlink(const char *gp, char *buf, size_t bs) {
     else if (!strcmp(gp, "/sys/class/drm/card0"))
         l = snprintf(t, sizeof t, "/sys/devices/platform/hl-gpu/drm/card0");
     else if (!strcmp(gp, "/sys/class/drm/renderD128/device") || !strcmp(gp, "/sys/class/drm/card0/device"))
-        l = snprintf(t, sizeof t, "/sys/devices/platform/dd-gpu");
+        l = snprintf(t, sizeof t, "/sys/devices/platform/hl-gpu");
     if (l < 0) return -1;
     size_t n = (size_t)l > bs ? bs : (size_t)l;
     memcpy(buf, t, n);
@@ -5313,7 +5313,7 @@ static int drm_synth_content(const char *gp, char *out, size_t n) {
         if (!strcmp(tail, "/dev")) return snprintf(out, n, "226:%d\n", minor);
         // the PARENT platform device's uevent (drmParsePlatformDeviceInfo parses OF_COMPATIBLE_N; absent -> 0)
         if (!strcmp(tail, "/device/uevent"))
-            return snprintf(out, n, "DRIVER=dd_gpu\nOF_NAME=gpu\nOF_FULLNAME=/dd-gpu\n");
+            return snprintf(out, n, "DRIVER=hl_gpu\nOF_NAME=gpu\nOF_FULLNAME=/hl-gpu\n");
     }
     if (!strcmp(gp, "/sys/class/drm/renderD128/dev")) return snprintf(out, n, "226:128\n");
     if (!strcmp(gp, "/sys/class/drm/card0/dev")) return snprintf(out, n, "226:0\n");
@@ -5412,7 +5412,7 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
         return 0;
     }
     case 0xc00c642d: { // DRM_IOCTL_PRIME_HANDLE_TO_FD {u32 handle,flags; s32 fd}
-        // Export the dumb buffer as a dmabuf. The fd is a throwaway placeholder — dd-display resolves the
+        // Export the dumb buffer as a dmabuf. The fd is a throwaway placeholder — hl-display resolves the
         // real IOSurface by id (announced over mach at alloc time / carried in the wl dmabuf modifier).
         uint8_t *d = (uint8_t *)arg;
         if (!d) return -EFAULT;
@@ -5429,7 +5429,7 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
     case 0xc0406400: { // DRM_IOCTL_VERSION (DRM_IOWR(0x00, struct drm_version), 64-byte arg)
         uint8_t *v = (uint8_t *)arg;
         if (!v) return -EFAULT;
-        static const char NM[] = "dd_gpu", DT[] = "20260707", DS[] = "dd virtual GPU";
+        static const char NM[] = "hl_gpu", DT[] = "20260707", DS[] = "dd virtual GPU";
         int32_t maj = 1, min = 0, pat = 0;
         memcpy(v + 0, &maj, 4); memcpy(v + 4, &min, 4); memcpy(v + 8, &pat, 4);
         uint64_t name_len, date_len, desc_len, name_p, date_p, desc_p;

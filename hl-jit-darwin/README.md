@@ -1,9 +1,9 @@
-# dd-jit-darwin
+# hl-jit-darwin
 
-The **macOS engine backend** for [`dd-jit`](../dd-jit/) — the VM-less JIT container engine (C) plus the
-FFI the runtime forks through. Developers use `dd-jit`'s typed API; this is its compile-time backend
-(`cargo build -p dd-jit` builds it as a dependency), never built standalone by a user. A future
-`dd-jit-linux` would be a same-API sibling. `cargo build` runs `build.rs`, which compiles and codesigns
+The **macOS engine backend** for [`hl-jit`](../hl-jit/) — the VM-less JIT container engine (C) plus the
+FFI the runtime forks through. Developers use `hl-jit`'s typed API; this is its compile-time backend
+(`cargo build -p hl-jit` builds it as a dependency), never built standalone by a user. A future
+`hl-jit-linux` would be a same-API sibling. `cargo build` runs `build.rs`, which compiles and codesigns
 **one JIT binary per guest target** through the macOS toolchain (`MAP_JIT` + the `allow-jit`
 entitlement); the library exposes `Guest`, the `ddjit_spawn`/`LaunchConfig` FFI entry the runtime forks
 through (the C side does the fork/exec, config travels as a typed struct — no shell, no env dialect),
@@ -47,13 +47,13 @@ src/runtime/
   os/linux/                       Linux personality: syscall/ (split dispatcher), elf, thread,
   os/linux/container/               signal; path-jail VFS, overlay, netns, /proc synth         (guest OS)
   os/darwin/                      macOS personality: jitdarwin DBT + jail/                     (guest OS)
-  targets/{linux_aarch64,linux_x86_64,darwin_aarch64}.c   one unity TU per target, entry dd_run
+  targets/{linux_aarch64,linux_x86_64,darwin_aarch64}.c   one unity TU per target, entry hl_run
 ```
 
 The two **axes** are now distinct directories: an `engine/` (host-ISA-agnostic JIT core) and a
 `host/arm64/` assembler form the *host* side; `translate/<isa>/` frontends and `os/<os>/` personalities
 form the *guest* side. A `targets/<os>_<isa>.c` unity TU `#include`s one frontend + one OS personality
-+ the shared engine/host, and exposes a single entry, `dd_run`.
++ the shared engine/host, and exposes a single entry, `hl_run`.
 
 ## Decomposition state
 

@@ -1,5 +1,5 @@
 // Test helper for the engine→compositor allocation-generation channel. Replicates the engine's
-// hl_gpu_send_port (dd-jit-darwin vfs.c): create a real host IOSurface, look up dd-display's GPU mach
+// hl_gpu_send_port (hl-jit-darwin vfs.c): create a real host IOSurface, look up hl-display's GPU mach
 // bridge, and send the SAME hl_gpu_msg_t the engine sends — a complex message carrying the IOSurface
 // send-right + its id + its allocation generation. The Rust harness starts the real bridge, runs this,
 // and asserts hl_display::metal::iosurface_generation(id) reports the generation we sent — proving the
@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// MUST match dd-jit-darwin vfs.c hl_gpu_msg_t and dd-display mach_bridge.c hl_gpu_msg_t.
+// MUST match hl-jit-darwin vfs.c hl_gpu_msg_t and hl-display mach_bridge.c hl_gpu_msg_t.
 typedef struct {
     mach_msg_header_t header;
     mach_msg_body_t body;
@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
     uint32_t id = IOSurfaceGetID(surf);
 
     const char *bridge = getenv("HL_GPU_BRIDGE_NAME");
-    if (!bridge || !*bridge) bridge = "com.dd.display.gpu";
+    if (!bridge || !*bridge) bridge = "com.hl.display.gpu";
     mach_port_t server = MACH_PORT_NULL;
     if (bootstrap_look_up(bootstrap_port, (char *)bridge, &server) != KERN_SUCCESS) return 4;
     mach_port_t port = IOSurfaceCreateMachPort(surf);

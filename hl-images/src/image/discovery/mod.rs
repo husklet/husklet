@@ -48,7 +48,7 @@ pub struct DiscoveredImage {
 }
 
 /// Discover `<images_dir>/<name>/rootfs` dirs, detecting each image's [`Arch`] from a probe binary and
-/// recovering its run config from the `dd-image.json` sidecar (falling back to the on-disk OCI config for
+/// recovering its run config from the `hl-image.json` sidecar (falling back to the on-disk OCI config for
 /// env, and to the dir name for the image name). Collapses duplicate tags to a single best entry.
 pub fn discover_images(images_dir: &str) -> Vec<DiscoveredImage> {
     let mut out = Vec::new();
@@ -60,9 +60,9 @@ pub fn discover_images(images_dir: &str) -> Vec<DiscoveredImage> {
         if !rootfs.is_dir() {
             continue;
         }
-        // Prefer dd-image.json so name/cmd/os round-trip exactly (even for images whose binaries can't be
+        // Prefer hl-image.json so name/cmd/os round-trip exactly (even for images whose binaries can't be
         // sniffed); else parse the dir name + detect the arch from a probe binary.
-        let meta = std::fs::read_to_string(e.path().join("dd-image.json"))
+        let meta = std::fs::read_to_string(e.path().join("hl-image.json"))
             .ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok());
         let (name, cmd, arch) = match &meta {

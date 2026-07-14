@@ -395,7 +395,7 @@ pub(crate) async fn images_build(
     let mut target_built = false;
 
     // --- build layer cache chain state (reset at each FROM) ---
-    // The snapshot/restore + step-metadata store lives in dd-images (runtime-agnostic); root it at the
+    // The snapshot/restore + step-metadata store lives in hl-images (runtime-agnostic); root it at the
     // daemon's buildcache dir. The chain-state bookkeeping below stays here (it drives the step loop).
     let bc = BuildCache::new(crate::util::buildcache_dir());
     let mut parent_id = String::new(); // cache id of the previous step (seeded from the base at FROM)
@@ -894,7 +894,7 @@ pub(crate) async fn images_build(
         })
         .collect();
     std::fs::write(
-        img_dir.join("dd-image.json"),
+        img_dir.join("hl-image.json"),
         json!({"name": name, "cmd": cmd, "entrypoint": entrypoint, "env": env, "workdir": workdir,
                "labels": labels, "arch": arch.arch(), "os": arch.os(), "user": user,
                "exposed_ports": exposed_ports, "img_volumes": img_volumes, "healthcheck": healthcheck,
@@ -981,7 +981,7 @@ mod handler_tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let d = std::env::temp_dir()
-            .join(format!("dd-handler-test-{}-{}-{}", label, std::process::id(), nanos));
+            .join(format!("hl-handler-test-{}-{}-{}", label, std::process::id(), nanos));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

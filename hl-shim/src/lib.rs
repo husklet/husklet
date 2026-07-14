@@ -1,10 +1,10 @@
-//! dd-shim-common — the guest-side foundation for every dd GPU shim (GL, Vulkan, CUDA).
+//! hl-shim-common — the guest-side foundation for every dd GPU shim (GL, Vulkan, CUDA).
 //!
 //! This is the ONLY-place-the-wire-lives layer, lifted out of the hand-rolled C in
-//! `dd-tests/guests/gl_shim.c` so that `dd-shim-gl`, `dd-shim-vk`, and `dd-shim-cuda` can all be
+//! `hl-tests/guests/gl_shim.c` so that `hl-shim-gl`, `hl-shim-vk`, and `hl-shim-cuda` can all be
 //! sibling crates on top of it. It owns three things:
 //!
-//! 1. **The shared IR contract** ([`ir`], [`wire`], [`id`]) — *re-exported* from the host's `dd-gpu`
+//! 1. **The shared IR contract** ([`ir`], [`wire`], [`id`]) — *re-exported* from the host's `hl-gpu`
 //!    crate, never redefined. The guest producer encodes with the very same [`ir::Cmd`] /
 //!    [`ir::encode_stream`] the host executor decodes with [`ir::Cmd::decode`], so the two sides
 //!    share one Rust type and one encode/decode implementation and *cannot drift*. (This is what
@@ -16,7 +16,7 @@
 //!    shared-memory ring).
 //!
 //! 3. **Guest GPU-memory registration** ([`transport::renderd`]) — the `renderD128`
-//!    `DD_IOCTL_GPU_ALLOC` that mints the rung-2 IOSurface-backed dma-buf a frame renders into.
+//!    `HL_IOCTL_GPU_ALLOC` that mints the rung-2 IOSurface-backed dma-buf a frame renders into.
 //!
 //! Cross-compiles to the guest ELF targets (aarch64 native on this host; x86_64 needs the
 //! `x86_64-unknown-linux-gnu` rust-std — see `docs/rendering/SHIM_RUST_ARCHITECTURE.md`).
@@ -32,7 +32,7 @@ pub use hl_gpu::{GpuError, Result};
 
 pub mod transport;
 
-/// The dd-gpu wire/protocol version the guest and host must agree on. Re-exported for shims that want
+/// The hl-gpu wire/protocol version the guest and host must agree on. Re-exported for shims that want
 /// to stamp it into a handshake; it is DEFINED AS `hl_gpu::ir::WIRE_VERSION` so it cannot drift from the
 /// code both sides actually run (it was a hand-copied `1` that fell behind when the IR reached v2 with the
 /// texture-copy/blit tags; binding it to the source of truth prevents that class of skew).

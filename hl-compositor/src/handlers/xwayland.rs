@@ -2,30 +2,30 @@
 //!
 //! ## What this composes
 //! Behind `--features xwayland` (see `Cargo.toml` for why it is not a declared cargo feature on the
-//! offline dev host) this module composes Smithay's XWayland support into `DdState`:
+//! offline dev host) this module composes Smithay's XWayland support into `HlState`:
 //!   - [`smithay::xwayland::XWayland`] — spawns and supervises the `Xwayland` server as a subprocess of
 //!     the compositor; `Xwayland` connects back to us as an ordinary Wayland client.
 //!   - [`smithay::wayland::xwayland_shell::XWaylandShellState`] — the `xwayland_shell_v1` global that pairs
 //!     each X11 window with its backing `wl_surface`.
 //!   - [`smithay::xwayland::X11Wm`] — the X11 window manager; its [`XwmHandler`] callbacks (implemented
-//!     here on `DdState`) map/unmap/configure/destroy X11 windows and route resize/move/state requests.
+//!     here on `HlState`) map/unmap/configure/destroy X11 windows and route resize/move/state requests.
 //!
 //! ## X11 windows use the SAME present + input path as Wayland toplevels
 //! An X11 window's pixels arrive as a normal `wl_surface` buffer commit (Xwayland is a Wayland client), so
 //! the ordinary `commit → present_render_root` path shows it — an X11 window's `wl_surface` is roleless,
 //! so it is its own `window_root` and presents as its own native window (Metal/IOSurface or shm) exactly
-//! like an `xdg_toplevel`. On map we call [`DdState::adopt_x11_window`], which labels the surface with the
+//! like an `xdg_toplevel`. On map we call [`HlState::adopt_x11_window`], which labels the surface with the
 //! X11 title and gives it keyboard focus; pointer/keyboard input then reaches it through the same seat
 //! hit-testing (`input_surface_at`) as any other window. No X11-specific present or input path exists.
 //!
 //! ## Runtime gating
-//! [`DdState::start_xwayland`] is called only under `HL_XWAYLAND` (itself only reachable under
+//! [`HlState::start_xwayland`] is called only under `HL_XWAYLAND` (itself only reachable under
 //! `HL_DISPLAY_SMITHAY`). On macOS the `Xwayland` binary is a Linux ELF, so it must be launched through
 //! the dd JIT engine (a host-runtime concern); on the Linux dev host a native `/usr/bin/Xwayland` is used.
 //!
 //! ## Validation status
-//! The window-management integration and the feature-independent core ([`DdState::adopt_x11_window`] /
-//! [`DdState::withdraw_x11_window`], proven by the in-process `xwayland_window_model_tests`) are complete.
+//! The window-management integration and the feature-independent core ([`HlState::adopt_x11_window`] /
+//! [`HlState::withdraw_x11_window`], proven by the in-process `xwayland_window_model_tests`) are complete.
 //! This feature-gated glue cannot be COMPILED or run on the offline dev host — Smithay's `xwayland`
 //! feature pulls in `x11rb`/`encoding_rs`/etc. which are not in the cargo cache and cannot be fetched
 //! (crates.io egress is TLS-intercepted). A live X11-app journey (xeyes/an X11 GTK app rendering, taking
@@ -45,9 +45,9 @@ use smithay::wayland::xwayland_shell::{XWaylandShellHandler, XWaylandShellState}
 use smithay::xwayland::xwm::{Reorder, ResizeEdge, X11Window, XwmId};
 use smithay::xwayland::{X11Surface, X11Wm, XWayland, XWaylandEvent, XwmHandler};
 
-use crate::DdState;
+use crate::HlState;
 
-/// All XWayland bridge state, held (as `Option`) on [`DdState::xwayland`] once started.
+/// All XWayland bridge state, held (as `Option`) on [`HlState::xwayland`] once started.
 pub struct XwaylandState {
     /// The `xwayland_shell_v1` global that pairs X11 windows with their `wl_surface`s.
     pub shell: XWaylandShellState,
@@ -61,12 +61,12 @@ pub struct XwaylandState {
     pub windows: HashMap<X11Window, X11Surface>,
 }
 
-impl DdState {
+impl HlState {
     /// Spawn and wire the Xwayland server + X11 window manager into `loop_handle`. Called once at startup
     /// under `HL_XWAYLAND`. Creates the `xwayland_shell_v1` global, spawns `Xwayland`, and inserts its
     /// event source; the `Ready` event starts the [`X11Wm`]. Idempotent-ish: a second call replaces state.
-    pub fn start_xwayland(&mut self, loop_handle: LoopHandle<'static, DdState>) -> std::io::Result<()> {
-        let shell = XWaylandShellState::new::<DdState>(&self.dh);
+    pub fn start_xwayland(&mut self, loop_handle: LoopHandle<'static, HlState>) -> std::io::Result<()> {
+        let shell = XWaylandShellState::new::<HlState>(&self.dh);
         // Spawn Xwayland. `open_abstract_socket = true` matches the Linux abstract-socket convention;
         // stdout/stderr are silenced (Xwayland is chatty). The returned `Client` is how Xwayland talks to
         // us and is required to start the window manager.
@@ -80,26 +80,26 @@ impl DdState {
             |_user_data| {},
         )?;
         let display_number = xwayland.display_number();
-        eprintln!("dd-compositor: XWayland starting on DISPLAY=:{display_number}");
+        eprintln!("hl-compositor: XWayland starting on DISPLAY=:{display_number}");
 
         let handle_for_wm = loop_handle.clone();
         loop_handle
-            .insert_source(xwayland, move |event, _, state: &mut DdState| match event {
+            .insert_source(xwayland, move |event, _, state: &mut HlState| match event {
                 XWaylandEvent::Ready { x11_socket, display_number } => {
                     match X11Wm::start_wm(handle_for_wm.clone(), x11_socket, state.xwayland_client()) {
                         Ok(wm) => {
                             eprintln!(
-                                "dd-compositor: XWayland X11 window manager attached (DISPLAY=:{display_number})"
+                                "hl-compositor: XWayland X11 window manager attached (DISPLAY=:{display_number})"
                             );
                             if let Some(xstate) = state.xwayland.as_mut() {
                                 xstate.xwm = Some(wm);
                             }
                         }
-                        Err(e) => eprintln!("dd-compositor: failed to attach X11 window manager: {e}"),
+                        Err(e) => eprintln!("hl-compositor: failed to attach X11 window manager: {e}"),
                     }
                 }
                 XWaylandEvent::Error => {
-                    eprintln!("dd-compositor: XWayland server failed to start");
+                    eprintln!("hl-compositor: XWayland server failed to start");
                 }
             })
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{e}")))?;
@@ -123,7 +123,7 @@ impl DdState {
     }
 }
 
-impl XWaylandShellHandler for DdState {
+impl XWaylandShellHandler for HlState {
     fn xwayland_shell_state(&mut self) -> &mut XWaylandShellState {
         &mut self
             .xwayland
@@ -133,7 +133,7 @@ impl XWaylandShellHandler for DdState {
     }
 }
 
-impl XwmHandler for DdState {
+impl XwmHandler for HlState {
     fn xwm_state(&mut self, _xwm: XwmId) -> &mut X11Wm {
         self.xwayland
             .as_mut()
@@ -161,7 +161,7 @@ impl XwmHandler for DdState {
     /// into the window model (title + focus + present through the ordinary path).
     fn map_window_request(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Err(e) = window.set_mapped(true) {
-            eprintln!("dd-compositor: X11 set_mapped failed: {e}");
+            eprintln!("hl-compositor: X11 set_mapped failed: {e}");
             return;
         }
         // Configure the X11 window to its requested geometry so the client draws at the right size. A
@@ -303,7 +303,7 @@ impl XwmHandler for DdState {
     /// requests the data. (Full wiring of the Wayland-side offer is the remaining live-validation item.)
     fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
         eprintln!(
-            "dd-compositor: X11 offered a {selection:?} selection with {} mime type(s); \
+            "hl-compositor: X11 offered a {selection:?} selection with {} mime type(s); \
              Wayland-side offer wiring pending live validation",
             mime_types.len()
         );
@@ -320,14 +320,14 @@ impl XwmHandler for DdState {
         _fd: OwnedFd,
     ) {
         eprintln!(
-            "dd-compositor: send_selection {selection:?} {mime_type}: X11→Wayland pipe pending live validation"
+            "hl-compositor: send_selection {selection:?} {mime_type}: X11→Wayland pipe pending live validation"
         );
     }
 
     fn cleared_selection(&mut self, _xwm: XwmId, _selection: SelectionTarget) {}
 }
 
-impl DdState {
+impl HlState {
     /// Present an override-redirect X11 window (menu/tooltip) as its own window without taking focus.
     fn present_unfocused_x11_window(&mut self, surface: &WlSurface, title: String) {
         let sid = self.surface_id(surface);
@@ -369,4 +369,4 @@ fn resize_edge_to_xdg(edge: ResizeEdge) -> u32 {
     }
 }
 
-smithay::delegate_xwayland_shell!(DdState);
+smithay::delegate_xwayland_shell!(HlState);

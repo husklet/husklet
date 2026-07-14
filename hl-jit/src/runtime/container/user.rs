@@ -54,7 +54,7 @@ mod tests {
     /// Build a throwaway rootfs with the given `etc/passwd`/`etc/group` contents; returns its path.
     fn make_rootfs(tag: &str, passwd: Option<&str>, group: Option<&str>) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "ddjit-resolve-user-{}-{}-{}",
+            "hljit-resolve-user-{}-{}-{}",
             std::process::id(),
             tag,
             std::time::SystemTime::now()

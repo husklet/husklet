@@ -12,7 +12,7 @@ pub fn anon_fd_with(bytes: &[u8]) -> Option<i32> {
     let size = bytes.len() + 1; // + NUL
     #[cfg(target_os = "linux")]
     let fd = {
-        let name = std::ffi::CString::new("dd-keymap").ok()?;
+        let name = std::ffi::CString::new("hl-keymap").ok()?;
         unsafe { libc::memfd_create(name.as_ptr(), 0) }
     };
     #[cfg(not(target_os = "linux"))]

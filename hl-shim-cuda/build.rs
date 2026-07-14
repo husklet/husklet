@@ -1,4 +1,4 @@
-//! dd-shim-cuda codegen: turn the CUDA-Driver-API entry-point manifest into the complete set of
+//! hl-shim-cuda codegen: turn the CUDA-Driver-API entry-point manifest into the complete set of
 //! `#[no_mangle] extern "C"` `cu*` exports the shim must provide. Mirrors hl-shim-gl/build.rs.
 //!
 //! Input:  `registry/cuda_driver.manifest` (extracted from dd's clean-room `hl-gpu/cuda/cuda_shim.c`
@@ -9,7 +9,7 @@
 //! *default* stub: correct C-ABI signature (so the symbol resolves and the app links + runs), a
 //! debug-gated "unimplemented entry point" trace, and a benign default return (`CUDA_SUCCESS` = 0 for
 //! the `CUresult` all driver entry points return). Real bodies replace stubs incrementally without
-//! ever changing the exported surface — the shrinking long tail, exactly like dd-shim-gl.
+//! ever changing the exported surface — the shrinking long tail, exactly like hl-shim-gl.
 //!
 //! Also sets the shared-object soname to `libcuda.so.1` (the CUDA Driver API drop-in name).
 
@@ -22,7 +22,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     // The shim is deployed as libcuda.so.1 (the CUDA Driver API soname a real app `DT_NEEDED`s);
-    // bake that soname. Matches hl-gpu/cuda/build.sh's C shim and dd-shim-gl's libEGL.so.1 pattern.
+    // bake that soname. Matches hl-gpu/cuda/build.sh's C shim and hl-shim-gl's libEGL.so.1 pattern.
     println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libcuda.so.1");
 
     let text = std::fs::read_to_string(&manifest)
@@ -208,7 +208,7 @@ fn map_ret(c: &str, ctx: &str) -> Option<String> {
 
 /// C type string -> Rust C-ABI type. Handles the pointer forms generally (single/double, const/mut,
 /// `*const*`) so an API bump only ever surprises us on a genuinely new *base scalar*, which panics
-/// (fail-loud ABI generator) rather than silently mis-typing. Identical structure to dd-shim-gl.
+/// (fail-loud ABI generator) rather than silently mis-typing. Identical structure to hl-shim-gl.
 fn map_type(c: &str, ctx: &str) -> String {
     let c = c.trim();
     if let Some(base) = c.strip_suffix("*const*") {
@@ -307,7 +307,7 @@ fn env(k: &str) -> String {
 /// Entry points hand-implemented in `src/driver.rs` (so the generator skips them to avoid duplicate
 /// symbols). Two groups: the **bring-up** set that returns real, sane values for a dlopen smoke test
 /// (init / driver-version / device-presence / context lifecycle), and the **IR-wired** set that maps
-/// the CUDA compute model onto the shared dd-gpu IR via `hl_gpu::cuda::CudaContext` (memory alloc/copy,
+/// the CUDA compute model onto the shared hl-gpu IR via `hl_gpu::cuda::CudaContext` (memory alloc/copy,
 /// PTX module load, kernel launch = compute pipeline + dispatch). Everything else is a generated stub.
 const IMPLEMENTED: &[&str] = &[
     // ---- bring-up: init + driver version + error strings ----
@@ -331,7 +331,7 @@ const IMPLEMENTED: &[&str] = &[
     "cuCtxGetCurrent",
     "cuCtxGetDevice",
     "cuCtxSynchronize",
-    // ---- IR-wired: memory (CUDA alloc/copy -> dd-gpu IR through CudaContext) ----
+    // ---- IR-wired: memory (CUDA alloc/copy -> hl-gpu IR through CudaContext) ----
     "cuMemAlloc_v2",
     "cuMemFree_v2",
     "cuMemcpyHtoD_v2",

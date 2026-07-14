@@ -1,4 +1,4 @@
-//! dd-jit build script: compile + codesign the JIT binaries for every supported guest arch.
+//! hl-jit build script: compile + codesign the JIT binaries for every supported guest arch.
 //!
 //! The JIT needs the macOS toolchain (arm64 codegen + MAP_JIT + a codesigned `allow-jit` entitlement),
 //! so on a non-macOS dev host we drive clang/codesign through the `mac` bridge. On a real macOS host we
@@ -59,13 +59,13 @@ fn main() {
     let mut built = Vec::new();
     for t in TARGETS {
         let tu = runtime.join("targets").join(format!("{t}.c"));
-        let bin = out.join(format!("ddjit-{t}"));
+        let bin = out.join(format!("hljit-{t}"));
         if !tu.exists() {
             println!("cargo:warning=skipping {t}: {} not found", tu.display());
             continue;
         }
         let script = format!(
-            // -framework IOSurface/CoreFoundation: the GPU rung 2 host-IOSurface allocator (dd_gpu.h /
+            // -framework IOSurface/CoreFoundation: the GPU rung 2 host-IOSurface allocator (hl_gpu.h /
             // vfs.c hl_gpu_alloc). Always linked (the engine is always a macOS binary); the code path is
             // runtime-gated behind HL_GPU_IOSURFACE so it's inert for every existing workload.
             "clang -O2 -framework IOSurface -framework CoreFoundation -o {bin} {tu} && codesign -s - --entitlements {ent} -f {bin}",
@@ -88,14 +88,14 @@ fn main() {
                 println!("cargo:rustc-env=HL_JIT_{}={}", t.to_uppercase(), bin.display());
                 built.push(*t);
             }
-            // On a real macOS host the engine MUST compile -- a missing ddjit-<t> ships a bundle that hangs the
+            // On a real macOS host the engine MUST compile -- a missing hljit-<t> ships a bundle that hangs the
             // moment a guest of that arch runs. Fail the build loudly instead of silently degrading to a warning
             // (the failure mode that shipped a darwin-only release). On a non-mac dev host the toolchain reaches
             // through the `mac` bridge, which may legitimately be absent, so there we stay best-effort.
-            Ok(s) if on_mac => panic!("building ddjit-{t} failed ({s}); fix the C engine compile -- refusing to produce an engine-incomplete build"),
-            Err(e) if on_mac => panic!("cannot build ddjit-{t} ({e}); macOS toolchain (clang/codesign) must be present"),
-            Ok(s) => println!("cargo:warning=building ddjit-{t} failed ({s}); binary unavailable"),
-            Err(e) => println!("cargo:warning=cannot build ddjit-{t} ({e}); is the toolchain/`mac` bridge present?"),
+            Ok(s) if on_mac => panic!("building hljit-{t} failed ({s}); fix the C engine compile -- refusing to produce an engine-incomplete build"),
+            Err(e) if on_mac => panic!("cannot build hljit-{t} ({e}); macOS toolchain (clang/codesign) must be present"),
+            Ok(s) => println!("cargo:warning=building hljit-{t} failed ({s}); binary unavailable"),
+            Err(e) => println!("cargo:warning=cannot build hljit-{t} ({e}); is the toolchain/`mac` bridge present?"),
         }
     }
     // Always define the env vars (empty if a build failed) so lib.rs `env!` compiles.

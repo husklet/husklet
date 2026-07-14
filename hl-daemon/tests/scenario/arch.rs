@@ -14,7 +14,7 @@ pub(super) fn target_arch(t: Target) -> &'static str {
 /// a per-ref rootfs, not a multi-arch manifest). When a scenario's target arch differs from the arch the
 /// store actually holds, the Dd daemon would serve the WRONG-arch rootfs (e.g. an aarch64 mongo image
 /// for an `amd-linux` cell), which the engine then runs under the *other* arch's JIT — a false gap, not a
-/// real one. We read the arch the store holds from the image's `dd-image.json` sidecar and, for the Dd
+/// real one. We read the arch the store holds from the image's `hl-image.json` sidecar and, for the Dd
 /// backend, cleanly SKIP the cell whose arch the store can't serve. The Real oracle pulls the correct
 /// arch per `--platform`, so it is never skipped. Memoized per image; `None` (no sidecar / no `arch`
 /// field, i.e. arch unknown) means "don't skip" — we only skip on a PROVEN mismatch.
@@ -29,7 +29,7 @@ pub(super) fn store_arch(cfg: &Cfg, image: &str) -> Option<String> {
     if let Ok(rd) = std::fs::read_dir(&cfg.images) {
         for e in rd.flatten() {
             let dir = e.path();
-            let Ok(txt) = std::fs::read_to_string(dir.join("dd-image.json")) else {
+            let Ok(txt) = std::fs::read_to_string(dir.join("hl-image.json")) else {
                 continue;
             };
             if !txt.contains(&want) {

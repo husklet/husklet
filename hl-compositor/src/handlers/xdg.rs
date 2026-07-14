@@ -35,9 +35,9 @@ use smithay::{
     },
 };
 
-use crate::{DdState, INITIAL_TOPLEVEL_SIZE};
+use crate::{HlState, INITIAL_TOPLEVEL_SIZE};
 
-impl XdgShellHandler for DdState {
+impl XdgShellHandler for HlState {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell
     }
@@ -83,8 +83,8 @@ impl XdgShellHandler for DdState {
     /// grab serial, mark the toplevel `Resizing` (+ `Activated`) and configure so the client knows a resize
     /// is in progress, then drive a HOST NSWindow resize anchored on the grabbed edge via the Presenter
     /// ([`Presenter::begin_interactive_resize`], which blocks for the gesture on the windowed backend). When
-    /// the gesture ends, [`DdState::finish_interactive_resize`] clears `Resizing` and reconfigures at the
-    /// final on-screen size (the platform loop's [`DdState::maybe_resize_focused`] also reflows live-edge
+    /// the gesture ends, [`HlState::finish_interactive_resize`] clears `Resizing` and reconfigures at the
+    /// final on-screen size (the platform loop's [`HlState::maybe_resize_focused`] also reflows live-edge
     /// drags that go through the native title bar instead).
     fn resize_request(
         &mut self,
@@ -225,7 +225,7 @@ impl XdgShellHandler for DdState {
 
     /// `xdg_popup.grab(seat, serial)`: the client takes an explicit popup grab (Chrome does this for menus
     /// and context menus, but NOT for tooltips). Record the grab so that a click outside the popup chain
-    /// dismisses the whole chain via [`DdState::dismiss_popup_grabs`] — the input path calls that. The
+    /// dismisses the whole chain via [`HlState::dismiss_popup_grabs`] — the input path calls that. The
     /// grab stack is ordered outer→inner, so a submenu opened under an existing grab extends the chain.
     fn grab(&mut self, surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
         if !self
@@ -286,7 +286,7 @@ impl XdgShellHandler for DdState {
 // (the borderless window shows the client's own decorations); SSD is granted only when the native title
 // bar exists, otherwise we answer CSD (a truthful mode the client can actually draw) rather than promising
 // server decorations we won't paint. This is exactly what a client needs to avoid a double title bar.
-impl XdgDecorationHandler for DdState {
+impl XdgDecorationHandler for HlState {
     /// The client created a decoration object without stating a preference yet: answer with our default
     /// (SSD when the native title bar is enabled, else CSD).
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
@@ -311,7 +311,7 @@ impl XdgDecorationHandler for DdState {
 // serial to defeat focus-stealing; our single-window-per-surface host has no cross-app focus-steal risk and
 // no notion of "deny focus", so we honour every activation by focusing + raising the target window — which
 // is what a launcher-spawned window, or an app raising its own window, expects.
-impl XdgActivationHandler for DdState {
+impl XdgActivationHandler for HlState {
     fn activation_state(&mut self) -> &mut XdgActivationState {
         &mut self.xdg_activation
     }
@@ -326,7 +326,7 @@ impl XdgActivationHandler for DdState {
     }
 }
 
-impl DdState {
+impl HlState {
     /// Resolve `requested` against what the host window can actually render and send the decoration
     /// `configure(mode)` (Smithay emits it from `send_configure` when `decoration_mode` changes). See the
     /// policy note above the [`XdgDecorationHandler`] impl.
@@ -346,7 +346,7 @@ impl DdState {
     }
 }
 
-impl DdState {
+impl HlState {
     /// Re-issue a fullscreen configure at the NEW output's logical size for every migrated toplevel that
     /// is currently fullscreen. Called by the output hot-unplug path AFTER the surfaces have entered their
     /// replacement output, so a fullscreen client learns its new size only once it is already a member of

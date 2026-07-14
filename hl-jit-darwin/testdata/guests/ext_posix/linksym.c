@@ -7,9 +7,9 @@
 
 int main(void) {
     char a[128], h[128], s[128];
-    snprintf(a, sizeof a, "/tmp/dd_lnk_%d", (int)getpid());
-    snprintf(h, sizeof h, "/tmp/dd_lnk_%d.hard", (int)getpid());
-    snprintf(s, sizeof s, "/tmp/dd_lnk_%d.sym", (int)getpid());
+    snprintf(a, sizeof a, "/tmp/hl_lnk_%d", (int)getpid());
+    snprintf(h, sizeof h, "/tmp/hl_lnk_%d.hard", (int)getpid());
+    snprintf(s, sizeof s, "/tmp/hl_lnk_%d.sym", (int)getpid());
     unlink(a); unlink(h); unlink(s);
     int fd = open(a, O_CREAT | O_WRONLY, 0644);
     write(fd, "shared", 6);

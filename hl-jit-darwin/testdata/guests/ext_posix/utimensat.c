@@ -6,7 +6,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_utime_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_utime_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_WRONLY, 0644);
     close(fd);
     struct timespec ts[2] = {{1000000000, 0}, {1234567890, 0}}; // atime, mtime

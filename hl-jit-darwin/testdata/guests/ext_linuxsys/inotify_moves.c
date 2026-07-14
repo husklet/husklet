@@ -9,7 +9,7 @@
 
 int main(void) {
     char dir[128];
-    snprintf(dir, sizeof dir, "/tmp/dd_inomv_%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/hl_inomv_%d", (int)getpid());
     mkdir(dir, 0755);
     int in = inotify_init1(0);
     inotify_add_watch(in, dir, IN_CREATE | IN_MOVED_FROM | IN_MOVED_TO);

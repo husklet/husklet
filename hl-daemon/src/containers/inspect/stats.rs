@@ -34,7 +34,7 @@ fn pid_metrics(pid: u32) -> (u64, u64) {
     (0, 0)
 }
 
-/// Parse a `ps` accumulated-CPU-time field `"[[dd-]hh:]mm:ss[.frac]"` into nanoseconds.
+/// Parse a `ps` accumulated-CPU-time field `"[[hl-]hh:]mm:ss[.frac]"` into nanoseconds.
 fn parse_ps_time(s: &str) -> u64 {
     let (days, rest) = match s.split_once('-') {
         Some((d, r)) => (d.parse::<u64>().unwrap_or(0), r),
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn ps_time_with_days_prefix() {
-        // `dd-hh:mm:ss` — the leading `N-` is whole days.
+        // `hl-hh:mm:ss` — the leading `N-` is whole days.
         assert_eq!(parse_ps_time("2-00:00:00"), 2 * 86400 * NS);
         assert_eq!(parse_ps_time("1-02:03:04"), (86400 + 7384) * NS);
     }

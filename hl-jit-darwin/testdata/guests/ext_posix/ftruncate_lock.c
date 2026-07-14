@@ -7,7 +7,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_flock_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_flock_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR, 0644);
     int locked = flock(fd, LOCK_EX) == 0;
     pid_t c = fork();

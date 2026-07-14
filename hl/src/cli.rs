@@ -1,9 +1,9 @@
-//! `clap` command-line definitions for the `ddcli` binary.
+//! `clap` command-line definitions for the `hl` binary.
 
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "ddcli", version, about = "ddcli — VM-less containers on macOS")]
+#[command(name = "hl", version, about = "hl — VM-less containers on macOS")]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) cmd: Cmd,
@@ -13,12 +13,12 @@ pub(crate) struct Cli {
 pub(crate) enum Cmd {
     /// Run a container: current dir mounted + working dir, host networking, interactive shell.
     ///
-    /// Usage: ddcli run [--platform P] [--isolated] [--keep] <image> [command…]
+    /// Usage: hl run [--platform P] [--isolated] [--keep] <image> [command…]
     Run {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Launch the dd-app GUI.
+    /// Launch the hl-app GUI.
     App,
     /// Manage + launch terminal workspaces (a named image+arch you develop in).
     Workspace {
@@ -34,7 +34,7 @@ pub(crate) enum Cmd {
     Install,
     /// Remove the daemon agent + docker context.
     Uninstall {
-        /// Also delete ~/.dd state (images, volumes, state.json) and logs.
+        /// Also delete ~/.hl state (images, volumes, state.json) and logs.
         #[arg(long)]
         purge: bool,
     },
@@ -43,7 +43,7 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: ContextCmd,
     },
-    /// `ddcli <image> [command…]` — shorthand for `ddcli run <image> …`.
+    /// `hl <image> [command…]` — shorthand for `hl run <image> …`.
     #[command(external_subcommand)]
     Image(Vec<String>),
 }
@@ -76,7 +76,7 @@ pub(crate) enum WorkspaceCmd {
         #[arg(long, num_args = 0..=1, default_missing_value = "default")]
         cuda: Option<String>,
         /// Render this workspace's GUI apps on the Mac (docs/ideas/RENDERING_PLAN.md): dd bind-mounts the
-        /// host `dd-display` Wayland socket into the guest and sets `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, so
+        /// host `hl-display` Wayland socket into the guest and sets `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, so
         /// a Linux GUI app (e.g. `weston-simple-shm`, SDL2) draws in a native window — no custom image.
         /// Bare `--gui` = on; `--gui off` clears it. Omit to preserve any prior setting.
         #[arg(long, num_args = 0..=1, default_missing_value = "on")]
@@ -152,16 +152,16 @@ pub(crate) enum ContextCmd {
 mod tests {
     use super::*;
 
-    // The parser is a contract with the GUI (which shells out to `ddcli workspace …`) and users, so lock
+    // The parser is a contract with the GUI (which shells out to `hl workspace …`) and users, so lock
     // its shape down: required flags, the optional `--arch`, the trailing-arg passthrough, and the bare
-    // `ddcli <image>` external-subcommand shorthand.
+    // `hl <image>` external-subcommand shorthand.
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(args)
     }
 
     #[test]
     fn workspace_create_minimal_has_none_optionals() {
-        let cli = parse(&["ddcli", "workspace", "create", "foo", "--image", "alpine"]).unwrap();
+        let cli = parse(&["hl", "workspace", "create", "foo", "--image", "alpine"]).unwrap();
         let Cmd::Workspace { action: WorkspaceCmd::Create { name, image, arch, vpn, cuda, gui } } = cli.cmd else {
             panic!("expected workspace create");
         };
@@ -175,20 +175,20 @@ mod tests {
     #[test]
     fn workspace_create_requires_image() {
         // `--image` is a required flag: omitting it is a parse error, not a silent empty image.
-        assert!(parse(&["ddcli", "workspace", "create", "foo"]).is_err());
+        assert!(parse(&["hl", "workspace", "create", "foo"]).is_err());
         // A flag given with no value is also an error (no accidental empty-string image).
-        assert!(parse(&["ddcli", "workspace", "create", "foo", "--image"]).is_err());
+        assert!(parse(&["hl", "workspace", "create", "foo", "--image"]).is_err());
     }
 
     #[test]
     fn workspace_create_flag_arities() {
         // `--cuda` and `--gui` take an OPTIONAL value (num_args 0..=1): bare and valued both parse.
-        let bare = parse(&["ddcli", "workspace", "create", "g", "--image", "x", "--cuda", "--gui"]).unwrap();
+        let bare = parse(&["hl", "workspace", "create", "g", "--image", "x", "--cuda", "--gui"]).unwrap();
         let Cmd::Workspace { action: WorkspaceCmd::Create { cuda, gui, .. } } = bare.cmd else { panic!() };
         assert_eq!(cuda.as_deref(), Some("default"), "bare --cuda => default_missing_value");
         assert_eq!(gui.as_deref(), Some("on"), "bare --gui => default_missing_value");
 
-        let valued = parse(&["ddcli", "workspace", "create", "g", "--image", "x",
+        let valued = parse(&["hl", "workspace", "create", "g", "--image", "x",
             "--cuda", "My GPU|8.6|8192", "--gui", "off", "--vpn", "socks5:1.2.3.4:1080", "--arch", "amd64"]).unwrap();
         let Cmd::Workspace { action: WorkspaceCmd::Create { cuda, gui, vpn, arch, .. } } = valued.cmd else { panic!() };
         assert_eq!(cuda.as_deref(), Some("My GPU|8.6|8192"));
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn workspace_launch_slot_and_cwd() {
-        let cli = parse(&["ddcli", "workspace", "launch", "w", "--restore", "--slot", "s1", "--cwd", "/work"]).unwrap();
+        let cli = parse(&["hl", "workspace", "launch", "w", "--restore", "--slot", "s1", "--cwd", "/work"]).unwrap();
         let Cmd::Workspace { action: WorkspaceCmd::Launch { name, restore, cwd, slot } } = cli.cmd else { panic!() };
         assert_eq!(name, "w");
         assert!(restore);
@@ -211,30 +211,30 @@ mod tests {
     fn run_passes_through_trailing_args_and_hyphens() {
         // trailing_var_arg + allow_hyphen_values: everything after `run` is captured verbatim, including
         // `--platform` and the guest command's own flags — clap must NOT try to interpret them.
-        let cli = parse(&["ddcli", "run", "ubuntu", "--platform", "linux/amd64", "echo", "-n", "hi"]).unwrap();
+        let cli = parse(&["hl", "run", "ubuntu", "--platform", "linux/amd64", "echo", "-n", "hi"]).unwrap();
         let Cmd::Run { args } = cli.cmd else { panic!("expected run") };
         assert_eq!(args, vec!["ubuntu", "--platform", "linux/amd64", "echo", "-n", "hi"]);
     }
 
     #[test]
     fn bare_image_is_external_subcommand_shorthand() {
-        // `ddcli <image> [cmd…]` (no known subcommand) routes to the external subcommand, forwarding argv.
-        let cli = parse(&["ddcli", "alpine", "sh", "-c", "id"]).unwrap();
+        // `hl <image> [cmd…]` (no known subcommand) routes to the external subcommand, forwarding argv.
+        let cli = parse(&["hl", "alpine", "sh", "-c", "id"]).unwrap();
         let Cmd::Image(args) = cli.cmd else { panic!("expected external-subcommand Image") };
         assert_eq!(args, vec!["alpine", "sh", "-c", "id"]);
     }
 
     #[test]
     fn uninstall_purge_flag() {
-        let no = parse(&["ddcli", "uninstall"]).unwrap();
+        let no = parse(&["hl", "uninstall"]).unwrap();
         assert!(matches!(no.cmd, Cmd::Uninstall { purge: false }));
-        let yes = parse(&["ddcli", "uninstall", "--purge"]).unwrap();
+        let yes = parse(&["hl", "uninstall", "--purge"]).unwrap();
         assert!(matches!(yes.cmd, Cmd::Uninstall { purge: true }));
     }
 
     #[test]
     fn no_subcommand_is_error() {
-        // `ddcli` with no args must not panic; clap returns a (help) error.
-        assert!(parse(&["ddcli"]).is_err());
+        // `hl` with no args must not panic; clap returns a (help) error.
+        assert!(parse(&["hl"]).is_err());
     }
 }

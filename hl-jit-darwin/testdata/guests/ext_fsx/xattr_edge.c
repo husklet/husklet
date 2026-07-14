@@ -29,7 +29,7 @@ static const char *rc(long r) { return r == 0 ? "ok" : en(errno); }
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_xattr_edge_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_xattr_edge_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     if (fd < 0) { perror("open"); return 1; }
     write(fd, "body", 4);

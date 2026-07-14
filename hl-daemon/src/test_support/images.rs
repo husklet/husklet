@@ -543,7 +543,7 @@ async fn commit_captures_upper_writes_and_user() {
     let app = test_app();
     let uniq = format!("{}-{}", std::process::id(), std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-    let base = std::env::temp_dir().join(format!("dd-commit-{uniq}"));
+    let base = std::env::temp_dir().join(format!("hl-commit-{uniq}"));
     let lower = base.join("lower");
     let upper = base.join("upper");
     std::fs::create_dir_all(&lower).unwrap();
@@ -583,7 +583,7 @@ async fn discover_images_restores_labels_and_arch_from_sidecar() {
     let app = test_app();
     let dir = std::path::Path::new(&app.images_dir).join("scratchx86");
     std::fs::create_dir_all(dir.join("rootfs")).unwrap();
-    std::fs::write(dir.join("dd-image.json"), serde_json::json!({
+    std::fs::write(dir.join("hl-image.json"), serde_json::json!({
         "name": "scratchx86:latest", "arch": "x86_64", "os": "linux",
         "labels": {"com.example.k": "v"}
     }).to_string()).unwrap();
@@ -615,7 +615,7 @@ async fn export_includes_upper_layer_writes() {
     let app = test_app();
     let uniq = format!("{}-{}", std::process::id(), std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-    let base = std::env::temp_dir().join(format!("dd-export-{uniq}"));
+    let base = std::env::temp_dir().join(format!("hl-export-{uniq}"));
     let lower = base.join("lower");
     let upper = base.join("upper");
     std::fs::create_dir_all(&lower).unwrap();
@@ -650,7 +650,7 @@ async fn tag_alias_survives_discovery() {
     let dir = std::path::Path::new(&app.images_dir).join("base_latest");
     std::fs::create_dir_all(dir.join("rootfs")).unwrap();
     let rootfs = dir.join("rootfs").to_string_lossy().into_owned();
-    std::fs::write(dir.join("dd-image.json"),
+    std::fs::write(dir.join("hl-image.json"),
         serde_json::json!({"name":"base:latest","arch":"aarch64","os":"linux"}).to_string()).unwrap();
     {
         let mut g = app.inner.lock().await;

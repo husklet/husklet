@@ -85,7 +85,7 @@
 #include "../engine/dispatch.c"              // SHARED engine: run_guest loop (x86 drives it via dispatch_hooks.h;
                                              // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
 #include "../translate/x86_64/elf.c"         // x86 ELF loader + stack + fault handlers (per-arch: machine/platform)
-#include "../os/hl_configfd.c"            // `--configfd` launch bridge -> re-hydrate DD_*/DDJIT_* env -> hl_run()
+#include "../os/hl_configfd.c"            // `--configfd` launch bridge -> re-hydrate HL_*/DDJIT_* env -> hl_run()
 
 // ---- entry + main ----
 // ---------------- entry ----------------
@@ -111,7 +111,7 @@ static void container_init(const char *rootfs) {
     if (rootfs) acct_container_reset();
     container_read_resource_env(); // docker --cpus / --read-only / --ulimit (HL_CPUS/HL_ROOTFS_RO/HL_ULIMITS)
     // #353: the daemon's DEFAULT launch path is the typed --configfd bridge, which hands the container
-    // model to the engine as DD_* ENV (hl_configfd.c), NOT as the --hostname/--mem-max/--pids-max CLI
+    // model to the engine as HL_* ENV (hl_configfd.c), NOT as the --hostname/--mem-max/--pids-max CLI
     // flags that hl_entry() parses. aarch64's container_init() already re-reads these from the env
     // (linux_aarch64.c); x86-64 did not, so a `docker run --hostname h` on x86 dropped the hostname
     // (uname/gethostname/`/etc/hostname` returned "jit") and --memory/--pids-limit were ignored. The
@@ -159,7 +159,7 @@ static void container_init(const char *rootfs) {
             snprintf(key, sizeof key, "%.39s", ns);
         else
             snprintf(key, sizeof key, "%d", (int)getpid());
-        snprintf(g_netns, sizeof g_netns, "/tmp/dd-lo-%s", key);
+        snprintf(g_netns, sizeof g_netns, "/tmp/hl-lo-%s", key);
         if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(ns && ns[0])) setenv("HL_NETNS", key, 1);
     }
     {
@@ -472,7 +472,7 @@ int hl_entry(int argc, char **argv) {
     else
         g_self_path = argv[0];
     // typed-config launch (the daemon's default path): `--configfd <fd>` streams a serialized hl_config
-    // over the inherited fd instead of the DD_* env/flag dialect. Dispatched before all other flags.
+    // over the inherited fd instead of the HL_* env/flag dialect. Dispatched before all other flags.
     if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return hl_run_configfd(atoi(argv[2]));
     if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return hl_run_configfile(argv[2]);
     // W3D fork-server dispatch (gated; standalone path untouched when neither flag is present):

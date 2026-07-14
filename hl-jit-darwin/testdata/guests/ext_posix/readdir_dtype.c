@@ -8,7 +8,7 @@
 
 int main(void) {
     char dir[128];
-    snprintf(dir, sizeof dir, "/tmp/dd_rd_%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/hl_rd_%d", (int)getpid());
     mkdir(dir, 0755);
     char p[200];
     snprintf(p, sizeof p, "%s/file1", dir); close(open(p, O_CREAT | O_WRONLY, 0644));

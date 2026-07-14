@@ -1,5 +1,5 @@
 //! A full visual demo: an iTerm2-style split-pane terminal window with three workspace panes, each
-//! running a real shell session, composited into a single PNG — the whole dd-term pipeline
+//! running a real shell session, composited into a single PNG — the whole hl-term pipeline
 //! (Layout → LocalPty → Vt → CpuRenderer) with no GPU/display.
 //!
 //!   cargo run -p hl-ws-term --example demo -- /tmp/demo.png
@@ -128,7 +128,7 @@ fn main() {
              printf '\\033[1;32mdev\\033[0m:\\033[1;34m~/project\\033[0m$ uname -m && cat /etc/os-release 2>/dev/null | head -1\\r\\n'; \
              printf 'aarch64\\r\\n'; printf 'PRETTY_NAME=\"Ubuntu 24.04 LTS\"\\r\\n'; \
              printf '\\033[1;32mdev\\033[0m:\\033[1;34m~/project\\033[0m$ cargo build\\r\\n'; \
-             printf '   \\033[1;32mCompiling\\033[0m dd-term-core v0.1.0\\r\\n'; \
+             printf '   \\033[1;32mCompiling\\033[0m hl-term-core v0.1.0\\r\\n'; \
              printf '    \\033[1;32mFinished\\033[0m dev target(s) in 0.6s\\r\\n'; \
              printf '\\033[1;32mdev\\033[0m:\\033[1;34m~/project\\033[0m$ \\033[?25h'",
         ),

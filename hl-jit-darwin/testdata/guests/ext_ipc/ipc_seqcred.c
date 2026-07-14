@@ -18,7 +18,7 @@
 int main(void) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) < 0) { printf("seqcred socketpair_failed\n"); return 0; }
-    const char *path = "/tmp/dd_seqcred_payload";
+    const char *path = "/tmp/hl_seqcred_payload";
     pid_t pid = fork();
     if (pid == 0) {
         close(sv[0]); // child keeps sv[1]

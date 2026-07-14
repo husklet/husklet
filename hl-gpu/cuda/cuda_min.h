@@ -4,8 +4,8 @@
  * broad: enough of the surface — types, error codes, attribute/enum values, handle types and the
  * versioned (`_v2`/`_v3`) entry-point names — that an unmodified CUDA app (or `libcudart`) links
  * against OUR libcuda and either runs its PTX kernels on dd's software backend or gets the spec-correct
- * error for an operation the dd-gpu model cannot serve. This is the ZLUDA "ship a drop-in libcuda.so"
- * seam; dd forwards to the dd-GPU IR + Metal instead of ROCm. No NVIDIA source is used.
+ * error for an operation the hl-gpu model cannot serve. This is the ZLUDA "ship a drop-in libcuda.so"
+ * seam; dd forwards to the hl-GPU IR + Metal instead of ROCm. No NVIDIA source is used.
  *
  * The load-bearing parts — the `_v2` versioned symbol names, `CUdeviceptr` width, the
  * `cuLaunchKernel` `void** kernelParams` calling convention, and the numeric values of the result /

@@ -23,7 +23,7 @@ pub mod execfaultx; // fork->execve child faults + CRASHDBG Mach exception-port 
 pub mod forkx; // preserved-arena fork: 1000-fork mixed-pattern storm (exit/work/cold/exec/nested)
 pub mod fs;
 pub mod fsx; // extended fs: *at() family, xattr, fadvise/close_range/O_PATH
-pub mod gpu_render_ir; // direct dd-gpu compositor replay probes: offscreen target -> sampled final target
+pub mod gpu_render_ir; // direct hl-gpu compositor replay probes: offscreen target -> sampled final target
 pub mod gui; // EGL/Wayland GL-shim probes for renderer debugging
 pub mod isolation; // container isolation + resource fidelity: --cpus/--read-only/--ulimit, masked/ro /proc paths
 pub mod ltpgaps; // LTP gap cluster: dup/fcntl flags, link/lstat, socket error paths, prctl/nanosleep/sched/read

@@ -34,7 +34,7 @@ static int fails(long r, int want) { return r == -1 && errno == want; }
 
 int main(void) {
     char dir[128];
-    snprintf(dir, sizeof dir, "/tmp/dd_aterr_%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/hl_aterr_%d", (int)getpid());
     mkdir(dir, 0755);
     if (chdir(dir) != 0) { printf("aterr chdir_failed\n"); return 1; }
     int fd = open("file", O_CREAT | O_RDWR, 0644);

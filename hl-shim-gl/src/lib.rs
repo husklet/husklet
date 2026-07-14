@@ -1,9 +1,9 @@
-//! dd-shim-gl — the guest GLES2/EGL shim, in Rust.
+//! hl-shim-gl — the guest GLES2/EGL shim, in Rust.
 //!
 //! Builds the single shared object deployed as `libEGL.so.1` (with `libGLESv2.so.2` /
 //! `libwayland-egl.so.1` as thin DT_NEEDED stubs). A real GLES2 app links `-lEGL -lGLESv2` and runs
 //! unmodified: every `egl*` / `gl*` symbol below is exported with the exact Khronos C ABI. On swap the
-//! front-end lowers accumulated state into a `dd-gpu` IR stream and ships it, via
+//! front-end lowers accumulated state into a `hl-gpu` IR stream and ships it, via
 //! [`hl_shim::transport`], to the host executor — the same IR the host decodes with the SAME
 //! Rust code (no hand-rolled second encoder, unlike the retiring C shim).
 //!
@@ -18,7 +18,7 @@
 #![allow(non_snake_case)]
 
 // The shared IR + transport foundation. Re-exported so this crate's modules (and readers) see that the
-// IR type is dd-gpu's, not a local copy.
+// IR type is hl-gpu's, not a local copy.
 pub use hl_shim as common;
 
 pub mod egl;

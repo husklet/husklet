@@ -6,7 +6,7 @@
 //! from CUDA PTX via the `KERNEL_MAGIC` descriptor seam), this drives the backend's *raw SPIR-V* path:
 //!   `SPIR-V words → CreateShader{spirv} → naga::front::spv → WGSL → naga → MSL → wgpu::ComputePipeline
 //!    → dispatch → storage-buffer readback`.
-//! This is the exact host execution seam the guest `dd-shim-vk` (Vulkan ICD) will target.
+//! This is the exact host execution seam the guest `hl-shim-vk` (Vulkan ICD) will target.
 //!
 //! The SPIR-V is minted on the host from a GLSL 450 (Vulkan dialect) source via naga's GLSL front end +
 //! SPIR-V back end — i.e. the same GLSL→SPIR-V step a Vulkan toolchain (glslang) performs — with a WGSL

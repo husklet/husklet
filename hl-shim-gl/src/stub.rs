@@ -60,7 +60,7 @@ fn trace_once(name: &'static str, kind: &str) {
     }
     if let Ok(mut s) = seen().lock() {
         if s.insert(name) {
-            eprintln!("[dd-shim-gl] {kind} entry point: {name}");
+            eprintln!("[hl-shim-gl] {kind} entry point: {name}");
         }
     }
 }
@@ -122,7 +122,7 @@ fn strict_abort(name: &'static str) -> ! {
     let ctx = crate::state::egl_current_context();
     let (major, minor) = (crate::state::egl_ctx_major(ctx), crate::state::egl_ctx_minor(ctx));
     eprintln!("========================================================================");
-    eprintln!("[dd-shim-gl] HL_SHIM_STRICT: aborting on unsupported entry point");
+    eprintln!("[hl-shim-gl] HL_SHIM_STRICT: aborting on unsupported entry point");
     eprintln!("  command : {name}");
     eprintln!("  object  : (unsupported capability — no backing object)");
     eprintln!("  thread  : {:?}", std::thread::current().id());

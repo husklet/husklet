@@ -3,14 +3,14 @@
  * These mirror the *documented* NVIDIA Management Library (NVML) C ABI from
  * nvml.h — enum values, struct layouts and function signatures — so the genuine,
  * closed-source `nvidia-smi` binary links against OUR implementation and reports a
- * dd-fabricated virtual device. We only declare what the shim needs; the layouts
+ * hl-fabricated virtual device. We only declare what the shim needs; the layouts
  * (field order/size/padding) and the versioned symbol names (`_v2`/`_v3`) are the
  * load-bearing part and match NVIDIA's headers exactly.
  *
  * This is a clean-room re-declaration of a published C ABI (no NVIDIA source).
  */
-#ifndef DD_NVML_MIN_H
-#define DD_NVML_MIN_H
+#ifndef HL_NVML_MIN_H
+#define HL_NVML_MIN_H
 
 #include <stddef.h>
 
@@ -106,4 +106,4 @@ typedef enum nvmlPstates_enum { NVML_PSTATE_0 = 0, NVML_PSTATE_UNKNOWN = 32 } nv
 #ifdef __cplusplus
 }
 #endif
-#endif /* DD_NVML_MIN_H */
+#endif /* HL_NVML_MIN_H */

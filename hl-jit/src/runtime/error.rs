@@ -17,7 +17,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::NoBackend(g) => write!(f, "no dd-jit backend available for {}", g.target()),
+            Error::NoBackend(g) => write!(f, "no hl-jit backend available for {}", g.target()),
             Error::Invalid(m) => write!(f, "invalid container config: {m}"),
             Error::Io(e) => write!(f, "container launch failed: {e}"),
         }

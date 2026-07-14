@@ -16,9 +16,9 @@ use smithay::wayland::keyboard_shortcuts_inhibit::{
     KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
 };
 
-use crate::DdState;
+use crate::HlState;
 
-impl KeyboardShortcutsInhibitHandler for DdState {
+impl KeyboardShortcutsInhibitHandler for HlState {
     fn keyboard_shortcuts_inhibit_state(&mut self) -> &mut KeyboardShortcutsInhibitState {
         &mut self.keyboard_shortcuts_inhibit
     }

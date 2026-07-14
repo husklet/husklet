@@ -34,7 +34,7 @@ pub extern "C" fn eglGetError() -> i32 {
 pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
     match name {
         0x3053 => cstr!("dd"),          // EGL_VENDOR
-        0x3054 => cstr!("1.4 dd-shim"), // EGL_VERSION
+        0x3054 => cstr!("1.4 hl-shim"), // EGL_VERSION
         0x308D => cstr!("OpenGL_ES"),   // EGL_CLIENT_APIS
         0x3055 => {
             // EGL_EXTENSIONS
@@ -525,9 +525,9 @@ pub extern "C" fn eglWaitNative(_engine: i32) -> u32 {
 
 /// Our own `libwayland-egl` window handle (mirrors gl_shim.c `struct hl_wl_egl_window`). The first
 /// field is Mesa-ABI-compatible (`intptr_t version`) so a stray Mesa struct is still parseable.
-const DD_WL_EGL_MAGIC: isize = 0x0064_6477_6c65_676c; // "ddwlegl"
+const HL_WL_EGL_MAGIC: isize = 0x0064_6477_6c65_676c; // "ddwlegl"
 #[repr(C)]
-pub struct DdWlEglWindow {
+pub struct HlWlEglWindow {
     version: isize,
     width: i32,
     height: i32,
@@ -548,8 +548,8 @@ unsafe fn parse_native_window(w: *const c_void) -> (u32, u32) {
     let (mut ww, mut hh) = (256i32, 256i32);
     if !w.is_null() {
         let version = *(w as *const isize);
-        if version == DD_WL_EGL_MAGIC {
-            let win = &*(w as *const DdWlEglWindow);
+        if version == HL_WL_EGL_MAGIC {
+            let win = &*(w as *const HlWlEglWindow);
             ww = win.width;
             hh = win.height;
             if win.attached_width > 0 && win.attached_height > 0 && win.attached_width <= 8192 && win.attached_height <= 8192 {
@@ -577,12 +577,12 @@ unsafe fn parse_native_window(w: *const c_void) -> (u32, u32) {
 
 // ---- libwayland-egl surface (our own; glmark2/Chrome call these) ----
 #[no_mangle]
-pub extern "C" fn wl_egl_window_create(surface: *mut c_void, width: i32, height: i32) -> *mut DdWlEglWindow {
+pub extern "C" fn wl_egl_window_create(surface: *mut c_void, width: i32, height: i32) -> *mut HlWlEglWindow {
     if width <= 0 || height <= 0 {
         return core::ptr::null_mut();
     }
-    let w = Box::into_raw(Box::new(DdWlEglWindow {
-        version: DD_WL_EGL_MAGIC,
+    let w = Box::into_raw(Box::new(HlWlEglWindow {
+        version: HL_WL_EGL_MAGIC,
         width,
         height,
         dx: 0,
@@ -603,7 +603,7 @@ pub extern "C" fn wl_egl_window_create(surface: *mut c_void, width: i32, height:
 }
 
 #[no_mangle]
-pub extern "C" fn wl_egl_window_resize(w: *mut DdWlEglWindow, width: i32, height: i32, dx: i32, dy: i32) {
+pub extern "C" fn wl_egl_window_resize(w: *mut HlWlEglWindow, width: i32, height: i32, dx: i32, dy: i32) {
     if w.is_null() {
         return;
     }
@@ -620,7 +620,7 @@ pub extern "C" fn wl_egl_window_resize(w: *mut DdWlEglWindow, width: i32, height
 }
 
 #[no_mangle]
-pub extern "C" fn wl_egl_window_get_attached_size(w: *mut DdWlEglWindow, width: *mut i32, height: *mut i32) {
+pub extern "C" fn wl_egl_window_get_attached_size(w: *mut HlWlEglWindow, width: *mut i32, height: *mut i32) {
     if w.is_null() {
         return;
     }
@@ -636,7 +636,7 @@ pub extern "C" fn wl_egl_window_get_attached_size(w: *mut DdWlEglWindow, width: 
 }
 
 #[no_mangle]
-pub extern "C" fn wl_egl_window_destroy(w: *mut DdWlEglWindow) {
+pub extern "C" fn wl_egl_window_destroy(w: *mut HlWlEglWindow) {
     if !w.is_null() {
         unsafe { drop(Box::from_raw(w)) };
     }
@@ -753,7 +753,7 @@ fn present_frame(surf: &Surface, ir: &[u8]) -> Result<(), String> {
         .unwrap_or_else(|e| e.into_inner())
         .submit(&ts, ir)
         .map_err(|e| format!("executor submit failed: {e}"))?;
-    // ...then commit the rendered dma-buf/IOSurface to the compositor (dd-display). A commit failure
+    // ...then commit the rendered dma-buf/IOSurface to the compositor (hl-display). A commit failure
     // (short write / fd-pass / disconnect / protocol / frame timeout) propagates so the swap reports it
     // instead of pretending the frame was presented.
     if let Some(wl) = wayland_session().lock().unwrap_or_else(|e| e.into_inner()).as_mut() {

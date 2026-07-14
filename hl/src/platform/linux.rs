@@ -1,8 +1,8 @@
 //! Linux platform impl. Service management is a `systemd --user` unit (no root): it writes
-//! `~/.config/systemd/user/com.dd.daemon.service` with the same daemon exec + env as the
+//! `~/.config/systemd/user/com.hl.daemon.service` with the same daemon exec + env as the
 //! macOS LaunchAgent (`HL_DOCKER_SOCK` / `HL_IMAGES` / `HL_JIT_DIR` — names unchanged) and drives
 //! it with `systemctl --user`. There is no Gatekeeper and no `.app` bundle on Linux, so
-//! quarantine is always `false` and `app_bundle()` is `None`. Logs live under `~/.dd/logs`.
+//! quarantine is always `false` and `app_bundle()` is `None`. Logs live under `~/.hl/logs`.
 //!
 //! `hl daemon run` (foreground exec) always works regardless of systemd; these functions only
 //! cover the managed start/stop/restart/status lifecycle.
@@ -12,12 +12,12 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// The `systemd --user` unit name, e.g. `com.dd.daemon.service`.
+/// The `systemd --user` unit name, e.g. `com.hl.daemon.service`.
 fn unit_name() -> String {
     format!("{}.service", paths::AGENT_LABEL)
 }
 
-/// `~/.config/systemd/user/com.dd.daemon.service`.
+/// `~/.config/systemd/user/com.hl.daemon.service`.
 fn unit_path() -> PathBuf {
     paths::home()
         .join(".config/systemd/user")
@@ -27,7 +27,7 @@ fn unit_path() -> PathBuf {
 /// Render the systemd user unit. Mirrors the macOS plist: same ExecStart + environment.
 fn render_unit() -> String {
     let daemon = paths::daemon_bin();
-    // The JIT binaries (ddjit-*) live next to the daemon.
+    // The JIT binaries (hljit-*) live next to the daemon.
     let jit_dir = daemon
         .parent()
         .map(|p| p.to_path_buf())
@@ -62,7 +62,7 @@ fn render_unit() -> String {
 
 // ── Seam surface ──────────────────────────────────────────────────────────────
 
-/// Create the `~/.dd` tree and write the systemd unit (does not start it). Returns the unit path.
+/// Create the `~/.hl` tree and write the systemd unit (does not start it). Returns the unit path.
 pub fn service_write() -> std::io::Result<PathBuf> {
     for d in [
         paths::run_dir(),
@@ -132,7 +132,7 @@ pub fn app_bundle() -> Option<PathBuf> {
     None
 }
 
-/// `~/.dd/logs` — daemon stdout/stderr logs.
+/// `~/.hl/logs` — daemon stdout/stderr logs.
 pub fn logs_dir() -> PathBuf {
     paths::hl_root().join("logs")
 }

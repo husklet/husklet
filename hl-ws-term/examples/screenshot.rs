@@ -3,14 +3,14 @@
 //!
 //!   cargo run -p hl-ws-term --example screenshot -- /tmp/out.png
 //!
-//! Defaults to `dd-term.png` in the current directory.
+//! Defaults to `hl-term.png` in the current directory.
 
 use hl_ws_term::pty::local::LocalPty;
 use hl_ws_term::{CpuRenderer, PtyBackend, Vt};
 use std::time::{Duration, Instant};
 
 fn main() {
-    let out = std::env::args().nth(1).unwrap_or_else(|| "dd-term.png".to_string());
+    let out = std::env::args().nth(1).unwrap_or_else(|| "hl-term.png".to_string());
     let (cols, rows) = (80usize, 24usize);
 
     // A little "dev session": colors, a prompt, box drawing (DEC line-drawing), a table, cursor.

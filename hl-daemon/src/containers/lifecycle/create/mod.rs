@@ -160,24 +160,24 @@ pub(crate) async fn containers_create(
         // Probe up front that the upper is actually creatable AND writable, and FAIL LOUD (a stderr
         // diagnostic) if not — otherwise a non-writable upper degrades into silent per-write EPERM inside
         // the guest with no hint why. This is a bridge-topology footgun: the daemon runs on one host but the
-        // JIT (which reads/writes this upper) runs mac-side, so the daemon's $HOME/.dd must land on a
+        // JIT (which reads/writes this upper) runs mac-side, so the daemon's $HOME/.hl must land on a
         // filesystem the JIT host can write. We do NOT change behavior — on a real macOS host HOME is
         // correct and the probe passes silently; this only surfaces the misconfiguration.
         if let Err(e) = std::fs::create_dir_all(&dir) {
             eprintln!(
-                "dd-daemon: overlay upper not creatable at {}: {e} -- container writes will fail \
-                (EPERM); ensure the daemon's $HOME/.dd is writable by the JIT host",
+                "hl-daemon: overlay upper not creatable at {}: {e} -- container writes will fail \
+                (EPERM); ensure the daemon's $HOME/.hl is writable by the JIT host",
                 dir.display()
             );
         } else {
-            let probe = dir.join(".dd-write-probe");
+            let probe = dir.join(".hl-write-probe");
             match std::fs::write(&probe, b"") {
                 Ok(()) => {
                     let _ = std::fs::remove_file(&probe);
                 }
                 Err(e) => eprintln!(
-                    "dd-daemon: overlay upper not writable at {}: {e} -- container writes \
-                    will fail (EPERM); ensure the daemon's $HOME/.dd is writable by the JIT host",
+                    "hl-daemon: overlay upper not writable at {}: {e} -- container writes \
+                    will fail (EPERM); ensure the daemon's $HOME/.hl is writable by the JIT host",
                     dir.display()
                 ),
             }

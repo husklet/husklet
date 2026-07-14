@@ -1,4 +1,4 @@
-//! dd-app UI: the window shell + render dispatch. Resource pages live in `views/`, reusable
+//! hl-app UI: the window shell + render dispatch. Resource pages live in `views/`, reusable
 //! widgets and dialogs in `components/`, the design tokens in `theme`.
 #![allow(unused_imports, dead_code)]
 pub(crate) mod components;
@@ -62,7 +62,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     // keeps the NATIVE macOS title bar with real traffic-light controls, and we place the status in
     // a slim strip just below it (assembled at the end of build()).
     let daemon_dot = gtk::Box::new(gtk::Orientation::Horizontal, 0); // a CSS-drawn status circle
-    daemon_dot.add_css_class("dd-dot");
+    daemon_dot.add_css_class("hl-dot");
     daemon_dot.set_valign(gtk::Align::Center);
     let daemon_label = gtk::Label::new(Some("Daemon"));
     let daemon_box = gtk::Box::new(gtk::Orientation::Horizontal, 7);
@@ -70,7 +70,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     daemon_box.append(&daemon_label);
     let daemon_toggle = gtk::Button::builder().child(&daemon_box).build();
     daemon_toggle.set_has_frame(false);
-    daemon_toggle.add_css_class("dd-seg");
+    daemon_toggle.add_css_class("hl-seg");
     {
         let s = sender.clone();
         daemon_toggle.connect_clicked(move |_| s.input(Msg::ToggleDaemon));
@@ -81,19 +81,19 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     context_pop_box.set_size_request(150, -1);
     let context_pop = gtk::Popover::new();
     context_pop.set_has_arrow(false);
-    context_pop.add_css_class("dd-pop");
+    context_pop.add_css_class("hl-pop");
     context_pop.set_child(Some(&context_pop_box));
     let context_menu = gtk::MenuButton::new();
     context_menu.set_label("Docker");
     context_menu.set_has_frame(false);
     context_menu.set_popover(Some(&context_pop));
-    context_menu.add_css_class("dd-seg");
+    context_menu.add_css_class("hl-seg");
     let context_seg = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     context_seg.append(&context_menu);
     context_seg.set_visible(false); // shown by render() when the docker CLI is present
 
     let group = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    group.add_css_class("dd-statusgroup");
+    group.add_css_class("hl-statusgroup");
     group.set_valign(gtk::Align::Center);
     group.set_halign(gtk::Align::End);
     group.set_hexpand(true);
@@ -138,7 +138,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     // --- pane 2: the items in the selected category ------------------------
     let list = nav_list();
     // Plain click = VIEW one item (Single selection + detail). BATCH selection is separate and ⌘-only:
-    // ⌘-clicked rows go into `batch` (a `.dd-batch` highlight, NOT the view selection); Delete removes them.
+    // ⌘-clicked rows go into `batch` (a `.hl-batch` highlight, NOT the view selection); Delete removes them.
     list.set_selection_mode(gtk::SelectionMode::Single);
     list.set_activate_on_single_click(true);
     let batch: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>> =
@@ -186,7 +186,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
         list.add_controller(keys);
     }
     {
-        // ⌘-click toggles BATCH membership (a `.dd-batch` highlight), without changing the viewed item.
+        // ⌘-click toggles BATCH membership (a `.hl-batch` highlight), without changing the viewed item.
         // Capture phase + claim so the default single-select/activate doesn't also fire.
         let click = gtk::GestureClick::new();
         click.set_button(gtk::gdk::BUTTON_PRIMARY);
@@ -207,10 +207,10 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
                     if key.contains(':') {
                         let mut b = batch_c.borrow_mut();
                         if b.remove(&key) {
-                            row.remove_css_class("dd-batch");
+                            row.remove_css_class("hl-batch");
                         } else {
                             b.insert(key);
-                            row.add_css_class("dd-batch");
+                            row.add_css_class("hl-batch");
                         }
                     }
                     g.set_state(gtk::EventSequenceState::Claimed);
@@ -249,7 +249,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     logs_view.set_right_margin(10);
     logs_view.set_top_margin(6);
     logs_view.set_bottom_margin(6);
-    logs_view.add_css_class("dd-logs");
+    logs_view.add_css_class("hl-logs");
     let logs_scroll = gtk::ScrolledWindow::builder()
         .child(&logs_view)
         .vexpand(true)
@@ -257,8 +257,8 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
         .build();
 
     let term_notebook = gtk::Notebook::new();
-    term_notebook.add_css_class("dd-termbook");
-    term_notebook.add_css_class("dd-content"); // the whole detail is one card
+    term_notebook.add_css_class("hl-termbook");
+    term_notebook.add_css_class("hl-content"); // the whole detail is one card
     term_notebook.set_overflow(gtk::Overflow::Hidden);
     term_notebook.set_scrollable(true);
     term_notebook.append_page(&info_scroll, Some(&gtk::Label::new(Some("Info"))));
@@ -301,7 +301,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
         .vexpand(true)
         .hexpand(true)
         .build();
-    home_scroll.add_css_class("dd-home");
+    home_scroll.add_css_class("hl-home");
 
     // Settings page (filled by render()).
     let settings = gtk::Box::new(gtk::Orientation::Vertical, 16);
@@ -315,7 +315,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
         .vexpand(true)
         .hexpand(true)
         .build();
-    settings_scroll.add_css_class("dd-home");
+    settings_scroll.add_css_class("hl-home");
 
     // System page: a tabbed notebook — "Logs" (engine + disk + the daemon log, filled by render()) and
     // "Settings" (the settings box, also filled by render()).
@@ -331,8 +331,8 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
         .hexpand(true)
         .build();
     let system_notebook = gtk::Notebook::new();
-    system_notebook.add_css_class("dd-termbook");
-    system_notebook.add_css_class("dd-syspages");
+    system_notebook.add_css_class("hl-termbook");
+    system_notebook.add_css_class("hl-syspages");
     system_notebook.append_page(&system_logs_scroll, Some(&gtk::Label::new(Some("Logs"))));
     system_notebook.append_page(&settings_scroll, Some(&gtk::Label::new(Some("Settings"))));
 
@@ -350,10 +350,10 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
         .vexpand(true)
         .hexpand(true)
         .build();
-    ws_list_scroll.add_css_class("dd-home");
+    ws_list_scroll.add_css_class("hl-home");
     let ws_notebook = gtk::Notebook::new();
-    ws_notebook.add_css_class("dd-termbook");
-    ws_notebook.add_css_class("dd-syspages");
+    ws_notebook.add_css_class("hl-termbook");
+    ws_notebook.add_css_class("hl-syspages");
     ws_notebook.set_scrollable(true);
     ws_notebook.append_page(&ws_list_scroll, Some(&gtk::Label::new(Some("Workspaces"))));
     let ws_sig = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
@@ -385,7 +385,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
 
     // "Update available" button (hidden unless a newer release is found).
     let update_btn = gtk::Button::new();
-    update_btn.add_css_class("dd-update");
+    update_btn.add_css_class("hl-update");
     update_btn.set_valign(gtk::Align::Center);
     update_btn.set_visible(false);
     {
@@ -395,7 +395,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
 
     // Slim status strip (under the native title bar) above the body.
     let strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    strip.add_css_class("dd-topstrip");
+    strip.add_css_class("hl-topstrip");
     strip.set_size_request(-1, 38); // title-bar height; traffic lights float over the (empty) left
     strip.set_margin_start(12);
     strip.set_margin_end(7);
@@ -460,7 +460,7 @@ pub(crate) fn logo_path() -> Option<std::path::PathBuf> {
 /// A sidebar-style floating card (translucent, rounded, clipped).
 pub(crate) fn sidebar_card() -> gtk::Box {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    b.add_css_class("dd-sidebar");
+    b.add_css_class("hl-sidebar");
     b.set_overflow(gtk::Overflow::Hidden);
     b
 }
@@ -621,7 +621,7 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
             while let Some(row) = w.list.row_at_index(i) {
                 let key = row.widget_name().to_string();
                 if w.batch.borrow().contains(&key) {
-                    row.add_css_class("dd-batch");
+                    row.add_css_class("hl-batch");
                 }
                 present.insert(key);
                 i += 1;
@@ -729,9 +729,9 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
             w.context_seg.set_visible(true);
             w.context_menu.set_label(active);
             if active == "dd" {
-                w.context_menu.add_css_class("dd-active");
+                w.context_menu.add_css_class("hl-active");
             } else {
-                w.context_menu.remove_css_class("dd-active");
+                w.context_menu.remove_css_class("hl-active");
             }
             w.context_menu.set_tooltip_text(Some(
                 "Choose which Docker context (daemon) the docker CLI uses",
@@ -743,10 +743,10 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
                 lbl.set_xalign(0.0);
                 lbl.set_hexpand(true);
                 let item = gtk::Button::builder().child(&lbl).build();
-                item.add_css_class("dd-popitem");
+                item.add_css_class("hl-popitem");
                 item.set_has_frame(false);
                 if ctx == active {
-                    item.add_css_class("dd-active");
+                    item.add_css_class("hl-active");
                 }
                 let s = sender.clone();
                 let name = ctx.clone();

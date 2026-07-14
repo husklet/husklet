@@ -4,10 +4,10 @@ set -eu
 cd "$(dirname "$0")"
 
 ROOT="$(cd ../../.. && pwd)"
-GL_SHIM="$ROOT/dd-tests/guests/gl_shim.c"
-HL_DISPLAY="${HL_DISPLAY:-$ROOT/target/release/dd-display}"
+GL_SHIM="$ROOT/hl-tests/guests/gl_shim.c"
+HL_DISPLAY="${HL_DISPLAY:-$ROOT/target/release/hl-display}"
 TMPBASE="${HL_SHADER_TRANSLATE_TMP:-$ROOT/target-chrome-codex/shader-translate-tmp}"
-TMPDIR="$TMPBASE/dd-shader-translate.$$"
+TMPDIR="$TMPBASE/hl-shader-translate.$$"
 
 cleanup() {
     rm -rf "$TMPDIR"

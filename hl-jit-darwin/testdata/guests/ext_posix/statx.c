@@ -7,7 +7,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_statx_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_statx_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     write(fd, "1234567890", 10);
     close(fd);

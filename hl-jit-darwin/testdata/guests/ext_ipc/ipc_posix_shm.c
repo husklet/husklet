@@ -8,7 +8,7 @@
 #include <stdatomic.h>
 #define NP 4
 int main(void) {
-    const char *name = "/dd_posix_shm2";
+    const char *name = "/hl_posix_shm2";
     shm_unlink(name);
     int fd = shm_open(name, O_CREAT | O_RDWR, 0600);
     if (fd < 0) { perror("shm_open"); return 1; }

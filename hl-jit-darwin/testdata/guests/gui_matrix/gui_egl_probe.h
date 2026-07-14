@@ -1,5 +1,5 @@
-#ifndef DD_GUI_EGL_PROBE_H
-#define DD_GUI_EGL_PROBE_H
+#ifndef HL_GUI_EGL_PROBE_H
+#define HL_GUI_EGL_PROBE_H
 
 #include "gui_probe_wayland.h"
 

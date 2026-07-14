@@ -8,7 +8,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_inotify_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_inotify_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR, 0644);
     close(fd);
     int in = inotify_init1(0);

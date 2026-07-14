@@ -1,4 +1,4 @@
-/* dd-shim-vk dlopen smoke test — the Vulkan analogue of dd-shim-cuda's tests/smoke.c.
+/* hl-shim-vk dlopen smoke test — the Vulkan analogue of hl-shim-cuda's tests/smoke.c.
  *
  * A plain C program (NOT linked against the ICD, and NOT going through a Vulkan loader) dlopen()s the
  * built libvk_dd.so and drives it exactly the way the Vulkan **loader** would: negotiate the loader<->

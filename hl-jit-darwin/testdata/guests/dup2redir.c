@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *path = "/tmp/dd_dup2redir.txt";
+    const char *path = "/tmp/hl_dup2redir.txt";
     int saved = dup(1);
     int f = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     dup2(f, 1);

@@ -32,7 +32,7 @@ struct Texture {
     pixels: Vec<u8>,
 }
 
-/// A registered shader module. The software oracle's shader ABI is a dd-GPU **kernel program**
+/// A registered shader module. The software oracle's shader ABI is a hl-GPU **kernel program**
 /// (compiled from forwarded PTX); a Metal backend would instead carry SPIR-V for the same slot — the
 /// per-backend seam described in `docs/ideas/CUDA_ON_METAL.md §5`.
 enum ShaderModule {
@@ -1048,9 +1048,9 @@ impl GpuBackend for SoftwareBackend {
     fn capabilities(&self) -> Capabilities {
         use crate::backend::{command_bits, format_bits, shader_payload, ALL_COMMANDS, COLOR_FORMATS};
         Capabilities {
-            name: "dd-software".into(),
+            name: "hl-software".into(),
             unified_memory: true, // it's all host memory
-            supports_compute: true, // executes compiled PTX kernels (dd-GPU kernel IR) on the CPU
+            supports_compute: true, // executes compiled PTX kernels (hl-GPU kernel IR) on the CPU
             supports_graphics: true, // clear/copy only
             max_texture_2d: 8192,
             present_kinds: vec![PresentKind::Shm],
@@ -1144,7 +1144,7 @@ impl GpuBackend for SoftwareBackend {
         if spirv.is_empty() {
             return Err(GpuError::Invalid("empty shader module"));
         }
-        // A dd-GPU kernel descriptor (forwarded PTX + launch config) is compiled to an executable
+        // A hl-GPU kernel descriptor (forwarded PTX + launch config) is compiled to an executable
         // kernel program here; anything else is treated as opaque SPIR-V (recorded, not run).
         let module = match kind {
             crate::ir::ShaderPayloadKind::PtxKernel => {

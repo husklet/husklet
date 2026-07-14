@@ -3,7 +3,7 @@
 //!
 //! - [`PngPresenter`] dumps each committed surface to a PNG — the headless proof of the whole CPU path
 //!   (memfd → wl_shm pool → `SCM_RIGHTS` → mmap → framebuffer), verifiable on the Linux dev host with no
-//!   GPU or display. This is how `dd-term-core` proves its renderer, applied to the display pipeline.
+//!   GPU or display. This is how `hl-term-core` proves its renderer, applied to the display pipeline.
 //! - The Cocoa presenter (see `present_cocoa.rs`, macOS only) opens a native `NSWindow`+`CALayer` per
 //!   surface and blits the same BGRA framebuffer via `CALayer.contents`.
 
@@ -50,7 +50,7 @@ pub struct SurfaceBuffer {
     /// subsurfaces/popups into `bgra` and leaves this empty; a GPU root instead carries each subsurface
     /// and popup here as a [`GpuCompositeNode`] (a `wl_shm` layer + its device-pixel offset) so the
     /// presenter draws the mixed shm/IOSurface tree — the IOSurface base plus each overlay on top —
-    /// instead of losing the child surfaces. See `dd-compositor`'s `present_tree`.
+    /// instead of losing the child surfaces. See `hl-compositor`'s `present_tree`.
     pub overlays: Vec<GpuCompositeNode>,
 }
 
@@ -132,7 +132,7 @@ pub struct IOSurfaceMetadata {
     pub bytes_per_row: u32,
     pub pixel_format: u32,
     /// The id's current allocation generation, stamped by the host and bumped each time the id's
-    /// backing surface is replaced (see `dd-display::metal` and the dmabuf modifier generation). A
+    /// backing surface is replaced (see `hl-display::metal` and the dmabuf modifier generation). A
     /// guest dmabuf whose modifier carries a non-zero generation is imported only if it equals this;
     /// a stale (retired) generation is rejected. 0 means the host does not version this id.
     pub generation: u32,
@@ -434,7 +434,7 @@ impl Presenter for PngPresenter {
         self.frames += 1;
         self.last = Some((surf.sid, surf.width, surf.height, rgba));
         eprintln!(
-            "[dd-display] present sid={} {}x{} title={:?} -> {}",
+            "[hl-display] present sid={} {}x{} title={:?} -> {}",
             surf.sid,
             surf.width,
             surf.height,

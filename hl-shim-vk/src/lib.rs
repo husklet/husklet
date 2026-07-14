@@ -1,12 +1,12 @@
-//! dd-shim-vk — the guest Vulkan driver (a Vulkan ICD), in Rust (increment-1 FOUNDATION).
+//! hl-shim-vk — the guest Vulkan driver (a Vulkan ICD), in Rust (increment-1 FOUNDATION).
 //!
 //! Builds the shared object a standard Vulkan **loader** (libvulkan) discovers via an `icd.json`
 //! manifest and accepts as a driver. An unmodified Vulkan app opens libvulkan; the loader loads this
 //! ICD, negotiates the loader↔ICD interface, and resolves every `vk*` entry point through our
 //! `vk_icdGetInstanceProcAddr`. We report the "dd Metal (Vulkan)" physical device; the compute/render
-//! path lowers into a `dd-gpu` IR stream and — through [`hl_shim::transport`] — reaches the
+//! path lowers into a `hl-gpu` IR stream and — through [`hl_shim::transport`] — reaches the
 //! host executor as the SAME IR the host decodes with the SAME Rust code (no hand-rolled second
-//! encoder). This mirrors dd-shim-gl / dd-shim-cuda increment-1 exactly.
+//! encoder). This mirrors hl-shim-gl / hl-shim-cuda increment-1 exactly.
 //!
 //! ## Ported from real references (no invented behavior)
 //! * **ICD interface** ([`icd`], [`handle`]) — Khronos **Vulkan-Loader** `docs/LoaderDriverInterface.md`
@@ -35,7 +35,7 @@
 #![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
 
 // The shared IR + transport foundation. Re-exported so this crate's modules (and readers) see that the
-// IR type is dd-gpu's, not a local copy.
+// IR type is hl-gpu's, not a local copy.
 pub use hl_shim as common;
 
 pub mod capability;
@@ -216,15 +216,15 @@ mod tests {
     #[test]
     fn advertises_vulkan_1_4() {
         assert_eq!(capability::ADVERTISED_API_VERSION, (1, 4));
-        assert_eq!(ash::vk::api_version_major(state::DD_API_VERSION), 1);
-        assert_eq!(ash::vk::api_version_minor(state::DD_API_VERSION), 4);
+        assert_eq!(ash::vk::api_version_major(state::HL_API_VERSION), 1);
+        assert_eq!(ash::vk::api_version_minor(state::HL_API_VERSION), 4);
         let mut v: u32 = 0xffff_ffff;
         assert_eq!(vkEnumerateInstanceVersion(&mut v), types::VK_SUCCESS);
         assert_eq!(ash::vk::api_version_major(v), 1);
         assert_eq!(ash::vk::api_version_minor(v), 4);
         // The physical-device properties report the same version.
         let props = state::physical_device_properties();
-        assert_eq!(props.api_version, state::DD_API_VERSION);
+        assert_eq!(props.api_version, state::HL_API_VERSION);
     }
 
     /// A vkCreateInstance requesting a version NEWER than advertised (1.4, 2.0) must be refused with

@@ -5,7 +5,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_fcntl_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_fcntl_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR, 0644);
     int fl = fcntl(fd, F_GETFL);
     int isrw = (fl & O_ACCMODE) == O_RDWR;

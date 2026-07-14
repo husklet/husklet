@@ -11,7 +11,7 @@
 //!   2. a `wl_surface.buffer_transform` of 90° rotates BOTH the presented geometry (w/h swapped) and the
 //!      sampled pixels (an asymmetric 2×1 buffer presents as an upright 1×2 with the two texels swapped).
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use hl_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
@@ -117,10 +117,10 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
 
 #[test]
 fn cpu_composition_premultiplied_blend_and_buffer_transform_are_correct() {
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
     let shots = Arc::new(Mutex::new(HashMap::new()));
-    let mut state = DdState::new(
+    let mut state = HlState::new(
         dh.clone(),
         Box::new(RecordingPresenter {
             frames: 0,

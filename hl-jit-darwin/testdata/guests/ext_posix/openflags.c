@@ -8,7 +8,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_openflags_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_openflags_%d", (int)getpid());
     unlink(path);
     int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0644);
     int created = fd >= 0;

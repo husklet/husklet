@@ -1,4 +1,4 @@
-//! Translator byte-parity: assert dd-shim-gl's Rust GLSL→MSL translator produces output IDENTICAL to
+//! Translator byte-parity: assert hl-shim-gl's Rust GLSL→MSL translator produces output IDENTICAL to
 //! gl_shim.c's `translate()`, using gl_shim.c's own `-DDD_TR_TOOL gl_tr` tool as the oracle. Runs over
 //! the committed `shader_translate/*.glsl` corpus (chrome/Skia shaders that exercise uniforms,
 //! matrices, samplers, builtins, local decls). Skips (does not fail) if `cc` isn't available.
@@ -41,7 +41,7 @@ fn gl_tr_output(bin: &Path, vert: &Path, frag: &Path) -> Option<String> {
 
 #[test]
 fn translator_matches_gl_shim_c_over_the_shader_corpus() {
-    let dir = std::env::temp_dir().join(format!("dd-shim-tr-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-shim-tr-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let gl_tr = match build_gl_tr(&dir) {
         Some(b) => b,
@@ -92,7 +92,7 @@ fn translator_matches_gl_shim_c_over_the_shader_corpus() {
             }
             let i = first.unwrap_or(0);
             panic!(
-                "translator diverges from gl_shim.c on '{name}' at line {i}:\n  gl_shim.c : {:?}\n  dd-shim-gl: {:?}\n--- full gl_shim.c ---\n{golden}\n--- full dd-shim-gl ---\n{got}",
+                "translator diverges from gl_shim.c on '{name}' at line {i}:\n  gl_shim.c : {:?}\n  hl-shim-gl: {:?}\n--- full gl_shim.c ---\n{golden}\n--- full hl-shim-gl ---\n{got}",
                 gl.get(i),
                 rl.get(i)
             );

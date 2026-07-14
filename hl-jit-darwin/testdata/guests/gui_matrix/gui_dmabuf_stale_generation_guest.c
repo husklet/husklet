@@ -23,7 +23,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#define DD_MAGIC 0x6464u
+#define HL_MAGIC 0x6464u
 #define GEN_SHIFT 17u
 #define GEN_MASK 0x7fffu
 #define XRGB8888 0x34325258u
@@ -114,7 +114,7 @@ static int send_create(int fd, uint32_t params) {
 static int make_plane_fd(void) {
     const char *tmp = getenv("TMPDIR");
     char path[256];
-    snprintf(path, sizeof(path), "%s/dd-stale-plane-XXXXXX", tmp && *tmp ? tmp : "/tmp");
+    snprintf(path, sizeof(path), "%s/hl-stale-plane-XXXXXX", tmp && *tmp ? tmp : "/tmp");
     int fd = mkstemp(path);
     if (fd < 0) return -1;
     unlink(path);
@@ -127,7 +127,7 @@ int main(int argc, char **argv) {
     // argv[2] = the IOSurface id to reference (default 7); lets the harness point the import at a real
     // engine/mach-seeded id whose live generation the compositor authenticates against.
     uint32_t iosurf_id = (argc > 2) ? (uint32_t)strtoul(argv[2], NULL, 10) : 7u;
-    uint32_t mod_hi = DD_MAGIC | ((generation & GEN_MASK) << GEN_SHIFT);
+    uint32_t mod_hi = HL_MAGIC | ((generation & GEN_MASK) << GEN_SHIFT);
 
     int fd = connect_wayland();
     if (fd < 0 || send_get_registry(fd) != 0) return 2;

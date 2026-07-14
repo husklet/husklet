@@ -92,7 +92,7 @@ impl Session {
 
     /// Serialize to the prefix-notation text format.
     pub fn serialize(&self) -> String {
-        let mut out = String::from("# dd session layout\nversion 1\n");
+        let mut out = String::from("# hl session layout\nversion 1\n");
         for tab in &self.tabs {
             out.push_str("tab ");
             out.push_str(&esc(&tab.title));
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn save_load_via_disk() {
-        let dir = std::env::temp_dir().join(format!("dd-sess-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hl-sess-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let s = sample_session();
         s.save(&dir).unwrap();

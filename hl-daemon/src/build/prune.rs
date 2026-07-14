@@ -4,13 +4,13 @@
 use super::*;
 
 /// `POST /build/prune` — `docker builder prune` / the build-cache portion of `docker system prune`.
-/// Reclaims BOTH dd build-cache slots: the new per-step layer cache (~/.dd/buildcache, populated by
-/// `docker build`) and the persistent JIT translated-code cache (~/.dd/pcache, surfaced as `system df`
+/// Reclaims BOTH dd build-cache slots: the new per-step layer cache (~/.hl/buildcache, populated by
+/// `docker build`) and the persistent JIT translated-code cache (~/.hl/pcache, surfaced as `system df`
 /// BuilderSize). Both are fully reclaimable — layers re-snapshot on the next build, pcache re-translates
 /// on demand — so a wholesale drop only forces a one-time recompute.
 pub(crate) async fn build_prune() -> axum::Json<crate::api::BuildPruneReport> {
     let (mut deleted, mut reclaimed) = (Vec::new(), 0i64);
-    // 1) the build layer cache: one dir per cached step under ~/.dd/buildcache/layers.
+    // 1) the build layer cache: one dir per cached step under ~/.hl/buildcache/layers.
     let layers = crate::util::buildcache_dir().join("layers");
     if let Ok(rd) = std::fs::read_dir(&layers) {
         for e in rd.filter_map(|e| e.ok()) {
@@ -211,7 +211,7 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
             fake_id(&manifest)
         }
     };
-    // Persist a dd-image.json so the image survives a daemon restart (discover_images reads it). Include
+    // Persist a hl-image.json so the image survives a daemon restart (discover_images reads it). Include
     // the effective `user` (Config.User) and the guest `arch`/`os` so a committed ELF-less image keeps its
     // default runtime user and doesn't get relabeled to arm64 by discovery's ELF-sniffing fallback.
     let mut dd = json!({"name": key, "cmd": cmd, "entrypoint": entrypoint, "env": env,
@@ -223,7 +223,7 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
     if let Some(a) = &q.author {
         dd["author"] = json!(a);
     }
-    let _ = std::fs::write(target.join("dd-image.json"), dd.to_string());
+    let _ = std::fs::write(target.join("hl-image.json"), dd.to_string());
     {
         let mut g = a.inner.lock().await;
         // Replace any existing image sharing this repo:tag (mirrors the build/load re-tag dedupe).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dd-tests/scenarios/compose-multinet.sh -- multi-network Docker Compose against dd-daemon.
+# hl-tests/scenarios/compose-multinet.sh -- multi-network Docker Compose against hl-daemon.
 #
 # The plain `compose.sh` scenario runs a single project network, so a container only ever needs the
 # primary network named by HostConfig.NetworkMode. Compose v2, however, attaches a service to EVERY
@@ -7,16 +7,16 @@
 # `POST /containers/create` (NetworkMode only carries the *first*). This scenario stands one service on
 # TWO project networks and asserts the container shows up in BOTH, exercising the EndpointsConfig path.
 #
-#   bash dd-tests/scenarios/compose-multinet.sh
+#   bash hl-tests/scenarios/compose-multinet.sh
 #
 # Self-skips with rc=0 when neither `docker compose` nor `docker-compose` is installed. Run after `make jit`.
-# Env: HL_IMAGES (image dir, default poc/images), HL_DAEMON (daemon binary, default target/release/dd-daemon).
+# Env: HL_IMAGES (image dir, default poc/images), HL_DAEMON (daemon binary, default target/release/hl-daemon).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
-DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
-SOCK="$ROOT/dd-compose-mnet.sock"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/hl-daemon}"
+SOCK="$ROOT/hl-compose-mnet.sock"
 export DOCKER_HOST="unix://$SOCK"
 
 # ---- pick a compose driver (v2 plugin preferred, v1 fallback) ----
@@ -33,10 +33,10 @@ pass=0 fail=0
 has() { if echo "$2" | grep -qF "$3"; then echo "  ok   $1"; pass=$((pass+1)); else echo "  FAIL $1: [$2] lacks [$3]"; fail=$((fail+1)); fi; }
 
 # ---- bring up an isolated daemon (private socket + private state/volumes) ----
-SCEN_LOG="$ROOT/dd-compose-mnet.log"
-pkill -x dd-daemon 2>/dev/null
+SCEN_LOG="$ROOT/hl-compose-mnet.log"
+pkill -x hl-daemon 2>/dev/null
 rm -f "$SOCK"
-STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dd-compose-mnet.XXXXXX")"
+STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hl-compose-mnet.XXXXXX")"
 export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!

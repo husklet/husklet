@@ -1,4 +1,4 @@
-//! dd-shim-vk codegen: turn the Khronos-`vk.xml`-derived entry-point manifest into (a) the complete
+//! hl-shim-vk codegen: turn the Khronos-`vk.xml`-derived entry-point manifest into (a) the complete
 //! set of `#[no_mangle] extern "C"` `vk*` exports the ICD must provide, and (b) a name→address
 //! dispatch table the loader-facing `vk_icdGetInstanceProcAddr`/`vkGetInstanceProcAddr` resolve
 //! against. Mirrors hl-shim-cuda/build.rs and hl-shim-gl/build.rs.
@@ -592,7 +592,7 @@ const IMPLEMENTED: &[&str] = &[
     "vkDestroyCommandPool",
     "vkAllocateCommandBuffers",
     "vkFreeCommandBuffers",
-    // ---- increment 2: functional execution path (Vulkan -> dd-gpu IR -> host Metal seam) ----
+    // ---- increment 2: functional execution path (Vulkan -> hl-gpu IR -> host Metal seam) ----
     // memory + buffers + images (memory.rs)
     "vkCreateBuffer",
     "vkDestroyBuffer",
@@ -665,7 +665,7 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetFenceStatus",
     "vkCreateSemaphore",
     "vkDestroySemaphore",
-    // ---- increment 3: WSI + present (wsi.rs) — the vkcube-through-dd-shim-vk path ----
+    // ---- increment 3: WSI + present (wsi.rs) — the vkcube-through-hl-shim-vk path ----
     "vkCreateWaylandSurfaceKHR",
     "vkDestroySurfaceKHR",
     "vkGetPhysicalDeviceWaylandPresentationSupportKHR",

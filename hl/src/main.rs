@@ -1,12 +1,12 @@
-//! `ddcli` — the user-facing command for the dd VM-less container runtime.
+//! `hl` — the user-facing command for the dd VM-less container runtime.
 //!
 //! Run containers with easy-access defaults (the current directory mounted + the working dir, host
 //! networking, an interactive shell), and manage the per-user daemon — all without root.
 //!
-//!   ddcli ubuntu                       # drop into a shell in an ubuntu container, here in this dir
-//!   ddcli run alpine echo hi           # run a one-off command
-//!   ddcli run ubuntu --platform linux/amd64   # force amd64 (runs via the x86-64 JIT)
-//!   ddcli install                      # set up the daemon agent + docker context
+//!   hl ubuntu                       # drop into a shell in an ubuntu container, here in this dir
+//!   hl run alpine echo hi           # run a one-off command
+//!   hl run ubuntu --platform linux/amd64   # force amd64 (runs via the x86-64 JIT)
+//!   hl install                      # set up the daemon agent + docker context
 
 mod agent;
 mod app;

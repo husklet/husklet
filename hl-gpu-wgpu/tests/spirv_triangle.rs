@@ -6,7 +6,7 @@
 //!   `SPIR-V words → CreateShader{spirv} → naga::front::spv → WGSL → naga → MSL → wgpu::RenderPipeline
 //!    → BeginRenderPass/Draw → render target → read pixels`.
 //! This mirrors `examples/verify_ir.rs` (which exercises the builtin FLAT/TEX fallbacks) but with real,
-//! guest-supplied SPIR-V modules — the exact host seam the guest `dd-shim-vk` will target. Vulkan hands
+//! guest-supplied SPIR-V modules — the exact host seam the guest `hl-shim-vk` will target. Vulkan hands
 //! one SPIR-V module per stage, so the vertex and fragment shaders are two distinct `CreateShader`s.
 //!
 //! SPIR-V is minted host-side from GLSL 450 (Vulkan dialect) via naga's GLSL front + SPIR-V back — the

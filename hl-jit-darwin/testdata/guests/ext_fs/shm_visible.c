@@ -16,7 +16,7 @@
 #define TMPFS_MAGIC 0x01021994
 
 int main(void) {
-    const char *base = "dd_shm_vis";
+    const char *base = "hl_shm_vis";
     char nm[64];
     snprintf(nm, sizeof nm, "/%s", base);
     shm_unlink(nm);

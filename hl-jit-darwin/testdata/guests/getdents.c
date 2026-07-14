@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *dir = "/tmp/dd_getdents_dir";
+    const char *dir = "/tmp/hl_getdents_dir";
     mkdir(dir, 0755);
     const char *names[] = {"alpha", "bravo", "charlie", "delta"};
     char p[256];

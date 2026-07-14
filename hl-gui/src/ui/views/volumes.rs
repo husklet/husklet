@@ -18,7 +18,7 @@ pub(crate) fn volume_detail(
     sender: &ComponentSender<AppModel>,
 ) -> gtk::Widget {
     let root = detail_root();
-    let del = text_btn("Delete", "dd-danger", sender, {
+    let del = text_btn("Delete", "hl-danger", sender, {
         let name = v.name.clone();
         move || Msg::RemoveVolume(name.clone())
     });

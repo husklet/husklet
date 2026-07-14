@@ -82,7 +82,7 @@ fn advertised_gl_version_matches_inventory_profile() {
     let s = unsafe { std::ffi::CStr::from_ptr(ptr as *const core::ffi::c_char) };
     let v = s.to_str().unwrap();
     assert_eq!(v, hl_shim_gl::ADVERTISED_GL_VERSION_STR);
-    assert_eq!(v, "OpenGL ES 2.0 dd-shim", "must advertise the coherent ES 2.0 profile, not ES 3.x");
+    assert_eq!(v, "OpenGL ES 2.0 hl-shim", "must advertise the coherent ES 2.0 profile, not ES 3.x");
     assert_eq!(hl_shim_gl::ADVERTISED_GL_MAJOR, 2);
     assert_eq!(hl_shim_gl::ADVERTISED_GL_MINOR, 0);
 
@@ -111,7 +111,7 @@ fn advertised_gl_version_matches_inventory_profile() {
 // with HL_SHIM_STRICT=1 and a marker env var; the child calls a stub, which aborts (SIGABRT). The
 // parent asserts the child did NOT exit successfully.
 
-const CHILD_MARKER: &str = "DD_SHIM_GL_STRICT_CHILD";
+const CHILD_MARKER: &str = "HL_SHIM_GL_STRICT_CHILD";
 
 #[test]
 fn strict_child_aborts_on_stub() {

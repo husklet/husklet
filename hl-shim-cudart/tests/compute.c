@@ -1,4 +1,4 @@
-/* dd-shim-cudart end-to-end RUNTIME-API COMPUTE test — the functional milestone through libcudart.so.1.
+/* hl-shim-cudart end-to-end RUNTIME-API COMPUTE test — the functional milestone through libcudart.so.1.
  *
  * A plain C program (NOT linked against the shim) dlopen()s the built libcudart.so.1 and drives a real
  * CUDA runtime vector-add exactly as a compiled CUDA app would: register a fatbin through the nvcc glue
@@ -7,7 +7,7 @@
  * asserts the read-back output is arithmetically correct (c[i] == a[i] + b[i]).
  *
  * This proves the whole runtime path executes end-to-end — libcudart(shim) -> libcuda(shim) -> shared
- * dd-gpu IR -> dd-gpu software backend (CPU PTX interpreter) -> readback — on this host with NO GPU. It
+ * hl-gpu IR -> hl-gpu software backend (CPU PTX interpreter) -> readback — on this host with NO GPU. It
  * is the runtime-API analogue of hl-gpu/cuda/test_cudart.c, self-contained (fatbin structs inlined).
  *
  *   build+run:  cc tests/compute.c -ldl -o /tmp/cudart_compute && /tmp/cudart_compute <path-to-libcudart.so>
@@ -23,7 +23,7 @@ typedef struct dim3 { unsigned int x, y, z; } dim3;
 
 enum { cudaMemcpyHostToDevice = 1, cudaMemcpyDeviceToHost = 2 };
 
-/* c[i] = a[i] + b[i] — byte-identical to dd_gpu::ptx::VECADD_PTX. */
+/* c[i] = a[i] + b[i] — byte-identical to hl_gpu::ptx::VECADD_PTX. */
 static const char *VECADD_PTX =
     ".version 7.5\n.target sm_86\n.address_size 64\n"
     ".visible .entry vecadd(\n"

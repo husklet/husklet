@@ -18,7 +18,7 @@ static int io_getevents_(aio_context_t c, long mn, long n, struct io_event *e, s
 static int io_destroy_(aio_context_t c) { return (int)syscall(SYS_io_destroy, c); }
 
 int main(void) {
-    const char *path = "/tmp/dd_aio_test.bin";
+    const char *path = "/tmp/hl_aio_test.bin";
     const char payload[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; // 36 bytes
     size_t plen = sizeof payload - 1;
 

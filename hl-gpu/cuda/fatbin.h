@@ -21,27 +21,27 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DD_FATBIN_WRAPPER_MAGIC 0x466243b1u   /* __fatBinC_Wrapper_t.magic */
-#define DD_FATBIN_MAGIC         0xba55ed50u   /* fatbin container magic     */
-#define DD_FATBIN_KIND_PTX      1
-#define DD_FATBIN_KIND_ELF      2
-#define DD_FATBIN_FLAG_COMPRESS 0x0000000000002000ull
+#define HL_FATBIN_WRAPPER_MAGIC 0x466243b1u   /* __fatBinC_Wrapper_t.magic */
+#define HL_FATBIN_MAGIC         0xba55ed50u   /* fatbin container magic     */
+#define HL_FATBIN_KIND_PTX      1
+#define HL_FATBIN_KIND_ELF      2
+#define HL_FATBIN_FLAG_COMPRESS 0x0000000000002000ull
 
 /* __fatBinC_Wrapper_t — what __cudaRegisterFatBinary receives. */
 typedef struct {
-    int         magic;      /* DD_FATBIN_WRAPPER_MAGIC */
+    int         magic;      /* HL_FATBIN_WRAPPER_MAGIC */
     int         version;
-    const void* data;       /* -> fatbin container (DdFatBinHeader) */
+    const void* data;       /* -> fatbin container (HlFatBinHeader) */
     void*       filename;
-} DdFatBinWrapper;
+} HlFatBinWrapper;
 
 /* fatbin container header (16 bytes). */
 typedef struct __attribute__((packed)) {
-    unsigned int       magic;        /* DD_FATBIN_MAGIC */
+    unsigned int       magic;        /* HL_FATBIN_MAGIC */
     unsigned short     version;
     unsigned short     header_size;  /* = 16 */
     unsigned long long fat_size;     /* total bytes of all entries after this header */
-} DdFatBinHeader;
+} HlFatBinHeader;
 
 /* per-image entry header (64 bytes). payload (PTX text or ELF) starts at entry + header_size. */
 typedef struct __attribute__((packed)) {
@@ -59,7 +59,7 @@ typedef struct __attribute__((packed)) {
     unsigned long long flags;             /* bit 0x2000 = FLAG_COMPRESS */
     unsigned long long reserved0;
     unsigned long long uncompressed_size;
-} DdFatBinEntry;
+} HlFatBinEntry;
 
 /* True if `image` looks like an ELF/CUBIN (SASS) blob — dd cannot execute SASS. */
 static inline int hl_image_is_elf(const void* image) {
@@ -70,7 +70,7 @@ static inline int hl_image_is_elf(const void* image) {
 /* True if `image` is a fatbin wrapper or a bare fatbin container. */
 static inline int hl_image_is_fatbin(const void* image) {
     unsigned int m; memcpy(&m, image, sizeof(m));
-    return m == DD_FATBIN_WRAPPER_MAGIC || m == DD_FATBIN_MAGIC;
+    return m == HL_FATBIN_WRAPPER_MAGIC || m == HL_FATBIN_MAGIC;
 }
 
 /* Extract the first uncompressed PTX entry as a malloc'd NUL-terminated string (caller frees).
@@ -80,31 +80,31 @@ static inline char* hl_fatbin_extract_ptx(const void* image, unsigned long long*
     unsigned int m0; memcpy(&m0, image, sizeof(m0));
 
     const unsigned char* container;
-    if (m0 == DD_FATBIN_WRAPPER_MAGIC) {
-        const DdFatBinWrapper* w = (const DdFatBinWrapper*)image;
+    if (m0 == HL_FATBIN_WRAPPER_MAGIC) {
+        const HlFatBinWrapper* w = (const HlFatBinWrapper*)image;
         container = (const unsigned char*)w->data;
-    } else if (m0 == DD_FATBIN_MAGIC) {
+    } else if (m0 == HL_FATBIN_MAGIC) {
         container = (const unsigned char*)image;
     } else {
         return NULL;
     }
     if (!container) return NULL;
 
-    DdFatBinHeader h; memcpy(&h, container, sizeof(h));
-    if (h.magic != DD_FATBIN_MAGIC || h.header_size < sizeof(DdFatBinHeader)) return NULL;
+    HlFatBinHeader h; memcpy(&h, container, sizeof(h));
+    if (h.magic != HL_FATBIN_MAGIC || h.header_size < sizeof(HlFatBinHeader)) return NULL;
 
     const unsigned char* base = container + h.header_size;
     const unsigned char* end  = base + h.fat_size;
     const unsigned char* cur  = base;
 
-    while (cur + sizeof(DdFatBinEntry) <= end) {
-        DdFatBinEntry e; memcpy(&e, cur, sizeof(e));
-        if (e.header_size < sizeof(DdFatBinEntry)) break;
+    while (cur + sizeof(HlFatBinEntry) <= end) {
+        HlFatBinEntry e; memcpy(&e, cur, sizeof(e));
+        if (e.header_size < sizeof(HlFatBinEntry)) break;
         if ((unsigned long long)(end - cur) < e.header_size) break;
         const unsigned char* payload = cur + e.header_size;
         if ((unsigned long long)(end - payload) < e.payload_size) break;
 
-        if (e.kind == DD_FATBIN_KIND_PTX && !(e.flags & DD_FATBIN_FLAG_COMPRESS)) {
+        if (e.kind == HL_FATBIN_KIND_PTX && !(e.flags & HL_FATBIN_FLAG_COMPRESS)) {
             unsigned long long n = e.payload_size;
             /* PTX payloads are NUL-padded; trim the trailing NUL run so the copy is exact text. */
             while (n > 0 && payload[n - 1] == 0) n--;

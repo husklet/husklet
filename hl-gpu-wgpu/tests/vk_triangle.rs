@@ -1,11 +1,11 @@
-//! End-to-end Vulkan GRAPHICS on the REAL Metal GPU, driven through dd-shim-vk's exported `vk*` API.
+//! End-to-end Vulkan GRAPHICS on the REAL Metal GPU, driven through hl-shim-vk's exported `vk*` API.
 //!
-//! The milestone: an app that calls ONLY dd-shim-vk's Vulkan entry points — create instance/device,
+//! The milestone: an app that calls ONLY hl-shim-vk's Vulkan entry points — create instance/device,
 //! a color-attachment image + view + render pass + framebuffer, a SPIR-V vertex+fragment graphics
 //! pipeline, a vertex buffer, then records `vkCmdBeginRenderPass`/`vkCmdBindPipeline`/
-//! `vkCmdBindVertexBuffers`/`vkCmdDraw(3)`/`vkCmdEndRenderPass` and `vkQueueSubmit` — produces a dd-gpu
+//! `vkCmdBindVertexBuffers`/`vkCmdDraw(3)`/`vkCmdEndRenderPass` and `vkQueueSubmit` — produces a hl-gpu
 //! IR stream that rasterizes a green triangle on a live Metal device. The Vulkan analogue of
-//! `dd-gpu-wgpu`'s `spirv_triangle.rs`, every action through the guest driver's `vk*` surface.
+//! `hl-gpu-wgpu`'s `spirv_triangle.rs`, every action through the guest driver's `vk*` surface.
 //!
 //! The color attachment is host-owned (like a swapchain image): the shim assigns it an IR texture id
 //! and references it in `Enc::BeginRenderPass`; the test — playing the host exec service — registers

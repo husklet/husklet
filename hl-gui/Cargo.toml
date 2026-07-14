@@ -2,22 +2,22 @@
 name = "hl-gui"
 version = "0.4.0"
 edition = "2021"
-description = "dd-app — a GTK4/libadwaita desktop UI for the dd VM-less container runtime."
+description = "hl-app — a GTK4/libadwaita desktop UI for the hl VM-less container runtime."
 license = "MIT"
 autobins = false
 
 [[bin]]
-name = "dd-app"
+name = "hl-app"
 path = "src/main.rs"
 
-# dd-term — a standalone GPU-rendered (GTK4/GSK) terminal window with iTerm2-style tabs + splits,
-# launching dd workspaces daemon-free via `ddcli workspace launch`.
+# hl-term — a standalone GPU-rendered (GTK4/GSK) terminal window with iTerm2-style tabs + splits,
+# launching hl workspaces daemon-free via `hl workspace launch`.
 [[bin]]
-name = "dd-term"
+name = "hl-term"
 path = "src/bin/term.rs"
 
 [dependencies]
-# Shared dd daemon client (a thin façade over bollard); GUI + CLI both use it.
+# Shared hl daemon client (a thin façade over bollard); GUI + CLI both use it.
 hl-client = { path = "../hl-client" }
 # Workspace RUN primitive (pure, no GTK): the bare Workspace + Arch/Mount.
 hl-ws = { path = "../hl-ws" }
@@ -27,14 +27,14 @@ hl = { path = "../hl", default-features = false }
 # Terminal primitive (VT/session/config/png): the terminal window's grid + session model.
 hl-ws-term = { path = "../hl-ws-term" }
 # GUI stack (GTK4 via Relm4). Needs pkg-config + the GTK4 dev libs at build time, which only
-# exist on the macOS host (via the Nix devShell in ./nix) — that's why dd-gui is excluded from
+# exist on the macOS host (via the Nix devShell in ./nix) — that's why hl-gui is excluded from
 # the workspace default-members. Build with `make app` there.
 #
 # NOTE: libadwaita is intentionally NOT used: its `appstream` dependency fails to build under
 # nixpkgs on aarch64-darwin. GTK4 ships the Adwaita *theme* internally, so the UI still looks
 # native without the libadwaita *library*.
 # Relm4's DEFAULT features include `css` (the separate `relm4-css` crate of predefined
-# CSS-class-name constants). dd-gui styles exclusively via gtk4's own `gtk::CssProvider`
+# CSS-class-name constants). hl-gui styles exclusively via gtk4's own `gtk::CssProvider`
 # (see src/ui/theme.rs / src/bin/term.rs) and never references relm4-css, so `css` is dropped.
 # Keep `macros` + `gnome_42` (the other default features) unchanged.
 relm4 = { version = "0.9", default-features = false, features = ["macros", "gnome_42"] }

@@ -1,7 +1,7 @@
 //! `LocalShellLauncher` — the host-shell implementation of `hl-ws`'s [`Launcher`] seam.
 //!
 //! Runs a plain host shell (ignoring the image) so the whole configure→launch→terminal flow is
-//! exercisable on any host and in tests. The real engine launcher (`DdJitLauncher`, macOS) lives in `hl`
+//! exercisable on any host and in tests. The real engine launcher (`HlJitLauncher`, macOS) lives in `hl`
 //! and enters the image's container; both return the shared [`hl_ws::PtyBackend`] handle.
 
 use crate::pty::local::LocalPty;
@@ -29,7 +29,7 @@ impl Launcher for LocalShellLauncher {
             &argv,
             cols,
             rows,
-            &[("TERM", "xterm-256color"), ("DD_WORKSPACE", &ws.name)],
+            &[("TERM", "xterm-256color"), ("HL_WORKSPACE", &ws.name)],
         )?;
         Ok(Box::new(pty))
     }
@@ -48,7 +48,7 @@ mod tests {
         let ws = Workspace::new("demo", "ubuntu:24.04", Arch::Arm64);
         let launcher = LocalShellLauncher::default();
         let mut pty = launcher.launch(&ws, 40, 10).unwrap();
-        pty.write(b"echo hello-$DD_WORKSPACE; exit\n").unwrap();
+        pty.write(b"echo hello-$HL_WORKSPACE; exit\n").unwrap();
 
         let mut vt = Vt::new(40, 10);
         let fd = pty.master_fd().unwrap();

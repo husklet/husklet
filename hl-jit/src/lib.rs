@@ -1,9 +1,9 @@
-//! dd-jit — a clean, platform-agnostic Rust API for configuring and running containers.
+//! hl-jit — a clean, platform-agnostic Rust API for configuring and running containers.
 //!
-//! `dd-jit` is the public runtime API. It selects a host backend at compile time (`dd-jit-darwin`
-//! on macOS today; `dd-jit-linux` / `dd-jit-win` in the future) and exposes a uniform, ergonomic
+//! `hl-jit` is the public runtime API. It selects a host backend at compile time (`hl-jit-darwin`
+//! on macOS today; `hl-jit-linux` / `hl-jit-win` in the future) and exposes a uniform, ergonomic
 //! interface for running containers directly from Rust — no shelling out, no Docker daemon needed.
-//! `dd-daemon` is a thin Docker-Engine-API polyfill layered on top of this crate.
+//! `hl-daemon` is a thin Docker-Engine-API polyfill layered on top of this crate.
 //!
 //! ```no_run
 //! use hl_jit::{Runtime, Container, Image};

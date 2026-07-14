@@ -22,16 +22,16 @@ use smithay::wayland::{
 
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
-use crate::DdState;
+use crate::HlState;
 
 /// Environment override for the advertised fractional backing scale (e.g. `1.5`, `1.25`). The macOS
 /// backing store reports an *integer* `backingScaleFactor` (2 on Retina), so a non-integer "logical"
 /// scale is a compositor *policy* choice rather than something the platform hands us; this override
 /// lets that policy — and the headless tests — drive a true fractional value without a live display.
-/// Mirrors the existing `DD_DISPLAY_*` knobs (`HL_DISPLAY_HIDPI`, `HL_DISPLAY_WINDOW_DECORATIONS`).
+/// Mirrors the existing `HL_DISPLAY_*` knobs (`HL_DISPLAY_HIDPI`, `HL_DISPLAY_WINDOW_DECORATIONS`).
 const FRACTIONAL_SCALE_ENV: &str = "HL_DISPLAY_FRACTIONAL_SCALE";
 
-impl DdState {
+impl HlState {
     /// The fractional buffer scale the compositor prefers for surfaces on the primary output — the value
     /// sent (in 120ths) via `wp_fractional_scale_v1.preferred_scale`. Defaults to the output's own
     /// fractional scale (equal to the integer `wl_output.scale` when that is all we have), overridable to
@@ -67,7 +67,7 @@ impl DdState {
     }
 }
 
-impl FractionalScaleHandler for DdState {
+impl FractionalScaleHandler for HlState {
     /// A surface just created its `wp_fractional_scale_v1`. Seed it with the output's preferred fractional
     /// scale immediately so the client can pick its first buffer size correctly (GTK/Qt query this before
     /// their first paint).

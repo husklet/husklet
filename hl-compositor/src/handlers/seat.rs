@@ -35,9 +35,9 @@ use smithay::{
     },
 };
 
-use crate::DdState;
+use crate::HlState;
 
-impl SeatHandler for DdState {
+impl SeatHandler for HlState {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
@@ -84,9 +84,9 @@ impl SeatHandler for DdState {
 /// `wp_cursor_shape_manager_v1` routes a tablet tool's themed cursor here. We drive a single pointer
 /// seat (no tablet), so the default (ignore) behaviour is correct — but the impl is required so
 /// `delegate_cursor_shape!` can dispatch the shared manager global.
-impl TabletSeatHandler for DdState {}
+impl TabletSeatHandler for HlState {}
 
-impl DdState {
+impl HlState {
     /// Absolute pointer motion in logical/point space (top-left origin). Focuses the pointer on the
     /// currently focused toplevel surface. Honours an active `zwp_pointer_constraints` constraint on the
     /// focused surface: a pointer LOCK freezes the absolute position (the motion is dropped — games read
@@ -447,7 +447,7 @@ impl DdState {
 // the `Presenter` clipboard hooks; (2) drag-and-drop is accepted (Smithay runs the pointer grab / offer
 // enter/motion/leave/drop/finish), with the client-initiated `started`/`dropped` callbacks wired below.
 
-impl SelectionHandler for DdState {
+impl SelectionHandler for HlState {
     type SelectionUserData = ();
 
     /// A guest set (or cleared) the clipboard selection. On a set (a copy), queue the offered mime types
@@ -492,7 +492,7 @@ impl SelectionHandler for DdState {
     }
 }
 
-impl DataDeviceHandler for DdState {
+impl DataDeviceHandler for HlState {
     fn data_device_state(&self) -> &DataDeviceState {
         &self.data_device
     }
@@ -504,9 +504,9 @@ impl DataDeviceHandler for DdState {
 // expect. Smithay drives the whole guest↔guest transfer through the SAME `SelectionHandler` as the
 // clipboard (a `Primary` target on `new_selection`/`send_selection`), and routes a reader straight to the
 // owning client, so the handler is a one-liner state getter; the compositor only follows keyboard focus
-// with it (see `DdState::focus_surface` → `set_primary_focus`). No host-clipboard bridge (kept optional).
+// with it (see `HlState::focus_surface` → `set_primary_focus`). No host-clipboard bridge (kept optional).
 
-impl PrimarySelectionHandler for DdState {
+impl PrimarySelectionHandler for HlState {
     fn primary_selection_state(&self) -> &PrimarySelectionState {
         &self.primary_selection
     }
@@ -520,7 +520,7 @@ impl PrimarySelectionHandler for DdState {
 // lock is active the injection path freezes the absolute pointer and the macOS loop feeds relative deltas
 // through `relative_motion`; a confine clamps absolute motion to the region (see `constrain_motion`).
 
-impl PointerConstraintsHandler for DdState {
+impl PointerConstraintsHandler for HlState {
     fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
         // Activate immediately if the constrained surface currently holds focus; otherwise leave it pending
         // (Smithay activates nothing on its own — the compositor owns the policy).
@@ -549,11 +549,11 @@ impl PointerConstraintsHandler for DdState {
 /// Client-initiated drag-and-drop. Smithay owns the pointer grab and the `wl_data_offer`
 /// enter/motion/leave/drop/finish choreography; these callbacks are the compositor-policy hooks. A DnD
 /// cursor icon is left to the host cursor (we drive a single pointer with no surface-backed drag icon).
-impl ClientDndGrabHandler for DdState {}
+impl ClientDndGrabHandler for HlState {}
 
 /// Server-initiated drag-and-drop. The compositor never starts a host-driven drag (there is no host drag
 /// source in this seat), so the defaults — which simply ignore the negotiation — are correct.
-impl ServerDndGrabHandler for DdState {}
+impl ServerDndGrabHandler for HlState {}
 
 /// Map Smithay's `CursorIcon` to the `wp_cursor_shape_device_v1.shape` enum number the Presenter
 /// (`apply_cursor_shape` → `NSCursor`) understands. This is the inverse of Smithay's internal

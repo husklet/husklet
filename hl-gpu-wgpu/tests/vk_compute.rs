@@ -1,15 +1,15 @@
-//! End-to-end Vulkan COMPUTE on the REAL Metal GPU, driven through dd-shim-vk's exported `vk*` API.
+//! End-to-end Vulkan COMPUTE on the REAL Metal GPU, driven through hl-shim-vk's exported `vk*` API.
 //!
-//! The milestone: an app that calls ONLY the Vulkan entry points dd-shim-vk exports — create
+//! The milestone: an app that calls ONLY the Vulkan entry points hl-shim-vk exports — create
 //! instance/device, create buffers + device memory, map/write inputs, create a SPIR-V compute shader,
-//! a compute pipeline, a descriptor set, record `vkCmdDispatch`, `vkQueueSubmit` — produces a dd-gpu
+//! a compute pipeline, a descriptor set, record `vkCmdDispatch`, `vkQueueSubmit` — produces a hl-gpu
 //! IR stream that, replayed on the host `WgpuBackend`, runs `c[i] = a[i] + b[i]` on a live Metal
-//! device with the correct readback. This is the Vulkan analogue of `dd-gpu-wgpu`'s
+//! device with the correct readback. This is the Vulkan analogue of `hl-gpu-wgpu`'s
 //! `spirv_compute.rs`, but every GPU action goes through the guest driver's `vk*` surface.
 //!
 //! The test plays the role of the host GPU-exec service: it drains the shim-recorded IR
 //! (`reg::take_ir`) and replays it on the backend, exactly as `$HL_GPU_EXEC` would in production
-//! (and as dd-shim-cuda's tests replay on an embedded backend). Needs a Metal device → macOS only.
+//! (and as hl-shim-cuda's tests replay on an embedded backend). Needs a Metal device → macOS only.
 //! Run: `cargo test -p hl-shim-vk --test vk_compute`.
 
 #![cfg(target_os = "macos")]

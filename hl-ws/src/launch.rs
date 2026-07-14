@@ -1,7 +1,7 @@
 //! The launch seam: turn a [`Workspace`] into a live terminal ([`crate::terminal::PtyBackend`]).
 //!
 //! Only the TRAIT lives here (std-only). The concrete launchers implement it in the crates that own a
-//! terminal: `LocalShellLauncher` in `hl-ws-term` (host shell, tests) and the engine `DdJitLauncher` in
+//! terminal: `LocalShellLauncher` in `hl-ws-term` (host shell, tests) and the engine `HlJitLauncher` in
 //! `hl`. `hl-ws` names no concrete terminal — the returned handle is the abstract [`PtyBackend`] trait.
 
 use crate::model::Workspace;

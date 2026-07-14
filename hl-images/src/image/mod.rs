@@ -1,6 +1,6 @@
 //! The image → rootfs flow: pull an OCI image into a local store as an unpacked **rootfs**, detect its
-//! target arch, and expose its config. `dd-images` is runtime-agnostic — it produces a rootfs + [`Arch`]
-//! + config that the CALLER hands to a runtime (e.g. `dd-jit`); it does not depend on any runtime crate.
+//! target arch, and expose its config. `hl-images` is runtime-agnostic — it produces a rootfs + [`Arch`]
+//! + config that the CALLER hands to a runtime (e.g. `hl-jit`); it does not depend on any runtime crate.
 //!
 //! ```no_run
 //! let img = hl_images::Store::new("/var/lib/dd/images")

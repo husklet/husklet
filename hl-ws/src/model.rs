@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn upper_dir_is_named_and_stable() {
         let ws = Workspace::new("My Cool WS!", "ubuntu", Arch::Arm64);
-        let dir = ws.upper_dir(Path::new("/home/u/.dd"));
-        assert_eq!(dir, Path::new("/home/u/.dd/workspaces/My_Cool_WS_/upper"));
+        let dir = ws.upper_dir(Path::new("/home/u/.hl"));
+        assert_eq!(dir, Path::new("/home/u/.hl/workspaces/My_Cool_WS_/upper"));
     }
 }

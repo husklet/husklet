@@ -1,6 +1,6 @@
 // dup/dup2/dup3/fcntl/read errno + flag semantics — the LTP dup03/dup201/fcntl05/fcntl13/read02 surface,
 // distilled to a deterministic self-check. Every line is a fixed string (only booleans/errno-names, never
-// raw fds/pids/addresses) so it oracle-diffs dd-vs-native byte-for-byte. A raw dup2(2) syscall is issued
+// raw fds/pids/addresses) so it oracle-diffs hl-vs-native byte-for-byte. A raw dup2(2) syscall is issued
 // (glibc dup2 on x86 uses the dup2 syscall; this pins the oldfd==newfd contract that dup3 does NOT share).
 //
 // The negative cases here are the ones dd historically got wrong because it shares the host descriptor

@@ -907,7 +907,7 @@ async fn published_port_bind_conflict_fails_start() {
     // Occupy a host port so the container's publish of the same port collides at bind time.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let base = std::env::temp_dir().join(format!("dd-portfail-{}-{}", std::process::id(), port));
+    let base = std::env::temp_dir().join(format!("hl-portfail-{}-{}", std::process::id(), port));
     std::fs::create_dir_all(&base).unwrap();
     let c = Container {
         id: "portfail0000".into(),

@@ -1,4 +1,4 @@
-/* dd's libnvidia-ml.so.1 — a real NVML implementation that reports a dd-fabricated
+/* dd's libnvidia-ml.so.1 — a real NVML implementation that reports a hl-fabricated
  * virtual GPU so the *genuine* closed-source `nvidia-smi` binary runs unmodified.
  *
  * There is no NVIDIA hardware on an Apple-silicon Mac; dd substitutes the driver's
@@ -40,7 +40,7 @@ static int         g_cuda_driver_version = 12020; /* 12.2 -> maj*1000 + min*10 *
 /* A single, stable, non-null handle for the one device. `nvmlDevice_t` is an opaque
  * pointer; we back it with a fixed storage address (its contents are never read). */
 static int g_device_obj;
-#define DD_DEVICE_HANDLE ((nvmlDevice_t)&g_device_obj)
+#define HL_DEVICE_HANDLE ((nvmlDevice_t)&g_device_obj)
 
 static void seed_from_env(void) {
     const char* n = getenv("HL_CUDA_NAME");
@@ -76,7 +76,7 @@ static void seed_from_env(void) {
     }
 }
 
-static int is_valid(nvmlDevice_t d) { return d == DD_DEVICE_HANDLE; }
+static int is_valid(nvmlDevice_t d) { return d == HL_DEVICE_HANDLE; }
 
 /* ================= init / shutdown / strings ================= */
 
@@ -135,7 +135,7 @@ static nvmlReturn_t handle_by_index_impl(unsigned int index, nvmlDevice_t* dev) 
     if (!g_inited) return NVML_ERROR_UNINITIALIZED;
     if (!dev) return NVML_ERROR_INVALID_ARGUMENT;
     if (index != 0) return NVML_ERROR_INVALID_ARGUMENT;
-    *dev = DD_DEVICE_HANDLE; return NVML_SUCCESS;
+    *dev = HL_DEVICE_HANDLE; return NVML_SUCCESS;
 }
 nvmlReturn_t nvmlDeviceGetHandleByIndex_v2(unsigned int i, nvmlDevice_t* d) { return handle_by_index_impl(i, d); }
 nvmlReturn_t nvmlDeviceGetHandleByIndex(unsigned int i, nvmlDevice_t* d)    { return handle_by_index_impl(i, d); }
@@ -144,14 +144,14 @@ nvmlReturn_t nvmlDeviceGetHandleByUUID(const char* uuid, nvmlDevice_t* dev) {
     if (!g_inited) return NVML_ERROR_UNINITIALIZED;
     if (!uuid || !dev) return NVML_ERROR_INVALID_ARGUMENT;
     if (strcmp(uuid, g_uuid) != 0) return NVML_ERROR_NOT_FOUND;
-    *dev = DD_DEVICE_HANDLE; return NVML_SUCCESS;
+    *dev = HL_DEVICE_HANDLE; return NVML_SUCCESS;
 }
 
 static nvmlReturn_t handle_by_pci_impl(const char* pci, nvmlDevice_t* dev) {
     if (!g_inited) return NVML_ERROR_UNINITIALIZED;
     if (!pci || !dev) return NVML_ERROR_INVALID_ARGUMENT;
     /* Only one device on a fixed bus; accept the canonical id. */
-    *dev = DD_DEVICE_HANDLE; return NVML_SUCCESS;
+    *dev = HL_DEVICE_HANDLE; return NVML_SUCCESS;
 }
 nvmlReturn_t nvmlDeviceGetHandleByPciBusId_v2(const char* p, nvmlDevice_t* d) { return handle_by_pci_impl(p, d); }
 nvmlReturn_t nvmlDeviceGetHandleByPciBusId(const char* p, nvmlDevice_t* d)    { return handle_by_pci_impl(p, d); }
@@ -398,9 +398,9 @@ nvmlReturn_t nvmlSystemGetProcessName(unsigned int pid, char* name, unsigned int
  * that cleanly steers the list/query modes onto our public API (they render the dd device for real) and
  * makes the default dashboard fail cleanly. **Query/list = real; default dashboard = closed-ABI boundary.** */
 static nvmlReturn_t hl_et_notsup(void) { return NVML_ERROR_NOT_SUPPORTED; }
-#define DD_ET_SLOTS 245                     /* matches real libnvidia-ml.so.535.230.02 */
-#define DD_ET_HEADER 0x7a8                  /* real slot[0] value (table byte size) */
-static void* g_export_table[DD_ET_SLOTS];
+#define HL_ET_SLOTS 245                     /* matches real libnvidia-ml.so.535.230.02 */
+#define HL_ET_HEADER 0x7a8                  /* real slot[0] value (table byte size) */
+static void* g_export_table[HL_ET_SLOTS];
 nvmlReturn_t nvmlInternalGetExportTable(const void** ppExportTable, void* pExportTableId) {
     (void)pExportTableId;
     if (!ppExportTable) return NVML_ERROR_INVALID_ARGUMENT;
@@ -408,8 +408,8 @@ nvmlReturn_t nvmlInternalGetExportTable(const void** ppExportTable, void* pExpor
         /* NULL slot positions observed in the real table (besides the header at [0]). */
         static const int nulls[] = {1,2,24,35,60,64,90,104,121,122,139,150,157,158,159,160,161,162,
                                      163,167,176,177,178,187,190,191,198,201,202,207,211,216,217,235,236};
-        g_export_table[0] = (void*)(size_t)DD_ET_HEADER;
-        for (int i = 1; i < DD_ET_SLOTS; i++) g_export_table[i] = (void*)hl_et_notsup;
+        g_export_table[0] = (void*)(size_t)HL_ET_HEADER;
+        for (int i = 1; i < HL_ET_SLOTS; i++) g_export_table[i] = (void*)hl_et_notsup;
         for (unsigned k = 0; k < sizeof(nulls) / sizeof(nulls[0]); k++) g_export_table[nulls[k]] = NULL;
     }
     *ppExportTable = g_export_table;

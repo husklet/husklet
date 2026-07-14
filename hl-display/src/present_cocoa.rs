@@ -6,7 +6,7 @@
 //! CoreGraphics or Metal yet (the `MTLBuffer(bytesNoCopy)` zero-copy path is M1's follow-on / M4). All
 //! AppKit calls run on the main thread, as AppKit/CoreAnimation require.
 //!
-//! Compiled only on macOS. The portable rest of `dd-display` (wire + shm + framebuffer) is what the Linux
+//! Compiled only on macOS. The portable rest of `hl-display` (wire + shm + framebuffer) is what the Linux
 //! headless self-test exercises; this file is the piece that needs the Mac (and, to *see* the window, the
 //! user's eyes — the bridge cannot screen-record).
 
@@ -220,7 +220,7 @@ fn make_focusable_window(
 /// Integer `wl_output.scale` to advertise, derived from the Mac's backing store. Retina HiDPI (advertising
 /// `backingScaleFactor`, 2 on a Retina display) is now OPT-IN via `HL_DISPLAY_HIDPI=1`; the default is
 /// scale 1. Advertising scale 2 makes the guest commit a `logical * 2` buffer (e.g. 1024x768 for a 512x384
-/// window), and the guest's GPU allocator (`DD_IOCTL_GPU_ALLOC` in the GL shim) FAILS that larger surface —
+/// window), and the guest's GPU allocator (`HL_IOCTL_GPU_ALLOC` in the GL shim) FAILS that larger surface —
 /// `gl_shim: alloc failed` → `eglSwapBuffers failed` → Chrome's GL context is "marked as lost" and it never
 /// renders. The headless `--png` present path (which never overrode this, so advertised scale 1) is exactly
 /// why it renders perfectly at 512x384. Until the guest allocator handles the HiDPI size, the on-screen
@@ -524,7 +524,7 @@ struct PresentDebugSnapshot {
 
 /// Presents each committed `wl_shm` buffer via Metal: upload → GPU blit into the `CAMetalLayer`'s
 /// drawable → present. This is the accelerated replacement for the `NSImageView` copy-blit. The shared
-/// [`MetalCtx`] (device + queue) is the same one `dd-gpu`'s executor targets.
+/// [`MetalCtx`] (device + queue) is the same one `hl-gpu`'s executor targets.
 pub struct MetalPresenter {
     mtm: MainThreadMarker,
     ctx: MetalCtx,
@@ -550,7 +550,7 @@ impl MetalPresenter {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         let dump_dir =
-            std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-live".into());
+            std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/hl-display-live".into());
         let present_debug = Self::present_debug_mode();
         let ctx = MetalCtx::new()?;
         let composite_pipeline = Self::make_composite_pipeline(&ctx)?;
@@ -638,7 +638,7 @@ impl MetalPresenter {
                 .map(|(w, h)| format!("{w}x{h}"))
                 .unwrap_or_else(|| "none".to_string());
             eprintln!(
-                "dd-display[metal][present-debug]: event={event} frame={frame} sid={sid} \
+                "hl-display[metal][present-debug]: event={event} frame={frame} sid={sid} \
 surf={}x{} texture={}x{} uv=[{:.6},{:.6},{:.6},{:.6}] iosurface={} \
 content_bounds=({bounds}) layer_drawable={}x{} drawable_tex={} clear=white rgba=(1,1,1,1)",
                 snapshot.surf_size.0,
@@ -709,7 +709,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         {
             Ok(lib) => lib,
             Err(err) => {
-                eprintln!("dd-display[metal]: composite MSL compile failed: {err:?}");
+                eprintln!("hl-display[metal]: composite MSL compile failed: {err:?}");
                 return None;
             }
         };
@@ -730,7 +730,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         {
             Ok(pipeline) => Some(pipeline),
             Err(err) => {
-                eprintln!("dd-display[metal]: composite pipeline creation failed: {err:?}");
+                eprintln!("hl-display[metal]: composite pipeline creation failed: {err:?}");
                 None
             }
         }
@@ -769,7 +769,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         // A client drawing its own client-side decorations (CSD) — the common Wayland case — fills the whole
         // window with an opaque surface. Drop the macOS drop shadow (a borderless window still gets the
         // system shadow, which otherwise shows as an "ugly halo/background" around the content) and clear
-        // the window's default gray background color so nothing dd-side can bleed at the edges/corners behind
+        // the window's default gray background color so nothing hl-side can bleed at the edges/corners behind
         // the content. Setting HL_DISPLAY_WINDOW_DECORATIONS opts into a titled AppKit window (server-side
         // decorations) for clients that expect them. Any titlebar the content itself paints is the client's
         // OWN CSD — not ours.
@@ -844,7 +844,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
         if std::env::var_os("HL_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
             let f = window.frame();
             eprintln!(
-                "dd-display[window]: created sid={sid} size={w}x{h} popup={} frame=(x={:.0} y={:.0} w={:.0} h={:.0})",
+                "hl-display[window]: created sid={sid} size={w}x{h} popup={} frame=(x={:.0} y={:.0} w={:.0} h={:.0})",
                 popup_top_left.is_some(),
                 f.origin.x,
                 f.origin.y,
@@ -935,7 +935,7 @@ impl Presenter for MetalPresenter {
                 if let (Some(pp), Some(tl)) = (surf.popup, popup_top_left) {
                     if std::env::var_os("HL_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
                         eprintln!(
-                            "dd-display[popup]: placed sid={sid} parent_sid={} offset=({},{}) window_top_left=({:.0},{:.0})",
+                            "hl-display[popup]: placed sid={sid} parent_sid={} offset=({},{}) window_top_left=({:.0},{:.0})",
                             pp.parent_sid, pp.x, pp.y, tl.x, tl.y
                         );
                     }
@@ -987,7 +987,7 @@ impl Presenter for MetalPresenter {
             .as_ref()
             .expect("composite texture")
             .clone();
-        // A drawable to show on the visible window, IF dd-display is the FOREGROUND app. When it is not, Core
+        // A drawable to show on the visible window, IF hl-display is the FOREGROUND app. When it is not, Core
         // Animation throttles drawable vending to this layer and `nextDrawable` BLOCKS the single-threaded
         // present loop ~1s per frame (then returns nil) -- which stalls buffer releases, wl frame callbacks
         // AND the GPU executor, freezing the frame-callback-paced guest for seconds while backgrounded (the
@@ -1001,7 +1001,7 @@ impl Presenter for MetalPresenter {
         // specific window is not occluded. Core Animation throttles drawable vending for a background OR an
         // occluded layer, so `nextDrawable` would block this single-threaded present/input loop for up to a
         // second per frame (then return nil) — the erratic multi-second input lag, since a stalled present used
-        // to gate the whole loop. `isActive()` alone missed the active-but-occluded case (dd-display frontmost
+        // to gate the whole loop. `isActive()` alone missed the active-but-occluded case (hl-display frontmost
         // but this surface hidden behind another window), so we additionally require occlusionState=Visible.
         // When we withhold the drawable we still composite offscreen (below): the guest keeps producing frames,
         // frame pacing keeps advancing, and the window catches up the instant it is refocused/revealed.
@@ -1080,7 +1080,7 @@ impl Presenter for MetalPresenter {
         }
         // MIXED shm/IOSurface tree (GPU root): `surf.overlays` carries each `wl_shm` subsurface/popup the
         // compositor could not composite on the CPU (the IOSurface base has no CPU pixels — see
-        // dd-compositor `present_tree`). Compositing them here — upload each `GpuCompositeNode::buffer`,
+        // hl-compositor `present_tree`). Compositing them here — upload each `GpuCompositeNode::buffer`,
         // draw it as an alpha-blended positioned quad over `composite` at its device offset — is the
         // remaining mac-device step (needs a blend-enabled pipeline + per-overlay quad; validated on the
         // mac bridge, not offline). Until then a GPU root presents its base texture (unchanged from before;
@@ -1158,7 +1158,7 @@ impl Presenter for MetalPresenter {
                     );
                     if std::fs::write(&path, png).is_ok() {
                         eprintln!(
-                            "dd-display[metal]: live frame {} dumped -> {path}",
+                            "hl-display[metal]: live frame {} dumped -> {path}",
                             self.frames
                         );
                     }
@@ -1225,7 +1225,7 @@ impl Presenter for MetalPresenter {
     }
 
     /// AppKit occlusion → compositor frame pacing (mac-gated; NOT exercised on the Linux dev host — the
-    /// `DdState` pacing transitions it drives are proven headlessly via `note_host_window_visibility`).
+    /// `HlState` pacing transitions it drives are proven headlessly via `note_host_window_visibility`).
     /// A window whose `NSWindowOcclusionState` lacks `Visible` is FULLY hidden (behind other windows or
     /// miniaturized into the Dock), so its guest should stop rendering: the compositor reads this and
     /// pauses the surface's `wl_surface.frame` callbacks (retaining the last frame) until the window is
@@ -1437,7 +1437,7 @@ fn apply_cursor_hidden(hidden: bool) {
 
 // ===================================== host clipboard (NSPasteboard) ==================================
 //
-// The native half of the `wl_data_device` selection bridge (see dd-compositor handlers/seat.rs). These
+// The native half of the `wl_data_device` selection bridge (see hl-compositor handlers/seat.rs). These
 // free functions back the `Presenter::clipboard_*` hooks so copy/paste crosses the guest↔host boundary
 // and the container feels like a native app: a guest copy lands on the macOS clipboard, and the macOS
 // clipboard is offered to the guest for paste. Text is the flavour that matters for "native feel", so we
@@ -1589,12 +1589,12 @@ fn perform_window_resize(mtm: MainThreadMarker, window: &NSWindow, edges: u32) {
 /// (`cacheDisplayInRect:`). Writes `out` and exits. Runs on macOS with no human looking — this shrinks
 /// "needs your eyes" for M1 to essentially zero (it renders the same view AppKit would show on screen).
 pub fn selftest_cocoa(out: &str) -> ! {
-    let mtm = MainThreadMarker::new().expect("dd-display must run on the main thread");
+    let mtm = MainThreadMarker::new().expect("hl-display must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     unsafe { app.finishLaunching() };
 
-    let sock = format!("/tmp/dd-display-cocoa-{}.sock", unsafe { libc::getpid() });
+    let sock = format!("/tmp/hl-display-cocoa-{}.sock", unsafe { libc::getpid() });
     let lfd = crate::listen_unix(&sock).expect("bind selftest socket");
     let pid = unsafe { libc::fork() };
     if pid == 0 {
@@ -1663,7 +1663,7 @@ pub fn selftest_cocoa(out: &str) -> ! {
 /// hardware-accelerated `CAMetalLayer` present path over the `NSImageView` copy-blit.
 pub fn run(lfd: RawFd, socket: String, metal: bool) -> ! {
     // The accelerated (Metal) path serves GPU/multi-connection apps like Chrome, which (a) stream their
-    // rendered frames as guest IOSurfaces through the dd-gpu IR executor, and (b) commit those surfaces over
+    // rendered frames as guest IOSurfaces through the hl-gpu IR executor, and (b) commit those surfaces over
     // a SECOND wayland connection opened by the GL shim. The legacy single-client loop below never starts
     // the executor and accepts only ONE connection, so Chrome's GL never gets serviced (context marked as
     // lost) and its committed surfaces are never presented (0 frames). The first-class `--window` live loop
@@ -1673,18 +1673,18 @@ pub fn run(lfd: RawFd, socket: String, metal: bool) -> ! {
     if metal {
         return run_window(lfd, socket, metal);
     }
-    let mtm = MainThreadMarker::new().expect("dd-display must run on the main thread");
+    let mtm = MainThreadMarker::new().expect("hl-display must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-    eprintln!("dd-display[cocoa]: waiting for a client on {socket} (metal={metal})");
+    eprintln!("hl-display[cocoa]: waiting for a client on {socket} (metal={metal})");
     let cfd = loop {
         let fd = unsafe { libc::accept(lfd, std::ptr::null_mut(), std::ptr::null_mut()) };
         if fd >= 0 {
             break fd;
         }
         if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-            eprintln!("dd-display[cocoa]: accept failed");
+            eprintln!("hl-display[cocoa]: accept failed");
             std::process::exit(1);
         }
     };
@@ -1692,7 +1692,7 @@ pub fn run(lfd: RawFd, socket: String, metal: bool) -> ! {
         let fl = libc::fcntl(cfd, libc::F_GETFL);
         libc::fcntl(cfd, libc::F_SETFL, fl | libc::O_NONBLOCK);
     }
-    eprintln!("dd-display[cocoa]: client connected");
+    eprintln!("hl-display[cocoa]: client connected");
     unsafe { app.finishLaunching() };
 
     // Metal path if requested and a device exists; else the NSImageView copy-blit.
@@ -1701,7 +1701,7 @@ pub fn run(lfd: RawFd, socket: String, metal: bool) -> ! {
         if let Some(mp) = MetalPresenter::new(mtm) {
             return drive(app, cfd, Server::new(cfd, mp));
         }
-        eprintln!("dd-display[cocoa]: no Metal device; falling back to NSImageView");
+        eprintln!("hl-display[cocoa]: no Metal device; falling back to NSImageView");
     }
     drive(app, cfd, Server::new(cfd, CocoaPresenter::new(mtm)))
 }
@@ -1715,9 +1715,9 @@ extern "C" fn on_sigusr1(_sig: i32) {
     DUMP_REQ.store(true, Ordering::SeqCst);
 }
 
-/// Where `SIGUSR1` dumps land: `HL_DISPLAY_DUMP` if set, else `/tmp/dd-display-live`.
+/// Where `SIGUSR1` dumps land: `HL_DISPLAY_DUMP` if set, else `/tmp/hl-display-live`.
 fn dump_dir() -> String {
-    std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-live".into())
+    std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/hl-display-live".into())
 }
 
 fn install_dump_handler() {
@@ -1735,7 +1735,7 @@ fn service_dump<P: Presenter>(servers: &mut [Server<P>]) {
         total += s.presenter_mut().dump_pngs(&dir);
     }
     eprintln!(
-        "dd-display[cocoa]: SIGUSR1 dumped {total} live window(s) -> {dir}/live-surface-*.png"
+        "hl-display[cocoa]: SIGUSR1 dumped {total} live window(s) -> {dir}/live-surface-*.png"
     );
 }
 
@@ -1754,7 +1754,7 @@ fn drive<P: Presenter>(app: Retained<NSApplication>, cfd: RawFd, mut server: Ser
         match server.pump() {
             Ok(true) => {}
             Ok(false) | Err(_) => {
-                eprintln!("dd-display[cocoa]: client gone");
+                eprintln!("hl-display[cocoa]: client gone");
                 std::process::exit(0);
             }
         }
@@ -1956,11 +1956,11 @@ fn set_nonblock(fd: RawFd) {
 /// services MANY concurrent clients (a real toolkit app keeps several connections open: e.g. a GL shim
 /// commits the rendered IOSurface on a second connection), so glmark2/Chrome-class apps work.
 pub fn run_window(lfd: RawFd, socket: String, metal: bool) -> ! {
-    let mtm = MainThreadMarker::new().expect("dd-display must run on the main thread");
+    let mtm = MainThreadMarker::new().expect("hl-display must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     unsafe { app.finishLaunching() };
-    // Bring dd-display to the FOREGROUND. macOS Core Animation aggressively throttles a background /
+    // Bring hl-display to the FOREGROUND. macOS Core Animation aggressively throttles a background /
     // non-foreground app's `CAMetalLayer` present (drawables are vended slowly, present coalesces) — which,
     // because the guest is paced ~1 frame ahead by the wl frame callback (present N acks → render N+1),
     // drags the whole guest→executor→present pipeline down to ~1-18 fps even though the raw pipeline
@@ -1968,29 +1968,29 @@ pub fn run_window(lfd: RawFd, socket: String, metal: bool) -> ! {
     // rate (60/120 Hz) so a real user's window renders smoothly instead of background-throttled.
     #[allow(deprecated)]
     app.activateIgnoringOtherApps(true);
-    eprintln!("dd-display[window]: live NSWindow present, listening on {socket} (metal={metal})");
+    eprintln!("hl-display[window]: live NSWindow present, listening on {socket} (metal={metal})");
 
     if metal {
         crate::metal::start_gpu_bridge(); // GPU rung 2: receive guest IOSurface handles over mach
-                                          // GPU rung 3: replay guest dd-gpu IR onto Metal into the resolved IOSurface.
+                                          // GPU rung 3: replay guest hl-gpu IR onto Metal into the resolved IOSurface.
         if let Some(p) = gpu_exec_sock(&socket) {
             std::thread::spawn(move || crate::metal_backend::run_executor(p));
         }
         if MetalPresenter::new(mtm).is_some() {
             return run_multi(app, lfd, "window-metal", move || MetalPresenter::new(mtm));
         }
-        eprintln!("dd-display[window]: no Metal device; falling back to NSImageView copy-blit");
+        eprintln!("hl-display[window]: no Metal device; falling back to NSImageView copy-blit");
     }
     run_multi(app, lfd, "window", move || Some(CocoaPresenter::new(mtm)))
 }
 
-/// The dd-gpu IR executor socket beside the display socket (or `HL_GPU_EXEC_SOCK`).
+/// The hl-gpu IR executor socket beside the display socket (or `HL_GPU_EXEC_SOCK`).
 fn gpu_exec_sock(disp: &str) -> Option<String> {
     if let Ok(p) = std::env::var("HL_GPU_EXEC_SOCK") {
         return Some(p);
     }
     let dir = std::path::Path::new(disp).parent()?;
-    Some(dir.join("dd-gpu.sock").to_string_lossy().into_owned())
+    Some(dir.join("hl-gpu.sock").to_string_lossy().into_owned())
 }
 
 /// Accept + service MANY live clients on the main thread while draining AppKit: each iteration polls the
@@ -2082,13 +2082,13 @@ fn run_multi<P: Presenter>(
                     match make() {
                         Some(p) => {
                             eprintln!(
-                                "dd-display[{tag}]: client connected (fd {cfd}, {} live)",
+                                "hl-display[{tag}]: client connected (fd {cfd}, {} live)",
                                 clients.len() + 1
                             );
                             clients.push(Server::new(cfd, p));
                         }
                         None => {
-                            eprintln!("dd-display[{tag}]: no presenter (no Metal device?)");
+                            eprintln!("hl-display[{tag}]: no presenter (no Metal device?)");
                             unsafe { libc::close(cfd) };
                         }
                     }
@@ -2108,7 +2108,7 @@ fn run_multi<P: Presenter>(
                 }
                 if !alive {
                     eprintln!(
-                        "dd-display[{tag}]: client disconnected ({} frame(s))",
+                        "hl-display[{tag}]: client disconnected ({} frame(s))",
                         clients[idx].presenter().frame_count()
                     );
                     // Release this client's per-IOSurface fences + cached surfaces BEFORE dropping the
@@ -2348,7 +2348,7 @@ fn input_debug_route(
         .map(|idx| idx.to_string())
         .unwrap_or_else(|| "none".to_string());
     eprintln!(
-        "dd-display[input]: event={} target_window={} owner=[{}] forward_candidates={:?} selected_client={} reason={}",
+        "hl-display[input]: event={} target_window={} owner=[{}] forward_candidates={:?} selected_client={} reason={}",
         event_type_name(ty),
         target_window,
         owner,
@@ -2392,12 +2392,12 @@ fn event_type_name(ty: NSEventType) -> String {
 /// button, key) into the same `inject_nsevent` the live loop uses, then verifies the guest logged the
 /// delivered pointer/keyboard events. Also dumps the live view to PNGs. Exits 0 on PASS, 1 on FAIL.
 pub fn selftest_input(out: &str) -> ! {
-    let mtm = MainThreadMarker::new().expect("dd-display must run on the main thread");
+    let mtm = MainThreadMarker::new().expect("hl-display must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     unsafe { app.finishLaunching() };
 
-    let sock = format!("/tmp/dd-display-input-{}.sock", unsafe { libc::getpid() });
+    let sock = format!("/tmp/hl-display-input-{}.sock", unsafe { libc::getpid() });
     let results = format!("{out}.log");
     let _ = std::fs::remove_file(&results);
     let _ = std::fs::remove_file(&sock);

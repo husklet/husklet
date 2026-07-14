@@ -1,7 +1,7 @@
 //! `wl_compositor` / `wl_subcompositor` / `wl_shm` handlers and the commit → present path.
 //!
 //! `commit()` snapshots the committed surface state (buffer, viewport, frame + presentation-feedback
-//! callbacks), repacks the `wl_shm` pixels into dd-display's tight-BGRA [`SurfaceBuffer`], hands it to
+//! callbacks), repacks the `wl_shm` pixels into hl-display's tight-BGRA [`SurfaceBuffer`], hands it to
 //! the boxed [`Presenter`], fires the frame callbacks so the client keeps drawing, and answers
 //! `wp_presentation` feedback so Chrome/viz's BeginFrameSource keeps ticking. This is the exact seam
 //! `server.rs` drives; the difference is Smithay decoded the wire for us.
@@ -35,7 +35,7 @@ use smithay::{
     },
 };
 
-use crate::{BufferUseKind, ClientState, DdState};
+use crate::{BufferUseKind, ClientState, HlState};
 
 /// How a presented tree should advance its per-surface frame pacing, derived from what actually
 /// happened to the frame. Replaces the old `did_present: bool` that conflated "nothing to present"
@@ -131,7 +131,7 @@ impl PresentedFrame {
 /// will never be presented.
 const MAX_RETAINED_CALLBACKS: usize = 16;
 
-impl CompositorHandler for DdState {
+impl CompositorHandler for HlState {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor
     }
@@ -149,13 +149,13 @@ impl CompositorHandler for DdState {
     }
 }
 
-impl BufferHandler for DdState {
+impl BufferHandler for HlState {
     fn buffer_destroyed(&mut self, buffer: &WlBuffer) {
         self.forget_destroyed_buffer(buffer);
     }
 }
 
-impl ShmHandler for DdState {
+impl ShmHandler for HlState {
     fn shm_state(&self) -> &ShmState {
         &self.shm
     }
@@ -169,7 +169,7 @@ impl ShmHandler for DdState {
     }
 }
 
-impl DdState {
+impl HlState {
     /// Topmost input-sensitive surface at root-local logical coordinates. Region coordinates are
     /// already surface-local after viewport/scale/buffer-transform interpretation.
     pub(crate) fn input_surface_at(
@@ -418,7 +418,7 @@ impl DdState {
             let stride = data.stride;
             let src_off = data.offset;
             let fmt = match data.format {
-                wl_shm::Format::Xrgb8888 => 1u32, // opaque (dd-display convention: format==1 ⇒ XRGB)
+                wl_shm::Format::Xrgb8888 => 1u32, // opaque (hl-display convention: format==1 ⇒ XRGB)
                 _ => 0u32,                        // ARGB8888 (and anything else): honour alpha
             };
             // ROBUSTNESS (defense-in-depth, preserved from the pre-restructure `build_surface_buffer`):
@@ -604,7 +604,7 @@ impl DdState {
                     }
                     Ok(hl_display::present::PresentOutcome::Offscreen) => {
                         eprintln!(
-                            "dd-compositor: present sid {sid} rendered offscreen but not delivered; \
+                            "hl-compositor: present sid {sid} rendered offscreen but not delivered; \
                              retaining frame for retry"
                         );
                         FramePacing::RetryableFailure
@@ -612,7 +612,7 @@ impl DdState {
                     Ok(hl_display::present::PresentOutcome::RetryableFailure) => FramePacing::RetryableFailure,
                     Ok(hl_display::present::PresentOutcome::TerminalFailure) => FramePacing::TerminalFailure,
                     Err(e) => {
-                        eprintln!("dd-compositor: present sid {sid} failed: {e}");
+                        eprintln!("hl-compositor: present sid {sid} failed: {e}");
                         FramePacing::TerminalFailure
                     }
                 }
@@ -1407,7 +1407,7 @@ fn visibility_allows_present(visibility: hl_display::present::SurfaceVisibility)
 }
 
 /// Per-surface repacked tight-BGRA texture — the CPU cache behind damage tracking (see
-/// [`DdState::repacks`]). Holds the surface's last committed content so a damaged commit copies only its
+/// [`HlState::repacks`]). Holds the surface's last committed content so a damaged commit copies only its
 /// changed rows into it (instead of repacking the whole `wl_shm` buffer) and a re-composite of an
 /// unchanged surface reuses the pixels without re-reading `wl_shm`. The cache always holds the complete,
 /// current frame, so the composited output is byte-for-byte identical to the full-upload path.
@@ -1416,7 +1416,7 @@ pub(crate) struct RepackCache {
     pub(crate) bgra: Vec<u8>,
     pub(crate) tex_w: i32,
     pub(crate) tex_h: i32,
-    /// dd-display format convention: 1 ⇒ opaque XRGB, 0 ⇒ honour alpha (ARGB / anything else).
+    /// hl-display format convention: 1 ⇒ opaque XRGB, 0 ⇒ honour alpha (ARGB / anything else).
     pub(crate) format: u32,
     /// The backing-texture region the latest commit changed, `(x, y, w, h)`, or `None` when the whole
     /// texture was (re)uploaded. Copied onto the presented [`SurfaceBuffer::damage`] upload hint.
@@ -1717,7 +1717,7 @@ mod presentation_evidence_tests {
             PhysicalProperties {
                 size: (600, 340).into(),
                 subpixel: Subpixel::Unknown,
-                make: "dd".into(),
+                make: "hl".into(),
                 model: "test".into(),
             },
         )

@@ -1,15 +1,15 @@
 //! The Metal present path (macOS) — the hardware-acceleration foundation for the display pipeline AND
-//! the shared host `MTLDevice`/`MTLCommandQueue` the `dd-gpu` executor targets.
+//! the shared host `MTLDevice`/`MTLCommandQueue` the `hl-gpu` executor targets.
 //!
 //! [`MetalCtx`] owns the one system `MTLDevice` + a command queue. The display side uploads a committed
 //! `wl_shm` buffer as a `BGRA8Unorm` `MTLTexture` (`replaceRegion:` — a real GPU upload; the zero-copy
 //! `MTLBuffer(bytesNoCopy)` over the pool pages is the next rung) and blits it to the target (an offscreen
 //! texture for the readback proof, or a `CAMetalLayer` drawable for the live window).
 //!
-//! **`dd-gpu` seam:** [`MetalCtx`] is `pub` and constructible from an existing device
-//! ([`MetalCtx::from_device`]), so `dd-gpu`'s `MetalBackend` (the CUDA/GPU-forwarding executor) and this
+//! **`hl-gpu` seam:** [`MetalCtx`] is `pub` and constructible from an existing device
+//! ([`MetalCtx::from_device`]), so `hl-gpu`'s `MetalBackend` (the CUDA/GPU-forwarding executor) and this
 //! display path share ONE `MTLDevice` + queue — a guest's rendered `MTLTexture`/IOSurface can then be
-//! composited by `dd-display` with no cross-device copy (GPU rung 2).
+//! composited by `hl-display` with no cross-device copy (GPU rung 2).
 //!
 //! Compiled only on macOS.
 
@@ -80,12 +80,12 @@ extern "C" {
 }
 
 /// The well-known bootstrap service name the engine sends IOSurface handles to.
-pub const GPU_BRIDGE_SERVICE: &str = "com.dd.display.gpu";
+pub const GPU_BRIDGE_SERVICE: &str = "com.hl.display.gpu";
 
 /// The bootstrap service name for the IOSurface handle bridge. `HL_GPU_BRIDGE_NAME` overrides the
-/// default so multiple dd-display instances can run concurrently (e.g. one per agent/benchmark) —
+/// default so multiple hl-display instances can run concurrently (e.g. one per agent/benchmark) —
 /// the engine reads the SAME env, so a guest's IOSurfaces reach the matching compositor. Default is
-/// the historical `com.dd.display.gpu` (fully backward-compatible when the env is unset).
+/// the historical `com.hl.display.gpu` (fully backward-compatible when the env is unset).
 pub fn gpu_bridge_service() -> String {
     std::env::var("HL_GPU_BRIDGE_NAME").unwrap_or_else(|_| GPU_BRIDGE_SERVICE.to_string())
 }
@@ -126,10 +126,10 @@ pub fn start_gpu_bridge() -> bool {
     let name = std::ffi::CString::new(svc.clone()).unwrap();
     let rc = unsafe { hl_mach_server_start(name.as_ptr()) };
     if rc != 0 {
-        eprintln!("dd-display: GPU mach bridge failed to register ({svc}): rc={rc}");
+        eprintln!("hl-display: GPU mach bridge failed to register ({svc}): rc={rc}");
         return false;
     }
-    eprintln!("dd-display: GPU mach bridge listening ({svc})");
+    eprintln!("hl-display: GPU mach bridge listening ({svc})");
     std::thread::spawn(|| loop {
         let mut id: u32 = 0;
         let mut generation: u32 = 0;
@@ -137,7 +137,7 @@ pub fn start_gpu_bridge() -> bool {
         let rc = unsafe { hl_mach_recv(&mut id, &mut generation, &mut surf) };
         if rc != 0 || surf.is_null() {
             if rc != 0 {
-                eprintln!("dd-display: GPU mach recv error rc={rc}");
+                eprintln!("hl-display: GPU mach recv error rc={rc}");
             }
             continue;
         }
@@ -153,7 +153,7 @@ pub fn start_gpu_bridge() -> bool {
             unsafe { cfrelease(old as IOSurfaceRef) };
         }
         let (w, h) = unsafe { (IOSurfaceGetWidth(surf), IOSurfaceGetHeight(surf)) };
-        eprintln!("dd-display: GPU bridge cached IOSurface id={id} gen={generation} size={w}x{h}");
+        eprintln!("hl-display: GPU bridge cached IOSurface id={id} gen={generation} size={w}x{h}");
     });
     true
 }
@@ -220,7 +220,7 @@ pub unsafe fn create_iosurface(w: u32, h: u32) -> IOSurfaceRef {
 }
 
 // ===================== L4: async submit + cross-queue IOSurface tearing fence =====================
-// The executor (dd-gpu IR → Metal render into the guest IOSurface) and the compositor (blit that
+// The executor (hl-gpu IR → Metal render into the guest IOSurface) and the compositor (blit that
 // IOSurface into the drawable/PNG target) run as TWO threads with TWO command queues in this one
 // process. L4 removes the executor's per-frame `waitUntilCompleted` so the guest can build frame N+1
 // while the GPU renders frame N (CPU/GPU overlap — the p50≈195µs serial GPU wait was the bottleneck).
@@ -357,7 +357,7 @@ pub fn gpu_surface_drop(id: u32) {
 }
 
 /// The shared host Metal context: one device + one command queue. Cloneable handle intent — hold one and
-/// pass `&MetalCtx` around. Reused by both the display present path and (by design) the `dd-gpu` backend.
+/// pass `&MetalCtx` around. Reused by both the display present path and (by design) the `hl-gpu` backend.
 pub struct MetalCtx {
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     pub queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
@@ -373,7 +373,7 @@ impl MetalCtx {
         Some(MetalCtx { device, queue })
     }
 
-    /// Build a context around an already-created device + queue — the seam `dd-gpu`'s `MetalBackend`
+    /// Build a context around an already-created device + queue — the seam `hl-gpu`'s `MetalBackend`
     /// uses so the GPU executor and the compositor share ONE device (no cross-device texture copies).
     pub fn from_device(
         device: Retained<ProtocolObject<dyn MTLDevice>>,
@@ -447,7 +447,7 @@ impl MetalCtx {
 
     /// GPU rung 3 first slice: the guest RENDERS on the host GPU. Run a real Metal **render pass** into
     /// the (rung-2) IOSurface — clear + a rasterized RGB triangle via compiled MSL vertex/fragment shaders.
-    /// This is the host executor's core op; a forwarded `dd-gpu` IR `BeginRenderPass`/`Draw` maps onto it.
+    /// This is the host executor's core op; a forwarded `hl-gpu` IR `BeginRenderPass`/`Draw` maps onto it.
     /// (Shaders are compiled per call for the slice; caching is a follow-up.)
     pub fn render_triangle_into(&self, target: &ProtocolObject<dyn MTLTexture>) {
         const SRC: &str = r#"
@@ -753,7 +753,7 @@ impl crate::present::Presenter for MetalPngPresenter {
     }
 }
 
-/// `dd-display selftest-iosurface <out.png>`: prove the **zero-copy GPU-rung-2 path**. Allocate a host
+/// `hl-display selftest-iosurface <out.png>`: prove the **zero-copy GPU-rung-2 path**. Allocate a host
 /// `IOSurface`, write a pattern into its pages via `IOSurfaceGetBaseAddress` (CPU), wrap it as an
 /// `MTLTexture` (NO upload — the IOSurface pages back the texture), GPU-blit it to an offscreen target,
 /// and read that back → PNG. The pattern round-trips with no `replaceRegion` copy in the path, so the
@@ -825,10 +825,10 @@ pub fn selftest_iosurface(out: &str) -> ! {
     }
 }
 
-/// `dd-display selftest-render <out.png>`: GPU rung 3 host-executor proof. Allocate a host IOSurface,
+/// `hl-display selftest-render <out.png>`: GPU rung 3 host-executor proof. Allocate a host IOSurface,
 /// run a Metal **render pass** (clear + rasterized triangle) into it — the guest's forwarded render — then
 /// read it back → PNG. Unlike the rung-2 selftests (which CPU-fill or blit), this proves the host GPU
-/// *rasterizes* into the shared IOSurface (the render target a forwarded `dd-gpu` IR would drive).
+/// *rasterizes* into the shared IOSurface (the render target a forwarded `hl-gpu` IR would drive).
 pub fn selftest_render(out: &str) -> ! {
     let Some(ctx) = MetalCtx::new() else {
         eprintln!("selftest-render: no Metal device");
@@ -862,7 +862,7 @@ pub fn selftest_render(out: &str) -> ! {
     std::process::exit(0);
 }
 
-/// `dd-display selftest-metal <out.png>`: drive one real client frame (a forked Wayland client backs an
+/// `hl-display selftest-metal <out.png>`: drive one real client frame (a forked Wayland client backs an
 /// shm pool and passes the fd via SCM_RIGHTS over a real socket) through the compositor into
 /// [`MetalPngPresenter`], so the committed `wl_shm` buffer is uploaded to a `MTLTexture`, GPU-blitted, and
 /// read back → PNG. Proves the hardware present path end to end on real Metal. Exits.
@@ -875,7 +875,7 @@ pub fn selftest_metal(out: &str) -> ! {
         eprintln!("selftest-metal: no Metal device available");
         std::process::exit(1);
     };
-    let sock = format!("/tmp/dd-display-metal-{}.sock", unsafe { libc::getpid() });
+    let sock = format!("/tmp/hl-display-metal-{}.sock", unsafe { libc::getpid() });
     let lfd = crate::listen_unix(&sock).expect("bind");
     let pid = unsafe { libc::fork() };
     if pid == 0 {

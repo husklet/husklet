@@ -1,7 +1,7 @@
 //! Shader-module + pipeline + render-pass + framebuffer entry points (real bodies), producing IR.
 //!
 //! Ported from MoltenVK:
-//!   * `MVKShaderModule.mm` — a `VkShaderModule` IS SPIR-V (`pCode`/`codeSize`). The dd-gpu IR shader
+//!   * `MVKShaderModule.mm` — a `VkShaderModule` IS SPIR-V (`pCode`/`codeSize`). The hl-gpu IR shader
 //!     ABI is ALSO SPIR-V (`Cmd::CreateShader{ spirv }`, lowered host-side to MSL by naga), so the
 //!     module forwards with **zero translation** — the keystone of the Vulkan seam. Entry point is
 //!     selected by (name, stage) exactly as `SPIRVToMSLConverter.cpp` `set_entry_point` does.
@@ -24,8 +24,8 @@ use ash::vk::Handle;
 use core::ffi::c_void;
 use hl_shim::ir::*;
 
-/// VkFormat → dd-gpu IR vertex-format code (float-component count in the low byte; see
-/// dd-gpu-wgpu `vertex_format`). Covers the `R32*_SFLOAT` attribute formats.
+/// VkFormat → hl-gpu IR vertex-format code (float-component count in the low byte; see
+/// hl-gpu-wgpu `vertex_format`). Covers the `R32*_SFLOAT` attribute formats.
 fn vertex_format_code(f: vk::Format) -> u32 {
     match f {
         vk::Format::R32_SFLOAT => 1,

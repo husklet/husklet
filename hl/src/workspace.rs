@@ -1,9 +1,9 @@
-//! `ddcli workspace` — configure and launch terminal workspaces (a named image+arch you develop in).
+//! `hl workspace` — configure and launch terminal workspaces (a named image+arch you develop in).
 //!
-//! The model + persistence live in `hl_ws`; this is the CLI surface the dd-gui invokes
-//! (`ddcli workspace launch <name>`). `launch` runs the workspace as an interactive terminal in the
+//! The model + persistence live in `hl_ws`; this is the CLI surface the hl-gui invokes
+//! (`hl workspace launch <name>`). `launch` runs the workspace as an interactive terminal in the
 //! current window via a raw-mode PTY passthrough. The launcher is `LocalShellLauncher` today (a real
-//! shell, so this works + is exercisable everywhere); the macOS build swaps in a dd-jit launcher that
+//! shell, so this works + is exercisable everywhere); the macOS build swaps in a hl-jit launcher that
 //! enters the image's container with a persistent writable upper.
 
 use crate::cli::WorkspaceCmd;
@@ -40,7 +40,7 @@ pub(crate) fn run(action: WorkspaceCmd) {
 fn list() {
     let store = WorkspaceStore::load(store_path());
     if store.all().is_empty() {
-        println!("no workspaces yet — create one with:  ddcli workspace create <name> --image <img>");
+        println!("no workspaces yet — create one with:  hl workspace create <name> --image <img>");
         return;
     }
     println!("{:<20} {:<14} {}", "NAME", "ARCH", "IMAGE");
@@ -127,7 +127,7 @@ fn create(name: String, image: String, arch: Option<String>, vpn: Option<String>
         eprintln!("failed to save workspace: {e}");
         std::process::exit(1);
     }
-    println!("workspace {name:?} → {image} ({}){vpn_note}{cuda_note}{gui_note}  saved. launch it:  ddcli workspace launch {name}", arch.as_str());
+    println!("workspace {name:?} → {image} ({}){vpn_note}{cuda_note}{gui_note}  saved. launch it:  hl workspace launch {name}", arch.as_str());
 }
 
 fn rm(name: String) {
@@ -152,7 +152,7 @@ extern "C" fn on_winch(_sig: libc::c_int) {
 fn checkpoint(name: String, slot: Option<String>) {
     let store = WorkspaceStore::load(store_path());
     let Some(ws) = store.get(&name).cloned() else {
-        eprintln!("no workspace named {name:?} — see:  ddcli workspace list");
+        eprintln!("no workspace named {name:?} — see:  hl workspace list");
         std::process::exit(2);
     };
     // A per-pane SLOT freezes that pane's own engine into `<storage>/checkpoint/<slot>`; None uses the
@@ -179,7 +179,7 @@ fn checkpoint(name: String, slot: Option<String>) {
         Ok(()) => {
             let _ = std::fs::remove_file(&pid_file);
             println!("workspace {name:?} checkpointed → {}", ckpt_dir.display());
-            println!("resume it with:  ddcli workspace launch {name} --restore");
+            println!("resume it with:  hl workspace launch {name} --restore");
         }
         Err(e) => {
             eprintln!("checkpoint of workspace {name:?} failed: {e}");
@@ -191,18 +191,18 @@ fn checkpoint(name: String, slot: Option<String>) {
 fn launch(name: String, restore: bool, cwd: Option<String>, slot: Option<String>) {
     let store = WorkspaceStore::load(store_path());
     let Some(ws) = store.get(&name).cloned() else {
-        eprintln!("no workspace named {name:?} — see:  ddcli workspace list");
+        eprintln!("no workspace named {name:?} — see:  hl workspace list");
         std::process::exit(2);
     };
     let (cols, rows) = term_size().unwrap_or((80, 24));
 
-    // Enter the workspace's IMAGE as a real container IN-PROCESS via dd-jit — no daemon, no docker, no
+    // Enter the workspace's IMAGE as a real container IN-PROCESS via hl-jit — no daemon, no docker, no
     // socket. When `restore`, resume the last whole-workspace checkpoint (process tree) instead of a fresh
     // shell. When this host's engine can't run the workspace's arch, fall back to a plain host shell.
     let launched = match crate::hl_launcher::launch_ex(&ws, cols, rows, restore, cwd.as_deref(), slot.as_deref()) {
         Ok(pty) => Ok(pty),
         Err(e) => {
-            eprintln!("[dd] (dd-jit unavailable here — {e}; running a local shell instead)");
+            eprintln!("[hl] (hl-jit unavailable here — {e}; running a local shell instead)");
             LocalShellLauncher::default().launch(&ws, cols, rows)
         }
     };
@@ -219,7 +219,7 @@ fn launch(name: String, restore: bool, cwd: Option<String>, slot: Option<String>
 
 /// Raw-mode passthrough between the real terminal and the workspace PTY until the child exits.
 /// Backend-agnostic: it only polls the terminal's stdin and drains `pty.read()` each tick, so it works
-/// for a `LocalPty` (a real master fd) and for `DdJitPty` (output drained from dd-jit's broadcast) alike.
+/// for a `LocalPty` (a real master fd) and for `HlJitPty` (output drained from hl-jit's broadcast) alike.
 fn run_inline(pty: &mut dyn hl_ws_term::PtyBackend) -> i32 {
     let raw = RawMode::enter(libc::STDIN_FILENO);
     unsafe {
@@ -239,7 +239,7 @@ fn run_inline(pty: &mut dyn hl_ws_term::PtyBackend) -> i32 {
     }
     let mut ticks: u32 = 0;
     // Once stdin reaches EOF (or is a non-pollable source we've drained), drop it from the poll set.
-    // Rationale: when stdin is a *redirected regular file* (`ddcli … < cmds.sh`), `poll()` on a regular
+    // Rationale: when stdin is a *redirected regular file* (`hl … < cmds.sh`), `poll()` on a regular
     // file returns POLLIN *immediately* every iteration and never blocks — after we've read the file to
     // EOF, re-polling+re-reading it would free-run the loop at 100% CPU (read→EOF→write(&[])→drain→
     // try_wait, forever). So after EOF we stop polling stdin and pace the loop with a plain 10ms sleep,
@@ -366,7 +366,7 @@ mod tests {
     use hl_ws::Mount;
 
     // A prior workspace carrying config that the `create` CLI does NOT expose as flags — exactly the
-    // state a user builds via `~/.dd/workspaces.conf` or the GUI. Re-running `create` must preserve it.
+    // state a user builds via `~/.hl/workspaces.conf` or the GUI. Re-running `create` must preserve it.
     fn prior_rich() -> WorkspaceConfig {
         let mut w = WorkspaceConfig::new("api", "node:20", Arch::Amd64);
         w.cpus = Some(4);

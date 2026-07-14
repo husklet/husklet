@@ -23,16 +23,16 @@ pub(crate) fn tar_members_contained(tar: &std::path::Path) -> Result<(), String>
     Ok(())
 }
 
-/// `~/.dd` (or `./.dd` if `$HOME` is unset) — the default state/volumes root.
+/// `~/.hl` (or `./.hl` if `$HOME` is unset) — the default state/volumes root.
 pub(crate) fn hl_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".dd")
+        .join(".hl")
 }
 
-/// `~/.dd/buildcache` — the `docker build` layer cache root (one dir per cached step under `layers/`).
-/// Distinct from `~/.dd/pcache` (the JIT translated-code cache surfaced as `system df` BuilderSize).
+/// `~/.hl/buildcache` — the `docker build` layer cache root (one dir per cached step under `layers/`).
+/// Distinct from `~/.hl/pcache` (the JIT translated-code cache surfaced as `system df` BuilderSize).
 pub(crate) fn buildcache_dir() -> PathBuf {
     hl_home().join("buildcache")
 }

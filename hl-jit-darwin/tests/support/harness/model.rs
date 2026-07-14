@@ -23,7 +23,7 @@ impl Engine {
     pub fn label(self) -> String {
         format!("{}/{}", self.os(), self.arch())
     }
-    /// Whether this engine's JIT binary was built (by dd-jit's build.rs).
+    /// Whether this engine's JIT binary was built (by hl-jit's build.rs).
     pub fn available(self) -> bool {
         hl_jit::available(self.jit())
     }
@@ -321,7 +321,7 @@ pub fn gate_failures(
     for &e in required {
         if !available(e) {
             failures.push(format!(
-                "engine {} MISSING — its JIT binary was not built (failed dd-jit compile / empty \
+                "engine {} MISSING — its JIT binary was not built (failed hl-jit compile / empty \
                  HL_JIT_{} env); the ENTIRE {} lane was DARK (every case on it skipped, NOT tested)",
                 e.label(),
                 e.label().replace('/', "_").to_uppercase(),

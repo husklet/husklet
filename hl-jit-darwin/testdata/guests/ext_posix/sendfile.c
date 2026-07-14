@@ -9,8 +9,8 @@
 
 int main(void) {
     char a[128], b[128];
-    snprintf(a, sizeof a, "/tmp/dd_sf_a_%d", (int)getpid());
-    snprintf(b, sizeof b, "/tmp/dd_sf_b_%d", (int)getpid());
+    snprintf(a, sizeof a, "/tmp/hl_sf_a_%d", (int)getpid());
+    snprintf(b, sizeof b, "/tmp/hl_sf_b_%d", (int)getpid());
     int in = open(a, O_CREAT | O_RDWR | O_TRUNC, 0644);
     char data[1000];
     for (int i = 0; i < 1000; i++) data[i] = (char)(i & 0x7f);

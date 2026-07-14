@@ -1,18 +1,18 @@
-//! The dd-gpu-side implementor of dd-jit's runtime-neutral device seam ([`hl_jit::DeviceProvider`]).
+//! The hl-gpu-side implementor of hl-jit's runtime-neutral device seam ([`hl_jit::DeviceProvider`]).
 //!
 //! ALL the GPU/CUDA/display specifics that used to be threaded through the container launcher live here
 //! and here only: which host libraries/binaries/sockets to inject, at which guest paths, behind which env
-//! vars, and whether an accelerated render node is needed. dd-jit / dd-jit-darwin stay device-agnostic —
+//! vars, and whether an accelerated render node is needed. hl-jit / hl-jit-darwin stay device-agnostic —
 //! they receive a plain [`hl_jit::DeviceRequest`] (mounts + env + a render-node bool) and apply it
 //! generically, never referencing CUDA, IOSurface, or Wayland.
 //!
-//! The caller (dd-cli) owns *where host files live* (it resolves the `~/.dd/...` drop-in paths and the
+//! The caller (hl-cli) owns *where host files live* (it resolves the `~/.hl/...` drop-in paths and the
 //! guest ISA); this module owns *how a GPU maps into a guest* (target lib dir, guest socket paths, env
 //! contract, LD_LIBRARY_PATH composition). Construct a [`GpuIntegration`] from a workspace's gui/cuda
-//! config + resolved host paths, then hand it to the dd-jit builder via
+//! config + resolved host paths, then hand it to the hl-jit builder via
 //! `builder.apply_device(&provider.device_request(&env))`.
 //!
-//! Gated behind the `runtime` cargo feature (which pulls in `dd-jit`); the crate's pure-`std`,
+//! Gated behind the `runtime` cargo feature (which pulls in `hl-jit`); the crate's pure-`std`,
 //! headless-testable IR/wire core builds and tests without it.
 
 use hl_jit::{DeviceMount, DeviceProvider, DeviceRequest};
@@ -44,7 +44,7 @@ impl GuestArch {
 pub struct DisplayIntegration {
     /// Host path of the compositor (Wayland/DDP) socket; bound rw at `/run/user/0/wayland-0`.
     pub wayland_sock: String,
-    /// Host path of the dd-gpu IR executor socket; bound rw at `/run/user/0/dd-gpu-0`.
+    /// Host path of the hl-gpu IR executor socket; bound rw at `/run/user/0/hl-gpu-0`.
     pub gpu_exec_sock: String,
     /// Host dir of client `*.so*` drop-ins (each bound into the guest multiarch lib dir). Empty = none.
     pub lib_dir: String,
@@ -115,13 +115,13 @@ impl GpuIntegration {
 /// Whether the accelerated-display shim is *authoritative* for a drop-in shared object and may bind it
 /// over the guest's multiarch lib dir. The shim owns the GPU/GL render stack (EGL/GLES/GL/GBM/Vulkan/CUDA,
 /// including the GLVND dispatchers and ANGLE's `libEGL`/`libGLESv2` sonames), the Wayland client transport
-/// it speaks to dd-display with (`libwayland-*`), and dd's own shim cores. Every other `*.so` in the
+/// it speaks to hl-display with (`libwayland-*`), and dd's own shim cores. Every other `*.so` in the
 /// drop-in dir belongs to the guest distro and MUST NOT be shadowed — above all `libX11`/`libxcb` (GTK/Qt
 /// X11 backends) and the base C/C++ runtime (`libstdc++`, `libz`, `libc`, …). Binding a stub over the
 /// guest's real copy is the "shim library shadowing" bug (docs/goal.md): the app then loads a crippled
 /// library and used to need an `LD_PRELOAD` workaround. Restricting the bind set to what the shim actually
 /// provides makes the guest resolve its own libraries with no hack — the shim libs the guest lacks
-/// (EGL/GLES/GBM/Vulkan/CUDA/dd-shim) are exactly the ones matched here, while shared base deps
+/// (EGL/GLES/GBM/Vulkan/CUDA/hl-shim) are exactly the ones matched here, while shared base deps
 /// (libX11/libffi/libstdc++/…) that any GUI image already ships are left to the distro.
 fn shim_owns_lib(file_name: &str) -> bool {
     // The soname "stem": everything before the first ".so" (`libEGL.so.1` -> `libegl`).
@@ -133,7 +133,7 @@ fn shim_owns_lib(file_name: &str) -> bool {
         "libvulkan",   // Vulkan loader + dd/lavapipe ICD
         "libvklayer",  // Vulkan layers
         "libcuda",     // CUDA driver shim (libcuda, libcudart)
-        "libwayland-", // wayland-egl platform + client/cursor transport to dd-display
+        "libwayland-", // wayland-egl platform + client/cursor transport to hl-display
         "libdd",       // dd's own shim cores (libdd*, libddshim)
     ];
     if OWNED_PREFIXES.iter().any(|p| stem.starts_with(p)) {
@@ -233,13 +233,13 @@ fn prune_shadowing_stubs(
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 eprintln!(
-                    "[dd-gpu] pruned stale inject stub {} from the workspace overlay upper ({reason})",
+                    "[hl-gpu] pruned stale inject stub {} from the workspace overlay upper ({reason})",
                     path.display()
                 );
                 pruned.push(name.into_owned());
             }
             Err(e) => {
-                eprintln!("[dd-gpu] could not prune stale inject stub {}: {e}", path.display());
+                eprintln!("[hl-gpu] could not prune stale inject stub {}: {e}", path.display());
             }
         }
     }
@@ -260,11 +260,11 @@ impl DeviceProvider for GpuIntegration {
             req.mounts.push(DeviceMount::rw(d.wayland_sock.clone(), "/run/user/0/wayland-0"));
             req.env.push("WAYLAND_DISPLAY=wayland-0".to_string());
             req.env.push("XDG_RUNTIME_DIR=/run/user/0".to_string());
-            // The dd-gpu IR executor socket the guest streams GPU commands to.
-            req.mounts.push(DeviceMount::rw(d.gpu_exec_sock.clone(), "/run/user/0/dd-gpu-0"));
-            req.env.push("HL_GPU_EXEC=/run/user/0/dd-gpu-0".to_string());
+            // The hl-gpu IR executor socket the guest streams GPU commands to.
+            req.mounts.push(DeviceMount::rw(d.gpu_exec_sock.clone(), "/run/user/0/hl-gpu-0"));
+            req.env.push("HL_GPU_EXEC=/run/user/0/hl-gpu-0".to_string());
             // Mount-not-bake the shim's OWN runtime libs (the GPU/GL render stack + the Wayland client
-            // transport it speaks to dd-display with): each such *.so* in the drop-in dir is bound over the
+            // transport it speaks to hl-display with): each such *.so* in the drop-in dir is bound over the
             // guest multiarch lib dir, and that dir is prepended to LD_LIBRARY_PATH so a bare image works.
             // We bind ONLY the libraries the shim is authoritative for (`shim_owns_lib`) — never unrelated
             // distro libraries that happen to share the drop-in dir. Binding a stub `libX11.so.6` over the
@@ -365,7 +365,7 @@ mod tests {
         // No lib/bin drop-in dirs → no fs access, no LD_LIBRARY_PATH; just the two sockets + their env.
         let g = GpuIntegration::new(GuestArch::X86_64).with_display(DisplayIntegration {
             wayland_sock: "/host/run/wayland-0".into(),
-            gpu_exec_sock: "/host/run/dd-gpu.sock".into(),
+            gpu_exec_sock: "/host/run/hl-gpu.sock".into(),
             lib_dir: String::new(),
             bin_dir: String::new(),
             overlay_lib_dir: String::new(),
@@ -376,7 +376,7 @@ mod tests {
             req.mounts,
             vec![
                 DeviceMount::rw("/host/run/wayland-0", "/run/user/0/wayland-0"),
-                DeviceMount::rw("/host/run/dd-gpu.sock", "/run/user/0/dd-gpu-0"),
+                DeviceMount::rw("/host/run/hl-gpu.sock", "/run/user/0/hl-gpu-0"),
             ]
         );
         assert_eq!(
@@ -384,7 +384,7 @@ mod tests {
             vec![
                 "WAYLAND_DISPLAY=wayland-0".to_string(),
                 "XDG_RUNTIME_DIR=/run/user/0".to_string(),
-                "HL_GPU_EXEC=/run/user/0/dd-gpu-0".to_string(),
+                "HL_GPU_EXEC=/run/user/0/hl-gpu-0".to_string(),
             ]
         );
     }
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn cuda_only_injects_shim_and_reports_device() {
         let g = GpuIntegration::new(GuestArch::X86_64).with_cuda(CudaIntegration {
-            name: "dd Metal (CUDA-sim) Device".into(),
+            name: "hl Metal (CUDA-sim) Device".into(),
             compute_capability: "8.6".into(),
             vram_mb: 4096,
             nvml_so: "/host/nvml/libnvidia-ml.so.1".into(),
@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(
             req.env,
             vec![
-                "HL_CUDA_NAME=dd Metal (CUDA-sim) Device".to_string(),
+                "HL_CUDA_NAME=hl Metal (CUDA-sim) Device".to_string(),
                 "HL_CUDA_CC=8.6".to_string(),
                 "HL_CUDA_VRAM=4096".to_string(),
                 "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu".to_string(),
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn cuda_missing_shim_still_reports_device_but_no_ld_or_bind() {
-        // Empty nvml_so/nvidia_smi → nothing bound, no LD_LIBRARY_PATH, but DD_CUDA_* still advertised.
+        // Empty nvml_so/nvidia_smi → nothing bound, no LD_LIBRARY_PATH, but HL_CUDA_* still advertised.
         let g = GpuIntegration::new(GuestArch::Aarch64).with_cuda(CudaIntegration {
             name: "X".into(),
             compute_capability: "7.5".into(),
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn display_binds_render_libs_but_not_shadowing_distro_libs() {
         // End-to-end through device_request: a drop-in dir holding BOTH shim render libs and distro libs
-        // (as a mis-assembled `~/.dd/gui/<arch>/lib` would) binds only the render libs; the distro libX11 &
+        // (as a mis-assembled `~/.hl/gui/<arch>/lib` would) binds only the render libs; the distro libX11 &
         // friends are never mounted, so the guest resolves its own real ones with no LD_PRELOAD.
         let dir = std::env::temp_dir().join(format!("ddgpu-shadow-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -564,7 +564,7 @@ mod tests {
         // 0-byte stubs from the overlay so the guest resolves its real base libs — while leaving the real
         // (non-empty) distro libs, non-.so files, and any stub it actually covers with a bind untouched.
         let base = std::env::temp_dir().join(format!("ddgpu-prune-{}", std::process::id()));
-        let dropin = base.join("dropin"); // host ~/.dd/gui/<arch>/lib
+        let dropin = base.join("dropin"); // host ~/.hl/gui/<arch>/lib
         let overlay = base.join("overlay"); // workspace overlay upper's /usr/lib/<arch>
         std::fs::create_dir_all(&dropin).unwrap();
         std::fs::create_dir_all(&overlay).unwrap();

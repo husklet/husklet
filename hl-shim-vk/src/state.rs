@@ -1,4 +1,4 @@
-//! The dd-shim-vk object model + the "dd Metal (Vulkan)" physical-device description.
+//! The hl-shim-vk object model + the "dd Metal (Vulkan)" physical-device description.
 //!
 //! Object model mirrors MoltenVK's (`MVKInstance` / `MVKPhysicalDevice` / `MVKDevice` / `MVKQueue` /
 //! `MVKCommandPool`): a small dispatch/ownership graph. Each **dispatchable** object's ICD state is
@@ -55,11 +55,11 @@ pub struct CommandPool {
 /// (queried via `vkGetPhysicalDeviceFeatures2`) are reported truthfully per what each command actually
 /// materializes; an app enables only the features it detects, so advertising 1.4 never over-promises.
 // `ash` 0.38 (headers 1.3.281) predates the `API_VERSION_1_4` constant, so spell it explicitly.
-pub const DD_API_VERSION: u32 = vk::make_api_version(0, 1, 4, 0);
+pub const HL_API_VERSION: u32 = vk::make_api_version(0, 1, 4, 0);
 /// Apple's PCI vendor id, as MoltenVK reports (`kAppleVendorId` in MVKDevice.mm).
 pub const APPLE_VENDOR_ID: u32 = 0x106b;
 /// `driverVersion` — dd's own driver revision (packed like an api version), increment 1.
-pub const DD_DRIVER_VERSION: u32 = vk::make_api_version(0, 0, 1, 0);
+pub const HL_DRIVER_VERSION: u32 = vk::make_api_version(0, 0, 1, 0);
 /// The single queue family we expose (graphics + compute + transfer, one queue).
 pub const QUEUE_FAMILY_INDEX: u32 = 0;
 
@@ -71,8 +71,8 @@ pub const DEVICE_NAME: &str = "dd Metal (Vulkan)";
 /// tail stays zero this increment; later increments refine them from the real device).
 pub fn physical_device_properties() -> vk::PhysicalDeviceProperties {
     let mut p = vk::PhysicalDeviceProperties {
-        api_version: DD_API_VERSION,
-        driver_version: DD_DRIVER_VERSION,
+        api_version: HL_API_VERSION,
+        driver_version: HL_DRIVER_VERSION,
         vendor_id: APPLE_VENDOR_ID,
         device_id: 0xdd_00_0001,
         device_type: vk::PhysicalDeviceType::INTEGRATED_GPU,
@@ -83,7 +83,7 @@ pub fn physical_device_properties() -> vk::PhysicalDeviceProperties {
     for (dst, &b) in p.device_name.iter_mut().zip(name.iter()) {
         *dst = b as core::ffi::c_char;
     }
-    // pipelineCacheUUID: a stable dd-specific tag (bytes "ddMetalVulkan\0\0\0").
+    // pipelineCacheUUID: a stable hl-specific tag (bytes "ddMetalVulkan\0\0\0").
     let uuid = b"ddMetalVulkan\0\0\0";
     p.pipeline_cache_uuid.copy_from_slice(&uuid[..16]);
     p.limits = physical_device_limits();

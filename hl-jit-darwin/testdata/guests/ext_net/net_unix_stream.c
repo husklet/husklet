@@ -7,7 +7,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 int main(void) {
-    const char *path = "/tmp/dd_unix_stream.sock";
+    const char *path = "/tmp/hl_unix_stream.sock";
     unlink(path);
     int ls = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un a = {0}; a.sun_family = AF_UNIX; strcpy(a.sun_path, path);

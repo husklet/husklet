@@ -25,89 +25,89 @@
 // per guest frontend in translate/<arch>/abi.h (native AUDIT_ARCH + the raw guest syscall number).
 
 // ---- classic-BPF ISA (subset the kernel's seccomp accepts; we implement the full cBPF for robustness) --
-#define DD_BPF_CLASS(code) ((code) & 0x07)
-#define DD_BPF_LD 0x00
-#define DD_BPF_LDX 0x01
-#define DD_BPF_ST 0x02
-#define DD_BPF_STX 0x03
-#define DD_BPF_ALU 0x04
-#define DD_BPF_JMP 0x05
-#define DD_BPF_RET 0x06
-#define DD_BPF_MISC 0x07
+#define HL_BPF_CLASS(code) ((code) & 0x07)
+#define HL_BPF_LD 0x00
+#define HL_BPF_LDX 0x01
+#define HL_BPF_ST 0x02
+#define HL_BPF_STX 0x03
+#define HL_BPF_ALU 0x04
+#define HL_BPF_JMP 0x05
+#define HL_BPF_RET 0x06
+#define HL_BPF_MISC 0x07
 
-#define DD_BPF_SIZE(code) ((code) & 0x18)
-#define DD_BPF_W 0x00
-#define DD_BPF_H 0x08
-#define DD_BPF_B 0x10
+#define HL_BPF_SIZE(code) ((code) & 0x18)
+#define HL_BPF_W 0x00
+#define HL_BPF_H 0x08
+#define HL_BPF_B 0x10
 
-#define DD_BPF_MODE(code) ((code) & 0xe0)
-#define DD_BPF_IMM 0x00
-#define DD_BPF_ABS 0x20
-#define DD_BPF_IND 0x40
-#define DD_BPF_MEM 0x60
-#define DD_BPF_LEN 0x80
-#define DD_BPF_MSH 0xa0
+#define HL_BPF_MODE(code) ((code) & 0xe0)
+#define HL_BPF_IMM 0x00
+#define HL_BPF_ABS 0x20
+#define HL_BPF_IND 0x40
+#define HL_BPF_MEM 0x60
+#define HL_BPF_LEN 0x80
+#define HL_BPF_MSH 0xa0
 
-#define DD_BPF_OP(code) ((code) & 0xf0)
-#define DD_BPF_ADD 0x00
-#define DD_BPF_SUB 0x10
-#define DD_BPF_MUL 0x20
-#define DD_BPF_DIV 0x30
-#define DD_BPF_OR 0x40
-#define DD_BPF_AND 0x50
-#define DD_BPF_LSH 0x60
-#define DD_BPF_RSH 0x70
-#define DD_BPF_NEG 0x80
-#define DD_BPF_MOD 0x90
-#define DD_BPF_XOR 0xa0
-#define DD_BPF_JA 0x00
-#define DD_BPF_JEQ 0x10
-#define DD_BPF_JGT 0x20
-#define DD_BPF_JGE 0x30
-#define DD_BPF_JSET 0x40
+#define HL_BPF_OP(code) ((code) & 0xf0)
+#define HL_BPF_ADD 0x00
+#define HL_BPF_SUB 0x10
+#define HL_BPF_MUL 0x20
+#define HL_BPF_DIV 0x30
+#define HL_BPF_OR 0x40
+#define HL_BPF_AND 0x50
+#define HL_BPF_LSH 0x60
+#define HL_BPF_RSH 0x70
+#define HL_BPF_NEG 0x80
+#define HL_BPF_MOD 0x90
+#define HL_BPF_XOR 0xa0
+#define HL_BPF_JA 0x00
+#define HL_BPF_JEQ 0x10
+#define HL_BPF_JGT 0x20
+#define HL_BPF_JGE 0x30
+#define HL_BPF_JSET 0x40
 
-#define DD_BPF_SRC(code) ((code) & 0x08)
-#define DD_BPF_K 0x00
-#define DD_BPF_X 0x08
+#define HL_BPF_SRC(code) ((code) & 0x08)
+#define HL_BPF_K 0x00
+#define HL_BPF_X 0x08
 
-#define DD_BPF_RVAL(code) ((code) & 0x18)
-#define DD_BPF_A 0x10
+#define HL_BPF_RVAL(code) ((code) & 0x18)
+#define HL_BPF_A 0x10
 
-#define DD_BPF_MISCOP(code) ((code) & 0xf8)
-#define DD_BPF_TAX 0x00
-#define DD_BPF_TXA 0x80
+#define HL_BPF_MISCOP(code) ((code) & 0xf8)
+#define HL_BPF_TAX 0x00
+#define HL_BPF_TXA 0x80
 
-#define DD_BPF_MAXINSNS 4096
-#define DD_BPF_MEMWORDS 16
+#define HL_BPF_MAXINSNS 4096
+#define HL_BPF_MEMWORDS 16
 
 // ---- seccomp return actions (linux/seccomp.h) ----
-#define DD_SECCOMP_RET_KILL_PROCESS 0x80000000u
-#define DD_SECCOMP_RET_KILL_THREAD 0x00000000u
-#define DD_SECCOMP_RET_TRAP 0x00030000u
-#define DD_SECCOMP_RET_ERRNO 0x00050000u
-#define DD_SECCOMP_RET_USER_NOTIF 0x7fc00000u
-#define DD_SECCOMP_RET_TRACE 0x7ff00000u
-#define DD_SECCOMP_RET_LOG 0x7ffc0000u
-#define DD_SECCOMP_RET_ALLOW 0x7fff0000u
-#define DD_SECCOMP_RET_ACTION_FULL 0xffff0000u
-#define DD_SECCOMP_RET_DATA 0x0000ffffu
+#define HL_SECCOMP_RET_KILL_PROCESS 0x80000000u
+#define HL_SECCOMP_RET_KILL_THREAD 0x00000000u
+#define HL_SECCOMP_RET_TRAP 0x00030000u
+#define HL_SECCOMP_RET_ERRNO 0x00050000u
+#define HL_SECCOMP_RET_USER_NOTIF 0x7fc00000u
+#define HL_SECCOMP_RET_TRACE 0x7ff00000u
+#define HL_SECCOMP_RET_LOG 0x7ffc0000u
+#define HL_SECCOMP_RET_ALLOW 0x7fff0000u
+#define HL_SECCOMP_RET_ACTION_FULL 0xffff0000u
+#define HL_SECCOMP_RET_DATA 0x0000ffffu
 
 // seccomp(2) operations
-#define DD_SECCOMP_SET_MODE_STRICT 0u
-#define DD_SECCOMP_SET_MODE_FILTER 1u
+#define HL_SECCOMP_SET_MODE_STRICT 0u
+#define HL_SECCOMP_SET_MODE_FILTER 1u
 // seccomp(2) filter flags
-#define DD_SECCOMP_FILTER_FLAG_TSYNC 0x01u
-#define DD_SECCOMP_FILTER_FLAG_LOG 0x02u
-#define DD_SECCOMP_FILTER_FLAG_SPEC_ALLOW 0x04u
-#define DD_SECCOMP_FILTER_FLAG_NEW_LISTENER 0x08u
-#define DD_SECCOMP_FILTER_FLAG_TSYNC_ESRCH 0x10u
-#define DD_SECCOMP_FILTER_FLAGS_KNOWN                                                                                   \
-    (DD_SECCOMP_FILTER_FLAG_TSYNC | DD_SECCOMP_FILTER_FLAG_LOG | DD_SECCOMP_FILTER_FLAG_SPEC_ALLOW |                    \
-     DD_SECCOMP_FILTER_FLAG_NEW_LISTENER | DD_SECCOMP_FILTER_FLAG_TSYNC_ESRCH)
+#define HL_SECCOMP_FILTER_FLAG_TSYNC 0x01u
+#define HL_SECCOMP_FILTER_FLAG_LOG 0x02u
+#define HL_SECCOMP_FILTER_FLAG_SPEC_ALLOW 0x04u
+#define HL_SECCOMP_FILTER_FLAG_NEW_LISTENER 0x08u
+#define HL_SECCOMP_FILTER_FLAG_TSYNC_ESRCH 0x10u
+#define HL_SECCOMP_FILTER_FLAGS_KNOWN                                                                                   \
+    (HL_SECCOMP_FILTER_FLAG_TSYNC | HL_SECCOMP_FILTER_FLAG_LOG | HL_SECCOMP_FILTER_FLAG_SPEC_ALLOW |                    \
+     HL_SECCOMP_FILTER_FLAG_NEW_LISTENER | HL_SECCOMP_FILTER_FLAG_TSYNC_ESRCH)
 
 // prctl PR_SET_SECCOMP modes (differ from seccomp(2) op numbers!)
-#define DD_SECCOMP_MODE_STRICT 1u
-#define DD_SECCOMP_MODE_FILTER 2u
+#define HL_SECCOMP_MODE_STRICT 1u
+#define HL_SECCOMP_MODE_FILTER 2u
 
 #ifndef CAP_SYS_ADMIN
 #define CAP_SYS_ADMIN 21
@@ -154,28 +154,28 @@ static uint32_t hl_bpf_run(const struct hl_sock_filter *f, uint16_t flen, const 
     const uint8_t *pkt = (const uint8_t *)sd;
     const uint32_t plen = (uint32_t)sizeof(*sd);
     uint32_t A = 0, X = 0;
-    uint32_t mem[DD_BPF_MEMWORDS];
+    uint32_t mem[HL_BPF_MEMWORDS];
     memset(mem, 0, sizeof mem);
     uint32_t pc = 0;
     // cBPF jumps are forward-only unsigned offsets, so a well-formed program halts within flen steps; the
     // extra guard bounds any pathological (yet in-range) case at the ISA maximum.
-    for (uint32_t steps = 0; pc < flen && steps <= DD_BPF_MAXINSNS; steps++, pc++) {
+    for (uint32_t steps = 0; pc < flen && steps <= HL_BPF_MAXINSNS; steps++, pc++) {
         const struct hl_sock_filter *in = &f[pc];
         uint16_t code = in->code;
         uint32_t k = in->k;
-        switch (DD_BPF_CLASS(code)) {
-        case DD_BPF_LD:
-            switch (DD_BPF_MODE(code)) {
-            case DD_BPF_IMM:
+        switch (HL_BPF_CLASS(code)) {
+        case HL_BPF_LD:
+            switch (HL_BPF_MODE(code)) {
+            case HL_BPF_IMM:
                 A = k;
                 break;
-            case DD_BPF_LEN:
+            case HL_BPF_LEN:
                 A = plen;
                 break;
-            case DD_BPF_ABS:
-            case DD_BPF_IND: {
-                uint64_t off = (DD_BPF_MODE(code) == DD_BPF_IND) ? (uint64_t)X + k : (uint64_t)k;
-                uint32_t sz = (DD_BPF_SIZE(code) == DD_BPF_B) ? 1 : (DD_BPF_SIZE(code) == DD_BPF_H) ? 2 : 4;
+            case HL_BPF_ABS:
+            case HL_BPF_IND: {
+                uint64_t off = (HL_BPF_MODE(code) == HL_BPF_IND) ? (uint64_t)X + k : (uint64_t)k;
+                uint32_t sz = (HL_BPF_SIZE(code) == HL_BPF_B) ? 1 : (HL_BPF_SIZE(code) == HL_BPF_H) ? 2 : 4;
                 if (off + sz > plen) return 0; // out of bounds -> deny (classic-BPF semantics)
                 if (sz == 1)
                     A = pkt[off];
@@ -186,27 +186,27 @@ static uint32_t hl_bpf_run(const struct hl_sock_filter *f, uint16_t flen, const 
                         ((uint32_t)pkt[off + 3] << 24);
                 break;
             }
-            case DD_BPF_MEM:
-                if (k >= DD_BPF_MEMWORDS) return 0;
+            case HL_BPF_MEM:
+                if (k >= HL_BPF_MEMWORDS) return 0;
                 A = mem[k];
                 break;
             default:
                 return 0;
             }
             break;
-        case DD_BPF_LDX:
-            switch (DD_BPF_MODE(code)) {
-            case DD_BPF_IMM:
+        case HL_BPF_LDX:
+            switch (HL_BPF_MODE(code)) {
+            case HL_BPF_IMM:
                 X = k;
                 break;
-            case DD_BPF_LEN:
+            case HL_BPF_LEN:
                 X = plen;
                 break;
-            case DD_BPF_MEM:
-                if (k >= DD_BPF_MEMWORDS) return 0;
+            case HL_BPF_MEM:
+                if (k >= HL_BPF_MEMWORDS) return 0;
                 X = mem[k];
                 break;
-            case DD_BPF_MSH: // X = 4 * (pkt[k] & 0xf) -- IP-header-length idiom; harmless here
+            case HL_BPF_MSH: // X = 4 * (pkt[k] & 0xf) -- IP-header-length idiom; harmless here
                 if (k >= plen) return 0;
                 X = 4 * (pkt[k] & 0xf);
                 break;
@@ -214,50 +214,50 @@ static uint32_t hl_bpf_run(const struct hl_sock_filter *f, uint16_t flen, const 
                 return 0;
             }
             break;
-        case DD_BPF_ST:
-            if (k >= DD_BPF_MEMWORDS) return 0;
+        case HL_BPF_ST:
+            if (k >= HL_BPF_MEMWORDS) return 0;
             mem[k] = A;
             break;
-        case DD_BPF_STX:
-            if (k >= DD_BPF_MEMWORDS) return 0;
+        case HL_BPF_STX:
+            if (k >= HL_BPF_MEMWORDS) return 0;
             mem[k] = X;
             break;
-        case DD_BPF_ALU: {
-            uint32_t src = (DD_BPF_SRC(code) == DD_BPF_X) ? X : k;
-            switch (DD_BPF_OP(code)) {
-            case DD_BPF_ADD:
+        case HL_BPF_ALU: {
+            uint32_t src = (HL_BPF_SRC(code) == HL_BPF_X) ? X : k;
+            switch (HL_BPF_OP(code)) {
+            case HL_BPF_ADD:
                 A += src;
                 break;
-            case DD_BPF_SUB:
+            case HL_BPF_SUB:
                 A -= src;
                 break;
-            case DD_BPF_MUL:
+            case HL_BPF_MUL:
                 A *= src;
                 break;
-            case DD_BPF_DIV:
+            case HL_BPF_DIV:
                 if (src == 0) return 0; // div by zero -> abort (deny)
                 A /= src;
                 break;
-            case DD_BPF_MOD:
+            case HL_BPF_MOD:
                 if (src == 0) return 0;
                 A %= src;
                 break;
-            case DD_BPF_OR:
+            case HL_BPF_OR:
                 A |= src;
                 break;
-            case DD_BPF_AND:
+            case HL_BPF_AND:
                 A &= src;
                 break;
-            case DD_BPF_XOR:
+            case HL_BPF_XOR:
                 A ^= src;
                 break;
-            case DD_BPF_LSH:
+            case HL_BPF_LSH:
                 A = (src < 32) ? (A << src) : 0;
                 break;
-            case DD_BPF_RSH:
+            case HL_BPF_RSH:
                 A = (src < 32) ? (A >> src) : 0;
                 break;
-            case DD_BPF_NEG:
+            case HL_BPF_NEG:
                 A = (uint32_t)(-(int32_t)A);
                 break;
             default:
@@ -265,24 +265,24 @@ static uint32_t hl_bpf_run(const struct hl_sock_filter *f, uint16_t flen, const 
             }
             break;
         }
-        case DD_BPF_JMP: {
-            if (DD_BPF_OP(code) == DD_BPF_JA) {
+        case HL_BPF_JMP: {
+            if (HL_BPF_OP(code) == HL_BPF_JA) {
                 pc += k; // += k, then the loop's pc++ advances to the target
                 break;
             }
-            uint32_t cmp = (DD_BPF_SRC(code) == DD_BPF_X) ? X : k;
+            uint32_t cmp = (HL_BPF_SRC(code) == HL_BPF_X) ? X : k;
             int t;
-            switch (DD_BPF_OP(code)) {
-            case DD_BPF_JEQ:
+            switch (HL_BPF_OP(code)) {
+            case HL_BPF_JEQ:
                 t = (A == cmp);
                 break;
-            case DD_BPF_JGT:
+            case HL_BPF_JGT:
                 t = (A > cmp);
                 break;
-            case DD_BPF_JGE:
+            case HL_BPF_JGE:
                 t = (A >= cmp);
                 break;
-            case DD_BPF_JSET:
+            case HL_BPF_JSET:
                 t = (A & cmp) != 0;
                 break;
             default:
@@ -291,14 +291,14 @@ static uint32_t hl_bpf_run(const struct hl_sock_filter *f, uint16_t flen, const 
             pc += t ? in->jt : in->jf; // += jt/jf, then loop pc++ advances past it
             break;
         }
-        case DD_BPF_RET: {
-            uint32_t rval = (DD_BPF_RVAL(code) == DD_BPF_A) ? A : k;
+        case HL_BPF_RET: {
+            uint32_t rval = (HL_BPF_RVAL(code) == HL_BPF_A) ? A : k;
             return rval;
         }
-        case DD_BPF_MISC:
-            if (DD_BPF_MISCOP(code) == DD_BPF_TAX)
+        case HL_BPF_MISC:
+            if (HL_BPF_MISCOP(code) == HL_BPF_TAX)
                 X = A;
-            else if (DD_BPF_MISCOP(code) == DD_BPF_TXA)
+            else if (HL_BPF_MISCOP(code) == HL_BPF_TXA)
                 A = X;
             else
                 return 0;
@@ -315,22 +315,22 @@ static uint32_t hl_bpf_run(const struct hl_sock_filter *f, uint16_t flen, const 
 // kernel's documented order KILL_PROCESS > KILL_THREAD > TRAP > ERRNO > USER_NOTIF > TRACE > LOG > ALLOW.
 // An unrecognized action is treated as KILL_THREAD (the kernel's default for an unknown action word).
 static int hl_seccomp_prec(uint32_t action) {
-    switch (action & DD_SECCOMP_RET_ACTION_FULL) {
-    case DD_SECCOMP_RET_KILL_PROCESS:
+    switch (action & HL_SECCOMP_RET_ACTION_FULL) {
+    case HL_SECCOMP_RET_KILL_PROCESS:
         return 0;
-    case DD_SECCOMP_RET_KILL_THREAD:
+    case HL_SECCOMP_RET_KILL_THREAD:
         return 1;
-    case DD_SECCOMP_RET_TRAP:
+    case HL_SECCOMP_RET_TRAP:
         return 2;
-    case DD_SECCOMP_RET_ERRNO:
+    case HL_SECCOMP_RET_ERRNO:
         return 3;
-    case DD_SECCOMP_RET_USER_NOTIF:
+    case HL_SECCOMP_RET_USER_NOTIF:
         return 4;
-    case DD_SECCOMP_RET_TRACE:
+    case HL_SECCOMP_RET_TRACE:
         return 5;
-    case DD_SECCOMP_RET_LOG:
+    case HL_SECCOMP_RET_LOG:
         return 6;
-    case DD_SECCOMP_RET_ALLOW:
+    case HL_SECCOMP_RET_ALLOW:
         return 7;
     default:
         return 1; // unknown -> KILL_THREAD
@@ -339,7 +339,7 @@ static int hl_seccomp_prec(uint32_t action) {
 
 // Run every installed filter and return the highest-precedence (most restrictive) action word.
 static uint32_t hl_seccomp_eval(const struct hl_seccomp_data *sd) {
-    uint32_t best = DD_SECCOMP_RET_ALLOW;
+    uint32_t best = HL_SECCOMP_RET_ALLOW;
     int best_prec = 7;
     for (struct hl_bpf_filter *f = t_seccomp_filters; f; f = f->prev) {
         uint32_t r = hl_bpf_run(f->insns, f->len, sd);
@@ -391,28 +391,28 @@ static int hl_seccomp_apply(struct cpu *c) {
     sd.args[5] = G_A5(c);
 
     uint32_t action = hl_seccomp_eval(&sd);
-    switch (action & DD_SECCOMP_RET_ACTION_FULL) {
-    case DD_SECCOMP_RET_ALLOW:
+    switch (action & HL_SECCOMP_RET_ACTION_FULL) {
+    case HL_SECCOMP_RET_ALLOW:
         return 0;
-    case DD_SECCOMP_RET_LOG: // treated as ALLOW (we don't emit an audit log); the syscall proceeds
+    case HL_SECCOMP_RET_LOG: // treated as ALLOW (we don't emit an audit log); the syscall proceeds
         return 0;
-    case DD_SECCOMP_RET_ERRNO: {
-        uint32_t e = action & DD_SECCOMP_RET_DATA;
+    case HL_SECCOMP_RET_ERRNO: {
+        uint32_t e = action & HL_SECCOMP_RET_DATA;
         if (e > 4095) e = 4095; // MAX_ERRNO clamp (kernel does the same)
         G_RET(c) = (uint64_t)(-(int64_t)e);
         return 1;
     }
-    case DD_SECCOMP_RET_TRACE:
+    case HL_SECCOMP_RET_TRACE:
         // SECCOMP_RET_TRACE with no ptrace supervisor attached: the kernel skips the syscall and returns
         // -ENOSYS. dd has no seccomp-TRACE supervisor wiring, so this is the always-correct no-tracer path.
         G_RET(c) = (uint64_t)(-(int64_t)ENOSYS);
         return 1;
-    case DD_SECCOMP_RET_USER_NOTIF:
+    case HL_SECCOMP_RET_USER_NOTIF:
         // No SECCOMP_FILTER_FLAG_NEW_LISTENER supervisor exists (we reject that flag at install), so a
         // USER_NOTIF at runtime cannot be serviced; fail the syscall with -ENOSYS rather than hang.
         G_RET(c) = (uint64_t)(-(int64_t)ENOSYS);
         return 1;
-    case DD_SECCOMP_RET_TRAP:
+    case HL_SECCOMP_RET_TRAP:
         // Deliver SIGSYS (si_code = SYS_SECCOMP) to the guest and skip the syscall. If the guest installed a
         // SIGSYS handler it runs; otherwise SIGSYS default-terminates the process (raise_guest_signal). The
         // kernel's TRAP path skips the syscall WITHOUT writing the return register (unlike ERRNO/TRACE), so
@@ -420,8 +420,8 @@ static int hl_seccomp_apply(struct cpu *c) {
         g_sigcode[31] = 1 /*SYS_SECCOMP*/;
         raise_guest_signal(c, 31);
         return 1;
-    case DD_SECCOMP_RET_KILL_PROCESS:
-    case DD_SECCOMP_RET_KILL_THREAD: // modeled as process death (faithful for a single-threaded guest)
+    case HL_SECCOMP_RET_KILL_PROCESS:
+    case HL_SECCOMP_RET_KILL_THREAD: // modeled as process death (faithful for a single-threaded guest)
     default:
         hl_seccomp_kill(c, 31 /*SIGSYS -- a filter KILL action reports WTERMSIG=SIGSYS*/);
         return 1;
@@ -454,10 +454,10 @@ static long seccomp_install_filter(uint64_t fprog_ptr, uint32_t flags) {
     // Installing a filter requires CAP_SYS_ADMIN or no_new_privs (kernel: else -EACCES). The container's
     // default cap set lacks CAP_SYS_ADMIN, so a well-behaved sandbox sets PR_SET_NO_NEW_PRIVS first.
     if (!g_nnp && !(g_cap_eff & (1ull << CAP_SYS_ADMIN))) return -EACCES;
-    if (flags & ~DD_SECCOMP_FILTER_FLAGS_KNOWN) return -EINVAL;
+    if (flags & ~HL_SECCOMP_FILTER_FLAGS_KNOWN) return -EINVAL;
     // NEW_LISTENER would have us return a userspace-notification fd and run a supervisor protocol we do not
     // implement; reject it honestly rather than hand back a listener that never delivers notifications.
-    if (flags & DD_SECCOMP_FILTER_FLAG_NEW_LISTENER) return -EINVAL;
+    if (flags & HL_SECCOMP_FILTER_FLAG_NEW_LISTENER) return -EINVAL;
     if (!fprog_ptr) return -EFAULT;
     if (gna_hit(fprog_ptr, 16)) return -EFAULT;
 
@@ -466,7 +466,7 @@ static long seccomp_install_filter(uint64_t fprog_ptr, uint32_t flags) {
     uint64_t insn_ptr;
     memcpy(&len, (const void *)(uintptr_t)fprog_ptr, sizeof len);
     memcpy(&insn_ptr, (const void *)(uintptr_t)(fprog_ptr + 8), sizeof insn_ptr);
-    if (len == 0 || len > DD_BPF_MAXINSNS) return -EINVAL;
+    if (len == 0 || len > HL_BPF_MAXINSNS) return -EINVAL;
     if (!insn_ptr) return -EFAULT;
     size_t bytes = (size_t)len * sizeof(struct hl_sock_filter);
     if (gna_hit(insn_ptr, bytes)) return -EFAULT;

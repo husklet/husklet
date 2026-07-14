@@ -1,5 +1,5 @@
 // link()/linkat()/lstat() semantics — LTP link02/link05/lstat01/lstat02 surface, deterministic self-check
-// oracle-diffed dd-vs-native on both arches. Covers: link increments st_nlink; link content is shared;
+// oracle-diffed hl-vs-native on both arches. Covers: link increments st_nlink; link content is shared;
 // link error paths (EEXIST/ENOENT/EPERM-on-dir); lstat reports the SYMLINK itself (size=len, S_ISLNK), not
 // its target; lstat error paths (ENOENT/ENOTDIR).
 //

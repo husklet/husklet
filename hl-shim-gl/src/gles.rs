@@ -98,13 +98,13 @@ pub extern "C" fn glGetString(name: u32) -> *const u8 {
     let s: *const c_char = match name {
         0x1F02 => {
             if es3 {
-                cstr!("OpenGL ES 3.0 dd-shim")
+                cstr!("OpenGL ES 3.0 hl-shim")
             } else {
                 crate::ADVERTISED_GL_VERSION.as_ptr() as *const c_char
             }
         }
         0x1F00 => cstr!("dd"),       // GL_VENDOR
-        0x1F01 => cstr!("dd-metal"), // GL_RENDERER
+        0x1F01 => cstr!("hl-metal"), // GL_RENDERER
         0x8B8C => {
             if es3 {
                 cstr!("OpenGL ES GLSL ES 3.00")

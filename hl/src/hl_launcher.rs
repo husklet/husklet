@@ -1,10 +1,10 @@
-//! Launch a workspace's image as a real container **in-process via dd-jit** — no daemon, no `docker`,
+//! Launch a workspace's image as a real container **in-process via hl-jit** — no daemon, no `docker`,
 //! no socket. `hl_jit::Runtime::start` forks the linked engine and gives us the guest's PTY directly;
 //! `hl_images::Store` resolves (and pulls, if missing) the image rootfs; a per-workspace persistent
 //! overlay upper makes it a dev environment you return to.
 //!
-//! [`DdJitPty`] adapts the async `RunningContainer` to the synchronous [`PtyBackend`] the CLI runner
-//! drives: a background multi-thread tokio runtime keeps dd-jit's IO pumps alive, output is drained
+//! [`HlJitPty`] adapts the async `RunningContainer` to the synchronous [`PtyBackend`] the CLI runner
+//! drives: a background multi-thread tokio runtime keeps hl-jit's IO pumps alive, output is drained
 //! from its broadcast, and `write_stdin`/`resize`/`waitpid` are plain synchronous calls.
 
 use crate::paths;
@@ -52,7 +52,7 @@ fn guest_is_musl(rootfs: &str, arch: Arch) -> bool {
 }
 
 /// Select the GUI render-stack shim drop-in dir whose libc ABI matches the guest. `gui_root`
-/// (`~/.dd/gui/<arch>`) holds per-libc variant dirs — `lib.glibc` for glibc guests, `lib.musl` /
+/// (`~/.hl/gui/<arch>`) holds per-libc variant dirs — `lib.glibc` for glibc guests, `lib.musl` /
 /// `lib.musl-chrome` for musl guests — plus a legacy shared `lib` a concurrent launch may have swapped to
 /// the wrong libc. Prefer the variant matching the guest; fall back to the shared `lib` only when no
 /// matching variant exists (a fresh/minimal install), preserving the pre-variant behavior.
@@ -84,7 +84,7 @@ fn split_ref(image: &str) -> (String, String) {
     }
 }
 
-/// Launch `ws` as an in-process dd-jit container and return a [`PtyBackend`] over its shell. Errors
+/// Launch `ws` as an in-process hl-jit container and return a [`PtyBackend`] over its shell. Errors
 /// (including "this host's engine can't run that arch") let the caller fall back to a local shell.
 /// Launch (or, when `restore`, RESUME from the last whole-workspace checkpoint) `ws`. Checkpointing is always
 /// armed: the engine's `HL_JIT_CHECKPOINT_DIR` is exported (inherited by the posix_spawn'd engine and every
@@ -109,7 +109,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
         let _ = std::fs::create_dir_all(p);
     }
     // Arm checkpoint/restore for the engine this process spawns (ffi.c execve()s with our environ). Each
-    // `ddcli workspace launch` is its own process, so these process-global vars never race across workspaces.
+    // `hl workspace launch` is its own process, so these process-global vars never race across workspaces.
     std::env::set_var("HL_JIT_CHECKPOINT_DIR", &ckpt_dir);
     // The engine implements guest fork() as a real host fork() of a multithreaded, objc-using process
     // (Metal/IOSurface/NSString on the GPU path), and a guest execve() reloads the image IN-PLACE (no
@@ -127,7 +127,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
     } else {
         std::env::remove_var("HL_JIT_RESTORE_DIR");
         if restore {
-            eprintln!("[dd] no checkpoint to restore for {:?}; starting a fresh workspace", ws.name);
+            eprintln!("[hl] no checkpoint to restore for {:?}; starting a fresh workspace", ws.name);
         }
         // A FRESH launch (not resuming a saved tree): wipe any leftover checkpoint dir + control-channel
         // files for this slot so the new engine starts from a clean, self-contained slot and never inherits
@@ -174,7 +174,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
     let present_ok =
         rootfs_pb.is_dir() && hl_images::detect_arch(&rootfs_pb).map(|a| a == want).unwrap_or(false);
     if !present_ok {
-        eprintln!("[dd] pulling {} ({}) …", ws.image, ws.arch.as_str());
+        eprintln!("[hl] pulling {} ({}) …", ws.image, ws.arch.as_str());
         store
             .pull_archs(&from, &tag, hl_images::Credentials::none(), &[want.oci().1], &mut |_| {})
             .map_err(to_io)?;
@@ -250,7 +250,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
                 builder = builder.egress_socks(sock.to_string());
             }
             None => eprintln!(
-                "[dd] workspace {:?} VPN kind {:?} needs the userspace-tunnel helper (not yet wired); egress is direct",
+                "[hl] workspace {:?} VPN kind {:?} needs the userspace-tunnel helper (not yet wired); egress is direct",
                 ws.name, vpn.kind
             ),
         }
@@ -276,13 +276,13 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
             builder = builder.guest_env(&env, true); // re-apply so DOCKER_HOST is included
         }
     }
-    // GPU integration (accelerated `--gui` display + simulated CUDA device) is now expressed to dd-jit
-    // through a GENERIC device-provider seam (docs/ideas/{RENDERING_PLAN,CUDA_ON_METAL}.md): dd-cli
-    // resolves *where the host artifacts live* (the `~/.dd/...` drop-ins, the socket paths, the guest ISA)
-    // and hands a `hl_gpu::integration::GpuIntegration` to the dd-jit builder as a `DeviceProvider`. The
-    // provider (in dd-gpu) owns *how a GPU maps into a guest* — target multiarch lib dir, guest socket
-    // paths, the WAYLAND_DISPLAY/HL_GPU_EXEC/DD_CUDA_* env contract, the LD_LIBRARY_PATH composition, and
-    // the render-node request — while dd-jit / the engine stay device-agnostic (they only see mounts +
+    // GPU integration (accelerated `--gui` display + simulated CUDA device) is now expressed to hl-jit
+    // through a GENERIC device-provider seam (docs/ideas/{RENDERING_PLAN,CUDA_ON_METAL}.md): hl-cli
+    // resolves *where the host artifacts live* (the `~/.hl/...` drop-ins, the socket paths, the guest ISA)
+    // and hands a `hl_gpu::integration::GpuIntegration` to the hl-jit builder as a `DeviceProvider`. The
+    // provider (in hl-gpu) owns *how a GPU maps into a guest* — target multiarch lib dir, guest socket
+    // paths, the WAYLAND_DISPLAY/HL_GPU_EXEC/HL_CUDA_* env contract, the LD_LIBRARY_PATH composition, and
+    // the render-node request — while hl-jit / the engine stay device-agnostic (they only see mounts +
     // env + a render-node bool; no CUDA/IOSurface/Wayland vocabulary crosses the runtime boundary). Inert
     // unless the workspace is `gui` and/or configures a `cuda` device → headless workspaces byte-identical.
     let mut gpu = hl_gpu::integration::GpuIntegration::new(match ws.arch {
@@ -291,16 +291,16 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
     });
     if ws.gui {
         // Host socket paths: `HL_DISPLAY_SOCK`/`HL_GPU_EXEC_SOCK` overrides (tests / bespoke layouts), else
-        // the per-session shared endpoints under the dd root (`dd-display`, spawned lazily elsewhere,
+        // the per-session shared endpoints under the dd root (`hl-display`, spawned lazily elsewhere,
         // creates + listens on them). Drop-in dirs (client libs / demo bins) are passed only when present,
-        // so a bare image needs no "dd-gpu image".
+        // so a bare image needs no "hl-gpu image".
         let host_sock = std::env::var("HL_DISPLAY_SOCK")
             .unwrap_or_else(|_| paths::hl_root().join("run").join("wayland-0").to_string_lossy().into_owned());
         let host_gpu_sock = std::env::var("HL_GPU_EXEC_SOCK").unwrap_or_else(|_| {
             std::path::Path::new(&host_sock)
                 .parent()
-                .map(|d| d.join("dd-gpu.sock").to_string_lossy().into_owned())
-                .unwrap_or_else(|| paths::hl_root().join("run").join("dd-gpu.sock").to_string_lossy().into_owned())
+                .map(|d| d.join("hl-gpu.sock").to_string_lossy().into_owned())
+                .unwrap_or_else(|| paths::hl_root().join("run").join("hl-gpu.sock").to_string_lossy().into_owned())
         });
         let gui_arch = match ws.arch {
             Arch::Amd64 => "x86_64",
@@ -320,7 +320,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
         let host_gui_bin = gui_root.join("bin");
         if host_gui_lib.is_dir() {
             eprintln!(
-                "[dd] gui render-stack shims: {} (guest libc = {})",
+                "[hl] gui render-stack shims: {} (guest libc = {})",
                 host_gui_lib.display(),
                 if guest_is_musl(&rootfs, ws.arch) { "musl" } else { "glibc" }
             );
@@ -352,7 +352,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
         if std::env::var_os("HL_GPU_POOL").is_none() {
             // The size the guest's Chrome launcher passes to `--window-size`: our process env first (a
             // harness/user `HL_WINDOW_SIZE=W,H`), else the workspace's configured value. The guest
-            // `ddrun` script defaults to 512x384 when unset, so we match that default below. The wire form
+            // `hlrun` script defaults to 512x384 when unset, so we match that default below. The wire form
             // is "W,H"; the pool wants "WxH". `x`-separated input is accepted too, for convenience.
             fn parse_wh(s: &str) -> Option<(u32, u32)> {
                 let (a, b) = s.trim().split_once(|c| c == ',' || c == 'x')?;
@@ -384,9 +384,9 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
     }
     if let Some(cuda) = &ws.cuda {
         // Host-side artifacts follow the same drop-in pattern as the injected `docker` CLI:
-        //   ~/.dd/nvml/<arch>/libnvidia-ml.so.1   (built by hl-gpu/nvml/build.sh install)
-        //   ~/.dd/bin/nvidia-smi[-<arch>]         (the REAL NVIDIA binary; user-provided, never committed)
-        // dd-cli resolves + existence-checks them (and warns exactly as before); dd-gpu injects whatever is
+        //   ~/.hl/nvml/<arch>/libnvidia-ml.so.1   (built by hl-gpu/nvml/build.sh install)
+        //   ~/.hl/bin/nvidia-smi[-<arch>]         (the REAL NVIDIA binary; user-provided, never committed)
+        // hl-cli resolves + existence-checks them (and warns exactly as before); hl-gpu injects whatever is
         // present (an empty path = not injected).
         let (nvml_arch, smi_arch) = match ws.arch {
             Arch::Amd64 => ("x86_64", "nvidia-smi-amd64"),
@@ -398,7 +398,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
             nvml_pb.to_string_lossy().into_owned()
         } else {
             eprintln!(
-                "[dd] workspace {:?} has a CUDA device configured but the NVML shim is missing ({}); \
+                "[hl] workspace {:?} has a CUDA device configured but the NVML shim is missing ({}); \
                  build it with hl-gpu/nvml/build.sh install. nvidia-smi will not find a GPU.",
                 ws.name,
                 nvml_pb.display()
@@ -414,7 +414,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
             smi_g.to_string_lossy().into_owned()
         } else {
             eprintln!(
-                "[dd] workspace {:?}: drop the real nvidia-smi at {} (or {}) to run it against dd's NVML; \
+                "[hl] workspace {:?}: drop the real nvidia-smi at {} (or {}) to run it against dd's NVML; \
                  the NVML shim is still injected so any NVML client sees the device.",
                 ws.name,
                 smi_a.display(),
@@ -450,7 +450,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
     }
     let container = builder.build().map_err(to_io)?;
 
-    // dd-jit's start_into() spawns tokio IO pumps, so it must run inside a runtime; keep that runtime
+    // hl-jit's start_into() spawns tokio IO pumps, so it must run inside a runtime; keep that runtime
     // alive in the handle so the pumps keep feeding the broadcast we drain synchronously.
     let trt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -473,7 +473,7 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
     // (per-pane slot when given, else the shared slot).
     let _ = std::fs::write(&ckpt_pid_file, launched.pid.to_string());
 
-    let mut pty = DdJitPty {
+    let mut pty = HlJitPty {
         _rt: trt,
         stdin_tx,
         rx,
@@ -501,10 +501,10 @@ fn sanitize_host(name: &str) -> String {
     if t.is_empty() { "workspace".to_string() } else { t.to_string() }
 }
 
-/// A synchronous [`PtyBackend`] over a dd-jit-launched container: output drained from the pre-subscribed
+/// A synchronous [`PtyBackend`] over a hl-jit-launched container: output drained from the pre-subscribed
 /// broadcast, input pushed to the guest stdin channel, resize/reap via the master fd + pid.
-struct DdJitPty {
-    /// Kept alive so dd-jit's IO pump tasks keep running (they feed the broadcast we drain).
+struct HlJitPty {
+    /// Kept alive so hl-jit's IO pump tasks keep running (they feed the broadcast we drain).
     _rt: tokio::runtime::Runtime,
     stdin_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     rx: tokio::sync::broadcast::Receiver<(u8, Vec<u8>)>,
@@ -515,7 +515,7 @@ struct DdJitPty {
     exited: Option<i32>,
 }
 
-impl PtyBackend for DdJitPty {
+impl PtyBackend for HlJitPty {
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         let _ = self.stdin_tx.try_send(bytes.to_vec());
         Ok(())
@@ -549,7 +549,7 @@ impl PtyBackend for DdJitPty {
     }
 
     fn master_fd(&self) -> Option<RawFd> {
-        None // output is drained from the broadcast, not the fd (dd-jit's pump owns the fd)
+        None // output is drained from the broadcast, not the fd (hl-jit's pump owns the fd)
     }
 
     fn try_wait(&mut self) -> Option<i32> {
@@ -572,7 +572,7 @@ impl PtyBackend for DdJitPty {
     }
 }
 
-impl Drop for DdJitPty {
+impl Drop for HlJitPty {
     fn drop(&mut self) {
         // Stop the guest's process group (pid == pgid); the pumps end when the PTY closes. ESRCH (already
         // gone) is fine.
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn guest_libc_detected_from_loader() {
-        let base = std::env::temp_dir().join(format!("ddjit-libc-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("hljit-libc-{}", std::process::id()));
         let glibc = base.join("glibc-root");
         std::fs::create_dir_all(glibc.join("lib")).unwrap();
         std::fs::write(glibc.join("lib").join("ld-linux-aarch64.so.1"), b"x").unwrap();
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn selects_abi_matching_gui_lib_variant() {
-        let base = std::env::temp_dir().join(format!("ddjit-guilib-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("hljit-guilib-{}", std::process::id()));
         let gui = base.join("gui");
         for v in ["lib", "lib.glibc", "lib.musl-chrome"] {
             std::fs::create_dir_all(gui.join(v)).unwrap();

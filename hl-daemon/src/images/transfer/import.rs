@@ -25,7 +25,7 @@ pub(crate) async fn image_import(
     } else {
         format!("{repo}:{tag}")
     };
-    // dd-images owns the rootfs-tar extraction into a new image dir (+ minimal `dd-image.json` sidecar);
+    // hl-images owns the rootfs-tar extraction into a new image dir (+ minimal `hl-image.json` sidecar);
     // the handler maps the result onto the daemon's `Image` and registers it.
     let loaded = match hl_images::Store::new(&a.images_dir)
         .import_rootfs(&name, &body)

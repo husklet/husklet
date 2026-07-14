@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dd-shim-vk manifest extractor. Mirrors hl-shim-gl/registry/extract_from_khronos.py and
+# hl-shim-vk manifest extractor. Mirrors hl-shim-gl/registry/extract_from_khronos.py and
 # hl-shim-cuda/registry/extract_cuda_manifest.py, but reads the Khronos **Vulkan** registry
 # (`vk.xml`) directly — Vulkan *does* ship a machine-readable XML registry (unlike the CUDA
 # Driver API), so this is the closest analogue to the GLES2/EGL extractor.

@@ -4,7 +4,7 @@
 // tear the terminal down. The fix flags /dev/tty + /dev/console fds and remaps a nonblocking 0-byte read to
 // EAGAIN.
 //
-// This is a dd-behavior golden (not an oracle diff): a real controlling tty is not guaranteed on the test
+// This is a hl-behavior golden (not an oracle diff): a real controlling tty is not guaranteed on the test
 // host, and native /dev/console read semantics inside a container are not portable. /dev/console is the
 // deterministic path -- dd intercepts open("/dev/console") unconditionally (backed by /dev/null), so it
 // exercises the exact flag+read fix here. /dev/tty is attempted best-effort (it needs the engine to hold a

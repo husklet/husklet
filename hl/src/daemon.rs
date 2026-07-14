@@ -1,4 +1,4 @@
-//! `ddcli daemon …` — run/start/stop/restart/status/logs for the background daemon.
+//! `hl daemon …` — run/start/stop/restart/status/logs for the background daemon.
 
 use crate::agent;
 use crate::cli::DaemonCmd;
@@ -23,21 +23,21 @@ pub(crate) fn cmd_daemon(action: DaemonCmd) -> i32 {
     }
 }
 
-/// Exec the dd-daemon binary in the foreground with the canonical env.
+/// Exec the hl-daemon binary in the foreground with the canonical env.
 fn daemon_run() -> i32 {
     use std::os::unix::process::CommandExt;
     let _ = std::fs::create_dir_all(paths::run_dir());
     let _ = std::fs::create_dir_all(paths::images_dir());
     let bin = paths::daemon_bin();
     if !bin.exists() {
-        eprintln!("dd-daemon binary not found at {}", bin.display());
+        eprintln!("hl-daemon binary not found at {}", bin.display());
         return 1;
     }
     let mut cmd = Command::new(&bin);
     cmd.env("HL_DOCKER_SOCK", paths::socket())
         .env("HL_IMAGES", paths::images_dir());
     if let Some(dir) = bin.parent() {
-        cmd.env("HL_JIT_DIR", dir); // find ddjit-* next to the daemon (bundle Resources)
+        cmd.env("HL_JIT_DIR", dir); // find hljit-* next to the daemon (bundle Resources)
     }
     let err = cmd.exec(); // only returns on failure
     eprintln!("exec {} failed: {err}", bin.display());

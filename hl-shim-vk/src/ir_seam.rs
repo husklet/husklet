@@ -1,14 +1,14 @@
-//! The Vulkan → dd-gpu-IR mapping seam (sketch + anti-drift round-trip).
+//! The Vulkan → hl-gpu-IR mapping seam (sketch + anti-drift round-trip).
 //!
 //! This increment establishes the ICD surface and object model; the sibling host-execution agent
 //! turns these IR streams into real Metal work. What lives here is the *encode seam*: the mapping
 //! from the Vulkan object/command model onto the shared [`hl_shim::ir`] vocabulary (which is
 //! `hl_gpu::ir` re-exported verbatim — the guest producer and host executor share ONE Rust type and
-//! ONE encode/decode, so they cannot drift). The mapping mirrors dd-shim-gl's `lower.rs` and
-//! dd-shim-cuda's `CudaContext` seam.
+//! ONE encode/decode, so they cannot drift). The mapping mirrors hl-shim-gl's `lower.rs` and
+//! hl-shim-cuda's `CudaContext` seam.
 //!
 //! ## Vulkan → IR correspondence
-//! | Vulkan                                   | dd-gpu IR                                       |
+//! | Vulkan                                   | hl-gpu IR                                       |
 //! |------------------------------------------|-------------------------------------------------|
 //! | `VkDeviceMemory` + `VkBuffer`            | [`Cmd::CreateBuffer`] (`BufferDesc`)            |
 //! | `vkMapMemory` write / `vkCmdUpdateBuffer`| [`Cmd::WriteBuffer`]                            |
@@ -25,7 +25,7 @@
 //! | `VkFence` / `VkSemaphore` (timeline)     | [`Cmd::CreateFence`] / [`Cmd::WaitFence`]       |
 //!
 //! The single most important row: a `VkShaderModule` **is** SPIR-V, and the IR's shader ABI is ALSO
-//! SPIR-V (`Cmd::CreateShader{ spirv: Vec<u32> }`, lowered host-side to MSL by naga in dd-gpu-wgpu).
+//! SPIR-V (`Cmd::CreateShader{ spirv: Vec<u32> }`, lowered host-side to MSL by naga in hl-gpu-wgpu).
 //! So Vulkan shaders forward with **zero translation** — the thinnest possible guest seam, and the
 //! reason Vulkan is a natural fit for this IR.
 
@@ -123,7 +123,7 @@ pub fn demo_compute_stream(spirv: Vec<u32>) -> Vec<Cmd> {
         create_buffer(IN_BUF, 1024, 0, "in"),
         create_buffer(OUT_BUF, 1024, 0, "out"),
         create_shader_module(SHADER, spirv),
-        create_compute_pipeline(PIPELINE, SHADER, "main", "dd-vk-compute"),
+        create_compute_pipeline(PIPELINE, SHADER, "main", "hl-vk-compute"),
         Cmd::CreateFence(FENCE),
         submit_compute_dispatch(PIPELINE, (64, 1, 1), Some((FENCE, 1))),
         Cmd::WaitFence {
@@ -138,8 +138,8 @@ mod tests {
     use super::*;
     use hl_shim::ir::{decode_stream, encode_stream};
 
-    /// Anti-drift round-trip (mirrors dd-shim-gl's `framebuilder_encodes_the_shared_contract` and
-    /// dd-shim-cuda's `launch_path_encodes_the_shared_ir_contract`): encode a representative Vulkan
+    /// Anti-drift round-trip (mirrors hl-shim-gl's `framebuilder_encodes_the_shared_contract` and
+    /// hl-shim-cuda's `launch_path_encodes_the_shared_ir_contract`): encode a representative Vulkan
     /// compute stream with the guest producer, then decode it with the HOST's own `hl_gpu::ir`
     /// decoder. Same bytes, same code path — guest and host cannot drift.
     #[test]

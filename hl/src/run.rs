@@ -1,6 +1,6 @@
-//! `ddcli run` / `ddcli <image>` — launch a container with *easy-access* defaults:
+//! `hl run` / `hl <image>` — launch a container with *easy-access* defaults:
 //! the current directory mounted at the same path and used as the working dir, host networking, and an
-//! interactive shell when no command is given. We drive the dd daemon through the stock `docker` CLI
+//! interactive shell when no command is given. We drive the hl daemon through the stock `docker` CLI
 //! (pointed at dd's socket), so the streaming/TTY behaviour is exactly docker's.
 
 use std::io::IsTerminal;
@@ -10,7 +10,7 @@ use crate::agent;
 use crate::paths;
 use crate::run;
 
-/// A parsed `run` invocation. `ddcli run …` and the bare-image shorthand `ddcli <image> …` both parse
+/// A parsed `run` invocation. `hl run …` and the bare-image shorthand `hl <image> …` both parse
 /// into this via [`parse`].
 pub struct RunArgs {
     /// `--platform linux/amd64` etc.; `None` = native (arm64).
@@ -24,8 +24,8 @@ pub struct RunArgs {
     pub command: Vec<String>,
 }
 
-/// Parse `[--platform P] [--isolated] [--keep] <image> [command…]`. ddcli's own flags are recognized
-/// wherever they appear (before or after the image, matching the casual `ddcli run ubuntu --platform …`);
+/// Parse `[--platform P] [--isolated] [--keep] <image> [command…]`. hl's own flags are recognized
+/// wherever they appear (before or after the image, matching the casual `hl run ubuntu --platform …`);
 /// the first remaining token is the image and the rest are the command.
 pub fn parse(raw: Vec<String>) -> Result<RunArgs, String> {
     let (mut platform, mut isolated, mut keep) = (None, false, false);
@@ -43,7 +43,7 @@ pub fn parse(raw: Vec<String>) -> Result<RunArgs, String> {
         }
     }
     let mut rest = rest.into_iter();
-    let image = rest.next().ok_or("usage: ddcli run <image> [command…]")?;
+    let image = rest.next().ok_or("usage: hl run <image> [command…]")?;
     Ok(RunArgs {
         platform,
         isolated,
@@ -57,12 +57,12 @@ pub fn parse(raw: Vec<String>) -> Result<RunArgs, String> {
 pub fn run(args: RunArgs) -> i32 {
     if !docker_present() {
         eprintln!(
-            "ddcli needs the `docker` CLI on PATH — it drives the dd daemon. Install Docker's CLI."
+            "hl needs the `docker` CLI on PATH — it drives the hl daemon. Install Docker's CLI."
         );
         return 1;
     }
     if let Err(e) = ensure_daemon() {
-        eprintln!("dd daemon isn't reachable: {e}\nTry:  ddcli install");
+        eprintln!("hl daemon isn't reachable: {e}\nTry:  hl install");
         return 1;
     }
     let cwd = std::env::current_dir()
@@ -121,7 +121,7 @@ fn docker_present() -> bool {
         .unwrap_or(false)
 }
 
-/// `ddcli run …` and the bare-image shorthand both land here.
+/// `hl run …` and the bare-image shorthand both land here.
 pub(crate) fn cmd_run(raw: Vec<String>) -> i32 {
     match run::parse(raw) {
         Ok(args) => run::run(args),

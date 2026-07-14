@@ -1,9 +1,9 @@
-//! User terminal configuration (`~/.dd/term.conf`) — font, palette, cursor, default scrollback, and
+//! User terminal configuration (`~/.hl/term.conf`) — font, palette, cursor, default scrollback, and
 //! keybindings — in a tiny dependency-free `key = value` format (the same style as `workspaces.conf`),
 //! so the core stays free of serde/toml and this parser is fully headless-testable.
 //!
 //! Unknown keys are ignored (forward-compatible); malformed values fall back to the default. The GUI
-//! (`dd-term`) loads this at startup, applies it to every VTE terminal, and live-reloads on file change.
+//! (`hl-term`) loads this at startup, applies it to every VTE terminal, and live-reloads on file change.
 
 use std::path::{Path, PathBuf};
 
@@ -178,7 +178,7 @@ impl TermConfig {
 
     /// A commented sample config (written on first run so users have something to edit).
     pub fn sample() -> String {
-        let mut s = String::from("# dd terminal config — ~/.dd/term.conf\n# edit + save; open terminals live-reload.\n\n");
+        let mut s = String::from("# hl terminal config — ~/.hl/term.conf\n# edit + save; open terminals live-reload.\n\n");
         s.push_str("font_family = Menlo\n");
         s.push_str("font_size = 12\n");
         s.push_str("# scrollback: a number of lines, or `unlimited`\n");

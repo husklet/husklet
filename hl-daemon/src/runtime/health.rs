@@ -32,7 +32,7 @@ async fn run_health_probe(
     temp.cmd = argv;
     temp.tty = false;
     temp.healthcheck = None; // the probe process is not itself health-checked
-    // Build the probe's container spec, then run it to completion via the typed one-shot capture. dd-jit
+    // Build the probe's container spec, then run it to completion via the typed one-shot capture. hl-jit
     // owns the spawn (piped stdio, combined stdout+stderr, reap); a timeout SIGKILLs it and yields (-1, …).
     let Some(container) = spawn_container(&temp, &app.volumes_dir, vols, None) else {
         return (-1, String::new());

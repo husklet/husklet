@@ -26,7 +26,7 @@ fn elf210() -> Group {
         vec![src("elf210-basecollide", "elf210.c")
             .only(&[Engine::LinuxX86_64])
             .env("HL_JIT_PCACHE", "1")
-            .env("HL_JIT_PCACHE_DIR", "/tmp/ddjit-pcache-elf210")
+            .env("HL_JIT_PCACHE_DIR", "/tmp/hljit-pcache-elf210")
             .env("HL_X_FORCE_BASE_COLLIDE", "1")
             .oracle()],
     )

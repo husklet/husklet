@@ -1,8 +1,8 @@
 // dd guest GLES2 + EGL shim (GPU rung 3 ICD, first slice). A real GLES2 app links -lEGL -lGLESv2 and
 // runs UNMODIFIED against these symbols (mount-injected as libEGL.so.1 + libGLESv2.so.2, like libwayland
 // — NOT a specialized image). Each GL/EGL call drives a small state machine; on eglSwapBuffers the shim
-// translates the accumulated GL state into a dd-gpu IR command stream, ships it to the host Metal executor
-// ($HL_GPU_EXEC) which renders it into a rung-2 IOSurface, and commits that IOSurface to dd-display
+// translates the accumulated GL state into a hl-gpu IR command stream, ships it to the host Metal executor
+// ($HL_GPU_EXEC) which renders it into a rung-2 IOSurface, and commits that IOSurface to hl-display
 // (linux-dmabuf) for zero-copy compositing.
 //
 // SUBSET (see RENDERING_PLAN.md M5 for the coverage map): eglGetDisplay/Initialize/ChooseConfig/
@@ -14,7 +14,7 @@
 // ActiveTexture/TexImage2D/TexParameteri/f/PixelStorei/GenerateMipmap), glEnable(DEPTH_TEST), glGetString.
 // Shaders: a hand GLSL-ES→MSL translator handling attribute/varying/uniform blocks, const globals,
 // sampler2D + texture2D()/texture() sampling, vecN(vecM) truncation, and mat3/mat4 — enough for glmark2's
-// build/texture-scene shaders (which Metal compiles; see `dd-display selftest-msl`). Arbitrary shaders
+// build/texture-scene shaders (which Metal compiles; see `hl-display selftest-msl`). Arbitrary shaders
 // (control flow, all builtins) remain the long tail — SPIRV-Cross is unbuildable on this host (no brew /
 // egress / crates.io), so the hand translator is the committed path.
 #define _GNU_SOURCE
@@ -212,9 +212,9 @@ typedef intptr_t GLsizeiptr;
 #define GL_SHADING_LANGUAGE_VERSION 0x8B8C
 #define GL_EXTENSIONS 0x1F03
 
-// ---- dd ioctl + dmabuf constants (match dd_gpu.h) ----
-#define DD_IOCTL_GPU_ALLOC 0xC020DD01u
-#define DD_DMABUF_MOD_MAGIC 0x6464u
+// ---- dd ioctl + dmabuf constants (match hl_gpu.h) ----
+#define HL_IOCTL_GPU_ALLOC 0xC020DD01u
+#define HL_DMABUF_MOD_MAGIC 0x6464u
 #define DRM_FMT_XRGB8888 0x34325258u
 struct hl_gpu_alloc {
     uint32_t width, height, format, stride, id;
@@ -379,7 +379,7 @@ static struct hl_gpu_alloc g_surf;
 static int g_have_surf;
 static int g_default_surface_valid;
 static int g_default_full_clear_since_swap;
-static int g_wl = -1, g_wl_ready; // wayland socket to dd-display
+static int g_wl = -1, g_wl_ready; // wayland socket to hl-display
 static uint32_t g_wl_surface = 6, g_wl_buffer = 10;
 static uint32_t g_xdg_surface = 7;
 static uint32_t g_wl_frame_cb = 11; // wl_callback id for wl_surface.frame (L1 pacing)
@@ -460,7 +460,7 @@ static int prof_on(void) {
     return g_prof;
 }
 
-// ======================= dd-gpu IR wire (matches hl-gpu/src/wire.rs) =======================
+// ======================= hl-gpu IR wire (matches hl-gpu/src/wire.rs) =======================
 // Chrome can upload multi-megabyte GPU-raster textures in a single frame, so the IR stream must grow.
 // Never emit a length prefix unless the payload bytes can also be appended; otherwise the host decoder
 // sees a well-formed length followed by a truncated stream.
@@ -855,11 +855,11 @@ static void type_fixups(char *b) {
     // Non-square forms first (word-boundary replace already protects mat3 inside mat3x2, but list all).
     // GLSL's `mat3x2(m3)` truncating constructor has NO MSL equivalent — MSL forbids building a matrix
     // from a larger one, so `float3x2(float3x3)` fails to compile and the whole (gradient) shader falls
-    // back to the builtin → a black, mispositioned block. Route the CONSTRUCTOR call to a dd_mat3x2()
+    // back to the builtin → a black, mispositioned block. Route the CONSTRUCTOR call to a hl_mat3x2()
     // helper (injected at file scope) that extracts the upper-left 3×2 block; bare `mat3x2` type
-    // declarations still map to `float3x2` via the wreplace below (dd_mat3x2 is protected — the leading
+    // declarations still map to `float3x2` via the wreplace below (hl_mat3x2 is protected — the leading
     // `_` is a word char, so the word-boundary wreplace won't rewrite the `mat3x2` inside it).
-    sreplace(b, "mat3x2(", "dd_mat3x2(");
+    sreplace(b, "mat3x2(", "hl_mat3x2(");
     wreplace(b, "mat2x2", "float2x2");
     wreplace(b, "mat2x3", "float2x3");
     wreplace(b, "mat2x4", "float2x4");
@@ -952,27 +952,27 @@ static void rename_call2(char *buf, const char *fn, const char *to) {
 }
 // GLSL-ES builtins whose MSL spelling differs. Missing these makes the whole shader fail to compile, so the
 // program never links and its draws silently VANISH. `mod` has NO MSL builtin (fmod differs on negatives) —
-// it's provided by dd_mod overloads injected at file scope (see translate()).
+// it's provided by hl_mod overloads injected at file scope (see translate()).
 static void builtin_fixups(char *b) {
     wreplace(b, "dFdx", "dfdx");           // MSL derivatives are lowercase
     wreplace(b, "dFdy", "dfdy");
     wreplace(b, "inversesqrt", "rsqrt");   // GLSL inversesqrt → MSL rsqrt
     rename_call2(b, "atan", "atan2");      // GLSL atan(y,x) → MSL atan2 (1-arg atan kept)
-    wreplace(b, "mod", "dd_mod");          // GLSL mod(x,y) = x - y*floor(x/y); MSL has no `mod`
+    wreplace(b, "mod", "hl_mod");          // GLSL mod(x,y) = x - y*floor(x/y); MSL has no `mod`
 }
 // float-scalar/vector GLSL mod() replacement, injected at MSL file scope when a shader uses mod().
-static const char *DD_MOD_HELPERS =
-    "template<typename T> inline T dd_mod(T x, T y) { return x - y * floor(x / y); }\n"
-    "inline float2 dd_mod(float2 x, float y) { return x - y * floor(x / y); }\n"
-    "inline float3 dd_mod(float3 x, float y) { return x - y * floor(x / y); }\n"
-    "inline float4 dd_mod(float4 x, float y) { return x - y * floor(x / y); }\n";
+static const char *HL_MOD_HELPERS =
+    "template<typename T> inline T hl_mod(T x, T y) { return x - y * floor(x / y); }\n"
+    "inline float2 hl_mod(float2 x, float y) { return x - y * floor(x / y); }\n"
+    "inline float3 hl_mod(float3 x, float y) { return x - y * floor(x / y); }\n"
+    "inline float4 hl_mod(float4 x, float y) { return x - y * floor(x / y); }\n";
 // GLSL `mat3x2(m3)` truncating-matrix constructor → MSL has none. Provide it: extract the upper-left
 // 3×2 block (cols 0..2, rows x/y). The float2×3 column form is passed through unchanged. Skia emits
 // `mat3x2(gradientMatrix) * vec3(coord, 1.0)` for linear-gradient/coord transforms; without this the
 // shader fails to compile and the draw falls back to the builtin (black, mispositioned).
-static const char *DD_MAT3X2_HELPER =
-    "inline float3x2 dd_mat3x2(float3x3 m) { return float3x2(m[0].xy, m[1].xy, m[2].xy); }\n"
-    "inline float3x2 dd_mat3x2(float2 a, float2 b, float2 c) { return float3x2(a, b, c); }\n";
+static const char *HL_MAT3X2_HELPER =
+    "inline float3x2 hl_mat3x2(float3x3 m) { return float3x2(m[0].xy, m[1].xy, m[2].xy); }\n"
+    "inline float3x2 hl_mat3x2(float2 a, float2 b, float2 c) { return float3x2(a, b, c); }\n";
 static void local_decl_fixups(char *b) {
     sreplace(b, "float in.", "float ");
     sreplace(b, "float2 in.", "float2 ");
@@ -1220,8 +1220,8 @@ static char *translate(const char *vs_in, const char *fs_in) {
     size_t o = 0;
     o = cat_msl(out, o, TRANSLATE_OUTCAP, "#include <metal_stdlib>\nusing namespace metal;\n");
     // Inject GLSL mod() helper overloads (MSL has no `mod`) only when a shader actually uses mod(…).
-    if (strstr(vs, "mod(") || strstr(fs, "mod(")) o = cat_msl(out, o, TRANSLATE_OUTCAP, "%s", DD_MOD_HELPERS);
-    if (strstr(vs, "mat3x2(") || strstr(fs, "mat3x2(")) o = cat_msl(out, o, TRANSLATE_OUTCAP, "%s", DD_MAT3X2_HELPER);
+    if (strstr(vs, "mod(") || strstr(fs, "mod(")) o = cat_msl(out, o, TRANSLATE_OUTCAP, "%s", HL_MOD_HELPERS);
+    if (strstr(vs, "mat3x2(") || strstr(fs, "mat3x2(")) o = cat_msl(out, o, TRANSLATE_OUTCAP, "%s", HL_MAT3X2_HELPER);
     // Global consts (glmark2's prepended light/material/PI): `const …` → `constant …`, types fixed.
     for (int i = 0; i < nc; i++) {
         char line[256];
@@ -1509,9 +1509,9 @@ static void surface_up(uint32_t w, uint32_t h) {
     if (rnode < 0) { fprintf(stderr, "gl_shim: no renderD128 (errno=%d %s)\n", errno, strerror(errno)); return; }
     fprintf(stderr, "gl_shim: renderD128 fd=%d\n", rnode);
     g_surf.width = w; g_surf.height = h; g_surf.format = 0;
-    if (ioctl(rnode, DD_IOCTL_GPU_ALLOC, &g_surf) != 0) { fprintf(stderr, "gl_shim: alloc failed\n"); return; }
+    if (ioctl(rnode, HL_IOCTL_GPU_ALLOC, &g_surf) != 0) { fprintf(stderr, "gl_shim: alloc failed\n"); return; }
     g_have_surf = 1;
-    // wayland handshake to dd-display
+    // wayland handshake to hl-display
     const char *disp = getenv("WAYLAND_DISPLAY"), *rd = getenv("XDG_RUNTIME_DIR");
     if (!disp) disp = "wayland-0";
     if (!rd) rd = "/run/user/0";
@@ -1580,7 +1580,7 @@ static void exec_stream(void) {
         }
     }
     const char *ep = getenv("HL_GPU_EXEC");
-    if (!ep) ep = "/run/user/0/dd-gpu-0";
+    if (!ep) ep = "/run/user/0/hl-gpu-0";
     // L2/L7.1: keep ONE executor connection open for the surface's lifetime — a frame is just
     // [hdr][ir]+ack on the same fd (no socket()/connect()/close() per frame). The executor holds a
     // persistent MetalBackend per connection, so its shader/PSO/resource caches survive across frames.
@@ -1651,14 +1651,14 @@ static void wl_drain_until_frame(uint32_t cb) {
         }
     }
 }
-// Commit the (executor-rendered) IOSurface to dd-display via linux-dmabuf.
+// Commit the (executor-rendered) IOSurface to hl-display via linux-dmabuf.
 static void wl_commit(void) {
     if (getenv("HL_IR_DUMP")) return; // host-tool mode: no wayland commit
     if (g_wl < 0 || !g_wl_ready) return;
     uint32_t dmabuf = 4, params = 9;
     wmsg(dmabuf, 1, &params, 1); // create_params
     wflush();
-    uint32_t addw[5] = {0, 0, g_surf.stride, DD_DMABUF_MOD_MAGIC, g_surf.id};
+    uint32_t addw[5] = {0, 0, g_surf.stride, HL_DMABUF_MOD_MAGIC, g_surf.id};
     wmsg(params, 1, addw, 5); // add(fd via SCM_RIGHTS)
     wflush_fd(g_surf.fd);
     uint32_t ci[5] = {g_wl_buffer, g_surf.width, g_surf.height, DRM_FMT_XRGB8888, 0};
@@ -1693,9 +1693,9 @@ static void wl_commit(void) {
 // with the reader below — no dependence on Mesa's exact field order. The first field mirrors Mesa's ABI
 // (`intptr_t version`) so a stray Mesa struct is still parseable via the offset fallback in
 // eglCreateWindowSurface.
-#define DD_WL_EGL_MAGIC ((intptr_t)0x6464776C65676CLL) // "ddwlegl" magic
+#define HL_WL_EGL_MAGIC ((intptr_t)0x6464776C65676CLL) // "ddwlegl" magic
 struct hl_wl_egl_window {
-    intptr_t version;   // = DD_WL_EGL_MAGIC (Mesa stores WL_EGL_WINDOW_VERSION here)
+    intptr_t version;   // = HL_WL_EGL_MAGIC (Mesa stores WL_EGL_WINDOW_VERSION here)
     int width, height;  // offsets 8/12 — same as Mesa's struct
     int dx, dy;
     int attached_width, attached_height;
@@ -1708,7 +1708,7 @@ struct hl_wl_egl_window *wl_egl_window_create(void *surface, int width, int heig
     if (width <= 0 || height <= 0) return 0;
     struct hl_wl_egl_window *w = calloc(1, sizeof *w);
     if (!w) return 0;
-    w->version = DD_WL_EGL_MAGIC;
+    w->version = HL_WL_EGL_MAGIC;
     w->width = width;
     w->height = height;
     w->surface = surface;
@@ -1772,7 +1772,7 @@ const char *eglQueryString(EGLDisplay dpy, EGLint name) {
     const char *r;
     switch (name) {
         case EGL_VENDOR: r = "dd"; break;
-        case EGL_VERSION: r = "1.4 dd-shim"; break;
+        case EGL_VERSION: r = "1.4 hl-shim"; break;
         case EGL_CLIENT_APIS: r = "OpenGL_ES"; break;
         // Advertise ONLY the client extensions ANGLE's gl-egl backend actually needs and that we back:
         // EGL_KHR_create_context (context client version / ES3 profile bits ANGLE passes to eglCreateContext)
@@ -1888,7 +1888,7 @@ EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig c, EGLNativeWindowTy
     if (w) {
         struct hl_wl_egl_window *win = (struct hl_wl_egl_window *)w;
         int ww, hh;
-        if (win->version == DD_WL_EGL_MAGIC) {
+        if (win->version == HL_WL_EGL_MAGIC) {
             // Our libwayland-egl.so.1 struct (glmark2, Chrome/ozone): width/height at offsets 8/12.
             ww = win->width;
             hh = win->height;
@@ -2010,7 +2010,7 @@ EGLBoolean eglCopyBuffers(EGLDisplay dpy, EGLSurface s, void *tgt) { (void)dpy; 
 // Pbuffer surface: ANGLE creates a tiny (typically 1x1) offscreen surface to make its BOOTSTRAP GL context
 // current during Display::initialize (GL capability probing), BEFORE the real window surface exists. Return
 // a DISTINCT non-null handle and do NOT run the IOSurface/Wayland bring-up — that belongs to the WINDOW
-// surface, whose pixels reach dd-display; clobbering the single global g_surf here would redirect the
+// surface, whose pixels reach hl-display; clobbering the single global g_surf here would redirect the
 // browser's frames to a 1x1 offscreen buffer. eglSwapBuffers is a no-op on a pbuffer in real EGL, and our
 // eglSwapBuffers only acts when g_have_surf (set by the window path), so this handle stays inert on swap.
 EGLSurface eglCreatePbufferSurface(EGLDisplay dpy, EGLConfig c, const EGLint *a) { (void)dpy; (void)c; (void)a; EGLDBG("eglCreatePbufferSurface cfg=%p -> 2\n", c); return (EGLSurface)2; }
@@ -2739,10 +2739,10 @@ const unsigned char *glGetString(GLenum n) {
         // ES2 by default so glmark2 (GLSL ES 1.00 shaders) stays on the known-good path. Chromium's ANGLE
         // asks for an ES3 context; HL_SHIM_ES3 opts that run into the ES3 caps and exported stubs below.
         case GL_VERSION:
-            r = (const unsigned char *)(g_ctx_major >= 3 ? "OpenGL ES 3.0 dd-shim" : "OpenGL ES 2.0 dd-shim");
+            r = (const unsigned char *)(g_ctx_major >= 3 ? "OpenGL ES 3.0 hl-shim" : "OpenGL ES 2.0 hl-shim");
             break;
         case GL_VENDOR: r = (const unsigned char *)"dd"; break;
-        case GL_RENDERER: r = (const unsigned char *)"dd-metal"; break;
+        case GL_RENDERER: r = (const unsigned char *)"hl-metal"; break;
         case GL_SHADING_LANGUAGE_VERSION:
             r = (const unsigned char *)(g_ctx_major >= 3 ? "OpenGL ES GLSL ES 3.00" : "OpenGL ES GLSL ES 1.00");
             break;
@@ -4151,8 +4151,8 @@ void glClearBufferfi(GLenum b, GLint d, GLfloat depth, GLint stencil) { (void)b;
 // ======================= translator test tool (host build) =======================
 // Build: cc -DDD_TR_TOOL gl_shim.c -o gl_tr ; run: gl_tr vertex.glsl fragment.glsl > out.metal
 // Feeds real GLSL-ES through the SAME translate() the shim uses at glLinkProgram time, so the emitted MSL
-// can be compiled (dd-display selftest-msl) to prove arbitrary app shaders (e.g. glmark2's) translate.
-#ifdef DD_TR_TOOL
+// can be compiled (hl-display selftest-msl) to prove arbitrary app shaders (e.g. glmark2's) translate.
+#ifdef HL_TR_TOOL
 static char *slurp(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) { perror(path); exit(1); }

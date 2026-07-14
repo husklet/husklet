@@ -6,7 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 int main(void) {
-    const char *req = "/tmp/dd_fifo_req", *rsp = "/tmp/dd_fifo_rsp";
+    const char *req = "/tmp/hl_fifo_req", *rsp = "/tmp/hl_fifo_rsp";
     unlink(req); unlink(rsp); mkfifo(req, 0644); mkfifo(rsp, 0644);
     pid_t pid = fork();
     if (pid == 0) {

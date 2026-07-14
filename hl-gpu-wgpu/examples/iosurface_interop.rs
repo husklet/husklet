@@ -2,7 +2,7 @@
 //!
 //! Proves the single hardest piece of the wgpu host-GPU path: rendering through **wgpu** directly into
 //! an **IOSurface-backed `MTLTexture`** (the same `newTextureWithDescriptor:iosurface:plane:` wrap
-//! `dd-display`'s `MetalCtx::texture_from_iosurface` uses), then reading the pixels back **through the
+//! `hl-display`'s `MetalCtx::texture_from_iosurface` uses), then reading the pixels back **through the
 //! IOSurface** (CPU map of the shared pages) — NOT through a wgpu copy. If the render lands in the
 //! IOSurface with no intermediate copy, the zero-copy present path is real.
 //!
@@ -10,12 +10,12 @@
 //!
 //! 1. `wgpu::Device` (own system-Metal device via `WgpuBackend::new`). Its underlying `MTLDevice` is
 //!    extracted with `Device::as_hal::<wgpu_hal::api::Metal>()` -> `hal_device.raw_device().lock().as_ptr()`
-//!    (a `metal::Device`, i.e. metal-rs 0.31, raw `*mut MTLDevice`). Sharing dd-display's *exact* device
+//!    (a `metal::Device`, i.e. metal-rs 0.31, raw `*mut MTLDevice`). Sharing hl-display's *exact* device
 //!    the other way (`device_from_raw`) is not reachable through wgpu-hal 24's public API — see the report
 //!    at the bottom of `main`. Extracting wgpu's device and building the IOSurface texture on THAT device
 //!    gives the same guarantee that matters for zero-copy: producer and consumer share one `MTLDevice`.
-//! 2. Wrap that raw `MTLDevice` on the **objc2** side (`Retained::retain`, the type dd-display speaks) and
-//!    create an `IOSurface` + an IOSurface-backed `MTLTexture` on it — byte-for-byte the dd-display recipe
+//! 2. Wrap that raw `MTLDevice` on the **objc2** side (`Retained::retain`, the type hl-display speaks) and
+//!    create an `IOSurface` + an IOSurface-backed `MTLTexture` on it — byte-for-byte the hl-display recipe
 //!    (BGRA8Unorm, `.ShaderRead | .RenderTarget`, `storageMode = .Shared`).
 //! 3. Bridge that `Retained<ProtocolObject<dyn MTLTexture>>` (objc2) to a metal-rs `metal::Texture`
 //!    (`Retained::as_ptr` -> `metal::TextureRef::from_ptr` -> `.to_owned()` = `retain +1`), then
@@ -72,7 +72,7 @@ mod imp {
         fn CFRelease(cf: *const c_void);
     }
 
-    /// Allocate a BGRA8888 host IOSurface (dd-display `create_iosurface`, inlined).
+    /// Allocate a BGRA8888 host IOSurface (hl-display `create_iosurface`, inlined).
     unsafe fn create_iosurface(w: u32, h: u32) -> IOSurfaceRef {
         let k = |s: CFStringRef| &*(s as *const NSString);
         let keys: [&NSString; 5] = [
@@ -143,7 +143,7 @@ mod imp {
             unsafe { Retained::retain(raw_device as *mut ProtocolObject<dyn MTLDevice>) }
                 .expect("retain MTLDevice");
 
-        // ---- 2. IOSurface + IOSurface-backed MTLTexture on wgpu's device (the dd-display wrap). --------
+        // ---- 2. IOSurface + IOSurface-backed MTLTexture on wgpu's device (the hl-display wrap). --------
         let surface = unsafe { create_iosurface(W, H) };
         if surface.is_null() {
             eprintln!("iosurface_interop: IOSurfaceCreate failed");
@@ -172,7 +172,7 @@ mod imp {
             be.device().create_texture_from_hal::<wgpu_hal::api::Metal>(
                 hal_texture,
                 &wgpu::TextureDescriptor {
-                    label: Some("dd-iosurface-target"),
+                    label: Some("hl-iosurface-target"),
                     size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
                     mip_level_count: 1,
                     sample_count: 1,

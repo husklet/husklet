@@ -1,14 +1,14 @@
-//! dd-daemon — a Docker-Engine-API daemon backed by the **dd** VM-less JIT runtime.
+//! hl-daemon — a Docker-Engine-API daemon backed by the **dd** VM-less JIT runtime.
 //!
-//! The real `docker` CLI (and the `dd-app` GUI) talk to this over a Unix socket; container
-//! *execution* is delegated to the JIT binaries built by the `ddjit` crate (one per guest
+//! The real `docker` CLI (and the `hl-app` GUI) talk to this over a Unix socket; container
+//! *execution* is delegated to the JIT binaries built by the `hljit` crate (one per guest
 //! architecture). The daemon detects each image's architecture from its ELF and picks the
 //! matching JIT, then launches it via the typed [`hl_jit::SpawnConfig`] contract — no VM.
 //!
 //!   cargo run --release -p hl-daemon            # build.rs builds the JITs first
 //!   DOCKER_HOST=unix://$PWD/dd.sock docker run -p 8080:80 -m 256m alpine echo hi
 //!
-//! Containers, volumes and networks are persisted to `HL_STATE` (default `~/.dd/state.json`) so
+//! Containers, volumes and networks are persisted to `HL_STATE` (default `~/.hl/state.json`) so
 //! they survive daemon restarts. Images are re-discovered from `HL_IMAGES` each startup.
 //!
 //! Env: HL_IMAGES (image dirs; default "./images"), HL_DOCKER_SOCK (listen socket),
@@ -45,7 +45,7 @@ use crate::util::*;
 
 /// Read-only bundled starter-image dirs to discover ALONGSIDE the writable `images_dir`: the app
 /// bundle's `Resources/images`, a sibling of this daemon binary. We discover (not copy) them so an app
-/// update always serves the current starter images and `~/.dd` never needs a manual refresh. Empty in a
+/// update always serves the current starter images and `~/.hl` never needs a manual refresh. Empty in a
 /// dev/test tree (no such sibling exists next to the binary), so it can't perturb the matrix.
 fn bundled_image_dirs(images_dir: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -63,7 +63,7 @@ fn bundled_image_dirs(images_dir: &str) -> Vec<String> {
 #[tokio::main]
 async fn main() {
     let images_dir = std::env::var("HL_IMAGES").unwrap_or_else(|_| "./images".into());
-    let sock = std::env::var("HL_DOCKER_SOCK").unwrap_or_else(|_| "./dd.sock".into());
+    let sock = std::env::var("HL_DOCKER_SOCK").unwrap_or_else(|_| "./hl.sock".into());
     let state_path = std::env::var("HL_STATE")
         .unwrap_or_else(|_| hl_home().join("state.json").to_string_lossy().into_owned());
     let volumes_dir = std::env::var("HL_VOLUMES")
@@ -78,7 +78,7 @@ async fn main() {
                 let _ = std::fs::remove_file(&sock);
             } else {
                 eprintln!(
-                    "[dd-daemon] refusing to remove non-socket HL_DOCKER_SOCK path {sock:?} \
+                    "[hl-daemon] refusing to remove non-socket HL_DOCKER_SOCK path {sock:?} \
                      (not a stale socket); bind will fail if it is occupied"
                 );
             }
@@ -88,10 +88,10 @@ async fn main() {
     let _ = std::fs::create_dir_all(&volumes_dir);
 
     let mut inner = Inner::default();
-    // Discover the writable user image store (HL_IMAGES = ~/.dd/images) PLUS any read-only bundled
+    // Discover the writable user image store (HL_IMAGES = ~/.hl/images) PLUS any read-only bundled
     // starter images shipped inside the app (Resources/images, beside this binary). Serving the bundled
-    // set straight from the bundle -- instead of copying it into ~/.dd -- means an app update always
-    // carries the current starter images and nothing in ~/.dd ever needs refreshing. User pulls win on
+    // set straight from the bundle -- instead of copying it into ~/.hl -- means an app update always
+    // carries the current starter images and nothing in ~/.hl ever needs refreshing. User pulls win on
     // a name clash.
     let mut imgs = discover_images(&images_dir);
     for d in bundled_image_dirs(&images_dir) {
@@ -107,7 +107,7 @@ async fn main() {
         inner.networks = default_networks();
     }
     eprintln!(
-        "[dd-daemon] images={} -> {} image(s): {}",
+        "[hl-daemon] images={} -> {} image(s): {}",
         images_dir,
         inner.images.len(),
         inner
@@ -118,14 +118,14 @@ async fn main() {
             .join(", ")
     );
     eprintln!(
-        "[dd-daemon] state={state_path} -> {} container(s), {} volume(s), {} network(s)",
+        "[hl-daemon] state={state_path} -> {} container(s), {} volume(s), {} network(s)",
         inner.containers.len(),
         inner.volumes.len(),
         inner.networks.len()
     );
     for g in Guest::ALL {
         eprintln!(
-            "[dd-daemon] JIT {}: {}",
+            "[hl-daemon] JIT {}: {}",
             g.target(),
             if hl_jit::available(g) {
                 "ready"
@@ -145,7 +145,7 @@ async fn main() {
     let router = routes::router(app);
 
     let listener = tokio::net::UnixListener::bind(&sock).expect("bind unix socket");
-    eprintln!("[dd-daemon] listening on unix://{sock}");
+    eprintln!("[hl-daemon] listening on unix://{sock}");
     let mut make = router.into_make_service();
     loop {
         let (socket, _) = match listener.accept().await {

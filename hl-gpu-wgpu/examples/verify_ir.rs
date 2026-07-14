@@ -1,4 +1,4 @@
-//! On-device verification for the wgpu backend: build dd-GPU IR streams, replay them through
+//! On-device verification for the wgpu backend: build hl-GPU IR streams, replay them through
 //! [`hl_gpu_wgpu::WgpuBackend`] into a wgpu-owned render target, read the pixels back, and assert.
 //!
 //! Two cases mirror the shapes the bespoke Metal replay's golden suite uses:

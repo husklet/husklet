@@ -91,7 +91,7 @@ mod tests {
         // A just-extracted layer: a normal whiteout, an opaque-dir marker, and two degenerate names
         // that the old `find | … rm` shell mishandled (a bare `.wh.` wiped the parent dir; `.wh..`
         // made `rm` error). After apply_whiteouts: targets gone, all markers gone, parents kept.
-        let root = std::env::temp_dir().join(format!("dd-wh-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("hl-wh-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let sub = root.join("sub");
         std::fs::create_dir_all(&sub).unwrap();
@@ -117,7 +117,7 @@ mod tests {
         // dd flattens all layers into one rootfs. Simulate a rootfs already holding LOWER content in
         // `app/`, then apply a new layer (a tar) that replaces `app/` wholesale via a `.wh..wh..opq`
         // marker. Real overlayfs would hide every lower entry of `app/`; the flattened image must too.
-        let base = std::env::temp_dir().join(format!("dd-opq-test-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("hl-opq-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("rootfs");
         std::fs::create_dir_all(root.join("app/oldsub")).unwrap();

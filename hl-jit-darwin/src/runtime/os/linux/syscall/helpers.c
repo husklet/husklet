@@ -2,7 +2,7 @@
 // Not standalone -- #included by ../service.c after its system headers and before static void service().
 // Emulated pipe-buffer sizes for F_SETPIPE_SZ/F_GETPIPE_SZ (macOS has no pipe-size fcntl): we record
 // the requested (page-rounded) size per-fd and report it back, so size-probing programs see it stick.
-static int g_pipesz[DD_NFD];
+static int g_pipesz[HL_NFD];
 
 // ---- guest RLIMIT_NOFILE enforcement -------------------------------------------------------------
 // dd shares the host descriptor table, whose real cap is far larger than the guest's (engine-private fds
@@ -51,10 +51,10 @@ static int nofile_gate(int r) {
 // fcntl record locks. Cross-process/cross-fork flock exclusion is preserved because every process that
 // flock()s the same underlying file contends on the same companion (same dev/ino -> same companion path);
 // fcntl record locks stay on the real fd, disjoint from the companion. LOCK_SH->F_RDLCK, LOCK_EX->F_WRLCK,
-// LOCK_NB->F_SETLK (else F_SETLKW), LOCK_UN->F_UNLCK. Per-fd state (fd<DD_NFD) drives release-on-close so a
+// LOCK_NB->F_SETLK (else F_SETLKW), LOCK_UN->F_UNLCK. Per-fd state (fd<HL_NFD) drives release-on-close so a
 // held flock is dropped when its last fd closes, matching flock's "released on last close" semantics.
 #define FLOCK_DIR "/tmp/.ddflock"
-static uint8_t g_flock_type[DD_NFD]; // per guest fd: 0 none, else LOCK_SH / LOCK_EX currently held via companion
+static uint8_t g_flock_type[HL_NFD]; // per guest fd: 0 none, else LOCK_SH / LOCK_EX currently held via companion
 
 static struct {
     dev_t dev;
@@ -105,7 +105,7 @@ static int hl_flock(int fd, int op) {
     if (base == LOCK_UN) {
         fl.l_type = F_UNLCK;
         int r = fcntl(comp, F_SETLK, &fl);
-        if (r == 0 && fd >= 0 && fd < DD_NFD && g_flock_type[fd]) {
+        if (r == 0 && fd >= 0 && fd < HL_NFD && g_flock_type[fd]) {
             g_flock_type[fd] = 0;
             if (--g_flkcomp[idx].refs < 0) g_flkcomp[idx].refs = 0;
         }
@@ -113,7 +113,7 @@ static int hl_flock(int fd, int op) {
     }
     fl.l_type = base == LOCK_SH ? F_RDLCK : F_WRLCK;
     int r = fcntl(comp, (op & LOCK_NB) ? F_SETLK : F_SETLKW, &fl);
-    if (r == 0 && fd >= 0 && fd < DD_NFD) {
+    if (r == 0 && fd >= 0 && fd < HL_NFD) {
         if (!g_flock_type[fd]) g_flkcomp[idx].refs++;
         g_flock_type[fd] = (uint8_t)base;
     }
@@ -123,7 +123,7 @@ static int hl_flock(int fd, int op) {
 // close() hook: drop the flock this fd contributed; release the companion lock once its last holder in
 // this process is gone (flock is released on the last close of the file).
 static void flock_on_close(int fd) {
-    if (fd < 0 || fd >= DD_NFD || !g_flock_type[fd]) return;
+    if (fd < 0 || fd >= HL_NFD || !g_flock_type[fd]) return;
     g_flock_type[fd] = 0;
     int idx = flock_companion(fd);
     if (idx < 0) return;
@@ -178,9 +178,9 @@ static struct poslk_shm *g_poslk;
 // never re-fstat()s (cleared on close in fd_reset_emul); (b) g_mypid caches getpid(). Both are per-process
 // (NOT in the shared region); fork inherits a valid COW copy (same fds/files) and the clone child resets
 // g_mypid/g_i_locked via poslk_after_fork.
-static dev_t g_lkdev[DD_NFD];
-static ino_t g_lkino[DD_NFD];
-static uint8_t g_lkval[DD_NFD]; // 1 == g_lk{dev,ino}[fd] valid
+static dev_t g_lkdev[HL_NFD];
+static ino_t g_lkino[HL_NFD];
+static uint8_t g_lkval[HL_NFD]; // 1 == g_lk{dev,ino}[fd] valid
 static int32_t g_mypid;       // cached getpid() (0 = not cached yet)
 static int g_i_locked;        // this process has held >=1 fcntl record lock (gates the close-time fstat)
 
@@ -296,7 +296,7 @@ static int poslk_resolve(int fd, const uint8_t *lf, dev_t *dev, ino_t *ino, int6
     short whence = *(const short *)(lf + 2);
     int64_t start = *(const int64_t *)(lf + 8);
     int64_t len = *(const int64_t *)(lf + 16);
-    int cached = fd >= 0 && fd < DD_NFD && g_lkval[fd];
+    int cached = fd >= 0 && fd < HL_NFD && g_lkval[fd];
     int64_t base;
     // Hot path: SEEK_SET on a cached fd -> (dev,ino) from the cache, base 0, and NOT A SINGLE host syscall.
     if (cached && whence == SEEK_SET) {
@@ -309,7 +309,7 @@ static int poslk_resolve(int fd, const uint8_t *lf, dev_t *dev, ino_t *ino, int6
         if (!S_ISREG(st.st_mode)) return -2; // POSIX record locks are only meaningful on regular files
         *dev = st.st_dev;
         *ino = st.st_ino;
-        if (fd >= 0 && fd < DD_NFD) {
+        if (fd >= 0 && fd < HL_NFD) {
             g_lkdev[fd] = st.st_dev;
             g_lkino[fd] = st.st_ino;
             g_lkval[fd] = 1;
@@ -438,7 +438,7 @@ static int poslk_op(int fd, int lcmd, uint8_t *lf, int *out) {
 static void poslk_on_close(int fd) {
     if (!g_poslk) return;
     int32_t me = poslk_mypid();
-    if (fd >= 0 && fd < DD_NFD && g_lkval[fd]) { // fast: release by the cached identity, then forget the fd
+    if (fd >= 0 && fd < HL_NFD && g_lkval[fd]) { // fast: release by the cached identity, then forget the fd
         poslk_lock();
         poslk_clear_own(g_lkdev[fd], g_lkino[fd], me, 0, INT64_MAX);
         poslk_unlock();
@@ -624,7 +624,7 @@ static size_t inomv_drain(int instfd, uint8_t *out, size_t cap) {
 
 // pipe read-pushback (tee(2)): consume up to `cap` bytes from fd's pushback into buf (removing them).
 static size_t pipe_pushback_take(int fd, void *buf, size_t cap) {
-    if (fd < 0 || fd >= DD_NFD || g_fd_pb_len[fd] == 0 || cap == 0) return 0;
+    if (fd < 0 || fd >= HL_NFD || g_fd_pb_len[fd] == 0 || cap == 0) return 0;
     size_t k = g_fd_pb_len[fd] < cap ? g_fd_pb_len[fd] : cap;
     memcpy(buf, g_fd_pushback[fd], k);
     if (k < g_fd_pb_len[fd]) {
@@ -640,7 +640,7 @@ static size_t pipe_pushback_take(int fd, void *buf, size_t cap) {
 
 // Replace fd's pushback with `len` bytes of `data` (tee restores the source it peeked out of the pipe).
 static void pipe_pushback_set(int fd, const void *data, size_t len) {
-    if (fd < 0 || fd >= DD_NFD) return;
+    if (fd < 0 || fd >= HL_NFD) return;
     free(g_fd_pushback[fd]);
     g_fd_pushback[fd] = NULL;
     g_fd_pb_len[fd] = 0;
@@ -903,19 +903,19 @@ static int dev_std_fd(const char *p) {
 // into the single wait syscall (the classic libevent/libev kqueue batching). It also tracks the
 // armed read/write filter per guest fd so EPOLL_CTL_MOD correctly removes a dropped filter (the
 // baseline leaves a stale EVFILT_WRITE armed on a MOD from IN|OUT->IN), without emitting spurious
-// EV_DELETEs that would error.  Tables are indexed by fd<DD_NFD (matches every other fd table here);
-// epfd/fd >= DD_NFD fall back to the immediate path.
+// EV_DELETEs that would error.  Tables are indexed by fd<HL_NFD (matches every other fd table here);
+// epfd/fd >= HL_NFD fall back to the immediate path.
 static int g_epopt = -1;              // -1 unknown, 0 off, 1 on
-static struct kevent *g_ep_chg[DD_NFD]; // deferred changelist per epoll fd
-static int g_ep_chgn[DD_NFD], g_ep_chgcap[DD_NFD];
-static uint8_t g_ep_rd[DD_NFD], g_ep_wr[DD_NFD]; // per guest fd: read/write filter currently armed
-static uint8_t g_ep_os[DD_NFD];                // per guest fd: EPOLLONESHOT requested (kernel auto-removes on fire)
-static uint8_t g_epoll[DD_NFD]; // per fd: an epoll instance (backed by kqueue) -- rebuilt across fork (macOS kqueue() is
+static struct kevent *g_ep_chg[HL_NFD]; // deferred changelist per epoll fd
+static int g_ep_chgn[HL_NFD], g_ep_chgcap[HL_NFD];
+static uint8_t g_ep_rd[HL_NFD], g_ep_wr[HL_NFD]; // per guest fd: read/write filter currently armed
+static uint8_t g_ep_os[HL_NFD];                // per guest fd: EPOLLONESHOT requested (kernel auto-removes on fire)
+static uint8_t g_epoll[HL_NFD]; // per fd: an epoll instance (backed by kqueue) -- rebuilt across fork (macOS kqueue() is
                               // not inherited)
 // per fd: this epoll instance has a dup alias. A dup() shares the SAME kqueue, so both aliases must submit
 // interest DIRECTLY to the kernel (the deferred per-epfd changelist would strand a change on one alias);
 // forces epoll_ctl/epoll_wait onto the immediate path for a dup'd instance.
-static uint8_t g_ep_dupd[DD_NFD];
+static uint8_t g_ep_dupd[HL_NFD];
 static unsigned long long g_ep_kevent_calls; // PROF: kevent() syscalls issued by the epoll path
 static int g_epprof = -1;
 
@@ -932,9 +932,9 @@ static int g_epprof = -1;
 // -dup can re-home the knote onto the surviving alias. Like the g_ep_rd/wr armed maps this is a SINGLE
 // owner per watched fd (dd already assumes a fd is watched by at most one epoll instance); the writes are
 // a couple of fd-indexed stores on the epoll_ctl path, so the hot path cost matches the existing armed map.
-static int g_ep_owner[DD_NFD];    // watched fd -> owning epoll instance fd + 1 (0 = not watched)
-static uint32_t g_ep_events[DD_NFD]; // watched fd -> the epoll events mask registered (EPOLLIN/OUT/ET/ONESHOT)
-static uint64_t g_ep_udata[DD_NFD];  // watched fd -> the epoll_event.data registered for it
+static int g_ep_owner[HL_NFD];    // watched fd -> owning epoll instance fd + 1 (0 = not watched)
+static uint32_t g_ep_events[HL_NFD]; // watched fd -> the epoll events mask registered (EPOLLIN/OUT/ET/ONESHOT)
+static uint64_t g_ep_udata[HL_NFD];  // watched fd -> the epoll_event.data registered for it
 
 // ---- open-file-description identity for fd-number aliases (dup) -------------------------------------
 // dd shares the host descriptor table with the guest, so two guest fds that refer to the same OFD are two
@@ -942,21 +942,21 @@ static uint64_t g_ep_udata[DD_NFD];  // watched fd -> the epoll_event.data regis
 // dup(2)/dup2/dup3/F_DUPFD tags both fds with a shared group id (see fd_carry_virt). close() clears the id.
 // Used by the epoll close path to find a surviving alias of a just-closed watched fd (finding: epoll
 // readiness must persist while a dup keeps the OFD open).
-static uint32_t g_ofd_id[DD_NFD]; // 0 = no known alias; else a group id shared by every dup of this OFD
+static uint32_t g_ofd_id[HL_NFD]; // 0 = no known alias; else a group id shared by every dup of this OFD
 static uint32_t g_ofd_next = 1;
 
 // Assign (or propagate) a shared OFD group id from oldfd to newfd on dup.
 static void ofd_link_dup(int newfd, int oldfd) {
-    if (oldfd < 0 || oldfd >= DD_NFD || newfd < 0 || newfd >= DD_NFD || oldfd == newfd) return;
+    if (oldfd < 0 || oldfd >= HL_NFD || newfd < 0 || newfd >= HL_NFD || oldfd == newfd) return;
     if (!g_ofd_id[oldfd]) g_ofd_id[oldfd] = g_ofd_next++;
     g_ofd_id[newfd] = g_ofd_id[oldfd];
 }
 
 // Find an OPEN guest fd (other than `fd`) that shares fd's OFD group id, or -1 if none survives.
 static int ofd_surviving_alias(int fd) {
-    if (fd < 0 || fd >= DD_NFD || !g_ofd_id[fd]) return -1;
+    if (fd < 0 || fd >= HL_NFD || !g_ofd_id[fd]) return -1;
     uint32_t id = g_ofd_id[fd];
-    for (int i = 0; i < DD_NFD; i++)
+    for (int i = 0; i < HL_NFD; i++)
         if (i != fd && g_ofd_id[i] == id && fcntl(i, F_GETFD) != -1) return i;
     return -1;
 }
@@ -984,7 +984,7 @@ static void ep_count(void) {
 
 // append a change to epfd's buffer, coalescing on (ident,filter) so repeated ctls collapse.
 static void ep_push(int ep, uintptr_t ident, int16_t filt, uint16_t flags, void *udata) {
-    if (ep < 0 || ep >= DD_NFD) return;
+    if (ep < 0 || ep >= HL_NFD) return;
     struct kevent *a = g_ep_chg[ep];
     for (int i = 0; i < g_ep_chgn[ep]; i++)
         if (a[i].ident == ident && a[i].filter == filt) {
@@ -1005,7 +1005,7 @@ static void ep_push(int ep, uintptr_t ident, int16_t filt, uint16_t flags, void 
 // reset epoll armed-state for a guest fd (called from close(): kqueue auto-removes a closed fd, so the
 // armed map must follow to avoid a later stale EV_DELETE on a reused fd number).
 static void ep_fd_reset(int fd) {
-    if (fd < 0 || fd >= DD_NFD) return;
+    if (fd < 0 || fd >= HL_NFD) return;
     g_ep_rd[fd] = g_ep_wr[fd] = g_ep_os[fd] = 0;
     if (g_ep_chg[fd]) {
         free(g_ep_chg[fd]);
@@ -1015,7 +1015,7 @@ static void ep_fd_reset(int fd) {
     // Closing an epoll INSTANCE removes every registration it held (Linux). Drop the interest ownership of
     // each fd it watched so a reused epoll fd number can't inherit stale registrations / mis-rehome later.
     if (g_epoll[fd]) {
-        for (int w = 0; w < DD_NFD; w++)
+        for (int w = 0; w < HL_NFD; w++)
             if (g_ep_owner[w] == fd + 1) {
                 g_ep_owner[w] = 0;
                 g_ep_events[w] = 0;
@@ -1040,7 +1040,7 @@ static void ep_fd_reset(int fd) {
 // a recycled inotify-instance number then still routed read() into the inotify drain (io.c) against a stale
 // kqueue. Called from fd_reset_emul BEFORE the real close(); idempotent and a no-op on a plain fd.
 static void inotify_fd_reset(int fd) {
-    if (fd < 0 || fd >= DD_NFD) return;
+    if (fd < 0 || fd >= HL_NFD) return;
     if (g_inotify[fd]) {                  // this fd is an inotify INSTANCE -> Linux drops every watch it owned
         for (int i = 0; i < g_inomv_n;) { // discard the instance's pending move-queue entries (keyed by owner)
             int w = g_inomv[i].wd;

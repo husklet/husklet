@@ -2,7 +2,7 @@
 name = "hl-images"
 version = "0.4.0"
 edition = "2021"
-description = "dd image handling: the OCI registry client (pull/push manifests + layers, auth, image refs). The home for image + rootfs building, kept separate from the runtime (dd-jit) and the daemon."
+description = "hl image handling: the OCI registry client (pull/push manifests + layers, auth, image refs). The home for image + rootfs building, kept separate from the runtime (hl-jit) and the daemon."
 license = "MIT"
 
 [lib]
@@ -10,11 +10,11 @@ name = "hl_images"
 path = "src/lib.rs"
 
 [dependencies]
-# dd-images is runtime-agnostic: it produces a rootfs + arch/config; the CALLER hands the rootfs to a
-# runtime (e.g. dd-jit). No dependency on any runtime crate.
+# hl-images is runtime-agnostic: it produces a rootfs + arch/config; the CALLER hands the rootfs to a
+# runtime (e.g. hl-jit). No dependency on any runtime crate.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# In-process sha256 (already in the workspace lock via dd-cli, so no new download offline). Replaces the
+# In-process sha256 (already in the workspace lock via hl-cli, so no new download offline). Replaces the
 # former `sha256sum` subprocess for blob/config/cache digests — see src/image/digest.rs.
 sha2 = "0.10"
 # In-process gzip (pure-Rust miniz_oxide backend — no C zlib, offline-friendly). Replaces the former

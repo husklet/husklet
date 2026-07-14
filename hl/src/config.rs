@@ -7,7 +7,7 @@
 //!   - the feature DATA types ([`VpnConfig`]/[`VpnKind`], [`CudaDevice`]) — plain data, no mechanism;
 //!   - [`WorkspaceConfig`], the wrapper = a bare `Workspace` + its feature settings (Derefs to `Workspace`
 //!     so identity/run fields read through transparently);
-//!   - [`WorkspaceStore`], the persistence (`~/.dd/workspaces.conf`) that round-trips the full config.
+//!   - [`WorkspaceStore`], the persistence (`~/.hl/workspaces.conf`) that round-trips the full config.
 //!
 //! `hl` (the CLI launcher) maps each setting to the owning crate's PRIMITIVE at launch (vpn→engine egress
 //! arg, cuda→hl-gpu, gui→compositor socket, docker_sock→mount); this module is pure data + IO only.
@@ -107,7 +107,7 @@ impl VpnConfig {
 /// `hl-gpu` primitive that `hl` drives from these fields at launch (see `docs/ideas/CUDA_ON_METAL.md`).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CudaDevice {
-    /// Reported device name, e.g. `"dd Metal (CUDA-sim) Device"`.
+    /// Reported device name, e.g. `"hl Metal (CUDA-sim) Device"`.
     pub name: String,
     /// Reported compute capability as `"major.minor"`, e.g. `"8.6"`.
     pub compute_capability: String,
@@ -119,7 +119,7 @@ impl CudaDevice {
     /// A sensible default simulated device (Ampere-class, 4 GiB reported).
     pub fn default_device() -> CudaDevice {
         CudaDevice {
-            name: "dd Metal (CUDA-sim) Device".to_string(),
+            name: "hl Metal (CUDA-sim) Device".to_string(),
             compute_capability: "8.6".to_string(),
             vram_mb: 4096,
         }
@@ -212,7 +212,7 @@ impl WorkspaceConfig {
     }
 }
 
-/// A file-backed set of workspace configs (`~/.dd/workspaces.conf`), in a tiny dependency-free block format
+/// A file-backed set of workspace configs (`~/.hl/workspaces.conf`), in a tiny dependency-free block format
 /// (`[workspace]` + `key = value` lines, repeatable `env`/`mount`) — no serde/toml. Still reads the legacy
 /// one-line `name<TAB>arch<TAB>image` rows so old config keeps working. Persists the full [`WorkspaceConfig`]
 /// (bare workspace + feature settings), byte-compatible with the format the old `hl-ws` store wrote.
@@ -289,7 +289,7 @@ impl WorkspaceStore {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let mut out = String::from("# dd workspaces\n");
+        let mut out = String::from("# hl workspaces\n");
         for w in &self.items {
             out.push_str("\n[workspace]\n");
             kv(&mut out, "name", &clean(&w.name));
@@ -486,7 +486,7 @@ mod tests {
         cfg.ws.env = vec![("FOO".into(), "bar=baz".into()), ("N".into(), "1".into())];
         cfg.ws.mounts = vec![Mount { host: "/h".into(), container: "/c".into(), ro: true }];
         cfg.vpn = Some(VpnConfig::socks5("127.30.0.1:1080"));
-        cfg.cuda = Some(CudaDevice::parse("dd Metal (CUDA-sim) Device|8.6|16384").unwrap());
+        cfg.cuda = Some(CudaDevice::parse("hl Metal (CUDA-sim) Device|8.6|16384").unwrap());
         let mut store = WorkspaceStore::load(&path);
         store.upsert(cfg.clone()).unwrap();
 

@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *src = "/tmp/dd_sf_src.bin", *dst = "/tmp/dd_sf_dst.bin";
+    const char *src = "/tmp/hl_sf_src.bin", *dst = "/tmp/hl_sf_dst.bin";
     int in = open(src, O_RDWR | O_CREAT | O_TRUNC, 0644);
     // build the source via writev (two iovecs)
     struct iovec iov[2] = {{"hello-", 6}, {"sendfile-payload", 16}};

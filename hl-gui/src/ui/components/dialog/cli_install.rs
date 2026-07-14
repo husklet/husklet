@@ -18,11 +18,11 @@ pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
 
     let heading = gtk::Label::new(Some("dd command-line tool"));
     heading.set_xalign(0.0);
-    heading.add_css_class("dd-onboard-head");
+    heading.add_css_class("hl-onboard-head");
     let status = gtk::Label::new(Some(&status_text));
     status.set_xalign(0.0);
     status.set_wrap(true);
-    status.add_css_class("dd-sub");
+    status.add_css_class("hl-sub");
 
     // Shell picker.
     let dropdown = gtk::DropDown::from_strings(&["zsh", "bash", "fish"]);
@@ -39,7 +39,7 @@ pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
     instr.set_xalign(0.0);
     instr.set_wrap(true);
     instr.set_selectable(true);
-    instr.add_css_class("dd-cli-msg");
+    instr.add_css_class("hl-cli-msg");
     instr.set_visible(ok);
     if ok {
         instr.set_label(&shell_instr(dropdown.selected(), on_path, &cmd));
@@ -51,7 +51,7 @@ pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
     }
 
     let done = gtk::Button::with_label("Done");
-    done.add_css_class("dd-btn");
+    done.add_css_class("hl-btn");
     done.add_css_class("suggested-action");
     let btnrow = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     btnrow.set_halign(gtk::Align::End);

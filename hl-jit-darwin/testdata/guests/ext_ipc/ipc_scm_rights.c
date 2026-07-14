@@ -23,7 +23,7 @@ int main(void) {
         _exit(0);
     }
     close(sv[1]);
-    char path[] = "/tmp/dd_scm_XXXXXX"; int fd = mkstemp(path);
+    char path[] = "/tmp/hl_scm_XXXXXX"; int fd = mkstemp(path);
     write(fd, "passed-fd-content", 17); lseek(fd, 0, SEEK_SET);
     char b[1] = "!"; struct iovec io = {b, 1};
     char cbuf[CMSG_SPACE(sizeof(int))]; memset(cbuf, 0, sizeof cbuf);

@@ -14,7 +14,7 @@
 //! keeps process-global state and this test sets a process-global env var — isolation keeps both
 //! deterministic.
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use hl_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
@@ -125,11 +125,11 @@ fn popup_presents_as_own_window_at_positioner_anchor() {
     // Enable the native popup-window path for this (isolated) test binary.
     std::env::set_var("HL_DISPLAY_POPUP_WINDOWS", "1");
 
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
     let last_popup: LastPopup = Arc::new(Mutex::new(None));
     let last_toplevel: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
-    let mut state = DdState::new(
+    let mut state = HlState::new(
         dh.clone(),
         Box::new(RecordingPresenter { frames: 0, last_popup: last_popup.clone(), last_toplevel: last_toplevel.clone() }),
     );

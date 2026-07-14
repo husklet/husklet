@@ -9,10 +9,10 @@
 //!
 //! The case registry moved here with the engine (ownership-matrix Step 2); the harness model
 //! (`Ctx`/`Engine`/`run`/`gate_failures`) is the crate-local `support` test-support module (formerly
-//! the `dd-tests` dev-dependency, now dissolved into this crate).
+//! the `hl-tests` dev-dependency, now dissolved into this crate).
 use crate::support::{gate_failures, run, Cell, Ctx, Engine};
 
-// The product-neutral engine-test harness, included crate-locally (was the `dd-tests` dev-dep).
+// The product-neutral engine-test harness, included crate-locally (was the `hl-tests` dev-dep).
 #[path = "support/mod.rs"]
 mod support;
 

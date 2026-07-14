@@ -1,7 +1,7 @@
-//! The one sha256 helper in `dd-images`. Both the registry (layer/config blob digests) and the build
+//! The one sha256 helper in `hl-images`. Both the registry (layer/config blob digests) and the build
 //! cache (step-key hashing) need sha256; this module owns the single implementation so those call sites
 //! don't each re-derive it. Hashing is done in-process with the `sha2` crate (already in the workspace
-//! lock via `dd-cli`), so we no longer shell out to `sha256sum` — one fewer external tool to depend on.
+//! lock via `hl-cli`), so we no longer shell out to `sha256sum` — one fewer external tool to depend on.
 //! The only subprocess left is `gzip -dc` in [`sha256_gz_file`], and only for *decompression* (there is
 //! no in-tree gzip decoder); its stdout is streamed straight into the hasher.
 
@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn file_and_gz() {
-        let dir = std::env::temp_dir().join(format!("dd-digest-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hl-digest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let raw = dir.join("f");
         std::fs::write(&raw, b"abc").unwrap();

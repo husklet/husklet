@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# memwatch — external host-RSS leak probe for the dd DAEMON/engine. Boots a private dd-daemon, runs a
+# memwatch — external host-RSS leak probe for the dd DAEMON/engine. Boots a private hl-daemon, runs a
 # churn workload, and samples the daemon's mac-side RSS before/after to catch ENGINE-INTERNAL leaks that
 # a guest's own RSS can't see (e.g. D1: the daemon `execs` HashMap grows per `docker exec`). Read-only on
 # the engine — it MEASURES, it never fixes. Verdict: PASS (bounded) / LEAK (per-iter growth).
 #
-#   WORKLOAD=exec N=300 bash dd-tests/tools/memwatch.sh        # docker exec churn (D1)
-#   WORKLOAD=create-rm N=300 bash dd-tests/tools/memwatch.sh   # create+rm churn (daemon record leak)
+#   WORKLOAD=exec N=300 bash hl-tests/tools/memwatch.sh        # docker exec churn (D1)
+#   WORKLOAD=create-rm N=300 bash hl-tests/tools/memwatch.sh   # create+rm churn (daemon record leak)
 #
 # Env: HL_DAEMON, HL_IMAGES, N (iters), THRESH_KB (growth budget). Drives the daemon via the mac bridge.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/hl-daemon}"
 IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
 N="${N:-300}"; THRESH_KB="${THRESH_KB:-20480}"; WORKLOAD="${WORKLOAD:-exec}"
 
-DIR="$ROOT/target/dd-scen/memwatch-$$"; mkdir -p "$DIR"; SOCK="$DIR/dd.sock"
+DIR="$ROOT/target/hl-scen/memwatch-$$"; mkdir -p "$DIR"; SOCK="$DIR/dd.sock"
 cat > "$DIR/boot.sh" <<EOF
 echo \$\$ > "$DIR/daemon.pid"
 export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$DIR/state.json" HL_VOLUMES="$DIR/vol"

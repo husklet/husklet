@@ -21,7 +21,7 @@ impl Arch {
         }
     }
 
-    /// The `<os>_<isa>` slug (matches dd-jit's `Guest::target()`), e.g. `"linux_aarch64"`.
+    /// The `<os>_<isa>` slug (matches hl-jit's `Guest::target()`), e.g. `"linux_aarch64"`.
     pub fn target(self) -> &'static str {
         match self {
             Arch::LinuxAarch64 => "linux_aarch64",
@@ -35,7 +35,7 @@ impl Arch {
     }
 
     /// The instruction set slug — `"aarch64"` or `"x86_64"` (NOT the OCI `arm64`/`amd64` label; this is
-    /// the kernel `uname -m` form recorded in the on-disk `dd-image.json` sidecar so discovery can
+    /// the kernel `uname -m` form recorded in the on-disk `hl-image.json` sidecar so discovery can
     /// round-trip an image's arch even when its binaries can't be sniffed).
     pub fn isa(self) -> &'static str {
         match self {

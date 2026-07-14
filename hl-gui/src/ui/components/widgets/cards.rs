@@ -4,7 +4,7 @@ use gtk::prelude::*;
 /// A card of key/value rows (selectable monospace values) for the Settings page.
 pub(crate) fn setting_card(rows: &[(&str, &str)]) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    card.add_css_class("dd-step-card");
+    card.add_css_class("hl-step-card");
     for (k, v) in rows {
         let key = gtk::Label::new(Some(k));
         key.set_xalign(0.0);
@@ -16,7 +16,7 @@ pub(crate) fn setting_card(rows: &[(&str, &str)]) -> gtk::Box {
         val.set_hexpand(true);
         val.set_selectable(true);
         val.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-        val.add_css_class("dd-mono");
+        val.add_css_class("hl-mono");
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         row.append(&key);
         row.append(&val);
@@ -35,18 +35,18 @@ pub(crate) fn sparkline_card(
     accent: bool,
 ) -> gtk::Widget {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    card.add_css_class("dd-stat-card");
+    card.add_css_class("hl-stat-card");
     card.set_hexpand(true);
 
     let val = gtk::Label::new(Some(value));
     val.set_xalign(0.0);
-    val.add_css_class("dd-stat-value");
+    val.add_css_class("hl-stat-value");
     if accent {
         val.add_css_class("accent");
     }
     let name = gtk::Label::new(Some(&title.to_uppercase()));
     name.set_xalign(0.0);
-    name.add_css_class("dd-stat-name");
+    name.add_css_class("hl-stat-name");
     card.append(&val);
     card.append(&name);
 
@@ -113,14 +113,14 @@ pub(crate) fn two_col(rows: &[(&str, String)]) -> gtk::Widget {
         row.set_margin_bottom(3);
         let key = gtk::Label::new(Some(k));
         key.set_xalign(0.0);
-        key.add_css_class("dd-kv-key");
+        key.add_css_class("hl-kv-key");
         let val = gtk::Label::new(Some(if v.is_empty() { "—" } else { v.as_str() }));
         val.set_xalign(0.0);
         val.set_hexpand(true);
         val.set_wrap(true);
         // Only real values are selectable — an empty "—" shouldn't show a text cursor / be clickable.
         val.set_selectable(!v.is_empty());
-        val.add_css_class("dd-kv-val");
+        val.add_css_class("hl-kv-val");
         row.append(&key);
         row.append(&val);
         card.append(&row);

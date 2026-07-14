@@ -11,15 +11,15 @@
  * elementwise). Device pointers are real host memory (Apple-silicon unified memory / this oracle's
  * host RAM), so H2D/D2H are memcpy and a kernel dereferences device pointers directly.
  *
- * ## The embedded executor mirrors the Rust `dd-gpu` crate
+ * ## The embedded executor mirrors the Rust `hl-gpu` crate
  * The PTX interpreter below is a compact C mirror of the authoritative Rust executor in
  * `hl-gpu/src/ptx.rs` + `hl-gpu/src/software.rs` (same modeled SIMT subset). It exists so this guest
  * `.so` is *self-contained* for the in-process oracle milestone. On a real host, libcuda instead
- * marshals dd-GPU IR over the shared-memory ring to the host Metal executor (RENDERING_PLAN.md) — the
+ * marshals hl-GPU IR over the shared-memory ring to the host Metal executor (RENDERING_PLAN.md) — the
  * ring transport replaces this embedded interpreter, so the compute logic is not duplicated in
  * production. Unimplemented Driver-API tail returns CUDA_ERROR_NOT_SUPPORTED (never crashes).
  *
- * Device presence values are seeded from environment (dd's launcher sets these), matching dd-nvml:
+ * Device presence values are seeded from environment (dd's launcher sets these), matching hl-nvml:
  *   HL_CUDA_NAME  device name        (default "dd Metal (CUDA-sim) Device")
  *   HL_CUDA_CC    compute capability (default "8.6")
  *   HL_CUDA_VRAM  reported VRAM (MB)  (default 4096)
@@ -627,7 +627,7 @@ static void ptx_execute(Program* p, const unsigned char* blob, unsigned grid[3])
  *            pointer attributes, address range, error strings, memGetInfo, peer-can-access=false).
  *   TIER 3 — present-but-honest stubs: the symbol is EXPORTED (so dlsym / cuGetProcAddress resolve and
  *            a version script matches real libcuda) and returns the spec-correct error for an op the
- *            dd-gpu model cannot serve — CUDA_ERROR_NOT_SUPPORTED (graphs, IPC, tex/surf, peer,
+ *            hl-gpu model cannot serve — CUDA_ERROR_NOT_SUPPORTED (graphs, IPC, tex/surf, peer,
  *            external interop, VMM, mempools, GL/VK/EGL/VDPAU), or CUDA_ERROR_INVALID_IMAGE for a
  *            cubin/fatbin (dd executes PTX only). Never a crash, never a fake success.
  * ================================================================================================= */
@@ -1286,7 +1286,7 @@ CUresult cuProfilerStop(void) { return CUDA_SUCCESS; }
  * TIER 3 — present-but-honest stubs.
  * Every symbol below is EXPORTED so dlsym / cuGetProcAddress resolve and a version script matches the
  * real libcuda symbol table; each returns CUDA_ERROR_NOT_SUPPORTED — the spec-correct error for an op
- * the dd-gpu model does not serve — never a crash and never a fake success. Groups: graphs, IPC,
+ * the hl-gpu model does not serve — never a crash and never a fake success. Groups: graphs, IPC,
  * texture/surface objects + legacy tex/surf refs, arrays/mipmaps, 2D/3D + array copies, unified VMM,
  * memory pools, peer-device P2P attrs, external memory/semaphore interop, and GL/EGL/VDPAU graphics
  * interop. They are defined with an empty parameter list: on the SysV/AAPCS ABI a caller may pass the

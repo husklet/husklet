@@ -1,11 +1,11 @@
-//! `docker save`: [`Store::save_archive`] — tar the image's `rootfs/` plus a `dd-manifest.json` sidecar.
+//! `docker save`: [`Store::save_archive`] — tar the image's `rootfs/` plus a `hl-manifest.json` sidecar.
 
 use super::*;
 use crate::Error;
 use std::path::Path;
 
 impl Store {
-    /// `docker save`: tar the image's `rootfs/` directory plus a `dd-manifest.json` sidecar and return the
+    /// `docker save`: tar the image's `rootfs/` directory plus a `hl-manifest.json` sidecar and return the
     /// archive bytes. `rootfs` is the image's on-disk `.../rootfs` path; the manifest records its identity +
     /// run config so a later [`load_archive`](Self::load_archive) restores name/cmd/env exactly. The
     /// on-disk image directory is left untouched (the manifest is staged in a temp dir and tarred via a
@@ -14,11 +14,11 @@ impl Store {
         let parent = rootfs
             .parent()
             .ok_or_else(|| Error::Archive("image has no rootfs directory".to_string()))?;
-        let staging = std::env::temp_dir().join(format!("dd-save-{}", uniq()));
+        let staging = std::env::temp_dir().join(format!("hl-save-{}", uniq()));
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).map_err(|e| Error::Archive(e.to_string()))?;
         let manifest_json = serde_json::to_string(manifest).map_err(|e| Error::Archive(e.to_string()))?;
-        let _ = std::fs::write(staging.join("dd-manifest.json"), manifest_json);
+        let _ = std::fs::write(staging.join("hl-manifest.json"), manifest_json);
         // SAVE_FLAGS: `--format=posix` (nanosecond mtimes), `--xattrs` (extended attributes round-trip),
         // `--sparse` (holes don't expand). `-c` creates, `-f -` writes the archive to stdout.
         let out = std::process::Command::new("tar")
@@ -30,7 +30,7 @@ impl Store {
             .arg("rootfs")
             .arg("-C")
             .arg(&staging)
-            .arg("dd-manifest.json")
+            .arg("hl-manifest.json")
             .output();
         let _ = std::fs::remove_dir_all(&staging);
         match out {

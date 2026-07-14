@@ -29,7 +29,7 @@ fn repo() -> PathBuf {
 /// Compile a pcachex guest as linux/aarch64 static-PIE into the repo-visible target dir.
 fn compile_guest(name: &str, out_name: &str) -> PathBuf {
     let src = repo().join("hl-jit-darwin/testdata/guests/pcachex").join(name);
-    let outdir = repo().join("target/dd-tests/pcache");
+    let outdir = repo().join("target/hl-tests/pcache");
     std::fs::create_dir_all(&outdir).unwrap();
     let out = outdir.join(out_name);
     let o = Command::new("gcc")
@@ -126,7 +126,7 @@ fn pcache_lifecycle_aarch64() {
         eprintln!("linux/aarch64 engine not built — skipping (pin HL_JIT_DIR to a built engine)");
         return;
     }
-    let dir = repo().join("target/dd-tests/pcache/dir");
+    let dir = repo().join("target/hl-tests/pcache/dir");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dirs = dir.to_string_lossy().into_owned();
@@ -218,7 +218,7 @@ fn pcache_lifecycle_aarch64() {
     }
 
     // ---- 4. stale binary: a fresh copy (new inode/mtime) must MISS, never load the old entry ----
-    let stale = repo().join("target/dd-tests/pcache/selfexec-stale");
+    let stale = repo().join("target/hl-tests/pcache/selfexec-stale");
     std::fs::copy(&hello, &stale).unwrap();
     let s1 = run_engine(&stale, &base);
     assert!(
@@ -340,7 +340,7 @@ fn pcache_policy_aarch64() {
         eprintln!("linux/aarch64 engine not built — skipping (pin HL_JIT_DIR to a built engine)");
         return;
     }
-    let dir = repo().join("target/dd-tests/pcache/dir-policy");
+    let dir = repo().join("target/hl-tests/pcache/dir-policy");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dirs = dir.to_string_lossy().into_owned();
@@ -448,7 +448,7 @@ fn pcache_policy_aarch64() {
 // ---- x86 lane helpers (cross-compiled guest + x86 engine) ----
 fn compile_guest_x86(name: &str, out_name: &str) -> PathBuf {
     let src = repo().join("hl-jit-darwin/testdata/guests/pcachex").join(name);
-    let outdir = repo().join("target/dd-tests/pcache");
+    let outdir = repo().join("target/hl-tests/pcache");
     std::fs::create_dir_all(&outdir).unwrap();
     let out = outdir.join(out_name);
     let o = Command::new("x86_64-linux-gnu-gcc")
@@ -502,7 +502,7 @@ fn pcache_policy_x86_64() {
         eprintln!("linux/x86_64 engine not built — skipping (pin HL_JIT_DIR to a built engine)");
         return;
     }
-    let dir = repo().join("target/dd-tests/pcache/dir-policy-x86");
+    let dir = repo().join("target/hl-tests/pcache/dir-policy-x86");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dirs = dir.to_string_lossy().into_owned();
@@ -566,7 +566,7 @@ fn pcache_policy_x86_64() {
 
     // ---- 2. selective restore of a file-backed executable (library-like) map: cold persists it in a
     // 1-entry manifest; warm DEFERS it and activates it on the identity-matched re-map -> waste=0. ----
-    let ldir = repo().join("target/dd-tests/pcache/dir-lib-x86");
+    let ldir = repo().join("target/hl-tests/pcache/dir-lib-x86");
     let _ = std::fs::remove_dir_all(&ldir);
     std::fs::create_dir_all(&ldir).unwrap();
     let ldirs = ldir.to_string_lossy().into_owned();

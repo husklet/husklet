@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn builder_dialect_matches_daemon_keys() {
-        // Every promoted DD_*/DDJIT_* key encodes exactly as the daemon's spawn_cfg did.
+        // Every promoted HL_*/DDJIT_* key encodes exactly as the daemon's spawn_cfg did.
         let c = Container::builder(Image::from_rootfs("/img"))
             .cmd(["/bin/true"])
             .cwd("/work")

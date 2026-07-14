@@ -1,5 +1,5 @@
 //! GPU rung 3 host executor: a Metal implementation of `hl_gpu::backend::GpuBackend`. The guest streams
-//! the dd-gpu command IR (buffers, a render pipeline, a render pass, draws) over a socket; the executor
+//! the hl-gpu command IR (buffers, a render pipeline, a render pass, draws) over a socket; the executor
 //! decodes it (`hl_gpu::replay::replay_stream`) and drives THIS backend, rendering into the rung-2
 //! IOSurface it resolved via the mach bridge. So *arbitrary* guest-described geometry renders on the host
 //! GPU — the path a real ICD/app needs — not a hardcoded triangle.
@@ -207,7 +207,7 @@ enum Bind {
     },
 }
 
-/// Map a dd-gpu `TextureFormat` to the Metal pixel format the backend can materialize as a sampled/render
+/// Map a hl-gpu `TextureFormat` to the Metal pixel format the backend can materialize as a sampled/render
 /// texture (color formats only; depth is handled separately).
 fn tex_pixel_format(f: hl_gpu::ir::TextureFormat) -> Result<MTLPixelFormat> {
     use hl_gpu::ir::TextureFormat as F;
@@ -287,7 +287,7 @@ fn dump_texture_png(id: u32, tex: &ProtocolObject<dyn MTLTexture>, dir: &str, se
     let _ = std::fs::create_dir_all(dir);
     let path = format!("{dir}/tex-{id}-{seq:04}-{w}x{h}.png");
     if write_texture_png(tex, &path) {
-        eprintln!("dd-metal: dumped texture {id} -> {path}");
+        eprintln!("hl-metal: dumped texture {id} -> {path}");
     }
 }
 
@@ -497,14 +497,14 @@ fn spirv_to_msl(words: &[u32]) -> Option<(String, String)> {
             Some(v)
         }
         Err(e) => {
-            eprintln!("dd-metal: SPIR-V→MSL failed ({} words): {e:?}", words.len());
+            eprintln!("hl-metal: SPIR-V→MSL failed ({} words): {e:?}", words.len());
             if let Some(dir) = std::env::var_os("HL_GPU_DUMP_SPIRV") {
                 let bytes: &[u8] = unsafe {
                     std::slice::from_raw_parts(words.as_ptr() as *const u8, std::mem::size_of_val(words))
                 };
                 let path = std::path::Path::new(&dir).join(format!("spirv-fail-{}.spv", bytes.len()));
                 let _ = std::fs::write(&path, bytes);
-                eprintln!("dd-metal: dumped failing SPIR-V to {}", path.display());
+                eprintln!("hl-metal: dumped failing SPIR-V to {}", path.display());
             }
             None
         }
@@ -963,7 +963,7 @@ impl MetalBackend {
 
 }
 
-/// `dd-display selftest-shader <out.png>`: prove the per-app SHADER path — the same one the GL shim
+/// `hl-display selftest-shader <out.png>`: prove the per-app SHADER path — the same one the GL shim
 /// drives after GLSL→MSL. Build an IR stream that ships a CUSTOM MSL shader via `CreateShader` (bytes),
 /// a pipeline referencing it, and a quad; replay it; PNG. The fragment shader brightens the vertex colors
 /// (out = c*0.5+0.5), so a washed-out quad proves the app's shader ran (not the builtin passthrough).
@@ -1115,7 +1115,7 @@ pub fn selftest_shader(out: &str) -> ! {
     std::process::exit(0);
 }
 
-/// `dd-display selftest-shim-ir <ir.bin> <out.png>`: replay a raw dd-gpu IR byte-stream (exactly what the
+/// `hl-display selftest-shim-ir <ir.bin> <out.png>`: replay a raw hl-gpu IR byte-stream (exactly what the
 /// GL shim emits for one frame, captured via `HL_IR_DUMP`) through the real `MetalBackend` into an
 /// IOSurface → PNG. Closes the loop on the shim's RUNTIME IR (CreateTexture/CreateSampler/
 /// CopyBufferToTexture/SetIndexBuffer/DrawIndexed/bind-group) without needing the container executor socket.
@@ -1161,7 +1161,7 @@ pub fn selftest_shim_ir(irfile: &str, out: &str, w: u32, h: u32, target_id: u32)
     std::process::exit(0);
 }
 
-/// `dd-display selftest-msl <file.metal>`: compile a Metal source file via `newLibraryWithSource` and
+/// `hl-display selftest-msl <file.metal>`: compile a Metal source file via `newLibraryWithSource` and
 /// report OK / the compiler diagnostics. Used to prove the GL shim's GLSL-ES→MSL translator emits valid
 /// MSL for real app shaders (e.g. glmark2's `light-basic`/`light-basic-tex`) without running the app.
 pub fn selftest_msl(path: &str) -> ! {
@@ -1230,7 +1230,7 @@ fn readback_png(ctx: &MetalCtx, tex: &ProtocolObject<dyn MTLTexture>, w: u32, h:
     let _ = std::fs::write(out, hl_ws_term::png::encode_rgba(w, h, &rgba));
 }
 
-/// `dd-display selftest-texture <out.png>`: prove the TEXTURE path — a `sampler2D`/`texture()` fragment
+/// `hl-display selftest-texture <out.png>`: prove the TEXTURE path — a `sampler2D`/`texture()` fragment
 /// shader sampling a 2×2 RGBA texture uploaded via a staging buffer (`CreateTexture` + `CreateBuffer` +
 /// `WriteBuffer` + `CopyBufferToTexture`) and bound with a sampler through a bind group. The PNG shows the
 /// four texel colors stretched across the quad (bilinear) — the exact surface glmark2's texture scene and
@@ -1430,7 +1430,7 @@ pub fn selftest_texture(out: &str) -> ! {
     std::process::exit(0);
 }
 
-/// `dd-display selftest-indexed <out.png>`: prove the INDEXED-DRAW path — a 4-vertex quad rendered with a
+/// `hl-display selftest-indexed <out.png>`: prove the INDEXED-DRAW path — a 4-vertex quad rendered with a
 /// 6-entry U16 index buffer (`SetIndexBuffer` + `DrawIndexed`), the `glDrawElements` mechanism glmark2's
 /// mesh scenes and Chrome's compositor quads use. The PNG shows the vertex-colored quad from 4 (not 6)
 /// vertices, so the index buffer really drove assembly.
@@ -1580,12 +1580,12 @@ pub fn selftest_indexed(out: &str) -> ! {
     std::process::exit(0);
 }
 
-/// GPU rung 3 executor transport: listen on a unix socket for framed dd-gpu IR streams from the guest,
+/// GPU rung 3 executor transport: listen on a unix socket for framed hl-gpu IR streams from the guest,
 /// resolve the target IOSurface (via the mach bridge), and `replay_stream` the guest's commands into it
 /// on the host GPU. Frame = `[u32 iosurface_id][u32 w][u32 h][u32 stream_len][stream bytes]`; we reply one
 /// ack byte when the replay completes (so the guest commits only after the frame is rendered).
 pub fn run_executor(sock_path: String) {
-    // Flag-gated (`DD_GPU_BACKEND=wgpu`) alternate host executor: render guest IR through wgpu into the
+    // Flag-gated (`HL_GPU_BACKEND=wgpu`) alternate host executor: render guest IR through wgpu into the
     // SAME zero-copy IOSurface the compositor blits. Default stays this bespoke Metal replay so main is
     // green. See `run_executor_wgpu`.
     if hl_gpu_wgpu::selected() {
@@ -1597,15 +1597,15 @@ pub fn run_executor(sock_path: String) {
     let listener = match UnixListener::bind(&sock_path) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("dd-gpu executor: bind {sock_path}: {e}");
+            eprintln!("hl-gpu executor: bind {sock_path}: {e}");
             return;
         }
     };
     let Some(ctx) = MetalCtx::new() else {
-        eprintln!("dd-gpu executor: no Metal device");
+        eprintln!("hl-gpu executor: no Metal device");
         return;
     };
-    eprintln!("dd-gpu executor: listening on {sock_path}");
+    eprintln!("hl-gpu executor: listening on {sock_path}");
     // Process-wide residency ceiling shared across connections (cloned per connection into its
     // ExecutorBudget). Mirrors `run_executor_wgpu`; a prior refactor added the `handle` parameter + call
     // but omitted this definition here, which failed to compile.
@@ -1680,7 +1680,7 @@ pub fn run_executor(sock_path: String) {
                 if !rt_cache.contains_key(&id) {
                     let surf = crate::metal::resolve_iosurface(id);
                     if surf.is_null() {
-                        eprintln!("dd-gpu executor: IOSurface id {id} not found");
+                        eprintln!("hl-gpu executor: IOSurface id {id} not found");
                         let _ = s.write_all(&[0]);
                         continue;
                     }
@@ -1697,12 +1697,12 @@ pub fn run_executor(sock_path: String) {
             let rendered = match hl_gpu::replay::replay_stream_limited(&mut be, &bytes, &mut budget) {
                 Ok(_) => {
                     if exec_debug() {
-                        eprintln!("dd-gpu executor: replayed {len} IR bytes into IOSurface {id}");
+                        eprintln!("hl-gpu executor: replayed {len} IR bytes into IOSurface {id}");
                     }
                     true
                 }
                 Err(e) => {
-                    eprintln!("dd-gpu executor: replay error: {e}");
+                    eprintln!("hl-gpu executor: replay error: {e}");
                     false
                 }
             };
@@ -1745,7 +1745,7 @@ pub fn run_executor(sock_path: String) {
         match conn {
             Ok(mut s) => {
                 if let Err(e) = handle(&ctx, &mut s, global_budget.clone()) {
-                    eprintln!("dd-gpu executor: conn error: {e}");
+                    eprintln!("hl-gpu executor: conn error: {e}");
                 }
             }
             Err(_) => continue,
@@ -1753,7 +1753,7 @@ pub fn run_executor(sock_path: String) {
     }
 }
 
-/// `DD_GPU_BACKEND=wgpu` host executor. Renders each guest frame's IR through `hl_gpu_wgpu::WgpuBackend`
+/// `HL_GPU_BACKEND=wgpu` host executor. Renders each guest frame's IR through `hl_gpu_wgpu::WgpuBackend`
 /// straight into the guest's zero-copy IOSurface, which the compositor's `blit_fenced` then reads unchanged.
 ///
 /// Device sharing (the zero-copy AND tear-free contract): the wgpu `Device`/`Queue` are built OVER dd's
@@ -1787,11 +1787,11 @@ fn run_executor_wgpu(sock_path: String) {
     let listener = match UnixListener::bind(&sock_path) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("dd-gpu executor[wgpu]: bind {sock_path}: {e}");
+            eprintln!("hl-gpu executor[wgpu]: bind {sock_path}: {e}");
             return;
         }
     };
-    eprintln!("dd-gpu executor[wgpu]: listening on {sock_path}");
+    eprintln!("hl-gpu executor[wgpu]: listening on {sock_path}");
     let global_budget = hl_gpu::limits::GlobalBudget::new(2 << 30, 262_144);
 
     // Reserved present-target id the guest streams its final color attachment as (see the Metal path's
@@ -1806,14 +1806,14 @@ fn run_executor_wgpu(sock_path: String) {
         // compositor's blit queue share one device and can be fenced with the SAME cross-queue MTLEvents
         // (the tear-free contract — see the fn doc). One backend per connection isolates guest id namespaces.
         let Some(shared) = crate::metal::shared_device() else {
-            eprintln!("dd-gpu executor[wgpu]: no shared Metal device");
+            eprintln!("hl-gpu executor[wgpu]: no shared Metal device");
             return Ok(());
         };
         let dev_ptr = Retained::as_ptr(&shared) as *mut std::ffi::c_void;
         let mut be = match unsafe { hl_gpu_wgpu::WgpuBackend::from_shared_mtl_device(dev_ptr) } {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("dd-gpu executor[wgpu]: wgpu over shared MTLDevice failed: {e:?}");
+                eprintln!("hl-gpu executor[wgpu]: wgpu over shared MTLDevice failed: {e:?}");
                 return Ok(());
             }
         };
@@ -1826,7 +1826,7 @@ fn run_executor_wgpu(sock_path: String) {
             match unsafe { Retained::retain(raw_q as *mut ProtocolObject<dyn MTLCommandQueue>) } {
                 Some(q) => q,
                 None => {
-                    eprintln!("dd-gpu executor[wgpu]: null wgpu render queue");
+                    eprintln!("hl-gpu executor[wgpu]: null wgpu render queue");
                     return Ok(());
                 }
             };
@@ -1834,7 +1834,7 @@ fn run_executor_wgpu(sock_path: String) {
         // wgpu-hal wrap is valid). `texture_from_iosurface` uses only the device; a throwaway queue satisfies
         // the ctor.
         let Some(ctx_queue) = shared.newCommandQueue() else {
-            eprintln!("dd-gpu executor[wgpu]: newCommandQueue failed");
+            eprintln!("hl-gpu executor[wgpu]: newCommandQueue failed");
             return Ok(());
         };
         let ctx = MetalCtx::from_device(shared.clone(), ctx_queue);
@@ -1864,7 +1864,7 @@ fn run_executor_wgpu(sock_path: String) {
                 if !rt_cache.contains_key(&id) {
                     let surf = crate::metal::resolve_iosurface(id);
                     if surf.is_null() {
-                        eprintln!("dd-gpu executor[wgpu]: IOSurface id {id} not found");
+                        eprintln!("hl-gpu executor[wgpu]: IOSurface id {id} not found");
                         let _ = s.write_all(&[0]);
                         continue;
                     }
@@ -1924,14 +1924,14 @@ fn run_executor_wgpu(sock_path: String) {
                         // (shader=0, pipeline=0, bind_group=0) — i.e. it compiles/allocates nothing.
                         let (sh, pl, bg) = be.take_prof();
                         eprintln!(
-                            "dd-gpu executor[wgpu]: replayed {len} IR bytes into IOSurface {id} \
+                            "hl-gpu executor[wgpu]: replayed {len} IR bytes into IOSurface {id} \
                              (compiles shader={sh} pipeline={pl} bind_group={bg})"
                         );
                     }
                     true
                 }
                 Err(e) => {
-                    eprintln!("dd-gpu executor[wgpu]: replay error: {e}");
+                    eprintln!("hl-gpu executor[wgpu]: replay error: {e}");
                     false
                 }
             };
@@ -1943,7 +1943,7 @@ fn run_executor_wgpu(sock_path: String) {
         match conn {
             Ok(mut s) => {
                 if let Err(e) = handle(&mut s, global_budget.clone()) {
-                    eprintln!("dd-gpu executor[wgpu]: conn error: {e}");
+                    eprintln!("hl-gpu executor[wgpu]: conn error: {e}");
                 }
             }
             Err(_) => continue,
@@ -1982,7 +1982,7 @@ impl RenderProf {
     }
 }
 
-/// `dd-display selftest-replay <out.png>`: GPU rung 3 proof — build a dd-gpu **IR stream** describing a
+/// `hl-display selftest-replay <out.png>`: GPU rung 3 proof — build a hl-gpu **IR stream** describing a
 /// vertex-colored QUAD (2 triangles, 4 corner colors), encode it to bytes, `replay_stream` it through the
 /// `MetalBackend` into a host IOSurface, read back → PNG. The rendered quad reflects the STREAMED geometry
 /// (buffers + draw), not any hardcoded shape — proving arbitrary guest IR renders on the host GPU.
@@ -2128,7 +2128,7 @@ pub fn selftest_replay(out: &str) -> ! {
         let png = hl_ws_term::png::encode_rgba(w, h, &rgba);
         let _ = std::fs::write(out, png);
     }
-    println!("selftest-replay: replayed a dd-gpu IR quad onto Metal -> {out}");
+    println!("selftest-replay: replayed a hl-gpu IR quad onto Metal -> {out}");
     std::process::exit(0);
 }
 
@@ -2145,17 +2145,17 @@ fn prim(t: Topology) -> MTLPrimitiveType {
 impl GpuBackend for MetalBackend {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            name: "dd-metal".into(),
+            name: "hl-metal".into(),
             unified_memory: true,
             // The bespoke Metal executor now drives a real `MTLComputeCommandEncoder` (see
             // `create_compute_pipeline` + the compute-pass arm of `submit`), so compute IR runs here — but
             // only for kernels shipped as MSL (the Metal-native ABI, mirroring the render path's GLSL→MSL).
             // A SPIR-V/PTX compute module can't be transpiled in-process and is explicitly routed to
-            // `DD_GPU_BACKEND=wgpu` (which lowers SPIR-V/PTX→WGSL via naga).
+            // `HL_GPU_BACKEND=wgpu` (which lowers SPIR-V/PTX→WGSL via naga).
             supports_compute: true,
             supports_graphics: true,
             max_texture_2d: 16384,
-            // The bespoke Metal executor's public present is the IOSurface path the dd-display compositor
+            // The bespoke Metal executor's public present is the IOSurface path the hl-display compositor
             // drives via `set_render_target` + the tearing fence, not a `GpuBackend::present` token, so it
             // advertises no PresentKind here (the executor owns the surface handoff).
             present_kinds: vec![],
@@ -2383,18 +2383,18 @@ impl GpuBackend for MetalBackend {
                         lib
                     }
                     Err(e) => {
-                        eprintln!("dd-metal: shader {} MSL compile failed: {e:?}", id.0);
+                        eprintln!("hl-metal: shader {} MSL compile failed: {e:?}", id.0);
                         let dir = std::env::var("HL_SHADER_DUMP_DIR")
-                            .unwrap_or_else(|_| "/tmp/dd-metal-shaders".into());
+                            .unwrap_or_else(|_| "/tmp/hl-metal-shaders".into());
                         if let Err(err) = std::fs::create_dir_all(&dir) {
-                            eprintln!("dd-metal: shader dump mkdir {dir}: {err}");
+                            eprintln!("hl-metal: shader dump mkdir {dir}: {err}");
                         } else {
                             let path = format!("{dir}/shader-{}-{key:016x}.metal", id.0);
                             match std::fs::write(&path, &src) {
                                 Ok(()) => {
-                                    eprintln!("dd-metal: dumped failed shader {} to {path}", id.0)
+                                    eprintln!("hl-metal: dumped failed shader {} to {path}", id.0)
                                 }
-                                Err(err) => eprintln!("dd-metal: shader dump write {path}: {err}"),
+                                Err(err) => eprintln!("hl-metal: shader dump write {path}: {err}"),
                             }
                         }
                         self.failed_shader_cache.insert(key);
@@ -2592,7 +2592,7 @@ impl GpuBackend for MetalBackend {
         // error steering compute to the wgpu executor, which lowers SPIR-V/PTX→WGSL via naga. No silent
         // success — the replay fails and the executor acks failure.
         let lib = self.shaders.get(&desc.compute.module).ok_or(GpuError::Unsupported(
-            "compute kernel is not MSL (SPIR-V/PTX): run compute with DD_GPU_BACKEND=wgpu",
+            "compute kernel is not MSL (SPIR-V/PTX): run compute with HL_GPU_BACKEND=wgpu",
         ))?;
         let func = lib
             .newFunctionWithName(&NSString::from_str(&desc.compute.entry))
@@ -2608,7 +2608,7 @@ impl GpuBackend for MetalBackend {
         };
         let Some(pso) = (unsafe { Retained::from_raw(pso_ptr) }) else {
             eprintln!(
-                "dd-metal: compute pipeline compile failed for module {} entry {}",
+                "hl-metal: compute pipeline compile failed for module {} entry {}",
                 desc.compute.module, desc.compute.entry
             );
             return Err(GpuError::Unsupported("compute pipeline compile"));
@@ -2768,7 +2768,7 @@ impl GpuBackend for MetalBackend {
                 }
             }
             eprintln!(
-                "dd-gpu executor[rt]: submit surf_id={} passes={passes} draws={draws} off_draws={off_draws} offscreen_targets={:?} surface_targets={:?}",
+                "hl-gpu executor[rt]: submit surf_id={} passes={passes} draws={draws} off_draws={off_draws} offscreen_targets={:?} surface_targets={:?}",
                 self.cur_surface_id, offs, surfs
             );
         }
@@ -3678,7 +3678,7 @@ impl GpuBackend for MetalBackend {
         if let Some(ids) = dump_ids {
             if !ids.is_empty() {
                 let dir = std::env::var("HL_GPU_DUMP_DIR")
-                    .unwrap_or_else(|_| "/tmp/dd-gpu-textures".into());
+                    .unwrap_or_else(|_| "/tmp/hl-gpu-textures".into());
                 let seq = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64)

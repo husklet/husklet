@@ -2,8 +2,8 @@
 
 #include <sys/ioctl.h>
 
-#define DD_IOCTL_GPU_ALLOC 0xC020DD01u
-#define DD_DMABUF_MOD_MAGIC 0x6464u
+#define HL_IOCTL_GPU_ALLOC 0xC020DD01u
+#define HL_DMABUF_MOD_MAGIC 0x6464u
 #define DRM_FMT_XRGB8888 0x34325258u
 
 struct hl_gpu_alloc {
@@ -47,7 +47,7 @@ static int alloc_frame(struct hl_gpu_alloc *a) {
     a->width = 128;
     a->height = 80;
     a->format = 0;
-    if (ioctl(rnode, DD_IOCTL_GPU_ALLOC, a) != 0) {
+    if (ioctl(rnode, HL_IOCTL_GPU_ALLOC, a) != 0) {
         printf("gui_dmabuf_frame alloc=0 errno=%d\n", errno);
         close(rnode);
         return -1;
@@ -71,7 +71,7 @@ static int commit_dmabuf_frame(struct gp_conn *c, const struct hl_gpu_alloc *a) 
         0,
         0,
         a->stride,
-        DD_DMABUF_MOD_MAGIC,
+        HL_DMABUF_MOD_MAGIC,
         a->id,
     };
     gp_send_u32(c, GP_DMABUF_PARAMS, 1, addw, 5);

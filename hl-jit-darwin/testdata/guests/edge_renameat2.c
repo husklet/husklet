@@ -12,7 +12,7 @@ static void put(const char *p, const char *s) { FILE *f = fopen(p, "w"); fputs(s
 static int get(const char *p, char *b, int n) { FILE *f = fopen(p, "r"); if (!f) return -1; int k = fread(b, 1, n - 1, f); b[k] = 0; fclose(f); return k; }
 
 int main(void) {
-    const char *a = "/tmp/dd_r2_a", *b = "/tmp/dd_r2_b";
+    const char *a = "/tmp/hl_r2_a", *b = "/tmp/hl_r2_b";
     put(a, "AAA");
     put(b, "BBB");
     // NOREPLACE over an existing target must fail with EEXIST.

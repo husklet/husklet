@@ -1,14 +1,14 @@
-# dd-shim-cuda — the guest CUDA Driver API front-end, as a first-class PRODUCT crate (SCAFFOLD).
+# hl-shim-cuda — the guest CUDA Driver API front-end, as a first-class PRODUCT crate (SCAFFOLD).
 #
 # Cross-compiles to the guest ELF targets and links as the shared object deployed under the CUDA
 # Driver API soname `libcuda.so.1` (matching hl-gpu/cuda/build.sh's C shim). An unmodified CUDA app
 # (or libcudart) that links `-lcuda` loads these `cu*` symbols as its driver; each call drives the
-# shim, and the compute path (alloc / H2D / PTX module / launch) lowers to a dd-gpu IR stream through
-# `dd-shim-common`'s transport — the SAME IR the host decodes.
+# shim, and the compute path (alloc / H2D / PTX module / launch) lowers to a hl-gpu IR stream through
+# `hl-shim-common`'s transport — the SAME IR the host decodes.
 #
 # The compute execution core is FUNCTIONAL: alloc / H2D / PTX module / launch / DtoH readback + stream
-# & event sync execute end-to-end in-process on an embedded dd-gpu SoftwareBackend (the CPU PTX
-# interpreter — the same executor dd-gpu's oracle and hl-gpu/cuda/cuda_shim.c use), so a real vecadd
+# & event sync execute end-to-end in-process on an embedded hl-gpu SoftwareBackend (the CPU PTX
+# interpreter — the same executor hl-gpu's oracle and hl-gpu/cuda/cuda_shim.c use), so a real vecadd
 # kernel runs and reads back correct results with no GPU. On a real host the same IR ships over
 # $HL_GPU_EXEC to the host Metal executor. The exported `cu*` SURFACE is code-generated from a committed
 # manifest (see `build.rs` + `registry/`); the bring-up + IR-wiring entry points have real bodies, the
@@ -17,7 +17,7 @@
 name = "hl-shim-cuda"
 version = "0.1.0"
 edition = "2021"
-description = "Guest CUDA Driver API shim (scaffold) producing libcuda.so.1: manifest-generated cu* entry-point surface over dd-shim-common's shared dd-gpu IR transport, with CudaContext PTX->compute mapping."
+description = "Guest CUDA Driver API shim (scaffold) producing libcuda.so.1: manifest-generated cu* entry-point surface over hl-shim-common's shared hl-gpu IR transport, with CudaContext PTX->compute mapping."
 license = "MIT"
 
 [lib]
@@ -27,11 +27,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Transport + shared IR re-export (the anti-drift contract): a shim encodes with the SAME
-# `dd_gpu::ir::Cmd` the host decodes with `Cmd::decode`.
+# `hl_gpu::ir::Cmd` the host decodes with `Cmd::decode`.
 hl-shim = { path = "../hl-shim" }
-# The CUDA->dd-gpu-IR translation (`cuda::CudaContext`) and the PTX front-end (`ptx::compile`, used to
+# The CUDA->hl-gpu-IR translation (`cuda::CudaContext`) and the PTX front-end (`ptx::compile`, used to
 # recover kernel-parameter layout at launch) live in the host crate; we reuse them directly rather than
-# redefining the mapping. Same `dd-gpu` path dd-shim-common depends on, so the IR types are identical.
+# redefining the mapping. Same `hl-gpu` path hl-shim-common depends on, so the IR types are identical.
 hl-gpu = { path = "../hl-gpu" }
 # NB: an injected shim must never unwind a Rust panic across the C-ABI boundary into a C caller.
 # `extern "C"` functions abort-on-unwind by default (Rust >= 1.81), so a panic aborts rather than

@@ -6,7 +6,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_umask_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_umask_%d", (int)getpid());
     unlink(path);
     mode_t old = umask(022);
     int prev_set = umask(022) == 022; // second call returns the 022 we just set

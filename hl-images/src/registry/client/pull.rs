@@ -163,7 +163,7 @@ impl Client {
         // A process-unique temp name (`<pid>-<seq>-<id>`) so concurrent pulls / concurrent layer
         // downloads never share and clobber the same blob file.
         let tmp = std::env::temp_dir().join(format!(
-            "dd-layer-{}-{}-{id}.tar.gz",
+            "hl-layer-{}-{}-{id}.tar.gz",
             std::process::id(),
             uniq()
         ));
@@ -375,7 +375,7 @@ mod tests {
 
     fn scratch(tag: &str) -> PathBuf {
         let n = uniq();
-        let p = std::env::temp_dir().join(format!("dd-pull-test-{}-{}-{}", tag, std::process::id(), n));
+        let p = std::env::temp_dir().join(format!("hl-pull-test-{}-{}-{}", tag, std::process::id(), n));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p

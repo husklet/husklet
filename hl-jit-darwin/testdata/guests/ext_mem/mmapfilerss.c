@@ -3,7 +3,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
-int main(void){ const size_t SZ=16u*1024*1024; const char*path="/tmp/dd_memrss.dat";
+int main(void){ const size_t SZ=16u*1024*1024; const char*path="/tmp/hl_memrss.dat";
   int fd=open(path,O_RDWR|O_CREAT|O_TRUNC,0600); if(fd<0){printf("mmapfilerss bounded=0\n");return 1;}
   if(ftruncate(fd,SZ)!=0){printf("mmapfilerss bounded=0\n");return 1;}
   long base=rss_kb();

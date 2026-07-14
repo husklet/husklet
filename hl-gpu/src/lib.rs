@@ -1,4 +1,4 @@
-//! dd-gpu — the host-GPU-agnostic command IR, wire protocol, resource-handle table, and `GpuBackend`
+//! hl-gpu — the host-GPU-agnostic command IR, wire protocol, resource-handle table, and `GpuBackend`
 //! executor abstraction for dd's rung-3 GPU forwarding and its CUDA-on-Metal device simulation.
 //!
 //! See `docs/ideas/RENDERING_GPU_BACKENDS.md` (the forward-level/IR decision + backend abstraction +
@@ -6,9 +6,9 @@
 //! run it on the host Metal GPU" design).
 //!
 //! ## What is real here vs designed-only
-//! This crate is **pure `std`, no serde, hand-rolled wire** — the `dd-term-core` discipline — so it
+//! This crate is **pure `std`, no serde, hand-rolled wire** — the `hl-term-core` discipline — so it
 //! `cargo test`s HEADLESS on the Linux dev box with no GPU/display/CUDA and no crates.io. The pieces
-//! that need a real GPU (`dd-gpu-wgpu`'s real-Metal `WgpuBackend`, a future `CudaBackend`) live in
+//! that need a real GPU (`hl-gpu-wgpu`'s real-Metal `WgpuBackend`, a future `CudaBackend`) live in
 //! separate crates; here we
 //! prototype and test the IR, the wire round-trip, the resource table, a recording mock backend, a real
 //! CPU software backend (clear/copy/readback), the command ring, and the CUDA→IR translation shim.
@@ -49,9 +49,9 @@ pub mod ring;
 pub mod software;
 pub mod wire;
 
-// The runtime-integration seam: dd-gpu's implementor of dd-jit's device-provider interface, so the
+// The runtime-integration seam: hl-gpu's implementor of hl-jit's device-provider interface, so the
 // container launcher wires a GPU generically instead of hardcoding CUDA/IOSurface/Wayland specifics.
-// Gated behind the `runtime` feature (pulls in `dd-jit`); the headless IR/wire core above stays pure-std.
+// Gated behind the `runtime` feature (pulls in `hl-jit`); the headless IR/wire core above stays pure-std.
 #[cfg(feature = "runtime")]
 pub mod integration;
 
@@ -95,7 +95,7 @@ pub enum GpuError {
     Invalid(&'static str),
     /// A negotiated per-object or aggregate executor resource limit was exceeded.
     ResourceLimit(&'static str),
-    /// Malformed or unsupported PTX while compiling a kernel to dd-GPU kernel IR.
+    /// Malformed or unsupported PTX while compiling a kernel to hl-GPU kernel IR.
     Ptx(String),
     /// Higher-level decode context wrapped around a low-level wire error.
     Decode(String),
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(d.compute_capability_str(), "8.6");
         assert_eq!(d.total_mem, 8 << 30);
         let smi = d.nvidia_smi_l_line(0);
-        assert!(smi.starts_with("GPU 0: dd Metal (CUDA-sim) Device (UUID: GPU-"));
+        assert!(smi.starts_with("GPU 0: hl Metal (CUDA-sim) Device (UUID: GPU-"));
     }
 
     #[test]
@@ -583,8 +583,8 @@ mod tests {
     }
 
     /// THE MILESTONE: a real PTX kernel (vector-add) allocates device memory, uploads inputs, launches
-    /// through the CUDA→dd-GPU-IR translation, executes on the software backend, and reads back numerically
-    /// correct results — the whole `libcuda → PTX → dd-GPU IR → backend` chain, headless, no GPU.
+    /// through the CUDA→hl-GPU-IR translation, executes on the software backend, and reads back numerically
+    /// correct results — the whole `libcuda → PTX → hl-GPU IR → backend` chain, headless, no GPU.
     #[test]
     fn cuda_vecadd_executes_end_to_end_on_software_backend() {
         let n = 1024usize;
@@ -636,7 +636,7 @@ mod tests {
 
     /// The same vecadd, but the ENTIRE command stream (including the kernel descriptor words) is
     /// serialized to the wire and decoded+replayed on the other side — proving the kernel path survives
-    /// the ring exactly like every other dd-GPU command.
+    /// the ring exactly like every other hl-GPU command.
     #[test]
     fn cuda_vecadd_survives_the_wire() {
         let n = 256usize;

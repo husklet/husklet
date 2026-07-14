@@ -6,7 +6,7 @@
 
 int main(void) {
     char name[64];
-    snprintf(name, sizeof name, "dd_cwd_%d", (int)getpid());
+    snprintf(name, sizeof name, "hl_cwd_%d", (int)getpid());
     char dir[128];
     snprintf(dir, sizeof dir, "/tmp/%s", name);
     mkdir(dir, 0755);

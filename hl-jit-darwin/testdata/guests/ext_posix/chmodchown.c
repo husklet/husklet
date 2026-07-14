@@ -6,7 +6,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_chmod_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_chmod_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_WRONLY, 0644);
     close(fd);
     int c1 = chmod(path, 0600) == 0;

@@ -6,7 +6,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_dup_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_dup_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     write(fd, "0123456789", 10);
     int d = dup(fd);

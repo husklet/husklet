@@ -16,7 +16,7 @@ EGL_PROBES := gui_egl_window_swap gui_egl_surfaceless gui_egl_textured_quad gui_
 EGL_ES3_PROBES := gui_egl_blit_framebuffer gui_egl_compositor_stress gui_egl_texture_upload_formats \
 	gui_egl_texture_formats_fbo_readback
 # Render probes built on the shared gui_egl_render_probe.h harness. Kept as their own group so every
-# such source has a home in the matrix (enforced by the coverage gate in dd-tests/tests/gate_invariants.rs).
+# such source has a home in the matrix (enforced by the coverage gate in hl-tests/tests/gate_invariants.rs).
 EGL_RENDER_PROBES := gui_egl_clear_only_swap gui_egl_draw_count_sentinel gui_egl_fifth_sampler \
 	gui_egl_r8_alpha_orientation gui_egl_renderbuffer_msaa_resolve retained_frame_partial_load \
 	single_channel_texture_probe

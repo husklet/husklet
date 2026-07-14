@@ -1,7 +1,7 @@
 //! Linux-fence ↔ Metal-completion bridge for the compositor's explicit-sync contract.
 //!
 //! The Wayland explicit-sync protocol (`zwp_linux_explicit_synchronization_v1`, implemented in
-//! `dd-compositor`) is a fence contract: the compositor must wait on a client's **acquire** fence before
+//! `hl-compositor`) is a fence contract: the compositor must wait on a client's **acquire** fence before
 //! it samples a buffer, and signal a **release** fence only after its own GPU work on that buffer has
 //! completed. On the real macOS host that GPU work runs on Metal, so the two Linux `dma_fence`
 //! sync_files bridge to Metal as follows:

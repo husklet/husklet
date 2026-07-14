@@ -2,7 +2,7 @@
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Backend {
     Real,
-    Dd,
+    Hl,
 }
 
 /// A real-software target. Linux targets map to a docker `--platform`.

@@ -10,7 +10,7 @@
 
 int main(void) {
     char dir[128];
-    snprintf(dir, sizeof dir, "/tmp/dd_fifoat_%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/hl_fifoat_%d", (int)getpid());
     mkdir(dir, 0755);
     int dfd = open(dir, O_RDONLY | O_DIRECTORY);
     int made = mkfifoat(dfd, "pipe", 0644) == 0;

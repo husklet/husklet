@@ -1,4 +1,4 @@
-//! The dd-GPU command IR — the host-GPU-agnostic intermediate the guest producer emits and every
+//! The hl-GPU command IR — the host-GPU-agnostic intermediate the guest producer emits and every
 //! [`crate::backend::GpuBackend`] replays.
 //!
 //! Shape: a compact, explicit, **WebGPU/Vulkan-family** command model (bindless-friendly resource
@@ -512,7 +512,7 @@ impl ShaderPayloadKind {
 // top-level command stream
 // ---------------------------------------------------------------------------------------------------
 
-/// One dd-GPU IR command. The guest emits a stream of these; a [`crate::backend::GpuBackend`] replays
+/// One hl-GPU IR command. The guest emits a stream of these; a [`crate::backend::GpuBackend`] replays
 /// them via [`crate::replay`].
 #[derive(Clone, PartialEq, Debug)]
 pub enum Cmd {
@@ -539,7 +539,7 @@ pub enum Cmd {
     Present { surface: u32, texture: u32 },
 }
 
-/// dd-GPU IR wire-format version. Bump this whenever a new `Cmd`/`Enc` tag or descriptor field is added
+/// hl-GPU IR wire-format version. Bump this whenever a new `Cmd`/`Enc` tag or descriptor field is added
 /// so a negotiated handshake can reject a stale guest/backend pair before it interprets a tag it predates
 /// (the connection preamble in §3 of `docs/codex-rendering.md`). Until that handshake lands, the decoder's
 /// hard `BadTag` rejection of any unknown tag is the standing guarantee that a v1 backend can never
@@ -1278,7 +1278,7 @@ impl Cmd {
             Cmd::CreateShader { id, kind: _, spirv } => {
                 e.u8(tag::CREATE_SHADER);
                 e.u32(*id);
-                // WIRE COMPAT: the shipped guest engine (dd-shim-gl compiled into ddjit) emits the
+                // WIRE COMPAT: the shipped guest engine (hl-shim-gl compiled into hljit) emits the
                 // WIRE_VERSION-2 CreateShader layout — `id` followed directly by the MSL word payload, with
                 // NO ShaderPayloadKind byte. Writing the kind byte here (the v3 layout) would desync the
                 // pinned guest's decoder against ours and vice-versa: our decoder would read the payload's
@@ -1372,8 +1372,8 @@ impl Cmd {
                 // exactly the regression that left Chrome white. Instead we recover the kind losslessly by
                 // inspecting the payload's leading word (the wire carries no kind byte, but each real kind
                 // is self-identifying):
-                //   * SPIR-V magic 0x07230203  → SpirV     (dd-shim-vk's translated Vulkan modules)
-                //   * KERNEL_MAGIC 0xDD6B_0001 → PtxKernel (CUDA→dd-GPU kernel descriptor, ptx::to_words)
+                //   * SPIR-V magic 0x07230203  → SpirV     (hl-shim-vk's translated Vulkan modules)
+                //   * KERNEL_MAGIC 0xDD6B_0001 → PtxKernel (CUDA→hl-GPU kernel descriptor, ptx::to_words)
                 //   * anything else            → LegacyMsl (the GL shim delivers GLSL already translated
                 //                                            to MSL words — the Metal-compile path)
                 // MSL text words never collide with these magics (both decode to non-ASCII byte runs), so

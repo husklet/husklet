@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Assemble a self-contained, ad-hoc-signed dd.app on macOS.
+# Assemble a self-contained, ad-hoc-signed hl.app on macOS.
 #
 # Must run inside the GTK dev shell so the GTK build/runtime data and tools are on PATH:
 #   nix develop "path:$PWD/nix" --command tools/bundle.sh
 # (the Makefile `app` target does this for you).
 #
-# Produces build/dd.app with:
-#   Contents/MacOS/dd-app                     the GTK GUI
-#   Contents/Resources/dd-daemon, ddjit-*     the daemon + JIT engines (allow-jit signed)
+# Produces build/hl.app with:
+#   Contents/MacOS/hl-app                     the GTK GUI
+#   Contents/Resources/hl-daemon, hljit-*     the daemon + JIT engines (allow-jit signed)
 #   Contents/Frameworks/*.dylib               the relocated GTK dylib graph (dylibbundler)
 #   Contents/Frameworks/gdk-pixbuf-.../       svg+png loaders with a relative loaders.cache
 #   Contents/Resources/glib-2.0/schemas/      compiled gschemas
@@ -16,7 +16,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"   # script lives in hl-gui/package/, repo root is ../..
 VERSION="${1:-0.1.0}"
-APP="$ROOT/target/dd.app"   # under target/ (gitignored) — kept out of the repo root
+APP="$ROOT/target/hl.app"   # under target/ (gitignored) — kept out of the repo root
 C="$APP/Contents"; MACOS="$C/MacOS"; RES="$C/Resources"; FW="$C/Frameworks"
 ENT="$ROOT/hl-jit/jit.entitlements"
 
@@ -27,68 +27,68 @@ die() { printf '\033[1;31m[bundle] %s\033[0m\n' "$*" >&2; exit 1; }
 [ -n "${HL_GTK4:-}" ] || die "run inside the nix dev shell: nix develop \"path:$ROOT/nix\" --command tools/bundle.sh"
 command -v dylibbundler >/dev/null || die "dylibbundler not found (nix dev shell)"
 
-# 1. Release GUI binary. The daemon + ddjit-* engines are built OUTSIDE this dev shell (by the
+# 1. Release GUI binary. The daemon + hljit-* engines are built OUTSIDE this dev shell (by the
 #    Makefile `app` target) using the known-good native toolchain for the JIT's build.rs, since
 #    the Nix stdenv clang may not find the macOS SDK headers the JIT C needs.
-log "building release dd-app"
+log "building release hl-app"
 ( cd "$ROOT" && cargo build --release -p hl-gui )
-[ -f "$ROOT/target/release/dd-daemon" ] || die "target/release/dd-daemon missing — run 'cargo build --release -p hl-daemon' first (the Makefile 'app' target does this)"
+[ -f "$ROOT/target/release/hl-daemon" ] || die "target/release/hl-daemon missing — run 'cargo build --release -p hl-daemon' first (the Makefile 'app' target does this)"
 
 # 2. Skeleton.
 log "laying out bundle skeleton"
 chmod -R u+w "$APP" 2>/dev/null || true   # nix-store copies are read-only; make removable
 rm -rf "$APP"
 mkdir -p "$MACOS" "$RES" "$FW"
-cp "$ROOT/target/release/dd-app" "$MACOS/dd-app"
-cp "$ROOT/target/release/dd-daemon" "$RES/dd-daemon"
-for cli in dd ddcli; do # the CLI (whatever it's named) — installed to PATH from the GUI
+cp "$ROOT/target/release/hl-app" "$MACOS/hl-app"
+cp "$ROOT/target/release/hl-daemon" "$RES/hl-daemon"
+for cli in dd hl; do # the CLI (whatever it's named) — installed to PATH from the GUI
   [ -f "$ROOT/target/release/$cli" ] && cp "$ROOT/target/release/$cli" "$RES/$cli"
 done
 printf 'APPL????' > "$C/PkgInfo"
 sed "s/@VERSION@/$VERSION/g" "$ROOT/hl-gui/package/Info.plist.in" > "$C/Info.plist"
-[ -f "$ROOT/hl-gui/package/dd-app.icns" ] && cp "$ROOT/hl-gui/package/dd-app.icns" "$RES/dd-app.icns" || true
+[ -f "$ROOT/hl-gui/package/hl-app.icns" ] && cp "$ROOT/hl-gui/package/hl-app.icns" "$RES/hl-app.icns" || true
 [ -f "$ROOT/assets/logo.png" ] && cp "$ROOT/assets/logo.png" "$RES/logo.png" || true # onboarding logo
 [ -d "$ROOT/assets/images" ] && cp -R "$ROOT/assets/images" "$RES/images" || true # bundled starter images (hello-dd)
 
 # JIT engines, copied next to the daemon (resolved at runtime next to the executable / via HL_JIT_DIR).
-# Every guest engine is REQUIRED: a bundle missing ddjit-linux_* installs and pulls images fine, then HANGS
+# Every guest engine is REQUIRED: a bundle missing hljit-linux_* installs and pulls images fine, then HANGS
 # the instant you `docker run` a Linux container (no engine -> the daemon can't spawn the guest). build.rs
 # silently downgrades a failed engine compile to a cargo:warning, so guard HERE and fail the build loudly
 # rather than ship a half-working .app -- this is exactly the bug that shipped a darwin-only v0.5.7.
 for t in linux_aarch64 linux_x86_64 darwin_aarch64; do
-  f="$(find "$ROOT/target/release/build" -name "ddjit-$t" -type f 2>/dev/null | head -1)"
-  [ -n "$f" ] || die "ddjit-$t was not built -- refusing to ship an engine-incomplete bundle. Run 'cargo clean -p ddjit --release && cargo build --release -p hl-daemon' and check build.rs's clang/codesign output."
-  cp "$f" "$RES/ddjit-$t"; log "  + ddjit-$t"
+  f="$(find "$ROOT/target/release/build" -name "hljit-$t" -type f 2>/dev/null | head -1)"
+  [ -n "$f" ] || die "hljit-$t was not built -- refusing to ship an engine-incomplete bundle. Run 'cargo clean -p hljit --release && cargo build --release -p hl-daemon' and check build.rs's clang/codesign output."
+  cp "$f" "$RES/hljit-$t"; log "  + hljit-$t"
 done
-# darwinjail.dylib — the DYLD_INSERT jail dylib for `ddcli mac`; MUST ship next to the engines or
-# `ddcli mac` falls back to the build-time path and dyld can't find it on the user's machine.
+# darwinjail.dylib — the DYLD_INSERT jail dylib for `hl mac`; MUST ship next to the engines or
+# `hl mac` falls back to the build-time path and dyld can't find it on the user's machine.
 djf="$(find "$ROOT/target/release/build" -name "darwinjail.dylib" -type f 2>/dev/null | head -1)"
 if [ -n "$djf" ]; then cp "$djf" "$RES/darwinjail.dylib"; log "  + darwinjail.dylib"; else log "  ! darwinjail.dylib not built (skipping)"; fi
 
-# dd-display + dd-compositor — the host Wayland renderer for `--gui` workspaces. dd-display is the legacy
-# compositor; with HL_DISPLAY_SMITHAY=1 it execs the sibling dd-compositor (Smithay-native). Both resolve
+# hl-display + hl-compositor — the host Wayland renderer for `--gui` workspaces. hl-display is the legacy
+# compositor; with HL_DISPLAY_SMITHAY=1 it execs the sibling hl-compositor (Smithay-native). Both resolve
 # each other and their dylibs via @executable_path, so they ship in Resources next to the daemon.
-# dd-compositor links the system libxkbcommon at link+run time (its Smithay keymap seat); the nix dev
+# hl-compositor links the system libxkbcommon at link+run time (its Smithay keymap seat); the nix dev
 # shell provides it via $HL_LIBXKBCOMMON, and dylibbundler (step 4) relocates it into Contents/Frameworks
 # with an @executable_path/../Frameworks install name so the compositor loads it on the user's machine.
 # Guarded: if $HL_LIBXKBCOMMON is absent (older dev shell) the compositor is skipped and HL_DISPLAY_SMITHAY
 # transparently falls back to the legacy path — the bundle stays shippable either way.
 COMPOSITOR_XARGS=()
 if [ -n "${HL_LIBXKBCOMMON:-}" ]; then
-  log "building dd-display + dd-compositor (smithay renderer; libxkbcommon from nix)"
+  log "building hl-display + hl-compositor (smithay renderer; libxkbcommon from nix)"
   if ( cd "$ROOT" && RUSTFLAGS="-L native=$HL_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" \
          cargo build --release -p hl-display -p hl-compositor ); then
-    for b in dd-display dd-compositor; do
+    for b in hl-display hl-compositor; do
       if [ -f "$ROOT/target/release/$b" ]; then
         cp "$ROOT/target/release/$b" "$RES/$b"; log "  + $b"
         COMPOSITOR_XARGS+=( -x "$RES/$b" )   # relocate its dylib graph (incl. libxkbcommon) in step 4
       fi
     done
   else
-    log "  ! dd-compositor build failed — shipping without the Smithay renderer (legacy path still works)"
+    log "  ! hl-compositor build failed — shipping without the Smithay renderer (legacy path still works)"
   fi
 else
-  log "  ! HL_LIBXKBCOMMON unset — skipping dd-compositor (Smithay renderer absent; HL_DISPLAY_SMITHAY falls back to legacy)"
+  log "  ! HL_LIBXKBCOMMON unset — skipping hl-compositor (Smithay renderer absent; HL_DISPLAY_SMITHAY falls back to legacy)"
 fi
 
 # 3. Stage gdk-pixbuf loaders (png from gdk-pixbuf, svg from librsvg) with a RELATIVE cache.
@@ -108,13 +108,13 @@ shopt -s nullglob
 LOADER_SOS=( "$DEST_LOADERS"/*.so )
 shopt -u nullglob
 
-# 4. Relocate the dylib graph: dd-app + each loader .so (+ hl-display/dd-compositor when built) ->
+# 4. Relocate the dylib graph: hl-app + each loader .so (+ hl-display/hl-compositor when built) ->
 #    Contents/Frameworks. Adding the compositor binaries here pulls libxkbcommon (and any other non-system
 #    dylib the Smithay renderer links) into Frameworks with @executable_path/../Frameworks install names,
 #    which — for a binary in Resources/ — resolves to Contents/Frameworks. That is what lets an end-user
-#    dd.app launch the compositor (readiness Gap 4).
+#    hl.app launch the compositor (readiness Gap 4).
 log "relocating dylibs (dylibbundler)"
-XARGS=( -x "$MACOS/dd-app" )
+XARGS=( -x "$MACOS/hl-app" )
 [ ${#COMPOSITOR_XARGS[@]} -gt 0 ] && XARGS+=( "${COMPOSITOR_XARGS[@]}" )
 for so in "${LOADER_SOS[@]}"; do XARGS+=( -x "$so" ); done
 dylibbundler -of -cd -b -d "$FW" -p '@executable_path/../Frameworks' "${XARGS[@]}" >/dev/null
@@ -202,14 +202,14 @@ find "$FW" "$RES/lib" -type f \( -name '*.dylib' -o -name '*.so' \) -print0 2>/d
   /usr/bin/strip -x "$f" 2>/dev/null || true
   codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$f" >/dev/null 2>&1 || true
 done
-for b in dd-daemon ddjit-linux_aarch64 ddjit-linux_x86_64 ddjit-darwin_aarch64; do
+for b in hl-daemon hljit-linux_aarch64 hljit-linux_x86_64 hljit-darwin_aarch64; do
   [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f --entitlements "$ENT" "$RES/$b" >/dev/null 2>&1 || true
 done
 [ -f "$RES/darwinjail.dylib" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/darwinjail.dylib" >/dev/null 2>&1 || true
-# dd-display / dd-compositor (the Wayland renderer) — no JIT, so no entitlement, signed like the CLI.
-for b in dd-display dd-compositor; do [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/$b" >/dev/null 2>&1 || true; done
-for cli in dd ddcli; do [ -f "$RES/$cli" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/$cli" >/dev/null 2>&1 || true; done
-codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$MACOS/dd-app" >/dev/null 2>&1 || true
+# hl-display / hl-compositor (the Wayland renderer) — no JIT, so no entitlement, signed like the CLI.
+for b in hl-display hl-compositor; do [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/$b" >/dev/null 2>&1 || true; done
+for cli in dd hl; do [ -f "$RES/$cli" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/$cli" >/dev/null 2>&1 || true; done
+codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$MACOS/hl-app" >/dev/null 2>&1 || true
 codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$APP" >/dev/null 2>&1 || true   # outermost signed last
 if [ "$SIGN_ID" != "-" ]; then
   codesign --verify --strict --verbose=2 "$APP" || { echo "[bundle] Developer ID signature verify FAILED" >&2; exit 1; }

@@ -14,11 +14,11 @@ pub(super) fn items() -> Vec<Scenario> {
             .has("socat by Gerhard Rieger"),
         // loopback TCP echo via busybox nc — fork + 127.0.0.1 round-trip, fully hermetic.
         scen("utilities/nc-loopback", "alpine")
-            .exec("{ echo dd-echo-ok | nc -l -p 9000; } & sleep 0.4; nc 127.0.0.1 9000 </dev/null")
-            .has("dd-echo-ok"),
+            .exec("{ echo hl-echo-ok | nc -l -p 9000; } & sleep 0.4; nc 127.0.0.1 9000 </dev/null")
+            .has("hl-echo-ok"),
         // loopback HTTP: busybox httpd serves a file, wget fetches it (server+client fork, no network).
         scen("utilities/wget-loopback", "busybox:latest")
-            .exec("mkdir -p /www && echo dd-http-ok > /www/f.txt && httpd -p 127.0.0.1:8080 -h /www && sleep 0.3 && wget -qO- http://127.0.0.1:8080/f.txt")
-            .has("dd-http-ok"),
+            .exec("mkdir -p /www && echo hl-http-ok > /www/f.txt && httpd -p 127.0.0.1:8080 -h /www && sleep 0.3 && wget -qO- http://127.0.0.1:8080/f.txt")
+            .has("hl-http-ok"),
     ]
 }

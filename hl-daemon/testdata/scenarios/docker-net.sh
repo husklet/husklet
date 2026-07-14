@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dd-tests/scenarios/docker-net.sh -- container-to-container networking against dd-daemon.
+# hl-tests/scenarios/docker-net.sh -- container-to-container networking against hl-daemon.
 #
 # The everyday multi-container case: two containers on the same user-defined network must reach each
 # other — by container NAME (Docker's embedded DNS) and by IP — while a container on a DIFFERENT network
@@ -10,14 +10,14 @@
 # are expected to FAIL today — they're the executable spec for that work, and will go green when a real
 # bridge/IPAM + embedded DNS land. A failure here is a known gap, not a regression.
 #
-#   bash dd-tests/scenarios/docker-net.sh        # run after `make jit`
+#   bash hl-tests/scenarios/docker-net.sh        # run after `make jit`
 # Env: HL_IMAGES, HL_DAEMON.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
-DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
-SOCK="$ROOT/dd-net.sock"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/hl-daemon}"
+SOCK="$ROOT/hl-net.sock"
 export DOCKER_HOST="unix://$SOCK"
 
 pass=0 fail=0
@@ -25,11 +25,11 @@ has() { if echo "$2" | grep -qF "$3"; then echo "  ok   $1"; pass=$((pass+1)); e
 no()  { if echo "$2" | grep -qF "$3"; then echo "  FAIL $1: [$2] unexpectedly has [$3]"; fail=$((fail+1)); else echo "  ok   $1"; pass=$((pass+1)); fi; }
 d()   { docker "$@" 2>&1; }
 
-SCEN_LOG="$ROOT/dd-net.log"
-pkill -x dd-daemon 2>/dev/null; rm -f "$SOCK"
+SCEN_LOG="$ROOT/hl-net.log"
+pkill -x hl-daemon 2>/dev/null; rm -f "$SOCK"
 # Fully isolate this daemon: private socket AND private state/volumes (a fresh per-scenario temp
-# dir), so it starts from empty state and never reads or mutates the developer's real ~/.dd.
-STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dd-net.XXXXXX")"
+# dir), so it starts from empty state and never reads or mutates the developer's real ~/.hl.
+STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hl-net.XXXXXX")"
 export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!

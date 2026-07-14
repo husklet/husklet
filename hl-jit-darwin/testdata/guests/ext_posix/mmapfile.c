@@ -8,7 +8,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_mmapf_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_mmapf_%d", (int)getpid());
     long ps = sysconf(_SC_PAGESIZE);
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     char *zero = calloc(1, ps);

@@ -83,10 +83,10 @@ int main(){ pthread_t t[8]; for(int i=0;i<8;i++)pthread_create(&t[i],0,w,0);
 int main(){
   int fd=memfd_create("dd",0);
   if(fd<0){perror("memfd");return 1;}
-  write(fd,"dd-memfd-ok",11);
+  write(fd,"hl-memfd-ok",11);
   char b[32]={0}; lseek(fd,0,SEEK_SET); read(fd,b,11);
   printf("%s\n",b); return 0;
-}"#).has("dd-memfd-ok"),
+}"#).has("hl-memfd-ok"),
         // eventfd counter semantics (41 + 1 → read 42, reset).
         cc("weird/eventfd", "-O2", r#"#include <stdio.h>
 #include <sys/eventfd.h>
@@ -121,19 +121,19 @@ int main(){
   int fd=inotify_init1(0);
   if(fd<0){perror("inotify");return 1;}
   inotify_add_watch(fd,"/tmp",IN_CREATE);
-  int f=open("/tmp/dd-inotify",O_CREAT|O_WRONLY,0644); close(f);
+  int f=open("/tmp/hl-inotify",O_CREAT|O_WRONLY,0644); close(f);
   char buf[4096]; read(fd,buf,sizeof buf);
   struct inotify_event *ev=(void*)buf;
   printf("INOTIFY=%s\n", ev->len?ev->name:"none"); return 0;
-}"#).has("INOTIFY=dd-inotify"),
+}"#).has("INOTIFY=hl-inotify"),
         // prctl PR_SET_NAME / PR_GET_NAME round-trip.
         cc("weird/prctl-name", "-O2", r#"#include <stdio.h>
 #include <sys/prctl.h>
 int main(){
-  prctl(PR_SET_NAME,"dd-proc");
+  prctl(PR_SET_NAME,"hl-proc");
   char n[16]={0}; prctl(PR_GET_NAME,n);
   printf("PRCTL=%s\n",n); return 0;
-}"#).has("PRCTL=dd-proc"),
+}"#).has("PRCTL=hl-proc"),
         // getrandom(2): 16 bytes from the kernel CSPRNG.
         cc("weird/getrandom", "-O2", r#"#define _GNU_SOURCE
 #include <stdio.h>

@@ -1,4 +1,4 @@
-//! dd-shim-cudart codegen: turn the CUDA-Runtime-API entry-point manifest into the complete set of
+//! hl-shim-cudart codegen: turn the CUDA-Runtime-API entry-point manifest into the complete set of
 //! `#[no_mangle] extern "C"` `cuda*`/`__cuda*` exports the shim must provide. Mirrors
 //! hl-shim-cuda/build.rs exactly, adapted to the runtime API's several return types.
 //!
@@ -14,7 +14,7 @@
 //!
 //! Also sets the shared-object soname to `libcudart.so.1` (the CUDA Runtime API drop-in name). The
 //! cdylib's exported-symbol set is the crate's own `#[no_mangle]` items (rustc localizes everything
-//! pulled from the `dd-shim-cuda` rlib, i.e. the driver's `cu*`), so `libcudart.so.1` exports EXACTLY
+//! pulled from the `hl-shim-cuda` rlib, i.e. the driver's `cu*`), so `libcudart.so.1` exports EXACTLY
 //! this manifest's `cuda*`/`__cuda*` surface — matching real libcudart visibility.
 
 use std::fmt::Write as _;
@@ -27,8 +27,8 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     // Deployed as libcudart.so.1 (the CUDA Runtime API soname a real app `DT_NEEDED`s); bake it.
-    // Matches hl-gpu/cuda/build.sh's C shim and dd-shim-cuda's libcuda.so.1 pattern. Since this crate is
-    // a self-contained peer over dd-gpu (it does NOT static-link dd-shim-cuda), no foreign `cu*` symbols
+    // Matches hl-gpu/cuda/build.sh's C shim and hl-shim-cuda's libcuda.so.1 pattern. Since this crate is
+    // a self-contained peer over hl-gpu (it does NOT static-link hl-shim-cuda), no foreign `cu*` symbols
     // or competing soname leak in, so the exported surface is exactly this crate's `cuda*`/`__cuda*`.
     println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libcudart.so.1");
 
@@ -183,7 +183,7 @@ fn map_ret(c: &str, ctx: &str) -> Option<String> {
 
 /// C type string -> Rust C-ABI type. Handles the pointer forms generally (single/double, const/mut) so
 /// an API bump only ever surprises us on a genuinely new *base scalar*, which panics (fail-loud ABI
-/// generator). Identical structure to dd-shim-cuda's mapper.
+/// generator). Identical structure to hl-shim-cuda's mapper.
 fn map_type(c: &str, ctx: &str) -> String {
     let c = c.trim();
     if let Some(base) = c.strip_suffix("**") {
@@ -266,7 +266,7 @@ fn env(k: &str) -> String {
 }
 
 /// Entry points hand-implemented in `src/runtime.rs` (so the generator skips them to avoid duplicate
-/// symbols). The WHOLE runtime surface has real bodies — each forwards to a `dd-shim-cuda` driver `cu*`
+/// symbols). The WHOLE runtime surface has real bodies — each forwards to a `hl-shim-cuda` driver `cu*`
 /// (the analogue of the C cudart shim calling into libcuda), so nothing is left as a generated stub.
 const IMPLEMENTED: &[&str] = &[
     // ---- device management ----

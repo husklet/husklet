@@ -1,7 +1,7 @@
 // GPU rung 2 end-to-end guest client: allocate a HOST-IOSurface-backed buffer via the engine
-// (/dev/dri/renderD128 + DD_IOCTL_GPU_ALLOC), CPU-fill the (x^y) pattern straight into the IOSurface's
-// pages (guest-VA == host-VA, so the returned pointer is directly usable), then commit it to dd-display
-// over linux-dmabuf carrying the IOSurface id in the modifier. dd-display resolves the id → IOSurface →
+// (/dev/dri/renderD128 + HL_IOCTL_GPU_ALLOC), CPU-fill the (x^y) pattern straight into the IOSurface's
+// pages (guest-VA == host-VA, so the returned pointer is directly usable), then commit it to hl-display
+// over linux-dmabuf carrying the IOSurface id in the modifier. hl-display resolves the id → IOSurface →
 // MTLTexture and composites ZERO-copy. Proves the no-VM guest→host GPU-buffer path.
 //
 // Runs under the dd engine with HL_GPU_IOSURFACE set (the --gui launcher sets it). Hand-rolls the Wayland
@@ -18,9 +18,9 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#define DD_IOCTL_GPU_ALLOC 0xC020DD01u
-#define DD_DMABUF_MOD_MAGIC 0x6464u
-#define DD_DMABUF_RENDER_BIT 0x10000u
+#define HL_IOCTL_GPU_ALLOC 0xC020DD01u
+#define HL_DMABUF_MOD_MAGIC 0x6464u
+#define HL_DMABUF_RENDER_BIT 0x10000u
 #define DRM_FMT_XRGB8888 0x34325258u
 
 struct hl_gpu_alloc {
@@ -29,10 +29,10 @@ struct hl_gpu_alloc {
     uint64_t ptr;
 };
 
-// Server-assigned registry global names (dd-display fixed layout).
+// Server-assigned registry global names (hl-display fixed layout).
 enum { G_COMPOSITOR = 1, G_XDG_WM_BASE = 3, G_DMABUF = 6 };
 
-// ---- dd-gpu IR wire builder (rung 3): hand-rolled to match hl-gpu/src/wire.rs (little-endian) ----
+// ---- hl-gpu IR wire builder (rung 3): hand-rolled to match hl-gpu/src/wire.rs (little-endian) ----
 static uint8_t ir[8192];
 static size_t irn;
 static void iu8(uint8_t v) { ir[irn++] = v; }
@@ -42,7 +42,7 @@ static void if32(float v) { memcpy(ir + irn, &v, 4); irn += 4; }
 static void istr(const char *s) { uint32_t l = (uint32_t)strlen(s); iu32(l); memcpy(ir + irn, s, l); irn += l; }
 static void ibytes(const uint8_t *b, uint32_t l) { iu32(l); memcpy(ir + irn, b, l); irn += l; }
 
-// Build a dd-gpu IR stream: upload a vertex-colored QUAD, create a pipeline, and draw it into texture
+// Build a hl-gpu IR stream: upload a vertex-colored QUAD, create a pipeline, and draw it into texture
 // id 1 (the executor injects our IOSurface there). Returns the stream length.
 static size_t build_ir_quad(void) {
     irn = 0;
@@ -86,10 +86,10 @@ static size_t build_ir_quad(void) {
     return irn;
 }
 
-// Stream the IR to the dd-gpu executor ($HL_GPU_EXEC) and wait for its 1-byte ack. Returns 0 on success.
+// Stream the IR to the hl-gpu executor ($HL_GPU_EXEC) and wait for its 1-byte ack. Returns 0 on success.
 static int stream_ir(uint32_t id, uint32_t w, uint32_t h) {
     const char *ep = getenv("HL_GPU_EXEC");
-    if (!ep) ep = "/run/user/0/dd-gpu-0";
+    if (!ep) ep = "/run/user/0/hl-gpu-0";
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un un = {0};
     un.sun_family = AF_UNIX;
@@ -166,8 +166,8 @@ int main(void) {
     a.width = 256;
     a.height = 160;
     a.format = 0;
-    if (ioctl(rnode, DD_IOCTL_GPU_ALLOC, &a) != 0) {
-        printf("gpu_dmabuf: DD_IOCTL_GPU_ALLOC failed (%m)\n");
+    if (ioctl(rnode, HL_IOCTL_GPU_ALLOC, &a) != 0) {
+        printf("gpu_dmabuf: HL_IOCTL_GPU_ALLOC failed (%m)\n");
         return 2;
     }
     printf("gpu_dmabuf: alloc id=%u stride=%u fd=%d ptr=%p\n", a.id, a.stride, a.fd, (void *)(uintptr_t)a.ptr);
@@ -176,7 +176,7 @@ int main(void) {
         return 3;
     }
 
-    // rung 3: HL_GPU_IR streams a real dd-gpu IR command stream to the host executor (which replays it on
+    // rung 3: HL_GPU_IR streams a real hl-gpu IR command stream to the host executor (which replays it on
     // Metal into this IOSurface); HL_GPU_RENDER is the older 1-op flag; else CPU-fill (rung 2).
     int want_ir = getenv("HL_GPU_IR") != NULL;
     int want_render = !want_ir && getenv("HL_GPU_RENDER") != NULL;
@@ -203,7 +203,7 @@ int main(void) {
         }
     }
 
-    // 3. Connect to dd-display.
+    // 3. Connect to hl-display.
     const char *disp = getenv("WAYLAND_DISPLAY");
     const char *rundir = getenv("XDG_RUNTIME_DIR");
     if (!disp) disp = "wayland-0";
@@ -220,7 +220,7 @@ int main(void) {
         return 4;
     }
 
-    // 4. Wayland handshake (fixed object ids; dd-display uses fixed global names).
+    // 4. Wayland handshake (fixed object ids; hl-display uses fixed global names).
     uint32_t reg = 2, comp = 3, dmabuf = 4, wm = 5, surface = 6, xdg = 7, toplevel = 8, params = 9, buffer = 10;
     uint32_t w1[1] = {reg};
     msg(1 /*wl_display*/, 1 /*get_registry*/, w1, 1);
@@ -260,7 +260,7 @@ int main(void) {
     msg(dmabuf, 1 /*create_params*/, &params, 1);
     flush_plain();
     // params.add — the fd rides SCM_RIGHTS
-    uint32_t mod_hi = DD_DMABUF_MOD_MAGIC | (want_render ? DD_DMABUF_RENDER_BIT : 0);
+    uint32_t mod_hi = HL_DMABUF_MOD_MAGIC | (want_render ? HL_DMABUF_RENDER_BIT : 0);
     uint32_t addw[5] = {0 /*plane*/, 0 /*offset*/, a.stride, mod_hi, a.id /*mod_lo*/};
     msg(params, 1 /*add*/, addw, 5);
     flush_with_fd(a.fd);
@@ -274,7 +274,7 @@ int main(void) {
     msg(surface, 2 /*damage*/, dm, 4);
     msg(surface, 6 /*commit*/, NULL, 0);
     flush_plain();
-    usleep(300000); // let dd-display composite
+    usleep(300000); // let hl-display composite
 
     printf("gpu_dmabuf: committed IOSurface id=%u via linux-dmabuf\n", a.id);
     return 0;

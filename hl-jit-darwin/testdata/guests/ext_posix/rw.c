@@ -5,7 +5,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_rw_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_rw_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     unsigned char data[256];
     for (int i = 0; i < 256; i++) data[i] = (unsigned char)i;

@@ -10,7 +10,7 @@
 //! Platform coverage: overlay (lower/upper union, whiteout, copy-up, opaque) is a LINUX-container feature —
 //! it exists only when the engine is launched with `--lower` image layers (`g_nlower>0`).
 //! The image-flattening opaque fix that IS platform-independent (it runs in the daemon at pull time,
-//! regardless of guest arch) is covered by the `dd-daemon` unit test `registry::tests::opaque_*`.
+//! regardless of guest arch) is covered by the `hl-daemon` unit test `registry::tests::opaque_*`.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ fn repo() -> PathBuf {
 /// Compile the probe static-PIE for a guest arch. Returns the host binary path.
 fn compile_probe(arch: &str) -> String {
     let src = repo().join("hl-jit-darwin/testdata/guests/overlay/probe.c");
-    let outdir = repo().join("target/dd-tests").join(arch);
+    let outdir = repo().join("target/hl-tests").join(arch);
     std::fs::create_dir_all(&outdir).unwrap();
     let out = outdir.join("overlay_probe");
     let cc = if arch == "x86_64" {
@@ -57,7 +57,7 @@ fn write(p: &Path, data: &[u8]) {
 /// tree (the macOS engine must be able to see them — not /tmp).
 fn build_layers(arch: &str) -> (PathBuf, PathBuf) {
     let root = repo()
-        .join("target/dd-tests")
+        .join("target/hl-tests")
         .join(format!("overlay-{arch}"));
     let _ = std::fs::remove_dir_all(&root);
     let lower = root.join("lower");

@@ -61,7 +61,7 @@ impl Entry {
 /// now that the entire 1.0–1.4 mandatory core (all 234 commands) has real bodies
 /// (`vkEnumerateInstanceVersion` and the physical-device `apiVersion` both report this; a 2.0+ app
 /// request is rejected with `VK_ERROR_INCOMPATIBLE_DRIVER`). The inventory test cross-checks this
-/// against `state::DD_API_VERSION`.
+/// against `state::HL_API_VERSION`.
 pub const ADVERTISED_API_VERSION: (u32, u32) = (1, 4);
 
 /// The instance extensions the ICD advertises (must equal what `vkEnumerateInstanceExtensionProperties`

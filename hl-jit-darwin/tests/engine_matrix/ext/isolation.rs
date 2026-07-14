@@ -113,8 +113,8 @@ printf 'cpu.max=[%s] mem.max=[%s] controllers=[%s]\\n' \
 // A busybox shell probe: a write to the rootfs root must fail "Read-only file system", while /tmp stays
 // writable. Under --read-only -> root=RO tmp=OK; without it (the old behaviour) -> root=RW.
 const RO_PROBE: &str = "\
-if ( echo x > /dd_ro_probe ) 2>&1 | grep -qi 'read-only'; then echo root=RO; else echo root=RW; rm -f /dd_ro_probe; fi; \
-if ( echo x > /tmp/dd_w_probe ) 2>/dev/null; then echo tmp=OK; rm -f /tmp/dd_w_probe; else echo tmp=FAIL; fi";
+if ( echo x > /hl_ro_probe ) 2>&1 | grep -qi 'read-only'; then echo root=RO; else echo root=RW; rm -f /hl_ro_probe; fi; \
+if ( echo x > /tmp/hl_w_probe ) 2>/dev/null; then echo tmp=OK; rm -f /tmp/hl_w_probe; else echo tmp=FAIL; fi";
 
 /// docker --read-only: the rootfs is EROFS, the /tmp pseudo-mount stays writable. Linux via a real image
 /// rootfs (both arches).

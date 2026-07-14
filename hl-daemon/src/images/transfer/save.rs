@@ -1,4 +1,4 @@
-//! `docker save` -- stream a tar of the image's `rootfs/` + a `dd-manifest.json` sidecar.
+//! `docker save` -- stream a tar of the image's `rootfs/` + a `hl-manifest.json` sidecar.
 use super::*;
 
 #[derive(Deserialize)]
@@ -7,7 +7,7 @@ pub(crate) struct SaveQ {
 }
 
 /// GET /images/get?names=<name> -- `docker save`. Streams a tar of the image's `rootfs/` directory
-/// plus a `dd-manifest.json` naming the image, as `application/x-tar`.
+/// plus a `hl-manifest.json` naming the image, as `application/x-tar`.
 pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> Response {
     let names = q.names.unwrap_or_default();
     if names.is_empty() {
@@ -33,7 +33,7 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
         )
             .into_response();
     }
-    // dd-images owns the archive format (tar of `rootfs/` + a `dd-manifest.json` sidecar); the handler just
+    // hl-images owns the archive format (tar of `rootfs/` + a `hl-manifest.json` sidecar); the handler just
     // maps the store `Image` onto the manifest and streams the bytes back.
     let manifest = hl_images::Manifest {
         name: img.name.clone(),

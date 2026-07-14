@@ -1,7 +1,7 @@
 //! The archive side of the store: `docker save` / `docker load` / `docker import`.
 //!
 //! dd's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
-//! `rootfs/` directory plus a [`Manifest`] sidecar (`dd-manifest.json`). [`Store::save_archive`] produces
+//! `rootfs/` directory plus a [`Manifest`] sidecar (`hl-manifest.json`). [`Store::save_archive`] produces
 //! it, [`Store::load_archive`] consumes it; [`Store::import_rootfs`] instead takes a bare rootfs tar (no
 //! manifest) whose files land directly in a new image's rootfs. All tar work shells out to the system
 //! `tar` (no crate dependency, no runtime) so the on-disk layout matches Docker/dd exactly.
@@ -96,7 +96,7 @@ mod load;
 mod save;
 
 // Per-process monotonic suffix so concurrent save/load/import requests in ONE daemon don't collide on
-// the same `<pid>` temp path (two in-flight loads sharing `dd-load-<pid>.tar` / `.load-<pid>` would
+// the same `<pid>` temp path (two in-flight loads sharing `hl-load-<pid>.tar` / `.load-<pid>` would
 // overwrite each other or `remove_dir_all` the dir mid-extract). Mirrors registry/http.rs's SEQ.
 static SEQ: AtomicU64 = AtomicU64::new(0);
 fn uniq() -> String {
@@ -213,7 +213,7 @@ impl Store {
         Ok(())
     }
 
-    /// Write the `dd-image.json` sidecar for a freshly loaded image so discovery restores its run config
+    /// Write the `hl-image.json` sidecar for a freshly loaded image so discovery restores its run config
     /// after a daemon restart (mirrors the fields the pull path records).
     fn write_sidecar(&self, target: &Path, img: &LoadedImage) {
         let dd = json!({
@@ -224,7 +224,7 @@ impl Store {
             // Record os + instruction set so discovery restores the arch even for an ELF-less rootfs.
             "os": img.arch.os(), "arch": img.arch.isa(),
         });
-        let _ = std::fs::write(target.join("dd-image.json"), dd.to_string());
+        let _ = std::fs::write(target.join("hl-image.json"), dd.to_string());
     }
 }
 
@@ -240,7 +240,7 @@ pub(super) mod testutil {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!("dd-images-test-{}-{}-{}", label, std::process::id(), nanos))
+        std::env::temp_dir().join(format!("hl-images-test-{}-{}-{}", label, std::process::id(), nanos))
     }
 
     /// Write `bytes` to `path`, creating parent dirs. Used to build fake rootfs trees on disk.

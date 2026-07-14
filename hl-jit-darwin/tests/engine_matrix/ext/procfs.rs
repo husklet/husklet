@@ -86,7 +86,7 @@ fn proc_content() -> Group {
             src("pf-misc", "ext_procfs/miscfiles.c").out("miscfiles ok=1\n"),
             src("pf-net", "ext_procfs/netfiles.c").out("netfiles ok=1\n"),
             // round 2 (networking tool class): tcp6/udp6 wide v6 header, /proc/net/{netstat,snmp6,ipv6_route},
-            // and the /proc/[self|pid]/net/* namespaced mirrors -- each a dd-only divergence vs docker before the fix.
+            // and the /proc/[self|pid]/net/* namespaced mirrors -- each a hl-only divergence vs docker before the fix.
             src("pf-net2", "ext_procfs/netfiles2.c").out("netfiles2 ok=1\n"),
             src("pf-maps", "ext_procfs/maps.c").out("maps ok=1\n"),
         ],
@@ -120,7 +120,7 @@ fn dev_sys() -> Group {
             src("pf-peer-fd", "ext_procfs/peerfd.c").out("peerfd ok=1 dir=1 lstat=1 readlink=1\n"),
             // A NONBLOCKING read on a controlling terminal with no input is EAGAIN on Linux, never EOF(0).
             // dd backs /dev/tty (host device) and /dev/console (/dev/null) with something that returns 0 when
-            // empty -> readline/TUI code read the 0 as terminal closure. dd-behavior golden: /dev/console is
+            // empty -> readline/TUI code read the 0 as terminal closure. hl-behavior golden: /dev/console is
             // the deterministic path (always intercepted); /dev/tty is best-effort (harness lacks a ctty).
             src("pf-ttynonblock", "ext_procfs/ttynonblock.c").out("ttynonblock ok=1 console=1 tty=-1\n"),
         ],

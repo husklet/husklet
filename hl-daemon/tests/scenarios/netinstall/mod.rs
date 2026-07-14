@@ -1,6 +1,6 @@
 //! Network package-install — the developer flow the base `distros` lane deliberately skips: actually
 //! REFRESH apt metadata over the network, INSTALL a real package (htop), and RUN it. This is the exact
-//! sequence a user drives after `ddcli ubuntu` (`apt-get update` → `apt-get install htop` → `htop`), and
+//! sequence a user drives after `hl ubuntu` (`apt-get update` → `apt-get install htop` → `htop`), and
 //! the one that regressed in the field (apt `Ign:`/`Err:` lines, install warnings, TUI not rendering).
 //! It is the regression net for that whole path. Owner: netinstall agent. Edit ONLY this folder.
 //!

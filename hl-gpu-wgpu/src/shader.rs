@@ -1,6 +1,6 @@
 //! Host-side shader translation via `naga`.
 //!
-//! The dd-GPU IR's declared shader ABI is SPIR-V (`Cmd::CreateShader{ spirv: Vec<u32> }`). This module
+//! The hl-GPU IR's declared shader ABI is SPIR-V (`Cmd::CreateShader{ spirv: Vec<u32> }`). This module
 //! lowers it to WGSL, which the wgpu backend feeds to `create_shader_module` (feature `wgsl`). Doing the
 //! whole translation in naga on the host is the thin-guest win: the guest shim forwards SPIR-V (or GLSL)
 //! bytes and never packs MSL itself — unlike the bespoke Metal replay, which ships MSL-as-bytes in this

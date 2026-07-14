@@ -13,10 +13,10 @@
 #
 # Oracle:  arm64 -> run the SAME static binary natively (this host is arm64);
 #          x86_64 -> run it under qemu-x86_64 (user-mode).
-# dd:      run the binary under $HL_JIT_DIR/ddjit-linux_<arch> via the `mac`
-#          bridge (the engine is a macOS arm64 binary; see dd-jit SpawnConfig).
+# dd:      run the binary under $HL_JIT_DIR/hljit-linux_<arch> via the `mac`
+#          bridge (the engine is a macOS arm64 binary; see hl-jit SpawnConfig).
 #
-# Requires: HL_JIT_DIR pinned to an engine out-dir (contains ddjit-linux_{aarch64,
+# Requires: HL_JIT_DIR pinned to an engine out-dir (contains hljit-linux_{aarch64,
 # x86_64}); qemu-x86_64 for the x86 oracle. Results: $OUT/results.tsv (+ stdout).
 set -uo pipefail
 
@@ -26,19 +26,19 @@ TIMEOUT="${LTP_TIMEOUT:-20}"
 ARCHES="${LTP_ARCHES:-arm64 x86_64}"
 
 if [ -z "${HL_JIT_DIR:-}" ]; then
-  # Best-effort autodiscover: newest ddjit-*/out under a sibling target*/ dir.
-  HL_JIT_DIR="$(ls -dt "$HERE"/../../../target*/release/build/ddjit-*/out 2>/dev/null | head -1)"
+  # Best-effort autodiscover: newest hljit-*/out under a sibling target*/ dir.
+  HL_JIT_DIR="$(ls -dt "$HERE"/../../../target*/release/build/hljit-*/out 2>/dev/null | head -1)"
 fi
 [ -n "${HL_JIT_DIR:-}" ] && [ -d "$HL_JIT_DIR" ] || { echo "ERROR: pin HL_JIT_DIR to an engine out-dir"; exit 2; }
 echo "[ltp] engine dir: $HL_JIT_DIR"
 
 # On a Linux dev host the engine runs mac-side through the `mac` bridge; on a real
-# Mac it runs directly. Mirror dd-jit::SpawnConfig::command.
+# Mac it runs directly. Mirror hl-jit::SpawnConfig::command.
 run_dd() { # $1 engine  $2 guestbin
   # Blocking-syscall tests (select/pause/…) can hit the timeout. When they do, the
   # local `mac` client is killed but the mac-side engine LINGERS (orphan pileup —
   # see memory "reap mac-bridge orphans"), stalling every later test and forcing
-  # transient failures. We can't broad-reap ddjit engines by name: sibling agents
+  # transient failures. We can't broad-reap hljit engines by name: sibling agents
   # share this host and would be cross-killed. So reap SURGICALLY — the mac-side
   # bash `exec`s into the engine, inheriting bash's PID; we stash that one PID and,
   # only on timeout, kill exactly it (and its group) mac-side. Nothing else is touched.
@@ -97,7 +97,7 @@ while read -r cat sys rel; do
 done < "$HERE/tests.list"
 
 for arch in $ARCHES; do
-  eng="$HL_JIT_DIR/ddjit-linux_$([ "$arch" = x86_64 ] && echo x86_64 || echo aarch64)"
+  eng="$HL_JIT_DIR/hljit-linux_$([ "$arch" = x86_64 ] && echo x86_64 || echo aarch64)"
   [ -x "$eng" ] || { echo "[ltp] no engine for $arch ($eng) — skipping arch"; continue; }
   bd="$OUT/bin/$arch"
   [ -d "$bd" ] || { echo "[ltp] no built tests for $arch — run build.sh"; continue; }
@@ -159,7 +159,7 @@ for arch in $ARCHES; do
   syspass=$((ok+td))
   spct=$(awk -v o="$syspass" -v t="$tot" 'BEGIN{ if(t>0) printf "%.1f", 100*o/t; else print "n/a"}')
   cpct=$(awk -v o="$ok"      -v t="$tot" 'BEGIN{ if(t>0) printf "%.1f", 100*o/t; else print "n/a"}')
-  printf 'dd-%-7s  syscall-assertion PASS %s/%s (%s%%)   clean-run %s/%s (%s%%)   [%s teardown-only, %s real gaps, %s oracle-nonpass excluded]\n' \
+  printf 'hl-%-7s  syscall-assertion PASS %s/%s (%s%%)   clean-run %s/%s (%s%%)   [%s teardown-only, %s real gaps, %s oracle-nonpass excluded]\n' \
     "$arch" "$syspass" "$tot" "$spct" "$ok" "$tot" "$cpct" "$td" "$gap" "$skp"
 done
 echo "  syscall-assertion PASS = every TPASS/TFAIL assertion matches the oracle (credits teardown-only)."
@@ -170,7 +170,7 @@ awk -F'\t' '$6!="skip"{tot[$1"|"$2]++; if($6=="ok"||$6=="TEARDOWN")ok[$1"|"$2]++
   END{for(k in tot){split(k,a,"|"); printf "  %-8s %-10s %d/%d\n", a[1], a[2], ok[k]+0, tot[k]}}' "$RES" | sort
 echo
 echo "TEARDOWN (assertions PASS but dd exits nonzero — systemic harness fork/exit gap):"
-awk -F'\t' '$6=="TEARDOWN"{printf "  %-8s %-12s %-24s dd_exit=%s\n",$1,$2,$3,$7}' "$RES" | sort || true
+awk -F'\t' '$6=="TEARDOWN"{printf "  %-8s %-12s %-24s hl_exit=%s\n",$1,$2,$3,$7}' "$RES" | sort || true
 echo
 echo "DD-GAP (dd assertions != oracle — real per-syscall compliance gaps):"
 awk -F'\t' '$6=="DD-GAP"{printf "  %-8s %-12s %-24s oracle=%s dd=%s exit=%s\n",$1,$2,$3,$4,$5,$7}' "$RES" | sort || true

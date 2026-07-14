@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dd-shim-cudart manifest extractor. The CUDA analogue of hl-shim-cuda/registry/extract_cuda_manifest.py,
+# hl-shim-cudart manifest extractor. The CUDA analogue of hl-shim-cuda/registry/extract_cuda_manifest.py,
 # but for the RUNTIME API. The CUDA Runtime API has no Khronos-style XML registry, so the entry-point
 # surface is extracted from an OPEN, CLEAN-ROOM C source of `cuda*`/`__cuda*` definitions rather than a
 # vendor header.

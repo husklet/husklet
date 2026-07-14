@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dd-tests/scenarios/pty-conformance.sh -- EXHAUSTIVE terminal/pty conformance, driven through a REAL
+# hl-tests/scenarios/pty-conformance.sh -- EXHAUSTIVE terminal/pty conformance, driven through a REAL
 # pseudo-terminal and diffed against the real-docker oracle. This is the suite that guards the whole
 # interactive-terminal surface so no terminal bug can silently ship again.
 #
@@ -16,18 +16,18 @@
 # Every interactive case is BYTE-DIFFED against the same case on the real-docker oracle, so "matches real
 # docker" is proven, not assumed.
 #
-#   BACKEND=dd   bash dd-tests/scenarios/pty-conformance.sh     # against a private dd daemon (default)
-#   BACKEND=real bash dd-tests/scenarios/pty-conformance.sh     # against the docker oracle (ground truth)
-#   BACKEND=both bash dd-tests/scenarios/pty-conformance.sh     # run dd AND oracle, DIFF every transcript
+#   BACKEND=dd   bash hl-tests/scenarios/pty-conformance.sh     # against a private dd daemon (default)
+#   BACKEND=real bash hl-tests/scenarios/pty-conformance.sh     # against the docker oracle (ground truth)
+#   BACKEND=both bash hl-tests/scenarios/pty-conformance.sh     # run dd AND oracle, DIFF every transcript
 #
-# Env: HL_IMAGES, HL_DAEMON (the dd-daemon binary), HL_JIT_DIR, REAL_CONTEXT (oracle docker context).
+# Env: HL_IMAGES, HL_DAEMON (the hl-daemon binary), HL_JIT_DIR, REAL_CONTEXT (oracle docker context).
 # Self-skips cleanly if python3 / the images / the backend aren't available.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BACKEND="${BACKEND:-dd}"
 REAL_CONTEXT="${REAL_CONTEXT:-default}"
-IMAGES="${HL_IMAGES:-$HOME/.dd/images}"
-DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
+IMAGES="${HL_IMAGES:-$HOME/.hl/images}"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/hl-daemon}"
 PY="$(command -v python3 || true)"
 NODE_IMG="${NODE_IMG:-node:20-alpine}"
 PY_IMG="${PY_IMG:-python:3.12-alpine}"
@@ -82,11 +82,11 @@ BS_KEYS='[["1",0.3],["2",0.3],["8",0.3],["",0.5],["3",0.3],["\r",1.2]]'
 # ---- bring up whichever backend(s) we diff against -----------------------------------------------------
 HL_DOCKER=""; REAL_DOCKER=""
 start_dd() {
-  [ -x "$DAEMON" ] || { echo "SKIP: dd-daemon not built ($DAEMON)"; return 1; }
-  SOCK="$ROOT/target/dd-ptyconf.sock"; STATE="$(mktemp -d "${TMPDIR:-/tmp}/dd-ptyc.XXXXXX")"
+  [ -x "$DAEMON" ] || { echo "SKIP: hl-daemon not built ($DAEMON)"; return 1; }
+  SOCK="$ROOT/target/hl-ptyconf.sock"; STATE="$(mktemp -d "${TMPDIR:-/tmp}/hl-ptyc.XXXXXX")"
   rm -f "$SOCK"
   env HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE/state.json" HL_VOLUMES="$STATE/vol" \
-    ${HL_JIT_DIR:+HL_JIT_DIR="$HL_JIT_DIR"} "$DAEMON" >"$ROOT/target/dd-ptyconf.log" 2>&1 &
+    ${HL_JIT_DIR:+HL_JIT_DIR="$HL_JIT_DIR"} "$DAEMON" >"$ROOT/target/hl-ptyconf.log" 2>&1 &
   DPID=$!; trap 'kill -9 $DPID 2>/dev/null; rm -rf "$STATE" "$SOCK"' EXIT
   n=0; until [ -S "$SOCK" ] || [ $n -ge 60 ]; do sleep 0.25; n=$((n+1)); done
   [ -S "$SOCK" ] || { echo "SKIP: dd daemon failed to start"; return 1; }
@@ -101,20 +101,20 @@ have_img() { $1 image inspect "$2" >/dev/null 2>&1; }
 #      mode) require the dd transcript to BYTE-MATCH the oracle. ------------------------------------------
 icase() {  # icase <name> <img> <keys> <want-substr-in-repr> -- <cmd...>
   local name="$1" img="$2" keys="$3" want="$4"; shift 4; shift
-  local dd_out="" real_out=""
+  local hl_out="" real_out=""
   if [ -n "$HL_DOCKER" ]; then
     have_img "$HL_DOCKER" "$img" || { skipc "$name (dd)" "image $img absent"; return; }
-    dd_out="$(drive "$HL_DOCKER" "$img" "$keys" -- "$@")"
-    case "$dd_out" in *"$want"*) ok "$name (dd)";; *) bad "$name (dd)" "want [$want] in $dd_out";; esac
+    hl_out="$(drive "$HL_DOCKER" "$img" "$keys" -- "$@")"
+    case "$hl_out" in *"$want"*) ok "$name (dd)";; *) bad "$name (dd)" "want [$want] in $hl_out";; esac
   fi
   if [ -n "$REAL_DOCKER" ]; then
     have_img "$REAL_DOCKER" "$img" || { skipc "$name (real)" "image $img absent"; return; }
     real_out="$(drive "$REAL_DOCKER" "$img" "$keys" -- "$@")"
     case "$real_out" in *"$want"*) ok "$name (real)";; *) bad "$name (real)" "want [$want] in $real_out";; esac
   fi
-  if [ -n "$dd_out" ] && [ -n "$real_out" ]; then
-    [ "$dd_out" = "$real_out" ] && ok "$name (dd==oracle byte-exact)" \
-      || bad "$name (dd!=oracle)" "dd=$dd_out oracle=$real_out"
+  if [ -n "$hl_out" ] && [ -n "$real_out" ]; then
+    [ "$hl_out" = "$real_out" ] && ok "$name (dd==oracle byte-exact)" \
+      || bad "$name (dd!=oracle)" "dd=$hl_out oracle=$real_out"
   fi
 }
 

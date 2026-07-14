@@ -66,7 +66,7 @@ fn scan_for_binary(rootfs: &Path) -> Option<Arch> {
 /// image with its binary at a non-standard path is still detected.
 pub fn detect_arch(rootfs: &Path) -> Option<Arch> {
     // Includes darwin-userland paths (`profile/bin/*`, `opt/homebrew/bin/*`) so a *pulled* macOS image
-    // — whose `dd-image.json` sidecar didn't survive the registry round-trip — is still detected as
+    // — whose `hl-image.json` sidecar didn't survive the registry round-trip — is still detected as
     // darwin from its packed Mach-O binaries. `sniff_path` follows the profile symlinks to the real
     // Mach-O in the packed `/nix` (or Homebrew) closure.
     for probe in [

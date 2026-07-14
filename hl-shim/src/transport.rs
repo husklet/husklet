@@ -1,7 +1,7 @@
 //! Guest→host GPU-exec transport: the wire the guest producer drives and the host executor drains.
 //!
 //! Faithful Rust port of the transport that lived inline in `gl_shim.c` (`exec_stream`, `write_full`,
-//! the `renderD128` `DD_IOCTL_GPU_ALLOC`), plus the completion-wake seam (eventfd/futex) the future
+//! the `renderD128` `HL_IOCTL_GPU_ALLOC`), plus the completion-wake seam (eventfd/futex) the future
 //! shared-memory command ring will use. The *working* path today is a persistent `SOCK_STREAM` Unix
 //! socket carrying, per frame, a 16-byte header + the encoded IR byte-stream, answered by a 1-byte ack.
 
@@ -11,10 +11,10 @@ use std::os::unix::net::UnixStream;
 use crate::ir;
 
 /// Default host GPU-exec socket path (overridable via `$HL_GPU_EXEC`); matches gl_shim.c.
-pub const DEFAULT_EXEC_SOCK: &str = "/run/user/0/dd-gpu-0";
+pub const DEFAULT_EXEC_SOCK: &str = "/run/user/0/hl-gpu-0";
 
 /// Per-frame execution-response bytes the host executor writes after replaying a submit (see
-/// `dd-display`'s `run_executor`, which writes `[rendered as u8]`). This is v1 of the exec response
+/// `hl-display`'s `run_executor`, which writes `[rendered as u8]`). This is v1 of the exec response
 /// protocol: a single status byte. `ACK_OK` means the frame replayed and its render is committed; any
 /// other value — notably `ACK_FAIL` — means the host rejected or failed the frame and the guest must NOT
 /// treat it as presented. A later revision can widen this to a typed response (status + error detail +
@@ -23,13 +23,13 @@ pub const DEFAULT_EXEC_SOCK: &str = "/run/user/0/dd-gpu-0";
 pub const ACK_OK: u8 = 1;
 /// The host executor's documented failure acknowledgement (replay error / missing surface).
 pub const ACK_FAIL: u8 = 0;
-/// Guest render node the `DD_IOCTL_GPU_ALLOC` ioctl targets.
+/// Guest render node the `HL_IOCTL_GPU_ALLOC` ioctl targets.
 pub const RENDER_NODE: &str = "/dev/dri/renderD128";
 
-/// The `DD_IOCTL_GPU_ALLOC` request code and dma-buf constants (must match `dd_gpu.h` / the engine's
-/// `mem.c` handler and gl_shim.c). These describe the guest↔engine ioctl ABI, not the dd-gpu IR.
-pub const DD_IOCTL_GPU_ALLOC: u64 = 0xC020_DD01;
-pub const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
+/// The `HL_IOCTL_GPU_ALLOC` request code and dma-buf constants (must match `hl_gpu.h` / the engine's
+/// `mem.c` handler and gl_shim.c). These describe the guest↔engine ioctl ABI, not the hl-gpu IR.
+pub const HL_IOCTL_GPU_ALLOC: u64 = 0xC020_DD01;
+pub const HL_DMABUF_MOD_MAGIC: u32 = 0x6464;
 pub const DRM_FMT_XRGB8888: u32 = 0x3432_5258;
 
 /// Mirror of the C `struct hl_gpu_alloc` the ioctl reads/writes. `#[repr(C)]` pins the field order and
@@ -46,7 +46,7 @@ pub struct GpuAlloc {
     pub ptr: u64,
 }
 
-// ---- minimal libc surface (dependency-free, matching dd-gpu / dd-term-core discipline) -------------
+// ---- minimal libc surface (dependency-free, matching hl-gpu / hl-term-core discipline) -------------
 extern "C" {
     fn ioctl(fd: i32, request: core::ffi::c_ulong, arg: *mut core::ffi::c_void) -> i32;
     fn eventfd(initval: core::ffi::c_uint, flags: i32) -> i32;
@@ -98,14 +98,14 @@ pub mod renderd {
     use std::os::unix::io::AsRawFd;
 
     /// Allocate an engine-backed surface (rung-2 IOSurface/dma-buf) of `width`x`height`. Ports
-    /// gl_shim.c's `open("/dev/dri/renderD128"); ioctl(DD_IOCTL_GPU_ALLOC,&g_surf)`.
+    /// gl_shim.c's `open("/dev/dri/renderD128"); ioctl(HL_IOCTL_GPU_ALLOC,&g_surf)`.
     ///
     /// The opened render-node fd is intentionally leaked for process lifetime (as in gl_shim.c: the
     /// surface's dma-buf fd returned in `GpuAlloc::fd` must outlive it). Returns the filled `GpuAlloc`.
     pub fn alloc(width: u32, height: u32, format: u32) -> std::io::Result<GpuAlloc> {
         let f = OpenOptions::new().read(true).write(true).open(RENDER_NODE)?;
         let mut a = GpuAlloc { width, height, format, ..Default::default() };
-        let rc = unsafe { ioctl(f.as_raw_fd(), DD_IOCTL_GPU_ALLOC as _, &mut a as *mut _ as *mut _) };
+        let rc = unsafe { ioctl(f.as_raw_fd(), HL_IOCTL_GPU_ALLOC as _, &mut a as *mut _ as *mut _) };
         if rc != 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -365,8 +365,8 @@ impl FrameBuilder {
 }
 
 /// A completion doorbell for the future shared-memory command ring (the eventfd/futex wake gfxstream
-/// uses). The current socket path blocks on the ack instead; this is the forward seam so `dd-shim-vk`
-/// and a ring-mode `dd-shim-gl` can signal without re-inventing it.
+/// uses). The current socket path blocks on the ack instead; this is the forward seam so `hl-shim-vk`
+/// and a ring-mode `hl-shim-gl` can signal without re-inventing it.
 pub struct Doorbell {
     fd: i32,
 }
@@ -442,7 +442,7 @@ mod tests {
     fn exec_conn_frames_header_then_ir_then_reads_ack() {
         // Stand up an in-process "host executor" on a socketpair-style Unix listener and assert the
         // ExecConn writes exactly [id,w,h,len][ir] and consumes one ack byte.
-        let dir = std::env::temp_dir().join(format!("dd-shim-exec-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hl-shim-exec-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sock = dir.join("exec.sock");
         let _ = std::fs::remove_file(&sock);
@@ -480,7 +480,7 @@ mod tests {
         // Mirrors the tracked gate `executor_transport_rejects_a_failed_frame_acknowledgement`: a host that
         // reads the frame and replies ACK_FAIL (0) must make submit() return Err, not be treated as a
         // successful present.
-        let dir = std::env::temp_dir().join(format!("dd-shim-nack-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hl-shim-nack-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sock = dir.join("nack.sock");
         let _ = std::fs::remove_file(&sock);
@@ -516,7 +516,7 @@ mod tests {
             body
         }
 
-        let dir = std::env::temp_dir().join(format!("dd-shim-reconnect-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hl-shim-reconnect-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sock = dir.join("exec.sock");
         let _ = std::fs::remove_file(&sock);
@@ -632,7 +632,7 @@ mod tests {
             body
         }
 
-        let dir = std::env::temp_dir().join(format!("dd-shim-kill-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hl-shim-kill-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let sock = dir.join("exec.sock");
         let _ = std::fs::remove_file(&sock);

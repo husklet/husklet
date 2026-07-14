@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Cross-build dd's libcuda.so.1 (CUDA Driver-API) + libcudart.so (CUDA Runtime-API, layered on it) for
 # the Linux guest arches, and run the ABI tests natively. MUST run Linux-side (cross-gcc is Linux-only)
-# — see the repo memory note "matrix runs linux-side". Mirrors ../../dd-nvml/build.sh.
+# — see the repo memory note "matrix runs linux-side". Mirrors ../../hl-nvml/build.sh.
 #
 #   ./build.sh            # build aarch64 + x86_64 .so into ./out/<arch>/ and run the native ABI tests
-#   ./build.sh install    # also copy the built .so into ~/.dd/cuda/<arch>/ (where the launcher looks)
+#   ./build.sh install    # also copy the built .so into ~/.hl/cuda/<arch>/ (where the launcher looks)
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT="out"
@@ -59,7 +59,7 @@ gcc -O2 -o "$OUT/test_cudart" test_cudart.c -L"$OUT/native" -l:libcudart.so.1 \
 
 if [ "${1:-}" = "install" ]; then
   for arch in aarch64 x86_64; do
-    dst="$HOME/.dd/cuda/$arch"
+    dst="$HOME/.hl/cuda/$arch"
     mkdir -p "$dst"
     cp "$OUT/$arch/libcuda.so.1"   "$dst/"; ln -sf libcuda.so.1   "$dst/libcuda.so"
     cp "$OUT/$arch/libcudart.so.1" "$dst/"; ln -sf libcudart.so.1 "$dst/libcudart.so"

@@ -1,13 +1,13 @@
-/* dd-shim-cuda end-to-end COMPUTE test — the functional milestone through the deployed cdylib.
+/* hl-shim-cuda end-to-end COMPUTE test — the functional milestone through the deployed cdylib.
  *
  * A plain C program (NOT linked against the shim) dlopen()s the built libcuda.so.1 and drives a real
  * CUDA vector-add exactly as an unmodified CUDA app / libcudart would: init → device → context →
  * cuMemAlloc → cuMemcpyHtoD → cuModuleLoadData(PTX) → cuModuleGetFunction → cuLaunchKernel →
  * cuMemcpyDtoH, then asserts the read-back output is arithmetically correct (c[i] == a[i] + b[i]).
  *
- * This proves the whole guest path executes end-to-end — libcuda(shim) → shared dd-gpu IR → dd-gpu
+ * This proves the whole guest path executes end-to-end — libcuda(shim) → shared hl-gpu IR → hl-gpu
  * software backend (the CPU PTX interpreter, hl-gpu/cuda/cuda_shim.c's parity oracle) → readback — on
- * this host with NO GPU. It is the CUDA analogue of dd-shim-gl reaching parity with gl_shim.c.
+ * this host with NO GPU. It is the CUDA analogue of hl-shim-gl reaching parity with gl_shim.c.
  *
  *   build+run:  cc tests/compute.c -ldl -o /tmp/cuda_compute && /tmp/cuda_compute <path-to-libcuda.so>
  */
@@ -21,7 +21,7 @@ typedef unsigned long long CUdeviceptr;
 
 /* Canonical nvcc-style PTX (sm_86) for vecadd(const float* a, const float* b, float* c, int n):
  * c[i] = a[i] + b[i], with the standard mad-computed global index and an `if (i >= n) return;` guard.
- * Byte-identical to dd_gpu::ptx::VECADD_PTX (the shim's parity reference kernel). */
+ * Byte-identical to hl_gpu::ptx::VECADD_PTX (the shim's parity reference kernel). */
 static const char *VECADD_PTX =
     ".version 7.5\n"
     ".target sm_86\n"

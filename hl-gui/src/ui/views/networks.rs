@@ -27,7 +27,7 @@ pub(crate) fn network_detail(
     let mut actions = Vec::new();
     // The predefined bridge/host/none networks can't be removed.
     if !matches!(n.name.as_str(), "bridge" | "host" | "none") {
-        actions.push(text_btn("Delete", "dd-danger", sender, {
+        actions.push(text_btn("Delete", "hl-danger", sender, {
             let id = n.id.clone();
             move || Msg::RemoveNetwork(id.clone())
         }));

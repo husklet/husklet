@@ -1,6 +1,6 @@
 //! `docker context` integration. Primary path uses the `docker` CLI; when it isn't installed we
 //! write the `~/.docker/contexts` metadata directly (the dir name is the lowercase SHA-256 of the
-//! context name). Either way we point at `unix://~/.dd/run/docker.sock`.
+//! context name). Either way we point at `unix://~/.hl/run/docker.sock`.
 
 use crate::cli::ContextCmd;
 use crate::context;
@@ -11,7 +11,7 @@ use std::io::Write;
 use std::process::Command;
 
 /// Context name surfaced in `docker context ls`.
-pub const NAME: &str = "dd";
+pub const NAME: &str = "hl";
 
 fn have_docker() -> bool {
     Command::new("docker")

@@ -1,6 +1,6 @@
 #![cfg(target_os = "macos")] // drives the real macOS GPU mach bridge (hl_display::metal::*); no-op on Linux
 //! Engine→compositor allocation-generation channel proof. The generation the engine stamps on an
-//! IOSurface (dd-jit-darwin vfs.c `hl_gpu_alloc`/`hl_gpu_send_port`) must reach the compositor over the
+//! IOSurface (hl-jit-darwin vfs.c `hl_gpu_alloc`/`hl_gpu_send_port`) must reach the compositor over the
 //! GPU mach bridge and become the id's authenticated `IOSurfaceMetadata::generation`. This starts the
 //! REAL bridge (`hl_display::metal::start_gpu_bridge`) and runs a C helper that sends the SAME
 //! `hl_gpu_msg_t` the engine sends — a real IOSurface send-right + id + generation — then asserts
@@ -37,14 +37,14 @@ fn build_sender(out: &Path) -> Option<PathBuf> {
 
 #[test]
 fn engine_supplied_generation_reaches_the_compositor_over_the_mach_bridge() {
-    let tmp = std::env::temp_dir().join(format!("dd-gen-mach-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("hl-gen-mach-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
     let Some(sender) = build_sender(&tmp) else {
         return; // no toolchain: skip
     };
 
     // A per-process bridge name so concurrent test binaries don't collide on the bootstrap service.
-    let bridge = format!("com.dd.display.gpu.test.{}", std::process::id());
+    let bridge = format!("com.hl.display.gpu.test.{}", std::process::id());
     std::env::set_var("HL_GPU_BRIDGE_NAME", &bridge);
     assert!(
         hl_display::metal::start_gpu_bridge(),

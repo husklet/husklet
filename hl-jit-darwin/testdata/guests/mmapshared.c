@@ -10,7 +10,7 @@
 #define SZ 8192
 
 int main(void) {
-    const char *path = "/tmp/dd_mmapshared.bin";
+    const char *path = "/tmp/hl_mmapshared.bin";
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) { perror("open"); return 1; }
     if (ftruncate(fd, SZ) < 0) { perror("ftruncate"); return 1; }

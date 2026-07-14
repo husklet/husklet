@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// A process-unique temp path `<tmp>/dd-reg-body-<pid>-<seq>.bin` for a request body, so concurrent
+/// A process-unique temp path `<tmp>/hl-reg-body-<pid>-<seq>.bin` for a request body, so concurrent
 /// `put_bytes` calls in ONE process never share (and clobber) the same file.
 fn reg_body_tmp() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("dd-reg-body-{}-{n}.bin", std::process::id()))
+    std::env::temp_dir().join(format!("hl-reg-body-{}-{n}.bin", std::process::id()))
 }
 
 pub(in crate::registry) fn get(url: &str, accept: Option<&str>, token: Option<&str>) -> Result<Resp, Error> {
@@ -133,7 +133,7 @@ mod tests {
     use std::net::TcpListener;
 
     // Finding 7: two `put_bytes`-class calls must get DISTINCT temp body files (was a single fixed
-    // `dd-reg-body-<pid>.bin`, so concurrent calls clobbered each other's body).
+    // `hl-reg-body-<pid>.bin`, so concurrent calls clobbered each other's body).
     #[test]
     fn reg_body_tmp_is_unique_per_call() {
         let a = reg_body_tmp();

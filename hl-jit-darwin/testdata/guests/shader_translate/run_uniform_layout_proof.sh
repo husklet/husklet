@@ -7,9 +7,9 @@ set -eu
 cd "$(dirname "$0")"
 
 ROOT="$(cd ../../.. && pwd)"
-GL_SHIM="$ROOT/dd-tests/guests/gl_shim.c"
+GL_SHIM="$ROOT/hl-tests/guests/gl_shim.c"
 TMPBASE="${HL_SHADER_TRANSLATE_TMP:-$ROOT/target-chrome-codex/shader-translate-tmp}"
-TMPDIR="$TMPBASE/dd-uniform-layout.$$"
+TMPDIR="$TMPBASE/hl-uniform-layout.$$"
 
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT INT TERM

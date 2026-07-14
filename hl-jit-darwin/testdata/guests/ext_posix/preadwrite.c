@@ -6,7 +6,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_prw_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_prw_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     char zeros[100] = {0};
     write(fd, zeros, sizeof zeros);

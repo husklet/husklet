@@ -6,7 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 int main(void) {
-    const char *path = "/tmp/dd_fifo_mw";
+    const char *path = "/tmp/hl_fifo_mw";
     unlink(path); mkfifo(path, 0644);
     for (int k = 0; k < 2; k++) {
         if (fork() == 0) { int w = open(path, O_WRONLY); for (int i = 1; i <= 1000; i++) write(w, &i, sizeof i); close(w); _exit(0); }

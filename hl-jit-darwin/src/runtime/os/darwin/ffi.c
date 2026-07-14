@@ -1,4 +1,4 @@
-// dd-jit-darwin FFI spawn shim — the C side of the typed launch contract (see include/hl_api.h).
+// hl-jit-darwin FFI spawn shim — the C side of the typed launch contract (see include/hl_api.h).
 //
 // This TU deliberately references NO engine symbols (only libc: fork/execve/write/dup2/ioctl), so
 // it links into the Rust host process safely — the engine itself only ever runs in the spawned child.
@@ -75,7 +75,7 @@ pid_t hl_spawn(const char *engine_path, const uint8_t *config, size_t config_len
     char *slash = strrchr(cfgdir, '/');
     if (slash) *slash = '\0';
     else snprintf(cfgdir, sizeof cfgdir, ".");
-    snprintf(cfgpath, sizeof cfgpath, "%s/.ddjit-config-%ld-XXXXXX", cfgdir, (long)getpid());
+    snprintf(cfgpath, sizeof cfgpath, "%s/.hljit-config-%ld-XXXXXX", cfgdir, (long)getpid());
     int cfgfd = mkstemp(cfgpath);
     if (cfgfd < 0) return -1;
     int werr = write_all(cfgfd, config, config_len);

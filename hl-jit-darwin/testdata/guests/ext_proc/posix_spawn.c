@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
         return 7;
     }
     char out[128];
-    snprintf(out, sizeof out, "/tmp/dd_spawn_%d", (int)getpid());
+    snprintf(out, sizeof out, "/tmp/hl_spawn_%d", (int)getpid());
 
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);

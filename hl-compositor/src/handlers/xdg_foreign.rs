@@ -14,9 +14,9 @@
 
 use smithay::wayland::xdg_foreign::{XdgForeignHandler, XdgForeignState};
 
-use crate::DdState;
+use crate::HlState;
 
-impl XdgForeignHandler for DdState {
+impl XdgForeignHandler for HlState {
     fn xdg_foreign_state(&mut self) -> &mut XdgForeignState {
         &mut self.xdg_foreign
     }

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# dd-tests/scenarios/compose.sh -- end-to-end Docker Compose scenarios against dd-daemon.
+# hl-tests/scenarios/compose.sh -- end-to-end Docker Compose scenarios against hl-daemon.
 #
 # Compose is the real stress test of the Engine API: one `compose up` drives image pulls, a project
 # network (create + connect), multi-container create/start with labels, label-filtered `ps`, log
 # multiplexing, `exec`, and an orderly `down` (stop + remove containers + remove the network). It
 # exercises far more of the API surface, and in a more demanding order, than the plain CLI does.
 #
-#   bash dd-tests/scenarios/compose.sh
+#   bash hl-tests/scenarios/compose.sh
 #
 # Requires the compose v2 plugin (`docker compose`) or the v1 binary (`docker-compose`). If neither is
 # installed this self-skips with rc=0 (so CI on a compose-less host stays green). Run after `make jit`.
 #
-# Env: HL_IMAGES (image dir, default poc/images), HL_DAEMON (daemon binary, default target/release/dd-daemon).
+# Env: HL_IMAGES (image dir, default poc/images), HL_DAEMON (daemon binary, default target/release/hl-daemon).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
-DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
-SOCK="$ROOT/dd-compose.sock"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/hl-daemon}"
+SOCK="$ROOT/hl-compose.sock"
 export DOCKER_HOST="unix://$SOCK"
 
 # ---- pick a compose driver (v2 plugin preferred, v1 fallback) ----
@@ -35,12 +35,12 @@ has() { if echo "$2" | grep -qF "$3"; then echo "  ok   $1"; pass=$((pass+1)); e
 no()  { if echo "$2" | grep -qF "$3"; then echo "  FAIL $1: [$2] still has [$3]"; fail=$((fail+1)); else echo "  ok   $1"; pass=$((pass+1)); fi; }
 
 # ---- bring up the daemon on a private socket ----
-SCEN_LOG="$ROOT/dd-compose.log"
-pkill -x dd-daemon 2>/dev/null
+SCEN_LOG="$ROOT/hl-compose.log"
+pkill -x hl-daemon 2>/dev/null
 rm -f "$SOCK"
 # Fully isolate this daemon: private socket AND private state/volumes (a fresh per-scenario temp
-# dir), so it starts from empty state and never reads or mutates the developer's real ~/.dd.
-STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dd-compose.XXXXXX")"
+# dir), so it starts from empty state and never reads or mutates the developer's real ~/.hl.
+STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hl-compose.XXXXXX")"
 export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!

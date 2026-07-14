@@ -1,6 +1,6 @@
 //! Daemon-write coherence (the docker-cp epoch blind spot).
 //!
-//! The engine's path/metadata caches (dd-jit fscache.c) are invalidated by GUEST syscalls, but the daemon
+//! The engine's path/metadata caches (hl-jit fscache.c) are invalidated by GUEST syscalls, but the daemon
 //! also writes into a LIVE container's filesystem from outside any engine — `docker cp`
 //! (PUT /containers/{id}/archive) and the exec-spawn /etc/{hosts,resolv.conf,hostname} rewrites — which no
 //! guest syscall announces, so a cached ENOENT could hide a file docker-cp just delivered. The contract
@@ -11,7 +11,7 @@
 //! it moves. The daemon calls [`fsgen_bump`] AFTER completing any such write, making the write visible to
 //! the guest no later than its next syscall (kernel-dcache semantics, like real Docker on Linux).
 //!
-//! Kept together as a unit: this module will later move to dd-jit wholesale.
+//! Kept together as a unit: this module will later move to hl-jit wholesale.
 use super::*;
 
 /// The container's external-writer generation file (see the module comment above).

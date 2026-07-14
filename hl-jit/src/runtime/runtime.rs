@@ -10,7 +10,7 @@ use hl_jit_darwin::{Guest, SpawnConfig};
 /// The runtime — the host backend that runs containers. Construct with [`Runtime::new`].
 ///
 /// The runtime owns the host/operator-level defaults that apply to EVERY container it launches, so a
-/// container manager (e.g. `dd-daemon`) never handles them itself: the persistent translated-code cache
+/// container manager (e.g. `hl-daemon`) never handles them itself: the persistent translated-code cache
 /// (on unless `HL_PCACHE=0`) and the default guest sandbox (`HL_SANDBOX=1`). Set the cache location with
 /// [`Runtime::cache_dir`].
 pub struct Runtime {
@@ -23,7 +23,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Create a runtime bound to this host's backend (`dd-jit-darwin` on macOS), reading the operator
+    /// Create a runtime bound to this host's backend (`hl-jit-darwin` on macOS), reading the operator
     /// env defaults (`HL_PCACHE`, `HL_SANDBOX`, `HL_JIT_PCACHE_DIR`).
     pub fn new() -> Result<Self, Error> {
         Ok(Runtime {
@@ -114,7 +114,7 @@ impl Runtime {
     }
 
     /// Run a container. Returns a handle to wait on / signal. Forks the linked engine directly via the
-    /// typed FFI (`hl_spawn`) — no `bash`, no separate `ddjit-*` binary, no `DD_*` environment. The
+    /// typed FFI (`hl_spawn`) — no `bash`, no separate `hljit-*` binary, no `HL_*` environment. The
     /// child inherits the host stdio.
     pub fn run(&self, c: &Container) -> Result<RunHandle, Error> {
         if !hl_jit_darwin::available(c.guest) {

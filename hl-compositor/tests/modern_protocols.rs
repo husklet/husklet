@@ -16,7 +16,7 @@
 //! ONE `Display`/client per the note in `client_roundtrip.rs` about wayland-server's process-global
 //! state. Runs headlessly on Linux (libxkbcommon present) and macOS.
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use hl_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
@@ -121,10 +121,10 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
 
 #[test]
 fn modern_protocols_bind_and_roundtrip() {
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
     let last_sid = Arc::new(Mutex::new(None));
-    let mut state = DdState::new(dh.clone(), Box::new(CountingPresenter { frames: 0, last_sid: last_sid.clone() }));
+    let mut state = HlState::new(dh.clone(), Box::new(CountingPresenter { frames: 0, last_sid: last_sid.clone() }));
 
     let (client_fd, server_fd) = socketpair_nonblocking();
     dh.insert_client(
@@ -241,7 +241,7 @@ fn modern_protocols_bind_and_roundtrip() {
     c.conn
         .send(&Message::new(tablet_mgr, 0).u32(tablet_seat).u32(seat)); // get_tablet_seat(id, seat)
     pump!();
-    state.add_tablet("dd-virtual-tablet");
+    state.add_tablet("hl-virtual-tablet");
     display.flush_clients().unwrap();
     c.drain();
     assert!(

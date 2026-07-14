@@ -10,7 +10,7 @@ pub fn group() -> ScenGroup {
     sgroup("process", vec![
         // ---- env-var passthrough (-e) ---------------------------------------------------------------
         scen("process/env-passthrough", "alpine:latest")
-            .host("docker run --rm $PLAT -e DD_ENV=hello123 $IMG printenv DD_ENV").has("hello123"),
+            .host("docker run --rm $PLAT -e HL_ENV=hello123 $IMG printenv HL_ENV").has("hello123"),
         scen("process/env-multiple", "alpine:latest")
             .host("docker run --rm $PLAT -e A=1 -e B=2 $IMG sh -c 'echo \"$A-$B\"'").has("1-2"),
 

@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *p = "/tmp/dd_sparse";
+    const char *p = "/tmp/hl_sparse";
     int fd = open(p, O_RDWR | O_CREAT | O_TRUNC, 0644);
     pwrite(fd, "A", 1, 0);
     pwrite(fd, "B", 1, 1 << 20); // 1 MiB -> creates a hole between

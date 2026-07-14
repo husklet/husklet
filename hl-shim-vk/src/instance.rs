@@ -49,7 +49,7 @@ unsafe fn requested_api_version(p_create_info: *const vk::InstanceCreateInfo) ->
 #[no_mangle]
 pub extern "C" fn vkEnumerateInstanceVersion(p_api_version: *mut u32) -> VkResult {
     if let Some(v) = unsafe { p_api_version.as_mut() } {
-        *v = state::DD_API_VERSION;
+        *v = state::HL_API_VERSION;
     }
     VK_SUCCESS
 }
@@ -109,11 +109,11 @@ pub extern "C" fn vkCreateInstance(
     };
     let requested = unsafe { requested_api_version(p_create_info) };
     // Phase-0 truthful version gate (gui_vk_capability_truth, audit §2.2). An app requesting an
-    // apiVersion NEWER than we advertise (`DD_API_VERSION` == 1.0) must be refused with
+    // apiVersion NEWER than we advertise (`HL_API_VERSION` == 1.0) must be refused with
     // `VK_ERROR_INCOMPATIBLE_DRIVER` — not just a greater *major* (which let a 1.4 request slip
     // through), but any greater variant/major/minor. Patch is ignored per spec (patch differences are
     // always compatible), so compare the version word with the low 12 patch bits masked off.
-    if (requested >> 12) > (state::DD_API_VERSION >> 12) {
+    if (requested >> 12) > (state::HL_API_VERSION >> 12) {
         return VK_ERROR_INCOMPATIBLE_DRIVER;
     }
 

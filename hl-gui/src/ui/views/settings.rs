@@ -14,7 +14,7 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
 
     let title = gtk::Label::new(Some("Settings"));
     title.set_xalign(0.0);
-    title.add_css_class("dd-h1");
+    title.add_css_class("hl-h1");
     s.append(&title);
 
     // About + locations.
@@ -22,18 +22,18 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
     let about = setting_card(&[
         ("Version", env!("HL_VERSION")),
         ("Socket", &m.socket.to_string_lossy()),
-        ("Images", &format!("{home}/.dd/images")),
-        ("State", &format!("{home}/.dd/state.json")),
+        ("Images", &format!("{home}/.hl/images")),
+        ("State", &format!("{home}/.hl/state.json")),
     ]);
     s.append(&about);
 
     // Command-line tool.
     let cli = gtk::Label::new(Some("Command-line tool"));
     cli.set_xalign(0.0);
-    cli.add_css_class("dd-h2");
+    cli.add_css_class("hl-h2");
     s.append(&cli);
     let cli_card = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    cli_card.add_css_class("dd-step-card");
+    cli_card.add_css_class("hl-step-card");
     cli_card.append(&action_row(
         "Install the dd CLI",
         "Adds dd to your terminal (~/.local/bin).",
@@ -47,7 +47,7 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
     // Reset (danger).
     let rz = gtk::Label::new(Some("Reset"));
     rz.set_xalign(0.0);
-    rz.add_css_class("dd-h2");
+    rz.add_css_class("hl-h2");
     s.append(&rz);
     let rt = gtk::Label::new(Some("Reset dd"));
     rt.set_xalign(0.0);
@@ -65,15 +65,15 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
     rtexts.append(&rt);
     rtexts.append(&rd);
     let rbtn = gtk::Button::with_label("Reset…");
-    rbtn.add_css_class("dd-btn");
-    rbtn.add_css_class("dd-danger");
+    rbtn.add_css_class("hl-btn");
+    rbtn.add_css_class("hl-danger");
     rbtn.set_valign(gtk::Align::Center);
     {
         let s2 = sender.clone();
         rbtn.connect_clicked(move |_| s2.input(Msg::ConfirmReset));
     }
     let rcard = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    rcard.add_css_class("dd-step-card");
+    rcard.add_css_class("hl-step-card");
     rcard.append(&rtexts);
     rcard.append(&rbtn);
     s.append(&rcard);
@@ -92,7 +92,7 @@ pub(crate) fn update_card(version: &str, sender: &ComponentSender<AppModel>) -> 
     texts.append(&t);
     texts.append(&d);
     let btn = gtk::Button::with_label("Install update");
-    btn.add_css_class("dd-btn");
+    btn.add_css_class("hl-btn");
     btn.add_css_class("suggested-action");
     btn.set_valign(gtk::Align::Center);
     {
@@ -100,7 +100,7 @@ pub(crate) fn update_card(version: &str, sender: &ComponentSender<AppModel>) -> 
         btn.connect_clicked(move |_| s.input(Msg::ApplyUpdate));
     }
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    row.add_css_class("dd-update-card");
+    row.add_css_class("hl-update-card");
     row.append(&texts);
     row.append(&btn);
     row.upcast()

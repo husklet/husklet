@@ -1,4 +1,4 @@
-//! dd-jit-darwin matrix runner — runs the engine × case matrix and prints a grouped, timed report.
+//! hl-jit-darwin matrix runner — runs the engine × case matrix and prints a grouped, timed report.
 //! This is the optional developer runner; `cargo test -p hl-jit-darwin --test suite` is the CI authority
 //! and shares the SAME case registry (tests/engine_matrix, included below via #[path]).
 //!
@@ -10,7 +10,7 @@
 use crate::support::{run, run_perf, Ctx, Engine, Status};
 use std::time::Instant;
 
-// The product-neutral engine-test harness, included crate-locally (was the `dd-tests` dev-dep).
+// The product-neutral engine-test harness, included crate-locally (was the `hl-tests` dev-dep).
 #[path = "../tests/support/mod.rs"]
 mod support;
 // Share the ONE Rust case registry with tests/suite.rs (no second catalog).
@@ -65,7 +65,7 @@ fn main() {
     };
 
     // Which engines MUST be present for this run to be a valid gate. The DEFAULT full run must exercise
-    // ALL three engines — if the dd-jit build failed to compile one (empty `DDJIT_<T>` env), its whole
+    // ALL three engines — if the hl-jit build failed to compile one (empty `DDJIT_<T>` env), its whole
     // lane would otherwise SILENTLY skip and the matrix would still report "0 failed" while the primary
     // arch was completely dark (the regression that shipped v0.9.56). An explicit `-e`/ENGINE=
     // narrowed run is the escape hatch: it opts into a single engine, so only that one is required.
@@ -205,12 +205,12 @@ fn main() {
 
     // HARD GATE: a required engine whose JIT binary didn't build is a FAILURE, not a silent skip.
     // Fold each missing engine into the fail count and name it loudly, so a dark lane can never coexist
-    // with a green "0 failed". `available()` is false when dd-jit's build.rs set an empty `DDJIT_<T>` env
+    // with a green "0 failed". `available()` is false when hl-jit's build.rs set an empty `DDJIT_<T>` env
     // after a failed C-engine compile (or the binary is otherwise absent).
     for &e in &missing {
         fail += 1;
         failures.push(format!(
-            "engine {} MISSING — its JIT binary was not built (failed dd-jit compile / empty HL_JIT_{} env); \
+            "engine {} MISSING — its JIT binary was not built (failed hl-jit compile / empty HL_JIT_{} env); \
              the ENTIRE {} lane was DARK (every case on it skipped, NOT tested)",
             e.label(), ekey(e).to_uppercase(), e.label()));
     }

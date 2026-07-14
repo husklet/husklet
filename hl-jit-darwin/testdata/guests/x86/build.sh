@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild the prebuilt x86-64 fixture binaries for the `x86` test group (dd-tests/src/cases/
+# Rebuild the prebuilt x86-64 fixture binaries for the `x86` test group (hl-tests/src/cases/
 # container.rs::x86). The binaries are COMMITTED next to this script — the harness runs them as-is
 # (Bin::Fixture), it never compiles them — because each one pins a specific binary FLAVOR the
 # on-the-fly `src()` builds don't cover (nolibc _start guests, static non-PIE glibc, static

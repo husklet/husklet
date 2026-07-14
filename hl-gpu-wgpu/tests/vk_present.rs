@@ -1,13 +1,13 @@
-//! End-to-end Vulkan WSI SWAPCHAIN render on REAL Metal, driven through dd-shim-vk's `vk*` API.
+//! End-to-end Vulkan WSI SWAPCHAIN render on REAL Metal, driven through hl-shim-vk's `vk*` API.
 //!
 //! The milestone this proves for increment 3: an app that goes through the full windowed-Vulkan WSI
-//! path dd-shim-vk now exports — `vkCreateWaylandSurfaceKHR` → `vkCreateSwapchainKHR` →
+//! path hl-shim-vk now exports — `vkCreateWaylandSurfaceKHR` → `vkCreateSwapchainKHR` →
 //! `vkGetSwapchainImagesKHR` → `vkAcquireNextImageKHR` → render into the acquired presentable image →
 //! `vkQueuePresentKHR` — produces the correct rendered frame in the swapchain image on a live Metal
 //! device. This is the same render→present IR a live `vkcube-wayland` emits; the live guest ships it to
-//! the host GPU-exec over `$HL_GPU_EXEC` and commits the IOSurface dma-buf to dd-display, whereas this
+//! the host GPU-exec over `$HL_GPU_EXEC` and commits the IOSurface dma-buf to hl-display, whereas this
 //! test (playing the host exec service) replays the render on the WgpuBackend and reads the presentable
-//! image back. `Cmd::Present` is the live wayland/dd-display step, so it is filtered before the
+//! image back. `Cmd::Present` is the live wayland/hl-display step, so it is filtered before the
 //! backend replay. Needs a Metal device → macOS only. Run: `cargo test -p hl-gpu-wgpu --test vk_present`.
 
 #![cfg(target_os = "macos")]
@@ -56,7 +56,7 @@ fn vk_swapchain_present_renders_on_real_metal() {
     // vkQueuePresentKHR ships the frame to the host GPU-exec socket ($HL_GPU_EXEC) and, unless disabled,
     // to the wayland compositor. Stand up a throwaway acking sink so the present succeeds off-guest; the
     // test itself replays the render IR on Metal below and checks the pixels.
-    let dir = std::env::temp_dir().join(format!("dd-vkpresent-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("hl-vkpresent-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let sock = dir.join("exec.sock");
     let _ = std::fs::remove_file(&sock);

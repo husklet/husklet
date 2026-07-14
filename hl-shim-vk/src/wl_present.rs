@@ -1,9 +1,9 @@
 //! Foreign-connection wayland/dma-buf present: commit the host-rendered swapchain IOSurface to the
 //! app's OWN `wl_surface` on the app's OWN `wl_display` — the piece that lands a windowed Vulkan app
-//! (vkcube) on dd-display.
+//! (vkcube) on hl-display.
 //!
-//! ## The rendezvous (oracle: `dd-tests/guests/gl_shim.c` `wl_commit`, ~l.1615)
-//! dd-display (`server.rs`) composites a dma-buf whose `modifier_hi & 0xffff == DD_DMABUF_MOD_MAGIC`
+//! ## The rendezvous (oracle: `hl-tests/guests/gl_shim.c` `wl_commit`, ~l.1615)
+//! hl-display (`server.rs`) composites a dma-buf whose `modifier_hi & 0xffff == HL_DMABUF_MOD_MAGIC`
 //! (`0x6464`) and `modifier_lo == <dd surface id>` by pulling the IOSurface that the GPU-exec channel
 //! already rendered into (our `ExecConn` `Cmd::Present` in `vkQueuePresentKHR`). So present is:
 //!   `zwp_linux_dmabuf_v1.create_params` → `params.add(fd, plane=0, offset=0, stride, mod_hi=0x6464,
@@ -18,7 +18,7 @@
 //! guest build needs no wayland dev libs; because the app already loaded `libwayland-client.so.0`, the
 //! `dlopen` resolves to the SAME instance, so our `wl_proxy` calls act on the app's real proxies.
 
-use hl_shim::transport::{Surface, DD_DMABUF_MOD_MAGIC};
+use hl_shim::transport::{Surface, HL_DMABUF_MOD_MAGIC};
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::OnceLock;
@@ -220,7 +220,7 @@ extern "C" fn on_global(
     }
     let ifc = unsafe { core::ffi::CStr::from_ptr(interface) };
     if std::env::var_os("HL_SHIM_DEBUG").is_some() {
-        eprintln!("[dd-shim-vk] wl global: name={name} iface={:?} v{version}", ifc);
+        eprintln!("[hl-shim-vk] wl global: name={name} iface={:?} v{version}", ifc);
     }
     if ifc.to_bytes() != b"zwp_linux_dmabuf_v1" {
         return;
@@ -265,7 +265,7 @@ fn ensure_dmabuf(w: &Wl, display: *mut c_void) -> Option<*mut c_void> {
         let dbg = std::env::var_os("HL_SHIM_DEBUG").is_some();
         if registry.is_null() {
             if dbg {
-                eprintln!("[dd-shim-vk] ensure_dmabuf: get_registry returned NULL");
+                eprintln!("[hl-shim-vk] ensure_dmabuf: get_registry returned NULL");
             }
             return None;
         }
@@ -275,7 +275,7 @@ fn ensure_dmabuf(w: &Wl, display: *mut c_void) -> Option<*mut c_void> {
         let added = (w.proxy_add_listener)(registry, l.as_ptr() as *mut *mut c_void, core::ptr::null_mut());
         let rt = (w.display_roundtrip)(display); // deliver the globals + our bind
         if dbg {
-            eprintln!("[dd-shim-vk] ensure_dmabuf: add_listener={added} roundtrip={rt} bound={}", DMABUF_PROXY.get().is_some());
+            eprintln!("[hl-shim-vk] ensure_dmabuf: add_listener={added} roundtrip={rt} bound={}", DMABUF_PROXY.get().is_some());
         }
     }
     DMABUF_PROXY.get().map(|p| *p as *mut c_void)
@@ -291,13 +291,13 @@ pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
     let dbg = std::env::var_os("HL_SHIM_DEBUG").is_some();
     if display == 0 || surface == 0 || surf.fd < 0 {
         if dbg {
-            eprintln!("[dd-shim-vk] wl_present: bad args display={display:#x} surface={surface:#x} fd={}", surf.fd);
+            eprintln!("[hl-shim-vk] wl_present: bad args display={display:#x} surface={surface:#x} fd={}", surf.fd);
         }
         return false;
     }
     let Some(w) = wl() else {
         if dbg {
-            eprintln!("[dd-shim-vk] wl_present: libwayland-client dlopen/dlsym FAILED");
+            eprintln!("[hl-shim-vk] wl_present: libwayland-client dlopen/dlsym FAILED");
         }
         return false;
     };
@@ -305,7 +305,7 @@ pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
     let wl_surface = surface as *mut c_void;
     let Some(dmabuf) = ensure_dmabuf(w, display) else {
         if dbg {
-            eprintln!("[dd-shim-vk] wl_present: zwp_linux_dmabuf_v1 global NOT bound");
+            eprintln!("[hl-shim-vk] wl_present: zwp_linux_dmabuf_v1 global NOT bound");
         }
         return false;
     };
@@ -321,7 +321,7 @@ pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
         // params.add(fd, plane_idx=0, offset=0, stride, modifier_hi=magic|generation, modifier_lo=id).
         // The generation (modifier_hi bits 17..=31) lets the compositor reject a stale reference whose
         // id was retired and reissued; 0 == unversioned (see transport::Surface::generation).
-        let modifier_hi = DD_DMABUF_MOD_MAGIC | ((surf.generation & 0x7fff) << 17);
+        let modifier_hi = HL_DMABUF_MOD_MAGIC | ((surf.generation & 0x7fff) << 17);
         (w.marshal_flags)(
             params,
             PARAMS_ADD,

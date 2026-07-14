@@ -46,7 +46,7 @@ pub(super) fn linuxsys() -> Group {
             // in the child and re-arms the inherited interest from its per-instance table).
             src("epoll-fork-inherit", "epoll_fork_inherit.c").oracle(),
             // poll/select/pselect/ppoll signal+timeout corners: the select02 HANG regression (a blocked,
-            // dd-hooked signal must NOT restart the full timeout), EINTR on a delivered handler, EFAULT/EINVAL.
+            // hl-hooked signal must NOT restart the full timeout), EINTR on a delivered handler, EFAULT/EINVAL.
             src("pollselect-eintr", "pollselect_eintr.c").oracle(),
             src("eventfd", "eventfd.c").oracle(), // eventfd2 counter semantics
             src("eventfd-sema", "eventfd_sema.c").oracle(), // EFD_SEMAPHORE decrement-by-1 contract

@@ -13,7 +13,7 @@
 int main(void) {
     int sv[2];
     socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
-    const char *path = "/tmp/dd_scm_payload";
+    const char *path = "/tmp/hl_scm_payload";
     pid_t pid = fork();
     if (pid == 0) {
         close(sv[0]);

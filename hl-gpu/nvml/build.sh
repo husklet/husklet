@@ -4,7 +4,7 @@
 # repo memory note "matrix runs linux-side".
 #
 #   ./build.sh            # build aarch64 + x86_64 .so into ./out/<arch>/ and run the native test
-#   ./build.sh install    # also copy the built .so into ~/.dd/nvml/<arch>/ (where the launcher looks)
+#   ./build.sh install    # also copy the built .so into ~/.hl/nvml/<arch>/ (where the launcher looks)
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT="out"
@@ -31,12 +31,12 @@ esac
 echo "[test] native ABI test ($HOST_ARCH)"
 gcc -O2 -fPIC -shared -o "$OUT/native-libnvidia-ml.so.1" nvml_shim.c
 gcc -O2 -o "$OUT/test_nvml" test_nvml.c -ldl
-HL_CUDA_NAME="${HL_CUDA_NAME:-Tesla dd-Metal 4C}" HL_CUDA_CC="${HL_CUDA_CC:-8.9}" HL_CUDA_VRAM="${HL_CUDA_VRAM:-16384}" \
+HL_CUDA_NAME="${HL_CUDA_NAME:-Tesla hl-Metal 4C}" HL_CUDA_CC="${HL_CUDA_CC:-8.9}" HL_CUDA_VRAM="${HL_CUDA_VRAM:-16384}" \
   "$OUT/test_nvml" "$OUT/native-libnvidia-ml.so.1"
 
 if [ "${1:-}" = "install" ]; then
   for arch in aarch64 x86_64; do
-    dst="$HOME/.dd/nvml/$arch"
+    dst="$HOME/.hl/nvml/$arch"
     mkdir -p "$dst"
     cp "$OUT/$arch/libnvidia-ml.so.1" "$dst/"
     ln -sf libnvidia-ml.so.1 "$dst/libnvidia-ml.so"

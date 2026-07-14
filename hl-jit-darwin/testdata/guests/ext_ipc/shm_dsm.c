@@ -17,8 +17,8 @@
 #define SZ 4096
 
 int main(void) {
-    const char *nm = "/dd_shm_dsm";
-    const char *sn = "/dd_shm_dsm_sem";
+    const char *nm = "/hl_shm_dsm";
+    const char *sn = "/hl_shm_dsm_sem";
     shm_unlink(nm);
     sem_unlink(sn);
 

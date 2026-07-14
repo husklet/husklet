@@ -2,7 +2,7 @@
 //!
 //! We hand-roll this rather than pull in Smithay because Smithay's server stack drags in
 //! `drm`/`gbm`/`libinput`/`udev`/`rustix`-Linux dependencies that do not build on macOS (where the real
-//! `dd-display` runs). The wire format itself is tiny and stable, so a focused codec keeps the CPU-buffer
+//! `hl-display` runs). The wire format itself is tiny and stable, so a focused codec keeps the CPU-buffer
 //! MVP portable AND fully unit-testable on the Linux dev host. See `docs/ideas/RENDERING_PLAN.md`.
 //!
 //! Wire format (host byte order — guest and host are the same ISA under dd, so native-endian is correct):

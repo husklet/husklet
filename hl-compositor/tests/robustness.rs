@@ -13,7 +13,7 @@
 //! The persistent client `A` is verified to still commit→present after each abuse, which is the real
 //! invariant: one bad guest never wedges the compositor or its neighbours.
 
-use hl_compositor::{ClientState, DdState, RenderLimits};
+use hl_compositor::{ClientState, HlState, RenderLimits};
 use hl_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use hl_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
@@ -138,7 +138,7 @@ fn shm_truncation_sigbus_is_contained_in_an_isolated_child() {
     use std::num::NonZeroUsize;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
-    let name = CString::new("dd-shm-sigbus-child").unwrap();
+    let name = CString::new("hl-shm-sigbus-child").unwrap();
     let raw = unsafe { libc::memfd_create(name.as_ptr(), 0) };
     assert!(raw >= 0);
     assert_eq!(unsafe { libc::ftruncate(raw, 4096) }, 0);
@@ -163,16 +163,16 @@ fn shm_truncation_sigbus_is_contained_in_an_isolated_child() {
 }
 #[test]
 fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exact_once() {
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let dh = display.handle();
     let log = Arc::new(Mutex::new(LifecycleLog::default()));
-    let mut state = DdState::new_with_render_limits(
+    let mut state = HlState::new_with_render_limits(
         dh.clone(),
         Box::new(LifecyclePresenter(log.clone())),
         RenderLimits { surfaces_per_client: 1, ..RenderLimits::default() },
     );
 
-    let connect = |display: &mut Display<DdState>| -> Cli {
+    let connect = |display: &mut Display<HlState>| -> Cli {
         let (client_fd, server_fd) = socketpair_nonblocking();
         display
             .handle()
@@ -189,7 +189,7 @@ fn compositor_surface_identity_is_client_owned_generational_and_teardown_is_exac
             let _ = display.flush_clients();
         }};
     }
-    fn bind_core(c: &mut Cli, display: &mut Display<DdState>, state: &mut DdState) -> (u32, u32, u32) {
+    fn bind_core(c: &mut Cli, display: &mut Display<HlState>, state: &mut HlState) -> (u32, u32, u32) {
         let reg = c.alloc();
         c.conn.send(&Message::new(WL_DISPLAY, 1).u32(reg));
         c.conn.flush().unwrap();
@@ -329,12 +329,12 @@ fn commit_buffer(c: &mut Cli, shm: u32, surface: u32, w: i32, h: i32) -> u32 {
 
 #[test]
 fn compositor_survives_stress_disconnect_and_bogus_requests() {
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let dh = display.handle();
-    let mut state = DdState::new(dh.clone(), Box::new(CountingPresenter { frames: 0 }));
+    let mut state = HlState::new(dh.clone(), Box::new(CountingPresenter { frames: 0 }));
 
     // insert_client on the shared display; returns the client-side fd wrapped in a Cli.
-    let connect = |display: &mut Display<DdState>| -> Cli {
+    let connect = |display: &mut Display<HlState>| -> Cli {
         let (client_fd, server_fd) = socketpair_nonblocking();
         display
             .handle()

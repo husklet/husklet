@@ -56,7 +56,7 @@ static int fail(const char *why, int64_t value) {
 
 static VkResult create_for_version(PFN_vkCreateInstance create, uint32_t api, VkInstance *out) {
     const struct VkApplicationInfo app = {
-        VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL, "dd-capability-truth", 1, "dd-tests", 1, api,
+        VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL, "hl-capability-truth", 1, "hl-tests", 1, api,
     };
     const struct VkInstanceCreateInfo ci = {
         VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, NULL, 0, &app, 0, NULL, 0, NULL,

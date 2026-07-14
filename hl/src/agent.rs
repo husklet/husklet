@@ -11,7 +11,7 @@ pub fn service_target() -> String {
     platform::service_label()
 }
 
-/// Write the service unit + `~/.dd` state tree (does not start it). Returns the unit path.
+/// Write the service unit + `~/.hl` state tree (does not start it). Returns the unit path.
 pub fn write_unit() -> std::io::Result<PathBuf> {
     platform::service_write()
 }

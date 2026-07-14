@@ -8,7 +8,7 @@
 //! manager, calls `get_tablet_seat(seat)`, obtains a live `zwp_tablet_seat_v2`, and receives no
 //! `tablet_added` — the exact protocol picture of a seat without a tablet, which is what every
 //! toolkit's no-tablet path already handles. Hot-plugging a tablet later is a single
-//! `seat.tablet_seat().add_tablet::<DdState>(dh, &desc)` call (the mechanism the roundtrip test drives
+//! `seat.tablet_seat().add_tablet::<HlState>(dh, &desc)` call (the mechanism the roundtrip test drives
 //! through a virtual descriptor to prove `tablet_added` reaches the client through this delegate).
 
 use smithay::{
@@ -16,11 +16,11 @@ use smithay::{
     wayland::tablet_manager::{TabletDescriptor, TabletManagerState, TabletSeatTrait},
 };
 
-use crate::DdState;
+use crate::HlState;
 
-impl DdState {
+impl HlState {
     /// Construct the `zwp_tablet_manager_v2` global. Kept in this module so the tablet slice owns its
-    /// registration; the returned state must be stored in [`DdState`] to keep the global alive.
+    /// registration; the returned state must be stored in [`HlState`] to keep the global alive.
     pub(crate) fn new_tablet_manager(dh: &DisplayHandle) -> TabletManagerState {
         TabletManagerState::new::<Self>(dh)
     }

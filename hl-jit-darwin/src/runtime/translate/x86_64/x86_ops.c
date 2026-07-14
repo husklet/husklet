@@ -262,7 +262,7 @@ static void do_cpuid(struct cpu *c) {
         // glibc select `__memmove_sse2_unaligned_erms` -> `rep movsb` above threshold, which dd lowers to a
         // single host memcpy. All features dd advertises (SSE4.2/AES-NI/PCLMUL/POPCNT below, BMI2/SHA/ERMS/
         // FSRM in leaf 7) are consumed by guests via their CPUID FEATURE bits, which stay set regardless of
-        // this model id -- the model only steers glibc's SSE-vs-rep tuning toward the dd-fast rep path.
+        // this model id -- the model only steers glibc's SSE-vs-rep tuning toward the hl-fast rep path.
         a = 0x000206c2; // Intel Westmere (fam 6, model 0x2c) -- trips glibc Fast_Unaligned_Copy (SSE memcpy -> rep
                         // movsb)
         d = (1u << 0) | (1u << 4) | (1u << 8) | (1u << 11) | (1u << 13) | (1u << 15) | (1u << 19) | (1u << 23) |

@@ -1,7 +1,7 @@
 //! Windows (and any other non-macOS/Linux target) stub. `hl` has no service-management backend
 //! here yet: the lifecycle calls return an informative "unsupported" error, quarantine is always
 //! `false`, and there is no `.app` bundle. `hl daemon run` (foreground exec) still works — only
-//! the managed start/stop/restart/status lifecycle is unavailable. Logs live under `~/.dd/logs`.
+//! the managed start/stop/restart/status lifecycle is unavailable. Logs live under `~/.hl/logs`.
 
 use std::path::PathBuf;
 
@@ -47,7 +47,7 @@ pub fn app_bundle() -> Option<PathBuf> {
     None
 }
 
-/// `~/.dd/logs` — daemon stdout/stderr logs.
+/// `~/.hl/logs` — daemon stdout/stderr logs.
 pub fn logs_dir() -> PathBuf {
     crate::paths::hl_root().join("logs")
 }

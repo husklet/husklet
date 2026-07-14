@@ -45,7 +45,7 @@ pub(crate) fn pull_image(
     archs: &[&str],
     progress: &mut dyn FnMut(PullEvent),
 ) -> Result<Image, String> {
-    // dd-images owns the pull + rootfs unpack; the daemon just maps the result onto its Docker model.
+    // hl-images owns the pull + rootfs unpack; the daemon just maps the result onto its Docker model.
     let li = hl_images::Store::new(images_dir)
         .pull_archs(from_image, tag, creds, archs, progress)
         .map_err(|e| e.to_string())?;
@@ -80,7 +80,7 @@ pub(crate) fn refresh_image_config(
 }
 
 /// Build a registered [`Image`] from a freshly-fetched OCI config blob + an already-unpacked rootfs,
-/// and (re)write the `dd-image.json` sidecar so the config survives a daemon restart. Shared by
+/// and (re)write the `hl-image.json` sidecar so the config survives a daemon restart. Shared by
 /// `pull_image` (fresh pull) and `refresh_image_config` (re-pull of a cached tag) so both derive
 /// Cmd/Entrypoint/Env/WorkingDir/User/etc. identically.
 pub(crate) fn image_from_config(
@@ -127,7 +127,7 @@ pub(crate) fn image_from_config(
                            "healthcheck": healthcheck.clone(),
                            "arch": arch.arch(), "os": arch.os() });
     let _ = std::fs::write(
-        format!("{images_dir}/{}/dd-image.json", safe_name(iref)),
+        format!("{images_dir}/{}/hl-image.json", safe_name(iref)),
         meta.to_string(),
     );
     Image {
@@ -188,7 +188,7 @@ mod refresh_tests {
     #[test]
     fn image_from_config_uses_real_entrypoint_not_bin_sh() {
         let dir =
-            std::env::temp_dir().join(format!("dd-refresh-{}-{}", std::process::id(), now_nanos()));
+            std::env::temp_dir().join(format!("hl-refresh-{}-{}", std::process::id(), now_nanos()));
         let iref = ImageRef::parse("nginx:latest");
         let img_dir = dir.join(safe_name(&iref));
         let rootfs = img_dir.join("rootfs");
@@ -216,7 +216,7 @@ mod refresh_tests {
             "refresh must not fall back to /bin/sh"
         );
         // The refreshed config is persisted to the sidecar so it survives a daemon restart.
-        let side = std::fs::read_to_string(img_dir.join("dd-image.json")).unwrap();
+        let side = std::fs::read_to_string(img_dir.join("hl-image.json")).unwrap();
         assert!(side.contains("docker-entrypoint.sh") && side.contains("nginx"));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -226,7 +226,7 @@ mod refresh_tests {
     #[test]
     fn image_from_config_entrypoint_only_keeps_empty_cmd() {
         let dir = std::env::temp_dir().join(format!(
-            "dd-refresh2-{}-{}",
+            "hl-refresh2-{}-{}",
             std::process::id(),
             now_nanos()
         ));

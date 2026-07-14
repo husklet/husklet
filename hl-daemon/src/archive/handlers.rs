@@ -179,7 +179,7 @@ pub(crate) async fn archive_put(
             .into_response();
     }
     // Stream the archive straight into tar over stdin -- NO temp file. The former per-daemon-PID temp path
-    // ("dd-cp-<pid>.tar") was SHARED across every in-flight cp of one daemon, so CONCURRENT `docker cp`s
+    // ("hl-cp-<pid>.tar") was SHARED across every in-flight cp of one daemon, so CONCURRENT `docker cp`s
     // clobbered each other's archive and raced its unlink: a cp could extract a sibling's payload, or fail
     // "tar: Failed to open archive" when another removed the file mid-read. Piping is race-free (each
     // request owns its child's stdin) and skips a disk round-trip. `extract_archive_into` also contains the
@@ -347,7 +347,7 @@ mod tests {
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!(
-            "dd-cp-test-{}-{}-{}",
+            "hl-cp-test-{}-{}-{}",
             tag,
             std::process::id(),
             SystemTime::now()

@@ -2,7 +2,7 @@
 name = "hl-compositor"
 version = "0.1.0"
 edition = "2021"
-description = "dd-compositor — a Smithay-native Wayland compositor for the dd host renderer. It replaces the hand-written dd-display protocol machine (hl-display/src/server.rs) with Smithay's maintained wayland_frontend state cores, while reusing dd-display's platform present/input seam (the Presenter trait + the Cocoa/Metal window backend). Gated behind HL_DISPLAY_SMITHAY=1; the legacy server.rs path is untouched when the flag is unset."
+description = "hl-compositor — a Smithay-native Wayland compositor for the hl host renderer. It replaces the hand-written hl-display protocol machine (hl-display/src/server.rs) with Smithay's maintained wayland_frontend state cores, while reusing hl-display's platform present/input seam (the Presenter trait + the Cocoa/Metal window backend). Gated behind HL_DISPLAY_SMITHAY=1; the legacy server.rs path is untouched when the flag is unset."
 license = "MIT"
 autobins = false
 
@@ -33,7 +33,7 @@ autobins = false
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("xwayland"))'] }
 
 [[bin]]
-name = "dd-compositor"
+name = "hl-compositor"
 path = "src/main.rs"
 
 [lib]
@@ -47,18 +47,18 @@ path = "src/lib.rs"
 # (see this crate's module docs). Verified to compile + run + accept a client on aarch64-apple-darwin.
 smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
 
-# Reuse dd-display's platform seam: the `Presenter` trait + `SurfaceBuffer`, the Cocoa/Metal window
-# backend (present_cocoa/metal), and the XKB keymap. dd-display does NOT depend on dd-compositor, so
+# Reuse hl-display's platform seam: the `Presenter` trait + `SurfaceBuffer`, the Cocoa/Metal window
+# backend (present_cocoa/metal), and the XKB keymap. hl-display does NOT depend on hl-compositor, so
 # there is no cycle and the legacy path is unaffected.
 hl-display = { path = "../hl-display" }
-# Single source of truth for the `DD_GPU_BACKEND` selection (`dd_gpu_wgpu::selected()`), used to name
-# the host GPU backend when starting the executor. dd-display already depends on this crate, so it adds
+# Single source of truth for the `HL_GPU_BACKEND` selection (`hl_gpu_wgpu::selected()`), used to name
+# the host GPU backend when starting the executor. hl-display already depends on this crate, so it adds
 # no new compilation to `cargo build -p hl-compositor`.
 hl-gpu-wgpu = { path = "../hl-gpu-wgpu" }
 libc = "0.2"
 
-# The native present/input loop reuses the objc2 stack already locked in the workspace (via dd-gui /
-# dd-display), so this fetches nothing new on the mac.
+# The native present/input loop reuses the objc2 stack already locked in the workspace (via hl-gui /
+# hl-display), so this fetches nothing new on the mac.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSThread", "NSRunLoop", "NSDate"] }

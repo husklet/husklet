@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dd-shim-cuda manifest extractor. Mirrors hl-shim-gl/registry/extract_from_khronos.py, but the
+# hl-shim-cuda manifest extractor. Mirrors hl-shim-gl/registry/extract_from_khronos.py, but the
 # CUDA Driver API has no Khronos-style XML registry, so the entry-point surface is extracted from an
 # OPEN, CLEAN-ROOM C source of `cu*` definitions rather than a vendor header.
 #

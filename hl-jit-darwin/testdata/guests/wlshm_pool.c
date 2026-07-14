@@ -26,7 +26,7 @@ int main(void) {
     if (pid == 0) {
         // ---- Producer (the "client"): create the pool, fill it, send the fd. ----
         close(sv[0]);
-        int fd = memfd_create("dd-wl-shm-pool", 0);
+        int fd = memfd_create("hl-wl-shm-pool", 0);
         if (fd < 0) { perror("memfd_create"); _exit(10); }
         if (ftruncate(fd, POOL) < 0) { perror("ftruncate"); _exit(11); }
         uint8_t *pix = mmap(NULL, POOL, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);

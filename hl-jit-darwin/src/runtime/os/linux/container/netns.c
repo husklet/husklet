@@ -17,7 +17,7 @@ static const int CC_L2M[17] = {VINTR, VQUIT, VERASE, VKILL, VEOF, VTIME, VMIN, -
                                VSTOP, VSUSP, VEOL, VREPRINT, VDISCARD, VWERASE, VLNEXT, VEOL2};
 
 // bind()/connect() an AF_UNIX socket at host path `host`. macOS sun_path is only 104 bytes, but a container
-// overlay upper socket path ($HOME/.dd/containers/<64-hex>/upper/.../.s.PGSQL.5432) can exceed that -- a
+// overlay upper socket path ($HOME/.hl/containers/<64-hex>/upper/.../.s.PGSQL.5432) can exceed that -- a
 // plain snprintf into sun_path SILENTLY TRUNCATES, so bind creates the inode at the wrong (short) path and
 // the guest's later stat/chmod/connect (which resolve the FULL path) ENOENT it. When `host` fits, bind/
 // connect directly (byte-identical to before). When it overflows, split dir/base, fchdir into the parent,
@@ -189,7 +189,7 @@ static int msgflags_m2l(int mf) {
 #define LX_CMSG_ALIGN(n) (((n) + 7u) & ~(size_t)7u) // Linux: 8-byte align
 #define LX_CMSGHDR 16u                              // Linux cmsg header: 8(len)+4(level)+4(type)
 #define LX_SOL_SOCKET 1
-#define DD_CMSG_EVENTFD_MAGIC 0xddefd001u
+#define HL_CMSG_EVENTFD_MAGIC 0xddefd001u
 
 struct hl_cmsg_eventfd_meta {
     uint32_t magic;
@@ -247,7 +247,7 @@ static int cmsg_read_eventfd_marker(int fd, struct hl_cmsg_eventfd_meta *m) {
     if (fd < 0 || !m) return 0;
     memset(m, 0, sizeof *m);
     if (pread(fd, m, sizeof *m, 0) != (ssize_t)sizeof *m) return 0;
-    return m->magic == DD_CMSG_EVENTFD_MAGIC;
+    return m->magic == HL_CMSG_EVENTFD_MAGIC;
 }
 
 
@@ -295,7 +295,7 @@ static int cmsg_import_eventfd_trailer(int *fds, int nfds) {
         int marker = marker_fd[i];
         struct hl_cmsg_eventfd_meta *m = &metas[i];
         int pub = fds[m->ordinal];
-        if (pub >= 0 && pub < DD_NFD) {
+        if (pub >= 0 && pub < HL_NFD) {
             g_eventfd_peer[pub] = h + 1;
             g_eventfd_cslot[pub] = (int)m->slot + 1;
             g_eventfd_sema[pub] = (uint8_t)(m->sema != 0);
@@ -356,7 +356,7 @@ static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap, i
             }
             for (int i = 0; i < nfds; i++) {
                 int fd = fds[i];
-                if (fd < 0 || fd >= DD_NFD || !g_eventfd_peer[fd]) continue;
+                if (fd < 0 || fd >= HL_NFD || !g_eventfd_peer[fd]) continue;
                 if (combo_n + 2 > combo_cap) {
                     free(combo);
                     if (errp) *errp = EMSGSIZE;
@@ -367,7 +367,7 @@ static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap, i
                 if (fl >= 0) fcntl(hidden, F_SETFL, fl | O_NONBLOCK);
                 fcntl(hidden, F_SETFD, FD_CLOEXEC);
                 struct hl_cmsg_eventfd_meta m = {
-                    .magic = DD_CMSG_EVENTFD_MAGIC,
+                    .magic = HL_CMSG_EVENTFD_MAGIC,
                     .ordinal = (uint32_t)i,
                     .slot = (uint32_t)eventfd_counter_slot(fd),
                     .sema = (uint32_t)(g_eventfd_sema[fd] != 0),
@@ -532,29 +532,29 @@ static int tcp_opt_l2m(int o) {
 // host dir for this container's loopback unix sockets ("" = no isolation)
 static char g_netns[200];
 // fd -> the loopback port it's bound/connected to (0 = not a private-lo socket)
-static uint16_t g_lo_port[DD_NFD];
+static uint16_t g_lo_port[HL_NFD];
 // fd -> 1 if this private-lo socket is AF_INET6 (so getsockname/getpeername/accept report a sockaddr_in6
 // with ::1 instead of an AF_INET 127.0.0.1). The unix-socket switch is keyed by port only, so a v6 server
 // and a v4 client on the same loopback port still rendezvous (dual-stack); this only picks the address
 // family reported back to the guest.
-static uint8_t g_lo_v6[DD_NFD];
+static uint8_t g_lo_v6[HL_NFD];
 // fd -> 1 if created SOCK_STREAM (only those get loopback isolation)
-static uint8_t g_sock_stream[DD_NFD];
+static uint8_t g_sock_stream[HL_NFD];
 // fd -> 1 once a stream connect() SUCCEEDED on it. Linux keeps a connected stream socket in SS_CONNECTED
 // (a second connect -> EISCONN) until close, even after the peer sends FIN; macOS drops the peer
 // association after FIN so getpeername() there returns ENOTCONN. This sticky flag lets connect(203) report
 // EISCONN faithfully (LTP connect01). Cleared on close (fd_reset_emul) and at socket()/accept re-init.
-static uint8_t g_sock_conn[DD_NFD];
+static uint8_t g_sock_conn[HL_NFD];
 // fd -> 1 if created AF_INET SOCK_DGRAM (only those get the published-UDP switch redirect, below)
-static uint8_t g_sock_dgram[DD_NFD];
+static uint8_t g_sock_dgram[HL_NFD];
 // fd -> the socket's guest (Linux) address family, recorded at socket()/accept() so connect(203)/bind(200)
 // can validate the guest sockaddr's sa_family against it (EAFNOSUPPORT) without a getsockname() probe --
 // which is unreliable after a prior failed connect on the same fd. 0 = untracked (best-effort fallback).
-static uint16_t g_sock_fam[DD_NFD];
+static uint16_t g_sock_fam[HL_NFD];
 // fd -> 1 if this DGRAM socket emulates a connection-oriented endpoint that owes its peer an EOF on
 // close (a SEQPACKET socketpair or an O_DIRECT "packet" pipe). macOS DGRAM sockets never deliver EOF on
 // peer close, so close() injects a zero-length EOF datagram and recv/read coerce ECONNRESET -> 0 for these.
-static uint8_t g_sock_seqpacket[DD_NFD];
+static uint8_t g_sock_seqpacket[HL_NFD];
 
 // fd -> (its socketpair/O_DIRECT-pipe PARTNER fd + 1); 0 = no known partner. Recorded for both ends at
 // socketpair(SEQPACKET)/pipe2(O_DIRECT) so close() can tell a genuine last-local close (inject the synthetic
@@ -562,7 +562,7 @@ static uint8_t g_sock_seqpacket[DD_NFD];
 // inject: Linux delivers no EOF while the child still references that end, and our zero-length datagram would
 // otherwise land in our own retained end's queue and be misread as a premature EOF -- exactly what broke
 // Chromium's Mojo SEQPACKET handshake). Carried on dup (fd_carry_sock); reset on close (fd_reset_emul).
-static int g_sock_pair_peer[DD_NFD];
+static int g_sock_pair_peer[HL_NFD];
 
 // fd -> a DISTINCT synthetic peer pid stamped on both ends at socketpair() creation (0 = none). macOS
 // captures LOCAL_PEERPID at socketpair-creation time and reports the CREATOR's pid on BOTH ends, never
@@ -575,7 +575,7 @@ static int g_sock_pair_peer[DD_NFD];
 // Stamping each end with a unique id (>= 1<<30, above Linux PID_MAX ~4M so it never aliases a real guest
 // pid Mojo also tracks) gives every child a distinct, non-self node identity whenever LOCAL_PEERPID
 // degenerates to self. Carried on dup (fd_carry_sock); reset on close (fd_reset_emul).
-static int g_sock_peer_pid[DD_NFD];
+static int g_sock_peer_pid[HL_NFD];
 
 // fd -> 1 if THIS process has actually SENT on this SEQPACKET/O_DIRECT-pipe endpoint (0 = never used it).
 // The synthetic peer-EOF injected on close (seq_send_eof) may fire ONLY for an endpoint this process wrote
@@ -590,10 +590,10 @@ static int g_sock_peer_pid[DD_NFD];
 // nothing on Linux either), while a genuine writer's close still injects the EOF a blocked reader needs
 // (rustc/make jobserver, O_DIRECT pipe). RESET on fork (a child starts having-written nothing -- seq_wrote_
 // after_fork), carried on dup (fd_carry_sock), cleared on close (fd_reset_emul).
-static uint8_t g_sock_seq_wrote[DD_NFD];
+static uint8_t g_sock_seq_wrote[HL_NFD];
 
 static void seq_mark_wrote(int fd) {
-    if (fd >= 0 && fd < DD_NFD && g_sock_seqpacket[fd]) g_sock_seq_wrote[fd] = 1;
+    if (fd >= 0 && fd < HL_NFD && g_sock_seqpacket[fd]) g_sock_seq_wrote[fd] = 1;
 }
 
 // A forked child inherits the parent's open channel ends but has WRITTEN to none of them yet: clear the
@@ -611,17 +611,17 @@ static int sock_alloc_synth_peer(void) {
 }
 
 static int seq_is(int fd) {
-    return fd >= 0 && fd < DD_NFD && g_sock_seqpacket[fd];
+    return fd >= 0 && fd < HL_NFD && g_sock_seqpacket[fd];
 }
 
 // fd -> 1 if the guest enabled SO_PASSCRED on this AF_UNIX socket. macOS has no SO_PASSCRED/SCM_CREDENTIALS,
 // so we record the request and synthesize the peer-credentials ancillary record on each recvmsg (below).
 // Chromium's Mojo NodeChannel sets SO_PASSCRED and REQUIRES an SCM_CREDENTIALS cmsg on the bootstrap message
 // -- without it the receiver logs "missing credentials" and aborts. Carried on dup, reset on close.
-static uint8_t g_sock_passcred[DD_NFD];
+static uint8_t g_sock_passcred[HL_NFD];
 
 static void cmsg_note_recv_sock_fd(int fd) {
-    if (fd < 0 || fd >= DD_NFD) return;
+    if (fd < 0 || fd >= HL_NFD) return;
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISSOCK(st.st_mode)) return;
 
@@ -643,11 +643,11 @@ static void cmsg_note_recv_sock_fd(int fd) {
 
 // fd -> guest-requested TCP bind port (host order), 0 = none. Set at bind(200) for AF_INET/INET6 stream
 // sockets; consumed by the /proc/net/tcp[6] synth to surface a LISTEN row (see netns_tcp_* below).
-static uint16_t g_tcp_lport[DD_NFD];
-static uint32_t g_tcp_laddr[DD_NFD];     // fd -> raw __be32 v4 bind addr (0.0.0.0 -> 0), printed %08X kernel-style
-static uint8_t g_tcp_l6[DD_NFD];         // fd -> 1 if the bind was AF_INET6 (row goes in /proc/net/tcp6)
-static uint8_t g_tcp_laddr6[DD_NFD][16]; // fd -> 16-byte v6 bind addr
-static uint8_t g_tcp_listen[DD_NFD];     // fd -> 1 once listen(2) succeeded (row is emitted only then)
+static uint16_t g_tcp_lport[HL_NFD];
+static uint32_t g_tcp_laddr[HL_NFD];     // fd -> raw __be32 v4 bind addr (0.0.0.0 -> 0), printed %08X kernel-style
+static uint8_t g_tcp_l6[HL_NFD];         // fd -> 1 if the bind was AF_INET6 (row goes in /proc/net/tcp6)
+static uint8_t g_tcp_laddr6[HL_NFD][16]; // fd -> 16-byte v6 bind addr
+static uint8_t g_tcp_listen[HL_NFD];     // fd -> 1 once listen(2) succeeded (row is emitted only then)
 
 // Wake any peer blocked on this DGRAM endpoint with a zero-length EOF datagram (queued after pending data,
 // so order is preserved). Best-effort: a no-op for non-SEQPACKET fds and harmless if the peer is gone.
@@ -660,7 +660,7 @@ static void seq_send_eof(int fd) {
     // Linux a bystander's close signals nothing to the peer either, so staying silent is Linux-exact; a real
     // writer's last close still injects the EOF a blocked reader needs (jobserver / O_DIRECT pipe). See
     // g_sock_seq_wrote for the full rationale.
-    if (fd < 0 || fd >= DD_NFD || !g_sock_seq_wrote[fd]) return;
+    if (fd < 0 || fd >= HL_NFD || !g_sock_seq_wrote[fd]) return;
     // Suppress the synthetic EOF when this pair's OTHER end is still open in THIS process: we're a parent
     // dropping a fork-inherited peer copy (Linux delivers no EOF while the fork child still holds that end),
     // and injecting our zero-length "EOF" datagram here would deliver it to our OWN retained end -- a later
@@ -670,7 +670,7 @@ static void seq_send_eof(int fd) {
     int p = g_sock_pair_peer[fd];
     if (p > 0) {
         int peer = p - 1;
-        if (peer >= 0 && peer < DD_NFD && g_sock_seqpacket[peer]) return; // partner still held here -> no self-EOF
+        if (peer >= 0 && peer < HL_NFD && g_sock_seqpacket[peer]) return; // partner still held here -> no self-EOF
     }
     send(fd, "", 0, 0);
 }
@@ -807,8 +807,8 @@ static void fill_inet6_lo(uint8_t *sa, socklen_t *l, uint16_t port) {
 // AF_INET is bridged. Off when g_netbr[0]==0 || g_myip==0.
 static char g_netbr[200];        // shared per-network rendezvous dir ("" = bridge off)
 static uint32_t g_myip;          // this endpoint's IP, network byte order (0 = unset)
-static uint16_t g_br_port[DD_NFD]; // fd -> virtual port of a bridge socket (0 = not a bridge socket)
-static uint32_t g_br_ip[DD_NFD]; // fd -> virtual IP (network order) reported via getsockname/getpeername
+static uint16_t g_br_port[HL_NFD]; // fd -> virtual port of a bridge socket (0 = not a bridge socket)
+static uint32_t g_br_ip[HL_NFD]; // fd -> virtual IP (network order) reported via getsockname/getpeername
 static int g_br_init;
 
 // Carry the per-fd socket-emulation metadata (SOCK_STREAM-ness, loopback/bridge port + ip) from `src`
@@ -817,7 +817,7 @@ static int g_br_init;
 // `g_sock_stream` flag that gates the loopback + per-network bridge bind/connect redirection, so its
 // AF_INET traffic silently falls through to host passthrough and never rendezvous with a peer container.
 static void fd_carry_sock(int dst, int src) {
-    if (dst < 0 || dst >= DD_NFD || src < 0 || src >= DD_NFD) return;
+    if (dst < 0 || dst >= HL_NFD || src < 0 || src >= HL_NFD) return;
     g_sock_stream[dst] = g_sock_stream[src];
     g_sock_dgram[dst] = g_sock_dgram[src];
     g_sock_seqpacket[dst] = g_sock_seqpacket[src];
@@ -846,7 +846,7 @@ static void fd_carry_sock(int dst, int src) {
 // close/socket-reinit (fd_reset_emul) so a reused fd never reports a stale listener.
 // Note: g_tcp_lport/laddr/l6/listen/laddr6 are declared up top alongside the other per-fd socket arrays.
 static void netns_tcp_bind_note(int fd, uint16_t port_host, int v6, uint32_t addr4_be, const uint8_t *addr6) {
-    if (fd < 0 || fd >= DD_NFD) return;
+    if (fd < 0 || fd >= HL_NFD) return;
     g_tcp_lport[fd] = port_host;
     g_tcp_laddr[fd] = addr4_be; // raw __be32 as it sits in memory (printed %08X, kernel-style)
     g_tcp_l6[fd] = (uint8_t)!!v6;
@@ -858,7 +858,7 @@ static void netns_tcp_bind_note(int fd, uint16_t port_host, int v6, uint32_t add
 }
 
 static void netns_tcp_listen_note(int fd) {
-    if (fd >= 0 && fd < DD_NFD && g_tcp_lport[fd]) g_tcp_listen[fd] = 1;
+    if (fd >= 0 && fd < HL_NFD && g_tcp_lport[fd]) g_tcp_listen[fd] = 1;
 }
 
 // Emit the LISTEN rows for the v4 (v6==0) or v6 (v6==1) table into `out` (<=cap). Returns bytes written.
@@ -866,7 +866,7 @@ static void netns_tcp_listen_note(int fd) {
 // uid 0, a synthetic-but-stable inode, refcount 1. Values a real ss/netstat parses positionally.
 static int netns_tcp_emit(char *out, size_t cap, int v6) {
     int off = 0, sl = 0;
-    for (int fd = 0; fd < DD_NFD && off < (int)cap - 256; fd++) {
+    for (int fd = 0; fd < HL_NFD && off < (int)cap - 256; fd++) {
         if (!g_tcp_listen[fd] || !g_tcp_lport[fd]) continue;
         if ((int)g_tcp_l6[fd] != !!v6) continue;
         unsigned long ino = 100000UL + (unsigned)fd; // stable within a run; distinct per listener
@@ -1193,7 +1193,7 @@ static int hostfwd_by_daemon(void) {
 // Called from listen(): if `fd` is a published switch-backed listening socket, start its host forwarder.
 static void fwd_maybe_start(int fd) {
     if (hostfwd_by_daemon()) return; // daemon owns the TCP host listener -> don't race it
-    if (fd < 0 || fd >= DD_NFD) return;
+    if (fd < 0 || fd >= HL_NFD) return;
     uint16_t cport = 0;
     char upath[200];
     if (g_br_port[fd]) {
@@ -1408,7 +1408,7 @@ static void *udp_fwd_thread(void *p) {
 // forwarder. Mirrors fwd_maybe_start() but triggers at bind (UDP has no listen) and keys off g_*_port,
 // which the bind hook just set on this fd.
 static void udp_fwd_maybe_start(int fd) {
-    if (fd < 0 || fd >= DD_NFD) return;
+    if (fd < 0 || fd >= HL_NFD) return;
     uint16_t cport = 0;
     char upath[200];
     if (g_br_port[fd]) {
@@ -1443,7 +1443,7 @@ static void udp_fwd_maybe_start(int fd) {
 // start the host->guest forwarder. Returns 1 if handled (result in *out), 0 to let the caller bind
 // normally (non-published UDP, non-switch nets, or anything not AF_INET datagram -> untouched).
 static int udp_bind_maybe(int fd, const uint8_t *sa, socklen_t l, int64_t *out) {
-    if (fd < 0 || fd >= DD_NFD || !g_sock_dgram[fd]) return 0;
+    if (fd < 0 || fd >= HL_NFD || !g_sock_dgram[fd]) return 0;
     uint16_t cport;
     char up[200];
     uint32_t myip = 0;
@@ -1863,15 +1863,15 @@ static void abs_path(const uint8_t *sa, socklen_t l, char *out, size_t n) {
 #define NL_NLM_F_MULTI 2
 // guest netlink fd -> our peer socketpair fd, stored +1 (0 = not a netlink socket). Mirrors the
 // g_eventfd_peer +1 convention so close()/fd_reset_emul can tear the peer down.
-static int g_nl_peer[DD_NFD];
+static int g_nl_peer[HL_NFD];
 
 static int nl_is(int fd) {
-    return fd >= 0 && fd < DD_NFD && g_nl_peer[fd];
+    return fd >= 0 && fd < HL_NFD && g_nl_peer[fd];
 }
 
 // close a netlink fd's peer (called from fd_reset_emul on the guest close). Idempotent.
 static void nl_close(int fd) {
-    if (fd >= 0 && fd < DD_NFD && g_nl_peer[fd]) {
+    if (fd >= 0 && fd < HL_NFD && g_nl_peer[fd]) {
         close(g_nl_peer[fd] - 1);
         g_nl_peer[fd] = 0;
     }
@@ -1885,7 +1885,7 @@ static int nl_open(int type, int proto) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) < 0) return -errno;
     int g = sv[0], peer = sv[1];
-    if (g < 0 || g >= DD_NFD) { // untracked fd range -> can't route sends; refuse cleanly
+    if (g < 0 || g >= HL_NFD) { // untracked fd range -> can't route sends; refuse cleanly
         close(g);
         close(peer);
         return -EMFILE;
@@ -2352,7 +2352,7 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
 // nameserver, the same address Docker uses. glibc/musl in the guest then send DNS as UDP (default) or TCP
 // (fallback) to 127.0.0.11:53. We intercept those sends here, parse the query, resolve it via the macOS
 // host resolver (getaddrinfo / getnameinfo -- which honor the host's system DNS, INCLUDING a corporate
-// VPN's split-DNS, exactly like the ddcli-mac container), synthesize a wire-format DNS response, and make
+// VPN's split-DNS, exactly like the hl-mac container), synthesize a wire-format DNS response, and make
 // it readable on the guest socket. The guest fd is swapped to one end of an AF_UNIX socketpair; the
 // response is written into the engine-held peer end, so poll/select/epoll + recv/read all see a real fd
 // with real buffered data (no polling/timeout hacks). recvfrom/recvmsg report the source as 127.0.0.11:53
@@ -2363,9 +2363,9 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
 // NXDOMAIN (name has no address of any family), NODATA (name exists but not this type), SERVFAIL (transient
 // resolver error), multiple answers, TTL. Other qtypes (MX/TXT/SRV/SOA/NS/CAA/HTTPS/SVCB...) return NOERROR
 // with no answer (NODATA), so a client falls back to A/AAAA -- see the tracked-remaining note in the report.
-#define DD_DNS_NS 0x0b00007fu    // 127.0.0.11, network byte order (bytes 7f 00 00 0b == LE u32 0x0b00007f)
-static uint8_t g_dns_sock[DD_NFD]; // fd -> 1 if this fd is an intercepted, socketpair-backed DNS socket
-static int g_dns_peer[DD_NFD];     // fd -> engine-held socketpair end we write synthesized responses into
+#define HL_DNS_NS 0x0b00007fu    // 127.0.0.11, network byte order (bytes 7f 00 00 0b == LE u32 0x0b00007f)
+static uint8_t g_dns_sock[HL_NFD]; // fd -> 1 if this fd is an intercepted, socketpair-backed DNS socket
+static int g_dns_peer[HL_NFD];     // fd -> engine-held socketpair end we write synthesized responses into
 
 // DNS interception is off under --network none (HL_NET_ISOLATE): Docker's null network has no resolver, so
 // :53 to 127.0.0.11 is left to fall through to the (dead) host loopback and name resolution fails, matching.
@@ -2379,7 +2379,7 @@ static int dns_enabled(void) {
 // A Linux sockaddr_in destined for the embedded nameserver 127.0.0.11:53 (family value 2 == macOS AF_INET).
 static int dns_dest_is(const uint8_t *sa, socklen_t l) {
     return sa && l >= 8 && *(const uint16_t *)sa == AF_INET && *(const uint16_t *)(sa + 2) == htons(53) &&
-           *(const uint32_t *)(sa + 4) == DD_DNS_NS;
+           *(const uint32_t *)(sa + 4) == HL_DNS_NS;
 }
 
 // Report the nameserver's address (127.0.0.11:53) back to the guest as the packet source / peer.
@@ -2387,7 +2387,7 @@ static void dns_fill_ns(uint8_t *sa, socklen_t *l) {
     if (!sa) return;
     *(uint16_t *)(sa + 0) = AF_INET;
     *(uint16_t *)(sa + 2) = htons(53);
-    *(uint32_t *)(sa + 4) = DD_DNS_NS;
+    *(uint32_t *)(sa + 4) = HL_DNS_NS;
     memset(sa + 8, 0, 8);
     if (l) *l = 16;
 }
@@ -2395,7 +2395,7 @@ static void dns_fill_ns(uint8_t *sa, socklen_t *l) {
 // Swap the guest's AF_INET DNS socket for one end of an AF_UNIX socketpair (keeping the fd number + flags);
 // stash the other end so send handlers can push synthesized responses into it. Idempotent per fd.
 static int dns_swap(int fd, int stream) {
-    if (fd < 0 || fd >= DD_NFD) return -1;
+    if (fd < 0 || fd >= HL_NFD) return -1;
     if (g_dns_sock[fd]) return 0;
     int fl = fcntl(fd, F_GETFL), df = fcntl(fd, F_GETFD);
     int sv[2];
@@ -2707,7 +2707,7 @@ static int64_t dns_send(int fd, const uint8_t *buf, size_t len, int stream) {
         resp[1] = (uint8_t)rl;
         rl += 2;
     }
-    if (fd >= 0 && fd < DD_NFD && g_dns_sock[fd] && g_dns_peer[fd] >= 0) {
+    if (fd >= 0 && fd < HL_NFD && g_dns_sock[fd] && g_dns_peer[fd] >= 0) {
         ssize_t w = write(g_dns_peer[fd], resp, (size_t)rl);
         (void)w;
     }
@@ -2719,13 +2719,13 @@ static int64_t dns_send(int fd, const uint8_t *buf, size_t len, int stream) {
 // handle it and set *ret; otherwise return 0 so the caller runs the normal socket path.
 static int dns_try_send(int fd, const uint8_t *buf, size_t len, const uint8_t *dst, socklen_t dstlen, int64_t *ret) {
     if (!dns_enabled()) return 0;
-    int is_dns = (fd >= 0 && fd < DD_NFD && g_dns_sock[fd]);
+    int is_dns = (fd >= 0 && fd < HL_NFD && g_dns_sock[fd]);
     if (!is_dns) {
         if (!dns_dest_is(dst, dstlen)) return 0;
-        int stream = (fd >= 0 && fd < DD_NFD) ? g_sock_stream[fd] : 0;
+        int stream = (fd >= 0 && fd < HL_NFD) ? g_sock_stream[fd] : 0;
         if (dns_swap(fd, stream) < 0) return 0; // couldn't swap -> let the normal path try
     }
-    int stream = (fd >= 0 && fd < DD_NFD) ? g_sock_stream[fd] : 0;
+    int stream = (fd >= 0 && fd < HL_NFD) ? g_sock_stream[fd] : 0;
     *ret = dns_send(fd, buf, len, stream);
     return 1;
 }

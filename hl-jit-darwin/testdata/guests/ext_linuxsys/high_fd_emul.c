@@ -39,7 +39,7 @@ static int bump_fds(void) {
 }
 
 static int one_sealed_memfd(void) {
-    int fd = memfd_create("dd_high_seal", MFD_ALLOW_SEALING);
+    int fd = memfd_create("hl_high_seal", MFD_ALLOW_SEALING);
     if (fd < 1024) return 0;
     if (write(fd, "seed", 4) != 4) return 0;
     if (fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) != 0) return 0;

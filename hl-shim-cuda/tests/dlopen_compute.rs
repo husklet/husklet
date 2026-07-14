@@ -33,7 +33,7 @@ fn deployed_libcuda_so_runs_vecadd_end_to_end() {
         return;
     };
     let src = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/compute.c");
-    let out = std::env::temp_dir().join(format!("dd-cuda-compute-{}", std::process::id()));
+    let out = std::env::temp_dir().join(format!("hl-cuda-compute-{}", std::process::id()));
     let built = Command::new("cc")
         .arg(src)
         .args(["-ldl", "-lm", "-O1", "-o"])

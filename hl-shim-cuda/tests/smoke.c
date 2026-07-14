@@ -1,4 +1,4 @@
-/* dd-shim-cuda dlopen smoke test — the CUDA analogue of hl-shim-gl's dlopen check.
+/* hl-shim-cuda dlopen smoke test — the CUDA analogue of hl-shim-gl's dlopen check.
  *
  * A plain C program (NOT linked against the shim) dlopen()s the built libcuda.so.1, resolves the
  * bring-up CUDA Driver API entry points by name, drives them, and asserts sane values. This proves the

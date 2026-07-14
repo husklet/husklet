@@ -7,7 +7,7 @@
 //! Advertising the manager is still the correct, spec-faithful behaviour: a client binds it, creates
 //! swipe/pinch/hold gesture objects bound to its `wl_pointer`, and simply receives no events — exactly
 //! what a machine with a mouse but no touchpad exposes. The moment a gesture source IS wired, the
-//! [`smithay::input::pointer::PointerHandle`] gesture injectors (see [`DdState::inject_swipe_gesture`])
+//! [`smithay::input::pointer::PointerHandle`] gesture injectors (see [`HlState::inject_swipe_gesture`])
 //! deliver begin/update/end through this same delegate with no further glue, which the roundtrip test
 //! drives to prove the wiring end to end.
 
@@ -16,9 +16,9 @@ use smithay::{
     utils::SERIAL_COUNTER,
 };
 
-use crate::DdState;
+use crate::HlState;
 
-impl DdState {
+impl HlState {
     /// Synthesize a one-shot touchpad swipe (begin → end, `fingers` fingers) on the focused surface —
     /// the seam a future macOS trackpad bridge would drive. Delivered through the seat's pointer to
     /// every swipe-gesture object of the focused client, so the delegate wiring is provable without any

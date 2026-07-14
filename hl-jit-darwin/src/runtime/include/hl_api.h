@@ -1,9 +1,9 @@
-// dd-jit-darwin FFI: the typed launch contract between the Rust runtime and the C engine.
+// hl-jit-darwin FFI: the typed launch contract between the Rust runtime and the C engine.
 //
-// The Rust side (dd-jit) builds a container purely as a typed value, serializes it into the
+// The Rust side (hl-jit) builds a container purely as a typed value, serializes it into the
 // position-independent `hl_config` wire buffer below, and calls `hl_spawn()`. The C side
 // `posix_spawn`s the arch-matching engine with `--configfd <fd>` and writes the buffer to it — NO
-// argv flag soup, NO `DD_*` environment dialect. The engine reads the buffer, populates the same
+// argv flag soup, NO `HL_*` environment dialect. The engine reads the buffer, populates the same
 // container globals `container_init` sets, and runs the guest; guest exit `_exit()`s the worker, so
 // the returned pid is the whole container's lifetime. Engine *tuning* knobs (DDJIT_*, JT, …) are a
 // separate, engine-internal concern and are NOT part of this contract.
@@ -26,7 +26,7 @@
 // terminated; list fields reuse the same delimiters the engine already parses (see the field notes).
 //
 // SKEW SAFETY: `magic`(@0), `pool_len`(@4), `header_len`(@8), `abi`(@12) are a FROZEN 16-byte prefix —
-// those four offsets never move. The engine reads that prefix first, so even a writer (ddcli) and reader
+// those four offsets never move. The engine reads that prefix first, so even a writer (hl) and reader
 // (engine) built from DIFFERENT commits agree on where the size + ABI live. `header_len` = the exact
 // `sizeof(struct hl_config)` the WRITER used, making the header/pool boundary explicit: the reader
 // consumes exactly `header_len` header bytes (zero-filling any tail fields it lacks, discarding any the
@@ -64,7 +64,7 @@ struct hl_config {
     uint32_t fsgen_off;     // shared external-writer generation file (HL_FSGEN_FILE); "" = none
     uint32_t argv_off;      // the guest argv: NUL-separated, double-NUL terminated
 
-    uint32_t gpu_iosurface; // bool: opt-in the host-IOSurface GPU path (--gui); render-node synth + DD_IOCTL_GPU_ALLOC
+    uint32_t gpu_iosurface; // bool: opt-in the host-IOSurface GPU path (--gui); render-node synth + HL_IOCTL_GPU_ALLOC
     uint32_t nopcache;      // bool: per-container persistent-cache kill switch (HL_JIT_NOPCACHE) — was reserved pad
     uint32_t egress_off;    // per-workspace VPN egress SOCKS5 endpoint (HL_EGRESS_SOCKS), "host:port"; "" = direct
     uint32_t reserved0;     // explicit tail pad: keeps the struct 8-aligned (sizeof == 128), no implicit padding.

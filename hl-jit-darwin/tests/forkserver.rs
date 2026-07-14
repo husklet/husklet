@@ -1,7 +1,7 @@
 //! fork-server ("ddjitd", W3D) — cold-vs-forkserver EQUIVALENCE lane, BOTH Linux engines.
 //!
-//! The resident fork-server (`ddjit --server SOCK`) forks pre-initialized engine instances instead of
-//! cold-spawning one per launch; `ddjit --client SOCK PROG ...` forwards a launch. The correctness
+//! The resident fork-server (`hljit --server SOCK`) forks pre-initialized engine instances instead of
+//! cold-spawning one per launch; `hljit --client SOCK PROG ...` forwards a launch. The correctness
 //! contract is INDISTINGUISHABILITY: for any guest, launching through the fork-server must produce the
 //! same stdout, the same exit code, and the same fatal-signal death as a cold-spawned engine. This lane
 //! drives that battery end to end on linux/aarch64 AND linux/x86_64 (the shared implementation lives in
@@ -56,7 +56,7 @@ fn compile_probe(arch: &str) -> Option<PathBuf> {
         _ => "x86_64-linux-gnu-gcc",
     };
     let src = repo().join("hl-jit-darwin/testdata/guests/forkserver/probe.c");
-    let outdir = repo().join("target/dd-tests/forkserver").join(arch);
+    let outdir = repo().join("target/hl-tests/forkserver").join(arch);
     std::fs::create_dir_all(&outdir).ok()?;
     let out = outdir.join("probe");
     let o = Command::new(cc)

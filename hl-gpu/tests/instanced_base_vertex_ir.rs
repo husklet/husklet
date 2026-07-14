@@ -1,4 +1,4 @@
-//! Instanced + base-vertex draws are a single-IR contract both the guest shim (dd-shim-gl) and the
+//! Instanced + base-vertex draws are a single-IR contract both the guest shim (hl-shim-gl) and the
 //! host executors must agree on. These tests pin (1) that `Enc::Draw`/`Enc::DrawIndexed` survive a wire
 //! encode/decode round-trip with non-default `instance_count` / `first_instance` / `base_vertex`, and
 //! (2) that the software oracle actually consumes `base_vertex` when fetching indexed vertices — the

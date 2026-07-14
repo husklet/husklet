@@ -1,4 +1,4 @@
-//! `ddcli install` / `ddcli uninstall` — set up or tear down the daemon service, docker context,
+//! `hl install` / `hl uninstall` — set up or tear down the daemon service, docker context,
 //! and (on macOS) Gatekeeper quarantine hints. All OS-specific work goes through `crate::platform`.
 
 use crate::agent;
@@ -30,7 +30,7 @@ pub(crate) fn cmd_install() -> i32 {
     println!("\nIf you don't use `docker context`, add this to your shell:");
     println!("    export DOCKER_HOST={}", paths::docker_host());
     warn_quarantine();
-    println!("\nDone. Try:  ddcli ubuntu   (a shell in an ubuntu container, here)");
+    println!("\nDone. Try:  hl ubuntu   (a shell in an ubuntu container, here)");
     0
 }
 

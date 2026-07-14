@@ -3,7 +3,7 @@
 //!
 //! Decomposed by concern:
 //! - `stream` — streamed pull-progress plumbing (`pull_stream`/`pull_event_json`/`pull_progress`/`registry_auth`).
-//! - `arch`   — docker `--platform` ↔ dd-arch mapping (`guest_of`/`manifest_arch`/`docker_arch`/`platform_arch(s)`).
+//! - `arch`   — docker `--platform` ↔ hl-arch mapping (`guest_of`/`manifest_arch`/`docker_arch`/`platform_arch(s)`).
 //! - `config` — registry config-refresh / image-build helpers (`pull_image`/`refresh_*`/`image_from_config`).
 use super::*;
 use crate::model::*;

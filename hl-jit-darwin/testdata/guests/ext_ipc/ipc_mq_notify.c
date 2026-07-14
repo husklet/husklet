@@ -37,7 +37,7 @@ static void notify_handler(int sig, siginfo_t *si, void *uc) {
 }
 
 int main(void) {
-    const char *nn = "/dd_mq_notify";
+    const char *nn = "/hl_mq_notify";
     mq_unlink(nn);
     struct mq_attr at = {0};
     at.mq_maxmsg = 4;

@@ -1,4 +1,4 @@
-//! dd-display build script: on macOS, compile the small Mach IPC shim (`src/mach_bridge.c`) that
+//! hl-display build script: on macOS, compile the small Mach IPC shim (`src/mach_bridge.c`) that
 //! receives the engine's IOSurface send-right (GPU rung 2 handle bridge) and link the frameworks it
 //! needs. No-op on other platforms (the portable compositor core builds without it).
 
@@ -31,7 +31,7 @@ fn main() {
             .map(|s| s.success())
             .unwrap_or(false);
     if !ok {
-        panic!("failed to compile dd-display mach_bridge.c");
+        panic!("failed to compile hl-display mach_bridge.c");
     }
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=hl_mach_bridge");

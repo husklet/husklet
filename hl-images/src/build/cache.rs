@@ -214,7 +214,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let d = std::env::temp_dir()
-            .join(format!("dd-cache-test-{}-{}-{}", label, std::process::id(), nanos));
+            .join(format!("hl-cache-test-{}-{}-{}", label, std::process::id(), nanos));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -379,7 +379,7 @@ mod tests {
 
 /// The build layer cache rooted at `<buildcache>/layers`: it snapshots the rootfs a step produced and
 /// restores it on a later hit, and records/serves each step's cumulative image config. Construct it with
-/// the caller's buildcache directory ([`BuildCache::new`]); the daemon passes `~/.dd/buildcache`.
+/// the caller's buildcache directory ([`BuildCache::new`]); the daemon passes `~/.hl/buildcache`.
 #[derive(Clone, Debug)]
 pub struct BuildCache {
     layers_dir: PathBuf,

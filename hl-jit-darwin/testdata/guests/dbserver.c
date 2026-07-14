@@ -79,7 +79,7 @@ int main(void) {
 
     // ---- server ----
     sqlite3 *db;
-    sqlite3_open("/tmp/dd_dbserver.db", &db);
+    sqlite3_open("/tmp/hl_dbserver.db", &db);
     sqlite3_exec(db, "PRAGMA journal_mode=WAL; DROP TABLE IF EXISTS t; CREATE TABLE t(v INTEGER);",
                  0, 0, 0);
     for (;;) {
@@ -110,6 +110,6 @@ int main(void) {
     }
     sqlite3_close(db);
     waitpid(pid, NULL, 0);
-    unlink("/tmp/dd_dbserver.db");
+    unlink("/tmp/hl_dbserver.db");
     return 0;
 }

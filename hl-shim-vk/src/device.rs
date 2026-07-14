@@ -3,7 +3,7 @@
 //! Ported from MoltenVK's `MVKDevice` / `MVKQueue` / `MVKCommandPool` object model. A `VkDevice`
 //! owns one `VkQueue` (our single graphics+compute+transfer family); command pools are
 //! non-dispatchable handles, command buffers are dispatchable (loader-magic'd). Real submission /
-//! recording lowers to dd-gpu IR in a later increment — this increment establishes the object graph
+//! recording lowers to hl-gpu IR in a later increment — this increment establishes the object graph
 //! and the ABI-correct lifecycle (see `crate::ir_seam` for the IR mapping sketch + round-trip test).
 
 use crate::handle::{self, Dispatchable};

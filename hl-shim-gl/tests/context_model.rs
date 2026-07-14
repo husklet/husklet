@@ -1,4 +1,4 @@
-//! Mirrors of the two RED conformance probes (dd-tests/guests/gui_matrix), encoding their assertions as
+//! Mirrors of the two RED conformance probes (hl-tests/guests/gui_matrix), encoding their assertions as
 //! in-tree Rust tests so the object/context model (audit §9.3) is guarded offline:
 //!   * `gui_egl_error_lifecycle`   — first-error retention, clear-on-read, no state mutation on reject.
 //!   * `gui_egl_sharegroup_threads`— unique context handles, share-group visibility, unrelated-context

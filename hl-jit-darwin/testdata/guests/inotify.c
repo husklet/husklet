@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *dir = "/tmp/dd_inotify_dir";
+    const char *dir = "/tmp/hl_inotify_dir";
     mkdir(dir, 0755);
     int fd = inotify_init1(0);
     if (fd < 0) { perror("inotify_init1"); return 1; }

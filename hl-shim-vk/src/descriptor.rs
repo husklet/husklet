@@ -9,7 +9,7 @@
 //!     (`VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT`, l.2003) gates `vkFreeDescriptorSets`.
 //!   * A descriptor set binds resources at `(set, binding[, arrayElement])`; `vkUpdateDescriptorSets`
 //!     writes **every** array element (not just element 0) and applies its whole write+copy batch
-//!     atomically. Buffer descriptors lower to the dd-gpu IR bind group at `vkCmdBindDescriptorSets`
+//!     atomically. Buffer descriptors lower to the hl-gpu IR bind group at `vkCmdBindDescriptorSets`
 //!     (`Cmd::CreateBindGroup(id, BindGroupDesc{ set, entries })`); image/sampler/texel writes are
 //!     retained for a later IR increment rather than silently dropped.
 

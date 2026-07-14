@@ -2,14 +2,14 @@
 #include "../../container_parse.h" // strict numeric parsing (the config trust boundary; see LAUNCH.md)
 #include <sys/sysctl.h>            // sysctlbyname("hw.activecpu") -- true host core count (see container_online_cpus)
 
-// DD_NFD: capacity of every per-guest-fd state table (memfd seals, eventfd/epoll/timerfd, socket
+// HL_NFD: capacity of every per-guest-fd state table (memfd seals, eventfd/epoll/timerfd, socket
 // tracking, pty/lock/pipe tables, ...). Was 1024, which HARD-failed for guests that use high fd numbers:
 // Chromium's Mojo shared-memory channel creates a memfd whose fd is >=1024, and F_ADD_SEALS then returned
 // EINVAL (fd out of the tracked range) and the browser aborted (channel_linux.cc). 65536 covers a realistic
 // RLIMIT_NOFILE; the tables are zero-init BSS so the cost is a few MB of never-resident address space.
-#define DD_NFD 65536
+#define HL_NFD 65536
 
-// ---- container namespace + cgroup state (SentryConfig: ddockerd -> jit) ----
+// ---- container namespace + cgroup state (SentryConfig: hl-dockerd -> jit) ----
 // UTS ns: container hostname (uname/sethostname); "" = host default
 static char g_hostname[65] = "";
 // cgroup memory.max bytes (0 = unlimited); charged in mmap
@@ -50,20 +50,20 @@ static int ro_subpath_add(const char *abs) {
     return 0;
 }
 // docker --ulimit overrides, indexed by Linux RLIMIT_* resource number; .set gates the override.
-#define DD_RLIM_MAX 16
+#define HL_RLIM_MAX 16
 
 static struct {
     int set;
     uint64_t cur, max;
-} g_ulimit[DD_RLIM_MAX];
+} g_ulimit[HL_RLIM_MAX];
 
 // current anon charge (bytes)
 static _Atomic uint64_t g_mem_charged = 0;
 // Max argv/envp entries the exec-forward + stack-build path carries. Linux caps only at ARG_MAX (bytes);
 // a former fixed 256 silently truncated large generated argv lists (a different command ran). 2048 covers
 // realistic exec argv/env while keeping the stack arrays bounded.
-#ifndef DD_MAXARGV
-#define DD_MAXARGV 2048
+#ifndef HL_MAXARGV
+#define HL_MAXARGV 2048
 #endif
 // live task count (init = 1)
 static _Atomic int g_pids_cur = 1;
@@ -86,7 +86,7 @@ static int g_init_hostpid = 0;
 // LIVE slots (a slot whose pid is dead is skipped and reclaimed), so the totals are container-wide AND
 // self-healing across a crash -- no fragile running counter to leak on SIGKILL. A fresh segment per
 // container-init isolates sibling forkserver workers (each is its own container).
-#define DD_ACCT_SLOTS 1024
+#define HL_ACCT_SLOTS 1024
 struct hl_acct_slot {
     _Atomic int pid;                // host pid owning this slot (0 = free)
     _Atomic int tasks;              // this process's live guest-task (thread) count
@@ -123,9 +123,9 @@ static void acct_claim_self(void) {
         return;
     }
     int me = (int)getpid();
-    for (int i = 0; i < DD_ACCT_SLOTS && !g_acct_self; i++)
+    for (int i = 0; i < HL_ACCT_SLOTS && !g_acct_self; i++)
         if (atomic_load(&g_acct[i].pid) == me) g_acct_self = &g_acct[i];
-    for (int i = 0; i < DD_ACCT_SLOTS && !g_acct_self; i++) {
+    for (int i = 0; i < HL_ACCT_SLOTS && !g_acct_self; i++) {
         int p = atomic_load(&g_acct[i].pid);
         if (p != 0 && acct_pid_live(p)) continue; // a live peer holds this slot
         int exp = p;
@@ -140,7 +140,7 @@ static void acct_claim_self(void) {
 // (Re)create the shared accounting table for a NEW container init and claim this process's slot. Called
 // from container_init (normal launch + cold forkserver) and the forkserver warm re-anchor point.
 static void acct_container_reset(void) {
-    size_t sz = sizeof(struct hl_acct_slot) * DD_ACCT_SLOTS;
+    size_t sz = sizeof(struct hl_acct_slot) * HL_ACCT_SLOTS;
     void *m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
     g_acct = (m == MAP_FAILED) ? NULL : (struct hl_acct_slot *)m; // kernel zero-fills -> all slots free
     g_acct_self = NULL;
@@ -166,9 +166,9 @@ static void acct_after_fork(void) {
 // acct_after_fork (same pid -> reused).
 static void acct_child_born(int childpid) {
     if (!g_acct || childpid <= 0) return;
-    for (int i = 0; i < DD_ACCT_SLOTS; i++)
+    for (int i = 0; i < HL_ACCT_SLOTS; i++)
         if (atomic_load(&g_acct[i].pid) == childpid) return; // child already self-registered
-    for (int i = 0; i < DD_ACCT_SLOTS; i++) {
+    for (int i = 0; i < HL_ACCT_SLOTS; i++) {
         int p = atomic_load(&g_acct[i].pid);
         if (p != 0 && acct_pid_live(p)) continue;
         int exp = p;
@@ -208,7 +208,7 @@ static int acct_pids_total(void) {
         return l > 0 ? l : 1;
     }
     int me = (int)getpid(), total = 0;
-    for (int i = 0; i < DD_ACCT_SLOTS; i++) {
+    for (int i = 0; i < HL_ACCT_SLOTS; i++) {
         int p = atomic_load(&g_acct[i].pid);
         if (p == 0) continue;
         if (p != me && !acct_pid_live(p)) { // a dead engine's slot -> reclaim it
@@ -228,7 +228,7 @@ static unsigned long long acct_mem_total(void) {
     if (!g_acct) return acct_self_mem();
     int me = (int)getpid();
     unsigned long long total = 0;
-    for (int i = 0; i < DD_ACCT_SLOTS; i++) {
+    for (int i = 0; i < HL_ACCT_SLOTS; i++) {
         int p = atomic_load(&g_acct[i].pid);
         if (p == 0) continue;
         if (p != me && !acct_pid_live(p)) {
@@ -434,8 +434,8 @@ static int cgid(void) {
 // "don't change" (POSIX chown) -> leave that xattr untouched so the other id / the default survives.
 // xattrs live on the real APFS upper file, so they persist across a re-stat AND across processes.
 #include <sys/xattr.h>
-#define DD_XATTR_UID "user.dd.uid"
-#define DD_XATTR_GID "user.dd.gid"
+#define HL_XATTR_UID "user.dd.uid"
+#define HL_XATTR_GID "user.dd.gid"
 // PERF (sqlite-select / any stat-heavy workload): reading the guest-chown xattr back on EVERY stat cost
 // two macOS fgetxattr/getxattr per stat (~2.5us each on APFS even for a MISS -> ~5us/stat, 40-50x native
 // fstat). But the dd.uid/dd.gid xattr is set ONLY by an explicit guest chown or a cred-dropped create
@@ -449,16 +449,16 @@ static int cgid(void) {
 // always-read path. Keyed on (st_dev,st_ino) which fill_linux_stat already has from the just-done stat.
 static uint32_t g_chown_gen = 1; // 0 reserved for "empty slot"
 static int g_noxattrcache = -1;  // -1 = uninit; 1 = cache disabled (kill switch)
-#define DD_NOXC_N 4096           // direct-mapped; power of two
+#define HL_NOXC_N 4096           // direct-mapped; power of two
 
 static struct {
     uint64_t dev, ino;
     uint32_t gen;
-} g_noxc[DD_NOXC_N];
+} g_noxc[HL_NOXC_N];
 
 static inline uint32_t noxc_slot(uint64_t dev, uint64_t ino) {
     uint64_t h = (ino * 0x9E3779B97F4A7C15ull) ^ (dev * 0xC2B2AE3D27D4EB4Full);
-    return (uint32_t)(h >> 33) & (DD_NOXC_N - 1);
+    return (uint32_t)(h >> 33) & (HL_NOXC_N - 1);
 }
 
 static void chown_gen_bump(void) { // any new xattr invalidates every cached "no xattr" verdict
@@ -472,11 +472,11 @@ static void chown_xattr_set_path(const char *hostpath, int uid, int gid, int nof
     int opt = nofollow ? XATTR_NOFOLLOW : 0;
     if (uid >= 0) {
         uint32_t v = (uint32_t)uid;
-        setxattr(hostpath, DD_XATTR_UID, &v, sizeof v, 0, opt);
+        setxattr(hostpath, HL_XATTR_UID, &v, sizeof v, 0, opt);
     }
     if (gid >= 0) {
         uint32_t v = (uint32_t)gid;
-        setxattr(hostpath, DD_XATTR_GID, &v, sizeof v, 0, opt);
+        setxattr(hostpath, HL_XATTR_GID, &v, sizeof v, 0, opt);
     }
     if (uid >= 0 || gid >= 0) chown_gen_bump();
 }
@@ -484,11 +484,11 @@ static void chown_xattr_set_path(const char *hostpath, int uid, int gid, int nof
 static void chown_xattr_set_fd(int fd, int uid, int gid) {
     if (uid >= 0) {
         uint32_t v = (uint32_t)uid;
-        fsetxattr(fd, DD_XATTR_UID, &v, sizeof v, 0, 0);
+        fsetxattr(fd, HL_XATTR_UID, &v, sizeof v, 0, 0);
     }
     if (gid >= 0) {
         uint32_t v = (uint32_t)gid;
-        fsetxattr(fd, DD_XATTR_GID, &v, sizeof v, 0, 0);
+        fsetxattr(fd, HL_XATTR_GID, &v, sizeof v, 0, 0);
     }
     if (uid >= 0 || gid >= 0) chown_gen_bump();
 }
@@ -511,20 +511,20 @@ static int chown_xattr_get(const char *hostpath, int fd, uint64_t dev, uint64_t 
     uint32_t v;
     int present = 0;
     if (fd >= 0) {
-        if (fgetxattr(fd, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
+        if (fgetxattr(fd, HL_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
             *uid = (int)v;
             present = 1;
         }
-        if (fgetxattr(fd, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
+        if (fgetxattr(fd, HL_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
             *gid = (int)v;
             present = 1;
         }
     } else {
-        if (getxattr(hostpath, DD_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
+        if (getxattr(hostpath, HL_XATTR_UID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
             *uid = (int)v;
             present = 1;
         }
-        if (getxattr(hostpath, DD_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
+        if (getxattr(hostpath, HL_XATTR_GID, &v, sizeof v, 0, 0) == (ssize_t)sizeof v) {
             *gid = (int)v;
             present = 1;
         }
@@ -637,11 +637,11 @@ static int gid_permitted(int id) {
 // truth. Effective narrows when a guest capset()s a smaller set; the bounding set narrows on
 // PR_CAPBSET_DROP; inheritable/ambient stay empty (the docker default). Previously dd reported all-ones
 // (0xffffffffffffffff) — grossly over-reporting caps vs real docker.
-#define DD_CAP_DEFAULT                                                                                                 \
+#define HL_CAP_DEFAULT                                                                                                 \
     0x00000000a80425fbull                   // chown,dac_override,fowner,fsetid,kill,setgid,setuid,setpcap,
                                             // net_bind_service,net_raw,sys_chroot,mknod,audit_write,setfcap
-static uint64_t g_cap_eff = DD_CAP_DEFAULT; // process EFFECTIVE cap set (capset(2) may narrow it)
-static uint64_t g_cap_bnd = DD_CAP_DEFAULT; // process BOUNDING cap set (PR_CAPBSET_DROP clears bits)
+static uint64_t g_cap_eff = HL_CAP_DEFAULT; // process EFFECTIVE cap set (capset(2) may narrow it)
+static uint64_t g_cap_bnd = HL_CAP_DEFAULT; // process BOUNDING cap set (PR_CAPBSET_DROP clears bits)
 static int g_nnp;                           // PR_SET/GET_NO_NEW_PRIVS: sticky; /proc/self/status NoNewPrivs
 // ---- image-derived supplementary groups (runc additionalGids) --------------------------------
 // A default `docker run` gives the container's run user (default root, uid 0) the supplementary GID set
@@ -656,8 +656,8 @@ static int g_nnp;                           // PR_SET/GET_NO_NEW_PRIVS: sticky; 
 // array below; bare (no-rootfs) mode leaves g_groups_parsed=0 so getgroups keeps its prior host-backed
 // behavior and the status Groups line stays empty -- nothing regresses. setgroups(2) replaces the set
 // (apt/gosu drop their supplementary groups before switching user), keeping getgroups + status coherent.
-#define DD_NGROUPS_MAX 64
-static gid_t g_groups[DD_NGROUPS_MAX];
+#define HL_NGROUPS_MAX 64
+static gid_t g_groups[HL_NGROUPS_MAX];
 static int g_ngroups = 0;       // count in g_groups (may be 0 after a guest setgroups(0))
 static int g_groups_parsed = 0; // 1 once container_parse_groups ran (rootfs mode); gates getgroups/setgroups
 
@@ -666,7 +666,7 @@ static void groups_reset(void) {
 }
 
 static void groups_append(gid_t g) {
-    if (g_ngroups < DD_NGROUPS_MAX) g_groups[g_ngroups++] = g;
+    if (g_ngroups < HL_NGROUPS_MAX) g_groups[g_ngroups++] = g;
 }
 
 // Render the set for /proc/[pid]/status: space-separated with a TRAILING space, exactly as the kernel prints
@@ -725,7 +725,7 @@ static struct {
 
 static int g_nportmap = 0;
 // fd -> the container port it bound (for getsockname)
-static uint16_t g_fd_cport[DD_NFD];
+static uint16_t g_fd_cport[HL_NFD];
 
 static uint16_t pm_host(uint16_t c) {
     for (int i = 0; i < g_nportmap; i++)
@@ -780,7 +780,7 @@ static uint64_t parse_size(const char *s) {
     }
 }
 
-// ---- resource fidelity: docker --cpus / --read-only / --ulimit (SentryConfig: ddockerd -> jit) ----
+// ---- resource fidelity: docker --cpus / --read-only / --ulimit (SentryConfig: hl-dockerd -> jit) ----
 // The online-CPU count the container advertises to the guest: the host's online cores, capped by the
 // container's --cpus allotment (ceil(NanoCpus/1e9)) and the 64-CPU mask ceiling. A guest's nproc / glibc
 // __get_nprocs / GOMAXPROCS / JVM availableProcessors all derive from this (via sched_getaffinity, the
@@ -849,7 +849,7 @@ static void parse_ulimits(const char *spec) {
         }
         *eq = 0;
         int r = ulimit_resource(t);
-        if (r < 0 || r >= DD_RLIM_MAX) continue; // unknown resource -> ignore (forward-compat)
+        if (r < 0 || r >= HL_RLIM_MAX) continue; // unknown resource -> ignore (forward-compat)
         char *colon = strchr(eq + 1, ':');
         uint64_t soft, hard;
         if (colon) {
@@ -866,7 +866,7 @@ static void parse_ulimits(const char *spec) {
 }
 
 // Shared resource-config reader (docker --cpus/--read-only/--ulimit). BOTH the aarch64 and x86_64 frontends
-// call this from container init, so the contract is engine-identical. Env-only: DD_* survive the mac bridge
+// call this from container init, so the contract is engine-identical. Env-only: HL_* survive the mac bridge
 // and the x86 fork-server (both inherit env), and the daemon serializes the HostConfig into these vars.
 static void container_read_resource_env(void) {
     const char *c = getenv("HL_CPUS");

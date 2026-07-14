@@ -2,7 +2,7 @@
 //!
 //! Defined here (in the leaf `hl-ws`) so the [`crate::launch::Launcher`] trait can name the handle it
 //! returns without `hl-ws` depending on any concrete terminal crate. `hl-ws-term` depends on `hl-ws` and
-//! IMPLEMENTS this for its `LocalPty` (and the engine's `DdJitPty` does likewise), so the edge always
+//! IMPLEMENTS this for its `LocalPty` (and the engine's `HlJitPty` does likewise), so the edge always
 //! points UP to `hl-ws` and never the other way.
 
 use std::io;

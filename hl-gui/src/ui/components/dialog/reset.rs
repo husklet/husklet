@@ -7,7 +7,7 @@ use relm4::ComponentSender;
 pub fn confirm_reset(parent: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) {
     let title = gtk::Label::new(Some("Reset dd?"));
     title.set_xalign(0.0);
-    title.add_css_class("dd-onboard-head");
+    title.add_css_class("hl-onboard-head");
     let detail = gtk::Label::new(Some(
         "This removes all containers, volumes and networks. Your images are kept.",
     ));
@@ -17,10 +17,10 @@ pub fn confirm_reset(parent: &gtk::ApplicationWindow, sender: &ComponentSender<A
     detail.add_css_class("dim-label");
 
     let cancel = gtk::Button::with_label("Cancel");
-    cancel.add_css_class("dd-btn");
+    cancel.add_css_class("hl-btn");
     let ok = gtk::Button::with_label("Reset");
-    ok.add_css_class("dd-btn");
-    ok.add_css_class("dd-danger");
+    ok.add_css_class("hl-btn");
+    ok.add_css_class("hl-danger");
     let btns = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     btns.set_halign(gtk::Align::End);
     btns.set_margin_top(8);
@@ -28,7 +28,7 @@ pub fn confirm_reset(parent: &gtk::ApplicationWindow, sender: &ComponentSender<A
     btns.append(&ok);
 
     let v = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    v.add_css_class("dd-dialog");
+    v.add_css_class("hl-dialog");
     v.set_margin_top(20);
     v.set_margin_bottom(18);
     v.set_margin_start(22);
@@ -44,7 +44,7 @@ pub fn confirm_reset(parent: &gtk::ApplicationWindow, sender: &ComponentSender<A
         .child(&v)
         .build();
     win.set_transient_for(Some(parent));
-    win.add_css_class("dd-modal");
+    win.add_css_class("hl-modal");
     let w1 = win.clone();
     cancel.connect_clicked(move |_| w1.close());
     let s = sender.clone();

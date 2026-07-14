@@ -1,6 +1,6 @@
 //! Row 3 live bridge regression (`compositor_validates_dmabuf_planes_flags_and_backing_metadata_
 //! before_success`): drive the REAL C guest probe (`gui_dmabuf_stale_generation_guest.c`) through a
-//! full `zwp_linux_dmabuf_v1` import handshake against a live `dd-compositor`, and prove the compositor
+//! full `zwp_linux_dmabuf_v1` import handshake against a live `hl-compositor`, and prove the compositor
 //! REJECTS an import whose modifier carries a stale allocation generation — while accepting the
 //! matching (and the legacy, unversioned) generation. This is the stale-id protocol regression the
 //! ledger asks for, run over a real socket on the macOS host via the `mac` bridge.
@@ -16,7 +16,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{
     IOSurfaceMetadata, PresentError, PresentOutcome, Presenter, SurfaceBuffer,
 };
@@ -75,15 +75,15 @@ fn dmabuf_import_rejects_a_stale_allocation_generation_over_the_wire() {
     // check rather than to a missing executor.
     hl_compositor::gpu::set_executor_health(true);
 
-    let tmp = std::env::temp_dir().join(format!("dd-stale-gen-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("hl-stale-gen-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
     let Some(probe) = build_probe(&tmp) else {
         return; // no toolchain: skip
     };
 
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let mut state = DdState::new(dh.clone(), Box::new(GenPresenter));
+    let mut state = HlState::new(dh.clone(), Box::new(GenPresenter));
 
     let sock_name = "wayland-stale-gen";
     let sock_path = tmp.join(sock_name);

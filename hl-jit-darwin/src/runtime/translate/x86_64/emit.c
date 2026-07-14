@@ -702,7 +702,7 @@ static uint64_t g_cal_real_ns;    // CLOCK_REALTIME  ns at calibration
 static uint64_t g_cal_mult;       // tick->ns multiplier (Q30): round(1e9 * 2^FAST_SHIFT / cntfrq)
 #define FAST_SHIFT 30
 // ---------------- W4F: inline pure-userspace-state syscalls (rt_sigprocmask / sched_yield) --------
-// Some guest syscalls touch ONLY dd-jit's own per-cpu state and need no host syscall, yet still pay
+// Some guest syscalls touch ONLY hl-jit's own per-cpu state and need no host syscall, yet still pay
 // the full spill->block_return->service()->run_block round-trip. We serve them inline at the `0F 05`
 // site (reusing S1's emit_fast_syscall ladder) and fall through without exiting the block.
 // g_pending is the async-signal pending bitmask owned by os/linux/signal.c (included LATER in this
@@ -912,7 +912,7 @@ static void emit_fast_syscall(uint64_t next) {
 
     // ===================== W4F: pure-userspace-state syscalls (no host syscall) ==================
     // rt_sigprocmask (read/update the per-cpu guest signal mask) + sched_yield (return 0). These
-    // touch ONLY dd-jit's own state, so we serve them inline and fall through -- no spill, no
+    // touch ONLY hl-jit's own state, so we serve them inline and fall through -- no spill, no
     // dispatch, no service(). Same ladder/contract as S1: guest nzcv saved in x17 + restored on
     // EVERY path, guest GPRs untouched except rax(=return); scratch in x16/x19-x22.
     if (g_siginline) {

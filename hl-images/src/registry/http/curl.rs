@@ -21,7 +21,7 @@ pub(super) const MAX_TIME_SECS: &str = "600";
 static SEQ: AtomicU64 = AtomicU64::new(0);
 fn tmp_headers() -> std::path::PathBuf {
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("dd-reg-{}-{n}.hdr", std::process::id()))
+    std::env::temp_dir().join(format!("hl-reg-{}-{n}.hdr", std::process::id()))
 }
 
 pub(super) fn run_curl(args: &[String]) -> Result<Resp, Error> {

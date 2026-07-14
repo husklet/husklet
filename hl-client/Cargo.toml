@@ -2,7 +2,7 @@
 name = "hl-client"
 version = "0.4.0"
 edition = "2021"
-description = "Docker-Engine-API client library for dd-daemon — a thin bollard façade with dd-specific view models, shared by the dd CLI and GUI."
+description = "Docker-Engine-API client library for hl-daemon — a thin bollard façade with hl-specific view models, shared by the hl CLI and GUI."
 license = "MIT"
 
 [lib]

@@ -88,7 +88,7 @@ pub(crate) async fn docker_headers(mut resp: Response) -> Response {
     h.insert("Builder-Version", HeaderValue::from_static("1"));
     h.insert(
         "Server",
-        HeaderValue::from_static(concat!("dd-daemon/", env!("CARGO_PKG_VERSION"))),
+        HeaderValue::from_static(concat!("hl-daemon/", env!("CARGO_PKG_VERSION"))),
     );
     h.insert(
         "Cache-Control",

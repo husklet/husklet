@@ -3,7 +3,7 @@
 // The Rust host serializes the container into the position-independent `hl_config` wire buffer
 // (include/hl_api.h) and `posix_spawn`s the arch-matching engine as `<engine> --configfd <fd>`,
 // streaming that buffer over `fd`. This is the ENGINE side: read + validate the buffer, then translate
-// every populated field back into the exact `DD_*`/`DDJIT_*` environment variable the existing env-driven
+// every populated field back into the exact `HL_*`/`DDJIT_*` environment variable the existing env-driven
 // setup (container_init() in targets/*.c, the guest-env reader in os/linux/elf.c, the pcache/sentry
 // readers) already consumes, rebuild the guest argv, and hand off to hl_run() -- the identical call the
 // normal env/flag launch makes. Reusing the env path means ZERO duplication of container setup logic.
@@ -52,7 +52,7 @@ static const char *cfd_str(const char *pool, uint32_t pool_len, uint32_t off) {
     return pool + off;
 }
 
-// Read a `hl_config` (+ its trailing string pool) from `fd`, re-hydrate the engine's DD_*/DDJIT_* env,
+// Read a `hl_config` (+ its trailing string pool) from `fd`, re-hydrate the engine's HL_*/DDJIT_* env,
 // rebuild the guest argv, and dispatch to hl_run(). The spawn shim normally enters through
 // hl_run_configfile() below; --configfd remains supported for direct/debug launches. Returns hl_run()'s
 // exit code, or a nonzero code on any read/validation failure. Single-shot per process.
@@ -61,7 +61,7 @@ int hl_run_configfd(int fd) {
     memset(&cfg, 0, sizeof cfg);
 
     // Phase 1 — the FROZEN 16-byte prefix: magic@0, pool_len@4, header_len@8, abi@12. Those offsets never
-    // move, so a writer (ddcli) and reader (engine) built from different commits still agree on where the
+    // move, so a writer (hl) and reader (engine) built from different commits still agree on where the
     // size + ABI live. This is the skew guard: instead of trusting our own sizeof for the header (which
     // silently over/under-reads when the writer's struct differs → the old cryptic "short read of N pool
     // bytes"), we learn the writer's exact header size and validate the ABI first.
@@ -81,7 +81,7 @@ int hl_run_configfd(int fd) {
     }
     if (abi != HL_CONFIG_ABI || header_len < sizeof prefix || header_len > 4096) {
         // A real layout/ABI mismatch (not a survivable tail-append). This is the exact failure that used to
-        // masquerade as a pool short-read: the engine and ddcli were built from different commits. Say so.
+        // masquerade as a pool short-read: the engine and hl were built from different commits. Say so.
         fprintf(stderr,
                 "dd: --configfd: incompatible config ABI (writer abi=%u header_len=%u; reader abi=%u sizeof=%zu). "
                 "The engine and launcher were built from different commits — rebuild both from the same tree and "

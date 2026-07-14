@@ -6,8 +6,8 @@
 
 int main(void) {
     char path[128], link[128];
-    snprintf(path, sizeof path, "/tmp/dd_stat_%d", (int)getpid());
-    snprintf(link, sizeof link, "/tmp/dd_stat_%d.lnk", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_stat_%d", (int)getpid());
+    snprintf(link, sizeof link, "/tmp/hl_stat_%d.lnk", (int)getpid());
     unlink(path); unlink(link);
     int fd = open(path, O_CREAT | O_WRONLY, 0644);
     write(fd, "1234567", 7);

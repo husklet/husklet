@@ -6,7 +6,7 @@
 
 int main(void) {
     char dir[128];
-    snprintf(dir, sizeof dir, "/tmp/dd_mkdir_%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/hl_mkdir_%d", (int)getpid());
     rmdir(dir);
     int made = mkdir(dir, 0755) == 0;
     struct stat st;

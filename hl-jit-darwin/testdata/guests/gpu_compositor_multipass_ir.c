@@ -1,4 +1,4 @@
-// Direct dd-gpu Chrome-compositor-like replay probe. It renders a solid quad
+// Direct hl-gpu Chrome-compositor-like replay probe. It renders a solid quad
 // into an RGBA8 offscreen texture, blends alpha/coverage-like content into that
 // texture in a second load/store pass, samples it into the final BGRA IOSurface
 // target, then validates target pixels from the guest CPU mapping.
@@ -14,7 +14,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#define DD_IOCTL_GPU_ALLOC 0xC020DD01u
+#define HL_IOCTL_GPU_ALLOC 0xC020DD01u
 
 struct hl_gpu_alloc {
     uint32_t width, height, format, stride, id;
@@ -186,7 +186,7 @@ static size_t build_ir(uint32_t w, uint32_t h) {
 
 static int stream_ir(uint32_t surface_id, uint32_t w, uint32_t h, const uint8_t *body, size_t len) {
     const char *ep = getenv("HL_GPU_EXEC");
-    if (!ep) ep = "/run/user/0/dd-gpu-0";
+    if (!ep) ep = "/run/user/0/hl-gpu-0";
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         printf("gpu_compositor_multipass: socket failed (%m)\n");
@@ -246,8 +246,8 @@ int main(void) {
         printf("gpu_compositor_multipass: open renderD128 failed (%m)\n");
         return 1;
     }
-    if (ioctl(rnode, DD_IOCTL_GPU_ALLOC, &a) != 0) {
-        printf("gpu_compositor_multipass: DD_IOCTL_GPU_ALLOC failed (%m)\n");
+    if (ioctl(rnode, HL_IOCTL_GPU_ALLOC, &a) != 0) {
+        printf("gpu_compositor_multipass: HL_IOCTL_GPU_ALLOC failed (%m)\n");
         close(rnode);
         return 2;
     }

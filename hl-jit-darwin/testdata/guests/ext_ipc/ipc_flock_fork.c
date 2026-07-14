@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 int main(void) {
-    char path[] = "/tmp/dd_flock_XXXXXX"; int fd = mkstemp(path);
+    char path[] = "/tmp/hl_flock_XXXXXX"; int fd = mkstemp(path);
     flock(fd, LOCK_EX);
     int p[2]; pipe(p);
     pid_t pid = fork();

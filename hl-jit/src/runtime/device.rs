@@ -1,11 +1,11 @@
 //! A runtime-neutral **device-integration seam**: how an external backend (a GPU, an accelerator, a
 //! display bridge, …) tells a container launch what host resources it needs — WITHOUT the runtime ever
-//! learning what that backend *is*. dd-jit knows only "some mounts, some env, maybe a synthetic device
+//! learning what that backend *is*. hl-jit knows only "some mounts, some env, maybe a synthetic device
 //! node"; the concrete meaning (CUDA shims, compositor sockets, an IOSurface render node) lives entirely
-//! in the provider's own crate (e.g. `dd-gpu`), which implements [`DeviceProvider`] and hands the
+//! in the provider's own crate (e.g. `hl-gpu`), which implements [`DeviceProvider`] and hands the
 //! resulting [`DeviceRequest`] to [`ContainerBuilder::apply_device`](super::ContainerBuilder::apply_device).
 //!
-//! This keeps GPU/CUDA/display specifics OUT of the runtime: dd-jit gains no dependency on, and no
+//! This keeps GPU/CUDA/display specifics OUT of the runtime: hl-jit gains no dependency on, and no
 //! vocabulary from, any particular device backend.
 
 /// One host→guest bind mount a device backend needs (a shim library, a helper binary, a socket — the

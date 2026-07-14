@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 
 // ---- bundle environment ----------------------------------------------------
 
-/// When running from inside `dd.app`, point GTK at the bundled runtime data. No-op for a dev
+/// When running from inside `hl.app`, point GTK at the bundled runtime data. No-op for a dev
 /// build (the Resources/Frameworks dirs won't exist), and never overrides an env var already set.
 pub fn setup_bundle_env() {
     let Ok(exe) = std::env::current_exe() else {
@@ -47,7 +47,7 @@ pub(crate) fn set_if_absent(key: &str, val: &OsStr) {
 
 // ---- headless verification ------------------------------------------------------------------------
 // Render the live window to a PNG offscreen so the UI can be verified without an interactive session
-// (`HL_SHOT=/path/out.png dd-app` screenshots once, then quits). Uses the window's own GSK renderer
+// (`HL_SHOT=/path/out.png hl-app` screenshots once, then quits). Uses the window's own GSK renderer
 // against a WidgetPaintable — no extra window, no user input. Pair with `GSK_RENDERER=cairo` for a
 // deterministic software render.
 pub fn screenshot(win: &gtk::ApplicationWindow, path: &str) -> Result<(), String> {

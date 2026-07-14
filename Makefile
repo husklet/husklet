@@ -12,20 +12,20 @@ test: jit       ## run the engine × case matrix (grouped report); FILTER=name E
 	cargo run -q -p hl-jit-darwin --example matrix -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
 test-ci: jit    ## the cargo-test path (one matrix test; for CI)
 	cargo test -p hl-jit-darwin
-mac-crates:     ## POST-MERGE GATE (macOS): build+test the mac-only Wayland-renderer crates (hl-display/hl-gpu-wgpu/dd-compositor). They are NOT in workspace default-members, so a plain `cargo build` never compiles them — run this after any merge that touches shared types they use (present.rs SurfaceBuffer, the GPU IR, …) so a cross-cutting change can't silently break the Smithay/wgpu path. Needs macOS + the nix dev shell (provides libxkbcommon).
-	@[ "$$(uname)" = "Darwin" ] || { echo "mac-crates: macOS-only (dd-compositor links libxkbcommon + the Cocoa/Metal present path) — skipping on $$(uname). Maintainer: run via the mac bridge."; exit 0; }
+mac-crates:     ## POST-MERGE GATE (macOS): build+test the mac-only Wayland-renderer crates (hl-display/hl-gpu-wgpu/hl-compositor). They are NOT in workspace default-members, so a plain `cargo build` never compiles them — run this after any merge that touches shared types they use (present.rs SurfaceBuffer, the GPU IR, …) so a cross-cutting change can't silently break the Smithay/wgpu path. Needs macOS + the nix dev shell (provides libxkbcommon).
+	@[ "$$(uname)" = "Darwin" ] || { echo "mac-crates: macOS-only (hl-compositor links libxkbcommon + the Cocoa/Metal present path) — skipping on $$(uname). Maintainer: run via the mac bridge."; exit 0; }
 	$(NIX_DEV) bash -euc '\
 	  X="$$HL_LIBXKBCOMMON"; [ -n "$$X" ] || { echo "mac-crates: HL_LIBXKBCOMMON not exported by the dev shell — update nix/flake.nix"; exit 1; }; \
 	  export RUSTFLAGS="-L native=$$X/lib $${RUSTFLAGS:-}" DYLD_LIBRARY_PATH="$$X/lib:$${DYLD_LIBRARY_PATH:-}"; \
 	  cargo build -p hl-display -p hl-gpu-wgpu -p hl-compositor; \
 	  cargo test  -p hl-compositor -p hl-gpu-wgpu'
-perf: jit       ## same matrix + an oracle-vs-JIT slowdown table & summary (PERF_N=median runs; writes target/dd-tests/perf.{csv,json}); FILTER/ENGINE narrow
+perf: jit       ## same matrix + an oracle-vs-JIT slowdown table & summary (PERF_N=median runs; writes target/hl-tests/perf.{csv,json}); FILTER/ENGINE narrow
 	PERF=1 cargo run -q -p hl-jit-darwin --example matrix -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
-test-docker: jit ## end-to-end Docker-CLI scenarios against dd-daemon (run/logs/stop/kill/volumes/networks)
+test-docker: jit ## end-to-end Docker-CLI scenarios against hl-daemon (run/logs/stop/kill/volumes/networks)
 	bash hl-daemon/testdata/scenarios/docker.sh
 test-docker-full: jit ## FULL Docker CLI/API compliance matrix (every command; maps each failure to a non-compliant verb)
 	bash hl-daemon/testdata/scenarios/docker-full.sh
-test-compose: jit ## end-to-end Docker Compose scenarios against dd-daemon (up/ps/logs/exec/down; skips if no compose)
+test-compose: jit ## end-to-end Docker Compose scenarios against hl-daemon (up/ps/logs/exec/down; skips if no compose)
 	bash hl-daemon/testdata/scenarios/compose.sh
 	bash hl-daemon/testdata/scenarios/compose-multinet.sh
 test-docker-net: jit ## container-to-container networking (by-name DNS / by-IP / cross-network isolation)
@@ -35,18 +35,18 @@ test-realsw: jit ## run REAL pulled software (redis/python/postgres/nats) with d
 test-smoke:     ## user-perspective: FRESH-PULL + run a real glibc distro on BOTH arches (the libc.so.6 guard; needs network, macOS)
 	cargo build --release -p hl-cli -p hl-daemon
 	bash hl-daemon/testdata/scenarios/smoke-realimage.sh
-scenarios: jit  ## REAL software through dd-daemon (the SUT): popular images, both arches. CAT=databases TGT=arm to narrow
+scenarios: jit  ## REAL software through hl-daemon (the SUT): popular images, both arches. CAT=databases TGT=arm to narrow
 	cargo test -q -p hl-daemon --test scenarios -- --backend dd $(if $(CAT),-c $(CAT)) $(if $(TGT),-t $(TGT))
 scenarios-real: ## same scenarios against the REAL docker oracle (mac Docker Desktop) — proves the tests are correct
 	cargo test -q -p hl-daemon --test scenarios -- --backend real --long $(if $(CAT),-c $(CAT)) $(if $(TGT),-t $(TGT))
-scenarios-long: jit ## full compatibility sweep against dd-daemon (pulls images, heavy workloads, both arches)
+scenarios-long: jit ## full compatibility sweep against hl-daemon (pulls images, heavy workloads, both arches)
 	cargo test -q -p hl-daemon --test scenarios -- --backend dd --long $(if $(CAT),-c $(CAT))
 scenarios-count: ## list every scenario×target case + total (runs nothing) — proves the case count
 	cargo test -q -p hl-daemon --test scenarios -- --count $(if $(CAT),-c $(CAT))
-scenarios-clean: ## reap ONLY harness-spawned dd-daemons (by pidfile, mac-side) + remove scratch — keeps the host clean
-	@for pf in target/dd-scen/*/daemon.pid; do [ -f "$$pf" ] || continue; pid=$$(cat "$$pf"); \
+scenarios-clean: ## reap ONLY harness-spawned hl-daemons (by pidfile, mac-side) + remove scratch — keeps the host clean
+	@for pf in target/hl-scen/*/daemon.pid; do [ -f "$$pf" ] || continue; pid=$$(cat "$$pf"); \
 	  mac bash -lc "kill $$pid 2>/dev/null; true" </dev/null; echo "reaped $$pid"; done; \
-	  rm -rf target/dd-scen/dd-* target/dd-scen/real-* target/dd-scen/*.sh 2>/dev/null; echo "scratch cleaned"
+	  rm -rf target/hl-scen/hl-* target/hl-scen/real-* target/hl-scen/*.sh 2>/dev/null; echo "scratch cleaned"
 scenarios-prune: ## DISK reclaim: drop UNUSED images from the mac docker ORACLE (Docker Desktop). Removes anything no container uses; re-pulls on next run. Opt-in.
 	@echo "oracle disk BEFORE:"; mac docker system df </dev/null 2>&1 | head -2; \
 	  mac docker image prune -af </dev/null 2>&1 | tail -1; \
@@ -62,17 +62,17 @@ fmt:            ## format the whole tree: clang-format the C engine + cargo fmt 
 fmt-check:      ## CI: verify clang-format + cargo fmt are clean (no writes)
 	clang-format --dry-run --Werror $(RUNTIME_C)
 	cargo fmt --all -- --check
-app:            ## build + assemble & ad-hoc-sign build/dd.app (the GTK GUI bundle; macOS)
+app:            ## build + assemble & ad-hoc-sign build/hl.app (the GTK GUI bundle; macOS)
 	@chmod +x hl-gui/package/bundle.sh hl-gui/package/make-dmg.sh
 	cargo clean -p hl-jit-darwin --release                 # FORCE a fresh C engine: build.rs's .c rerun-if-changed is unreliable under CI rust-cache, so a stale engine could otherwise ship (Rust/daemon fixes shipped while engine/C fixes silently didn't)
-	cargo build --release -p hl-daemon -p hl-cli   # native toolchain: builds + allow-jit-signs the ddjit-* engines
-	HL_VERSION=$(VERSION) $(NIX_DEV) hl-gui/package/bundle.sh $(VERSION)   # HL_VERSION -> baked into the dd-app binary
-dmg: app        ## build dist/dd-<ver>-<arch>.dmg from the app bundle (macOS)
+	cargo build --release -p hl-daemon -p hl-cli   # native toolchain: builds + allow-jit-signs the hljit-* engines
+	HL_VERSION=$(VERSION) $(NIX_DEV) hl-gui/package/bundle.sh $(VERSION)   # HL_VERSION -> baked into the hl-app binary
+dmg: app        ## build dist/hl-<ver>-<arch>.dmg from the app bundle (macOS)
 	$(NIX_DEV) hl-gui/package/make-dmg.sh $(VERSION)
 install: app    ## copy the app to /Applications and run `dd install` (per-user, no root)
-	rm -rf /Applications/dd.app && cp -R target/dd.app /Applications/
+	rm -rf /Applications/hl.app && cp -R target/hl.app /Applications/
 	cargo run -q -p hl-cli -- install
-uninstall:      ## remove the daemon agent + docker context (keeps ~/.dd unless --purge)
+uninstall:      ## remove the daemon agent + docker context (keeps ~/.hl unless --purge)
 	cargo run -q -p hl-cli -- uninstall
 clean:
 	cargo clean

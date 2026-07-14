@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 int main(void) {
-    const char *name = "/dd_mq_test";
+    const char *name = "/hl_mq_test";
     mq_unlink(name);
     struct mq_attr at = {0}; at.mq_maxmsg = 8; at.mq_msgsize = 32;
     mqd_t q = mq_open(name, O_CREAT | O_RDWR, 0600, &at);

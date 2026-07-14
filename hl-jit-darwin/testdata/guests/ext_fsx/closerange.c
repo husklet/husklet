@@ -6,7 +6,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_closerange_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_closerange_%d", (int)getpid());
     int lo = -1, hi = -1;
     for (int i = 0; i < 8; i++) {
         int fd = open(path, O_CREAT | O_RDWR, 0644);

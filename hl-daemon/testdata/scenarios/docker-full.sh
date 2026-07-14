@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dd-tests/scenarios/docker-full.sh -- FULL Docker CLI/API compliance matrix against dd-daemon.
+# hl-tests/scenarios/docker-full.sh -- FULL Docker CLI/API compliance matrix against hl-daemon.
 #
 # Walks (nearly) every docker command and asserts the documented behaviour, so a failure maps 1:1 to a
 # non-compliant command. docker.sh covers the happy-path lifecycle; THIS file is the exhaustive sweep,
@@ -9,15 +9,15 @@
 # config/plugin/checkpoint/manifest/trust) are out of scope for a single-host engine and are only
 # probed for a graceful (non-crash) response.
 #
-#   bash dd-tests/scenarios/docker-full.sh        # run after `make jit`
+#   bash hl-tests/scenarios/docker-full.sh        # run after `make jit`
 #
-# Env: HL_IMAGES (image dir, default poc/images), HL_DAEMON (default target/release/dd-daemon).
+# Env: HL_IMAGES (image dir, default poc/images), HL_DAEMON (default target/release/hl-daemon).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
-DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
-SOCK="$ROOT/dd-full.sock"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/hl-daemon}"
+SOCK="$ROOT/hl-full.sock"
 export DOCKER_HOST="unix://$SOCK"
 
 pass=0 fail=0 gaps=""
@@ -26,11 +26,11 @@ has() { if echo "$2" | grep -qF "$3"; then echo "  ok   $1"; pass=$((pass+1)); e
 no()  { if echo "$2" | grep -qF "$3"; then echo "  FAIL $1: [$2] still has [$3]"; fail=$((fail+1)); gaps="$gaps $1"; else echo "  ok   $1"; pass=$((pass+1)); fi; }
 d()   { docker "$@" 2>&1; }
 
-SCEN_LOG="$ROOT/dd-full.log"
-pkill -x dd-daemon 2>/dev/null; rm -f "$SOCK"
+SCEN_LOG="$ROOT/hl-full.log"
+pkill -x hl-daemon 2>/dev/null; rm -f "$SOCK"
 # Fully isolate this daemon: private socket AND private state/volumes (a fresh per-scenario temp
-# dir), so it starts from empty state and never reads or mutates the developer's real ~/.dd.
-STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dd-full.XXXXXX")"
+# dir), so it starts from empty state and never reads or mutates the developer's real ~/.hl.
+STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hl-full.XXXXXX")"
 export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!
@@ -132,9 +132,9 @@ has "run-v-bind"   "$(d run --rm -v "$vol":/mnt alpine cat /mnt/f.txt 2>&1)" "vo
 has "run-w-workdir" "$(d run --rm -w /tmp alpine pwd 2>&1)" "/tmp"
 has "run-user"      "$(d run --rm --user 1000 alpine id -u 2>&1)" "1000"
 has "run-hostname"  "$(d run --rm --hostname myhost alpine hostname 2>&1)" "myhost"
-lcid="$(d run -d --label com.dd.role=worker alpine sh -c 'sleep 3')"
+lcid="$(d run -d --label com.hl.role=worker alpine sh -c 'sleep 3')"
 has "run-label"     "$(d inspect --format '{{.Config.Labels}}' "$lcid" 2>&1)" "worker"
-has "ps-filter-label" "$(d ps --filter label=com.dd.role=worker --format '{{.Image}}' 2>&1)" "alpine"
+has "ps-filter-label" "$(d ps --filter label=com.hl.role=worker --format '{{.Image}}' 2>&1)" "alpine"
 d rm -f "$lcid" >/dev/null; rm -rf "$vol"
 
 echo "== ps filters / formatting =="

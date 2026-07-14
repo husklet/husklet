@@ -1,4 +1,4 @@
-//! Command-buffer recording + queue submit + synchronization (real bodies), producing dd-gpu IR.
+//! Command-buffer recording + queue submit + synchronization (real bodies), producing hl-gpu IR.
 //!
 //! Ported from MoltenVK's command + queue objects:
 //!   * `Commands/MVKCmdDispatch.mm` — dispatch encodes `dispatchThreadgroups: count

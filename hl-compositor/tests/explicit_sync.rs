@@ -7,7 +7,7 @@
 //! then commits the buffer. We then prove the compositor's fence CONTRACT end to end:
 //!
 //!   * the acquire fence committed with the buffer is available to the present path BEFORE sampling
-//!     ([`DdState::take_acquire_fence`]) and a real pollable-fd wait blocks until it signals
+//!     ([`HlState::take_acquire_fence`]) and a real pollable-fd wait blocks until it signals
 //!     ([`wait_acquire_fence`]);
 //!   * signalling the release AFTER GPU completion reaches the client both as `immediate_release`
 //!     (no fence) and as `fenced_release` carrying the compositor's completion fence fd;
@@ -24,7 +24,7 @@
 #![cfg(target_os = "linux")]
 
 use hl_compositor::handlers::explicit_sync::wait_acquire_fence;
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use hl_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
@@ -118,9 +118,9 @@ fn signal_eventfd(fd: RawFd) {
 
 #[test]
 fn explicit_sync_acquire_release_fence_contract() {
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let mut state = DdState::new(dh.clone(), Box::new(CountingPresenter { frames: 0 }));
+    let mut state = HlState::new(dh.clone(), Box::new(CountingPresenter { frames: 0 }));
 
     let (client_fd, server_fd) = socketpair_nonblocking();
     dh.insert_client(

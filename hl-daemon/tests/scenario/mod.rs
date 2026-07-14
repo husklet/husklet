@@ -7,7 +7,7 @@
 //! TWO BACKENDS (the key to fast, unblocked authoring):
 //!   * [`Backend::Real`] — the host's real `docker`. The **oracle / ground truth**: every scenario must
 //!     pass here, which proves the *test* is correct (deterministic, right marker). Authors verify here.
-//!   * [`Backend::Dd`]   — `dd-daemon` (the system under test), driven via the `mac` bridge on a linux
+//!   * [`Backend::Hl`]   — `hl-daemon` (the system under test), driven via the `mac` bridge on a linux
 //!     dev host (the daemon is a Mach-O binary; env is inline, socket/state under a `/Users` shared
 //!     path) or directly on a real macOS host. Divergences from the oracle are dd bugs → `xfail` + GAPS.
 //!
@@ -23,7 +23,7 @@
 
 mod arch;
 mod daemon;
-mod diag; // failed-run -> actionable JIT bug report (was the diag helper from the dissolved dd-tests crate)
+mod diag; // failed-run -> actionable JIT bug report (was the diag helper from the dissolved hl-tests crate)
 mod drive;
 mod model;
 

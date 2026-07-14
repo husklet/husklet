@@ -1,4 +1,4 @@
-//! `dd-display selftest <out.png>` — a REAL-socket end-to-end proof of the CPU path, portable to macOS.
+//! `hl-display selftest <out.png>` — a REAL-socket end-to-end proof of the CPU path, portable to macOS.
 //!
 //! Unlike the in-crate unit test (which uses a `socketpair`), this binds a real `AF_UNIX` listening
 //! socket, `fork`s a Wayland client that backs a `wl_shm` pool with an anonymous shared file
@@ -18,7 +18,7 @@ const WL_DISPLAY: u32 = 1;
 fn anon_shared_fd(size: usize) -> RawFd {
     #[cfg(target_os = "linux")]
     let fd = {
-        let name = std::ffi::CString::new("dd-shm-selftest").unwrap();
+        let name = std::ffi::CString::new("hl-shm-selftest").unwrap();
         unsafe { libc::memfd_create(name.as_ptr(), 0) }
     };
     #[cfg(not(target_os = "linux"))]
@@ -380,7 +380,7 @@ fn drain(c: &mut Conn) {
 
 /// Run the real-socket self-test: fork a client, serve it, dump a PNG. Returns the PNG path.
 pub fn run(out: &str) -> std::io::Result<()> {
-    let sock = format!("/tmp/dd-display-selftest-{}.sock", unsafe {
+    let sock = format!("/tmp/hl-display-selftest-{}.sock", unsafe {
         libc::getpid()
     });
     let _ = std::fs::remove_file(&sock);
@@ -438,6 +438,6 @@ pub fn run(out: &str) -> std::io::Result<()> {
             "no frame composited",
         ));
     }
-    println!("dd-display selftest: composited 1 frame over a real AF_UNIX socket -> {out}");
+    println!("hl-display selftest: composited 1 frame over a real AF_UNIX socket -> {out}");
     Ok(())
 }

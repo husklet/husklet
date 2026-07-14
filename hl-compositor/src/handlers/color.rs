@@ -30,7 +30,7 @@ use smithay::reexports::wayland_server::{
     GlobalDispatch, New, Resource, Weak as WlWeak,
 };
 
-use crate::DdState;
+use crate::HlState;
 
 const COLOR_MANAGER_VERSION: u32 = 1;
 
@@ -271,7 +271,7 @@ pub struct ColorSurfaceData {
     surface: WlWeak<WlSurface>,
 }
 
-/// Aggregate `wp_color_manager_v1` state, held in [`DdState`].
+/// Aggregate `wp_color_manager_v1` state, held in [`HlState`].
 pub struct ColorManagementState {
     #[allow(dead_code)]
     global: GlobalId,
@@ -285,7 +285,7 @@ pub struct ColorManagementState {
 
 impl ColorManagementState {
     pub fn new(dh: &DisplayHandle) -> Self {
-        let global = dh.create_global::<DdState, WpColorManagerV1, ()>(COLOR_MANAGER_VERSION, ());
+        let global = dh.create_global::<HlState, WpColorManagerV1, ()>(COLOR_MANAGER_VERSION, ());
         Self {
             global,
             output: ColorDescription::srgb(),
@@ -295,7 +295,7 @@ impl ColorManagementState {
     }
 }
 
-impl DdState {
+impl HlState {
     /// The committed color description a surface declared (by sid), if any.
     pub fn surface_color(&self, sid: u32) -> Option<ColorDescription> {
         self.color.surface_colors.get(&sid).map(|(d, _)| d.clone())
@@ -318,7 +318,7 @@ impl DdState {
 
 // ---- wp_color_manager_v1 (manager global) ----------------------------------------------------------
 
-impl GlobalDispatch<WpColorManagerV1, ()> for DdState {
+impl GlobalDispatch<WpColorManagerV1, ()> for HlState {
     fn bind(
         _state: &mut Self,
         _dh: &DisplayHandle,
@@ -344,7 +344,7 @@ impl GlobalDispatch<WpColorManagerV1, ()> for DdState {
     }
 }
 
-impl Dispatch<WpColorManagerV1, ()> for DdState {
+impl Dispatch<WpColorManagerV1, ()> for HlState {
     fn request(
         state: &mut Self,
         _client: &Client,
@@ -377,7 +377,7 @@ impl Dispatch<WpColorManagerV1, ()> for DdState {
 
 // ---- wp_image_description_creator_params_v1 --------------------------------------------------------
 
-impl Dispatch<WpImageDescriptionCreatorParamsV1, ParamsCreatorData> for DdState {
+impl Dispatch<WpImageDescriptionCreatorParamsV1, ParamsCreatorData> for HlState {
     fn request(
         state: &mut Self,
         _client: &Client,
@@ -424,7 +424,7 @@ impl Dispatch<WpImageDescriptionCreatorParamsV1, ParamsCreatorData> for DdState 
 
 // ---- wp_image_description_creator_icc_v1 -----------------------------------------------------------
 
-impl Dispatch<WpImageDescriptionCreatorIccV1, IccCreatorData> for DdState {
+impl Dispatch<WpImageDescriptionCreatorIccV1, IccCreatorData> for HlState {
     fn request(
         state: &mut Self,
         _client: &Client,
@@ -485,7 +485,7 @@ fn read_fd_range(
 
 // ---- wp_image_description_v1 -----------------------------------------------------------------------
 
-impl Dispatch<WpImageDescriptionV1, ImageDescData> for DdState {
+impl Dispatch<WpImageDescriptionV1, ImageDescData> for HlState {
     fn request(
         _state: &mut Self,
         _client: &Client,
@@ -507,7 +507,7 @@ impl Dispatch<WpImageDescriptionV1, ImageDescData> for DdState {
 
 // ---- wp_color_management_surface_v1 ----------------------------------------------------------------
 
-impl Dispatch<WpColorManagementSurfaceV1, ColorSurfaceData> for DdState {
+impl Dispatch<WpColorManagementSurfaceV1, ColorSurfaceData> for HlState {
     fn request(
         state: &mut Self,
         _client: &Client,
@@ -540,7 +540,7 @@ impl Dispatch<WpColorManagementSurfaceV1, ColorSurfaceData> for DdState {
 
 // ---- wp_color_management_output_v1 -----------------------------------------------------------------
 
-impl Dispatch<WpColorManagementOutputV1, ()> for DdState {
+impl Dispatch<WpColorManagementOutputV1, ()> for HlState {
     fn request(
         state: &mut Self,
         _client: &Client,

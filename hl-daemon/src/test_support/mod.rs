@@ -38,7 +38,7 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// (best-effort; a RAII guard across the async lock is not worth the complexity).
 pub(crate) fn test_app() -> App {
     let base = std::env::temp_dir().join(format!(
-        "dd-daemon-test-{}-{}",
+        "hl-daemon-test-{}-{}",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));

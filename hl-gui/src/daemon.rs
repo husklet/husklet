@@ -1,15 +1,15 @@
-//! Managing the dd-daemon process: start our bundled copy, stop an external LaunchAgent, and
-//! resolve the daemon binary (+ the dir holding the `ddjit-*` engines).
+//! Managing the hl-daemon process: start our bundled copy, stop an external LaunchAgent, and
+//! resolve the daemon binary (+ the dir holding the `hljit-*` engines).
 
 use std::path::PathBuf;
 
-/// Spawn the dd-daemon binary detached, with the canonical socket/images/JIT env, and return the
+/// Spawn the hl-daemon binary detached, with the canonical socket/images/JIT env, and return the
 /// child so we can stop it later. Resolves the binary from `$HL_DAEMON_BIN`, the app bundle
-/// (`Contents/Resources/dd-daemon`), or a sibling of this executable (the dev/`cargo` layout).
+/// (`Contents/Resources/hl-daemon`), or a sibling of this executable (the dev/`cargo` layout).
 pub(crate) fn spawn_daemon() -> Option<std::process::Child> {
     use std::process::{Command, Stdio};
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let dd = PathBuf::from(&home).join(".dd");
+    let dd = PathBuf::from(&home).join(".hl");
     let run = dd.join("run");
     let images = dd.join("images");
     let _ = std::fs::create_dir_all(&run);
@@ -50,11 +50,11 @@ pub(crate) fn stop_external_daemon() {
     }
     let uid = unsafe { getuid() };
     let _ = std::process::Command::new("launchctl")
-        .args(["bootout", &format!("gui/{uid}/com.dd.daemon")])
+        .args(["bootout", &format!("gui/{uid}/com.hl.daemon")])
         .output();
 }
 
-/// Locate the daemon binary and the dir holding the `ddjit-*` engines.
+/// Locate the daemon binary and the dir holding the `hljit-*` engines.
 fn resolve_daemon() -> Option<(PathBuf, PathBuf)> {
     if let Some(p) = std::env::var_os("HL_DAEMON_BIN") {
         let p = PathBuf::from(p);
@@ -62,17 +62,17 @@ fn resolve_daemon() -> Option<(PathBuf, PathBuf)> {
         return Some((p, dir));
     }
     let exe = std::env::current_exe().ok()?;
-    // Bundle: .../Contents/MacOS/dd-app -> .../Contents/Resources/dd-daemon
+    // Bundle: .../Contents/MacOS/hl-app -> .../Contents/Resources/hl-daemon
     if let Some(contents) = exe.parent().and_then(|p| p.parent()) {
         let res = contents.join("Resources");
-        let cand = res.join("dd-daemon");
+        let cand = res.join("hl-daemon");
         if cand.exists() {
             return Some((cand, res));
         }
     }
-    // Dev: a dd-daemon next to this binary (ddjit-* paths are baked in at compile time there).
+    // Dev: a hl-daemon next to this binary (hljit-* paths are baked in at compile time there).
     if let Some(dir) = exe.parent() {
-        let cand = dir.join("dd-daemon");
+        let cand = dir.join("hl-daemon");
         if cand.exists() {
             return Some((cand, dir.to_path_buf()));
         }

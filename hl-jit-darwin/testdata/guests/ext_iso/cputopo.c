@@ -1,7 +1,7 @@
 // CPU-topology sysfs conformance: lscpu / util-linux reconstruct sockets/cores/threads by reading
 // /sys/devices/system/cpu/cpuN/topology/{core_id,physical_package_id,thread_siblings_list,core_cpus_list,
 // core_siblings_list,...} for every online CPU. dd materialized the cpuN directories but served NONE of
-// the topology attribute files (every open -> ENOENT), so lscpu mis-counts or errors -- a dd-only
+// the topology attribute files (every open -> ENOENT), so lscpu mis-counts or errors -- a hl-only
 // divergence from real docker (which always serves them). This probe drives lscpu's exact reads and
 // prints a HOST-INDEPENDENT structural verdict (the attribute VALUES are host-variant -- core_id need not
 // equal N on real SMT hardware -- so we assert STRUCTURE, not bytes): ok=1 iff, for every online CPU,

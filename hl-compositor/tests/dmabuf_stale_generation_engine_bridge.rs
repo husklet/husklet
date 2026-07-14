@@ -20,7 +20,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{IOSurfaceMetadata, PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use smithay::reexports::wayland_server::Display;
 
@@ -54,7 +54,7 @@ fn cc(src: &Path, out: &Path, extra: &[&str]) -> Option<PathBuf> {
 
 #[test]
 fn stale_engine_generation_is_rejected_and_the_live_one_imports() {
-    let tmp = std::env::temp_dir().join(format!("dd-stale-engine-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("hl-stale-engine-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
     let sender = cc(
         &guest("gui_dmabuf_gen_sender.c"),
@@ -68,7 +68,7 @@ fn stale_engine_generation_is_rejected_and_the_live_one_imports() {
 
     std::env::set_var("HL_DISPLAY_DMABUF", "1");
     hl_compositor::gpu::set_executor_health(true);
-    let bridge = format!("com.dd.display.gpu.test.{}", std::process::id());
+    let bridge = format!("com.hl.display.gpu.test.{}", std::process::id());
     std::env::set_var("HL_GPU_BRIDGE_NAME", &bridge);
     assert!(hl_display::metal::start_gpu_bridge(), "mach bridge register");
 
@@ -91,9 +91,9 @@ fn stale_engine_generation_is_rejected_and_the_live_one_imports() {
     }
 
     // (4) Drive the import handshake for this real id.
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let mut state = DdState::new(dh.clone(), Box::new(MetalDelegatingPresenter));
+    let mut state = HlState::new(dh.clone(), Box::new(MetalDelegatingPresenter));
     let sock_name = "wayland-stale-engine";
     let sock_path = tmp.join(sock_name);
     let _ = std::fs::remove_file(&sock_path);

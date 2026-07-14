@@ -16,7 +16,7 @@
 //!     process at the FIRST unsupported call, so an app run stops exactly where dd cannot honestly act
 //!     instead of silently mis-executing.
 //!
-//! Identical mechanism to dd-shim-cuda / dd-shim-gl `stub.rs`.
+//! Identical mechanism to hl-shim-cuda / hl-shim-gl `stub.rs`.
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
@@ -47,7 +47,7 @@ pub fn strict_enabled() -> bool {
 /// history. Factored out so it is unit-testable without actually aborting the process.
 pub fn strict_report(cmd: &str, detail: &str) -> String {
     let mut s = String::new();
-    s.push_str("[dd-shim-vk] STRICT: aborting at first unsupported Vulkan call\n");
+    s.push_str("[hl-shim-vk] STRICT: aborting at first unsupported Vulkan call\n");
     s.push_str(&format!("  command: {cmd}\n"));
     s.push_str(&format!("  object : {detail}\n"));
     let hist = history_snapshot();
@@ -95,7 +95,7 @@ pub fn hit(name: &'static str) {
     if std::env::var_os("HL_SHIM_DEBUG").is_some() {
         if let Ok(mut s) = seen().lock() {
             if s.insert(name) {
-                eprintln!("[dd-shim-vk] unimplemented entry point: {name} (default stub)");
+                eprintln!("[hl-shim-vk] unimplemented entry point: {name} (default stub)");
             }
         }
     }

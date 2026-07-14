@@ -265,7 +265,7 @@ static uint64_t pcache_make_id(const char *prog_host, const char *interp_host, c
 
 static void pcache_file(char *out, size_t n) {
     const char *dir = getenv("HL_JIT_PCACHE_DIR");
-    if (!dir || !dir[0]) dir = "/tmp/ddjit-pcache-arm64";
+    if (!dir || !dir[0]) dir = "/tmp/hljit-pcache-arm64";
     mkdir(dir, 0700);
     snprintf(out, n, "%s/%016llx.pcache", dir, (unsigned long long)g_pc_binid);
 }

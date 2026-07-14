@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *path = "/tmp/dd_filelock.bin";
+    const char *path = "/tmp/hl_filelock.bin";
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     ftruncate(fd, 16);
 

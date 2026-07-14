@@ -1,12 +1,12 @@
-# dd-shim-vk — the guest Vulkan driver (a Vulkan ICD), as a first-class PRODUCT crate (FOUNDATION).
+# hl-shim-vk — the guest Vulkan driver (a Vulkan ICD), as a first-class PRODUCT crate (FOUNDATION).
 #
 # Cross-compiles to the guest ELF targets and links as the shared object a standard Vulkan **loader**
 # (libvulkan) discovers through an `icd.json` manifest (`VK_ICD_FILENAMES`/`VK_DRIVER_FILES`). An
 # unmodified Vulkan app opens `libvulkan`, the loader loads this driver, negotiates the loader<->ICD
 # interface (`vk_icdNegotiateLoaderICDInterfaceVersion`), and resolves every `vk*` entry point through
-# our `vk_icdGetInstanceProcAddr`. The device we report is "dd Metal (Vulkan)"; the compute/render
-# path lowers into a dd-gpu IR stream through `dd-shim-common`'s transport — the SAME IR the host
-# decodes with the SAME Rust code (no hand-rolled second encoder). Mirrors dd-shim-gl / dd-shim-cuda.
+# our `vk_icdGetInstanceProcAddr`. The device we report is "hl Metal (Vulkan)"; the compute/render
+# path lowers into a hl-gpu IR stream through `hl-shim-common`'s transport — the SAME IR the host
+# decodes with the SAME Rust code (no hand-rolled second encoder). Mirrors hl-shim-gl / hl-shim-cuda.
 #
 # The ICD interface is ported from the AUTHORITATIVE Khronos sources (Vulkan-Loader
 # docs/LoaderDriverInterface.md + include/vulkan/vk_icd.h; MoltenVK vulkan.mm for the negotiation +
@@ -18,7 +18,7 @@
 name = "hl-shim-vk"
 version = "0.1.0"
 edition = "2021"
-description = "Guest Vulkan ICD producing libvk_dd.so: vk.xml-generated vk* entry-point surface + loader-ICD interface (vk_icdGetInstanceProcAddr / negotiation) over dd-shim-common's shared dd-gpu IR transport."
+description = "Guest Vulkan ICD producing libvk_dd.so: vk.xml-generated vk* entry-point surface + loader-ICD interface (vk_icdGetInstanceProcAddr / negotiation) over hl-shim-common's shared hl-gpu IR transport."
 license = "MIT"
 
 [lib]
@@ -29,10 +29,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Transport + shared IR re-export (the anti-drift contract): the shim encodes with the SAME
-# `dd_gpu::ir::Cmd` the host decodes with `Cmd::decode`.
+# `hl_gpu::ir::Cmd` the host decodes with `Cmd::decode`.
 hl-shim = { path = "../hl-shim" }
-# The shared dd-gpu IR (buffers/textures/shaders/pipelines/passes/fences) the Vulkan object model maps
-# onto. Same `dd-gpu` path dd-shim-common depends on, so the IR types are identical (no drift).
+# The shared hl-gpu IR (buffers/textures/shaders/pipelines/passes/fences) the Vulkan object model maps
+# onto. Same `hl-gpu` path hl-shim-common depends on, so the IR types are identical (no drift).
 hl-gpu = { path = "../hl-gpu" }
 # `ash` (the Khronos-blessed Rust Vulkan bindings) is used ONLY for its `vk` module's spec-exact,
 # `#[repr(C)]` type layouts (VkPhysicalDeviceProperties/Limits, VkInstanceCreateInfo, the enums, the
@@ -47,5 +47,5 @@ ash = { version = "0.38", default-features = false }
 #
 # The end-to-end Vulkan-on-real-Metal validations live in `hl-gpu-wgpu/tests/vk_compute.rs` +
 # `vk_triangle.rs` (next to the `spirv_*` host seam they replay on), NOT here — so this crate keeps a
-# tiny, always-cached dependency set (dd-shim-common + dd-gpu + ash) and `cargo build -p hl-shim-vk`
-# stays offline-buildable on the Linux guest host. dd-gpu-wgpu dev-depends on this crate to drive them.
+# tiny, always-cached dependency set (hl-shim-common + hl-gpu + ash) and `cargo build -p hl-shim-vk`
+# stays offline-buildable on the Linux guest host. hl-gpu-wgpu dev-depends on this crate to drive them.

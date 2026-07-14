@@ -1,14 +1,14 @@
 //! `wl_output` / `xdg_output` handler. Smithay's [`OutputManagerState`] owns the mode/scale/geometry
 //! tables and emits the `geometry`/`mode`/`scale`/`done` events; the compositor only needs to declare
 //! that it participates. Output state changes are pushed via `Output::change_current_state` (see
-//! `DdState::new`), not through this handler.
+//! `HlState::new`), not through this handler.
 //!
 //! ## Multi-output readiness
-//! The primary output (`dd-0`) is stood up in `DdState::new`. The state is NOT hard-wired to exactly
+//! The primary output (`hl-0`) is stood up in `HlState::new`. The state is NOT hard-wired to exactly
 //! one output, though: [`OutputManagerState`] (created with `new_with_xdg_output`) tracks *every*
 //! [`Output`] whose global is created, and independently emits `wl_output` + `zxdg_output_v1`
-//! (name/description/logical position+size) for each. [`DdState::add_output`] registers an additional
-//! output global at a logical position, and the extras are retained in `DdState::extra_outputs` so a
+//! (name/description/logical position+size) for each. [`HlState::add_output`] registers an additional
+//! output global at a logical position, and the extras are retained in `HlState::extra_outputs` so a
 //! multi-monitor guest sees a coherent output layout even though the present path still shows one
 //! native window per surface. Toolkits (GTK/Qt) that require xdg-output for correct multi-monitor +
 //! scaling get it here.
@@ -17,11 +17,11 @@ use smithay::output::{Mode as OutMode, Output, PhysicalProperties, Scale, Subpix
 use smithay::utils::{Point, Size};
 use smithay::wayland::output::OutputHandler;
 
-use crate::{DdState, OUTPUT_REFRESH_MHZ};
+use crate::{HlState, OUTPUT_REFRESH_MHZ};
 
-impl OutputHandler for DdState {}
+impl OutputHandler for HlState {}
 
-impl DdState {
+impl HlState {
     pub(crate) fn selected_output(&self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> Output {
         self.surface_outputs
             .get(&self.surface_id(surface))
@@ -193,7 +193,7 @@ impl DdState {
         self.surface_outputs.get(&sid).map(Output::name)
     }
 
-    /// Register an ADDITIONAL output global (beyond the primary `dd-0`) at a logical `position`, with its
+    /// Register an ADDITIONAL output global (beyond the primary `hl-0`) at a logical `position`, with its
     /// own name/description, device `mode` (px), and integer `scale`. The new output's `wl_output` +
     /// `zxdg_output_v1` are advertised immediately by the shared [`OutputManagerState`]; the returned (and
     /// retained) [`Output`] lets the compositor later re-state it. Proves the output plumbing handles
@@ -212,7 +212,7 @@ impl DdState {
             PhysicalProperties {
                 size: (0, 0).into(),
                 subpixel: Subpixel::Unknown,
-                make: "dd".into(),
+                make: "hl".into(),
                 model: model.into(),
             },
         );

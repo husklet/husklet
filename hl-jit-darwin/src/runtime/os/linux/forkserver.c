@@ -272,7 +272,7 @@ static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, ch
     for (int i = 0; i < nfd; i++)
         if (fds[i] > 2) close(fds[i]);
     // Adopt the client's environment WHOLESALE (guest envp is built from environ) + its cwd, so
-    // `FOO=bar cd dir && ddjit --client ...` behaves exactly like the standalone engine invocation.
+    // `FOO=bar cd dir && hljit --client ...` behaves exactly like the standalone engine invocation.
     static char *envvec[FSRV_MAXENV + 1];
     int ne = 0;
     for (; envv && envv[ne] && ne < FSRV_MAXENV; ne++)
@@ -346,7 +346,7 @@ static int ddjitd_server_main(int argc, char **argv) {
             prewarm = argv[++i];
     }
     if (!sock) {
-        fprintf(stderr, "usage: ddjit --server SOCK [--rootfs DIR] [--prewarm PROG]\n");
+        fprintf(stderr, "usage: hljit --server SOCK [--rootfs DIR] [--prewarm PROG]\n");
         return 2;
     }
     if (rootfs) snprintf(g_srv_rootfs, sizeof g_srv_rootfs, "%s", rootfs);
@@ -630,7 +630,7 @@ static int ddjitd_client_main(int argc, char **argv) {
             break;
     }
     if (!sock || ai >= argc) {
-        fprintf(stderr, "usage: ddjit --client SOCK [--rootfs DIR] PROG [args...]\n");
+        fprintf(stderr, "usage: hljit --client SOCK [--rootfs DIR] PROG [args...]\n");
         return 2;
     }
     int s = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -657,7 +657,7 @@ static int ddjitd_client_main(int argc, char **argv) {
     int32_t cl = cwd[0] ? (int32_t)strlen(cwd) + 1 : 0;
     if (pack_strvec(buf, sizeof buf, &o, argc - ai, argv + ai) != 0 ||
         pack_strvec(buf, sizeof buf, &o, nenv, environ) != 0 || o + 4 + (size_t)cl > sizeof buf) {
-        fprintf(stderr, "ddjit --client: request too large\n");
+        fprintf(stderr, "hljit --client: request too large\n");
         return 1;
     }
     memcpy(buf + o, &cl, 4);

@@ -1,16 +1,16 @@
 //! macOS platform impl. Service management is the per-user launchd LaunchAgent (no root):
-//! it writes `~/Library/LaunchAgents/com.dd.daemon.plist` and drives it with the modern
+//! it writes `~/Library/LaunchAgents/com.hl.daemon.plist` and drives it with the modern
 //! `launchctl bootstrap/bootout/kickstart/print` API in the per-user GUI domain `gui/<uid>`.
 //! Quarantine is the Gatekeeper `com.apple.quarantine` xattr probe; the app bundle is
-//! `/Applications/dd.app`; logs live under `~/Library/Logs/dd`.
+//! `/Applications/hl.app`; logs live under `~/Library/Logs/hl`.
 
 use crate::paths;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Installed app-bundle location (where `ddcli install` expects the signed `.app`).
-const APP_BUNDLE: &str = "/Applications/dd.app";
+/// Installed app-bundle location (where `hl install` expects the signed `.app`).
+const APP_BUNDLE: &str = "/Applications/hl.app";
 
 // Avoid a libc dependency for one call.
 extern "C" {
@@ -24,12 +24,12 @@ fn domain_target() -> String {
     format!("gui/{uid}")
 }
 
-/// The `gui/<uid>/com.dd.daemon` service name for kickstart/bootout/print.
+/// The `gui/<uid>/com.hl.daemon` service name for kickstart/bootout/print.
 fn service_target() -> String {
     format!("{}/{}", domain_target(), paths::AGENT_LABEL)
 }
 
-/// `~/Library/LaunchAgents/com.dd.daemon.plist`.
+/// `~/Library/LaunchAgents/com.hl.daemon.plist`.
 fn agent_plist() -> PathBuf {
     paths::home()
         .join("Library/LaunchAgents")
@@ -39,7 +39,7 @@ fn agent_plist() -> PathBuf {
 /// Render the LaunchAgent plist. launchd does **not** expand `~`, so every path is absolute.
 fn render_plist() -> String {
     let daemon = paths::daemon_bin();
-    // The JIT binaries (ddjit-*) live next to the daemon inside the bundle's Resources dir.
+    // The JIT binaries (hljit-*) live next to the daemon inside the bundle's Resources dir.
     let jit_dir = daemon
         .parent()
         .map(|p| p.to_path_buf())
@@ -84,7 +84,7 @@ fn render_plist() -> String {
 
 // ── Seam surface ──────────────────────────────────────────────────────────────
 
-/// Create the `~/.dd` tree and write the plist (does not load it). Returns the plist path.
+/// Create the `~/.hl` tree and write the plist (does not load it). Returns the plist path.
 pub fn service_write() -> std::io::Result<PathBuf> {
     for d in [
         paths::run_dir(),
@@ -123,17 +123,17 @@ fn bootstrap() -> std::io::Result<()> {
     )
 }
 
-/// `launchctl bootout gui/<uid>/com.dd.daemon` (stop + unload).
+/// `launchctl bootout gui/<uid>/com.hl.daemon` (stop + unload).
 pub fn service_stop() -> std::io::Result<()> {
     run("launchctl", &["bootout", &service_target()])
 }
 
-/// `launchctl kickstart -k gui/<uid>/com.dd.daemon` (restart).
+/// `launchctl kickstart -k gui/<uid>/com.hl.daemon` (restart).
 pub fn service_restart() -> std::io::Result<()> {
     run("launchctl", &["kickstart", "-k", &service_target()])
 }
 
-/// `launchctl print gui/<uid>/com.dd.daemon` (status, streamed to our stdout).
+/// `launchctl print gui/<uid>/com.hl.daemon` (status, streamed to our stdout).
 pub fn service_status() -> std::io::Result<bool> {
     let st = Command::new("launchctl")
         .args(["print", &service_target()])
@@ -148,7 +148,7 @@ pub fn service_remove() -> std::io::Result<()> {
     Ok(())
 }
 
-/// The `gui/<uid>/com.dd.daemon` service target (shown in install output).
+/// The `gui/<uid>/com.hl.daemon` service target (shown in install output).
 pub fn service_label() -> String {
     service_target()
 }
@@ -167,9 +167,9 @@ pub fn app_bundle() -> Option<PathBuf> {
     Some(PathBuf::from(APP_BUNDLE))
 }
 
-/// `~/Library/Logs/dd` — daemon stdout/stderr logs.
+/// `~/Library/Logs/hl` — daemon stdout/stderr logs.
 pub fn logs_dir() -> PathBuf {
-    paths::home().join("Library/Logs/dd")
+    paths::home().join("Library/Logs/hl")
 }
 
 fn run(cmd: &str, args: &[&str]) -> std::io::Result<()> {

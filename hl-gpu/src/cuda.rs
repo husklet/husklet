@@ -1,4 +1,4 @@
-//! Simulated CUDA device + CUDA→dd-GPU-IR translation (the "show the container a CUDA device, run it
+//! Simulated CUDA device + CUDA→hl-GPU-IR translation (the "show the container a CUDA device, run it
 //! on host Metal" path). See `docs/ideas/CUDA_ON_METAL.md` for the full design and the honest
 //! feasibility phasing.
 //!
@@ -41,14 +41,14 @@ impl CudaDeviceDesc {
     /// by unified memory. `vram_bytes` should be a slice of the machine's RAM the user allows.
     pub fn apple_default(vram_bytes: u64) -> Self {
         Self {
-            name: "dd Metal (CUDA-sim) Device".into(),
+            name: "hl Metal (CUDA-sim) Device".into(),
             compute_capability: (8, 6),
             total_mem: vram_bytes,
             multiprocessor_count: 32,
             warp_size: 32,
             max_threads_per_block: 1024,
             clock_khz: 1_500_000,
-            uuid: *b"dd-metal-cuda\0\0\0",
+            uuid: *b"hl-metal-cuda\0\0\0",
             pci_bus_id: "0000:00:00.0".into(),
         }
     }
@@ -136,7 +136,7 @@ pub struct Function {
     pub entry: u32,
 }
 
-/// Translates a stream of intercepted CUDA driver-API calls into dd-GPU IR + tracks device state.
+/// Translates a stream of intercepted CUDA driver-API calls into hl-GPU IR + tracks device state.
 ///
 /// Backends replay the emitted [`Cmd`]s; readbacks (`cuMemcpyDtoH`) are resolved by the caller via
 /// [`crate::backend::GpuBackend::read_buffer`] using [`CudaContext::resolve`].
@@ -281,8 +281,8 @@ impl CudaContext {
             self.next_shader += 1;
             let pipeline = self.next_pipeline;
             self.next_pipeline += 1;
-            // The "shader" carried across the dd-GPU IR is a kernel descriptor: the module's PTX text +
-            // the entry name + the launch block dims. The host backend compiles it (software → dd-GPU
+            // The "shader" carried across the hl-GPU IR is a kernel descriptor: the module's PTX text +
+            // the entry name + the launch block dims. The host backend compiles it (software → hl-GPU
             // kernel IR + CPU interpreter; a Metal host → PTX→SPIR-V→MSL). See CUDA_ON_METAL.md §5.
             let (ptx_src, entry_name) = self
                 .modules

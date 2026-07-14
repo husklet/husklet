@@ -382,17 +382,17 @@ static struct rcent {
 static int res_enabled(void) {
     static int on = -1;
     if (on < 0) {
-        // Gated by EITHER the HL_NOPATHCACHE env var OR a host sentinel file /tmp/dd_nopathcache. The
+        // Gated by EITHER the HL_NOPATHCACHE env var OR a host sentinel file /tmp/hl_nopathcache. The
         // file gate is the reliable one: the engine is spawned with a curated config (via --configfd),
         // NOT the full parent environ, so an ambient HL_NOPATHCACHE never reaches getenv() here (the
         // "mac bridge drops env" seam) -- without the sentinel the kill switch was silently inert.
         // access() runs in engine context against the HOST fs (not the guest jail), so
-        // `touch /tmp/dd_nopathcache` mac-side arms it. Cached once; inert (caches ON) when neither is
+        // `touch /tmp/hl_nopathcache` mac-side arms it. Cached once; inert (caches ON) when neither is
         // present -> gate-neutral.
         int saved = errno; // access() sets errno=ENOENT when the sentinel is absent -- MUST NOT leak
         const char *e = getenv("HL_NOPATHCACHE");
         int envset = (e && e[0] == '1');
-        int fileset = access("/tmp/dd_nopathcache", F_OK) == 0;
+        int fileset = access("/tmp/hl_nopathcache", F_OK) == 0;
         errno = saved;
         on = (envset || fileset) ? 0 : 1;
     }
@@ -694,14 +694,14 @@ static int oc_enabled(void) {
     static int on = -1;
     if (on < 0) {
         // Same curated-env seam as res_enabled (the engine sees no ambient env under --configfd): honor
-        // W4_NOOPENCACHE via env OR the host sentinel /tmp/dd_noopencache, and fold in the master
+        // W4_NOOPENCACHE via env OR the host sentinel /tmp/hl_noopencache, and fold in the master
         // HL_NOPATHCACHE gate (res_enabled) so the master kill switch disables the open-resolution cache
         // alongside the other path caches, matching its documented intent. Gate-neutral: when nothing is
         // armed res_enabled()==1 and off==0 -> on=1 (cache ON), byte-identical to the prior default.
         int saved = errno; // access() sets errno=ENOENT when the sentinel is absent -- MUST NOT leak
         const char *e = getenv("W4_NOOPENCACHE");
         int envset = (e && e[0] == '1');
-        int fileset = access("/tmp/dd_noopencache", F_OK) == 0;
+        int fileset = access("/tmp/hl_noopencache", F_OK) == 0;
         errno = saved;
         on = (envset || fileset || !res_enabled()) ? 0 : 1;
     }
@@ -764,7 +764,7 @@ static void oc_reset(void) {
 // (a) its page is MAP_ANON, shared only by THIS engine's fork tree, unreachable from the daemon; and
 // (b) it wouldn't invalidate the positives anyway.
 //
-// Mechanism: the daemon owns a 4-byte generation file, <dd-home>/containers/<cid>/fsgen, created before
+// Mechanism: the daemon owns a 4-byte generation file, <hl-home>/containers/<cid>/fsgen, created before
 // the first engine of the container spawns and handed to EVERY engine of that container (run + exec +
 // health probe) as HL_FSGEN_FILE. The daemon atomically increments the mapped u32 AFTER completing any
 // external write; each engine process maps the SAME file MAP_SHARED (ctor below; fork children inherit
@@ -772,7 +772,7 @@ static void oc_reset(void) {
 // cache). On a change it drops ALL its caches via rc_reset() -- the same conservative fork-grade full
 // flush -- so a daemon write is visible no later than the guest's NEXT syscall, exactly like the
 // kernel-coherent dcache on real Linux. Hot-path cost: ONE shared-page atomic load per syscall. Without
-// the env (bench/tests/direct `ddjit` runs) the pointer stays on a local counter that never moves, so
+// the env (bench/tests/direct `hljit` runs) the pointer stays on a local counter that never moves, so
 // the poll is a single always-equal load and behaviour is byte-identical. Same 32-bit width and atomics
 // discipline as g_res_epoch (daemon side increments with release; the poll loads with acquire so the
 // flush is ordered after the daemon's completed file writes).

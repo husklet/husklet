@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 int main(void) {
-    char tmpl[] = "/tmp/dd_mkstempXXXXXX";
+    char tmpl[] = "/tmp/hl_mkstempXXXXXX";
     int fd = mkstemp(tmpl);
     int mk_ok = fd >= 0;
     char rb[32] = {0};

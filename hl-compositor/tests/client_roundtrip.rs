@@ -3,12 +3,12 @@
 //! `Display` as a client, drives `get_registry` + the `xdg_shell`/`wl_shm` handshake, backs a pool
 //! with a real `memfd`, and commits a frame. We assert: (1) every parity global is advertised, and
 //! (2) the commit reaches the `Presenter` (frame_count advances) — i.e. the guest→host present path
-//! works end to end through the Smithay core. This mirrors `dd-display`'s headless `server.rs` test,
-//! but against `DdState`, so both protocol machines are proven by the same kind of client.
+//! works end to end through the Smithay core. This mirrors `hl-display`'s headless `server.rs` test,
+//! but against `HlState`, so both protocol machines are proven by the same kind of client.
 //!
 //! Runs headlessly on Linux (libxkbcommon present) and on macOS.
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
 use std::os::unix::io::RawFd;
@@ -247,7 +247,7 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
 // isolation; folding them into a single connection keeps the whole proof deterministic.
 #[test]
 fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
     let last_shape = Arc::new(Mutex::new(None));
     let host = Arc::new(Mutex::new(None));
@@ -259,7 +259,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     let cursor_hidden = Arc::new(Mutex::new(None));
     let last_damage = Arc::new(Mutex::new(None));
     let last_present_sid = Arc::new(Mutex::new(None));
-    let mut state = DdState::new(
+    let mut state = HlState::new(
         dh.clone(),
         Box::new(RecordingPresenter {
             frames: 0,
@@ -392,7 +392,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     c.conn.send(&Message::new(xdg, 4).u32(init_serial)); // ack_configure(serial)
 
     // Back a 4x3 XRGB buffer with a portable anonymous shm fd (memfd on Linux, shm/tmpfile on macOS),
-    // prefilled with a recognizable BGRA pattern. Reuses dd-display's `keymap::anon_fd_with`.
+    // prefilled with a recognizable BGRA pattern. Reuses hl-display's `keymap::anon_fd_with`.
     let (w, h): (i32, i32) = (4, 3);
     let stride = w * 4;
     let size = (stride * h) as usize;

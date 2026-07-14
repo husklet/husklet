@@ -1,4 +1,4 @@
-//! dd-app — a GTK4 desktop UI for the **dd** VM-less container runtime.
+//! hl-app — a GTK4 desktop UI for the **dd** VM-less container runtime.
 //!
 //! Container-centric master/detail: a left sidebar lists containers + images (with the daemon
 //! connection shown as a sidebar footer), and the content pane shows the selected item's detail —
@@ -74,7 +74,7 @@ enum Msg {
     RemoveVolume(String),
     NewVolume,
     CreateVolume(String),
-    /// Add or replace a workspace (name, image, arch token) in `~/.dd/workspaces.conf`.
+    /// Add or replace a workspace (name, image, arch token) in `~/.hl/workspaces.conf`.
     CreateWorkspace(String, String, String),
     /// Remove a workspace by name.
     RemoveWorkspace(String),
@@ -167,7 +167,7 @@ impl Component for AppModel {
 
         // Bundled starter images (hello-dd) are discovered straight from the app bundle by the daemon
         // (Resources/images), so an app update always serves the current set and nothing is copied into
-        // ~/.dd that could go stale.
+        // ~/.hl that could go stale.
 
         // One-shot update check on startup (off the UI thread).
         {
@@ -207,8 +207,8 @@ impl Component for AppModel {
                 .unwrap_or(1800);
             gtk::glib::timeout_add_local_once(Duration::from_millis(delay), move || {
                 match ui::screenshot(&win, &shot) {
-                    Ok(()) => eprintln!("[dd-shot] wrote {shot}"),
-                    Err(e) => eprintln!("[dd-shot] failed: {e}"),
+                    Ok(()) => eprintln!("[hl-shot] wrote {shot}"),
+                    Err(e) => eprintln!("[hl-shot] failed: {e}"),
                 }
                 std::process::exit(0);
             });
@@ -386,7 +386,7 @@ impl Component for AppModel {
                     let _ = c.create_volume(&name).await;
                 });
             }
-            // Workspaces are a local config file (`~/.dd/workspaces.conf`), not a daemon resource — mutate
+            // Workspaces are a local config file (`~/.hl/workspaces.conf`), not a daemon resource — mutate
             // the store inline; the view reloads it on the next render (which Relm4 runs after update()).
             Msg::CreateWorkspace(name, image, arch) => {
                 use hl::config::{WorkspaceConfig, WorkspaceStore};
@@ -519,6 +519,6 @@ impl AppModel {
 fn main() {
     ui::setup_bundle_env();
     let socket = Client::default_socket();
-    let app = RelmApp::new("com.dd.app");
+    let app = RelmApp::new("com.hl.app");
     app.run::<AppModel>(socket);
 }

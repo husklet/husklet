@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *src = "/tmp/dd_splice_src", *dst = "/tmp/dd_splice_dst";
+    const char *src = "/tmp/hl_splice_src", *dst = "/tmp/hl_splice_dst";
     int in = open(src, O_RDWR | O_CREAT | O_TRUNC, 0644);
     const char *payload = "splice-zero-copy-1234567890";
     write(in, payload, strlen(payload));

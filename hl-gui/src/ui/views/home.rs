@@ -16,7 +16,7 @@ pub(crate) fn render_home(home: &gtk::Box, m: &AppModel, sender: &ComponentSende
 
     let title = gtk::Label::new(Some("Overview"));
     title.set_xalign(0.0);
-    title.add_css_class("dd-h1");
+    title.add_css_class("hl-h1");
     home.append(&title);
 
     // Stats + sparkline charts of recent history (running/containers/images/disk over the last poll window).
@@ -66,13 +66,13 @@ pub(crate) fn render_home(home: &gtk::Box, m: &AppModel, sender: &ComponentSende
     // ---- Get started -------------------------------------------------------
     let gs = gtk::Label::new(Some("Get started"));
     gs.set_xalign(0.0);
-    gs.add_css_class("dd-h2");
+    gs.add_css_class("hl-h2");
     home.append(&gs);
 
     let card = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    card.add_css_class("dd-step-card");
+    card.add_css_class("hl-step-card");
 
-    // 1. Run hello-world — works immediately (the image is bundled + seeded into ~/.dd/images).
+    // 1. Run hello-world — works immediately (the image is bundled + seeded into ~/.hl/images).
     card.append(&action_row(
         "Run your first container",
         "A hello-world image is bundled — give it a try.",
@@ -97,7 +97,7 @@ pub(crate) fn render_home(home: &gtk::Box, m: &AppModel, sender: &ComponentSende
     code.set_xalign(0.0);
     code.set_hexpand(true); // full-width code box (not shrink-wrapped to the text)
     code.set_selectable(true);
-    code.add_css_class("dd-code");
+    code.add_css_class("hl-code");
     card.append(&code);
 
     home.append(&card);
@@ -116,11 +116,11 @@ fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box
 
     let h = gtk::Label::new(Some("Docker context"));
     h.set_xalign(0.0);
-    h.add_css_class("dd-h2");
+    h.add_css_class("hl-h2");
     wrap.append(&h);
 
     let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    card.add_css_class("dd-step-card");
+    card.add_css_class("hl-step-card");
 
     match &snap.docker_context {
         // docker CLI present -> a real selector of the available contexts
@@ -141,7 +141,7 @@ fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box
 
             let refs: Vec<&str> = ctxs.iter().map(|s| s.as_str()).collect();
             let dropdown = gtk::DropDown::from_strings(&refs);
-            dropdown.add_css_class("dd-seg");
+            dropdown.add_css_class("hl-seg");
             dropdown.set_tooltip_text(Some(
                 "Switch which Docker context (daemon) the `docker` CLI uses",
             ));
@@ -169,7 +169,7 @@ fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box
             ));
             hint.set_xalign(0.0);
             hint.set_wrap(true);
-            hint.add_css_class("dd-sub");
+            hint.add_css_class("hl-sub");
             card.append(&hint);
         }
         // docker CLI absent (or not found on the app's PATH) -> just a small warning. Note: installing
@@ -181,7 +181,7 @@ fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box
             ));
             note.set_xalign(0.0);
             note.set_wrap(true);
-            note.add_css_class("dd-sub");
+            note.add_css_class("hl-sub");
             card.append(&note);
         }
     }

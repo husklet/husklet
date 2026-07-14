@@ -1,11 +1,11 @@
 {
-  # Dev shell that provides the GTK4 build/runtime deps for `dd-gui` (the `dd-app` GUI) on
+  # Dev shell that provides the GTK4 build/runtime deps for `hl-gui` (the `hl-app` GUI) on
   # macOS. Pinned to the exact nixpkgs rev that already has gtk4 cached in this machine's store,
   # so entering the shell never rebuilds GTK. libadwaita is deliberately absent: its `appstream`
-  # dependency fails to build under nixpkgs on aarch64-darwin, so dd-app uses pure GTK4.
+  # dependency fails to build under nixpkgs on aarch64-darwin, so hl-app uses pure GTK4.
   #
   #   nix develop ./nix --command bash -lc 'cargo build -p hl-gui'
-  description = "dd-app GTK4 dev shell";
+  description = "hl-app GTK4 dev shell";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/89570f24e97e614aa34aa9ab1c927b6578a43775";
 
@@ -14,7 +14,7 @@
       system = "aarch64-darwin";
       pkgs = import nixpkgs { inherit system; };
 
-      # --- macOS dev-container userlands (for `ddcli mac`, built by tools/mac-image.sh) ---------
+      # --- macOS dev-container userlands (for `hl mac`, built by tools/mac-image.sh) ---------
       # A lean base, and a batteries-included dev set. buildEnv joins them into one profile whose
       # closure tools/mac-image.sh packs into the image rootfs.
       base = with pkgs; [
@@ -47,7 +47,7 @@
           pkgs.macdylibbundler     # provides `dylibbundler` — relocate the dylib graph
           pkgs.create-dmg          # build the .dmg
         ];
-        # libxkbcommon: the Smithay-native `dd-compositor` links it at build+run time (its keymap seat).
+        # libxkbcommon: the Smithay-native `hl-compositor` links it at build+run time (its keymap seat).
         # Provided here so the mac-crates build gate (`make mac-crates`) and the .app bundling can find it
         # (RUSTFLAGS `-L native=$HL_LIBXKBCOMMON/lib` + relocation into Contents/Frameworks).
         buildInputs = [ pkgs.gtk4 pkgs.librsvg pkgs.vte-gtk4 pkgs.libxkbcommon ];

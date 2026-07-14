@@ -47,17 +47,17 @@ fn usage(code: i32) -> ! {
 Usage:
   cargo run -p hl-gpu --example replay_ir_sweep -- <input.ir> <out-dir> [options]
 
-Truncate a captured dd-gpu IR stream at a sweep of Submit encoder op counts, then
+Truncate a captured hl-gpu IR stream at a sweep of Submit encoder op counts, then
 replay each trimmed stream through:
-  target-chrome-codex/release/dd-display selftest-shim-ir <trim.ir> <out.png> <w> <h> <target>
+  target-chrome-codex/release/hl-display selftest-shim-ir <trim.ir> <out.png> <w> <h> <target>
 
 This is meant for Chrome offscreen texture reduction. By default it targets
 texture 514 at 512x256, finds the render pass writing that texture, sweeps op
 counts around the end of that pass, and emits PNGs plus manifest.jsonl.
 
 Options:
-  --dd-display <path>   dd-display binary to invoke
-                        [default: target-chrome-codex/release/dd-display]
+  --hl-display <path>   hl-display binary to invoke
+                        [default: target-chrome-codex/release/hl-display]
   --target <id>         texture id wired as selftest render target [default: 514]
   --width <px>          IOSurface/readback width [default: 512]
   --height <px>         IOSurface/readback height [default: 256]
@@ -68,7 +68,7 @@ Options:
   --counts <spec>       explicit kept-op counts; examples: 33,41 or 24:48 or 24:48:2
   --no-balance-pass     leave partial render/compute passes open after truncation
   --keep-ir             keep every generated trim IR beside its PNG
-  --no-replay           write trim IRs but do not run dd-display
+  --no-replay           write trim IRs but do not run hl-display
   -h, --help            show this help
 
 Notes:
@@ -166,7 +166,7 @@ fn parse_args() -> Args {
     let mut args = Args {
         input: PathBuf::from(first),
         out_dir: PathBuf::from(second),
-        hl_display: PathBuf::from("target-chrome-codex/release/dd-display"),
+        hl_display: PathBuf::from("target-chrome-codex/release/hl-display"),
         target: DEFAULT_TARGET_TEXTURE,
         width: DEFAULT_WIDTH,
         height: DEFAULT_HEIGHT,
@@ -182,7 +182,7 @@ fn parse_args() -> Args {
 
     while let Some(flag) = raw.next() {
         match flag.to_string_lossy().as_ref() {
-            "--dd-display" => {
+            "--hl-display" => {
                 args.hl_display = PathBuf::from(raw.next().unwrap_or_else(|| usage(2)))
             }
             "--target" => args.target = parse_num("--target", raw.next()),

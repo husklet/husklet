@@ -1,10 +1,10 @@
-//! `dd-display` server binary: listen on a Wayland socket, accept guest clients, composite their
+//! `hl-display` server binary: listen on a Wayland socket, accept guest clients, composite their
 //! `wl_shm` surfaces. The presenter is chosen at runtime:
 //!   - default on macOS: the native Cocoa window backend (one NSWindow per surface);
 //!   - `--png <dir>` (any platform): dump each committed surface to a PNG — the headless proof path.
 //!
 //! Usage:
-//!   dd-display [--socket <path>] [--png <dir>]
+//!   hl-display [--socket <path>] [--png <dir>]
 //! Env:
 //!   WAYLAND_DISPLAY / XDG_RUNTIME_DIR — if `--socket` is absent, the socket path is
 //!   `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` (default `$XDG_RUNTIME_DIR/wayland-0`).
@@ -15,7 +15,7 @@ use std::os::unix::io::RawFd;
 
 fn main() {
     // Flag-gated Smithay-native compositor path. When `HL_DISPLAY_SMITHAY=1`, replace the hand-written
-    // protocol machine below with the Smithay-based `dd-compositor` binary (same CLI + socket), execing
+    // protocol machine below with the Smithay-based `hl-compositor` binary (same CLI + socket), execing
     // it in place so the daemon's launch semantics are preserved. When the flag is unset, everything
     // below runs unchanged — the legacy `server.rs` path is the untouched default, and this crate never
     // links smithay (keeping the Linux headless `cargo build -p hl-display` core build green + offline).
@@ -41,7 +41,7 @@ fn main() {
                 {
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-input.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-input.png".into());
                     hl_display::present_cocoa::selftest_input(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -54,11 +54,11 @@ fn main() {
                 // Real-socket end-to-end proof (portable; run on the Mac to validate the macOS shm path).
                 let out = args
                     .next()
-                    .unwrap_or_else(|| "/tmp/dd-display-selftest.png".into());
+                    .unwrap_or_else(|| "/tmp/hl-display-selftest.png".into());
                 match hl_display::selftest::run(&out) {
                     Ok(()) => return,
                     Err(e) => {
-                        eprintln!("dd-display selftest FAILED: {e}");
+                        eprintln!("hl-display selftest FAILED: {e}");
                         std::process::exit(1);
                     }
                 }
@@ -69,7 +69,7 @@ fn main() {
                 {
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-metal.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-metal.png".into());
                     hl_display::metal::selftest_metal(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -83,7 +83,7 @@ fn main() {
                 {
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-shader.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-shader.png".into());
                     hl_display::metal_backend::selftest_shader(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -98,7 +98,7 @@ fn main() {
                     let irf = args.next().unwrap_or_default();
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-shim-ir.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-shim-ir.png".into());
                     let w = args.next().and_then(|s| s.parse().ok()).unwrap_or(256);
                     let h = args.next().and_then(|s| s.parse().ok()).unwrap_or(256);
                     let target = args.next().and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -127,7 +127,7 @@ fn main() {
                 {
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-texture.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-texture.png".into());
                     hl_display::metal_backend::selftest_texture(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -141,7 +141,7 @@ fn main() {
                 {
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-indexed.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-indexed.png".into());
                     hl_display::metal_backend::selftest_indexed(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -151,12 +151,12 @@ fn main() {
                 }
             }
             "selftest-replay" => {
-                // macOS-only: GPU rung 3 — replay a streamed dd-gpu IR quad through the Metal executor.
+                // macOS-only: GPU rung 3 — replay a streamed hl-gpu IR quad through the Metal executor.
                 #[cfg(target_os = "macos")]
                 {
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-replay.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-replay.png".into());
                     hl_display::metal_backend::selftest_replay(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -171,7 +171,7 @@ fn main() {
                 {
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-render.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-render.png".into());
                     hl_display::metal::selftest_render(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -186,7 +186,7 @@ fn main() {
                 {
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-iosurface.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-iosurface.png".into());
                     hl_display::metal::selftest_iosurface(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -201,7 +201,7 @@ fn main() {
                 {
                     let out = args
                         .next()
-                        .unwrap_or_else(|| "/tmp/dd-display-cocoa.png".into());
+                        .unwrap_or_else(|| "/tmp/hl-display-cocoa.png".into());
                     hl_display::present_cocoa::selftest_cocoa(&out);
                 }
                 #[cfg(not(target_os = "macos"))]
@@ -211,7 +211,7 @@ fn main() {
                 }
             }
             "-h" | "--help" => {
-                eprintln!("usage: dd-display [--socket <path>] [--png <dir>]\n       dd-display selftest [out.png]\n       dd-display selftest-cocoa [out.png]  (macOS)");
+                eprintln!("usage: hl-display [--socket <path>] [--png <dir>]\n       hl-display selftest [out.png]\n       hl-display selftest-cocoa [out.png]  (macOS)");
                 return;
             }
             _ => {}
@@ -220,10 +220,10 @@ fn main() {
     let socket = socket.unwrap_or_else(default_socket);
 
     let lfd = hl_display::listen_unix(&socket).unwrap_or_else(|e| {
-        eprintln!("dd-display: cannot bind {socket}: {e}");
+        eprintln!("hl-display: cannot bind {socket}: {e}");
         std::process::exit(1);
     });
-    eprintln!("dd-display: listening on {socket}");
+    eprintln!("hl-display: listening on {socket}");
 
     // Presenter selection.
     //   --window            → first-class LIVE mode: a real interactive NSWindow per surface, Metal-
@@ -242,7 +242,7 @@ fn main() {
         }
     }
     let _ = (window, no_metal);
-    let dir = png_dir.unwrap_or_else(|| "/tmp/dd-display".into());
+    let dir = png_dir.unwrap_or_else(|| "/tmp/hl-display".into());
     // `--png --metal`: dump each committed frame to a PNG, but composite via the Metal path — this is
     // what resolves an IOSurface-backed dmabuf buffer (GPU rung 2 proof). Plain `--png` uses the CPU path.
     #[cfg(target_os = "macos")]
@@ -264,7 +264,7 @@ fn main() {
 fn serve_loop_metal(lfd: RawFd, dir: &str) {
     // Start the mach-port IOSurface handle bridge so guest dmabuf buffers resolve cross-process.
     hl_display::metal::start_gpu_bridge();
-    // Start the dd-gpu IR executor (rung 3): the guest streams GPU commands here; we replay them on Metal
+    // Start the hl-gpu IR executor (rung 3): the guest streams GPU commands here; we replay them on Metal
     // into the resolved IOSurface. Socket path: HL_GPU_EXEC_SOCK, else alongside the display socket.
     if let Some(p) = gpu_exec_sock() {
         std::thread::spawn(move || hl_display::metal_backend::run_executor(p));
@@ -335,13 +335,13 @@ fn serve_multiplex<P: Presenter>(
                 match make_presenter() {
                     Some(p) => {
                         eprintln!(
-                            "dd-display[{tag}]: client connected (fd {cfd}, {} live)",
+                            "hl-display[{tag}]: client connected (fd {cfd}, {} live)",
                             clients.len() + 1
                         );
                         clients.push(Server::new(cfd, p));
                     }
                     None => {
-                        eprintln!("dd-display[{tag}]: no presenter (no Metal device?)");
+                        eprintln!("hl-display[{tag}]: no presenter (no Metal device?)");
                         unsafe { libc::close(cfd) };
                     }
                 }
@@ -360,7 +360,7 @@ fn serve_multiplex<P: Presenter>(
                     _ => String::new(),
                 };
                 eprintln!(
-                    "dd-display[{tag}]: client disconnected ({} frame(s)) [{why}]",
+                    "hl-display[{tag}]: client disconnected ({} frame(s)) [{why}]",
                     clients[idx].presenter().frame_count()
                 );
                 unsafe { libc::close(fd) };
@@ -370,7 +370,7 @@ fn serve_multiplex<P: Presenter>(
     }
 }
 
-/// The dd-gpu IR executor socket path: `HL_GPU_EXEC_SOCK` if set, else `dd-gpu.sock` beside the display
+/// The hl-gpu IR executor socket path: `HL_GPU_EXEC_SOCK` if set, else `hl-gpu.sock` beside the display
 /// socket. `None` only if no runtime dir is resolvable.
 #[cfg(target_os = "macos")]
 fn gpu_exec_sock() -> Option<String> {
@@ -379,7 +379,7 @@ fn gpu_exec_sock() -> Option<String> {
     }
     let disp = default_socket();
     let dir = std::path::Path::new(&disp).parent()?;
-    Some(dir.join("dd-gpu.sock").to_string_lossy().into_owned())
+    Some(dir.join("hl-gpu.sock").to_string_lossy().into_owned())
 }
 
 fn default_socket() -> String {
@@ -399,16 +399,16 @@ fn set_nonblock(fd: RawFd) {
     }
 }
 
-/// If `HL_DISPLAY_SMITHAY=1`, exec the `dd-compositor` binary (the Smithay-native path) in place of
-/// this process, forwarding all CLI args. `dd-compositor` is expected next to this executable (both
-/// land in the same `dd.app` bundle / `target/<profile>` dir). If it cannot be found or exec fails,
+/// If `HL_DISPLAY_SMITHAY=1`, exec the `hl-compositor` binary (the Smithay-native path) in place of
+/// this process, forwarding all CLI args. `hl-compositor` is expected next to this executable (both
+/// land in the same `hl.app` bundle / `target/<profile>` dir). If it cannot be found or exec fails,
 /// we log and fall through to the legacy `server.rs` path so the display never silently dies. This is
-/// an exec, not a link dependency, so `dd-display` itself never pulls in smithay/libxkbcommon.
+/// an exec, not a link dependency, so `hl-display` itself never pulls in smithay/libxkbcommon.
 ///
 /// Phase 6.1: this exec replaces the process BEFORE the executor-startup wiring below (`run_executor`
 /// in the `--metal`/`--window` present paths) would have run. That startup is therefore duplicated on
-/// the Smithay side by `hl_compositor::gpu::start` (called from `dd-compositor`'s `main` before its
-/// compositor mode is selected), so `DD_GPU_BACKEND=wgpu` and the default Metal executor stay
+/// the Smithay side by `hl_compositor::gpu::start` (called from `hl-compositor`'s `main` before its
+/// compositor mode is selected), so `HL_GPU_BACKEND=wgpu` and the default Metal executor stay
 /// reachable and accelerated guests are not left without a host GPU backend.
 fn maybe_exec_smithay() {
     match std::env::var("HL_DISPLAY_SMITHAY").as_deref() {
@@ -419,24 +419,24 @@ fn maybe_exec_smithay() {
     let self_exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("dd-display: HL_DISPLAY_SMITHAY set but current_exe failed: {e}; using legacy path");
+            eprintln!("hl-display: HL_DISPLAY_SMITHAY set but current_exe failed: {e}; using legacy path");
             return;
         }
     };
     let bin = self_exe
         .parent()
-        .map(|d| d.join("dd-compositor"))
-        .unwrap_or_else(|| std::path::PathBuf::from("dd-compositor"));
+        .map(|d| d.join("hl-compositor"))
+        .unwrap_or_else(|| std::path::PathBuf::from("hl-compositor"));
     if !bin.exists() {
         eprintln!(
-            "dd-display: HL_DISPLAY_SMITHAY set but {} not found; using legacy path",
+            "hl-display: HL_DISPLAY_SMITHAY set but {} not found; using legacy path",
             bin.display()
         );
         return;
     }
-    eprintln!("dd-display: HL_DISPLAY_SMITHAY=1 -> exec {}", bin.display());
+    eprintln!("hl-display: HL_DISPLAY_SMITHAY=1 -> exec {}", bin.display());
     let err = std::process::Command::new(&bin)
         .args(std::env::args_os().skip(1))
         .exec(); // only returns on failure
-    eprintln!("dd-display: exec {} failed: {err}; using legacy path", bin.display());
+    eprintln!("hl-display: exec {} failed: {err}; using legacy path", bin.display());
 }

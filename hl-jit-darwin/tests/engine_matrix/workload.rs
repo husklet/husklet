@@ -115,7 +115,7 @@ pub(super) fn compile() -> Group {
             | base64 -d > p.c && gcc-14 -O2 -o p p.c && ./p && rm -f p p.c").has("primes=9592"),
         // C++: g++ -> cc1plus -> libstdc++ (vector/sort/string) -- the heavy template+STL link path.
         gcc("cpp-stl", "cd /tmp && echo I2luY2x1ZGUgPHZlY3Rvcj4KI2luY2x1ZGUgPGFsZ29yaXRobT4KI2luY2x1ZGUgPHN0cmluZz4KI2luY2x1ZGUgPGNzdGRpbz4KaW50IG1haW4oKXsKICBzdGQ6OnZlY3Rvcjxsb25nPiB2OwogIGZvcihpbnQgaT0wO2k8MTAwMDAwO2krKykgdi5wdXNoX2JhY2soKGxvbmcpKChpKjI2NTQ0MzU3NjF1KSUxMDAwMDAzKSk7CiAgc3RkOjpzb3J0KHYuYmVnaW4oKSwgdi5lbmQoKSk7CiAgbG9uZyBzPTA7IGZvcihsb25nIHg6IHYpIHMrPXg7CiAgc3RkOjpzdHJpbmcgYT0iZGQiLCBiPSItY3BwIjsgYSs9YjsKICBwcmludGYoImNwcCBuPSV6dSBzdW09JWxkIG1lZD0lbGQgcz0lc1xuIiwgdi5zaXplKCksIHMsIHZbdi5zaXplKCkvMl0sIGEuY19zdHIoKSk7CiAgcmV0dXJuIDA7Cn0K \
-            | base64 -d > p.cpp && g++-14 -O2 -o p p.cpp && ./p && rm -f p p.cpp").has("cpp n=100000 sum=50002557337 med=500032 s=dd-cpp"),
+            | base64 -d > p.cpp && g++-14 -O2 -o p p.cpp && ./p && rm -f p p.cpp").has("cpp n=100000 sum=50002557337 med=500032 s=hl-cpp"),
     ])
 }
 

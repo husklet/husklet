@@ -9,7 +9,7 @@
 //!   * **logs dir** — where the daemon's stdout/stderr logs live.
 //!
 //! The rest of `hl` calls `crate::platform::…`; it never touches `launchctl`, `systemctl`,
-//! `xattr`, the plist, or `/Applications/dd.app` directly.
+//! `xattr`, the plist, or `/Applications/hl.app` directly.
 
 use std::path::{Path, PathBuf};
 
@@ -31,7 +31,7 @@ use windows as imp;
 
 // ── Service management ────────────────────────────────────────────────────────
 
-/// Write the service unit (plist / systemd unit) and the `~/.dd` state tree; does **not**
+/// Write the service unit (plist / systemd unit) and the `~/.hl` state tree; does **not**
 /// start it. Returns the path of the unit file written (for user-facing output).
 pub fn service_write() -> std::io::Result<PathBuf> {
     imp::service_write()
@@ -83,7 +83,7 @@ pub fn app_bundle() -> Option<PathBuf> {
 
 // ── Platform paths ────────────────────────────────────────────────────────────
 
-/// Where the daemon's stdout/stderr logs live (macOS `~/Library/Logs/dd`, Linux `~/.dd/logs`).
+/// Where the daemon's stdout/stderr logs live (macOS `~/Library/Logs/dd`, Linux `~/.hl/logs`).
 pub fn logs_dir() -> PathBuf {
     imp::logs_dir()
 }

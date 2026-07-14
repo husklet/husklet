@@ -1,5 +1,5 @@
 //! Row 1 (`dmabuf_feedback_serializes_an_explicit_linux_u64_device_id`): drive the REAL C guest probe
-//! (`dd-tests/guests/gui_matrix/gui_dmabuf_feedback_guest.c`) against a REAL `dd-compositor` Wayland
+//! (`hl-tests/guests/gui_matrix/gui_dmabuf_feedback_guest.c`) against a REAL `hl-compositor` Wayland
 //! socket, end to end. The in-process `dmabuf_v4_feedback.rs` test proves the Rust wire side; the
 //! ledger's residual is that the macOS *guest bridge* run — a separate process doing `recvmsg` +
 //! `SCM_RIGHTS` fd receipt + `mmap` of the format table over a real `AF_UNIX` connection — was absent.
@@ -17,7 +17,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use smithay::reexports::wayland_server::Display;
 
@@ -64,15 +64,15 @@ fn dmabuf_feedback_guest_reads_device_id_and_format_table_over_a_real_socket() {
     // The v4/v5 feedback global is opt-in behind HL_DISPLAY_DMABUF (see new_dmabuf_state).
     std::env::set_var("HL_DISPLAY_DMABUF", "1");
 
-    let tmp = std::env::temp_dir().join(format!("dd-dmabuf-bridge-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("hl-dmabuf-bridge-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&tmp);
     let Some(probe) = build_probe(&tmp) else {
         return; // no toolchain: skip (not a failure)
     };
 
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let mut state = DdState::new(dh.clone(), Box::new(NullPresenter));
+    let mut state = HlState::new(dh.clone(), Box::new(NullPresenter));
 
     // A real listening AF_UNIX socket at $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY (what the probe connects to).
     let sock_name = "wayland-dmabuf-bridge";
@@ -126,7 +126,7 @@ fn dmabuf_feedback_guest_reads_device_id_and_format_table_over_a_real_socket() {
     let _ = std::fs::remove_file(&sock_path);
 
     // The probe prints e.g. `... device=57984 ar=1 xr=1 truthful=1` and returns 0 only when it mapped
-    // the v4 format table, saw both ARGB/XRGB dd-modifier pairs, and read the exact Linux dev_t.
+    // the v4 format table, saw both ARGB/XRGB hl-modifier pairs, and read the exact Linux dev_t.
     assert!(
         status.success(),
         "guest dmabuf-feedback probe failed (exit {:?}); output: {out:?}. \

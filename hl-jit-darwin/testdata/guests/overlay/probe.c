@@ -1,4 +1,4 @@
-// Overlay-correctness probe. Run by dd-tests/tests/overlay.rs with a SYNTHETIC read-only lower layer
+// Overlay-correctness probe. Run by hl-tests/tests/overlay.rs with a SYNTHETIC read-only lower layer
 // (an "image") + an empty writable upper (the container rootfs). It exercises the union/whiteout/
 // copy-up/opaque/xattr semantics that real Linux overlayfs guarantees and prints one `KEY=VALUE` line
 // per observation; the Rust harness asserts the VALUEs against real-overlayfs ground truth. Every check

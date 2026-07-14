@@ -1,9 +1,9 @@
 #![allow(unused_imports, dead_code)]
 //! The Workspaces page: a named image+arch dev environment you configure once and LAUNCH as a terminal.
 //!
-//! The model + persistence live in `hl_ws` (a plain `~/.dd/workspaces.conf`); this view
+//! The model + persistence live in `hl_ws` (a plain `~/.hl/workspaces.conf`); this view
 //! is a thin CRUD over a [`WorkspaceStore`] plus a Launch that opens a VTE tab running
-//! `ddcli workspace launch <name>` — a real interactive terminal inside the workspace's image.
+//! `hl workspace launch <name>` — a real interactive terminal inside the workspace's image.
 //!
 //! The page is a persistent notebook (built once in `ui::build`): page 0 is this config list, and each
 //! Launch appends a terminal tab beside it (so launched shells survive the 2s state poll). `render` only
@@ -22,10 +22,10 @@ use std::path::PathBuf;
 /// The arch choices offered in the "New workspace" dropdown (index ↔ [`Arch`], stable order).
 const ARCH_TOKENS: [&str; 3] = ["arm64", "amd64", "darwin-arm64"];
 
-/// `~/.dd/workspaces.conf` — the same store the `ddcli workspace` subcommands read/write.
+/// `~/.hl/workspaces.conf` — the same store the `hl workspace` subcommands read/write.
 pub(crate) fn workspaces_conf() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".dd").join("workspaces.conf")
+    PathBuf::from(home).join(".hl").join("workspaces.conf")
 }
 
 /// A signature of the configured workspace set, so `render` only rebuilds page 0 on a real change
@@ -56,7 +56,7 @@ pub(crate) fn render_workspaces(
 
     let title = gtk::Label::new(Some("Workspaces"));
     title.set_xalign(0.0);
-    title.add_css_class("dd-h1");
+    title.add_css_class("hl-h1");
     page.append(&title);
 
     let blurb = gtk::Label::new(Some(
@@ -65,17 +65,17 @@ pub(crate) fn render_workspaces(
     ));
     blurb.set_xalign(0.0);
     blurb.set_wrap(true);
-    blurb.add_css_class("dd-sub");
+    blurb.add_css_class("hl-sub");
     page.append(&blurb);
 
     // ---- New workspace form -------------------------------------------------
     let nh = gtk::Label::new(Some("New workspace"));
     nh.set_xalign(0.0);
-    nh.add_css_class("dd-h2");
+    nh.add_css_class("hl-h2");
     page.append(&nh);
 
     let form = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    form.add_css_class("dd-step-card");
+    form.add_css_class("hl-step-card");
 
     let name_entry = gtk::Entry::new();
     name_entry.set_placeholder_text(Some("name (e.g. ubuntu-dev)"));
@@ -84,7 +84,7 @@ pub(crate) fn render_workspaces(
     image_entry.set_placeholder_text(Some("image (e.g. ubuntu:24.04)"));
     image_entry.set_hexpand(true);
     let arch_dd = gtk::DropDown::from_strings(&ARCH_TOKENS);
-    arch_dd.add_css_class("dd-seg");
+    arch_dd.add_css_class("hl-seg");
     arch_dd.set_tooltip_text(Some("Target architecture (amd64 runs via the jit86 translator)"));
 
     let fields = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -94,7 +94,7 @@ pub(crate) fn render_workspaces(
     form.append(&fields);
 
     let create = gtk::Button::with_label("Create workspace");
-    create.add_css_class("dd-btn");
+    create.add_css_class("hl-btn");
     create.add_css_class("suggested-action");
     create.set_halign(gtk::Align::Start);
     {
@@ -122,7 +122,7 @@ pub(crate) fn render_workspaces(
     // ---- Configured workspaces ---------------------------------------------
     let lh = gtk::Label::new(Some("Configured"));
     lh.set_xalign(0.0);
-    lh.add_css_class("dd-h2");
+    lh.add_css_class("hl-h2");
     page.append(&lh);
 
     let store = WorkspaceStore::load(workspaces_conf());
@@ -136,7 +136,7 @@ pub(crate) fn render_workspaces(
 
     for w in store.all() {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        row.add_css_class("dd-step-card");
+        row.add_css_class("hl-step-card");
 
         let texts = gtk::Box::new(gtk::Orientation::Vertical, 1);
         texts.set_hexpand(true);
@@ -152,19 +152,19 @@ pub(crate) fn render_workspaces(
         texts.append(&d);
         row.append(&texts);
 
-        // Launch → a VTE tab running `ddcli workspace launch <name>` (bypasses Msg, exactly like the
+        // Launch → a VTE tab running `hl workspace launch <name>` (bypasses Msg, exactly like the
         // container ＋-terminal button: a direct VTE spawn, not a daemon round-trip).
         let launch = gtk::Button::with_label("Launch");
-        launch.add_css_class("dd-btn");
+        launch.add_css_class("hl-btn");
         launch.add_css_class("suggested-action");
         launch.set_valign(gtk::Align::Center);
         {
             let nb = nb.clone();
             let name = w.name.clone();
             launch.connect_clicked(move |_| {
-                let ddcli = ddcli_bin().to_string_lossy().into_owned();
+                let hl = ddcli_bin().to_string_lossy().into_owned();
                 let argv = ["workspace", "launch", name.as_str()];
-                let mut full: Vec<&str> = vec![ddcli.as_str()];
+                let mut full: Vec<&str> = vec![hl.as_str()];
                 full.extend_from_slice(&argv);
                 open_command_tab(&nb, &format!("ws: {name}"), &full);
             });
@@ -172,8 +172,8 @@ pub(crate) fn render_workspaces(
         row.append(&launch);
 
         let remove = gtk::Button::with_label("Remove");
-        remove.add_css_class("dd-btn");
-        remove.add_css_class("dd-danger");
+        remove.add_css_class("hl-btn");
+        remove.add_css_class("hl-danger");
         remove.set_valign(gtk::Align::Center);
         {
             let s = sender.clone();
@@ -186,16 +186,16 @@ pub(crate) fn render_workspaces(
     }
 }
 
-/// Locate the bundled `ddcli` binary. A macOS app launched from Finder/launchd has a minimal PATH, so
+/// Locate the bundled `hl` binary. A macOS app launched from Finder/launchd has a minimal PATH, so
 /// (mirroring `install::resolve_cli`) prefer an explicit override, then the installed/dev app bundle's
 /// `Contents/Resources`, then a sibling of this executable; fall back to the bare name (PATH) for dev.
 fn ddcli_bin() -> PathBuf {
     if let Some(p) = std::env::var_os("HL_CLI_BIN") {
         return PathBuf::from(p);
     }
-    let names = ["ddcli", "dd"];
+    let names = ["hl", "dd"];
     for n in names {
-        let p = PathBuf::from("/Applications/dd.app/Contents/Resources").join(n);
+        let p = PathBuf::from("/Applications/hl.app/Contents/Resources").join(n);
         if p.exists() {
             return p;
         }
@@ -218,5 +218,5 @@ fn ddcli_bin() -> PathBuf {
             }
         }
     }
-    PathBuf::from("ddcli")
+    PathBuf::from("hl")
 }

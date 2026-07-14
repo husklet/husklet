@@ -1,4 +1,4 @@
-//! Memory + buffer + image entry points (real bodies), producing dd-gpu IR.
+//! Memory + buffer + image entry points (real bodies), producing hl-gpu IR.
 //!
 //! Ported from MoltenVK's `MVKBuffer`/`MVKDeviceMemory`/`MVKImage`:
 //!   * `MVKDeviceMemory.mm` — host-visible memory is a mapped allocation the app writes into
@@ -11,7 +11,7 @@
 //!   * `MVKImage.mm` — a color-attachment `VkImage` becomes the render target the pass draws into.
 //!     Like a swapchain image it is host-owned (the loader/host provides the surface), so we allocate
 //!     its IR texture id and let the host register the target — the shim never emits `CreateTexture`
-//!     for an attachment (matching the render-target flip-scratch contract in dd-gpu-wgpu).
+//!     for an attachment (matching the render-target flip-scratch contract in hl-gpu-wgpu).
 
 use crate::reg::{
     self, BufferRec, ImageRec, ImageSubresourceRange, ImageSubresourceState, ImageViewRec, MemRec,
@@ -21,7 +21,7 @@ use ash::vk;
 use ash::vk::Handle; // `.as_raw()` on handle newtypes (VkImage/VkImageView -> u64)
 use core::ffi::c_void;
 
-/// VkBufferUsageFlags → dd-gpu `buffer_usage` bits. The host backend always adds COPY_SRC/DST, so we
+/// VkBufferUsageFlags → hl-gpu `buffer_usage` bits. The host backend always adds COPY_SRC/DST, so we
 /// only translate the binding-relevant classes (storage/uniform/vertex/index).
 fn buffer_usage(u: vk::BufferUsageFlags) -> u32 {
     use hl_shim::ir::buffer_usage as bu;
@@ -70,7 +70,7 @@ fn texture_usage(u: vk::ImageUsageFlags) -> u32 {
     out
 }
 
-/// VkFormat → dd-gpu IR `TextureFormat` (the color-target subset the bring-up render path needs).
+/// VkFormat → hl-gpu IR `TextureFormat` (the color-target subset the bring-up render path needs).
 pub fn tex_format(f: vk::Format) -> hl_shim::ir::TextureFormat {
     use hl_shim::ir::TextureFormat as T;
     match f {
@@ -627,17 +627,17 @@ pub extern "C" fn vkDestroyImageView(_device: VkDevice, view: VkImageView, _p_al
 
 // ---- samplers ------------------------------------------------------------------------------------
 
-/// VkFilter → dd-gpu IR `Filter` (NEAREST=0, LINEAR=1).
+/// VkFilter → hl-gpu IR `Filter` (NEAREST=0, LINEAR=1).
 fn ir_filter(f: vk::Filter) -> hl_shim::ir::Filter {
     use hl_shim::ir::Filter;
     if f == vk::Filter::LINEAR { Filter::Linear } else { Filter::Nearest }
 }
-/// VkSamplerMipmapMode → dd-gpu IR `Filter`.
+/// VkSamplerMipmapMode → hl-gpu IR `Filter`.
 fn ir_mip_filter(m: vk::SamplerMipmapMode) -> hl_shim::ir::Filter {
     use hl_shim::ir::Filter;
     if m == vk::SamplerMipmapMode::LINEAR { Filter::Linear } else { Filter::Nearest }
 }
-/// VkSamplerAddressMode → dd-gpu IR `AddressMode` (the three modes the IR carries; CLAMP_TO_BORDER and
+/// VkSamplerAddressMode → hl-gpu IR `AddressMode` (the three modes the IR carries; CLAMP_TO_BORDER and
 /// MIRROR_CLAMP_TO_EDGE fold to their nearest supported neighbour — a bounded translation).
 fn ir_address(a: vk::SamplerAddressMode) -> hl_shim::ir::AddressMode {
     use hl_shim::ir::AddressMode;
@@ -650,7 +650,7 @@ fn ir_address(a: vk::SamplerAddressMode) -> hl_shim::ir::AddressMode {
     }
 }
 
-/// `vkCreateSampler` — translate the filter/address state into a dd-gpu IR sampler (`Cmd::CreateSampler`).
+/// `vkCreateSampler` — translate the filter/address state into a hl-gpu IR sampler (`Cmd::CreateSampler`).
 /// Ported from `MVKSampler` (`MVKImage.mm`), which builds an `MTLSamplerDescriptor` from the same fields.
 #[no_mangle]
 pub extern "C" fn vkCreateSampler(

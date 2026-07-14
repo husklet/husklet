@@ -7,7 +7,7 @@ use serde_json::json;
 impl Store {
     /// `docker import`: extract a bare rootfs tar (no manifest) into a new image named `name` (already a
     /// `repository` or `repository:tag`) and return the materialized [`LoadedImage`]. The arch is probed
-    /// from the rootfs and the command defaults to the image's shell; a minimal `dd-image.json` sidecar is
+    /// from the rootfs and the command defaults to the image's shell; a minimal `hl-image.json` sidecar is
     /// written so the image survives a daemon restart.
     pub fn import_rootfs(&self, name: &str, tar_bytes: &[u8]) -> Result<LoadedImage, Error> {
         let target = self.dir_for(name);
@@ -17,7 +17,7 @@ impl Store {
         // import never leaves a half-populated image behind.
         let _ = std::fs::remove_dir_all(&target);
         std::fs::create_dir_all(&rootfs).map_err(|e| Error::Archive(e.to_string()))?;
-        let tmp = std::env::temp_dir().join(format!("dd-import-{}.tar", uniq()));
+        let tmp = std::env::temp_dir().join(format!("hl-import-{}.tar", uniq()));
         if let Err(e) = std::fs::write(&tmp, tar_bytes) {
             let _ = std::fs::remove_dir_all(&target);
             return Err(Error::Archive(e.to_string()));
@@ -119,7 +119,7 @@ mod tests {
         );
     }
 
-    // C08 — the dd-images extraction boundary (run_extract_args) must REJECT an archive whose member
+    // C08 — the hl-images extraction boundary (run_extract_args) must REJECT an archive whose member
     // escapes the destination via a `..` component (path traversal) BEFORE writing any file, so a
     // `docker import` of a hostile tar can't land files outside the store.
     #[test]

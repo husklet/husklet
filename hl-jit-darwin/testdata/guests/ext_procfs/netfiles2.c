@@ -5,7 +5,7 @@
 //   * /proc/net/snmp6 exposes the IPv6 counter table (netstat -s IPv6 section).
 //   * /proc/net/ipv6_route exists with the loopback route table (ip -6 route / netstat -6 -r).
 //   * the namespaced mirrors /proc/self/net/* and /proc/<pid>/net/* resolve to the shared table.
-// Each was a dd-only divergence (missing file / wrong header) before the fix.
+// Each was a hl-only divergence (missing file / wrong header) before the fix.
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>

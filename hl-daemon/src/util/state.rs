@@ -6,7 +6,7 @@ use super::*;
 /// fail/roll back on a persistence error call [`save_state_checked`] instead.
 pub(crate) fn save_state(inner: &Inner, path: &str) {
     if let Err(e) = save_state_checked(inner, path) {
-        eprintln!("[dd-daemon] state save failed: {e}");
+        eprintln!("[hl-daemon] state save failed: {e}");
     }
 }
 
@@ -35,7 +35,7 @@ pub(crate) fn load_state(inner: &mut Inner, path: &str) {
         return;
     };
     let Ok(p) = serde_json::from_slice::<Persisted>(&bytes) else {
-        eprintln!("[dd-daemon] ignoring unreadable state file {path}");
+        eprintln!("[hl-daemon] ignoring unreadable state file {path}");
         return;
     };
     for mut c in p.containers {
@@ -99,7 +99,7 @@ mod tests {
 
     fn tmp(tag: &str) -> String {
         std::env::temp_dir()
-            .join(format!("dd-daemon-state-{}-{}.json", std::process::id(), tag))
+            .join(format!("hl-daemon-state-{}-{}.json", std::process::id(), tag))
             .to_string_lossy()
             .into_owned()
     }

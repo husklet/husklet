@@ -2,14 +2,14 @@
 //! cudart-owned bits the driver has no analogue for (thread-local last-error, current-device, and the
 //! `<<<>>>` call-config stack, and the process-global fatbin / function registries the nvcc glue fills).
 //!
-//! dd-shim-cudart is a PEER of dd-shim-cuda over the SAME shared `dd-gpu` core: the heavy lifting — the
-//! CUDA→dd-gpu-IR translation — is delegated to [`hl_gpu::cuda::CudaContext`] (memory alloc/copy → IR,
+//! hl-shim-cudart is a PEER of hl-shim-cuda over the SAME shared `hl-gpu` core: the heavy lifting — the
+//! CUDA→hl-gpu-IR translation — is delegated to [`hl_gpu::cuda::CudaContext`] (memory alloc/copy → IR,
 //! PTX module load, kernel launch → compute pipeline + dispatch), and the accumulated IR is EXECUTED
 //! in-process on an embedded [`hl_gpu::software::SoftwareBackend`] (the CPU PTX interpreter — the same
 //! executor the oracle uses), so a runtime vecadd runs end-to-end and reads back correct results with no
 //! GPU. We do NOT redefine that mapping; the shim owns device-presence values, C-ABI handle tables, the
 //! frame accumulator, and the cudart error/last-error/registration surface, forwarding compute into the
-//! `CudaContext`. This mirrors dd-shim-cuda's `state.rs` exactly (the runtime API lowers to the same IR).
+//! `CudaContext`. This mirrors hl-shim-cuda's `state.rs` exactly (the runtime API lowers to the same IR).
 
 use core::ffi::c_void;
 use std::cell::{Cell, RefCell};
@@ -151,9 +151,9 @@ struct EventState {
 pub struct CudartState {
     /// `cuInit`/`ensure_init` has run.
     pub inited: bool,
-    /// The CUDA→dd-gpu-IR translator + simulated device (from the shared `dd-gpu` crate).
+    /// The CUDA→hl-gpu-IR translator + simulated device (from the shared `hl-gpu` crate).
     pub ctx: CudaContext,
-    /// The dd-gpu IR accumulated for the current stream; flushed on synchronize.
+    /// The hl-gpu IR accumulated for the current stream; flushed on synchronize.
     pub frame: FrameBuilder,
     /// The embedded host executor: a real CPU backend that runs the accumulated IR — including the
     /// compute `Dispatch` (the PTX interpreter in `hl_gpu::ptx`) — and holds the resulting
@@ -323,7 +323,7 @@ impl CudartState {
         let ncmds = self.frame.cmds().len();
         if let Err(e) = replay_stream(&mut self.backend, &bytes) {
             if std::env::var_os("HL_SHIM_DEBUG").is_some() {
-                eprintln!("[dd-shim-cudart] flush: embedded backend replay error ({ncmds} cmds): {e}");
+                eprintln!("[hl-shim-cudart] flush: embedded backend replay error ({ncmds} cmds): {e}");
             }
         }
         if std::env::var_os("HL_GPU_EXEC").is_some() {
@@ -332,7 +332,7 @@ impl CudartState {
             let _ = conn.submit(&surf, &bytes);
         } else if std::env::var_os("HL_SHIM_DEBUG").is_some() {
             eprintln!(
-                "[dd-shim-cudart] flush: executed {} IR bytes ({ncmds} cmds) on the embedded software \
+                "[hl-shim-cudart] flush: executed {} IR bytes ({ncmds} cmds) on the embedded software \
                  backend (dispatches so far: {})",
                 bytes.len(),
                 self.backend.dispatches

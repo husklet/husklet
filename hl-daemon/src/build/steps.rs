@@ -129,7 +129,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let d = std::env::temp_dir()
-            .join(format!("dd-steps-test-{}-{}-{}", label, std::process::id(), nanos));
+            .join(format!("hl-steps-test-{}-{}-{}", label, std::process::id(), nanos));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -305,9 +305,9 @@ pub(super) async fn run_step(
         }
     };
     let shell_desc = shell.join(" ");
-    // Build the RUN step's container spec through the typed dd-jit API. CRITICAL: route the step's env
+    // Build the RUN step's container spec through the typed hl-jit API. CRITICAL: route the step's env
     // (loose `K=V` lines: image ENV + Dockerfile ENV/ARG) through `.guest_env`, which encodes it into
-    // `HL_GUEST_ENV` — the launch_config mapper only translates known `DD_*`/`DDJIT_*` keys and would drop
+    // `HL_GUEST_ENV` — the launch_config mapper only translates known `HL_*`/`DDJIT_*` keys and would drop
     // arbitrary RUN env otherwise, so a plain `.env()` per pair would silently lose the step's environment.
     let mut builder = hl_jit::Container::builder(
         hl_jit::Image::from_rootfs(rootfs.to_string_lossy().into_owned()).guest(arch),

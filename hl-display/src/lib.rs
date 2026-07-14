@@ -1,4 +1,4 @@
-//! `dd-display` — the shared host renderer for dd containers (see `docs/ideas/RENDERING.md`).
+//! `hl-display` — the shared host renderer for dd containers (see `docs/ideas/RENDERING.md`).
 //!
 //! This library is the **portable compositor core**: a minimal Wayland endpoint ([`server::Server`]) that
 //! composites a guest's `wl_shm` buffers into tight BGRA framebuffers and hands them to a
@@ -152,7 +152,7 @@ mod headless {
         }
 
         let dir =
-            std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/dd-display-selftest".into());
+            std::env::var("HL_DISPLAY_DUMP").unwrap_or_else(|_| "/tmp/hl-display-selftest".into());
         let mut server = Server::new(server_fd, PngPresenter::new(&dir));
 
         let mut c = Client::new(client_fd);
@@ -213,7 +213,7 @@ mod headless {
         let toplevel = c.alloc();
         c.conn.send(&Message::new(xdg, 1).u32(toplevel)); // get_toplevel
         c.conn
-            .send(&Message::new(toplevel, 2).string("dd-selftest")); // set_title
+            .send(&Message::new(toplevel, 2).string("hl-selftest")); // set_title
         c.conn.send(&Message::new(surface, 6)); // initial commit (no buffer)
         c.flush();
         server.pump().unwrap();
@@ -224,7 +224,7 @@ mod headless {
         let (w, h): (i32, i32) = (4, 3);
         let stride = w * 4;
         let size = (stride * h) as usize;
-        let name = std::ffi::CString::new("dd-shm").unwrap();
+        let name = std::ffi::CString::new("hl-shm").unwrap();
         let mfd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
         assert!(mfd >= 0, "memfd_create failed");
         assert_eq!(unsafe { libc::ftruncate(mfd, size as libc::off_t) }, 0);
@@ -343,7 +343,7 @@ mod headless {
         let (wide_w, wide_h): (i32, i32) = (532, 384);
         let wide_stride = wide_w * 4;
         let wide_size = (wide_stride * wide_h) as usize;
-        let wide_name = std::ffi::CString::new("dd-wide-shm").unwrap();
+        let wide_name = std::ffi::CString::new("hl-wide-shm").unwrap();
         let wide_mfd = unsafe { libc::memfd_create(wide_name.as_ptr(), 0) };
         assert!(wide_mfd >= 0, "wide memfd_create failed");
         assert_eq!(unsafe { libc::ftruncate(wide_mfd, wide_size as libc::off_t) }, 0);
@@ -449,7 +449,7 @@ mod headless {
                 libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
             }
         }
-        let mut server = Server::new(server_fd, PngPresenter::new("/tmp/dd-display-input"));
+        let mut server = Server::new(server_fd, PngPresenter::new("/tmp/hl-display-input"));
         let mut c = Client::new(client_fd);
 
         // Registry → bind seat/compositor/xdg → make a toplevel (so it becomes the focus).
@@ -650,7 +650,7 @@ mod headless {
     #[test]
     fn wl_output_reports_scale_name_and_done_last() {
         let (client_fd, server_fd) = socketpair_nonblocking();
-        let mut server = Server::new(server_fd, PngPresenter::new("/tmp/dd-display-output"));
+        let mut server = Server::new(server_fd, PngPresenter::new("/tmp/hl-display-output"));
         let mut c = Client::new(client_fd);
 
         let reg = c.alloc();
@@ -679,7 +679,7 @@ mod headless {
 
         // name (opcode 4) is the stable display id.
         let name = msgs.iter().find(|m| m.opcode == 4).expect("wl_output.name");
-        assert_eq!(name.reader().string(), "dd-0");
+        assert_eq!(name.reader().string(), "hl-0");
         assert!(
             msgs.iter().any(|m| m.opcode == 5),
             "wl_output.description (v4)"
@@ -697,7 +697,7 @@ mod headless {
     #[test]
     fn wp_presentation_feedback_reports_presented() {
         let (client_fd, server_fd) = socketpair_nonblocking();
-        let mut server = Server::new(server_fd, PngPresenter::new("/tmp/dd-display-presentation"));
+        let mut server = Server::new(server_fd, PngPresenter::new("/tmp/hl-display-presentation"));
         let mut c = Client::new(client_fd);
 
         let reg = c.alloc();
@@ -739,7 +739,7 @@ mod headless {
         let (w, h): (i32, i32) = (2, 2);
         let stride = w * 4;
         let size = (stride * h) as usize;
-        let nm = std::ffi::CString::new("dd-pres-shm").unwrap();
+        let nm = std::ffi::CString::new("hl-pres-shm").unwrap();
         let mfd = unsafe { libc::memfd_create(nm.as_ptr(), 0) };
         assert!(mfd >= 0);
         assert_eq!(unsafe { libc::ftruncate(mfd, size as libc::off_t) }, 0);

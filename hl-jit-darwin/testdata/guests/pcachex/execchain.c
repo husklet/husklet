@@ -6,7 +6,7 @@
 // cached because the process never reaches exit in it), and (b) re-key + reload for the APPLET epoch, so
 // the two epochs land in TWO distinct cache files and a save keyed to the wrong binary is impossible.
 // Output is a single deterministic line from the applet epoch, so the case is golden-checkable cold or
-// warm; the lifecycle lane (dd-tests/tests/pcache.rs) additionally asserts the two-file protocol + HITs.
+// warm; the lifecycle lane (hl-tests/tests/pcache.rs) additionally asserts the two-file protocol + HITs.
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>

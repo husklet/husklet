@@ -7,7 +7,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 int main(void) {
-    const char *sp = "/tmp/dd_unix_dg_srv.sock", *cp = "/tmp/dd_unix_dg_cli.sock";
+    const char *sp = "/tmp/hl_unix_dg_srv.sock", *cp = "/tmp/hl_unix_dg_cli.sock";
     unlink(sp); unlink(cp);
     int srv = socket(AF_UNIX, SOCK_DGRAM, 0);
     struct sockaddr_un sa = {0}; sa.sun_family = AF_UNIX; strcpy(sa.sun_path, sp);

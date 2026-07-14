@@ -7,13 +7,13 @@
 //!   2. `zxdg_output_manager_v1` is advertised; an `zxdg_output_v1` reports logical size (mode ÷ scale),
 //!      logical position, and a name — what GTK/Qt need for multi-monitor + scaling.
 //!   3. `wp_single_pixel_buffer_v1` is advertised and a 1×1 solid-color buffer is created without error.
-//!   4. A second output (via `DdState::add_output`) is advertised as its own `wl_output` + xdg-output —
+//!   4. A second output (via `HlState::add_output`) is advertised as its own `wl_output` + xdg-output —
 //!      the output plumbing is not hard-wired to exactly one.
 //!
 //! This lives in its OWN test binary (separate process) so it does not share `wayland-server`'s
 //! process-global `Display` state with `client_roundtrip.rs`. Runs headlessly on Linux + macOS.
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use hl_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
@@ -142,16 +142,16 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
 #[test]
 fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     // Drive the compositor's fractional backing scale to a true non-integer (1.5×) so the wire value is
-    // unambiguously 180 (round(1.5 × 120)) rather than an integer fallback. Set before DdState::new.
+    // unambiguously 180 (round(1.5 × 120)) rather than an integer fallback. Set before HlState::new.
     std::env::set_var("HL_DISPLAY_FRACTIONAL_SCALE", "1.5");
 
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let mut state = DdState::new(dh.clone(), Box::new(Scale2Presenter));
+    let mut state = HlState::new(dh.clone(), Box::new(Scale2Presenter));
 
     // Register a SECOND output before the client connects, at a logical position to the right of the
     // primary. Proves the output plumbing handles >1 output cleanly.
-    state.add_output("dd-1", "dd-display-2", (1920, 1080), 1, (1280, 0));
+    state.add_output("hl-1", "hl-display-2", (1920, 1080), 1, (1280, 0));
 
     let (client_fd, server_fd) = socketpair_nonblocking();
     dh.insert_client(
@@ -223,7 +223,7 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     );
 
     // (2) zxdg_output_manager_v1: get_xdg_output for the PRIMARY wl_output → logical geometry + name.
-    // Bind the FIRST wl_output advertised (primary dd-0 at scale 2, mode 2560×1440 ⇒ logical 1280×720). The
+    // Bind the FIRST wl_output advertised (primary hl-0 at scale 2, mode 2560×1440 ⇒ logical 1280×720). The
     // `globals` map keeps only the last per-iface name, so use the ordered `wl_output_names` list instead.
     let primary_output_name = c.wl_output_names[0];
     let wl_out = c.alloc();
@@ -254,8 +254,8 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     );
     assert_eq!(
         c.xo_name.as_deref(),
-        Some("dd-0"),
-        "primary xdg-output name should be dd-0; got {:?}",
+        Some("hl-0"),
+        "primary xdg-output name should be hl-0; got {:?}",
         c.xo_name
     );
 
@@ -287,13 +287,13 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
         c.events
     );
 
-    // (4) Multi-output: TWO distinct wl_output globals must be advertised (primary dd-0 + dd-1). Bind each,
-    // query its xdg-output, and prove the dd-1 instance carries the logical geometry we placed it at
+    // (4) Multi-output: TWO distinct wl_output globals must be advertised (primary hl-0 + hl-1). Bind each,
+    // query its xdg-output, and prove the hl-1 instance carries the logical geometry we placed it at
     // (position (1280, 0), size mode(1920×1080) ÷ scale(1) = 1920×1080). Order-independent: we match by name.
     assert_eq!(
         c.wl_output_names.len(),
         2,
-        "expected exactly two wl_output globals (primary + dd-1); got {:?}",
+        "expected exactly two wl_output globals (primary + hl-1); got {:?}",
         c.wl_output_names
     );
     let mut found_dd1 = None;
@@ -314,20 +314,20 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
         c.xo_logical_position = None;
         c.xo_logical_size = None;
         pump!();
-        if c.xo_name.as_deref() == Some("dd-1") {
+        if c.xo_name.as_deref() == Some("hl-1") {
             found_dd1 = Some((c.xo_logical_position, c.xo_logical_size));
         }
     }
-    let (pos, size) = found_dd1.expect("the dd-1 xdg-output should have been advertised");
+    let (pos, size) = found_dd1.expect("the hl-1 xdg-output should have been advertised");
     assert_eq!(
         pos,
         Some((1280, 0)),
-        "dd-1 logical position should be (1280, 0); got {pos:?}"
+        "hl-1 logical position should be (1280, 0); got {pos:?}"
     );
     assert_eq!(
         size,
         Some((1920, 1080)),
-        "dd-1 logical size should be 1920×1080; got {size:?}"
+        "hl-1 logical size should be 1920×1080; got {size:?}"
     );
 
     // State-level readiness: the compositor genuinely tracks the extra output (not hard-wired to one).
@@ -338,11 +338,11 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     );
     assert_eq!(
         state.extra_outputs[0].name(),
-        "dd-1",
-        "the extra output should be named dd-1"
+        "hl-1",
+        "the extra output should be named hl-1"
     );
 
-    // Move this independent root from dd-0 to dd-1. Membership changes are ordered enter(new) then
+    // Move this independent root from hl-0 to hl-1. Membership changes are ordered enter(new) then
     // leave(old), and every later presenter/feedback lookup reads this same selected output.
     c.events.clear();
     let subcomp = bind(&mut c, "wl_subcompositor", 1);
@@ -353,13 +353,13 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     c.conn.send(&Message::new(child, 6));
     pump!();
     c.events.clear();
-    assert!(state.route_surface_to_output(1, "dd-1"));
+    assert!(state.route_surface_to_output(1, "hl-1"));
     display.flush_clients().unwrap();
     c.drain();
-    assert_eq!(state.surface_output_name(1).as_deref(), Some("dd-1"));
-    assert!(c.saw(surface, 0), "route must emit wl_surface.enter for dd-1");
-    assert!(c.saw(surface, 1), "route must emit wl_surface.leave for dd-0");
-    assert_eq!(state.surface_output_name(2).as_deref(), Some("dd-1"));
+    assert_eq!(state.surface_output_name(1).as_deref(), Some("hl-1"));
+    assert!(c.saw(surface, 0), "route must emit wl_surface.enter for hl-1");
+    assert!(c.saw(surface, 1), "route must emit wl_surface.leave for hl-0");
+    assert_eq!(state.surface_output_name(2).as_deref(), Some("hl-1"));
     assert!(c.saw(child, 0), "child must enter its root's replacement output");
     assert!(c.saw(child, 1), "child must leave its root's old output");
 
@@ -368,24 +368,24 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     pump!();
     assert_eq!(
         state.surface_output_name(3).as_deref(),
-        Some("dd-0"),
+        Some("hl-0"),
         "routing one root must not move an independent root"
     );
 
-    // Hot-unplug dd-1 migrates the complete first tree back to deterministic dd-0 before withdrawal.
+    // Hot-unplug hl-1 migrates the complete first tree back to deterministic hl-0 before withdrawal.
     c.events.clear();
-    assert!(state.remove_output("dd-1"));
+    assert!(state.remove_output("hl-1"));
     display.flush_clients().unwrap();
     c.drain();
-    assert_eq!(state.surface_output_name(1).as_deref(), Some("dd-0"));
-    assert_eq!(state.surface_output_name(2).as_deref(), Some("dd-0"));
-    assert_eq!(state.surface_output_name(3).as_deref(), Some("dd-0"));
+    assert_eq!(state.surface_output_name(1).as_deref(), Some("hl-0"));
+    assert_eq!(state.surface_output_name(2).as_deref(), Some("hl-0"));
+    assert_eq!(state.surface_output_name(3).as_deref(), Some("hl-0"));
     assert!(c.saw(surface, 0) && c.saw(surface, 1));
     assert!(c.saw(child, 0) && c.saw(child, 1));
 
     // Removing the final output has an explicit headless policy: no fallback membership and no
     // fabricated presentation until a new output is added.
-    assert!(state.remove_output("dd-0"));
+    assert!(state.remove_output("hl-0"));
     assert!(state.is_headless());
     assert_eq!(state.surface_output_name(1), None);
     assert_eq!(state.surface_output_name(3), None);
@@ -394,19 +394,19 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     display.flush_clients().unwrap();
     c.drain();
 
-    // Recover from headless with a new output. The compositor records each surface's membership on dd-2
-    // and enters them into dd-2's surface set immediately; but `wl_surface.enter` can only be delivered
-    // against a wl_output the CLIENT has bound, and dd-2's global was just advertised. A correct client
+    // Recover from headless with a new output. The compositor records each surface's membership on hl-2
+    // and enters them into hl-2's surface set immediately; but `wl_surface.enter` can only be delivered
+    // against a wl_output the CLIENT has bound, and hl-2's global was just advertised. A correct client
     // binds the newly-advertised output — and Smithay's wl_output bind handler then replays `enter` for
-    // every surface already on dd-2 (exactly one per surface). Track the fresh advertisement in isolation
-    // (global names may be reused after dd-0/dd-1 were withdrawn).
+    // every surface already on hl-2 (exactly one per surface). Track the fresh advertisement in isolation
+    // (global names may be reused after hl-0/hl-1 were withdrawn).
     c.events.clear();
     c.wl_output_names.clear();
-    state.add_output("dd-2", "replacement", (1600, 900), 2, (0, 0));
+    state.add_output("hl-2", "replacement", (1600, 900), 2, (0, 0));
     display.flush_clients().unwrap();
     c.drain();
     assert!(!state.is_headless());
-    assert_eq!(c.wl_output_names.len(), 1, "exactly one new wl_output (dd-2) is advertised on recovery");
+    assert_eq!(c.wl_output_names.len(), 1, "exactly one new wl_output (hl-2) is advertised on recovery");
     let dd2_name = c.wl_output_names[0];
     let dd2 = c.alloc();
     c.conn.send(&Message::new(2, 0).u32(dd2_name).string("wl_output").u32(4).u32(dd2));
@@ -415,7 +415,7 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     display.flush_clients().unwrap();
     c.drain();
     for (sid, object) in [(1, surface), (2, child), (3, independent)] {
-        assert_eq!(state.surface_output_name(sid).as_deref(), Some("dd-2"));
+        assert_eq!(state.surface_output_name(sid).as_deref(), Some("hl-2"));
         assert_eq!(
             c.events.iter().filter(|&&(event_object, opcode)| event_object == object && opcode == 0).count(),
             1,

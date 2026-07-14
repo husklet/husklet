@@ -1,4 +1,4 @@
-//! The `dd-manifest.json` sidecar carried inside a dd save archive.
+//! The `hl-manifest.json` sidecar carried inside a dd save archive.
 //!
 //! dd's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
 //! `rootfs/` directory plus this manifest recording the image identity + run config. `docker save`

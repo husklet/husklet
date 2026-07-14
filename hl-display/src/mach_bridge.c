@@ -1,6 +1,6 @@
-// dd-display mach receiver for the GPU rung 2 IOSurface handle bridge.
+// hl-display mach receiver for the GPU rung 2 IOSurface handle bridge.
 //
-// The engine (dd-jit-darwin) creates a host IOSurface for a guest's dmabuf and sends its send-right +
+// The engine (hl-jit-darwin) creates a host IOSurface for a guest's dmabuf and sends its send-right +
 // global id to this service over Mach IPC (global-id IOSurfaceLookup is restricted on modern macOS, so
 // the mach port is the only cross-process handle). We register a bootstrap service, receive (port, id)
 // messages, resolve the IOSurface via IOSurfaceLookupFromMachPort, and hand it back to Rust to cache.
@@ -16,7 +16,7 @@
 #include <string.h>
 
 // The wire message: a complex message carrying one port descriptor + the surface id + its allocation
-// generation. MUST match the engine's hl_gpu_msg_t in dd-jit-darwin vfs.c exactly.
+// generation. MUST match the engine's hl_gpu_msg_t in hl-jit-darwin vfs.c exactly.
 typedef struct {
     mach_msg_header_t header;
     mach_msg_body_t body;

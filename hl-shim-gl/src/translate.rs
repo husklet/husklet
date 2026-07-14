@@ -357,8 +357,8 @@ fn builtin_fixups(b: &mut String) {
     wreplace(b, "mod", "hl_mod");
 }
 
-const DD_MOD_HELPERS: &str = "template<typename T> inline T hl_mod(T x, T y) { return x - y * floor(x / y); }\ninline float2 hl_mod(float2 x, float y) { return x - y * floor(x / y); }\ninline float3 hl_mod(float3 x, float y) { return x - y * floor(x / y); }\ninline float4 hl_mod(float4 x, float y) { return x - y * floor(x / y); }\n";
-const DD_MAT3X2_HELPER: &str = "inline float3x2 hl_mat3x2(float3x3 m) { return float3x2(m[0].xy, m[1].xy, m[2].xy); }\ninline float3x2 hl_mat3x2(float2 a, float2 b, float2 c) { return float3x2(a, b, c); }\n";
+const HL_MOD_HELPERS: &str = "template<typename T> inline T hl_mod(T x, T y) { return x - y * floor(x / y); }\ninline float2 hl_mod(float2 x, float y) { return x - y * floor(x / y); }\ninline float3 hl_mod(float3 x, float y) { return x - y * floor(x / y); }\ninline float4 hl_mod(float4 x, float y) { return x - y * floor(x / y); }\n";
+const HL_MAT3X2_HELPER: &str = "inline float3x2 hl_mat3x2(float3x3 m) { return float3x2(m[0].xy, m[1].xy, m[2].xy); }\ninline float3x2 hl_mat3x2(float2 a, float2 b, float2 c) { return float3x2(a, b, c); }\n";
 
 fn local_decl_fixups(b: &mut String) {
     for ty in ["float", "float2", "float3", "float4", "int", "int2", "int3", "int4", "uint", "uint2", "uint3", "uint4"] {
@@ -623,10 +623,10 @@ pub fn translate(vs_in: &str, fs_in: &str) -> String {
     let mut out = String::new();
     out.push_str("#include <metal_stdlib>\nusing namespace metal;\n");
     if vs.contains("mod(") || fs.contains("mod(") {
-        out.push_str(DD_MOD_HELPERS);
+        out.push_str(HL_MOD_HELPERS);
     }
     if vs.contains("mat3x2(") || fs.contains("mat3x2(") {
-        out.push_str(DD_MAT3X2_HELPER);
+        out.push_str(HL_MAT3X2_HELPER);
     }
     for c in &consts {
         let mut line = c.clone();

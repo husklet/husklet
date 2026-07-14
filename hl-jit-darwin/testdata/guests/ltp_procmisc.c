@@ -1,6 +1,6 @@
 // prctl / nanosleep / sched_getaffinity / read error-path semantics — LTP prctl02/prctl03/nanosleep02/
 // sched_getaffinity01/read02 surface. Deterministic booleans only (no raw cpu counts / remaining-time
-// values, which legitimately vary), oracle-diffed dd-vs-native on both arches.
+// values, which legitimately vary), oracle-diffed hl-vs-native on both arches.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>

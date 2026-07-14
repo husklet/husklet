@@ -4,7 +4,7 @@ use std::process::Command;
 use std::time::Duration;
 
 // ---- the mac bridge ------------------------------------------------------------------------------
-// On a linux dev host, dd-daemon + its docker live mac-side: we run script FILES through `mac bash
+// On a linux dev host, hl-daemon + its docker live mac-side: we run script FILES through `mac bash
 // <file>` (env inline in the file, paths under a /Users shared dir). On macOS we run them directly.
 // Script files (not `-lc` strings) sidestep all quote-escaping of embedded workloads/heredocs.
 fn on_mac_host() -> bool {
@@ -15,7 +15,7 @@ pub(super) fn shared_run_dir() -> PathBuf {
     let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("target/dd-scen");
+        .join("target/hl-scen");
     std::fs::create_dir_all(&d).ok();
     d
 }
@@ -69,7 +69,7 @@ impl Daemon {
 }
 
 impl Daemon {
-    /// Real backend → no daemon to manage (host docker is already up). Dd backend → boot dd-daemon
+    /// Real backend → no daemon to manage (host docker is already up). Dd backend → boot hl-daemon
     /// (bridged on linux) on a private socket/state under the shared run dir.
     pub fn boot(cfg: &Cfg) -> Result<Daemon, String> {
         let bridged = !on_mac_host();
@@ -86,7 +86,7 @@ impl Daemon {
                 bridged,
             });
         }
-        let dir = shared_run_dir().join(format!("dd-{}", std::process::id()));
+        let dir = shared_run_dir().join(format!("hl-{}", std::process::id()));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let sock = dir.join("dd.sock");
         let log = dir.join("daemon.log");
@@ -119,7 +119,7 @@ impl Daemon {
         if !sock.exists() {
             let tail = std::fs::read_to_string(&log).unwrap_or_default();
             return Err(format!(
-                "dd-daemon failed to start; log tail:\n{}",
+                "hl-daemon failed to start; log tail:\n{}",
                 tail.lines().rev().take(15).collect::<Vec<_>>().join("\n")
             ));
         }

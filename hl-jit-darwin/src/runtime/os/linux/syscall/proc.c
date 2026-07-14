@@ -80,7 +80,7 @@ static void svc_fill_rlimit(int resource, uint64_t *o) {
     // docker --ulimit override wins (g_ulimit, seeded from HL_ULIMITS in state.c): a guest that reads its
     // limits (memcached calloc's off RLIMIT_NOFILE, the JVM sizes threads off RLIMIT_NPROC) must see the
     // requested value, not the dd default. `set` gates each resource so unspecified ones keep the defaults.
-    if (resource >= 0 && resource < DD_RLIM_MAX && g_ulimit[resource].set) {
+    if (resource >= 0 && resource < HL_RLIM_MAX && g_ulimit[resource].set) {
         o[0] = g_ulimit[resource].cur;
         o[1] = g_ulimit[resource].max;
         return;
@@ -253,7 +253,7 @@ static void fork_child_hooks(struct cpu *c) {
     hl_gpu_after_fork();    // GPU rung 2: this child can no longer create/map an IOSurface (fork-unsafe) —
                             // it may only reuse the pre-fork, VM_INHERIT_SHARE'd IOSurface pool it inherited
     if (fp) t[4] = now_ns();
-#ifdef DD_HAS_MACH_EXC
+#ifdef HL_HAS_MACH_EXC
     // The CRASHDBG Mach exception port + its receiver thread do NOT survive fork, so a crash in the
     // child silently dies. Clear the inherited task exception port so a fault falls through to the
     // POSIX diag_crash handler (which IS inherited) and reports fault=/pc=.
@@ -289,7 +289,7 @@ static int g_subreaper;    // PR_SET/GET_CHILD_SUBREAPER (this process is a reap
 // few prctl options the kernel gates on a specific capability (PR_SET_SECUREBITS / PR_CAPBSET_DROP need
 // CAP_SETPCAP) return -EPERM after that cap has been dropped -- exactly as LTP prctl02 (which drops
 // CAP_SETPCAP via libcap before those subtests) expects. g_cap_eff/g_cap_bnd are DEFINED in
-// container/state.c (default = the 14-cap docker set DD_CAP_DEFAULT, which INCLUDES CAP_SETPCAP) so the
+// container/state.c (default = the 14-cap docker set HL_CAP_DEFAULT, which INCLUDES CAP_SETPCAP) so the
 // /proc/self/status builder and these handlers share one source of truth. capset() narrows the effective set.
 #define CAP_SETPCAP 8
 // personality(2) persona (lsys-personality): query with 0xffffffff, set returns the previous value.
@@ -301,7 +301,7 @@ static unsigned g_persona;
 // a per-process record of the requested policy+priority so sched_getscheduler/sched_getparam round-trip.
 static int g_sched_policy = 0; // SCHED_OTHER
 static int g_sched_prio;       // sched_priority last set
-#define DD_SCHED_RESET_ON_FORK 0x40000000
+#define HL_SCHED_RESET_ON_FORK 0x40000000
 
 // Priority band for a policy (Linux sched_get_priority_min/max): FIFO(1)/RR(2) use 1..99, every other
 // valid policy uses 0..0. Returns 0 for a known policy (filling *lo/*hi), -1 for an unknown one (EINVAL).
@@ -324,7 +324,7 @@ static int sched_prio_band(int policy, int *lo, int *hi) {
 
 // Does guest pid `gpid` name a live task? pid 0 (and the container init pid) is the caller itself; init pid 1
 // maps to its real host pid. A guest THREAD tid (glibc's pthread_getaffinity_np passes pd->tid, which the
-// JVM/Go/etc. do heavily) is a dd-internal id (g_next_tid, base 1000) that is NOT a host pid -- probing it
+// JVM/Go/etc. do heavily) is a hl-internal id (g_next_tid, base 1000) that is NOT a host pid -- probing it
 // with kill() checks an unrelated host process and wrongly returns ESRCH (the JVM's pthread_getattr_np then
 // fails "pthread_getattr_np failed with error = 3"). Resolve those against the live-thread registry FIRST;
 // only a pid that is neither the caller, init, nor a known guest thread falls through to the host kill()
@@ -425,10 +425,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             uint32_t *d = (uint32_t *)a1;
             for (int i = 0; i < u32s; i++) {
                 uint32_t eff = (i == 0) ? (uint32_t)g_cap_eff : (uint32_t)(g_cap_eff >> 32);
-                // permitted = the docker default 14-cap set (DD_CAP_DEFAULT), NOT a blanket all-ones: a
+                // permitted = the docker default 14-cap set (HL_CAP_DEFAULT), NOT a blanket all-ones: a
                 // default `docker run` root container has CapPrm=00000000a80425fb, matching /proc/self/status
                 // exactly. The old 0xffffffff over-reported caps (e.g. CAP_SYS_ADMIN) the container lacks.
-                uint32_t prm = (i == 0) ? (uint32_t)DD_CAP_DEFAULT : (uint32_t)(DD_CAP_DEFAULT >> 32);
+                uint32_t prm = (i == 0) ? (uint32_t)HL_CAP_DEFAULT : (uint32_t)(HL_CAP_DEFAULT >> 32);
                 d[i * 3 + 0] = eff; // effective: the guest's live effective set (respects drops)
                 d[i * 3 + 1] = prm; // permitted: the docker default bounding/permitted set
                 d[i * 3 + 2] = 0;   // inheritable: empty (Docker default)
@@ -692,7 +692,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(-ESRCH);
             break;
         } // find_process_by_pid
-        int base = policy & ~DD_SCHED_RESET_ON_FORK, lo, hi;
+        int base = policy & ~HL_SCHED_RESET_ON_FORK, lo, hi;
         if (sched_prio_band(base, &lo, &hi) < 0) {
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
@@ -1081,7 +1081,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         long ng = (long)a0;
-        if (ng < 0 || ng > DD_NGROUPS_MAX) {
+        if (ng < 0 || ng > HL_NGROUPS_MAX) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
@@ -1298,7 +1298,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // PR_CAPBSET_READ(23): "is capability arg2 in this task's BOUNDING set?" capsh --print / getpcaps
         // probe every cap this way to render the mask; it MUST agree with /proc/self/status CapBnd. Returns 1
         // if present, 0 if absent, -EINVAL for a cap index past CAP_LAST_CAP (40). The docker default holds
-        // exactly the 14 bits of DD_CAP_DEFAULT (g_cap_bnd), so e.g. CAP_SYS_ADMIN(21) reads 0.
+        // exactly the 14 bits of HL_CAP_DEFAULT (g_cap_bnd), so e.g. CAP_SYS_ADMIN(21) reads 0.
         if ((int)a0 == 23) {
             if (a1 > 40 /* CAP_LAST_CAP */) {
                 G_RET(c) = (uint64_t)(-EINVAL);
@@ -1566,10 +1566,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
             // ENOENT
         }
-        char *argv[DD_MAXARGV]; // Linux allows far more than 255 args within ARG_MAX -- a fixed 256 silently
+        char *argv[HL_MAXARGV]; // Linux allows far more than 255 args within ARG_MAX -- a fixed 256 silently
         int ac = 0;             // dropped the tail (a different command ran, and /proc/self/cmdline diverged)
         uint64_t *gv = (uint64_t *)a1; // a1 (argv array base) already nonpie_p()'d at the top redirect
-        while (gv && gv[ac] && ac < DD_MAXARGV - 1) {
+        while (gv && gv[ac] && ac < HL_MAXARGV - 1) {
             argv[ac] = (char *)nonpie_p(gv[ac]); // each argv[] element may itself be a low-image pointer
             ac++;
         }
@@ -1600,15 +1600,15 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // RECURSIVE -- the interpreter may itself be a #! script (e.g. /usr/bin/env -> coreutils multicall);
         // resolve the whole chain (Linux binfmt_script, up to SHEBANG_MAX levels) and load the FINAL interp.
         char sh_store[SHEBANG_MAX * 2][256], shpb[4200];
-        char *na[DD_MAXARGV];
+        char *na[HL_MAXARGV];
         int nn = 0;
         // Linux passes the execve path (a0) as the script-path arg; the original argv[0] is discarded.
         na[nn++] = (char *)a0;
-        for (int i = 1; i < ac && nn < DD_MAXARGV - 1; i++)
+        for (int i = 1; i < ac && nn < HL_MAXARGV - 1; i++)
             na[nn++] = argv[i];
         na[nn] = NULL;
         const char *sh_finalhost;
-        int sh_new = resolve_shebang_chain(na, nn, DD_MAXARGV, p, sh_store, shpb, sizeof shpb, &sh_finalhost);
+        int sh_new = resolve_shebang_chain(na, nn, HL_MAXARGV, p, sh_store, shpb, sizeof shpb, &sh_finalhost);
         if (sh_new < 0) {
             // too many nested #! -> ELOOP. `-ELOOP` is the HOST (macOS, 62) errno; svc_done's m2l_errno
             // maps it to Linux ELOOP (40) at the syscall boundary, exactly like the vfs symlink-loop path.
@@ -1664,10 +1664,10 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // fixed vaddr (__PAGEZERO blocks the low 4 GB) -> its baked absolute refs collide -> SIGSEGV.
         // argv + path live in guest memory we're about to munmap, so copy them to the host heap first.
         char *xpath = strdup(p);
-        char *xargv[DD_MAXARGV];
-        for (int i = 0; i < ac && i < DD_MAXARGV - 1; i++)
+        char *xargv[HL_MAXARGV];
+        for (int i = 0; i < ac && i < HL_MAXARGV - 1; i++)
             xargv[i] = strdup(argv[i]);
-        xargv[ac < DD_MAXARGV - 1 ? ac : DD_MAXARGV - 1] = NULL;
+        xargv[ac < HL_MAXARGV - 1 ? ac : HL_MAXARGV - 1] = NULL;
         gmap_reset_all();
         gna_reset();                   // the old image's PROT_NONE ranges are gone with its address space
         mlk_reset();                   // ... and so are its mlock'd ranges (VmLck resets across execve)
@@ -1678,9 +1678,9 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
 #endif
         g_go_iscgo = 0; // reset; load_elf re-sets it iff the new main image is a cgo Go image
         p = xpath;
-        for (int i = 0; i < ac && i < DD_MAXARGV - 1; i++)
+        for (int i = 0; i < ac && i < HL_MAXARGV - 1; i++)
             argv[i] = xargv[i];
-        argv[ac < DD_MAXARGV - 1 ? ac : DD_MAXARGV - 1] = NULL;
+        argv[ac < HL_MAXARGV - 1 ? ac : HL_MAXARGV - 1] = NULL;
         struct loaded lm;
         char pc_ihost[4200];
         const char *pc_interp_host = NULL;
@@ -1915,7 +1915,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
             break;
         }
-        if (res < 0 || res >= DD_RLIM_MAX) {
+        if (res < 0 || res >= HL_RLIM_MAX) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
@@ -1928,7 +1928,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
                 break;
             }
-            if (res >= 0 && res < DD_RLIM_MAX) {
+            if (res >= 0 && res < HL_RLIM_MAX) {
                 g_ulimit[res].set = 1;
                 g_ulimit[res].cur = ncur;
                 g_ulimit[res].max = nmax;

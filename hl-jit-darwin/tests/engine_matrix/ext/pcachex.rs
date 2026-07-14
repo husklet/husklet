@@ -24,7 +24,7 @@ pub fn groups() -> Vec<Group> {
 
 fn pc(c: Case) -> Case {
     c.env("HL_JIT_PCACHE", "1")
-        .env("HL_JIT_PCACHE_DIR", "/tmp/ddjit-pcache-matrix")
+        .env("HL_JIT_PCACHE_DIR", "/tmp/hljit-pcache-matrix")
 }
 
 fn pcachex() -> Group {

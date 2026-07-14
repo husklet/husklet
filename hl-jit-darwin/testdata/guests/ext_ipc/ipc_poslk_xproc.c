@@ -45,7 +45,7 @@ static void worker(const char *path) {
 }
 
 int main(void) {
-    char path[] = "/tmp/dd_poslk_XXXXXX";
+    char path[] = "/tmp/hl_poslk_XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) { printf("poslk mkstemp fail\n"); return 1; }
     if (write(fd, "0", 1) != 1) { /* ignore */ }

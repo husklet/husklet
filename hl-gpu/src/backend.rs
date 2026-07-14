@@ -1,4 +1,4 @@
-//! The `GpuBackend` executor abstraction — the seam between the forwarded dd-GPU IR and a concrete
+//! The `GpuBackend` executor abstraction — the seam between the forwarded hl-GPU IR and a concrete
 //! host GPU.
 //!
 //! One trait, several implementors:
@@ -6,10 +6,10 @@
 //!   * [`crate::software::SoftwareBackend`] — a real CPU executor (buffers/textures/clears/copies +
 //!     readback), the standing correctness fallback; runs headless here.
 //!   * `hl_gpu_wgpu::WgpuBackend` — real Metal on an Apple-silicon Mac host, in the SEPARATE
-//!     `dd-gpu-wgpu` crate (mac-only; built via `make mac-crates`). It runs on the SAME `MTLDevice` +
+//!     `hl-gpu-wgpu` crate (mac-only; built via `make mac-crates`). It runs on the SAME `MTLDevice` +
 //!     `MTLCommandQueue` the display renderer owns (`hl_display::metal::MetalCtx`, constructible via
 //!     `MetalCtx::from_device`), so a guest's rendered `MTLTexture`/IOSurface can be composited by
-//!     `dd-display` with no cross-device copy (GPU rung 2).
+//!     `hl-display` with no cross-device copy (GPU rung 2).
 //!   * a future `CudaBackend` — a native Vulkan+CUDA-interop executor on an NVIDIA host.
 //!
 //! Backends receive **guest-assigned ids** and keep their own id→object map (a [`crate::id::ResourceTable`]
@@ -58,7 +58,7 @@ pub mod shader_payload {
     pub const MSL: u32 = 1 << 2;
     /// WGSL source (wgpu-native).
     pub const WGSL: u32 = 1 << 3;
-    /// CUDA PTX (compiled to dd-GPU kernel IR).
+    /// CUDA PTX (compiled to hl-GPU kernel IR).
     pub const PTX: u32 = 1 << 4;
 }
 
@@ -108,7 +108,7 @@ pub const ALL_COMMANDS: &[u8] = &[
 ];
 
 /// Commands implemented by both hardware executors. Now identical to [`ALL_COMMANDS`]: both the Metal
-/// backend (`dd-display::metal_backend`) and the wgpu backend (`dd-gpu-wgpu`) implement genuine
+/// backend (`hl-display::metal_backend`) and the wgpu backend (`hl-gpu-wgpu`) implement genuine
 /// multisample resolve (`RESOLVE_TEXTURE`) — a per-sample averaging pass into the dest region, proven by
 /// their resolve conformance tests (`metal_resolve` / `texture_resolve`) against the software oracle.
 pub const HARDWARE_COMMANDS: &[u8] = &[
@@ -147,7 +147,7 @@ pub struct Capabilities {
     pub present_kinds: Vec<PresentKind>,
 
     // --- versioned negotiation descriptor (Phase 1 capability handshake) ---
-    /// dd-gpu IR wire version this backend decodes; a guest with a different [`crate::ir::WIRE_VERSION`]
+    /// hl-gpu IR wire version this backend decodes; a guest with a different [`crate::ir::WIRE_VERSION`]
     /// must be rejected before any command flows (never let a stale pair reinterpret a tag).
     pub wire_version: u32,
     /// Bitset of encoder-op tags (`ir::etag`) this backend replays. Bit N = etag N supported.

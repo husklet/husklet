@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *path = "/tmp/dd_fifo_test";
+    const char *path = "/tmp/hl_fifo_test";
     unlink(path);
     if (mkfifo(path, 0644) < 0) { perror("mkfifo"); return 1; }
     pid_t pid = fork();

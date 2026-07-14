@@ -31,14 +31,14 @@ pub fn group() -> ScenGroup {
             .has("Welcome to nginx!").timeout(60),
         // serve a fixed file we write — deterministic body, exercises static file path + sendfile.
         scen("web/nginx-custom-file", "nginx:alpine")
-            .exec("echo dd-served-ok > /usr/share/nginx/html/dd.txt; nginx; sleep 1; \
+            .exec("echo hl-served-ok > /usr/share/nginx/html/dd.txt; nginx; sleep 1; \
                    wget -qO- http://127.0.0.1/dd.txt")
-            .has("dd-served-ok").timeout(60),
+            .has("hl-served-ok").timeout(60),
         // replace the index served at / with a fixed marker.
         scen("web/nginx-index-replace", "nginx:alpine")
-            .exec("echo dd-index-ok > /usr/share/nginx/html/index.html; nginx; sleep 1; \
+            .exec("echo hl-index-ok > /usr/share/nginx/html/index.html; nginx; sleep 1; \
                    wget -qO- http://127.0.0.1/")
-            .has("dd-index-ok").timeout(60),
+            .has("hl-index-ok").timeout(60),
         // a missing path returns the built-in 404 page (loopback error path).
         scen("web/nginx-404", "nginx:alpine")
             .exec("nginx; sleep 1; wget -qO- http://127.0.0.1/nope-does-not-exist 2>&1; \
@@ -64,9 +64,9 @@ pub fn group() -> ScenGroup {
             .exec("nginx; sleep 1; wget -qO- http://127.0.0.1/")
             .has("Welcome to nginx!").timeout(60),
         scen("web/nginx-stable-custom", "nginx:stable-alpine")
-            .exec("echo dd-served-ok > /usr/share/nginx/html/dd.txt; nginx; sleep 1; \
+            .exec("echo hl-served-ok > /usr/share/nginx/html/dd.txt; nginx; sleep 1; \
                    wget -qO- http://127.0.0.1/dd.txt")
-            .has("dd-served-ok").timeout(60),
+            .has("hl-served-ok").timeout(60),
         scen("web/nginx-stable-version", "nginx:stable-alpine")
             .exec("nginx -v 2>&1")
             .has("nginx/1.").timeout(45),
@@ -89,16 +89,16 @@ pub fn group() -> ScenGroup {
             .has("v2.").timeout(45),
         // adapt a tiny Caddyfile and serve a fixed response over loopback.
         scen("web/caddy-respond", "caddy:2-alpine")
-            .exec("printf ':80\\n\\nrespond \"dd-served-ok\"\\n' > /tmp/Caddyfile; \
+            .exec("printf ':80\\n\\nrespond \"hl-served-ok\"\\n' > /tmp/Caddyfile; \
                    caddy start --config /tmp/Caddyfile --adapter caddyfile >/dev/null 2>&1; sleep 1; \
                    wget -qO- http://127.0.0.1/")
-            .has("dd-served-ok").timeout(60),
+            .has("hl-served-ok").timeout(60),
         // file-server serving a written file.
         scen("web/caddy-file-server", "caddy:2-alpine")
-            .exec("mkdir -p /tmp/srv; echo dd-served-ok > /tmp/srv/dd.txt; \
+            .exec("mkdir -p /tmp/srv; echo hl-served-ok > /tmp/srv/dd.txt; \
                    caddy file-server --root /tmp/srv --listen :80 >/dev/null 2>&1 & sleep 1; \
                    wget -qO- http://127.0.0.1/dd.txt")
-            .has("dd-served-ok").timeout(60),
+            .has("hl-served-ok").timeout(60),
 
         // ---- traefik (Go, scratch image — no shell, run form only) --------------------------------
         scen("web/traefik-version", "traefik:v3.1")
@@ -132,10 +132,10 @@ haproxy -c -f /tmp/h.cfg && echo HAPROXY-CFG-VALID")
             .exec("cat > /tmp/h.cfg <<'CFG'\n\
 global\n  daemon\n\
 defaults\n  mode http\n  timeout connect 1s\n  timeout client 1s\n  timeout server 1s\n\
-frontend f\n  bind :80\n  http-request return status 200 content-type \"text/plain\" string \"dd-haproxy-ok\"\n\
+frontend f\n  bind :80\n  http-request return status 200 content-type \"text/plain\" string \"hl-haproxy-ok\"\n\
 CFG\n\
 haproxy -f /tmp/h.cfg -D; sleep 1; wget -qO- http://127.0.0.1/")
-            .has("dd-haproxy-ok").timeout(60),
+            .has("hl-haproxy-ok").timeout(60),
 
         // ---- varnish (C; VCL is JIT-compiled to C and dlopen'd — a real codegen path) -------------
         scen("web/varnish-version", "varnish:7.5")
@@ -161,9 +161,9 @@ haproxy -f /tmp/h.cfg -D; sleep 1; wget -qO- http://127.0.0.1/")
             .exec("httpd -v 2>&1")
             .has("Apache/2.4").timeout(45),
         scen("web/httpd-custom", "httpd:alpine")
-            .exec("echo dd-served-ok > /usr/local/apache2/htdocs/dd.txt; httpd -k start 2>/dev/null; \
+            .exec("echo hl-served-ok > /usr/local/apache2/htdocs/dd.txt; httpd -k start 2>/dev/null; \
                    sleep 1; wget -qO- http://127.0.0.1/dd.txt")
-            .has("dd-served-ok").timeout(60),
+            .has("hl-served-ok").timeout(60),
         scen("web/httpd-config-test", "httpd:alpine")
             .exec("httpd -t 2>&1")
             .has("Syntax OK").timeout(45),

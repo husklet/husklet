@@ -1,11 +1,11 @@
-//! Live validation client for the input-offset + popup-position fixes. Connects to a RUNNING dd-display
+//! Live validation client for the input-offset + popup-position fixes. Connects to a RUNNING hl-display
 //! (`--window --metal`) over its Wayland socket and drives the two code paths under test with the raw wire
 //! protocol (no libwayland, no GTK):
 //!   1. a toplevel whose `xdg_surface.set_window_geometry` insets a CSD-style shadow margin — so the native
 //!      window is CROPPED to the inner rect and on-screen clicks must be offset back by (gx,gy);
 //!   2. an `xdg_popup` anchored near the top-left of that toplevel via a positioner — so the popup window
 //!      must open AT the anchor, not at a default cascade / screen bottom.
-//! It then holds the connection open (draining events) so a driver can SIGUSR1-dump, inspect the dd-display
+//! It then holds the connection open (draining events) so a driver can SIGUSR1-dump, inspect the hl-display
 //! logs, and synthesize clicks. This is the on-Mac analogue of the headless `render_pattern` example.
 //!
 //! Run:  live_geometry_popup <socket-path> [hold-seconds]
@@ -39,7 +39,7 @@ fn main() {
     let (pos, psurface, pxdg, popup) = (30u32, 31, 32, 33);
     let (ppool, pbuffer) = (40u32, 41);
 
-    // ---- registry + binds (dd-display advertises fixed global names 1..) ----
+    // ---- registry + binds (hl-display advertises fixed global names 1..) ----
     c.send(&Message::new(WL_DISPLAY, 1).u32(reg)); // get_registry
     c.send(&Message::new(reg, 0).u32(1).string("wl_compositor").u32(4).u32(comp));
     c.send(&Message::new(reg, 0).u32(2).string("wl_shm").u32(1).u32(shm));
@@ -157,7 +157,7 @@ fn pump(c: &mut Conn) {
 /// vanishes on close; the fd stays valid for SCM_RIGHTS passing + the server's own mmap.
 fn make_pool(w: i32, h: i32, a: u32, b: u32, margin: bool) -> (*mut libc::c_void, RawFd, usize) {
     let size = (w * h * 4) as usize;
-    let path = format!("/tmp/dd-live-shm-{}-{}", std::process::id(), w * 100003 + h);
+    let path = format!("/tmp/hl-live-shm-{}-{}", std::process::id(), w * 100003 + h);
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)

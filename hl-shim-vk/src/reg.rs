@@ -1,15 +1,15 @@
-//! The dd-shim-vk recording registry: the process-global state that turns a stream of `vk*` calls
-//! into a `hl_gpu::ir` command stream (the shared contract `dd-shim-common` re-exports).
+//! The hl-shim-vk recording registry: the process-global state that turns a stream of `vk*` calls
+//! into a `hl_gpu::ir` command stream (the shared contract `hl-shim-common` re-exports).
 //!
-//! ## Execution model (mirrors dd-shim-cuda's embedded-backend seam)
+//! ## Execution model (mirrors hl-shim-cuda's embedded-backend seam)
 //! Every resource-creating `vk*` call (`vkCreateBuffer`, `vkCreateShaderModule`, `vkCreate*Pipelines`,
 //! …) allocates an IR object id and appends the matching [`Cmd`] to [`VkState::ir_log`]; every
 //! `vkCmd*` records an [`Enc`] into the target command buffer; `vkQueueSubmit` wraps the recorded
 //! encoder in a [`Cmd::Submit`]. The accumulated IR is the exact stream the host SPIR-V→Metal executor
-//! (`dd-gpu-wgpu`, proven in `spirv_compute.rs`/`spirv_triangle.rs`) replays — in production shipped
+//! (`hl-gpu-wgpu`, proven in `spirv_compute.rs`/`spirv_triangle.rs`) replays — in production shipped
 //! over `hl_shim::transport` to `$HL_GPU_EXEC`; in the validation tests drained via
 //! [`take_ir`] and replayed on a real-Metal `WgpuBackend` (the test playing the host exec service,
-//! exactly as dd-shim-cuda's tests replay on an embedded backend).
+//! exactly as hl-shim-cuda's tests replay on an embedded backend).
 //!
 //! The Vulkan→IR mapping is ported from MoltenVK (the canonical Vulkan-over-Metal driver); each
 //! entry-point module cites the specific `MVK*` source it mirrors.
@@ -18,7 +18,7 @@ use hl_shim::ir::*;
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-/// The reserved IR texture id the host executor uses for the presented surface (dd-display's Metal
+/// The reserved IR texture id the host executor uses for the presented surface (hl-display's Metal
 /// executor `set_render_target(1, <current IOSurface>)` per frame). Every swapchain image's render
 /// pass targets this id so the render lands in the IOSurface. IR texture ids and buffer ids are
 /// separate namespaces host-side, so this never collides with a buffer id 1.
@@ -29,7 +29,7 @@ pub const PRESENT_IR_ID: u32 = 1;
 pub struct BufferRec {
     pub ir_id: u32,
     pub size: u64,
-    pub usage: u32, // dd-gpu buffer_usage bits
+    pub usage: u32, // hl-gpu buffer_usage bits
     pub bound_mem: Option<u64>,
     pub bound_offset: u64,
 }
@@ -488,7 +488,7 @@ pub struct EventRec {
     pub signaled: bool,
 }
 
-/// A `VkSampler` (MoltenVK `MVKSampler`): lowered to a dd-gpu IR sampler (`Cmd::CreateSampler`). The
+/// A `VkSampler` (MoltenVK `MVKSampler`): lowered to a hl-gpu IR sampler (`Cmd::CreateSampler`). The
 /// filter/address state is translated at creation; the handle carries the IR id for descriptor lowering.
 pub struct SamplerRec {
     pub ir_id: u32,
@@ -709,6 +709,6 @@ pub fn reset() {
 #[inline]
 pub fn trace(name: &str) {
     if std::env::var_os("HL_SHIM_DEBUG").is_some() {
-        eprintln!("[dd-shim-vk] -> {name}");
+        eprintln!("[hl-shim-vk] -> {name}");
     }
 }

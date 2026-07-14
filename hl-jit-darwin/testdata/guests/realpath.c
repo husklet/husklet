@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *dir = "/tmp/dd_realpath_dir";
+    const char *dir = "/tmp/hl_realpath_dir";
     mkdir(dir, 0755);
     char target[256], l1[256], l2[256], l3[256];
     snprintf(target, sizeof target, "%s/target.txt", dir);

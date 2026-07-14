@@ -8,7 +8,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_unshare_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_unshare_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     write(fd, "abc", 3);
     int un = unshare(CLONE_FILES) == 0;

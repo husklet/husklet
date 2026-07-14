@@ -46,11 +46,11 @@ impl Guest {
 
     /// Absolute path to the JIT binary, or `None` if it can't be located.
     ///
-    /// Resolution order (see [`resolve_bundled`]): `$HL_JIT_DIR/ddjit-<target>`, then beside the running
+    /// Resolution order (see [`resolve_bundled`]): `$HL_JIT_DIR/hljit-<target>`, then beside the running
     /// executable, then the `build.rs`-baked compile-time path (dev/`cargo` layout). `None` if none exist.
     pub fn jit_path(self) -> Option<String> {
         resolve_bundled(
-            &format!("ddjit-{}", self.target()),
+            &format!("hljit-{}", self.target()),
             match self {
                 Guest::LinuxAarch64 => env!("HL_JIT_LINUX_AARCH64"),
                 Guest::LinuxX86_64 => env!("HL_JIT_LINUX_X86_64"),
@@ -59,7 +59,7 @@ impl Guest {
     }
 }
 
-/// Resolve a shipped artifact (a `ddjit-<target>` engine or `darwinjail.dylib`) at runtime. The backend
+/// Resolve a shipped artifact (a `hljit-<target>` engine or `darwinjail.dylib`) at runtime. The backend
 /// knows nothing about any particular deployment (GUI app, LaunchAgent, install location) — an embedder
 /// that relocates the engines just points `$HL_JIT_DIR` at them. Resolution order:
 ///   1. `$HL_JIT_DIR/<name>` — an explicit override for a relocated/bundled layout,

@@ -1,10 +1,10 @@
-//! Pull an OCI image into a local store with the `dd-images` API, then read what a runtime needs.
+//! Pull an OCI image into a local store with the `hl-images` API, then read what a runtime needs.
 //!
 //!   cargo run -p hl-images --example pull_image -- alpine latest ./store
 //!
-//! `dd-images` is runtime-agnostic: it fetches + unpacks the image and hands you the `rootfs`, the
+//! `hl-images` is runtime-agnostic: it fetches + unpacks the image and hands you the `rootfs`, the
 //! detected `arch`, and the image's default command/env — you feed those to whatever runtime you use
-//! (e.g. `dd-jit`). No Docker daemon involved.
+//! (e.g. `hl-jit`). No Docker daemon involved.
 
 use hl_images::{Credentials, PullEvent, Store};
 

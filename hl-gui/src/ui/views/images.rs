@@ -14,7 +14,7 @@ pub(crate) fn image_detail(img: &Image, sender: &ComponentSender<AppModel>) -> g
         let name = img.name();
         move || Msg::RunImage(name.clone())
     });
-    let del = text_btn("Delete", "dd-danger", sender, {
+    let del = text_btn("Delete", "hl-danger", sender, {
         let name = img.name();
         move || Msg::RemoveImage(name.clone())
     });

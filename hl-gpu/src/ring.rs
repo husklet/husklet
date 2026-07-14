@@ -1,7 +1,7 @@
 //! A single-producer/single-consumer byte ring — the in-memory model of the shared-memory command
 //! ring the guest producer writes and the host executor drains (the batching/coalescing transport).
 //!
-//! On the real host this lives in a POSIX-shm region shared guest↔`dd-display`, with the head/tail as
+//! On the real host this lives in a POSIX-shm region shared guest↔`hl-display`, with the head/tail as
 //! atomics and a futex/eventfd doorbell (gfxstream's model). Here it is a plain in-process ring so the
 //! framing + batching logic is unit-testable headless. Frames are length-prefixed (u32) blobs — one
 //! encoded [`crate::ir::Cmd`] per frame via [`crate::ir::Cmd::frame`], or any opaque batch.

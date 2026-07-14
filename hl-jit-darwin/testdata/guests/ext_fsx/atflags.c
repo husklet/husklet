@@ -8,7 +8,7 @@
 
 int main(void) {
     char dir[128];
-    snprintf(dir, sizeof dir, "/tmp/dd_atdir_%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/hl_atdir_%d", (int)getpid());
     mkdir(dir, 0755);
     int dfd = open(dir, O_RDONLY | O_DIRECTORY);
 

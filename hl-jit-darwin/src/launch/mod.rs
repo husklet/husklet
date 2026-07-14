@@ -1,7 +1,7 @@
 //! The typed, env-free launch path: marshal a [`LaunchConfig`] into the `hl_config` wire buffer
 //! (see `src/runtime/include/hl_api.h`) and hand it to the C `hl_spawn`, which posix_spawns the
 //! arch-matching engine as `<engine> --configfd <fd>` and returns the container's pid. No `bash`, no
-//! `DD_*`/`DDJIT_*` environment — the container config travels as a struct.
+//! `HL_*`/`DDJIT_*` environment — the container config travels as a struct.
 //!
 //! Split by concern: this module holds the typed [`LaunchConfig`]; `wire.rs` is the byte-exact
 //! `hl_config` encoder ([`LaunchConfig::to_wire`] + the `WireHeader` C-contract layout); `spawn.rs`
@@ -12,7 +12,7 @@ mod wire;
 
 pub use spawn::{spawn, spawn_io, SpawnIo};
 
-/// Everything needed to launch one container, as typed Rust — the caller (dd-jit) builds this from its
+/// Everything needed to launch one container, as typed Rust — the caller (hl-jit) builds this from its
 /// `Container`; there is no environment dialect. Empty/`None` fields are simply omitted from the wire.
 #[derive(Clone, Debug, Default)]
 pub struct LaunchConfig {
@@ -64,7 +64,7 @@ pub struct LaunchConfig {
     /// persistent translated-code cache dir; empty = disabled
     pub pcache_dir: String,
     /// opt-in the host-IOSurface GPU path (`--gui`): the engine synthesizes `/dev/dri/renderD128` + services
-    /// `DD_IOCTL_GPU_ALLOC`. Off = the whole GPU path is inert (existing workloads/the gate never see it).
+    /// `HL_IOCTL_GPU_ALLOC`. Off = the whole GPU path is inert (existing workloads/the gate never see it).
     pub gpu_iosurface: bool,
     /// per-container persistent-cache kill switch (`HL_JIT_NOPCACHE`): disables pcache for THIS container even
     /// when the runtime enables pcache defaults globally. Off = pcache follows the global gate.

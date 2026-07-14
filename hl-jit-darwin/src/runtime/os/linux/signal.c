@@ -132,12 +132,12 @@ static int sig_coredumps(int sig) {
 // Current soft RLIMIT_CORE (resource 4), guest-visible: a docker --ulimit / the guest's own
 // setrlimit/prlimit64 store (g_ulimit, seeded in state.c) wins, else the dd default. A core dump only
 // happens when a coredumping signal kills a process whose SOFT core limit is nonzero, so this is the single
-// input WCOREDUMP is gated on. g_ulimit/DD_RLIM_MAX come from container/state.c (included first).
+// input WCOREDUMP is gated on. g_ulimit/HL_RLIM_MAX come from container/state.c (included first).
 // The default MUST be 0 (cores OFF), matching getrlimit(RLIMIT_CORE)'s Linux/docker default soft=0 -- the
 // old RLIM_INFINITY default contradicted getrlimit and made every crash report WCOREDUMP even though cores
 // were disabled (wait4/waitid reported CLD_DUMPED while getrlimit said the core limit was 0).
 static uint64_t svc_core_rlimit_cur(void) {
-    if (4 < DD_RLIM_MAX && g_ulimit[4].set) return g_ulimit[4].cur;
+    if (4 < HL_RLIM_MAX && g_ulimit[4].set) return g_ulimit[4].cur;
     return 0; // Linux/docker default: cores OFF (soft RLIMIT_CORE = 0)
 }
 
@@ -239,19 +239,19 @@ static __thread uint64_t g_force_deliver;
 // pipe is torn down only when the last alias closes). The read end is a normal guest fd; only the write end
 // is engine-private (relocated out of the guest's low fd range at create, protected from the guest's
 // close/exec sweep). `g_sigfd_slot[fdnum]` maps a guest fd NUMBER to its OFD slot (+1); 0 = not a signalfd.
-#define DD_SFD_MAX 64
+#define HL_SFD_MAX 64
 struct sfd_ofd {
     int rd;                 // read end (a guest fd number)
     int wr;                 // write end (engine-private, poked on signal delivery)
     volatile uint64_t mask; // signals routed to THIS signalfd (1<<signo)
     int refs;               // fd aliases referring to this OFD (dup bumps); 0 = free slot
 };
-static struct sfd_ofd g_sfd[DD_SFD_MAX];
-static uint8_t g_sigfd_slot[DD_NFD]; // guest fd number -> OFD slot index + 1 (0 = not a signalfd)
+static struct sfd_ofd g_sfd[HL_SFD_MAX];
+static uint8_t g_sigfd_slot[HL_NFD]; // guest fd number -> OFD slot index + 1 (0 = not a signalfd)
 
 // Allocate a free OFD slot (refs==0). Returns the slot index or -1 if the pool is exhausted.
 static int sfd_alloc(void) {
-    for (int i = 0; i < DD_SFD_MAX; i++)
+    for (int i = 0; i < HL_SFD_MAX; i++)
         if (g_sfd[i].refs == 0) {
             g_sfd[i].rd = g_sfd[i].wr = -1;
             g_sfd[i].mask = 0;
@@ -266,7 +266,7 @@ static int sfd_alloc(void) {
 static void sfd_deliver(int ls) {
     if (ls < 1 || ls > 63) return;
     uint64_t bit = 1ull << ls;
-    for (int i = 0; i < DD_SFD_MAX; i++)
+    for (int i = 0; i < HL_SFD_MAX; i++)
         if (g_sfd[i].refs > 0 && g_sfd[i].wr >= 0 && (g_sfd[i].mask & bit)) {
             char b = (char)ls;
             if (write(g_sfd[i].wr, &b, 1) < 0) {}
@@ -276,7 +276,7 @@ static void sfd_deliver(int ls) {
 // Is host fd `fd` a signalfd write end? (engine-private -- must survive the guest's close/exec sweep.)
 static int sfd_wr_is(int fd) {
     if (fd < 0) return 0;
-    for (int i = 0; i < DD_SFD_MAX; i++)
+    for (int i = 0; i < HL_SFD_MAX; i++)
         if (g_sfd[i].refs > 0 && g_sfd[i].wr == fd) return 1;
     return 0;
 }

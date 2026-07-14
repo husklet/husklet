@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *dir = "/tmp/dd_glob_dir";
+    const char *dir = "/tmp/hl_glob_dir";
     mkdir(dir, 0755);
     const char *files[] = {"a.txt", "b.txt", "c.log", "d.txt", "e.md"};
     char p[256];

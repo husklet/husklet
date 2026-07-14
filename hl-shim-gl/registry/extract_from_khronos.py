@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dd-shim-gl registry extractor. Reads the Khronos API registry XML (gl.xml, egl.xml — as vendored by
+# hl-shim-gl registry extractor. Reads the Khronos API registry XML (gl.xml, egl.xml — as vendored by
 # the `khronos_api` crate, or a fresh checkout of KhronosGroup/OpenGL-Registry + EGL-Registry) and emits
 # the compact `gles2_egl.manifest` build.rs consumes. This is the "generated from the Khronos XML"
 # completeness path; the manifest is committed so the build needs no XML and no network.

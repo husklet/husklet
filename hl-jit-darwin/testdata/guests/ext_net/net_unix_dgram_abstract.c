@@ -22,7 +22,7 @@ static socklen_t abs_addr(struct sockaddr_un *a, const char *name) {
 
 int main(void) {
     struct sockaddr_un sa;
-    socklen_t alen = abs_addr(&sa, "dd_dgram_abs");
+    socklen_t alen = abs_addr(&sa, "hl_dgram_abs");
     int srv = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (bind(srv, (struct sockaddr *)&sa, alen) < 0) { printf("dgabs bind_failed\n"); return 0; }
     pid_t pid = fork();

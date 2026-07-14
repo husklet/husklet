@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Build a distributable .dmg from build/dd.app. Run after tools/bundle.sh.
+# Build a distributable .dmg from build/hl.app. Run after tools/bundle.sh.
 #   nix develop "path:$PWD/nix" --command tools/make-dmg.sh   (Makefile `dmg` target)
 #
 # The .dmg is unsigned/ad-hoc like the app: on first launch users must right-click -> Open,
-# or run `xattr -dr com.apple.quarantine /Applications/dd.app` (also printed by `dd doctor`).
+# or run `xattr -dr com.apple.quarantine /Applications/hl.app` (also printed by `dd doctor`).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"   # script lives in hl-gui/package/, repo root is ../..
 VERSION="${1:-0.1.0}"
-APP="$ROOT/target/dd.app"
+APP="$ROOT/target/hl.app"
 ARCH="$(uname -m)"
 DIST="$ROOT/target/dist"
 OUT="$DIST/dd.dmg"
@@ -22,9 +22,9 @@ if command -v create-dmg >/dev/null; then
   create-dmg \
     --volname "dd $VERSION" \
     --window-pos 200 120 --window-size 640 400 --icon-size 120 \
-    --icon "dd.app" 160 200 \
+    --icon "hl.app" 160 200 \
     --app-drop-link 480 200 \
-    --hide-extension "dd.app" \
+    --hide-extension "hl.app" \
     --no-internet-enable \
     "$OUT" "$APP" || true
 fi
@@ -42,7 +42,7 @@ fi
 rm -f "$DIST"/rw.*.dmg
 
 # Sign + notarize + staple when notarization creds are configured — either a notarytool keychain profile
-# (HL_NOTARY_PROFILE, e.g. "dd-notary", local) OR inline App Store Connect creds (HL_NOTARY_APPLE_ID +
+# (HL_NOTARY_PROFILE, e.g. "hl-notary", local) OR inline App Store Connect creds (HL_NOTARY_APPLE_ID +
 # HL_NOTARY_TEAM_ID + HL_NOTARY_PW, used by CI from secrets). The app inside must already be Developer
 # ID-signed with hardened runtime (tools/bundle.sh + HL_SIGN_ID).
 if [ -n "${HL_NOTARY_PROFILE:-}" ] || [ -n "${HL_NOTARY_APPLE_ID:-}" ]; then

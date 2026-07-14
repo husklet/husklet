@@ -47,7 +47,7 @@ static int recv_fd(int sock) {
 }
 
 int main(void) {
-    int fd = memfd_create("dd_scm_memfd", MFD_ALLOW_SEALING);
+    int fd = memfd_create("hl_scm_memfd", MFD_ALLOW_SEALING);
     if (fd < 0) {
         perror("memfd_create");
         return 1;

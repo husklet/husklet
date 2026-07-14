@@ -188,7 +188,7 @@ static void ckpt_control_init(void) {
 // descriptor (a global kqueue, the netns control socket, ...) the guest cannot see -- skipped. A guest-owned
 // one is the P3 case ckpt_dump_self refuses cleanly.
 static const char *ckpt_guest_kernel_fd(int fd) {
-    if (fd < 0 || fd >= DD_NFD) return NULL;
+    if (fd < 0 || fd >= HL_NFD) return NULL;
     if (g_epoll[fd]) return "epoll";
     if (g_sock_stream[fd] || g_sock_dgram[fd] || g_sock_seqpacket[fd] || g_dns_sock[fd] || g_sock_fam[fd])
         return "socket";
@@ -214,7 +214,7 @@ static int ckpt_live_threads(void) {
 // never mistaken for guest fds.
 static int ckpt_scan_fds(struct ckpt_fd *recs, int cap, int *out_n) {
     int n = 0;
-    for (int fd = 0; fd < DD_NFD && n < cap; fd++) {
+    for (int fd = 0; fd < HL_NFD && n < cap; fd++) {
         if (fcntl(fd, F_GETFD) < 0) continue; // not open
         struct stat st;
         if (fstat(fd, &st) != 0) continue;

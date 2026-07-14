@@ -1,5 +1,5 @@
-#ifndef DD_GUI_PROBE_WAYLAND_H
-#define DD_GUI_PROBE_WAYLAND_H
+#ifndef HL_GUI_PROBE_WAYLAND_H
+#define HL_GUI_PROBE_WAYLAND_H
 
 #define _GNU_SOURCE
 #include <errno.h>
@@ -363,7 +363,7 @@ static int gp_make_memfd(const char *name, size_t size) {
 static int GP_UNUSED gp_commit_shm_frame(struct gp_conn *c, int width, int height, uint32_t frame_id) {
     int stride = width * 4;
     size_t size = (size_t)stride * (size_t)height;
-    int fd = gp_make_memfd("dd-gui-probe-shm", size);
+    int fd = gp_make_memfd("hl-gui-probe-shm", size);
     if (fd < 0) {
         perror("memfd_create/ftruncate");
         return -1;

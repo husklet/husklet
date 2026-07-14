@@ -20,9 +20,9 @@ pub fn prompt_switch_context(
     detail.add_css_class("dim-label");
 
     let cancel = gtk::Button::with_label("Not now");
-    cancel.add_css_class("dd-btn");
+    cancel.add_css_class("hl-btn");
     let ok = gtk::Button::with_label("Switch to dd");
-    ok.add_css_class("dd-btn");
+    ok.add_css_class("hl-btn");
     ok.add_css_class("suggested-action");
     let btns = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     btns.set_halign(gtk::Align::End);
@@ -31,7 +31,7 @@ pub fn prompt_switch_context(
     btns.append(&ok);
 
     let v = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    v.add_css_class("dd-dialog");
+    v.add_css_class("hl-dialog");
     v.set_margin_top(20);
     v.set_margin_bottom(18);
     v.set_margin_start(22);
@@ -47,7 +47,7 @@ pub fn prompt_switch_context(
         .child(&v)
         .build();
     win.set_transient_for(Some(parent));
-    win.add_css_class("dd-modal");
+    win.add_css_class("hl-modal");
 
     let w1 = win.clone();
     cancel.connect_clicked(move |_| w1.close());

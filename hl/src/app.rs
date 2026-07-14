@@ -1,9 +1,9 @@
-//! `ddcli app` — launch the installed dd-app GUI bundle (or a dev sibling binary).
+//! `hl app` — launch the installed hl-app GUI bundle (or a dev sibling binary).
 
 use crate::report::run_status;
 use std::process::Command;
 
-/// Launch the installed GUI bundle (or a dev `dd-app` sibling binary).
+/// Launch the installed GUI bundle (or a dev `hl-app` sibling binary).
 pub(crate) fn cmd_app() -> i32 {
     if let Some(bundle) = crate::platform::app_bundle() {
         if bundle.exists() {
@@ -11,16 +11,16 @@ pub(crate) fn cmd_app() -> i32 {
             return run_status(Command::new("open").arg(&bundle));
         }
     }
-    // Dev fallback: a dd-app binary next to us.
+    // Dev fallback: a hl-app binary next to us.
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(sib) = exe.parent().map(|d| d.join("dd-app")) {
+        if let Some(sib) = exe.parent().map(|d| d.join("hl-app")) {
             if sib.exists() {
                 return run_status(&mut Command::new(sib));
             }
         }
     }
     eprintln!(
-        "dd-app not found. Install it (drag dd.app to /Applications) or build with `make app`."
+        "hl-app not found. Install it (drag hl.app to /Applications) or build with `make app`."
     );
     1
 }

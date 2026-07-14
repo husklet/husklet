@@ -1,12 +1,12 @@
-//! dd-shim-cudart — the guest CUDA Runtime API shim, in Rust.
+//! hl-shim-cudart — the guest CUDA Runtime API shim, in Rust.
 //!
 //! Builds the single shared object deployed as `libcudart.so.1` (the CUDA Runtime API soname). A CUDA
 //! app or framework that links `-lcudart` runs unmodified: every `cuda*`/`__cuda*` symbol below is
 //! exported with the CUDA Runtime API C ABI. cudart is the UPPER edge; each stateful compute call
-//! lowers the CUDA model into the shared `dd-gpu` IR through [`hl_gpu::cuda::CudaContext`] and EXECUTEs
+//! lowers the CUDA model into the shared `hl-gpu` IR through [`hl_gpu::cuda::CudaContext`] and EXECUTEs
 //! it in-process on the embedded [`SoftwareBackend`](hl_gpu::software::SoftwareBackend) — the SAME IR +
-//! executor dd-shim-cuda's driver bodies use (dd-shim-cudart is a PEER over dd-gpu, not a consumer of
-//! dd-shim-cuda). A runtime vector-add thus runs end-to-end with NO GPU and reads back
+//! executor hl-shim-cuda's driver bodies use (hl-shim-cudart is a PEER over hl-gpu, not a consumer of
+//! hl-shim-cuda). A runtime vector-add thus runs end-to-end with NO GPU and reads back
 //! numerically-correct results — identical to `hl-gpu/cuda/cudart_shim.c` (the parity oracle).
 //!
 //! ## Coverage
@@ -25,7 +25,7 @@
 // The generated + hand-written entry-point surface uses the CUDA C names verbatim (cudaMalloc, …).
 #![allow(non_snake_case)]
 
-// The shared IR + transport foundation (re-exported so readers see the IR type is dd-gpu's).
+// The shared IR + transport foundation (re-exported so readers see the IR type is hl-gpu's).
 pub use hl_shim as common;
 
 pub mod capability;

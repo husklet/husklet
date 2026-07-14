@@ -29,8 +29,8 @@
 #define F_SEAL_WRITE 0x0008
 #endif
 
-static const char *DATA = "/tmp/dd_fdreuse_data";
-static const char *WDIR = "/tmp/dd_fdreuse_dir";
+static const char *DATA = "/tmp/hl_fdreuse_data";
+static const char *WDIR = "/tmp/hl_fdreuse_dir";
 #define WANT "PLAINDATA"
 #define WLEN 9
 

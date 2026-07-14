@@ -11,7 +11,7 @@
 //! Desktop's dockerd serves the identical classic build too, so the Real oracle stays byte-green.
 //! Coverage on dd: FROM (local + auto-pull), RUN (via the JIT in a throwaway rootfs), COPY/ADD (context
 //! + `--from=<stage>`), ENV, WORKDIR, CMD, ENTRYPOINT, LABEL, ARG/`--build-arg`, multi-stage + `--target`,
-//! `--no-cache`, `-t`, and a per-step content-addressed layer cache (see dd-daemon/src/build.rs).
+//! `--no-cache`, `-t`, and a per-step content-addressed layer cache (see hl-daemon/src/build.rs).
 
 use crate::scenario::{scen, sgroup, ScenGroup, Target};
 

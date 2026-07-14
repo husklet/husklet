@@ -2,7 +2,7 @@
 //! REAL Metal GPU through wgpu — and cross-checked against the CPU `SoftwareBackend` oracle.
 //!
 //! This is the milestone for the shared-memory + barriers + atomics PTX subset: the same `block_reduce`
-//! PTX kernel runs both on a live Metal device (`PTX → dd-GPU kernel IR → WGSL → naga → MSL →
+//! PTX kernel runs both on a live Metal device (`PTX → hl-GPU kernel IR → WGSL → naga → MSL →
 //! wgpu::ComputePipeline`) and on the CPU interpreter (`hl_gpu::software::SoftwareBackend`), and BOTH
 //! produce the same, arithmetically-correct sum. The Metal path proves `var<workgroup>` shared memory,
 //! `workgroupBarrier()`, and `atomicAdd` on a storage buffer all execute correctly end-to-end.

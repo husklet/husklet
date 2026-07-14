@@ -38,7 +38,7 @@ pub(crate) fn section(title: &str, lines: &[String]) -> gtk::Widget {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let cap = gtk::Label::new(Some(&title.to_uppercase()));
     cap.set_xalign(0.0);
-    cap.add_css_class("dd-section-title");
+    cap.add_css_class("hl-section-title");
     b.append(&cap);
 
     if lines.is_empty() {

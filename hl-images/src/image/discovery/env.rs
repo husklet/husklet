@@ -1,5 +1,5 @@
 //! Env recovery + sidecar JSON helpers: recover an image's environment from an on-disk OCI config,
-//! persist it back into the `dd-image.json` sidecar, and extract string fields from that sidecar.
+//! persist it back into the `hl-image.json` sidecar, and extract string fields from that sidecar.
 
 use super::*;
 use serde_json::{json, Value};
@@ -18,7 +18,7 @@ pub(super) fn meta_str(meta: &Option<Value>, key: &str) -> String {
 }
 
 /// Best-effort recovery of an image's environment from an on-disk OCI config, used by
-/// [`discover_images`] when the `dd-image.json` sidecar recorded no `env` (pre-seeded / umoci-built
+/// [`discover_images`] when the `hl-image.json` sidecar recorded no `env` (pre-seeded / umoci-built
 /// images, or images cached before the pull path persisted env). Two layouts are understood, in order:
 ///   1. umoci's runtime `config.json` at the image dir root -> `process.env`.
 ///   2. an OCI image layout in the dir (`index.json` + `blobs/sha256/`) -> manifest -> image config
@@ -61,7 +61,7 @@ pub(super) fn oci_disk_env(dir: &Path) -> Vec<String> {
     Vec::new()
 }
 
-/// Persist an env recovered by [`oci_disk_env`] back into the image's `dd-image.json` sidecar so the
+/// Persist an env recovered by [`oci_disk_env`] back into the image's `hl-image.json` sidecar so the
 /// next discovery round-trips it directly (and never has to re-parse the OCI config). Merges into the
 /// existing sidecar when present so other recorded fields are preserved; otherwise writes a fresh one
 /// from the values [`discover_images`] already resolved. Best-effort: a write failure (e.g. a
@@ -84,7 +84,7 @@ pub(super) fn persist_discovered_env(
         })
     });
     m["env"] = json!(env);
-    let _ = std::fs::write(dir.join("dd-image.json"), m.to_string());
+    let _ = std::fs::write(dir.join("hl-image.json"), m.to_string());
 }
 
 #[cfg(test)]

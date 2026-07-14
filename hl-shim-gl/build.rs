@@ -1,4 +1,4 @@
-//! dd-shim-gl codegen: turn the Khronos-registry-derived entry-point manifest into the complete set
+//! hl-shim-gl codegen: turn the Khronos-registry-derived entry-point manifest into the complete set
 //! of `#[no_mangle] extern "C"` GLES2+EGL exports the shim must provide, PLUS a generated capability
 //! inventory that tags every exported symbol.
 //!
@@ -43,7 +43,7 @@ const BACKED_GL_EXTENSIONS: &[&str] = &[
 /// The lowest coherent GLES profile the real bodies back. NOT ES3: the ES3 core additions (UBO
 /// binding, transform feedback, fence sync, sampler objects, immutable/3D textures, MRT) are all
 /// `stub`s, so advertising ES3 would be a false claim. ES3 stays an explicit `HL_SHIM_ES3` opt-in.
-const ADVERTISED_GL_VERSION: &str = "OpenGL ES 2.0 dd-shim";
+const ADVERTISED_GL_VERSION: &str = "OpenGL ES 2.0 hl-shim";
 const ADVERTISED_GLSL_VERSION: &str = "OpenGL ES GLSL ES 1.00";
 const ADVERTISED_GL_MAJOR: i32 = 2;
 const ADVERTISED_GL_MINOR: i32 = 0;

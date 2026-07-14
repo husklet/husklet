@@ -27,7 +27,7 @@ pub fn hit(name: &'static str) {
     }
     if let Ok(mut s) = seen().lock() {
         if s.insert(name) {
-            eprintln!("[dd-shim-cudart] unimplemented entry point: {name} (default stub)");
+            eprintln!("[hl-shim-cudart] unimplemented entry point: {name} (default stub)");
         }
     }
 }
@@ -62,7 +62,7 @@ pub fn strict_enabled() -> bool {
 /// Factored out so it is unit-testable without aborting the process.
 pub fn strict_report(cmd: &str, detail: &str) -> String {
     let mut s = String::new();
-    s.push_str("[dd-shim-cudart] STRICT: aborting at first unsupported CUDA call\n");
+    s.push_str("[hl-shim-cudart] STRICT: aborting at first unsupported CUDA call\n");
     s.push_str(&format!("  command: {cmd}\n"));
     s.push_str(&format!("  detail : {detail}\n"));
     let hist = history_snapshot();
@@ -102,7 +102,7 @@ pub fn unsupported(cmd: &'static str, detail: &str) {
     if std::env::var_os("HL_SHIM_DEBUG").is_some() {
         if let Ok(mut s) = seen().lock() {
             if s.insert(cmd) {
-                eprintln!("[dd-shim-cudart] unsupported CUDA operation: {cmd} ({detail})");
+                eprintln!("[hl-shim-cudart] unsupported CUDA operation: {cmd} ({detail})");
             }
         }
     }

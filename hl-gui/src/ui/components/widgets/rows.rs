@@ -26,7 +26,7 @@ pub(crate) fn action_row(
     texts.append(&t);
     texts.append(&d);
     let btn = gtk::Button::with_label(btn_label);
-    btn.add_css_class("dd-btn");
+    btn.add_css_class("hl-btn");
     if primary {
         btn.add_css_class("suggested-action");
     }
@@ -47,12 +47,12 @@ pub(crate) fn nav_item(title: &str, subtitle: &str, running: bool) -> gtk::ListB
     let t = gtk::Label::new(Some(title));
     t.set_xalign(0.0);
     t.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    t.add_css_class("dd-listrow-title"); // same title weight as the containers list
+    t.add_css_class("hl-listrow-title"); // same title weight as the containers list
     v.append(&t);
     if !subtitle.is_empty() {
         let s = gtk::Label::new(Some(subtitle));
         s.set_xalign(0.0);
-        s.add_css_class("dd-listrow-sub");
+        s.add_css_class("hl-listrow-sub");
         if running {
             s.add_css_class("success");
         }
@@ -84,7 +84,7 @@ pub(crate) fn text_btn(
     msg: impl Fn() -> Msg + 'static,
 ) -> gtk::Button {
     let b = gtk::Button::with_label(label);
-    b.add_css_class("dd-btn");
+    b.add_css_class("hl-btn");
     if !css.is_empty() {
         b.add_css_class(css);
     }
@@ -102,7 +102,7 @@ pub(crate) fn new_row(
     let b = gtk::Button::with_label(label);
     b.set_has_frame(false);
     b.set_halign(gtk::Align::Start);
-    b.add_css_class("dd-popitem");
+    b.add_css_class("hl-popitem");
     let s = sender.clone();
     b.connect_clicked(move |_| s.input(make()));
     let row = gtk::ListBoxRow::new();

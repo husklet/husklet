@@ -9,12 +9,12 @@
 #include <unistd.h>
 
 int main(void) {
-    const char *path = "/tmp/dd_procfd_target";
+    const char *path = "/tmp/hl_procfd_target";
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     char link[64], target[256] = {0};
     snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
     ssize_t n = readlink(link, target, sizeof target - 1);
-    int resolves = (n > 0) && (strstr(target, "dd_procfd_target") != NULL);
+    int resolves = (n > 0) && (strstr(target, "hl_procfd_target") != NULL);
 
     DIR *d = opendir("/proc/self/fd");
     int count = 0;

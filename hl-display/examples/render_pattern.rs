@@ -1,4 +1,4 @@
-//! Headless "first pixels" proof, viewable on the Linux dev host: drive the `dd-display` compositor with
+//! Headless "first pixels" proof, viewable on the Linux dev host: drive the `hl-display` compositor with
 //! an in-process minimal Wayland client that draws `weston-simple-shm`'s exact signature pattern (the
 //! `(x ^ y)` XOR texture with a moving-color border) into a real `memfd`-backed `wl_shm` pool, pass the fd
 //! via `SCM_RIGHTS`, and have the server composite + dump a PNG. Since it renders the SAME pattern the real
@@ -26,7 +26,7 @@ fn main() {
 fn main() {
     let out = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "/tmp/dd-display-pattern.png".into());
+        .unwrap_or_else(|| "/tmp/hl-display-pattern.png".into());
     let dir = std::path::Path::new(&out)
         .parent()
         .map(|p| p.to_path_buf())
@@ -77,7 +77,7 @@ fn main() {
     c.send(&Message::new(xdg, 4).u32(1)); // ack_configure
 
     // memfd-backed pool + the XOR pattern.
-    let name = std::ffi::CString::new("dd-shm-pattern").unwrap();
+    let name = std::ffi::CString::new("hl-shm-pattern").unwrap();
     let mfd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
     assert!(mfd >= 0);
     assert_eq!(unsafe { libc::ftruncate(mfd, size as libc::off_t) }, 0);

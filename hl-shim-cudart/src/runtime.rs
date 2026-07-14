@@ -1,9 +1,9 @@
 //! The hand-written CUDA Runtime API entry points — the whole surface, at parity with dd's C oracle
-//! `hl-gpu/cuda/cudart_shim.c`. The stateful compute calls lower the CUDA model into the shared `dd-gpu`
+//! `hl-gpu/cuda/cudart_shim.c`. The stateful compute calls lower the CUDA model into the shared `hl-gpu`
 //! IR through [`hl_gpu::cuda::CudaContext`] and EXECUTE it on the embedded
 //! [`SoftwareBackend`](hl_gpu::software::SoftwareBackend) (CPU PTX interpreter), so a runtime vecadd
 //! runs end-to-end and `cudaMemcpy(...DeviceToHost)` reads back numerically-correct results with NO GPU
-//! — the same numbers the oracle produces. This mirrors dd-shim-cuda's driver bodies (the runtime API
+//! — the same numbers the oracle produces. This mirrors hl-shim-cuda's driver bodies (the runtime API
 //! maps to the same IR — reuse, don't redefine); cudart adds the `cudaError_t` surface, the last-error
 //! cell, the nvcc registration glue, and the fatbin → PTX walk on top.
 

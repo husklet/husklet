@@ -17,7 +17,7 @@ pub(crate) use query::*;
 pub(crate) use tags::*;
 pub(crate) use transfer::*;
 
-// Image ref / store-name / OCI-config / repo-tag / default-command helpers live in dd-images (usable
+// Image ref / store-name / OCI-config / repo-tag / default-command helpers live in hl-images (usable
 // standalone, runtime-agnostic); re-export so existing `crate::images::*` call sites keep resolving.
 pub(crate) use hl_images::{
     config_exposed_ports, config_labels, config_stop_signal, config_strs, config_volumes,

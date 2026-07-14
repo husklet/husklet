@@ -1,4 +1,4 @@
-//! Perf reporting for the dd-tests matrix — the oracle-vs-JIT slowdown table + summary + machine
+//! Perf reporting for the hl-tests matrix — the oracle-vs-JIT slowdown table + summary + machine
 //! readable dump. Fed one [`Row`] per (case × engine) that actually executed (skips carry no timing).
 //!
 //! The table is opt-in (`PERF=1 make test` / `make perf`); the correctness matrix above it is

@@ -1,5 +1,5 @@
 // EGL context identity, share-group isolation, and thread-current conformance. Explicit red gate:
-// current dd-shim-gl uses one process-global GL state and one sentinel context handle.
+// current hl-shim-gl uses one process-global GL state and one sentinel context handle.
 #include "gui_egl_probe.h"
 
 #include <pthread.h>

@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 int main(void) {
-    int fd = memfd_create("dd_memfd", 0);
+    int fd = memfd_create("hl_memfd", 0);
     if (fd < 0) { perror("memfd_create"); return 1; }
     if (ftruncate(fd, 4096) < 0) { perror("ftruncate"); return 1; }
     const char *msg = "in-memory-file";

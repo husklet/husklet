@@ -8,22 +8,22 @@
 //! model fits a Linux desktop where ibus/fcitx run as their own Wayland clients.
 //!
 //! dd has no such client: the HOST (macOS, via its own input-method framework / marked-text) is the
-//! IME, and `dd-compositor` is the bridge. So the compositor itself must be the input-method endpoint —
+//! IME, and `hl-compositor` is the bridge. So the compositor itself must be the input-method endpoint —
 //! it owns the text-input instances directly and synthesizes `commit_string`/`preedit_string` from host
 //! input. This module therefore implements the `zwp_text_input_manager_v3` + `zwp_text_input_v3`
-//! dispatch on [`DdState`] directly (no input-method client required), which is what lets a guest text
+//! dispatch on [`HlState`] directly (no input-method client required), which is what lets a guest text
 //! field actually receive committed text.
 //!
 //! ## What it does
 //!   - Advertises `zwp_text_input_manager_v3` so toolkits (GTK/Qt/Chromium) that bind text-input find it
 //!     and enable their IME path instead of misbehaving on its absence.
-//!   - Follows keyboard focus: `enter`/`leave` are emitted from [`DdState::set_text_input_focus`], which
-//!     [`DdState::focus_surface`] drives — text-input focus tracks the keyboard focus, per the protocol.
+//!   - Follows keyboard focus: `enter`/`leave` are emitted from [`HlState::set_text_input_focus`], which
+//!     [`HlState::focus_surface`] drives — text-input focus tracks the keyboard focus, per the protocol.
 //!   - Tracks the double-buffered client state (enable/disable, surrounding text, content-type, cursor
 //!     rectangle) applied atomically on `commit`, enforcing the one-active-text-input-per-seat rule and
 //!     the "ignore requests from an unfocused instance" rule.
-//!   - Exposes [`DdState::text_input_commit_string`] / [`DdState::text_input_preedit_string`] /
-//!     [`DdState::text_input_delete_surrounding`] so the host input path can route committed / preedit
+//!   - Exposes [`HlState::text_input_commit_string`] / [`HlState::text_input_preedit_string`] /
+//!     [`HlState::text_input_delete_surrounding`] so the host input path can route committed / preedit
 //!     text (and surrounding-text edits) into the focused, enabled text field with the correct `done`
 //!     serial. Plain keystroke typing still flows through `wl_keyboard`; this is the IME-composition seam
 //!     on top of it (CJK, dead keys, emoji, the macOS marked-text path).
@@ -44,7 +44,7 @@ use smithay::reexports::wayland_protocols::wp::text_input::zv3::server::{
     zwp_text_input_v3::{self, ZwpTextInputV3},
 };
 
-use crate::DdState;
+use crate::HlState;
 
 /// The `zwp_text_input_manager_v3` version we advertise. Only content-hint flags gate on v2; the
 /// enter/leave/commit_string/preedit_string/done event surface this bridge relies on is all v1.
@@ -57,7 +57,7 @@ pub struct TextInputData;
 
 /// The compositor-owned aggregate text-input state: the manager global, every bound text-input instance
 /// (across all clients), and the surface that currently holds text-input focus (kept equal to keyboard
-/// focus). Lives in [`DdState`].
+/// focus). Lives in [`HlState`].
 pub struct TextInputState {
     /// The `zwp_text_input_manager_v3` global id (advertised in the registry).
     #[allow(dead_code)]
@@ -65,7 +65,7 @@ pub struct TextInputState {
     /// Every live `zwp_text_input_v3` instance. Small (typically one per focusable client), so a linear
     /// scan is cheaper than a map and keeps ordering deterministic.
     instances: Vec<TextInputInstance>,
-    /// The surface with text-input focus — mirrors keyboard focus (see [`DdState::set_text_input_focus`]).
+    /// The surface with text-input focus — mirrors keyboard focus (see [`HlState::set_text_input_focus`]).
     focus: Option<WlSurface>,
 }
 
@@ -82,7 +82,7 @@ struct TextInputInstance {
     pending: PendingState,
     /// Applied content purpose (`zwp_text_input_v3.content_purpose`), if the client set one. Lets the
     /// host tailor its IME panel (e.g. a numeric keyboard for `digits`); surfaced via
-    /// [`DdState::text_input_content_purpose`].
+    /// [`HlState::text_input_content_purpose`].
     content_purpose: Option<u32>,
     /// Applied content hint bitmask, if set.
     content_hint: Option<u32>,
@@ -120,7 +120,7 @@ impl TextInputState {
     /// Create the `zwp_text_input_manager_v3` global and an empty instance table.
     pub fn new(dh: &DisplayHandle) -> TextInputState {
         let global =
-            dh.create_global::<DdState, ZwpTextInputManagerV3, ()>(TEXT_INPUT_VERSION, ());
+            dh.create_global::<HlState, ZwpTextInputManagerV3, ()>(TEXT_INPUT_VERSION, ());
         TextInputState {
             global,
             instances: Vec::new(),
@@ -200,7 +200,7 @@ impl TextInputState {
     }
 }
 
-impl DdState {
+impl HlState {
     /// Move text-input focus to `surface` (or clear it), mirroring keyboard focus. Sends `leave` to the
     /// previously focused client's text-input instances and `enter` to the newly focused client's — per
     /// the protocol, text-input focus follows the keyboard when the seat has the keyboard capability.
@@ -318,7 +318,7 @@ impl DdState {
 
 // ---- zwp_text_input_manager_v3: the factory global ---------------------------------------------------
 
-impl GlobalDispatch<ZwpTextInputManagerV3, ()> for DdState {
+impl GlobalDispatch<ZwpTextInputManagerV3, ()> for HlState {
     fn bind(
         _state: &mut Self,
         _dh: &DisplayHandle,
@@ -331,7 +331,7 @@ impl GlobalDispatch<ZwpTextInputManagerV3, ()> for DdState {
     }
 }
 
-impl Dispatch<ZwpTextInputManagerV3, ()> for DdState {
+impl Dispatch<ZwpTextInputManagerV3, ()> for HlState {
     fn request(
         state: &mut Self,
         _client: &Client,
@@ -362,7 +362,7 @@ impl Dispatch<ZwpTextInputManagerV3, ()> for DdState {
 
 // ---- zwp_text_input_v3: one text entry field --------------------------------------------------------
 
-impl Dispatch<ZwpTextInputV3, TextInputData> for DdState {
+impl Dispatch<ZwpTextInputV3, TextInputData> for HlState {
     fn request(
         state: &mut Self,
         _client: &Client,

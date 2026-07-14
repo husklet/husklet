@@ -14,7 +14,7 @@ static int mode_is(const char *p, unsigned want) {
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_perm_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_perm_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR, 0644);
     close(fd);
 

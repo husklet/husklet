@@ -3,7 +3,7 @@
 //! `docs/rendering/SMITHAY_DEFAULT_READINESS.md`).
 //!
 //! Chromium's ozone/GPU derives its DRM render-node path from the dmabuf-**feedback** `main_device`
-//! (protocol version 4). `dd-compositor` used to advertise the v3 global only, because Smithay builds
+//! (protocol version 4). `hl-compositor` used to advertise the v3 global only, because Smithay builds
 //! the v4 feedback format-table in a `shm_open`ed file whose name overflows macOS `PSHMNAMLEN` (31) →
 //! `ENAMETOOLONG`, so the v4 global could not stand up on the macOS host. With the offline-vendored
 //! smithay fix (`vendor/smithay-0.7.0/src/utils/sealed_file.rs` shortens that object name), the
@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{PresentError, PresentOutcome, Presenter, SurfaceBuffer};
 use hl_display::wire::{Conn, Message};
 use smithay::reexports::wayland_server::Display;
@@ -51,9 +51,9 @@ fn socketpair_nonblocking() -> (i32, i32) {
 #[test]
 fn dmabuf_global_advertises_v4_feedback() {
     std::env::set_var("HL_DISPLAY_DMABUF", "1");
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let mut state = DdState::new(dh.clone(), Box::new(NullPresenter));
+    let mut state = HlState::new(dh.clone(), Box::new(NullPresenter));
 
     use std::os::unix::io::FromRawFd;
     let (client_fd, server_fd) = socketpair_nonblocking();

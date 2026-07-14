@@ -27,7 +27,7 @@
 #include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h> // mach_vm_remap/protect for the dual-mapped RW/RX code cache
-#define DD_HAS_MACH_EXC 1 // service.c gates its CRASHDBG fork-child Mach re-arm on this
+#define HL_HAS_MACH_EXC 1 // service.c gates its CRASHDBG fork-child Mach re-arm on this
 #include <dlfcn.h>
 #include <sys/event.h>
 #include <termios.h>
@@ -84,7 +84,7 @@ static int engine_global_init(void);
 #include "../os/linux/elf.c"
 // native checkpoint/restore (multi-process tree): dump/restore guest RAM + cpu + path-backed fds + pty
 #include "../os/linux/checkpoint.c"
-// `--configfd` launch bridge: read the serialized hl_config from the fd, re-hydrate DD_*/DDJIT_* env,
+// `--configfd` launch bridge: read the serialized hl_config from the fd, re-hydrate HL_*/DDJIT_* env,
 // and dispatch to this TU's hl_run() (forward-declared inside; defined below).
 #include "../os/hl_configfd.c"
 
@@ -555,7 +555,7 @@ static void container_init(const char *rootfs) {
     if (rootfs) acct_container_reset();
     {
         const char *h = getenv("HL_HOSTNAME");
-        // ddockerd -> jit config
+        // hl-dockerd -> jit config
         if (h && !g_hostname[0]) { strncpy(g_hostname, h, 64); }
         const char *m = getenv("HL_MEM_MAX");
         if (m && !g_mem_max) g_mem_max = parse_size(m);
@@ -995,7 +995,7 @@ int hl_entry(int argc, char **argv) {
     int ai = 1;
     const char *rootfs = NULL;
     // typed-config launch (the daemon's default path): `--configfd <fd>` streams a serialized hl_config
-    // over the inherited fd instead of the DD_* env/flag dialect. Dispatched before all other flags.
+    // over the inherited fd instead of the HL_* env/flag dialect. Dispatched before all other flags.
     if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return hl_run_configfd(atoi(argv[2]));
     if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return hl_run_configfile(argv[2]);
     // fork-server dispatch (gated; standalone path untouched when neither flag is present):

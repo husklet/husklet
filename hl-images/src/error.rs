@@ -1,4 +1,4 @@
-//! The typed error for `dd-images`, replacing the crate's former stringly-typed `Result<_, String>`
+//! The typed error for `hl-images`, replacing the crate's former stringly-typed `Result<_, String>`
 //! public surface (mirrors [`hl_jit::Error`](../../hl_jit/enum.Error.html)).
 //!
 //! Every variant except [`Error::Io`] simply CARRIES the message string a call site produced, and

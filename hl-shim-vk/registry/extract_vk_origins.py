@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dd-shim-vk command-origin extractor (Phase 0 capability inventory sidecar).
+# hl-shim-vk command-origin extractor (Phase 0 capability inventory sidecar).
 #
 # `extract_vk_manifest.py` produces the ABI export surface (`vk_commands.manifest`). This companion
 # produces the *provenance* sidecar `vk_command_origins.manifest` that `build.rs` reads to build the

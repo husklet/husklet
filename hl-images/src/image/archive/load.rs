@@ -10,9 +10,9 @@ impl Store {
     /// `docker load`: materialize an archive into a new image directory under the store and return the
     /// [`LoadedImage`]. Two archive shapes are accepted:
     ///
-    ///  * **dd format** — a top-level `rootfs/` dir plus an optional `dd-manifest.json` sidecar (what
+    ///  * **dd format** — a top-level `rootfs/` dir plus an optional `hl-manifest.json` sidecar (what
     ///    [`save_archive`](Self::save_archive) writes). A rootfs-only archive (no manifest) still loads via
-    ///    a generic name + probed arch; a PRESENT-but-malformed `dd-manifest.json` is an error.
+    ///    a generic name + probed arch; a PRESENT-but-malformed `hl-manifest.json` is an error.
     ///  * **docker save format** — a top-level `manifest.json` (a JSON array of `{Config, RepoTags,
     ///    Layers}`), a config blob, and per-layer tar members (`<hash>/layer.tar`, `<hash>.tar`, or
     ///    `blobs/sha256/<hash>`, gzipped or not). The layers are flattened IN ORDER into one rootfs honoring
@@ -21,9 +21,9 @@ impl Store {
     ///
     /// Extraction preserves owners/perms/xattrs and tolerates unprivileged device-node mknod failures. The
     /// staged image is swapped into place so a same-name load never destroys the previous rootfs until the
-    /// new one is fully built. Writes a `dd-image.json` sidecar so the image survives a daemon restart.
+    /// new one is fully built. Writes a `hl-image.json` sidecar so the image survives a daemon restart.
     pub fn load_archive(&self, tar_bytes: &[u8]) -> Result<LoadedImage, Error> {
-        let tmp = std::env::temp_dir().join(format!("dd-load-{}.tar", uniq()));
+        let tmp = std::env::temp_dir().join(format!("hl-load-{}.tar", uniq()));
         std::fs::write(&tmp, tar_bytes).map_err(|e| Error::Archive(e.to_string()))?;
         let staging = PathBuf::from(format!("{}/.load-{}", self.dir, uniq()));
         let _ = std::fs::remove_dir_all(&staging);
@@ -54,15 +54,15 @@ impl Store {
         result
     }
 
-    /// Materialize a dd-format staging dir (`rootfs/` + optional `dd-manifest.json`) into a new image.
+    /// Materialize a hl-format staging dir (`rootfs/` + optional `hl-manifest.json`) into a new image.
     fn load_dd_format(&self, staging: &Path) -> Result<LoadedImage, Error> {
-        // dd-manifest.json carries the image identity. ABSENT is fine (rootfs-only fallback); PRESENT but
+        // hl-manifest.json carries the image identity. ABSENT is fine (rootfs-only fallback); PRESENT but
         // malformed is an ERROR rather than being silently swallowed to defaults.
-        let manifest_path = staging.join("dd-manifest.json");
+        let manifest_path = staging.join("hl-manifest.json");
         let manifest: Manifest = if manifest_path.exists() {
             let s = std::fs::read_to_string(&manifest_path).map_err(|e| Error::Archive(e.to_string()))?;
             serde_json::from_str::<Manifest>(&s)
-                .map_err(|e| Error::Manifest(format!("malformed dd-manifest.json: {e}")))?
+                .map_err(|e| Error::Manifest(format!("malformed hl-manifest.json: {e}")))?
         } else {
             Manifest::default()
         };
@@ -291,7 +291,7 @@ mod tests {
     use super::*;
     use crate::image::archive::testutil::{tar_members, unique_dir, write_file};
 
-    // Flow 2 — a rootfs-only archive (no dd-manifest.json) loads via the fallback path.
+    // Flow 2 — a rootfs-only archive (no hl-manifest.json) loads via the fallback path.
     // Invariant: with no manifest, name falls back to "loaded", arch falls back to LinuxAarch64 (no
     // binaries to sniff), and the rootfs still unpacks.
     #[test]
@@ -299,7 +299,7 @@ mod tests {
         let src = unique_dir("ro-src");
         let rootfs = src.join("rootfs");
         write_file(&rootfs.join("greeting"), b"no manifest here\n");
-        // Archive containing ONLY `rootfs/...` (no dd-manifest.json sidecar).
+        // Archive containing ONLY `rootfs/...` (no hl-manifest.json sidecar).
         let bytes = tar_members(&src, &["rootfs"]);
 
         let store_dir = unique_dir("ro-store");
@@ -354,10 +354,10 @@ mod tests {
 
         let store_dir = unique_dir("nd-store");
         let store = Store::new(store_dir.to_str().unwrap());
-        let err = store.load_archive(&bytes).expect_err("non-dd archive must be rejected");
+        let err = store.load_archive(&bytes).expect_err("non-hl archive must be rejected");
         assert!(
             err.to_string().contains("not a dd image"),
-            "err mentions the not-a-dd-image reason: {err}"
+            "err mentions the not-a-hl-image reason: {err}"
         );
 
         // Staging was cleaned: the store root has no leftover entries at all.
@@ -438,18 +438,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&store_dir);
     }
 
-    // Finding 6 — a PRESENT but malformed dd-manifest.json is an ERROR (not swallowed to rootfs-only).
+    // Finding 6 — a PRESENT but malformed hl-manifest.json is an ERROR (not swallowed to rootfs-only).
     #[test]
     fn load_malformed_dd_manifest_errors() {
         let src = unique_dir("mm-src");
         write_file(&src.join("rootfs/f"), b"x\n");
-        write_file(&src.join("dd-manifest.json"), b"{ this is : not valid json ]");
-        let bytes = tar_members(&src, &["rootfs", "dd-manifest.json"]);
+        write_file(&src.join("hl-manifest.json"), b"{ this is : not valid json ]");
+        let bytes = tar_members(&src, &["rootfs", "hl-manifest.json"]);
 
         let store_dir = unique_dir("mm-store");
         let store = Store::new(store_dir.to_str().unwrap());
         let err = store.load_archive(&bytes).expect_err("malformed manifest must error");
-        assert!(err.to_string().contains("malformed dd-manifest.json"), "err: {err}");
+        assert!(err.to_string().contains("malformed hl-manifest.json"), "err: {err}");
 
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&store_dir);
@@ -460,8 +460,8 @@ mod tests {
     fn load_unsupported_os_manifest_errors() {
         let src = unique_dir("os-src");
         write_file(&src.join("rootfs/f"), b"x\n");
-        write_file(&src.join("dd-manifest.json"), br#"{"name":"win:1","os":"windows"}"#);
-        let bytes = tar_members(&src, &["rootfs", "dd-manifest.json"]);
+        write_file(&src.join("hl-manifest.json"), br#"{"name":"win:1","os":"windows"}"#);
+        let bytes = tar_members(&src, &["rootfs", "hl-manifest.json"]);
 
         let store_dir = unique_dir("os-store");
         let store = Store::new(store_dir.to_str().unwrap());

@@ -43,7 +43,7 @@ static struct timespec deadline_in(long ms) {
 }
 
 int main(void) {
-    const char *name = "/dd_mq_edge";
+    const char *name = "/hl_mq_edge";
     mq_unlink(name); // clean slate
 
     // open a missing queue without O_CREAT -> ENOENT
@@ -118,7 +118,7 @@ int main(void) {
     printf("open_toolong=%s\n", en(mq_open(toolong, O_CREAT | O_RDWR, 0600, &at) == (mqd_t)-1 ? errno : 0));
 
     // ---- blocking (non-O_NONBLOCK) timed matrix: EINVAL(tv_nsec) / ETIMEDOUT ----
-    const char *tn = "/dd_mq_timed";
+    const char *tn = "/hl_mq_timed";
     mq_unlink(tn);
     struct mq_attr tat = {0};
     tat.mq_maxmsg = 1;

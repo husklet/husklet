@@ -4,13 +4,13 @@
 //!   * **Bring-up** (init / driver version / device presence / context lifecycle): real, sane values
 //!     so a plain `dlopen` + probe succeeds and `torch.cuda`-style detection would accept the device.
 //!   * **IR-wired** (memory alloc/copy, PTX module load, kernel launch): map the CUDA compute model
-//!     onto the shared dd-gpu IR through [`hl_gpu::cuda::CudaContext`], accumulating [`hl_gpu::ir::Cmd`]s
+//!     onto the shared hl-gpu IR through [`hl_gpu::cuda::CudaContext`], accumulating [`hl_gpu::ir::Cmd`]s
 //!     in the frame. `cuLaunchKernel` recovers the kernel's parameter layout with the shared
 //!     [`hl_gpu::ptx`] front-end so it can pack `kernelParams` into the exact `CudaContext::launch` ABI.
 //!
 //! Where the host IR / a host compute backend can't yet serve an operation (device→host readback,
 //! PTX outside the modeled subset), the entry point is a spec-faithful traced no-op with a clear TODO —
-//! the same "shrinking long tail" discipline as dd-shim-gl. See `docs/rendering/SHIM_RUST_ARCHITECTURE.md`.
+//! the same "shrinking long tail" discipline as hl-shim-gl. See `docs/rendering/SHIM_RUST_ARCHITECTURE.md`.
 
 use core::ffi::{c_char, c_void};
 
@@ -334,7 +334,7 @@ pub extern "C" fn cuCtxSynchronize() -> i32 {
 }
 
 // ==================================================================================================
-// IR-wired: memory (CUDA alloc/copy -> dd-gpu IR through CudaContext)
+// IR-wired: memory (CUDA alloc/copy -> hl-gpu IR through CudaContext)
 // ==================================================================================================
 
 #[no_mangle]

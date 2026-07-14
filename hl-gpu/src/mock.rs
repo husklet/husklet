@@ -69,7 +69,7 @@ impl GpuBackend for RecordingBackend {
     fn capabilities(&self) -> Capabilities {
         use crate::backend::{command_bits, format_bits, shader_payload, ALL_COMMANDS, COLOR_FORMATS};
         Capabilities {
-            name: "dd-mock".into(),
+            name: "hl-mock".into(),
             unified_memory: true,
             supports_compute: true,
             supports_graphics: true,

@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# dd-tests/scenarios/docker.sh -- end-to-end Docker-CLI scenarios against dd-daemon.
+# hl-tests/scenarios/docker.sh -- end-to-end Docker-CLI scenarios against hl-daemon.
 #
-# Starts dd-daemon on a private socket, drives it with the real `docker` CLI through the full container
+# Starts hl-daemon on a private socket, drives it with the real `docker` CLI through the full container
 # lifecycle (images, run, logs, ps, inspect, exec, stop, kill, rm, volumes, networks), asserts each result,
 # then tears the daemon down. Run after `make jit` (the daemon + JIT binaries must be built).
 #
-#   bash dd-tests/scenarios/docker.sh
+#   bash hl-tests/scenarios/docker.sh
 #
-# Env: HL_IMAGES (image dir, default poc/images), HL_DAEMON (daemon binary, default target/release/dd-daemon).
+# Env: HL_IMAGES (image dir, default poc/images), HL_DAEMON (daemon binary, default target/release/hl-daemon).
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
-DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
-SOCK="$ROOT/dd-scenarios.sock"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/hl-daemon}"
+SOCK="$ROOT/hl-scenarios.sock"
 export DOCKER_HOST="unix://$SOCK"
 
 pass=0 fail=0
@@ -22,15 +22,15 @@ has() { if echo "$2" | grep -qF "$3"; then echo "  ok   $1"; pass=$((pass+1)); e
 d()   { docker "$@" 2>&1; }
 
 # ---- bring up the daemon on a private socket ----
-# dd-daemon + docker run on the same host (a local unix socket); the daemon bridges to the mac JIT
+# hl-daemon + docker run on the same host (a local unix socket); the daemon bridges to the mac JIT
 # internally. On a real macOS host all three are native; on the linux dev host the daemon is a linux
 # binary that shells out to the mac for the JIT (handled by SpawnConfig, transparent here).
-SCEN_LOG="$ROOT/dd-scenarios.log"
-pkill -x dd-daemon 2>/dev/null
+SCEN_LOG="$ROOT/hl-scenarios.log"
+pkill -x hl-daemon 2>/dev/null
 rm -f "$SOCK"
 # Fully isolate this daemon: private socket AND private state/volumes (a fresh per-scenario temp
-# dir), so it starts from empty state and never reads or mutates the developer's real ~/.dd.
-STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dd-scenarios.XXXXXX")"
+# dir), so it starts from empty state and never reads or mutates the developer's real ~/.hl.
+STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hl-scenarios.XXXXXX")"
 export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!

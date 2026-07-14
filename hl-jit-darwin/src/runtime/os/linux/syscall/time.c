@@ -12,7 +12,7 @@
 // a one-shot for it_value and the thread re-arms it periodic on the first fire (two-phase). Remaining
 // time (timer_gettime) and overrun are tracked in software from the recorded deadline + kevent .data.
 #define GTIMER_MAX 32
-#define DD_SI_TIMER (-2) // Linux si_code SI_TIMER (the value the guest's siginfo expects)
+#define HL_SI_TIMER (-2) // Linux si_code SI_TIMER (the value the guest's siginfo expects)
 
 struct gtimer {
     int used;                   // slot allocated by timer_create, not yet timer_delete'd
@@ -154,7 +154,7 @@ static void *gtimer_loop(void *arg) {
         if (notify == 1) continue;
         if (signo >= 1 && signo <= 64) {
             // carry SI_TIMER + sigev_value into the handler's siginfo (consumed on delivery)
-            g_sigcode[signo] = DD_SI_TIMER;
+            g_sigcode[signo] = HL_SI_TIMER;
             g_sigval[signo] = sv;
             __atomic_or_fetch(&g_pending, 1ull << signo, __ATOMIC_SEQ_CST);
             sfd_deliver(signo); // wake signalfd/epoll (per-OFD mask)

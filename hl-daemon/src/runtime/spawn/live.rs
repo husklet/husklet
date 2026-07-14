@@ -105,7 +105,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // nameserver at all and every DNS lookup fails (apt-get "Ign"/"failed to fetch"). The engine
         // intercepts UDP/TCP :53 to this address and resolves via the macOS host resolver (net.c dns_*),
         // so the container inherits the host's DNS config -- including a corporate VPN's split-DNS -- exactly
-        // like the ddcli-mac container. `ndots:0` matches Docker's embedded-DNS resolv.conf (names are tried
+        // like the hl-mac container. `ndots:0` matches Docker's embedded-DNS resolv.conf (names are tried
         // as-is first; we have no search domains to append). Written into the SAME writable layer as
         // /etc/hosts so it shadows the image's file via the overlay. --network none still gets the file, but
         // the engine leaves :53 un-intercepted under HL_NET_ISOLATE, so name resolution fails as Docker's
@@ -171,13 +171,13 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         return live_fail(app, &c.id, &live, format!("dd: {e}")).await;
     }
     // No launch command means the JIT engine for this guest arch isn't bundled (e.g. a darwin-only build
-    // shipped without ddjit-linux_*). Surface a CLEAN error (exit 127, like every other spawn failure) so an
+    // shipped without hljit-linux_*). Surface a CLEAN error (exit 127, like every other spawn failure) so an
     // interactive `docker run -it` exits with a message instead of hanging forever on a stream that never
     // opens -- the missing-engine hang that looked like a frozen, Ctrl-C-deaf shell.
     let Some(container) = spawn_container(c, &app.volumes_dir, vols, bridge) else {
         return live_fail(app, &c.id, &live, "dd: failed to build container spec".into()).await;
     };
-    // Launch + supervise the guest via the dd-jit runtime API: it spawns the engine (piped or PTY stdio),
+    // Launch + supervise the guest via the hl-jit runtime API: it spawns the engine (piped or PTY stdio),
     // feeds stdin from this container's channel, and pumps stdout/stderr INTO this container's live `out`
     // broadcast + rotated `log_chunks`. The daemon owns only the Docker bookkeeping (status/events/health/
     // restart/--rm) in the reaper below -- the process mechanics live in hl_jit::Runtime::start_into.
@@ -187,10 +187,10 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         .await
         .take()
         .expect("stdin_rx is consumed exactly once per container start");
-    // dd-jit owns the operator cache/sandbox policy; the daemon only supplies its storage location so the
+    // hl-jit owns the operator cache/sandbox policy; the daemon only supplies its storage location so the
     // persistent cache lands under the dd home (reported by `system df`, cleared by `system prune`).
     let rt = JitRuntime::new()
-        .expect("dd-jit runtime")
+        .expect("hl-jit runtime")
         .cache_dir(crate::util::hl_home().join("pcache").to_string_lossy().into_owned());
     let launched = match rt.start_into(
         &container,
@@ -205,7 +205,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             // failure) so an interactive `docker run -it` exits with a message instead of hanging on a
             // stream that never opens (the missing-engine hang that looked like a frozen, Ctrl-C-deaf shell).
             return live_fail(app, &c.id, &live,
-                format!("dd: no JIT engine for {} guests in this build (ddjit-{} missing) -- cannot start container",
+                format!("dd: no JIT engine for {} guests in this build (hljit-{} missing) -- cannot start container",
                     guest.target(), guest.target())).await;
         }
         Err(e) => return live_fail(app, &c.id, &live, format!("jit exec failed: {e}")).await,
@@ -241,7 +241,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         }
         *live.pty_master.lock().unwrap() = None;
         // Signal the natural exit IMMEDIATELY — flip status + fire the exit watch the instant the guest's
-        // own process dies, so an interactive `docker run`/`ddcli mac` returns at once when the user types
+        // own process dies, so an interactive `docker run`/`hl mac` returns at once when the user types
         // `exit`. CRITICAL: this must NOT be gated on draining the PTY/pipe reader tasks. A stray
         // grandchild that inherited the slave/pipe fds can keep those readers from ever hitting EOF, and
         // the previous code awaited them BEFORE flipping status — which made `exit` hang for as long as

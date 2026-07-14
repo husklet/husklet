@@ -16,11 +16,11 @@ pub fn prompt_name(
     v.set_margin_bottom(18);
     v.set_margin_start(20);
     v.set_margin_end(20);
-    v.add_css_class("dd-dialog");
+    v.add_css_class("hl-dialog");
 
     let t = gtk::Label::new(Some(title));
     t.set_xalign(0.0);
-    t.add_css_class("dd-onboard-head");
+    t.add_css_class("hl-onboard-head");
 
     let entry = gtk::Entry::new();
     entry.set_placeholder_text(Some(placeholder));
@@ -30,9 +30,9 @@ pub fn prompt_name(
     let btns = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     btns.set_halign(gtk::Align::End);
     let cancel = gtk::Button::with_label("Cancel");
-    cancel.add_css_class("dd-btn");
+    cancel.add_css_class("hl-btn");
     let ok = gtk::Button::with_label("Create");
-    ok.add_css_class("dd-btn");
+    ok.add_css_class("hl-btn");
     ok.add_css_class("suggested-action");
     btns.append(&cancel);
     btns.append(&ok);
@@ -48,7 +48,7 @@ pub fn prompt_name(
         .child(&v)
         .build();
     win.set_transient_for(Some(parent));
-    win.add_css_class("dd-modal");
+    win.add_css_class("hl-modal");
 
     let w1 = win.clone();
     cancel.connect_clicked(move |_| w1.close());

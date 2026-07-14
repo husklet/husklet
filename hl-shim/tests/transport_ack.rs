@@ -8,7 +8,7 @@ fn executor_transport_rejects_a_failed_frame_acknowledgement() {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
 
-    let path = std::env::temp_dir().join(format!("dd-render-ack-{}-{}.sock", std::process::id(),
+    let path = std::env::temp_dir().join(format!("hl-render-ack-{}-{}.sock", std::process::id(),
         std::thread::current().name().unwrap_or("test")));
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).expect("bind fake executor");

@@ -113,7 +113,7 @@ pub(crate) async fn image_delete(
     // even a FORCED rmi must not delete storage a live container reads (docker refcounts the layers by the
     // container; dd shares the rootfs directly, so deleting it would break the container's restart/export).
     if last_ref && target.name != "macos" && !container_uses_rootfs {
-        // the host `macos` image's rootfs is the live `/` — never delete. dd-images owns the store-guarded
+        // the host `macos` image's rootfs is the live `/` — never delete. hl-images owns the store-guarded
         // dir removal (a rootfs outside the writable store — a bundled starter — is left untouched). If the
         // on-disk removal FAILS, keep the image in state (retryable) and report an error rather than
         // dropping state while the store entry lingers on disk.
@@ -134,7 +134,7 @@ pub(crate) async fn image_delete(
 }
 
 /// Re-scan the writable images dir from disk and merge any images not already in the in-memory store
-/// (keyed by `repository:tag`). A safety net for a lookup miss: an image whose rootfs + `dd-image.json`
+/// (keyed by `repository:tag`). A safety net for a lookup miss: an image whose rootfs + `hl-image.json`
 /// exist on disk but isn't registered in memory (e.g. pulled/built by another daemon process, or dropped
 /// in out-of-band) becomes visible without a daemon restart. Returns true if anything new was added.
 pub(crate) async fn rescan_images(a: &App) -> bool {

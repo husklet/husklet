@@ -3,7 +3,7 @@
 // glibc's pthread_getattr_np(pthread_self()) — called by HotSpot's os::current_stack_region on every
 // thread it brings up (the JVM's very first bootstrap) and by Go/others — FIRST issues
 // sched_getaffinity(pd->tid, ...). dd used to validate that pid with the HOST kill(pid, 0): a guest
-// thread's tid is a dd-internal id (g_next_tid, base 1000) that is not a host pid, so kill() returned
+// thread's tid is a hl-internal id (g_next_tid, base 1000) that is not a host pid, so kill() returned
 // ESRCH and dd failed the syscall -> pthread_getattr_np returned ESRCH(3) -> "java -version" aborted
 // with `fatal error: pthread_getattr_np failed with error = 3`. The fix resolves a guest tid against the
 // live-thread registry (thread_tid_alive) before any host probe.

@@ -1,8 +1,8 @@
-//! The shim's global device/context state + the accumulated dd-gpu IR frame.
+//! The shim's global device/context state + the accumulated hl-gpu IR frame.
 //!
 //! The `cu*` entry points are free `extern "C"` functions, so their shared mutable state lives behind
-//! a process-global `Mutex` (like dd-shim-gl's state, adapted to the single-simulated-device CUDA
-//! model). The heavy lifting — the CUDA→dd-gpu-IR translation — is delegated to
+//! a process-global `Mutex` (like hl-shim-gl's state, adapted to the single-simulated-device CUDA
+//! model). The heavy lifting — the CUDA→hl-gpu-IR translation — is delegated to
 //! [`hl_gpu::cuda::CudaContext`], which is the shared, host-authored mapping (memory alloc/copy → IR,
 //! PTX module load, kernel launch → compute pipeline + dispatch). We do NOT redefine that mapping; the
 //! shim just owns the device-presence values, the C-ABI handle tables, and the frame accumulator, and
@@ -46,9 +46,9 @@ struct EventState {
 pub struct CudaState {
     /// `cuInit` was called (the driver spec-guards most calls behind this).
     pub inited: bool,
-    /// The CUDA→dd-gpu-IR translator + simulated device (from the shared `dd-gpu` crate).
+    /// The CUDA→hl-gpu-IR translator + simulated device (from the shared `hl-gpu` crate).
     pub ctx: CudaContext,
-    /// The dd-gpu IR accumulated for the current stream; flushed on synchronize.
+    /// The hl-gpu IR accumulated for the current stream; flushed on synchronize.
     pub frame: FrameBuilder,
     /// The embedded host executor: a real CPU backend that runs the accumulated IR — including the
     /// compute `Dispatch` (the PTX kernel interpreter in `hl_gpu::ptx`) — and holds the resulting
@@ -348,11 +348,11 @@ impl CudaState {
         let bytes = self.frame.finish();
         let ncmds = self.frame.cmds().len();
         // Execute in-process: replay the frame into the CPU backend. The decoder + executor are the
-        // host's own `dd_gpu` code (no second implementation), so what runs here is byte-for-byte what
+        // host's own `hl_gpu` code (no second implementation), so what runs here is byte-for-byte what
         // a host executor would run — the anti-drift guarantee, now covering execution, not just shape.
         if let Err(e) = replay_stream(&mut self.backend, &bytes) {
             if std::env::var_os("HL_SHIM_DEBUG").is_some() {
-                eprintln!("[dd-shim-cuda] flush: embedded backend replay error ({ncmds} cmds): {e}");
+                eprintln!("[hl-shim-cuda] flush: embedded backend replay error ({ncmds} cmds): {e}");
             }
         }
         if std::env::var_os("HL_GPU_EXEC").is_some() {
@@ -362,7 +362,7 @@ impl CudaState {
             let _ = conn.submit(&surf, &bytes);
         } else if std::env::var_os("HL_SHIM_DEBUG").is_some() {
             eprintln!(
-                "[dd-shim-cuda] flush: executed {} IR bytes ({ncmds} cmds) on the embedded software \
+                "[hl-shim-cuda] flush: executed {} IR bytes ({ncmds} cmds) on the embedded software \
                  backend (dispatches so far: {})",
                 bytes.len(),
                 self.backend.dispatches

@@ -1,7 +1,7 @@
 //! Process-independent published-port forwarder (`docker run -p`).
 //!
 //! THE BUG (before this): the host `AF_INET` listener for a published port lived INSIDE the guest engine
-//! process that happened to call `listen()` (dd-jit `netns.c fwd_maybe_start`). Because every guest
+//! process that happened to call `listen()` (hl-jit `netns.c fwd_maybe_start`). Because every guest
 //! fork/clone is a real host process, a prefork/worker server (nginx master→workers, postgres postmaster,
 //! or a shell loop `while true; do nc -l -p 9000 -w1; done`) tears down + re-creates that listener on every
 //! re-listen — so the host port blinks in and out and `g_fwd_started` races `EADDRINUSE`, even though the

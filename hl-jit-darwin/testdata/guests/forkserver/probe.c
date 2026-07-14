@@ -2,7 +2,7 @@
 // fork-server-spawned engine must get right to be indistinguishable from a cold-spawned one:
 // argv, environment, cwd, tty detection on 0/1/2, stdin plumbing, exit codes, fatal signals, and
 // asynchronously delivered (forwarded) signals. Golden-checked cold-vs-forkserver by
-// dd-tests/tests/forkserver.rs on BOTH Linux engines.
+// hl-tests/tests/forkserver.rs on BOTH Linux engines.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

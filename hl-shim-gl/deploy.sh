@@ -2,7 +2,7 @@
 # Deploy the guest GLES driver into the GUI lib dir, selected by HL_SHIM_IMPL.
 #
 #   HL_SHIM_IMPL unset / != "rust"  -> no-op: the C shim (gl_shim.c) libs stay in place (the default).
-#   HL_SHIM_IMPL=rust               -> build dd-shim-gl's cdylib and install it as the GLES stack:
+#   HL_SHIM_IMPL=rust               -> build hl-shim-gl's cdylib and install it as the GLES stack:
 #                                        libEGL.so.1              (the cdylib; all symbols live here)
 #                                        libGLESv2.so.2           (thin DT_NEEDED -> libEGL.so.1 stub)
 #                                        libwayland-egl.so.1      (thin DT_NEEDED -> libEGL.so.1 stub)
@@ -11,7 +11,7 @@
 # driver; the default leaves the C shim untouched until the maintainer flips it after a live check.
 #
 # Usage:  HL_SHIM_IMPL=rust hl-shim-gl/deploy.sh [ARCH]      # ARCH defaults to the host arch
-# Env:    HL_GUI_LIB   override the install dir (default: ~/.dd/gui/<arch>/lib)
+# Env:    HL_GUI_LIB   override the install dir (default: ~/.hl/gui/<arch>/lib)
 #         CC           C compiler for the DT_NEEDED stubs (default: cc; use the cross cc for x86_64)
 set -euo pipefail
 
@@ -22,11 +22,11 @@ fi
 
 ARCH="${1:-$(uname -m)}"
 ROOT="$(git rev-parse --show-toplevel)"
-LIB="${HL_GUI_LIB:-$HOME/.dd/gui/$ARCH/lib}"
+LIB="${HL_GUI_LIB:-$HOME/.hl/gui/$ARCH/lib}"
 CC="${CC:-cc}"
 
 # The cdylib bakes SONAME libEGL.so.1 (see hl-shim-gl/build.rs). Its output dir honors CARGO_TARGET_DIR.
-echo "building dd-shim-gl (Rust GLES driver) for $ARCH ..."
+echo "building hl-shim-gl (Rust GLES driver) for $ARCH ..."
 ( cd "$ROOT" && cargo build -p hl-shim-gl --release )
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 SO="$TARGET_DIR/release/libdd_shim_gl.so"

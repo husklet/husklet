@@ -58,10 +58,10 @@ const FMT_XRGB8888: u32 = 1;
 // DRM fourccs for zwp_linux_dmabuf format events.
 const DRM_FMT_ARGB8888: u32 = 0x3432_5241; // 'AR24'
 const DRM_FMT_XRGB8888: u32 = 0x3432_5258; // 'XR24'
-                                           // dd-private dmabuf modifier: modifier_lo = IOSurface id; modifier_hi low-16 = magic tag; bit 16 of
+                                           // hl-private dmabuf modifier: modifier_lo = IOSurface id; modifier_hi low-16 = magic tag; bit 16 of
                                            // modifier_hi = "the guest asked the host GPU to RENDER into this surface" (rung 3 first slice).
-const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
-const DD_DMABUF_RENDER_BIT: u32 = 0x1_0000;
+const HL_DMABUF_MOD_MAGIC: u32 = 0x6464;
+const HL_DMABUF_RENDER_BIT: u32 = 0x1_0000;
 
 const WL_DISPLAY: u32 = 1;
 
@@ -177,7 +177,7 @@ enum Obj {
         // independently of how many bytes it actually ftruncated the fd to; a well-formed client makes them
         // equal (wayland-shm's os_create_anonymous_file ftruncates to exactly the pool size), but a lying or
         // racing client can declare a `size` larger than the fd. macOS mmaps whole 16 KB host pages, and a
-        // read that lands in a page WHOLLY past the fd's EOF takes a SIGBUS — which dd-display does not catch,
+        // read that lands in a page WHOLLY past the fd's EOF takes a SIGBUS — which hl-display does not catch,
         // so the whole compositor would die. libwayland guards this with wl_shm_buffer_begin_access + a SIGBUS
         // handler; we instead clamp the per-buffer bounds check (see `extract`) to this real length so an
         // out-of-backing buffer is refused rather than read. Equal to `size` for every well-formed client.
@@ -479,7 +479,7 @@ pub struct Server<P: Presenter> {
     present_seq: u64, // wp_presentation MSC / vblank counter, incremented once per presented frame
     /// A surface for which the client issued `xdg_toplevel.move` (interactive drag). Drained by the live
     /// presenter loop via [`Server::take_move_request`] to start a HOST window drag — the request-gated
-    /// replacement for the blanket `DD_DISPLAY_WINDOW_DRAG` movable-by-background behavior.
+    /// replacement for the blanket `HL_DISPLAY_WINDOW_DRAG` movable-by-background behavior.
     pending_move: Option<u32>,
     /// Monotonic clock start, for frame-callback timestamps (see `frame_time_ms`).
     start: std::time::Instant,
@@ -821,7 +821,7 @@ impl<P: Presenter> Server<P> {
                 None => "UNKNOWN-OBJ",
             };
             eprintln!(
-                "[dd-display] req obj={} op={} iface={} ({}b)",
+                "[hl-display] req obj={} op={} iface={} ({}b)",
                 m.object,
                 m.opcode,
                 kind,
@@ -962,7 +962,7 @@ impl<P: Presenter> Server<P> {
         let ver = r.u32();
         let id = r.u32();
         if dbg_on() {
-            eprintln!("[dd-display] bind name={name} iface={iface:?} v{ver} -> id={id}");
+            eprintln!("[hl-display] bind name={name} iface={iface:?} v{ver} -> id={id}");
         }
         match name {
             G_COMPOSITOR => {
@@ -1022,7 +1022,7 @@ impl<P: Presenter> Server<P> {
                         .i32(phys_h)
                         .i32(0)
                         .string("dd")
-                        .string("dd-display")
+                        .string("hl-display")
                         .i32(0),
                 );
                 // mode(flags=current(1)|preferred(2), w, h, refresh) — v1. Reported in physical device
@@ -1040,7 +1040,7 @@ impl<P: Presenter> Server<P> {
                 if ver >= 4 {
                     // name(string) [opcode 4] + description(string) [opcode 5] — wl_output v4. Chrome/GTK
                     // use the stable name to identify the display across hotplugs.
-                    self.conn.send(&Message::new(id, 4).string("dd-0"));
+                    self.conn.send(&Message::new(id, 4).string("hl-0"));
                     self.conn
                         .send(&Message::new(id, 5).string("dd virtual display"));
                 }
@@ -1065,7 +1065,7 @@ impl<P: Presenter> Server<P> {
                     if ver >= 3 {
                         // modifier(format, modifier_hi, modifier_lo) [v3]
                         self.conn
-                            .send(&Message::new(id, 1).u32(fmt).u32(DD_DMABUF_MOD_MAGIC).u32(0));
+                            .send(&Message::new(id, 1).u32(fmt).u32(HL_DMABUF_MOD_MAGIC).u32(0));
                         self.conn.send(&Message::new(id, 1).u32(fmt).u32(0).u32(0));
                         // LINEAR
                     }
@@ -1696,7 +1696,7 @@ impl<P: Presenter> Server<P> {
                     Ok(crate::present::PresentOutcome::RetryableFailure) => false,
                     Ok(crate::present::PresentOutcome::TerminalFailure) => false,
                     Err(e) => {
-                        eprintln!("dd-display: present failed for sid {}: {e}", sb.sid);
+                        eprintln!("hl-display: present failed for sid {}: {e}", sb.sid);
                         false
                     }
                 };
@@ -2146,7 +2146,7 @@ impl<P: Presenter> Server<P> {
 
             if let Some((_, _, _, _, crop)) = mirrored_geometry {
                 eprintln!(
-                    "dd-display[mirror-geometry]: source_client={} source_surface={} source={} \
+                    "hl-display[mirror-geometry]: source_client={} source_surface={} source={} \
 target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) mapped_dst={}x{}",
                     crop.source_client,
                     crop.source_surface,
@@ -2629,9 +2629,9 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                 }) = self.objs.get_mut(&m.object)
                 {
                     *s = stride;
-                    if mod_hi & 0xffff == DD_DMABUF_MOD_MAGIC {
+                    if mod_hi & 0xffff == HL_DMABUF_MOD_MAGIC {
                         *iosurface_id = Some(mod_lo);
-                        *gpu_render = mod_hi & DD_DMABUF_RENDER_BIT != 0;
+                        *gpu_render = mod_hi & HL_DMABUF_RENDER_BIT != 0;
                         // Allocation generation (modifier_hi bits 17..=31); authenticated at create_immed.
                         *generation = (mod_hi >> 17) & 0x7fff;
                     }
@@ -3383,7 +3383,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
         let (ox, oy) = self.focused_geometry_origin();
         if std::env::var_os("HL_DISPLAY_INPUT_DEBUG").is_some_and(|v| !v.is_empty() && v != "0") {
             eprintln!(
-                "dd-display[input]: pointer_motion content=({x},{y}) geometry_origin=({ox},{oy}) surface_local=({},{}) focus={:?}",
+                "hl-display[input]: pointer_motion content=({x},{y}) geometry_origin=({ox},{oy}) surface_local=({},{}) focus={:?}",
                 x + ox,
                 y + oy,
                 self.focus
@@ -3660,7 +3660,7 @@ mod tests {
             unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr()) },
             0
         );
-        let mut server = Server::new(sv[1], PngPresenter::new("/tmp/dd-display-mirror-test"));
+        let mut server = Server::new(sv[1], PngPresenter::new("/tmp/hl-display-mirror-test"));
         server.objs.insert(7, Obj::Surface(Surface::default()));
         server.set_external_logical_crop(Some(ExternalLogicalCrop {
             source_client: 0,
@@ -3695,7 +3695,7 @@ mod tests {
             0
         );
         (
-            Server::new(sv[1], PngPresenter::new("/tmp/dd-display-unit-test")),
+            Server::new(sv[1], PngPresenter::new("/tmp/hl-display-unit-test")),
             sv,
         )
     }
@@ -4179,7 +4179,7 @@ mod tests {
                 let fl = libc::fcntl(sv[0], libc::F_GETFL);
                 libc::fcntl(sv[0], libc::F_SETFL, fl | libc::O_NONBLOCK);
             }
-            let server = Server::new(sv[1], PngPresenter::new("/tmp/dd-display-xdg-test"));
+            let server = Server::new(sv[1], PngPresenter::new("/tmp/hl-display-xdg-test"));
             Harness {
                 server,
                 peer: sv[0],
@@ -5087,7 +5087,7 @@ mod tests {
         assert_eq!(sr.string(), "text/plain;charset=utf-8");
         assert_eq!(sfds.len(), 1, "send must carry exactly one fd, got {sfds:?}");
         // The source writes the clipboard payload into the pipe and closes.
-        let payload = b"dd-clipboard";
+        let payload = b"hl-clipboard";
         let w = unsafe { libc::write(sfds[0], payload.as_ptr() as *const _, payload.len()) };
         assert_eq!(w, payload.len() as isize);
         unsafe {

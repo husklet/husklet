@@ -51,7 +51,7 @@ fn host_sh(script: &str, timeout_s: u32) -> std::process::Output {
 /// to SKIP when the toolchain isn't present. Done in one bash script so it runs on the Linux dev/CI box.
 fn build_guest_and_rootfs() -> Option<(String, String)> {
     let src = repo().join("hl-jit-darwin/testdata/guests/nonpie_dladdr.c");
-    let work = repo().join("target/dd-tests/nonpie_dladdr");
+    let work = repo().join("target/hl-tests/nonpie_dladdr");
     let rootfs = work.join("rootfs");
     let guest = work.join("guest");
     let script = format!(

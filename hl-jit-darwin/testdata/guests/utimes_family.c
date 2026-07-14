@@ -40,8 +40,8 @@ static int at_sec(const char *p, long *a, long *m) { // stat -> atime/mtime seco
 static int recent(long t, long now) { return t >= now - 5 && t <= now + 30; } // "set to now" window
 
 int main(void) {
-    const char *path = "/tmp/dd_utimes_family";
-    const char *rel = "dd_utimes_rel";
+    const char *path = "/tmp/hl_utimes_family";
+    const char *rel = "hl_utimes_rel";
     long a, m, now;
     int ok = 1;
 

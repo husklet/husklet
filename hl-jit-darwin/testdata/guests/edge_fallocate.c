@@ -11,7 +11,7 @@
 #define SZ (128 * 1024)
 
 int main(void) {
-    const char *p = "/tmp/dd_falloc";
+    const char *p = "/tmp/hl_falloc";
     int fd = open(p, O_RDWR | O_CREAT | O_TRUNC, 0644);
     char buf[SZ];
     memset(buf, 0x5a, SZ);

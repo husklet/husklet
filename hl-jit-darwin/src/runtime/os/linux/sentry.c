@@ -609,7 +609,7 @@ static void sentry_proc_fork(pid_t parent, pid_t child) {
                 int d = dup(pp->real[v]);
                 cp->real[v] = d;
                 cp->borrowed[v] = (d < 0); // dup failure: leave the slot unusable but never closeable
-                if (d >= 0 && d < DD_NFD && pp->real[v] >= 0 && pp->real[v] < DD_NFD) {
+                if (d >= 0 && d < HL_NFD && pp->real[v] >= 0 && pp->real[v] < HL_NFD) {
                     strcpy(g_fdpath[d], g_fdpath[pp->real[v]]);
                     strcpy(g_proc_text_desc[d], g_proc_text_desc[pp->real[v]]);
                     g_proc_text_ro[d] = g_proc_text_ro[pp->real[v]];

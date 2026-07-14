@@ -1,4 +1,4 @@
-//! `dd-compositor` — a Smithay-native Wayland compositor for the dd host renderer.
+//! `hl-compositor` — a Smithay-native Wayland compositor for the dd host renderer.
 //!
 //! This crate is the flag-gated replacement for the ~4900-line hand-written protocol machine in
 //! `hl-display/src/server.rs`. Instead of decoding every `wl_*` request by hand, it stands up
@@ -9,7 +9,7 @@
 //!
 //! ## The platform seam is REUSED, not rewritten
 //! The Cocoa/Metal window backend, the `Presenter` trait, and the XKB keymap all live in
-//! `dd-display` and are consumed here unchanged. `commit()` pulls the committed `wl_shm` buffer,
+//! `hl-display` and are consumed here unchanged. `commit()` pulls the committed `wl_shm` buffer,
 //! repacks it into a [`hl_display::present::SurfaceBuffer`], and hands it to a boxed
 //! [`hl_display::present::Presenter`] — exactly the seam `server.rs` uses. On macOS that Presenter is
 //! `CocoaPresenter`/`MetalPresenter` (one NSWindow per surface, IOSurface/Metal present + HiDPI); on
@@ -18,7 +18,7 @@
 //! the "thin guest, fat native host; mac-first, all-platforms-eventually" steering.
 //!
 //! ## Module layout
-//! The shared aggregate [`DdState`] lives here in `lib.rs`; the per-protocol `Handler` impls are split
+//! The shared aggregate [`HlState`] lives here in `lib.rs`; the per-protocol `Handler` impls are split
 //! into [`handlers`] submodules so successive waves of work (popup/subsurface, data-device, …) can own
 //! a file without colliding:
 //!   - [`handlers::compositor`] — `wl_compositor`/`wl_shm` commit → present path + buffer repack.
@@ -28,14 +28,14 @@
 //!   - [`handlers::output`] — `wl_output` / `xdg_output` + multi-output registration.
 //!   - [`handlers::scale`] — `wp_fractional_scale_v1` preferred-scale policy (non-integer HiDPI).
 //! Because Rust privacy grants descendant modules access to a parent module's private items, those
-//! submodules read/write `DdState`'s private fields directly — no accessor churn.
+//! submodules read/write `HlState`'s private fields directly — no accessor churn.
 //!
 //! ## Native library requirement (libxkbcommon)
 //! `smithay` links the system `libxkbcommon` unconditionally (it compiles the seat's XKB keymap at
 //! runtime). It is NOT a Linux-only dependency — it builds on macOS (Homebrew / nixpkgs). For dev:
 //!   build: `RUSTFLAGS="-L native=<libxkbcommon>/lib"`   run: `DYLD_LIBRARY_PATH="<libxkbcommon>/lib"`.
-//! For a shipped `dd.app` this is the host-provides-everything model: bundle `libxkbcommon.dylib` in
-//! `dd.app/Contents/Frameworks` and link with `-rpath @executable_path/../Frameworks` (or statically
+//! For a shipped `hl.app` this is the host-provides-everything model: bundle `libxkbcommon.dylib` in
+//! `hl.app/Contents/Frameworks` and link with `-rpath @executable_path/../Frameworks` (or statically
 //! link it). No guest/user install is ever required.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -84,9 +84,9 @@ use smithay::{
     },
 };
 
-/// GPU IR executor lifecycle (Phase 6.1–6.2): starts the dd-gpu executor for the Smithay path so
+/// GPU IR executor lifecycle (Phase 6.1–6.2): starts the hl-gpu executor for the Smithay path so
 /// accelerated guests reach a host GPU backend, since the `HL_DISPLAY_SMITHAY=1` exec replaces
-/// `dd-display` before it would have started the executor itself.
+/// `hl-display` before it would have started the executor itself.
 pub mod gpu;
 pub mod handlers;
 
@@ -107,11 +107,11 @@ const INITIAL_TOPLEVEL_SIZE: (i32, i32) = (1000, 700);
 ///
 /// `disconnect_sink` is the seam that makes the Smithay client-disconnect callback observable to the
 /// compositor: when the client's connection drops, [`ClientData::disconnected`] records the [`ClientId`]
-/// here so [`DdState::drain_client_disconnects`] can run [`DdState::drop_client_gpu_state`] and reclaim
+/// here so [`HlState::drain_client_disconnects`] can run [`HlState::drop_client_gpu_state`] and reclaim
 /// any client-owned executor allocations / in-flight GPU fences that were not tied to an individual
 /// surface. Clients created with [`ClientState::default`] get a private (detached) sink — every surface
 /// is still reclaimed individually through `CompositorHandler::destroyed` — so existing tests are
-/// unaffected; the runtime wires [`DdState::new_client_state`] to share the compositor's sink.
+/// unaffected; the runtime wires [`HlState::new_client_state`] to share the compositor's sink.
 #[derive(Default)]
 pub struct ClientState {
     pub compositor: CompositorClientState,
@@ -216,7 +216,7 @@ pub struct RenderBudgetTotals {
 }
 
 /// The count-based render-resource dimensions charged with the shared atomic reserve/refund helpers
-/// ([`DdState::charge_budget`] / [`DdState::refund_budget`]). Surfaces, retained callbacks, CPU cache
+/// ([`HlState::charge_budget`] / [`HlState::refund_budget`]). Surfaces, retained callbacks, CPU cache
 /// bytes, and shm-pool bytes keep their bespoke charge paths; these are the dimensions row 2's residual
 /// added (fds, dmabuf imports, presenter objects, executor allocations).
 #[derive(Clone, Copy, Debug)]
@@ -265,7 +265,7 @@ impl ClientData for ClientState {
 /// Smithay owns every per-protocol table; we hold the state handles plus the reused platform seam
 /// (the boxed [`Presenter`]) and the small amount of compositor policy Smithay leaves to us
 /// (window focus, per-surface titles, the pointer location).
-pub struct DdState {
+pub struct HlState {
     pub dh: DisplayHandle,
     pub compositor: CompositorState,
     pub shm: ShmState,
@@ -285,13 +285,13 @@ pub struct DdState {
     pub dmabuf_state: DmabufState,
     /// `zwp_primary_selection_v1` — the X11-style primary/middle-click-paste selection (terminals, GTK/Qt
     /// apps). Guest↔guest transfer is driven entirely by Smithay through the shared [`SelectionHandler`];
-    /// the compositor only follows keyboard focus with it (see [`DdState::focus_surface`]).
+    /// the compositor only follows keyboard focus with it (see [`HlState::focus_surface`]).
     pub primary_selection: PrimarySelectionState,
     /// `zwp_relative_pointer_v1` — unaccelerated relative motion deltas for games/3D (FPS mouselook). The
-    /// global is advertised here; deltas are emitted through the pointer via [`DdState::relative_motion`].
+    /// global is advertised here; deltas are emitted through the pointer via [`HlState::relative_motion`].
     pub relative_pointer: RelativePointerManagerState,
     /// `zwp_pointer_constraints_v1` — pointer LOCK / CONFINE (FPS mouselook, drawing apps). The constraint
-    /// is created per surface+pointer and activated by [`DdState::new_constraint`]; the injection path
+    /// is created per surface+pointer and activated by [`HlState::new_constraint`]; the injection path
     /// freezes the absolute pointer while a lock is active and clamps motion to a confine region.
     pub pointer_constraints: PointerConstraintsState,
     /// `wp_fractional_scale_manager_v1` — lets GTK/Qt/Chrome learn the non-integer buffer scale to render
@@ -336,7 +336,7 @@ pub struct DdState {
     pub output: Output,
     /// Additional outputs beyond the primary `output` (multi-monitor guests). Each has its own
     /// `wl_output` + `zxdg_output_v1` advertised by the shared [`OutputManagerState`]; registered via
-    /// [`DdState::add_output`]. Empty in the single-output default — the state is not hard-wired to one.
+    /// [`HlState::add_output`]. Empty in the single-output default — the state is not hard-wired to one.
     pub extra_outputs: Vec<Output>,
     pub(crate) output_globals: HashMap<String, GlobalId>,
     pub(crate) headless: bool,
@@ -346,7 +346,7 @@ pub struct DdState {
     /// `zwp_text_input_v3` — text-input for editors/address-bars/forms + the host IME (marked-text)
     /// bridge. The compositor IS the input method here (dd has no separate IME client), so it owns the
     /// text-input instances directly; see [`handlers::text_input`]. Text-input focus follows the keyboard
-    /// focus via [`DdState::set_text_input_focus`].
+    /// focus via [`HlState::set_text_input_focus`].
     pub(crate) text_input: handlers::text_input::TextInputState,
 
     /// The reused platform present half (`CocoaPresenter`/`MetalPresenter` on macOS, `PngPresenter`
@@ -361,9 +361,9 @@ pub struct DdState {
     pub ptr_loc: (f64, f64),
     /// Recent input-event serials the compositor issued (pointer button / key presses), newest last,
     /// bounded. An `xdg_toplevel.move`/`resize` grab must echo the serial of the input event that began
-    /// it (the implicit pointer-button grab), so [`DdState::is_recent_input_serial`] validates the
+    /// it (the implicit pointer-button grab), so [`HlState::is_recent_input_serial`] validates the
     /// request against this window — rejecting a client that tries to start a drag without a real user
-    /// gesture. The seat input path records each press via [`DdState::note_input_serial`].
+    /// gesture. The seat input path records each press via [`HlState::note_input_serial`].
     pub(crate) recent_serials: VecDeque<Serial>,
 
     /// Last committed `wl_shm` buffer per surface (`sid` → buffer). A subsurface or popup that redraws
@@ -392,7 +392,7 @@ pub struct DdState {
     pub(crate) fullscreen_surfaces: HashSet<u32>,
     /// The active `xdg_popup` grab chain (outer→inner). A popup created with `xdg_popup.grab` is dismissed
     /// (with `popup_done`) together with its whole submenu chain when the user clicks outside it; the
-    /// input/present loop drives that via [`DdState::dismiss_popup_grabs`]. Tooltips (mapped without a
+    /// input/present loop drives that via [`HlState::dismiss_popup_grabs`]. Tooltips (mapped without a
     /// grab) are NOT listed here, so they are not torn down on an outside click.
     pub(crate) popup_grabs: Vec<PopupSurface>,
     /// Last on-screen window size we sent an `xdg_toplevel.configure` for, so a host-driven window
@@ -437,7 +437,7 @@ pub struct DdState {
     surface_ids: HashMap<ObjectId, u32>,
     next_surface_id: u32,
     presenter_windows: HashSet<u32>,
-    /// Host sids of surfaces adopted as X11 (XWayland) windows — see [`DdState::adopt_x11_window`]. An
+    /// Host sids of surfaces adopted as X11 (XWayland) windows — see [`HlState::adopt_x11_window`]. An
     /// X11 window's `wl_surface` presents through the same commit→present path as a native toplevel; this
     /// set only records which windows came from the X11 bridge (for policy/diagnostics).
     x11_windows: HashSet<u32>,
@@ -446,11 +446,11 @@ pub struct DdState {
     /// consume input" used by the split-client input router (`handlers::input_routing`). Chrome's browser
     /// connection owns the seat + focus while a SEPARATE gpu/shim connection owns the visible IOSurface
     /// window; an event on the gpu window is forwarded to the browser client. See
-    /// [`DdState::surface_can_receive_input`].
+    /// [`HlState::surface_can_receive_input`].
     seat_input_clients: HashSet<ClientId>,
     /// Server-wide temporary logical crop mirrored from the input (browser) connection onto the visible
     /// (gpu/shim) connection so its IOSurface is cropped to the browser window's region at present time.
-    /// Set by [`DdState::set_external_logical_crop`]; applied in `snapshot_surface`.
+    /// Set by [`HlState::set_external_logical_crop`]; applied in `snapshot_surface`.
     external_logical_crop: Option<handlers::input_routing::ExternalLogicalCrop>,
     /// Client charged a presenter-object (native window) budget unit for surface `sid`, so the charge can
     /// be refunded on `drop_window` even after the surface's protocol object / owner record is gone.
@@ -463,21 +463,21 @@ pub struct DdState {
     surface_buffer_uses: HashMap<u32, BufferUse>,
     /// Zero-copy (IOSurface/dmabuf) buffer uses that were PRESENTED and are awaiting host-GPU/present
     /// completion before their `wl_buffer` may be released. Each carries the presenter completion serial
-    /// (`completion_serial`) it was submitted under; [`DdState::retire_completed_buffer_uses`] releases
+    /// (`completion_serial`) it was submitted under; [`HlState::retire_completed_buffer_uses`] releases
     /// every use whose serial the presenter reports complete — possibly out of submission order.
     inflight_zero_copy: Vec<BufferUse>,
     next_buffer_use_generation: u64,
     /// In-flight GPU fence state per surface: the host-executor allocation + presenter completion serial
-    /// a zero-copy surface currently depends on. Reclaimed by [`DdState::fence_drop`] on teardown so a
+    /// a zero-copy surface currently depends on. Reclaimed by [`HlState::fence_drop`] on teardown so a
     /// destroyed surface / disconnected client never leaks a cross-queue fence or executor allocation.
     surface_fences: HashMap<u32, GpuFence>,
     /// Shared sink the per-client [`ClientState::disconnected`] callback pushes disconnected client ids
-    /// into; drained by [`DdState::drain_client_disconnects`].
+    /// into; drained by [`HlState::drain_client_disconnects`].
     client_disconnects: Arc<Mutex<Vec<ClientId>>>,
 
     /// XWayland bridge state (Xwayland server handle, `wl_surface`↔X11 shell global, and the running X11
     /// window manager), present only when built with `--features xwayland` and started at runtime under
-    /// HL_XWAYLAND. `None` until [`handlers::xwayland::DdState::start_xwayland`] runs. See
+    /// HL_XWAYLAND. `None` until [`handlers::xwayland::HlState::start_xwayland`] runs. See
     /// `handlers/xwayland.rs`.
     #[cfg(feature = "xwayland")]
     pub(crate) xwayland: Option<handlers::xwayland::XwaylandState>,
@@ -502,7 +502,7 @@ struct ShmBudgetLedger {
     global: usize,
 }
 
-struct DdShmPoolQuota {
+struct HlShmPoolQuota {
     ledger: Arc<Mutex<ShmBudgetLedger>>,
     owner: ClientId,
     size: Mutex<usize>,
@@ -510,7 +510,7 @@ struct DdShmPoolQuota {
     global_limit: usize,
 }
 
-impl smithay::wayland::shm::ShmPoolQuota for DdShmPoolQuota {
+impl smithay::wayland::shm::ShmPoolQuota for HlShmPoolQuota {
     fn resize(&self, new_size: usize) -> bool {
         let mut size = self.size.lock().unwrap();
         let mut ledger = self.ledger.lock().unwrap();
@@ -531,7 +531,7 @@ impl smithay::wayland::shm::ShmPoolQuota for DdShmPoolQuota {
     }
 }
 
-impl Drop for DdShmPoolQuota {
+impl Drop for HlShmPoolQuota {
     fn drop(&mut self) {
         let size = *self.size.lock().unwrap();
         let mut ledger = self.ledger.lock().unwrap();
@@ -573,11 +573,11 @@ pub(crate) struct BufferUse {
     completion_serial: Option<u64>,
 }
 
-impl DdState {
+impl HlState {
     /// Stand up every global `server.rs` advertises by hand. `output_scale` comes from the Presenter so
-    /// a Retina backing store advertises `wl_output.scale = 2` (HiDPI), matching `dd-display`'s
+    /// a Retina backing store advertises `wl_output.scale = 2` (HiDPI), matching `hl-display`'s
     /// `present_cocoa` HiDPI advert.
-    pub fn new(dh: DisplayHandle, presenter: Box<dyn Presenter>) -> DdState {
+    pub fn new(dh: DisplayHandle, presenter: Box<dyn Presenter>) -> HlState {
         Self::new_with_render_limits(dh, presenter, RenderLimits::default())
     }
 
@@ -585,7 +585,7 @@ impl DdState {
         dh: DisplayHandle,
         presenter: Box<dyn Presenter>,
         render_limits: RenderLimits,
-    ) -> DdState {
+    ) -> HlState {
         let compositor = CompositorState::new::<Self>(&dh); // wl_compositor v5 + wl_subcompositor
         // wl_shm: Argb8888/Xrgb8888 are always advertised by Smithay.
         let shm = ShmState::new::<Self>(&dh, Vec::new());
@@ -659,7 +659,7 @@ impl DdState {
         let text_input = handlers::text_input::TextInputState::new(&dh);
 
         let mut seat_state = SeatState::<Self>::new();
-        let mut seat = seat_state.new_wl_seat(&dh, "dd-seat-0"); // wl_seat v5
+        let mut seat = seat_state.new_wl_seat(&dh, "hl-seat-0"); // wl_seat v5
         // add_keyboard compiles an XKB keymap through libxkbcommon (US default layout).
         let keyboard = seat
             .add_keyboard(Default::default(), 200, 25)
@@ -670,12 +670,12 @@ impl DdState {
         let output_manager = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let scale = presenter.output_scale().max(1);
         let output = Output::new(
-            "dd-0".into(),
+            "hl-0".into(),
             PhysicalProperties {
                 size: (600, 340).into(),
                 subpixel: Subpixel::Unknown,
-                make: "dd".into(),
-                model: "dd-display".into(),
+                make: "hl".into(),
+                model: "hl-display".into(),
             },
         );
         let output_global = output.create_global::<Self>(&dh);
@@ -686,7 +686,7 @@ impl DdState {
         output.change_current_state(Some(mode), None, Some(Scale::Integer(scale)), None);
         output.set_preferred(mode);
 
-        DdState {
+        HlState {
             dh,
             compositor,
             shm,
@@ -721,7 +721,7 @@ impl DdState {
             pointer,
             output,
             extra_outputs: Vec::new(),
-            output_globals: HashMap::from([("dd-0".to_string(), output_global)]),
+            output_globals: HashMap::from([("hl-0".to_string(), output_global)]),
             headless: false,
             surface_outputs: HashMap::new(),
             text_input,
@@ -815,7 +815,7 @@ impl DdState {
         self.surface_ids.get(&surface.id()).copied()
     }
 
-    /// Reclaim every dd-owned resource associated with a surface. This is deliberately idempotent:
+    /// Reclaim every hl-owned resource associated with a surface. This is deliberately idempotent:
     /// role teardown and `wl_surface.destroy` can arrive through different protocol paths.
     pub(crate) fn teardown_surface(&mut self, surface: &WlSurface) {
         let Some(sid) = self.surface_ids.remove(&surface.id()) else {
@@ -1343,7 +1343,7 @@ impl DdState {
         ledger.per_client.insert(owner.clone(), next_client);
         ledger.global = next_global;
         drop(ledger);
-        Some(Box::new(DdShmPoolQuota {
+        Some(Box::new(HlShmPoolQuota {
             ledger: self.shm_budget.clone(),
             owner: owner.clone(),
             size: Mutex::new(size),
@@ -1514,13 +1514,13 @@ mod zero_copy_release_tests {
     /// client buffer id.
     fn map_and_commit(
         c: &mut Cli,
-        display: &mut Display<DdState>,
-        state: &mut DdState,
+        display: &mut Display<HlState>,
+        state: &mut HlState,
         comp: u32,
         shm: u32,
         wm: u32,
     ) -> u32 {
-        fn drive(c: &mut Cli, display: &mut Display<DdState>, state: &mut DdState) {
+        fn drive(c: &mut Cli, display: &mut Display<HlState>, state: &mut HlState) {
             c.conn.flush().unwrap();
             display.dispatch_clients(state).unwrap();
             display.flush_clients().unwrap();
@@ -1556,9 +1556,9 @@ mod zero_copy_release_tests {
 
     #[test]
     fn zero_copy_buffers_release_only_on_out_of_order_gpu_completion_and_reclaim_on_teardown() {
-        let mut display: Display<DdState> = Display::new().unwrap();
+        let mut display: Display<HlState> = Display::new().unwrap();
         let mut dh = display.handle();
-        let mut state = DdState::new(dh.clone(), Box::new(NullPresenter));
+        let mut state = HlState::new(dh.clone(), Box::new(NullPresenter));
         let (cfd, sfd) = socketpair();
         dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(sfd) }, Arc::new(state.new_client_state())).unwrap();
         let mut c = Cli::new(cfd);
@@ -1735,8 +1735,8 @@ mod region_occlusion_and_pacing_tests {
     }
 
     struct Harness {
-        display: Display<DdState>,
-        state: DdState,
+        display: Display<HlState>,
+        state: HlState,
         c: Cli,
         comp: u32,
         subc: u32,
@@ -1745,9 +1745,9 @@ mod region_occlusion_and_pacing_tests {
     }
     impl Harness {
         fn new() -> Harness {
-            let display: Display<DdState> = Display::new().unwrap();
+            let display: Display<HlState> = Display::new().unwrap();
             let mut dh = display.handle();
-            let state = DdState::new(dh.clone(), Box::new(P { frames: 0 }));
+            let state = HlState::new(dh.clone(), Box::new(P { frames: 0 }));
             let (cfd, sfd) = socketpair();
             dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(sfd) }, Arc::new(ClientState::default())).unwrap();
             let mut h = Harness { display, state, c: Cli::new(cfd), comp: 0, subc: 0, shm: 0, wm: 0 };
@@ -2044,12 +2044,12 @@ mod xwayland_window_model_tests {
     #[test]
     #[allow(unused_assignments)]
     fn adopted_x11_window_presents_focuses_and_withdraws() {
-        let display: Display<DdState> = Display::new().unwrap();
+        let display: Display<HlState> = Display::new().unwrap();
         let mut dh = display.handle();
         let mut display = display;
         let last = Arc::new(Mutex::new(None));
         let dropped = Arc::new(Mutex::new(Vec::new()));
-        let mut state = DdState::new(dh.clone(), Box::new(XP { frames: 0, last: last.clone(), dropped: dropped.clone() }));
+        let mut state = HlState::new(dh.clone(), Box::new(XP { frames: 0, last: last.clone(), dropped: dropped.clone() }));
         let (cfd, sfd) = socketpair();
         dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(sfd) }, Arc::new(ClientState::default())).unwrap();
         let mut conn = Conn::new(cfd);
@@ -2197,10 +2197,10 @@ mod input_routing_tests {
 
     #[test]
     fn split_client_routing_and_geometry_mirror() {
-        let display: Display<DdState> = Display::new().unwrap();
+        let display: Display<HlState> = Display::new().unwrap();
         let mut dh = display.handle();
         let mut display = display;
-        let mut state = DdState::new(dh.clone(), Box::new(P));
+        let mut state = HlState::new(dh.clone(), Box::new(P));
 
         let (acf, asf) = sp();
         dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(asf) }, Arc::new(ClientState::default())).unwrap();

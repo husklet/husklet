@@ -1,17 +1,17 @@
 //! WSI: `VK_KHR_surface` + `VK_KHR_wayland_surface` + `VK_KHR_swapchain` (present) — the path that
-//! lets a real windowed Vulkan app (vkcube) render THROUGH dd-shim-vk onto dd-display.
+//! lets a real windowed Vulkan app (vkcube) render THROUGH hl-shim-vk onto hl-display.
 //!
 //! Ported from MoltenVK's WSI object model (`MVKSurface.mm`, `MVKSwapchain.mm`) and mirroring
-//! dd-shim-gl's present half (`src/wayland.rs` / `gl_shim.c`):
+//! hl-shim-gl's present half (`src/wayland.rs` / `gl_shim.c`):
 //!   * `MVKSwapchain` owns N presentable images the app renders into and cycles with
 //!     `acquireNextImage` / `queuePresent`. Here each presentable image is a `renderd` IOSurface/
 //!     dma-buf (`transport::renderd::alloc` — the rung-2 buffer the host Metal executor renders into),
 //!     paired with a `VkImage` (its IR texture id is what the app's render pass targets).
 //!   * Present = ship the frame's IR (the recorded render + a terminating `Cmd::Present{ surface,
 //!     texture }`) to the host GPU-exec service over `hl_shim::transport::ExecConn` — the SAME
-//!     channel + `[surface.id,w,h,len][ir]` frame protocol dd-shim-gl's `eglSwapBuffers` uses — then
+//!     channel + `[surface.id,w,h,len][ir]` frame protocol hl-shim-gl's `eglSwapBuffers` uses — then
 //!     attach the IOSurface dma-buf to the app's `wl_surface` and commit (the dma-buf `modifier_hi =
-//!     DD_DMABUF_MOD_MAGIC`, `modifier_lo = surface.id` convention dd-display keys the GPU render on).
+//!     HL_DMABUF_MOD_MAGIC`, `modifier_lo = surface.id` convention hl-display keys the GPU render on).
 //!
 //! Off-guest (no `/dev/dri/renderD128`, e.g. the macOS validation host) `renderd::alloc` fails, so the
 //! swapchain falls back to plain offscreen images — the render path still exercises + the Metal
@@ -148,7 +148,7 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     VK_SUCCESS
 }
 
-/// Report B8G8R8A8_UNORM / SRGB-nonlinear (the format the dd-display dma-buf present expects,
+/// Report B8G8R8A8_UNORM / SRGB-nonlinear (the format the hl-display dma-buf present expects,
 /// `DRM_FORMAT_XRGB8888`).
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceSurfaceFormatsKHR(
@@ -236,7 +236,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
     let mut images = Vec::with_capacity(count);
     for _ in 0..count {
         // Every presentable image renders into the executor's RESERVED present-target texture id (1):
-        // dd-display's Metal executor re-points texture id 1 at the current frame's IOSurface each
+        // hl-display's Metal executor re-points texture id 1 at the current frame's IOSurface each
         // frame (`set_render_target(1, ...)` keyed by the ExecConn header's surface.id). Using a
         // per-image id instead makes the executor reject it ("unknown/freed texture id"). See
         // hl-display/src/metal_backend.rs run_executor.
@@ -289,7 +289,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
     if std::env::var_os("HL_SHIM_DEBUG").is_some() {
         let ids: Vec<u32> = images.iter().map(|i| i.surface.id).collect();
         let fds: Vec<i32> = images.iter().map(|i| i.surface.fd).collect();
-        eprintln!("[dd-shim-vk] vkCreateSwapchainKHR: {count} imgs {width}x{height} surf_ids={ids:?} fds={fds:?}");
+        eprintln!("[hl-shim-vk] vkCreateSwapchainKHR: {count} imgs {width}x{height} surf_ids={ids:?} fds={fds:?}");
     }
     let handle = s.alloc_handle();
     s.swapchains.insert(

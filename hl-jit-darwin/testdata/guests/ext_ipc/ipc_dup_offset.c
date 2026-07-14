@@ -5,7 +5,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 int main(void) {
-    char path[] = "/tmp/dd_dup_XXXXXX"; int fd = mkstemp(path);
+    char path[] = "/tmp/hl_dup_XXXXXX"; int fd = mkstemp(path);
     write(fd, "0123456789", 10);
     lseek(fd, 0, SEEK_SET);
     int fd2 = dup(fd);

@@ -43,7 +43,7 @@ pub(crate) fn path_under_readonly_mount(path: &str, ro_targets: &[String]) -> bo
 }
 
 /// Map a container path to its host path. A path inside a bind/volume mount maps to its host source dir
-/// (so `docker cp` to e.g. ddcli's mounted cwd, or a `-v name:/mnt` mount, hits the real files);
+/// (so `docker cp` to e.g. hl's mounted cwd, or a `-v name:/mnt` mount, hits the real files);
 /// otherwise it lands in the container rootfs (the overlay upper). `..` is lexically clamped inside
 /// whichever base so it can't escape. `binds` is "host:container" — for `--mount`/Mounts coverage the
 /// caller appends [`mounts_as_binds`] (the local-driver volume name resolves to `<volumes_dir>/<name>`).
@@ -262,7 +262,7 @@ pub(crate) fn merged_overlay_dir(
     let base = std::path::Path::new(path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned());
-    let tmp_root = unique_tmp_dir("dd-cp-get")?;
+    let tmp_root = unique_tmp_dir("hl-cp-get")?;
     let (staged, base_str) = match base {
         Some(b) => (tmp_root.join(&b), b),
         None => (tmp_root.clone(), ".".to_string()), // cp of "/" -> tar the merged root itself
@@ -388,7 +388,7 @@ mod tests {
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!(
-            "dd-overlay-test-{}-{}-{}",
+            "hl-overlay-test-{}-{}-{}",
             tag,
             std::process::id(),
             SystemTime::now()

@@ -22,7 +22,7 @@ pub type PFN_vkVoidFunction = Option<unsafe extern "C" fn()>;
 
 /// The loader ↔ ICD interface version we support. MoltenVK negotiates 5; 5 is the version at which
 /// the loader (not the driver) validates the requested API version, so a modern loader accepts us.
-const DD_ICD_INTERFACE_VERSION: u32 = 5;
+const HL_ICD_INTERFACE_VERSION: u32 = 5;
 
 /// Resolve a `vk*` name to its address via the generated [`crate::dispatch_addr`] resolver.
 fn resolve(name: &str) -> PFN_vkVoidFunction {
@@ -50,8 +50,8 @@ pub extern "C" fn vk_icdNegotiateLoaderICDInterfaceVersion(p_supported_version: 
     let Some(ver) = (unsafe { p_supported_version.as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    if *ver >= DD_ICD_INTERFACE_VERSION {
-        *ver = DD_ICD_INTERFACE_VERSION;
+    if *ver >= HL_ICD_INTERFACE_VERSION {
+        *ver = HL_ICD_INTERFACE_VERSION;
         VK_SUCCESS
     } else {
         // Loader too old to guarantee the version-5 contract we rely on.

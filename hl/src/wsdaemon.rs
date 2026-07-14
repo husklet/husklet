@@ -1,5 +1,5 @@
-//! Per-workspace dd-daemon: each workspace gets its OWN isolated Docker-API daemon (own socket, state,
-//! and volumes under `~/.dd/ws/<name>/`), so `docker` inside the workspace — and the dashboard reading
+//! Per-workspace hl-daemon: each workspace gets its OWN isolated Docker-API daemon (own socket, state,
+//! and volumes under `~/.hl/ws/<name>/`), so `docker` inside the workspace — and the dashboard reading
 //! it — see only that workspace's containers. The image cache is shared (images are immutable).
 //!
 //! [`ensure`] is idempotent: it returns the socket path, starting the daemon (detached) on first use.
@@ -7,7 +7,7 @@
 use crate::paths;
 use std::path::PathBuf;
 
-/// Per-workspace state directory `~/.dd/ws/<name>`.
+/// Per-workspace state directory `~/.hl/ws/<name>`.
 pub fn ws_dir(name: &str) -> PathBuf {
     paths::hl_root().join("ws").join(sanitize(name))
 }
@@ -35,7 +35,7 @@ pub fn ensure(name: &str) -> std::io::Result<PathBuf> {
     if !bin.exists() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("dd-daemon binary not found at {} (set HL_DAEMON_BIN)", bin.display()),
+            format!("hl-daemon binary not found at {} (set HL_DAEMON_BIN)", bin.display()),
         ));
     }
 
@@ -49,7 +49,7 @@ pub fn ensure(name: &str) -> std::io::Result<PathBuf> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(errlog));
-    // Where the ddjit-* engines live (needed to actually run containers): HL_ENGINE_DIR, else next
+    // Where the hljit-* engines live (needed to actually run containers): HL_ENGINE_DIR, else next
     // to the daemon binary.
     let engine_dir = std::env::var_os("HL_ENGINE_DIR").map(PathBuf::from).or_else(|| bin.parent().map(|p| p.to_path_buf()));
     if let Some(d) = engine_dir {
@@ -78,7 +78,7 @@ fn is_up(sock: &std::path::Path) -> bool {
     std::os::unix::net::UnixStream::connect(sock).is_ok()
 }
 
-/// Resolve the dd-daemon binary: `HL_DAEMON_BIN`, else the installed bundle path.
+/// Resolve the hl-daemon binary: `HL_DAEMON_BIN`, else the installed bundle path.
 fn daemon_bin() -> PathBuf {
     if let Some(p) = std::env::var_os("HL_DAEMON_BIN") {
         return PathBuf::from(p);

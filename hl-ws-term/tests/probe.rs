@@ -1,4 +1,4 @@
-//! Regression tests for bugs found during the dd-term-core hardening pass.
+//! Regression tests for bugs found during the hl-term-core hardening pass.
 
 use hl_ws_term::session::{cwd_from_uri, Pane, PaneNode, Session, SessionTab};
 use hl_ws_term::{Attrs, Vt};

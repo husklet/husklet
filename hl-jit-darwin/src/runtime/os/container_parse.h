@@ -2,7 +2,7 @@
 //
 // dd is the actual runtime that executes untrusted guest images AND is reachable directly via the
 // main()/`docker` CLI (bypassing the typed Rust binding), so it must NOT trust its config input.
-// Every DD_* numeric value is re-validated here and a bad value FAILS LOUD: a clear message to stderr
+// Every HL_* numeric value is re-validated here and a bad value FAILS LOUD: a clear message to stderr
 // + nonzero exit, never a silent coercion to a privileged/wrong default. The classic footgun this
 // kills: `atoi("oops") == 0`, which would silently run the container as uid 0 (root).
 //

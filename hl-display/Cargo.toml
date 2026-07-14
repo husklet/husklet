@@ -2,12 +2,12 @@
 name = "hl-display"
 version = "0.1.0"
 edition = "2021"
-description = "dd-display — the shared host renderer for dd containers: a minimal Wayland compositor endpoint that composites guest wl_shm buffers into native macOS windows (docs/ideas/RENDERING.md). The protocol core is pure Rust + libc so it builds and self-tests headlessly on the Linux dev host; the Cocoa/AppKit presenter is macOS-only."
+description = "hl-display — the shared host renderer for hl containers: a minimal Wayland compositor endpoint that composites guest wl_shm buffers into native macOS windows (docs/ideas/RENDERING.md). The protocol core is pure Rust + libc so it builds and self-tests headlessly on the Linux dev host; the Cocoa/AppKit presenter is macOS-only."
 license = "MIT"
 autobins = false
 
 [[bin]]
-name = "dd-display"
+name = "hl-display"
 path = "src/main.rs"
 
 [lib]
@@ -20,18 +20,18 @@ path = "src/lib.rs"
 # adds NO new crate: it reuses the objc2 stack already locked in this workspace (see the macos target block).
 libc = "0.2"
 # The workspace's pure-Rust PNG encoder — the debug-dump path writes a composited surface to a PNG the
-# author can Read back, exactly how dd-term-core proves its CPU renderer headlessly.
+# author can Read back, exactly how hl-term-core proves its CPU renderer headlessly.
 hl-ws-term = { path = "../hl-ws-term" }
 # GPU rung 3: the forwarded command IR + GpuBackend trait the Metal executor implements (pure-Rust, no
-# new transitive deps). dd-display → dd-gpu only (no cycle; dd-gpu never depends on dd-display).
+# new transitive deps). hl-display → hl-gpu only (no cycle; hl-gpu never depends on hl-display).
 hl-gpu = { path = "../hl-gpu" }
-# Flag-gated (`DD_GPU_BACKEND=wgpu`) alternate executor. On the Linux dev host this crate is an EMPTY lib
+# Flag-gated (`HL_GPU_BACKEND=wgpu`) alternate executor. On the Linux dev host this crate is an EMPTY lib
 # (all wgpu/naga/metal deps are macOS-gated inside it), so this adds no compiled deps here; on macOS it
 # provides `WgpuBackend` + the IOSurface interop the wgpu present path in `metal_backend` calls.
 hl-gpu-wgpu = { path = "../hl-gpu-wgpu" }
 
 # Native presenter: one NSWindow + CALayer per guest surface, blitting the committed wl_shm buffer.
-# objc2* are ALREADY in Cargo.lock (used by dd-gui), so this fetches nothing new on the mac.
+# objc2* are ALREADY in Cargo.lock (used by hl-gui), so this fetches nothing new on the mac.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSString", "NSGeometry", "NSData", "NSThread", "NSRunLoop", "NSDate", "NSDictionary"] }
@@ -40,7 +40,7 @@ objc2-app-kit = { version = "0.2", features = [
     "NSImage", "NSImageRep", "NSBitmapImageRep", "NSImageView", "NSGraphics", "NSCursor",
     "NSRunningApplication", "NSEvent", "NSGraphicsContext", "NSPasteboard", "objc2-quartz-core",
 ] }
-# Metal present path (hardware-accelerated blit + the shared MTLDevice/queue the dd-gpu backend targets).
+# Metal present path (hardware-accelerated blit + the shared MTLDevice/queue the hl-gpu backend targets).
 objc2-metal = { version = "0.2", features = [
     "MTLDevice", "MTLCommandQueue", "MTLCommandBuffer", "MTLCommandEncoder", "MTLBlitCommandEncoder",
     "MTLTexture", "MTLPixelFormat", "MTLResource", "MTLTypes", "MTLDrawable", "MTLBuffer",

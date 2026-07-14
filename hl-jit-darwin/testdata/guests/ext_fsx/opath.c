@@ -9,7 +9,7 @@
 
 int main(void) {
     char dir[128];
-    snprintf(dir, sizeof dir, "/tmp/dd_opath_%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/hl_opath_%d", (int)getpid());
     mkdir(dir, 0755);
     char fpath[192];
     snprintf(fpath, sizeof fpath, "%s/f", dir);

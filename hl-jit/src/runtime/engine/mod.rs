@@ -1,5 +1,5 @@
 //! Async launch + supervision of a container process — the runtime capability a container manager
-//! (e.g. `dd-daemon`) builds Docker semantics on top of. [`Runtime::start`] spawns the engine for a
+//! (e.g. `hl-daemon`) builds Docker semantics on top of. [`Runtime::start`] spawns the engine for a
 //! [`Container`], pumps its stdio into a log broadcast (with rotation), and returns a
 //! [`RunningContainer`] handle to `wait`/`signal`/`pause`/`resume`, feed stdin, and subscribe to output.
 //!

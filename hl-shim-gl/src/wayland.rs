@@ -1,5 +1,5 @@
 //! Guest wayland/dma-buf display client — the "present" half that shows the executor-rendered
-//! IOSurface on screen (dd-display).
+//! IOSurface on screen (hl-display).
 //!
 //! This is a real (small) wayland protocol state machine, not a fixed message script: it DISCOVERS the
 //! server's globals from `wl_registry.global` events (binding each interface by its *advertised* name +
@@ -29,17 +29,17 @@ const OBJ_PARAMS: u32 = 10;
 const OBJ_WL_BUFFER: u32 = 11;
 const OBJ_FRAME_CB: u32 = 12;
 
-const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
+const HL_DMABUF_MOD_MAGIC: u32 = 0x6464;
 const DRM_FMT_XRGB8888: u32 = 0x3432_5258;
 /// Allocation generation packed into `modifier_hi` bits 17..=31 (15 bits); see the dmabuf modifier
-/// layout in `dd-compositor::handlers::dmabuf`. The compositor rejects a stale (retired) generation.
-const DD_DMABUF_GEN_SHIFT: u32 = 17;
-const DD_DMABUF_GEN_MASK: u32 = 0x7fff;
+/// layout in `hl-compositor::handlers::dmabuf`. The compositor rejects a stale (retired) generation.
+const HL_DMABUF_GEN_SHIFT: u32 = 17;
+const HL_DMABUF_GEN_MASK: u32 = 0x7fff;
 
 /// `modifier_hi` for a dd IOSurface buffer: the magic tag plus the allocation generation the host gave
 /// this surface (0 == unversioned; see [`hl_shim::transport::Surface::generation`]).
 fn hl_modifier_hi(generation: u32) -> u32 {
-    DD_DMABUF_MOD_MAGIC | ((generation & DD_DMABUF_GEN_MASK) << DD_DMABUF_GEN_SHIFT)
+    HL_DMABUF_MOD_MAGIC | ((generation & HL_DMABUF_GEN_MASK) << HL_DMABUF_GEN_SHIFT)
 }
 
 /// How long to wait for the compositor's per-frame callback before reporting a pacing failure.
@@ -137,7 +137,7 @@ impl Geometry {
     }
 }
 
-/// A connected wayland session to dd-display.
+/// A connected wayland session to hl-display.
 pub struct Wayland {
     fd: c_int,
     tx: Vec<u8>,

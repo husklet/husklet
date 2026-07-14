@@ -184,10 +184,10 @@ static uint64_t mlk_total_locked(void) {
 //     uncounted (the mmap still succeeds), so the tracked locked total never exceeds the limit.
 // The soft limit is the guest's RLIMIT_MEMLOCK (resource 8): a docker --ulimit / guest setrlimit override
 // in g_ulimit[8], else RLIM_INFINITY -- unset means "not enforced", preserving the legacy best-effort path.
-#define DD_RLIMIT_MEMLOCK 8
+#define HL_RLIMIT_MEMLOCK 8
 
 static uint64_t mlk_memlock_limit(void) {
-    return g_ulimit[DD_RLIMIT_MEMLOCK].set ? g_ulimit[DD_RLIMIT_MEMLOCK].cur : ~0ull;
+    return g_ulimit[HL_RLIMIT_MEMLOCK].set ? g_ulimit[HL_RLIMIT_MEMLOCK].cur : ~0ull;
 }
 
 // Explicitly mlock()'d bytes (sum of the tracked ranges) -- the accounting base for the rlimit check.

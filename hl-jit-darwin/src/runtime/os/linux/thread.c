@@ -425,7 +425,7 @@ static void uninstall_host_sigaltstack(void) {
 // kernel's access_ok() role). A zero length is vacuously OK; an address-space-wrapping range is rejected.
 //
 // PERF (sqlite/fcntl): the original implementation issued one mach_vm_region -- a full Mach
-// message round-trip (~200ns+) -- PER PAGE PER CALL. `sample` showed ~97% of the dd-side overhead of the
+// message round-trip (~200ns+) -- PER PAGE PER CALL. `sample` showed ~97% of the hl-side overhead of the
 // sqlite syscall mix (2 fcntl(F_SETLK) per query, each validating the guest flock*) inside
 // host_range_mapped->mach_vm_region->mach_msg2_trap. Replace it with the kernel's own access_ok() idiom:
 // a FAULT-GUARDED PROBE READ of each page under a per-thread sigsetjmp. Mapped pointer (the always case)
@@ -646,9 +646,9 @@ static int futex_wake_op_apply(int *uaddr2, uint32_t val3, int *do_wake2) {
 // correctness one), but it enforces real MUTUAL EXCLUSION and the exact futex-word contract glibc's userspace
 // fast paths depend on -- so two threads can never both believe they own a PTHREAD_PRIO_INHERIT/robust mutex
 // (the old return-0 fake-acquire silently let them into the critical section together -> data corruption).
-#define DD_FUTEX_WAITERS 0x80000000u
-#define DD_FUTEX_OWNER_DIED 0x40000000u
-#define DD_FUTEX_TID_MASK 0x3fffffffu
+#define HL_FUTEX_WAITERS 0x80000000u
+#define HL_FUTEX_OWNER_DIED 0x40000000u
+#define HL_FUTEX_TID_MASK 0x3fffffffu
 
 static int cpu_tid(const struct cpu *c);
 
@@ -668,14 +668,14 @@ static long futex_lock_pi(struct cpu *c, int *uaddr, int trylock, const struct t
     for (;;) {
         int expect = __atomic_load_n(uaddr, __ATOMIC_SEQ_CST);
         uint32_t v = (uint32_t)expect;
-        uint32_t owner = v & DD_FUTEX_TID_MASK;
+        uint32_t owner = v & HL_FUTEX_TID_MASK;
         if (owner == 0) { // free (owner slot 0; FUTEX_OWNER_DIED may still be set on a robust mutex)
             int others = fbk_parked(b, futex_key(uaddr)) - (parked ? 1 : 0); // waiters left behind
-            int nv = (int)((uint32_t)mytid | (others > 0 ? DD_FUTEX_WAITERS : 0));
+            int nv = (int)((uint32_t)mytid | (others > 0 ? HL_FUTEX_WAITERS : 0));
             // Acquire atomically vs a racing userspace fast-path locker (cmpxchg 0->tid): if the word moved
             // underfoot, retry from the re-read instead of clobbering the new owner (double-ownership bug).
             if (!__atomic_compare_exchange_n(uaddr, &expect, nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) continue;
-            ret = (v & DD_FUTEX_OWNER_DIED) ? -EOWNERDEAD : 0;
+            ret = (v & HL_FUTEX_OWNER_DIED) ? -EOWNERDEAD : 0;
             break;
         }
         if (owner == (uint32_t)mytid) {
@@ -690,7 +690,7 @@ static long futex_lock_pi(struct cpu *c, int *uaddr, int trylock, const struct t
         // userspace lock fast path can't steal ahead of us. Do it as a CMPXCHG under b->m: if the owner just
         // released in userspace (word -> 0) our swap fails and we loop to re-read + acquire -- WITHOUT this
         // the stale store would resurrect a dead owner and every waiter would block forever (the deadlock).
-        if (!__atomic_compare_exchange_n(uaddr, &expect, (int)(v | DD_FUTEX_WAITERS), 0, __ATOMIC_SEQ_CST,
+        if (!__atomic_compare_exchange_n(uaddr, &expect, (int)(v | HL_FUTEX_WAITERS), 0, __ATOMIC_SEQ_CST,
                                          __ATOMIC_SEQ_CST))
             continue;
         if (!parked) {
@@ -748,12 +748,12 @@ static long futex_unlock_pi(struct cpu *c, int *uaddr) {
     struct futex_bucket *b = fbk_of(uaddr);
     pthread_mutex_lock(&b->m);
     uint32_t v = (uint32_t)__atomic_load_n(uaddr, __ATOMIC_SEQ_CST);
-    if ((v & DD_FUTEX_TID_MASK) != (uint32_t)mytid) {
+    if ((v & HL_FUTEX_TID_MASK) != (uint32_t)mytid) {
         pthread_mutex_unlock(&b->m);
         return -EPERM; // not the owner -- Linux rejects an UNLOCK_PI from a non-owner
     }
     int waiters = fbk_parked(b, futex_key(uaddr));
-    __atomic_store_n(uaddr, (int)(waiters > 0 ? DD_FUTEX_WAITERS : 0), __ATOMIC_SEQ_CST);
+    __atomic_store_n(uaddr, (int)(waiters > 0 ? HL_FUTEX_WAITERS : 0), __ATOMIC_SEQ_CST);
     if (waiters > 0) pthread_cond_broadcast(&b->c);
     pthread_mutex_unlock(&b->m);
     return 0;
@@ -1273,7 +1273,7 @@ static void thread_exit_others(struct cpu *self) {
 // `list` chains each mutex's embedded robust_list node (first word = next; LSB is a PI flag we mask off) and
 // terminates by pointing back at &head->list (== head, list is at offset 0). The futex word for a node is at
 // node + futex_offset. list_op_pending covers a mutex mid-(un)lock and is handled once, at the end.
-#define DD_ROBUST_LIST_LIMIT 2048
+#define HL_ROBUST_LIST_LIMIT 2048
 
 // If the dying thread still owns *futex_addr, set FUTEX_OWNER_DIED (preserving FUTEX_WAITERS) and wake one
 // waiter. cmpxchg-loops so a concurrent lock/unlock on the same word can't clobber the OWNER_DIED marking.
@@ -1282,10 +1282,10 @@ static void robust_handle_death(uint64_t futex_addr, int mytid) {
     int *w = (int *)(uintptr_t)futex_addr;
     int v = __atomic_load_n(w, __ATOMIC_SEQ_CST);
     for (;;) {
-        if (((uint32_t)v & DD_FUTEX_TID_MASK) != (uint32_t)mytid) return; // not (or no longer) ours
-        int nv = (int)(((uint32_t)v & DD_FUTEX_WAITERS) | DD_FUTEX_OWNER_DIED);
+        if (((uint32_t)v & HL_FUTEX_TID_MASK) != (uint32_t)mytid) return; // not (or no longer) ours
+        int nv = (int)(((uint32_t)v & HL_FUTEX_WAITERS) | HL_FUTEX_OWNER_DIED);
         if (__atomic_compare_exchange_n(w, &v, nv, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
-            if ((uint32_t)v & DD_FUTEX_WAITERS) futex_wake_bucket(w, 1, ~0u); // one waiter -> EOWNERDEAD
+            if ((uint32_t)v & HL_FUTEX_WAITERS) futex_wake_bucket(w, 1, ~0u); // one waiter -> EOWNERDEAD
             return;
         }
         // v was reloaded with the current word by the failed cmpxchg -> re-check ownership and retry
@@ -1303,7 +1303,7 @@ static void futex_robust_exit(struct cpu *c) {
     uint64_t pending = (*(uint64_t *)(uintptr_t)(head + 16)) & ~1ULL; // head->list_op_pending
     int mytid = cpu_tid(c);
     uint64_t entry = raw_first & ~1ULL;
-    for (int limit = 0; limit < DD_ROBUST_LIST_LIMIT; limit++) {
+    for (int limit = 0; limit < HL_ROBUST_LIST_LIMIT; limit++) {
         if (entry == head) break; // wrapped back to &head->list -> done
         if (!host_range_mapped((uintptr_t)entry, 8)) break;
         uint64_t next = (*(uint64_t *)(uintptr_t)entry) & ~1ULL; // entry->next

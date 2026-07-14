@@ -47,17 +47,17 @@ static const char* VECADD_PTX =
     "$L__BB0_2:\n  ret;\n}\n";
 
 /* Build a SYNTHETIC uncompressed fatbin: [container header][entry header][payload].
- * Returns a malloc'd buffer; *out points at the container start. `kind` = DD_FATBIN_KIND_PTX/ELF. */
+ * Returns a malloc'd buffer; *out points at the container start. `kind` = HL_FATBIN_KIND_PTX/ELF. */
 static unsigned char* build_fatbin(const void* payload, size_t payload_len, unsigned short kind,
                                    unsigned char** out_container) {
-    size_t total = sizeof(DdFatBinHeader) + sizeof(DdFatBinEntry) + payload_len;
+    size_t total = sizeof(HlFatBinHeader) + sizeof(HlFatBinEntry) + payload_len;
     unsigned char* buf = (unsigned char*)calloc(1, total);
-    DdFatBinHeader h; memset(&h, 0, sizeof(h));
-    h.magic = DD_FATBIN_MAGIC; h.version = 1; h.header_size = (unsigned short)sizeof(DdFatBinHeader);
-    h.fat_size = sizeof(DdFatBinEntry) + payload_len;
+    HlFatBinHeader h; memset(&h, 0, sizeof(h));
+    h.magic = HL_FATBIN_MAGIC; h.version = 1; h.header_size = (unsigned short)sizeof(HlFatBinHeader);
+    h.fat_size = sizeof(HlFatBinEntry) + payload_len;
     memcpy(buf, &h, sizeof(h));
-    DdFatBinEntry e; memset(&e, 0, sizeof(e));
-    e.kind = kind; e.version = 1; e.header_size = (unsigned int)sizeof(DdFatBinEntry);
+    HlFatBinEntry e; memset(&e, 0, sizeof(e));
+    e.kind = kind; e.version = 1; e.header_size = (unsigned int)sizeof(HlFatBinEntry);
     e.payload_size = payload_len; e.arch = 86; e.major = 7; e.minor = 5; e.flags = 0; /* uncompressed */
     memcpy(buf + sizeof(h), &e, sizeof(e));
     memcpy(buf + sizeof(h) + sizeof(e), payload, payload_len);
@@ -76,55 +76,55 @@ static void test_fatbin_malformed(void) {
     unsigned char junk[16] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
     CHECK(hl_fatbin_extract_ptx(junk, &n) == NULL, "fatbin: bad magic -> NULL");
     /* 3. wrapper with a NULL container pointer */
-    DdFatBinWrapper wnull = { (int)DD_FATBIN_WRAPPER_MAGIC, 1, NULL, NULL };
+    HlFatBinWrapper wnull = { (int)HL_FATBIN_WRAPPER_MAGIC, 1, NULL, NULL };
     CHECK(hl_fatbin_extract_ptx(&wnull, &n) == NULL, "fatbin: wrapper NULL data -> NULL");
     /* 4. container magic but header_size < sizeof(header) */
     {
-        DdFatBinHeader h; memset(&h, 0, sizeof h);
-        h.magic = DD_FATBIN_MAGIC; h.header_size = 4; h.fat_size = 0;
-        unsigned char b[sizeof(DdFatBinHeader)]; memcpy(b, &h, sizeof h);
+        HlFatBinHeader h; memset(&h, 0, sizeof h);
+        h.magic = HL_FATBIN_MAGIC; h.header_size = 4; h.fat_size = 0;
+        unsigned char b[sizeof(HlFatBinHeader)]; memcpy(b, &h, sizeof h);
         CHECK(hl_fatbin_extract_ptx(b, &n) == NULL, "fatbin: header_size<16 -> NULL");
     }
     /* 5. valid header, zero fat_size (no entries) */
     {
-        DdFatBinHeader h; memset(&h, 0, sizeof h);
-        h.magic = DD_FATBIN_MAGIC; h.header_size = (unsigned short)sizeof h; h.fat_size = 0;
-        unsigned char b[sizeof(DdFatBinHeader)]; memcpy(b, &h, sizeof h);
+        HlFatBinHeader h; memset(&h, 0, sizeof h);
+        h.magic = HL_FATBIN_MAGIC; h.header_size = (unsigned short)sizeof h; h.fat_size = 0;
+        unsigned char b[sizeof(HlFatBinHeader)]; memcpy(b, &h, sizeof h);
         CHECK(hl_fatbin_extract_ptx(b, &n) == NULL, "fatbin: zero fat_size -> NULL");
     }
     /* 6. entry header_size = 0 (< sizeof entry) -> loop breaks (guarantees forward progress), NULL */
     {
-        unsigned char *c = NULL; unsigned char *buf = build_fatbin("x", 2, DD_FATBIN_KIND_PTX, &c);
-        DdFatBinEntry e; memcpy(&e, c + sizeof(DdFatBinHeader), sizeof e);
-        e.header_size = 0; memcpy(c + sizeof(DdFatBinHeader), &e, sizeof e);
+        unsigned char *c = NULL; unsigned char *buf = build_fatbin("x", 2, HL_FATBIN_KIND_PTX, &c);
+        HlFatBinEntry e; memcpy(&e, c + sizeof(HlFatBinHeader), sizeof e);
+        e.header_size = 0; memcpy(c + sizeof(HlFatBinHeader), &e, sizeof e);
         CHECK(hl_fatbin_extract_ptx(c, &n) == NULL, "fatbin: entry header_size=0 -> NULL (no infinite loop)");
         free(buf);
     }
     /* 7. PTX entry whose payload_size runs far past fat_size -> bounded by end, NULL (no OOB read) */
     {
-        unsigned char *c = NULL; unsigned char *buf = build_fatbin("hello", 6, DD_FATBIN_KIND_PTX, &c);
-        DdFatBinEntry e; memcpy(&e, c + sizeof(DdFatBinHeader), sizeof e);
-        e.payload_size = 0xffffffffULL; memcpy(c + sizeof(DdFatBinHeader), &e, sizeof e);
+        unsigned char *c = NULL; unsigned char *buf = build_fatbin("hello", 6, HL_FATBIN_KIND_PTX, &c);
+        HlFatBinEntry e; memcpy(&e, c + sizeof(HlFatBinHeader), sizeof e);
+        e.payload_size = 0xffffffffULL; memcpy(c + sizeof(HlFatBinHeader), &e, sizeof e);
         CHECK(hl_fatbin_extract_ptx(c, &n) == NULL, "fatbin: payload beyond end -> NULL (no OOB)");
         free(buf);
     }
     /* 8. compressed PTX entry -> NULL (tier-1 decodes uncompressed only) */
     {
-        unsigned char *c = NULL; unsigned char *buf = build_fatbin("hello", 6, DD_FATBIN_KIND_PTX, &c);
-        DdFatBinEntry e; memcpy(&e, c + sizeof(DdFatBinHeader), sizeof e);
-        e.flags = DD_FATBIN_FLAG_COMPRESS; memcpy(c + sizeof(DdFatBinHeader), &e, sizeof e);
+        unsigned char *c = NULL; unsigned char *buf = build_fatbin("hello", 6, HL_FATBIN_KIND_PTX, &c);
+        HlFatBinEntry e; memcpy(&e, c + sizeof(HlFatBinHeader), sizeof e);
+        e.flags = HL_FATBIN_FLAG_COMPRESS; memcpy(c + sizeof(HlFatBinHeader), &e, sizeof e);
         CHECK(hl_fatbin_extract_ptx(c, &n) == NULL, "fatbin: compressed PTX -> NULL");
         free(buf);
     }
     /* 9. truncated container: fat_size honest, but the entry's payload_size runs 4 bytes past the buffer */
     {
-        size_t total = sizeof(DdFatBinHeader) + sizeof(DdFatBinEntry) + 4;
+        size_t total = sizeof(HlFatBinHeader) + sizeof(HlFatBinEntry) + 4;
         unsigned char *b = (unsigned char *)calloc(1, total);
-        DdFatBinHeader h; memset(&h, 0, sizeof h);
-        h.magic = DD_FATBIN_MAGIC; h.header_size = (unsigned short)sizeof h;
-        h.fat_size = sizeof(DdFatBinEntry) + 4; memcpy(b, &h, sizeof h);
-        DdFatBinEntry e; memset(&e, 0, sizeof e);
-        e.kind = DD_FATBIN_KIND_PTX; e.header_size = (unsigned int)sizeof e; e.payload_size = 8; /* > 4 left */
+        HlFatBinHeader h; memset(&h, 0, sizeof h);
+        h.magic = HL_FATBIN_MAGIC; h.header_size = (unsigned short)sizeof h;
+        h.fat_size = sizeof(HlFatBinEntry) + 4; memcpy(b, &h, sizeof h);
+        HlFatBinEntry e; memset(&e, 0, sizeof e);
+        e.kind = HL_FATBIN_KIND_PTX; e.header_size = (unsigned int)sizeof e; e.payload_size = 8; /* > 4 left */
         memcpy(b + sizeof h, &e, sizeof e);
         CHECK(hl_fatbin_extract_ptx(b, &n) == NULL, "fatbin: truncated payload -> NULL (no OOB)");
         free(b);
@@ -132,7 +132,7 @@ static void test_fatbin_malformed(void) {
     /* 10. sanity: a well-formed PTX entry still extracts exactly (the trim + copy path stays correct) */
     {
         const char *ptx = ".version 7.5\n";
-        unsigned char *c = NULL; unsigned char *buf = build_fatbin(ptx, strlen(ptx) + 1, DD_FATBIN_KIND_PTX, &c);
+        unsigned char *c = NULL; unsigned char *buf = build_fatbin(ptx, strlen(ptx) + 1, HL_FATBIN_KIND_PTX, &c);
         unsigned long long got_len = 0;
         char *got = hl_fatbin_extract_ptx(c, &got_len);
         CHECK(got && strcmp(got, ptx) == 0 && got_len == strlen(ptx), "fatbin: well-formed PTX round-trips");
@@ -212,9 +212,9 @@ int main(void) {
 
     /* ---- TIER 1: register a SYNTHETIC uncompressed fatbin (PTX kind=1) via the nvcc glue ---- */
     unsigned char *container = NULL;
-    unsigned char *fatbuf = build_fatbin(VECADD_PTX, strlen(VECADD_PTX) + 1, DD_FATBIN_KIND_PTX, &container);
+    unsigned char *fatbuf = build_fatbin(VECADD_PTX, strlen(VECADD_PTX) + 1, HL_FATBIN_KIND_PTX, &container);
     /* the __fatBinC_Wrapper_t nvcc would hand __cudaRegisterFatBinary */
-    DdFatBinWrapper wrapper = { (int)DD_FATBIN_WRAPPER_MAGIC, 1, container, NULL };
+    HlFatBinWrapper wrapper = { (int)HL_FATBIN_WRAPPER_MAGIC, 1, container, NULL };
     void** handle = __cudaRegisterFatBinary(&wrapper);
     CHECK(handle != NULL, "__cudaRegisterFatBinary returns a handle");
     g_vecadd_handle = (void*)vecadd_stub; /* nvcc uses the host stub's address as the key */
@@ -243,8 +243,8 @@ int main(void) {
     /* ---- TIER 1: a SASS-only fatbin (kind=2 only, no PTX) must be rejected cleanly ---- */
     static const unsigned char FAKE_ELF[32] = { 0x7f, 'E', 'L', 'F', 2, 1, 1, 0 };
     unsigned char *sass_container = NULL;
-    build_fatbin(FAKE_ELF, sizeof(FAKE_ELF), DD_FATBIN_KIND_ELF, &sass_container);
-    DdFatBinWrapper sass_wrapper = { (int)DD_FATBIN_WRAPPER_MAGIC, 1, sass_container, NULL };
+    build_fatbin(FAKE_ELF, sizeof(FAKE_ELF), HL_FATBIN_KIND_ELF, &sass_container);
+    HlFatBinWrapper sass_wrapper = { (int)HL_FATBIN_WRAPPER_MAGIC, 1, sass_container, NULL };
     void** sass_handle = __cudaRegisterFatBinary(&sass_wrapper);
     static char sass_stub_key; /* a distinct host-fun key */
     __cudaRegisterFunction(sass_handle, &sass_stub_key, "ghost", "ghost", -1, NULL, NULL, NULL, NULL, NULL);

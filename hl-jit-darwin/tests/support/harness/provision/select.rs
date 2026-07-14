@@ -41,7 +41,7 @@ pub(super) fn rootfs_machine(rootfs: &Path) -> Option<u16> {
 /// Exact-match tier for an image dir against a requested `name` (lower = stronger):
 ///   0 — a `docker.io_<ns>_<repo>_<tag>` registry-encoded dir whose decoded repo matches: a REAL pulled
 ///       image (these carry the full rootfs, e.g. `/etc/hostname`), so it beats a hand-built dir.
-///   1 — the `name`/`repo` recorded in the dir's `dd-image.json` sidecar matches (non-registry dir).
+///   1 — the `name`/`repo` recorded in the dir's `hl-image.json` sidecar matches (non-registry dir).
 ///   2 — the dir is literally named `name` (hand-built bundle dirs like `gcc-bundle`).
 ///   `None` — no exact match (the caller may still fall back to a substring match).
 pub(super) fn image_name_tier(dir: &Path, dname: &str, name: &str) -> Option<u8> {
@@ -59,7 +59,7 @@ pub(super) fn image_name_tier(dir: &Path, dname: &str, name: &str) -> Option<u8>
     if decoded_repo == Some(name) {
         return Some(0);
     }
-    if let Ok(json) = std::fs::read_to_string(dir.join("dd-image.json")) {
+    if let Ok(json) = std::fs::read_to_string(dir.join("hl-image.json")) {
         if let Some(img) = json
             .split("\"name\":\"")
             .nth(1)

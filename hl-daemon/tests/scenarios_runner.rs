@@ -1,8 +1,8 @@
 //! Real-software scenario runner — drives popular images through a container engine (the second test
-//! surface; the first is the `dd-tests` engine basics matrix). Rust, no bash. Owned by dd-daemon.
+//! surface; the first is the `hl-tests` engine basics matrix). Rust, no bash. Owned by hl-daemon.
 //!
 //!   cargo test -p hl-daemon --test scenarios -- --backend real        # host docker = ORACLE (prove tests)
-//!   cargo test -p hl-daemon --test scenarios -- --backend dd          # dd-daemon = SYSTEM UNDER TEST
+//!   cargo test -p hl-daemon --test scenarios -- --backend dd          # hl-daemon = SYSTEM UNDER TEST
 //!   cargo test -p hl-daemon --test scenarios -- --backend dd --long   # full compatibility sweep (pulls)
 //!   cargo test -p hl-daemon --test scenarios -- -c databases -t arm   # one category, one arch
 //!   cargo test -p hl-daemon --test scenarios -- --count               # list every case + total, run nothing
@@ -10,7 +10,7 @@
 //! Each invocation boots its OWN engine/daemon (private socket) so many runners go in parallel.
 
 //! This crate-owned scenario runner is a `harness = false` integration test target: `cargo test -p
-//! dd-daemon --test scenarios` runs `main` below (the CI authority AND developer runner). Args after
+//! hl-daemon --test scenarios` runs `main` below (the CI authority AND developer runner). Args after
 //! `--` are parsed by `main`, e.g. `cargo test -p hl-daemon --test scenarios -- --count`.
 mod scenario;
 mod scenarios;
@@ -82,16 +82,16 @@ fn parse_target(s: &str) -> Option<Target> {
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let (mut backend, mut class, mut category, mut count) =
-        (Backend::Dd, Class::Quick, None, false);
+        (Backend::Hl, Class::Quick, None, false);
     let mut targets = Target::LINUX.to_vec();
     let mut it = argv.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--backend" => match it.next().map(|s| s.as_str()) {
                 Some("real") => backend = Backend::Real,
-                Some("dd") => backend = Backend::Dd,
+                Some("hl") => backend = Backend::Hl,
                 other => {
-                    eprintln!("--backend real|dd (got {other:?})");
+                    eprintln!("--backend real|hl (got {other:?})");
                     std::process::exit(2);
                 }
             },
@@ -107,7 +107,7 @@ fn main() {
                     .unwrap_or(targets)
             }
             "-h" | "--help" => {
-                eprintln!("usage: scenarios [--backend real|dd] [--long] [--count] [-c cat] [-t arm|amd]");
+                eprintln!("usage: scenarios [--backend real|hl] [--long] [--count] [-c cat] [-t arm|amd]");
                 return;
             }
             other => {
@@ -132,7 +132,7 @@ fn main() {
             .unwrap_or_else(|_| PathBuf::from("/Users/x/dd/poc/images")),
         daemon_bin: std::env::var("HL_DAEMON")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| repo.join("target/release/dd-daemon")),
+            .unwrap_or_else(|_| repo.join("target/release/hl-daemon")),
     };
 
     let groups = scenarios::all();

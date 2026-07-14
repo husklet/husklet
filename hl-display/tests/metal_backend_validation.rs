@@ -80,7 +80,7 @@ mod macos {
         let mut be = MetalBackend::new(&ctx);
         // A SPIR-V/PTX compute module can't be transpiled in-process by the bespoke Metal executor. Its
         // `create_shader` leaves no MSL library, so `create_compute_pipeline` must reject with the EXPLICIT
-        // routing error — a documented decision (steer compute to DD_GPU_BACKEND=wgpu), never a silent stub.
+        // routing error — a documented decision (steer compute to HL_GPU_BACKEND=wgpu), never a silent stub.
         // Real SPIR-V words (magic 0x07230203) — decidedly not the MSL-bytes packing the shim uses.
         be.create_shader(ShaderId(20), hl_gpu::ir::ShaderPayloadKind::LegacyMsl, &[0x0723_0203, 0, 0, 0, 0]).unwrap();
         let r = be.create_compute_pipeline(

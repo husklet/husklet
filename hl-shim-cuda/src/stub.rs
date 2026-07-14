@@ -3,7 +3,7 @@
 //! Two jobs:
 //!   * [`hit`] — once-per-name "unimplemented entry point" tracing for any generated default stub
 //!     (there are currently none, but the hook stays so a future manifest bump is visible). Identical
-//!     mechanism to dd-shim-gl's `stub.rs`.
+//!     mechanism to hl-shim-gl's `stub.rs`.
 //!   * [`unsupported`] + [`note`] — the Phase-0 truthfulness path: when a hand-written entry point
 //!     reaches an operation the IR / PTX executor cannot represent (an unsupported PTX instruction, an
 //!     unmodeled CUDA feature), it returns the *accurate* `CUresult` (never a false `CUDA_SUCCESS`) and
@@ -28,7 +28,7 @@ pub fn hit(name: &'static str) {
     }
     if let Ok(mut s) = seen().lock() {
         if s.insert(name) {
-            eprintln!("[dd-shim-cuda] unimplemented entry point: {name} (default stub)");
+            eprintln!("[hl-shim-cuda] unimplemented entry point: {name} (default stub)");
         }
     }
 }
@@ -66,7 +66,7 @@ pub fn strict_enabled() -> bool {
 /// history. Factored out so it is unit-testable without actually aborting the process.
 pub fn strict_report(cmd: &str, detail: &str) -> String {
     let mut s = String::new();
-    s.push_str("[dd-shim-cuda] STRICT: aborting at first unsupported CUDA call\n");
+    s.push_str("[hl-shim-cuda] STRICT: aborting at first unsupported CUDA call\n");
     s.push_str(&format!("  command: {cmd}\n"));
     s.push_str(&format!("  detail : {detail}\n"));
     let hist = history_snapshot();
@@ -107,7 +107,7 @@ pub fn unsupported(cmd: &'static str, detail: &str) {
     if std::env::var_os("HL_SHIM_DEBUG").is_some() {
         if let Ok(mut s) = seen().lock() {
             if s.insert(cmd) {
-                eprintln!("[dd-shim-cuda] unsupported CUDA operation: {cmd} ({detail})");
+                eprintln!("[hl-shim-cuda] unsupported CUDA operation: {cmd} ({detail})");
             }
         }
     }

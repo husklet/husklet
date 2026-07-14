@@ -7,6 +7,6 @@ int main(void){
   const char* w[]={"the","quick","brown","fox","jumps","over","lazy","dog"};
   unsigned long h=0;
   for(int r=0;r<1000;r++) for(int i=0;i<8;i++) h = mix(h ^ fnv1a(w[i]) ^ (unsigned long)r);
-  printf("h=%lx fnv=%lx\n", h, fnv1a("dd-jit"));
+  printf("h=%lx fnv=%lx\n", h, fnv1a("hl-jit"));
   return 0;
 }

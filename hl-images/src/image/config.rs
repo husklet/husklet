@@ -1,7 +1,7 @@
 //! Small helpers over image references and OCI config blobs (store paths, ref parsing, config arrays,
 //! and the pure OCI `config.config.*` field extractors + `repository:tag` / default-command helpers the
 //! image store needs). All runtime-agnostic: they read a config `Value` or a rootfs path and return
-//! plain data, so both `dd-images` and the daemon share one implementation.
+//! plain data, so both `hl-images` and the daemon share one implementation.
 
 use crate::registry::ImageRef;
 use serde_json::Value;

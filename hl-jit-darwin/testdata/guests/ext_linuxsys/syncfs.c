@@ -6,7 +6,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_syncfs_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_syncfs_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     write(fd, "syncme", 6);
     int sfr = sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE) == 0;

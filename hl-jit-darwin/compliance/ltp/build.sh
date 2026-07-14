@@ -10,7 +10,7 @@
 # hand-built include/config.h (see ./config.h) that mirrors what ./configure
 # would detect on a modern glibc host.
 #
-# Outputs (under $OUT, default dd-tests/compliance/ltp/out):
+# Outputs (under $OUT, default hl-tests/compliance/ltp/out):
 #   ltp-src/               the pinned LTP checkout
 #   bin/<arch>/<test>      one static test binary per (arch, curated test)
 #   build.log             per-test compile status

@@ -42,7 +42,7 @@ fn context_tar(files: &[(&str, &str)]) -> Vec<u8> {
         SEQ.fetch_add(1, Ordering::Relaxed)
     };
     let dir =
-        std::env::temp_dir().join(format!("dd-buildctx-{}-{}-{}", std::process::id(), nanos, seq));
+        std::env::temp_dir().join(format!("hl-buildctx-{}-{}-{}", std::process::id(), nanos, seq));
     std::fs::create_dir_all(&dir).unwrap();
     let mut names: Vec<String> = Vec::new();
     for (rel, contents) in files {

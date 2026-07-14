@@ -2,7 +2,7 @@
 // (VmRSS), /proc/<pid>/statm (field 2 = resident pages) and /proc/<pid>/stat (field 24 = rss pages). A
 // real Linux process ALWAYS has a non-zero VmRSS (it has faulted at least its own code/stack). dd computed
 // the SELF pid's RSS from the guest's tracked anon charge, which is 0 for a process that has only its
-// static image resident -- so top/htop/ps showed this process at RES=0, a dd-only divergence from real
+// static image resident -- so top/htop/ps showed this process at RES=0, a hl-only divergence from real
 // docker (a PEER pid already reported a live resident size; only self read 0). This probe reads all three
 // resident figures and asserts each is > 0 (the invariant that FAILS on the pre-fix engine). We do NOT
 // assert exact cross-file equality: VmRSS / statm-resident / stat-rss are sampled at slightly different

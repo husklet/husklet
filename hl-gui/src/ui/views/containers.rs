@@ -11,7 +11,7 @@ use std::ffi::OsStr;
 /// A container list row: short id on top, "image · state" below, with a running/stopped dot.
 pub(crate) fn container_list_row(c: &Container, removing: bool) -> gtk::ListBoxRow {
     let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    dot.add_css_class("dd-dot");
+    dot.add_css_class("hl-dot");
     dot.add_css_class(if removing {
         "warn"
     } else if c.running() {
@@ -23,7 +23,7 @@ pub(crate) fn container_list_row(c: &Container, removing: bool) -> gtk::ListBoxR
 
     let id = gtk::Label::new(Some(&c.short_id()));
     id.set_xalign(0.0);
-    id.add_css_class("dd-listrow-title"); // same weight as every other list (was bold "heading")
+    id.add_css_class("hl-listrow-title"); // same weight as every other list (was bold "heading")
     let state = if removing {
         "removing…".to_string()
     } else if c.running() {
@@ -34,7 +34,7 @@ pub(crate) fn container_list_row(c: &Container, removing: bool) -> gtk::ListBoxR
     let sub = gtk::Label::new(Some(&format!("{} · {}", c.image, state)));
     sub.set_xalign(0.0);
     sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    sub.add_css_class("dd-listrow-sub");
+    sub.add_css_class("hl-listrow-sub");
     let v = gtk::Box::new(gtk::Orientation::Vertical, 1);
     v.set_hexpand(true);
     v.append(&id);
@@ -89,7 +89,7 @@ pub(crate) fn container_info(
             move || Msg::StartContainer(id.clone())
         }));
     }
-    actions.push(text_btn("Delete", "dd-danger", sender, {
+    actions.push(text_btn("Delete", "hl-danger", sender, {
         let id = id.clone();
         move || Msg::RemoveContainer(id.clone())
     }));

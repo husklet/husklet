@@ -6,7 +6,7 @@
 
 int main(void) {
     char dir[128];
-    snprintf(dir, sizeof dir, "/tmp/dd_fstatat_%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/hl_fstatat_%d", (int)getpid());
     mkdir(dir, 0755);
     int dfd = open(dir, O_RDONLY | O_DIRECTORY);
     int fd = openat(dfd, "f", O_CREAT | O_WRONLY, 0644);

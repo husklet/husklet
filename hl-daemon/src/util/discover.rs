@@ -1,4 +1,4 @@
-//! Image discovery + reference resolution, thinned onto `dd-images`.
+//! Image discovery + reference resolution, thinned onto `hl-images`.
 //!
 //! The pure pipeline — scanning the store, sniffing each image's arch from binary magic, recovering env
 //! from an on-disk OCI config, and deduping by tag — lives in `hl_images` (runtime-agnostic). This module
@@ -6,7 +6,7 @@
 //! over-the-live-store resolver ([`find_image`]) that ranks the daemon's own `Image`s.
 use super::*;
 
-// `ref_name` / `ref_repo` are pure reference-string helpers now owned by dd-images; re-export them under
+// `ref_name` / `ref_repo` are pure reference-string helpers now owned by hl-images; re-export them under
 // their old names so `crate::util::ref_name` / `crate::util::ref_repo` call sites keep resolving.
 pub(crate) use hl_images::{ref_name, ref_repo};
 
@@ -32,9 +32,9 @@ pub(crate) fn discover_images(images_dir: &str) -> Vec<Image> {
     imgs
 }
 
-/// The dir holding persisted `docker tag` alias records (`<images_dir>/dd-aliases/*.json`).
+/// The dir holding persisted `docker tag` alias records (`<images_dir>/hl-aliases/*.json`).
 fn tag_aliases_dir(images_dir: &str) -> std::path::PathBuf {
-    std::path::Path::new(images_dir).join("dd-aliases")
+    std::path::Path::new(images_dir).join("hl-aliases")
 }
 
 /// Persist one `docker tag` alias (`alias` reference -> the shared image `rootfs`) so it survives a daemon
@@ -94,7 +94,7 @@ fn image_from_discovered(d: hl_images::DiscoveredImage) -> Image {
     }
 }
 
-/// Probe the rootfs and pick the guest target from a binary's magic (dd-images' detector mapped onto the
+/// Probe the rootfs and pick the guest target from a binary's magic (hl-images' detector mapped onto the
 /// runtime's [`Guest`] personality). Tries well-known paths first, then a bounded whole-rootfs scan.
 pub(crate) fn detect_arch(rootfs: &std::path::Path) -> Option<Guest> {
     hl_images::detect_arch(rootfs).map(guest_of)

@@ -14,16 +14,16 @@ pub(crate) fn build_onboarding(sender: &ComponentSender<AppModel>) -> (gtk::Widg
     // Left column: status + enable the daemon.
     let head = gtk::Label::new(Some("Daemon"));
     head.set_xalign(0.0);
-    head.add_css_class("dd-onboard-head");
+    head.add_css_class("hl-onboard-head");
     let subtitle = gtk::Label::new(Some("Run Linux containers on macOS — no VM."));
     subtitle.set_xalign(0.0);
     subtitle.set_wrap(true);
-    subtitle.add_css_class("dd-sub");
+    subtitle.add_css_class("hl-sub");
     let onboard_status = gtk::Label::new(Some("The dd daemon is not running."));
     onboard_status.set_xalign(0.0);
-    onboard_status.add_css_class("dd-onboard-status");
+    onboard_status.add_css_class("hl-onboard-status");
     let enable = gtk::Button::with_label("Enable daemon");
-    enable.add_css_class("dd-btn");
+    enable.add_css_class("hl-btn");
     enable.add_css_class("suggested-action");
     enable.set_halign(gtk::Align::Start);
     enable.set_margin_top(4);
@@ -42,15 +42,15 @@ pub(crate) fn build_onboarding(sender: &ComponentSender<AppModel>) -> (gtk::Widg
     // Right column: install the CLI.
     let cli_head = gtk::Label::new(Some("Command-line tool"));
     cli_head.set_xalign(0.0);
-    cli_head.add_css_class("dd-onboard-head");
+    cli_head.add_css_class("hl-onboard-head");
     let cli_desc = gtk::Label::new(Some(
         "Install the dd command to manage containers from your terminal.",
     ));
     cli_desc.set_xalign(0.0);
     cli_desc.set_wrap(true);
-    cli_desc.add_css_class("dd-sub");
+    cli_desc.add_css_class("hl-sub");
     let install = gtk::Button::with_label("Install dd CLI");
-    install.add_css_class("dd-btn");
+    install.add_css_class("hl-btn");
     install.set_halign(gtk::Align::Start);
     install.set_margin_top(4);
     {

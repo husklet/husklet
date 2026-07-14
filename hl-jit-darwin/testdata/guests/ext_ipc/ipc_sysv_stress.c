@@ -1,4 +1,4 @@
-// #421 stress: proves the dd-internal SysV registry is NOT the old host 32-slot table -- it allocates and
+// #421 stress: proves the hl-internal SysV registry is NOT the old host 32-slot table -- it allocates and
 // uses WELL more than 32 shared-memory segments concurrently, then a cross-fork shmat/shmdt shared write
 // (a child writes a segment the parent reads back through the SAME physical pages), a cross-process
 // BLOCKING semop round-trip (the parent P()s a 0-valued semaphore until the child V()s it), and a

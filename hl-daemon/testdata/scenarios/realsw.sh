@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# dd-tests/scenarios/realsw.sh -- run REAL upstream software (pulled from Docker Hub) under dd, with
+# hl-tests/scenarios/realsw.sh -- run REAL upstream software (pulled from Docker Hub) under dd, with
 # deterministic workloads. This is the "does production software actually work" tier: a database
 # (postgres), an in-memory store (redis), a message broker (nats), and a language runtime (python) --
 # each a large, syscall-heavy, fork/thread/mmap-heavy program that surfaces edge cases microtests miss.
 #
-#   bash dd-tests/scenarios/realsw.sh        # run after `make jit`; needs network to pull
+#   bash hl-tests/scenarios/realsw.sh        # run after `make jit`; needs network to pull
 #
 # Each app self-skips if its image can't be pulled. A FAIL is a real gap (the workload is deterministic).
 # Env: HL_IMAGES, HL_DAEMON.
@@ -12,8 +12,8 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 IMAGES="${HL_IMAGES:-/Users/x/dd/poc/images}"
-DAEMON="${HL_DAEMON:-$ROOT/target/release/dd-daemon}"
-SOCK="$ROOT/dd-realsw.sock"
+DAEMON="${HL_DAEMON:-$ROOT/target/release/hl-daemon}"
+SOCK="$ROOT/hl-realsw.sock"
 export DOCKER_HOST="unix://$SOCK"
 
 pass=0 fail=0 skip=0
@@ -24,11 +24,11 @@ ensure() { # $1=image ; echo "ready" if present/pullable, else ""
     if timeout 150 docker pull "$1" >/dev/null 2>&1; then echo ready; fi
 }
 
-SCEN_LOG="$ROOT/dd-realsw.log"
-pkill -x dd-daemon 2>/dev/null; rm -f "$SOCK"
+SCEN_LOG="$ROOT/hl-realsw.log"
+pkill -x hl-daemon 2>/dev/null; rm -f "$SOCK"
 # Fully isolate this daemon: private socket AND private state/volumes (a fresh per-scenario temp
-# dir), so it starts from empty state and never reads or mutates the developer's real ~/.dd.
-STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dd-realsw.XXXXXX")"
+# dir), so it starts from empty state and never reads or mutates the developer's real ~/.hl.
+STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hl-realsw.XXXXXX")"
 export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!

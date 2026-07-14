@@ -21,7 +21,7 @@ pub(crate) fn new_terminal_button(
     let menu = gtk::MenuButton::new();
     menu.set_icon_name("list-add-symbolic");
     menu.set_tooltip_text(Some("Open a shell in the selected container"));
-    menu.add_css_class("dd-seg");
+    menu.add_css_class("hl-seg");
     menu.set_margin_end(4);
     menu.set_valign(gtk::Align::Center); // keep the ＋ from dictating the tab-strip height
 
@@ -42,7 +42,7 @@ pub(crate) fn new_terminal_button(
             lbl.set_hexpand(true);
             let item = gtk::Button::builder().child(&lbl).build();
             item.set_has_frame(false);
-            item.add_css_class("dd-popitem");
+            item.add_css_class("hl-popitem");
             let nb = nb.clone();
             let target = target.clone();
             let mb = mb.clone();
@@ -57,7 +57,7 @@ pub(crate) fn new_terminal_button(
         }
         let pop = gtk::Popover::new();
         pop.set_has_arrow(false);
-        pop.add_css_class("dd-pop");
+        pop.add_css_class("hl-pop");
         pop.set_child(Some(&pop_box));
         mb.set_popover(Some(&pop));
     });
@@ -88,14 +88,14 @@ pub(crate) fn open_terminal_tab(nb: &gtk::Notebook, id: &str, _name: &str, shell
 }
 
 /// Open a VTE tab that runs an arbitrary `argv` (the generic seam behind [`open_terminal_tab`]; also
-/// used to launch a workspace via `ddcli workspace launch <name>`). VTE owns the PTY, so any program
-/// that wants a controlling terminal (a login shell, `docker exec -it`, `ddcli workspace launch …`)
+/// used to launch a workspace via `hl workspace launch <name>`). VTE owns the PTY, so any program
+/// that wants a controlling terminal (a login shell, `docker exec -it`, `hl workspace launch …`)
 /// gets a real interactive one. The tab is closable and killing it terminates the whole process tree.
 pub(crate) fn open_command_tab(nb: &gtk::Notebook, title: &str, argv: &[&str]) {
     let term = vte4::Terminal::new();
     style_terminal(&term);
 
-    // Inherit the environment but guarantee a PATH that can find `docker`/`ddcli` + the container tools.
+    // Inherit the environment but guarantee a PATH that can find `docker`/`hl` + the container tools.
     let mut env: Vec<String> = std::env::vars().map(|(k, v)| format!("{k}={v}")).collect();
     if !env.iter().any(|e| e.starts_with("PATH=")) {
         env.push("PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin".into());
@@ -179,7 +179,7 @@ fn closable_tab(
     // the terminal tab taller than the plain Info/Logs label tabs, which grows the whole tab strip.
     let close = gtk::Label::new(Some("✕"));
     close.set_valign(gtk::Align::Center);
-    close.add_css_class("dd-tabclose");
+    close.add_css_class("hl-tabclose");
     let click = gtk::GestureClick::new();
     let nb = nb.clone();
     let child = child.clone().upcast::<gtk::Widget>();
@@ -226,11 +226,11 @@ fn style_terminal(term: &vte4::Terminal) {
     term.set_colors(Some(&fg), Some(&bg), &[]);
 }
 
-/// `unix://<socket>` for `docker --host` ( `$HL_DOCKER_SOCK`, else `~/.dd/run/docker.sock` ).
+/// `unix://<socket>` for `docker --host` ( `$HL_DOCKER_SOCK`, else `~/.hl/run/docker.sock` ).
 fn daemon_host() -> String {
     let sock = std::env::var("HL_DOCKER_SOCK").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        format!("{home}/.dd/run/docker.sock")
+        format!("{home}/.hl/run/docker.sock")
     });
     format!("unix://{sock}")
 }

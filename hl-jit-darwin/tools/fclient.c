@@ -1,17 +1,17 @@
 // fclient.c -- tiny ddjitd (fork-server) client, protocol v2. Models a resident orchestrator
-// (ddockerd) dispatching a launch:
+// (hl-dockerd) dispatching a launch:
 //   ./fclient SOCK PROG [args...]            -- one launch, exit with the guest's code
 //   ./fclient --bench N SOCK PROG [args...]  -- N internal round-trips, print median/min/p75 ms
 // The whole point of the fork-server is that the *launcher* is already resident, so the marginal
 // launch cost is server-fork + worker-run, NOT a fresh posix_spawn+dyld of the engine. This tiny
 // binary measures exactly that marginal cost. (One-shot launches from a cold shell can just use the
-// engine's own `ddjit --client SOCK PROG ...` mode; that pays one engine spawn for the CLIENT.)
+// engine's own `hljit --client SOCK PROG ...` mode; that pays one engine spawn for the CLIENT.)
 //
 // Protocol v2 (see hl-jit/src/runtime/os/linux/forkserver.c):
 //   -> [u32 'DDF2'][u32 body_len] [i32 argc][argc*(i32 len+NUL-str)] [i32 envc][envc*...]
 //      [i32 cwdlen(+NUL)][cwd]  + stdio fds 0/1/2 via SCM_RIGHTS on the first sendmsg
 //   <- [i32 runner_pid] then [i32 raw wait status]
-// Build (macOS host): clang -O2 -o fclient dd-tests/tools/fclient.c
+// Build (macOS host): clang -O2 -o fclient hl-tests/tools/fclient.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

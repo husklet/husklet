@@ -15,7 +15,7 @@ use spec::*;
 /// image config nor a `-e PATH=` override supplies one, so bare commands in the standard sbin/bin dirs
 /// (e.g. alpine's `apk` in /sbin) resolve without an absolute path.
 /// Translate the daemon's Docker container model into a typed `hl_jit::Container`. The daemon states
-/// WHAT the container is; dd-jit owns HOW it launches. `None` only if the spec can't be built.
+/// WHAT the container is; hl-jit owns HOW it launches. `None` only if the spec can't be built.
 pub(crate) fn spawn_container(
     c: &Container,
     volumes_dir: &str,
@@ -35,7 +35,7 @@ pub(crate) fn spawn_container(
     }
     .guest(guest);
 
-    // Every knob below is a typed dd-jit API call — the daemon states WHAT the container is; dd-jit owns
+    // Every knob below is a typed hl-jit API call — the daemon states WHAT the container is; hl-jit owns
     // HOW it launches (the wire dialect, overlay/netns/pcache/fsgen encoding, the engine invocation).
     let mut b = JitContainer::builder(image)
         .cmd(c.cmd.clone())

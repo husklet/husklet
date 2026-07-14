@@ -4,7 +4,7 @@
 //! This is what makes the whole terminal headlessly testable: spawn a real `bash`, drive its stdin,
 //! read its output off the master fd, feed it to [`crate::Vt`], and assert the resulting grid — no GPU,
 //! no display, no container engine. On macOS the same code also underlies "local shell" workspaces; the
-//! in-container workspace path is the sibling `DdJitPty`.
+//! in-container workspace path is the sibling `HlJitPty`.
 
 use super::PtyBackend;
 use std::ffi::{CString, CStr};

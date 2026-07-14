@@ -1,10 +1,10 @@
-# dd-shim-gl — the guest GLES2/EGL front-end, as a first-class PRODUCT crate (not a test fixture).
+# hl-shim-gl — the guest GLES2/EGL front-end, as a first-class PRODUCT crate (not a test fixture).
 #
 # Cross-compiles to the guest ELF targets and links as the single shared object deployed under the
 # GLES sonames (libEGL.so.1, with libGLESv2.so.2 / libwayland-egl.so.1 as thin DT_NEEDED stubs — see
 # docs/rendering/SHIM_RUST_ARCHITECTURE.md). A real GLES2 app links `-lEGL -lGLESv2` and runs
 # UNMODIFIED against these symbols; each call drives the shim state machine and, on swap, emits a
-# dd-gpu IR stream through `dd-shim-common`'s transport to the host executor.
+# hl-gpu IR stream through `hl-shim-common`'s transport to the host executor.
 #
 # The exported entry-point SURFACE is code-generated from the Khronos registry (see `build.rs` +
 # `registry/`) so coverage is the complete GLES2+EGL symbol set, not a hand-picked few. Hand-written
@@ -14,7 +14,7 @@
 name = "hl-shim-gl"
 version = "0.1.0"
 edition = "2021"
-description = "Guest GLES2/EGL shim producing libEGL.so.1 / libGLESv2.so.2: Khronos-registry-generated C-ABI entry-point surface over dd-shim-common's shared dd-gpu IR transport."
+description = "Guest GLES2/EGL shim producing libEGL.so.1 / libGLESv2.so.2: Khronos-registry-generated C-ABI entry-point surface over hl-shim-common's shared hl-gpu IR transport."
 license = "MIT"
 
 [lib]

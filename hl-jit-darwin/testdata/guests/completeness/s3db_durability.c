@@ -16,7 +16,7 @@
  * The default (no env) run is byte-identical to native Linux, so it is oracle-diffed; the explicit-mode
  * runs are golden (native has no such env var). */
 int main(void) {
-    char path[] = "/tmp/dd_s3db_XXXXXX";
+    char path[] = "/tmp/hl_s3db_XXXXXX";
     int fd = mkstemp(path);
     int regfile_fsync = -2, regfile_fdatasync = -2, readback_ok = 0;
     if (fd >= 0) {

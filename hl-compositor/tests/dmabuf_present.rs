@@ -4,7 +4,7 @@
 //! handed to Smithay's `Display`, and drives the accelerated path end to end:
 //!   1. `get_registry` → assert `zwp_linux_dmabuf_v1` is advertised;
 //!   2. bind it (v3) → assert the compositor sends the dd IOSurface `modifier` for ARGB/XRGB8888;
-//!   3. `create_params` + `add(fd, …, modifier=dd-tag|iosurface-id)` + `create_immed` → a dmabuf
+//!   3. `create_params` + `add(fd, …, modifier=hl-tag|iosurface-id)` + `create_immed` → a dmabuf
 //!      `wl_buffer`;
 //!   4. attach it to a `wl_surface` and commit.
 //! We assert the committed frame reaches the `Presenter` as a zero-copy `SurfaceBuffer` carrying
@@ -15,7 +15,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{
     IOSurfaceMetadata, PresentError, PresentOutcome, Presenter, SurfaceBuffer,
 };
@@ -27,8 +27,8 @@ const WL_DISPLAY: u32 = 1;
 // DRM fourccs (little-endian 'AR24' / 'XR24').
 const DRM_FMT_ARGB8888: u32 = 0x3432_5241;
 const DRM_FMT_XRGB8888: u32 = 0x3432_5258;
-// dd-private modifier tag (must match handlers/dmabuf.rs + legacy server.rs).
-const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
+// hl-private modifier tag (must match handlers/dmabuf.rs + legacy server.rs).
+const HL_DMABUF_MOD_MAGIC: u32 = 0x6464;
 
 /// The fields of the last presented `SurfaceBuffer` the test asserts on (`SurfaceBuffer` is not
 /// `Clone`, so we snapshot what we need): iosurface id, whether it carried CPU pixels, texture size,
@@ -160,13 +160,13 @@ fn dmabuf_global_and_iosurface_commit_presents() {
     // the default software path must not advertise it — see handlers/dmabuf.rs::new_dmabuf_state).
     std::env::set_var("HL_DISPLAY_DMABUF", "1");
     // Accelerated import now REQUIRES a healthy host executor (dmabuf.rs's readiness gate rejects a
-    // dd-tagged dmabuf when none is running, so the client can't render into a surface nothing presents).
+    // hl-tagged dmabuf when none is running, so the client can't render into a surface nothing presents).
     // This test simulates that healthy environment; without it the import would be correctly rejected.
     hl_compositor::gpu::set_executor_health(true);
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
     let last = Arc::new(Mutex::new(None));
-    let mut state = DdState::new(
+    let mut state = HlState::new(
         dh.clone(),
         Box::new(RecordingPresenter {
             frames: 0,
@@ -220,11 +220,11 @@ fn dmabuf_global_and_iosurface_commit_presents() {
     let has_dd_mod = |fourcc: u32| {
         c.dmabuf_modifiers
             .iter()
-            .any(|&(f, hi, _)| f == fourcc && (hi & 0xffff) == DD_DMABUF_MOD_MAGIC)
+            .any(|&(f, hi, _)| f == fourcc && (hi & 0xffff) == HL_DMABUF_MOD_MAGIC)
     };
     assert!(
         has_dd_mod(DRM_FMT_ARGB8888) && has_dd_mod(DRM_FMT_XRGB8888),
-        "expected dd IOSurface modifier for AR24 + XR24; got {:?}",
+        "expected hl IOSurface modifier for AR24 + XR24; got {:?}",
         c.dmabuf_modifiers
     );
 
@@ -245,7 +245,7 @@ fn dmabuf_global_and_iosurface_commit_presents() {
             .u32(0) // plane_idx
             .u32(0) // offset
             .u32(stride)
-            .u32(DD_DMABUF_MOD_MAGIC) // modifier_hi: dd tag
+            .u32(HL_DMABUF_MOD_MAGIC) // modifier_hi: dd tag
             .u32(IOSURFACE_ID), // modifier_lo: IOSurface id
     );
     let buffer = c.alloc();

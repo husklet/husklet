@@ -35,7 +35,7 @@ impl Container {
     }
 
     /// Map this container into the typed, env-free [`hl_jit_darwin::LaunchConfig`] the FFI spawn path
-    /// consumes. The builder stores some knobs as `DD_*`/`DDJIT_*` env pairs (docker-parity encoding);
+    /// consumes. The builder stores some knobs as `HL_*`/`DDJIT_*` env pairs (docker-parity encoding);
     /// this translates each known key into its typed wire field, so nothing crosses the FFI as loose
     /// environment. Pure engine *tuning* knobs (CRASHDBG/COLDPROF/HL_JIT_NOPCACHE) are not part of the
     /// container contract and are intentionally dropped here — a follow-up can carry them if needed.
@@ -58,7 +58,7 @@ impl Container {
             argv: c.argv.clone(),
             ..Default::default()
         };
-        // Translate the builder's DD_*/DDJIT_* env pairs into typed wire fields (the engine setenv's them
+        // Translate the builder's HL_*/DDJIT_* env pairs into typed wire fields (the engine setenv's them
         // back internally from the wire, so the API carries zero environment).
         for (k, v) in &c.env {
             match k.as_str() {
@@ -95,7 +95,7 @@ mod tests {
         c.cfg.env.iter().any(|(ek, ev)| ek == k && ev == v)
     }
 
-    // ---- launch_config(): DD_*/DDJIT_* + typed SpawnConfig -> typed LaunchConfig mapping ----
+    // ---- launch_config(): HL_*/DDJIT_* + typed SpawnConfig -> typed LaunchConfig mapping ----
 
     #[test]
     fn launch_config_maps_all_fields() {
@@ -142,7 +142,7 @@ mod tests {
         assert_eq!(lc.ulimits, vec![("nofile".to_string(), 1024u64, 2048u64)]);
         assert_eq!(lc.argv, vec!["/bin/sh", "-c", "echo hi"]);
 
-        // DD_*/DDJIT_* env-pair translation.
+        // HL_*/DDJIT_* env-pair translation.
         assert_eq!(lc.cwd, "/work");
         // HL_GUEST_ENV is newline-joined at the builder and split back into a Vec here.
         assert_eq!(lc.guest_env, vec!["FOO=bar".to_string(), DEFAULT_GUEST_PATH.to_string(), "TERM=xterm".to_string()]);
@@ -233,7 +233,7 @@ mod tests {
         assert!(lc.volumes.is_empty());
         assert!(lc.ulimits.is_empty());
         assert_eq!(lc.argv, vec!["/bin/true"]);
-        // env-backed fields: all default (empty / false) because no DD_*/DDJIT_* pairs were stored.
+        // env-backed fields: all default (empty / false) because no HL_*/DDJIT_* pairs were stored.
         assert_eq!(lc.cwd, "");
         assert!(lc.guest_env.is_empty());
         assert!(!lc.sandbox);

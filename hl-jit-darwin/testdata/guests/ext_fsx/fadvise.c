@@ -7,7 +7,7 @@
 
 int main(void) {
     char path[128];
-    snprintf(path, sizeof path, "/tmp/dd_fadvise_%d", (int)getpid());
+    snprintf(path, sizeof path, "/tmp/hl_fadvise_%d", (int)getpid());
     int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
     char blk[8192];
     for (int i = 0; i < (int)sizeof blk; i++) blk[i] = (char)i;

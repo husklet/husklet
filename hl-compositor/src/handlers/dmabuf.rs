@@ -20,7 +20,7 @@
 //! 2. On import ([`DmabufHandler::dmabuf_imported`]) we decode the IOSurface id from the modifier
 //!    and accept the buffer; a buffer with no dd tag (a real LINEAR allocation we cannot back on
 //!    macOS) is rejected so the client falls back to `wl_shm`.
-//! 3. On commit, [`DdState::dmabuf_surface_buffer`] turns the committed dmabuf `wl_buffer` into a
+//! 3. On commit, [`HlState::dmabuf_surface_buffer`] turns the committed dmabuf `wl_buffer` into a
 //!    [`SurfaceBuffer`] carrying only `iosurface_id` (no CPU pixels). The reused `Presenter`
 //!    (`MetalPresenter`/`CocoaPresenter`) resolves that id to the host IOSurface via the GPU mach
 //!    bridge and composites it zero-copy — identical to the legacy GL path.
@@ -49,13 +49,13 @@ use smithay::{
     },
 };
 
-use crate::{handlers::compositor::logical_size_and_uv, DdState};
+use crate::{handlers::compositor::logical_size_and_uv, HlState};
 
-/// dd-private dmabuf modifier layout (shared with `hl-display/src/server.rs` and the guest shims'
+/// hl-private dmabuf modifier layout (shared with `hl-display/src/server.rs` and the guest shims'
 /// modifier producers). `modifier_lo` = the host IOSurface id. `modifier_hi` packs:
-///   - bits 0..=15  `DD_DMABUF_MOD_MAGIC` — the tag identifying a dd IOSurface-backed buffer;
-///   - bit  16      `DD_DMABUF_RENDER_BIT` — the guest asked the host GPU to render into it;
-///   - bits 17..=31 the **allocation generation** (`DD_DMABUF_GEN_*`) — see below.
+///   - bits 0..=15  `HL_DMABUF_MOD_MAGIC` — the tag identifying a dd IOSurface-backed buffer;
+///   - bit  16      `HL_DMABUF_RENDER_BIT` — the guest asked the host GPU to render into it;
+///   - bits 17..=31 the **allocation generation** (`HL_DMABUF_GEN_*`) — see below.
 ///
 /// The IOSurface `id` (`modifier_lo`) is a macOS-minted `IOSurfaceGetID` that dd RECYCLES: a retired
 /// pool surface is re-handed to the next same-size allocation, and a released legacy id becomes
@@ -67,19 +67,19 @@ use crate::{handlers::compositor::logical_size_and_uv, DdState};
 ///
 /// Generation `0` is reserved as "unversioned": a guest that does not source a generation sends 0, and
 /// the check is skipped for it (backward compatibility — no false rejections for legacy producers).
-pub(crate) const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
-pub(crate) const DD_DMABUF_RENDER_BIT: u32 = 0x1_0000;
+pub(crate) const HL_DMABUF_MOD_MAGIC: u32 = 0x6464;
+pub(crate) const HL_DMABUF_RENDER_BIT: u32 = 0x1_0000;
 /// Bit offset of the allocation generation within `modifier_hi`.
-pub(crate) const DD_DMABUF_GEN_SHIFT: u32 = 17;
+pub(crate) const HL_DMABUF_GEN_SHIFT: u32 = 17;
 /// 15-bit generation field mask (post-shift): values 1..=0x7fff cycle; 0 == unversioned.
-pub(crate) const DD_DMABUF_GEN_MASK: u32 = 0x7fff;
+pub(crate) const HL_DMABUF_GEN_MASK: u32 = 0x7fff;
 
 /// Compose `modifier_hi` from its parts (used by the guest producers and tests). `generation` is masked
 /// to the 15-bit field; pass 0 for an unversioned (legacy) buffer.
 pub(crate) fn compose_modifier_hi(gpu_render: bool, generation: u32) -> u32 {
-    DD_DMABUF_MOD_MAGIC
-        | if gpu_render { DD_DMABUF_RENDER_BIT } else { 0 }
-        | ((generation & DD_DMABUF_GEN_MASK) << DD_DMABUF_GEN_SHIFT)
+    HL_DMABUF_MOD_MAGIC
+        | if gpu_render { HL_DMABUF_RENDER_BIT } else { 0 }
+        | ((generation & HL_DMABUF_GEN_MASK) << HL_DMABUF_GEN_SHIFT)
 }
 
 #[derive(Clone, Copy)]
@@ -110,7 +110,7 @@ pub(crate) enum DmabufValidationError {
 }
 
 fn modifier_has_dd_layout(modifier: u64) -> bool {
-    ((modifier >> 32) as u32) & 0xffff == DD_DMABUF_MOD_MAGIC
+    ((modifier >> 32) as u32) & 0xffff == HL_DMABUF_MOD_MAGIC
 }
 
 fn supports_pair(format: Fourcc, modifier: u64) -> bool {
@@ -119,7 +119,7 @@ fn supports_pair(format: Fourcc, modifier: u64) -> bool {
 
 /// The allocation generation stamped in `modifier_hi` (0 == unversioned/legacy).
 pub(crate) fn modifier_generation(modifier: u64) -> u32 {
-    ((modifier >> 32) as u32 >> DD_DMABUF_GEN_SHIFT) & DD_DMABUF_GEN_MASK
+    ((modifier >> 32) as u32 >> HL_DMABUF_GEN_SHIFT) & HL_DMABUF_GEN_MASK
 }
 
 /// Decode a DRM format modifier into `(iosurface_id, gpu_render)` when it carries the dd IOSurface
@@ -127,14 +127,14 @@ pub(crate) fn modifier_generation(modifier: u64) -> u32 {
 pub(crate) fn hl_iosurface_from_modifier(modifier: u64) -> Option<(u32, bool)> {
     let hi = (modifier >> 32) as u32;
     let lo = modifier as u32;
-    if hi & 0xffff == DD_DMABUF_MOD_MAGIC {
-        Some((lo, hi & DD_DMABUF_RENDER_BIT != 0))
+    if hi & 0xffff == HL_DMABUF_MOD_MAGIC {
+        Some((lo, hi & HL_DMABUF_RENDER_BIT != 0))
     } else {
         None
     }
 }
 
-impl DmabufHandler for DdState {
+impl DmabufHandler for HlState {
     fn dmabuf_state(&mut self) -> &mut DmabufState {
         &mut self.dmabuf_state
     }
@@ -147,7 +147,7 @@ impl DmabufHandler for DdState {
         let modifier: u64 = dmabuf.format().modifier.into();
         match hl_iosurface_from_modifier(modifier) {
             Some((iosurface_id, _gpu_render)) => {
-                // Accelerated-import readiness gate (supersedes the interim warn-only check). A dd-tagged
+                // Accelerated-import readiness gate (supersedes the interim warn-only check). A hl-tagged
                 // dmabuf means the client expects the host GPU to render/present into a dd IOSurface, so
                 // REJECT the import up front unless BOTH hold:
                 //   (a) a healthy host executor is running (crate::gpu::executor_healthy) — otherwise the
@@ -165,7 +165,7 @@ impl DmabufHandler for DdState {
                 }
                 if let Err(reason) = self.validate_iosurface(&dmabuf, iosurface_id) {
                     eprintln!(
-                        "dd-compositor: rejecting accelerated dmabuf import: IOSurface id \
+                        "hl-compositor: rejecting accelerated dmabuf import: IOSurface id \
                          {iosurface_id} failed validation ({reason:?}, {}x{}, code {:?})",
                         dmabuf.width(),
                         dmabuf.height(),
@@ -174,7 +174,7 @@ impl DmabufHandler for DdState {
                     notifier.failed();
                     return;
                 }
-                let _ = notifier.successful::<DdState>();
+                let _ = notifier.successful::<HlState>();
             }
             None => notifier.failed(),
         }
@@ -247,7 +247,7 @@ fn validate_dmabuf(
     Ok(())
 }
 
-impl DdState {
+impl HlState {
     /// Validate a dd IOSurface-backed dmabuf at IMPORT time, before the buffer is accepted. Offline this
     /// proves the reference is structurally sound — a non-zero IOSurface id and a representable
     /// size/format — so a malformed or zero handle is rejected instead of accepted and later presented as
@@ -284,7 +284,7 @@ impl DdState {
         if tex_w <= 0 || tex_h <= 0 {
             return None;
         }
-        // dd-display convention: format == 1 ⇒ opaque (XRGB); 0 ⇒ honour alpha (ARGB / anything else).
+        // hl-display convention: format == 1 ⇒ opaque (XRGB); 0 ⇒ honour alpha (ARGB / anything else).
         let format = match dmabuf.format().code {
             Fourcc::Xrgb8888 => 1u32,
             _ => 0u32,
@@ -320,27 +320,27 @@ impl DdState {
 /// reads the dmabuf-feedback `main_device`, `stat`s that node, and takes its accelerated render path
 /// only when the two match — so the feedback must advertise exactly this dev_t (identical to the
 /// legacy `hl-display/src/server.rs::send_dmabuf_feedback` value).
-const DD_MAIN_DEVICE: DmabufDeviceId = DmabufDeviceId::from_linux_dev_t((226u64 << 8) | 128);
+const HL_MAIN_DEVICE: DmabufDeviceId = DmabufDeviceId::from_linux_dev_t((226u64 << 8) | 128);
 
 /// The exact ARGB/XRGB8888 format+modifier pairs the importer can accept. Genuine Linux `LINEAR`
 /// dma-bufs are intentionally absent because the macOS importer only resolves dd IOSurface references. GLES clients
 /// (glmark2/es2tri) read this list off the v3 modifier events; v4+ clients read the same set from the
 /// feedback format-table's main tranche.
 fn hl_dmabuf_formats() -> [Format; 2] {
-    let magic = Modifier::from((DD_DMABUF_MOD_MAGIC as u64) << 32);
+    let magic = Modifier::from((HL_DMABUF_MOD_MAGIC as u64) << 32);
     DMABUF_IMPORT_CAPS.map(|caps| Format { code: caps.format, modifier: magic })
 }
 
 /// Build the default [`DmabufFeedback`] for the v4/v5 global: a single main tranche of
-/// [`hl_dmabuf_formats`] targeting [`DD_MAIN_DEVICE`]. Returns `Err` if the format-table backing file
+/// [`hl_dmabuf_formats`] targeting [`HL_MAIN_DEVICE`]. Returns `Err` if the format-table backing file
 /// cannot be created — on macOS this is the `PSHMNAMLEN` failure the offline-vendored smithay patch
 /// fixes (`vendor/smithay-0.7.0/src/utils/sealed_file.rs`); the caller falls back to a v3 global.
 pub(crate) fn build_default_feedback() -> std::io::Result<DmabufFeedback> {
-    DmabufFeedbackBuilder::new(DD_MAIN_DEVICE, hl_dmabuf_formats()).build()
+    DmabufFeedbackBuilder::new(HL_MAIN_DEVICE, hl_dmabuf_formats()).build()
 }
 
 /// Stand up the `zwp_linux_dmabuf_v1` global and return the [`DmabufState`] delegate. Called once from
-/// [`DdState::new`] (only under `HL_DISPLAY_SMITHAY=1`, since that flag is what execs this compositor,
+/// [`HlState::new`] (only under `HL_DISPLAY_SMITHAY=1`, since that flag is what execs this compositor,
 /// so the whole path — v3 or v4 — is already behind it; the legacy `server.rs` default is untouched).
 ///
 /// Preferred: a **version 5** global carrying a default dmabuf-**feedback** (which serves the v4
@@ -365,15 +365,15 @@ pub(crate) fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
         Ok(feedback) => {
             // The returned DmabufGlobal is only a handle; the global (and a clone of the feedback) live
             // inside `state`, so dropping it does not remove the global.
-            let _global = state.create_global_with_default_feedback::<DdState>(dh, &feedback);
+            let _global = state.create_global_with_default_feedback::<HlState>(dh, &feedback);
         }
         Err(e) => {
             eprintln!(
-                "dd-compositor: zwp_linux_dmabuf v4 feedback format-table could not be created \
+                "hl-compositor: zwp_linux_dmabuf v4 feedback format-table could not be created \
                  ({e}); falling back to the v3 modifier-list global (no accelerated-Chromium \
                  render-node feedback)"
             );
-            let _global = state.create_global::<DdState>(dh, hl_dmabuf_formats());
+            let _global = state.create_global::<HlState>(dh, hl_dmabuf_formats());
         }
     }
     state
@@ -393,7 +393,7 @@ mod tests {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "/tmp".into());
         let mut templ: Vec<u8> =
-            format!("{}/dd-plane-XXXXXX", dir.trim_end_matches('/')).into_bytes();
+            format!("{}/hl-plane-XXXXXX", dir.trim_end_matches('/')).into_bytes();
         templ.push(0);
         let fd = unsafe { libc::mkstemp(templ.as_mut_ptr() as *mut libc::c_char) };
         assert!(fd >= 0, "mkstemp plane fd");
@@ -411,7 +411,7 @@ mod tests {
         backing: usize,
         second_plane: bool,
     ) -> Dmabuf {
-        let modifier = Modifier::from(((DD_DMABUF_MOD_MAGIC as u64) << 32) | 7);
+        let modifier = Modifier::from(((HL_DMABUF_MOD_MAGIC as u64) << 32) | 7);
         let mut builder = Dmabuf::builder((16, 8), format, modifier, flags);
         assert!(builder.add_plane(plane_fd(backing), plane_idx, offset, stride));
         if second_plane {
@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(modifier_generation((compose_modifier_hi(false, 5) as u64) << 32), 5);
         assert_eq!(modifier_generation((compose_modifier_hi(true, 0x7fff) as u64) << 32), 0x7fff);
         // The render bit and generation are independent fields.
-        assert!(compose_modifier_hi(true, 3) & DD_DMABUF_RENDER_BIT != 0);
+        assert!(compose_modifier_hi(true, 3) & HL_DMABUF_RENDER_BIT != 0);
         assert_eq!(modifier_generation((compose_modifier_hi(true, 3) as u64) << 32), 3);
     }
 }

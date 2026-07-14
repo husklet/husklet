@@ -7,7 +7,7 @@ use crate::support::{gate_failures, Cell, Engine, Status};
 use std::path::PathBuf;
 use std::process::Command;
 
-// The product-neutral engine-test harness, included crate-locally (was the `dd-tests` dev-dep).
+// The product-neutral engine-test harness, included crate-locally (was the `hl-tests` dev-dep).
 #[path = "support/mod.rs"]
 mod support;
 
@@ -55,7 +55,7 @@ fn coverage_static_scans_existing_runtime_sources() {
 
 #[test]
 fn coverage_static_is_fatal_when_runtime_tree_is_missing() {
-    let code = run_coverage("static", &[("DDCOV_RT", "/nonexistent/dd-coverage-guard")]);
+    let code = run_coverage("static", &[("DDCOV_RT", "/nonexistent/hl-coverage-guard")]);
     assert_ne!(code, 0, "a missing runtime tree must be fatal, got exit {code}");
 }
 
@@ -63,7 +63,7 @@ fn coverage_static_is_fatal_when_runtime_tree_is_missing() {
 fn coverage_report_does_not_greenlight_a_broken_scan() {
     // `report` writes the authoritative SYSCALL-COVERAGE.md; it must refuse to run against a tree whose
     // handler modules exist but parse to zero handled syscalls, rather than write a "0 handled" doc.
-    let root = std::env::temp_dir().join("dd-cov-empty-guard");
+    let root = std::env::temp_dir().join("hl-cov-empty-guard");
     let sc = root.join("os/linux/syscall");
     let tr = root.join("translate/x86_64");
     std::fs::create_dir_all(&sc).unwrap();
@@ -85,8 +85,8 @@ fn coverage_dynamic_fails_when_required_engines_are_missing() {
     let code = run_coverage(
         "dynamic",
         &[
-            ("DDCOV_ENGINE_A", "/nonexistent/ddjit-linux_aarch64"),
-            ("DDCOV_ENGINE_X", "/nonexistent/ddjit-linux_x86_64"),
+            ("DDCOV_ENGINE_A", "/nonexistent/hljit-linux_aarch64"),
+            ("DDCOV_ENGINE_X", "/nonexistent/hljit-linux_x86_64"),
         ],
     );
     assert_ne!(code, 0, "dynamic coverage with no engines must be fatal, got exit {code}");

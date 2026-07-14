@@ -1,4 +1,4 @@
-//! Frame assembly — lower the recorded draw-list into the dd-gpu IR stream at `eglSwapBuffers`,
+//! Frame assembly — lower the recorded draw-list into the hl-gpu IR stream at `eglSwapBuffers`,
 //! mirroring `gl_shim.c`'s swap-time emission byte-for-byte.
 //!
 //! This increment implements the **clear path** (a frame whose draw-list is all clears — the

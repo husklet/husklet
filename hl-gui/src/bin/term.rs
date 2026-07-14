@@ -3,11 +3,11 @@
 //!
 //! * Native macOS title bars (real traffic lights); content — including the full-width tab strip — sits
 //!   directly below, so nothing needs a traffic-light gap.
-//! * DAEMON-FREE launch: each terminal tab runs `ddcli workspace launch <name>`, entering the image
-//!   in-process via dd-jit. GPU-rendered through GTK4's GSK renderer; VTE is the grid.
+//! * DAEMON-FREE launch: each terminal tab runs `hl workspace launch <name>`, entering the image
+//!   in-process via hl-jit. GPU-rendered through GTK4's GSK renderer; VTE is the grid.
 //! * No onboarding, no popups — the app opens straight onto workspaces.
 //!
-//! Build + run on macOS: `nix develop ./nix -c cargo run -p hl-gui --bin dd-term`.
+//! Build + run on macOS: `nix develop ./nix -c cargo run -p hl-gui --bin hl-term`.
 
 use gtk::gdk;
 use gtk::gio;
@@ -25,7 +25,7 @@ use hl_ws_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir};
 use hl::config::{CudaDevice, VpnConfig, WorkspaceConfig, WorkspaceStore};
 use hl_ws::{Arch, Mount, Workspace};
 
-const APP_ID: &str = "com.dd.term";
+const APP_ID: &str = "com.hl.term";
 
 // One committed near-black palette (matches the design mockup).
 const BG0: &str = "#0d0e11"; // window ground
@@ -178,7 +178,7 @@ vte-terminal.copymode, terminal.copymode {{ box-shadow: inset 0 0 0 1px {ACCENT}
 }
 
 // =================================================================================================
-// User config (~/.dd/term.conf) — loaded at startup, applied to every VTE terminal, live-reloaded.
+// User config (~/.hl/term.conf) — loaded at startup, applied to every VTE terminal, live-reloaded.
 // =================================================================================================
 
 // PCRE2 flags for VTE's regex engine (search + URL match). VTE requires UTF + MULTILINE.
@@ -490,7 +490,7 @@ fn confirm_dialog(message: &str) -> bool {
 // Window — Settings (global): one coherent surface over everything dd has built. A left nav drives a
 // stack of sections, matching the all-black New-Workspace sheet idiom.
 //
-//   * Appearance         → the terminal look (`~/.dd/term.conf`): font + size, theme fg/bg, cursor,
+//   * Appearance         → the terminal look (`~/.hl/term.conf`): font + size, theme fg/bg, cursor,
 //                          default scrollback. Persisted and LIVE-applied to every open terminal (the
 //                          startup config watcher re-reads term.conf on change).
 //   * Workspace defaults → the image/os-arch/storage/docker a NEW workspace starts from.
@@ -498,13 +498,13 @@ fn confirm_dialog(message: &str) -> bool {
 //   * Network (VPN)      → the default per-workspace VPN/proxy egress for new workspaces.
 //   * Rendering (GPU)    → whether new workspaces enable accelerated GUI rendering (`--gui`).
 //
-// The "defaults" sections write `~/.dd/term-defaults.conf` (a tiny key=value file this binary owns);
+// The "defaults" sections write `~/.hl/term-defaults.conf` (a tiny key=value file this binary owns);
 // `apply_ws_defaults` pre-fills the New-Workspace form from it. Nothing here invents backend features —
 // each control maps to an existing `TermConfig` or `Workspace` field.
 // =================================================================================================
 
 /// The values a freshly-created workspace starts from (edited in Settings → Workspace defaults/Device/
-/// Network/Rendering, persisted to `~/.dd/term-defaults.conf`). Every field mirrors a `Workspace` field.
+/// Network/Rendering, persisted to `~/.hl/term-defaults.conf`). Every field mirrors a `Workspace` field.
 struct WsDefaults {
     image: String,
     arch: Arch,
@@ -610,7 +610,7 @@ fn apply_ws_defaults(form: &Rc<Form>, d: &WsDefaults) {
     form.cuda_vram.set_text(&d.cuda.vram_mb.to_string());
 }
 
-/// Serialize a [`TermConfig`] back to `~/.dd/term.conf` (a commented, human-readable rewrite). The
+/// Serialize a [`TermConfig`] back to `~/.hl/term.conf` (a commented, human-readable rewrite). The
 /// startup config watcher notices the file change within a second and re-applies it to every open
 /// terminal; we also update the in-memory config + re-style immediately so the change is instant.
 fn save_term_config(cfg: &TermConfig) -> std::io::Result<()> {
@@ -618,7 +618,7 @@ fn save_term_config(cfg: &TermConfig) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut s = String::from("# dd terminal config — ~/.dd/term.conf\n# edit here or via Settings; open terminals live-reload.\n\n");
+    let mut s = String::from("# dd terminal config — ~/.hl/term.conf\n# edit here or via Settings; open terminals live-reload.\n\n");
     s.push_str(&format!("font_family = {}\n", cfg.font_family));
     s.push_str(&format!("font_size = {}\n", if cfg.font_size.fract().abs() < f64::EPSILON { format!("{}", cfg.font_size as i64) } else { format!("{}", cfg.font_size) }));
     s.push_str("# scrollback: a number of lines, or `unlimited`\n");
@@ -689,7 +689,7 @@ fn open_settings_window(app: &gtk::Application) {
         d_gui: gtk::Switch::new(),
         d_vpn: entry("socks5:127.30.0.1:1080  (blank = direct)", true),
         d_cuda_on: gtk::Switch::new(),
-        d_cuda_name: entry("dd Metal (CUDA-sim) Device", true),
+        d_cuda_name: entry("hl Metal (CUDA-sim) Device", true),
         d_cuda_cc: entry("8.6", true),
         d_cuda_vram: entry("4096", true),
     });
@@ -876,7 +876,7 @@ fn is_hex6(v: &str) -> bool {
 fn settings_appearance(ui: &Rc<SettingsUi>) -> gtk::Box {
     let p = pane("Appearance");
     let intro = gtk::Label::new(Some(
-        "dd's terminal look — the all-black aesthetic. Changes save to ~/.dd/term.conf and apply live \
+        "dd's terminal look — the all-black aesthetic. Changes save to ~/.hl/term.conf and apply live \
          to every open terminal.",
     ));
     intro.add_css_class("fhint");
@@ -993,7 +993,7 @@ fn settings_defaults(ui: &Rc<SettingsUi>) -> gtk::Box {
     sbox.append(&ui.d_storage);
     sbox.append(&browse);
     srow.append(&sbox);
-    let sh = gtk::Label::new(Some("Blank = ~/.dd/workspaces/<name>. A folder here becomes the parent for new workspaces you can override."));
+    let sh = gtk::Label::new(Some("Blank = ~/.hl/workspaces/<name>. A folder here becomes the parent for new workspaces you can override."));
     sh.add_css_class("fhint");
     sh.set_xalign(0.0);
     sh.set_wrap(true);
@@ -1065,7 +1065,7 @@ fn settings_rendering(ui: &Rc<SettingsUi>) -> gtk::Box {
     let p = pane("Rendering (GPU)");
     p.append(&switch_row(
         "Accelerated GUI rendering (--gui) by default",
-        "New workspaces bind-mount the host dd-display socket + set WAYLAND_DISPLAY so a Linux GUI app \
+        "New workspaces bind-mount the host hl-display socket + set WAYLAND_DISPLAY so a Linux GUI app \
          renders on the Mac (GPU-accelerated). Off = headless (terminal only).",
         &ui.d_gui,
     ));
@@ -1094,7 +1094,7 @@ struct Form {
     mem: gtk::SpinButton,
     scrollback: gtk::Entry,
     docker: gtk::Switch,
-    /// Accelerated GUI rendering (`--gui`): bind-mount the host `dd-display` socket so a Linux GUI app
+    /// Accelerated GUI rendering (`--gui`): bind-mount the host `hl-display` socket so a Linux GUI app
     /// in the workspace renders on the Mac. Maps to [`Workspace::gui`].
     gui: gtk::Switch,
     vpn: gtk::Entry,
@@ -1259,7 +1259,7 @@ fn build_form() -> Form {
         gui: gtk::Switch::new(),
         vpn: entry("socks5:127.30.0.1:1080  (blank = direct)", true),
         cuda_on: gtk::Switch::new(),
-        cuda_name: entry("dd Metal (CUDA-sim) Device", true),
+        cuda_name: entry("hl Metal (CUDA-sim) Device", true),
         cuda_cc: entry("8.6", true),
         cuda_vram: entry("4096", true),
         env_box: gtk::Box::new(gtk::Orientation::Vertical, 6),
@@ -1345,7 +1345,7 @@ fn pane_general(form: &Rc<Form>) -> gtk::Box {
     sbox.append(&form.storage);
     sbox.append(&browse);
     srow.append(&sbox);
-    let sh = gtk::Label::new(Some("Holds this workspace's docker images, volumes + state. Blank = ~/.dd/workspaces/<name>."));
+    let sh = gtk::Label::new(Some("Holds this workspace's docker images, volumes + state. Blank = ~/.hl/workspaces/<name>."));
     sh.add_css_class("fhint");
     sh.set_xalign(0.0);
     srow.append(&sh);
@@ -1545,7 +1545,7 @@ fn pane_rendering(form: &Rc<Form>) -> gtk::Box {
     let p = pane("Rendering");
     p.append(&switch_row(
         "Accelerated GUI rendering (--gui)",
-        "Bind-mount the host dd-display socket + set WAYLAND_DISPLAY so a Linux GUI app in this \
+        "Bind-mount the host hl-display socket + set WAYLAND_DISPLAY so a Linux GUI app in this \
          workspace renders on the Mac (GPU-accelerated). Off = headless (terminal only).",
         &form.gui,
     ));
@@ -2002,12 +2002,12 @@ fn open_terminal_window(app: &gtk::Application, ws: &WorkspaceConfig) {
                 .iter()
                 .filter_map(|(w, slot, pid)| w.upgrade().map(|_| (slot.clone(), pid.clone())))
                 .collect();
-            // Checkpoint every slot CONCURRENTLY: spawn all the per-slot `ddcli workspace checkpoint`
+            // Checkpoint every slot CONCURRENTLY: spawn all the per-slot `hl workspace checkpoint`
             // children at once, then join. Each pane is a SEPARATE engine/slot, so the freezes are
             // independent — running them sequentially made closing an N-tab window take N× a single engine
             // dump (seconds of frozen UI = the "window takes a while to close" report). MUST go through the
-            // clean-env `ddcli_command` (dd-term runs under the nix devshell; a raw Command would poison
-            // ddcli's loader + its forked engine and silently lose the processes). Every child is joined
+            // clean-env `ddcli_command` (hl-term runs under the nix devshell; a raw Command would poison
+            // hl's loader + its forked engine and silently lose the processes). Every child is joined
             // before the kill_pg below, so all slots are fully frozen before any pane is torn down.
             let mut freezes: Vec<(String, Option<std::process::Child>)> = live
                 .iter()
@@ -2020,7 +2020,7 @@ fn open_terminal_window(app: &gtk::Application, ws: &WorkspaceConfig) {
             for (slot, child) in &mut freezes {
                 let ok = child.take().and_then(|mut c| c.wait().ok()).map(|s| s.success()).unwrap_or(false);
                 if !ok {
-                    eprintln!("[dd-term] freeze of {:?} slot {slot} failed — discarding that slot", tw.ws.name);
+                    eprintln!("[hl-term] freeze of {:?} slot {slot} failed — discarding that slot", tw.ws.name);
                     let d = tw.ws.checkpoint_slot_dir(&base, slot);
                     let _ = std::fs::remove_dir_all(&d);
                     // Also drop the control-channel leftovers so the discarded slot reopens truly fresh.
@@ -2701,19 +2701,19 @@ fn make_terminal_ex(tw: &Rc<TermWin>, cwd: Option<String>, history: Option<Strin
     // Register this pane (terminal + its slot + pid) so the window's close handler can freeze it into its
     // own slot, and `save_session` can record which slot each pane owns.
     tw.panes.borrow_mut().push((term.downgrade(), slot.clone(), pid.clone()));
-    let ddcli = ddcli_path();
-    // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs ddcli); HL_TERM_DEBUG_LOG
-    // captures ddcli's output to a file to diagnose the early exit.
+    let hl = ddcli_path();
+    // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs hl); HL_TERM_DEBUG_LOG
+    // captures hl's output to a file to diagnose the early exit.
     let testcmd = std::env::var("HL_TERM_CMD").ok();
     let dbg = std::env::var("HL_TERM_DEBUG_LOG").ok();
     let dbgcmd = dbg
         .as_ref()
-        .map(|p| format!("exec '{}' workspace launch '{}' --slot '{}' > '{}' 2>&1", ddcli, tw.ws.name, slot, p));
+        .map(|p| format!("exec '{}' workspace launch '{}' --slot '{}' > '{}' 2>&1", hl, tw.ws.name, slot, p));
     let cwd_arg = cwd.filter(|c| c.starts_with('/'));
     // Always pass this pane's `--slot`; add `--restore` when this slot has a frozen tree to resume, else
     // a `--cwd` for OSC-7 new-tab-in-cwd. (Restore ignores cwd — the checkpoint carries every cwd.)
     let mut launch_args: Vec<&str> =
-        vec![ddcli.as_str(), "workspace", "launch", tw.ws.name.as_str(), "--slot", slot.as_str()];
+        vec![hl.as_str(), "workspace", "launch", tw.ws.name.as_str(), "--slot", slot.as_str()];
     if restore {
         launch_args.push("--restore");
     } else if let Some(dir) = &cwd_arg {
@@ -2727,8 +2727,8 @@ fn make_terminal_ex(tw: &Rc<TermWin>, cwd: Option<String>, history: Option<Strin
     } else {
         launch_args
     };
-    // A CLEAN minimal env — NOT the full parent env. dd-term runs under the nix devshell, whose
-    // DYLD_*/GTK/GI library-path vars would poison `ddcli`'s dynamic loader (and its forked engine),
+    // A CLEAN minimal env — NOT the full parent env. hl-term runs under the nix devshell, whose
+    // DYLD_*/GTK/GI library-path vars would poison `hl`'s dynamic loader (and its forked engine),
     // crashing it at startup (SIGSEGV). Pass only what a shell needs.
     let mut env = vec![
         "TERM=xterm-256color".to_string(),
@@ -3158,7 +3158,7 @@ struct DashData {
 /// Background thread: ensure the workspace daemon, then poll it over its Unix socket every ~2s.
 fn spawn_dashboard_poller(ws_name: String, shell: String, data: std::sync::Arc<std::sync::Mutex<DashData>>) {
     std::thread::spawn(move || {
-        // `ddcli workspace daemon <name>` starts (idempotently) the isolated daemon + prints its socket.
+        // `hl workspace daemon <name>` starts (idempotently) the isolated daemon + prints its socket.
         let sock = ddcli_command(&["workspace", "daemon", &ws_name])
             .output()
             .ok()
@@ -3176,7 +3176,7 @@ fn spawn_dashboard_poller(ws_name: String, shell: String, data: std::sync::Arc<s
                 None => d.error = Some("workspace daemon unavailable".into()),
             }
             // Workspace processes = the launched shells + their guest subprocesses, read from the host
-            // process table (they run in-process via dd-jit, NOT through the daemon).
+            // process table (they run in-process via hl-jit, NOT through the daemon).
             d.processes = workspace_processes(&ws_name, &shell);
             if let Ok(mut g) = data.lock() {
                 *g = d;
@@ -3250,7 +3250,7 @@ fn query_networks(sock: &std::path::Path) -> Vec<Vec<String>> {
         .map(|n| vec![s(n, "Name"), s(n, "Driver"), s(n, "Scope")])
         .collect()
 }
-/// The workspace's processes: every shell launched into this workspace (`ddcli workspace launch <name>`,
+/// The workspace's processes: every shell launched into this workspace (`hl workspace launch <name>`,
 /// which runs the engine IN-PROCESS — so there is no `--rootfs` child to match) plus all of their
 /// descendants (the guest's forks appear as host children of the launcher). Read from the host `ps`.
 /// A friendly name for the workspace's shell — the basename of the configured shell, else "bash" (the
@@ -3313,7 +3313,7 @@ fn filter_workspace_procs(ps_text: &str, ws_name: &str, shell: &str) -> Vec<Vec<
         })
         .map(|p| p.pid.clone())
         .collect();
-    // A launcher shell is a launch process whose PARENT is not itself a launcher (its parent is dd-term
+    // A launcher shell is a launch process whose PARENT is not itself a launcher (its parent is hl-term
     // or init); a launch process parented by another launcher is a guest fork, not a distinct shell.
     let mut keep: std::collections::HashSet<String> = launch_pids.clone();
     let roots: std::collections::HashSet<String> =
@@ -3364,7 +3364,7 @@ fn guest_cmd(cmd: &str) -> String {
 
 /// The Processes pane: a header + a body that [`fill_proc_table`] repopulates with a NAME column and
 /// per-row Stop (SIGTERM) / Force-kill (SIGKILL) buttons. These act on the host launcher process — i.e.
-/// the terminal shell session — because the workspace's guest processes run in-process (inside the dd-jit
+/// the terminal shell session — because the workspace's guest processes run in-process (inside the hl-jit
 /// engine) and aren't individually visible in the host process table.
 fn live_proc_pane() -> (gtk::ScrolledWindow, gtk::Box) {
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -3556,9 +3556,9 @@ fn maybe_shot(window: &gtk::ApplicationWindow, tag: &str) {
             (Some(node), Some(renderer)) => {
                 let tex = renderer.render_texture(&node, None);
                 let _ = tex.save_to_png(&path);
-                eprintln!("[dd-term] wrote screenshot {path} ({w}x{h})");
+                eprintln!("[hl-term] wrote screenshot {path} ({w}x{h})");
             }
-            _ => eprintln!("[dd-term] screenshot failed: no render node/renderer"),
+            _ => eprintln!("[hl-term] screenshot failed: no render node/renderer"),
         }
         std::process::exit(0);
     });
@@ -3640,9 +3640,9 @@ fn kill_pg(pid: i32) {
     }
 }
 
-/// A `Command` for our own `ddcli` with a CLEAN environment. dd-term runs from the `.app`, whose
-/// DYLD_*/GI library-path vars (pointing at the bundled nix GTK stack) poison `ddcli`'s dynamic loader and
-/// crash it + its forked engine at startup. EVERY `ddcli` invocation from the GUI must therefore clear the
+/// A `Command` for our own `hl` with a CLEAN environment. hl-term runs from the `.app`, whose
+/// DYLD_*/GI library-path vars (pointing at the bundled nix GTK stack) poison `hl`'s dynamic loader and
+/// crash it + its forked engine at startup. EVERY `hl` invocation from the GUI must therefore clear the
 /// inherited env and pass only the essentials — the same discipline the terminal-launch spawn already uses.
 /// Skipping this on the freeze-on-close checkpoint is why frozen workspaces silently lost their processes.
 fn ddcli_command(args: &[&str]) -> std::process::Command {
@@ -3661,22 +3661,22 @@ fn ddcli_command(args: &[&str]) -> std::process::Command {
 
 fn ddcli_path() -> String {
     if let Ok(home) = std::env::var("HOME") {
-        let p = format!("{home}/.local/bin/ddcli");
+        let p = format!("{home}/.local/bin/hl");
         if std::path::Path::new(&p).exists() {
             return p;
         }
     }
-    for p in ["/usr/local/bin/ddcli", "/opt/homebrew/bin/ddcli"] {
+    for p in ["/usr/local/bin/hl", "/opt/homebrew/bin/hl"] {
         if std::path::Path::new(p).exists() {
             return p.to_string();
         }
     }
-    "ddcli".to_string()
+    "hl".to_string()
 }
 
 fn hl_root() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    std::path::PathBuf::from(home).join(".dd")
+    std::path::PathBuf::from(home).join(".hl")
 }
 
 /// Allocate a fresh, stable checkpoint slot for a new pane ("0", "1", …).
@@ -3803,16 +3803,16 @@ mod macshim {
 mod tests {
     use super::filter_workspace_procs;
 
-    // A captured `ps -axo pid=,ppid=,etime=,command=` slice: dd-term (43405) with two launcher shells for
+    // A captured `ps -axo pid=,ppid=,etime=,command=` slice: hl-term (43405) with two launcher shells for
     // the `general` workspace, one of which (43444) has a guest fork (90001); plus an orphaned launcher
     // (16020, ppid 1), an UNRELATED workspace launcher (`ubuntu-dev`), and noise that must be excluded.
     const PS: &str = "\
-43405     1    01:00:00 ./target-mac/release/dd-term
-43444 43405       04:12 /Users/x/.local/bin/ddcli workspace launch general
-45125 43405       00:30 /Users/x/.local/bin/ddcli workspace launch general
-90001 43444       00:05 /Users/x/.local/bin/ddcli workspace launch general
-16020     1    02:03:04 /Users/x/.local/bin/ddcli workspace launch general
-17980     1       10:00 /Users/x/.local/bin/ddcli workspace launch ubuntu-dev
+43405     1    01:00:00 ./target-mac/release/hl-term
+43444 43405       04:12 /Users/x/.local/bin/hl workspace launch general
+45125 43405       00:30 /Users/x/.local/bin/hl workspace launch general
+90001 43444       00:05 /Users/x/.local/bin/hl workspace launch general
+16020     1    02:03:04 /Users/x/.local/bin/hl workspace launch general
+17980     1       10:00 /Users/x/.local/bin/hl workspace launch ubuntu-dev
 55500     1       10:00 /usr/sbin/some-daemon --workspace launch generalizer
 99999     1       00:01 grep workspace launch general";
 
@@ -3827,7 +3827,7 @@ mod tests {
         assert!(pids.contains(&"16020"), "missing orphaned launcher 16020");
         assert!(!pids.contains(&"17980"), "must not match ubuntu-dev launcher");
         assert!(!pids.contains(&"55500"), "must not match `generalizer` substring");
-        assert!(!pids.contains(&"43405"), "dd-term itself is not a workspace process");
+        assert!(!pids.contains(&"43405"), "hl-term itself is not a workspace process");
         // The fork is a plain process; launchers are named by shell + uptime (from etime).
         let fork = rows.iter().find(|r| r[0] == "90001").unwrap();
         assert_eq!(fork[2], "process");
@@ -3838,7 +3838,7 @@ mod tests {
     #[test]
     fn exact_name_match_no_prefix_collision() {
         // `general` must never pull in `general-2`'s launcher.
-        let ps = "100 1 00:10 /x/ddcli workspace launch general-2\n101 1 00:20 /x/ddcli workspace launch general";
+        let ps = "100 1 00:10 /x/hl workspace launch general-2\n101 1 00:20 /x/hl workspace launch general";
         let rows = filter_workspace_procs(ps, "general", "fish");
         let pids: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
         assert_eq!(pids, vec!["101"]);

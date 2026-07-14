@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 int main(void) {
-    const char *path = "/tmp/dd_fifo_nb";
+    const char *path = "/tmp/hl_fifo_nb";
     unlink(path); mkfifo(path, 0644);
     int wr = open(path, O_WRONLY | O_NONBLOCK);
     int enxio = (wr < 0 && errno == ENXIO);

@@ -1,9 +1,9 @@
-//! docker `--platform` ↔ dd-arch mapping: dd-images target arch ↔ runtime [`Guest`] personality,
+//! docker `--platform` ↔ hl-arch mapping: hl-images target arch ↔ runtime [`Guest`] personality,
 //! image-config arch detection, docker arch labels, and the pull arch-preference list.
 use super::*;
 use hl_jit::Guest;
 
-/// Map a dd-images (runtime-agnostic) target arch onto the runtime's guest personality.
+/// Map a hl-images (runtime-agnostic) target arch onto the runtime's guest personality.
 pub(crate) fn guest_of(a: hl_images::Arch) -> Guest {
     match a {
         hl_images::Arch::LinuxAarch64 => Guest::LinuxAarch64,
@@ -11,7 +11,7 @@ pub(crate) fn guest_of(a: hl_images::Arch) -> Guest {
     }
 }
 
-/// The image config's declared guest arch, if recognizable (dd-images detection mapped to a `Guest`).
+/// The image config's declared guest arch, if recognizable (hl-images detection mapped to a `Guest`).
 pub(crate) fn manifest_arch(config: &Value) -> Option<Guest> {
     hl_images::arch_from_config(config).map(guest_of)
 }
@@ -67,7 +67,7 @@ mod arch_map_tests {
     //! These assert what the code actually does today, not what docker conventions might imply.
     use super::*;
 
-    // ---- guest_of: dd-images Arch -> runtime Guest personality ----
+    // ---- guest_of: hl-images Arch -> runtime Guest personality ----
     #[test]
     fn guest_of_maps_each_arch_to_matching_guest() {
         assert_eq!(guest_of(hl_images::Arch::LinuxAarch64), Guest::LinuxAarch64);

@@ -23,9 +23,9 @@ int main(void) {
     printf("epoll_oneshot first=%d disabled=%d rearmed=%d\n", first, disabled, rearmed);
     // #390: this case was flaky under host load with a *fully empty* stdout (rc=0, never a wrong value)
     // — a `mac`-bridge teardown race that dropped the guest's final buffered stdout write. The former
-    // per-guest workaround (fflush + a 50ms drain gap before exit) is now REDUNDANT: the dd-tests runner
+    // per-guest workaround (fflush + a 50ms drain gap before exit) is now REDUNDANT: the hl-tests runner
     // captures guest stdout via a durable file on the shared repo tree instead of the bridge pipe (see
-    // `run()` in dd-tests/src/lib.rs), so the final line can no longer be lost in the stream teardown.
+    // `run()` in hl-tests/src/lib.rs), so the final line can no longer be lost in the stream teardown.
     // Verified 0 flakes / 50 runs under a mac-side CPU flood with no guest-side flush/sleep.
     return 0;
 }

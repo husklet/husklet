@@ -1,11 +1,11 @@
-//! dd-shim-cuda — the guest CUDA Driver API shim, in Rust (increment-1 SCAFFOLD).
+//! hl-shim-cuda — the guest CUDA Driver API shim, in Rust (increment-1 SCAFFOLD).
 //!
 //! Builds the single shared object deployed as `libcuda.so.1` (the CUDA Driver API soname). A CUDA
 //! app — or `libcudart` — that links `-lcuda` runs unmodified: every `cu*` symbol below is exported
 //! with the CUDA Driver API C ABI. The compute path (memory alloc/copy, PTX module load, kernel
-//! launch) lowers into a `dd-gpu` IR stream and — through [`hl_shim::transport`] — reaches the
+//! launch) lowers into a `hl-gpu` IR stream and — through [`hl_shim::transport`] — reaches the
 //! host executor as the SAME IR the host decodes with the SAME Rust code (no hand-rolled second
-//! encoder). This mirrors dd-shim-gl's increment-1 structure exactly.
+//! encoder). This mirrors hl-shim-gl's increment-1 structure exactly.
 //!
 //! ## Coverage
 //! The exported entry-point *surface* is code-generated from a committed manifest (`build.rs` +
@@ -21,7 +21,7 @@
 //! `cuModuleGetFunction`, `cuLaunchKernel` (→ compute pipeline + dispatch), `cuMemcpyDtoH_v2` (real
 //! device→host readback), and `cuStream*`/`cuEvent*` synchronization — all through the shared
 //! [`hl_gpu::cuda::CudaContext`] mapping. The accumulated IR is EXECUTED in-process on an embedded
-//! [`hl_gpu::software::SoftwareBackend`] (the CPU PTX interpreter — the same executor `dd-gpu`'s oracle
+//! [`hl_gpu::software::SoftwareBackend`] (the CPU PTX interpreter — the same executor `hl-gpu`'s oracle
 //! and `hl-gpu/cuda/cuda_shim.c` use), so a real vector-add PTX kernel runs end-to-end and reads back
 //! numerically correct results with NO GPU. On a real Apple-silicon host the same IR is shipped over
 //! `$HL_GPU_EXEC` to the host Metal executor instead. See `docs/rendering/SHIM_RUST_ARCHITECTURE.md`.
@@ -30,7 +30,7 @@
 #![allow(non_snake_case)]
 
 // The shared IR + transport foundation. Re-exported so this crate's modules (and readers) see that the
-// IR type is dd-gpu's, not a local copy.
+// IR type is hl-gpu's, not a local copy.
 pub use hl_shim as common;
 
 pub mod capability;
@@ -76,7 +76,7 @@ mod tests {
     // Count of hand-written entry points (kept in sync with build.rs IMPLEMENTED via the census).
     const IMPLEMENTED_COUNT: usize = TOTAL_ENTRYPOINTS - GENERATED_STUBS;
 
-    /// Anti-drift round-trip (mirrors dd-shim-gl's `framebuilder_encodes_the_shared_contract`): drive
+    /// Anti-drift round-trip (mirrors hl-shim-gl's `framebuilder_encodes_the_shared_contract`): drive
     /// the REAL exported `cu*` entry points through a full alloc → H2D → PTX-module → launch sequence,
     /// then decode the accumulated IR bytes with the HOST's own `hl_gpu::ir` decoder. Same bytes, same
     /// code path — the guest producer and host executor cannot drift.
@@ -146,7 +146,7 @@ mod tests {
         let cmds = decode_stream(&bytes).expect("host decoder must accept shim-encoded IR");
 
         // Structure: three device allocations, one host upload, a kernel shader + compute pipeline, and
-        // a compute dispatch — the CUDA compute model expressed in dd-gpu IR.
+        // a compute dispatch — the CUDA compute model expressed in hl-gpu IR.
         let buffers = cmds.iter().filter(|c| matches!(c, Cmd::CreateBuffer(..))).count();
         assert!(buffers >= 3, "expected >=3 CreateBuffer (a,b,c[,params]), got {buffers}");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::WriteBuffer { .. })), "H2D -> WriteBuffer");
@@ -168,7 +168,7 @@ mod tests {
     /// THE FUNCTIONAL MILESTONE: drive the REAL exported `cu*` entry points through a full vector-add —
     /// alloc → H2D → module load → get function → launch → **DtoH** — and assert the read-back output is
     /// arithmetically correct (`c[i] == a[i] + b[i]`). This proves the whole guest path executes
-    /// end-to-end: the shim lowers CUDA to the shared dd-gpu IR, the IR runs the PTX kernel on the
+    /// end-to-end: the shim lowers CUDA to the shared hl-gpu IR, the IR runs the PTX kernel on the
     /// embedded software backend (CPU interpreter), and `cuMemcpyDtoH_v2` returns the real results — the
     /// same numbers `hl-gpu/cuda/cuda_shim.c` (the parity oracle) produces. No GPU, no host process.
     #[test]

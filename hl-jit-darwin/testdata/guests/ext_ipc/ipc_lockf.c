@@ -8,7 +8,7 @@
 #include <time.h>
 #include <sys/wait.h>
 int main(void) {
-    char path[] = "/tmp/dd_lockf_XXXXXX"; int fd = mkstemp(path);
+    char path[] = "/tmp/hl_lockf_XXXXXX"; int fd = mkstemp(path);
     ftruncate(fd, 100);
     lockf(fd, F_LOCK, 100);
     int p[2]; pipe(p);

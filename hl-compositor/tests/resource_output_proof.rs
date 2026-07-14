@@ -1,5 +1,5 @@
 //! Behavioral regression proof for the compositor resource/output ledger cluster. Drives the public
-//! dd-compositor API over an in-process Wayland client to prove: per-client render budgets charge
+//! hl-compositor API over an in-process Wayland client to prove: per-client render budgets charge
 //! presenter objects and reclaim every dimension on surface teardown (rows on client-owned resource
 //! reclamation + per-client budgets); geometry-intersection output routing selects the max-overlap
 //! output and falls back to the nearest; and output hot-unplug migrates surfaces to a fallback output
@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use hl_compositor::{ClientState, DdState};
+use hl_compositor::{ClientState, HlState};
 use hl_display::present::{
     IOSurfaceMetadata, PresentError, PresentOutcome, Presenter, SurfaceBuffer,
 };
@@ -123,7 +123,7 @@ fn socketpair_nonblocking() -> (RawFd, RawFd) {
 
 #[test]
 fn resource_output_cluster_behavioral_proof() {
-    // dmabuf global is opt-in; set before any DdState::new so the zero-copy block advertises it.
+    // dmabuf global is opt-in; set before any HlState::new so the zero-copy block advertises it.
     std::env::set_var("HL_DISPLAY_DMABUF", "1");
 
     // Rows 1 (shm teardown), 2 (budget incl. presenter objects), 4 (geometry routing), 5 (hotplug +
@@ -139,37 +139,37 @@ fn resource_output_cluster_behavioral_proof() {
 
 /// ROW 4: geometry-intersection output routing + a real surface routed by geometry.
 fn row_geometry_output_routing() {
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let mut state = DdState::new(
+    let mut state = HlState::new(
         dh.clone(),
         Box::new(ProofPresenter::new(Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())), None)),
     );
-    // Primary dd-0 is logical 2560x1440 @ (0,0). Add dd-1 at (3000,0), logical 1920x1080.
-    state.add_output("dd-1", "second", (1920, 1080), 1, (3000, 0));
+    // Primary hl-0 is logical 2560x1440 @ (0,0). Add hl-1 at (3000,0), logical 1920x1080.
+    state.add_output("hl-1", "second", (1920, 1080), 1, (3000, 0));
 
-    // Fully inside dd-1.
+    // Fully inside hl-1.
     assert_eq!(
         state.output_for_geometry(3200, 100, 400, 300).map(|o| o.name()).as_deref(),
-        Some("dd-1"),
-        "a rect wholly inside dd-1's logical area routes to dd-1"
+        Some("hl-1"),
+        "a rect wholly inside hl-1's logical area routes to hl-1"
     );
-    // Fully inside dd-0.
+    // Fully inside hl-0.
     assert_eq!(
         state.output_for_geometry(100, 100, 400, 300).map(|o| o.name()).as_deref(),
-        Some("dd-0"),
-        "a rect wholly inside dd-0 routes to dd-0"
+        Some("hl-0"),
+        "a rect wholly inside hl-0 routes to hl-0"
     );
-    // Straddle the gap, mostly over dd-1 (rect x[2900,3600): 100px over dd-0 edge, 600px over dd-1).
+    // Straddle the gap, mostly over hl-1 (rect x[2900,3600): 100px over hl-0 edge, 600px over hl-1).
     assert_eq!(
         state.output_for_geometry(2900, 100, 700, 300).map(|o| o.name()).as_deref(),
-        Some("dd-1"),
+        Some("hl-1"),
         "a straddling rect routes to the output it overlaps most"
     );
-    // Entirely off every output → nearest by center distance (dd-1's center is closer at x~9000).
+    // Entirely off every output → nearest by center distance (hl-1's center is closer at x~9000).
     assert_eq!(
         state.output_for_geometry(9000, 100, 100, 100).map(|o| o.name()).as_deref(),
-        Some("dd-1"),
+        Some("hl-1"),
         "an off-screen rect falls back to the nearest output"
     );
 
@@ -192,9 +192,9 @@ fn row_geometry_output_routing() {
     let surface = c.alloc();
     c.conn.send(&Message::new(comp, 0).u32(surface)); // create_surface -> sid 1
     pump!();
-    assert_eq!(state.surface_output_name(1).as_deref(), Some("dd-0"), "new surface starts on the primary output");
+    assert_eq!(state.surface_output_name(1).as_deref(), Some("hl-0"), "new surface starts on the primary output");
     assert!(state.route_surface_by_geometry(1, 3200, 50, 400, 300), "geometry routing migrates the surface");
-    assert_eq!(state.surface_output_name(1).as_deref(), Some("dd-1"), "the surface is now a member of dd-1");
+    assert_eq!(state.surface_output_name(1).as_deref(), Some("hl-1"), "the surface is now a member of hl-1");
     // Idempotent: routing to the same geometry/output again is a no-op.
     assert!(!state.route_surface_by_geometry(1, 3200, 50, 400, 300), "no migration when already on the target output");
 }
@@ -202,14 +202,14 @@ fn row_geometry_output_routing() {
 /// ROW 5: host output hot-unplug migrates surfaces to a fallback AND re-issues a fullscreen configure at
 /// the new output's size, with the wl_surface.enter(new) event ORDERED before the xdg_toplevel.configure.
 fn row_hotplug_migrate_and_fullscreen_reconfigure() {
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
-    let mut state = DdState::new(
+    let mut state = HlState::new(
         dh.clone(),
         Box::new(ProofPresenter::new(Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(Vec::new())), None)),
     );
     // Host connects a second display; assert the notification wired through to an advertised output.
-    state.on_host_output_connected("dd-1", "second", (1920, 1080), 1, (3000, 0));
+    state.on_host_output_connected("hl-1", "second", (1920, 1080), 1, (3000, 0));
 
     let (client_fd, server_fd) = socketpair_nonblocking();
     dh.insert_client(unsafe { std::os::unix::net::UnixStream::from_raw_fd(server_fd) }, Arc::new(ClientState::default())).unwrap();
@@ -244,26 +244,26 @@ fn row_hotplug_migrate_and_fullscreen_reconfigure() {
     c.conn.send(&Message::new(xdg, 4).u32(serial)); // ack_configure
     pump!();
 
-    // Move the toplevel onto dd-1 and make it fullscreen there (set_fullscreen(output=null) uses the
+    // Move the toplevel onto hl-1 and make it fullscreen there (set_fullscreen(output=null) uses the
     // surface's selected output).
-    assert!(state.route_surface_to_output(1, "dd-1"));
+    assert!(state.route_surface_to_output(1, "hl-1"));
     c.conn.send(&Message::new(top, 11).u32(0)); // xdg_toplevel.set_fullscreen(output: null)
     pump!();
-    assert_eq!(state.surface_output_name(1).as_deref(), Some("dd-1"), "fullscreen toplevel lives on dd-1");
+    assert_eq!(state.surface_output_name(1).as_deref(), Some("hl-1"), "fullscreen toplevel lives on hl-1");
     c.events.clear();
 
-    // Host disconnects dd-1: migrate to dd-0 (fallback) and reconfigure fullscreen at dd-0's size.
-    assert!(state.on_host_output_disconnected("dd-1"), "disconnect notification retires the output");
+    // Host disconnects hl-1: migrate to hl-0 (fallback) and reconfigure fullscreen at hl-0's size.
+    assert!(state.on_host_output_disconnected("hl-1"), "disconnect notification retires the output");
     pump!();
-    assert_eq!(state.surface_output_name(1).as_deref(), Some("dd-0"), "surface migrated to the fallback output");
+    assert_eq!(state.surface_output_name(1).as_deref(), Some("hl-0"), "surface migrated to the fallback output");
 
-    // The client must have received a wl_surface.enter for dd-0 BEFORE the fullscreen xdg_toplevel.configure.
+    // The client must have received a wl_surface.enter for hl-0 BEFORE the fullscreen xdg_toplevel.configure.
     let enter_idx = c.events.iter().position(|(o, op, _)| *o == surface && *op == 0);
     let cfg_idx = c.events.iter().position(|(o, op, _)| *o == top && *op == 0);
     assert!(enter_idx.is_some(), "migrated surface received a wl_surface.enter for its new output");
     assert!(cfg_idx.is_some(), "migrated fullscreen toplevel received a fresh configure");
     assert!(enter_idx.unwrap() < cfg_idx.unwrap(), "enter(new output) must precede the fullscreen configure");
-    // The reconfigure carries dd-0's logical size (2560x1440), not dd-1's (1920x1080).
+    // The reconfigure carries hl-0's logical size (2560x1440), not hl-1's (1920x1080).
     let (_, _, body) = &c.events[cfg_idx.unwrap()];
     let (w, h) = (i32::from_ne_bytes([body[0], body[1], body[2], body[3]]), i32::from_ne_bytes([body[4], body[5], body[6], body[7]]));
     assert_eq!((w, h), (2560, 1440), "fullscreen reconfigure uses the new output's logical size");
@@ -272,10 +272,10 @@ fn row_hotplug_migrate_and_fullscreen_reconfigure() {
 /// ROWS 1 & 2 (shm path): presenter-object charge + exact teardown reclamation across every budget
 /// dimension. Also proves a surface-budget refusal posts a deterministic protocol error.
 fn row_shm_budget_and_teardown() {
-    let mut display: Display<DdState> = Display::new().unwrap();
+    let mut display: Display<HlState> = Display::new().unwrap();
     let mut dh = display.handle();
     let dropped = Arc::new(Mutex::new(Vec::new()));
-    let mut state = DdState::new(
+    let mut state = HlState::new(
         dh.clone(),
         Box::new(ProofPresenter::new(Arc::new(Mutex::new(Vec::new())), dropped.clone(), None)),
     );

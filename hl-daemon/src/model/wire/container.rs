@@ -37,7 +37,7 @@ pub(crate) struct Ulimit {
 
 /// Serialize `Container.arch` (an `Option<Guest>`) as the guest's stable `target()` string (e.g.
 /// `"linux_x86_64"`) in `state.json`, so the arch survives a daemon restart even when the backing image
-/// is gone. `Guest` itself has no serde derive, so this bridges it without touching the ddjit crate.
+/// is gone. `Guest` itself has no serde derive, so this bridges it without touching the hljit crate.
 mod arch_serde {
     use super::Guest;
     use serde::{Deserialize, Deserializer, Serializer};

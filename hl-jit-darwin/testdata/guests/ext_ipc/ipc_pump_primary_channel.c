@@ -37,7 +37,7 @@
 // Assert: every message the browser sends is woken + recv'd on the IO pump AND dispatched + processed on
 // the main pump within a bound. A lost readiness edge / lost cross-thread wake on ANY leg parks a pump
 // with work pending = the dormant renderer; a watchdog turns that into a deterministic nonzero exit
-// (exit 7), never a hang. If this reproduces the stall, localize in dd-jit-darwin
+// (exit 7), never a hang. If this reproduces the stall, localize in hl-jit-darwin
 // (src/runtime/os/linux/syscall/event.c: kqueue readiness-prime / level re-report for an SCM_RIGHTS-
 // received socket under concurrent epoll_ctl + high-fd load, or the eventfd cross-thread wake).
 #define _GNU_SOURCE

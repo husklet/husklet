@@ -15,7 +15,7 @@
 //     0F3A 20..22   PINSRB / INSERTPS / PINSRD/Q             (reg or mem source)
 //     0F3A DF       AESKEYGENASSIST (one AESE + one TBL -- ShiftRows folded into the index vector)
 //
-// Same quality bar as translate/crypto.c: byte-exact vs the qemu oracle (dd-tests completeness guest),
+// Same quality bar as translate/crypto.c: byte-exact vs the qemu oracle (hl-tests completeness guest),
 // no EFLAGS interaction (none of these ops read or write flags), scratch = x16 (GPR), v16..v19 (vector).
 // A/B kill-switch: NOSSEOPT=1 falls back to the do_sse3b block-exit path (same gate as the shuffle glue).
 

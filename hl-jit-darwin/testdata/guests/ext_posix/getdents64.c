@@ -12,7 +12,7 @@ struct lde { unsigned long ino, off; unsigned short reclen; unsigned char type; 
 
 int main(void) {
     char dir[128];
-    snprintf(dir, sizeof dir, "/tmp/dd_gd64_%d", (int)getpid());
+    snprintf(dir, sizeof dir, "/tmp/hl_gd64_%d", (int)getpid());
     mkdir(dir, 0755);
     char p[200];
     snprintf(p, sizeof p, "%s/reg", dir); close(open(p, O_CREAT | O_WRONLY, 0644));

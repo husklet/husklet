@@ -1,5 +1,5 @@
 //! Dead-simple self-update: ask GitHub for the latest release and, if it's newer than the running
-//! version, download its `.dmg` and swap `/Applications/dd.app`. Uses `curl` + `hdiutil`
+//! version, download its `.dmg` and swap `/Applications/hl.app`. Uses `curl` + `hdiutil`
 //! (always present on macOS), so no HTTP/TLS dependencies.
 
 use serde::Deserialize;
@@ -36,7 +36,7 @@ struct Asset {
 pub fn check(current: &str) -> Option<Release> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let out = Command::new("curl")
-        .args(["-fsSL", "-H", "User-Agent: dd-app", &url])
+        .args(["-fsSL", "-H", "User-Agent: hl-app", &url])
         .output()
         .ok()?;
     if !out.status.success() {
@@ -62,10 +62,10 @@ pub fn check(current: &str) -> Option<Release> {
     })
 }
 
-/// Download the release `.dmg`, replace `/Applications/dd.app`, clear quarantine and reopen.
+/// Download the release `.dmg`, replace `/Applications/hl.app`, clear quarantine and reopen.
 /// Blocking; the caller should quit after this succeeds (the new copy is already launching).
 pub fn install(rel: &Release) -> Result<(), String> {
-    let tmp = std::env::temp_dir().join("dd-update");
+    let tmp = std::env::temp_dir().join("hl-update");
     let dmg = tmp.join("dd.dmg");
     let mnt = tmp.join("mnt");
     std::fs::create_dir_all(&mnt).map_err(|e| e.to_string())?;
@@ -88,7 +88,7 @@ pub fn install(rel: &Release) -> Result<(), String> {
                 .find(|p| p.extension().is_some_and(|x| x == "app"))
         })
         .ok_or("no .app inside the dmg")?;
-    let dest = "/Applications/dd.app";
+    let dest = "/Applications/hl.app";
     let _ = std::fs::remove_dir_all(dest);
     let copied = sh("cp", &["-R", &app.to_string_lossy(), "/Applications/"]);
     let _ = sh("hdiutil", &["detach", &mnt.to_string_lossy(), "-force"]);

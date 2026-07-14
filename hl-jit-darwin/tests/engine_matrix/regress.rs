@@ -23,7 +23,7 @@ pub(super) fn regress() -> Group {
         // sched_getaffinity(tid) for a NON-main guest thread must not spuriously return ESRCH. glibc's
         // pthread_getattr_np (HotSpot's os::current_stack_region on EVERY JVM thread bring-up, also Go)
         // calls sched_getaffinity(pd->tid) first; dd validated that pid with host kill(guest_tid,0) -> ESRCH
-        // (a guest tid is a dd-internal id, not a host pid) -> pthread_getattr_np returned 3 -> `java -version`
+        // (a guest tid is a hl-internal id, not a host pid) -> pthread_getattr_np returned 3 -> `java -version`
         // aborted "pthread_getattr_np failed with error = 3". Fix resolves guest tids via the live-thread
         // registry. Pre-fix: tid=0 wrap=0 getattr=0; post-fix matches native. Linux-only (no pthread_getattr_np
         // on macOS libc). Shared proc.c fix -> both arches.
@@ -117,7 +117,7 @@ pub(super) fn regress() -> Group {
         // to the wrong host-relative bytes). The literal must resolve to the identical guest value cold or
         // warm; diffed byte-exact vs native either way.
         src("ldrsw-literal-pcache", "ldrsw_literal.c")
-            .env("HL_JIT_PCACHE", "1").env("HL_JIT_PCACHE_DIR", "/tmp/ddjit-pcache-ldrsw")
+            .env("HL_JIT_PCACHE", "1").env("HL_JIT_PCACHE_DIR", "/tmp/hljit-pcache-ldrsw")
             .oracle().only(&[Engine::LinuxAarch64]),
         // V8's embedded-builtins CODE base (symbol v8_Default_embedded_blob_code_) is a baked LOW.text
         // address loaded via `mov r,imm`; the builtins execute at the HIGH mapping, so V8's

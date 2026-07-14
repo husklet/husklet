@@ -1,14 +1,14 @@
-# dd-jit
+# hl-jit
 
 A clean, platform-agnostic Rust API for **configuring and running Linux containers directly from
-code** — no Docker daemon, no VM, no shelling out. `dd-jit` picks a host backend at compile time
-(`dd-jit-darwin` today; `dd-jit-linux` / `dd-jit-win` in future — all the same API) and runs the
+code** — no Docker daemon, no VM, no shelling out. `hl-jit` picks a host backend at compile time
+(`hl-jit-darwin` today; `hl-jit-linux` / `hl-jit-win` in future — all the same API) and runs the
 container through the VM-less dd JIT engine.
 
 ## Configure and launch a container from Rust
 
 ```rust
-use dd_jit::{Runtime, Container, Image};
+use hl_jit::{Runtime, Container, Image};
 
 let rt = Runtime::new()?;                                   // the host backend (darwin today)
 
@@ -27,11 +27,11 @@ let mut handle = rt.run(&container)?;                       // launch
 println!("pid {}", handle.pid());
 let status = handle.wait()?;                                // or handle.signal(libc::SIGTERM)
 println!("exited {}", status.code());
-# Ok::<(), dd_jit::Error>(())
+# Ok::<(), hl_jit::Error>(())
 ```
 
 Runnable version: [`examples/run_container.rs`](examples/run_container.rs)
-(`cargo run -p dd-jit --example run_container -- /path/to/rootfs`).
+(`cargo run -p hl-jit --example run_container -- /path/to/rootfs`).
 
 ## What the builder covers
 
@@ -42,10 +42,10 @@ with sensible defaults (unlimited resources, shared network, root user); set onl
 
 ## The two-crate model
 
-- **`dd-jit`** — this crate: the public API (`Runtime`, `Image`, `Container` + builder, `RunHandle`,
+- **`hl-jit`** — this crate: the public API (`Runtime`, `Image`, `Container` + builder, `RunHandle`,
   `Error`). Platform-agnostic; depends only on the backend for the current host.
-- **`dd-jit-darwin`** — the macOS-host backend: the C DBT engine (x86-64 + aarch64 Linux guests → ARM64)
+- **`hl-jit-darwin`** — the macOS-host backend: the C DBT engine (x86-64 + aarch64 Linux guests → ARM64)
   and the darwinjail for native macOS containers.
 
-[`dd-daemon`](../dd-daemon) is a thin Docker-Engine-API polyfill layered on top of this crate: it
-translates Docker HTTP requests into `dd_jit` calls and owns no runtime logic of its own.
+[`hl-daemon`](../hl-daemon) is a thin Docker-Engine-API polyfill layered on top of this crate: it
+translates Docker HTTP requests into `hl_jit` calls and owns no runtime logic of its own.

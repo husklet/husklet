@@ -1,12 +1,12 @@
 //! Multi-window + Chrome split-client input routing.
 //!
-//! ## The problem this solves (ported from the legacy `dd-display` `run_multi` / `route_input`)
+//! ## The problem this solves (ported from the legacy `hl-display` `run_multi` / `route_input`)
 //! The native present backend shows one host window (NSWindow) per presented surface, keyed by the
 //! compositor's HOST surface id. Two things then need routing that a single "keyboard focus" cannot
 //! express on its own:
 //!   1. **Multi-window**: a click on window B must reach the surface B backs, not whatever last held
 //!      focus. The presenter maps the clicked `NSWindow*` → host sid (`Presenter::window_ptr_to_sid`);
-//!      [`DdState::route_window_input`] turns that host sid into a routing decision.
+//!      [`HlState::route_window_input`] turns that host sid into a routing decision.
 //!   2. **Chrome split-client**: Chrome's BROWSER connection owns the `wl_seat` + `xdg_toplevel` (input +
 //!      geometry) while a SEPARATE gpu/shim connection commits the visible IOSurface. So the window the
 //!      user clicks is owned by a connection that CANNOT consume input; the event must be FORWARDED to the
@@ -14,14 +14,14 @@
 //!      IOSurface is cropped to the visible window region (`external_logical_crop`, applied at present).
 //!
 //! ## Architecture note (legacy vs Smithay)
-//! The legacy path had one `Server` per Wayland connection and iterated `&mut [Server]`; dd-compositor has
-//! ONE `DdState` with many Smithay clients sharing one seat/presenter. So "which connection can receive
-//! input" becomes a per-CLIENT predicate ([`DdState::surface_can_receive_input`], keyed on
+//! The legacy path had one `Server` per Wayland connection and iterated `&mut [Server]`; hl-compositor has
+//! ONE `HlState` with many Smithay clients sharing one seat/presenter. So "which connection can receive
+//! input" becomes a per-CLIENT predicate ([`HlState::surface_can_receive_input`], keyed on
 //! `seat_input_clients` — clients that have held keyboard focus, i.e. bound `wl_seat`), and the forward
 //! target is the current keyboard-focused surface (unambiguous — there is exactly one focus).
 //!
 //! ## Validation
-//! The routing DECISION + geometry-mirror STATE MACHINE are pure functions over `DdState` and are proven
+//! The routing DECISION + geometry-mirror STATE MACHINE are pure functions over `HlState` and are proven
 //! by the in-process `input_routing_tests`. The AppKit wiring in `main.rs` (`window_ptr_to_sid` → route →
 //! deliver) is macOS-only and needs a live multi-window app on the mac bridge to validate end-to-end.
 
@@ -29,7 +29,7 @@ use hl_display::present::SurfaceBuffer;
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
-use crate::DdState;
+use crate::HlState;
 
 /// A temporary logical crop mirrored from the input (browser) connection onto the visible (gpu/shim)
 /// connection so its IOSurface is cropped to the browser window's region at present time.
@@ -79,7 +79,7 @@ pub fn mirror_input_geometry_enabled() -> bool {
     )
 }
 
-impl DdState {
+impl HlState {
     /// Whether the surface's owning CLIENT can consume input — i.e. it has bound the seat (held keyboard
     /// focus at least once). Chrome's browser connection returns true; its gpu/shim connection false.
     pub(crate) fn surface_can_receive_input(&self, sid: u32) -> bool {
