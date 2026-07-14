@@ -454,9 +454,15 @@ fn append_decls_unique(dst: &mut Vec<Decl>, src: Vec<Decl>, max: usize) {
 /// Vertex attributes: `attribute` decls + `in` decls (unique by name) — gl_shim.c
 /// `collect_vertex_attrs`.
 pub fn collect_vertex_attrs(vs: &str) -> Vec<Decl> {
-    let mut attrs = collect(vs, "attribute");
+    // Strip comments FIRST, matching every sibling reflection helper (`collect_uniforms`,
+    // `program_frag_outputs`, …). Without this, a comment mentioning `attribute`/`in` (e.g. a legacy
+    // declaration commented out) would be collected as a phantom attribute — shifting the location
+    // namespace that `attrib_location`/`active_attrib`/the frame vertex layout key on AWAY from the
+    // layout the translator emits (which runs on stripped source). Idempotent when the caller pre-strips.
+    let vs = strip_comments(vs);
+    let mut attrs = collect(&vs, "attribute");
     attrs.truncate(16);
-    let tmp = collect(vs, "in");
+    let tmp = collect(&vs, "in");
     append_decls_unique(&mut attrs, tmp, 16);
     attrs
 }

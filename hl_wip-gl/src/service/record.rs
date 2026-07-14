@@ -253,6 +253,10 @@ pub fn tex_storage_2d(ctx: &mut GlContext, target: u32, levels: i32, internalfor
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
+    if w > crate::service::query::MAX_TEXTURE_SIZE || h > crate::service::query::MAX_TEXTURE_SIZE {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
     let name = ctx.tex_unit[ctx.active_texture];
     match ctx.textures.get(name) {
         _ if name == 0 => {
@@ -382,9 +386,14 @@ pub fn copy_tex_sub_image_2d(ctx: &mut GlContext, target: u32, level: i32, xo: i
     if w == 0 || h == 0 {
         return;
     }
-    // Validate the destination rect fits the bound texture.
+    // Validate the destination rect fits the bound texture. The `+` are widened to i64 so a huge (or
+    // adversarial) offset/extent can never overflow an i32 and panic — it just fails the fit and raises
+    // GL_INVALID_VALUE.
     match ctx.textures.get(dst) {
-        Some(t) if !t.data.is_empty() && xo + w <= t.w && yo + h <= t.h => {}
+        Some(t)
+            if !t.data.is_empty()
+                && xo as i64 + w as i64 <= t.w as i64
+                && yo as i64 + h as i64 <= t.h as i64 => {}
         Some(_) => {
             ctx.set_gl_error(GL_INVALID_VALUE);
             return;
@@ -398,7 +407,7 @@ pub fn copy_tex_sub_image_2d(ctx: &mut GlContext, target: u32, level: i32, xo: i
     // an absent/dataless source (default framebuffer, or an FBO not yet rendered) is the honest no-op.
     let src = ctx.framebuffers.color_attachment(ctx.read_fbo);
     let src_rows: Option<(Vec<u8>, usize)> = ctx.textures.get(src).and_then(|st| {
-        if st.data.is_empty() || x + w > st.w || y + h > st.h {
+        if st.data.is_empty() || x as i64 + w as i64 > st.w as i64 || y as i64 + h as i64 > st.h as i64 {
             return None;
         }
         let (sw, w, h) = (st.w as usize, w as usize, h as usize);
@@ -560,7 +569,9 @@ pub fn renderbuffer_storage(ctx: &mut GlContext, target: u32, _internalformat: u
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
-    if w < 0 || h < 0 {
+    // A negative extent, or one beyond the advertised GL_MAX_RENDERBUFFER_SIZE, is GL_INVALID_VALUE (real
+    // GL rejects an oversized renderbuffer). This also bounds the backing-plane allocation to a sane size.
+    if w < 0 || h < 0 || w > crate::service::query::MAX_TEXTURE_SIZE || h > crate::service::query::MAX_TEXTURE_SIZE {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }

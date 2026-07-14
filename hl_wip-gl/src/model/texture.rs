@@ -120,14 +120,20 @@ impl Textures {
     /// its generation. `pixels` is the already-converted RGBA8 image (`w*h*4` bytes) or empty for a
     /// storage-only define (e.g. an FBO color attachment allocated before it is rendered into).
     pub fn image_2d(&mut self, name: u32, w: i32, h: i32, pixels: &[u8], format: TextureFormat) {
+        // The zeroed-storage byte size, computed in usize with a checked multiply so a large (or
+        // adversarial) w*h never overflows an i32 and panics — an out-of-range extent saturates to a
+        // no-alloc `None` rather than crashing the driver (the record layer raises GL_INVALID_VALUE).
+        let want = (w.max(0) as usize).checked_mul(h.max(0) as usize).and_then(|n| n.checked_mul(4));
         let t = self.map.entry(name).or_default();
         t.w = w;
         t.h = h;
         t.ir_format = format;
         if !pixels.is_empty() {
             t.data = pixels.to_vec();
-        } else if t.data.len() != (w * h * 4) as usize {
-            t.data = vec![0u8; (w.max(0) * h.max(0) * 4) as usize];
+        } else if let Some(want) = want {
+            if t.data.len() != want {
+                t.data = vec![0u8; want];
+            }
         }
         t.gen += 1;
     }

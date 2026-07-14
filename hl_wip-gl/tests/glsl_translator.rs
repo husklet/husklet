@@ -1,0 +1,277 @@
+//! Adversarial coverage for the just-rewritten GLSL-ES → naga-acceptable desktop GLSL 460 translator
+//! (`adapter/glsl.rs`). The host (naga `glsl-in`) owns the real compile, so we assert the STRUCTURAL
+//! invariants of the emitted source (the form naga accepts) + the reflection helpers the pipeline keys on,
+//! across varied real shaders and malformed input. Every assertion checks REAL translator output — never
+//! "didn't crash".
+
+use hl_gl::adapter::glsl;
+
+// ---------------------------------------------------------------------------------------------------
+// desktop-GLSL form invariants: no ES dialect leaks; #version pinned; entry present
+// ---------------------------------------------------------------------------------------------------
+
+/// A helper that fails loudly if any ES-dialect token survives into the emitted desktop GLSL.
+fn assert_no_es_leaks(src: &str) {
+    for banned in ["attribute ", "varying ", "gl_FragColor", "texture2D(", "#version 300", " es\n"] {
+        assert!(!src.contains(banned), "ES dialect token {banned:?} leaked into emitted GLSL:\n{src}");
+    }
+    assert!(src.contains("#version 460"), "desktop #version not pinned:\n{src}");
+    assert!(src.contains("void main()"), "entry point missing:\n{src}");
+}
+
+#[test]
+fn es2_attribute_varying_fragcolor_shader_is_fully_desktopized() {
+    let vs = "attribute vec3 aPos;\nattribute vec2 aUV;\nvarying vec2 vUV;\nuniform mat4 uMVP;\n\
+              void main(){ vUV = aUV; gl_Position = uMVP * vec4(aPos, 1.0); }\n";
+    let fs = "precision mediump float;\nvarying vec2 vUV;\nuniform sampler2D uTex;\n\
+              void main(){ gl_FragColor = texture2D(uTex, vUV); }\n";
+    let (v, f) = glsl::translate_render(vs, fs);
+
+    assert_no_es_leaks(&v);
+    assert_no_es_leaks(&f);
+
+    // Both attributes get sequential explicit locations in declaration order.
+    assert!(v.contains("layout(location = 0) in vec3 aPos;"), "{v}");
+    assert!(v.contains("layout(location = 1) in vec2 aUV;"), "{v}");
+    // The varying is an `out` in the vertex stage and an `in` in the fragment stage at the SAME location.
+    assert!(v.contains("layout(location = 0) out vec2 vUV;"), "{v}");
+    assert!(f.contains("layout(location = 0) in vec2 vUV;"), "{f}");
+    // The uniform block lands at binding 1; the sampler at binding 0.
+    assert!(v.contains("layout(std140, binding = 1) uniform HlUniforms {"), "{v}");
+    assert!(v.contains("mat4 uMVP;"), "{v}");
+    assert!(f.contains("layout(binding = 0) uniform sampler2D uTex;"), "{f}");
+    // The synthesized fragment output + rewritten gl_FragColor/texture2D.
+    assert!(f.contains("layout(location = 0) out vec4 hl_FragColor;"), "{f}");
+    assert!(f.contains("hl_FragColor = texture(uTex, vUV)"), "{f}");
+    // The vertex body carries through verbatim (built-in gl_Position preserved).
+    assert!(v.contains("gl_Position ="), "{v}");
+}
+
+#[test]
+fn es3_in_out_shader_with_explicit_frag_output_keeps_the_named_output() {
+    let vs = "#version 300 es\nin vec3 aPos;\nout vec3 vColor;\n\
+              void main(){ vColor = aPos; gl_Position = vec4(aPos, 1.0); }\n";
+    let fs = "#version 300 es\nprecision highp float;\nin vec3 vColor;\nout vec4 fragColor;\n\
+              void main(){ fragColor = vec4(vColor, 1.0); }\n";
+    let (v, f) = glsl::translate_render(vs, fs);
+    assert_no_es_leaks(&v);
+    assert_no_es_leaks(&f);
+
+    // ES3 `in` attribute recognized (no `attribute` keyword) and located.
+    assert!(v.contains("layout(location = 0) in vec3 aPos;"), "{v}");
+    // The named ES3 fragment output is REUSED (not replaced with hl_FragColor), at location 0.
+    assert!(f.contains("layout(location = 0) out vec4 fragColor;"), "{f}");
+    assert!(!f.contains("hl_FragColor"), "a named frag output must not synthesize hl_FragColor: {f}");
+    // The frag body already writes `fragColor`; no gl_FragColor rewrite is needed and none is present.
+    assert!(f.contains("fragColor = vec4(vColor, 1.0)"), "{f}");
+}
+
+#[test]
+fn es_precision_qualifiers_are_stripped_from_the_carried_body() {
+    let vs = "attribute vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+    // A precision qualifier used INSIDE the body (not just the global `precision` statement).
+    let fs = "precision mediump float;\nvoid main(){ highp float v = 0.5; gl_FragColor = vec4(v); }\n";
+    let (_, f) = glsl::translate_render(vs, fs);
+    // Desktop core GLSL rejects `highp`/`mediump`/`lowp` as qualifiers — they must be gone from the body.
+    assert!(!f.contains("highp"), "highp not stripped from body: {f}");
+    assert!(!f.contains("mediump"), "mediump not stripped: {f}");
+    // The actual statement survives (minus the qualifier).
+    assert!(f.contains("float v = 0.5;"), "body statement lost: {f}");
+}
+
+#[test]
+fn comments_do_not_leak_phantom_attributes_or_uniforms() {
+    // A commented-out legacy attribute + a block comment hiding a uniform must NOT be reflected.
+    let vs = "// attribute vec4 aLegacy;\n/* uniform mat4 uOld; */\nattribute vec2 aPos;\n\
+              void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+    let fs = "void main(){ gl_FragColor = vec4(1.0); }\n";
+    let (v, _) = glsl::translate_render(vs, fs);
+    assert!(!v.contains("aLegacy"), "commented attribute leaked: {v}");
+    assert!(!v.contains("uOld"), "commented uniform leaked: {v}");
+    // aPos is the SOLE attribute and lands at location 0.
+    assert!(v.contains("layout(location = 0) in vec2 aPos;"), "{v}");
+    let attrs = glsl::collect_vertex_attrs(vs);
+    assert_eq!(attrs.len(), 1);
+    assert_eq!(attrs[0].name, "aPos");
+}
+
+#[test]
+fn multiple_varyings_and_outs_get_distinct_sequential_locations() {
+    let vs = "attribute vec3 aPos;\nvarying vec2 vUV;\nvarying vec3 vNormal;\nout vec4 vExtra;\n\
+              void main(){ vUV = aPos.xy; vNormal = aPos; vExtra = vec4(1.0); gl_Position = vec4(aPos,1.0); }\n";
+    let fs = "varying vec2 vUV;\nvarying vec3 vNormal;\nvoid main(){ gl_FragColor = vec4(vUV, vNormal.z, 1.0); }\n";
+    let (v, f) = glsl::translate_render(vs, fs);
+    assert!(v.contains("layout(location = 0) out vec2 vUV;"), "{v}");
+    assert!(v.contains("layout(location = 1) out vec3 vNormal;"), "{v}");
+    assert!(v.contains("layout(location = 2) out vec4 vExtra;"), "{v}");
+    // The fragment stage receives the varyings it consumes at the same locations.
+    assert!(f.contains("layout(location = 0) in vec2 vUV;"), "{f}");
+    assert!(f.contains("layout(location = 1) in vec3 vNormal;"), "{f}");
+}
+
+#[test]
+fn multiple_samplers_get_sequential_binding_indices() {
+    let vs = "attribute vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n";
+    let fs = "varying vec2 vUV;\nuniform sampler2D uAlbedo;\nuniform sampler2D uNormal;\n\
+              void main(){ gl_FragColor = texture2D(uAlbedo, vUV) + texture2D(uNormal, vUV); }\n";
+    let (_, f) = glsl::translate_render(vs, fs);
+    assert!(f.contains("layout(binding = 0) uniform sampler2D uAlbedo;"), "{f}");
+    assert!(f.contains("layout(binding = 1) uniform sampler2D uNormal;"), "{f}");
+    assert!(!f.contains("texture2D"), "texture2D not lowered: {f}");
+    assert_eq!(glsl::program_samplers(vs, fs), vec!["uAlbedo".to_string(), "uNormal".to_string()]);
+}
+
+#[test]
+fn global_consts_are_hoisted_into_both_stages() {
+    let vs = "const float PI = 3.14159;\nattribute vec2 aPos;\n\
+              void main(){ gl_Position = vec4(aPos * PI, 0.0, 1.0); }\n";
+    let fs = "const vec3 TINT = vec3(1.0, 0.5, 0.25);\nvoid main(){ gl_FragColor = vec4(TINT, 1.0); }\n";
+    let (v, f) = glsl::translate_render(vs, fs);
+    // A const declared in either stage is emitted into BOTH stages (deduped), before main.
+    assert!(v.contains("const float PI = 3.14159;"), "{v}");
+    assert!(v.contains("const vec3 TINT = vec3(1.0, 0.5, 0.25);"), "vs const hoist: {v}");
+    assert!(f.contains("const float PI = 3.14159;"), "fs const hoist: {f}");
+    assert!(f.contains("const vec3 TINT = vec3(1.0, 0.5, 0.25);"), "{f}");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// uniform-block std140 byte layout (uni_layout) — the offsets glUniform* + the UBO upload key on
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn uni_layout_computes_std140_style_offsets_and_padded_total() {
+    let vs = "uniform float uScale;\nuniform vec3 uColor;\nuniform mat4 uMVP;\nattribute vec2 aPos;\n\
+              void main(){ gl_Position = uMVP * vec4(aPos, 0.0, 1.0); }\n";
+    let fs = "void main(){ gl_FragColor = vec4(1.0); }\n";
+    let (unis, total) = glsl::uni_layout(vs, fs);
+    assert_eq!(unis.len(), 3);
+    // float @0 sz4; vec3 aligns to 16 → @16 sz16; mat4 aligns to 16 → @32 sz64.
+    assert_eq!((unis[0].name.as_str(), unis[0].off, unis[0].sz), ("uScale", 0, 4));
+    assert_eq!((unis[1].name.as_str(), unis[1].off, unis[1].sz), ("uColor", 16, 16));
+    assert_eq!((unis[2].name.as_str(), unis[2].off, unis[2].sz), ("uMVP", 32, 64));
+    // Total rounds up to a 16-byte multiple: 32 + 64 = 96.
+    assert_eq!(total, 96);
+}
+
+#[test]
+fn uni_layout_separates_data_uniforms_from_samplers() {
+    let vs = "attribute vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n";
+    let fs = "uniform vec4 uTint;\nuniform sampler2D uTex;\nuniform samplerCube uEnv;\n\
+              void main(){ gl_FragColor = uTint; }\n";
+    // Samplers do NOT occupy uniform-block bytes.
+    let (unis, total) = glsl::uni_layout(vs, fs);
+    assert_eq!(unis.len(), 1, "only the data uniform is in the block");
+    assert_eq!(unis[0].name, "uTint");
+    assert_eq!(total, 16);
+    // program_uniform_decls = data only; sampler decls carry the sampler types for glGetActiveUniform.
+    let data = glsl::program_uniform_decls(vs, fs);
+    assert_eq!(data.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), vec!["uTint"]);
+    let samps = glsl::program_sampler_decls(vs, fs);
+    assert_eq!(samps.iter().map(|d| (d.name.as_str(), d.ty.as_str())).collect::<Vec<_>>(),
+        vec![("uTex", "sampler2D"), ("uEnv", "samplerCube")]);
+}
+
+#[test]
+fn uniform_interface_block_members_are_enumerated() {
+    // A named std140 interface block: its MEMBERS become the data uniforms.
+    let vs = "uniform Matrices { mat4 uModel; mat4 uView; } mats;\nattribute vec3 aPos;\n\
+              void main(){ gl_Position = uModel * uView * vec4(aPos, 1.0); }\n";
+    let fs = "void main(){ gl_FragColor = vec4(1.0); }\n";
+    let (unis, _total) = glsl::uni_layout(vs, fs);
+    let names: Vec<_> = unis.iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, vec!["uModel", "uView"], "block members enumerated as uniforms: {names:?}");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// fragment outputs reflection (glGetFragDataLocation / GL_PROGRAM_OUTPUT)
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn frag_outputs_reflect_named_es3_outputs_and_none_for_es2() {
+    let es3 = "out vec4 color0;\nout vec4 color1;\nvoid main(){ color0 = vec4(1.0); color1 = vec4(0.0); }\n";
+    let outs = glsl::program_frag_outputs(es3);
+    assert_eq!(outs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), vec!["color0", "color1"]);
+    // An ES2 gl_FragColor shader declares NO named output.
+    let es2 = "void main(){ gl_FragColor = vec4(1.0); }\n";
+    assert!(glsl::program_frag_outputs(es2).is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------------
+// compute translation (translate_compute)
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn translate_compute_pins_desktop_version_and_strips_es_dialect() {
+    let cs = "#version 310 es\nlayout(local_size_x = 64) in;\n\
+              layout(std430, binding = 0) buffer Data { float v[]; };\n\
+              void main(){ highp uint i = gl_GlobalInvocationID.x; v[i] = float(i); }\n";
+    let out = glsl::translate_compute(cs);
+    assert!(out.starts_with("#version 460\n"), "compute version pinned: {out}");
+    assert!(!out.contains("#version 310"), "ES compute version not stripped: {out}");
+    assert!(!out.contains("highp"), "ES precision not stripped from compute: {out}");
+    // The compute body + SSBO layout survive.
+    assert!(out.contains("layout(local_size_x = 64) in;"), "{out}");
+    assert!(out.contains("void main()"), "{out}");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// malformed / degenerate input — honest structural output, never a panic or silent-wrong
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn empty_sources_produce_structurally_valid_stubs() {
+    let (v, f) = glsl::translate_render("", "");
+    // No attributes/uniforms, but a valid pinned-version stage with an (empty) entry — not a panic.
+    assert!(v.contains("#version 460"));
+    assert!(v.contains("void main()"));
+    // The fragment stub still synthesizes its required output.
+    assert!(f.contains("layout(location = 0) out vec4 hl_FragColor;"), "{f}");
+}
+
+#[test]
+fn shader_without_main_yields_empty_body_not_a_crash() {
+    // Declarations but no main(): reflection still works; the emitted stage has an empty main body.
+    let vs = "attribute vec2 aPos;\nvarying vec2 vUV;\n";
+    let fs = "uniform sampler2D uTex;\n";
+    let (v, f) = glsl::translate_render(vs, fs);
+    assert!(v.contains("layout(location = 0) in vec2 aPos;"), "decls still reflected: {v}");
+    assert!(v.contains("void main()"), "{v}");
+    assert!(f.contains("layout(binding = 0) uniform sampler2D uTex;"), "{f}");
+    assert_eq!(glsl::collect_vertex_attrs(vs).len(), 1);
+}
+
+#[test]
+fn attribute_and_uniform_caps_are_enforced() {
+    // 20 attributes declared, but the model caps the vertex-attribute count at 16.
+    let mut vs = String::new();
+    for i in 0..20 {
+        vs.push_str(&format!("attribute vec4 a{i};\n"));
+    }
+    vs.push_str("void main(){ gl_Position = a0; }\n");
+    let attrs = glsl::collect_vertex_attrs(&vs);
+    assert_eq!(attrs.len(), 16, "attribute count is capped at 16");
+
+    // 20 data uniforms → capped at 16 in the block.
+    let mut fs = String::from("");
+    for i in 0..20 {
+        fs.push_str(&format!("uniform float u{i};\n"));
+    }
+    fs.push_str("void main(){ gl_FragColor = vec4(u0); }\n");
+    let (unis, _) = glsl::uni_layout("void main(){}", &fs);
+    assert!(unis.len() <= 16, "data-uniform count capped at 16, got {}", unis.len());
+}
+
+#[test]
+fn int_and_matrix_uniform_types_layout_without_panicking() {
+    // Exercise the full type table in uni_layout (ivec/uvec/matNxM) — must produce monotonic offsets.
+    let fs = "uniform int uA;\nuniform ivec2 uB;\nuniform uvec3 uC;\nuniform mat3 uD;\nuniform mat2 uE;\n\
+              void main(){ gl_FragColor = vec4(float(uA)); }\n";
+    let (unis, total) = glsl::uni_layout("void main(){}", fs);
+    assert_eq!(unis.len(), 5);
+    // Offsets are non-decreasing and each member fits before the next.
+    for w in unis.windows(2) {
+        assert!(w[1].off >= w[0].off + w[0].sz, "overlapping members: {:?}", unis);
+    }
+    assert!(total >= unis.last().unwrap().off + unis.last().unwrap().sz);
+    assert_eq!(total % 16, 0, "block total is 16-byte aligned");
+}
