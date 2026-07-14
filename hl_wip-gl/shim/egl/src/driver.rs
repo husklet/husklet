@@ -17,9 +17,10 @@ use core::ffi::{c_char, c_void};
 use hl_gl::model::context::GlSurface;
 use hl_gl::model::glconst::*;
 use hl_gl::result::{
-    egl_error_from_gpu_error, EGL_FALSE, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
+    egl_error_from_gpu_error, EGL_BAD_ATTRIBUTE, EGL_BAD_CONFIG, EGL_BAD_PARAMETER, EGL_FALSE, EGL_TRUE,
+    GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
 };
-use hl_gl::service::{compute, es3, intro, map, query, readpixels, record, swap, sync};
+use hl_gl::service::{compute, config, es3, intro, map, query, readpixels, record, swap, sync};
 
 use crate::state::{with, AppPresentOutcome, CONFIG_TOKEN, DISPLAY_TOKEN};
 
@@ -29,12 +30,6 @@ const EGL_VENDOR: i32 = 0x3053;
 const EGL_VERSION_Q: i32 = 0x3054;
 const EGL_EXTENSIONS_Q: i32 = 0x3055;
 const EGL_CLIENT_APIS: i32 = 0x308D;
-
-const EGL_ALPHA_SIZE: i32 = 0x3021;
-const EGL_BLUE_SIZE: i32 = 0x3022;
-const EGL_GREEN_SIZE: i32 = 0x3023;
-const EGL_RED_SIZE: i32 = 0x3024;
-const EGL_DEPTH_SIZE: i32 = 0x3025;
 
 // ---- small C-ABI marshalling helpers -------------------------------------------------------------
 
@@ -458,6 +453,11 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "eglDestroyImage" => p!(eglDestroyImage),
         "eglDestroySync" => p!(eglDestroySync),
         "eglGetPlatformDisplay" => p!(eglGetPlatformDisplay),
+        // EGL_EXT_platform_base — advertised in the client extension string, so a caller (e.g. the real
+        // `eglinfo`) resolves + calls these without a null check. Resolved here only (not exported ABI).
+        "eglGetPlatformDisplayEXT" => p!(eglGetPlatformDisplayEXT),
+        "eglCreatePlatformWindowSurfaceEXT" => p!(eglCreatePlatformWindowSurfaceEXT),
+        "eglCreatePlatformPixmapSurfaceEXT" => p!(eglCreatePlatformPixmapSurfaceEXT),
         "eglGetSyncAttrib" => p!(eglGetSyncAttrib),
         "eglQueryAPI" => p!(eglQueryAPI),
         "eglQueryContext" => p!(eglQueryContext),
@@ -644,6 +644,25 @@ pub extern "C" fn eglBindAPI(_api: u32) -> u32 {
 // EGL: config selection
 // ==================================================================================================
 
+/// Write the `n` config handles this driver advertises into the caller's `configs` array (each our
+/// single [`CONFIG_TOKEN`]) and report `num_config`. Shared by `eglChooseConfig` / `eglGetConfigs`: the
+/// enumeration contract (null array → count only; real array → bounded copy) is decided by
+/// [`config::enumerate`], so this only marshals the raw pointers.
+unsafe fn write_configs(configs: *mut *mut c_void, config_size: i32, num_config: *mut i32) {
+    let (n, num) = config::enumerate(!configs.is_null(), config_size);
+    for i in 0..n as isize {
+        *configs.offset(i) = CONFIG_TOKEN as *mut c_void;
+    }
+    if !num_config.is_null() {
+        *num_config = num;
+    }
+}
+
+/// `eglChooseConfig(dpy, attrib_list, configs, config_size, num_config)` — select configs matching the
+/// requested attributes. This driver advertises one config that satisfies the common GLES2/ES3 window +
+/// pbuffer requests, so a null / empty `attrib_list` (match-all) and a populated list both return it. A
+/// null `configs` array is the count-only query (`num_config` = number available). `num_config` is
+/// required by the spec; a null one is `EGL_BAD_PARAMETER`.
 #[no_mangle]
 pub extern "C" fn eglChooseConfig(
     _dpy: *mut c_void,
@@ -652,17 +671,18 @@ pub extern "C" fn eglChooseConfig(
     config_size: i32,
     num_config: *mut i32,
 ) -> u32 {
-    unsafe {
-        if !configs.is_null() && config_size >= 1 {
-            *configs = CONFIG_TOKEN as *mut c_void;
-        }
-        if !num_config.is_null() {
-            *num_config = if config_size >= 1 || configs.is_null() { 1 } else { 0 };
-        }
+    if num_config.is_null() {
+        with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+        return EGL_FALSE;
     }
+    unsafe { write_configs(configs, config_size, num_config) };
     EGL_TRUE
 }
 
+/// `eglGetConfigs(dpy, configs, config_size, num_config)` — enumerate all configs. A null `configs` array
+/// returns the total count in `num_config`; a real array is filled with up to `config_size` handles and
+/// `num_config` reports how many were written. `num_config` is required; a null one is
+/// `EGL_BAD_PARAMETER`.
 #[no_mangle]
 pub extern "C" fn eglGetConfigs(
     _dpy: *mut c_void,
@@ -670,34 +690,44 @@ pub extern "C" fn eglGetConfigs(
     config_size: i32,
     num_config: *mut i32,
 ) -> u32 {
-    unsafe {
-        if !configs.is_null() && config_size >= 1 {
-            *configs = CONFIG_TOKEN as *mut c_void;
-        }
-        if !num_config.is_null() {
-            *num_config = 1;
-        }
+    if num_config.is_null() {
+        with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+        return EGL_FALSE;
     }
+    unsafe { write_configs(configs, config_size, num_config) };
     EGL_TRUE
 }
 
+/// `eglGetConfigAttrib(dpy, config, attribute, value)` — the value of one attribute of an `EGLConfig`.
+/// Delegates the truthful value to [`config::config_attrib`]: a foreign config handle raises
+/// `EGL_BAD_CONFIG` and an unrecognized attribute raises `EGL_BAD_ATTRIBUTE` — both return `EGL_FALSE`
+/// WITHOUT writing `value` or dereferencing the unknown config, instead of the old silent `0`.
 #[no_mangle]
 pub extern "C" fn eglGetConfigAttrib(
     _dpy: *mut c_void,
-    _config: *mut c_void,
+    config: *mut c_void,
     attribute: i32,
     value: *mut i32,
 ) -> u32 {
     if value.is_null() {
+        with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
         return EGL_FALSE;
     }
-    let v = match attribute {
-        EGL_RED_SIZE | EGL_GREEN_SIZE | EGL_BLUE_SIZE | EGL_ALPHA_SIZE => 8,
-        EGL_DEPTH_SIZE => 24,
-        _ => 0,
-    };
-    unsafe { *value = v };
-    EGL_TRUE
+    let is_ours = config as usize == CONFIG_TOKEN;
+    match config::config_attrib(is_ours, attribute) {
+        Ok(v) => {
+            unsafe { *value = v };
+            EGL_TRUE
+        }
+        Err(config::ConfigError::BadConfig) => {
+            with(|s| s.set_egl_error(EGL_BAD_CONFIG));
+            EGL_FALSE
+        }
+        Err(config::ConfigError::BadAttribute) => {
+            with(|s| s.set_egl_error(EGL_BAD_ATTRIBUTE));
+            EGL_FALSE
+        }
+    }
 }
 
 // ==================================================================================================
@@ -4126,6 +4156,38 @@ pub extern "C" fn glFinish() {
 #[no_mangle]
 pub extern "C" fn eglGetPlatformDisplay(_platform: u32, _native_display: *mut c_void, _attrib_list: *const isize) -> *mut c_void {
     DISPLAY_TOKEN as *mut c_void
+}
+
+// ---- EGL_EXT_platform_base entry points ----------------------------------------------------------
+//
+// The client extension string ([`hl_gl::adapter::wayland::egl_client_extensions`]) advertises
+// `EGL_EXT_platform_base` (+ `EGL_EXT_platform_wayland`). By that extension's contract a caller that
+// sees the string resolves these `*EXT` entry points through `eglGetProcAddress` and CALLS them WITHOUT
+// a null check (the extension being advertised is the promise they exist) — e.g. the real Khronos
+// `eglinfo` calls `eglGetProcAddress("eglGetPlatformDisplayEXT")` for every named platform and invokes
+// the returned pointer directly. Advertising the extension while resolving these to null is therefore a
+// crash-the-caller bug: `eglinfo` SIGSEGVs jumping through the null. These are the EGLint-attrib-list
+// `EXT` spellings of the EGL 1.5 core `eglGetPlatformDisplay` / `eglCreatePlatform*Surface` above and
+// forward to the same single display / surface bring-up. They are resolved ONLY via `eglGetProcAddress`
+// (extension functions are not part of the exported ABI surface — the 402-symbol golden), so they are
+// deliberately not `#[no_mangle]`.
+
+/// `eglGetPlatformDisplayEXT(platform, native_display, attrib_list)` — `EGL_EXT_platform_base` display
+/// getter. Same single display token as `eglGetDisplay`; the surfaceless / wayland / gbm / x11 platform
+/// enums all map to the one initializable display this driver serves.
+extern "C" fn eglGetPlatformDisplayEXT(_platform: u32, _native_display: *mut c_void, _attrib_list: *const i32) -> *mut c_void {
+    DISPLAY_TOKEN as *mut c_void
+}
+/// `eglCreatePlatformWindowSurfaceEXT(dpy, config, native_window, attrib_list)` — `EGL_EXT_platform_base`
+/// window-surface getter; `native_window` is the `wl_egl_window*`. Brings up the window surface exactly
+/// like the core `eglCreatePlatformWindowSurface`.
+extern "C" fn eglCreatePlatformWindowSurfaceEXT(_dpy: *mut c_void, _config: *mut c_void, native_window: *mut c_void, _attrib_list: *const i32) -> *mut c_void {
+    create_window_surface(native_window)
+}
+/// `eglCreatePlatformPixmapSurfaceEXT(...)` — `EGL_EXT_platform_base` pixmap-surface getter; a fresh
+/// surface token (no native-pixmap target is modeled).
+extern "C" fn eglCreatePlatformPixmapSurfaceEXT(_dpy: *mut c_void, _config: *mut c_void, _native_pixmap: *mut c_void, _attrib_list: *const i32) -> *mut c_void {
+    with(|s| s.mint_token())
 }
 /// `eglQueryAPI()` — the API bound by `eglBindAPI`; this driver serves OpenGL ES.
 #[no_mangle]
