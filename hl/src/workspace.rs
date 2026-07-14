@@ -6,20 +6,95 @@
 //! shell, so this works + is exercisable everywhere); the macOS build swaps in a hl-jit launcher that
 //! enters the image's container with a persistent writable upper.
 
-use crate::cli::WorkspaceCmd;
+use crate::config::{CudaDevice, VpnConfig, WorkspaceConfig, WorkspaceStore};
 use crate::paths;
-use hl::config::{CudaDevice, VpnConfig, WorkspaceConfig, WorkspaceStore};
+use clap::Subcommand;
 use hl_ws::{Arch, Launcher};
 use hl_ws_term::LocalShellLauncher;
 use std::io::Write;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// `hl workspace <action>` — the sub-commands for managing + launching terminal workspaces. The
+/// clap arg type lives here, next to its handler ([`run`]); the binary's top-level `Cmd` references
+/// it as `hl::workspace::WorkspaceCmd`.
+#[derive(Subcommand)]
+pub enum WorkspaceCmd {
+    /// List configured workspaces.
+    List,
+    /// Create (or update) a workspace: a name + the image it runs + its architecture.
+    Create {
+        /// Workspace name (a stable handle you launch by).
+        name: String,
+        /// The image/distro the workspace runs, e.g. `ubuntu:24.04` or `alpine`.
+        #[arg(long)]
+        image: String,
+        /// Target arch: `arm64` (default) or `amd64` (x86-64 via jit86). Omit when re-creating an existing
+        /// workspace to preserve its current arch (a fresh workspace defaults to `arm64`); passing it
+        /// always sets the arch explicitly.
+        #[arg(long)]
+        arch: Option<String>,
+        /// Route this workspace's egress through a VPN/proxy (see docs/VPN.md). Accepts a bare SOCKS5
+        /// `host:port` (e.g. `127.30.0.1:1080`) or a `<kind>:<endpoint>` spec
+        /// (`socks5:host:port`, `http:host:port`, `wireguard:/path/wg.conf`). Omit for direct egress.
+        #[arg(long)]
+        vpn: Option<String>,
+        /// Present a simulated CUDA device (docs/ideas/CUDA_ON_METAL.md): dd injects its NVML shim +
+        /// the real `nvidia-smi` so the container reports an NVIDIA-looking GPU (presence only, not
+        /// compute). Bare `--cuda` = the default device; `--cuda "Name|8.6|8192"` sets name|cc|VRAM-MB;
+        /// `--cuda off` (or `""`/`none`) clears it. Omit to preserve any prior setting.
+        #[arg(long, num_args = 0..=1, default_missing_value = "default")]
+        cuda: Option<String>,
+        /// Render this workspace's GUI apps on the Mac (docs/ideas/RENDERING_PLAN.md): dd bind-mounts the
+        /// host `hl-display` Wayland socket into the guest and sets `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, so
+        /// a Linux GUI app (e.g. `weston-simple-shm`, SDL2) draws in a native window — no custom image.
+        /// Bare `--gui` = on; `--gui off` clears it. Omit to preserve any prior setting.
+        #[arg(long, num_args = 0..=1, default_missing_value = "on")]
+        gui: Option<String>,
+    },
+    /// Remove a workspace (its persistent files are left on disk).
+    Rm {
+        name: String,
+    },
+    /// Launch a workspace as an interactive terminal in this window.
+    Launch {
+        name: String,
+        /// Resume the workspace from its last checkpoint (whole process tree) instead of a fresh shell.
+        #[arg(long)]
+        restore: bool,
+        /// Start the shell in this guest directory (used by the GUI's OSC-7 "new tab in same cwd").
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Per-pane checkpoint SLOT. A multi-tab/split window runs one engine per pane; each pane
+        /// freezes/restores into its own `<storage>/checkpoint/<slot>` slot. Omit for the single
+        /// shared slot (back-compat).
+        #[arg(long)]
+        slot: Option<String>,
+    },
+    /// Checkpoint a RUNNING workspace's whole process tree to disk (shells + background jobs + children),
+    /// freeing its memory. Reopen it later with `workspace launch <name> --restore`.
+    Checkpoint {
+        name: String,
+        /// Per-pane checkpoint SLOT (must match the slot the pane was launched with). Omit for the
+        /// single shared slot (back-compat).
+        #[arg(long)]
+        slot: Option<String>,
+    },
+    /// Restore a checkpointed workspace's whole process tree (alias for `launch --restore`).
+    Restore {
+        name: String,
+    },
+    /// Ensure the workspace's isolated docker daemon is running; print its socket path.
+    Daemon {
+        name: String,
+    },
+}
+
 fn store_path() -> std::path::PathBuf {
     paths::hl_root().join("workspaces.conf")
 }
 
-pub(crate) fn run(action: WorkspaceCmd) {
+pub fn run(action: WorkspaceCmd) {
     match action {
         WorkspaceCmd::List => list(),
         WorkspaceCmd::Create { name, image, arch, vpn, cuda, gui } => create(name, image, arch, vpn, cuda, gui),
@@ -362,7 +437,7 @@ impl Drop for RawMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hl::config::VpnKind;
+    use crate::config::VpnKind;
     use hl_ws::Mount;
 
     // A prior workspace carrying config that the `create` CLI does NOT expose as flags — exactly the

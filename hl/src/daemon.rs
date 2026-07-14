@@ -1,12 +1,31 @@
 //! `hl daemon …` — run/start/stop/restart/status/logs for the background daemon.
 
 use crate::agent;
-use crate::cli::DaemonCmd;
 use crate::paths;
 use crate::report::{report, run_status};
+use clap::Subcommand;
 use std::process::Command;
 
-pub(crate) fn cmd_daemon(action: DaemonCmd) -> i32 {
+/// `hl daemon <action>` — run/start/stop/restart/status/logs for the background daemon. The clap
+/// arg type lives next to its handler; the binary's top-level `Cmd` references it as
+/// `hl::daemon::DaemonCmd`.
+#[derive(Subcommand)]
+pub enum DaemonCmd {
+    /// Run the daemon in the foreground (what the LaunchAgent execs).
+    Run,
+    /// Load + start the daemon agent.
+    Start,
+    /// Stop + unload the daemon agent.
+    Stop,
+    /// Restart the daemon agent.
+    Restart,
+    /// Show launchd status for the agent.
+    Status,
+    /// Tail the daemon logs.
+    Logs,
+}
+
+pub fn cmd_daemon(action: DaemonCmd) -> i32 {
     match action {
         DaemonCmd::Run => daemon_run(),
         DaemonCmd::Start => report("daemon start", agent::ensure()),

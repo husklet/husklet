@@ -2,13 +2,27 @@
 //! write the `~/.docker/contexts` metadata directly (the dir name is the lowercase SHA-256 of the
 //! context name). Either way we point at `unix://~/.hl/run/docker.sock`.
 
-use crate::cli::ContextCmd;
 use crate::context;
 use crate::paths;
 use crate::report::{note, report};
+use clap::Subcommand;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::process::Command;
+
+/// `hl context <action>` — manage just the docker context. The clap arg type lives next to its
+/// handler; the binary's top-level `Cmd` references it as `hl::context::ContextCmd`.
+#[derive(Subcommand)]
+pub enum ContextCmd {
+    /// Create/refresh the `dd` docker context.
+    Create,
+    /// Remove the `dd` docker context.
+    Rm,
+    /// `docker context use dd`.
+    Use,
+    /// Print the context endpoint.
+    Show,
+}
 
 /// Context name surfaced in `docker context ls`.
 pub const NAME: &str = "hl";
@@ -106,7 +120,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub(crate) fn cmd_context(action: ContextCmd) -> i32 {
+pub fn cmd_context(action: ContextCmd) -> i32 {
     match action {
         ContextCmd::Create => note("context create", context::create()),
         ContextCmd::Rm => report("context rm", context::remove()),

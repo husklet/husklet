@@ -122,7 +122,7 @@ fn docker_present() -> bool {
 }
 
 /// `hl run …` and the bare-image shorthand both land here.
-pub(crate) fn cmd_run(raw: Vec<String>) -> i32 {
+pub fn cmd_run(raw: Vec<String>) -> i32 {
     match run::parse(raw) {
         Ok(args) => run::run(args),
         Err(e) => {

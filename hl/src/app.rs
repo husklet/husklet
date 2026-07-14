@@ -4,7 +4,7 @@ use crate::report::run_status;
 use std::process::Command;
 
 /// Launch the installed GUI bundle (or a dev `hl-app` sibling binary).
-pub(crate) fn cmd_app() -> i32 {
+pub fn cmd_app() -> i32 {
     if let Some(bundle) = crate::platform::app_bundle() {
         if bundle.exists() {
             // `open` detaches the GUI from this terminal.

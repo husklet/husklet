@@ -1,16 +1,29 @@
-//! `clap` command-line definitions for the `hl` binary.
+//! `hl` — the user-facing command for the dd VM-less container runtime.
+//!
+//! This binary is the PARSING LAYER only: it owns the clap `Cli`/`Cmd` (the top-level command grammar)
+//! and `fn main`, then dispatches into `hl::*` library fns which hold all the command logic. The
+//! per-command sub-grammars (`WorkspaceCmd`/`DaemonCmd`/`ContextCmd`) live next to their handlers in the
+//! library (`hl::workspace`/`hl::daemon`/`hl::context`) and are referenced here.
+//!
+//! Run containers with easy-access defaults (the current directory mounted + the working dir, host
+//! networking, an interactive shell), and manage the per-user daemon — all without root.
+//!
+//!   hl ubuntu                       # drop into a shell in an ubuntu container, here in this dir
+//!   hl run alpine echo hi           # run a one-off command
+//!   hl run ubuntu --platform linux/amd64   # force amd64 (runs via the x86-64 JIT)
+//!   hl install                      # set up the daemon agent + docker context
 
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "hl", version, about = "hl — VM-less containers on macOS")]
-pub(crate) struct Cli {
+struct Cli {
     #[command(subcommand)]
-    pub(crate) cmd: Cmd,
+    cmd: Cmd,
 }
 
 #[derive(Subcommand)]
-pub(crate) enum Cmd {
+enum Cmd {
     /// Run a container: current dir mounted + working dir, host networking, interactive shell.
     ///
     /// Usage: hl run [--platform P] [--isolated] [--keep] <image> [command…]
@@ -23,12 +36,12 @@ pub(crate) enum Cmd {
     /// Manage + launch terminal workspaces (a named image+arch you develop in).
     Workspace {
         #[command(subcommand)]
-        action: WorkspaceCmd,
+        action: hl::workspace::WorkspaceCmd,
     },
     /// Run or control the background daemon.
     Daemon {
         #[command(subcommand)]
-        action: DaemonCmd,
+        action: hl::daemon::DaemonCmd,
     },
     /// Install the daemon agent + docker context (no root).
     Install,
@@ -41,116 +54,35 @@ pub(crate) enum Cmd {
     /// Manage just the docker context.
     Context {
         #[command(subcommand)]
-        action: ContextCmd,
+        action: hl::context::ContextCmd,
     },
     /// `hl <image> [command…]` — shorthand for `hl run <image> …`.
     #[command(external_subcommand)]
     Image(Vec<String>),
 }
 
-#[derive(Subcommand)]
-pub(crate) enum WorkspaceCmd {
-    /// List configured workspaces.
-    List,
-    /// Create (or update) a workspace: a name + the image it runs + its architecture.
-    Create {
-        /// Workspace name (a stable handle you launch by).
-        name: String,
-        /// The image/distro the workspace runs, e.g. `ubuntu:24.04` or `alpine`.
-        #[arg(long)]
-        image: String,
-        /// Target arch: `arm64` (default) or `amd64` (x86-64 via jit86). Omit when re-creating an existing
-        /// workspace to preserve its current arch (a fresh workspace defaults to `arm64`); passing it
-        /// always sets the arch explicitly.
-        #[arg(long)]
-        arch: Option<String>,
-        /// Route this workspace's egress through a VPN/proxy (see docs/VPN.md). Accepts a bare SOCKS5
-        /// `host:port` (e.g. `127.30.0.1:1080`) or a `<kind>:<endpoint>` spec
-        /// (`socks5:host:port`, `http:host:port`, `wireguard:/path/wg.conf`). Omit for direct egress.
-        #[arg(long)]
-        vpn: Option<String>,
-        /// Present a simulated CUDA device (docs/ideas/CUDA_ON_METAL.md): dd injects its NVML shim +
-        /// the real `nvidia-smi` so the container reports an NVIDIA-looking GPU (presence only, not
-        /// compute). Bare `--cuda` = the default device; `--cuda "Name|8.6|8192"` sets name|cc|VRAM-MB;
-        /// `--cuda off` (or `""`/`none`) clears it. Omit to preserve any prior setting.
-        #[arg(long, num_args = 0..=1, default_missing_value = "default")]
-        cuda: Option<String>,
-        /// Render this workspace's GUI apps on the Mac (docs/ideas/RENDERING_PLAN.md): dd bind-mounts the
-        /// host `hl-display` Wayland socket into the guest and sets `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, so
-        /// a Linux GUI app (e.g. `weston-simple-shm`, SDL2) draws in a native window — no custom image.
-        /// Bare `--gui` = on; `--gui off` clears it. Omit to preserve any prior setting.
-        #[arg(long, num_args = 0..=1, default_missing_value = "on")]
-        gui: Option<String>,
-    },
-    /// Remove a workspace (its persistent files are left on disk).
-    Rm {
-        name: String,
-    },
-    /// Launch a workspace as an interactive terminal in this window.
-    Launch {
-        name: String,
-        /// Resume the workspace from its last checkpoint (whole process tree) instead of a fresh shell.
-        #[arg(long)]
-        restore: bool,
-        /// Start the shell in this guest directory (used by the GUI's OSC-7 "new tab in same cwd").
-        #[arg(long)]
-        cwd: Option<String>,
-        /// Per-pane checkpoint SLOT. A multi-tab/split window runs one engine per pane; each pane
-        /// freezes/restores into its own `<storage>/checkpoint/<slot>` slot. Omit for the single
-        /// shared slot (back-compat).
-        #[arg(long)]
-        slot: Option<String>,
-    },
-    /// Checkpoint a RUNNING workspace's whole process tree to disk (shells + background jobs + children),
-    /// freeing its memory. Reopen it later with `workspace launch <name> --restore`.
-    Checkpoint {
-        name: String,
-        /// Per-pane checkpoint SLOT (must match the slot the pane was launched with). Omit for the
-        /// single shared slot (back-compat).
-        #[arg(long)]
-        slot: Option<String>,
-    },
-    /// Restore a checkpointed workspace's whole process tree (alias for `launch --restore`).
-    Restore {
-        name: String,
-    },
-    /// Ensure the workspace's isolated docker daemon is running; print its socket path.
-    Daemon {
-        name: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum DaemonCmd {
-    /// Run the daemon in the foreground (what the LaunchAgent execs).
-    Run,
-    /// Load + start the daemon agent.
-    Start,
-    /// Stop + unload the daemon agent.
-    Stop,
-    /// Restart the daemon agent.
-    Restart,
-    /// Show launchd status for the agent.
-    Status,
-    /// Tail the daemon logs.
-    Logs,
-}
-
-#[derive(Subcommand)]
-pub(crate) enum ContextCmd {
-    /// Create/refresh the `dd` docker context.
-    Create,
-    /// Remove the `dd` docker context.
-    Rm,
-    /// `docker context use dd`.
-    Use,
-    /// Print the context endpoint.
-    Show,
+fn main() {
+    let cli = Cli::parse();
+    let code = match cli.cmd {
+        Cmd::Run { args } => hl::run::cmd_run(args),
+        Cmd::Image(args) => hl::run::cmd_run(args),
+        Cmd::App => hl::app::cmd_app(),
+        Cmd::Workspace { action } => {
+            hl::workspace::run(action);
+            0
+        }
+        Cmd::Daemon { action } => hl::daemon::cmd_daemon(action),
+        Cmd::Install => hl::install::cmd_install(),
+        Cmd::Uninstall { purge } => hl::install::cmd_uninstall(purge),
+        Cmd::Context { action } => hl::context::cmd_context(action),
+    };
+    std::process::exit(code);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hl::workspace::WorkspaceCmd;
 
     // The parser is a contract with the GUI (which shells out to `hl workspace …`) and users, so lock
     // its shape down: required flags, the optional `--arch`, the trailing-arg passthrough, and the bare

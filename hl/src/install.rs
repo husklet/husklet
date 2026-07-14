@@ -7,7 +7,7 @@ use crate::paths;
 use crate::platform;
 
 /// Full install: state tree + daemon service + docker context, then a quarantine hint.
-pub(crate) fn cmd_install() -> i32 {
+pub fn cmd_install() -> i32 {
     let unit = match agent::write_unit() {
         Ok(p) => p,
         Err(e) => {
@@ -34,7 +34,7 @@ pub(crate) fn cmd_install() -> i32 {
     0
 }
 
-pub(crate) fn cmd_uninstall(purge: bool) -> i32 {
+pub fn cmd_uninstall(purge: bool) -> i32 {
     let _ = agent::remove();
     println!("✓ removed daemon agent + plist");
     let _ = context::remove();

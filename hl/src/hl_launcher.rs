@@ -8,7 +8,7 @@
 //! from its broadcast, and `write_stdin`/`resize`/`waitpid` are plain synchronous calls.
 
 use crate::paths;
-use hl::config::WorkspaceConfig;
+use crate::config::WorkspaceConfig;
 use hl_jit::DeviceProvider;
 use hl_ws::Arch;
 use hl_ws_term::PtyBackend;
