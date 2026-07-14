@@ -108,6 +108,9 @@ pub const CU_FUNC_ATTRIBUTE_PREFERRED_SHARED_MEMORY_CARVEOUT: i32 = 9;
 // ---- CUlimit — `CU_LIMIT_MAX` is one past the last valid `CUlimit`; the limit table has this many slots.
 pub const CU_LIMIT_MAX: i32 = 7;
 
+// ---- CUmoduleLoadingMode — the loading mode `cuModuleGetLoadingMode` reports (value from cuda.h).
+pub const CU_MODULE_EAGER_LOADING: i32 = 1;
+
 // ---- cudaError_t (runtime API; the subset the runtime entry points return) -----------------------
 pub const CUDART_SUCCESS: i32 = 0; // cudaSuccess
 pub const CUDART_ERROR_INVALID_VALUE: i32 = 1; // cudaErrorInvalidValue

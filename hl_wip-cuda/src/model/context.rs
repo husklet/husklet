@@ -32,6 +32,10 @@ pub struct CudaContext {
     /// `CreateShader`/`CreateComputePipeline`. The block dims are part of the key because they bake into
     /// the compiled kernel as the WebGPU/Metal `local_size`.
     pipelines: HashMap<(u32, u32, [u32; 3]), (u32, u32)>,
+    /// Module-global backing allocations: `(module id, symbol name)` → `(device pointer, byte size)`,
+    /// so `cuModuleGetGlobal` lazily creates one backing buffer per global and returns the same device
+    /// pointer on repeat lookups.
+    global_allocs: HashMap<(u32, String), (u64, u64)>,
 
     // guest-assigned id counters (monotonic; one buffer counter shared by allocations + param buffers,
     // exactly as the ported source did).
@@ -52,6 +56,7 @@ impl CudaContext {
             modules: Modules::new(),
             streams: StreamTable::new(),
             pipelines: HashMap::new(),
+            global_allocs: HashMap::new(),
             next_buffer: 1,
             next_shader: 1,
             next_pipeline: 1,
@@ -110,6 +115,18 @@ impl CudaContext {
     /// Record a freshly-created `(shader, pipeline)` for this `(module, entry, block)`.
     pub fn cache_pipeline(&mut self, module: u32, entry: u32, block: [u32; 3], v: (u32, u32)) {
         self.pipelines.insert((module, entry, block), v);
+    }
+
+    // ---- module-global backing allocations --------------------------------------------------------
+
+    /// The cached `(device pointer, byte size)` a prior `cuModuleGetGlobal` created for `(module, name)`.
+    pub fn global_alloc(&self, module: u32, name: &str) -> Option<(u64, u64)> {
+        self.global_allocs.get(&(module, name.to_string())).copied()
+    }
+
+    /// Record the backing `(device pointer, byte size)` for a module global so repeat lookups reuse it.
+    pub fn record_global_alloc(&mut self, module: u32, name: &str, ptr: u64, size: u64) {
+        self.global_allocs.insert((module, name.to_string()), (ptr, size));
     }
 
     // ---- convenience delegates --------------------------------------------------------------------

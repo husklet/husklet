@@ -863,6 +863,174 @@ pub extern "C" fn cuModuleGetFunction(hfunc: *mut *mut c_void, hmod: *mut c_void
     })
 }
 
+/// `cuModuleLoad(module, fname)` — load a module from a file on the guest filesystem. Reads the file and
+/// loads it through the same [`load_module::module_load_data`] path as `cuModuleLoadData` (so a fatbin
+/// container or raw PTX text both work). A missing file is `CUDA_ERROR_FILE_NOT_FOUND`.
+#[no_mangle]
+pub extern "C" fn cuModuleLoad(module: *mut *mut c_void, fname: *const c_char) -> i32 {
+    if module.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let Some(path) = (unsafe { cstr_bytes(fname) }) else {
+        return CUDA_ERROR_INVALID_VALUE;
+    };
+    let Ok(path) = std::str::from_utf8(&path) else {
+        return CUDA_ERROR_INVALID_VALUE;
+    };
+    let Ok(bytes) = std::fs::read(path) else {
+        return CUDA_ERROR_FILE_NOT_FOUND;
+    };
+    with(|s| match load_module::module_load_data(&mut s.ctx, &bytes) {
+        Ok(id) => {
+            let h = s.intern_module(id);
+            unsafe { *module = h };
+            CUDA_SUCCESS
+        }
+        Err(e) => cu_result_from_gpu_error(&e),
+    })
+}
+
+/// `cuModuleLoadDataEx(module, image, n, options, optionValues)` — the JIT-option form. The modeled
+/// module load ignores JIT options (the executor compiles PTX itself), so it shares `cuModuleLoadData`.
+#[no_mangle]
+pub extern "C" fn cuModuleLoadDataEx(
+    module: *mut *mut c_void,
+    image: *const c_void,
+    n: u32,
+    o: *mut i32,
+    ov: *mut *mut c_void,
+) -> i32 {
+    let _ = (n, o, ov);
+    cuModuleLoadData(module, image)
+}
+
+/// `cuModuleLoadFatBinary(module, image)` — load from an nvcc fatbin container. The shared
+/// [`load_module::module_load_data`] path already walks a fatbin to recover its embedded PTX, so this is
+/// `cuModuleLoadData` on the same image.
+#[no_mangle]
+pub extern "C" fn cuModuleLoadFatBinary(module: *mut *mut c_void, image: *const c_void) -> i32 {
+    cuModuleLoadData(module, image)
+}
+
+/// `cuModuleUnload(m)` — the modeled context keeps a module's parsed source for the process lifetime (a
+/// launch may still reference it), so unload validates the handle and is otherwise a no-op. A bogus handle
+/// is `CUDA_ERROR_INVALID_HANDLE`.
+#[no_mangle]
+pub extern "C" fn cuModuleUnload(m: *mut c_void) -> i32 {
+    with(|s| if s.module_id(m).is_some() { CUDA_SUCCESS } else { CUDA_ERROR_INVALID_HANDLE })
+}
+
+/// `cuModuleGetGlobal_v2(dptr, bytes, m, name)` — resolve a `__device__`/`__constant__` global symbol to
+/// its backing device pointer + byte size. The size comes from the module's parsed PTX `.global`/`.const`
+/// declaration; the backing buffer is created lazily on first lookup (see [`load_module::module_get_global`]).
+/// A symbol the module does not declare is `CUDA_ERROR_NOT_FOUND` (never a fake pointer).
+#[no_mangle]
+pub extern "C" fn cuModuleGetGlobal_v2(
+    dptr: *mut u64,
+    bytes: *mut usize,
+    m: *mut c_void,
+    name: *const c_char,
+) -> i32 {
+    let Some(nm) = (unsafe { cstr_bytes(name) }) else {
+        return CUDA_ERROR_INVALID_VALUE;
+    };
+    let Ok(nm) = std::str::from_utf8(&nm) else {
+        return CUDA_ERROR_INVALID_VALUE;
+    };
+    with(|s| {
+        let Some(module_id) = s.module_id(m) else {
+            return CUDA_ERROR_INVALID_HANDLE;
+        };
+        match load_module::module_get_global(&mut s.ctx, &mut s.sink, module_id, nm) {
+            Ok(Some((ptr, size))) => {
+                if !dptr.is_null() {
+                    unsafe { *dptr = ptr.0 };
+                }
+                if !bytes.is_null() {
+                    unsafe { *bytes = size as usize };
+                }
+                CUDA_SUCCESS
+            }
+            Ok(None) => CUDA_ERROR_NOT_FOUND,
+            Err(e) => cu_result_from_gpu_error(&e),
+        }
+    })
+}
+
+/// `cuModuleGetLoadingMode(mode)` — the driver's module loading mode. The model loads modules eagerly.
+#[no_mangle]
+pub extern "C" fn cuModuleGetLoadingMode(mode: *mut i32) -> i32 {
+    if mode.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    unsafe { *mode = CU_MODULE_EAGER_LOADING };
+    CUDA_SUCCESS
+}
+
+/// `cuModuleGetTexRef(t, m, name)` — the PTX model has no texture-reference variables, so a valid module
+/// honestly reports the symbol absent (`CUDA_ERROR_NOT_FOUND`) rather than handing back a null texref as a
+/// false success. A bogus module handle is `CUDA_ERROR_INVALID_HANDLE`.
+#[no_mangle]
+pub extern "C" fn cuModuleGetTexRef(t: *mut *mut c_void, m: *mut c_void, name: *const c_char) -> i32 {
+    let _ = (t, name);
+    with(|s| if s.module_id(m).is_some() { CUDA_ERROR_NOT_FOUND } else { CUDA_ERROR_INVALID_HANDLE })
+}
+
+/// `cuModuleGetSurfRef(s, m, name)` — as `cuModuleGetTexRef`, for surface references (also unmodeled).
+#[no_mangle]
+pub extern "C" fn cuModuleGetSurfRef(sref: *mut *mut c_void, m: *mut c_void, name: *const c_char) -> i32 {
+    let _ = (sref, name);
+    with(|s| if s.module_id(m).is_some() { CUDA_ERROR_NOT_FOUND } else { CUDA_ERROR_INVALID_HANDLE })
+}
+
+// ==================================================================================================
+// IR-wired: unified + peer copies (single-device model → device→device)
+// ==================================================================================================
+
+/// `cuMemcpy(dst, src, n)` — a unified-addressing copy. Both pointers live in the one unified VA, so a
+/// generic copy is a device→device copy (a pointer that is not a live device allocation is a hard error,
+/// never a fake success).
+#[no_mangle]
+pub extern "C" fn cuMemcpy(dst: u64, src: u64, n: usize) -> i32 {
+    cuMemcpyDtoD_v2(dst, src, n)
+}
+
+/// `cuMemcpyAsync(dst, src, n, stream)` — the stream-ordered unified copy; validates the stream, then
+/// records the same on-device copy as [`cuMemcpy`].
+#[no_mangle]
+pub extern "C" fn cuMemcpyAsync(dst: u64, src: u64, n: usize, s: *mut c_void) -> i32 {
+    cuMemcpyDtoDAsync_v2(dst, src, n, s)
+}
+
+/// `cuMemcpyPeer(dst, dstCtx, src, srcCtx, n)` — a peer (cross-context) copy. The model has a single
+/// device with one unified VA, so a peer copy is a device→device copy; the contexts are irrelevant.
+#[no_mangle]
+pub extern "C" fn cuMemcpyPeer(
+    dst: u64,
+    dctx: *mut c_void,
+    src: u64,
+    sctx: *mut c_void,
+    n: usize,
+) -> i32 {
+    let _ = (dctx, sctx);
+    cuMemcpyDtoD_v2(dst, src, n)
+}
+
+/// `cuMemcpyPeerAsync(dst, dstCtx, src, srcCtx, n, stream)` — the stream-ordered peer copy (single-device
+/// model → stream-ordered device→device).
+#[no_mangle]
+pub extern "C" fn cuMemcpyPeerAsync(
+    dst: u64,
+    dctx: *mut c_void,
+    src: u64,
+    sctx: *mut c_void,
+    n: usize,
+    s: *mut c_void,
+) -> i32 {
+    let _ = (dctx, sctx);
+    cuMemcpyDtoDAsync_v2(dst, src, n, s)
+}
+
 // ==================================================================================================
 // IR-wired: kernel launch
 // ==================================================================================================
@@ -1765,6 +1933,53 @@ mod tests {
         assert_eq!(cuModuleGetFunction(&mut func, module, name.as_ptr()), CUDA_SUCCESS);
         assert!(!func.is_null());
         func
+    }
+
+    #[test]
+    fn module_globals_and_unload_error_paths() {
+        let _g = guard();
+        // A module declaring a `.global` variable (module load emits no IR — pure model bookkeeping).
+        let src = ".visible .global .align 4 .b8 gState[128];\n.visible .entry noop() { ret; }\n";
+        let img = std::ffi::CString::new(src).unwrap();
+        let mut module: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuModuleLoadData(&mut module, img.as_ptr() as *const c_void), CUDA_SUCCESS);
+
+        // An undeclared symbol is honestly NOT_FOUND (this path resolves the size first and never submits).
+        let missing = std::ffi::CString::new("nope").unwrap();
+        let (mut dptr, mut bytes) = (0u64, 0usize);
+        assert_eq!(
+            cuModuleGetGlobal_v2(&mut dptr, &mut bytes, module, missing.as_ptr()),
+            CUDA_ERROR_NOT_FOUND
+        );
+        // A bogus module handle is INVALID_HANDLE; a null name is INVALID_VALUE.
+        let name = std::ffi::CString::new("gState").unwrap();
+        assert_eq!(
+            cuModuleGetGlobal_v2(&mut dptr, &mut bytes, 0x9999 as *mut c_void, name.as_ptr()),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(
+            cuModuleGetGlobal_v2(&mut dptr, &mut bytes, module, core::ptr::null()),
+            CUDA_ERROR_INVALID_VALUE
+        );
+
+        // Unload validates the handle: a real module succeeds, a bogus one is INVALID_HANDLE.
+        assert_eq!(cuModuleUnload(module), CUDA_SUCCESS);
+        assert_eq!(cuModuleUnload(0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+
+        // Texref/surfref are unmodeled → NOT_FOUND for a valid module, INVALID_HANDLE for a bogus one.
+        let mut tref: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuModuleGetTexRef(&mut tref, module, name.as_ptr()), CUDA_ERROR_NOT_FOUND);
+        assert_eq!(cuModuleGetSurfRef(&mut tref, module, name.as_ptr()), CUDA_ERROR_NOT_FOUND);
+        assert_eq!(
+            cuModuleGetTexRef(&mut tref, 0x9999 as *mut c_void, name.as_ptr()),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+
+        // Loading mode is reported (eager).
+        let mut mode = -1i32;
+        assert_eq!(cuModuleGetLoadingMode(&mut mode), CUDA_SUCCESS);
+        assert_eq!(mode, 1);
+        assert_eq!(cuModuleGetLoadingMode(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
     }
 
     #[test]

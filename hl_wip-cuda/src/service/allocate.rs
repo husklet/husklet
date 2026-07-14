@@ -11,12 +11,12 @@ use hl_gpu::protocol::model::enums::buffer_usage;
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
 
 /// The usage flags every CUDA device allocation needs: storage + both copy directions + host-mappable.
-fn cuda_buffer_usage() -> u32 {
+pub(crate) fn cuda_buffer_usage() -> u32 {
     buffer_usage::STORAGE | buffer_usage::COPY_SRC | buffer_usage::COPY_DST | buffer_usage::MAP
 }
 
 /// Build the `CreateBuffer` command for a CUDA allocation of `size` bytes backed by `buffer`.
-fn create_buffer_cmd(buffer: u32, size: u64) -> Cmd {
+pub(crate) fn create_buffer_cmd(buffer: u32, size: u64) -> Cmd {
     Cmd::CreateBuffer(buffer, BufferDesc { size, usage: cuda_buffer_usage(), label: String::new() })
 }
 
