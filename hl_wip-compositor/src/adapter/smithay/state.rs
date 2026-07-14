@@ -35,10 +35,16 @@ use smithay::wayland::{
     },
     output::{OutputHandler, OutputManagerState},
     shell::xdg::{
+        decoration::{XdgDecorationHandler, XdgDecorationState},
         PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
     },
     shm::{with_buffer_contents, ShmHandler, ShmState},
 };
+
+/// The zxdg-decoration mode the wire speaks (`ServerSide` / `ClientSide`).
+use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
+/// The `xdg_toplevel` state enum (`Activated` / `Maximized` / `Fullscreen` / …) sent in a configure.
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgToplevelState;
 
 use crate::scene::model::{BufferState, Format, Output, OutputId, Rect, SurfaceId, SurfaceRole};
 use crate::scene::port::Clock;
@@ -89,6 +95,11 @@ pub struct HlState {
     pub compositor: CompositorState,
     pub shm: ShmState,
     pub xdg_shell: XdgShellState,
+    /// Owns the `zxdg_decoration_manager_v1` global. A client (GTK/Chrome/Qt) binds it, calls
+    /// `get_toplevel_decoration` on its toplevel, and negotiates server-side vs client-side decorations;
+    /// without an answering `configure(mode)` those toolkits stall waiting to learn whether to draw their
+    /// own CSD. Held for the state's lifetime so the global keeps advertising.
+    pub xdg_decoration: XdgDecorationState,
     /// Backs the `delegate_xdg_shell` `SeatHandler` bound (popup grabs reference a seat) AND owns the
     /// `wl_seat` capabilities the toolkits enumerate for input.
     pub seat_state: SeatState<HlState>,
@@ -140,6 +151,8 @@ impl HlState {
         // Smithay always advertises Argb8888 + Xrgb8888; pass no extra formats.
         let shm = ShmState::new::<HlState>(dh, Vec::new());
         let xdg_shell = XdgShellState::new::<HlState>(dh);
+        // Advertise `zxdg_decoration_manager_v1` so CSD-vs-SSD negotiation resolves instead of hanging.
+        let xdg_decoration = XdgDecorationState::new::<HlState>(dh);
         let mut seat_state = SeatState::new();
 
         let mut engine = Compositor::new(presenter, MonotonicClock::new());
@@ -165,6 +178,7 @@ impl HlState {
             compositor,
             shm,
             xdg_shell,
+            xdg_decoration,
             seat_state,
             seat,
             _output_manager: output_manager,
@@ -641,17 +655,73 @@ impl XdgShellHandler for HlState {
     }
 
     /// A toplevel mapped: assign the scene `Toplevel` role, send the initial configure (a floating size +
-    /// `Activated` + output bounds) so the client draws its first frame.
+    /// `Activated` + output bounds) so the client draws its first frame. A headless single-window
+    /// compositor grants keyboard focus to whatever maps, so the mapped toplevel is `Activated` — GTK/Qt
+    /// gate their "focused" styling (and Chrome its window controls) on that state.
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState;
         if let Some(sid) = self.sid(surface.wl_surface()) {
             self.engine.scene.set_role(sid, SurfaceRole::Toplevel);
         }
         let bounds = self.engine.scene.output_logical_size();
         surface.with_pending_state(|s| {
             s.size = Some(INITIAL_TOPLEVEL_SIZE.into());
+            // `configure_bounds` (xdg-shell v4+): the largest a client should size itself to. Toolkits
+            // clamp their preferred size to this; without it a client can pick a size larger than the
+            // output. Sourced from the scene's primary output logical size, same as maximize.
             s.bounds = Some(bounds.into());
-            s.states.set(XdgState::Activated);
+            s.states.set(XdgToplevelState::Activated);
+        });
+        surface.send_configure();
+    }
+
+    /// A toplevel set its title. Smithay has already stored it in the surface's role attributes; the
+    /// headless compositor has no task bar to reflect it into, so this is an explicit accept.
+    fn title_changed(&mut self, _surface: ToplevelSurface) {}
+
+    /// A toplevel set its app id. Stored by smithay; accepted here (no launcher/grouping policy headless).
+    fn app_id_changed(&mut self, _surface: ToplevelSurface) {}
+
+    /// The client asked to be maximized. A headless compositor grants it against the primary output's
+    /// logical size and reconfigures with the `Maximized` state (kept `Activated`) so the client redraws
+    /// to fill the output and drops its resize affordances. `set_min_size`/`set_max_size` land in
+    /// smithay's committed `SurfaceCachedState` automatically; they are not re-sent (they are client→server
+    /// hints, not part of the configure).
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        let (w, h) = self.engine.scene.output_logical_size();
+        surface.with_pending_state(|s| {
+            s.size = Some((w, h).into());
+            s.states.set(XdgToplevelState::Maximized);
+            s.states.set(XdgToplevelState::Activated);
+        });
+        surface.send_configure();
+    }
+
+    /// The client asked to leave maximized: drop the state and return to the floating size.
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|s| {
+            s.states.unset(XdgToplevelState::Maximized);
+            s.size = Some(INITIAL_TOPLEVEL_SIZE.into());
+        });
+        surface.send_configure();
+    }
+
+    /// The client asked for fullscreen. Grant it at the output's logical size with the `Fullscreen` state
+    /// (the headless compositor has one output; the requested `output` hint is not needed).
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>) {
+        let (w, h) = self.engine.scene.output_logical_size();
+        surface.with_pending_state(|s| {
+            s.size = Some((w, h).into());
+            s.states.set(XdgToplevelState::Fullscreen);
+            s.states.set(XdgToplevelState::Activated);
+        });
+        surface.send_configure();
+    }
+
+    /// The client asked to leave fullscreen: drop the state and return to the floating size.
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|s| {
+            s.states.unset(XdgToplevelState::Fullscreen);
+            s.size = Some(INITIAL_TOPLEVEL_SIZE.into());
         });
         surface.send_configure();
     }
@@ -669,6 +739,43 @@ impl XdgShellHandler for HlState {
     }
 }
 
+/// Server-side handling of `zxdg_decoration_manager_v1`. The negotiation contract: whenever a client
+/// creates a decoration object or expresses a preference, it MUST receive a `configure(mode)` telling it
+/// whether the compositor draws the frame (server-side) or the client must draw its own (client-side).
+/// A toolkit that never hears back stalls before mapping. This headless compositor composites the client
+/// buffer verbatim (it draws no frame of its own), so it honors the client's preferred mode when one is
+/// given and defaults to server-side (i.e. "no client CSD needed") otherwise. Smithay's
+/// `ToplevelSurface::send_configure` emits the `zxdg_toplevel_decoration_v1.configure` from the pending
+/// `decoration_mode` for us — we only set the mode and configure.
+impl XdgDecorationHandler for HlState {
+    /// The client attached a decoration object (`get_toplevel_decoration`) without yet stating a
+    /// preference: answer with the server-side default so it knows not to draw CSD.
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        toplevel.with_pending_state(|s| {
+            s.decoration_mode = Some(DecorationMode::ServerSide);
+        });
+        toplevel.send_configure();
+    }
+
+    /// The client stated a preferred mode (`set_mode`): honor it and re-configure. GTK/Chrome request
+    /// `ClientSide` to draw their own titlebar; granting exactly what they ask avoids a mode fight (the
+    /// double-decoration / no-decoration hangs a mismatched reply causes).
+    fn request_mode(&mut self, toplevel: ToplevelSurface, mode: DecorationMode) {
+        toplevel.with_pending_state(|s| {
+            s.decoration_mode = Some(mode);
+        });
+        toplevel.send_configure();
+    }
+
+    /// The client withdrew its preference (`unset_mode`): fall back to the server-side default.
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        toplevel.with_pending_state(|s| {
+            s.decoration_mode = Some(DecorationMode::ServerSide);
+        });
+        toplevel.send_configure();
+    }
+}
+
 /// A client bound `wl_output`. Smithay has already sent geometry/mode/scale/name/done; nothing extra to
 /// do headless (no `wl_surface.enter`/`leave` tracking without live output routing).
 impl OutputHandler for HlState {}
@@ -676,6 +783,7 @@ impl OutputHandler for HlState {}
 smithay::delegate_compositor!(HlState);
 smithay::delegate_shm!(HlState);
 smithay::delegate_xdg_shell!(HlState);
+smithay::delegate_xdg_decoration!(HlState);
 smithay::delegate_output!(HlState);
 smithay::delegate_seat!(HlState);
 

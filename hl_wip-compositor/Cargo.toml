@@ -87,6 +87,16 @@ name = "wayland_serve_adversarial"
 path = "tests/wayland_serve_adversarial.rs"
 required-features = ["smithay-adapter"]
 
+# xdg-shell configure (size + states + bounds) and zxdg_decoration_manager_v1 (CSD-vs-SSD) negotiation
+# proof: a real wayland-client binds the decoration manager, sets title/app_id, requests a decoration
+# mode, and asserts it receives an `xdg_toplevel.configure` (non-zero size + Activated + configure_bounds)
+# and a `zxdg_toplevel_decoration_v1.configure(mode)`, then maps + composites. Own binary — it mutates
+# process-global `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "wayland_xdg_decoration_socket"
+path = "tests/wayland_xdg_decoration_socket.rs"
+required-features = ["smithay-adapter"]
+
 # Input delivery proof: a real client maps a toplevel + creates wl_pointer/wl_keyboard, the test injects
 # pointer motion/button + a key over the live socket (via the host input channel), and the client asserts
 # it received wl_pointer.enter/motion/button (correct surface + surface-local coords) and
