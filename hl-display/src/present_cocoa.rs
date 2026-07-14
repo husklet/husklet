@@ -1984,11 +1984,9 @@ pub fn run_window(lfd: RawFd, socket: String, metal: bool) -> ! {
     run_multi(app, lfd, "window", move || Some(CocoaPresenter::new(mtm)))
 }
 
-/// The hl-gpu IR executor socket beside the display socket (or `HL_GPU_EXEC_SOCK`).
+/// The hl-gpu IR executor socket: always `hl-gpu.sock` beside the display socket (derived, not an env
+/// knob — the launcher computes the same path the same way).
 fn gpu_exec_sock(disp: &str) -> Option<String> {
-    if let Ok(p) = std::env::var("HL_GPU_EXEC_SOCK") {
-        return Some(p);
-    }
     let dir = std::path::Path::new(disp).parent()?;
     Some(dir.join("hl-gpu.sock").to_string_lossy().into_owned())
 }

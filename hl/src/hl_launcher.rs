@@ -290,18 +290,13 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
         _ => hl_gpu::integration::GuestArch::Aarch64,
     });
     if ws.gui {
-        // Host socket paths: `HL_DISPLAY_SOCK`/`HL_GPU_EXEC_SOCK` overrides (tests / bespoke layouts), else
-        // the per-session shared endpoints under the dd root (`hl-display`, spawned lazily elsewhere,
-        // creates + listens on them). Drop-in dirs (client libs / demo bins) are passed only when present,
-        // so a bare image needs no "hl-gpu image".
-        let host_sock = std::env::var("HL_DISPLAY_SOCK")
-            .unwrap_or_else(|_| paths::hl_root().join("run").join("wayland-0").to_string_lossy().into_owned());
-        let host_gpu_sock = std::env::var("HL_GPU_EXEC_SOCK").unwrap_or_else(|_| {
-            std::path::Path::new(&host_sock)
-                .parent()
-                .map(|d| d.join("hl-gpu.sock").to_string_lossy().into_owned())
-                .unwrap_or_else(|| paths::hl_root().join("run").join("hl-gpu.sock").to_string_lossy().into_owned())
-        });
+        // Host socket paths: the per-session shared endpoints under the hl run dir that `hl-display`
+        // (spawned lazily elsewhere) creates + listens on. Computed directly — no env indirection; the
+        // guest is handed these paths as values (bind-mount + WAYLAND_DISPLAY) via the provider below.
+        // Drop-in dirs (client libs / demo bins) are passed only when present, so a bare image needs none.
+        let run_dir = paths::hl_root().join("run");
+        let host_sock = run_dir.join("wayland-0").to_string_lossy().into_owned();
+        let host_gpu_sock = run_dir.join("hl-gpu.sock").to_string_lossy().into_owned();
         let gui_arch = match ws.arch {
             Arch::Amd64 => "x86_64",
             _ => "aarch64",

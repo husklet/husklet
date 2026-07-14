@@ -71,9 +71,9 @@ pub fn set_executor_health(healthy: bool) {
 
 /// Start the hl-gpu IR executor (and the IOSurface mach bridge) for the Smithay compositor, once.
 ///
-/// `disp_socket` is the Wayland socket path; the executor socket is derived beside it (or taken from
-/// `HL_GPU_EXEC_SOCK`) so a guest built for the legacy path finds the same endpoint on the Smithay
-/// path. Idempotent — subsequent calls return immediately.
+/// `disp_socket` is the Wayland socket path; the executor socket is derived beside it so a guest built
+/// for the legacy path finds the same endpoint on the Smithay path. Idempotent — subsequent calls
+/// return immediately.
 pub fn start(disp_socket: &str) {
     if START_ONCE.swap(true, Ordering::SeqCst) {
         return;
@@ -81,14 +81,11 @@ pub fn start(disp_socket: &str) {
     start_impl(disp_socket);
 }
 
-/// The hl-gpu IR executor socket: `HL_GPU_EXEC_SOCK` if set, else `hl-gpu.sock` beside the display
-/// socket. Mirrors `hl-display`'s `gpu_exec_sock` so the Smithay and legacy paths agree on the
-/// endpoint. `None` only when the display socket has no parent directory.
+/// The hl-gpu IR executor socket: `hl-gpu.sock` beside the display socket (derived, not an env knob).
+/// Mirrors `hl-display`'s `gpu_exec_sock` so the Smithay and legacy paths agree on the endpoint.
+/// `None` only when the display socket has no parent directory.
 #[cfg(target_os = "macos")]
 fn exec_sock(disp_socket: &str) -> Option<String> {
-    if let Ok(p) = std::env::var("HL_GPU_EXEC_SOCK") {
-        return Some(p);
-    }
     let dir = std::path::Path::new(disp_socket).parent()?;
     Some(dir.join("hl-gpu.sock").to_string_lossy().into_owned())
 }

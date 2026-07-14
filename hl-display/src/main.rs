@@ -265,7 +265,7 @@ fn serve_loop_metal(lfd: RawFd, dir: &str) {
     // Start the mach-port IOSurface handle bridge so guest dmabuf buffers resolve cross-process.
     hl_display::metal::start_gpu_bridge();
     // Start the hl-gpu IR executor (rung 3): the guest streams GPU commands here; we replay them on Metal
-    // into the resolved IOSurface. Socket path: HL_GPU_EXEC_SOCK, else alongside the display socket.
+    // into the resolved IOSurface. Socket path: hl-gpu.sock alongside the display socket (derived).
     if let Some(p) = gpu_exec_sock() {
         std::thread::spawn(move || hl_display::metal_backend::run_executor(p));
     }
@@ -370,13 +370,10 @@ fn serve_multiplex<P: Presenter>(
     }
 }
 
-/// The hl-gpu IR executor socket path: `HL_GPU_EXEC_SOCK` if set, else `hl-gpu.sock` beside the display
-/// socket. `None` only if no runtime dir is resolvable.
+/// The hl-gpu IR executor socket path: always `hl-gpu.sock` beside the display socket (derived, not an
+/// env knob). `None` only if no runtime dir is resolvable.
 #[cfg(target_os = "macos")]
 fn gpu_exec_sock() -> Option<String> {
-    if let Ok(p) = std::env::var("HL_GPU_EXEC_SOCK") {
-        return Some(p);
-    }
     let disp = default_socket();
     let dir = std::path::Path::new(&disp).parent()?;
     Some(dir.join("hl-gpu.sock").to_string_lossy().into_owned())
