@@ -6,7 +6,7 @@
 use std::io::IsTerminal;
 use std::process::Command;
 
-use crate::doctor::{ensure_agent, ping_socket};
+use crate::agent;
 use crate::paths;
 use crate::run;
 
@@ -138,7 +138,7 @@ fn ensure_daemon() -> Result<(), String> {
     if ping_socket(&sock) {
         return Ok(());
     }
-    let _ = ensure_agent(); // best-effort: load the LaunchAgent (macOS)
+    let _ = agent::ensure(); // best-effort: start the daemon service for this platform
     for _ in 0..40 {
         if ping_socket(&sock) {
             return Ok(());
@@ -146,4 +146,20 @@ fn ensure_daemon() -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     Err(format!("no daemon listening at {}", sock.display()))
+}
+
+/// Synchronously connect to the socket to confirm the daemon answers `_ping`. (Previously in the
+/// removed `doctor` module; `run` is now its only caller.)
+fn ping_socket(sock: &std::path::Path) -> bool {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => return false,
+    };
+    rt.block_on(async {
+        let c = hl_client::Client::new(sock);
+        c.ping().await.is_ok()
+    })
 }

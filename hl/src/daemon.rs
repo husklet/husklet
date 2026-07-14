@@ -2,7 +2,6 @@
 
 use crate::agent;
 use crate::cli::DaemonCmd;
-use crate::doctor::ensure_agent;
 use crate::paths;
 use crate::report::{report, run_status};
 use std::process::Command;
@@ -10,7 +9,7 @@ use std::process::Command;
 pub(crate) fn cmd_daemon(action: DaemonCmd) -> i32 {
     match action {
         DaemonCmd::Run => daemon_run(),
-        DaemonCmd::Start => report("daemon start", ensure_agent()),
+        DaemonCmd::Start => report("daemon start", agent::ensure()),
         DaemonCmd::Stop => report("daemon stop", agent::bootout()),
         DaemonCmd::Restart => report("daemon restart", agent::kickstart()),
         DaemonCmd::Status => {

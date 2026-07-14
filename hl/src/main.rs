@@ -7,16 +7,15 @@
 //!   ddcli run alpine echo hi           # run a one-off command
 //!   ddcli run ubuntu --platform linux/amd64   # force amd64 (runs via the x86-64 JIT)
 //!   ddcli install                      # set up the daemon agent + docker context
-//!   ddcli doctor                       # check everything is healthy
 
 mod agent;
 mod app;
 mod cli;
 mod context;
 mod daemon;
-mod doctor;
 mod install;
 mod paths;
+mod platform;
 mod hl_launcher;
 mod report;
 mod run;
@@ -27,7 +26,6 @@ use crate::app::cmd_app;
 use crate::cli::{Cli, Cmd};
 use crate::context::cmd_context;
 use crate::daemon::cmd_daemon;
-use crate::doctor::cmd_doctor;
 use crate::install::{cmd_install, cmd_uninstall};
 use crate::run::cmd_run;
 use clap::Parser;
@@ -46,7 +44,6 @@ fn main() {
         Cmd::Install => cmd_install(),
         Cmd::Uninstall { purge } => cmd_uninstall(purge),
         Cmd::Context { action } => cmd_context(action),
-        Cmd::Doctor => cmd_doctor(),
     };
     std::process::exit(code);
 }

@@ -4,11 +4,9 @@
 
 use std::path::PathBuf;
 
-/// The launchd label for the per-user daemon agent.
+/// The base service label/id for the per-user daemon (launchd label on macOS, the systemd unit
+/// stem on Linux).
 pub const AGENT_LABEL: &str = "com.dd.daemon";
-
-/// Installed app-bundle location (where `dd install` expects the signed `.app`).
-pub const APP_BUNDLE: &str = "/Applications/dd.app";
 
 /// `$HOME`, or `.` as a last resort.
 pub fn home() -> PathBuf {
@@ -37,27 +35,22 @@ pub fn images_dir() -> PathBuf {
     hl_root().join("images")
 }
 
-/// `~/Library/Logs/dd` — daemon stdout/stderr logs.
+/// Daemon stdout/stderr logs dir. Platform-specific (macOS `~/Library/Logs/dd`, Linux `~/.dd/logs`).
 pub fn logs_dir() -> PathBuf {
-    home().join("Library/Logs/dd")
-}
-
-/// `~/Library/LaunchAgents/com.dd.daemon.plist`.
-pub fn agent_plist() -> PathBuf {
-    home()
-        .join("Library/LaunchAgents")
-        .join(format!("{AGENT_LABEL}.plist"))
+    crate::platform::logs_dir()
 }
 
 /// The `dd-daemon` binary the agent should launch. Order: `$DD_DAEMON_BIN`, the installed app
-/// bundle, then a binary sitting next to this `dd` executable (the dev/`cargo` layout).
+/// bundle (macOS only), then a binary sitting next to this `dd` executable (the dev/`cargo` layout).
 pub fn daemon_bin() -> PathBuf {
     if let Some(p) = std::env::var_os("DD_DAEMON_BIN") {
         return PathBuf::from(p);
     }
-    let bundled = PathBuf::from(APP_BUNDLE).join("Contents/Resources/dd-daemon");
-    if bundled.exists() {
-        return bundled;
+    if let Some(bundle) = crate::platform::app_bundle() {
+        let bundled = bundle.join("Contents/Resources/dd-daemon");
+        if bundled.exists() {
+            return bundled;
+        }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
@@ -67,7 +60,10 @@ pub fn daemon_bin() -> PathBuf {
             }
         }
     }
-    bundled
+    // Fallback: the bundle path on macOS, else a `~/.dd`-relative location.
+    crate::platform::app_bundle()
+        .map(|b| b.join("Contents/Resources/dd-daemon"))
+        .unwrap_or_else(|| hl_root().join("dd-daemon"))
 }
 
 /// `unix://<socket>` — the DOCKER_HOST / docker-context endpoint.

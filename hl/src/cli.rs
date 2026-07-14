@@ -43,8 +43,6 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: ContextCmd,
     },
-    /// Diagnose the install (socket, agent, context, app quarantine).
-    Doctor,
     /// `ddcli <image> [command…]` — shorthand for `ddcli run <image> …`.
     #[command(external_subcommand)]
     Image(Vec<String>),

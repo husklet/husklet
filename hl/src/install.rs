@@ -1,20 +1,23 @@
-//! `ddcli install` / `ddcli uninstall` — set up or tear down the daemon agent, docker context, and Gatekeeper quarantine hints.
+//! `ddcli install` / `ddcli uninstall` — set up or tear down the daemon service, docker context,
+//! and (on macOS) Gatekeeper quarantine hints. All OS-specific work goes through `crate::platform`.
 
 use crate::agent;
 use crate::context;
-use crate::doctor::ensure_agent;
 use crate::paths;
-use std::process::Command;
+use crate::platform;
 
-/// Full install: state tree + LaunchAgent + docker context, then a health hint.
+/// Full install: state tree + daemon service + docker context, then a quarantine hint.
 pub(crate) fn cmd_install() -> i32 {
-    if let Err(e) = agent::write_plist() {
-        eprintln!("write LaunchAgent: {e}");
-        return 1;
-    }
-    println!("✓ wrote {}", paths::agent_plist().display());
+    let unit = match agent::write_unit() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("write daemon service: {e}");
+            return 1;
+        }
+    };
+    println!("✓ wrote {}", unit.display());
 
-    match ensure_agent() {
+    match agent::ensure() {
         Ok(_) => println!("✓ loaded daemon agent ({})", agent::service_target()),
         Err(e) => eprintln!("! could not load agent: {e}"),
     }
@@ -27,15 +30,12 @@ pub(crate) fn cmd_install() -> i32 {
     println!("\nIf you don't use `docker context`, add this to your shell:");
     println!("    export DOCKER_HOST={}", paths::docker_host());
     warn_quarantine();
-    println!(
-        "\nDone. Try:  ddcli ubuntu   (a shell in an ubuntu container, here)  ·  ddcli doctor"
-    );
+    println!("\nDone. Try:  ddcli ubuntu   (a shell in an ubuntu container, here)");
     0
 }
 
 pub(crate) fn cmd_uninstall(purge: bool) -> i32 {
-    let _ = agent::bootout();
-    let _ = std::fs::remove_file(paths::agent_plist());
+    let _ = agent::remove();
     println!("✓ removed daemon agent + plist");
     let _ = context::remove();
     println!("✓ removed docker context '{}'", context::NAME);
@@ -47,20 +47,13 @@ pub(crate) fn cmd_uninstall(purge: bool) -> i32 {
     0
 }
 
-pub(crate) fn is_quarantined(p: &std::path::Path) -> bool {
-    Command::new("xattr")
-        .arg("-p")
-        .arg("com.apple.quarantine")
-        .arg(p)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
+/// On macOS, if the installed `.app` is Gatekeeper-quarantined, print the one-time fix. No-op
+/// on platforms without an app bundle / Gatekeeper.
 fn warn_quarantine() {
-    let bundle = std::path::Path::new(paths::APP_BUNDLE);
-    if bundle.exists() && is_quarantined(bundle) {
-        println!("\nThe app is quarantined by Gatekeeper. Clear it once with:");
-        println!("    xattr -dr com.apple.quarantine {}", paths::APP_BUNDLE);
+    if let Some(bundle) = platform::app_bundle() {
+        if bundle.exists() && platform::is_quarantined(&bundle) {
+            println!("\nThe app is quarantined by Gatekeeper. Clear it once with:");
+            println!("    xattr -dr com.apple.quarantine {}", bundle.display());
+        }
     }
 }

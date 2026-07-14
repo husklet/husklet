@@ -1,15 +1,15 @@
 //! `ddcli app` — launch the installed dd-app GUI bundle (or a dev sibling binary).
 
-use crate::paths;
 use crate::report::run_status;
 use std::process::Command;
 
 /// Launch the installed GUI bundle (or a dev `dd-app` sibling binary).
 pub(crate) fn cmd_app() -> i32 {
-    let bundle = std::path::Path::new(paths::APP_BUNDLE);
-    if bundle.exists() {
-        // `open` detaches the GUI from this terminal.
-        return run_status(Command::new("open").arg(bundle));
+    if let Some(bundle) = crate::platform::app_bundle() {
+        if bundle.exists() {
+            // `open` detaches the GUI from this terminal.
+            return run_status(Command::new("open").arg(&bundle));
+        }
     }
     // Dev fallback: a dd-app binary next to us.
     if let Ok(exe) = std::env::current_exe() {

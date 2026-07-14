@@ -2,10 +2,6 @@
 
 use std::process::Command;
 
-pub(crate) fn line(ok: bool, msg: &str) {
-    println!("[{}] {msg}", if ok { "✓" } else { "✗" });
-}
-
 /// Report success/failure of an action whose Ok payload we don't need to show.
 pub(crate) fn report<T, E: std::fmt::Display>(what: &str, r: Result<T, E>) -> i32 {
     match r {
