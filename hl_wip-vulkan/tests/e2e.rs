@@ -191,38 +191,57 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
     let surface = present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
     let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
 
-    // vkGetSwapchainImagesKHR → the presentable images' VkImage handles; vkAcquireNextImageKHR → an index.
+    // vkGetSwapchainImagesKHR → the presentable images' VkImage handles.
     let images = present::get_swapchain_images(&d, swapchain).unwrap();
     assert_eq!(images.len(), 2, "the swapchain has its two presentable images");
-    let idx = present::acquire_next_image(&d, swapchain).unwrap();
-    let acquired = images[idx as usize];
 
-    // Record a render pass that CLEARS the acquired swapchain image to the known color, then submit — the
-    // executor clears the image's REAL backing texture (this fails if the image were not a real texture).
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
-    record::cmd_begin_render_pass(&mut d, cb, acquired, clear, true).unwrap();
-    record::cmd_end_render_pass(&mut d, cb).unwrap();
-    record::end(&mut d, cb).unwrap();
-    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+    // Run a CONTINUOUS present loop for MORE iterations than there are images (a real app's acquire →
+    // render → present, repeat). This proves acquisition genuinely round-robins: the returned index must
+    // cycle 0,1,0,1,... (NOT stay pinned at image 0, which aborted vkcube's demo_draw after one frame), and
+    // each frame's readback must return exactly what THAT frame cleared into THAT acquired image.
+    const FRAMES: usize = 5; // > the 2 images, so the cycle wraps twice
+    let mut acquired_indices = Vec::new();
+    for frame in 0..FRAMES {
+        // A per-frame clear color with 4 distinct channels; frame index rides in the blue channel so each
+        // frame's presented pixels are provably the ones this frame rendered into the acquired image.
+        let clear = [51.0 / 255.0, 102.0 / 255.0, (10 + frame as u32) as f32 / 255.0, 1.0];
+        let expected = [(10 + frame) as u8, 102, 51, 255]; // BGRA readback of the above
 
-    // vkQueuePresentKHR — presents the rendered image (Cmd::Present names its real texture id).
-    present::queue_present(&mut d, &mut sink, swapchain, idx).unwrap();
+        // vkAcquireNextImageKHR — the next image in round-robin order.
+        let idx = present::acquire_next_image(&mut d, swapchain).unwrap();
+        acquired_indices.push(idx);
+        let acquired = images[idx as usize];
 
-    // Read the PRESENTED image back to host pixels over the sink (CopyTextureToBuffer + read_buffer).
-    let pixels = present::read_presented_image(&mut d, &mut sink, swapchain, idx).unwrap();
-    assert_eq!(pixels.len(), (W * H * 4) as usize, "the whole presented image plane came back");
+        // Record a render pass that CLEARS the acquired image to this frame's color, then submit — the
+        // executor clears the image's REAL backing texture (fails if the image were not a real texture).
+        let cb = record::allocate_command_buffer(&mut d);
+        record::begin(&mut d, cb).unwrap();
+        record::cmd_begin_render_pass(&mut d, cb, acquired, clear, true).unwrap();
+        record::cmd_end_render_pass(&mut d, cb).unwrap();
+        record::end(&mut d, cb).unwrap();
+        submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
-    let texel = |x: u32, y: u32| -> [u8; 4] {
-        let o = ((y * W + x) * 4) as usize;
-        [pixels[o], pixels[o + 1], pixels[o + 2], pixels[o + 3]]
-    };
-    // Every texel of the presented swapchain image is exactly the color the app cleared it to.
-    for y in 0..H {
-        for x in 0..W {
-            assert_eq!(texel(x, y), expected, "presented swapchain image texel ({x},{y})");
+        // vkQueuePresentKHR — presents the rendered image (Cmd::Present names its real texture id) and
+        // returns it to the pool so the next acquire can advance.
+        present::queue_present(&mut d, &mut sink, swapchain, idx).unwrap();
+
+        // Read the PRESENTED image back and assert it is exactly what THIS frame cleared into THIS image.
+        let pixels = present::read_presented_image(&mut d, &mut sink, swapchain, idx).unwrap();
+        assert_eq!(pixels.len(), (W * H * 4) as usize, "the whole presented image plane came back");
+        let texel = |x: u32, y: u32| -> [u8; 4] {
+            let o = ((y * W + x) * 4) as usize;
+            [pixels[o], pixels[o + 1], pixels[o + 2], pixels[o + 3]]
+        };
+        for y in 0..H {
+            for x in 0..W {
+                assert_eq!(texel(x, y), expected, "frame {frame} presented image (idx {idx}) texel ({x},{y})");
+            }
         }
     }
+
+    // The acquire indices genuinely cycled through the 2 images (0,1,0,1,0) — NOT pinned at 0.
+    assert_eq!(acquired_indices, vec![0, 1, 0, 1, 0], "acquire round-robins across the swapchain images");
+    assert!(acquired_indices.contains(&1), "more than image 0 was acquired (the round-robin fix)");
 }
 
 /// The device→host mapped-memory readback, end-to-end: a device op produces bytes in a buffer bound to

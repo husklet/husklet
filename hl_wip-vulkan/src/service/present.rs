@@ -13,7 +13,7 @@ use crate::model::instance::QUEUE_FAMILY_INDEX;
 use crate::model::memory::{tex_format_from_vk, vk_format};
 use crate::model::memory::ImageRec;
 use crate::model::queue::{
-    SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage, SwapchainRec,
+    ImageState, SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage, SwapchainRec,
     COMPOSITE_ALPHA_OPAQUE_BIT, CURRENT_EXTENT_UNDEFINED, SURFACE_IMAGE_USAGE,
     SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_PRESENT_MODE_FIFO_KHR,
 };
@@ -133,10 +133,11 @@ pub fn create_swapchain(
             handle,
             ImageRec { ir_id: ir_texture_id, width, height, format, usage, is_render_target: true },
         );
-        images.push(SwapImage { ir_texture_id, handle });
+        images.push(SwapImage { ir_texture_id, handle, state: ImageState::Available });
     }
     let handle = dev.alloc_handle();
-    dev.swapchains.insert(handle, SwapchainRec { surface, width, height, format, images });
+    dev.swapchains
+        .insert(handle, SwapchainRec { surface, width, height, format, images, acquire_cursor: 0 });
     Ok(handle)
 }
 
@@ -152,21 +153,46 @@ pub fn get_swapchain_images(dev: &Device, swapchain: VkSwapchainKHR) -> Result<V
     Ok(sc.images.iter().map(|i| i.handle).collect())
 }
 
-/// `vkAcquireNextImageKHR` — return the index of a presentable image. The bring-up model is a trivial
-/// single-image acquire (index 0); real FIFO round-robin is a later hardening pass.
-pub fn acquire_next_image(dev: &Device, swapchain: VkSwapchainKHR) -> Result<u32> {
+/// `vkAcquireNextImageKHR` — return the index of the next presentable image in genuine FIFO round-robin
+/// order. Starting at the swapchain's `acquire_cursor`, this scans the images cyclically for the first one
+/// in the pool ([`ImageState::Available`]), marks it [`ImageState::Acquired`] (so it is not handed out
+/// again until [`queue_present`] returns it to the pool), advances the cursor past it, and returns its
+/// index — so a real present loop cycles `0,1,..,N-1,0,..` instead of being pinned to image 0 (which would
+/// re-hand the app an image the presentation engine still owns, aborting the loop after one frame).
+///
+/// If NO image is currently available (the app acquired more than it presented), the headless model —
+/// where a present completes immediately — would normally already have returned one; as a defensive
+/// fallback it returns the cursor image anyway (re-marking it acquired) so acquisition still makes forward
+/// progress rather than failing. Errors on an unknown or empty swapchain.
+///
+/// The `_semaphore`/`_fence` the app may pass are signalled by the shim's existing sync path (unchanged);
+/// this driver-level entry only advances the acquire cursor and image ownership.
+pub fn acquire_next_image(dev: &mut Device, swapchain: VkSwapchainKHR) -> Result<u32> {
     let sc = dev
         .swapchains
-        .get(&swapchain)
+        .get_mut(&swapchain)
         .ok_or(GpuError::Invalid("vkAcquireNextImageKHR: unknown VkSwapchainKHR"))?;
-    if sc.images.is_empty() {
+    let count = sc.images.len();
+    if count == 0 {
         return Err(GpuError::Invalid("vkAcquireNextImageKHR: swapchain has no images"));
     }
-    Ok(0)
+    let start = (sc.acquire_cursor as usize) % count;
+    // Scan cyclically from the cursor for the first pool image; fall back to the cursor image itself.
+    let index = (0..count)
+        .map(|off| (start + off) % count)
+        .find(|&i| sc.images[i].state == ImageState::Available)
+        .unwrap_or(start);
+    sc.images[index].state = ImageState::Acquired;
+    sc.acquire_cursor = ((index + 1) % count) as u32;
+    Ok(index as u32)
 }
 
 /// `vkQueuePresentKHR` (one swapchain) — submit [`Cmd::Present`] naming the swapchain's surface + the
-/// presented image's texture id. Errors on an unknown swapchain / out-of-range image index.
+/// presented image's texture id, then RETURN that image to the pool. Because this headless present
+/// completes immediately (the readback runs synchronously right after), the presented image is marked
+/// [`ImageState::Available`] again as the last step, so the next `vkAcquireNextImageKHR` can round-robin
+/// on to (and eventually back to) it — keeping a real FIFO present loop cycling. Errors on an unknown
+/// swapchain / out-of-range image index.
 pub fn queue_present(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
@@ -190,6 +216,12 @@ pub fn queue_present(
         .ok_or(GpuError::Invalid("vkQueuePresentKHR: swapchain surface lost"))?
         .ir_id;
     sink.submit(&[Cmd::Present { surface, texture }])?;
+    // The present engine is done with this image (immediate headless present) — return it to the pool so a
+    // future acquire can hand it out again. Index was range-checked above, so the image is present.
+    if let Some(img) = dev.swapchains.get_mut(&swapchain).and_then(|sc| sc.images.get_mut(image_index as usize))
+    {
+        img.state = ImageState::Available;
+    }
     Ok(())
 }
 

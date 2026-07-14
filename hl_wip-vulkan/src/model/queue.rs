@@ -52,21 +52,41 @@ pub struct SurfaceRec {
     pub format: TextureFormat,
 }
 
+/// Where a swapchain image is in the acquire→render→present→available cycle — the per-image ownership
+/// the FIFO round-robin acquire tracks. Mirrors the `VkSwapchainImage` availability a real presentation
+/// engine keeps: an image the app holds (`Acquired`) or has handed back to present (`Presented`) must not
+/// be re-acquired until it returns to the pool (`Available`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum ImageState {
+    /// In the pool — free for `vkAcquireNextImageKHR` to hand out.
+    #[default]
+    Available,
+    /// Handed to the app by `vkAcquireNextImageKHR`; the app is rendering into it, not yet presented.
+    Acquired,
+    /// Handed to `vkQueuePresentKHR`; owned by the presentation engine. In this headless model the
+    /// present completes immediately, so it returns to `Available` at the end of the present.
+    Presented,
+}
+
 /// One presentable swapchain image. Unlike the old reserved-id model (every image aliased a single
 /// host-owned present texture), each image is now backed by a REAL hl-GPU render-target texture
 /// ([`hl_gpu::Cmd::CreateTexture`] with `RENDER_TARGET | COPY_SRC`, emitted at
 /// [`crate::service::present::create_swapchain`]) — so the app renders into it like any other image, a
 /// present names its texture id, and a `CopyTextureToBuffer` + `read_buffer` reads its pixels back to the
 /// host (the same device→host path GL's `glReadPixels` uses). `handle` is the `VkImage`
-/// `vkGetSwapchainImagesKHR` hands the app for this image; `ir_texture_id` is that image's backing texture.
+/// `vkGetSwapchainImagesKHR` hands the app for this image; `ir_texture_id` is that image's backing texture;
+/// `state` is its acquire-cycle ownership (starts [`ImageState::Available`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SwapImage {
     pub ir_texture_id: u32,
     pub handle: crate::VkImage,
+    pub state: ImageState,
 }
 
-/// A `VkSwapchainKHR`: the surface it presents through, its geometry/format, and its presentable
-/// images. Mirrors `MVKSwapchain`.
+/// A `VkSwapchainKHR`: the surface it presents through, its geometry/format, its presentable images, and
+/// the round-robin acquire cursor. Mirrors `MVKSwapchain`. `acquire_cursor` is the next index
+/// `vkAcquireNextImageKHR` scans from, so successive acquires cycle `0,1,..,N-1,0,..` instead of always
+/// returning image 0 (which would re-hand the app an image the presentation engine still owns).
 #[derive(Clone, PartialEq, Debug)]
 pub struct SwapchainRec {
     pub surface: crate::VkSurfaceKHR,
@@ -74,6 +94,8 @@ pub struct SwapchainRec {
     pub height: u32,
     pub format: TextureFormat,
     pub images: Vec<SwapImage>,
+    /// The index the next round-robin acquire starts its scan at (mod `images.len()`).
+    pub acquire_cursor: u32,
 }
 
 // ---- WSI physical-device surface queries (modeled values) ----------------------------------------
