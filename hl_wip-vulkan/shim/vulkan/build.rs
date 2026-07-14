@@ -276,8 +276,16 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetPhysicalDeviceFeatures",
     "vkGetPhysicalDeviceMemoryProperties",
     "vkGetPhysicalDeviceQueueFamilyProperties",
+    "vkGetPhysicalDeviceFormatProperties",
+    "vkGetPhysicalDeviceImageFormatProperties",
     "vkEnumerateDeviceExtensionProperties",
     "vkEnumerateDeviceLayerProperties",
+    // ---- VK_KHR_get_physical_device_properties2 / core-1.1 `...2` queries (instance.rs) ----
+    "vkGetPhysicalDeviceProperties2",
+    "vkGetPhysicalDeviceFeatures2",
+    "vkGetPhysicalDeviceMemoryProperties2",
+    "vkGetPhysicalDeviceQueueFamilyProperties2",
+    "vkGetPhysicalDeviceFormatProperties2",
     // ---- device + queue (device.rs) ----
     "vkCreateDevice",
     "vkDestroyDevice",
@@ -323,6 +331,7 @@ const IMPLEMENTED: &[&str] = &[
     "vkDestroyFence",
     "vkWaitForFences",
     "vkResetFences",
+    "vkGetFenceStatus",
     // ---- IR-wired graphics path (graphics.rs) ----
     // images + views + samplers
     "vkCreateImage",

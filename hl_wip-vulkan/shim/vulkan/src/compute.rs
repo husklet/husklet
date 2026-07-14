@@ -674,3 +674,15 @@ pub extern "C" fn vkResetFences(_device: *mut c_void, fence_count: u32, p_fences
     })
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
+
+/// `vkGetFenceStatus` — poll the fence's guest-side signaled state (`VK_SUCCESS` when signaled,
+/// `VK_NOT_READY` otherwise). Non-blocking, unlike `vkWaitForFences`. Errors on an unknown fence.
+#[no_mangle]
+pub extern "C" fn vkGetFenceStatus(_device: *mut c_void, fence: u64) -> VkResult {
+    dev_sink(|dev, _| match submit::fence_status(dev, fence) {
+        Ok(true) => VK_SUCCESS,
+        Ok(false) => VK_NOT_READY,
+        Err(e) => vk_result_from_gpu_error(&e),
+    })
+    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+}

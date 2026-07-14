@@ -8,6 +8,7 @@
 
 use core::ffi::{c_char, c_void};
 
+use hl_vulkan::model::capability::{self, ExtensionProp};
 use hl_vulkan::service::create;
 
 use crate::state::with;
@@ -23,6 +24,36 @@ fn write_name(dst: &mut [c_char], s: &str) {
     for i in 0..n {
         dst[i] = b[i] as c_char;
     }
+}
+
+/// The Vulkan two-call enumeration idiom: with `p_data` NULL, write the item count; otherwise copy up
+/// to `*p_count` items (truncating to `VK_INCOMPLETE` if the caller's buffer is smaller).
+///
+/// # Safety
+/// `p_count` must be a valid `*mut u32`; `p_data`, if non-NULL, must point to `*p_count` writable `T`s.
+unsafe fn write_enumeration<T: Copy>(items: &[T], p_count: *mut u32, p_data: *mut T) -> VkResult {
+    let Some(count) = p_count.as_mut() else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if p_data.is_null() {
+        *count = items.len() as u32;
+        return VK_SUCCESS;
+    }
+    let n = (*count as usize).min(items.len());
+    core::ptr::copy_nonoverlapping(items.as_ptr(), p_data, n);
+    *count = n as u32;
+    if n < items.len() {
+        VK_INCOMPLETE
+    } else {
+        VK_SUCCESS
+    }
+}
+
+/// Build a `VkExtensionProperties` from an advertised extension descriptor.
+fn ext_prop(e: &ExtensionProp) -> VkExtensionProperties {
+    let mut p = VkExtensionProperties { extension_name: [0; VK_MAX_EXTENSION_NAME_SIZE], spec_version: e.spec_version };
+    write_name(&mut p.extension_name, e.name);
+    p
 }
 
 // ==================================================================================================
@@ -68,28 +99,27 @@ pub extern "C" fn vkEnumerateInstanceVersion(p_api_version: *mut u32) -> VkResul
     VK_SUCCESS
 }
 
-/// We advertise no instance extensions in this bring-up shim (WSI lands with the present pass).
+/// Instance extensions the ICD really backs (allow-list, not the whole `vk.xml`): the WSI base
+/// `VK_KHR_surface` + `VK_KHR_get_physical_device_properties2` (the `...2` queries below). A real app
+/// gates its init on these being enumerated, so this is the key unblock. Sourced from
+/// [`capability::INSTANCE_EXTENSIONS`].
 #[no_mangle]
 pub extern "C" fn vkEnumerateInstanceExtensionProperties(
     _p_layer_name: *const c_char,
     p_property_count: *mut u32,
-    _p_properties: *mut c_void,
+    p_properties: *mut c_void,
 ) -> VkResult {
-    if !p_property_count.is_null() {
-        unsafe { *p_property_count = 0 };
-    }
-    VK_SUCCESS
+    let exts: Vec<VkExtensionProperties> = capability::INSTANCE_EXTENSIONS.iter().map(ext_prop).collect();
+    unsafe { write_enumeration(&exts, p_property_count, p_properties as *mut VkExtensionProperties) }
 }
 
+/// The ICD exposes no layers (layers are discovered from layer manifests, never the driver).
 #[no_mangle]
 pub extern "C" fn vkEnumerateInstanceLayerProperties(
     p_property_count: *mut u32,
-    _p_properties: *mut c_void,
+    p_properties: *mut c_void,
 ) -> VkResult {
-    if !p_property_count.is_null() {
-        unsafe { *p_property_count = 0 };
-    }
-    VK_SUCCESS
+    unsafe { write_enumeration::<VkLayerProperties>(&[], p_property_count, p_properties as *mut VkLayerProperties) }
 }
 
 // ==================================================================================================
@@ -206,29 +236,193 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties(
     }
 }
 
+/// Device extensions the ICD really backs: `VK_KHR_swapchain` (the present path). Nothing unbacked is
+/// advertised. Sourced from [`capability::DEVICE_EXTENSIONS`].
 #[no_mangle]
 pub extern "C" fn vkEnumerateDeviceExtensionProperties(
     _physical_device: *mut c_void,
     _p_layer_name: *const c_char,
     p_property_count: *mut u32,
-    _p_properties: *mut c_void,
+    p_properties: *mut c_void,
 ) -> VkResult {
-    if !p_property_count.is_null() {
-        unsafe { *p_property_count = 0 };
-    }
-    VK_SUCCESS
+    let exts: Vec<VkExtensionProperties> = capability::DEVICE_EXTENSIONS.iter().map(ext_prop).collect();
+    unsafe { write_enumeration(&exts, p_property_count, p_properties as *mut VkExtensionProperties) }
 }
 
+/// Deprecated device-layer enumeration — always empty (spec: return instance layers or none).
 #[no_mangle]
 pub extern "C" fn vkEnumerateDeviceLayerProperties(
     _physical_device: *mut c_void,
     p_property_count: *mut u32,
-    _p_properties: *mut c_void,
+    p_properties: *mut c_void,
 ) -> VkResult {
-    if !p_property_count.is_null() {
-        unsafe { *p_property_count = 0 };
+    unsafe { write_enumeration::<VkLayerProperties>(&[], p_property_count, p_properties as *mut VkLayerProperties) }
+}
+
+// ==================================================================================================
+// format + image-format queries
+// ==================================================================================================
+
+/// `vkGetPhysicalDeviceFormatProperties` — the truthful per-format feature masks (color formats:
+/// color-attachment/blend/sampled/storage/blit/transfer; depth: depth-stencil-attachment/sampled/
+/// transfer; vertex float: vertex-buffer). Sourced from [`capability::format_features`].
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
+    _physical_device: *mut c_void,
+    format: i32,
+    p_format_properties: *mut c_void,
+) {
+    let Some(out) = (unsafe { (p_format_properties as *mut VkFormatProperties).as_mut() }) else {
+        return;
+    };
+    let ff = capability::format_features(format as u32);
+    out.linear_tiling_features = ff.linear_tiling;
+    out.optimal_tiling_features = ff.optimal_tiling;
+    out.buffer_features = ff.buffer;
+}
+
+/// `vkGetPhysicalDeviceImageFormatProperties` — the creation limits for a `(format, type, tiling, …)`
+/// combination, or `VK_ERROR_FORMAT_NOT_SUPPORTED` when not creatable (spec §12.3). Reports the
+/// supported 2D-optimal color subset with the device limits; everything else is truthfully unsupported.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
+    _physical_device: *mut c_void,
+    format: i32,
+    image_type: i32,
+    tiling: i32,
+    _usage: VkFlags,
+    _flags: VkFlags,
+    p_image_format_properties: *mut c_void,
+) -> VkResult {
+    const VK_ERROR_FORMAT_NOT_SUPPORTED: VkResult = -11;
+    const VK_IMAGE_TYPE_2D: i32 = 1;
+    const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+    let Some(out) = (unsafe { (p_image_format_properties as *mut VkImageFormatProperties).as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    if !capability::image_format_supported(format as u32)
+        || image_type != VK_IMAGE_TYPE_2D
+        || tiling != VK_IMAGE_TILING_OPTIMAL
+    {
+        return VK_ERROR_FORMAT_NOT_SUPPORTED;
     }
+    let dim = with(|s| s.physical_device().limits.max_image_dimension_2d);
+    *out = VkImageFormatProperties {
+        max_extent: VkExtent3D { width: dim, height: dim, depth: 1 },
+        max_mip_levels: 1 + (dim as f32).log2() as u32,
+        max_array_layers: 2048,
+        sample_counts: 0x1 | 0x4, // TYPE_1 | TYPE_4
+        max_resource_size: 1 << 31, // 2 GiB (the executor residency budget)
+    };
     VK_SUCCESS
+}
+
+// ==================================================================================================
+// the `...2` physical-device queries (VK_KHR_get_physical_device_properties2 / core 1.1)
+// ==================================================================================================
+
+/// Write a NUL-terminated C string into a fixed `[c_char; N]` array (truncating).
+fn write_cstr(dst: &mut [c_char], s: &str) {
+    write_name(dst, s);
+}
+
+/// `vkGetPhysicalDeviceProperties2` — the base properties + the pNext payloads apps read back
+/// (driver name/info, maintenance3 descriptor ceilings). Each node's sType/pNext is preserved.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceProperties2(
+    physical_device: *mut c_void,
+    p_properties: *mut c_void,
+) {
+    let Some(out) = (unsafe { (p_properties as *mut VkPhysicalDeviceProperties2).as_mut() }) else {
+        return;
+    };
+    vkGetPhysicalDeviceProperties(physical_device, &mut out.properties as *mut _ as *mut c_void);
+    let mut node = out.p_next as *mut VkBaseOutStructure;
+    while let Some(n) = unsafe { node.as_mut() } {
+        if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES {
+            if let Some(d) = unsafe { (node as *mut VkPhysicalDeviceDriverProperties).as_mut() } {
+                d.driver_id = 8; // VK_DRIVER_ID_MESA_LLVMPIPE — a valid id (hl has no registered one)
+                write_cstr(&mut d.driver_name, "hl");
+                write_cstr(&mut d.driver_info, "hl Metal (Vulkan) 0.1");
+                d.conformance_version = VkConformanceVersion { major: 1, minor: 4, subminor: 0, patch: 0 };
+            }
+        } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES {
+            if let Some(m) = unsafe { (node as *mut VkPhysicalDeviceMaintenance3Properties).as_mut() } {
+                m.max_per_set_descriptors = 1_000_000;
+                m.max_memory_allocation_size = 1 << 31; // 2 GiB
+            }
+        }
+        node = n.p_next;
+    }
+}
+
+/// `vkGetPhysicalDeviceFeatures2` — the base 1.0 feature set. The promoted-feature pNext structs are
+/// left as the app zero-initialized them (all `VK_FALSE`): we advertise NO promoted feature we do not
+/// really implement, so a chained struct honestly reports the feature as unsupported. The chain is
+/// preserved.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceFeatures2(
+    physical_device: *mut c_void,
+    p_features: *mut c_void,
+) {
+    let Some(out) = (unsafe { (p_features as *mut VkPhysicalDeviceFeatures2).as_mut() }) else {
+        return;
+    };
+    vkGetPhysicalDeviceFeatures(physical_device, &mut out.features as *mut _ as *mut c_void);
+}
+
+/// `vkGetPhysicalDeviceMemoryProperties2` — delegates to the 1.0 memory-properties fill.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceMemoryProperties2(
+    physical_device: *mut c_void,
+    p_memory_properties: *mut c_void,
+) {
+    let Some(out) = (unsafe { (p_memory_properties as *mut VkPhysicalDeviceMemoryProperties2).as_mut() }) else {
+        return;
+    };
+    vkGetPhysicalDeviceMemoryProperties(physical_device, &mut out.memory_properties as *mut _ as *mut c_void);
+}
+
+/// `vkGetPhysicalDeviceQueueFamilyProperties2` — delegates to the 1.0 queue-family fill.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties2(
+    physical_device: *mut c_void,
+    p_queue_family_property_count: *mut u32,
+    p_queue_family_properties: *mut c_void,
+) {
+    if p_queue_family_property_count.is_null() {
+        return;
+    }
+    if p_queue_family_properties.is_null() {
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_device, p_queue_family_property_count, core::ptr::null_mut());
+        return;
+    }
+    if unsafe { *p_queue_family_property_count } < 1 {
+        unsafe { *p_queue_family_property_count = 0 };
+        return;
+    }
+    let out = p_queue_family_properties as *mut VkQueueFamilyProperties2;
+    if let Some(o) = unsafe { out.as_mut() } {
+        vkGetPhysicalDeviceQueueFamilyProperties(
+            physical_device,
+            p_queue_family_property_count,
+            &mut o.queue_family_properties as *mut _ as *mut c_void,
+        );
+    }
+    unsafe { *p_queue_family_property_count = 1 };
+}
+
+/// `vkGetPhysicalDeviceFormatProperties2` — delegates to the 1.0 per-format feature fill.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
+    physical_device: *mut c_void,
+    format: i32,
+    p_format_properties: *mut c_void,
+) {
+    let Some(out) = (unsafe { (p_format_properties as *mut VkFormatProperties2).as_mut() }) else {
+        return;
+    };
+    vkGetPhysicalDeviceFormatProperties(physical_device, format, &mut out.format_properties as *mut _ as *mut c_void);
 }
 
 /// The full Apple-GPU-class `VkPhysicalDeviceLimits` (all 106 fields), ported verbatim from

@@ -289,6 +289,132 @@ pub struct VkMemoryRequirements {
     pub memory_type_bits: u32,
 }
 
+// ---- enumeration + format-query structs (written back to the app; layout from vk.xml) ------------
+
+pub const VK_MAX_EXTENSION_NAME_SIZE: usize = 256;
+pub const VK_MAX_DESCRIPTION_SIZE: usize = 256;
+pub const VK_MAX_DRIVER_NAME_SIZE: usize = 256;
+pub const VK_MAX_DRIVER_INFO_SIZE: usize = 256;
+
+/// `VkExtensionProperties` — one row of `vkEnumerate{Instance,Device}ExtensionProperties`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkExtensionProperties {
+    pub extension_name: [c_char; VK_MAX_EXTENSION_NAME_SIZE],
+    pub spec_version: u32,
+}
+
+/// `VkLayerProperties` — one row of `vkEnumerate{Instance,Device}LayerProperties` (we expose none).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkLayerProperties {
+    pub layer_name: [c_char; VK_MAX_EXTENSION_NAME_SIZE],
+    pub spec_version: u32,
+    pub implementation_version: u32,
+    pub description: [c_char; VK_MAX_DESCRIPTION_SIZE],
+}
+
+/// `VkFormatProperties` — the three per-format feature masks (`VkFormatFeatureFlags`).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkFormatProperties {
+    pub linear_tiling_features: VkFlags,
+    pub optimal_tiling_features: VkFlags,
+    pub buffer_features: VkFlags,
+}
+
+/// `VkImageFormatProperties` — the creation limits for a supported `(format, type, tiling, …)` combo.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkImageFormatProperties {
+    pub max_extent: VkExtent3D,
+    pub max_mip_levels: u32,
+    pub max_array_layers: u32,
+    pub sample_counts: VkFlags,
+    pub max_resource_size: VkDeviceSize,
+}
+
+// ---- the `...2` physical-device query wrappers (VK_KHR_get_physical_device_properties2) ----------
+// Each is `{ sType, pNext, <payload> }`; the entry point fills only the payload, preserving the chain.
+
+/// A pNext-chain node header (`{ sType, pNext }`) — every Vulkan extension struct begins with this.
+#[repr(C)]
+pub struct VkBaseOutStructure {
+    pub s_type: i32,
+    pub p_next: *mut VkBaseOutStructure,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDeviceProperties2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub properties: VkPhysicalDeviceProperties,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDeviceFeatures2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub features: VkPhysicalDeviceFeatures,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDeviceMemoryProperties2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub memory_properties: VkPhysicalDeviceMemoryProperties,
+}
+
+#[repr(C)]
+pub struct VkQueueFamilyProperties2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub queue_family_properties: VkQueueFamilyProperties,
+}
+
+#[repr(C)]
+pub struct VkFormatProperties2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub format_properties: VkFormatProperties,
+}
+
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES` (a pNext payload apps read back).
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES: i32 = 1_000_196_000;
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES`.
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES: i32 = 1_000_168_000;
+
+/// `VkConformanceVersion` — the 4-byte version tuple in `VkPhysicalDeviceDriverProperties`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkConformanceVersion {
+    pub major: u8,
+    pub minor: u8,
+    pub subminor: u8,
+    pub patch: u8,
+}
+
+/// `VkPhysicalDeviceDriverProperties` — driverID/name/info + conformance (vkcube prints these).
+#[repr(C)]
+pub struct VkPhysicalDeviceDriverProperties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub driver_id: i32,
+    pub driver_name: [c_char; VK_MAX_DRIVER_NAME_SIZE],
+    pub driver_info: [c_char; VK_MAX_DRIVER_INFO_SIZE],
+    pub conformance_version: VkConformanceVersion,
+}
+
+/// `VkPhysicalDeviceMaintenance3Properties` — descriptor-set + allocation-size ceilings a modern app
+/// (wgpu-hal) reads to bound its descriptor sizing (a zero here makes it refuse to build any set).
+#[repr(C)]
+pub struct VkPhysicalDeviceMaintenance3Properties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub max_per_set_descriptors: u32,
+    pub max_memory_allocation_size: VkDeviceSize,
+}
+
 // ==================================================================================================
 // *CreateInfo / *AllocateInfo input structs (read across the seam; layout from vk.xml)
 // ==================================================================================================

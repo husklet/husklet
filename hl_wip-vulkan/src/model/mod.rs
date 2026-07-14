@@ -5,6 +5,7 @@
 //! the [`super::service`] layer drives it and emits the IR. The object model + reported device props
 //! are ported from `hl-shim-vk/src/{state.rs,reg.rs}` (which mirror MoltenVK's object graph).
 
+pub mod capability;
 pub mod command;
 pub mod descriptor;
 pub mod device;

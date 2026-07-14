@@ -98,6 +98,17 @@ pub fn wait_for_fence(dev: &mut Device, sink: &mut dyn CommandSink, fence: VkFen
     Ok(())
 }
 
+/// `vkGetFenceStatus` — the fence's current guest-side signaled state (`true` → `VK_SUCCESS`, `false`
+/// → `VK_NOT_READY`). A non-blocking poll of the same `signaled` flag `vkWaitForFences`/`vkResetFences`
+/// drive. Errors on an unknown fence.
+pub fn fence_status(dev: &Device, fence: VkFence) -> Result<bool> {
+    Ok(dev
+        .fences
+        .get(&fence)
+        .ok_or(GpuError::Invalid("vkGetFenceStatus: unknown VkFence"))?
+        .signaled)
+}
+
 /// `vkResetFences` (one fence) — clear the fence's signaled state.
 pub fn reset_fence(dev: &mut Device, fence: VkFence) -> Result<()> {
     dev.fences
