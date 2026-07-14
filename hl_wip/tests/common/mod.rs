@@ -11,6 +11,11 @@
 //! about the parts it does not touch (each `mod common;` compiles the whole module).
 #![allow(dead_code)]
 
+/// The `WgpuExecutor`-backed (lavapipe) host used by the real GRAPHICS tests — real SPIR-V/GLSL shaders
+/// rasterized on the software Vulkan device, with the rendered target read back off the device. The
+/// `CpuExecutor`-backed [`Executor`] below stays for the compute/identity real-app tests.
+pub mod wgpu;
+
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

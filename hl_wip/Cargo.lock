@@ -548,6 +548,7 @@ dependencies = [
  "hl_wip_gpu_wgpu",
  "hl_wip_vulkan",
  "libc",
+ "naga",
 ]
 
 [[package]]

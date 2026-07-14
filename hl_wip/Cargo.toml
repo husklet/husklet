@@ -51,6 +51,9 @@ hl_gl = { package = "hl_wip_gl", path = "../hl_wip-gl", features = ["jit"] }
 hl_compositor = { package = "hl_wip_compositor", path = "../hl_wip-compositor", features = ["smithay-adapter"] }
 # dlopen/dlsym the staged libcuda.so.1 (tests/realapp_cuda.rs).
 libc = "0.2"
+# Mint real SPIR-V / GLSL-ES shaders for the graphics tests from WGSL seeds (wgsl-in → spv-out), the same
+# naga the wgpu executor uses to translate them back. Version-matched to hl_wip-gpu-wgpu (naga 24).
+naga = { version = "24", features = ["wgsl-in", "spv-out"] }
 
 # The real-software tests are single-connection socket servers driving real subprocesses; force serial so
 # a shared `$HL_GPU_EXEC` / staged-shim environment never races. Also declared here so each carries its
@@ -78,3 +81,11 @@ path = "tests/vk_loader_icd.rs"
 [[test]]
 name = "cuda_c_vecadd"
 path = "tests/cuda_c_vecadd.rs"
+
+[[test]]
+name = "vk_triangle"
+path = "tests/vk_triangle.rs"
+
+[[test]]
+name = "gl_triangle"
+path = "tests/gl_triangle.rs"
