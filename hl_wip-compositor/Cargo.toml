@@ -21,12 +21,42 @@ path = "src/lib.rs"
 # default so the pure-std scene core keeps building with zero deps.
 default = []
 smithay-adapter = ["dep:smithay"]
+# The macOS surface presenter (`surface/macos`) — a concrete `scene::port::Presenter` that draws a
+# composed frame to a REAL `NSWindow` + `CAMetalLayer` via Metal (or, headless, into an offscreen
+# `MTLTexture`/`IOSurface` it can read back). Off by default so the pure-std scene core keeps building
+# with zero deps, and the objc2 stack is only pulled on macOS (the deps are target-gated below). Build:
+#   cargo build --manifest-path hl_wip-compositor/Cargo.toml --features macos-surface   (on macOS)
+macos-surface = [
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-app-kit",
+    "dep:objc2-metal",
+    "dep:objc2-quartz-core",
+]
 
 [dependencies]
 # The neutral policy is pure std. The Smithay adapter (adapter/smithay) is optional: it translates
 # Wayland `wl_*`/`xdg_*` callbacks into `scene::service` calls. Headless — wayland_frontend only, NO
 # drm/gbm/libinput/session/egl backend.
 smithay = { path = "../vendor/smithay-0.7.0", default-features = false, features = ["wayland_frontend"], optional = true }
+
+# The macOS surface presenter's Cocoa/Metal/IOSurface stack — the SAME objc2 crates the old
+# `hl-display` present path used. Target-gated to macOS (so a Linux build never sees them) AND optional
+# (activated only by the `macos-surface` feature via the `dep:` entries above). No new fetch on the mac:
+# objc2* are already locked across the tree.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.5", optional = true }
+objc2-foundation = { version = "0.2", optional = true, features = ["NSString", "NSGeometry", "NSData", "NSThread", "NSRunLoop", "NSDate", "NSDictionary"] }
+objc2-app-kit = { version = "0.2", optional = true, features = [
+    "NSApplication", "NSWindow", "NSResponder", "NSView", "NSControl", "NSScreen", "NSColor",
+    "NSGraphics", "NSRunningApplication", "objc2-quartz-core",
+] }
+objc2-metal = { version = "0.2", optional = true, features = [
+    "MTLDevice", "MTLCommandQueue", "MTLCommandBuffer", "MTLCommandEncoder", "MTLBlitCommandEncoder",
+    "MTLTexture", "MTLPixelFormat", "MTLResource", "MTLTypes", "MTLDrawable", "MTLBuffer",
+    "MTLLibrary", "MTLRenderPipeline", "MTLRenderPass", "MTLRenderCommandEncoder",
+] }
+objc2-quartz-core = { version = "0.2", optional = true, features = ["CALayer", "CAMetalLayer", "CATransaction", "objc2-metal"] }
 
 [dev-dependencies]
 # The headless end-to-end test spawns the compositor and drives a real Wayland CLIENT against it.
@@ -37,3 +67,17 @@ wayland-protocols = { version = "0.32", features = ["client"] }
 name = "wayland_e2e"
 path = "tests/wayland_e2e.rs"
 required-features = ["smithay-adapter"]
+
+# The macOS present smoke: build the Cocoa/Metal presenter, present one known-color frame, and read it
+# back (offscreen MTLTexture readback — GUI-session-free) to verify the pixels round-tripped on a real
+# Metal device. A second (ignored-by-default) test opens a real NSWindow + CAMetalLayer.
+[[test]]
+name = "macos_present_smoke"
+path = "tests/macos_present_smoke.rs"
+required-features = ["macos-surface"]
+
+# Opens a REAL NSWindow + CAMetalLayer and presents a color frame (main-thread + GUI session required).
+[[example]]
+name = "present_window"
+path = "examples/present_window.rs"
+required-features = ["macos-surface"]

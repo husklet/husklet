@@ -27,5 +27,9 @@
 
 pub mod adapter;
 pub mod scene;
+/// Concrete platform `scene::port::Presenter` backends. Behind the `macos-surface` feature so the
+/// pure-std scene core (and the Linux build) is unaffected; only the macOS presenter lives here today.
+#[cfg(feature = "macos-surface")]
+pub mod surface;
 
 pub use scene::{Compositor, CommitOutcome, FrameOutcome};
