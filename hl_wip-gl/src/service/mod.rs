@@ -13,8 +13,11 @@
 //!   `Present` through the `&mut dyn CommandSink`, then resets the per-frame state. This is the tested
 //!   lowering surface (a driver test drives it against a `hl_gpu::RecordingSink`).
 
+pub mod compute;
 pub mod frame;
+pub mod map;
 pub mod query;
 pub mod readpixels;
 pub mod record;
 pub mod swap;
+pub mod sync;

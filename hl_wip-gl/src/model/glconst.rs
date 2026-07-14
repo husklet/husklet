@@ -16,6 +16,15 @@ pub const GL_HALF_FLOAT: u32 = 0x140B;
 // buffer targets
 pub const GL_ARRAY_BUFFER: u32 = 0x8892;
 pub const GL_ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
+pub const GL_PIXEL_PACK_BUFFER: u32 = 0x88EB;
+pub const GL_PIXEL_UNPACK_BUFFER: u32 = 0x88EC;
+pub const GL_UNIFORM_BUFFER: u32 = 0x8A11;
+pub const GL_SHADER_STORAGE_BUFFER: u32 = 0x90D2;
+pub const GL_ATOMIC_COUNTER_BUFFER: u32 = 0x92C0;
+pub const GL_TRANSFORM_FEEDBACK_BUFFER: u32 = 0x8C8E;
+pub const GL_DISPATCH_INDIRECT_BUFFER: u32 = 0x90EE;
+pub const GL_COPY_READ_BUFFER: u32 = 0x8F36;
+pub const GL_COPY_WRITE_BUFFER: u32 = 0x8F37;
 
 // primitive topology + clear mask
 pub const GL_POINTS: u32 = 0x0000;
@@ -72,6 +81,7 @@ pub const GL_CCW: u32 = 0x0901;
 // shader object kinds
 pub const GL_VERTEX_SHADER: u32 = 0x8B31;
 pub const GL_FRAGMENT_SHADER: u32 = 0x8B30;
+pub const GL_COMPUTE_SHADER: u32 = 0x91B9;
 
 // texture enums
 pub const GL_TEXTURE_2D: u32 = 0x0DE1;
@@ -189,6 +199,35 @@ pub const GL_INVALID_ENUM: u32 = 0x0500;
 pub const GL_INVALID_VALUE: u32 = 0x0501;
 pub const GL_INVALID_OPERATION: u32 = 0x0502;
 pub const GL_INVALID_FRAMEBUFFER_OPERATION: u32 = 0x0506;
+
+// MRT draw/read buffer selectors (glDrawBuffers / glReadBuffer). GL_BACK (0x0405) doubles as the
+// default-framebuffer draw buffer (declared once, above, as the cull-face enum of the same value).
+pub const GL_NONE: u32 = 0;
+pub const GL_COLOR_ATTACHMENT1: u32 = 0x8CE1;
+pub const GL_MAX_DRAW_BUFFERS: u32 = 0x8824;
+pub const GL_MAX_COLOR_ATTACHMENTS: u32 = 0x8CDF;
+
+// sync objects (glFenceSync / glClientWaitSync / glWaitSync / glGetSynciv).
+pub const GL_SYNC_GPU_COMMANDS_COMPLETE: u32 = 0x9117;
+pub const GL_SYNC_FLUSH_COMMANDS_BIT: u32 = 0x0000_0001;
+pub const GL_TIMEOUT_IGNORED: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+pub const GL_ALREADY_SIGNALED: u32 = 0x911A;
+pub const GL_TIMEOUT_EXPIRED: u32 = 0x911B;
+pub const GL_CONDITION_SATISFIED: u32 = 0x911C;
+pub const GL_WAIT_FAILED: u32 = 0x911D;
+pub const GL_OBJECT_TYPE: u32 = 0x9112;
+pub const GL_SYNC_CONDITION: u32 = 0x9113;
+pub const GL_SYNC_STATUS: u32 = 0x9114;
+pub const GL_SYNC_FLAGS: u32 = 0x9115;
+pub const GL_SYNC_FENCE: u32 = 0x9116;
+pub const GL_SIGNALED: u32 = 0x9119;
+pub const GL_UNSIGNALED: u32 = 0x9118;
+
+// glBindBufferBase/Range indexed-target minimum binding caps (ES3.1).
+pub const MAX_UNIFORM_BUFFER_BINDINGS: u32 = 24;
+pub const MAX_SHADER_STORAGE_BUFFER_BINDINGS: u32 = 8;
+pub const MAX_ATOMIC_COUNTER_BUFFER_BINDINGS: u32 = 8;
+pub const MAX_TRANSFORM_FEEDBACK_BUFFERS: u32 = 4;
 
 // framebuffer / renderbuffer objects (offscreen render targets).
 pub const GL_FRAMEBUFFER: u32 = 0x8D40;

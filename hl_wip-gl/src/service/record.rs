@@ -17,12 +17,20 @@ pub fn gen_buffer(ctx: &mut GlContext) -> u32 {
     ctx.buffers.gen()
 }
 
-/// `glBindBuffer(target, name)`.
+/// `glBindBuffer(target, name)`. `GL_ARRAY_BUFFER`/`GL_ELEMENT_ARRAY_BUFFER` use their dedicated bindings;
+/// every other ES3 target (UBO/SSBO/PBO/dispatch-indirect/…) records into the general binding map so
+/// `glMapBufferRange`/`glDispatchComputeIndirect` can resolve it.
 pub fn bind_buffer(ctx: &mut GlContext, target: u32, name: u32) {
     match target {
         GL_ARRAY_BUFFER => ctx.array_buffer = name,
         GL_ELEMENT_ARRAY_BUFFER => ctx.element_buffer = name,
-        _ => {}
+        t => {
+            if name == 0 {
+                ctx.general_buffers.remove(&t);
+            } else {
+                ctx.general_buffers.insert(t, name);
+            }
+        }
     }
 }
 
@@ -54,10 +62,94 @@ pub fn delete_buffer(ctx: &mut GlContext, name: u32) -> bool {
 }
 
 fn bound_buffer(ctx: &GlContext, target: u32) -> u32 {
+    ctx.buffer_for_target(target)
+}
+
+// ---- indexed buffer bindings (glBindBufferBase / glBindBufferRange) -------------------------------
+
+use crate::model::context::IndexedBinding;
+
+/// The per-index binding cap for an indexed-buffer `target`, or `None` if `target` is not a valid indexed
+/// target (`glBindBufferBase`/`glBindBufferRange` raise `GL_INVALID_ENUM`).
+fn indexed_target_cap(target: u32) -> Option<u32> {
     match target {
-        GL_ELEMENT_ARRAY_BUFFER => ctx.element_buffer,
-        _ => ctx.array_buffer,
+        GL_UNIFORM_BUFFER => Some(MAX_UNIFORM_BUFFER_BINDINGS),
+        GL_SHADER_STORAGE_BUFFER => Some(MAX_SHADER_STORAGE_BUFFER_BINDINGS),
+        GL_ATOMIC_COUNTER_BUFFER => Some(MAX_ATOMIC_COUNTER_BUFFER_BINDINGS),
+        GL_TRANSFORM_FEEDBACK_BUFFER => Some(MAX_TRANSFORM_FEEDBACK_BUFFERS),
+        _ => None,
     }
+}
+
+/// `glBindBufferBase(target, index, buffer)` — bind the whole `buffer` to indexed slot `index` of `target`
+/// (and the generic target binding). A UBO/SSBO binding feeds a `glDispatchCompute` bind group.
+pub fn bind_buffer_base(ctx: &mut GlContext, target: u32, index: u32, buffer: u32) {
+    bind_buffer_range(ctx, target, index, buffer, 0, 0);
+}
+
+/// `glBindBufferRange(target, index, buffer, offset, size)` — bind `[offset, offset+size)` of `buffer` to
+/// indexed slot `index` (`size == 0` from `glBindBufferBase` = the whole buffer). Honest GL errors: a
+/// non-indexed `target` → `GL_INVALID_ENUM`; `index >= cap` or a non-zero `buffer` with a non-positive
+/// size / negative offset → `GL_INVALID_VALUE` (first-error-wins).
+pub fn bind_buffer_range(ctx: &mut GlContext, target: u32, index: u32, buffer: u32, offset: isize, size: isize) {
+    let Some(cap) = indexed_target_cap(target) else {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    };
+    if index >= cap {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    // glBindBufferRange (a non-zero buffer) requires a positive size + non-negative offset.
+    if buffer != 0 && size != 0 && (size < 0 || offset < 0) {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    // Bind the generic target too (GL binds both), so a later glBufferData(target, …) fills this buffer.
+    bind_buffer(ctx, target, buffer);
+    if buffer == 0 {
+        ctx.indexed_buffers.remove(&(target, index));
+    } else {
+        ctx.indexed_buffers.insert((target, index), IndexedBinding { buffer, offset, size });
+    }
+}
+
+/// The indexed-buffer binding at `(target, index)` (`glBindBufferBase`/`glBindBufferRange`), or `None` if
+/// nothing is bound there. Exposed for the lowering tests + the compute bind-group builder.
+pub fn indexed_buffer_binding(ctx: &GlContext, target: u32, index: u32) -> Option<IndexedBinding> {
+    ctx.indexed_buffers.get(&(target, index)).copied()
+}
+
+// ---- MRT draw/read buffer selection (glDrawBuffers / glReadBuffer) --------------------------------
+
+/// `glDrawBuffers(bufs)` — record the fragment-output color-buffer list. Each entry must be `GL_NONE`,
+/// `GL_BACK` (default framebuffer), or a `GL_COLOR_ATTACHMENT{i}` (FBO) — else `GL_INVALID_ENUM`. This
+/// model renders a single color target, so the list round-trips faithfully but only the first attachment
+/// is materialized (an honest partial).
+pub fn draw_buffers(ctx: &mut GlContext, bufs: &[u32]) {
+    for &b in bufs {
+        let ok = b == GL_NONE
+            || b == GL_BACK
+            || (GL_COLOR_ATTACHMENT0..=GL_COLOR_ATTACHMENT0 + 15).contains(&b);
+        if !ok {
+            ctx.set_gl_error(GL_INVALID_ENUM);
+            return;
+        }
+    }
+    ctx.draw_buffers = bufs.to_vec();
+}
+
+/// `glReadBuffer(src)` — select the color buffer subsequent `glReadPixels`/blit reads from. `src` must be
+/// `GL_NONE`, `GL_BACK`, or a `GL_COLOR_ATTACHMENT{i}` (else `GL_INVALID_ENUM`).
+pub fn read_buffer(ctx: &mut GlContext, src: u32) {
+    let ok = src == GL_NONE
+        || src == GL_BACK
+        || (GL_COLOR_ATTACHMENT0..=GL_COLOR_ATTACHMENT0 + 15).contains(&src);
+    if !ok {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    ctx.read_buffer_src = src;
 }
 
 // ---- textures ------------------------------------------------------------------------------------

@@ -313,4 +313,24 @@ const IMPLEMENTED: &[&str] = &[
     "glBlitFramebuffer",
     // ---- GLES: readback (device→host; render + CopyTextureToBuffer + read_buffer) ----
     "glReadPixels",
+    // ---- GLES3.1: compute dispatch (compute program → CreateComputePipeline + Dispatch) ----
+    "glDispatchCompute",
+    "glDispatchComputeIndirect",
+    // ---- GLES3.0: sync objects (GLsync) over the IR fence timeline ----
+    "glFenceSync",
+    "glClientWaitSync",
+    "glWaitSync",
+    "glDeleteSync",
+    "glIsSync",
+    "glGetSynciv",
+    // ---- GLES3.0: indexed buffer bindings (UBO/SSBO feeding bind groups) ----
+    "glBindBufferBase",
+    "glBindBufferRange",
+    // ---- GLES3.0: PBO-style buffer mapping (host staging flushed on unmap as WriteBuffer) ----
+    "glMapBufferRange",
+    "glUnmapBuffer",
+    "glFlushMappedBufferRange",
+    // ---- GLES3.0: MRT draw/read buffer selection ----
+    "glDrawBuffers",
+    "glReadBuffer",
 ];

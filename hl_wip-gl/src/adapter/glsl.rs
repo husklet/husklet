@@ -46,6 +46,23 @@ pub fn to_words(msl: &str) -> Vec<u32> {
     w
 }
 
+/// GLSL-ES compute (`GL_COMPUTE_SHADER`) → MSL-ish kernel source with the `cmain` entry a
+/// `CreateComputePipeline` references. This is a lightweight wrap (comment-stripped body under a
+/// `kernel void cmain(...)` shell), NOT a full compute translation: the CPU software oracle cannot run a
+/// LegacyMsl compute payload anyway (it runs only neutral KERNEL programs), so `glDispatchCompute`
+/// asserts the lowered `Cmd` stream rather than a computed result — the entry-point name is what the
+/// pipeline binds. Kept deterministic so the `CreateShader` payload is stable across runs.
+pub fn translate_compute(cs_in: &str) -> String {
+    let body = strip_comments(cs_in);
+    let mut out = String::new();
+    out.push_str("#include <metal_stdlib>\nusing namespace metal;\n");
+    out.push_str("// hl-gl compute (GLES3.1 GL_COMPUTE_SHADER) — entry: cmain\n");
+    out.push_str("kernel void cmain(uint3 gid [[thread_position_in_grid]]) {\n");
+    out.push_str(&body);
+    out.push_str("\n}\n");
+    out
+}
+
 // ---------------------------------------------------------------------------------------------------
 // GLSL-ES → MSL translation (ported verbatim from hl-shim-gl/src/translate.rs)
 // ---------------------------------------------------------------------------------------------------

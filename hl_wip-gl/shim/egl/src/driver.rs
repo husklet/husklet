@@ -19,7 +19,7 @@ use hl_gl::model::glconst::*;
 use hl_gl::result::{
     egl_error_from_gpu_error, EGL_FALSE, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
 };
-use hl_gl::service::{query, readpixels, record, swap};
+use hl_gl::service::{compute, map, query, readpixels, record, swap, sync};
 
 use crate::state::{with, CONFIG_TOKEN, DISPLAY_TOKEN};
 
@@ -306,6 +306,26 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "glRenderbufferStorage" => p!(glRenderbufferStorage),
         "glFramebufferRenderbuffer" => p!(glFramebufferRenderbuffer),
         "glBlitFramebuffer" => p!(glBlitFramebuffer),
+        // ---- GLES3.1: compute dispatch ----
+        "glDispatchCompute" => p!(glDispatchCompute),
+        "glDispatchComputeIndirect" => p!(glDispatchComputeIndirect),
+        // ---- GLES3.0: sync objects (GLsync) ----
+        "glFenceSync" => p!(glFenceSync),
+        "glClientWaitSync" => p!(glClientWaitSync),
+        "glWaitSync" => p!(glWaitSync),
+        "glDeleteSync" => p!(glDeleteSync),
+        "glIsSync" => p!(glIsSync),
+        "glGetSynciv" => p!(glGetSynciv),
+        // ---- GLES3.0: indexed buffer bindings (UBO/SSBO) ----
+        "glBindBufferBase" => p!(glBindBufferBase),
+        "glBindBufferRange" => p!(glBindBufferRange),
+        // ---- GLES3.0: PBO-style buffer mapping ----
+        "glMapBufferRange" => p!(glMapBufferRange),
+        "glUnmapBuffer" => p!(glUnmapBuffer),
+        "glFlushMappedBufferRange" => p!(glFlushMappedBufferRange),
+        // ---- GLES3.0: MRT draw/read buffer selection ----
+        "glDrawBuffers" => p!(glDrawBuffers),
+        "glReadBuffer" => p!(glReadBuffer),
         // Unknown / extension name we do not advertise → spec-legal "not found".
         _ => core::ptr::null_mut(),
     }
@@ -1458,4 +1478,172 @@ pub extern "C" fn glReadPixels(
             s.set_egl_error(egl_error_from_gpu_error(&e));
         }),
     }
+}
+
+// ==================================================================================================
+// GLES3.1: compute dispatch (the GL analogue of cuLaunchKernel — lowers + submits immediately)
+// ==================================================================================================
+
+/// `glDispatchCompute(x, y, z)` — lower the bound compute program + its SSBO/UBO bindings into a
+/// `CreateComputePipeline` + a `Dispatch` and submit (see [`compute::dispatch_compute`]). A sink error is
+/// surfaced through `eglGetError` (the frame's `EGL_*`), never a false success.
+#[no_mangle]
+pub extern "C" fn glDispatchCompute(num_groups_x: u32, num_groups_y: u32, num_groups_z: u32) {
+    with(|s| {
+        if let Err(e) = compute::dispatch_compute(&mut s.ctx, &mut s.sink, num_groups_x, num_groups_y, num_groups_z) {
+            s.set_egl_error(egl_error_from_gpu_error(&e));
+        }
+    });
+}
+
+/// `glDispatchComputeIndirect(indirect)` — dispatch with the group counts read from the buffer bound to
+/// `GL_DISPATCH_INDIRECT_BUFFER` at byte offset `indirect` (see [`compute::dispatch_compute_indirect`]).
+#[no_mangle]
+pub extern "C" fn glDispatchComputeIndirect(indirect: isize) {
+    with(|s| {
+        if let Err(e) = compute::dispatch_compute_indirect(&mut s.ctx, &mut s.sink, indirect) {
+            s.set_egl_error(egl_error_from_gpu_error(&e));
+        }
+    });
+}
+
+// ==================================================================================================
+// GLES3.0: sync objects (GLsync) over the IR fence timeline
+// ==================================================================================================
+
+/// `glFenceSync(condition, flags)` — insert a fence into the command stream + return its `GLsync` token
+/// (an opaque non-null pointer), or null on a bad `condition`/`flags`. See [`sync::fence_sync`].
+#[no_mangle]
+pub extern "C" fn glFenceSync(condition: u32, flags: u32) -> *mut c_void {
+    with(|s| match sync::fence_sync(&mut s.ctx, &mut s.sink, condition, flags) {
+        Some(token) => token as *mut c_void,
+        None => core::ptr::null_mut(),
+    })
+}
+
+/// `glClientWaitSync(sync, flags, timeout)` — client-side wait on the fence value `sync` marks. See
+/// [`sync::client_wait_sync`].
+#[no_mangle]
+pub extern "C" fn glClientWaitSync(sync: *mut c_void, flags: u32, timeout: u64) -> u32 {
+    with(|s| sync::client_wait_sync(&mut s.ctx, &mut s.sink, sync as usize, flags, timeout))
+}
+
+/// `glWaitSync(sync, flags, timeout)` — device-side (queue) wait; lowers to a `WaitFence`. See
+/// [`sync::wait_sync`].
+#[no_mangle]
+pub extern "C" fn glWaitSync(sync: *mut c_void, flags: u32, timeout: u64) {
+    with(|s| sync::wait_sync(&mut s.ctx, &mut s.sink, sync as usize, flags, timeout));
+}
+
+/// `glDeleteSync(sync)` — drop the sync object (an unknown non-null sync raises `GL_INVALID_VALUE`).
+#[no_mangle]
+pub extern "C" fn glDeleteSync(sync: *mut c_void) {
+    with(|s| sync::delete_sync(&mut s.ctx, sync as usize));
+}
+
+/// `glIsSync(sync)` — `GL_TRUE`/`GL_FALSE` as the codegen's `u8` (`GLboolean`) ABI.
+#[no_mangle]
+pub extern "C" fn glIsSync(sync: *mut c_void) -> u8 {
+    with(|s| sync::is_sync(&s.ctx, sync as usize)) as u8
+}
+
+/// `glGetSynciv(sync, pname, buf_size, length, values)` — write the single integer state value for
+/// `pname` (see [`sync::get_synciv`]). Null-safe on both out-params.
+#[no_mangle]
+pub extern "C" fn glGetSynciv(sync: *mut c_void, pname: u32, buf_size: i32, length: *mut i32, values: *mut i32) {
+    let v = with(|s| sync::get_synciv(&mut s.ctx, sync as usize, pname));
+    if let Some(v) = v {
+        unsafe {
+            if !values.is_null() && buf_size >= 1 {
+                *values = v;
+                if !length.is_null() {
+                    *length = 1;
+                }
+            } else if !length.is_null() {
+                *length = 0;
+            }
+        }
+    }
+}
+
+// ==================================================================================================
+// GLES3.0: indexed buffer bindings (UBO/SSBO) — glBindBufferBase / glBindBufferRange
+// ==================================================================================================
+
+/// `glBindBufferBase(target, index, buffer)` — bind the whole `buffer` to indexed slot `index`. See
+/// [`record::bind_buffer_base`].
+#[no_mangle]
+pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
+    with(|s| record::bind_buffer_base(&mut s.ctx, target, index, buffer));
+}
+
+/// `glBindBufferRange(target, index, buffer, offset, size)` — bind `[offset, offset+size)` of `buffer` to
+/// indexed slot `index`. See [`record::bind_buffer_range`].
+#[no_mangle]
+pub extern "C" fn glBindBufferRange(target: u32, index: u32, buffer: u32, offset: isize, size: isize) {
+    with(|s| record::bind_buffer_range(&mut s.ctx, target, index, buffer, offset, size));
+}
+
+// ==================================================================================================
+// GLES3.0: PBO-style buffer mapping — glMapBufferRange / glUnmapBuffer / glFlushMappedBufferRange
+// ==================================================================================================
+
+/// `glMapBufferRange(target, offset, length, access)` — map a range of the bound buffer and return a
+/// pointer INTO its host storage (the app writes through it; `glUnmapBuffer` flushes). Null on error. The
+/// pointer stays valid until the buffer's storage reallocates (the reference shim's fragile contract).
+#[no_mangle]
+pub extern "C" fn glMapBufferRange(target: u32, offset: isize, length: isize, access: u32) -> *mut c_void {
+    with(|s| match map::map_buffer_range(&mut s.ctx, target, offset, length, access) {
+        Some((name, off)) => match s.ctx.buffers.get_mut(name) {
+            Some(b) => unsafe { b.data.as_mut_ptr().add(off) as *mut c_void },
+            None => core::ptr::null_mut(),
+        },
+        None => core::ptr::null_mut(),
+    })
+}
+
+/// `glUnmapBuffer(target)` — flush the mapped range as a `WriteBuffer` + clear the mapping. Returns the
+/// `GLboolean` (`u8`) result; a sink error is surfaced via `eglGetError`. See [`map::unmap_buffer`].
+#[no_mangle]
+pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
+    with(|s| match map::unmap_buffer(&mut s.ctx, &mut s.sink, target) {
+        Ok(v) => v,
+        Err(e) => {
+            s.set_egl_error(egl_error_from_gpu_error(&e));
+            0
+        }
+    })
+}
+
+/// `glFlushMappedBufferRange(target, offset, length)` — flush a sub-range of a still-mapped buffer as a
+/// `WriteBuffer`. See [`map::flush_mapped_range`].
+#[no_mangle]
+pub extern "C" fn glFlushMappedBufferRange(target: u32, offset: isize, length: isize) {
+    with(|s| {
+        if let Err(e) = map::flush_mapped_range(&mut s.ctx, &mut s.sink, target, offset, length) {
+            s.set_egl_error(egl_error_from_gpu_error(&e));
+        }
+    });
+}
+
+// ==================================================================================================
+// GLES3.0: MRT draw/read buffer selection — glDrawBuffers / glReadBuffer
+// ==================================================================================================
+
+/// `glDrawBuffers(n, bufs)` — record the fragment-output color-buffer list. See [`record::draw_buffers`].
+#[no_mangle]
+pub extern "C" fn glDrawBuffers(n: i32, bufs: *const u32) {
+    let list = if bufs.is_null() || n <= 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(bufs, n as usize) }.to_vec()
+    };
+    with(|s| record::draw_buffers(&mut s.ctx, &list));
+}
+
+/// `glReadBuffer(src)` — select the color buffer subsequent readbacks read from. See
+/// [`record::read_buffer`].
+#[no_mangle]
+pub extern "C" fn glReadBuffer(src: u32) {
+    with(|s| record::read_buffer(&mut s.ctx, src));
 }

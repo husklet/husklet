@@ -29,12 +29,20 @@ pub struct Program {
     /// Attached vertex/fragment shader GL names.
     pub vs: u32,
     pub fs: u32,
+    /// Attached compute shader GL name (`glAttachShader` of a `GL_COMPUTE_SHADER`) — a GLES3.1 compute
+    /// program. A program is a compute program when `cs != 0`; it lowers to a `CreateComputePipeline`.
+    pub cs: u32,
     pub linked: bool,
     /// The vertex+fragment GLSL-ES sources captured at link, for the vertex-layout reflection at draw.
     pub vs_src: String,
     pub fs_src: String,
     /// The translated shader-IR word payload (packed MSL), lowered to a single `CreateShader` at swap.
     pub shader_ir: Option<Vec<u32>>,
+    /// The captured compute GLSL-ES source (for a compute program), translated to `compute_ir` at link.
+    pub cs_src: String,
+    /// The translated compute shader-IR word payload — lowered to a `CreateShader` +
+    /// `CreateComputePipeline` at `glDispatchCompute`. `None` for a render (vertex+fragment) program.
+    pub compute_ir: Option<Vec<u32>>,
     /// Uniform-block members (name → offset/size) — the layout `glUniform*` writes into `ubuf`.
     pub unis: Vec<Uni>,
     /// The 16-byte-aligned Uniforms struct size (bytes actually shipped as the uniform buffer).
@@ -48,9 +56,19 @@ pub struct Program {
 }
 
 impl Program {
-    /// `glLinkProgram` — translate the attached vertex+fragment GLSL-ES pair to shader-IR and reflect the
-    /// uniform-block + sampler layout. `vs_src`/`fs_src` are the shaders' captured sources.
-    pub fn link(&mut self, vs_src: String, fs_src: String) {
+    /// `glLinkProgram` — translate the attached shaders to shader-IR and reflect the layout.
+    ///
+    /// A **render** program (a vertex+fragment pair) translates the GLSL-ES pair to combined MSL
+    /// (`shader_ir`) and reflects the uniform-block + sampler layout. A **compute** program (`cs_src`
+    /// non-empty) translates the compute source to `compute_ir`, which `glDispatchCompute` lowers to a
+    /// `CreateShader` + `CreateComputePipeline`.
+    pub fn link(&mut self, vs_src: String, fs_src: String, cs_src: String) {
+        if !cs_src.is_empty() {
+            self.compute_ir = Some(glsl::to_words(&glsl::translate_compute(&cs_src)));
+            self.cs_src = cs_src;
+            self.linked = true;
+            return;
+        }
         let (unis, ubuf_size) = glsl::uni_layout(&vs_src, &fs_src);
         self.samp_names = glsl::program_samplers(&vs_src, &fs_src);
         let msl = glsl::translate(&vs_src, &fs_src);
@@ -61,6 +79,11 @@ impl Program {
         self.vs_src = vs_src;
         self.fs_src = fs_src;
         self.linked = true;
+    }
+
+    /// Is this a GLES3.1 compute program (a linked `GL_COMPUTE_SHADER`)?
+    pub fn is_compute(&self) -> bool {
+        self.compute_ir.is_some()
     }
 
     /// Does this program declare any data uniforms (→ a uniform buffer + binding 1)?
@@ -274,6 +297,7 @@ impl Programs {
             match kind {
                 crate::model::glconst::GL_VERTEX_SHADER => p.vs = shader,
                 crate::model::glconst::GL_FRAGMENT_SHADER => p.fs = shader,
+                crate::model::glconst::GL_COMPUTE_SHADER => p.cs = shader,
                 _ => {}
             }
         }
@@ -282,14 +306,15 @@ impl Programs {
     /// `glLinkProgram(program)` — translate + reflect the attached shaders. Returns `false` if the
     /// program name or either attached shader is unknown.
     pub fn link(&mut self, program: u32) -> bool {
-        let (vs, fs) = match self.programs.get(&program) {
-            Some(p) => (p.vs, p.fs),
+        let (vs, fs, cs) = match self.programs.get(&program) {
+            Some(p) => (p.vs, p.fs, p.cs),
             None => return false,
         };
         let vs_src = self.shaders.get(&vs).and_then(|s| s.src.clone()).unwrap_or_default();
         let fs_src = self.shaders.get(&fs).and_then(|s| s.src.clone()).unwrap_or_default();
+        let cs_src = self.shaders.get(&cs).and_then(|s| s.src.clone()).unwrap_or_default();
         if let Some(p) = self.programs.get_mut(&program) {
-            p.link(vs_src, fs_src);
+            p.link(vs_src, fs_src, cs_src);
             true
         } else {
             false

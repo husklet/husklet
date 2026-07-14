@@ -58,6 +58,16 @@ impl Default for Vao {
     }
 }
 
+/// One indexed-buffer binding point (`glBindBufferBase`/`glBindBufferRange`) for a UBO/SSBO/atomic-counter
+/// or transform-feedback target. `size == 0` means "the whole buffer from `offset`" (the `glBindBufferBase`
+/// case). These feed a compute dispatch's bind group (`crate::service::compute`).
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct IndexedBinding {
+    pub buffer: u32,
+    pub offset: isize,
+    pub size: isize,
+}
+
 impl Default for PixelStore {
     fn default() -> Self {
         Self {
@@ -95,6 +105,10 @@ pub struct GlContext {
     pub array_buffer: u32,
     /// The buffer bound to `GL_ELEMENT_ARRAY_BUFFER`.
     pub element_buffer: u32,
+    /// The buffer bound to each non-array/element target (`GL_UNIFORM_BUFFER`, `GL_SHADER_STORAGE_BUFFER`,
+    /// `GL_PIXEL_PACK_BUFFER`, `GL_DISPATCH_INDIRECT_BUFFER`, …) by `glBindBuffer`. Used to resolve the
+    /// target of `glMapBufferRange`/`glDispatchComputeIndirect` for the long tail of ES3 buffer targets.
+    pub general_buffers: HashMap<u32, u32>,
     /// The active texture unit index (`glActiveTexture` - `GL_TEXTURE0`).
     pub active_texture: usize,
     /// The GL texture bound to each texture unit (`glBindTexture`).
@@ -145,6 +159,30 @@ pub struct GlContext {
     /// The pack/unpack pixel-store parameters (`glPixelStorei`).
     pub pixel_store: PixelStore,
 
+    /// Indexed-buffer bindings (`glBindBufferBase`/`glBindBufferRange`), keyed by `(target, index)`.
+    /// The UBO/SSBO bindings feed a `glDispatchCompute`'s bind group (`crate::service::compute`).
+    pub indexed_buffers: HashMap<(u32, u32), IndexedBinding>,
+
+    /// The MRT draw-buffer list (`glDrawBuffers`) + the read-buffer source (`glReadBuffer`). This model
+    /// renders a single color target, so the list is recorded for a faithful round-trip but only the
+    /// first attachment is materialized — an honest partial.
+    pub draw_buffers: Vec<u32>,
+    pub read_buffer_src: u32,
+
+    // ---- sync objects (glFenceSync / glClientWaitSync / …) over the IR fence timeline ----------------
+    /// The IR fence id backing every sync object (`0` = not yet created; minted + `CreateFence`d on the
+    /// first `glFenceSync`). One monotonic fence timeline carries every fence sync this context creates.
+    pub fence_ir: u32,
+    /// The next timeline value a `glFenceSync` signals the fence to (monotonic, starts at 1).
+    pub fence_next_value: u64,
+    /// The highest fence timeline value a `glClientWaitSync`/`glWaitSync` has observed as reached. A sync
+    /// whose value is `<=` this reads back already-signaled without re-waiting.
+    pub fence_signaled_through: u64,
+    /// Live sync objects: opaque sync token → the fence timeline value it was inserted at.
+    pub syncs: HashMap<usize, u64>,
+    /// The opaque sync-token allocator (non-zero, so a `GLsync` is never null).
+    next_sync_token: usize,
+
     /// The last GL error (`glGetError` reads + clears it). GL keeps the FIRST error raised until read,
     /// so [`Self::set_gl_error`] is first-error-wins.
     pub gl_error: u32,
@@ -160,6 +198,7 @@ pub struct GlContext {
     next_pipeline: u32,
     next_bind_group: u32,
     next_surface: u32,
+    next_fence: u32,
 
     /// The default render-target texture + presentable surface IR ids, minted once and cached (0 =
     /// not yet created). The frame builder emits their `CreateTexture`/`CreateSurface` on first use.
@@ -190,6 +229,7 @@ impl GlContext {
             cur_prog: 0,
             array_buffer: 0,
             element_buffer: 0,
+            general_buffers: HashMap::new(),
             active_texture: 0,
             tex_unit: [0; 8],
             attr: [Attr::default(); MAX_ATTR],
@@ -218,6 +258,14 @@ impl GlContext {
             vaos: HashMap::new(),
             next_vao: 1,
             pixel_store: PixelStore::default(),
+            indexed_buffers: HashMap::new(),
+            draw_buffers: vec![glconst::GL_BACK],
+            read_buffer_src: glconst::GL_BACK,
+            fence_ir: 0,
+            fence_next_value: 1,
+            fence_signaled_through: 0,
+            syncs: HashMap::new(),
+            next_sync_token: 1,
             gl_error: glconst::GL_NO_ERROR,
             draws: Vec::new(),
             next_buffer: 1,
@@ -227,6 +275,7 @@ impl GlContext {
             next_pipeline: 1,
             next_bind_group: 1,
             next_surface: 1,
+            next_fence: 1,
             default_tex_ir: 0,
             default_surface_ir: 0,
             fbo_targets: HashMap::new(),
@@ -264,6 +313,18 @@ impl GlContext {
         let id = self.next_bind_group;
         self.next_bind_group += 1;
         id
+    }
+    pub fn alloc_fence_ir(&mut self) -> u32 {
+        let id = self.next_fence;
+        self.next_fence += 1;
+        id
+    }
+
+    /// Mint a fresh opaque sync-object token (non-zero, so a `GLsync` is never null).
+    pub fn mint_sync_token(&mut self) -> usize {
+        let t = self.next_sync_token;
+        self.next_sync_token += 1;
+        t
     }
 
     /// The default render-target texture + presentable surface IR ids. Returns `(surface, texture,
@@ -344,6 +405,17 @@ impl GlContext {
     /// `glIsVertexArray(vao)` — true once `vao` names a generated (non-default) VAO object.
     pub fn is_vertex_array(&self, vao: u32) -> bool {
         vao != 0 && self.vaos.contains_key(&vao)
+    }
+
+    /// The GL buffer name currently bound to `target` (`0` = none). `GL_ARRAY_BUFFER` /
+    /// `GL_ELEMENT_ARRAY_BUFFER` read their dedicated bindings; every other target reads the general
+    /// binding map (`glBindBuffer` of a UBO/SSBO/PBO/dispatch-indirect target).
+    pub fn buffer_for_target(&self, target: u32) -> u32 {
+        match target {
+            glconst::GL_ARRAY_BUFFER => self.array_buffer,
+            glconst::GL_ELEMENT_ARRAY_BUFFER => self.element_buffer,
+            t => self.general_buffers.get(&t).copied().unwrap_or(0),
+        }
     }
 
     /// The default-framebuffer draw-target width/height in pixels (the window-surface size).
