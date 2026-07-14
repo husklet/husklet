@@ -2,10 +2,11 @@
 //! lowering services through the process-global [`crate::state`] sink.
 //!
 //! Covers the memory + device + stream basics that map cleanly onto the services (alloc/free/memcpy/
-//! memset/synchronize) plus the version/error/device queries a probe expects. The runtime's launch path
-//! (`cudaLaunchKernel` + the `__cudaRegister*` fatbin registration) is intentionally a benign stub — it
-//! needs the host-function → fatbin registration machinery, which is deferred; the driver-API `cuLaunchKernel`
-//! is the wired compute launch.
+//! memset/synchronize) plus the version/error/device queries a probe expects, AND the runtime's launch
+//! path: `__cudaRegisterFatBinary`/`__cudaRegisterFunction`/`__cudaRegisterFatBinaryEnd` populate the
+//! [`hl_cuda::service::register::Registry`] (fatbin handle → module, host-fn pointer → kernel) and
+//! `cudaLaunchKernel` resolves a host-fn pointer to its device entry and lowers exactly like the
+//! driver-API `cuLaunchKernel` (same `CreateShader{kernel}` + `ComputePipeline` + `BindGroup` + `Dispatch`).
 
 use core::ffi::{c_char, c_void};
 
@@ -14,9 +15,17 @@ use hl_cuda::result::{
     cudart_from_gpu_error, CUDART_ERROR_INVALID_DEVICE, CUDART_ERROR_INVALID_VALUE,
     CUDART_ERROR_NOT_SUPPORTED, CUDART_SUCCESS,
 };
+use hl_cuda::service::register::{self, FatbinHandle};
 use hl_cuda::service::{allocate, synchronize, transfer};
 
 use crate::state::with;
+use crate::Dim3;
+
+// nvcc's `__fatBinC_Wrapper_t`: `{ int magic; int version; const void* data; void* filename_or_fatbins; }`.
+// `__cudaRegisterFatBinary` receives a pointer to this; `data` points at the fatbin CONTAINER (which
+// begins with the 0xba55ed50 fatbin magic). Clean-room from the documented layout.
+const FATBIN_WRAPPER_MAGIC: u32 = 0x4662_43b1;
+const FATBIN_MAGIC: u32 = 0xba55_ed50;
 
 /// CUDA 12.2 — reported by both `cudaDriverGetVersion` and `cudaRuntimeGetVersion`.
 const CUDART_VERSION: i32 = 12020;
@@ -303,4 +312,156 @@ pub extern "C" fn cudaDeviceReset() -> i32 {
         s.device = 0;
     });
     CUDART_SUCCESS
+}
+
+// ==================================================================================================
+// runtime-API launch path: `__cudaRegister*` fatbin/function registry + `cudaLaunchKernel`
+// ==================================================================================================
+
+/// nvcc's `__fatBinC_Wrapper_t` — the argument `__cudaRegisterFatBinary` actually receives. `data` points
+/// at the fatbin container (which itself begins with [`FATBIN_MAGIC`]).
+#[repr(C)]
+struct FatBinWrapper {
+    magic: i32,
+    version: i32,
+    data: *const c_void,
+    filename_or_fatbins: *const c_void,
+}
+
+/// Follow `fat_cubin` (a `__fatBinC_Wrapper_t*`, or defensively a bare container) to the fatbin CONTAINER
+/// bytes, sized by the container's own `header_size + fat_size`. `None` for a null/foreign/short image.
+unsafe fn container_bytes<'a>(fat_cubin: *const c_void) -> Option<&'a [u8]> {
+    if fat_cubin.is_null() {
+        return None;
+    }
+    let head = std::ptr::read_unaligned(fat_cubin as *const u32);
+    let container: *const u8 = if head == FATBIN_WRAPPER_MAGIC {
+        let w = &*(fat_cubin as *const FatBinWrapper);
+        if w.data.is_null() {
+            return None;
+        }
+        w.data as *const u8
+    } else if head == FATBIN_MAGIC {
+        fat_cubin as *const u8
+    } else {
+        return None;
+    };
+    if std::ptr::read_unaligned(container as *const u32) != FATBIN_MAGIC {
+        return None;
+    }
+    let header_size = std::ptr::read_unaligned(container.add(6) as *const u16) as usize;
+    let fat_size = std::ptr::read_unaligned(container.add(8) as *const u64) as usize;
+    let total = header_size.checked_add(fat_size)?;
+    Some(std::slice::from_raw_parts(container, total))
+}
+
+/// Read a nul-terminated C string into an owned `String` (`None` if null or not UTF-8).
+unsafe fn cstr_string(p: *const c_char) -> Option<String> {
+    if p.is_null() {
+        return None;
+    }
+    std::ffi::CStr::from_ptr(p).to_str().ok().map(str::to_string)
+}
+
+/// Encode a [`FatbinHandle`] as the opaque `void**` nvcc round-trips back to us: a heap cell whose stored
+/// `void*` value is the handle. [`decode_handle`] reads it back.
+fn encode_handle(h: FatbinHandle) -> *mut *mut c_void {
+    Box::into_raw(Box::new(h.0 as *mut c_void))
+}
+unsafe fn decode_handle(h: *mut *mut c_void) -> Option<FatbinHandle> {
+    if h.is_null() {
+        return None;
+    }
+    Some(FatbinHandle(*h as u64))
+}
+
+/// `__cudaRegisterFatBinary(fatCubin)` — walk the wrapped fatbin to its PTX, load it as a module, and hand
+/// nvcc an opaque handle bound to that module. Returns null on a bad image (nvcc tolerates a null handle).
+#[no_mangle]
+pub extern "C" fn __cudaRegisterFatBinary(fatCubin: *mut c_void) -> *mut *mut c_void {
+    let Some(container) = (unsafe { container_bytes(fatCubin) }) else {
+        return core::ptr::null_mut();
+    };
+    with(|s| match s.registry.register_fatbinary(&mut s.ctx, container) {
+        Ok(handle) => encode_handle(handle),
+        Err(e) => {
+            s.fail(cudart_from_gpu_error(&e));
+            core::ptr::null_mut()
+        }
+    })
+}
+
+/// `__cudaRegisterFunction(handle, hostFun, deviceFun, deviceName, …)` — bind the host function pointer
+/// `hostFun` to the device entry `deviceName` in the handle's module. `deviceFun` + the launch-bound
+/// descriptors are nvcc bookkeeping the lowering does not need.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn __cudaRegisterFunction(
+    fatCubinHandle: *mut *mut c_void,
+    hostFun: *const c_char,
+    deviceFun: *mut c_char,
+    deviceName: *const c_char,
+    thread_limit: i32,
+    tid: *mut c_void,
+    bid: *mut c_void,
+    bDim: *mut c_void,
+    gDim: *mut c_void,
+    wSize: *mut i32,
+) {
+    let _ = (deviceFun, thread_limit, tid, bid, bDim, gDim, wSize);
+    let Some(handle) = (unsafe { decode_handle(fatCubinHandle) }) else {
+        return;
+    };
+    let Some(name) = (unsafe { cstr_string(deviceName) }) else {
+        return;
+    };
+    let host_fn = hostFun as usize;
+    with(|s| {
+        if let Err(e) = s.registry.register_function(&s.ctx, handle, host_fn, &name) {
+            s.fail(cudart_from_gpu_error(&e));
+        }
+    });
+}
+
+/// `__cudaRegisterFatBinaryEnd(handle)` — the finalization marker after the last `__cudaRegisterFunction`.
+#[no_mangle]
+pub extern "C" fn __cudaRegisterFatBinaryEnd(fatCubinHandle: *mut *mut c_void) {
+    if let Some(handle) = unsafe { decode_handle(fatCubinHandle) } {
+        with(|s| {
+            s.registry.register_fatbinary_end(handle);
+        });
+    }
+}
+
+/// `cudaLaunchKernel(func, gridDim, blockDim, args, sharedMem, stream)` — resolve the host-fn pointer to
+/// its registered device entry and lower exactly like the driver-API `cuLaunchKernel`, via the shared
+/// [`register::launch_kernel`].
+#[no_mangle]
+pub extern "C" fn cudaLaunchKernel(
+    func: *const c_void,
+    gridDim: Dim3,
+    blockDim: Dim3,
+    args: *mut *mut c_void,
+    _sharedMem: usize,
+    _stream: *mut c_void,
+) -> i32 {
+    let host_fn = func as usize;
+    let grid = (gridDim.x, gridDim.y, gridDim.z);
+    let block = (blockDim.x, blockDim.y, blockDim.z);
+    with(|s| {
+        match unsafe {
+            register::launch_kernel(
+                &mut s.ctx,
+                &mut s.sink,
+                &s.registry,
+                host_fn,
+                grid,
+                block,
+                args as *const *const c_void,
+            )
+        } {
+            Ok(()) => CUDART_SUCCESS,
+            Err(e) => s.fail(cudart_from_gpu_error(&e)),
+        }
+    })
 }

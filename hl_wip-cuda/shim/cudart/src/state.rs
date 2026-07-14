@@ -8,12 +8,16 @@ use core::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
 use hl_cuda::model::stream::Stream;
+use hl_cuda::service::register::Registry;
 use hl_cuda::{CudaContext, CudaDeviceDesc};
 use hl_gpu::RemoteCommandSink;
 
 pub struct State {
     pub ctx: CudaContext,
     pub sink: RemoteCommandSink,
+    /// The CUDA Runtime API `__cudaRegister*` registry: fatbin handle → module, host-fn pointer →
+    /// resolved kernel. Populated by the `__cudaRegister*` entry points, read by `cudaLaunchKernel`.
+    pub registry: Registry,
     /// Sticky last runtime error (`cudaGetLastError` reads + clears; `cudaPeekAtLastError` reads only).
     pub last_error: i32,
     /// Selected device ordinal (`cudaSetDevice`/`cudaGetDevice`). One simulated device → always 0.
@@ -31,6 +35,7 @@ impl State {
         State {
             ctx: CudaContext::new(CudaDeviceDesc::apple_default(vram)),
             sink: RemoteCommandSink::from_env(),
+            registry: Registry::new(),
             last_error: 0,
             device: 0,
             streams: Vec::new(),

@@ -7,10 +7,12 @@
 //!
 //! Fully lowered this pass: [`allocate`] (`cuMemAlloc`/`cuMemFree`), [`transfer`]
 //! (`cuMemcpyHtoD`/`DtoH`/`DtoD`), [`load_module`] (`cuModuleLoadData`/`cuModuleGetFunction`),
-//! [`launch`] (`cuLaunchKernel`), [`synchronize`] (`cuCtxSynchronize`/`cuStreamSynchronize`).
+//! [`launch`] (`cuLaunchKernel`), [`synchronize`] (`cuCtxSynchronize`/`cuStreamSynchronize`), and
+//! [`register`] (the CUDA Runtime API's `__cudaRegister*` fatbin/function registry + `cudaLaunchKernel`).
 
 pub mod allocate;
 pub mod launch;
 pub mod load_module;
+pub mod register;
 pub mod synchronize;
 pub mod transfer;

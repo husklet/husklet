@@ -161,10 +161,16 @@ fn env(k: &str) -> String {
 }
 
 /// Entry points hand-written in `src/runtime.rs`: the memory + device + stream basics that map cleanly
-/// onto the `hl_cuda` lowering services (alloc/free/memcpy/memset/sync) + version/error/device queries.
-/// The fatbin-registration launch tail (`__cudaRegister*`, `cudaLaunchKernel`, the call-config helpers)
-/// stays a benign stub — that path needs the runtime's fatbin registration machinery, deferred.
+/// onto the `hl_cuda` lowering services (alloc/free/memcpy/memset/sync) + version/error/device queries,
+/// PLUS the runtime-API launch tail — `__cudaRegisterFatBinary`/`__cudaRegisterFunction`/
+/// `__cudaRegisterFatBinaryEnd` (the fatbin/host-fn registry) and `cudaLaunchKernel` (resolves a host-fn
+/// pointer to its device entry and lowers exactly like the driver-API `cuLaunchKernel`). The remaining
+/// `__cudaRegisterVar`/`__cudaUnregisterFatBinary`/call-config helpers stay benign stubs.
 const IMPLEMENTED: &[&str] = &[
+    "__cudaRegisterFatBinary",
+    "__cudaRegisterFunction",
+    "__cudaRegisterFatBinaryEnd",
+    "cudaLaunchKernel",
     "cudaMalloc",
     "cudaFree",
     "cudaMemcpy",
