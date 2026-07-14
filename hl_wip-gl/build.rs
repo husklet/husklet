@@ -29,6 +29,7 @@ const SHIM_DIR: &str = "shim/egl";
 const SHIM_LIB: &str = "libhl_egl_guest.so";
 const EGL_SONAME: &str = "libEGL.so.1";
 const GLES_SONAME: &str = "libGLESv2.so.2";
+const WLEGL_SONAME: &str = "libwayland-egl.so.1";
 
 /// (rust target triple, cross linker / C compiler, install-dir arch name).
 const ARCHES: &[(&str, &str, &str)] = &[
@@ -49,12 +50,14 @@ fn main() {
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("registry").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("build.rs").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join("shim/gles/forward.c").display());
+    println!("cargo:rerun-if-changed={}", manifest_dir.join("shim/wayland-egl/wayland_egl.c").display());
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let shim_target = manifest_dir.join("target").join("shim-build");
     let stage_root = stage_root();
     let sysroot = rustc_sysroot();
     let forward_c = manifest_dir.join("shim/gles/forward.c");
+    let wlegl_c = manifest_dir.join("shim/wayland-egl/wayland_egl.c");
 
     for (triple, cc, arch_dir) in ARCHES {
         let host = *triple == host_triple();
@@ -93,6 +96,15 @@ fn main() {
                 panic!("generating {GLES_SONAME} for {triple}: {e}");
             }
             println!("cargo:warning=hl_wip-gl: generating {GLES_SONAME} for {triple} failed: {e}");
+            continue;
+        }
+        // 4. Compile + stage the libwayland-egl.so.1 wayland-egl ABI object (the app's `wl_egl_window`
+        //    library). A SEPARATE object from libEGL — libEGL reads its `wl_egl_window` struct back.
+        if let Err(e) = generate_wayland_egl(cc, &wlegl_c, &dst_dir) {
+            if host {
+                panic!("generating {WLEGL_SONAME} for {triple}: {e}");
+            }
+            println!("cargo:warning=hl_wip-gl: generating {WLEGL_SONAME} for {triple} failed: {e}");
             continue;
         }
 
@@ -175,6 +187,32 @@ fn generate_gles_stub(cc: &str, forward_c: &Path, dst_dir: &Path) -> Result<(), 
         return Err(format!("expected {} not produced", out.display()));
     }
     symlink_unversioned(dst_dir, GLES_SONAME);
+    Ok(())
+}
+
+/// Compile the `libwayland-egl.so.1` wayland-egl ABI object from the one-file C shim (`DT_SONAME=
+/// libwayland-egl.so.1`), linked against libc for `calloc`/`free`. Installs it next to libEGL (+
+/// unversioned symlink). The app links `-lwayland-egl` and calls `wl_egl_window_create`; libEGL reads the
+/// resulting struct back in `eglCreateWindowSurface`.
+fn generate_wayland_egl(cc: &str, wlegl_c: &Path, dst_dir: &Path) -> Result<(), String> {
+    let out = dst_dir.join(WLEGL_SONAME);
+    let status = Command::new(cc)
+        .arg("-shared")
+        .arg("-fPIC")
+        .arg("-O2")
+        .arg("-o")
+        .arg(&out)
+        .arg(wlegl_c)
+        .arg(format!("-Wl,-soname,{WLEGL_SONAME}"))
+        .status()
+        .map_err(|e| format!("spawn {cc}: {e}"))?;
+    if !status.success() {
+        return Err(format!("{cc} link exited with {status}"));
+    }
+    if !out.exists() {
+        return Err(format!("expected {} not produced", out.display()));
+    }
+    symlink_unversioned(dst_dir, WLEGL_SONAME);
     Ok(())
 }
 

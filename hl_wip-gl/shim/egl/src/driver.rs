@@ -144,16 +144,39 @@ pub extern "C" fn eglTerminate(_dpy: *mut c_void) -> u32 {
     EGL_TRUE
 }
 
+/// `eglQueryString(dpy, name)` — vendor / version / client-APIs / **extensions**. The extension string is
+/// keyed on `dpy`: with `EGL_NO_DISPLAY` (null) it returns the CLIENT extensions (the platform-base +
+/// `EGL_*_platform_wayland` set a toolkit probes before opening a display), otherwise the per-display set.
+/// Advertising `EGL_EXT_platform_wayland` / `EGL_KHR_platform_wayland` is what makes a Wayland app take the
+/// `eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, …)` window path instead of surfaceless/pbuffer.
 #[no_mangle]
-pub extern "C" fn eglQueryString(_dpy: *mut c_void, name: i32) -> *const c_char {
-    let text: &'static [u8] = match name {
-        EGL_VENDOR => b"hl-gl\0",
-        EGL_VERSION_Q => b"1.5 hl-gl\0",
-        EGL_CLIENT_APIS => b"OpenGL_ES\0",
-        EGL_EXTENSIONS_Q => b"\0",
-        _ => b"\0",
-    };
-    text.as_ptr() as *const c_char
+pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
+    match name {
+        EGL_VENDOR => b"hl-gl\0".as_ptr() as *const c_char,
+        EGL_VERSION_Q => b"1.5 hl-gl\0".as_ptr() as *const c_char,
+        EGL_CLIENT_APIS => b"OpenGL_ES\0".as_ptr() as *const c_char,
+        EGL_EXTENSIONS_Q => egl_extensions_cstr(dpy.is_null()),
+        _ => b"\0".as_ptr() as *const c_char,
+    }
+}
+
+/// The NUL-terminated `EGL_EXTENSIONS` string (built once from [`hl_gl::adapter::wayland`], process-static
+/// so the returned pointer is valid for the app's lifetime).
+fn egl_extensions_cstr(client: bool) -> *const c_char {
+    use std::ffi::CString;
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<CString> = OnceLock::new();
+    static DISPLAY: OnceLock<CString> = OnceLock::new();
+    let cell = if client { &CLIENT } else { &DISPLAY };
+    cell.get_or_init(|| {
+        let s = if client {
+            hl_gl::adapter::wayland::egl_client_extensions()
+        } else {
+            hl_gl::adapter::wayland::egl_display_extensions()
+        };
+        CString::new(s).unwrap_or_default()
+    })
+    .as_ptr()
 }
 
 /// `eglGetProcAddress(name)` — resolve a core `egl*`/`gl*` entry point to its real function pointer.
@@ -715,18 +738,41 @@ pub extern "C" fn eglMakeCurrent(
     EGL_TRUE
 }
 
+/// `eglCreateWindowSurface(dpy, config, win, attrib_list)` — bring up the presented default framebuffer.
+///
+/// `win` is the native window: for a Wayland app it is a `wl_egl_window*` (created by the staged
+/// `libwayland-egl.so.1`), from which we read the backing size + the wrapped `wl_surface`. A non-wayland /
+/// sizeless window falls back to `$HL_GL_SURFACE_W/_H`. When a `wl_surface` is present and a compositor is
+/// reachable (`$WAYLAND_DISPLAY`), a self-contained `wl_shm` present session is brought up so
+/// `eglSwapBuffers` shows the frame; otherwise the session stays `None` (present is skipped, never faked).
 #[no_mangle]
 pub extern "C" fn eglCreateWindowSurface(
     _dpy: *mut c_void,
     _config: *mut c_void,
-    _win: *mut c_void,
+    win: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
-    let (width, height) = default_surface_wh();
+    create_window_surface(win)
+}
+
+/// Shared `eglCreateWindowSurface` / `eglCreatePlatformWindowSurface` body: size the surface from the
+/// native window and (best-effort) bring up the Wayland present session.
+fn create_window_surface(win: *mut c_void) -> *mut c_void {
+    // Parse the wl_egl_window (or a stock two-int window). A null / sizeless window uses the env default.
+    let info = unsafe { hl_gl::adapter::wayland::parse_native_window(win) };
+    let (width, height) = if win.is_null() { default_surface_wh() } else { (info.width, info.height) };
     with(|s| {
         s.ctx.surf = GlSurface { have: true, width, height };
+        s.current_is_wayland = info.wl_surface != 0;
+        s.wl_surface_ptr = info.wl_surface;
         let tok = s.mint_token();
         s.current_surface = tok as usize;
+        // Deployed Wayland path: connect to the compositor + bring up an xdg-toplevel. `connect_and_handshake`
+        // returns None when `$WAYLAND_DISPLAY` is unset or the handshake fails (an honest "no compositor").
+        if std::env::var_os("HL_GL_NO_WAYLAND").is_none() {
+            let geom = hl_gl::adapter::wayland::Geometry::backing(width, height);
+            s.wl = hl_gl::adapter::wayland::Wayland::connect_and_handshake(&geom);
+        }
         tok
     })
 }
@@ -742,16 +788,48 @@ pub extern "C" fn eglDestroySurface(_dpy: *mut c_void, surface: *mut c_void) -> 
     EGL_TRUE
 }
 
+/// `EGL_CONTEXT_LOST` — reported when the compositor commit of a Wayland frame fails (delivery / protocol /
+/// pacing), so a failed present is never mistaken for a shown frame.
+const EGL_CONTEXT_LOST: i32 = 0x300E;
+
 /// `eglSwapBuffers` — the one sink-touching op: lower + submit + present the recorded frame. On a sink
 /// error the frame is retained and `EGL_*` is registered (surfaced by the next `eglGetError`).
+///
+/// On a Wayland window surface with a live present session, the rendered frame is ALSO read back and
+/// committed to the compositor as a `wl_shm` `wl_buffer` (the deployed present path). The read-back
+/// happens BEFORE the swap (which resets the draw-list); a commit failure is surfaced as
+/// `EGL_CONTEXT_LOST`.
 #[no_mangle]
 pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u32 {
-    with(|s| match swap::swap_buffers(&mut s.ctx, &mut s.sink) {
-        Ok(_) => EGL_TRUE,
-        Err(e) => {
+    with(|s| {
+        // Wayland present: read the rendered frame back (draws intact) to feed a wl_shm buffer. Only when a
+        // live session exists (deployed path) — tests / no-compositor keep this None and skip it.
+        let wl_pixels = if s.wl.is_some() {
+            let (w, h) = (s.ctx.surf.width as i32, s.ctx.surf.height as i32);
+            readpixels::read_pixels(&mut s.ctx, &mut s.sink, 0, 0, w, h, GL_RGBA)
+                .ok()
+                .map(|rgba| hl_gl::adapter::wayland::rgba_to_xrgb8888(&rgba, w as usize, h as usize))
+        } else {
+            None
+        };
+
+        // The authoritative present: lower + submit the frame IR (+ Present) to the GPU-exec host.
+        if let Err(e) = swap::swap_buffers(&mut s.ctx, &mut s.sink) {
             s.set_egl_error(egl_error_from_gpu_error(&e));
-            EGL_FALSE
+            return EGL_FALSE;
         }
+
+        // Commit the read-back frame to the compositor (a failure is surfaced, never a silent present).
+        if let Some(px) = wl_pixels {
+            let geom = hl_gl::adapter::wayland::Geometry::backing(s.ctx.surf.width, s.ctx.surf.height);
+            if let Some(wl) = s.wl.as_mut() {
+                if wl.commit(&px, &geom).is_err() {
+                    s.set_egl_error(EGL_CONTEXT_LOST);
+                    return EGL_FALSE;
+                }
+            }
+        }
+        EGL_TRUE
     })
 }
 
@@ -4105,16 +4183,11 @@ pub extern "C" fn eglCreatePbufferFromClientBuffer(_dpy: *mut c_void, _buftype: 
     with(|s| s.mint_token())
 }
 /// `eglCreatePlatformWindowSurface(dpy, config, native_window, attrib_list)` — the EGL 1.5 window-surface
-/// getter; brings up the window surface like `eglCreateWindowSurface`.
+/// getter modern toolkits use. `native_window` is the same `wl_egl_window*`; brings up the window surface
+/// (size + Wayland present session) exactly like `eglCreateWindowSurface`.
 #[no_mangle]
-pub extern "C" fn eglCreatePlatformWindowSurface(_dpy: *mut c_void, _config: *mut c_void, _native_window: *mut c_void, _attrib_list: *const isize) -> *mut c_void {
-    let (width, height) = default_surface_wh();
-    with(|s| {
-        s.ctx.surf = GlSurface { have: true, width, height };
-        let tok = s.mint_token();
-        s.current_surface = tok as usize;
-        tok
-    })
+pub extern "C" fn eglCreatePlatformWindowSurface(_dpy: *mut c_void, _config: *mut c_void, native_window: *mut c_void, _attrib_list: *const isize) -> *mut c_void {
+    create_window_surface(native_window)
 }
 /// `eglCreatePlatformPixmapSurface(...)` — the EGL 1.5 pixmap-surface getter; a fresh surface token.
 #[no_mangle]

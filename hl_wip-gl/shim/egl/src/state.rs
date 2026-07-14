@@ -43,6 +43,16 @@ pub struct State {
     pub current_ctx: usize,
     /// The current `EGLSurface` token (`0` = none). The single window surface lives in `ctx.surf`.
     pub current_surface: usize,
+
+    /// Whether the current window surface is a Wayland window (created from a `wl_egl_window`). Keys the
+    /// `eglSwapBuffers` compositor-commit path.
+    pub current_is_wayland: bool,
+    /// The app's `wl_surface*` (as a `usize`) the current window surface wraps (`0` = none). Recovered
+    /// from the `wl_egl_window` in `eglCreateWindowSurface`.
+    pub wl_surface_ptr: usize,
+    /// The live self-contained `wl_shm` present session to the compositor (`None` in tests / when no
+    /// compositor is reachable — the present is then skipped, never faked).
+    pub wl: Option<hl_gl::adapter::wayland::Wayland>,
 }
 
 impl State {
@@ -56,6 +66,9 @@ impl State {
             next_token: 1,
             current_ctx: 0,
             current_surface: 0,
+            current_is_wayland: false,
+            wl_surface_ptr: 0,
+            wl: None,
         }
     }
 
