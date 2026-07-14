@@ -356,10 +356,11 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
     }
 }
 
-/// `vkGetPhysicalDeviceFeatures2` — the base 1.0 feature set. The promoted-feature pNext structs are
-/// left as the app zero-initialized them (all `VK_FALSE`): we advertise NO promoted feature we do not
-/// really implement, so a chained struct honestly reports the feature as unsupported. The chain is
-/// preserved.
+/// `vkGetPhysicalDeviceFeatures2` — the base 1.0 feature set, plus the promoted-feature pNext structs we
+/// really back. `VkPhysicalDeviceDynamicRenderingFeatures::dynamicRendering` is set `VK_TRUE` (backed by
+/// the `cmd_begin_rendering` lowering + the advertised `VK_KHR_dynamic_rendering` device extension). Every
+/// OTHER promoted-feature struct is left as the app zero-initialized it (`VK_FALSE`) — we advertise no
+/// feature we do not implement. The chain is preserved.
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceFeatures2(
     physical_device: *mut c_void,
@@ -369,6 +370,15 @@ pub extern "C" fn vkGetPhysicalDeviceFeatures2(
         return;
     };
     vkGetPhysicalDeviceFeatures(physical_device, &mut out.features as *mut _ as *mut c_void);
+    let mut node = out.p_next as *mut VkBaseOutStructure;
+    while let Some(n) = unsafe { node.as_mut() } {
+        if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES {
+            if let Some(f) = unsafe { (node as *mut VkPhysicalDeviceDynamicRenderingFeatures).as_mut() } {
+                f.dynamic_rendering = VK_TRUE;
+            }
+        }
+        node = n.p_next;
+    }
 }
 
 /// `vkGetPhysicalDeviceMemoryProperties2` — delegates to the 1.0 memory-properties fill.
@@ -423,6 +433,58 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2(
         return;
     };
     vkGetPhysicalDeviceFormatProperties(physical_device, format, &mut out.format_properties as *mut _ as *mut c_void);
+}
+
+// ==================================================================================================
+// the `...2KHR` aliases (VK_KHR_get_physical_device_properties2) — delegate to the promoted-core bodies
+// ==================================================================================================
+// Each is the pre-promotion `KHR` name of the identical core-1.1 query; it forwards verbatim so an app /
+// loader that resolves the `KHR` spelling gets the same truthful answer as the core entry point.
+
+/// `vkGetPhysicalDeviceProperties2KHR` — alias of the core [`vkGetPhysicalDeviceProperties2`].
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceProperties2KHR(physical_device: *mut c_void, p_properties: *mut c_void) {
+    vkGetPhysicalDeviceProperties2(physical_device, p_properties)
+}
+
+/// `vkGetPhysicalDeviceFeatures2KHR` — alias of the core [`vkGetPhysicalDeviceFeatures2`].
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceFeatures2KHR(physical_device: *mut c_void, p_features: *mut c_void) {
+    vkGetPhysicalDeviceFeatures2(physical_device, p_features)
+}
+
+/// `vkGetPhysicalDeviceMemoryProperties2KHR` — alias of the core [`vkGetPhysicalDeviceMemoryProperties2`].
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceMemoryProperties2KHR(
+    physical_device: *mut c_void,
+    p_memory_properties: *mut c_void,
+) {
+    vkGetPhysicalDeviceMemoryProperties2(physical_device, p_memory_properties)
+}
+
+/// `vkGetPhysicalDeviceQueueFamilyProperties2KHR` — alias of the core
+/// [`vkGetPhysicalDeviceQueueFamilyProperties2`].
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties2KHR(
+    physical_device: *mut c_void,
+    p_queue_family_property_count: *mut u32,
+    p_queue_family_properties: *mut c_void,
+) {
+    vkGetPhysicalDeviceQueueFamilyProperties2(
+        physical_device,
+        p_queue_family_property_count,
+        p_queue_family_properties,
+    )
+}
+
+/// `vkGetPhysicalDeviceFormatProperties2KHR` — alias of the core [`vkGetPhysicalDeviceFormatProperties2`].
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceFormatProperties2KHR(
+    physical_device: *mut c_void,
+    format: i32,
+    p_format_properties: *mut c_void,
+) {
+    vkGetPhysicalDeviceFormatProperties2(physical_device, format, p_format_properties)
 }
 
 /// The full Apple-GPU-class `VkPhysicalDeviceLimits` (all 106 fields), ported verbatim from

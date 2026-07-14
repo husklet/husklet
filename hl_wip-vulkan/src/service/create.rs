@@ -279,17 +279,22 @@ pub fn create_compute_pipeline(
 }
 
 /// `vkCreateGraphicsPipelines` (one pipeline) — resolve the vertex (+ optional fragment) stage(s), carry
-/// the `VkPipelineVertexInputState` vertex-buffer layout(s), and submit [`Cmd::CreateRenderPipeline`]
-/// with one color target of `color_format`. Ported from `pipeline.rs::vkCreateGraphicsPipelines` (the
-/// bring-up subset: one color target, no blend/depth). `vertex_layouts` are the translated
+/// the `VkPipelineVertexInputState` vertex-buffer layout(s), and submit [`Cmd::CreateRenderPipeline`] with
+/// one color target per entry in `color_formats`. Ported from `pipeline.rs::vkCreateGraphicsPipelines`
+/// (the bring-up subset: no blend/depth). `vertex_layouts` are the translated
 /// `VkVertexInputBindingDescription`s (slot-0 layout is what the host rasterizer fetches positions from).
+///
+/// `color_formats` carries one format per color attachment — sourced from the bound `VkRenderPass`'s
+/// attachments in the classic path, or from the pipeline's `VkPipelineRenderingCreateInfo::pColorAttachmentFormats`
+/// pNext in the dynamic-rendering path (a null `renderPass`). An empty slice is valid (a depth-only /
+/// no-color pipeline), yielding a pipeline with no color targets.
 pub fn create_graphics_pipeline(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
     vertex: (VkShaderModule, &str),
     fragment: Option<(VkShaderModule, &str)>,
     vertex_layouts: Vec<VertexLayout>,
-    color_format: TextureFormat,
+    color_formats: Vec<TextureFormat>,
 ) -> Result<VkPipeline> {
     use hl_gpu::protocol::model::descriptor::ColorTargetState;
     let resolve = |dev: &Device, (module, entry): (VkShaderModule, &str)| -> Result<ShaderRef> {
@@ -304,6 +309,10 @@ pub fn create_graphics_pipeline(
     };
     let vertex_ref = resolve(dev, vertex)?;
     let fragment_ref = fragment.map(|f| resolve(dev, f)).transpose()?;
+    let color_targets = color_formats
+        .into_iter()
+        .map(|format| ColorTargetState { format, blend: None, write_mask: 0xf })
+        .collect();
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
     sink.submit(&[Cmd::CreateRenderPipeline(
@@ -312,7 +321,7 @@ pub fn create_graphics_pipeline(
             vertex: vertex_ref,
             fragment: fragment_ref,
             vertex_buffers: vertex_layouts,
-            color_targets: vec![ColorTargetState { format: color_format, blend: None, write_mask: 0xf }],
+            color_targets,
             depth: None,
             topology: Topology::TriangleList,
             cull: 0,

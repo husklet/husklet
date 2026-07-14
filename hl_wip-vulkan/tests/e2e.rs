@@ -99,7 +99,7 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
         (vs, "vsmain"),
         Some((fs, "fsmain")),
         vec![layout],
-        TextureFormat::Rgba8Unorm,
+        vec![TextureFormat::Rgba8Unorm],
     )
     .unwrap();
 

@@ -13,7 +13,8 @@ use crate::model::sync::DeferredOp;
 use crate::*;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
-    BindEntry, BindGroupDesc, BindResource, ColorAttachment, Extent3d, Origin3d, TextureSubresource,
+    BindEntry, BindGroupDesc, BindResource, ColorAttachment, DepthAttachment, Extent3d, Origin3d,
+    TextureSubresource,
 };
 use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, Filter, IndexFormat, LoadOp};
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
@@ -265,6 +266,88 @@ pub fn cmd_draw_indexed(
         base_vertex: vertex_offset,
         first_instance,
     });
+    Ok(())
+}
+
+// ---- dynamic rendering (VK_KHR_dynamic_rendering / core 1.3) ------------------------------------
+// A dynamic-rendering pass carries its attachments inline in `VkRenderingInfo` — no `VkRenderPass` or
+// `VkFramebuffer` object. `vkCmdBeginRendering` lowers to the SAME `Enc::BeginRenderPass` a
+// `vkCmdBeginRenderPass` does; the only difference is where the color/depth targets come from (the
+// inline `pColorAttachments`/`pDepthAttachment`, resolved to image ir ids by the shim). `vkCmdEndRendering`
+// is identical to `vkCmdEndRenderPass` (`Enc::EndRenderPass`), so it reuses [`cmd_end_render_pass`].
+
+/// One parsed `VkRenderingAttachmentInfo` color target: the color `VkImage` (resolved from the
+/// attachment's `imageView` by the shim), its clear value, and whether its `loadOp`/`storeOp` are
+/// CLEAR/STORE. Neutral (no C ABI) so the lowering is unit-testable against a `RecordingSink`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RenderingColorAttachment {
+    /// The color `VkImage` handle the attachment's `imageView` resolves to.
+    pub image: VkImage,
+    /// The RGBA clear value (`VkRenderingAttachmentInfo::clearValue.color`).
+    pub clear: [f32; 4],
+    /// `loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR` (else the existing contents are loaded).
+    pub load_clear: bool,
+    /// `storeOp == VK_ATTACHMENT_STORE_OP_STORE` (else the result may be discarded).
+    pub store: bool,
+}
+
+/// One parsed `VkRenderingAttachmentInfo` depth target.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RenderingDepthAttachment {
+    /// The depth `VkImage` handle the attachment's `imageView` resolves to.
+    pub image: VkImage,
+    /// The depth clear value (`VkRenderingAttachmentInfo::clearValue.depthStencil.depth`).
+    pub clear_depth: f32,
+    /// `loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR`.
+    pub load_clear: bool,
+}
+
+/// `vkCmdBeginRendering(KHR)` — begin a render-pass-object-free pass from `VkRenderingInfo`: each color
+/// attachment lowers to a [`ColorAttachment`] (`Clear` when its `loadOp` is CLEAR, else `Load`) and an
+/// optional depth attachment to a [`DepthAttachment`], emitted as one [`Enc::BeginRenderPass`] — the SAME
+/// op a classic render pass lowers to (§ dynamic rendering). Every attachment image must exist. The active
+/// clear target (`vkCmdClearAttachments`) is the first color attachment.
+pub fn cmd_begin_rendering(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    colors: &[RenderingColorAttachment],
+    depth: Option<RenderingDepthAttachment>,
+) -> Result<()> {
+    // Resolve every attachment image → ir texture id up front (a bad handle fails before recording).
+    let mut color_targets: Vec<ColorAttachment> = Vec::with_capacity(colors.len());
+    for c in colors {
+        let texture = dev
+            .images
+            .get(&c.image)
+            .ok_or(GpuError::Invalid("vkCmdBeginRendering: unknown color VkImage"))?
+            .ir_id;
+        color_targets.push(ColorAttachment {
+            texture,
+            load: if c.load_clear { LoadOp::Clear } else { LoadOp::Load },
+            clear: c.clear,
+            store: c.store,
+        });
+    }
+    let depth_target = match depth {
+        Some(d) => {
+            let texture = dev
+                .images
+                .get(&d.image)
+                .ok_or(GpuError::Invalid("vkCmdBeginRendering: unknown depth VkImage"))?
+                .ir_id;
+            Some(DepthAttachment {
+                texture,
+                load: if d.load_clear { LoadOp::Clear } else { LoadOp::Load },
+                clear_depth: d.clear_depth,
+            })
+        }
+        None => None,
+    };
+    let active = color_targets.first().map(|c| c.texture);
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::BeginRenderPass { color: color_targets, depth: depth_target });
+    rec.in_render_pass = true;
+    rec.active_render_texture = active;
     Ok(())
 }
 

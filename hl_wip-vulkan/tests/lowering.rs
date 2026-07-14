@@ -203,7 +203,7 @@ fn graphics_pipeline_emits_create_render_pipeline() {
         (vs, "vsmain"),
         Some((fs, "fsmain")),
         vec![pos_color_layout()],
-        TextureFormat::Bgra8Unorm,
+        vec![TextureFormat::Bgra8Unorm],
     )
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
@@ -214,6 +214,37 @@ fn graphics_pipeline_emits_create_render_pipeline() {
             assert_eq!(desc.vertex_buffers.len(), 1);
             assert_eq!(desc.vertex_buffers[0].stride, 24);
             assert_eq!(desc.vertex_buffers[0].attrs.len(), 2);
+        }
+        other => panic!("expected CreateRenderPipeline, got {other:?}"),
+    }
+}
+
+#[test]
+fn dynamic_rendering_pipeline_takes_color_formats_from_pnext_no_render_pass() {
+    // A VK_KHR_dynamic_rendering graphics pipeline has NO VkRenderPass — its color-target formats come
+    // from VkPipelineRenderingCreateInfo::pColorAttachmentFormats (passed here as the format list). It
+    // still lowers to a real Cmd::CreateRenderPipeline with those color targets.
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let vs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("vsmain"))
+        .unwrap();
+    let fs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("fsmain"))
+        .unwrap();
+    // Two color attachment formats from the pNext, and no render pass object at all.
+    create::create_graphics_pipeline(
+        &mut d,
+        &mut sink,
+        (vs, "vsmain"),
+        Some((fs, "fsmain")),
+        vec![pos_color_layout()],
+        vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
+    )
+    .unwrap();
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::CreateRenderPipeline(_, desc)] => {
+            assert_eq!(desc.color_targets.len(), 2);
+            assert_eq!(desc.color_targets[0].format, TextureFormat::Bgra8Unorm);
+            assert_eq!(desc.color_targets[1].format, TextureFormat::Rgba8Unorm);
         }
         other => panic!("expected CreateRenderPipeline, got {other:?}"),
     }
@@ -248,7 +279,7 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
         (vs, "vsmain"),
         Some((fs, "fsmain")),
         vec![pos_color_layout()],
-        TextureFormat::Rgba8Unorm,
+        vec![TextureFormat::Rgba8Unorm],
     )
     .unwrap();
 
@@ -293,6 +324,79 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
         }
         other => panic!("expected Submit, got {other:?}"),
     }
+}
+
+#[test]
+fn begin_rendering_lowers_to_begin_render_pass_with_clear_attachment() {
+    // vkCmdBeginRendering (VK_KHR_dynamic_rendering) lowers to the SAME Enc::BeginRenderPass a classic
+    // render pass does — the color target + CLEAR come from the inline VkRenderingInfo, with no
+    // VkRenderPass/VkFramebuffer object. vkCmdEndRendering reuses cmd_end_render_pass (Enc::EndRenderPass).
+    use hl_vulkan::service::record::RenderingColorAttachment;
+
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let target = create::create_image(
+        &mut d,
+        &mut sink,
+        128,
+        128,
+        vk_format::B8G8R8A8_UNORM,
+        vk_image_usage::COLOR_ATTACHMENT,
+    )
+    .unwrap();
+    let ir = img_ir(&d, target);
+
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_begin_rendering(
+            d,
+            cb,
+            &[RenderingColorAttachment {
+                image: target,
+                clear: [0.1, 0.2, 0.3, 1.0],
+                load_clear: true,
+                store: true,
+            }],
+            None,
+        )
+        .unwrap();
+        record::cmd_end_render_pass(d, cb).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![
+            Enc::BeginRenderPass {
+                color: vec![hl_gpu::protocol::model::descriptor::ColorAttachment {
+                    texture: ir,
+                    load: hl_gpu::protocol::model::enums::LoadOp::Clear,
+                    clear: [0.1, 0.2, 0.3, 1.0],
+                    store: true,
+                }],
+                depth: None,
+            },
+            Enc::EndRenderPass,
+        ]
+    );
+    // The active clear target is set, so a vkCmdClearAttachments inside the dynamic pass resolves.
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_begin_rendering(
+        &mut d,
+        cb,
+        &[RenderingColorAttachment { image: target, clear: [0.0; 4], load_clear: false, store: true }],
+        None,
+    )
+    .unwrap();
+    assert!(record::cmd_clear_attachment_rect(&mut d, cb, 0, 0, 4, 4, [1.0, 0.0, 0.0, 1.0]).is_ok());
+    // An unknown attachment image is a typed error, not a silent skip.
+    let cb2 = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb2).unwrap();
+    assert!(record::cmd_begin_rendering(
+        &mut d,
+        cb2,
+        &[RenderingColorAttachment { image: 0xdead, clear: [0.0; 4], load_clear: true, store: true }],
+        None,
+    )
+    .is_err());
 }
 
 #[test]
@@ -752,7 +856,6 @@ fn push_constants_reach_the_command_buffer_for_the_draw() {
 #[test]
 fn dynamic_state_is_recorded_but_emits_no_encoder_op() {
     let mut d = dev();
-    let mut sink = RecordingSink::with_full_caps();
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb).unwrap();
     record::cmd_set_line_width(&mut d, cb, 2.5).unwrap();

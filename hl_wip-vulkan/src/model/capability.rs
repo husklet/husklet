@@ -30,10 +30,14 @@ pub const INSTANCE_EXTENSIONS: &[ExtensionProp] = &[
 ];
 
 /// Device-level extensions the ICD really backs: `VK_KHR_swapchain` (the present path in
-/// [`crate::service::present`]). Nothing else is advertised — a `vk.xml` extension without a real body
-/// here (timeline semaphores, dynamic rendering, buffer device address, …) would be a dishonest claim.
-pub const DEVICE_EXTENSIONS: &[ExtensionProp] =
-    &[ExtensionProp { name: "VK_KHR_swapchain", spec_version: 70 }];
+/// [`crate::service::present`]) + `VK_KHR_dynamic_rendering` (the render-pass-object-free rendering path
+/// in [`crate::service::record::cmd_begin_rendering`], really lowered to `Enc::BeginRenderPass`). Nothing
+/// else is advertised — a `vk.xml` extension without a real body here (timeline semaphores, buffer device
+/// address, …) would be a dishonest claim.
+pub const DEVICE_EXTENSIONS: &[ExtensionProp] = &[
+    ExtensionProp { name: "VK_KHR_swapchain", spec_version: 70 },
+    ExtensionProp { name: "VK_KHR_dynamic_rendering", spec_version: 1 },
+];
 
 /// `VkFormatFeatureFlagBits` (stable bit values from vk.xml) — the per-format capability bits reported
 /// in `VkFormatProperties`.
@@ -147,6 +151,15 @@ mod tests {
     fn device_extensions_advertise_swapchain() {
         let names: Vec<&str> = DEVICE_EXTENSIONS.iter().map(|e| e.name).collect();
         assert!(names.contains(&"VK_KHR_swapchain"));
+    }
+
+    #[test]
+    fn device_extensions_advertise_dynamic_rendering() {
+        // VK_KHR_dynamic_rendering is really backed (cmd_begin_rendering lowers to Enc::BeginRenderPass),
+        // so it is honestly advertised — a modern app / wgpu-on-Vulkan gates its no-render-pass path on it.
+        let names: Vec<&str> = DEVICE_EXTENSIONS.iter().map(|e| e.name).collect();
+        assert!(names.contains(&"VK_KHR_dynamic_rendering"));
+        assert!(DEVICE_EXTENSIONS.iter().all(|e| e.spec_version >= 1));
     }
 
     #[test]

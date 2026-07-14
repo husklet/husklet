@@ -815,6 +815,119 @@ pub struct VkRenderPassBeginInfo {
     pub p_clear_values: *const VkClearValue,
 }
 
+// ---- dynamic rendering (VK_KHR_dynamic_rendering / core 1.3) --------------------------------------
+// A dynamic-rendering pass carries its attachments inline (no VkRenderPass/VkFramebuffer object). Layout
+// from vk.xml; the same sType values for the core and `KHR` aliases.
+
+/// `VK_STRUCTURE_TYPE_RENDERING_INFO`.
+pub const VK_STRUCTURE_TYPE_RENDERING_INFO: i32 = 1_000_044_000;
+/// `VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO` (a graphics-pipeline pNext carrying color formats).
+pub const VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO: i32 = 1_000_044_002;
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES` (the feature pNext in `...Features2`).
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES: i32 = 1_000_044_003;
+/// `VK_ATTACHMENT_STORE_OP_STORE` (a dynamic-rendering attachment stores its result when its storeOp is this).
+pub const VK_ATTACHMENT_STORE_OP_STORE: i32 = 0;
+
+/// `VkRenderingAttachmentInfo` — one inline color/depth attachment of a dynamic-rendering pass.
+#[repr(C)]
+pub struct VkRenderingAttachmentInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub image_view: u64,
+    pub image_layout: i32,
+    pub resolve_mode: i32,
+    pub resolve_image_view: u64,
+    pub resolve_image_layout: i32,
+    pub load_op: i32,
+    pub store_op: i32,
+    pub clear_value: VkClearValue,
+}
+
+/// `VkRenderingInfo` — the `vkCmdBeginRendering` argument (render area + inline color/depth attachments).
+#[repr(C)]
+pub struct VkRenderingInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub render_area: VkRect2D,
+    pub layer_count: u32,
+    pub view_mask: u32,
+    pub color_attachment_count: u32,
+    pub p_color_attachments: *const VkRenderingAttachmentInfo,
+    pub p_depth_attachment: *const VkRenderingAttachmentInfo,
+    pub p_stencil_attachment: *const VkRenderingAttachmentInfo,
+}
+
+/// `VkPipelineRenderingCreateInfo` — a graphics-pipeline pNext giving the color/depth formats a
+/// dynamic-rendering pipeline (null `renderPass`) targets.
+#[repr(C)]
+pub struct VkPipelineRenderingCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub view_mask: u32,
+    pub color_attachment_count: u32,
+    pub p_color_attachment_formats: *const i32,
+    pub depth_attachment_format: i32,
+    pub stencil_attachment_format: i32,
+}
+
+/// `VkPhysicalDeviceDynamicRenderingFeatures` — the feature pNext `vkGetPhysicalDeviceFeatures2` fills to
+/// advertise `dynamicRendering = VK_TRUE` (really backed by the `cmd_begin_rendering` lowering).
+#[repr(C)]
+pub struct VkPhysicalDeviceDynamicRenderingFeatures {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub dynamic_rendering: VkBool32,
+}
+
+// ---- bind-memory-2 / memory-requirements-2 (core 1.1 / VK_KHR_bind_memory2 + get_memory_requirements2)
+// Each aggregate wraps the v1 arguments behind a `{ sType, pNext }` header; the `...2` entry points read
+// these and delegate to the identical v1 body. Layout from vk.xml.
+
+/// `VkBindBufferMemoryInfo` — one `vkBindBufferMemory2` binding.
+#[repr(C)]
+pub struct VkBindBufferMemoryInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub buffer: u64,
+    pub memory: u64,
+    pub memory_offset: VkDeviceSize,
+}
+
+/// `VkBindImageMemoryInfo` — one `vkBindImageMemory2` binding.
+#[repr(C)]
+pub struct VkBindImageMemoryInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub image: u64,
+    pub memory: u64,
+    pub memory_offset: VkDeviceSize,
+}
+
+/// `VkBufferMemoryRequirementsInfo2` — the `vkGetBufferMemoryRequirements2` input (the queried buffer).
+#[repr(C)]
+pub struct VkBufferMemoryRequirementsInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub buffer: u64,
+}
+
+/// `VkImageMemoryRequirementsInfo2` — the `vkGetImageMemoryRequirements2` input (the queried image).
+#[repr(C)]
+pub struct VkImageMemoryRequirementsInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub image: u64,
+}
+
+/// `VkMemoryRequirements2` — the `...Requirements2` output (base `VkMemoryRequirements` + preserved chain).
+#[repr(C)]
+pub struct VkMemoryRequirements2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub memory_requirements: VkMemoryRequirements,
+}
+
 #[repr(C)]
 pub struct VkSemaphoreCreateInfo {
     pub s_type: i32,

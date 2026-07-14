@@ -18,6 +18,7 @@ use hl_gpu::CommandSink;
 use hl_vulkan::model::memory::{tex_format_from_vk, ImageRec};
 use hl_vulkan::model::queue::PRESENT_TEXTURE_ID;
 use hl_vulkan::result::vk_result_from_gpu_error;
+use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachment};
 use hl_vulkan::service::{create, present, record};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
@@ -150,6 +151,73 @@ pub extern "C" fn vkBindImageMemory(
     // Images are host-owned render targets in this model (no explicit VkDeviceMemory backing); the bind
     // is a no-op that succeeds so a conventional create→bind flow proceeds.
     VK_SUCCESS
+}
+
+// ---- bind-memory-2 / memory-requirements-2 for images (core 1.1 / KHR) — delegate to the v1 bodies
+
+/// `vkBindImageMemory2` — bind each `VkBindImageMemoryInfo` via the v1 [`vkBindImageMemory`] body (a
+/// host-owned render-target image binds as a no-op success). Returns the first error (else `VK_SUCCESS`).
+#[no_mangle]
+pub extern "C" fn vkBindImageMemory2(
+    device: *mut c_void,
+    bind_info_count: u32,
+    p_bind_infos: *const c_void,
+) -> VkResult {
+    if p_bind_infos.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    let infos = unsafe {
+        std::slice::from_raw_parts(p_bind_infos as *const VkBindImageMemoryInfo, bind_info_count as usize)
+    };
+    let mut result = VK_SUCCESS;
+    for bi in infos {
+        let r = vkBindImageMemory(device, bi.image, bi.memory, bi.memory_offset);
+        if r != VK_SUCCESS {
+            result = r;
+        }
+    }
+    result
+}
+
+/// `vkBindImageMemory2KHR` — the `VK_KHR_bind_memory2` alias of [`vkBindImageMemory2`].
+#[no_mangle]
+pub extern "C" fn vkBindImageMemory2KHR(
+    device: *mut c_void,
+    bind_info_count: u32,
+    p_bind_infos: *const c_void,
+) -> VkResult {
+    vkBindImageMemory2(device, bind_info_count, p_bind_infos)
+}
+
+/// `vkGetImageMemoryRequirements2` — read `VkImageMemoryRequirementsInfo2` and fill the base
+/// `VkMemoryRequirements` via the v1 [`vkGetImageMemoryRequirements`] body (chain preserved).
+#[no_mangle]
+pub extern "C" fn vkGetImageMemoryRequirements2(
+    device: *mut c_void,
+    p_info: *const c_void,
+    p_memory_requirements: *mut c_void,
+) {
+    let Some(info) = (unsafe { (p_info as *const VkImageMemoryRequirementsInfo2).as_ref() }) else {
+        return;
+    };
+    let Some(out) = (unsafe { (p_memory_requirements as *mut VkMemoryRequirements2).as_mut() }) else {
+        return;
+    };
+    vkGetImageMemoryRequirements(
+        device,
+        info.image,
+        &mut out.memory_requirements as *mut _ as *mut c_void,
+    );
+}
+
+/// `vkGetImageMemoryRequirements2KHR` — the `VK_KHR_get_memory_requirements2` alias.
+#[no_mangle]
+pub extern "C" fn vkGetImageMemoryRequirements2KHR(
+    device: *mut c_void,
+    p_info: *const c_void,
+    p_memory_requirements: *mut c_void,
+) {
+    vkGetImageMemoryRequirements2(device, p_info, p_memory_requirements)
 }
 
 #[no_mangle]
@@ -357,6 +425,27 @@ fn parse_vertex_layouts(vi: *const VkPipelineVertexInputStateCreateInfo) -> Vec<
         .collect()
 }
 
+/// Walk a pNext chain for `VkPipelineRenderingCreateInfo` and read its `pColorAttachmentFormats` into the
+/// neutral color-target formats (a dynamic-rendering pipeline's color targets). Empty when absent / no
+/// color formats (a valid depth-only or no-color pipeline).
+fn parse_pipeline_rendering_color_formats(p_next: *const c_void) -> Vec<TextureFormat> {
+    let mut node = p_next as *const VkBaseInStructure;
+    while let Some(n) = unsafe { node.as_ref() } {
+        if n.s_type == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO {
+            let pr = unsafe { &*(node as *const VkPipelineRenderingCreateInfo) };
+            if pr.p_color_attachment_formats.is_null() || pr.color_attachment_count == 0 {
+                return Vec::new();
+            }
+            let fmts = unsafe {
+                std::slice::from_raw_parts(pr.p_color_attachment_formats, pr.color_attachment_count as usize)
+            };
+            return fmts.iter().map(|&f| tex_format_from_vk(f as u32)).collect();
+        }
+        node = n.p_next;
+    }
+    Vec::new()
+}
+
 #[no_mangle]
 pub extern "C" fn vkCreateGraphicsPipelines(
     _device: *mut c_void,
@@ -400,15 +489,21 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             continue;
         };
         let layouts = parse_vertex_layouts(ci.p_vertex_input_state);
-        // The single color target's format comes from the bound render pass's first attachment.
-        let color_fmt = with(|s| {
-            s.render_passes.get(&ci.render_pass).map(|r| tex_format_from_vk(r.color_format_vk))
-        })
-        .unwrap_or(TextureFormat::Rgba8Unorm);
+        // The color-target formats: from the bound VkRenderPass's attachment in the classic path, or —
+        // for a VK_KHR_dynamic_rendering pipeline (null renderPass) — from the
+        // VkPipelineRenderingCreateInfo::pColorAttachmentFormats carried in the pNext chain.
+        let color_formats: Vec<TextureFormat> = if ci.render_pass == 0 {
+            parse_pipeline_rendering_color_formats(ci.p_next)
+        } else {
+            let fmt = with(|s| {
+                s.render_passes.get(&ci.render_pass).map(|r| tex_format_from_vk(r.color_format_vk))
+            });
+            vec![fmt.unwrap_or(TextureFormat::Rgba8Unorm)]
+        };
 
         let r = dev_sink(|dev, sink| {
             let frag = fragment.as_ref().map(|(m, e)| (*m, e.as_str()));
-            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_fmt)
+            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats)
         })
         .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkCreateGraphicsPipelines: no device")));
         match r {
@@ -464,6 +559,81 @@ pub extern "C" fn vkCmdEndRenderPass(command_buffer: *mut c_void) {
     dev(|dev| {
         let _ = record::cmd_end_render_pass(dev, cb);
     });
+}
+
+// ==================================================================================================
+// dynamic rendering (VK_KHR_dynamic_rendering / core 1.3): render-pass-object-free recording
+// ==================================================================================================
+
+/// Resolve one `VkRenderingAttachmentInfo`'s `imageView` back to the `VkImage` handle it views (the hl
+/// model renders into images directly). `None` on a null view / unmapped view (skipped as a no-attachment).
+fn rendering_attachment_image(s: &crate::state::State, att: &VkRenderingAttachmentInfo) -> Option<u64> {
+    s.image_views.get(&att.image_view).copied()
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdBeginRendering(command_buffer: *mut c_void, p_rendering_info: *const c_void) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+        return;
+    };
+    let Some(ri) = (unsafe { (p_rendering_info as *const VkRenderingInfo).as_ref() }) else {
+        return;
+    };
+    let colors_c: &[VkRenderingAttachmentInfo] =
+        if ri.p_color_attachments.is_null() || ri.color_attachment_count == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(ri.p_color_attachments, ri.color_attachment_count as usize) }
+        };
+    let depth_c = unsafe { ri.p_depth_attachment.as_ref() };
+    with(|s| {
+        // Resolve each attachment view → image up front (image_views is disjoint from the device field).
+        let colors: Vec<RenderingColorAttachment> = colors_c
+            .iter()
+            .filter_map(|att| {
+                rendering_attachment_image(s, att).map(|image| RenderingColorAttachment {
+                    image,
+                    clear: att.clear_value.float32,
+                    load_clear: att.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    store: att.store_op == VK_ATTACHMENT_STORE_OP_STORE,
+                })
+            })
+            .collect();
+        let depth = depth_c.and_then(|att| {
+            rendering_attachment_image(s, att).map(|image| RenderingDepthAttachment {
+                image,
+                clear_depth: att.clear_value.float32[0],
+                load_clear: att.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
+            })
+        });
+        if let Some(dev) = s.device.as_mut() {
+            let _ = record::cmd_begin_rendering(dev, cb, &colors, depth);
+        }
+    });
+}
+
+/// `vkCmdBeginRenderingKHR` — the `VK_KHR_dynamic_rendering` alias of the promoted-core body.
+#[no_mangle]
+pub extern "C" fn vkCmdBeginRenderingKHR(command_buffer: *mut c_void, p_rendering_info: *const c_void) {
+    vkCmdBeginRendering(command_buffer, p_rendering_info)
+}
+
+/// `vkCmdEndRendering` — close the dynamic-rendering pass (identical to `vkCmdEndRenderPass`:
+/// `Enc::EndRenderPass`).
+#[no_mangle]
+pub extern "C" fn vkCmdEndRendering(command_buffer: *mut c_void) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+        return;
+    };
+    dev(|dev| {
+        let _ = record::cmd_end_render_pass(dev, cb);
+    });
+}
+
+/// `vkCmdEndRenderingKHR` — the `VK_KHR_dynamic_rendering` alias.
+#[no_mangle]
+pub extern "C" fn vkCmdEndRenderingKHR(command_buffer: *mut c_void) {
+    vkCmdEndRendering(command_buffer)
 }
 
 #[no_mangle]

@@ -183,6 +183,73 @@ pub extern "C" fn vkUnmapMemory(_device: *mut c_void, memory: u64) {
     dev_sink(|dev, _| create::unmap_memory(dev, memory));
 }
 
+// ---- bind-memory-2 / memory-requirements-2 (core 1.1 / KHR) — delegate to the v1 bodies -----------
+
+/// `vkBindBufferMemory2` — bind each `VkBindBufferMemoryInfo` via the v1 [`vkBindBufferMemory`] body.
+/// Returns the first binding error (else `VK_SUCCESS`).
+#[no_mangle]
+pub extern "C" fn vkBindBufferMemory2(
+    device: *mut c_void,
+    bind_info_count: u32,
+    p_bind_infos: *const c_void,
+) -> VkResult {
+    if p_bind_infos.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    let infos = unsafe {
+        std::slice::from_raw_parts(p_bind_infos as *const VkBindBufferMemoryInfo, bind_info_count as usize)
+    };
+    let mut result = VK_SUCCESS;
+    for bi in infos {
+        let r = vkBindBufferMemory(device, bi.buffer, bi.memory, bi.memory_offset);
+        if r != VK_SUCCESS {
+            result = r;
+        }
+    }
+    result
+}
+
+/// `vkBindBufferMemory2KHR` — the `VK_KHR_bind_memory2` alias of [`vkBindBufferMemory2`].
+#[no_mangle]
+pub extern "C" fn vkBindBufferMemory2KHR(
+    device: *mut c_void,
+    bind_info_count: u32,
+    p_bind_infos: *const c_void,
+) -> VkResult {
+    vkBindBufferMemory2(device, bind_info_count, p_bind_infos)
+}
+
+/// `vkGetBufferMemoryRequirements2` — read `VkBufferMemoryRequirementsInfo2` and fill the base
+/// `VkMemoryRequirements` via the v1 [`vkGetBufferMemoryRequirements`] body (chain preserved).
+#[no_mangle]
+pub extern "C" fn vkGetBufferMemoryRequirements2(
+    device: *mut c_void,
+    p_info: *const c_void,
+    p_memory_requirements: *mut c_void,
+) {
+    let Some(info) = (unsafe { (p_info as *const VkBufferMemoryRequirementsInfo2).as_ref() }) else {
+        return;
+    };
+    let Some(out) = (unsafe { (p_memory_requirements as *mut VkMemoryRequirements2).as_mut() }) else {
+        return;
+    };
+    vkGetBufferMemoryRequirements(
+        device,
+        info.buffer,
+        &mut out.memory_requirements as *mut _ as *mut c_void,
+    );
+}
+
+/// `vkGetBufferMemoryRequirements2KHR` — the `VK_KHR_get_memory_requirements2` alias.
+#[no_mangle]
+pub extern "C" fn vkGetBufferMemoryRequirements2KHR(
+    device: *mut c_void,
+    p_info: *const c_void,
+    p_memory_requirements: *mut c_void,
+) {
+    vkGetBufferMemoryRequirements2(device, p_info, p_memory_requirements)
+}
+
 // ==================================================================================================
 // shaders + pipelines
 // ==================================================================================================

@@ -286,6 +286,12 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetPhysicalDeviceMemoryProperties2",
     "vkGetPhysicalDeviceQueueFamilyProperties2",
     "vkGetPhysicalDeviceFormatProperties2",
+    // ...2KHR aliases (VK_KHR_get_physical_device_properties2) — delegate to the core bodies above
+    "vkGetPhysicalDeviceProperties2KHR",
+    "vkGetPhysicalDeviceFeatures2KHR",
+    "vkGetPhysicalDeviceMemoryProperties2KHR",
+    "vkGetPhysicalDeviceQueueFamilyProperties2KHR",
+    "vkGetPhysicalDeviceFormatProperties2KHR",
     // ---- device + queue (device.rs) ----
     "vkCreateDevice",
     "vkDestroyDevice",
@@ -301,6 +307,11 @@ const IMPLEMENTED: &[&str] = &[
     "vkBindBufferMemory",
     "vkMapMemory",
     "vkUnmapMemory",
+    // bind-memory-2 / get-memory-requirements-2 for buffers (core 1.1 + KHR) — delegate to the v1 bodies
+    "vkBindBufferMemory2",
+    "vkBindBufferMemory2KHR",
+    "vkGetBufferMemoryRequirements2",
+    "vkGetBufferMemoryRequirements2KHR",
     // shaders + pipelines
     "vkCreateShaderModule",
     "vkDestroyShaderModule",
@@ -354,6 +365,11 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetImageMemoryRequirements",
     "vkGetImageSubresourceLayout",
     "vkBindImageMemory",
+    // bind-memory-2 / get-memory-requirements-2 for images (core 1.1 + KHR) — delegate to the v1 bodies
+    "vkBindImageMemory2",
+    "vkBindImageMemory2KHR",
+    "vkGetImageMemoryRequirements2",
+    "vkGetImageMemoryRequirements2KHR",
     "vkCreateImageView",
     "vkDestroyImageView",
     "vkCreateSampler",
@@ -368,6 +384,11 @@ const IMPLEMENTED: &[&str] = &[
     // render-pass command recording
     "vkCmdBeginRenderPass",
     "vkCmdEndRenderPass",
+    // dynamic rendering (VK_KHR_dynamic_rendering / core 1.3) — render-pass-object-free recording
+    "vkCmdBeginRendering",
+    "vkCmdBeginRenderingKHR",
+    "vkCmdEndRendering",
+    "vkCmdEndRenderingKHR",
     "vkCmdBindVertexBuffers",
     "vkCmdBindIndexBuffer",
     "vkCmdDraw",
