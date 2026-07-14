@@ -1,0 +1,80 @@
+# hl_wip — the staging COMPOSITION ROOT (mirrors the future top-level `hl` crate).
+#
+# Per the maintainer, integration / real-app / real-software tests belong in the composition root — the
+# one place where "we compose these things" — NOT scattered across throwaway crates. This crate
+# consolidates the three former WIP integration crates (hl_wip-integration, hl_wip-realapp,
+# hl_wip-realsw) into ONE test host so the dependency graph is sane:
+#
+#   * tests/plug.rs           — engine.add(Cuda/Vulkan/Gl::new()) composes all three driver plugs.
+#   * tests/lower.rs          — all three drivers lower onto ONE shared runtime + reference CpuExecutor.
+#   * tests/realapp_cuda.rs   — a real app dlopen()s the staged libcuda.so.1 and runs a vecadd over a socket.
+#   * tests/gl_eglinfo.rs     — the real Khronos `eglinfo` binary queries OUR staged EGL.
+#   * tests/vk_loader_icd.rs  — the real Khronos Vulkan loader drives OUR ICD from a real C program.
+#   * tests/cuda_c_vecadd.rs  — a real C CUDA program computes a vecadd through OUR staged libcuda.
+#
+# Everything is a DEV-dependency (test-only): a guest `.so` never pulls the host graph at build time, and
+# each driver is taken with its `jit` feature so its host-side `hl_jit::Driver` plug is built.
+#
+# STANDALONE workspace: the empty `[workspace]` table below makes this its OWN workspace root, EXCLUDED
+# from the shared repo-root workspace so the concurrent codex agent's repo-root build never sees it. The
+# crate-local `.cargo/config.toml` pulls the crates.io index over git and points the linker at
+# `.linklibs/` (the unversioned `libxkbcommon.so` the Smithay compositor adapter links). Build + run:
+#   cargo test --manifest-path hl_wip/Cargo.toml -- --test-threads=1
+[package]
+name = "hl_wip"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "hl_wip"
+path = "src/lib.rs"
+
+# Empty table => own workspace root, excluded from the shared repo-root workspace.
+[workspace]
+
+# Everything is test-only: the integration tests in `tests/` see dev-dependencies, so all the real crates
+# live here and nothing is a normal (build-time) dependency. A guest `.so` therefore never drags the host
+# graph in.
+[dev-dependencies]
+# The container-runtime driver-plugin seam: `Drivers`, `Driver`, `DeviceRequest`, `DeviceMount`.
+hl-jit = { path = "../hl-jit" }
+# The neutral GPU protocol + runtime + reference CPU executor (package `hl_wip_gpu`, lib `hl_gpu`).
+hl_gpu = { package = "hl_wip_gpu", path = "../hl_wip-gpu" }
+# The cross-platform wgpu + naga host executor implementing the same `GpuExecutor` port (lib `hl_gpu_wgpu`).
+hl_gpu_wgpu = { package = "hl_wip_gpu_wgpu", path = "../hl_wip-gpu-wgpu" }
+# The three real guest drivers, each with its host-side `hl_jit::Driver` plug (`jit` feature).
+hl_cuda = { package = "hl_wip_cuda", path = "../hl_wip-cuda", features = ["jit"] }
+hl_vulkan = { package = "hl_wip_vulkan", path = "../hl_wip-vulkan", features = ["jit"] }
+hl_gl = { package = "hl_wip_gl", path = "../hl_wip-gl", features = ["jit"] }
+# The real Wayland compositor policy + its Smithay adapter (the composition root also owns the compositor).
+hl_compositor = { package = "hl_wip_compositor", path = "../hl_wip-compositor", features = ["smithay-adapter"] }
+# dlopen/dlsym the staged libcuda.so.1 (tests/realapp_cuda.rs).
+libc = "0.2"
+
+# The real-software tests are single-connection socket servers driving real subprocesses; force serial so
+# a shared `$HL_GPU_EXEC` / staged-shim environment never races. Also declared here so each carries its
+# path explicitly.
+[[test]]
+name = "plug"
+path = "tests/plug.rs"
+
+[[test]]
+name = "lower"
+path = "tests/lower.rs"
+
+[[test]]
+name = "realapp_cuda"
+path = "tests/realapp_cuda.rs"
+
+[[test]]
+name = "gl_eglinfo"
+path = "tests/gl_eglinfo.rs"
+
+[[test]]
+name = "vk_loader_icd"
+path = "tests/vk_loader_icd.rs"
+
+[[test]]
+name = "cuda_c_vecadd"
+path = "tests/cuda_c_vecadd.rs"

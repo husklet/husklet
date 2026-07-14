@@ -4,92 +4,22 @@
 //! the real, separately-compiled guest shared object that `hl_wip-cuda`'s build.rs staged at
 //! `~/.hl/cuda/aarch64/libcuda.so.1`, resolves each `cu*` entry point with `dlsym`, and calls the CUDA
 //! Driver API. Inside that `.so`, a process-global `RemoteCommandSink` (built from `$HL_GPU_EXEC`) frames
-//! every lowered batch and ships it over a unix socket. A host thread in THIS process serves that socket
-//! with a runtime-backed reference `CpuExecutor`, so the whole product data path runs:
+//! every lowered batch and ships it over a unix socket. The host end of that socket is this crate's shared
+//! `common::Executor` — a runtime-backed reference `CpuExecutor` (with the CUDA PTX front-end injected) —
+//! so the whole product data path runs:
 //!
 //!   app → dlsym(cu*) → libcuda.so.1 → hl_cuda lowering → RemoteCommandSink → unix socket
 //!        → serve_connection_with_handler → runtime (validate/account/dispatch) → CpuExecutor
 //!        → cuMemcpyDtoH readback over the socket → assert c == a + b == [11, 22, 33, 44].
 //!
 //! The only host-side wiring the neutral `hl_gpu` crate cannot supply itself is the PTX front-end (a driver
-//! concern): we inject `hl_cuda::adapter::ptx::compile` as the executor's kernel compiler, exactly as the
-//! composition root would. Everything the guest touches is the real shipped shim.
+//! concern): `common::RuntimeHost` injects `hl_cuda::adapter::ptx::compile` as the executor's kernel
+//! compiler, exactly as the composition root would. Everything the guest touches is the real shipped shim.
 
 use core::ffi::{c_char, c_void};
-use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
-use std::thread;
 
-use hl_gpu::protocol::model::kernel::KernelDescriptor;
-use hl_gpu::transport::{SubmitHeader, Verdict};
-use hl_gpu::{
-    encode_stream, BufferId, Capabilities, Cmd, ConnectionHandler, CpuExecutor, FakeClock,
-    GlobalLedger, GpuExecutor, Limits, ReadbackRequest, Session,
-};
-
-// ===================================================================================================
-// host side: the GPU-executor socket server (runtime + CpuExecutor + injected PTX front-end)
-// ===================================================================================================
-
-/// A host that owns a runtime `Session` + a `CpuExecutor` with the PTX kernel compiler injected, and serves
-/// BOTH the submit path (through the runtime pipeline) and device→host readback (through the executor's
-/// device memory). One `&mut self` drives both halves — the same shape as `hl_wip-gpu/tests/readback.rs`'s
-/// `RuntimeHost`, with the kernel compiler added so a `cuLaunchKernel`'s KERNEL payload compiles for real.
-struct RuntimeHost {
-    session: Session,
-    exec: CpuExecutor,
-}
-
-impl RuntimeHost {
-    fn new() -> Self {
-        let mut exec = CpuExecutor::new();
-        // Inject the driver's PTX parser so a shim-produced `CreateShader { PtxKernel, .. }` (payload = a
-        // `KernelDescriptor` carrying the PTX source + entry + block dims) compiles on the fly.
-        exec.set_kernel_compiler(|desc: &KernelDescriptor| {
-            hl_cuda::adapter::ptx::compile(&desc.ptx, &desc.entry, desc.block)
-        });
-        let limits = Limits::from_capabilities(exec.capabilities());
-        let session = Session::new(limits, GlobalLedger::unbounded(), Box::new(FakeClock::new(0)));
-        Self { session, exec }
-    }
-}
-
-impl ConnectionHandler for RuntimeHost {
-    fn submit(&mut self, _header: &SubmitHeader, batch: &[Cmd]) -> Verdict {
-        let frame_bytes = encode_stream(batch).len();
-        match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
-            Ok(_) => Verdict::Ack,
-            Err(_) => Verdict::Nack,
-        }
-    }
-
-    fn read_buffer(&mut self, req: &ReadbackRequest) -> Option<Vec<u8>> {
-        hl_gpu::runtime::service::dispatch::read_buffer(
-            &self.session,
-            &self.exec,
-            BufferId(req.id),
-            req.offset,
-            req.len as usize,
-        )
-        .ok()
-    }
-}
-
-/// A unique temp socket path for this test, removed on drop.
-struct TempSock(PathBuf);
-impl TempSock {
-    fn new() -> Self {
-        let p = std::env::temp_dir()
-            .join(format!("hl-realapp-vecadd-{}.sock", std::process::id()));
-        let _ = std::fs::remove_file(&p);
-        TempSock(p)
-    }
-}
-impl Drop for TempSock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
+mod common;
+use common::Executor;
 
 // ===================================================================================================
 // guest side: load the REAL staged libcuda.so.1 and bind the cu* entry points via dlsym
@@ -180,24 +110,10 @@ fn real_libcuda_shim_runs_vecadd_over_the_socket() {
     );
 
     // --- stand up the host GPU-executor socket BEFORE the shim connects --------------------------
-    let sock = TempSock::new();
-    let sock_path = sock.0.to_string_lossy().into_owned();
-    let listener = UnixListener::bind(&sock.0).expect("bind executor socket");
-
-    // Point the shim's process-global RemoteCommandSink at our socket. The shim reads $HL_GPU_EXEC when its
-    // global State is first initialized (first cu* call), so set it before any cu* call / dlopen.
-    std::env::set_var("HL_GPU_EXEC", &sock_path);
-
-    // Serve the ONE persistent guest connection on a background thread. We do NOT join it: the shim's sink
-    // is a process-global that never drops, so the connection stays open until the test process exits — the
-    // thread is torn down at exit. By the time cuMemcpyDtoH returns we already have the computed bytes.
-    thread::spawn(move || {
-        let (stream, _) = listener.accept().expect("accept guest connection");
-        let caps = Capabilities::full("host");
-        let mut host = RuntimeHost::new();
-        // Serve submit + readback frames until the guest closes the connection.
-        let _ = hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host);
-    });
+    // The shim reads $HL_GPU_EXEC when its process-global State is first initialized (first cu* call), so
+    // point it at our in-process executor's socket before any cu* call / dlopen.
+    let exec = Executor::start("realapp-cuda");
+    std::env::set_var("HL_GPU_EXEC", exec.sock());
 
     // --- the app: load the real shim and drive the CUDA Driver API -------------------------------
     let cu = unsafe { Cuda::load(&so_path) };
@@ -294,6 +210,8 @@ fn real_libcuda_shim_runs_vecadd_over_the_socket() {
 
         // The whole product data path actually COMPUTED the elementwise sum through the real .so.
         assert_eq!(got, vec![11.0, 22.0, 33.0, 44.0], "vecadd result read back over the socket");
+        // The guest actually drove our host executor (not a silently-stubbed success).
+        assert!(exec.submit_count() > 0, "guest submitted batches to the host executor");
 
         // Free the allocations cleanly (each lowers + submits over the socket too).
         assert_eq!((cu.cu_mem_free)(da), CUDA_SUCCESS, "cuMemFree a");
