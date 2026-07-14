@@ -42,12 +42,6 @@ impl FenceRec {
 
 use hl_gpu::protocol::model::enums::TextureFormat;
 
-/// The reserved IR **texture** id every presentable swapchain image renders into: the host Metal
-/// executor re-points texture id 1 at the current frame's IOSurface each frame
-/// (`set_render_target(1, …)`). IR texture ids and buffer ids are separate host namespaces, so this
-/// never collides with buffer id 1. Ported from `reg::PRESENT_IR_ID`.
-pub const PRESENT_TEXTURE_ID: u32 = 1;
-
 /// A `VkSurfaceKHR`: the backing hl-GPU IR surface id ([`hl_gpu::Cmd::CreateSurface`]) + geometry.
 /// Mirrors `MVKSurface`.
 #[derive(Clone, PartialEq, Debug)]
@@ -58,10 +52,17 @@ pub struct SurfaceRec {
     pub format: TextureFormat,
 }
 
-/// One presentable swapchain image: the IR texture id it renders into ([`PRESENT_TEXTURE_ID`]).
+/// One presentable swapchain image. Unlike the old reserved-id model (every image aliased a single
+/// host-owned present texture), each image is now backed by a REAL hl-GPU render-target texture
+/// ([`hl_gpu::Cmd::CreateTexture`] with `RENDER_TARGET | COPY_SRC`, emitted at
+/// [`crate::service::present::create_swapchain`]) — so the app renders into it like any other image, a
+/// present names its texture id, and a `CopyTextureToBuffer` + `read_buffer` reads its pixels back to the
+/// host (the same device→host path GL's `glReadPixels` uses). `handle` is the `VkImage`
+/// `vkGetSwapchainImagesKHR` hands the app for this image; `ir_texture_id` is that image's backing texture.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SwapImage {
     pub ir_texture_id: u32,
+    pub handle: crate::VkImage,
 }
 
 /// A `VkSwapchainKHR`: the surface it presents through, its geometry/format, and its presentable

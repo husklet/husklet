@@ -858,19 +858,20 @@ fn submit_unknown_fence_errors_before_emitting() {
 fn present_unknown_swapchain_and_out_of_range_index() {
     let mut d = dev();
     let mut s = sink();
-    assert!(matches!(present::create_swapchain(&mut d, 0xdead, 2), Err(GpuError::Invalid(_))));
+    assert!(matches!(present::create_swapchain(&mut d, &mut s, 0xdead, 2), Err(GpuError::Invalid(_))));
     assert!(matches!(present::acquire_next_image(&d, 0xdead), Err(GpuError::Invalid(_))));
     assert!(matches!(present::queue_present(&mut d, &mut s, 0xdead, 0), Err(GpuError::Invalid(_))));
 
     let surf = present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, 7).unwrap();
-    let sc = present::create_swapchain(&mut d, surf, 2).unwrap();
+    let sc = present::create_swapchain(&mut d, &mut s, surf, 2).unwrap();
     assert_eq!(present::acquire_next_image(&d, sc).unwrap(), 0);
     // An image index past the swapchain image count is rejected.
     assert!(matches!(present::queue_present(&mut d, &mut s, sc, 99), Err(GpuError::Invalid(_))));
-    // A valid present emits Cmd::Present naming the surface's ir + the present texture id.
+    // A valid present emits Cmd::Present naming the surface's ir + the presented image's REAL texture id.
     present::queue_present(&mut d, &mut s, sc, 0).unwrap();
     let surf_ir = d.surfaces.get(&surf).unwrap().ir_id;
-    assert!(s.commands().any(|c| matches!(c, Cmd::Present { surface, texture } if *surface == surf_ir && *texture == 1)));
+    let img0_ir = d.swapchains.get(&sc).unwrap().images[0].ir_texture_id;
+    assert!(s.commands().any(|c| matches!(c, Cmd::Present { surface, texture } if *surface == surf_ir && *texture == img0_ir)));
 }
 
 #[test]

@@ -790,15 +790,26 @@ fn present_path_lowers_surface_and_present() {
         other => panic!("expected CreateSurface, got {other:?}"),
     }
 
-    let sc = present::create_swapchain(&mut d, surface, 2).unwrap();
+    let sc = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
+    // create_swapchain emits one CreateTexture per presentable image (real render-target textures).
+    let img0_ir = d.swapchains.get(&sc).unwrap().images[0].ir_texture_id;
+    assert!(sink.batches.iter().flatten().any(|c| matches!(
+        c,
+        Cmd::CreateTexture(id, desc)
+            if *id == img0_ir
+                && (desc.width, desc.height) == (1920, 1080)
+                && desc.usage & hl_gpu::protocol::model::enums::texture_usage::RENDER_TARGET != 0
+                && desc.usage & hl_gpu::protocol::model::enums::texture_usage::COPY_SRC != 0
+    )));
+
     let idx = present::acquire_next_image(&d, sc).unwrap();
     present::queue_present(&mut d, &mut sink, sc, idx).unwrap();
 
-    // the present names the surface's ir id + the presented image's (reserved) present texture id.
+    // the present names the surface's ir id + the presented image's REAL backing texture id.
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::Present { surface: s, texture: t }] => {
             assert_eq!(*s, 1); // the CreateSurface ir id
-            assert_eq!(*t, 1); // PRESENT_TEXTURE_ID
+            assert_eq!(*t, img0_ir); // the presented swapchain image's real render-target texture
         }
         other => panic!("expected Present, got {other:?}"),
     }

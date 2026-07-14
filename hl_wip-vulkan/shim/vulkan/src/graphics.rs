@@ -13,10 +13,9 @@
 use core::ffi::{c_char, c_void};
 
 use hl_gpu::protocol::model::descriptor::{VertexAttr, VertexLayout};
-use hl_gpu::protocol::model::enums::{texture_usage, TextureFormat};
+use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::CommandSink;
-use hl_vulkan::model::memory::{tex_format_from_vk, ImageRec};
-use hl_vulkan::model::queue::PRESENT_TEXTURE_ID;
+use hl_vulkan::model::memory::tex_format_from_vk;
 use hl_vulkan::result::vk_result_from_gpu_error;
 use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachment};
 use hl_vulkan::service::{create, present, record};
@@ -927,7 +926,7 @@ pub extern "C" fn vkCreateSwapchainKHR(
     // then register the swapchain's presentable images against it.
     let r = dev_sink(|dev, sink| {
         let surface = create_surface_for_swapchain(dev, sink, ci)?;
-        present::create_swapchain(dev, surface, ci.min_image_count)
+        present::create_swapchain(dev, sink, surface, ci.min_image_count)
     });
     match r {
         Some(Ok(h)) => {
@@ -975,13 +974,12 @@ pub extern "C" fn vkGetSwapchainImagesKHR(
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     dev(|dev| {
-        let Some((w, h, fmt, count)) = dev
-            .swapchains
-            .get(&swapchain)
-            .map(|sc| (sc.width, sc.height, sc.format, sc.images.len() as u32))
-        else {
+        // The swapchain's presentable images (real render-target textures + their VkImage handles) were
+        // created with the swapchain; return the SAME handles here (identical on every call).
+        let Ok(handles) = present::get_swapchain_images(dev, swapchain) else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
+        let count = handles.len() as u32;
         if p_swapchain_images.is_null() {
             unsafe { *p_swapchain_image_count = count };
             return VK_SUCCESS;
@@ -989,21 +987,7 @@ pub extern "C" fn vkGetSwapchainImagesKHR(
         let cap = unsafe { *p_swapchain_image_count };
         let n = cap.min(count);
         let out = unsafe { std::slice::from_raw_parts_mut(p_swapchain_images, n as usize) };
-        for slot in out.iter_mut() {
-            // Each presentable image resolves to the reserved present texture id; mint a VkImage handle
-            // so views/framebuffers/render-passes over it lower correctly.
-            let handle = dev.alloc_handle();
-            dev.images.insert(
-                handle,
-                ImageRec {
-                    ir_id: PRESENT_TEXTURE_ID,
-                    width: w,
-                    height: h,
-                    format: fmt,
-                    usage: texture_usage::RENDER_TARGET,
-                    is_render_target: true,
-                },
-            );
+        for (slot, &handle) in out.iter_mut().zip(handles.iter()) {
             *slot = handle;
         }
         unsafe { *p_swapchain_image_count = n };

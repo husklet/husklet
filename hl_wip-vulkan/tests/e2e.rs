@@ -27,7 +27,7 @@
 use hl_vulkan::adapter::spirv;
 use hl_vulkan::model::memory::{vk_buffer_usage, vk_format, vk_image_usage};
 use hl_vulkan::result::HL_API_VERSION;
-use hl_vulkan::service::{create, record, submit};
+use hl_vulkan::service::{create, present, record, submit};
 
 use hl_gpu::protocol::model::descriptor::{VertexAttr, VertexLayout};
 use hl_gpu::protocol::model::enums::TextureFormat;
@@ -149,6 +149,80 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
     assert_eq!(texel(0, 0), [0, 0, 255, 255], "corner keeps the clear color (blue)");
     // The bottom-left corner (below-left of the triangle's left edge) is also uncovered.
     assert_eq!(texel(0, H - 1), [0, 0, 255, 255], "bottom-left corner keeps the clear color");
+}
+
+/// The WSI swapchain full loop, end-to-end at the DRIVER level — the Vulkan analog of the
+/// weston-simple-egl GL milestone, proving a presented swapchain image is a REAL, readable-back render
+/// target through our IR + the reference `CpuExecutor`:
+///
+///   vkCreateSurfaceKHR → vkCreateSwapchainKHR (emits a real `CreateTexture(RENDER_TARGET | COPY_SRC)`
+///   per presentable image) → vkGetSwapchainImagesKHR (the images' `VkImage` handles) →
+///   vkAcquireNextImageKHR (an image index) → record a render pass that CLEARS the acquired image to a
+///   known color → vkQueueSubmit (the executor clears the real texture) → vkQueuePresentKHR (`Cmd::Present`
+///   naming that texture) → read the PRESENTED image back (`CopyTextureToBuffer` + `read_buffer`) and
+///   assert the known pixels.
+///
+/// This proves the swapchain image is genuinely allocated + rendered into + presented + read back (not a
+/// reserved host-owned alias): the app rendered into it and the exact bytes come back. The clear color's
+/// channels are all distinct so the readback also proves the surface's BGRA texel order. What remains for
+/// a LIVE vkcube on-screen is the wayland present-marshalling (attaching the presented image to a
+/// compositor buffer) — a separate follow-up, deliberately NOT exercised here.
+#[test]
+fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
+    const W: u32 = 8;
+    const H: u32 = 8;
+    // A known clear color with 4 DISTINCT channels (r,g,b,a) chosen to land on exact bytes.
+    let clear = [51.0 / 255.0, 102.0 / 255.0, 153.0 / 255.0, 1.0];
+    // Surface format is B8G8R8A8_UNORM ⇒ the readback plane is BGRA: bytes [b, g, r, a].
+    let expected = [153u8, 102, 51, 255];
+
+    let exec = CpuExecutor::new();
+    let session = Session::new(
+        Limits::from_capabilities(Capabilities::full("hl-cpu-swapchain")),
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+    let mut sink = InProcessCommandSink::with_session(session, exec);
+
+    let inst = create::create_instance(HL_API_VERSION);
+    let mut d = create::create_device(&inst);
+
+    // vkCreateSurfaceKHR + vkCreateSwapchainKHR (2 presentable images, real render-target textures).
+    let surface = present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+    let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
+
+    // vkGetSwapchainImagesKHR → the presentable images' VkImage handles; vkAcquireNextImageKHR → an index.
+    let images = present::get_swapchain_images(&d, swapchain).unwrap();
+    assert_eq!(images.len(), 2, "the swapchain has its two presentable images");
+    let idx = present::acquire_next_image(&d, swapchain).unwrap();
+    let acquired = images[idx as usize];
+
+    // Record a render pass that CLEARS the acquired swapchain image to the known color, then submit — the
+    // executor clears the image's REAL backing texture (this fails if the image were not a real texture).
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_begin_render_pass(&mut d, cb, acquired, clear, true).unwrap();
+    record::cmd_end_render_pass(&mut d, cb).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    // vkQueuePresentKHR — presents the rendered image (Cmd::Present names its real texture id).
+    present::queue_present(&mut d, &mut sink, swapchain, idx).unwrap();
+
+    // Read the PRESENTED image back to host pixels over the sink (CopyTextureToBuffer + read_buffer).
+    let pixels = present::read_presented_image(&mut d, &mut sink, swapchain, idx).unwrap();
+    assert_eq!(pixels.len(), (W * H * 4) as usize, "the whole presented image plane came back");
+
+    let texel = |x: u32, y: u32| -> [u8; 4] {
+        let o = ((y * W + x) * 4) as usize;
+        [pixels[o], pixels[o + 1], pixels[o + 2], pixels[o + 3]]
+    };
+    // Every texel of the presented swapchain image is exactly the color the app cleared it to.
+    for y in 0..H {
+        for x in 0..W {
+            assert_eq!(texel(x, y), expected, "presented swapchain image texel ({x},{y})");
+        }
+    }
 }
 
 /// The device→host mapped-memory readback, end-to-end: a device op produces bytes in a buffer bound to
