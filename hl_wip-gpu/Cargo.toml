@@ -14,6 +14,11 @@ publish = false
 name = "hl_gpu"
 path = "src/lib.rs"
 
+[dependencies]
+# Unix-socket / SCM_RIGHTS fd transfer / ioctl / eventfd / futex for the `transport` adapter. The rest of
+# the crate (protocol) stays dependency-free; libc is confined to `transport::adapter::unix`.
+libc = "0.2"
+
 # Empty table => this file is its own workspace root, so the crate is EXCLUDED from the repo-root
 # workspace and keeps the shared tree green.
 [workspace]

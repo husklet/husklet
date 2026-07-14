@@ -12,6 +12,8 @@
 //! never reaches into a CUDA/PTX constant.
 
 pub mod protocol;
+pub mod runtime;
+pub mod transport;
 
 // Ergonomic re-exports so downstream reads `hl_gpu::{GpuError, Result, Cmd, …}`.
 pub use protocol::codec::{decode_stream, encode_stream};
@@ -23,3 +25,11 @@ pub use protocol::model::id::{
     TextureId,
 };
 pub use protocol::port::sink::{CommandSink, RecordingSink};
+
+// Runtime layer: the per-connection Session that validates + accounts a decoded batch and dispatches it
+// to an injected GpuExecutor (built on top of `protocol`).
+pub use runtime::{
+    Clock, FakeClock, GlobalLedger, GpuExecutor, Ledger, Limits, Presented, Session,
+    SessionResources, SystemClock,
+};
+pub use transport::{serve, serve_connection, GpuAlloc, RemoteCommandSink, Surface};
