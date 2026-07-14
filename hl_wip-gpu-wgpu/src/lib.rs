@@ -36,14 +36,43 @@ mod wgsl;
 use std::collections::HashMap;
 
 use hl_gpu::protocol::model::capability::{
-    command_bits, format_bits, shader_payload, Capabilities, PresentKind, ALL_COMMANDS, COLOR_FORMATS,
+    command_bits, format_bits, shader_payload, Capabilities, PresentKind, COLOR_FORMATS,
     DEPTH_FORMATS,
 };
-use hl_gpu::protocol::model::command::WIRE_VERSION;
+use hl_gpu::protocol::model::command::{etag, WIRE_VERSION};
 use hl_gpu::protocol::model::kernel::{KernelDescriptor, KernelProgram};
 use hl_gpu::Result;
 
 pub use device::{DeviceConfig, Gpu};
+
+/// The encoder ops this executor actually replays — every command in the current IR EXCEPT the two that
+/// need image resampling this bring-up backend does not implement: `BlitTexture` (scaled/filtered
+/// texture→texture) and `ResolveTexture` (multisample resolve). Advertising `ALL_COMMANDS` would be a
+/// capability lie: the old `_ =>` replay arm silently no-op'd a submitted blit/resolve, so a guest that
+/// negotiated them saw its op vanish with no error and no effect. This set is the honest truth — the
+/// runtime rejects a negotiated blit/resolve at validate, and `submit` errors on one defensively.
+/// `CopyTextureToTexture` (exact, no scaling) IS implemented and stays advertised.
+const REPLAYED_COMMANDS: &[u8] = &[
+    etag::BEGIN_RENDER_PASS,
+    etag::END_RENDER_PASS,
+    etag::SET_PIPELINE,
+    etag::SET_BIND_GROUP,
+    etag::SET_VERTEX_BUFFER,
+    etag::SET_INDEX_BUFFER,
+    etag::SET_VIEWPORT,
+    etag::SET_SCISSOR,
+    etag::CLEAR_RECT,
+    etag::DRAW,
+    etag::DRAW_INDEXED,
+    etag::BEGIN_COMPUTE_PASS,
+    etag::END_COMPUTE_PASS,
+    etag::DISPATCH,
+    etag::COPY_B2B,
+    etag::COPY_B2T,
+    etag::COPY_T2B,
+    etag::COPY_T2T,
+    etag::FILL_BUFFER,
+];
 
 /// The wgpu-backed [`hl_gpu::GpuExecutor`]. Holds the acquired device/queue, the negotiated capabilities
 /// it advertises, and the kernel front-end state (a pre-registered kernel map + optional PTX-descriptor
@@ -96,9 +125,15 @@ impl WgpuExecutor {
         self.kernel_compiler = Some(Box::new(compiler));
     }
 
-    /// The capability descriptor this executor advertises. It accepts SPIR-V/GLSL/WGSL graphics shaders
+    /// The capability descriptor this executor advertises. It accepts SPIR-V/GLSL graphics shaders
     /// (translated to WGSL by naga) AND neutral compute kernels (lowered to WGSL compute) — the union the
     /// wgpu path genuinely executes, a strict superset of the CPU oracle's kernel-only shader surface.
+    ///
+    /// WGSL is intentionally NOT advertised: the protocol's `CreateShader` derives the payload kind from a
+    /// leading magic word ([`ShaderPayloadKind`] has no `Wgsl` variant, and a payload with no known magic
+    /// is classified as `LegacyMsl`, which this executor rejects), so there is no wire path by which a
+    /// guest could hand this backend a WGSL payload it would accept. Advertising it would be a capability
+    /// lie (a negotiated-but-unaccepted payload); the honest set is SPIRV | GLSL | KERNEL.
     fn capabilities_for(name: &str) -> Capabilities {
         Capabilities {
             name: format!("hl-wgpu ({name})"),
@@ -108,11 +143,8 @@ impl WgpuExecutor {
             max_texture_2d: 8192,
             present_kinds: vec![PresentKind::Shm],
             wire_version: WIRE_VERSION,
-            command_bits: command_bits(ALL_COMMANDS),
-            shader_payloads: shader_payload::SPIRV
-                | shader_payload::GLSL
-                | shader_payload::WGSL
-                | shader_payload::KERNEL,
+            command_bits: command_bits(REPLAYED_COMMANDS),
+            shader_payloads: shader_payload::SPIRV | shader_payload::GLSL | shader_payload::KERNEL,
             texture_formats: format_bits(COLOR_FORMATS) | format_bits(DEPTH_FORMATS),
             max_frame_bytes: 64 << 20,
             max_buffer_bytes: 256 << 20,

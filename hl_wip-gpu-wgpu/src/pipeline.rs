@@ -9,7 +9,7 @@
 //! from the bound pipeline's own layout (see `bindgroup.rs`).
 
 use hl_gpu::protocol::model::descriptor::{ComputePipelineDesc, RenderPipelineDesc, VertexLayout};
-use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
+use hl_gpu::protocol::model::enums::{compare, TextureFormat, Topology};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
@@ -170,6 +170,21 @@ impl WgpuExecutor {
             })
             .collect();
 
+        // A depth-stencil state (format + write-enable + compare) if the pipeline is depth-tested. The
+        // opaque WebGPU compare code is mapped through the protocol's neutral `compare` constants, matching
+        // the CPU oracle's per-fragment test. The pass this pipeline draws in must carry a matching depth
+        // attachment (see `submit::run_render_pass`).
+        let depth_stencil = match &desc.depth {
+            Some(ds) => Some(wgpu::DepthStencilState {
+                format: texture_format(ds.format)?,
+                depth_write_enabled: ds.depth_write,
+                depth_compare: compare_function(ds.depth_compare),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            None => None,
+        };
+
         let color_formats: Vec<TextureFormat> = desc.color_targets.iter().map(|c| c.format).collect();
         let mut targets: Vec<Option<wgpu::ColorTargetState>> = Vec::new();
         for c in &desc.color_targets {
@@ -193,7 +208,7 @@ impl WgpuExecutor {
                 topology: topology(desc.topology),
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil,
             multisample: wgpu::MultisampleState::default(),
             fragment: fs.as_ref().map(|(m, entry)| wgpu::FragmentState {
                 module: m,
@@ -205,6 +220,24 @@ impl WgpuExecutor {
             cache: None,
         });
         res.pipelines.insert(id, Box::new(PipelineNative::Render { pipeline, color_formats }))
+    }
+}
+
+/// Map the protocol's opaque WebGPU depth-compare code (carried through the neutral [`compare`] constants,
+/// Vulkan `VkCompareOp` ordering) to a `wgpu::CompareFunction`. An unrecognized code is treated as
+/// `Always` — matching the CPU oracle's `compare::passes`, which never hard-fails a draw on a code it does
+/// not model.
+fn compare_function(code: u32) -> wgpu::CompareFunction {
+    use wgpu::CompareFunction as C;
+    match code {
+        compare::NEVER => C::Never,
+        compare::LESS => C::Less,
+        compare::EQUAL => C::Equal,
+        compare::LESS_EQUAL => C::LessEqual,
+        compare::GREATER => C::Greater,
+        compare::NOT_EQUAL => C::NotEqual,
+        compare::GREATER_EQUAL => C::GreaterEqual,
+        _ => C::Always, // compare::ALWAYS and any unmodeled code
     }
 }
 

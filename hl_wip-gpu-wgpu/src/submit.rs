@@ -10,8 +10,10 @@
 //! `submit` (`hl_wip-gpu/src/cpu/executor.rs`) — same ops, same order, now on the GPU.
 
 use hl_gpu::protocol::model::command::{CommandBuffer, Enc};
-use hl_gpu::protocol::model::descriptor::ColorAttachment;
-use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp};
+use hl_gpu::protocol::model::descriptor::{
+    ColorAttachment, DepthAttachment, Extent3d, Origin3d, TextureSubresource,
+};
+use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp, TextureAspect};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
@@ -33,9 +35,9 @@ impl WgpuExecutor {
         let mut i = 0;
         while i < ops.len() {
             match &ops[i] {
-                Enc::BeginRenderPass { color, depth: _ } => {
+                Enc::BeginRenderPass { color, depth } => {
                     let end = find_end(ops, i, Enc::EndRenderPass)?;
-                    self.run_render_pass(res, color, &ops[i + 1..end])?;
+                    self.run_render_pass(res, color, depth.as_ref(), &ops[i + 1..end])?;
                     i = end + 1;
                 }
                 Enc::BeginComputePass => {
@@ -61,11 +63,18 @@ impl WgpuExecutor {
                 Enc::CopyTextureToBuffer { src, width, height, dst, dst_offset, bytes_per_row, .. } => {
                     let t = texture::native(res, *src)?;
                     let bpt = texel_bytes(t.format)? as u32;
+                    // The tight readback plane is packed at the TEXTURE's width, not the copy region's
+                    // width — the source row stride is `tex_width*bpt`, so a sub-region copy (width <
+                    // texture width) advances by the full plane stride, exactly as the CPU oracle does.
+                    let src_stride = (t.width * bpt) as usize;
                     let plane = self.read_texture_tight(res, *src)?;
                     let row = (*width * bpt) as usize;
-                    for r in 0..*height {
-                        let s = (r * *width * bpt) as usize;
-                        let d = *dst_offset + (r * *bytes_per_row) as u64;
+                    // `bytes_per_row == 0` means "tightly packed" on the destination (the protocol/oracle
+                    // convention); a non-zero value is the explicit row stride.
+                    let dst_stride = if *bytes_per_row == 0 { row } else { *bytes_per_row as usize };
+                    for r in 0..*height as usize {
+                        let s = r * src_stride;
+                        let d = *dst_offset + (r * dst_stride) as u64;
                         self.write_bytes(res, *dst, d, &plane[s..s + row])?;
                     }
                     i += 1;
@@ -74,20 +83,45 @@ impl WgpuExecutor {
                     let t = texture::native(res, *dst)?;
                     let bpt = texel_bytes(t.format)? as u32;
                     let row = (*width * bpt) as usize;
+                    // `bytes_per_row == 0` means the source rows are tightly packed (the oracle convention).
+                    let src_stride = if *bytes_per_row == 0 { row } else { *bytes_per_row as usize };
                     let mut tight = Vec::with_capacity(row * *height as usize);
-                    for r in 0..*height {
-                        let off = *src_offset + (r * *bytes_per_row) as u64;
+                    for r in 0..*height as usize {
+                        let off = *src_offset + (r * src_stride) as u64;
                         tight.extend_from_slice(&self.read_bytes(res, *src, off, row)?);
                     }
                     self.write_region(res, *dst, 0, 0, *width, *height, &tight)?;
+                    i += 1;
+                }
+                Enc::CopyTextureToTexture {
+                    src,
+                    src_sub,
+                    src_origin,
+                    dst,
+                    dst_sub,
+                    dst_origin,
+                    extent,
+                } => {
+                    self.copy_texture_to_texture(
+                        res, *src, src_sub, src_origin, *dst, dst_sub, dst_origin, extent,
+                    )?;
                     i += 1;
                 }
                 Enc::FillBuffer { buffer, offset, size, value } => {
                     self.fill_buffer(res, *buffer, *offset, *size, *value)?;
                     i += 1;
                 }
-                // Stray state-setters outside a pass and the copy/blit/resolve ops not in the frozen
-                // conformance suite are skipped here (unreached given a validated command buffer).
+                // Scaled blit + multisample resolve need image resampling this backend does not implement,
+                // and are NOT advertised (see `REPLAYED_COMMANDS`), so the runtime rejects them at validate.
+                // Erroring here (rather than the old silent no-op) is the defensive backstop for a direct
+                // executor call — a submitted-but-unimplemented op must never vanish without a trace.
+                Enc::BlitTexture { .. } => {
+                    return Err(GpuError::Unsupported("wgpu: BlitTexture (scaled/filtered) unimplemented"))
+                }
+                Enc::ResolveTexture { .. } => {
+                    return Err(GpuError::Unsupported("wgpu: ResolveTexture (multisample) unimplemented"))
+                }
+                // Stray state-setters outside a pass cannot occur in a validated command buffer.
                 _ => i += 1,
             }
         }
@@ -121,12 +155,72 @@ impl WgpuExecutor {
         self.write_bytes(res, id, astart, &window)
     }
 
+    /// Exact (no-scaling) texture→texture copy: move `extent` texels from `src`'s `src_origin` to `dst`'s
+    /// `dst_origin`, CPU-mediated through the tight readback plane + region upload (mirrors the CPU oracle's
+    /// `copy_texture_to_texture`). Only the base subresource (mip 0 / layer 0 / whole color aspect) of a 2D
+    /// color texture is supported; anything else, a format-size mismatch, or an out-of-range region is a
+    /// clean typed error rather than a panic (the runtime does not range-check this op).
+    #[allow(clippy::too_many_arguments)]
+    fn copy_texture_to_texture(
+        &self,
+        res: &SessionResources,
+        src: u32,
+        src_sub: &TextureSubresource,
+        src_origin: &Origin3d,
+        dst: u32,
+        dst_sub: &TextureSubresource,
+        dst_origin: &Origin3d,
+        extent: &Extent3d,
+    ) -> Result<()> {
+        for sub in [src_sub, dst_sub] {
+            if sub.mip != 0 || sub.layer != 0 || sub.aspect != TextureAspect::All {
+                return Err(GpuError::Unsupported("wgpu: non-base subresource texture copy"));
+            }
+        }
+        if src_origin.z != 0 || dst_origin.z != 0 || extent.depth > 1 {
+            return Err(GpuError::Unsupported("wgpu: 3D/layer texture-to-texture copy"));
+        }
+        let (sw, sh, s_bpt) = {
+            let t = texture::native(res, src)?;
+            (t.width, t.height, texel_bytes(t.format)? as u32)
+        };
+        let (dw, dh, d_bpt) = {
+            let t = texture::native(res, dst)?;
+            (t.width, t.height, texel_bytes(t.format)? as u32)
+        };
+        if s_bpt != d_bpt {
+            return Err(GpuError::Invalid("wgpu: texture-to-texture copy between incompatible formats"));
+        }
+        let (ew, eh) = (extent.width, extent.height);
+        // Range guards (wrapping-safe): the source region must lie in `src`, the dest region in `dst`.
+        let ok = |x: u32, y: u32, w: u32, h: u32, tw: u32, th: u32| {
+            x.checked_add(w).is_some_and(|e| e <= tw) && y.checked_add(h).is_some_and(|e| e <= th)
+        };
+        if !ok(src_origin.x, src_origin.y, ew, eh, sw, sh)
+            || !ok(dst_origin.x, dst_origin.y, ew, eh, dw, dh)
+        {
+            return Err(GpuError::OutOfBounds);
+        }
+        let bpt = s_bpt as usize;
+        let sw = sw as usize;
+        let plane = self.read_texture_tight(res, src)?;
+        let (sx, sy) = (src_origin.x as usize, src_origin.y as usize);
+        let row = ew as usize * bpt;
+        let mut block = Vec::with_capacity(row * eh as usize);
+        for r in 0..eh as usize {
+            let start = ((sy + r) * sw + sx) * bpt;
+            block.extend_from_slice(&plane[start..start + row]);
+        }
+        self.write_region(res, dst, dst_origin.x, dst_origin.y, ew, eh, &block)
+    }
+
     /// Execute one render pass: begin with the color attachments (clear/load), replay any pipeline/bind/
     /// draw ops into it, end, submit, and wait. A clear-only pass (no draws) realizes the clear.
     fn run_render_pass(
         &mut self,
         res: &SessionResources,
         color: &[ColorAttachment],
+        depth: Option<&DepthAttachment>,
         ops: &[Enc],
     ) -> Result<()> {
         // Resolve attachment views up front (they must outlive the pass).
@@ -134,6 +228,14 @@ impl WgpuExecutor {
         for c in color {
             views.push((texture::native(res, c.texture)?.view.clone(), c));
         }
+        // Resolve the depth attachment's view + load/clear (it too must outlive the pass). A pipeline
+        // built with a depth-stencil state MUST run in a pass with a matching depth attachment (wgpu
+        // enforces this), so honoring the attachment here is what makes depth-tested draws real instead
+        // of silently dropping the depth field.
+        let depth_view = match depth {
+            Some(d) => Some((texture::native(res, d.texture)?.view.clone(), d.load, d.clear_depth)),
+            None => None,
+        };
         // Pre-build any bind group a draw in this pass needs (keyed to the pipeline it's drawn with).
         let mut cur_pipeline: Option<u32> = None;
         let mut cur_bind_group: Option<u32> = None;
@@ -192,7 +294,19 @@ impl WgpuExecutor {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("hl-render-pass"),
                 color_attachments: &attachments,
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: depth_view.as_ref().map(|(view, load, clear)| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: match load {
+                                LoadOp::Clear => wgpu::LoadOp::Clear(*clear),
+                                _ => wgpu::LoadOp::Load,
+                            },
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
