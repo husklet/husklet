@@ -3,7 +3,7 @@
 // postgres drop-to-unprivileged, capsh/getpcaps, systemd) reads these three sources — and they MUST agree:
 //   /proc/self/status Cap* lines, capget(2), and prctl(PR_CAPBSET_READ). Golden (verified vs OrbStack real
 //   docker, Server 29.4.0/runc): CapInh=CapAmb=0, CapPrm=CapEff=CapBnd=00000000a80425fb (the 14 default
-//   caps), NoNewPrivs=0, Seccomp=2, Seccomp_filters=1, PR_GET_SECCOMP=2. dd previously reported all-ones
+//   caps), NoNewPrivs=0, Seccomp=2, Seccomp_filters=1, PR_GET_SECCOMP=2. hl previously reported all-ones
 //   (over-reporting caps) and omitted the Cap*/Seccomp lines from status entirely.
 #define _GNU_SOURCE
 #include <stdio.h>

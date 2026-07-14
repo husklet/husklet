@@ -2,7 +2,7 @@
 // the SCM_CREDENTIALS ucred.pid the kernel attaches on recv as the peer's ports-node identity, so two
 // distinct children must present two DISTINCT pids, and neither may equal the RECEIVER's own pid (a peer
 // that reports the receiver's own pid looks like a self/loopback node and the ports node-merge never
-// finalizes). Under dd, macOS reports the socketpair CREATOR's pid via LOCAL_PEERPID on BOTH ends (never
+// finalizes). Under hl, macOS reports the socketpair CREATOR's pid via LOCAL_PEERPID on BOTH ends (never
 // updated on fork), so before the fix the creating parent read its OWN pid as every child's peer credential
 // and container_pid() collapsed them all to guest pid 1 -> colliding, self-equal identities. The engine now
 // stamps each socketpair end with a distinct synthetic peer node id. Output is booleans only (distinct /

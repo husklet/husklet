@@ -13,8 +13,8 @@ pub(crate) async fn image_import(
     if repo.is_empty() {
         return import_progress(Err("repo is required".into()));
     }
-    // dd imports a rootfs tar streamed in the body (`docker import - <name>`); importing from a remote
-    // URL is not supported (dd has no HTTP fetcher).
+    // hl imports a rootfs tar streamed in the body (`docker import - <name>`); importing from a remote
+    // URL is not supported (hl has no HTTP fetcher).
     if src != "-" {
         return import_progress(Err(format!(
             "unsupported import source {src:?}; pipe the rootfs to `-`"

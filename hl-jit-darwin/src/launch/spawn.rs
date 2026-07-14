@@ -14,7 +14,7 @@ const HL_SPAWN_TTY: u32 = 0x2;
 
 extern "C" {
     /// C spawn shim (os/darwin/ffi.c). `in_fd`/`out_fd`/`err_fd` become the child's fd 0/1/2 (-1 =
-    /// inherit); `flags` is a bitwise-OR of `DDJIT_SPAWN_*`. Returns the child pid, or -1 (errno set).
+    /// inherit); `flags` is a bitwise-OR of `HL_JIT_SPAWN_*`. Returns the child pid, or -1 (errno set).
     /// The caller owns the passed fds and closes its own copies after this returns.
     fn hl_spawn(
         engine_path: *const c_char,

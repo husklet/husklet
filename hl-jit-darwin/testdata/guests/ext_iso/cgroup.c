@@ -1,11 +1,11 @@
 // Container cgroup-v2 fidelity (the surface real runtimes SIZE THEMSELVES from). The JVM
 // (-XX:+UseContainerSupport) reads memory.max + cpu.max to pick MaxHeap and availableProcessors; the Go
 // runtime derives GOMAXPROCS from cpu.max's quota/period; systemd/Node detect the unified hierarchy via
-// the cgroup2 statfs magic + cgroup.controllers/cgroup.type. If dd's cgroup files are absent or wrong,
+// the cgroup2 statfs magic + cgroup.controllers/cgroup.type. If hl's cgroup files are absent or wrong,
 // these apps mis-size heaps and thread pools (OOM or under-parallelism).
 //
 // This probe prints a NORMALIZED, host-INDEPENDENT verdict that is byte-identical between real Linux
-// (docker/runc) and a correct dd: the v2 markers plus the sizing-critical file CONTENTS (cpu.max /
+// (docker/runc) and a correct hl: the v2 markers plus the sizing-critical file CONTENTS (cpu.max /
 // memory.max / memory.swap.max / memory.high / cpu.weight / pids.max), which reflect the --cpus/--memory
 // caps exactly. Live accounting counters (memory.current, cpu.stat) are host-variant and NOT asserted.
 // Linux-only by construction: cgroup is a kernel concept with no darwin analogue.

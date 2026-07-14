@@ -5,7 +5,7 @@ use serde_json::Value;
 
 // ---- containers: `docker top` ----------------------------------------------
 
-/// `GET /containers/{id}/top` — a single synthetic process row (dd has no guest process tree).
+/// `GET /containers/{id}/top` — a single synthetic process row (hl has no guest process tree).
 #[derive(Serialize)]
 pub(crate) struct ContainerTop {
     #[serde(rename = "Titles")]
@@ -26,7 +26,7 @@ pub(crate) struct CreateResponse {
 // ---- containers: prune / update acks ---------------------------------------
 
 /// `POST /containers/prune` report — the ids of the removed (exited) containers plus reclaimed bytes
-/// (always 0; dd does not size container writable layers).
+/// (always 0; hl does not size container writable layers).
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct ContainersPruneReport {
@@ -34,7 +34,7 @@ pub(crate) struct ContainersPruneReport {
     pub space_reclaimed: i64,
 }
 
-/// `POST /containers/{id}/update` ack — `{"Warnings": []}`. dd applies no live resource limits, so the
+/// `POST /containers/{id}/update` ack — `{"Warnings": []}`. hl applies no live resource limits, so the
 /// envelope is always empty.
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]

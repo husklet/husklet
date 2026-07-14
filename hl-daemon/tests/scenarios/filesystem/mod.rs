@@ -86,7 +86,7 @@ pub fn group() -> ScenGroup {
             .exec("echo bb > /r && ln -s /r /l && cat /l").has("bb"),
 
         // ---- device nodes (/dev) + generated /etc + magic /proc symlinks ----------------------------
-        // The container's /dev is a fresh set of standard nodes (runc mounts a tmpfs); dd synthesizes them.
+        // The container's /dev is a fresh set of standard nodes (runc mounts a tmpfs); hl synthesizes them.
         scen("filesystem/dev-null", "alpine:latest")
             .exec("echo discard > /dev/null && head -c1 /dev/null | wc -c").has("0"),
         scen("filesystem/dev-zero", "alpine:latest")

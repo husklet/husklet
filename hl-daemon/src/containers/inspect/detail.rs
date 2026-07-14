@@ -78,7 +78,7 @@ pub(crate) async fn containers_inspect(State(a): State<App>, Path(id): Path<Stri
                 .unwrap_or_default();
             // State, adding `Health` only when a HEALTHCHECK is configured (docker omits it otherwise).
             // §8.3-4: the always-present state booleans docker emits (Restarting from the backoff window;
-            // OOMKilled/Dead not modelled by dd's reaper, reported false; Error empty). Running stays true
+            // OOMKilled/Dead not modelled by hl's reaper, reported false; Error empty). Running stays true
             // through the restart backoff (Moby keeps Running=true while restarting).
             let restarting = c.status == "restarting";
             let state = crate::api::ContainerState {

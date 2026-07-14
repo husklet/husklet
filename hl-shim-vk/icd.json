@@ -1,7 +1,7 @@
 {
     "file_format_version": "1.0.1",
     "ICD": {
-        "library_path": "./libvk_dd.so",
+        "library_path": "./libvk_hl.so",
         "api_version": "1.4.0"
     }
 }

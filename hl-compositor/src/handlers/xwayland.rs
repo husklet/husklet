@@ -21,7 +21,7 @@
 //! ## Runtime gating
 //! [`HlState::start_xwayland`] is called only under `HL_XWAYLAND` (itself only reachable under
 //! `HL_DISPLAY_SMITHAY`). On macOS the `Xwayland` binary is a Linux ELF, so it must be launched through
-//! the dd JIT engine (a host-runtime concern); on the Linux dev host a native `/usr/bin/Xwayland` is used.
+//! the hl JIT engine (a host-runtime concern); on the Linux dev host a native `/usr/bin/Xwayland` is used.
 //!
 //! ## Validation status
 //! The window-management integration and the feature-independent core ([`HlState::adopt_x11_window`] /
@@ -204,7 +204,7 @@ impl XwmHandler for HlState {
     }
 
     /// The X11 client asked to reposition/resize/restack a window. Honour the requested geometry (a real
-    /// window manager would constrain to the output; the dd model shows one native window per surface, so
+    /// window manager would constrain to the output; the hl model shows one native window per surface, so
     /// the size is what matters for the client's buffer).
     fn configure_request(
         &mut self,

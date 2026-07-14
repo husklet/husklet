@@ -1438,9 +1438,9 @@ impl GpuBackend for SoftwareBackend {
                                     src_fmt,
                                 ),
                             };
-                            let ddx = dst_origin.x as usize + dx;
-                            let ddy = dst_origin.y as usize + dy;
-                            let off = (ddy * dw + ddx) * bpt;
+                            let hlx = dst_origin.x as usize + dx;
+                            let hly = dst_origin.y as usize + dy;
+                            let off = (hly * dw + hlx) * bpt;
                             t.pixels[off..off + bpt].copy_from_slice(&texel);
                         }
                     }

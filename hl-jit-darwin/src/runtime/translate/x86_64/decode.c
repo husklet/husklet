@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- the x86-64 instruction decoder (prefixes, ModRM/SIB, the insn IR).
+// hl/runtime/frontend/x86_64 -- the x86-64 instruction decoder (prefixes, ModRM/SIB, the insn IR).
 
 // ---------------- x86-64 decoder ----------------
 struct insn {

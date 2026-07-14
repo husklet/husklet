@@ -2,8 +2,8 @@
 //! surface; the first is the `hl-tests` engine basics matrix). Rust, no bash. Owned by hl-daemon.
 //!
 //!   cargo test -p hl-daemon --test scenarios -- --backend real        # host docker = ORACLE (prove tests)
-//!   cargo test -p hl-daemon --test scenarios -- --backend dd          # hl-daemon = SYSTEM UNDER TEST
-//!   cargo test -p hl-daemon --test scenarios -- --backend dd --long   # full compatibility sweep (pulls)
+//!   cargo test -p hl-daemon --test scenarios -- --backend hl          # hl-daemon = SYSTEM UNDER TEST
+//!   cargo test -p hl-daemon --test scenarios -- --backend hl --long   # full compatibility sweep (pulls)
 //!   cargo test -p hl-daemon --test scenarios -- -c databases -t arm   # one category, one arch
 //!   cargo test -p hl-daemon --test scenarios -- --count               # list every case + total, run nothing
 //!

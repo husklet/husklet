@@ -1,4 +1,4 @@
-// dd/runtime/os/linux -- the ELF loader (map PT_LOAD high; static-PIE + dynamic via ld.so; build stack).
+// hl/runtime/os/linux -- the ELF loader (map PT_LOAD high; static-PIE + dynamic via ld.so; build stack).
 
 // ---------------- minimal ELF loader (load segments HIGH; PC-relative stays valid) ----------------
 static uint16_t rd16(const uint8_t *p) {
@@ -621,8 +621,8 @@ static void nonpie_guard(int sig, siginfo_t *si, void *uc) {
         }
     }
     // no guest handler -> a fatal, unmaskable synchronous fault. Terminate the guest process through
-    // dd's fatal-signal machinery so its parent's wait4 sees WIFSIGNALED/WTERMSIG=sig (a raw host raise()
-    // degrades to exit(255) across dd's fork). Declines (returns 0) for a genuine ENGINE fault -> re-raise.
+    // hl's fatal-signal machinery so its parent's wait4 sees WIFSIGNALED/WTERMSIG=sig (a raw host raise()
+    // degrades to exit(255) across hl's fork). Declines (returns 0) for a genuine ENGINE fault -> re-raise.
     if (deliver_guest_fatal_fault(sig, si, uc)) return;
     signal(sig, SIG_DFL);
     raise(sig);
@@ -662,8 +662,8 @@ __attribute__((constructor)) static void install_sync_fault_guards(void) {
 // mmap fault-injection gate (inert unless the env var is set; nothing sets it in production, and
 // the mac bridge drops ambient env -- same idiom as the sibling x86 loader's NONPIE_NOFIXUP/NORELRO gates).
 // Forces the Nth LOAD-path mmap/mprotect ATTEMPT to report failure, so the retry/abort hardening below can
-// be regression-tested without inducing real host-VM fragmentation or memory pressure. DDFAILMMAP /
-// DDFAILMPROT = "N" fails attempt N once (transient; the retry must recover); "N-" fails every attempt
+// be regression-tested without inducing real host-VM fragmentation or memory pressure. HLFAILMMAP /
+// HLFAILMPROT = "N" fails attempt N once (transient; the retry must recover); "N-" fails every attempt
 // from N onward (permanent; the loader must abort cleanly / stay best-effort, never leave a hole).
 static int elf_inject_fail(const char *var, int attempt) {
     const char *s = getenv(var);
@@ -678,7 +678,7 @@ static void *elf_map_checked(void *hint, size_t len, int prot, int flags, const 
     static int attempt;
     for (int t = 0;; t++) {
         void *p;
-        if (elf_inject_fail("DDFAILMMAP", ++attempt)) {
+        if (elf_inject_fail("HLFAILMMAP", ++attempt)) {
             errno = ENOMEM;
             p = MAP_FAILED;
         } else {
@@ -705,7 +705,7 @@ static void *elf_map_checked(void *hint, size_t len, int prot, int flags, const 
 static void elf_mprotect_besteffort(void *addr, size_t len, int prot, const char *what) {
     for (int t = 0;; t++) {
         int r;
-        if (elf_inject_fail("DDFAILMPROT", t + 1)) {
+        if (elf_inject_fail("HLFAILMPROT", t + 1)) {
             errno = ENOMEM;
             r = -1;
         } else {
@@ -732,7 +732,7 @@ static int elf_mem_has(const uint8_t *f, size_t n, const char *needle, size_t nl
 // INTERIM: is `f` (an aarch64 ELF, size `sz`) a cgo-enabled (iscgo) Go image? Every Go binary carries a
 // linker-embedded build-info blob (magic "\xff Go buildinf:"); its recorded build settings include
 // CGO_ENABLED=<0|1>, and CGO_ENABLED=1 is exactly the runtime.iscgo==1 class whose SIGURG async-preempt
-// delivery dd must suppress (see os/linux/signal.c, g_go_iscgo). We GATE on the Go magic first so a non-Go
+// delivery hl must suppress (see os/linux/signal.c, g_go_iscgo). We GATE on the Go magic first so a non-Go
 // guest is NEVER matched, then decode the two inline strings (Go >=1.18 stores version + modinfo inline when
 // the flags byte has bit 0x2 set, starting at blob offset 32) and scan ONLY the modinfo for the setting. A
 // blob without the inline flag (older linkers) falls back to a bounded scan just past the magic.

@@ -166,7 +166,7 @@ pub struct ColorDescription {
 }
 
 impl ColorDescription {
-    /// The compositor's default sRGB SDR description (the dd output profile).
+    /// The compositor's default sRGB SDR description (the hl output profile).
     pub fn srgb() -> Self {
         Self { primaries: ColorPrimaries::Srgb, transfer: ColorTransfer::Srgb, peak_luminance: 80.0, icc: Vec::new() }
     }

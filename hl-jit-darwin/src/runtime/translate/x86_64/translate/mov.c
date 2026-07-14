@@ -1,4 +1,4 @@
-// dd/runtime/translate/x86_64 -- data-move instruction class, lifted VERBATIM out of translate_block's
+// hl/runtime/translate/x86_64 -- data-move instruction class, lifted VERBATIM out of translate_block's
 // one-byte switch (behavior-preserving move): mov r,imm (B0-BF), mov r/m,imm (C6/C7), mov r/m<->r
 // (88-8B), lea (8D), push/pop r (50-5F), movsxd/move (0x63). None of these touch the modeled EFLAGS, so
 // there is no lazy-flag interaction. Every handler advances past the insn -> the helper returns TX_FALL

@@ -1,5 +1,5 @@
 // #391 root cause: gpg's keyring_get_keyblock re-opens the keyring, lseek(fd, found.offset, SEEK_SET)s to
-// the matched keyblock, then read()s it. Under dd, the lseek did not reposition the file: read() returned
+// the matched keyblock, then read()s it. Under hl, the lseek did not reposition the file: read() returned
 // bytes from offset 0 (the FIRST keyblock) regardless of the seek, so gpg fetched the wrong key -> BADSIG.
 // This reproduces exactly that: open a file O_RDONLY, lseek to a mid-file offset, read, and verify the
 // bytes match what pread() returns at that offset (i.e. that the seek took effect). Also checks that a
@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
         fails += test_one(argv[1], sz > 100 ? sz - 100 : 0);
     } else {
         // self-contained: create a 3000-byte file with position-dependent content, then seek+read
-        char path[] = "/tmp/ddlseekXXXXXX";
+        char path[] = "/tmp/hllseekXXXXXX";
         int fd = mkstemp(path);
         for (int i = 0; i < 3000; i++) { uint8_t b = (uint8_t)(i * 7 + 3); (void)!write(fd, &b, 1); }
         close(fd);

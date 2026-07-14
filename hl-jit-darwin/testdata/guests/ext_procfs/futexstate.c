@@ -1,5 +1,5 @@
 // /proc/<pid>/stat field 3 + /proc/<pid>/status State: CROSS-PROCESS fidelity for a FUTEX_WAIT blocker.
-// A child parked in futex(FUTEX_WAIT) is interruptible-sleep 'S' on real Linux, NOT 'R' -- dd used to
+// A child parked in futex(FUTEX_WAIT) is interruptible-sleep 'S' on real Linux, NOT 'R' -- hl used to
 // synthesize the state from the macOS process status (SRUN, which can't express "all threads asleep in a
 // futex"), so a futex-blocked child wrongly read 'R', hiding blocked threads from monitors/deadlock
 // diagnostics. This fixture is the same shape as procstate.c but the child blocks in FUTEX_WAIT instead of

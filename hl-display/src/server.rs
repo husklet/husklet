@@ -1057,7 +1057,7 @@ impl<P: Presenter> Server<P> {
             }
             G_DMABUF => {
                 self.objs.insert(id, Obj::LinuxDmabuf);
-                // Advertise supported (format, modifier) pairs. modifier = our dd tag in the high 32 bits
+                // Advertise supported (format, modifier) pairs. modifier = our hl tag in the high 32 bits
                 // (the low 32 are filled per-buffer with the IOSurface id); also advertise LINEAR(0).
                 for fmt in [DRM_FMT_ARGB8888, DRM_FMT_XRGB8888] {
                     // format(format) [v1] — kept for older clients.
@@ -2683,7 +2683,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                         );
                     }
                     None => {
-                        // No dd IOSurface tag (e.g. the advertised LINEAR modifier): the compositor
+                        // No hl IOSurface tag (e.g. the advertised LINEAR modifier): the compositor
                         // cannot back this buffer. create_immed has no `failed` event, so report the
                         // spec's INVALID_FORMAT protocol error rather than handing back an inert object
                         // the client would attach and get missing frames from.
@@ -4997,7 +4997,7 @@ mod tests {
 
     #[test]
     fn dmabuf_untagged_create_immed_is_protocol_error() {
-        // A dmabuf buffer created without the dd IOSurface tag (e.g. the advertised LINEAR modifier)
+        // A dmabuf buffer created without the hl IOSurface tag (e.g. the advertised LINEAR modifier)
         // cannot be presented — create_immed must post a protocol error, not hand back an inert object.
         let mut h = Harness::new();
         h.server.objs.insert(50, Obj::DmabufParams { iosurface_id: None, stride: 0, gpu_render: false, generation: 0 });

@@ -1,24 +1,24 @@
 //! `zwp_linux_dmabuf_v1` — the GPU present path for the Smithay compositor.
 //!
-//! ## Why dmabuf means "resolve a dd IOSurface" on this boundary
-//! dd runs Linux guests on a macOS host. A guest GPU client (glmark2, es2tri, a GPU-composited
-//! browser) renders through dd's GPU stack, which executes the guest's GL/GLES/Vulkan commands on
+//! ## Why dmabuf means "resolve a hl IOSurface" on this boundary
+//! hl runs Linux guests on a macOS host. A guest GPU client (glmark2, es2tri, a GPU-composited
+//! browser) renders through hl's GPU stack, which executes the guest's GL/GLES/Vulkan commands on
 //! the host Metal device INTO a host `IOSurface`. It never makes a real Linux PRIME/`dma-buf`
 //! export — there is no kernel dma-buf to import. What the guest hands the compositor as a
 //! "dmabuf" is really a *reference to that host IOSurface*, carried in the dmabuf's DRM format
-//! MODIFIER: `modifier_lo` is the IOSurface id and `modifier_hi`'s low 16 bits are a dd magic tag
+//! MODIFIER: `modifier_lo` is the IOSurface id and `modifier_hi`'s low 16 bits are a hl magic tag
 //! (bit 16 = "the host GPU should also RENDER into this surface" — rung 3). This is the exact
 //! contract the legacy hand-written `hl-display/src/server.rs` uses; this module is its Smithay
 //! equivalent, so a guest built for the legacy path presents unchanged on `HL_DISPLAY_SMITHAY=1`.
 //!
 //! ## The bridge
 //! 1. We advertise `zwp_linux_dmabuf_v1` (Smithay's [`DmabufState`], v4/v5 with feedback) exporting
-//!    ARGB8888/XRGB8888 with the dd IOSurface modifier, and the synthetic render-node
+//!    ARGB8888/XRGB8888 with the hl IOSurface modifier, and the synthetic render-node
 //!    `main_device` (226:128) so a client's ozone/EGL GPU probe resolves the same node the engine
 //!    synthesizes. Chrome needs the feedback path; glmark2/es2tri use the plain v3 modifier list
 //!    Smithay derives from the same formats.
 //! 2. On import ([`DmabufHandler::dmabuf_imported`]) we decode the IOSurface id from the modifier
-//!    and accept the buffer; a buffer with no dd tag (a real LINEAR allocation we cannot back on
+//!    and accept the buffer; a buffer with no hl tag (a real LINEAR allocation we cannot back on
 //!    macOS) is rejected so the client falls back to `wl_shm`.
 //! 3. On commit, [`HlState::dmabuf_surface_buffer`] turns the committed dmabuf `wl_buffer` into a
 //!    [`SurfaceBuffer`] carrying only `iosurface_id` (no CPU pixels). The reused `Presenter`
@@ -53,11 +53,11 @@ use crate::{handlers::compositor::logical_size_and_uv, HlState};
 
 /// hl-private dmabuf modifier layout (shared with `hl-display/src/server.rs` and the guest shims'
 /// modifier producers). `modifier_lo` = the host IOSurface id. `modifier_hi` packs:
-///   - bits 0..=15  `HL_DMABUF_MOD_MAGIC` — the tag identifying a dd IOSurface-backed buffer;
+///   - bits 0..=15  `HL_DMABUF_MOD_MAGIC` — the tag identifying a hl IOSurface-backed buffer;
 ///   - bit  16      `HL_DMABUF_RENDER_BIT` — the guest asked the host GPU to render into it;
 ///   - bits 17..=31 the **allocation generation** (`HL_DMABUF_GEN_*`) — see below.
 ///
-/// The IOSurface `id` (`modifier_lo`) is a macOS-minted `IOSurfaceGetID` that dd RECYCLES: a retired
+/// The IOSurface `id` (`modifier_lo`) is a macOS-minted `IOSurfaceGetID` that hl RECYCLES: a retired
 /// pool surface is re-handed to the next same-size allocation, and a released legacy id becomes
 /// OS-recyclable. So an id alone cannot distinguish a live allocation from a stale reference whose
 /// backing surface was retired and reissued under the same id. The generation authenticates that: the
@@ -122,7 +122,7 @@ pub(crate) fn modifier_generation(modifier: u64) -> u32 {
     ((modifier >> 32) as u32 >> HL_DMABUF_GEN_SHIFT) & HL_DMABUF_GEN_MASK
 }
 
-/// Decode a DRM format modifier into `(iosurface_id, gpu_render)` when it carries the dd IOSurface
+/// Decode a DRM format modifier into `(iosurface_id, gpu_render)` when it carries the hl IOSurface
 /// tag, else `None` (a modifier we cannot back — e.g. a genuine `LINEAR` allocation).
 pub(crate) fn hl_iosurface_from_modifier(modifier: u64) -> Option<(u32, bool)> {
     let hi = (modifier >> 32) as u32;
@@ -140,7 +140,7 @@ impl DmabufHandler for HlState {
     }
 
     /// A client finished a `zwp_linux_buffer_params_v1` create/create_immed. Accept the buffer iff
-    /// its modifier carries a dd IOSurface id (which we resolve zero-copy at present time); reject
+    /// its modifier carries a hl IOSurface id (which we resolve zero-copy at present time); reject
     /// anything else so the client renders via `wl_shm` instead. `successful` binds the [`Dmabuf`]
     /// as the `wl_buffer`'s user-data, so [`get_dmabuf`] recovers it on commit — no side table.
     fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
@@ -148,7 +148,7 @@ impl DmabufHandler for HlState {
         match hl_iosurface_from_modifier(modifier) {
             Some((iosurface_id, _gpu_render)) => {
                 // Accelerated-import readiness gate (supersedes the interim warn-only check). A hl-tagged
-                // dmabuf means the client expects the host GPU to render/present into a dd IOSurface, so
+                // dmabuf means the client expects the host GPU to render/present into a hl IOSurface, so
                 // REJECT the import up front unless BOTH hold:
                 //   (a) a healthy host executor is running (crate::gpu::executor_healthy) — otherwise the
                 //       frames have nowhere to render and the window shows white; and
@@ -248,7 +248,7 @@ fn validate_dmabuf(
 }
 
 impl HlState {
-    /// Validate a dd IOSurface-backed dmabuf at IMPORT time, before the buffer is accepted. Offline this
+    /// Validate a hl IOSurface-backed dmabuf at IMPORT time, before the buffer is accepted. Offline this
     /// proves the reference is structurally sound — a non-zero IOSurface id and a representable
     /// size/format — so a malformed or zero handle is rejected instead of accepted and later presented as
     /// white. The deep host check (the IOSurface actually exists in the Metal registry at these
@@ -267,7 +267,7 @@ impl HlState {
     /// IOSurface id decoded from the modifier plus the viewport-resolved logical size / sample rect.
     /// The `Presenter` wraps the IOSurface as an `MTLTexture` and composites it zero-copy. Returns
     /// `None` for a non-dmabuf buffer (the caller falls through to the `wl_shm` path) or a dmabuf
-    /// whose modifier lacks the dd tag (should not occur — such imports are rejected).
+    /// whose modifier lacks the hl tag (should not occur — such imports are rejected).
     pub(crate) fn dmabuf_surface_buffer(
         &self,
         sid: u32,
@@ -315,7 +315,7 @@ impl HlState {
     }
 }
 
-/// The synthetic DRM render node the dd engine presents to a guest: `/dev/dri/renderD128`, whose
+/// The synthetic DRM render node the hl engine presents to a guest: `/dev/dri/renderD128`, whose
 /// `st_rdev` is `makedev(226, 128) == (226 << 8) | 128`. A guest GPU client (Chromium's ozone/GPU)
 /// reads the dmabuf-feedback `main_device`, `stat`s that node, and takes its accelerated render path
 /// only when the two match — so the feedback must advertise exactly this dev_t (identical to the
@@ -323,7 +323,7 @@ impl HlState {
 const HL_MAIN_DEVICE: DmabufDeviceId = DmabufDeviceId::from_linux_dev_t((226u64 << 8) | 128);
 
 /// The exact ARGB/XRGB8888 format+modifier pairs the importer can accept. Genuine Linux `LINEAR`
-/// dma-bufs are intentionally absent because the macOS importer only resolves dd IOSurface references. GLES clients
+/// dma-bufs are intentionally absent because the macOS importer only resolves hl IOSurface references. GLES clients
 /// (glmark2/es2tri) read this list off the v3 modifier events; v4+ clients read the same set from the
 /// feedback format-table's main tranche.
 fn hl_dmabuf_formats() -> [Format; 2] {

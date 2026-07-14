@@ -1,4 +1,4 @@
-//! hl-shim-common — the guest-side foundation for every dd GPU shim (GL, Vulkan, CUDA).
+//! hl-shim-common — the guest-side foundation for every hl GPU shim (GL, Vulkan, CUDA).
 //!
 //! This is the ONLY-place-the-wire-lives layer, lifted out of the hand-rolled C in
 //! `hl-tests/guests/gl_shim.c` so that `hl-shim-gl`, `hl-shim-vk`, and `hl-shim-cuda` can all be

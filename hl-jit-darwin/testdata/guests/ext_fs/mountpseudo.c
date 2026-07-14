@@ -1,5 +1,5 @@
 // Pseudo-mount COMPLETENESS of /proc/mounts + /proc/self/mountinfo inside the alpine overlay rootfs. The
-// storage audit found dd omitted the /dev/shm, /dev/pts and /dev/mqueue mounts, listed no cgroup2 line in
+// storage audit found hl omitted the /dev/shm, /dev/pts and /dev/mqueue mounts, listed no cgroup2 line in
 // /proc/mounts, and marked sysfs rw where real docker (runc) marks it ro. This asserts each line docker's
 // oracle shows, in BOTH the fstab form (/proc/mounts) and the "-"-separated mountinfo form. Verdict is a
 // normalized ok=1 (host-variant fields like sizes/ids are not asserted); a stub/incomplete synth fails.

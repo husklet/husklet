@@ -1,10 +1,10 @@
 // x86 rep movs/stos/cmps completeness + ERMS-funnel correctness (oracle: qemu-x86_64).
-// dd lowers `rep movs`/`rep stos` to ONE host memcpy/memset and now advertises ERMS+FSRM
+// hl lowers `rep movs`/`rep stos` to ONE host memcpy/memset and now advertises ERMS+FSRM
 // (cpuid 7:0 EBX[9]/EDX[4]) so glibc funnels bulk memcpy/memmove/memset through rep movsb/stosb.
 // This guest exercises EVERY case that routing now reaches, byte-exact vs qemu:
 //   - rep movs/stos all widths (b/w/l/q), incl 0-length, unaligned, sub-16, 16, large
-//   - forward-overlap smear (dst>src) at each width (dd replays element-granular)
-//   - backward (DF=1, std) overlapping copy (dd's fast path is forward-only -> scalar fallback)
+//   - forward-overlap smear (dst>src) at each width (hl replays element-granular)
+//   - backward (DF=1, std) overlapping copy (hl's fast path is forward-only -> scalar fallback)
 //   - XMM PRESERVATION across rep movs/stos: guest xmm live in host v0..v15 and a host memcpy/memset
 //     clobbers caller-saved v0..v7 (+ upper v8..v15), so the emitter's xmm spill/reload around the
 //     host call is load-bearing; if it were dropped this checksum would diverge from qemu
@@ -90,7 +90,7 @@ int main(void) {
         }
     }
 
-    // 4) backward (DF=1, std) OVERLAPPING copy (dst>src, high->low). dd's fast path is forward-only,
+    // 4) backward (DF=1, std) OVERLAPPING copy (dst>src, high->low). hl's fast path is forward-only,
     //    so this drives the byte-exact scalar fallback with a -w stride.
     for (int wi = 0; wi < 4; wi++) {
         int w = WID[wi];

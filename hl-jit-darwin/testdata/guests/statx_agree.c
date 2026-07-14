@@ -1,11 +1,11 @@
 // #383 differential: statx (nr 291) MUST report the same file metadata as fstat/stat/newfstatat for the
-// SAME file -- including dd's ownership virtualization (#156 cuid/cgid) and the #181 guest-chown xattr
+// SAME file -- including hl's ownership virtualization (#156 cuid/cgid) and the #181 guest-chown xattr
 // override. statx used to copy the RAW host uid/gid (and never wrote rdev/dev major:minor), so a program
 // saw inconsistent ownership/device numbers depending on which call it made.
 //
 // This test is SELF-CHECKING: it prints only AGREEMENT booleans (statx vs newfstatat/fstat for the same
 // file), never absolute ids -- so its output is byte-identical on the native Linux oracle (where the two
-// calls trivially agree) and on dd (where they must agree only after the fix). Before the fix, dd diverges
+// calls trivially agree) and on hl (where they must agree only after the fix). Before the fix, hl diverges
 // on the chowned file (raw uid vs xattr uid) and on the device node (rdev 0:0 vs 1:3), flipping the
 // booleans and failing the byte-exact oracle diff. Covers a regular file, a #181-chowned file (by path AND
 // by fd via AT_EMPTY_PATH), a symlink (AT_SYMLINK_NOFOLLOW), a device node, a directory, and the
@@ -60,7 +60,7 @@ static int agree(const struct sx *x, const struct stat *s) {
 }
 
 int main(void) {
-    const char *reg = "/tmp/ddsx_reg", *cwn = "/tmp/ddsx_chown", *sym = "/tmp/ddsx_sym", *dir = "/tmp/ddsx_dir";
+    const char *reg = "/tmp/hlsx_reg", *cwn = "/tmp/hlsx_chown", *sym = "/tmp/hlsx_sym", *dir = "/tmp/hlsx_dir";
     unlink(reg); unlink(cwn); unlink(sym); rmdir(dir);
 
     // regular file
@@ -108,8 +108,8 @@ int main(void) {
     do_statx(AT_FDCWD, dir, 0, &x); fstatat(AT_FDCWD, dir, &s, 0);
     int r_dir = agree(&x, &s);
 
-    // statx-specific sanity, phrased to be byte-identical native-vs-dd: all BASIC fields were reported,
-    // and btime is non-negative (native returns 0 when the FS lacks btime; dd returns st_birthtime>=0).
+    // statx-specific sanity, phrased to be byte-identical native-vs-hl: all BASIC fields were reported,
+    // and btime is non-negative (native returns 0 when the FS lacks btime; hl returns st_birthtime>=0).
     do_statx(AT_FDCWD, reg, 0, &x);
     int r_mask = ((x.mask & 0x7ff) == 0x7ff);
     int r_btime = (x.btime.sec >= 0);

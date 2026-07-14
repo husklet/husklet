@@ -1,4 +1,4 @@
-//! `hl-client` — the shared client both the dd GUI and CLI use to talk to **hl-daemon** over its
+//! `hl-client` — the shared client both the hl GUI and CLI use to talk to **hl-daemon** over its
 //! Unix socket. The wire transport is [`bollard`] (the mature Docker-Engine-API crate); this crate
 //! wraps it behind a small façade with hl-specific view models, so the consumers depend on one
 //! place and never touch bollard's types directly.

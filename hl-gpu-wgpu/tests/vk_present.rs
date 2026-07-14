@@ -17,7 +17,7 @@ use ash::vk::Handle;
 use core::ffi::c_void;
 use hl_gpu::ir::{Cmd, TextureFormat};
 use hl_gpu_wgpu::WgpuBackend;
-use vk_dd as ddvk;
+use vk_hl as hlvk;
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -42,7 +42,7 @@ const FS: &str = "@fragment fn main(@location(0) col: vec4<f32>) -> @location(0)
 fn shader(dev: *mut c_void, spv: &[u32]) -> u64 {
     let ci = vk::ShaderModuleCreateInfo::default().code(spv);
     let mut m = 0u64;
-    assert_eq!(ddvk::vkCreateShaderModule(dev, &ci, core::ptr::null(), &mut m), 0);
+    assert_eq!(hlvk::vkCreateShaderModule(dev, &ci, core::ptr::null(), &mut m), 0);
     m
 }
 
@@ -51,7 +51,7 @@ fn vk_swapchain_present_renders_on_real_metal() {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
 
-    ddvk::reg::reset();
+    hlvk::reg::reset();
 
     // vkQueuePresentKHR ships the frame to the host GPU-exec socket ($HL_GPU_EXEC) and, unless disabled,
     // to the wayland compositor. Stand up a throwaway acking sink so the present succeeds off-guest; the
@@ -77,16 +77,16 @@ fn vk_swapchain_present_renders_on_real_metal() {
 
     // instance / device / queue / command pool
     let mut inst: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkCreateInstance(core::ptr::null(), core::ptr::null(), &mut inst), 0);
+    assert_eq!(hlvk::vkCreateInstance(core::ptr::null(), core::ptr::null(), &mut inst), 0);
     let mut n = 1u32;
     let mut phys: *mut c_void = core::ptr::null_mut();
-    ddvk::vkEnumeratePhysicalDevices(inst, &mut n, &mut phys);
+    hlvk::vkEnumeratePhysicalDevices(inst, &mut n, &mut phys);
     let mut dev: *mut c_void = core::ptr::null_mut();
-    ddvk::vkCreateDevice(phys, &vk::DeviceCreateInfo::default() as *const _, core::ptr::null(), &mut dev);
+    hlvk::vkCreateDevice(phys, &vk::DeviceCreateInfo::default() as *const _, core::ptr::null(), &mut dev);
     let mut queue: *mut c_void = core::ptr::null_mut();
-    ddvk::vkGetDeviceQueue(dev, 0, 0, &mut queue);
+    hlvk::vkGetDeviceQueue(dev, 0, 0, &mut queue);
     let mut pool = 0u64;
-    ddvk::vkCreateCommandPool(dev, &vk::CommandPoolCreateInfo::default(), core::ptr::null(), &mut pool);
+    hlvk::vkCreateCommandPool(dev, &vk::CommandPoolCreateInfo::default(), core::ptr::null(), &mut pool);
 
     // --- WSI: wayland surface + swapchain (fallback offscreen images off-guest) ---
     let wsci = vk::WaylandSurfaceCreateInfoKHR {
@@ -95,10 +95,10 @@ fn vk_swapchain_present_renders_on_real_metal() {
         ..Default::default()
     };
     let mut surface = 0u64;
-    assert_eq!(ddvk::vkCreateWaylandSurfaceKHR(inst, &wsci, core::ptr::null(), &mut surface), 0);
+    assert_eq!(hlvk::vkCreateWaylandSurfaceKHR(inst, &wsci, core::ptr::null(), &mut surface), 0);
 
     let mut support = 0u32;
-    assert_eq!(ddvk::vkGetPhysicalDeviceSurfaceSupportKHR(phys, 0, surface, &mut support), 0);
+    assert_eq!(hlvk::vkGetPhysicalDeviceSurfaceSupportKHR(phys, 0, surface, &mut support), 0);
     assert_eq!(support, vk::TRUE);
 
     let sc_ci = vk::SwapchainCreateInfoKHR::default()
@@ -114,25 +114,25 @@ fn vk_swapchain_present_renders_on_real_metal() {
         .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
         .present_mode(vk::PresentModeKHR::FIFO);
     let mut swapchain = 0u64;
-    assert_eq!(ddvk::vkCreateSwapchainKHR(dev, &sc_ci, core::ptr::null(), &mut swapchain), 0);
+    assert_eq!(hlvk::vkCreateSwapchainKHR(dev, &sc_ci, core::ptr::null(), &mut swapchain), 0);
 
     let mut img_count = 0u32;
-    ddvk::vkGetSwapchainImagesKHR(dev, swapchain, &mut img_count, core::ptr::null_mut());
+    hlvk::vkGetSwapchainImagesKHR(dev, swapchain, &mut img_count, core::ptr::null_mut());
     assert!(img_count >= 2, "swapchain must expose >=2 presentable images, got {img_count}");
     let mut images = vec![0u64; img_count as usize];
-    ddvk::vkGetSwapchainImagesKHR(dev, swapchain, &mut img_count, images.as_mut_ptr());
+    hlvk::vkGetSwapchainImagesKHR(dev, swapchain, &mut img_count, images.as_mut_ptr());
 
     // Acquire requires a semaphore or fence to signal (Vulkan spec); use a throwaway fence.
     let mut acquire_fence = 0u64;
-    assert_eq!(ddvk::vkCreateFence(dev, &vk::FenceCreateInfo::default() as *const _, core::ptr::null(), &mut acquire_fence), 0);
+    assert_eq!(hlvk::vkCreateFence(dev, &vk::FenceCreateInfo::default() as *const _, core::ptr::null(), &mut acquire_fence), 0);
     let mut image_index = 0u32;
     assert_eq!(
-        ddvk::vkAcquireNextImageKHR(dev, swapchain, u64::MAX, 0, acquire_fence, &mut image_index),
+        hlvk::vkAcquireNextImageKHR(dev, swapchain, u64::MAX, 0, acquire_fence, &mut image_index),
         0
     );
     let sc_image = images[image_index as usize];
     // The presentable image's IR texture id (the render target the host renders into).
-    let sc_image_ir = ddvk::reg::lock().images.get(&sc_image).map(|i| i.ir_id).unwrap();
+    let sc_image_ir = hlvk::reg::lock().images.get(&sc_image).map(|i| i.ir_id).unwrap();
 
     // --- render a green triangle into the acquired swapchain image ---
     let view_ci = vk::ImageViewCreateInfo::default()
@@ -147,7 +147,7 @@ fn vk_swapchain_present_renders_on_real_metal() {
             layer_count: 1,
         });
     let mut view = 0u64;
-    assert_eq!(ddvk::vkCreateImageView(dev, &view_ci, core::ptr::null(), &mut view), 0);
+    assert_eq!(hlvk::vkCreateImageView(dev, &view_ci, core::ptr::null(), &mut view), 0);
 
     let att = [vk::AttachmentDescription::default()
         .format(vk::Format::B8G8R8A8_UNORM)
@@ -158,11 +158,11 @@ fn vk_swapchain_present_renders_on_real_metal() {
     let sub = [vk::SubpassDescription::default().pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS).color_attachments(&cref)];
     let rp_ci = vk::RenderPassCreateInfo::default().attachments(&att).subpasses(&sub);
     let mut rp = 0u64;
-    ddvk::vkCreateRenderPass(dev, &rp_ci, core::ptr::null(), &mut rp);
+    hlvk::vkCreateRenderPass(dev, &rp_ci, core::ptr::null(), &mut rp);
     let vlist = [vk::ImageView::from_raw(view)];
     let fb_ci = vk::FramebufferCreateInfo::default().render_pass(vk::RenderPass::from_raw(rp)).attachments(&vlist).width(W).height(H).layers(1);
     let mut fb = 0u64;
-    ddvk::vkCreateFramebuffer(dev, &fb_ci, core::ptr::null(), &mut fb);
+    hlvk::vkCreateFramebuffer(dev, &fb_ci, core::ptr::null(), &mut fb);
 
     // vertex buffer (green triangle)
     let tri: [([f32; 2], [f32; 4]); 3] = [
@@ -177,20 +177,20 @@ fn vk_swapchain_present_renders_on_real_metal() {
     }
     let vsz = verts.len() as u64;
     let mut vbuf = 0u64;
-    ddvk::vkCreateBuffer(dev, &vk::BufferCreateInfo::default().size(vsz).usage(vk::BufferUsageFlags::VERTEX_BUFFER), core::ptr::null(), &mut vbuf);
+    hlvk::vkCreateBuffer(dev, &vk::BufferCreateInfo::default().size(vsz).usage(vk::BufferUsageFlags::VERTEX_BUFFER), core::ptr::null(), &mut vbuf);
     let mut vmem = 0u64;
-    ddvk::vkAllocateMemory(dev, &vk::MemoryAllocateInfo::default().allocation_size(vsz), core::ptr::null(), &mut vmem);
-    ddvk::vkBindBufferMemory(dev, vbuf, vmem, 0);
+    hlvk::vkAllocateMemory(dev, &vk::MemoryAllocateInfo::default().allocation_size(vsz), core::ptr::null(), &mut vmem);
+    hlvk::vkBindBufferMemory(dev, vbuf, vmem, 0);
     let mut p: *mut c_void = core::ptr::null_mut();
-    ddvk::vkMapMemory(dev, vmem, 0, vsz, 0, &mut p);
+    hlvk::vkMapMemory(dev, vmem, 0, vsz, 0, &mut p);
     unsafe { core::ptr::copy_nonoverlapping(verts.as_ptr(), p as *mut u8, verts.len()) };
-    ddvk::vkUnmapMemory(dev, vmem);
+    hlvk::vkUnmapMemory(dev, vmem);
 
     // graphics pipeline
     let vs = shader(dev, &wgsl_spirv(VS));
     let fs = shader(dev, &wgsl_spirv(FS));
     let mut layout = 0u64;
-    ddvk::vkCreatePipelineLayout(dev, (&vk::PipelineLayoutCreateInfo::default() as *const _) as *const vk::PipelineLayoutCreateInfo, core::ptr::null(), &mut layout);
+    hlvk::vkCreatePipelineLayout(dev, (&vk::PipelineLayoutCreateInfo::default() as *const _) as *const vk::PipelineLayoutCreateInfo, core::ptr::null(), &mut layout);
     let stages = [
         vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(vk::ShaderModule::from_raw(vs)).name(c"main"),
         vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(vk::ShaderModule::from_raw(fs)).name(c"main"),
@@ -204,43 +204,43 @@ fn vk_swapchain_present_renders_on_real_metal() {
     let ia = vk::PipelineInputAssemblyStateCreateInfo::default().topology(vk::PrimitiveTopology::TRIANGLE_LIST);
     let gp = vk::GraphicsPipelineCreateInfo::default().stages(&stages).vertex_input_state(&vi).input_assembly_state(&ia).layout(vk::PipelineLayout::from_raw(layout)).render_pass(vk::RenderPass::from_raw(rp));
     let mut pipeline = 0u64;
-    ddvk::vkCreateGraphicsPipelines(dev, 0, 1, &gp, core::ptr::null(), &mut pipeline);
+    hlvk::vkCreateGraphicsPipelines(dev, 0, 1, &gp, core::ptr::null(), &mut pipeline);
 
     // record + submit the draw into the swapchain image
     let cb_ai = vk::CommandBufferAllocateInfo::default().command_pool(vk::CommandPool::from_raw(pool)).command_buffer_count(1);
     let mut cb: *mut c_void = core::ptr::null_mut();
-    ddvk::vkAllocateCommandBuffers(dev, &cb_ai, &mut cb);
-    ddvk::vkBeginCommandBuffer(cb, (&vk::CommandBufferBeginInfo::default() as *const _) as *const vk::CommandBufferBeginInfo);
+    hlvk::vkAllocateCommandBuffers(dev, &cb_ai, &mut cb);
+    hlvk::vkBeginCommandBuffer(cb, (&vk::CommandBufferBeginInfo::default() as *const _) as *const vk::CommandBufferBeginInfo);
     let clear = [vk::ClearValue { color: vk::ClearColorValue { float32: [0.1, 0.1, 0.1, 1.0] } }];
     let rpb = vk::RenderPassBeginInfo::default()
         .render_pass(vk::RenderPass::from_raw(rp))
         .framebuffer(vk::Framebuffer::from_raw(fb))
         .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: W, height: H } })
         .clear_values(&clear);
-    ddvk::vkCmdBeginRenderPass(cb, &rpb, vk::SubpassContents::INLINE.as_raw());
-    ddvk::vkCmdBindPipeline(cb, vk::PipelineBindPoint::GRAPHICS.as_raw(), pipeline);
+    hlvk::vkCmdBeginRenderPass(cb, &rpb, vk::SubpassContents::INLINE.as_raw());
+    hlvk::vkCmdBindPipeline(cb, vk::PipelineBindPoint::GRAPHICS.as_raw(), pipeline);
     let vb = [vbuf];
     let offs = [0u64];
-    ddvk::vkCmdBindVertexBuffers(cb, 0, 1, vb.as_ptr(), offs.as_ptr());
-    ddvk::vkCmdDraw(cb, 3, 1, 0, 0);
-    ddvk::vkCmdEndRenderPass(cb);
-    ddvk::vkEndCommandBuffer(cb);
+    hlvk::vkCmdBindVertexBuffers(cb, 0, 1, vb.as_ptr(), offs.as_ptr());
+    hlvk::vkCmdDraw(cb, 3, 1, 0, 0);
+    hlvk::vkCmdEndRenderPass(cb);
+    hlvk::vkEndCommandBuffer(cb);
     let cbs = [cb];
     let submit = vk::SubmitInfo { command_buffer_count: 1, p_command_buffers: cbs.as_ptr() as *const vk::CommandBuffer, ..Default::default() };
-    ddvk::vkQueueSubmit(queue, 1, &submit, 0);
+    hlvk::vkQueueSubmit(queue, 1, &submit, 0);
 
     // present (adds Cmd::Present; on the live guest this ships to $HL_GPU_EXEC + commits the dma-buf)
     let scs = [vk::SwapchainKHR::from_raw(swapchain)];
     let idxs = [image_index];
     let present = vk::PresentInfoKHR::default().swapchains(&scs).image_indices(&idxs);
-    assert_eq!(ddvk::vkQueuePresentKHR(queue, &present), 0);
+    assert_eq!(hlvk::vkQueuePresentKHR(queue, &present), 0);
 
     // --- replay the shim-produced RENDER IR on real Metal (present is the live wayland step) ---
-    let ir: Vec<Cmd> = ddvk::reg::take_ir()
+    let ir: Vec<Cmd> = hlvk::reg::take_ir()
         .into_iter()
         .filter(|c| !matches!(c, Cmd::Present { .. }))
         .collect();
-    let has_present = ddvk::reg::lock().present_flushed > 0; // present ran + advanced the cursor
+    let has_present = hlvk::reg::lock().present_flushed > 0; // present ran + advanced the cursor
     eprintln!("vk_present: {} render IR cmds (present filtered); present_flushed>0 = {has_present}", ir.len());
     let bytes = hl_gpu::ir::encode_stream(&ir);
     let mut be = WgpuBackend::new().expect("wgpu Metal backend");

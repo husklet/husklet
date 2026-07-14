@@ -1,5 +1,5 @@
 // kill(0, sig): Linux sends the signal to EVERY process in the caller's process group -- not just the
-// caller. dd historically routed kill(0) to the caller only, so a job-control shell / supervisor that
+// caller. hl historically routed kill(0) to the caller only, so a job-control shell / supervisor that
 // signals its group left sibling children unsignalled. This probe forks a child that stays in the parent's
 // process group, both install a SIGUSR1 handler, then the parent kill(0, SIGUSR1)s the group; the child
 // must observe the signal too. Oracle-diffed vs native aarch64 (native always signals the group).

@@ -21,7 +21,7 @@ members = ["hl-jit", "hl-jit-darwin", "hl-images", "hl-daemon", "hl-client", "hl
 # hl-shim-cudart is the fourth guest GPU shim (CUDA Runtime API -> libcudart.so.1, layered on
 # hl-shim-cuda); same rationale, likewise out of default-members. Test with `cargo test -p
 # hl-shim-cudart`, build the guest .so with `cargo build -p hl-shim-cudart --release`.
-# hl-shim-vk is the fifth guest GPU driver (a Vulkan ICD -> libvk_dd.so, discovered by the standard
+# hl-shim-vk is the fifth guest GPU driver (a Vulkan ICD -> libvk_hl.so, discovered by the standard
 # Vulkan loader via icd.json); same rationale, likewise out of default-members. Test with `cargo test
 # -p hl-shim-vk`, build the guest .so with `cargo build -p hl-shim-vk --release`, and enumerate it
 # through a real loader with `VK_ICD_FILENAMES=<...>/icd.json vulkaninfo` (see hl-shim-vk/icd.json).

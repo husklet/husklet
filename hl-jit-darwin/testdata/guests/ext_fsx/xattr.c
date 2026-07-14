@@ -11,14 +11,14 @@
 #define XGET(p,n,v,s)   getxattr(p, n, v, s, 0, 0)
 #define XLIST(p,b,s)    listxattr(p, b, s, 0)
 #define XREMOVE(p,n)    removexattr(p, n, 0)
-#define XNAME           "user.ddtest"
+#define XNAME           "user.hltest"
 #else
 #include <sys/xattr.h>
 #define XSET(p,n,v,s)   setxattr(p, n, v, s, 0)
 #define XGET(p,n,v,s)   getxattr(p, n, v, s)
 #define XLIST(p,b,s)    listxattr(p, b, s)
 #define XREMOVE(p,n)    removexattr(p, n)
-#define XNAME           "user.ddtest"
+#define XNAME           "user.hltest"
 #endif
 
 int main(void) {

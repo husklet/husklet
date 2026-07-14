@@ -1,9 +1,9 @@
 // SHARED epoll instance across threads: one waiter thread blocks in epoll_wait while OTHER threads
-// register (epoll_ctl ADD, EPOLLET) fds that are ALREADY readable. This is the exact case dd's W3E epoll
+// register (epoll_ctl ADD, EPOLLET) fds that are ALREADY readable. This is the exact case hl's W3E epoll
 // fast path (event.c: ep_flush + EVFILT_USER NOTE_TRIGGER wake + g_ep_prime registration-time readiness)
 // exists to serve -- and the one case NO existing gate exercises (every pump gate is single-thread-per-
 // instance). On Linux the EPOLLET ADD of an already-ready fd wakes the blocked waiter at once (the
-// registration edge); dd must reproduce that cross-thread via the NOTE_TRIGGER + prime path. A lost
+// registration edge); hl must reproduce that cross-thread via the NOTE_TRIGGER + prime path. A lost
 // wake => the just-registered ready fd is never delivered => the token it carries is never drained =>
 // a bounded per-fd retry backlog builds and the watchdog fails the run. Run under host CPU load to widen
 // the waiter's unlocked "returned-from-kevent / about-to-re-block" window where a trigger can be dropped.

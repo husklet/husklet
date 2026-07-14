@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- arm64 host emitters + NEON/SSE encoders (xmm->v0..15) + x87 FPU stack
+// hl/runtime/frontend/x86_64 -- arm64 host emitters + NEON/SSE encoders (xmm->v0..15) + x87 FPU stack
 // (ST(i) at double precision) + prologue/spill/exits.
 #ifdef __APPLE__
 #include <mach/mach_time.h> // mach_timebase_info -- authoritative CNTVCT tick->ns on Apple Silicon

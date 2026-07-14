@@ -1,4 +1,4 @@
-/* Clean-room CUDA Runtime API ABI declarations for dd's libcudart.so shim.
+/* Clean-room CUDA Runtime API ABI declarations for hl's libcudart.so shim.
  *
  * A clean-room re-declaration of the *documented, stable* CUDA Runtime API (cuda_runtime_api.h) plus
  * the private compiler-emitted registration glue (__cudaRegister* / __cuda*CallConfiguration) that

@@ -2,7 +2,7 @@
 // x86 GENERATES the QNaN floating-point INDEFINITE (sign bit SET: single 0xFFC00000, double
 // 0xFFF8000000000000) whenever an FP op produces a NaN with no NaN input (0/0, inf/inf, 0*inf,
 // inf-inf, sqrt(<0)). ARM's hardware FDIV/FMUL/... produce the DEFAULT NaN with sign CLEAR
-// (0x7FC00000 / 0x7FF8000000000000). The dd lowering now stamps x86's sign on GENERATED NaNs only --
+// (0x7FC00000 / 0x7FF8000000000000). The hl lowering now stamps x86's sign on GENERATED NaNs only --
 // a NaN PROPAGATED from an input keeps that input's sign on both ISAs (critical: 2.0*QNaN(+) must stay
 // positive, i.e. NOT be over-flipped). Every operand goes through a volatile sink so -O2 cannot
 // constant-fold; the real SSE instruction runs and we print raw bit patterns -> byte-exact vs qemu.

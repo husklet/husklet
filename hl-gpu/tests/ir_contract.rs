@@ -104,7 +104,7 @@ fn every_command_variant() -> Vec<Cmd> {
             BindEntry { binding: 2, resource: BindResource::Sampler { id: 3 } },
         ]}),
         Cmd::DestroyBindGroup(6),
-        Cmd::CreateSurface(10, SurfaceDesc { width: 8, height: 4, format: TextureFormat::Rgba8Unorm, ddp_surface: 77 }),
+        Cmd::CreateSurface(10, SurfaceDesc { width: 8, height: 4, format: TextureFormat::Rgba8Unorm, hlp_surface: 77 }),
         Cmd::DestroySurface(10),
         Cmd::CreateFence(11),
         Cmd::DestroyFence(11),

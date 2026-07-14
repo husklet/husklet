@@ -541,7 +541,7 @@ impl WgpuBackend {
     /// Build over an existing `wgpu::Device`/`Queue`. This is the seam toward zero-copy IOSurface interop:
     /// once a `wgpu::Device` is created over hl-display's shared `MTLDevice` via `wgpu-hal`'s
     /// `Device::device_from_raw` (crossing the objc2-metal <-> metal-rs raw-pointer boundary), the
-    /// executor renders straight into dd's IOSurface-backed texture with no readback.
+    /// executor renders straight into hl's IOSurface-backed texture with no readback.
     pub fn from_shared(device: wgpu::Device, queue: wgpu::Queue) -> Self {
         let flat_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("hl-flat"),
@@ -648,7 +648,7 @@ impl WgpuBackend {
     }
 
     /// Build a wgpu backend whose `Device`/`Queue` run OVER an existing, externally-owned `MTLDevice` —
-    /// hl-display's process-shared device (`crate::metal::shared_device()` on the dd side). This is what
+    /// hl-display's process-shared device (`crate::metal::shared_device()` on the hl side). This is what
     /// makes the live present path tear-free WITHOUT a blocking poll: because the wgpu render queue and
     /// hl-display's compositor blit queue then live on the SAME `MTLDevice`, one `MTLEvent` fences
     /// render→blit across the two queues (the executor signals render-complete, the compositor's
@@ -657,7 +657,7 @@ impl WgpuBackend {
     /// so a fence is only meaningful when producer and consumer share the device object.
     ///
     /// This is the inverse of the `iosurface_interop` example (which extracts wgpu's OWN raw `MTLDevice`);
-    /// here we inject dd's device INTO wgpu via wgpu-hal `device_from_raw` + `queue_from_raw`, wrapped back
+    /// here we inject hl's device INTO wgpu via wgpu-hal `device_from_raw` + `queue_from_raw`, wrapped back
     /// into a `wgpu::Device`/`Queue` through `Adapter::create_device_from_hal`.
     ///
     /// # Safety

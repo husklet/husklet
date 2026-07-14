@@ -22,7 +22,7 @@ fn signalx() -> Group {
         port("sigspin", "ext_sig/sigspin.c").out("sigspin loop1=1 loop2=1\n"),
         port("pausesig", "ext_sig/pausesig.c").out("pausesig got=1 eintr=1\n"),
         // (LTP pause01/pause02): EVERY caught signal delivered by kill(2) -- incl. the fault-class
-        // SIGILL/SIGTRAP/SIGFPE/SIGSEGV/SIGBUS, which dd previously routed to its hardware-fault guard and
+        // SIGILL/SIGTRAP/SIGFPE/SIGSEGV/SIGBUS, which hl previously routed to its hardware-fault guard and
         // never woke pause() -- must wake pause() with -1/EINTR after the handler runs; SIGKILL is
         // un-catchable so pause() never returns and the process dies by SIGKILL. Diffed vs native.
         src("pausewake", "ext_sig/pausewake.c").oracle(),

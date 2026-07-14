@@ -3,7 +3,7 @@
 //! A minimal in-process Wayland client (built on `hl_display::wire`) connects over a `socketpair`
 //! handed to Smithay's `Display`, and drives the accelerated path end to end:
 //!   1. `get_registry` → assert `zwp_linux_dmabuf_v1` is advertised;
-//!   2. bind it (v3) → assert the compositor sends the dd IOSurface `modifier` for ARGB/XRGB8888;
+//!   2. bind it (v3) → assert the compositor sends the hl IOSurface `modifier` for ARGB/XRGB8888;
 //!   3. `create_params` + `add(fd, …, modifier=hl-tag|iosurface-id)` + `create_immed` → a dmabuf
 //!      `wl_buffer`;
 //!   4. attach it to a `wl_surface` and commit.
@@ -215,7 +215,7 @@ fn dmabuf_global_and_iosurface_commit_presents() {
     c.dmabuf_id = dmabuf;
     pump!();
 
-    // (2) The compositor advertised the dd IOSurface modifier (modifier_hi low-16 == magic) for both
+    // (2) The compositor advertised the hl IOSurface modifier (modifier_hi low-16 == magic) for both
     // ARGB8888 and XRGB8888 — the tag a GLES client's buffer must carry to be resolved to an IOSurface.
     let has_dd_mod = |fourcc: u32| {
         c.dmabuf_modifiers
@@ -228,7 +228,7 @@ fn dmabuf_global_and_iosurface_commit_presents() {
         c.dmabuf_modifiers
     );
 
-    // (3) Create an IOSurface-backed dmabuf buffer. The plane fd is a placeholder (dd resolves the
+    // (3) Create an IOSurface-backed dmabuf buffer. The plane fd is a placeholder (hl resolves the
     // IOSurface by id, not by the fd), sized to pass Smithay's stride*height <= size validation.
     const IOSURFACE_ID: u32 = 0x00AB_CDEF;
     let (w, h): (i32, i32) = (64, 64);

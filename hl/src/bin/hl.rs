@@ -1,4 +1,4 @@
-//! `hl` — the user-facing command for the dd VM-less container runtime.
+//! `hl` — the user-facing command for the hl VM-less container runtime.
 //!
 //! This binary is the PARSING LAYER only: it owns the clap `Cli`/`Cmd` (the top-level command grammar)
 //! and `fn main`, then dispatches into `hl::*` library fns which hold all the command logic. The

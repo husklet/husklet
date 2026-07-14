@@ -1,6 +1,6 @@
 // FP-codegen edge differential (H10 MIN/MAX, H12 CMPNLT/NLE, H13 float->int indefinite, ROUND MXCSR).
 // Every operand is read through a volatile sink so gcc -O2 cannot constant-fold the intrinsic -- the
-// actual SSE/SSE2/SSE4.1 instruction executes at runtime, so this diffs the dd x86 codegen against the
+// actual SSE/SSE2/SSE4.1 instruction executes at runtime, so this diffs the hl x86 codegen against the
 // qemu oracle byte-for-byte (results printed as raw hex bit patterns: NaN payload / sign-of-zero exact).
 #include <stdint.h>
 #include <stdio.h>

@@ -7,7 +7,7 @@ use gtk::prelude::*;
 /// border radius ("pane in pane"), faintly tinted sidebar, no gradients. Uses theme color names so
 /// light/dark both work.
 pub(crate) const CSS: &str = "
-/* === dd design tokens =============================================================================
+/* === hl design tokens =============================================================================
    A sharp, precise developer-tool aesthetic from ONE kit: a single 6px radius on every card/control/
    popover/dialog, one hairline border token (@hl_line), an 8px spacing grid, a tight type scale, and a
    single blue accent. Theme colors keep

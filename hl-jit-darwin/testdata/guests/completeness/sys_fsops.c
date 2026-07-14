@@ -4,11 +4,11 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 int main(void){
-  const char *a="/tmp/ddc_fa",*b="/tmp/ddc_fb",*s="/tmp/ddc_fs",*d="/tmp/ddc_fd";
+  const char *a="/tmp/hlc_fa",*b="/tmp/hlc_fb",*s="/tmp/hlc_fs",*d="/tmp/hlc_fd";
   unlink(a);unlink(b);unlink(s); rmdir(d);
   int fd=open(a,O_CREAT|O_WRONLY,0644); close(fd);
   long l=syscall(SYS_linkat, AT_FDCWD,a, AT_FDCWD,b, 0);
-  long sy=syscall(SYS_symlinkat, "ddc_fa", AT_FDCWD, s);
+  long sy=syscall(SYS_symlinkat, "hlc_fa", AT_FDCWD, s);
   long mk=syscall(SYS_mkdirat, AT_FDCWD, d, 0755);
   struct stat st; stat(a,&st); int nl=st.st_nlink;
   long un=syscall(SYS_unlinkat, AT_FDCWD, b, 0);

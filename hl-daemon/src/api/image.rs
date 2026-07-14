@@ -48,7 +48,7 @@ pub(crate) struct HistoryLayer {
     pub empty_layer: bool,
 }
 
-/// `POST /images/prune` — nothing reclaimed (dd tracks no dangling images).
+/// `POST /images/prune` — nothing reclaimed (hl tracks no dangling images).
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct PruneReport {
@@ -56,7 +56,7 @@ pub(crate) struct PruneReport {
     pub space_reclaimed: i64,
 }
 
-// `GET /distribution/{name}/json` returns an honest Docker-shaped 404 (dd does not resolve remote
+// `GET /distribution/{name}/json` returns an honest Docker-shaped 404 (hl does not resolve remote
 // registry manifests, so it has no truthful descriptor to serialize) — see `images::distribution_inspect`.
 // Its former fabricated `DistributionInspect`/`Descriptor`/`PlatformDesc` response types were removed.
 
@@ -97,7 +97,7 @@ pub(crate) struct ImageConfig {
     pub healthcheck: Option<crate::model::HealthConfig>,
 }
 
-/// The inspect `RootFS` object. dd squashes to a single rootfs, so `Layers` is empty.
+/// The inspect `RootFS` object. hl squashes to a single rootfs, so `Layers` is empty.
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct RootFs {

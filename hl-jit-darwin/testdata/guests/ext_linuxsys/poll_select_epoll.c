@@ -1,4 +1,4 @@
-// Permanent poll/select/pselect6/ppoll/epoll_create1 guard for the dd matrix. Mirrors the assertions the
+// Permanent poll/select/pselect6/ppoll/epoll_create1 guard for the hl matrix. Mirrors the assertions the
 // LTP binaries poll02, pselect01, select01, select02, epoll_create1_01 make, plus the completeness edges
 // the task calls out (nfds 0/negative -> EINVAL, timeout==0 immediate return, EFAULT on a bad fd_set /
 // timeout / pollfd pointer, EBADF for a closed fd in the set, POLLNVAL for a bad fd). Output is a stable,

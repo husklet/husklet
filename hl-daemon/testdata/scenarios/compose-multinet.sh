@@ -40,7 +40,7 @@ STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hl-compose-mnet.XXXXXX")"
 export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!
-PROJ="ddmnet"
+PROJ="hlmnet"
 WORK="$ROOT/scen-compose-mnet"
 cleanup() {
     COMPOSE -p "$PROJ" -f "$WORK/compose.yml" down -v --remove-orphans >/dev/null 2>&1

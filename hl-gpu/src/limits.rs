@@ -694,7 +694,7 @@ mod tests {
             width: w,
             height: h,
             format: crate::ir::TextureFormat::Rgba8Unorm,
-            ddp_surface: 1,
+            hlp_surface: 1,
         }
     }
 

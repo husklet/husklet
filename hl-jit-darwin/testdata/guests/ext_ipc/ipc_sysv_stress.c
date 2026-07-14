@@ -3,7 +3,7 @@
 // (a child writes a segment the parent reads back through the SAME physical pages), a cross-process
 // BLOCKING semop round-trip (the parent P()s a 0-valued semaphore until the child V()s it), and a
 // cross-process BLOCKING msgsnd/msgrcv round-trip (the parent blocks in msgrcv on an empty queue until the
-// child sends). Verdict-only (booleans), so it is byte-identical on dd and the native Linux oracle -- and
+// child sends). Verdict-only (booleans), so it is byte-identical on hl and the native Linux oracle -- and
 // it would have FAILED on the pre-#421 host-backed path (host shmmni=32, and shm/eventfd not shared cross
 // process). Portable POSIX; oracle-diffed vs native aarch64 / qemu x86_64.
 #define _GNU_SOURCE

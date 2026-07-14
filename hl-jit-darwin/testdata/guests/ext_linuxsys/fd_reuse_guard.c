@@ -73,7 +73,7 @@ int main(void) {
     int eventfd_ok = read_reuse(ef);
 
     // memfd + F_SEAL_WRITE -- the reused PLAIN fd must NOT report the stale F_SEAL_WRITE. Real Linux on a
-    // sealing-capable fs (tmpfs) returns 0 seals; dd returns EINVAL (-1); either proves "not stale". A stale
+    // sealing-capable fs (tmpfs) returns 0 seals; hl returns EINVAL (-1); either proves "not stale". A stale
     // g_memfd_seal[n] would surface F_SEAL_WRITE (0x8) on the recycled number -> caught here on both arches.
     int mf = memfd_create("dd224", MFD_ALLOW_SEALING);
     int memfd_ok = 0;

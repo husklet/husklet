@@ -1,5 +1,5 @@
 // Vulkan ICD capability-truth probe. Uses the loader<->ICD ABI directly so it needs no Vulkan headers
-// or libvulkan. Explicit red gate: dd currently advertises Vulkan 1.3 while most mandatory core calls
+// or libvulkan. Explicit red gate: hl currently advertises Vulkan 1.3 while most mandatory core calls
 // are generated success stubs, and accepts an application version newer than its advertised version.
 #include <dlfcn.h>
 #include <stdint.h>
@@ -68,7 +68,7 @@ static VkResult create_for_version(PFN_vkCreateInstance create, uint32_t api, Vk
 int main(int argc, char **argv) {
     const char *library = argc > 1 ? argv[1] : getenv("HL_VK_ICD_LIBRARY");
     if (!library || !*library) {
-        printf("gui_vk_capability_truth SKIP set HL_VK_ICD_LIBRARY=/path/to/libvk_dd.so\n");
+        printf("gui_vk_capability_truth SKIP set HL_VK_ICD_LIBRARY=/path/to/libvk_hl.so\n");
         return 77;
     }
     void *handle = dlopen(library, RTLD_NOW | RTLD_LOCAL);
@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
     if (!destroy) return fail("destroy_dispatch", 0);
     destroy(instance, NULL);
 
-    // A driver must reject a requested version newer than it advertises. dd currently checks only the
+    // A driver must reject a requested version newer than it advertises. hl currently checks only the
     // major number, so 1.4 is incorrectly accepted even while it advertises 1.3.
     instance = NULL;
     r = create_for_version(create, VK_API_VERSION_1_4, &instance);

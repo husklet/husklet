@@ -18,7 +18,7 @@ pub fn group() -> ScenGroup {
         scen("terminal/ubuntu-notty-dev", "ubuntu:latest")
             .exec("tty || true").has("not a tty").timeout(60),
         // The controlling terminal must be named /dev/pts/0 (as on Linux/devpts), NOT the leaked host pty
-        // device (dd's slave is a mac /dev/ttysNNN). Regression for `tty`/ttyname(3)/`ps` reporting "not a
+        // device (hl's slave is a mac /dev/ttysNNN). Regression for `tty`/ttyname(3)/`ps` reporting "not a
         // tty" on `docker run -t`: readlink(/proc/self/fd/0) and ttyname(0) must both resolve /dev/pts/0,
         // /dev/pts/0 must stat as a character device, and reopening it (open(ttyname(0))) must reach the
         // same terminal. Verified against the real-docker oracle (which always shows /dev/pts/0).
@@ -58,7 +58,7 @@ pub fn group() -> ScenGroup {
 
         // ---- $TERM propagation (docker parity) ----------------------------------------------------
         // A `docker run -t` container gets TERM=xterm (the docker daemon's default); a non-tty container
-        // gets NO TERM. dd used to hardcode the engine's TERM=dumb fallback for BOTH, which pushed
+        // gets NO TERM. hl used to hardcode the engine's TERM=dumb fallback for BOTH, which pushed
         // node/python readline into a no-cursor "dumb" line editor (backspace didn't erase) and made
         // debconf's Dialog frontend fail ("unable to initialize frontend: Dialog" -> Term::ReadLine ->
         // Teletype). These lock the docker-exact behaviour so it can't regress.

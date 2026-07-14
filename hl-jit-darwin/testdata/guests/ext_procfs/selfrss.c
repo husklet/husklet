@@ -1,6 +1,6 @@
 // Self memory-footprint fidelity: top/htop/ps read a process's resident-set size from /proc/<pid>/status
 // (VmRSS), /proc/<pid>/statm (field 2 = resident pages) and /proc/<pid>/stat (field 24 = rss pages). A
-// real Linux process ALWAYS has a non-zero VmRSS (it has faulted at least its own code/stack). dd computed
+// real Linux process ALWAYS has a non-zero VmRSS (it has faulted at least its own code/stack). hl computed
 // the SELF pid's RSS from the guest's tracked anon charge, which is 0 for a process that has only its
 // static image resident -- so top/htop/ps showed this process at RES=0, a hl-only divergence from real
 // docker (a PEER pid already reported a live resident size; only self read 0). This probe reads all three
@@ -8,7 +8,7 @@
 // assert exact cross-file equality: VmRSS / statm-resident / stat-rss are sampled at slightly different
 // instants and in the running process's own page-size units, so their reconstructed magnitudes can drift
 // by a page or two even on real Linux -- the load-bearing, non-flaky property is simply non-zero. Host-
-// independent verdict: ok=1 on real Linux and a correct dd; the pre-fix engine printed ok=0 (rss=0). Run
+// independent verdict: ok=1 on real Linux and a correct hl; the pre-fix engine printed ok=0 (rss=0). Run
 // bare on both Linux engines so the /proc synth fires.
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,7 +1,7 @@
 #![cfg(target_os = "macos")]
 
 use hl_gpu::{replay, GpuError};
-use vk_dd::ir_seam::create_shader_module;
+use vk_hl::ir_seam::create_shader_module;
 
 #[test]
 fn vulkan_shader_translation_failure_never_falls_back_to_builtin_rendering() {

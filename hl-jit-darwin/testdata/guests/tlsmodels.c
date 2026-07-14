@@ -3,7 +3,7 @@
 // on BOTH the main thread and a spawned thread (the CLONE_SETTLS path). A pointer's identity must
 // survive the intervening allocations -- the exact pattern behind DB::current_thread in clickhouse
 // (#281), whose re-entrancy guard was suspected to read a stale/NULL thread_local. Guards that every
-// TLS relocation/model dd translates resolves to the same address the native oracle uses. Portable
+// TLS relocation/model hl translates resolves to the same address the native oracle uses. Portable
 // (golden), and paired with a non-PIE ET_EXEC build (the local-exec model clickhouse actually uses).
 #include <stdio.h>
 #include <stdlib.h>

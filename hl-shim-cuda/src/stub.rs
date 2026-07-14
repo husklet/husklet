@@ -9,7 +9,7 @@
 //!     unmodeled CUDA feature), it returns the *accurate* `CUresult` (never a false `CUDA_SUCCESS`) and
 //!     reports the unsupported call here. With `HL_SHIM_STRICT=1` the process aborts at the first such
 //!     call with the command, object/context detail, and a recent-call history — so an exploratory app
-//!     run stops exactly at the first thing dd cannot honestly do, instead of silently mis-executing.
+//!     run stops exactly at the first thing hl cannot honestly do, instead of silently mis-executing.
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};

@@ -1,6 +1,6 @@
 // sigurg_preempt.c -- #423 regression: an async SIGURG (Go's async-preempt signal) delivered at an
 // ARBITRARY instruction boundary must never corrupt the interrupted guest frame's return address or its
-// callee-saved registers. dd builds a Linux rt_sigframe on the guest stack to run the handler; if that
+// callee-saved registers. hl builds a Linux rt_sigframe on the guest stack to run the handler; if that
 // frame is laid flush at (or above) the interrupted SP it overlaps the still-live interrupted frame and
 // clobbers a stack return address -> the classic influxd/victoria-metrics SIGSEGV storm.
 //

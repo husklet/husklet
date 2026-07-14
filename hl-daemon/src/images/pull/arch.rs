@@ -25,8 +25,8 @@ pub(crate) fn docker_arch(g: Guest) -> &'static str {
     }
 }
 
-/// A docker `--platform` value mapped to dd's arch label, if recognized. OCI platform strings are
-/// `os/arch[/variant]`; dd only runs Linux guests, so an explicit OS prefix MUST be `linux` — a
+/// A docker `--platform` value mapped to hl's arch label, if recognized. OCI platform strings are
+/// `os/arch[/variant]`; hl only runs Linux guests, so an explicit OS prefix MUST be `linux` — a
 /// non-Linux request (`windows/amd64`, `nonsense/amd64`) is rejected (`None`) rather than silently
 /// mapped to the matching arch. Accepted forms: a bare `<arch>` (no OS prefix), `linux/<arch>`, or
 /// `linux/<arch>/<variant>` (a trailing variant like `.../arm64/v8` must not hide the arch).
@@ -88,7 +88,7 @@ mod arch_map_tests {
         assert_eq!(docker_arch(guest_of(hl_images::Arch::LinuxAarch64)), "arm64");
     }
 
-    // ---- platform_arch: docker --platform string -> dd arch label ----
+    // ---- platform_arch: docker --platform string -> hl arch label ----
     #[test]
     fn platform_arch_amd64_aliases() {
         assert_eq!(platform_arch(Some("linux/amd64")), Some("amd64"));
@@ -111,12 +111,12 @@ mod arch_map_tests {
         assert_eq!(platform_arch(Some("")), None);
         assert_eq!(platform_arch(Some("windows/riscv")), None);
         assert_eq!(platform_arch(Some("banana")), None);
-        // 32-bit arm (`arm`/`v7`) is not a supported dd arch -> None.
+        // 32-bit arm (`arm`/`v7`) is not a supported hl arch -> None.
         assert_eq!(platform_arch(Some("linux/arm/v7")), None);
     }
 
     // Finding 19: a non-Linux OS prefix must be REJECTED, not silently mapped to the matching arch.
-    // dd only runs Linux guests, so `windows/amd64` / `nonsense/amd64` are None; only `linux/<arch>`
+    // hl only runs Linux guests, so `windows/amd64` / `nonsense/amd64` are None; only `linux/<arch>`
     // (or a bare `<arch>`) is accepted.
     #[test]
     fn platform_arch_rejects_non_linux_os_prefix() {

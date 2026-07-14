@@ -1,13 +1,13 @@
 /* hl-shim-vk dlopen smoke test — the Vulkan analogue of hl-shim-cuda's tests/smoke.c.
  *
  * A plain C program (NOT linked against the ICD, and NOT going through a Vulkan loader) dlopen()s the
- * built libvk_dd.so and drives it exactly the way the Vulkan **loader** would: negotiate the loader<->
+ * built libvk_hl.so and drives it exactly the way the Vulkan **loader** would: negotiate the loader<->
  * ICD interface, resolve entry points through `vk_icdGetInstanceProcAddr`, create an instance,
  * enumerate physical devices, and read the device name. This proves the cdylib is a valid ICD drop-in
  * — the private loader<->driver protocol works and the "dd Metal (Vulkan)" device enumerates — even on
  * a host without a Vulkan loader installed.
  *
- *   build+run: cc tests/smoke.c -ldl -o /tmp/vk_smoke && /tmp/vk_smoke <path-to-libvk_dd.so>
+ *   build+run: cc tests/smoke.c -ldl -o /tmp/vk_smoke && /tmp/vk_smoke <path-to-libvk_hl.so>
  *
  * The ICD/loader ABI mirrored here is ported from Vulkan-Loader docs/LoaderDriverInterface.md +
  * include/vulkan/vk_icd.h (the same source hl-shim-vk/src/icd.rs is ported from).
@@ -41,7 +41,7 @@ static const char *find_device_name(const unsigned char *props, size_t len) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <libvk_dd.so>\n", argv[0]);
+        fprintf(stderr, "usage: %s <libvk_hl.so>\n", argv[0]);
         return 2;
     }
     void *h = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
@@ -116,7 +116,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* 5) Read the physical-device name and confirm it is the dd device. */
+    /* 5) Read the physical-device name and confirm it is the hl device. */
     unsigned char props[1024];
     memset(props, 0, sizeof props);
     getProps(phys[0], props);

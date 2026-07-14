@@ -1756,7 +1756,7 @@ pub fn run_executor(sock_path: String) {
 /// `HL_GPU_BACKEND=wgpu` host executor. Renders each guest frame's IR through `hl_gpu_wgpu::WgpuBackend`
 /// straight into the guest's zero-copy IOSurface, which the compositor's `blit_fenced` then reads unchanged.
 ///
-/// Device sharing (the zero-copy AND tear-free contract): the wgpu `Device`/`Queue` are built OVER dd's
+/// Device sharing (the zero-copy AND tear-free contract): the wgpu `Device`/`Queue` are built OVER hl's
 /// process-shared `MTLDevice` (`crate::metal::shared_device()`) via wgpu-hal `device_from_raw`/
 /// `queue_from_raw` (`WgpuBackend::from_shared_mtl_device`). Because the wgpu render queue and the
 /// compositor's blit queue now live on that ONE device, they synchronize with the SAME cross-queue
@@ -1802,7 +1802,7 @@ fn run_executor_wgpu(sock_path: String) {
         s: &mut UnixStream,
         global_budget: hl_gpu::limits::GlobalBudget,
     ) -> std::io::Result<()> {
-        // Build the wgpu backend OVER dd's process-shared MTLDevice, so the wgpu render queue and the
+        // Build the wgpu backend OVER hl's process-shared MTLDevice, so the wgpu render queue and the
         // compositor's blit queue share one device and can be fenced with the SAME cross-queue MTLEvents
         // (the tear-free contract — see the fn doc). One backend per connection isolates guest id namespaces.
         let Some(shared) = crate::metal::shared_device() else {
@@ -2733,7 +2733,7 @@ impl GpuBackend for MetalBackend {
         // render-target texture ids bound, split into OFFSCREEN (content tiles — not the present surface)
         // vs SURFACE (the presented IOSurface), plus the pass/draw counts. This splits the multi-proc
         // content-white wall: if the gpu-process ever binds an offscreen content target WITH draws, the
-        // renderer's raster IS reaching the RasterDecoder (renderer/paint issue upstream of dd); if the
+        // renderer's raster IS reaching the RasterDecoder (renderer/paint issue upstream of hl); if the
         // frame only ever binds the present surface (no offscreen content targets / no offscreen draws),
         // the content raster never arrives = a GPU command-buffer TRANSPORT dormancy in the engine.
         if exec_debug() {

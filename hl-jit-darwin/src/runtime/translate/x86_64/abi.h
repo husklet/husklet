@@ -16,7 +16,7 @@
 #define G_RET(c) ((c)->r[0])               // rax
 
 // seccomp seam: the NATIVE audit arch + the RAW guest syscall number the seccomp cBPF program is run
-// against (os/linux/seccomp.c). The filter expects the x86-64 syscall number (rax), NOT dd's canonical
+// against (os/linux/seccomp.c). The filter expects the x86-64 syscall number (rax), NOT hl's canonical
 // mapping -- a guest's own filter is written against its ISA's numbers. AUDIT_ARCH_X86_64 = EM_X86_64(62)
 // | __AUDIT_ARCH_64BIT | _LE = 0xC000003E.
 #define G_SECCOMP_ARCH 0xC000003Eu

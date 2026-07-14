@@ -1,4 +1,4 @@
-// dd/runtime/os/linux -- sentry process-split: the untrusted-guest isolation trust boundary.
+// hl/runtime/os/linux -- sentry process-split: the untrusted-guest isolation trust boundary.
 //
 // THREAT MODEL. The whole guest->host authority crossing is run_guest()->service(c). A malicious
 // translated guest can forge any register state at a syscall, so service() is the one place that

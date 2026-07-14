@@ -78,7 +78,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
     // against a real struct seccomp_data on every syscall (os/linux/seccomp.c, gated in service()), honouring
     // the program's return action (ALLOW/ERRNO/KILL_PROCESS/KILL_THREAD/TRAP/TRACE/LOG). SET_MODE_STRICT is
     // likewise enforced (only read/write/exit/rt_sigreturn). Filters are per-thread, stacked, inherited across
-    // fork and preserved across dd's in-process execve -- matching Linux's SECCOMP_FILTER semantics.
+    // fork and preserved across hl's in-process execve -- matching Linux's SECCOMP_FILTER semantics.
     case 277: { // seccomp(op, flags, args)
         unsigned op = (unsigned)a0;
         if (op == HL_SECCOMP_SET_MODE_FILTER) {
@@ -91,8 +91,8 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         }
         break;
     }
-    // ptrace(2): real in-dd tracer/tracee coordination. dd emulates the ptrace relationship
-    // BETWEEN two guest processes (both run translated under dd) over a shared arena keyed on guest pids;
+    // ptrace(2): real in-hl tracer/tracee coordination. hl emulates the ptrace relationship
+    // BETWEEN two guest processes (both run translated under hl) over a shared arena keyed on guest pids;
     // see os/linux/syscall/ptrace.c. svc_ptrace sets G_RET (0 / -errno) itself.
     case 117: // ptrace(request, pid, addr, data)
         G_RET(c) = (uint64_t)(int64_t)svc_ptrace(c, a0, a1, a2, a3);
@@ -114,7 +114,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 break;
             }
         }
-        char tn[] = "/tmp/.ddmemfdXXXXXX";
+        char tn[] = "/tmp/.hlmemfdXXXXXX";
         int fd = mkstemp(tn);
         if (fd >= 0) {
             unlink(tn);
@@ -239,7 +239,7 @@ static int svc_rare(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
                 G_RET(c) = (uint64_t)(int64_t)(-ESRCH);
                 break;
             }
-            // Cross-process: translate Linux->macOS signo (the target dd engine listens on the macOS number;
+            // Cross-process: translate Linux->macOS signo (the target hl engine listens on the macOS number;
             // see kill, case 129). Untranslated, a divergent signal (SIGUSR1/2, SIGURG, ...) is lost.
             G_RET(c) = kill(pid, sig_l2m(sig)) < 0 ? (uint64_t)(-errno) : 0;
         }

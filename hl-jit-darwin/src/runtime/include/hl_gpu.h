@@ -1,4 +1,4 @@
-// dd GPU buffer sharing ABI (GPU rung 2): the guest↔engine contract for allocating a HOST-backed,
+// hl GPU buffer sharing ABI (GPU rung 2): the guest↔engine contract for allocating a HOST-backed,
 // zero-copy GPU buffer. A guest opens /dev/dri/renderD128 and issues HL_IOCTL_GPU_ALLOC; the engine
 // host-allocates an IOSurface (macOS), and — because guest-VA == host-VA in this in-process JIT — hands
 // the IOSurface's base pointer straight back as the guest buffer (no mmap, no copy). The engine also

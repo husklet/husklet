@@ -61,7 +61,7 @@ int main(void) {
 
     // ---- G2: rename of a lower-only POPULATED directory must preserve its whole subtree ----
     // Real overlayfs: `mv` succeeds and every child (incl. nested) moves to the destination; the source
-    // disappears. The dd bug materialised the lower dir as an EMPTY upper and moved that -> data loss.
+    // disappears. The hl bug materialised the lower dir as an EMPTY upper and moved that -> data loss.
     int rr = rename("/g2src", "/g2dst");
     printf("g2_rename_ret=%d\n", rr < 0 ? -1 : 0);
     printf("g2_dst_f1=%s\n", rd("/g2dst/f1", buf, sizeof buf) >= 0 ? buf : "<none>");
@@ -112,7 +112,7 @@ int main(void) {
     unlink("/opqdir/stale2");
     rmdir("/opqdir");
     // After `rm -rf`, a lower-backed dir must be truly GONE (real overlayfs drops a whiteout and removes
-    // the whole upper copy). The dd bug left a non-empty upper dir behind (rmdir couldn't remove it while
+    // the whole upper copy). The hl bug left a non-empty upper dir behind (rmdir couldn't remove it while
     // it still held child `.wh.` markers), so `/opqdir` wrongly still resolved as existing.
     printf("g1r_gone_after_rm=%d\n", access("/opqdir", F_OK) < 0 ? 1 : 0);
     mkdir("/opqdir", 0755);
@@ -265,7 +265,7 @@ int main(void) {
 
     // ==== N-series (#239/#269): STALE POSITIVE after removing a lower-backed directory ====
     // Real overlayfs whiteouts the removed dir, which hides EVERY read-only lower child beneath it: a later
-    // stat/access of a child must be ENOENT. dd resolved a whole path inside one layer, so it kept finding
+    // stat/access of a child must be ENOENT. hl resolved a whole path inside one layer, so it kept finding
     // the lower child through the whited-out parent -> the child wrongly stat'd as present after `rm -r`
     // (#239), and a merged view under an opaque/removed parent leaked stale lower entries (#269). Values
     // verified against `docker` on real overlayfs (fixtures baked into an image lower layer).

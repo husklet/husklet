@@ -7,9 +7,9 @@
 //! `printf '...%d...\n...'` — the SHELL's printf eats the `%d`/`\n` and corrupts the source (the old
 //! seed produced `printf("sum=0<newline>",s)`). Always write sources via a QUOTED heredoc
 //! (`cat > /m.c <<'EOF' … EOF`) so nothing is interpreted. The harness wraps each `.exec` script in an
-//! outer `<<'DDEOF'` heredoc, so a nested `<<'EOF'` here is passed verbatim to the inner shell.
+//! outer `<<'HLEOF'` heredoc, so a nested `<<'EOF'` here is passed verbatim to the inner shell.
 //!
-//! XFAIL POLICY (GAPS.md) — post-#333: NO xfails. The whole cluster now passes on both linux arches on dd.
+//! XFAIL POLICY (GAPS.md) — post-#333: NO xfails. The whole cluster now passes on both linux arches on hl.
 //! The "exec-loader-noent" gap was a MISDIAGNOSIS: the ELF loader / exec-of-child path was never broken.
 //! Two real root causes were found and FIXED:
 //!   1. go/rust "not found" / rustup-no-default = the pre-seeded poc images had DROPPED their Config.Env
@@ -21,7 +21,7 @@
 //!      HIGH while the driver compared it against a LOW-materialized address → gcc_unreachable. Fixed in
 //!      translate/x86_64/elf.c by restricting the blind .data rebasing to STATIC non-PIE images (musl jq /
 //!      busybox still need it); DYNAMIC non-PIE (glibc gcc/cc1/ld) is low-consistent and must not be rebased.
-//! All cases pass on the Real oracle AND on dd (both arches) — hence no `.xfail()` remains.
+//! All cases pass on the Real oracle AND on hl (both arches) — hence no `.xfail()` remains.
 
 use crate::scenario::{sgroup, ScenGroup};
 

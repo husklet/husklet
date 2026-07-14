@@ -4,7 +4,7 @@
 //!
 //! ## The rendezvous (oracle: `hl-tests/guests/gl_shim.c` `wl_commit`, ~l.1615)
 //! hl-display (`server.rs`) composites a dma-buf whose `modifier_hi & 0xffff == HL_DMABUF_MOD_MAGIC`
-//! (`0x6464`) and `modifier_lo == <dd surface id>` by pulling the IOSurface that the GPU-exec channel
+//! (`0x6464`) and `modifier_lo == <hl surface id>` by pulling the IOSurface that the GPU-exec channel
 //! already rendered into (our `ExecConn` `Cmd::Present` in `vkQueuePresentKHR`). So present is:
 //!   `zwp_linux_dmabuf_v1.create_params` → `params.add(fd, plane=0, offset=0, stride, mod_hi=0x6464,
 //!    mod_lo=surface.id)` → `params.create_immed(w,h,XRGB8888)` → `wl_surface.attach(buffer)` →
@@ -285,7 +285,7 @@ extern "C" fn on_global_remove(_data: *mut c_void, _registry: *mut c_void, _name
 
 // ---- the present itself --------------------------------------------------------------------------
 
-/// Commit the executor-rendered IOSurface `surf` (its dma-buf fd + dd surface id) to the app's
+/// Commit the executor-rendered IOSurface `surf` (its dma-buf fd + hl surface id) to the app's
 /// `wl_surface` on the app's `wl_display`. Returns false if wayland/dmabuf is unavailable (off-guest).
 pub fn present(display: usize, surface: usize, surf: &Surface) -> bool {
     let dbg = std::env::var_os("HL_SHIM_DEBUG").is_some();

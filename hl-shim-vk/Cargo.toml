@@ -18,12 +18,12 @@
 name = "hl-shim-vk"
 version = "0.1.0"
 edition = "2021"
-description = "Guest Vulkan ICD producing libvk_dd.so: vk.xml-generated vk* entry-point surface + loader-ICD interface (vk_icdGetInstanceProcAddr / negotiation) over hl-shim-common's shared hl-gpu IR transport."
+description = "Guest Vulkan ICD producing libvk_hl.so: vk.xml-generated vk* entry-point surface + loader-ICD interface (vk_icdGetInstanceProcAddr / negotiation) over hl-shim-common's shared hl-gpu IR transport."
 license = "MIT"
 
 [lib]
-name = "vk_dd"
-# cdylib = the deployed ICD (libvk_dd.so, named by icd.json's library_path); rlib so the smoke/anti-drift
+name = "vk_hl"
+# cdylib = the deployed ICD (libvk_hl.so, named by icd.json's library_path); rlib so the smoke/anti-drift
 # tests and other Rust can link it. The rlib is build-time-only; the deployed .so is unaffected.
 crate-type = ["cdylib", "rlib"]
 

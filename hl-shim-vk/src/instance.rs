@@ -1,7 +1,7 @@
 //! Instance-level + physical-device entry points (real bodies).
 //!
 //! Ported from MoltenVK's `MVKInstance` / `MVKPhysicalDevice` object model and the Vulkan spec
-//! semantics; the property values come from [`crate::state`] (the "dd Metal (Vulkan)" device). The
+//! semantics; the property values come from [`crate::state`] (the "hl Metal (Vulkan)" device). The
 //! big out-structs (`VkPhysicalDeviceProperties`, …) are `ash::vk` types so the ABI is spec-exact.
 
 use crate::handle::Dispatchable;
@@ -299,7 +299,7 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
                 d.driver_id = vk::DriverId::MESA_LLVMPIPE; // a valid enum; dd has no registered id
                 write_cstr(&mut d.driver_name, "dd");
                 write_cstr(&mut d.driver_info, "dd Metal (Vulkan) 0.1");
-                // Matches the advertised 1.4 core level (the API version this ICD targets; dd is not a
+                // Matches the advertised 1.4 core level (the API version this ICD targets; hl is not a
                 // formally-submitted CTS-conformant implementation).
                 d.conformance_version = vk::ConformanceVersion {
                     major: 1,

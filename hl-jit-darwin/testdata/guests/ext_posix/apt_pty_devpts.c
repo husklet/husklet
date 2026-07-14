@@ -1,6 +1,6 @@
 // #411 REGRESSION GUARD (registry-first master detection + devpts round-trip). apt/dpkg StartPtyMagic
 // sets termios + winsize on the pty MASTER while NO slave is open, then a forked child opens the slave
-// and reads the size back. On macOS a master ENOTTYs every termios/winsize ioctl, so dd must recognize
+// and reads the size back. On macOS a master ENOTTYs every termios/winsize ioctl, so hl must recognize
 // the master and answer from its per-master g_ptm_* cache (returning success, exactly like Linux). The
 // engine's authoritative signal for "this fd is a master" is its devpts registry (stamped at /dev/ptmx
 // open), so this guard opens NO slave before the master ops (the master's isatty()==1 on macOS, which is

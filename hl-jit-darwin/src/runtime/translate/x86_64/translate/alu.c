@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- integer ALU instruction class, lifted VERBATIM out of translate_block's
+// hl/runtime/frontend/x86_64 -- integer ALU instruction class, lifted VERBATIM out of translate_block's
 // one-byte switch (behavior-preserving move): ADD/OR/ADC/SBB/AND/SUB/XOR/CMP primary /r forms (00..3D),
 // the acc,imm forms (04/05..3C/3D), group1 r/m,imm (80/81/83), and TEST (84/85, A8/A9). Flag production is
 // unchanged -- do_alu()/narrow_adcsbb() still drive the lazy-flag state (g_fl_pending) exactly as before;

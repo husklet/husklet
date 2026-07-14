@@ -114,7 +114,7 @@ mod tests {
     }
     #[test]
     fn opaque_clears_lower_content() {
-        // dd flattens all layers into one rootfs. Simulate a rootfs already holding LOWER content in
+        // hl flattens all layers into one rootfs. Simulate a rootfs already holding LOWER content in
         // `app/`, then apply a new layer (a tar) that replaces `app/` wholesale via a `.wh..wh..opq`
         // marker. Real overlayfs would hide every lower entry of `app/`; the flattened image must too.
         let base = std::env::temp_dir().join(format!("hl-opq-test-{}", std::process::id()));

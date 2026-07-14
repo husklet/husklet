@@ -1,6 +1,6 @@
 // In-process renderer-shaped model: an IO epoll pump (SEQPACKET channel + ScheduleWork eventfd, EPOLLET)
 // that, per inbound message, dispatches work to one of N worker threads parked on a condvar (glibc
-// condvar => FUTEX_WAIT under dd). Mirrors the observed dormant Chrome-renderer park state -- several
+// condvar => FUTEX_WAIT under hl). Mirrors the observed dormant Chrome-renderer park state -- several
 // threads in FUTEX_WAIT plus the epoll pump -- and exercises the pump->worker handoff that couples the
 // epoll-readiness wakeup to a futex wakeup (no existing gate combines the two). A missed wakeup anywhere
 // (eventfd edge, socket edge, or the FUTEX handoff) stalls the pipeline; a watchdog turns any stall into
@@ -27,7 +27,7 @@ static int chan[2], wake_fd, ack_fd;
 static _Atomic long g_done_rounds = 0;
 static _Atomic int g_quit = 0;
 
-// worker dispatch: a tiny queue slot per worker + condvar (glibc condvar => FUTEX under dd)
+// worker dispatch: a tiny queue slot per worker + condvar (glibc condvar => FUTEX under hl)
 struct worker {
     pthread_mutex_t m;
     pthread_cond_t cv;

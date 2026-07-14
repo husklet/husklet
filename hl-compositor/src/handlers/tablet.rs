@@ -4,7 +4,7 @@
 //! `handlers::seat` (it was required for `wp_cursor_shape`'s tablet-tool cursor routing).
 //!
 //! ## Host policy (no tablet hardware)
-//! dd has no stylus/digitizer, so the seat advertises ZERO tablets and tools: a client binds the
+//! hl has no stylus/digitizer, so the seat advertises ZERO tablets and tools: a client binds the
 //! manager, calls `get_tablet_seat(seat)`, obtains a live `zwp_tablet_seat_v2`, and receives no
 //! `tablet_added` — the exact protocol picture of a seat without a tablet, which is what every
 //! toolkit's no-tablet path already handles. Hot-plugging a tablet later is a single
@@ -25,7 +25,7 @@ impl HlState {
         TabletManagerState::new::<Self>(dh)
     }
 
-    /// Advertise a tablet on the primary seat (a real digitizer hot-plug would call this). dd adds none
+    /// Advertise a tablet on the primary seat (a real digitizer hot-plug would call this). hl adds none
     /// by default — this exists so the composed delegate can be proven to deliver `tablet_added` to a
     /// bound `zwp_tablet_seat_v2`, and so a future host tablet bridge has a ready seam.
     pub fn add_tablet(&mut self, name: &str) {

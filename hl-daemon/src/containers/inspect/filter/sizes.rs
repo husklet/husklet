@@ -1,7 +1,7 @@
 //! `docker ps --size` accounting: the SizeRw/SizeRootFs on-disk `du` walk (`container_sizes`).
 use super::*;
 
-/// `docker ps --size` -> (SizeRw, SizeRootFs). dd gives each container a private copy-on-write UPPER over
+/// `docker ps --size` -> (SizeRw, SizeRootFs). hl gives each container a private copy-on-write UPPER over
 /// the read-only image rootfs, so SizeRw is the `du`-style size of that writable upper layer (matching
 /// docker, which measures the container's writable diff) and SizeRootFs is the full image rootfs walk.
 /// The host-fs `macos` image (rootfs "/") is skipped -- walking it would be catastrophic, exactly as

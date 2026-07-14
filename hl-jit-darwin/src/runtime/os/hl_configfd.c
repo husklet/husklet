@@ -1,9 +1,9 @@
-// dd/runtime/os -- the `--configfd` launch bridge (unity-included once into each engine TU).
+// hl/runtime/os -- the `--configfd` launch bridge (unity-included once into each engine TU).
 //
 // The Rust host serializes the container into the position-independent `hl_config` wire buffer
 // (include/hl_api.h) and `posix_spawn`s the arch-matching engine as `<engine> --configfd <fd>`,
 // streaming that buffer over `fd`. This is the ENGINE side: read + validate the buffer, then translate
-// every populated field back into the exact `HL_*`/`DDJIT_*` environment variable the existing env-driven
+// every populated field back into the exact `HL_*`/`HL_JIT_*` environment variable the existing env-driven
 // setup (container_init() in targets/*.c, the guest-env reader in os/linux/elf.c, the pcache/sentry
 // readers) already consumes, rebuild the guest argv, and hand off to hl_run() -- the identical call the
 // normal env/flag launch makes. Reusing the env path means ZERO duplication of container setup logic.
@@ -30,13 +30,13 @@ static int cfd_read_full(int fd, void *buf, size_t n) {
         if (r < 0) {
             if (errno == EINTR) continue;
             if (getenv("HL_CONFIGFD_DEBUG"))
-                fprintf(stderr, "[DDCONFIGFD] fd=%d read error got=%zu want=%zu errno=%d\n", fd, got, n, errno);
+                fprintf(stderr, "[HLCONFIGFD] fd=%d read error got=%zu want=%zu errno=%d\n", fd, got, n, errno);
             return -1;
         }
         if (r == 0) {
             if (getenv("HL_CONFIGFD_DEBUG")) {
                 int fl = fcntl(fd, F_GETFD, 0);
-                fprintf(stderr, "[DDCONFIGFD] fd=%d eof got=%zu want=%zu fdflags=%d errno=%d\n", fd, got, n, fl, errno);
+                fprintf(stderr, "[HLCONFIGFD] fd=%d eof got=%zu want=%zu fdflags=%d errno=%d\n", fd, got, n, fl, errno);
             }
             return -1;
         } // premature EOF
@@ -52,7 +52,7 @@ static const char *cfd_str(const char *pool, uint32_t pool_len, uint32_t off) {
     return pool + off;
 }
 
-// Read a `hl_config` (+ its trailing string pool) from `fd`, re-hydrate the engine's HL_*/DDJIT_* env,
+// Read a `hl_config` (+ its trailing string pool) from `fd`, re-hydrate the engine's HL_*/HL_JIT_* env,
 // rebuild the guest argv, and dispatch to hl_run(). The spawn shim normally enters through
 // hl_run_configfile() below; --configfd remains supported for direct/debug launches. Returns hl_run()'s
 // exit code, or a nonzero code on any read/validation failure. Single-shot per process.

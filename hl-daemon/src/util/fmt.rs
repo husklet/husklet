@@ -74,7 +74,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 /// Parse a docker `--since`/`--until` / logs time filter into unix SECONDS. Docker accepts several forms;
-/// dd previously honored only integer seconds, so RFC3339 strings and Go durations disabled the filter
+/// hl previously honored only integer seconds, so RFC3339 strings and Go durations disabled the filter
 /// (logs) or turned a bounded event query into an unbounded stream. Handles:
 ///   - Unix `seconds[.nanos]` (`"1700000000"`, `"1700000000.5"`) — the integer seconds.
 ///   - RFC3339 / RFC3339Nano (`"2017-01-05T00:36:05Z"`, `"...05.123456789Z"`, with `±HH:MM` offset).
@@ -102,7 +102,7 @@ pub(crate) fn parse_docker_ts(s: &str, now: i64) -> Option<i64> {
             return intpart.parse::<i64>().ok();
         }
     }
-    // RFC3339: begins with `YYYY-MM-DDT`.
+    // RFC3339: begins with `YYYY-MM-HLT`.
     if s.len() >= 20 && s.as_bytes().get(4) == Some(&b'-') && (s.contains('T') || s.contains('t')) {
         return parse_rfc3339(s);
     }

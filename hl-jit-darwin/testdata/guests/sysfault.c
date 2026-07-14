@@ -3,7 +3,7 @@
 // struct-fill (memcpy/memset), NOT via a host syscall, must surface as -EFAULT to the guest — never fault
 // the engine, never wrongly succeed. This is the slow (svc_*) dispatch path; the x86 vDSO fast clock path
 // is covered separately by clockefault.c (#218). RAW syscalls (SYS_*) so we bypass any libc pointer check
-// and hit dd's dispatch directly (x86 numbers are normalized to the aarch64 table inside dd). Diffed
+// and hit hl's dispatch directly (x86 numbers are normalized to the aarch64 table inside hl). Diffed
 // byte-exact vs the native oracle (.oracle()); before the fix these returned 0 (or crashed the engine).
 //
 //   nanosleep(bad,·)          -> EFAULT     getrusage(SELF,bad)   -> EFAULT

@@ -1,7 +1,7 @@
 // POSIX mq_notify fidelity — diffed vs the native aarch64 oracle only. (qemu-user's mq_notify does NOT
-// faithfully emulate the SIGEV notification, so it is not a usable x86 oracle; dd runs the SAME arch-
+// faithfully emulate the SIGEV notification, so it is not a usable x86 oracle; hl runs the SAME arch-
 // normalized handler for both guest arches, so the aarch64 real-kernel diff validates the x86 path too.)
-// macOS has no POSIX mqueue kernel object; dd emulates a named in-process priority queue and delivers the
+// macOS has no POSIX mqueue kernel object; hl emulates a named in-process priority queue and delivers the
 // one-shot notification on the queue's empty->non-empty edge. Exercises: SIGEV_NONE register -> 0, a second
 // register on the owned queue -> EBUSY, unregister (NULL) -> 0, and a SIGEV_SIGNAL registration that fires
 // an SI_MESGQ signal carrying the registered sigev_value when a message arrives on the empty queue.

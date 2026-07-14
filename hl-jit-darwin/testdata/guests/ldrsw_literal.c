@@ -1,7 +1,7 @@
 // TASK #251 regression: aarch64 PC-relative literal-load family rewrite.
 //
 // A literal load (LDR/LDRSW/PRFM literal, LDR-literal SIMD) reads a constant from an address computed
-// relative to the GUEST PC. dd translates each block to a DIFFERENT host address, so a verbatim emit would
+// relative to the GUEST PC. hl translates each block to a DIFFERENT host address, so a verbatim emit would
 // read from the wrong (host-PC-relative) location. The GPR and SIMD LDR-literal forms were already
 // rewritten to materialize the guest-absolute literal address; LDRSW (literal) (opc=10, V=0, top byte
 // 0x98, the sign-extending 32->64 word load compilers emit for switch/jump tables) was MISSING from that
@@ -23,7 +23,7 @@ int main(void) {
     uint64_t x64 = 0, dbits = 0, q_lo = 0, q_hi = 0;
 
     // One volatile asm block with its own literal pool. `b 1f` jumps over the pool; every load references
-    // its pool entry PC-relative (backward), exactly the encoding dd must rewrite to the guest address.
+    // its pool entry PC-relative (backward), exactly the encoding hl must rewrite to the guest address.
     __asm__ volatile(
         "b      1f\n"
         ".p2align 4\n"

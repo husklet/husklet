@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- opt8 persistent translated-code cache (HL_JIT_PCACHE=1; default OFF).
+// hl/runtime/frontend/x86_64 -- opt8 persistent translated-code cache (HL_JIT_PCACHE=1; default OFF).
 //
 // Idea: cold start of a short-lived container is dominated by translating the dynamic linker (musl
 // ld.so) + the program's startup path -- ~1000 blocks for `busybox echo`. That work is identical on
@@ -219,9 +219,9 @@ static uint64_t pcache_id_of(const char *path) {
     return h;
 }
 
-// A per-engine-build tag mixed into every cache id so the cache self-invalidates across dd versions:
+// A per-engine-build tag mixed into every cache id so the cache self-invalidates across hl versions:
 // host code emitted by a DIFFERENT engine build is never loaded (loading it would crash). __DATE__/
-// __TIME__ change on every (re)build, so a user who updates dd transparently gets a fresh cache --
+// __TIME__ change on every (re)build, so a user who updates hl transparently gets a fresh cache --
 // they never need to clear ~/.hl/pcache by hand. (Old files just go unreferenced; harmless cruft.)
 static uint64_t pcache_engine_id(void) {
     uint64_t h = 1469598103934665603ull;

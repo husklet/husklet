@@ -1,4 +1,4 @@
-//! # hljit — the dd VM-less JIT container runtime + its bindings.
+//! # hljit — the hl VM-less JIT container runtime + its bindings.
 //!
 //! The JIT runs a Linux container by translating its code and servicing its syscalls in userspace — no
 //! VM. The C runtime (`src/runtime/`) is compiled by `build.rs` into one codesigned binary per guest

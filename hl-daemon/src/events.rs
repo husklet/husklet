@@ -122,7 +122,7 @@ pub(crate) struct EventsQ {
     pub(crate) until: Option<String>,
 }
 
-/// The parsed, best-effort subset of `docker events` filters dd honors.
+/// The parsed, best-effort subset of `docker events` filters hl honors.
 #[derive(Default, Clone)]
 struct Filters {
     types: Vec<String>,      // `type=` (container/image/network/volume/...)
@@ -282,7 +282,7 @@ pub(crate) async fn events(State(a): State<App>, Query(q): Query<EventsQ>) -> Re
     }
 
     // `--until <t>` makes `docker events` a BOUNDED command: it replays matching events up to `t` then
-    // closes the stream and the CLI exits. dd keeps no historical event store, so an `--until` already in
+    // closes the stream and the CLI exits. hl keeps no historical event store, so an `--until` already in
     // the past has nothing to replay and closes IMMEDIATELY (an unbounded live stream here would hang the
     // client forever, e.g. `docker events --until $(date +%s)`); a future `--until` ends the live stream
     // once wall-clock passes it. Without `--until` the stream stays unbounded (ends on client disconnect).
@@ -465,7 +465,7 @@ mod filter_tests {
         assert!(fvol.matches(&vol_ev));
         assert!(!fvol.matches(&unrelated));
 
-        // scope=swarm narrows on the event scope (dd only emits local).
+        // scope=swarm narrows on the event scope (hl only emits local).
         let fscope = Filters::parse(&Some("{\"scope\":[\"swarm\"]}".into())).unwrap();
         let local_ev = json!({"Type":"container","Action":"start","scope":"local",
             "Actor":{"ID":"c1","Attributes":{}}});

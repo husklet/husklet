@@ -1,7 +1,7 @@
 //! `hl run` / `hl <image>` — launch a container with *easy-access* defaults:
 //! the current directory mounted at the same path and used as the working dir, host networking, and an
 //! interactive shell when no command is given. We drive the hl daemon through the stock `docker` CLI
-//! (pointed at dd's socket), so the streaming/TTY behaviour is exactly docker's.
+//! (pointed at hl's socket), so the streaming/TTY behaviour is exactly docker's.
 
 use std::io::IsTerminal;
 use std::process::Command;
@@ -53,7 +53,7 @@ pub fn parse(raw: Vec<String>) -> Result<RunArgs, String> {
     })
 }
 
-/// Run a container with the easy-access defaults, by invoking `docker` against dd's socket.
+/// Run a container with the easy-access defaults, by invoking `docker` against hl's socket.
 pub fn run(args: RunArgs) -> i32 {
     if !docker_present() {
         eprintln!(

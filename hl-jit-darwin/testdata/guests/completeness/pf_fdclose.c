@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-/* After close(fd), Linux makes /proc/self/fd/N disappear -- lstat/access/readlink all ENOENT. dd reported
+/* After close(fd), Linux makes /proc/self/fd/N disappear -- lstat/access/readlink all ENOENT. hl reported
    the closed fd as still live via lstat/access (only readlink ENOENT'd), creating stale fd state. */
 
 int main(void) {

@@ -1,6 +1,6 @@
-// dd/runtime/os -- container config parsing: the strict numeric trust boundary (see docs/LAUNCH.md).
+// hl/runtime/os -- container config parsing: the strict numeric trust boundary (see docs/LAUNCH.md).
 //
-// dd is the actual runtime that executes untrusted guest images AND is reachable directly via the
+// hl is the actual runtime that executes untrusted guest images AND is reachable directly via the
 // main()/`docker` CLI (bypassing the typed Rust binding), so it must NOT trust its config input.
 // Every HL_* numeric value is re-validated here and a bad value FAILS LOUD: a clear message to stderr
 // + nonzero exit, never a silent coercion to a privileged/wrong default. The classic footgun this
@@ -17,7 +17,7 @@
 #include <string.h>
 
 // Parse a base-10 unsigned integer in [lo, hi]. Rejects empty / non-numeric / trailing garbage /
-// negative / overflow. On ANY violation: print "dd: invalid <name>..." to stderr and exit nonzero.
+// negative / overflow. On ANY violation: print "hl: invalid <name>..." to stderr and exit nonzero.
 static unsigned long long hl_parse_u64(const char *name, const char *s, unsigned long long lo, unsigned long long hi) {
     if (!s || !*s || *s == '-') {
         fprintf(stderr, "dd: invalid %s=%s: not a number\n", name, s ? s : "");

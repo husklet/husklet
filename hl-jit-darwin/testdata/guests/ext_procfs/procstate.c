@@ -1,5 +1,5 @@
 // /proc/<pid>/stat field 3 (task run state) CROSS-PROCESS fidelity (#404). A child blocked in pause() is
-// interruptible-sleep 'S' on real Linux, NOT 'R'; a busy child is 'R'. dd used to synthesize this field
+// interruptible-sleep 'S' on real Linux, NOT 'R'; a busy child is 'R'. hl used to synthesize this field
 // from the macOS process status (SRUN), which can't express "all threads asleep in a syscall", so a paused
 // child wrongly read 'R' and LTP's TST_PROCESS_STATE_WAIT (pause01/pause02) timed out. This fixture is the
 // same shape as that LTP poll: the PARENT reads the CHILD's /proc/<pid>/stat and must observe 'S' for a

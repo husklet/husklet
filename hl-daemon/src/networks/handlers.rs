@@ -215,7 +215,7 @@ pub(crate) async fn network_disconnect(
 
 /// Re-emit the LIVE reach-by-name table for a user-defined network after a connect/disconnect, so the
 /// change reaches the in-engine 127.0.0.11 resolvers of running peers AT ONCE — the identical file the
-/// spawn path writes per container start (`/tmp/.ddbr-<netid>/.names`, one `ip\tname` line per endpoint;
+/// spawn path writes per container start (`/tmp/.hlbr-<netid>/.names`, one `ip\tname` line per endpoint;
 /// see runtime/spawn/live.rs and runtime/spawn/net.rs). Without this, `network connect`/`disconnect` on a
 /// running container mutated only daemon state: a connected container stayed unresolvable to live peers,
 /// and a disconnected one's stale name kept resolving, until the peer restarted and re-read its snapshot.

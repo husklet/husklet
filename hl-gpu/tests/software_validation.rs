@@ -360,7 +360,7 @@ fn wait_on_unsignaled_fence_is_error_not_fabricated() {
 #[test]
 fn present_size_mismatch_is_rejected() {
     let mut be = SoftwareBackend::new();
-    be.create_surface(SurfaceId(1), &SurfaceDesc { width: 8, height: 8, format: TextureFormat::Bgra8Unorm, ddp_surface: 1 }).unwrap();
+    be.create_surface(SurfaceId(1), &SurfaceDesc { width: 8, height: 8, format: TextureFormat::Bgra8Unorm, hlp_surface: 1 }).unwrap();
     be.create_texture(TextureId(1), &tex(4, 4, TextureFormat::Bgra8Unorm, texture_usage::PRESENT)).unwrap();
     assert!(matches!(be.present(SurfaceId(1), TextureId(1)), Err(GpuError::Invalid(_))));
 }

@@ -1,4 +1,4 @@
-/* dlopen ABI test for dd's libnvidia-ml.so.1 shim.
+/* dlopen ABI test for hl's libnvidia-ml.so.1 shim.
  *
  * Proves the shim answers the exact NVML call sequence `nvidia-smi` uses, with the
  * seeded (env) values, WITHOUT any GPU — mirroring how the real closed nvidia-smi

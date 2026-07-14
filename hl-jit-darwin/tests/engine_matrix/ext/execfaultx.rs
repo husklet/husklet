@@ -3,7 +3,7 @@
 //!
 //! A compiler DRIVER (gcc/clang) forks and execve's sub-processes (cc1/as/ld/collect2); those exec'd
 //! CHILDREN take guest CPU faults -- some HANDLED via a registered SIGSEGV handler (cc1's fatal-signal
-//! handler, glibc stack-overflow detection), some unhandled. dd must re-establish the faulting thread's
+//! handler, glibc stack-overflow detection), some unhandled. hl must re-establish the faulting thread's
 //! signal + Mach-exception state across fork + in-process execve and deliver both fates exactly as Linux.
 //!
 //! - `execfault` (no CRASHDBG): the driver forks, the child execve's a fresh image and faults. A HANDLED

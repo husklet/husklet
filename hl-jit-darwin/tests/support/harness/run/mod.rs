@@ -52,7 +52,7 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     if let Some(rfs) = &rootfs {
         if !matches!(c.bin, Bin::InRootfs) {
             let leaf = format!(
-                "ddguest_{}_{}_{}",
+                "hlguest_{}_{}_{}",
                 c.name.replace('/', "_"),
                 e.arch(),
                 std::process::id()

@@ -1,4 +1,4 @@
-/* Conformance harness for dd's libcuda.so.1 Driver-API shim.
+/* Conformance harness for hl's libcuda.so.1 Driver-API shim.
  *
  * Drives the FULL guest-facing path an unmodified CUDA app (or cudart) exercises — with NO GPU —
  * across every tier of the shim:
@@ -347,7 +347,7 @@ int main(int argc, char** argv) {
     *(void**)(&GraphCreate) = dlsym(h, "cuGraphCreate");
     CHECK(GraphCreate != NULL, "cuGraphCreate is EXPORTED (dlsym resolves)");
     if (GraphCreate) { void* g = NULL; CHECK(GraphCreate(&g, 0) == CUDA_ERROR_NOT_SUPPORTED, "cuGraphCreate -> NOT_SUPPORTED (honest stub)"); }
-    /* a cubin/ELF image must be rejected: dd executes PTX only */
+    /* a cubin/ELF image must be rejected: hl executes PTX only */
     static const unsigned char FAKE_CUBIN[16] = { 0x7f, 'E', 'L', 'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     CUmodule bogus = NULL; CHECK(ModLoad(&bogus, FAKE_CUBIN) == CUDA_ERROR_INVALID_IMAGE, "cuModuleLoadData(cubin/ELF) -> INVALID_IMAGE");
 

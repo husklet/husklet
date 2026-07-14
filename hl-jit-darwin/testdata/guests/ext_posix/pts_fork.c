@@ -1,6 +1,6 @@
 // #420 REGRESSION GUARD (devpts fork-teardown: /dev/pts/N must resolve while the pair is open ANYWHERE).
 // apt's SetupSlavePtyMagic runs in the forked CHILD: it closes the inherited pty MASTER fd, then opens the
-// slave BY NAME ("/dev/pts/N"), expecting the still-live slave (the PARENT keeps the master open). Under dd
+// slave BY NAME ("/dev/pts/N"), expecting the still-live slave (the PARENT keeps the master open). Under hl
 // the child's master close ran pts_on_close() which freed devpts index N in the child's (COW-private) table,
 // so the child's later open("/dev/pts/N") saw pts_master_fd(N)==-1 and returned ENOENT -> apt printed
 //   "E: Can not write log (Is /dev/pts mounted?)".
@@ -8,7 +8,7 @@
 // child opens the slave fine and its writes reach the parent's master. This guard reproduces exactly that:
 //   parent posix_openpt+grantpt+unlockpt (index N) -> fork -> child closes master, opens /dev/pts/N, writes
 //   a byte -> parent (still holding the master) reads that byte back.
-// PASS (native + fixed dd, both arches): childopen=1 roundtrip=1.  FAIL (pre-#420 dd): childopen=0 roundtrip=0.
+// PASS (native + fixed hl, both arches): childopen=1 roundtrip=1.  FAIL (pre-#420 hl): childopen=0 roundtrip=0.
 #define _DEFAULT_SOURCE
 #define _XOPEN_SOURCE 600
 #include <errno.h>

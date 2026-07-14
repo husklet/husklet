@@ -1,4 +1,4 @@
-/* Clean-room CUDA Driver API ABI declarations for dd's libcuda.so.1 shim.
+/* Clean-room CUDA Driver API ABI declarations for hl's libcuda.so.1 shim.
  *
  * A clean-room re-declaration of the *documented, stable* CUDA Driver API (cuda.h). It is deliberately
  * broad: enough of the surface — types, error codes, attribute/enum values, handle types and the

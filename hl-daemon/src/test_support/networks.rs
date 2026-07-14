@@ -211,7 +211,7 @@ async fn flow_network_endpoint_refcount_lifecycle() {
 
 // "Live Network Connect/Disconnect Mutates Daemon State Only" (P2): connect/disconnect on a running
 // container used to update ONLY g.networks — the LIVE per-user-network reach-by-name table the in-engine
-// 127.0.0.11 resolver reads per DNS query (/tmp/.ddbr-<netid>/.names, written per spawn) was left stale,
+// 127.0.0.11 resolver reads per DNS query (/tmp/.hlbr-<netid>/.names, written per spawn) was left stale,
 // so a connected container was unresolvable to running peers and a disconnected one's name kept resolving
 // until the peer restarted. The handlers now refresh that file on connect AND disconnect, applying the
 // change to the live network. This asserts the file reflects the current endpoint set both ways.
@@ -234,7 +234,7 @@ async fn live_network_connect_disconnect_refreshes_reach_by_name_table() {
         .unwrap()
         .id
         .clone();
-    let names_path = format!("/tmp/.ddbr-{}/.names", &netid[..netid.len().min(40)]);
+    let names_path = format!("/tmp/.hlbr-{}/.names", &netid[..netid.len().min(40)]);
     let _ = std::fs::remove_file(&names_path); // start clean (shared /tmp path)
 
     // Connect web then db — each connect must (re)write the live table with the CURRENT endpoint set.
@@ -369,7 +369,7 @@ async fn flow_events_emitted_across_network_lifecycle() {
 // ---- FLOW 17: network connect IDEMPOTENCY + double disconnect --------------------------------
 // docker contract: a SECOND `network connect` of the same container is a 403/500 ("endpoint ...
 // already exists in network"); a `network disconnect` of a container that is NOT attached is a
-// 500 ("is not connected to network"). dd is LENIENT on both (join/leave are idempotent). The
+// 500 ("is not connected to network"). hl is LENIENT on both (join/leave are idempotent). The
 // SAFETY property under test is the refcount: a double-connect must NOT leak a second endpoint that
 // a single disconnect then cannot clear. Drives connect x2 -> disconnect -> disconnect(again).
 #[tokio::test]
@@ -390,7 +390,7 @@ async fn flow_network_connect_idempotent_no_refcount_leak() {
     assert_eq!(net_endpoint_count(&app, "mynet").await, 1, "first connect allocates one endpoint");
     assert_eq!(net_members(&app, "mynet").await, vec!["c1".to_string()]);
 
-    // Step 2: connect c1 AGAIN. docker would 403/500; dd is idempotent (200). CRITICAL: the endpoint
+    // Step 2: connect c1 AGAIN. docker would 403/500; hl is idempotent (200). CRITICAL: the endpoint
     // count must STAY 1 — a leak here (count 2) would need two disconnects to clear (a refcount bug).
     let r = crate::networks::network_connect(
         State(app.clone()),
@@ -425,7 +425,7 @@ async fn flow_network_connect_idempotent_no_refcount_leak() {
     );
     assert_eq!(net_members(&app, "mynet").await.len(), 0, "membership cleared in one disconnect");
 
-    // Step 4: disconnect AGAIN, already gone. docker: 500 "is not connected"; dd: idempotent 200,
+    // Step 4: disconnect AGAIN, already gone. docker: 500 "is not connected"; hl: idempotent 200,
     // state unchanged. Soft divergence (lenient) — flagged, not a state-corruption bug.
     let r = crate::networks::network_disconnect(
         State(app.clone()),

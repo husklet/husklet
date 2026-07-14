@@ -4,7 +4,7 @@
 use super::*;
 
 /// `POST /build/prune` — `docker builder prune` / the build-cache portion of `docker system prune`.
-/// Reclaims BOTH dd build-cache slots: the new per-step layer cache (~/.hl/buildcache, populated by
+/// Reclaims BOTH hl build-cache slots: the new per-step layer cache (~/.hl/buildcache, populated by
 /// `docker build`) and the persistent JIT translated-code cache (~/.hl/pcache, surfaced as `system df`
 /// BuilderSize). Both are fully reclaimable — layers re-snapshot on the next build, pcache re-translates
 /// on demand — so a wholesale drop only forces a one-time recompute.
@@ -56,7 +56,7 @@ pub(crate) struct CommitQ {
 
 /// `POST /commit?container=<id>&repo=<r>&tag=<t>` — `docker commit`. Snapshots the container's CURRENT
 /// rootfs into a new image directory under `images_dir` and registers it as `repo:tag` carrying the
-/// container's run config (cmd/env/workdir/labels, plus the source image's entrypoint). dd runs a
+/// container's run config (cmd/env/workdir/labels, plus the source image's entrypoint). hl runs a
 /// container directly in the (shared) image rootfs with no copy-on-write upper, so the snapshot is a
 /// `cp -a` of the live rootfs — it captures every write the container made, matching `docker commit`'s
 /// "freeze the current filesystem" semantics. Reuses the same registration path as build/load/import.

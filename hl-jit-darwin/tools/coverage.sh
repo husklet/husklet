@@ -35,7 +35,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # The decomposed C engine lives under hl-jit-darwin/src/runtime (see Makefile RUNTIME_C).
 # NOT hl-jit/src/runtime -- that is the Rust runtime wrapper (container/, engine/ *.rs), which
 # contains none of the syscall handlers and would false-green the coverage report at 0/321 (#coverage).
-RT="${DDCOV_RT:-$ROOT/hl-jit-darwin/src/runtime}"   # DDCOV_RT overrides for tests/CI probing
+RT="${HLCOV_RT:-$ROOT/hl-jit-darwin/src/runtime}"   # HLCOV_RT overrides for tests/CI probing
 SYSCALL_DIR="$RT/os/linux/syscall"
 SYSMAP="$RT/translate/x86_64/sysmap.h"
 # the handler modules that own a top-level `switch (nr)` (dispatch.c's two switches are pre-dispatch
@@ -176,9 +176,9 @@ dynamic() {
     echo ""
     echo "== dynamic: syscalls/opcodes the engines hit at runtime over the test corpus =="
     local A X RF
-    # Engine paths are env-overridable (DDCOV_ENGINE_*) so the missing-engine guard is regression-testable.
-    A="${DDCOV_ENGINE_A:-$(ls "$ROOT"/target/debug/build/hl-jit-darwin-*/out/hljit-linux_aarch64 2>/dev/null | head -1)}"
-    X="${DDCOV_ENGINE_X:-$(ls "$ROOT"/target/debug/build/hl-jit-darwin-*/out/hljit-linux_x86_64 2>/dev/null | head -1)}"
+    # Engine paths are env-overridable (HLCOV_ENGINE_*) so the missing-engine guard is regression-testable.
+    A="${HLCOV_ENGINE_A:-$(ls "$ROOT"/target/debug/build/hl-jit-darwin-*/out/hljit-linux_aarch64 2>/dev/null | head -1)}"
+    X="${HLCOV_ENGINE_X:-$(ls "$ROOT"/target/debug/build/hl-jit-darwin-*/out/hljit-linux_x86_64 2>/dev/null | head -1)}"
     [ -e "$A" ] || A=""   # a non-existent override path counts as "not built"
     RF="$(ls -d /Users/x/dd/poc/images/*alpine*/rootfs 2>/dev/null | head -1)"
     # A dynamic run that can't find the engines has measured NOTHING; returning green here is a

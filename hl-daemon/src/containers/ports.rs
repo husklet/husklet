@@ -18,8 +18,8 @@
 //! bind/listen→switch redirect + `getsockname`→cport reporting.
 //!
 //! The switch path is byte-identical to what the engine binds (`netns.c`):
-//!   * bridge (0.0.0.0/eth0 bind):  `/tmp/.ddbr-<netid[..40]>/<cIP>:<cport>`
-//!   * loopback (127.0.0.1 bind):   `/tmp/.ddnet-<netnsKey[..40]>/p<cport>`
+//!   * bridge (0.0.0.0/eth0 bind):  `/tmp/.hlbr-<netid[..40]>/<cIP>:<cport>`
+//!   * loopback (127.0.0.1 bind):   `/tmp/.hlnet-<netnsKey[..40]>/p<cport>`
 //! We dial both candidates (a published server almost always binds 0.0.0.0 → the bridge path, but a
 //! 127.0.0.1 publish lands on loopback), taking whichever connects.
 
@@ -69,14 +69,14 @@ fn plan(c: &Container, bridge: &Option<(String, String)>, netns_key: &str) -> Ve
             let mut switch_paths = Vec::new();
             if let Some((netid, ip)) = bridge {
                 switch_paths.push(format!(
-                    "/tmp/.ddbr-{}/{}:{}",
+                    "/tmp/.hlbr-{}/{}:{}",
                     t40(netid),
                     ip,
                     p.container_port
                 ));
             }
             switch_paths.push(format!(
-                "/tmp/.ddnet-{}/p{}",
+                "/tmp/.hlnet-{}/p{}",
                 t40(netns_key),
                 p.container_port
             ));
@@ -110,7 +110,7 @@ pub(crate) async fn start(
     }
     // Bind EVERY host listener SYNCHRONOUSLY up front: an occupied host port must FAIL the start with a
     // port-allocation error (docker's "port is already allocated"), not silently no-op in a background
-    // acceptor task and leave the container reporting running while no dd listener owns the published port.
+    // acceptor task and leave the container reporting running while no hl listener owns the published port.
     let mut bound = Vec::new();
     for b in bindings {
         let addr = format!("{}:{}", b.host_ip, b.host_port);
@@ -281,8 +281,8 @@ mod tests {
         assert_eq!(
             b.switch_paths,
             vec![
-                "/tmp/.ddbr-net123/172.18.0.5:80".to_string(),
-                "/tmp/.ddnet-nskey/p80".to_string(),
+                "/tmp/.hlbr-net123/172.18.0.5:80".to_string(),
+                "/tmp/.hlnet-nskey/p80".to_string(),
             ]
         );
     }
@@ -294,7 +294,7 @@ mod tests {
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].host_ip, "127.0.0.1");
         assert_eq!(plan[0].host_port, 9000);
-        assert_eq!(plan[0].switch_paths, vec!["/tmp/.ddnet-nskey/p90".to_string()]);
+        assert_eq!(plan[0].switch_paths, vec!["/tmp/.hlnet-nskey/p90".to_string()]);
     }
 
     #[test]
@@ -321,8 +321,8 @@ mod tests {
         assert_eq!(
             plan[0].switch_paths,
             vec![
-                format!("/tmp/.ddbr-{clipped}/10.0.0.2:80"),
-                format!("/tmp/.ddnet-{clipped}/p80"),
+                format!("/tmp/.hlbr-{clipped}/10.0.0.2:80"),
+                format!("/tmp/.hlnet-{clipped}/p80"),
             ]
         );
     }
@@ -334,8 +334,8 @@ mod tests {
         let plan = plan(&c, &None, "k");
         assert_eq!(plan.len(), 2);
         assert_eq!(plan[0].host_port, 8080);
-        assert_eq!(plan[0].switch_paths, vec!["/tmp/.ddnet-k/p80".to_string()]);
+        assert_eq!(plan[0].switch_paths, vec!["/tmp/.hlnet-k/p80".to_string()]);
         assert_eq!(plan[1].host_port, 8443);
-        assert_eq!(plan[1].switch_paths, vec!["/tmp/.ddnet-k/p443".to_string()]);
+        assert_eq!(plan[1].switch_paths, vec!["/tmp/.hlnet-k/p443".to_string()]);
     }
 }

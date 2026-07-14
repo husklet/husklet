@@ -5,7 +5,7 @@
 static int g_pipesz[HL_NFD];
 
 // ---- guest RLIMIT_NOFILE enforcement -------------------------------------------------------------
-// dd shares the host descriptor table, whose real cap is far larger than the guest's (engine-private fds
+// hl shares the host descriptor table, whose real cap is far larger than the guest's (engine-private fds
 // are hoisted above 1<<20, see engine_fd_hoist), so the guest's soft RLIMIT_NOFILE is purely EMULATED
 // (svc_fill_rlimit reports 20480, or the docker --ulimit / guest setrlimit override in g_ulimit[7]). The
 // host therefore never enforces it: a raw dup/open/dup2 at or past the guest cap wrongly succeeds. These
@@ -33,7 +33,7 @@ static int nofile_gate(int r) {
 
 // ---- guest PROT_NONE region registry -------------------------------------------------------------
 // The SINGLE source of truth is g_gna (gna_add/gna_clear/gna_hit/gna_reset) in os/linux/thread.c, which the
-// target TU #includes BEFORE this file. dd force-maps guest anon memory host-RW (case 222) so its no-op
+// target TU #includes BEFORE this file. hl force-maps guest anon memory host-RW (case 222) so its no-op
 // mprotect model works, which means a host syscall writing into a guest PROT_NONE buffer does NOT get the
 // EFAULT a real Linux copy_to_user would (the host page is really RW). g_gna tracks the guest's requested
 // PROT_NONE ranges; the check lives INSIDE host_range_mapped (thread.c), so every guest-buffer validator
@@ -53,7 +53,7 @@ static int nofile_gate(int r) {
 // fcntl record locks stay on the real fd, disjoint from the companion. LOCK_SH->F_RDLCK, LOCK_EX->F_WRLCK,
 // LOCK_NB->F_SETLK (else F_SETLKW), LOCK_UN->F_UNLCK. Per-fd state (fd<HL_NFD) drives release-on-close so a
 // held flock is dropped when its last fd closes, matching flock's "released on last close" semantics.
-#define FLOCK_DIR "/tmp/.ddflock"
+#define FLOCK_DIR "/tmp/.hlflock"
 static uint8_t g_flock_type[HL_NFD]; // per guest fd: 0 none, else LOCK_SH / LOCK_EX currently held via companion
 
 static struct {
@@ -145,7 +145,7 @@ static void flock_on_close(int fd) {
 // SQLite, postgres backends), which are SEPARATE host processes all descended from container init by fork().
 // The table lives in a MAP_SHARED|MAP_ANON region created at engine startup (constructor, before any guest
 // fork), so every forked worker inherits the SAME physical table -- identical to the cross-process futex
-// table in thread.c. dd's guest execve reloads the image IN-PROCESS, so the region (and a process's locks)
+// table in thread.c. hl's guest execve reloads the image IN-PROCESS, so the region (and a process's locks)
 // survive exec, exactly as POSIX requires. Records are keyed by host-file identity (dev,ino) + absolute byte
 // range + type, owned PER-PROCESS by host pid (threads of a process share the pid, hence share their locks;
 // a fork child gets a NEW pid so it does NOT inherit the parent's locks -- POSIX). This is fully INDEPENDENT
@@ -574,11 +574,11 @@ static void inomv_push(int wd, uint32_t mask, uint32_t cookie, const char *name)
 // Queue IN_MOVED_FROM(src basename) + IN_MOVED_TO(dst basename), sharing one cookie, against any inotify
 // watch whose directory is the source / destination parent. host paths are resolved exactly as add_watch
 // resolved g_inotify_wpath (atpath), so their parent-dir prefixes compare equal. No-op when nothing watches.
-static void inotify_notify_move(int sdirfd, const char *spath, int ddirfd, const char *dpath) {
+static void inotify_notify_move(int sdirfd, const char *spath, int hlirfd, const char *dpath) {
     if (!spath || !dpath) return;
     char sb[4300], db[4300];
     const char *sh = atpath(sdirfd, spath, sb, sizeof sb, 1);
-    const char *dh = atpath(ddirfd, dpath, db, sizeof db, 1);
+    const char *dh = atpath(hlirfd, dpath, db, sizeof db, 1);
     if (!sh || !dh) return;
     uint32_t cookie = ++g_inomv_cookie;
     if (!cookie) cookie = ++g_inomv_cookie; // a rename cookie is always nonzero on Linux
@@ -921,8 +921,8 @@ static int g_epprof = -1;
 
 // ---- per-instance epoll interest table (fd -> owning instance + events + udata) --------------------
 // Linux keeps an interest list per epoll instance and ties each registration to the underlying OPEN FILE
-// DESCRIPTION, not the fd number. dd emulates epoll with a macOS kqueue whose knotes are keyed by fd
-// number and vanish when that fd number closes -- so two OFD-semantics that dd previously got wrong:
+// DESCRIPTION, not the fd number. hl emulates epoll with a macOS kqueue whose knotes are keyed by fd
+// number and vanish when that fd number closes -- so two OFD-semantics that hl previously got wrong:
 //   (1) a fork child inherits the parent's interest list, but macOS does NOT inherit kqueue()s, so the
 //       rebuilt child kqueue was EMPTY (a child that epoll_waits without re-registering saw nothing);
 //   (2) closing a watched fd whose OFD stays alive via a dup should KEEP the registration (readiness
@@ -930,14 +930,14 @@ static int g_epprof = -1;
 // The table below records, per WATCHED fd, its owning epoll instance + the registered events + udata, so
 // the fork child can re-arm every inherited registration on its rebuilt kqueue, and a close-with-surviving
 // -dup can re-home the knote onto the surviving alias. Like the g_ep_rd/wr armed maps this is a SINGLE
-// owner per watched fd (dd already assumes a fd is watched by at most one epoll instance); the writes are
+// owner per watched fd (hl already assumes a fd is watched by at most one epoll instance); the writes are
 // a couple of fd-indexed stores on the epoll_ctl path, so the hot path cost matches the existing armed map.
 static int g_ep_owner[HL_NFD];    // watched fd -> owning epoll instance fd + 1 (0 = not watched)
 static uint32_t g_ep_events[HL_NFD]; // watched fd -> the epoll events mask registered (EPOLLIN/OUT/ET/ONESHOT)
 static uint64_t g_ep_udata[HL_NFD];  // watched fd -> the epoll_event.data registered for it
 
 // ---- open-file-description identity for fd-number aliases (dup) -------------------------------------
-// dd shares the host descriptor table with the guest, so two guest fds that refer to the same OFD are two
+// hl shares the host descriptor table with the guest, so two guest fds that refer to the same OFD are two
 // host fds dup'd from each other. There is no portable "same OFD?" query, so track it ourselves: every
 // dup(2)/dup2/dup3/F_DUPFD tags both fds with a shared group id (see fd_carry_virt). close() clears the id.
 // Used by the epoll close path to find a surviving alias of a just-closed watched fd (finding: epoll
@@ -970,7 +970,7 @@ static int epopt_on(void) {
 }
 
 static void ep_prof_dump(void) {
-    if (g_epprof == 1) fprintf(stderr, "[ddepollprof] epoll_kevent_syscalls=%llu\n", g_ep_kevent_calls);
+    if (g_epprof == 1) fprintf(stderr, "[hlepollprof] epoll_kevent_syscalls=%llu\n", g_ep_kevent_calls);
 }
 
 static void ep_count(void) {
@@ -1032,7 +1032,7 @@ static void ep_fd_reset(int fd) {
     g_ofd_id[fd] = 0;
 }
 
-// close() hook for the inotify family (event.c cases 26/27/28). dd emulates inotify with a kqueue: the
+// close() hook for the inotify family (event.c cases 26/27/28). hl emulates inotify with a kqueue: the
 // INSTANCE fd carries g_inotify[fd]=1, while each WATCH descriptor (wd) is itself a host O_EVTONLY fd with
 // g_inotify_wpath/_snap/_owner keyed by that wd NUMBER. Both roles live in the shared fd table, so on close
 // a reused fd number must shed whichever role it held or a later read()/epoll_wait/inotify read misroutes to

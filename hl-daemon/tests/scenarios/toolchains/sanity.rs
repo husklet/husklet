@@ -1,5 +1,5 @@
 //! SANITY: base images carry NO compiler. Pure shell (no fork/exec of a toolchain binary) → should
-//! pass on dd; not xfailed.
+//! pass on hl; not xfailed.
 
 use crate::scenario::{scen, Scenario};
 

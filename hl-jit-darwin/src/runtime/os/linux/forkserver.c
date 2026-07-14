@@ -1,4 +1,4 @@
-// os/linux/forkserver.c -- W3D: resident "ddjitd" fork-server, SHARED by both Linux engines.
+// os/linux/forkserver.c -- W3D: resident "hljitd" fork-server, SHARED by both Linux engines.
 //
 // WHY: per-launch wall is dominated by the irreducible per-process posix_spawn + dyld +
 // codesign-validation floor of the engine ITSELF (opt8 measured ~2 ms of a ~3-5 ms launch), paid on
@@ -50,7 +50,7 @@
 // runner re-keys + lifts the bar via pcache_exec_reload (aarch64), exactly like any other fork child.
 // The resident PARENT never calls pcache_save (prewarm uses run_loaded directly, not hl_run).
 //
-// CONFIG MODEL: engine-level env (JT/PROF/DDJIT_*/NODUALMAP...) and the container rootfs are SERVER
+// CONFIG MODEL: engine-level env (JT/PROF/HL_JIT_*/NODUALMAP...) and the container rootfs are SERVER
 // launch config, read once at --server startup. Guest-visible env + the per-request container env the
 // cold path re-parses (HL_VOL/HL_NETNS/HL_CWD/HL_PUBLISH...) come from the CLIENT per request.
 
@@ -249,7 +249,7 @@ static struct {
 
 static int g_fsrv_ls = -1, g_fsrv_kq = -1;
 
-static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, char **envv, const char *cwd) {
+static void hljitd_runner(int conn, int *fds, int nfd, int argc, char **argv, char **envv, const char *cwd) {
     // Shed every server-side fd so nothing leaks into the guest's fd table: the listener, the kqueue
     // slot (kqueues are not inherited across fork, but the fd number is), every concurrently live
     // launch's control conn, and our OWN control conn (the server reports pid/status, not us).
@@ -335,7 +335,7 @@ static void srv_sigint(int s) {
     g_srv_stop = 1;
 }
 
-static int ddjitd_server_main(int argc, char **argv) {
+static int hljitd_server_main(int argc, char **argv) {
     const char *sock = NULL, *rootfs = NULL, *prewarm = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--server") == 0 && i + 1 < argc)
@@ -352,7 +352,7 @@ static int ddjitd_server_main(int argc, char **argv) {
     if (rootfs) snprintf(g_srv_rootfs, sizeof g_srv_rootfs, "%s", rootfs);
 
     // keep the default dual-mapped RW/RX arena. It doesn't survive fork on its own, but every
-    // runner re-couples it via jit_after_fork() (see ddjitd_runner) -- the same preserved-arena hook a
+    // runner re-couples it via jit_after_fork() (see hljitd_runner) -- the same preserved-arena hook a
     // guest fork uses -- so we get the fast no-W^X-toggle dual map AND correct COW inheritance, without
     // the old NODUALMAP single-mapping hack the x86 research forkserver needed.
 
@@ -416,7 +416,7 @@ static int ddjitd_server_main(int argc, char **argv) {
         close(sv1);
         close(sv2);
         g_warm_ready = 1;
-        fprintf(stderr, "[ddjitd] prewarmed %s: arena=%lld KB\n", prewarm, (long long)((g_cp - g_cache) / 1024));
+        fprintf(stderr, "[hljitd] prewarmed %s: arena=%lld KB\n", prewarm, (long long)((g_cp - g_cache) / 1024));
     }
 
     // SIGCHLD stays at the DEFAULT disposition: runners are reaped by the kqueue EVFILT_PROC handler
@@ -450,7 +450,7 @@ static int ddjitd_server_main(int argc, char **argv) {
         perror("listen");
         return 1;
     }
-    fprintf(stderr, "[ddjitd] listening on %s (warm=%d rootfs=%s)\n", sock, g_warm_ready,
+    fprintf(stderr, "[hljitd] listening on %s (warm=%d rootfs=%s)\n", sock, g_warm_ready,
             g_srv_rootfs[0] ? g_srv_rootfs : "(none)");
 
     g_fsrv_ls = ls;
@@ -574,7 +574,7 @@ static int ddjitd_server_main(int argc, char **argv) {
             continue;
         }
         pid_t pid = fork();
-        if (pid == 0) ddjitd_runner(conn, fds, nfd, wac, wargv, wenv, wcwd); // never returns
+        if (pid == 0) hljitd_runner(conn, fds, nfd, wac, wargv, wenv, wcwd); // never returns
         for (int i = 0; i < nfd; i++)
             close(fds[i]); // ours were only for the runner
         int32_t p32 = (int32_t)(pid > 0 ? pid : -1);
@@ -617,7 +617,7 @@ static void fwd_sig(int s) {
     if (p > 0) kill(p, s);
 }
 
-static int ddjitd_client_main(int argc, char **argv) {
+static int hljitd_client_main(int argc, char **argv) {
     const char *sock = NULL;
     int ai = 1;
     while (ai < argc) {

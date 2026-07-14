@@ -4,7 +4,7 @@
 // over linux-dmabuf carrying the IOSurface id in the modifier. hl-display resolves the id → IOSurface →
 // MTLTexture and composites ZERO-copy. Proves the no-VM guest→host GPU-buffer path.
 //
-// Runs under the dd engine with HL_GPU_IOSURFACE set (the --gui launcher sets it). Hand-rolls the Wayland
+// Runs under the hl engine with HL_GPU_IOSURFACE set (the --gui launcher sets it). Hand-rolls the Wayland
 // wire (no libwayland) so it needs no client libs. Connects to $WAYLAND_DISPLAY under $XDG_RUNTIME_DIR.
 #define _GNU_SOURCE
 #include <stdio.h>

@@ -1,4 +1,4 @@
-//! `hl-compositor` — a Smithay-native Wayland compositor for the dd host renderer.
+//! `hl-compositor` — a Smithay-native Wayland compositor for the hl host renderer.
 //!
 //! This crate is the flag-gated replacement for the ~4900-line hand-written protocol machine in
 //! `hl-display/src/server.rs`. Instead of decoding every `wl_*` request by hand, it stands up
@@ -281,7 +281,7 @@ pub struct HlState {
     pub cursor_shape: CursorShapeManagerState,
     pub data_device: DataDeviceState,
     /// `zwp_linux_dmabuf_v1` delegate. Holds the dmabuf global that lets GPU clients (GLES/Vulkan)
-    /// present via a dd IOSurface-backed buffer — see [`handlers::dmabuf`].
+    /// present via a hl IOSurface-backed buffer — see [`handlers::dmabuf`].
     pub dmabuf_state: DmabufState,
     /// `zwp_primary_selection_v1` — the X11-style primary/middle-click-paste selection (terminals, GTK/Qt
     /// apps). Guest↔guest transfer is driven entirely by Smithay through the shared [`SelectionHandler`];
@@ -344,7 +344,7 @@ pub struct HlState {
     pub(crate) surface_outputs: HashMap<u32, Output>,
 
     /// `zwp_text_input_v3` — text-input for editors/address-bars/forms + the host IME (marked-text)
-    /// bridge. The compositor IS the input method here (dd has no separate IME client), so it owns the
+    /// bridge. The compositor IS the input method here (hl has no separate IME client), so it owns the
     /// text-input instances directly; see [`handlers::text_input`]. Text-input focus follows the keyboard
     /// focus via [`HlState::set_text_input_focus`].
     pub(crate) text_input: handlers::text_input::TextInputState,
@@ -638,13 +638,13 @@ impl HlState {
         let single_pixel_buffer = SinglePixelBufferState::new::<Self>(&dh);
 
         // ---- Modern GUI protocol groups composed from the vendored Smithay tree (codex-rendering §5.2/§9.4).
-        // Advertise + supply host policy for protocols the vendored smithay-0.7.0 implements but dd did not
+        // Advertise + supply host policy for protocols the vendored smithay-0.7.0 implements but hl did not
         // compose. Policy lives in the same-named handlers::* submodules; see each module's docs.
         // zwp_pointer_gestures_v1: touchpad swipe/pinch/hold; no host gesture device, so no events by default.
         let pointer_gestures = PointerGesturesState::new::<Self>(&dh);
-        // zwp_tablet_manager_v2: graphics tablet/stylus; dd has no tablet hardware, so the seat exposes none.
+        // zwp_tablet_manager_v2: graphics tablet/stylus; hl has no tablet hardware, so the seat exposes none.
         let tablet_manager = Self::new_tablet_manager(&dh);
-        // zwp_idle_inhibit_manager_v1: keep-session-awake; dd records the intent (handlers::idle_inhibit).
+        // zwp_idle_inhibit_manager_v1: keep-session-awake; hl records the intent (handlers::idle_inhibit).
         let idle_inhibit = IdleInhibitManagerState::new::<Self>(&dh);
         // wp_content_type_manager_v1: per-surface photo/video/game hint; stored on commit (handlers::content_type).
         let content_type = ContentTypeState::new::<Self>(&dh);
@@ -652,7 +652,7 @@ impl HlState {
         let color = handlers::color::ColorManagementState::new(&dh);
         // zxdg_exporter_v2 + zxdg_importer_v2: cross-client toplevel parenting; Smithay issues real handles.
         let xdg_foreign = XdgForeignState::new::<Self>(&dh);
-        // zwp_keyboard_shortcuts_inhibit_manager_v1: forward all keys; dd honours it (handlers::keyboard_shortcuts_inhibit).
+        // zwp_keyboard_shortcuts_inhibit_manager_v1: forward all keys; hl honours it (handlers::keyboard_shortcuts_inhibit).
         let keyboard_shortcuts_inhibit = KeyboardShortcutsInhibitState::new::<Self>(&dh);
         // zwp_text_input_manager_v3: text-input for editors/forms + the host IME (marked-text) bridge.
         // Advertised here; the compositor owns the text-input instances directly (see handlers/text_input.rs).

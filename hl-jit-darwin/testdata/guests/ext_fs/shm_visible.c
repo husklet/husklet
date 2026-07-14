@@ -1,6 +1,6 @@
 // /dev/shm as a REAL per-container tmpfs, the way `docker run` presents it: a segment created with
 // shm_open() must (1) appear as a REGULAR FILE when /dev/shm is listed (postgres/ipcs/ops enumerate it),
-// (2) stat as a regular file at /dev/shm/<name>, and (3) statfs("/dev/shm") reports TMPFS. Pre-fix dd
+// (2) stat as a regular file at /dev/shm/<name>, and (3) statfs("/dev/shm") reports TMPFS. Pre-fix hl
 // backed shm at a FLAT host file under /tmp, so the segment worked but was INVISIBLE in /dev/shm (the
 // listing was empty) and shared one global host namespace across containers. Runs in the alpine overlay
 // rootfs (container semantics); verdict is a normalized ok=1 verified vs the docker (runc) oracle.

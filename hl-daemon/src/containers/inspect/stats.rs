@@ -109,7 +109,7 @@ fn stats_sample(
     };
     let v = crate::api::ContainerStats {
         read: fmt_rfc3339(now_secs()),
-        // Go zero-time: dd doesn't thread the prior sample's read timestamp, and CPU% is derived from
+        // Go zero-time: hl doesn't thread the prior sample's read timestamp, and CPU% is derived from
         // the usage deltas (not these timestamps), so this is docker-accurate for the no-precpu case.
         preread: "0001-01-01T00:00:00Z".to_string(),
         name: format!("/{name}"),
@@ -134,7 +134,7 @@ fn stats_sample(
     (v, total, system)
 }
 
-/// GET /containers/:id/stats -- a Docker stats document. dd has no cgroup accounting, so metrics are
+/// GET /containers/:id/stats -- a Docker stats document. hl has no cgroup accounting, so metrics are
 /// best-effort: memory + CPU come from the live JIT pid via `ps`, with a synthetic CPU floor so the CLI
 /// shows a sane non-zero %. `stream=0`/`false` returns a single object; otherwise it's newline-delimited
 /// JSON, one sample/sec, on a long-lived body that ends when the client disconnects (or a 1h cap).

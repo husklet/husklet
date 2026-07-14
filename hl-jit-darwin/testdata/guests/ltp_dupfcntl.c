@@ -3,7 +3,7 @@
 // raw fds/pids/addresses) so it oracle-diffs hl-vs-native byte-for-byte. A raw dup2(2) syscall is issued
 // (glibc dup2 on x86 uses the dup2 syscall; this pins the oldfd==newfd contract that dup3 does NOT share).
 //
-// The negative cases here are the ones dd historically got wrong because it shares the host descriptor
+// The negative cases here are the ones hl historically got wrong because it shares the host descriptor
 // table (whose real fd cap is far larger than the guest's emulated RLIMIT_NOFILE) and force-maps guest
 // PROT_NONE memory host-writable: dup2 newfd>=cap (EBADF), dup/open past the cap (EMFILE), F_DUPFD floor
 // >=cap (EINVAL), F_SETLK bad l_whence / unknown fcntl cmd (EINVAL), and read into a PROT_NONE buffer or a
@@ -111,7 +111,7 @@ int main(void) {
     printf("fcntl badfd: ret=%d ebadf=%d\n", bad, errno == EBADF);
 
     // read() error matrix (LTP read02): EBADF on a bad fd, EISDIR on a directory, EFAULT into a PROT_NONE
-    // buffer (dd force-maps such pages host-writable, so this only faults if the guest's intent is honoured).
+    // buffer (hl force-maps such pages host-writable, so this only faults if the guest's intent is honoured).
     char rb;
     errno = 0;
     ssize_t re = read(-1, &rb, 1);

@@ -234,7 +234,7 @@ fn modern_protocols_bind_and_roundtrip() {
     // ---------------------------------------------------------------------------------------------
     // (2) zwp_tablet_manager_v2: bind, get_tablet_seat for our seat, then hot-plug a virtual tablet (the
     // mechanism a real digitizer would use) → the client's tablet_seat must receive tablet_added (0).
-    // dd advertises ZERO tablets by default (no hardware); this proves the delegate delivers when one
+    // hl advertises ZERO tablets by default (no hardware); this proves the delegate delivers when one
     // appears.
     let tablet_mgr = bind(&mut c, "zwp_tablet_manager_v2", 1);
     let tablet_seat = c.alloc();
@@ -309,7 +309,7 @@ fn modern_protocols_bind_and_roundtrip() {
 
     // ---------------------------------------------------------------------------------------------
     // (6) zwp_keyboard_shortcuts_inhibit_manager_v1: bind, request inhibition for (surface, seat) → the
-    // host honours it (dd owns no conflicting chords) and immediately activates the inhibitor, so the
+    // host honours it (hl owns no conflicting chords) and immediately activates the inhibitor, so the
     // client receives `active` (opcode 0).
     let ksi_mgr = bind(&mut c, "zwp_keyboard_shortcuts_inhibit_manager_v1", 1);
     let ksi = c.alloc();

@@ -1,5 +1,5 @@
 // System V IPC errno/edge fidelity (LTP msgget/semget/shmget + *ctl families) — diffed vs the native
-// oracle. Verdict-only (errno NAMES + booleans, never raw ids/pids), so dd must be byte-identical to
+// oracle. Verdict-only (errno NAMES + booleans, never raw ids/pids), so hl must be byte-identical to
 // native Linux (aarch64) / qemu (x86_64). Complements ext_ipc/ipc_sysv_{shm,sem,msg}.c (round-trips).
 // Exercises: IPC_EXCL EEXIST on re-create, ENOENT for a missing key without IPC_CREAT, EINVAL on a bad
 // id, the shm data round-trip + IPC_STAT size, sem SETVAL/GETVAL, and msg IPC_NOWAIT ENOMSG on empty.

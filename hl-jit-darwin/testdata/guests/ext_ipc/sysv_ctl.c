@@ -1,15 +1,15 @@
 // SysV IPC control-command fidelity (shmctl/semctl/msgctl) — the full IPC_STAT/IPC_SET/*_INFO/*_STAT +
 // errno surface behind task #418, diffed vs the native oracle (native aarch64 / qemu x86_64). Verdict-only:
 // every line is a boolean or an errno NAME derived from a *self-relative* comparison (fields vs our own
-// getuid(), sizes we chose), never a raw id/pid/uid — so dd (guest runs as container-root, uid 0) and the
+// getuid(), sizes we chose), never a raw id/pid/uid — so hl (guest runs as container-root, uid 0) and the
 // native oracle (an unprivileged user) must print byte-identical output. Complements ext_ipc/ipc_sysv_edge.c
 // (get/EEXIST/ENOENT) and ipc_sysv_{shm,sem,msg}.c (data round-trips).
 //
-// The permission paths (EACCES/EPERM) are the subtle case: dd is root, the oracle is not. We normalise by
-// dropping to a non-root uid on the privileged (dd) side, then asserting each op returns the result correct
+// The permission paths (EACCES/EPERM) are the subtle case: hl is root, the oracle is not. We normalise by
+// dropping to a non-root uid on the privileged (hl) side, then asserting each op returns the result correct
 // for the CURRENT privilege — EACCES when a non-root caller has no mode bits (true for a non-root *owner* of
-// a mode-0 object on the oracle AND a non-root *non-owner* on dd), and EPERM for IPC_SET/RMID only when we
-// are a non-owner (dd, after the drop), owner-allowed otherwise (the oracle). Booleans keep both identical.
+// a mode-0 object on the oracle AND a non-root *non-owner* on hl), and EPERM for IPC_SET/RMID only when we
+// are a non-owner (hl, after the drop), owner-allowed otherwise (the oracle). Booleans keep both identical.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stdio.h>
@@ -114,8 +114,8 @@ int main(void) {
     // Use a NEGATIVE index: *_STAT reads its arg as a kernel array index, and a positive OOR value like
     // 0x40000000 maps via `idx % IPCMNI` back onto a REAL low index (0x40000000 % 32768 == 0) — so on the
     // native oracle it can spuriously find whatever object a *concurrent* test left at host index 0 in the
-    // SHARED host SysV table (the exact contention #421 removes on dd's side) and return "ok". A negative
-    // index is out of range on both dd and any real kernel's IDR, so this stays deterministic under
+    // SHARED host SysV table (the exact contention #421 removes on hl's side) and return "ok". A negative
+    // index is out of range on both hl and any real kernel's IDR, so this stays deterministic under
     // concurrency while testing the same thing (an out-of-range *_STAT index -> EINVAL).
     int x_shm = shmctl(-1, SHM_STAT, &sds) < 0 ? errno : 0;
     su.buf = &semds;

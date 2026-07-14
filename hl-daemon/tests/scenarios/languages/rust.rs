@@ -1,7 +1,7 @@
 //! Rust — rustc drives LLVM codegen then links and runs the produced binary: a real native-codegen
 //! pipeline (cc1-class compile + ld + exec) inside the container. musl (alpine) + glibc (slim).
 //! exec-loader-noent triage — NOT an exec-loader gap, and now NO xfail: rustc compiles, links and
-//! runs on BOTH arches under dd. Two fixes made it pass: (1) the poc image must carry Config.Env
+//! runs on BOTH arches under hl. Two fixes made it pass: (1) the poc image must carry Config.Env
 //! (PATH=/usr/local/cargo/bin, RUSTUP_HOME, CARGO_HOME) — a fresh `--long` pull records it; (2) on x86 the
 //! LINK step shells out to `cc` (gcc), whose driver ICE'd in set_static_spec until the non-PIE `.data`
 //! rebasing was restricted to static images (translate/x86_64/elf.c). Floating 1.x tags for availability.

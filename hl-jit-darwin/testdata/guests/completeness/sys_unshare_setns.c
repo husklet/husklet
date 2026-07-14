@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <sched.h>
-/* unshare(unknown flags) -> EINVAL; setns(-1, ...) -> EBADF. dd used to fake-succeed both. */
+/* unshare(unknown flags) -> EINVAL; setns(-1, ...) -> EBADF. hl used to fake-succeed both. */
 int main(void){
   long u=syscall(SYS_unshare, (long)0xdeadbeefU);
   int unshare_einval=(u==-1 && errno==EINVAL);

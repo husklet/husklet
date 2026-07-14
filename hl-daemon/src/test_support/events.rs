@@ -29,7 +29,7 @@ async fn body_bytes(resp: axum::response::Response) -> Vec<u8> {
 
 // ---- docker events --until <past> terminates immediately (does NOT hang) --------------------
 // Regression: `--until`/`--since` were deserialized but never applied, so `docker events --until
-// <past-ts>` (a BOUNDED command) streamed forever. dd keeps no event history, so a past `--until`
+// <past-ts>` (a BOUNDED command) streamed forever. hl keeps no event history, so a past `--until`
 // must close the stream at once rather than block the client.
 #[tokio::test]
 async fn events_until_in_the_past_closes_immediately() {

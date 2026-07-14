@@ -1,4 +1,4 @@
-//! hl-daemon — a Docker-Engine-API daemon backed by the **dd** VM-less JIT runtime.
+//! hl-daemon — a Docker-Engine-API daemon backed by the **hl** VM-less JIT runtime.
 //!
 //! The real `docker` CLI (and the `hl-app` GUI) talk to this over a Unix socket; container
 //! *execution* is delegated to the JIT binaries built by the `hljit` crate (one per guest
@@ -6,7 +6,7 @@
 //! matching JIT, then launches it via the typed [`hl_jit::SpawnConfig`] contract — no VM.
 //!
 //!   cargo run --release -p hl-daemon            # build.rs builds the JITs first
-//!   DOCKER_HOST=unix://$PWD/dd.sock docker run -p 8080:80 -m 256m alpine echo hi
+//!   DOCKER_HOST=unix://$PWD/hl.sock docker run -p 8080:80 -m 256m alpine echo hi
 //!
 //! Containers, volumes and networks are persisted to `HL_STATE` (default `~/.hl/state.json`) so
 //! they survive daemon restarts. Images are re-discovered from `HL_IMAGES` each startup.

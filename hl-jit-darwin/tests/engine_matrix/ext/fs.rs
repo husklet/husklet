@@ -16,7 +16,7 @@ fn storage() -> Group {
     group(
         "fs-storage",
         vec![
-            // statfs f_type + pseudo-fs geometry. Pre-fix dd stamped TMPFS_MAGIC + host disk geometry on EVERY
+            // statfs f_type + pseudo-fs geometry. Pre-fix hl stamped TMPFS_MAGIC + host disk geometry on EVERY
             // path: `/` looked like tmpfs (not overlay) and /proc & /sys reported a huge nonzero size, so
             // `stat -f -c %T` named them wrong and `df -h` LISTED /proc & /sys (real docker hides 0-block fs).
             // Fix classifies by the resolved guest mount in os/linux/syscall/fs.c. Overlay-only -> Linux engines.
@@ -32,7 +32,7 @@ fn storage() -> Group {
                 .overlay()
                 .only(LIN)
                 .out("mounttab ok=1\n"),
-            // Pseudo-mount COMPLETENESS (audit): dd omitted the /dev/shm, /dev/pts, /dev/mqueue mounts, listed
+            // Pseudo-mount COMPLETENESS (audit): hl omitted the /dev/shm, /dev/pts, /dev/mqueue mounts, listed
             // no cgroup2 line in /proc/mounts, and marked sysfs rw where runc marks it ro. Asserts each line the
             // docker oracle shows in BOTH /proc/mounts (fstab form) and /proc/self/mountinfo ("-"-separated).
             src("fs-mountpseudo", "ext_fs/mountpseudo.c")

@@ -4,7 +4,7 @@
 // and the MOD re-arm, Linux re-reports it on re-arm (the fd is still readable) -- a lost re-arm edge
 // parks the child. The parent plants each next message right in that window (child writes a control
 // token after re-arming). Watchdog turns any stall into a deterministic nonzero exit. Distinct from the
-// EPOLLET gate: exercises dd's EV_ONESHOT + g_ep_os re-arm path rather than the EV_CLEAR edge path.
+// EPOLLET gate: exercises hl's EV_ONESHOT + g_ep_os re-arm path rather than the EV_CLEAR edge path.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>

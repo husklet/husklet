@@ -39,7 +39,7 @@ fn run_coverage(mode: &str, env: &[(&str, &str)]) -> i32 {
 // ---------------------------------------------------------------------------------------------------
 // Coverage tool — "Coverage Tool Uses Stale Engine Paths and Exits Green" (P0 false-green).
 // The static lens must scan the real runtime tree; a missing/moved tree or an empty scan must be FATAL,
-// never a green "handled 0 / N ... exit 0". (RT is overridden via DDCOV_RT.)
+// never a green "handled 0 / N ... exit 0". (RT is overridden via HLCOV_RT.)
 // ---------------------------------------------------------------------------------------------------
 
 #[test]
@@ -55,7 +55,7 @@ fn coverage_static_scans_existing_runtime_sources() {
 
 #[test]
 fn coverage_static_is_fatal_when_runtime_tree_is_missing() {
-    let code = run_coverage("static", &[("DDCOV_RT", "/nonexistent/hl-coverage-guard")]);
+    let code = run_coverage("static", &[("HLCOV_RT", "/nonexistent/hl-coverage-guard")]);
     assert_ne!(code, 0, "a missing runtime tree must be fatal, got exit {code}");
 }
 
@@ -74,7 +74,7 @@ fn coverage_report_does_not_greenlight_a_broken_scan() {
         std::fs::write(sc.join(format!("{m}.c")), b"// no nr-switch here\n").unwrap();
     }
     std::fs::write(tr.join("sysmap.h"), b"// no map\n").unwrap();
-    let code = run_coverage("report", &[("DDCOV_RT", root.to_str().unwrap())]);
+    let code = run_coverage("report", &[("HLCOV_RT", root.to_str().unwrap())]);
     assert_ne!(code, 0, "report against a zero-handler tree must be fatal, got exit {code}");
 }
 
@@ -85,8 +85,8 @@ fn coverage_dynamic_fails_when_required_engines_are_missing() {
     let code = run_coverage(
         "dynamic",
         &[
-            ("DDCOV_ENGINE_A", "/nonexistent/hljit-linux_aarch64"),
-            ("DDCOV_ENGINE_X", "/nonexistent/hljit-linux_x86_64"),
+            ("HLCOV_ENGINE_A", "/nonexistent/hljit-linux_aarch64"),
+            ("HLCOV_ENGINE_X", "/nonexistent/hljit-linux_x86_64"),
         ],
     );
     assert_ne!(code, 0, "dynamic coverage with no engines must be fatal, got exit {code}");

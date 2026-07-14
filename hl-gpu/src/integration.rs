@@ -42,7 +42,7 @@ impl GuestArch {
 /// Empty `lib_dir`/`bin_dir` = no drop-ins for that slot (nothing bound).
 #[derive(Clone, Debug, Default)]
 pub struct DisplayIntegration {
-    /// Host path of the compositor (Wayland/DDP) socket; bound rw at `/run/user/0/wayland-0`.
+    /// Host path of the compositor (Wayland/HLP) socket; bound rw at `/run/user/0/wayland-0`.
     pub wayland_sock: String,
     /// Host path of the hl-gpu IR executor socket; bound rw at `/run/user/0/hl-gpu-0`.
     pub gpu_exec_sock: String,
@@ -57,7 +57,7 @@ pub struct DisplayIntegration {
     pub overlay_lib_dir: String,
 }
 
-/// The simulated-CUDA-device integration: inject dd's NVML shim (+ the real `nvidia-smi`) so unmodified
+/// The simulated-CUDA-device integration: inject hl's NVML shim (+ the real `nvidia-smi`) so unmodified
 /// probes see an NVIDIA-looking device. `nvml_so` / `nvidia_smi` empty = that artifact is absent and
 /// simply not injected (the caller is responsible for any user-facing warning).
 #[derive(Clone, Debug, Default)]
@@ -115,7 +115,7 @@ impl GpuIntegration {
 /// Whether the accelerated-display shim is *authoritative* for a drop-in shared object and may bind it
 /// over the guest's multiarch lib dir. The shim owns the GPU/GL render stack (EGL/GLES/GL/GBM/Vulkan/CUDA,
 /// including the GLVND dispatchers and ANGLE's `libEGL`/`libGLESv2` sonames), the Wayland client transport
-/// it speaks to hl-display with (`libwayland-*`), and dd's own shim cores. Every other `*.so` in the
+/// it speaks to hl-display with (`libwayland-*`), and hl's own shim cores. Every other `*.so` in the
 /// drop-in dir belongs to the guest distro and MUST NOT be shadowed — above all `libX11`/`libxcb` (GTK/Qt
 /// X11 backends) and the base C/C++ runtime (`libstdc++`, `libz`, `libc`, …). Binding a stub over the
 /// guest's real copy is the "shim library shadowing" bug (docs/goal.md): the app then loads a crippled
@@ -145,14 +145,14 @@ fn shim_owns_lib(file_name: &str) -> bool {
     if OWNED_EXACT.contains(&stem.as_str()) {
         return true;
     }
-    // dd shim cores whose name doesn't start with `libdd` (e.g. `gl_shim` / `*_shim` builds).
+    // hl shim cores whose name doesn't start with `libdd` (e.g. `gl_shim` / `*_shim` builds).
     stem.contains("shim")
 }
 
 /// Self-heal a workspace overlay that still carries stale **injection stubs**, so the "shim library
 /// shadowing" failure class (docs/goal.md) can't recur from legacy overlay state.
 ///
-/// dd injects the render stack by bind-mounting shim libs into the guest multiarch dir and PREPENDING
+/// hl injects the render stack by bind-mounting shim libs into the guest multiarch dir and PREPENDING
 /// that dir to `LD_LIBRARY_PATH`. A pre-`5e8c10ee` "inject every `*.so`" build could leave, in the
 /// workspace overlay UPPER, a full set of ZERO-BYTE bind-mount-target stubs (`libz.so.1`, `libffi.so.8`,
 /// `libstdc++.so.6`, …). Once the inject set shrank to only what [`shim_owns_lib`] covers, those stubs
@@ -164,7 +164,7 @@ fn shim_owns_lib(file_name: &str) -> bool {
 /// It also heals a second, ABI-level variant of the same class: a stale render-stack shim left in the
 /// overlay upper by a PRIOR launch of a DIFFERENT-libc guest (a musl `libwayland-egl.so.1` from a Chrome
 /// session shadowing a later GTK/glibc guest, → `libc.musl-<arch>.so.1: cannot open shared object file`).
-/// Such a shim is a dd inject artifact (the guest's real base libs live in the image rootfs, never the
+/// Such a shim is a hl inject artifact (the guest's real base libs live in the image rootfs, never the
 /// writable upper), so if we are NOT binding it this run it can only shadow the guest's real lib and is
 /// pruned regardless of size. The launcher now injects the ABI-matching variant, so this is defense in
 /// depth against overlays dirtied before that fix.
@@ -216,7 +216,7 @@ fn prune_shadowing_stubs(
         //     inject from a PRIOR launch of a DIFFERENT-libc guest, e.g. a musl `libwayland-egl.so.1`
         //     left by a Chrome (musl) session now shadowing a GTK (glibc) guest, which fails the loader
         //     with `libc.musl-<arch>.so.1: cannot open shared object file`. A shim-owned lib in the
-        //     overlay UPPER is always a dd inject artifact — the guest's real base libs live in the image
+        //     overlay UPPER is always a hl inject artifact — the guest's real base libs live in the image
         //     rootfs, never the writable upper — so removing an unbound one only lets the guest resolve
         //     its own lib. (Any shim we DO inject this run is in `bound_this_run` and skipped above; its
         //     RO bind-mount covers the path regardless.)
@@ -457,7 +457,7 @@ mod tests {
     fn display_ld_prepends_last_existing_env_value() {
         // With a lib_dir present, the display path composes against the LAST LD_LIBRARY_PATH in guest_env.
         // Use a temp dir so read_dir succeeds; leave it empty so only the LD env line is asserted.
-        let dir = std::env::temp_dir().join(format!("ddgpu-int-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hlgpu-int-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let g = GpuIntegration::new(GuestArch::X86_64).with_display(DisplayIntegration {
             wayland_sock: "/w".into(),
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn shim_owns_only_render_stack_never_distro_libs() {
-        // The shim is authoritative for the GPU/GL/Vulkan/Wayland render stack + dd's own cores…
+        // The shim is authoritative for the GPU/GL/Vulkan/Wayland render stack + hl's own cores…
         for owned in [
             "libEGL.so.1",
             "libEGL_mesa.so.0",
@@ -486,7 +486,7 @@ mod tests {
             "libglapi.so.0",
             "libgbm.so.1",
             "libvulkan.so.1",
-            "libvulkan_dd.so",
+            "libvulkan_hl.so",
             "libcuda.so.1",
             "libwayland-egl.so.1",
             "libwayland-client.so.0",
@@ -521,7 +521,7 @@ mod tests {
         // End-to-end through device_request: a drop-in dir holding BOTH shim render libs and distro libs
         // (as a mis-assembled `~/.hl/gui/<arch>/lib` would) binds only the render libs; the distro libX11 &
         // friends are never mounted, so the guest resolves its own real ones with no LD_PRELOAD.
-        let dir = std::env::temp_dir().join(format!("ddgpu-shadow-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hlgpu-shadow-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for f in [
             "libEGL.so.1",
@@ -560,10 +560,10 @@ mod tests {
         // End-to-end through device_request, reproducing the cold-Chrome ENOEXEC failure class: a legacy
         // workspace overlay UPPER whose multiarch dir still holds pre-5e8c10ee 0-byte inject stubs
         // (libz/libffi/libstdc++, and even a 0-byte libEGL) alongside the guest's OWN real base libs.
-        // dd binds the render stack from a separate drop-in dir and, this run, must prune the orphaned
+        // hl binds the render stack from a separate drop-in dir and, this run, must prune the orphaned
         // 0-byte stubs from the overlay so the guest resolves its real base libs — while leaving the real
         // (non-empty) distro libs, non-.so files, and any stub it actually covers with a bind untouched.
-        let base = std::env::temp_dir().join(format!("ddgpu-prune-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("hlgpu-prune-{}", std::process::id()));
         let dropin = base.join("dropin"); // host ~/.hl/gui/<arch>/lib
         let overlay = base.join("overlay"); // workspace overlay upper's /usr/lib/<arch>
         std::fs::create_dir_all(&dropin).unwrap();
@@ -633,7 +633,7 @@ mod tests {
         // glibc variant lacks it, or it simply isn't in the drop-in), so the stale musl shim would shadow
         // the guest's real glibc libwayland-egl on LD_LIBRARY_PATH -> `libc.musl-…: cannot open`. A
         // shim-owned lib in the UPPER we aren't binding this run must be pruned regardless of size.
-        let base = std::env::temp_dir().join(format!("ddgpu-abiprune-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("hlgpu-abiprune-{}", std::process::id()));
         let overlay = base.join("overlay");
         std::fs::create_dir_all(&overlay).unwrap();
 

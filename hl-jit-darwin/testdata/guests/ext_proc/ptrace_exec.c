@@ -1,4 +1,4 @@
-// ext_proc/ptrace_exec.c -- exercises dd's ptrace exec-stop (bug #238), the strace -f initial event.
+// ext_proc/ptrace_exec.c -- exercises hl's ptrace exec-stop (bug #238), the strace -f initial event.
 // A parent forks a child; the child PTRACE_TRACEME's itself then execve()s THIS SAME binary in a trivial
 // "exec-child" mode (argv[1] == "x"). Real Linux stops the tracee with SIGTRAP right after the exec, before
 // the new image runs a single instruction; the parent asserts it observed that exec-stop, then PTRACE_CONT

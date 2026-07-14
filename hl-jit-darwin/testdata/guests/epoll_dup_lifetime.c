@@ -1,6 +1,6 @@
 // epoll interest follows the OPEN FILE DESCRIPTION, not the fd number. Register a pipe read end, then
 // close it while a dup keeps the same OFD alive: Linux KEEPS the registration (readiness must persist),
-// returning the original udata. dd's kqueue knote used to die with the fd number, losing readiness.
+// returning the original udata. hl's kqueue knote used to die with the fd number, losing readiness.
 // Deterministic -> oracle-checked against native Linux.
 #include <stdio.h>
 #include <sys/epoll.h>

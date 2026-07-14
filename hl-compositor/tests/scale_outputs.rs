@@ -407,9 +407,9 @@ fn fractional_scale_xdg_output_single_pixel_and_multi_output() {
     c.drain();
     assert!(!state.is_headless());
     assert_eq!(c.wl_output_names.len(), 1, "exactly one new wl_output (hl-2) is advertised on recovery");
-    let dd2_name = c.wl_output_names[0];
+    let hl2_name = c.wl_output_names[0];
     let dd2 = c.alloc();
-    c.conn.send(&Message::new(2, 0).u32(dd2_name).string("wl_output").u32(4).u32(dd2));
+    c.conn.send(&Message::new(2, 0).u32(hl2_name).string("wl_output").u32(4).u32(dd2));
     c.conn.flush().unwrap();
     display.dispatch_clients(&mut state).unwrap();
     display.flush_clients().unwrap();

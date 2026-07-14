@@ -56,7 +56,7 @@ pub(crate) async fn containers_prune(State(a): State<App>) -> Json<crate::api::C
     })
 }
 
-/// `docker update` request body (the resource subset dd tracks). Every field is optional — a `docker
+/// `docker update` request body (the resource subset hl tracks). Every field is optional — a `docker
 /// update` is a partial update, so an omitted field leaves the stored value unchanged.
 #[derive(serde::Deserialize, Default)]
 pub(crate) struct ContainerUpdateBody {
@@ -70,7 +70,7 @@ pub(crate) struct ContainerUpdateBody {
     restart_policy: Option<crate::model::RestartPolicy>,
 }
 
-/// Apply a `docker update` to a container's stored resource config. dd doesn't live-patch cgroups, but
+/// Apply a `docker update` to a container's stored resource config. hl doesn't live-patch cgroups, but
 /// the new limits must be persisted so inspect reports them and the next start honors them — previously
 /// the whole body was ignored and inspect kept reporting the create-time values (e.g. Memory=0).
 pub(crate) fn apply_update(c: &mut crate::model::Container, req: &ContainerUpdateBody) {
@@ -89,7 +89,7 @@ pub(crate) fn apply_update(c: &mut crate::model::Container, req: &ContainerUpdat
 }
 
 /// `POST /containers/{id}/update` — `docker update`. Persists the requested memory/pids/cpu/restart-policy
-/// changes to container state (dd does not live-patch cgroups) and returns the `{Warnings}` envelope.
+/// changes to container state (hl does not live-patch cgroups) and returns the `{Warnings}` envelope.
 pub(crate) async fn containers_update(
     State(a): State<App>,
     Path(id): Path<String>,

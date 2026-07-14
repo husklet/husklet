@@ -198,7 +198,7 @@ impl HlState {
         let ptr = self.pointer.clone();
         let focus = self.focus.clone().map(|s| (s, (0.0, 0.0).into()));
         let utime = self.now_us();
-        // dd has no host pointer-acceleration curve of its own, so accelerated == unaccelerated delta.
+        // hl has no host pointer-acceleration curve of its own, so accelerated == unaccelerated delta.
         ptr.relative_motion(
             self,
             focus,

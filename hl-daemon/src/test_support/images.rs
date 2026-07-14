@@ -360,7 +360,7 @@ async fn flow_image_tag_untag_delete_shared_rootfs_lifecycle() {
 // docker contract: `docker rmi <img>` while a container references that image is a 409 Conflict
 // ("conflict: unable to delete <id> (must be forced) - image is being used by container <cid>");
 // the image survives unless `--force` is used. This drives create-from-image THEN rmi and asserts
-// dd's ACTUAL behavior. ***DIVERGENCE (bug):*** dd's `image_delete` never consults `Inner.containers`,
+// hl's ACTUAL behavior. ***DIVERGENCE (bug):*** hl's `image_delete` never consults `Inner.containers`,
 // so it happily UNTAGS+DELETES an in-use image and returns 200 — the referencing container is left
 // dangling on a now-absent image. Flagged, not fixed.
 #[tokio::test]
@@ -686,7 +686,7 @@ async fn stats_num_procs_agrees_with_pids_and_memory_shape() {
 // ---- C27: /distribution/:name/json returns an honest 404, never a fabricated descriptor ----------
 #[tokio::test]
 async fn distribution_inspect_is_honest_not_fabricated() {
-    // dd cannot resolve remote registry manifests, so it must NOT invent a descriptor. The response is
+    // hl cannot resolve remote registry manifests, so it must NOT invent a descriptor. The response is
     // a Docker-shaped 404 error, and its body carries no fabricated `Descriptor`/`Digest`.
     let resp = crate::images::distribution_inspect(Path("busybox:latest".into())).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND, "no truthful descriptor -> honest 404");

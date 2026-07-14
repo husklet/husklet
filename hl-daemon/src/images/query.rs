@@ -16,7 +16,7 @@ pub(crate) async fn images_json(State(a): State<App>) -> Json<Vec<ImageSummary>>
             let size = image_size(&i.rootfs, &i.name);
             // Fields required by the Docker `ImageSummary` schema (strict clients like bollard reject the
             // object if any are absent). `VirtualSize` is a required i64 in API <=1.43 models (no serde
-            // default), so it must be present; dd has no parent/registry-digest/shared-size accounting yet,
+            // default), so it must be present; hl has no parent/registry-digest/shared-size accounting yet,
             // so the rest take the Docker "not calculated" sentinels (-1) or empties.
             ImageSummary {
                 id: image_id(i),
@@ -66,7 +66,7 @@ pub(crate) async fn image_history(State(a): State<App>, Path(name): Path<String>
                     created: h.created,
                     created_by: h.created_by.clone(),
                     tags: if pos == 0 { vec![repo_tag(&i.name)] } else { vec![] },
-                    // dd squashes to one rootfs, so report the whole size on the top row only.
+                    // hl squashes to one rootfs, so report the whole size on the top row only.
                     size: if pos == 0 && !h.empty_layer { total } else { 0 },
                     comment: "",
                     empty_layer: h.empty_layer,
@@ -78,7 +78,7 @@ pub(crate) async fn image_history(State(a): State<App>, Path(name): Path<String>
     }
 }
 
-/// `GET /images/search` — `docker search`. dd has no search index; return an empty result set with
+/// `GET /images/search` — `docker search`. hl has no search index; return an empty result set with
 /// the correct shape rather than 404.
 pub(crate) async fn image_search() -> Json<Vec<Value>> {
     Json(vec![])
@@ -87,7 +87,7 @@ pub(crate) async fn image_search() -> Json<Vec<Value>> {
 /// `POST /images/prune` — `docker image prune`. Reclaims DANGLING images: those with no repository tag
 /// (a `docker commit` with no repo, or an untagged leftover) that no container still references by rootfs.
 /// Deletes their on-disk store dir and reports each as an untagged/deleted record (docker parity). The
-/// default (`dangling=true`) semantics — untagged-only — is what dd tracks.
+/// default (`dangling=true`) semantics — untagged-only — is what hl tracks.
 pub(crate) async fn images_prune(State(a): State<App>) -> Json<PruneReport> {
     let mut g = a.inner.lock().await;
     // A dangling image has an empty (untagged) name; keep it only if a container still points at its rootfs.
@@ -125,7 +125,7 @@ pub(crate) async fn images_prune(State(a): State<App>) -> Json<PruneReport> {
 
 /// `GET /distribution/{name}/json` — `docker manifest inspect` / `buildx imagetools inspect`. This
 /// endpoint resolves the image's manifest DESCRIPTOR (real content digest + size + platforms) from the
-/// registry. dd does not perform remote manifest resolution and stores no registry digest locally, so it
+/// registry. hl does not perform remote manifest resolution and stores no registry digest locally, so it
 /// cannot produce a truthful descriptor. Returning an invented `sha256:<hash-of-name>` with size 0 (the
 /// former behavior) misleads any client that trusts the digest, so return an honest Docker-shaped 404
 /// instead — never fabricated metadata.

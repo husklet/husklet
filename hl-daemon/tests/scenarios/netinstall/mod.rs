@@ -10,7 +10,7 @@
 //! with no egress simply omits `--long`. Verified against the Real docker oracle (orbstack, linux/arm64).
 //!
 //! ARCH: arm64-first (GA target). The x86 guest's gpgv `divq` SIGFPE during Release verification
-//! is RESOLVED — apt update/install + gpgv RSA verify complete byte-clean on dd amd — so the
+//! is RESOLVED — apt update/install + gpgv RSA verify complete byte-clean on hl amd — so the
 //! amd targets are no longer xfailed and run on both arches. Determinism: markers are fixed strings the
 //! harness greps out of the guest output.
 

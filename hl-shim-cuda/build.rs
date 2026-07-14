@@ -1,7 +1,7 @@
 //! hl-shim-cuda codegen: turn the CUDA-Driver-API entry-point manifest into the complete set of
 //! `#[no_mangle] extern "C"` `cu*` exports the shim must provide. Mirrors hl-shim-gl/build.rs.
 //!
-//! Input:  `registry/cuda_driver.manifest` (extracted from dd's clean-room `hl-gpu/cuda/cuda_shim.c`
+//! Input:  `registry/cuda_driver.manifest` (extracted from hl's clean-room `hl-gpu/cuda/cuda_shim.c`
 //!         driver-API surface — see `registry/extract_cuda_manifest.py`).
 //! Output: `$OUT_DIR/generated_entrypoints.rs`, `include!`d by `src/lib.rs`.
 //!

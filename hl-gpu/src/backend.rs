@@ -22,20 +22,20 @@ use crate::ir::*;
 use crate::wire::{Decoder, Encoder};
 use crate::{GpuError, Result};
 
-/// Where a presented frame's pixels live, so the DDP layer can attach the right buffer kind.
+/// Where a presented frame's pixels live, so the HLP layer can attach the right buffer kind.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PresentKind {
-    /// POSIX-shm region (CPU / software path) — DDP `Buffer(SHM)`.
+    /// POSIX-shm region (CPU / software path) — HLP `Buffer(SHM)`.
     Shm,
-    /// IOSurface handed over a mach-port (Apple GPU path) — DDP `Buffer(IOSURFACE)`.
+    /// IOSurface handed over a mach-port (Apple GPU path) — HLP `Buffer(IOSURFACE)`.
     IoSurface,
-    /// dma-buf fd (Linux/NVIDIA host GPU path) — DDP `Buffer(DMABUF)`.
+    /// dma-buf fd (Linux/NVIDIA host GPU path) — HLP `Buffer(DMABUF)`.
     DmaBuf,
 }
 
-/// An opaque token identifying the buffer a `present` produced, to be carried in DDP `BUFFER_ATTACH`.
+/// An opaque token identifying the buffer a `present` produced, to be carried in HLP `BUFFER_ATTACH`.
 /// `handle` is the shm region id, the IOSurface mach-port name, or the dma-buf fd number depending on
-/// `kind`; the real fd/port is passed out-of-band over the DDP socket.
+/// `kind`; the real fd/port is passed out-of-band over the HLP socket.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PresentToken {
     pub surface: u32,
@@ -143,7 +143,7 @@ pub struct Capabilities {
     pub supports_compute: bool,
     pub supports_graphics: bool,
     pub max_texture_2d: u32,
-    /// The present buffer kinds this backend can hand to DDP.
+    /// The present buffer kinds this backend can hand to HLP.
     pub present_kinds: Vec<PresentKind>,
 
     // --- versioned negotiation descriptor (Phase 1 capability handshake) ---

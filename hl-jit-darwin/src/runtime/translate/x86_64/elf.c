@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- ELF loader (load PT_LOAD high; static-PIE + dynamic via ld.so) + stack.
+// hl/runtime/frontend/x86_64 -- ELF loader (load PT_LOAD high; static-PIE + dynamic via ld.so) + stack.
 
 // W6A: the x86 target (linux_x86_64.c) does not pull in the mach VM headers (only the aarch64 target
 // does, for item 2's dual map). The lazy-fault budget classifier (item 4) queries the real VM map via
@@ -361,7 +361,7 @@ static void load_elf(const char *path, struct loaded *out) {
     // Restrict the blind .data rebasing to STATIC non-PIE images (no PT_INTERP). A static binary (musl jq,
     // busybox) has no ld.so and its baked-absolute .data pointers are compared against rip-relative-lea
     // HIGH values, so the words must move HIGH too. A DYNAMIC non-PIE (glibc gcc/cc1 driver) instead
-    // materializes those same pointers as LOW link addresses in code (mov-imm / data loads that dd's
+    // materializes those same pointers as LOW link addresses in code (mov-imm / data loads that hl's
     // ea_bias17 folds on access), so it compares LOW==LOW natively -- rebasing its words HIGH is what broke
     // gcc's set_static_spec pointer-identity check (gcc_unreachable ICE). Gating on static cleanly separates
     // the two: jq/busybox stay rebased, gcc/cc1 stay low-consistent. HL_RELRODYN=1 forces the old behavior.
@@ -809,7 +809,7 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
     // W6A item 1: a non-PIE absolute DATA ref into the low link range -> serve the access at +bias and
     // advance the host PC. Inert unless g_nonpie_lo is set (ET_EXEC only).
     if (nonpie_fixup(si, uc)) return;
-    // a fault inside a tracked guest PROT_NONE region -- dd's main-stack guard gap OR a page the guest
+    // a fault inside a tracked guest PROT_NONE region -- hl's main-stack guard gap OR a page the guest
     // itself made PROT_NONE (glibc thread-stack guard, malloc-arena guard, an mmap(PROT_NONE) reservation) --
     // is a HARD fault. Deliver SIGSEGV to the guest (or, with no handler, die of it) and NEVER fall into the
     // lazy zero-page grower below: it would see the mapped stack/heap neighbor, mprotect the guard R+W, and
@@ -898,7 +898,7 @@ void jit86_lazyguard(int sig, siginfo_t *si, void *uc) {
     }
     // a genuine in-translated-code guest fault with no handler and no legitimate lazy mapping ->
     // terminate the guest process faithfully (WIFSIGNALED/WTERMSIG=sig for its parent) instead of a raw host
-    // raise() that degrades to exit(255) across dd's fork. Declines for an engine fault -> real crash below.
+    // raise() that degrades to exit(255) across hl's fork. Declines for an engine fault -> real crash below.
     if (deliver_guest_fatal_fault(sig, si, uc)) return;
     signal(sig, SIG_DFL);
     raise(sig); // out of budget / mmap failed -> real crash

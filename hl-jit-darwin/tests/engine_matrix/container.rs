@@ -23,10 +23,10 @@ pub(super) fn container() -> Group {
         {
             let mut c = in_rootfs("hostname-env", "alpine", &["/bin/hostname"]);
             c.engines = vec![Engine::LinuxAarch64, Engine::LinuxX86_64];
-            c.env.push(("HL_HOSTNAME".to_string(), "ddenvhost".to_string()));
+            c.env.push(("HL_HOSTNAME".to_string(), "hlenvhost".to_string()));
             c
         }
-        .out("ddenvhost\n"),
+        .out("hlenvhost\n"),
         sh("proc-self", "test -r /proc/self/status && echo proc-ok").out("proc-ok\n"),
         sh("dev-null", "echo discard > /dev/null && echo dev-ok").out("dev-ok\n"),
         // /dev completeness: fd/std* symlinks + ptmx/pts/shm/console nodes the OCI unpacker strips.
@@ -136,11 +136,11 @@ pub(super) fn x86() -> Group {
                 &[(Engine::LinuxX86_64, "guests/x86/go_heapgc_x86")],
             )
             .has("OK heapgc total= 9922162"),
-            // CPUID feature-flag completeness. Executes real CPUID and asserts every feature dd's
+            // CPUID feature-flag completeness. Executes real CPUID and asserts every feature hl's
             // translator implements is ADVERTISED (SSE2/SSE4.2/POPCNT/AES/PCLMUL/BMI/SHA/ERMS/FSRM/NX/RDTSCP/LM
-            // + the GenuineIntel vendor + "dd JIT x86-64 processor" brand) while AVX/AVX2/AVX512/FMA/XSAVE stay
-            // OFF (dd can't translate VEX/EVEX -> advertising them would crash guests). Self-check verdict,
-            // golden on dd (qemu advertises its own limited model, so exact bits can't be oracle-diffed).
+            // + the GenuineIntel vendor + "hl JIT x86-64 processor" brand) while AVX/AVX2/AVX512/FMA/XSAVE stay
+            // OFF (hl can't translate VEX/EVEX -> advertising them would crash guests). Self-check verdict,
+            // golden on hl (qemu advertises its own limited model, so exact bits can't be oracle-diffed).
             src("cpuid-features", "cpuid_features.c")
                 .only(&[Engine::LinuxX86_64])
                 .out("cpuid ok=1\n"),

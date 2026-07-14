@@ -83,7 +83,7 @@ pub fn app_bundle() -> Option<PathBuf> {
 
 // ── Platform paths ────────────────────────────────────────────────────────────
 
-/// Where the daemon's stdout/stderr logs live (macOS `~/Library/Logs/dd`, Linux `~/.hl/logs`).
+/// Where the daemon's stdout/stderr logs live (macOS `~/Library/Logs/hl`, Linux `~/.hl/logs`).
 pub fn logs_dir() -> PathBuf {
     imp::logs_dir()
 }

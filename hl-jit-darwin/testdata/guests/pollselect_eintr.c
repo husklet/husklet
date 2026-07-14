@@ -1,7 +1,7 @@
 // #396 signal/timeout corners for poll/select/pselect that have no portable POSIX ground truth on a
 // linux dev host, so this is diffed against a native oracle (aarch64 direct / x86 under qemu).
 //
-// The headline check is the select02 HANG regression: a signal dd hooks (host_sigh installed) but the
+// The headline check is the select02 HANG regression: a signal hl hooks (host_sigh installed) but the
 // guest has BLOCKED must NOT restart the full timeout on the resulting EINTR. Before the fix, each such
 // spurious wakeup re-armed the entire timeout, so a *repeating* blocked signal made select/poll/pselect
 // overshoot without bound (LTP select02 never returned). Here a child hammers a blocked SIGUSR1 through
@@ -42,8 +42,8 @@ int main(void) {
     if (pipe(fds) < 0) return 1; // never readable
     pid_t self = getpid();
 
-    // Install a handler for SIGUSR1 (so dd hooks it via host_sigh) then BLOCK it. A blocked signal must
-    // not interrupt the wait as far as the guest is concerned; dd must re-block for the REMAINING time.
+    // Install a handler for SIGUSR1 (so hl hooks it via host_sigh) then BLOCK it. A blocked signal must
+    // not interrupt the wait as far as the guest is concerned; hl must re-block for the REMAINING time.
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = onsig;

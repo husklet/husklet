@@ -1,6 +1,6 @@
 // A fork child INHERITS the parent's epoll interest list (Linux ties it to the inherited OFDs). The child
 // here does NOT re-register: it just writes to the inherited pipe and epoll_waits the inherited instance,
-// expecting the inherited registration (with its original udata) to fire. dd rebuilds an EMPTY kqueue in the
+// expecting the inherited registration (with its original udata) to fire. hl rebuilds an EMPTY kqueue in the
 // child (macOS does not inherit kqueue()s), so without re-arming the inherited interest the child saw
 // nothing. Deterministic -> oracle-checked against native Linux.
 #include <stdio.h>

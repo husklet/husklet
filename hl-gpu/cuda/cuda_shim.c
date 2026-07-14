@@ -1,4 +1,4 @@
-/* dd's libcuda.so.1 — a real CUDA Driver API implementation that runs an app's PTX kernels on dd's
+/* hl's libcuda.so.1 — a real CUDA Driver API implementation that runs an app's PTX kernels on hl's
  * software backend, with NO NVIDIA GPU. The "show the Linux container a CUDA device, run the compute
  * on the host" seam (docs/ideas/CUDA_ON_METAL.md): dd substitutes libcuda (the ZLUDA seam) instead of
  * emulating the closed /dev/nvidia* ioctl ABI.
@@ -933,7 +933,7 @@ CUresult cuCtxDisablePeerAccess(CUcontext peer) { (void)peer; REQUIRE_INIT(); re
 /* -------------------------------------------------------------------------------------------------
  * module / PTX
  * ------------------------------------------------------------------------------------------------- */
-/* Accept an app's kernel image. dd executes PTX text only, so:
+/* Accept an app's kernel image. hl executes PTX text only, so:
  *   - ELF/cubin (0x7f 'E' 'L' 'F')      -> INVALID_IMAGE (SASS is out of scope, see brief tier 3).
  *   - fatbin wrapper/container          -> walk it and extract the embedded UNCOMPRESSED PTX entry
  *     (fatbin.h). A SASS-only or compressed fatbin has no usable PTX -> INVALID_IMAGE.
@@ -984,12 +984,12 @@ CUresult cuModuleGetFunction(CUfunction* f, CUmodule m, const char* name) {
 CUresult cuModuleGetGlobal_v2(CUdeviceptr* dptr, size_t* bytes, CUmodule m, const char* name) {
     REQUIRE_INIT(); if (!m || !name) return CUDA_ERROR_INVALID_VALUE;
     (void)dptr; (void)bytes;
-    /* dd parses only kernel entries out of PTX, not .global variables -> the symbol is absent. */
+    /* hl parses only kernel entries out of PTX, not .global variables -> the symbol is absent. */
     return CUDA_ERROR_NOT_FOUND;
 }
 CUresult cuModuleGetLoadingMode(CUmoduleLoadingMode* mode) { if (!mode) return CUDA_ERROR_INVALID_VALUE; *mode = CU_MODULE_EAGER_LOADING; return CUDA_SUCCESS; }
 CUresult cuModuleUnload(CUmodule m) { if (m) { free(m->ptx); free(m); } return CUDA_SUCCESS; }
-/* a module carries no texture/surface references in dd's PTX model */
+/* a module carries no texture/surface references in hl's PTX model */
 CUresult cuModuleGetTexRef(CUtexref* t, CUmodule m, const char* name) { REQUIRE_INIT(); (void)t; (void)m; (void)name; return CUDA_ERROR_NOT_FOUND; }
 CUresult cuModuleGetSurfRef(CUsurfref* s, CUmodule m, const char* name) { REQUIRE_INIT(); (void)s; (void)m; (void)name; return CUDA_ERROR_NOT_FOUND; }
 
@@ -1305,7 +1305,7 @@ CUresult cuProfilerStop(void) { return CUDA_SUCCESS; }
     X(cuArrayDestroy) X(cuArrayGetSparseProperties) X(cuArrayGetPlane) X(cuArrayGetMemoryRequirements) \
     X(cuMipmappedArrayCreate) X(cuMipmappedArrayGetLevel) X(cuMipmappedArrayDestroy) \
     X(cuMipmappedArrayGetSparseProperties) X(cuMipmappedArrayGetMemoryRequirements) \
-    /* 2D/3D + array-backed copies (dd has no CUarray backing store) */ \
+    /* 2D/3D + array-backed copies (hl has no CUarray backing store) */ \
     X(cuMemcpy2D_v2) X(cuMemcpy2DUnaligned_v2) X(cuMemcpy3D_v2) X(cuMemcpy3DPeer) \
     X(cuMemcpy2DAsync_v2) X(cuMemcpy3DAsync_v2) X(cuMemcpy3DPeerAsync) \
     X(cuMemcpyHtoA_v2) X(cuMemcpyAtoH_v2) X(cuMemcpyAtoD_v2) X(cuMemcpyDtoA_v2) X(cuMemcpyAtoA_v2) \

@@ -1,4 +1,4 @@
-/* Conformance harness for dd's libcudart.so — the CUDA Runtime API shim over the libcuda driver shim.
+/* Conformance harness for hl's libcudart.so — the CUDA Runtime API shim over the libcuda driver shim.
  *
  * Drives the full runtime path an unmodified CUDA app exercises — with NO GPU:
  *   TIER 0 (stateful runtime API): cudaGetDeviceCount / cudaGetDeviceProperties / cudaSetDevice /

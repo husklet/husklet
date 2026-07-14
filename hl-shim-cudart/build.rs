@@ -2,7 +2,7 @@
 //! `#[no_mangle] extern "C"` `cuda*`/`__cuda*` exports the shim must provide. Mirrors
 //! hl-shim-cuda/build.rs exactly, adapted to the runtime API's several return types.
 //!
-//! Input:  `registry/cudart.manifest` (extracted from dd's clean-room `hl-gpu/cuda/cudart_shim.c`
+//! Input:  `registry/cudart.manifest` (extracted from hl's clean-room `hl-gpu/cuda/cudart_shim.c`
 //!         runtime-API surface + the standard driver-backed tail — see `registry/`).
 //! Output: `$OUT_DIR/generated_entrypoints.rs`, `include!`d by `src/lib.rs`.
 //!

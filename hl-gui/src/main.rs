@@ -1,4 +1,4 @@
-//! hl-app — a GTK4 desktop UI for the **dd** VM-less container runtime.
+//! hl-app — a GTK4 desktop UI for the **hl** VM-less container runtime.
 //!
 //! Container-centric master/detail: a left sidebar lists containers + images (with the daemon
 //! connection shown as a sidebar footer), and the content pane shows the selected item's detail —
@@ -165,7 +165,7 @@ impl Component for AppModel {
         };
         let widgets = ui::build(&root, &sender);
 
-        // Bundled starter images (hello-dd) are discovered straight from the app bundle by the daemon
+        // Bundled starter images (hello-hl) are discovered straight from the app bundle by the daemon
         // (Resources/images), so an app update always serves the current set and nothing is copied into
         // ~/.hl that could go stale.
 

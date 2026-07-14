@@ -1,6 +1,6 @@
 // A real GLES2 app (no hl-specific calls): compiles a vertex+fragment shader, uploads an interleaved VBO,
 // and draws an animated colored triangle, swapping buffers each frame. Linked against -lEGL -lGLESv2 — it
-// runs unmodified on the dd GL shim (which forwards its GL calls as hl-gpu IR to the host Metal executor).
+// runs unmodified on the hl GL shim (which forwards its GL calls as hl-gpu IR to the host Metal executor).
 // Prototypes are declared here (standard GLES2/EGL ABI) so it builds without the vendor headers.
 #include <math.h>
 #include <stdint.h>

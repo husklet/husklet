@@ -11,7 +11,7 @@
 //!
 //! All hashes are published vectors or verified-once-and-pinned on the Real oracle (Docker Desktop):
 //!   sha256("abc")=ba7816bf… · sha256("")=e3b0c442… · md5("abc")=90015098… · empty git blob=e69de29b…
-//!   git blob "dd\n"=f03f6945… · fixed-identity commit SHA=9fba1c3d… (all inputs pinned → reproducible).
+//!   git blob "hl\n"=f03f6945… · fixed-identity commit SHA=9fba1c3d… (all inputs pinned → reproducible).
 //!
 //! One file per tool/concern category (each returns `Vec<Scenario>`); `group()` chains them in order.
 

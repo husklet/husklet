@@ -1,7 +1,7 @@
 // #139/#222 regression guard: a fork -> execve CHILD that FAULTS, plus a main-thread handled fault under
 // CRASHDBG. A compiler DRIVER (gcc/clang) forks and execve's sub-processes (cc1/as/ld/collect2); such an
 // exec'd child may take a guest CPU fault -- one it HANDLES via a registered SIGSEGV handler (cc1's fatal-
-// signal handler, glibc stack-overflow detection) or an unhandled one the kernel turns into SIGSEGV. dd
+// signal handler, glibc stack-overflow detection) or an unhandled one the kernel turns into SIGSEGV. hl
 // must re-establish the faulting thread's signal/Mach-exception state across fork + in-process execve and
 // deliver both fates exactly as Linux.
 //

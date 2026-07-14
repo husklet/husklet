@@ -1,14 +1,14 @@
-// PI (priority-inheritance) mutex + robust mutex: the two futex-op families dd used to FAKE.
+// PI (priority-inheritance) mutex + robust mutex: the two futex-op families hl used to FAKE.
 //
-//   * PTHREAD_PRIO_INHERIT mutex -> FUTEX_LOCK_PI/UNLOCK_PI under contention. dd's old "other ops -> return 0"
+//   * PTHREAD_PRIO_INHERIT mutex -> FUTEX_LOCK_PI/UNLOCK_PI under contention. hl's old "other ops -> return 0"
 //     fake-acquired WITHOUT blocking, so two threads could both "own" it and race the counter -> a sum below
 //     the total. Real mutual exclusion => the sum is exactly N.
 //   * PTHREAD_MUTEX_ROBUST mutex whose owner dies still holding it: set_robust_list + the OWNER_DIED handoff
-//     must let the next locker recover with EOWNERDEAD. dd's old no-op set_robust_list left the word owned by
+//     must let the next locker recover with EOWNERDEAD. hl's old no-op set_robust_list left the word owned by
 //     a dead thread forever -> the next lock deadlocked.
 //
 // .out() golden (NOT .oracle()): qemu-user x86_64 -- the x86 oracle on an aarch64 host -- cannot run PI
-// futexes (hangs), so the golden below is the correct native-Linux result, checked on both dd Linux engines.
+// futexes (hangs), so the golden below is the correct native-Linux result, checked on both hl Linux engines.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>

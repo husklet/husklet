@@ -99,7 +99,7 @@ fn gpu_map() -> &'static std::sync::Mutex<std::collections::HashMap<u32, usize>>
     GPU_SURFACES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-// id → allocation generation. The IOSurface id is a macOS-minted `IOSurfaceGetID` that dd RECYCLES
+// id → allocation generation. The IOSurface id is a macOS-minted `IOSurfaceGetID` that hl RECYCLES
 // (a retired pool surface is re-handed to the next same-size alloc; a released legacy id is
 // OS-recyclable), so the bare id cannot distinguish a live allocation from a stale reference. This
 // table stamps each id's current allocation: set to 1 on first registration and bumped every time the

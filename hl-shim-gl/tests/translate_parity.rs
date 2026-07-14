@@ -1,5 +1,5 @@
 //! Translator byte-parity: assert hl-shim-gl's Rust GLSL→MSL translator produces output IDENTICAL to
-//! gl_shim.c's `translate()`, using gl_shim.c's own `-DDD_TR_TOOL gl_tr` tool as the oracle. Runs over
+//! gl_shim.c's `translate()`, using gl_shim.c's own `-HLD_TR_TOOL gl_tr` tool as the oracle. Runs over
 //! the committed `shader_translate/*.glsl` corpus (chrome/Skia shaders that exercise uniforms,
 //! matrices, samplers, builtins, local decls). Skips (does not fail) if `cc` isn't available.
 
@@ -13,7 +13,7 @@ fn gl_shim_c() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../hl-jit-darwin/testdata/guests/gl_shim.c")
 }
 
-/// Build gl_shim.c's translator tool (`cc -DDD_TR_TOOL`). Returns the binary path, or None to skip.
+/// Build gl_shim.c's translator tool (`cc -HLD_TR_TOOL`). Returns the binary path, or None to skip.
 fn build_gl_tr(dir: &Path) -> Option<PathBuf> {
     let src = gl_shim_c();
     if !src.exists() {
@@ -21,7 +21,7 @@ fn build_gl_tr(dir: &Path) -> Option<PathBuf> {
     }
     let bin = dir.join("gl_tr");
     let ok = Command::new("cc")
-        .arg("-DDD_TR_TOOL")
+        .arg("-HLD_TR_TOOL")
         .arg(&src)
         .arg("-o")
         .arg(&bin)

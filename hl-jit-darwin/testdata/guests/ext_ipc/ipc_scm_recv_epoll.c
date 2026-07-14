@@ -9,7 +9,7 @@
 //   - zygote-inbound epolls a FORK-INHERITED socket: the receiver recvmsg's it, then fork()s a child
 //     that epoll_ctl's the INHERITED fd -- kqueue arming rides fork inheritance, not the recvmsg fd.
 //   - scm-futex delivers an SCM_RIGHTS memfd but waits on FUTEX, never epoll/kqueue.
-// Here the SAME process that recvmsg's the socket is the one that arms it on epoll -- so if dd fails to
+// Here the SAME process that recvmsg's the socket is the one that arms it on epoll -- so if hl fails to
 // arm the host kqueue EVFILT_READ on an fd installed by recvmsg's SCM_RIGHTS path (net.c:1283 ->
 // cmsg_m2l), the child never gets EPOLLIN and parks forever. A watchdog thread turns that lost wake
 // into a deterministic nonzero exit (never a hang). ROUNDS repeats the drain->re-block cycle so a

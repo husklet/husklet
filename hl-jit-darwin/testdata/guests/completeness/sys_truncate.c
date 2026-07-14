@@ -4,7 +4,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 int main(void){
-  const char *p="/tmp/ddc_trc"; unlink(p);
+  const char *p="/tmp/hlc_trc"; unlink(p);
   int fd=open(p,O_CREAT|O_RDWR|O_TRUNC,0644);
   for(int i=0;i<100;i++) write(fd,"x",1);
   long r1=syscall(SYS_ftruncate, fd, (long)10);

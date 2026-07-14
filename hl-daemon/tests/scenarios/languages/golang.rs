@@ -1,7 +1,7 @@
 //! Go — full compile+link+run inside the container (`go run`), heaviest fork/exec+codegen path among
 //! the interpreted langs. alpine (musl, internal linker) + bookworm (glibc). Markers per MANIFEST §2.
 //! exec-loader-noent triage: NOT an engine gap. go compiles, links (internal linker) and runs
-//! correctly on BOTH linux arches under dd — the earlier failures were the pre-seeded poc image dropping
+//! correctly on BOTH linux arches under hl — the earlier failures were the pre-seeded poc image dropping
 //! Config.Env (PATH=/usr/local/go/bin:/go/bin), so `go` was simply not on PATH. Verified XPASS both arches.
 
 use crate::scenario::{scen, Scenario};

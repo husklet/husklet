@@ -1,4 +1,4 @@
-//! `dd` — one black, iTerm2-style product: a Workspace Manager window that opens first, a rich
+//! `hl` — one black, iTerm2-style product: a Workspace Manager window that opens first, a rich
 //! New-Workspace configuration window, and a per-workspace Terminal window you launch from the manager.
 //!
 //! * Native macOS title bars (real traffic lights); content — including the full-width tab strip — sits
@@ -487,7 +487,7 @@ fn confirm_dialog(message: &str) -> bool {
 }
 
 // =================================================================================================
-// Window — Settings (global): one coherent surface over everything dd has built. A left nav drives a
+// Window — Settings (global): one coherent surface over everything hl has built. A left nav drives a
 // stack of sections, matching the all-black New-Workspace sheet idiom.
 //
 //   * Appearance         → the terminal look (`~/.hl/term.conf`): font + size, theme fg/bg, cursor,
@@ -2006,14 +2006,14 @@ fn open_terminal_window(app: &gtk::Application, ws: &WorkspaceConfig) {
             // children at once, then join. Each pane is a SEPARATE engine/slot, so the freezes are
             // independent — running them sequentially made closing an N-tab window take N× a single engine
             // dump (seconds of frozen UI = the "window takes a while to close" report). MUST go through the
-            // clean-env `ddcli_command` (hl-term runs under the nix devshell; a raw Command would poison
+            // clean-env `hlcli_command` (hl-term runs under the nix devshell; a raw Command would poison
             // hl's loader + its forked engine and silently lose the processes). Every child is joined
             // before the kill_pg below, so all slots are fully frozen before any pane is torn down.
             let mut freezes: Vec<(String, Option<std::process::Child>)> = live
                 .iter()
                 .map(|(slot, _pid)| {
                     let child =
-                        ddcli_command(&["workspace", "checkpoint", &tw.ws.name, "--slot", slot]).spawn().ok();
+                        hlcli_command(&["workspace", "checkpoint", &tw.ws.name, "--slot", slot]).spawn().ok();
                     (slot.clone(), child)
                 })
                 .collect();
@@ -2701,7 +2701,7 @@ fn make_terminal_ex(tw: &Rc<TermWin>, cwd: Option<String>, history: Option<Strin
     // Register this pane (terminal + its slot + pid) so the window's close handler can freeze it into its
     // own slot, and `save_session` can record which slot each pane owns.
     tw.panes.borrow_mut().push((term.downgrade(), slot.clone(), pid.clone()));
-    let hl = ddcli_path();
+    let hl = hlcli_path();
     // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs hl); HL_TERM_DEBUG_LOG
     // captures hl's output to a file to diagnose the early exit.
     let testcmd = std::env::var("HL_TERM_CMD").ok();
@@ -3159,7 +3159,7 @@ struct DashData {
 fn spawn_dashboard_poller(ws_name: String, shell: String, data: std::sync::Arc<std::sync::Mutex<DashData>>) {
     std::thread::spawn(move || {
         // `hl workspace daemon <name>` starts (idempotently) the isolated daemon + prints its socket.
-        let sock = ddcli_command(&["workspace", "daemon", &ws_name])
+        let sock = hlcli_command(&["workspace", "daemon", &ws_name])
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -3645,8 +3645,8 @@ fn kill_pg(pid: i32) {
 /// crash it + its forked engine at startup. EVERY `hl` invocation from the GUI must therefore clear the
 /// inherited env and pass only the essentials — the same discipline the terminal-launch spawn already uses.
 /// Skipping this on the freeze-on-close checkpoint is why frozen workspaces silently lost their processes.
-fn ddcli_command(args: &[&str]) -> std::process::Command {
-    let mut c = std::process::Command::new(ddcli_path());
+fn hlcli_command(args: &[&str]) -> std::process::Command {
+    let mut c = std::process::Command::new(hlcli_path());
     c.args(args);
     c.env_clear();
     c.env("TERM", "xterm-256color");
@@ -3659,7 +3659,7 @@ fn ddcli_command(args: &[&str]) -> std::process::Command {
     c
 }
 
-fn ddcli_path() -> String {
+fn hlcli_path() -> String {
     if let Ok(home) = std::env::var("HOME") {
         let p = format!("{home}/.local/bin/hl");
         if std::path::Path::new(&p).exists() {

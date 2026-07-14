@@ -55,7 +55,7 @@ mod arch_serde {
     }
 }
 
-/// `HostConfig.LogConfig` (`--log-driver`/`--log-opt`). Metadata only — dd has a single built-in log
+/// `HostConfig.LogConfig` (`--log-driver`/`--log-opt`). Metadata only — hl has a single built-in log
 /// sink — but accepted at create and round-tripped verbatim through inspect so clients diff it cleanly.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct LogConfig {
@@ -227,7 +227,7 @@ pub(crate) struct Container {
     pub(crate) stderr: Vec<u8>,
 }
 
-/// A `docker exec` invocation: a command to run in a container's rootfs. dd runs it as a fresh JIT
+/// A `docker exec` invocation: a command to run in a container's rootfs. hl runs it as a fresh JIT
 /// process sharing the container's rootfs + volumes (the same files; a distinct process namespace).
 #[derive(Clone)]
 pub(crate) struct Exec {

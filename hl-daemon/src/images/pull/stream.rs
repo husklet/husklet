@@ -146,7 +146,7 @@ pub(crate) fn registry_auth(headers: &axum::http::HeaderMap) -> Credentials {
 /// docker-style pull progress: a newline-delimited stream of JSON status lines the CLI renders.
 ///
 /// `digest`/`size` describe the pulled image (its synthetic content digest and on-disk rootfs size);
-/// they drive a docker-shaped per-layer progress sequence on a fresh pull. dd squashes an image to a
+/// they drive a docker-shaped per-layer progress sequence on a fresh pull. hl squashes an image to a
 /// single rootfs, so we surface ONE synthetic layer (id = first 12 hex of the digest) rather than the
 /// registry's real per-blob layers. See the registry note in the push helper for what real byte
 /// progress would require.

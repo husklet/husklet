@@ -1,13 +1,13 @@
 // /proc/sys/{kernel,vm,net,fs} conformance. Two kinds of assertion, both byte-identical between a correct
-// dd and the real-docker (OrbStack) oracle:
+// hl and the real-docker (OrbStack) oracle:
 //   * eq()  -- deterministic, well-known kernel defaults (a stub/empty/placeholder handler is caught here).
 //   * ge()  -- the app-tuning values whose ABSOLUTE number is host-variant, but which real servers compare
-//              against a threshold. We assert the threshold the server needs, so both dd and the oracle pass
-//              while the OLD dd constants (which triggered startup warnings a docker user never sees) fail:
+//              against a threshold. We assert the threshold the server needs, so both hl and the oracle pass
+//              while the OLD hl constants (which triggered startup warnings a docker user never sees) fail:
 //                - vm.overcommit_memory must be 1  (else redis prints its overcommit WARNING)
 //                - vm.max_map_count >= 262144      (else elasticsearch refuses to boot)
 //                - fs.file-max large, fs.aio-max-nr, fs.inotify.* large (else watchers hit ENOSPC)
-//                - fs.mqueue.* present             (dd used to ENOENT these)
+//                - fs.mqueue.* present             (hl used to ENOENT these)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,7 +45,7 @@ int main(void) {
     ok &= eq("/proc/sys/net/ipv4/ip_local_port_range", "32768\t60999\n");
     ok &= eq("/proc/sys/net/ipv4/tcp_congestion_control", "cubic\n");
 
-    // ---- app-warning differentials (the OLD dd values fail these; oracle + fixed dd pass) ----
+    // ---- app-warning differentials (the OLD hl values fail these; oracle + fixed hl pass) ----
     ok &= eq("/proc/sys/vm/overcommit_memory", "1\n"); // redis warns unless exactly 1
     ok &= ge("/proc/sys/vm/max_map_count", 262144);    // elasticsearch bootstrap floor
     ok &= ge("/proc/sys/fs/file-max", 2000000);        // modern kernels report ~LONG_MAX

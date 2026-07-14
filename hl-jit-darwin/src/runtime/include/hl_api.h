@@ -5,7 +5,7 @@
 // `posix_spawn`s the arch-matching engine with `--configfd <fd>` and writes the buffer to it — NO
 // argv flag soup, NO `HL_*` environment dialect. The engine reads the buffer, populates the same
 // container globals `container_init` sets, and runs the guest; guest exit `_exit()`s the worker, so
-// the returned pid is the whole container's lifetime. Engine *tuning* knobs (DDJIT_*, JT, …) are a
+// the returned pid is the whole container's lifetime. Engine *tuning* knobs (HL_JIT_*, JT, …) are a
 // separate, engine-internal concern and are NOT part of this contract.
 #ifndef HL_API_H
 #define HL_API_H
@@ -82,7 +82,7 @@ struct hl_config {
 //
 // `in_fd`/`out_fd`/`err_fd` become the child's fd 0/1/2 via dup2 (-1 = inherit the caller's). The caller
 // OWNS those fds and closes its own copies after this returns — the shim never closes them. `flags` is a
-// bitwise-OR of the DDJIT_SPAWN_* bits above. No engine symbols are referenced here, so this translation
+// bitwise-OR of the HL_JIT_SPAWN_* bits above. No engine symbols are referenced here, so this translation
 // unit links cleanly into the Rust host process without pulling the engine in.
 pid_t hl_spawn(const char *engine_path, const uint8_t *config, size_t config_len,
                   int in_fd, int out_fd, int err_fd, uint32_t flags);

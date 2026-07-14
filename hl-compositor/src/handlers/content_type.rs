@@ -3,7 +3,7 @@
 //! latency). Composed from the vendored Smithay `content_type` module.
 //!
 //! ## Host policy (store the hint)
-//! dd presents through one Cocoa/Metal window and has no per-surface tearing/filter knob to flip today,
+//! hl presents through one Cocoa/Metal window and has no per-surface tearing/filter knob to flip today,
 //! so the correct behaviour is to STORE the committed content type per surface (Smithay double-buffers
 //! it in `ContentTypeSurfaceCachedState`; [`HlState::record_content_type`] snapshots the committed value
 //! into `content_types` on every commit). [`HlState::content_type`] exposes it so the present path — and

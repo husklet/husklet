@@ -4,7 +4,7 @@
 //     dev field of the form NN:NN;
 //   * the executable's own text is mapped r-xp somewhere;
 //   * regions are ASCENDING and NON-OVERLAPPING (the kernel invariant a sequential parser relies on) —
-//     dd emitted them in gmap-registration order before the fix, so this fails on the pre-fix engine;
+//     hl emitted them in gmap-registration order before the fix, so this fails on the pre-fix engine;
 //   * a live heap allocation lands inside SOME writable mapping (the allocator's memory is represented),
 //     and on aarch64 (growable brk) a line named [heap] exists — jemalloc/redis/pmap look for it;
 //   * a [stack] line exists (glibc pthread_getattr_np scans for it).

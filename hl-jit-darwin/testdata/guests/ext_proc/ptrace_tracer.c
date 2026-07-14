@@ -1,4 +1,4 @@
-// ext_proc/ptrace_tracer.c -- exercises dd's real ptrace(2) support (bug #238), portable across the two
+// ext_proc/ptrace_tracer.c -- exercises hl's real ptrace(2) support (bug #238), portable across the two
 // Linux guest arches (x86-64 + aarch64). A parent forks a child; the child PTRACE_TRACEME's itself and
 // raises SIGSTOP; the parent drives it with PTRACE_SYSCALL and asserts, via PTRACE_GETREGS, that it
 // observes the child's syscalls with the CORRECT arch-native syscall number, at both entry and exit,

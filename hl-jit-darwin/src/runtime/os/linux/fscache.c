@@ -1,4 +1,4 @@
-// dd/runtime/os/linux -- ELF loader fwd-decls + the FS-metadata cache (stat/access/readlink memoized).
+// hl/runtime/os/linux -- ELF loader fwd-decls + the FS-metadata cache (stat/access/readlink memoized).
 
 static void load_elf(const char *path, struct loaded *out);
 static int elf_interp(const char *path, char *out, size_t n);
@@ -37,7 +37,7 @@ static void oc_reset(void);
 static const char *shm_backing_path(const char *guest, char *buf, size_t n) {
     if (!guest || guest[0] != '/' || strncmp(guest, "/dev/shm/", 9)) return NULL;
     const char *name = guest + 9;
-    int pfx = g_rootfs_canon[0] ? snprintf(buf, n, "%s/dev/shm/", g_rootfs_canon) : snprintf(buf, n, "/tmp/.ddshm-");
+    int pfx = g_rootfs_canon[0] ? snprintf(buf, n, "%s/dev/shm/", g_rootfs_canon) : snprintf(buf, n, "/tmp/.hlshm-");
     if (pfx < 0 || pfx >= (int)n - 1) return NULL;
     int m = pfx + snprintf(buf + pfx, n - (size_t)pfx, "%s", name);
     if (m > (int)n - 1) m = (int)n - 1;
@@ -148,8 +148,8 @@ static const char *atpath(int dirfd, const char *raw, char *buf, size_t n, int n
 // keeps serving ENOENT forever (its own private g_res_epoch never moved), so the file looks "vanished" and
 // apt's split rename fails ENOENT. With the counter shared, the child's O_CREAT/rename res_bump() invalidates
 // the negative entry in the parent too. The page is created in a constructor BEFORE any guest fork, so every
-// fork descendant AND in-process execve (dd keeps its own mappings across the guest execve) share one physical
-// counter; a fresh `docker exec` is a NEW dd process = its own tree = its own counter (correct per-container
+// fork descendant AND in-process execve (hl keeps its own mappings across the guest execve) share one physical
+// counter; a fresh `docker exec` is a NEW hl process = its own tree = its own counter (correct per-container
 // isolation). Falls back to a private local counter if the mmap fails (degrades to the old per-process
 // behaviour, never crashes). Positive entries are still served epoch-independently, unchanged.
 static _Atomic uint32_t g_res_epoch_local = 1;                 // fallback when the shared mapping can't be made

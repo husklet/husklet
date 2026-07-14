@@ -93,7 +93,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
         if (g_pidmap_n && (int)a0 > 0 && (int)a0 != container_pid()) a0 = (uint64_t)(unsigned)pidmap_to_live((int)a0);
         else if (g_pidmap_n && (int)a0 < -1) a0 = (uint64_t)(int64_t)(-pidmap_to_live(-(int)a0));
         if ((int)a0 == 0) {
-            // kill(0, sig): Linux signals EVERY process in the CALLER's process group. dd shares its host
+            // kill(0, sig): Linux signals EVERY process in the CALLER's process group. hl shares its host
             // session/process-group with the launcher + sibling engines, so a raw kill(-getpgrp()) would
             // escape the "container"; instead deliver to each container-registry MEMBER that shares our host
             // process group (which mirrors the guest's -- setpgid is forwarded, case 154), plus ourselves via
@@ -112,7 +112,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             raise_guest_signal(c, (int)a1);
             G_RET(c) = 0;
         } else if ((int)a0 < -1) {
-            // kill(-pgid, sig): signal a SPECIFIC process group. dd runs each guest process as a real host
+            // kill(-pgid, sig): signal a SPECIFIC process group. hl runs each guest process as a real host
             // process whose process group MIRRORS the guest's (case 154 forwards setpgid to the host; non-
             // init children carry their real host pids), so the named group is a real, isolated host group
             // -- route the signal there. The old code folded EVERY a0<=0 into raise_guest_signal (signal
@@ -126,7 +126,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             if (gpgid == 1 && g_init_hostpid) gpgid = g_init_hostpid;
             G_RET(c) = kill(-gpgid, sig_l2m((int)a1)) < 0 ? (uint64_t)(-errno) : 0;
         } else
-        // Cross-process: the target is another dd engine whose host_sigh is installed on the MACOS signal
+        // Cross-process: the target is another hl engine whose host_sigh is installed on the MACOS signal
         // number (rt_sigaction, case 134, installs on sig_l2m(sig)); its host_sigh translates back via
         // sig_m2l. So the sender MUST translate Linux->macOS here too -- else a divergent signal (SIGUSR1=10,
         // SIGUSR2=12, SIGURG=23, ... differ between Linux and macOS) lands on the wrong disposition and is
@@ -140,7 +140,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
             // guest-pid namespace: a container may only signal a process INSIDE itself. Reject a target that
             // is not a live member of this container's process registry -> ESRCH. This closes the host-pid
             // authority leak: without it a guest kill(2)/kill(pid,0) could reach an ARBITRARY same-user host
-            // pid -- a sibling engine (another container), the launcher, or any of the dd user's processes.
+            // pid -- a sibling engine (another container), the launcher, or any of the hl user's processes.
             // Legitimate cross-guest-process signalling still works (a real peer IS a registry member). Gated
             // on container mode (g_init_hostpid); bare (non-container) mode keeps the historical host model.
             if (g_init_hostpid && !container_host_member((int)tgt)) {
@@ -199,7 +199,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     // sigaltstack(new, old): struct sigaltstack { void *ss_sp; int ss_flags; size_t ss_size; } (24 bytes).
     case 132: {
         // Linux validates BEFORE writing `old`: bad pointers -> EFAULT; an unknown ss_flags mode -> EINVAL;
-        // and, unless SS_DISABLE, a stack smaller than MINSIGSTKSZ -> ENOMEM. Without this dd installs a
+        // and, unless SS_DISABLE, a stack smaller than MINSIGSTKSZ -> ENOMEM. Without this hl installs a
         // bogus/tiny altstack that corrupts later SA_ONSTACK signal delivery.
         if ((a1 && guest_bad_ptr(a1, 24)) || (a0 && guest_bad_ptr(a0, 24))) {
             G_RET(c) = (uint64_t)(-EFAULT);
@@ -280,7 +280,7 @@ static int svc_signal(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint
     // bit is the only deviation from a perfect mask restore).
     case 133: {
         // The kernel copy_from_user()s the new mask, so a bad set pointer is -EFAULT (LTP sigsuspend02's
-        // tst_get_bad_addr case). That address is a guest PROT_NONE guard page (physically R+W under dd but
+        // tst_get_bad_addr case). That address is a guest PROT_NONE guard page (physically R+W under hl but
         // faulting per Linux), tracked in the g_gna registry -- gna_hit catches it WITHOUT a probe-read, so a
         // valid but non-host-mapped non-PIE .bss sigset (this handler reads a0 directly, unrebased) is not
         // mistaken for a fault. NULL is not a valid rt_sigsuspend mask -> EFAULT too.

@@ -11,7 +11,7 @@
 //!
 //! ## Coverage
 //! The exported entry-point *surface* is code-generated from a committed manifest (`build.rs` +
-//! `registry/`), extracted from dd's clean-room `hl-gpu/cuda/cudart_shim.c` runtime surface plus the
+//! `registry/`), extracted from hl's clean-room `hl-gpu/cuda/cudart_shim.c` runtime surface plus the
 //! standard driver-backed tail, so it is genuinely surface-complete. Every entry point in
 //! [`build::IMPLEMENTED`](../build.rs) has a real hand-written body in [`runtime`]; there are no
 //! generated stubs left.
@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(runtime::cudaStreamDestroy(s), CUDA_SUCCESS);
     }
 
-    /// A kernel using an instruction outside dd's modeled PTX subset (`shfl.sync`, a warp intrinsic).
+    /// A kernel using an instruction outside hl's modeled PTX subset (`shfl.sync`, a warp intrinsic).
     /// It parses as a valid entry (so the fatbin walk + module load succeed) but cannot be executed.
     const UNSUPPORTED_PTX: &str = r#"
         .version 7.5

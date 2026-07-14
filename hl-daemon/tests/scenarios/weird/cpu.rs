@@ -51,7 +51,7 @@ int main(){struct timespec a,b; clock_gettime(CLOCK_MONOTONIC,&a);
   printf("CLOCK=%s\n",(b.tv_sec>a.tv_sec||(b.tv_sec==a.tv_sec&&b.tv_nsec>=a.tv_nsec))?"ok":"no"); return 0;}"#)
             .has("CLOCK=ok"),
         // Plain compile-and-run canary: documents the toolchain (cc1/as/ld fork-exec) gap directly,
-        // separate from any syscall — XPASS here means `cc` works under dd again.
+        // separate from any syscall — XPASS here means `cc` works under hl again.
         cc("weird/cc-canary", "-O2", r#"#include <stdio.h>
 int main(){ long s=0; for(long i=1;i<=1000;i++) s+=i; printf("CC=%ld\n", s); return 0; }"#)
             .has("CC=500500"),

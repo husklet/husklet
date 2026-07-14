@@ -328,7 +328,7 @@ pub(crate) async fn images_build(
     }
 
     // Reject a Dockerfile whose exec-form (JSON array) instruction has a non-string element — e.g.
-    // `CMD ["echo", 123]`. Docker fails the build; dd previously filtered the bad element and built a
+    // `CMD ["echo", 123]`. Docker fails the build; hl previously filtered the bad element and built a
     // truncated command. Only a *valid JSON array* with a non-string trips this: a `[`-prefixed shell
     // command like `RUN [ -f x ]` is not valid JSON and stays shell-form. Validate up front so we fail
     // before creating any image output.

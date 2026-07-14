@@ -4,8 +4,8 @@
 //!
 //! Authoring contract (see docs/CHARTER.md, docs/TESTING.md, docs/IMAGE-MANIFEST.md):
 //!   * verify every case against `--backend real` (host docker = ground-truth oracle) so the TEST is
-//!     proven correct; then `--backend dd` reveals JIT divergences.
-//!   * runs on BOTH linux arches by default; pin output (deterministic); known dd gaps → `.xfail()`.
+//!     proven correct; then `--backend hl` reveals JIT divergences.
+//!   * runs on BOTH linux arches by default; pin output (deterministic); known hl gaps → `.xfail()`.
 
 use crate::scenario::ScenGroup;
 

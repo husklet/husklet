@@ -1,5 +1,5 @@
 //! PTX → hl-GPU **kernel IR** front-end + a CPU interpreter — the compute core that lets a real
-//! CUDA PTX kernel execute end-to-end through dd's stack on the [`crate::software::SoftwareBackend`]
+//! CUDA PTX kernel execute end-to-end through hl's stack on the [`crate::software::SoftwareBackend`]
 //! with **no GPU**, as the standing correctness oracle for the future Metal backend.
 //!
 //! ## What this is (and the honest boundary)
@@ -39,7 +39,7 @@ fn err(m: impl Into<String>) -> GpuError {
 /// Canonical nvcc-style PTX (sm_86) for `vecadd(const float* a, const float* b, float* c, int n)`:
 /// `c[i] = a[i] + b[i]` with the standard `mad`-computed global index and an `if (i >= n) return;`
 /// bounds guard. Used by the end-to-end tests + the `hl-gpu/cuda` dlopen ABI test as the reference
-/// kernel that executes all the way through dd's stack on the software backend.
+/// kernel that executes all the way through hl's stack on the software backend.
 pub const VECADD_PTX: &str = r#"
     .version 7.5
     .target sm_86

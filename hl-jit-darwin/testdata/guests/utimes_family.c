@@ -1,13 +1,13 @@
 // EDGE / regress: the x86-legacy time-setter family that has NO aarch64 canonical syscall number and so
-// used to fall through dd's x86->canonical normalization to ENOSYS:
+// used to fall through hl's x86->canonical normalization to ENOSYS:
 //   utime(2)=132, utimes(2)=235, futimesat(2)=261  (+ the modern utimensat(2) they are rewritten onto).
-// dd rewrites each to utimensat(dirfd, path, timespec[2], flags), converting struct utimbuf / struct
+// hl rewrites each to utimensat(dirfd, path, timespec[2], flags), converting struct utimbuf / struct
 // timeval[2] -> struct timespec[2], and mapping NULL times to "set to now". This guest exercises, for each:
 //   * explicit times (distinct atime != mtime, so both fields are proven to flow through independently),
 //   * NULL times (=> current time; checked as "recent", not an exact value, to stay deterministic),
 // plus utimensat's UTIME_OMIT (leave one field) and UTIME_NOW (bump one field to now) which the legacy forms
 // cannot express but the modern target must honor. All checks reduce to booleans + second-granularity time
-// compares (nanosecond FS granularity differs across the dd/oracle filesystems, so we compare seconds only),
+// compares (nanosecond FS granularity differs across the hl/oracle filesystems, so we compare seconds only),
 // so stdout is byte-identical to the native/qemu oracle. Prints "utimes-family OK" iff every check passes.
 #define _GNU_SOURCE
 #include <fcntl.h>

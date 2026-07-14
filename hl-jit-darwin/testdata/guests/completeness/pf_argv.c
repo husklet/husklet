@@ -4,7 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 
-/* Linux carries far more than 255 argv entries (up to ARG_MAX bytes) across execve. dd truncated at 255,
+/* Linux carries far more than 255 argv entries (up to ARG_MAX bytes) across execve. hl truncated at 255,
    silently running a different command and diverging /proc/self/cmdline. Re-exec self with 300 extra args
    and, in the child, print the observed argc + the /proc/self/cmdline arg count. Oracle-diff vs native. */
 

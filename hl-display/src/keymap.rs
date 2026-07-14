@@ -22,7 +22,7 @@ pub fn anon_fd_with(bytes: &[u8]) -> Option<i32> {
         // and O_EXCL then fails EEXIST — the source of a flaky `anon_fd_with` failure on macOS.
         use std::sync::atomic::{AtomicU64, Ordering};
         static ANON_SEQ: AtomicU64 = AtomicU64::new(0);
-        let nm = format!("/ddkm{}.{}", unsafe { libc::getpid() }, ANON_SEQ.fetch_add(1, Ordering::Relaxed));
+        let nm = format!("/hlkm{}.{}", unsafe { libc::getpid() }, ANON_SEQ.fetch_add(1, Ordering::Relaxed));
         let c = std::ffi::CString::new(nm).ok()?;
         unsafe {
             let fd = libc::shm_open(

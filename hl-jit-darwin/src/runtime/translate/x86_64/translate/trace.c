@@ -195,7 +195,7 @@ static int loop_flags_dead(uint64_t start) {
 //    (txpg_has -> mapped, executable guest code). A speculative jcc target on a never-mapped page is
 //    simply "all flags live".
 //  * Classification is a sound under-approximation of WRITES and over-approximation of READS with
-//    respect to dd's OWN emitters (not just the x86 architecture): e.g. rotates and by-CL shifts
+//    respect to hl's OWN emitters (not just the x86 architecture): e.g. rotates and by-CL shifts
 //    load-modify-store cpu->nzcv (membank readers!) -> unknown; inc/dec merge the stored C (which
 //    they can never kill, so a live CF always blocks the elision before it matters); imm shifts
 //    store a full fresh NZCV word + PF but never AF.
@@ -252,7 +252,7 @@ static const uint8_t xf_cond_rd[16] = {
 };
 
 // Per-insn flag read/write classification for the liveness scan. *rd = flags possibly read,
-// *wr = flags DEFINITELY overwritten (with a fresh, input-independent storage write by dd's
+// *wr = flags DEFINITELY overwritten (with a fresh, input-independent storage write by hl's
 // emitter). Returns the scan step kind.
 enum { XRW_OK, XRW_JMP, XRW_END, XRW_UNK };
 

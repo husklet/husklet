@@ -5,7 +5,7 @@
 //! `hl-display` runs). The wire format itself is tiny and stable, so a focused codec keeps the CPU-buffer
 //! MVP portable AND fully unit-testable on the Linux dev host. See `docs/ideas/RENDERING_PLAN.md`.
 //!
-//! Wire format (host byte order — guest and host are the same ISA under dd, so native-endian is correct):
+//! Wire format (host byte order — guest and host are the same ISA under hl, so native-endian is correct):
 //!   header: u32 `object_id`, u32 `(size << 16) | opcode`  (size counts the 8-byte header).
 //!   args, each 32-bit aligned: int/uint/fixed = 1 word; object/new_id = 1 word (u32 id);
 //!   string = u32 len (incl. NUL) then bytes padded to 4 (len 0 ⇒ null); array = u32 size then bytes

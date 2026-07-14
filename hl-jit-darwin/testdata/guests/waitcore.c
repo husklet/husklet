@@ -2,7 +2,7 @@
 // (SIGQUIT/SIGABRT/SIGSEGV/SIGILL/SIGFPE/SIGBUS/SIGTRAP/SIGSYS/SIGXCPU/SIGXFSZ) while RLIMIT_CORE's soft
 // limit is > 0, the parent's wait status must have the 0x80 (WCOREDUMP) bit set -- exactly as Linux does.
 // A non-core signal (SIGKILL/SIGTERM/SIGINT/...) or a zero core limit must leave it clear, and a normal
-// exit is WIFEXITED with the right code. dd historically dropped the 0x80 bit (LTP waitpid01 TFAIL).
+// exit is WIFEXITED with the right code. hl historically dropped the 0x80 bit (LTP waitpid01 TFAIL).
 //
 // The core limit is set in the PARENT before fork (children inherit it), matching LTP waitpid01's setup.
 // Children chdir into a private temp dir so the native oracle's real core file lands there; the parent

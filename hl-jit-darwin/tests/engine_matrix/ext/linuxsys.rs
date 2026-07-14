@@ -53,7 +53,7 @@ fn events() -> Group {
             // kernel-AIO/libaio (io_setup/io_submit(PREAD)/io_getevents): synchronous emulation must return
             // the completion with res==nbytes and the right bytes. Unblocks nginx:alpine + innodb file-AIO.
             // Golden-checked (NOT oracle): qemu-x86_64 user-mode returns ENOSYS for io_setup, so it can't be
-            // the ground truth; the native aarch64 kernel and both dd JITs all produce this exact line.
+            // the ground truth; the native aarch64 kernel and both hl JITs all produce this exact line.
             src("aio-pread", "ext_linuxsys/aio_pread.c")
                 .out("aio res=10 data=d00dfeed buf=KLMNOPQRST\n")
                 .exit(0),
@@ -87,7 +87,7 @@ fn fsx() -> Group {
             // Golden-checked (NOT oracle): the 4th seal digit is pwritev2-vs-F_SEAL_WRITE, and
             // qemu-x86_64 user-mode returns ENOSYS for pwritev2 (seals=1110), so it can't be the
             // ground truth. Canonical Linux returns EPERM (verified: native aarch64 kernel prints
-            // seals=1111, matching both dd JITs) — the golden pins dd to real-kernel behaviour.
+            // seals=1111, matching both hl JITs) — the golden pins hl to real-kernel behaviour.
             src("high-fd-emul", "ext_linuxsys/high_fd_emul.c")
                 .out("highfd base=1 event=1 timer=1 seals=1111\n")
                 .exit(0),
@@ -133,7 +133,7 @@ fn procx() -> Group {
             // pidfd_send_signal IS implemented and delivers correctly (opened=1 sent=1). The test's `killed`
             // field is a non-deterministic SIGTERM-vs-SIGKILL RACE: right after the pidfd SIGTERM the parent
             // also SIGKILLs the child. The native kernel usually lets the unblockable SIGKILL win the pending
-            // pair (killed=0), while dd's SIGTERM (a host kill to the separate child engine, whose host default
+            // pair (killed=0), while hl's SIGTERM (a host kill to the separate child engine, whose host default
             // terminates it) frequently lands first (killed=1). The winner varies run-to-run on BOTH arches, so
             // it can never be byte-stable against the oracle -- not an engine gap. Timing/oracle artifact.
             src("pidfd-signal", "ext_linuxsys/pidfd_signal.c")
@@ -185,7 +185,7 @@ fn miscx() -> Group {
             // io_uring is DELIBERATELY unimplemented: all of setup/enter/register return ENOSYS on BOTH arches
             // A fake setup that succeeds but never completes SQEs would hang every real guest that then
             // submits I/O (Go/tokio/liburing) waiting on completions that never arrive — strictly worse than the
-            // graceful epoll/sync fallback a clean ENOSYS triggers. So dd reports "no io_uring" exactly as a
+            // graceful epoll/sync fallback a clean ENOSYS triggers. So hl reports "no io_uring" exactly as a
             // kernel built without it. The native aarch64 oracle HAS io_uring (setup=1), so this differential is
             // an accepted-gap artifact on aarch64 (x86's qemu oracle also ENOSYS -> matches). xfail'd.
             src("io-uring", "ext_linuxsys/io_uring.c")

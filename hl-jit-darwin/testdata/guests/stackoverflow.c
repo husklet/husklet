@@ -1,7 +1,7 @@
 // #392 stack-overflow guard regression test.
 //
 // A guest that runs off the BOTTOM of its stack must receive SIGSEGV at the guard page (exactly like
-// Linux's stack guard gap) instead of silently corrupting dd's adjacent 64MB RX code cache. Before the
+// Linux's stack guard gap) instead of silently corrupting hl's adjacent 64MB RX code cache. Before the
 // fix the main stack sat immediately above the code cache with no guard, so a deep recursion wrote
 // straight into the executable cache -> wild corruption (the clickhouse crash) rather than a clean fault.
 //

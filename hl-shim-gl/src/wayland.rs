@@ -36,7 +36,7 @@ const DRM_FMT_XRGB8888: u32 = 0x3432_5258;
 const HL_DMABUF_GEN_SHIFT: u32 = 17;
 const HL_DMABUF_GEN_MASK: u32 = 0x7fff;
 
-/// `modifier_hi` for a dd IOSurface buffer: the magic tag plus the allocation generation the host gave
+/// `modifier_hi` for a hl IOSurface buffer: the magic tag plus the allocation generation the host gave
 /// this surface (0 == unversioned; see [`hl_shim::transport::Surface::generation`]).
 fn hl_modifier_hi(generation: u32) -> u32 {
     HL_DMABUF_MOD_MAGIC | ((generation & HL_DMABUF_GEN_MASK) << HL_DMABUF_GEN_SHIFT)

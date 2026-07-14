@@ -21,11 +21,11 @@ pub(crate) struct ContainerStats {
     pub precpu_stats: CpuStats,
     pub memory_stats: MemoryStats,
     pub blkio_stats: BlkioStats,
-    /// Always the empty object `{}` (dd reports no per-interface net counters).
+    /// Always the empty object `{}` (hl reports no per-interface net counters).
     pub networks: BTreeMap<String, Value>,
     /// Process count (Docker's Windows-oriented field; 0 on Linux). Present for strict-client parsing.
     pub num_procs: u32,
-    /// Always the empty object `{}` (dd has no blkio/storage backend accounting).
+    /// Always the empty object `{}` (hl has no blkio/storage backend accounting).
     pub storage_stats: BTreeMap<String, Value>,
 }
 
@@ -60,17 +60,17 @@ pub(crate) struct ThrottlingData {
 #[derive(Serialize)]
 pub(crate) struct MemoryStats {
     pub usage: u64,
-    /// Peak usage — docker-compat clients read `max_usage`; dd has no historical high-water mark, so it
+    /// Peak usage — docker-compat clients read `max_usage`; hl has no historical high-water mark, so it
     /// mirrors `usage` (a consistent value beats an omitted key strict clients choke on).
     pub max_usage: u64,
     pub limit: u64,
-    /// Memory-limit-hit counter — always 0 (dd doesn't OOM-throttle), but present for client compat.
+    /// Memory-limit-hit counter — always 0 (hl doesn't OOM-throttle), but present for client compat.
     pub failcnt: u64,
-    /// Always the empty object `{}` (dd has no cgroup memory breakdown).
+    /// Always the empty object `{}` (hl has no cgroup memory breakdown).
     pub stats: BTreeMap<String, Value>,
 }
 
-/// All eight recursive blkio arrays, always empty (dd has no block-IO accounting).
+/// All eight recursive blkio arrays, always empty (hl has no block-IO accounting).
 #[derive(Serialize)]
 pub(crate) struct BlkioStats {
     pub io_service_bytes_recursive: Vec<Value>,

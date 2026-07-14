@@ -26,7 +26,7 @@ pub(crate) use hl_images::{
 
 /// A container image's **content** identity — a real `sha256:` digest over the image's defining content
 /// (its rootfs identity + OCI config: arch/cmd/entrypoint/env/workdir/user/sorted-labels). Docker keys
-/// the image ID on image content, so every tag alias of one image reports the SAME id (dd squashes each
+/// the image ID on image content, so every tag alias of one image reports the SAME id (hl squashes each
 /// image to one rootfs and a `docker tag` clone copies the `rootfs` path + config, so aliases agree),
 /// while two distinct rootfs/configs differ. This is the SAME id used by list, inspect, distribution and
 /// pull, and it is a stable 64-hex sha256 shape (not the old tiled FNV placeholder).

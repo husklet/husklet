@@ -212,7 +212,7 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL); // out-of-range/negative timespec (LTP nanosleep02)
             break;
         }
-        // Sleep against a FIXED absolute deadline. dd preempts a blocking syscall with an internal async
+        // Sleep against a FIXED absolute deadline. hl preempts a blocking syscall with an internal async
         // signal (block-back-edge preemption) that is invisible to the guest; the old code retried
         // with `nanosleep(a0, a1)`, so when rem(a1) was NULL every such interruption RESTARTED the whole
         // duration -- one extra full sleep per preemption (LTP nanosleep01 "slept for too long", ~request +
@@ -403,7 +403,7 @@ static int svc_time(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
             break;
         }
         // Relative sleep against a FIXED monotonic deadline (glibc's nanosleep() arrives here). Two host
-        // realities are corrected: (1) dd's internal block-preemption interrupts the sleep with a
+        // realities are corrected: (1) hl's internal block-preemption interrupts the sleep with a
         // signal invisible to the guest -- re-sleep only the TRUE remainder, never restart the duration
         // (the old `nanosleep(req,rem)` retry restarted the full sleep when rem was NULL, +1 period each
         // preemption); (2) macOS coalesces timer wakeups by ~1-2.5ms, blowing LTP nanosleep01's 450us

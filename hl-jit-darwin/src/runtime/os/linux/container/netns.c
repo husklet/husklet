@@ -1,4 +1,4 @@
-// dd/runtime/os/linux/container -- termios (Linux<->macOS) + NET-ns private loopback (127/8 -> AF_UNIX).
+// hl/runtime/os/linux/container -- termios (Linux<->macOS) + NET-ns private loopback (127/8 -> AF_UNIX).
 
 #include <netdb.h> // container DNS: getaddrinfo/getnameinfo via the macOS host resolver (dns_* below)
 
@@ -183,7 +183,7 @@ static int msgflags_m2l(int mf) {
 }
 
 // ---- SCM ancillary data: Linux<->macOS cmsg framing translation (SOL_SOCKET/SCM_RIGHTS fd passing).
-// dd uses host fds directly as guest fds, so the fd integers in an SCM_RIGHTS payload need no remap --
+// hl uses host fds directly as guest fds, so the fd integers in an SCM_RIGHTS payload need no remap --
 // only the cmsg framing differs: Linux hdr=16B (8B len @0, int level @8, int type @12), 8-byte align,
 // SOL_SOCKET=1; macOS hdr=12B (4B len @0, int level @4, int type @8), 4-byte align, SOL_SOCKET=0xffff.
 #define LX_CMSG_ALIGN(n) (((n) + 7u) & ~(size_t)7u) // Linux: 8-byte align
@@ -218,7 +218,7 @@ static int cmsg_level_m2l(int lv) {
 
 static int cmsg_eventfd_marker(const struct hl_cmsg_eventfd_meta *m) {
     if (g_cmsg_ntmpfds >= (int)(sizeof g_cmsg_tmpfds / sizeof g_cmsg_tmpfds[0])) return -1;
-    char tn[] = "/tmp/.ddcmsgXXXXXX";
+    char tn[] = "/tmp/.hlcmsgXXXXXX";
     int fd = mkstemp(tn);
     if (fd < 0) return -1;
     unlink(tn);
@@ -798,8 +798,8 @@ static void fill_inet6_lo(uint8_t *sa, socklen_t *l, uint16_t port) {
 // Generalizes the loopback redirect from "127/8 -> per-container dir" to "this user network's subnet ->
 // SHARED per-network dir". A guest TCP socket whose peer is ANOTHER container's IP on the same user
 // network (same /16 as our own HL_IP, and not 127/8) is routed to an AF_UNIX socket at
-//   /tmp/.ddbr-<HL_NETBR>/<ip>:<port>
-// The listening container (bind 0.0.0.0:<port> or its own IP) LISTENS on /tmp/.ddbr-<netid>/<ownip>:<port>;
+//   /tmp/.hlbr-<HL_NETBR>/<ip>:<port>
+// The listening container (bind 0.0.0.0:<port> or its own IP) LISTENS on /tmp/.hlbr-<netid>/<ownip>:<port>;
 // a peer connect(<ownip>:<port>) dials the same path. Because every container on the host is a JIT
 // process under the same user, the two AF_UNIX endpoints rendezvous with no bridge / TUN / root. The dir
 // is keyed by <netid> (mode 0700, the guest is path-jailed) so other networks never share sockets. The
@@ -839,7 +839,7 @@ static void fd_carry_sock(int dst, int src) {
 }
 
 // ---- listening-TCP introspection (ss/netstat -l): a socket the guest bind()+listen()s MUST appear in
-// /proc/net/tcp[6] with state 0A (TCP_LISTEN). dd translates the guest's AF_INET(6) bind onto a host
+// /proc/net/tcp[6] with state 0A (TCP_LISTEN). hl translates the guest's AF_INET(6) bind onto a host
 // AF_UNIX switch (or a real host bind in passthrough), so the synthesized /proc/net/tcp table -- which
 // runs no real IP stack -- has to remember the guest-requested (addr,port) itself. bind(200) records it;
 // listen(201) arms g_tcp_listen; the vfs synth walks these to emit the LISTEN rows. Cleared on
@@ -906,7 +906,7 @@ static void br_init(void) {
     g_br_init = 1;
     const char *nbr = getenv("HL_NETBR");
     if (nbr && nbr[0]) {
-        snprintf(g_netbr, sizeof g_netbr, "/tmp/.ddbr-%.40s", nbr);
+        snprintf(g_netbr, sizeof g_netbr, "/tmp/.hlbr-%.40s", nbr);
         mkdir(g_netbr, 0700); // shared per-network dir; EEXIST is fine (peers share it)
     }
     const char *dip = getenv("HL_IP");
@@ -1351,7 +1351,7 @@ static void *udp_fwd_thread(void *p) {
         return NULL;
     }
     f->hs = hs;
-    snprintf(f->pdir, sizeof f->pdir, "/tmp/.ddudp.%d.%u", (int)getpid(), (unsigned)f->hport);
+    snprintf(f->pdir, sizeof f->pdir, "/tmp/.hludp.%d.%u", (int)getpid(), (unsigned)f->hport);
     mkdir(f->pdir, 0700);
     char buf[65536];
     for (;;) {
@@ -1599,11 +1599,11 @@ static int egress_should_redirect(const struct sockaddr *m) {
     return 0;
 }
 
-// #261 — IPv4-only container network: dd models eth0 exactly like Docker's default bridge does — one IPv4
+// #261 — IPv4-only container network: hl models eth0 exactly like Docker's default bridge does — one IPv4
 // address, NO global IPv6 address, and an empty IPv6 routing table (see the RTM_GETADDR/RTM_GETROUTE dumps
 // in nl_emit_dump: eth0 gets only an AF_INET addr, and the only v6 addr is ::1 on lo). So a genuine external
 // (global-unicast) IPv6 destination has NO ROUTE and, on a real container kernel, connect()/sendto() to it
-// fails *immediately* with ENETUNREACH. dd must reproduce that instead of forwarding the dial to the
+// fails *immediately* with ENETUNREACH. hl must reproduce that instead of forwarding the dial to the
 // underlying host's v6 stack: on a mac whose v6 path to the destination is black-holed (orbstack NAT is
 // v4-only), that forward hangs the guest for the full ~2-minute connect timeout, and a happy-eyeballs client
 // (apt, curl, glibc) that tried the AAAA first never falls back — the exact #261 stall. Failing fast is what
@@ -1792,7 +1792,7 @@ static void abs_init(void) {
     if (g_abs_init) return;
     g_abs_init = 1;
     const char *ns = getenv("HL_NETNS"); // same key used by ipc_ns_key (service.c)
-    snprintf(g_absdir, sizeof g_absdir, "/tmp/.ddabs-%.40s", (ns && ns[0]) ? ns : "default");
+    snprintf(g_absdir, sizeof g_absdir, "/tmp/.hlabs-%.40s", (ns && ns[0]) ? ns : "default");
     mkdir(g_absdir, 0700); // EEXIST fine; peers share it (0700, guest is path-jailed)
 }
 
@@ -1845,7 +1845,7 @@ static void abs_path(const uint8_t *sa, socklen_t l, char *out, size_t n) {
 // ===== AF_NETLINK / NETLINK_ROUTE: a minimal RTNETLINK responder ==========================
 // macOS has no AF_NETLINK, so socket(AF_NETLINK,...) returned EAFNOSUPPORT and every interface-
 // enumeration path (getifaddrs via glibc/musl, go-sockaddr, `ip`, ifconfig, minio, consul)
-// failed with "Address family not supported". dd models exactly two interfaces (lo + eth0; see
+// failed with "Address family not supported". hl models exactly two interfaces (lo + eth0; see
 // netif_* in state.c). A guest netlink socket is backed by an AF_UNIX SOCK_DGRAM socketpair: the
 // guest holds one end; when it sends an RTM_GET* dump request we parse the nlmsghdr and WRITE the
 // synthesized dump into OUR peer end, which queues on the guest end so the guest's ordinary
@@ -2134,7 +2134,7 @@ static int64_t nl_send(int fd, const uint8_t *buf, size_t len) {
         uint16_t ntype = *(const uint16_t *)(buf + off + 4);
         uint32_t nseq = *(const uint32_t *)(buf + off + 8);
         // RTM message groups run base+0=NEW, +1=DEL, +2=GET, +3=SET. A GET (type%4==2) is a read the dump
-        // responder answers; a NEW/DEL/SET (type%4!=2) is a MODIFICATION dd has no writable netlink stack to
+        // responder answers; a NEW/DEL/SET (type%4!=2) is a MODIFICATION hl has no writable netlink stack to
         // apply. Reply to modifications with a real NLMSG_ERROR (-EPERM) instead of the old phantom empty
         // NLMSG_DONE, so `ip addr/route add`/SETLINK fail loudly rather than silently succeeding unchanged.
         if (ntype >= 16 && (ntype % 4) != 2)
@@ -2348,7 +2348,7 @@ static int net_ioctl(int fd, unsigned long rq, uint8_t *arg, int64_t *out) {
 }
 
 // ============================ Container DNS (embedded nameserver -> host resolver) ============================
-// The container's /etc/resolv.conf (provisioned by the daemon) points at 127.0.0.11 -- dd's embedded
+// The container's /etc/resolv.conf (provisioned by the daemon) points at 127.0.0.11 -- hl's embedded
 // nameserver, the same address Docker uses. glibc/musl in the guest then send DNS as UDP (default) or TCP
 // (fallback) to 127.0.0.11:53. We intercept those sends here, parse the query, resolve it via the macOS
 // host resolver (getaddrinfo / getnameinfo -- which honor the host's system DNS, INCLUDING a corporate

@@ -4,7 +4,7 @@
 #include <sys/file.h>
 #include <fcntl.h>
 int main(void){
-  const char *p="/tmp/ddc_flk"; unlink(p);
+  const char *p="/tmp/hlc_flk"; unlink(p);
   int fd=open(p,O_CREAT|O_RDWR,0644);
   long ex=syscall(SYS_flock, fd, LOCK_EX);
   long sh=syscall(SYS_flock, fd, LOCK_SH);

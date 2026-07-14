@@ -1,4 +1,4 @@
-// dd/runtime -- hl_aarch64: the aarch64-Linux-guest JIT runner (unity translation unit).
+// hl/runtime -- hl_aarch64: the aarch64-Linux-guest JIT runner (unity translation unit).
 //
 // A same-ISA aarch64->aarch64 JIT services the guest's Linux syscalls in userspace (no VM). This TU
 // pulls in the engine (jit/), the aarch64 guest frontend (frontend/aarch64/), the Linux personality +
@@ -84,7 +84,7 @@ static int engine_global_init(void);
 #include "../os/linux/elf.c"
 // native checkpoint/restore (multi-process tree): dump/restore guest RAM + cpu + path-backed fds + pty
 #include "../os/linux/checkpoint.c"
-// `--configfd` launch bridge: read the serialized hl_config from the fd, re-hydrate HL_*/DDJIT_* env,
+// `--configfd` launch bridge: read the serialized hl_config from the fd, re-hydrate HL_*/HL_JIT_* env,
 // and dispatch to this TU's hl_run() (forward-declared inside; defined below).
 #include "../os/hl_configfd.c"
 
@@ -540,7 +540,7 @@ static void nonpie_guard_count(int sig, siginfo_t *si, void *uc) {
 
 // fork-server seam (mirrors targets/linux_x86_64.c): the original hl_run inlined (1)
 // container init, (2) engine init (signal handlers + pthread key + code-cache arena + env flags), and
-// (3) per-launch load+run. The resident ddjitd parent must pay (1)+(2) ONCE and share them COW with
+// (3) per-launch load+run. The resident hljitd parent must pay (1)+(2) ONCE and share them COW with
 // every forked worker, so those phases are factored into container_init()/engine_global_init().
 // engine_global_init() is idempotent (g_engine_inited) so the standalone path is unchanged: standalone
 // hl_run() composes container_init -> engine_global_init -> load_program -> run_loaded in the exact
@@ -587,7 +587,7 @@ static void container_init(const char *rootfs) {
                 snprintf(key, sizeof key, "%.39s", nn);
             else
                 snprintf(key, sizeof key, "%d", (int)getpid());
-            snprintf(g_netns, sizeof g_netns, "/tmp/.ddnet-%.40s", key);
+            snprintf(g_netns, sizeof g_netns, "/tmp/.hlnet-%.40s", key);
             // Export the minted key so children/exec + abstract-AF_UNIX/IPC/bridge share this
             // container's namespace (getenv("HL_NETNS")); a daemon-supplied key is already in the env.
             if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(nn && nn[0])) setenv("HL_NETNS", key, 1);
@@ -944,7 +944,7 @@ int hl_run(const char *rootfs, int argc, char *const argv[]) {
     return ec;
 }
 
-// resident ddjitd fork-server (server/client/worker), SHARED with linux_x86_64.c through the
+// resident hljitd fork-server (server/client/worker), SHARED with linux_x86_64.c through the
 // container_init/engine_global_init/load_program/run_loaded/hl_run seam above. aarch64 has no
 // g_loadbase and its container model never chdir()s the engine into the rootfs (those knobs stay
 // default no-ops), but its load_elf applies per-segment W^X to the guest image (.text R+X, .rodata R;
@@ -999,11 +999,11 @@ int hl_entry(int argc, char **argv) {
     if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return hl_run_configfd(atoi(argv[2]));
     if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return hl_run_configfile(argv[2]);
     // fork-server dispatch (gated; standalone path untouched when neither flag is present):
-    //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident ddjitd, listen on SOCK
-    //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a ddjitd
+    //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident hljitd, listen on SOCK
+    //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a hljitd
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--server") == 0) return ddjitd_server_main(argc, argv);
-        if (strcmp(argv[i], "--client") == 0) return ddjitd_client_main(argc, argv);
+        if (strcmp(argv[i], "--server") == 0) return hljitd_server_main(argc, argv);
+        if (strcmp(argv[i], "--client") == 0) return hljitd_client_main(argc, argv);
     }
     // container flags (SentryConfig)
     while (ai < argc && argv[ai][0] == '-' && argv[ai][1] == '-') {
@@ -1030,7 +1030,7 @@ int hl_entry(int argc, char **argv) {
             ai += 2;
             // ro overlay lower layer
         } else if (!strcmp(argv[ai], "--netns") && ai + 1 < argc) {
-            snprintf(g_netns, sizeof g_netns, "/tmp/.ddnet-%.40s", argv[ai + 1]);
+            snprintf(g_netns, sizeof g_netns, "/tmp/.hlnet-%.40s", argv[ai + 1]);
             mkdir(g_netns, 0700);
             ai += 2;
             // private loopback ns

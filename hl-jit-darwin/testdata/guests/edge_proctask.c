@@ -1,7 +1,7 @@
 // EDGE: /proc/self/task — the per-thread directory crashpad/ThreadHelpers (and any thread enumerator)
 // walks. opendir(/proc/self/task) must list >=1 numeric tid, our own tid's task dir must stat as a
 // directory, and its per-thread stat/comm must be readable & non-empty. Verdict-checked (tid values
-// vary, and dd models the main thread where native Linux may show more) so it's golden across engines.
+// vary, and hl models the main thread where native Linux may show more) so it's golden across engines.
 #include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>

@@ -1,4 +1,4 @@
-// dd/runtime/os/linux -- threads & futex (clone -> pthread; per-thread cpu; futex via condvars).
+// hl/runtime/os/linux -- threads & futex (clone -> pthread; per-thread cpu; futex via condvars).
 
 #include <mach/mach.h>
 #include <mach/mach_vm.h>       // mach_vm_region: probe whether a guest address is still mapped (see cleartid)
@@ -128,9 +128,9 @@ static int fbk_parked(struct futex_bucket *b, uintptr_t a) {
     return 0;
 }
 // _xproc-futex-fork_: the bucket table lives in a MAP_SHARED anonymous region whose mutex/condvar are
-// PTHREAD_PROCESS_SHARED, so a FUTEX_WAKE in one process matches a FUTEX_WAIT in another across dd's
+// PTHREAD_PROCESS_SHARED, so a FUTEX_WAKE in one process matches a FUTEX_WAIT in another across hl's
 // fork() -- e.g. a glibc process-shared (named/unnamed-on-shm) semaphore where the child sem_post()s
-// and the parent sem_wait()s. dd's fork() is a real host fork(): the child inherits the identical guest
+// and the parent sem_wait()s. hl's fork() is a real host fork(): the child inherits the identical guest
 // address space, so a shared-memory futex word resolves to the SAME host address in parent and child
 // and both hash to the same bucket, while the underlying MAP_SHARED guest page is one physical page.
 // The table is created ONCE at engine startup (constructor, before any guest fork) so every forked
@@ -168,13 +168,13 @@ __attribute__((constructor)) static void futex_table_ctor(void) {
 }
 
 // ===================== shared-memory futex key (Linux "shared" futex semantics) =================
-// dd hashes a futex bucket by the WORD's host virtual address. That is exactly Linux's PRIVATE futex key
+// hl hashes a futex bucket by the WORD's host virtual address. That is exactly Linux's PRIVATE futex key
 // (mm + address) and is correct for anon/private words -- including a fork-inherited MAP_SHARED page, which
 // lands at the SAME VA in parent and child. But a file-backed MAP_SHARED object (memfd, shm) is mapped
 // INDEPENDENTLY by each peer: Chrome's renderer and GPU-service map the command-buffer shmem at DIFFERENT
 // addresses, so the SAME physical futex word has a different VA in each. Linux keys such a word by the
 // SHARED object identity (inode + page offset), so a FUTEX_WAKE through one mapping reaches a FUTEX_WAIT
-// parked through another. dd's VA-only key put the two in different buckets and LOST the wake -- the
+// parked through another. hl's VA-only key put the two in different buckets and LOST the wake -- the
 // documented "Wall 7": the renderer's command-buffer flush never woke the GPU service, so page content was
 // never rasterized. (A fork-inherited anon MAP_SHARED page keeps the VA key: same VA in both processes.)
 //
@@ -295,8 +295,8 @@ static int g_futex_parked;
 static uint64_t g_futex_wake_fast, g_futex_wake_slow, g_futex_wait_n;
 
 // ===================== guest PROT_NONE region registry ==========================================
-// dd maps every guest anon page R+W on the host (case 222 ORs in PROT_READ|WRITE) so that a later
-// mprotect-to-writable -- which dd no-ops, since the JIT never enforces guest page protection -- is
+// hl maps every guest anon page R+W on the host (case 222 ORs in PROT_READ|WRITE) so that a later
+// mprotect-to-writable -- which hl no-ops, since the JIT never enforces guest page protection -- is
 // already in effect. A consequence: a guest mapping the guest genuinely made INACCESSIBLE (mmap
 // PROT_NONE, e.g. LTP's tst_get_bad_addr, a malloc-arena guard page, a Go/V8 reservation) is still
 // PHYSICALLY readable, so host_range_mapped's page probe wrongly reports it mapped -- and a syscall
@@ -463,7 +463,7 @@ static int host_range_mapped(uintptr_t a, size_t len) {
     if (!len) return 1;
     uintptr_t end = a + len;
     if (end < a) return 0; // wrap -> bogus pointer
-    // A guest PROT_NONE mapping is physically R+W under dd (see the g_gna registry above), so the page
+    // A guest PROT_NONE mapping is physically R+W under hl (see the g_gna registry above), so the page
     // probe below would call it mapped; the kernel's copy_to/from_user faults it. Reject up front.
     if (gna_hit((uint64_t)a, (uint64_t)len)) return 0;
     uintptr_t lo = a & ~(uintptr_t)0xfff;
@@ -642,7 +642,7 @@ static int futex_wake_op_apply(int *uaddr2, uint32_t val3, int *do_wake2) {
 
 // FUTEX PI (priority-inheritance) mutex constants: the futex word holds the owner's guest TID in the low 30
 // bits, plus FUTEX_WAITERS (contended -> userspace must trap into the kernel) and FUTEX_OWNER_DIED (robust:
-// the owner exited still holding it). dd does not model priority BOOSTING (a latency/QoS property, not a
+// the owner exited still holding it). hl does not model priority BOOSTING (a latency/QoS property, not a
 // correctness one), but it enforces real MUTUAL EXCLUSION and the exact futex-word contract glibc's userspace
 // fast paths depend on -- so two threads can never both believe they own a PTHREAD_PRIO_INHERIT/robust mutex
 // (the old return-0 fake-acquire silently let them into the critical section together -> data corruption).
@@ -968,7 +968,7 @@ static long futex_op(struct cpu *c, int *uaddr, int op, int val, const struct ti
     }
     // A genuinely undefined command (the removed FUTEX_FD=2, or any value >= 14 that names no futex op) is
     // -ENOSYS on Linux, not a silent success -- the old fall-through masked capability probes. The PI ops
-    // (6-8,11-13) that dd does not model are left as best-effort success above to avoid breaking a PI-mutex
+    // (6-8,11-13) that hl does not model are left as best-effort success above to avoid breaking a PI-mutex
     // fast-path fallback; only the truly-undefined range is rejected here.
     if (op == 2 || op >= 14) return -ENOSYS;
     // Any remaining op is unmodelled -- pretend success (baseline behavior).
@@ -1267,7 +1267,7 @@ static void thread_exit_others(struct cpu *self) {
 // A thread that dies while holding a robust mutex must not wedge its waiters forever: the kernel walks the
 // thread's registered robust list on exit and, for each futex it still owns, sets FUTEX_OWNER_DIED and wakes
 // one waiter so a blocked peer returns EOWNERDEAD (and can pthread_mutex_consistent the lock) instead of
-// hanging. dd did neither (set_robust_list was a no-op), so a crash/exit under a PTHREAD_MUTEX_ROBUST lock
+// hanging. hl did neither (set_robust_list was a no-op), so a crash/exit under a PTHREAD_MUTEX_ROBUST lock
 // deadlocked every waiter. Layout (LP64 kernel/glibc ABI, 24-byte head):
 //   struct robust_list_head { void *list; long futex_offset; void *list_op_pending; };
 // `list` chains each mutex's embedded robust_list node (first word = next; LSB is a PI flag we mask off) and

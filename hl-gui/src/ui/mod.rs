@@ -443,7 +443,7 @@ pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) 
     }
 }
 
-/// Locate the dd logo: the app bundle's `Contents/Resources/logo.png`, or `assets/logo.png` in dev.
+/// Locate the hl logo: the app bundle's `Contents/Resources/logo.png`, or `assets/logo.png` in dev.
 pub(crate) fn logo_path() -> Option<std::path::PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(contents) = exe.parent().and_then(|p| p.parent()) {

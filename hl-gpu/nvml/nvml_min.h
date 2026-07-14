@@ -1,4 +1,4 @@
-/* Minimal NVML ABI declarations for dd's libnvidia-ml.so.1 shim.
+/* Minimal NVML ABI declarations for hl's libnvidia-ml.so.1 shim.
  *
  * These mirror the *documented* NVIDIA Management Library (NVML) C ABI from
  * nvml.h — enum values, struct layouts and function signatures — so the genuine,

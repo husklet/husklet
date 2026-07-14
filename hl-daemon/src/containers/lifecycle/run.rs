@@ -276,7 +276,7 @@ pub(crate) async fn containers_restart(
 }
 
 // ---- container control: pause / unpause -------------------------------------
-/// POST /containers/:id/(un)pause -- dd has no freezer cgroup, so it SIGSTOP/SIGCONTs the container's
+/// POST /containers/:id/(un)pause -- hl has no freezer cgroup, so it SIGSTOP/SIGCONTs the container's
 /// whole process group (see `freeze`) and flips the recorded status.
 pub(crate) async fn containers_pause(State(a): State<App>, Path(id): Path<String>) -> Response {
     freeze(a, id, true).await

@@ -1,7 +1,7 @@
 // A real GLES2 app exercising the DEPTH BUFFER: two overlapping triangles at different z, the NEAR (red)
 // one specified BEFORE the FAR (green) one in a single draw. With glEnable(GL_DEPTH_TEST) the near red
 // wins the overlap; without depth the later-drawn far green would paint over it. So red-in-the-overlap
-// proves depth testing works. Runs unmodified on the dd GL shim (z in [0,1] = Metal NDC depth range).
+// proves depth testing works. Runs unmodified on the hl GL shim (z in [0,1] = Metal NDC depth range).
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

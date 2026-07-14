@@ -13,7 +13,7 @@
 //!   * records the call in a recent-history ring (for the strict-mode report),
 //!   * once-per-name logs "unimplemented entry point" under `HL_SHIM_DEBUG` (exploratory runs),
 //!   * and — under `HL_SHIM_STRICT=1` — prints command + object + recent history and aborts the
-//!     process at the FIRST unsupported call, so an app run stops exactly where dd cannot honestly act
+//!     process at the FIRST unsupported call, so an app run stops exactly where hl cannot honestly act
 //!     instead of silently mis-executing.
 //!
 //! Identical mechanism to hl-shim-cuda / hl-shim-gl `stub.rs`.

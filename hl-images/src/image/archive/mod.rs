@@ -1,10 +1,10 @@
 //! The archive side of the store: `docker save` / `docker load` / `docker import`.
 //!
-//! dd's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
+//! hl's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
 //! `rootfs/` directory plus a [`Manifest`] sidecar (`hl-manifest.json`). [`Store::save_archive`] produces
 //! it, [`Store::load_archive`] consumes it; [`Store::import_rootfs`] instead takes a bare rootfs tar (no
 //! manifest) whose files land directly in a new image's rootfs. All tar work shells out to the system
-//! `tar` (no crate dependency, no runtime) so the on-disk layout matches Docker/dd exactly.
+//! `tar` (no crate dependency, no runtime) so the on-disk layout matches Docker/hl exactly.
 //!
 //! Split by operation across sibling files: [`Store::save_archive`] (`save.rs`),
 //! [`Store::load_archive`] (`load.rs`), [`Store::import_rootfs`] (`import.rs`). This module holds the

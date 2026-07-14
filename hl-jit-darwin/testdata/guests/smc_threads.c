@@ -1,8 +1,8 @@
 // #267 (Erlang/OTP BeamAsm SIGSEGV) regression: MULTITHREADED self-modifying code sharing code pages.
 // BeamAsm is a code-GENERATING guest -- it JITs Erlang to arm64 at load time, from N scheduler + dirty +
-// async threads, packing many small functions per 4KB page. dd translates that guest-generated code; when a
-// thread writes a NEW function onto a page another thread has ALREADY executed (so dd has a translation for
-// it) and issues the icache-flush (`ic ivau`), dd's SMC hook fires. The original bug: that hook dropped the
+// async threads, packing many small functions per 4KB page. hl translates that guest-generated code; when a
+// thread writes a NEW function onto a page another thread has ALREADY executed (so hl has a translation for
+// it) and issues the icache-flush (`ic ivau`), hl's SMC hook fires. The original bug: that hook dropped the
 // whole translation map + IBTC UNLOCKED, racing every peer thread, and it fired on ANY same-page write
 // (page-granular gate) even though no translated byte changed -> non-deterministic SIGSEGV/SIGBUS in the
 // code cache under heavy threading. The fix: gate at cache-line (64B) granularity so a same-page APPEND is a
@@ -13,7 +13,7 @@
 // calls it -- so slots from different threads interleave onto the same pages (the append-onto-a-live-page
 // case) and, on later passes, threads REWRITE already-translated slots in place (the genuine line-hit case).
 // Determinism (required for the oracle diff): a slot's immediate is ALWAYS slot_index & 0xffff, so a rewrite
-// stores identical bytes -> the result is the same whether dd re-translates or keeps the prior translation.
+// stores identical bytes -> the result is the same whether hl re-translates or keeps the prior translation.
 // aarch64 machine code -> Linux/aarch64 only; diffed vs a native run.
 #include <pthread.h>
 #include <stdatomic.h>

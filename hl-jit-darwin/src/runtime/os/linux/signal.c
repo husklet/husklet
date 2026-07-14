@@ -1,4 +1,4 @@
-// dd/runtime/os/linux -- signal delivery (Linux<->macOS signal-number translation; sigframe build).
+// hl/runtime/os/linux -- signal delivery (Linux<->macOS signal-number translation; sigframe build).
 
 // ptrace signal-delivery/group stops. Defined later in the TU (os/linux/syscall/ptrace.c, pulled in
 // via dispatch.c). ptrace_intercept_signal: this process is traced and a signal is about to be delivered
@@ -23,10 +23,10 @@ static struct {
 // aarch64 Go binary, delivering SIGURG into the guest crashes it -- but NOT via a sigframe/SP overlap (that
 // hypothesis was investigated with the go_cgo_stackgrow_arm fixture under HL_SIGURG=deliver + CRASHDBG and
 // DISPROVEN: build_signal_frame captures a correct, consistent guest SP/PC/LR and the frame sits strictly
-// below SP). The real defect is ASYNC-PREEMPT SAFETY: dd delivers the caught signal at TRANSLATION-BLOCK
+// below SP). The real defect is ASYNC-PREEMPT SAFETY: hl delivers the caught signal at TRANSLATION-BLOCK
 // boundaries (the cpu->irq poll), which do NOT coincide with Go's compiler-inserted async-safe points. Go's
 // own guard (doSigPreempt -> isAsyncSafePoint / canPreemptM) is meant to no-op an unsafe delivery, but under
-// dd's non-PIE HIGH-bias translation the interaction with Go's stack-growth machinery corrupts state: the
+// hl's non-PIE HIGH-bias translation the interaction with Go's stack-growth machinery corrupts state: the
 // fixture's crash lands squarely in runtime.copystack / runtime.adjustframe / (*stkframe).getStackMap with
 // `fatal error: wirep: already in go` and `untyped locals` (a stack-map/scheduler invariant violation), i.e.
 // an async preempt injected around a stack copy rewrites a frame's return address / pointer. A correct fix
@@ -130,7 +130,7 @@ static int sig_coredumps(int sig) {
 }
 
 // Current soft RLIMIT_CORE (resource 4), guest-visible: a docker --ulimit / the guest's own
-// setrlimit/prlimit64 store (g_ulimit, seeded in state.c) wins, else the dd default. A core dump only
+// setrlimit/prlimit64 store (g_ulimit, seeded in state.c) wins, else the hl default. A core dump only
 // happens when a coredumping signal kills a process whose SOFT core limit is nonzero, so this is the single
 // input WCOREDUMP is gated on. g_ulimit/HL_RLIM_MAX come from container/state.c (included first).
 // The default MUST be 0 (cores OFF), matching getrlimit(RLIMIT_CORE)'s Linux/docker default soft=0 -- the
@@ -144,10 +144,10 @@ static uint64_t svc_core_rlimit_cur(void) {
 // ---------------- guest signal-death relay ----------------
 // Every guest process is a real host (macOS) process, so a guest parent reaps its children with the host
 // wait4/waitid and reads the host termination status. When a guest child must die from a fatal-default
-// signal, dd normally lets it die BY the mapped host signal, and the parent's wait4 translates the host
+// signal, hl normally lets it die BY the mapped host signal, and the parent's wait4 translates the host
 // termsig back (sig_m2l). That fails for signals with NO faithful fatal host mapping: SIGPOLL(29)->host
 // SIGIO / SIGSTKFLT(16)->host SIGURG both DEFAULT-IGNORE on macOS (so raising them does not terminate),
-// and SIGPWR(30)->host SIGUSR1 maps BACK to a different signo (10). dd then fell back to _exit(128+signo),
+// and SIGPWR(30)->host SIGUSR1 maps BACK to a different signo (10). hl then fell back to _exit(128+signo),
 // which the parent reads as WIFEXITED(128+signo) instead of WIFSIGNALED/WTERMSIG=signo.
 //
 // Fix: the dying child records its intended Linux termination signo (+ the WCOREDUMP verdict it computed
@@ -233,7 +233,7 @@ static __thread uint64_t g_force_deliver;
 // --- signalfd open-file-description (OFD) pool ---------------------------------------------------------
 // Linux signalfd(2) creates an INDEPENDENT descriptor: each has its own signal mask and its own delivery
 // queue, so a SIGUSR1 signalfd and a SIGUSR2 signalfd never alias each other or broaden each other's masks.
-// dd's old model was a SINGLE shared self-pipe with one ORed mask, which failed exactly that independence.
+// hl's old model was a SINGLE shared self-pipe with one ORed mask, which failed exactly that independence.
 // Each signalfd OFD is now one slot here: a self-pipe (read end = the guest's signalfd, write end poked by
 // the host signal handlers) + its own mask + a refcount (a dup(2) shares the OFD, so refs bumps and the
 // pipe is torn down only when the last alias closes). The read end is a normal guest fd; only the write end
@@ -409,7 +409,7 @@ static void maybe_deliver_signal(struct cpu *c) {
             // A SIG_DFL signal whose default action TERMINATES, still pending at the container init, was NOT
             // already actioned by the host: real Linux protects a PID-namespace init from an unhandled fatal
             // signal, so it lingered (e.g. the guest blocked it inside its handler, reset the disposition to
-            // SIG_DFL, then re-raised it to exit -- exactly node's SignalExit / mongosh path). dd's init is
+            // SIG_DFL, then re-raised it to exit -- exactly node's SignalExit / mongosh path). hl's init is
             // just the container entrypoint, not an init that must survive, so take the default action and end
             // the container with 128+signo (the code `docker run` reports for a PID 1 killed by a signal).
             // SIG_IGN (h==1) and the default-ignore/stop signals stay dropped here.
@@ -474,7 +474,7 @@ static void raise_guest_signal(struct cpu *c, int sig) {
     // SIGCHLD/CONT/URG/WINCH: ignore
     if (sig == 17 || sig == 18 || sig == 23 || sig == 28) return;
     // Unhandled fatal signal aimed at the container init: real Linux would protect a PID-namespace init and
-    // drop it, but dd's init is just the entrypoint -- take the default action and end the container with
+    // drop it, but hl's init is just the entrypoint -- take the default action and end the container with
     // 128+signo (what `docker run` reports for a PID 1 killed by a signal) rather than raising a real host
     // signal that kills the engine BY the signal. The stop signals keep the host path below (job control
     // mirrors them onto the host mask, so a real host stop is the correct default action).
@@ -607,7 +607,7 @@ static void sig_diag_fatal_fault(int sig, int hostsig, siginfo_t *si, struct cpu
     if (!getenv("HL_FATALSIG_LOG")) return;
     char b[384];
     int n = 0;
-    n = sig_diag_put(b, n, "[DDFATAL]");
+    n = sig_diag_put(b, n, "[HLFATAL]");
     n = sig_diag_put_hex(b, n, " pid=", (uint64_t)getpid());
     n = sig_diag_put_hex(b, n, " cpid=", (uint64_t)container_pid());
     n = sig_diag_put_hex(b, n, " sig=", (uint64_t)sig);
@@ -642,7 +642,7 @@ static void sig_diag_sync_reraise(int sig, int ls, siginfo_t *si, void *ucv) {
     struct cpu *c = (struct cpu *)pthread_getspecific(g_cpu_key);
     char b[512];
     int n = 0;
-    n = sig_diag_put(b, n, "[DDSYNC]");
+    n = sig_diag_put(b, n, "[HLSYNC]");
     n = sig_diag_put_hex(b, n, " pid=", (uint64_t)getpid());
     n = sig_diag_put_hex(b, n, " cpid=", (uint64_t)container_pid());
     n = sig_diag_put_hex(b, n, " hostsig=", (uint64_t)sig);
@@ -668,7 +668,7 @@ static void sig_diag_raise_default(struct cpu *c, int sig) {
     if (!getenv("HL_FATALSIG_LOG")) return;
     char b[384];
     int n = 0;
-    n = sig_diag_put(b, n, "[DDRAISE]");
+    n = sig_diag_put(b, n, "[HLRAISE]");
     n = sig_diag_put_hex(b, n, " pid=", (uint64_t)getpid());
     n = sig_diag_put_hex(b, n, " cpid=", (uint64_t)container_pid());
     n = sig_diag_put_hex(b, n, " tid=", c ? (uint64_t)cpu_tid(c) : 0);
@@ -686,11 +686,11 @@ static void sig_diag_raise_default(struct cpu *c, int sig) {
 
 // a GENUINE synchronous CPU fault (SIGSEGV/SIGBUS/...) taken in translated code for which the guest
 // installed NO handler. Such a fault is fatal and cannot be masked or ignored (a stack overflow into the
-// guard gap, a wild pointer, a NULL deref). Terminate the guest process the SAME way dd terminates any
-// fatal-default signal, so the exit status crosses dd's fork faithfully: the container init ends with
+// guard gap, a wild pointer, a NULL deref). Terminate the guest process the SAME way hl terminates any
+// fatal-default signal, so the exit status crosses hl's fork faithfully: the container init ends with
 // 128+signo; a non-init guest records the intended Linux termination signal (sigexit_record) then exits
 // via the normal c->exited path so its parent's wait4/waitid reconstructs WIFSIGNALED/WTERMSIG=signo. A
-// raw host raise() cannot carry the signo across dd's fork and, from a MAP_JIT thread, degrades to a plain
+// raw host raise() cannot carry the signo across hl's fork and, from a MAP_JIT thread, degrades to a plain
 // exit(255) (the parent then wrongly sees WIFEXITED, not WIFSIGNALED). Called by the per-arch SIGSEGV/SIGBUS
 // guard AFTER deliver_guest_fault (the guest-handler path) declines. Returns 1 iff this was a genuine
 // in-translated-code guest fault (caller stops); 0 for an engine fault / external async signal, so the
@@ -712,7 +712,7 @@ static int deliver_guest_fatal_fault(int hostsig, siginfo_t *si, void *ucv) {
     // not by resuming the dispatcher: the guest state is captured mid-fault (e.g. SP overrun into the guard),
     // so re-entering the code cache would run off into garbage. A non-init guest records its Linux
     // termination signo so the parent's wait4/waitid reconstructs WIFSIGNALED/WTERMSIG=sig (proc.c case 260);
-    // the container init just exits 128+signo (what `docker run` reports for a crash). This is dd's standard
+    // the container init just exits 128+signo (what `docker run` reports for a crash). This is hl's standard
     // fatal-signal relay -- the same mechanism as a fatal-default signal in maybe_deliver_signal.
     if (container_pid() != 1) {
         int core = sig_coredumps(sig) && svc_core_rlimit_cur() > 0;

@@ -42,7 +42,7 @@ pub(crate) fn image_detail(img: &Image, sender: &ComponentSender<AppModel>) -> g
             },
         ),
         ("Size", human_size(img.size)),
-        // dd unpacks each image to one rootfs, so there are no docker-style intermediate layers.
+        // hl unpacks each image to one rootfs, so there are no docker-style intermediate layers.
         ("Layers", "1 (dd squashes images to a single rootfs)".into()),
     ]));
     root.upcast()

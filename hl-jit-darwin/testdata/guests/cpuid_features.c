@@ -1,7 +1,7 @@
 // #187 — CPUID feature-flag completeness guard (x86-64 only). Executes the real CPUID instruction and
-// asserts that (a) every feature dd's translator actually implements is ADVERTISED as present, and (b) the
-// families dd CANNOT translate (AVX/AVX2/AVX512/FMA/XSAVE) stay OFF — advertising a VEX/EVEX feature dd
-// can't lower would crash any guest that then used it. Verdict-style (`ok=1`), golden on the dd engine:
+// asserts that (a) every feature hl's translator actually implements is ADVERTISED as present, and (b) the
+// families hl CANNOT translate (AVX/AVX2/AVX512/FMA/XSAVE) stay OFF — advertising a VEX/EVEX feature hl
+// can't lower would crash any guest that then used it. Verdict-style (`ok=1`), golden on the hl engine:
 // qemu-x86_64 advertises its OWN model (a limited qemu64 CPU that lacks sse4.2/aes/bmi/sha), so the exact
 // bits can't be oracle-diffed — we self-check the required set instead.
 #include <cpuid.h>
@@ -33,7 +33,7 @@ int main(void) {
           bit(d, 26);
     // ECX: SSE3 PCLMULQDQ SSSE3 CX16 SSE4.1 SSE4.2 POPCNT AES
     ok &= bit(c, 0) & bit(c, 1) & bit(c, 9) & bit(c, 13) & bit(c, 19) & bit(c, 20) & bit(c, 23) & bit(c, 25);
-    // NOT advertised (dd cannot translate VEX/EVEX or provide YMM/XSAVE state): FMA(12), XSAVE(26),
+    // NOT advertised (hl cannot translate VEX/EVEX or provide YMM/XSAVE state): FMA(12), XSAVE(26),
     // OSXSAVE(27), AVX(28). Any of these set would be a bug that crashes AVX-using guests.
     ok &= !bit(c, 12) & !bit(c, 26) & !bit(c, 27) & !bit(c, 28);
 

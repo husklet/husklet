@@ -4,8 +4,8 @@
 //! `keyboard_shortcuts_inhibit` module.
 //!
 //! ## Host policy (honour the inhibit)
-//! dd's compositor reserves essentially no global keyboard shortcuts on its single Cocoa window (system
-//! chords are handled by macOS above dd, not intercepted here), so honouring an inhibit request is both
+//! hl's compositor reserves essentially no global keyboard shortcuts on its single Cocoa window (system
+//! chords are handled by macOS above hl, not intercepted here), so honouring an inhibit request is both
 //! safe and correct: [`Self::new_inhibitor`] immediately [`activate`](smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitor::activate)s
 //! the inhibitor, which emits `active` to the client and flips the seat's
 //! [`keyboard_shortcuts_inhibited`](smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat)
@@ -23,7 +23,7 @@ impl KeyboardShortcutsInhibitHandler for HlState {
         &mut self.keyboard_shortcuts_inhibit
     }
 
-    /// A client requested shortcut inhibition for a (surface, seat). dd owns no conflicting global
+    /// A client requested shortcut inhibition for a (surface, seat). hl owns no conflicting global
     /// chords, so activate it immediately — the client receives `active` and gets every key.
     fn new_inhibitor(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
         inhibitor.activate();

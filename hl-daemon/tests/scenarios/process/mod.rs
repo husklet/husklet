@@ -56,7 +56,7 @@ pub fn group() -> ScenGroup {
 
         // ---- container identity ---------------------------------------------------------------------
         scen("process/hostname-flag", "alpine:latest")
-            .host("docker run --rm $PLAT --hostname ddbox $IMG hostname").has("ddbox"),
+            .host("docker run --rm $PLAT --hostname hlbox $IMG hostname").has("hlbox"),
         scen("process/pid1-is-init", "alpine:latest")
             .run(&["sh", "-c", "echo PID=$$"]).has("PID=1"),
         scen("process/uid-root", "alpine:latest")

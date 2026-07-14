@@ -20,7 +20,7 @@ use ash::vk::Handle;
 use core::ffi::c_void;
 use hl_gpu::ir::TextureFormat;
 use hl_gpu_wgpu::WgpuBackend;
-use vk_dd as ddvk;
+use vk_hl as hlvk;
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -80,27 +80,27 @@ fn stage_spirv(glsl: &str, wgsl: &str, stage: naga::ShaderStage, name: &str) -> 
 fn create_shader(dev: *mut c_void, spirv: &[u32]) -> u64 {
     let ci = vk::ShaderModuleCreateInfo::default().code(spirv);
     let mut m: u64 = 0;
-    assert_eq!(ddvk::vkCreateShaderModule(dev, &ci, core::ptr::null(), &mut m), 0);
+    assert_eq!(hlvk::vkCreateShaderModule(dev, &ci, core::ptr::null(), &mut m), 0);
     m
 }
 
 #[test]
 fn vk_triangle_renders_on_real_metal() {
-    ddvk::reg::reset();
+    hlvk::reg::reset();
 
     // --- instance / device / queue / command pool ---
     let mut inst: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkCreateInstance(core::ptr::null(), core::ptr::null(), &mut inst), 0);
+    assert_eq!(hlvk::vkCreateInstance(core::ptr::null(), core::ptr::null(), &mut inst), 0);
     let mut n = 1u32;
     let mut phys: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkEnumeratePhysicalDevices(inst, &mut n, &mut phys), 0);
+    assert_eq!(hlvk::vkEnumeratePhysicalDevices(inst, &mut n, &mut phys), 0);
     let mut dev: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkCreateDevice(phys, &vk::DeviceCreateInfo::default() as *const _, core::ptr::null(), &mut dev), 0);
+    assert_eq!(hlvk::vkCreateDevice(phys, &vk::DeviceCreateInfo::default() as *const _, core::ptr::null(), &mut dev), 0);
     let mut queue: *mut c_void = core::ptr::null_mut();
-    ddvk::vkGetDeviceQueue(dev, 0, 0, &mut queue);
+    hlvk::vkGetDeviceQueue(dev, 0, 0, &mut queue);
     let mut pool: u64 = 0;
     assert_eq!(
-        ddvk::vkCreateCommandPool(dev, &vk::CommandPoolCreateInfo::default(), core::ptr::null(), &mut pool),
+        hlvk::vkCreateCommandPool(dev, &vk::CommandPoolCreateInfo::default(), core::ptr::null(), &mut pool),
         0
     );
 
@@ -114,8 +114,8 @@ fn vk_triangle_renders_on_real_metal() {
         .samples(vk::SampleCountFlags::TYPE_1)
         .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC);
     let mut image: u64 = 0;
-    assert_eq!(ddvk::vkCreateImage(dev, &img_ci, core::ptr::null(), &mut image), 0);
-    let attach_ir = ddvk::reg::lock().images.get(&image).map(|i| i.ir_id).unwrap();
+    assert_eq!(hlvk::vkCreateImage(dev, &img_ci, core::ptr::null(), &mut image), 0);
+    let attach_ir = hlvk::reg::lock().images.get(&image).map(|i| i.ir_id).unwrap();
 
     let view_ci = vk::ImageViewCreateInfo::default()
         .image(vk::Image::from_raw(image))
@@ -130,7 +130,7 @@ fn vk_triangle_renders_on_real_metal() {
             layer_count: 1,
         });
     let mut view: u64 = 0;
-    assert_eq!(ddvk::vkCreateImageView(dev, &view_ci, core::ptr::null(), &mut view), 0);
+    assert_eq!(hlvk::vkCreateImageView(dev, &view_ci, core::ptr::null(), &mut view), 0);
 
     let attachment = vk::AttachmentDescription::default()
         .format(vk::Format::R8G8B8A8_UNORM)
@@ -147,7 +147,7 @@ fn vk_triangle_renders_on_real_metal() {
     let atts = [attachment];
     let rp_ci = vk::RenderPassCreateInfo::default().attachments(&atts).subpasses(&subpass);
     let mut render_pass: u64 = 0;
-    assert_eq!(ddvk::vkCreateRenderPass(dev, &rp_ci, core::ptr::null(), &mut render_pass), 0);
+    assert_eq!(hlvk::vkCreateRenderPass(dev, &rp_ci, core::ptr::null(), &mut render_pass), 0);
 
     let views = [vk::ImageView::from_raw(view)];
     let fb_ci = vk::FramebufferCreateInfo::default()
@@ -157,7 +157,7 @@ fn vk_triangle_renders_on_real_metal() {
         .height(H)
         .layers(1);
     let mut framebuffer: u64 = 0;
-    assert_eq!(ddvk::vkCreateFramebuffer(dev, &fb_ci, core::ptr::null(), &mut framebuffer), 0);
+    assert_eq!(hlvk::vkCreateFramebuffer(dev, &fb_ci, core::ptr::null(), &mut framebuffer), 0);
 
     // --- vertex buffer: a green triangle in clip space (pos float2 + color float4, stride 24) ---
     let tri: [([f32; 2], [f32; 4]); 3] = [
@@ -177,24 +177,24 @@ fn vk_triangle_renders_on_real_metal() {
     let vsz = verts.len() as u64;
     let buf_ci = vk::BufferCreateInfo::default().size(vsz).usage(vk::BufferUsageFlags::VERTEX_BUFFER);
     let mut vbuf: u64 = 0;
-    assert_eq!(ddvk::vkCreateBuffer(dev, &buf_ci, core::ptr::null(), &mut vbuf), 0);
+    assert_eq!(hlvk::vkCreateBuffer(dev, &buf_ci, core::ptr::null(), &mut vbuf), 0);
     let mut vmem: u64 = 0;
     assert_eq!(
-        ddvk::vkAllocateMemory(dev, &vk::MemoryAllocateInfo::default().allocation_size(vsz), core::ptr::null(), &mut vmem),
+        hlvk::vkAllocateMemory(dev, &vk::MemoryAllocateInfo::default().allocation_size(vsz), core::ptr::null(), &mut vmem),
         0
     );
-    assert_eq!(ddvk::vkBindBufferMemory(dev, vbuf, vmem, 0), 0);
+    assert_eq!(hlvk::vkBindBufferMemory(dev, vbuf, vmem, 0), 0);
     let mut p: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkMapMemory(dev, vmem, 0, vsz, 0, &mut p), 0);
+    assert_eq!(hlvk::vkMapMemory(dev, vmem, 0, vsz, 0, &mut p), 0);
     unsafe { core::ptr::copy_nonoverlapping(verts.as_ptr(), p as *mut u8, verts.len()) };
-    ddvk::vkUnmapMemory(dev, vmem);
+    hlvk::vkUnmapMemory(dev, vmem);
 
     // --- SPIR-V graphics pipeline ---
     let vs = create_shader(dev, &stage_spirv(VS_GLSL, VS_WGSL, naga::ShaderStage::Vertex, "vertex"));
     let fs = create_shader(dev, &stage_spirv(FS_GLSL, FS_WGSL, naga::ShaderStage::Fragment, "fragment"));
     let mut layout: u64 = 0;
     assert_eq!(
-        ddvk::vkCreatePipelineLayout(dev, (&vk::PipelineLayoutCreateInfo::default() as *const _) as *const vk::PipelineLayoutCreateInfo, core::ptr::null(), &mut layout),
+        hlvk::vkCreatePipelineLayout(dev, (&vk::PipelineLayoutCreateInfo::default() as *const _) as *const vk::PipelineLayoutCreateInfo, core::ptr::null(), &mut layout),
         0
     );
 
@@ -217,15 +217,15 @@ fn vk_triangle_renders_on_real_metal() {
         .render_pass(vk::RenderPass::from_raw(render_pass));
     let mut pipeline: u64 = 0;
     assert_eq!(
-        ddvk::vkCreateGraphicsPipelines(dev, 0, 1, &gp_ci, core::ptr::null(), &mut pipeline),
+        hlvk::vkCreateGraphicsPipelines(dev, 0, 1, &gp_ci, core::ptr::null(), &mut pipeline),
         0
     );
 
     // --- record + submit the draw ---
     let cb_ai = vk::CommandBufferAllocateInfo::default().command_pool(vk::CommandPool::from_raw(pool)).command_buffer_count(1);
     let mut cb: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkAllocateCommandBuffers(dev, &cb_ai, &mut cb), 0);
-    assert_eq!(ddvk::vkBeginCommandBuffer(cb, (&vk::CommandBufferBeginInfo::default() as *const _) as *const vk::CommandBufferBeginInfo), 0);
+    assert_eq!(hlvk::vkAllocateCommandBuffers(dev, &cb_ai, &mut cb), 0);
+    assert_eq!(hlvk::vkBeginCommandBuffer(cb, (&vk::CommandBufferBeginInfo::default() as *const _) as *const vk::CommandBufferBeginInfo), 0);
 
     let clear = [vk::ClearValue { color: vk::ClearColorValue { float32: [0.1, 0.1, 0.1, 1.0] } }];
     let rp_begin = vk::RenderPassBeginInfo::default()
@@ -233,22 +233,22 @@ fn vk_triangle_renders_on_real_metal() {
         .framebuffer(vk::Framebuffer::from_raw(framebuffer))
         .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: W, height: H } })
         .clear_values(&clear);
-    ddvk::vkCmdBeginRenderPass(cb, &rp_begin, vk::SubpassContents::INLINE.as_raw());
-    ddvk::vkCmdBindPipeline(cb, vk::PipelineBindPoint::GRAPHICS.as_raw(), pipeline);
+    hlvk::vkCmdBeginRenderPass(cb, &rp_begin, vk::SubpassContents::INLINE.as_raw());
+    hlvk::vkCmdBindPipeline(cb, vk::PipelineBindPoint::GRAPHICS.as_raw(), pipeline);
     let vbufs = [vbuf];
     let offs = [0u64];
-    ddvk::vkCmdBindVertexBuffers(cb, 0, 1, vbufs.as_ptr(), offs.as_ptr());
-    ddvk::vkCmdDraw(cb, 3, 1, 0, 0);
-    ddvk::vkCmdEndRenderPass(cb);
-    assert_eq!(ddvk::vkEndCommandBuffer(cb), 0);
+    hlvk::vkCmdBindVertexBuffers(cb, 0, 1, vbufs.as_ptr(), offs.as_ptr());
+    hlvk::vkCmdDraw(cb, 3, 1, 0, 0);
+    hlvk::vkCmdEndRenderPass(cb);
+    assert_eq!(hlvk::vkEndCommandBuffer(cb), 0);
 
     let cbs = [cb];
     let submit = vk::SubmitInfo { command_buffer_count: 1, p_command_buffers: cbs.as_ptr() as *const vk::CommandBuffer, ..Default::default() };
-    assert_eq!(ddvk::vkQueueSubmit(queue, 1, &submit, 0), 0);
-    assert_eq!(ddvk::vkQueueWaitIdle(queue), 0);
+    assert_eq!(hlvk::vkQueueSubmit(queue, 1, &submit, 0), 0);
+    assert_eq!(hlvk::vkQueueWaitIdle(queue), 0);
 
     // --- replay on real Metal, reading back the render target ---
-    let ir = ddvk::reg::take_ir();
+    let ir = hlvk::reg::take_ir();
     eprintln!("vk_triangle: shim produced {} IR commands", ir.len());
     let bytes_ir = hl_gpu::ir::encode_stream(&ir);
     let mut be = WgpuBackend::new().expect("wgpu Metal backend");

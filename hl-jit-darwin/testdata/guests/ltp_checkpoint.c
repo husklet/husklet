@@ -1,15 +1,15 @@
 // Cross-process futex over a MAP_SHARED /dev/shm page across fork() — the exact mechanism LTP's new-API
 // tst_checkpoint uses (a shared IPC page of futex words; a child FUTEX_WAKEs, the parent FUTEX_WAITs, or
 // vice-versa). This is the #402 shared-setup guard: LTP's tst_checkpoint_wake() loops until FUTEX_WAKE's
-// return value EQUALS nr_wake, and dd's FUTEX_WAKE used to return the requested max (INT_MAX) instead of
+// return value EQUALS nr_wake, and hl's FUTEX_WAKE used to return the requested max (INT_MAX) instead of
 // the ACTUAL number of waiters woken — so every checkpoint spun to ETIMEDOUT and BROKe the SETUP of
 // pause01/pause02/mincore04/fork04 (and any *.needs_checkpoints test) before a single assertion ran.
 //
-// Deterministic self-check (dd must equal native on both arches):
+// Deterministic self-check (hl must equal native on both arches):
 //   * FUTEX_WAKE with NO waiter returns 0.
 //   * With one child parked in FUTEX_WAIT on a shared-page word, FUTEX_WAKE(INT_MAX) returns exactly 1
 //     (the count of waiters actually woken), and the child observes the wake.
-// Output is booleans only (no addresses/pids), so `.oracle()` holds dd byte-identical to native/qemu.
+// Output is booleans only (no addresses/pids), so `.oracle()` holds hl byte-identical to native/qemu.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>

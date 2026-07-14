@@ -1,6 +1,6 @@
 //! Archive + registry transfer: `docker push` / `docker save` / `docker load` / `docker import`.
 //!
-//! dd's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
+//! hl's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
 //! `rootfs/` directory plus a `hl-manifest.json` sidecar recording the image identity (name + run
 //! config). `docker save` produces it, `docker load` consumes it; `docker import` instead takes a
 //! bare rootfs tar (no manifest) whose files land directly in a new image's rootfs.

@@ -1,4 +1,4 @@
-//! `hl-display` — the shared host renderer for dd containers (see `docs/ideas/RENDERING.md`).
+//! `hl-display` — the shared host renderer for hl containers (see `docs/ideas/RENDERING.md`).
 //!
 //! This library is the **portable compositor core**: a minimal Wayland endpoint ([`server::Server`]) that
 //! composites a guest's `wl_shm` buffers into tight BGRA framebuffers and hands them to a

@@ -111,7 +111,7 @@ pub(crate) async fn image_delete(
     let mut report = vec![DeleteRecord::Untagged(untagged)];
     // Delete the backing store only when this was the last tag AND no container still uses the rootfs —
     // even a FORCED rmi must not delete storage a live container reads (docker refcounts the layers by the
-    // container; dd shares the rootfs directly, so deleting it would break the container's restart/export).
+    // container; hl shares the rootfs directly, so deleting it would break the container's restart/export).
     if last_ref && target.name != "macos" && !container_uses_rootfs {
         // the host `macos` image's rootfs is the live `/` — never delete. hl-images owns the store-guarded
         // dir removal (a rootfs outside the writable store — a bundled starter — is left untouched). If the

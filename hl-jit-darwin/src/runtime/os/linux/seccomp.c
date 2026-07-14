@@ -1,17 +1,17 @@
-// dd/runtime/os/linux -- seccomp: a real classic-BPF (cBPF) interpreter + syscall gating.
+// hl/runtime/os/linux -- seccomp: a real classic-BPF (cBPF) interpreter + syscall gating.
 //
 // Guests self-sandbox with seccomp(2) / prctl(PR_SET_SECCOMP): they install a cBPF program that the
 // kernel runs against a `struct seccomp_data` on EVERY syscall and honours the program's return action
 // (ALLOW / ERRNO / KILL_PROCESS / KILL_THREAD / TRAP / TRACE / LOG), or SECCOMP_MODE_STRICT (only
-// read/write/exit/rt_sigreturn permitted). dd previously accepted the install as a no-op and enforced
-// nothing -- a guest believed a syscall was blocked/trapped/killed while dd kept servicing it (a
+// read/write/exit/rt_sigreturn permitted). hl previously accepted the install as a no-op and enforced
+// nothing -- a guest believed a syscall was blocked/trapped/killed while hl kept servicing it (a
 // compatibility AND security fail-open). This module closes that: it stores the installed program(s) and
 // runs a small cBPF virtual machine on the syscall entry path (service()), applying the resulting action.
 //
 // Storage is PER-THREAD (Linux seccomp is per-thread) via __thread, stacked newest-first (multiple
 // installs compose; the most restrictive action wins). It is inherited across fork(2) for free (a real
 // host fork COW-copies the calling thread's __thread head + the malloc'd program nodes) and preserved
-// across execve(2) for free (dd's execve re-enters IN-process -- it never host-execve's -- so __thread
+// across execve(2) for free (hl's execve re-enters IN-process -- it never host-execve's -- so __thread
 // state survives, exactly as the kernel keeps filters across a non-setuid exec).
 //
 // HOT PATH: g_seccomp_active is a plain global that stays 0 until the first install anywhere, so a guest
@@ -143,7 +143,7 @@ struct hl_bpf_filter {
 static volatile int g_seccomp_active;
 
 // Per-thread mode: 0 = none, 1 = SECCOMP_MODE_STRICT, 2 = SECCOMP_MODE_FILTER. Sticky (a thread cannot
-// leave seccomp). Inherited across fork (COW) and preserved across dd's in-process execve.
+// leave seccomp). Inherited across fork (COW) and preserved across hl's in-process execve.
 static __thread unsigned char t_seccomp_mode;
 static __thread struct hl_bpf_filter *t_seccomp_filters; // stacked, newest first
 
@@ -404,7 +404,7 @@ static int hl_seccomp_apply(struct cpu *c) {
     }
     case HL_SECCOMP_RET_TRACE:
         // SECCOMP_RET_TRACE with no ptrace supervisor attached: the kernel skips the syscall and returns
-        // -ENOSYS. dd has no seccomp-TRACE supervisor wiring, so this is the always-correct no-tracer path.
+        // -ENOSYS. hl has no seccomp-TRACE supervisor wiring, so this is the always-correct no-tracer path.
         G_RET(c) = (uint64_t)(-(int64_t)ENOSYS);
         return 1;
     case HL_SECCOMP_RET_USER_NOTIF:

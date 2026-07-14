@@ -22,7 +22,7 @@ pub(super) fn regress() -> Group {
         port("ccmp-chain", "ccmp_test.c").has("ccmp OK"),          // conditional-compare/branch chains
         // sched_getaffinity(tid) for a NON-main guest thread must not spuriously return ESRCH. glibc's
         // pthread_getattr_np (HotSpot's os::current_stack_region on EVERY JVM thread bring-up, also Go)
-        // calls sched_getaffinity(pd->tid) first; dd validated that pid with host kill(guest_tid,0) -> ESRCH
+        // calls sched_getaffinity(pd->tid) first; hl validated that pid with host kill(guest_tid,0) -> ESRCH
         // (a guest tid is a hl-internal id, not a host pid) -> pthread_getattr_np returned 3 -> `java -version`
         // aborted "pthread_getattr_np failed with error = 3". Fix resolves guest tids via the live-thread
         // registry. Pre-fix: tid=0 wrap=0 getattr=0; post-fix matches native. Linux-only (no pthread_getattr_np
@@ -52,7 +52,7 @@ pub(super) fn regress() -> Group {
             .only(&[Engine::LinuxAarch64]),
         // REGRESSION GUARD: an externally-linked / cgo (runtime.iscgo==1) aarch64 Go binary that forces
         // heavy goroutine stack growth + GC (64 goroutines, morestack copies, runtime.GC). Go async-preempts
-        // running goroutines with SIGURG; dd's delivery of SIGURG into a preempted cgo thread (Go's
+        // running goroutines with SIGURG; hl's delivery of SIGURG into a preempted cgo thread (Go's
         // cgoSigtramp) corrupted a stack return address via a signal-frame/SP overlap -> SIGSEGV/SIGBUS mid-run
         // (proven: this fixture, influxd, and victoria-metrics all crashed). The interim fix auto-suppresses
         // SIGURG for exactly the iscgo aarch64 Go class (os/linux/elf.c detects it from the Go build-info
@@ -67,7 +67,7 @@ pub(super) fn regress() -> Group {
         fixture("go-cgo-sigurg", &[(Engine::LinuxAarch64, "guests/arm/go_cgo_stackgrow_arm")])
             .has("OK stackgrow total= 2016"),
         // STACK-OVERFLOW GUARD: a guest that recurses off the bottom of its stack must hit the
-        // PROT_NONE guard gap dd now places immediately below every guest stack -> a deliverable SIGSEGV
+        // PROT_NONE guard gap hl now places immediately below every guest stack -> a deliverable SIGSEGV
         // (like Linux's stack guard gap), NOT a silent write into the adjacent 64MB RX code cache (the
         // clickhouse corruption). The guest first proves the usable stack is intact (a bounded-but-deep
         // recursion prints "deep ok"), then overruns and dies of SIGSEGV. Byte-exact vs native arm64 /
@@ -78,7 +78,7 @@ pub(super) fn regress() -> Group {
         // item 3: a guest that installs its OWN SIGSEGV handler on an alternate signal stack (glibc's
         // stack-overflow detection / a JIT guard-page trap) must, on overflow, get that handler invoked with
         // signo SIGSEGV and a non-NULL si_addr in the guard region -- delivered on the altstack because the
-        // main stack is exhausted (requires dd's per-thread host altstack + host-SIGBUS->SIGSEGV mapping).
+        // main stack is exhausted (requires hl's per-thread host altstack + host-SIGBUS->SIGSEGV mapping).
         // Byte-exact "caught SIGSEGV addr=1" + exit 42 vs native arm64 / qemu-x86_64.
         src("stackoverflow-catch", "stackoverflow_catch.c").oracle()
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
@@ -102,7 +102,7 @@ pub(super) fn regress() -> Group {
         src_nopie("repcmps-nonpie", "repcmps_nopie.c").oracle()
             .only(&[Engine::LinuxX86_64]), // rep cmps/scas are x86 opcodes; no aarch64 analogue
         // aarch64 PC-relative literal-load family. A literal load reads its constant at an address
-        // relative to the GUEST PC; dd places the block at a DIFFERENT host address, so each such load must
+        // relative to the GUEST PC; hl places the block at a DIFFERENT host address, so each such load must
         // be rewritten to materialize the guest-absolute literal address. LDRSW (literal) (opc=10, V=0, top
         // byte 0x98 — the sign-extending word load compilers emit for switch/jump tables) was MISSING from
         // that rewrite (it only "worked" when the host arena happened to place the literal in reach), and

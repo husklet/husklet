@@ -31,7 +31,7 @@ int main(void) {
     ok &= pf_read("/proc/self/comm", b, sizeof b) > 0 && b[0] != '\n'; // our command name
 
     // /proc/self/limits: docker container default soft/hard RLIMIT_NOFILE (oracle 20480/1048576, must
-    // agree with getrlimit/svc_fill_rlimit). Old dd reported soft 1024.
+    // agree with getrlimit/svc_fill_rlimit). Old hl reported soft 1024.
     pf_read("/proc/self/limits", b, sizeof b);
     {
         char *ln = strstr(b, "Max open files");

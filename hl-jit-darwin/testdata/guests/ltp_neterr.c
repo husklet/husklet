@@ -1,12 +1,12 @@
 // Permanent guard for the connect(2)/bind(2) errno matrix that upstream LTP's connect01 + bind01 check.
-// dd emulates the Linux socket ABI on top of macOS BSD sockets, and macOS reports a DIFFERENT errno than
+// hl emulates the Linux socket ABI on top of macOS BSD sockets, and macOS reports a DIFFERENT errno than
 // Linux for several bad inputs; net.c's net_precheck() re-derives the Linux errno + ORDER up front. This
 // guest asserts every case against the exact Linux errno (arch-independent numbers) so a regression in
 // that path fails the matrix on both engines. Golden-compared (deterministic); see cases/ext/net.rs.
 //
 // The values mirror connect01 (EBADF/EFAULT/EINVAL/ENOTSOCK/EISCONN/ECONNREFUSED/EAFNOSUPPORT) and
 // bind01 (EINVAL/ENOTSOCK/EAFNOSUPPORT/EADDRNOTAVAIL/EBADF). EFAULT is exercised with a mmap(PROT_NONE)
-// guard page exactly as LTP's tst_get_bad_addr does — the case dd force-maps host-readable, so net.c
+// guard page exactly as LTP's tst_get_bad_addr does — the case hl force-maps host-readable, so net.c
 // consults its guest-PROT_NONE registry to still fault.
 #include <errno.h>
 #include <fcntl.h>
@@ -83,7 +83,7 @@ int main(void) {
     // .fd=&fd_invalid .addr=&sock1). A bad fd + a bad ADDRESS is deliberately NOT combined: that case is
     // order-ambiguous across implementations — the real Linux kernel checks the fd first (fdget -> EBADF,
     // before move_addr_to_kernel ever reads the sockaddr), while qemu-user copies the sockaddr in userspace
-    // BEFORE issuing the host syscall, so it reports EFAULT. dd matches the real kernel (fd first). Passing a
+    // BEFORE issuing the host syscall, so it reports EFAULT. hl matches the real kernel (fd first). Passing a
     // valid address here keeps the assertion portable and meaningful (EBADF on every implementation).
     int c_ebadf = err_of(connect(-1, (struct sockaddr *)&ok, sizeof ok));
     int c_efault = err_of(connect(s, (struct sockaddr *)bad, sizeof(struct sockaddr_in)));

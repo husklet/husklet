@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-/* Linux exposes /proc/self/fdinfo (a dir) and /proc/self/fdinfo/<N> (pos/flags/mnt_id per fd). dd omitted
+/* Linux exposes /proc/self/fdinfo (a dir) and /proc/self/fdinfo/<N> (pos/flags/mnt_id per fd). hl omitted
    it entirely while exposing /proc/self/fd. Check the dir + an entry for a known-open fd. Oracle-diff. */
 
 int main(void) {

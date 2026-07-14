@@ -18,7 +18,7 @@ pub struct Image {
 
 impl From<ImageSummary> for Image {
     fn from(i: ImageSummary) -> Self {
-        // bollard's ImageSummary has no Architecture field (the dd daemon emits it as an extra,
+        // bollard's ImageSummary has no Architecture field (the hl daemon emits it as an extra,
         // which bollard drops). The UI only displays it, so leave it blank.
         Image {
             id: i.id,

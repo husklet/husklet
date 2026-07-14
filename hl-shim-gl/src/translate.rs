@@ -3,7 +3,7 @@
 //! The host compiles MSL (not GLSL), so the guest shim transforms a vertex+fragment GLSL-ES pair into
 //! one combined MSL source at `glLinkProgram`. Every transform here mirrors the C shim exactly (same
 //! passes, same order, same whitespace) so the emitted MSL — and therefore the `CreateShader` IR — is
-//! identical. Verified against gl_shim.c's own `-DDD_TR_TOOL gl_tr` tool in `tests/translate_parity`.
+//! identical. Verified against gl_shim.c's own `-HLD_TR_TOOL gl_tr` tool in `tests/translate_parity`.
 
 /// A parsed `qualifier TYPE name;` declaration (gl_shim.c `struct decl`).
 #[derive(Clone, Debug, PartialEq)]

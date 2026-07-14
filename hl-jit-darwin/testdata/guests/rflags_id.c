@@ -1,5 +1,5 @@
 // #120 — RFLAGS.ID (bit 21) round-trip through pushfq/popfq (x86-64 only). Classic CPUID-availability
-// probe: software toggles EFLAGS.ID and checks the change stuck. dd models the ID bit in its flag
+// probe: software toggles EFLAGS.ID and checks the change stuck. hl models the ID bit in its flag
 // substrate (translate.c: popfq stashes bit 21 -> cpu->idflag, pushfq re-materializes it), so a set/clear
 // must survive the pushfq/popfq round-trip exactly as real hardware. Byte-exact vs the qemu-x86_64 oracle
 // (qemu models EFLAGS.ID correctly), so this is oracle-diffed, not just golden.

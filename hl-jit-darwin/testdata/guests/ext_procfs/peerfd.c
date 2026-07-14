@@ -1,6 +1,6 @@
 // Peer /proc/<pid>/fd cross-process fidelity. A container process can inspect ANOTHER process's open-fd
 // table: /proc/<pid>/fd is a listable directory of symlinks, and /proc/<pid>/fd/<N> readlinks to the fd's
-// target. dd runs every guest process as its own macOS process with a PRIVATE fd table, and the
+// target. hl runs every guest process as its own macOS process with a PRIVATE fd table, and the
 // cross-process proc registry published only comm+argv -- so a peer's /proc/<pid>/fd was advertised
 // (listed as a dir entry) but its contents ENOENTed. The fix reads a peer's fd table from the host kernel
 // (libproc) and serves the listing + per-fd readlink (the symlink-target view; actually OPENING a peer fd
@@ -40,7 +40,7 @@ int main(void) {
         close(pipefd[0]);
         // Pin a real file onto a known fd. Its readlink target is the child's OWN view of PIN_FD.
         char marker[64];
-        snprintf(marker, sizeof marker, "/tmp/.ddpeerfd_%d", (int)getpid());
+        snprintf(marker, sizeof marker, "/tmp/.hlpeerfd_%d", (int)getpid());
         int mf = open(marker, O_RDWR | O_CREAT | O_TRUNC, 0600);
         if (mf < 0) _exit(1);
         if (mf != PIN_FD) {

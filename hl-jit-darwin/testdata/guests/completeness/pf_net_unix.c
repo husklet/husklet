@@ -6,7 +6,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-/* A bound AF_UNIX PATH socket must appear in /proc/net/unix (socket-inventory tools rely on it). dd emitted
+/* A bound AF_UNIX PATH socket must appear in /proc/net/unix (socket-inventory tools rely on it). hl emitted
    only the header. Bind a uniquely-named socket, then check its path shows up. Oracle-diffed vs native. */
 
 int main(void) {

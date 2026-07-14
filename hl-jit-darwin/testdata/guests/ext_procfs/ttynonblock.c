@@ -1,12 +1,12 @@
 // A NONBLOCKING read on a controlling terminal with no pending input returns EAGAIN on Linux, NEVER EOF(0):
-// a tty has no end-of-input from emptiness. dd backs /dev/tty with a host device (and /dev/console with
+// a tty has no end-of-input from emptiness. hl backs /dev/tty with a host device (and /dev/console with
 // /dev/null) that returns 0 when empty, so readline/TUI/event-loop code read the 0 as terminal closure and
 // tear the terminal down. The fix flags /dev/tty + /dev/console fds and remaps a nonblocking 0-byte read to
 // EAGAIN.
 //
 // This is a hl-behavior golden (not an oracle diff): a real controlling tty is not guaranteed on the test
 // host, and native /dev/console read semantics inside a container are not portable. /dev/console is the
-// deterministic path -- dd intercepts open("/dev/console") unconditionally (backed by /dev/null), so it
+// deterministic path -- hl intercepts open("/dev/console") unconditionally (backed by /dev/null), so it
 // exercises the exact flag+read fix here. /dev/tty is attempted best-effort (it needs the engine to hold a
 // controlling terminal, which the compiled-guest harness lacks); when it can't be opened it is skipped.
 #include <errno.h>
@@ -30,7 +30,7 @@ static int probe(const char *path) {
 }
 
 int main(void) {
-    // Deterministic path: /dev/console is always intercepted by dd (backed by /dev/null) -> open succeeds,
+    // Deterministic path: /dev/console is always intercepted by hl (backed by /dev/null) -> open succeeds,
     // and a nonblocking empty read MUST be EAGAIN, not EOF.
     int console = probe("/dev/console");
 

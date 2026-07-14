@@ -9,8 +9,8 @@
 //!
 //! ## Coverage
 //! The exported entry-point *surface* is code-generated from a committed manifest (`build.rs` +
-//! `registry/`), extracted from dd's clean-room `hl-gpu/cuda/cuda_shim.c` driver-API surface, so it is
-//! the full `cu*` set dd ships (132 entry points), not a hand-picked few. Entry points in
+//! `registry/`), extracted from hl's clean-room `hl-gpu/cuda/cuda_shim.c` driver-API surface, so it is
+//! the full `cu*` set hl ships (132 entry points), not a hand-picked few. Entry points in
 //! [`build::IMPLEMENTED`](../build.rs) have real hand-written bodies in [`driver`]; the rest are
 //! generated spec-faithful default stubs (correct ABI, `CUDA_SUCCESS` return, `HL_SHIM_DEBUG`-traced)
 //! ported to real bodies incrementally — the shrinking long tail.
@@ -507,7 +507,7 @@ mod tests {
         assert!(write_fills, "cuMemsetD32 must emit a WriteBuffer of the expanded fill");
     }
 
-    /// A kernel using an instruction outside dd's modeled PTX subset (`shfl.sync`, a warp intrinsic).
+    /// A kernel using an instruction outside hl's modeled PTX subset (`shfl.sync`, a warp intrinsic).
     /// It parses as a valid entry (so module load + get-function succeed) but cannot be executed. Used
     /// by the truthful-failure and strict-mode tests.
     const UNSUPPORTED_PTX: &str = r#"

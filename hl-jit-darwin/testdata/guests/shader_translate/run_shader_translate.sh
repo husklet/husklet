@@ -15,7 +15,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 mkdir -p "$TMPDIR"
 
-cc -DDD_TR_TOOL "$GL_SHIM" -o "$TMPDIR/gl_tr"
+cc -HLD_TR_TOOL "$GL_SHIM" -o "$TMPDIR/gl_tr"
 
 run_pair() {
     name="$1"

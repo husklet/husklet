@@ -1,4 +1,4 @@
-// dd/runtime/translate/aarch64 -- persistent cross-process translated-code cache for the aarch64
+// hl/runtime/translate/aarch64 -- persistent cross-process translated-code cache for the aarch64
 // engine. Mirror of the x86 opt8 pcache (translate/x86_64/pcache.c), adapted to the two ways the
 // aarch64 engine differs from the x86 frontend:
 //
@@ -217,8 +217,8 @@ static uint64_t pcache_id_of(const char *path) {
     return pc_fnv(h, path, strlen(path));
 }
 
-// Per-engine-build tag so the cache self-invalidates across dd rebuilds (host bytes from a different build
-// must never load). __DATE__/__TIME__ change every (re)build -> a user who updates dd gets a fresh cache
+// Per-engine-build tag so the cache self-invalidates across hl rebuilds (host bytes from a different build
+// must never load). __DATE__/__TIME__ change every (re)build -> a user who updates hl gets a fresh cache
 // transparently (old files just go unreferenced; harmless cruft in the cache dir).
 static uint64_t pcache_engine_id(void) {
     static const char tag[] = __DATE__ " " __TIME__;

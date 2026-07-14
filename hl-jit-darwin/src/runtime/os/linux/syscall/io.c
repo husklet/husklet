@@ -23,7 +23,7 @@ static void eventfd_peer_vacate(int fd) {
     }
 }
 
-// Carry dd's virtual-fd emulation state from oldfd to newfd on dup/dup2/dup3/F_DUPFD. Linux duplicated
+// Carry hl's virtual-fd emulation state from oldfd to newfd on dup/dup2/dup3/F_DUPFD. Linux duplicated
 // descriptors refer to the SAME open file description, so a dup'd eventfd/timerfd must share the underlying
 // object. The host dup already shares the backing pipe/kqueue; these tables are what route the guest's
 // read/write to the virtual handler, so without carrying them the duplicate degraded to a raw pipe/fd.
@@ -81,7 +81,7 @@ static void fd_carry_virt(int newfd, int oldfd) {
 #define G_O_DIRECT 0x10000 // aarch64 / asm-generic
 #endif
 
-// In dd's in-process exec model the guest shares the host descriptor table (fds are 1:1), and the engine
+// In hl's in-process exec model the guest shares the host descriptor table (fds are 1:1), and the engine
 // pins private host fds at LOW numbers (g_root_fd -- every path resolution openat()s off it -- plus the
 // timer kqueue, the signalfd pipe, and each bind-mount volume fd). A guest dup2/dup3 onto one of those low
 // numbers (e.g. BEAM's erl_child_setup does dup3(controlpipe, 3), landing on g_root_fd) would silently
@@ -304,7 +304,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         default: break;
         }
     }
-    // Guest PROT_NONE buffer in the fd-I/O family (fd, BUF=a1, count=a2): dd force-maps guest anon pages
+    // Guest PROT_NONE buffer in the fd-I/O family (fd, BUF=a1, count=a2): hl force-maps guest anon pages
     // host-writable (mem.c case 222) so the host read/write does NOT fault on a guest PROT_NONE page the way
     // Linux's copy_{to,from}_user would. Reject it here with -EFAULT, exactly as Linux. Near-free when no
     // PROT_NONE region exists (g_ngna==0). read/pread WRITE the buffer, write/pwrite READ it; both fault. (read02)
@@ -642,7 +642,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         ts_wait_leave();
         // /dev/tty (or /dev/console) tty semantics: a controlling terminal has no EOF-from-emptiness, so a
         // NONBLOCKING read that came back with 0 bytes ("no input") must be EAGAIN, never EOF -- otherwise
-        // readline/TUI/event-loop code reads the 0 as terminal closure and tears the terminal down. dd may
+        // readline/TUI/event-loop code reads the 0 as terminal closure and tears the terminal down. hl may
         // back /dev/tty with a host device (or /dev/null for console) that returns 0 when empty; remap it.
         if (r == 0 && a2 > 0 && rfd >= 0 && rfd < HL_NFD && g_devtty[rfd]) {
             int fl = fcntl(rfd, F_GETFL);
@@ -713,7 +713,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             pthread_mutex_lock(&g_eventfd_lock);
             // Linux caps the counter at ULLONG_MAX-1 (0xfffffffffffffffe). A write that would overflow that
             // maximum does NOT wrap: a nonblocking eventfd returns EAGAIN and leaves the counter unchanged
-            // (a blocking one sleeps until a reader makes room -- an extreme edge dd does not model, so it
+            // (a blocking one sleeps until a reader makes room -- an extreme edge hl does not model, so it
             // also returns EAGAIN rather than silently wrapping the counter to zero and losing wake state).
             if (add > 0xfffffffffffffffeULL - g_eventfd_count[eslot]) {
                 pthread_mutex_unlock(&g_eventfd_lock);
@@ -1126,7 +1126,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 } else {
                     (void)fcntl((int)a0, F_GETPATH, p);
                 }
-                fprintf(stderr, "[DDFCNTL] pid=%d cpid=%d fd=%d mflags=0x%x lflags=0x%x path=%s\n",
+                fprintf(stderr, "[HLFCNTL] pid=%d cpid=%d fd=%d mflags=0x%x lflags=0x%x path=%s\n",
                         getpid(), container_pid(), (int)a0, r, lf, p);
             }
             G_RET(c) = (uint64_t)(unsigned)lf;
@@ -1163,7 +1163,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             // The Linux struct flock at a2 (fields up to lf+24) is read directly and written back for F_GETLK;
             // validate the 32-byte struct before any deref so a bad pointer returns -EFAULT, not a crash. A guest
-            // PROT_NONE flock buffer (LTP fcntl13 uses one) is force-mapped host-writable by dd, but
+            // PROT_NONE flock buffer (LTP fcntl13 uses one) is force-mapped host-writable by hl, but
             // host_range_mapped rejects it via its internal gna_hit check so it still EFAULTs like Linux.
             if (!host_range_mapped((uintptr_t)a2, 32)) {
                 G_RET(c) = (uint64_t)(-EFAULT);
@@ -1330,7 +1330,7 @@ static int svc_io(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // A read lease (F_RDLCK) may only be taken on a descriptor NOT open for writing -- Linux
             // generic_add_lease returns EAGAIN when the inode has a writer, and the requesting fd itself
             // counts (an O_RDWR/O_WRONLY fd -> EAGAIN). This single-fd check matches the kernel exactly for
-            // the common case. A write lease (F_WRLCK) requires the fd be the SOLE opener; dd cannot
+            // the common case. A write lease (F_WRLCK) requires the fd be the SOLE opener; hl cannot
             // enumerate other openers across guest processes, so it is tracked but its BREAK on a conflicting
             // open is never delivered (see syscall-compat.md). Both states round-trip through F_GETLEASE.
             if (arg == 0) { // F_RDLCK

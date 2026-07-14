@@ -3,7 +3,7 @@ use crate::{AppModel, Msg};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 
-/// On first launch, offer to point the `docker` CLI at our daemon (the `dd` context). A small,
+/// On first launch, offer to point the `docker` CLI at our daemon (the `hl` context). A small,
 /// frameless dialog using the app's own pill buttons.
 pub fn prompt_switch_context(
     parent: &gtk::ApplicationWindow,

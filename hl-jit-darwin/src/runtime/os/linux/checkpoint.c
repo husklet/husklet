@@ -1,9 +1,9 @@
-// dd/runtime/os/linux -- native checkpoint/restore ("CRIU-equivalent"), MULTI-PROCESS.
+// hl/runtime/os/linux -- native checkpoint/restore ("CRIU-equivalent"), MULTI-PROCESS.
 //
 // Freezes a running guest -- a WHOLE process tree (multiple shells, background jobs, their children) -- to an
 // on-disk directory (RAM + CPU + fds, per process), so every host engine process can exit and free its
-// memory, then later resume the entire tree EXACTLY from where it left off. dd has no Linux kernel (guests
-// run in-process on macOS via the JIT), so criu (ptrace, /proc, freezer cgroup) cannot run; but dd IS the
+// memory, then later resume the entire tree EXACTLY from where it left off. hl has no Linux kernel (guests
+// run in-process on macOS via the JIT), so criu (ptrace, /proc, freezer cgroup) cannot run; but hl IS the
 // kernel for its guests -- it owns every guest page, the CPU context and the fd table -- so checkpoint/
 // restore is implemented natively in the engine, snapshotting at a guest block boundary.
 //
@@ -409,7 +409,7 @@ done:
     return 0;
 }
 
-// Enumerate the container's whole process tree = every ENGINE process in the init's session. dd runs each
+// Enumerate the container's whole process tree = every ENGINE process in the init's session. hl runs each
 // guest process as a real host process and the launcher setsid()s the container init, so every guest process
 // (even a fork-without-exec bash subshell, even one orphaned to launchd after its parent exited) keeps the
 // init's session id. The pid registry is unreliable here (a short-lived fork child inherits + unlinks the

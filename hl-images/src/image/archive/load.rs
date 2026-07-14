@@ -1,4 +1,4 @@
-//! `docker load`: [`Store::load_archive`] — extract a dd save archive (or a standard `docker save`
+//! `docker load`: [`Store::load_archive`] — extract a hl save archive (or a standard `docker save`
 //! archive) into a new image directory under the store.
 
 use super::*;
@@ -10,7 +10,7 @@ impl Store {
     /// `docker load`: materialize an archive into a new image directory under the store and return the
     /// [`LoadedImage`]. Two archive shapes are accepted:
     ///
-    ///  * **dd format** — a top-level `rootfs/` dir plus an optional `hl-manifest.json` sidecar (what
+    ///  * **hl format** — a top-level `rootfs/` dir plus an optional `hl-manifest.json` sidecar (what
     ///    [`save_archive`](Self::save_archive) writes). A rootfs-only archive (no manifest) still loads via
     ///    a generic name + probed arch; a PRESENT-but-malformed `hl-manifest.json` is an error.
     ///  * **docker save format** — a top-level `manifest.json` (a JSON array of `{Config, RepoTags,
@@ -48,7 +48,7 @@ impl Store {
                 "archive is not a dd image (no rootfs/ at top level)".to_string(),
             ))
         };
-        // The dd path renames `staging` into place; the docker path builds a separate dir and leaves
+        // The hl path renames `staging` into place; the docker path builds a separate dir and leaves
         // `staging`. Either way, remove whatever remains (a no-op if already renamed away).
         let _ = std::fs::remove_dir_all(&staging);
         result
@@ -341,7 +341,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&store_dir);
     }
 
-    // Flow 3 — a NON-dd archive (no top-level rootfs/) is rejected and leaves nothing behind.
+    // Flow 3 — a NON-hl archive (no top-level rootfs/) is rejected and leaves nothing behind.
     // Invariant: load_archive returns Err and its staging dir is cleaned up, so the store root holds no
     // partial image or `.load-*` directory.
     #[test]
@@ -455,7 +455,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&store_dir);
     }
 
-    // Finding 8 — a dd manifest with an unsupported os (windows) must be rejected, not imported as Linux.
+    // Finding 8 — a hl manifest with an unsupported os (windows) must be rejected, not imported as Linux.
     #[test]
     fn load_unsupported_os_manifest_errors() {
         let src = unique_dir("os-src");

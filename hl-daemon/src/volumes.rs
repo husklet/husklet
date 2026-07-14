@@ -31,7 +31,7 @@ pub(crate) fn container_uses_volume(c: &Container, name: &str, mp: Option<&str>)
 }
 
 /// A fresh, UNIQUE name for an anonymous `docker volume create` (empty `Name`). Docker mints a random
-/// id per call; dd uses `vol_<12 hex>`. The seed MUST be unique per call: an earlier version seeded
+/// id per call; hl uses `vol_<12 hex>`. The seed MUST be unique per call: an earlier version seeded
 /// `fake_id("v")` — a pure hash of a constant — so every unnamed create produced the SAME name, and the
 /// second call returned the FIRST volume, silently sharing one backing dir across unrelated containers.
 fn new_unnamed_volume_name() -> String {

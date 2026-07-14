@@ -1,7 +1,7 @@
 // #403 guard — a guest child killed by a fatal-default signal must be reported to the parent's wait4 as
 // WIFSIGNALED/WTERMSIG=signo (not WIFEXITED(128+signo)), including the signals with NO faithful fatal host
 // (macOS) mapping: SIGPOLL(29)/SIGSTKFLT(16) map to host signals that default-IGNORE, SIGPWR(30) maps to a
-// host signal that reports a different signo. dd relays the intended Linux signo through a shared table and
+// host signal that reports a different signo. hl relays the intended Linux signo through a shared table and
 // the parent reconstructs the status. This is the LTP waitpid01 scenario, distilled to a single golden line
 // diffable against the native oracle on both Linux engines.
 //
@@ -10,7 +10,7 @@
 //   - exit157: a REAL _exit(157) must read back WIFEXITED(157), never a signal death (disambiguation guard).
 //   - sigkill: parent kill(child, SIGKILL) -> the cross-process host-kill path (must not regress).
 //   - sigsegv: an actual NULL write -> the synchronous-fault path (must not regress).
-// RLIMIT_CORE is pinned to 0 so WCOREDUMP is deterministically 0 on every case (dd == native), independent
+// RLIMIT_CORE is pinned to 0 so WCOREDUMP is deterministically 0 on every case (hl == native), independent
 // of the host's core policy. (The WCOREDUMP==1 path is exercised by LTP waitpid01's coredump variant.)
 
 #include <signal.h>

@@ -69,7 +69,7 @@ int main(void) {
     int noent = epoll_ctl(ep3, EPOLL_CTL_MOD, a[1], &e2) < 0 && errno == ENOENT; // a[1] not registered
     errno = 0;
     int self = epoll_ctl(ep3, EPOLL_CTL_ADD, ep3, &e2) < 0 && errno == EINVAL;   // can't watch itself
-    char tmpl[] = "/tmp/ddep_XXXXXX";
+    char tmpl[] = "/tmp/hlep_XXXXXX";
     int rf = mkstemp(tmpl);
     errno = 0;
     int perm = epoll_ctl(ep3, EPOLL_CTL_ADD, rf, &e2) < 0 && errno == EPERM;      // regular file -> EPERM

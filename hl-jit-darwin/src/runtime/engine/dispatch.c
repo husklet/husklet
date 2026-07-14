@@ -1,4 +1,4 @@
-// dd/runtime/jit -- the host<->guest boundary: entry trampoline + run_guest() dispatcher loop.
+// hl/runtime/jit -- the host<->guest boundary: entry trampoline + run_guest() dispatcher loop.
 
 // ---------------- host entry trampoline ----------------
 // run_block(cpu, code): save host callee-saved into cpu, set env=x28, jump to code.

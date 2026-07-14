@@ -3,14 +3,14 @@
 //! fork-worker models (good JIT stress). Hermetic: loopback-only, no external network. Both Linux
 //! arches. Owner: web agent. Recipes: docs/IMAGE-MANIFEST.md §4.
 //!
-//! Every case below is verified against the REAL docker oracle (`--backend real`). Known dd gaps are
+//! Every case below is verified against the REAL docker oracle (`--backend real`). Known hl gaps are
 //! `.xfail()`-marked so the gate stays green and XPASS fires when the engine lane fixes them:
-//!   * httpd MUSL (httpd:alpine) — NOW WORKS on x86 under dd (verified: `docker exec` starts httpd and it
+//!   * httpd MUSL (httpd:alpine) — NOW WORKS on x86 under hl (verified: `docker exec` starts httpd and it
 //!     serves "It works!"; XPASS on amd, Real amd green). No xfail. On arm it SKIPS: the single-arch
 //!     `poc/images` store holds httpd:alpine at x86_64 only, so the arm cell can't be served (skip, not a
 //!     gap — see scenario.rs `store_arch`). Seeding an arm httpd:alpine needs a network pull (egress
 //!     blocked here), so arm stays a clean skip until the store carries it.
-//!   * httpd GLIBC (httpd:2.4) — still fails under dd on ARM (the residual glibc dynamic-linker/exec path
+//!   * httpd GLIBC (httpd:2.4) — still fails under hl on ARM (the residual glibc dynamic-linker/exec path
 //!     gap). The store holds httpd:2.4 at aarch64 only, so it runs (and xfails) on arm and SKIPS on amd.
 //!     `.xfail(ArmLinux)`.
 
@@ -20,7 +20,7 @@ const ARM: &[Target] = &[Target::ArmLinux];
 
 pub fn group() -> ScenGroup {
     sgroup("web", vec![
-        // ---- nginx (C, fork-worker, musl + glibc) — works on dd, no xfail -------------------------
+        // ---- nginx (C, fork-worker, musl + glibc) — works on hl, no xfail -------------------------
         // seed (proven on Real): nginx serves its default page over loopback.
         scen("web/nginx-serve", "nginx:alpine")
             .exec("nginx; sleep 1; wget -qO- http://127.0.0.1/ | head -1")
@@ -152,7 +152,7 @@ haproxy -f /tmp/h.cfg -D; sleep 1; wget -qO- http://127.0.0.1/")
             .exec("varnishd -C -f /etc/varnish/default.vcl 2>&1 | grep -o VRT_ | head -1")
             .has("VRT_").timeout(45),
 
-        // ---- httpd / apache — MUSL (httpd:alpine) now serves under dd on x86 (XPASS on amd; Real green).
+        // ---- httpd / apache — MUSL (httpd:alpine) now serves under hl on x86 (XPASS on amd; Real green).
         // No xfail: amd PASSES, arm SKIPS (store holds httpd:alpine at x86_64 only → single-arch skip).
         scen("web/httpd-serve", "httpd:alpine")
             .exec("httpd -k start 2>/dev/null; sleep 1; wget -qO- http://127.0.0.1/")
@@ -167,7 +167,7 @@ haproxy -f /tmp/h.cfg -D; sleep 1; wget -qO- http://127.0.0.1/")
         scen("web/httpd-config-test", "httpd:alpine")
             .exec("httpd -t 2>&1")
             .has("Syntax OK").timeout(45),
-        // glibc apache (debian) — still fails on arm under dd (residual glibc linker/exec gap); the store
+        // glibc apache (debian) — still fails on arm under hl (residual glibc linker/exec gap); the store
         // holds httpd:2.4 at aarch64 only → runs+xfails on arm, skips on amd. `.xfail(ARM)`.
         scen("web/httpd-glibc-version", "httpd:2.4")
             .exec("httpd -v 2>&1")

@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- the x86-64 -> arm64 translator (flag synthesis, SSE/x87 lowering, the
+// hl/runtime/frontend/x86_64 -- the x86-64 -> arm64 translator (flag synthesis, SSE/x87 lowering, the
 // big translate_block) + host entry trampolines.
 
 // ---------------- the translator ----------------
@@ -21,7 +21,7 @@ static void e_mul_set_oc(int cfreg) {
 // imul reg<-a*b (two-/three-operand forms 0F AF, 69, 6B): truncated product into dst, and x86
 // CF=OF = (the full signed product differs from the sign-extension of the truncated result).
 // Scratch x21..x25 (x21 carries the 0/1 CF into e_mul_set_oc); callers must not pass a/b in those.
-// x86-xflags: when `co_live`==0 the caller proved the WHOLE NZCV word imul defines (dd sets N=Z=0,
+// x86-xflags: when `co_live`==0 the caller proved the WHOLE NZCV word imul defines (hl sets N=Z=0,
 // C=NOT CF, V=OF) is dead before any read -> skip the entire overflow/flag synthesis (incl. the extra
 // smulh, a real multiply that contends with the product mul on a dependent chain) and emit product-only.
 static void e_imul2(int dst, int a, int b, int w, int co_live) {
@@ -216,7 +216,7 @@ static void byte_wb(struct insn *I, int regnum, int val) {
 // images -> the rewrite is inert.
 static uint64_t g_nonpie_lo, g_nonpie_hi, g_nonpie_bias, g_nonpie_types_lo, g_nonpie_types_hi;
 // V8's embedded-builtins CODE base (symbol v8_Default_embedded_blob_code_) -- a baked LOW.text
-// address the binary loads via `mov r32,imm32`. dd runs the code at the HIGH mapping (+bias), so V8's
+// address the binary loads via `mov r32,imm32`. hl runs the code at the HIGH mapping (+bias), so V8's
 // InnerPointerToCodeCache range check compares its LOW registered base against a HIGH frame return address
 // and MISSES -> V8_Fatal "maybe_code.has_value()" (node:20 `new Error().stack` / mongosh). We record the
 // symbol's LOW link value at load (0 if absent / PIE / non-V8) and bias just THIS one materialization to the

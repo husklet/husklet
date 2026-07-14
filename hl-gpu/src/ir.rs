@@ -119,7 +119,7 @@ pub mod texture_usage {
     pub const RENDER_TARGET: u32 = 1 << 2;
     pub const COPY_SRC: u32 = 1 << 3;
     pub const COPY_DST: u32 = 1 << 4;
-    /// Presentable to a DDP surface (IOSurface-backed on Mac; dma-buf/VkImage on a CUDA host).
+    /// Presentable to a HLP surface (IOSurface-backed on Mac; dma-buf/VkImage on a CUDA host).
     pub const PRESENT: u32 = 1 << 5;
 }
 
@@ -255,15 +255,15 @@ pub struct SurfaceDesc {
     pub width: u32,
     pub height: u32,
     pub format: TextureFormat,
-    /// DDP surface id this GPU surface presents through.
-    pub ddp_surface: u32,
+    /// HLP surface id this GPU surface presents through.
+    pub hlp_surface: u32,
 }
 
 // ---------------------------------------------------------------------------------------------------
 // texture subresources / regions (texture-to-texture copy + blit)
 // ---------------------------------------------------------------------------------------------------
 
-/// A texture subresource selector — dd's first-class "texture view / subresource" concept: the
+/// A texture subresource selector — hl's first-class "texture view / subresource" concept: the
 /// (mip level, array layer, aspect) a copy/blit reads or writes. Mirrors wgpu's
 /// `TexelCopyTextureInfo { mip_level, origin.z (array layer), aspect }` and the `VkImageSubresourceLayers`
 /// (`mipLevel` / `baseArrayLayer` / `aspectMask`) MoltenVK maps in `MVKCmdCopyImage`/`MVKCmdBlitImage`.
@@ -1320,7 +1320,7 @@ impl Cmd {
                 e.u32(d.width);
                 e.u32(d.height);
                 e.u32(d.format.to_u32());
-                e.u32(d.ddp_surface);
+                e.u32(d.hlp_surface);
             }
             Cmd::DestroySurface(id) => {
                 e.u8(tag::DESTROY_SURFACE);
@@ -1406,7 +1406,7 @@ impl Cmd {
                         width: d.u32()?,
                         height: d.u32()?,
                         format: TextureFormat::from_u32(d.u32()?)?,
-                        ddp_surface: d.u32()?,
+                        hlp_surface: d.u32()?,
                     },
                 )
             }

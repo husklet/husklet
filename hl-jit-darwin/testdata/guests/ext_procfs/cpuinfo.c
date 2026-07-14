@@ -11,9 +11,9 @@ int main(void) {
     int n = pf_read("/proc/cpuinfo", b, sizeof b);
     int has_processor = pf_has(b, "processor");
 #if defined(__x86_64__)
-    // Structure + the required feature flags dd advertises (must agree with the CPUID leaves; #187). Each
-    // token is a bit dd's translator actually implements, so software feature-detecting via /proc sees only
-    // what the engine can execute. AVX (and any VEX/EVEX class) MUST be absent -- dd cannot translate it, so
+    // Structure + the required feature flags hl advertises (must agree with the CPUID leaves; #187). Each
+    // token is a bit hl's translator actually implements, so software feature-detecting via /proc sees only
+    // what the engine can execute. AVX (and any VEX/EVEX class) MUST be absent -- hl cannot translate it, so
     // advertising it would crash guests that then use it.
     int flags_ok = pf_has(b, "fpu") && pf_has(b, "tsc") && pf_has(b, "sse2") && pf_has(b, "sse4_2") &&
                    pf_has(b, "popcnt") && pf_has(b, "aes") && pf_has(b, "pclmulqdq") && pf_has(b, "ssse3") &&

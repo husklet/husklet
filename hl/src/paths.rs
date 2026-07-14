@@ -1,4 +1,4 @@
-//! Canonical filesystem locations for a dd install. Everything lives under the user's `$HOME`
+//! Canonical filesystem locations for a hl install. Everything lives under the user's `$HOME`
 //! so install/uninstall never needs root. The socket sits at `~/.hl/run/docker.sock` — short and
 //! space-free so it stays under the ~104-byte `sun_path` limit (never under "Application Support").
 
@@ -35,13 +35,13 @@ pub fn images_dir() -> PathBuf {
     hl_root().join("images")
 }
 
-/// Daemon stdout/stderr logs dir. Platform-specific (macOS `~/Library/Logs/dd`, Linux `~/.hl/logs`).
+/// Daemon stdout/stderr logs dir. Platform-specific (macOS `~/Library/Logs/hl`, Linux `~/.hl/logs`).
 pub fn logs_dir() -> PathBuf {
     crate::platform::logs_dir()
 }
 
 /// The `hl-daemon` binary the agent should launch. Order: `$HL_DAEMON_BIN`, the installed app
-/// bundle (macOS only), then a binary sitting next to this `dd` executable (the dev/`cargo` layout).
+/// bundle (macOS only), then a binary sitting next to this `hl` executable (the dev/`cargo` layout).
 pub fn daemon_bin() -> PathBuf {
     if let Some(p) = std::env::var_os("HL_DAEMON_BIN") {
         return PathBuf::from(p);

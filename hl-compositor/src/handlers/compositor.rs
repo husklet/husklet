@@ -1118,7 +1118,7 @@ impl HlState {
             let src = cur.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h));
             (scale, cur.size(), src, buffer_transform)
         });
-        // GPU present path: a dmabuf-backed buffer carries a dd IOSurface id (no CPU pixels). Resolve it
+        // GPU present path: a dmabuf-backed buffer carries a hl IOSurface id (no CPU pixels). Resolve it
         // to a zero-copy IOSurface `SurfaceBuffer` and skip the shm cache.
         if let Some(mut sb) = self.dmabuf_surface_buffer(sid, buffer, buffer_scale, dst, src) {
             // Split-client mirror: crop the visible IOSurface to the browser window region (no-op unless
@@ -1641,8 +1641,8 @@ fn blend(base: &mut SurfaceBuffer, top: &SurfaceBuffer, x_logical: i32, y_logica
     } else {
         1.0
     };
-    let ddw = ((dw as f64) * s).round().max(1.0) as i32;
-    let ddh = ((dh as f64) * s).round().max(1.0) as i32;
+    let hlw = ((dw as f64) * s).round().max(1.0) as i32;
+    let hlh = ((dh as f64) * s).round().max(1.0) as i32;
     let (ox, oy) = ((x_logical as f64 * s).round() as i32, (y_logical as f64 * s).round() as i32);
     // Source sample window over the top's backing texture, from its `wp_viewport` source crop
     // (`top.uv_rect` is normalized `[u0,v0,u1,v1]`; the full texture when there is no crop).
@@ -1650,21 +1650,21 @@ fn blend(base: &mut SurfaceBuffer, top: &SurfaceBuffer, x_logical: i32, y_logica
     let (su0, sv0) = (u0 as f64 * tw as f64, v0 as f64 * th as f64);
     let (sw, sh) = ((u1 - u0) as f64 * tw as f64, (v1 - v0) as f64 * th as f64);
     let top_opaque = top.format == 1;
-    for dy in 0..ddh {
+    for dy in 0..hlh {
         let by = oy + dy;
         if by < 0 || by >= bh {
             continue;
         }
         // Map this device destination row to a source texel row through the viewport crop.
-        let fy = if ddh > 1 { dy as f64 / ddh as f64 } else { 0.0 };
+        let fy = if hlh > 1 { dy as f64 / hlh as f64 } else { 0.0 };
         let sy = (sv0 + fy * sh).floor() as i32;
         let sy = sy.clamp(0, th - 1);
-        for dx in 0..ddw {
+        for dx in 0..hlw {
             let bx = ox + dx;
             if bx < 0 || bx >= bw {
                 continue;
             }
-            let fx = if ddw > 1 { dx as f64 / ddw as f64 } else { 0.0 };
+            let fx = if hlw > 1 { dx as f64 / hlw as f64 } else { 0.0 };
             let sx = (su0 + fx * sw).floor() as i32;
             let sx = sx.clamp(0, tw - 1);
             let ti = sy as usize * top_stride + sx as usize * 4;

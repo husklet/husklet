@@ -6,7 +6,7 @@
 //! These are where a translator is most likely to diverge. Both Linux arches. Owner: weird agent.
 //!
 //! Every scenario below is proven on the REAL oracle (Docker Desktop, arm64) — the marker matches the
-//! real output, so the TEST is correct. `.xfail()` flags a *suspected* dd divergence (see GAPS.md):
+//! real output, so the TEST is correct. `.xfail()` flags a *suspected* hl divergence (see GAPS.md):
 //!   * gcc-compiled C cases → the documented toolchain fork-exec / exec-loader gap blocks `cc`/`ld`
 //!     (and `ghc`/`dotnet build`), so they xfail on both Linux arches; each ALSO probes a deeper corner
 //!     (RWX exec, SMC re-translation, signal-on-fault, rdtsc, futex, a syscall) — XPASS after the

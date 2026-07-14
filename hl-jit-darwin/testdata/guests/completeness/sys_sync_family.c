@@ -3,7 +3,7 @@
 #include <string.h>
 #include <fcntl.h>
 int main(void){
-  const char *p="/tmp/ddc_syn"; unlink(p);
+  const char *p="/tmp/hlc_syn"; unlink(p);
   int fd=open(p,O_CREAT|O_RDWR|O_TRUNC,0644); write(fd,"data",4);
   long fs=syscall(SYS_fsync, fd);
   long fd2=syscall(SYS_fdatasync, fd);

@@ -35,7 +35,7 @@ def_id!(/// A compiled render or compute pipeline (state + shader entry points).
     PipelineId, "pipeline");
 def_id!(/// A bound set of resources (WebGPU bind group / Vulkan descriptor set).
     BindGroupId, "bind_group");
-def_id!(/// A presentable output surface (one DDP `Surface`).
+def_id!(/// A presentable output surface (one HLP `Surface`).
     SurfaceId, "surface");
 def_id!(/// A timeline fence for host↔guest synchronization.
     FenceId, "fence");

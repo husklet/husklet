@@ -20,7 +20,7 @@ use core::ffi::c_void;
 use hl_gpu::backend::GpuBackend;
 use hl_gpu::id::BufferId;
 use hl_gpu_wgpu::WgpuBackend;
-use vk_dd as ddvk; // the crate's lib is named `vk_dd` (the ICD library name)
+use vk_hl as hlvk; // the crate's lib is named `vk_hl` (the ICD library name)
 
 fn module_to_spirv(module: &naga::Module) -> Result<Vec<u32>, String> {
     let info = naga::valid::Validator::new(
@@ -74,44 +74,44 @@ unsafe fn make_buffer(dev: *mut c_void, size: u64, data: Option<&[u8]>) -> (u64,
         .size(size)
         .usage(vk::BufferUsageFlags::STORAGE_BUFFER);
     let mut buf: u64 = 0;
-    assert_eq!(ddvk::vkCreateBuffer(dev, &ci, core::ptr::null(), &mut buf), 0);
+    assert_eq!(hlvk::vkCreateBuffer(dev, &ci, core::ptr::null(), &mut buf), 0);
 
     let ai = vk::MemoryAllocateInfo::default().allocation_size(size);
     let mut mem: u64 = 0;
-    assert_eq!(ddvk::vkAllocateMemory(dev, &ai, core::ptr::null(), &mut mem), 0);
-    assert_eq!(ddvk::vkBindBufferMemory(dev, buf, mem, 0), 0);
+    assert_eq!(hlvk::vkAllocateMemory(dev, &ai, core::ptr::null(), &mut mem), 0);
+    assert_eq!(hlvk::vkBindBufferMemory(dev, buf, mem, 0), 0);
 
     if let Some(bytes) = data {
         let mut p: *mut c_void = core::ptr::null_mut();
-        assert_eq!(ddvk::vkMapMemory(dev, mem, 0, size, 0, &mut p), 0);
+        assert_eq!(hlvk::vkMapMemory(dev, mem, 0, size, 0, &mut p), 0);
         core::ptr::copy_nonoverlapping(bytes.as_ptr(), p as *mut u8, bytes.len());
-        ddvk::vkUnmapMemory(dev, mem);
+        hlvk::vkUnmapMemory(dev, mem);
     }
     // The IR id the shim assigned (for readback), read from the recording registry.
-    let ir = ddvk::reg::lock().buffers.get(&buf).map(|b| b.ir_id).unwrap();
+    let ir = hlvk::reg::lock().buffers.get(&buf).map(|b| b.ir_id).unwrap();
     (buf, ir)
 }
 
 #[test]
 fn vk_vecadd_runs_on_real_metal() {
     const N: usize = 1024;
-    ddvk::reg::reset();
+    hlvk::reg::reset();
 
     // --- instance / device / queue / command pool (the bring-up path) ---
     let mut inst: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkCreateInstance(core::ptr::null(), core::ptr::null(), &mut inst), 0);
+    assert_eq!(hlvk::vkCreateInstance(core::ptr::null(), core::ptr::null(), &mut inst), 0);
     let mut count = 0u32;
-    assert_eq!(ddvk::vkEnumeratePhysicalDevices(inst, &mut count, core::ptr::null_mut()), 0);
+    assert_eq!(hlvk::vkEnumeratePhysicalDevices(inst, &mut count, core::ptr::null_mut()), 0);
     let mut phys: *mut c_void = core::ptr::null_mut();
     count = 1;
-    assert_eq!(ddvk::vkEnumeratePhysicalDevices(inst, &mut count, &mut phys), 0);
+    assert_eq!(hlvk::vkEnumeratePhysicalDevices(inst, &mut count, &mut phys), 0);
     let mut dev: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkCreateDevice(phys, &vk::DeviceCreateInfo::default() as *const _, core::ptr::null(), &mut dev), 0);
+    assert_eq!(hlvk::vkCreateDevice(phys, &vk::DeviceCreateInfo::default() as *const _, core::ptr::null(), &mut dev), 0);
     let mut queue: *mut c_void = core::ptr::null_mut();
-    ddvk::vkGetDeviceQueue(dev, 0, 0, &mut queue);
+    hlvk::vkGetDeviceQueue(dev, 0, 0, &mut queue);
     let pool_ci = vk::CommandPoolCreateInfo::default();
     let mut pool: u64 = 0;
-    assert_eq!(ddvk::vkCreateCommandPool(dev, &pool_ci, core::ptr::null(), &mut pool), 0);
+    assert_eq!(hlvk::vkCreateCommandPool(dev, &pool_ci, core::ptr::null(), &mut pool), 0);
 
     // --- buffers a, b (written), c (output) ---
     let ha: Vec<f32> = (0..N).map(|i| i as f32).collect();
@@ -127,7 +127,7 @@ fn vk_vecadd_runs_on_real_metal() {
     assert_eq!(spirv.first().copied(), Some(0x0723_0203), "payload is real SPIR-V");
     let sm_ci = vk::ShaderModuleCreateInfo::default().code(&spirv);
     let mut shader: u64 = 0;
-    assert_eq!(ddvk::vkCreateShaderModule(dev, &sm_ci, core::ptr::null(), &mut shader), 0);
+    assert_eq!(hlvk::vkCreateShaderModule(dev, &sm_ci, core::ptr::null(), &mut shader), 0);
 
     // --- descriptor set layout: the shader declares set 0, storage-buffer bindings 0/1/2 (a/b/c). The
     //     shim reflects the SPIR-V and requires the pipeline layout to cover exactly these. ---
@@ -139,7 +139,7 @@ fn vk_vecadd_runs_on_real_metal() {
     let dsl_ci = vk::DescriptorSetLayoutCreateInfo::default().bindings(&dsl_bindings);
     let mut dsl: u64 = 0;
     assert_eq!(
-        ddvk::vkCreateDescriptorSetLayout(dev, &dsl_ci as *const _, core::ptr::null(), &mut dsl),
+        hlvk::vkCreateDescriptorSetLayout(dev, &dsl_ci as *const _, core::ptr::null(), &mut dsl),
         0
     );
 
@@ -148,7 +148,7 @@ fn vk_vecadd_runs_on_real_metal() {
     let layout_ci = vk::PipelineLayoutCreateInfo::default().set_layouts(&pl_set_layouts);
     let mut layout: u64 = 0;
     assert_eq!(
-        ddvk::vkCreatePipelineLayout(dev, &layout_ci as *const _, core::ptr::null(), &mut layout),
+        hlvk::vkCreatePipelineLayout(dev, &layout_ci as *const _, core::ptr::null(), &mut layout),
         0
     );
 
@@ -161,7 +161,7 @@ fn vk_vecadd_runs_on_real_metal() {
         .layout(vk::PipelineLayout::from_raw(layout));
     let mut pipeline: u64 = 0;
     assert_eq!(
-        ddvk::vkCreateComputePipelines(dev, 0, 1, &cp_ci, core::ptr::null(), &mut pipeline),
+        hlvk::vkCreateComputePipelines(dev, 0, 1, &cp_ci, core::ptr::null(), &mut pipeline),
         0
     );
 
@@ -169,7 +169,7 @@ fn vk_vecadd_runs_on_real_metal() {
     let dp_ci = vk::DescriptorPoolCreateInfo::default();
     let mut pool_d: u64 = 0;
     assert_eq!(
-        ddvk::vkCreateDescriptorPool(dev, (&dp_ci as *const _) as *const vk::DescriptorPoolCreateInfo, core::ptr::null(), &mut pool_d),
+        hlvk::vkCreateDescriptorPool(dev, (&dp_ci as *const _) as *const vk::DescriptorPoolCreateInfo, core::ptr::null(), &mut pool_d),
         0
     );
     let set_layouts = [vk::DescriptorSetLayout::from_raw(dsl)];
@@ -177,7 +177,7 @@ fn vk_vecadd_runs_on_real_metal() {
         .descriptor_pool(vk::DescriptorPool::from_raw(pool_d))
         .set_layouts(&set_layouts);
     let mut dset: u64 = 0;
-    assert_eq!(ddvk::vkAllocateDescriptorSets(dev, &ds_ai, &mut dset), 0);
+    assert_eq!(hlvk::vkAllocateDescriptorSets(dev, &ds_ai, &mut dset), 0);
 
     let bi = |b: u64| [vk::DescriptorBufferInfo::default().buffer(vk::Buffer::from_raw(b)).offset(0).range(sz)];
     let (ba, bb, bc) = (bi(buf_a), bi(buf_b), bi(buf_c));
@@ -186,20 +186,20 @@ fn vk_vecadd_runs_on_real_metal() {
         vk::WriteDescriptorSet::default().dst_set(vk::DescriptorSet::from_raw(dset)).dst_binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&bb),
         vk::WriteDescriptorSet::default().dst_set(vk::DescriptorSet::from_raw(dset)).dst_binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&bc),
     ];
-    ddvk::vkUpdateDescriptorSets(dev, writes.len() as u32, writes.as_ptr(), 0, core::ptr::null());
+    hlvk::vkUpdateDescriptorSets(dev, writes.len() as u32, writes.as_ptr(), 0, core::ptr::null());
 
     // --- record + submit the dispatch ---
     let cb_ai = vk::CommandBufferAllocateInfo::default()
         .command_pool(vk::CommandPool::from_raw(pool))
         .command_buffer_count(1);
     let mut cb: *mut c_void = core::ptr::null_mut();
-    assert_eq!(ddvk::vkAllocateCommandBuffers(dev, &cb_ai, &mut cb), 0);
+    assert_eq!(hlvk::vkAllocateCommandBuffers(dev, &cb_ai, &mut cb), 0);
 
     let begin = vk::CommandBufferBeginInfo::default();
-    assert_eq!(ddvk::vkBeginCommandBuffer(cb, (&begin as *const _) as *const vk::CommandBufferBeginInfo), 0);
-    ddvk::vkCmdBindPipeline(cb, vk::PipelineBindPoint::COMPUTE.as_raw(), pipeline);
+    assert_eq!(hlvk::vkBeginCommandBuffer(cb, (&begin as *const _) as *const vk::CommandBufferBeginInfo), 0);
+    hlvk::vkCmdBindPipeline(cb, vk::PipelineBindPoint::COMPUTE.as_raw(), pipeline);
     let sets = [dset];
-    ddvk::vkCmdBindDescriptorSets(
+    hlvk::vkCmdBindDescriptorSets(
         cb,
         vk::PipelineBindPoint::COMPUTE.as_raw(),
         layout,
@@ -209,18 +209,18 @@ fn vk_vecadd_runs_on_real_metal() {
         0,
         core::ptr::null(),
     );
-    ddvk::vkCmdDispatch(cb, (N as u32).div_ceil(64), 1, 1);
-    assert_eq!(ddvk::vkEndCommandBuffer(cb), 0);
+    hlvk::vkCmdDispatch(cb, (N as u32).div_ceil(64), 1, 1);
+    assert_eq!(hlvk::vkEndCommandBuffer(cb), 0);
 
     let submit = vk::SubmitInfo::default();
     // command_buffer_count/p_command_buffers set manually (raw u64->*mut c_void handle array).
     let cbs = [cb];
     let submit = vk::SubmitInfo { command_buffer_count: 1, p_command_buffers: cbs.as_ptr() as *const vk::CommandBuffer, ..submit };
-    assert_eq!(ddvk::vkQueueSubmit(queue, 1, &submit, 0), 0);
-    assert_eq!(ddvk::vkQueueWaitIdle(queue), 0);
+    assert_eq!(hlvk::vkQueueSubmit(queue, 1, &submit, 0), 0);
+    assert_eq!(hlvk::vkQueueWaitIdle(queue), 0);
 
     // --- replay the shim-produced IR on real Metal, then read back c ---
-    let ir = ddvk::reg::take_ir();
+    let ir = hlvk::reg::take_ir();
     eprintln!("vk_compute: shim produced {} IR commands", ir.len());
     let bytes_ir = hl_gpu::ir::encode_stream(&ir);
     let mut be = WgpuBackend::new().expect("wgpu Metal backend");

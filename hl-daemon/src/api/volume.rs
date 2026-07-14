@@ -25,7 +25,7 @@ pub(crate) struct VolumeList {
     pub warnings: Vec<Value>,
 }
 
-/// `POST /volumes/prune` report — the names of removed volumes plus reclaimed bytes (always 0; dd
+/// `POST /volumes/prune` report — the names of removed volumes plus reclaimed bytes (always 0; hl
 /// does not size volume contents).
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]

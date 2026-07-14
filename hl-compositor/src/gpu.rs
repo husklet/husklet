@@ -53,7 +53,7 @@ pub fn is_running() -> bool {
 }
 
 /// Readiness health handle for accelerated (dmabuf/IOSurface) imports: whether a host GPU executor is
-/// up and able to render/present dd IOSurface-backed buffers. This is the ACTIONABLE successor to
+/// up and able to render/present hl IOSurface-backed buffers. This is the ACTIONABLE successor to
 /// [`warn_if_accel_client_without_executor`] (which only logs): [`crate::HlState::dmabuf_imported`]
 /// REJECTS a hl-tagged dmabuf when this returns `false`, instead of accepting the buffer and letting the
 /// client render into a surface nothing can present (a white window). Currently the executor being
@@ -132,7 +132,7 @@ fn start_impl(_disp_socket: &str) {
 }
 
 /// Phase 6.2 health / capability check. Call this the moment an accelerated client is observed — it
-/// has imported a dd IOSurface-backed dmabuf, i.e. it expects the host GPU to render/present its
+/// has imported a hl IOSurface-backed dmabuf, i.e. it expects the host GPU to render/present its
 /// frames. If no executor is running, FAIL VISIBLY: log a prominent, once-only error instead of
 /// letting the client render a silent white window. (When the executor *is* running this is a cheap
 /// no-op, so it is safe to call on every accelerated import.)

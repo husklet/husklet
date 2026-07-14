@@ -85,7 +85,7 @@ static int unix_dgram_dest(const uint8_t *sa, socklen_t l, char *host, size_t hn
     return 0;
 }
 
-// Linux-faithful errno pre-screen for bind(200)/connect(203). macOS hands dd's translated (or raw)
+// Linux-faithful errno pre-screen for bind(200)/connect(203). macOS hands hl's translated (or raw)
 // sockaddr to its own bind()/connect(), which then reports the WRONG errno for several inputs the LTP
 // net-errno suite (bind01/connect01) checks — a bad sockaddr pointer, a wrong sa_family, an
 // already-connected socket. Replicate the kernel's ORDER + values here, up front, so every path (real
@@ -405,7 +405,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             G_RET(c) = r < 0 ? (uint64_t)(-errno) : 0;
             break;
         }
-        // NET bridge: bind(0.0.0.0 / own-ip / in-subnet :port) -> LISTEN on /tmp/.ddbr-<netid>/<ownip>:<port>.
+        // NET bridge: bind(0.0.0.0 / own-ip / in-subnet :port) -> LISTEN on /tmp/.hlbr-<netid>/<ownip>:<port>.
         // A dual-stack listener that binds `::` (busybox nc's default, and many servers') is the IPv6 analogue
         // of 0.0.0.0 and takes the same path (br6_any_is), so it's reachable by peer containers over the switch
         // instead of landing on the isolated per-container loopback (which broke cross-container reach-by-name).
@@ -688,7 +688,7 @@ static int svc_net(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             if (r == 0 && (int)a0 >= 0 && (int)a0 < HL_NFD) g_sock_conn[(int)a0] = 1; // sticky-connected
             break;
         }
-        // NET bridge: connect(peer-ip:port in our subnet) -> dial /tmp/.ddbr-<netid>/<peerip>:<port>
+        // NET bridge: connect(peer-ip:port in our subnet) -> dial /tmp/.hlbr-<netid>/<peerip>:<port>
         if (br_on() && (int)a0 >= 0 && (int)a0 < HL_NFD && g_sock_stream[(int)a0] && br_connect_is(sa, (socklen_t)a2)) {
             uint32_t dip = *(uint32_t *)(sa + 4);
             uint16_t p = ntohs(*(uint16_t *)(sa + 2));

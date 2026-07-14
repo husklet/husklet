@@ -123,7 +123,7 @@ pub(crate) fn image_score(img: &Image) -> i32 {
 }
 
 /// Pick the single best image matching a docker reference (`docker inspect ubuntu`, `docker run alpine`),
-/// deterministically. dd's lookup is lenient — a bare name matches any stored image with that repository
+/// deterministically. hl's lookup is lenient — a bare name matches any stored image with that repository
 /// regardless of tag (see [`ref_repo`]) — so several images can match one query. Ranks by:
 ///   1. an exact `repository:tag` match for the requested reference, then `<name>:latest`,
 ///   2. then the richest metadata (a real environment beats an empty one — see [`image_score`]),

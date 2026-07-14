@@ -8,10 +8,10 @@
 // densely-packed inherited maps -> SIGSEGV. Resetting reproduces the clean fresh-exec layout that works.
 #define GMAP_N 8192 // was 1024 -- a heavy guest overflowed it, leaking the untracked mappings at execve teardown
 
-// `len` is the FULL tracked extent (incl. the 64 KB guard tail dd reserves past a guest anon mapping,
+// `len` is the FULL tracked extent (incl. the 64 KB guard tail hl reserves past a guest anon mapping,
 // so glibc's vectorized over-reads stay mapped) -- used for execve teardown / munmap / mremap. `glen`
 // is the guest-VISIBLE logical length (== len for guard-less mappings); /proc/[pid]/{,s}maps reports it
-// so a mapping's Size/Rss matches what the guest asked for, not dd's over-reservation (LTP mlock05 Rss).
+// so a mapping's Size/Rss matches what the guest asked for, not hl's over-reservation (LTP mlock05 Rss).
 static struct {
     uint64_t addr, len, glen;
 } g_gmap[GMAP_N];
@@ -122,7 +122,7 @@ static void mlk_reset(void) {
 
 // mlockall(MCL_CURRENT): actually WIRE every currently-mapped guest range resident via the host mlock(2)
 // (macOS has mlock, same as mlock(2)/case 228 uses). Best-effort: a range the host refuses (RLIMIT_MEMLOCK
-// exhausted) is left pageable rather than aborting the whole call -- Linux would ENOMEM, but dd keeps the
+// exhausted) is left pageable rather than aborting the whole call -- Linux would ENOMEM, but hl keeps the
 // call succeeding with honest /proc state (the wired ranges are real; see the residual note in
 // syscall-compat.md). Returns the number of ranges the host declined (0 = fully wired).
 static int mlk_wire_current(void) {

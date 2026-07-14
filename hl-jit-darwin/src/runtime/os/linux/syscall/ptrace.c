@@ -1,9 +1,9 @@
-// os/linux/syscall/ptrace.c -- real ptrace(2) support for dd. Included by dispatch.c AFTER the
+// os/linux/syscall/ptrace.c -- real ptrace(2) support for hl. Included by dispatch.c AFTER the
 // svc_* family + local helpers; the shared arena struct (struct pt_arena/pt_link) + the hook forward
 // declarations live at the top of dispatch.c (before the family includes so mem.c/proc.c/rare.c can call
 // them). See that header block for the architecture rationale. Summary:
 //
-//   dd runs each guest PROCESS as its own host process, so a guest tracer and its guest tracee are two
+//   hl runs each guest PROCESS as its own host process, so a guest tracer and its guest tracee are two
 //   host processes. We do NOT touch the host macOS ptrace (no Linux semantics, cannot see guest regs).
 //   Instead this file emulates the Linux ptrace relationship BETWEEN the two guest processes over a
 //   shared-memory arena (g_pt) keyed on guest pids:
@@ -26,7 +26,7 @@
 //   process_vm_readv/writev against a stopped tracee.
 //
 // STAGED (returns a correct errno / documented approximation, never a lying success):
-//   (*) SINGLESTEP is accepted and resumes, but dd translates whole basic blocks, so it is NOT yet
+//   (*) SINGLESTEP is accepted and resumes, but hl translates whole basic blocks, so it is NOT yet
 //       instruction-granular (it resumes like CONT). True single-step needs single-instruction blocks --
 //       tracked for the gdb batch. GETFPREGS/SETFPREGS/GETREGSET(NT_PRFPREG/NT_X86_XSTATE) return -EIO
 //       (FP/vector register-set marshalling is the next batch). TRACEFORK/VFORK/CLONE auto-attach of

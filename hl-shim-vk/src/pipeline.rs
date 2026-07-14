@@ -925,7 +925,7 @@ fn pipeline_cache_header() -> Vec<u8> {
     h.extend_from_slice(&1u32.to_le_bytes()); // headerVersion = ONE
     h.extend_from_slice(&crate::state::APPLE_VENDOR_ID.to_le_bytes()); // vendorID
     h.extend_from_slice(&0xdd_00_0001u32.to_le_bytes()); // deviceID (matches physical_device_properties)
-    h.extend_from_slice(b"ddMetalVulkan\0\0\0"); // pipelineCacheUUID[16]
+    h.extend_from_slice(b"hlMetalVulkan\0\0\0"); // pipelineCacheUUID[16]
     h.truncate(32);
     while h.len() < 32 {
         h.push(0);

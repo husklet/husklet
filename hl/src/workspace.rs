@@ -39,13 +39,13 @@ pub enum WorkspaceCmd {
         /// (`socks5:host:port`, `http:host:port`, `wireguard:/path/wg.conf`). Omit for direct egress.
         #[arg(long)]
         vpn: Option<String>,
-        /// Present a simulated CUDA device (docs/ideas/CUDA_ON_METAL.md): dd injects its NVML shim +
+        /// Present a simulated CUDA device (docs/ideas/CUDA_ON_METAL.md): hl injects its NVML shim +
         /// the real `nvidia-smi` so the container reports an NVIDIA-looking GPU (presence only, not
         /// compute). Bare `--cuda` = the default device; `--cuda "Name|8.6|8192"` sets name|cc|VRAM-MB;
         /// `--cuda off` (or `""`/`none`) clears it. Omit to preserve any prior setting.
         #[arg(long, num_args = 0..=1, default_missing_value = "default")]
         cuda: Option<String>,
-        /// Render this workspace's GUI apps on the Mac (docs/ideas/RENDERING_PLAN.md): dd bind-mounts the
+        /// Render this workspace's GUI apps on the Mac (docs/ideas/RENDERING_PLAN.md): hl bind-mounts the
         /// host `hl-display` Wayland socket into the guest and sets `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`, so
         /// a Linux GUI app (e.g. `weston-simple-shm`, SDL2) draws in a native window — no custom image.
         /// Bare `--gui` = on; `--gui off` clears it. Omit to preserve any prior setting.

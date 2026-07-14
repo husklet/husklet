@@ -5,7 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-/* Synthetic directories whose direct leaves exist but whose DIRECTORY was not enumerable under dd:
+/* Synthetic directories whose direct leaves exist but whose DIRECTORY was not enumerable under hl:
    /proc/net, cpuN/topology, /sys/fs/cgroup, /sys/class/block, /sys/block, /proc/self/ns, /dev/fd.
    A tool walks these before opening leaves, so each must opendir + stat like real Linux. */
 

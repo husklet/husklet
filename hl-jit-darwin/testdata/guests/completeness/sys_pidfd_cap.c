@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <errno.h>
 
-/* Open many simultaneous pidfds. The invariant Linux guarantees (and dd must too): every SUCCESSFUL
+/* Open many simultaneous pidfds. The invariant Linux guarantees (and hl must too): every SUCCESSFUL
    pidfd_open returns a fd that stays resolvable (pidfd_send_signal(fd,0) works); a failure is a clean errno,
    never a usable-looking fd that later can't be resolved. dd's fixed 64-slot table used to silently hand
    back an unresolvable fd past capacity -- now it fails EMFILE. Print the invariant boolean, oracle-diffed. */

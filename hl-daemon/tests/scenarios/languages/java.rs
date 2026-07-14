@@ -1,5 +1,5 @@
 //! Java — JVM (HotSpot C2) is PRIME JIT-in-JIT stress: javac emits bytecode, then the JIT-compiling
-//! VM emits native code the dd engine must itself translate, and it mmaps RWX code cache.
+//! VM emits native code the hl engine must itself translate, and it mmaps RWX code cache.
 //! eclipse-temurin JDKs (glibc + musl alpine), 17/21. J-prog/J-fib written to /Main.java then
 //! `javac … && java …`. Markers per IMAGE-MANIFEST §2.
 

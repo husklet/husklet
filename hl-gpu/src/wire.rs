@@ -1,6 +1,6 @@
 //! Hand-rolled little-endian wire primitives (no serde — the `hl-term-core` discipline).
 //!
-//! Everything on dd's GPU channel is framed with these: a length-prefixed byte stream carried in the
+//! Everything on hl's GPU channel is framed with these: a length-prefixed byte stream carried in the
 //! shared-memory command ring ([`crate::ring`]), with out-of-band handles (shm fd via `SCM_RIGHTS`,
 //! IOSurface mach-port, or dma-buf fd) correlated by id. All integers little-endian; `f32` as raw bits.
 

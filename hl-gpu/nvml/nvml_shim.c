@@ -1,4 +1,4 @@
-/* dd's libnvidia-ml.so.1 — a real NVML implementation that reports a hl-fabricated
+/* hl's libnvidia-ml.so.1 — a real NVML implementation that reports a hl-fabricated
  * virtual GPU so the *genuine* closed-source `nvidia-smi` binary runs unmodified.
  *
  * There is no NVIDIA hardware on an Apple-silicon Mac; dd substitutes the driver's

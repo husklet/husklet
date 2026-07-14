@@ -1,9 +1,9 @@
-// Synthetic repro for the Chrome "lost cross-thread wakeup" stall (dd aarch64 engine, eventfd/epoll).
+// Synthetic repro for the Chrome "lost cross-thread wakeup" stall (hl aarch64 engine, eventfd/epoll).
 //
 // Chrome's browser main thread runs an idle message-pump loop: a MessagePumpEpoll blocks in epoll_pwait
 // on an eventfd that peer threads write() to wake it (ScheduleWork), and a futex-backed mutex
 // (base::Lock, FUTEX_WAIT val=2 = locked-with-waiters) guards the task queue. Under heavy multi-threaded
-// startup the browser stops making progress -> no first paint. Root cause: dd emulated an eventfd as a
+// startup the browser stops making progress -> no first paint. Root cause: hl emulated an eventfd as a
 // {counter, readiness-pipe} pair mutated WITHOUT synchronization, so concurrent write()/read() interleave
 // and strand the invariant "pipe-readable IFF counter>0" -- a byte left in the pipe with counter 0 makes a
 // level-triggered epoll_wait report the fd endlessly ready while read() drains nothing (the pump busy-

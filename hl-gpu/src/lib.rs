@@ -1,5 +1,5 @@
 //! hl-gpu — the host-GPU-agnostic command IR, wire protocol, resource-handle table, and `GpuBackend`
-//! executor abstraction for dd's rung-3 GPU forwarding and its CUDA-on-Metal device simulation.
+//! executor abstraction for hl's rung-3 GPU forwarding and its CUDA-on-Metal device simulation.
 //!
 //! See `docs/ideas/RENDERING_GPU_BACKENDS.md` (the forward-level/IR decision + backend abstraction +
 //! optimization plan) and `docs/ideas/CUDA_ON_METAL.md` (the "show the Linux container a CUDA device,
@@ -179,7 +179,7 @@ mod tests {
                 6,
                 BindGroupDesc { set: 0, entries: vec![BindEntry { binding: 0, resource: BindResource::Buffer { id: 1, offset: 0, size: 256 } }] },
             ),
-            Cmd::CreateSurface(7, SurfaceDesc { width: 64, height: 32, format: TextureFormat::Bgra8Unorm, ddp_surface: 100 }),
+            Cmd::CreateSurface(7, SurfaceDesc { width: 64, height: 32, format: TextureFormat::Bgra8Unorm, hlp_surface: 100 }),
             Cmd::CreateFence(8),
             Cmd::Submit(CommandBuffer {
                 encoder: vec![
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn software_backend_present_format_check() {
         let mut be = SoftwareBackend::new();
-        be.create_surface(SurfaceId(1), &SurfaceDesc { width: 4, height: 4, format: TextureFormat::Bgra8Unorm, ddp_surface: 1 }).unwrap();
+        be.create_surface(SurfaceId(1), &SurfaceDesc { width: 4, height: 4, format: TextureFormat::Bgra8Unorm, hlp_surface: 1 }).unwrap();
         be.create_texture(TextureId(1), &TextureDesc { width: 4, height: 4, depth: 1, mip_levels: 1, sample_count: 1, dim: TextureDim::D2, format: TextureFormat::Bgra8Unorm, usage: texture_usage::PRESENT, label: String::new() }).unwrap();
         let tok = be.present(SurfaceId(1), TextureId(1)).unwrap();
         assert!(tok.format_ok);

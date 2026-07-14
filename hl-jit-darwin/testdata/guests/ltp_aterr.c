@@ -1,6 +1,6 @@
-// #416 LTP fs family — the *at() dirfd/flag/EFAULT error-path fidelity that dd used to miss. Every syscall
+// #416 LTP fs family — the *at() dirfd/flag/EFAULT error-path fidelity that hl used to miss. Every syscall
 // here is a standard kernel path, so the fixed-string verdict is byte-identical on native aarch64 and under
-// qemu-x86_64 -> oracle-diffable on both Linux engines. Historical dd gaps this locks down (fs.c):
+// qemu-x86_64 -> oracle-diffable on both Linux engines. Historical hl gaps this locks down (fs.c):
 //   * fstatat/statx/symlinkat/linkat/renameat2/unlinkat folded a bad/non-dir dirfd into an absolute host
 //     path via g_fdpath, so EBADF/ENOTDIR were never produced (or leaked macOS EOPNOTSUPP);
 //   * fstatat/statx/linkat/renameat2 ignored invalid flag/mask bits (no EINVAL);

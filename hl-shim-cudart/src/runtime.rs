@@ -1,4 +1,4 @@
-//! The hand-written CUDA Runtime API entry points — the whole surface, at parity with dd's C oracle
+//! The hand-written CUDA Runtime API entry points — the whole surface, at parity with hl's C oracle
 //! `hl-gpu/cuda/cudart_shim.c`. The stateful compute calls lower the CUDA model into the shared `hl-gpu`
 //! IR through [`hl_gpu::cuda::CudaContext`] and EXECUTE it on the embedded
 //! [`SoftwareBackend`](hl_gpu::software::SoftwareBackend) (CPU PTX interpreter), so a runtime vecadd
@@ -737,7 +737,7 @@ pub extern "C" fn cudaFuncGetAttributes(attr: *mut c_void, func: *const c_void) 
     state::ensure_init();
     let cc = state::with(|s| s.ctx.device.compute_capability);
     let ptx_ver = cc.0 as i32 * 10 + cc.1 as i32;
-    // Modeled defaults matching the driver's cuFuncGetAttribute answers — dd's PTX model does not track
+    // Modeled defaults matching the driver's cuFuncGetAttribute answers — hl's PTX model does not track
     // per-kernel register/shared pressure, so these are honest GPU-free values.
     let a = CudaFuncAttributes {
         shared_size_bytes: 0,
@@ -944,7 +944,7 @@ pub extern "C" fn __cudaRegisterVar(
     constant: i32,
     global: i32,
 ) {
-    // dd's PTX model parses only kernel entries, not .global variables -> nothing to bind.
+    // hl's PTX model parses only kernel entries, not .global variables -> nothing to bind.
     let _ = (fatCubinHandle, hostVar, deviceAddress, deviceName, ext, size, constant, global);
 }
 

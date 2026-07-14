@@ -3,7 +3,7 @@
 //! + config that the CALLER hands to a runtime (e.g. `hl-jit`); it does not depend on any runtime crate.
 //!
 //! ```no_run
-//! let img = hl_images::Store::new("/var/lib/dd/images")
+//! let img = hl_images::Store::new("/var/lib/hl/images")
 //!     .pull("alpine", "latest", hl_images::Credentials::none(), &mut |_| {})?;
 //! // img.rootfs is an unpacked filesystem; img.arch is its target; hand both to your runtime:
 //! println!("rootfs {:?} arch {:?} cmd {:?}", img.rootfs, img.arch, img.entrypoint_cmd(["/bin/sh"]));

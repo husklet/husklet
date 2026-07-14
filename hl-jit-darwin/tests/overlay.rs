@@ -1,6 +1,6 @@
 //! Overlay-correctness differential tests (the "overlay test lane").
 //!
-//! dd emulates Linux `overlayfs` in userspace (a single read-only lower "image" + a writable upper, unioned
+//! hl emulates Linux `overlayfs` in userspace (a single read-only lower "image" + a writable upper, unioned
 //! by path-rewriting in the JIT). This lane pins that emulation to REAL overlayfs semantics: it builds a
 //! synthetic lower layer with known content, launches the `overlay/probe` guest against it on EVERY buildable
 //! Linux guest arch (x86_64 AND aarch64 — the two engines that run image overlays), and asserts the guest's

@@ -1,7 +1,7 @@
 //! CUDA Driver API result codes + the device-attribute enum values the bring-up entry points answer.
 //!
 //! Numeric values match NVIDIA's published `cuda.h` (they are the stable ABI a CUDA app compiles
-//! against); they are re-declared clean-room here, mirroring dd's `hl-gpu/cuda/cuda_min.h`. Only the
+//! against); they are re-declared clean-room here, mirroring hl's `hl-gpu/cuda/cuda_min.h`. Only the
 //! subset the hand-written entry points reference is declared — the generated stubs never inspect a
 //! `CUresult` value, they just return `CUDA_SUCCESS`.
 
@@ -26,7 +26,7 @@ pub const CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED: i32 = 713;
 pub const CUDA_ERROR_NOT_SUPPORTED: i32 = 801;
 
 /// The driver version cuDriverGetVersion reports: `major*1000 + minor*10`. 12020 == CUDA 12.2,
-/// matching dd's C shim (`hl-gpu/cuda/cuda_shim.c` `g_driver_version`).
+/// matching hl's C shim (`hl-gpu/cuda/cuda_shim.c` `g_driver_version`).
 pub const DRIVER_VERSION: i32 = 12020;
 
 // ---- CUdevice_attribute (subset the bring-up path answers; values from cuda.h) -------------------

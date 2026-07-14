@@ -1,4 +1,4 @@
-//! Seed: documented dd divergences (GAPS.md) that are NOT toolchain-related — the CPU-topology
+//! Seed: documented hl divergences (GAPS.md) that are NOT toolchain-related — the CPU-topology
 //! syscall gap (mongod aborts on an empty possible-CPU set) and the static non-PIE ET_EXEC loader
 //! gap (hello-world). Both xfail on both Linux arches.
 

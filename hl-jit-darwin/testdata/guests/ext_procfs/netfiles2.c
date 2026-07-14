@@ -49,7 +49,7 @@ int main(void) {
     ok &= (pf_read("/proc/1/net/dev", b, sizeof b) > 0) && pf_has(b, "eth0:");
 
     // /sys/class/net/eth0/statistics/* (node_exporter/ifstat read these per-interface counters directly).
-    // A digit-leading numeric value on both real Linux (live counter) and dd (zero counter).
+    // A digit-leading numeric value on both real Linux (live counter) and hl (zero counter).
     ok &= (pf_read("/sys/class/net/eth0/statistics/rx_bytes", b, sizeof b) > 0) && b[0] >= '0' && b[0] <= '9';
     ok &= (pf_read("/sys/class/net/eth0/statistics/tx_packets", b, sizeof b) > 0) && b[0] >= '0' && b[0] <= '9';
     // the statistics/ subdir is enumerable (opendir/getdents) and lists rx_bytes.

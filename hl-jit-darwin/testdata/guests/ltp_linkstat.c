@@ -3,13 +3,13 @@
 // link error paths (EEXIST/ENOENT/EPERM-on-dir); lstat reports the SYMLINK itself (size=len, S_ISLNK), not
 // its target; lstat error paths (ENOENT/ENOTDIR).
 //
-// Also guards the #402 setup-phase regressions that made all four LTP tests BROK under dd:
+// Also guards the #402 setup-phase regressions that made all four LTP tests BROK under hl:
 //   (a) utimensat(AT_FDCWD, path, NULL, 0) — the exact syscall LTP's SAFE_TOUCH issues in setup — must
-//       SUCCEED (NULL `times` == set atime/mtime to now). Syscall 88 was missing from dd's non-PIE
+//       SUCCEED (NULL `times` == set atime/mtime to now). Syscall 88 was missing from hl's non-PIE
 //       path-pointer rebase list, so on the static non-PIE LTP binaries the host got an un-rebased low
 //       link-vaddr and returned EFAULT. (The static-PIE self-check here documents the NULL-times contract;
 //       the non-PIE trigger is exercised by the LTP compliance lane binaries themselves.)
-//   (b) lstat/stat/statx on a NULL (bad) path pointer must return EFAULT, not SIGSEGV. dd's /proc
+//   (b) lstat/stat/statx on a NULL (bad) path pointer must return EFAULT, not SIGSEGV. hl's /proc
 //       magic-link synthesis helpers (proc_self_leaf / synth_stat_raw) dereferenced a NULL resolved path
 //       and crashed the engine before the host stat could EFAULT — a crash that reproduces on ORDINARY
 //       static-PIE guests (exit 255), which is what this self-check pins.

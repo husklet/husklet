@@ -1,6 +1,6 @@
 // Two INDEPENDENT signalfds: one for SIGUSR1, one for SIGUSR2. Linux gives each its own mask + delivery
 // queue, so raising SIGUSR1 must be readable on the USR1 fd only and the USR2 fd stays empty (EAGAIN).
-// dd's old single-shared-pipe model aliased them (same fd, ORed masks) and failed this. Deterministic ->
+// hl's old single-shared-pipe model aliased them (same fd, ORed masks) and failed this. Deterministic ->
 // oracle-checked against native Linux.
 #include <fcntl.h>
 #include <signal.h>

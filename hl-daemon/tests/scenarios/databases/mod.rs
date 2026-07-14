@@ -5,16 +5,16 @@
 //! + a readiness poll), then drives a deterministic aggregate over loopback (canonical sum(1..1000) =
 //! 500500, or a fixed SET/GET). Every marker is verified against the Real docker oracle.
 //!
-//! Status (db-web-scenarios pass, 2026-07): postgres/redis/valkey bring-up now WORKS under dd (servers
+//! Status (db-web-scenarios pass, 2026-07): postgres/redis/valkey bring-up now WORKS under hl (servers
 //! boot + serve correct results; verified arm via single-daemon probe, zero engine signals) — the old
 //! fork+exec/jemalloc arm `.xfail`s were removed (now XPASS). Still `.xfail(ArmLinux)`: mysql + mariadb
-//! (server boots under dd, but the `my()`/`maria()` drivers only poll `mysqladmin/mariadb-admin ping`,
+//! (server boots under hl, but the `my()`/`maria()` drivers only poll `mysqladmin/mariadb-admin ping`,
 //! which races the entrypoint's root-grant/init — an auth/readiness HARNESS-LANE bug, not an engine gap;
 //! harden the poll to wait for the real "ready for connections" marker like `pg()` does) and redis
 //! setget-74/ping-glibc (images absent from the local store — unverified). mongo stays `.xfail(both)`
 //! (didn't finish boot within 5min under load — unresolved; engine has full cpu-topology handling and
 //! showed NO tcmalloc abort, so likely slow-boot rather than the old cpu-topology gap — re-verify on a
-//! quiet host). The test stays correct (passes on Real) so XPASS fires the moment dd matches.
+//! quiet host). The test stays correct (passes on Real) so XPASS fires the moment hl matches.
 //! Owner: databases agent. Edit ONLY this folder.
 
 use crate::scenario::{scen, sgroup, ScenGroup, Target};
@@ -244,7 +244,7 @@ pub fn group() -> ScenGroup {
             .exec("export COUCHDB_USER=admin COUCHDB_PASSWORD=pw\n/docker-entrypoint.sh /opt/couchdb/bin/couchdb >/tmp/couch.log 2>&1 &\nfor i in $(seq 1 60); do curl -s http://admin:pw@127.0.0.1:5984/ 2>/dev/null | grep -q Welcome && break; sleep 1; done\ncurl -s http://admin:pw@127.0.0.1:5984/")
             .has("\"couchdb\":\"Welcome\"").timeout(120).long(),
         scen("databases/couchdb-create-db", "couchdb:3")
-            .exec("export COUCHDB_USER=admin COUCHDB_PASSWORD=pw\n/docker-entrypoint.sh /opt/couchdb/bin/couchdb >/tmp/couch.log 2>&1 &\nfor i in $(seq 1 60); do curl -s http://admin:pw@127.0.0.1:5984/ 2>/dev/null | grep -q Welcome && break; sleep 1; done\ncurl -s -X PUT http://admin:pw@127.0.0.1:5984/ddb")
+            .exec("export COUCHDB_USER=admin COUCHDB_PASSWORD=pw\n/docker-entrypoint.sh /opt/couchdb/bin/couchdb >/tmp/couch.log 2>&1 &\nfor i in $(seq 1 60); do curl -s http://admin:pw@127.0.0.1:5984/ 2>/dev/null | grep -q Welcome && break; sleep 1; done\ncurl -s -X PUT http://admin:pw@127.0.0.1:5984/hlb")
             .has("\"ok\":true").timeout(120).long(),
 
         // ---- influxdb: Go runtime, version banner (deterministic, no server needed) ------------------

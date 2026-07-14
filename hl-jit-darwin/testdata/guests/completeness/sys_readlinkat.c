@@ -4,7 +4,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 int main(void){
-  const char *l="/tmp/ddc_lnk"; unlink(l);
+  const char *l="/tmp/hlc_lnk"; unlink(l);
   symlink("target-12345", l);
   char buf[64]; memset(buf,0,sizeof buf);
   long n=syscall(SYS_readlinkat, AT_FDCWD, l, buf, sizeof buf-1);

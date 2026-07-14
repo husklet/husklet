@@ -1,6 +1,6 @@
 //! Configure and launch a container from Rust with the `hl-jit` API.
 //!
-//!   cargo run -p hl-jit --example run_container -- /var/lib/dd/alpine
+//!   cargo run -p hl-jit --example run_container -- /var/lib/hl/alpine
 //!
 //! `hl-jit` selects the host backend at compile time (`hl-jit-darwin` today) and runs the container
 //! directly — no Docker daemon, no shelling out.

@@ -33,42 +33,42 @@ STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hl-net.XXXXXX")"
 export HL_IMAGES="$IMAGES" HL_DOCKER_SOCK="$SOCK" HL_STATE="$STATE_DIR/state.json" HL_VOLUMES="$STATE_DIR/volumes"
 "$DAEMON" >"$SCEN_LOG" 2>&1 &
 DPID=$!
-cleanup() { docker rm -f net-srv net-cli net-other >/dev/null 2>&1; docker network rm ddnet ddnet2 >/dev/null 2>&1; kill -9 $DPID 2>/dev/null; rm -f "$SOCK" "$SCEN_LOG"; rm -rf "$STATE_DIR"; }
+cleanup() { docker rm -f net-srv net-cli net-other >/dev/null 2>&1; docker network rm hlnet hlnet2 >/dev/null 2>&1; kill -9 $DPID 2>/dev/null; rm -f "$SOCK" "$SCEN_LOG"; rm -rf "$STATE_DIR"; }
 trap cleanup EXIT
 n=0; until [ -S "$SOCK" ] || [ $n -ge 60 ]; do sleep 0.25; n=$((n+1)); done
 [ -S "$SOCK" ] || { echo "daemon failed to start:"; cat "$SCEN_LOG" 2>/dev/null; exit 1; }
 
 echo "== a user-defined network + a named server container joined to it =="
-d network create ddnet >/dev/null 2>&1
-has "network-created" "$(d network ls --format '{{.Name}}')" "ddnet"
+d network create hlnet >/dev/null 2>&1
+has "network-created" "$(d network ls --format '{{.Name}}')" "hlnet"
 # echo server: busybox nc, one connection at a time, echoes input back via /bin/cat.
-srv=$(d run -d --network ddnet --name net-srv alpine sh -c 'while true; do nc -l -p 8080 -e /bin/cat; done')
+srv=$(d run -d --network hlnet --name net-srv alpine sh -c 'while true; do nc -l -p 8080 -e /bin/cat; done')
 sleep 1
 has "server-running" "$(d ps --format '{{.Names}}')" "net-srv"
 
 echo "== the server has an IP on the network (inspect .NetworkSettings) =="
 ip="$(d inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' net-srv 2>&1 | tr -d ' ')"
 has "server-has-ip" "${ip:-<none>}" "."   # any non-empty IP-ish string
-has "network-inspect-lists-member" "$(d network inspect ddnet 2>&1)" "net-srv"
+has "network-inspect-lists-member" "$(d network inspect hlnet 2>&1)" "net-srv"
 
 echo "== container -> container by NAME (embedded DNS) =="
-out="$(timeout 20 docker run --rm --network ddnet alpine sh -c 'echo by-name-msg | nc -w3 net-srv 8080' 2>&1)"
+out="$(timeout 20 docker run --rm --network hlnet alpine sh -c 'echo by-name-msg | nc -w3 net-srv 8080' 2>&1)"
 has "reach-by-name" "$out" "by-name-msg"
 
 echo "== container -> container by IP =="
 if echo "$ip" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
-    out="$(timeout 20 docker run --rm --network ddnet alpine sh -c "echo by-ip-msg | nc -w3 $ip 8080" 2>&1)"
+    out="$(timeout 20 docker run --rm --network hlnet alpine sh -c "echo by-ip-msg | nc -w3 $ip 8080" 2>&1)"
     has "reach-by-ip" "$out" "by-ip-msg"
 else
     echo "  FAIL reach-by-ip: no server IP to dial"; fail=$((fail+1))
 fi
 
 echo "== isolation: a container on a DIFFERENT network must NOT reach the server =="
-d network create ddnet2 >/dev/null 2>&1
-out="$(timeout 20 docker run --rm --network ddnet2 alpine sh -c 'echo cross | nc -w3 net-srv 8080; echo rc=$?' 2>&1)"
+d network create hlnet2 >/dev/null 2>&1
+out="$(timeout 20 docker run --rm --network hlnet2 alpine sh -c 'echo cross | nc -w3 net-srv 8080; echo rc=$?' 2>&1)"
 no "cross-network-isolated" "$out" "cross"   # the echo must NOT come back across networks
 
-d rm -f net-srv >/dev/null 2>&1; d network rm ddnet ddnet2 >/dev/null 2>&1
+d rm -f net-srv >/dev/null 2>&1; d network rm hlnet hlnet2 >/dev/null 2>&1
 echo ""
 echo "docker-net: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

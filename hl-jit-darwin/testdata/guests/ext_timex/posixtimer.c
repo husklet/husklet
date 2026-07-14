@@ -122,7 +122,7 @@ static int overrun_counts(void) {
 
     // PLAIN blocking sleep for ~100ms: the guest is descheduled the whole time, so ~20 of the 5ms periods
     // elapse with nothing executing in the guest. A correct engine still counts them (in-kernel on Linux; from
-    // elapsed monotonic time in dd), so this deliberately does NOT busy-spin -- it is the regression guard for
+    // elapsed monotonic time in hl), so this deliberately does NOT busy-spin -- it is the regression guard for
     // the #422 undercount.
     usleep(100 * 1000);
 

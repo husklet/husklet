@@ -1,6 +1,6 @@
 // A real GLES2 app exercising UNIFORMS + a vec3 attribute + a matrix: it uploads a triangle VBO ONCE and
 // animates purely by updating a `uniform mat4 uMVP` each frame (glUniformMatrix4fv) — so a visible
-// rotation across frames proves the uniform+matrix path (not VBO re-upload). Runs unmodified on the dd
+// rotation across frames proves the uniform+matrix path (not VBO re-upload). Runs unmodified on the hl
 // GL shim, which translates the uniform block + `uMVP * vec4(aPos,1.0)` GLSL to MSL and forwards it.
 #include <math.h>
 #include <stdint.h>

@@ -174,7 +174,7 @@ pub fn group() -> ScenGroup {
         // mkdir-EPERM). Marker: the fetched Release/InRelease lists actually land on disk. `.long`
         // (network + not cache-only). Regression-catch for "apt-get update doesn't work".
         // arm: FIXED (dev-node stat/access + xattr errno). amd: FIXED — the gpgv `divq %r14` R14=0 SIGFPE
-        // during RSA verify  is resolved; apt update + gpgv verify complete byte-clean on dd amd.
+        // during RSA verify  is resolved; apt update + gpgv verify complete byte-clean on hl amd.
         scen("distros/debian-apt-update", "debian:bookworm-slim")
             .exec("apt-get update >/dev/null 2>&1; ls /var/lib/apt/lists/ 2>/dev/null | grep -q Release && echo APT_UPDATE_OK")
             .has("APT_UPDATE_OK").long(),

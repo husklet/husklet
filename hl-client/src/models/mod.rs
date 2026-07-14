@@ -1,5 +1,5 @@
-//! View models for the dd daemon, built from [`bollard`]'s Docker-API responses. These are the
-//! shapes the dd GUI and CLI render; each has a `From<bollard::...>` conversion and the small
+//! View models for the hl daemon, built from [`bollard`]'s Docker-API responses. These are the
+//! shapes the hl GUI and CLI render; each has a `From<bollard::...>` conversion and the small
 //! display helpers (`short_id`, `name`, `ports_str`, …) the UI relies on.
 
 mod container;

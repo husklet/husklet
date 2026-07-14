@@ -12,7 +12,7 @@ pub(super) fn items() -> Vec<Scenario> {
         scen("utilities/git-empty-blob", "bitnami/git:latest")
             .exec("printf '' | git hash-object --stdin")
             .has("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"),
-        // blob of "dd\n" — verified+pinned on the Real oracle.
+        // blob of "hl\n" — verified+pinned on the Real oracle.
         scen("utilities/git-hashobject-dd", "bitnami/git:latest")
             .exec("printf 'dd\\n' | git hash-object --stdin")
             .has("f03f6945fbf941fa91cb460eab583c7f36c8cee3"),

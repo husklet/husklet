@@ -41,8 +41,8 @@ fn ext_ipc() -> Group {
         // pinned as a Linux-engine GOLDEN (not `.oracle()`) because the oracle would create 64 *native*
         // IPC_PRIVATE segments in the shared HOST SysV table, whose churn destabilises the concurrent
         // `sysv-ctl` badidx oracle (a `*_STAT(0x40000000)` maps via `idx % IPCMNI == 0` onto whatever host
-        // object sits at index 0) — the very host-table contention removes on the dd side. Golden keeps
-        // this to dd's own per-container registry (macOS host can't do >32, so darwin is excluded).
+        // object sits at index 0) — the very host-table contention removes on the hl side. Golden keeps
+        // this to hl's own per-container registry (macOS host can't do >32, so darwin is excluded).
         port("sysv-stress", "ext_ipc/ipc_sysv_stress.c")
             .out("many_segs over32=1 allmapped=1 dataok=1\nxfork shm_shared=1 sem_blockwait=1 msg_roundtrip=1\n")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
@@ -92,20 +92,20 @@ fn ext_ipc() -> Group {
         // ---- SysV IPC control-command surface: shmctl/semctl/msgctl full IPC_STAT/IPC_SET/*_INFO/
         // *_STAT + EINVAL/EFAULT/EACCES/EPERM. STAT round-trips (perms/nsems/qbytes/segsz), SET-then-STAT,
         // the INFO/index forms, and the errno paths — verdict-only (booleans/errno names vs our own
-        // getuid), so root-dd and the unprivileged native oracle print byte-identically. Both Linux arches.
+        // getuid), so root-hl and the unprivileged native oracle print byte-identically. Both Linux arches.
         src("sysv-ctl", "ext_ipc/sysv_ctl.c").oracle(),
         // ---- POSIX mqueue errno/edge fidelity (mq_open/timedsend/timedreceive/getattr) — diffed ----
         // O_CREAT|O_EXCL EEXIST, ENOENT w/o O_CREAT, ENAMETOOLONG, priority ordering, EMSGSIZE, O_NONBLOCK
         // EAGAIN, getattr maxmsg/msgsize/curmsgs, and the blocking mq_timed{send,receive} matrix
-        // EINVAL(tv_nsec)/ETIMEDOUT. dd emulates POSIX mq in-process (macOS has no mqueue kernel).
+        // EINVAL(tv_nsec)/ETIMEDOUT. hl emulates POSIX mq in-process (macOS has no mqueue kernel).
         src("mq-edge", "ext_ipc/ipc_mq_edge.c").oracle(),
         // mq_notify register/EBUSY/unregister/EINVAL + SIGEV_SIGNAL SI_MESGQ delivery on the empty->non-empty
         // edge. aarch64-only: qemu-user's mq_notify is not a faithful oracle (it fails the SIGEV path), and
-        // dd runs the SAME arch-normalized handler for both guest arches, so the real-kernel aarch64 diff
+        // hl runs the SAME arch-normalized handler for both guest arches, so the real-kernel aarch64 diff
         // also covers the x86 path.
         src("mq-notify", "ext_ipc/ipc_mq_notify.c").oracle().only(&[Engine::LinuxAarch64]),
         // ---- Linux-only IPC (no portable POSIX form) — diffed vs native oracle ----
-        // POSIX mq priority ordering. macOS has no mqueue kernel object, so dd emulates a named
+        // POSIX mq priority ordering. macOS has no mqueue kernel object, so hl emulates a named
         // in-process priority queue (rare.c) — byte-exact vs native here; errno edges in `mq-edge` above.
         src("mq", "ext_ipc/ipc_mq.c").oracle(),
         // eventfd counters ARE shared across fork (the child's writes reach the parent's object, so the
@@ -129,7 +129,7 @@ fn ext_ipc() -> Group {
         // Wall-7 (multi-process Chrome content) cross-process Mojo-transport gates. The renderer is
         // launched over Mojo's fd transport and blocks on INBOUND delivery from the browser/GPU; these
         // isolate every primitive that delivery rides on across a REAL process boundary (not the
-        // cross-thread / same-VA fork cases the older gates cover). All pass — establishing that dd's
+        // cross-thread / same-VA fork cases the older gates cover). All pass — establishing that hl's
         // cross-process epoll/eventfd/socketpair/SCM_RIGHTS/futex emulation is NOT the content-blank drop
         // point (see docs/rendering/README.md §3.2). Diffing directions matters: scm-eventfd has the parent
         // epoll + child write; these add the child-epoll + parent-write (dormant-renderer) direction.
@@ -151,7 +151,7 @@ fn ext_ipc() -> Group {
         // child pump's drain->re-arm window (child drains to EAGAIN, signals "drained", parent immediately
         // sends the next), so a readiness edge lost between drain and re-block -- the exact renderer-pump
         // lost-wakeup hypothesis -- parks the child and the in-guest watchdog fails it. EPOLLET (EV_CLEAR)
-        // and EPOLLONESHOT (EV_ONESHOT + MOD re-arm) are distinct dd kqueue paths, so both are covered.
+        // and EPOLLONESHOT (EV_ONESHOT + MOD re-arm) are distinct hl kqueue paths, so both are covered.
         port("pump-xproc-et", "ext_ipc/ipc_pump_xproc_et.c")
             .out("child stream got=4000/4000 ok=1\nparent done sent=4000 child_exit=0\n")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
@@ -173,7 +173,7 @@ fn ext_ipc() -> Group {
             .out("epollout_rearm sent=67108864 recv=67108864 ok=1\n")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // SHARED epoll instance across threads: a waiter blocks in epoll_wait while other threads
-        // epoll_ctl-ADD already-ready fds — the exact cross-thread registration-edge case dd's W3E fast
+        // epoll_ctl-ADD already-ready fds — the exact cross-thread registration-edge case hl's W3E fast
         // path (ep_flush + EVFILT_USER NOTE_TRIGGER wake + g_ep_prime) serves and no other gate covers.
         // A lost cross-thread wake parks the waiter with a ready fd pending; the watchdog hard-fails it.
         port("epoll-shared-xthread", "ext_ipc/ipc_epoll_shared_xthread.c")
@@ -198,7 +198,7 @@ fn ext_ipc() -> Group {
         // Renderer Mojo PRIMARY-CHANNEL bring-up under base::MessagePumpEpoll — the load/timing permutation
         // NO passing gate combines (the multi-process dormant-renderer wall; see CHROME-TILE-B1-B2-RESOLVED).
         // A fork+execve child recvmsg's an SCM_RIGHTS-RECEIVED SOCK_STREAM (the primary channel) AFTER exec
-        // and arms it LEVEL-triggered (EPOLLIN, no EPOLLET — dd must synthesize level re-report; every extra
+        // and arms it LEVEL-triggered (EPOLLIN, no EPOLLET — hl must synthesize level re-report; every extra
         // byte needs a fresh readiness report, a path the EPOLLET pump/recv gates never touch) on a shared
         // epoll ALSO carrying >=1024 idle watched fds (high-fd interest set) while a churn thread hammers
         // concurrent epoll_ctl ADD/DEL on that same live instance. Each decoded message is handed IO->main
@@ -249,7 +249,7 @@ fn ext_ipc() -> Group {
         // Chrome child-process Mojo BOOTSTRAP end-to-end (the multi-process dormant-renderer hypothesis):
         // the browser hands a launched child its platform channel + a shared-memory command buffer by
         // placing each fd at a fixed number and naming that number on the command line (Chrome's
-        // --mojo-platform-channel-handle=N convention). This gate proves each bootstrap fd survives dd's
+        // --mojo-platform-channel-handle=N convention). This gate proves each bootstrap fd survives hl's
         // fork + IN-PLACE execve AT THE CMDLINE-NAMED NUMBER: the exec'd child receives the browser's
         // inbound channel message (chan), mmaps the memfd command buffer coherently in the NEW image
         // (shmem), is released by a cross-process FUTEX_WAKE on a word inside it (futex), while a sibling

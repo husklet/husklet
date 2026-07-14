@@ -342,7 +342,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     let seat = bind(&mut c, "wl_seat", 5);
     let presentation = bind(&mut c, "wp_presentation", 1);
     let cursor_mgr = bind(&mut c, "wp_cursor_shape_manager_v1", 1);
-    let ddm = bind(&mut c, "wl_data_device_manager", 3);
+    let hlm = bind(&mut c, "wl_data_device_manager", 3);
 
     // wl_seat.get_pointer(0): track the id so drain captures the wl_pointer.enter serial (needed to
     // satisfy the serial check on wp_cursor_shape_device_v1.set_shape).
@@ -359,7 +359,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     // wl_data_device_manager.get_data_device(1, id, seat): the per-seat clipboard/DnD endpoint. Bound
     // before focus so it becomes the focused client's data device (set_data_device_focus follows kbd focus).
     let data_device = c.alloc();
-    c.conn.send(&Message::new(ddm, 1).u32(data_device).u32(seat));
+    c.conn.send(&Message::new(hlm, 1).u32(data_device).u32(seat));
     c.data_device_id = data_device;
 
     // surface + xdg toplevel + initial commit → configure.
@@ -737,7 +737,7 @@ fn globals_advertise_frame_presents_feedback_and_cursor_shape_wire() {
     // runtime loop then reads the source and calls `clipboard_set_host`).
     assert!(state.pending_host_copy().is_none(), "no export should be pending yet");
     let source = c.alloc();
-    c.conn.send(&Message::new(ddm, 0).u32(source)); // create_data_source(id)
+    c.conn.send(&Message::new(hlm, 0).u32(source)); // create_data_source(id)
     let copy_mime = "text/plain";
     c.conn.send(&Message::new(source, 0).string(copy_mime)); // wl_data_source.offer(mime)
     let sel_serial = c.kbd_enter_serial.expect("need a keyboard enter serial for set_selection");

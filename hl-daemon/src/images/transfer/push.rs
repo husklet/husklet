@@ -86,7 +86,7 @@ pub(crate) struct PushQ {
 ///
 /// REPORT-only: a fully accurate `Size` would be the manifest byte length, not the rootfs size. The
 /// registry client computes both the layer size and the manifest bytes internally; if `Client::push`
-/// returned `(digest, manifest_size, layer_size)` instead of just the digest, dd could emit Docker's
+/// returned `(digest, manifest_size, layer_size)` instead of just the digest, hl could emit Docker's
 /// exact `size:` value and real per-blob byte progress here.
 pub(crate) fn push_progress(
     name: &str,

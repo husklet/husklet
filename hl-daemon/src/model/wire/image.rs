@@ -19,7 +19,7 @@ pub(crate) struct Image {
     pub(crate) img_volumes: Vec<String>, // Config.Volumes keys — dirs that get an anonymous volume at run (postgres /var/lib/postgresql/data)
     pub(crate) healthcheck: Option<HealthConfig>, // Config.Healthcheck — the container HEALTHCHECK probe (None / Test=["NONE"] ⇒ no probe)
     // Per-instruction build history (`docker history`): one row per Dockerfile instruction, created at
-    // build time. Empty ⇒ report the single synthetic "dd import" row (pulled/imported images).
+    // build time. Empty ⇒ report the single synthetic "hl import" row (pulled/imported images).
     pub(crate) history: Vec<HistoryEntry>,
     // ONBUILD triggers this image carries (Dockerfile `ONBUILD X`), replayed when a child `FROM` this
     // image is built. Empty for a normal image.

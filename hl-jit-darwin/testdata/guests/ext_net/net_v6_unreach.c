@@ -1,9 +1,9 @@
-// #261 — dd models an IPv4-only container network (like Docker's default bridge: eth0 has no global IPv6
+// #261 — hl models an IPv4-only container network (like Docker's default bridge: eth0 has no global IPv6
 // address and the IPv6 routing table is empty). So a connect() to a genuine external (global-unicast) IPv6
 // address has NO ROUTE and must fail *immediately* with ENETUNREACH — never hang on the host's v6 stack.
 // That instant failure is what lets a happy-eyeballs client (apt/curl) that tried the AAAA record first fall
 // back to IPv4 in milliseconds, so `apt-get update` works without Acquire::ForceIPv4. Fixed Linux golden
-// (dd's contract deliberately differs from a raw v6-capable host, matching a real IPv4-only container).
+// (hl's contract deliberately differs from a raw v6-capable host, matching a real IPv4-only container).
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -30,7 +30,7 @@ int main(void) {
     a.sin6_family = AF_INET6;
     a.sin6_port = htons(80);
     // 2001:4860:4860::8888 — a routable global-unicast address (Google public DNS). On a real IPv4-only
-    // container this is unreachable at once; the point is dd must say so too, not dial it over the host.
+    // container this is unreachable at once; the point is hl must say so too, not dial it over the host.
     inet_pton(AF_INET6, "2001:4860:4860::8888", &a.sin6_addr);
 
     struct timespec t0;

@@ -22,7 +22,7 @@ pub(crate) struct Snapshot {
     pub(crate) daemon_log: String,
     /// Active `docker` context name, or `None` if the docker CLI isn't installed.
     pub(crate) docker_context: Option<String>,
-    /// All selectable `docker` contexts (always includes `dd`).
+    /// All selectable `docker` contexts (always includes `hl`).
     pub(crate) docker_contexts: Vec<String>,
 }
 
@@ -118,7 +118,7 @@ pub(crate) async fn fetch(c: &Client) -> Snapshot {
     }
 }
 
-/// The daemon's own log: `$HL_DAEMON_LOG`, else `~/Library/Logs/dd/daemon.err.log`. Returns the last
+/// The daemon's own log: `$HL_DAEMON_LOG`, else `~/Library/Logs/hl/daemon.err.log`. Returns the last
 /// ~400 lines so the System view shows what the daemon is logging without unbounded growth.
 fn read_daemon_log() -> String {
     let path = std::env::var("HL_DAEMON_LOG")

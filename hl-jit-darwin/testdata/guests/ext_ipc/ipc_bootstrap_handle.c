@@ -4,7 +4,7 @@
 // handle=N / GlobalDescriptors convention). The child, after fork + in-place execve, must find each fd
 // alive AT THE NUMBER THE ARGV NAMED and be able to use it. The existing xproc-inbound/zygote/scm-futex
 // gates prove the cross-process TRANSPORT (socketpair/eventfd/epoll/SCM_RIGHTS/futex) delivers, but none
-// carries a memfd across dd's fork+in-place-execve, mmaps it in the NEW image, and wakes it by futex --
+// carries a memfd across hl's fork+in-place-execve, mmaps it in the NEW image, and wakes it by futex --
 // nor validates that the cmdline fd NUMBER and the surviving fd agree. This closes that bootstrap gap.
 //
 // What it asserts (browser == parent, child == exec'd renderer/GPU/utility process):
@@ -15,7 +15,7 @@
 //   3. futex  : a FUTEX_WAKE issued through the browser's mapping releases the child parked in FUTEX_WAIT
 //               on a word inside that shared page (the renderer<->GPU command-buffer wakeup).
 //   4. decoy  : a sibling fd left FD_CLOEXEC is GONE after the execve -- proving the close-on-exec sweep
-//               actually ran, so (1)/(2) survive because dd honours the CLEARED cloexec flag, not because
+//               actually ran, so (1)/(2) survive because hl honours the CLEARED cloexec flag, not because
 //               the sweep is a no-op that would also leak a fd Chrome meant to drop.
 // A dropped/renumbered bootstrap fd (the multi-process dormant-renderer hypothesis) fails deterministically
 // (chan/shmem/futex=0) inside a timed wait -- never a hang.

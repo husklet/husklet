@@ -1,6 +1,6 @@
 // #411 GUARD: apt/dpkg's StartPtyMagic (and any pty owner) does termios + winsize ioctls on the pty
 // MASTER *without ever opening the slave* -- it keeps only the master fd. On macOS isatty(master)==1
-// (a master is a tty-class char device) yet every termios/winsize ioctl on it ENOTTYs, so dd's old
+// (a master is a tty-class char device) yet every termios/winsize ioctl on it ENOTTYs, so hl's old
 // isatty-gated retarget ("if (!isatty(fd)) retarget-to-slave") skipped exactly these masters and the
 // guest saw ENOTTY -> apt's "Setting TIOCSWINSZ/TCSANOW for master fd N failed" and the debconf frontend
 // fallback. ext_posix/pty did NOT catch this because it open()s the slave first, which flips isatty(master)

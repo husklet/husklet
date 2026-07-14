@@ -8,7 +8,7 @@ use std::process::Command;
 
 /// Unpack a gzipped-tar layer blob from `src` into `rootfs` (`tar xzf`), unprivileged, on macOS.
 ///
-/// dd flattens every OCI layer into one shared `rootfs` with sequential `tar` runs (no overlayfs), so
+/// hl flattens every OCI layer into one shared `rootfs` with sequential `tar` runs (no overlayfs), so
 /// two macOS-specific hazards break `docker pull` for images that pull fine everywhere else:
 ///
 ///  1. Device nodes. Base layers (mysql:8.4, amazonlinux:2023, oraclelinux, …) ship char/fifo specials
@@ -28,7 +28,7 @@ use std::process::Command;
 /// Real corruption (truncated/damaged gzip, "Unexpected EOF", "not in gzip format", "No space left")
 /// is never swallowed — those still fail the pull.
 pub(in crate::registry) fn extract_targz(src: &Path, rootfs: &Path) -> Result<(), Error> {
-    // CONTAINMENT: dd flattens every layer into ONE shared rootfs with sequential `tar` runs, so a
+    // CONTAINMENT: hl flattens every layer into ONE shared rootfs with sequential `tar` runs, so a
     // pre-existing symlink left by an earlier layer (e.g. `rootfs/linkout -> ../outside`) plus a later
     // entry that writes THROUGH it (`linkout/file.txt`) would make tar follow the symlink and write
     // `outside/file.txt` — outside the rootfs. Before extracting, remove any existing symlink sitting at

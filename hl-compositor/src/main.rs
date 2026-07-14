@@ -93,7 +93,7 @@ fn build_loop(
 
     let state = HlState::new(dh, presenter);
 
-    // Listening socket. dd's daemon injects a known socket path, so bind it directly (parity with
+    // Listening socket. hl's daemon injects a known socket path, so bind it directly (parity with
     // hl-display's `listen_unix`) rather than auto-picking a wayland-N name.
     let lfd = hl_display::listen_unix(socket).expect("bind wayland socket");
     set_nonblock(lfd);

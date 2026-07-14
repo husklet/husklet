@@ -2,8 +2,8 @@
 //!
 //! `__cudaRegisterFatBinary` hands cudart the `__fatBinC_Wrapper_t` nvcc emits; on first launch we walk
 //! the wrapped fatbin container and extract the embedded UNCOMPRESSED PTX text, which then goes to the
-//! driver's `cuModuleLoadData` (dd's PTX front-end). In the C world the *driver's* `cuModuleLoadData`
-//! does this walk; dd's Rust driver (`hl-shim-cuda`) treats its image as raw PTX text, so — exactly like
+//! driver's `cuModuleLoadData` (hl's PTX front-end). In the C world the *driver's* `cuModuleLoadData`
+//! does this walk; hl's Rust driver (`hl-shim-cuda`) treats its image as raw PTX text, so — exactly like
 //! the C oracle's design intent (extraction "lives in ONE place") — cudart performs the walk here and
 //! passes the recovered PTX down. No NVIDIA source is used; the layout is the documented/community
 //! public format (see docs/ideas/CUDART_PLAN.md §2).

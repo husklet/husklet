@@ -14,11 +14,11 @@ use std::process::Command;
 /// handler; the binary's top-level `Cmd` references it as `hl::context::ContextCmd`.
 #[derive(Subcommand)]
 pub enum ContextCmd {
-    /// Create/refresh the `dd` docker context.
+    /// Create/refresh the `hl` docker context.
     Create,
-    /// Remove the `dd` docker context.
+    /// Remove the `hl` docker context.
     Rm,
-    /// `docker context use dd`.
+    /// `docker context use hl`.
     Use,
     /// Print the context endpoint.
     Show,
@@ -37,7 +37,7 @@ fn have_docker() -> bool {
         .unwrap_or(false)
 }
 
-/// Create (or refresh) the `dd` docker context. Returns a human note about which path was taken.
+/// Create (or refresh) the `hl` docker context. Returns a human note about which path was taken.
 pub fn create() -> std::io::Result<String> {
     let host = paths::docker_host();
     if have_docker() {
@@ -67,7 +67,7 @@ pub fn create() -> std::io::Result<String> {
     ))
 }
 
-/// `docker context use dd` (no-op note if docker CLI is absent).
+/// `docker context use hl` (no-op note if docker CLI is absent).
 pub fn use_context() -> std::io::Result<String> {
     if have_docker() {
         let out = Command::new("docker")
@@ -83,7 +83,7 @@ pub fn use_context() -> std::io::Result<String> {
     Ok("docker CLI not found; set DOCKER_HOST instead".into())
 }
 
-/// Remove the `dd` context (CLI if present, else delete the metadata dir).
+/// Remove the `hl` context (CLI if present, else delete the metadata dir).
 pub fn remove() -> std::io::Result<()> {
     if have_docker() {
         let _ = Command::new("docker")

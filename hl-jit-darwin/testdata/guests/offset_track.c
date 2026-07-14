@@ -1,5 +1,5 @@
 // #391 root-cause guard: gpg's keydb records the FILE OFFSET of the matched keyblock (via an off_t /
-// iobuf_tell-style position), then seeks back to re-read it. Under dd the RECORDED offset came out as the
+// iobuf_tell-style position), then seeks back to re-read it. Under hl the RECORDED offset came out as the
 // FIRST record's offset regardless of which record matched -> the wrong key was fetched (BADSIG). The
 // keyid COMPARISON was fine; the bug is a wrong POSITION *value* flowing through correct control flow
 // (suspects: 64-bit off_t truncated to 32b, or a load fed the offset with wrong sign/zero-extension).
@@ -38,7 +38,7 @@ static int64_t find_offset(struct rdr *r, uint8_t target) {
 
 static int check_file_path(void) {
     // Also exercise the real fd/lseek/pread path (ftell/lseek position math + a large seek).
-    char path[] = "/tmp/ddofftrackXXXXXX";
+    char path[] = "/tmp/hlofftrackXXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) return 0;
     uint8_t rec[3] = {0, 1, 0};

@@ -115,7 +115,7 @@ fn drive(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> (String, i32) {
             // images with no keep-alive shell (distroless). Embed the user script verbatim via a
             // quoted heredoc so arbitrary quotes/heredocs inside it survive.
             let name = format!(
-                "ddx-{}-{}-{}",
+                "hlx-{}-{}-{}",
                 std::process::id(),
                 s.id.replace('/', "-"),
                 t.label()
@@ -132,15 +132,15 @@ fn drive(d: &Daemon, s: &Scenario, t: Target, cfg: &Cfg) -> (String, i32) {
 "{hdr}N={name}
 trap 'docker kill $N >/dev/null 2>&1' EXIT INT TERM
 if docker run -d --rm --name $N {plat}{img} {sh} -c 'while true; do sleep 3600; done' >/dev/null 2>&1; then
-  docker exec {xt} $N {sh} -c \"$(cat <<'DDEOF'
+  docker exec {xt} $N {sh} -c \"$(cat <<'HLEOF'
 {script}
-DDEOF
+HLEOF
 )\"
   rc=$?
 else
-  docker run --rm --name $N {tt}{plat}{img} {sh} -c \"$(cat <<'DDEOF'
+  docker run --rm --name $N {tt}{plat}{img} {sh} -c \"$(cat <<'HLEOF'
 {script}
-DDEOF
+HLEOF
 )\"
   rc=$?
 fi
@@ -153,13 +153,13 @@ exit $rc
             // $NET a unique network, $WORK a private host scratch dir under the shared run dir (so a
             // `-v $WORK:/x` bind mount is visible to the docker host). $PLAT is unquoted → word-splits.
             let base = format!(
-                "ddh-{}-{}-{}",
+                "hlh-{}-{}-{}",
                 std::process::id(),
                 s.id.replace('/', "-"),
                 t.label()
             );
             let net = format!(
-                "ddnet-{}-{}-{}",
+                "hlnet-{}-{}-{}",
                 std::process::id(),
                 s.id.replace('/', "-"),
                 t.label()

@@ -31,7 +31,7 @@ pub(crate) async fn exec_inspect(State(a): State<App>, Path(id): Path<String>) -
             entrypoint: exec.cmd.first().cloned().unwrap_or_default(),
             arguments: exec.cmd.get(1..).map(|s| s.to_vec()).unwrap_or_default(),
         },
-        // dd streams all three exec channels; CanRemove is false (dd auto-reaps exec Live on exit).
+        // hl streams all three exec channels; CanRemove is false (hl auto-reaps exec Live on exit).
         open_stdin: exec.tty,
         open_stdout: true,
         open_stderr: true,

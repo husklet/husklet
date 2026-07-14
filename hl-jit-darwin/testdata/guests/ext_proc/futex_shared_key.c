@@ -2,7 +2,7 @@
 // renderer<->GPU-service command-buffer pattern: one shared-memory object, mmap'd independently in each
 // peer, so the SAME futex word lives at a DIFFERENT address in each). On Linux a FUTEX_WAIT and a
 // FUTEX_WAKE on a MAP_SHARED page rendezvous by the shared key (inode+offset), NOT by virtual address,
-// so a wake through mapping B must release a waiter parked through mapping A. dd hashed the futex bucket
+// so a wake through mapping B must release a waiter parked through mapping A. hl hashed the futex bucket
 // on the host VA, so the two mappings fell in different buckets and the wake was LOST (Wall 7).
 //
 //   T (same-process, two mappings of one memfd): thread FUTEX_WAITs via map A; main stores + FUTEX_WAKEs

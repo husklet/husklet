@@ -1,4 +1,4 @@
-// dd/runtime/jit -- the code cache, the gpc->host block map, and lazy inter-block chaining.
+// hl/runtime/jit -- the code cache, the gpc->host block map, and lazy inter-block chaining.
 // One W^X MAP_JIT arena; blocks appended + chained (b/bl backpatch). Host-ISA engine state.
 
 // ---------------- JIT code cache ----------------

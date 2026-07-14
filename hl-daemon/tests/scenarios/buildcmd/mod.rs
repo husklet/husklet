@@ -5,11 +5,11 @@
 //! in-recipe. Host-orchestrated; ArmLinux. Verified GREEN on the Real docker oracle. Owner: docker-cli
 //! agent. Edit ONLY this folder.
 //!
-//! dd implements the CLASSIC Docker Build API (`POST /build` — Dockerfile -> layered image), not the
+//! hl implements the CLASSIC Docker Build API (`POST /build` — Dockerfile -> layered image), not the
 //! BuildKit gRPC frontend. So each recipe exports `DOCKER_BUILDKIT=0` to force the client onto the
-//! classic builder (which POSTs the context tar to `/build`); this is the path dd serves, and Docker
+//! classic builder (which POSTs the context tar to `/build`); this is the path hl serves, and Docker
 //! Desktop's dockerd serves the identical classic build too, so the Real oracle stays byte-green.
-//! Coverage on dd: FROM (local + auto-pull), RUN (via the JIT in a throwaway rootfs), COPY/ADD (context
+//! Coverage on hl: FROM (local + auto-pull), RUN (via the JIT in a throwaway rootfs), COPY/ADD (context
 //! + `--from=<stage>`), ENV, WORKDIR, CMD, ENTRYPOINT, LABEL, ARG/`--build-arg`, multi-stage + `--target`,
 //! `--no-cache`, `-t`, and a per-step content-addressed layer cache (see hl-daemon/src/build.rs).
 

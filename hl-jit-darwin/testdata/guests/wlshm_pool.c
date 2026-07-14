@@ -1,4 +1,4 @@
-// wl_shm pool foundation (dd display pipeline, M0): the EXACT CPU zero-copy path a Wayland client's
+// wl_shm pool foundation (hl display pipeline, M0): the EXACT CPU zero-copy path a Wayland client's
 // wl_shm pool takes to the compositor. A `memfd_create`'d anonymous file is ftruncate'd to a pool
 // size, mmap(MAP_SHARED)'d, and a test pattern written into it. The fd is then handed to another
 // process over an AF_UNIX socket via SCM_RIGHTS (exactly how libwayland sends the pool fd to the
@@ -74,7 +74,7 @@ int main(void) {
     int got_fd = (rfd >= 0);
     int pattern_ok = 0, size_ok = 0;
     if (got_fd) {
-        // The server learns the pool size out-of-band (BUFFER_ATTACH in DDP / wl_shm_create_pool arg);
+        // The server learns the pool size out-of-band (BUFFER_ATTACH in HLP / wl_shm_create_pool arg);
         // it maps at that size and the mapping must succeed against the passed fd.
         uint8_t *pix = mmap(NULL, POOL, PROT_READ | PROT_WRITE, MAP_SHARED, rfd, 0);
         if (pix != MAP_FAILED) {

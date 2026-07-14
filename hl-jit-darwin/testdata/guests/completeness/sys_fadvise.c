@@ -3,7 +3,7 @@
 #include <string.h>
 #include <fcntl.h>
 int main(void){
-  const char *p="/tmp/ddc_fad"; unlink(p);
+  const char *p="/tmp/hlc_fad"; unlink(p);
   int fd=open(p,O_CREAT|O_RDWR|O_TRUNC,0644);
   for(int i=0;i<1024;i++) write(fd,"x",1);
   int w=posix_fadvise(fd,0,0,POSIX_FADV_WILLNEED);

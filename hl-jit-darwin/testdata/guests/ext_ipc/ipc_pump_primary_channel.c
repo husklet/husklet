@@ -12,7 +12,7 @@
 // WHAT NO OTHER GATE COMBINES (each existing gate isolates ONE leg):
 //   * scm-recv-epoll:  SCM_RIGHTS-received SOCK_STREAM + execve, but EPOLLET, ONE watched fd, single
 //                      thread, FIXED settle delay. This gate is LEVEL-triggered (EPOLLIN, no EPOLLET) —
-//                      dd's kqueue must synthesize level re-report — under a large interest set.
+//                      hl's kqueue must synthesize level re-report — under a large interest set.
 //   * epoll-shared-xthread: concurrent cross-thread epoll_ctl on a shared epoll, but no received socket,
 //                      no exec, no two-pump handoff.
 //   * pump-worker-dispatch: EPOLLET IO pump + eventfd ScheduleWork + FUTEX handoff, but in-process

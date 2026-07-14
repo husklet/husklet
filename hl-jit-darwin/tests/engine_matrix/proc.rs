@@ -76,10 +76,10 @@ pub(super) fn proc() -> Group {
             port("pipeproc", "pipeproc.c").out("pipeproc sum=500500\n"), // producer/consumer over a pipe
             // wait4/waitpid status must carry WCOREDUMP (0x80) exactly as Linux: core-dumping signal +
             // RLIMIT_CORE>0 sets it, non-core signals / zero limit clear it. Golden values are the REAL-Linux
-            // truth (verified byte-exact vs the native aarch64 run); dd emits them identically on x86_64 too.
+            // truth (verified byte-exact vs the native aarch64 run); hl emits them identically on x86_64 too.
             // (Not oracle-diffed on x86_64: qemu-user doesn't reproduce WCOREDUMP for emulated fatal signals.)
             src("waitcore", "waitcore.c").out(WAITCORE_OUT),
-            // Continuous dd==native proof on the arch whose oracle is a real Linux run (aarch64 executes bare).
+            // Continuous hl==native proof on the arch whose oracle is a real Linux run (aarch64 executes bare).
             src("waitcore-oracle", "waitcore.c")
                 .only(&[Engine::LinuxAarch64])
                 .oracle(),

@@ -52,7 +52,7 @@ docker run --rm --network "$NET" $PLAT $IMG nc -w 3 ${C}srv 9000"#).has("BYNAMEO
         // network only afterwards; then the client resolves it BY NAME via `docker exec`. A static
         // /etc/hosts snapshot can't see the late peer — only the live in-engine 127.0.0.11 resolver
         // (consulting the daemon's live per-network names file) can. Real docker's embedded DNS passes;
-        // dd passes once the resolver reads live daemon state.
+        // hl passes once the resolver reads live daemon state.
         s("dockernet/reach-by-name-late").only(&Target::LINUX).host(r#"
 docker network create "$NET" >/dev/null
 docker run -d --name ${C}cli --network "$NET" $PLAT $IMG sleep 120 >/dev/null

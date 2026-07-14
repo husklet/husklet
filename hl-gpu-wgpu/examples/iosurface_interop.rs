@@ -21,7 +21,7 @@
 //!    (`Retained::as_ptr` -> `metal::TextureRef::from_ptr` -> `.to_owned()` = `retain +1`), then
 //!    `wgpu_hal::metal::Device::texture_from_raw(...)` -> `wgpu::Device::create_texture_from_hal::<Metal>()`.
 //! 4. Register it as the executor's render target, replay the increment-1 flat-quad IR into it via wgpu.
-//! 5. `IOSurfaceLock` + `IOSurfaceGetBaseAddress` on the dd side, read the shared pages, assert the pixels.
+//! 5. `IOSurfaceLock` + `IOSurfaceGetBaseAddress` on the hl side, read the shared pages, assert the pixels.
 //!
 //! Run on the macOS host: `cargo run --release -p hl-gpu-wgpu --example iosurface_interop` (exit 0 = PASS).
 

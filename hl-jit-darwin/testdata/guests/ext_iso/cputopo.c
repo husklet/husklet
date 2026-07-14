@@ -1,13 +1,13 @@
 // CPU-topology sysfs conformance: lscpu / util-linux reconstruct sockets/cores/threads by reading
 // /sys/devices/system/cpu/cpuN/topology/{core_id,physical_package_id,thread_siblings_list,core_cpus_list,
-// core_siblings_list,...} for every online CPU. dd materialized the cpuN directories but served NONE of
+// core_siblings_list,...} for every online CPU. hl materialized the cpuN directories but served NONE of
 // the topology attribute files (every open -> ENOENT), so lscpu mis-counts or errors -- a hl-only
 // divergence from real docker (which always serves them). This probe drives lscpu's exact reads and
 // prints a HOST-INDEPENDENT structural verdict (the attribute VALUES are host-variant -- core_id need not
 // equal N on real SMT hardware -- so we assert STRUCTURE, not bytes): ok=1 iff, for every online CPU,
 // every attribute opens and parses to a well-formed value AND the real invariants hold (physical_package_id
 // >= 0, core_id >= 0, and cpu N is a member of its OWN thread_siblings_list). Byte-identical on real Linux
-// and a correct dd; prints ok=0 (with the first failing path) on the pre-fix engine.
+// and a correct hl; prints ok=0 (with the first failing path) on the pre-fix engine.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

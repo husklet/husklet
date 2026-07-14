@@ -24,7 +24,7 @@ fn software_backend_graphics_and_present_claims_have_observable_behavior() {
     };
     backend.create_texture(TextureId(1), &texture).unwrap();
     backend.create_surface(SurfaceId(2), &SurfaceDesc {
-        width: 4, height: 3, format: TextureFormat::Rgba8Unorm, ddp_surface: 99,
+        width: 4, height: 3, format: TextureFormat::Rgba8Unorm, hlp_surface: 99,
     }).unwrap();
     backend.submit(&CommandBuffer {
         encoder: vec![

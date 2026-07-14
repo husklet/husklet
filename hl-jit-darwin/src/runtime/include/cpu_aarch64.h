@@ -1,4 +1,4 @@
-// dd/runtime/include -- aarch64 guest CPU state. The cpu struct is the guest register file +
+// hl/runtime/include -- aarch64 guest CPU state. The cpu struct is the guest register file +
 // engine scratch (shadow stack for §B return prediction, mangle scratch). Offsets are baked into
 // emitted code. x18/x28/x30 are STOLEN by the engine (x28=cpu ptr, x30=host link, x18=scratch);
 // guest values live in cpu->x[]. See docs/OPTIMIZATIONS.md.

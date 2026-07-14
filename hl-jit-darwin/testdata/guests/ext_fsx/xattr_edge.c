@@ -1,5 +1,5 @@
 // xattr errno/edge fidelity (LTP setxattr/getxattr/removexattr family) — diffed vs the native oracle.
-// Verdict-only output (errno NAMES + lengths, never raw fds/pids), so dd must be byte-identical to
+// Verdict-only output (errno NAMES + lengths, never raw fds/pids), so hl must be byte-identical to
 // native Linux (aarch64) / qemu (x86_64). Complements ext_fsx/xattr.c (the happy-path round-trip).
 // Exercises: ENODATA on a missing attr (get/remove), EEXIST for XATTR_CREATE on an existing attr,
 // ENODATA for XATTR_REPLACE on a missing attr, ERANGE for a too-small get/list buffer, the size-probe
@@ -35,7 +35,7 @@ int main(void) {
     write(fd, "body", 4);
     close(fd);
 
-    const char *N = "user.ddedge";
+    const char *N = "user.hledge";
     char buf[64];
 
     // 1. get before any set -> ENODATA

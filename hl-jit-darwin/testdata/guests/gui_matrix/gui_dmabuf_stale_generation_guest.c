@@ -1,5 +1,5 @@
 // Row 3 regression (compositor_validates_dmabuf_planes_flags_and_backing_metadata_before_success):
-// a guest that imports a dd IOSurface dmabuf whose modifier carries an allocation GENERATION that no
+// a guest that imports a hl IOSurface dmabuf whose modifier carries an allocation GENERATION that no
 // longer matches the id's live host allocation must be REJECTED by the compositor — no partial state,
 // no fake wl_buffer. This probe drives the real zwp_linux_dmabuf_v1 import handshake over the wire:
 //

@@ -6,7 +6,7 @@
 // the src vectors into the dst vectors in order, stopping when either side is exhausted. Returns the
 // number of bytes copied.
 // Is guest range [a,a+len) inaccessible to a userspace read/write, the way the Linux kernel would EFAULT?
-// TWO cases dd must catch: (1) not mapped at all, and (2) mapped but PROT_NONE — dd force-maps guest anon
+// TWO cases hl must catch: (1) not mapped at all, and (2) mapped but PROT_NONE — hl force-maps guest anon
 // memory host-RW so mprotect can stay a near-noop, which discards the guest's PROT_NONE intent, so a guest
 // guard page (LTP tst_get_bad_addr = mmap(PROT_NONE)) stays host-readable. Both are handled by
 // host_range_mapped: it rejects the wrap/unmapped case AND queries the single PROT_NONE registry g_gna
@@ -671,7 +671,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             // not survive the region being remapped) -- drop stale wipe coverage so a reused address is
             // never wrongly zeroed in a child.
             wipefork_del((uint64_t)r, (uint64_t)a1 + guard);
-            // PROT_NONE registry (g_gna, thread.c; read INSIDE host_range_mapped). dd force-maps this region
+            // PROT_NONE registry (g_gna, thread.c; read INSIDE host_range_mapped). hl force-maps this region
             // host-RW, so a guest PROT_NONE mmap is really RW -- record the guest's REQUESTED prot so a
             // syscall buffer landing in it still EFAULTs (LTP read02); an accessible map clears stale coverage.
             {
@@ -823,7 +823,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
             break;
         }
         // Linux: `vec` must be a writable buffer of ceil(len/pagesize) bytes; a NULL or inaccessible vec is
-        // EFAULT. Validate against GUEST protections up front (both paths), because dd force-maps guest
+        // EFAULT. Validate against GUEST protections up front (both paths), because hl force-maps guest
         // PROT_NONE pages host-writable -- so a raw host mincore would happily scribble a guest guard page
         // (aarch64 fast path) and the slow path skipped the check entirely when a2==NULL (x86 null-vec).
         // len==0 is a success no-op regardless of vec, matching the kernel.
@@ -893,7 +893,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         int adv = (int)a2, hadv = -1;
         // Linux validates the advice value and start alignment BEFORE any work (mm/madvise.c). An advice
         // number the kernel does not define, or a start not aligned to the guest page size, is EINVAL --
-        // otherwise a bad feature probe reads dd's best-effort no-op as success. (Valid Linux advice:
+        // otherwise a bad feature probe reads hl's best-effort no-op as success. (Valid Linux advice:
         // 0..4, 8..23, 25, 100, 101.)
         {
             int ok = (adv >= 0 && adv <= 4) || (adv >= 8 && adv <= 23) || adv == 25 || adv == 100 || adv == 101;

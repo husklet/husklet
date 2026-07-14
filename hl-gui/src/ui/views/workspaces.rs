@@ -162,7 +162,7 @@ pub(crate) fn render_workspaces(
             let nb = nb.clone();
             let name = w.name.clone();
             launch.connect_clicked(move |_| {
-                let hl = ddcli_bin().to_string_lossy().into_owned();
+                let hl = hlcli_bin().to_string_lossy().into_owned();
                 let argv = ["workspace", "launch", name.as_str()];
                 let mut full: Vec<&str> = vec![hl.as_str()];
                 full.extend_from_slice(&argv);
@@ -189,7 +189,7 @@ pub(crate) fn render_workspaces(
 /// Locate the bundled `hl` binary. A macOS app launched from Finder/launchd has a minimal PATH, so
 /// (mirroring `install::resolve_cli`) prefer an explicit override, then the installed/dev app bundle's
 /// `Contents/Resources`, then a sibling of this executable; fall back to the bare name (PATH) for dev.
-fn ddcli_bin() -> PathBuf {
+fn hlcli_bin() -> PathBuf {
     if let Some(p) = std::env::var_os("HL_CLI_BIN") {
         return PathBuf::from(p);
     }

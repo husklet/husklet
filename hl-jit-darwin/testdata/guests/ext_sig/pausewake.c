@@ -1,7 +1,7 @@
 // pause() WAKE semantics (task #397): LTP pause01 + pause02. A signal that is CAUGHT (a guest handler is
 // installed) must wake pause() -> it returns -1/EINTR after the handler runs; this must hold for EVERY
 // deliverable signal delivered via kill(2), INCLUDING the fault-class ones (SIGILL/SIGTRAP/SIGFPE/SIGSEGV/
-// SIGBUS) which dd otherwise routed to its hardware-fault guard and never woke pause (the pause01 BROK).
+// SIGBUS) which hl otherwise routed to its hardware-fault guard and never woke pause (the pause01 BROK).
 // pause02: a SIGKILL is un-catchable -> pause never returns and the process dies by SIGKILL. Delivery is
 // via alarm()/SIGALRM and a child->parent (or parent->child) kill; every line is a normalized verdict, so
 // the output is byte-identical on both guest arches and is diffed against the native oracle.

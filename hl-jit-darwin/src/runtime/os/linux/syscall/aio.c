@@ -41,7 +41,7 @@ struct aio_evt {
 };
 
 // Engine-side AIO context. The "context id" handed back to the guest (io_setup's *ctx_idp) is the ADDRESS
-// of one of these table entries. In dd's in-process model the guest shares this address space, so it can
+// of one of these table entries. In hl's in-process model the guest shares this address space, so it can
 // pass the value back to us; we always VALIDATE it against the table before use (a bogus ctx -> -EINVAL),
 // never blind-deref. NOTE on the libaio userspace fast path: libaio's io_getevents reads (aio_ring*)ctx
 // and, only if the u32 at offset 16 equals AIO_RING_MAGIC (0xa10a10a1), drains events in userspace and

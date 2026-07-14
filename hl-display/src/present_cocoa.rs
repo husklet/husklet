@@ -66,7 +66,7 @@ declare_class!(
     unsafe impl ClassType for WindowCloseDelegate {
         type Super = NSObject;
         type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "DDWindowCloseDelegate";
+        const NAME: &'static str = "HLWindowCloseDelegate";
     }
 
     impl DeclaredClass for WindowCloseDelegate {}
@@ -128,7 +128,7 @@ declare_class!(
     unsafe impl ClassType for ContentWindow {
         type Super = NSWindow;
         type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "DDContentWindow";
+        const NAME: &'static str = "HLContentWindow";
     }
 
     impl DeclaredClass for ContentWindow {}
@@ -163,7 +163,7 @@ declare_class!(
     unsafe impl ClassType for ContentView {
         type Super = NSView;
         type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "DDContentView";
+        const NAME: &'static str = "HLContentView";
     }
 
     impl DeclaredClass for ContentView {}

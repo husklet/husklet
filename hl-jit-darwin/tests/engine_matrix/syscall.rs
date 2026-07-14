@@ -42,7 +42,7 @@ pub(super) fn linuxsys() -> Group {
             // a dup KEEPS readiness (re-homed onto the surviving alias), returning the original udata.
             src("epoll-dup-lifetime", "epoll_dup_lifetime.c").oracle(),
             // a fork child inherits the parent's epoll interest list; the child epoll_waits WITHOUT
-            // re-registering and must still see the inherited registration fire (dd rebuilds an empty kqueue
+            // re-registering and must still see the inherited registration fire (hl rebuilds an empty kqueue
             // in the child and re-arms the inherited interest from its per-instance table).
             src("epoll-fork-inherit", "epoll_fork_inherit.c").oracle(),
             // poll/select/pselect/ppoll signal+timeout corners: the select02 HANG regression (a blocked,
@@ -115,7 +115,7 @@ pub(super) fn edge() -> Group {
             // times(): tms_utime works on x86_64 but is 0 on aarch64 (clock() works on both) — engine split.
             src("times", "edge_times.c").has("utime_ok=1 clock_ok=1 ret_ok=1"),
             // Legacy x86 time-setters with NO aarch64 canonical syscall number (utime=132/utimes=235/
-            // futimesat=261) — used to return ENOSYS-by-normalization on x86 (arm64 261 is prlimit64). dd now
+            // futimesat=261) — used to return ENOSYS-by-normalization on x86 (arm64 261 is prlimit64). hl now
             // rewrites each to utimensat(dfd,path,timespec[2],flags) with the struct utimbuf/timeval[2] -> timespec
             // conversion, NULL times = "now", and honors utimensat's UTIME_OMIT/UTIME_NOW (Linux tv_nsec sentinels
             // translated to the macOS host's). Byte-identical vs native/qemu on both Linux engines.
@@ -124,8 +124,8 @@ pub(super) fn edge() -> Group {
                 .has("utimes-family OK"),
             src("statfs", "edge_statfs.c").oracle().xfail(lin), // real fs geometry (not hardcoded)
             // statx (nr 291) must report the SAME uid/gid/mode/nlink/rdev/dev/size as fstat/newfstatat
-            // for the same file -- through dd's cuid/cgid + guest-chown virtualization. Self-checking
-            // agreement booleans, byte-identical native-vs-dd; before the fix statx diverged (raw uid, rdev 0:0).
+            // for the same file -- through hl's cuid/cgid + guest-chown virtualization. Self-checking
+            // agreement booleans, byte-identical native-vs-hl; before the fix statx diverged (raw uid, rdev 0:0).
             src("statx-agree", "statx_agree.c").oracle(),
             // Guest-pointer validation (access_ok): bad syscall buffers -> EFAULT, exactly as native Linux.
             // The differential test for host_range_mapped's fault-guarded probe fast path,
@@ -152,7 +152,7 @@ pub(super) fn edge() -> Group {
             // whose result the ENGINE fills via memcpy/struct-write (nanosleep/getrusage/mincore/fstat/
             // newfstatat/rt_sigaction) must return -EFAULT, exactly as native — never crash the engine, never
             // wrongly succeed. Complements clockefault.c (the clock family) and edge_efault.c (fcntl). RAW
-            // syscalls hit dd's dispatch directly; the `-slow` sibling forces HL_JIT_NOFASTSYS. Byte-exact oracle.
+            // syscalls hit hl's dispatch directly; the `-slow` sibling forces HL_JIT_NOFASTSYS. Byte-exact oracle.
             src("sysfault", "sysfault.c").oracle(),
             src("sysfault-slow", "sysfault.c")
                 .env("HL_JIT_NOFASTSYS", "1")

@@ -15,7 +15,7 @@ cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT INT TERM
 mkdir -p "$TMPDIR"
 
-cc -DDD_TR_TOOL "$GL_SHIM" -o "$TMPDIR/gl_tr"
+cc -HLD_TR_TOOL "$GL_SHIM" -o "$TMPDIR/gl_tr"
 cc layout_proof.c -o "$TMPDIR/layout_proof"
 
 "$TMPDIR/gl_tr" chrome_uniform_layout.vert.glsl chrome_uniform_layout.frag.glsl --print-layout > "$TMPDIR/shim.txt"

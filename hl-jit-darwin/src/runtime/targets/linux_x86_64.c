@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- the x86-64-Linux-guest JIT (jit86), brought in WHOLE.
+// hl/runtime/frontend/x86_64 -- the x86-64-Linux-guest JIT (jit86), brought in WHOLE.
 //
 // jit86 is under active improvement upstream (poc/runtime/jit86/jit86.c) and has a DIFFERENT cpu
 // struct + its own (basic) container runtime, so it is not yet decomposed onto the shared jit/ +
@@ -85,13 +85,13 @@
 #include "../engine/dispatch.c"              // SHARED engine: run_guest loop (x86 drives it via dispatch_hooks.h;
                                              // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
 #include "../translate/x86_64/elf.c"         // x86 ELF loader + stack + fault handlers (per-arch: machine/platform)
-#include "../os/hl_configfd.c"            // `--configfd` launch bridge -> re-hydrate HL_*/DDJIT_* env -> hl_run()
+#include "../os/hl_configfd.c"            // `--configfd` launch bridge -> re-hydrate HL_*/HL_JIT_* env -> hl_run()
 
 // ---- entry + main ----
 // ---------------- entry ----------------
 // W3D fork-server refactor: the original hl_run inlined (1) container init, (2) engine init
 // (pthread key + MAP_JIT arena + signal handlers + trace env), and (3) per-launch load+run. The
-// resident ddjitd parent must pay (1)+(2) ONCE and share them COW with every forked worker, so
+// resident hljitd parent must pay (1)+(2) ONCE and share them COW with every forked worker, so
 // those two phases are factored into container_init()/engine_global_init(). engine_global_init()
 // is idempotent (g_engine_inited) so the standalone path is byte-for-byte unchanged: standalone
 // hl_run() composes container_init -> engine_global_init -> load_program -> run_loaded in the
@@ -149,7 +149,7 @@ static void container_init(const char *rootfs) {
     }
     if (!getenv("HL_NONETNS")) { // opt-out: leave g_netns empty -> 127/8 uses the REAL host TCP stack
         // HL_NETNS is a short KEY (not a path) -- the SAME key netns.c derives the abstract-socket / IPC
-        // namespace dirs from (/tmp/.ddabs-<key>, ...) and that the daemon + aarch64 engine use. The
+        // namespace dirs from (/tmp/.hlabs-<key>, ...) and that the daemon + aarch64 engine use. The
         // private-loopback dir is derived FROM it. Inherit the key across exec / from the daemon, else
         // mint one from our pid. (Setting HL_NETNS to the full loopback path put slashes in those derived
         // dir names -> mkdir failed -> abstract-socket bind broke.)
@@ -440,7 +440,7 @@ int hl_run(const char *rootfs, int argc, char *const argv[]) {
     return ec;
 }
 
-// resident ddjitd fork-server (server/client/worker) -- SHARED with linux_aarch64.c, driven
+// resident hljitd fork-server (server/client/worker) -- SHARED with linux_aarch64.c, driven
 // through the container_init/engine_global_init/load_program/run_loaded/hl_run seam defined above.
 // x86-only knobs: the warm re-run must re-point g_loadbase, and the x86 container model chdir()s the
 // engine process into the rootfs (container_init does; the warm path must match it per request).
@@ -476,11 +476,11 @@ int hl_entry(int argc, char **argv) {
     if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return hl_run_configfd(atoi(argv[2]));
     if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return hl_run_configfile(argv[2]);
     // W3D fork-server dispatch (gated; standalone path untouched when neither flag is present):
-    //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident ddjitd, listen on SOCK
-    //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a ddjitd
+    //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident hljitd, listen on SOCK
+    //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a hljitd
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--server") == 0) return ddjitd_server_main(argc, argv);
-        if (strcmp(argv[i], "--client") == 0) return ddjitd_client_main(argc, argv);
+        if (strcmp(argv[i], "--server") == 0) return hljitd_server_main(argc, argv);
+        if (strcmp(argv[i], "--client") == 0) return hljitd_client_main(argc, argv);
     }
     while (ai + 1 < argc) { // --rootfs DIR / --vol guest:host (repeatable)
         if (strcmp(argv[ai], "--rootfs") == 0) {

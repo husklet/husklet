@@ -14,7 +14,7 @@
 // tcsetpgrp/tcsetattr still runs on the real pty) and is a no-op when the guest already blocked it.
 // statfs(2)/fstatfs(2) f_type + geometry fidelity inside a container. A real container's mount tree puts
 // the rootfs on OVERLAYFS and the kernel pseudo-filesystems (/proc, /sys, /sys/fs/cgroup, /dev*) on their
-// own magic types with the pseudo ones reporting ZERO blocks. dd resolves every guest path into ONE host
+// own magic types with the pseudo ones reporting ZERO blocks. hl resolves every guest path into ONE host
 // (macOS) directory tree, so a naive host statfs stamps the SAME magic + the SAME real-disk geometry on
 // every path -- so `stat -f -c %T /proc` prints the wrong type and `df -h` lists /proc & /sys with a huge
 // bogus size (busybox/coreutils df hides a mount only when f_blocks==0, which the pseudo-fs must report).
@@ -143,7 +143,7 @@ static void ptm_clear(int fd) {
 }
 
 // Re-apply a master's cached termios/winsize onto a freshly-opened slave fd (Linux: the slave shares the
-// master's line discipline). `ptn` is the pts number, which dd defines to equal the master fd.
+// master's line discipline). `ptn` is the pts number, which hl defines to equal the master fd.
 static void ptm_apply_to_slave(int ptn, int slavefd) {
     if (ptn < 0 || ptn >= HL_NFD || slavefd < 0) return;
     if (g_ptm_tset[ptn]) tcsetattr(slavefd, TCSANOW, &g_ptm_term[ptn]);
@@ -153,7 +153,7 @@ static void ptm_apply_to_slave(int ptn, int slavefd) {
 // Tear down EVERY hl-side emulation-table entry keyed by this fd NUMBER (eventfd peer/counter/sema, timerfd,
 // overlay-dir, the socket/loopback/bridge maps, epoll armed-state, flock, pidfd, RAM-scratch memf, and the
 // getdents/overlay-dents caches + the path map). Shared by close(2) (case 57) AND the emulated
-// close-on-exec sweep (proc.c exec_close_cloexec*). dd's execve reloads the new image IN-PROCESS, so the
+// close-on-exec sweep (proc.c exec_close_cloexec*). hl's execve reloads the new image IN-PROCESS, so the
 // sweep hand-closes each FD_CLOEXEC descriptor -- but it used to close ONLY the real fd, leaving these tables
 // stamped. A CLOEXEC eventfd thus left g_eventfd_peer[fd] set after exec; the new program (postgres) opened
 // postgresql.conf onto that freed fd number and read() was misrouted to the eventfd emulation -> 0 bytes of
@@ -267,10 +267,10 @@ static void fd_reset_emul(int fd) {
 
 // Linux *at dirfd precondition, shared by the fstatat/statx/link/symlink/rename/unlink/... family.
 // For a RELATIVE path with dirfd != AT_FDCWD the kernel resolves the descriptor FIRST: EBADF if it is not an
-// open fd, ENOTDIR if it is open but not a directory. dd folds the dirfd into an absolute host path via
+// open fd, ENOTDIR if it is open but not a directory. hl folds the dirfd into an absolute host path via
 // g_fdpath, which silently accepts a bad/regular-file dirfd -- so those errnos were never produced (fstatat
 // on a non-dir dirfd wrongly "succeeded", symlinkat/linkat leaked macOS EOPNOTSUPP, statx returned EBADF for
-// a non-dir dirfd). dd shares the host descriptor table, so validate against the real fd. Returns 0 (ok) or
+// a non-dir dirfd). hl shares the host descriptor table, so validate against the real fd. Returns 0 (ok) or
 // -errno. Absolute paths, AT_FDCWD, and the empty path (AT_EMPTY_PATH / the ENOENT case) never consult the
 // dirfd. (LTP fstatat01 / statx03 / symlinkat01 / linkat01.)
 static int at_dirfd_check(int dirfd, const char *raw) {
@@ -284,12 +284,12 @@ static int at_dirfd_check(int dirfd, const char *raw) {
 
 // ---- guest xattr passthrough (overlay G5) -----------------------------------------------------------
 // Real overlayfs exposes a file's xattrs (file caps, SELinux labels, user.* attrs) and copies them up on
-// write; dd used to stub set->ignore / get->ENODATA / list->empty, silently dropping them (a correctness
-// trap -- setcap "succeeded" but getcap saw nothing). We namespace guest xattrs under `user.ddx.` on the
-// host backing inode so they round-trip AND survive copy-up (ovl_copy_xattrs carries `user.ddx.*`),
-// without colliding with dd's own `user.dd.*` owner attrs or host/macOS attrs. The macOS errno is mapped
+// write; hl used to stub set->ignore / get->ENODATA / list->empty, silently dropping them (a correctness
+// trap -- setcap "succeeded" but getcap saw nothing). We namespace guest xattrs under `user.hlx.` on the
+// host backing inode so they round-trip AND survive copy-up (ovl_copy_xattrs carries `user.hlx.*`),
+// without colliding with hl's own `user.hl.*` owner attrs or host/macOS attrs. The macOS errno is mapped
 // to Linux at the dispatch boundary (ENOATTR->ENODATA).
-#define DDX_PFX "user.ddx."
+#define HLX_PFX "user.hlx."
 
 // Host backing path for a path-based xattr op. forwrite copies a lower-only file up first (attr lands on
 // the writable upper). Returns 0 (host filled) or -errno.
@@ -316,9 +316,9 @@ static int xattr_hostpath(const char *path, int nofollow, int forwrite, char *ho
 // (an if/else-if), so CREATE+REPLACE on an existing attr yields EEXIST, on a missing one yields ENODATA.
 // So we resolve the create/replace precondition ourselves against a host existence probe and hand macOS
 // a plain set (flags=0), which reproduces the kernel byte-for-byte and never leaks macOS's EINVAL.
-static long ddx_set(const char *host, const char *name, const void *val, size_t sz, uint64_t lflags, int nofollow) {
+static long hlx_set(const char *host, const char *name, const void *val, size_t sz, uint64_t lflags, int nofollow) {
     char hn[512];
-    snprintf(hn, sizeof hn, "%s%s", DDX_PFX, name ? name : "");
+    snprintf(hn, sizeof hn, "%s%s", HLX_PFX, name ? name : "");
     int opt = nofollow ? XATTR_NOFOLLOW : 0;
     if (lflags & 3) { // XATTR_CREATE(1) | XATTR_REPLACE(2)
         int exists = getxattr(host, hn, NULL, 0, 0, opt) >= 0;
@@ -328,30 +328,30 @@ static long ddx_set(const char *host, const char *name, const void *val, size_t 
     return setxattr(host, hn, val, sz, 0, opt) < 0 ? -errno : 0;
 }
 
-static long ddx_get(const char *host, const char *name, void *val, size_t sz, int opt) {
+static long hlx_get(const char *host, const char *name, void *val, size_t sz, int opt) {
     char hn[512];
-    snprintf(hn, sizeof hn, "%s%s", DDX_PFX, name ? name : "");
+    snprintf(hn, sizeof hn, "%s%s", HLX_PFX, name ? name : "");
     ssize_t r = getxattr(host, hn, val, sz, 0, opt);
     return r < 0 ? -errno : r;
 }
 
-static long ddx_remove(const char *host, const char *name, int opt) {
+static long hlx_remove(const char *host, const char *name, int opt) {
     char hn[512];
-    snprintf(hn, sizeof hn, "%s%s", DDX_PFX, name ? name : "");
+    snprintf(hn, sizeof hn, "%s%s", HLX_PFX, name ? name : "");
     return removexattr(host, hn, opt) < 0 ? -errno : 0;
 }
 
-// List only the guest-visible (user.ddx.*) attrs, prefix stripped, into the guest buffer. sz==0 -> size.
-static long ddx_list(const char *host, char *out, size_t sz, int opt) {
+// List only the guest-visible (user.hlx.*) attrs, prefix stripped, into the guest buffer. sz==0 -> size.
+static long hlx_list(const char *host, char *out, size_t sz, int opt) {
     char raw[65536];
     ssize_t n = listxattr(host, raw, sizeof raw, opt);
     if (n < 0) return -errno;
-    size_t need = 0, pl = strlen(DDX_PFX);
+    size_t need = 0, pl = strlen(HLX_PFX);
     for (ssize_t i = 0; i < n;) {
         const char *nm = raw + i;
         size_t l = strlen(nm);
         i += l + 1;
-        if (l > pl && !strncmp(nm, DDX_PFX, pl)) {
+        if (l > pl && !strncmp(nm, HLX_PFX, pl)) {
             const char *g = nm + pl;
             size_t gl = strlen(g) + 1;
             if (sz) {
@@ -367,10 +367,10 @@ static long ddx_list(const char *host, char *out, size_t sz, int opt) {
 // mount(2). The historical stub returned 0 unconditionally, so a container entrypoint's `mount --bind`,
 // `mount -t tmpfs`, and `mount -o remount,ro` silently did NOTHING -- wrong dir content and, worse, an
 // UNENFORCED read-only mount (a silent correctness/security hole). Implement the cases an entrypoint
-// actually issues against dd's vfs: bind = a bind-vol alias to the source's host backing; tmpfs/ramfs = a
+// actually issues against hl's vfs: bind = a bind-vol alias to the source's host backing; tmpfs/ramfs = a
 // fresh empty host scratch dir; remount,ro = enforce RO (whole-rootfs g_rootfs_ro / a bind-vol's ro flag /
-// a per-subtree path-based RO list). Pseudo-filesystems dd already synthesizes (proc/sysfs/cgroup/devpts/
-// mqueue/...) are a genuine no-op success (they ARE present at their mount point). Anything dd cannot
+// a per-subtree path-based RO list). Pseudo-filesystems hl already synthesizes (proc/sysfs/cgroup/devpts/
+// mqueue/...) are a genuine no-op success (they ARE present at their mount point). Anything hl cannot
 // materialize returns the honest Linux errno instead of a fake 0. MS_RDONLY=1 REMOUNT=0x20 BIND=0x1000.
 static int64_t svc_mount(struct cpu *c, uint64_t a_src, uint64_t a_tgt, uint64_t a_fstype, uint64_t a_flags) {
     (void)c;
@@ -425,7 +425,7 @@ static int64_t svc_mount(struct cpu *c, uint64_t a_src, uint64_t a_tgt, uint64_t
             ft[k] = fstype[k];
             ft[k + 1] = 0;
         }
-    // Pseudo-filesystems dd already serves at their canonical mount points -> a real no-op success.
+    // Pseudo-filesystems hl already serves at their canonical mount points -> a real no-op success.
     if (!strcmp(ft, "proc") || !strcmp(ft, "sysfs") || !strcmp(ft, "cgroup") || !strcmp(ft, "cgroup2") ||
         !strcmp(ft, "devpts") || !strcmp(ft, "mqueue") || !strcmp(ft, "devtmpfs") || !strcmp(ft, "debugfs") ||
         !strcmp(ft, "securityfs") || !strcmp(ft, "tracefs") || !strcmp(ft, "configfs") || !strcmp(ft, "bpf") ||
@@ -433,14 +433,14 @@ static int64_t svc_mount(struct cpu *c, uint64_t a_src, uint64_t a_tgt, uint64_t
         return 0;
     // tmpfs / ramfs: back the mount point with a fresh, empty host scratch dir.
     if (!strcmp(ft, "tmpfs") || !strcmp(ft, "ramfs")) {
-        char tmpl[] = "/tmp/.ddtmpfsXXXXXX";
+        char tmpl[] = "/tmp/.hltmpfsXXXXXX";
         if (!mkdtemp(tmpl)) return -errno;
         int64_t r = rt_add_vol(tgt, tmpl, (fl & 0x1) ? 1 : 0);
         if (r < 0) rmdir(tmpl);
         return r;
     }
     if (ft[0] == 0) return -EINVAL; // mount without a type, bind, or remount is invalid
-    // A real block/overlay/nfs/... filesystem dd cannot materialize -> the honest errno, NOT a fake 0 that
+    // A real block/overlay/nfs/... filesystem hl cannot materialize -> the honest errno, NOT a fake 0 that
     // would leave the mount point showing the wrong (still-unmounted) content.
     return -ENODEV;
 }
@@ -464,7 +464,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(int64_t)e;
             break;
         }
-        G_RET(c) = (uint64_t)(int64_t)ddx_set(host, (const char *)a1, (const void *)a2, (size_t)a3, a4, nr == 6);
+        G_RET(c) = (uint64_t)(int64_t)hlx_set(host, (const char *)a1, (const void *)a2, (size_t)a3, a4, nr == 6);
         break;
     }
     // getxattr(8)/lgetxattr(9)/fgetxattr(10): a0=path|fd, a1=name, a2=val, a3=size
@@ -482,7 +482,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         G_RET(c) =
-            (uint64_t)(int64_t)ddx_get(host, (const char *)a1, (void *)a2, (size_t)a3, nr == 9 ? XATTR_NOFOLLOW : 0);
+            (uint64_t)(int64_t)hlx_get(host, (const char *)a1, (void *)a2, (size_t)a3, nr == 9 ? XATTR_NOFOLLOW : 0);
         break;
     }
     // listxattr(11)/llistxattr(12)/flistxattr(13): a0=path|fd, a1=list, a2=size
@@ -499,7 +499,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(int64_t)e;
             break;
         }
-        G_RET(c) = (uint64_t)(int64_t)ddx_list(host, (char *)a1, (size_t)a2, nr == 12 ? XATTR_NOFOLLOW : 0);
+        G_RET(c) = (uint64_t)(int64_t)hlx_list(host, (char *)a1, (size_t)a2, nr == 12 ? XATTR_NOFOLLOW : 0);
         break;
     }
     // removexattr(14)/lremovexattr(15)/fremovexattr(16): a0=path|fd, a1=name
@@ -516,7 +516,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             G_RET(c) = (uint64_t)(int64_t)e;
             break;
         }
-        G_RET(c) = (uint64_t)(int64_t)ddx_remove(host, (const char *)a1, nr == 15 ? XATTR_NOFOLLOW : 0);
+        G_RET(c) = (uint64_t)(int64_t)hlx_remove(host, (const char *)a1, nr == 15 ? XATTR_NOFOLLOW : 0);
         break;
     }
     case 17: {
@@ -560,7 +560,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // it worked there). This makes both forms match, fixing musl tmux/script/openpty and any high-bit ioctl.
         unsigned long rq = (uint32_t)a1;
         void *arg = (void *)a2;
-        // GPU rung 2 (opt-in): the dd render node services HL_IOCTL_GPU_ALLOC (host-IOSurface buffer).
+        // GPU rung 2 (opt-in): the hl render node services HL_IOCTL_GPU_ALLOC (host-IOSurface buffer).
         // Gated on the per-fd render-node tag, so no other fd/ioctl is affected.
         if (gpu_iosurface_on() && fd >= 0 && fd < HL_NFD && g_devdri[fd] && rq == HL_IOCTL_GPU_ALLOC) {
             G_RET(c) = (uint64_t)hl_gpu_alloc(fd, arg);
@@ -591,7 +591,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // because it opened the slave first, which happens to flip isatty). ptsname()!=NULL is the precise
         // "fd is a pty master" test: a slave or ordinary tty returns NULL (ENOTTY) and we operate on fd
         // directly, which is correct -- those accept termios/winsize as-is.
-        // The GET/SET on a master answers from / writes to dd's per-master termios+winsize cache (g_ptm_*);
+        // The GET/SET on a master answers from / writes to hl's per-master termios+winsize cache (g_ptm_*);
         // a SET is also pushed to a transient slave so any real slave the guest ALREADY holds open sees it
         // live, and re-applied via ptm_apply_to_slave() when the guest later opens the slave.
         int tfd = fd, pts_slave = -1, is_master = 0;
@@ -610,13 +610,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             // "Is fd a pty master?" -- apt/dpkg StartPtyMagic does TIOCSWINSZ + tcsetattr(TCSANOW) on the
             // master WITHOUT ever opening the slave, and a macOS master ENOTTYs every termios/winsize ioctl,
             // so mis-detecting the master here is exactly ("Setting TIOCSWINSZ/TCSANOW for master fd N
-            // failed"). Consult dd's AUTHORITATIVE devpts registry first (pts_fd_is_master, stamped at
-            // /dev/ptmx-open time): it is the source of truth for every master dd handed out and costs no
+            // failed"). Consult hl's AUTHORITATIVE devpts registry first (pts_fd_is_master, stamped at
+            // /dev/ptmx-open time): it is the source of truth for every master hl handed out and costs no
             // host syscall. ptsname(fd) is kept as an independent confirmation AND to resolve the host
             // slave device so a SET can be live-pushed to a transient slave. A slave or ordinary tty is
             // neither (bit clear, ptsname==NULL) -> operate on fd directly, which is correct there. (Prior
             // code detected the master by ptsname ALONE; adding the registry makes detection authoritative
-            // rather than dependent solely on a host heuristic, so a master dd tracks is recognized even if
+            // rather than dependent solely on a host heuristic, so a master hl tracks is recognized even if
             // ptsname ever fails to resolve it.)
             is_master = pts_fd_is_master(fd);
             char *sn = ptsname(fd); // non-NULL only for a real host pty master
@@ -716,7 +716,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             break;
         }
         case 0x80045430: {
-            // TIOCGPTN -> the Linux devpts index N dd assigned this master at /dev/ptmx-open time (ptsname(3)
+            // TIOCGPTN -> the Linux devpts index N hl assigned this master at /dev/ptmx-open time (ptsname(3)
             // and musl/glibc openpty build "/dev/pts/N" from it). Fall back to the fd for an untracked master.
             int n = pts_index_of_master(fd);
             if (n < 0) n = fd;
@@ -945,7 +945,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         // a bad pathname pointer -> EFAULT (getname copy_from_user), before any resolution; and a
         // relative path under a bad/non-dir dirfd -> EBADF/ENOTDIR. (LTP unlink07.) guest_bad_ptr also faults
-        // a PROT_NONE guard page (tst_get_bad_addr), which dd force-maps host-readable.
+        // a PROT_NONE guard page (tst_get_bad_addr), which hl force-maps host-readable.
         if (!a1 || guest_bad_ptr(a1, 1)) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
             break;
@@ -1106,7 +1106,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     }
     // symlinkat(target, newdirfd, linkpath) -- the link is CREATED at (newdirfd, linkpath)
     case 36: {
-        // a relative linkpath under a bad/non-dir newdirfd -> EBADF/ENOTDIR (dd's g_fdpath fold used to
+        // a relative linkpath under a bad/non-dir newdirfd -> EBADF/ENOTDIR (hl's g_fdpath fold used to
         // leak macOS EOPNOTSUPP for a non-dir dirfd). (LTP symlinkat01.)
         {
             int adc = at_dirfd_check((int)a1, (const char *)a2);
@@ -1154,13 +1154,13 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // linkat(odir,opath,ndir,npath,flags) -- writes both ends (new link + source link count)
     case 37: {
         // reject unknown linkat flag bits with EINVAL (valid: AT_SYMLINK_FOLLOW 0x400 | AT_EMPTY_PATH
-        // 0x1000). dd otherwise ignored the flags and the link wrongly succeeded. (LTP linkat01 case 22.)
+        // 0x1000). hl otherwise ignored the flags and the link wrongly succeeded. (LTP linkat01 case 22.)
         if (a4 & ~(uint64_t)0x1400) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
         }
         // a relative old/new path under a bad/non-dir dirfd -> EBADF/ENOTDIR, before any resolution
-        // (dd's g_fdpath fold leaked macOS EOPNOTSUPP for a non-dir dirfd). (LTP linkat01 cases 8/9.)
+        // (hl's g_fdpath fold leaked macOS EOPNOTSUPP for a non-dir dirfd). (LTP linkat01 cases 8/9.)
         {
             int adc = at_dirfd_check((int)a0, (const char *)a1);
             if (!adc) adc = at_dirfd_check((int)a2, (const char *)a3);
@@ -1345,12 +1345,12 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         G_RET(c) = rr < 0 ? (uint64_t)(-errno) : 0;
         break;
     }
-    // mount(source,target,fstype,flags,data): implement bind/tmpfs/remount,ro against dd's vfs (svc_mount);
+    // mount(source,target,fstype,flags,data): implement bind/tmpfs/remount,ro against hl's vfs (svc_mount);
     // a real no-op stub silently gave wrong content + unenforced RO.
     case 40: G_RET(c) = (uint64_t)svc_mount(c, a0, a1, a2, a3); break;
-    // umount2(target,flags): detach a runtime bind/tmpfs volume mounted exactly there. A pseudo-mount dd
+    // umount2(target,flags): detach a runtime bind/tmpfs volume mounted exactly there. A pseudo-mount hl
     // keeps serving (not a registered volume) stays present -> success (unmounting it is a harmless no-op
-    // in dd's model; the content is synthetic, not backed by the removed mount).
+    // in hl's model; the content is synthetic, not backed by the removed mount).
     case 39: {
         if (!g_rootfs) {
             G_RET(c) = 0;
@@ -1367,7 +1367,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         break;
     }
     // pivot_root(new_root,put_old): re-root the guest at new_root, confined within the rootfs jail (modeled
-    // as a chroot -- dd has one root fd; put_old is not separately materialized). Validate new_root exists
+    // as a chroot -- hl has one root fd; put_old is not separately materialized). Validate new_root exists
     // as a directory so a bad target reports ENOENT/ENOTDIR instead of a fake success.
     case 41: {
         if (!g_rootfs) {
@@ -1418,7 +1418,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             r = statfs(p, &hs);
             // A SYNTHETIC proc/sys/cgroup leaf (its content is served by the /proc·/sys synth, not the image)
             // has no host file to statfs -> ENOENT. But Linux reports the pseudo-fs magic + geometry for these
-            // paths, and tools (UseContainerSupport, magic-based pseudo-fs detection) rely on it. If dd
+            // paths, and tools (UseContainerSupport, magic-based pseudo-fs detection) rely on it. If hl
             // synthesizes the path, adopt the rootfs-root geometry (container mode) or a zeroed pseudo geometry
             // (bare mode), and let the classification below stamp the magic + zero the block/inode counts.
             if (r < 0 && gpath[0] && (!strncmp(gpath, "/proc", 5) || !strncmp(gpath, "/sys", 4))) {
@@ -1482,7 +1482,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         *(int32_t *)(b + 60) = hs.f_fsid.val[1];    // f_fsid[1]
         *(int64_t *)(b + 64) = 255;                 // f_namelen (NAME_MAX)
         *(int64_t *)(b + 72) = (int64_t)hs.f_bsize; // f_frsize
-        // f_flags: Linux exposes the mount flags (ST_VALID + mount options). dd's mounts are all relatime;
+        // f_flags: Linux exposes the mount flags (ST_VALID + mount options). hl's mounts are all relatime;
         // the pseudo-fs + tmpfs mounts (/proc /sys /dev /dev/shm) are nosuid,nodev,noexec (per mountinfo).
         // Reporting 0 made ST_NOSUID/NODEV/NOEXEC/RDONLY probes see a false mount view.
         int64_t f_flags = 0;
@@ -1799,7 +1799,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // A pathname pointer outside the accessible address space -> EFAULT (kernel getname
         // copy_from_user), before the dirfd/target is examined (LTP fchmodat02 "invalid address").
         // guest_bad_ptr catches the PROT_NONE tst_get_bad_addr page; the reads below (jail/atpath) would
-        // otherwise consume garbage from dd's force-mapped shadow of that page and mis-report the error.
+        // otherwise consume garbage from hl's force-mapped shadow of that page and mis-report the error.
         // fchmodat2 (452) additionally rejects unknown flag bits with EINVAL (AT_SYMLINK_NOFOLLOW|
         // AT_EMPTY_PATH only); glibc screens fchmodat(53)'s flags in userspace so 53's a3 is never trusted.
         if (nr == 452 && (a3 & ~((uint64_t)0x100 | 0x1000))) {
@@ -1858,7 +1858,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     // fchownat(dirfd,path,uid,gid,flags) -- best-effort (rootless)
     case 54: {
         // Linux validates the flag word before touching the path: only AT_SYMLINK_NOFOLLOW (0x100) and
-        // AT_EMPTY_PATH (0x1000) are defined; any other bit is EINVAL. dd emulates a root container, so an
+        // AT_EMPTY_PATH (0x1000) are defined; any other bit is EINVAL. hl emulates a root container, so an
         // actual ownership change is faked-success (a real host chown is a rootless no-op), but a syntactically
         // invalid call must still fail exactly as Linux does rather than silently mutate the owner xattr.
         if (a4 & ~0x1100u) {
@@ -2107,7 +2107,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 }
                 // /proc/[self|pid]/auxv (rustix/libc read it)
                 if (strstr(rp, "/auxv")) {
-                    char tn[] = "/tmp/.ddauxvXXXXXX";
+                    char tn[] = "/tmp/.hlauxvXXXXXX";
                     int afd = mkstemp(tn);
                     if (afd >= 0) {
                         unlink(tn);
@@ -2325,7 +2325,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             }
             // a guest-created pty slave /dev/pts/N. Intercepted HERE, ahead of the overlay resolver, so
             // the freshly-allocated slave (which has no rootfs backing file) is never an ENOENT miss. N is the
-            // devpts index dd assigned the master (pts_alloc); ptsname(master) yields the host slave device.
+            // devpts index hl assigned the master (pts_alloc); ptsname(master) yields the host slave device.
             if (rp && !strncmp(rp, "/dev/pts/", 9) && rp[9] >= '0' && rp[9] <= '9') {
                 int n = atoi(rp + 9);
                 int mfd = pts_master_fd(n);
@@ -2777,7 +2777,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 }
             }
             // Peer /proc/<pid>/fd/<N> -> the fd's target (symlink-target view), read from the peer's libproc
-            // fd table (its fds live in another dd worker process; procfd_num rejected the foreign pid above).
+            // fd table (its fds live in another hl worker process; procfd_num rejected the foreign pid above).
             // A closed/absent peer fd -> ENOENT. Opening the link stays deferred (needs cross-process fd
             // passing). proc_self_leaf matched only our own pid, so cover foreign pids here.
             if (aleaf && !strncmp(aleaf, "fd/", 3) && aleaf[3] && proc_pid_member(peer, &hp)) {
@@ -2857,7 +2857,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         const char *raw = (const char *)a1;
         // reject unknown flag bits with EINVAL, and validate the dirfd (EBADF/ENOTDIR) for a relative
         // path -- both BEFORE resolving, matching the kernel. Valid flags: AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT
-        // | AT_EMPTY_PATH = 0x1900. dd's g_fdpath fold otherwise accepts a bad/non-dir dirfd. (LTP fstatat01.)
+        // | AT_EMPTY_PATH = 0x1900. hl's g_fdpath fold otherwise accepts a bad/non-dir dirfd. (LTP fstatat01.)
         if (a3 & ~(uint64_t)0x1900) {
             G_RET(c) = (uint64_t)(int64_t)(-EINVAL);
             break;
@@ -3044,7 +3044,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // Linux and macOS disagree on the tv_nsec "special" sentinels: Linux UTIME_NOW = 0x3fffffff /
         // UTIME_OMIT = 0x3ffffffe, but the host (macOS) wants UTIME_NOW = -1 / UTIME_OMIT = -2. The host
         // utimensat/futimens only honor the macOS values, so a guest passing the Linux sentinels (glibc's
-        // futimens/utimensat, and dd's own utime/utimes/futimesat -> utimensat rewrites whenever a field is
+        // futimens/utimensat, and hl's own utime/utimes/futimesat -> utimensat rewrites whenever a field is
         // "set to now") would otherwise write the raw 0x3ffffffe nanoseconds instead of omitting/now-ing the
         // field. Copy out to a local (never mutate guest memory) and translate both slots. a2==NULL stays
         // NULL (= set both to now). EFAULT a bad non-NULL times pointer (we now dereference it in-engine).
@@ -3129,7 +3129,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         }
         // Validate the guest pointers before any deref: a bad path or result buffer must return -EFAULT, not
         // fault the engine. guest_bad_ptr (not host_addr_mapped) also faults a PROT_NONE guard page -- the LTP
-        // tst_get_bad_addr idiom -- which dd force-maps host-readable (and zero-filled, so raw[0] must NOT be
+        // tst_get_bad_addr idiom -- which hl force-maps host-readable (and zero-filled, so raw[0] must NOT be
         // consulted here or the guard page reads as an empty "" path). host_addr_mapped wrongly passed it.
         if (raw && guest_bad_ptr((uintptr_t)raw, 1)) {
             G_RET(c) = (uint64_t)(int64_t)(-EFAULT);
@@ -3290,7 +3290,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
     case 48: {
         char pb[4200];
         // Linux: an empty pathname is ENOENT for faccessat(48), and for faccessat2(439) unless
-        // AT_EMPTY_PATH(0x1000) is set. dd used to resolve "" to the rootfs root (a searchable dir) and
+        // AT_EMPTY_PATH(0x1000) is set. hl used to resolve "" to the rootfs root (a searchable dir) and
         // report it executable, so `[ -x "$(command -v missing)" ]` (dash's `command -v` yields "" for a
         // missing command) wrongly passed and ran a nonexistent `update-menus` -> exit 127. That is the
         // dh_installmenu postinst guard in fish/lynx/many packages, so it broke `dpkg --configure`.

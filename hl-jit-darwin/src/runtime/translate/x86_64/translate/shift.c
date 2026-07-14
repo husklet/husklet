@@ -1,4 +1,4 @@
-// dd/runtime/translate/x86_64 -- shift/rotate instruction class (group2: C0/C1 imm, D0/D1 by 1, D2/D3 by
+// hl/runtime/translate/x86_64 -- shift/rotate instruction class (group2: C0/C1 imm, D0/D1 by 1, D2/D3 by
 // CL -> SHL/SHR/SAR/ROL/ROR/RCL/RCR), lifted VERBATIM out of translate_block's one-byte switch. Emits the
 // exact x86 CF/SF/ZF/PF (incl. the count==0 'no flags change' rule and the by-CL masked-count case). A rare
 // unhandled form (RCL/RCR by CL) defers to C via report_unimpl. Returns TX_FALL (not a shift), TX_NEXT

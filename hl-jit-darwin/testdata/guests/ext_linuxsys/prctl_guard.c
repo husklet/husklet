@@ -1,9 +1,9 @@
-// Permanent prctl(2) guard for the dd matrix. Mirrors the option/argument validation matrix the LTP
+// Permanent prctl(2) guard for the hl matrix. Mirrors the option/argument validation matrix the LTP
 // binaries prctl02 (the EINVAL/EFAULT/EPERM cases) and prctl03 (PR_SET/GET_CHILD_SUBREAPER round-trip)
 // assert, driven straight at the syscall so it is engine-independent. SELF-CHECKING: every assertion
 // compares the observed return/errno against the real-Linux contract and the program exits 0 and prints
 // PRCTL_GUARD_OK only if all pass (so it is NOT diffed against the oracle -- qemu-user lacks THP_DISABLE
-// and some speculation state, and the initial THP/dumpable flags are host-specific; the point is that dd's
+// and some speculation state, and the initial THP/dumpable flags are host-specific; the point is that hl's
 // prctl matches the Linux *contract*, which the native run confirms by also printing PRCTL_GUARD_OK).
 // Owner: prctl guard.
 #define _GNU_SOURCE

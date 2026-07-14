@@ -1,5 +1,5 @@
 // statfs(2) f_type + pseudo-fs geometry inside a container. Runs in the alpine overlay rootfs; asserts the
-// SAME invariants real docker (runc) presents so `stat -f -c %T` and `df -h` behave. Pre-fix dd stamped
+// SAME invariants real docker (runc) presents so `stat -f -c %T` and `df -h` behave. Pre-fix hl stamped
 // TMPFS_MAGIC + real host geometry on EVERY path -> `/` looked like tmpfs, /proc & /sys reported a huge
 // bogus size (so df listed them). ok=1 iff every mount classifies correctly and the pseudo-fs report zero.
 #include <stdio.h>

@@ -1,8 +1,8 @@
 /* completeness shared: syscall-number fallbacks (newer syscalls glibc may lack) + tiny helpers.
    Numbers below are the cross-arch-stable allocations (>= ~2019 syscalls share the same number on
    x86_64 and aarch64). Older syscalls always come from <sys/syscall.h>'s SYS_* (arch-correct). */
-#ifndef DDC_COMPAT_H
-#define DDC_COMPAT_H
+#ifndef HLC_COMPAT_H
+#define HLC_COMPAT_H
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif

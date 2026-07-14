@@ -1,5 +1,5 @@
 // syscall-compat regression: read(eventfd, NULL, 8) must return EFAULT, not a fake 8-byte success.
-// (Only the errno is asserted: Linux consumes-then-faults while dd faults-before-consuming; both agree
+// (Only the errno is asserted: Linux consumes-then-faults while hl faults-before-consuming; both agree
 // on the EFAULT return, which is what this finding is about.)
 #define _GNU_SOURCE
 #include <errno.h>

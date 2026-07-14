@@ -61,7 +61,7 @@ typedef struct __attribute__((packed)) {
     unsigned long long uncompressed_size;
 } HlFatBinEntry;
 
-/* True if `image` looks like an ELF/CUBIN (SASS) blob — dd cannot execute SASS. */
+/* True if `image` looks like an ELF/CUBIN (SASS) blob — hl cannot execute SASS. */
 static inline int hl_image_is_elf(const void* image) {
     const unsigned char* b = (const unsigned char*)image;
     return b[0] == 0x7f && b[1] == 'E' && b[2] == 'L' && b[3] == 'F';

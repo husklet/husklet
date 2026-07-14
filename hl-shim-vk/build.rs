@@ -17,7 +17,7 @@
 //! pointer — every `*`-suffixed C type lowers to a `c_void` pointer regardless of pointee, so only
 //! by-value types ever consult the T-table.
 //!
-//! Also sets the shared-object soname to `libvk_dd.so.1` (the ICD library the icd.json `library_path`
+//! Also sets the shared-object soname to `libvk_hl.so.1` (the ICD library the icd.json `library_path`
 //! names).
 
 use std::collections::{HashMap, HashSet};
@@ -254,7 +254,7 @@ fn main() {
     // build exists solely for the on-Metal validation tests (which link the rlib), so only emit the
     // soname link-arg on Linux — otherwise the cdylib fails to link on the test host.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
-        println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libvk_dd.so.1");
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libvk_hl.so.1");
     }
 
     let text = std::fs::read_to_string(&manifest)
@@ -557,7 +557,7 @@ fn env(k: &str) -> String {
 
 /// Entry points hand-implemented in `src/` (so the generator skips them to avoid duplicate symbols).
 /// The **bring-up** set: the ICD proc-addr resolvers, instance + physical-device enumeration and
-/// property queries (reporting the "dd Metal (Vulkan)" device), device + queue + command-pool
+/// property queries (reporting the "hl Metal (Vulkan)" device), device + queue + command-pool
 /// creation. Everything else in the vk.xml surface is a generated stub, ported incrementally.
 /// Ported from Vulkan-Loader (ICD interface), MoltenVK (object model / property values), ash (types).
 const IMPLEMENTED: &[&str] = &[

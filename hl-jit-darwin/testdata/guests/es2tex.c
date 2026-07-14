@@ -1,6 +1,6 @@
 // A real GLES2 app (no hl-specific calls) exercising the TEXTURE + INDEXED-DRAW path: it uploads a 4x4
 // RGBA texture, binds it to a sampler2D, and draws a textured quad via glDrawElements (a 4-vertex VBO +
-// a 6-entry index buffer). Linked -lEGL -lGLESv2, it runs UNMODIFIED on the dd GL shim, which forwards
+// a 6-entry index buffer). Linked -lEGL -lGLESv2, it runs UNMODIFIED on the hl GL shim, which forwards
 // glTexImage2D/glDrawElements as hl-gpu IR (CreateTexture+CopyBufferToTexture+SetIndexBuffer+DrawIndexed)
 // to the host Metal executor. Prototypes are the stock GLES2/EGL ABI, declared locally (no vendor headers).
 #include <stdint.h>

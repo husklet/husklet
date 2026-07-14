@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-/* Linux exposes /proc/tty and readable metadata such as /proc/tty/drivers; dd returned ENOENT. */
+/* Linux exposes /proc/tty and readable metadata such as /proc/tty/drivers; hl returned ENOENT. */
 
 int main(void) {
   struct stat st;

@@ -38,7 +38,7 @@ unsafe fn cstr(p: *const c_char) -> Option<String> {
 }
 
 /// Map a PTX front-end failure ([`hl_gpu::ptx::compile`] → [`hl_gpu::GpuError::Ptx`]) to the accurate
-/// `CUresult`. A kernel that uses an instruction / space / type *outside dd's modeled subset* is
+/// `CUresult`. A kernel that uses an instruction / space / type *outside hl's modeled subset* is
 /// `CUDA_ERROR_NOT_SUPPORTED` (the executor genuinely cannot run it); a genuinely malformed / truncated
 /// PTX image is `CUDA_ERROR_INVALID_PTX` (a JIT compilation failure), matching a real driver. The
 /// front-end phrases every "outside the subset" rejection with the word "unsupported", so that is the
@@ -1470,7 +1470,7 @@ pub extern "C" fn cuModuleLoadDataEx(
 
 #[no_mangle]
 pub extern "C" fn cuModuleLoadFatBinary(module: *mut *mut c_void, image: *const c_void) -> i32 {
-    // dd's Rust module model parses PTX text; a real fatbin container is not unpacked here (the C
+    // hl's Rust module model parses PTX text; a real fatbin container is not unpacked here (the C
     // oracle's fatbin.h extraction has no Rust port yet), so treat the image as PTX text.
     cuModuleLoadData(module, image)
 }
@@ -1495,7 +1495,7 @@ pub extern "C" fn cuModuleGetGlobal_v2(
     if m.is_null() || name.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    // dd parses only kernel entries out of PTX, not `.global` variables → symbol absent.
+    // hl parses only kernel entries out of PTX, not `.global` variables → symbol absent.
     CUDA_ERROR_NOT_FOUND
 }
 
@@ -1740,7 +1740,7 @@ pub extern "C" fn cuLaunchCooperativeKernel(
     stream: *mut c_void,
     kernelParams: *mut *mut c_void,
 ) -> i32 {
-    // A cooperative launch is an ordinary grid launch in dd's synchronous single-device model.
+    // A cooperative launch is an ordinary grid launch in hl's synchronous single-device model.
     cuLaunchKernel(
         f, gx, gy, gz, bx, by, bz, sharedMemBytes, stream, kernelParams, core::ptr::null_mut(),
     )
@@ -1795,7 +1795,7 @@ pub extern "C" fn cuLaunchHostFunc(stream: *mut c_void, fn_: *mut c_void, userDa
 }
 
 // ==================================================================================================
-// pointer attributes (report what dd's model actually knows)
+// pointer attributes (report what hl's model actually knows)
 // ==================================================================================================
 
 /// Fill one pointer attribute into `data` (mirrors the C oracle's `pointer_attr`).

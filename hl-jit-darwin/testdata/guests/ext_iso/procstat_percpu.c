@@ -1,5 +1,5 @@
 // Replicates the "htop shows every core at identical usage" bug (user-reported). htop/top compute
-// per-core busy% as the DELTA of each cpuN line in /proc/stat between two samples. dd's /proc/stat
+// per-core busy% as the DELTA of each cpuN line in /proc/stat between two samples. hl's /proc/stat
 // used to emit every cpuN line as the aggregate host ticks split EVENLY (aggregate/ncpu), so every
 // core's delta was identical -> all meters move in lockstep at the same %. A correct kernel reports
 // each core's OWN jiffies, so a core running a busy loop shows a large user-delta while idle cores
@@ -8,10 +8,10 @@
 // This test pegs one core with a ~250ms busy loop between two /proc/stat reads and checks whether the
 // per-core DELTA tuples are all identical. Verdict is a normalized 0/1 so it is byte-identical to the
 // native oracle:
-//   multicore   = 1 iff >=2 cpuN lines (host is multi-core; same on dd and the oracle)
+//   multicore   = 1 iff >=2 cpuN lines (host is multi-core; same on hl and the oracle)
 //   deltas_differ = 1 iff the per-core (user,nice,system,idle) deltas are NOT all identical
-// Real Linux + fixed dd: deltas_differ=1 (the busy core diverges from the idle ones).
-// Buggy dd (aggregate/ncpu): deltas_differ=0 (every core advances by the same split share).
+// Real Linux + fixed hl: deltas_differ=1 (the busy core diverges from the idle ones).
+// Buggy hl (aggregate/ncpu): deltas_differ=0 (every core advances by the same split share).
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>

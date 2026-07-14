@@ -221,7 +221,7 @@ async fn flow_container_name_conflict_keeps_single() {
 
 // ---- FLOW 11: create --name -> rename -> inspect/lookup by new name; update returns 200 --------
 // docker: `rename web app` frees `web` and binds `app`; inspect shows `/app`; lookup by `app` works;
-// lookup by the OLD `web` fails. `docker update` returns 200 (a `{Warnings}` envelope). *** dd NOTE:
+// lookup by the OLD `web` fails. `docker update` returns 200 (a `{Warnings}` envelope). *** hl NOTE:
 // update is a documented no-op — it does NOT persist the new resource limit; docker DOES reflect the
 // new Memory in a later inspect. Asserted below as a soft divergence (flagged, not a hard bug). ***
 #[tokio::test]
@@ -294,9 +294,9 @@ async fn flow_container_rename_then_inspect_lookup_and_update_noop() {
     );
 }
 
-// ---- FLOW 12: rename onto an EXISTING name — dd accepts a DUPLICATE (docker rejects with 409) ---
+// ---- FLOW 12: rename onto an EXISTING name — hl accepts a DUPLICATE (docker rejects with 409) ---
 // docker contract: `docker rename web app` when `app` is already taken is a 409 Conflict; the rename
-// is refused and both names stay distinct. *** DIVERGENCE (bug): dd's `containers_rename` never checks
+// is refused and both names stay distinct. *** DIVERGENCE (bug): hl's `containers_rename` never checks
 // for a target-name collision — it silently overwrites, leaving TWO containers named `app`. A later
 // `resolve_cid("app")` then resolves to an arbitrary one. Flagged, not fixed. ***
 #[tokio::test]

@@ -45,7 +45,7 @@ run_dd() { # $1 engine  $2 guestbin
   if [ "$(uname -s)" = "Darwin" ]; then
     timeout "$TIMEOUT" bash -lc "exec env '$1' '$2'"
   else
-    local pidf="$OUT/.ddpid.$$"; : > "$pidf"
+    local pidf="$OUT/.hlpid.$$"; : > "$pidf"
     timeout "$TIMEOUT" mac bash -lc "echo \$\$ > '$pidf'; exec env '$1' '$2'"
     local rc=$?
     if [ "$rc" = 124 ]; then

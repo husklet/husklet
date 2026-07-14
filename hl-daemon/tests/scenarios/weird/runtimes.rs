@@ -1,5 +1,5 @@
 //! Guest language runtimes: managed JIT-in-JIT engines (V8/JVM/LuaJIT/PyPy/YJIT/BEAM/Julia/RyuJIT
-//! emitting + executing their own machine code inside the dd JIT), unusual-language interpreters/
+//! emitting + executing their own machine code inside the hl JIT), unusual-language interpreters/
 //! compilers (Haskell/R/Forth/Tcl/Lua/Perl/awk), and Python C-extensions (zlib/libcrypto/ctypes FFI).
 
 use crate::scenario::{scen, Scenario, Target};
@@ -7,8 +7,8 @@ use crate::scenario::{scen, Scenario, Target};
 pub(super) fn items() -> Vec<Scenario> {
     vec![
         // ============================ JIT-in-JIT: managed runtimes ============================
-        // Each forces the GUEST's own JIT to emit + execute machine code inside the dd JIT.
-        // seed (proven on Real): node = a V8 JIT running inside the dd JIT. Deterministic.
+        // Each forces the GUEST's own JIT to emit + execute machine code inside the hl JIT.
+        // seed (proven on Real): node = a V8 JIT running inside the hl JIT. Deterministic.
         scen("weird/v8-jit-in-jit", "node:alpine")
             .exec("node -e 'let s=0;for(let i=1;i<=1000000;i++)s+=i;console.log(\"sum\",s)'")
             .has("sum 500000500000"),   // sum(1..1e6); corrected from the seed's typo

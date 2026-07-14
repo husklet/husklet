@@ -1,7 +1,7 @@
 // POSIX message-queue errno/edge fidelity (mq_open/mq_timedsend/mq_timedreceive/mq_getattr) — diffed vs
-// the native oracle. Verdict-only (errno NAMES + booleans, never raw descriptors), so dd must be
+// the native oracle. Verdict-only (errno NAMES + booleans, never raw descriptors), so hl must be
 // byte-identical to native Linux (aarch64) / qemu (x86_64). macOS has no POSIX mqueue kernel object, so
-// dd emulates a named in-process priority queue; this pins that emulation to the real kernel's errnos.
+// hl emulates a named in-process priority queue; this pins that emulation to the real kernel's errnos.
 // Exercises: ENOENT (open missing w/o O_CREAT), EEXIST (O_CREAT|O_EXCL on existing), ENAMETOOLONG, attr
 // maxmsg/msgsize, EMSGSIZE (oversized send / undersized receive), O_NONBLOCK EAGAIN (recv-empty / send-full),
 // curmsgs, strict highest-priority-first delivery, and the mq_timed{send,receive} blocking matrix

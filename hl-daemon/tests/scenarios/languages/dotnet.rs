@@ -1,5 +1,5 @@
 //! .NET — CoreCLR RyuJIT is PRIME JIT-in-JIT stress: Roslyn compiles C# to IL, the runtime JITs IL to
-//! native that the dd engine must itself translate, with RWX code heaps. SDK 8/9 do a full
+//! native that the hl engine must itself translate, with RWX code heaps. SDK 8/9 do a full
 //! restore+build+JIT (heaviest case here); runtime image for the host banner. Markers per MANIFEST §2.
 //! The SDK compile cases are heavy → `.long()`.
 

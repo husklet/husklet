@@ -1,8 +1,8 @@
 // A socket the guest bind()+listen()s MUST appear in /proc/net/tcp with state 0A (TCP_LISTEN) -- this is
 // what `ss -l` / `netstat -ln` inside the container parse to list listening services. On real Linux (and
-// real docker) the kernel adds the row; a dd that synthesizes only the header made every listener invisible.
+// real docker) the kernel adds the row; a hl that synthesizes only the header made every listener invisible.
 // Verdict is host-independent: we look ONLY for OUR OWN fixed port, so it holds on both native Linux and a
-// correct dd. Fixed uncommon port 47251 (0xB893) + SO_REUSEADDR to avoid a stray collision.
+// correct hl. Fixed uncommon port 47251 (0xB893) + SO_REUSEADDR to avoid a stray collision.
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>

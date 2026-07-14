@@ -1,7 +1,7 @@
 // Kernel-AIO (libaio) round-trip via RAW syscalls: io_setup -> io_submit(PREAD) -> io_getevents.
 // Writes a known payload to a temp file, then reads it back through the AIO path at an offset and
 // verifies the completion (res == nbytes) and the bytes. Deterministic stdout -> oracle-checked: the
-// native aarch64 kernel supports AIO, and the dd JIT must produce the identical result.
+// native aarch64 kernel supports AIO, and the hl JIT must produce the identical result.
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

@@ -7,7 +7,7 @@
 //! `commit_string`/`preedit_string` back to the app is for that input-method client to relay it. That
 //! model fits a Linux desktop where ibus/fcitx run as their own Wayland clients.
 //!
-//! dd has no such client: the HOST (macOS, via its own input-method framework / marked-text) is the
+//! hl has no such client: the HOST (macOS, via its own input-method framework / marked-text) is the
 //! IME, and `hl-compositor` is the bridge. So the compositor itself must be the input-method endpoint —
 //! it owns the text-input instances directly and synthesizes `commit_string`/`preedit_string` from host
 //! input. This module therefore implements the `zwp_text_input_manager_v3` + `zwp_text_input_v3`

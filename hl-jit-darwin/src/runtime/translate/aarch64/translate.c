@@ -1,4 +1,4 @@
-// dd/runtime/frontend/aarch64 -- the aarch64-Linux -> arm64-host transliterator. Same-ISA: copy
+// hl/runtime/frontend/aarch64 -- the aarch64-Linux -> arm64-host transliterator. Same-ISA: copy
 // most instructions verbatim; MANGLE only stolen-register (x18/x28/x30) users. Optimizations: LSE
 // atomic upgrade, §B shadow-return prediction (depth-gated), tier-2 purity gate. See OPTIMIZATIONS.md.
 
@@ -1229,7 +1229,7 @@ static void smc_icflush(uint64_t va) {
     // The coherent choice under live peers is to keep the SINGLE existing translation for EVERY thread and NOT
     // re-translate: g_smc_seen (latched above) already disables the per-site monomorphic IC so a code-
     // modifying guest never trusts a baked body, and the guest re-synchronizes through the shared indirect
-    // dispatch. This matches dd's long-standing NOSMC fallback and is exactly what lets Erlang/OTP + Elixir
+    // dispatch. This matches hl's long-standing NOSMC fallback and is exactly what lets Erlang/OTP + Elixir
     // (BeamAsm) run to completion, including external-program ports (os:cmd / open_port {spawn,...}) whose
     // forker relies on the emulator staying alive. Fully coherent re-translation of a multithreaded
     // in-place patch would need precise per-block recompile+redirect with all peers rendezvoused at a

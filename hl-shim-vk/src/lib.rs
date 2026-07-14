@@ -3,7 +3,7 @@
 //! Builds the shared object a standard Vulkan **loader** (libvulkan) discovers via an `icd.json`
 //! manifest and accepts as a driver. An unmodified Vulkan app opens libvulkan; the loader loads this
 //! ICD, negotiates the loader↔ICD interface, and resolves every `vk*` entry point through our
-//! `vk_icdGetInstanceProcAddr`. We report the "dd Metal (Vulkan)" physical device; the compute/render
+//! `vk_icdGetInstanceProcAddr`. We report the "hl Metal (Vulkan)" physical device; the compute/render
 //! path lowers into a `hl-gpu` IR stream and — through [`hl_shim::transport`] — reaches the
 //! host executor as the SAME IR the host decodes with the SAME Rust code (no hand-rolled second
 //! encoder). This mirrors hl-shim-gl / hl-shim-cuda increment-1 exactly.

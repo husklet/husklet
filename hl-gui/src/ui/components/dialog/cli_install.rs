@@ -1,7 +1,7 @@
 #![allow(unused_imports, dead_code)]
 use gtk::prelude::*;
 
-/// Install the `dd` CLI and show a small window with a shell picker + matching PATH instructions.
+/// Install the `hl` CLI and show a small window with a shell picker + matching PATH instructions.
 pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
     let result = crate::install::install_cli();
     let ok = result.is_ok();

@@ -55,7 +55,7 @@ impl SealedFile {
     pub fn with_data(name: &CStr, data: &[u8]) -> Result<Self, std::io::Error> {
         use std::os::unix::io::FromRawFd;
 
-        // dd patch (offline-vendored smithay 0.7.0) — macOS SealedFile backing.
+        // hl patch (offline-vendored smithay 0.7.0) — macOS SealedFile backing.
         //
         // Upstream backs this non-Linux path with a POSIX `shm_open` object (FreeBSD takes the memfd
         // branch above, so macOS is the only consumer). That fd is NOT usable the way the Wayland

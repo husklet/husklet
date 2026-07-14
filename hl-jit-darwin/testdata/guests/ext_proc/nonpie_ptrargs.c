@@ -4,7 +4,7 @@
 // on dispatch.c's non-PIE g2h rebase switch (g_nonpie_lo != 0). EVERY pointer this program hands to a
 // syscall is the address of a STATIC (.bss/.data) object — i.e. a LOW link vaddr on aarch64 (the guest
 // computes it via ADRP; its memory *accesses* are folded high, but the raw pointer *value* stays low and
-// is passed to the kernel as-is). Without the per-syscall rebase in dispatch.c, dd's native handler
+// is passed to the kernel as-is). Without the per-syscall rebase in dispatch.c, hl's native handler
 // dereferences that unmapped low address and returns EFAULT (or SIGSEGV's the engine) on a perfectly
 // valid pointer. On x86 the same pointer was already biased high by the loader/translator, so it passes
 // either way — this program guards BOTH arches (one build per arch; the JIT normalizes x86 syscall

@@ -1,7 +1,7 @@
 //! Cross-resource multi-step flows that span more than one domain (container + network + volume):
 //! the interactions no single-resource test can see (create-joins-net/rm-leaves, anon-volume GC on
 //! rm, and a named-volume + network teardown). Same rules as the per-domain flows: engine-free
-//! handlers only; state asserted after every step; docker's contract stated inline, dd's asserted.
+//! handlers only; state asserted after every step; docker's contract stated inline, hl's asserted.
 use super::*;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;

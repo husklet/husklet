@@ -2,7 +2,7 @@
 //! layer-reclaim used by `docker rm`/prune.
 use super::super::*;
 
-/// Reclaim a container's private writable upper layer (its copy-on-write files + whiteouts). dd gives
+/// Reclaim a container's private writable upper layer (its copy-on-write files + whiteouts). hl gives
 /// each container an UPPER over the read-only image rootfs, so `docker rm`/prune drops it just as docker
 /// drops the container's writable layer — the shared image (the lower) is never touched. Removes the whole
 /// `<hl_home>/containers/<id>` tree (the `upper` dir's parent). A no-op for darwin/flat-rootfs containers
@@ -78,7 +78,7 @@ pub(crate) fn overlay_changes(upper: &str, rootfs: &str) -> HashMap<String, u8> 
     out
 }
 
-/// `GET /containers/{id}/changes` — `docker diff`. dd gives each container a copy-on-write UPPER over the
+/// `GET /containers/{id}/changes` — `docker diff`. hl gives each container a copy-on-write UPPER over the
 /// read-only image rootfs, so the changes are exactly that upper layer diffed against the image (see
 /// `overlay_changes`). Reports the Docker shape: an array of `{Path, Kind}` (0=modified, 1=added,
 /// 2=deleted), with each changed entry's ancestor directories also reported as modified, as docker does.

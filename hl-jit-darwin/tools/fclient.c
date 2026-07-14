@@ -1,4 +1,4 @@
-// fclient.c -- tiny ddjitd (fork-server) client, protocol v2. Models a resident orchestrator
+// fclient.c -- tiny hljitd (fork-server) client, protocol v2. Models a resident orchestrator
 // (hl-dockerd) dispatching a launch:
 //   ./fclient SOCK PROG [args...]            -- one launch, exit with the guest's code
 //   ./fclient --bench N SOCK PROG [args...]  -- N internal round-trips, print median/min/p75 ms

@@ -525,7 +525,7 @@ pub extern "C" fn eglWaitNative(_engine: i32) -> u32 {
 
 /// Our own `libwayland-egl` window handle (mirrors gl_shim.c `struct hl_wl_egl_window`). The first
 /// field is Mesa-ABI-compatible (`intptr_t version`) so a stray Mesa struct is still parseable.
-const HL_WL_EGL_MAGIC: isize = 0x0064_6477_6c65_676c; // "ddwlegl"
+const HL_WL_EGL_MAGIC: isize = 0x0064_6477_6c65_676c; // "hlwlegl"
 #[repr(C)]
 pub struct HlWlEglWindow {
     version: isize,

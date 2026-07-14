@@ -9,7 +9,7 @@
 //! use hl_jit::{Runtime, Container, Image};
 //!
 //! let rt = Runtime::new()?;
-//! let c = Container::builder(Image::from_rootfs("/var/lib/dd/alpine"))
+//! let c = Container::builder(Image::from_rootfs("/var/lib/hl/alpine"))
 //!     .cmd(["/bin/sh", "-c", "echo hi"])
 //!     .env("TERM", "xterm")
 //!     .cpus(2)

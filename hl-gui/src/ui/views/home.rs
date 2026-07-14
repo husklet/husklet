@@ -84,7 +84,7 @@ pub(crate) fn render_home(home: &gtk::Box, m: &AppModel, sender: &ComponentSende
 
     card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
-    // 2. Terminal path: install the CLI, point Docker at dd, then the (working) command.
+    // 2. Terminal path: install the CLI, point Docker at hl, then the (working) command.
     card.append(&action_row(
         "Use the terminal",
         "Install the dd CLI, point Docker at dd (selector, top-right), then:",
@@ -109,7 +109,7 @@ pub(crate) fn render_home(home: &gtk::Box, m: &AppModel, sender: &ComponentSende
 // CLI via `.ok()` (never panic), and a change emits `Msg::SetContext` (the same handler the
 // top-right selector uses). When the docker CLI isn't installed, `docker_context` is None and we
 // render an informational card with an "Install CLI" action instead of a control — no subprocess,
-// no panic, dd keeps running.
+// no panic, hl keeps running.
 fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box {
     let snap = &m.snap;
     let wrap = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -173,7 +173,7 @@ fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box
             card.append(&hint);
         }
         // docker CLI absent (or not found on the app's PATH) -> just a small warning. Note: installing
-        // the dd CLI does NOT help here — it doesn't provide `docker`. Context switching needs docker.
+        // the hl CLI does NOT help here — it doesn't provide `docker`. Context switching needs docker.
         None => {
             let note = gtk::Label::new(Some(
                 "Docker CLI not found — context switching is unavailable. Install Docker \

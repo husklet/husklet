@@ -13,7 +13,7 @@ pub(crate) struct Endpoint {
     pub(crate) aliases: Vec<String>,
 }
 
-/// A user-defined network. dd's isolation is a per-container loopback netns (see `run_in_jit`);
+/// A user-defined network. hl's isolation is a per-container loopback netns (see `run_in_jit`);
 /// a network here is metadata plus the set of attached containers and their IPAM identities.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Net {

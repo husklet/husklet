@@ -71,7 +71,7 @@ fn portable() -> Group {
                 "pty mget=1 mset=1 mdrain=1 mflush=1 mswin=1 mgwin=1 sgwin=1 sraw=1 rawrt=1\n",
             ),
             // apt-pty: the SAME master termios/winsize ops as `pty`, but the slave is NEVER opened
-            // (exactly what apt/dpkg StartPtyMagic does). macOS isatty(master)==1, so dd's old isatty-gated
+            // (exactly what apt/dpkg StartPtyMagic does). macOS isatty(master)==1, so hl's old isatty-gated
             // master retarget was skipped -> ENOTTY -> apt's "Setting TIOCSWINSZ/TCSANOW for master fd N
             // failed". The `pty` case masked this by opening the slave first. Must be all-1s == native Linux.
             // Linux engines only: on the darwin container the guest is a NATIVE Mach-O and a macOS pty master
@@ -81,7 +81,7 @@ fn portable() -> Group {
                 .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64])
                 .out("aptpty ptsname=1 mget=1 mset=1 mswin=1 mgwin=1 mdrain=1 mflush=1 sgwin=1\n"),
             // apt-pty-devpts (hardening): the SAME master termios/winsize ops with NO slave open, but the
-            // master is recognized via dd's AUTHORITATIVE devpts registry (not just the host ptsname heuristic),
+            // master is recognized via hl's AUTHORITATIVE devpts registry (not just the host ptsname heuristic),
             // and the slave is then opened via the devpts route (TIOCGPTN -> /dev/pts/N) to prove the
             // master's cached size + termios propagate. All 1s == native Linux; pre-#411 (isatty-gated) the
             // master ops ENOTTY and every m* field is 0. Linux-guest bug -> Linux engines only (see apt-pty).
@@ -90,10 +90,10 @@ fn portable() -> Group {
                 .out("aptptsdev mget=1 mset=1 mswin=1 mgwin=1 ptn=1 sopen=1 sgwin=1 sterm=1\n"),
             // pty-fork-devpts: apt's SetupSlavePtyMagic runs in the forked CHILD -- it closes the
             // inherited pty MASTER, then opens the slave BY NAME (/dev/pts/N) while the PARENT keeps the master
-            // open. dd's per-process (COW) devpts table freed index N on the child's master close (pts_on_close),
+            // open. hl's per-process (COW) devpts table freed index N on the child's master close (pts_on_close),
             // so the child's later open("/dev/pts/N") ENOENTed -> apt's "E: Can not write log (Is /dev/pts
             // mounted?)". Real Linux keeps the pty alive as long as ANY process holds the master, so the child
-            // opens the slave and its write reaches the parent's master: childopen=1 roundtrip=1. Pre-#420 dd
+            // opens the slave and its write reaches the parent's master: childopen=1 roundtrip=1. Pre-#420 hl
             // returned childopen=0 roundtrip=0 (oracle mismatch). Linux/devpts fork semantics -> both Linux
             // engines, oracle-diffed vs native (aarch64 direct / x86_64 qemu-user).
             port("pty-fork-devpts", "ext_posix/pts_fork.c")

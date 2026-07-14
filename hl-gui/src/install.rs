@@ -1,8 +1,8 @@
-//! Installing the bundled `dd` CLI as a no-root `~/.local/bin` symlink.
+//! Installing the bundled `hl` CLI as a no-root `~/.local/bin` symlink.
 
 use std::path::PathBuf;
 
-/// Symlink the bundled `dd` CLI into `~/.local/bin` (no root). Returns `(link path, already on
+/// Symlink the bundled `hl` CLI into `~/.local/bin` (no root). Returns `(link path, already on
 /// PATH)`. The onboarding window turns this into per-shell instructions.
 pub(crate) fn install_cli() -> Result<(PathBuf, bool), String> {
     let cli = resolve_cli().ok_or("dd CLI binary not found in the app bundle")?;
@@ -21,7 +21,7 @@ pub(crate) fn install_cli() -> Result<(PathBuf, bool), String> {
     Ok((link, on_path))
 }
 
-/// Locate the bundled `dd` CLI: `$HL_CLI_BIN`, the app bundle, or a sibling of this binary (dev).
+/// Locate the bundled `hl` CLI: `$HL_CLI_BIN`, the app bundle, or a sibling of this binary (dev).
 fn resolve_cli() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("HL_CLI_BIN") {
         return Some(PathBuf::from(p));

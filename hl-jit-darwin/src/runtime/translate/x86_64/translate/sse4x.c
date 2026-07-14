@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- 0F38/0F3A GPR + lane "glue" lowering (AES-GCM endgame, perf wave 2).
+// hl/runtime/frontend/x86_64 -- 0F38/0F3A GPR + lane "glue" lowering (AES-GCM endgame, perf wave 2).
 //
 // WHY: the shipped crypto/shuffle glue (translate/crypto.c) lowered AES-NI/PCLMUL/SHA-NI + the SSSE3/SSE4
 // vector shuffles inline, but real openssl's stitched aesni_ctr32_encrypt_blocks loop STILL exited to the

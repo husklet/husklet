@@ -2,7 +2,7 @@
 //! pinch-zoom, long-press). Composed from the vendored Smithay `pointer_gestures` module.
 //!
 //! ## Host policy (no dedicated gesture device)
-//! dd drives ONE pointer seat from a single Cocoa window and does not (yet) forward the macOS trackpad
+//! hl drives ONE pointer seat from a single Cocoa window and does not (yet) forward the macOS trackpad
 //! `NSEventTypeMagnify` / swipe phases into the seat, so in production no gesture stream is synthesized.
 //! Advertising the manager is still the correct, spec-faithful behaviour: a client binds it, creates
 //! swipe/pinch/hold gesture objects bound to its `wl_pointer`, and simply receives no events — exactly

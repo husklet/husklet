@@ -1,5 +1,5 @@
 //! Direct hl-gpu compositor replay probes. Owner: gpu-render-ir agent.
-//! These cases require a GUI/GPU-enabled dd launch with `/dev/dri/renderD128`
+//! These cases require a GUI/GPU-enabled hl launch with `/dev/dri/renderD128`
 //! and `HL_GPU_EXEC` wired to the host executor socket.
 
 use crate::support::{group, src, Engine, Group};

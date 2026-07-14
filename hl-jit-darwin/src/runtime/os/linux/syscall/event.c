@@ -326,7 +326,7 @@ static void kqueue_rebuild_after_fork(void) {
 }
 
 // pselect6/ppoll/epoll_pwait install a temporary signal mask for the duration of the wait (Linux swaps the
-// blocked mask atomically so a caller can unblock a signal exactly while it waits). dd's wait loops gate on
+// blocked mask atomically so a caller can unblock a signal exactly while it waits). hl's wait loops gate on
 // c->sigmask via svc_poll_retry, so installing the guest mask into c->sigmask for the wait makes an
 // unblocked signal interrupt the host poll/select/kevent -- previously the mask was ignored and a
 // signal-driven wait slept the full timeout. `smptr` is the guest sigset_t address (bit signo-1), or 0 for
@@ -790,7 +790,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             if (a0 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK);
             // macOS kqueue() defaults FD_CLOEXEC SET; Linux inotify_init1(0) leaves it CLEAR. Set it exactly
             // per IN_CLOEXEC (clearing the kqueue default otherwise) so an inotify fd created without the
-            // flag survives exec instead of being swept by dd's close-on-exec pass.
+            // flag survives exec instead of being swept by hl's close-on-exec pass.
             fcntl(r, F_SETFD, (a0 & 0x80000) ? FD_CLOEXEC : 0);
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;
@@ -846,7 +846,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
         // The Linux/macOS fd_set byte-layout is identical (bit N at byte N/8), so pass the sets through.
         int have_to = a4 != 0;
         // EFAULT on any inaccessible fd_set / timeout pointer -- incl. a PROT_NONE guard page (LTP's
-        // tst_get_bad_addr), which host_range_mapped alone misses since dd force-maps guest anon host-RW.
+        // tst_get_bad_addr), which host_range_mapped alone misses since hl force-maps guest anon host-RW.
         int selnfds = (int)a0;
         size_t nb = selnfds > 0 ? ((size_t)selnfds + 7) / 8 : 0;
         if (nb > sizeof(fd_set)) nb = sizeof(fd_set);
@@ -856,7 +856,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             break;
         }
         // Linux rejects an out-of-range timeout nanoseconds field (tv_nsec < 0 or >= 1e9) with EINVAL
-        // before waiting; dd must not treat it as a normal timeout and hide the caller bug.
+        // before waiting; hl must not treat it as a normal timeout and hide the caller bug.
         if (have_to) {
             long tns = ((const struct timespec *)a4)->tv_nsec;
             if (tns < 0 || tns >= 1000000000L) {
@@ -887,7 +887,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
                 sm_set = ssp;
             }
         }
-        // a spurious EINTR (a signal dd hooks with host_sigh but the guest has BLOCKED or defaults to
+        // a spurious EINTR (a signal hl hooks with host_sigh but the guest has BLOCKED or defaults to
         // ignore -- e.g. an LTP heartbeat, or SIGCHLD from a reaped child) interrupts the host pselect but
         // must NOT restart the FULL original timeout: that overshoots the deadline and, under a *repeating*
         // spurious wakeup, never reaches it -> select02 hangs (and every timing sample overshoots -> the
@@ -1146,7 +1146,7 @@ static int svc_event(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint6
             if (a1 & 0x800) fcntl(r, F_SETFL, O_NONBLOCK); // TFD_NONBLOCK
             // macOS kqueue() defaults FD_CLOEXEC SET; Linux timerfd_create(...,0) leaves it CLEAR. Set it
             // exactly per TFD_CLOEXEC (clearing the kqueue default otherwise) so a timerfd created without
-            // the flag survives exec instead of being swept by dd's close-on-exec pass.
+            // the flag survives exec instead of being swept by hl's close-on-exec pass.
             fcntl(r, F_SETFD, (a1 & 0x80000) ? FD_CLOEXEC : 0);
         }
         G_RET(c) = r < 0 ? (uint64_t)(-errno) : (uint64_t)r;

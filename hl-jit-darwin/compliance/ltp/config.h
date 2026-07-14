@@ -1,4 +1,4 @@
-/* Hand-built config.h for the dd LTP compliance lane (no autotools).
+/* Hand-built config.h for the hl LTP compliance lane (no autotools).
  * Targets a modern Linux glibc (>=2.36) + recent kernel UAPI headers, as on the
  * cross toolchain host. Each HAVE_ below mirrors what LTP's ./configure would
  * detect on such a system; they suppress LTP's lapi/ fallback re-declarations

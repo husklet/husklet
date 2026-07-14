@@ -17,9 +17,9 @@
 //
 // Mappings are 64KB-granular and released with full-region munmap so the result is identical under
 // a 16KB-host-page kernel (no sub-host-page munmap edge in play — that is #286's surface, not this
-// test's). A PROT_NONE case is deliberately ABSENT: dd maps guest anon memory R+W and no-ops guest
+// test's). A PROT_NONE case is deliberately ABSENT: hl maps guest anon memory R+W and no-ops guest
 // mprotect by design (see mem.c case 222/226 and the xfail'd edge/mprotect case), so guest-PROT_NONE
-// pages are readable under dd — a divergence owned by that lane, not by the pointer-validation probe
+// pages are readable under hl — a divergence owned by that lane, not by the pointer-validation probe
 // (which agrees with its mach_vm_region predecessor there: both report "mapped").
 #define _GNU_SOURCE
 #include <errno.h>

@@ -14,7 +14,7 @@
 int main(void) {
     // ---- prctl ----
     // PR_SET_NAME / PR_GET_NAME round-trip (prctl03-style: a real, supported option).
-    prctl(PR_SET_NAME, "ddprobe");
+    prctl(PR_SET_NAME, "hlprobe");
     char nm[16] = {0};
     prctl(PR_GET_NAME, nm);
     printf("prctl name: %s\n", nm);

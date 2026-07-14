@@ -13,7 +13,7 @@ pub fn groups() -> Vec<Group> {
 
 // a busybox/coreutils shell in a real image rootfs. The container run user (root) must hold the
 // IMAGE-DERIVED supplementary GID set runc computes from /etc/passwd + /etc/group (additionalGids) --
-// getgroups(2) (via `id -G`) and /proc/self/status `Groups:` must AGREE and equal that set. dd previously
+// getgroups(2) (via `id -G`) and /proc/self/status `Groups:` must AGREE and equal that set. hl previously
 // left both EMPTY (only the primary gid / nothing), so any group-membership check inside a container failed.
 // The verdict normalizes both to a sorted-unique multiset so it is host-independent (the set is image-
 // derived, so a fixed golden per image is valid). Exercises the overlay relative-open path a bare guest
@@ -73,12 +73,12 @@ fn proc_content() -> Group {
             // /proc/self/status, capget(2) and PR_CAPBSET_READ must all agree (nginx/postgres/capsh gate on it).
             src("pf-selfcaps", "ext_procfs/selfcaps.c").out("selfcaps ok=1\n"),
             // top/htop/ps read a process's RES from /proc/self/status VmRSS, /proc/self/statm resident, and
-            // /proc/self/stat field 24. dd derived the SELF pid's rss from the guest's tracked anon charge,
+            // /proc/self/stat field 24. hl derived the SELF pid's rss from the guest's tracked anon charge,
             // which is 0 for a process resident only in its static image -> RES=0 (a PEER pid already showed a
             // live rss via libproc; only self read 0). Asserts all three are non-zero (fails on the pre-fix engine).
             src("pf-selfrss", "ext_procfs/selfrss.c").out("selfrss ok=1\n"),
             src("pf-procstate", "ext_procfs/procstate.c").out("procstate ok=1\n"), // cross-proc R/S state
-            // A child parked in futex(FUTEX_WAIT) is interruptible-sleep 'S' on Linux, NOT 'R'. dd stamped
+            // A child parked in futex(FUTEX_WAIT) is interruptible-sleep 'S' on Linux, NOT 'R'. hl stamped
             // 'R' (macOS SRUN can't express "asleep in a futex") -> blocked threads hidden from monitors and
             // deadlock diagnostics. Parent reads the child's /proc/<pid>/stat field 3 AND status State:.
             src("pf-futexstate", "ext_procfs/futexstate.c").out("futexstate ok=1\n"),
@@ -119,7 +119,7 @@ fn dev_sys() -> Group {
             // listing + per-fd readlink (symlink-target view) are served; opening a peer fd stays deferred.
             src("pf-peer-fd", "ext_procfs/peerfd.c").out("peerfd ok=1 dir=1 lstat=1 readlink=1\n"),
             // A NONBLOCKING read on a controlling terminal with no input is EAGAIN on Linux, never EOF(0).
-            // dd backs /dev/tty (host device) and /dev/console (/dev/null) with something that returns 0 when
+            // hl backs /dev/tty (host device) and /dev/console (/dev/null) with something that returns 0 when
             // empty -> readline/TUI code read the 0 as terminal closure. hl-behavior golden: /dev/console is
             // the deterministic path (always intercepted); /dev/tty is best-effort (harness lacks a ctty).
             src("pf-ttynonblock", "ext_procfs/ttynonblock.c").out("ttynonblock ok=1 console=1 tty=-1\n"),

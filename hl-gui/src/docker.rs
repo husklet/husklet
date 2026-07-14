@@ -39,7 +39,7 @@ pub(crate) async fn docker_context() -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// All selectable docker contexts (`docker context ls`), always including `dd` so the user can
+/// All selectable docker contexts (`docker context ls`), always including `hl` so the user can
 /// pick our daemon even before the context exists.
 pub(crate) async fn docker_contexts() -> Vec<String> {
     let out = tokio::process::Command::new(bin())
@@ -60,7 +60,7 @@ pub(crate) async fn docker_contexts() -> Vec<String> {
     list
 }
 
-/// Switch the `docker` CLI to context `name` (creating the `dd` context first if needed).
+/// Switch the `docker` CLI to context `name` (creating the `hl` context first if needed).
 pub(crate) async fn set_context(name: &str, socket: &std::path::Path) {
     use tokio::process::Command;
     if name == "dd" {

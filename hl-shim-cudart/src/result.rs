@@ -2,7 +2,7 @@
 //!
 //! The runtime returns a DIFFERENT enum from the driver: an app that links libcudart checks
 //! `cudaError_t`, not the driver's `CUresult`. Values match NVIDIA's published `driver_types.h` (the
-//! stable ABI a CUDA app compiles against); re-declared clean-room here, mirroring dd's
+//! stable ABI a CUDA app compiles against); re-declared clean-room here, mirroring hl's
 //! `hl-gpu/cuda/cudart_min.h`. The map mirrors `hl-gpu/cuda/cudart_shim.c`'s `map_err` exactly so the
 //! runtime library returns the SAME `cudaError_t` for the SAME driver `CUresult`.
 

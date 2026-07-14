@@ -3,7 +3,7 @@
 //! vendored Smithay `idle_inhibit` module.
 //!
 //! ## Host policy (record intent)
-//! dd has no compositor-owned screensaver/DPMS timer to suppress — idle/blank is macOS's job. The
+//! hl has no compositor-owned screensaver/DPMS timer to suppress — idle/blank is macOS's job. The
 //! correct, honest behaviour is therefore to RECORD the inhibition intent (which surfaces currently
 //! hold an inhibitor) so the host can, if it chooses, assert a `NSProcessInfo` power assertion or
 //! simply report the state. [`HlState::idle_inhibited`] exposes whether any inhibitor is live; the set
@@ -16,7 +16,7 @@ use crate::HlState;
 
 impl IdleInhibitHandler for HlState {
     /// A client created a `zwp_idle_inhibitor_v1` for `surface`: record that the session should not idle
-    /// while this surface is up. (dd defers the actual power assertion to the host; the intent is the
+    /// while this surface is up. (hl defers the actual power assertion to the host; the intent is the
     /// compositor-side contract.)
     fn inhibit(&mut self, surface: WlSurface) {
         self.idle_inhibitors.insert(self.surface_id(&surface));

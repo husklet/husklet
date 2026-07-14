@@ -3,7 +3,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 int main(void) {
-    const char *p = "/tmp/ddtest_files";
+    const char *p = "/tmp/hltest_files";
     int fd = open(p, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0) { perror("open"); return 1; }
     write(fd, "payload", 7); close(fd);

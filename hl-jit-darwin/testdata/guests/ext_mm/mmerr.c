@@ -3,7 +3,7 @@
 // raw address or page size) so it is byte-identical on a 4 KB guest (x86) and a 16 KB guest (arm), and is
 // diffed against the native oracle (qemu-x86_64 / native aarch64) on BOTH Linux engines.
 //
-// Deliberately EXCLUDES the three behaviours dd cannot reproduce under its force-mapped, 4 KB-guest-on-
+// Deliberately EXCLUDES the three behaviours hl cannot reproduce under its force-mapped, 4 KB-guest-on-
 // 16 KB-host model and that are documented architectural deviations, not semantics bugs:
 //   * mprotect(PROT_NONE)/mprotect over an unmapped range -> ENOMEM  (mprotect is a JIT no-op; see mem.c
 //     case 226 + edge_mprotect.c which is .xfail(lin)),

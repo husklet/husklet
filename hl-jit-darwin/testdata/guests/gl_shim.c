@@ -1,4 +1,4 @@
-// dd guest GLES2 + EGL shim (GPU rung 3 ICD, first slice). A real GLES2 app links -lEGL -lGLESv2 and
+// hl guest GLES2 + EGL shim (GPU rung 3 ICD, first slice). A real GLES2 app links -lEGL -lGLESv2 and
 // runs UNMODIFIED against these symbols (mount-injected as libEGL.so.1 + libGLESv2.so.2, like libwayland
 // — NOT a specialized image). Each GL/EGL call drives a small state machine; on eglSwapBuffers the shim
 // translates the accumulated GL state into a hl-gpu IR command stream, ships it to the host Metal executor
@@ -212,7 +212,7 @@ typedef intptr_t GLsizeiptr;
 #define GL_SHADING_LANGUAGE_VERSION 0x8B8C
 #define GL_EXTENSIONS 0x1F03
 
-// ---- dd ioctl + dmabuf constants (match hl_gpu.h) ----
+// ---- hl ioctl + dmabuf constants (match hl_gpu.h) ----
 #define HL_IOCTL_GPU_ALLOC 0xC020DD01u
 #define HL_DMABUF_MOD_MAGIC 0x6464u
 #define DRM_FMT_XRGB8888 0x34325258u
@@ -1693,7 +1693,7 @@ static void wl_commit(void) {
 // with the reader below — no dependence on Mesa's exact field order. The first field mirrors Mesa's ABI
 // (`intptr_t version`) so a stray Mesa struct is still parseable via the offset fallback in
 // eglCreateWindowSurface.
-#define HL_WL_EGL_MAGIC ((intptr_t)0x6464776C65676CLL) // "ddwlegl" magic
+#define HL_WL_EGL_MAGIC ((intptr_t)0x6464776C65676CLL) // "hlwlegl" magic
 struct hl_wl_egl_window {
     intptr_t version;   // = HL_WL_EGL_MAGIC (Mesa stores WL_EGL_WINDOW_VERSION here)
     int width, height;  // offsets 8/12 — same as Mesa's struct
@@ -1903,7 +1903,7 @@ EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig c, EGLNativeWindowTy
                 if (win->attached_height > hh) hh = win->attached_height;
             }
             if (getenv("HL_SHIM_DEBUG"))
-                fprintf(stderr, "[shim] native_window=%p ddwlegl width=%d height=%d attached=%d,%d attach=%d,%d\n",
+                fprintf(stderr, "[shim] native_window=%p hlwlegl width=%d height=%d attached=%d,%d attach=%d,%d\n",
                         w, win->width, win->height, win->attached_width, win->attached_height, attach_x, attach_y);
         } else {
             // Stock-app convention (es2tri/es2tex): two ints {width, height} at offset 0. Chrome/ANGLE
@@ -2300,8 +2300,8 @@ EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface s) {
                 iu8(10); iu32(30 + (uint32_t)d);
                 iu32(20 + (uint32_t)d); istr("vmain");
                 iu8(1); iu32(20 + (uint32_t)d); istr("fmain");
-                struct decl ddecl[16];
-                int dnd = (dpr->vs && g_sh[dpr->vs].src) ? collect_vertex_attrs(g_sh[dpr->vs].src, ddecl, 16) : 0;
+                struct decl hlecl[16];
+                int dnd = (dpr->vs && g_sh[dpr->vs].src) ? collect_vertex_attrs(g_sh[dpr->vs].src, hlecl, 16) : 0;
                 int dvcount = dnd;
                 for (int i = 0; i < MAXATTR; i++) {
                     if (g_draws[d].attrs[i].enabled && i + 1 > dvcount) dvcount = i + 1;
@@ -2328,7 +2328,7 @@ EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface s) {
                                                      g_draws[d].attrs[L].normalized, g_draws[d].attrs[L].integer);
                             off = (uint32_t)g_draws[d].attrs[L].offset;
                         } else {
-                            const char *t = (L < dnd) ? ddecl[L].type : "vec4";
+                            const char *t = (L < dnd) ? hlecl[L].type : "vec4";
                             fmt = decl_format_wire(t);
                             off = 0;
                         }
@@ -4149,7 +4149,7 @@ void glClearBufferfv(GLenum b, GLint d, const GLfloat *v) {
 void glClearBufferfi(GLenum b, GLint d, GLfloat depth, GLint stencil) { (void)b; (void)d; (void)depth; (void)stencil; }
 
 // ======================= translator test tool (host build) =======================
-// Build: cc -DDD_TR_TOOL gl_shim.c -o gl_tr ; run: gl_tr vertex.glsl fragment.glsl > out.metal
+// Build: cc -HLD_TR_TOOL gl_shim.c -o gl_tr ; run: gl_tr vertex.glsl fragment.glsl > out.metal
 // Feeds real GLSL-ES through the SAME translate() the shim uses at glLinkProgram time, so the emitted MSL
 // can be compiled (hl-display selftest-msl) to prove arbitrary app shaders (e.g. glmark2's) translate.
 #ifdef HL_TR_TOOL

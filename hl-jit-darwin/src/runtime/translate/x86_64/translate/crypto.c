@@ -1,4 +1,4 @@
-// dd/runtime/frontend/x86_64 -- crypto instruction class: map the x86 AES-NI / PCLMULQDQ /
+// hl/runtime/frontend/x86_64 -- crypto instruction class: map the x86 AES-NI / PCLMULQDQ /
 // SHA-NI opcodes to the ARMv8 crypto extension INLINE, instead of exiting the block to the C softmulator
 // (do_sse3b). The per-instruction block-exit + re-decode + scalar C emulation runs the openssl AES-GCM /
 // SHA-256 inner loops ~100x slower than native; emitting the native ARM crypto instructions in-line runs

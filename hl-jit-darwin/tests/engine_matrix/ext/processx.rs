@@ -42,7 +42,7 @@ fn processx_linux() -> Group {
         src("futex", "ext_proc/futex.c").oracle(),       // direct FUTEX_WAIT/FUTEX_WAKE/FUTEX_WAKE_OP
         // PI mutex (FUTEX_LOCK_PI/UNLOCK_PI under contention) + robust mutex (set_robust_list + OWNER_DIED
         // handoff). .out() golden not .oracle(): qemu-user x86_64 can't run PI futexes (hangs), so the golden
-        // is the correct native-Linux result. Both dd Linux engines must give real mutual exclusion/recovery.
+        // is the correct native-Linux result. Both hl Linux engines must give real mutual exclusion/recovery.
         port("pi-robust", "ext_proc/pi_robust.c").only(LIN)
             .out("pi_mutex sum=8000\nrobust eownerdead=1\n"),
         // (extends): non-PIE ET_EXEC pointer-arg rebase. Built static -no-pie (src_nopie) so the
@@ -62,7 +62,7 @@ fn processx_linux() -> Group {
         // cross-MAPPING futex: one MAP_SHARED page reached at two DIFFERENT virtual addresses (the Chrome
         // renderer<->GPU-service command-buffer split). A FUTEX_WAKE through mapping B must release a
         // FUTEX_WAIT parked through mapping A -- Linux keys the futex by the shared inode+offset, not the
-        // VA. dd hashed the bucket on host VA, so the two mappings missed each other and the wake was lost.
+        // VA. hl hashed the bucket on host VA, so the two mappings missed each other and the wake was lost.
         src("futex-shared-key", "ext_proc/futex_shared_key.c").oracle(),
         // a child killed by a fatal-default signal with no faithful fatal host mapping (SIGPOLL/
         // SIGSTKFLT map to host signals that default-ignore, SIGPWR maps to a different signo) must reach
@@ -71,7 +71,7 @@ fn processx_linux() -> Group {
         src("waitsig", "ext_proc/waitsig.c")
             .out("waitsig sigpoll=1 sigsys=1 sigstkflt=1 sigpwr=1 exit157=1 sigkill=1 sigsegv=1\n")
             .oracle(),
-        // ptrace(2) real tracer/tracee coordination. dd emulates the ptrace relationship BETWEEN two
+        // ptrace(2) real tracer/tracee coordination. hl emulates the ptrace relationship BETWEEN two
         // guest processes (both translated) over a shared arena -- NOT the host macOS ptrace. A golden
         // verdict (both Linux arches): TRACEME + group-stop + PTRACE_SYSCALL entry/exit stops observe the
         // child's arch-native syscall numbers via GETREGS, with the TRACESYSGOOD 0x80 bit, and PEEKDATA

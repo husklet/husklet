@@ -1,4 +1,4 @@
-//! Node.js — V8 JIT-in-JIT (PRIME engine stress: V8 emits machine code the dd JIT must in turn
+//! Node.js — V8 JIT-in-JIT (PRIME engine stress: V8 emits machine code the hl JIT must in turn
 //! translate), 18/20/22 on glibc (slim) + musl (alpine). Markers per IMAGE-MANIFEST §2.
 
 use crate::scenario::{scen, Scenario};
@@ -33,7 +33,7 @@ pub fn scenarios() -> Vec<Scenario> {
         scen("languages/node-version-repl-22-alpine", "node:22-alpine")
             .exec("echo \"console.log('NODEMAJOR', process.version[0])\" | node")
             .has("NODEMAJOR v"),
-        // V8 hot loop: primes < 10000 = 1229 (tier-up to optimizing compiler under the dd JIT)
+        // V8 hot loop: primes < 10000 = 1229 (tier-up to optimizing compiler under the hl JIT)
         scen("languages/node-primes-20-alpine", "node:20-alpine")
             .exec("node -e \"let p=0;for(let n=2;n<10000;n++){let q=1;for(let d=2;d*d<=n;d++)if(n%d===0){q=0;break}p+=q}console.log('PRIMES',p)\"")
             .has("PRIMES 1229"),

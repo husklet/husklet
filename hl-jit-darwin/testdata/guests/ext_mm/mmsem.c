@@ -2,7 +2,7 @@
 // tests mmap08/mmap12/munmap01/munmap03/mincore02/mincore04/madvise10 exercise. Every line is a
 // NORMALIZED verdict (booleans / counts, never a raw address or page size) so it is byte-identical on a
 // 4 KB guest (x86) and a 16 KB guest (arm), and is diffed against the native oracle (qemu-x86_64 / native
-// aarch64). Deliberately excludes the two behaviours dd cannot reproduce under a direct-mapped 4 KB-guest-
+// aarch64). Deliberately excludes the two behaviours hl cannot reproduce under a direct-mapped 4 KB-guest-
 // on-16 KB-host model (a sub-host-page unmap/EOF page cannot be made to FAULT on access); those are a
 // documented architectural deviation, not a semantics bug.
 #define _GNU_SOURCE
@@ -70,7 +70,7 @@ static void t_munmap_einval(void) {
 }
 
 // A COMPLETE unmap of a whole mapping succeeds and the mapping is gone (return 0). (The fault-on-access
-// check that LTP munmap01 adds is a host-page property dd cannot honor for a 4 KB guest on a 16 KB host,
+// check that LTP munmap01 adds is a host-page property hl cannot honor for a 4 KB guest on a 16 KB host,
 // so only the success/return value is asserted here.)
 static void t_munmap_ok(void) {
     void *m = mmap(NULL, PS * 3, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

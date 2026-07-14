@@ -25,7 +25,7 @@
 //                           cross-process eventfd wakeup = command-channel pump dormancy).
 //   * "cmdbuf_ring ok"    — all N commands crossed coherently and every flush woke the consumer: the
 //                           engine's command-buffer transport is correct; the live wall is Chromium-internal
-//                           command-buffer scheduling, not a dd primitive.
+//                           command-buffer scheduling, not a hl primitive.
 //
 // FIX LOCUS if it reproduces: hl-jit-darwin/src/runtime/os/linux/syscall/mem.c (MAP_SHARED memfd host
 // mapping / partial 16 KB-vs-4 KB page coherence) for the *-incoherence verdicts, or event.c/eventfd

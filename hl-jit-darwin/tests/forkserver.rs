@@ -1,4 +1,4 @@
-//! fork-server ("ddjitd", W3D) — cold-vs-forkserver EQUIVALENCE lane, BOTH Linux engines.
+//! fork-server ("hljitd", W3D) — cold-vs-forkserver EQUIVALENCE lane, BOTH Linux engines.
 //!
 //! The resident fork-server (`hljit --server SOCK`) forks pre-initialized engine instances instead of
 //! cold-spawning one per launch; `hljit --client SOCK PROG ...` forwards a launch. The correctness

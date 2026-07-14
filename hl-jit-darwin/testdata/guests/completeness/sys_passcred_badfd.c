@@ -3,7 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
-/* SO_PASSCRED on a closed fd -> EBADF; SO_PEERCRED on a non-socket -> ENOTSOCK. dd used to fake-succeed. */
+/* SO_PASSCRED on a closed fd -> EBADF; SO_PEERCRED on a non-socket -> ENOTSOCK. hl used to fake-succeed. */
 int main(void){
   int on=1;
   long r1=syscall(SYS_setsockopt, -1, SOL_SOCKET, SO_PASSCRED, &on, (socklen_t)sizeof on);

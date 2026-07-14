@@ -1,5 +1,5 @@
 // #229: an AF_UNIX DATAGRAM sendto() to a NAMED dest must be routed the same way bind/connect route it.
-// This exercises the abstract-namespace variant (sun_path[0]=='\0'), which macOS lacks and dd maps to a
+// This exercises the abstract-namespace variant (sun_path[0]=='\0'), which macOS lacks and hl maps to a
 // per-namespace filesystem socket: bind, connect AND sendto/sendmsg must all agree on that mapping or the
 // datagram is dropped. The pathname variant (overlay-routed, e.g. syslog to /dev/log) shares the same code
 // path and is exercised by the container scenarios. Linux-only (abstract ns is a Linux feature); diffed vs

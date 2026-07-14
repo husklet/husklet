@@ -1,6 +1,6 @@
-//! The `hl-manifest.json` sidecar carried inside a dd save archive.
+//! The `hl-manifest.json` sidecar carried inside a hl save archive.
 //!
-//! dd's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
+//! hl's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
 //! `rootfs/` directory plus this manifest recording the image identity + run config. `docker save`
 //! writes it, `docker load` reads it back. The field names are the on-disk contract — keep them stable.
 
@@ -57,7 +57,7 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// True when this manifest's `os` is one dd can run: absent/empty or `linux`. A PRESENT but
+    /// True when this manifest's `os` is one hl can run: absent/empty or `linux`. A PRESENT but
     /// unsupported os (e.g. `"windows"`, `"darwin"`) is NOT supported and the load path must reject it
     /// rather than importing it as Linux.
     pub fn os_is_supported(&self) -> bool {

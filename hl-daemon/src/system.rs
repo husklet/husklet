@@ -34,7 +34,7 @@ pub(crate) async fn version() -> Json<crate::api::Version> {
 }
 
 /// Logical CPUs usable by the daemon, for `/info` `NCPU`. Docker reports the host's usable CPU count;
-/// dd hardcoded 1, so schedulers/clients under-sized workloads.
+/// hl hardcoded 1, so schedulers/clients under-sized workloads.
 pub(crate) fn host_ncpu() -> i64 {
     std::thread::available_parallelism()
         .map(|n| n.get() as i64)
@@ -57,12 +57,12 @@ pub(crate) fn host_mem_total() -> i64 {
     0
 }
 
-/// dd's only container runtime. `/info` advertises it as `DefaultRuntime` AND lists it in `Runtimes`
+/// hl's only container runtime. `/info` advertises it as `DefaultRuntime` AND lists it in `Runtimes`
 /// (via [`runtimes`]) so the two stay consistent — Docker clients validate the default against that map.
 pub(crate) const DEFAULT_RUNTIME: &str = "hl-jit";
 
 /// The `Runtimes` map for `/info`. Always contains [`DEFAULT_RUNTIME`] so runtime validation/capability
-/// discovery sees a well-formed shape (dd previously omitted `Runtimes` while advertising a default).
+/// discovery sees a well-formed shape (hl previously omitted `Runtimes` while advertising a default).
 pub(crate) fn runtimes() -> std::collections::HashMap<&'static str, crate::api::Runtime> {
     std::collections::HashMap::from([(DEFAULT_RUNTIME, crate::api::Runtime { path: DEFAULT_RUNTIME })])
 }
@@ -118,7 +118,7 @@ pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
     })
 }
 
-/// `POST /auth` — `docker login`. dd has no central auth store; accept any credentials so the CLI
+/// `POST /auth` — `docker login`. hl has no central auth store; accept any credentials so the CLI
 /// records them locally (pull/push then send them via `X-Registry-Auth`). Empty body = a probe.
 pub(crate) async fn auth(body: axum::body::Bytes) -> Response {
     let _ = body;
@@ -133,7 +133,7 @@ pub(crate) async fn auth(body: axum::body::Bytes) -> Response {
 }
 
 /// `GET /system/df` — `docker system df`. Reports the rough disk usage of images, containers and
-/// volumes. dd has no build cache and no per-container/volume size accounting yet, so `BuildCache`
+/// volumes. hl has no build cache and no per-container/volume size accounting yet, so `BuildCache`
 /// is empty, `BuilderSize` is 0 and the rw/volume sizes take Docker's "not calculated" sentinels.
 pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsage> {
     use crate::api::{ContainerDf, DiskUsage, ImageDf, Usage, VolumeDf, VolumeUsageData};
@@ -302,7 +302,7 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
     })
 }
 
-/// `GET /plugins` — `docker plugin ls`. dd ships no managed plugins, but `/info` advertises plugin
+/// `GET /plugins` — `docker plugin ls`. hl ships no managed plugins, but `/info` advertises plugin
 /// categories, so a compatible client may query the inventory. Return an empty list (200) rather than a
 /// 404 fallback, which strict clients treat as a daemon error.
 pub(crate) async fn plugins_list() -> Json<Vec<Value>> {

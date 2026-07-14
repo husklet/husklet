@@ -3,7 +3,7 @@
 #include <sys/vfs.h>
 #include <sys/statfs.h>
 
-/* Linux reports pseudo-fs magic + mount flags for procfs/sysfs paths. dd returned ENOENT for path statfs
+/* Linux reports pseudo-fs magic + mount flags for procfs/sysfs paths. hl returned ENOENT for path statfs
    of a synthetic proc leaf and zeroed f_flags. Check the magic + nonzero flags; oracle-diffed vs native. */
 
 int main(void) {

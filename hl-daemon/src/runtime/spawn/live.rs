@@ -100,7 +100,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                 );
             }
         }
-        // Provision /etc/resolv.conf with dd's embedded nameserver (mirrors Docker's 127.0.0.11). Many base
+        // Provision /etc/resolv.conf with hl's embedded nameserver (mirrors Docker's 127.0.0.11). Many base
         // images ship an EMPTY /etc/resolv.conf (Docker fills it at runtime); without this the guest has no
         // nameserver at all and every DNS lookup fails (apt-get "Ign"/"failed to fetch"). The engine
         // intercepts UDP/TCP :53 to this address and resolves via the macOS host resolver (net.c dns_*),
@@ -112,7 +112,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // null network does. Best-effort: never fail the spawn on an I/O error.
         // Honor `--dns`/`--dns-search`/`--dns-option` (HostConfig.Dns*) when the user set them: those
         // nameservers/search/options are written verbatim (Docker parity). With none set, fall back to
-        // dd's embedded nameserver (127.0.0.11), which the engine intercepts to the host resolver.
+        // hl's embedded nameserver (127.0.0.11), which the engine intercepts to the host resolver.
         let resolv = if c.dns.is_empty() && c.dns_search.is_empty() && c.dns_options.is_empty() {
             "nameserver 127.0.0.11\noptions ndots:0\n".to_string()
         } else {
@@ -188,7 +188,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         .take()
         .expect("stdin_rx is consumed exactly once per container start");
     // hl-jit owns the operator cache/sandbox policy; the daemon only supplies its storage location so the
-    // persistent cache lands under the dd home (reported by `system df`, cleared by `system prune`).
+    // persistent cache lands under the hl home (reported by `system df`, cleared by `system prune`).
     let rt = JitRuntime::new()
         .expect("hl-jit runtime")
         .cache_dir(crate::util::hl_home().join("pcache").to_string_lossy().into_owned());

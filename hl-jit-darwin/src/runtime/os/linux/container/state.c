@@ -1,4 +1,4 @@
-// dd/runtime/os/linux/container -- container config state (UTS/cgroup/USER-ns/port-map) + parsers.
+// hl/runtime/os/linux/container -- container config state (UTS/cgroup/USER-ns/port-map) + parsers.
 #include "../../container_parse.h" // strict numeric parsing (the config trust boundary; see LAUNCH.md)
 #include <sys/sysctl.h>            // sysctlbyname("hw.activecpu") -- true host core count (see container_online_cpus)
 
@@ -298,7 +298,7 @@ static int container_pid(void) {
 }
 
 // ---- checkpoint/restore PID virtualization (INACTIVE on a normal launch) --------------------------------
-// dd normally uses the REAL host pid as a guest child's pid (only the init is virtualized). A restore assigns
+// hl normally uses the REAL host pid as a guest child's pid (only the init is virtualized). A restore assigns
 // NEW host pids to the re-forked tree, so this table maps each restored process's checkpoint-time guest pid
 // <-> its new live host pid, keeping guest-visible pids stable across a restore (a blocked wait4's target, a
 // reaped-child pid, bash's job table, kill(pid)). It is EMPTY on every normal launch (g_pidmap_n==0 => every
@@ -362,7 +362,7 @@ static int net_isolate(void) {
 }
 
 // ---- container network-interface model --------------------------------------------------
-// dd runs no real network stack, so a container had NO interface introspection at all: /sys/class/net
+// hl runs no real network stack, so a container had NO interface introspection at all: /sys/class/net
 // and /proc/net/* were absent and AF_NETLINK sockets failed EAFNOSUPPORT, breaking getifaddrs /
 // go-sockaddr / netlink (consul, minio, `ip`, ifconfig). To fix that coherently we model exactly two
 // interfaces -- lo (127.0.0.1/8, ::1) and eth0 (the container's bridge IP, or a stable synthetic
@@ -438,9 +438,9 @@ static int cgid(void) {
 #define HL_XATTR_GID "user.dd.gid"
 // PERF (sqlite-select / any stat-heavy workload): reading the guest-chown xattr back on EVERY stat cost
 // two macOS fgetxattr/getxattr per stat (~2.5us each on APFS even for a MISS -> ~5us/stat, 40-50x native
-// fstat). But the dd.uid/dd.gid xattr is set ONLY by an explicit guest chown or a cred-dropped create
+// fstat). But the hl.uid/hl.gid xattr is set ONLY by an explicit guest chown or a cred-dropped create
 // (chown_xattr_set_*); the overwhelmingly common file has none. So keep a per-inode NEGATIVE cache: once
-// we confirm an inode carries no dd xattr, skip the syscalls on repeat stats of the same inode. A global
+// we confirm an inode carries no hl xattr, skip the syscalls on repeat stats of the same inode. A global
 // generation counter (bumped on every set) invalidates the whole cache the instant any chown xattr is
 // written, so a stale "no xattr" verdict can never outlive the xattr appearing. Cross-process correctness
 // is free: a new engine process starts with an empty cache, so its first stat of any inode does the real
@@ -635,7 +635,7 @@ static int gid_permitted(int id) {
 // operations on their effective/bounding set. Defined here (state.c is the first container TU include) so
 // both vfs.c (the /proc/self/status builder) and proc.c (capget/prctl handlers) consume ONE source of
 // truth. Effective narrows when a guest capset()s a smaller set; the bounding set narrows on
-// PR_CAPBSET_DROP; inheritable/ambient stay empty (the docker default). Previously dd reported all-ones
+// PR_CAPBSET_DROP; inheritable/ambient stay empty (the docker default). Previously hl reported all-ones
 // (0xffffffffffffffff) — grossly over-reporting caps vs real docker.
 #define HL_CAP_DEFAULT                                                                                                 \
     0x00000000a80425fbull                   // chown,dac_override,fowner,fsetid,kill,setgid,setuid,setpcap,
@@ -687,7 +687,7 @@ static int groups_status_str(char *b, size_t n) {
 // EXPLICIT chown(2); a plain create left no xattr, so a new file re-appeared as the container id (0),
 // which broke initdb ("data directory has wrong ownership"). fsuid/fsgid follow the overlay's
 // euid/egid unless setfsuid/setfsgid override them (g_fs*_ovr >= 0); any subsequent set*id resets the
-// override (POSIX: fsuid tracks euid). We persist the intended owner as the SAME dd.uid/gid xattr the
+// override (POSIX: fsuid tracks euid). We persist the intended owner as the SAME hl.uid/gid xattr the
 // chown path uses, so a later stat reports it. The create sites in fs.c call the helpers below.
 static int g_fsuid_ovr = -1, g_fsgid_ovr = -1; // -1 = follow euid/egid
 

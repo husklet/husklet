@@ -1,6 +1,6 @@
 // int3 (#BP -> SIGTRAP) and UD2 (#UD -> SIGILL) must reach the guest's signal handler, not terminate the
 // process. On Apple Silicon a JIT'd host BRK/UDF raises a Mach exception the x86 engine did not catch, so
-// the guest handler was silently skipped and dd exited 133/132. This exercises: (1) int3 delivering SIGTRAP
+// the guest handler was silently skipped and hl exited 133/132. This exercises: (1) int3 delivering SIGTRAP
 // and recovering via siglongjmp, (2) ud2 delivering SIGILL and RESUMING after the handler advances RIP past
 // the 2-byte 0F 0B. Oracle-diffed vs qemu (stdout + exit).
 #define _GNU_SOURCE

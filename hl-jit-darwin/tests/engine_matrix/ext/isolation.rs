@@ -33,15 +33,15 @@ fn resources() -> Group {
         src("cpu-sysfs-dirs-cap2", "ext_iso/cpusysfs.c").cpus(2)
             .out("htop_cpus=2 get_nprocs=2 get_nprocs_conf=2\n"),
         // part 3 (htop cores all show IDENTICAL usage): htop/top compute per-core busy% from the
-        // DELTA of each /proc/stat cpuN line between two samples. dd emitted every cpuN line as the
+        // DELTA of each /proc/stat cpuN line between two samples. hl emitted every cpuN line as the
         // aggregate host ticks split EVENLY (aggregate/ncpu), so every core's delta was identical -> all
         // meters move in lockstep. This probe pegs one core for ~250ms between two reads and checks the
         // per-core deltas are not all identical. Oracle -> real Linux shows the busy core diverging
-        // (deltas_differ=1); before the fix dd showed deltas_differ=0 (every core the same split share).
+        // (deltas_differ=1); before the fix hl showed deltas_differ=0 (every core the same split share).
         src("procstat-percpu", "ext_iso/procstat_percpu.c").oracle()
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
         // lscpu / util-linux reconstruct sockets/cores/threads from /sys/devices/system/cpu/cpuN/topology/*
-        // (core_id, physical_package_id, thread_siblings_list, core_cpus_list, core_siblings_list, ...). dd
+        // (core_id, physical_package_id, thread_siblings_list, core_cpus_list, core_siblings_list, ...). hl
         // materialized the cpuN dirs but served NONE of the topology attribute files -> every open
         // ENOENT'd and lscpu mis-counted. This probe drives lscpu's exact per-CPU reads and asserts a
         // host-independent structural verdict (values are host-variant; STRUCTURE is not). Linux-only (/sys).

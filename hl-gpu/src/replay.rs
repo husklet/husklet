@@ -10,7 +10,7 @@ use crate::wire::Decoder;
 use crate::{GpuError, Result};
 
 /// Apply one decoded command to a backend. Returns an optional present token when the command was a
-/// `Present` (so the caller can hand the buffer to DDP).
+/// `Present` (so the caller can hand the buffer to HLP).
 pub fn apply(be: &mut dyn GpuBackend, cmd: &Cmd) -> Result<Option<PresentToken>> {
     match cmd {
         Cmd::CreateBuffer(id, d) => be.create_buffer(BufferId(*id), d)?,

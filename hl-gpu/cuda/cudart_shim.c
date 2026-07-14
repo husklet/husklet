@@ -1,4 +1,4 @@
-/* dd's libcudart.so — the CUDA Runtime API shim, layered on dd's libcuda Driver-API shim.
+/* hl's libcudart.so — the CUDA Runtime API shim, layered on hl's libcuda Driver-API shim.
  *
  * cudart is the upper edge an app (or a framework like PyTorch) links against. It is THIN over the
  * driver for the stateful surface (malloc / memcpy / memset / streams / events / device query), and it
@@ -424,7 +424,7 @@ void __cudaRegisterFunction(void** fatCubinHandle, const char* hostFun, char* de
 }
 void __cudaRegisterVar(void** fatCubinHandle, char* hostVar, char* deviceAddress,
                        const char* deviceName, int ext, size_t size, int constant, int global) {
-    /* dd's PTX model parses only kernel entries, not .global variables -> record but nothing to bind. */
+    /* hl's PTX model parses only kernel entries, not .global variables -> record but nothing to bind. */
     (void)fatCubinHandle; (void)hostVar; (void)deviceAddress; (void)deviceName;
     (void)ext; (void)size; (void)constant; (void)global;
 }

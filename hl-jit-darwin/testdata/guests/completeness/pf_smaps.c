@@ -5,7 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-/* Reading /proc/self/smaps must return promptly (memory profilers, redis COW self-test). dd was reported to
+/* Reading /proc/self/smaps must return promptly (memory profilers, redis COW self-test). hl was reported to
    hang. Map a few regions, then read the whole file; print a bounded verdict. A hang -> harness timeout. */
 
 int main(void) {
