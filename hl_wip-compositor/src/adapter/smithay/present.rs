@@ -30,6 +30,13 @@ pub struct CapturedFrame {
     pub surface: SurfaceId,
     pub width: i32,
     pub height: i32,
+    /// Root-space top-left `(x, y)` this layer's content was composited at this cycle — the placement a
+    /// popup/subsurface was routed to. Derived from the compose damage the scene handed `present`
+    /// (`layer_damage` translates a layer's rect into root space by its offset), so a popup at a resolved
+    /// positioner geometry, or a subsurface at `parent + set_position`, reports that offset here. `(0, 0)`
+    /// when the layer contributed no damage this cycle (a clean base layer re-presented under a child).
+    pub x: i32,
+    pub y: i32,
     /// Tight `width*height*4` RGBA of the presented surface.
     pub rgba: Vec<u8>,
     pub serial: u64,
@@ -97,7 +104,7 @@ impl Presenter for PngPresenter {
         &mut self,
         output: OutputId,
         image: &PresentableImage,
-        _damage: &[Rect],
+        damage: &[Rect],
         timing: PresentTiming,
     ) -> PresentationFeedback {
         let Some(buf) = self.store.get(&image.surface) else {
@@ -107,11 +114,22 @@ impl Presenter for PngPresenter {
         };
         self.serial += 1;
         let serial = self.serial;
+        // Where this layer landed in root space: the top-left of its compose damage (which
+        // `service/compose::layer_damage` produced by translating the layer rect by its root offset). A
+        // clean layer carries no damage, so it reports `(0, 0)` — the base root's own origin.
+        let (x, y) = damage
+            .iter()
+            .filter(|r| !r.is_empty())
+            .map(|r| (r.x, r.y))
+            .next()
+            .unwrap_or((0, 0));
         let frame = CapturedFrame {
             output,
             surface: image.surface,
             width: buf.width,
             height: buf.height,
+            x,
+            y,
             rgba: buf.rgba.clone(),
             serial,
         };

@@ -30,8 +30,9 @@ use smithay::utils::Transform;
 use smithay::wayland::{
     buffer::BufferHandler,
     compositor::{
-        with_states, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
-        Damage, SurfaceAttributes,
+        get_children, get_parent, is_sync_subsurface, with_states, BufferAssignment,
+        CompositorClientState, CompositorHandler, CompositorState, Damage, SubsurfaceCachedState,
+        SurfaceAttributes,
     },
     output::{OutputHandler, OutputManagerState},
     shell::xdg::{
@@ -41,14 +42,26 @@ use smithay::wayland::{
     shm::{with_buffer_contents, ShmHandler, ShmState},
 };
 
+/// The `xdg_positioner` anchor/gravity/constraint-adjustment wire enums — mapped onto the neutral
+/// [`crate::scene::model`] positioner value types so the scene's placement math (not Smithay's) resolves
+/// the popup geometry.
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::{
+    Anchor as WireAnchor, ConstraintAdjustment as WireConstraint, Gravity as WireGravity,
+};
+use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
+use smithay::utils::{Rectangle, Serial};
+
 /// The zxdg-decoration mode the wire speaks (`ServerSide` / `ClientSide`).
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 /// The `xdg_toplevel` state enum (`Activated` / `Maximized` / `Fullscreen` / …) sent in a configure.
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgToplevelState;
 
-use crate::scene::model::{BufferState, Format, Output, OutputId, Rect, SurfaceId, SurfaceRole};
+use crate::scene::model::{
+    Anchor, BufferState, ConstraintAdjustment, Format, Gravity, Output, OutputId, PopupState,
+    Positioner, Rect, SubsurfaceState, SurfaceId, SurfaceRole,
+};
 use crate::scene::port::Clock;
-use crate::scene::service::{surface_at, BufferChange, Commit};
+use crate::scene::service::{constrain_popup, surface_at, BufferChange, Commit};
 use crate::{Compositor, FrameOutcome};
 
 use super::present::{PngPresenter, StoredBuffer};
@@ -136,6 +149,12 @@ pub struct HlState {
     /// client "your content is on screen, draw the next one". Fired by [`Self::fire_tree_callbacks`] when
     /// the surface's window root presents (or is cleanly skipped).
     pending_callbacks: HashMap<SurfaceId, Vec<WlCallback>>,
+    /// The active `xdg_popup.grab` chain, ordered outer → inner (a menu, then any submenu opened under
+    /// it). A press outside this chain — or the grab otherwise breaking — dismisses it: each popup is sent
+    /// `xdg_popup.popup_done` innermost-first (see [`Self::dismiss_popup_grabs`]). Tooltips take no grab, so
+    /// they are absent here and are not dismissed on an outside click. Kept as the concrete Smithay
+    /// [`PopupSurface`] (it owns `send_popup_done`); pruned when a popup is destroyed.
+    popup_grabs: Vec<PopupSurface>,
     /// Window roots with a repaint owed at the recorded host-monotonic deadline (ns). Populated when a
     /// commit is throttled (or a present is retryable): the serve loop drains these in
     /// [`Self::drive_due_repaints`] to re-drive `present_root` at the next refresh boundary, so the
@@ -187,6 +206,7 @@ impl HlState {
             engine,
             surface_ids: HashMap::new(),
             surfaces_by_id: HashMap::new(),
+            popup_grabs: Vec::new(),
             pending_callbacks: HashMap::new(),
             pending_repaints: HashMap::new(),
         }
@@ -211,6 +231,9 @@ impl HlState {
 
     /// Drop a `wl_surface` and its scene surface.
     fn teardown_surface(&mut self, surface: &WlSurface) {
+        // A destroyed surface can never anchor an active grab (a menu's `wl_surface` going away breaks its
+        // grab), so drop it from the chain before the scene reference is gone.
+        self.popup_grabs.retain(|p| p.wl_surface() != surface);
         if let Some(sid) = self.surface_ids.remove(&surface.id()) {
             self.surfaces_by_id.remove(&sid);
             self.engine.presenter_mut().forget(sid);
@@ -223,6 +246,85 @@ impl HlState {
         }
     }
 
+    /// Refresh `surface`'s own subsurface role (if it is one) from Smithay's applied state, then recurse
+    /// into its children — a parent commit applies its synchronized children's buffered `set_position` /
+    /// sync state, so the whole subtree may have moved.
+    fn sync_subsurface_tree(&mut self, surface: &WlSurface) {
+        self.refresh_subsurface_role(surface);
+        for child in get_children(surface) {
+            if &child == surface {
+                continue;
+            }
+            self.sync_subsurface_tree(&child);
+        }
+    }
+
+    /// If `surface` is a `wl_subsurface`, mirror its Smithay-applied state into the scene: link it to its
+    /// parent at the committed `set_position` offset with its current sync/desync mode, and push its
+    /// parent's `get_children` z-order (which reflects `place_above`/`place_below`) into the scene. A
+    /// no-op for a surface with no subsurface parent (toplevels, popups, roleless).
+    fn refresh_subsurface_role(&mut self, surface: &WlSurface) {
+        let Some(parent_wl) = get_parent(surface) else {
+            return; // not a subsurface
+        };
+        let (Some(sid), Some(parent)) = (self.sid(surface), self.sid(&parent_wl)) else {
+            return;
+        };
+        let (x, y) = with_states(surface, |states| {
+            let loc = states.cached_state.get::<SubsurfaceCachedState>().current().location;
+            (loc.x, loc.y)
+        });
+        let sync = is_sync_subsurface(surface);
+        self.engine
+            .scene
+            .set_role(sid, SurfaceRole::Subsurface(SubsurfaceState { parent, x, y, sync }));
+        // Mirror the wire z-order: Smithay keeps `place_above`/`place_below` in `get_children` (bottom →
+        // top, excluding the parent's self-entry). Map those to scene ids and reorder the scene's children.
+        let order: Vec<SurfaceId> = get_children(&parent_wl)
+            .iter()
+            .filter(|c| *c != &parent_wl)
+            .filter_map(|c| self.sid(c))
+            .collect();
+        self.engine.scene.set_subsurface_order(parent, &order);
+    }
+
+    /// Dismiss the whole active popup-grab chain: send `xdg_popup.popup_done` innermost-first (a submenu
+    /// closes before the menu that spawned it), then clear the grab stack. Returns how many popups were
+    /// dismissed. The client tears the popups down in response (its `popup_destroyed` / `wl_surface`
+    /// destroy then reclaims scene state). Driven by a press outside the chain (see
+    /// [`Self::inject_pointer_button`]) or callable directly by a host.
+    pub fn dismiss_popup_grabs(&mut self) -> usize {
+        let chain = std::mem::take(&mut self.popup_grabs);
+        let n = chain.len();
+        for popup in chain.into_iter().rev() {
+            popup.send_popup_done();
+        }
+        n
+    }
+
+    /// Whether root-local logical point `(x, y)` falls OUTSIDE every popup in the active grab chain — the
+    /// press-dismisses-the-menu test. A point inside any grabbing popup's on-screen rectangle (its
+    /// resolved offset within the toplevel + its logical size) keeps the chain; a point outside all of them
+    /// dismisses it. With no grab active this is vacuously `false` (nothing to dismiss).
+    fn press_outside_grab_chain(&self, x: f64, y: f64) -> bool {
+        if self.popup_grabs.is_empty() {
+            return false;
+        }
+        let (px, py) = (x.floor() as i32, y.floor() as i32);
+        for popup in &self.popup_grabs {
+            let Some(sid) = self.sid(popup.wl_surface()) else { continue };
+            let Some((_, ox, oy, _)) = self.engine.scene.popup_offset_to_toplevel(sid) else {
+                continue;
+            };
+            if let Some((w, h)) = self.engine.scene.get(sid).and_then(|s| s.logical_size()) {
+                if Rect::new(ox, oy, w, h).contains_point(px, py) {
+                    return false; // inside a grabbing popup — do not dismiss
+                }
+            }
+        }
+        true
+    }
+
     /// The commit → present path (the neutral analogue of `on_commit`): read the committed double-buffered
     /// state Smithay has already applied, deposit the surface's pixels for the presenter, translate the
     /// commit into a [`Commit`], drive the neutral engine (which composes + presents + paces), then fire
@@ -231,6 +333,13 @@ impl HlState {
         let Some(sid) = self.sid(surface) else {
             return;
         };
+
+        // Mirror Smithay's just-applied subsurface state (set_position offset, sync/desync, and the
+        // place_above/place_below z-order) into the scene BEFORE the engine composes/paces this commit: a
+        // parent commit atomically applies its synchronized children's buffered state, so refresh the whole
+        // committed subtree, not just this surface. Without this the scene would composite a subsurface at a
+        // stale offset (or present a sync child that should ship with its parent).
+        self.sync_subsurface_tree(surface);
 
         // Snapshot the committed state Smithay applied, taking ownership of the buffer assignment and
         // draining this commit's damage + frame callbacks (the compositor is expected to consume both).
@@ -546,6 +655,15 @@ impl HlState {
     /// Press or release a pointer button. Uses the pointer's CURRENT focus (from the last motion), which
     /// smithay tracks internally — so a button lands on whatever surface the cursor is over.
     pub fn inject_pointer_button(&mut self, button: u32, pressed: bool) {
+        // An explicit popup grab (menu / context-menu) dismisses on a press that lands outside the whole
+        // popup chain — the click-outside-closes-the-menu semantics. Uses the pointer's last known location
+        // (set by the preceding `inject_pointer_motion`). The button itself is still delivered below.
+        if pressed {
+            let (x, y) = self.engine.scene.seat().pointer_location;
+            if self.press_outside_grab_chain(x, y) {
+                self.dismiss_popup_grabs();
+            }
+        }
         let Some(pointer) = self.seat.get_pointer() else { return };
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.input_time_ms();
@@ -615,6 +733,19 @@ impl CompositorHandler for HlState {
 
     fn new_surface(&mut self, surface: &WlSurface) {
         self.register_surface(surface);
+    }
+
+    /// A `wl_subsurface` was created (`wl_subcompositor.get_subsurface(surface, parent)`). Establish the
+    /// scene parent linkage immediately: subsurfaces map SYNC by default (they present atomically with the
+    /// parent until `set_desync`), at offset `(0, 0)` until the first `set_position` commit. The concrete
+    /// offset / sync mode / z-order are refreshed from Smithay on each commit (`sync_subsurface_tree`).
+    fn new_subsurface(&mut self, surface: &WlSurface, parent: &WlSurface) {
+        if let (Some(sid), Some(parent_sid)) = (self.sid(surface), self.sid(parent)) {
+            self.engine.scene.set_role(
+                sid,
+                SurfaceRole::Subsurface(SubsurfaceState { parent: parent_sid, x: 0, y: 0, sync: true }),
+            );
+        }
     }
 
     fn commit(&mut self, surface: &WlSurface) {
@@ -726,16 +857,79 @@ impl XdgShellHandler for HlState {
         surface.send_configure();
     }
 
-    /// An `xdg_popup` mapped: send its initial configure so the client can draw. (Placement policy lives
-    /// in `scene::service::popup`; the headless e2e proof only exercises toplevels.)
-    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+    /// An `xdg_popup` mapped (`xdg_surface.get_popup(parent, positioner)`): a menu / dropdown / combo-box
+    /// list / tooltip / context menu. Resolve the client's `xdg_positioner` to a concrete on-screen
+    /// geometry via the scene's placement math (anchor rect → anchor point → gravity → offset, then the
+    /// flip/slide/resize constraint adjustment against the output area), register the popup in the scene's
+    /// popup registry linked to its parent (another popup for a submenu chain, or the owning toplevel), and
+    /// complete the initial handshake with `xdg_popup.configure(x,y,w,h)` + the paired
+    /// `xdg_surface.configure(serial)`. The popup's committed buffer then routes into the scene through the
+    /// ordinary commit path: `window_root` climbs it to its toplevel, whose present composites every popup
+    /// in its tree at the resolved offset (`Scene::collect_popups_for_root`).
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        let neutral = map_positioner(&positioner);
+        let geometry = constrain_popup(&self.engine.scene, &neutral);
+        // Link the scene popup to its parent (toplevel or parent popup). Without a mapped parent we still
+        // configure the client, but it cannot composite until its parent exists.
+        if let (Some(sid), Some(parent)) = (
+            self.sid(surface.wl_surface()),
+            surface.get_parent_surface().and_then(|p| self.sid(&p)),
+        ) {
+            self.engine.scene.set_role(
+                sid,
+                SurfaceRole::Popup(PopupState { parent, positioner: neutral, geometry, grabbed: false }),
+            );
+        }
+        // Tell the client where it was placed (Smithay emits `xdg_popup.configure` from this pending
+        // geometry, paired with `xdg_surface.configure`). MUST precede the client's first buffer attach.
+        surface.with_pending_state(|state| {
+            state.positioner = positioner;
+            state.geometry = rect_to_smithay(geometry);
+        });
         surface.send_configure().ok();
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: smithay::reexports::wayland_server::protocol::wl_seat::WlSeat, _serial: smithay::utils::Serial) {}
+    /// `xdg_popup.grab(seat, serial)`: the client takes an explicit popup grab (menus / context menus do;
+    /// tooltips do not). Record the popup in the grab chain and flag it in the scene so a press outside the
+    /// chain dismisses it (see [`HlState::inject_pointer_button`] → [`HlState::dismiss_popup_grabs`]). The
+    /// chain is ordered outer → inner, so a submenu opened under an existing grab extends it.
+    fn grab(&mut self, surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
+        if let Some(sid) = self.sid(surface.wl_surface()) {
+            if let Some(SurfaceRole::Popup(p)) = self.engine.scene.get_mut(sid).map(|s| &mut s.role) {
+                p.grabbed = true;
+            }
+        }
+        if !self.popup_grabs.iter().any(|p| p.wl_surface() == surface.wl_surface()) {
+            self.popup_grabs.push(surface);
+        }
+    }
 
-    fn reposition_request(&mut self, surface: PopupSurface, _positioner: PositionerState, token: u32) {
+    /// `xdg_popup.reposition(positioner, token)` (xdg-shell v3): a mapped popup is re-anchored (e.g. a menu
+    /// re-placing as the pointer walks a menu bar). Recompute the geometry from the NEW positioner, update
+    /// the scene popup in place, and answer `xdg_popup.repositioned(token)` (which also emits the fresh
+    /// configure/ack). The scene composites at the new offset once the client acks and re-commits.
+    fn reposition_request(&mut self, surface: PopupSurface, positioner: PositionerState, token: u32) {
+        let neutral = map_positioner(&positioner);
+        let geometry = constrain_popup(&self.engine.scene, &neutral);
+        if let Some(sid) = self.sid(surface.wl_surface()) {
+            if let Some(SurfaceRole::Popup(p)) = self.engine.scene.get_mut(sid).map(|s| &mut s.role) {
+                p.positioner = neutral;
+                p.geometry = geometry;
+            }
+        }
+        surface.with_pending_state(|state| {
+            state.positioner = positioner;
+            state.geometry = rect_to_smithay(geometry);
+        });
         surface.send_repositioned(token);
+    }
+
+    /// A popup's role was destroyed (the client tore the menu/tooltip down, or honoured a grab dismissal).
+    /// Drop it from the grab chain; the scene surface + popup-registry entry are reclaimed when its
+    /// `wl_surface` is destroyed (`teardown_surface`), and the owning toplevel re-presents on its next
+    /// commit so the menu visibly disappears.
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        self.popup_grabs.retain(|p| p.wl_surface() != surface.wl_surface());
     }
 }
 
@@ -825,6 +1019,76 @@ fn build_wl_output(dh: &DisplayHandle, scene: Option<&Output>) -> (WlOutputHandl
     output.set_preferred(mode);
 
     (output, global)
+}
+
+/// Map a Smithay `xdg_positioner` [`PositionerState`] onto the neutral [`Positioner`] value type the
+/// scene's `place_popup` resolves. A straight field/enum translation — the placement math itself
+/// (anchor/gravity/offset + flip/slide/resize) lives in `scene::service::popup`, not here, so the neutral
+/// core owns the policy and the adapter only decodes the wire.
+fn map_positioner(p: &PositionerState) -> Positioner {
+    Positioner {
+        anchor_rect: Rect::new(
+            p.anchor_rect.loc.x,
+            p.anchor_rect.loc.y,
+            p.anchor_rect.size.w,
+            p.anchor_rect.size.h,
+        ),
+        size: (p.rect_size.w, p.rect_size.h),
+        anchor: map_anchor(p.anchor_edges),
+        gravity: map_gravity(p.gravity),
+        constraint_adjustment: map_constraint(p.constraint_adjustment),
+        offset: (p.offset.x, p.offset.y),
+    }
+}
+
+/// Translate the `xdg_positioner.set_anchor` edge onto the neutral [`Anchor`].
+fn map_anchor(a: WireAnchor) -> Anchor {
+    match a {
+        WireAnchor::None => Anchor::None,
+        WireAnchor::Top => Anchor::Top,
+        WireAnchor::Bottom => Anchor::Bottom,
+        WireAnchor::Left => Anchor::Left,
+        WireAnchor::Right => Anchor::Right,
+        WireAnchor::TopLeft => Anchor::TopLeft,
+        WireAnchor::BottomLeft => Anchor::BottomLeft,
+        WireAnchor::TopRight => Anchor::TopRight,
+        WireAnchor::BottomRight => Anchor::BottomRight,
+        _ => Anchor::None,
+    }
+}
+
+/// Translate the `xdg_positioner.set_gravity` direction onto the neutral [`Gravity`].
+fn map_gravity(g: WireGravity) -> Gravity {
+    match g {
+        WireGravity::None => Gravity::None,
+        WireGravity::Top => Gravity::Top,
+        WireGravity::Bottom => Gravity::Bottom,
+        WireGravity::Left => Gravity::Left,
+        WireGravity::Right => Gravity::Right,
+        WireGravity::TopLeft => Gravity::TopLeft,
+        WireGravity::BottomLeft => Gravity::BottomLeft,
+        WireGravity::TopRight => Gravity::TopRight,
+        WireGravity::BottomRight => Gravity::BottomRight,
+        _ => Gravity::None,
+    }
+}
+
+/// Translate the `xdg_positioner.set_constraint_adjustment` bitmask onto the neutral per-axis
+/// flip/slide/resize flags the scene applies in that order.
+fn map_constraint(c: WireConstraint) -> ConstraintAdjustment {
+    ConstraintAdjustment {
+        flip_x: c.contains(WireConstraint::FlipX),
+        flip_y: c.contains(WireConstraint::FlipY),
+        slide_x: c.contains(WireConstraint::SlideX),
+        slide_y: c.contains(WireConstraint::SlideY),
+        resize_x: c.contains(WireConstraint::ResizeX),
+        resize_y: c.contains(WireConstraint::ResizeY),
+    }
+}
+
+/// Lift a neutral [`Rect`] into the Smithay `Rectangle<i32, Logical>` the popup configure carries.
+fn rect_to_smithay(r: Rect) -> Rectangle<i32, smithay::utils::Logical> {
+    Rectangle::new((r.x, r.y).into(), (r.w, r.h).into())
 }
 
 /// Read a `wl_shm` buffer's pixels into tight top-left RGBA8888 plus its neutral [`Format`].

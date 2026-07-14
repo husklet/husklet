@@ -106,6 +106,16 @@ name = "wayland_input_socket"
 path = "tests/wayland_input_socket.rs"
 required-features = ["smithay-adapter"]
 
+# xdg_popup + wl_subsurface placement proof: a real wayland-client maps a toplevel, creates an xdg_popup
+# via get_popup with an xdg_positioner (anchor/gravity/offset) + takes a grab, and a wl_subsurface at a
+# set_position offset — each in a distinct color — then asserts both composited to the PngPresenter at
+# their EXACT resolved positions, and that a pointer press outside the popup dismisses the grab
+# (xdg_popup.popup_done). Own binary — it mutates process-global `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "wayland_live_popup_subsurface"
+path = "tests/wayland_live_popup_subsurface.rs"
+required-features = ["smithay-adapter"]
+
 # The macOS present smoke: build the Cocoa/Metal presenter, present one known-color frame, and read it
 # back (offscreen MTLTexture readback — GUI-session-free) to verify the pixels round-tripped on a real
 # Metal device. A second (ignored-by-default) test opens a real NSWindow + CAMetalLayer.

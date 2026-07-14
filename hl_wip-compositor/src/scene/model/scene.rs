@@ -344,6 +344,26 @@ impl Scene {
         out.into_iter().map(|(s, x, y, _)| (s, x, y)).collect()
     }
 
+    /// Reorder `parent`'s subsurface children to match `order` (bottom → top). Ids in `order` that are
+    /// children of `parent` are placed first, in the given order; any current child NOT named in `order`
+    /// keeps its relative position after them. Ids in `order` that are not children are ignored. The
+    /// adapter mirrors `wl_subsurface.place_above` / `place_below` z-order changes into the scene through
+    /// this — Smithay owns the wire ordering (its `get_children`), and this pushes that order into the
+    /// scene's explicit child list so `compose`/`surface_at` stack the subsurfaces identically.
+    pub fn set_subsurface_order(&mut self, parent: SurfaceId, order: &[SurfaceId]) {
+        let Some(kids) = self.subsurface_children.get_mut(&parent) else {
+            return;
+        };
+        let mut reordered: Vec<SurfaceId> =
+            order.iter().copied().filter(|id| kids.contains(id)).collect();
+        for &k in kids.iter() {
+            if !reordered.contains(&k) {
+                reordered.push(k);
+            }
+        }
+        *kids = reordered;
+    }
+
     /// Mutate a popup's resolved geometry in place (used by `place_popup` after constraint solving).
     pub fn set_popup_geometry(&mut self, surface: SurfaceId, geometry: Rect) {
         if let Some(Surface { role: SurfaceRole::Popup(p), .. }) = self.surfaces.get_mut(&surface) {
