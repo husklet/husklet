@@ -152,9 +152,19 @@ impl Device {
             .filter_map(|m| {
                 let b = self.buffers.get(&m.bound_buffer?)?;
                 if m.mapped {
-                    // Still-mapped coherent flush: whole buffer from offset 0 (unchanged behavior).
-                    let n = (b.size as usize).min(m.data.len());
-                    return Some((b.ir_id, 0u64, m.data[..n].to_vec()));
+                    // Still-mapped coherent flush: the whole buffer, read from its footprint in the
+                    // allocation `[bound_offset, bound_offset + size)` and uploaded to buffer offset 0.
+                    // Honoring `bound_offset` matches the readback + pending-flush paths below; a buffer
+                    // suballocated at a non-zero offset (a big HOST_COHERENT arena bound to many buffers —
+                    // the common VMA/vkcube pattern) would otherwise flush the WRONG bytes (the arena from
+                    // offset 0). A zero bind offset is byte-for-byte the old behavior.
+                    let mem_len = m.data.len() as u64;
+                    let start = b.bound_offset.min(mem_len);
+                    let end = b.bound_offset.saturating_add(b.size).min(mem_len);
+                    if end <= start {
+                        return None; // the buffer's footprint lies entirely past the allocation
+                    }
+                    return Some((b.ir_id, 0u64, m.data[start as usize..end as usize].to_vec()));
                 }
                 // Unmapped, but a pending host→device upload was captured — flush the honored range.
                 let (offset, size) = m.pending_flush?;

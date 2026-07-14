@@ -152,9 +152,17 @@ fn collect_occlusion_layers(scene: &Scene, root: SurfaceId) -> Vec<(SurfaceId, i
 /// Whether `up`'s opaque region — translated from its surface-local space to root space by `(ux, uy)` —
 /// provably covers the whole root-space rectangle `rect`. A `None` opaque region proves nothing. Port
 /// of `opaque_covers_root_rect` (single-rect neutral opaque region; a conservative subset is safe).
+///
+/// A surface with NO committed buffer draws nothing — `compose_frame` emits no layer for it — so it can
+/// never occlude anything, regardless of a stale `set_opaque_region` left over from before a detach.
+/// Requiring a live buffer here upholds the module contract ("a present is never wrongly skipped"): an
+/// unmapped cover must not hide the damage below it.
 fn opaque_covers(scene: &Scene, up: SurfaceId, ux: i32, uy: i32, rect: &Rect) -> bool {
-    match scene.get(up).and_then(|s| s.opaque_region) {
-        Some(region) => region.translate(ux, uy).contains_rect(rect),
-        None => false,
+    match scene.get(up) {
+        Some(s) if s.buffer.is_some() => match s.opaque_region {
+            Some(region) => region.translate(ux, uy).contains_rect(rect),
+            None => false,
+        },
+        _ => false,
     }
 }

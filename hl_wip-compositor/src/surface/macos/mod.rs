@@ -23,5 +23,5 @@ mod present;
 mod window;
 
 pub use iosurface::{create_iosurface, IOSurfaceRef};
-pub use metal::MetalCtx;
+pub use metal::{bgra_to_rgba, MetalCtx};
 pub use present::MacPresenter;

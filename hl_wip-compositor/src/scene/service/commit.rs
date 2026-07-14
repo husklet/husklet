@@ -112,13 +112,18 @@ pub fn commit_surface(scene: &mut Scene, sid: SurfaceId, commit: Commit) -> bool
             true
         }
         BufferChange::Keep => {
-            if surface.buffer.is_some() && !commit.damage.is_empty() {
+            if surface.buffer.is_some() {
+                // Accumulate this commit's damage and report a change only if a REAL (non-empty) rect
+                // landed: `DamageRegion::add` drops empty/negative rects, so a damage-only commit whose
+                // rects are all degenerate (e.g. a `wl_surface.damage(0,0,0,0)`) adds nothing visible and
+                // must not force a spurious full-surface present.
+                let before = surface.damage.rects().len();
                 for rect in &commit.damage {
                     surface.damage.add(*rect);
                 }
-                true
+                surface.damage.rects().len() > before
             } else {
-                // No buffer, or a bufferless commit with no damage: nothing new is visible.
+                // No buffer attached: damage against a non-existent buffer changes nothing visible.
                 false
             }
         }

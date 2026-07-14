@@ -34,8 +34,10 @@ pub struct MetalWindow {
     window: Retained<NSWindow>,
     layer: Retained<CAMetalLayer>,
     /// Device pixels per point (`backingScaleFactor`); the layer drawable is sized `size * scale`.
+    #[allow(dead_code)] // read by pixel_size (the retina readback helper)
     scale: f64,
     /// Logical surface size in points (window content size).
+    #[allow(dead_code)] // read by pixel_size (the retina readback helper)
     size: (u32, u32),
 }
 
@@ -91,6 +93,7 @@ impl MetalWindow {
     }
 
     /// Device-pixel size of the drawable (`size * scale`).
+    #[allow(dead_code)] // helper for reading back a windowed frame at device resolution
     pub fn pixel_size(&self) -> (u32, u32) {
         (
             (self.size.0 as f64 * self.scale).round() as u32,

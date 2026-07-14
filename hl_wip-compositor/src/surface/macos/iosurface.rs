@@ -78,8 +78,9 @@ pub unsafe fn create_iosurface(w: u32, h: u32) -> IOSurfaceRef {
 }
 
 /// CPU-fill a freshly created `IOSurface`'s pages with tight BGRA rows (`w*4` bytes per row), honoring the
-/// surface's real `bytesPerRow` stride. Used by the offscreen zero-copy smoke to plant a known pattern in
-/// the surface's storage before wrapping it as a texture. Rows beyond `bgra`'s length are left untouched.
+/// surface's real `bytesPerRow` stride. Plants a known pattern in the surface's storage before wrapping it
+/// as a texture (the zero-copy IOSurface present path). Rows beyond `bgra`'s length are left untouched.
+#[allow(dead_code)] // forward seam: IOSurface zero-copy fill, exercised once a live IOSurface id is bridged
 pub unsafe fn fill_bgra(s: IOSurfaceRef, bgra: &[u8], w: u32, h: u32) {
     IOSurfaceLock(s, 0, std::ptr::null_mut());
     let base = IOSurfaceGetBaseAddress(s) as *mut u8;
