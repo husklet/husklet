@@ -137,7 +137,7 @@ static int translate_sse4x(struct insn *I, uint64_t next) {
             int countD = (imm >> 4) & 3, zmask = imm & 0xf;
             if (I->is_mem) {
                 emit_ea(I, next);
-                e_ldr_s(19, 17); // m32 -> lane 0 of v19 (rest zeroed)
+                g_ldr_s(19, 17); // m32 -> lane 0 of v19 (rest zeroed)
                 e_ins_s(D, countD, 19, 0);
             } else {
                 e_ins_s(D, countD, I->rm_reg, (imm >> 6) & 3);

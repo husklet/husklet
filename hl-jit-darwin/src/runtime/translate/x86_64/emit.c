@@ -78,14 +78,22 @@ static void emit_host_ptr(int rd, uint64_t v, int kind) {
     e_movconst_fixed(rd, v);
 }
 
-// width-typed load/store at [rn, #0]. w = 1/2/4/8 bytes. (zero-extends on load)
+// x86 TSO has three ordered edges (LoadLoad, LoadStore, StoreStore) and permits StoreLoad.  DMB
+// ISHLD after guest loads and DMB ISH before guest stores provide exactly those required edges while
+// retaining x86's unaligned-access behavior.  Engine-private e_ldr/e_str accesses remain relaxed.
+static void e_dmb_ish(void) { emit32(0xD5033BBFu); }
+static void e_dmb_ishld(void) { emit32(0xD50339BFu); }
+
+// Guest width-typed load/store at [rn, #0]. w = 1/2/4/8 bytes. (zero-extends on load)
 static void e_load(int w, int rt, int rn) {
     uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
     emit32(b | (rn << 5) | rt);
+    e_dmb_ishld();
 }
 
 static void e_store(int w, int rt, int rn) {
     uint32_t b = w == 1 ? 0x39000000u : w == 2 ? 0x79000000u : w == 4 ? 0xB9000000u : 0xF9000000u;
+    e_dmb_ish();
     emit32(b | (rn << 5) | rt);
 }
 
@@ -99,10 +107,12 @@ static void e_ldrs(int w, int rt, int rn) {                                 // s
 static void e_load_uoff(int w, int rt, int rn, unsigned disp) { // ldr{b,h,,} rt,[rn,#disp]
     uint32_t b = w == 1 ? 0x39400000u : w == 2 ? 0x79400000u : w == 4 ? 0xB9400000u : 0xF9400000u;
     emit32(b | (((disp / (unsigned)w) & 0xFFF) << 10) | (rn << 5) | rt);
+    e_dmb_ishld();
 }
 
 static void e_store_uoff(int w, int rt, int rn, unsigned disp) { // str{b,h,,} rt,[rn,#disp]
     uint32_t b = w == 1 ? 0x39000000u : w == 2 ? 0x79000000u : w == 4 ? 0xB9000000u : 0xF9000000u;
+    e_dmb_ish();
     emit32(b | (((disp / (unsigned)w) & 0xFFF) << 10) | (rn << 5) | rt);
 }
 
@@ -110,10 +120,12 @@ static void e_store_uoff(int w, int rt, int rn, unsigned disp) { // str{b,h,,} r
 static void e_ldur(int w, int rt, int rn, int simm9) { // ldur{b,h,,} rt,[rn,#simm9]
     uint32_t b = w == 1 ? 0x38400000u : w == 2 ? 0x78400000u : w == 4 ? 0xB8400000u : 0xF8400000u;
     emit32(b | (((uint32_t)simm9 & 0x1FF) << 12) | (rn << 5) | rt);
+    e_dmb_ishld();
 }
 
 static void e_stur(int w, int rt, int rn, int simm9) { // stur{b,h,,} rt,[rn,#simm9]
     uint32_t b = w == 1 ? 0x38000000u : w == 2 ? 0x78000000u : w == 4 ? 0xB8000000u : 0xF8000000u;
+    e_dmb_ish();
     emit32(b | (((uint32_t)simm9 & 0x1FF) << 12) | (rn << 5) | rt);
 }
 
@@ -452,6 +464,14 @@ static void e_ldr_s(int t, int rn) {
 static void e_str_s(int t, int rn) {
     emit32(0xBD000000u | (rn << 5) | t);
 } // str s,[xn]
+
+// Guest SIMD/x87 accesses. Keep these distinct from relaxed engine spills to cpu/scratch storage.
+static void g_ldr_q(int t, int rn, int off) { e_ldr_q(t, rn, off); e_dmb_ishld(); }
+static void g_str_q(int t, int rn, int off) { e_dmb_ish(); e_str_q(t, rn, off); }
+static void g_ldr_d(int t, int rn) { e_ldr_d(t, rn); e_dmb_ishld(); }
+static void g_str_d(int t, int rn) { e_dmb_ish(); e_str_d(t, rn); }
+static void g_ldr_s(int t, int rn) { e_ldr_s(t, rn); e_dmb_ishld(); }
+static void g_str_s(int t, int rn) { e_dmb_ish(); e_str_s(t, rn); }
 
 static void e_fmov_to_d(int vd, int xn) {
     emit32(0x9E670000u | (xn << 5) | vd);

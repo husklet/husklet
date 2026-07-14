@@ -71,7 +71,7 @@ static void fp_drop(void) {
 static void fp_ld(int vd, int i) { // vd = ST(i)
     if (FP_STATIC) {
         fp_slot_addr(17, i);
-        e_ldr_d(vd, 17);
+        g_ldr_d(vd, 17);
     } else
         e_fp_ld(vd, i);
 }
@@ -79,7 +79,7 @@ static void fp_ld(int vd, int i) { // vd = ST(i)
 static void fp_st(int vs, int i) { // ST(i) = vs
     if (FP_STATIC) {
         fp_slot_addr(17, i);
-        e_str_d(vs, 17);
+        g_str_d(vs, 17);
     } else
         e_fp_st(vs, i);
 }
@@ -89,7 +89,7 @@ static void fp_push(int vs) { // push vs -> ST(0)  (top -= 1)
         g_fp_top = (g_fp_top - 1) & 7;
         g_fp_dirty = 1;
         fp_slot_addr(17, 0);
-        e_str_d(vs, 17);
+        g_str_d(vs, 17);
     } else
         e_fp_push(vs);
 }

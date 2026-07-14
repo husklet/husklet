@@ -228,6 +228,9 @@ fn ext_ipc() -> Group {
         port("cmdbuf-ring", "ext_ipc/ipc_cmdbuf_ring.c")
             .out("cmdbuf_ring ok cmds=200000 wraps=390 child_exit=0 spurious_eagain=0\n")
             .only(&[Engine::LinuxAarch64, Engine::LinuxX86_64]),
+        port("tso-unaligned", "ext_ipc/ipc_tso_unaligned.c")
+            .out("tso_unaligned rounds=100000 bad=0\n")
+            .only(&[Engine::LinuxX86_64]),
         // Cross-process eventfd COUNTER semantics: a blocking eventfd created flags=0, then fork()'d; the
         // child writes value 5, the parent blocking-reads. eventfd is a SHARED kernel object — the parent
         // must read exactly 5 (the child's write), not a process-local counter. Models Chrome's Mojo

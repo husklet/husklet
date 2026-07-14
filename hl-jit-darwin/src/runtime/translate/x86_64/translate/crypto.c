@@ -45,7 +45,7 @@
 static int crypto_rm_vec(struct insn *I, uint64_t next) {
     if (I->is_mem) {
         emit_ea(I, next);
-        e_ldr_q(19, 17, 0);
+        g_ldr_q(19, 17, 0);
         return 19;
     }
     return I->rm_reg;
@@ -333,9 +333,9 @@ static int translate_crypto(struct insn *I, uint64_t next) {
                 emit_ea(I, next);
                 s = 19;
                 if (src_bytes == 8)
-                    e_ldr_d(19, 17);
+                    g_ldr_d(19, 17);
                 else if (src_bytes == 4)
-                    e_ldr_s(19, 17);
+                    g_ldr_s(19, 17);
                 else
                     e_ldr_h(19, 17);
             } else

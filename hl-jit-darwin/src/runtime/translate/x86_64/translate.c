@@ -2017,14 +2017,14 @@ static void *translate_block(uint64_t gpc) {
                     e_mov_rr(19, 17, 1); // x19 = EA (helpers clobber x17)
                     if (op == 0xD9) {    // f32 mem
                         if (reg == 0) {
-                            e_ldr_s(16, 19);
+                            g_ldr_s(16, 19);
                             emit32(0x1E22C000u | (16 << 5) | 16);
                             fp_push(16);
                         } // fld m32
                         else if (reg == 2 || reg == 3) {
                             fp_ld(16, 0);
                             emit32(0x1E624000u | (16 << 5) | 16);
-                            e_str_s(16, 19);
+                            g_str_s(16, 19);
                             if (reg == 3) fp_settop(1);
                         } // fst/fstp
                         else if (reg == 5) { // fldcw m16: load the x87 control word (RC/PC/exception masks)
@@ -2073,12 +2073,12 @@ static void *translate_block(uint64_t gpc) {
                         }
                     } else if (op == 0xDD) { // f64 mem
                         if (reg == 0) {
-                            e_ldr_d(16, 19);
+                            g_ldr_d(16, 19);
                             fp_push(16);
                         } // fld m64
                         else if (reg == 2 || reg == 3) {
                             fp_ld(16, 0);
-                            e_str_d(16, 19);
+                            g_str_d(16, 19);
                             if (reg == 3) fp_settop(1);
                         } // fst/fstp
                         else if (reg == 7) {
@@ -2151,7 +2151,7 @@ static void *translate_block(uint64_t gpc) {
                         // arith dispatch below (identical fadd(0)/fmul(1)/fcom(2)/fcomp(3)/fsub(4)/
                         // fsubr(5)/fdiv(6)/fdivr(7) encoding for all four opcodes).
                         if (op == 0xD8) { // m32 float
-                            e_ldr_s(16, 19);
+                            g_ldr_s(16, 19);
                             emit32(0x1E22C000u | (16 << 5) | 16); // fcvt d16, s16
                         } else if (op == 0xDA) {                  // m32 signed integer
                             emit32(0xB9400000u | (19 << 5) | 16); // ldr   w16, [x19]
@@ -2160,7 +2160,7 @@ static void *translate_block(uint64_t gpc) {
                             emit32(0x79C00000u | (19 << 5) | 16); // ldrsh w16, [x19]
                             emit32(0x1E620000u | (16 << 5) | 16); // scvtf d16, w16
                         } else                                    // 0xDC: m64 float
-                            e_ldr_d(16, 19);
+                            g_ldr_d(16, 19);
                         if (reg == 2 || reg == 3) {
                             fp_ld(18, 0);
                             e_fcom_setfpsw(18, 16);
@@ -2505,9 +2505,9 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (I.rexW)
-                            e_ldr_d(vd, 17);
+                            g_ldr_d(vd, 17);
                         else
-                            e_ldr_s(vd, 17);
+                            g_ldr_s(vd, 17);
                     } else {
                         if (I.rexW)
                             e_fmov_to_d(vd, I.rm_reg);
@@ -2517,16 +2517,16 @@ static void *translate_block(uint64_t gpc) {
                 } else if (op == 0x7E && I.rep) { // F3 0F 7E: movq xmm, xmm/m64
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_d(vd, 17);
+                        g_ldr_d(vd, 17);
                     } else
                         e_vmov8(vd, vm);
                 } else if (op == 0x7E) { // 66 0F 7E: movd/movq r/m, xmm
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (I.rexW)
-                            e_str_d(vd, 17);
+                            g_str_d(vd, 17);
                         else
-                            e_str_s(vd, 17);
+                            g_str_s(vd, 17);
                     } else {
                         if (I.rexW)
                             e_fmov_from_d(I.rm_reg, vd);
@@ -2536,7 +2536,7 @@ static void *translate_block(uint64_t gpc) {
                 } else if (op == 0xD6) { // 66 0F D6: movq xmm/m64, xmm
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_str_d(vd, 17);
+                        g_str_d(vd, 17);
                     } else
                         e_vmov8(vm, vd);
                 } else if (op == 0x6F && !I.p66 && !I.rep && !I.repne) { // MMX movq mm, mm/m64 (NO prefix): 64-bit
@@ -2545,25 +2545,25 @@ static void *translate_block(uint64_t gpc) {
                     // corrupted the adjacent 8 bytes of guest memory. Keep MMX at its architectural 64-bit width.
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_d(vd, 17);
+                        g_ldr_d(vd, 17);
                     } else
                         e_vmov8(vd, vm);
                 } else if (op == 0x7F && !I.p66 && !I.rep && !I.repne) { // MMX movq mm/m64, mm (NO prefix): 64-bit
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_str_d(vd, 17); // 64-bit store: must NOT clobber the 8 bytes after the MMX destination
+                        g_str_d(vd, 17); // 64-bit store: must NOT clobber the 8 bytes after the MMX destination
                     } else
                         e_vmov8(vm, vd);
                 } else if (op == 0x6F || op == 0x28 || (op == 0x10 && !I.rep && !I.repne)) { // load 128 -> xmm
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(vd, 17, 0);
+                        g_ldr_q(vd, 17, 0);
                     } else
                         e_vmov(vd, vm);
                 } else if (op == 0x7F || op == 0x29 || (op == 0x11 && !I.rep && !I.repne)) { // store xmm -> 128
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_str_q(vd, 17, 0);
+                        g_str_q(vd, 17, 0);
                     } else
                         e_vmov(vm, vd);
                 } else if ((op == 0x10 || op == 0x11) && I.rep) { // movss (32-bit)
@@ -2571,9 +2571,9 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (st)
-                            e_str_s(vd, 17);
+                            g_str_s(vd, 17);
                         else
-                            e_ldr_s(vd, 17);
+                            g_ldr_s(vd, 17);
                     } else {
                         if (st)
                             emit32(0x6E040400u | (vd << 5) | vm);
@@ -2585,9 +2585,9 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (st)
-                            e_str_d(vd, 17);
+                            g_str_d(vd, 17);
                         else
-                            e_ldr_d(vd, 17);
+                            g_ldr_d(vd, 17);
                     } else {
                         if (st)
                             emit32(0x6E080400u | (vd << 5) | vm);
@@ -2598,7 +2598,7 @@ static void *translate_block(uint64_t gpc) {
                     int lane = (op == 0x16) ? 1 : 0;   // 12->low lane(d[0]), 16->high lane(d[1])
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_d(16, 17);
+                        g_ldr_d(16, 17);
                         e_ins_d(vd, lane, 16, 0);
                     } else {
                         int srclane = (op == 0x12) ? 1 : 0; // movhlps: d[0]<-src d[1]; movlhps: d[1]<-src d[0]
@@ -2608,13 +2608,13 @@ static void *translate_block(uint64_t gpc) {
                     int lane = (op == 0x17) ? 1 : 0;
                     emit_ea(&I, next);
                     e_ins_d(16, 0, vd, lane);
-                    e_str_d(16, 17);
+                    g_str_d(16, 17);
                 } else if (op == 0x54 || op == 0x55 || op == 0x56 ||
                            op == 0x57) { // andps/andnps/orps/xorps (FP bitwise)
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     if (op == 0x54)
                         e_v3(0x4E201C00u, vd, vd, s); // and
@@ -2628,7 +2628,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     unsigned im = (unsigned)I.imm;
                     e_vmov(18, vd);
@@ -2639,7 +2639,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     unsigned im = (unsigned)I.imm;
                     e_vmov(18, vd);
@@ -2679,7 +2679,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     unsigned im = (unsigned)I.imm & 0xff;
                     // AES-endgame perf: single-insn forms for the shuffles crypto/ghash loops actually use.
@@ -2703,7 +2703,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     unsigned im = (unsigned)I.imm;
                     int hi = I.rep; // F3 shuffles the HIGH 4 words, F2 the LOW 4
@@ -2720,14 +2720,14 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     e_v3(0x6E201C00u, vd, vd, s);
                 } else if (op == 0xDB || op == 0xEB || op == 0xDF) { // pand / por / pandn
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     if (op == 0xDB)
                         e_v3(0x4E201C00u, vd, vd, s);
@@ -2739,7 +2739,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     uint32_t b = op == 0x74 ? 0x6E208C00u : op == 0x75 ? 0x6E608C00u : 0x6EA08C00u;
                     e_v3(b, vd, vd, s);
@@ -2747,7 +2747,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     uint32_t b = op == 0x64 ? 0x4E203400u : op == 0x65 ? 0x4E603400u : 0x4EA03400u;
                     e_v3(b, vd, vd, s);
@@ -2755,7 +2755,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     uint32_t b = op == 0xDE   ? 0x6E206400u  // pmaxub -> UMAX  .16B (lane-wise, NOT UMAXP)
                                  : op == 0xDA ? 0x6E206C00u  // pminub -> UMIN  .16B (lane-wise, NOT UMINP)
@@ -2766,7 +2766,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     uint32_t b = op == 0xFC   ? 0x4E208400u
                                  : op == 0xFD ? 0x4E608400u
@@ -2777,7 +2777,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     uint32_t b = op == 0xF8   ? 0x6E208400u
                                  : op == 0xF9 ? 0x6E608400u
@@ -2789,7 +2789,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     uint32_t b = op == 0xDC   ? 0x6E200C00u  // paddusb -> UQADD .16b
                                  : op == 0xDD ? 0x6E600C00u  // paddusw -> UQADD .8h
@@ -2804,21 +2804,21 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     e_v3(op == 0xE0 ? 0x6E201400u : 0x6E601400u, vd, vd, s); // .16b : .8h
                 } else if (op == 0xD5) { // pmullw: packed signed 16x16 -> low 16 bits -> MUL .8h
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     e_v3(0x4E609C00u, vd, vd, s);
                 } else if (op == 0xE5 || op == 0xE4) { // pmulhw(signed)/pmulhuw(unsigned): 16x16 -> high 16 bits
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     // widen-multiply the low/high 4 lanes to 32-bit products, then UZP2 picks the high 16 of each.
                     uint32_t lo = op == 0xE5 ? 0x0E60C000u : 0x2E60C000u; // SMULL/UMULL  v18.4s, vd.4h, s.4h
@@ -2830,7 +2830,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     emit32(0x0E60C000u | (s << 16) | (vd << 5) | 18);  // smull  v18.4s, vd.4h, s.4h
                     emit32(0x4E60C000u | (s << 16) | (vd << 5) | 19);  // smull2 v19.4s, vd.8h, s.8h
@@ -2840,7 +2840,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     int left = (op == 0xF1 || op == 0xF2 || op == 0xF3);
                     int arith = (op == 0xE1 || op == 0xE2);
@@ -2852,7 +2852,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     int hi = (op == 0x15);  // unpckh* -> ZIP2
                     int sz = I.p66 ? 3 : 2; // 66=pd (64-bit lanes, .2d); none=ps (32-bit lanes, .4s)
@@ -2862,7 +2862,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_d(16, 17);
+                        g_ldr_d(16, 17);
                         s = 16;
                     }
                     emit32(0x0F20A400u | (s << 5) | 16);  // SXTL v16.2d, vs.2s  (sign-extend the 2 int32)
@@ -2873,7 +2873,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                         s = 16;
                     }
                     uint32_t cvt = I.p66 ? 0x4EE1B800u  // FCVTZS v16.2d, vs.2d (toward zero)
@@ -2902,7 +2902,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     int hi = (op == 0x68 || op == 0x69 || op == 0x6A || op == 0x6D); // punpckh*; 0x6C(lqdq) is LOW
                     int sz = (op == 0x60 || op == 0x68)   ? 0
@@ -2917,7 +2917,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     uint32_t sz = (op == 0x6B) ? 1u : 0u;     // source element: 0x6B = 16-bit, else 8-bit dest
                     uint32_t lo = (op == 0x67) ? 0x2E212800u  // SQXTUN  (signed->unsigned narrow)
@@ -2970,9 +2970,9 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (I.repne)
-                            e_ldr_d(16, 17);
+                            g_ldr_d(16, 17);
                         else
-                            e_ldr_s(16, 17);
+                            g_ldr_s(16, 17);
                         s = 16;
                     }
                     if (op == 0x2D) { // cvtsd2si: honor MXCSR.RC -> round to integral (FRINTI uses FPCR.RMode)...
@@ -3014,11 +3014,11 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (packed)
-                            e_ldr_q(16, 17, 0);
+                            g_ldr_q(16, 17, 0);
                         else if (I.repne)
-                            e_ldr_d(16, 17);
+                            g_ldr_d(16, 17);
                         else
-                            e_ldr_s(16, 17);
+                            g_ldr_s(16, 17);
                         s = 16;
                     }
                     uint32_t szb = (packed ? I.p66 : I.repne) ? 0x00400000u : 0;
@@ -3044,11 +3044,11 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (packed)
-                            e_ldr_q(16, 17, 0);
+                            g_ldr_q(16, 17, 0);
                         else if (I.repne)
-                            e_ldr_d(16, 17);
+                            g_ldr_d(16, 17);
                         else
-                            e_ldr_s(16, 17);
+                            g_ldr_s(16, 17);
                         s = 16;
                     }
                     int dbl = packed ? I.p66 : I.repne; // element type: double vs single
@@ -3083,9 +3083,9 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (I.repne)
-                            e_ldr_d(16, 17);
+                            g_ldr_d(16, 17);
                         else
-                            e_ldr_s(16, 17);
+                            g_ldr_s(16, 17);
                         s = 16;
                     }
                     if (I.repne)
@@ -3114,11 +3114,11 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (packed)
-                            e_ldr_q(16, 17, 0);
+                            g_ldr_q(16, 17, 0);
                         else if (I.repne)
-                            e_ldr_d(16, 17);
+                            g_ldr_d(16, 17);
                         else
-                            e_ldr_s(16, 17);
+                            g_ldr_s(16, 17);
                         s = 16;
                     }
                     int pred = (int)I.imm & 7;
@@ -3153,9 +3153,9 @@ static void *translate_block(uint64_t gpc) {
                     if (I.is_mem) {
                         emit_ea(&I, next);
                         if (I.p66)
-                            e_ldr_d(16, 17);
+                            g_ldr_d(16, 17);
                         else
-                            e_ldr_s(16, 17);
+                            g_ldr_s(16, 17);
                         s = 16;
                     }
                     emit32((I.p66 ? 0x1E602000u : 0x1E202000u) | (s << 16) | (vd << 5)); // FCMP Dvd, Ds  (Rd=0)
@@ -3167,7 +3167,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     emit32(0x4E801800u | (vd << 16) | (vd << 5) | 17); // uzp1 v17.4s, vd.4s, vd.4s -> [d0,d2,..]
                     emit32(0x4E801800u | (s << 16) | (s << 5) | 18);   // uzp1 v18.4s, s.4s,  s.4s  -> [s0,s2,..]
@@ -3190,7 +3190,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                         s = 16;
                     }
                     if (I.rep)
@@ -3220,7 +3220,7 @@ static void *translate_block(uint64_t gpc) {
                     int s = I.is_mem ? 16 : vm;
                     if (I.is_mem) {
                         emit_ea(&I, next);
-                        e_ldr_q(16, 17, 0);
+                        g_ldr_q(16, 17, 0);
                     }
                     emit32(0x6E207400u | (s << 16) | (vd << 5) | 17); // uabd   v17.16b, vd.16b, s.16b
                     emit32(0x6E202800u | (17 << 5) | 17);             // uaddlp v17.8h,  v17.16b
@@ -3229,19 +3229,19 @@ static void *translate_block(uint64_t gpc) {
                     e_vmov(vd, 17);
                 } else if (op == 0xE7 && I.p66) { // movntdq (66): non-temporal store xmm -> m128
                     emit_ea(&I, next);
-                    e_str_q(vd, 17, 0);
+                    g_str_q(vd, 17, 0);
                 } else if (op == 0xF7 && I.p66) { // maskmovdqu (66): per-byte masked store xmm(vd) -> [RDI],
                     // mask = xmm(vm); only each mask byte's MSB selects. Read-modify-write blend at [RDI]
                     // (the region is writable; unselected bytes keep their memory value == architecturally
                     // "not stored"). sel = sshr(mask,#7) -> 0xFF where store; BSL sel?src:mem; store back.
                     e_vshr_imm(18, vm, 8, 7, 1);     // sshr v18.16b, vmask.16b, #7
                     e_mov_rr(17, RDI, 1);            // x17 = RDI (guest addr == host addr, in-process)
-                    e_ldr_q(16, 17, 0);              // v16 = [RDI]
+                    g_ldr_q(16, 17, 0);              // v16 = [RDI]
                     e_v3(0x6E601C00u, 18, vd, 16);   // bsl v18.16b, vsrc.16b, v16.16b (sel?src:mem)
-                    e_str_q(18, 17, 0);              // [RDI] = blended
+                    g_str_q(18, 17, 0);              // [RDI] = blended
                 } else if (op == 0x2B && I.is_mem) { // movntps (NP) / movntpd (66): non-temporal store xmm -> m128
                     emit_ea(&I, next);               // (aligned, non-temporal -> a plain 128-bit store on ARM;)
-                    e_str_q(vd, 17, 0);
+                    g_str_q(vd, 17, 0);
                 } else
                     handled = 0;
                 if (handled) {
@@ -3501,9 +3501,9 @@ static void *translate_block(uint64_t gpc) {
                     emit_ea(&I, next);                    // x17 = base of the 512-byte FXSAVE area
                     for (int i = 0; i < 16; i++) {
                         if (sub == 0)
-                            e_str_q(i, 17, 160 + i * 16);
+                            g_str_q(i, 17, 160 + i * 16);
                         else
-                            e_ldr_q(i, 17, 160 + i * 16);
+                            g_ldr_q(i, 17, 160 + i * 16);
                     }
                     if (sub == 0) { // fxsave: also save MXCSR (from FPCR.RMode, mirrors stmxcsr) + FCW
                         emit32(0xD53B4400u | 19);       // mrs x19, fpcr
