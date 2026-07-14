@@ -16,7 +16,13 @@ use smithay::reexports::wayland_server::{
     protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_shm, wl_surface::WlSurface},
     Client, DisplayHandle, Resource,
 };
-use smithay::input::{keyboard::XkbConfig, Seat, SeatHandler, SeatState};
+use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
+use smithay::input::{
+    keyboard::{FilterResult, Keycode, XkbConfig},
+    pointer::{AxisFrame, ButtonEvent, MotionEvent},
+    Seat, SeatHandler, SeatState,
+};
+use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 use smithay::output::{
     Mode as OutputMode, Output as WlOutputHandle, PhysicalProperties, Scale, Subpixel,
 };
@@ -36,7 +42,7 @@ use smithay::wayland::{
 
 use crate::scene::model::{BufferState, Format, Output, OutputId, Rect, SurfaceId, SurfaceRole};
 use crate::scene::port::Clock;
-use crate::scene::service::{BufferChange, Commit};
+use crate::scene::service::{surface_at, BufferChange, Commit};
 use crate::{Compositor, FrameOutcome};
 
 use super::present::{PngPresenter, StoredBuffer};
@@ -108,6 +114,11 @@ pub struct HlState {
     /// `wl_surface` protocol object → neutral scene surface id. The scene mints collision-free ids; this
     /// is the neutral analogue of `HlState::surface_ids`.
     surface_ids: HashMap<ObjectId, SurfaceId>,
+    /// Neutral scene surface id → the live `wl_surface` protocol object. The inverse of `surface_ids`,
+    /// needed so input injection can hand smithay's `PointerHandle`/`KeyboardHandle` the concrete
+    /// `WlSurface` focus (its `PointerTarget`/`KeyboardTarget` impls serialize the wire events). Kept in
+    /// lockstep with `surface_ids` (registered/torn down together).
+    surfaces_by_id: HashMap<SurfaceId, WlSurface>,
     /// `wl_surface.frame` callbacks the client is owed but that have NOT yet been fired, keyed by the
     /// neutral surface they were requested on. A callback is held (not fired at commit) until the frame it
     /// belongs to actually reaches the presenter — so a throttled frame does not prematurely tell the
@@ -161,6 +172,7 @@ impl HlState {
             _output_global: output_global,
             engine,
             surface_ids: HashMap::new(),
+            surfaces_by_id: HashMap::new(),
             pending_callbacks: HashMap::new(),
             pending_repaints: HashMap::new(),
         }
@@ -180,11 +192,13 @@ impl HlState {
     fn register_surface(&mut self, surface: &WlSurface) {
         let sid = self.engine.scene.create_surface();
         self.surface_ids.insert(surface.id(), sid);
+        self.surfaces_by_id.insert(sid, surface.clone());
     }
 
     /// Drop a `wl_surface` and its scene surface.
     fn teardown_surface(&mut self, surface: &WlSurface) {
         if let Some(sid) = self.surface_ids.remove(&surface.id()) {
+            self.surfaces_by_id.remove(&sid);
             self.engine.presenter_mut().forget(sid);
             self.engine.scene.remove_surface(sid);
             // Reclaim any frame callbacks/repaint owed to a surface that just went away: a client that
@@ -393,6 +407,184 @@ impl HlState {
         for sid in targets {
             self.pending_callbacks.remove(&sid);
         }
+    }
+}
+
+// ------------------------------------- input injection ---------------------------------------
+//
+// The headless compositor has NO hardware input source, so these methods are the seam a host (or a
+// test) drives to deliver pointer + keyboard input to the focused client. Each routes through smithay's
+// `PointerHandle`/`KeyboardHandle`, whose `PointerTarget`/`KeyboardTarget` impls for `WlSurface` do the
+// actual wire serialization (enter/leave/motion/button/axis/frame and enter/leave/key/modifiers). The
+// coordinate model matches smithay's `PointerHandle::motion` contract: we pass the pointer location in
+// GLOBAL compositor space plus the focused surface's ORIGIN in global space, and smithay derives the
+// surface-local coordinate the client receives as `location - origin`.
+//
+// The neutral scene tracks no global on-screen window position (every toplevel roots its own tree at
+// `(0, 0)`), so "global" here is that shared root space: injected `(x, y)` are root-local logical
+// points, and a surface's global origin is its accumulated offset within its window root.
+
+/// One host/test-driven input action, delivered to [`HlState`] over the serve loop's input channel (see
+/// [`super::serve::run_auto_with_input`]) or applied directly via [`HlState::apply_input`]. Keyboard
+/// focus is expressed by intent (`FocusTopmostKeyboard`) rather than a surface id, because a remote
+/// driver across the serve-thread boundary has no handle to the neutral [`SurfaceId`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum InputCommand {
+    /// Move the pointer to root-local logical `(x, y)`; re-hit-tests focus and emits enter/leave/motion.
+    PointerMotion { x: f64, y: f64 },
+    /// Press/release a pointer button (Linux `input-event-codes`, e.g. `0x110` = BTN_LEFT).
+    PointerButton { button: u32, pressed: bool },
+    /// Scroll: `horizontal`/`vertical` are logical scroll amounts (wheel source).
+    PointerAxis { horizontal: f64, vertical: f64 },
+    /// Press/release a key by EVDEV keycode (Linux `input-event-codes`, e.g. `30` = KEY_A) — the same
+    /// value the client receives on `wl_keyboard.key`.
+    Key { keycode: u32, pressed: bool },
+    /// Give keyboard focus to the topmost toplevel (emits `wl_keyboard.leave`/`enter` + keymap).
+    FocusTopmostKeyboard,
+    /// Clear keyboard focus (emits `wl_keyboard.leave` to the previously focused surface).
+    ClearKeyboardFocus,
+}
+
+impl HlState {
+    /// Apply one host/test-driven [`InputCommand`], routing it through the seat's pointer/keyboard.
+    pub fn apply_input(&mut self, cmd: InputCommand) {
+        match cmd {
+            InputCommand::PointerMotion { x, y } => self.inject_pointer_motion(x, y),
+            InputCommand::PointerButton { button, pressed } => self.inject_pointer_button(button, pressed),
+            InputCommand::PointerAxis { horizontal, vertical } => self.inject_pointer_axis(horizontal, vertical),
+            InputCommand::Key { keycode, pressed } => self.inject_key(keycode, pressed),
+            InputCommand::FocusTopmostKeyboard => {
+                let target = self.topmost_toplevel();
+                self.set_keyboard_focus(target);
+            }
+            InputCommand::ClearKeyboardFocus => self.set_keyboard_focus(None),
+        }
+    }
+
+    /// The most recently mapped toplevel (highest surface id) — the "topmost" window an input-focus
+    /// intent targets. `None` if no toplevel is mapped. A stand-in for real z-order/stacking, which the
+    /// neutral scene does not model.
+    pub fn topmost_toplevel(&self) -> Option<SurfaceId> {
+        self.engine.scene.toplevels().max()
+    }
+
+    /// The current-frame timestamp (ms) events are stamped with — the same host-monotonic clock the
+    /// frame callbacks read, so input and frame time share one timeline.
+    fn input_time_ms(&self) -> u32 {
+        (self.engine.clock().now_nanos() / 1_000_000) as u32
+    }
+
+    /// Candidate window roots a pointer hit-test walks, best-first: the keyboard-focused window (so an
+    /// overlapping stack resolves to the active window), then every other toplevel. Because the neutral
+    /// scene carries no global window offsets, all roots sit at `(0, 0)`; focus is the only tie-break.
+    fn candidate_roots(&self) -> Vec<SurfaceId> {
+        let mut roots = Vec::new();
+        if let Some(focus) = self.engine.scene.seat().keyboard_focus {
+            if let Some(root) = self.engine.scene.window_root(focus) {
+                roots.push(root);
+            }
+        }
+        for tl in self.engine.scene.toplevels() {
+            if !roots.contains(&tl) {
+                roots.push(tl);
+            }
+        }
+        roots
+    }
+
+    /// Hit-test the tree(s) at root-local logical `(x, y)`: the input-sensitive surface under the point
+    /// and its window root + root-space origin `(ox, oy)`. Returns `(root, hit_surface, ox, oy)`.
+    fn hit_test(&self, x: f64, y: f64) -> Option<(SurfaceId, SurfaceId, i32, i32)> {
+        let (ix, iy) = (x.floor() as i32, y.floor() as i32);
+        for root in self.candidate_roots() {
+            if let Some((sid, ox, oy)) = surface_at(&self.engine.scene, root, ix, iy) {
+                return Some((root, sid, ox, oy));
+            }
+        }
+        None
+    }
+
+    /// Move the pointer to root-local logical `(x, y)`. Hit-tests the surface under the point, updates
+    /// the neutral seat, and drives smithay's `PointerHandle::motion` + `frame` with that focus so the
+    /// client receives `wl_pointer.leave`/`enter` (on the surface under the cursor changing) and
+    /// `wl_pointer.motion` at the correct surface-local coordinate (`(x, y)` minus the surface origin).
+    pub fn inject_pointer_motion(&mut self, x: f64, y: f64) {
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let hit = self.hit_test(x, y);
+
+        // Keep the neutral seat consistent with what we deliver over the wire (for inspection/tests).
+        self.engine.scene.seat_mut().pointer_location = (x, y);
+        self.engine.scene.seat_mut().pointer_focus = hit.map(|(_, sid, _, _)| sid);
+
+        // Build smithay's focus: the concrete `WlSurface` + its origin in global (root) space.
+        let focus = hit.and_then(|(_, sid, ox, oy)| {
+            self.surfaces_by_id
+                .get(&sid)
+                .cloned()
+                .map(|wl| (wl, Point::<f64, Logical>::from((ox as f64, oy as f64))))
+        });
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        pointer.motion(self, focus, &MotionEvent { location: (x, y).into(), serial, time });
+        pointer.frame(self);
+    }
+
+    /// Press or release a pointer button. Uses the pointer's CURRENT focus (from the last motion), which
+    /// smithay tracks internally — so a button lands on whatever surface the cursor is over.
+    pub fn inject_pointer_button(&mut self, button: u32, pressed: bool) {
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        let state = if pressed { ButtonState::Pressed } else { ButtonState::Released };
+        pointer.button(self, &ButtonEvent { serial, time, button, state });
+        pointer.frame(self);
+    }
+
+    /// Scroll the pointer by logical `horizontal`/`vertical` amounts (wheel source). A zero component is
+    /// omitted so the client only sees the axes that actually moved.
+    pub fn inject_pointer_axis(&mut self, horizontal: f64, vertical: f64) {
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let time = self.input_time_ms();
+        let mut frame = AxisFrame::new(time).source(AxisSource::Wheel);
+        if horizontal != 0.0 {
+            frame = frame.value(Axis::Horizontal, horizontal);
+        }
+        if vertical != 0.0 {
+            frame = frame.value(Axis::Vertical, vertical);
+        }
+        pointer.axis(self, frame);
+        pointer.frame(self);
+    }
+
+    /// Give keyboard focus to `sid` (or clear it with `None`). Drives smithay's `KeyboardHandle::set_focus`
+    /// — which emits `wl_keyboard.leave` to the old focus and `wl_keyboard.enter` (+ the keymap already
+    /// sent at bind) to the new — and mirrors the change into the neutral seat.
+    pub fn set_keyboard_focus(&mut self, sid: Option<SurfaceId>) {
+        let Some(keyboard) = self.seat.get_keyboard() else { return };
+        let surface = sid.and_then(|s| self.surfaces_by_id.get(&s).cloned());
+        // Mirror into the neutral seat so scene focus bookkeeping stays truthful.
+        self.engine.scene.seat_mut().keyboard_focus = sid;
+        let serial = SERIAL_COUNTER.next_serial();
+        keyboard.set_focus(self, surface, serial);
+    }
+
+    /// Press or release a key by EVDEV keycode. smithay's keymap is keyed on X11 keycodes (evdev + 8),
+    /// and its `KeyboardTarget` impl sends `evdev` back to the client (`raw - 8`); we add the 8 here so
+    /// the caller speaks Linux `input-event-codes` and the client receives the same value. Modifiers are
+    /// tracked by smithay's xkb state across presses. No compositor keybinding filter — always forward.
+    pub fn inject_key(&mut self, keycode: u32, pressed: bool) {
+        let Some(keyboard) = self.seat.get_keyboard() else { return };
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        let state = if pressed { KeyState::Pressed } else { KeyState::Released };
+        keyboard.input::<(), _>(
+            self,
+            Keycode::new(keycode + 8),
+            state,
+            serial,
+            time,
+            |_, _, _| FilterResult::Forward,
+        );
     }
 }
 

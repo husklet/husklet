@@ -201,6 +201,17 @@ impl Scene {
 
     // ---- tree navigation --------------------------------------------------------------------------
 
+    /// Every live toplevel surface id (the roots an input hit-test can land in). Order-independent —
+    /// the neutral scene tracks no global on-screen window position, so toplevels all root at `(0, 0)`;
+    /// an adapter that injects pointer input disambiguates overlap with focus (see `candidate_roots` in
+    /// `adapter/smithay`).
+    pub fn toplevels(&self) -> impl Iterator<Item = SurfaceId> + '_ {
+        self.surfaces
+            .iter()
+            .filter(|(_, s)| matches!(s.role, SurfaceRole::Toplevel))
+            .map(|(id, _)| *id)
+    }
+
     /// Ordered (bottom → top) subsurface children of `surface`.
     pub fn subsurface_children(&self, surface: SurfaceId) -> &[SurfaceId] {
         self.subsurface_children.get(&surface).map(Vec::as_slice).unwrap_or(&[])

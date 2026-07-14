@@ -87,6 +87,15 @@ name = "wayland_serve_adversarial"
 path = "tests/wayland_serve_adversarial.rs"
 required-features = ["smithay-adapter"]
 
+# Input delivery proof: a real client maps a toplevel + creates wl_pointer/wl_keyboard, the test injects
+# pointer motion/button + a key over the live socket (via the host input channel), and the client asserts
+# it received wl_pointer.enter/motion/button (correct surface + surface-local coords) and
+# wl_keyboard.enter/key (correct surface + keycode). Its own binary — it mutates process-global env.
+[[test]]
+name = "wayland_input_socket"
+path = "tests/wayland_input_socket.rs"
+required-features = ["smithay-adapter"]
+
 # The macOS present smoke: build the Cocoa/Metal presenter, present one known-color frame, and read it
 # back (offscreen MTLTexture readback — GUI-session-free) to verify the pixels round-tripped on a real
 # Metal device. A second (ignored-by-default) test opens a real NSWindow + CAMetalLayer.

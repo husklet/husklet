@@ -13,14 +13,29 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use smithay::reexports::{
-    calloop::{generic::Generic, EventLoop, Interest, Mode, PostAction},
+    calloop::{
+        channel::{Channel, Event as ChannelEvent},
+        generic::Generic,
+        EventLoop, Interest, Mode, PostAction,
+    },
     wayland_server::Display,
 };
 use smithay::wayland::socket::ListeningSocketSource;
 
 use super::present::PngPresenter;
-use super::state::{ClientState, HlState};
+use super::state::{ClientState, HlState, InputCommand};
 use crate::scene::port::Clock;
+
+/// The cross-thread sender half of an [`InputCommand`] channel. `Send` — a host/test on another thread
+/// injects input through it while the serve loop runs.
+pub use smithay::reexports::calloop::channel::{Channel as InputChannel, Sender as InputSender};
+
+/// Create a host/test input channel: the [`InputSender`] stays with the caller (any thread), the
+/// [`InputChannel`] is handed to [`run_auto_with_input`], which drains it into the seat. A convenience
+/// so callers that do not depend on Smithay directly can still build the channel.
+pub fn input_channel() -> (InputSender<InputCommand>, InputChannel<InputCommand>) {
+    smithay::reexports::calloop::channel::channel()
+}
 
 struct LoopData {
     state: HlState,
@@ -95,6 +110,32 @@ pub fn run_auto(
     stop: Arc<AtomicBool>,
     on_bound: impl FnOnce(OsString),
 ) -> std::io::Result<()> {
+    run_auto_inner(presenter, stop, None, on_bound)
+}
+
+/// Like [`run_auto`], but additionally drains a host/test-driven [`InputCommand`] channel each time a
+/// command arrives, delivering pointer + keyboard input to the focused client through the seat.
+///
+/// This is the headless input seam: there is no hardware input source, so a caller (a test, or a host
+/// that translates its own input) sends [`InputCommand`]s down `input` and the serve loop applies them
+/// to [`HlState`] via [`HlState::apply_input`] — driving smithay's `PointerHandle`/`KeyboardHandle` so a
+/// real Wayland client receives the wire events. The channel's [`smithay::reexports::calloop::channel::Sender`]
+/// is `Send`, so a caller on another thread injects input while the loop runs here.
+pub fn run_auto_with_input(
+    presenter: PngPresenter,
+    stop: Arc<AtomicBool>,
+    input: Channel<InputCommand>,
+    on_bound: impl FnOnce(OsString),
+) -> std::io::Result<()> {
+    run_auto_inner(presenter, stop, Some(input), on_bound)
+}
+
+fn run_auto_inner(
+    presenter: PngPresenter,
+    stop: Arc<AtomicBool>,
+    input: Option<Channel<InputCommand>>,
+    on_bound: impl FnOnce(OsString),
+) -> std::io::Result<()> {
     let display: Display<HlState> = Display::new().expect("create wl_display");
     let dh = display.handle();
     let state = HlState::new(&dh, presenter);
@@ -113,6 +154,18 @@ pub fn run_auto(
             data.insert_client(stream);
         })
         .expect("insert listening socket source");
+
+    // The host/test input seam: each `InputCommand` is applied to the seat as it arrives (a channel
+    // message also wakes the loop, so injected input is delivered promptly, not a tick later).
+    if let Some(input) = input {
+        handle
+            .insert_source(input, |event, _, data: &mut LoopData| {
+                if let ChannelEvent::Msg(cmd) = event {
+                    data.state.apply_input(cmd);
+                }
+            })
+            .expect("insert input channel source");
+    }
 
     drive(event_loop, LoopData { state, display }, stop)
 }
