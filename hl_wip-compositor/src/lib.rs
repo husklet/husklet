@@ -25,6 +25,7 @@
 //! Because the whole policy is expressed against the two ports, it is fully unit-testable with a fake
 //! clock and a fake presenter — no Smithay, no GPU, no Cocoa/DRM (see `tests/scene.rs`).
 
+pub mod adapter;
 pub mod scene;
 
 pub use scene::{Compositor, CommitOutcome, FrameOutcome};

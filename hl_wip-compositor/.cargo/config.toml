@@ -1,0 +1,14 @@
+# This host's cargo libcurl fails TLS against the sparse crates.io index; system git verifies fine,
+# so pull the index over the git protocol with the git CLI. Scoped to this standalone crate (own
+# [workspace]); does not affect the shared root tree.
+[registries.crates-io]
+protocol = "git"
+
+[net]
+git-fetch-with-cli = true
+
+# smithay's mandatory `xkbcommon` dep links `-lxkbcommon`, which needs the *unversioned* .so. This host
+# ships only libxkbcommon.so.0, so point the linker at a local dir holding a `libxkbcommon.so -> .so.0`
+# symlink (.linklibs/). Runtime resolves .so.0 from the standard path.
+[build]
+rustflags = ["-L", "native=/Users/x/dd/dd/hl_wip-compositor/.linklibs"]

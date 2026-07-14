@@ -10,11 +10,30 @@ name = "hl_compositor"
 path = "src/lib.rs"
 
 # STANDALONE crate: an empty [workspace] table excludes this directory from the shared repo workspace
-# (it is not a member of the root Cargo.toml). The neutral `scene` core is pure std — zero dependencies —
-# so it builds and tests with no Smithay / GPU / Cocoa / DRM. Build + test with:
-#   cargo test --manifest-path hl_wip-compositor/Cargo.toml
+# (it is not a member of the root Cargo.toml). The neutral `scene` core is pure std — zero dependencies.
+# The Smithay Wayland adapter is behind the `smithay-adapter` feature so the neutral policy still builds
+# and tests with no Smithay/GPU. Build + test with:
+#   cargo test --manifest-path hl_wip-compositor/Cargo.toml --features smithay-adapter
 [workspace]
 
+[features]
+# The real Wayland protocol server (adapter/smithay) — pulls in Smithay + the calloop serve loop. Off by
+# default so the pure-std scene core keeps building with zero deps.
+default = []
+smithay-adapter = ["dep:smithay"]
+
 [dependencies]
-# Intentionally empty. The platform-neutral policy is pure std. Adapters (smithay, surface/macos,
-# surface/linux) are DEFERRED to later tasks and will carry their own heavy deps behind the ports here.
+# The neutral policy is pure std. The Smithay adapter (adapter/smithay) is optional: it translates
+# Wayland `wl_*`/`xdg_*` callbacks into `scene::service` calls. Headless — wayland_frontend only, NO
+# drm/gbm/libinput/session/egl backend.
+smithay = { path = "../vendor/smithay-0.7.0", default-features = false, features = ["wayland_frontend"], optional = true }
+
+[dev-dependencies]
+# The headless end-to-end test spawns the compositor and drives a real Wayland CLIENT against it.
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+
+[[test]]
+name = "wayland_e2e"
+path = "tests/wayland_e2e.rs"
+required-features = ["smithay-adapter"]
