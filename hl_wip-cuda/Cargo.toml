@@ -1,0 +1,29 @@
+# hl_wip-cuda — the standalone CUDA guest-driver crate (v2-layered staging rewrite).
+#
+# Its ONLY dependency is the neutral protocol crate `hl_wip-gpu` (package `hl_wip_gpu`, lib `hl_gpu`):
+# a CUDA operation lowers to protocol `Cmd`s and is submitted through a `CommandSink`. Nothing
+# CUDA-specific leaks into the protocol; nothing protocol-transport-specific leaks into the driver.
+#
+# It carries an EMPTY `[workspace]` table so it is its OWN workspace root, EXCLUDED from the shared
+# repo-root workspace: the concurrent codex agent's `cargo build` at the repo root never sees it, and
+# this crate never drags the heavy engine build in. Build/test it with:
+#   cargo test --manifest-path hl_wip-cuda/Cargo.toml
+[package]
+name = "hl_wip_cuda"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+# Downstream reads `hl_cuda::…`. The package is the _wip staging crate; the lib is the final name.
+name = "hl_cuda"
+path = "src/lib.rs"
+
+[dependencies]
+# The neutral hl-GPU protocol (Cmd/Enc, descriptors, kernel-IR, CommandSink). Package `hl_wip_gpu`,
+# lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.
+hl_gpu = { package = "hl_wip_gpu", path = "../hl_wip-gpu" }
+
+# Empty table => this file is its own workspace root, so the crate is EXCLUDED from the repo-root
+# workspace and keeps the shared tree green.
+[workspace]
