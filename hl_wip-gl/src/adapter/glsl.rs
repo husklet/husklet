@@ -78,24 +78,59 @@ fn strip_es_precision(body: &mut String) {
     wreplace(body, "highp", "");
 }
 
-/// Emit the data-uniform interface block at `binding = 1` (matching the frame's uniform bind entry). An
+/// Emit the data-uniform interface block at `binding = 0` (matching the frame's uniform bind entry). An
 /// anonymous block puts its members in global scope so the shader body references them by their plain name.
+/// The sampler texture/sampler bindings start at 1 ([`emit_sampler_decls`]) so the UBO never collides.
 fn emit_uniform_block(out: &mut String, unis: &[Decl]) {
     if unis.is_empty() {
         return;
     }
-    out.push_str("layout(std140, binding = 1) uniform HlUniforms {\n");
+    out.push_str("layout(std140, binding = 0) uniform HlUniforms {\n");
     for u in unis {
         out.push_str(&format!("    {} {};\n", u.ty, u.name));
     }
     out.push_str("};\n");
 }
 
-/// Emit the combined image-sampler declarations (`layout(binding=k) uniform sampler2D name;`), one per
-/// declared sampler, keyed by declaration index — matching the frame's per-texture bind index.
+/// Split a GLSL-ES combined-sampler type into naga's separate `(texture type, sampler type, recombining
+/// constructor)`. naga's `glsl-in` REJECTS a combined `uniform sampler2D` at global scope (it errors with
+/// `NotImplemented("variable qualifier")`), accepting only the Vulkan-flavored form: a `texture2D` global +
+/// a `sampler` global recombined at each use site by a `sampler2D(tex, samp)` constructor. So every sampler
+/// is emitted as that pair and its uses rewritten by [`rewrite_sampler_refs`].
+fn split_sampler(ty: &str) -> (&'static str, &'static str, &'static str) {
+    match ty {
+        "samplerCube" => ("textureCube", "sampler", "samplerCube"),
+        "sampler2DShadow" => ("texture2D", "samplerShadow", "sampler2DShadow"),
+        _ => ("texture2D", "sampler", "sampler2D"),
+    }
+}
+
+/// Emit each combined image-sampler as a SEPARATE `texture2D` + `sampler` pair (naga rejects a combined
+/// `uniform sampler2D`). The uniform block owns binding 0; sampler `k` (declaration index) owns TEXTURE
+/// binding `1 + 2k` and SAMPLER binding `2 + 2k` — every UBO/texture/sampler thus lands on a DISTINCT
+/// binding within the single wgpu bind-group namespace, exactly matching the `BindEntry`s
+/// [`crate::service::frame::build_frame_ir`] emits. The shader body recombines the pair at each use via
+/// [`rewrite_sampler_refs`].
 fn emit_sampler_decls(out: &mut String, samps: &[Decl]) {
     for (k, s) in samps.iter().enumerate() {
-        out.push_str(&format!("layout(binding = {k}) uniform {} {};\n", s.ty, s.name));
+        let (tex_ty, smp_ty, _) = split_sampler(&s.ty);
+        let tex_binding = 1 + 2 * k;
+        let smp_binding = 2 + 2 * k;
+        out.push_str(&format!("layout(binding = {tex_binding}) uniform {tex_ty} {}_hltex;\n", s.name));
+        out.push_str(&format!("layout(binding = {smp_binding}) uniform {smp_ty} {}_hlsmp;\n", s.name));
+    }
+}
+
+/// Rewrite each combined-sampler NAME in a shader body to a `ctor(name_hltex, name_hlsmp)` expression, so a
+/// `texture(uTex, uv)` call feeds the separated texture + sampler globals [`emit_sampler_decls`] declared.
+/// A sampler uniform can only ever appear as a texture-function argument (you cannot do arithmetic on a
+/// sampler), so a word-boundary name replace is safe and total. Run BEFORE the `texture2D(`→`texture(`
+/// lowering: `texture2D(uTex, uv)` → `texture2D(sampler2D(uTex_hltex, uTex_hlsmp), uv)` → `texture(...)`.
+fn rewrite_sampler_refs(body: &mut String, samps: &[Decl]) {
+    for s in samps {
+        let (_, _, ctor) = split_sampler(&s.ty);
+        let repl = format!("{ctor}({}_hltex, {}_hlsmp)", s.name, s.name);
+        wreplace(body, &s.name, &repl);
     }
 }
 
@@ -141,7 +176,9 @@ pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
     emit_sampler_decls(&mut vs_out, &samps);
     let mut vb = main_body(&vs);
     strip_es_precision(&mut vb);
+    rewrite_sampler_refs(&mut vb, &samps);
     sreplace(&mut vb, "texture2D(", "texture(");
+    sreplace(&mut vb, "textureCube(", "texture(");
     vs_out.push_str(&format!("void main() {{\n{vb}\n}}\n"));
 
     // ---- fragment stage ----
@@ -165,7 +202,9 @@ pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
     fs_out.push_str(&format!("layout(location = 0) out vec4 {frag_name};\n"));
     let mut fb = main_body(&fs);
     strip_es_precision(&mut fb);
+    rewrite_sampler_refs(&mut fb, &samps);
     sreplace(&mut fb, "texture2D(", "texture(");
+    sreplace(&mut fb, "textureCube(", "texture(");
     if fragouts.is_empty() {
         wreplace(&mut fb, "gl_FragColor", &frag_name);
     }

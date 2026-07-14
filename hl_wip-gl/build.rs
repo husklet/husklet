@@ -44,8 +44,12 @@ fn main() {
     }
 
     let manifest_dir = PathBuf::from(env("CARGO_MANIFEST_DIR"));
-    // Rerun only when the shim's sources / manifest / this script / the forwarding stub change.
+    // Rerun when the shim's sources / manifest / this script / the forwarding stub change — AND when this
+    // crate's own library sources change: the shim cdylib links `hl_gl` (this crate) as a path dependency,
+    // so a change to the lowering/translator (e.g. `src/adapter/glsl.rs`, `src/service/frame.rs`) must
+    // restage the guest shim, or the staged `libGLESv2.so.2` the e2e loads keeps the OLD lowering.
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed={}", manifest_dir.join("src").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("src").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("registry").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("build.rs").display());

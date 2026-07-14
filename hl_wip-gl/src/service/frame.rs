@@ -259,6 +259,9 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
 
     // ---- sampler-bound textures ----
     struct TexBind {
+        /// The sampler's DECLARATION index (its `k` in the translator's `layout(binding=)` scheme). Keeps
+        /// the IR binding aligned to the emitted GLSL even when an earlier sampler had no bound texture.
+        slot: usize,
         tex_ir: u32,
         samp_ir: u32,
         stage_ir: u32,
@@ -303,7 +306,7 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
         ));
         cmds.push(Cmd::CreateBuffer(stage_ir, BufferDesc { size: t.data.len() as u64, usage: buffer_usage::COPY_SRC, label: String::new() }));
         cmds.push(Cmd::WriteBuffer { id: stage_ir, offset: 0, data: t.data.clone() });
-        texbinds.push(TexBind { tex_ir, samp_ir, stage_ir, w: t.w as u32, h: t.h as u32 });
+        texbinds.push(TexBind { slot: i, tex_ir, samp_ir, stage_ir, w: t.w as u32, h: t.h as u32 });
     }
     let has_u = prog.has_uniforms();
     let has_bg = has_u || !texbinds.is_empty();
@@ -399,13 +402,21 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     let mut bind_group_ir = 0u32;
     if has_bg {
         bind_group_ir = ctx.alloc_bind_group_ir();
+        // Binding scheme (single wgpu bind-group namespace, matching `adapter::glsl`'s emitted
+        // `layout(binding=)` — naga derives the pipeline's bind-group layout from that GLSL, so these
+        // MUST agree): the uniform block owns binding 0; sampler `k` (declaration index) owns TEXTURE
+        // binding `1 + 2k` and SAMPLER binding `2 + 2k`. Every resource lands on a DISTINCT binding, so a
+        // program with a UBO AND 2+ samplers no longer aliases the UBO onto a sampler (the old bug: UBO at
+        // 1 collided with the 2nd sampler, also at 1).
         let mut entries = Vec::new();
         if has_u {
-            entries.push(BindEntry { binding: 1, resource: BindResource::Buffer { id: uniform_ir, offset: 0, size: prog.ubuf_size as u64 } });
+            entries.push(BindEntry { binding: 0, resource: BindResource::Buffer { id: uniform_ir, offset: 0, size: prog.ubuf_size as u64 } });
         }
-        for (k, tb) in texbinds.iter().enumerate() {
-            entries.push(BindEntry { binding: k as u32, resource: BindResource::Texture { id: tb.tex_ir } });
-            entries.push(BindEntry { binding: k as u32, resource: BindResource::Sampler { id: tb.samp_ir } });
+        for tb in texbinds.iter() {
+            let tex_binding = 1 + 2 * tb.slot as u32;
+            let smp_binding = 2 + 2 * tb.slot as u32;
+            entries.push(BindEntry { binding: tex_binding, resource: BindResource::Texture { id: tb.tex_ir } });
+            entries.push(BindEntry { binding: smp_binding, resource: BindResource::Sampler { id: tb.samp_ir } });
         }
         cmds.push(Cmd::CreateBindGroup(bind_group_ir, BindGroupDesc { set: 0, entries }));
     }

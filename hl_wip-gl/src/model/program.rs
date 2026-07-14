@@ -49,7 +49,7 @@ pub struct Program {
     pub unis: Vec<Uni>,
     /// The 16-byte-aligned Uniforms struct size (bytes actually shipped as the uniform buffer).
     pub ubuf_size: i32,
-    /// The uniform-block bytes written by `glUniform*` (bound at binding 1 when non-empty).
+    /// The uniform-block bytes written by `glUniform*` (bound at binding 0 when non-empty).
     pub ubuf: Vec<u8>,
     /// Sampler uniform names in declaration order (for the bind-group texture bindings).
     pub samp_names: Vec<String>,
@@ -99,7 +99,7 @@ impl Program {
         self.compute_ir.is_some()
     }
 
-    /// Does this program declare any data uniforms (→ a uniform buffer + binding 1)?
+    /// Does this program declare any data uniforms (→ a uniform buffer + binding 0)?
     pub fn has_uniforms(&self) -> bool {
         !self.unis.is_empty()
     }
