@@ -25,17 +25,27 @@
 //! `glCreateShader`/`glShaderSource`/`glCompileShader` + `glCreateProgram`/`glAttachShader`/`glLinkProgram`
 //! (GLSL→shader-IR via [`adapter::glsl`]) → `CreateShader`/`CreateRenderPipeline`; the bound draw state +
 //! `glDrawArrays`/`glDrawElements` → a recorded draw op; `eglSwapBuffers` → the frame's `CommandBuffer`
-//! (`BeginRenderPass`/`SetPipeline`/…/`Draw`/`EndRenderPass`) + `Present`. Deferred to later passes: the
-//! injectable shim cdylibs (`shim/`), the `build.rs` dual-arch cross-compile, and the `hl_jit::Driver`
-//! plug — wiring, not lowering, kept out to keep this crate a light, standalone workspace.
+//! (`BeginRenderPass`/`SetPipeline`/…/`Draw`/`EndRenderPass`) + `Present`. Around that lowering core, the
+//! packaging + injection is now wired: the `shim/egl` guest cdylib (`libEGL.so.1`) marshals the `egl*`/`gl*`
+//! C ABI and calls these services through a process-global [`hl_gpu::RemoteCommandSink`]; `build.rs`
+//! cross-compiles + stages it (plus the thin `libGLESv2.so.2` DT_NEEDED→libEGL forwarding stub) for both
+//! guest arches under `~/.hl/gl/<arch>/`; and [`driver::Gl`] (behind the `jit` feature) is the
+//! [`hl_jit::Driver`] plug a composition root attaches with `engine.add(Gl::new(spec))`.
 
 pub mod adapter;
+#[cfg(feature = "jit")]
+pub mod driver;
 pub mod model;
 pub mod result;
 pub mod service;
 
-// Ergonomic re-exports: downstream (and the shims, later) read `hl_gl::{GlContext, GlBuffer, …}`.
+// Ergonomic re-exports: downstream (and the shims) read `hl_gl::{GlContext, GlBuffer, …}`.
 pub use model::buffer::GlBuffer;
 pub use model::context::{GlContext, GlSurface};
 pub use model::program::{DrawCall, Program, Shader};
 pub use model::texture::GlTexture;
+
+// The host-side driver plug (`engine.add(Gl::new(..))`). Behind the `jit` feature so a guest shim never
+// pulls hl-jit into its `.so`.
+#[cfg(feature = "jit")]
+pub use driver::{Arch, Gl, GlSpec};
