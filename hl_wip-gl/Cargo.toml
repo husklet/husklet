@@ -1,0 +1,31 @@
+# hl_wip-gl — the standalone OpenGL-ES/EGL guest-driver crate (v2-layered staging rewrite).
+#
+# Structurally IDENTICAL to `hl_wip-cuda`: its ONLY dependency is the neutral protocol crate
+# `hl_wip-gpu` (package `hl_wip_gpu`, lib `hl_gpu`). A GLES/EGL operation lowers to protocol `Cmd`s and
+# is submitted through a `CommandSink`. Nothing GL-specific leaks into the protocol; nothing
+# protocol-transport-specific leaks into the driver. GL is DEFERRED-lowering: `gl*` calls RECORD into
+# per-context state and the IR is emitted at `eglSwapBuffers`.
+#
+# It carries an EMPTY `[workspace]` table so it is its OWN workspace root, EXCLUDED from the shared
+# repo-root workspace: the concurrent codex agent's `cargo build` at the repo root never sees it, and
+# this crate never drags the heavy engine build in. Build/test it with:
+#   cargo test --manifest-path hl_wip-gl/Cargo.toml
+[package]
+name = "hl_wip_gl"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+# Downstream reads `hl_gl::…`. The package is the _wip staging crate; the lib is the final name.
+name = "hl_gl"
+path = "src/lib.rs"
+
+[dependencies]
+# The neutral hl-GPU protocol (Cmd/Enc, descriptors, kernel-IR, CommandSink). Package `hl_wip_gpu`,
+# lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.
+hl_gpu = { package = "hl_wip_gpu", path = "../hl_wip-gpu" }
+
+# Empty table => this file is its own workspace root, so the crate is EXCLUDED from the repo-root
+# workspace and keeps the shared tree green.
+[workspace]

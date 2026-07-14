@@ -1,0 +1,295 @@
+//! The `gl*` recording ops — the deferred-lowering front half of the driver.
+//!
+//! Every function here mutates [`GlContext`] and submits NOTHING: a `gl*` call records into per-context
+//! state (a created object, a binding, or an appended [`DrawCall`]) exactly as `gl_shim.c` does, and the
+//! IR is emitted later, at swap, by [`crate::service::frame`]. Ported from `hl-shim-gl/src/gles.rs`
+//! (the state-recording bodies) — the semantics (bindings, the draw-time state snapshot) are preserved.
+
+use crate::model::context::GlContext;
+use crate::model::glconst::*;
+use crate::model::program::DrawCall;
+
+// ---- buffers -------------------------------------------------------------------------------------
+
+/// `glGenBuffers` (one name).
+pub fn gen_buffer(ctx: &mut GlContext) -> u32 {
+    ctx.buffers.gen()
+}
+
+/// `glBindBuffer(target, name)`.
+pub fn bind_buffer(ctx: &mut GlContext, target: u32, name: u32) {
+    match target {
+        GL_ARRAY_BUFFER => ctx.array_buffer = name,
+        GL_ELEMENT_ARRAY_BUFFER => ctx.element_buffer = name,
+        _ => {}
+    }
+}
+
+/// `glBufferData(target, data, usage)` — fills the buffer currently bound to `target`.
+pub fn buffer_data(ctx: &mut GlContext, target: u32, data: &[u8], usage: u32) {
+    let name = bound_buffer(ctx, target);
+    if name != 0 {
+        ctx.buffers.set_data(name, target, data, usage);
+    }
+}
+
+/// `glBufferSubData(target, offset, data)`.
+pub fn buffer_sub_data(ctx: &mut GlContext, target: u32, offset: usize, data: &[u8]) {
+    let name = bound_buffer(ctx, target);
+    if name != 0 {
+        ctx.buffers.set_sub_data(name, offset, data);
+    }
+}
+
+/// `glDeleteBuffers` (one name).
+pub fn delete_buffer(ctx: &mut GlContext, name: u32) -> bool {
+    if ctx.array_buffer == name {
+        ctx.array_buffer = 0;
+    }
+    if ctx.element_buffer == name {
+        ctx.element_buffer = 0;
+    }
+    ctx.buffers.delete(name)
+}
+
+fn bound_buffer(ctx: &GlContext, target: u32) -> u32 {
+    match target {
+        GL_ELEMENT_ARRAY_BUFFER => ctx.element_buffer,
+        _ => ctx.array_buffer,
+    }
+}
+
+// ---- textures ------------------------------------------------------------------------------------
+
+/// `glGenTextures` (one name).
+pub fn gen_texture(ctx: &mut GlContext) -> u32 {
+    ctx.textures.gen()
+}
+
+/// `glActiveTexture(GL_TEXTURE0 + i)`.
+pub fn active_texture(ctx: &mut GlContext, texture: u32) {
+    let unit = texture.wrapping_sub(GL_TEXTURE0) as usize;
+    if unit < ctx.tex_unit.len() {
+        ctx.active_texture = unit;
+    }
+}
+
+/// `glBindTexture(GL_TEXTURE_2D, name)` — binds to the active texture unit.
+pub fn bind_texture(ctx: &mut GlContext, _target: u32, name: u32) {
+    let unit = ctx.active_texture;
+    if unit < ctx.tex_unit.len() {
+        ctx.tex_unit[unit] = name;
+    }
+}
+
+/// `glTexImage2D` — `pixels` is the already-RGBA8-converted image (`w*h*4`) bound to the active unit.
+pub fn tex_image_2d(ctx: &mut GlContext, w: i32, h: i32, pixels: &[u8]) {
+    let name = ctx.tex_unit[ctx.active_texture];
+    if name != 0 {
+        ctx.textures.image_2d(name, w, h, pixels);
+    }
+}
+
+/// `glTexParameteri(GL_TEXTURE_2D, pname, value)` on the active unit's texture.
+pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
+    let name = ctx.tex_unit[ctx.active_texture];
+    if name != 0 {
+        ctx.textures.set_param(name, pname, value);
+    }
+}
+
+/// `glDeleteTextures` (one name).
+pub fn delete_texture(ctx: &mut GlContext, name: u32) -> bool {
+    for u in ctx.tex_unit.iter_mut() {
+        if *u == name {
+            *u = 0;
+        }
+    }
+    ctx.textures.delete(name)
+}
+
+// ---- shaders + programs --------------------------------------------------------------------------
+
+/// `glCreateShader(kind)`.
+pub fn create_shader(ctx: &mut GlContext, kind: u32) -> u32 {
+    ctx.programs.create_shader(kind)
+}
+
+/// `glShaderSource(shader, src)`.
+pub fn shader_source(ctx: &mut GlContext, shader: u32, src: &str) {
+    ctx.programs.shader_source(shader, src);
+}
+
+/// `glCompileShader(shader)`.
+pub fn compile_shader(ctx: &mut GlContext, shader: u32) {
+    ctx.programs.compile_shader(shader);
+}
+
+/// `glCreateProgram()`.
+pub fn create_program(ctx: &mut GlContext) -> u32 {
+    ctx.programs.create_program()
+}
+
+/// `glAttachShader(program, shader)`.
+pub fn attach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
+    ctx.programs.attach(program, shader);
+}
+
+/// `glLinkProgram(program)` — translate the attached GLSL-ES pair to shader-IR + reflect the layout.
+pub fn link_program(ctx: &mut GlContext, program: u32) -> bool {
+    ctx.programs.link(program)
+}
+
+/// `glUseProgram(program)`.
+pub fn use_program(ctx: &mut GlContext, program: u32) {
+    ctx.cur_prog = program;
+}
+
+/// `glUniform1i(samplerLocation, unit)` — map a sampler uniform (by declaration index) to a texture
+/// unit. Simplified: `sampler_index` is the sampler's position in the program's `samp_names`.
+pub fn uniform_sampler(ctx: &mut GlContext, sampler_index: usize, unit: i32) {
+    if let Some(p) = ctx.programs.program_mut(ctx.cur_prog) {
+        if sampler_index < p.samp_units.len() {
+            p.samp_units[sampler_index] = unit;
+        }
+    }
+}
+
+/// `glUniform*` for a data uniform — write `bytes` into the bound program's uniform-block buffer at the
+/// named member's offset. Simplified name-keyed write (real GL uses integer locations).
+pub fn uniform_data(ctx: &mut GlContext, name: &str, bytes: &[u8]) {
+    if let Some(p) = ctx.programs.program_mut(ctx.cur_prog) {
+        if let Some(u) = p.unis.iter().find(|u| u.name == name) {
+            let off = u.off as usize;
+            let end = (off + bytes.len()).min(p.ubuf.len());
+            if off < p.ubuf.len() {
+                p.ubuf[off..end].copy_from_slice(&bytes[..end - off]);
+            }
+        }
+    }
+}
+
+// ---- fixed-function state ------------------------------------------------------------------------
+
+/// `glVertexAttribPointer` + implicit `glEnableVertexAttribArray` is separate.
+#[allow(clippy::too_many_arguments)]
+pub fn vertex_attrib_pointer(
+    ctx: &mut GlContext,
+    location: usize,
+    size: i32,
+    kind: u32,
+    normalized: bool,
+    stride: i32,
+    offset: usize,
+) {
+    if location < ctx.attr.len() {
+        let a = &mut ctx.attr[location];
+        a.size = size;
+        a.kind = kind;
+        a.normalized = normalized;
+        a.integer = false;
+        a.stride = stride;
+        a.offset = offset;
+        a.buffer = ctx.array_buffer;
+    }
+}
+
+/// `glEnableVertexAttribArray(location)`.
+pub fn enable_vertex_attrib(ctx: &mut GlContext, location: usize) {
+    if location < ctx.attr.len() {
+        ctx.attr[location].enabled = true;
+    }
+}
+
+/// `glDisableVertexAttribArray(location)`.
+pub fn disable_vertex_attrib(ctx: &mut GlContext, location: usize) {
+    if location < ctx.attr.len() {
+        ctx.attr[location].enabled = false;
+    }
+}
+
+/// `glClearColor(r, g, b, a)`.
+pub fn clear_color(ctx: &mut GlContext, rgba: [f32; 4]) {
+    ctx.clear_color = rgba;
+}
+
+/// `glViewport(x, y, w, h)`.
+pub fn viewport(ctx: &mut GlContext, vp: [i32; 4]) {
+    ctx.viewport = vp;
+}
+
+/// `glScissor(x, y, w, h)`.
+pub fn scissor(ctx: &mut GlContext, sc: [i32; 4]) {
+    ctx.scissor = sc;
+}
+
+/// `glEnable(cap)`.
+pub fn enable(ctx: &mut GlContext, cap: u32) {
+    set_cap(ctx, cap, true);
+}
+
+/// `glDisable(cap)`.
+pub fn disable(ctx: &mut GlContext, cap: u32) {
+    set_cap(ctx, cap, false);
+}
+
+fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
+    match cap {
+        GL_BLEND => ctx.blend = on,
+        GL_DEPTH_TEST => ctx.depth = on,
+        GL_SCISSOR_TEST => ctx.scissor_enabled = on,
+        _ => {}
+    }
+}
+
+// ---- draw + clear recording ----------------------------------------------------------------------
+
+/// `glClear(mask)` — record a full-surface clear rect at the current clear color (color bit assumed).
+pub fn clear(ctx: &mut GlContext) {
+    let (w, h) = ctx.target_wh();
+    let mut d = DrawCall { is_clear: true, ..snapshot(ctx) };
+    d.clear_rect = [0, 0, w, h];
+    ctx.draws.push(d);
+}
+
+/// `glDrawArrays(mode, first, count)` — snapshot the bound state and append the draw.
+pub fn draw_arrays(ctx: &mut GlContext, mode: u32, first: i32, count: i32) {
+    let mut d = snapshot(ctx);
+    d.mode = mode;
+    d.first = first;
+    d.count = count;
+    ctx.draws.push(d);
+}
+
+/// `glDrawElements(mode, count, index_type, offset)` — snapshot + append an indexed draw.
+pub fn draw_elements(ctx: &mut GlContext, mode: u32, count: i32, index_type: u32, offset: usize) {
+    let mut d = snapshot(ctx);
+    d.mode = mode;
+    d.count = count;
+    d.indexed = true;
+    d.index_type = index_type;
+    d.index_offset = offset;
+    d.elem_buf = ctx.element_buffer;
+    ctx.draws.push(d);
+}
+
+/// Snapshot the currently-bound draw state into a fresh [`DrawCall`] (the immutable per-draw record).
+fn snapshot(ctx: &GlContext) -> DrawCall {
+    let mut d = DrawCall {
+        prog: ctx.cur_prog,
+        attrs: ctx.attr,
+        tex_units: ctx.tex_unit,
+        viewport: ctx.viewport,
+        scissor_enabled: ctx.scissor_enabled,
+        scissor: ctx.scissor,
+        blend: ctx.blend,
+        depth: ctx.depth,
+        clear: ctx.clear_color,
+        elem_buf: ctx.element_buffer,
+        ..DrawCall::default()
+    };
+    if let Some(p) = ctx.programs.program(ctx.cur_prog) {
+        d.samp_units = p.samp_units;
+    }
+    d
+}
