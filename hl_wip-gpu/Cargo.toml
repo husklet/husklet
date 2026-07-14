@@ -1,0 +1,19 @@
+# hl_wip-gpu — v2-layered rewrite of the hl-gpu GPU core. The `protocol` module ported here is
+# wire-compatible with the shipping `hl-gpu` crate (same WIRE_VERSION, same tag numbers, same byte
+# layout). It carries an EMPTY `[workspace]` table so it is a standalone workspace root, excluded from
+# the shared repo workspace: codex's `cargo build` at the repo root never sees it. Build/test it with
+#   cargo test --manifest-path hl_wip-gpu/Cargo.toml
+[package]
+name = "hl_wip_gpu"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+# Downstream reads `hl_gpu::protocol::…` naturally even though the package is the _wip staging crate.
+name = "hl_gpu"
+path = "src/lib.rs"
+
+# Empty table => this file is its own workspace root, so the crate is EXCLUDED from the repo-root
+# workspace and keeps the shared tree green.
+[workspace]
