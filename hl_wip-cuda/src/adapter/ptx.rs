@@ -361,11 +361,18 @@ fn parse_body(body: &str, params: &[(String, u32)], interner: &mut Interner) -> 
         if s.is_empty() {
             continue;
         }
-        if s.starts_with(".shared") {
-            parse_shared_decl(&s, &mut shared_syms, &mut shared_cursor)?;
-            continue;
-        }
+        // A `.shared` state-space variable declaration — either bare (`.shared …`) or, as nvcc actually
+        // emits it, behind linkage qualifiers (`.extern .shared …`, `.visible .shared …`). It is a
+        // directive line (starts with `.`) with a standalone `.shared` token; an instruction that touches
+        // shared memory (`ld.shared.f32`, `st.shared.b32`) carries `.shared` inside its opcode token, never
+        // as a bare token, so it is not misrouted here. Routing the qualified form matters: `parse_shared_decl`
+        // is what rejects the dynamic (`extern`, unsized `name[]`) form — skipping it would silently model a
+        // dynamic-shared kernel as having zero shared memory (wrong results / a deferred OOB) instead of an
+        // honest `GpuError::Kernel`.
         if s.starts_with('.') {
+            if s.split_whitespace().any(|t| t == ".shared") {
+                parse_shared_decl(&s, &mut shared_syms, &mut shared_cursor)?;
+            }
             continue;
         }
         stmts.push(s);

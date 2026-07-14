@@ -215,3 +215,171 @@ fn cuda_runtime_api_vecadd_registers_and_launches_end_to_end() {
     assert_eq!(got, vec![11.0, 22.0, 33.0, 44.0]);
     assert_eq!(sink.executor().dispatches, 1, "exactly one compute dispatch executed");
 }
+
+// ===================================================================================================
+// More real end-to-end paths: device memset, on-device copy, a multi-block grid, and an f32-scalar
+// saxpy kernel — each COMPUTES then reads the bytes back and asserts the exact result (never "did not
+// crash"). All share the same real lowering → InProcessCommandSink → CpuExecutor seam.
+// ===================================================================================================
+
+/// An in-process sink over the reference `CpuExecutor` with the PTX front-end injected and the capability
+/// handshake performed — the exact host wiring a socketed driver negotiates before its first submit.
+fn harness() -> InProcessCommandSink<CpuExecutor> {
+    let mut exec = CpuExecutor::new();
+    exec.set_kernel_compiler(|desc: &KernelDescriptor| ptx::compile(&desc.ptx, &desc.entry, desc.block));
+    let mut sink = InProcessCommandSink::new(exec);
+    let req = FeatureRequest {
+        wire_version: WIRE_VERSION,
+        shader_payloads: shader_payload::KERNEL,
+        command_bits: command_bits(ALL_COMMANDS),
+        texture_formats: format_bits(COLOR_FORMATS),
+    };
+    sink.negotiate(&req).expect("negotiate against CpuExecutor");
+    sink
+}
+
+fn readback(sink: &mut InProcessCommandSink<CpuExecutor>, ctx: &CudaContext, p: DevicePtr, len: usize) -> Vec<u8> {
+    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    sink.read_buffer(buf, off, len).unwrap()
+}
+
+#[test]
+fn cuda_memset_d32_fills_device_memory_end_to_end() {
+    let mut sink = harness();
+    let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
+    let n = 8usize;
+    let bytes = (n * 4) as u64;
+    let p = allocate::mem_alloc(&mut ctx, &mut sink, bytes).unwrap();
+
+    // cuMemsetD32(p, 0xAABBCCDD, n) → the word repeated n times, lowered as a WriteBuffer and executed.
+    let word: u32 = 0xAABB_CCDD;
+    let pattern: Vec<u8> = (0..n).flat_map(|_| word.to_le_bytes()).collect();
+    transfer::memset(&mut ctx, &mut sink, p, &pattern).unwrap();
+
+    // Read it back off the executor: every 4-byte lane is the fill word (the fill really landed).
+    let raw = readback(&mut sink, &ctx, p, bytes as usize);
+    for chunk in raw.chunks_exact(4) {
+        assert_eq!(u32::from_le_bytes(chunk.try_into().unwrap()), word);
+    }
+}
+
+#[test]
+fn cuda_dtod_copy_moves_bytes_on_device_end_to_end() {
+    let mut sink = harness();
+    let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
+    let data: Vec<u8> = (0..64u8).collect();
+
+    let a = allocate::mem_alloc(&mut ctx, &mut sink, 64).unwrap();
+    let b = allocate::mem_alloc(&mut ctx, &mut sink, 64).unwrap();
+    transfer::memcpy_htod(&mut ctx, &mut sink, a, &data).unwrap();
+    // On-device copy a → b, then read b back: it must equal the source bytes exactly.
+    transfer::memcpy_dtod(&mut ctx, &mut sink, b, a, 64).unwrap();
+    assert_eq!(readback(&mut sink, &ctx, b, 64), data, "DtoD copy produced the source bytes");
+}
+
+#[test]
+fn cuda_vecadd_over_a_multi_block_grid_computes_all_elements() {
+    // grid = 2 blocks, block = 2 threads → the kernel's global index ctaid*ntid+tid covers 4 elements
+    // across two workgroups. Proves the grid dims propagate as the dispatch's workgroup count.
+    let a = [1.0f32, 2.0, 3.0, 4.0];
+    let b = [10.0f32, 20.0, 30.0, 40.0];
+    let n = 4u32;
+
+    let mut sink = harness();
+    let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
+    let module = load_module::module_load_data(&mut ctx, ptx::VECADD_PTX.as_bytes()).unwrap();
+    let func = load_module::module_get_function(&ctx, module, "vecadd").unwrap();
+
+    let bytes = (n as u64) * 4;
+    let da = allocate::mem_alloc(&mut ctx, &mut sink, bytes).unwrap();
+    let db = allocate::mem_alloc(&mut ctx, &mut sink, bytes).unwrap();
+    let dc = allocate::mem_alloc(&mut ctx, &mut sink, bytes).unwrap();
+    transfer::memcpy_htod(&mut ctx, &mut sink, da, &f32s_to_bytes(&a)).unwrap();
+    transfer::memcpy_htod(&mut ctx, &mut sink, db, &f32s_to_bytes(&b)).unwrap();
+
+    let args = vec![
+        KernelArg::Ptr(da),
+        KernelArg::Ptr(db),
+        KernelArg::Ptr(dc),
+        KernelArg::Scalar((n as i32).to_le_bytes().to_vec()),
+    ];
+    launch::launch(&mut ctx, &mut sink, func, (2, 1, 1), (2, 1, 1), &args).unwrap();
+
+    let raw = readback(&mut sink, &ctx, dc, bytes as usize);
+    let got: Vec<f32> = raw.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+    assert_eq!(got, vec![11.0, 22.0, 33.0, 44.0], "all 4 elements across 2 blocks");
+    assert_eq!(sink.executor().dispatches, 1);
+}
+
+/// saxpy: `y[i] = a*x[i] + y[i]` with the scalar count + f32 alpha placed BEFORE the two pointers — a
+/// natural-aligned layout (`u32@0, f32@4, u64@8, u64@16`) and an `fma.rn.f32`.
+const SAXPY_PTX: &str = r#"
+    .visible .entry saxpy(
+        .param .u32 saxpy_param_0,
+        .param .f32 saxpy_param_1,
+        .param .u64 saxpy_param_2,
+        .param .u64 saxpy_param_3
+    )
+    {
+        .reg .pred %p<2>;
+        .reg .f32 %f<5>;
+        .reg .b32 %r<6>;
+        .reg .b64 %rd<9>;
+
+        ld.param.u32  %r2, [saxpy_param_0];
+        ld.param.f32  %f1, [saxpy_param_1];
+        ld.param.u64  %rd1, [saxpy_param_2];
+        ld.param.u64  %rd2, [saxpy_param_3];
+        mov.u32       %r3, %ntid.x;
+        mov.u32       %r4, %ctaid.x;
+        mov.u32       %r5, %tid.x;
+        mad.lo.s32    %r1, %r4, %r3, %r5;
+        setp.ge.s32   %p1, %r1, %r2;
+        @%p1 bra      DONE;
+        cvta.to.global.u64 %rd3, %rd1;
+        cvta.to.global.u64 %rd4, %rd2;
+        mul.wide.s32  %rd5, %r1, 4;
+        add.s64       %rd6, %rd3, %rd5;
+        add.s64       %rd7, %rd4, %rd5;
+        ld.global.f32 %f2, [%rd6];
+        ld.global.f32 %f3, [%rd7];
+        fma.rn.f32    %f4, %f1, %f2, %f3;
+        st.global.f32 [%rd7], %f4;
+    DONE:
+        ret;
+    }
+"#;
+
+#[test]
+fn cuda_saxpy_with_f32_scalar_computes_end_to_end() {
+    let x = [1.0f32, 2.0, 3.0, 4.0];
+    let y = [10.0f32, 20.0, 30.0, 40.0];
+    let alpha = 2.5f32;
+    let n = 4u32;
+
+    let mut sink = harness();
+    let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
+    let module = load_module::module_load_data(&mut ctx, SAXPY_PTX.as_bytes()).unwrap();
+    let func = load_module::module_get_function(&ctx, module, "saxpy").unwrap();
+
+    let bytes = (n as u64) * 4;
+    let dx = allocate::mem_alloc(&mut ctx, &mut sink, bytes).unwrap();
+    let dy = allocate::mem_alloc(&mut ctx, &mut sink, bytes).unwrap();
+    transfer::memcpy_htod(&mut ctx, &mut sink, dx, &f32s_to_bytes(&x)).unwrap();
+    transfer::memcpy_htod(&mut ctx, &mut sink, dy, &f32s_to_bytes(&y)).unwrap();
+
+    // args in declared order: n (int), alpha (f32), x, y.
+    let args = vec![
+        KernelArg::Scalar((n as i32).to_le_bytes().to_vec()),
+        KernelArg::Scalar(alpha.to_le_bytes().to_vec()),
+        KernelArg::Ptr(dx),
+        KernelArg::Ptr(dy),
+    ];
+    launch::launch(&mut ctx, &mut sink, func, (1, 1, 1), (n, 1, 1), &args).unwrap();
+
+    let raw = readback(&mut sink, &ctx, dy, bytes as usize);
+    let got: Vec<f32> = raw.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+    let want: Vec<f32> = x.iter().zip(&y).map(|(xi, yi)| alpha * xi + yi).collect();
+    assert_eq!(got, want, "saxpy y = a*x + y");
+    assert_eq!(got, vec![12.5, 25.0, 37.5, 50.0]);
+}

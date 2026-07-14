@@ -21,7 +21,7 @@ use hl_gpu::protocol::model::descriptor::{
 };
 use hl_gpu::protocol::model::enums::buffer_usage;
 use hl_gpu::protocol::model::kernel::KernelDescriptor;
-use hl_gpu::{Cmd, CommandBuffer, CommandSink, Result, ShaderPayloadKind};
+use hl_gpu::{Cmd, CommandBuffer, CommandSink, GpuError, Result, ShaderPayloadKind};
 
 /// `cuLaunchKernel(func, grid, block, args)` → the compute IR, submitted as one batch. `grid` = number
 /// of blocks (→ workgroup count); `block` = threads per block (→ threadgroup size, baked into the
@@ -34,8 +34,43 @@ pub fn launch(
     block: (u32, u32, u32),
     args: &[KernelArg],
 ) -> Result<u32> {
-    let mut out: Vec<Cmd> = Vec::new();
     let block_arr = [block.0, block.1, block.2];
+
+    // Marshal the arguments FIRST — before minting/caching any shader or pipeline id. A dangling
+    // (non-null) device-pointer argument is a hard error (the `CUDA_ERROR_INVALID_VALUE` analogue,
+    // matching every `cuMemcpy*` path), not a silently-dropped binding that would leave the kernel's
+    // storage region unbound (an unbound output region is discarded on writeback → a fake-success launch
+    // that computed nothing). A NULL pointer (`0`) is a legal kernel argument and binds no region.
+    // Validating up front also guarantees we never cache a pipeline whose `CreateShader`/`CreatePipeline`
+    // never actually reached the backend (this function returns before `sink.submit`).
+    let mut blob: Vec<u8> = Vec::new();
+    let mut entries: Vec<BindEntry> = Vec::new();
+    let mut region = 0u32;
+    for a in args {
+        match a {
+            KernelArg::Ptr(p) => {
+                // natural-align to 8 (pointer width), then store the device address in the blob.
+                align_blob(&mut blob, 8);
+                blob.extend_from_slice(&p.0.to_le_bytes());
+                if p.0 != 0 {
+                    let (buf, off) = ctx.resolve(*p).ok_or(GpuError::Invalid(
+                        "cuLaunchKernel: kernel argument is a dangling device pointer",
+                    ))?;
+                    entries.push(BindEntry {
+                        binding: region + 1,
+                        resource: BindResource::Buffer { id: buf.0, offset: off, size: 0 },
+                    });
+                }
+                region += 1;
+            }
+            KernelArg::Scalar(bytes) => {
+                align_blob(&mut blob, bytes.len().max(1) as u64);
+                blob.extend_from_slice(bytes);
+            }
+        }
+    }
+
+    let mut out: Vec<Cmd> = Vec::new();
 
     // lazily create the kernel shader (forwarded PTX descriptor) + compute pipeline.
     let pipeline = if let Some((_, pipeline)) = ctx.cached_pipeline(func.module, func.entry, block_arr) {
@@ -60,31 +95,6 @@ pub fn launch(
         ctx.cache_pipeline(func.module, func.entry, block_arr, (shader, pipeline));
         pipeline
     };
-
-    // Build the flat parameter blob (binding 0) and the pointer storage bindings (binding r+1).
-    let mut blob: Vec<u8> = Vec::new();
-    let mut entries: Vec<BindEntry> = Vec::new();
-    let mut region = 0u32;
-    for a in args {
-        match a {
-            KernelArg::Ptr(p) => {
-                // natural-align to 8 (pointer width), then store the device address in the blob.
-                align_blob(&mut blob, 8);
-                blob.extend_from_slice(&p.0.to_le_bytes());
-                if let Some((buf, off)) = ctx.resolve(*p) {
-                    entries.push(BindEntry {
-                        binding: region + 1,
-                        resource: BindResource::Buffer { id: buf.0, offset: off, size: 0 },
-                    });
-                }
-                region += 1;
-            }
-            KernelArg::Scalar(bytes) => {
-                align_blob(&mut blob, bytes.len().max(1) as u64);
-                blob.extend_from_slice(bytes);
-            }
-        }
-    }
 
     // Materialize the parameter blob as a small uniform/storage buffer bound at binding 0.
     let param_buf = ctx.alloc_buffer();
