@@ -34,10 +34,9 @@ pub struct State {
     /// The guest→host boundary: encodes the frame batch and ships it framed over `$HL_GPU_EXEC`.
     pub sink: RemoteCommandSink,
 
-    /// Last EGL error (`eglGetError` reads + clears it).
+    /// Last EGL error (`eglGetError` reads + clears it). The GL error register lives on the modeled
+    /// `ctx` ([`GlContext::gl_error`]) so it is unit-testable in the `hl_gl` lib crate.
     pub egl_error: i32,
-    /// Last GL error (`glGetError` reads + clears it).
-    pub gl_error: u32,
 
     /// `EGLContext` token allocator (opaque, non-null); the current bound context token (`0` = none).
     next_token: usize,
@@ -54,7 +53,6 @@ impl State {
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
             sink: RemoteCommandSink::from_env(),
             egl_error: EGL_SUCCESS,
-            gl_error: GL_NO_ERROR,
             next_token: 1,
             current_ctx: 0,
             current_surface: 0,
@@ -76,11 +74,6 @@ impl State {
     /// Read + clear the last EGL error.
     pub fn take_egl_error(&mut self) -> i32 {
         std::mem::replace(&mut self.egl_error, EGL_SUCCESS)
-    }
-
-    /// Read + clear the last GL error.
-    pub fn take_gl_error(&mut self) -> u32 {
-        std::mem::replace(&mut self.gl_error, GL_NO_ERROR)
     }
 }
 

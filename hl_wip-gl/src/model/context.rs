@@ -26,6 +26,35 @@ pub struct GlSurface {
     pub height: u32,
 }
 
+/// The pixel-store pack/unpack parameters (`glPixelStorei`) an app sets before texture upload / readback.
+/// Recorded for a faithful `glGetIntegerv` round-trip; the alignments default to GL's documented `4`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PixelStore {
+    pub unpack_alignment: i32,
+    pub pack_alignment: i32,
+    pub unpack_row_length: i32,
+    pub unpack_skip_rows: i32,
+    pub unpack_skip_pixels: i32,
+    pub pack_row_length: i32,
+    pub pack_skip_rows: i32,
+    pub pack_skip_pixels: i32,
+}
+
+impl Default for PixelStore {
+    fn default() -> Self {
+        Self {
+            unpack_alignment: 4,
+            pack_alignment: 4,
+            unpack_row_length: 0,
+            unpack_skip_rows: 0,
+            unpack_skip_pixels: 0,
+            pack_row_length: 0,
+            pack_skip_rows: 0,
+            pack_skip_pixels: 0,
+        }
+    }
+}
+
 pub struct GlContext {
     /// The default-framebuffer window surface.
     pub surf: GlSurface,
@@ -77,6 +106,13 @@ pub struct GlContext {
     pub front_face: u32,
     /// The framebuffer bound by `glBindFramebuffer` (`0` = the default window framebuffer).
     pub bound_fbo: u32,
+
+    /// The pack/unpack pixel-store parameters (`glPixelStorei`).
+    pub pixel_store: PixelStore,
+
+    /// The last GL error (`glGetError` reads + clears it). GL keeps the FIRST error raised until read,
+    /// so [`Self::set_gl_error`] is first-error-wins.
+    pub gl_error: u32,
 
     /// The recorded draw-list, replayed into IR at `eglSwapBuffers`.
     pub draws: Vec<DrawCall>,
@@ -140,6 +176,8 @@ impl GlContext {
             cull_face: glconst::GL_BACK,
             front_face: glconst::GL_CCW,
             bound_fbo: 0,
+            pixel_store: PixelStore::default(),
+            gl_error: glconst::GL_NO_ERROR,
             draws: Vec::new(),
             next_buffer: 1,
             next_texture: 1,
@@ -225,5 +263,20 @@ impl GlContext {
     /// Reset the per-frame draw state after a successful swap (`eglSwapBuffers` tail).
     pub fn reset_frame(&mut self) {
         self.draws.clear();
+    }
+
+    // ---- error register (glGetError) -------------------------------------------------------------
+
+    /// Record a GL error. GL keeps the FIRST error raised until `glGetError` clears it, so a later error
+    /// does not overwrite a still-unread one (first-error-wins).
+    pub fn set_gl_error(&mut self, e: u32) {
+        if self.gl_error == glconst::GL_NO_ERROR {
+            self.gl_error = e;
+        }
+    }
+
+    /// Read + clear the last GL error (`glGetError`), returning `GL_NO_ERROR` when none is pending.
+    pub fn take_gl_error(&mut self) -> u32 {
+        std::mem::replace(&mut self.gl_error, glconst::GL_NO_ERROR)
     }
 }

@@ -92,3 +92,79 @@ pub const GL_LINEAR_MIPMAP_LINEAR: u32 = 0x2703;
 pub const GL_CLAMP_TO_EDGE: u32 = 0x812F;
 pub const GL_REPEAT: u32 = 0x2901;
 pub const GL_MIRRORED_REPEAT: u32 = 0x8370;
+
+// boolean literals (glGetBooleanv / *_STATUS)
+pub const GL_FALSE: u32 = 0;
+pub const GL_TRUE: u32 = 1;
+
+// glGetString name enums (identity strings)
+pub const GL_VENDOR: u32 = 0x1F00;
+pub const GL_RENDERER: u32 = 0x1F01;
+pub const GL_VERSION: u32 = 0x1F02;
+pub const GL_EXTENSIONS: u32 = 0x1F03;
+pub const GL_SHADING_LANGUAGE_VERSION: u32 = 0x8B8C;
+
+// glGetIntegerv/glGetFloatv/glGetBooleanv pnames — capability limits + bound-object queries.
+pub const GL_MAX_TEXTURE_SIZE: u32 = 0x0D33;
+pub const GL_MAX_CUBE_MAP_TEXTURE_SIZE: u32 = 0x851C;
+pub const GL_MAX_RENDERBUFFER_SIZE: u32 = 0x84E8;
+pub const GL_MAX_VERTEX_ATTRIBS: u32 = 0x8869;
+pub const GL_MAX_TEXTURE_IMAGE_UNITS: u32 = 0x8872;
+pub const GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS: u32 = 0x8B4D;
+pub const GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS: u32 = 0x8B4C;
+pub const GL_MAX_FRAGMENT_UNIFORM_VECTORS: u32 = 0x8DFD;
+pub const GL_MAX_VERTEX_UNIFORM_VECTORS: u32 = 0x8DFB;
+pub const GL_MAX_VARYING_VECTORS: u32 = 0x8DFC;
+pub const GL_NUM_COMPRESSED_TEXTURE_FORMATS: u32 = 0x86A2;
+pub const GL_SAMPLES: u32 = 0x80A9;
+pub const GL_MAX_SAMPLES: u32 = 0x8D57;
+pub const GL_CURRENT_PROGRAM: u32 = 0x8B8D;
+pub const GL_ACTIVE_TEXTURE: u32 = 0x84E0;
+pub const GL_ARRAY_BUFFER_BINDING: u32 = 0x8894;
+pub const GL_ELEMENT_ARRAY_BUFFER_BINDING: u32 = 0x8895;
+pub const GL_TEXTURE_BINDING_2D: u32 = 0x8069;
+pub const GL_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+pub const GL_MAJOR_VERSION: u32 = 0x821B;
+pub const GL_MINOR_VERSION: u32 = 0x821C;
+pub const GL_NUM_EXTENSIONS: u32 = 0x821D;
+pub const GL_DEPTH_BITS: u32 = 0x0D56;
+pub const GL_STENCIL_BITS: u32 = 0x0D57;
+pub const GL_RED_BITS: u32 = 0x0D52;
+pub const GL_GREEN_BITS: u32 = 0x0D53;
+pub const GL_BLUE_BITS: u32 = 0x0D54;
+pub const GL_ALPHA_BITS: u32 = 0x0D55;
+pub const GL_MAX_VIEWPORT_DIMS: u32 = 0x0D3A;
+pub const GL_VIEWPORT: u32 = 0x0BA2;
+pub const GL_SCISSOR_BOX: u32 = 0x0C10;
+pub const GL_COLOR_CLEAR_VALUE: u32 = 0x0C22;
+pub const GL_DEPTH_CLEAR_VALUE: u32 = 0x0B73;
+pub const GL_LINE_WIDTH: u32 = 0x0B21;
+pub const GL_DEPTH_WRITEMASK: u32 = 0x0B72;
+
+// glGetShaderiv / glGetProgramiv pnames.
+pub const GL_DELETE_STATUS: u32 = 0x8B80;
+pub const GL_COMPILE_STATUS: u32 = 0x8B81;
+pub const GL_LINK_STATUS: u32 = 0x8B82;
+pub const GL_VALIDATE_STATUS: u32 = 0x8B83;
+pub const GL_INFO_LOG_LENGTH: u32 = 0x8B84;
+pub const GL_ATTACHED_SHADERS: u32 = 0x8B85;
+pub const GL_ACTIVE_UNIFORMS: u32 = 0x8B86;
+pub const GL_ACTIVE_ATTRIBUTES: u32 = 0x8B89;
+pub const GL_SHADER_TYPE: u32 = 0x8B4F;
+pub const GL_SHADER_SOURCE_LENGTH: u32 = 0x8B88;
+
+// glPixelStorei pnames.
+pub const GL_UNPACK_ALIGNMENT: u32 = 0x0CF5;
+pub const GL_PACK_ALIGNMENT: u32 = 0x0D05;
+pub const GL_UNPACK_ROW_LENGTH: u32 = 0x0CF2;
+pub const GL_UNPACK_SKIP_ROWS: u32 = 0x0CF3;
+pub const GL_UNPACK_SKIP_PIXELS: u32 = 0x0CF4;
+pub const GL_PACK_ROW_LENGTH: u32 = 0x0D02;
+pub const GL_PACK_SKIP_ROWS: u32 = 0x0D03;
+pub const GL_PACK_SKIP_PIXELS: u32 = 0x0D04;
+
+// GLenum error codes (returned by glGetError; re-declared from result.rs for the model layer).
+pub const GL_NO_ERROR: u32 = 0;
+pub const GL_INVALID_ENUM: u32 = 0x0500;
+pub const GL_INVALID_VALUE: u32 = 0x0501;
+pub const GL_INVALID_OPERATION: u32 = 0x0502;

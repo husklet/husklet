@@ -208,6 +208,19 @@ const IMPLEMENTED: &[&str] = &[
     // ---- GLES: error / string ----
     "glGetError",
     "glGetString",
+    // ---- GLES: state / capability queries (glGet*) + pixel store ----
+    "glGetIntegerv",
+    "glGetFloatv",
+    "glGetBooleanv",
+    "glPixelStorei",
+    // ---- GLES: shader / program introspection (status + reflection lookups) ----
+    "glGetShaderiv",
+    "glGetProgramiv",
+    "glGetShaderInfoLog",
+    "glGetProgramInfoLog",
+    "glGetUniformLocation",
+    "glGetAttribLocation",
+    "glBindAttribLocation",
     // ---- GLES: buffers ----
     "glGenBuffers",
     "glBindBuffer",

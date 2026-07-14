@@ -17,20 +17,13 @@ use core::ffi::{c_char, c_void};
 use hl_gl::model::context::GlSurface;
 use hl_gl::model::glconst::*;
 use hl_gl::result::{
-    egl_error_from_gpu_error, EGL_FALSE, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE, GL_NO_ERROR,
-    GL_OUT_OF_MEMORY,
+    egl_error_from_gpu_error, EGL_FALSE, EGL_TRUE, GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
 };
-use hl_gl::service::{readpixels, record, swap};
+use hl_gl::service::{query, readpixels, record, swap};
 
 use crate::state::{with, CONFIG_TOKEN, DISPLAY_TOKEN};
 
-// ---- GL/EGL query enums the string/attrib getters key on (not in hl_gl::glconst) -----------------
-
-const GL_VENDOR: u32 = 0x1F00;
-const GL_RENDERER: u32 = 0x1F01;
-const GL_VERSION: u32 = 0x1F02;
-const GL_EXTENSIONS: u32 = 0x1F03;
-const GL_SHADING_LANGUAGE_VERSION: u32 = 0x8B8C;
+// ---- EGL query enums the string getters key on (the GL_* query enums live in hl_gl::glconst) ------
 
 const EGL_VENDOR: i32 = 0x3053;
 const EGL_VERSION_Q: i32 = 0x3054;
@@ -76,6 +69,15 @@ unsafe fn join_source(count: i32, string: *const *const c_char, length: *const i
         }
     }
     s
+}
+
+/// Borrow a NUL-terminated C string as an owned `String` (`None` if null or not valid UTF-8). Used by the
+/// `glGet*Location` name lookups.
+unsafe fn cstr(p: *const c_char) -> Option<String> {
+    if p.is_null() {
+        return None;
+    }
+    core::ffi::CStr::from_ptr(p).to_str().ok().map(|s| s.to_string())
 }
 
 /// Convert an uploaded `glTexImage2D` image to the RGBA8 (`w*h*4`) plane the frame builder consumes.
@@ -199,9 +201,21 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "eglGetCurrentDisplay" => p!(eglGetCurrentDisplay),
         "eglGetCurrentContext" => p!(eglGetCurrentContext),
         "eglGetCurrentSurface" => p!(eglGetCurrentSurface),
-        // ---- GLES: error / string ----
+        // ---- GLES: error / string / query ----
         "glGetError" => p!(glGetError),
         "glGetString" => p!(glGetString),
+        "glGetIntegerv" => p!(glGetIntegerv),
+        "glGetFloatv" => p!(glGetFloatv),
+        "glGetBooleanv" => p!(glGetBooleanv),
+        "glPixelStorei" => p!(glPixelStorei),
+        // ---- GLES: shader / program introspection ----
+        "glGetShaderiv" => p!(glGetShaderiv),
+        "glGetProgramiv" => p!(glGetProgramiv),
+        "glGetShaderInfoLog" => p!(glGetShaderInfoLog),
+        "glGetProgramInfoLog" => p!(glGetProgramInfoLog),
+        "glGetUniformLocation" => p!(glGetUniformLocation),
+        "glGetAttribLocation" => p!(glGetAttribLocation),
+        "glBindAttribLocation" => p!(glBindAttribLocation),
         // ---- GLES: buffers ----
         "glGenBuffers" => p!(glGenBuffers),
         "glBindBuffer" => p!(glBindBuffer),
@@ -435,22 +449,79 @@ pub extern "C" fn eglGetCurrentSurface(_readdraw: i32) -> *mut c_void {
 // GLES: error / string
 // ==================================================================================================
 
+/// `glGetError` — read + clear the context's error flag. A real app loops on this after batches of GL
+/// calls, so it must return the first error raised (GL keeps it until read) and then reset to
+/// `GL_NO_ERROR`.
 #[no_mangle]
 pub extern "C" fn glGetError() -> u32 {
-    with(|s| s.take_gl_error())
+    with(|s| s.ctx.take_gl_error())
 }
 
+/// `glGetString(name)` — the driver's GLES3 identity strings (`GL_VERSION` = "OpenGL ES 3.0 …", vendor /
+/// renderer / GLSL version / extensions). Served from [`query::gl_string`] so the guest-visible identity
+/// is defined once and unit-tested. Never null: a GLES app dereferences the result unconditionally.
 #[no_mangle]
 pub extern "C" fn glGetString(name: u32) -> *const u8 {
-    let text: &'static [u8] = match name {
-        GL_VENDOR => b"hl-gl\0",
-        GL_RENDERER => b"hl-gl-metal\0",
-        GL_VERSION => b"OpenGL ES 2.0 hl-shim\0",
-        GL_SHADING_LANGUAGE_VERSION => b"OpenGL ES GLSL ES 1.00\0",
-        GL_EXTENSIONS => b"\0",
-        _ => b"\0",
-    };
-    text.as_ptr()
+    query::gl_string(name).as_ptr()
+}
+
+// ==================================================================================================
+// GLES: state / capability queries (glGet*) — read-only; served from the modeled limits + live state
+// ==================================================================================================
+
+/// `glGetIntegerv(pname, data)` — capability limits + bound-object / fixed-function state. Writes the
+/// modeled value(s) for `pname` (1, 2, or 4 ints); a null `data` or unknown `pname` is handled by
+/// [`query::get_integerv`] (unknown → a single `0`).
+#[no_mangle]
+pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
+    if data.is_null() {
+        return;
+    }
+    let mut buf = [0i32; 4];
+    let n = with(|s| query::get_integerv(&s.ctx, pname, &mut buf));
+    unsafe {
+        for i in 0..n {
+            *data.add(i) = buf[i];
+        }
+    }
+}
+
+/// `glGetFloatv(pname, data)` — the float-typed state (clear color, depth-clear value, line width, …).
+#[no_mangle]
+pub extern "C" fn glGetFloatv(pname: u32, data: *mut f32) {
+    if data.is_null() {
+        return;
+    }
+    let mut buf = [0f32; 4];
+    let n = with(|s| query::get_floatv(&s.ctx, pname, &mut buf));
+    unsafe {
+        for i in 0..n {
+            *data.add(i) = buf[i];
+        }
+    }
+}
+
+/// `glGetBooleanv(pname, data)` — the boolean-typed state (fixed-function enables + depth write mask).
+#[no_mangle]
+pub extern "C" fn glGetBooleanv(pname: u32, data: *mut u8) {
+    if data.is_null() {
+        return;
+    }
+    let mut buf = [0u8; 4];
+    let n = with(|s| query::get_booleanv(&s.ctx, pname, &mut buf));
+    unsafe {
+        for i in 0..n {
+            *data.add(i) = buf[i];
+        }
+    }
+}
+
+/// `glPixelStorei(pname, param)` — record a pack/unpack pixel-store parameter (e.g. `GL_UNPACK_ALIGNMENT`,
+/// which affects texture-upload row packing). An out-of-range value raises `GL_INVALID_VALUE` (first-error
+/// wins); see [`record::pixel_store`].
+#[no_mangle]
+pub extern "C" fn glPixelStorei(pname: u32, param: i32) {
+    with(|s| record::pixel_store(&mut s.ctx, pname, param));
 }
 
 // ==================================================================================================
@@ -604,6 +675,98 @@ pub extern "C" fn glLinkProgram(program: u32) {
 pub extern "C" fn glUseProgram(program: u32) {
     with(|s| record::use_program(&mut s.ctx, program));
 }
+
+// ---- shader / program introspection (glGet*iv / glGet*InfoLog / glGet*Location) -------------------
+//
+// A real GLES app queries COMPILE_STATUS / LINK_STATUS after every compile+link (and bails on failure),
+// and resolves uniform/attribute locations at program bind. These serve the modeled compile/link state +
+// the reflected uniform/attribute tables (see `hl_gl::service::query`).
+
+/// `glGetShaderiv(shader, pname, params)` — `GL_COMPILE_STATUS` (TRUE for a compiled shader),
+/// `GL_INFO_LOG_LENGTH` (0), `GL_SHADER_SOURCE_LENGTH`, `GL_SHADER_TYPE`, `GL_DELETE_STATUS`.
+#[no_mangle]
+pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
+    if params.is_null() {
+        return;
+    }
+    let v = with(|s| query::get_shaderiv(&s.ctx, shader, pname));
+    unsafe { *params = v };
+}
+
+/// `glGetProgramiv(program, pname, params)` — `GL_LINK_STATUS`/`GL_VALIDATE_STATUS` (TRUE once linked),
+/// `GL_INFO_LOG_LENGTH` (0), `GL_ATTACHED_SHADERS`, `GL_ACTIVE_UNIFORMS`, `GL_ACTIVE_ATTRIBUTES`.
+#[no_mangle]
+pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
+    if params.is_null() {
+        return;
+    }
+    let v = with(|s| query::get_programiv(&s.ctx, program, pname));
+    unsafe { *params = v };
+}
+
+/// `glGetShaderInfoLog(shader, buf_size, length, info_log)` — the shader compiled successfully, so the
+/// diagnostic log is empty (an empty NUL-terminated string, length 0).
+#[no_mangle]
+pub extern "C" fn glGetShaderInfoLog(
+    _shader: u32,
+    buf_size: i32,
+    length: *mut i32,
+    info_log: *mut c_char,
+) {
+    unsafe { write_empty_info_log(buf_size, length, info_log) };
+}
+
+/// `glGetProgramInfoLog(program, buf_size, length, info_log)` — the program linked successfully, so the
+/// diagnostic log is empty (an empty NUL-terminated string, length 0).
+#[no_mangle]
+pub extern "C" fn glGetProgramInfoLog(
+    _program: u32,
+    buf_size: i32,
+    length: *mut i32,
+    info_log: *mut c_char,
+) {
+    unsafe { write_empty_info_log(buf_size, length, info_log) };
+}
+
+/// Emit an empty info log per the `glGet*InfoLog` contract: write a single NUL into `info_log` (when a
+/// buffer of at least one byte is given) and report a written length of `0` (the count excludes the
+/// terminator). Null-safe on every pointer.
+unsafe fn write_empty_info_log(buf_size: i32, length: *mut i32, info_log: *mut c_char) {
+    if !info_log.is_null() && buf_size > 0 {
+        *info_log = 0;
+    }
+    if !length.is_null() {
+        *length = 0;
+    }
+}
+
+/// `glGetUniformLocation(program, name)` — the location of a uniform in the linked program (its reflected
+/// declaration index), or `-1` if `name` is not an active uniform. Null-safe.
+#[no_mangle]
+pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32 {
+    let want = match unsafe { cstr(name) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    with(|s| query::uniform_location(&s.ctx, program, &want))
+}
+
+/// `glGetAttribLocation(program, name)` — the vertex attribute's declaration-order slot in the linked
+/// program, or `-1` if `name` is not an active attribute. Null-safe.
+#[no_mangle]
+pub extern "C" fn glGetAttribLocation(program: u32, name: *const c_char) -> i32 {
+    let want = match unsafe { cstr(name) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    with(|s| query::attrib_location(&s.ctx, program, &want))
+}
+
+/// `glBindAttribLocation(program, index, name)` — a no-op: the GLSL→MSL translator binds attributes by
+/// declaration order (`[[attribute(N)]]`), so an app-requested binding cannot be honored without
+/// re-linking. This matches the reference shim; `glGetAttribLocation` reports the declaration-order slot.
+#[no_mangle]
+pub extern "C" fn glBindAttribLocation(_program: u32, _index: u32, _name: *const c_char) {}
 
 /// `glUniform1i` — in this simplified model an integer uniform binds a sampler: `location` selects the
 /// sampler's declaration index, `v0` the texture unit (mirrors the lowering test's `uniform_sampler`).
@@ -898,11 +1061,7 @@ pub extern "C" fn glReadPixels(
     pixels: *mut c_void,
 ) {
     // Record the first GL error and bail (GL keeps the first error until glGetError clears it).
-    let fail = |e: u32| with(|s| {
-        if s.gl_error == GL_NO_ERROR {
-            s.gl_error = e;
-        }
-    });
+    let fail = |e: u32| with(|s| s.ctx.set_gl_error(e));
     if type_ != GL_UNSIGNED_BYTE {
         fail(GL_INVALID_ENUM);
         return;
@@ -933,9 +1092,7 @@ pub extern "C" fn glReadPixels(
             unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), pixels as *mut u8, n) };
         }
         Err(e) => with(|s| {
-            if s.gl_error == GL_NO_ERROR {
-                s.gl_error = GL_OUT_OF_MEMORY;
-            }
+            s.ctx.set_gl_error(GL_OUT_OF_MEMORY);
             s.set_egl_error(egl_error_from_gpu_error(&e));
         }),
     }

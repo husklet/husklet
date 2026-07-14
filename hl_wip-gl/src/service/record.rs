@@ -315,6 +315,57 @@ pub fn viewport(ctx: &mut GlContext, vp: [i32; 4]) {
     ctx.viewport = vp;
 }
 
+/// `glPixelStorei(pname, value)` — record a pack/unpack pixel-store parameter (affecting texture upload /
+/// readback packing). Alignments accept only `{1,2,4,8}`; row-length/skip parameters must be non-negative.
+/// An out-of-range value raises `GL_INVALID_VALUE` (first-error-wins) and leaves the parameter unchanged;
+/// an unrecognized `pname` is ignored (the long tail of pack/unpack params this model does not track).
+pub fn pixel_store(ctx: &mut GlContext, pname: u32, value: i32) {
+    let ps = &mut ctx.pixel_store;
+    let ok = match pname {
+        GL_UNPACK_ALIGNMENT if matches!(value, 1 | 2 | 4 | 8) => {
+            ps.unpack_alignment = value;
+            true
+        }
+        GL_PACK_ALIGNMENT if matches!(value, 1 | 2 | 4 | 8) => {
+            ps.pack_alignment = value;
+            true
+        }
+        GL_UNPACK_ROW_LENGTH if value >= 0 => {
+            ps.unpack_row_length = value;
+            true
+        }
+        GL_UNPACK_SKIP_ROWS if value >= 0 => {
+            ps.unpack_skip_rows = value;
+            true
+        }
+        GL_UNPACK_SKIP_PIXELS if value >= 0 => {
+            ps.unpack_skip_pixels = value;
+            true
+        }
+        GL_PACK_ROW_LENGTH if value >= 0 => {
+            ps.pack_row_length = value;
+            true
+        }
+        GL_PACK_SKIP_ROWS if value >= 0 => {
+            ps.pack_skip_rows = value;
+            true
+        }
+        GL_PACK_SKIP_PIXELS if value >= 0 => {
+            ps.pack_skip_pixels = value;
+            true
+        }
+        // A recognized parameter with an out-of-range value is GL_INVALID_VALUE.
+        GL_UNPACK_ALIGNMENT | GL_PACK_ALIGNMENT | GL_UNPACK_ROW_LENGTH | GL_UNPACK_SKIP_ROWS
+        | GL_UNPACK_SKIP_PIXELS | GL_PACK_ROW_LENGTH | GL_PACK_SKIP_ROWS | GL_PACK_SKIP_PIXELS => {
+            ctx.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
+        // Unrecognized pname: an untracked pack/unpack parameter — leave state unchanged.
+        _ => true,
+    };
+    let _ = ok;
+}
+
 /// `glScissor(x, y, w, h)`.
 pub fn scissor(ctx: &mut GlContext, sc: [i32; 4]) {
     ctx.scissor = sc;
