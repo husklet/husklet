@@ -10,6 +10,7 @@
 
 pub mod buffer;
 pub mod context;
+pub mod es3;
 pub mod framebuffer;
 pub mod glconst;
 pub mod program;

@@ -238,6 +238,38 @@ pub fn get_programiv(ctx: &GlContext, program: u32, pname: u32) -> i32 {
     }
 }
 
+// ---- glGetBufferParameteriv / glGetTexParameteriv -------------------------------------------------
+
+/// `glGetBufferParameteriv(target, pname)` — real size/usage of the buffer bound to `target`
+/// (`gl_shim.c` parity). `GL_BUFFER_SIZE` is the byte length; `GL_BUFFER_USAGE` the stored usage hint;
+/// an unknown pname / unbound buffer reads `0`.
+pub fn get_buffer_parameteriv(ctx: &GlContext, target: u32, pname: u32) -> i32 {
+    let name = ctx.buffer_for_target(target);
+    let Some(b) = ctx.buffers.get(name) else { return 0 };
+    match pname {
+        GL_BUFFER_SIZE => b.data.len() as i32,
+        GL_BUFFER_USAGE => b.usage as i32,
+        _ => 0,
+    }
+}
+
+/// `glGetTexParameteriv(target, pname)` — filter / wrap state of the bound texture (`gl_shim.c` parity).
+/// An unknown pname / no bound texture reads `0`.
+pub fn get_tex_parameteriv(ctx: &GlContext, target: u32, pname: u32) -> i32 {
+    if target != GL_TEXTURE_2D {
+        return 0;
+    }
+    let name = ctx.tex_unit[ctx.active_texture];
+    let Some(t) = ctx.textures.get(name) else { return 0 };
+    match pname {
+        GL_TEXTURE_MIN_FILTER => t.min_filter as i32,
+        GL_TEXTURE_MAG_FILTER => t.mag_filter as i32,
+        GL_TEXTURE_WRAP_S => t.wrap_s as i32,
+        GL_TEXTURE_WRAP_T => t.wrap_t as i32,
+        _ => 0,
+    }
+}
+
 // ---- glGetUniformLocation / glGetAttribLocation --------------------------------------------------
 
 /// `glGetUniformLocation(program, name)` — resolve `name` against the linked program's reflected uniform

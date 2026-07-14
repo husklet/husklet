@@ -22,6 +22,11 @@ pub struct GlTexture {
     pub wrap_s: u32,
     pub wrap_t: u32,
     pub gen: u64,
+    /// Immutable-format storage (`glTexStorage2D`/`3D`): once set, `glTexImage2D` on this texture is a
+    /// `GL_INVALID_OPERATION` and only `glTexSubImage*` may update its pixels.
+    pub immutable: bool,
+    /// The mip-level count declared by `glTexStorage*` (`1` for a mutable texture — the base level only).
+    pub levels: i32,
     /// The neutral-IR texel format this texture lowers to (a `CreateTexture` `format`, and — when the
     /// texture is a framebuffer color attachment — the render-target + surface format). Chosen from the
     /// `glTexImage2D` internal format; defaults to `Rgba8Unorm` (the RGBA8 upload the model materializes).
@@ -40,6 +45,8 @@ impl Default for GlTexture {
             wrap_s: GL_REPEAT,
             wrap_t: GL_REPEAT,
             gen: 0,
+            immutable: false,
+            levels: 1,
             ir_format: TextureFormat::Rgba8Unorm,
         }
     }
@@ -123,6 +130,69 @@ impl Textures {
             t.data = vec![0u8; (w.max(0) * h.max(0) * 4) as usize];
         }
         t.gen += 1;
+    }
+
+    /// `glTexStorage2D`/`glTexStorage3D` — allocate immutable RGBA8 storage (`w*h*4` zeroed bytes),
+    /// mark the texture immutable, and record the declared `levels`. Mirrors `gl_shim.c`, which allocates
+    /// the RGBA8 base plane so a later `glTexSubImage*` has a target (format/levels are not otherwise
+    /// materialized). Returns `false` if the `w*h*4` byte size overflows.
+    pub fn storage_2d(&mut self, name: u32, w: i32, h: i32, levels: i32, format: TextureFormat) -> bool {
+        let Some(size) = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4)) else {
+            return false;
+        };
+        let t = self.map.entry(name).or_default();
+        t.w = w;
+        t.h = h;
+        t.ir_format = format;
+        t.data = vec![0u8; size];
+        t.immutable = true;
+        t.levels = levels;
+        t.gen += 1;
+        true
+    }
+
+    /// Allocate (or grow to) a `w*h*4` RGBA8 base plane for a 2D-array / 3D texture upload
+    /// (`glTexImage3D`/`glTexStorage3D`) — `gl_shim.c` materializes only the layer-0 plane. Returns
+    /// `false` on a size overflow.
+    pub fn alloc_rgba(&mut self, name: u32, w: i32, h: i32) -> bool {
+        let Some(size) = (w.max(0) as usize).checked_mul(h.max(0) as usize).and_then(|n| n.checked_mul(4))
+        else {
+            return false;
+        };
+        let t = self.map.entry(name).or_default();
+        t.w = w;
+        t.h = h;
+        if t.data.len() != size {
+            t.data = vec![0u8; size];
+        }
+        t.gen += 1;
+        true
+    }
+
+    /// `glTexSubImage2D` / `glCopyTexSubImage2D` — overwrite the `[xo,xo+w) × [yo,yo+h)` sub-rect of an
+    /// existing texture's RGBA8 plane with `rgba` (`w*h*4` tightly-packed bytes). Silently clips to the
+    /// texture bounds (the caller validates the range first). Returns `false` for an unknown/dataless name.
+    pub fn sub_image_2d(&mut self, name: u32, xo: i32, yo: i32, w: i32, h: i32, rgba: &[u8]) -> bool {
+        let Some(t) = self.map.get_mut(&name) else { return false };
+        if t.data.is_empty() || w <= 0 || h <= 0 || xo < 0 || yo < 0 {
+            return false;
+        }
+        let (tw, th) = (t.w as usize, t.h as usize);
+        let (xo, yo, w, h) = (xo as usize, yo as usize, w as usize, h as usize);
+        if xo + w > tw || yo + h > th || rgba.len() < w * h * 4 {
+            return false;
+        }
+        for row in 0..h {
+            let dst = ((yo + row) * tw + xo) * 4;
+            let src = row * w * 4;
+            t.data[dst..dst + w * 4].copy_from_slice(&rgba[src..src + w * 4]);
+        }
+        t.gen += 1;
+        true
+    }
+
+    pub fn get_mut(&mut self, name: u32) -> Option<&mut GlTexture> {
+        self.map.get_mut(&name)
     }
 
     /// `glTexParameteri` — set one filter/wrap parameter.

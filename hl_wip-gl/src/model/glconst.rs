@@ -229,6 +229,43 @@ pub const MAX_SHADER_STORAGE_BUFFER_BINDINGS: u32 = 8;
 pub const MAX_ATOMIC_COUNTER_BUFFER_BINDINGS: u32 = 8;
 pub const MAX_TRANSFORM_FEEDBACK_BUFFERS: u32 = 4;
 
+// ES3 sampler-object parameters (glSamplerParameter* / glGetSamplerParameter*).
+pub const GL_TEXTURE_WRAP_R: u32 = 0x8072;
+pub const GL_TEXTURE_MIN_LOD: u32 = 0x813A;
+pub const GL_TEXTURE_MAX_LOD: u32 = 0x813B;
+pub const GL_TEXTURE_COMPARE_MODE: u32 = 0x884C;
+pub const GL_TEXTURE_COMPARE_FUNC: u32 = 0x884D;
+pub const GL_COMPARE_REF_TO_TEXTURE: u32 = 0x884E;
+
+// ES3 array/3D texture targets (glTexStorage3D / glTexImage3D / glTexSubImage3D).
+pub const GL_TEXTURE_3D: u32 = 0x806F;
+pub const GL_TEXTURE_2D_ARRAY: u32 = 0x8C1A;
+
+// glGetBufferParameteriv pnames.
+pub const GL_BUFFER_SIZE: u32 = 0x8764;
+pub const GL_BUFFER_USAGE: u32 = 0x8765;
+
+// occlusion / transform-feedback query objects (glBeginQuery / glGetQueryObjectuiv).
+pub const GL_ANY_SAMPLES_PASSED: u32 = 0x8C2F;
+pub const GL_ANY_SAMPLES_PASSED_CONSERVATIVE: u32 = 0x8D6A;
+pub const GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN: u32 = 0x8C88;
+pub const GL_CURRENT_QUERY: u32 = 0x8865;
+pub const GL_QUERY_RESULT: u32 = 0x8866;
+pub const GL_QUERY_RESULT_AVAILABLE: u32 = 0x8867;
+
+// transform-feedback objects (glBindTransformFeedback / glTransformFeedbackVaryings).
+pub const GL_TRANSFORM_FEEDBACK: u32 = 0x8E22;
+pub const GL_INTERLEAVED_ATTRIBS: u32 = 0x8C8C;
+pub const GL_SEPARATE_ATTRIBS: u32 = 0x8C8D;
+
+// separate-shader program pipelines (glProgramParameteri / glUseProgramStages).
+pub const GL_PROGRAM_SEPARABLE: u32 = 0x8258;
+pub const GL_ACTIVE_PROGRAM: u32 = 0x8259;
+pub const GL_VERTEX_SHADER_BIT: u32 = 0x0000_0001;
+pub const GL_FRAGMENT_SHADER_BIT: u32 = 0x0000_0002;
+pub const GL_COMPUTE_SHADER_BIT: u32 = 0x0000_0020;
+pub const GL_ALL_SHADER_BITS: u32 = 0xFFFF_FFFF;
+
 // framebuffer / renderbuffer objects (offscreen render targets).
 pub const GL_FRAMEBUFFER: u32 = 0x8D40;
 pub const GL_RENDERBUFFER: u32 = 0x8D41;

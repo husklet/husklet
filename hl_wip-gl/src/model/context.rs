@@ -11,6 +11,7 @@
 //! through a [`hl_gpu::CommandSink`].
 
 use super::buffer::Buffers;
+use super::es3::{ProgramPipelines, Queries, Samplers, TransformFeedbacks};
 use super::framebuffer::Framebuffers;
 use super::glconst;
 use super::program::{Attr, DrawCall, Programs, MAX_ATTR};
@@ -97,6 +98,14 @@ pub struct GlContext {
     pub framebuffers: Framebuffers,
     /// GL renderbuffer objects (`glGenRenderbuffers`/`glRenderbufferStorage`) — texture-backed attachments.
     pub renderbuffers: Renderbuffers,
+    /// ES3 sampler objects (`glGenSamplers`/`glSamplerParameter*`/`glBindSampler`). Client-side state.
+    pub samplers: Samplers,
+    /// ES3 occlusion/transform-feedback query objects (`glGenQueries`/`glBeginQuery`/…). Client-side.
+    pub queries: Queries,
+    /// ES3 transform-feedback objects + per-program varying capture (`glBindTransformFeedback`/…).
+    pub transform_feedbacks: TransformFeedbacks,
+    /// Separate-shader program-pipeline objects (`glGenProgramPipelines`/`glUseProgramStages`/…).
+    pub program_pipelines: ProgramPipelines,
 
     // ---- currently-bound GL state ----------------------------------------------------------------
     /// The program bound by `glUseProgram`.
@@ -226,6 +235,10 @@ impl GlContext {
             programs: Programs::new(),
             framebuffers: Framebuffers::new(),
             renderbuffers: Renderbuffers::new(),
+            samplers: Samplers::new(),
+            queries: Queries::new(),
+            transform_feedbacks: TransformFeedbacks::new(),
+            program_pipelines: ProgramPipelines::new(),
             cur_prog: 0,
             array_buffer: 0,
             element_buffer: 0,

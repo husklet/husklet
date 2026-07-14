@@ -14,6 +14,7 @@
 //!   lowering surface (a driver test drives it against a `hl_gpu::RecordingSink`).
 
 pub mod compute;
+pub mod es3;
 pub mod frame;
 pub mod map;
 pub mod query;

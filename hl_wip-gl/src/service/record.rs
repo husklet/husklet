@@ -65,6 +65,31 @@ fn bound_buffer(ctx: &GlContext, target: u32) -> u32 {
     ctx.buffer_for_target(target)
 }
 
+/// `glCopyBufferSubData(readTarget, writeTarget, readOffset, writeOffset, size)` — copy `size` bytes
+/// between the buffers bound to the two targets (`gl_shim.c` parity, a CPU-side byte copy). A negative
+/// offset/size → `GL_INVALID_VALUE`; an out-of-range range is an honest no-op (nothing is copied).
+pub fn copy_buffer_sub_data(ctx: &mut GlContext, read_target: u32, write_target: u32, read_off: isize, write_off: isize, size: isize) {
+    if read_off < 0 || write_off < 0 || size < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    let rb = ctx.buffer_for_target(read_target);
+    let wb = ctx.buffer_for_target(write_target);
+    let (ro, wo, n) = (read_off as usize, write_off as usize, size as usize);
+    if rb == 0 || wb == 0 {
+        return;
+    }
+    let src = match ctx.buffers.range_bytes(rb, ro, n) {
+        Some(s) if s.len() == n => s,
+        _ => return, // out-of-range read source: no-op
+    };
+    // Grow the write buffer to cover the destination range, then overwrite it.
+    if ctx.buffers.get(wb).map(|b| b.data.len() < wo + n).unwrap_or(true) {
+        return; // destination out of range: no-op (matches gl_shim.c's bounds guard)
+    }
+    ctx.buffers.set_sub_data(wb, wo, &src);
+}
+
 // ---- indexed buffer bindings (glBindBufferBase / glBindBufferRange) -------------------------------
 
 use crate::model::context::IndexedBinding;
@@ -210,6 +235,183 @@ pub fn generate_mipmap(ctx: &mut GlContext, target: u32) {
     }
     if ctx.tex_unit[ctx.active_texture] == 0 {
         ctx.set_gl_error(GL_INVALID_OPERATION);
+    }
+}
+
+/// `glTexStorage2D(target, levels, internalformat, w, h)` — immutable-format allocation of the bound
+/// 2D texture. Mirrors `gl_shim.c`: allocate the RGBA8 base plane (so a later `glTexSubImage2D` has a
+/// target), mark the texture immutable, and record `levels`. Honest GL errors: bad `target` →
+/// `GL_INVALID_ENUM`; `levels != 1`, non-positive extent, or an unmodeled internalformat →
+/// `GL_INVALID_VALUE`; no bound texture, unknown texture, or an already-immutable texture →
+/// `GL_INVALID_OPERATION`.
+pub fn tex_storage_2d(ctx: &mut GlContext, target: u32, levels: i32, internalformat: u32, w: i32, h: i32) {
+    if target != GL_TEXTURE_2D {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    if levels != 1 || w <= 0 || h <= 0 || !matches!(internalformat, GL_RGB | GL_RGBA) {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    let name = ctx.tex_unit[ctx.active_texture];
+    match ctx.textures.get(name) {
+        _ if name == 0 => {
+            ctx.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        Some(t) if !t.immutable => {}
+        _ => {
+            ctx.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+    }
+    if !ctx.textures.storage_2d(name, w, h, levels, TextureFormat::Rgba8Unorm) {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
+}
+
+/// `glTexStorage3D(target, levels, internalformat, w, h, depth)` — immutable storage for a 2D-array / 3D
+/// texture; `gl_shim.c` allocates the layer-0 RGBA8 plane. A non-array/3D `target` is `GL_INVALID_ENUM`;
+/// a non-positive extent is `GL_INVALID_VALUE`.
+pub fn tex_storage_3d(ctx: &mut GlContext, target: u32, levels: i32, w: i32, h: i32, depth: i32) {
+    if target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    if levels < 1 || w <= 0 || h <= 0 || depth <= 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    let name = ctx.tex_unit[ctx.active_texture];
+    if name == 0 || ctx.textures.get(name).is_none() {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if ctx.textures.storage_2d(name, w, h, levels, TextureFormat::Rgba8Unorm) {
+        // storage_2d marks immutable; that is correct for glTexStorage3D too.
+    } else {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
+}
+
+/// `glTexImage3D` — 2D-array / 3D upload; `gl_shim.c` allocates RGBA8 and stores the layer-0 plane.
+/// `rgba` is the already-converted RGBA8 layer-0 image (`w*h*4`) or empty (storage-only). A bad `target`
+/// / `level != 0` / unknown texture is an honest no-op (matches the reference).
+pub fn tex_image_3d(ctx: &mut GlContext, target: u32, level: i32, w: i32, h: i32, depth: i32, rgba: &[u8]) {
+    if level != 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
+        return;
+    }
+    let name = ctx.tex_unit[ctx.active_texture];
+    if name == 0 || ctx.textures.get(name).is_none() {
+        return;
+    }
+    if !ctx.textures.alloc_rgba(name, w, h) {
+        return;
+    }
+    if !rgba.is_empty() && depth > 0 {
+        ctx.textures.sub_image_2d(name, 0, 0, w, h, rgba);
+    }
+}
+
+/// `glTexSubImage2D(target, level, xo, yo, w, h, format, type, pixels)` — overwrite a sub-rect of the
+/// bound 2D texture with the already-converted `rgba` (`w*h*4`). Honest GL errors: bad `target` →
+/// `GL_INVALID_ENUM`; `level != 0`, negative extent/offset, no/unknown texture, or an out-of-bounds rect
+/// → `GL_INVALID_VALUE`.
+pub fn tex_sub_image_2d(ctx: &mut GlContext, target: u32, level: i32, xo: i32, yo: i32, w: i32, h: i32, rgba: &[u8]) {
+    if target != GL_TEXTURE_2D {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    let name = ctx.tex_unit[ctx.active_texture];
+    if level != 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || name == 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if w == 0 || h == 0 {
+        return;
+    }
+    if !ctx.textures.sub_image_2d(name, xo, yo, w, h, rgba) {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+    }
+}
+
+/// `glTexSubImage3D` — layer-0 sub-image update for a 2D-array / 3D texture (`gl_shim.c` parity). A bad
+/// `target` / `level != 0` / `zoffset != 0` / non-positive depth / dataless texture is an honest no-op.
+pub fn tex_sub_image_3d(
+    ctx: &mut GlContext,
+    target: u32,
+    level: i32,
+    xo: i32,
+    yo: i32,
+    zo: i32,
+    w: i32,
+    h: i32,
+    depth: i32,
+    rgba: &[u8],
+) {
+    if level != 0 || zo != 0 || depth <= 0 || (target != GL_TEXTURE_2D_ARRAY && target != GL_TEXTURE_3D) {
+        return;
+    }
+    let name = ctx.tex_unit[ctx.active_texture];
+    if name == 0 {
+        return;
+    }
+    ctx.textures.sub_image_2d(name, xo, yo, w, h, rgba);
+}
+
+/// `glCopyTexSubImage2D(target, level, xo, yo, x, y, w, h)` — copy a rect of the READ framebuffer's color
+/// attachment into the bound texture's sub-rect.
+///
+/// HONEST LIMIT: like `glBlitFramebuffer`, the deferred model has no materialized source color plane at
+/// record time (a frame's pixels exist only after swap), and the default framebuffer has no backing
+/// texture object. So when the read framebuffer's color attachment carries materialized pixels the rect
+/// is copied CPU-side; otherwise the call validates and is a documented no-op. Honest GL errors: bad
+/// `target` / `level != 0` → `GL_INVALID_ENUM` / `GL_INVALID_VALUE`; a negative extent/offset or an
+/// out-of-bounds destination rect → `GL_INVALID_VALUE`.
+#[allow(clippy::too_many_arguments)]
+pub fn copy_tex_sub_image_2d(ctx: &mut GlContext, target: u32, level: i32, xo: i32, yo: i32, x: i32, y: i32, w: i32, h: i32) {
+    if target != GL_TEXTURE_2D {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    let dst = ctx.tex_unit[ctx.active_texture];
+    if level != 0 || w < 0 || h < 0 || xo < 0 || yo < 0 || x < 0 || y < 0 || dst == 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if w == 0 || h == 0 {
+        return;
+    }
+    // Validate the destination rect fits the bound texture.
+    match ctx.textures.get(dst) {
+        Some(t) if !t.data.is_empty() && xo + w <= t.w && yo + h <= t.h => {}
+        Some(_) => {
+            ctx.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
+        None => {
+            ctx.set_gl_error(GL_INVALID_VALUE);
+            return;
+        }
+    }
+    // Source: the read framebuffer's color-attachment texture (if any). Copy the overlapping RGBA rows;
+    // an absent/dataless source (default framebuffer, or an FBO not yet rendered) is the honest no-op.
+    let src = ctx.framebuffers.color_attachment(ctx.read_fbo);
+    let src_rows: Option<(Vec<u8>, usize)> = ctx.textures.get(src).and_then(|st| {
+        if st.data.is_empty() || x + w > st.w || y + h > st.h {
+            return None;
+        }
+        let (sw, w, h) = (st.w as usize, w as usize, h as usize);
+        let (x, y) = (x as usize, y as usize);
+        let mut buf = Vec::with_capacity(w * h * 4);
+        for row in 0..h {
+            let base = ((y + row) * sw + x) * 4;
+            buf.extend_from_slice(&st.data[base..base + w * 4]);
+        }
+        Some((buf, w))
+    });
+    if let Some((buf, _)) = src_rows {
+        ctx.textures.sub_image_2d(dst, xo, yo, w, h, &buf);
     }
 }
 
