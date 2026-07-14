@@ -27,37 +27,22 @@ pub(crate) fn sha256_file(path: &Path) -> Result<String, Error> {
     Ok(prefixed(&h.finalize()))
 }
 
-/// `sha256:<hex>` of the DECOMPRESSED contents of a gzip file (an OCI `diff_id`). Decompression runs in a
-/// `gzip -dc` subprocess (no in-tree gzip decoder) whose stdout is streamed into the hasher.
+/// `sha256:<hex>` of the DECOMPRESSED contents of a gzip file (an OCI `diff_id`). Decompression runs
+/// in-process via `flate2` (pure-Rust miniz_oxide backend), streamed into the hasher — no subprocess.
 pub(crate) fn sha256_gz_file(path: &Path) -> Result<String, Error> {
-    use std::process::{Command, Stdio};
-    let mut child = Command::new("gzip")
-        .arg("-dc")
-        .arg(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| Error::Digest(format!("spawn gzip -dc {}: {e}", path.display())))?;
-    let mut out = child
-        .stdout
-        .take()
-        .ok_or_else(|| Error::Digest("gzip -dc: no stdout".to_string()))?;
+    let f = std::fs::File::open(path)
+        .map_err(|e| Error::Digest(format!("open {}: {e}", path.display())))?;
+    let mut dec = flate2::read::GzDecoder::new(std::io::BufReader::new(f));
     let mut h = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
-        let n = out
+        let n = dec
             .read(&mut buf)
-            .map_err(|e| Error::Digest(format!("read gzip -dc {}: {e}", path.display())))?;
+            .map_err(|e| Error::Digest(format!("gunzip {}: {e}", path.display())))?;
         if n == 0 {
             break;
         }
         h.update(&buf[..n]);
-    }
-    let status = child
-        .wait()
-        .map_err(|e| Error::Digest(format!("wait gzip -dc {}: {e}", path.display())))?;
-    if !status.success() {
-        return Err(Error::Digest(format!("gzip -dc {} failed", path.display())));
     }
     Ok(prefixed(&h.finalize()))
 }

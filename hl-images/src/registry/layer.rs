@@ -210,6 +210,7 @@ fn tar_pack_argv(rootfs: &Path) -> Vec<std::ffi::OsString> {
 }
 
 pub(super) fn tar_gzip(rootfs: &Path, out: &Path) -> Result<(String, u64), Error> {
+    use std::io::{BufReader, Read, Write};
     use std::process::Stdio;
     let outfile = std::fs::File::create(out).map_err(|e| Error::Archive(e.to_string()))?;
     let mut tar = Command::new("tar")
@@ -217,29 +218,30 @@ pub(super) fn tar_gzip(rootfs: &Path, out: &Path) -> Result<(String, u64), Error
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| Error::Archive(format!("tar: {e}")))?;
-    let tar_stdout = tar
-        .stdout
-        .take()
-        .ok_or_else(|| Error::Archive("tar stdout unavailable".to_string()))?;
-    let gzip = Command::new("gzip")
-        .arg("-n")
-        .stdin(tar_stdout)
-        .stdout(outfile)
-        .spawn()
-        .map_err(|e| Error::Archive(format!("gzip: {e}")))?;
+    let mut tar_stdout = BufReader::new(
+        tar.stdout
+            .take()
+            .ok_or_else(|| Error::Archive("tar stdout unavailable".to_string()))?,
+    );
+    // Compress the tar stream in-process with flate2 (pure-Rust). Default header carries MTIME=0 and no
+    // filename, matching the deterministic `gzip -n` output the old subprocess produced.
+    let mut enc = flate2::write::GzEncoder::new(outfile, flate2::Compression::default());
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = tar_stdout
+            .read(&mut buf)
+            .map_err(|e| Error::Archive(format!("read tar stream: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        enc.write_all(&buf[..n])
+            .map_err(|e| Error::Archive(format!("gzip: {e}")))?;
+    }
+    enc.finish()
+        .map_err(|e| Error::Archive(format!("gzip finish: {e}")))?;
     let tar_status = tar.wait().map_err(|e| Error::Archive(e.to_string()))?;
-    let gzip_out = gzip
-        .wait_with_output()
-        .map_err(|e| Error::Archive(e.to_string()))?;
     if !tar_status.success() {
         return Err(Error::Archive(format!("tar exited with {tar_status}")));
-    }
-    if !gzip_out.status.success() {
-        return Err(Error::Archive(format!(
-            "gzip exited with {}: {}",
-            gzip_out.status,
-            String::from_utf8_lossy(&gzip_out.stderr).trim()
-        )));
     }
     let size = std::fs::metadata(out)
         .map_err(|e| Error::Archive(e.to_string()))?
