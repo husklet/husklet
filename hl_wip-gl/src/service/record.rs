@@ -946,6 +946,128 @@ pub fn clear(ctx: &mut GlContext) {
     ctx.draws.push(d);
 }
 
+/// Read one enabled CLIENT-side vertex attribute's bytes into a tightly-packed, de-interleaved buffer
+/// spanning logical vertices `[0, vert_end)`, honoring `stride` (`0` = tightly packed by
+/// `size * component_size`). The transient buffer is indexed by the draw's own `first_vertex` / index
+/// values, so it must span from vertex `0` (not `first`) up to the last vertex the draw fetches.
+///
+/// UNSAFE: dereferences the client pointer the app passed to `glVertexAttribPointer` (an address in GUEST
+/// memory). This is valid ONLY here, at draw-record time, in the guest process where that pointer lives —
+/// the deferred model cannot defer the read to swap (the client memory may be reused by then).
+unsafe fn read_client_attr(base: usize, size: i32, kind: u32, stride: i32, vert_end: usize) -> Vec<u8> {
+    let comp = size.clamp(1, 4) as usize;
+    let elem = comp * crate::model::glconst::gl_component_size(kind);
+    let st = if stride > 0 { stride as usize } else { elem };
+    let mut out = Vec::with_capacity(vert_end * elem);
+    for v in 0..vert_end {
+        let src = (base + v * st) as *const u8;
+        out.extend_from_slice(std::slice::from_raw_parts(src, elem));
+    }
+    out
+}
+
+/// Capture every enabled attribute drawn with NO vertex buffer bound (`buffer == 0`, a client pointer) into
+/// the draw's `client_vbufs`, each spanning `[0, vert_end)`. A null client pointer (`offset == 0`) is
+/// skipped (nothing to read). An all-VBO draw records nothing here, so it lowers unchanged.
+fn capture_client_vbufs(d: &mut DrawCall, vert_end: usize) {
+    if vert_end == 0 {
+        return;
+    }
+    let attrs = d.attrs; // `[Attr; MAX_ATTR]` is Copy — snapshot before borrowing `d` mutably below.
+    for (i, a) in attrs.iter().enumerate() {
+        if !a.enabled || a.buffer != 0 || a.offset == 0 {
+            continue;
+        }
+        let data = unsafe { read_client_attr(a.offset, a.size, a.kind, a.stride, vert_end) };
+        d.client_vbufs.push(crate::model::program::ClientArray {
+            location: i,
+            data,
+            size: a.size,
+            kind: a.kind,
+            normalized: a.normalized,
+            integer: a.integer,
+            divisor: a.divisor,
+        });
+    }
+}
+
+/// Read `count` indices of type `index_type` from `bytes` (little-endian) at index position `k`.
+fn index_at(bytes: &[u8], index_type: u32, k: usize) -> usize {
+    match index_type {
+        GL_UNSIGNED_BYTE => bytes.get(k).copied().unwrap_or(0) as usize,
+        GL_UNSIGNED_SHORT => {
+            let o = k * 2;
+            u16::from_le_bytes([bytes.get(o).copied().unwrap_or(0), bytes.get(o + 1).copied().unwrap_or(0)]) as usize
+        }
+        _ => {
+            let o = k * 4;
+            u32::from_le_bytes([
+                bytes.get(o).copied().unwrap_or(0),
+                bytes.get(o + 1).copied().unwrap_or(0),
+                bytes.get(o + 2).copied().unwrap_or(0),
+                bytes.get(o + 3).copied().unwrap_or(0),
+            ]) as usize
+        }
+    }
+}
+
+/// The indexed-draw capture: handle client-side vertex arrays and/or a client-side index array for a
+/// `glDrawElements*`. Covers all four combinations (pure-VBO returns immediately, leaving the draw
+/// unchanged):
+/// * client index array (no element buffer bound) → read the client index bytes, promote `u8`→`u16`
+///   (the index IR has no `u8` format), store them in `client_indices`, and rewrite `index_type`.
+/// * client vertex arrays → scan the index range for the max index and capture each client array over
+///   `[0, maxIndex + baseVertex + 1)` (the exact vertex span the fetch touches).
+///
+/// The index source is the client pointer when no element-array-buffer is bound, else the bound buffer's
+/// bytes at `offset` (so a client-vertex + VBO-index mix still finds the right vertex span).
+fn capture_indexed(ctx: &GlContext, d: &mut DrawCall, count: i32, index_type: u32, offset: usize, base_vertex: i32) {
+    let has_client_vbuf = d.attrs.iter().any(|a| a.enabled && a.buffer == 0 && a.offset != 0);
+    let client_index = d.elem_buf == 0;
+    if !has_client_vbuf && !client_index {
+        return; // pure-VBO indexed draw — the existing VBO path handles everything.
+    }
+    let isz = crate::model::glconst::gl_component_size(index_type);
+    let need = count.max(0) as usize * isz;
+    // The raw index bytes: from the client pointer, or from the bound element-array-buffer at `offset`.
+    let idx_bytes: Vec<u8> = if client_index {
+        if offset == 0 || count <= 0 {
+            return;
+        }
+        unsafe { std::slice::from_raw_parts(offset as *const u8, need).to_vec() }
+    } else {
+        match ctx.buffers.get(d.elem_buf).and_then(|b| b.data.get(offset..(offset + need).min(b.data.len()))) {
+            Some(s) => s.to_vec(),
+            None => return,
+        }
+    };
+    // A client index array is promoted (u8→u16) into the final index-buffer encoding + type rewrite.
+    if client_index {
+        if index_type == GL_UNSIGNED_BYTE {
+            let mut promoted = Vec::with_capacity(count as usize * 2);
+            for k in 0..count as usize {
+                promoted.extend_from_slice(&(index_at(&idx_bytes, index_type, k) as u16).to_le_bytes());
+            }
+            d.client_indices = promoted;
+            d.index_type = GL_UNSIGNED_SHORT;
+        } else {
+            d.client_indices = idx_bytes.clone();
+        }
+    }
+    // Client vertex arrays span [0, maxIndex + baseVertex + 1) — the widest vertex the fetch reaches.
+    if has_client_vbuf {
+        let mut max_idx = 0usize;
+        for k in 0..count.max(0) as usize {
+            let i = index_at(&idx_bytes, index_type, k);
+            if i > max_idx {
+                max_idx = i;
+            }
+        }
+        let vert_end = max_idx + base_vertex.max(0) as usize + 1;
+        capture_client_vbufs(d, vert_end);
+    }
+}
+
 /// `glDrawArrays(mode, first, count)` — snapshot the bound state and append the draw (one instance).
 pub fn draw_arrays(ctx: &mut GlContext, mode: u32, first: i32, count: i32) {
     draw_arrays_instanced(ctx, mode, first, count, 1);
@@ -968,6 +1090,8 @@ pub fn draw_arrays_instanced(ctx: &mut GlContext, mode: u32, first: i32, count: 
     d.first = first;
     d.count = count;
     d.instance_count = instances as u32;
+    // Client-side vertex arrays span [0, first+count): the transient buffer is indexed by `first_vertex`.
+    capture_client_vbufs(&mut d, first.max(0) as usize + count as usize);
     ctx.draws.push(d);
 }
 
@@ -1002,6 +1126,7 @@ pub fn draw_elements_instanced(
     d.index_offset = offset;
     d.instance_count = instances as u32;
     d.elem_buf = ctx.element_buffer;
+    capture_indexed(ctx, &mut d, count, index_type, offset, 0);
     ctx.draws.push(d);
 }
 
@@ -1038,6 +1163,7 @@ pub fn draw_elements_instanced_base_vertex(
     d.instance_count = instances as u32;
     d.base_vertex = base_vertex;
     d.elem_buf = ctx.element_buffer;
+    capture_indexed(ctx, &mut d, count, index_type, offset, base_vertex);
     ctx.draws.push(d);
 }
 

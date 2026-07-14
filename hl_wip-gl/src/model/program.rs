@@ -158,6 +158,31 @@ pub struct Attr {
     pub divisor: u32,
 }
 
+/// A captured **client-side vertex array**: one enabled attribute drawn with NO vertex buffer object
+/// bound (`Attr::buffer == 0`), i.e. `glVertexAttribPointer` was given a pointer into CLIENT memory (the
+/// weston-simple-egl / immediate-ish GL pattern). The deferred model can only read that client memory at
+/// the moment the draw is recorded (it may change before swap), so the bytes are snapshotted then —
+/// de-interleaved and TIGHTLY packed for the vertex range the draw touches — and lowered at swap into a
+/// transient per-draw VERTEX buffer + a one-attribute vertex-layout slot (`CreateBuffer`/`WriteBuffer` +
+/// `SetVertexBuffer`, the same path a real VBO uses).
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct ClientArray {
+    /// The attribute location this array feeds — exactly the `layout(location = N)` the GLSL translator
+    /// emits, so the lowered vertex-layout attribute's `location` matches the shader.
+    pub location: usize,
+    /// Tightly-packed captured bytes: one `size * component_size(kind)` element per touched vertex, with
+    /// the client stride removed (element `v` of the range at byte `v * size * component_size`).
+    pub data: Vec<u8>,
+    /// Component count (1..4), component type, and the normalize/integer flags — the vertex-format the
+    /// pipeline slot declares (mirrors the `Attr` fields, so `vertex_format_wire` produces the same code).
+    pub size: i32,
+    pub kind: u32,
+    pub normalized: bool,
+    pub integer: bool,
+    /// The attribute's instance-step divisor, carried so the transient slot steps per-instance when set.
+    pub divisor: u32,
+}
+
 /// An immutable snapshot of the bound draw state at the moment a draw (or clear) is recorded. The frame
 /// builder replays the draw-list into IR at swap. Ported from `hl-shim-gl`'s `DrawCall` (trimmed to the
 /// fields the core single-draw / clear path uses this pass).
@@ -211,6 +236,15 @@ pub struct DrawCall {
     pub clear: [f32; 4],
     /// For a clear call: the (x, y, w, h) rect being cleared.
     pub clear_rect: [i32; 4],
+    /// Captured client-side vertex arrays (enabled attribs drawn with NO VBO bound). EMPTY for an
+    /// all-VBO draw — so a bound-VBO draw lowers byte-identically. Each entry lowers to a transient
+    /// vertex buffer + a one-attribute vertex-layout slot (see [`ClientArray`]).
+    pub client_vbufs: Vec<ClientArray>,
+    /// Captured client-side INDEX bytes (`glDrawElements` with NO element-array-buffer bound: the index
+    /// pointer is client memory). EMPTY otherwise. Already in the final index-buffer encoding — an
+    /// unsigned-byte source is promoted to `u16` here (the index IR has no `u8` format), and `index_type`
+    /// is rewritten to `GL_UNSIGNED_SHORT` to match. Lowered to a transient index buffer + `SetIndexBuffer`.
+    pub client_indices: Vec<u8>,
 }
 
 impl Default for DrawCall {
@@ -250,6 +284,8 @@ impl Default for DrawCall {
             front_face: crate::model::glconst::GL_CCW,
             clear: [0.0; 4],
             clear_rect: [0; 4],
+            client_vbufs: Vec::new(),
+            client_indices: Vec::new(),
         }
     }
 }

@@ -248,11 +248,43 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
         cmds.push(Cmd::WriteBuffer { id: ir, offset: 0, data });
     }
 
-    // Index buffer.
+    // ---- client-side vertex arrays (no VBO bound) → transient per-draw VERTEX buffers ----
+    // Each captured client array (recorded at draw time from a `glVertexAttribPointer` client pointer)
+    // becomes its own tightly-packed buffer + a one-attribute vertex-layout slot appended AFTER the VBO
+    // slots. De-interleaving into per-attribute buffers maps 1:1 onto the vertex-layout IR and handles
+    // interleaved and separate client arrays uniformly. EMPTY for a bound-VBO draw → that path is unchanged.
+    struct ClientSlot {
+        ir: u32,
+        stride: u32,
+        step_mode: u32,
+        location: u32,
+        format: u32,
+    }
+    let mut client_slots: Vec<ClientSlot> = Vec::with_capacity(d.client_vbufs.len());
+    for ca in &d.client_vbufs {
+        let ir = ctx.alloc_buffer_ir();
+        cmds.push(Cmd::CreateBuffer(ir, BufferDesc { size: ca.data.len() as u64, usage: buffer_usage::VERTEX, label: String::new() }));
+        cmds.push(Cmd::WriteBuffer { id: ir, offset: 0, data: ca.data.clone() });
+        let elem = ca.size.clamp(1, 4) as u32 * gl_component_size(ca.kind) as u32;
+        client_slots.push(ClientSlot {
+            ir,
+            stride: elem.max(1),
+            step_mode: (ca.divisor > 0) as u32,
+            location: ca.location as u32,
+            format: vertex_format_wire(ca.kind, ca.size, ca.normalized, ca.integer),
+        });
+    }
+
+    // Index buffer: a bound element-array-buffer, else the captured client-side index array (transient).
     let mut index_ir = 0u32;
     if d.indexed && d.elem_buf != 0 && ctx.buffers.has_data(d.elem_buf) {
         index_ir = ctx.alloc_buffer_ir();
         let data = ctx.buffers.get(d.elem_buf).map(|b| b.data.clone()).unwrap_or_default();
+        cmds.push(Cmd::CreateBuffer(index_ir, BufferDesc { size: data.len() as u64, usage: buffer_usage::INDEX, label: String::new() }));
+        cmds.push(Cmd::WriteBuffer { id: index_ir, offset: 0, data });
+    } else if d.indexed && !d.client_indices.is_empty() {
+        index_ir = ctx.alloc_buffer_ir();
+        let data = d.client_indices.clone();
         cmds.push(Cmd::CreateBuffer(index_ir, BufferDesc { size: data.len() as u64, usage: buffer_usage::INDEX, label: String::new() }));
         cmds.push(Cmd::WriteBuffer { id: index_ir, offset: 0, data });
     }
@@ -321,11 +353,23 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     cmds.push(Cmd::CreateShader { id: vs_id, kind: ShaderPayloadKind::Glsl, spirv: vs_ir });
     cmds.push(Cmd::CreateShader { id: fs_id, kind: ShaderPayloadKind::Glsl, spirv: fs_ir });
 
-    let nvb = nslot.max(1);
-    let mut vbs: Vec<VertexLayout> = Vec::with_capacity(nvb);
+    // Locations fed by an appended client slot (see below) are NOT folded into a VBO slot's layout.
+    let mut client_loc = [false; crate::model::program::MAX_ATTR];
+    for ca in &d.client_vbufs {
+        if ca.location < crate::model::program::MAX_ATTR {
+            client_loc[ca.location] = true;
+        }
+    }
+    // With client slots present, DON'T mint the phantom slot-0 (the `nslot == 0` fallback): the client
+    // slots ARE the vertex buffers. Without client slots this stays `nslot.max(1)` — byte-identical VBO path.
+    let nvb = if client_slots.is_empty() { nslot.max(1) } else { nslot };
+    let mut vbs: Vec<VertexLayout> = Vec::with_capacity(nvb + client_slots.len());
     for sl in 0..nvb {
         let mut attrs = Vec::new();
         for l in 0..nvd {
+            if l < crate::model::program::MAX_ATTR && client_loc[l] {
+                continue; // fed by an appended client slot, not this VBO slot
+            }
             let ls = if l < crate::model::program::MAX_ATTR && attr_slot[l] >= 0 { attr_slot[l] } else { 0 };
             if ls as usize != sl {
                 continue;
@@ -347,6 +391,14 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
             .any(|l| attr_slot[l] == sl as i32 && d.attrs[l].enabled && d.attrs[l].divisor > 0)
             as u32;
         vbs.push(VertexLayout { stride, step_mode, attrs });
+    }
+    // Append one layout per client-side array — a single attribute at offset 0, tightly-packed stride.
+    for cs in &client_slots {
+        vbs.push(VertexLayout {
+            stride: cs.stride,
+            step_mode: cs.step_mode,
+            attrs: vec![VertexAttr { location: cs.location, format: cs.format, offset: 0 }],
+        });
     }
     // Fixed-function state → the pipeline's blend / depth / cull descriptor (the values a real app set via
     // glBlendFunc / glDepthFunc / glCullFace / glFrontFace, mapped to their opaque WebGPU wire enums).
@@ -444,13 +496,20 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     for (sl, &ir) in slot_ir.iter().enumerate() {
         ops.push(Enc::SetVertexBuffer { slot: sl as u32, buffer: ir, offset: 0 });
     }
+    // Client-side transient buffers bind to the slots appended after the VBO slots.
+    for (i, cs) in client_slots.iter().enumerate() {
+        ops.push(Enc::SetVertexBuffer { slot: (nslot + i) as u32, buffer: cs.ir, offset: 0 });
+    }
     if d.indexed && index_ir != 0 {
         let ifmt = if d.index_type == GL_UNSIGNED_INT {
             hl_gpu::protocol::model::enums::IndexFormat::U32
         } else {
             hl_gpu::protocol::model::enums::IndexFormat::U16
         };
-        ops.push(Enc::SetIndexBuffer { buffer: index_ir, offset: d.index_offset as u64, format: ifmt });
+        // A bound element buffer indexes at `index_offset`; a captured client index array is transient
+        // (its own buffer from byte 0), so it binds at offset 0.
+        let ioff = if d.elem_buf != 0 { d.index_offset as u64 } else { 0 };
+        ops.push(Enc::SetIndexBuffer { buffer: index_ir, offset: ioff, format: ifmt });
         ops.push(Enc::DrawIndexed { index_count: d.count as u32, instance_count: d.instance_count, first_index: 0, base_vertex: d.base_vertex, first_instance: d.first_instance });
     } else {
         ops.push(Enc::Draw { vertex_count: d.count as u32, instance_count: d.instance_count, first_vertex: d.first as u32, first_instance: d.first_instance });
