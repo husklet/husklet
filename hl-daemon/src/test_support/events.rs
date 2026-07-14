@@ -160,7 +160,7 @@ async fn plugins_endpoint_returns_empty_list() {
 async fn version_tracks_crate_version() {
     let v = crate::system::version().await.0;
     assert_eq!(v.version, env!("CARGO_PKG_VERSION"));
-    assert_ne!(v.version, "0.1.0-dd", "version must not be the stale hardcoded value");
+    assert_ne!(v.version, "0.1.0-hl", "version must not be the stale hardcoded value");
 }
 
 #[tokio::test]

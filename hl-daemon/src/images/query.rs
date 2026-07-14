@@ -48,7 +48,7 @@ pub(crate) async fn image_history(State(a): State<App>, Path(name): Path<String>
                 return Json(vec![HistoryLayer {
                     id: image_id(i),
                     created: i.created,
-                    created_by: "dd import".to_string(),
+                    created_by: "hl import".to_string(),
                     tags: vec![repo_tag(&i.name)],
                     size: total,
                     comment: "",
@@ -134,7 +134,7 @@ pub(crate) async fn distribution_inspect(Path(name): Path<String>) -> Response {
         StatusCode::NOT_FOUND,
         Json(ErrorMessage {
             message: format!(
-                "no distribution descriptor for {name}: dd does not resolve remote registry manifests"
+                "no distribution descriptor for {name}: hl does not resolve remote registry manifests"
             ),
         }),
     )

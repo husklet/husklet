@@ -738,13 +738,13 @@ static uint16_t pm_host(uint16_t c) {
 static void parse_publish(const char *s) {
     while (s && *s) {
         if (g_nportmap >= 32) {
-            fprintf(stderr, "dd: too many HL_PUBLISH entries (max 32)\n");
+            fprintf(stderr, "hl: too many HL_PUBLISH entries (max 32)\n");
             exit(2);
         }
         const char *colon = strchr(s, ':');
         const char *comma = strchr(s, ',');
         if (!colon || (comma && colon > comma)) {
-            fprintf(stderr, "dd: invalid HL_PUBLISH '%s': expected HOST:CONTAINER\n", s);
+            fprintf(stderr, "hl: invalid HL_PUBLISH '%s': expected HOST:CONTAINER\n", s);
             exit(2);
         }
         unsigned h = hl_parse_port_field("HL_PUBLISH host port", s, colon);
@@ -765,7 +765,7 @@ static uint64_t parse_size(const char *s) {
     char *e = NULL;
     uint64_t v = strtoull(s, &e, 10);
     if (errno != 0 || e == s) {
-        fprintf(stderr, "dd: invalid size '%s': not a number\n", s);
+        fprintf(stderr, "hl: invalid size '%s': not a number\n", s);
         exit(2);
     }
     switch (*e) {
@@ -776,7 +776,7 @@ static uint64_t parse_size(const char *s) {
     case 'M': return v << 20;
     case 'g':
     case 'G': return v << 30;
-    default: fprintf(stderr, "dd: invalid size '%s': bad suffix\n", s); exit(2);
+    default: fprintf(stderr, "hl: invalid size '%s': bad suffix\n", s); exit(2);
     }
 }
 
@@ -830,7 +830,7 @@ static uint64_t ulimit_val(const char *s) {
     char *e = NULL;
     unsigned long long v = strtoull(s, &e, 10);
     if (errno != 0 || e == s || *e) {
-        fprintf(stderr, "dd: invalid HL_ULIMITS value '%s': not a number\n", s);
+        fprintf(stderr, "hl: invalid HL_ULIMITS value '%s': not a number\n", s);
         exit(2);
     }
     return (uint64_t)v;
@@ -844,7 +844,7 @@ static void parse_ulimits(const char *spec) {
     for (char *t = strtok_r(tb, ",", &sv); t; t = strtok_r(NULL, ",", &sv)) {
         char *eq = strchr(t, '=');
         if (!eq) {
-            fprintf(stderr, "dd: invalid HL_ULIMITS entry '%s': expected NAME=SOFT[:HARD]\n", t);
+            fprintf(stderr, "hl: invalid HL_ULIMITS entry '%s': expected NAME=SOFT[:HARD]\n", t);
             exit(2);
         }
         *eq = 0;

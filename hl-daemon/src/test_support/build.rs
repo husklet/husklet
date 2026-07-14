@@ -148,7 +148,7 @@ async fn history_without_recorded_history_is_single_row() {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let rows: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "single synthetic row");
-    assert_eq!(rows[0]["CreatedBy"], "dd import");
+    assert_eq!(rows[0]["CreatedBy"], "hl import");
 }
 
 // ---- Finding 5: LABEL merges base labels ------------------------------------------------------

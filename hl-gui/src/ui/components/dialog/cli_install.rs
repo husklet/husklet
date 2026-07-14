@@ -16,7 +16,7 @@ pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
         Err(e) => format!("Couldn't install: {e}"),
     };
 
-    let heading = gtk::Label::new(Some("dd command-line tool"));
+    let heading = gtk::Label::new(Some("hl command-line tool"));
     heading.set_xalign(0.0);
     heading.add_css_class("hl-onboard-head");
     let status = gtk::Label::new(Some(&status_text));

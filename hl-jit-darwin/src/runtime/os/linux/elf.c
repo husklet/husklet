@@ -686,7 +686,7 @@ static void *elf_map_checked(void *hint, size_t len, int prot, int flags, const 
         }
         if (p != MAP_FAILED) return p;
         if (t >= ELF_MAP_RETRIES) {
-            fprintf(stderr, "dd: load_elf: cannot map %s (%zu bytes) for the guest image: %s\n", what, len,
+            fprintf(stderr, "hl: load_elf: cannot map %s (%zu bytes) for the guest image: %s\n", what, len,
                     strerror(errno));
             exit(1);
         }
@@ -713,7 +713,7 @@ static void elf_mprotect_besteffort(void *addr, size_t len, int prot, const char
         }
         if (r == 0 || errno != ENOMEM || t >= ELF_MAP_RETRIES) {
             if (r != 0 && getenv("JT"))
-                fprintf(stderr, "dd: load_elf: mprotect %s (%zu bytes) skipped: %s (region stays R+W, backed)\n", what,
+                fprintf(stderr, "hl: load_elf: mprotect %s (%zu bytes) skipped: %s (region stays R+W, backed)\n", what,
                         len, strerror(errno));
             return;
         }
@@ -796,7 +796,7 @@ static void load_elf(const char *path, struct loaded *out) {
     // (The x86-64 image is the x86_64 engine's job; the daemon/test harness route by the rootfs's arch.)
     uint16_t e_machine = rd16(f + 18);
     if (e_machine != 0xB7) { // EM_AARCH64
-        fprintf(stderr, "dd: %s: ELF e_machine=0x%x is not aarch64 (EM_AARCH64=0xb7) -- wrong engine for this image\n",
+        fprintf(stderr, "hl: %s: ELF e_machine=0x%x is not aarch64 (EM_AARCH64=0xb7) -- wrong engine for this image\n",
                 path, e_machine);
         exit(1);
     }

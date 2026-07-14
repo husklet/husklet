@@ -875,7 +875,7 @@ static void retire_current(void) {
 // reusing it in place would corrupt them on resume. Reclamation has already freed everything safe to free,
 // so we cannot proceed -- abort cleanly rather than corrupt guest state.
 static void cache_oom_abort(void) {
-    static const char msg[] = "dd: JIT code cache exhausted (out of VA for a fresh cache under threads)\n";
+    static const char msg[] = "hl: JIT code cache exhausted (out of VA for a fresh cache under threads)\n";
     write(2, msg, sizeof msg - 1);
     _exit(70);
 }

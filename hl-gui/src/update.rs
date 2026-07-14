@@ -66,7 +66,7 @@ pub fn check(current: &str) -> Option<Release> {
 /// Blocking; the caller should quit after this succeeds (the new copy is already launching).
 pub fn install(rel: &Release) -> Result<(), String> {
     let tmp = std::env::temp_dir().join("hl-update");
-    let dmg = tmp.join("dd.dmg");
+    let dmg = tmp.join("hl.dmg");
     let mnt = tmp.join("mnt");
     std::fs::create_dir_all(&mnt).map_err(|e| e.to_string())?;
     sh("curl", &["-fsSL", "-o", &dmg.to_string_lossy(), &rel.dmg])?;

@@ -168,14 +168,14 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     // a port-allocation message) instead of launching the guest and reporting a running-but-unreachable
     // container. live_fail marks it exited, persists, and releases any listeners already bound.
     if let Err(e) = crate::containers::ports::start_for(c, &bridge).await {
-        return live_fail(app, &c.id, &live, format!("dd: {e}")).await;
+        return live_fail(app, &c.id, &live, format!("hl: {e}")).await;
     }
     // No launch command means the JIT engine for this guest arch isn't bundled (e.g. a darwin-only build
     // shipped without hljit-linux_*). Surface a CLEAN error (exit 127, like every other spawn failure) so an
     // interactive `docker run -it` exits with a message instead of hanging forever on a stream that never
     // opens -- the missing-engine hang that looked like a frozen, Ctrl-C-deaf shell.
     let Some(container) = spawn_container(c, &app.volumes_dir, vols, bridge) else {
-        return live_fail(app, &c.id, &live, "dd: failed to build container spec".into()).await;
+        return live_fail(app, &c.id, &live, "hl: failed to build container spec".into()).await;
     };
     // Launch + supervise the guest via the hl-jit runtime API: it spawns the engine (piped or PTY stdio),
     // feeds stdin from this container's channel, and pumps stdout/stderr INTO this container's live `out`
@@ -205,7 +205,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             // failure) so an interactive `docker run -it` exits with a message instead of hanging on a
             // stream that never opens (the missing-engine hang that looked like a frozen, Ctrl-C-deaf shell).
             return live_fail(app, &c.id, &live,
-                format!("dd: no JIT engine for {} guests in this build (hljit-{} missing) -- cannot start container",
+                format!("hl: no JIT engine for {} guests in this build (hljit-{} missing) -- cannot start container",
                     guest.target(), guest.target())).await;
         }
         Err(e) => return live_fail(app, &c.id, &live, format!("jit exec failed: {e}")).await,

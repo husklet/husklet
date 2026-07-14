@@ -92,7 +92,7 @@ pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
         volumes: g.volumes.len(),
         networks: g.networks.len(),
         driver: "jit-overlay",
-        operating_system: "dd (VM-less JIT on macOS)",
+        operating_system: "hl (VM-less JIT on macOS)",
         os_type: "linux",
         architecture: "aarch64",
         ncpu: host_ncpu(),

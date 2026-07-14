@@ -45,7 +45,7 @@ impl Store {
             self.load_docker_format(&staging)
         } else {
             Err(Error::Archive(
-                "archive is not a dd image (no rootfs/ at top level)".to_string(),
+                "archive is not a hl image (no rootfs/ at top level)".to_string(),
             ))
         };
         // The hl path renames `staging` into place; the docker path builds a separate dir and leaves

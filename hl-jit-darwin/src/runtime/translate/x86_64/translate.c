@@ -1098,7 +1098,7 @@ static void emit_div64_fast(uint64_t next, uint64_t gpc, int idiv, int rmv) {
 static void emit_sigill(uint64_t pc) {
     // Quiet by default: UD2 frequently sits on never-taken paths (compiler trap/unreachable slots) that get
     // translated as block fall-through but never run; an unconditional message would falsely imply delivery.
-    if (getenv("CRASHDBG")) fprintf(stderr, "[dd] #UD ud2 at rip=%llx -> SIGILL\n", (unsigned long long)pc);
+    if (getenv("CRASHDBG")) fprintf(stderr, "[hl] #UD ud2 at rip=%llx -> SIGILL\n", (unsigned long long)pc);
     emit_guest_signal(pc, 4, 2); // ud2 -> SIGILL (si_code ILL_ILLOPN), rip = the faulting insn
 }
 
@@ -3983,7 +3983,7 @@ static void tier2_promote(uint64_t gpc) {
 
 static void report_unimpl(uint64_t pc, struct insn *I) {
     const uint8_t *p = (const uint8_t *)pc;
-    fprintf(stderr, "[dd] UNIMPL %s opcode 0x%02x at rip=%llx  bytes:", I->two ? "0F" : "1B", I->op,
+    fprintf(stderr, "[hl] UNIMPL %s opcode 0x%02x at rip=%llx  bytes:", I->two ? "0F" : "1B", I->op,
             (unsigned long long)pc);
     for (int i = 0; i < (I->len ? I->len : 8); i++)
         fprintf(stderr, " %02x", p[i]);

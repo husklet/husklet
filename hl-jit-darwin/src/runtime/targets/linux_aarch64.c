@@ -914,7 +914,7 @@ int hl_run(const char *rootfs, int argc, char *const argv[]) {
     int sb_new =
         resolve_shebang_chain(sb_argv, sb_argc, 256, prog_host, sb_store, sb_fhb, sizeof sb_fhb, &sb_finalhost);
     if (sb_new < 0) {
-        fprintf(stderr, "dd: too many nested #! interpreters (ELOOP): %s\n", prog);
+        fprintf(stderr, "hl: too many nested #! interpreters (ELOOP): %s\n", prog);
         return 40; // ELOOP
     }
     if (sb_new != sb_argc) { // a shebang chain resolved -> run the final interpreter, not the script

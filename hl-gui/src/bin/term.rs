@@ -579,7 +579,7 @@ impl WsDefaults {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let mut s = String::from("# dd — defaults for newly-created workspaces (edited in Settings)\n\n");
+        let mut s = String::from("# hl — defaults for newly-created workspaces (edited in Settings)\n\n");
         s.push_str(&format!("image = {}\n", self.image));
         s.push_str(&format!("arch = {}\n", self.arch.as_str()));
         s.push_str(&format!("storage = {}\n", self.storage));

@@ -20,18 +20,18 @@
 // negative / overflow. On ANY violation: print "hl: invalid <name>..." to stderr and exit nonzero.
 static unsigned long long hl_parse_u64(const char *name, const char *s, unsigned long long lo, unsigned long long hi) {
     if (!s || !*s || *s == '-') {
-        fprintf(stderr, "dd: invalid %s=%s: not a number\n", name, s ? s : "");
+        fprintf(stderr, "hl: invalid %s=%s: not a number\n", name, s ? s : "");
         exit(2);
     }
     errno = 0;
     char *end = NULL;
     unsigned long long v = strtoull(s, &end, 10);
     if (errno != 0 || end == s || *end != '\0') {
-        fprintf(stderr, "dd: invalid %s=%s: not a number\n", name, s);
+        fprintf(stderr, "hl: invalid %s=%s: not a number\n", name, s);
         exit(2);
     }
     if (v < lo || v > hi) {
-        fprintf(stderr, "dd: invalid %s=%s: out of range %llu..%llu\n", name, s, lo, hi);
+        fprintf(stderr, "hl: invalid %s=%s: out of range %llu..%llu\n", name, s, lo, hi);
         exit(2);
     }
     return v;
@@ -53,7 +53,7 @@ static unsigned hl_parse_port_field(const char *name, const char *s, const char 
     char buf[16];
     size_t n = end ? (size_t)(end - s) : strlen(s);
     if (n == 0 || n >= sizeof buf) {
-        fprintf(stderr, "dd: invalid %s: bad port field\n", name);
+        fprintf(stderr, "hl: invalid %s: bad port field\n", name);
         exit(2);
     }
     memcpy(buf, s, n);

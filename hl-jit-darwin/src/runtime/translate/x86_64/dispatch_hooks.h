@@ -107,7 +107,7 @@ static int smc_on_write(uint64_t a) {
         g_curpc = (c)->rip;                                                                                            \
         g_disp_n++;                                                                                                    \
         if (g_trace && g_tracecap && g_disp_n > g_tracecap) { /* bound trace output for runaway guests */              \
-            fprintf(stderr, "[dd] trace cap %llu blocks reached -> stop\n", (unsigned long long)g_tracecap);           \
+            fprintf(stderr, "[hl] trace cap %llu blocks reached -> stop\n", (unsigned long long)g_tracecap);           \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 99;                                                                                       \
             break;                                                                                                     \
@@ -214,7 +214,7 @@ static int smc_on_write(uint64_t a) {
 // tail line never re-fires for x86). Verbatim from frontend/x86_64/dispatch.c. `break` exits the loop.
 #define G_DISPATCH_REASON(c)                                                                                           \
     if ((c)->reason == 99) {                                                                                           \
-        fprintf(stderr, "[dd] aborting at rip marker %llx (unimplemented opcode)\n", (unsigned long long)(c)->rip);    \
+        fprintf(stderr, "[hl] aborting at rip marker %llx (unimplemented opcode)\n", (unsigned long long)(c)->rip);    \
         if (g_trace) {                                                                                                 \
             for (int rr = 0; rr < 16; rr++) { /* dump heap-pointer regs (meta etc.) */                                 \
                 uint64_t v = (c)->r[rr];                                                                               \
@@ -282,14 +282,14 @@ static int smc_on_write(uint64_t a) {
         uint64_t d = (c)->divop;                                                                                       \
         if (d == 0) {                                                                                                  \
             if (raise_guest_de(c)) continue; /* #DE -> guest SIGFPE handler (queued; delivered at loop top) */         \
-            fprintf(stderr, "[dd] #DE divide-by-zero\n");                                                              \
+            fprintf(stderr, "[hl] #DE divide-by-zero\n");                                                              \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 136;                                                                                      \
             break;                                                                                                     \
         }                                                                                                              \
         if ((c)->r[RDX] >= d) { /* quotient overflow (high half >= divisor): x86 #DE, same as /0 */                    \
             if (raise_guest_de(c)) continue;                                                                           \
-            fprintf(stderr, "[dd] #DE divide overflow\n");                                                             \
+            fprintf(stderr, "[hl] #DE divide overflow\n");                                                             \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 136;                                                                                      \
             break;                                                                                                     \
@@ -303,7 +303,7 @@ static int smc_on_write(uint64_t a) {
         int64_t d = (int64_t)(c)->divop;                                                                               \
         if (d == 0) {                                                                                                  \
             if (raise_guest_de(c)) continue; /* #DE -> guest SIGFPE handler (queued; delivered at loop top) */         \
-            fprintf(stderr, "[dd] #DE divide-by-zero\n");                                                              \
+            fprintf(stderr, "[hl] #DE divide-by-zero\n");                                                              \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 136;                                                                                      \
             break;                                                                                                     \
@@ -312,7 +312,7 @@ static int smc_on_write(uint64_t a) {
         __int128 q = num / d;                                                                                          \
         if ((__int128)(int64_t)q != q) { /* quotient doesn't fit int64 (incl. INT_MIN/-1): x86 #DE */                  \
             if (raise_guest_de(c)) continue;                                                                           \
-            fprintf(stderr, "[dd] #DE divide overflow\n");                                                             \
+            fprintf(stderr, "[hl] #DE divide overflow\n");                                                             \
             (c)->exited = 1;                                                                                           \
             (c)->exit_code = 136;                                                                                      \
             break;                                                                                                     \

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// Symlink the bundled `hl` CLI into `~/.local/bin` (no root). Returns `(link path, already on
 /// PATH)`. The onboarding window turns this into per-shell instructions.
 pub(crate) fn install_cli() -> Result<(PathBuf, bool), String> {
-    let cli = resolve_cli().ok_or("dd CLI binary not found in the app bundle")?;
+    let cli = resolve_cli().ok_or("hl CLI binary not found in the app bundle")?;
     let name = cli.file_name().ok_or("bad CLI path")?;
     let home = std::env::var("HOME").map_err(|_| "no HOME".to_string())?;
     let bindir = PathBuf::from(&home).join(".local/bin");

@@ -36,7 +36,7 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
     cli_card.add_css_class("hl-step-card");
     cli_card.append(&action_row(
         "Install the dd CLI",
-        "Adds dd to your terminal (~/.local/bin).",
+        "Adds hl to your terminal (~/.local/bin).",
         "Install",
         false,
         sender,
@@ -83,7 +83,7 @@ pub(crate) fn update_card(version: &str, sender: &ComponentSender<AppModel>) -> 
     let t = gtk::Label::new(Some(&format!("Update available — v{version}")));
     t.set_xalign(0.0);
     t.add_css_class("heading");
-    let d = gtk::Label::new(Some("A newer version of dd is ready to install."));
+    let d = gtk::Label::new(Some("A newer version of hl is ready to install."));
     d.set_xalign(0.0);
     d.add_css_class("dim-label");
     let texts = gtk::Box::new(gtk::Orientation::Vertical, 1);

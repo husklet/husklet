@@ -67,7 +67,7 @@ int hl_run_configfd(int fd) {
     // bytes"), we learn the writer's exact header size and validate the ABI first.
     uint8_t prefix[16];
     if (cfd_read_full(fd, prefix, sizeof prefix) != 0) {
-        fprintf(stderr, "dd: --configfd: short read of config header\n");
+        fprintf(stderr, "hl: --configfd: short read of config header\n");
         return 78;
     }
     uint32_t magic, pool_len, header_len, abi;
@@ -76,14 +76,14 @@ int hl_run_configfd(int fd) {
     memcpy(&header_len, prefix + 8, 4);
     memcpy(&abi, prefix + 12, 4);
     if (magic != HL_CONFIG_MAGIC) {
-        fprintf(stderr, "dd: --configfd: bad magic 0x%08x (want 0x%08x)\n", magic, HL_CONFIG_MAGIC);
+        fprintf(stderr, "hl: --configfd: bad magic 0x%08x (want 0x%08x)\n", magic, HL_CONFIG_MAGIC);
         return 78;
     }
     if (abi != HL_CONFIG_ABI || header_len < sizeof prefix || header_len > 4096) {
         // A real layout/ABI mismatch (not a survivable tail-append). This is the exact failure that used to
         // masquerade as a pool short-read: the engine and hl were built from different commits. Say so.
         fprintf(stderr,
-                "dd: --configfd: incompatible config ABI (writer abi=%u header_len=%u; reader abi=%u sizeof=%zu). "
+                "hl: --configfd: incompatible config ABI (writer abi=%u header_len=%u; reader abi=%u sizeof=%zu). "
                 "The engine and launcher were built from different commits — rebuild both from the same tree and "
                 "point HL_JIT_DIR at that engine.\n",
                 abi, header_len, HL_CONFIG_ABI, sizeof cfg);
@@ -101,7 +101,7 @@ int hl_run_configfd(int fd) {
         uint32_t room = (uint32_t)(sizeof cfg - sizeof prefix);
         into = rest < room ? rest : room;
         if (into && cfd_read_full(fd, (uint8_t *)&cfg + sizeof prefix, into) != 0) {
-            fprintf(stderr, "dd: --configfd: short read of config header\n");
+            fprintf(stderr, "hl: --configfd: short read of config header\n");
             return 78;
         }
     }
@@ -109,7 +109,7 @@ int hl_run_configfd(int fd) {
         uint8_t sink[256];
         uint32_t n = discard < sizeof sink ? discard : (uint32_t)sizeof sink;
         if (cfd_read_full(fd, sink, n) != 0) {
-            fprintf(stderr, "dd: --configfd: short read of config header\n");
+            fprintf(stderr, "hl: --configfd: short read of config header\n");
             return 78;
         }
         discard -= n;
@@ -121,7 +121,7 @@ int hl_run_configfd(int fd) {
         pool = (char *)malloc(cfg.pool_len);
         if (!pool) return 78;
         if (cfd_read_full(fd, pool, cfg.pool_len) != 0) {
-            fprintf(stderr, "dd: --configfd: short read of %u pool bytes\n", cfg.pool_len);
+            fprintf(stderr, "hl: --configfd: short read of %u pool bytes\n", cfg.pool_len);
             free(pool);
             return 78;
         }
@@ -214,7 +214,7 @@ int hl_run_configfd(int fd) {
         }
     }
     if (n == 0) {
-        fprintf(stderr, "dd: --configfd: empty guest argv\n");
+        fprintf(stderr, "hl: --configfd: empty guest argv\n");
         free(pool);
         return 78;
     }
@@ -245,7 +245,7 @@ int hl_run_configfile(const char *path) {
     if (!path || !path[0]) return 78;
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        fprintf(stderr, "dd: --configfile: open failed: %s\n", path);
+        fprintf(stderr, "hl: --configfile: open failed: %s\n", path);
         return 78;
     }
     unlink(path);
