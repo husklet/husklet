@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use hl_gpu::RemoteCommandSink;
+use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
 use hl_vulkan::{Device, Instance};
 
 use crate::types::Dispatchable;
@@ -27,6 +28,16 @@ use core::ffi::c_void;
 pub struct RenderPassRec {
     pub first_attachment_clears: bool,
     pub color_format_vk: u32,
+}
+
+/// The app's native wayland handles captured at `vkCreateWaylandSurfaceKHR` — the `wl_display*` /
+/// `wl_surface*` (as raw `usize` addresses; never dereferenced in the shim). A swapchain built over a
+/// wayland `VkSurfaceKHR` copies these so `vkQueuePresentKHR` can marshal the presented frame onto the
+/// app's own `wl_surface` via [`WaylandAppPresenter`]. `surface == 0` marks a non-wayland surface.
+#[derive(Clone, Copy)]
+pub struct WaylandWindow {
+    pub display: usize,
+    pub surface: usize,
 }
 
 /// Everything the shim tracks between `vk*` calls.
@@ -54,6 +65,17 @@ pub struct State {
     /// Monotonic non-dispatchable-handle counter for `VkSurfaceKHR` (never 0 == `VK_NULL_HANDLE`); kept
     /// on a distinct high base so surface handles never alias the device's object handles.
     next_surface: u64,
+
+    /// `VkSurfaceKHR` → the app's captured wayland handles (only wayland surfaces; a wl `wl_surface*` of
+    /// 0 or a non-wayland platform surface is simply absent). Populated by `vkCreateWaylandSurfaceKHR`.
+    pub wayland_surfaces: HashMap<u64, WaylandWindow>,
+    /// `VkSwapchainKHR` → the app's wayland window, copied from the swapchain's `VkSurfaceKHR` at
+    /// `vkCreateSwapchainKHR`. Its presence is what routes `vkQueuePresentKHR`'s readback onto the app's
+    /// `wl_surface` (absent ⇒ a headless/offscreen present: the readback still runs, the attach is skipped).
+    pub swapchain_windows: HashMap<u64, WaylandWindow>,
+    /// `VkSwapchainKHR` → its live [`WaylandAppPresenter`], or `None` if bring-up hit a *soft* error
+    /// (libwayland/global absent) — cached so a soft-unavailable surface is not re-probed every frame.
+    pub presenters: HashMap<u64, Option<WaylandAppPresenter>>,
 
     /// Live `VkPrivateDataSlot` handles (the `VK_EXT_private_data` / core-1.3 slot objects). A slot is a
     /// pure host object; the per-object data it stores lives in [`Self::private_data`].
@@ -100,6 +122,9 @@ impl State {
             framebuffers: HashMap::new(),
             surfaces: std::collections::HashSet::new(),
             next_surface: 0,
+            wayland_surfaces: HashMap::new(),
+            swapchain_windows: HashMap::new(),
+            presenters: HashMap::new(),
             private_data_slots: std::collections::HashSet::new(),
             private_data: HashMap::new(),
             ycbcr_conversions: std::collections::HashSet::new(),

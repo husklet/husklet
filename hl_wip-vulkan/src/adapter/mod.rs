@@ -8,3 +8,4 @@
 //!   fit for the IR.
 
 pub mod spirv;
+pub mod wayland_app;

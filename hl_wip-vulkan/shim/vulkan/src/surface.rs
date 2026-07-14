@@ -52,11 +52,27 @@ pub extern "C" fn vkCreateXlibSurfaceKHR(
 #[no_mangle]
 pub extern "C" fn vkCreateWaylandSurfaceKHR(
     _instance: *mut c_void,
-    _p_create_info: *const c_void,
+    p_create_info: *const c_void,
     _p_allocator: *const c_void,
     p_surface: *mut u64,
 ) -> VkResult {
-    create_surface(p_surface)
+    if p_surface.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    // Capture the app's OWN wayland handles (its `wl_display*` + `wl_surface*`, on its own
+    // `libwayland-client` connection) so `vkQueuePresentKHR` can marshal the presented frame onto that
+    // exact `wl_surface`. The pointers are recorded (as raw addresses), never dereferenced here.
+    let Some(ci) = (unsafe { (p_create_info as *const VkWaylandSurfaceCreateInfoKHR).as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let window = crate::state::WaylandWindow { display: ci.display as usize, surface: ci.surface as usize };
+    let handle = with(|s| {
+        let h = s.mint_surface();
+        s.wayland_surfaces.insert(h, window);
+        h
+    });
+    unsafe { *p_surface = handle };
+    VK_SUCCESS
 }
 
 #[no_mangle]
@@ -73,6 +89,7 @@ pub extern "C" fn vkCreateHeadlessSurfaceEXT(
 pub extern "C" fn vkDestroySurfaceKHR(_instance: *mut c_void, surface: u64, _p_allocator: *const c_void) {
     with(|s| {
         s.surfaces.remove(&surface);
+        s.wayland_surfaces.remove(&surface);
     });
 }
 
@@ -210,5 +227,89 @@ unsafe fn write_enumeration<T: Copy>(items: &[T], p_count: *mut u32, p_data: *mu
         VK_INCOMPLETE
     } else {
         VK_SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::with;
+
+    /// `vkCreateWaylandSurfaceKHR` records the app's OWN `wl_display*` + `wl_surface*` (from
+    /// `VkWaylandSurfaceCreateInfoKHR`) against the minted `VkSurfaceKHR`, so a later present can marshal
+    /// onto that exact surface. This is the Vulkan side of the "capture at surface creation" milestone.
+    #[test]
+    fn wayland_surface_creation_captures_display_and_surface() {
+        // Fake, never-dereferenced native handles standing in for the app's libwayland objects.
+        let fake_display = 0xD15_9000usize as *mut c_void;
+        let fake_surface = 0x5_FACE_00usize as *mut c_void;
+        let ci = VkWaylandSurfaceCreateInfoKHR {
+            s_type: 0,
+            p_next: core::ptr::null(),
+            flags: 0,
+            display: fake_display,
+            surface: fake_surface,
+        };
+        let mut handle: u64 = 0;
+        assert_eq!(
+            vkCreateWaylandSurfaceKHR(
+                core::ptr::null_mut(),
+                &ci as *const _ as *const c_void,
+                core::ptr::null(),
+                &mut handle,
+            ),
+            VK_SUCCESS
+        );
+        assert_ne!(handle, 0, "a live VkSurfaceKHR must be minted");
+        // The captured pointers are stored (as raw addresses) keyed by the surface handle.
+        let win = with(|s| s.wayland_surfaces.get(&handle).copied()).expect("wayland window captured");
+        assert_eq!(win.display, fake_display as usize);
+        assert_eq!(win.surface, fake_surface as usize);
+        assert!(with(|s| s.surface_valid(handle)), "surface handle must be live");
+
+        // Destroy clears both the surface set and the captured window.
+        vkDestroySurfaceKHR(core::ptr::null_mut(), handle, core::ptr::null());
+        assert!(with(|s| s.wayland_surfaces.get(&handle).is_none()));
+        assert!(!with(|s| s.surface_valid(handle)));
+    }
+
+    /// A null `pCreateInfo` is rejected (no faked capture), and a null `pSurface` too.
+    #[test]
+    fn wayland_surface_creation_rejects_null_pointers() {
+        let mut handle: u64 = 0;
+        assert_eq!(
+            vkCreateWaylandSurfaceKHR(core::ptr::null_mut(), core::ptr::null(), core::ptr::null(), &mut handle),
+            VK_ERROR_INITIALIZATION_FAILED
+        );
+        let ci = VkWaylandSurfaceCreateInfoKHR {
+            s_type: 0,
+            p_next: core::ptr::null(),
+            flags: 0,
+            display: core::ptr::null_mut(),
+            surface: core::ptr::null_mut(),
+        };
+        assert_eq!(
+            vkCreateWaylandSurfaceKHR(
+                core::ptr::null_mut(),
+                &ci as *const _ as *const c_void,
+                core::ptr::null(),
+                core::ptr::null_mut(),
+            ),
+            VK_ERROR_INITIALIZATION_FAILED
+        );
+    }
+
+    /// `vkGetPhysicalDeviceWaylandPresentationSupportKHR` reports the lone present family as supported.
+    #[test]
+    fn wayland_presentation_support_is_true_for_the_present_family() {
+        assert_eq!(
+            vkGetPhysicalDeviceWaylandPresentationSupportKHR(core::ptr::null_mut(), 0, core::ptr::null_mut()),
+            VK_TRUE
+        );
+        // A non-present family index is not supported.
+        assert_eq!(
+            vkGetPhysicalDeviceWaylandPresentationSupportKHR(core::ptr::null_mut(), 7, core::ptr::null_mut()),
+            VK_FALSE
+        );
     }
 }

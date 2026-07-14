@@ -15,13 +15,14 @@ use core::ffi::{c_char, c_void};
 use hl_gpu::protocol::model::descriptor::{VertexAttr, VertexLayout};
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::CommandSink;
+use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
 use hl_vulkan::model::memory::tex_format_from_vk;
 use hl_vulkan::result::vk_result_from_gpu_error;
 use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachment};
 use hl_vulkan::service::{create, present, record};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
-use crate::state::{with, RenderPassRec};
+use crate::state::{with, RenderPassRec, WaylandWindow};
 use crate::types::*;
 
 // ---- shared marshalling helpers ------------------------------------------------------------------
@@ -923,21 +924,31 @@ pub extern "C" fn vkCreateSwapchainKHR(
         unsafe { *p_swapchain = 0 };
     }
     // Bring-up: materialize the presentation surface from the swapchain extent/format (hlp surface 0),
-    // then register the swapchain's presentable images against it.
-    let r = dev_sink(|dev, sink| {
-        let surface = create_surface_for_swapchain(dev, sink, ci)?;
-        present::create_swapchain(dev, sink, surface, ci.min_image_count)
-    });
-    match r {
-        Some(Ok(h)) => {
-            if !p_swapchain.is_null() {
-                unsafe { *p_swapchain = h };
+    // then register the swapchain's presentable images against it. On success, carry the app's wayland
+    // window (captured at `vkCreateWaylandSurfaceKHR` under `ci.surface`) onto the swapchain so a present
+    // can marshal the readback onto the app's own `wl_surface`.
+    with(|s| {
+        let sink = &mut s.sink;
+        let Some(dev) = s.device.as_mut() else {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        };
+        let r = (|| {
+            let surface = create_surface_for_swapchain(dev, sink, ci)?;
+            present::create_swapchain(dev, sink, surface, ci.min_image_count)
+        })();
+        match r {
+            Ok(h) => {
+                if let Some(win) = s.wayland_surfaces.get(&ci.surface).copied() {
+                    s.swapchain_windows.insert(h, win);
+                }
+                if !p_swapchain.is_null() {
+                    unsafe { *p_swapchain = h };
+                }
+                VK_SUCCESS
             }
-            VK_SUCCESS
+            Err(e) => vk_result_from_gpu_error(&e),
         }
-        Some(Err(e)) => vk_result_from_gpu_error(&e),
-        None => VK_ERROR_INITIALIZATION_FAILED,
-    }
+    })
 }
 
 /// Create the GPU surface a swapchain presents through (extent/format from the swapchain create info).
@@ -958,8 +969,14 @@ fn create_surface_for_swapchain(
 
 #[no_mangle]
 pub extern "C" fn vkDestroySwapchainKHR(_device: *mut c_void, swapchain: u64, _p_allocator: *const c_void) {
-    dev(|dev| {
-        dev.swapchains.remove(&swapchain);
+    with(|s| {
+        if let Some(dev) = s.device.as_mut() {
+            dev.swapchains.remove(&swapchain);
+        }
+        // Tear down the app-surface presenter + its window binding (drops the private queue wrappers +
+        // the bound `wl_shm`, releasing the app's connection).
+        s.swapchain_windows.remove(&swapchain);
+        s.presenters.remove(&swapchain);
     });
 }
 
@@ -1031,16 +1048,72 @@ pub extern "C" fn vkQueuePresentKHR(_queue: *mut c_void, p_present_info: *const 
     }
     let swapchains = unsafe { std::slice::from_raw_parts(pi.p_swapchains, pi.swapchain_count as usize) };
     let indices = unsafe { std::slice::from_raw_parts(pi.p_image_indices, pi.swapchain_count as usize) };
-    dev_sink(|dev, sink| {
+    with(|s| {
+        let sink = &mut s.sink;
+        let Some(dev) = s.device.as_mut() else {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        };
         let mut res = VK_SUCCESS;
-        for (sc, &idx) in swapchains.iter().zip(indices) {
-            if let Err(e) = present::queue_present(dev, sink, *sc, idx) {
+        for (&sc, &idx) in swapchains.iter().zip(indices) {
+            // 1) The present lowering (`Cmd::Present` names the surface + presented image).
+            if let Err(e) = present::queue_present(dev, sink, sc, idx) {
                 res = vk_result_from_gpu_error(&e);
+                continue;
+            }
+            // 2) Read the presented image back + convert to the XRGB plane a `wl_shm` buffer wants.
+            let plane = match present::read_presented_xrgb(dev, sink, sc, idx) {
+                Ok(p) => p,
+                Err(e) => {
+                    res = vk_result_from_gpu_error(&e);
+                    continue;
+                }
+            };
+            // 3) Marshal that plane onto the app's OWN `wl_surface` (soft-unavailable ⇒ readback-only,
+            //    still VK_SUCCESS; a hard marshal/flush failure ⇒ VK_ERROR_OUT_OF_DATE/SURFACE_LOST).
+            let vk = present_frame_to_app_surface(&mut s.presenters, &s.swapchain_windows, sc, plane);
+            if vk != VK_SUCCESS {
+                res = vk;
             }
         }
         res
     })
-    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+}
+
+/// Marshal one presented frame's XRGB plane onto the app's OWN `wl_surface` via a cached
+/// [`WaylandAppPresenter`]. If the swapchain has no captured wayland window (a headless/offscreen or
+/// non-wayland surface), the readback already ran and the on-surface attach is skipped — `VK_SUCCESS`. A
+/// *soft* bring-up error (libwayland/global absent) caches `None` (so it is not re-probed each frame) and
+/// is likewise `VK_SUCCESS`. A *hard* per-frame marshal/flush/size failure maps to
+/// `VK_ERROR_OUT_OF_DATE_KHR` / `VK_ERROR_SURFACE_LOST_KHR` — never a faked present.
+fn present_frame_to_app_surface(
+    presenters: &mut std::collections::HashMap<u64, Option<WaylandAppPresenter>>,
+    windows: &std::collections::HashMap<u64, WaylandWindow>,
+    swapchain: u64,
+    plane: (Vec<u8>, u32, u32),
+) -> VkResult {
+    let (xrgb, w, h) = plane;
+    let Some(win) = windows.get(&swapchain) else {
+        return VK_SUCCESS; // no captured wl_surface: readback-only present
+    };
+    // Bring the presenter up once, caching a soft-unavailable outcome as `None`.
+    if !presenters.contains_key(&swapchain) {
+        match WaylandAppPresenter::new(win.surface) {
+            Ok(p) => {
+                presenters.insert(swapchain, Some(p));
+            }
+            Err(e) if e.is_unavailable() => {
+                presenters.insert(swapchain, None);
+            }
+            Err(e) => return e.to_vk_result(),
+        }
+    }
+    match presenters.get_mut(&swapchain) {
+        Some(Some(p)) => match p.present(&xrgb, w, h) {
+            Ok(()) => VK_SUCCESS,
+            Err(e) => e.to_vk_result(),
+        },
+        _ => VK_SUCCESS, // soft-unavailable: readback-only present
+    }
 }
 
 // ==================================================================================================
@@ -1155,3 +1228,56 @@ pub extern "C" fn vkCmdNextSubpass2KHR(
 }
 
 // Semaphores (binary present/acquire sync + timeline) are hand-written in `crate::sync`.
+
+#[cfg(test)]
+mod present_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// A swapchain with NO captured wayland window (a headless/offscreen or non-wayland surface) still
+    /// presents `VK_SUCCESS`: the readback already ran, the on-surface attach is simply skipped. The
+    /// presenter cache stays empty (no bring-up attempted).
+    #[test]
+    fn no_wayland_window_is_readback_only_vk_success() {
+        let mut presenters: HashMap<u64, Option<WaylandAppPresenter>> = HashMap::new();
+        let windows: HashMap<u64, WaylandWindow> = HashMap::new();
+        let plane = (vec![0xFFu8; 2 * 2 * 4], 2, 2);
+        assert_eq!(present_frame_to_app_surface(&mut presenters, &windows, 0xABC, plane), VK_SUCCESS);
+        assert!(presenters.is_empty(), "no window ⇒ no presenter bring-up");
+    }
+
+    /// A soft bring-up failure (here: a null `wl_surface*` ⇒ `WlAppError::NoSurface`, the same soft class
+    /// as a missing `libwayland-client`) is cached as `None` and mapped to `VK_SUCCESS` — the readback-only
+    /// present. A second frame reuses the cache (no re-probe) and is likewise `VK_SUCCESS`.
+    #[test]
+    fn soft_unavailable_bringup_caches_none_and_returns_vk_success() {
+        let sc = 0xBEEFu64;
+        let mut presenters: HashMap<u64, Option<WaylandAppPresenter>> = HashMap::new();
+        let mut windows: HashMap<u64, WaylandWindow> = HashMap::new();
+        // surface == 0 ⇒ WaylandAppPresenter::new short-circuits to NoSurface (soft) WITHOUT dlopen/deref.
+        windows.insert(sc, WaylandWindow { display: 0xD15, surface: 0 });
+
+        let vk = present_frame_to_app_surface(&mut presenters, &windows, sc, (vec![0xFFu8; 16], 2, 2));
+        assert_eq!(vk, VK_SUCCESS, "soft-unavailable bring-up ⇒ readback-only VK_SUCCESS");
+        assert!(matches!(presenters.get(&sc), Some(None)), "soft outcome must be cached as None");
+
+        // Second frame: cache hit, still readback-only VK_SUCCESS.
+        let vk2 = present_frame_to_app_surface(&mut presenters, &windows, sc, (vec![0xFFu8; 16], 2, 2));
+        assert_eq!(vk2, VK_SUCCESS);
+    }
+
+    /// A pre-seeded soft-unavailable cache entry short-circuits to `VK_SUCCESS` (readback-only) — the
+    /// steady-state path once `libwayland-client` was found absent.
+    #[test]
+    fn cached_soft_unavailable_is_vk_success() {
+        let sc = 0x1234u64;
+        let mut presenters: HashMap<u64, Option<WaylandAppPresenter>> = HashMap::new();
+        presenters.insert(sc, None);
+        let mut windows: HashMap<u64, WaylandWindow> = HashMap::new();
+        windows.insert(sc, WaylandWindow { display: 0xD15, surface: 0xF00 });
+        assert_eq!(
+            present_frame_to_app_surface(&mut presenters, &windows, sc, (vec![0xFFu8; 16], 2, 2)),
+            VK_SUCCESS
+        );
+    }
+}

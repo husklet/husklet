@@ -242,3 +242,33 @@ pub fn read_presented_image(
     ])?;
     sink.read_buffer(BufferId(readback), 0, size as usize)
 }
+
+/// Read a presented swapchain image back and convert it to the `WL_SHM_FORMAT_XRGB8888` plane a `wl_shm`
+/// buffer wants — the pixels `vkQueuePresentKHR` marshals onto the app's `wl_surface`.
+///
+/// Wraps [`read_presented_image`] (the device→host readback) with the format-aware
+/// [`crate::adapter::wayland_app::pixels_to_xrgb8888`] convert: the readback is in the swapchain's native
+/// texel order (`Bgra8`/`Rgba8`), and this reorders it into XRGB (channel-swapping RGBA, passing BGRA
+/// through) with NO vertical flip (a Vulkan swapchain image is top-left origin). Returns the converted
+/// plane plus the surface `(width, height)`.
+pub fn read_presented_xrgb(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    swapchain: VkSwapchainKHR,
+    image_index: u32,
+) -> Result<(Vec<u8>, u32, u32)> {
+    use crate::adapter::wayland_app::pixels_to_xrgb8888;
+    use hl_gpu::protocol::model::enums::TextureFormat;
+
+    let (format, width, height) = {
+        let sc = dev
+            .swapchains
+            .get(&swapchain)
+            .ok_or(GpuError::Invalid("readback: unknown VkSwapchainKHR"))?;
+        (sc.format, sc.width, sc.height)
+    };
+    let pixels = read_presented_image(dev, sink, swapchain, image_index)?;
+    let source_is_bgra = matches!(format, TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb);
+    let xrgb = pixels_to_xrgb8888(&pixels, width as usize, height as usize, source_is_bgra);
+    Ok((xrgb, width, height))
+}

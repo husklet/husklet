@@ -966,6 +966,21 @@ pub struct VkSwapchainCreateInfoKHR {
     pub old_swapchain: u64,
 }
 
+/// `VkWaylandSurfaceCreateInfoKHR` (`VK_KHR_wayland_surface`) — the app's native wayland handles the ICD
+/// captures at `vkCreateWaylandSurfaceKHR`: `display` is the app's `wl_display*` and `surface` its
+/// `wl_surface*`, both on the app's OWN `libwayland-client` connection. The shim records these (never
+/// dereferences them here) so `vkQueuePresentKHR` can marshal the presented frame onto that `wl_surface`.
+#[repr(C)]
+pub struct VkWaylandSurfaceCreateInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    /// `struct wl_display*` — the app's connection.
+    pub display: *mut c_void,
+    /// `struct wl_surface*` — the app window's surface.
+    pub surface: *mut c_void,
+}
+
 #[repr(C)]
 pub struct VkPresentInfoKHR {
     pub s_type: i32,
