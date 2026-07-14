@@ -10,7 +10,8 @@
 //! reads only because it initiated the readback.
 //!
 //! The sub-protocol carries its own [`READBACK_VERSION`] in every request so it can evolve independently of
-//! the handshake's [`WIRE_VERSION`](crate::protocol::model::command::WIRE_VERSION), which stays pinned at 4.
+//! the handshake's [`WIRE_VERSION`](crate::protocol::model::command::WIRE_VERSION) (currently 6): a readback
+//! change never forces a submit-interop-breaking wire-version bump.
 //!
 //! [`write_readback_response`]: super::super::adapter::unix::write_readback_response
 
