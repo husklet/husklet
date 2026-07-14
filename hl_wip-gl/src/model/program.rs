@@ -328,4 +328,54 @@ impl Programs {
     pub fn program_mut(&mut self, name: u32) -> Option<&mut Program> {
         self.programs.get_mut(&name)
     }
+
+    /// `glIsProgram(name)` — true once `name` names a live program object (`0` is never a program).
+    pub fn program_exists(&self, name: u32) -> bool {
+        name != 0 && self.programs.contains_key(&name)
+    }
+
+    /// `glIsShader(name)` — true once `name` names a live shader object.
+    pub fn shader_exists(&self, name: u32) -> bool {
+        name != 0 && self.shaders.contains_key(&name)
+    }
+
+    /// `glDeleteProgram(name)` — drop the program object (deleting `0` is a silent no-op; GL defines it
+    /// so). This model has no deferred-delete-while-current subtlety: the object is removed immediately.
+    /// Returns `false` for an unknown / zero name.
+    pub fn delete_program(&mut self, name: u32) -> bool {
+        if name == 0 {
+            return false;
+        }
+        self.programs.remove(&name).is_some()
+    }
+
+    /// `glDeleteShader(name)` — drop the shader object (deleting `0` is a silent no-op). Attachments hold
+    /// only the shader NAME (captured at link), so a delete does not disturb a linked program's reflected
+    /// IR. Returns `false` for an unknown / zero name.
+    pub fn delete_shader(&mut self, name: u32) -> bool {
+        if name == 0 {
+            return false;
+        }
+        self.shaders.remove(&name).is_some()
+    }
+
+    /// `glDetachShader(program, shader)` — clear the matching attachment slot. Returns `false` if the
+    /// program is unknown or `shader` is not attached (the caller raises the spec error).
+    pub fn detach(&mut self, program: u32, shader: u32) -> bool {
+        match self.programs.get_mut(&program) {
+            Some(p) if p.vs == shader => {
+                p.vs = 0;
+                true
+            }
+            Some(p) if p.fs == shader => {
+                p.fs = 0;
+                true
+            }
+            Some(p) if p.cs == shader => {
+                p.cs = 0;
+                true
+            }
+            _ => false,
+        }
+    }
 }

@@ -147,6 +147,31 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
     }
 }
 
+/// `glGetIntegeri_v(target, index)` / `glGetInteger64i_v` / `glGetBooleani_v` — the INDEXED integer state.
+/// The indexed-buffer targets (`GL_UNIFORM_BUFFER_BINDING`, `GL_SHADER_STORAGE_BUFFER_BINDING`, …) report
+/// the buffer / start / size bound at `index` by `glBindBufferBase`/`glBindBufferRange` (real state); any
+/// other target falls back to the non-indexed scalar value (matches the reference shim). Returns the single
+/// integer for `target` at `index`.
+pub fn get_integer_indexed(ctx: &GlContext, target: u32, index: u32) -> i64 {
+    // Map the indexed *binding* pname to the buffer target whose indexed bindings it reads back.
+    let buffer_target = match target {
+        GL_UNIFORM_BUFFER_BINDING => Some(GL_UNIFORM_BUFFER),
+        GL_SHADER_STORAGE_BUFFER_BINDING => Some(GL_SHADER_STORAGE_BUFFER),
+        GL_TRANSFORM_FEEDBACK_BUFFER_BINDING => Some(GL_TRANSFORM_FEEDBACK_BUFFER),
+        _ => None,
+    };
+    if let Some(bt) = buffer_target {
+        return ctx.indexed_buffers.get(&(bt, index)).map(|b| b.buffer as i64).unwrap_or(0);
+    }
+    let mut buf = [0i32; 4];
+    let n = get_integerv(ctx, target, &mut buf);
+    if n > 0 {
+        buf[0] as i64
+    } else {
+        0
+    }
+}
+
 /// `glGetFloatv(pname)` — the float-typed state a GLES app reads. Writes the value(s) into `out` and
 /// returns the count. An unrecognized `pname` writes a single `0.0`.
 pub fn get_floatv(ctx: &GlContext, pname: u32, out: &mut [f32; 4]) -> usize {
@@ -299,7 +324,7 @@ pub struct ActiveVar {
 
 /// Map a GLSL-ES type keyword to the GL type enum `glGetActiveUniform`/`glGetActiveAttrib` report. An
 /// unrecognized type falls back to `GL_FLOAT` (the safest scalar an app is likely to accept).
-fn gl_type_enum(ty: &str) -> u32 {
+pub fn gl_type_enum(ty: &str) -> u32 {
     match ty {
         "float" => GL_FLOAT,
         "vec2" => GL_FLOAT_VEC2,

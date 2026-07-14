@@ -25,6 +25,7 @@ pub const GL_TRANSFORM_FEEDBACK_BUFFER: u32 = 0x8C8E;
 pub const GL_DISPATCH_INDIRECT_BUFFER: u32 = 0x90EE;
 pub const GL_COPY_READ_BUFFER: u32 = 0x8F36;
 pub const GL_COPY_WRITE_BUFFER: u32 = 0x8F37;
+pub const GL_DRAW_INDIRECT_BUFFER: u32 = 0x8F3F;
 
 // primitive topology + clear mask
 pub const GL_POINTS: u32 = 0x0000;
@@ -223,6 +224,11 @@ pub const GL_SYNC_FENCE: u32 = 0x9116;
 pub const GL_SIGNALED: u32 = 0x9119;
 pub const GL_UNSIGNALED: u32 = 0x9118;
 
+// indexed-buffer binding readback pnames (glGetIntegeri_v).
+pub const GL_UNIFORM_BUFFER_BINDING: u32 = 0x8A28;
+pub const GL_SHADER_STORAGE_BUFFER_BINDING: u32 = 0x90D3;
+pub const GL_TRANSFORM_FEEDBACK_BUFFER_BINDING: u32 = 0x8C8F;
+
 // glBindBufferBase/Range indexed-target minimum binding caps (ES3.1).
 pub const MAX_UNIFORM_BUFFER_BINDINGS: u32 = 24;
 pub const MAX_SHADER_STORAGE_BUFFER_BINDINGS: u32 = 8;
@@ -265,6 +271,79 @@ pub const GL_VERTEX_SHADER_BIT: u32 = 0x0000_0001;
 pub const GL_FRAGMENT_SHADER_BIT: u32 = 0x0000_0002;
 pub const GL_COMPUTE_SHADER_BIT: u32 = 0x0000_0020;
 pub const GL_ALL_SHADER_BITS: u32 = 0xFFFF_FFFF;
+
+// glGetUniformIndices / glGetActiveUniformsiv per-uniform pnames + the "not an index" sentinel.
+pub const GL_INVALID_INDEX: u32 = 0xFFFF_FFFF;
+pub const GL_UNIFORM_TYPE: u32 = 0x8A37;
+pub const GL_UNIFORM_SIZE: u32 = 0x8A38;
+pub const GL_UNIFORM_NAME_LENGTH: u32 = 0x8A39;
+pub const GL_UNIFORM_BLOCK_INDEX: u32 = 0x8A3A;
+pub const GL_UNIFORM_OFFSET: u32 = 0x8A3B;
+pub const GL_UNIFORM_ARRAY_STRIDE: u32 = 0x8A3C;
+pub const GL_UNIFORM_MATRIX_STRIDE: u32 = 0x8A3D;
+pub const GL_UNIFORM_IS_ROW_MAJOR: u32 = 0x8A3E;
+
+// uniform-block reflection pnames (glGetActiveUniformBlockiv / glUniformBlockBinding).
+pub const GL_UNIFORM_BLOCK_BINDING: u32 = 0x8A3F;
+pub const GL_UNIFORM_BLOCK_DATA_SIZE: u32 = 0x8A40;
+pub const GL_UNIFORM_BLOCK_NAME_LENGTH: u32 = 0x8A41;
+pub const GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS: u32 = 0x8A42;
+pub const GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES: u32 = 0x8A43;
+
+// program-resource introspection (glGetProgramInterfaceiv / glGetProgramResource*).
+pub const GL_UNIFORM: u32 = 0x92E1;
+pub const GL_UNIFORM_BLOCK: u32 = 0x92E2;
+pub const GL_PROGRAM_INPUT: u32 = 0x92E3;
+pub const GL_PROGRAM_OUTPUT: u32 = 0x92E4;
+pub const GL_ACTIVE_RESOURCES: u32 = 0x92F5;
+pub const GL_MAX_NAME_LENGTH: u32 = 0x92F6;
+pub const GL_NAME_LENGTH: u32 = 0x92F9;
+pub const GL_TYPE: u32 = 0x92FA;
+pub const GL_ARRAY_SIZE: u32 = 0x92FB;
+pub const GL_OFFSET: u32 = 0x92FC;
+pub const GL_BLOCK_INDEX: u32 = 0x92FD;
+pub const GL_LOCATION: u32 = 0x930E;
+
+// glClearBuffer* buffer selectors.
+pub const GL_COLOR: u32 = 0x1800;
+pub const GL_DEPTH: u32 = 0x1801;
+pub const GL_STENCIL: u32 = 0x1802;
+pub const GL_DEPTH_STENCIL: u32 = 0x84F9;
+
+// glGetTexLevelParameter* pnames.
+pub const GL_TEXTURE_WIDTH: u32 = 0x1000;
+pub const GL_TEXTURE_HEIGHT: u32 = 0x1001;
+pub const GL_TEXTURE_INTERNAL_FORMAT: u32 = 0x1003;
+
+// glGetRenderbufferParameteriv pnames + the neutral sized internal format.
+pub const GL_RENDERBUFFER_WIDTH: u32 = 0x8D42;
+pub const GL_RENDERBUFFER_HEIGHT: u32 = 0x8D43;
+pub const GL_RENDERBUFFER_INTERNAL_FORMAT: u32 = 0x8D44;
+pub const GL_RGBA8: u32 = 0x8058;
+
+// glGetFramebufferAttachmentParameteriv pnames + object-type values.
+pub const GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE: u32 = 0x8CD0;
+pub const GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME: u32 = 0x8CD1;
+pub const GL_FRAMEBUFFER_DEFAULT: u32 = 0x8218;
+pub const GL_TEXTURE: u32 = 0x1702;
+
+// glGetInternalformativ pnames.
+pub const GL_NUM_SAMPLE_COUNTS: u32 = 0x9380;
+
+// shader/program compiler + binary capability queries.
+pub const GL_SHADER_COMPILER: u32 = 0x8DFA;
+pub const GL_NUM_SHADER_BINARY_FORMATS: u32 = 0x8DF9;
+pub const GL_NUM_PROGRAM_BINARY_FORMATS: u32 = 0x87FE;
+pub const GL_PROGRAM_BINARY_LENGTH: u32 = 0x8741;
+
+// glGetShaderPrecisionFormat precision-type enums (float low/med/high, then int low/med/high).
+pub const GL_LOW_FLOAT: u32 = 0x8DF0;
+pub const GL_HIGH_FLOAT: u32 = 0x8DF2;
+pub const GL_LOW_INT: u32 = 0x8DF3;
+pub const GL_HIGH_INT: u32 = 0x8DF5;
+
+// glGetGraphicsResetStatus — no reset.
+pub const GL_NO_RESET_NOTIFICATION: u32 = 0x8261;
 
 // framebuffer / renderbuffer objects (offscreen render targets).
 pub const GL_FRAMEBUFFER: u32 = 0x8D40;

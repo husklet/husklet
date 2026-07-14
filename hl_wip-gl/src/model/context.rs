@@ -69,6 +69,15 @@ pub struct IndexedBinding {
     pub size: isize,
 }
 
+/// One named uniform block of a program (`glGetUniformBlockIndex`/`glUniformBlockBinding`). The block's
+/// member layout + data size live on the [`super::program::Program`] (the single implicit block this
+/// model reflects); this record carries the block's declared name and its app-assigned binding point.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct UniformBlock {
+    pub name: String,
+    pub binding: u32,
+}
+
 impl Default for PixelStore {
     fn default() -> Self {
         Self {
@@ -172,6 +181,11 @@ pub struct GlContext {
     /// The UBO/SSBO bindings feed a `glDispatchCompute`'s bind group (`crate::service::compute`).
     pub indexed_buffers: HashMap<(u32, u32), IndexedBinding>,
 
+    /// Per-program named uniform blocks (`glGetUniformBlockIndex` assigns a stable index by name;
+    /// `glUniformBlockBinding` sets the binding point). Keyed by program GL name. Populated lazily on the
+    /// first `glGetUniformBlockIndex`/reflection query — the same lazy scheme the reference shim uses.
+    pub uniform_blocks: HashMap<u32, Vec<UniformBlock>>,
+
     /// The MRT draw-buffer list (`glDrawBuffers`) + the read-buffer source (`glReadBuffer`). This model
     /// renders a single color target, so the list is recorded for a faithful round-trip but only the
     /// first attachment is materialized — an honest partial.
@@ -272,6 +286,7 @@ impl GlContext {
             next_vao: 1,
             pixel_store: PixelStore::default(),
             indexed_buffers: HashMap::new(),
+            uniform_blocks: HashMap::new(),
             draw_buffers: vec![glconst::GL_BACK],
             read_buffer_src: glconst::GL_BACK,
             fence_ir: 0,

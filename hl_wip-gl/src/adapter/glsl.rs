@@ -658,6 +658,15 @@ pub fn program_sampler_decls(vs: &str, fs: &str) -> Vec<Decl> {
     samps
 }
 
+/// The fragment-shader output variables a linked program declares (`out vecN name;`), in declaration
+/// order — the resource list `glGetFragDataLocation`/`glGetProgramResource*(GL_PROGRAM_OUTPUT)` resolve
+/// against. An ES2-style `gl_FragColor` shader declares none (its single output is location 0 implicitly).
+pub fn program_frag_outputs(fs: &str) -> Vec<Decl> {
+    let mut outs = collect(&strip_comments(fs), "out");
+    outs.truncate(4);
+    outs
+}
+
 /// Translate a vertex+fragment GLSL-ES pair into one combined MSL source (gl_shim.c `translate`).
 pub fn translate(vs_in: &str, fs_in: &str) -> String {
     let vs = strip_comments(vs_in);

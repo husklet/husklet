@@ -994,6 +994,178 @@ pub fn draw_elements_instanced(
     ctx.draws.push(d);
 }
 
+/// `glDrawElementsBaseVertex(mode, count, type, offset, basevertex)` — an indexed draw whose fetched
+/// index values are all offset by `basevertex` before the vertex fetch. Recorded onto the draw's
+/// `base_vertex` (the frame builder folds it into the vertex fetch).
+pub fn draw_elements_base_vertex(ctx: &mut GlContext, mode: u32, count: i32, index_type: u32, offset: usize, base_vertex: i32) {
+    draw_elements_instanced_base_vertex(ctx, mode, count, index_type, offset, 1, base_vertex);
+}
+
+/// `glDrawElementsInstancedBaseVertex(...)` — the instanced + base-vertex indexed draw.
+pub fn draw_elements_instanced_base_vertex(
+    ctx: &mut GlContext,
+    mode: u32,
+    count: i32,
+    index_type: u32,
+    offset: usize,
+    instances: i32,
+    base_vertex: i32,
+) {
+    if instances < 0 || count < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if count == 0 || instances == 0 {
+        return;
+    }
+    let mut d = snapshot(ctx);
+    d.mode = mode;
+    d.count = count;
+    d.indexed = true;
+    d.index_type = index_type;
+    d.index_offset = offset;
+    d.instance_count = instances as u32;
+    d.base_vertex = base_vertex;
+    d.elem_buf = ctx.element_buffer;
+    ctx.draws.push(d);
+}
+
+/// `glDrawRangeElements(mode, start, end, count, type, offset)` — a bounded indexed draw. `[start, end]`
+/// is a driver hint about the referenced index range (used for buffer-residency optimization); it does not
+/// change what is drawn, so this records the same indexed draw as `glDrawElements`. `end < start` →
+/// `GL_INVALID_VALUE`.
+pub fn draw_range_elements(ctx: &mut GlContext, mode: u32, start: u32, end: u32, count: i32, index_type: u32, offset: usize, base_vertex: i32) {
+    if end < start {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    draw_elements_base_vertex(ctx, mode, count, index_type, offset, base_vertex);
+}
+
+/// Read a `u32` at byte `off` from the buffer bound to `target` (little-endian), or `None` out of range.
+fn read_u32_at(ctx: &GlContext, target: u32, off: usize) -> Option<u32> {
+    let name = ctx.buffer_for_target(target);
+    let b = ctx.buffers.get(name)?;
+    let bytes = b.data.get(off..off + 4)?;
+    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+/// `glDrawArraysIndirect(mode, indirect)` — an array draw whose `{count, instanceCount, first,
+/// baseInstance}` are read from the buffer bound to `GL_DRAW_INDIRECT_BUFFER` at byte offset `indirect`.
+/// This model reads the CPU-side indirect struct and records the equivalent instanced array draw. A
+/// missing / too-short indirect buffer is an honest no-op (nothing drawn).
+pub fn draw_arrays_indirect(ctx: &mut GlContext, mode: u32, indirect: usize) {
+    let count = match read_u32_at(ctx, GL_DRAW_INDIRECT_BUFFER, indirect) {
+        Some(v) => v as i32,
+        None => return,
+    };
+    let instances = read_u32_at(ctx, GL_DRAW_INDIRECT_BUFFER, indirect + 4).unwrap_or(1) as i32;
+    let first = read_u32_at(ctx, GL_DRAW_INDIRECT_BUFFER, indirect + 8).unwrap_or(0) as i32;
+    draw_arrays_instanced(ctx, mode, first, count, instances);
+}
+
+/// `glDrawElementsIndirect(mode, type, indirect)` — the indexed indirect draw; reads `{count,
+/// instanceCount, firstIndex, baseVertex, baseInstance}` from the bound indirect buffer.
+pub fn draw_elements_indirect(ctx: &mut GlContext, mode: u32, index_type: u32, indirect: usize) {
+    let count = match read_u32_at(ctx, GL_DRAW_INDIRECT_BUFFER, indirect) {
+        Some(v) => v as i32,
+        None => return,
+    };
+    let instances = read_u32_at(ctx, GL_DRAW_INDIRECT_BUFFER, indirect + 4).unwrap_or(1) as i32;
+    let first_index = read_u32_at(ctx, GL_DRAW_INDIRECT_BUFFER, indirect + 8).unwrap_or(0) as usize;
+    let base_vertex = read_u32_at(ctx, GL_DRAW_INDIRECT_BUFFER, indirect + 12).unwrap_or(0) as i32;
+    // The element offset is a byte offset; firstIndex is in index units. Convert by the index size.
+    let index_size = match index_type {
+        GL_UNSIGNED_BYTE => 1,
+        GL_UNSIGNED_SHORT => 2,
+        _ => 4,
+    };
+    draw_elements_instanced_base_vertex(ctx, mode, count, index_type, first_index * index_size, instances, base_vertex);
+}
+
+// ---- clear-buffer (glClearBuffer*) ---------------------------------------------------------------
+
+/// `glClearBufferfv(GL_COLOR, drawbuffer, value)` — clear the current render target to `rgba`. Recorded as
+/// a full-surface clear at the given color (the same deferred clear `glClear` records), so the frame
+/// builder lowers a pass clear-load with this color.
+pub fn clear_buffer_color(ctx: &mut GlContext, rgba: [f32; 4]) {
+    ctx.clear_color = rgba;
+    clear(ctx);
+}
+
+// ---- blend equation (glBlendEquation*) -----------------------------------------------------------
+
+/// `glBlendEquation(mode)` — set the same blend equation for RGB and alpha.
+pub fn blend_equation(ctx: &mut GlContext, mode: u32) {
+    ctx.blend_eq_rgb = mode;
+    ctx.blend_eq_alpha = mode;
+}
+
+/// `glBlendEquationSeparate(modeRGB, modeAlpha)`.
+pub fn blend_equation_separate(ctx: &mut GlContext, rgb: u32, alpha: u32) {
+    ctx.blend_eq_rgb = rgb;
+    ctx.blend_eq_alpha = alpha;
+}
+
+// ---- program-uniform DSA setters (glProgramUniform*) ---------------------------------------------
+
+/// `glProgramUniform*` for a data uniform — write `bytes` into `program`'s uniform-block buffer at the
+/// member at declaration index `location` (the DSA form of [`uniform_at`], targeting a named program
+/// rather than the bound one). Out-of-range writes are truncated to the member's slot.
+pub fn program_uniform_at(ctx: &mut GlContext, program: u32, location: i32, bytes: &[u8]) {
+    if location < 0 {
+        return;
+    }
+    if let Some(p) = ctx.programs.program_mut(program) {
+        let (off, sz) = match p.unis.get(location as usize) {
+            Some(u) => (u.off as usize, u.sz as usize),
+            None => return,
+        };
+        if off >= p.ubuf.len() {
+            return;
+        }
+        let n = bytes.len().min(sz).min(p.ubuf.len() - off);
+        p.ubuf[off..off + n].copy_from_slice(&bytes[..n]);
+    }
+}
+
+/// `glProgramUniform1i(program, samplerLocation, unit)` — map `program`'s sampler uniform (declaration
+/// index) to a texture unit (the DSA form of [`uniform_sampler`]).
+pub fn program_uniform_sampler(ctx: &mut GlContext, program: u32, sampler_index: usize, unit: i32) {
+    if let Some(p) = ctx.programs.program_mut(program) {
+        if sampler_index < p.samp_units.len() {
+            p.samp_units[sampler_index] = unit;
+        }
+    }
+}
+
+// ---- program / shader lifecycle (glDeleteProgram / glDeleteShader / glDetachShader) ---------------
+
+/// `glDeleteProgram(program)` — drop the program object; clears the current-program binding if it names
+/// the deleted program.
+pub fn delete_program(ctx: &mut GlContext, program: u32) {
+    if ctx.programs.delete_program(program) && ctx.cur_prog == program {
+        ctx.cur_prog = 0;
+    }
+}
+
+/// `glDeleteShader(shader)` — drop the shader object (its source + compile state).
+pub fn delete_shader(ctx: &mut GlContext, shader: u32) {
+    ctx.programs.delete_shader(shader);
+}
+
+/// `glDetachShader(program, shader)` — clear the matching attachment slot. Honest GL errors: an unknown
+/// program or shader → `GL_INVALID_VALUE`; a shader not attached to the program → `GL_INVALID_OPERATION`.
+pub fn detach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
+    if !ctx.programs.program_exists(program) || !ctx.programs.shader_exists(shader) {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if !ctx.programs.detach(program, shader) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+    }
+}
+
 /// Snapshot the currently-bound draw state into a fresh [`DrawCall`] (the immutable per-draw record).
 fn snapshot(ctx: &GlContext) -> DrawCall {
     let mut d = DrawCall {

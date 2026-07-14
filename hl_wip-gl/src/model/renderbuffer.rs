@@ -53,6 +53,12 @@ impl Renderbuffers {
         self.map.get(&name).map(|r| r.tex).unwrap_or(0)
     }
 
+    /// The `(width, height)` extent recorded by `glRenderbufferStorage` for RBO `name`, or `None` if the
+    /// RBO is unknown (`glGetRenderbufferParameteriv`).
+    pub fn dims(&self, name: u32) -> Option<(i32, i32)> {
+        self.map.get(&name).map(|r| (r.width, r.height))
+    }
+
     /// Record `glRenderbufferStorage`: bind `tex` (a texture-table name) as the RBO's backing storage at
     /// the given extent. Creates the RBO entry on demand (matching GL's first-bind-creates behavior).
     pub fn set_storage(&mut self, name: u32, tex: u32, width: i32, height: i32) {

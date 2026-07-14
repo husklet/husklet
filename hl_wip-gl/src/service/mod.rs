@@ -16,6 +16,7 @@
 pub mod compute;
 pub mod es3;
 pub mod frame;
+pub mod intro;
 pub mod map;
 pub mod query;
 pub mod readpixels;
