@@ -37,7 +37,7 @@ use crate::protocol::model::enums::{
 };
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId, SurfaceId, TextureId};
-use crate::protocol::model::kernel::{KernelProgram, SPIRV_MAGIC};
+use crate::protocol::model::kernel::{KernelDescriptor, KernelProgram, SPIRV_MAGIC};
 use crate::runtime::model::resources::SessionResources;
 use crate::runtime::port::executor::{GpuExecutor, Presented};
 
@@ -47,8 +47,15 @@ use crate::runtime::port::executor::{GpuExecutor, Presented};
 #[derive(Default)]
 pub struct CpuExecutor {
     /// Pre-compiled kernels keyed by the shader id a later `CreateShader { PtxKernel, .. }` uses. The PTX
-    /// text parser is a driver concern (`hl-cuda`), so the compiled program is injected here directly.
+    /// text parser is a driver concern (`hl-cuda`), so the compiled program can be injected here directly
+    /// (the `define_kernel` convenience) for tests that hand-build a [`KernelProgram`].
     kernels: HashMap<u32, KernelProgram>,
+    /// Optional kernel front-end: compiles a driver-forwarded [`KernelDescriptor`] (source text + entry +
+    /// block dims, decoded from a `CreateShader` KERNEL payload) into a [`KernelProgram`]. Injected by the
+    /// composition root so the PTX parser stays a driver concern (`hl-cuda`) and never links into this
+    /// crate. When set, a real (non-empty) descriptor on the wire is compiled directly — no `define_kernel`.
+    #[allow(clippy::type_complexity)]
+    kernel_compiler: Option<Box<dyn Fn(&KernelDescriptor) -> Result<KernelProgram>>>,
     /// Count of dispatches/draws seen — lets a test confirm compute/draw work reached the executor.
     pub dispatches: u64,
     pub draws: u64,
@@ -64,6 +71,17 @@ impl CpuExecutor {
     /// front-end, which is not part of this crate.
     pub fn define_kernel(&mut self, shader_id: u32, program: KernelProgram) {
         self.kernels.insert(shader_id, program);
+    }
+
+    /// Inject the kernel front-end that compiles a driver-forwarded [`KernelDescriptor`] (decoded from a
+    /// `CreateShader` KERNEL payload) into a [`KernelProgram`]. With this set, a `PtxKernel` shader whose
+    /// payload carries a real descriptor is compiled on the fly — the real driver flow needs no
+    /// `define_kernel`. Keeping the parser out here preserves this crate's freedom from any PTX/CUDA code.
+    pub fn set_kernel_compiler<F>(&mut self, compiler: F)
+    where
+        F: Fn(&KernelDescriptor) -> Result<KernelProgram> + 'static,
+    {
+        self.kernel_compiler = Some(Box::new(compiler));
     }
 
     /// Read `out.len()` bytes back from buffer `id` at `offset` — the readback path a conformance test
@@ -136,11 +154,25 @@ impl CpuExecutor {
         }
         let module = match kind {
             ShaderPayloadKind::PtxKernel => {
-                // The PTX text → kernel-IR front-end is a driver concern (hl-cuda); the CPU executor
-                // consumes the pre-registered compiled program keyed by this shader id.
-                let prog = self.kernels.get(&id).cloned().ok_or(GpuError::Unsupported(
-                    "cpu: no compiled kernel registered for PtxKernel shader id",
-                ))?;
+                // The real driver flow serializes a kernel descriptor (source text + entry + block dims)
+                // INTO this payload (`KernelDescriptor::to_words`). Decode it here and compile it via the
+                // injected front-end (the PTX parser is a driver concern kept out of this crate). A
+                // non-kernel / empty placeholder payload falls back to a pre-registered program — the
+                // `define_kernel` convenience hand-built kernels use.
+                let prog = match KernelDescriptor::from_words(spirv) {
+                    // A real driver-produced descriptor (non-empty source): compile it on the fly.
+                    Some(Ok(desc)) if !desc.ptx.is_empty() => {
+                        let compiler = self.kernel_compiler.as_ref().ok_or(GpuError::Unsupported(
+                            "cpu: PtxKernel payload needs a kernel compiler (set_kernel_compiler)",
+                        ))?;
+                        compiler(&desc)?
+                    }
+                    // A non-kernel / empty-placeholder / undecodable payload → the pre-registered
+                    // program a test injected via `define_kernel`.
+                    _ => self.kernels.get(&id).cloned().ok_or(GpuError::Unsupported(
+                        "cpu: no compiled kernel registered for PtxKernel shader id",
+                    ))?,
+                };
                 ShaderModule::Kernel(Box::new(prog))
             }
             ShaderPayloadKind::SpirV => {

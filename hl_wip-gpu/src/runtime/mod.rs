@@ -13,6 +13,7 @@
 pub mod model;
 pub mod port;
 pub mod service;
+pub mod sink;
 
 pub use model::resources::{
     GlobalLedger, Ledger, Native, SessionResources, Totals, KIND_BUFFER, KIND_BIND_GROUP,
@@ -22,6 +23,7 @@ pub use model::session::{Limits, Session};
 pub use model::timeline::{FenceState, FenceTimeline};
 pub use port::clock::{Clock, FakeClock, SystemClock};
 pub use port::executor::{GpuExecutor, Presented};
+pub use sink::InProcessCommandSink;
 
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::Result;
