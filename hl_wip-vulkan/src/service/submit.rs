@@ -90,10 +90,19 @@ pub fn queue_submit(
     // reached the device in this frame — retire them so they are not re-flushed on the next submit.
     dev.clear_pending_uploads();
 
-    // Advance model state: command buffers pending, fence armed at its signal value.
+    // Advance model state. The host replay is SYNCHRONOUS — `sink.submit` above already ran every command
+    // buffer to completion — so each buffer's execution is done on return. Per Vulkan §6.4, a completed
+    // buffer recorded WITHOUT `ONE_TIME_SUBMIT` returns to `Executable` (re-submittable); a one-time buffer
+    // becomes non-resubmittable. Leaving a re-submittable buffer stuck in `Pending` would fail the NEXT
+    // `vkQueueSubmit` of that same buffer ("not executable") — exactly the vkcube per-image draw loop, which
+    // records each swapchain image's command buffer once and re-submits it every frame.
     for &cb in command_buffers {
         if let Some(rec) = dev.command_buffers.get_mut(&cb) {
-            rec.state = CommandBufferState::Pending;
+            rec.state = if rec.one_time_submit {
+                CommandBufferState::Pending
+            } else {
+                CommandBufferState::Executable
+            };
         }
     }
     if let Some((f, _, value)) = signal {

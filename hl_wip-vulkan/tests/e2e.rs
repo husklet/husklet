@@ -118,7 +118,7 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
 
     // record: begin render pass (clear) → bind pipeline → bind vertex buffer → draw 3 → end pass.
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_begin_render_pass(&mut d, cb, target, clear, true).unwrap();
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
@@ -215,7 +215,7 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
         // Record a render pass that CLEARS the acquired image to this frame's color, then submit — the
         // executor clears the image's REAL backing texture (fails if the image were not a real texture).
         let cb = record::allocate_command_buffer(&mut d);
-        record::begin(&mut d, cb).unwrap();
+        record::begin(&mut d, cb, false).unwrap();
         record::cmd_begin_render_pass(&mut d, cb, acquired, clear, true).unwrap();
         record::cmd_end_render_pass(&mut d, cb).unwrap();
         record::end(&mut d, cb).unwrap();
@@ -242,6 +242,85 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
     // The acquire indices genuinely cycled through the 2 images (0,1,0,1,0) — NOT pinned at 0.
     assert_eq!(acquired_indices, vec![0, 1, 0, 1, 0], "acquire round-robins across the swapchain images");
     assert!(acquired_indices.contains(&1), "more than image 0 was acquired (the round-robin fix)");
+}
+
+/// vkcube's exact per-frame draw loop: each swapchain image has ONE command buffer recorded ONCE (a
+/// reusable buffer, no `ONE_TIME_SUBMIT`) that is re-submitted every frame, and a per-frame fence the
+/// submit signals and the next frame waits+resets. This proves the continuous multi-frame present loop:
+///
+///   vkWaitForFences(per-frame fence) → vkResetFences → vkAcquireNextImageKHR → vkQueueSubmit(re-submit
+///   the pre-recorded buffer, signal the fence) → vkWaitForFences(fence is now signaled) → vkQueuePresentKHR
+///
+/// FAIL-BEFORE / PASS-AFTER: before the fix, `vkQueueSubmit` left a submitted command buffer stuck in
+/// `Pending` forever, so the SECOND (and every later) re-submit of a pre-recorded per-image buffer failed
+/// with `VK_ERROR_INITIALIZATION_FAILED` — exactly vkcube's `demo_draw` abort at cube.c:1093 after ~1
+/// presented frame. The reusable buffer must return to `Executable` once its (synchronous) submit
+/// completes so the loop keeps running.
+#[test]
+fn vkcube_style_multiframe_fence_and_resubmit_loop() {
+    const W: u32 = 8;
+    const H: u32 = 8;
+
+    let exec = CpuExecutor::new();
+    let session = Session::new(
+        Limits::from_capabilities(Capabilities::full("hl-cpu-vkcube-loop")),
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+    let mut sink = InProcessCommandSink::with_session(session, exec);
+
+    let inst = create::create_instance(HL_API_VERSION);
+    let mut d = create::create_device(&inst);
+
+    let surface = present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
+    let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
+    let images = present::get_swapchain_images(&d, swapchain).unwrap();
+
+    // Record ONE reusable command buffer PER swapchain image, ONCE, up front — the vkcube setup pattern.
+    let clear = [51.0 / 255.0, 102.0 / 255.0, 153.0 / 255.0, 1.0];
+    let per_image_cbs: Vec<_> = images
+        .iter()
+        .map(|&img| {
+            let cb = record::allocate_command_buffer(&mut d);
+            record::begin(&mut d, cb, false).unwrap(); // NOT one-time-submit → re-submittable every frame
+            record::cmd_begin_render_pass(&mut d, cb, img, clear, true).unwrap();
+            record::cmd_end_render_pass(&mut d, cb).unwrap();
+            record::end(&mut d, cb).unwrap();
+            cb
+        })
+        .collect();
+
+    // Two per-frame fences (FRAME_LAG = 2), created SIGNALED so the first wait passes — vkcube's model.
+    let fences =
+        [create::create_fence(&mut d, &mut sink, true).unwrap(), create::create_fence(&mut d, &mut sink, true).unwrap()];
+
+    // Run more frames than there are images OR fences, so both cycles wrap several times.
+    const FRAMES: usize = 8;
+    for frame in 0..FRAMES {
+        let fence = fences[frame % fences.len()];
+
+        // vkWaitForFences → the per-frame fence (signaled from its prior frame, or created signaled).
+        submit::wait_for_fence(&mut d, &mut sink, fence).unwrap();
+        assert!(submit::fence_status(&d, fence).unwrap(), "frame {frame}: fence is signaled after wait");
+        // vkResetFences → back to unsignaled before this frame's submit re-arms it.
+        submit::reset_fence(&mut d, fence).unwrap();
+        assert!(!submit::fence_status(&d, fence).unwrap(), "frame {frame}: fence unsignaled after reset");
+
+        // vkAcquireNextImageKHR → the next image round-robin.
+        let idx = present::acquire_next_image(&mut d, swapchain).unwrap();
+        let cb = per_image_cbs[idx as usize];
+
+        // vkQueueSubmit → RE-SUBMIT that image's pre-recorded buffer, signaling this frame's fence. Before
+        // the fix this errored on every frame after the buffer's first submit.
+        submit::queue_submit(&mut d, &mut sink, &[cb], Some(fence)).unwrap();
+
+        // vkWaitForFences → the submit's signal is now observable (synchronous executor).
+        submit::wait_for_fence(&mut d, &mut sink, fence).unwrap();
+        assert!(submit::fence_status(&d, fence).unwrap(), "frame {frame}: fence signaled by its submit");
+
+        // vkQueuePresentKHR → present the rendered image; returns it to the pool for the next acquire.
+        present::queue_present(&mut d, &mut sink, swapchain, idx).unwrap();
+    }
 }
 
 /// The device→host mapped-memory readback, end-to-end: a device op produces bytes in a buffer bound to
@@ -287,7 +366,7 @@ fn map_memory_reflects_device_output_end_to_end() {
 
     // Device work: fill src with the pattern, then copy src → dst. No host write to dst's staging.
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_fill_buffer(&mut d, cb, src, 0, N, PATTERN).unwrap();
     record::cmd_copy_buffer(&mut d, cb, src, dst, 0, 0, N).unwrap();
     record::end(&mut d, cb).unwrap();
@@ -350,7 +429,7 @@ fn unmapped_host_write_reaches_the_device_end_to_end() {
 
     // An empty submit — the only device traffic is the pending host→device flush of the unmapped write.
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 

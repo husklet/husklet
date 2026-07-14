@@ -36,7 +36,7 @@ fn buf_ir(d: &Device, h: u64) -> u32 {
 /// `Cmd::Submit` in the last batch. Panics if the batch is not exactly one Submit.
 fn record_and_submit(d: &mut Device, s: &mut RecordingSink, f: impl FnOnce(&mut Device, u64)) -> Vec<Enc> {
     let cb = record::allocate_command_buffer(d);
-    record::begin(d, cb).unwrap();
+    record::begin(d, cb, false).unwrap();
     f(d, cb);
     record::end(d, cb).unwrap();
     submit::queue_submit(d, s, &[cb], None).unwrap();
@@ -86,7 +86,7 @@ fn still_mapped_flush_honors_bind_offset() {
     create::write_mapped(&mut d, mem, 16, &pattern).unwrap();
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
 
@@ -134,7 +134,7 @@ fn pending_flush_bind_offset_targets_buffer_relative_offset() {
     create::unmap_memory(&mut d, mem); // captures pending (0, WHOLE) intersected with footprint
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
     let write = s
@@ -166,7 +166,7 @@ fn pending_upload_is_cleared_after_one_submit() {
 
     for expect_write in [true, false] {
         let cb = record::allocate_command_buffer(&mut d);
-        record::begin(&mut d, cb).unwrap();
+        record::begin(&mut d, cb, false).unwrap();
         record::end(&mut d, cb).unwrap();
         submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
         let has = s.batches.last().unwrap().iter().any(|c| matches!(c, Cmd::WriteBuffer { id, .. } if *id == ir));
@@ -193,7 +193,7 @@ fn flush_ranges_widen_and_cover_both_writes() {
     create::unmap_memory(&mut d, mem); // still-mapped? no — unmap keeps pending and widens to whole
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
     let (off, data) = s
@@ -253,7 +253,7 @@ fn cmd_outside_recording_is_rejected() {
     let cb = record::allocate_command_buffer(&mut d);
     // Initial (not begun): a vkCmd* must fail.
     assert!(matches!(record::cmd_bind_vertex_buffer(&mut d, cb, 0, buf, 0), Err(GpuError::Invalid(_))));
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     // Executable (ended): a vkCmd* must fail again.
     assert!(matches!(record::cmd_bind_vertex_buffer(&mut d, cb, 0, buf, 0), Err(GpuError::Invalid(_))));
@@ -269,7 +269,7 @@ fn end_without_begin_is_rejected() {
 #[test]
 fn begin_unknown_command_buffer_errors() {
     let mut d = dev();
-    assert!(matches!(record::begin(&mut d, 0xdead), Err(GpuError::Invalid(_))));
+    assert!(matches!(record::begin(&mut d, 0xdead, false), Err(GpuError::Invalid(_))));
     assert!(matches!(record::end(&mut d, 0xdead), Err(GpuError::Invalid(_))));
 }
 
@@ -281,19 +281,32 @@ fn submit_non_executable_buffer_is_rejected() {
     // Initial state → not executable.
     assert!(matches!(submit::queue_submit(&mut d, &mut s, &[cb], None), Err(GpuError::Invalid(_))));
     // Recording → still not executable.
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(submit::queue_submit(&mut d, &mut s, &[cb], None), Err(GpuError::Invalid(_))));
 }
 
 #[test]
-fn resubmitting_a_pending_buffer_is_rejected() {
+fn resubmit_semantics_one_time_vs_reusable() {
     let mut d = dev();
     let mut s = sink();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
-    record::end(&mut d, cb).unwrap();
-    submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap(); // → Pending
-    assert!(matches!(submit::queue_submit(&mut d, &mut s, &[cb], None), Err(GpuError::Invalid(_))));
+
+    // A ONE-TIME-SUBMIT buffer is single-use: after its (synchronous) submit completes it is not
+    // resubmittable, so a second submit of the same buffer is rejected.
+    let once = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, once, true).unwrap();
+    record::end(&mut d, once).unwrap();
+    submit::queue_submit(&mut d, &mut s, &[once], None).unwrap();
+    assert!(matches!(submit::queue_submit(&mut d, &mut s, &[once], None), Err(GpuError::Invalid(_))));
+
+    // A REUSABLE buffer (no ONE_TIME_SUBMIT) records once and re-submits every frame — the vkcube
+    // per-image draw pattern. The synchronous executor completes each submit, returning it to Executable,
+    // so repeated submits all succeed.
+    let reuse = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, reuse, false).unwrap();
+    record::end(&mut d, reuse).unwrap();
+    for _ in 0..5 {
+        submit::queue_submit(&mut d, &mut s, &[reuse], None).unwrap();
+    }
 }
 
 #[test]
@@ -309,10 +322,10 @@ fn begin_resets_prior_recording() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::VERTEX_BUFFER, 16).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, cb, 0, buf, 0).unwrap();
     // A fresh begin must clear the earlier SetVertexBuffer.
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
     match s.batches.last().unwrap().as_slice() {
@@ -332,7 +345,7 @@ fn use_after_destroy_buffer_is_rejected() {
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::VERTEX_BUFFER, 16).unwrap();
     create::destroy_buffer(&mut d, &mut s, buf).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_bind_vertex_buffer(&mut d, cb, 0, buf, 0), Err(GpuError::Invalid(_))));
 }
 
@@ -454,7 +467,7 @@ fn dynamic_offsets_apply_to_dynamic_bindings_only() {
     create::update_descriptor_buffer(&mut d, set, 2, b2, 8, 64).unwrap();
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut s, cb, 0, &[set], &[100]).unwrap();
     let bg = last_bind_group(&s);
     use hl_gpu::protocol::model::descriptor::BindResource;
@@ -488,7 +501,7 @@ fn multiple_sets_get_distinct_set_indices_from_first_set() {
     create::update_descriptor_buffer(&mut d, sb, 0, bb, 0, 64).unwrap();
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // first_set = 1 → the two sets land at set indices 1 and 2.
     record::cmd_bind_descriptor_sets(&mut d, &mut s, cb, 1, &[sa, sb], &[]).unwrap();
     let sets: Vec<u32> = s.commands().filter_map(|c| match c {
@@ -517,7 +530,7 @@ fn separate_image_and_sampler_writes_compose_on_one_binding() {
     create::update_descriptor_image(&mut d, set, 3, None, Some(samp)).unwrap();
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut s, cb, 0, &[set], &[]).unwrap();
     use hl_gpu::protocol::model::descriptor::BindResource;
     let bg = last_bind_group(&s);
@@ -539,7 +552,7 @@ fn copy_buffer_to_image_usage_and_bounds_errors() {
     let bad_src = create::create_buffer(&mut d, &mut s, vk_buffer_usage::UNIFORM_BUFFER, 4096).unwrap();
     let img = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_copy_buffer_to_image(&mut d, cb, bad_src, img, 0, 0, 0, 8, 8), Err(GpuError::Invalid(_))));
     // A good src but an oversized region (width > image width) is out of bounds.
     let src = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_SRC, 4096).unwrap();
@@ -553,7 +566,7 @@ fn copy_image_format_mismatch_and_self_overlap_rejected() {
     let a = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST).unwrap();
     let b = create::create_image(&mut d, &mut s, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // Format mismatch.
     assert!(matches!(record::cmd_copy_image(&mut d, cb, a, b, (0, 0), (0, 0), (4, 4)), Err(GpuError::Invalid(_))));
     // Overlapping same-image self-copy.
@@ -569,7 +582,7 @@ fn blit_same_image_rejected_and_zero_extent_rejected() {
     let a = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST).unwrap();
     let b = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_blit_image(&mut d, cb, a, a, (0, 0), (4, 4), (0, 0), (4, 4), true), Err(GpuError::Invalid(_))));
     assert!(matches!(record::cmd_blit_image(&mut d, cb, a, b, (0, 0), (0, 4), (0, 0), (4, 4), false), Err(GpuError::OutOfBounds)));
 }
@@ -582,7 +595,7 @@ fn fill_buffer_alignment_usage_and_whole_size() {
     let ir = buf_ir(&d, buf);
     let no_dst = create::create_buffer(&mut d, &mut s, vk_buffer_usage::UNIFORM_BUFFER, 64).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // Misaligned dstOffset.
     assert!(matches!(record::cmd_fill_buffer(&mut d, cb, buf, 3, 4, 0), Err(GpuError::Invalid(_))));
     // Missing COPY_DST usage.
@@ -609,7 +622,7 @@ fn update_buffer_size_limits() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // Empty data.
     assert!(matches!(record::cmd_update_buffer(&mut d, cb, buf, 0, &[]), Err(GpuError::Invalid(_))));
     // Not a multiple of 4.
@@ -624,7 +637,7 @@ fn clear_color_image_requires_copy_dst() {
     let mut s = sink();
     let img = create::create_image(&mut d, &mut s, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_clear_color_image(&mut d, cb, img, [1.0; 4]), Err(GpuError::Invalid(_))));
 }
 
@@ -634,7 +647,7 @@ fn clear_attachments_outside_render_pass_errors() {
     let mut s = sink();
     let _ = &mut s;
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // Non-empty rect, no active render pass → error.
     assert!(matches!(record::cmd_clear_attachment_rect(&mut d, cb, 0, 0, 4, 4, [1.0; 4]), Err(GpuError::Invalid(_))));
     // A zero-area rect is a spec-valid no-op even outside a pass.
@@ -652,7 +665,7 @@ fn indirect_validation_missing_usage_and_out_of_range() {
     // Missing INDIRECT usage.
     let plain = create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 256).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_draw_indirect(&mut d, cb, plain, 0, 1, 16), Err(GpuError::Invalid(_))));
     // Proper INDIRECT buffer but the argument span runs past the end.
     let ind = create::create_buffer(&mut d, &mut s, vk_buffer_usage::INDIRECT_BUFFER, 16).unwrap();
@@ -672,7 +685,7 @@ fn indirect_validation_missing_usage_and_out_of_range() {
 fn push_constants_alignment_rules() {
     let mut d = dev();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_push_constants(&mut d, cb, 2, &[0u8; 4]), Err(GpuError::Invalid(_)))); // offset misaligned
     assert!(matches!(record::cmd_push_constants(&mut d, cb, 0, &[0u8; 3]), Err(GpuError::Invalid(_)))); // size misaligned
     assert!(matches!(record::cmd_push_constants(&mut d, cb, 0, &[]), Err(GpuError::Invalid(_)))); // empty
@@ -691,7 +704,7 @@ fn pipeline_barrier_records_known_and_skips_unknown() {
     let mut s = sink();
     let img = create::create_image(&mut d, &mut s, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // Known image: layout recorded; unknown image: skipped (no panic, no entry).
     record::cmd_pipeline_barrier(&mut d, cb, &[(img, 0, 7), (0xdead, 0, 7)]).unwrap();
     record::end(&mut d, cb).unwrap();
@@ -728,7 +741,7 @@ fn event_host_lifecycle_and_unknown_errors() {
 fn cmd_set_event_unknown_is_rejected() {
     let mut d = dev();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_set_event(&mut d, cb, 0xdead, true), Err(GpuError::Invalid(_))));
     assert!(matches!(record::cmd_wait_events(&mut d, cb, &[0xdead]), Err(GpuError::Invalid(_))));
 }
@@ -773,7 +786,7 @@ fn query_pool_zero_count_rejected_and_span_bounds() {
     assert!(matches!(sync::create_query_pool(&mut d, 2, 0), Err(GpuError::Invalid(_))));
     let pool = sync::create_query_pool(&mut d, 2, 4).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // Out-of-range reset span.
     assert!(matches!(record::cmd_reset_query_pool(&mut d, cb, pool, 2, 4), Err(GpuError::Invalid(_))));
     // Out-of-range write index.
@@ -801,7 +814,7 @@ fn get_query_pool_results_availability_wait_partial() {
     assert_eq!(u32::from_le_bytes([wide[4], wide[5], wide[6], wide[7]]), 0);
     // After a device write-timestamp submit, the slot is available with a monotonic serial.
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_write_timestamp(&mut d, cb, pool, 0).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
@@ -846,7 +859,7 @@ fn submit_unknown_fence_errors_before_emitting() {
     let mut d = dev();
     let mut s = sink();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     assert!(matches!(submit::queue_submit(&mut d, &mut s, &[cb], Some(0xdead)), Err(GpuError::Invalid(_))));
     assert!(s.batches.is_empty(), "a bad fence fails before any Cmd is submitted");
@@ -985,7 +998,7 @@ fn execute_commands_requires_recording_primary_and_executable_secondaries() {
     let ir = buf_ir(&d, buf);
     // A recorded, ended (Executable) secondary.
     let sec = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, sec).unwrap();
+    record::begin(&mut d, sec, false).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, sec, 0, buf, 0).unwrap();
     record::end(&mut d, sec).unwrap();
 
@@ -995,7 +1008,7 @@ fn execute_commands_requires_recording_primary_and_executable_secondaries() {
 
     // A recording primary + a NON-executable secondary is rejected, and splices nothing.
     let prim = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, prim).unwrap();
+    record::begin(&mut d, prim, false).unwrap();
     let not_ready = record::allocate_command_buffer(&mut d);
     assert!(matches!(record::cmd_execute_commands(&mut d, prim, &[not_ready]), Err(GpuError::Invalid(_))));
     assert!(d.command_buffers.get(&prim).unwrap().enc.is_empty());

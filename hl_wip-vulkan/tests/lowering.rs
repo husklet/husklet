@@ -288,7 +288,7 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
 
     // record the render pass: begin (clear) → bind pipeline → bind vertex buffer → draw → end.
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_begin_render_pass(&mut d, cb, target, [0.0, 0.0, 1.0, 1.0], true).unwrap();
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
@@ -378,7 +378,7 @@ fn begin_rendering_lowers_to_begin_render_pass_with_clear_attachment() {
     );
     // The active clear target is set, so a vkCmdClearAttachments inside the dynamic pass resolves.
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_begin_rendering(
         &mut d,
         cb,
@@ -389,7 +389,7 @@ fn begin_rendering_lowers_to_begin_render_pass_with_clear_attachment() {
     assert!(record::cmd_clear_attachment_rect(&mut d, cb, 0, 0, 4, 4, [1.0, 0.0, 0.0, 1.0]).is_ok());
     // An unknown attachment image is a typed error, not a silent skip.
     let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2).unwrap();
+    record::begin(&mut d, cb2, false).unwrap();
     assert!(record::cmd_begin_rendering(
         &mut d,
         cb2,
@@ -405,7 +405,7 @@ fn indexed_draw_lowers_set_index_buffer_and_draw_indexed() {
     let mut sink = RecordingSink::with_full_caps();
     let ibuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDEX_BUFFER, 6).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // VK_INDEX_TYPE_UINT16 = 0.
     record::cmd_bind_index_buffer(&mut d, cb, ibuf, 0, 0).unwrap();
     record::cmd_draw_indexed(&mut d, cb, 3, 1, 0, 0, 0).unwrap();
@@ -462,7 +462,7 @@ fn full_compute_dispatch_lowers_to_expected_stream() {
 
     // record: bind pipeline + descriptor set (→ CreateBindGroup ir 5) + dispatch.
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
     record::cmd_dispatch(&mut d, cb, 64, 1, 1).unwrap();
@@ -538,7 +538,7 @@ fn combined_image_sampler_descriptor_lowers_to_texture_and_sampler_binds() {
     create::update_descriptor_image(&mut d, set, 0, Some(image), Some(sampler)).unwrap();
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
     record::end(&mut d, cb).unwrap();
 
@@ -582,7 +582,7 @@ fn separate_sampled_image_and_sampler_descriptors_lower_at_their_own_bindings() 
     create::update_descriptor_image(&mut d, set, 1, None, Some(sampler)).unwrap();
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
     record::end(&mut d, cb).unwrap();
 
@@ -607,7 +607,7 @@ fn submit_with_fence_signals_and_wait_lowers_to_command_sink_wait() {
     assert!(matches!(sink.batches[0][0], Cmd::CreateFence(1)));
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], Some(fence)).unwrap();
 
@@ -632,7 +632,7 @@ fn mapped_memory_flushes_as_write_buffer_at_submit() {
     create::write_mapped(&mut d, mem, 0, &[1, 2, 3, 4]).unwrap();
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
@@ -662,7 +662,7 @@ fn unmapped_memory_still_flushes_its_write_at_submit() {
     create::unmap_memory(&mut d, mem); // <-- unmap before submit; the write must not be dropped
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
@@ -678,7 +678,7 @@ fn unmapped_memory_still_flushes_its_write_at_submit() {
 
     // The pending upload is one-shot: a SECOND submit (no re-map/re-write) flushes nothing more.
     let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2).unwrap();
+    record::begin(&mut d, cb2, false).unwrap();
     record::end(&mut d, cb2).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb2], None).unwrap();
     match sink.batches.last().unwrap().as_slice() {
@@ -703,7 +703,7 @@ fn mapped_write_without_unmap_flushes_exactly_once() {
     create::capture_pending_upload(&mut d, mem, 0, 4);
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
@@ -730,7 +730,7 @@ fn unmapped_unbound_host_staging_flushes_nothing() {
     assert!(d.memories.get(&mem).unwrap().pending_flush.is_none(), "unbound staging captures nothing");
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::end(&mut d, cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
     match sink.batches.last().unwrap().as_slice() {
@@ -878,7 +878,7 @@ fn record_and_submit(
     record_fn: impl FnOnce(&mut Device, u64),
 ) -> Vec<Enc> {
     let cb = record::allocate_command_buffer(d);
-    record::begin(d, cb).unwrap();
+    record::begin(d, cb, false).unwrap();
     record_fn(d, cb);
     record::end(d, cb).unwrap();
     submit::queue_submit(d, sink, &[cb], None).unwrap();
@@ -969,7 +969,7 @@ fn copy_image_lowers_to_copy_texture_to_texture() {
         create::create_image(&mut d, &mut sink, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST)
             .unwrap();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(record::cmd_copy_image(&mut d, cb, src, other, (0, 0), (0, 0), (4, 4)).is_err());
 }
 
@@ -1049,7 +1049,7 @@ fn clear_attachments_lowers_to_clear_rect_on_active_target() {
     );
     // A clear-attachments outside a render pass is a typed error (no active target to clear).
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(record::cmd_clear_attachment_rect(&mut d, cb, 0, 0, 4, 4, [0.0; 4]).is_err());
 }
 
@@ -1060,7 +1060,7 @@ fn fill_and_update_buffer_flush_as_write_buffer_at_submit() {
     let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
     let ir = buf_ir(&d, buf);
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // Fill [0,8) with 0x01010101 (two words), then update [16,20) with explicit bytes.
     record::cmd_fill_buffer(&mut d, cb, buf, 0, 8, 0x0101_0101).unwrap();
     record::cmd_update_buffer(&mut d, cb, buf, 16, &[9, 8, 7, 6]).unwrap();
@@ -1079,7 +1079,7 @@ fn fill_and_update_buffer_flush_as_write_buffer_at_submit() {
     // fill rejects a non-COPY_DST buffer and a misaligned offset.
     let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 64).unwrap();
     let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2).unwrap();
+    record::begin(&mut d, cb2, false).unwrap();
     assert!(record::cmd_fill_buffer(&mut d, cb2, vbuf, 0, 8, 0).is_err());
     assert!(record::cmd_fill_buffer(&mut d, cb2, buf, 2, 8, 0).is_err());
 }
@@ -1110,7 +1110,7 @@ fn set_viewport_and_scissor_lower_to_encoder_ops() {
 fn push_constants_reach_the_command_buffer_for_the_draw() {
     let mut d = dev();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     // Write 8 bytes at offset 0, then overwrite 4 bytes at offset 4 (grows/patches the block in place).
     record::cmd_push_constants(&mut d, cb, 0, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
     record::cmd_push_constants(&mut d, cb, 4, &[9, 9, 9, 9]).unwrap();
@@ -1125,7 +1125,7 @@ fn push_constants_reach_the_command_buffer_for_the_draw() {
 fn dynamic_state_is_recorded_but_emits_no_encoder_op() {
     let mut d = dev();
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_set_line_width(&mut d, cb, 2.5).unwrap();
     record::cmd_set_depth_bias(&mut d, cb, 1.0, 0.0, 2.0).unwrap();
     record::cmd_set_blend_constants(&mut d, cb, [0.1, 0.2, 0.3, 0.4]).unwrap();
@@ -1162,7 +1162,7 @@ fn indirect_draws_validate_buffer_and_emit_no_op() {
 
     // Truthful failure: an unknown buffer, a non-INDIRECT buffer, and an out-of-range span all error.
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     assert!(record::cmd_draw_indirect(&mut d, cb, 0xdead, 0, 1, 16).is_err());
     let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 64).unwrap();
     assert!(record::cmd_draw_indirect(&mut d, cb, vbuf, 0, 1, 16).is_err());
@@ -1221,7 +1221,7 @@ fn event_host_ops_and_device_set_resolves_at_submit() {
 
     // A device vkCmdSetEvent resolves at (synchronous) submit completion — signaled once submit returns.
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_set_event(&mut d, cb, ev, true).unwrap();
     record::end(&mut d, cb).unwrap();
     assert!(!sync::event_status(&d, ev).unwrap(), "not signaled until the submit completes");
@@ -1262,7 +1262,7 @@ fn query_pool_timestamp_records_and_results_readable() {
     let pool = sync::create_query_pool(&mut d, 2, 2).unwrap();
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_reset_query_pool(&mut d, cb, pool, 0, 2).unwrap();
     record::cmd_write_timestamp(&mut d, cb, pool, 0).unwrap();
     record::end(&mut d, cb).unwrap();
@@ -1299,7 +1299,7 @@ fn copy_query_pool_results_writes_dst_buffer_at_submit() {
     let dst_ir = buf_ir(&d, dst);
 
     let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb).unwrap();
+    record::begin(&mut d, cb, false).unwrap();
     record::cmd_reset_query_pool(&mut d, cb, pool, 0, 1).unwrap();
     record::cmd_write_timestamp(&mut d, cb, pool, 0).unwrap();
     // 32-bit results, no availability, stride 4.
@@ -1337,7 +1337,7 @@ fn bind_and_capture_entries(
     set: u64,
 ) -> Vec<hl_gpu::protocol::model::descriptor::BindEntry> {
     let cb = record::allocate_command_buffer(d);
-    record::begin(d, cb).unwrap();
+    record::begin(d, cb, false).unwrap();
     record::cmd_bind_descriptor_sets(d, sink, cb, 0, &[set], &[]).unwrap();
     record::end(d, cb).unwrap();
     match sink.batches.last().unwrap().as_slice() {
@@ -1433,14 +1433,14 @@ fn execute_commands_replays_secondary_ops_into_primary() {
 
     // A secondary records a copy (encoder op) + a fill (buffer write), then becomes Executable.
     let secondary = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, secondary).unwrap();
+    record::begin(&mut d, secondary, false).unwrap();
     record::cmd_copy_buffer(&mut d, secondary, src, dst, 0, 0, 64).unwrap();
     record::cmd_fill_buffer(&mut d, secondary, dst, 128, 8, 0x0202_0202).unwrap();
     record::end(&mut d, secondary).unwrap();
 
     // The primary executes the secondary, then is submitted.
     let primary = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, primary).unwrap();
+    record::begin(&mut d, primary, false).unwrap();
     record::cmd_execute_commands(&mut d, primary, &[secondary]).unwrap();
     record::end(&mut d, primary).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[primary], None).unwrap();
@@ -1457,9 +1457,9 @@ fn execute_commands_replays_secondary_ops_into_primary() {
 
     // A secondary that is not Executable (still recording) is a typed error, splicing nothing.
     let unfinished = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, unfinished).unwrap();
+    record::begin(&mut d, unfinished, false).unwrap();
     let p2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, p2).unwrap();
+    record::begin(&mut d, p2, false).unwrap();
     assert!(record::cmd_execute_commands(&mut d, p2, &[unfinished]).is_err());
 }
 

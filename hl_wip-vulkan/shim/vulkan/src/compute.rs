@@ -798,11 +798,17 @@ pub extern "C" fn vkAllocateCommandBuffers(
 }
 
 #[no_mangle]
-pub extern "C" fn vkBeginCommandBuffer(command_buffer: *mut c_void, _p_begin_info: *const c_void) -> VkResult {
+pub extern "C" fn vkBeginCommandBuffer(command_buffer: *mut c_void, p_begin_info: *const c_void) -> VkResult {
     let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    dev_sink(|dev, _| vk(record::begin(dev, cb))).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+    // A command buffer recorded WITHOUT `ONE_TIME_SUBMIT` is re-submittable every frame (vkcube's per-image
+    // draw pattern); one with it is single-use. Read the flag from the begin info (absent/null ⇒ 0).
+    let one_time_submit = match unsafe { (p_begin_info as *const VkCommandBufferBeginInfo).as_ref() } {
+        Some(bi) => bi.flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT != 0,
+        None => false,
+    };
+    dev_sink(|dev, _| vk(record::begin(dev, cb, one_time_submit))).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
 #[no_mangle]

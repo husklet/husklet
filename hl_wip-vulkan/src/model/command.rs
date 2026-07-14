@@ -186,6 +186,11 @@ impl Default for DynamicState {
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct CmdBufRec {
     pub state: CommandBufferState,
+    /// `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT` was set at `vkBeginCommandBuffer`. A one-time buffer
+    /// must not be re-submitted (it becomes non-resubmittable once its submit completes); a buffer without
+    /// this flag returns to `Executable` after a (synchronous) submit completes, so the standard "record
+    /// once, submit every frame" pattern (vkcube's per-image draw buffers) keeps working across frames.
+    pub one_time_submit: bool,
     /// The recorded encoder ops (the `Enc` stream `vkQueueSubmit` ships as one `Cmd::Submit`).
     pub enc: Vec<Enc>,
     /// hl-GPU pipeline id of the last `vkCmdBindPipeline` (replayed into the next pass).
@@ -223,6 +228,7 @@ impl CmdBufRec {
 
     /// Clear the recorded contents back to a just-begun state (MoltenVK `MVKCommandBuffer::reset`).
     pub fn reset_recording(&mut self) {
+        self.one_time_submit = false;
         self.enc.clear();
         self.bound_pipeline = None;
         self.bound_pipeline_kind = None;

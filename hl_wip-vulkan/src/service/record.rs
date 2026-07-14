@@ -34,13 +34,17 @@ pub fn allocate_command_buffer(dev: &mut Device) -> VkCommandBuffer {
     handle
 }
 
-/// `vkBeginCommandBuffer` — move the buffer to `Recording` and clear any prior recording.
-pub fn begin(dev: &mut Device, cb: VkCommandBuffer) -> Result<()> {
+/// `vkBeginCommandBuffer` — move the buffer to `Recording` and clear any prior recording. `one_time_submit`
+/// records `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT`: a one-time buffer is not resubmittable, whereas a
+/// buffer without it returns to `Executable` after its (synchronous) submit completes so it can be
+/// re-submitted every frame (the standard vkcube per-image draw pattern).
+pub fn begin(dev: &mut Device, cb: VkCommandBuffer, one_time_submit: bool) -> Result<()> {
     let rec = dev
         .command_buffers
         .get_mut(&cb)
         .ok_or(GpuError::Invalid("vkBeginCommandBuffer: unknown VkCommandBuffer"))?;
     rec.reset_recording();
+    rec.one_time_submit = one_time_submit;
     rec.state = CommandBufferState::Recording;
     Ok(())
 }

@@ -1445,6 +1445,20 @@ pub struct VkCopyImageToBufferInfo2 {
     pub p_regions: *const VkBufferImageCopy2,
 }
 
+/// `VkCommandBufferBeginInfo` — the `vkBeginCommandBuffer` info. Only `flags` is consumed by the model
+/// (the `ONE_TIME_SUBMIT` bit decides whether a completed submit returns the buffer to `Executable` for
+/// re-submission or leaves it non-resubmittable); `pInheritanceInfo` is validated-then-ignored.
+#[repr(C)]
+pub struct VkCommandBufferBeginInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub p_inheritance_info: *const c_void,
+}
+
+/// `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT` — the buffer is recorded for a single submission.
+pub const VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT: VkFlags = 0x0000_0001;
+
 /// `VkCommandBufferSubmitInfo` — one command buffer of a `vkQueueSubmit2` batch (a dispatchable handle).
 #[repr(C)]
 pub struct VkCommandBufferSubmitInfo {
