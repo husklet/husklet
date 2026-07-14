@@ -192,6 +192,29 @@ const IMPLEMENTED: &[&str] = &[
     "cuCtxGetCurrent",
     "cuCtxGetDevice",
     "cuCtxSynchronize",
+    // context management: push/pop stack, api version, flags
+    "cuCtxPushCurrent_v2",
+    "cuCtxPopCurrent_v2",
+    "cuCtxGetApiVersion",
+    "cuCtxGetFlags",
+    "cuCtxSetFlags",
+    // primary context (device 0): retain/release/reset ref-counting + state
+    "cuDevicePrimaryCtxRetain",
+    "cuDevicePrimaryCtxRelease_v2",
+    "cuDevicePrimaryCtxReset_v2",
+    "cuDevicePrimaryCtxGetState",
+    "cuDevicePrimaryCtxSetFlags_v2",
+    // memory info + pointer attributes
+    "cuMemGetInfo_v2",
+    "cuMemGetAddressRange_v2",
+    "cuPointerGetAttribute",
+    "cuPointerGetAttributes",
+    // stream/event query + wait (synchronous-executor semantics)
+    "cuEventRecordWithFlags",
+    "cuEventQuery",
+    "cuEventElapsedTime",
+    "cuStreamQuery",
+    "cuStreamWaitEvent",
     // IR-wired compute path
     "cuMemAlloc_v2",
     "cuMemFree_v2",

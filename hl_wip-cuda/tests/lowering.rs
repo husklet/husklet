@@ -79,6 +79,37 @@ fn mem_free_emits_destroy_buffer_and_rejects_bogus() {
     assert!(matches!(err, GpuError::Invalid(_)));
 }
 
+#[test]
+fn allocation_metadata_backs_pointer_and_mem_info_queries() {
+    // The model data the driver's `cuPointerGetAttribute` / `cuMemGetAddressRange` / `cuMemGetInfo`
+    // entry points read: `containing` resolves an interior pointer to its (base, size), and
+    // `total_bytes` is the used figure `cuMemGetInfo` subtracts from total VRAM.
+    use hl_cuda::model::device::DevicePtr;
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+
+    assert_eq!(c.mem.total_bytes(), 0, "no allocations → nothing used");
+    let a = allocate::mem_alloc(&mut c, &mut sink, 4096).unwrap();
+    let b = allocate::mem_alloc(&mut c, &mut sink, 256).unwrap();
+    assert_eq!(c.mem.total_bytes(), 4096 + 256, "used = sum of live allocation sizes");
+
+    // An interior pointer resolves to the allocation's base + size.
+    assert_eq!(c.mem.containing(DevicePtr(a.0 + 8)), Some((a.0, 4096)));
+    assert_eq!(c.mem.containing(DevicePtr(b.0)), Some((b.0, 256)));
+    // A dangling pointer resolves to nothing (→ CUDA_ERROR_INVALID_VALUE at the ABI seam).
+    assert_eq!(c.mem.containing(DevicePtr(0xdead_beef)), None);
+
+    // Free drops it from both the resolver and the used-bytes total (what cuMemGetInfo reflects).
+    allocate::mem_free(&mut c, &mut sink, a).unwrap();
+    assert_eq!(c.mem.total_bytes(), 256);
+    assert_eq!(c.mem.containing(DevicePtr(a.0 + 8)), None);
+
+    // The free/total cuMemGetInfo would report.
+    let total = c.device.total_mem;
+    let free = total - c.mem.total_bytes();
+    assert_eq!(free, total - 256);
+}
+
 // ---------------------------------------------------------------------------------------------------
 // transfer
 // ---------------------------------------------------------------------------------------------------

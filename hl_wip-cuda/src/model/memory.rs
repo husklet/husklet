@@ -60,6 +60,23 @@ impl Allocations {
         self.map.remove(&p.0).map(|a| a.buffer)
     }
 
+    /// Find the live allocation whose `[base, base+size)` range contains `p`, returning `(base, size)`.
+    /// `None` for a dangling pointer. This is what the metadata queries (`cuPointerGetAttribute`,
+    /// `cuMemGetAddressRange`) resolve against — unlike [`resolve`](Self::resolve) they need the
+    /// allocation *base* and *size*, not the backing (buffer, offset).
+    pub fn containing(&self, p: DevicePtr) -> Option<(u64, u64)> {
+        self.map
+            .iter()
+            .find(|(&base, a)| p.0 >= base && p.0 < base + a.size.max(1))
+            .map(|(&base, a)| (base, a.size))
+    }
+
+    /// Total bytes across every live allocation — the "used device memory" `cuMemGetInfo` subtracts
+    /// from the device's total VRAM to report the free figure.
+    pub fn total_bytes(&self) -> u64 {
+        self.map.values().map(|a| a.size).sum()
+    }
+
     /// Number of live allocations (diagnostics / tests).
     pub fn len(&self) -> usize {
         self.map.len()
