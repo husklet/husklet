@@ -11,6 +11,7 @@
 //! payloads are classified by a neutral magic ([`protocol::model::kernel::KERNEL_MAGIC`]) — the decoder
 //! never reaches into a CUDA/PTX constant.
 
+pub mod cpu;
 pub mod protocol;
 pub mod runtime;
 pub mod transport;
@@ -33,3 +34,7 @@ pub use runtime::{
     SessionResources, SystemClock,
 };
 pub use transport::{serve, serve_connection, GpuAlloc, RemoteCommandSink, Surface};
+
+// The reference CPU executor (the semantic oracle): a pure, platform-free `GpuExecutor` a composition
+// root injects for socket-free CPU execution and against which every real executor is conformance-checked.
+pub use cpu::CpuExecutor;
