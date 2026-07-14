@@ -65,6 +65,22 @@ pub struct State {
     /// conversion is a pure host object referenced by a sampler's pNext; no IR is emitted for it.
     pub ycbcr_conversions: std::collections::HashSet<u64>,
 
+    /// `(objectType, objectHandle)` → the debug name set by `vkSetDebugUtilsObjectNameEXT` /
+    /// `vkDebugMarkerSetObjectNameEXT`. Debug-only bookkeeping (the name is stored so a later query or a
+    /// validation trace can surface it); never affects behaviour. `VK_EXT_debug_utils` is not advertised,
+    /// but these entry points succeed benignly (they are safe no-ops that only record a name).
+    pub debug_object_names: HashMap<(i32, u64), String>,
+    /// Live `VkDebugUtilsMessengerEXT` handles (`vkCreateDebugUtilsMessengerEXT`). Pure host objects.
+    pub debug_messengers: std::collections::HashSet<u64>,
+    /// Live `VkDebugReportCallbackEXT` handles (`vkCreateDebugReportCallbackEXT`). Pure host objects.
+    pub debug_report_callbacks: std::collections::HashSet<u64>,
+    /// Live `VkBufferView` handles (`vkCreateBufferView`). A buffer view is a pure host object in this
+    /// model (the color/compute lowering binds buffers directly), tracked so create/destroy balance.
+    pub buffer_views: std::collections::HashSet<u64>,
+    /// Monotonic counter for the auxiliary non-dispatchable handles above (debug messengers/callbacks,
+    /// buffer views), kept on a distinct high base so they never alias device object or surface handles.
+    next_aux: u64,
+
     /// Stable loader-magic'd dispatchable tokens (a pointer, once minted, is reused so the loader's
     /// object identity is consistent across calls). `0` = not yet minted.
     phys_dev: usize,
@@ -87,6 +103,11 @@ impl State {
             private_data_slots: std::collections::HashSet::new(),
             private_data: HashMap::new(),
             ycbcr_conversions: std::collections::HashSet::new(),
+            debug_object_names: HashMap::new(),
+            debug_messengers: std::collections::HashSet::new(),
+            debug_report_callbacks: std::collections::HashSet::new(),
+            buffer_views: std::collections::HashSet::new(),
+            next_aux: 0,
             phys_dev: 0,
             device_handle: 0,
             queue_handle: 0,
@@ -104,6 +125,13 @@ impl State {
     /// Whether `surface` is a live (created, not destroyed) `VkSurfaceKHR`.
     pub fn surface_valid(&self, surface: u64) -> bool {
         surface != 0 && self.surfaces.contains(&surface)
+    }
+
+    /// Mint a fresh auxiliary non-dispatchable handle (debug messenger/callback, buffer view). Monotonic,
+    /// never `VK_NULL_HANDLE`, on a high base distinct from device object + surface handles.
+    pub fn mint_aux(&mut self) -> u64 {
+        self.next_aux += 1;
+        0x6000_0000_0000_0000 + self.next_aux
     }
 
     /// The single physical-device dispatchable token, minted once and reused.

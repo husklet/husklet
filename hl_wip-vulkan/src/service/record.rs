@@ -482,6 +482,61 @@ pub fn cmd_set_stencil_reference(dev: &mut Device, cb: VkCommandBuffer, face_mas
     Ok(())
 }
 
+// ---- extended dynamic state 1/2/3 --------------------------------------------------------------
+// The core-promoted `VK_EXT_extended_dynamic_state{,2,3}` `vkCmdSet*` commands set fixed-function
+// pipeline state the software color rasterizer does not model (cull mode, depth/stencil test enables,
+// blend/logic-op state, ...). Each is recorded verbatim into the command buffer's [`DynamicState`] —
+// observable, honest command state — and carries NO encoder op. `set_dynamic` is the single seam the
+// shim's extended-dynamic-state bodies mutate through (it enforces the "must be recording" rule).
+
+/// Mutate the recording command buffer's [`DynamicState`] with `f`. The one entry point every extended
+/// `vkCmdSet*` records through. Errors if `cb` is not currently recording (the Vulkan rule).
+pub fn set_dynamic<R>(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    f: impl FnOnce(&mut crate::model::command::DynamicState) -> R,
+) -> Result<R> {
+    Ok(f(&mut recording_mut(dev, cb)?.dynamic))
+}
+
+/// Set the extended-stencil-op state for the face(s) selected by `face_mask` (FRONT = 0x1, BACK = 0x2).
+/// Helper for `vkCmdSetStencilOp` (`(failOp, passOp, depthFailOp, compareOp)`).
+pub fn set_stencil_op(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    face_mask: u32,
+    ops: (i32, i32, i32, i32),
+) -> Result<()> {
+    let ds = &mut recording_mut(dev, cb)?.dynamic;
+    if face_mask & 0x1 != 0 {
+        ds.stencil_op_front = ops;
+    }
+    if face_mask & 0x2 != 0 {
+        ds.stencil_op_back = ops;
+    }
+    Ok(())
+}
+
+/// Record a per-attachment extended-dynamic-state array (`vkCmdSetColorBlendEnableEXT` /
+/// `vkCmdSetColorWriteMaskEXT` / `vkCmdSetColorWriteEnableEXT`): overwrite `[first, first+values.len())`
+/// of `target`, growing it as needed. `select` picks which `DynamicState` vector to write.
+pub fn set_dynamic_attachment_array(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    first: u32,
+    values: &[u32],
+    select: impl FnOnce(&mut crate::model::command::DynamicState) -> &mut Vec<u32>,
+) -> Result<()> {
+    let ds = &mut recording_mut(dev, cb)?.dynamic;
+    let target = select(ds);
+    let end = first as usize + values.len();
+    if target.len() < end {
+        target.resize(end, 0);
+    }
+    target[first as usize..end].copy_from_slice(values);
+    Ok(())
+}
+
 // ---- push constants ----------------------------------------------------------------------------
 
 /// `vkCmdPushConstants` — write `bytes` at `offset` into the command buffer's push-constant block. The

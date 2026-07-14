@@ -44,11 +44,94 @@ pub struct DynamicState {
     pub stencil_write_mask: (u32, u32),
     /// `vkCmdSetStencilReference` `(front, back)`.
     pub stencil_reference: (u32, u32),
+
+    // ---- extended dynamic state 1/2/3 (VK_EXT_extended_dynamic_state{,2,3} + core 1.3) -------------
+    // Recorded verbatim as observable, honest command state exactly like the fields above. The software
+    // color rasterizer models none of this fixed-function state, so each carries NO encoder op — but the
+    // value is retained (never silently dropped), so a later increment can consume it and a test can
+    // assert it was recorded. Every field's initial value is the Vulkan "unset" default (0 / false).
+    /// `vkCmdSetCullMode` — raw `VkCullModeFlags`.
+    pub cull_mode: u32,
+    /// `vkCmdSetFrontFace` — raw `VkFrontFace`.
+    pub front_face: i32,
+    /// `vkCmdSetPrimitiveTopology` — raw `VkPrimitiveTopology`.
+    pub primitive_topology: i32,
+    /// `vkCmdSetPrimitiveRestartEnable`.
+    pub primitive_restart_enable: bool,
+    /// `vkCmdSetRasterizerDiscardEnable`.
+    pub rasterizer_discard_enable: bool,
+    /// `vkCmdSetDepthTestEnable`.
+    pub depth_test_enable: bool,
+    /// `vkCmdSetDepthWriteEnable`.
+    pub depth_write_enable: bool,
+    /// `vkCmdSetDepthCompareOp` — raw `VkCompareOp`.
+    pub depth_compare_op: i32,
+    /// `vkCmdSetDepthBoundsTestEnable`.
+    pub depth_bounds_test_enable: bool,
+    /// `vkCmdSetDepthBounds` `(min, max)`.
+    pub depth_bounds: (f32, f32),
+    /// `vkCmdSetDepthBiasEnable`.
+    pub depth_bias_enable: bool,
+    /// `vkCmdSetStencilTestEnable`.
+    pub stencil_test_enable: bool,
+    /// `vkCmdSetStencilOp` front face `(failOp, passOp, depthFailOp, compareOp)` (raw `VkStencilOp`/`VkCompareOp`).
+    pub stencil_op_front: (i32, i32, i32, i32),
+    /// `vkCmdSetStencilOp` back face `(failOp, passOp, depthFailOp, compareOp)`.
+    pub stencil_op_back: (i32, i32, i32, i32),
+    /// `vkCmdSetLineStipple` `(factor, pattern)`.
+    pub line_stipple: (u32, u16),
+    /// `vkCmdSetLineStippleEnableEXT`.
+    pub line_stipple_enable: bool,
+    /// `vkCmdSetVertexInputEXT` binding count (the vertex-input state is recorded as unmodeled).
+    pub vertex_binding_count: u32,
+    // ---- extended dynamic state 3 ----
+    /// `vkCmdSetRasterizationSamplesEXT` — raw `VkSampleCountFlagBits`.
+    pub rasterization_samples: u32,
+    /// `vkCmdSetSampleMaskEXT` (first 32-bit word).
+    pub sample_mask: u32,
+    /// `vkCmdSetAlphaToCoverageEnableEXT`.
+    pub alpha_to_coverage_enable: bool,
+    /// `vkCmdSetAlphaToOneEnableEXT`.
+    pub alpha_to_one_enable: bool,
+    /// `vkCmdSetLogicOpEnableEXT`.
+    pub logic_op_enable: bool,
+    /// `vkCmdSetLogicOpEXT` — raw `VkLogicOp`.
+    pub logic_op: i32,
+    /// `vkCmdSetPolygonModeEXT` — raw `VkPolygonMode`.
+    pub polygon_mode: i32,
+    /// `vkCmdSetPatchControlPointsEXT`.
+    pub patch_control_points: u32,
+    /// `vkCmdSetTessellationDomainOriginEXT` — raw `VkTessellationDomainOrigin`.
+    pub tessellation_domain_origin: i32,
+    /// `vkCmdSetProvokingVertexModeEXT` — raw `VkProvokingVertexModeEXT`.
+    pub provoking_vertex_mode: i32,
+    /// `vkCmdSetLineRasterizationModeEXT` — raw `VkLineRasterizationModeEXT`.
+    pub line_rasterization_mode: i32,
+    /// `vkCmdSetDepthClampEnableEXT`.
+    pub depth_clamp_enable: bool,
+    /// `vkCmdSetDepthClipEnableEXT`.
+    pub depth_clip_enable: bool,
+    /// `vkCmdSetDepthClipNegativeOneToOneEXT`.
+    pub depth_clip_negative_one_to_one: bool,
+    /// `vkCmdSetConservativeRasterizationModeEXT` — raw `VkConservativeRasterizationModeEXT`.
+    pub conservative_rasterization_mode: i32,
+    /// `vkCmdSetExtraPrimitiveOverestimationSizeEXT`.
+    pub extra_primitive_overestimation_size: f32,
+    /// `vkCmdSetSampleLocationsEnableEXT`.
+    pub sample_locations_enable: bool,
+    /// `vkCmdSetRasterizationStreamEXT`.
+    pub rasterization_stream: u32,
+    /// `vkCmdSetColorBlendEnableEXT` — per-attachment enable (raw `VkBool32`), indexed by attachment.
+    pub color_blend_enables: Vec<u32>,
+    /// `vkCmdSetColorWriteMaskEXT` — per-attachment `VkColorComponentFlags`.
+    pub color_write_masks: Vec<u32>,
+    /// `vkCmdSetColorWriteEnableEXT` — per-attachment enable (raw `VkBool32`).
+    pub color_write_enables: Vec<u32>,
 }
 
 impl Default for DynamicState {
     fn default() -> Self {
-        // Vulkan's initial dynamic state: line width 1.0, everything else zero.
+        // Vulkan's initial dynamic state: line width 1.0, everything else zero/false.
         DynamicState {
             line_width: 1.0,
             depth_bias: (0.0, 0.0, 0.0),
@@ -56,6 +139,44 @@ impl Default for DynamicState {
             stencil_compare_mask: (0, 0),
             stencil_write_mask: (0, 0),
             stencil_reference: (0, 0),
+            cull_mode: 0,
+            front_face: 0,
+            primitive_topology: 0,
+            primitive_restart_enable: false,
+            rasterizer_discard_enable: false,
+            depth_test_enable: false,
+            depth_write_enable: false,
+            depth_compare_op: 0,
+            depth_bounds_test_enable: false,
+            depth_bounds: (0.0, 0.0),
+            depth_bias_enable: false,
+            stencil_test_enable: false,
+            stencil_op_front: (0, 0, 0, 0),
+            stencil_op_back: (0, 0, 0, 0),
+            line_stipple: (1, 0),
+            line_stipple_enable: false,
+            vertex_binding_count: 0,
+            rasterization_samples: 1,
+            sample_mask: u32::MAX,
+            alpha_to_coverage_enable: false,
+            alpha_to_one_enable: false,
+            logic_op_enable: false,
+            logic_op: 0,
+            polygon_mode: 0,
+            patch_control_points: 0,
+            tessellation_domain_origin: 0,
+            provoking_vertex_mode: 0,
+            line_rasterization_mode: 0,
+            depth_clamp_enable: false,
+            depth_clip_enable: false,
+            depth_clip_negative_one_to_one: false,
+            conservative_rasterization_mode: 0,
+            extra_primitive_overestimation_size: 0.0,
+            sample_locations_enable: false,
+            rasterization_stream: 0,
+            color_blend_enables: Vec::new(),
+            color_write_masks: Vec::new(),
+            color_write_enables: Vec::new(),
         }
     }
 }
