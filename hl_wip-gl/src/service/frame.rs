@@ -330,7 +330,13 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
             attrs.push(VertexAttr { location: l as u32, format: fmt, offset: off });
         }
         let stride = if sl < nslot { slot_stride[sl] } else { 16 };
-        vbs.push(VertexLayout { stride, step_mode: 0, attrs });
+        // A vertex-buffer slot steps per-instance (step_mode 1) when any attribute it feeds carries a
+        // non-zero `glVertexAttribDivisor`. This model has one step rate per slot, so a divisor `N>1`
+        // (fractional instancing rate) collapses to per-instance stepping — an honest partial lowering.
+        let step_mode = (0..crate::model::program::MAX_ATTR)
+            .any(|l| attr_slot[l] == sl as i32 && d.attrs[l].enabled && d.attrs[l].divisor > 0)
+            as u32;
+        vbs.push(VertexLayout { stride, step_mode, attrs });
     }
     // Fixed-function state → the pipeline's blend / depth / cull descriptor (the values a real app set via
     // glBlendFunc / glDepthFunc / glCullFace / glFrontFace, mapped to their opaque WebGPU wire enums).

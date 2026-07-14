@@ -40,6 +40,23 @@ pub struct PixelStore {
     pub pack_skip_pixels: i32,
 }
 
+/// A Vertex Array Object's captured state: the per-location vertex-attribute array plus the
+/// element-array-buffer binding. Binding a VAO swaps this state into the live context (`ctx.attr` /
+/// `ctx.element_buffer`); a GLES3 app MUST bind a VAO before it can draw. Ported from `hl-shim-gl`'s `Vao`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Vao {
+    /// The captured per-location vertex-attribute array (`glVertexAttribPointer` + enable + divisor).
+    pub attrs: [Attr; MAX_ATTR],
+    /// The captured `GL_ELEMENT_ARRAY_BUFFER` binding (element buffer is VAO state; array buffer is not).
+    pub element_buffer: u32,
+}
+
+impl Default for Vao {
+    fn default() -> Self {
+        Self { attrs: [Attr::default(); MAX_ATTR], element_buffer: 0 }
+    }
+}
+
 impl Default for PixelStore {
     fn default() -> Self {
         Self {
@@ -106,6 +123,14 @@ pub struct GlContext {
     pub front_face: u32,
     /// The framebuffer bound by `glBindFramebuffer` (`0` = the default window framebuffer).
     pub bound_fbo: u32,
+
+    /// The Vertex Array Object currently bound by `glBindVertexArray` (`0` = the default VAO).
+    pub cur_vao: u32,
+    /// The per-name captured VAO state (attrib array + element buffer). The live `attr`/`element_buffer`
+    /// fields hold `cur_vao`'s working copy; a bind snapshots the live copy here and loads the target's.
+    vaos: HashMap<u32, Vao>,
+    /// Monotonic VAO name counter (name `0` is the reserved default VAO, never minted).
+    next_vao: u32,
 
     /// The pack/unpack pixel-store parameters (`glPixelStorei`).
     pub pixel_store: PixelStore,
@@ -176,6 +201,9 @@ impl GlContext {
             cull_face: glconst::GL_BACK,
             front_face: glconst::GL_CCW,
             bound_fbo: 0,
+            cur_vao: 0,
+            vaos: HashMap::new(),
+            next_vao: 1,
             pixel_store: PixelStore::default(),
             gl_error: glconst::GL_NO_ERROR,
             draws: Vec::new(),
@@ -253,6 +281,56 @@ impl GlContext {
             self.fbo_targets.insert(gl_tex, (surface, texture));
             (surface, texture, true)
         }
+    }
+
+    // ---- vertex array objects (glGenVertexArrays / glBindVertexArray / …) ------------------------
+
+    /// `glGenVertexArrays` (one name) — mint a fresh VAO name with empty captured state.
+    pub fn gen_vertex_array(&mut self) -> u32 {
+        let id = self.next_vao;
+        self.next_vao += 1;
+        self.vaos.insert(id, Vao::default());
+        id
+    }
+
+    /// `glBindVertexArray(vao)` — snapshot the live attribute array + element-buffer binding into the
+    /// currently-bound VAO, then load `vao`'s captured state into the live context. Binding an unknown
+    /// name creates that VAO on demand (matching GL's "first bind creates the object") with empty state.
+    pub fn bind_vertex_array(&mut self, vao: u32) {
+        self.vaos.insert(self.cur_vao, Vao { attrs: self.attr, element_buffer: self.element_buffer });
+        self.cur_vao = vao;
+        match self.vaos.get(&vao) {
+            Some(v) => {
+                self.attr = v.attrs;
+                self.element_buffer = v.element_buffer;
+            }
+            None => {
+                self.attr = [Attr::default(); MAX_ATTR];
+                self.element_buffer = 0;
+                self.vaos.insert(vao, Vao::default());
+            }
+        }
+    }
+
+    /// `glDeleteVertexArrays` (one name). Deleting the currently-bound VAO reverts the binding to the
+    /// default VAO `0` (GL semantics) and loads its captured state. The default VAO `0` cannot be deleted.
+    /// Returns `false` for an unknown / zero name.
+    pub fn delete_vertex_array(&mut self, vao: u32) -> bool {
+        if vao == 0 {
+            return false;
+        }
+        if self.cur_vao == vao {
+            self.cur_vao = 0;
+            let def = self.vaos.get(&0).copied().unwrap_or_default();
+            self.attr = def.attrs;
+            self.element_buffer = def.element_buffer;
+        }
+        self.vaos.remove(&vao).is_some()
+    }
+
+    /// `glIsVertexArray(vao)` — true once `vao` names a generated (non-default) VAO object.
+    pub fn is_vertex_array(&self, vao: u32) -> bool {
+        vao != 0 && self.vaos.contains_key(&vao)
     }
 
     /// The default-framebuffer draw-target width/height in pixels (the window-surface size).

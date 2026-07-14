@@ -116,6 +116,10 @@ pub struct Attr {
     pub offset: usize,
     /// The GL array-buffer name this attribute fetches from.
     pub buffer: u32,
+    /// The instance-step divisor (`glVertexAttribDivisor`): `0` = advance per vertex, `>0` = per
+    /// instance. This model has a single step rate per vertex-buffer slot, so a non-zero divisor marks
+    /// the slot instance-stepped (the exact rate `N>1` is not modeled — see `service::frame`).
+    pub divisor: u32,
 }
 
 /// An immutable snapshot of the bound draw state at the moment a draw (or clear) is recorded. The frame

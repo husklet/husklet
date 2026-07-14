@@ -107,6 +107,20 @@ pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
     }
 }
 
+/// `glGenerateMipmap(target)` — validate the request. This model samples only the base level (the
+/// neutral-IR textures carry a single mip), so the mip chain is not materialized — an honest no-op on
+/// the pixel data. `target` must be a 2D/cube texture target (else `GL_INVALID_ENUM`) with a texture
+/// bound to the active unit (else `GL_INVALID_OPERATION`); the state is otherwise unchanged.
+pub fn generate_mipmap(ctx: &mut GlContext, target: u32) {
+    if target != GL_TEXTURE_2D && target != GL_TEXTURE_CUBE_MAP {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    if ctx.tex_unit[ctx.active_texture] == 0 {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+    }
+}
+
 /// `glDeleteTextures` (one name).
 pub fn delete_texture(ctx: &mut GlContext, name: u32) -> bool {
     for u in ctx.tex_unit.iter_mut() {
@@ -142,6 +156,29 @@ pub fn delete_framebuffer(ctx: &mut GlContext, name: u32) -> bool {
         ctx.bound_fbo = 0;
     }
     ctx.framebuffers.delete(name)
+}
+
+// ---- vertex array objects ------------------------------------------------------------------------
+
+/// `glGenVertexArrays` (one name).
+pub fn gen_vertex_array(ctx: &mut GlContext) -> u32 {
+    ctx.gen_vertex_array()
+}
+
+/// `glBindVertexArray(vao)` — swap the captured attrib/element-buffer state (see
+/// [`GlContext::bind_vertex_array`]).
+pub fn bind_vertex_array(ctx: &mut GlContext, vao: u32) {
+    ctx.bind_vertex_array(vao);
+}
+
+/// `glDeleteVertexArrays` (one name).
+pub fn delete_vertex_array(ctx: &mut GlContext, vao: u32) -> bool {
+    ctx.delete_vertex_array(vao)
+}
+
+/// `glIsVertexArray(vao)`.
+pub fn is_vertex_array(ctx: &GlContext, vao: u32) -> bool {
+    ctx.is_vertex_array(vao)
 }
 
 // ---- shaders + programs --------------------------------------------------------------------------
@@ -247,6 +284,15 @@ pub fn vertex_attrib_pointer(
         a.stride = stride;
         a.offset = offset;
         a.buffer = ctx.array_buffer;
+    }
+}
+
+/// `glVertexAttribDivisor(index, divisor)` — set the instance-step divisor for attribute `index`
+/// (`0` = per-vertex, `>0` = per-instance). Recorded per attribute; the frame builder marks a
+/// vertex-buffer slot instance-stepped when its attributes carry a non-zero divisor.
+pub fn vertex_attrib_divisor(ctx: &mut GlContext, index: usize, divisor: u32) {
+    if index < ctx.attr.len() {
+        ctx.attr[index].divisor = divisor;
     }
 }
 
@@ -401,23 +447,61 @@ pub fn clear(ctx: &mut GlContext) {
     ctx.draws.push(d);
 }
 
-/// `glDrawArrays(mode, first, count)` — snapshot the bound state and append the draw.
+/// `glDrawArrays(mode, first, count)` — snapshot the bound state and append the draw (one instance).
 pub fn draw_arrays(ctx: &mut GlContext, mode: u32, first: i32, count: i32) {
+    draw_arrays_instanced(ctx, mode, first, count, 1);
+}
+
+/// `glDrawArraysInstanced(mode, first, count, instances)` — like [`draw_arrays`] with an explicit
+/// instance count, recorded onto the draw so the frame builder lowers a `Draw { instance_count }`. A
+/// negative instance count raises `GL_INVALID_VALUE` (first-error-wins) and records nothing; a zero
+/// count (or vertex count) is a legal no-op.
+pub fn draw_arrays_instanced(ctx: &mut GlContext, mode: u32, first: i32, count: i32, instances: i32) {
+    if instances < 0 || count < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if count == 0 || instances == 0 {
+        return;
+    }
     let mut d = snapshot(ctx);
     d.mode = mode;
     d.first = first;
     d.count = count;
+    d.instance_count = instances as u32;
     ctx.draws.push(d);
 }
 
-/// `glDrawElements(mode, count, index_type, offset)` — snapshot + append an indexed draw.
+/// `glDrawElements(mode, count, index_type, offset)` — snapshot + append an indexed draw (one instance).
 pub fn draw_elements(ctx: &mut GlContext, mode: u32, count: i32, index_type: u32, offset: usize) {
+    draw_elements_instanced(ctx, mode, count, index_type, offset, 1);
+}
+
+/// `glDrawElementsInstanced(mode, count, index_type, offset, instances)` — like [`draw_elements`] with
+/// an explicit instance count, lowered to a `DrawIndexed { instance_count }`. A negative instance count
+/// raises `GL_INVALID_VALUE` and records nothing.
+pub fn draw_elements_instanced(
+    ctx: &mut GlContext,
+    mode: u32,
+    count: i32,
+    index_type: u32,
+    offset: usize,
+    instances: i32,
+) {
+    if instances < 0 || count < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if count == 0 || instances == 0 {
+        return;
+    }
     let mut d = snapshot(ctx);
     d.mode = mode;
     d.count = count;
     d.indexed = true;
     d.index_type = index_type;
     d.index_offset = offset;
+    d.instance_count = instances as u32;
     d.elem_buf = ctx.element_buffer;
     ctx.draws.push(d);
 }

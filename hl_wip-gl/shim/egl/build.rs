@@ -208,6 +208,7 @@ const IMPLEMENTED: &[&str] = &[
     // ---- GLES: error / string ----
     "glGetError",
     "glGetString",
+    "glGetStringi",
     // ---- GLES: state / capability queries (glGet*) + pixel store ----
     "glGetIntegerv",
     "glGetFloatv",
@@ -221,6 +222,8 @@ const IMPLEMENTED: &[&str] = &[
     "glGetUniformLocation",
     "glGetAttribLocation",
     "glBindAttribLocation",
+    "glGetActiveUniform",
+    "glGetActiveAttrib",
     // ---- GLES: buffers ----
     "glGenBuffers",
     "glBindBuffer",
@@ -233,6 +236,10 @@ const IMPLEMENTED: &[&str] = &[
     "glBindTexture",
     "glTexImage2D",
     "glTexParameteri",
+    "glTexParameterf",
+    "glTexParameterfv",
+    "glTexParameteriv",
+    "glGenerateMipmap",
     "glDeleteTextures",
     // ---- GLES: shaders + programs ----
     "glCreateShader",
@@ -266,6 +273,7 @@ const IMPLEMENTED: &[&str] = &[
     "glVertexAttribPointer",
     "glEnableVertexAttribArray",
     "glDisableVertexAttribArray",
+    "glVertexAttribDivisor",
     "glClearColor",
     "glClearDepthf",
     "glViewport",
@@ -282,6 +290,13 @@ const IMPLEMENTED: &[&str] = &[
     "glClear",
     "glDrawArrays",
     "glDrawElements",
+    "glDrawArraysInstanced",
+    "glDrawElementsInstanced",
+    // ---- GLES: vertex array objects (GLES3 requires a bound VAO to draw) ----
+    "glGenVertexArrays",
+    "glBindVertexArray",
+    "glDeleteVertexArrays",
+    "glIsVertexArray",
     // ---- GLES: readback (device→host; render + CopyTextureToBuffer + read_buffer) ----
     "glReadPixels",
 ];

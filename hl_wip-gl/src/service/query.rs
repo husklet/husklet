@@ -21,10 +21,15 @@ pub const IDENT_VENDOR: &[u8] = b"hl-gl\0";
 pub const IDENT_RENDERER: &[u8] = b"hl-gl-metal\0";
 pub const IDENT_VERSION: &[u8] = b"OpenGL ES 3.0 hl-gl\0";
 pub const IDENT_GLSL_VERSION: &[u8] = b"OpenGL ES GLSL ES 3.00\0";
-/// No non-core extensions are advertised: the indexed query `glGetStringi` (the ES3 enumeration path) is
-/// not implemented, so `GL_NUM_EXTENSIONS` is kept at `0` to stay consistent (an app that trusted a
-/// non-zero count would then `glGetStringi` a null pointer). An empty list is the honest answer.
+/// No non-core extensions are advertised. `glGetString(GL_EXTENSIONS)` returns this (empty) space-
+/// separated list; the indexed `glGetStringi(GL_EXTENSIONS, i)` enumeration and `GL_NUM_EXTENSIONS`
+/// count both derive from [`EXTENSIONS`], so the three can never disagree. An empty list is the honest
+/// answer (this driver backs only core GLES3).
 pub const IDENT_EXTENSIONS: &[u8] = b"\0";
+
+/// The advertised extension inventory, each entry a NUL-terminated name — the single source of truth for
+/// `glGetStringi` (indexed enumeration) and `GL_NUM_EXTENSIONS` (the count). Currently empty.
+pub const EXTENSIONS: &[&[u8]] = &[];
 
 /// The GLES major/minor version the driver advertises (`glGetIntegerv(GL_MAJOR_VERSION/…)`), matching the
 /// `glGetString(GL_VERSION)` identity above.
@@ -42,9 +47,23 @@ pub const MAX_VARYING_VECTORS: i32 = 15;
 pub const MAX_SAMPLES: i32 = 4;
 pub const VIEWPORT_DIM: i32 = 4096;
 
-/// The number of extensions advertised by `glGetString(GL_EXTENSIONS)` — see [`IDENT_EXTENSIONS`].
+/// The number of extensions advertised (`glGetIntegerv(GL_NUM_EXTENSIONS)`) — the length of the
+/// [`EXTENSIONS`] inventory `glGetStringi` enumerates, so the count and the indexed query agree.
 pub const fn num_extensions() -> i32 {
-    0
+    EXTENSIONS.len() as i32
+}
+
+/// `glGetStringi(name, index)` — the indexed extension query (the ES3 enumeration path). Returns the
+/// `index`-th extension name (NUL-terminated) when `name == GL_EXTENSIONS` and `index` is in range, or
+/// `None` for a bad name / an out-of-range index. Consistent with [`num_extensions`]: with an empty
+/// [`EXTENSIONS`] list every index is out of range, so the caller returns a null pointer (never a
+/// dangling one) and raises the spec error — an app that honored the `GL_NUM_EXTENSIONS` count of `0`
+/// never reaches this.
+pub fn string_i(name: u32, index: u32) -> Option<&'static [u8]> {
+    if name != GL_EXTENSIONS {
+        return None;
+    }
+    EXTENSIONS.get(index as usize).copied()
 }
 
 /// `glGetString(name)` — the identity strings, NUL-terminated. An unrecognized name returns the empty
@@ -228,4 +247,76 @@ pub fn uniform_location(ctx: &GlContext, program: u32, name: &str) -> i32 {
 /// (see [`crate::model::program::Program::attrib_location`]). `-1` for an unknown name / program.
 pub fn attrib_location(ctx: &GlContext, program: u32, name: &str) -> i32 {
     ctx.programs.program(program).map(|p| p.attrib_location(name)).unwrap_or(-1)
+}
+
+// ---- glGetActiveUniform / glGetActiveAttrib ------------------------------------------------------
+
+/// One active program variable's reflection, as `glGetActiveUniform`/`glGetActiveAttrib` report it.
+pub struct ActiveVar {
+    /// The declared variable name.
+    pub name: String,
+    /// The GL type enum (`GL_FLOAT`, `GL_FLOAT_VEC3`, `GL_FLOAT_MAT4`, `GL_SAMPLER_2D`, …).
+    pub gl_type: u32,
+    /// The array length in GLSL elements (`1` for a scalar/vector/matrix — this model does not reflect
+    /// uniform/attribute arrays).
+    pub size: i32,
+}
+
+/// Map a GLSL-ES type keyword to the GL type enum `glGetActiveUniform`/`glGetActiveAttrib` report. An
+/// unrecognized type falls back to `GL_FLOAT` (the safest scalar an app is likely to accept).
+fn gl_type_enum(ty: &str) -> u32 {
+    match ty {
+        "float" => GL_FLOAT,
+        "vec2" => GL_FLOAT_VEC2,
+        "vec3" => GL_FLOAT_VEC3,
+        "vec4" => GL_FLOAT_VEC4,
+        "int" => GL_INT,
+        "ivec2" => GL_INT_VEC2,
+        "ivec3" => GL_INT_VEC3,
+        "ivec4" => GL_INT_VEC4,
+        "uint" => GL_UNSIGNED_INT,
+        "uvec2" => GL_UNSIGNED_INT_VEC2,
+        "uvec3" => GL_UNSIGNED_INT_VEC3,
+        "uvec4" => GL_UNSIGNED_INT_VEC4,
+        "bool" => GL_BOOL,
+        "mat2" | "mat2x2" => GL_FLOAT_MAT2,
+        "mat3" | "mat3x3" => GL_FLOAT_MAT3,
+        "mat4" | "mat4x4" => GL_FLOAT_MAT4,
+        "samplerCube" => GL_SAMPLER_CUBE,
+        "sampler2D" | "sampler2DShadow" => GL_SAMPLER_2D,
+        _ => GL_FLOAT,
+    }
+}
+
+/// `glGetActiveUniform(program, index)` — the reflection of the `index`-th active uniform. The uniforms
+/// are enumerated data-uniforms-first then samplers, matching both `glGetProgramiv(GL_ACTIVE_UNIFORMS)`
+/// (the count) and the location convention of `glGetUniformLocation` (so `index` and location agree).
+/// `None` for an unknown program / unlinked program / out-of-range index.
+pub fn active_uniform(ctx: &GlContext, program: u32, index: u32) -> Option<ActiveVar> {
+    let p = ctx.programs.program(program)?;
+    if !p.linked {
+        return None;
+    }
+    let data = crate::adapter::glsl::program_uniform_decls(&p.vs_src, &p.fs_src);
+    let i = index as usize;
+    if let Some(d) = data.get(i) {
+        return Some(ActiveVar { name: d.name.clone(), gl_type: gl_type_enum(&d.ty), size: 1 });
+    }
+    let samps = crate::adapter::glsl::program_sampler_decls(&p.vs_src, &p.fs_src);
+    samps
+        .get(i - data.len())
+        .map(|d| ActiveVar { name: d.name.clone(), gl_type: gl_type_enum(&d.ty), size: 1 })
+}
+
+/// `glGetActiveAttrib(program, index)` — the reflection of the `index`-th active vertex attribute, in
+/// the declaration order `glGetAttribLocation` resolves against. `None` for an unknown / unlinked
+/// program or an out-of-range index.
+pub fn active_attrib(ctx: &GlContext, program: u32, index: u32) -> Option<ActiveVar> {
+    let p = ctx.programs.program(program)?;
+    if !p.linked {
+        return None;
+    }
+    crate::adapter::glsl::collect_vertex_attrs(&p.vs_src)
+        .get(index as usize)
+        .map(|d| ActiveVar { name: d.name.clone(), gl_type: gl_type_enum(&d.ty), size: 1 })
 }

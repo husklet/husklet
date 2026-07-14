@@ -204,6 +204,7 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         // ---- GLES: error / string / query ----
         "glGetError" => p!(glGetError),
         "glGetString" => p!(glGetString),
+        "glGetStringi" => p!(glGetStringi),
         "glGetIntegerv" => p!(glGetIntegerv),
         "glGetFloatv" => p!(glGetFloatv),
         "glGetBooleanv" => p!(glGetBooleanv),
@@ -216,6 +217,8 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "glGetUniformLocation" => p!(glGetUniformLocation),
         "glGetAttribLocation" => p!(glGetAttribLocation),
         "glBindAttribLocation" => p!(glBindAttribLocation),
+        "glGetActiveUniform" => p!(glGetActiveUniform),
+        "glGetActiveAttrib" => p!(glGetActiveAttrib),
         // ---- GLES: buffers ----
         "glGenBuffers" => p!(glGenBuffers),
         "glBindBuffer" => p!(glBindBuffer),
@@ -228,6 +231,10 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "glBindTexture" => p!(glBindTexture),
         "glTexImage2D" => p!(glTexImage2D),
         "glTexParameteri" => p!(glTexParameteri),
+        "glTexParameterf" => p!(glTexParameterf),
+        "glTexParameterfv" => p!(glTexParameterfv),
+        "glTexParameteriv" => p!(glTexParameteriv),
+        "glGenerateMipmap" => p!(glGenerateMipmap),
         "glDeleteTextures" => p!(glDeleteTextures),
         // ---- GLES: shaders + programs ----
         "glCreateShader" => p!(glCreateShader),
@@ -260,6 +267,7 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "glVertexAttribPointer" => p!(glVertexAttribPointer),
         "glEnableVertexAttribArray" => p!(glEnableVertexAttribArray),
         "glDisableVertexAttribArray" => p!(glDisableVertexAttribArray),
+        "glVertexAttribDivisor" => p!(glVertexAttribDivisor),
         "glClearColor" => p!(glClearColor),
         "glClearDepthf" => p!(glClearDepthf),
         "glViewport" => p!(glViewport),
@@ -276,7 +284,14 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "glClear" => p!(glClear),
         "glDrawArrays" => p!(glDrawArrays),
         "glDrawElements" => p!(glDrawElements),
+        "glDrawArraysInstanced" => p!(glDrawArraysInstanced),
+        "glDrawElementsInstanced" => p!(glDrawElementsInstanced),
         "glReadPixels" => p!(glReadPixels),
+        // ---- GLES: vertex array objects ----
+        "glGenVertexArrays" => p!(glGenVertexArrays),
+        "glBindVertexArray" => p!(glBindVertexArray),
+        "glDeleteVertexArrays" => p!(glDeleteVertexArrays),
+        "glIsVertexArray" => p!(glIsVertexArray),
         // Unknown / extension name we do not advertise → spec-legal "not found".
         _ => core::ptr::null_mut(),
     }
@@ -465,6 +480,23 @@ pub extern "C" fn glGetString(name: u32) -> *const u8 {
     query::gl_string(name).as_ptr()
 }
 
+/// `glGetStringi(name, index)` — the ES3 indexed extension enumeration. Served from the SAME inventory as
+/// `glGetString(GL_EXTENSIONS)` + `glGetIntegerv(GL_NUM_EXTENSIONS)` (see [`query::string_i`]), so the
+/// three never disagree. An out-of-range index raises `GL_INVALID_VALUE` and returns null (never a
+/// dangling pointer); a non-`GL_EXTENSIONS` name raises `GL_INVALID_ENUM`. With no extensions advertised
+/// an app that honors the count of `0` never calls this.
+#[no_mangle]
+pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const u8 {
+    match query::string_i(name, index) {
+        Some(bytes) => bytes.as_ptr(),
+        None => {
+            let e = if name == GL_EXTENSIONS { GL_INVALID_VALUE } else { GL_INVALID_ENUM };
+            with(|s| s.ctx.set_gl_error(e));
+            core::ptr::null()
+        }
+    }
+}
+
 // ==================================================================================================
 // GLES: state / capability queries (glGet*) — read-only; served from the modeled limits + live state
 // ==================================================================================================
@@ -617,6 +649,41 @@ pub extern "C" fn glTexParameteri(_target: u32, pname: u32, param: i32) {
     with(|s| record::tex_parameter(&mut s.ctx, pname, param as u32));
 }
 
+/// `glTexParameterf(target, pname, param)` — the float-typed setter. GL's texture filter/wrap parameters
+/// are enum-valued; the app passes the enum as a float, so it is truncated back to the `GLenum` the
+/// integer path records (`glTexParameteri` parity).
+#[no_mangle]
+pub extern "C" fn glTexParameterf(_target: u32, pname: u32, param: f32) {
+    with(|s| record::tex_parameter(&mut s.ctx, pname, param as u32));
+}
+
+/// `glTexParameterfv(target, pname, params)` — the single-element vector form; reads `params[0]`.
+#[no_mangle]
+pub extern "C" fn glTexParameterfv(_target: u32, pname: u32, params: *const f32) {
+    if params.is_null() {
+        return;
+    }
+    let v = unsafe { *params };
+    with(|s| record::tex_parameter(&mut s.ctx, pname, v as u32));
+}
+
+/// `glTexParameteriv(target, pname, params)` — the single-element integer vector form; reads `params[0]`.
+#[no_mangle]
+pub extern "C" fn glTexParameteriv(_target: u32, pname: u32, params: *const i32) {
+    if params.is_null() {
+        return;
+    }
+    let v = unsafe { *params };
+    with(|s| record::tex_parameter(&mut s.ctx, pname, v as u32));
+}
+
+/// `glGenerateMipmap(target)` — validate + record (an honest no-op on the pixel data; this model samples
+/// the base level only). See [`record::generate_mipmap`].
+#[no_mangle]
+pub extern "C" fn glGenerateMipmap(target: u32) {
+    with(|s| record::generate_mipmap(&mut s.ctx, target));
+}
+
 #[no_mangle]
 pub extern "C" fn glDeleteTextures(n: i32, textures: *const u32) {
     if textures.is_null() || n <= 0 {
@@ -767,6 +834,94 @@ pub extern "C" fn glGetAttribLocation(program: u32, name: *const c_char) -> i32 
 /// re-linking. This matches the reference shim; `glGetAttribLocation` reports the declaration-order slot.
 #[no_mangle]
 pub extern "C" fn glBindAttribLocation(_program: u32, _index: u32, _name: *const c_char) {}
+
+/// Write an active-variable reflection into the `glGetActive{Uniform,Attrib}` out-params: `size`, GL
+/// `type`, the NUL-terminated `name` truncated to `buf_size`, and `length` = chars written (excl. NUL).
+/// Every pointer is null-safe.
+unsafe fn write_active_var(
+    var: &query::ActiveVar,
+    buf_size: i32,
+    length: *mut i32,
+    size: *mut i32,
+    type_: *mut u32,
+    name: *mut c_char,
+) {
+    if !size.is_null() {
+        *size = var.size;
+    }
+    if !type_.is_null() {
+        *type_ = var.gl_type;
+    }
+    let mut written = 0i32;
+    if !name.is_null() && buf_size > 0 {
+        let bytes = var.name.as_bytes();
+        let cap = (buf_size - 1) as usize; // reserve one byte for the terminator
+        let n = bytes.len().min(cap);
+        for (i, &b) in bytes.iter().take(n).enumerate() {
+            *name.add(i) = b as c_char;
+        }
+        *name.add(n) = 0;
+        written = n as i32;
+    }
+    if !length.is_null() {
+        *length = written;
+    }
+}
+
+/// `glGetActiveUniform(program, index, …)` — the `index`-th active uniform's name/type/size from the
+/// reflected tables (data uniforms first, then samplers — matching `glGetUniformLocation`). An
+/// out-of-range index raises `GL_INVALID_VALUE` and reports an empty name.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glGetActiveUniform(
+    program: u32,
+    index: u32,
+    buf_size: i32,
+    length: *mut i32,
+    size: *mut i32,
+    type_: *mut u32,
+    name: *mut c_char,
+) {
+    let var = with(|s| query::active_uniform(&s.ctx, program, index));
+    emit_active_var(var, buf_size, length, size, type_, name);
+}
+
+/// `glGetActiveAttrib(program, index, …)` — the `index`-th active vertex attribute's name/type/size, in
+/// the declaration order `glGetAttribLocation` resolves against. Out-of-range index → `GL_INVALID_VALUE`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glGetActiveAttrib(
+    program: u32,
+    index: u32,
+    buf_size: i32,
+    length: *mut i32,
+    size: *mut i32,
+    type_: *mut u32,
+    name: *mut c_char,
+) {
+    let var = with(|s| query::active_attrib(&s.ctx, program, index));
+    emit_active_var(var, buf_size, length, size, type_, name);
+}
+
+/// Shared tail for `glGetActive{Uniform,Attrib}`: write the reflection, or (on an out-of-range index)
+/// raise `GL_INVALID_VALUE` and report an empty variable.
+fn emit_active_var(
+    var: Option<query::ActiveVar>,
+    buf_size: i32,
+    length: *mut i32,
+    size: *mut i32,
+    type_: *mut u32,
+    name: *mut c_char,
+) {
+    match var {
+        Some(v) => unsafe { write_active_var(&v, buf_size, length, size, type_, name) },
+        None => {
+            with(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
+            let empty = query::ActiveVar { name: String::new(), gl_type: 0, size: 0 };
+            unsafe { write_active_var(&empty, buf_size, length, size, type_, name) };
+        }
+    }
+}
 
 /// `glUniform1i` — in this simplified model an integer uniform binds a sampler: `location` selects the
 /// sampler's declaration index, `v0` the texture unit (mirrors the lowering test's `uniform_sampler`).
@@ -962,6 +1117,13 @@ pub extern "C" fn glDisableVertexAttribArray(index: u32) {
     with(|s| record::disable_vertex_attrib(&mut s.ctx, index as usize));
 }
 
+/// `glVertexAttribDivisor(index, divisor)` — the instance-step rate for attribute `index` (`0` =
+/// per-vertex, `>0` = per-instance). See [`record::vertex_attrib_divisor`].
+#[no_mangle]
+pub extern "C" fn glVertexAttribDivisor(index: u32, divisor: u32) {
+    with(|s| record::vertex_attrib_divisor(&mut s.ctx, index as usize, divisor));
+}
+
 #[no_mangle]
 pub extern "C" fn glClearColor(red: f32, green: f32, blue: f32, alpha: f32) {
     with(|s| record::clear_color(&mut s.ctx, [red, green, blue, alpha]));
@@ -1039,6 +1201,66 @@ pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
 #[no_mangle]
 pub extern "C" fn glDrawElements(mode: u32, count: i32, type_: u32, indices: *const c_void) {
     with(|s| record::draw_elements(&mut s.ctx, mode, count, type_, indices as usize));
+}
+
+/// `glDrawArraysInstanced(mode, first, count, instancecount)` — record an instanced array draw; the
+/// frame builder lowers the recorded instance count into `Draw { instance_count }`.
+#[no_mangle]
+pub extern "C" fn glDrawArraysInstanced(mode: u32, first: i32, count: i32, instancecount: i32) {
+    with(|s| record::draw_arrays_instanced(&mut s.ctx, mode, first, count, instancecount));
+}
+
+/// `glDrawElementsInstanced(mode, count, type, indices, instancecount)` — record an instanced indexed
+/// draw; lowered into `DrawIndexed { instance_count }`.
+#[no_mangle]
+pub extern "C" fn glDrawElementsInstanced(
+    mode: u32,
+    count: i32,
+    type_: u32,
+    indices: *const c_void,
+    instancecount: i32,
+) {
+    with(|s| record::draw_elements_instanced(&mut s.ctx, mode, count, type_, indices as usize, instancecount));
+}
+
+// ==================================================================================================
+// GLES: vertex array objects (GLES3 requires a bound VAO to draw)
+// ==================================================================================================
+
+#[no_mangle]
+pub extern "C" fn glGenVertexArrays(n: i32, arrays: *mut u32) {
+    if arrays.is_null() || n <= 0 {
+        return;
+    }
+    with(|s| unsafe {
+        for i in 0..n as isize {
+            *arrays.offset(i) = record::gen_vertex_array(&mut s.ctx);
+        }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn glBindVertexArray(array: u32) {
+    with(|s| record::bind_vertex_array(&mut s.ctx, array));
+}
+
+#[no_mangle]
+pub extern "C" fn glDeleteVertexArrays(n: i32, arrays: *const u32) {
+    if arrays.is_null() || n <= 0 {
+        return;
+    }
+    with(|s| unsafe {
+        for i in 0..n as isize {
+            record::delete_vertex_array(&mut s.ctx, *arrays.offset(i));
+        }
+    });
+}
+
+/// `glIsVertexArray(array)` — `GL_TRUE`/`GL_FALSE`. Returns the `GLboolean` as the codegen's `u32` ABI
+/// (the low byte is the boolean a C caller reads).
+#[no_mangle]
+pub extern "C" fn glIsVertexArray(array: u32) -> u32 {
+    with(|s| record::is_vertex_array(&s.ctx, array)) as u32
 }
 
 // ==================================================================================================

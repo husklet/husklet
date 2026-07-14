@@ -163,6 +163,26 @@ pub const GL_PACK_ROW_LENGTH: u32 = 0x0D02;
 pub const GL_PACK_SKIP_ROWS: u32 = 0x0D03;
 pub const GL_PACK_SKIP_PIXELS: u32 = 0x0D04;
 
+// GLSL variable type enums (returned by glGetActiveUniform / glGetActiveAttrib `type`).
+pub const GL_FLOAT_VEC2: u32 = 0x8B50;
+pub const GL_FLOAT_VEC3: u32 = 0x8B51;
+pub const GL_FLOAT_VEC4: u32 = 0x8B52;
+pub const GL_INT_VEC2: u32 = 0x8B53;
+pub const GL_INT_VEC3: u32 = 0x8B54;
+pub const GL_INT_VEC4: u32 = 0x8B55;
+pub const GL_BOOL: u32 = 0x8B56;
+pub const GL_UNSIGNED_INT_VEC2: u32 = 0x8DC6;
+pub const GL_UNSIGNED_INT_VEC3: u32 = 0x8DC7;
+pub const GL_UNSIGNED_INT_VEC4: u32 = 0x8DC8;
+pub const GL_FLOAT_MAT2: u32 = 0x8B5A;
+pub const GL_FLOAT_MAT3: u32 = 0x8B5B;
+pub const GL_FLOAT_MAT4: u32 = 0x8B5C;
+pub const GL_SAMPLER_2D: u32 = 0x8B5E;
+pub const GL_SAMPLER_CUBE: u32 = 0x8B60;
+
+// glGenerateMipmap texture targets.
+pub const GL_TEXTURE_CUBE_MAP: u32 = 0x8513;
+
 // GLenum error codes (returned by glGetError; re-declared from result.rs for the model layer).
 pub const GL_NO_ERROR: u32 = 0;
 pub const GL_INVALID_ENUM: u32 = 0x0500;

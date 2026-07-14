@@ -625,6 +625,22 @@ pub fn program_samplers(vs: &str, fs: &str) -> Vec<String> {
     samps.into_iter().map(|d| d.name).collect()
 }
 
+/// The DATA uniforms a linked program declares, in declaration order, as `(name, glsl_type)` — the
+/// reflection `glGetActiveUniform` reports. Matches the order of the uniform-block layout ([`uni_layout`])
+/// and the location convention of [`Program::uniform_location`](crate::model::program::Program::uniform_location)
+/// (data uniforms first, then samplers), so the two never disagree.
+pub fn program_uniform_decls(vs: &str, fs: &str) -> Vec<Decl> {
+    let (data, _samps) = collect_uniforms(&strip_comments(vs), &strip_comments(fs));
+    data
+}
+
+/// The SAMPLER uniforms as `(name, glsl_type)` (`program_samplers` keeps only names; this keeps the
+/// declared sampler type so `glGetActiveUniform` can report `GL_SAMPLER_2D` vs `GL_SAMPLER_CUBE`).
+pub fn program_sampler_decls(vs: &str, fs: &str) -> Vec<Decl> {
+    let (_data, samps) = collect_uniforms(&strip_comments(vs), &strip_comments(fs));
+    samps
+}
+
 /// Translate a vertex+fragment GLSL-ES pair into one combined MSL source (gl_shim.c `translate`).
 pub fn translate(vs_in: &str, fs_in: &str) -> String {
     let vs = strip_comments(vs_in);

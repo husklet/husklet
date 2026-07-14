@@ -236,6 +236,57 @@ fn attrib_location_matches_declaration_order() {
     assert_eq!(query::attrib_location(&c, 4242, "aPos"), -1);
 }
 
+// ---- glGetActiveUniform / glGetActiveAttrib ------------------------------------------------------
+
+#[test]
+fn active_uniform_reflects_declared_name_and_type() {
+    let mut c = ctx_800x600();
+    let prog = linked_program(&mut c);
+
+    // The GL_ACTIVE_UNIFORMS enumeration is data uniforms first (uTint: vec4), then samplers (uTex:
+    // sampler2D) — the same order and count glGetProgramiv(GL_ACTIVE_UNIFORMS) reports (2).
+    assert_eq!(query::get_programiv(&c, prog, GL_ACTIVE_UNIFORMS), 2);
+    let tint = query::active_uniform(&c, prog, 0).expect("uniform 0");
+    assert_eq!(tint.name, "uTint");
+    assert_eq!(tint.gl_type, GL_FLOAT_VEC4);
+    assert_eq!(tint.size, 1);
+
+    let tex = query::active_uniform(&c, prog, 1).expect("uniform 1");
+    assert_eq!(tex.name, "uTex");
+    assert_eq!(tex.gl_type, GL_SAMPLER_2D);
+
+    // An out-of-range index / unknown program reflects nothing.
+    assert!(query::active_uniform(&c, prog, 2).is_none());
+    assert!(query::active_uniform(&c, 4242, 0).is_none());
+}
+
+#[test]
+fn active_attrib_reflects_declared_name_and_type() {
+    let mut c = ctx_800x600();
+    let prog = linked_program(&mut c);
+
+    // Declaration order in VS: aPos (vec2, index 0), aColor (vec3, index 1).
+    let a0 = query::active_attrib(&c, prog, 0).expect("attrib 0");
+    assert_eq!(a0.name, "aPos");
+    assert_eq!(a0.gl_type, GL_FLOAT_VEC2);
+    let a1 = query::active_attrib(&c, prog, 1).expect("attrib 1");
+    assert_eq!(a1.name, "aColor");
+    assert_eq!(a1.gl_type, GL_FLOAT_VEC3);
+
+    assert!(query::active_attrib(&c, prog, 2).is_none());
+}
+
+// ---- glGetStringi --------------------------------------------------------------------------------
+
+#[test]
+fn get_stringi_is_consistent_with_num_extensions() {
+    // With no extensions advertised, every index is out of range → None (the shim returns null), and a
+    // non-GL_EXTENSIONS name is also None. This agrees with GL_NUM_EXTENSIONS == 0.
+    assert_eq!(query::num_extensions(), 0);
+    assert!(query::string_i(GL_EXTENSIONS, 0).is_none());
+    assert!(query::string_i(GL_VERSION, 0).is_none());
+}
+
 // ---- glGetError ----------------------------------------------------------------------------------
 
 #[test]
