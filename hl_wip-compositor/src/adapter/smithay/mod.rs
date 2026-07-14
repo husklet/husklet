@@ -20,5 +20,5 @@ pub mod serve;
 pub mod state;
 
 pub use present::{CapturedFrame, PngPresenter, StoredBuffer};
-pub use serve::run;
+pub use serve::{run, run_auto};
 pub use state::{ClientState, HlState, MonotonicClock};

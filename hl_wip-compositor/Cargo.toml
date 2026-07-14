@@ -68,6 +68,16 @@ name = "wayland_e2e"
 path = "tests/wayland_e2e.rs"
 required-features = ["smithay-adapter"]
 
+# Live-socket discovery proof: the compositor binds the STANDARD `$XDG_RUNTIME_DIR/wayland-N` (+ lock)
+# discovery socket via Smithay's `ListeningSocketSource` (`run_auto`), and a real `wayland-client` finds it
+# through `$WAYLAND_DISPLAY` with `Connection::connect_to_env()` — the exact path a real GUI toolkit takes —
+# then composites a colored buffer to the `PngPresenter`. Its own binary because it mutates process-global
+# `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "wayland_live_socket"
+path = "tests/wayland_live_socket.rs"
+required-features = ["smithay-adapter"]
+
 # Adversarial serve-loop coverage: drives real wayland-clients through the calloop serve loop with the
 # hostile sequences a scene-only test can't reach — a throttled commit then client idle (must still ship +
 # release the frame callback one refresh later), coalesced bursts, no-buffer / damage-only commits,
@@ -90,3 +100,8 @@ required-features = ["macos-surface"]
 name = "present_window"
 path = "examples/present_window.rs"
 required-features = ["macos-surface"]
+
+[[example]]
+name = "serve_auto_probe"
+path = "examples/serve_auto_probe.rs"
+required-features = ["smithay-adapter"]

@@ -5,7 +5,8 @@
 //! `Display` holds `Rc`s), so the whole loop — `Display`, `HlState`, and the `PngPresenter` — is created
 //! and run on ONE thread; a caller that wants it off-thread spawns a thread whose body calls [`run`].
 
-use std::os::unix::net::UnixListener;
+use std::ffi::OsString;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use smithay::reexports::{
     calloop::{generic::Generic, EventLoop, Interest, Mode, PostAction},
     wayland_server::Display,
 };
+use smithay::wayland::socket::ListeningSocketSource;
 
 use super::present::PngPresenter;
 use super::state::{ClientState, HlState};
@@ -25,13 +27,25 @@ struct LoopData {
     display: Display<HlState>,
 }
 
+impl LoopData {
+    /// Turn an accepted client stream into a wayland-server client with its own [`ClientState`]. Shared by
+    /// both socket paths (raw bind and the standard `ListeningSocketSource`).
+    fn insert_client(&mut self, stream: UnixStream) {
+        let _ = stream.set_nonblocking(true);
+        let cs: Arc<ClientState> = Arc::new(self.state.new_client_state());
+        if let Err(e) = self.display.handle().insert_client(stream, cs) {
+            eprintln!("hl_wip-compositor: insert_client failed: {e}");
+        }
+    }
+}
+
 /// Bind `socket_path`, stand up the compositor, and dispatch until `stop` is set.
 ///
 /// Creates the `Display` + [`HlState`] + engine on the calling thread (all `!Send`). `presenter` and
 /// `stop` cross the thread boundary from the caller (both `Send`); grab the presenter's captures handle
 /// BEFORE calling this.
 pub fn run(socket_path: &Path, presenter: PngPresenter, stop: Arc<AtomicBool>) -> std::io::Result<()> {
-    let mut display: Display<HlState> = Display::new().expect("create wl_display");
+    let display: Display<HlState> = Display::new().expect("create wl_display");
     let dh = display.handle();
     let state = HlState::new(&dh, presenter);
 
@@ -50,13 +64,7 @@ pub fn run(socket_path: &Path, presenter: PngPresenter, stop: Arc<AtomicBool>) -
             |_, listener, data: &mut LoopData| {
                 loop {
                     match listener.accept() {
-                        Ok((stream, _)) => {
-                            let _ = stream.set_nonblocking(true);
-                            let cs: Arc<ClientState> = Arc::new(data.state.new_client_state());
-                            if let Err(e) = data.display.handle().insert_client(stream, cs) {
-                                eprintln!("hl_wip-compositor: insert_client failed: {e}");
-                            }
-                        }
+                        Ok((stream, _)) => data.insert_client(stream),
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                         Err(e) => {
                             eprintln!("hl_wip-compositor: accept error: {e}");
@@ -69,8 +77,53 @@ pub fn run(socket_path: &Path, presenter: PngPresenter, stop: Arc<AtomicBool>) -
         )
         .expect("insert socket source");
 
+    drive(event_loop, LoopData { state, display }, stop)
+}
+
+/// Bind the STANDARD Wayland discovery socket and serve until `stop` — the path a real GUI toolkit takes.
+///
+/// Where [`run`] binds a bespoke absolute-path socket (handed to a client that already knows the path),
+/// this uses Smithay's [`ListeningSocketSource`] to bind `$XDG_RUNTIME_DIR/wayland-N` with the sibling
+/// `.lock` file, exactly as a real compositor does. A real client then finds it through `$WAYLAND_DISPLAY`
+/// (Smithay picks the first free `wayland-1..=wayland-32`). The chosen socket name is handed to `on_bound`
+/// BEFORE the serve loop starts — e.g. to publish `WAYLAND_DISPLAY` for a client about to connect.
+///
+/// `$XDG_RUNTIME_DIR` must be set (and absolute) in the environment before this is called; that is where
+/// the socket is created.
+pub fn run_auto(
+    presenter: PngPresenter,
+    stop: Arc<AtomicBool>,
+    on_bound: impl FnOnce(OsString),
+) -> std::io::Result<()> {
+    let display: Display<HlState> = Display::new().expect("create wl_display");
+    let dh = display.handle();
+    let state = HlState::new(&dh, presenter);
+
+    // The real discovery socket: `$XDG_RUNTIME_DIR/wayland-N` + its `.lock`, the same seam a real client
+    // reaches through `$WAYLAND_DISPLAY`.
+    let source = ListeningSocketSource::new_auto()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("bind wayland socket: {e}")))?;
+    on_bound(source.socket_name().to_os_string());
+
+    let event_loop: EventLoop<LoopData> = EventLoop::try_new().expect("calloop event loop");
+    let handle = event_loop.handle();
+    handle
+        .insert_source(source, |stream, _, data: &mut LoopData| {
+            // `ListeningSocketSource` yields one already-accepted client stream per invocation.
+            data.insert_client(stream);
+        })
+        .expect("insert listening socket source");
+
+    drive(event_loop, LoopData { state, display }, stop)
+}
+
+/// The shared serve loop: insert the `wl_display` dispatch source, then dispatch + pace until `stop`. The
+/// client-accept source is already inserted on `event_loop` by the caller ([`run`] or [`run_auto`]).
+fn drive(event_loop: EventLoop<LoopData>, mut data: LoopData, stop: Arc<AtomicBool>) -> std::io::Result<()> {
+    let handle = event_loop.handle();
+
     // Drive the wl_display fd so queued client requests dispatch into the handlers.
-    let display_fd = display.backend().poll_fd().try_clone_to_owned().expect("dup display fd");
+    let display_fd = data.display.backend().poll_fd().try_clone_to_owned().expect("dup display fd");
     handle
         .insert_source(
             Generic::new(display_fd, Interest::READ, Mode::Level),
@@ -88,7 +141,6 @@ pub fn run(socket_path: &Path, presenter: PngPresenter, stop: Arc<AtomicBool>) -
     const TICK: Duration = Duration::from_millis(16);
 
     let mut event_loop = event_loop;
-    let mut data = LoopData { state, display };
     while !stop.load(Ordering::Relaxed) {
         // Wake no later than the nearest owed repaint, so a throttled frame ships at its refresh boundary
         // instead of a whole tick late; otherwise sleep a full tick waiting on the socket.
