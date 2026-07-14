@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use smithay::reexports::wayland_server::{
     backend::{ClientData, ClientId, DisconnectReason, ObjectId},
-    protocol::{wl_buffer::WlBuffer, wl_shm, wl_surface::WlSurface},
+    protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_shm, wl_surface::WlSurface},
     Client, DisplayHandle, Resource,
 };
 use smithay::input::{Seat, SeatHandler, SeatState};
@@ -32,7 +32,7 @@ use smithay::wayland::{
 use crate::scene::model::{BufferState, Format, Output, OutputId, Rect, SurfaceId, SurfaceRole};
 use crate::scene::port::Clock;
 use crate::scene::service::{BufferChange, Commit};
-use crate::Compositor;
+use crate::{Compositor, FrameOutcome};
 
 use super::present::{PngPresenter, StoredBuffer};
 
@@ -87,6 +87,18 @@ pub struct HlState {
     /// `wl_surface` protocol object → neutral scene surface id. The scene mints collision-free ids; this
     /// is the neutral analogue of `HlState::surface_ids`.
     surface_ids: HashMap<ObjectId, SurfaceId>,
+    /// `wl_surface.frame` callbacks the client is owed but that have NOT yet been fired, keyed by the
+    /// neutral surface they were requested on. A callback is held (not fired at commit) until the frame it
+    /// belongs to actually reaches the presenter — so a throttled frame does not prematurely tell the
+    /// client "your content is on screen, draw the next one". Fired by [`Self::fire_tree_callbacks`] when
+    /// the surface's window root presents (or is cleanly skipped).
+    pending_callbacks: HashMap<SurfaceId, Vec<WlCallback>>,
+    /// Window roots with a repaint owed at the recorded host-monotonic deadline (ns). Populated when a
+    /// commit is throttled (or a present is retryable): the serve loop drains these in
+    /// [`Self::drive_due_repaints`] to re-drive `present_root` at the next refresh boundary, so the
+    /// retained frame ships and its callbacks release even if the client has since gone idle. A later real
+    /// commit that presents the same root supersedes the entry (it is cleared on a completing present).
+    pending_repaints: HashMap<SurfaceId, u64>,
 }
 
 impl HlState {
@@ -101,7 +113,16 @@ impl HlState {
         let mut engine = Compositor::new(presenter, MonotonicClock::new());
         engine.scene.add_output(Output::new(OutputId(1), "HL-0", 1920, 1080, 60_000));
 
-        HlState { compositor, shm, xdg_shell, seat_state, engine, surface_ids: HashMap::new() }
+        HlState {
+            compositor,
+            shm,
+            xdg_shell,
+            seat_state,
+            engine,
+            surface_ids: HashMap::new(),
+            pending_callbacks: HashMap::new(),
+            pending_repaints: HashMap::new(),
+        }
     }
 
     /// Fresh per-client protocol state for `insert_client`.
@@ -125,6 +146,11 @@ impl HlState {
         if let Some(sid) = self.surface_ids.remove(&surface.id()) {
             self.engine.presenter_mut().forget(sid);
             self.engine.scene.remove_surface(sid);
+            // Reclaim any frame callbacks/repaint owed to a surface that just went away: a client that
+            // destroys a surface mid-frame (or disconnects) must not leave a dangling repaint that keeps
+            // re-driving a removed root, nor stale callback objects for a dead protocol resource.
+            self.pending_callbacks.remove(&sid);
+            self.pending_repaints.remove(&sid);
         }
     }
 
@@ -185,14 +211,146 @@ impl HlState {
             None => Commit { buffer: BufferChange::Keep, damage, ..Commit::default() },
         };
 
-        // Drive the neutral policy: apply + (unless cursor / sync-subsurface) compose, present, pace.
-        self.engine.commit(sid, commit);
+        // Hold this commit's `wl_surface.frame` callbacks until the frame they belong to actually reaches
+        // the presenter. Firing them here — before the present decision — would tell the client "your
+        // content is on screen, draw the next frame" even when the frame was throttled and NEVER shown,
+        // which drops the just-committed content (the client overwrites it) or, if the client then idles,
+        // strands stale content on screen forever. The neutral engine models callbacks as a per-surface
+        // count; the adapter owns the concrete `wl_callback` objects and releases them per the pacing
+        // outcome below.
+        self.pending_callbacks.entry(sid).or_default().extend(frame_callbacks);
 
-        // Fire the client's frame callbacks so it draws its next frame (the neutral engine models these
-        // as a count; the adapter owns the concrete `wl_callback` objects).
+        // Drive the neutral policy: apply + (unless cursor / sync-subsurface) compose, present, pace.
+        let outcome = self.engine.commit(sid, commit);
+
+        // Release or retain the held callbacks — and schedule a repaint if the frame was withheld.
+        match outcome.frame {
+            Some(frame) => {
+                let root = self.engine.scene.window_root(sid).unwrap_or(sid);
+                self.settle_frame(root, &frame);
+            }
+            // No window present was driven this commit (a cursor image or a synchronized subsurface, which
+            // ships atomically with its parent's next present). There is no per-frame boundary to gate on
+            // here, so release immediately — matching the pre-existing behavior for these roles and
+            // avoiding a stall if the parent never commits again.
+            None => self.fire_callbacks_for(sid),
+        }
+    }
+
+    /// Act on the pacing outcome of a just-driven present for window root `root`: fire, retain, or drop
+    /// the frame callbacks held for its tree, and arm/clear a repaint so a withheld frame still ships.
+    ///
+    ///  - `throttled` — the frame was coalesced by the vsync throttle (a commit landed within one refresh
+    ///    interval of the last present). Retain the callbacks and arm a repaint at the next refresh
+    ///    boundary; nothing else re-drives `present_root`, so without this the retained frame would never
+    ///    present if the client goes idle.
+    ///  - a completing present (`Presented` / `Skipped`, `complete_callbacks`) — the frame reached the
+    ///    screen (or the tree was already clean): fire the held callbacks and clear any pending repaint.
+    ///  - a retryable failure — keep the callbacks and retry at the next boundary (the engine keeps the
+    ///    tree dirty).
+    ///  - a terminal failure — the frame can never ship: drop the held callbacks and the repaint.
+    fn settle_frame(&mut self, root: SurfaceId, frame: &FrameOutcome) {
+        if frame.throttled {
+            self.arm_repaint(root);
+            return;
+        }
+        let policy = frame.pacing.policy();
+        if policy.complete_callbacks {
+            self.pending_repaints.remove(&root);
+            self.fire_tree_callbacks(root);
+        } else if policy.terminal_cleanup {
+            self.pending_repaints.remove(&root);
+            self.drop_tree_callbacks(root);
+        } else {
+            // Retryable: retain the callbacks and try again on a later tick.
+            self.arm_repaint(root);
+        }
+    }
+
+    /// Record that `root` owes a repaint at its next refresh boundary (or immediately, if it has never
+    /// presented yet — a first present that failed retryably). Earlier deadlines win.
+    fn arm_repaint(&mut self, root: SurfaceId) {
+        let due = self.engine.next_present_due_ns(root).unwrap_or_else(|| self.engine.clock().now_nanos());
+        self.pending_repaints
+            .entry(root)
+            .and_modify(|d| *d = (*d).min(due))
+            .or_insert(due);
+    }
+
+    /// The earliest host-monotonic deadline (ns) at which a repaint is owed, if any — the serve loop
+    /// clamps its next wait to this so a throttled frame ships promptly rather than a fixed tick late.
+    pub fn next_repaint_deadline(&self) -> Option<u64> {
+        self.pending_repaints.values().copied().min()
+    }
+
+    /// Re-drive `present_root` for every window root whose repaint deadline has arrived, releasing the
+    /// callbacks of any frame that now ships. Called by the serve loop each iteration. A root whose
+    /// present is STILL not due (a clock that has not advanced a full interval) is left armed for a later
+    /// tick rather than busy-looped.
+    pub fn drive_due_repaints(&mut self) {
+        let now = self.engine.clock().now_nanos();
+        let due: Vec<SurfaceId> = self
+            .pending_repaints
+            .iter()
+            .filter(|(_, &deadline)| now >= deadline)
+            .map(|(&root, _)| root)
+            .collect();
+        for root in due {
+            // Only surfaces that still exist and still root a window can present.
+            if !self.engine.scene.contains(root) {
+                self.pending_repaints.remove(&root);
+                self.pending_callbacks.remove(&root);
+                continue;
+            }
+            let frame = self.engine.present_root(root);
+            if frame.throttled {
+                // Not actually due yet (deadline race with a non-monotonic clock read): leave armed.
+                self.arm_repaint(root);
+            } else {
+                self.settle_frame(root, &frame);
+            }
+        }
+    }
+
+    /// Fire (and remove) the frame callbacks held for every surface whose window root is `root` — the
+    /// whole presented tree (root + subsurfaces + popups all resolve to it via `window_root`).
+    fn fire_tree_callbacks(&mut self, root: SurfaceId) {
         let time_ms = (self.engine.clock().now_nanos() / 1_000_000) as u32;
-        for callback in frame_callbacks {
-            callback.done(time_ms);
+        let targets: Vec<SurfaceId> = self
+            .pending_callbacks
+            .keys()
+            .copied()
+            .filter(|&sid| self.engine.scene.window_root(sid) == Some(root) || sid == root)
+            .collect();
+        for sid in targets {
+            if let Some(callbacks) = self.pending_callbacks.remove(&sid) {
+                for callback in callbacks {
+                    callback.done(time_ms);
+                }
+            }
+        }
+    }
+
+    /// Fire (and remove) the frame callbacks held for a single surface.
+    fn fire_callbacks_for(&mut self, sid: SurfaceId) {
+        let time_ms = (self.engine.clock().now_nanos() / 1_000_000) as u32;
+        if let Some(callbacks) = self.pending_callbacks.remove(&sid) {
+            for callback in callbacks {
+                callback.done(time_ms);
+            }
+        }
+    }
+
+    /// Drop (without firing) the frame callbacks held for `root`'s tree — a terminally-failed frame.
+    fn drop_tree_callbacks(&mut self, root: SurfaceId) {
+        let targets: Vec<SurfaceId> = self
+            .pending_callbacks
+            .keys()
+            .copied()
+            .filter(|&sid| self.engine.scene.window_root(sid) == Some(root) || sid == root)
+            .collect();
+        for sid in targets {
+            self.pending_callbacks.remove(&sid);
         }
     }
 }

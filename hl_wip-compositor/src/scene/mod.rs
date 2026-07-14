@@ -94,6 +94,20 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
         self.retained_callbacks.get(&sid).copied().unwrap_or(0)
     }
 
+    /// The host-monotonic time at which `root` next becomes due to present — its last delivered present
+    /// plus the output's refresh interval — or `None` if it has never presented or has no output.
+    ///
+    /// This is the exact boundary [`present_root`] tests with [`schedule::should_present`]: a commit that
+    /// arrives before it returns `throttled: true`. An adapter uses this to arm a repaint at that instant,
+    /// so a throttled frame still ships ~one refresh later even if the client then goes idle (the retained
+    /// frame otherwise never re-drives — nothing else calls `present_root`). Saturating so a pathological
+    /// `last + refresh` overflow clamps instead of wrapping to an always-due time.
+    pub fn next_present_due_ns(&self, root: SurfaceId) -> Option<u64> {
+        let last = *self.last_present_ns.get(&root)?;
+        let refresh = self.scene.selected_output(root)?.refresh_nanos();
+        Some(last.saturating_add(refresh))
+    }
+
     /// Apply a commit to a surface WITHOUT presenting (pure state update); returns whether content
     /// changed. Use [`Self::commit`] to also run the present decision.
     pub fn apply_commit(&mut self, sid: SurfaceId, commit: Commit) -> bool {

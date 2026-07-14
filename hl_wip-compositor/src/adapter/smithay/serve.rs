@@ -18,6 +18,7 @@ use smithay::reexports::{
 
 use super::present::PngPresenter;
 use super::state::{ClientState, HlState};
+use crate::scene::port::Clock;
 
 struct LoopData {
     state: HlState,
@@ -82,12 +83,27 @@ pub fn run(socket_path: &Path, presenter: PngPresenter, stop: Arc<AtomicBool>) -
         )
         .expect("insert display source");
 
+    // One refresh interval at 60 Hz — the fixed upper bound on how long the loop sleeps between wakeups,
+    // so a repaint owed to a throttled frame is re-driven about a frame later even with no client traffic.
+    const TICK: Duration = Duration::from_millis(16);
+
     let mut event_loop = event_loop;
     let mut data = LoopData { state, display };
     while !stop.load(Ordering::Relaxed) {
-        if let Err(e) = event_loop.dispatch(Some(Duration::from_millis(16)), &mut data) {
+        // Wake no later than the nearest owed repaint, so a throttled frame ships at its refresh boundary
+        // instead of a whole tick late; otherwise sleep a full tick waiting on the socket.
+        let now = data.state.engine.clock().now_nanos();
+        let wait = match data.state.next_repaint_deadline() {
+            Some(deadline) => Duration::from_nanos(deadline.saturating_sub(now)).min(TICK),
+            None => TICK,
+        };
+        if let Err(e) = event_loop.dispatch(Some(wait), &mut data) {
             eprintln!("hl_wip-compositor: event loop dispatch error (continuing): {e}");
         }
+        // Re-drive any frame the vsync throttle withheld whose refresh boundary has now arrived — this is
+        // what actually ships a late commit + releases the client's frame callback when the client has
+        // gone idle (a real commit arriving first supersedes it, so no double present). Then flush.
+        data.state.drive_due_repaints();
         let _ = data.display.flush_clients();
     }
     Ok(())

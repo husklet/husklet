@@ -68,6 +68,15 @@ name = "wayland_e2e"
 path = "tests/wayland_e2e.rs"
 required-features = ["smithay-adapter"]
 
+# Adversarial serve-loop coverage: drives real wayland-clients through the calloop serve loop with the
+# hostile sequences a scene-only test can't reach — a throttled commit then client idle (must still ship +
+# release the frame callback one refresh later), coalesced bursts, no-buffer / damage-only commits,
+# disconnect mid-frame, and multi-surface interleaving.
+[[test]]
+name = "wayland_serve_adversarial"
+path = "tests/wayland_serve_adversarial.rs"
+required-features = ["smithay-adapter"]
+
 # The macOS present smoke: build the Cocoa/Metal presenter, present one known-color frame, and read it
 # back (offscreen MTLTexture readback — GUI-session-free) to verify the pixels round-tripped on a real
 # Metal device. A second (ignored-by-default) test opens a real NSWindow + CAMetalLayer.
