@@ -290,7 +290,7 @@ fn main() -> glib::ExitCode {
 fn open_manager(app: &gtk::Application) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("dd")
+        .title("hl")
         .default_width(480)
         .default_height(560)
         .build();
@@ -618,7 +618,7 @@ fn save_term_config(cfg: &TermConfig) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut s = String::from("# dd terminal config — ~/.hl/term.conf\n# edit here or via Settings; open terminals live-reload.\n\n");
+    let mut s = String::from("# hl terminal config — ~/.hl/term.conf\n# edit here or via Settings; open terminals live-reload.\n\n");
     s.push_str(&format!("font_family = {}\n", cfg.font_family));
     s.push_str(&format!("font_size = {}\n", if cfg.font_size.fract().abs() < f64::EPSILON { format!("{}", cfg.font_size as i64) } else { format!("{}", cfg.font_size) }));
     s.push_str("# scrollback: a number of lines, or `unlimited`\n");
@@ -876,7 +876,7 @@ fn is_hex6(v: &str) -> bool {
 fn settings_appearance(ui: &Rc<SettingsUi>) -> gtk::Box {
     let p = pane("Appearance");
     let intro = gtk::Label::new(Some(
-        "dd's terminal look — the all-black aesthetic. Changes save to ~/.hl/term.conf and apply live \
+        "hl's terminal look — the all-black aesthetic. Changes save to ~/.hl/term.conf and apply live \
          to every open terminal.",
     ));
     intro.add_css_class("fhint");
@@ -892,7 +892,7 @@ fn settings_appearance(ui: &Rc<SettingsUi>) -> gtk::Box {
 
     // Theme colors (the all-black ground + text).
     ui.bg.set_hexpand(true);
-    p.append(&field("BACKGROUND (#rrggbb)", &ui.bg, Some("Terminal background. dd ships near-black #1a1d23.")));
+    p.append(&field("BACKGROUND (#rrggbb)", &ui.bg, Some("Terminal background. hl ships near-black #1a1d23.")));
     ui.fg.set_hexpand(true);
     p.append(&field("FOREGROUND (#rrggbb)", &ui.fg, Some("Default text color.")));
 

@@ -31,8 +31,8 @@ pub fn group() -> ScenGroup {
             .has("Welcome to nginx!").timeout(60),
         // serve a fixed file we write — deterministic body, exercises static file path + sendfile.
         scen("web/nginx-custom-file", "nginx:alpine")
-            .exec("echo hl-served-ok > /usr/share/nginx/html/dd.txt; nginx; sleep 1; \
-                   wget -qO- http://127.0.0.1/dd.txt")
+            .exec("echo hl-served-ok > /usr/share/nginx/html/hl.txt; nginx; sleep 1; \
+                   wget -qO- http://127.0.0.1/hl.txt")
             .has("hl-served-ok").timeout(60),
         // replace the index served at / with a fixed marker.
         scen("web/nginx-index-replace", "nginx:alpine")
@@ -64,8 +64,8 @@ pub fn group() -> ScenGroup {
             .exec("nginx; sleep 1; wget -qO- http://127.0.0.1/")
             .has("Welcome to nginx!").timeout(60),
         scen("web/nginx-stable-custom", "nginx:stable-alpine")
-            .exec("echo hl-served-ok > /usr/share/nginx/html/dd.txt; nginx; sleep 1; \
-                   wget -qO- http://127.0.0.1/dd.txt")
+            .exec("echo hl-served-ok > /usr/share/nginx/html/hl.txt; nginx; sleep 1; \
+                   wget -qO- http://127.0.0.1/hl.txt")
             .has("hl-served-ok").timeout(60),
         scen("web/nginx-stable-version", "nginx:stable-alpine")
             .exec("nginx -v 2>&1")
@@ -95,9 +95,9 @@ pub fn group() -> ScenGroup {
             .has("hl-served-ok").timeout(60),
         // file-server serving a written file.
         scen("web/caddy-file-server", "caddy:2-alpine")
-            .exec("mkdir -p /tmp/srv; echo hl-served-ok > /tmp/srv/dd.txt; \
+            .exec("mkdir -p /tmp/srv; echo hl-served-ok > /tmp/srv/hl.txt; \
                    caddy file-server --root /tmp/srv --listen :80 >/dev/null 2>&1 & sleep 1; \
-                   wget -qO- http://127.0.0.1/dd.txt")
+                   wget -qO- http://127.0.0.1/hl.txt")
             .has("hl-served-ok").timeout(60),
 
         // ---- traefik (Go, scratch image — no shell, run form only) --------------------------------
@@ -161,8 +161,8 @@ haproxy -f /tmp/h.cfg -D; sleep 1; wget -qO- http://127.0.0.1/")
             .exec("httpd -v 2>&1")
             .has("Apache/2.4").timeout(45),
         scen("web/httpd-custom", "httpd:alpine")
-            .exec("echo hl-served-ok > /usr/local/apache2/htdocs/dd.txt; httpd -k start 2>/dev/null; \
-                   sleep 1; wget -qO- http://127.0.0.1/dd.txt")
+            .exec("echo hl-served-ok > /usr/local/apache2/htdocs/hl.txt; httpd -k start 2>/dev/null; \
+                   sleep 1; wget -qO- http://127.0.0.1/hl.txt")
             .has("hl-served-ok").timeout(60),
         scen("web/httpd-config-test", "httpd:alpine")
             .exec("httpd -t 2>&1")

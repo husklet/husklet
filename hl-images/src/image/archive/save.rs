@@ -78,7 +78,7 @@ mod tests {
     fn save_then_load_roundtrips_config_and_files() {
         let src = unique_dir("rt-src");
         let rootfs = src.join("rootfs");
-        write_file(&rootfs.join("hello.txt"), b"hello dd\n");
+        write_file(&rootfs.join("hello.txt"), b"hello hl\n");
         write_file(&rootfs.join("etc/motd"), b"welcome\n");
         // A fake x86_64 ELF at a probe path so the re-detected arch is the meaningful LinuxX86_64
         // (NOT the LinuxAarch64 fallback) — proves arch is genuinely probed on load.
@@ -127,7 +127,7 @@ mod tests {
         // Files land under the unpacked rootfs WITH their contents intact.
         assert_eq!(
             std::fs::read_to_string(loaded.rootfs.join("hello.txt")).unwrap(),
-            "hello dd\n"
+            "hello hl\n"
         );
         assert_eq!(
             std::fs::read_to_string(loaded.rootfs.join("etc/motd")).unwrap(),

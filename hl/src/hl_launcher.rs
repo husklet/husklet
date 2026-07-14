@@ -387,8 +387,8 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
             Arch::Amd64 => ("x86_64", "nvidia-smi-amd64"),
             _ => ("aarch64", "nvidia-smi-arm64"),
         };
-        let dd = paths::hl_root();
-        let nvml_pb = dd.join("nvml").join(nvml_arch).join("libnvidia-ml.so.1");
+        let root = paths::hl_root();
+        let nvml_pb = root.join("nvml").join(nvml_arch).join("libnvidia-ml.so.1");
         let nvml_so = if nvml_pb.exists() {
             nvml_pb.to_string_lossy().into_owned()
         } else {
@@ -401,15 +401,15 @@ pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd:
             String::new()
         };
         // Prefer the arch-specific nvidia-smi name, then a generic `nvidia-smi`. Never ship the closed binary.
-        let smi_a = dd.join("bin").join(smi_arch);
-        let smi_g = dd.join("bin").join("nvidia-smi");
+        let smi_a = root.join("bin").join(smi_arch);
+        let smi_g = root.join("bin").join("nvidia-smi");
         let nvidia_smi = if smi_a.exists() {
             smi_a.to_string_lossy().into_owned()
         } else if smi_g.exists() {
             smi_g.to_string_lossy().into_owned()
         } else {
             eprintln!(
-                "[hl] workspace {:?}: drop the real nvidia-smi at {} (or {}) to run it against dd's NVML; \
+                "[hl] workspace {:?}: drop the real nvidia-smi at {} (or {}) to run it against hl's NVML; \
                  the NVML shim is still injected so any NVML client sees the device.",
                 ws.name,
                 smi_a.display(),

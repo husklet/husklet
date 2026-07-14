@@ -3,7 +3,7 @@
 #include <string.h>
 
 /* Static-PIE binaries expose read-only (RELRO/rodata) load segments in /proc/self/maps -- an r--p row for
-   the executable image. dd was reported to emit only r-xp and rw-p. Check for an r--p executable-image row. */
+   the executable image. hl was reported to emit only r-xp and rw-p. Check for an r--p executable-image row. */
 
 int main(void) {
   FILE *f = fopen("/proc/self/maps", "r"); if (!f) { printf("maps_relro open_failed\n"); return 0; }

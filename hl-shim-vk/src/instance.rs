@@ -296,9 +296,9 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
         if s_type == vk::StructureType::PHYSICAL_DEVICE_DRIVER_PROPERTIES.as_raw() {
             let dp = node as *mut vk::PhysicalDeviceDriverProperties;
             if let Some(d) = unsafe { dp.as_mut() } {
-                d.driver_id = vk::DriverId::MESA_LLVMPIPE; // a valid enum; dd has no registered id
-                write_cstr(&mut d.driver_name, "dd");
-                write_cstr(&mut d.driver_info, "dd Metal (Vulkan) 0.1");
+                d.driver_id = vk::DriverId::MESA_LLVMPIPE; // a valid enum; hl has no registered id
+                write_cstr(&mut d.driver_name, "hl");
+                write_cstr(&mut d.driver_info, "hl Metal (Vulkan) 0.1");
                 // Matches the advertised 1.4 core level (the API version this ICD targets; hl is not a
                 // formally-submitted CTS-conformant implementation).
                 d.conformance_version = vk::ConformanceVersion {

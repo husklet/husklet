@@ -245,7 +245,7 @@ fn dmabuf_global_and_iosurface_commit_presents() {
             .u32(0) // plane_idx
             .u32(0) // offset
             .u32(stride)
-            .u32(HL_DMABUF_MOD_MAGIC) // modifier_hi: dd tag
+            .u32(HL_DMABUF_MOD_MAGIC) // modifier_hi: hl tag
             .u32(IOSURFACE_ID), // modifier_lo: IOSurface id
     );
     let buffer = c.alloc();

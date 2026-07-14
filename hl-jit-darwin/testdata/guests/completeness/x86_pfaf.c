@@ -1,5 +1,5 @@
 /* #346 PF/AF lazy dead-flag elimination — differential guest.
-   dd's x86 JIT emits the x86 PF (parity, EFLAGS bit 2) and AF (aux-carry, bit 4) substrate for an ALU
+   hl's x86 JIT emits the x86 PF (parity, EFLAGS bit 2) and AF (aux-carry, bit 4) substrate for an ALU
    op ONLY when it is live: a consumer (lahf / pushfq / setp/setnp / jp/jnp / sahf / popfq) reads it
    before the next op overwrites both. This guest forces every ALU/shift/inc/dec/adc/sbb/neg family
    into BOTH positions and reads PF/AF back through EVERY consumer, so a mis-elimination (skipping a
@@ -45,7 +45,7 @@ static unsigned long acc = 0;
   } } while (0)
 
 /* one shift family (SOP literal shl/shr/sar). #346 gates only the shift's *PF* emission; SHL/SHR/SAR
-   leave AF architecturally UNDEFINED (and dd vs qemu also legitimately differ on the OF/CF of the
+   leave AF architecturally UNDEFINED (and hl vs qemu also legitimately differ on the OF/CF of the
    D0-form shift-by-1), so this asserts ONLY the defined PF that #346 touches — via pushfq (masked to
    PF) and setp, in both LIVE and DEAD (shift-PF killed by a following add) positions. */
 #define RUNSHIFT(SOP) do { \

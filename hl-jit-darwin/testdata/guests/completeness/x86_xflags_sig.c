@@ -1,7 +1,7 @@
 /* x86-xflags signal-timing differential — flags carried across block back-edges must survive async
    signal delivery (the #292 irq-poll exit at block entry). The loops below keep CF live ACROSS the
    back-edge (adc consumes the PREVIOUS iteration's carry; dec preserves CF), while SIGALRM fires
-   repeatedly via setitimer. dd delivers the signal at a block boundary where the deferred/elided
+   repeatedly via setitimer. hl delivers the signal at a block boundary where the deferred/elided
    flag state must be reconstructible (live NZCV is spilled by the exit; sigreturn restores it) —
    any CF loss at the boundary changes the final sums deterministically. The handler count is
    timing-dependent, so only `fired > 0` is printed; the sums are exact and oracle-diffed vs qemu. */

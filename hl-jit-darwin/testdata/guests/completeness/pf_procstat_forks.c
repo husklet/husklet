@@ -5,7 +5,7 @@
 #include <sys/wait.h>
 
 /* /proc/stat `processes` is a cumulative fork counter since boot, so forking N children raises it by >= N.
-   dd previously reported the live registry count (flat). Print delta_ge_n so the oracle diff matches. */
+   hl previously reported the live registry count (flat). Print delta_ge_n so the oracle diff matches. */
 
 static long procs_field(void) {
   FILE *f = fopen("/proc/stat", "r"); if (!f) return -1;

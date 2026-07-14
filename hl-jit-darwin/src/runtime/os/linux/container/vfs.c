@@ -3563,7 +3563,7 @@ static int cpuinfo_x86_block(char *b, size_t n, int idx, int ncpu) {
     return snprintf(
         b, n,
         "processor\t: %d\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 44\n"
-        "model name\t: dd JIT x86-64 processor\nstepping\t: 2\nmicrocode\t: 0x1\ncpu MHz\t\t: 2500.000\n"
+        "model name\t: hl JIT x86-64 processor\nstepping\t: 2\nmicrocode\t: 0x1\ncpu MHz\t\t: 2500.000\n"
         "cache size\t: 8192 KB\nphysical id\t: 0\nsiblings\t: %d\ncore id\t\t: %d\ncpu cores\t: %d\n"
         "apicid\t\t: %d\ninitial apicid\t: %d\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 7\nwp\t\t: yes\n"
         "flags\t\t: fpu tsc cx8 sep pge cmov clflush mmx fxsr sse sse2 syscall nx rdtscp lm constant_tsc "
@@ -4068,7 +4068,7 @@ static int proc_open(const char *rp) {
         else
             n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.current")) {
-        n = snprintf(buf, sizeof buf, "0\n"); // no swap accounted (dd runs no swap)
+        n = snprintf(buf, sizeof buf, "0\n"); // no swap accounted (hl runs no swap)
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.swap.high")) {
         n = snprintf(buf, sizeof buf, "max\n");
     } else if (!strcmp(rp, "/sys/fs/cgroup/memory.peak")) {
@@ -5429,7 +5429,7 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
     case 0xc0406400: { // DRM_IOCTL_VERSION (DRM_IOWR(0x00, struct drm_version), 64-byte arg)
         uint8_t *v = (uint8_t *)arg;
         if (!v) return -EFAULT;
-        static const char NM[] = "hl_gpu", DT[] = "20260707", DS[] = "dd virtual GPU";
+        static const char NM[] = "hl_gpu", DT[] = "20260707", DS[] = "hl virtual GPU";
         int32_t maj = 1, min = 0, pat = 0;
         memcpy(v + 0, &maj, 4); memcpy(v + 4, &min, 4); memcpy(v + 8, &pat, 4);
         uint64_t name_len, date_len, desc_len, name_p, date_p, desc_p;

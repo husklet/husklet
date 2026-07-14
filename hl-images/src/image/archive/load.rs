@@ -348,7 +348,7 @@ mod tests {
     fn load_non_dd_archive_errors_and_leaves_no_leftover() {
         let src = unique_dir("nd-src");
         // Files at the top level, NO `rootfs/` wrapper.
-        write_file(&src.join("loose.txt"), b"not a dd image\n");
+        write_file(&src.join("loose.txt"), b"not a hl image\n");
         write_file(&src.join("data/inner"), b"x\n");
         let bytes = tar_members(&src, &["loose.txt", "data"]);
 
@@ -356,7 +356,7 @@ mod tests {
         let store = Store::new(store_dir.to_str().unwrap());
         let err = store.load_archive(&bytes).expect_err("non-hl archive must be rejected");
         assert!(
-            err.to_string().contains("not a dd image"),
+            err.to_string().contains("not a hl image"),
             "err mentions the not-a-hl-image reason: {err}"
         );
 

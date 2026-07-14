@@ -71,7 +71,7 @@ fn main() {
     c.send(&Message::new(comp, 0).u32(surface)); // create_surface
     c.send(&Message::new(wm, 2).u32(xdg).u32(surface)); // get_xdg_surface
     c.send(&Message::new(xdg, 1).u32(toplevel)); // get_toplevel
-    c.send(&Message::new(toplevel, 2).string("weston-simple-shm (dd)")); // set_title
+    c.send(&Message::new(toplevel, 2).string("weston-simple-shm (hl)")); // set_title
     c.send(&Message::new(surface, 6)); // initial commit
     flush(&mut c, &mut server);
     c.send(&Message::new(xdg, 4).u32(1)); // ack_configure

@@ -1,5 +1,5 @@
 /* x86-xflags cross-block dead-flag elimination — differential guest (oracle: qemu-x86_64).
-   dd's x86 JIT now extends dead-flag elision ACROSS direct block boundaries: at a direct jmp/call/jcc
+   hl's x86 JIT now extends dead-flag elision ACROSS direct block boundaries: at a direct jmp/call/jcc
    edge it scans the SUCCESSOR's guest bytes and skips materializing flags the successor provably
    overwrites before reading (NZCV via FL_SUB/FL_ADD/FL_LOGIC deferral; PF/AF via the #346 substrate).
    This guest puts a flag producer LAST in a block and reads the flags FIRST in the successor through

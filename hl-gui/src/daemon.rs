@@ -9,15 +9,15 @@ use std::path::PathBuf;
 pub(crate) fn spawn_daemon() -> Option<std::process::Child> {
     use std::process::{Command, Stdio};
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let dd = PathBuf::from(&home).join(".hl");
-    let run = dd.join("run");
-    let images = dd.join("images");
+    let hl = PathBuf::from(&home).join(".hl");
+    let run = hl.join("run");
+    let images = hl.join("images");
     let _ = std::fs::create_dir_all(&run);
     let _ = std::fs::create_dir_all(&images);
 
     // Send the daemon's output to the same log file the LaunchAgent uses, so the System view can tail
     // what the daemon is logging regardless of how it was started.
-    let logs = PathBuf::from(&home).join("Library/Logs/dd");
+    let logs = PathBuf::from(&home).join("Library/Logs/hl");
     let _ = std::fs::create_dir_all(&logs);
     let log = |name: &str| {
         std::fs::OpenOptions::new()

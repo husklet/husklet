@@ -19,7 +19,7 @@ pub(crate) fn build_onboarding(sender: &ComponentSender<AppModel>) -> (gtk::Widg
     subtitle.set_xalign(0.0);
     subtitle.set_wrap(true);
     subtitle.add_css_class("hl-sub");
-    let onboard_status = gtk::Label::new(Some("The dd daemon is not running."));
+    let onboard_status = gtk::Label::new(Some("The hl daemon is not running."));
     onboard_status.set_xalign(0.0);
     onboard_status.add_css_class("hl-onboard-status");
     let enable = gtk::Button::with_label("Enable daemon");
@@ -44,12 +44,12 @@ pub(crate) fn build_onboarding(sender: &ComponentSender<AppModel>) -> (gtk::Widg
     cli_head.set_xalign(0.0);
     cli_head.add_css_class("hl-onboard-head");
     let cli_desc = gtk::Label::new(Some(
-        "Install the dd command to manage containers from your terminal.",
+        "Install the hl command to manage containers from your terminal.",
     ));
     cli_desc.set_xalign(0.0);
     cli_desc.set_wrap(true);
     cli_desc.add_css_class("hl-sub");
-    let install = gtk::Button::with_label("Install dd CLI");
+    let install = gtk::Button::with_label("Install hl CLI");
     install.add_css_class("hl-btn");
     install.set_halign(gtk::Align::Start);
     install.set_margin_top(4);

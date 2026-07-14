@@ -49,7 +49,7 @@ use smithay::{
 
 delegate_compositor!(HlState); // wl_compositor + wl_subcompositor
 delegate_shm!(HlState);
-delegate_dmabuf!(HlState); // zwp_linux_dmabuf_v1 (GPU present path → dd IOSurface, zero-copy)
+delegate_dmabuf!(HlState); // zwp_linux_dmabuf_v1 (GPU present path → hl IOSurface, zero-copy)
 delegate_xdg_shell!(HlState);
 delegate_xdg_decoration!(HlState); // zxdg_decoration_manager_v1 + zxdg_toplevel_decoration_v1 (SSD/CSD)
 delegate_xdg_activation!(HlState); // xdg_activation_v1 + xdg_activation_token_v1 (focus/raise on request)

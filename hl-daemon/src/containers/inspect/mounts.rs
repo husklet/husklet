@@ -118,13 +118,13 @@ mod tests {
     fn bind_with_named_volume_source_is_type_volume_with_resolved_mountpoint() {
         let mut c = Container::default();
         c.binds = vec!["myvol:/data:ro".into()];
-        let vols = [vol("myvol", "/var/lib/dd/volumes/myvol")];
+        let vols = [vol("myvol", "/var/lib/hl/volumes/myvol")];
         let out = container_mounts_json(&vols, &c);
         let m = &out[0];
         assert_eq!(m["Type"], "volume");
         assert_eq!(m["Name"], "myvol");
         // Source is resolved to the volume's on-disk mountpoint.
-        assert_eq!(m["Source"], "/var/lib/dd/volumes/myvol");
+        assert_eq!(m["Source"], "/var/lib/hl/volumes/myvol");
         assert_eq!(m["Driver"], "local");
         // `:ro` -> read-only.
         assert_eq!(m["RW"], false);

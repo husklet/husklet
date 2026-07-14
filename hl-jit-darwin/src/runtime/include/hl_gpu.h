@@ -32,7 +32,7 @@ struct hl_gpu_alloc {
 // tag; bit 16 of modifier_hi = "ask the host GPU to RENDER into this surface" (rung 3 first slice — a
 // forwarded 1-op render command). hl-display recognizes the tag, resolves the IOSurface, and (if the
 // render bit is set) runs a Metal render pass into it before compositing.
-#define HL_DMABUF_MOD_MAGIC 0x6464u /* 'dd' */
+#define HL_DMABUF_MOD_MAGIC 0x6464u /* ASCII tag */
 #define HL_DMABUF_RENDER_BIT 0x10000u
 
 #endif

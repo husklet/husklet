@@ -4,8 +4,8 @@
 #include <stdlib.h>
 
 /* /proc/self/environ must match getenv(): programs compare the two, and helper processes scrape procfs.
-   dd generated environ from raw HL_GUEST_ENV, omitting the engine defaults (HOME/LANG/…) it actually
-   places on the stack. Check consistency for a few keys; native is trivially consistent, so is a fixed dd. */
+   hl generated environ from raw HL_GUEST_ENV, omitting the engine defaults (HOME/LANG/…) it actually
+   places on the stack. Check consistency for a few keys; native is trivially consistent, so is a fixed hl. */
 
 static int environ_has(const char *key) {
   FILE *f = fopen("/proc/self/environ", "rb"); if (!f) return -1;

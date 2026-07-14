@@ -4,8 +4,8 @@
 #include <fcntl.h>
 
 /* cgroup v2 advertises controllers (cpuset cpu io memory pids); the standard controller files those
-   controllers imply must exist and be readable. dd previously advertised the controllers but omitted many
-   files, so a cgroup walk/probe failed. Print a native-vs-dd stable readable-boolean per file. */
+   controllers imply must exist and be readable. hl previously advertised the controllers but omitted many
+   files, so a cgroup walk/probe failed. Print a native-vs-hl stable readable-boolean per file. */
 
 static int readable(const char *p) {
   int fd = open(p, O_RDONLY);

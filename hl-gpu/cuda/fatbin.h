@@ -1,5 +1,5 @@
 /* Clean-room nvcc fatbin container walker: extract embedded PTX text out of a fatbin so it can be
- * handed to dd's existing PTX front-end (cuModuleLoadData). Shared by the libcuda driver shim
+ * handed to hl's existing PTX front-end (cuModuleLoadData). Shared by the libcuda driver shim
  * (cuModuleLoadData) and the libcudart runtime shim (__cudaRegisterFatBinary), so extraction lives
  * in ONE place. No NVIDIA source is used — the container layout is the documented/community-reversed
  * public format (see docs/ideas/CUDART_PLAN.md §2).

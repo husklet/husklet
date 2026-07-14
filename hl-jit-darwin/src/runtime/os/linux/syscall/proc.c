@@ -141,7 +141,7 @@ static void exec_close_cloexec_scan(int maxfd) {
         if (exec_fd_is_engine(fd)) continue;
         int fl = fcntl(fd, F_GETFD);
         if (fl >= 0 && (fl & FD_CLOEXEC)) {
-            fd_reset_emul(fd); // drop dd's emulation tables for this fd so a reused number isn't misrouted
+            fd_reset_emul(fd); // drop hl's emulation tables for this fd so a reused number isn't misrouted
             close(fd);
         }
     }
@@ -182,7 +182,7 @@ static void exec_close_cloexec(void) {
         if (exec_fd_is_engine(fd)) continue;
         int fl = fcntl(fd, F_GETFD);
         if (fl >= 0 && (fl & FD_CLOEXEC)) {
-            fd_reset_emul(fd); // drop dd's emulation tables for this fd so a reused number isn't misrouted
+            fd_reset_emul(fd); // drop hl's emulation tables for this fd so a reused number isn't misrouted
             close(fd);
         }
     }

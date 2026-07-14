@@ -88,7 +88,7 @@ impl Daemon {
         }
         let dir = shared_run_dir().join(format!("hl-{}", std::process::id()));
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let sock = dir.join("dd.sock");
+        let sock = dir.join("hl.sock");
         let log = dir.join("daemon.log");
         let _ = std::fs::remove_file(&sock);
         // Start a fresh daemon on a PRIVATE socket/state. NO global pkill — many daemons run in

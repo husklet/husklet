@@ -398,7 +398,7 @@ async fn flow_network_connect_idempotent_no_refcount_leak() {
         net_attach_body("c1"),
     )
     .await;
-    assert_eq!(r.status(), StatusCode::OK, "dd re-connect is idempotent 200 (docker would 403/500)");
+    assert_eq!(r.status(), StatusCode::OK, "hl re-connect is idempotent 200 (docker would 403/500)");
     assert_eq!(
         net_endpoint_count(&app, "mynet").await,
         1,
@@ -433,7 +433,7 @@ async fn flow_network_connect_idempotent_no_refcount_leak() {
         net_attach_body("c1"),
     )
     .await;
-    assert_eq!(r.status(), StatusCode::OK, "dd double-disconnect is idempotent 200 (docker would 500)");
+    assert_eq!(r.status(), StatusCode::OK, "hl double-disconnect is idempotent 200 (docker would 500)");
     assert_eq!(net_endpoint_count(&app, "mynet").await, 0, "still zero endpoints");
 
     // The now-empty net is deletable (proving the refcount truly reached zero).

@@ -38,9 +38,9 @@ int main(void) {
     // slot 0: sf(x0) -- flush the 64B line at x0 from WITHIN this executing block, then return. We call
     // it with x0 = &sf so it invalidates its OWN (already-translated, never-changing) source line.
     uint32_t *sf = arena;
-    sf[0] = 0xD50B7B20u; // dc cvau, x0   (-> nop in dd; harmless data-cache clean)
+    sf[0] = 0xD50B7B20u; // dc cvau, x0   (-> nop in hl; harmless data-cache clean)
     sf[1] = 0xD5033B9Fu; // dsb ish
-    sf[2] = 0xD50B7520u; // ic ivau, x0   (-> dd R_ICFLUSH: SMC hook fires on line &sf)
+    sf[2] = 0xD50B7520u; // ic ivau, x0   (-> hl R_ICFLUSH: SMC hook fires on line &sf)
     sf[3] = 0xD5033B9Fu; // dsb ish
     sf[4] = 0xD5033FDFu; // isb
     sf[5] = 0xD65F03C0u; // ret

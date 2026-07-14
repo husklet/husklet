@@ -68,7 +68,7 @@ pub struct Scenario {
     pub targets: Vec<Target>,
     pub class: Class,
     pub checks: Vec<Check>,
-    pub xfail: Vec<Target>, // targets where dd is known-broken (still must pass on Real)
+    pub xfail: Vec<Target>, // targets where hl is known-broken (still must pass on Real)
     pub timeout: u64,
     pub tty: bool, // allocate a container PTY (docker -t) → isatty/termios/job-control path
 }

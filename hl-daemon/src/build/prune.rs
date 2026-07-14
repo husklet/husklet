@@ -214,16 +214,16 @@ pub(crate) async fn commit_container(State(a): State<App>, Query(q): Query<Commi
     // Persist a hl-image.json so the image survives a daemon restart (discover_images reads it). Include
     // the effective `user` (Config.User) and the guest `arch`/`os` so a committed ELF-less image keeps its
     // default runtime user and doesn't get relabeled to arm64 by discovery's ELF-sniffing fallback.
-    let mut dd = json!({"name": key, "cmd": cmd, "entrypoint": entrypoint, "env": env,
+    let mut desc = json!({"name": key, "cmd": cmd, "entrypoint": entrypoint, "env": env,
         "workdir": workdir, "labels": labels, "user": user,
         "arch": arch.arch(), "os": arch.os()});
     if let Some(c) = &q.comment {
-        dd["comment"] = json!(c);
+        desc["comment"] = json!(c);
     }
     if let Some(a) = &q.author {
-        dd["author"] = json!(a);
+        desc["author"] = json!(a);
     }
-    let _ = std::fs::write(target.join("hl-image.json"), dd.to_string());
+    let _ = std::fs::write(target.join("hl-image.json"), desc.to_string());
     {
         let mut g = a.inner.lock().await;
         // Replace any existing image sharing this repo:tag (mirrors the build/load re-tag dedupe).

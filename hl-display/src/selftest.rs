@@ -25,7 +25,7 @@ fn anon_shared_fd(size: usize) -> RawFd {
     let fd = {
         // macOS: shm_open a uniquely-named object, then immediately unlink it → anonymous, lives with the fd.
         let nm = format!(
-            "/dd{}.{}",
+            "/hl{}.{}",
             unsafe { libc::getpid() },
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -107,7 +107,7 @@ pub fn client(sock: &str) {
     c.send(&Message::new(comp, 0).u32(surface));
     c.send(&Message::new(wm, 2).u32(xdg).u32(surface));
     c.send(&Message::new(xdg, 1).u32(toplevel));
-    c.send(&Message::new(toplevel, 2).string("weston-simple-shm (dd real-socket)"));
+    c.send(&Message::new(toplevel, 2).string("weston-simple-shm (hl real-socket)"));
     c.send(&Message::new(surface, 6)); // initial commit
     drain(&mut c);
     c.send(&Message::new(xdg, 4).u32(1)); // ack_configure
@@ -225,7 +225,7 @@ pub fn input_client(sock: &str, results: &str, run_ms: u64) {
     c.send(&Message::new(comp, 0).u32(surface));
     c.send(&Message::new(wm, 2).u32(xdg).u32(surface));
     c.send(&Message::new(xdg, 1).u32(toplevel));
-    c.send(&Message::new(toplevel, 2).string("dd input round-trip"));
+    c.send(&Message::new(toplevel, 2).string("hl input round-trip"));
     c.send(&Message::new(seat, 0).u32(ptr)); // get_pointer
     c.send(&Message::new(seat, 1).u32(kbd)); // get_keyboard
     c.send(&Message::new(surface, 6)); // initial commit → configure handshake

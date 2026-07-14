@@ -1,14 +1,14 @@
 /* hl's libnvidia-ml.so.1 — a real NVML implementation that reports a hl-fabricated
  * virtual GPU so the *genuine* closed-source `nvidia-smi` binary runs unmodified.
  *
- * There is no NVIDIA hardware on an Apple-silicon Mac; dd substitutes the driver's
+ * There is no NVIDIA hardware on an Apple-silicon Mac; hl substitutes the driver's
  * user-space entry point (NVML) — the same "ship a drop-in .so" seam ZLUDA uses for
  * libcuda — instead of emulating the closed /dev/nvidia* kernel ioctl ABI. This
  * provides *device presence* (tier 1 of docs/ideas/CUDA_ON_METAL.md); it does NOT
  * provide CUDA compute (that is libcuda/libcudart + PTX->Metal, separate tiers).
  *
- * Device values are seeded at nvmlInit from environment set by dd's launcher:
- *   HL_CUDA_NAME   reported device name        (default "dd Metal (CUDA-sim) Device")
+ * Device values are seeded at nvmlInit from environment set by hl's launcher:
+ *   HL_CUDA_NAME   reported device name        (default "hl Metal (CUDA-sim) Device")
  *   HL_CUDA_CC     compute capability "maj.min" (default "8.6")
  *   HL_CUDA_VRAM   reported VRAM in MB          (default 4096)
  *
@@ -23,7 +23,7 @@
 
 /* ---- fabricated device state (single device) ---- */
 static int         g_inited = 0;
-static char        g_name[NVML_DEVICE_NAME_V2_BUFFER_SIZE] = "dd Metal (CUDA-sim) Device";
+static char        g_name[NVML_DEVICE_NAME_V2_BUFFER_SIZE] = "hl Metal (CUDA-sim) Device";
 static int         g_cc_major = 8;
 static int         g_cc_minor = 6;
 static unsigned long long g_vram_bytes = 4096ULL * 1024 * 1024;
@@ -31,7 +31,7 @@ static char        g_uuid[NVML_DEVICE_UUID_BUFFER_SIZE] = "GPU-dd000000-0000-4d6
 static char        g_serial[NVML_DEVICE_SERIAL_BUFFER_SIZE] = "DD-SIM-00000001";
 /* nvidia-smi refuses to run if the NVML-reported DRIVER version's major differs from the driver the
  * nvidia-smi binary itself was built for ("Mismatch in versions between nvidia-smi and NVML"). So the
- * driver/NVML version strings are seeded from env (HL_CUDA_DRIVER / HL_CUDA_NVML) — dd's launcher can
+ * driver/NVML version strings are seeded from env (HL_CUDA_DRIVER / HL_CUDA_NVML) — hl's launcher can
  * set them to match whichever real nvidia-smi is injected. Defaults track a common LTS driver. */
 static char        g_driver_version[NVML_SYSTEM_DRIVER_VERSION_BUFFER_SIZE] = "535.230.02";
 static char        g_nvml_version[NVML_SYSTEM_NVML_VERSION_BUFFER_SIZE]     = "12.535.230.02";
@@ -395,7 +395,7 @@ nvmlReturn_t nvmlSystemGetProcessName(unsigned int pid, char* name, unsigned int
  * returns NOT_SUPPORTED for nvmlInternalGetExportTable) nor any public source provides it, and it is the
  * same closed-ABI class this project deliberately does not emulate (cf. /dev/nvidia* ioctls). Populating a
  * *partial* slot set would only make the stock render crash/misbehave, so we keep every slot NOT_SUPPORTED:
- * that cleanly steers the list/query modes onto our public API (they render the dd device for real) and
+ * that cleanly steers the list/query modes onto our public API (they render the hl device for real) and
  * makes the default dashboard fail cleanly. **Query/list = real; default dashboard = closed-ABI boundary.** */
 static nvmlReturn_t hl_et_notsup(void) { return NVML_ERROR_NOT_SUPPORTED; }
 #define HL_ET_SLOTS 245                     /* matches real libnvidia-ml.so.535.230.02 */

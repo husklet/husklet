@@ -26,7 +26,7 @@ fn resolve_cli() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("HL_CLI_BIN") {
         return Some(PathBuf::from(p));
     }
-    let names = ["hl", "dd"]; // whichever the CLI is built as
+    let names = ["hl", "hl"]; // whichever the CLI is built as
                                  // Prefer the *installed* bundle so the symlink stays valid across relaunches and updates
                                  // (which replace /Applications/hl.app in place), not the dev copy we run from.
     for n in names {

@@ -216,7 +216,7 @@ impl Store {
     /// Write the `hl-image.json` sidecar for a freshly loaded image so discovery restores its run config
     /// after a daemon restart (mirrors the fields the pull path records).
     fn write_sidecar(&self, target: &Path, img: &LoadedImage) {
-        let dd = json!({
+        let desc = json!({
             "name": img.name, "cmd": img.cmd, "env": img.env, "entrypoint": img.entrypoint,
             "workdir": img.workdir, "user": img.user, "exposed_ports": img.exposed_ports,
             "stop_signal": img.stop_signal, "img_volumes": img.img_volumes,
@@ -224,7 +224,7 @@ impl Store {
             // Record os + instruction set so discovery restores the arch even for an ELF-less rootfs.
             "os": img.arch.os(), "arch": img.arch.isa(),
         });
-        let _ = std::fs::write(target.join("hl-image.json"), dd.to_string());
+        let _ = std::fs::write(target.join("hl-image.json"), desc.to_string());
     }
 }
 
@@ -373,8 +373,8 @@ mod tests {
     // store root (load's remove-before-rename would otherwise delete outside the store).
     #[test]
     fn dir_for_contains_path_traversal_names() {
-        let store = Store::new("/var/lib/dd/images");
-        let base = Path::new("/var/lib/dd/images");
+        let store = Store::new("/var/lib/hl/images");
+        let base = Path::new("/var/lib/hl/images");
         for name in ["../../evil", "..", ".", "a/../../b", "", "/etc/passwd"] {
             let d = store.dir_for(name);
             assert!(d.starts_with(base), "{name:?} -> {d:?} escaped the store");

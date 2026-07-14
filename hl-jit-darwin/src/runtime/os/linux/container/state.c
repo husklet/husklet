@@ -434,8 +434,8 @@ static int cgid(void) {
 // "don't change" (POSIX chown) -> leave that xattr untouched so the other id / the default survives.
 // xattrs live on the real APFS upper file, so they persist across a re-stat AND across processes.
 #include <sys/xattr.h>
-#define HL_XATTR_UID "user.dd.uid"
-#define HL_XATTR_GID "user.dd.gid"
+#define HL_XATTR_UID "user.hl.uid"
+#define HL_XATTR_GID "user.hl.gid"
 // PERF (sqlite-select / any stat-heavy workload): reading the guest-chown xattr back on EVERY stat cost
 // two macOS fgetxattr/getxattr per stat (~2.5us each on APFS even for a MISS -> ~5us/stat, 40-50x native
 // fstat). But the hl.uid/hl.gid xattr is set ONLY by an explicit guest chown or a cred-dropped create
@@ -506,7 +506,7 @@ static int chown_xattr_get(const char *hostpath, int fd, uint64_t dev, uint64_t 
     if (use_cache) {
         slot = noxc_slot(dev, ino);
         if (g_noxc[slot].gen == g_chown_gen && g_noxc[slot].dev == dev && g_noxc[slot].ino == ino)
-            return 0; // cached: this inode carries no dd chown xattr (verified at the current generation)
+            return 0; // cached: this inode carries no hl chown xattr (verified at the current generation)
     }
     uint32_t v;
     int present = 0;

@@ -73,7 +73,7 @@ pub(crate) fn render_system(s: &gtk::Box, m: &AppModel, _sender: &ComponentSende
     tv.set_top_margin(8);
     tv.set_bottom_margin(8);
     let text = if snap.daemon_log.trim().is_empty() {
-        "(no daemon log output found at ~/Library/Logs/dd/daemon.err.log)".to_string()
+        "(no daemon log output found at ~/Library/Logs/hl/daemon.err.log)".to_string()
     } else {
         snap.daemon_log.clone()
     };

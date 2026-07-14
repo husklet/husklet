@@ -14,7 +14,7 @@ use select::{elf_machine, image_name_tier, rootfs_machine};
 
 /// Shared paths/config for a run.
 pub struct Ctx {
-    pub repo: PathBuf,   // dd repo root (shared mount, visible to the mac-side JIT)
+    pub repo: PathBuf,   // hl repo root (shared mount, visible to the mac-side JIT)
     pub guests: PathBuf, // hl-jit-darwin/testdata/guests (the JIT engine owns the C guest corpus)
     pub cache: PathBuf,  // compiled-guest cache (under target/, shared)
     pub images: PathBuf, // image rootfs dir (default the poc images)

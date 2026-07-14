@@ -57,7 +57,7 @@ int main(void) {
     __cpuid(0x80000003, bp[4], bp[5], bp[6], bp[7]);
     __cpuid(0x80000004, bp[8], bp[9], bp[10], bp[11]);
     brand[48] = 0;
-    ok &= (strcmp(brand, "dd JIT x86-64 processor") == 0);
+    ok &= (strcmp(brand, "hl JIT x86-64 processor") == 0);
 
     printf("cpuid ok=%d\n", ok ? 1 : 0);
     return 0;

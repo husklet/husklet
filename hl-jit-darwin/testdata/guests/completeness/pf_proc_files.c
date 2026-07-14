@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 /* Common procfs leaves that must exist / carry their standard fields, matching a real Linux container.
-   Prints existence/field booleans so the oracle diff (native/qemu vs dd) catches an absent or sparse leaf. */
+   Prints existence/field booleans so the oracle diff (native/qemu vs hl) catches an absent or sparse leaf. */
 
 static int slurp(const char *p, char *b, int n) {
   FILE *f = fopen(p, "r"); if (!f) return -1;

@@ -109,7 +109,7 @@ mod tests {
             .bridge("net123", "10.0.0.5")
             .egress_socks("127.30.0.1:1080")
             .write_coherence_file("/run/fsgen")
-            .persistent_cache("/home/dd/pcache")
+            .persistent_cache("/home/hl/pcache")
             .external_port_forwarder(true)
             .render_node(true)
             .hostname("host1")
@@ -153,7 +153,7 @@ mod tests {
         assert_eq!(lc.ip, "10.0.0.5"); // HL_IP
         assert_eq!(lc.fsgen_file, "/run/fsgen"); // HL_FSGEN_FILE
         assert_eq!(lc.egress_socks, "127.30.0.1:1080"); // HL_EGRESS_SOCKS
-        assert_eq!(lc.pcache_dir, "/home/dd/pcache"); // HL_JIT_PCACHE_DIR
+        assert_eq!(lc.pcache_dir, "/home/hl/pcache"); // HL_JIT_PCACHE_DIR
         assert!(lc.gpu_iosurface); // HL_GPU_IOSURFACE
     }
 

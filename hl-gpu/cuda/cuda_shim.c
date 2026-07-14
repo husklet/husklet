@@ -1,6 +1,6 @@
 /* hl's libcuda.so.1 — a real CUDA Driver API implementation that runs an app's PTX kernels on hl's
  * software backend, with NO NVIDIA GPU. The "show the Linux container a CUDA device, run the compute
- * on the host" seam (docs/ideas/CUDA_ON_METAL.md): dd substitutes libcuda (the ZLUDA seam) instead of
+ * on the host" seam (docs/ideas/CUDA_ON_METAL.md): hl substitutes libcuda (the ZLUDA seam) instead of
  * emulating the closed /dev/nvidia* ioctl ABI.
  *
  * ## What is real here
@@ -19,8 +19,8 @@
  * ring transport replaces this embedded interpreter, so the compute logic is not duplicated in
  * production. Unimplemented Driver-API tail returns CUDA_ERROR_NOT_SUPPORTED (never crashes).
  *
- * Device presence values are seeded from environment (dd's launcher sets these), matching hl-nvml:
- *   HL_CUDA_NAME  device name        (default "dd Metal (CUDA-sim) Device")
+ * Device presence values are seeded from environment (hl's launcher sets these), matching hl-nvml:
+ *   HL_CUDA_NAME  device name        (default "hl Metal (CUDA-sim) Device")
  *   HL_CUDA_CC    compute capability (default "8.6")
  *   HL_CUDA_VRAM  reported VRAM (MB)  (default 4096)
  */
@@ -38,7 +38,7 @@
  * global device / driver state
  * ================================================================================================= */
 static int          g_inited = 0;
-static char         g_name[128] = "dd Metal (CUDA-sim) Device";
+static char         g_name[128] = "hl Metal (CUDA-sim) Device";
 static int          g_cc_major = 8, g_cc_minor = 6;
 static unsigned long long g_vram = 4096ULL * 1024 * 1024;
 static const int    g_driver_version = 12020; /* 12.2 -> maj*1000 + min*10 */
@@ -623,13 +623,13 @@ static void ptx_execute(Program* p, const unsigned char* blob, unsigned grid[3])
  * Tiering (see the header comment + the task brief):
  *   TIER 1 — fully real, backed by the embedded software backend (init/device/context/module/memory/
  *            launch/stream/event). These execute PTX end-to-end and mutate real host memory.
- *   TIER 2 — semantically-correct minimal impls for dd's model (limits, cache config, occupancy,
+ *   TIER 2 — semantically-correct minimal impls for hl's model (limits, cache config, occupancy,
  *            pointer attributes, address range, error strings, memGetInfo, peer-can-access=false).
  *   TIER 3 — present-but-honest stubs: the symbol is EXPORTED (so dlsym / cuGetProcAddress resolve and
  *            a version script matches real libcuda) and returns the spec-correct error for an op the
  *            hl-gpu model cannot serve — CUDA_ERROR_NOT_SUPPORTED (graphs, IPC, tex/surf, peer,
  *            external interop, VMM, mempools, GL/VK/EGL/VDPAU), or CUDA_ERROR_INVALID_IMAGE for a
- *            cubin/fatbin (dd executes PTX only). Never a crash, never a fake success.
+ *            cubin/fatbin (hl executes PTX only). Never a crash, never a fake success.
  * ================================================================================================= */
 #define REQUIRE_INIT() do { if (!g_inited) return CUDA_ERROR_NOT_INITIALIZED; } while (0)
 
@@ -1085,7 +1085,7 @@ CUresult cuMemAllocAsync(CUdeviceptr* dptr, size_t bytesize, CUstream s) { (void
 CUresult cuMemFreeAsync(CUdeviceptr dptr, CUstream s) { (void)s; return cuMemFree_v2(dptr); }
 
 /* -------------------------------------------------------------------------------------------------
- * pointer attributes (TIER 2: report what dd's model actually knows)
+ * pointer attributes (TIER 2: report what hl's model actually knows)
  * ------------------------------------------------------------------------------------------------- */
 static CUresult pointer_attr(CUpointer_attribute attr, void* data, CUdeviceptr ptr) {
     AllocRec* a = alloc_find((void*)(size_t)ptr);
@@ -1495,7 +1495,7 @@ CUresult cuGetProcAddress_v2(const char* symbol, void** pfn, int cudaVersion, cu
 
 /* =================================================================================================
  * ABI-exported aliases so plain dlsym("cuMemAlloc") etc. resolve to the versioned impl, and the
- * per-thread-default-stream (_ptds/_ptsz) variants exist as real symbols (dd's executor is
+ * per-thread-default-stream (_ptds/_ptsz) variants exist as real symbols (hl's executor is
  * synchronous, so the default-stream variant is identical to the base entry point).
  * ================================================================================================= */
 #define ALIAS(newname, target, ...) \

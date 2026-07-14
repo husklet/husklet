@@ -19,7 +19,7 @@ pub fn unify_titlebar() {
     for i in 0..count {
         unsafe {
             let w = windows.objectAtIndex(i);
-            if w.title().to_string() != "dd" {
+            if w.title().to_string() != "hl" {
                 continue;
             }
             w.setTitlebarAppearsTransparent(true);

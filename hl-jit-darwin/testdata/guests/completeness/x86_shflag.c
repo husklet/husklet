@@ -1,5 +1,5 @@
 /* x86 shift/rotate cross-block dead-flag elision — differential guest (oracle: qemu-x86_64).
-   dd's x86 JIT elides the eager flag synthesis of an IMMEDIATE SHL/SHR/SAR when the shift's whole
+   hl's x86 JIT elides the eager flag synthesis of an IMMEDIATE SHL/SHR/SAR when the shift's whole
    architectural flag output {CF,SF,ZF,OF,PF} is provably dead before any read at every successor entry
    (successor guest-byte liveness scan, translate/x86_64/translate/shift.c + trace.c). This guest puts a
    shift producer LAST in a block and reads its flags FIRST in the successor through every consumer family,

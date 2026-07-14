@@ -315,7 +315,7 @@ impl CocoaPresenter {
             | NSWindowStyleMask::Miniaturizable;
         let window = make_focusable_window(mtm, content, style);
         let t = if title.is_empty() {
-            format!("dd surface {sid}")
+            format!("hl surface {sid}")
         } else {
             title.to_string()
         };
@@ -778,7 +778,7 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
             unsafe { window.setBackgroundColor(Some(&NSColor::clearColor())) };
         }
         let t = if title.is_empty() {
-            format!("dd surface {sid} (metal)")
+            format!("hl surface {sid} (metal)")
         } else {
             title.to_string()
         };

@@ -52,7 +52,7 @@ fn main() {
     c.send(&Message::new(comp, 0).u32(surface)); // create_surface
     c.send(&Message::new(wm, 2).u32(xdg).u32(surface)); // get_xdg_surface
     c.send(&Message::new(xdg, 1).u32(toplevel)); // get_toplevel
-    c.send(&Message::new(toplevel, 2).string("dd live: geometry+popup")); // set_title
+    c.send(&Message::new(toplevel, 2).string("hl live: geometry+popup")); // set_title
     c.send(&Message::new(xdg, 3).i32(GEO_X).i32(GEO_Y).i32(GEO_W).i32(GEO_H)); // set_window_geometry
     c.send(&Message::new(surface, 6)); // initial commit
     pump(&mut c);

@@ -10,7 +10,7 @@
 
 /* /proc/self/task must enumerate EVERY live thread (not just the main tid), and each listed task dir plus
    its per-tid files (stat/status) must be stat/openable -- Linux lets a task walker descend and read them.
-   Prints native-vs-dd stable verdicts. */
+   Prints native-vs-hl stable verdicts. */
 
 static volatile int g_started = 0, g_stop = 0;
 static void *worker(void *a) {

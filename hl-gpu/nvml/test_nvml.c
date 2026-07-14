@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     if (failures) return 3;
 
     /* expected seeded values (env, with defaults matching the shim) */
-    const char* exp_name = getenv("HL_CUDA_NAME"); if (!exp_name || !*exp_name) exp_name = "dd Metal (CUDA-sim) Device";
+    const char* exp_name = getenv("HL_CUDA_NAME"); if (!exp_name || !*exp_name) exp_name = "hl Metal (CUDA-sim) Device";
     const char* exp_cc   = getenv("HL_CUDA_CC");   if (!exp_cc   || !*exp_cc)   exp_cc   = "8.6";
     const char* exp_vram = getenv("HL_CUDA_VRAM"); if (!exp_vram || !*exp_vram) exp_vram = "4096";
     int exp_maj = 8, exp_min = 6; sscanf(exp_cc, "%d.%d", &exp_maj, &exp_min);

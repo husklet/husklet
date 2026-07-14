@@ -18,7 +18,7 @@
  * embedded UNCOMPRESSED PTX, so __cudaRegisterFatBinary just forwards the fatCubin to it. SASS-only or
  * compressed fatbins have no usable PTX and surface a clean cudaErrorInvalidKernelImage (never a crash).
  *
- * Runtime is thin: it forwards to libcuda (DT_NEEDED), which runs the PTX on dd's software backend.
+ * Runtime is thin: it forwards to libcuda (DT_NEEDED), which runs the PTX on hl's software backend.
  */
 #define _GNU_SOURCE
 #include "cudart_min.h"

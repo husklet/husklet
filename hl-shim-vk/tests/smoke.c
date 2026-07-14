@@ -4,7 +4,7 @@
  * built libvk_hl.so and drives it exactly the way the Vulkan **loader** would: negotiate the loader<->
  * ICD interface, resolve entry points through `vk_icdGetInstanceProcAddr`, create an instance,
  * enumerate physical devices, and read the device name. This proves the cdylib is a valid ICD drop-in
- * — the private loader<->driver protocol works and the "dd Metal (Vulkan)" device enumerates — even on
+ * — the private loader<->driver protocol works and the "hl Metal (Vulkan)" device enumerates — even on
  * a host without a Vulkan loader installed.
  *
  *   build+run: cc tests/smoke.c -ldl -o /tmp/vk_smoke && /tmp/vk_smoke <path-to-libvk_hl.so>
@@ -32,7 +32,7 @@ typedef void (*PFN_vkGetPhysicalDeviceProperties)(void *phys, void *pProps);
  * scan for the ASCII name to stay layout-robust. */
 static const char *find_device_name(const unsigned char *props, size_t len) {
     for (size_t i = 0; i + 4 < len; i++) {
-        if (memcmp(props + i, "dd Metal", 8) == 0) {
+        if (memcmp(props + i, "hl Metal", 8) == 0) {
             return (const char *)(props + i);
         }
     }
@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
     getProps(phys[0], props);
     const char *name = find_device_name(props, sizeof props);
     if (!name) {
-        fprintf(stderr, "vkGetPhysicalDeviceProperties: dd device name not found\n");
+        fprintf(stderr, "vkGetPhysicalDeviceProperties: hl device name not found\n");
         return 1;
     }
 

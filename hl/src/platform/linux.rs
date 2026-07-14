@@ -38,7 +38,7 @@ fn render_unit() -> String {
     let err = logs_dir().join("daemon.err.log");
     format!(
         "[Unit]\n\
-         Description=dd VM-less container daemon\n\
+         Description=hl VM-less container daemon\n\
          \n\
          [Service]\n\
          ExecStart={daemon}\n\

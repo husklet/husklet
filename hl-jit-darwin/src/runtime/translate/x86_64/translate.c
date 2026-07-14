@@ -1085,8 +1085,8 @@ static void emit_div64_fast(uint64_t next, uint64_t gpc, int idiv, int rmv) {
     e_str(23, 28, OFF_DIVOP);                     // divisor -> cpu->divop
     emit_exit_const(next, idiv ? R_IDIV : R_DIV); // -> dispatcher (resumes at next after the division)
     // ---- Ldone ----
-    int64_t dd = ((uint8_t *)g_cp - (uint8_t *)b_done) / 4;
-    *b_done = 0x14000000u | ((uint32_t)dd & 0x3FFFFFF); // b Ldone
+    int64_t disp = ((uint8_t *)g_cp - (uint8_t *)b_done) / 4;
+    *b_done = 0x14000000u | ((uint32_t)disp & 0x3FFFFFF); // b Ldone
 }
 
 // 0F 0B (UD2): an explicitly-undefined opcode that real software (e.g. ruby's unreachable/trap paths,

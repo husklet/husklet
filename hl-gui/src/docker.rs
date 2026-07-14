@@ -54,8 +54,8 @@ pub(crate) async fn docker_contexts() -> Vec<String> {
             .collect(),
         _ => vec![],
     };
-    if !list.iter().any(|c| c == "dd") {
-        list.push("dd".to_string());
+    if !list.iter().any(|c| c == "hl") {
+        list.push("hl".to_string());
     }
     list
 }
@@ -63,10 +63,10 @@ pub(crate) async fn docker_contexts() -> Vec<String> {
 /// Switch the `docker` CLI to context `name` (creating the `hl` context first if needed).
 pub(crate) async fn set_context(name: &str, socket: &std::path::Path) {
     use tokio::process::Command;
-    if name == "dd" {
+    if name == "hl" {
         let host = format!("host=unix://{}", socket.display());
         let _ = Command::new(bin())
-            .args(["context", "create", "dd", "--docker", &host])
+            .args(["context", "create", "hl", "--docker", &host])
             .output()
             .await;
     }

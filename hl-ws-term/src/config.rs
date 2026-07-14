@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn absent_file_is_default() {
-        let c = TermConfig::load("/nonexistent/dd/term.conf");
+        let c = TermConfig::load("/nonexistent/hl/term.conf");
         assert_eq!(c, TermConfig::default());
     }
 

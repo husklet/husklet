@@ -54,7 +54,7 @@ pub struct Widgets {
 /// [sidebar | detail] split.
 pub fn build(root: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) -> Widgets {
     load_css();
-    root.set_title(Some("dd"));
+    root.set_title(Some("hl"));
     root.set_default_size(660, 420); // compact onboarding size; expands when the daemon comes up
 
     // Status control (daemon toggle + docker selector). We deliberately DON'T use a GtkHeaderBar:
@@ -484,9 +484,9 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
     w.stack
         .set_visible_child_name(if snap.connected { "main" } else { "onboarding" });
     w.onboard_status.set_label(if snap.connected {
-        "The dd daemon is running."
+        "The hl daemon is running."
     } else {
-        "The dd daemon is not running."
+        "The hl daemon is not running."
     });
 
     // Pane 1: reflect the active category in the nav (Settings now lives inside the System page).
@@ -728,7 +728,7 @@ pub fn render(w: &Widgets, m: &AppModel, sender: &ComponentSender<AppModel>) {
         Some(active) => {
             w.context_seg.set_visible(true);
             w.context_menu.set_label(active);
-            if active == "dd" {
+            if active == "hl" {
                 w.context_menu.add_css_class("hl-active");
             } else {
                 w.context_menu.remove_css_class("hl-active");

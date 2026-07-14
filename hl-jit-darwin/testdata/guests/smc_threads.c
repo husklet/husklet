@@ -42,7 +42,7 @@ static void *worker(void *arg) {
             uint16_t imm = (uint16_t)(s & 0xffff);
             slot[0] = 0x52800000u | ((uint32_t)imm << 5); // movz w0, #imm
             slot[1] = 0xd65f03c0u;                        // ret
-            __builtin___clear_cache((char *)slot, (char *)(slot + 2)); // guest icache-flush -> dd SMC hook
+            __builtin___clear_cache((char *)slot, (char *)(slot + 2)); // guest icache-flush -> hl SMC hook
             uint32_t (*f)(void) = (uint32_t (*)(void))slot;
             sum += f(); // MUST observe imm (never a stale/garbage translation, never a race fault)
         }

@@ -137,11 +137,11 @@ int main(void) {
     int pmsg = msgget(IPC_PRIVATE, IPC_CREAT | 0600);
 
     int dropped = 0;
-    if (geteuid() == 0) { // dd runs as root: drop so the container mode/owner check actually applies
+    if (geteuid() == 0) { // hl runs as root: drop so the container mode/owner check actually applies
         seteuid(65534);
         dropped = 1;
     }
-    int want_owner = dropped ? EPERM : 0; // dd(dropped)=non-owner -> EPERM; oracle=owner -> allowed
+    int want_owner = dropped ? EPERM : 0; // hl(dropped)=non-owner -> EPERM; oracle=owner -> allowed
 
     struct shmid_ds ab;
     int acc = shmctl(acc_id, IPC_STAT, &ab) < 0 ? errno : 0; // EACCES on both (mode-0, non-root)
@@ -170,7 +170,7 @@ int main(void) {
 
     if (dropped) seteuid(0); // regain root to clean everything up
     shmctl(acc_id, IPC_RMID, NULL);
-    shmctl(rmid_id, IPC_RMID, NULL); // no-op on the oracle (already removed above); cleans up on dd
+    shmctl(rmid_id, IPC_RMID, NULL); // no-op on the oracle (already removed above); cleans up on hl
     semctl(psem, 0, IPC_RMID);
     msgctl(pmsg, IPC_RMID, NULL);
     shmctl(sid, IPC_RMID, NULL);

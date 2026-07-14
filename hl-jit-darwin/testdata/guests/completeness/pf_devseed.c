@@ -4,7 +4,7 @@
 #include <unistd.h>
 
 /* Linux accepts writes to /dev/urandom and /dev/random as entropy-pool seeding and returns the byte count;
-   dd returned EPERM. Entropy-seeding probes rely on this. Print the write result, oracle-diffed vs native. */
+   hl returned EPERM. Entropy-seeding probes rely on this. Print the write result, oracle-diffed vs native. */
 
 static int seed_ok(const char *p) {
   int fd = open(p, O_WRONLY);

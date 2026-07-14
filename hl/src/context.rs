@@ -51,7 +51,7 @@ pub fn create() -> std::io::Result<String> {
                 "create",
                 NAME,
                 "--description",
-                "dd VM-less runtime",
+                "hl VM-less runtime",
                 "--docker",
                 &format!("host={host}"),
             ])
@@ -108,7 +108,7 @@ fn write_meta(host: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(&dir)?;
     let meta = serde_json::json!({
         "Name": NAME,
-        "Metadata": { "Description": "dd VM-less runtime" },
+        "Metadata": { "Description": "hl VM-less runtime" },
         "Endpoints": { "docker": { "Host": host, "SkipTLSVerify": false } }
     });
     let mut f = std::fs::File::create(dir.join("meta.json"))?;

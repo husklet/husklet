@@ -73,7 +73,7 @@ pub struct Diagnosis {
     pub what: String,         // the check that failed / timeout / spawn error
     pub signals: Vec<Signal>, // engine signals scraped from output + daemon log
     pub out_clip: String,     // container output (clipped)
-    pub log_clip: String,     // daemon-log tail (clipped) — dd backend only
+    pub log_clip: String,     // daemon-log tail (clipped) — hl backend only
     pub timed_out: bool,
 }
 

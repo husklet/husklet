@@ -2209,11 +2209,11 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
                 // the minimal DRM sysfs tree libdrm's drmGetDevices2 walks: opendir the class/drm dirs,
                 // and serve uevent/dev attribute files as content fds.
                 if (!strncmp(rp, "/sys/dev/char/226:", 18) || !strncmp(rp, "/sys/class/drm", 14)) {
-                    int dd = drm_dir_open(rp);
-                    if (dd != -2) {
-                        if (dd >= 0 && (lf & 0x80000)) fcntl(dd, F_SETFD, FD_CLOEXEC);
-                        if (dd >= 0 && dd < 1024) g_opath[dd] = is_opath;
-                        G_RET(c) = dd < 0 ? (uint64_t)(-errno) : (uint64_t)dd;
+                    int drmfd = drm_dir_open(rp);
+                    if (drmfd != -2) {
+                        if (drmfd >= 0 && (lf & 0x80000)) fcntl(drmfd, F_SETFD, FD_CLOEXEC);
+                        if (drmfd >= 0 && drmfd < 1024) g_opath[drmfd] = is_opath;
+                        G_RET(c) = drmfd < 0 ? (uint64_t)(-errno) : (uint64_t)drmfd;
                         break;
                     }
                     char cb[256];

@@ -33,7 +33,7 @@ pub extern "C" fn eglGetError() -> i32 {
 #[no_mangle]
 pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
     match name {
-        0x3053 => cstr!("dd"),          // EGL_VENDOR
+        0x3053 => cstr!("hl"),          // EGL_VENDOR
         0x3054 => cstr!("1.4 hl-shim"), // EGL_VERSION
         0x308D => cstr!("OpenGL_ES"),   // EGL_CLIENT_APIS
         0x3055 => {

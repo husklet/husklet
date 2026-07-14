@@ -35,7 +35,7 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
     let cli_card = gtk::Box::new(gtk::Orientation::Vertical, 0);
     cli_card.add_css_class("hl-step-card");
     cli_card.append(&action_row(
-        "Install the dd CLI",
+        "Install the hl CLI",
         "Adds hl to your terminal (~/.local/bin).",
         "Install",
         false,
@@ -49,7 +49,7 @@ pub(crate) fn render_settings(s: &gtk::Box, m: &AppModel, sender: &ComponentSend
     rz.set_xalign(0.0);
     rz.add_css_class("hl-h2");
     s.append(&rz);
-    let rt = gtk::Label::new(Some("Reset dd"));
+    let rt = gtk::Label::new(Some("Reset hl"));
     rt.set_xalign(0.0);
     rt.add_css_class("heading");
     let rd = gtk::Label::new(Some(

@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn dir_size_missing_path_is_zero() {
         // An unreadable/absent path is 0, not an error.
-        assert_eq!(dir_size(std::path::Path::new("/dd/no/such/path/xyzzy")), 0);
+        assert_eq!(dir_size(std::path::Path::new("/hl/no/such/path/xyzzy")), 0);
     }
 
     #[test]

@@ -125,7 +125,7 @@ fn read_daemon_log() -> String {
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            PathBuf::from(home).join("Library/Logs/dd/daemon.err.log")
+            PathBuf::from(home).join("Library/Logs/hl/daemon.err.log")
         });
     match std::fs::read_to_string(&path) {
         Ok(s) => last_lines(&s, 400),

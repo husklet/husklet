@@ -8,7 +8,7 @@
 use hl_jit::{Container, Image, Runtime};
 
 fn main() -> Result<(), hl_jit::Error> {
-    let rootfs = std::env::args().nth(1).unwrap_or_else(|| "/var/lib/dd/alpine".into());
+    let rootfs = std::env::args().nth(1).unwrap_or_else(|| "/var/lib/hl/alpine".into());
 
     let rt = Runtime::new()?;
 

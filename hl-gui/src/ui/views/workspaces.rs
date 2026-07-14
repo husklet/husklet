@@ -193,7 +193,7 @@ fn hlcli_bin() -> PathBuf {
     if let Some(p) = std::env::var_os("HL_CLI_BIN") {
         return PathBuf::from(p);
     }
-    let names = ["hl", "dd"];
+    let names = ["hl", "hl"];
     for n in names {
         let p = PathBuf::from("/Applications/hl.app/Contents/Resources").join(n);
         if p.exists() {

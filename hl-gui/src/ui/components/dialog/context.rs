@@ -10,10 +10,10 @@ pub fn prompt_switch_context(
     sender: &ComponentSender<AppModel>,
     current: &str,
 ) {
-    let title = gtk::Label::new(Some("Use dd as your Docker context?"));
+    let title = gtk::Label::new(Some("Use hl as your Docker context?"));
     title.set_xalign(0.0);
     title.add_css_class("title-3");
-    let detail = gtk::Label::new(Some(&format!("Point the docker CLI at this app (switch from \u{201c}{current}\u{201d} to \u{201c}dd\u{201d}).")));
+    let detail = gtk::Label::new(Some(&format!("Point the docker CLI at this app (switch from \u{201c}{current}\u{201d} to \u{201c}hl\u{201d}).")));
     detail.set_xalign(0.0);
     detail.set_wrap(true);
     detail.set_max_width_chars(34);
@@ -21,7 +21,7 @@ pub fn prompt_switch_context(
 
     let cancel = gtk::Button::with_label("Not now");
     cancel.add_css_class("hl-btn");
-    let ok = gtk::Button::with_label("Switch to dd");
+    let ok = gtk::Button::with_label("Switch to hl");
     ok.add_css_class("hl-btn");
     ok.add_css_class("suggested-action");
     let btns = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -54,7 +54,7 @@ pub fn prompt_switch_context(
     let s = sender.clone();
     let w2 = win.clone();
     ok.connect_clicked(move |_| {
-        s.input(Msg::SetContext("dd".to_string()));
+        s.input(Msg::SetContext("hl".to_string()));
         w2.close();
     });
     win.present();

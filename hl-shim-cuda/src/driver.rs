@@ -1514,7 +1514,7 @@ pub extern "C" fn cuModuleGetTexRef(t: *mut *mut c_void, m: *mut c_void, name: *
     if !inited() {
         return CUDA_ERROR_NOT_INITIALIZED;
     }
-    CUDA_ERROR_NOT_FOUND // no texture references in dd's PTX model
+    CUDA_ERROR_NOT_FOUND // no texture references in hl's PTX model
 }
 
 #[no_mangle]
@@ -1523,7 +1523,7 @@ pub extern "C" fn cuModuleGetSurfRef(s: *mut *mut c_void, m: *mut c_void, name: 
     if !inited() {
         return CUDA_ERROR_NOT_INITIALIZED;
     }
-    CUDA_ERROR_NOT_FOUND // no surface references in dd's PTX model
+    CUDA_ERROR_NOT_FOUND // no surface references in hl's PTX model
 }
 
 // ==================================================================================================

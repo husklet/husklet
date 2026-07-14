@@ -1,7 +1,7 @@
 /* seccomp(2) BPF-filter ENFORCEMENT: install a classic-BPF program that denies getpid with EPERM
    (SECCOMP_RET_ERRNO) and allows every other syscall (SECCOMP_RET_ALLOW), then confirm the kernel/engine
    actually runs the filter: getpid must fail -1/EPERM while an allowed syscall (getuid) still succeeds.
-   Native aarch64 (the oracle) enforces this; dd used to accept the install as a no-op and still service
+   Native aarch64 (the oracle) enforces this; hl used to accept the install as a no-op and still service
    getpid (fail-open). Deterministic verdict (errno, not the raw pid/uid) so JIT stdout == native. */
 #include "compat.h"
 #include <stdio.h>

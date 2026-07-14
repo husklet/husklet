@@ -69,12 +69,12 @@ mod tests {
 
     #[test]
     fn rootfs_path_uses_canonical_safe_name_layout() {
-        let store = Store::new("/var/lib/dd/images");
+        let store = Store::new("/var/lib/hl/images");
         let iref = ImageRef::parse("nginx");
         // safe_name(nginx) == canonical "docker.io/library/nginx:latest" percent-encoded (`/`->%2F, `:`->%3A).
         assert_eq!(
             store.rootfs_path(&iref),
-            PathBuf::from("/var/lib/dd/images/docker.io%2Flibrary%2Fnginx%3Alatest/rootfs")
+            PathBuf::from("/var/lib/hl/images/docker.io%2Flibrary%2Fnginx%3Alatest/rootfs")
         );
     }
 }

@@ -67,7 +67,7 @@ pub fn anon_fd_with(bytes: &[u8]) -> Option<i32> {
 /// types, and us symbols for the alphanumerics + common keys — enough for a toolkit to build a working
 /// `xkb_state` and translate the raw evdev codes we send in `wl_keyboard.key`.
 pub const US_XKB_KEYMAP: &str = r#"xkb_keymap {
-xkb_keycodes "dd" {
+xkb_keycodes "hl" {
     minimum = 8;
     maximum = 255;
     <ESC> = 9;
@@ -88,7 +88,7 @@ xkb_keycodes "dd" {
     <LWIN> = 133; <CAPS> = 66;
     <LEFT> = 113; <RGHT> = 114; <UP> = 111; <DOWN> = 116;
 };
-xkb_types "dd" {
+xkb_types "hl" {
     virtual_modifiers NumLock,Alt,LevelThree,Super,Meta;
     type "ONE_LEVEL" { modifiers = none; level_name[Level1] = "Any"; };
     type "TWO_LEVEL" {
@@ -102,7 +102,7 @@ xkb_types "dd" {
         level_name[Level1] = "Base"; level_name[Level2] = "Caps";
     };
 };
-xkb_compatibility "dd" {
+xkb_compatibility "hl" {
     virtual_modifiers NumLock,Alt,LevelThree,Super,Meta;
     // Keys repeat by default — consistent with the wl_keyboard.repeat_info(rate>0) the compositor
     // advertises. (Leaving this False would tell xkbcommon "no key repeats" while the protocol said
@@ -112,7 +112,7 @@ xkb_compatibility "dd" {
     interpret Caps_Lock { action = LockMods(modifiers = Lock); };
     interpret Num_Lock { action = LockMods(modifiers = NumLock); };
 };
-xkb_symbols "dd" {
+xkb_symbols "hl" {
     name[Group1] = "English (US)";
     key <ESC> { [ Escape ] };
     key <AE01> { [ 1, exclam ] }; key <AE02> { [ 2, at ] }; key <AE03> { [ 3, numbersign ] };

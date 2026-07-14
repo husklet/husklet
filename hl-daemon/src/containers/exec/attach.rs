@@ -19,7 +19,7 @@ pub(crate) struct AttachQ {
     stdin: Option<String>,
     stdout: Option<String>,
     stderr: Option<String>,
-    #[allow(dead_code)] // `stream=`/`logs=` are accepted for wire-compat; dd always streams live.
+    #[allow(dead_code)] // `stream=`/`logs=` are accepted for wire-compat; hl always streams live.
     stream: Option<String>,
     #[allow(dead_code)]
     logs: Option<String>,

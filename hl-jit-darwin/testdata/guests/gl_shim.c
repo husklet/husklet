@@ -1771,7 +1771,7 @@ EGLBoolean eglInitialize(EGLDisplay dpy, EGLint *maj, EGLint *min) { (void)dpy; 
 const char *eglQueryString(EGLDisplay dpy, EGLint name) {
     const char *r;
     switch (name) {
-        case EGL_VENDOR: r = "dd"; break;
+        case EGL_VENDOR: r = "hl"; break;
         case EGL_VERSION: r = "1.4 hl-shim"; break;
         case EGL_CLIENT_APIS: r = "OpenGL_ES"; break;
         // Advertise ONLY the client extensions ANGLE's gl-egl backend actually needs and that we back:
@@ -2741,7 +2741,7 @@ const unsigned char *glGetString(GLenum n) {
         case GL_VERSION:
             r = (const unsigned char *)(g_ctx_major >= 3 ? "OpenGL ES 3.0 hl-shim" : "OpenGL ES 2.0 hl-shim");
             break;
-        case GL_VENDOR: r = (const unsigned char *)"dd"; break;
+        case GL_VENDOR: r = (const unsigned char *)"hl"; break;
         case GL_RENDERER: r = (const unsigned char *)"hl-metal"; break;
         case GL_SHADING_LANGUAGE_VERSION:
             r = (const unsigned char *)(g_ctx_major >= 3 ? "OpenGL ES GLSL ES 3.00" : "OpenGL ES GLSL ES 1.00");

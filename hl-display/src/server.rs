@@ -1021,7 +1021,7 @@ impl<P: Presenter> Server<P> {
                         .i32(phys_w)
                         .i32(phys_h)
                         .i32(0)
-                        .string("dd")
+                        .string("hl")
                         .string("hl-display")
                         .i32(0),
                 );
@@ -1042,7 +1042,7 @@ impl<P: Presenter> Server<P> {
                     // use the stable name to identify the display across hotplugs.
                     self.conn.send(&Message::new(id, 4).string("hl-0"));
                     self.conn
-                        .send(&Message::new(id, 5).string("dd virtual display"));
+                        .send(&Message::new(id, 5).string("hl virtual display"));
                 }
                 if ver >= 2 {
                     self.conn.send(&Message::new(id, 2)); // done (wl_output v2+) — must come last.
@@ -2687,7 +2687,7 @@ target_surface={} crop=({},{} {}x{}) backing={}x{} mapped_src=({},{}..{},{}) map
                         // cannot back this buffer. create_immed has no `failed` event, so report the
                         // spec's INVALID_FORMAT protocol error rather than handing back an inert object
                         // the client would attach and get missing frames from.
-                        self.post_error(m.object, 4 /* invalid_format */, "unsupported dmabuf modifier (only dd IOSurface-tagged buffers are usable)");
+                        self.post_error(m.object, 4 /* invalid_format */, "unsupported dmabuf modifier (only hl IOSurface-tagged buffers are usable)");
                     }
                 }
             }

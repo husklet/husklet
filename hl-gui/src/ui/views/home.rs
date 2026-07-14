@@ -79,7 +79,7 @@ pub(crate) fn render_home(home: &gtk::Box, m: &AppModel, sender: &ComponentSende
         "Run hello-world",
         true,
         sender,
-        || Msg::RunImage("hello-dd".to_string()),
+        || Msg::RunImage("hello-hl".to_string()),
     ));
 
     card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
@@ -87,13 +87,13 @@ pub(crate) fn render_home(home: &gtk::Box, m: &AppModel, sender: &ComponentSende
     // 2. Terminal path: install the CLI, point Docker at hl, then the (working) command.
     card.append(&action_row(
         "Use the terminal",
-        "Install the dd CLI, point Docker at dd (selector, top-right), then:",
+        "Install the hl CLI, point Docker at hl (selector, top-right), then:",
         "Install CLI",
         false,
         sender,
         || Msg::InstallCli,
     ));
-    let code = gtk::Label::new(Some("docker run --rm hello-dd"));
+    let code = gtk::Label::new(Some("docker run --rm hello-hl"));
     code.set_xalign(0.0);
     code.set_hexpand(true); // full-width code box (not shrink-wrapped to the text)
     code.set_selectable(true);
@@ -153,8 +153,8 @@ fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box
             let ctxs_cb = ctxs.clone();
             let active_cb = active.clone();
             let s = sender.clone();
-            dropdown.connect_selected_notify(move |dd| {
-                if let Some(name) = ctxs_cb.get(dd.selected() as usize) {
+            dropdown.connect_selected_notify(move |hl| {
+                if let Some(name) = ctxs_cb.get(hl.selected() as usize) {
                     // only act on a real user change (guards against any spurious notify)
                     if name != &active_cb {
                         s.input(Msg::SetContext(name.clone()));
@@ -165,7 +165,7 @@ fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box
             card.append(&row);
 
             let hint = gtk::Label::new(Some(
-                "Pick which daemon `docker` commands talk to. Choose 'dd' to use the no-VM runtime.",
+                "Pick which daemon `docker` commands talk to. Choose 'hl' to use the no-VM runtime.",
             ));
             hint.set_xalign(0.0);
             hint.set_wrap(true);
@@ -177,7 +177,7 @@ fn context_section(m: &AppModel, sender: &ComponentSender<AppModel>) -> gtk::Box
         None => {
             let note = gtk::Label::new(Some(
                 "Docker CLI not found — context switching is unavailable. Install Docker \
-                 (e.g. `brew install docker`) and reopen. dd keeps running either way.",
+                 (e.g. `brew install docker`) and reopen. hl keeps running either way.",
             ));
             note.set_xalign(0.0);
             note.set_wrap(true);

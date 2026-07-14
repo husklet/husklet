@@ -4,7 +4,7 @@
  * the private compiler-emitted registration glue (__cudaRegister* / __cuda*CallConfiguration) that
  * nvcc targets. Enough of the surface that an unmodified CUDA app links against OUR libcudart, queries
  * the device, round-trips memory, and launches kernels delivered as fatbins. libcudart is a thin upper
- * layer over dd's libcuda Driver-API shim (docs/ideas/CUDART_PLAN.md). No NVIDIA source is used.
+ * layer over hl's libcuda Driver-API shim (docs/ideas/CUDART_PLAN.md). No NVIDIA source is used.
  *
  * The load-bearing parts — the cudaError_t enum values, the cudaMemcpyKind values, the dim3 layout,
  * and the cudaLaunchKernel / __cuda* calling conventions — match NVIDIA's published headers so the ABI

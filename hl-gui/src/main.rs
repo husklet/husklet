@@ -446,7 +446,7 @@ impl Component for AppModel {
                 if !self.context_prompted {
                     self.context_prompted = true;
                     if let Some(ctx) = self.snap.docker_context.clone() {
-                        if ctx != "dd" {
+                        if ctx != "hl" {
                             ui::prompt_switch_context(root, &sender, &ctx);
                         }
                     }

@@ -10,7 +10,7 @@ pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
         .as_ref()
         .ok()
         .and_then(|(link, _)| link.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "dd".to_string());
+        .unwrap_or_else(|| "hl".to_string());
     let status_text = match &result {
         Ok((link, _)) => format!("Installed to {}", link.display()),
         Err(e) => format!("Couldn't install: {e}"),
@@ -70,7 +70,7 @@ pub fn show_cli_install(parent: &gtk::ApplicationWindow) {
     v.append(&btnrow);
 
     let win = gtk::Window::builder()
-        .title("Install dd CLI")
+        .title("Install hl CLI")
         .modal(true)
         .resizable(false)
         .default_width(460)

@@ -103,7 +103,7 @@ pub extern "C" fn glGetString(name: u32) -> *const u8 {
                 crate::ADVERTISED_GL_VERSION.as_ptr() as *const c_char
             }
         }
-        0x1F00 => cstr!("dd"),       // GL_VENDOR
+        0x1F00 => cstr!("hl"),       // GL_VENDOR
         0x1F01 => cstr!("hl-metal"), // GL_RENDERER
         0x8B8C => {
             if es3 {

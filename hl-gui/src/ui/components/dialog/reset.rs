@@ -5,7 +5,7 @@ use relm4::ComponentSender;
 
 /// Confirm a full reset (remove all containers/volumes/networks). Frameless dialog, pill buttons.
 pub fn confirm_reset(parent: &gtk::ApplicationWindow, sender: &ComponentSender<AppModel>) {
-    let title = gtk::Label::new(Some("Reset dd?"));
+    let title = gtk::Label::new(Some("Reset hl?"));
     title.set_xalign(0.0);
     title.add_css_class("hl-onboard-head");
     let detail = gtk::Label::new(Some(

@@ -297,7 +297,7 @@ mod tests {
             .bridge("net123", "10.0.0.5")
             .egress_socks("127.30.0.1:1080")
             .write_coherence_file("/run/fsgen")
-            .persistent_cache("/home/dd/pcache")
+            .persistent_cache("/home/hl/pcache")
             .external_port_forwarder(true)
             .build()
             .unwrap();
@@ -312,7 +312,7 @@ mod tests {
         assert!(has(&c, "HL_EGRESS_SOCKS", "127.30.0.1:1080"));
         assert!(has(&c, "HL_FSGEN_FILE", "/run/fsgen"));
         assert!(has(&c, "HL_JIT_PCACHE", "1"));
-        assert!(has(&c, "HL_JIT_PCACHE_DIR", "/home/dd/pcache"));
+        assert!(has(&c, "HL_JIT_PCACHE_DIR", "/home/hl/pcache"));
         assert!(has(&c, "HL_PUBLISH_DAEMON", "1"));
     }
 

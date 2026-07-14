@@ -130,11 +130,11 @@ fn shim_owns_lib(file_name: &str) -> bool {
     const OWNED_PREFIXES: &[&str] = &[
         "libegl",      // libEGL, libEGL_mesa, ANGLE's libEGL
         "libgles",     // libGLESv1_CM, libGLESv2
-        "libvulkan",   // Vulkan loader + dd/lavapipe ICD
+        "libvulkan",   // Vulkan loader + hl/lavapipe ICD
         "libvklayer",  // Vulkan layers
         "libcuda",     // CUDA driver shim (libcuda, libcudart)
         "libwayland-", // wayland-egl platform + client/cursor transport to hl-display
-        "libdd",       // dd's own shim cores (libdd*, libddshim)
+        "libdd",       // hl's own shim cores (libdd*, libddshim)
     ];
     if OWNED_PREFIXES.iter().any(|p| stem.starts_with(p)) {
         return true;

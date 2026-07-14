@@ -303,7 +303,7 @@ static void do_cpuid(struct cpu *c) {
     case 0x80000002:
     case 0x80000003:
     case 0x80000004: { // processor brand string (48 bytes across 3 leaves); MUST match /proc/cpuinfo model name
-        static const char brand[48] = "dd JIT x86-64 processor";
+        static const char brand[48] = "hl JIT x86-64 processor";
         const uint8_t *p = (const uint8_t *)brand + (leaf - 0x80000002) * 16;
         memcpy(&a, p, 4);
         memcpy(&b, p + 4, 4);

@@ -1131,7 +1131,7 @@ impl HlState {
         // pixels FIRST — producing an upright texture (`uw`×`uh`, with w/h swapped for 90°/270°) — so the
         // `wp_viewport` source crop, logical size, and damage are all resolved in upright surface space.
         let cache = self.repacks.get(&sid)?;
-        let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "dd".into());
+        let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "hl".into());
         let (bgra, uw, uh) =
             apply_buffer_transform(&cache.bgra, cache.tex_w, cache.tex_h, buffer_transform);
         let damage = transform_damage(cache.damage, cache.tex_w, cache.tex_h, buffer_transform);

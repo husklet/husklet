@@ -64,7 +64,7 @@ pub const HL_DRIVER_VERSION: u32 = vk::make_api_version(0, 0, 1, 0);
 pub const QUEUE_FAMILY_INDEX: u32 = 0;
 
 /// The physical-device name a real loader/app reads back. The plan's required identity.
-pub const DEVICE_NAME: &str = "dd Metal (Vulkan)";
+pub const DEVICE_NAME: &str = "hl Metal (Vulkan)";
 
 /// Fill a `VkPhysicalDeviceProperties`. Ported from MoltenVK's Apple-silicon reporting: integrated
 /// GPU, Apple vendor id, unified-memory limits. Limits are a plausible Metal-class subset (the long

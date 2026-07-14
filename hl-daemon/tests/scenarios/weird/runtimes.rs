@@ -56,7 +56,7 @@ pub(super) fn items() -> Vec<Scenario> {
         scen("weird/dotnet-ryujit", "mcr.microsoft.com/dotnet/sdk:8.0")
             .exec("mkdir -p /app && cd /app && dotnet new console -o . >/dev/null 2>&1 && cat > Program.cs <<'EOF'\nlong s=0; for(long i=1;i<=1000;i++) s+=i; System.Console.WriteLine(\"NET=\"+s);\nEOF\ndotnet run -c Release 2>/dev/null")
             .has("NET=500500").long().timeout(300)
-            .xfail(&Target::LINUX),   // dotnet build/restore fork-exec under dd — GAPS toolchain
+            .xfail(&Target::LINUX),   // dotnet build/restore fork-exec under hl — GAPS toolchain
 
         // ===================== unusual languages (interpreters / compilers) ====================
         // Haskell GHC: compile to native then run — ghc forks the assembler/linker (toolchain gap).

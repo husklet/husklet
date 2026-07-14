@@ -290,7 +290,7 @@ impl HlState {
             _ => 0u32,
         };
         let (width, height, uv_rect) = logical_size_and_uv(dst, src, tex_w, tex_h, buffer_scale);
-        let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "dd".into());
+        let title = self.titles.get(&sid).cloned().unwrap_or_else(|| "hl".into());
         Some(SurfaceBuffer {
             sid,
             width,

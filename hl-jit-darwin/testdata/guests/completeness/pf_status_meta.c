@@ -12,7 +12,7 @@
    - /proc/self/status Uid/Gid == getuid()/getgid()
    - /proc/version ISA token == uname -m
    - /proc/self/limits "Max core file size" soft == getrlimit(RLIMIT_CORE).rlim_cur
-   Each line prints a native-vs-dd stable verdict (booleans), so the oracle diff catches divergence. */
+   Each line prints a native-vs-hl stable verdict (booleans), so the oracle diff catches divergence. */
 
 static volatile int g_started = 0;
 static volatile int g_stop = 0;
