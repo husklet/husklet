@@ -36,6 +36,8 @@
 //! `hl_jit::Driver` plug (`Vulkan::new`/`inject`). Those are wiring, not lowering.
 
 pub mod adapter;
+#[cfg(feature = "jit")]
+pub mod driver;
 pub mod model;
 pub mod result;
 pub mod service;
@@ -61,7 +63,12 @@ pub type VkSwapchainKHR = u64;
 /// `VK_NULL_HANDLE` — the reserved null non-dispatchable handle.
 pub const VK_NULL_HANDLE: u64 = 0;
 
-// Ergonomic re-exports: downstream (and the shim, later) read `hl_vulkan::{Device, PhysicalDeviceDesc, …}`.
+// Ergonomic re-exports: downstream (and the shim) read `hl_vulkan::{Device, PhysicalDeviceDesc, …}`.
 pub use model::device::Device;
 pub use model::instance::{Instance, PhysicalDeviceDesc};
 pub use model::pipeline::PipelineKind;
+
+// The host-side driver plug (`engine.add(Vulkan::new(..))`). Behind the `jit` feature so the guest ICD
+// shim never pulls hl-jit into its `.so`.
+#[cfg(feature = "jit")]
+pub use driver::{Arch, Vulkan, VulkanSpec};

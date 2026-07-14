@@ -1,0 +1,466 @@
+//! The Vulkan C-ABI aliases, `VkResult` values, loader-dispatchable-handle helper, and the by-value
+//! C structs the hand-written entry points read/write across the seam.
+//!
+//! Dispatchable handles (`VkInstance`/`VkDevice`/`VkQueue`/`VkCommandBuffer`) are opaque pointers to a
+//! loader-magic'd [`Dispatchable`] object (Vulkan-Loader `vk_icd.h` contract). Non-dispatchable handles
+//! are the plain `u64`s the `hl_vulkan` object model already mints. The big by-value structs
+//! (`VkPhysicalDeviceProperties`, `VkBufferCreateInfo`, …) are re-declared clean-room here as
+//! `#[repr(C)]` so their layout matches a real loader/app byte-for-byte — the shim carries no `ash`
+//! dependency (the thinnest-seam doctrine). Struct field order + values are ported from `vk.xml` and
+//! `hl-shim-vk/src/{types.rs,state.rs}`.
+
+#![allow(non_snake_case, non_upper_case_globals, dead_code)]
+
+use core::ffi::{c_char, c_void};
+
+// ---- scalar aliases ------------------------------------------------------------------------------
+pub type VkResult = i32;
+pub type VkBool32 = u32;
+pub type VkDeviceSize = u64;
+pub type VkFlags = u32;
+
+// ---- dispatchable handles (pointer to a loader-magic'd object) -----------------------------------
+pub type VkInstance = *mut c_void;
+pub type VkPhysicalDevice = *mut c_void;
+pub type VkDevice = *mut c_void;
+pub type VkQueue = *mut c_void;
+pub type VkCommandBuffer = *mut c_void;
+
+pub const VK_TRUE: VkBool32 = 1;
+pub const VK_FALSE: VkBool32 = 0;
+
+// ---- VkResult values (stable Vulkan ABI, from vk.xml) --------------------------------------------
+pub const VK_SUCCESS: VkResult = 0;
+pub const VK_NOT_READY: VkResult = 1;
+pub const VK_TIMEOUT: VkResult = 2;
+pub const VK_INCOMPLETE: VkResult = 5;
+pub const VK_ERROR_OUT_OF_HOST_MEMORY: VkResult = -1;
+pub const VK_ERROR_OUT_OF_DEVICE_MEMORY: VkResult = -2;
+pub const VK_ERROR_INITIALIZATION_FAILED: VkResult = -3;
+pub const VK_ERROR_DEVICE_LOST: VkResult = -4;
+pub const VK_ERROR_MEMORY_MAP_FAILED: VkResult = -5;
+pub const VK_ERROR_FEATURE_NOT_PRESENT: VkResult = -8;
+pub const VK_ERROR_INCOMPATIBLE_DRIVER: VkResult = -9;
+pub const VK_ERROR_UNKNOWN: VkResult = -13;
+
+/// The Vulkan API version this ICD advertises: **Vulkan 1.4.0** (mirrors `hl_vulkan::result`).
+pub const HL_API_VERSION: u32 = make_api_version(0, 1, 4, 0);
+pub const HL_DRIVER_VERSION: u32 = make_api_version(0, 0, 1, 0);
+
+/// `VK_MAKE_API_VERSION(variant, major, minor, patch)` — the stable Vulkan version packing.
+pub const fn make_api_version(variant: u32, major: u32, minor: u32, patch: u32) -> u32 {
+    (variant << 29) | (major << 22) | (minor << 12) | patch
+}
+
+// ==================================================================================================
+// loader-dispatchable-handle ABI (ported from hl-shim-vk/src/handle.rs)
+// ==================================================================================================
+
+/// `ICD_LOADER_MAGIC` from `vk_icd.h`. The loader checks `(loaderMagic & 0xffffffff) == this`.
+pub const ICD_LOADER_MAGIC: usize = 0x01CD_C0DE;
+
+/// A dispatchable ICD object: the loader-owned slot in field 0, then the ICD's own state `T`.
+/// `#[repr(C)]` so field 0 is exactly the first pointer-sized word the loader reads/writes.
+#[repr(C)]
+pub struct Dispatchable<T> {
+    /// Owned by the loader after creation — stamped with [`ICD_LOADER_MAGIC`], never read by us.
+    pub loader_data: usize,
+    pub inner: T,
+}
+
+impl<T> Dispatchable<T> {
+    /// Box a new dispatchable object with the loader magic stamped, returning the raw handle the ICD
+    /// returns to the loader.
+    pub fn new(inner: T) -> *mut c_void {
+        Box::into_raw(Box::new(Dispatchable { loader_data: ICD_LOADER_MAGIC, inner })) as *mut c_void
+    }
+    /// Borrow the ICD state behind a dispatchable handle the loader passed back. `None` for NULL.
+    ///
+    /// # Safety
+    /// `h` must be a handle previously returned by [`Dispatchable::new`] for this `T`, still live.
+    pub unsafe fn inner<'a>(h: *mut c_void) -> Option<&'a mut T> {
+        (h as *mut Dispatchable<T>).as_mut().map(|d| &mut d.inner)
+    }
+    /// Reclaim and drop a dispatchable handle (the `vkDestroy*` / `vkFree*` path).
+    ///
+    /// # Safety
+    /// Same contract as [`Dispatchable::inner`]; `h` must not be used afterward.
+    pub unsafe fn free(h: *mut c_void) {
+        if !h.is_null() {
+            drop(Box::from_raw(h as *mut Dispatchable<T>));
+        }
+    }
+}
+
+// ==================================================================================================
+// physical-device property structs (written back to the app; layout from vk.xml)
+// ==================================================================================================
+
+pub const VK_MAX_PHYSICAL_DEVICE_NAME_SIZE: usize = 256;
+pub const VK_UUID_SIZE: usize = 16;
+pub const VK_MAX_MEMORY_TYPES: usize = 32;
+pub const VK_MAX_MEMORY_HEAPS: usize = 16;
+
+/// `VkPhysicalDeviceLimits` — 106 fields in exact vk.xml order (ported from `hl-shim-vk/src/state.rs`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkPhysicalDeviceLimits {
+    pub max_image_dimension_1d: u32,
+    pub max_image_dimension_2d: u32,
+    pub max_image_dimension_3d: u32,
+    pub max_image_dimension_cube: u32,
+    pub max_image_array_layers: u32,
+    pub max_texel_buffer_elements: u32,
+    pub max_uniform_buffer_range: u32,
+    pub max_storage_buffer_range: u32,
+    pub max_push_constants_size: u32,
+    pub max_memory_allocation_count: u32,
+    pub max_sampler_allocation_count: u32,
+    pub buffer_image_granularity: VkDeviceSize,
+    pub sparse_address_space_size: VkDeviceSize,
+    pub max_bound_descriptor_sets: u32,
+    pub max_per_stage_descriptor_samplers: u32,
+    pub max_per_stage_descriptor_uniform_buffers: u32,
+    pub max_per_stage_descriptor_storage_buffers: u32,
+    pub max_per_stage_descriptor_sampled_images: u32,
+    pub max_per_stage_descriptor_storage_images: u32,
+    pub max_per_stage_descriptor_input_attachments: u32,
+    pub max_per_stage_resources: u32,
+    pub max_descriptor_set_samplers: u32,
+    pub max_descriptor_set_uniform_buffers: u32,
+    pub max_descriptor_set_uniform_buffers_dynamic: u32,
+    pub max_descriptor_set_storage_buffers: u32,
+    pub max_descriptor_set_storage_buffers_dynamic: u32,
+    pub max_descriptor_set_sampled_images: u32,
+    pub max_descriptor_set_storage_images: u32,
+    pub max_descriptor_set_input_attachments: u32,
+    pub max_vertex_input_attributes: u32,
+    pub max_vertex_input_bindings: u32,
+    pub max_vertex_input_attribute_offset: u32,
+    pub max_vertex_input_binding_stride: u32,
+    pub max_vertex_output_components: u32,
+    pub max_tessellation_generation_level: u32,
+    pub max_tessellation_patch_size: u32,
+    pub max_tessellation_control_per_vertex_input_components: u32,
+    pub max_tessellation_control_per_vertex_output_components: u32,
+    pub max_tessellation_control_per_patch_output_components: u32,
+    pub max_tessellation_control_total_output_components: u32,
+    pub max_tessellation_evaluation_input_components: u32,
+    pub max_tessellation_evaluation_output_components: u32,
+    pub max_geometry_shader_invocations: u32,
+    pub max_geometry_input_components: u32,
+    pub max_geometry_output_components: u32,
+    pub max_geometry_output_vertices: u32,
+    pub max_geometry_total_output_components: u32,
+    pub max_fragment_input_components: u32,
+    pub max_fragment_output_attachments: u32,
+    pub max_fragment_dual_src_attachments: u32,
+    pub max_fragment_combined_output_resources: u32,
+    pub max_compute_shared_memory_size: u32,
+    pub max_compute_work_group_count: [u32; 3],
+    pub max_compute_work_group_invocations: u32,
+    pub max_compute_work_group_size: [u32; 3],
+    pub sub_pixel_precision_bits: u32,
+    pub sub_texel_precision_bits: u32,
+    pub mipmap_precision_bits: u32,
+    pub max_draw_indexed_index_value: u32,
+    pub max_draw_indirect_count: u32,
+    pub max_sampler_lod_bias: f32,
+    pub max_sampler_anisotropy: f32,
+    pub max_viewports: u32,
+    pub max_viewport_dimensions: [u32; 2],
+    pub viewport_bounds_range: [f32; 2],
+    pub viewport_sub_pixel_bits: u32,
+    pub min_memory_map_alignment: usize,
+    pub min_texel_buffer_offset_alignment: VkDeviceSize,
+    pub min_uniform_buffer_offset_alignment: VkDeviceSize,
+    pub min_storage_buffer_offset_alignment: VkDeviceSize,
+    pub min_texel_offset: i32,
+    pub max_texel_offset: u32,
+    pub min_texel_gather_offset: i32,
+    pub max_texel_gather_offset: u32,
+    pub min_interpolation_offset: f32,
+    pub max_interpolation_offset: f32,
+    pub sub_pixel_interpolation_offset_bits: u32,
+    pub max_framebuffer_width: u32,
+    pub max_framebuffer_height: u32,
+    pub max_framebuffer_layers: u32,
+    pub framebuffer_color_sample_counts: VkFlags,
+    pub framebuffer_depth_sample_counts: VkFlags,
+    pub framebuffer_stencil_sample_counts: VkFlags,
+    pub framebuffer_no_attachments_sample_counts: VkFlags,
+    pub max_color_attachments: u32,
+    pub sampled_image_color_sample_counts: VkFlags,
+    pub sampled_image_integer_sample_counts: VkFlags,
+    pub sampled_image_depth_sample_counts: VkFlags,
+    pub sampled_image_stencil_sample_counts: VkFlags,
+    pub storage_image_sample_counts: VkFlags,
+    pub max_sample_mask_words: u32,
+    pub timestamp_compute_and_graphics: VkBool32,
+    pub timestamp_period: f32,
+    pub max_clip_distances: u32,
+    pub max_cull_distances: u32,
+    pub max_combined_clip_and_cull_distances: u32,
+    pub discrete_queue_priorities: u32,
+    pub point_size_range: [f32; 2],
+    pub line_width_range: [f32; 2],
+    pub point_size_granularity: f32,
+    pub line_width_granularity: f32,
+    pub strict_lines: VkBool32,
+    pub standard_sample_locations: VkBool32,
+    pub optimal_buffer_copy_offset_alignment: VkDeviceSize,
+    pub optimal_buffer_copy_row_pitch_alignment: VkDeviceSize,
+    pub non_coherent_atom_size: VkDeviceSize,
+}
+
+/// `VkPhysicalDeviceSparseProperties` — the 5-bool tail of `VkPhysicalDeviceProperties`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkPhysicalDeviceSparseProperties {
+    pub residency_standard_2d_block_shape: VkBool32,
+    pub residency_standard_2d_multisample_block_shape: VkBool32,
+    pub residency_standard_3d_block_shape: VkBool32,
+    pub residency_aligned_mip_size: VkBool32,
+    pub residency_non_resident_strict: VkBool32,
+}
+
+/// `VkPhysicalDeviceProperties`.
+#[repr(C)]
+pub struct VkPhysicalDeviceProperties {
+    pub api_version: u32,
+    pub driver_version: u32,
+    pub vendor_id: u32,
+    pub device_id: u32,
+    pub device_type: i32,
+    pub device_name: [c_char; VK_MAX_PHYSICAL_DEVICE_NAME_SIZE],
+    pub pipeline_cache_uuid: [u8; VK_UUID_SIZE],
+    pub limits: VkPhysicalDeviceLimits,
+    pub sparse_properties: VkPhysicalDeviceSparseProperties,
+}
+
+/// `VkPhysicalDeviceFeatures` — 55 contiguous `VkBool32`s (indexed set; see `instance.rs`).
+#[repr(C)]
+pub struct VkPhysicalDeviceFeatures {
+    pub bits: [VkBool32; 55],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkMemoryType {
+    pub property_flags: VkFlags,
+    pub heap_index: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkMemoryHeap {
+    pub size: VkDeviceSize,
+    pub flags: VkFlags,
+}
+
+#[repr(C)]
+pub struct VkPhysicalDeviceMemoryProperties {
+    pub memory_type_count: u32,
+    pub memory_types: [VkMemoryType; VK_MAX_MEMORY_TYPES],
+    pub memory_heap_count: u32,
+    pub memory_heaps: [VkMemoryHeap; VK_MAX_MEMORY_HEAPS],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkExtent3D {
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+}
+
+#[repr(C)]
+pub struct VkQueueFamilyProperties {
+    pub queue_flags: VkFlags,
+    pub queue_count: u32,
+    pub timestamp_valid_bits: u32,
+    pub min_image_transfer_granularity: VkExtent3D,
+}
+
+#[repr(C)]
+pub struct VkMemoryRequirements {
+    pub size: VkDeviceSize,
+    pub alignment: VkDeviceSize,
+    pub memory_type_bits: u32,
+}
+
+// ==================================================================================================
+// *CreateInfo / *AllocateInfo input structs (read across the seam; layout from vk.xml)
+// ==================================================================================================
+
+#[repr(C)]
+pub struct VkApplicationInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub p_application_name: *const c_char,
+    pub application_version: u32,
+    pub p_engine_name: *const c_char,
+    pub engine_version: u32,
+    pub api_version: u32,
+}
+
+#[repr(C)]
+pub struct VkInstanceCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub p_application_info: *const VkApplicationInfo,
+    pub enabled_layer_count: u32,
+    pub pp_enabled_layer_names: *const *const c_char,
+    pub enabled_extension_count: u32,
+    pub pp_enabled_extension_names: *const *const c_char,
+}
+
+#[repr(C)]
+pub struct VkBufferCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub size: VkDeviceSize,
+    pub usage: VkFlags,
+    pub sharing_mode: i32,
+    pub queue_family_index_count: u32,
+    pub p_queue_family_indices: *const u32,
+}
+
+#[repr(C)]
+pub struct VkMemoryAllocateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub allocation_size: VkDeviceSize,
+    pub memory_type_index: u32,
+}
+
+#[repr(C)]
+pub struct VkShaderModuleCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub code_size: usize,
+    pub p_code: *const u32,
+}
+
+#[repr(C)]
+pub struct VkDescriptorSetLayoutBinding {
+    pub binding: u32,
+    pub descriptor_type: i32,
+    pub descriptor_count: u32,
+    pub stage_flags: VkFlags,
+    pub p_immutable_samplers: *const u64,
+}
+
+#[repr(C)]
+pub struct VkDescriptorSetLayoutCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub binding_count: u32,
+    pub p_bindings: *const VkDescriptorSetLayoutBinding,
+}
+
+#[repr(C)]
+pub struct VkDescriptorPoolCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub max_sets: u32,
+    pub pool_size_count: u32,
+    pub p_pool_sizes: *const c_void,
+}
+
+#[repr(C)]
+pub struct VkDescriptorSetAllocateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub descriptor_pool: u64,
+    pub descriptor_set_count: u32,
+    pub p_set_layouts: *const u64,
+}
+
+#[repr(C)]
+pub struct VkDescriptorBufferInfo {
+    pub buffer: u64,
+    pub offset: VkDeviceSize,
+    pub range: VkDeviceSize,
+}
+
+#[repr(C)]
+pub struct VkWriteDescriptorSet {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub dst_set: u64,
+    pub dst_binding: u32,
+    pub dst_array_element: u32,
+    pub descriptor_count: u32,
+    pub descriptor_type: i32,
+    pub p_image_info: *const c_void,
+    pub p_buffer_info: *const VkDescriptorBufferInfo,
+    pub p_texel_buffer_view: *const c_void,
+}
+
+#[repr(C)]
+pub struct VkPipelineShaderStageCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub stage: VkFlags,
+    pub module: u64,
+    pub p_name: *const c_char,
+    pub p_specialization_info: *const c_void,
+}
+
+#[repr(C)]
+pub struct VkComputePipelineCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub stage: VkPipelineShaderStageCreateInfo,
+    pub layout: u64,
+    pub base_pipeline_handle: u64,
+    pub base_pipeline_index: i32,
+}
+
+#[repr(C)]
+pub struct VkPipelineLayoutCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub set_layout_count: u32,
+    pub p_set_layouts: *const u64,
+    pub push_constant_range_count: u32,
+    pub p_push_constant_ranges: *const c_void,
+}
+
+#[repr(C)]
+pub struct VkCommandBufferAllocateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub command_pool: u64,
+    pub level: i32,
+    pub command_buffer_count: u32,
+}
+
+#[repr(C)]
+pub struct VkFenceCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+}
+
+#[repr(C)]
+pub struct VkSubmitInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub wait_semaphore_count: u32,
+    pub p_wait_semaphores: *const u64,
+    pub p_wait_dst_stage_mask: *const u32,
+    pub command_buffer_count: u32,
+    pub p_command_buffers: *const *mut c_void,
+    pub signal_semaphore_count: u32,
+    pub p_signal_semaphores: *const u64,
+}

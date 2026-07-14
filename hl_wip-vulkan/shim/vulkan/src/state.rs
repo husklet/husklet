@@ -1,0 +1,98 @@
+//! The shim's process-global Vulkan state + the guest→host command sink.
+//!
+//! The `vk*` entry points are free `extern "C"` functions, so their shared mutable state lives behind a
+//! process-global `Mutex`. The heavy lifting — the Vulkan→hl-GPU-IR lowering — is delegated to the
+//! `hl_vulkan` service layer (`create`/`record`/`submit`/`present`), which mutates a [`Device`] and
+//! submits protocol `Cmd`s through a [`hl_gpu::RemoteCommandSink`]. That sink is the single boundary to
+//! the host GPU-exec service, connected lazily from `$HL_GPU_EXEC` on first submit.
+//!
+//! One simulated physical device, so the model is single-instance/single-device: the dispatchable
+//! `VkInstance`/`VkPhysicalDevice`/`VkDevice`/`VkQueue` handles are loader-magic'd tokens routed to this
+//! one global `State`. The `hl_vulkan::Device` owns the real object model (buffers/shaders/pipelines/
+//! command buffers/…); this module only holds the connection + the instance/device presence.
+
+use std::sync::{Mutex, OnceLock};
+
+use hl_gpu::RemoteCommandSink;
+use hl_vulkan::{Device, Instance};
+
+use crate::types::Dispatchable;
+use core::ffi::c_void;
+
+/// Everything the shim tracks between `vk*` calls.
+pub struct State {
+    /// The current `VkInstance` (created by `vkCreateInstance`), holding the physical-device descriptor.
+    pub instance: Option<Instance>,
+    /// The logical device (created by `vkCreateDevice`) — the `hl_vulkan` object model + lowering target.
+    pub device: Option<Device>,
+    /// The guest→host boundary: encodes each lowered batch and ships it framed over `$HL_GPU_EXEC`.
+    pub sink: RemoteCommandSink,
+
+    /// Stable loader-magic'd dispatchable tokens (a pointer, once minted, is reused so the loader's
+    /// object identity is consistent across calls). `0` = not yet minted.
+    phys_dev: usize,
+    device_handle: usize,
+    queue_handle: usize,
+}
+
+impl State {
+    fn new() -> Self {
+        State {
+            instance: None,
+            device: None,
+            // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
+            sink: RemoteCommandSink::from_env(),
+            phys_dev: 0,
+            device_handle: 0,
+            queue_handle: 0,
+        }
+    }
+
+    /// The single physical-device dispatchable token, minted once and reused.
+    pub fn phys_dev_handle(&mut self) -> *mut c_void {
+        if self.phys_dev == 0 {
+            self.phys_dev = Dispatchable::new(()) as usize;
+        }
+        self.phys_dev as *mut c_void
+    }
+
+    /// The logical-device dispatchable token, minted once and reused.
+    pub fn device_token(&mut self) -> *mut c_void {
+        if self.device_handle == 0 {
+            self.device_handle = Dispatchable::new(()) as usize;
+        }
+        self.device_handle as *mut c_void
+    }
+
+    /// The single queue dispatchable token, minted once and reused.
+    pub fn queue_token(&mut self) -> *mut c_void {
+        if self.queue_handle == 0 {
+            self.queue_handle = Dispatchable::new(()) as usize;
+        }
+        self.queue_handle as *mut c_void
+    }
+
+    /// The physical-device descriptor the property queries read (the instance's, or the default if a
+    /// query races ahead of `vkCreateInstance`).
+    pub fn physical_device(&self) -> hl_vulkan::PhysicalDeviceDesc {
+        match &self.instance {
+            Some(i) => i.physical_device.clone(),
+            None => hl_vulkan::PhysicalDeviceDesc::hl_default(),
+        }
+    }
+
+    /// Borrow the logical device mutably, if one has been created.
+    pub fn device_mut(&mut self) -> Option<&mut Device> {
+        self.device.as_mut()
+    }
+}
+
+static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+
+/// Run `f` with exclusive access to the global shim state. Non-reentrant — never call [`with`] from
+/// inside an `f` (the `Mutex` is not recursive); each entry point does exactly one `with`.
+pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
+    let m = STATE.get_or_init(|| Mutex::new(State::new()));
+    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut g)
+}
