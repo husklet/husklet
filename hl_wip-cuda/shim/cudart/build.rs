@@ -160,33 +160,62 @@ fn env(k: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| panic!("env {k} not set"))
 }
 
-/// Entry points hand-written in `src/runtime.rs`: the memory + device + stream basics that map cleanly
-/// onto the `hl_cuda` lowering services (alloc/free/memcpy/memset/sync) + version/error/device queries,
-/// PLUS the runtime-API launch tail — `__cudaRegisterFatBinary`/`__cudaRegisterFunction`/
-/// `__cudaRegisterFatBinaryEnd` (the fatbin/host-fn registry) and `cudaLaunchKernel` (resolves a host-fn
-/// pointer to its device entry and lowers exactly like the driver-API `cuLaunchKernel`). The remaining
-/// `__cudaRegisterVar`/`__cudaUnregisterFatBinary`/call-config helpers stay benign stubs.
+/// Every entry point is hand-written in `src/runtime.rs` (`GENERATED_STUBS == 0`): the memory + device +
+/// stream + event basics that map onto the `hl_cuda` lowering services (alloc/free/memcpy/memset/sync,
+/// managed + pinned memory, streams, events), the full device-properties / func-attributes / version /
+/// error surface, and the runtime-API launch tail — `__cudaRegisterFatBinary`/`Function`/`FatBinaryEnd`/
+/// `Var`/`UnregisterFatBinary` + the `<<<>>>` `__cudaPush/PopCallConfiguration` stack + `cudaLaunchKernel`
+/// (resolves a host-fn pointer to its device entry and lowers exactly like the driver-API `cuLaunchKernel`).
 const IMPLEMENTED: &[&str] = &[
+    // nvcc registration + launch glue
     "__cudaRegisterFatBinary",
     "__cudaRegisterFunction",
     "__cudaRegisterFatBinaryEnd",
+    "__cudaRegisterVar",
+    "__cudaUnregisterFatBinary",
+    "__cudaPushCallConfiguration",
+    "__cudaPopCallConfiguration",
     "cudaLaunchKernel",
+    // memory (device / managed / pinned)
     "cudaMalloc",
     "cudaFree",
+    "cudaMallocManaged",
+    "cudaMallocHost",
+    "cudaHostAlloc",
+    "cudaFreeHost",
+    "cudaHostGetDevicePointer",
     "cudaMemcpy",
     "cudaMemcpyAsync",
     "cudaMemset",
     "cudaMemsetAsync",
     "cudaMemGetInfo",
+    // synchronization
     "cudaDeviceSynchronize",
     "cudaThreadSynchronize",
+    // streams
     "cudaStreamCreate",
     "cudaStreamCreateWithFlags",
     "cudaStreamDestroy",
     "cudaStreamSynchronize",
+    "cudaStreamQuery",
+    "cudaStreamWaitEvent",
+    // events
+    "cudaEventCreate",
+    "cudaEventCreateWithFlags",
+    "cudaEventRecord",
+    "cudaEventSynchronize",
+    "cudaEventQuery",
+    "cudaEventElapsedTime",
+    "cudaEventDestroy",
+    // device queries + properties
     "cudaGetDeviceCount",
     "cudaGetDevice",
     "cudaSetDevice",
+    "cudaGetDeviceProperties",
+    "cudaGetDeviceProperties_v2",
+    "cudaDeviceGetPCIBusId",
+    "cudaFuncGetAttributes",
+    // versions + errors
     "cudaDriverGetVersion",
     "cudaRuntimeGetVersion",
     "cudaGetErrorString",

@@ -156,19 +156,82 @@ fn env(k: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| panic!("env {k} not set"))
 }
 
-/// Entry points hand-written in `src/nvml.rs`: the init/shutdown/error/count/handle/name/version basics
-/// that let a probe enumerate the single simulated device. The rest are benign `NVML_SUCCESS` stubs.
+/// Every entry point is hand-written in `src/nvml.rs` (`GENERATED_STUBS == 0`): init/shutdown/error, the
+/// system version queries, device enumeration + identity (name/uuid/serial/index/brand/arch/cc), memory +
+/// utilization (from `HL_CUDA_VRAM*`), PCI info, sensors/clocks/power (modeled sane values), modes/states,
+/// running-process queries (none), and the private `nvmlInternalGetExportTable` handshake. Genuinely
+/// hardware-specific queries (fan speed, MIG, ext PCI info) return an honest `NVML_ERROR_NOT_SUPPORTED`.
 const IMPLEMENTED: &[&str] = &[
+    // init / shutdown / error
     "nvmlInit_v2",
     "nvmlInit",
     "nvmlInitWithFlags",
     "nvmlShutdown",
     "nvmlErrorString",
+    // system version queries
+    "nvmlSystemGetDriverVersion",
+    "nvmlSystemGetNVMLVersion",
+    "nvmlSystemGetCudaDriverVersion",
+    "nvmlSystemGetCudaDriverVersion_v2",
+    "nvmlSystemGetProcessName",
+    // enumeration + handles
     "nvmlDeviceGetCount",
     "nvmlDeviceGetCount_v2",
     "nvmlDeviceGetHandleByIndex",
     "nvmlDeviceGetHandleByIndex_v2",
+    "nvmlDeviceGetHandleByUUID",
+    "nvmlDeviceGetHandleByPciBusId",
+    "nvmlDeviceGetHandleByPciBusId_v2",
+    // identity
     "nvmlDeviceGetName",
-    "nvmlSystemGetCudaDriverVersion",
-    "nvmlSystemGetCudaDriverVersion_v2",
+    "nvmlDeviceGetUUID",
+    "nvmlDeviceGetSerial",
+    "nvmlDeviceGetIndex",
+    "nvmlDeviceGetMinorNumber",
+    "nvmlDeviceGetBrand",
+    "nvmlDeviceGetCudaComputeCapability",
+    "nvmlDeviceGetArchitecture",
+    "nvmlDeviceGetVbiosVersion",
+    // memory + utilization
+    "nvmlDeviceGetMemoryInfo",
+    "nvmlDeviceGetMemoryInfo_v2",
+    "nvmlDeviceGetUtilizationRates",
+    "nvmlDeviceGetEncoderUtilization",
+    "nvmlDeviceGetDecoderUtilization",
+    // PCI info + link
+    "nvmlDeviceGetPciInfo",
+    "nvmlDeviceGetPciInfo_v2",
+    "nvmlDeviceGetPciInfo_v3",
+    "nvmlDeviceGetPciInfoExt",
+    "nvmlDeviceGetCurrPcieLinkGeneration",
+    "nvmlDeviceGetMaxPcieLinkGeneration",
+    "nvmlDeviceGetCurrPcieLinkWidth",
+    "nvmlDeviceGetMaxPcieLinkWidth",
+    "nvmlDeviceGetMemoryBusWidth",
+    "nvmlDeviceGetNumGpuCores",
+    // sensors / clocks / power
+    "nvmlDeviceGetTemperature",
+    "nvmlDeviceGetTemperatureThreshold",
+    "nvmlDeviceGetPowerUsage",
+    "nvmlDeviceGetPowerManagementLimit",
+    "nvmlDeviceGetEnforcedPowerLimit",
+    "nvmlDeviceGetClockInfo",
+    "nvmlDeviceGetMaxClockInfo",
+    "nvmlDeviceGetFanSpeed",
+    // modes / states
+    "nvmlDeviceGetPersistenceMode",
+    "nvmlDeviceGetDisplayMode",
+    "nvmlDeviceGetComputeMode",
+    "nvmlDeviceGetPerformanceState",
+    "nvmlDeviceGetPowerState",
+    "nvmlDeviceGetMigMode",
+    // running processes
+    "nvmlDeviceGetComputeRunningProcesses",
+    "nvmlDeviceGetComputeRunningProcesses_v2",
+    "nvmlDeviceGetComputeRunningProcesses_v3",
+    "nvmlDeviceGetGraphicsRunningProcesses",
+    "nvmlDeviceGetGraphicsRunningProcesses_v2",
+    "nvmlDeviceGetGraphicsRunningProcesses_v3",
+    // private export table
+    "nvmlInternalGetExportTable",
 ];
