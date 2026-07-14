@@ -323,4 +323,36 @@ const IMPLEMENTED: &[&str] = &[
     "vkDestroyFence",
     "vkWaitForFences",
     "vkResetFences",
+    // ---- IR-wired graphics path (graphics.rs) ----
+    // images + views + samplers
+    "vkCreateImage",
+    "vkDestroyImage",
+    "vkGetImageMemoryRequirements",
+    "vkBindImageMemory",
+    "vkCreateImageView",
+    "vkDestroyImageView",
+    "vkCreateSampler",
+    "vkDestroySampler",
+    // render pass + framebuffer
+    "vkCreateRenderPass",
+    "vkDestroyRenderPass",
+    "vkCreateFramebuffer",
+    "vkDestroyFramebuffer",
+    // graphics pipeline
+    "vkCreateGraphicsPipelines",
+    // render-pass command recording
+    "vkCmdBeginRenderPass",
+    "vkCmdEndRenderPass",
+    "vkCmdBindVertexBuffers",
+    "vkCmdBindIndexBuffer",
+    "vkCmdDraw",
+    "vkCmdDrawIndexed",
+    // WSI: swapchain + present + semaphores
+    "vkCreateSwapchainKHR",
+    "vkDestroySwapchainKHR",
+    "vkGetSwapchainImagesKHR",
+    "vkAcquireNextImageKHR",
+    "vkQueuePresentKHR",
+    "vkCreateSemaphore",
+    "vkDestroySemaphore",
 ];

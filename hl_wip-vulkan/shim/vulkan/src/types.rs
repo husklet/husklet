@@ -464,3 +464,264 @@ pub struct VkSubmitInfo {
     pub signal_semaphore_count: u32,
     pub p_signal_semaphores: *const u64,
 }
+
+// ==================================================================================================
+// graphics-path structs (images / views / samplers / render pass / graphics pipeline / WSI)
+// ==================================================================================================
+
+/// `VK_SHADER_STAGE_VERTEX_BIT` / `..._FRAGMENT_BIT` (from vk.xml) — classify a pipeline stage.
+pub const VK_SHADER_STAGE_VERTEX_BIT: u32 = 0x0000_0001;
+pub const VK_SHADER_STAGE_FRAGMENT_BIT: u32 = 0x0000_0010;
+/// `VK_ATTACHMENT_LOAD_OP_CLEAR` (a render pass's first color attachment clears when its loadOp is this).
+pub const VK_ATTACHMENT_LOAD_OP_CLEAR: i32 = 1;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkExtent2D {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkOffset2D {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkRect2D {
+    pub offset: VkOffset2D,
+    pub extent: VkExtent2D,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkViewport {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub min_depth: f32,
+    pub max_depth: f32,
+}
+
+#[repr(C)]
+pub struct VkImageCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub image_type: i32,
+    pub format: i32,
+    pub extent: VkExtent3D,
+    pub mip_levels: u32,
+    pub array_layers: u32,
+    pub samples: i32,
+    pub tiling: i32,
+    pub usage: VkFlags,
+    pub sharing_mode: i32,
+    pub queue_family_index_count: u32,
+    pub p_queue_family_indices: *const u32,
+    pub initial_layout: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkComponentMapping {
+    pub r: i32,
+    pub g: i32,
+    pub b: i32,
+    pub a: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkImageSubresourceRange {
+    pub aspect_mask: VkFlags,
+    pub base_mip_level: u32,
+    pub level_count: u32,
+    pub base_array_layer: u32,
+    pub layer_count: u32,
+}
+
+#[repr(C)]
+pub struct VkImageViewCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub image: u64,
+    pub view_type: i32,
+    pub format: i32,
+    pub components: VkComponentMapping,
+    pub subresource_range: VkImageSubresourceRange,
+}
+
+#[repr(C)]
+pub struct VkSamplerCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub mag_filter: i32,
+    pub min_filter: i32,
+    pub mipmap_mode: i32,
+    pub address_mode_u: i32,
+    pub address_mode_v: i32,
+    pub address_mode_w: i32,
+    pub mip_lod_bias: f32,
+    pub anisotropy_enable: VkBool32,
+    pub max_anisotropy: f32,
+    pub compare_enable: VkBool32,
+    pub compare_op: i32,
+    pub min_lod: f32,
+    pub max_lod: f32,
+    pub border_color: i32,
+    pub unnormalized_coordinates: VkBool32,
+}
+
+#[repr(C)]
+pub struct VkVertexInputBindingDescription {
+    pub binding: u32,
+    pub stride: u32,
+    pub input_rate: i32,
+}
+
+#[repr(C)]
+pub struct VkVertexInputAttributeDescription {
+    pub location: u32,
+    pub binding: u32,
+    pub format: i32,
+    pub offset: u32,
+}
+
+#[repr(C)]
+pub struct VkPipelineVertexInputStateCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub vertex_binding_description_count: u32,
+    pub p_vertex_binding_descriptions: *const VkVertexInputBindingDescription,
+    pub vertex_attribute_description_count: u32,
+    pub p_vertex_attribute_descriptions: *const VkVertexInputAttributeDescription,
+}
+
+#[repr(C)]
+pub struct VkGraphicsPipelineCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub stage_count: u32,
+    pub p_stages: *const VkPipelineShaderStageCreateInfo,
+    pub p_vertex_input_state: *const VkPipelineVertexInputStateCreateInfo,
+    pub p_input_assembly_state: *const c_void,
+    pub p_tessellation_state: *const c_void,
+    pub p_viewport_state: *const c_void,
+    pub p_rasterization_state: *const c_void,
+    pub p_multisample_state: *const c_void,
+    pub p_depth_stencil_state: *const c_void,
+    pub p_color_blend_state: *const c_void,
+    pub p_dynamic_state: *const c_void,
+    pub layout: u64,
+    pub render_pass: u64,
+    pub subpass: u32,
+    pub base_pipeline_handle: u64,
+    pub base_pipeline_index: i32,
+}
+
+#[repr(C)]
+pub struct VkAttachmentDescription {
+    pub flags: VkFlags,
+    pub format: i32,
+    pub samples: i32,
+    pub load_op: i32,
+    pub store_op: i32,
+    pub stencil_load_op: i32,
+    pub stencil_store_op: i32,
+    pub initial_layout: i32,
+    pub final_layout: i32,
+}
+
+#[repr(C)]
+pub struct VkRenderPassCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub attachment_count: u32,
+    pub p_attachments: *const VkAttachmentDescription,
+    pub subpass_count: u32,
+    pub p_subpasses: *const c_void,
+    pub dependency_count: u32,
+    pub p_dependencies: *const c_void,
+}
+
+#[repr(C)]
+pub struct VkFramebufferCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub render_pass: u64,
+    pub attachment_count: u32,
+    pub p_attachments: *const u64,
+    pub width: u32,
+    pub height: u32,
+    pub layers: u32,
+}
+
+/// `VkClearValue` is a 16-byte union; the color clear path reads it as `float32[4]`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkClearValue {
+    pub float32: [f32; 4],
+}
+
+#[repr(C)]
+pub struct VkRenderPassBeginInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub render_pass: u64,
+    pub framebuffer: u64,
+    pub render_area: VkRect2D,
+    pub clear_value_count: u32,
+    pub p_clear_values: *const VkClearValue,
+}
+
+#[repr(C)]
+pub struct VkSemaphoreCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+}
+
+#[repr(C)]
+pub struct VkSwapchainCreateInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub surface: u64,
+    pub min_image_count: u32,
+    pub image_format: i32,
+    pub image_color_space: i32,
+    pub image_extent: VkExtent2D,
+    pub image_array_layers: u32,
+    pub image_usage: VkFlags,
+    pub image_sharing_mode: i32,
+    pub queue_family_index_count: u32,
+    pub p_queue_family_indices: *const u32,
+    pub pre_transform: VkFlags,
+    pub composite_alpha: VkFlags,
+    pub present_mode: i32,
+    pub clipped: VkBool32,
+    pub old_swapchain: u64,
+}
+
+#[repr(C)]
+pub struct VkPresentInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub wait_semaphore_count: u32,
+    pub p_wait_semaphores: *const u64,
+    pub swapchain_count: u32,
+    pub p_swapchains: *const u64,
+    pub p_image_indices: *const u32,
+    pub p_results: *mut i32,
+}

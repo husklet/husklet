@@ -18,7 +18,7 @@ use crate::model::pipeline::{PipelineKind, PipelineLayoutRec, PipelineRec, Shade
 use crate::model::queue::FenceRec;
 use crate::*;
 use hl_gpu::protocol::model::descriptor::{
-    BufferDesc, ComputePipelineDesc, RenderPipelineDesc, SamplerDesc, ShaderRef,
+    BufferDesc, ComputePipelineDesc, RenderPipelineDesc, SamplerDesc, ShaderRef, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{AddressMode, Filter, TextureFormat, Topology};
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
@@ -274,14 +274,17 @@ pub fn create_compute_pipeline(
     Ok(handle)
 }
 
-/// `vkCreateGraphicsPipelines` (one pipeline) — resolve the vertex (+ optional fragment) stage(s) and
-/// submit [`Cmd::CreateRenderPipeline`] with one color target of `color_format`. Ported from
-/// `pipeline.rs::vkCreateGraphicsPipelines` (the bring-up subset: one color target, no blend/depth).
+/// `vkCreateGraphicsPipelines` (one pipeline) — resolve the vertex (+ optional fragment) stage(s), carry
+/// the `VkPipelineVertexInputState` vertex-buffer layout(s), and submit [`Cmd::CreateRenderPipeline`]
+/// with one color target of `color_format`. Ported from `pipeline.rs::vkCreateGraphicsPipelines` (the
+/// bring-up subset: one color target, no blend/depth). `vertex_layouts` are the translated
+/// `VkVertexInputBindingDescription`s (slot-0 layout is what the host rasterizer fetches positions from).
 pub fn create_graphics_pipeline(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
     vertex: (VkShaderModule, &str),
     fragment: Option<(VkShaderModule, &str)>,
+    vertex_layouts: Vec<VertexLayout>,
     color_format: TextureFormat,
 ) -> Result<VkPipeline> {
     use hl_gpu::protocol::model::descriptor::ColorTargetState;
@@ -304,7 +307,7 @@ pub fn create_graphics_pipeline(
         RenderPipelineDesc {
             vertex: vertex_ref,
             fragment: fragment_ref,
-            vertex_buffers: Vec::new(),
+            vertex_buffers: vertex_layouts,
             color_targets: vec![ColorTargetState { format: color_format, blend: None, write_mask: 0xf }],
             depth: None,
             topology: Topology::TriangleList,

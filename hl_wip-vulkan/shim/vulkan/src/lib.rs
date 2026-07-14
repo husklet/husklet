@@ -17,6 +17,7 @@
 
 pub mod compute;
 pub mod device;
+pub mod graphics;
 pub mod icd;
 pub mod instance;
 pub mod state;
@@ -30,6 +31,8 @@ pub mod types;
 use compute::*;
 #[allow(unused_imports)]
 use device::*;
+#[allow(unused_imports)]
+use graphics::*;
 #[allow(unused_imports)]
 use icd::*;
 #[allow(unused_imports)]

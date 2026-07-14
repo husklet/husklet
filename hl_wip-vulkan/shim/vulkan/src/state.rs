@@ -11,6 +11,7 @@
 //! one global `State`. The `hl_vulkan::Device` owns the real object model (buffers/shaders/pipelines/
 //! command buffers/…); this module only holds the connection + the instance/device presence.
 
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use hl_gpu::RemoteCommandSink;
@@ -18,6 +19,15 @@ use hl_vulkan::{Device, Instance};
 
 use crate::types::Dispatchable;
 use core::ffi::c_void;
+
+/// A `VkRenderPass`'s bring-up bookkeeping: whether its first color attachment clears (loadOp == CLEAR)
+/// and that attachment's raw `VkFormat` (so a graphics pipeline created against this pass knows its one
+/// color-target format). Objects the `hl_vulkan` object model does not itself carry live here in the shim.
+#[derive(Clone, Copy)]
+pub struct RenderPassRec {
+    pub first_attachment_clears: bool,
+    pub color_format_vk: u32,
+}
 
 /// Everything the shim tracks between `vk*` calls.
 pub struct State {
@@ -27,6 +37,17 @@ pub struct State {
     pub device: Option<Device>,
     /// The guest→host boundary: encodes each lowered batch and ships it framed over `$HL_GPU_EXEC`.
     pub sink: RemoteCommandSink,
+
+    /// `VkImageView` handle → the `VkImage` handle it views. The `hl_vulkan` model renders into images,
+    /// so a view is a thin alias resolved back to its image at `vkCmdBeginRenderPass` (via a framebuffer).
+    pub image_views: HashMap<u64, u64>,
+    /// `VkRenderPass` handle → its bring-up bookkeeping (see [`RenderPassRec`]).
+    pub render_passes: HashMap<u64, RenderPassRec>,
+    /// `VkFramebuffer` handle → its attachment `VkImageView` handles (index 0 is the color target).
+    pub framebuffers: HashMap<u64, Vec<u64>>,
+    /// `VkSemaphore` handles (present/acquire sync) — bookkeeping only; the synchronous executor needs no
+    /// real semaphore object.
+    pub semaphores: HashMap<u64, ()>,
 
     /// Stable loader-magic'd dispatchable tokens (a pointer, once minted, is reused so the loader's
     /// object identity is consistent across calls). `0` = not yet minted.
@@ -42,6 +63,10 @@ impl State {
             device: None,
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
             sink: RemoteCommandSink::from_env(),
+            image_views: HashMap::new(),
+            render_passes: HashMap::new(),
+            framebuffers: HashMap::new(),
+            semaphores: HashMap::new(),
             phys_dev: 0,
             device_handle: 0,
             queue_handle: 0,

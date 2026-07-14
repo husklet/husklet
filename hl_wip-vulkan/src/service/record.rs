@@ -14,7 +14,7 @@ use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, ColorAttachment,
 };
-use hl_gpu::protocol::model::enums::LoadOp;
+use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp};
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
 use std::collections::HashMap;
 
@@ -193,6 +193,26 @@ pub fn cmd_bind_vertex_buffer(
     Ok(())
 }
 
+/// `vkCmdBindIndexBuffer` — record `SetIndexBuffer` for the bound index buffer. `vk_index_type` is a raw
+/// `VkIndexType` (`VK_INDEX_TYPE_UINT16` = 0, `VK_INDEX_TYPE_UINT32` = 1).
+pub fn cmd_bind_index_buffer(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    vk_index_type: u32,
+) -> Result<()> {
+    let ir = dev
+        .buffers
+        .get(&buffer)
+        .ok_or(GpuError::Invalid("vkCmdBindIndexBuffer: unknown VkBuffer"))?
+        .ir_id;
+    let format = if vk_index_type == 1 { IndexFormat::U32 } else { IndexFormat::U16 };
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::SetIndexBuffer { buffer: ir, offset, format });
+    Ok(())
+}
+
 /// `vkCmdDraw` — replay the bound pipeline + bind groups, then record `Draw`. Ported from
 /// `command.rs::vkCmdDraw`.
 pub fn cmd_draw(
@@ -213,6 +233,36 @@ pub fn cmd_draw(
         rec.enc.push(Enc::SetBindGroup { index, group });
     }
     rec.enc.push(Enc::Draw { vertex_count, instance_count, first_vertex, first_instance });
+    Ok(())
+}
+
+/// `vkCmdDrawIndexed` — replay the bound pipeline + bind groups, then record `DrawIndexed` against the
+/// bound index buffer. Ported from `command.rs::vkCmdDrawIndexed`.
+pub fn cmd_draw_indexed(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    vertex_offset: i32,
+    first_instance: u32,
+) -> Result<()> {
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    if let Some(p) = pipeline {
+        rec.enc.push(Enc::SetPipeline(p));
+    }
+    for (index, group) in groups {
+        rec.enc.push(Enc::SetBindGroup { index, group });
+    }
+    rec.enc.push(Enc::DrawIndexed {
+        index_count,
+        instance_count,
+        first_index,
+        base_vertex: vertex_offset,
+        first_instance,
+    });
     Ok(())
 }
 

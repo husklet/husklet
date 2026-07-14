@@ -12,9 +12,22 @@ use hl_vulkan::service::{create, present, record, submit};
 use hl_vulkan::{Device, Instance};
 
 use hl_gpu::protocol::model::command::Enc;
-use hl_gpu::protocol::model::descriptor::BindResource;
-use hl_gpu::protocol::model::enums::{buffer_usage, TextureFormat};
+use hl_gpu::protocol::model::descriptor::{BindResource, VertexAttr, VertexLayout};
+use hl_gpu::protocol::model::enums::{buffer_usage, IndexFormat, TextureFormat};
 use hl_gpu::{Cmd, FenceId, GpuError, RecordingSink, ShaderPayloadKind};
+
+/// A slot-0 vertex layout carrying interleaved position (offset 0) + color (offset 8), stride 24 — the
+/// layout the host rasterizer fetches `pos`/`color` from.
+fn pos_color_layout() -> VertexLayout {
+    VertexLayout {
+        stride: 24,
+        step_mode: 0,
+        attrs: vec![
+            VertexAttr { location: 0, format: 0, offset: 0 },
+            VertexAttr { location: 1, format: 0, offset: 8 },
+        ],
+    }
+}
 
 fn dev() -> Device {
     let inst = create::create_instance(result::HL_API_VERSION);
@@ -184,6 +197,7 @@ fn graphics_pipeline_emits_create_render_pipeline() {
         &mut sink,
         (vs, "vsmain"),
         Some((fs, "fsmain")),
+        vec![pos_color_layout()],
         TextureFormat::Bgra8Unorm,
     )
     .unwrap();
@@ -191,8 +205,120 @@ fn graphics_pipeline_emits_create_render_pipeline() {
         [Cmd::CreateRenderPipeline(_, desc)] => {
             assert!(desc.fragment.is_some());
             assert_eq!(desc.color_targets[0].format, TextureFormat::Bgra8Unorm);
+            // the VkPipelineVertexInputState layout is forwarded (slot 0, stride 24).
+            assert_eq!(desc.vertex_buffers.len(), 1);
+            assert_eq!(desc.vertex_buffers[0].stride, 24);
+            assert_eq!(desc.vertex_buffers[0].attrs.len(), 2);
         }
         other => panic!("expected CreateRenderPipeline, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// the graphics render-pass lowering: pipeline → begin pass → bind vbuf → draw → end pass → submit
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+
+    // a render-target image (ir 1), vertex + fragment shaders (ir 2, 3), graphics pipeline (ir 4).
+    let target = create::create_image(
+        &mut d,
+        &mut sink,
+        64,
+        64,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::COLOR_ATTACHMENT,
+    )
+    .unwrap();
+    let vs =
+        create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("vsmain")).unwrap();
+    let fs =
+        create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("fsmain")).unwrap();
+    let pipe = create::create_graphics_pipeline(
+        &mut d,
+        &mut sink,
+        (vs, "vsmain"),
+        Some((fs, "fsmain")),
+        vec![pos_color_layout()],
+        TextureFormat::Rgba8Unorm,
+    )
+    .unwrap();
+
+    // a vertex buffer (ir 5).
+    let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 24 * 3).unwrap();
+
+    // record the render pass: begin (clear) → bind pipeline → bind vertex buffer → draw → end.
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_begin_render_pass(&mut d, cb, target, [0.0, 0.0, 1.0, 1.0], true).unwrap();
+    record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
+    record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
+    record::cmd_draw(&mut d, cb, 3, 1, 0, 0).unwrap();
+    record::cmd_end_render_pass(&mut d, cb).unwrap();
+    record::end(&mut d, cb).unwrap();
+
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    // the submitted encoder is the exact render-pass draw stream.
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::Submit(cbuf)] => {
+            assert_eq!(
+                cbuf.encoder,
+                vec![
+                    Enc::BeginRenderPass {
+                        color: vec![hl_gpu::protocol::model::descriptor::ColorAttachment {
+                            texture: 1,
+                            load: hl_gpu::protocol::model::enums::LoadOp::Clear,
+                            clear: [0.0, 0.0, 1.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    // SetVertexBuffer is recorded eagerly by vkCmdBindVertexBuffers; the pipeline is
+                    // replayed lazily by vkCmdDraw — hence vbuf precedes the pipeline in the stream.
+                    Enc::SetVertexBuffer { slot: 0, buffer: 5, offset: 0 },
+                    Enc::SetPipeline(4),
+                    Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                    Enc::EndRenderPass,
+                ]
+            );
+        }
+        other => panic!("expected Submit, got {other:?}"),
+    }
+}
+
+#[test]
+fn indexed_draw_lowers_set_index_buffer_and_draw_indexed() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let ibuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDEX_BUFFER, 6).unwrap();
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    // VK_INDEX_TYPE_UINT16 = 0.
+    record::cmd_bind_index_buffer(&mut d, cb, ibuf, 0, 0).unwrap();
+    record::cmd_draw_indexed(&mut d, cb, 3, 1, 0, 0, 0).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::Submit(cbuf)] => {
+            assert_eq!(
+                cbuf.encoder,
+                vec![
+                    Enc::SetIndexBuffer { buffer: 1, offset: 0, format: IndexFormat::U16 },
+                    Enc::DrawIndexed {
+                        index_count: 3,
+                        instance_count: 1,
+                        first_index: 0,
+                        base_vertex: 0,
+                        first_instance: 0,
+                    },
+                ]
+            );
+        }
+        other => panic!("expected Submit, got {other:?}"),
     }
 }
 
