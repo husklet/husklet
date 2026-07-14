@@ -22,6 +22,7 @@ pub mod icd;
 pub mod instance;
 pub mod state;
 pub mod stub;
+pub mod surface;
 pub mod sync;
 pub mod transfer;
 pub mod types;
@@ -39,6 +40,8 @@ use graphics::*;
 use icd::*;
 #[allow(unused_imports)]
 use instance::*;
+#[allow(unused_imports)]
+use surface::*;
 #[allow(unused_imports)]
 use sync::*;
 #[allow(unused_imports)]

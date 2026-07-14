@@ -10,7 +10,7 @@
 
 use core::ffi::{c_char, c_void};
 
-use hl_vulkan::model::descriptor::LayoutBinding;
+use hl_vulkan::model::descriptor::{DescriptorTemplateEntry, LayoutBinding};
 use hl_vulkan::result::vk_result_from_gpu_error;
 use hl_vulkan::service::{create, record, submit};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
@@ -438,6 +438,212 @@ pub extern "C" fn vkUpdateDescriptorSets(
 }
 
 // ==================================================================================================
+// descriptor update templates (Vulkan 1.1 / VK_KHR_descriptor_update_template)
+// ==================================================================================================
+
+/// `vkCreateDescriptorUpdateTemplate` — retain the immutable entry table the app pushes descriptors
+/// through. Only the `DESCRIPTOR_SET` template type is modeled (see `create::create_descriptor_update_template`).
+#[no_mangle]
+pub extern "C" fn vkCreateDescriptorUpdateTemplate(
+    _device: *mut c_void,
+    p_create_info: *const c_void,
+    _p_allocator: *const c_void,
+    p_descriptor_update_template: *mut u64,
+) -> VkResult {
+    if !p_descriptor_update_template.is_null() {
+        unsafe { *p_descriptor_update_template = 0 };
+    }
+    let Some(ci) = (unsafe { (p_create_info as *const VkDescriptorUpdateTemplateCreateInfo).as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let entries: Vec<DescriptorTemplateEntry> =
+        if ci.p_descriptor_update_entries.is_null() || ci.descriptor_update_entry_count == 0 {
+            Vec::new()
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(ci.p_descriptor_update_entries, ci.descriptor_update_entry_count as usize)
+            }
+            .iter()
+            .map(|e| DescriptorTemplateEntry {
+                dst_binding: e.dst_binding,
+                dst_array_element: e.dst_array_element,
+                descriptor_count: e.descriptor_count,
+                descriptor_type: e.descriptor_type,
+                offset: e.offset,
+                stride: e.stride,
+            })
+            .collect()
+        };
+    let r = dev_sink(|dev, _| create::create_descriptor_update_template(dev, ci.template_type, entries));
+    match r {
+        Some(Ok(handle)) => {
+            if !p_descriptor_update_template.is_null() {
+                unsafe { *p_descriptor_update_template = handle };
+            }
+            VK_SUCCESS
+        }
+        Some(Err(e)) => vk_result_from_gpu_error(&e),
+        None => VK_ERROR_INITIALIZATION_FAILED,
+    }
+}
+
+/// `vkCreateDescriptorUpdateTemplateKHR` — the `VK_KHR_descriptor_update_template` alias.
+#[no_mangle]
+pub extern "C" fn vkCreateDescriptorUpdateTemplateKHR(
+    device: *mut c_void,
+    p_create_info: *const c_void,
+    p_allocator: *const c_void,
+    p_descriptor_update_template: *mut u64,
+) -> VkResult {
+    vkCreateDescriptorUpdateTemplate(device, p_create_info, p_allocator, p_descriptor_update_template)
+}
+
+#[no_mangle]
+pub extern "C" fn vkDestroyDescriptorUpdateTemplate(
+    _device: *mut c_void,
+    descriptor_update_template: u64,
+    _p_allocator: *const c_void,
+) {
+    dev_sink(|dev, _| create::destroy_descriptor_update_template(dev, descriptor_update_template));
+}
+
+#[no_mangle]
+pub extern "C" fn vkDestroyDescriptorUpdateTemplateKHR(
+    device: *mut c_void,
+    descriptor_update_template: u64,
+    p_allocator: *const c_void,
+) {
+    vkDestroyDescriptorUpdateTemplate(device, descriptor_update_template, p_allocator)
+}
+
+/// `vkUpdateDescriptorSetWithTemplate` — apply the template's buffer descriptors read out of `pData` to
+/// `descriptorSet` (identical result to the equivalent `vkUpdateDescriptorSets`). The C API carries no
+/// `pData` size, so the shim bounds the raw pointer with the template's computed read extent
+/// (`create::descriptor_template_data_len`).
+#[no_mangle]
+pub extern "C" fn vkUpdateDescriptorSetWithTemplate(
+    _device: *mut c_void,
+    descriptor_set: u64,
+    descriptor_update_template: u64,
+    p_data: *const c_void,
+) {
+    if p_data.is_null() {
+        return;
+    }
+    // Determine exactly how many bytes the template reads, then build a bounded slice over pData.
+    let Some(len) = with(|s| {
+        s.device
+            .as_ref()
+            .and_then(|d| create::descriptor_template_data_len(d, descriptor_update_template))
+    }) else {
+        return;
+    };
+    let data = unsafe { std::slice::from_raw_parts(p_data as *const u8, len) };
+    dev_sink(|dev, _| {
+        let _ = create::update_descriptor_set_with_template(dev, descriptor_set, descriptor_update_template, data);
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn vkUpdateDescriptorSetWithTemplateKHR(
+    device: *mut c_void,
+    descriptor_set: u64,
+    descriptor_update_template: u64,
+    p_data: *const c_void,
+) {
+    vkUpdateDescriptorSetWithTemplate(device, descriptor_set, descriptor_update_template, p_data)
+}
+
+// ==================================================================================================
+// pipeline cache (modeled: a valid, versioned header; hl-GPU forwards SPIR-V, so no host binary)
+// ==================================================================================================
+
+#[no_mangle]
+pub extern "C" fn vkCreatePipelineCache(
+    _device: *mut c_void,
+    p_create_info: *const c_void,
+    _p_allocator: *const c_void,
+    p_pipeline_cache: *mut u64,
+) -> VkResult {
+    if p_pipeline_cache.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    unsafe { *p_pipeline_cache = 0 };
+    // The optional initialData blob (may be absent — a fresh cache).
+    let initial: Vec<u8> = match unsafe { (p_create_info as *const VkPipelineCacheCreateInfo).as_ref() } {
+        Some(ci) if !ci.p_initial_data.is_null() && ci.initial_data_size > 0 => {
+            unsafe { std::slice::from_raw_parts(ci.p_initial_data as *const u8, ci.initial_data_size) }.to_vec()
+        }
+        _ => Vec::new(),
+    };
+    match dev_sink(|dev, _| create::create_pipeline_cache(dev, &initial)) {
+        Some(handle) => {
+            unsafe { *p_pipeline_cache = handle };
+            VK_SUCCESS
+        }
+        None => VK_ERROR_INITIALIZATION_FAILED,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn vkDestroyPipelineCache(_device: *mut c_void, pipeline_cache: u64, _p_allocator: *const c_void) {
+    dev_sink(|dev, _| create::destroy_pipeline_cache(dev, pipeline_cache));
+}
+
+#[no_mangle]
+pub extern "C" fn vkMergePipelineCaches(
+    _device: *mut c_void,
+    dst_cache: u64,
+    src_cache_count: u32,
+    p_src_caches: *const u64,
+) -> VkResult {
+    let srcs: Vec<u64> = if p_src_caches.is_null() || src_cache_count == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(p_src_caches, src_cache_count as usize) }.to_vec()
+    };
+    match dev_sink(|dev, _| create::merge_pipeline_caches(dev, dst_cache, &srcs)) {
+        Some(Ok(())) => VK_SUCCESS,
+        Some(Err(e)) => vk_result_from_gpu_error(&e),
+        None => VK_ERROR_INITIALIZATION_FAILED,
+    }
+}
+
+/// `vkGetPipelineCacheData` — write the serialized cache blob (a spec-valid header). The two-call size
+/// query (`pData` NULL) reports the length; a short buffer truncates with `VK_INCOMPLETE`.
+#[no_mangle]
+pub extern "C" fn vkGetPipelineCacheData(
+    _device: *mut c_void,
+    pipeline_cache: u64,
+    p_data_size: *mut usize,
+    p_data: *mut c_void,
+) -> VkResult {
+    if p_data_size.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    let data = match dev_sink(|dev, _| create::get_pipeline_cache_data(dev, pipeline_cache)) {
+        Some(Ok(d)) => d,
+        Some(Err(e)) => return vk_result_from_gpu_error(&e),
+        None => return VK_ERROR_INITIALIZATION_FAILED,
+    };
+    if p_data.is_null() {
+        unsafe { *p_data_size = data.len() };
+        return VK_SUCCESS;
+    }
+    let cap = unsafe { *p_data_size };
+    let n = cap.min(data.len());
+    unsafe {
+        core::ptr::copy_nonoverlapping(data.as_ptr(), p_data as *mut u8, n);
+        *p_data_size = n;
+    }
+    if n < data.len() {
+        VK_INCOMPLETE
+    } else {
+        VK_SUCCESS
+    }
+}
+
+// ==================================================================================================
 // command pool + buffers + recording + submit
 // ==================================================================================================
 
@@ -564,6 +770,29 @@ pub extern "C" fn vkCmdDispatchIndirect(command_buffer: *mut c_void, buffer: u64
     };
     dev_sink(|dev, _| {
         let _ = record::cmd_dispatch_indirect(dev, cb, buffer, offset);
+    });
+}
+
+/// `vkCmdExecuteCommands` — replay recorded secondary command buffers into this primary (their encoder
+/// ops, deferred device ops, and inline buffer writes spliced in order). Every secondary must be a valid,
+/// `Executable` command buffer.
+#[no_mangle]
+pub extern "C" fn vkCmdExecuteCommands(
+    command_buffer: *mut c_void,
+    command_buffer_count: u32,
+    p_command_buffers: *const *mut c_void,
+) {
+    let Some(primary) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+        return;
+    };
+    if p_command_buffers.is_null() || command_buffer_count == 0 {
+        return;
+    }
+    let raw = unsafe { std::slice::from_raw_parts(p_command_buffers, command_buffer_count as usize) };
+    // Unwrap each dispatchable secondary to its hl_vulkan u64 handle (skip any null slot).
+    let secondaries: Vec<VkCbHandle> = raw.iter().filter_map(|&p| unsafe { cmdbuf_handle(p) }).collect();
+    dev_sink(|dev, _| {
+        let _ = record::cmd_execute_commands(dev, primary, &secondaries);
     });
 }
 

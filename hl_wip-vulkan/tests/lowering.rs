@@ -5,7 +5,10 @@
 //! the recorded command stream, which is wire-identical to what the shipping ICD emits.
 
 use hl_vulkan::adapter::spirv;
-use hl_vulkan::model::descriptor::{vk_descriptor_type, LayoutBinding};
+use hl_vulkan::model::descriptor::{
+    vk_descriptor_type, DescriptorTemplateEntry, LayoutBinding,
+    VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
+};
 use hl_vulkan::model::memory::{vk_buffer_usage, vk_format, vk_image_usage};
 use hl_vulkan::result;
 use hl_vulkan::service::{create, present, record, submit, sync};
@@ -941,6 +944,219 @@ fn copy_query_pool_results_writes_dst_buffer_at_submit() {
         }
         other => panic!("expected [Submit, WriteBuffer], got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// descriptor update templates: a template update == the equivalent direct writes (same bind group)
+// ---------------------------------------------------------------------------------------------------
+
+/// The 24-byte `VkDescriptorBufferInfo`/`TemplateBufferInfo` blob a buffer-class template entry reads.
+fn buffer_info_bytes(buffer: u64, offset: u64, range: u64) -> [u8; 24] {
+    let mut b = [0u8; 24];
+    b[0..8].copy_from_slice(&buffer.to_le_bytes());
+    b[8..16].copy_from_slice(&offset.to_le_bytes());
+    b[16..24].copy_from_slice(&range.to_le_bytes());
+    b
+}
+
+/// Bind `set` at set index 0 and return the resulting `CreateBindGroup`'s entries.
+fn bind_and_capture_entries(
+    d: &mut Device,
+    sink: &mut RecordingSink,
+    set: u64,
+) -> Vec<hl_gpu::protocol::model::descriptor::BindEntry> {
+    let cb = record::allocate_command_buffer(d);
+    record::begin(d, cb).unwrap();
+    record::cmd_bind_descriptor_sets(d, sink, cb, 0, &[set], &[]).unwrap();
+    record::end(d, cb).unwrap();
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::CreateBindGroup(_, desc)] => desc.entries.clone(),
+        other => panic!("expected CreateBindGroup, got {other:?}"),
+    }
+}
+
+#[test]
+fn descriptor_template_update_matches_direct_writes() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let in_buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 1024).unwrap();
+    let out_buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 1024).unwrap();
+
+    let layout = create::create_descriptor_set_layout(
+        &mut d,
+        vec![
+            LayoutBinding { binding: 0, descriptor_type: vk_descriptor_type::STORAGE_BUFFER, descriptor_count: 1, stage_flags: 0 },
+            LayoutBinding { binding: 1, descriptor_type: vk_descriptor_type::STORAGE_BUFFER, descriptor_count: 1, stage_flags: 0 },
+        ],
+    );
+    let pool = create::create_descriptor_pool(&mut d, 8);
+
+    // Set A: two direct buffer writes (the reference path).
+    let set_direct = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    create::update_descriptor_buffer(&mut d, set_direct, 0, in_buf, 0, 1024).unwrap();
+    create::update_descriptor_buffer(&mut d, set_direct, 1, out_buf, 256, 512).unwrap();
+
+    // Set B: the SAME two writes applied via a descriptor update template + a packed data blob.
+    let set_tmpl = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    let template = create::create_descriptor_update_template(
+        &mut d,
+        VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
+        vec![
+            DescriptorTemplateEntry { dst_binding: 0, dst_array_element: 0, descriptor_count: 1, descriptor_type: vk_descriptor_type::STORAGE_BUFFER, offset: 0, stride: 24 },
+            DescriptorTemplateEntry { dst_binding: 1, dst_array_element: 0, descriptor_count: 1, descriptor_type: vk_descriptor_type::STORAGE_BUFFER, offset: 24, stride: 24 },
+        ],
+    )
+    .unwrap();
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&buffer_info_bytes(in_buf, 0, 1024));
+    blob.extend_from_slice(&buffer_info_bytes(out_buf, 256, 512));
+    create::update_descriptor_set_with_template(&mut d, set_tmpl, template, &blob).unwrap();
+
+    // Binding either set produces the identical IR bind-group entries.
+    let direct = bind_and_capture_entries(&mut d, &mut sink, set_direct);
+    let via_template = bind_and_capture_entries(&mut d, &mut sink, set_tmpl);
+    assert_eq!(direct, via_template);
+    // …and they resolve the two storage buffers to ir ids 1 & 2 with the written offsets/ranges.
+    assert_eq!(via_template.len(), 2);
+    assert!(matches!(via_template[0].resource, BindResource::Buffer { id: 1, offset: 0, size: 1024 }));
+    assert!(matches!(via_template[1].resource, BindResource::Buffer { id: 2, offset: 256, size: 512 }));
+}
+
+#[test]
+fn descriptor_template_rejects_non_descriptor_set_type_and_bad_handles() {
+    let mut d = dev();
+    // A push-descriptor template type (1) is a truthful feature-not-present, never a fake success.
+    assert!(matches!(
+        create::create_descriptor_update_template(&mut d, 1, vec![]),
+        Err(GpuError::Unsupported(_))
+    ));
+    // Updating with an unknown template / set is a typed error.
+    assert!(create::update_descriptor_set_with_template(&mut d, 0xdead, 0xbeef, &[]).is_err());
+    // A blob too short for a declared entry is a truthful out-of-bounds, not a junk read.
+    let tmpl = create::create_descriptor_update_template(
+        &mut d,
+        VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
+        vec![DescriptorTemplateEntry { dst_binding: 0, dst_array_element: 0, descriptor_count: 1, descriptor_type: vk_descriptor_type::UNIFORM_BUFFER, offset: 0, stride: 24 }],
+    )
+    .unwrap();
+    let pool = create::create_descriptor_pool(&mut d, 1);
+    let layout = create::create_descriptor_set_layout(&mut d, vec![]);
+    let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    assert!(matches!(
+        create::update_descriptor_set_with_template(&mut d, set, tmpl, &[0u8; 8]),
+        Err(GpuError::OutOfBounds)
+    ));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// secondary command buffers: vkCmdExecuteCommands replays a secondary's ops into the primary
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn execute_commands_replays_secondary_ops_into_primary() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 256).unwrap();
+    let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 256).unwrap();
+    let (s, t) = (buf_ir(&d, src), buf_ir(&d, dst));
+
+    // A secondary records a copy (encoder op) + a fill (buffer write), then becomes Executable.
+    let secondary = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, secondary).unwrap();
+    record::cmd_copy_buffer(&mut d, secondary, src, dst, 0, 0, 64).unwrap();
+    record::cmd_fill_buffer(&mut d, secondary, dst, 128, 8, 0x0202_0202).unwrap();
+    record::end(&mut d, secondary).unwrap();
+
+    // The primary executes the secondary, then is submitted.
+    let primary = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, primary).unwrap();
+    record::cmd_execute_commands(&mut d, primary, &[secondary]).unwrap();
+    record::end(&mut d, primary).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[primary], None).unwrap();
+
+    // The primary's submit carries the secondary's copy (encoder) preceded by the spliced fill (write).
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::WriteBuffer { id, offset: 128, data }, Cmd::Submit(cbuf)] => {
+            assert_eq!(*id, t);
+            assert_eq!(data, &vec![2u8; 8]);
+            assert_eq!(cbuf.encoder, vec![Enc::CopyBufferToBuffer { src: s, src_offset: 0, dst: t, dst_offset: 0, size: 64 }]);
+        }
+        other => panic!("expected [WriteBuffer, Submit], got {other:?}"),
+    }
+
+    // A secondary that is not Executable (still recording) is a typed error, splicing nothing.
+    let unfinished = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, unfinished).unwrap();
+    let p2 = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, p2).unwrap();
+    assert!(record::cmd_execute_commands(&mut d, p2, &[unfinished]).is_err());
+}
+
+// ---------------------------------------------------------------------------------------------------
+// WSI physical-device surface queries: modeled caps / formats / present modes
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn surface_queries_report_modeled_values() {
+    // Support: only the lone present family (0) presents.
+    assert!(present::surface_supports_present(0));
+    assert!(!present::surface_supports_present(1));
+
+    // Capabilities: double/triple-buffered, surface-defined extent, identity/opaque.
+    let caps = present::surface_capabilities();
+    assert_eq!(caps.min_image_count, 2);
+    assert_eq!(caps.max_image_count, 3);
+    assert_eq!(caps.current_extent, (u32::MAX, u32::MAX));
+    assert_eq!(caps.max_image_extent, (16384, 16384));
+    assert_eq!(caps.max_image_array_layers, 1);
+
+    // Formats: BGRA8 + RGBA8, UNORM + SRGB, all SRGB-nonlinear.
+    let formats = present::surface_formats();
+    use hl_vulkan::model::queue::VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    assert!(formats.iter().all(|f| f.color_space == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR));
+    assert!(formats.iter().any(|f| f.format == vk_format::B8G8R8A8_SRGB));
+    assert!(formats.iter().any(|f| f.format == vk_format::R8G8B8A8_SRGB));
+
+    // Present modes: FIFO (the always-available v-synced mode).
+    assert_eq!(present::surface_present_modes(), vec![hl_vulkan::model::queue::VK_PRESENT_MODE_FIFO_KHR]);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// vkGetImageSubresourceLayout + pipeline cache
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn image_subresource_layout_reports_linear_rgba8_layout() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let img = create::create_image(&mut d, &mut sink, 64, 32, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST).unwrap();
+    let l = create::image_subresource_layout(&d, img).unwrap();
+    assert_eq!(l.offset, 0);
+    assert_eq!(l.row_pitch, 64 * 4); // width * 4 bytes/texel
+    assert_eq!(l.size, 64 * 4 * 32); // rowPitch * height
+    // An unknown image is a typed error.
+    assert!(create::image_subresource_layout(&d, 0xdead).is_err());
+}
+
+#[test]
+fn pipeline_cache_roundtrips_a_valid_header() {
+    let mut d = dev();
+    let cache = create::create_pipeline_cache(&mut d, &[]);
+    let data = create::get_pipeline_cache_data(&d, cache).unwrap();
+    // A valid VkPipelineCacheHeaderVersionOne: length 32, version 1 (little-endian).
+    assert!(data.len() >= 32);
+    assert_eq!(u32::from_le_bytes([data[0], data[1], data[2], data[3]]), 32);
+    assert_eq!(u32::from_le_bytes([data[4], data[5], data[6], data[7]]), 1);
+
+    // Merge is a truthful no-op that validates handles.
+    let other = create::create_pipeline_cache(&mut d, &[]);
+    assert!(create::merge_pipeline_caches(&d, cache, &[other]).is_ok());
+    assert!(create::merge_pipeline_caches(&d, cache, &[0xdead]).is_err());
+    assert!(create::merge_pipeline_caches(&d, 0xdead, &[]).is_err());
+
+    // Destroy then query is a typed error.
+    create::destroy_pipeline_cache(&mut d, cache);
+    assert!(create::get_pipeline_cache_data(&d, cache).is_err());
 }
 
 #[test]

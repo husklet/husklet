@@ -74,3 +74,48 @@ pub struct SwapchainRec {
     pub format: TextureFormat,
     pub images: Vec<SwapImage>,
 }
+
+// ---- WSI physical-device surface queries (modeled values) ----------------------------------------
+// `vkGetPhysicalDeviceSurface{Support,Capabilities,Formats,PresentModes}KHR` report these fixed,
+// truthful values for the modeled presentation engine. Ported from `hl-shim-vk/src/wsi.rs`
+// (`surface_capabilities`, `SURFACE_FORMAT`, FIFO). Raw Vulkan enum/flag values (from vk.xml) so the
+// shim copies them straight into the app's C structs.
+
+/// `VkColorSpaceKHR::SRGB_NONLINEAR` — the one color space the surface formats advertise.
+pub const VK_COLOR_SPACE_SRGB_NONLINEAR_KHR: i32 = 0;
+/// `VkPresentModeKHR::FIFO` — the one present mode (guaranteed-available, v-synced).
+pub const VK_PRESENT_MODE_FIFO_KHR: i32 = 2;
+/// `VkSurfaceTransformFlagBitsKHR::IDENTITY`.
+pub const SURFACE_TRANSFORM_IDENTITY_BIT: u32 = 0x0000_0001;
+/// `VkCompositeAlphaFlagBitsKHR::OPAQUE`.
+pub const COMPOSITE_ALPHA_OPAQUE_BIT: u32 = 0x0000_0001;
+/// `VkImageUsageFlagBits` a swapchain image supports: COLOR_ATTACHMENT | TRANSFER_SRC | TRANSFER_DST.
+pub const SURFACE_IMAGE_USAGE: u32 = 0x0000_0010 | 0x0000_0001 | 0x0000_0002;
+/// The special "surface decides" current extent, both dimensions `u32::MAX` (the app must pick).
+pub const CURRENT_EXTENT_UNDEFINED: (u32, u32) = (u32::MAX, u32::MAX);
+
+/// The modeled `VkSurfaceCapabilitiesKHR` (min/max image count, extents, transforms, usage). Values
+/// ported from `hl-shim-vk/src/wsi.rs::surface_capabilities` (MoltenVK Apple-class WSI).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SurfaceCapabilities {
+    pub min_image_count: u32,
+    pub max_image_count: u32,
+    /// `(u32::MAX, u32::MAX)` == surface-defined; the app chooses the swapchain extent within bounds.
+    pub current_extent: (u32, u32),
+    pub min_image_extent: (u32, u32),
+    pub max_image_extent: (u32, u32),
+    pub max_image_array_layers: u32,
+    pub supported_transforms: u32,
+    pub current_transform: u32,
+    pub supported_composite_alpha: u32,
+    pub supported_usage_flags: u32,
+}
+
+/// One modeled `VkSurfaceFormatKHR` (raw `VkFormat` + `VkColorSpaceKHR`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SurfaceFormat {
+    /// Raw `VkFormat`.
+    pub format: u32,
+    /// Raw `VkColorSpaceKHR`.
+    pub color_space: i32,
+}

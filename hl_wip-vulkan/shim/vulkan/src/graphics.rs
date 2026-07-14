@@ -117,6 +117,29 @@ pub extern "C" fn vkGetImageMemoryRequirements(
     out.memory_type_bits = 1;
 }
 
+/// `vkGetImageSubresourceLayout` — report the linear byte layout (offset/size/rowPitch) of `image`'s
+/// subresource. Modeled images are single-mip single-layer RGBA8 2D targets (rowPitch = width*4). Leaves
+/// the output zeroed on an unknown image (the caller must have queried a valid, linear-tiled image).
+#[no_mangle]
+pub extern "C" fn vkGetImageSubresourceLayout(
+    _device: *mut c_void,
+    image: u64,
+    _p_subresource: *const c_void,
+    p_layout: *mut c_void,
+) {
+    let Some(out) = (unsafe { (p_layout as *mut VkSubresourceLayout).as_mut() }) else {
+        return;
+    };
+    *out = VkSubresourceLayout::default();
+    if let Some(Ok(l)) = dev(|d| create::image_subresource_layout(d, image)) {
+        out.offset = l.offset;
+        out.size = l.size;
+        out.row_pitch = l.row_pitch;
+        out.array_pitch = l.array_pitch;
+        out.depth_pitch = l.depth_pitch;
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn vkBindImageMemory(
     _device: *mut c_void,

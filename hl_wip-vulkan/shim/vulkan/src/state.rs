@@ -46,6 +46,15 @@ pub struct State {
     /// `VkFramebuffer` handle → its attachment `VkImageView` handles (index 0 is the color target).
     pub framebuffers: HashMap<u64, Vec<u64>>,
 
+    /// Live `VkSurfaceKHR` handles (the WSI surface model). A surface is an INSTANCE-level object created
+    /// before any logical device, so it lives here in the shim state, not in the `hl_vulkan::Device`. The
+    /// physical-device surface queries (`vkGetPhysicalDeviceSurface*KHR`) validate their handle against
+    /// this set (an unknown one is `VK_ERROR_SURFACE_LOST_KHR`).
+    pub surfaces: std::collections::HashSet<u64>,
+    /// Monotonic non-dispatchable-handle counter for `VkSurfaceKHR` (never 0 == `VK_NULL_HANDLE`); kept
+    /// on a distinct high base so surface handles never alias the device's object handles.
+    next_surface: u64,
+
     /// Stable loader-magic'd dispatchable tokens (a pointer, once minted, is reused so the loader's
     /// object identity is consistent across calls). `0` = not yet minted.
     phys_dev: usize,
@@ -63,10 +72,25 @@ impl State {
             image_views: HashMap::new(),
             render_passes: HashMap::new(),
             framebuffers: HashMap::new(),
+            surfaces: std::collections::HashSet::new(),
+            next_surface: 0,
             phys_dev: 0,
             device_handle: 0,
             queue_handle: 0,
         }
+    }
+
+    /// Mint a fresh live `VkSurfaceKHR` handle (monotonic, never `VK_NULL_HANDLE`).
+    pub fn mint_surface(&mut self) -> u64 {
+        self.next_surface += 1;
+        let handle = 0x5000_0000_0000_0000 + self.next_surface;
+        self.surfaces.insert(handle);
+        handle
+    }
+
+    /// Whether `surface` is a live (created, not destroyed) `VkSurfaceKHR`.
+    pub fn surface_valid(&self, surface: u64) -> bool {
+        surface != 0 && self.surfaces.contains(&surface)
     }
 
     /// The single physical-device dispatchable token, minted once and reused.

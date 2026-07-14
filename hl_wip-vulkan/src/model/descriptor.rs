@@ -16,6 +16,56 @@ pub mod vk_descriptor_type {
     pub const STORAGE_BUFFER_DYNAMIC: i32 = 9;
 }
 
+/// Whether a `VkDescriptorType` is one of the buffer descriptors the bring-up compute path models (the
+/// only class carried in [`DsetRec::buffers`]). Image/texel descriptors are not materialized here, so —
+/// exactly as `vkUpdateDescriptorSets` does — a template applying them is a truthful no-op for that entry.
+pub fn is_buffer_descriptor(descriptor_type: i32) -> bool {
+    use vk_descriptor_type::*;
+    matches!(
+        descriptor_type,
+        UNIFORM_BUFFER | STORAGE_BUFFER | UNIFORM_BUFFER_DYNAMIC | STORAGE_BUFFER_DYNAMIC
+    )
+}
+
+/// `VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET` — the only template kind without
+/// `VK_KHR_push_descriptor` (the push-descriptor kind needs a bound pipeline layout we do not model).
+pub const VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET: i32 = 0;
+
+/// One entry of a `VkDescriptorUpdateTemplate` (Vulkan 1.1 / MoltenVK `MVKDescriptorUpdateTemplate`):
+/// where in the app's pushed data blob each descriptor lives (`offset` + per-element `stride`) and which
+/// `(binding, arrayElement)` of which class it targets. Ported from `hl-shim-vk/src/reg.rs`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct DescriptorTemplateEntry {
+    pub dst_binding: u32,
+    pub dst_array_element: u32,
+    pub descriptor_count: u32,
+    /// `VkDescriptorType` (raw).
+    pub descriptor_type: i32,
+    /// Byte offset of element 0 in the app's `pData` blob.
+    pub offset: usize,
+    /// Byte stride between consecutive array elements in the blob.
+    pub stride: usize,
+}
+
+/// A `VkDescriptorUpdateTemplate` (Vulkan 1.1): the immutable entry table
+/// `vkUpdateDescriptorSetWithTemplate` walks to read descriptors out of the app's data blob at fixed
+/// offsets/strides and apply them to a set exactly as `vkUpdateDescriptorSets` would.
+#[derive(Clone, PartialEq, Debug)]
+pub struct DescriptorUpdateTemplateRec {
+    pub entries: Vec<DescriptorTemplateEntry>,
+}
+
+/// `VkDescriptorBufferInfo` byte layout (`{ VkBuffer buffer; VkDeviceSize offset; VkDeviceSize range }`,
+/// 24 bytes) — the stable ABI a buffer-class template entry reads out of the app's blob. Re-declared
+/// clean-room so the driver layer parses the blob without the C-ABI struct (testable without FFI).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TemplateBufferInfo {
+    pub buffer: u64,
+    pub offset: u64,
+    pub range: u64,
+}
+
 /// One immutable binding of a `VkDescriptorSetLayout`. Mirrors `MVKDescriptorSetLayout` binding record.
 #[derive(Clone, PartialEq, Debug)]
 pub struct LayoutBinding {

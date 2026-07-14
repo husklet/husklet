@@ -277,6 +277,44 @@ pub fn cmd_end_render_pass(dev: &mut Device, cb: VkCommandBuffer) -> Result<()> 
     Ok(())
 }
 
+// ---- secondary command buffers -----------------------------------------------------------------
+
+/// `vkCmdExecuteCommands` — replay recorded secondary command buffers into this primary: each
+/// secondary's encoder ops, its deferred device query/event ops, and its inline buffer writes are
+/// appended to the primary in order (so a later `vkQueueSubmit` of the primary ships the spliced work as
+/// one stream). The primary must be `Recording`; every secondary must exist and be `Executable`
+/// (validated up front so a bad batch splices nothing). Ported from
+/// `hl-shim-vk/src/command.rs::vkCmdExecuteCommands` (`MVKCmdExecuteCommands`).
+pub fn cmd_execute_commands(
+    dev: &mut Device,
+    primary: VkCommandBuffer,
+    secondaries: &[VkCommandBuffer],
+) -> Result<()> {
+    // The primary must be recording.
+    let _ = recording_mut(dev, primary)?;
+    // Every secondary must exist and be Executable — validate before splicing anything.
+    for &sec in secondaries {
+        match dev.command_buffers.get(&sec) {
+            Some(r) if r.state == CommandBufferState::Executable => {}
+            _ => return Err(GpuError::Invalid("vkCmdExecuteCommands: secondary is unknown or not executable")),
+        }
+    }
+    // Snapshot each secondary's recorded work (immutable borrows end), then splice in order.
+    let mut spliced: Vec<(Vec<Enc>, Vec<(u32, u64, Vec<u8>)>, Vec<DeferredOp>)> = Vec::new();
+    for &sec in secondaries {
+        if let Some(r) = dev.command_buffers.get(&sec) {
+            spliced.push((r.enc.clone(), r.buffer_writes.clone(), r.deferred.clone()));
+        }
+    }
+    let primary_rec = recording_mut(dev, primary)?;
+    for (enc, writes, deferred) in spliced {
+        primary_rec.enc.extend(enc);
+        primary_rec.buffer_writes.extend(writes);
+        primary_rec.deferred.extend(deferred);
+    }
+    Ok(())
+}
+
 // ---- dynamic state -----------------------------------------------------------------------------
 // Viewport + scissor are modeled by the IR (etag 7 / 16) and lower to real encoder ops. The remaining
 // `vkCmdSet*` dynamic state is recorded into the command buffer's [`DynamicState`] (observable, honest)

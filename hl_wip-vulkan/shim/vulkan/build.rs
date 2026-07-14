@@ -290,6 +290,7 @@ const IMPLEMENTED: &[&str] = &[
     "vkCreateDevice",
     "vkDestroyDevice",
     "vkGetDeviceQueue",
+    "vkGetDeviceQueue2",
     // ---- IR-wired compute path (compute.rs) ----
     // memory + buffers
     "vkCreateBuffer",
@@ -314,6 +315,18 @@ const IMPLEMENTED: &[&str] = &[
     "vkDestroyDescriptorPool",
     "vkAllocateDescriptorSets",
     "vkUpdateDescriptorSets",
+    // descriptor update templates (core 1.1 + VK_KHR_descriptor_update_template)
+    "vkCreateDescriptorUpdateTemplate",
+    "vkCreateDescriptorUpdateTemplateKHR",
+    "vkDestroyDescriptorUpdateTemplate",
+    "vkDestroyDescriptorUpdateTemplateKHR",
+    "vkUpdateDescriptorSetWithTemplate",
+    "vkUpdateDescriptorSetWithTemplateKHR",
+    // pipeline cache (modeled no-op-with-valid-data)
+    "vkCreatePipelineCache",
+    "vkDestroyPipelineCache",
+    "vkMergePipelineCaches",
+    "vkGetPipelineCacheData",
     // command pool + buffers + record + submit
     "vkCreateCommandPool",
     "vkDestroyCommandPool",
@@ -324,6 +337,7 @@ const IMPLEMENTED: &[&str] = &[
     "vkCmdBindDescriptorSets",
     "vkCmdDispatch",
     "vkCmdDispatchIndirect",
+    "vkCmdExecuteCommands",
     "vkQueueSubmit",
     "vkQueueWaitIdle",
     "vkDeviceWaitIdle",
@@ -338,6 +352,7 @@ const IMPLEMENTED: &[&str] = &[
     "vkCreateImage",
     "vkDestroyImage",
     "vkGetImageMemoryRequirements",
+    "vkGetImageSubresourceLayout",
     "vkBindImageMemory",
     "vkCreateImageView",
     "vkDestroyImageView",
@@ -375,6 +390,19 @@ const IMPLEMENTED: &[&str] = &[
     "vkGetSwapchainImagesKHR",
     "vkAcquireNextImageKHR",
     "vkQueuePresentKHR",
+    // ---- WSI surface: VK_KHR_surface + platform constructors + phys-device queries (surface.rs) ----
+    "vkCreateXcbSurfaceKHR",
+    "vkCreateXlibSurfaceKHR",
+    "vkCreateWaylandSurfaceKHR",
+    "vkCreateHeadlessSurfaceEXT",
+    "vkDestroySurfaceKHR",
+    "vkGetPhysicalDeviceSurfaceSupportKHR",
+    "vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+    "vkGetPhysicalDeviceSurfaceFormatsKHR",
+    "vkGetPhysicalDeviceSurfacePresentModesKHR",
+    "vkGetPhysicalDeviceXcbPresentationSupportKHR",
+    "vkGetPhysicalDeviceXlibPresentationSupportKHR",
+    "vkGetPhysicalDeviceWaylandPresentationSupportKHR",
     // ---- IR-wired transfer path (transfer.rs): copies / blits / clears / fills / barriers ----
     "vkCmdCopyBuffer",
     "vkCmdCopyBufferToImage",

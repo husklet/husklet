@@ -8,13 +8,17 @@
 //! ([`crate::adapter::spirv`]).
 
 use crate::adapter::spirv;
-use crate::model::descriptor::{DescriptorPoolRec, DsetRec, LayoutBinding, SetLayoutRec};
+use crate::model::descriptor::{
+    is_buffer_descriptor, DescriptorPoolRec, DescriptorTemplateEntry, DescriptorUpdateTemplateRec,
+    DsetRec, LayoutBinding, SetLayoutRec, TemplateBufferInfo,
+    VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
+};
 use crate::model::instance::Instance;
 use crate::model::memory::{
     buffer_usage_from_vk, is_render_target, tex_format_from_vk, texture_usage_from_vk, BufferRec,
     ImageRec, MemRec, SamplerRec,
 };
-use crate::model::pipeline::{PipelineKind, PipelineLayoutRec, PipelineRec, ShaderRec};
+use crate::model::pipeline::{PipelineCacheRec, PipelineKind, PipelineLayoutRec, PipelineRec, ShaderRec};
 use crate::model::queue::FenceRec;
 use crate::*;
 use hl_gpu::protocol::model::descriptor::{
@@ -381,6 +385,187 @@ pub fn update_descriptor_buffer(
         .ok_or(GpuError::Invalid("vkUpdateDescriptorSets: unknown VkDescriptorSet"))?;
     rec.buffers.insert(binding, (buffer, offset, range));
     Ok(())
+}
+
+// ---- descriptor update templates -----------------------------------------------------------------
+
+/// `vkCreateDescriptorUpdateTemplate(KHR)` — retain the immutable entry table (offset/stride/binding/
+/// type) the app later pushes descriptors through. Only the `DESCRIPTOR_SET` template type is modeled
+/// (push-descriptor templates need a bound pipeline layout the bring-up path lacks), so a different type
+/// is a truthful `VK_ERROR_FEATURE_NOT_PRESENT` analogue. No IR. Ported from
+/// `hl-shim-vk/src/descriptor.rs::vkCreateDescriptorUpdateTemplate`.
+pub fn create_descriptor_update_template(
+    dev: &mut Device,
+    template_type: i32,
+    entries: Vec<DescriptorTemplateEntry>,
+) -> Result<VkDescriptorUpdateTemplate> {
+    if template_type != VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET {
+        return Err(GpuError::Unsupported(
+            "vkCreateDescriptorUpdateTemplate: only DESCRIPTOR_SET templates are supported",
+        ));
+    }
+    let handle = dev.alloc_handle();
+    dev.descriptor_update_templates.insert(handle, DescriptorUpdateTemplateRec { entries });
+    Ok(handle)
+}
+
+/// `vkDestroyDescriptorUpdateTemplate(KHR)` — drop the template. No-op on `VK_NULL_HANDLE`/unknown.
+pub fn destroy_descriptor_update_template(dev: &mut Device, template: VkDescriptorUpdateTemplate) {
+    dev.descriptor_update_templates.remove(&template);
+}
+
+/// `vkUpdateDescriptorSetWithTemplate(KHR)` — walk the template entries, reading each buffer descriptor
+/// out of `data` at `entry.offset + i*entry.stride` and applying it to `set` **exactly as**
+/// [`update_descriptor_buffer`] does (so a template update yields the same `binding -> (buffer, offset,
+/// range)` table — and thus the same IR bind group — as the equivalent direct `vkUpdateDescriptorSets`).
+/// Image/texel descriptors are not materialized in the compute path, so those entries are a truthful
+/// no-op (mirroring the direct-write path). Errors on an unknown template or set; a short blob (an entry
+/// reading past `data`) is a truthful out-of-bounds error, never a junk read. Ported from
+/// `hl-shim-vk/src/descriptor.rs::vkUpdateDescriptorSetWithTemplate`.
+pub fn update_descriptor_set_with_template(
+    dev: &mut Device,
+    set: VkDescriptorSet,
+    template: VkDescriptorUpdateTemplate,
+    data: &[u8],
+) -> Result<()> {
+    let entries = dev
+        .descriptor_update_templates
+        .get(&template)
+        .ok_or(GpuError::Invalid("vkUpdateDescriptorSetWithTemplate: unknown VkDescriptorUpdateTemplate"))?
+        .entries
+        .clone();
+    if !dev.descriptor_sets.contains_key(&set) {
+        return Err(GpuError::Invalid("vkUpdateDescriptorSetWithTemplate: unknown VkDescriptorSet"));
+    }
+    for e in &entries {
+        // Array elements fold onto the binding (the model keys a set's resources by binding), matching
+        // `vkUpdateDescriptorSets`.
+        if !is_buffer_descriptor(e.descriptor_type) {
+            continue;
+        }
+        for i in 0..e.descriptor_count as usize {
+            let base = e
+                .offset
+                .checked_add(i.checked_mul(e.stride).ok_or(GpuError::OutOfBounds)?)
+                .ok_or(GpuError::OutOfBounds)?;
+            let end = base.checked_add(core::mem::size_of::<TemplateBufferInfo>()).ok_or(GpuError::OutOfBounds)?;
+            if end > data.len() {
+                return Err(GpuError::OutOfBounds);
+            }
+            // The blob is app-provided bytes at an arbitrary offset — an unaligned read is required.
+            let bi = unsafe { core::ptr::read_unaligned(data.as_ptr().add(base) as *const TemplateBufferInfo) };
+            update_descriptor_buffer(dev, set, e.dst_binding, bi.buffer, bi.offset, bi.range)?;
+        }
+    }
+    Ok(())
+}
+
+/// The number of bytes of the app's `pData` blob a template's BUFFER entries read — the max over every
+/// buffer entry of `offset + (count-1)*stride + sizeof(VkDescriptorBufferInfo)`. The shim uses this to
+/// build a correctly-bounded slice over the raw `pData` pointer (the C API carries no data size), so the
+/// bounds check in [`update_descriptor_set_with_template`] is exact. `None` on an unknown template; `0`
+/// if the template reads no buffer bytes.
+pub fn descriptor_template_data_len(dev: &Device, template: VkDescriptorUpdateTemplate) -> Option<usize> {
+    let rec = dev.descriptor_update_templates.get(&template)?;
+    let mut max = 0usize;
+    for e in &rec.entries {
+        if !is_buffer_descriptor(e.descriptor_type) || e.descriptor_count == 0 {
+            continue;
+        }
+        let last = (e.descriptor_count as usize - 1).saturating_mul(e.stride);
+        let end = e.offset.saturating_add(last).saturating_add(core::mem::size_of::<TemplateBufferInfo>());
+        max = max.max(end);
+    }
+    Some(max)
+}
+
+// ---- image subresource layout --------------------------------------------------------------------
+
+/// A `VkSubresourceLayout` for one image subresource: byte `offset`/`size` of the subresource and the
+/// `row_pitch` (bytes per row). The bring-up images are single-mip, single-layer 2D RGBA8 targets, so
+/// array/depth pitch are 0. Values a linear-tiling app reads to `memcpy` into a mapped image.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SubresourceLayout {
+    pub offset: u64,
+    pub size: u64,
+    pub row_pitch: u64,
+    pub array_pitch: u64,
+    pub depth_pitch: u64,
+}
+
+/// `vkGetImageSubresourceLayout` — report the linear layout of `image`'s base subresource. The modeled
+/// images are 4-byte-per-texel (RGBA8/BGRA8) single-mip 2D targets: `row_pitch = width*4`,
+/// `size = row_pitch*height`, tightly packed from offset 0. Errors on an unknown image. Ported (for the
+/// single-subresource model) from `hl-shim-vk`'s image-layout reporting.
+pub fn image_subresource_layout(dev: &Device, image: VkImage) -> Result<SubresourceLayout> {
+    let img = dev
+        .images
+        .get(&image)
+        .ok_or(GpuError::Invalid("vkGetImageSubresourceLayout: unknown VkImage"))?;
+    let row_pitch = img.width as u64 * 4;
+    Ok(SubresourceLayout {
+        offset: 0,
+        size: row_pitch * img.height as u64,
+        row_pitch,
+        array_pitch: 0,
+        depth_pitch: 0,
+    })
+}
+
+// ---- pipeline cache (modeled: a valid, versioned header; no host binary to cache) ----------------
+
+/// The 32-byte `VkPipelineCacheHeaderVersionOne` prefix a valid pipeline-cache blob begins with:
+/// `{ u32 length=32; u32 version=1; u32 vendorID; u32 deviceID; u8 uuid[16] }` (all little-endian, from
+/// vk.xml). The hl-GPU pipelines forward SPIR-V verbatim (no compiled host artifact), so a cache carries
+/// only this header — enough that a loader/app re-reading it via `vkGetPipelineCacheData` accepts it.
+pub fn pipeline_cache_header(dev: &Device) -> Vec<u8> {
+    const HEADER_LEN: u32 = 32;
+    const VK_PIPELINE_CACHE_HEADER_VERSION_ONE: u32 = 1;
+    let pd = &dev.physical_device;
+    let mut hdr = Vec::with_capacity(HEADER_LEN as usize);
+    hdr.extend_from_slice(&HEADER_LEN.to_le_bytes());
+    hdr.extend_from_slice(&VK_PIPELINE_CACHE_HEADER_VERSION_ONE.to_le_bytes());
+    hdr.extend_from_slice(&pd.vendor_id.to_le_bytes());
+    hdr.extend_from_slice(&pd.device_id.to_le_bytes());
+    hdr.extend_from_slice(&pd.pipeline_cache_uuid);
+    hdr
+}
+
+/// `vkCreatePipelineCache` — mint a cache holding a valid header (plus any app-provided `initial_data`,
+/// retained verbatim for round-trip). No IR.
+pub fn create_pipeline_cache(dev: &mut Device, initial_data: &[u8]) -> VkPipelineCache {
+    // A well-formed `initialDataSize` blob is retained as-is; anything else falls back to a fresh header.
+    let data = if initial_data.len() >= 32 { initial_data.to_vec() } else { pipeline_cache_header(dev) };
+    let handle = dev.alloc_handle();
+    dev.pipeline_caches.insert(handle, PipelineCacheRec { data });
+    handle
+}
+
+/// `vkDestroyPipelineCache` — drop the cache. No-op on `VK_NULL_HANDLE`/unknown.
+pub fn destroy_pipeline_cache(dev: &mut Device, cache: VkPipelineCache) {
+    dev.pipeline_caches.remove(&cache);
+}
+
+/// `vkMergePipelineCaches` — merge `src` caches into `dst`. There is no compiled artifact to combine, so
+/// this is a truthful no-op that validates the handles. Errors on an unknown `dst`/`src` cache.
+pub fn merge_pipeline_caches(dev: &Device, dst: VkPipelineCache, srcs: &[VkPipelineCache]) -> Result<()> {
+    if !dev.pipeline_caches.contains_key(&dst) {
+        return Err(GpuError::Invalid("vkMergePipelineCaches: unknown dst VkPipelineCache"));
+    }
+    if !srcs.iter().all(|s| dev.pipeline_caches.contains_key(s)) {
+        return Err(GpuError::Invalid("vkMergePipelineCaches: unknown src VkPipelineCache"));
+    }
+    Ok(())
+}
+
+/// `vkGetPipelineCacheData` — the serialized cache blob (a spec-valid header). Errors on an unknown cache.
+pub fn get_pipeline_cache_data(dev: &Device, cache: VkPipelineCache) -> Result<Vec<u8>> {
+    Ok(dev
+        .pipeline_caches
+        .get(&cache)
+        .ok_or(GpuError::Invalid("vkGetPipelineCacheData: unknown VkPipelineCache"))?
+        .data
+        .clone())
 }
 
 // ---- fences --------------------------------------------------------------------------------------

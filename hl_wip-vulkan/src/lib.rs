@@ -62,6 +62,8 @@ pub type VkEvent = u64;
 pub type VkQueryPool = u64;
 pub type VkSurfaceKHR = u64;
 pub type VkSwapchainKHR = u64;
+pub type VkDescriptorUpdateTemplate = u64;
+pub type VkPipelineCache = u64;
 
 /// `VK_NULL_HANDLE` — the reserved null non-dispatchable handle.
 pub const VK_NULL_HANDLE: u64 = 0;

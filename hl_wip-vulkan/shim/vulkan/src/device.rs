@@ -53,3 +53,26 @@ pub extern "C" fn vkGetDeviceQueue(
     let q = with(|s| s.queue_token());
     unsafe { *p_queue = q };
 }
+
+/// `vkGetDeviceQueue2` (Vulkan 1.1) — the `VkDeviceQueueInfo2`-parameterized retrieval. The device
+/// exposes exactly one queue (family 0, index 0), so this returns the same lone queue token as
+/// `vkGetDeviceQueue`; a request for any other `(family, index)` returns `VK_NULL_HANDLE`.
+#[no_mangle]
+pub extern "C" fn vkGetDeviceQueue2(
+    _device: *mut c_void,
+    p_queue_info: *const c_void,
+    p_queue: *mut *mut c_void,
+) {
+    if p_queue.is_null() {
+        return;
+    }
+    unsafe { *p_queue = core::ptr::null_mut() };
+    let Some(info) = (unsafe { (p_queue_info as *const VkDeviceQueueInfo2).as_ref() }) else {
+        return;
+    };
+    if info.queue_family_index != 0 || info.queue_index != 0 {
+        return; // only the single (family 0, index 0) queue exists.
+    }
+    let q = with(|s| s.queue_token());
+    unsafe { *p_queue = q };
+}

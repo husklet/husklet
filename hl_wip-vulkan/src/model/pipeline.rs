@@ -44,3 +44,14 @@ pub struct PipelineRec {
 pub struct PipelineLayoutRec {
     pub set_layouts: Vec<VkDescriptorSetLayout>,
 }
+
+/// One `VkPipelineCache`: an opaque, host-only blob the app serializes/restores across runs. The hl-GPU
+/// pipelines already forward SPIR-V verbatim (no host-format binary to cache), so a cache holds only a
+/// valid, versioned header (`vkGetPipelineCacheData` round-trips it) and never a compiled artifact —
+/// merging two caches is a truthful no-op. Ported from `hl-shim-vk/src/reg.rs` (`PipelineCacheRec`).
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct PipelineCacheRec {
+    /// The serialized cache blob returned by `vkGetPipelineCacheData` (a spec-valid header; see
+    /// [`crate::service::create::pipeline_cache_header`]).
+    pub data: Vec<u8>,
+}

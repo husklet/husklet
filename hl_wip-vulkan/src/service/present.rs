@@ -6,11 +6,64 @@
 //! re-points at the current frame's IOSurface each frame), so the swapchain emits NO `CreateTexture`.
 //! A present lowers to one [`Cmd::Present`] naming the surface + the presented image's texture id.
 
-use crate::model::memory::tex_format_from_vk;
-use crate::model::queue::{SurfaceRec, SwapImage, SwapchainRec, PRESENT_TEXTURE_ID};
+use crate::model::instance::QUEUE_FAMILY_INDEX;
+use crate::model::memory::{tex_format_from_vk, vk_format};
+use crate::model::queue::{
+    SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage, SwapchainRec,
+    COMPOSITE_ALPHA_OPAQUE_BIT, CURRENT_EXTENT_UNDEFINED, PRESENT_TEXTURE_ID, SURFACE_IMAGE_USAGE,
+    SURFACE_TRANSFORM_IDENTITY_BIT, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_PRESENT_MODE_FIFO_KHR,
+};
 use crate::*;
 use hl_gpu::protocol::model::descriptor::SurfaceDesc;
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
+
+// ---- WSI physical-device surface queries (modeled, physical-device-level — no Device/sink) --------
+
+/// `vkGetPhysicalDeviceSurfaceSupportKHR` — whether `queue_family_index` can present. The lone family
+/// (graphics+compute+transfer) is the present family; any other index cannot present.
+pub fn surface_supports_present(queue_family_index: u32) -> bool {
+    queue_family_index == QUEUE_FAMILY_INDEX
+}
+
+/// `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` — the modeled surface capabilities (double/triple
+/// buffered, surface-defined extent, identity transform, opaque alpha). Ported from
+/// `hl-shim-vk/src/wsi.rs::surface_capabilities`.
+pub fn surface_capabilities() -> SurfaceCapabilities {
+    SurfaceCapabilities {
+        min_image_count: 2,
+        max_image_count: 3,
+        current_extent: CURRENT_EXTENT_UNDEFINED,
+        min_image_extent: (1, 1),
+        max_image_extent: (16384, 16384),
+        max_image_array_layers: 1,
+        supported_transforms: SURFACE_TRANSFORM_IDENTITY_BIT,
+        current_transform: SURFACE_TRANSFORM_IDENTITY_BIT,
+        supported_composite_alpha: COMPOSITE_ALPHA_OPAQUE_BIT,
+        supported_usage_flags: SURFACE_IMAGE_USAGE,
+    }
+}
+
+/// `vkGetPhysicalDeviceSurfaceFormatsKHR` — the presentable formats: BGRA8 / RGBA8, UNORM + SRGB, all in
+/// the SRGB-nonlinear color space (the color subset the render/transfer path materializes; BGRA8 is what
+/// the hl-display dma-buf present expects). Ported from `hl-shim-vk/src/wsi.rs::SURFACE_FORMAT` (widened
+/// to the full 4-format color subset).
+pub fn surface_formats() -> Vec<SurfaceFormat> {
+    [
+        vk_format::B8G8R8A8_UNORM,
+        vk_format::B8G8R8A8_SRGB,
+        vk_format::R8G8B8A8_UNORM,
+        vk_format::R8G8B8A8_SRGB,
+    ]
+    .into_iter()
+    .map(|format| SurfaceFormat { format, color_space: VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
+    .collect()
+}
+
+/// `vkGetPhysicalDeviceSurfacePresentModesKHR` — the supported present modes: FIFO (the always-available,
+/// v-synced mode the compositor present path implements).
+pub fn surface_present_modes() -> Vec<i32> {
+    vec![VK_PRESENT_MODE_FIFO_KHR]
+}
 
 /// `vkCreate*SurfaceKHR` — mint an hl-GPU surface id and submit [`Cmd::CreateSurface`]. `hlp_surface`
 /// is the HLP surface id this GPU surface presents through (the compositor's window surface).

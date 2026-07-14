@@ -12,10 +12,10 @@
 //! [`hl_gpu::CommandSink`].
 
 use super::command::CmdBufRec;
-use super::descriptor::{DescriptorPoolRec, DsetRec, SetLayoutRec};
+use super::descriptor::{DescriptorPoolRec, DescriptorUpdateTemplateRec, DsetRec, SetLayoutRec};
 use super::instance::PhysicalDeviceDesc;
 use super::memory::{BufferRec, ImageRec, MemRec, SamplerRec};
-use super::pipeline::{PipelineLayoutRec, PipelineRec, ShaderRec};
+use super::pipeline::{PipelineCacheRec, PipelineLayoutRec, PipelineRec, ShaderRec};
 use super::queue::{FenceRec, Queue, SurfaceRec, SwapchainRec};
 use super::sync::{EventRec, QueryPoolRec, SemaphoreRec};
 use crate::*;
@@ -37,6 +37,8 @@ pub struct Device {
     pub set_layouts: HashMap<VkDescriptorSetLayout, SetLayoutRec>,
     pub descriptor_pools: HashMap<VkDescriptorPool, DescriptorPoolRec>,
     pub descriptor_sets: HashMap<VkDescriptorSet, DsetRec>,
+    pub descriptor_update_templates: HashMap<VkDescriptorUpdateTemplate, DescriptorUpdateTemplateRec>,
+    pub pipeline_caches: HashMap<VkPipelineCache, PipelineCacheRec>,
     pub command_buffers: HashMap<VkCommandBuffer, CmdBufRec>,
     pub fences: HashMap<VkFence, FenceRec>,
     pub semaphores: HashMap<VkSemaphore, SemaphoreRec>,
@@ -79,6 +81,8 @@ impl Device {
             set_layouts: HashMap::new(),
             descriptor_pools: HashMap::new(),
             descriptor_sets: HashMap::new(),
+            descriptor_update_templates: HashMap::new(),
+            pipeline_caches: HashMap::new(),
             command_buffers: HashMap::new(),
             fences: HashMap::new(),
             semaphores: HashMap::new(),

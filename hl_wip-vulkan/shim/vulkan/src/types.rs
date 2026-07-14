@@ -42,6 +42,10 @@ pub const VK_ERROR_MEMORY_MAP_FAILED: VkResult = -5;
 pub const VK_ERROR_FEATURE_NOT_PRESENT: VkResult = -8;
 pub const VK_ERROR_INCOMPATIBLE_DRIVER: VkResult = -9;
 pub const VK_ERROR_UNKNOWN: VkResult = -13;
+/// `VK_ERROR_SURFACE_LOST_KHR` (`VK_KHR_surface`, stable ABI) — an unknown/destroyed surface.
+pub const VK_ERROR_SURFACE_LOST_KHR: VkResult = -1_000_000_000;
+/// `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR` — a second surface over a window already claimed by one.
+pub const VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: VkResult = -1_000_000_001;
 
 /// The Vulkan API version this ICD advertises: **Vulkan 1.4.0** (mirrors `hl_vulkan::result`).
 pub const HL_API_VERSION: u32 = make_api_version(0, 1, 4, 0);
@@ -1122,4 +1126,98 @@ pub struct VkQueryPoolCreateInfo {
     pub query_type: i32,
     pub query_count: u32,
     pub pipeline_statistics: VkFlags,
+}
+
+// ==================================================================================================
+// descriptor-update-template / pipeline-cache / device-queue-2 / WSI-surface structs (from vk.xml)
+// ==================================================================================================
+
+/// `VkDescriptorUpdateTemplateEntry` — one entry mapping a `pData` slice (`offset`/`stride`) to a
+/// `(dstBinding, dstArrayElement)` of a given descriptor class.
+#[repr(C)]
+pub struct VkDescriptorUpdateTemplateEntry {
+    pub dst_binding: u32,
+    pub dst_array_element: u32,
+    pub descriptor_count: u32,
+    pub descriptor_type: i32,
+    pub offset: usize,
+    pub stride: usize,
+}
+
+/// `VkDescriptorUpdateTemplateCreateInfo` — the entry table + template type (`DESCRIPTOR_SET` = 0).
+#[repr(C)]
+pub struct VkDescriptorUpdateTemplateCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub descriptor_update_entry_count: u32,
+    pub p_descriptor_update_entries: *const VkDescriptorUpdateTemplateEntry,
+    pub template_type: i32,
+    pub descriptor_set_layout: u64,
+    pub pipeline_bind_point: i32,
+    pub pipeline_layout: u64,
+    pub set: u32,
+}
+
+/// `VkPipelineCacheCreateInfo` — the optional serialized `initialData` blob a cache is restored from.
+#[repr(C)]
+pub struct VkPipelineCacheCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub initial_data_size: usize,
+    pub p_initial_data: *const c_void,
+}
+
+/// `VkDeviceQueueInfo2` — the `(flags, queueFamilyIndex, queueIndex)` a `vkGetDeviceQueue2` retrieves.
+#[repr(C)]
+pub struct VkDeviceQueueInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub queue_family_index: u32,
+    pub queue_index: u32,
+}
+
+/// `VkImageSubresource` — the `(aspect, mip, arrayLayer)` a `vkGetImageSubresourceLayout` queries.
+#[repr(C)]
+pub struct VkImageSubresource {
+    pub aspect_mask: VkFlags,
+    pub mip_level: u32,
+    pub array_layer: u32,
+}
+
+/// `VkSubresourceLayout` — the linear byte layout (offset/size/pitches) written back to the app.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkSubresourceLayout {
+    pub offset: VkDeviceSize,
+    pub size: VkDeviceSize,
+    pub row_pitch: VkDeviceSize,
+    pub array_pitch: VkDeviceSize,
+    pub depth_pitch: VkDeviceSize,
+}
+
+/// `VkSurfaceCapabilitiesKHR` (`VK_KHR_surface`) — the min/max image count, extents, transforms + usage.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkSurfaceCapabilitiesKHR {
+    pub min_image_count: u32,
+    pub max_image_count: u32,
+    pub current_extent: VkExtent2D,
+    pub min_image_extent: VkExtent2D,
+    pub max_image_extent: VkExtent2D,
+    pub max_image_array_layers: u32,
+    pub supported_transforms: VkFlags,
+    pub current_transform: VkFlags,
+    pub supported_composite_alpha: VkFlags,
+    pub supported_usage_flags: VkFlags,
+}
+
+/// `VkSurfaceFormatKHR` — one `(format, colorSpace)` a surface presents.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkSurfaceFormatKHR {
+    pub format: i32,
+    pub color_space: i32,
 }
