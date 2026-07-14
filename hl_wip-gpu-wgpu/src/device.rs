@@ -25,12 +25,25 @@ pub struct DeviceConfig {
 
 impl Default for DeviceConfig {
     fn default() -> Self {
-        Self {
-            backends: wgpu::Backends::VULKAN,
-            force_fallback: false,
-            // The lavapipe manifest shipped on this host; harmless if the file is absent (the loader
-            // simply ignores an override pointing at a missing manifest and falls back to system ICDs).
-            vk_icd_filenames: Some("/usr/share/vulkan/icd.d/lvp_icd.json".to_string()),
+        // Platform-selected backend: macOS has Metal (no Vulkan ICD), Linux/others bind the software
+        // Vulkan ICD (lavapipe) so the headless conformance suite runs with no GPU + no display.
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                backends: wgpu::Backends::METAL,
+                force_fallback: false,
+                vk_icd_filenames: None,
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self {
+                backends: wgpu::Backends::VULKAN,
+                force_fallback: false,
+                // The lavapipe manifest shipped on this Linux host; harmless if absent (the loader
+                // ignores an override pointing at a missing manifest and falls back to system ICDs).
+                vk_icd_filenames: Some("/usr/share/vulkan/icd.d/lvp_icd.json".to_string()),
+            }
         }
     }
 }

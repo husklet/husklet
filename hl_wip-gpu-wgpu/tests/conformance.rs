@@ -87,13 +87,21 @@ fn bound_adapter_is_software_vulkan() {
     let g = exec();
     let info = g.adapter_info();
     eprintln!("wgpu adapter: name={:?} backend={:?} type={:?}", info.name, info.backend, info.device_type);
-    assert_eq!(info.backend, wgpu::Backend::Vulkan, "expected the Vulkan backend (lavapipe)");
-    let name = info.name.to_lowercase();
-    assert!(
-        name.contains("llvmpipe") || name.contains("lavapipe") || info.device_type == wgpu::DeviceType::Cpu,
-        "expected a software adapter, got {:?}",
-        info.name
-    );
+    #[cfg(target_os = "macos")]
+    {
+        // Real Apple GPU via Metal (no software fallback needed — the whole suite runs on the hardware).
+        assert_eq!(info.backend, wgpu::Backend::Metal, "expected the Metal backend on macOS, got {:?}", info.name);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert_eq!(info.backend, wgpu::Backend::Vulkan, "expected the Vulkan backend (lavapipe)");
+        let name = info.name.to_lowercase();
+        assert!(
+            name.contains("llvmpipe") || name.contains("lavapipe") || info.device_type == wgpu::DeviceType::Cpu,
+            "expected a software adapter, got {:?}",
+            info.name
+        );
+    }
 }
 
 // -------------------------------------------------------------------------------------------------
