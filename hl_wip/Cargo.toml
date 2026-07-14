@@ -89,3 +89,11 @@ path = "tests/vk_triangle.rs"
 [[test]]
 name = "gl_triangle"
 path = "tests/gl_triangle.rs"
+
+[[test]]
+name = "vk_quad"
+path = "tests/vk_quad.rs"
+
+[[test]]
+name = "vk_ubo"
+path = "tests/vk_ubo.rs"
