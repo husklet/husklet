@@ -12,17 +12,22 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use smithay::reexports::wayland_server::{
-    backend::{ClientData, ClientId, DisconnectReason, ObjectId},
+    backend::{ClientData, ClientId, DisconnectReason, GlobalId, ObjectId},
     protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_shm, wl_surface::WlSurface},
     Client, DisplayHandle, Resource,
 };
-use smithay::input::{Seat, SeatHandler, SeatState};
+use smithay::input::{keyboard::XkbConfig, Seat, SeatHandler, SeatState};
+use smithay::output::{
+    Mode as OutputMode, Output as WlOutputHandle, PhysicalProperties, Scale, Subpixel,
+};
+use smithay::utils::Transform;
 use smithay::wayland::{
     buffer::BufferHandler,
     compositor::{
         with_states, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
         Damage, SurfaceAttributes,
     },
+    output::{OutputHandler, OutputManagerState},
     shell::xdg::{
         PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
     },
@@ -78,9 +83,25 @@ pub struct HlState {
     pub compositor: CompositorState,
     pub shm: ShmState,
     pub xdg_shell: XdgShellState,
-    /// Held only to satisfy `delegate_xdg_shell`'s `SeatHandler` bound (popup grabs reference a seat).
-    /// The headless e2e proof drives no input, so no `wl_seat` global is created.
+    /// Backs the `delegate_xdg_shell` `SeatHandler` bound (popup grabs reference a seat) AND owns the
+    /// `wl_seat` capabilities the toolkits enumerate for input.
     pub seat_state: SeatState<HlState>,
+    /// The `wl_seat` this compositor advertises. Created via [`SeatState::new_wl_seat`] and given pointer
+    /// + keyboard capabilities (with a default xkb keymap) so a client that binds `wl_seat` and creates
+    /// `wl_pointer`/`wl_keyboard` succeeds. No live input source is wired headless — the capabilities and
+    /// objects exist, but no motion/key events are injected.
+    pub seat: Seat<HlState>,
+    /// Owns the `zxdg_output_manager_v1` global (xdg-output) so a client that enumerates it for logical
+    /// output geometry gets an answer consistent with `wl_output`. Kept alive for the life of the state;
+    /// the `wl_output` dispatch reads the [`WlOutputHandle`] out of its own per-global data, not this.
+    _output_manager: OutputManagerState,
+    /// The single smithay `wl_output` this compositor advertises, driven from the scene's primary
+    /// [`crate::scene::model::Output`] (mode size in px + refresh, integer scale). Kept alive so its
+    /// global keeps advertising; a bind delivers geometry/mode/scale/name/done to the client. (Held as
+    /// the handle that would drive future scene→output changes; not mutated after construction yet.)
+    _wl_output: WlOutputHandle,
+    /// The `wl_output` global id (held so it stays advertised for the state's lifetime).
+    _output_global: GlobalId,
     /// The neutral policy: scene graph + `PngPresenter` + monotonic clock. All compositing/pacing
     /// decisions live here; `HlState` only translates the wire into calls on it.
     pub engine: Compositor<PngPresenter, MonotonicClock>,
@@ -108,16 +129,36 @@ impl HlState {
         // Smithay always advertises Argb8888 + Xrgb8888; pass no extra formats.
         let shm = ShmState::new::<HlState>(dh, Vec::new());
         let xdg_shell = XdgShellState::new::<HlState>(dh);
-        let seat_state = SeatState::new();
+        let mut seat_state = SeatState::new();
 
         let mut engine = Compositor::new(presenter, MonotonicClock::new());
         engine.scene.add_output(Output::new(OutputId(1), "HL-0", 1920, 1080, 60_000));
+
+        // Advertise a `wl_output` (+ xdg-output) driven from the scene's primary output, so toolkits that
+        // enumerate outputs for HiDPI geometry / mode / scale / window sizing get a consistent answer.
+        let output_manager = OutputManagerState::new_with_xdg_output::<HlState>(dh);
+        let (wl_output, output_global) = build_wl_output(dh, engine.scene.primary_output());
+
+        // Advertise a `wl_seat` with pointer + keyboard capabilities so toolkits that bind it for input
+        // succeed in creating `wl_pointer`/`wl_keyboard`. No live input is injected headless.
+        let mut seat = seat_state.new_wl_seat(dh, "seat-0");
+        seat.add_pointer();
+        // A default xkb keymap (evdev rules) — enough for the keyboard object + keymap fd to be handed to
+        // the client. If libxkbcommon cannot build even the default keymap the seat still advertises the
+        // pointer; the keyboard capability is simply omitted rather than panicking the whole compositor.
+        if let Err(e) = seat.add_keyboard(XkbConfig::default(), 200, 25) {
+            eprintln!("hl_wip-compositor: wl_seat keyboard keymap unavailable, pointer only: {e}");
+        }
 
         HlState {
             compositor,
             shm,
             xdg_shell,
             seat_state,
+            seat,
+            _output_manager: output_manager,
+            _wl_output: wl_output,
+            _output_global: output_global,
             engine,
             surface_ids: HashMap::new(),
             pending_callbacks: HashMap::new(),
@@ -436,9 +477,55 @@ impl XdgShellHandler for HlState {
     }
 }
 
+/// A client bound `wl_output`. Smithay has already sent geometry/mode/scale/name/done; nothing extra to
+/// do headless (no `wl_surface.enter`/`leave` tracking without live output routing).
+impl OutputHandler for HlState {}
+
 smithay::delegate_compositor!(HlState);
 smithay::delegate_shm!(HlState);
 smithay::delegate_xdg_shell!(HlState);
+smithay::delegate_output!(HlState);
+smithay::delegate_seat!(HlState);
+
+/// Build the compositor's single `wl_output` from the scene's primary [`Output`], creating its global and
+/// pushing the current mode / scale / preferred mode so a binding client receives geometry + mode + scale
+/// + name + done consistent with what compose/present uses. Falls back to a 1080p\@60 output if the scene
+/// has none registered (it always does, but keep this total).
+fn build_wl_output(dh: &DisplayHandle, scene: Option<&Output>) -> (WlOutputHandle, GlobalId) {
+    // Values sourced from the scene so `wl_output` reports exactly what the scene composites onto.
+    let (name, mode_w, mode_h, refresh_mhz, scale) = match scene {
+        Some(o) => (o.name.clone(), o.mode_w, o.mode_h, o.refresh_mhz, o.scale.max(1)),
+        None => ("HL-0".to_string(), 1920, 1080, 60_000, 1),
+    };
+
+    // Physical size in mm assuming ~96 dpi (25.4 mm/inch) — a plausible value for toolkits that derive DPI
+    // from it; the pixel mode + scale below are the load-bearing fidelity, not the millimetre size.
+    let phys_w_mm = (mode_w as f64 / 96.0 * 25.4).round() as i32;
+    let phys_h_mm = (mode_h as f64 / 96.0 * 25.4).round() as i32;
+
+    let output = WlOutputHandle::new(
+        name,
+        PhysicalProperties {
+            size: (phys_w_mm, phys_h_mm).into(),
+            subpixel: Subpixel::Unknown,
+            make: "hl".into(),
+            model: "hl-virtual".into(),
+        },
+    );
+    let global = output.create_global::<HlState>(dh);
+
+    // `refresh` on a smithay `Mode` is millihertz (same unit as the scene's `refresh_mhz`).
+    let mode = OutputMode { size: (mode_w, mode_h).into(), refresh: refresh_mhz as i32 };
+    output.change_current_state(
+        Some(mode),
+        Some(Transform::Normal),
+        Some(Scale::Integer(scale)),
+        Some((0, 0).into()),
+    );
+    output.set_preferred(mode);
+
+    (output, global)
+}
 
 /// Read a `wl_shm` buffer's pixels into tight top-left RGBA8888 plus its neutral [`Format`].
 ///

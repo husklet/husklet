@@ -34,9 +34,11 @@ use hl_compositor::adapter::smithay::{self, PngPresenter};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_callback::WlCallback, wl_compositor::WlCompositor,
-    wl_registry::WlRegistry, wl_shm::{self, WlShm}, wl_shm_pool::WlShmPool, wl_surface::WlSurface,
+    wl_keyboard::WlKeyboard, wl_output::{self, WlOutput}, wl_pointer::WlPointer,
+    wl_registry::WlRegistry, wl_seat::{self, Capability, WlSeat}, wl_shm::{self, WlShm},
+    wl_shm_pool::WlShmPool, wl_surface::WlSurface,
 };
-use wayland_client::{Connection, Dispatch, QueueHandle};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::xdg::shell::client::{
     xdg_surface::{self, XdgSurface},
     xdg_toplevel::XdgToplevel,
@@ -57,6 +59,20 @@ struct AppData {
     configured: bool,
     released: bool,
     frame_done: bool,
+    // ---- wl_output enumeration state (what a HiDPI-aware toolkit reads) ----
+    /// `wl_output.mode` current-mode pixel size `(w, h)`.
+    output_mode_px: Option<(i32, i32)>,
+    /// `wl_output.scale` integer scale.
+    output_scale: Option<i32>,
+    /// `wl_output.geometry` was received (physical size + subpixel + make/model).
+    output_geometry: bool,
+    /// `wl_output.name` (v4) if sent.
+    output_name: Option<String>,
+    /// `wl_output.done` — the atomic-update terminator a toolkit waits for.
+    output_done: bool,
+    // ---- wl_seat enumeration state (what an input-aware toolkit reads) ----
+    /// `wl_seat.capabilities` advertised to the client.
+    seat_caps: Option<Capability>,
 }
 
 #[test]
@@ -118,6 +134,20 @@ fn real_client_discovers_compositor_via_wayland_display_and_composites() {
     let shm: WlShm = globals.bind(&qh, 1..=1, ()).expect("wl_shm global");
     let wm_base: XdgWmBase = globals.bind(&qh, 1..=6, ()).expect("xdg_wm_base global");
 
+    // ---- 3b. The compositor must advertise EXACTLY ONE wl_output and ONE wl_seat in its registry ------
+    // A real GTK/Qt/Chrome toolkit enumerates these for HiDPI geometry/scale and pointer/keyboard input;
+    // before this task the adapter exposed neither, so a client that hard-requires them could refuse to
+    // map its window.
+    let global_list = globals.contents().clone_list();
+    let count = |iface: &str| global_list.iter().filter(|g| g.interface == iface).count();
+    assert_eq!(count("wl_output"), 1, "expected exactly one wl_output global, got {:?}", global_list);
+    assert_eq!(count("wl_seat"), 1, "expected exactly one wl_seat global, got {:?}", global_list);
+
+    // Bind wl_output (v4 → geometry/mode/scale/name/done) and wl_seat (v9 → name/capabilities). Binding
+    // itself must succeed; the event assertions below prove the objects carry real data.
+    let _output: WlOutput = globals.bind(&qh, 1..=4, ()).expect("wl_output global");
+    let seat: WlSeat = globals.bind(&qh, 1..=9, ()).expect("wl_seat global");
+
     // ---- 4. Build a wl_shm buffer filled with the known color ----------------------------------------
     let stride = W * 4;
     let size = (stride * H) as usize;
@@ -153,6 +183,12 @@ fn real_client_discovers_compositor_via_wayland_display_and_composites() {
         configured: false,
         released: false,
         frame_done: false,
+        output_mode_px: None,
+        output_scale: None,
+        output_geometry: false,
+        output_name: None,
+        output_done: false,
+        seat_caps: None,
     };
 
     // The server side is complete when: it configured our surface, released our buffer (proof it consumed
@@ -166,6 +202,39 @@ fn real_client_discovers_compositor_via_wayland_display_and_composites() {
         );
         queue.blocking_dispatch(&mut app).expect("client dispatch");
     }
+
+    // ---- 5b. Assert wl_output enumeration completed with the scene's real geometry -------------------
+    // Drain until the output's atomic update terminates (`done`) and the seat advertised its caps.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !(app.output_done && app.seat_caps.is_some()) {
+        assert!(
+            Instant::now() < deadline,
+            "output/seat enumeration incomplete: output_done={} seat_caps={:?}",
+            app.output_done, app.seat_caps,
+        );
+        queue.blocking_dispatch(&mut app).expect("client dispatch (output/seat)");
+    }
+
+    // The scene's primary output is `HL-0`, 1920x1080 @ 60Hz, scale 1 (see `HlState::new`). wl_output must
+    // report that exactly, so a toolkit sizes windows / picks HiDPI factors against the real composite area.
+    assert!(app.output_geometry, "wl_output.geometry (physical size/subpixel/make/model) never arrived");
+    assert_eq!(app.output_mode_px, Some((1920, 1080)), "wl_output.mode current pixel size");
+    assert_eq!(app.output_scale, Some(1), "wl_output.scale integer factor");
+    assert_eq!(app.output_name.as_deref(), Some("HL-0"), "wl_output.name (v4) matches the scene output");
+
+    // The seat must advertise BOTH pointer and keyboard so an input-aware toolkit proceeds.
+    let caps = app.seat_caps.expect("seat capabilities");
+    assert!(caps.contains(Capability::Pointer), "wl_seat advertises pointer capability, got {caps:?}");
+    assert!(caps.contains(Capability::Keyboard), "wl_seat advertises keyboard capability, got {caps:?}");
+
+    // A client that binds the seat must be able to CREATE wl_pointer + wl_keyboard (the objects must be
+    // reachable, with a keymap handed to the keyboard). No live input is injected — creation + the keymap
+    // fd is the fidelity this task proves.
+    let pointer: WlPointer = seat.get_pointer(&qh, ());
+    let keyboard: WlKeyboard = seat.get_keyboard(&qh, ());
+    queue.roundtrip(&mut app).expect("roundtrip after creating pointer/keyboard");
+    assert!(pointer.is_alive(), "wl_pointer object created and alive");
+    assert!(keyboard.is_alive(), "wl_keyboard object created and alive");
 
     // ---- 6. Assert the committed pixels composited all the way to the presenter ----------------------
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -278,7 +347,50 @@ impl Dispatch<WlCallback, ()> for AppData {
     }
 }
 
-// The remaining objects emit events we don't need to act on.
+impl Dispatch<WlOutput, ()> for AppData {
+    fn event(
+        app: &mut Self,
+        _: &WlOutput,
+        event: <WlOutput as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_output::Event::Geometry { .. } => app.output_geometry = true,
+            wl_output::Event::Mode { flags, width, height, .. } => {
+                // Record the CURRENT mode's pixel size (we only advertise one, marked current+preferred).
+                if matches!(flags, WEnum::Value(m) if m.contains(wl_output::Mode::Current)) {
+                    app.output_mode_px = Some((width, height));
+                }
+            }
+            wl_output::Event::Scale { factor } => app.output_scale = Some(factor),
+            wl_output::Event::Name { name } => app.output_name = Some(name),
+            wl_output::Event::Done => app.output_done = true,
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlSeat, ()> for AppData {
+    fn event(
+        app: &mut Self,
+        _: &WlSeat,
+        event: <WlSeat as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_seat::Event::Capabilities { capabilities } = event {
+            if let WEnum::Value(caps) = capabilities {
+                app.seat_caps = Some(caps);
+            }
+        }
+    }
+}
+
+// The remaining objects emit events we don't need to act on (the keyboard's `keymap` fd, pointer motion,
+// etc.) — creating them and observing they stay alive is the fidelity the seat assertions prove.
 macro_rules! ignore_dispatch {
     ($($t:ty),*) => {$(
         impl Dispatch<$t, ()> for AppData {
@@ -293,4 +405,4 @@ macro_rules! ignore_dispatch {
         }
     )*};
 }
-ignore_dispatch!(WlCompositor, WlSurface, WlShm, WlShmPool, XdgToplevel);
+ignore_dispatch!(WlCompositor, WlSurface, WlShm, WlShmPool, XdgToplevel, WlPointer, WlKeyboard);
