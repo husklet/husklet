@@ -10,23 +10,61 @@ use hl_gpu::protocol::model::descriptor::BufferDesc;
 use hl_gpu::protocol::model::enums::buffer_usage;
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
 
+/// The usage flags every CUDA device allocation needs: storage + both copy directions + host-mappable.
+fn cuda_buffer_usage() -> u32 {
+    buffer_usage::STORAGE | buffer_usage::COPY_SRC | buffer_usage::COPY_DST | buffer_usage::MAP
+}
+
+/// Build the `CreateBuffer` command for a CUDA allocation of `size` bytes backed by `buffer`.
+fn create_buffer_cmd(buffer: u32, size: u64) -> Cmd {
+    Cmd::CreateBuffer(buffer, BufferDesc { size, usage: cuda_buffer_usage(), label: String::new() })
+}
+
 /// `cuMemAlloc(size)` → a device pointer, submitting the backing [`Cmd::CreateBuffer`].
 pub fn mem_alloc(ctx: &mut CudaContext, sink: &mut dyn CommandSink, size: u64) -> Result<DevicePtr> {
     let buffer = ctx.alloc_buffer();
     let ptr = ctx.mem.record(buffer, size);
-    let cmd = Cmd::CreateBuffer(
-        buffer,
-        BufferDesc {
-            size,
-            usage: buffer_usage::STORAGE
-                | buffer_usage::COPY_SRC
-                | buffer_usage::COPY_DST
-                | buffer_usage::MAP,
-            label: String::new(),
-        },
-    );
-    sink.submit(&[cmd])?;
+    sink.submit(&[create_buffer_cmd(buffer, size)])?;
     Ok(ptr)
+}
+
+/// `cuMemAllocManaged(size)` → a device pointer into *managed* (unified, host-addressable) memory. The
+/// backing IR is identical to [`mem_alloc`] — a single [`Cmd::CreateBuffer`] — but the allocation is
+/// flagged managed in the model so `cuPointerGetAttribute(IS_MANAGED)` answers truthfully.
+pub fn mem_alloc_managed(
+    ctx: &mut CudaContext,
+    sink: &mut dyn CommandSink,
+    size: u64,
+) -> Result<DevicePtr> {
+    let buffer = ctx.alloc_buffer();
+    let ptr = ctx.mem.record_managed(buffer, size);
+    sink.submit(&[create_buffer_cmd(buffer, size)])?;
+    Ok(ptr)
+}
+
+/// `cuMemAllocPitch(widthBytes, height, elementSize)` → a 2D device allocation. The row *pitch* is
+/// `widthBytes` rounded up to a 512-byte boundary (matching a real allocator's texture alignment), and the
+/// backing buffer is `pitch * height` bytes. Returns the base device pointer and the computed pitch (the
+/// value the driver hands back through its `*pPitch` out-param). The IR is a single [`Cmd::CreateBuffer`].
+pub fn mem_alloc_pitch(
+    ctx: &mut CudaContext,
+    sink: &mut dyn CommandSink,
+    width_bytes: u64,
+    height: u64,
+    _element_size: u32,
+) -> Result<(DevicePtr, u64)> {
+    if width_bytes == 0 || height == 0 {
+        return Err(GpuError::Invalid("cuMemAllocPitch: zero width or height"));
+    }
+    // 512-byte aligned rows, like a real allocator's CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT.
+    let pitch = (width_bytes + 511) & !511u64;
+    let size = pitch
+        .checked_mul(height)
+        .ok_or(GpuError::Invalid("cuMemAllocPitch: pitch*height overflow"))?;
+    let buffer = ctx.alloc_buffer();
+    let ptr = ctx.mem.record(buffer, size);
+    sink.submit(&[create_buffer_cmd(buffer, size)])?;
+    Ok((ptr, pitch))
 }
 
 /// `cuMemFree(ptr)` → destroy the backing buffer. Errors (`CUDA_ERROR_INVALID_VALUE` analogue) if `ptr`
@@ -38,4 +76,68 @@ pub fn mem_free(ctx: &mut CudaContext, sink: &mut dyn CommandSink, ptr: DevicePt
         .ok_or(GpuError::Invalid("cuMemFree: pointer is not a live allocation base"))?;
     sink.submit(&[Cmd::DestroyBuffer(buffer)])?;
     Ok(())
+}
+
+// --------------------------------------------------------------------------------------------------
+// host (pinned / registered) memory — `cuMemAllocHost` / `cuMemHostAlloc` / `cuMemFreeHost` /
+// `cuMemHostRegister` / `cuMemHostUnregister` / `cuMemHostGetDevicePointer`.
+// --------------------------------------------------------------------------------------------------
+
+/// `cuMemAllocHost(size)` / `cuMemHostAlloc(size, flags)` → the base address of a fresh page-locked host
+/// buffer the model owns. The returned address is real, stable host memory the caller can read/write and
+/// pass directly to `cuMemcpy*` as a host source/destination.
+pub fn host_alloc(ctx: &mut CudaContext, size: usize) -> u64 {
+    ctx.host.alloc_pinned(size)
+}
+
+/// `cuMemFreeHost(p)` → free a pinned allocation. Errors if `base` is not a live pinned allocation.
+pub fn host_free(ctx: &mut CudaContext, base: u64) -> Result<()> {
+    if ctx.host.free_pinned(base) {
+        Ok(())
+    } else {
+        Err(GpuError::Invalid("cuMemFreeHost: pointer is not a live pinned allocation"))
+    }
+}
+
+/// `cuMemHostRegister(p, size, flags)` → page-lock an existing guest host range. Errors if it is already
+/// a live host allocation (the `CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED` analogue).
+pub fn host_register(ctx: &mut CudaContext, base: u64, size: u64) -> Result<()> {
+    if ctx.host.register(base, size) {
+        Ok(())
+    } else {
+        Err(GpuError::Invalid("cuMemHostRegister: host range is already registered"))
+    }
+}
+
+/// `cuMemHostUnregister(p)` → unlock a previously registered host range. Errors if `base` was not
+/// registered (the `CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED` analogue).
+pub fn host_unregister(ctx: &mut CudaContext, base: u64) -> Result<()> {
+    if ctx.host.unregister(base) {
+        Ok(())
+    } else {
+        Err(GpuError::Invalid("cuMemHostUnregister: host range is not registered"))
+    }
+}
+
+/// `cuMemHostGetDevicePointer(p, flags)` → the device pointer that maps the host allocation based at
+/// `base`. The first call lazily creates a backing device buffer (sized to the host allocation) with a
+/// single [`Cmd::CreateBuffer`] and records the device allocation; repeat calls return the same device
+/// pointer. Errors if `base` is not a live host allocation.
+pub fn host_get_device_pointer(
+    ctx: &mut CudaContext,
+    sink: &mut dyn CommandSink,
+    base: u64,
+) -> Result<DevicePtr> {
+    if let Some((_, ptr)) = ctx.host.device_mapping(base) {
+        return Ok(DevicePtr(ptr));
+    }
+    let size = ctx
+        .host
+        .size_of(base)
+        .ok_or(GpuError::Invalid("cuMemHostGetDevicePointer: not a live host allocation"))?;
+    let buffer = ctx.alloc_buffer();
+    let ptr = ctx.mem.record(buffer, size);
+    ctx.host.set_device_mapping(base, buffer, ptr.0);
+    sink.submit(&[create_buffer_cmd(buffer, size)])?;
+    Ok(ptr)
 }

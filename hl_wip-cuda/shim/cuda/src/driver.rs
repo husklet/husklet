@@ -431,9 +431,15 @@ unsafe fn pointer_attr(attr: i32, data: *mut c_void, ptr: u64) -> i32 {
     if data.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let (found, base, size, cur_ctx) = with(|s| {
+    let (found, base, size, managed, cur_ctx) = with(|s| {
         let m = s.ctx.mem.containing(DevicePtr(ptr));
-        (m.is_some(), m.map(|x| x.0).unwrap_or(0), m.map(|x| x.1).unwrap_or(0), s.current_ctx() as usize)
+        (
+            m.is_some(),
+            m.map(|x| x.0).unwrap_or(0),
+            m.map(|x| x.1).unwrap_or(0),
+            s.ctx.mem.is_managed(DevicePtr(ptr)),
+            s.current_ctx() as usize,
+        )
     });
     match attr {
         CU_POINTER_ATTRIBUTE_CONTEXT => *(data as *mut usize) = cur_ctx,
@@ -450,7 +456,7 @@ unsafe fn pointer_attr(attr: i32, data: *mut c_void, ptr: u64) -> i32 {
             *(data as *mut u64) = ptr;
         }
         CU_POINTER_ATTRIBUTE_HOST_POINTER => *(data as *mut *mut c_void) = core::ptr::null_mut(),
-        CU_POINTER_ATTRIBUTE_IS_MANAGED => *(data as *mut u32) = 0, // no managed-alloc path modeled
+        CU_POINTER_ATTRIBUTE_IS_MANAGED => *(data as *mut u32) = managed as u32,
         CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL => *(data as *mut i32) = 0,
         CU_POINTER_ATTRIBUTE_BUFFER_ID => *(data as *mut u64) = base,
         CU_POINTER_ATTRIBUTE_SYNC_MEMOPS => *(data as *mut i32) = 1,
@@ -550,6 +556,261 @@ pub extern "C" fn cuMemcpyDtoH_v2(dst: *mut c_void, src: u64, n: usize) -> i32 {
             CUDA_SUCCESS
         }
         Err(_) => CUDA_ERROR_INVALID_VALUE,
+    })
+}
+
+// ==================================================================================================
+// IR-wired: memory (host pinned/registered, managed, pitched, memset, async copies)
+// ==================================================================================================
+
+/// `cuMemAllocHost_v2(pp, size)` — a page-locked host allocation. Hands back the base of a real host
+/// buffer the model owns (usable directly as a `cuMemcpy*` host source/destination).
+#[no_mangle]
+pub extern "C" fn cuMemAllocHost_v2(pp: *mut *mut c_void, size: usize) -> i32 {
+    if pp.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let base = with(|s| allocate::host_alloc(&mut s.ctx, size));
+    unsafe { *pp = base as *mut c_void };
+    CUDA_SUCCESS
+}
+
+/// `cuMemHostAlloc(pp, size, flags)` — the flagged pinned-allocation form; the modeled semantics do not
+/// depend on the (portable / mapped / write-combined) flags, so it shares `cuMemAllocHost`'s body.
+#[no_mangle]
+pub extern "C" fn cuMemHostAlloc(pp: *mut *mut c_void, size: usize, _flags: u32) -> i32 {
+    cuMemAllocHost_v2(pp, size)
+}
+
+/// `cuMemFreeHost(p)` — free a pinned allocation. A bogus / already-freed pointer is `INVALID_VALUE`.
+#[no_mangle]
+pub extern "C" fn cuMemFreeHost(p: *mut c_void) -> i32 {
+    if p.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| match allocate::host_free(&mut s.ctx, p as u64) {
+        Ok(()) => CUDA_SUCCESS,
+        Err(_) => CUDA_ERROR_INVALID_VALUE,
+    })
+}
+
+/// `cuMemHostRegister_v2(p, size, flags)` — page-lock an existing guest host range. Registering the same
+/// base twice is `INVALID_VALUE`.
+#[no_mangle]
+pub extern "C" fn cuMemHostRegister_v2(p: *mut c_void, size: usize, _flags: u32) -> i32 {
+    if p.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| match allocate::host_register(&mut s.ctx, p as u64, size as u64) {
+        Ok(()) => CUDA_SUCCESS,
+        Err(_) => CUDA_ERROR_INVALID_VALUE,
+    })
+}
+
+/// `cuMemHostUnregister(p)` — unlock a previously registered host range. An unregistered base is
+/// `INVALID_VALUE`.
+#[no_mangle]
+pub extern "C" fn cuMemHostUnregister(p: *mut c_void) -> i32 {
+    if p.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| match allocate::host_unregister(&mut s.ctx, p as u64) {
+        Ok(()) => CUDA_SUCCESS,
+        Err(_) => CUDA_ERROR_INVALID_VALUE,
+    })
+}
+
+/// `cuMemHostGetDevicePointer_v2(pdptr, p, flags)` — the device pointer that maps host allocation `p`
+/// (lazily creating its backing device buffer). A pointer that is not a live host allocation is
+/// `INVALID_VALUE`.
+#[no_mangle]
+pub extern "C" fn cuMemHostGetDevicePointer_v2(pdptr: *mut u64, p: *mut c_void, _flags: u32) -> i32 {
+    if pdptr.is_null() || p.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| match allocate::host_get_device_pointer(&mut s.ctx, &mut s.sink, p as u64) {
+        Ok(ptr) => {
+            unsafe { *pdptr = ptr.0 };
+            CUDA_SUCCESS
+        }
+        Err(_) => CUDA_ERROR_INVALID_VALUE,
+    })
+}
+
+/// `cuMemAllocManaged(dptr, bytesize, flags)` — a managed (unified) allocation: a device buffer that is
+/// also host-addressable in the model.
+#[no_mangle]
+pub extern "C" fn cuMemAllocManaged(dptr: *mut u64, bytesize: usize, _flags: u32) -> i32 {
+    if dptr.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| match allocate::mem_alloc_managed(&mut s.ctx, &mut s.sink, bytesize as u64) {
+        Ok(p) => {
+            unsafe { *dptr = p.0 };
+            CUDA_SUCCESS
+        }
+        Err(e) => cu_result_from_gpu_error(&e),
+    })
+}
+
+/// `cuMemAllocPitch_v2(dptr, pPitch, widthBytes, height, elementSizeBytes)` — a 2D allocation with a
+/// 512-byte-aligned row pitch, returned through `pPitch`.
+#[no_mangle]
+pub extern "C" fn cuMemAllocPitch_v2(
+    dptr: *mut u64,
+    p_pitch: *mut usize,
+    width_bytes: usize,
+    height: usize,
+    element_size: u32,
+) -> i32 {
+    if dptr.is_null() || p_pitch.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| {
+        match allocate::mem_alloc_pitch(
+            &mut s.ctx,
+            &mut s.sink,
+            width_bytes as u64,
+            height as u64,
+            element_size,
+        ) {
+            Ok((p, pitch)) => {
+                unsafe {
+                    *dptr = p.0;
+                    *p_pitch = pitch as usize;
+                }
+                CUDA_SUCCESS
+            }
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        }
+    })
+}
+
+/// Expand a `width`-byte little-endian element `value` repeated `n` times into a byte pattern (the
+/// memset family's fill). `cuMemsetD8/D16/D32` set `width` = 1/2/4.
+fn expand_pattern(value: u64, width: usize, n: usize) -> Vec<u8> {
+    let el = &value.to_le_bytes()[..width];
+    let mut out = Vec::with_capacity(width * n);
+    for _ in 0..n {
+        out.extend_from_slice(el);
+    }
+    out
+}
+
+/// Shared memset body: lower the expanded fill into the device buffer at `dst`.
+fn memset_sync(dst: u64, value: u64, width: usize, n: usize) -> i32 {
+    if n == 0 {
+        return CUDA_SUCCESS;
+    }
+    let pattern = expand_pattern(value, width, n);
+    with(|s| match transfer::memset(&mut s.ctx, &mut s.sink, DevicePtr(dst), &pattern) {
+        Ok(()) => CUDA_SUCCESS,
+        Err(_) => CUDA_ERROR_INVALID_VALUE,
+    })
+}
+
+/// Shared stream-ordered memset body: validate the stream, then lower the same fill as [`memset_sync`].
+fn memset_stream(dst: u64, value: u64, width: usize, n: usize, hstream: *mut c_void) -> i32 {
+    if n == 0 {
+        return CUDA_SUCCESS;
+    }
+    let pattern = expand_pattern(value, width, n);
+    with(|s| {
+        let Some(st) = s.stream(hstream) else {
+            return CUDA_ERROR_INVALID_HANDLE;
+        };
+        match transfer::memset_async(&mut s.ctx, &mut s.sink, st, DevicePtr(dst), &pattern) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cuMemsetD8_v2(dst: u64, uc: u8, n: usize) -> i32 {
+    memset_sync(dst, uc as u64, 1, n)
+}
+
+#[no_mangle]
+pub extern "C" fn cuMemsetD16_v2(dst: u64, us: u16, n: usize) -> i32 {
+    memset_sync(dst, us as u64, 2, n)
+}
+
+#[no_mangle]
+pub extern "C" fn cuMemsetD32_v2(dst: u64, ui: u32, n: usize) -> i32 {
+    memset_sync(dst, ui as u64, 4, n)
+}
+
+#[no_mangle]
+pub extern "C" fn cuMemsetD8Async(dst: u64, uc: u8, n: usize, s: *mut c_void) -> i32 {
+    memset_stream(dst, uc as u64, 1, n, s)
+}
+
+#[no_mangle]
+pub extern "C" fn cuMemsetD16Async(dst: u64, us: u16, n: usize, s: *mut c_void) -> i32 {
+    memset_stream(dst, us as u64, 2, n, s)
+}
+
+#[no_mangle]
+pub extern "C" fn cuMemsetD32Async(dst: u64, ui: u32, n: usize, s: *mut c_void) -> i32 {
+    memset_stream(dst, ui as u64, 4, n, s)
+}
+
+/// `cuMemcpyHtoDAsync_v2(dst, src, n, stream)` — stream-ordered HtoD; records the same `WriteBuffer` as
+/// the synchronous `cuMemcpyHtoD` once the stream is validated.
+#[no_mangle]
+pub extern "C" fn cuMemcpyHtoDAsync_v2(dst: u64, src: *const c_void, n: usize, s: *mut c_void) -> i32 {
+    let host = unsafe { bytes(src, n) };
+    with(|st| {
+        let Some(stream) = st.stream(s) else {
+            return CUDA_ERROR_INVALID_HANDLE;
+        };
+        match transfer::memcpy_htod_async(&mut st.ctx, &mut st.sink, stream, DevicePtr(dst), host) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        }
+    })
+}
+
+/// `cuMemcpyDtoDAsync_v2(dst, src, n, stream)` — stream-ordered on-device copy.
+#[no_mangle]
+pub extern "C" fn cuMemcpyDtoDAsync_v2(dst: u64, src: u64, n: usize, s: *mut c_void) -> i32 {
+    with(|st| {
+        let Some(stream) = st.stream(s) else {
+            return CUDA_ERROR_INVALID_HANDLE;
+        };
+        match transfer::memcpy_dtod_async(
+            &mut st.ctx,
+            &mut st.sink,
+            stream,
+            DevicePtr(dst),
+            DevicePtr(src),
+            n as u64,
+        ) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        }
+    })
+}
+
+/// `cuMemcpyDtoHAsync_v2(dst, src, n, stream)` — stream-ordered device→host readback; reads the bytes back
+/// through the sink like the synchronous `cuMemcpyDtoH`.
+#[no_mangle]
+pub extern "C" fn cuMemcpyDtoHAsync_v2(dst: *mut c_void, src: u64, n: usize, s: *mut c_void) -> i32 {
+    if dst.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|st| {
+        let Some(stream) = st.stream(s) else {
+            return CUDA_ERROR_INVALID_HANDLE;
+        };
+        match transfer::read_dtoh_async(&st.ctx, &mut st.sink, stream, DevicePtr(src), n) {
+            Ok(bytes) => {
+                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len()) };
+                CUDA_SUCCESS
+            }
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        }
     })
 }
 
@@ -834,6 +1095,81 @@ mod tests {
             let b = s.ctx.alloc_buffer();
             s.ctx.mem.record(b, size).0
         })
+    }
+
+    /// Record a live *managed* allocation directly in the model (no sink) — the stand-in for a completed
+    /// `cuMemAllocManaged`.
+    fn record_managed_alloc(size: u64) -> u64 {
+        with(|s| {
+            let b = s.ctx.alloc_buffer();
+            s.ctx.mem.record_managed(b, size).0
+        })
+    }
+
+    #[test]
+    fn host_alloc_gives_a_usable_host_buffer() {
+        let _g = guard();
+        // cuMemAllocHost hands back real, writable host memory of the requested size.
+        let mut p: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuMemAllocHost_v2(&mut p, 64), CUDA_SUCCESS);
+        assert!(!p.is_null());
+        unsafe {
+            let b = p as *mut u8;
+            for i in 0..64u8 {
+                *b.add(i as usize) = i.wrapping_mul(3);
+            }
+            assert_eq!(*b.add(7), 21);
+        }
+        // free it; a second free of the same pointer is rejected (not a fake success).
+        assert_eq!(cuMemFreeHost(p), CUDA_SUCCESS);
+        assert_eq!(cuMemFreeHost(p), CUDA_ERROR_INVALID_VALUE);
+        // a null out-pointer / null free are rejected.
+        assert_eq!(cuMemAllocHost_v2(core::ptr::null_mut(), 16), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(cuMemFreeHost(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+
+        // the flagged form shares the same body.
+        let mut q: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuMemHostAlloc(&mut q, 8, 0), CUDA_SUCCESS);
+        assert!(!q.is_null());
+        assert_eq!(cuMemFreeHost(q), CUDA_SUCCESS);
+    }
+
+    #[test]
+    fn host_register_unregister_round_trips() {
+        let _g = guard();
+        let mut buf = [0u8; 32];
+        let p = buf.as_mut_ptr() as *mut c_void;
+        assert_eq!(cuMemHostRegister_v2(p, 32, 0), CUDA_SUCCESS);
+        // double-register is rejected.
+        assert_eq!(cuMemHostRegister_v2(p, 32, 0), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(cuMemHostUnregister(p), CUDA_SUCCESS);
+        // unregister of an unknown range is rejected.
+        assert_eq!(cuMemHostUnregister(p), CUDA_ERROR_INVALID_VALUE);
+        // an unknown host pointer has no device mapping.
+        let mut d = 0u64;
+        assert_eq!(cuMemHostGetDevicePointer_v2(&mut d, p, 0), CUDA_ERROR_INVALID_VALUE);
+        // null args rejected.
+        assert_eq!(cuMemHostRegister_v2(core::ptr::null_mut(), 32, 0), CUDA_ERROR_INVALID_VALUE);
+    }
+
+    #[test]
+    fn pointer_attribute_reports_managed_memory() {
+        let _g = guard();
+        let managed = record_managed_alloc(4096);
+        let device = record_alloc(4096);
+
+        let mut m = 9u32;
+        assert_eq!(
+            cuPointerGetAttribute(&mut m as *mut u32 as *mut c_void, CU_POINTER_ATTRIBUTE_IS_MANAGED, managed),
+            CUDA_SUCCESS
+        );
+        assert_eq!(m, 1, "a managed allocation reports IS_MANAGED = 1");
+
+        assert_eq!(
+            cuPointerGetAttribute(&mut m as *mut u32 as *mut c_void, CU_POINTER_ATTRIBUTE_IS_MANAGED, device),
+            CUDA_SUCCESS
+        );
+        assert_eq!(m, 0, "a plain device allocation reports IS_MANAGED = 0");
     }
 
     #[test]

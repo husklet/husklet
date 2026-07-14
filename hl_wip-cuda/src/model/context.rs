@@ -11,7 +11,7 @@
 //! [`hl_gpu::CommandSink`].
 
 use super::device::{CudaDeviceDesc, DevicePtr};
-use super::memory::Allocations;
+use super::memory::{Allocations, HostMemory};
 use super::module::{Function, Modules};
 use super::stream::StreamTable;
 use hl_gpu::BufferId;
@@ -21,6 +21,8 @@ pub struct CudaContext {
     pub device: CudaDeviceDesc,
     /// Device-memory allocations (unified-VA bump allocator + resolver).
     pub mem: Allocations,
+    /// Host-side pinned + registered memory (`cuMemAllocHost` / `cuMemHostRegister` families).
+    pub host: HostMemory,
     /// Loaded PTX modules + `cuModuleGetFunction` resolution.
     pub modules: Modules,
     /// CUDA streams (validation + a synchronize target).
@@ -46,6 +48,7 @@ impl CudaContext {
         Self {
             device,
             mem: Allocations::new(),
+            host: HostMemory::new(),
             modules: Modules::new(),
             streams: StreamTable::new(),
             pipelines: HashMap::new(),
