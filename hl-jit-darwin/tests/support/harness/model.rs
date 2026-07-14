@@ -3,20 +3,14 @@
 pub enum Engine {
     LinuxAarch64,
     LinuxX86_64,
-    DarwinAarch64,
 }
 
 impl Engine {
-    pub const ALL: [Engine; 3] = [
-        Engine::LinuxAarch64,
-        Engine::LinuxX86_64,
-        Engine::DarwinAarch64,
-    ];
+    pub const ALL: [Engine; 2] = [Engine::LinuxAarch64, Engine::LinuxX86_64];
     pub fn jit(self) -> hl_jit::Guest {
         match self {
             Engine::LinuxAarch64 => hl_jit::Guest::LinuxAarch64,
             Engine::LinuxX86_64 => hl_jit::Guest::LinuxX86_64,
-            Engine::DarwinAarch64 => hl_jit::Guest::DarwinAarch64,
         }
     }
     pub fn os(self) -> &'static str {
@@ -48,16 +42,9 @@ pub enum Bin {
     /// pointer-arg rebase switch. Used to guard that whole class  against regression. Linux only.
     SourceNoPie(&'static str),
     /// A portable POSIX C source under `guests/` built for *every* engine: gcc -static-pie for the two
-    /// Linux engines, clang (full libSystem) Mach-O for darwin. The one source proves the behaviour is
-    /// identical on Linux (JIT-emulated) and macOS (native under darwinjail) — so coverage isn't
-    /// Linux-only. Checks must be golden (deterministic stdout/exit), since darwin has no native oracle.
+    /// Linux engines. The one source proves the behaviour is identical across the Linux engines.
+    /// Checks must be golden (deterministic stdout/exit).
     Portable(&'static str),
-    /// Compile a macOS/aarch64 Mach-O C source under `guests/darwin/` (mac clang).
-    DarwinSource(&'static str),
-    /// A macOS-only C source (path relative to `guests/`, e.g. `darwin/kqueue.c`) built with the full
-    /// libSystem (normal C runtime + main) and run on the darwin engine. For BSD/Mach-only APIs
-    /// (kqueue, sysctl, mach_*) that have no Linux form — the darwin counterpart to a Linux-only `src`.
-    DarwinLibc(&'static str),
     /// Prebuilt fixture binaries, one per engine that has one.
     Fixture(&'static [(Engine, &'static str)]),
     /// The guest program is already inside the rootfs; `args[0]` names it (e.g. `/bin/sh`).
@@ -134,9 +121,7 @@ fn base(name: &'static str, bin: Bin) -> Case {
     let engines = match &bin {
         Bin::Source(_) => vec![Engine::LinuxAarch64, Engine::LinuxX86_64], // same source, both Linux engines
         Bin::SourceNoPie(_) => vec![Engine::LinuxAarch64, Engine::LinuxX86_64], // non-PIE ET_EXEC, both Linux
-        Bin::Portable(_) => Engine::ALL.to_vec(), // every engine: Linux x2 + darwin
-        Bin::DarwinSource(_) => vec![Engine::DarwinAarch64],
-        Bin::DarwinLibc(_) => vec![Engine::DarwinAarch64],
+        Bin::Portable(_) => Engine::ALL.to_vec(), // every engine: Linux x2
         Bin::Fixture(fx) => fx.iter().map(|(e, _)| *e).collect(),
         Bin::InRootfs => vec![Engine::LinuxAarch64], // container rootfs fixtures are aarch64 today
     };
@@ -170,19 +155,10 @@ pub fn src(name: &'static str, source: &'static str) -> Case {
 pub fn src_nopie(name: &'static str, source: &'static str) -> Case {
     base(name, Bin::SourceNoPie(source))
 }
-/// A case whose guest is a portable POSIX source under `guests/`, run on EVERY engine (Linux x2 +
-/// darwin). Use golden checks — the same deterministic output must appear on Linux and macOS.
+/// A case whose guest is a portable POSIX source under `guests/`, run on EVERY engine (Linux x2).
+/// Use golden checks — the same deterministic output must appear on every Linux engine.
 pub fn port(name: &'static str, source: &'static str) -> Case {
     base(name, Bin::Portable(source))
-}
-/// A case whose guest is compiled from a macOS/aarch64 Mach-O C source under `guests/darwin/`.
-pub fn darwin_src(name: &'static str, source: &'static str) -> Case {
-    base(name, Bin::DarwinSource(source))
-}
-/// A macOS-only case (source path relative to `guests/`, e.g. `darwin/kqueue.c`), full-libSystem, run
-/// on the darwin engine only. For BSD/Mach APIs with no Linux equivalent. Golden-checked.
-pub fn darwin_libc(name: &'static str, source: &'static str) -> Case {
-    base(name, Bin::DarwinLibc(source))
 }
 /// A case whose guest is a prebuilt fixture, per engine.
 pub fn fixture(name: &'static str, fx: &'static [(Engine, &'static str)]) -> Case {

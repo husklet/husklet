@@ -24,7 +24,6 @@ fn guest_of(arch: Arch) -> hl_jit::Guest {
     match arch {
         Arch::Arm64 => hl_jit::Guest::LinuxAarch64,
         Arch::Amd64 => hl_jit::Guest::LinuxX86_64,
-        Arch::DarwinArm64 => hl_jit::Guest::DarwinAarch64,
     }
 }
 
@@ -34,7 +33,6 @@ fn want_arch(arch: Arch) -> hl_images::Arch {
     match arch {
         Arch::Arm64 => hl_images::Arch::LinuxAarch64,
         Arch::Amd64 => hl_images::Arch::LinuxX86_64,
-        Arch::DarwinArm64 => hl_images::Arch::DarwinAarch64,
     }
 }
 

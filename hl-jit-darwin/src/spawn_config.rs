@@ -49,10 +49,10 @@ impl SpawnConfig {
     }
 
     /// Serialize the docker resource knobs (`--cpus`/`--read-only`/`--ulimit`) into the engine's env
-    /// contract (DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS), shared by the linux and darwin launch scripts. Env,
-    /// not flags, so it survives the mac bridge + the x86 fork-server and is read identically by all three
-    /// engines (linux frontends' container_read_resource_env(); the darwinjail init()). Empty when unset ->
-    /// byte-identical launch for containers that use none of these.
+    /// contract (DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS). Env, not flags, so it survives the mac bridge +
+    /// the x86 fork-server and is read identically by both engines (the linux frontends'
+    /// container_read_resource_env()). Empty when unset -> byte-identical launch for containers that use
+    /// none of these.
     fn resource_env(&self) -> String {
         let mut s = String::new();
         if self.cpus > 0 {
@@ -73,9 +73,8 @@ impl SpawnConfig {
         s
     }
 
-    /// The `bash -lc` script that launches the container in the given guest's JIT. The flag/env contract
-    /// differs per guest OS — linux (jit/jit86) takes the full container flag set + `DDVOL`/`DD_NETNS`
-    /// env; darwin (jitdarwin) takes `--rootfs` + `--volume HOST:CONT`. Returns `None` if not built.
+    /// The `bash -lc` script that launches the container in the given guest's JIT. Linux (jit/jit86)
+    /// takes the full container flag set + `DDVOL`/`DD_NETNS` env. Returns `None` if not built.
     pub fn script(&self, guest: Guest) -> Option<String> {
         let cd = if self.work_dir.is_empty() {
             String::new()
@@ -88,58 +87,7 @@ impl SpawnConfig {
             .map(|a| shq(a))
             .collect::<Vec<_>>()
             .join(" ");
-        let body = if guest.os() == "darwin" {
-            // darwinjail: run the native arm64 binary jailed via an interposing dylib (DYLD_INSERT) -- no
-            // DBT. The container model (rootfs/lowers/volumes/hostname/limits/publish) is passed as env.
-            let jail = guest.jail_dylib()?;
-            let mut env = format!("DYLD_INSERT_LIBRARIES={} DD_SANDBOX=1 ", shq(&jail));
-            if !self.rootfs.is_empty() {
-                env += &format!("DD_ROOTFS={} ", shq(&self.rootfs));
-            }
-            if !self.lowers.is_empty() {
-                env += &format!("DD_LOWERS={} ", shq(&self.lowers.join(",")));
-            }
-            // ALWAYS set DD_VOLUMES (empty when there are no binds), never conditionally: the daemon's OWN
-            // process env carries a DD_VOLUMES (its named-volume ROOT dir, a plain path) that the container
-            // would otherwise inherit -- and the jail parses DD_VOLUMES as `HOST:CONT,…` bind specs, so a
-            // colon-less dir path made it abort every no-bind mac container with "invalid DD_VOLUMES"
-            // Emitting an explicit (possibly empty) value here shadows the inherited one; empty =>
-            // zero binds. (Linux uses DDVOL, a different name, so only darwin hit this collision.)
-            let v = self
-                .volumes
-                .iter()
-                .map(|v| format!("{}:{}", v.host, v.container))
-                .collect::<Vec<_>>()
-                .join(",");
-            env += &format!("DD_VOLUMES={} ", shq(&v));
-            if let Some(h) = &self.hostname {
-                if !h.is_empty() {
-                    env += &format!("DD_HOSTNAME={} ", shq(h));
-                }
-            }
-            if self.mem_max > 0 {
-                env += &format!("DD_MEM_MAX={} ", self.mem_max);
-            }
-            if self.pids_max > 0 {
-                env += &format!("DD_PIDS_MAX={} ", self.pids_max);
-            }
-            env += &self.resource_env(); // DD_CPUS / DD_ROOTFS_RO / DD_ULIMITS (docker --cpus/--read-only/--ulimit)
-            if !self.publish.is_empty() {
-                let p = self
-                    .publish
-                    .iter()
-                    .map(|p| format!("{}:{}", p.host, p.container))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                env += &format!("DD_PUBLISH={} ", shq(&p));
-            }
-            for (k, val) in &self.env {
-                env += &format!("{}={} ", k, shq(val));
-            }
-            // `exec env …` so the container process REPLACES this shell -- it becomes the session leader /
-            // foreground of the PTY, so an interactive shell can read the terminal (no job-control stall).
-            format!("exec env {env}{argv}")
-        } else {
+        let body = {
             let jit = guest.jit_path()?;
             let mut env = String::new();
             // The `mac` bridge drops the ambient env, so forward CRASHDBG explicitly when the host sets it
@@ -309,21 +257,6 @@ mod tests {
         }
     }
     #[test]
-    fn darwin_script_uses_rootfs_volume() {
-        let mut c = SpawnConfig::new("", "/jail");
-        c.volumes = vec![Volume {
-            container: "/data".into(),
-            host: "/h".into(),
-            ro: false,
-        }];
-        c.argv = vec!["/bin/app".into()];
-        if let Some(s) = c.script(Guest::DarwinAarch64) {
-            // darwinjail takes the container model as env (DD_ROOTFS/DD_VOLUMES), not flags.
-            assert!(s.contains("DD_ROOTFS='/jail'") && s.contains("DD_VOLUMES='/h:/data'"));
-            assert!(!s.contains("--mem-max") && !s.contains("DDVOL")); // darwin uses DD_VOLUMES, not linux DDVOL
-        }
-    }
-    #[test]
     fn linux_ro_volume_encodes_prefix() {
         let mut c = SpawnConfig::new("/work", "img/upper");
         // one rw, one ro: rw stays `guest:host` (byte-identical), ro gets the leading `ro:` marker.
@@ -351,12 +284,12 @@ mod tests {
         c.cpus = 2;
         c.read_only = true;
         c.ulimits = vec![("nofile".into(), 1024, 2048), ("nproc".into(), 512, 1024)];
-        // env contract is engine-agnostic (linux flags path + darwin env path both emit it).
+        // env contract is engine-agnostic (the linux flags path emits it).
         let re = c.resource_env();
         assert!(re.contains("DD_CPUS=2"));
         assert!(re.contains("DD_ROOTFS_RO=1"));
         assert!(re.contains("DD_ULIMITS='nofile=1024:2048,nproc=512:1024'"));
-        for g in [Guest::LinuxAarch64, Guest::DarwinAarch64] {
+        for g in [Guest::LinuxAarch64, Guest::LinuxX86_64] {
             if let Some(s) = c.script(g) {
                 assert!(
                     s.contains("DD_CPUS=2")

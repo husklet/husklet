@@ -1,6 +1,6 @@
 // Container CPU-count fidelity (docker --cpus). The guest must see its CPU ALLOTMENT, not the host's
 // core count: glibc __get_nprocs / GOMAXPROCS / JVM availableProcessors all derive from these. Portable:
-// the SAME source runs JIT-emulated on the two Linux engines and native (under darwinjail) on macOS.
+// the SAME source runs JIT-emulated on the two Linux engines.
 // On Linux we cross-check sched_getaffinity (the engine caps its mask) against sysconf so a divergence
 // between the two reporting paths is caught, not hidden.
 #define _GNU_SOURCE

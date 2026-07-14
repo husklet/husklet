@@ -24,15 +24,12 @@ pub(crate) fn spawn_container(
 ) -> Option<JitContainer> {
     let guest = c.arch.unwrap_or(Guest::LinuxAarch64);
     // Per-container copy-on-write: the private writable UPPER (`c.upper`) overlays the read-only image
-    // rootfs (the lower) so guest writes/whiteouts never mutate the shared image. Linux guests only —
-    // darwin runs natively jailed (its lower is the host `/`); a flat rootfs is used when no upper exists.
-    let overlay = guest.os() != "darwin" && !c.upper.is_empty();
+    // rootfs (the lower) so guest writes/whiteouts never mutate the shared image. A flat rootfs is used
+    // when no upper exists.
+    let overlay = !c.upper.is_empty();
     let rootfs = if overlay { c.upper.clone() } else { c.rootfs.clone() };
     let image = if overlay {
         Image::overlay(rootfs, [c.rootfs.clone()])
-    } else if guest.os() == "darwin" {
-        // darwinjail: the host filesystem is the read-only lower so native binaries find their /nix deps.
-        Image::overlay(rootfs, ["/".to_string()])
     } else {
         Image::from_rootfs(rootfs)
     }
@@ -69,7 +66,7 @@ pub(crate) fn spawn_container(
     // daemon-write coherence: hand every Linux engine the shared external-writer generation file so a
     // daemon-side write into the live fs (docker cp's PUT, the exec /etc rewrites) drops the engine's
     // path/metadata caches and is guest-visible by its next syscall.
-    if guest.os() != "darwin" {
+    {
         let key = c.netns_key.as_deref().unwrap_or(&c.id);
         b = b.write_coherence_file(crate::util::fsgen_ensure(key).to_string_lossy().into_owned());
     }
@@ -126,24 +123,5 @@ pub(crate) fn spawn_container(
         b = b.publish(p.host_port, p.container_port);
     }
     b = b.external_port_forwarder(!c.publish.is_empty());
-    // macOS containers (darwinjail): forward the image ENV as real process env (the native jailed binaries
-    // see it; DD_GUEST_ENV is Linux-only) with a nix-first PATH default, and wrap the entry in the in-jail
-    // bash so a bare command resolves via the in-jail PATH and the entry shell stays inside the jail (a
-    // login shell or `/bin/sh` would source the host profile / run arm64e tools and escape the arm64 jail).
-    if guest.os() == "darwin" {
-        let mut have_path = false;
-        for kv in &c.env {
-            if let Some((k, v)) = kv.split_once('=') {
-                if k == "PATH" {
-                    have_path = true;
-                }
-                b = b.env(k.to_string(), v.to_string());
-            }
-        }
-        if !have_path {
-            b = b.env("PATH", "/profile/bin:/usr/bin:/bin");
-        }
-        b = b.argv(darwin_wrapped_argv(&c.rootfs, &c.cmd));
-    }
     b.build().ok()
 }

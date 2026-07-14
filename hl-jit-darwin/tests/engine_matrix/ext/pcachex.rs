@@ -16,7 +16,7 @@
 //! disable the engine's cache, but the per-case env here is baked into the launch script and the `mac`
 //! bridge drops ambient env, so these cases always exercise the cache path as written.
 #![allow(unused_imports)]
-use crate::support::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![pcachex()]

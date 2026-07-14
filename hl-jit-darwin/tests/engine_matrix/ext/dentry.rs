@@ -5,8 +5,7 @@
 //! recreate/cross-process create) with lookups and assert a lookup NEVER sees a stale resolution, plus
 //! the O_NOFOLLOW/follow cache-mixing corner (must ELOOP right after a follow-mode open). They run
 //! inside the alpine rootfs because the path caches only exist under a container jail; both Linux
-//! engines are covered. The darwin container resolves paths via darwinjail + the host FS — this
-//! resolver/cache does not exist there, so a darwin variant would exercise none of the code under test.
+//! engines are covered.
 //! Overlay-mode coverage (copy-up relocation, whiteouts, opaque dirs) comes from the daemon scenarios
 //! (utilities/overlay-metadata + filesystem/dentry-storm-overlay), which run both guest arches.
 #![allow(unused_imports)]

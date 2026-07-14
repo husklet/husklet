@@ -1,8 +1,8 @@
 use std::path::Path;
 
 /// A guest target = (OS personality, ISA) the JIT can run. Each maps to one binary built by `build.rs`
-/// from `targets/<target>.c`. The OS axis is `linux` (jit / jit86) or `darwin` (jitdarwin — native
-/// macOS Mach-O containers); the ISA axis is `aarch64` or `x86_64`.
+/// from `targets/<target>.c`. The OS axis is `linux` (jit / jit86); the ISA axis is `aarch64` or
+/// `x86_64`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Guest {
     /// Linux on ARM64 — same-arch, run by the native `jit` engine. The default.
@@ -10,24 +10,15 @@ pub enum Guest {
     LinuxAarch64,
     /// Linux on x86-64 — translated to ARM64 by the `jit86` engine.
     LinuxX86_64,
-    /// Native macOS ARM64 (Mach-O) containers, run jailed by `jitdarwin`/darwinjail.
-    DarwinAarch64,
 }
 
 impl Guest {
     /// Every guest target, for iterating over or probing which engines were built.
-    pub const ALL: [Guest; 3] = [
-        Guest::LinuxAarch64,
-        Guest::LinuxX86_64,
-        Guest::DarwinAarch64,
-    ];
+    pub const ALL: [Guest; 2] = [Guest::LinuxAarch64, Guest::LinuxX86_64];
 
-    /// Guest OS personality: `"linux"` or `"darwin"`.
+    /// Guest OS personality: `"linux"`.
     pub fn os(self) -> &'static str {
-        match self {
-            Guest::DarwinAarch64 => "darwin",
-            _ => "linux",
-        }
+        "linux"
     }
     /// Guest instruction set: `"aarch64"` or `"x86_64"`.
     pub fn arch(self) -> &'static str {
@@ -41,7 +32,6 @@ impl Guest {
         match self {
             Guest::LinuxAarch64 => "linux_aarch64",
             Guest::LinuxX86_64 => "linux_x86_64",
-            Guest::DarwinAarch64 => "darwin_aarch64",
         }
     }
 
@@ -50,7 +40,6 @@ impl Guest {
         match (os, arch.to_ascii_lowercase().as_str()) {
             ("linux", "aarch64" | "arm64" | "arm64/v8") => Some(Guest::LinuxAarch64),
             ("linux", "x86_64" | "amd64" | "x86-64") => Some(Guest::LinuxX86_64),
-            ("darwin", "aarch64" | "arm64") => Some(Guest::DarwinAarch64),
             _ => None,
         }
     }
@@ -65,15 +54,8 @@ impl Guest {
             match self {
                 Guest::LinuxAarch64 => env!("DDJIT_LINUX_AARCH64"),
                 Guest::LinuxX86_64 => env!("DDJIT_LINUX_X86_64"),
-                Guest::DarwinAarch64 => env!("DDJIT_DARWIN_AARCH64"),
             },
         )
-    }
-
-    /// Path to the darwinjail interposing dylib (DYLD_INSERT) that runs native macOS arm64 binaries in a
-    /// container. Resolved the same way as the engines (see `resolve_bundled`). `None` if absent.
-    pub fn jail_dylib(&self) -> Option<String> {
-        resolve_bundled("darwinjail.dylib", env!("DDJAIL_DARWIN_AARCH64"))
     }
 }
 
@@ -122,12 +104,9 @@ mod tests {
     fn guest_detect() {
         assert_eq!(Guest::detect("linux", "amd64"), Some(Guest::LinuxX86_64));
         assert_eq!(Guest::detect("linux", "arm64"), Some(Guest::LinuxAarch64));
-        assert_eq!(
-            Guest::detect("darwin", "aarch64"),
-            Some(Guest::DarwinAarch64)
-        );
+        assert_eq!(Guest::detect("darwin", "aarch64"), None);
         assert_eq!(Guest::detect("plan9", "aarch64"), None);
-        assert_eq!(Guest::DarwinAarch64.os(), "darwin");
+        assert_eq!(Guest::LinuxAarch64.os(), "linux");
         assert_eq!(Guest::LinuxX86_64.arch(), "x86_64");
     }
 }

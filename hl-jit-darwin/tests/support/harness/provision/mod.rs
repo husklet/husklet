@@ -1,17 +1,15 @@
 //! Guest provisioning: turn a `Case`'s `Bin` into a runnable binary path for an engine — compiling C
-//! sources on demand (Linux via gcc/cross-gcc, darwin via the mac clang toolchain) or resolving a
-//! prebuilt fixture / in-rootfs argv. Also owns `Ctx` (shared run paths) and image-rootfs selection.
+//! sources on demand (Linux via gcc/cross-gcc) or resolving a prebuilt fixture / in-rootfs argv.
+//! Also owns `Ctx` (shared run paths) and image-rootfs selection.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::*;
 
 mod compile;
-mod darwin;
 mod select;
 
 use compile::{compile, compile_nopie};
-use darwin::{compile_darwin, compile_darwin_libc};
 use select::{elf_machine, image_name_tier, rootfs_machine};
 
 /// Shared paths/config for a run.
@@ -91,14 +89,9 @@ pub(crate) fn provision(ctx: &Ctx, c: &Case, e: Engine) -> Result<Option<String>
         Bin::Source(_) => Ok(None),
         Bin::SourceNoPie(s) if e.can_compile() => compile_nopie(ctx, s, e).map(Some),
         Bin::SourceNoPie(_) => Ok(None),
-        // portable POSIX: Linux engines via gcc (same as Source), darwin via clang+libSystem.
+        // portable POSIX: Linux engines via gcc (same as Source).
         Bin::Portable(s) if e.can_compile() => compile(ctx, s, e).map(Some),
-        Bin::Portable(s) if e == Engine::DarwinAarch64 => compile_darwin_libc(ctx, s).map(Some),
         Bin::Portable(_) => Ok(None),
-        Bin::DarwinSource(s) if e == Engine::DarwinAarch64 => compile_darwin(ctx, s).map(Some),
-        Bin::DarwinSource(_) => Ok(None),
-        Bin::DarwinLibc(s) if e == Engine::DarwinAarch64 => compile_darwin_libc(ctx, s).map(Some),
-        Bin::DarwinLibc(_) => Ok(None),
         Bin::Fixture(fx) => Ok(fx
             .iter()
             .find(|(fe, _)| *fe == e)

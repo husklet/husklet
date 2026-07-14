@@ -6,7 +6,6 @@ use crate::support::Group;
 
 pub mod abi; // codegen / ABI: int/float/simd/varargs/recursion/jumptable/fnptr/struct-abi
 pub mod completeness; // syscall-table + x86-64/aarch64 opcode COMPLETENESS probes (no images)
-pub mod darwin; // macOS-native (lighter-touch): kqueue/sysctl/mach/Mach-O ABI corners
 pub mod ipc; // pipes/fifo/sysv+posix shm/sem/msg/unix sockets/scm_rights + edge corners
 pub mod libc; // string/mem/stdio/malloc/math/locale/time/regex/glob breadth
 pub mod linuxsys; // epoll/eventfd/timerfd/signalfd/inotify/sendfile/splice/memfd/pidfd (oracle)
@@ -49,7 +48,6 @@ pub fn all() -> Vec<Group> {
     g.extend(net::groups());
     g.extend(soak::groups());
     g.extend(syscallcompat::groups());
-    g.extend(darwin::groups());
     g.extend(completeness::groups());
     g.extend(fsx::groups());
     g.extend(gui::groups());

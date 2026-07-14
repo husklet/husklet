@@ -2,10 +2,10 @@ use super::*;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// The guest ISA a target runs. Linux/arm and mac are aarch64; amd is x86_64.
+/// The guest ISA a target runs. Linux/arm is aarch64; amd is x86_64.
 pub(super) fn target_arch(t: Target) -> &'static str {
     match t {
-        Target::ArmLinux | Target::ArmMac => "aarch64",
+        Target::ArmLinux => "aarch64",
         Target::AmdLinux => "x86_64",
     }
 }

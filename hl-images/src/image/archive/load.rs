@@ -77,25 +77,20 @@ impl Store {
         } else {
             manifest.name.clone()
         };
-        let darwin = manifest.is_darwin();
         let target = self.dir_for(&name);
         self.install_dir(staging, &target)?;
         let rootfs = target.join("rootfs");
         // Prefer the arch the manifest recorded (round-trips an ELF-less linux/amd64 exactly); else sniff
         // the rootfs, else native arm64. Without this, a scratch/distroless amd64 image loaded back as arm64.
-        let arch = if darwin {
-            Arch::DarwinAarch64
-        } else {
-            manifest
-                .arch
-                .as_deref()
-                .and_then(|a| Arch::detect("linux", a))
-                .or_else(|| detect_arch(&rootfs))
-                .unwrap_or(Arch::LinuxAarch64)
-        };
+        let arch = manifest
+            .arch
+            .as_deref()
+            .and_then(|a| Arch::detect("linux", a))
+            .or_else(|| detect_arch(&rootfs))
+            .unwrap_or(Arch::LinuxAarch64);
         let mut cmd = manifest.cmd.clone();
         if cmd.is_empty() {
-            cmd = if darwin { vec!["bash".into()] } else { default_shell(&rootfs) };
+            cmd = default_shell(&rootfs);
         }
         let loaded = LoadedImage {
             name,
@@ -112,7 +107,7 @@ impl Store {
             img_volumes: manifest.img_volumes.clone(),
             healthcheck: manifest.healthcheck.clone(),
         };
-        self.write_sidecar(&target, &loaded, darwin);
+        self.write_sidecar(&target, &loaded);
         Ok(loaded)
     }
 
@@ -149,11 +144,10 @@ impl Store {
             .unwrap_or(Value::Null);
         // Reject a present-but-unsupported OS rather than importing it as Linux.
         if let Some(os) = blob["os"].as_str() {
-            if !os.is_empty() && os != "linux" && os != "darwin" {
+            if !os.is_empty() && os != "linux" {
                 return Err(Error::Manifest(format!("unsupported image os: {os}")));
             }
         }
-        let darwin = blob["os"].as_str() == Some("darwin");
 
         // Flatten the layers IN ORDER into a fresh build dir's rootfs, honoring whiteouts.
         let build = PathBuf::from(format!("{}/.merge-{}", self.dir, uniq()));
@@ -175,7 +169,7 @@ impl Store {
         let rootfs = target.join("rootfs");
         let arch = arch_from_config(&blob)
             .or_else(|| detect_arch(&rootfs))
-            .unwrap_or(if darwin { Arch::DarwinAarch64 } else { Arch::LinuxAarch64 });
+            .unwrap_or(Arch::LinuxAarch64);
 
         // The run config lives under `config` (OCI image config) or `Config` (docker container config).
         let section = if blob.get("config").map(Value::is_object).unwrap_or(false) {
@@ -199,7 +193,7 @@ impl Store {
         };
         let mut cmd = strs("Cmd");
         if cmd.is_empty() {
-            cmd = if darwin { vec!["bash".into()] } else { default_shell(&rootfs) };
+            cmd = default_shell(&rootfs);
         }
         let healthcheck = match &section["Healthcheck"] {
             Value::Null => None,
@@ -227,7 +221,7 @@ impl Store {
             img_volumes: sorted_keys("Volumes"),
             healthcheck,
         };
-        self.write_sidecar(&target, &loaded, darwin);
+        self.write_sidecar(&target, &loaded);
         Ok(loaded)
     }
 }

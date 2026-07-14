@@ -4,13 +4,12 @@
 //! so on a non-macOS dev host we drive clang/codesign through the `mac` bridge. On a real macOS host we
 //! invoke them directly. Each guest target is one unity TU (src/runtime/targets/<target>.c) -> one
 //! executable in OUT_DIR, whose path is exported to the crate via `cargo:rustc-env=DDJIT_<TARGET>`.
-//! Targets span the guest-OS × guest-ISA matrix: linux_aarch64 (jit), linux_x86_64 (jit86),
-//! darwin_aarch64 (jitdarwin — native macOS Mach-O containers).
+//! Targets span the guest-ISA matrix: linux_aarch64 (jit), linux_x86_64 (jit86).
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-const TARGETS: &[&str] = &["linux_aarch64", "linux_x86_64", "darwin_aarch64"];
+const TARGETS: &[&str] = &["linux_aarch64", "linux_x86_64"];
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -104,42 +103,6 @@ fn main() {
         if !built.contains(t) {
             println!("cargo:rustc-env=DDJIT_{}=", t.to_uppercase());
         }
-    }
-
-    // darwinjail: the DYLD-interposing jail dylib for native macOS containers (`ddcli mac`). Runs the
-    // host's arm64 binaries jailed -- no DBT. arm64 only (matches the userland); exported as DDJAIL_*.
-    let djc = runtime.join("os/darwin/jail/jail.c");
-    let djdylib = out.join("darwinjail.dylib");
-    let mut jail_built = false;
-    if djc.exists() {
-        let script = format!(
-            "clang -arch arm64 -O2 -dynamiclib -o {o} {c} && codesign -s - -f {o}",
-            o = sh(&djdylib),
-            c = sh(&djc),
-        );
-        let status = if on_mac {
-            Command::new("bash").arg("-lc").arg(&script).status()
-        } else {
-            Command::new("mac")
-                .arg("bash")
-                .arg("-lc")
-                .arg(&script)
-                .status()
-        };
-        match status {
-            Ok(s) if s.success() => {
-                println!(
-                    "cargo:rustc-env=DDJAIL_DARWIN_AARCH64={}",
-                    djdylib.display()
-                );
-                jail_built = true;
-            }
-            Ok(s) => println!("cargo:warning=building darwinjail failed ({s})"),
-            Err(e) => println!("cargo:warning=cannot build darwinjail ({e})"),
-        }
-    }
-    if !jail_built {
-        println!("cargo:rustc-env=DDJAIL_DARWIN_AARCH64=");
     }
 }
 

@@ -33,7 +33,7 @@ impl Store {
         let arch = detect_arch(&rootfs).unwrap_or(Arch::LinuxAarch64);
         let cmd = default_shell(&rootfs);
         let _ = std::fs::write(
-            target.join("dd-image.json"),
+            target.join("hl-image.json"),
             json!({ "name": name, "cmd": cmd }).to_string(),
         );
         Ok(LoadedImage {
@@ -101,10 +101,22 @@ mod tests {
     // assert the flags the extract command uses).
     #[test]
     fn extract_flags_preserve_owner_and_perms() {
-        assert!(EXTRACT_FLAGS.contains(&"--numeric-owner"), "numeric owner (finding 11)");
-        assert!(EXTRACT_FLAGS.contains(&"--same-owner"), "same owner (finding 11)");
-        assert!(EXTRACT_FLAGS.contains(&"-p"), "preserve permissions (finding 11)");
-        assert!(EXTRACT_FLAGS.contains(&"--xattrs"), "xattrs round-trip (finding 3)");
+        assert!(
+            EXTRACT_FLAGS.contains(&"--numeric-owner"),
+            "numeric owner (finding 11)"
+        );
+        assert!(
+            EXTRACT_FLAGS.contains(&"--same-owner"),
+            "same owner (finding 11)"
+        );
+        assert!(
+            EXTRACT_FLAGS.contains(&"-p"),
+            "preserve permissions (finding 11)"
+        );
+        assert!(
+            EXTRACT_FLAGS.contains(&"--xattrs"),
+            "xattrs round-trip (finding 3)"
+        );
     }
 
     // C08 — the dd-images extraction boundary (run_extract_args) must REJECT an archive whose member
@@ -118,14 +130,24 @@ mod tests {
         // GNU tar --transform prepends `../` -> member "../x". Skip gracefully on bsdtar (no --transform).
         let evil = src.join("evil.tar");
         let made = std::process::Command::new("tar")
-            .arg("cf").arg(&evil).arg("-C").arg(&src)
-            .arg("--transform").arg("s,^,../,").arg("x").status();
+            .arg("cf")
+            .arg(&evil)
+            .arg("-C")
+            .arg(&src)
+            .arg("--transform")
+            .arg("s,^,../,")
+            .arg("x")
+            .status();
         if !matches!(made, Ok(s) if s.success()) {
             let _ = std::fs::remove_dir_all(&src);
             return; // no GNU tar --transform available; the guard wiring is still exercised elsewhere
         }
         // Prove the archive really carries a `..` member (else the test asserts nothing).
-        let listed = std::process::Command::new("tar").arg("tf").arg(&evil).output().unwrap();
+        let listed = std::process::Command::new("tar")
+            .arg("tf")
+            .arg(&evil)
+            .output()
+            .unwrap();
         if !String::from_utf8_lossy(&listed.stdout).contains("..") {
             let _ = std::fs::remove_dir_all(&src);
             return;
@@ -139,7 +161,10 @@ mod tests {
             .expect_err("a `..`-escaping member must be rejected at the extraction boundary");
         assert!(err.to_string().contains("path traversal"), "err: {err}");
         // The rejected import leaves no image dir (and never wrote the escaping file).
-        assert!(!store_dir.join("evilimg").exists(), "rejected import must leave no image dir");
+        assert!(
+            !store_dir.join("evilimg").exists(),
+            "rejected import must leave no image dir"
+        );
         assert!(!src.join("x.escaped").exists());
 
         let _ = std::fs::remove_dir_all(&src);
@@ -164,7 +189,11 @@ mod tests {
         let loaded = store.import_rootfs("myimg", &bytes).expect("import_rootfs");
 
         assert_eq!(loaded.name, "myimg");
-        assert_eq!(loaded.arch, Arch::LinuxX86_64, "arch probed from the imported rootfs");
+        assert_eq!(
+            loaded.arch,
+            Arch::LinuxX86_64,
+            "arch probed from the imported rootfs"
+        );
         assert_eq!(
             std::fs::read_to_string(loaded.rootfs.join("app.conf")).unwrap(),
             "key=value\n"

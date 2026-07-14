@@ -152,12 +152,10 @@ pub(crate) async fn containers_create(
             }
         }
     }
-    // Per-container copy-on-write upper layer over the read-only image rootfs (linux guests only; darwin
-    // runs natively jailed and writes into its own rootfs). The guest's writes/creates/deletes land in
-    // this private dir, so the shared image is never mutated. Reclaimed on `docker rm`/prune.
-    let upper = if img.arch.os() == "darwin" {
-        String::new()
-    } else {
+    // Per-container copy-on-write upper layer over the read-only image rootfs. The guest's
+    // writes/creates/deletes land in this private dir, so the shared image is never mutated. Reclaimed
+    // on `docker rm`/prune.
+    let upper = {
         let dir = hl_home().join("containers").join(&id).join("upper");
         // Probe up front that the upper is actually creatable AND writable, and FAIL LOUD (a stderr
         // diagnostic) if not — otherwise a non-writable upper degrades into silent per-write EPERM inside

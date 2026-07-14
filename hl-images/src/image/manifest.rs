@@ -34,7 +34,7 @@ pub struct Manifest {
     /// The exposed-port keys (e.g. `"5432/tcp"`).
     #[serde(default)]
     pub exposed_ports: Vec<String>,
-    /// `"darwin"` for a native-macOS image; absent for a normal linux image.
+    /// The image OS (`"linux"`); absent for a normal linux image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<String>,
     /// The guest instruction set (`"x86_64"` / `"aarch64"`), recorded so an ELF-less linux image (scratch/
@@ -57,16 +57,11 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// True when this manifest describes a native-macOS (darwinjail) image.
-    pub fn is_darwin(&self) -> bool {
-        self.os.as_deref() == Some("darwin")
-    }
-
-    /// True when this manifest's `os` is one dd can run: absent/empty, `linux`, or `darwin`. A PRESENT but
-    /// unsupported os (e.g. `"windows"`) is NOT supported and the load path must reject it rather than
-    /// importing it as Linux.
+    /// True when this manifest's `os` is one dd can run: absent/empty or `linux`. A PRESENT but
+    /// unsupported os (e.g. `"windows"`, `"darwin"`) is NOT supported and the load path must reject it
+    /// rather than importing it as Linux.
     pub fn os_is_supported(&self) -> bool {
-        matches!(self.os.as_deref(), None | Some("") | Some("linux") | Some("darwin"))
+        matches!(self.os.as_deref(), None | Some("") | Some("linux"))
     }
 }
 
@@ -85,7 +80,7 @@ mod tests {
             workdir: "/app".to_string(),
             user: "1000".to_string(),
             exposed_ports: vec!["5432/tcp".to_string()],
-            os: Some("darwin".to_string()),
+            os: Some("linux".to_string()),
             arch: None,
             labels: std::collections::HashMap::new(),
             stop_signal: Some("SIGQUIT".to_string()),
@@ -99,7 +94,7 @@ mod tests {
             serde_json::to_value(&m).unwrap(),
             serde_json::to_value(&back).unwrap()
         );
-        assert!(back.is_darwin());
+        assert_eq!(back.os.as_deref(), Some("linux"));
     }
 
     #[test]
@@ -118,7 +113,6 @@ mod tests {
         assert_eq!(m.stop_signal, None);
         assert!(m.img_volumes.is_empty());
         assert_eq!(m.healthcheck, None);
-        assert!(!m.is_darwin());
     }
 
     #[test]
@@ -130,7 +124,7 @@ mod tests {
         assert!(r.is_err());
     }
 
-    // Finding 8 — os support classification: only absent/empty/linux/darwin are runnable.
+    // Finding 8 — os support classification: only absent/empty/linux are runnable.
     #[test]
     fn os_is_supported_classifies_os() {
         let mk = |os: Option<&str>| Manifest {
@@ -141,7 +135,7 @@ mod tests {
         assert!(mk(None).os_is_supported());
         assert!(mk(Some("")).os_is_supported());
         assert!(mk(Some("linux")).os_is_supported());
-        assert!(mk(Some("darwin")).os_is_supported());
+        assert!(!mk(Some("darwin")).os_is_supported());
         assert!(!mk(Some("windows")).os_is_supported());
         assert!(!mk(Some("plan9")).os_is_supported());
     }

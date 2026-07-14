@@ -10,7 +10,7 @@ pub(crate) async fn image_push(
     Query(q): Query<PushQ>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    // The route `name` is collapsed to the bare image (e.g. `huttarichard/ddmac` -> `ddmac`), so match on
+    // The route `name` is collapsed to the bare image (e.g. `myorg/myapp` -> `myapp`), so match on
     // it AND the requested tag, then push to the image's FULL stored name so the registry namespace
     // (`huttarichard/…`) is preserved — otherwise the upload targets `library/<name>` and is denied.
     let want_tag = q
@@ -36,7 +36,7 @@ pub(crate) async fn image_push(
     let tag = want_tag;
     let iref = image_ref(&img.name, &tag);
     let arch = docker_arch(img.arch).to_string();
-    let os = img.arch.os().to_string(); // "darwin" for mac images, else "linux"
+    let os = img.arch.os().to_string(); // "linux"
     let creds = registry_auth(&headers);
     // On-disk rootfs size, captured before `img` is moved into the push task; reported as the layer
     // `Size` in the push progress/aux lines (a real registry manifest size would need registry.rs to

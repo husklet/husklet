@@ -60,8 +60,8 @@ pub fn discover_images(images_dir: &str) -> Vec<DiscoveredImage> {
         if !rootfs.is_dir() {
             continue;
         }
-        // Prefer dd-image.json so name/cmd/os round-trip exactly (macOS images have no probe-able ELF);
-        // else parse the dir name + detect the arch from a probe binary.
+        // Prefer dd-image.json so name/cmd/os round-trip exactly (even for images whose binaries can't be
+        // sniffed); else parse the dir name + detect the arch from a probe binary.
         let meta = std::fs::read_to_string(e.path().join("dd-image.json"))
             .ok()
             .and_then(|s| serde_json::from_str::<Value>(&s).ok());
@@ -70,12 +70,11 @@ pub fn discover_images(images_dir: &str) -> Vec<DiscoveredImage> {
                 let name = m["name"].as_str().unwrap_or("img").to_string();
                 let cmd = json_strs(&m["cmd"]);
                 // Prefer the arch the sidecar recorded at pull/build time (round-trips exactly, even for
-                // images whose binaries can't be sniffed — distroless/scratch). `os:darwin` marks a
-                // native-macOS (darwinjail) image. Fall back to probing the rootfs, then native arm64.
+                // images whose binaries can't be sniffed — distroless/scratch). Fall back to probing the
+                // rootfs, then native arm64.
                 let arch = m["arch"]
                     .as_str()
                     .and_then(|a| Arch::detect(m["os"].as_str().unwrap_or("linux"), a))
-                    .or_else(|| (m["os"].as_str() == Some("darwin")).then_some(Arch::DarwinAarch64))
                     .or_else(|| detect_arch(&rootfs))
                     .unwrap_or(Arch::LinuxAarch64);
                 (

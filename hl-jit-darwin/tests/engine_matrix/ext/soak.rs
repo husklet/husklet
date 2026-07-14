@@ -13,7 +13,7 @@
 //! 25s timeout. Golden values were computed natively and cross-checked aarch64 vs x86-64 (qemu) so the
 //! `.out(...)` strings are arch-independent.
 #![allow(unused_imports)]
-use crate::support::{darwin_libc, darwin_src, fixture, group, in_rootfs, port, src, Case, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, port, src, Case, Engine, Group};
 
 pub fn groups() -> Vec<Group> {
     vec![soakext()]

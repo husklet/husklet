@@ -5,22 +5,14 @@ use super::*;
 use std::collections::VecDeque;
 use std::path::Path;
 
-/// Classify a binary by its leading magic bytes: ELF -> linux (e_machine = aarch64/x86_64), Mach-O 64 ->
-/// darwin (cputype = arm64). Returns `None` for anything else (scripts, data, an unrecognized machine).
+/// Classify a binary by its leading magic bytes: ELF -> linux (e_machine = aarch64/x86_64).
+/// Returns `None` for anything else (scripts, data, an unrecognized machine).
 fn sniff_magic(b: &[u8]) -> Option<Arch> {
     if b.len() > 19 && &b[0..4] == b"\x7fELF" {
         return match u16::from_le_bytes([b[18], b[19]]) {
             // ELF e_machine
             0xB7 => Some(Arch::LinuxAarch64),
             0x3E => Some(Arch::LinuxX86_64),
-            _ => None,
-        };
-    }
-    if b.len() > 7 && b[0..4] == [0xCF, 0xFA, 0xED, 0xFE] {
-        // MH_MAGIC_64 (little-endian)
-        return match u32::from_le_bytes([b[4], b[5], b[6], b[7]]) {
-            // cputype
-            0x0100000C => Some(Arch::DarwinAarch64), // CPU_TYPE_ARM64
             _ => None,
         };
     }
@@ -126,11 +118,10 @@ mod tests {
     }
 
     #[test]
-    fn sniff_magic_macho_arm64_only() {
-        // CPU_TYPE_ARM64 (0x0100000C) -> darwin arm64
-        assert_eq!(sniff_magic(&macho_header(0x0100000C)), Some(Arch::DarwinAarch64));
-        // a Mach-O with any other cputype (e.g. x86_64 0x01000007) -> None
-        assert_eq!(sniff_magic(&macho_header(0x01000007)), None);
+    fn sniff_magic_macho_unsupported() {
+        // Mach-O images are no longer a supported target -> always None.
+        assert_eq!(sniff_magic(&macho_header(0x0100000C)), None); // CPU_TYPE_ARM64
+        assert_eq!(sniff_magic(&macho_header(0x01000007)), None); // CPU_TYPE_X86_64
     }
 
     #[test]

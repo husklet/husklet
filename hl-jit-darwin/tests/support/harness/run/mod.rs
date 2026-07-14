@@ -2,7 +2,6 @@
 //! assemble the spawn config (`config`), drive the engine under `timeout`, drain guest stdout durably,
 //! and evaluate the case's checks (`eval`). Shell/output helpers live in `util`.
 
-use std::path::PathBuf;
 use std::process::Command;
 
 use super::*;
@@ -48,11 +47,10 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     // A COMPILED guest + a rootfs on a Linux engine: the engine resolves argv[0] INSIDE the jail
     // (xresolve_overlay at startup), so a host path outside the rootfs can never load. Copy the built
     // guest into the image's /tmp under a unique name and run it by its in-guest path (removed after
-    // the run; the fixture rootfs' /tmp is already scratch for the sh-based cases). Darwin keeps the
-    // host path: darwinjail runs our own Mach-O natively and only arms the jail around it.
+    // the run; the fixture rootfs' /tmp is already scratch for the sh-based cases).
     let mut jail_copy: Option<(String, String)> = None; // (host file to clean up, in-guest argv[0])
     if let Some(rfs) = &rootfs {
-        if !matches!(c.bin, Bin::InRootfs) && e != Engine::DarwinAarch64 {
+        if !matches!(c.bin, Bin::InRootfs) {
             let leaf = format!(
                 "ddguest_{}_{}_{}",
                 c.name.replace('/', "_"),
@@ -99,46 +97,12 @@ pub fn run(ctx: &Ctx, c: &Case, e: Engine) -> Status {
     // propagated by the bridge). On a real Mac there is no bridge and no race — the same file capture
     // is equally correct — so the path is unified (no per-guest fflush/usleep workaround needed).
     //
-    // Darwin (darwinjail) shares this run()/redirect path — the `> file` below binds to the darwin launch
-    // script exactly as it does for linux — but the DRAIN FILE LOCATION needs two darwin-only adjustments,
-    // or the capture silently drops to empty on the darwin engine:
-    //   (1) Seatbelt. The darwinjail arms a Seatbelt profile (DD_SANDBOX, only WHEN a rootfs is set) whose
-    //       body is `(deny file-write* (subpath "/")) (allow file-write* (subpath "<rootfs>") …)` — writes
-    //       outside the rootfs are DENIED. A drain under target/dd-tests/stdout/ (i.e. under /Users) is
-    //       outside that set, so a rootfs darwin case's guest write to it is refused → empty file. (On a
-    //       host that already confines the process, e.g. OrbStack, sandbox_init fails and this is masked —
-    //       but on a real mac the deny is live.) Fix: for a rootfs darwin case, drain INTO the rootfs's
-    //       /tmp — a Seatbelt-allowed subpath that is on the shared tree (so this Linux runner reads it
-    //       back by the same host path) and stays writable even under docker --read-only.
-    //   (2) Filename collision. darwin/aarch64 and linux/aarch64 share e.arch()=="aarch64", so the
-    //       `{name}_{arch}_{pid}` file would be the SAME for both engines within one runner process — tag
-    //       the darwin drain with the OS too so its file can never be clobbered by the same-arch linux run.
-    // The linux drain path is left byte-identical (the `else` arm below).
-    let drain_file = if e == Engine::DarwinAarch64 && !rootfs_str.is_empty() {
-        // rootfs armed → the Seatbelt profile only permits writes under the rootfs; /tmp is rw even RO.
-        PathBuf::from(&rootfs_str).join("tmp").join(format!(
-            "ddstdout_{}_{}_{}.out",
-            c.name.replace('/', "_"),
-            e.os(),
-            std::process::id()
-        ))
-    } else if e == Engine::DarwinAarch64 {
-        // bare darwin → no Seatbelt; keep the shared drain dir but OS-tag the name (no arch collision).
-        ctx.cache.join("stdout").join(format!(
-            "{}_{}_{}_{}.out",
-            c.name.replace('/', "_"),
-            e.os(),
-            e.arch(),
-            std::process::id()
-        ))
-    } else {
-        ctx.cache.join("stdout").join(format!(
-            "{}_{}_{}.out",
-            c.name.replace('/', "_"),
-            e.arch(),
-            std::process::id()
-        ))
-    };
+    let drain_file = ctx.cache.join("stdout").join(format!(
+        "{}_{}_{}.out",
+        c.name.replace('/', "_"),
+        e.arch(),
+        std::process::id()
+    ));
     let mut args = args;
     let drained = std::fs::create_dir_all(drain_file.parent().unwrap()).is_ok();
     if drained {

@@ -215,8 +215,8 @@ impl Store {
 
     /// Write the `dd-image.json` sidecar for a freshly loaded image so discovery restores its run config
     /// after a daemon restart (mirrors the fields the pull path records).
-    fn write_sidecar(&self, target: &Path, img: &LoadedImage, darwin: bool) {
-        let mut dd = json!({
+    fn write_sidecar(&self, target: &Path, img: &LoadedImage) {
+        let dd = json!({
             "name": img.name, "cmd": img.cmd, "env": img.env, "entrypoint": img.entrypoint,
             "workdir": img.workdir, "user": img.user, "exposed_ports": img.exposed_ports,
             "stop_signal": img.stop_signal, "img_volumes": img.img_volumes,
@@ -224,9 +224,6 @@ impl Store {
             // Record os + instruction set so discovery restores the arch even for an ELF-less rootfs.
             "os": img.arch.os(), "arch": img.arch.isa(),
         });
-        if darwin {
-            dd["os"] = json!("darwin");
-        }
         let _ = std::fs::write(target.join("dd-image.json"), dd.to_string());
     }
 }

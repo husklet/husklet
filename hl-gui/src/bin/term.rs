@@ -394,7 +394,6 @@ fn arch_chip(arch: Arch) -> gtk::Label {
     l.add_css_class(match arch {
         Arch::Arm64 => "arm",
         Arch::Amd64 => "amd",
-        Arch::DarwinArm64 => "dar",
     });
     l.set_valign(gtk::Align::Center);
     l
@@ -599,7 +598,6 @@ impl WsDefaults {
 /// actual workspace instead.
 fn apply_ws_defaults(form: &Rc<Form>, d: &WsDefaults) {
     form.image.set_text(&d.image);
-    form.os_linux.set(d.arch != Arch::DarwinArm64);
     form.cpu_amd.set(d.arch == Arch::Amd64);
     form.storage.set_text(&d.storage);
     form.docker.set_active(d.docker_sock);
@@ -966,15 +964,12 @@ fn settings_defaults(ui: &Rc<SettingsUi>) -> gtk::Box {
     seg.add_css_class("seg");
     let arm = gtk::ToggleButton::with_label("linux/aarch64");
     let amd = gtk::ToggleButton::with_label("linux/x86_64");
-    let dar = gtk::ToggleButton::with_label("darwin/aarch64");
     amd.set_group(Some(&arm));
-    dar.set_group(Some(&arm));
     match ui.d_arch.get() {
         Arch::Arm64 => arm.set_active(true),
         Arch::Amd64 => amd.set_active(true),
-        Arch::DarwinArm64 => dar.set_active(true),
     }
-    for (btn, a) in [(&arm, Arch::Arm64), (&amd, Arch::Amd64), (&dar, Arch::DarwinArm64)] {
+    for (btn, a) in [(&arm, Arch::Arm64), (&amd, Arch::Amd64)] {
         let cell = ui.d_arch.clone();
         btn.connect_toggled(move |t| {
             if t.is_active() {
@@ -1093,7 +1088,6 @@ struct Form {
     image: gtk::Entry,
     shell: gtk::Entry,
     storage: gtk::Entry,
-    os_linux: Rc<Cell<bool>>, // true = Linux, false = macOS
     cpu_amd: Rc<Cell<bool>>,  // true = x86-64, false = arm64
 
     cpus: gtk::SpinButton,
@@ -1257,7 +1251,6 @@ fn build_form() -> Form {
         image: entry("ubuntu:24.04", true),
         shell: entry("/bin/bash -l", true),
         storage: entry("", true),
-        os_linux: Rc::new(Cell::new(true)),
         cpu_amd: Rc::new(Cell::new(false)),
         cpus: gtk::SpinButton::with_range(0.0, 64.0, 1.0),
         mem: gtk::SpinButton::with_range(0.0, 65536.0, 256.0),
@@ -1306,42 +1299,7 @@ fn pane_general(form: &Rc<Form>) -> gtk::Box {
     a_seg.append(&arm);
     a_seg.append(&amd);
 
-    // OS segmented control (Linux / macOS). macOS supports arm64 only → disable x86-64 there.
-    let os_seg = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    os_seg.add_css_class("seg");
-    let linux = gtk::ToggleButton::with_label("Linux");
-    let macos = gtk::ToggleButton::with_label("macOS");
-    macos.set_group(Some(&linux));
-    linux.set_active(true);
-    {
-        let c = form.os_linux.clone();
-        let amd = amd.clone();
-        let img = form.image.clone();
-        linux.connect_toggled(move |t| {
-            if t.is_active() {
-                c.set(true);
-                amd.set_sensitive(true);
-                img.set_text(""); // Linux images differ from macOS — re-pick for the new OS
-            }
-        });
-    }
-    {
-        let c = form.os_linux.clone();
-        let arm = arm.clone();
-        let amd = amd.clone();
-        let img = form.image.clone();
-        macos.connect_toggled(move |t| {
-            if t.is_active() {
-                c.set(false);
-                arm.set_active(true); // force arm64 (there is no macOS x86-64)
-                amd.set_sensitive(false); // no darwin/x86-64
-                img.set_text(""); // clear the Linux image; pick a ddmac template instead
-            }
-        });
-    }
-    os_seg.append(&linux);
-    os_seg.append(&macos);
-    p.append(&labeled("OPERATING SYSTEM", &os_seg));
+    // Only Linux guests are supported; the workspace OS is always Linux.
     p.append(&labeled("ARCHITECTURE", &a_seg));
 
     // IMAGE comes AFTER OS + ARCH: pick the arch first, then choose from images built for it. The
@@ -1420,34 +1378,22 @@ fn pick_folder_dialog() -> Option<String> {
 }
 
 /// Curated image templates for an arch — the "predefined images" the picker offers. `(display, ref, desc)`.
-fn curated_images(arch: &str) -> Vec<(&'static str, &'static str, &'static str)> {
-    match arch {
-        "darwin-arm64" => vec![
-            ("ddmac slim", "huttarichard/ddmac:base", "Lean macOS base — a minimal Darwin userland."),
-            ("ddmac full", "huttarichard/ddmac:dev", "Full macOS dev image — toolchains + common tools."),
-        ],
-        // Linux arm64 / amd64 share the same catalog.
-        _ => vec![
-            ("Ubuntu 24.04 LTS", "ubuntu:24.04", "Latest Ubuntu LTS — the default dev base."),
-            ("Ubuntu 22.04 LTS", "ubuntu:22.04", "Previous Ubuntu LTS."),
-            ("Debian 12 (Bookworm)", "debian:bookworm", "Stable Debian."),
-            ("Alpine", "alpine:latest", "Tiny musl-based image."),
-            ("Fedora", "fedora:latest", "Fedora — recent packages."),
-            ("AlmaLinux 9", "almalinux:9", "RHEL-compatible enterprise base."),
-        ],
-    }
+fn curated_images(_arch: &str) -> Vec<(&'static str, &'static str, &'static str)> {
+    // Linux arm64 / amd64 share the same catalog.
+    vec![
+        ("Ubuntu 24.04 LTS", "ubuntu:24.04", "Latest Ubuntu LTS — the default dev base."),
+        ("Ubuntu 22.04 LTS", "ubuntu:22.04", "Previous Ubuntu LTS."),
+        ("Debian 12 (Bookworm)", "debian:bookworm", "Stable Debian."),
+        ("Alpine", "alpine:latest", "Tiny musl-based image."),
+        ("Fedora", "fedora:latest", "Fedora — recent packages."),
+        ("AlmaLinux 9", "almalinux:9", "RHEL-compatible enterprise base."),
+    ]
 }
 
 /// The image-selection window: a list of predefined templates for the workspace's currently-selected
 /// architecture. Clicking a row fills the IMAGE field. (Custom refs can still be typed directly.)
 fn open_image_picker(parent: &gtk::Window, form: &Rc<Form>) {
-    let arch = if !form.os_linux.get() {
-        "darwin-arm64"
-    } else if form.cpu_amd.get() {
-        "amd64"
-    } else {
-        "arm64"
-    };
+    let arch = if form.cpu_amd.get() { "amd64" } else { "arm64" };
 
     let win = gtk::Window::builder()
         .title("Choose an image")
@@ -1748,12 +1694,8 @@ fn save_workspace(form: &Rc<Form>) -> bool {
     if name.is_empty() || image.is_empty() {
         return false;
     }
-    // Map OS + Arch to the internal target. dd supports macOS on arm64 only.
-    let arch = match (form.os_linux.get(), form.cpu_amd.get()) {
-        (false, _) => Arch::DarwinArm64,
-        (true, true) => Arch::Amd64,
-        (true, false) => Arch::Arm64,
-    };
+    // Map the arch toggle to the internal target (Linux only).
+    let arch = if form.cpu_amd.get() { Arch::Amd64 } else { Arch::Arm64 };
     let mut ws = WorkspaceConfig::new(&name, &image, arch);
     let shell = form.shell.text().trim().to_string();
     if !shell.is_empty() {
@@ -3073,7 +3015,6 @@ fn dash_settings(ws: &WorkspaceConfig) -> gtk::ScrolledWindow {
     // Apply the workspace's values AFTER the pane builders (which set their own defaults).
     form.name.set_text(&ws.name);
     form.image.set_text(&ws.image);
-    form.os_linux.set(ws.arch != Arch::DarwinArm64);
     form.cpu_amd.set(ws.arch == Arch::Amd64);
     if let Some(s) = &ws.shell {
         form.shell.set_text(s);

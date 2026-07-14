@@ -18,11 +18,6 @@ pub(crate) enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Start a macOS container (experimental — the host macOS in a darwin jail).
-    Mac {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
     /// Launch the dd-app GUI.
     App,
     /// Manage + launch terminal workspaces (a named image+arch you develop in).
@@ -66,9 +61,9 @@ pub(crate) enum WorkspaceCmd {
         /// The image/distro the workspace runs, e.g. `ubuntu:24.04` or `alpine`.
         #[arg(long)]
         image: String,
-        /// Target arch: `arm64` (default), `amd64` (x86-64 via jit86), or `darwin-arm64`. Omit when
-        /// re-creating an existing workspace to preserve its current arch (a fresh workspace defaults to
-        /// `arm64`); passing it always sets the arch explicitly.
+        /// Target arch: `arm64` (default) or `amd64` (x86-64 via jit86). Omit when re-creating an existing
+        /// workspace to preserve its current arch (a fresh workspace defaults to `arm64`); passing it
+        /// always sets the arch explicitly.
         #[arg(long)]
         arch: Option<String>,
         /// Route this workspace's egress through a VPN/proxy (see docs/VPN.md). Accepts a bare SOCKS5

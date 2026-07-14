@@ -1,5 +1,5 @@
 # dd workspace.
-.PHONY: all jit fmt fmt-check test test-ci mac-crates perf test-docker test-docker-full test-compose test-docker-net test-macos test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage clean app dmg install uninstall mac-image mac-push
+.PHONY: all jit fmt fmt-check test test-ci mac-crates perf test-docker test-docker-full test-compose test-docker-net test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage clean app dmg install uninstall
 # Version is the git tag (v0.2.0 -> 0.2.0); falls back to 0.0.0-dev with no tags. CI passes it too.
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
@@ -30,8 +30,6 @@ test-compose: jit ## end-to-end Docker Compose scenarios against dd-daemon (up/p
 	bash hl-daemon/testdata/scenarios/compose-multinet.sh
 test-docker-net: jit ## container-to-container networking (by-name DNS / by-IP / cross-network isolation)
 	bash hl-daemon/testdata/scenarios/docker-net.sh
-test-macos: jit ## macOS-container parity: same docker lifecycle on a Linux AND a native-macOS container
-	bash hl-daemon/testdata/scenarios/macos-container.sh
 test-realsw: jit ## run REAL pulled software (redis/python/postgres/nats) with deterministic workloads
 	bash hl-daemon/testdata/scenarios/realsw.sh
 test-smoke:     ## user-perspective: FRESH-PULL + run a real glibc distro on BOTH arches (the libc.so.6 guard; needs network, macOS)
@@ -76,25 +74,5 @@ install: app    ## copy the app to /Applications and run `dd install` (per-user,
 	cargo run -q -p hl-cli -- install
 uninstall:      ## remove the daemon agent + docker context (keeps ~/.dd unless --purge)
 	cargo run -q -p hl-cli -- uninstall
-# --- macOS dev-container image (`ddcli mac`) -------------------------------------------------------
-DDMAC_REPO ?= huttarichard/ddmac
-DD_IMAGES  ?= $(HOME)/.dd/images
-# docker pointed at the dd daemon socket (override if your socket lives elsewhere / use a context).
-DD_DOCKER  ?= docker --host unix://$(HOME)/.dd/run/docker.sock
-mac-image:      ## build the macOS dev-container images (base + dev) into $$DD_IMAGES (macOS + nix)
-	DD_IMAGES=$(DD_IMAGES) bash hl-gui/mac/mac-image.sh base
-	DD_IMAGES=$(DD_IMAGES) bash hl-gui/mac/mac-image.sh dev
-	-cargo run -q -p hl-cli -- daemon restart   # re-discover the new images
-mac-push: mac-image ## tag + push to $(DDMAC_REPO):{base,dev,latest}; needs DDMAC_TOKEN=<docker hub PAT>
-	@test -n "$(DDMAC_TOKEN)" || { echo "set DDMAC_TOKEN=<docker hub PAT> (NEVER commit it); rotate after use"; exit 1; }
-	@printf '%s' "$(DDMAC_TOKEN)" | $(DD_DOCKER) login -u huttarichard --password-stdin
-	$(DD_DOCKER) tag ddmac-base $(DDMAC_REPO):base
-	$(DD_DOCKER) tag ddmac-dev  $(DDMAC_REPO):dev
-	$(DD_DOCKER) tag ddmac-dev  $(DDMAC_REPO):latest
-	$(DD_DOCKER) push $(DDMAC_REPO):base
-	$(DD_DOCKER) push $(DDMAC_REPO):dev
-	$(DD_DOCKER) push $(DDMAC_REPO):latest
-	@echo "pushed $(DDMAC_REPO):{base,dev,latest} — now: ddcli mac   (pulls $(DDMAC_REPO):latest)"
-
 clean:
 	cargo clean

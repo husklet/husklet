@@ -231,13 +231,6 @@ pub(crate) async fn start_for(
     c: &Container,
     bridge: &Option<(String, String)>,
 ) -> Result<(), String> {
-    // The darwin container (darwinjail) runs native binaries on the REAL host network stack — a server it
-    // binds already listens on the actual host port, so `-p` needs no forwarder. Starting one here would
-    // just collide (EADDRINUSE) with the container's own bind. Only Linux guests use the AF_UNIX switch
-    // that this forwarder bridges into.
-    if c.arch.map_or(false, |g| g.os() == "darwin") {
-        return Ok(());
-    }
     // Matches `spawn_cfg`: an exec shares the target container's netns via `netns_key`; a normal container
     // uses its own id. The engine truncates to 40, so pass the untruncated key (t40 clips inside `plan`).
     let ns_key = c.netns_key.as_deref().unwrap_or(&c.id).to_string();

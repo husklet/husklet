@@ -10,8 +10,6 @@ pub enum Arch {
     LinuxAarch64,
     /// Linux on 64-bit x86 (OCI `linux`/`amd64`).
     LinuxX86_64,
-    /// macOS on 64-bit ARM (OCI `darwin`/`arm64`).
-    DarwinAarch64,
 }
 
 impl Arch {
@@ -20,7 +18,6 @@ impl Arch {
         match self {
             Arch::LinuxAarch64 => ("linux", "arm64"),
             Arch::LinuxX86_64 => ("linux", "amd64"),
-            Arch::DarwinAarch64 => ("darwin", "arm64"),
         }
     }
 
@@ -29,11 +26,10 @@ impl Arch {
         match self {
             Arch::LinuxAarch64 => "linux_aarch64",
             Arch::LinuxX86_64 => "linux_x86_64",
-            Arch::DarwinAarch64 => "darwin_aarch64",
         }
     }
 
-    /// The OS personality alone: `"linux"` or `"darwin"` (the first half of [`oci`](Self::oci)).
+    /// The OS personality alone: `"linux"` (the first half of [`oci`](Self::oci)).
     pub fn os(self) -> &'static str {
         self.oci().0
     }
@@ -54,24 +50,21 @@ impl Arch {
         match (os, arch.to_ascii_lowercase().as_str()) {
             ("linux", "aarch64" | "arm64" | "arm64/v8") => Some(Arch::LinuxAarch64),
             ("linux", "x86_64" | "amd64" | "x86-64") => Some(Arch::LinuxX86_64),
-            ("darwin", "aarch64" | "arm64") => Some(Arch::DarwinAarch64),
             _ => None,
         }
     }
 
     /// Map an OCI config blob's `architecture` + `os` to an [`Arch`]. `None` if unrecognized — including a
-    /// config whose `os` is PRESENT but neither `linux` nor `darwin` (e.g. `"windows"`): such an image must
+    /// config whose `os` is PRESENT but not `linux` (e.g. `"windows"`, `"darwin"`): such an image must
     /// be REJECTED, not silently treated as Linux (the pull/registry path treats `None` as "reject"). An
     /// absent/empty `os` still defaults to `linux` for back-compat with configs that omit it.
     pub fn from_config(config: &Value) -> Option<Arch> {
         let os = match config["os"].as_str() {
             None | Some("") => "linux",
             Some("linux") => "linux",
-            Some("darwin") => "darwin",
             Some(_) => return None, // present but unsupported OS -> reject
         };
         match (os, config["architecture"].as_str()?) {
-            ("darwin", "arm64" | "aarch64") => Some(Arch::DarwinAarch64),
             (_, "amd64" | "x86_64") => Some(Arch::LinuxX86_64),
             (_, "arm64" | "aarch64") => Some(Arch::LinuxAarch64),
             _ => None,
@@ -104,12 +97,12 @@ mod tests {
 
     #[test]
     fn detect_darwin_and_unknown() {
-        assert_eq!(Arch::detect("darwin", "arm64"), Some(Arch::DarwinAarch64));
-        assert_eq!(Arch::detect("darwin", "aarch64"), Some(Arch::DarwinAarch64));
+        // darwin is no longer a supported target -> None
+        assert_eq!(Arch::detect("darwin", "arm64"), None);
+        assert_eq!(Arch::detect("darwin", "aarch64"), None);
         // unrecognized os/arch -> None
         assert_eq!(Arch::detect("windows", "amd64"), None);
         assert_eq!(Arch::detect("linux", "mips"), None);
-        assert_eq!(Arch::detect("darwin", "amd64"), None);
     }
 
     #[test]
@@ -123,10 +116,10 @@ mod tests {
             arch_from_config(&json!({"architecture": "arm64"})),
             Some(Arch::LinuxAarch64)
         );
-        // darwin + arm64 is the only darwin mapping
+        // darwin is no longer supported -> REJECTED (None)
         assert_eq!(
             arch_from_config(&json!({"os": "darwin", "architecture": "arm64"})),
-            Some(Arch::DarwinAarch64)
+            None
         );
         // Finding 9 — a PRESENT but unsupported os is REJECTED (None), not treated as Linux.
         assert_eq!(
@@ -155,7 +148,6 @@ mod tests {
         let cases = [
             (Arch::LinuxAarch64, ("linux", "arm64"), "linux_aarch64", "aarch64", "linux"),
             (Arch::LinuxX86_64, ("linux", "amd64"), "linux_x86_64", "x86_64", "linux"),
-            (Arch::DarwinAarch64, ("darwin", "arm64"), "darwin_aarch64", "aarch64", "darwin"),
         ];
         for (a, oci, target, isa, os) in cases {
             assert_eq!(a.oci(), oci);

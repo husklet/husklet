@@ -49,11 +49,11 @@ impl Store {
         let pulled = Client::new(iref.clone(), creds).pull(&rootfs, archs, progress)?;
         // Map the config's os/arch; a PRESENT but unsupported os yields `None` from `arch_from_config`
         // (finding 9). Only fall back to the linux/arm64 default when the os is acceptable (absent/empty/
-        // linux/darwin) but the arch simply couldn't be classified — never for an explicitly-unsupported os.
+        // linux) but the arch simply couldn't be classified — never for an explicitly-unsupported os.
         let arch = match arch_from_config(&pulled.config) {
             Some(a) => a,
             None => match pulled.config["os"].as_str() {
-                Some(os) if !os.is_empty() && os != "linux" && os != "darwin" => {
+                Some(os) if !os.is_empty() && os != "linux" => {
                     return Err(Error::Manifest(format!("unsupported image os: {os}")));
                 }
                 _ => Arch::LinuxAarch64,

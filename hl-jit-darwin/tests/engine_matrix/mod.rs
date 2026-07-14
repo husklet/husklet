@@ -52,7 +52,6 @@ pub fn all() -> Vec<Group> {
         container(),
         sandbox(),
         x86(),
-        darwin(),
         regress(),
     ];
     g.extend(ext::all());

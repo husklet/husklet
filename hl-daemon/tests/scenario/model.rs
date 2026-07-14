@@ -5,13 +5,12 @@ pub enum Backend {
     Dd,
 }
 
-/// A real-software target. Linux targets map to a docker `--platform`; mac is the lighter native path.
+/// A real-software target. Linux targets map to a docker `--platform`.
 /// Linux parity = a scenario runs on BOTH ArmLinux and AmdLinux unless narrowed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Target {
     ArmLinux,
     AmdLinux,
-    ArmMac,
 }
 
 impl Target {
@@ -20,14 +19,12 @@ impl Target {
         match self {
             Target::ArmLinux => Some("linux/arm64"),
             Target::AmdLinux => Some("linux/amd64"),
-            Target::ArmMac => None,
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Target::ArmLinux => "arm-linux",
             Target::AmdLinux => "amd-linux",
-            Target::ArmMac => "arm-mac",
         }
     }
 }
@@ -131,12 +128,6 @@ impl Scenario {
     }
     pub fn only(mut self, t: &[Target]) -> Self {
         self.targets = t.to_vec();
-        self
-    }
-    pub fn plus_mac(mut self) -> Self {
-        if !self.targets.contains(&Target::ArmMac) {
-            self.targets.push(Target::ArmMac);
-        }
         self
     }
     pub fn xfail(mut self, t: &[Target]) -> Self {

@@ -94,7 +94,6 @@ pub(crate) fn image_from_config(
     let arch = detect_arch(rootfs)
         .or_else(|| manifest_arch(config))
         .unwrap_or(Guest::LinuxAarch64);
-    let darwin = arch.os() == "darwin";
     // Keep Entrypoint and Cmd *separate* (NOT flattened like `config_cmd`) so docker's override semantics
     // survive the round-trip — `containers_create` rebuilds argv = entrypoint ++ cmd and `--entrypoint`/CMD
     // overrides act on the right half (see containers.rs).
@@ -111,31 +110,22 @@ pub(crate) fn image_from_config(
     let stop_signal = config_stop_signal(config);
     let img_volumes = config_volumes(config);
     let healthcheck = config_healthcheck(config);
-    // A pulled macOS image's `dd-image.json` sidecar doesn't survive the registry round-trip and its
-    // userland shell lives on the in-jail PATH (`/profile/bin/bash`), not `/bin/sh` — so default a
-    // darwin image to a bare `bash` (resolved via PATH by the darwinjail) rather than `/bin/sh`. Only fall
-    // back when the config supplies neither Entrypoint nor Cmd (an entrypoint-only image keeps empty cmd).
+    // Fall back to the rootfs's default shell only when the config supplies neither Entrypoint nor Cmd
+    // (an entrypoint-only image keeps an empty cmd).
     let mut cmd = config_strs(config, "Cmd");
     if cmd.is_empty() && entrypoint.is_empty() {
-        cmd = if darwin {
-            vec!["bash".into()]
-        } else {
-            default_shell(rootfs)
-        };
+        cmd = default_shell(rootfs);
     }
     let name = iref.short();
-    // Record name + the full OCI run config (cmd/env/entrypoint/workdir, +os for darwin) so the image keeps
+    // Record name + the full OCI run config (cmd/env/entrypoint/workdir, +os) so the image keeps
     // its identity AND its entrypoint/env/workdir across a daemon restart (the dir name alone doesn't
     // round-trip -- e.g. "docker.io_library_alpine_latest"). Mirrors the `docker load` path (`image_load`).
-    let mut meta = json!({ "name": name.clone(), "cmd": cmd.clone(), "env": env.clone(),
+    let meta = json!({ "name": name.clone(), "cmd": cmd.clone(), "env": env.clone(),
                            "entrypoint": entrypoint.clone(), "workdir": workdir.clone(),
                            "user": user.clone(), "exposed_ports": exposed_ports.clone(),
                            "stop_signal": stop_signal.clone(), "img_volumes": img_volumes.clone(),
                            "healthcheck": healthcheck.clone(),
                            "arch": arch.arch(), "os": arch.os() });
-    if darwin {
-        meta["os"] = json!("darwin");
-    }
     let _ = std::fs::write(
         format!("{images_dir}/{}/dd-image.json", safe_name(iref)),
         meta.to_string(),

@@ -69,7 +69,7 @@ fn build_workspace(
 ) -> Result<WorkspaceConfig, String> {
     // arch: explicit `--arch` always wins; omitted keeps the prior workspace's arch, else defaults arm64.
     let arch = match arch {
-        Some(s) => Arch::parse(s).ok_or_else(|| format!("unknown arch {s:?} (use arm64 | amd64 | darwin-arm64)"))?,
+        Some(s) => Arch::parse(s).ok_or_else(|| format!("unknown arch {s:?} (use arm64 | amd64)"))?,
         None => prior.map(|w| w.arch).unwrap_or(Arch::Arm64),
     };
     let vpn_cfg = match vpn {

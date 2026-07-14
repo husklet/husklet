@@ -75,7 +75,6 @@ fn parse_target(s: &str) -> Option<Target> {
     match s {
         "arm" | "arm-linux" | "arm64" => Some(Target::ArmLinux),
         "amd" | "amd-linux" | "x86_64" | "amd64" => Some(Target::AmdLinux),
-        "mac" | "arm-mac" | "darwin" => Some(Target::ArmMac),
         _ => None,
     }
 }
@@ -108,7 +107,7 @@ fn main() {
                     .unwrap_or(targets)
             }
             "-h" | "--help" => {
-                eprintln!("usage: scenarios [--backend real|dd] [--long] [--count] [-c cat] [-t arm|amd|mac]");
+                eprintln!("usage: scenarios [--backend real|dd] [--long] [--count] [-c cat] [-t arm|amd]");
                 return;
             }
             other => {

@@ -24,7 +24,6 @@ fn parse_engine(s: &str) -> Option<Engine> {
     match s {
         "linux/aarch64" | "aarch64" | "arm64" => Some(Engine::LinuxAarch64),
         "linux/x86_64" | "x86_64" | "amd64" => Some(Engine::LinuxX86_64),
-        "darwin/aarch64" | "darwin" | "macos" => Some(Engine::DarwinAarch64),
         _ => None,
     }
 }

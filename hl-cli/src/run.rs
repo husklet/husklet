@@ -1,4 +1,4 @@
-//! `ddcli run` / `ddcli <image>` / `ddcli mac` — launch a container with *easy-access* defaults:
+//! `ddcli run` / `ddcli <image>` — launch a container with *easy-access* defaults:
 //! the current directory mounted at the same path and used as the working dir, host networking, and an
 //! interactive shell when no command is given. We drive the dd daemon through the stock `docker` CLI
 //! (pointed at dd's socket), so the streaming/TTY behaviour is exactly docker's.
@@ -53,25 +53,6 @@ pub fn parse(raw: Vec<String>) -> Result<RunArgs, String> {
     })
 }
 
-/// `ddcli mac [command…]` — drop into a macOS (arm64) dev container: a native userland jailed via
-/// darwinjail, the current dir mounted, host networking. Uniform with `ddcli ubuntu`.
-///
-/// The image is downloaded on first use (the daemon pulls it like any other), so a fresh machine
-/// needs no local build. Override with `DD_MAC_IMAGE` (e.g. a locally-built `macos`, or a pinned tag).
-pub fn mac(raw: Vec<String>) -> i32 {
-    let image = std::env::var("DD_MAC_IMAGE").unwrap_or_else(|_| DEFAULT_MAC_IMAGE.into());
-    run(RunArgs {
-        platform: None,
-        isolated: false,
-        keep: false,
-        image,
-        command: raw,
-    })
-}
-
-/// The published macOS dev image `ddcli mac` pulls by default.
-pub const DEFAULT_MAC_IMAGE: &str = "huttarichard/ddmac:latest";
-
 /// Run a container with the easy-access defaults, by invoking `docker` against dd's socket.
 pub fn run(args: RunArgs) -> i32 {
     if !docker_present() {
@@ -112,9 +93,8 @@ pub fn run(args: RunArgs) -> i32 {
     if args.command.is_empty() {
         // No command given → an interactive shell. Prefer bash when the image has it (a nicer dev
         // shell: history, line editing, completion), falling back to sh — resolved INSIDE the
-        // container since we can't see its filesystem from here.
-        // Fallback must be an ABSOLUTE path: in the macOS container (darwinjail) bare `sh` may not
-        // resolve on PATH, so `exec sh` died "sh not found". `/bin/sh` is the one we're already in.
+        // container since we can't see its filesystem from here. The fallback is an ABSOLUTE path
+        // (`/bin/sh`) so it resolves even when bare `sh` isn't on PATH.
         cmd.args([
             "/bin/sh",
             "-c",

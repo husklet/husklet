@@ -3,12 +3,12 @@ use super::*;
 /// Assemble the `SpawnConfig` for a case+engine EXCEPT `argv` (callers set `argv`: `run()` may use a
 /// jailed in-rootfs copy path, perf uses the plain guest path). `rootfs_str` is "" when the case has no
 /// rootfs. Needs no `Ctx`. Preserves the exact overlay guard, the untrusted push, and the env loop.
-pub(crate) fn build_cfg(c: &Case, e: Engine, rootfs_str: &str) -> hl_jit::SpawnConfig {
+pub(crate) fn build_cfg(c: &Case, _e: Engine, rootfs_str: &str) -> hl_jit::SpawnConfig {
     let mut cfg = hl_jit::SpawnConfig::new(String::new(), rootfs_str.to_string());
     cfg.lowers = c.lowers.clone();
-    // .overlay(): inject the rootfs as its own lower so g_nlower>0 turns on the overlay open/lseek path
-    // (linux engines only; darwin has no overlayfs). Reproduces overlay-only bugs like in the matrix.
-    if c.overlay && !rootfs_str.is_empty() && e != Engine::DarwinAarch64 {
+    // .overlay(): inject the rootfs as its own lower so g_nlower>0 turns on the overlay open/lseek path.
+    // Reproduces overlay-only bugs like in the matrix.
+    if c.overlay && !rootfs_str.is_empty() {
         cfg.lowers.push(rootfs_str.to_string());
     }
     cfg.mem_max = c.mem_max;

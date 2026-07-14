@@ -2,7 +2,7 @@
 name = "hl-jit-darwin"
 version = "0.4.0"
 edition = "2021"
-description = "dd macOS-host backend: the VM-less DBT engine (C, aarch64 + x86-64 Linux guests) + the darwinjail for native macOS containers. Implements the dd-jit backend API. build.rs compiles + codesigns the per-guest engine binaries."
+description = "dd macOS-host backend: the VM-less DBT engine (C, aarch64 + x86-64 Linux guests). Implements the dd-jit backend API. build.rs compiles + codesigns the per-guest engine binaries."
 license = "MIT"
 build = "build.rs"
 

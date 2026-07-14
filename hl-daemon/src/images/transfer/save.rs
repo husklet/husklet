@@ -43,7 +43,7 @@ pub(crate) async fn image_save(State(a): State<App>, Query(q): Query<SaveQ>) -> 
         workdir: img.workdir.clone(),
         user: img.user.clone(),
         exposed_ports: img.exposed_ports.clone(),
-        os: (img.arch.os() == "darwin").then(|| "darwin".to_string()),
+        os: None,
         // Lifecycle/volume config a container inherits at run — must round-trip through save/load (the
         // load path already restores these). Omitted when unset so the manifest stays minimal.
         stop_signal: (!img.stop_signal.is_empty()).then(|| img.stop_signal.clone()),

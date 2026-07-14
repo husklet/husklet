@@ -8,7 +8,6 @@ pub(crate) fn guest_of(a: hl_images::Arch) -> Guest {
     match a {
         hl_images::Arch::LinuxAarch64 => Guest::LinuxAarch64,
         hl_images::Arch::LinuxX86_64 => Guest::LinuxX86_64,
-        hl_images::Arch::DarwinAarch64 => Guest::DarwinAarch64,
     }
 }
 
@@ -73,10 +72,6 @@ mod arch_map_tests {
     fn guest_of_maps_each_arch_to_matching_guest() {
         assert_eq!(guest_of(hl_images::Arch::LinuxAarch64), Guest::LinuxAarch64);
         assert_eq!(guest_of(hl_images::Arch::LinuxX86_64), Guest::LinuxX86_64);
-        assert_eq!(
-            guest_of(hl_images::Arch::DarwinAarch64),
-            Guest::DarwinAarch64
-        );
     }
 
     // ---- docker_arch: Guest -> docker arch label ----
@@ -84,8 +79,6 @@ mod arch_map_tests {
     fn docker_arch_x86_is_amd64_everything_else_arm64() {
         assert_eq!(docker_arch(Guest::LinuxX86_64), "amd64");
         assert_eq!(docker_arch(Guest::LinuxAarch64), "arm64");
-        // DarwinAarch64.arch() == "aarch64", which is not "x86_64" -> falls through to "arm64".
-        assert_eq!(docker_arch(Guest::DarwinAarch64), "arm64");
     }
 
     // ---- docker_arch ∘ guest_of round-trip for both linux arches ----
@@ -93,10 +86,6 @@ mod arch_map_tests {
     fn docker_arch_guest_of_roundtrip() {
         assert_eq!(docker_arch(guest_of(hl_images::Arch::LinuxX86_64)), "amd64");
         assert_eq!(docker_arch(guest_of(hl_images::Arch::LinuxAarch64)), "arm64");
-        assert_eq!(
-            docker_arch(guest_of(hl_images::Arch::DarwinAarch64)),
-            "arm64"
-        );
     }
 
     // ---- platform_arch: docker --platform string -> dd arch label ----

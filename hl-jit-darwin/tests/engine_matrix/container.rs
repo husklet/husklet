@@ -1,6 +1,6 @@
 //! Container behaviour, sandbox containment, and x86-64 / macOS guest fixtures.
 
-use crate::support::{darwin_libc, darwin_src, fixture, group, in_rootfs, src, Engine, Group};
+use crate::support::{fixture, group, in_rootfs, src, Engine, Group};
 
 use super::sh;
 
@@ -96,21 +96,6 @@ pub(super) fn sandbox() -> Group {
             src("sentry-fork-sandbox", "sentry_fork.c")
                 .out("sentry_fork child_exit=7 readback=ok sum=32640\n")
                 .sandbox(),
-        ],
-    )
-}
-
-/// macOS guest — native Mach-O binaries through the jitdarwin engine (no VM). Built via the mac
-/// toolchain; golden-checked (can't run a Mach-O natively on a linux dev host for an oracle).
-pub(super) fn darwin() -> Group {
-    group(
-        "darwin",
-        vec![
-            darwin_src("hello", "hello.c").exit(42).out("hi\n"), // write(1,"hi\n") + exit(42) via BSD svc
-            darwin_src("adrp", "adrp.c").exit(42).out("ADRP-OK\n"), // __cstring literal via adrp (segment slide)
-            // BSD/Mach APIs with no Linux equivalent (full libSystem, run under darwinjail).
-            darwin_libc("kqueue", "darwin/kqueue.c").out("kqueue readable=1 bytes=5\n"), // EVFILT_READ readiness
-            darwin_libc("sysctl", "darwin/sysctl.c").out("sysctl ncpu_ok=1 ostype=Darwin\n"), // sysctlbyname
         ],
     )
 }

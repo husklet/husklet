@@ -8,10 +8,7 @@
 //! against `docker`/`mount -t overlay` on Linux (see comments per gap).
 //!
 //! Platform coverage: overlay (lower/upper union, whiteout, copy-up, opaque) is a LINUX-container feature —
-//! it exists only when the engine is launched with `--lower` image layers (`g_nlower>0`). The darwin/aarch64
-//! engine (the `ddcli mac` macOS container) runs under darwinjail over the host FS with NO lower layers
-//! (`SpawnConfig` never emits `--lower` for the darwin script; `g_nlower==0`), so the entire overlay code
-//! path is inert there and has no analogue to test — a macOS container has one plain rootfs, not a union.
+//! it exists only when the engine is launched with `--lower` image layers (`g_nlower>0`).
 //! The image-flattening opaque fix that IS platform-independent (it runs in the daemon at pull time,
 //! regardless of guest arch) is covered by the `dd-daemon` unit test `registry::tests::opaque_*`.
 

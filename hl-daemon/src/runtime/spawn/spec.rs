@@ -1,6 +1,6 @@
 //! Pure value transforms behind `spawn_container`: mount-source resolution, `--cpus` whole-CPU
-//! rounding, sandbox detection, and the darwinjail argv wrapper. No state/IO — the caller gathers the
-//! inputs and drives the `JitContainer` builder; these helpers only compute the values it feeds in.
+//! rounding, and sandbox detection. No state/IO — the caller gathers the inputs and drives the
+//! `JitContainer` builder; these helpers only compute the values it feeds in.
 use super::*;
 
 /// Resolve a `-v`/`--mount` source to a host path: an absolute path is a bind (verbatim); any other
@@ -68,23 +68,6 @@ pub(super) fn wants_sandbox(security_opt: &[String]) -> bool {
     })
 }
 
-/// darwinjail entry wrap: run the guest argv through the in-jail bash (`<rootfs>/profile/bin/bash -c
-/// 'exec "$@"' dd-mac ...`) so a bare command resolves via the in-jail PATH and the entry shell stays
-/// inside the arm64 jail. An empty argv defaults to `bash`; a leading `/bin/sh`/`sh`/`/bin/bash`/`bash`
-/// is normalized to `bash` so it too resolves in-jail rather than sourcing the host profile.
-pub(super) fn darwin_wrapped_argv(rootfs: &str, cmd: &[String]) -> Vec<String> {
-    let wrapper = format!("{rootfs}/profile/bin/bash");
-    let mut argv = cmd.to_vec();
-    if argv.is_empty() {
-        argv = vec!["bash".into()];
-    } else if matches!(argv[0].as_str(), "/bin/sh" | "sh" | "/bin/bash" | "bash") {
-        argv[0] = "bash".into();
-    }
-    let mut wrapped = vec![wrapper, "-c".into(), "exec \"$@\"".into(), "dd-mac".into()];
-    wrapped.extend(argv);
-    wrapped
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,29 +129,5 @@ mod tests {
         assert!(wants_sandbox(&["label=Untrusted".into()]));
         assert!(!wants_sandbox(&["seccomp=unconfined".into()]));
         assert!(!wants_sandbox(&[]));
-    }
-
-    #[test]
-    fn darwin_wrapped_argv_empty_defaults_to_bash() {
-        assert_eq!(
-            darwin_wrapped_argv("/rf", &[]),
-            vec!["/rf/profile/bin/bash", "-c", "exec \"$@\"", "dd-mac", "bash"]
-        );
-    }
-
-    #[test]
-    fn darwin_wrapped_argv_normalizes_leading_shell() {
-        assert_eq!(
-            darwin_wrapped_argv("/rf", &["/bin/sh".into(), "-c".into(), "echo hi".into()]),
-            vec!["/rf/profile/bin/bash", "-c", "exec \"$@\"", "dd-mac", "bash", "-c", "echo hi"]
-        );
-    }
-
-    #[test]
-    fn darwin_wrapped_argv_keeps_non_shell_entry() {
-        assert_eq!(
-            darwin_wrapped_argv("/rf", &["node".into(), "app.js".into()]),
-            vec!["/rf/profile/bin/bash", "-c", "exec \"$@\"", "dd-mac", "node", "app.js"]
-        );
     }
 }

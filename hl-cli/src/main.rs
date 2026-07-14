@@ -6,7 +6,6 @@
 //!   ddcli ubuntu                       # drop into a shell in an ubuntu container, here in this dir
 //!   ddcli run alpine echo hi           # run a one-off command
 //!   ddcli run ubuntu --platform linux/amd64   # force amd64 (runs via the x86-64 JIT)
-//!   ddcli mac                          # a macOS container (experimental)
 //!   ddcli install                      # set up the daemon agent + docker context
 //!   ddcli doctor                       # check everything is healthy
 
@@ -37,7 +36,6 @@ fn main() {
     let cli = Cli::parse();
     let code = match cli.cmd {
         Cmd::Run { args } => cmd_run(args),
-        Cmd::Mac { args } => run::mac(args),
         Cmd::Image(args) => cmd_run(args),
         Cmd::App => cmd_app(),
         Cmd::Workspace { action } => {

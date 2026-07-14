@@ -1,7 +1,6 @@
 // Container rlimit fidelity (docker --ulimit). getrlimit(RLIMIT_NOFILE) inside the container must reflect
 // the requested --ulimit, not dd's default -- memcached calloc()s off it, the JVM sizes thread pools off
-// RLIMIT_NPROC. Portable: JIT-emulated on Linux (the engine's svc_fill_rlimit returns the override), native
-// under darwinjail on macOS (init() applies it via setrlimit, so the native getrlimit reports it).
+// RLIMIT_NPROC. Portable: JIT-emulated on Linux (the engine's svc_fill_rlimit returns the override).
 #include <stdio.h>
 #include <sys/resource.h>
 
