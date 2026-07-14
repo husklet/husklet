@@ -1334,3 +1334,197 @@ pub struct VkSurfaceFormatKHR {
     pub format: i32,
     pub color_space: i32,
 }
+
+// ==================================================================================================
+// maintenance1-5 / private-data / host-image-copy / promoted-`...2` structs (layout from vk.xml)
+// ==================================================================================================
+
+/// `VkDescriptorSetLayoutSupport` — `vkGetDescriptorSetLayoutSupport` writes `supported` (whether a set
+/// of the queried layout can be created). The bring-up model accepts any layout within the reported
+/// limits, so this is `VK_TRUE`.
+#[repr(C)]
+pub struct VkDescriptorSetLayoutSupport {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub supported: VkBool32,
+}
+
+/// `VkDeviceBufferMemoryRequirements` (`vkGetDeviceBufferMemoryRequirements` input) — the buffer's
+/// create info, from which the requirements are derived WITHOUT creating the buffer.
+#[repr(C)]
+pub struct VkDeviceBufferMemoryRequirements {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub p_create_info: *const VkBufferCreateInfo,
+}
+
+/// `VkDeviceImageMemoryRequirements` (`vkGetDeviceImageMemoryRequirements` input) — the image's create
+/// info + the plane aspect (single-plane here).
+#[repr(C)]
+pub struct VkDeviceImageMemoryRequirements {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub p_create_info: *const VkImageCreateInfo,
+    pub plane_aspect: i32,
+}
+
+/// `VkImageSubresource2(KHR)` — the `vkGetImageSubresourceLayout2` input (a `VkImageSubresource` + chain).
+#[repr(C)]
+pub struct VkImageSubresource2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub image_subresource: VkImageSubresource,
+}
+
+/// `VkSubresourceLayout2(KHR)` — the `vkGetImageSubresourceLayout2` output (base layout + chain).
+#[repr(C)]
+pub struct VkSubresourceLayout2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub subresource_layout: VkSubresourceLayout,
+}
+
+/// `VkImageCopy2` — one `vkCmdCopyImage2` region (`VkImageCopy` + chain header).
+#[repr(C)]
+pub struct VkImageCopy2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_subresource: VkImageSubresourceLayers,
+    pub src_offset: VkOffset3D,
+    pub dst_subresource: VkImageSubresourceLayers,
+    pub dst_offset: VkOffset3D,
+    pub extent: VkExtent3D,
+}
+
+/// `VkCopyImageInfo2` — the `vkCmdCopyImage2` argument aggregate.
+#[repr(C)]
+pub struct VkCopyImageInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_image: u64,
+    pub src_image_layout: i32,
+    pub dst_image: u64,
+    pub dst_image_layout: i32,
+    pub region_count: u32,
+    pub p_regions: *const VkImageCopy2,
+}
+
+/// `VkCopyImageToBufferInfo2` — the `vkCmdCopyImageToBuffer2` argument aggregate (reuses `VkBufferImageCopy2`).
+#[repr(C)]
+pub struct VkCopyImageToBufferInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_image: u64,
+    pub src_image_layout: i32,
+    pub dst_buffer: u64,
+    pub region_count: u32,
+    pub p_regions: *const VkBufferImageCopy2,
+}
+
+/// `VkCommandBufferSubmitInfo` — one command buffer of a `vkQueueSubmit2` batch (a dispatchable handle).
+#[repr(C)]
+pub struct VkCommandBufferSubmitInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub command_buffer: *mut c_void,
+    pub device_mask: u32,
+}
+
+/// `VkSubmitInfo2` — the `vkQueueSubmit2` batch (sync2). Only the command-buffer array is consumed by the
+/// synchronous model; the semaphore-info arrays are validated-then-ignored (as `vkQueueSubmit` does).
+#[repr(C)]
+pub struct VkSubmitInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub wait_semaphore_info_count: u32,
+    pub p_wait_semaphore_infos: *const c_void,
+    pub command_buffer_info_count: u32,
+    pub p_command_buffer_infos: *const VkCommandBufferSubmitInfo,
+    pub signal_semaphore_info_count: u32,
+    pub p_signal_semaphore_infos: *const c_void,
+}
+
+/// `VkMemoryMapInfo(KHR)` — the `vkMapMemory2` argument aggregate.
+#[repr(C)]
+pub struct VkMemoryMapInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub memory: u64,
+    pub offset: VkDeviceSize,
+    pub size: VkDeviceSize,
+}
+
+/// `VkMemoryUnmapInfo(KHR)` — the `vkUnmapMemory2` argument aggregate.
+#[repr(C)]
+pub struct VkMemoryUnmapInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub memory: u64,
+}
+
+/// `VkPhysicalDeviceImageFormatInfo2` — the `vkGetPhysicalDeviceImageFormatProperties2` input.
+#[repr(C)]
+pub struct VkPhysicalDeviceImageFormatInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub format: i32,
+    pub image_type: i32,
+    pub tiling: i32,
+    pub usage: VkFlags,
+    pub flags: VkFlags,
+}
+
+/// `VkImageFormatProperties2` — the `...ImageFormatProperties2` output (base props + preserved chain).
+#[repr(C)]
+pub struct VkImageFormatProperties2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub image_format_properties: VkImageFormatProperties,
+}
+
+/// `VkAttachmentDescription2` — one attachment of a `VkRenderPassCreateInfo2` (`+ sType/pNext` vs v1).
+#[repr(C)]
+pub struct VkAttachmentDescription2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub format: i32,
+    pub samples: i32,
+    pub load_op: i32,
+    pub store_op: i32,
+    pub stencil_load_op: i32,
+    pub stencil_store_op: i32,
+    pub initial_layout: i32,
+    pub final_layout: i32,
+}
+
+/// `VkRenderPassCreateInfo2` — the `vkCreateRenderPass2` argument (only the attachment table is read for
+/// the bring-up single-target clear/format bookkeeping).
+#[repr(C)]
+pub struct VkRenderPassCreateInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub attachment_count: u32,
+    pub p_attachments: *const VkAttachmentDescription2,
+    pub subpass_count: u32,
+    pub p_subpasses: *const c_void,
+    pub dependency_count: u32,
+    pub p_dependencies: *const c_void,
+    pub correlated_view_mask_count: u32,
+    pub p_correlated_view_masks: *const u32,
+}
+
+/// `VkCalibratedTimestampInfoKHR` — one queried time domain of `vkGetCalibratedTimestamps`.
+#[repr(C)]
+pub struct VkCalibratedTimestampInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub time_domain: i32,
+}
+
+/// `VK_TIME_DOMAIN_DEVICE_KHR` — the only calibrateable time domain the modeled device reports.
+pub const VK_TIME_DOMAIN_DEVICE_KHR: i32 = 0;

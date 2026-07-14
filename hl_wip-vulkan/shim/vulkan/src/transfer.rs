@@ -321,6 +321,92 @@ pub extern "C" fn vkCmdBlitImage2KHR(command_buffer: *mut c_void, p_blit_image_i
     blit_image2(command_buffer, p_blit_image_info);
 }
 
+/// Shared body for `vkCmdCopyImage2` / `vkCmdCopyImage2KHR` (reads `VkCopyImageInfo2`, delegates per region
+/// to the identical v1 image-copy lowering).
+fn copy_image2(command_buffer: *mut c_void, p_copy_info: *const c_void) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(info) = (unsafe { (p_copy_info as *const VkCopyImageInfo2).as_ref() }) else { return };
+    if info.p_regions.is_null() {
+        return;
+    }
+    let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
+    dev(|d| {
+        for r in regions {
+            if r.src_offset.x < 0 || r.src_offset.y < 0 || r.dst_offset.x < 0 || r.dst_offset.y < 0 {
+                continue;
+            }
+            let _ = record::cmd_copy_image(
+                d,
+                cb,
+                info.src_image,
+                info.dst_image,
+                (r.src_offset.x as u32, r.src_offset.y as u32),
+                (r.dst_offset.x as u32, r.dst_offset.y as u32),
+                (r.extent.width, r.extent.height.max(1)),
+            );
+        }
+    });
+}
+
+/// Shared body for `vkCmdCopyImageToBuffer2` / `vkCmdCopyImageToBuffer2KHR` (reuses `VkBufferImageCopy2`).
+fn copy_image_to_buffer2(command_buffer: *mut c_void, p_copy_info: *const c_void) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(info) = (unsafe { (p_copy_info as *const VkCopyImageToBufferInfo2).as_ref() }) else { return };
+    if info.p_regions.is_null() {
+        return;
+    }
+    let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
+    dev(|d| {
+        for r in regions {
+            if r.image_subresource.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0
+                || r.image_subresource.mip_level != 0
+                || r.image_subresource.base_array_layer != 0
+                || r.image_offset.x != 0
+                || r.image_offset.y != 0
+            {
+                continue;
+            }
+            let _ = record::cmd_copy_image_to_buffer(
+                d,
+                cb,
+                info.src_image,
+                info.dst_buffer,
+                r.buffer_offset,
+                r.buffer_row_length,
+                r.buffer_image_height,
+                r.image_extent.width,
+                r.image_extent.height.max(1),
+            );
+        }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyImage2(command_buffer: *mut c_void, p_copy_image_info: *const c_void) {
+    copy_image2(command_buffer, p_copy_image_info);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyImage2KHR(command_buffer: *mut c_void, p_copy_image_info: *const c_void) {
+    copy_image2(command_buffer, p_copy_image_info);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyImageToBuffer2(command_buffer: *mut c_void, p_copy_image_to_buffer_info: *const c_void) {
+    copy_image_to_buffer2(command_buffer, p_copy_image_to_buffer_info);
+}
+
+#[no_mangle]
+pub extern "C" fn vkCmdCopyImageToBuffer2KHR(command_buffer: *mut c_void, p_copy_image_to_buffer_info: *const c_void) {
+    copy_image_to_buffer2(command_buffer, p_copy_image_to_buffer_info);
+}
+
+/// `vkCmdPipelineBarrier2KHR` — the `VK_KHR_synchronization2` alias of [`vkCmdPipelineBarrier2`].
+#[no_mangle]
+pub extern "C" fn vkCmdPipelineBarrier2KHR(command_buffer: *mut c_void, p_dependency_info: *const c_void) {
+    vkCmdPipelineBarrier2(command_buffer, p_dependency_info);
+}
+
 // ---- clears --------------------------------------------------------------------------------------
 
 #[no_mangle]

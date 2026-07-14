@@ -55,6 +55,16 @@ pub struct State {
     /// on a distinct high base so surface handles never alias the device's object handles.
     next_surface: u64,
 
+    /// Live `VkPrivateDataSlot` handles (the `VK_EXT_private_data` / core-1.3 slot objects). A slot is a
+    /// pure host object; the per-object data it stores lives in [`Self::private_data`].
+    pub private_data_slots: std::collections::HashSet<u64>,
+    /// `(objectType, objectHandle, slot)` → the app's stored `u64` (`vkSetPrivateData`/`vkGetPrivateData`).
+    /// An unset key reads back as 0 (the spec default).
+    pub private_data: HashMap<(i32, u64, u64), u64>,
+    /// Live `VkSamplerYcbcrConversion` handles (`VK_KHR_sampler_ycbcr_conversion` / core 1.1). The
+    /// conversion is a pure host object referenced by a sampler's pNext; no IR is emitted for it.
+    pub ycbcr_conversions: std::collections::HashSet<u64>,
+
     /// Stable loader-magic'd dispatchable tokens (a pointer, once minted, is reused so the loader's
     /// object identity is consistent across calls). `0` = not yet minted.
     phys_dev: usize,
@@ -74,6 +84,9 @@ impl State {
             framebuffers: HashMap::new(),
             surfaces: std::collections::HashSet::new(),
             next_surface: 0,
+            private_data_slots: std::collections::HashSet::new(),
+            private_data: HashMap::new(),
+            ycbcr_conversions: std::collections::HashSet::new(),
             phys_dev: 0,
             device_handle: 0,
             queue_handle: 0,

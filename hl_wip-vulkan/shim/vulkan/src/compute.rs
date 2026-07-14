@@ -906,6 +906,84 @@ pub extern "C" fn vkDeviceWaitIdle(_device: *mut c_void) -> VkResult {
     VK_SUCCESS
 }
 
+// ---- synchronization2 submit + maintenance5 map/unmap-2 (delegate to the v1 bodies) ---------------
+
+/// `vkQueueSubmit2` — the sync2 submit form. Gathers every `VkCommandBufferSubmitInfo::commandBuffer`
+/// across the batch (unwrapping each dispatchable to its `u64` handle) and lowers exactly as
+/// `vkQueueSubmit`; the semaphore-info arrays are validated-then-ignored by the synchronous model.
+#[no_mangle]
+pub extern "C" fn vkQueueSubmit2(
+    _queue: *mut c_void,
+    submit_count: u32,
+    p_submits: *const c_void,
+    fence: u64,
+) -> VkResult {
+    let submits = if p_submits.is_null() {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(p_submits as *const VkSubmitInfo2, submit_count as usize) }
+    };
+    let mut cbs: Vec<VkCbHandle> = Vec::new();
+    for si in submits {
+        if si.p_command_buffer_infos.is_null() {
+            continue;
+        }
+        let infos = unsafe {
+            std::slice::from_raw_parts(si.p_command_buffer_infos, si.command_buffer_info_count as usize)
+        };
+        for info in infos {
+            if let Some(h) = unsafe { cmdbuf_handle(info.command_buffer) } {
+                cbs.push(h);
+            }
+        }
+    }
+    let signal = if fence != 0 { Some(fence) } else { None };
+    dev_sink(|dev, sink| vk(submit::queue_submit(dev, sink, &cbs, signal)))
+        .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+}
+
+/// `vkQueueSubmit2KHR` — the `VK_KHR_synchronization2` alias.
+#[no_mangle]
+pub extern "C" fn vkQueueSubmit2KHR(
+    queue: *mut c_void,
+    submit_count: u32,
+    p_submits: *const c_void,
+    fence: u64,
+) -> VkResult {
+    vkQueueSubmit2(queue, submit_count, p_submits, fence)
+}
+
+/// `vkMapMemory2` (maintenance5) — read the `VkMemoryMapInfo` aggregate and delegate to `vkMapMemory`.
+#[no_mangle]
+pub extern "C" fn vkMapMemory2(device: *mut c_void, p_memory_map_info: *const c_void, pp_data: *mut *mut c_void) -> VkResult {
+    let Some(info) = (unsafe { (p_memory_map_info as *const VkMemoryMapInfo).as_ref() }) else {
+        return VK_ERROR_MEMORY_MAP_FAILED;
+    };
+    vkMapMemory(device, info.memory, info.offset, info.size, info.flags, pp_data)
+}
+
+/// `vkMapMemory2KHR` — the `VK_KHR_map_memory2` alias.
+#[no_mangle]
+pub extern "C" fn vkMapMemory2KHR(device: *mut c_void, p_memory_map_info: *const c_void, pp_data: *mut *mut c_void) -> VkResult {
+    vkMapMemory2(device, p_memory_map_info, pp_data)
+}
+
+/// `vkUnmapMemory2` (maintenance5) — read the `VkMemoryUnmapInfo` aggregate and delegate to `vkUnmapMemory`.
+#[no_mangle]
+pub extern "C" fn vkUnmapMemory2(device: *mut c_void, p_memory_unmap_info: *const c_void) -> VkResult {
+    let Some(info) = (unsafe { (p_memory_unmap_info as *const VkMemoryUnmapInfo).as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    vkUnmapMemory(device, info.memory);
+    VK_SUCCESS
+}
+
+/// `vkUnmapMemory2KHR` — the `VK_KHR_map_memory2` alias.
+#[no_mangle]
+pub extern "C" fn vkUnmapMemory2KHR(device: *mut c_void, p_memory_unmap_info: *const c_void) -> VkResult {
+    vkUnmapMemory2(device, p_memory_unmap_info)
+}
+
 // ==================================================================================================
 // fences
 // ==================================================================================================

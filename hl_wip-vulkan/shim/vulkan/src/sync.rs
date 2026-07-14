@@ -367,6 +367,123 @@ pub extern "C" fn vkCmdWriteTimestamp(
     });
 }
 
+// ==================================================================================================
+// promoted-core / KHR / EXT aliases (delegate verbatim to the implemented base bodies)
+// ==================================================================================================
+
+/// `vkGetSemaphoreCounterValueKHR` — the `VK_KHR_timeline_semaphore` alias.
+#[no_mangle]
+pub extern "C" fn vkGetSemaphoreCounterValueKHR(device: *mut c_void, semaphore: u64, p_value: *mut u64) -> VkResult {
+    vkGetSemaphoreCounterValue(device, semaphore, p_value)
+}
+
+/// `vkSignalSemaphoreKHR` — the `VK_KHR_timeline_semaphore` alias.
+#[no_mangle]
+pub extern "C" fn vkSignalSemaphoreKHR(device: *mut c_void, p_signal_info: *const c_void) -> VkResult {
+    vkSignalSemaphore(device, p_signal_info)
+}
+
+/// `vkWaitSemaphoresKHR` — the `VK_KHR_timeline_semaphore` alias.
+#[no_mangle]
+pub extern "C" fn vkWaitSemaphoresKHR(device: *mut c_void, p_wait_info: *const c_void, timeout: u64) -> VkResult {
+    vkWaitSemaphores(device, p_wait_info, timeout)
+}
+
+/// `vkResetQueryPoolEXT` — the `VK_EXT_host_query_reset` alias.
+#[no_mangle]
+pub extern "C" fn vkResetQueryPoolEXT(device: *mut c_void, query_pool: u64, first_query: u32, query_count: u32) {
+    vkResetQueryPool(device, query_pool, first_query, query_count)
+}
+
+// ---- synchronization2 recording commands (core 1.3 / VK_KHR_synchronization2) ---------------------
+// The sync2 forms carry 64-bit stage masks + a `VkDependencyInfo`; the modeled lowering ignores the
+// stage/access masks (the IR is dependency-implicit) and reduces to the same device op as the v1 command.
+
+/// `vkCmdWriteTimestamp2` — record a timestamp write (the 64-bit `stage` is not modeled). Same lowering
+/// as `vkCmdWriteTimestamp`.
+#[no_mangle]
+pub extern "C" fn vkCmdWriteTimestamp2(command_buffer: *mut c_void, _stage: u64, query_pool: u64, query: u32) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    with(|s| {
+        if let Some(d) = s.device.as_mut() {
+            let _ = record::cmd_write_timestamp(d, cb, query_pool, query);
+        }
+    });
+}
+
+/// `vkCmdWriteTimestamp2KHR` — the `VK_KHR_synchronization2` alias.
+#[no_mangle]
+pub extern "C" fn vkCmdWriteTimestamp2KHR(command_buffer: *mut c_void, stage: u64, query_pool: u64, query: u32) {
+    vkCmdWriteTimestamp2(command_buffer, stage, query_pool, query)
+}
+
+/// `vkCmdSetEvent2` — record a device set of `event` (the `VkDependencyInfo` scope is not modeled).
+#[no_mangle]
+pub extern "C" fn vkCmdSetEvent2(command_buffer: *mut c_void, event: u64, _p_dependency_info: *const c_void) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    with(|s| {
+        if let Some(d) = s.device.as_mut() {
+            let _ = record::cmd_set_event(d, cb, event, true);
+        }
+    });
+}
+
+/// `vkCmdSetEvent2KHR` — the `VK_KHR_synchronization2` alias.
+#[no_mangle]
+pub extern "C" fn vkCmdSetEvent2KHR(command_buffer: *mut c_void, event: u64, p_dependency_info: *const c_void) {
+    vkCmdSetEvent2(command_buffer, event, p_dependency_info)
+}
+
+/// `vkCmdResetEvent2` — record a device reset of `event` (the 64-bit `stageMask` is not modeled).
+#[no_mangle]
+pub extern "C" fn vkCmdResetEvent2(command_buffer: *mut c_void, event: u64, _stage_mask: u64) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    with(|s| {
+        if let Some(d) = s.device.as_mut() {
+            let _ = record::cmd_set_event(d, cb, event, false);
+        }
+    });
+}
+
+/// `vkCmdResetEvent2KHR` — the `VK_KHR_synchronization2` alias.
+#[no_mangle]
+pub extern "C" fn vkCmdResetEvent2KHR(command_buffer: *mut c_void, event: u64, stage_mask: u64) {
+    vkCmdResetEvent2(command_buffer, event, stage_mask)
+}
+
+/// `vkCmdWaitEvents2` — validate the waited events (the per-event `VkDependencyInfo` array is not modeled).
+/// Same lowering as `vkCmdWaitEvents`.
+#[no_mangle]
+pub extern "C" fn vkCmdWaitEvents2(
+    command_buffer: *mut c_void,
+    event_count: u32,
+    p_events: *const u64,
+    _p_dependency_infos: *const c_void,
+) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let events = if event_count == 0 || p_events.is_null() {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(p_events, event_count as usize) }.to_vec()
+    };
+    with(|s| {
+        if let Some(d) = s.device.as_mut() {
+            let _ = record::cmd_wait_events(d, cb, &events);
+        }
+    });
+}
+
+/// `vkCmdWaitEvents2KHR` — the `VK_KHR_synchronization2` alias.
+#[no_mangle]
+pub extern "C" fn vkCmdWaitEvents2KHR(
+    command_buffer: *mut c_void,
+    event_count: u32,
+    p_events: *const u64,
+    p_dependency_infos: *const c_void,
+) {
+    vkCmdWaitEvents2(command_buffer, event_count, p_events, p_dependency_infos)
+}
+
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn vkCmdCopyQueryPoolResults(

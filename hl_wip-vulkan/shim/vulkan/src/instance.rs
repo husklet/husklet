@@ -487,6 +487,41 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties2KHR(
     vkGetPhysicalDeviceFormatProperties2(physical_device, format, p_format_properties)
 }
 
+/// `vkGetPhysicalDeviceImageFormatProperties2` — read the `VkPhysicalDeviceImageFormatInfo2` aggregate
+/// and fill the base `VkImageFormatProperties` via the v1 body (the pNext chain is preserved).
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties2(
+    physical_device: *mut c_void,
+    p_image_format_info: *const c_void,
+    p_image_format_properties: *mut c_void,
+) -> VkResult {
+    let Some(info) = (unsafe { (p_image_format_info as *const VkPhysicalDeviceImageFormatInfo2).as_ref() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    let Some(out) = (unsafe { (p_image_format_properties as *mut VkImageFormatProperties2).as_mut() }) else {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    };
+    vkGetPhysicalDeviceImageFormatProperties(
+        physical_device,
+        info.format,
+        info.image_type,
+        info.tiling,
+        info.usage,
+        info.flags,
+        &mut out.image_format_properties as *mut _ as *mut c_void,
+    )
+}
+
+/// `vkGetPhysicalDeviceImageFormatProperties2KHR` — the `VK_KHR_get_physical_device_properties2` alias.
+#[no_mangle]
+pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties2KHR(
+    physical_device: *mut c_void,
+    p_image_format_info: *const c_void,
+    p_image_format_properties: *mut c_void,
+) -> VkResult {
+    vkGetPhysicalDeviceImageFormatProperties2(physical_device, p_image_format_info, p_image_format_properties)
+}
+
 /// The full Apple-GPU-class `VkPhysicalDeviceLimits` (all 106 fields), ported verbatim from
 /// `hl-shim-vk/src/state.rs::physical_device_limits` (MoltenVK Metal-feature-derived values).
 fn metal_limits() -> VkPhysicalDeviceLimits {
