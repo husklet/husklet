@@ -39,6 +39,9 @@ use wayland_client::protocol::{
     wl_shm_pool::WlShmPool, wl_surface::WlSurface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
+use wayland_client::protocol::{
+    wl_data_device::WlDataDevice, wl_data_device_manager::WlDataDeviceManager,
+};
 use wayland_protocols::xdg::shell::client::{
     xdg_surface::{self, XdgSurface},
     xdg_toplevel::XdgToplevel,
@@ -142,11 +145,24 @@ fn real_client_discovers_compositor_via_wayland_display_and_composites() {
     let count = |iface: &str| global_list.iter().filter(|g| g.interface == iface).count();
     assert_eq!(count("wl_output"), 1, "expected exactly one wl_output global, got {:?}", global_list);
     assert_eq!(count("wl_seat"), 1, "expected exactly one wl_seat global, got {:?}", global_list);
+    // GDK4's Wayland backend (and Chrome/Qt) hard-require `wl_data_device_manager` at display-open — a
+    // missing manager aborts `gdk_display_open` with "The Wayland compositor does not provide one or more
+    // of the required interfaces" before ANY GL/EGL. Assert exactly one is advertised.
+    assert_eq!(
+        count("wl_data_device_manager"), 1,
+        "expected exactly one wl_data_device_manager global (clipboard/DnD), got {:?}", global_list,
+    );
 
     // Bind wl_output (v4 → geometry/mode/scale/name/done) and wl_seat (v9 → name/capabilities). Binding
     // itself must succeed; the event assertions below prove the objects carry real data.
     let _output: WlOutput = globals.bind(&qh, 1..=4, ()).expect("wl_output global");
     let seat: WlSeat = globals.bind(&qh, 1..=9, ()).expect("wl_seat global");
+
+    // Bind wl_data_device_manager and obtain a wl_data_device from the seat — the exact sequence GDK4
+    // performs at startup. Both objects must be live with no protocol error (proven by the roundtrip
+    // below); this is the missing global that previously blocked GTK/Chrome from opening the display.
+    let data_device_manager: WlDataDeviceManager = globals.bind(&qh, 1..=3, ()).expect("wl_data_device_manager global");
+    let data_device: WlDataDevice = data_device_manager.get_data_device(&seat, &qh, ());
 
     // ---- 4. Build a wl_shm buffer filled with the known color ----------------------------------------
     let stride = W * 4;
@@ -235,6 +251,13 @@ fn real_client_discovers_compositor_via_wayland_display_and_composites() {
     queue.roundtrip(&mut app).expect("roundtrip after creating pointer/keyboard");
     assert!(pointer.is_alive(), "wl_pointer object created and alive");
     assert!(keyboard.is_alive(), "wl_keyboard object created and alive");
+
+    // The wl_data_device obtained from the seat must survive a roundtrip with no protocol error — proof
+    // the compositor answered `get_data_device` with a live device (the manager + seat plumbing exist and
+    // agree). No cross-client selection is exercised headless; a live, error-free device is the fidelity.
+    queue.roundtrip(&mut app).expect("roundtrip after get_data_device (no protocol error)");
+    assert!(data_device_manager.is_alive(), "wl_data_device_manager object created and alive");
+    assert!(data_device.is_alive(), "wl_data_device object created from the seat and alive");
 
     // ---- 6. Assert the committed pixels composited all the way to the presenter ----------------------
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -405,4 +428,25 @@ macro_rules! ignore_dispatch {
         }
     )*};
 }
-ignore_dispatch!(WlCompositor, WlSurface, WlShm, WlShmPool, XdgToplevel, WlPointer, WlKeyboard);
+ignore_dispatch!(
+    WlCompositor, WlSurface, WlShm, WlShmPool, XdgToplevel, WlPointer, WlKeyboard,
+    WlDataDeviceManager
+);
+
+// `wl_data_device` can emit `data_offer` (which would create a child `wl_data_offer`), `selection`, and
+// DnD enter/leave/motion/drop. None occur in this headless, single-client test (no selection is set and
+// no drag is started), so we only need to observe the device stays alive after the roundtrip.
+impl Dispatch<WlDataDevice, ()> for AppData {
+    fn event(
+        _: &mut Self,
+        _: &WlDataDevice,
+        event: <WlDataDevice as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // No cross-client selection/DnD is exercised here, so no event is expected. Any that arrives is a
+        // surprise worth failing on (e.g. a spurious selection offer to a single client).
+        panic!("unexpected wl_data_device event in headless single-client test: {event:?}");
+    }
+}

@@ -35,6 +35,13 @@ use smithay::wayland::{
         SurfaceAttributes,
     },
     output::{OutputHandler, OutputManagerState},
+    selection::{
+        data_device::{
+            set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
+            ServerDndGrabHandler,
+        },
+        SelectionHandler,
+    },
     shell::xdg::{
         decoration::{XdgDecorationHandler, XdgDecorationState},
         PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
@@ -105,6 +112,9 @@ impl ClientData for ClientState {
 
 /// The Smithay dispatch aggregate: protocol cores + the neutral compositor engine.
 pub struct HlState {
+    /// A clone of the server `DisplayHandle`, kept so focus changes can resolve a `WlSurface`'s owning
+    /// `Client` and retarget the clipboard (data-device) focus via [`set_data_device_focus`].
+    display: DisplayHandle,
     pub compositor: CompositorState,
     pub shm: ShmState,
     pub xdg_shell: XdgShellState,
@@ -113,6 +123,14 @@ pub struct HlState {
     /// without an answering `configure(mode)` those toolkits stall waiting to learn whether to draw their
     /// own CSD. Held for the state's lifetime so the global keeps advertising.
     pub xdg_decoration: XdgDecorationState,
+    /// Owns the `wl_data_device_manager` global (clipboard / drag-and-drop). GDK4's Wayland backend —
+    /// and Chrome/Qt — hard-require this interface at display-open: without it `gdk_display_open` aborts
+    /// with "The Wayland compositor does not provide one or more of the required interfaces" before any
+    /// GL/EGL is touched. A client binds the manager, calls `get_data_device(seat)` to obtain a
+    /// `wl_data_device`, and drives selection (copy/paste) + DnD through it; clipboard focus follows the
+    /// keyboard focus via [`set_data_device_focus`]. Held for the state's lifetime so the global keeps
+    /// advertising.
+    pub data_device: DataDeviceState,
     /// Backs the `delegate_xdg_shell` `SeatHandler` bound (popup grabs reference a seat) AND owns the
     /// `wl_seat` capabilities the toolkits enumerate for input.
     pub seat_state: SeatState<HlState>,
@@ -172,6 +190,9 @@ impl HlState {
         let xdg_shell = XdgShellState::new::<HlState>(dh);
         // Advertise `zxdg_decoration_manager_v1` so CSD-vs-SSD negotiation resolves instead of hanging.
         let xdg_decoration = XdgDecorationState::new::<HlState>(dh);
+        // Advertise `wl_data_device_manager` (clipboard / drag-and-drop). GDK4 (and Chrome/Qt) require
+        // this global at display-open; without it `gdk_display_open` aborts before any GL is created.
+        let data_device = DataDeviceState::new::<HlState>(dh);
         let mut seat_state = SeatState::new();
 
         let mut engine = Compositor::new(presenter, MonotonicClock::new());
@@ -194,10 +215,12 @@ impl HlState {
         }
 
         HlState {
+            display: dh.clone(),
             compositor,
             shm,
             xdg_shell,
             xdg_decoration,
+            data_device,
             seat_state,
             seat,
             _output_manager: output_manager,
@@ -694,6 +717,11 @@ impl HlState {
     pub fn set_keyboard_focus(&mut self, sid: Option<SurfaceId>) {
         let Some(keyboard) = self.seat.get_keyboard() else { return };
         let surface = sid.and_then(|s| self.surfaces_by_id.get(&s).cloned());
+        // Follow the keyboard focus with the clipboard (data-device) focus so the newly focused client's
+        // `wl_data_device` receives selection offers and its `set_selection` is honored — the standard
+        // Wayland "clipboard follows keyboard focus" rule. `None` clears it (no client owns the clipboard).
+        let focus_client = surface.as_ref().and_then(|s| self.display.get_client(s.id()).ok());
+        set_data_device_focus(&self.display, &self.seat, focus_client);
         // Mirror into the neutral seat so scene focus bookkeeping stays truthful.
         self.engine.scene.seat_mut().keyboard_focus = sid;
         let serial = SERIAL_COUNTER.next_serial();
@@ -778,6 +806,34 @@ impl SeatHandler for HlState {
 
     fn focus_changed(&mut self, _seat: &Seat<HlState>, _focused: Option<&WlSurface>) {}
     fn cursor_image(&mut self, _seat: &Seat<HlState>, _image: smithay::input::pointer::CursorImageStatus) {}
+}
+
+/// Selection (clipboard / primary) plumbing for `wl_data_device`. Headless we carry no per-selection
+/// user data (`()`), and the default `new_selection` / `send_selection` (no-op / not-answered) are
+/// sufficient: the neutral core does no cross-client data transfer, so a `set_selection` succeeds at the
+/// object level (no protocol error) and clipboard focus tracking (via [`set_data_device_focus`], driven
+/// from keyboard focus) is what a toolkit checks at startup. Live paste across clients is out of scope
+/// for the headless adapter.
+impl SelectionHandler for HlState {
+    type SelectionUserData = ();
+}
+
+/// A client-initiated drag-and-drop grab (a client dragging one of its surfaces). No compositor-side DnD
+/// policy headless — accept the defaults; the client manages its own data transfer.
+impl ClientDndGrabHandler for HlState {}
+
+/// A server-initiated drag-and-drop grab (the compositor starting a DnD). Never initiated headless, so
+/// the default (empty) handler is correct.
+impl ServerDndGrabHandler for HlState {}
+
+/// Server-side handling of `wl_data_device_manager` / `wl_data_device`. `data_device_state` hands
+/// Smithay the held [`DataDeviceState`]; every other callback (DnD negotiation, selection transfer)
+/// keeps its default, which is enough for a client to bind the manager, obtain a `wl_data_device` from
+/// the seat, and set/observe a selection at the object level.
+impl DataDeviceHandler for HlState {
+    fn data_device_state(&self) -> &DataDeviceState {
+        &self.data_device
+    }
 }
 
 impl XdgShellHandler for HlState {
@@ -980,6 +1036,7 @@ smithay::delegate_xdg_shell!(HlState);
 smithay::delegate_xdg_decoration!(HlState);
 smithay::delegate_output!(HlState);
 smithay::delegate_seat!(HlState);
+smithay::delegate_data_device!(HlState);
 
 /// Build the compositor's single `wl_output` from the scene's primary [`Output`], creating its global and
 /// pushing the current mode / scale / preferred mode so a binding client receives geometry + mode + scale
