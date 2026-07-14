@@ -33,7 +33,10 @@ pub use runtime::{
     Clock, FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink, Ledger, Limits, Presented,
     Session, SessionResources, SystemClock,
 };
-pub use transport::{serve, serve_connection, GpuAlloc, RemoteCommandSink, Surface};
+pub use transport::{
+    serve, serve_connection, serve_connection_with_handler, ConnectionHandler, GpuAlloc,
+    ReadbackRequest, RemoteCommandSink, Surface,
+};
 
 // The reference CPU executor (the semantic oracle): a pure, platform-free `GpuExecutor` a composition
 // root injects for socket-free CPU execution and against which every real executor is conformance-checked.

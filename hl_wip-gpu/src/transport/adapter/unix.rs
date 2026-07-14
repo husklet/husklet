@@ -14,6 +14,7 @@ use crate::protocol::model::capability::Capabilities;
 use crate::transport::model::frame::Frame;
 use crate::transport::model::handshake::{decode_handshake, encode_handshake};
 use crate::transport::model::header::SubmitHeader;
+use crate::transport::model::readback::{ReadbackRequest, READBACK_MAGIC, READBACK_OK};
 
 // ---------------------------------------------------------------------------------------------------
 // framed submit IO (byte-identical to gl_shim.c's exec_stream)
@@ -62,6 +63,55 @@ pub fn read_ack(stream: &UnixStream) -> io::Result<u8> {
 pub fn write_ack(stream: &UnixStream, ack: u8) -> io::Result<()> {
     let mut s = stream;
     s.write_all(&[ack])
+}
+
+// ---------------------------------------------------------------------------------------------------
+// readback IO (device→host buffer readback; additive, disjoint from the submit ack)
+// ---------------------------------------------------------------------------------------------------
+
+/// Write a device→host readback REQUEST as a submit frame whose header carries the reserved
+/// [`READBACK_MAGIC`] sentinel in `surface_id` (so the server routes it to readback, never to submit) and
+/// whose payload is the serialized [`ReadbackRequest`]. Reuses the exact submit-frame writer, keeping every
+/// real submit byte-identical.
+pub fn write_readback_request(stream: &UnixStream, req: &ReadbackRequest) -> io::Result<()> {
+    let payload = req.to_bytes();
+    let header = SubmitHeader {
+        surface_id: READBACK_MAGIC,
+        width: 0,
+        height: 0,
+        len: payload.len() as u32,
+    };
+    write_frame(stream, &header, &payload)
+}
+
+/// Write the host's readback RESPONSE: a status byte then a `u32` length-prefixed byte payload. On failure
+/// `status` is [`READBACK_FAIL`](crate::transport::model::readback::READBACK_FAIL) and `bytes` must be
+/// empty. This is deliberately NOT the 1-byte submit ack — only a peer that issued a readback request reads
+/// this framing.
+pub fn write_readback_response(stream: &UnixStream, status: u8, bytes: &[u8]) -> io::Result<()> {
+    let mut out = Vec::with_capacity(1 + 4 + bytes.len());
+    out.push(status);
+    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(bytes);
+    write_full(stream, &out)
+}
+
+/// Read a host readback RESPONSE written by [`write_readback_response`]. Returns the returned bytes on
+/// success; a failure status maps to an `Other` IO error the caller surfaces as a typed
+/// [`GpuError`](crate::protocol::model::error::GpuError).
+pub fn read_readback_response(stream: &UnixStream) -> io::Result<Vec<u8>> {
+    let mut s = stream;
+    let mut status = [0u8; 1];
+    s.read_exact(&mut status)?;
+    let mut len_bytes = [0u8; 4];
+    s.read_exact(&mut len_bytes)?;
+    let len = u32::from_le_bytes(len_bytes) as usize;
+    let mut body = vec![0u8; len];
+    s.read_exact(&mut body)?;
+    match status[0] {
+        READBACK_OK => Ok(body),
+        _ => Err(io::Error::new(io::ErrorKind::Other, "host readback failed")),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------

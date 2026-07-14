@@ -456,6 +456,20 @@ impl GpuExecutor for CpuExecutor {
         }
         Ok(())
     }
+
+    /// Serve the device→host readback port by allocating the output and delegating to the inherent
+    /// [`read_buffer`](CpuExecutor::read_buffer) over the runtime-owned resources.
+    fn read_buffer(
+        &self,
+        resources: &SessionResources,
+        id: BufferId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>> {
+        let mut out = vec![0u8; len];
+        CpuExecutor::read_buffer(self, resources, id, offset, &mut out)?;
+        Ok(out)
+    }
 }
 
 // ===================================================================================================

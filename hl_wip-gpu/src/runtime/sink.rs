@@ -88,6 +88,13 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {
         dispatch::wait(&mut self.session, &mut self.exec, fence, value)
     }
+
+    /// Read a buffer back straight off the runtime-owned resources via the injected executor — the
+    /// socket-free half of the readback port. Works for ANY `GpuExecutor` that implements readback (the
+    /// default returns `Unsupported`); the CPU reference executor serves it directly.
+    fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
+        dispatch::read_buffer(&self.session, &self.exec, id, offset, len)
+    }
 }
 
 impl InProcessCommandSink<CpuExecutor> {

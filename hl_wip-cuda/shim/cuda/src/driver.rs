@@ -287,17 +287,19 @@ pub extern "C" fn cuMemcpyDtoD_v2(dst: u64, src: u64, n: usize) -> i32 {
     })
 }
 
-/// `cuMemcpyDtoH_v2` resolves + validates the device source (dangling → `CUDA_ERROR_INVALID_VALUE`).
-/// The actual host readback is served out-of-band by the host executor over the transport; there is no
-/// protocol readback command in `hl_gpu` yet (see `hl_cuda::service::transfer` doc), so the byte copy is
-/// deferred to when that host-side readback lands — this validates the request truthfully in the interim.
+/// `cuMemcpyDtoH_v2` resolves the device source and reads `n` bytes back through the sink's device→host
+/// readback path (`CommandSink::read_buffer`), copying them into the caller's host `dst`. A dangling source
+/// or a failed readback → `CUDA_ERROR_INVALID_VALUE`.
 #[no_mangle]
-pub extern "C" fn cuMemcpyDtoH_v2(dst: *mut c_void, src: u64, _n: usize) -> i32 {
+pub extern "C" fn cuMemcpyDtoH_v2(dst: *mut c_void, src: u64, n: usize) -> i32 {
     if dst.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match transfer::memcpy_dtoh(&s.ctx, DevicePtr(src)) {
-        Ok(_) => CUDA_SUCCESS,
+    with(|s| match transfer::read_dtoh(&s.ctx, &mut s.sink, DevicePtr(src), n) {
+        Ok(bytes) => {
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len()) };
+            CUDA_SUCCESS
+        }
         Err(_) => CUDA_ERROR_INVALID_VALUE,
     })
 }

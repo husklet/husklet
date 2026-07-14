@@ -14,11 +14,12 @@ use crate::protocol::codec::encode_stream;
 use crate::protocol::model::capability::{Capabilities, FeatureRequest};
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::{GpuError, Result};
-use crate::protocol::model::id::FenceId;
+use crate::protocol::model::id::{BufferId, FenceId};
 use crate::protocol::port::sink::CommandSink;
 use crate::transport::adapter::unix;
 use crate::transport::model::abi::{Surface, DEFAULT_EXEC_SOCK};
 use crate::transport::model::header::{SubmitHeader, ACK_OK};
+use crate::transport::model::readback::ReadbackRequest;
 
 const MAX_REPLAY_BYTES: usize = 64 << 20;
 
@@ -276,6 +277,22 @@ impl CommandSink for RemoteCommandSink {
         let batch = [Cmd::WaitFence { id: fence.raw(), value }];
         let ir = encode_stream(&batch);
         self.submit_ir(&ir, &batch).map_err(to_gpu_err)
+    }
+
+    /// Read `len` bytes of buffer `id` back from the host executor over the wire (the socketed
+    /// `cuMemcpyDtoH` / `glReadPixels` path). Sends a readback-magic REQUEST frame — disjoint from a submit,
+    /// so it never collides on the wire — and reads the host's length-prefixed byte response.
+    fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
+        self.ensure().map_err(to_gpu_err)?;
+        // If a reconnect emptied the host's resource cache, flush acknowledged residency first so the buffer
+        // being read is actually resident on the current executor before we query it.
+        if self.residency_reset {
+            self.submit_ir(&[], &[]).map_err(to_gpu_err)?;
+        }
+        let req = ReadbackRequest::buffer(id.raw(), offset, len as u64);
+        let s = self.sock.as_ref().expect("ensure installed executor socket");
+        unix::write_readback_request(s, &req).map_err(to_gpu_err)?;
+        unix::read_readback_response(s).map_err(to_gpu_err)
     }
 }
 

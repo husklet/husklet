@@ -25,4 +25,5 @@ pub use model::abi::{
 };
 pub use model::frame::Frame;
 pub use model::header::{SubmitHeader, ACK_FAIL, ACK_OK};
-pub use server::{serve, serve_connection, Verdict};
+pub use model::readback::{ReadbackRequest, READBACK_MAGIC, READBACK_VERSION};
+pub use server::{serve, serve_connection, serve_connection_with_handler, ConnectionHandler, Verdict};

@@ -4,8 +4,9 @@
 //!   straight into the backing buffer (ported from `hl-gpu/src/cuda.rs` `memcpy_htod`).
 //! * **DtoD** lowers to a [`Enc::CopyBufferToBuffer`] inside a [`Cmd::Submit`] — a real on-device copy.
 //! * **DtoH** has NO protocol command: a device→host read is an out-of-band readback the executor
-//!   serves. This resolves the source to its (buffer, offset) so the caller (the shim, later) can read
-//!   it back through the sink's transport; it submits nothing.
+//!   serves through [`CommandSink::read_buffer`]. [`memcpy_dtoh`] resolves the source to its
+//!   (buffer, offset) for callers that only need the location; [`read_dtoh`] performs the full readback,
+//!   returning the device bytes over whatever transport the sink is (socket-free or socketed).
 
 use crate::model::context::CudaContext;
 use crate::model::device::DevicePtr;
@@ -52,8 +53,21 @@ pub fn memcpy_dtod(
 }
 
 /// `cuMemcpyDtoH(host, src, n)` → resolve the device source to its (buffer, offset) for the caller to
-/// read back out-of-band. Submits no command (there is no protocol readback command — the executor
-/// serves the read directly). Returns the source location.
+/// read back out-of-band. Submits no command; returns the source location. Prefer [`read_dtoh`] when you
+/// want the bytes — it performs the readback through the sink.
 pub fn memcpy_dtoh(ctx: &CudaContext, src: DevicePtr) -> Result<(BufferId, u64)> {
     resolve(ctx, src, "cuMemcpyDtoH: dangling source pointer")
+}
+
+/// `cuMemcpyDtoH(host, src, n)`, fully served: resolve the device source and read `n` bytes back through
+/// the sink's device→host readback path (the real `CommandSink::read_buffer`, in-process or over the wire).
+/// Returns exactly `n` device bytes.
+pub fn read_dtoh(
+    ctx: &CudaContext,
+    sink: &mut dyn CommandSink,
+    src: DevicePtr,
+    n: usize,
+) -> Result<Vec<u8>> {
+    let (buf, off) = resolve(ctx, src, "cuMemcpyDtoH: dangling source pointer")?;
+    sink.read_buffer(buf, off, n)
 }

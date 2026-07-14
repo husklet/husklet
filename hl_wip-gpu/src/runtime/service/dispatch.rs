@@ -10,7 +10,7 @@
 
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::Result;
-use crate::protocol::model::id::FenceId;
+use crate::protocol::model::id::{BufferId, FenceId};
 use crate::runtime::model::session::Session;
 use crate::runtime::port::executor::{GpuExecutor, Presented};
 
@@ -52,4 +52,17 @@ pub fn wait(
     value: u64,
 ) -> Result<()> {
     exec.wait(&mut session.resources, fence, value)
+}
+
+/// Service the device→host readback path: return `len` bytes of buffer `id` at `offset` from the executor
+/// over the runtime-owned resources. Not part of a command batch — an out-of-band query the transport layer
+/// forwards to answer a `CommandSink::read_buffer` / `cuMemcpyDtoH`.
+pub fn read_buffer(
+    session: &Session,
+    exec: &dyn GpuExecutor,
+    id: BufferId,
+    offset: u64,
+    len: usize,
+) -> Result<Vec<u8>> {
+    exec.read_buffer(&session.resources, id, offset, len)
 }

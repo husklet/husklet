@@ -9,8 +9,8 @@
 
 use crate::protocol::model::capability::{Capabilities, FeatureRequest};
 use crate::protocol::model::command::Cmd;
-use crate::protocol::model::error::Result;
-use crate::protocol::model::id::FenceId;
+use crate::protocol::model::error::{GpuError, Result};
+use crate::protocol::model::id::{BufferId, FenceId};
 
 /// The contract a driver submits through. A batch is a slice of protocol [`Cmd`]s; the sink validates,
 /// transports, and (eventually) executes them — the driver neither knows nor cares which.
@@ -26,6 +26,17 @@ pub trait CommandSink {
 
     /// Block until fence `fence` reaches timeline `value`.
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()>;
+
+    /// Read `len` bytes back from buffer `id` starting at `offset` — the device→host readback path that
+    /// makes `cuMemcpyDtoH` / `glReadPixels`-style results available to a driver regardless of whether the
+    /// sink is in-process or socketed.
+    ///
+    /// Additive: it has a default implementation returning [`GpuError::Unsupported`] so existing sinks and
+    /// drivers that never read back keep compiling unchanged; the three real sinks override it.
+    fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let _ = (id, offset, len);
+        Err(GpuError::Unsupported("command sink: read_buffer"))
+    }
 }
 
 /// A recording [`CommandSink`] test double: it negotiates against a fixed [`Capabilities`] and records
@@ -40,12 +51,21 @@ pub struct RecordingSink {
     pub batches: Vec<Vec<Cmd>>,
     /// Every `(fence, value)` passed to [`CommandSink::wait`], in order.
     pub waits: Vec<(FenceId, u64)>,
+    /// Every `(buffer, offset, len)` passed to [`CommandSink::read_buffer`], in order — so a driver test can
+    /// assert exactly what readback a driver requested.
+    pub reads: Vec<(BufferId, u64, usize)>,
 }
 
 impl RecordingSink {
     /// A recording sink advertising the given capability descriptor.
     pub fn new(caps: Capabilities) -> Self {
-        Self { caps, negotiated: Vec::new(), batches: Vec::new(), waits: Vec::new() }
+        Self {
+            caps,
+            negotiated: Vec::new(),
+            batches: Vec::new(),
+            waits: Vec::new(),
+            reads: Vec::new(),
+        }
     }
 
     /// A recording sink advertising the full current IR surface (see [`Capabilities::full`]).
@@ -81,5 +101,12 @@ impl CommandSink for RecordingSink {
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {
         self.waits.push((fence, value));
         Ok(())
+    }
+
+    /// Record the readback request and return a zero-filled buffer of the requested length (the test double
+    /// executes nothing, so it has no real bytes to return).
+    fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
+        self.reads.push((id, offset, len));
+        Ok(vec![0u8; len])
     }
 }

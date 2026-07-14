@@ -12,8 +12,8 @@
 
 use crate::protocol::model::capability::Capabilities;
 use crate::protocol::model::command::Cmd;
-use crate::protocol::model::error::Result;
-use crate::protocol::model::id::{FenceId, SurfaceId, TextureId};
+use crate::protocol::model::error::{GpuError, Result};
+use crate::protocol::model::id::{BufferId, FenceId, SurfaceId, TextureId};
 use crate::runtime::model::resources::SessionResources;
 
 /// The outcome of a `Present` command executed within a batch: which surface presented which texture.
@@ -47,4 +47,20 @@ pub trait GpuExecutor {
     /// out-of-band wait not carried inside a command batch); `resources` is passed so the executor can
     /// resolve the fence's native primitive.
     fn wait(&mut self, resources: &mut SessionResources, fence: FenceId, value: u64) -> Result<()>;
+
+    /// Read `len` bytes back from buffer `id` at `offset` out of the runtime-owned `resources` — the
+    /// host-side half of the device→host readback path (`CommandSink::read_buffer` /`cuMemcpyDtoH`).
+    ///
+    /// Additive: the default returns [`GpuError::Unsupported`] so an executor that cannot expose device
+    /// memory keeps compiling; the CPU reference executor overrides it over its `SessionResources` natives.
+    fn read_buffer(
+        &self,
+        resources: &SessionResources,
+        id: BufferId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>> {
+        let _ = (resources, id, offset, len);
+        Err(GpuError::Unsupported("executor: read_buffer"))
+    }
 }

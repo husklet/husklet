@@ -97,10 +97,17 @@ fn memcpy_impl(s: &mut crate::state::State, dst: *mut c_void, src: *const c_void
             }
         }
         MEMCPY_DEVICE_TO_HOST => {
-            // Validate the device source; the actual host readback is served out-of-band by the host
-            // executor (no protocol readback command yet — see `hl_cuda::service::transfer`).
-            match transfer::memcpy_dtoh(&s.ctx, DevicePtr(src as u64)) {
-                Ok(_) => CUDART_SUCCESS,
+            // Read the device source back through the sink's device→host readback path and copy it into
+            // the caller's host buffer.
+            match transfer::read_dtoh(&s.ctx, &mut s.sink, DevicePtr(src as u64), count) {
+                Ok(bytes) => {
+                    if !dst.is_null() {
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len())
+                        };
+                    }
+                    CUDART_SUCCESS
+                }
                 Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
             }
         }
