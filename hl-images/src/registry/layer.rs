@@ -4,15 +4,49 @@ use crate::Error;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Recursively re-add owner-write to every directory in the tree rooted at `p` (best-effort, per-entry).
+/// A previous (possibly failed) extraction, or a base layer, can leave a read-only dir (e.g. a
+/// `dr-xr-xr-x` cert dir); `remove_dir_all` / a later overwrite can't unlink entries inside a write-less
+/// dir, so we re-add owner-write first — otherwise stale content would survive a reset or block a retry.
+///
+/// Replaces the former `find <p> -type d -exec chmod u+w {} +` subprocess (shared by `reset_dir`,
+/// `clear_opaque_dirs`, and the extract retry in `registry::http::archive`). Symlinks are NOT followed
+/// (an entry's own `file_type()` is used, so a dir-typed symlink is not descended — a layer can't
+/// redirect the walk outside the tree), and each error is swallowed so one stubborn entry never aborts
+/// the sweep, matching `find`'s best-effort per-node semantics.
+pub(in crate::registry) fn make_dirs_writable(p: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = std::fs::symlink_metadata(p) else {
+        return;
+    };
+    if !meta.is_dir() {
+        return;
+    }
+    // Re-add owner-write on THIS dir first, so its entries can be read/traversed and unlinked.
+    let mut perm = meta.permissions();
+    let mode = perm.mode();
+    if mode & 0o200 == 0 {
+        perm.set_mode(mode | 0o200);
+        let _ = std::fs::set_permissions(p, perm);
+    }
+    let Ok(entries) = std::fs::read_dir(p) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        // `file_type()` from read_dir does NOT follow symlinks, so a symlink-to-dir reads as non-dir and
+        // is skipped — the walk stays inside the real tree.
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            make_dirs_writable(&entry.path());
+        }
+    }
+}
+
 pub(super) fn reset_dir(p: &Path) -> Result<(), Error> {
     // A previous (possibly failed) extraction can leave read-only dirs (e.g. a base layer's
     // `dr-xr-xr-x` cert dir); `remove_dir_all` can't unlink entries inside a write-less dir, so re-add
     // owner-write to every dir first — otherwise stale content would survive the reset.
     if p.exists() {
-        let _ = Command::new("find")
-            .arg(p)
-            .args(["-type", "d", "-exec", "chmod", "u+w", "{}", "+"])
-            .output();
+        make_dirs_writable(p);
     }
     let _ = std::fs::remove_dir_all(p);
     std::fs::create_dir_all(p).map_err(|e| Error::Archive(format!("mkdir {}: {e}", p.display())))
@@ -99,10 +133,7 @@ pub(super) fn clear_opaque_dirs(rootfs: &Path, dirs: &[String]) {
         // A base layer may have left the dir read-only (see reset_dir); re-add owner-write so it can be
         // cleared, then remove + recreate empty.
         if target.exists() {
-            let _ = Command::new("find")
-                .arg(&target)
-                .args(["-type", "d", "-exec", "chmod", "u+w", "{}", "+"])
-                .output();
+            make_dirs_writable(&target);
         }
         let _ = std::fs::remove_dir_all(&target);
         let _ = std::fs::create_dir_all(&target);
@@ -372,6 +403,54 @@ mod tests {
         assert_eq!(contained_relative("../outside"), None);
         assert_eq!(contained_relative("a/../.."), None);
         assert_eq!(contained_relative("/abs"), None);
+    }
+
+    // make_dirs_writable must recover a read-only directory subtree so `reset_dir`/`remove_dir_all` can
+    // unlink inside it — the native replacement for `find -type d -exec chmod u+w`.
+    #[test]
+    fn make_dirs_writable_recovers_readonly_subtree_and_reset_dir_clears_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = Tmp::new("writable");
+        let root = t.0.join("rootfs");
+        let inner = root.join("ro").join("deep");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("f"), b"x").unwrap();
+        // Make the nested dirs read-only (dr-xr-xr-x), the exact state that blocks unlink.
+        std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o555)).unwrap();
+        std::fs::set_permissions(root.join("ro"), std::fs::Permissions::from_mode(0o555)).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        make_dirs_writable(&root);
+        // every dir regained owner-write.
+        for d in [&root, &root.join("ro"), &inner] {
+            let mode = std::fs::metadata(d).unwrap().permissions().mode();
+            assert!(mode & 0o200 != 0, "{} should be owner-writable, mode={:o}", d.display(), mode);
+        }
+        // and reset_dir (which now uses the helper) fully clears + recreates the read-only tree.
+        reset_dir(&root).unwrap();
+        assert!(root.is_dir(), "reset_dir recreates the dir");
+        assert!(std::fs::read_dir(&root).unwrap().next().is_none(), "reset_dir emptied the tree");
+    }
+
+    // Symlinks are not followed by the writable sweep: a symlink pointing OUT of the tree must not have
+    // its target chmod'd, and the walk must not escape.
+    #[test]
+    fn make_dirs_writable_does_not_follow_symlinks() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let t = Tmp::new("writable-sym");
+        let tree = t.0.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        // an external read-only dir the symlink points at; it must stay untouched.
+        let outside = t.0.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o555)).unwrap();
+        symlink(&outside, tree.join("link")).unwrap();
+
+        make_dirs_writable(&tree);
+
+        let mode = std::fs::metadata(&outside).unwrap().permissions().mode();
+        assert_eq!(mode & 0o200, 0, "a symlinked-to external dir must NOT be made writable");
+        let _ = std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o755));
     }
 
     #[test]

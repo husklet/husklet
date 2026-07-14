@@ -82,10 +82,7 @@ pub(in crate::registry) fn extract_targz(src: &Path, rootfs: &Path) -> Result<()
     } // only device-node noise — the layer's real content extracted fine
       // A read-only dir from an earlier layer is blocking this layer's overwrites: make every dir in the
       // rootfs owner-writable and extract the layer again.
-    let _ = Command::new("find")
-        .arg(rootfs)
-        .args(["-type", "d", "-exec", "chmod", "u+w", "{}", "+"])
-        .output();
+    crate::registry::layer::make_dirs_writable(rootfs);
     let out2 = attempt()?;
     if out2.status.success() {
         return Ok(());

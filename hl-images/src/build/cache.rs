@@ -11,7 +11,9 @@
 //! identical misses and re-runs.
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// A deterministic non-crypto fallback id (FNV-1a, widened) matching the daemon's, used only when the
@@ -42,66 +44,144 @@ pub fn sha256_hex(data: &[u8]) -> String {
 }
 
 /// A deterministic content digest of an assembled rootfs: hash of a sorted
-/// (type,mode,nlink,symlink-target,size,path) listing combined with the sha256 of every regular file's
-/// contents. Including `%m` (mode) means a permission change (e.g. `0644 -> 0755`) changes the digest, so
-/// image/cache identity tracks the executable bit and other mode/metadata; `%n`/`%l` fold in hardlink
-/// count and symlink target so topology/target changes are not aliased. Same tree -> same hash,
+/// (type,mode,nlink,size,symlink-target,path) listing combined with the sha256 of every regular file's
+/// contents. Including the mode means a permission change (e.g. `0644 -> 0755`) changes the digest, so
+/// image/cache identity tracks the executable bit and other mode/metadata; nlink/symlink-target fold in
+/// hardlink count and symlink target so topology/target changes are not aliased. Same tree -> same hash,
 /// independent of filesystem iteration order. Returns "" on failure.
+///
+/// Computed by a native in-process walk (see [`dir_digest`]) — the former `sh -c` find/sort/sha256sum
+/// pipeline is gone, removing the crate's last shell-injection surface. The serialization is our own
+/// canonical form and is NOT byte-compatible with the old GNU-tool output, so existing cache keys rotate
+/// once on rollout (a one-time miss + re-run, allowed by the module's CORRECTNESS RULE); it is
+/// self-consistent thereafter.
 pub fn rootfs_digest(rootfs: &Path) -> String {
-    // The rootfs path is passed as a POSITIONAL ARGUMENT (`$1`), never interpolated into the script
-    // text, so a path containing a single quote (or any shell metacharacter) can't break quoting or
-    // inject shell — a naive `cd '<path>'` silently produced an empty/wrong digest for such paths.
-    const SCRIPT: &str = "cd \"$1\" 2>/dev/null || exit 0; \
-         { find . -printf '%y %m %n %l %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
-            find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null; \
-         } | sha256sum";
-    match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(SCRIPT)
-        .arg("sh") // $0
-        .arg(rootfs) // $1
-        .output()
-    {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string(),
-        Err(_) => String::new(),
-    }
+    dir_digest(rootfs).unwrap_or_default()
 }
 
 /// Deterministic content+metadata digest of a file or directory subtree at `p` (absolute host path):
-/// type, mode, hardlink count (`%n`), symlink target (`%l`) and size of every entry plus the sha256 of
-/// each regular file's contents, sorted so it is independent of fs iteration order. Including `%l` means a
-/// changed symlink target (`link -> aa` vs `link -> bb`) changes the digest; including `%n`/hardlink-count
-/// distinguishes a hardlinked tree from independent files with identical bytes, so a `COPY`/`ADD` cache
-/// key does not alias those. Used to make COPY/ADD cache keys content-addressed. Returns "" on failure
-/// (the caller then forces a miss rather than risk serving a stale layer).
+/// type, mode, hardlink count, symlink target and size of every entry plus the sha256 of each regular
+/// file's contents, sorted so it is independent of fs iteration order. A changed symlink target
+/// (`link -> aa` vs `link -> bb`) changes the digest; folding in hardlink count distinguishes a
+/// hardlinked tree from independent files with identical bytes, so a `COPY`/`ADD` cache key does not
+/// alias those. Used to make COPY/ADD cache keys content-addressed. Returns "" on failure or a
+/// missing/unreadable path (the caller then forces a miss rather than risk serving a stale layer).
+///
+/// Native in-process implementation (no `sh -c`/find/stat/sha256sum subprocess); the canonical
+/// serialization differs from the old GNU-tool output, so keys rotate once on rollout — see
+/// [`rootfs_digest`].
 pub fn path_digest(p: &Path) -> String {
-    // The path is passed as a POSITIONAL ARGUMENT (`$1`), never interpolated into the script text, so a
-    // path containing a single quote (or any shell metacharacter) can't break quoting or inject shell —
-    // the old `p='<path>'` interpolation silently produced an empty/wrong digest for such paths.
-    const SCRIPT: &str = "p=\"$1\"; if [ -d \"$p\" ]; then cd \"$p\" 2>/dev/null || exit 0; \
-            { find . -printf '%y %m %n %l %s %p\\n' 2>/dev/null | LC_ALL=C sort; \
-               find . -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null; } | sha256sum; \
-         elif [ -h \"$p\" ]; then { stat -c '%F %a' \"$p\" 2>/dev/null; readlink \"$p\" 2>/dev/null; } | sha256sum; \
-         elif [ -e \"$p\" ]; then { stat -c '%F %a %h %s' \"$p\" 2>/dev/null; sha256sum \"$p\" 2>/dev/null; } | sha256sum; \
-         else echo missing; fi";
-    match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(SCRIPT)
-        .arg("sh") // $0
-        .arg(p) // $1
-        .output()
-    {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string(),
-        Err(_) => String::new(),
+    let Ok(md) = std::fs::symlink_metadata(p) else {
+        return String::new(); // missing/unreadable -> force a cache miss
+    };
+    let ft = md.file_type();
+    if ft.is_dir() {
+        return dir_digest(p).unwrap_or_default();
     }
+    // A single file / symlink / special node: hash a small canonical descriptor of just this entry.
+    let mut h = Sha256::new();
+    if ft.is_symlink() {
+        let tgt = std::fs::read_link(p)
+            .map(|t| t.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        h.update(format!("l {:o} {tgt}", md.mode() & 0o7777).as_bytes());
+    } else if ft.is_file() {
+        h.update(format!("f {:o} {} {}", md.mode() & 0o7777, md.nlink(), md.len()).as_bytes());
+        if let Some(hexd) = file_sha256(p) {
+            h.update(b" ");
+            h.update(hexd.as_bytes());
+        }
+    } else {
+        // char/block/fifo/socket special — fold in rdev so a different device node digests differently.
+        h.update(
+            format!(
+                "s {:o} {} rdev={}",
+                md.mode() & 0o7777,
+                md.nlink(),
+                md.rdev()
+            )
+            .as_bytes(),
+        );
+    }
+    hex_lower(&h.finalize())
+}
+
+/// The shared directory-subtree digester behind [`rootfs_digest`] and [`path_digest`]'s dir branch: one
+/// hand-rolled recursive walk that records a canonical metadata line per entry plus the sha256 of each
+/// regular file's contents, sorts both listings (so the result is independent of fs iteration order), and
+/// hashes the concatenation. Symlinks are recorded (type + target) but NOT followed, so a malicious
+/// symlink in the tree can't redirect the walk elsewhere. Returns `None` only if `root` itself can't be
+/// read as a directory (caller maps that to "" -> forced cache miss).
+fn dir_digest(root: &Path) -> Option<String> {
+    // `root` must be a readable directory; otherwise there is nothing to digest deterministically.
+    if !std::fs::symlink_metadata(root).ok()?.is_dir() {
+        return None;
+    }
+    let mut meta_lines: Vec<String> = Vec::new();
+    let mut file_lines: Vec<String> = Vec::new();
+    record_entry(root, root, &mut meta_lines, &mut file_lines);
+    meta_lines.sort();
+    file_lines.sort();
+    let mut h = Sha256::new();
+    for l in &meta_lines {
+        h.update(l.as_bytes());
+        h.update(b"\n");
+    }
+    h.update(b"--\n"); // separate the metadata section from the content-hash section unambiguously
+    for l in &file_lines {
+        h.update(l.as_bytes());
+        h.update(b"\n");
+    }
+    Some(hex_lower(&h.finalize()))
+}
+
+/// Record `path`'s canonical metadata line (and, for a regular file, its content sha256), recursing into
+/// real subdirectories only. `root` anchors the rootfs-relative path so the listing is location-stable.
+fn record_entry(root: &Path, path: &Path, meta: &mut Vec<String>, files: &mut Vec<String>) {
+    let Ok(md) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    let ft = md.file_type();
+    let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
+    let mode = md.mode() & 0o7777;
+    if ft.is_dir() {
+        meta.push(format!("d {mode:o} {} {} {rel}", md.nlink(), md.len()));
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for e in entries.flatten() {
+                record_entry(root, &e.path(), meta, files);
+            }
+        }
+    } else if ft.is_symlink() {
+        let tgt = std::fs::read_link(path)
+            .map(|t| t.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        meta.push(format!("l {mode:o} {} {rel} -> {tgt}", md.nlink()));
+    } else if ft.is_file() {
+        meta.push(format!("f {mode:o} {} {} {rel}", md.nlink(), md.len()));
+        if let Some(hexd) = file_sha256(path) {
+            files.push(format!("{hexd}  {rel}"));
+        }
+    } else {
+        meta.push(format!("s {mode:o} {} rdev={} {rel}", md.nlink(), md.rdev()));
+    }
+}
+
+/// Streaming lowercase-hex sha256 of a file's contents (no `sha256:` prefix); `None` if it can't be read.
+fn file_sha256(p: &Path) -> Option<String> {
+    let mut f = std::fs::File::open(p).ok()?;
+    let mut h = Sha256::new();
+    std::io::copy(&mut f, &mut h).ok()?;
+    Some(hex_lower(&h.finalize()))
+}
+
+/// Lowercase-hex encode of raw digest bytes (32 bytes -> 64 chars).
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        s.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+    }
+    s
 }
 
 /// Chain hash for a step's cache id: sha256(parent + descriptor), falling back to a stable non-crypto id
@@ -126,7 +206,7 @@ pub fn is_fs_inst(inst: &str) -> bool {
 mod tests {
     use super::*;
 
-    // --- content+metadata digest regression tests (shell out to find/stat/sha256sum) ---
+    // --- content+metadata digest regression tests (native in-process walk) ---
 
     fn scratch(label: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -223,6 +303,38 @@ mod tests {
         std::fs::write(dir2.join("f"), b"y\n").unwrap();
         assert_ne!(d, path_digest(&dir2));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // The digest is deterministic and independent of filesystem creation/iteration order: two trees with
+    // the same entries built in a DIFFERENT order must produce the SAME digest, and a content change must
+    // change it. Guards the native walker's canonical (sorted) serialization.
+    #[test]
+    fn rootfs_digest_is_order_independent_and_content_sensitive() {
+        let a = scratch("det-a");
+        let b = scratch("det-b");
+        // Build `a` in one order.
+        std::fs::create_dir_all(a.join("d1")).unwrap();
+        std::fs::write(a.join("d1").join("x"), b"hello\n").unwrap();
+        std::fs::write(a.join("top"), b"root file\n").unwrap();
+        // Build `b` with identical content but a different creation order.
+        std::fs::write(b.join("top"), b"root file\n").unwrap();
+        std::fs::create_dir_all(b.join("d1")).unwrap();
+        std::fs::write(b.join("d1").join("x"), b"hello\n").unwrap();
+
+        let da = rootfs_digest(&a);
+        let db = rootfs_digest(&b);
+        assert_eq!(da.len(), 64);
+        assert!(da.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(da, db, "identical trees must digest identically regardless of build order");
+        // The same call is stable across invocations.
+        assert_eq!(da, rootfs_digest(&a), "digest must be stable across calls");
+        // Changing one file's contents changes the digest.
+        std::fs::write(b.join("d1").join("x"), b"HELLO\n").unwrap();
+        assert_ne!(da, rootfs_digest(&b), "a content change must change the digest");
+        // A missing/unreadable path digests to "" so the caller forces a miss.
+        assert_eq!(path_digest(&a.join("does-not-exist")), "");
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
     }
 
     #[test]
