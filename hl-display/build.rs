@@ -13,8 +13,8 @@ fn main() {
         return;
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let obj = out.join("dd_mach_bridge.o");
-    let lib = out.join("libdd_mach_bridge.a");
+    let obj = out.join("hl_mach_bridge.o");
+    let lib = out.join("libhl_mach_bridge.a");
     let cc = env::var("CC").unwrap_or_else(|_| "cc".into());
     let ar = env::var("AR").unwrap_or_else(|_| "ar".into());
     let ok = Command::new(&cc)
@@ -34,7 +34,7 @@ fn main() {
         panic!("failed to compile dd-display mach_bridge.c");
     }
     println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-lib=static=dd_mach_bridge");
+    println!("cargo:rustc-link-lib=static=hl_mach_bridge");
     println!("cargo:rustc-link-lib=framework=IOSurface");
     println!("cargo:rustc-link-lib=framework=CoreFoundation");
 }

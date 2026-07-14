@@ -158,7 +158,7 @@ pub(crate) async fn containers_create(
     let upper = if img.arch.os() == "darwin" {
         String::new()
     } else {
-        let dir = dd_home().join("containers").join(&id).join("upper");
+        let dir = hl_home().join("containers").join(&id).join("upper");
         // Probe up front that the upper is actually creatable AND writable, and FAIL LOUD (a stderr
         // diagnostic) if not — otherwise a non-writable upper degrades into silent per-write EPERM inside
         // the guest with no hint why. This is a bridge-topology footgun: the daemon runs on one host but the

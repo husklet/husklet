@@ -104,8 +104,8 @@ static void add_pub(char *hc) {
         exit(2);
     }
     *c = 0;
-    g_pub[g_npub].host = (int)dd_parse_port("DD_PUBLISH host port", hc);
-    g_pub[g_npub].cont = (int)dd_parse_port("DD_PUBLISH container port", c + 1);
+    g_pub[g_npub].host = (int)hl_parse_port("DD_PUBLISH host port", hc);
+    g_pub[g_npub].cont = (int)hl_parse_port("DD_PUBLISH container port", c + 1);
     g_npub++;
 }
 
@@ -151,7 +151,7 @@ static void dj_apply_ulimits(const char *spec) {
         rlim_t soft, hard;
 #define DJ_ULV(x)                                                                                                      \
     (!strcmp((x), "unlimited") || !strcmp((x), "-1") ? RLIM_INFINITY                                                   \
-                                                     : (rlim_t)dd_parse_u64("DD_ULIMITS", (x), 0, RLIM_INFINITY))
+                                                     : (rlim_t)hl_parse_u64("DD_ULIMITS", (x), 0, RLIM_INFINITY))
         if (colon) {
             *colon = 0;
             soft = DJ_ULV(eq + 1);
@@ -243,12 +243,12 @@ __attribute__((constructor)) static void init(void) {
     }
     char *mm = getenv("DD_MEM_MAX"), *pm = getenv("DD_PIDS_MAX");
     if (mm) {
-        rlim_t v = dd_parse_u64("DD_MEM_MAX", mm, 0, RLIM_INFINITY);
+        rlim_t v = hl_parse_u64("DD_MEM_MAX", mm, 0, RLIM_INFINITY);
         struct rlimit r = {v, v};
         setrlimit(RLIMIT_AS, &r);
     }
     if (pm) {
-        rlim_t v = dd_parse_u64("DD_PIDS_MAX", pm, 0, INT_MAX);
+        rlim_t v = hl_parse_u64("DD_PIDS_MAX", pm, 0, INT_MAX);
         struct rlimit r = {v, v};
         setrlimit(RLIMIT_NPROC, &r);
     }
@@ -259,7 +259,7 @@ __attribute__((constructor)) static void init(void) {
     {
         char *cs = getenv("DD_CPUS");
         if (cs && cs[0]) {
-            int v = (int)dd_parse_u64("DD_CPUS", cs, 1, 1024);
+            int v = (int)hl_parse_u64("DD_CPUS", cs, 1, 1024);
             g_cpu_max = v;
         }
     }

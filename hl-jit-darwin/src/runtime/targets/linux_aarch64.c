@@ -2,7 +2,7 @@
 //
 // A same-ISA aarch64->aarch64 JIT services the guest's Linux syscalls in userspace (no VM). This TU
 // pulls in the engine (jit/), the aarch64 guest frontend (frontend/aarch64/), the Linux personality +
-// container layer (os/linux/), and defines dd_run() (the Rust binding's entry) + main(). The x86-64
+// container layer (os/linux/), and defines hl_run() (the Rust binding's entry) + main(). The x86-64
 // guest reuses os/linux/ + jit/ with frontend/x86_64/ (see hl_x86_64.c).
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,7 +85,7 @@ static int engine_global_init(void);
 // native checkpoint/restore (multi-process tree): dump/restore guest RAM + cpu + path-backed fds + pty
 #include "../os/linux/checkpoint.c"
 // `--configfd` launch bridge: read the serialized hl_config from the fd, re-hydrate DD_*/DDJIT_* env,
-// and dispatch to this TU's dd_run() (forward-declared inside; defined below).
+// and dispatch to this TU's hl_run() (forward-declared inside; defined below).
 #include "../os/hl_configfd.c"
 
 // ---- library entry (Rust binding) + main() ----
@@ -495,7 +495,7 @@ static void install_mach_exc(void) {
 }
 
 // DD_FAULTCOUNT=1: measurement-only wrapper around nonpie_guard that tallies served low-address faults
-// (the guest_base bias-fold's whole point is to drive this to ~0). Per-process; printed at dd_run exit.
+// (the guest_base bias-fold's whole point is to drive this to ~0). Per-process; printed at hl_run exit.
 static volatile uint64_t g_nonpie_faults;
 static volatile uint64_t g_fhist[16];
 static const char *g_fhname[16] = {"uoff", "unscaled", "wb",    "regoff", "ldp",   "ldp_wb", "excl",  "lse",
@@ -538,12 +538,12 @@ static void nonpie_guard_count(int sig, siginfo_t *si, void *uc) {
     nonpie_guard(sig, si, uc);
 }
 
-// fork-server seam (mirrors targets/linux_x86_64.c): the original dd_run inlined (1)
+// fork-server seam (mirrors targets/linux_x86_64.c): the original hl_run inlined (1)
 // container init, (2) engine init (signal handlers + pthread key + code-cache arena + env flags), and
 // (3) per-launch load+run. The resident ddjitd parent must pay (1)+(2) ONCE and share them COW with
 // every forked worker, so those phases are factored into container_init()/engine_global_init().
 // engine_global_init() is idempotent (g_engine_inited) so the standalone path is unchanged: standalone
-// dd_run() composes container_init -> engine_global_init -> load_program -> run_loaded in the exact
+// hl_run() composes container_init -> engine_global_init -> load_program -> run_loaded in the exact
 // original order, with the identical operations in each phase.
 static int g_engine_inited;
 
@@ -560,7 +560,7 @@ static void container_init(const char *rootfs) {
         const char *m = getenv("DD_MEM_MAX");
         if (m && !g_mem_max) g_mem_max = parse_size(m);
         const char *p = getenv("DD_PIDS_MAX");
-        if (p && !g_pids_max) g_pids_max = dd_parse_id("DD_PIDS_MAX", p);
+        if (p && !g_pids_max) g_pids_max = hl_parse_id("DD_PIDS_MAX", p);
         container_read_resource_env(); // docker --cpus / --read-only / --ulimit (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS)
         const char *pub = getenv("DD_PUBLISH");
         if (pub && !g_nportmap) parse_publish(pub);
@@ -593,9 +593,9 @@ static void container_init(const char *rootfs) {
             if ((mkdir(g_netns, 0700) == 0 || errno == EEXIST) && !(nn && nn[0])) setenv("DD_NETNS", key, 1);
         }
         const char *eu = getenv("DD_UID");
-        if (eu && g_uid < 0) g_uid = dd_parse_id("DD_UID", eu);
+        if (eu && g_uid < 0) g_uid = hl_parse_id("DD_UID", eu);
         const char *eg = getenv("DD_GID");
-        if (eg && g_gid < 0) g_gid = dd_parse_id("DD_GID", eg);
+        if (eg && g_gid < 0) g_gid = hl_parse_id("DD_GID", eg);
         // USER ns (process.user)
     }
     if (rootfs && rootfs[0]) {
@@ -760,7 +760,7 @@ static int engine_global_init(void) {
     g_sentry_sandbox = getenv("DDJIT_SANDBOX") != NULL;
     // pcache_poison_check runs AFTER the codegen-mode flags above so it can refuse to persist an arena
     // that a non-default mode (PROF) baked unrecorded host pointers
-    // into. (g_pcache itself is read at the top of dd_run -- per-invocation, mirroring linux_x86_64.c,
+    // into. (g_pcache itself is read at the top of hl_run -- per-invocation, mirroring linux_x86_64.c,
     // so a fork-server runner honors the CLIENT's DDJIT_PCACHE; the check is mode-only and independent.)
     pcache_poison_check();
     // ptrace tracer/tracee coordination arena -- mmap the shared region ONCE here, BEFORE any guest
@@ -792,8 +792,8 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
     // /proc/self/exe must be the ABSOLUTE, CANONICAL guest path of the loaded image: a RELATIVE guest
     // invocation ("./x" from a harness) or an entry symlink (/bin/sh->busybox) otherwise leaks into the
     // link value, and glibc static-pie ASSERTS on it at startup ("dl-origin.c: linkval[0]=='/'"). Done
-    // HERE (not only in dd_run) so the fork-server's parent preload -- which calls load_program directly,
-    // NOT dd_run -- also hands every COW warm worker a canonical g_exe_path (#378: byte-identical to a
+    // HERE (not only in hl_run) so the fork-server's parent preload -- which calls load_program directly,
+    // NOT hl_run -- also hands every COW warm worker a canonical g_exe_path (#378: byte-identical to a
     // cold launch). Static: the value must outlive this call, like gb above. Mirrors linux_x86_64.c.
     static char bootexe[4200];
     exe_canon(prog, bootexe, sizeof bootexe);
@@ -837,9 +837,9 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
 }
 
 // fresh per-launch guest run from a loaded image. Allocates a private heap + a guest stack +
-// cpu and runs from `jump`. Shared by dd_run (standalone/cold) and the fork-server's warm worker (which
+// cpu and runs from `jump`. Shared by hl_run (standalone/cold) and the fork-server's warm worker (which
 // restores a pristine COW image first, then calls this against the parent-preloaded base). Body is the
-// original dd_run tail verbatim, so standalone behavior is byte-identical.
+// original hl_run tail verbatim, so standalone behavior is byte-identical.
 static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t jump, uint64_t at_base) {
     // checkpoint/restore: place the brk heap in the deterministic high arena (0 hint => normal NULL placement)
     uint8_t *heap =
@@ -861,25 +861,25 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     return c.exit_code;
 }
 
-// Restore driver (the dd_jit::Runtime::restore surface; also reachable via the `--restore <dir>` flag).
+// Restore driver (the hl_jit::Runtime::restore surface; also reachable via the `--restore <dir>` flag).
 // Rebuilds the checkpointed process tree from `dir` and resumes it. Guest memory for the init is rebuilt
 // FIRST -- before container_init/engine_global_init allocate anything -- inside ckpt_restore_tree.
-int dd_restore(const char *rootfs, const char *dir) {
+int hl_restore(const char *rootfs, const char *dir) {
     g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
     return ckpt_restore_tree(rootfs, dir);
 }
 
-int dd_run(const char *rootfs, int argc, char *const argv[]) {
+int hl_run(const char *rootfs, int argc, char *const argv[]) {
     // Resume a previously checkpointed workspace instead of launching a program (the GUI sets this on
     // window reopen; the container config/env is otherwise identical to the original launch).
     const char *rdir = getenv("DDJIT_RESTORE_DIR");
-    if (rdir && rdir[0]) return dd_restore(rootfs, rdir);
+    if (rdir && rdir[0]) return hl_restore(rootfs, rdir);
     if (argc < 1 || !argv || !argv[0]) return 2;
     // persistent cross-process translated-code cache. Landed OPT-IN (DDJIT_PCACHE=1, same gating as
     // the x86 opt8 pcache) so the default correctness matrix stays byte-identical to the baseline; the
     // one-line flip to default-on (`getenv("DDJIT_NOPCACHE") == NULL`) is gated on a green full pcache-on
     // matrix soak (see plan). DDJIT_NOPCACHE=1 is the kill-switch and always wins. Read here (per
-    // dd_run, like linux_x86_64.c) so a fork-server cold runner honors the CLIENT's env.
+    // hl_run, like linux_x86_64.c) so a fork-server cold runner honors the CLIENT's env.
     g_pcache = getenv("DDJIT_PCACHE") != NULL && getenv("DDJIT_NOPCACHE") == NULL;
     g_coldprof = getenv("COLDPROF") != NULL;
     container_init(rootfs);
@@ -924,7 +924,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
         // (matches /proc/self/exe for a script exec).
     }
     // /proc/self/exe canonicalization now happens inside load_program (below), so it also covers the
-    // fork-server's parent preload path (which never calls dd_run) -- see #378. load_program re-resolves
+    // fork-server's parent preload path (which never calls hl_run) -- see #378. load_program re-resolves
     // argv[0] and sets g_exe_path to the canonical absolute path of the binary actually loaded, matching
     // /proc/self/exe for a script exec.
     struct loaded lm, li;
@@ -945,7 +945,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
 }
 
 // resident ddjitd fork-server (server/client/worker), SHARED with linux_x86_64.c through the
-// container_init/engine_global_init/load_program/run_loaded/dd_run seam above. aarch64 has no
+// container_init/engine_global_init/load_program/run_loaded/hl_run seam above. aarch64 has no
 // g_loadbase and its container model never chdir()s the engine into the rootfs (those knobs stay
 // default no-ops), but its load_elf applies per-segment W^X to the guest image (.text R+X, .rodata R;
 // the prewarm run's guest may mprotect more, e.g. musl RELRO) -- so the fork-server's pristine-image
@@ -1011,7 +1011,7 @@ int hl_entry(int argc, char **argv) {
             rootfs = argv[ai + 1];
             ai += 2;
         } else if (!strcmp(argv[ai], "--restore") && ai + 1 < argc) {
-            setenv("DDJIT_RESTORE_DIR", argv[ai + 1], 1); // dd_run() dispatches to dd_restore() (no <elf> arg)
+            setenv("DDJIT_RESTORE_DIR", argv[ai + 1], 1); // hl_run() dispatches to hl_restore() (no <elf> arg)
             ai += 2;
         } else if (!strcmp(argv[ai], "--hostname") && ai + 1 < argc) {
             strncpy(g_hostname, argv[ai + 1], 64);
@@ -1020,7 +1020,7 @@ int hl_entry(int argc, char **argv) {
             g_mem_max = parse_size(argv[ai + 1]);
             ai += 2;
         } else if (!strcmp(argv[ai], "--pids-max") && ai + 1 < argc) {
-            g_pids_max = dd_parse_id("--pids-max", argv[ai + 1]);
+            g_pids_max = hl_parse_id("--pids-max", argv[ai + 1]);
             ai += 2;
         } else if (!strcmp(argv[ai], "--publish") && ai + 1 < argc) {
             parse_publish(argv[ai + 1]);
@@ -1035,16 +1035,16 @@ int hl_entry(int argc, char **argv) {
             ai += 2;
             // private loopback ns
         } else if (!strcmp(argv[ai], "--uid") && ai + 1 < argc) {
-            g_uid = dd_parse_id("--uid", argv[ai + 1]);
+            g_uid = hl_parse_id("--uid", argv[ai + 1]);
             ai += 2;
             // USER ns uid
         } else if (!strcmp(argv[ai], "--gid") && ai + 1 < argc) {
-            g_gid = dd_parse_id("--gid", argv[ai + 1]);
+            g_gid = hl_parse_id("--gid", argv[ai + 1]);
             ai += 2;
         } else
             break;
     }
-    if (getenv("DDJIT_RESTORE_DIR")) return dd_run(rootfs, 0, NULL); // resume a checkpoint (no <elf> needed)
+    if (getenv("DDJIT_RESTORE_DIR")) return hl_run(rootfs, 0, NULL); // resume a checkpoint (no <elf> needed)
     if (ai >= argc) {
         fprintf(stderr,
                 "usage: %s [--rootfs DIR] [--hostname NAME] [--mem-max BYTES] [--pids-max N] [--publish H:C] "
@@ -1054,6 +1054,6 @@ int hl_entry(int argc, char **argv) {
                 argv[0], argv[0]);
         return 2;
     }
-    return dd_run(rootfs, argc - ai, argv + ai);
+    return hl_run(rootfs, argc - ai, argv + ai);
 }
 #endif

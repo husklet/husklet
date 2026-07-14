@@ -22,7 +22,7 @@ pub(crate) async fn build_prune() -> axum::Json<crate::api::BuildPruneReport> {
         }
     }
     // 2) the persistent JIT translated-code cache: one <binid>.pcache file per guest binary.
-    let dir = crate::util::dd_home().join("pcache");
+    let dir = crate::util::hl_home().join("pcache");
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for e in rd.filter_map(|e| e.ok()) {
             let sz = e

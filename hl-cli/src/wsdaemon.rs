@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 /// Per-workspace state directory `~/.dd/ws/<name>`.
 pub fn ws_dir(name: &str) -> PathBuf {
-    paths::dd_root().join("ws").join(sanitize(name))
+    paths::hl_root().join("ws").join(sanitize(name))
 }
 
 /// The workspace daemon's listen socket.

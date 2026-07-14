@@ -1,7 +1,7 @@
 //! Image discovery + reference resolution, thinned onto `dd-images`.
 //!
 //! The pure pipeline — scanning the store, sniffing each image's arch from binary magic, recovering env
-//! from an on-disk OCI config, and deduping by tag — lives in `dd_images` (runtime-agnostic). This module
+//! from an on-disk OCI config, and deduping by tag — lives in `hl_images` (runtime-agnostic). This module
 //! maps its plain [`hl_images::DiscoveredImage`] results onto the daemon's [`Image`] model and keeps the
 //! over-the-live-store resolver ([`find_image`]) that ranks the daemon's own `Image`s.
 use super::*;
@@ -11,7 +11,7 @@ use super::*;
 pub(crate) use hl_images::{ref_name, ref_repo};
 
 /// Discover `<images>/<name>/rootfs` dirs and map each onto the daemon's [`Image`]. The scan + arch
-/// detection + env recovery + tag-dedup all happen in `dd_images`; here we only translate the plain
+/// detection + env recovery + tag-dedup all happen in `hl_images`; here we only translate the plain
 /// [`hl_images::DiscoveredImage`] (runtime-agnostic arch, raw-JSON healthcheck) into an `Image`.
 pub(crate) fn discover_images(images_dir: &str) -> Vec<Image> {
     let mut imgs: Vec<Image> = hl_images::discover_images(images_dir)

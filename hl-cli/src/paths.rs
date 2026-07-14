@@ -18,13 +18,13 @@ pub fn home() -> PathBuf {
 }
 
 /// `~/.dd` — state root (images, volumes, state.json, run/).
-pub fn dd_root() -> PathBuf {
+pub fn hl_root() -> PathBuf {
     home().join(".dd")
 }
 
 /// `~/.dd/run` — runtime dir holding the socket.
 pub fn run_dir() -> PathBuf {
-    dd_root().join("run")
+    hl_root().join("run")
 }
 
 /// `~/.dd/run/docker.sock` — the daemon's listen socket (== `DDOCKERD_SOCK`).
@@ -34,7 +34,7 @@ pub fn socket() -> PathBuf {
 
 /// `~/.dd/images` — image rootfs dirs (== `DD_IMAGES`).
 pub fn images_dir() -> PathBuf {
-    dd_root().join("images")
+    hl_root().join("images")
 }
 
 /// `~/Library/Logs/dd` — daemon stdout/stderr logs.

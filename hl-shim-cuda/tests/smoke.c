@@ -1,11 +1,11 @@
-/* dd-shim-cuda dlopen smoke test — the CUDA analogue of dd-shim-gl's dlopen check.
+/* dd-shim-cuda dlopen smoke test — the CUDA analogue of hl-shim-gl's dlopen check.
  *
  * A plain C program (NOT linked against the shim) dlopen()s the built libcuda.so.1, resolves the
  * bring-up CUDA Driver API entry points by name, drives them, and asserts sane values. This proves the
  * cdylib is a valid drop-in `libcuda`: the symbols are exported with the right C ABI and return usable
  * results — a real CUDA app / libcudart resolving `cu*` the same way would load and initialize.
  *
- *   build+run:  cc tests/smoke.c -ldl -o /tmp/cuda_smoke && /tmp/cuda_smoke <path-to-libdd_shim_cuda.so>
+ *   build+run:  cc tests/smoke.c -ldl -o /tmp/cuda_smoke && /tmp/cuda_smoke <path-to-libhl_shim_cuda.so>
  */
 #include <dlfcn.h>
 #include <stdio.h>

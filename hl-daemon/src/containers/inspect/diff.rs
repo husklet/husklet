@@ -5,7 +5,7 @@ use super::super::*;
 /// Reclaim a container's private writable upper layer (its copy-on-write files + whiteouts). dd gives
 /// each container an UPPER over the read-only image rootfs, so `docker rm`/prune drops it just as docker
 /// drops the container's writable layer — the shared image (the lower) is never touched. Removes the whole
-/// `<dd_home>/containers/<id>` tree (the `upper` dir's parent). A no-op for darwin/flat-rootfs containers
+/// `<hl_home>/containers/<id>` tree (the `upper` dir's parent). A no-op for darwin/flat-rootfs containers
 /// (empty `upper`).
 /// Reclaim a container's private writable upper layer. Returns the I/O result so `docker rm` can fail
 /// (keeping state for retry) rather than silently orphaning the layer while reporting success. An empty
@@ -122,7 +122,7 @@ mod tests {
             static SEQ: AtomicU64 = AtomicU64::new(0);
             let n = SEQ.fetch_add(1, Ordering::Relaxed);
             let root = std::env::temp_dir().join(format!(
-                "dd_diff_test_{}_{}_{}",
+                "hl_diff_test_{}_{}_{}",
                 tag,
                 std::process::id(),
                 n

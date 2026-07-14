@@ -87,13 +87,13 @@ static int g_init_hostpid = 0;
 // self-healing across a crash -- no fragile running counter to leak on SIGKILL. A fresh segment per
 // container-init isolates sibling forkserver workers (each is its own container).
 #define DD_ACCT_SLOTS 1024
-struct dd_acct_slot {
+struct hl_acct_slot {
     _Atomic int pid;                // host pid owning this slot (0 = free)
     _Atomic int tasks;              // this process's live guest-task (thread) count
     _Atomic unsigned long long mem; // this process's charged anon bytes (memory.current aggregate)
 };
-static struct dd_acct_slot *g_acct;      // shared slot table (NULL if unavailable -> local fallback)
-static struct dd_acct_slot *g_acct_self; // this process's own slot (re-found after fork)
+static struct hl_acct_slot *g_acct;      // shared slot table (NULL if unavailable -> local fallback)
+static struct hl_acct_slot *g_acct_self; // this process's own slot (re-found after fork)
 static void acct_proc_leave(void);       // (defined below; atexit'd from acct_container_reset)
 // g_mem_charged INHERITED at fork: a child COW-inherits the parent's charge, so its memory.current
 // contribution must be only what IT allocates AFTER the fork -- else the parent's charge is counted twice
@@ -140,9 +140,9 @@ static void acct_claim_self(void) {
 // (Re)create the shared accounting table for a NEW container init and claim this process's slot. Called
 // from container_init (normal launch + cold forkserver) and the forkserver warm re-anchor point.
 static void acct_container_reset(void) {
-    size_t sz = sizeof(struct dd_acct_slot) * DD_ACCT_SLOTS;
+    size_t sz = sizeof(struct hl_acct_slot) * DD_ACCT_SLOTS;
     void *m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
-    g_acct = (m == MAP_FAILED) ? NULL : (struct dd_acct_slot *)m; // kernel zero-fills -> all slots free
+    g_acct = (m == MAP_FAILED) ? NULL : (struct hl_acct_slot *)m; // kernel zero-fills -> all slots free
     g_acct_self = NULL;
     acct_claim_self();
     static int reg = 0; // free our slot on a normal exit (fork children inherit this atexit registration)
@@ -747,8 +747,8 @@ static void parse_publish(const char *s) {
             fprintf(stderr, "dd: invalid DD_PUBLISH '%s': expected HOST:CONTAINER\n", s);
             exit(2);
         }
-        unsigned h = dd_parse_port_field("DD_PUBLISH host port", s, colon);
-        unsigned cc = dd_parse_port_field("DD_PUBLISH container port", colon + 1, comma);
+        unsigned h = hl_parse_port_field("DD_PUBLISH host port", s, colon);
+        unsigned cc = hl_parse_port_field("DD_PUBLISH container port", colon + 1, comma);
         g_portmap[g_nportmap].cport = (uint16_t)cc;
         g_portmap[g_nportmap].hport = (uint16_t)h;
         g_nportmap++;
@@ -871,7 +871,7 @@ static void parse_ulimits(const char *spec) {
 static void container_read_resource_env(void) {
     const char *c = getenv("DD_CPUS");
     if (c && c[0] && !g_cpu_max) {
-        int v = dd_parse_id("DD_CPUS", c);
+        int v = hl_parse_id("DD_CPUS", c);
         if (v > 0) g_cpu_max = v;
     }
     if (!g_rootfs_ro && getenv("DD_ROOTFS_RO")) g_rootfs_ro = 1;

@@ -38,7 +38,7 @@ const DD_DMABUF_GEN_MASK: u32 = 0x7fff;
 
 /// `modifier_hi` for a dd IOSurface buffer: the magic tag plus the allocation generation the host gave
 /// this surface (0 == unversioned; see [`hl_shim::transport::Surface::generation`]).
-fn dd_modifier_hi(generation: u32) -> u32 {
+fn hl_modifier_hi(generation: u32) -> u32 {
     DD_DMABUF_MOD_MAGIC | ((generation & DD_DMABUF_GEN_MASK) << DD_DMABUF_GEN_SHIFT)
 }
 
@@ -443,7 +443,7 @@ impl Wayland {
         // params.add(fd, plane=0, offset=0, stride, mod_hi=magic|generation, mod_lo=surface id). The
         // generation (modifier_hi bits 17..=31) is the engine's per-allocation stamp from the renderD128
         // alloc reply; the compositor rejects a stale reference whose id was recycled. 0 == unversioned.
-        self.wmsg(OBJ_PARAMS, 1, &[0, 0, surf.stride, dd_modifier_hi(surf.generation), surf.id]);
+        self.wmsg(OBJ_PARAMS, 1, &[0, 0, surf.stride, hl_modifier_hi(surf.generation), surf.id]);
         self.wflush_fd(surf.fd)?;
         self.wmsg(OBJ_PARAMS, 3, &[OBJ_WL_BUFFER, surf.width, surf.height, DRM_FMT_XRGB8888, 0]); // create_immed
         self.wmsg(OBJ_WL_SURFACE, 1, &[OBJ_WL_BUFFER, g.attach_x as u32, g.attach_y as u32]); // attach

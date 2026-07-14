@@ -6,7 +6,7 @@
 //! Two comparison modes, both live:
 //! * `full_frame_clear_*` drives an isolated `GlState` (unit-level) against the real gl_shim.c dump.
 //! * `full_frame_textured_triangle_*` is the flagship **black-box** test: it compiles the SAME GLES
-//!   workload against BOTH shims' `.so` (gl_shim.c's `libEGL.so.1` and dd-shim-gl's cdylib), runs each
+//!   workload against BOTH shims' `.so` (gl_shim.c's `libEGL.so.1` and hl-shim-gl's cdylib), runs each
 //!   with `DD_IR_DUMP`, and asserts the emitted IR byte-streams are identical.
 
 use std::path::{Path, PathBuf};
@@ -52,10 +52,10 @@ fn gl_shim_c_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../hl-jit-darwin/testdata/guests/gl_shim.c")
 }
 
-/// Locate dd-shim-gl's built cdylib (target/<profile>/libdd_shim_gl.so), next to the test binary.
-fn dd_shim_gl_so() -> Option<PathBuf> {
+/// Locate hl-shim-gl's built cdylib (target/<profile>/libhl_shim_gl.so), next to the test binary.
+fn hl_shim_gl_so() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?; // target/<profile>/deps/<test>
-    let so = exe.parent()?.parent()?.join("libdd_shim_gl.so");
+    let so = exe.parent()?.parent()?.join("libhl_shim_gl.so");
     so.exists().then_some(so)
 }
 
@@ -110,7 +110,7 @@ fn run_workload_against(shim_so: &Path, workload: &str, tag: &str) -> Option<Vec
     bytes
 }
 
-fn dd_shim_gl_clear_ir(w: u32, h: u32, color: [f32; 4]) -> Vec<u8> {
+fn hl_shim_gl_clear_ir(w: u32, h: u32, color: [f32; 4]) -> Vec<u8> {
     let mut s = GlState::default();
     s.surface_up(w, h);
     s.clear = color;
@@ -146,7 +146,7 @@ fn full_frame_clear_is_byte_identical_to_gl_shim_c() {
         None => return,
     };
     let _ = std::fs::remove_dir_all(&dir);
-    let rust_ir = dd_shim_gl_clear_ir(640, 480, [0.1, 0.2, 0.3, 1.0]);
+    let rust_ir = hl_shim_gl_clear_ir(640, 480, [0.1, 0.2, 0.3, 1.0]);
     match diff_ir(&c_ir, &rust_ir) {
         Ok(()) => eprintln!("[parity] PASS clear-frame: byte-identical ({} bytes)", c_ir.len()),
         Err(e) => panic!("clear-frame parity FAILED:\n{e}"),
@@ -167,7 +167,7 @@ fn full_frame_textured_triangle_is_byte_identical() {
             return;
         }
     };
-    let rust_so = match dd_shim_gl_so() {
+    let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => {
             eprintln!("[parity] SKIP textured-triangle: dd-shim-gl cdylib not found");
@@ -203,7 +203,7 @@ fn full_frame_multi_draw_replay_is_byte_identical() {
             return;
         }
     };
-    let rust_so = match dd_shim_gl_so() {
+    let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => {
             eprintln!("[parity] SKIP multi-draw: dd-shim-gl cdylib not found");
@@ -238,7 +238,7 @@ fn full_frame_wl_egl_window_is_byte_identical() {
             return;
         }
     };
-    let rust_so = match dd_shim_gl_so() {
+    let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => {
             eprintln!("[parity] SKIP wl_egl_window: dd-shim-gl cdylib not found");
@@ -275,7 +275,7 @@ fn full_frame_fbo_render_to_texture_is_byte_identical() {
             return;
         }
     };
-    let rust_so = match dd_shim_gl_so() {
+    let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => return,
     };
@@ -397,7 +397,7 @@ fn full_frame_mat3_uniform_is_byte_identical() {
             return;
         }
     };
-    let rust_so = match dd_shim_gl_so() {
+    let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => return,
     };
@@ -431,7 +431,7 @@ fn full_frame_texstorage_and_mapbuffer_is_byte_identical() {
             return;
         }
     };
-    let rust_so = match dd_shim_gl_so() {
+    let rust_so = match hl_shim_gl_so() {
         Some(s) => s,
         None => {
             eprintln!("[parity] SKIP texstorage/mapbuffer: dd-shim-gl cdylib not found");

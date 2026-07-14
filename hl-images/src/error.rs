@@ -1,5 +1,5 @@
 //! The typed error for `dd-images`, replacing the crate's former stringly-typed `Result<_, String>`
-//! public surface (mirrors [`hl_jit::Error`](../../dd_jit/enum.Error.html)).
+//! public surface (mirrors [`hl_jit::Error`](../../hl_jit/enum.Error.html)).
 //!
 //! Every variant except [`Error::Io`] simply CARRIES the message string a call site produced, and
 //! [`Display`](std::fmt::Display) writes that string back VERBATIM. This is deliberate: the daemon

@@ -72,7 +72,7 @@ pub(crate) struct Container {
     pub(crate) rootfs: String,
     // Per-container copy-on-write UPPER layer: a private writable dir overlaid on the read-only image
     // `rootfs` (the lower). The guest's writes/creates land here and deletions become whiteouts, so a
-    // container never mutates the shared image. Allocated under `<dd_home>/containers/<id>/upper` at
+    // container never mutates the shared image. Allocated under `<hl_home>/containers/<id>/upper` at
     // create (linux guests only; darwin uses the native jail) and reclaimed on `docker rm`/prune. Empty
     // for darwin containers and for state predating overlay, in which case the flat `rootfs` is used.
     #[serde(default)]

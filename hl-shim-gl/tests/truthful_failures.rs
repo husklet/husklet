@@ -126,7 +126,7 @@ fn strict_child_aborts_on_stub() {
 }
 
 #[test]
-fn dd_shim_strict_aborts_on_first_stub_call() {
+fn hl_shim_strict_aborts_on_first_stub_call() {
     let exe = std::env::current_exe().expect("current_exe");
     let status = std::process::Command::new(exe)
         .args(["--exact", "strict_child_aborts_on_stub", "--nocapture"])

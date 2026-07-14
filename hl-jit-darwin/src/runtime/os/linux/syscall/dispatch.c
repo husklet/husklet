@@ -399,7 +399,7 @@ static void mq_maybe_free(int qi) {
 // CPU topology: the number of CPUs to advertise to the guest (the host's online count, capped). glibc
 // and tcmalloc enumerate CPUs via sched_getaffinity and /sys/devices/system/cpu/{online,possible};
 // reporting only CPU 0 makes tcmalloc's NumPossibleCPUs() assert (`cpus.has_value()`) and mongod abort.
-static int dd_online_cpus(void) {
+static int hl_online_cpus(void) {
     // container_online_cpus() (state.c) applies the docker --cpus cap (ceil(NanoCpus/1e9)) on top of the
     // host online count, so sched_getaffinity / the cpu-topology sysfs advertise the container's allotment.
     return container_online_cpus();
@@ -408,7 +408,7 @@ static int dd_online_cpus(void) {
 // Build the "all online CPUs" bitmask into the caller's buffer (CPU i -> bit i, little-endian bytes).
 static void cpu_online_mask(uint8_t *m, size_t n) {
     memset(m, 0, n);
-    int nc = dd_online_cpus();
+    int nc = hl_online_cpus();
     for (int cpu = 0; cpu < nc; cpu++)
         if ((size_t)(cpu / 8) < n) m[cpu / 8] |= (uint8_t)(1u << (cpu % 8));
 }
@@ -455,7 +455,7 @@ static int synth_str_fd(const char *s) {
 // Render the kernel's CPU-range format ("0" for a single CPU, else "0-N\n") for the cpu/{online,
 // possible,present} sysfs files that glibc __get_nprocs / tcmalloc NumPossibleCPUs parse.
 static void cpu_range_str(char *buf, size_t n) {
-    int nc = dd_online_cpus();
+    int nc = hl_online_cpus();
     if (nc <= 1)
         snprintf(buf, n, "0\n");
     else

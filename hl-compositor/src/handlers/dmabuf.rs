@@ -124,7 +124,7 @@ pub(crate) fn modifier_generation(modifier: u64) -> u32 {
 
 /// Decode a DRM format modifier into `(iosurface_id, gpu_render)` when it carries the dd IOSurface
 /// tag, else `None` (a modifier we cannot back — e.g. a genuine `LINEAR` allocation).
-pub(crate) fn dd_iosurface_from_modifier(modifier: u64) -> Option<(u32, bool)> {
+pub(crate) fn hl_iosurface_from_modifier(modifier: u64) -> Option<(u32, bool)> {
     let hi = (modifier >> 32) as u32;
     let lo = modifier as u32;
     if hi & 0xffff == DD_DMABUF_MOD_MAGIC {
@@ -145,7 +145,7 @@ impl DmabufHandler for DdState {
     /// as the `wl_buffer`'s user-data, so [`get_dmabuf`] recovers it on commit — no side table.
     fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
         let modifier: u64 = dmabuf.format().modifier.into();
-        match dd_iosurface_from_modifier(modifier) {
+        match hl_iosurface_from_modifier(modifier) {
             Some((iosurface_id, _gpu_render)) => {
                 // Accelerated-import readiness gate (supersedes the interim warn-only check). A dd-tagged
                 // dmabuf means the client expects the host GPU to render/present into a dd IOSurface, so
@@ -278,7 +278,7 @@ impl DdState {
     ) -> Option<SurfaceBuffer> {
         let dmabuf = get_dmabuf(buffer).ok()?;
         let modifier: u64 = dmabuf.format().modifier.into();
-        let (iosurface_id, gpu_render) = dd_iosurface_from_modifier(modifier)?;
+        let (iosurface_id, gpu_render) = hl_iosurface_from_modifier(modifier)?;
         let tex_w = dmabuf.width() as i32;
         let tex_h = dmabuf.height() as i32;
         if tex_w <= 0 || tex_h <= 0 {
@@ -326,17 +326,17 @@ const DD_MAIN_DEVICE: DmabufDeviceId = DmabufDeviceId::from_linux_dev_t((226u64 
 /// dma-bufs are intentionally absent because the macOS importer only resolves dd IOSurface references. GLES clients
 /// (glmark2/es2tri) read this list off the v3 modifier events; v4+ clients read the same set from the
 /// feedback format-table's main tranche.
-fn dd_dmabuf_formats() -> [Format; 2] {
+fn hl_dmabuf_formats() -> [Format; 2] {
     let magic = Modifier::from((DD_DMABUF_MOD_MAGIC as u64) << 32);
     DMABUF_IMPORT_CAPS.map(|caps| Format { code: caps.format, modifier: magic })
 }
 
 /// Build the default [`DmabufFeedback`] for the v4/v5 global: a single main tranche of
-/// [`dd_dmabuf_formats`] targeting [`DD_MAIN_DEVICE`]. Returns `Err` if the format-table backing file
+/// [`hl_dmabuf_formats`] targeting [`DD_MAIN_DEVICE`]. Returns `Err` if the format-table backing file
 /// cannot be created — on macOS this is the `PSHMNAMLEN` failure the offline-vendored smithay patch
 /// fixes (`vendor/smithay-0.7.0/src/utils/sealed_file.rs`); the caller falls back to a v3 global.
 pub(crate) fn build_default_feedback() -> std::io::Result<DmabufFeedback> {
-    DmabufFeedbackBuilder::new(DD_MAIN_DEVICE, dd_dmabuf_formats()).build()
+    DmabufFeedbackBuilder::new(DD_MAIN_DEVICE, hl_dmabuf_formats()).build()
 }
 
 /// Stand up the `zwp_linux_dmabuf_v1` global and return the [`DmabufState`] delegate. Called once from
@@ -373,7 +373,7 @@ pub(crate) fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
                  ({e}); falling back to the v3 modifier-list global (no accelerated-Chromium \
                  render-node feedback)"
             );
-            let _global = state.create_global::<DdState>(dh, dd_dmabuf_formats());
+            let _global = state.create_global::<DdState>(dh, hl_dmabuf_formats());
         }
     }
     state

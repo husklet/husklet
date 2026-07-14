@@ -114,7 +114,7 @@
 #endif
 
 // The seccomp classic-BPF instruction, byte-identical to the guest's `struct sock_filter`.
-struct dd_sock_filter {
+struct hl_sock_filter {
     uint16_t code;
     uint8_t jt;
     uint8_t jf;
@@ -124,7 +124,7 @@ struct dd_sock_filter {
 // The read-only data buffer the cBPF program is run against, byte-identical to the kernel's
 // `struct seccomp_data`: nr (native syscall number), arch (AUDIT_ARCH_*), the userspace IP, and the six
 // syscall arguments -- all little-endian on both guest ISAs, so BPF_LD|W|ABS reads a native u32/u16/u8.
-struct dd_seccomp_data {
+struct hl_seccomp_data {
     int32_t nr;
     uint32_t arch;
     uint64_t instruction_pointer;
@@ -132,10 +132,10 @@ struct dd_seccomp_data {
 };
 
 // One installed program on a thread's stacked filter chain (newest first).
-struct dd_bpf_filter {
-    struct dd_sock_filter *insns;
+struct hl_bpf_filter {
+    struct hl_sock_filter *insns;
     uint16_t len;
-    struct dd_bpf_filter *prev;
+    struct hl_bpf_filter *prev;
 };
 
 // 0 = no seccomp anywhere (never installed); flips to 1 on the first install and never resets. A plain
@@ -145,12 +145,12 @@ static volatile int g_seccomp_active;
 // Per-thread mode: 0 = none, 1 = SECCOMP_MODE_STRICT, 2 = SECCOMP_MODE_FILTER. Sticky (a thread cannot
 // leave seccomp). Inherited across fork (COW) and preserved across dd's in-process execve.
 static __thread unsigned char t_seccomp_mode;
-static __thread struct dd_bpf_filter *t_seccomp_filters; // stacked, newest first
+static __thread struct hl_bpf_filter *t_seccomp_filters; // stacked, newest first
 
 // Run one cBPF program against `sd`, returning its 32-bit action word. A malformed/out-of-bounds memory
 // access aborts the program with 0 (== SECCOMP_RET_KILL_THREAD), exactly as classic BPF (sk_run_filter)
 // returns 0 on an out-of-range load -- the conservative "deny" that a broken filter deserves.
-static uint32_t dd_bpf_run(const struct dd_sock_filter *f, uint16_t flen, const struct dd_seccomp_data *sd) {
+static uint32_t hl_bpf_run(const struct hl_sock_filter *f, uint16_t flen, const struct hl_seccomp_data *sd) {
     const uint8_t *pkt = (const uint8_t *)sd;
     const uint32_t plen = (uint32_t)sizeof(*sd);
     uint32_t A = 0, X = 0;
@@ -160,7 +160,7 @@ static uint32_t dd_bpf_run(const struct dd_sock_filter *f, uint16_t flen, const 
     // cBPF jumps are forward-only unsigned offsets, so a well-formed program halts within flen steps; the
     // extra guard bounds any pathological (yet in-range) case at the ISA maximum.
     for (uint32_t steps = 0; pc < flen && steps <= DD_BPF_MAXINSNS; steps++, pc++) {
-        const struct dd_sock_filter *in = &f[pc];
+        const struct hl_sock_filter *in = &f[pc];
         uint16_t code = in->code;
         uint32_t k = in->k;
         switch (DD_BPF_CLASS(code)) {
@@ -314,7 +314,7 @@ static uint32_t dd_bpf_run(const struct dd_sock_filter *f, uint16_t flen, const 
 // Precedence rank of a seccomp action -- SMALLER = higher precedence (more restrictive wins), matching the
 // kernel's documented order KILL_PROCESS > KILL_THREAD > TRAP > ERRNO > USER_NOTIF > TRACE > LOG > ALLOW.
 // An unrecognized action is treated as KILL_THREAD (the kernel's default for an unknown action word).
-static int dd_seccomp_prec(uint32_t action) {
+static int hl_seccomp_prec(uint32_t action) {
     switch (action & DD_SECCOMP_RET_ACTION_FULL) {
     case DD_SECCOMP_RET_KILL_PROCESS:
         return 0;
@@ -338,12 +338,12 @@ static int dd_seccomp_prec(uint32_t action) {
 }
 
 // Run every installed filter and return the highest-precedence (most restrictive) action word.
-static uint32_t dd_seccomp_eval(const struct dd_seccomp_data *sd) {
+static uint32_t hl_seccomp_eval(const struct hl_seccomp_data *sd) {
     uint32_t best = DD_SECCOMP_RET_ALLOW;
     int best_prec = 7;
-    for (struct dd_bpf_filter *f = t_seccomp_filters; f; f = f->prev) {
-        uint32_t r = dd_bpf_run(f->insns, f->len, sd);
-        int p = dd_seccomp_prec(r);
+    for (struct hl_bpf_filter *f = t_seccomp_filters; f; f = f->prev) {
+        uint32_t r = hl_bpf_run(f->insns, f->len, sd);
+        int p = hl_seccomp_prec(r);
         if (p < best_prec) {
             best_prec = p;
             best = r;
@@ -358,7 +358,7 @@ static uint32_t dd_seccomp_eval(const struct dd_seccomp_data *sd) {
 // SECCOMP_MODE_STRICT violation reports SIGKILL, matching the kernel. Mirrors signal.c's fatal-default
 // path: run_guest unwinds on c->exited and run_loaded returns c->exit_code (128+signo), so the parent's
 // wait4/waitid reconstructs WIFSIGNALED/WTERMSIG.
-static void dd_seccomp_kill(struct cpu *c, int signo) {
+static void hl_seccomp_kill(struct cpu *c, int signo) {
     sig_diag_raise_default(c, signo);
     int core = sig_coredumps(signo) && svc_core_rlimit_cur() > 0;
     sigexit_record(signo, core);
@@ -369,17 +369,17 @@ static void dd_seccomp_kill(struct cpu *c, int signo) {
 // The syscall-entry gate. Returns 1 if the syscall was intercepted (its result is already set in G_RET, a
 // signal was queued, or the process was killed -- the dispatcher must NOT service it), 0 to allow it. Only
 // reached when g_seccomp_active (see seccomp_gate below), so the no-seccomp case never runs any of this.
-static int dd_seccomp_apply(struct cpu *c) {
+static int hl_seccomp_apply(struct cpu *c) {
     unsigned mode = t_seccomp_mode;
     if (mode == 1) { // SECCOMP_MODE_STRICT: only read/write/exit/rt_sigreturn (canonical aarch64 numbers)
         uint64_t nr = G_NR(c);
         if (nr == 63 /*read*/ || nr == 64 /*write*/ || nr == 93 /*exit*/ || nr == 139 /*rt_sigreturn*/) return 0;
-        dd_seccomp_kill(c, 9 /*SIGKILL -- strict-mode violations are SIGKILL, not SIGSYS*/);
+        hl_seccomp_kill(c, 9 /*SIGKILL -- strict-mode violations are SIGKILL, not SIGSYS*/);
         return 1;
     }
     if (mode != 2) return 0; // no filter on this thread
 
-    struct dd_seccomp_data sd;
+    struct hl_seccomp_data sd;
     sd.nr = (int32_t)G_SECCOMP_NR(c); // RAW native syscall number the guest issued (pre-normalization)
     sd.arch = G_SECCOMP_ARCH;
     sd.instruction_pointer = G_PC(c);
@@ -390,7 +390,7 @@ static int dd_seccomp_apply(struct cpu *c) {
     sd.args[4] = G_A4(c);
     sd.args[5] = G_A5(c);
 
-    uint32_t action = dd_seccomp_eval(&sd);
+    uint32_t action = hl_seccomp_eval(&sd);
     switch (action & DD_SECCOMP_RET_ACTION_FULL) {
     case DD_SECCOMP_RET_ALLOW:
         return 0;
@@ -423,17 +423,17 @@ static int dd_seccomp_apply(struct cpu *c) {
     case DD_SECCOMP_RET_KILL_PROCESS:
     case DD_SECCOMP_RET_KILL_THREAD: // modeled as process death (faithful for a single-threaded guest)
     default:
-        dd_seccomp_kill(c, 31 /*SIGSYS -- a filter KILL action reports WTERMSIG=SIGSYS*/);
+        hl_seccomp_kill(c, 31 /*SIGSYS -- a filter KILL action reports WTERMSIG=SIGSYS*/);
         return 1;
     }
 }
 
 // Fast inline gate called from service() on EVERY syscall. One predicted-not-taken global load in the
-// common (no-seccomp) case; the real work is out-of-line in dd_seccomp_apply.
+// common (no-seccomp) case; the real work is out-of-line in hl_seccomp_apply.
 static inline int seccomp_gate(struct cpu *c) {
     if (__builtin_expect(!g_seccomp_active, 1)) return 0;
     if (__builtin_expect(t_seccomp_mode == 0, 1)) return 0;
-    return dd_seccomp_apply(c);
+    return hl_seccomp_apply(c);
 }
 
 // ---- install paths (called from the seccomp(2) and prctl(PR_SET_SECCOMP) handlers) ----
@@ -468,12 +468,12 @@ static long seccomp_install_filter(uint64_t fprog_ptr, uint32_t flags) {
     memcpy(&insn_ptr, (const void *)(uintptr_t)(fprog_ptr + 8), sizeof insn_ptr);
     if (len == 0 || len > DD_BPF_MAXINSNS) return -EINVAL;
     if (!insn_ptr) return -EFAULT;
-    size_t bytes = (size_t)len * sizeof(struct dd_sock_filter);
+    size_t bytes = (size_t)len * sizeof(struct hl_sock_filter);
     if (gna_hit(insn_ptr, bytes)) return -EFAULT;
 
-    struct dd_bpf_filter *node = (struct dd_bpf_filter *)malloc(sizeof *node);
+    struct hl_bpf_filter *node = (struct hl_bpf_filter *)malloc(sizeof *node);
     if (!node) return -ENOMEM;
-    node->insns = (struct dd_sock_filter *)malloc(bytes);
+    node->insns = (struct hl_sock_filter *)malloc(bytes);
     if (!node->insns) {
         free(node);
         return -ENOMEM;

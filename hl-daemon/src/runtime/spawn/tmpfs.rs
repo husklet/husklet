@@ -10,7 +10,7 @@ pub(crate) fn tmpfs_hostdir(cid: &str, target: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
-    crate::util::dd_home()
+    crate::util::hl_home()
         .join("containers")
         .join(cid)
         .join("tmpfs")

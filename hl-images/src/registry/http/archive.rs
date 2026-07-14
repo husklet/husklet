@@ -151,7 +151,7 @@ mod tests {
             static SEQ: AtomicU64 = AtomicU64::new(0);
             let n = SEQ.fetch_add(1, Ordering::Relaxed);
             let p = std::env::temp_dir()
-                .join(format!("dd_archive_test_{}_{}_{}", tag, std::process::id(), n));
+                .join(format!("hl_archive_test_{}_{}_{}", tag, std::process::id(), n));
             let _ = std::fs::remove_dir_all(&p);
             std::fs::create_dir_all(&p).unwrap();
             Tmp(p)

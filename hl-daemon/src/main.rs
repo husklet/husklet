@@ -65,9 +65,9 @@ async fn main() {
     let images_dir = std::env::var("DD_IMAGES").unwrap_or_else(|_| "./images".into());
     let sock = std::env::var("DDOCKERD_SOCK").unwrap_or_else(|_| "./dd.sock".into());
     let state_path = std::env::var("DD_STATE")
-        .unwrap_or_else(|_| dd_home().join("state.json").to_string_lossy().into_owned());
+        .unwrap_or_else(|_| hl_home().join("state.json").to_string_lossy().into_owned());
     let volumes_dir = std::env::var("DD_VOLUMES")
-        .unwrap_or_else(|_| dd_home().join("volumes").to_string_lossy().into_owned());
+        .unwrap_or_else(|_| hl_home().join("volumes").to_string_lossy().into_owned());
     // Only unlink the configured socket path when it is actually a (stale) unix socket — an env-only
     // override must NOT blindly delete an arbitrary regular file/dir a misconfigured DDOCKERD_SOCK points
     // at. A non-socket is left in place (the bind below then fails loudly instead of eating user data).

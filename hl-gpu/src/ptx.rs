@@ -1870,7 +1870,7 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
     }
     // --- cooperative-loop bookkeeping: a workgroup counter of retired threads (see the loop below) ---
     if coop {
-        s.push_str("var<workgroup> dd_retired_count: atomic<u32>;\n");
+        s.push_str("var<workgroup> hl_retired_count: atomic<u32>;\n");
     }
     s.push('\n');
 
@@ -1901,16 +1901,16 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
     // dependent control flow it is trivially uniform (naga-legal), and because every thread runs the loop
     // in iteration-lockstep it is reached by the whole workgroup each pass — an over-approximation of the
     // program's real `bar.sync` points (which is always safe: extra synchronization can never introduce a
-    // race). A thread that hits `ret` increments `dd_retired_count` and idles (its `switch` is skipped)
+    // race). A thread that hits `ret` increments `hl_retired_count` and idles (its `switch` is skipped)
     // but keeps hitting the barrier, so no thread is ever left waiting on a retired peer; the whole block
     // breaks together the iteration the last thread retires. A real `bar.sync` is thus a plain pc-advance.
     if coop {
-        s.push_str("    if (lidx == 0u) { atomicStore(&dd_retired_count, 0u); }\n");
+        s.push_str("    if (lidx == 0u) { atomicStore(&hl_retired_count, 0u); }\n");
         s.push_str("    workgroupBarrier();\n");
         s.push_str("    var pc: i32 = 0;\n");
-        s.push_str("    var dd_retired: bool = false;\n");
+        s.push_str("    var hl_retired: bool = false;\n");
         s.push_str("    loop {\n");
-        s.push_str("        if (!dd_retired) {\n");
+        s.push_str("        if (!hl_retired) {\n");
         s.push_str("            switch pc {\n");
     } else {
         // Termination sets `pc = -1`; the loop-top guard is the only real loop `break`.
@@ -1922,7 +1922,7 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
     let indent = if coop { "                " } else { "            " };
     // The statement a `ret` (or falling off the end) lowers to.
     let retire = if coop {
-        "atomicAdd(&dd_retired_count, 1u); dd_retired = true; pc = -1;"
+        "atomicAdd(&hl_retired_count, 1u); hl_retired = true; pc = -1;"
     } else {
         "pc = -1;"
     };
@@ -2092,9 +2092,9 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
     s.push_str(&format!("{indent}default: {{ {retire} }}\n"));
     if coop {
         s.push_str("            }\n"); // close switch
-        s.push_str("        }\n"); // close `if (!dd_retired)`
+        s.push_str("        }\n"); // close `if (!hl_retired)`
         s.push_str("        workgroupBarrier();\n");
-        s.push_str(&format!("        if (atomicLoad(&dd_retired_count) == {total_threads}u) {{ break; }}\n"));
+        s.push_str(&format!("        if (atomicLoad(&hl_retired_count) == {total_threads}u) {{ break; }}\n"));
         s.push_str("    }\n}\n"); // close loop + fn
     } else {
         s.push_str("        }\n    }\n}\n"); // close switch + loop + fn
@@ -2426,7 +2426,7 @@ mod tests {
         assert!(wgsl.contains("region0: array<u32>;"), "{wgsl}");
         assert!(wgsl.contains("atomicAdd(&region1["), "{wgsl}");
         // the cooperative retire-counter bookkeeping is present.
-        assert!(wgsl.contains("dd_retired_count"), "{wgsl}");
+        assert!(wgsl.contains("hl_retired_count"), "{wgsl}");
         assert!(wgsl.contains("local_invocation_index"), "{wgsl}");
     }
 
@@ -2438,7 +2438,7 @@ mod tests {
         let wgsl = kernel_to_wgsl(&prog).unwrap();
         assert!(!wgsl.contains("workgroupBarrier"), "elementwise must not synchronize: {wgsl}");
         assert!(!wgsl.contains("var<workgroup>"), "elementwise has no shared memory: {wgsl}");
-        assert!(!wgsl.contains("dd_retired_count"), "elementwise has no coop bookkeeping: {wgsl}");
+        assert!(!wgsl.contains("hl_retired_count"), "elementwise has no coop bookkeeping: {wgsl}");
         assert!(wgsl.contains("if (pc < 0) { break; }"), "keeps the simple loop guard: {wgsl}");
     }
 

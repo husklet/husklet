@@ -28,7 +28,7 @@ static inline uint64_t repstr_g2h(uint64_t a) {
     return (g_nonpie_lo && a >= g_nonpie_lo && a < g_nonpie_hi) ? a + g_nonpie_bias : a;
 }
 
-static void dd_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w, int df) {
+static void hl_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w, int df) {
     g_repmovs_n++;
     dst = (uint8_t *)repstr_g2h((uint64_t)dst);
     src = (const uint8_t *)repstr_g2h((uint64_t)src);
@@ -77,7 +77,7 @@ static void dd_rep_movs(uint8_t *dst, const uint8_t *src, uint64_t nbytes, int w
 }
 
 // Host helper for `rep stos`: fill `n` elements of width `w` with `val` (AL/AX/EAX/RAX).
-static void dd_rep_stos(uint8_t *dst, uint64_t val, uint64_t n, int w, int df) {
+static void hl_rep_stos(uint8_t *dst, uint64_t val, uint64_t n, int w, int df) {
     g_repstos_n++;
     dst = (uint8_t *)repstr_g2h((uint64_t)dst);
     if (df) { // DF=1 backward: dst points at the highest element; write val at dst, dst-w, dst-2w, ...
@@ -141,9 +141,9 @@ static void emit_rep_string(int movs, int w, int shift, int df_static) {
         e_movconst(4, (uint64_t)(df_static == DF_BWD)); // x4 = statically-known direction
     if (movs) {
         if (shift) e_lsl_i(2, 2, shift, 1); // x2 = nbytes = count << shift
-        emit_host_ptr(16, (uint64_t)(uintptr_t)&dd_rep_movs, PRELOC_HOSTGLOBAL);
+        emit_host_ptr(16, (uint64_t)(uintptr_t)&hl_rep_movs, PRELOC_HOSTGLOBAL);
     } else {
-        emit_host_ptr(16, (uint64_t)(uintptr_t)&dd_rep_stos, PRELOC_HOSTGLOBAL);
+        emit_host_ptr(16, (uint64_t)(uintptr_t)&hl_rep_stos, PRELOC_HOSTGLOBAL);
     }
     emit32(0xD63F0000u | (16 << 5)); // blr x16
     // membank still holds the pre-call rcx/rdi/rsi (the helper takes its args by value):

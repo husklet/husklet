@@ -10,7 +10,7 @@
 //     PCs (the block-map keys) and any guest address baked into host code are stable, and arena-internal
 //     absolute pointers (g_map host/body, g_pend slots) + PC-relative chaining are valid as-is on reload.
 //   * The host addresses baked into emitted blocks (block_return, &g_ibtc, &g_fast_count, &g_pending,
-//     &g_sig_inline_count, &g_yield_inline_count, &dd_rep_movs/stos, ...) ALL live in this one PIE binary,
+//     &g_sig_inline_count, &g_yield_inline_count, &hl_rep_movs/stos, ...) ALL live in this one PIE binary,
 //     which dyld slides as a unit; each baked site is emitted as a fixed 4-insn movz/movk slot and recorded
 //     in g_reloc, and rewritten on load by the single image slide. if the g_reloc table ever fills we
 //     poison the arena (g_pcache_poison) so save() refuses -- a persisted arena has EVERY baked site

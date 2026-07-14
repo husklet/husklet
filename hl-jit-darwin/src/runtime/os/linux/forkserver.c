@@ -11,7 +11,7 @@
 // HISTORY: this began as the x86-only translate/x86_64/forkserver.c (the W3D research diff).
 // ported it to aarch64 by hoisting it here, parameterized by the SAME per-target seam the x86 W3D
 // refactor already carved: container_init() / engine_global_init() / load_program() / run_loaded() /
-// dd_run(), all defined by the including target TU before this file. ONE implementation, two engines.
+// hl_run(), all defined by the including target TU before this file. ONE implementation, two engines.
 //
 // PROTOCOL v2 (AF_UNIX SOCK_STREAM; v2 extends the W3D research protocol with env/cwd + signal
 // propagation so a forkserver launch is INDISTINGUISHABLE from a cold spawn):
@@ -48,7 +48,7 @@
 // fork-child latch (g_pcache_forked) before running -- its COW arena is the parent's prewarm mix, and
 // persisting it under the request binary's identity would poison the cache. A guest execve inside the
 // runner re-keys + lifts the bar via pcache_exec_reload (aarch64), exactly like any other fork child.
-// The resident PARENT never calls pcache_save (prewarm uses run_loaded directly, not dd_run).
+// The resident PARENT never calls pcache_save (prewarm uses run_loaded directly, not hl_run).
 //
 // CONFIG MODEL: engine-level env (JT/PROF/DDJIT_*/NODUALMAP...) and the container rootfs are SERVER
 // launch config, read once at --server startup. Guest-visible env + the per-request container env the
@@ -322,9 +322,9 @@ static void ddjitd_runner(int conn, int *fds, int nfd, int argc, char **argv, ch
     // A PREWARMED arena bars the persistent cache in a cold runner: pcache_load() restores over the
     // arena from offset 0 WITHOUT clearing the prewarm block map (stale entries would point into the
     // clobbered bytes), and the pcache fixed-VA image base (PC_IMG_BASE) is already occupied by the
-    // prewarm image. DDJIT_NOPCACHE is the engine's own kill-switch and always wins inside dd_run.
+    // prewarm image. DDJIT_NOPCACHE is the engine's own kill-switch and always wins inside hl_run.
     if (g_warm_ready) setenv("DDJIT_NOPCACHE", "1", 1);
-    _exit(dd_run(g_srv_rootfs[0] ? g_srv_rootfs : NULL, argc, argv));
+    _exit(hl_run(g_srv_rootfs[0] ? g_srv_rootfs : NULL, argc, argv));
 }
 
 // ---- server ----

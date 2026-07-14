@@ -13,11 +13,11 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-/// The deployed cdylib next to the test binary's profile dir (`target/<profile>/libdd_shim_cuda.{so,dylib}`).
+/// The deployed cdylib next to the test binary's profile dir (`target/<profile>/libhl_shim_cuda.{so,dylib}`).
 fn cdylib() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?; // target/<profile>/deps/<test>-<hash>
     let profile = exe.parent()?.parent()?; // target/<profile>
-    for name in ["libdd_shim_cuda.so", "libdd_shim_cuda.dylib"] {
+    for name in ["libhl_shim_cuda.so", "libhl_shim_cuda.dylib"] {
         let p = profile.join(name);
         if p.exists() {
             return Some(p);

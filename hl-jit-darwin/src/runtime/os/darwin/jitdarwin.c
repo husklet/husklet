@@ -395,11 +395,11 @@ static void run_guest(void) {
     }
 }
 
-// The container run entry -- also the dd_run() the shared `--configfd` bridge dispatches to. Loads the
+// The container run entry -- also the hl_run() the shared `--configfd` bridge dispatches to. Loads the
 // Mach-O guest at argv[0] and runs it under the JIT (native macOS code, no VM). `rootfs`, when set, becomes
 // the jail root the BSD syscall layer resolves guest paths against; a bare launch passes NULL. Single-shot
-// per process. Non-static so os/hl_configfd.c's forward-declared dd_run() resolves to this definition.
-int dd_run(const char *rootfs, int argc, char *const argv[]) {
+// per process. Non-static so os/hl_configfd.c's forward-declared hl_run() resolves to this definition.
+int hl_run(const char *rootfs, int argc, char *const argv[]) {
     if (rootfs && rootfs[0]) g_rootfs = rootfs;
     if (argc < 1) {
         fprintf(stderr, "dd: no guest binary to run\n");
@@ -454,7 +454,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
 }
 
 // `--configfd` launch bridge (read the serialized hl_config, re-hydrate DD_*/DDJIT_* env, dispatch to
-// the dd_run() above). Included once here so this TU gets its own copy referencing this engine's dd_run.
+// the hl_run() above). Included once here so this TU gets its own copy referencing this engine's hl_run.
 #include "../hl_configfd.c"
 
 // The darwinjail entry point. Named `hl_entry` so the runtime can be linked as a library and launched
@@ -490,5 +490,5 @@ int hl_entry(int argc, char **argv) {
         fprintf(stderr, "usage: %s [--rootfs DIR] [-q] <mach-o>\n", argv[0]);
         return 2;
     }
-    return dd_run(g_rootfs, argc - ai, argv + ai);
+    return hl_run(g_rootfs, argc - ai, argv + ai);
 }

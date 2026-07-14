@@ -85,16 +85,16 @@
 #include "../engine/dispatch.c"              // SHARED engine: run_guest loop (x86 drives it via dispatch_hooks.h;
                                              // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
 #include "../translate/x86_64/elf.c"         // x86 ELF loader + stack + fault handlers (per-arch: machine/platform)
-#include "../os/hl_configfd.c"            // `--configfd` launch bridge -> re-hydrate DD_*/DDJIT_* env -> dd_run()
+#include "../os/hl_configfd.c"            // `--configfd` launch bridge -> re-hydrate DD_*/DDJIT_* env -> hl_run()
 
 // ---- entry + main ----
 // ---------------- entry ----------------
-// W3D fork-server refactor: the original dd_run inlined (1) container init, (2) engine init
+// W3D fork-server refactor: the original hl_run inlined (1) container init, (2) engine init
 // (pthread key + MAP_JIT arena + signal handlers + trace env), and (3) per-launch load+run. The
 // resident ddjitd parent must pay (1)+(2) ONCE and share them COW with every forked worker, so
 // those two phases are factored into container_init()/engine_global_init(). engine_global_init()
 // is idempotent (g_engine_inited) so the standalone path is byte-for-byte unchanged: standalone
-// dd_run() composes container_init -> engine_global_init -> load_program -> run_loaded in the
+// hl_run() composes container_init -> engine_global_init -> load_program -> run_loaded in the
 // exact original order, with the identical operations in each phase.
 static int g_engine_inited;
 
@@ -127,7 +127,7 @@ static void container_init(const char *rootfs) {
         const char *m = getenv("DD_MEM_MAX");
         if (m && m[0] && !g_mem_max) g_mem_max = parse_size(m);
         const char *p = getenv("DD_PIDS_MAX");
-        if (p && p[0] && !g_pids_max) g_pids_max = dd_parse_id("DD_PIDS_MAX", p);
+        if (p && p[0] && !g_pids_max) g_pids_max = hl_parse_id("DD_PIDS_MAX", p);
     }
     if (rootfs && rootfs[0]) {     // the shared container jails against the canonical rootfs + its dir fd
         g_rootfs = (char *)rootfs;
@@ -141,9 +141,9 @@ static void container_init(const char *rootfs) {
         // override. Without this g_uid stayed -1 and cuid() fell back to the HOST uid -> the guest saw
         // getuid()/geteuid() == the host's 501 ("I have no name!", non-root shell) on x86-64 only.
         const char *eu = getenv("DD_UID");
-        if (eu && g_uid < 0) g_uid = dd_parse_id("DD_UID", eu);
+        if (eu && g_uid < 0) g_uid = hl_parse_id("DD_UID", eu);
         const char *eg = getenv("DD_GID");
-        if (eg && g_gid < 0) g_gid = dd_parse_id("DD_GID", eg);
+        if (eg && g_gid < 0) g_gid = hl_parse_id("DD_GID", eg);
         if (g_uid < 0) g_uid = 0;
         if (g_gid < 0) g_gid = 0;
     }
@@ -316,7 +316,7 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
                                 uint64_t *at_base, int *have_interp) {
     static char gb[1024];
     prog = find_in_path(prog, gb, sizeof gb);   // bare "sh" (docker) -> "/bin/sh" via the container PATH
-    if (!g_comm_store[0]) set_guest_comm(prog); // dd_run recorded the pre-shebang name; preload lands here
+    if (!g_comm_store[0]) set_guest_comm(prog); // hl_run recorded the pre-shebang name; preload lands here
     g_exe_path = prog;
     // /proc/self/exe must be the ABSOLUTE, CANONICAL guest path of the loaded image: a RELATIVE guest
     // invocation ("./x" from a harness) or an entry symlink otherwise leaks into the link value, and
@@ -355,9 +355,9 @@ static const char *load_program(const char *prog, struct loaded *lm, struct load
 }
 
 // W3D: fresh per-launch guest run from a loaded image. Allocates a private heap + stack + cpu and
-// runs from `jump`. Shared by dd_run (standalone/cold) and the warm worker (which restores a
+// runs from `jump`. Shared by hl_run (standalone/cold) and the warm worker (which restores a
 // pristine COW image first, then calls this against the parent-preloaded base). Body is the original
-// dd_run tail verbatim (incl. the committed s1_calibrate + the fastsys/prof prints), so standalone
+// hl_run tail verbatim (incl. the committed s1_calibrate + the fastsys/prof prints), so standalone
 // behavior is byte-identical.
 static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t jump, uint64_t at_base) {
     uint8_t *heap = mmap(NULL, 256u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -387,7 +387,7 @@ static int run_loaded(int argc, char *const argv[], struct loaded *lm, uint64_t 
     return c.exit_code;
 }
 
-int dd_run(const char *rootfs, int argc, char *const argv[]) {
+int hl_run(const char *rootfs, int argc, char *const argv[]) {
     if (argc < 1 || !argv || !argv[0]) return 2;
     // opt8 persistent translated-code cache: OPT-IN via DDJIT_PCACHE (default OFF -> byte-identical to the
     // baseline; the cross-engine matrix never sets it, so it is unaffected). DDJIT_NOPCACHE=1 is the
@@ -441,7 +441,7 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
 }
 
 // resident ddjitd fork-server (server/client/worker) -- SHARED with linux_aarch64.c, driven
-// through the container_init/engine_global_init/load_program/run_loaded/dd_run seam defined above.
+// through the container_init/engine_global_init/load_program/run_loaded/hl_run seam defined above.
 // x86-only knobs: the warm re-run must re-point g_loadbase, and the x86 container model chdir()s the
 // engine process into the rootfs (container_init does; the warm path must match it per request).
 #define FSRV_SET_LOADBASE(b) (g_loadbase = (b))
@@ -505,13 +505,13 @@ int hl_entry(int argc, char **argv) {
             g_mem_max = parse_size(argv[ai + 1]);
             ai += 2;
         } else if (strcmp(argv[ai], "--pids-max") == 0) { // docker --pids-limit -> pids.max reporting
-            g_pids_max = dd_parse_id("--pids-max", argv[ai + 1]);
+            g_pids_max = hl_parse_id("--pids-max", argv[ai + 1]);
             ai += 2;
         } else if (strcmp(argv[ai], "--uid") == 0) { // docker --user uid (USER-ns uid); else container default 0
-            g_uid = dd_parse_id("--uid", argv[ai + 1]);
+            g_uid = hl_parse_id("--uid", argv[ai + 1]);
             ai += 2;
         } else if (strcmp(argv[ai], "--gid") == 0) {
-            g_gid = dd_parse_id("--gid", argv[ai + 1]);
+            g_gid = hl_parse_id("--gid", argv[ai + 1]);
             ai += 2;
         } else
             break;
@@ -520,6 +520,6 @@ int hl_entry(int argc, char **argv) {
         fprintf(stderr, "usage: %s [--rootfs DIR] [--vol guest:host]... [-p H:C]... <x86-64-elf> [args...]\n", argv[0]);
         return 2;
     }
-    return dd_run(rootfs, argc - ai, argv + ai);
+    return hl_run(rootfs, argc - ai, argv + ai);
 }
 #endif

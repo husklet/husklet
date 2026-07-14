@@ -8,7 +8,7 @@
 //! ps-includes-paused, …) that were previously untestable because they live inside stateful handlers.
 //!
 //! Engine-reaching branches (a *successful* start/stop that spawns a guest) are deliberately NOT
-//! exercised — there is no JIT engine on the CI/Linux host, and those paths call into `dd_jit`.
+//! exercised — there is no JIT engine on the CI/Linux host, and those paths call into `hl_jit`.
 //!
 //! The tests themselves live in per-domain submodules ([`containers`], [`networks`], [`volumes`],
 //! [`images`], [`exec`], [`flows`]); each does `use super::*` to inherit this harness plus the shared

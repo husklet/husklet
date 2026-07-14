@@ -195,7 +195,7 @@ thread_local! {
 }
 
 fn config_file() -> std::path::PathBuf {
-    dd_root().join("term.conf")
+    hl_root().join("term.conf")
 }
 
 fn current_config() -> TermConfig {
@@ -411,7 +411,7 @@ fn workspace_row(app: &gtk::Application, ws: &Workspace, list: &gtk::ListBox) ->
     nm.add_css_class("nm");
     // os/arch is folded into the subtitle line as plain dim text (no chip/pill): the name on top,
     // then one clean meta line "linux/aarch64 · image · ~/path" beneath it.
-    let dir = ws.storage_dir(&dd_root());
+    let dir = ws.storage_dir(&hl_root());
     let meta = gtk::Label::new(Some(&format!(
         "{} · {} · {}",
         ws.arch.os_arch_label(),
@@ -537,7 +537,7 @@ impl Default for WsDefaults {
 
 impl WsDefaults {
     fn path() -> std::path::PathBuf {
-        dd_root().join("term-defaults.conf")
+        hl_root().join("term-defaults.conf")
     }
 
     fn load() -> WsDefaults {
@@ -2051,7 +2051,7 @@ fn open_terminal_window(app: &gtk::Application, ws: &Workspace) {
             // Persist the session layout (with each pane's slot) + scrollback BEFORE tearing down, so
             // reopening restores the tabs/splits + on-screen history and re-attaches each pane to its slot.
             save_session(&tw);
-            let base = dd_root();
+            let base = hl_root();
             // Snapshot the live panes (upgradeable weak refs = still-open panes).
             let live: Vec<(String, Rc<Cell<i32>>)> = tw
                 .panes
@@ -2096,7 +2096,7 @@ fn open_terminal_window(app: &gtk::Application, ws: &Workspace) {
     add_dashboard_tab(&tw);
     // Restore the saved session (tabs + splits + per-pane history) if this workspace has one; else open a
     // single fresh shell. The debug hooks below still layer on top.
-    let saved = Session::load(&tw.ws.storage_dir(&dd_root()));
+    let saved = Session::load(&tw.ws.storage_dir(&hl_root()));
     if saved.tabs.is_empty() {
         add_terminal_tab(&tw);
     } else {
@@ -2328,7 +2328,7 @@ fn copymode_key(tw: &Rc<TermWin>, key: gdk::Key, state: gdk::ModifierType) -> bo
 /// Snapshot the window's tabs (skipping the dashboard) + each pane's scrollback into a [`Session`] and
 /// write it (layout + history files) under the workspace storage dir.
 fn save_session(tw: &Rc<TermWin>) {
-    let storage = tw.ws.storage_dir(&dd_root());
+    let storage = tw.ws.storage_dir(&hl_root());
     // Fresh history files each save (avoid stale accumulation).
     let dir = Session::dir(&storage);
     let _ = std::fs::remove_dir_all(&dir);
@@ -2426,7 +2426,7 @@ fn snapshot_node(tw: &Rc<TermWin>, w: &gtk::Widget, storage: &std::path::Path, h
 
 /// Rebuild all tabs from a saved [`Session`].
 fn restore_session(tw: &Rc<TermWin>, session: &Session) {
-    let storage = tw.ws.storage_dir(&dd_root());
+    let storage = tw.ws.storage_dir(&hl_root());
     for tab in &session.tabs {
         let n = tw.shell_no.get() + 1;
         tw.shell_no.set(n);
@@ -3159,7 +3159,7 @@ fn dash_overview(ws: &Workspace) -> gtk::ScrolledWindow {
     };
     kv("Image", ws.image.clone());
     kv("Architecture", ws.arch.as_str().to_string());
-    kv("Storage", tilde(&ws.storage_dir(&dd_root())));
+    kv("Storage", tilde(&ws.storage_dir(&hl_root())));
     kv("Shell", ws.shell.clone().unwrap_or_else(|| "auto (bash \u{2192} sh)".into()));
     kv("CPU cores", ws.cpus.map(|c| c.to_string()).unwrap_or_else(|| "unlimited".into()));
     kv("Memory", ws.memory_mb.map(|m| format!("{m} MB")).unwrap_or_else(|| "unlimited".into()));
@@ -3732,7 +3732,7 @@ fn ddcli_path() -> String {
     "ddcli".to_string()
 }
 
-fn dd_root() -> std::path::PathBuf {
+fn hl_root() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     std::path::PathBuf::from(home).join(".dd")
 }
@@ -3762,7 +3762,7 @@ fn adopt_slot(tw: &Rc<TermWin>, saved: &Option<String>) -> String {
 
 /// True if this pane slot has a frozen checkpoint on disk (a written MANIFEST) to restore.
 fn slot_has_checkpoint(ws: &Workspace, slot: &str) -> bool {
-    ws.checkpoint_slot_dir(&dd_root(), slot).join("MANIFEST").exists()
+    ws.checkpoint_slot_dir(&hl_root(), slot).join("MANIFEST").exists()
 }
 
 /// Find the checkpoint slot registered for `term` (pruning dead registry entries as it scans).
@@ -3804,7 +3804,7 @@ fn discard_terminal_slot(tw: &Rc<TermWin>, term: &vte4::Terminal) {
         None => false, // prune dead entries while we're here
     });
     if let Some(slot) = removed {
-        let _ = std::fs::remove_dir_all(tw.ws.checkpoint_slot_dir(&dd_root(), &slot));
+        let _ = std::fs::remove_dir_all(tw.ws.checkpoint_slot_dir(&hl_root(), &slot));
     }
 }
 
@@ -3818,7 +3818,7 @@ fn discard_page_slots(tw: &Rc<TermWin>, child: &gtk::Widget) {
 }
 
 fn workspaces_conf() -> std::path::PathBuf {
-    dd_root().join("workspaces.conf")
+    hl_root().join("workspaces.conf")
 }
 
 fn tilde(p: &std::path::Path) -> String {

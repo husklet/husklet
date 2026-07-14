@@ -99,7 +99,7 @@ pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
         mem_total: host_mem_total(),
         kernel_version: "6.1.0-dd",
         server_version: DD_VERSION,
-        docker_root_dir: dd_home().to_string_lossy().into_owned(),
+        docker_root_dir: hl_home().to_string_lossy().into_owned(),
         cgroup_driver: "none",
         default_runtime: DEFAULT_RUNTIME,
         runtimes: runtimes(),
@@ -234,7 +234,7 @@ pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsag
     // reclaimed by `system prune` / `builder prune` (see build_prune). Fully reclaimable (rebuilds on demand).
     // Materialize one build-cache ITEM per pcache file so the reported TotalCount always matches the
     // item list — a nonzero count with an empty Items list is internally contradictory (docker parity).
-    let pc_items: Vec<Value> = std::fs::read_dir(crate::util::dd_home().join("pcache"))
+    let pc_items: Vec<Value> = std::fs::read_dir(crate::util::hl_home().join("pcache"))
         .map(|rd| {
             rd.filter_map(|e| e.ok())
                 .filter_map(|e| {

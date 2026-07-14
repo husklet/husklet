@@ -18,7 +18,7 @@
 
 // Parse a base-10 unsigned integer in [lo, hi]. Rejects empty / non-numeric / trailing garbage /
 // negative / overflow. On ANY violation: print "dd: invalid <name>..." to stderr and exit nonzero.
-static unsigned long long dd_parse_u64(const char *name, const char *s, unsigned long long lo, unsigned long long hi) {
+static unsigned long long hl_parse_u64(const char *name, const char *s, unsigned long long lo, unsigned long long hi) {
     if (!s || !*s || *s == '-') {
         fprintf(stderr, "dd: invalid %s=%s: not a number\n", name, s ? s : "");
         exit(2);
@@ -38,18 +38,18 @@ static unsigned long long dd_parse_u64(const char *name, const char *s, unsigned
 }
 
 // Container uid/gid: a valid id (0..INT_MAX). Garbage MUST error -- never fall back to 0 (= root).
-static int dd_parse_id(const char *name, const char *s) {
-    return (int)dd_parse_u64(name, s, 0, INT_MAX);
+static int hl_parse_id(const char *name, const char *s) {
+    return (int)hl_parse_u64(name, s, 0, INT_MAX);
 }
 
 // A TCP/UDP port: 1..65535. Rejects 0 and >65535 (which atoi would wrap into a wrong u16).
-static unsigned dd_parse_port(const char *name, const char *s) {
-    return (unsigned)dd_parse_u64(name, s, 1, 65535);
+static unsigned hl_parse_port(const char *name, const char *s) {
+    return (unsigned)hl_parse_u64(name, s, 1, 65535);
 }
 
 // Parse a port from the field s[0..end) -- 'end' points just past the last char (e.g. at ':'/','),
 // or NULL for "to end of string". Used by the HOST:CONTAINER publish parsers (delimited tokens).
-static unsigned dd_parse_port_field(const char *name, const char *s, const char *end) {
+static unsigned hl_parse_port_field(const char *name, const char *s, const char *end) {
     char buf[16];
     size_t n = end ? (size_t)(end - s) : strlen(s);
     if (n == 0 || n >= sizeof buf) {
@@ -58,6 +58,6 @@ static unsigned dd_parse_port_field(const char *name, const char *s, const char 
     }
     memcpy(buf, s, n);
     buf[n] = '\0';
-    return dd_parse_port(name, buf);
+    return hl_parse_port(name, buf);
 }
 #endif // HL_CONTAINER_PARSE_H

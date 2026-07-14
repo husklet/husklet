@@ -6,7 +6,7 @@
 //! same stdout, the same exit code, and the same fatal-signal death as a cold-spawned engine. This lane
 //! drives that battery end to end on linux/aarch64 AND linux/x86_64 (the shared implementation lives in
 //! `hl-jit/src/runtime/os/linux/forkserver.c`, parameterized by the per-target
-//! container_init/engine_global_init/load_program/run_loaded/dd_run seam):
+//! container_init/engine_global_init/load_program/run_loaded/hl_run seam):
 //!   1. identity probe — argv, guest env (DD_GUEST_ENV), cwd, tty triple, exit code.
 //!   2. stdio plumbing — stdin reaches the guest, stdout comes back byte-identical.
 //!   3. exit codes — arbitrary codes round-trip.

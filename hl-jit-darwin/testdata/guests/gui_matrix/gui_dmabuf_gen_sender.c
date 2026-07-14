@@ -2,7 +2,7 @@
 // hl_gpu_send_port (dd-jit-darwin vfs.c): create a real host IOSurface, look up dd-display's GPU mach
 // bridge, and send the SAME hl_gpu_msg_t the engine sends — a complex message carrying the IOSurface
 // send-right + its id + its allocation generation. The Rust harness starts the real bridge, runs this,
-// and asserts dd_display::metal::iosurface_generation(id) reports the generation we sent — proving the
+// and asserts hl_display::metal::iosurface_generation(id) reports the generation we sent — proving the
 // new generation field flows over the real mach ABI into the compositor's authenticated metadata.
 //
 // argv[1] = generation to send. Prints "id=<IOSurfaceGetID> gen=<generation>". macOS-only.

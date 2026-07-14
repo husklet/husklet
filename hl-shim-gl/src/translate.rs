@@ -233,7 +233,7 @@ fn type_fixups(b: &mut String) {
     wreplace(b, "uvec2", "uint2");
     wreplace(b, "uvec3", "uint3");
     wreplace(b, "uvec4", "uint4");
-    sreplace(b, "mat3x2(", "dd_mat3x2(");
+    sreplace(b, "mat3x2(", "hl_mat3x2(");
     wreplace(b, "mat2x2", "float2x2");
     wreplace(b, "mat2x3", "float2x3");
     wreplace(b, "mat2x4", "float2x4");
@@ -354,11 +354,11 @@ fn builtin_fixups(b: &mut String) {
     wreplace(b, "dFdy", "dfdy");
     wreplace(b, "inversesqrt", "rsqrt");
     rename_call2(b, "atan", "atan2");
-    wreplace(b, "mod", "dd_mod");
+    wreplace(b, "mod", "hl_mod");
 }
 
-const DD_MOD_HELPERS: &str = "template<typename T> inline T dd_mod(T x, T y) { return x - y * floor(x / y); }\ninline float2 dd_mod(float2 x, float y) { return x - y * floor(x / y); }\ninline float3 dd_mod(float3 x, float y) { return x - y * floor(x / y); }\ninline float4 dd_mod(float4 x, float y) { return x - y * floor(x / y); }\n";
-const DD_MAT3X2_HELPER: &str = "inline float3x2 dd_mat3x2(float3x3 m) { return float3x2(m[0].xy, m[1].xy, m[2].xy); }\ninline float3x2 dd_mat3x2(float2 a, float2 b, float2 c) { return float3x2(a, b, c); }\n";
+const DD_MOD_HELPERS: &str = "template<typename T> inline T hl_mod(T x, T y) { return x - y * floor(x / y); }\ninline float2 hl_mod(float2 x, float y) { return x - y * floor(x / y); }\ninline float3 hl_mod(float3 x, float y) { return x - y * floor(x / y); }\ninline float4 hl_mod(float4 x, float y) { return x - y * floor(x / y); }\n";
+const DD_MAT3X2_HELPER: &str = "inline float3x2 hl_mat3x2(float3x3 m) { return float3x2(m[0].xy, m[1].xy, m[2].xy); }\ninline float3x2 hl_mat3x2(float2 a, float2 b, float2 c) { return float3x2(a, b, c); }\n";
 
 fn local_decl_fixups(b: &mut String) {
     for ty in ["float", "float2", "float3", "float4", "int", "int2", "int3", "int4", "uint", "uint2", "uint3", "uint4"] {

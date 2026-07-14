@@ -5,7 +5,7 @@
 //! (PUT /containers/{id}/archive) and the exec-spawn /etc/{hosts,resolv.conf,hostname} rewrites — which no
 //! guest syscall announces, so a cached ENOENT could hide a file docker-cp just delivered. The contract
 //! with the engine: a 4-byte native-endian u32 "external-writer generation" file per container at
-//! `<dd_home>/containers/<cid>/fsgen`. spawn_cfg hands its path to every engine of the container
+//! `<hl_home>/containers/<cid>/fsgen`. spawn_cfg hands its path to every engine of the container
 //! (DD_FSGEN_FILE — run, exec and health probes share one file, keyed like tmpfs by the target container
 //! id); each engine maps it MAP_SHARED and polls it once per guest syscall, dropping ALL its caches when
 //! it moves. The daemon calls [`fsgen_bump`] AFTER completing any such write, making the write visible to
@@ -16,7 +16,7 @@ use super::*;
 
 /// The container's external-writer generation file (see the module comment above).
 pub(crate) fn fsgen_path(cid: &str) -> PathBuf {
-    dd_home().join("containers").join(cid).join("fsgen")
+    hl_home().join("containers").join(cid).join("fsgen")
 }
 
 /// Create the generation file (value 1) if it doesn't exist yet; returns its path. Called before any

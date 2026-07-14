@@ -191,7 +191,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     // persistent cache lands under the dd home (reported by `system df`, cleared by `system prune`).
     let rt = JitRuntime::new()
         .expect("dd-jit runtime")
-        .cache_dir(crate::util::dd_home().join("pcache").to_string_lossy().into_owned());
+        .cache_dir(crate::util::hl_home().join("pcache").to_string_lossy().into_owned());
     let launched = match rt.start_into(
         &container,
         Stdio3 { tty: c.tty },
@@ -300,7 +300,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                 // still works AFTER a daemon restart — the in-memory cc.stdout/cc.stderr are `#[serde(skip)]`
                 // and the Live's ordered log is gone on reload, so without this the log body comes back
                 // empty. Written under the per-container dir (reclaimed with the container on `docker rm`).
-                let logdir = dd_home().join("containers").join(&cid).join("logs");
+                let logdir = hl_home().join("containers").join(&cid).join("logs");
                 let _ = std::fs::create_dir_all(&logdir);
                 let _ = std::fs::write(logdir.join("stdout"), &so);
                 let _ = std::fs::write(logdir.join("stderr"), &se);

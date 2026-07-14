@@ -4,7 +4,7 @@
   # so entering the shell never rebuilds GTK. libadwaita is deliberately absent: its `appstream`
   # dependency fails to build under nixpkgs on aarch64-darwin, so dd-app uses pure GTK4.
   #
-  #   nix develop ./nix --command bash -lc 'cargo build -p dd-gui'
+  #   nix develop ./nix --command bash -lc 'cargo build -p hl-gui'
   description = "dd-app GTK4 dev shell";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/89570f24e97e614aa34aa9ab1c927b6578a43775";

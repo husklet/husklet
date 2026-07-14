@@ -15,7 +15,7 @@ const DEFAULT_STEP: usize = 1;
 struct Args {
     input: PathBuf,
     out_dir: PathBuf,
-    dd_display: PathBuf,
+    hl_display: PathBuf,
     target: u32,
     width: u32,
     height: u32,
@@ -166,7 +166,7 @@ fn parse_args() -> Args {
     let mut args = Args {
         input: PathBuf::from(first),
         out_dir: PathBuf::from(second),
-        dd_display: PathBuf::from("target-chrome-codex/release/dd-display"),
+        hl_display: PathBuf::from("target-chrome-codex/release/dd-display"),
         target: DEFAULT_TARGET_TEXTURE,
         width: DEFAULT_WIDTH,
         height: DEFAULT_HEIGHT,
@@ -183,7 +183,7 @@ fn parse_args() -> Args {
     while let Some(flag) = raw.next() {
         match flag.to_string_lossy().as_ref() {
             "--dd-display" => {
-                args.dd_display = PathBuf::from(raw.next().unwrap_or_else(|| usage(2)))
+                args.hl_display = PathBuf::from(raw.next().unwrap_or_else(|| usage(2)))
             }
             "--target" => args.target = parse_num("--target", raw.next()),
             "--width" => args.width = parse_num("--width", raw.next()),
@@ -446,7 +446,7 @@ fn main() {
         let mut png_bytes = 0u64;
         let mut ir_kept = args.keep_ir || args.no_replay;
         if !args.no_replay {
-            let output = Command::new(&args.dd_display)
+            let output = Command::new(&args.hl_display)
                 .arg("selftest-shim-ir")
                 .arg(&ir_path)
                 .arg(&png_path)
@@ -454,7 +454,7 @@ fn main() {
                 .arg(args.height.to_string())
                 .arg(args.target.to_string())
                 .output()
-                .unwrap_or_else(|e| panic!("run {}: {e}", args.dd_display.display()));
+                .unwrap_or_else(|e| panic!("run {}: {e}", args.hl_display.display()));
 
             let mut log = Vec::new();
             log.extend_from_slice(&output.stdout);

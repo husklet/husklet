@@ -1595,7 +1595,7 @@ static int proc_maps_fd(int smaps) {
 
 // /proc/[pid]/status -- the Name:/State:/VmRSS: key:value format (NOT the stat one-liner). VmRSS/VmSize
 // reflect the cgroup memory charge so a reader sees a plausible footprint.
-static unsigned long long self_rss_bytes(void); // defined after dd_get_procinfo (real engine resident floor)
+static unsigned long long self_rss_bytes(void); // defined after hl_get_procinfo (real engine resident floor)
 
 // /proc/[pid]/status Cpus_allowed / Cpus_allowed_list. A default container is allowed to run on ALL of its
 // online CPUs (contiguous 0..N-1, N = container_online_cpus()), so this MUST agree with sched_getaffinity
@@ -2191,7 +2191,7 @@ static int proc_reg_read(int hostpid, char *comm, size_t csz, char *cmd, size_t 
 
 // Live per-process stats from the host kernel (libproc). rss/cpu-times/state are REAL (coarse beats
 // zero); comm here is the HOST comm (the DBT binary) -- the guest comm comes from the registry instead.
-struct dd_procinfo {
+struct hl_procinfo {
     int ppid_host, pgid_host, nthreads;
     char state;
     unsigned long long rss, vsize, utime_ns, stime_ns;
@@ -2199,7 +2199,7 @@ struct dd_procinfo {
     char hostcomm[32];
 };
 
-static int dd_get_procinfo(int pid, struct dd_procinfo *pi) {
+static int hl_get_procinfo(int pid, struct hl_procinfo *pi) {
     struct proc_bsdinfo bsd;
     if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof bsd) != (int)sizeof bsd) return 0;
     pi->ppid_host = (int)bsd.pbi_ppid;
@@ -2369,8 +2369,8 @@ static int proc_fd_dir_pid_open(int host) {
 // charge with this engine process's real resident size so the reported RSS is non-zero and plausible.
 static unsigned long long self_rss_bytes(void) {
     unsigned long long charged = (unsigned long long)atomic_load(&g_mem_charged);
-    struct dd_procinfo pi;
-    unsigned long long real = dd_get_procinfo((int)getpid(), &pi) ? pi.rss : 0;
+    struct hl_procinfo pi;
+    unsigned long long real = hl_get_procinfo((int)getpid(), &pi) ? pi.rss : 0;
     return real > charged ? real : charged;
 }
 
@@ -2504,8 +2504,8 @@ static unsigned long long cgroup_mem_current(void) {
                 continue;
             }
             if (kill(host, 0) != 0 && errno == ESRCH) continue; // stale registry entry
-            struct dd_procinfo pi;
-            if (dd_get_procinfo(host, &pi)) total += pi.rss;
+            struct hl_procinfo pi;
+            if (hl_get_procinfo(host, &pi)) total += pi.rss;
         }
         closedir(d);
     }
@@ -2648,8 +2648,8 @@ static int container_group_kill(int want_hpgid, int msig, int self_hpid) {
         if (e->d_name[0] < '0' || e->d_name[0] > '9') continue; // pid records only (skip the x<pid> exe recs)
         int h = atoi(e->d_name);
         if (h <= 0 || h == self_hpid) continue;
-        struct dd_procinfo pi;
-        if (!dd_get_procinfo(h, &pi)) continue;   // dead/unknown host pid -> skip
+        struct hl_procinfo pi;
+        if (!hl_get_procinfo(h, &pi)) continue;   // dead/unknown host pid -> skip
         if (pi.pgid_host != want_hpgid) continue; // not in the caller's process group
         if (kill(h, msig) == 0) n++;
     }
@@ -2659,8 +2659,8 @@ static int container_group_kill(int want_hpgid, int msig, int self_hpid) {
 
 // /proc/<pid>/stat for a peer -- the 52-field line with GUEST pid/ppid and REAL rss/cpu/state/starttime.
 static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
-    struct dd_procinfo pi;
-    int ok = dd_get_procinfo(host, &pi);
+    struct hl_procinfo pi;
+    int ok = hl_get_procinfo(host, &pi);
     char comm[32], cmd[4096];
     int cl;
     if (!proc_reg_read(host, comm, sizeof comm, cmd, sizeof cmd, &cl))
@@ -2706,8 +2706,8 @@ static int proc_stat_pid_text(char *b, size_t n, int gp, int host) {
 
 // /proc/<pid>/status for a peer -- the key:value form with GUEST Pid/PPid and REAL VmRSS.
 static int proc_status_pid_text(char *b, size_t n, int gp, int host) {
-    struct dd_procinfo pi;
-    int ok = dd_get_procinfo(host, &pi);
+    struct hl_procinfo pi;
+    int ok = hl_get_procinfo(host, &pi);
     char comm[32], cmd[4096];
     int cl;
     if (!proc_reg_read(host, comm, sizeof comm, cmd, sizeof cmd, &cl))
@@ -2772,8 +2772,8 @@ static int proc_cmdline_pid_text(char *b, size_t n, int host) {
         }
         return L;
     }
-    struct dd_procinfo pi;
-    const char *c = dd_get_procinfo(host, &pi) ? pi.hostcomm : "proc";
+    struct hl_procinfo pi;
+    const char *c = hl_get_procinfo(host, &pi) ? pi.hostcomm : "proc";
     int L = (int)strlen(c);
     if (L + 1 > (int)n) L = (int)n - 1;
     memcpy(b, c, (size_t)L);
@@ -2786,8 +2786,8 @@ static int proc_comm_pid_text(char *b, size_t n, int host) {
     char comm[32], cmd[4096];
     int cl;
     if (!proc_reg_read(host, comm, sizeof comm, cmd, sizeof cmd, &cl)) {
-        struct dd_procinfo pi;
-        snprintf(comm, sizeof comm, "%.15s", dd_get_procinfo(host, &pi) ? pi.hostcomm : "proc");
+        struct hl_procinfo pi;
+        snprintf(comm, sizeof comm, "%.15s", hl_get_procinfo(host, &pi) ? pi.hostcomm : "proc");
     }
     return snprintf(b, n, "%s\n", comm);
 }
@@ -2808,10 +2808,10 @@ static int proc_statm_text(char *b, size_t n) { // our own pid
 }
 
 static int proc_statm_pid_text(char *b, size_t n, int host) { // a peer -- REAL rss from libproc
-    struct dd_procinfo pi;
+    struct hl_procinfo pi;
     long pg = sysconf(_SC_PAGESIZE);
     unsigned long pgsz = pg > 0 ? (unsigned long)pg : 4096;
-    unsigned long rss_pg = dd_get_procinfo(host, &pi) ? (unsigned long)(pi.rss / pgsz) : 0;
+    unsigned long rss_pg = hl_get_procinfo(host, &pi) ? (unsigned long)(pi.rss / pgsz) : 0;
     unsigned long overhead_pg = (unsigned long)((128ULL << 20) / pgsz);
     return proc_statm_common(b, n, rss_pg + overhead_pg, rss_pg);
 }

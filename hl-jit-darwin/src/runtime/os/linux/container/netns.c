@@ -191,7 +191,7 @@ static int msgflags_m2l(int mf) {
 #define LX_SOL_SOCKET 1
 #define DD_CMSG_EVENTFD_MAGIC 0xddefd001u
 
-struct dd_cmsg_eventfd_meta {
+struct hl_cmsg_eventfd_meta {
     uint32_t magic;
     uint32_t ordinal;
     uint32_t slot;
@@ -216,7 +216,7 @@ static int cmsg_level_m2l(int lv) {
     return lv == SOL_SOCKET ? LX_SOL_SOCKET : lv;
 }
 
-static int cmsg_eventfd_marker(const struct dd_cmsg_eventfd_meta *m) {
+static int cmsg_eventfd_marker(const struct hl_cmsg_eventfd_meta *m) {
     if (g_cmsg_ntmpfds >= (int)(sizeof g_cmsg_tmpfds / sizeof g_cmsg_tmpfds[0])) return -1;
     char tn[] = "/tmp/.ddcmsgXXXXXX";
     int fd = mkstemp(tn);
@@ -243,7 +243,7 @@ static int cmsg_fd_is_write_sideband(int fd) {
     return S_ISFIFO(st.st_mode);
 }
 
-static int cmsg_read_eventfd_marker(int fd, struct dd_cmsg_eventfd_meta *m) {
+static int cmsg_read_eventfd_marker(int fd, struct hl_cmsg_eventfd_meta *m) {
     if (fd < 0 || !m) return 0;
     memset(m, 0, sizeof *m);
     if (pread(fd, m, sizeof *m, 0) != (ssize_t)sizeof *m) return 0;
@@ -256,7 +256,7 @@ static int cmsg_import_eventfd_trailer(int *fds, int nfds) {
     int cap = nfds / 3 + 1;
     int *hidden = calloc((size_t)cap, sizeof(int));
     int *marker_fd = calloc((size_t)cap, sizeof(int));
-    struct dd_cmsg_eventfd_meta *metas = calloc((size_t)cap, sizeof(*metas));
+    struct hl_cmsg_eventfd_meta *metas = calloc((size_t)cap, sizeof(*metas));
     if (!hidden || !marker_fd || !metas) {
         free(hidden);
         free(marker_fd);
@@ -268,7 +268,7 @@ static int cmsg_import_eventfd_trailer(int *fds, int nfds) {
     while (visible >= 3 && nmeta < cap) {
         int h = fds[visible - 2];
         int marker = fds[visible - 1];
-        struct dd_cmsg_eventfd_meta m;
+        struct hl_cmsg_eventfd_meta m;
         if (!cmsg_fd_is_write_sideband(h)) break;
         if (!cmsg_read_eventfd_marker(marker, &m)) break;
         hidden[nmeta] = h;
@@ -293,7 +293,7 @@ static int cmsg_import_eventfd_trailer(int *fds, int nfds) {
     for (int i = 0; i < nmeta; i++) {
         int h = hidden[i];
         int marker = marker_fd[i];
-        struct dd_cmsg_eventfd_meta *m = &metas[i];
+        struct hl_cmsg_eventfd_meta *m = &metas[i];
         int pub = fds[m->ordinal];
         if (pub >= 0 && pub < DD_NFD) {
             g_eventfd_peer[pub] = h + 1;
@@ -366,7 +366,7 @@ static ssize_t cmsg_l2m(const uint8_t *g, size_t glen, uint8_t *h, size_t cap, i
                 int fl = fcntl(hidden, F_GETFL);
                 if (fl >= 0) fcntl(hidden, F_SETFL, fl | O_NONBLOCK);
                 fcntl(hidden, F_SETFD, FD_CLOEXEC);
-                struct dd_cmsg_eventfd_meta m = {
+                struct hl_cmsg_eventfd_meta m = {
                     .magic = DD_CMSG_EVENTFD_MAGIC,
                     .ordinal = (uint32_t)i,
                     .slot = (uint32_t)eventfd_counter_slot(fd),

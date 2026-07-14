@@ -1694,19 +1694,19 @@ static void wl_commit(void) {
 // (`intptr_t version`) so a stray Mesa struct is still parseable via the offset fallback in
 // eglCreateWindowSurface.
 #define DD_WL_EGL_MAGIC ((intptr_t)0x6464776C65676CLL) // "ddwlegl" magic
-struct dd_wl_egl_window {
+struct hl_wl_egl_window {
     intptr_t version;   // = DD_WL_EGL_MAGIC (Mesa stores WL_EGL_WINDOW_VERSION here)
     int width, height;  // offsets 8/12 — same as Mesa's struct
     int dx, dy;
     int attached_width, attached_height;
     void *driver_private;
-    void (*resize_cb)(struct dd_wl_egl_window *, void *);
-    void (*destroy_cb)(struct dd_wl_egl_window *);
+    void (*resize_cb)(struct hl_wl_egl_window *, void *);
+    void (*destroy_cb)(struct hl_wl_egl_window *);
     void *surface;      // the wl_surface
 };
-struct dd_wl_egl_window *wl_egl_window_create(void *surface, int width, int height) {
+struct hl_wl_egl_window *wl_egl_window_create(void *surface, int width, int height) {
     if (width <= 0 || height <= 0) return 0;
-    struct dd_wl_egl_window *w = calloc(1, sizeof *w);
+    struct hl_wl_egl_window *w = calloc(1, sizeof *w);
     if (!w) return 0;
     w->version = DD_WL_EGL_MAGIC;
     w->width = width;
@@ -1722,7 +1722,7 @@ struct dd_wl_egl_window *wl_egl_window_create(void *surface, int width, int heig
     }
     return w;
 }
-void wl_egl_window_resize(struct dd_wl_egl_window *w, int width, int height, int dx, int dy) {
+void wl_egl_window_resize(struct hl_wl_egl_window *w, int width, int height, int dx, int dy) {
     if (!w) return;
     w->width = width;
     w->height = height;
@@ -1745,12 +1745,12 @@ void wl_egl_window_resize(struct dd_wl_egl_window *w, int width, int height, int
         fflush(stderr);
     }
 }
-void wl_egl_window_get_attached_size(struct dd_wl_egl_window *w, int *width, int *height) {
+void wl_egl_window_get_attached_size(struct hl_wl_egl_window *w, int *width, int *height) {
     if (!w) return;
     if (width) *width = w->attached_width ? w->attached_width : w->width;
     if (height) *height = w->attached_height ? w->attached_height : w->height;
 }
-void wl_egl_window_destroy(struct dd_wl_egl_window *w) { free(w); }
+void wl_egl_window_destroy(struct hl_wl_egl_window *w) { free(w); }
 
 // ======================= EGL entry points =======================
 #define EGLDBG(...) do { if (getenv("DD_SHIM_DEBUG")) { fprintf(stderr, "[shim] " __VA_ARGS__); fflush(stderr); } } while (0)
@@ -1886,7 +1886,7 @@ EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig c, EGLNativeWindowTy
     uint32_t W = 256, H = 256;
     int logical_w = 0, logical_h = 0, attach_x = 0, attach_y = 0;
     if (w) {
-        struct dd_wl_egl_window *win = (struct dd_wl_egl_window *)w;
+        struct hl_wl_egl_window *win = (struct hl_wl_egl_window *)w;
         int ww, hh;
         if (win->version == DD_WL_EGL_MAGIC) {
             // Our libwayland-egl.so.1 struct (glmark2, Chrome/ozone): width/height at offsets 8/12.

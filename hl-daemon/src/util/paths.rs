@@ -24,7 +24,7 @@ pub(crate) fn tar_members_contained(tar: &std::path::Path) -> Result<(), String>
 }
 
 /// `~/.dd` (or `./.dd` if `$HOME` is unset) — the default state/volumes root.
-pub(crate) fn dd_home() -> PathBuf {
+pub(crate) fn hl_home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
@@ -34,7 +34,7 @@ pub(crate) fn dd_home() -> PathBuf {
 /// `~/.dd/buildcache` — the `docker build` layer cache root (one dir per cached step under `layers/`).
 /// Distinct from `~/.dd/pcache` (the JIT translated-code cache surfaced as `system df` BuilderSize).
 pub(crate) fn buildcache_dir() -> PathBuf {
-    dd_home().join("buildcache")
+    hl_home().join("buildcache")
 }
 
 /// On-disk size of an image's rootfs, cached per rootfs path (computed once; rootfs rarely changes).
@@ -84,7 +84,7 @@ mod tests {
     // component here), and accept a well-formed one.
     #[test]
     fn tar_members_contained_rejects_traversal_and_accepts_safe() {
-        let stage = std::env::temp_dir().join(format!("dd_tar_guard_{}", std::process::id()));
+        let stage = std::env::temp_dir().join(format!("hl_tar_guard_{}", std::process::id()));
         std::fs::create_dir_all(&stage).unwrap();
         std::fs::write(stage.join("x"), b"data").unwrap();
         // A SAFE archive: member "x".
@@ -115,7 +115,7 @@ mod tests {
             static SEQ: AtomicU64 = AtomicU64::new(0);
             let n = SEQ.fetch_add(1, Ordering::Relaxed);
             let p = std::env::temp_dir().join(format!(
-                "dd_paths_test_{}_{}_{}",
+                "hl_paths_test_{}_{}_{}",
                 tag,
                 std::process::id(),
                 n

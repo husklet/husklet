@@ -620,7 +620,7 @@ static int svc_proc(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64
         // Linux validates the cpusetsize FIRST: it must be a multiple of sizeof(long) AND wide enough to
         // hold every online CPU, else -EINVAL (LTP sched_getaffinity01). The old handler skipped this and
         // always "succeeded", so a deliberately-tiny cpusetsize wrongly returned 0.
-        if ((n & (sizeof(unsigned long) - 1)) || n * 8 < (size_t)dd_online_cpus()) {
+        if ((n & (sizeof(unsigned long) - 1)) || n * 8 < (size_t)hl_online_cpus()) {
             G_RET(c) = (uint64_t)(-EINVAL);
             break;
         }

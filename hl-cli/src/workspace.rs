@@ -14,7 +14,7 @@ use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn store_path() -> std::path::PathBuf {
-    paths::dd_root().join("workspaces.conf")
+    paths::hl_root().join("workspaces.conf")
 }
 
 pub(crate) fn run(action: WorkspaceCmd) {
@@ -156,8 +156,8 @@ fn checkpoint(name: String, slot: Option<String>) {
     // A per-pane SLOT freezes that pane's own engine into `<storage>/checkpoint/<slot>`; None uses the
     // single shared slot (back-compat).
     let (pid_file, ckpt_dir) = match slot.as_deref() {
-        Some(s) => (ws.checkpoint_slot_pid_file(&paths::dd_root(), s), ws.checkpoint_slot_dir(&paths::dd_root(), s)),
-        None => (ws.checkpoint_pid_file(&paths::dd_root()), ws.checkpoint_dir(&paths::dd_root())),
+        Some(s) => (ws.checkpoint_slot_pid_file(&paths::hl_root(), s), ws.checkpoint_slot_dir(&paths::hl_root(), s)),
+        None => (ws.checkpoint_pid_file(&paths::hl_root()), ws.checkpoint_dir(&paths::hl_root())),
     };
     let pid: u32 = match std::fs::read_to_string(&pid_file).ok().and_then(|s| s.trim().parse().ok()) {
         Some(p) => p,

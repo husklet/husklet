@@ -236,9 +236,9 @@ fn split_font(v: &str) -> Option<(String, Option<f64>)> {
     Some((v.to_string(), None))
 }
 
-/// The default config path, `<dd_root>/term.conf`.
-pub fn config_path(dd_root: &Path) -> PathBuf {
-    dd_root.join("term.conf")
+/// The default config path, `<hl_root>/term.conf`.
+pub fn config_path(hl_root: &Path) -> PathBuf {
+    hl_root.join("term.conf")
 }
 
 #[cfg(test)]

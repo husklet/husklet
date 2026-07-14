@@ -40,9 +40,9 @@ pub(crate) fn cmd_uninstall(purge: bool) -> i32 {
     let _ = context::remove();
     println!("✓ removed docker context '{}'", context::NAME);
     if purge {
-        let _ = std::fs::remove_dir_all(paths::dd_root());
+        let _ = std::fs::remove_dir_all(paths::hl_root());
         let _ = std::fs::remove_dir_all(paths::logs_dir());
-        println!("✓ purged {} and logs", paths::dd_root().display());
+        println!("✓ purged {} and logs", paths::hl_root().display());
     }
     0
 }

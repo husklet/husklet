@@ -145,7 +145,7 @@ pub(super) fn containersw() -> Group {
 pub(super) fn realsw() -> Group {
     group("realsw", vec![
         // SQLite 3: WAL, a 5000-row transaction, then an aggregate query. Diffed against a native run.
-        src("sqlite", "sqlite.c").arg("/tmp/dd_sqlite_test.db").only(&[Engine::LinuxAarch64]).oracle(),
+        src("sqlite", "sqlite.c").arg("/tmp/hl_sqlite_test.db").only(&[Engine::LinuxAarch64]).oracle(),
         // Perl 5 (the real Ubuntu interpreter): a prime sieve up to 10k -- heavy interpreter loop +
         // dynamic dispatch. 1229 primes, last is 9973.
         in_rootfs("perl-sieve", "ubuntu", &["/usr/bin/perl", "-e",

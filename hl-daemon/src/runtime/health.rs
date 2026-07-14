@@ -38,7 +38,7 @@ async fn run_health_probe(
         return (-1, String::new());
     };
     let rt = match JitRuntime::new() {
-        Ok(r) => r.cache_dir(crate::util::dd_home().join("pcache").to_string_lossy().into_owned()),
+        Ok(r) => r.cache_dir(crate::util::hl_home().join("pcache").to_string_lossy().into_owned()),
         Err(e) => return (-1, format!("probe runtime: {e}")),
     };
     let timeout_ns = if hcfg.timeout > 0 {

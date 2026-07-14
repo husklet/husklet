@@ -213,7 +213,7 @@ pub(crate) async fn containers_delete(
             }
         }
         // Reclaim any tmpfs scratch dirs this container owns (never persisted; always safe to drop).
-        let _ = std::fs::remove_dir_all(dd_home().join("containers").join(&full).join("tmpfs"));
+        let _ = std::fs::remove_dir_all(hl_home().join("containers").join(&full).join("tmpfs"));
         // Drop the container from any network membership too.
         for n in g.networks.iter_mut() {
             leave_network(n, &full);

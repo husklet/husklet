@@ -397,7 +397,7 @@ nvmlReturn_t nvmlSystemGetProcessName(unsigned int pid, char* name, unsigned int
  * *partial* slot set would only make the stock render crash/misbehave, so we keep every slot NOT_SUPPORTED:
  * that cleanly steers the list/query modes onto our public API (they render the dd device for real) and
  * makes the default dashboard fail cleanly. **Query/list = real; default dashboard = closed-ABI boundary.** */
-static nvmlReturn_t dd_et_notsup(void) { return NVML_ERROR_NOT_SUPPORTED; }
+static nvmlReturn_t hl_et_notsup(void) { return NVML_ERROR_NOT_SUPPORTED; }
 #define DD_ET_SLOTS 245                     /* matches real libnvidia-ml.so.535.230.02 */
 #define DD_ET_HEADER 0x7a8                  /* real slot[0] value (table byte size) */
 static void* g_export_table[DD_ET_SLOTS];
@@ -409,7 +409,7 @@ nvmlReturn_t nvmlInternalGetExportTable(const void** ppExportTable, void* pExpor
         static const int nulls[] = {1,2,24,35,60,64,90,104,121,122,139,150,157,158,159,160,161,162,
                                      163,167,176,177,178,187,190,191,198,201,202,207,211,216,217,235,236};
         g_export_table[0] = (void*)(size_t)DD_ET_HEADER;
-        for (int i = 1; i < DD_ET_SLOTS; i++) g_export_table[i] = (void*)dd_et_notsup;
+        for (int i = 1; i < DD_ET_SLOTS; i++) g_export_table[i] = (void*)hl_et_notsup;
         for (unsigned k = 0; k < sizeof(nulls) / sizeof(nulls[0]); k++) g_export_table[nulls[k]] = NULL;
     }
     *ppExportTable = g_export_table;

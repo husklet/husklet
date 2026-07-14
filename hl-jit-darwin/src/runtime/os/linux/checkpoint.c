@@ -44,8 +44,8 @@
 //
 // TRIGGER (checkpoint): DDJIT_CHECKPOINT_DIR=<dir> arms a SIGUSR1 control handler (inherited by every forked
 // guest process); SIGUSR1 to the container init checkpoints the whole tree then _exit()s each process.
-// RESTORE: DDJIT_RESTORE_DIR=<dir> (or the `--restore <dir>` engine flag) -> dd_restore(rootfs, dir).
-// dd_jit::Runtime layers checkpoint(dir)/restore(dir) on this; the GUI calls it on window close/reopen.
+// RESTORE: DDJIT_RESTORE_DIR=<dir> (or the `--restore <dir>` engine flag) -> hl_restore(rootfs, dir).
+// hl_jit::Runtime layers checkpoint(dir)/restore(dir) on this; the GUI calls it on window close/reopen.
 
 #include <libproc.h>   // proc_pidpath: filter session members to engine processes
 #include <sys/sysctl.h> // KERN_PROC_SESSION: enumerate the container's whole process tree

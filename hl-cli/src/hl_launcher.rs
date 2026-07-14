@@ -101,10 +101,10 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
     // dir (`<storage>/checkpoint/<slot>`); None keeps the single shared slot (back-compat). The pcache is
     // a translation cache — safe (and cheaper) to SHARE across all of a workspace's slots.
     let (ckpt_dir, ckpt_pid_file) = match slot {
-        Some(s) => (ws.checkpoint_slot_dir(&paths::dd_root(), s), ws.checkpoint_slot_pid_file(&paths::dd_root(), s)),
-        None => (ws.checkpoint_dir(&paths::dd_root()), ws.checkpoint_pid_file(&paths::dd_root())),
+        Some(s) => (ws.checkpoint_slot_dir(&paths::hl_root(), s), ws.checkpoint_slot_pid_file(&paths::hl_root(), s)),
+        None => (ws.checkpoint_dir(&paths::hl_root()), ws.checkpoint_pid_file(&paths::hl_root())),
     };
-    let pcache_dir = ws.storage_dir(&paths::dd_root()).join("pcache");
+    let pcache_dir = ws.storage_dir(&paths::hl_root()).join("pcache");
     let _ = std::fs::create_dir_all(&pcache_dir);
     if let Some(p) = ckpt_dir.parent() {
         let _ = std::fs::create_dir_all(p);
@@ -183,7 +183,7 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
     let rootfs = rootfs_pb.to_string_lossy().into_owned();
 
     // Per-workspace persistent writable upper: the dev environment that survives across launches.
-    let upper_pb = ws.upper_dir(&paths::dd_root());
+    let upper_pb = ws.upper_dir(&paths::hl_root());
     std::fs::create_dir_all(&upper_pb)?;
     let upper = upper_pb.to_string_lossy().into_owned();
 
@@ -267,7 +267,7 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
             builder = builder.bind(sock.to_string_lossy().into_owned(), "/run/docker.sock".to_string(), false);
             env.push("DOCKER_HOST=unix:///run/docker.sock".to_string());
             // Inject a static `docker` CLI (matching the workspace arch) so it works even in a bare image.
-            let docker_bin = paths::dd_root().join("bin").join(match ws.arch {
+            let docker_bin = paths::hl_root().join("bin").join(match ws.arch {
                 Arch::Amd64 => "docker-amd64",
                 _ => "docker-arm64",
             });
@@ -296,18 +296,18 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
         // creates + listens on them). Drop-in dirs (client libs / demo bins) are passed only when present,
         // so a bare image needs no "dd-gpu image".
         let host_sock = std::env::var("DD_DISPLAY_SOCK")
-            .unwrap_or_else(|_| paths::dd_root().join("run").join("wayland-0").to_string_lossy().into_owned());
+            .unwrap_or_else(|_| paths::hl_root().join("run").join("wayland-0").to_string_lossy().into_owned());
         let host_gpu_sock = std::env::var("DD_GPU_EXEC_SOCK").unwrap_or_else(|_| {
             std::path::Path::new(&host_sock)
                 .parent()
                 .map(|d| d.join("dd-gpu.sock").to_string_lossy().into_owned())
-                .unwrap_or_else(|| paths::dd_root().join("run").join("dd-gpu.sock").to_string_lossy().into_owned())
+                .unwrap_or_else(|| paths::hl_root().join("run").join("dd-gpu.sock").to_string_lossy().into_owned())
         });
         let gui_arch = match ws.arch {
             Arch::Amd64 => "x86_64",
             _ => "aarch64",
         };
-        let gui_root = paths::dd_root().join("gui").join(gui_arch);
+        let gui_root = paths::hl_root().join("gui").join(gui_arch);
         // Inject the render-stack shim variant whose libc ABI MATCHES the guest. The gui root holds
         // per-libc variants (`lib.glibc` for glibc guests like Ubuntu/GTK; `lib.musl` / `lib.musl-chrome`
         // for musl guests like Alpine/Chrome) alongside a legacy shared `lib` dir. A concurrent launch of
@@ -393,7 +393,7 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
             Arch::Amd64 => ("x86_64", "nvidia-smi-amd64"),
             _ => ("aarch64", "nvidia-smi-arm64"),
         };
-        let dd = paths::dd_root();
+        let dd = paths::hl_root();
         let nvml_pb = dd.join("nvml").join(nvml_arch).join("libnvidia-ml.so.1");
         let nvml_so = if nvml_pb.exists() {
             nvml_pb.to_string_lossy().into_owned()

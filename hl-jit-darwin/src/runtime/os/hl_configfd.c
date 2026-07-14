@@ -5,7 +5,7 @@
 // streaming that buffer over `fd`. This is the ENGINE side: read + validate the buffer, then translate
 // every populated field back into the exact `DD_*`/`DDJIT_*` environment variable the existing env-driven
 // setup (container_init() in targets/*.c, the guest-env reader in os/linux/elf.c, the pcache/sentry
-// readers) already consumes, rebuild the guest argv, and hand off to dd_run() -- the identical call the
+// readers) already consumes, rebuild the guest argv, and hand off to hl_run() -- the identical call the
 // normal env/flag launch makes. Reusing the env path means ZERO duplication of container setup logic.
 #include <errno.h>
 #include <fcntl.h>
@@ -17,8 +17,8 @@
 
 #include "../include/hl_api.h"
 
-// dd_run() is defined by the including target TU (linux_aarch64.c / linux_x86_64.c / darwin's jitdarwin.c).
-int dd_run(const char *rootfs, int argc, char *const argv[]);
+// hl_run() is defined by the including target TU (linux_aarch64.c / linux_x86_64.c / darwin's jitdarwin.c).
+int hl_run(const char *rootfs, int argc, char *const argv[]);
 
 // Read exactly `n` bytes from `fd` into `buf`, looping over short reads. Returns 0 on success, -1 on
 // EOF/error -- a truncated buffer is a hard failure (a partial config must never launch a container).
@@ -53,8 +53,8 @@ static const char *cfd_str(const char *pool, uint32_t pool_len, uint32_t off) {
 }
 
 // Read a `hl_config` (+ its trailing string pool) from `fd`, re-hydrate the engine's DD_*/DDJIT_* env,
-// rebuild the guest argv, and dispatch to dd_run(). The spawn shim normally enters through
-// hl_run_configfile() below; --configfd remains supported for direct/debug launches. Returns dd_run()'s
+// rebuild the guest argv, and dispatch to hl_run(). The spawn shim normally enters through
+// hl_run_configfile() below; --configfd remains supported for direct/debug launches. Returns hl_run()'s
 // exit code, or a nonzero code on any read/validation failure. Single-shot per process.
 int hl_run_configfd(int fd) {
     struct hl_config cfg;
@@ -234,8 +234,8 @@ int hl_run_configfd(int fd) {
 
     // rootfs: "" (bare launch) maps to NULL, matching the flag path's `rootfs = NULL` default.
     const char *rootfs = cfd_str(pool, cfg.pool_len, cfg.rootfs_off);
-    int rc = dd_run(rootfs[0] ? rootfs : NULL, n, argv2);
-    // Single-shot process: dd_run typically _exit()s the worker and never returns; if it does, release.
+    int rc = hl_run(rootfs[0] ? rootfs : NULL, n, argv2);
+    // Single-shot process: hl_run typically _exit()s the worker and never returns; if it does, release.
     free(argv2);
     free(pool);
     return rc;

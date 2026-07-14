@@ -67,7 +67,7 @@ static inline uint64_t coldprof_now_ns(void) {
 // ---- opt8 persistent translated-code cache (DDJIT_PCACHE=1; default OFF) ----
 // Deterministic guest/arena bases let us persist the translated arena + block map and mmap it back on
 // the next run of the same binary, skipping retranslation. Emitted blocks bake a handful of HOST pointers
-// (block_return, &g_ibtc, &g_fast_count, &g_pending, &g_t2cnt[], &dd_rep_movs/stos, the inline-fastsys
+// (block_return, &g_ibtc, &g_fast_count, &g_pending, &g_t2cnt[], &hl_rep_movs/stos, the inline-fastsys
 // counters) -- every one lives in THIS PIE binary's image, which dyld slides by ONE vmaddr_slide per run.
 // We record each baked slot's arena offset (g_reloc; emitted as a fixed 4-insn movz/movk so it is
 // rewritable to any address) and, on load, add (block_return_now - block_return_at_save) -- the single

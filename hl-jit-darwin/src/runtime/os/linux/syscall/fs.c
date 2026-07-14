@@ -1999,7 +1999,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
             int fd = -1, e = ENOENT;
             for (int t = 0; t < 64; t++) {
                 char nm[40];
-                snprintf(nm, sizeof nm, ".dd_tmpfile_%d_%d", (int)getpid(), rand());
+                snprintf(nm, sizeof nm, ".hl_tmpfile_%d_%d", (int)getpid(), rand());
                 fd = openat(dfd, nm, O_CREAT | O_EXCL | O_RDWR, (mode_t)(a3 ? a3 : 0600));
                 e = errno;
                 if (fd >= 0) {

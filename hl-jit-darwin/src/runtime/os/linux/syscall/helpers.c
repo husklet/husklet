@@ -97,7 +97,7 @@ static int flock_companion(int fd) {
 
 // flock(2): whole-file advisory lock delegated to the companion. Returns 0 or -1 (host errno set); the
 // caller applies the normal macOS->Linux errno translation.
-static int dd_flock(int fd, int op) {
+static int hl_flock(int fd, int op) {
     int idx = flock_companion(fd);
     if (idx < 0) return -1;
     int comp = g_flkcomp[idx].fd, base = op & ~LOCK_NB;
@@ -675,7 +675,7 @@ static void dirs_drop(int fd) {
 // begins with "#!", fills `interp` (size ni) with the interpreter path and `arg` (size na) with the
 // optional single argument (arg[0]==0 when there is none) and returns 1. Returns 0 when it is not a
 // shebang script, -1 when the file can't be opened/read. Shared by execve (case 221) and the initial
-// program loader (dd_run): both then rewrite argv to [interp, (arg), scriptpath, args...] and load the
+// program loader (hl_run): both then rewrite argv to [interp, (arg), scriptpath, args...] and load the
 // INTERPRETER instead of the script. load_elf has no ELF-magic/#! check, so the script bytes would
 // otherwise be parsed as a bogus ELF and fault.
 static int parse_shebang(const char *host_path, char *interp, size_t ni, char *arg, size_t na) {

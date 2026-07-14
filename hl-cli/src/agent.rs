@@ -30,7 +30,7 @@ pub fn render_plist() -> String {
     let jit_dir = daemon
         .parent()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| paths::dd_root());
+        .unwrap_or_else(|| paths::hl_root());
     let sock = paths::socket();
     let images = paths::images_dir();
     let out = paths::logs_dir().join("daemon.out.log");
@@ -74,7 +74,7 @@ pub fn write_plist() -> std::io::Result<()> {
     for d in [
         paths::run_dir(),
         paths::images_dir(),
-        paths::dd_root().join("volumes"),
+        paths::hl_root().join("volumes"),
         paths::logs_dir(),
     ] {
         std::fs::create_dir_all(&d)?;

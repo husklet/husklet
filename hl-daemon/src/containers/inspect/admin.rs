@@ -121,7 +121,7 @@ pub(crate) async fn containers_export(State(a): State<App>, Path(id): Path<Strin
     // With no writable upper (darwin / legacy), tar the rootfs directly. With one, materialize the merged
     // view into a temp dir (lower copied, then upper overlaid so container writes win) and tar THAT.
     let merged_tmp = if !upper.is_empty() && std::path::Path::new(&upper).is_dir() {
-        let tmp = dd_home().join("export-tmp").join(&id[..id.len().min(16)]);
+        let tmp = hl_home().join("export-tmp").join(&id[..id.len().min(16)]);
         let _ = std::fs::remove_dir_all(&tmp);
         if std::fs::create_dir_all(&tmp).is_err() {
             return server_error("export: failed to stage merged rootfs");

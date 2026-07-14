@@ -523,7 +523,7 @@ pub extern "C" fn eglWaitNative(_engine: i32) -> u32 {
 // window surface bring-up + present (the frame boundary)
 // ===================================================================================================
 
-/// Our own `libwayland-egl` window handle (mirrors gl_shim.c `struct dd_wl_egl_window`). The first
+/// Our own `libwayland-egl` window handle (mirrors gl_shim.c `struct hl_wl_egl_window`). The first
 /// field is Mesa-ABI-compatible (`intptr_t version`) so a stray Mesa struct is still parseable.
 const DD_WL_EGL_MAGIC: isize = 0x0064_6477_6c65_676c; // "ddwlegl"
 #[repr(C)]
@@ -542,7 +542,7 @@ pub struct DdWlEglWindow {
 }
 
 /// Parse the app's native window handle to a backing `(width, height)`. Handles our
-/// `dd_wl_egl_window` magic struct (glmark2/Chrome via our libwayland-egl) plus gl_shim.c's stock-app
+/// `hl_wl_egl_window` magic struct (glmark2/Chrome via our libwayland-egl) plus gl_shim.c's stock-app
 /// heuristics (es2*/ANGLE two-int + Mesa `wl_egl_window` word shapes).
 unsafe fn parse_native_window(w: *const c_void) -> (u32, u32) {
     let (mut ww, mut hh) = (256i32, 256i32);

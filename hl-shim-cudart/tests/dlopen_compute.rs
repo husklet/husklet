@@ -12,7 +12,7 @@ use std::process::Command;
 fn cdylib() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let profile = exe.parent()?.parent()?;
-    for name in ["libdd_shim_cudart.so", "libdd_shim_cudart.dylib"] {
+    for name in ["libhl_shim_cudart.so", "libhl_shim_cudart.dylib"] {
         let p = profile.join(name);
         if p.exists() {
             return Some(p);
