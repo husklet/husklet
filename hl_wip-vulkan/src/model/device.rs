@@ -17,6 +17,7 @@ use super::instance::PhysicalDeviceDesc;
 use super::memory::{BufferRec, ImageRec, MemRec, SamplerRec};
 use super::pipeline::{PipelineLayoutRec, PipelineRec, ShaderRec};
 use super::queue::{FenceRec, Queue, SurfaceRec, SwapchainRec};
+use super::sync::{EventRec, QueryPoolRec, SemaphoreRec};
 use crate::*;
 use std::collections::HashMap;
 
@@ -38,8 +39,17 @@ pub struct Device {
     pub descriptor_sets: HashMap<VkDescriptorSet, DsetRec>,
     pub command_buffers: HashMap<VkCommandBuffer, CmdBufRec>,
     pub fences: HashMap<VkFence, FenceRec>,
+    pub semaphores: HashMap<VkSemaphore, SemaphoreRec>,
+    pub events: HashMap<VkEvent, EventRec>,
+    pub query_pools: HashMap<VkQueryPool, QueryPoolRec>,
     pub surfaces: HashMap<VkSurfaceKHR, SurfaceRec>,
     pub swapchains: HashMap<VkSwapchainKHR, SwapchainRec>,
+
+    /// `VkImage` handle → its last-recorded `VkImageLayout` (raw). Layout is implicit in the hl-GPU IR
+    /// (the executor needs no explicit transitions), so this is correctness bookkeeping only: a
+    /// `vkCmdPipelineBarrier` records the transition here and emits no IR. Ported (simplified) from
+    /// `hl-shim-vk`'s per-subresource layout tracker.
+    pub image_layouts: HashMap<VkImage, i32>,
 
     // ---- id counters (monotonic) ----
     /// hl-GPU IR object-id counter — one shared namespace across every resource kind (the host backend
@@ -49,6 +59,8 @@ pub struct Device {
     next_handle: u64,
     /// Timeline value for the next fence signal (monotonic across the device).
     fence_value: u64,
+    /// Host-monotonic serial handed out by `vkCmdWriteTimestamp` (strictly increasing; not wall-clock).
+    timestamp: u64,
 }
 
 impl Device {
@@ -69,11 +81,16 @@ impl Device {
             descriptor_sets: HashMap::new(),
             command_buffers: HashMap::new(),
             fences: HashMap::new(),
+            semaphores: HashMap::new(),
+            events: HashMap::new(),
+            query_pools: HashMap::new(),
             surfaces: HashMap::new(),
             swapchains: HashMap::new(),
+            image_layouts: HashMap::new(),
             next_ir: 0,
             next_handle: 0,
             fence_value: 1,
+            timestamp: 1,
         }
     }
 
@@ -97,6 +114,14 @@ impl Device {
     pub fn next_fence_value(&mut self) -> u64 {
         let v = self.fence_value;
         self.fence_value += 1;
+        v
+    }
+
+    /// The next host-monotonic timestamp serial (`vkCmdWriteTimestamp`). Strictly increasing — the only
+    /// guarantee an app may rely on across two timestamps in submission order.
+    pub fn next_timestamp(&mut self) -> u64 {
+        let v = self.timestamp;
+        self.timestamp += 1;
         v
     }
 

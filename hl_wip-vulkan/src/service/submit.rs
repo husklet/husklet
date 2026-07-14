@@ -8,6 +8,7 @@
 //! hl-cuda's `synchronize` uses).
 
 use crate::model::command::CommandBufferState;
+use crate::model::sync::{DeferredOp, QueryResult};
 use crate::*;
 use hl_gpu::{Cmd, CommandBuffer, CommandSink, FenceId, GpuError, Result};
 
@@ -34,8 +35,11 @@ pub fn queue_submit(
         None => None,
     };
 
-    // Snapshot each command buffer's encoder (owned), validating the handle + state.
+    // Snapshot each command buffer's encoder + its out-of-band buffer writes + deferred device ops
+    // (owned), validating the handle + state.
     let mut encoders: Vec<Vec<hl_gpu::Enc>> = Vec::with_capacity(command_buffers.len());
+    let mut buffer_writes: Vec<(u32, u64, Vec<u8>)> = Vec::new();
+    let mut deferred: Vec<DeferredOp> = Vec::new();
     for &cb in command_buffers {
         let rec = dev
             .command_buffers
@@ -45,11 +49,17 @@ pub fn queue_submit(
             return Err(GpuError::Invalid("vkQueueSubmit: command buffer is not executable"));
         }
         encoders.push(rec.enc.clone());
+        buffer_writes.extend(rec.buffer_writes.iter().cloned());
+        deferred.extend(rec.deferred.iter().cloned());
     }
 
-    // Build the frame: mapped-buffer flushes first, then one Submit per command buffer.
+    // Build the frame: mapped-buffer flushes first, then the recorded fill/update buffer writes, then one
+    // Submit per command buffer.
     let mut batch: Vec<Cmd> = Vec::new();
     for (id, offset, data) in dev.mapped_uploads() {
+        batch.push(Cmd::WriteBuffer { id, offset, data });
+    }
+    for (id, offset, data) in buffer_writes {
         batch.push(Cmd::WriteBuffer { id, offset, data });
     }
     let last = encoders.len().saturating_sub(1);
@@ -64,6 +74,16 @@ pub fn queue_submit(
             batch.push(Cmd::Submit(CommandBuffer { encoder, signal: sig }));
         }
     }
+
+    // Apply the deferred device ops (events set/reset, query reset/end/timestamp) — the host replay is
+    // synchronous, so they resolve at submit completion. `vkCmdCopyQueryPoolResults` reads the resolved
+    // pool state and appends its result copy as a trailing `Cmd::WriteBuffer` in the same frame.
+    for op in deferred {
+        if let Some(write) = apply_deferred(dev, op) {
+            batch.push(write);
+        }
+    }
+
     sink.submit(&batch)?;
 
     // Advance model state: command buffers pending, fence armed at its signal value.
@@ -116,4 +136,90 @@ pub fn reset_fence(dev: &mut Device, fence: VkFence) -> Result<()> {
         .ok_or(GpuError::Invalid("vkResetFences: unknown VkFence"))?
         .signaled = false;
     Ok(())
+}
+
+/// Apply one recorded device event/query op to the device state at (synchronous) submit completion,
+/// returning a `Cmd::WriteBuffer` for the one op (`CopyResults`) that emits IR. Ported from
+/// `query.rs::apply_deferred`.
+fn apply_deferred(dev: &mut Device, op: DeferredOp) -> Option<Cmd> {
+    match op {
+        DeferredOp::Event { event, set } => {
+            if let Some(e) = dev.events.get_mut(&event) {
+                e.signaled = set;
+            }
+            None
+        }
+        DeferredOp::QueryReset { pool, first, count } => {
+            if let Some(p) = dev.query_pools.get_mut(&pool) {
+                for i in first..first.saturating_add(count) {
+                    if let Some(slot) = p.results.get_mut(i as usize) {
+                        *slot = QueryResult::default();
+                    }
+                }
+            }
+            None
+        }
+        DeferredOp::QueryEnd { pool, query, value } => {
+            if let Some(p) = dev.query_pools.get_mut(&pool) {
+                if let Some(slot) = p.results.get_mut(query as usize) {
+                    slot.available = true;
+                    slot.value = value;
+                }
+            }
+            None
+        }
+        DeferredOp::QueryTimestamp { pool, query } => {
+            let ts = dev.next_timestamp();
+            if let Some(p) = dev.query_pools.get_mut(&pool) {
+                if let Some(slot) = p.results.get_mut(query as usize) {
+                    slot.available = true;
+                    slot.value = ts;
+                }
+            }
+            None
+        }
+        DeferredOp::CopyResults {
+            pool,
+            first,
+            count,
+            dst_ir,
+            dst_offset,
+            dst_size,
+            stride,
+            wide,
+            with_availability,
+        } => {
+            let p = dev.query_pools.get(&pool)?;
+            let elem = if wide { 8usize } else { 4usize };
+            let mut bytes = vec![0u8; dst_size as usize];
+            let len = bytes.len();
+            for i in 0..count as usize {
+                let slot = p.results.get(first as usize + i).copied().unwrap_or_default();
+                let base = i * stride as usize;
+                if base + elem <= len {
+                    write_le(&mut bytes, base, slot.value, wide);
+                }
+                if with_availability {
+                    let a = base + elem;
+                    if a + elem <= len {
+                        write_le(&mut bytes, a, slot.available as u64, wide);
+                    }
+                }
+            }
+            Some(Cmd::WriteBuffer { id: dst_ir, offset: dst_offset, data: bytes })
+        }
+    }
+}
+
+/// Write a query result value into `buf` at `off`, 32- or 64-bit little-endian per `wide`. Out-of-range
+/// offsets are silently skipped (the caller has bounds-checked the element span). Ported from
+/// `query.rs::write_le`.
+fn write_le(buf: &mut [u8], off: usize, v: u64, wide: bool) {
+    if wide {
+        if let Some(d) = buf.get_mut(off..off + 8) {
+            d.copy_from_slice(&v.to_le_bytes());
+        }
+    } else if let Some(d) = buf.get_mut(off..off + 4) {
+        d.copy_from_slice(&(v as u32).to_le_bytes());
+    }
 }

@@ -22,6 +22,8 @@ pub mod icd;
 pub mod instance;
 pub mod state;
 pub mod stub;
+pub mod sync;
+pub mod transfer;
 pub mod types;
 
 // Bring every hand-written `#[no_mangle]` entry point into crate-root scope so the generated
@@ -37,6 +39,10 @@ use graphics::*;
 use icd::*;
 #[allow(unused_imports)]
 use instance::*;
+#[allow(unused_imports)]
+use sync::*;
+#[allow(unused_imports)]
+use transfer::*;
 
 // The generated C-ABI export surface: every `vk*` command not hand-written above (as a default stub),
 // plus the `dispatch_addr` / `DISPATCH_NAMES` census the loader-facing resolvers consult.

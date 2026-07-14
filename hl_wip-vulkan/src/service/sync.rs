@@ -1,0 +1,196 @@
+//! Host-side synchronization + query object lifecycle — `VkEvent`, timeline `VkSemaphore`, `VkQueryPool`.
+//!
+//! Ported from `hl-shim-vk/src/{event.rs,ext.rs,query.rs}` (themselves mirroring MoltenVK's `MVKEvent`,
+//! `MVKTimelineSemaphore`, `MVKQueryPool`). These are the HOST ops — no IR is emitted; they mutate/poll
+//! the [`Device`] model directly. The DEVICE ops (`vkCmd*`) that record into a command buffer and resolve
+//! at submit completion live in [`super::record`] / [`super::submit`].
+//!
+//! Bounded-domain truthfulness: the host replay is synchronous, so an unmet timeline wait honestly
+//! reports a timeout (it never blocks on a counter that cannot advance here), and occlusion /
+//! pipeline-statistics query values are a conservative `0` (no real GPU sample count). Availability, the
+//! timeline counter, and the read machinery are real and observable.
+
+use crate::model::sync::{EventRec, QueryPoolRec, QueryResult, SemaphoreRec};
+use crate::*;
+use hl_gpu::{GpuError, Result};
+
+// ---- events --------------------------------------------------------------------------------------
+
+/// `vkCreateEvent` — mint an unsignaled event. No IR.
+pub fn create_event(dev: &mut Device) -> VkEvent {
+    let handle = dev.alloc_handle();
+    dev.events.insert(handle, EventRec { signaled: false });
+    handle
+}
+
+/// `vkDestroyEvent` — drop the event (no-op on unknown / `VK_NULL_HANDLE`).
+pub fn destroy_event(dev: &mut Device, event: VkEvent) {
+    dev.events.remove(&event);
+}
+
+/// `vkSetEvent` (`set = true`) / `vkResetEvent` (`set = false`) — host set/clear. Errors on unknown.
+pub fn set_event(dev: &mut Device, event: VkEvent, set: bool) -> Result<()> {
+    dev.events
+        .get_mut(&event)
+        .ok_or(GpuError::Invalid("vkSetEvent/ResetEvent: unknown VkEvent"))?
+        .signaled = set;
+    Ok(())
+}
+
+/// `vkGetEventStatus` — the event's current signaled state (`true` → `VK_EVENT_SET`). Errors on unknown.
+pub fn event_status(dev: &Device, event: VkEvent) -> Result<bool> {
+    Ok(dev
+        .events
+        .get(&event)
+        .ok_or(GpuError::Invalid("vkGetEventStatus: unknown VkEvent"))?
+        .signaled)
+}
+
+// ---- semaphores (binary + timeline) --------------------------------------------------------------
+
+/// `vkCreateSemaphore` — mint a semaphore. `timeline` selects `VK_SEMAPHORE_TYPE_TIMELINE` (with
+/// `initial` counter); otherwise a binary semaphore. No IR (present/acquire sync is bookkeeping in the
+/// synchronous executor; the timeline counter is host-visible state).
+pub fn create_semaphore(dev: &mut Device, timeline: bool, initial: u64) -> VkSemaphore {
+    let handle = dev.alloc_handle();
+    let rec = if timeline { SemaphoreRec::timeline(initial) } else { SemaphoreRec::binary() };
+    dev.semaphores.insert(handle, rec);
+    handle
+}
+
+/// `vkDestroySemaphore` — drop the semaphore (no-op on unknown / `VK_NULL_HANDLE`).
+pub fn destroy_semaphore(dev: &mut Device, semaphore: VkSemaphore) {
+    dev.semaphores.remove(&semaphore);
+}
+
+/// `vkSignalSemaphore` — host signal of a TIMELINE semaphore to `value` (the counter only advances, so
+/// it moves to `max(counter, value)`). Errors on unknown or a binary semaphore. Ported from
+/// `MVKTimelineSemaphore::signal`.
+pub fn signal_semaphore(dev: &mut Device, semaphore: VkSemaphore, value: u64) -> Result<()> {
+    match dev.semaphores.get_mut(&semaphore) {
+        Some(sm) if sm.timeline => {
+            sm.counter = sm.counter.max(value);
+            Ok(())
+        }
+        _ => Err(GpuError::Invalid("vkSignalSemaphore: unknown or non-timeline VkSemaphore")),
+    }
+}
+
+/// `vkGetSemaphoreCounterValue` — the current counter of a TIMELINE semaphore. Errors on unknown or a
+/// binary semaphore.
+pub fn semaphore_counter(dev: &Device, semaphore: VkSemaphore) -> Result<u64> {
+    match dev.semaphores.get(&semaphore) {
+        Some(sm) if sm.timeline => Ok(sm.counter),
+        _ => Err(GpuError::Invalid("vkGetSemaphoreCounterValue: unknown or non-timeline VkSemaphore")),
+    }
+}
+
+/// `vkWaitSemaphores` — whether the timeline wait is satisfied NOW (`any` = `VK_SEMAPHORE_WAIT_ANY_BIT`,
+/// else wait-all). The host signals are synchronous, so a satisfied wait returns `true` immediately and
+/// an unsatisfiable one returns `false` (the shim maps that to `VK_TIMEOUT`; it never blocks on a counter
+/// that cannot advance). An unknown semaphore counts as unreached. Ported from `MVKDevice::waitSemaphores`.
+pub fn wait_semaphores(dev: &Device, semaphores: &[VkSemaphore], values: &[u64], any: bool) -> bool {
+    if semaphores.is_empty() {
+        return true;
+    }
+    let reached = |i: usize| {
+        dev.semaphores.get(&semaphores[i]).map(|sm| sm.counter >= values[i]).unwrap_or(false)
+    };
+    let n = semaphores.len().min(values.len());
+    if any {
+        (0..n).any(reached)
+    } else {
+        (0..n).all(reached)
+    }
+}
+
+// ---- query pools ---------------------------------------------------------------------------------
+
+/// `vkCreateQueryPool` — mint a pool of `count` unavailable/zero slots of `query_type`. Errors on a
+/// zero-count pool (a usage error). No IR.
+pub fn create_query_pool(dev: &mut Device, query_type: i32, count: u32) -> Result<VkQueryPool> {
+    if count == 0 {
+        return Err(GpuError::Invalid("vkCreateQueryPool: queryCount must be > 0"));
+    }
+    let handle = dev.alloc_handle();
+    dev.query_pools.insert(handle, QueryPoolRec::new(query_type, count));
+    Ok(handle)
+}
+
+/// `vkDestroyQueryPool` — drop the pool (no-op on unknown / `VK_NULL_HANDLE`).
+pub fn destroy_query_pool(dev: &mut Device, pool: VkQueryPool) {
+    dev.query_pools.remove(&pool);
+}
+
+/// `vkResetQueryPool` (Vulkan 1.2 / `VK_EXT_host_query_reset`) — host reset of `[first, first+count)` to
+/// unavailable/zero (no command buffer). Ported from `query.rs::vkResetQueryPool`.
+pub fn reset_query_pool(dev: &mut Device, pool: VkQueryPool, first: u32, count: u32) {
+    if let Some(p) = dev.query_pools.get_mut(&pool) {
+        for i in first..first.saturating_add(count) {
+            if let Some(slot) = p.results.get_mut(i as usize) {
+                *slot = QueryResult::default();
+            }
+        }
+    }
+}
+
+/// `vkGetQueryPoolResults` — copy `[first, first+count)` result slots into `out` honouring the flag set.
+/// Returns `Ok(true)` when every requested slot was written (`VK_SUCCESS`), `Ok(false)` when at least one
+/// was unavailable and neither `wait` nor `partial` was set (`VK_NOT_READY`). Errors (analogous to
+/// `VK_ERROR_INITIALIZATION_FAILED`) on an unknown pool or an out-of-range span. Ported from
+/// `query.rs::vkGetQueryPoolResults` / `MVKQueryPool::getResults`.
+#[allow(clippy::too_many_arguments)]
+pub fn get_query_pool_results(
+    dev: &Device,
+    pool: VkQueryPool,
+    first: u32,
+    count: u32,
+    out: &mut [u8],
+    stride: u64,
+    wide: bool,
+    wait: bool,
+    with_availability: bool,
+    partial: bool,
+) -> Result<bool> {
+    let p = dev
+        .query_pools
+        .get(&pool)
+        .ok_or(GpuError::Invalid("vkGetQueryPoolResults: unknown VkQueryPool"))?;
+    if first.checked_add(count).is_none_or(|end| end > p.count) {
+        return Err(GpuError::Invalid("vkGetQueryPoolResults: query range out of bounds"));
+    }
+    let elem = if wide { 8usize } else { 4usize };
+    let len = out.len();
+    let mut all_ready = true;
+    for i in 0..count as usize {
+        let slot = p.results[first as usize + i];
+        let base = i * stride as usize;
+        // Availability gates the value write unless the caller opted into WAIT (satisfied immediately in
+        // the synchronous model) or PARTIAL (write whatever is there). Missing availability → not ready.
+        if slot.available || wait || partial {
+            if base + elem <= len {
+                write_le(out, base, slot.value, wide);
+            }
+        } else {
+            all_ready = false;
+        }
+        if with_availability {
+            let a = base + elem;
+            if a + elem <= len {
+                write_le(out, a, slot.available as u64, wide);
+            }
+        }
+    }
+    Ok(all_ready)
+}
+
+/// Write a query result value into `buf` at `off`, 32- or 64-bit little-endian per `wide`.
+fn write_le(buf: &mut [u8], off: usize, v: u64, wide: bool) {
+    if wide {
+        if let Some(d) = buf.get_mut(off..off + 8) {
+            d.copy_from_slice(&v.to_le_bytes());
+        }
+    } else if let Some(d) = buf.get_mut(off..off + 4) {
+        d.copy_from_slice(&(v as u32).to_le_bytes());
+    }
+}

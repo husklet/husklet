@@ -6,6 +6,8 @@
 //! [`hl_gpu::Cmd::Submit`] ([`crate::service::submit`]).
 
 use super::pipeline::PipelineKind;
+use super::sync::DeferredOp;
+use crate::VkQueryPool;
 use hl_gpu::protocol::model::command::Enc;
 
 /// The Vulkan command-buffer lifecycle state (spec §6). Ported from MoltenVK's flag model:
@@ -35,6 +37,19 @@ pub struct CmdBufRec {
     /// `(set index, bind-group IR id)` bound by `vkCmdBindDescriptorSets`, replayed into the next pass.
     pub pending_bind_groups: Vec<(u32, u32)>,
     pub in_render_pass: bool,
+    /// The IR texture id of the active render pass's color target (set at `vkCmdBeginRenderPass`) — the
+    /// target `vkCmdClearAttachments` clears while inside the pass.
+    pub active_render_texture: Option<u32>,
+    /// The `(pool, query)` opened by `vkCmdBeginQuery` (spec §17.4: at most one active query of a type).
+    /// `vkCmdEndQuery` resolves the matching slot.
+    pub active_query: Option<(VkQueryPool, u32)>,
+    /// Buffer writes (`vkCmdFillBuffer` / `vkCmdUpdateBuffer`) — `(ir buffer id, offset, bytes)`, flushed
+    /// as `Cmd::WriteBuffer`s at the start of the owning `vkQueueSubmit`. Kept out of the `Enc` encoder
+    /// (there is no encoder-level write op) exactly as `hl-shim-vk` does.
+    pub buffer_writes: Vec<(u32, u64, Vec<u8>)>,
+    /// Device event/query ops (`vkCmdSetEvent`/`vkCmdResetEvent`/`vkCmdResetQueryPool`/`vkCmdEndQuery`/
+    /// `vkCmdWriteTimestamp`/`vkCmdCopyQueryPoolResults`) applied at (synchronous) submit completion.
+    pub deferred: Vec<DeferredOp>,
 }
 
 impl CmdBufRec {
@@ -50,5 +65,9 @@ impl CmdBufRec {
         self.bound_pipeline_kind = None;
         self.pending_bind_groups.clear();
         self.in_render_pass = false;
+        self.active_render_texture = None;
+        self.active_query = None;
+        self.buffer_writes.clear();
+        self.deferred.clear();
     }
 }

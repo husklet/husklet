@@ -8,12 +8,14 @@ use hl_vulkan::adapter::spirv;
 use hl_vulkan::model::descriptor::{vk_descriptor_type, LayoutBinding};
 use hl_vulkan::model::memory::{vk_buffer_usage, vk_format, vk_image_usage};
 use hl_vulkan::result;
-use hl_vulkan::service::{create, present, record, submit};
+use hl_vulkan::service::{create, present, record, submit, sync};
 use hl_vulkan::{Device, Instance};
 
 use hl_gpu::protocol::model::command::Enc;
-use hl_gpu::protocol::model::descriptor::{BindResource, VertexAttr, VertexLayout};
-use hl_gpu::protocol::model::enums::{buffer_usage, IndexFormat, TextureFormat};
+use hl_gpu::protocol::model::descriptor::{
+    BindResource, Extent3d, Origin3d, TextureSubresource, VertexAttr, VertexLayout,
+};
+use hl_gpu::protocol::model::enums::{buffer_usage, Filter, IndexFormat, TextureFormat};
 use hl_gpu::{Cmd, FenceId, GpuError, RecordingSink, ShaderPayloadKind};
 
 /// A slot-0 vertex layout carrying interleaved position (offset 0) + color (offset 8), stride 24 — the
@@ -481,6 +483,363 @@ fn present_path_lowers_surface_and_present() {
 // ---------------------------------------------------------------------------------------------------
 // result mapping
 // ---------------------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------------------------------
+// transfer path: buffer/image copies, blits, clears, fills/updates, barriers
+// ---------------------------------------------------------------------------------------------------
+
+/// The ir buffer/image id behind a handle (the id the emitted encoder op references).
+fn buf_ir(d: &Device, h: u64) -> u32 {
+    d.buffers.get(&h).unwrap().ir_id
+}
+fn img_ir(d: &Device, h: u64) -> u32 {
+    d.images.get(&h).unwrap().ir_id
+}
+
+/// Record `record_fn` into a fresh command buffer and return the single submitted encoder stream.
+fn record_and_submit(
+    d: &mut Device,
+    sink: &mut RecordingSink,
+    record_fn: impl FnOnce(&mut Device, u64),
+) -> Vec<Enc> {
+    let cb = record::allocate_command_buffer(d);
+    record::begin(d, cb).unwrap();
+    record_fn(d, cb);
+    record::end(d, cb).unwrap();
+    submit::queue_submit(d, sink, &[cb], None).unwrap();
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::Submit(cbuf)] => cbuf.encoder.clone(),
+        other => panic!("expected a single Submit, got {other:?}"),
+    }
+}
+
+#[test]
+fn copy_buffer_lowers_to_copy_buffer_to_buffer() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 256).unwrap();
+    let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 256).unwrap();
+    let (s, t) = (buf_ir(&d, src), buf_ir(&d, dst));
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_buffer(d, cb, src, dst, 16, 32, 64).unwrap();
+    });
+    assert_eq!(enc, vec![Enc::CopyBufferToBuffer { src: s, src_offset: 16, dst: t, dst_offset: 32, size: 64 }]);
+}
+
+#[test]
+fn copy_buffer_to_image_lowers_to_copy_buffer_to_texture() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    // A 4x4 RGBA8 target: tight-packed bytes_per_row = 4*4 = 16; span = 16*3 + 16 = 64.
+    let src = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 64).unwrap();
+    let dst =
+        create::create_image(&mut d, &mut sink, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+            .unwrap();
+    let (s, t) = (buf_ir(&d, src), img_ir(&d, dst));
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_buffer_to_image(d, cb, src, dst, 0, 0, 0, 4, 4).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![Enc::CopyBufferToTexture { src: s, src_offset: 0, bytes_per_row: 16, dst: t, mip: 0, width: 4, height: 4 }]
+    );
+}
+
+#[test]
+fn copy_image_to_buffer_lowers_to_copy_texture_to_buffer() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src =
+        create::create_image(&mut d, &mut sink, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC)
+            .unwrap();
+    let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
+    let (s, t) = (img_ir(&d, src), buf_ir(&d, dst));
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_image_to_buffer(d, cb, src, dst, 0, 0, 0, 4, 4).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![Enc::CopyTextureToBuffer { src: s, mip: 0, width: 4, height: 4, dst: t, dst_offset: 0, bytes_per_row: 16 }]
+    );
+}
+
+#[test]
+fn copy_image_lowers_to_copy_texture_to_texture() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src =
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC)
+            .unwrap();
+    let dst =
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+            .unwrap();
+    let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_image(d, cb, src, dst, (1, 2), (3, 4), (4, 4)).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![Enc::CopyTextureToTexture {
+            src: s,
+            src_sub: TextureSubresource::base(),
+            src_origin: Origin3d { x: 1, y: 2, z: 0 },
+            dst: t,
+            dst_sub: TextureSubresource::base(),
+            dst_origin: Origin3d { x: 3, y: 4, z: 0 },
+            extent: Extent3d { width: 4, height: 4, depth: 1 },
+        }]
+    );
+    // Copy-compatible-format rejection: differing formats are a typed error, not a silent mis-copy.
+    let other =
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST)
+            .unwrap();
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    assert!(record::cmd_copy_image(&mut d, cb, src, other, (0, 0), (0, 0), (4, 4)).is_err());
+}
+
+#[test]
+fn blit_image_lowers_to_blit_texture_with_filter() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src =
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC)
+            .unwrap();
+    let dst =
+        create::create_image(&mut d, &mut sink, 16, 16, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+            .unwrap();
+    let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        // Upscale the 8x8 source into a 16x16 region with a linear filter.
+        record::cmd_blit_image(d, cb, src, dst, (0, 0), (8, 8), (0, 0), (16, 16), true).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![Enc::BlitTexture {
+            src: s,
+            src_sub: TextureSubresource::base(),
+            src_origin: Origin3d { x: 0, y: 0, z: 0 },
+            src_extent: Extent3d { width: 8, height: 8, depth: 1 },
+            dst: t,
+            dst_sub: TextureSubresource::base(),
+            dst_origin: Origin3d { x: 0, y: 0, z: 0 },
+            dst_extent: Extent3d { width: 16, height: 16, depth: 1 },
+            filter: Filter::Linear,
+        }]
+    );
+}
+
+#[test]
+fn clear_color_image_lowers_to_full_extent_clear_rect() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let img =
+        create::create_image(&mut d, &mut sink, 32, 16, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+            .unwrap();
+    let ir = img_ir(&d, img);
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_clear_color_image(d, cb, img, [0.25, 0.5, 0.75, 1.0]).unwrap();
+    });
+    assert_eq!(enc, vec![Enc::ClearRect { texture: ir, x: 0, y: 0, w: 32, h: 16, color: [0.25, 0.5, 0.75, 1.0] }]);
+}
+
+#[test]
+fn clear_attachments_lowers_to_clear_rect_on_active_target() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let target =
+        create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT)
+            .unwrap();
+    let ir = img_ir(&d, target);
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_begin_render_pass(d, cb, target, [0.0, 0.0, 0.0, 1.0], false).unwrap();
+        record::cmd_clear_attachment_rect(d, cb, 8, 8, 16, 16, [1.0, 0.0, 0.0, 1.0]).unwrap();
+        record::cmd_end_render_pass(d, cb).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![
+            Enc::BeginRenderPass {
+                color: vec![hl_gpu::protocol::model::descriptor::ColorAttachment {
+                    texture: ir,
+                    load: hl_gpu::protocol::model::enums::LoadOp::Load,
+                    clear: [0.0, 0.0, 0.0, 1.0],
+                    store: true,
+                }],
+                depth: None,
+            },
+            Enc::ClearRect { texture: ir, x: 8, y: 8, w: 16, h: 16, color: [1.0, 0.0, 0.0, 1.0] },
+            Enc::EndRenderPass,
+        ]
+    );
+    // A clear-attachments outside a render pass is a typed error (no active target to clear).
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    assert!(record::cmd_clear_attachment_rect(&mut d, cb, 0, 0, 4, 4, [0.0; 4]).is_err());
+}
+
+#[test]
+fn fill_and_update_buffer_flush_as_write_buffer_at_submit() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
+    let ir = buf_ir(&d, buf);
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    // Fill [0,8) with 0x01010101 (two words), then update [16,20) with explicit bytes.
+    record::cmd_fill_buffer(&mut d, cb, buf, 0, 8, 0x0101_0101).unwrap();
+    record::cmd_update_buffer(&mut d, cb, buf, 16, &[9, 8, 7, 6]).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    // The two buffer writes flush (in record order) as WriteBuffers before the (empty) Submit.
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::WriteBuffer { id: i1, offset: 0, data: d1 }, Cmd::WriteBuffer { id: i2, offset: 16, data: d2 }, Cmd::Submit(_)] => {
+            assert_eq!((*i1, *i2), (ir, ir));
+            assert_eq!(d1, &vec![1u8; 8]);
+            assert_eq!(d2, &vec![9u8, 8, 7, 6]);
+        }
+        other => panic!("expected [WriteBuffer, WriteBuffer, Submit], got {other:?}"),
+    }
+    // fill rejects a non-COPY_DST buffer and a misaligned offset.
+    let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 64).unwrap();
+    let cb2 = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb2).unwrap();
+    assert!(record::cmd_fill_buffer(&mut d, cb2, vbuf, 0, 8, 0).is_err());
+    assert!(record::cmd_fill_buffer(&mut d, cb2, buf, 2, 8, 0).is_err());
+}
+
+#[test]
+fn pipeline_barrier_records_layout_transition_and_emits_no_ir() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let img =
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+            .unwrap();
+    // VK_IMAGE_LAYOUT_UNDEFINED (0) -> VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL (7).
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_pipeline_barrier(d, cb, &[(img, 0, 7)]).unwrap();
+    });
+    // The layout-implicit IR carries no encoder op for a barrier.
+    assert!(enc.is_empty(), "a pipeline barrier emits no encoder op, got {enc:?}");
+    // The transition is modeled in device bookkeeping.
+    assert_eq!(d.image_layouts.get(&img), Some(&7));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// events + timeline semaphores + query pools
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn event_host_ops_and_device_set_resolves_at_submit() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let ev = sync::create_event(&mut d);
+    assert!(!sync::event_status(&d, ev).unwrap()); // created unsignaled
+
+    // Host set/reset mutate directly.
+    sync::set_event(&mut d, ev, true).unwrap();
+    assert!(sync::event_status(&d, ev).unwrap());
+    sync::set_event(&mut d, ev, false).unwrap();
+    assert!(!sync::event_status(&d, ev).unwrap());
+
+    // A device vkCmdSetEvent resolves at (synchronous) submit completion — signaled once submit returns.
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_set_event(&mut d, cb, ev, true).unwrap();
+    record::end(&mut d, cb).unwrap();
+    assert!(!sync::event_status(&d, ev).unwrap(), "not signaled until the submit completes");
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+    assert!(sync::event_status(&d, ev).unwrap(), "device-set event signaled after submit");
+
+    // An unknown event is a typed error, never a false success.
+    assert!(sync::set_event(&mut d, 0xdead, true).is_err());
+}
+
+#[test]
+fn timeline_semaphore_signal_wait_roundtrips() {
+    let mut d = dev();
+    let sem = sync::create_semaphore(&mut d, true, 2); // timeline, initial 2
+    assert_eq!(sync::semaphore_counter(&d, sem).unwrap(), 2);
+
+    // Host signal advances the counter monotonically (a signal below the current value is a no-op).
+    sync::signal_semaphore(&mut d, sem, 5).unwrap();
+    assert_eq!(sync::semaphore_counter(&d, sem).unwrap(), 5);
+    sync::signal_semaphore(&mut d, sem, 3).unwrap();
+    assert_eq!(sync::semaphore_counter(&d, sem).unwrap(), 5);
+
+    // A satisfied wait (counter >= value) is true; an unmet one is false (→ VK_TIMEOUT at the shim).
+    assert!(sync::wait_semaphores(&d, &[sem], &[5], false));
+    assert!(!sync::wait_semaphores(&d, &[sem], &[6], false));
+
+    // A binary semaphore has no timeline counter — host counter ops are typed errors.
+    let bin = sync::create_semaphore(&mut d, false, 0);
+    assert!(sync::semaphore_counter(&d, bin).is_err());
+    assert!(sync::signal_semaphore(&mut d, bin, 1).is_err());
+}
+
+#[test]
+fn query_pool_timestamp_records_and_results_readable() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    // A 2-slot TIMESTAMP pool (VkQueryType TIMESTAMP = 2).
+    let pool = sync::create_query_pool(&mut d, 2, 2).unwrap();
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_reset_query_pool(&mut d, cb, pool, 0, 2).unwrap();
+    record::cmd_write_timestamp(&mut d, cb, pool, 0).unwrap();
+    record::end(&mut d, cb).unwrap();
+
+    // Before submit the slot is unavailable → NOT_READY (no WAIT/PARTIAL).
+    let mut out = [0u8; 4];
+    assert_eq!(
+        sync::get_query_pool_results(&d, pool, 0, 1, &mut out, 4, false, false, false, false).unwrap(),
+        false
+    );
+
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    // After the (synchronous) submit the timestamp slot is available with a monotonic serial (1).
+    let mut out = [0u8; 4];
+    assert!(sync::get_query_pool_results(&d, pool, 0, 1, &mut out, 4, false, false, false, false).unwrap());
+    assert_eq!(u32::from_le_bytes(out), 1);
+
+    // A host reset clears availability again.
+    sync::reset_query_pool(&mut d, pool, 0, 2);
+    let mut out = [0u8; 4];
+    assert_eq!(
+        sync::get_query_pool_results(&d, pool, 0, 1, &mut out, 4, false, false, false, false).unwrap(),
+        false
+    );
+}
+
+#[test]
+fn copy_query_pool_results_writes_dst_buffer_at_submit() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let pool = sync::create_query_pool(&mut d, 2, 1).unwrap();
+    let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
+    let dst_ir = buf_ir(&d, dst);
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_reset_query_pool(&mut d, cb, pool, 0, 1).unwrap();
+    record::cmd_write_timestamp(&mut d, cb, pool, 0).unwrap();
+    // 32-bit results, no availability, stride 4.
+    record::cmd_copy_query_pool_results(&mut d, cb, pool, 0, 1, dst, 0, 4, false, false).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    // On completion the resolved timestamp is written into the destination buffer (trailing WriteBuffer).
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::Submit(_), Cmd::WriteBuffer { id, offset: 0, data }] => {
+            assert_eq!(*id, dst_ir);
+            assert_eq!(u32::from_le_bytes([data[0], data[1], data[2], data[3]]), 1);
+        }
+        other => panic!("expected [Submit, WriteBuffer], got {other:?}"),
+    }
+}
 
 #[test]
 fn gpu_error_maps_to_vk_result() {

@@ -57,6 +57,9 @@ pub type VkDescriptorPool = u64;
 pub type VkDescriptorSet = u64;
 pub type VkCommandBuffer = u64;
 pub type VkFence = u64;
+pub type VkSemaphore = u64;
+pub type VkEvent = u64;
+pub type VkQueryPool = u64;
 pub type VkSurfaceKHR = u64;
 pub type VkSwapchainKHR = u64;
 

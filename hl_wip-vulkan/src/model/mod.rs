@@ -13,3 +13,4 @@ pub mod instance;
 pub mod memory;
 pub mod pipeline;
 pub mod queue;
+pub mod sync;

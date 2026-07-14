@@ -681,36 +681,4 @@ pub extern "C" fn vkQueuePresentKHR(_queue: *mut c_void, p_present_info: *const 
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
-// ==================================================================================================
-// semaphores (present/acquire sync — bookkeeping only for the synchronous executor)
-// ==================================================================================================
-
-#[no_mangle]
-pub extern "C" fn vkCreateSemaphore(
-    _device: *mut c_void,
-    _p_create_info: *const c_void,
-    _p_allocator: *const c_void,
-    p_semaphore: *mut u64,
-) -> VkResult {
-    let handle = with(|s| {
-        let h = s.device.as_mut()?.alloc_handle();
-        s.semaphores.insert(h, ());
-        Some(h)
-    });
-    match handle {
-        Some(h) => {
-            if !p_semaphore.is_null() {
-                unsafe { *p_semaphore = h };
-            }
-            VK_SUCCESS
-        }
-        None => VK_ERROR_INITIALIZATION_FAILED,
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn vkDestroySemaphore(_device: *mut c_void, semaphore: u64, _p_allocator: *const c_void) {
-    with(|s| {
-        s.semaphores.remove(&semaphore);
-    });
-}
+// Semaphores (binary present/acquire sync + timeline) are hand-written in `crate::sync`.

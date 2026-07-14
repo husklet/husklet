@@ -45,9 +45,6 @@ pub struct State {
     pub render_passes: HashMap<u64, RenderPassRec>,
     /// `VkFramebuffer` handle → its attachment `VkImageView` handles (index 0 is the color target).
     pub framebuffers: HashMap<u64, Vec<u64>>,
-    /// `VkSemaphore` handles (present/acquire sync) — bookkeeping only; the synchronous executor needs no
-    /// real semaphore object.
-    pub semaphores: HashMap<u64, ()>,
 
     /// Stable loader-magic'd dispatchable tokens (a pointer, once minted, is reused so the loader's
     /// object identity is consistent across calls). `0` = not yet minted.
@@ -66,7 +63,6 @@ impl State {
             image_views: HashMap::new(),
             render_passes: HashMap::new(),
             framebuffers: HashMap::new(),
-            semaphores: HashMap::new(),
             phys_dev: 0,
             device_handle: 0,
             queue_handle: 0,

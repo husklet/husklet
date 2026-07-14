@@ -851,3 +851,199 @@ pub struct VkPresentInfoKHR {
     pub p_image_indices: *const u32,
     pub p_results: *mut i32,
 }
+
+// ==================================================================================================
+// transfer-path structs (buffer/image copies, blits, clears, pipeline barriers) — layout from vk.xml
+// ==================================================================================================
+
+/// `VK_IMAGE_ASPECT_COLOR_BIT` (the only aspect the software oracle materializes).
+pub const VK_IMAGE_ASPECT_COLOR_BIT: u32 = 0x0000_0001;
+/// `VK_FILTER_LINEAR` (`vkCmdBlitImage` filter; `VK_FILTER_NEAREST` = 0).
+pub const VK_FILTER_LINEAR: i32 = 1;
+
+/// A `pNext`-chain input node header (`{ sType, pNext }`, const) — every extension struct begins with it.
+#[repr(C)]
+pub struct VkBaseInStructure {
+    pub s_type: i32,
+    pub p_next: *const VkBaseInStructure,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VkOffset3D {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+}
+
+/// `VkImageSubresourceLayers` — the (aspect, mip, layers) a copy/blit region reads or writes.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkImageSubresourceLayers {
+    pub aspect_mask: VkFlags,
+    pub mip_level: u32,
+    pub base_array_layer: u32,
+    pub layer_count: u32,
+}
+
+#[repr(C)]
+pub struct VkBufferCopy {
+    pub src_offset: VkDeviceSize,
+    pub dst_offset: VkDeviceSize,
+    pub size: VkDeviceSize,
+}
+
+#[repr(C)]
+pub struct VkBufferImageCopy {
+    pub buffer_offset: VkDeviceSize,
+    pub buffer_row_length: u32,
+    pub buffer_image_height: u32,
+    pub image_subresource: VkImageSubresourceLayers,
+    pub image_offset: VkOffset3D,
+    pub image_extent: VkExtent3D,
+}
+
+#[repr(C)]
+pub struct VkImageCopy {
+    pub src_subresource: VkImageSubresourceLayers,
+    pub src_offset: VkOffset3D,
+    pub dst_subresource: VkImageSubresourceLayers,
+    pub dst_offset: VkOffset3D,
+    pub extent: VkExtent3D,
+}
+
+#[repr(C)]
+pub struct VkImageBlit {
+    pub src_subresource: VkImageSubresourceLayers,
+    pub src_offsets: [VkOffset3D; 2],
+    pub dst_subresource: VkImageSubresourceLayers,
+    pub dst_offsets: [VkOffset3D; 2],
+}
+
+/// `VkClearColorValue` is a 16-byte union; the color-clear path reads it as `float32[4]`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkClearColorValue {
+    pub float32: [f32; 4],
+}
+
+#[repr(C)]
+pub struct VkClearAttachment {
+    pub aspect_mask: VkFlags,
+    pub color_attachment: u32,
+    pub clear_value: VkClearValue,
+}
+
+#[repr(C)]
+pub struct VkClearRect {
+    pub rect: VkRect2D,
+    pub base_array_layer: u32,
+    pub layer_count: u32,
+}
+
+/// `VkImageMemoryBarrier` (legacy / core 1.0) — an image's `oldLayout → newLayout` transition.
+#[repr(C)]
+pub struct VkImageMemoryBarrier {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_access_mask: VkFlags,
+    pub dst_access_mask: VkFlags,
+    pub old_layout: i32,
+    pub new_layout: i32,
+    pub src_queue_family_index: u32,
+    pub dst_queue_family_index: u32,
+    pub image: u64,
+    pub subresource_range: VkImageSubresourceRange,
+}
+
+/// `VkImageMemoryBarrier2` (synchronization2 / core 1.3) — per-barrier 64-bit stage/access masks.
+#[repr(C)]
+pub struct VkImageMemoryBarrier2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub src_stage_mask: u64,
+    pub src_access_mask: u64,
+    pub dst_stage_mask: u64,
+    pub dst_access_mask: u64,
+    pub old_layout: i32,
+    pub new_layout: i32,
+    pub src_queue_family_index: u32,
+    pub dst_queue_family_index: u32,
+    pub image: u64,
+    pub subresource_range: VkImageSubresourceRange,
+}
+
+/// `VkDependencyInfo` — the `vkCmdPipelineBarrier2` argument aggregating the sync2 barrier arrays.
+#[repr(C)]
+pub struct VkDependencyInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub dependency_flags: VkFlags,
+    pub memory_barrier_count: u32,
+    pub p_memory_barriers: *const c_void,
+    pub buffer_memory_barrier_count: u32,
+    pub p_buffer_memory_barriers: *const c_void,
+    pub image_memory_barrier_count: u32,
+    pub p_image_memory_barriers: *const VkImageMemoryBarrier2,
+}
+
+// ==================================================================================================
+// sync + query object structs (events, timeline semaphores, query pools) — layout from vk.xml
+// ==================================================================================================
+
+/// `VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO` (the pNext node selecting a timeline semaphore).
+pub const VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO: i32 = 1_000_207_002;
+/// `VK_SEMAPHORE_TYPE_TIMELINE` (`VkSemaphoreTypeCreateInfo::semaphoreType`; BINARY = 0).
+pub const VK_SEMAPHORE_TYPE_TIMELINE: i32 = 1;
+
+/// `VkQueryResultFlagBits` (stable ABI).
+pub const VK_QUERY_RESULT_64_BIT: u32 = 0x1;
+pub const VK_QUERY_RESULT_WAIT_BIT: u32 = 0x2;
+pub const VK_QUERY_RESULT_WITH_AVAILABILITY_BIT: u32 = 0x4;
+pub const VK_QUERY_RESULT_PARTIAL_BIT: u32 = 0x8;
+/// `VK_SEMAPHORE_WAIT_ANY_BIT` (`VkSemaphoreWaitFlags`).
+pub const VK_SEMAPHORE_WAIT_ANY_BIT: u32 = 0x1;
+
+#[repr(C)]
+pub struct VkEventCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+}
+
+/// `VkSemaphoreTypeCreateInfo` — a `VkSemaphoreCreateInfo` pNext selecting BINARY/TIMELINE + initial value.
+#[repr(C)]
+pub struct VkSemaphoreTypeCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub semaphore_type: i32,
+    pub initial_value: u64,
+}
+
+#[repr(C)]
+pub struct VkSemaphoreSignalInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub semaphore: u64,
+    pub value: u64,
+}
+
+#[repr(C)]
+pub struct VkSemaphoreWaitInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub semaphore_count: u32,
+    pub p_semaphores: *const u64,
+    pub p_values: *const u64,
+}
+
+#[repr(C)]
+pub struct VkQueryPoolCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub query_type: i32,
+    pub query_count: u32,
+    pub pipeline_statistics: VkFlags,
+}
