@@ -24,6 +24,18 @@ path = "src/lib.rs"
 # lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.
 hl_gpu = { package = "hl_wip_gpu", path = "../hl_wip-gpu" }
 
+# The container-runtime driver-plugin seam (`hl_jit::Driver`). OPTIONAL + behind the `jit` feature so the
+# HOST composition root gets the `Cuda` driver plug, while the GUEST shim cdylibs (which depend on this
+# crate for the lowering services) do NOT drag hl-jit / hl-jit-darwin / tokio into a guest .so — they set
+# `default-features = false`. hl-jit builds on this Linux host.
+hl-jit = { path = "../hl-jit", optional = true }
+
+[features]
+# On by default so `cargo test --manifest-path hl_wip-cuda/Cargo.toml` builds the `Cuda` driver plug.
+default = ["jit"]
+# Gate the host-side `driver` module (the `hl_jit::Driver` impl) + its hl-jit dependency.
+jit = ["dep:hl-jit"]
+
 # Empty table => this file is its own workspace root, so the crate is EXCLUDED from the repo-root
 # workspace and keeps the shared tree green.
 [workspace]

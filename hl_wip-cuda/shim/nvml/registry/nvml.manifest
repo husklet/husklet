@@ -1,0 +1,68 @@
+# NVML entry-point manifest for the hl_wip-cuda nvml guest shim (libnvidia-ml.so.1).
+# Extracted from the clean-room NVML oracle hl-gpu/nvml/nvml_shim.c (its exported nvml* surface).
+# Format: NVML<TAB>name<TAB>ret<TAB>params  (params = `ctype|pname` joined by ";"; empty for void).
+# Consumed by build.rs to code-generate the #[no_mangle] extern "C" export surface. Every entry is a
+# benign truthful stub (NVML_SUCCESS / null string) — device-info surface, not a compute path.
+
+NVML	nvmlInit_v2	nvmlReturn_t	
+NVML	nvmlInit	nvmlReturn_t	
+NVML	nvmlInitWithFlags	nvmlReturn_t	unsigned int|f
+NVML	nvmlShutdown	nvmlReturn_t	
+NVML	nvmlErrorString	const char*	nvmlReturn_t|r
+NVML	nvmlSystemGetDriverVersion	nvmlReturn_t	char*|v;unsigned int|len
+NVML	nvmlSystemGetNVMLVersion	nvmlReturn_t	char*|v;unsigned int|len
+NVML	nvmlSystemGetCudaDriverVersion	nvmlReturn_t	int*|v
+NVML	nvmlSystemGetCudaDriverVersion_v2	nvmlReturn_t	int*|v
+NVML	nvmlDeviceGetCount_v2	nvmlReturn_t	unsigned int*|c
+NVML	nvmlDeviceGetCount	nvmlReturn_t	unsigned int*|c
+NVML	nvmlDeviceGetHandleByIndex_v2	nvmlReturn_t	unsigned int|i;nvmlDevice_t*|d
+NVML	nvmlDeviceGetHandleByIndex	nvmlReturn_t	unsigned int|i;nvmlDevice_t*|d
+NVML	nvmlDeviceGetHandleByUUID	nvmlReturn_t	const char*|uuid;nvmlDevice_t*|dev
+NVML	nvmlDeviceGetHandleByPciBusId_v2	nvmlReturn_t	const char*|p;nvmlDevice_t*|d
+NVML	nvmlDeviceGetHandleByPciBusId	nvmlReturn_t	const char*|p;nvmlDevice_t*|d
+NVML	nvmlDeviceGetName	nvmlReturn_t	nvmlDevice_t|d;char*|name;unsigned int|len
+NVML	nvmlDeviceGetUUID	nvmlReturn_t	nvmlDevice_t|d;char*|uuid;unsigned int|len
+NVML	nvmlDeviceGetSerial	nvmlReturn_t	nvmlDevice_t|d;char*|serial;unsigned int|len
+NVML	nvmlDeviceGetIndex	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|index
+NVML	nvmlDeviceGetMinorNumber	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|minor
+NVML	nvmlDeviceGetBrand	nvmlReturn_t	nvmlDevice_t|d;nvmlBrandType_t*|type
+NVML	nvmlDeviceGetCudaComputeCapability	nvmlReturn_t	nvmlDevice_t|d;int*|major;int*|minor
+NVML	nvmlDeviceGetMemoryInfo	nvmlReturn_t	nvmlDevice_t|d;nvmlMemory_t*|m
+NVML	nvmlDeviceGetMemoryInfo_v2	nvmlReturn_t	nvmlDevice_t|d;nvmlMemory_v2_t*|m
+NVML	nvmlDeviceGetUtilizationRates	nvmlReturn_t	nvmlDevice_t|d;nvmlUtilization_t*|u
+NVML	nvmlDeviceGetPciInfo_v3	nvmlReturn_t	nvmlDevice_t|d;nvmlPciInfo_t*|p
+NVML	nvmlDeviceGetPciInfo_v2	nvmlReturn_t	nvmlDevice_t|d;nvmlPciInfo_t*|p
+NVML	nvmlDeviceGetPciInfo	nvmlReturn_t	nvmlDevice_t|d;nvmlPciInfo_t*|p
+NVML	nvmlDeviceGetTemperature	nvmlReturn_t	nvmlDevice_t|d;nvmlTemperatureSensors_t|s;unsigned int*|t
+NVML	nvmlDeviceGetPowerUsage	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|mw
+NVML	nvmlDeviceGetPowerManagementLimit	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|mw
+NVML	nvmlDeviceGetEnforcedPowerLimit	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|mw
+NVML	nvmlDeviceGetClockInfo	nvmlReturn_t	nvmlDevice_t|d;nvmlClockType_t|type;unsigned int*|mhz
+NVML	nvmlDeviceGetMaxClockInfo	nvmlReturn_t	nvmlDevice_t|d;nvmlClockType_t|type;unsigned int*|mhz
+NVML	nvmlDeviceGetFanSpeed	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|pct
+NVML	nvmlDeviceGetPersistenceMode	nvmlReturn_t	nvmlDevice_t|d;nvmlEnableState_t*|m
+NVML	nvmlDeviceGetDisplayMode	nvmlReturn_t	nvmlDevice_t|d;nvmlEnableState_t*|m
+NVML	nvmlDeviceGetComputeMode	nvmlReturn_t	nvmlDevice_t|d;nvmlComputeMode_t*|m
+NVML	nvmlDeviceGetPerformanceState	nvmlReturn_t	nvmlDevice_t|d;nvmlPstates_t*|s
+NVML	nvmlDeviceGetMigMode	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|cur;unsigned int*|pend
+NVML	nvmlDeviceGetComputeRunningProcesses_v3	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|c;nvmlProcessInfo_t*|i
+NVML	nvmlDeviceGetComputeRunningProcesses_v2	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|c;void*|i
+NVML	nvmlDeviceGetComputeRunningProcesses	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|c;void*|i
+NVML	nvmlDeviceGetGraphicsRunningProcesses_v3	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|c;nvmlProcessInfo_t*|i
+NVML	nvmlDeviceGetGraphicsRunningProcesses_v2	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|c;void*|i
+NVML	nvmlDeviceGetGraphicsRunningProcesses	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|c;void*|i
+NVML	nvmlDeviceGetArchitecture	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|arch
+NVML	nvmlDeviceGetPowerState	nvmlReturn_t	nvmlDevice_t|d;nvmlPstates_t*|s
+NVML	nvmlDeviceGetVbiosVersion	nvmlReturn_t	nvmlDevice_t|d;char*|v;unsigned int|len
+NVML	nvmlDeviceGetCurrPcieLinkGeneration	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|g
+NVML	nvmlDeviceGetMaxPcieLinkGeneration	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|g
+NVML	nvmlDeviceGetCurrPcieLinkWidth	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|w
+NVML	nvmlDeviceGetMaxPcieLinkWidth	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|w
+NVML	nvmlDeviceGetTemperatureThreshold	nvmlReturn_t	nvmlDevice_t|d;unsigned int|type;unsigned int*|t
+NVML	nvmlDeviceGetNumGpuCores	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|n
+NVML	nvmlDeviceGetMemoryBusWidth	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|w
+NVML	nvmlDeviceGetPciInfoExt	nvmlReturn_t	nvmlDevice_t|d;void*|p
+NVML	nvmlDeviceGetEncoderUtilization	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|u;unsigned int*|s
+NVML	nvmlDeviceGetDecoderUtilization	nvmlReturn_t	nvmlDevice_t|d;unsigned int*|u;unsigned int*|s
+NVML	nvmlSystemGetProcessName	nvmlReturn_t	unsigned int|pid;char*|name;unsigned int|len
+NVML	nvmlInternalGetExportTable	nvmlReturn_t	const void**|ppExportTable;void*|pExportTableId
