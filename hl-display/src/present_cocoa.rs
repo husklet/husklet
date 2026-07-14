@@ -1150,7 +1150,7 @@ impl Presenter for MetalPresenter {
                         rgba[i + 2] = bgra[i];
                         rgba[i + 3] = 0xff;
                     }
-                    let png = hl_term::png::encode_rgba(pw, ph, &rgba);
+                    let png = hl_ws_term::png::encode_rgba(pw, ph, &rgba);
                     let _ = std::fs::create_dir_all(&self.dump_dir);
                     let path = format!(
                         "{}/live-surface-{sid}-{:04}.png",
@@ -1263,7 +1263,7 @@ impl Presenter for MetalPresenter {
                 rgba[i + 2] = bgra[i];
                 rgba[i + 3] = 0xff;
             }
-            let png = hl_term::png::encode_rgba(pw, ph, &rgba);
+            let png = hl_ws_term::png::encode_rgba(pw, ph, &rgba);
             if std::fs::write(format!("{dir}/live-surface-{sid}.png"), png).is_ok() {
                 n += 1;
             }

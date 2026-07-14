@@ -4,10 +4,10 @@
 //!
 //!   cargo run -p hl-term --example demo -- /tmp/demo.png
 
-use hl_term::layout::{Dir, Layout, Rect};
-use hl_term::pty::local::LocalPty;
-use hl_term::render::CpuRenderer;
-use hl_term::{PtyBackend, Vt};
+use hl_ws_term::layout::{Dir, Layout, Rect};
+use hl_ws_term::pty::local::LocalPty;
+use hl_ws_term::render::CpuRenderer;
+use hl_ws_term::{PtyBackend, Vt};
 use std::time::{Duration, Instant};
 
 const SCALE: u32 = 2;
@@ -49,7 +49,7 @@ impl Canvas {
         self.fill(x + w - 1, y, 1, h, c);
     }
     /// Blit an RGBA image at (ox, oy), clipped to the canvas.
-    fn blit(&mut self, ox: u32, oy: u32, img: &hl_term::render::Image) {
+    fn blit(&mut self, ox: u32, oy: u32, img: &hl_ws_term::render::Image) {
         for row in 0..img.height {
             if oy + row >= self.h {
                 break;
@@ -97,7 +97,7 @@ fn session(script: &str, cols: usize, rows: usize) -> Vt {
 }
 
 /// Render a short title string into a small RGBA image (green on the tab background).
-fn title_img(text: &str, cols: usize) -> hl_term::render::Image {
+fn title_img(text: &str, cols: usize) -> hl_ws_term::render::Image {
     let mut vt = Vt::new(cols.max(text.len() + 1), 1);
     vt.advance_bytes(b"\x1b[1;32m");
     vt.advance_bytes(text.as_bytes());
@@ -176,7 +176,7 @@ fn main() {
         canvas.border(px, py, pw, ph, bc);
     }
 
-    let png = hl_term::png::encode_rgba(canvas.w, canvas.h, &canvas.px);
+    let png = hl_ws_term::png::encode_rgba(canvas.w, canvas.h, &canvas.px);
     std::fs::write(&out, &png).expect("write");
     eprintln!("wrote {out} ({}x{}px, {} panes)", canvas.w, canvas.h, panes.len());
 }

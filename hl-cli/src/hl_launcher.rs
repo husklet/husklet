@@ -10,7 +10,7 @@
 use crate::paths;
 use hl_jit::DeviceProvider;
 use hl_term::workspace::{Arch, Workspace};
-use hl_term::PtyBackend;
+use hl_ws_term::PtyBackend;
 use std::collections::VecDeque;
 use std::io;
 use std::os::unix::io::RawFd;

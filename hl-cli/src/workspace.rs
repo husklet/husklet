@@ -218,7 +218,7 @@ fn launch(name: String, restore: bool, cwd: Option<String>, slot: Option<String>
 /// Raw-mode passthrough between the real terminal and the workspace PTY until the child exits.
 /// Backend-agnostic: it only polls the terminal's stdin and drains `pty.read()` each tick, so it works
 /// for a `LocalPty` (a real master fd) and for `DdJitPty` (output drained from dd-jit's broadcast) alike.
-fn run_inline(pty: &mut dyn hl_term::PtyBackend) -> i32 {
+fn run_inline(pty: &mut dyn hl_ws_term::PtyBackend) -> i32 {
     let raw = RawMode::enter(libc::STDIN_FILENO);
     unsafe {
         libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t);

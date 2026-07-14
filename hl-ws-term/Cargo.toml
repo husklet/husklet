@@ -1,0 +1,22 @@
+[package]
+name = "hl-ws-term"
+version = "0.1.0"
+edition = "2021"
+description = "hl-ws-term: the terminal primitive — a self-contained VT grid, input encoding, pane layout, and a CPU renderer (embedded bitmap font + PNG) — zero GPU/window/network deps so it is fully headless-testable. This is the workspace-agnostic terminal core (was hl-term minus the workspace model)."
+license = "MIT"
+
+[lib]
+name = "hl_ws_term"
+path = "src/lib.rs"
+
+# Deliberately depends ONLY on crates already vendored in this workspace's cargo cache (libc, bitflags):
+# this Linux dev/test host cannot fetch new crates.io tarballs (TLS MITM blocks cargo downloads), and
+# keeping the core dependency-free makes it buildable + testable + screenshottable here with no network.
+# The GPU shell crate (winit + wgpu) pulls its heavier deps on the macOS build host; it uploads this
+# crate's same embedded font atlas so ship == what the CPU renderer verifies.
+[dependencies]
+# The shared foundation: the terminal-interface (`PtyBackend`) + `Launcher` traits + the `Workspace`
+# model. The edge points UP to the std-only leaf `hl-ws` (this crate implements those traits).
+hl-ws = { path = "../hl-ws" }
+libc = "0.2"
+bitflags = "2"

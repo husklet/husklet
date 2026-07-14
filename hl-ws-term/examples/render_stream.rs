@@ -3,7 +3,7 @@
 //!
 //!   some-command | cargo run -q -p hl-term --example render_stream -- out.png 80 24
 
-use hl_term::{CpuRenderer, Vt};
+use hl_ws_term::{CpuRenderer, Vt};
 use std::io::Read;
 
 fn main() {

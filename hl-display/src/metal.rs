@@ -728,7 +728,7 @@ impl crate::present::Presenter for MetalPngPresenter {
                 self.ctx.composite_to_rgba(&surf.bgra, w, h)
             }
         };
-        let png = hl_term::png::encode_rgba(w, h, &rgba);
+        let png = hl_ws_term::png::encode_rgba(w, h, &rgba);
         std::fs::create_dir_all(&self.dir).map_err(crate::present::PresentError::Output)?;
         // Frame-indexed so an animated client's successive frames are all captured (not overwritten).
         let path = self
@@ -813,7 +813,7 @@ pub fn selftest_iosurface(out: &str) -> ! {
             rgba[i + 2] = bgra[i];
             rgba[i + 3] = 0xff;
         }
-        let png = hl_term::png::encode_rgba(w, h, &rgba);
+        let png = hl_ws_term::png::encode_rgba(w, h, &rgba);
         let _ = std::fs::write(out, png);
         CFRelease(surf);
         if ok {
@@ -855,7 +855,7 @@ pub fn selftest_render(out: &str) -> ! {
             rgba[i + 2] = bgra[i];
             rgba[i + 3] = 0xff;
         }
-        let png = hl_term::png::encode_rgba(w, h, &rgba);
+        let png = hl_ws_term::png::encode_rgba(w, h, &rgba);
         let _ = std::fs::write(out, png);
     }
     println!("selftest-render: GPU-rendered a triangle into an IOSurface -> {out}");

@@ -278,7 +278,7 @@ fn write_texture_png(tex: &ProtocolObject<dyn MTLTexture>, out: &str) -> bool {
             px[3] = 0xff;
         }
     }
-    std::fs::write(out, hl_term::png::encode_rgba(w, h, &rgba)).is_ok()
+    std::fs::write(out, hl_ws_term::png::encode_rgba(w, h, &rgba)).is_ok()
 }
 
 fn dump_texture_png(id: u32, tex: &ProtocolObject<dyn MTLTexture>, dir: &str, seq: u64) {
@@ -1109,7 +1109,7 @@ pub fn selftest_shader(out: &str) -> ! {
             rgba[i + 2] = bgra[i];
             rgba[i + 3] = 0xff;
         }
-        let _ = std::fs::write(out, hl_term::png::encode_rgba(w, h, &rgba));
+        let _ = std::fs::write(out, hl_ws_term::png::encode_rgba(w, h, &rgba));
     }
     println!("selftest-shader: replayed a custom-MSL-shader quad -> {out}");
     std::process::exit(0);
@@ -1227,7 +1227,7 @@ fn readback_png(ctx: &MetalCtx, tex: &ProtocolObject<dyn MTLTexture>, w: u32, h:
         rgba[i + 2] = bgra[i];
         rgba[i + 3] = 0xff;
     }
-    let _ = std::fs::write(out, hl_term::png::encode_rgba(w, h, &rgba));
+    let _ = std::fs::write(out, hl_ws_term::png::encode_rgba(w, h, &rgba));
 }
 
 /// `dd-display selftest-texture <out.png>`: prove the TEXTURE path — a `sampler2D`/`texture()` fragment
@@ -2125,7 +2125,7 @@ pub fn selftest_replay(out: &str) -> ! {
             rgba[i + 2] = bgra[i];
             rgba[i + 3] = 0xff;
         }
-        let png = hl_term::png::encode_rgba(w, h, &rgba);
+        let png = hl_ws_term::png::encode_rgba(w, h, &rgba);
         let _ = std::fs::write(out, png);
     }
     println!("selftest-replay: replayed a dd-gpu IR quad onto Metal -> {out}");

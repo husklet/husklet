@@ -21,7 +21,7 @@ path = "src/lib.rs"
 libc = "0.2"
 # The workspace's pure-Rust PNG encoder — the debug-dump path writes a composited surface to a PNG the
 # author can Read back, exactly how dd-term-core proves its CPU renderer headlessly.
-hl-term = { path = "../hl-term" }
+hl-ws-term = { path = "../hl-ws-term" }
 # GPU rung 3: the forwarded command IR + GpuBackend trait the Metal executor implements (pure-Rust, no
 # new transitive deps). dd-display → dd-gpu only (no cycle; dd-gpu never depends on dd-display).
 hl-gpu = { path = "../hl-gpu" }

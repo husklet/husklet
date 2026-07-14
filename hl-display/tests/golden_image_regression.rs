@@ -26,7 +26,7 @@
 
 // ------------------------------------------------------------------------------------------------
 // PNG decode (self-contained). The workspace has a dependency-free PNG *encoder*
-// (`hl_term::png::encode_rgba`, stored zlib + filter 0) but no decoder, and this host is offline
+// (`hl_ws_term::png::encode_rgba`, stored zlib + filter 0) but no decoder, and this host is offline
 // so we cannot pull `png`/`image`. This module decodes 8-bit RGB/RGBA PNGs — the stored-block path used
 // by our own goldens *and* the compressed path an external oracle screenshot would use.
 // ------------------------------------------------------------------------------------------------
@@ -826,7 +826,7 @@ fn png_codec_roundtrip() {
             rgba.extend_from_slice(&[(x * 40) as u8, (y * 70) as u8, (x + y) as u8, 255]);
         }
     }
-    let png = hl_term::png::encode_rgba(w, h, &rgba);
+    let png = hl_ws_term::png::encode_rgba(w, h, &rgba);
     let (dw, dh, drgba) = png_decode::decode(&png).expect("decode our own PNG");
     assert_eq!((dw, dh), (w, h));
     assert_eq!(drgba, rgba);
@@ -977,7 +977,7 @@ mod metal_suite {
             if c.name == "chrome-orientation" {
                 assert_orientation_contract(&rgba, c.w, c.h);
             }
-            let rendered_png = hl_term::png::encode_rgba(c.w, c.h, &rgba);
+            let rendered_png = hl_ws_term::png::encode_rgba(c.w, c.h, &rgba);
             std::fs::write(rendered_dir.join(format!("{}.png", c.name)), &rendered_png).unwrap();
 
             let golden_path = golden_dir.join(format!("{}.png", c.name));
@@ -1003,7 +1003,7 @@ mod metal_suite {
                         );
                         if !pass {
                             let dp = diff_dir.join(format!("{}.png", c.name));
-                            std::fs::write(&dp, hl_term::png::encode_rgba(c.w, c.h, &diff_img)).unwrap();
+                            std::fs::write(&dp, hl_ws_term::png::encode_rgba(c.w, c.h, &diff_img)).unwrap();
                             println!("        wrote diff {}", dp.display());
                             failures.push(c.name);
                         }
@@ -1138,7 +1138,7 @@ mod wgpu_suite {
             }
             std::fs::write(
                 rendered_dir.join(format!("{}.png", c.name)),
-                hl_term::png::encode_rgba(c.w, c.h, &rgba),
+                hl_ws_term::png::encode_rgba(c.w, c.h, &rgba),
             )
             .unwrap();
 
@@ -1162,7 +1162,7 @@ mod wgpu_suite {
                     if !pass {
                         std::fs::write(
                             diff_dir.join(format!("{}.png", c.name)),
-                            hl_term::png::encode_rgba(c.w, c.h, &img),
+                            hl_ws_term::png::encode_rgba(c.w, c.h, &img),
                         )
                         .unwrap();
                         failures.push(c.name);

@@ -20,8 +20,8 @@ use std::time::SystemTime;
 use vte4::prelude::*;
 use vte4::TerminalExtManual;
 
-use hl_term::config::{CursorShape, TermConfig};
-use hl_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir};
+use hl_ws_term::config::{CursorShape, TermConfig};
+use hl_ws_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir};
 use hl_term::workspace::{Arch, CudaDevice, Mount, VpnConfig, Workspace, WorkspaceStore};
 
 const APP_ID: &str = "com.dd.term";

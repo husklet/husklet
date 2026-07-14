@@ -1189,6 +1189,7 @@ dependencies = [
  "hl-images",
  "hl-jit",
  "hl-term",
+ "hl-ws-term",
  "libc",
  "serde_json",
  "sha2",
@@ -1240,7 +1241,7 @@ version = "0.1.0"
 dependencies = [
  "hl-gpu",
  "hl-gpu-wgpu",
- "hl-term",
+ "hl-ws-term",
  "libc",
  "objc2",
  "objc2-app-kit",
@@ -1281,6 +1282,7 @@ dependencies = [
  "gtk4",
  "hl-client",
  "hl-term",
+ "hl-ws-term",
  "libc",
  "objc2",
  "objc2-app-kit",
@@ -1360,7 +1362,20 @@ dependencies = [
 name = "hl-term"
 version = "0.1.0"
 dependencies = [
+ "hl-ws-term",
+ "libc",
+]
+
+[[package]]
+name = "hl-ws"
+version = "0.1.0"
+
+[[package]]
+name = "hl-ws-term"
+version = "0.1.0"
+dependencies = [
  "bitflags 2.13.0",
+ "hl-ws",
  "libc",
 ]
 

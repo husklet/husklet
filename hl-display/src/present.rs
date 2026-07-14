@@ -424,7 +424,7 @@ impl Presenter for PngPresenter {
     }
     fn present(&mut self, surf: &SurfaceBuffer) -> Result<PresentOutcome, PresentError> {
         let rgba = surf.to_rgba();
-        let png = hl_term::png::encode_rgba(surf.width as u32, surf.height as u32, &rgba);
+        let png = hl_ws_term::png::encode_rgba(surf.width as u32, surf.height as u32, &rgba);
         // Propagate a real output failure rather than reporting a phantom success: if the directory
         // cannot be created or the PNG cannot be written, the frame did NOT reach this presenter's sink,
         // and the compositor must learn that (so it does not fire frame callbacks / release the buffer).

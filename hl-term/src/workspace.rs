@@ -7,8 +7,8 @@
 //! a [`LocalShellLauncher`] runs a host shell, so the whole "configure a workspace → get a working
 //! terminal" flow is exercised headlessly.
 
-use crate::pty::local::LocalPty;
-use crate::pty::PtyBackend;
+use hl_ws_term::pty::local::LocalPty;
+use hl_ws_term::pty::PtyBackend;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -565,7 +565,7 @@ fn clean(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Vt;
+    use hl_ws_term::Vt;
     use std::time::{Duration, Instant};
 
     fn tmp_path(tag: &str) -> PathBuf {

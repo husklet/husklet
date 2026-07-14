@@ -5,8 +5,8 @@
 //!
 //! Defaults to `dd-term.png` in the current directory.
 
-use hl_term::pty::local::LocalPty;
-use hl_term::{CpuRenderer, PtyBackend, Vt};
+use hl_ws_term::pty::local::LocalPty;
+use hl_ws_term::{CpuRenderer, PtyBackend, Vt};
 use std::time::{Duration, Instant};
 
 fn main() {

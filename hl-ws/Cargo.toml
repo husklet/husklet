@@ -1,0 +1,15 @@
+[package]
+name = "hl-ws"
+version = "0.1.0"
+edition = "2021"
+description = "hl-ws: the workspace model + persistence + the launch/feature TRAITS + the neutral settings schema. std-ONLY and feature-AGNOSTIC — it references NO other hl crate (no hl-ws-term, no vpn/cuda/gpu/gtk), so the compiler enforces that it can never name a feature OR a concrete terminal. Features (vpn, cuda, display, …) implement its `Feature` trait; `hl` supplies the concrete terminal that satisfies the `Launcher` seam. `hl` composes everything."
+license = "MIT"
+
+[lib]
+name = "hl_ws"
+path = "src/lib.rs"
+
+# hl-ws is PURE: std only, zero hl-* edges (verify with `cargo tree -p hl-ws`). The Launcher trait's
+# terminal is an abstract associated type, so hl-ws never names hl-ws-term; the feature seam speaks only
+# hl-ws's own schema/effect types. Add serde ONLY if persistence ever truly needs it (today it does not).
+[dependencies]

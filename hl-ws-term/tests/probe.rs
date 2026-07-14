@@ -1,7 +1,7 @@
 //! Regression tests for bugs found during the dd-term-core hardening pass.
 
-use hl_term::session::{cwd_from_uri, Pane, PaneNode, Session, SessionTab};
-use hl_term::{Attrs, Vt};
+use hl_ws_term::session::{cwd_from_uri, Pane, PaneNode, Session, SessionTab};
+use hl_ws_term::{Attrs, Vt};
 
 // --- session unesc / round-trip (was: Latin-1 byte-wise decode → mojibake + char-boundary panic) ---
 
