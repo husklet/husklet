@@ -225,7 +225,7 @@ static void fd_reset_emul(int fd) {
         g_devtty[fd] = 0;
         unix_bind_clear(fd);
 #ifdef __APPLE__
-        if (g_devdri[fd]) dd_gpu_free_fd(fd); // release the render node's IOSurfaces on close
+        if (g_devdri[fd]) hl_gpu_free_fd(fd); // release the render node's IOSurfaces on close
 #endif
         g_devdri[fd] = 0;
         g_lo_port[fd] = 0;
@@ -563,7 +563,7 @@ static int svc_fs(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t
         // GPU rung 2 (opt-in): the dd render node services DD_IOCTL_GPU_ALLOC (host-IOSurface buffer).
         // Gated on the per-fd render-node tag, so no other fd/ioctl is affected.
         if (gpu_iosurface_on() && fd >= 0 && fd < DD_NFD && g_devdri[fd] && rq == DD_IOCTL_GPU_ALLOC) {
-            G_RET(c) = (uint64_t)dd_gpu_alloc(fd, arg);
+            G_RET(c) = (uint64_t)hl_gpu_alloc(fd, arg);
             break;
         }
         // DRM ioctls chromium/Mesa(kms_swrast) issue on the render node once it opens the discovered node:

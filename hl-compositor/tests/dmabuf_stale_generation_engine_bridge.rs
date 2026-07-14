@@ -3,7 +3,7 @@
 //! genuinely-recycled id rejected; this wires the real pieces together on macOS:
 //!
 //!   1. start the real GPU mach bridge;
-//!   2. a C helper (`gui_dmabuf_gen_sender.c`, the engine's `dd_gpu_send_port` in miniature) creates a
+//!   2. a C helper (`gui_dmabuf_gen_sender.c`, the engine's `hl_gpu_send_port` in miniature) creates a
 //!      real IOSurface and sends its send-right + id + a real generation over the mach ABI;
 //!   3. the compositor's authenticated metadata for that id is resolved from the REAL IOSurface via
 //!      `hl_display::metal::iosurface_metadata` (no mock generation);

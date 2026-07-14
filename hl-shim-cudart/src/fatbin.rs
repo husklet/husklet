@@ -46,7 +46,7 @@ unsafe fn rd_ptr(p: *const u8, off: usize) -> *const u8 {
 ///
 /// # Safety
 /// `image` must be null or point at a fatbin wrapper / container that is valid for the bytes its own
-/// header declares (`header_size + fat_size`), exactly as the C `dd_fatbin_extract_ptx` requires.
+/// header declares (`header_size + fat_size`), exactly as the C `hl_fatbin_extract_ptx` requires.
 pub unsafe fn extract_ptx(image: *const c_void) -> Option<Vec<u8>> {
     if image.is_null() {
         return None;

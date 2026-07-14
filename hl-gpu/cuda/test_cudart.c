@@ -71,33 +71,33 @@ static unsigned char* build_fatbin(const void* payload, size_t payload_len, unsi
 static void test_fatbin_malformed(void) {
     unsigned long long n = 12345; /* poisoned; a NULL return must not write it */
     /* 1. NULL image */
-    CHECK(dd_fatbin_extract_ptx(NULL, &n) == NULL, "fatbin: NULL image -> NULL");
+    CHECK(hl_fatbin_extract_ptx(NULL, &n) == NULL, "fatbin: NULL image -> NULL");
     /* 2. garbage (bad magic) */
     unsigned char junk[16] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-    CHECK(dd_fatbin_extract_ptx(junk, &n) == NULL, "fatbin: bad magic -> NULL");
+    CHECK(hl_fatbin_extract_ptx(junk, &n) == NULL, "fatbin: bad magic -> NULL");
     /* 3. wrapper with a NULL container pointer */
     DdFatBinWrapper wnull = { (int)DD_FATBIN_WRAPPER_MAGIC, 1, NULL, NULL };
-    CHECK(dd_fatbin_extract_ptx(&wnull, &n) == NULL, "fatbin: wrapper NULL data -> NULL");
+    CHECK(hl_fatbin_extract_ptx(&wnull, &n) == NULL, "fatbin: wrapper NULL data -> NULL");
     /* 4. container magic but header_size < sizeof(header) */
     {
         DdFatBinHeader h; memset(&h, 0, sizeof h);
         h.magic = DD_FATBIN_MAGIC; h.header_size = 4; h.fat_size = 0;
         unsigned char b[sizeof(DdFatBinHeader)]; memcpy(b, &h, sizeof h);
-        CHECK(dd_fatbin_extract_ptx(b, &n) == NULL, "fatbin: header_size<16 -> NULL");
+        CHECK(hl_fatbin_extract_ptx(b, &n) == NULL, "fatbin: header_size<16 -> NULL");
     }
     /* 5. valid header, zero fat_size (no entries) */
     {
         DdFatBinHeader h; memset(&h, 0, sizeof h);
         h.magic = DD_FATBIN_MAGIC; h.header_size = (unsigned short)sizeof h; h.fat_size = 0;
         unsigned char b[sizeof(DdFatBinHeader)]; memcpy(b, &h, sizeof h);
-        CHECK(dd_fatbin_extract_ptx(b, &n) == NULL, "fatbin: zero fat_size -> NULL");
+        CHECK(hl_fatbin_extract_ptx(b, &n) == NULL, "fatbin: zero fat_size -> NULL");
     }
     /* 6. entry header_size = 0 (< sizeof entry) -> loop breaks (guarantees forward progress), NULL */
     {
         unsigned char *c = NULL; unsigned char *buf = build_fatbin("x", 2, DD_FATBIN_KIND_PTX, &c);
         DdFatBinEntry e; memcpy(&e, c + sizeof(DdFatBinHeader), sizeof e);
         e.header_size = 0; memcpy(c + sizeof(DdFatBinHeader), &e, sizeof e);
-        CHECK(dd_fatbin_extract_ptx(c, &n) == NULL, "fatbin: entry header_size=0 -> NULL (no infinite loop)");
+        CHECK(hl_fatbin_extract_ptx(c, &n) == NULL, "fatbin: entry header_size=0 -> NULL (no infinite loop)");
         free(buf);
     }
     /* 7. PTX entry whose payload_size runs far past fat_size -> bounded by end, NULL (no OOB read) */
@@ -105,7 +105,7 @@ static void test_fatbin_malformed(void) {
         unsigned char *c = NULL; unsigned char *buf = build_fatbin("hello", 6, DD_FATBIN_KIND_PTX, &c);
         DdFatBinEntry e; memcpy(&e, c + sizeof(DdFatBinHeader), sizeof e);
         e.payload_size = 0xffffffffULL; memcpy(c + sizeof(DdFatBinHeader), &e, sizeof e);
-        CHECK(dd_fatbin_extract_ptx(c, &n) == NULL, "fatbin: payload beyond end -> NULL (no OOB)");
+        CHECK(hl_fatbin_extract_ptx(c, &n) == NULL, "fatbin: payload beyond end -> NULL (no OOB)");
         free(buf);
     }
     /* 8. compressed PTX entry -> NULL (tier-1 decodes uncompressed only) */
@@ -113,7 +113,7 @@ static void test_fatbin_malformed(void) {
         unsigned char *c = NULL; unsigned char *buf = build_fatbin("hello", 6, DD_FATBIN_KIND_PTX, &c);
         DdFatBinEntry e; memcpy(&e, c + sizeof(DdFatBinHeader), sizeof e);
         e.flags = DD_FATBIN_FLAG_COMPRESS; memcpy(c + sizeof(DdFatBinHeader), &e, sizeof e);
-        CHECK(dd_fatbin_extract_ptx(c, &n) == NULL, "fatbin: compressed PTX -> NULL");
+        CHECK(hl_fatbin_extract_ptx(c, &n) == NULL, "fatbin: compressed PTX -> NULL");
         free(buf);
     }
     /* 9. truncated container: fat_size honest, but the entry's payload_size runs 4 bytes past the buffer */
@@ -126,7 +126,7 @@ static void test_fatbin_malformed(void) {
         DdFatBinEntry e; memset(&e, 0, sizeof e);
         e.kind = DD_FATBIN_KIND_PTX; e.header_size = (unsigned int)sizeof e; e.payload_size = 8; /* > 4 left */
         memcpy(b + sizeof h, &e, sizeof e);
-        CHECK(dd_fatbin_extract_ptx(b, &n) == NULL, "fatbin: truncated payload -> NULL (no OOB)");
+        CHECK(hl_fatbin_extract_ptx(b, &n) == NULL, "fatbin: truncated payload -> NULL (no OOB)");
         free(b);
     }
     /* 10. sanity: a well-formed PTX entry still extracts exactly (the trim + copy path stays correct) */
@@ -134,7 +134,7 @@ static void test_fatbin_malformed(void) {
         const char *ptx = ".version 7.5\n";
         unsigned char *c = NULL; unsigned char *buf = build_fatbin(ptx, strlen(ptx) + 1, DD_FATBIN_KIND_PTX, &c);
         unsigned long long got_len = 0;
-        char *got = dd_fatbin_extract_ptx(c, &got_len);
+        char *got = hl_fatbin_extract_ptx(c, &got_len);
         CHECK(got && strcmp(got, ptx) == 0 && got_len == strlen(ptx), "fatbin: well-formed PTX round-trips");
         free(got); free(buf);
     }

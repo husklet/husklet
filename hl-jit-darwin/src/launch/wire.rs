@@ -1,15 +1,15 @@
-//! The byte-exact `ddjit_config` wire encoder: [`LaunchConfig::to_wire`] plus the `WireHeader` C-contract
-//! layout + string-pool packing the C engine (`ddjit_configfd.c`) reads. A byte change here mislaunches
+//! The byte-exact `hl_config` wire encoder: [`LaunchConfig::to_wire`] plus the `WireHeader` C-contract
+//! layout + string-pool packing the C engine (`hl_configfd.c`) reads. A byte change here mislaunches
 //! every container, so this is moved verbatim and locked by the offset/layout tests below.
 
 use super::LaunchConfig;
 
-pub(super) const DDJIT_CONFIG_MAGIC: u32 = 0x4443_4647; // 'DCFG'
-// ABI generation of the header field layout/meaning — mirrors DDJIT_CONFIG_ABI in ddjit_api.h. Bump ONLY
+pub(super) const HL_CONFIG_MAGIC: u32 = 0x4443_4647; // 'DCFG'
+// ABI generation of the header field layout/meaning — mirrors HL_CONFIG_ABI in hl_api.h. Bump ONLY
 // when an existing field changes type/meaning (a pure tail-append is skew-absorbed by `header_len`).
-pub(super) const DDJIT_CONFIG_ABI: u32 = 1;
+pub(super) const HL_CONFIG_ABI: u32 = 1;
 
-// Mirrors `struct ddjit_config` in ddjit_api.h EXACTLY (field order + types) so `#[repr(C)]` produces
+// Mirrors `struct hl_config` in hl_api.h EXACTLY (field order + types) so `#[repr(C)]` produces
 // the same 128-byte header the engine reads. Every `*_off` is a byte offset into the string pool that
 // trails this header; 0 = unset (pool[0] is a lone NUL, so 0 reads as "").
 //
@@ -78,7 +78,7 @@ impl Pool {
 }
 
 impl LaunchConfig {
-    /// Serialize into the `ddjit_config` wire buffer (`<header><string pool>`).
+    /// Serialize into the `hl_config` wire buffer (`<header><string pool>`).
     pub(super) fn to_wire(&self) -> Vec<u8> {
         let mut pool = Pool::new();
         let rootfs_off = pool.add(&self.rootfs);
@@ -128,10 +128,10 @@ impl LaunchConfig {
         };
 
         let header = WireHeader {
-            magic: DDJIT_CONFIG_MAGIC,
+            magic: HL_CONFIG_MAGIC,
             pool_len: pool.0.len() as u32,
             header_len: std::mem::size_of::<WireHeader>() as u32,
-            abi: DDJIT_CONFIG_ABI,
+            abi: HL_CONFIG_ABI,
             mem_max: self.mem_max,
             pids_max: self.pids_max,
             cpus: self.cpus,
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn header_layout_is_stable() {
-        // Must match `sizeof(struct ddjit_config)` in ddjit_api.h: the frozen 16-byte prefix (magic,
+        // Must match `sizeof(struct hl_config)` in hl_api.h: the frozen 16-byte prefix (magic,
         // pool_len, header_len, abi) + 1 u64 (mem_max) + 8 more u32 scalars + 15 offsets (…fsgen_off,
         // egress_off) + gpu_iosurface/nopcache bools + 1 u32 explicit `reserved0` pad = 128 bytes,
         // 8-aligned, no implicit padding. Grown from 120: header_len/abi form the skew-safe prefix that
@@ -194,7 +194,7 @@ mod tests {
         // The engine reads magic@0, pool_len@4, header_len@8, abi@12 BEFORE it trusts any later field,
         // so these four offsets are a permanent cross-commit contract. Lock them byte-for-byte.
         let wire = LaunchConfig { rootfs: "/img".into(), argv: vec!["/bin/sh".into()], ..Default::default() }.to_wire();
-        assert_eq!(&wire[0..4], &DDJIT_CONFIG_MAGIC.to_ne_bytes(), "magic@0");
+        assert_eq!(&wire[0..4], &HL_CONFIG_MAGIC.to_ne_bytes(), "magic@0");
         // pool_len@4 = total bytes trailing the header
         let pool_len = u32::from_ne_bytes(wire[4..8].try_into().unwrap());
         assert_eq!(pool_len as usize, wire.len() - std::mem::size_of::<WireHeader>(), "pool_len@4");
@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(header_len as usize, std::mem::size_of::<WireHeader>(), "header_len@8");
         // abi@12 = the layout generation the reader validates
         let abi = u32::from_ne_bytes(wire[12..16].try_into().unwrap());
-        assert_eq!(abi, DDJIT_CONFIG_ABI, "abi@12");
+        assert_eq!(abi, HL_CONFIG_ABI, "abi@12");
     }
 
     #[test]
@@ -225,7 +225,7 @@ mod tests {
         // header + at least the pooled strings
         assert!(wire.len() > std::mem::size_of::<WireHeader>());
         // magic at offset 0
-        assert_eq!(&wire[0..4], &DDJIT_CONFIG_MAGIC.to_ne_bytes());
+        assert_eq!(&wire[0..4], &HL_CONFIG_MAGIC.to_ne_bytes());
         // the rootfs string is present in the pool
         assert!(wire.windows(4).any(|w| w == b"/img"));
     }
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn wire_pool_offsets_point_at_expected_strings() {
-        // Lock the exact byte layout `ddjit_configfd.c` decodes: every `*_off` is a pool-relative
+        // Lock the exact byte layout `hl_configfd.c` decodes: every `*_off` is a pool-relative
         // offset to a NUL-terminated string (0 == empty), and argv is NUL-separated + double-NUL
         // terminated at `argv_off`.
         let cfg = LaunchConfig {
@@ -270,7 +270,7 @@ mod tests {
         // The header prefix is exactly the WireHeader bytes; read it back unaligned (Vec<u8> data is
         // not guaranteed 8-aligned).
         let hdr: WireHeader = unsafe { std::ptr::read_unaligned(wire.as_ptr() as *const WireHeader) };
-        assert_eq!(hdr.magic, DDJIT_CONFIG_MAGIC);
+        assert_eq!(hdr.magic, HL_CONFIG_MAGIC);
         assert_eq!(hdr.pool_len as usize, wire.len() - hsize);
 
         let pool = &wire[hsize..];

@@ -11,8 +11,8 @@
  * `cuLaunchKernel` `void** kernelParams` calling convention, and the numeric values of the result /
  * attribute enums — match NVIDIA's published headers so the ABI is compatible.
  */
-#ifndef DD_CUDA_MIN_H
-#define DD_CUDA_MIN_H
+#ifndef HL_CUDA_MIN_H
+#define HL_CUDA_MIN_H
 
 #include <stddef.h>
 
@@ -314,4 +314,4 @@ typedef enum CUmoduleLoadingMode_enum {
 #ifdef __cplusplus
 }
 #endif
-#endif /* DD_CUDA_MIN_H */
+#endif /* HL_CUDA_MIN_H */

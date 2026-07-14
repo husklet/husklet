@@ -2,7 +2,7 @@
 //! synchronous [`RunHandle`], and the async launch/supervision surface ([`RunningContainer`],
 //! [`Launched`]). [`Runtime::run`] (sync) and [`Runtime::start`]/`start_into` (async) marshal a
 //! [`Container`] into the backend's typed launch config and fork the engine directly through the linked
-//! FFI entry (`hl_jit_darwin::spawn`/`spawn_io` → `ddjit_spawn`) — no subprocess, no shell, no env dialect.
+//! FFI entry (`hl_jit_darwin::spawn`/`spawn_io` → `hl_spawn`) — no subprocess, no shell, no env dialect.
 //!
 //! The types live split across cohesive submodules; everything the crate root re-exports is gathered
 //! here so `lib.rs` has a single import site.

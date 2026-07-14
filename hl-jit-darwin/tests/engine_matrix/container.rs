@@ -15,7 +15,7 @@ pub(super) fn container() -> Group {
         sh("chmod", "rm -f /f; touch /f && chmod 700 /f && stat -c %a /f; rm -f /f").out("700\n"),
         sh("symlink", "rm -f /l; ln -s /etc/hostname /l && readlink /l; rm -f /l").out("/etc/hostname\n"),
         // #353 regression guard: the daemon's DEFAULT launch is the typed --configfd bridge, which hands the
-        // UTS hostname to the engine as the DD_HOSTNAME *env* (ddjit_configfd.c) — NOT the --hostname CLI flag
+        // UTS hostname to the engine as the DD_HOSTNAME *env* (hl_configfd.c) — NOT the --hostname CLI flag
         // that the out-of-process SpawnConfig::script path emits. aarch64's container_init() already re-read
         // DD_HOSTNAME; x86-64 dropped it, so `docker run --hostname h` on x86 returned "jit". The flag-only
         // matrix never drove the env path (the coverage gap), so inject DD_HOSTNAME directly and assert the

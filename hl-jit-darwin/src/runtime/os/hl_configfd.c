@@ -1,7 +1,7 @@
 // dd/runtime/os -- the `--configfd` launch bridge (unity-included once into each engine TU).
 //
-// The Rust host serializes the container into the position-independent `ddjit_config` wire buffer
-// (include/ddjit_api.h) and `posix_spawn`s the arch-matching engine as `<engine> --configfd <fd>`,
+// The Rust host serializes the container into the position-independent `hl_config` wire buffer
+// (include/hl_api.h) and `posix_spawn`s the arch-matching engine as `<engine> --configfd <fd>`,
 // streaming that buffer over `fd`. This is the ENGINE side: read + validate the buffer, then translate
 // every populated field back into the exact `DD_*`/`DDJIT_*` environment variable the existing env-driven
 // setup (container_init() in targets/*.c, the guest-env reader in os/linux/elf.c, the pcache/sentry
@@ -15,7 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "../include/ddjit_api.h"
+#include "../include/hl_api.h"
 
 // dd_run() is defined by the including target TU (linux_aarch64.c / linux_x86_64.c / darwin's jitdarwin.c).
 int dd_run(const char *rootfs, int argc, char *const argv[]);
@@ -52,12 +52,12 @@ static const char *cfd_str(const char *pool, uint32_t pool_len, uint32_t off) {
     return pool + off;
 }
 
-// Read a `ddjit_config` (+ its trailing string pool) from `fd`, re-hydrate the engine's DD_*/DDJIT_* env,
+// Read a `hl_config` (+ its trailing string pool) from `fd`, re-hydrate the engine's DD_*/DDJIT_* env,
 // rebuild the guest argv, and dispatch to dd_run(). The spawn shim normally enters through
-// ddjit_run_configfile() below; --configfd remains supported for direct/debug launches. Returns dd_run()'s
+// hl_run_configfile() below; --configfd remains supported for direct/debug launches. Returns dd_run()'s
 // exit code, or a nonzero code on any read/validation failure. Single-shot per process.
-int ddjit_run_configfd(int fd) {
-    struct ddjit_config cfg;
+int hl_run_configfd(int fd) {
+    struct hl_config cfg;
     memset(&cfg, 0, sizeof cfg);
 
     // Phase 1 — the FROZEN 16-byte prefix: magic@0, pool_len@4, header_len@8, abi@12. Those offsets never
@@ -75,18 +75,18 @@ int ddjit_run_configfd(int fd) {
     memcpy(&pool_len, prefix + 4, 4);
     memcpy(&header_len, prefix + 8, 4);
     memcpy(&abi, prefix + 12, 4);
-    if (magic != DDJIT_CONFIG_MAGIC) {
-        fprintf(stderr, "dd: --configfd: bad magic 0x%08x (want 0x%08x)\n", magic, DDJIT_CONFIG_MAGIC);
+    if (magic != HL_CONFIG_MAGIC) {
+        fprintf(stderr, "dd: --configfd: bad magic 0x%08x (want 0x%08x)\n", magic, HL_CONFIG_MAGIC);
         return 78;
     }
-    if (abi != DDJIT_CONFIG_ABI || header_len < sizeof prefix || header_len > 4096) {
+    if (abi != HL_CONFIG_ABI || header_len < sizeof prefix || header_len > 4096) {
         // A real layout/ABI mismatch (not a survivable tail-append). This is the exact failure that used to
         // masquerade as a pool short-read: the engine and ddcli were built from different commits. Say so.
         fprintf(stderr,
                 "dd: --configfd: incompatible config ABI (writer abi=%u header_len=%u; reader abi=%u sizeof=%zu). "
                 "The engine and launcher were built from different commits — rebuild both from the same tree and "
                 "point DDJIT_DIR at that engine.\n",
-                abi, header_len, DDJIT_CONFIG_ABI, sizeof cfg);
+                abi, header_len, HL_CONFIG_ABI, sizeof cfg);
         return 78;
     }
 
@@ -241,7 +241,7 @@ int ddjit_run_configfd(int fd) {
     return rc;
 }
 
-int ddjit_run_configfile(const char *path) {
+int hl_run_configfile(const char *path) {
     if (!path || !path[0]) return 78;
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -249,7 +249,7 @@ int ddjit_run_configfile(const char *path) {
         return 78;
     }
     unlink(path);
-    int rc = ddjit_run_configfd(fd);
+    int rc = hl_run_configfd(fd);
     close(fd);
     return rc;
 }

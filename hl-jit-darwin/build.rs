@@ -27,8 +27,8 @@ fn main() {
     // which the offline build can't fetch), mirroring how the engine binaries are built below.
     {
         let ffi_c = runtime.join("os/darwin/ffi.c");
-        let ffi_o = out.join("ddjit_ffi.o");
-        let ffi_a = out.join("libddjit_ffi.a");
+        let ffi_o = out.join("hl_ffi.o");
+        let ffi_a = out.join("libhl_ffi.a");
         let cc = env::var("CC").unwrap_or_else(|_| "cc".into());
         let ar = env::var("AR").unwrap_or_else(|_| "ar".into());
         let ok = Command::new(&cc)
@@ -50,7 +50,7 @@ fn main() {
                 .unwrap_or(false);
         if ok {
             println!("cargo:rustc-link-search=native={}", out.display());
-            println!("cargo:rustc-link-lib=static=ddjit_ffi");
+            println!("cargo:rustc-link-lib=static=hl_ffi");
         } else {
             panic!("failed to compile the FFI spawn shim {}", ffi_c.display());
         }
@@ -67,7 +67,7 @@ fn main() {
         }
         let script = format!(
             // -framework IOSurface/CoreFoundation: the GPU rung 2 host-IOSurface allocator (dd_gpu.h /
-            // vfs.c dd_gpu_alloc). Always linked (the engine is always a macOS binary); the code path is
+            // vfs.c hl_gpu_alloc). Always linked (the engine is always a macOS binary); the code path is
             // runtime-gated behind DD_GPU_IOSURFACE so it's inert for every existing workload.
             "clang -O2 -framework IOSurface -framework CoreFoundation -o {bin} {tu} && codesign -s - --entitlements {ent} -f {bin}",
             bin = sh(&bin),

@@ -16,7 +16,7 @@
 
 #define DD_IOCTL_GPU_ALLOC 0xC020DD01u
 
-struct dd_gpu_alloc {
+struct hl_gpu_alloc {
     uint32_t width, height, format, stride, id;
     int32_t fd;
     uint64_t ptr;
@@ -224,7 +224,7 @@ static int pixel_ok(const uint8_t *px, uint32_t stride, uint32_t x, uint32_t y,
     return near_u8(p[0], want_b, 18) && near_u8(p[1], want_g, 18) && near_u8(p[2], want_r, 18);
 }
 
-static int validate_pixels(const struct dd_gpu_alloc *a) {
+static int validate_pixels(const struct hl_gpu_alloc *a) {
     const uint8_t *px = (const uint8_t *)(uintptr_t)a->ptr;
     uint32_t bx = a->width / 8, by = a->height / 5, cx = a->width / 2, cy = a->height / 2;
     int base = pixel_ok(px, a->stride, bx, by, 204, 102, 51);
@@ -237,7 +237,7 @@ static int validate_pixels(const struct dd_gpu_alloc *a) {
 }
 
 int main(void) {
-    struct dd_gpu_alloc a;
+    struct hl_gpu_alloc a;
     memset(&a, 0, sizeof(a));
     a.width = 128;
     a.height = 96;

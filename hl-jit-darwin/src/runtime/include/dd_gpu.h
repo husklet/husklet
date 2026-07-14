@@ -7,8 +7,8 @@
 //
 // This whole path is inert unless DD_GPU_IOSURFACE is set in the engine's environment (the --gui launcher
 // sets it), so every existing workload — and the test gate — is byte-for-byte unaffected.
-#ifndef DD_GPU_H
-#define DD_GPU_H
+#ifndef HL_GPU_H
+#define HL_GPU_H
 #include <stdint.h>
 
 // ioctl request number (dd-private magic 0xDD; _IOWR-shaped, 32-byte arg). Guest sends this on the
@@ -18,7 +18,7 @@
 // Formats (match DRM fourccs' intent). 0 = BGRA8888 (little-endian ARGB), the wl_shm/Metal default.
 #define DD_GPU_FMT_BGRA8888 0u
 
-struct dd_gpu_alloc {
+struct hl_gpu_alloc {
     uint32_t width;   // in
     uint32_t height;  // in
     uint32_t format;  // in  (DD_GPU_FMT_*)

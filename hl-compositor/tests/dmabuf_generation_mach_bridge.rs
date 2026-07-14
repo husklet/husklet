@@ -1,9 +1,9 @@
 #![cfg(target_os = "macos")] // drives the real macOS GPU mach bridge (hl_display::metal::*); no-op on Linux
 //! Engine→compositor allocation-generation channel proof. The generation the engine stamps on an
-//! IOSurface (dd-jit-darwin vfs.c `dd_gpu_alloc`/`dd_gpu_send_port`) must reach the compositor over the
+//! IOSurface (dd-jit-darwin vfs.c `hl_gpu_alloc`/`hl_gpu_send_port`) must reach the compositor over the
 //! GPU mach bridge and become the id's authenticated `IOSurfaceMetadata::generation`. This starts the
 //! REAL bridge (`hl_display::metal::start_gpu_bridge`) and runs a C helper that sends the SAME
-//! `dd_gpu_msg_t` the engine sends — a real IOSurface send-right + id + generation — then asserts
+//! `hl_gpu_msg_t` the engine sends — a real IOSurface send-right + id + generation — then asserts
 //! `hl_display::metal::iosurface_generation(id)` reports exactly that generation. Together with
 //! `dmabuf_stale_generation_bridge` (which proves the compositor rejects a mismatched generation over
 //! the wire), this closes the loop: real engine generation → real mach → real compositor authentication.

@@ -23,7 +23,7 @@
 #define DD_DMABUF_RENDER_BIT 0x10000u
 #define DRM_FMT_XRGB8888 0x34325258u
 
-struct dd_gpu_alloc {
+struct hl_gpu_alloc {
     uint32_t width, height, format, stride, id;
     int32_t fd;
     uint64_t ptr;
@@ -162,7 +162,7 @@ int main(void) {
         printf("gpu_dmabuf: open renderD128 failed (%m)\n");
         return 1;
     }
-    struct dd_gpu_alloc a = {0};
+    struct hl_gpu_alloc a = {0};
     a.width = 256;
     a.height = 160;
     a.format = 0;

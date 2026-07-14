@@ -343,7 +343,7 @@ pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Optio
         // Fork-safe IOSurface pool pre-seed for a NO-ARGUMENT `--gui` launch. Chrome's GPU/render process
         // is a host fork()-WITHOUT-exec child that can NEITHER create an IOSurface nor receive one over a
         // mach port — it can only reuse surfaces the non-forked ROOT engine pre-created, marked
-        // VM_INHERIT_SHARE, BEFORE the fork. The engine seeds that pool in `dd_gpu_prewarm_fork_safety`
+        // VM_INHERIT_SHARE, BEFORE the fork. The engine seeds that pool in `hl_gpu_prewarm_fork_safety`
         // (vfs.c) from `DD_GPU_POOL="WxH[,WxH…]"` read from ITS OWN process env — and ffi.c forwards our
         // `environ` to the engine's execve (the very same channel as the `DDJIT_CHECKPOINT_DIR` /
         // `OBJC_DISABLE_INITIALIZE_FORK_SAFETY` vars set above). On a plain launch nothing exports it, so

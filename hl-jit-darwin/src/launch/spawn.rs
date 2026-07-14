@@ -1,5 +1,5 @@
 //! The fork/exec entry: [`spawn`] / [`spawn_io`] / [`SpawnIo`] hand the encoded [`LaunchConfig`] wire
-//! buffer to the C `ddjit_spawn` shim, which posix_spawns the arch-matching engine and returns its pid.
+//! buffer to the C `hl_spawn` shim, which posix_spawns the arch-matching engine and returns its pid.
 
 use super::LaunchConfig;
 use crate::Guest;
@@ -7,16 +7,16 @@ use std::ffi::CString;
 use std::os::fd::RawFd;
 use std::os::raw::{c_char, c_int};
 
-/// `flags` bit: the child leads a new process group (see `DDJIT_SPAWN_SETPGID` in ddjit_api.h).
-const DDJIT_SPAWN_SETPGID: u32 = 0x1;
-/// `flags` bit: the child acquires a controlling terminal (see `DDJIT_SPAWN_TTY` in ddjit_api.h).
-const DDJIT_SPAWN_TTY: u32 = 0x2;
+/// `flags` bit: the child leads a new process group (see `HL_SPAWN_SETPGID` in hl_api.h).
+const HL_SPAWN_SETPGID: u32 = 0x1;
+/// `flags` bit: the child acquires a controlling terminal (see `HL_SPAWN_TTY` in hl_api.h).
+const HL_SPAWN_TTY: u32 = 0x2;
 
 extern "C" {
     /// C spawn shim (os/darwin/ffi.c). `in_fd`/`out_fd`/`err_fd` become the child's fd 0/1/2 (-1 =
     /// inherit); `flags` is a bitwise-OR of `DDJIT_SPAWN_*`. Returns the child pid, or -1 (errno set).
     /// The caller owns the passed fds and closes its own copies after this returns.
-    fn ddjit_spawn(
+    fn hl_spawn(
         engine_path: *const c_char,
         config: *const u8,
         config_len: usize,
@@ -60,15 +60,15 @@ pub fn spawn_io(guest: Guest, cfg: &LaunchConfig, io: SpawnIo) -> std::io::Resul
     let wire = cfg.to_wire();
     let mut flags = 0u32;
     if io.setpgid {
-        flags |= DDJIT_SPAWN_SETPGID;
+        flags |= HL_SPAWN_SETPGID;
     }
     if io.tty {
-        flags |= DDJIT_SPAWN_TTY;
+        flags |= HL_SPAWN_TTY;
     }
     // SAFETY: `wire` is a live, correctly-sized buffer; `engine_c` is a valid NUL-terminated path; the
     // fds are the caller's own and stay open across this call (the shim only dup2's them in the child).
     let pid = unsafe {
-        ddjit_spawn(
+        hl_spawn(
             engine_c.as_ptr(),
             wire.as_ptr(),
             wire.len(),

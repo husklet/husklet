@@ -4,7 +4,7 @@
 use super::error::Error;
 
 /// A running container. Wait on it or send it a signal. The container is forked by the engine FFI
-/// (`ddjit_spawn`), so the handle owns just the raw pid and reaps it with `waitpid(2)`.
+/// (`hl_spawn`), so the handle owns just the raw pid and reaps it with `waitpid(2)`.
 pub struct RunHandle {
     pub(crate) pid: u32,
 }

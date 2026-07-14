@@ -14,8 +14,8 @@
  * returns NULL -> the caller surfaces a clean INVALID_IMAGE (never a crash, never a fake success).
  * The NVIDIA LZ4-variant decompressor (Tier 1.5) is deliberately out of scope.
  */
-#ifndef DD_FATBIN_H
-#define DD_FATBIN_H
+#ifndef HL_FATBIN_H
+#define HL_FATBIN_H
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -62,20 +62,20 @@ typedef struct __attribute__((packed)) {
 } DdFatBinEntry;
 
 /* True if `image` looks like an ELF/CUBIN (SASS) blob — dd cannot execute SASS. */
-static inline int dd_image_is_elf(const void* image) {
+static inline int hl_image_is_elf(const void* image) {
     const unsigned char* b = (const unsigned char*)image;
     return b[0] == 0x7f && b[1] == 'E' && b[2] == 'L' && b[3] == 'F';
 }
 
 /* True if `image` is a fatbin wrapper or a bare fatbin container. */
-static inline int dd_image_is_fatbin(const void* image) {
+static inline int hl_image_is_fatbin(const void* image) {
     unsigned int m; memcpy(&m, image, sizeof(m));
     return m == DD_FATBIN_WRAPPER_MAGIC || m == DD_FATBIN_MAGIC;
 }
 
 /* Extract the first uncompressed PTX entry as a malloc'd NUL-terminated string (caller frees).
  * Returns NULL for: not a fatbin, no PTX entry (SASS-only), or PTX present but compressed. */
-static inline char* dd_fatbin_extract_ptx(const void* image, unsigned long long* out_len) {
+static inline char* hl_fatbin_extract_ptx(const void* image, unsigned long long* out_len) {
     if (!image) return NULL;
     unsigned int m0; memcpy(&m0, image, sizeof(m0));
 
@@ -120,4 +120,4 @@ static inline char* dd_fatbin_extract_ptx(const void* image, unsigned long long*
     return NULL;
 }
 
-#endif /* DD_FATBIN_H */
+#endif /* HL_FATBIN_H */

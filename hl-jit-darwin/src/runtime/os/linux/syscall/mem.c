@@ -425,7 +425,7 @@ static int svc_mem(struct cpu *c, uint64_t nr, uint64_t a0, uint64_t a1, uint64_
         // render-node tag, so no other mmap is affected (inert unless DD_GPU_IOSURFACE).
         if (gpu_iosurface_on() && !(a3 & 0x20) && (int)a4 >= 0 && (int)a4 < 1024 && g_devdri[(int)a4]) {
             uint32_t handle = (uint32_t)((uint64_t)a5 >> 12);
-            int gi = dd_gpu_reg_by_handle(handle);
+            int gi = hl_gpu_reg_by_handle(handle);
             if (gi >= 0) {
                 G_RET(c) = (uint64_t)(uintptr_t)g_gpu_reg[gi].base;
                 break;

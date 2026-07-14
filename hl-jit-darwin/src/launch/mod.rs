@@ -1,10 +1,10 @@
-//! The typed, env-free launch path: marshal a [`LaunchConfig`] into the `ddjit_config` wire buffer
-//! (see `src/runtime/include/ddjit_api.h`) and hand it to the C `ddjit_spawn`, which posix_spawns the
+//! The typed, env-free launch path: marshal a [`LaunchConfig`] into the `hl_config` wire buffer
+//! (see `src/runtime/include/hl_api.h`) and hand it to the C `hl_spawn`, which posix_spawns the
 //! arch-matching engine as `<engine> --configfd <fd>` and returns the container's pid. No `bash`, no
 //! `DD_*`/`DDJIT_*` environment — the container config travels as a struct.
 //!
 //! Split by concern: this module holds the typed [`LaunchConfig`]; `wire.rs` is the byte-exact
-//! `ddjit_config` encoder ([`LaunchConfig::to_wire`] + the `WireHeader` C-contract layout); `spawn.rs`
+//! `hl_config` encoder ([`LaunchConfig::to_wire`] + the `WireHeader` C-contract layout); `spawn.rs`
 //! is the fork/exec entry ([`spawn`] / [`spawn_io`] / [`SpawnIo`]).
 
 mod spawn;

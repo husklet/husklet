@@ -6,7 +6,7 @@
 #define DD_DMABUF_MOD_MAGIC 0x6464u
 #define DRM_FMT_XRGB8888 0x34325258u
 
-struct dd_gpu_alloc {
+struct hl_gpu_alloc {
     uint32_t width;
     uint32_t height;
     uint32_t format;
@@ -16,7 +16,7 @@ struct dd_gpu_alloc {
     uint64_t ptr;
 };
 
-static void fill_xor_frame(struct dd_gpu_alloc *a) {
+static void fill_xor_frame(struct hl_gpu_alloc *a) {
     uint8_t *px = (uint8_t *)(uintptr_t)a->ptr;
     for (uint32_t y = 0; y < a->height; y++) {
         for (uint32_t x = 0; x < a->width; x++) {
@@ -37,7 +37,7 @@ static void fill_xor_frame(struct dd_gpu_alloc *a) {
     }
 }
 
-static int alloc_frame(struct dd_gpu_alloc *a) {
+static int alloc_frame(struct hl_gpu_alloc *a) {
     int rnode = open("/dev/dri/renderD128", O_RDWR);
     if (rnode < 0) {
         printf("gui_dmabuf_frame open_render=0 errno=%d\n", errno);
@@ -62,7 +62,7 @@ static int alloc_frame(struct dd_gpu_alloc *a) {
     return 0;
 }
 
-static int commit_dmabuf_frame(struct gp_conn *c, const struct dd_gpu_alloc *a) {
+static int commit_dmabuf_frame(struct gp_conn *c, const struct hl_gpu_alloc *a) {
     gp_bind(c, GP_GLOBAL_DMABUF, "zwp_linux_dmabuf_v1", 3, GP_DMABUF);
     gp_send_u32(c, GP_DMABUF, 1, &(uint32_t){GP_DMABUF_PARAMS}, 1);
     if (gp_flush(c) != 0) return -1;
@@ -89,7 +89,7 @@ static int commit_dmabuf_frame(struct gp_conn *c, const struct dd_gpu_alloc *a) 
 }
 
 int main(void) {
-    struct dd_gpu_alloc a;
+    struct hl_gpu_alloc a;
     if (alloc_frame(&a) != 0) return 1;
 
     struct gp_conn c;

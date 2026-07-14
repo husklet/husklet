@@ -114,7 +114,7 @@ impl Runtime {
     }
 
     /// Run a container. Returns a handle to wait on / signal. Forks the linked engine directly via the
-    /// typed FFI (`ddjit_spawn`) — no `bash`, no separate `ddjit-*` binary, no `DD_*` environment. The
+    /// typed FFI (`hl_spawn`) — no `bash`, no separate `ddjit-*` binary, no `DD_*` environment. The
     /// child inherits the host stdio.
     pub fn run(&self, c: &Container) -> Result<RunHandle, Error> {
         if !hl_jit_darwin::available(c.guest) {

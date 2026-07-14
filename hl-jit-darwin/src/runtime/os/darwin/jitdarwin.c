@@ -398,7 +398,7 @@ static void run_guest(void) {
 // The container run entry -- also the dd_run() the shared `--configfd` bridge dispatches to. Loads the
 // Mach-O guest at argv[0] and runs it under the JIT (native macOS code, no VM). `rootfs`, when set, becomes
 // the jail root the BSD syscall layer resolves guest paths against; a bare launch passes NULL. Single-shot
-// per process. Non-static so os/ddjit_configfd.c's forward-declared dd_run() resolves to this definition.
+// per process. Non-static so os/hl_configfd.c's forward-declared dd_run() resolves to this definition.
 int dd_run(const char *rootfs, int argc, char *const argv[]) {
     if (rootfs && rootfs[0]) g_rootfs = rootfs;
     if (argc < 1) {
@@ -453,24 +453,24 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
     return 0;
 }
 
-// `--configfd` launch bridge (read the serialized ddjit_config, re-hydrate DD_*/DDJIT_* env, dispatch to
+// `--configfd` launch bridge (read the serialized hl_config, re-hydrate DD_*/DDJIT_* env, dispatch to
 // the dd_run() above). Included once here so this TU gets its own copy referencing this engine's dd_run.
-#include "../ddjit_configfd.c"
+#include "../hl_configfd.c"
 
-// The darwinjail entry point. Named `ddjit_entry` so the runtime can be linked as a library and launched
+// The darwinjail entry point. Named `hl_entry` so the runtime can be linked as a library and launched
 // by an in-process fork()+call; the thin `main` shim keeps the standalone binary (used by the test
 // harness) launching identically. The static-lib build defines DDJIT_NO_MAIN to drop the shim.
-int ddjit_entry(int argc, char **argv);
+int hl_entry(int argc, char **argv);
 #ifndef DDJIT_NO_MAIN
 int main(int argc, char **argv) {
-    return ddjit_entry(argc, argv);
+    return hl_entry(argc, argv);
 }
 #endif
-int ddjit_entry(int argc, char **argv) {
-    // typed-config launch: `--configfd <fd>` streams a serialized ddjit_config over the inherited fd
+int hl_entry(int argc, char **argv) {
+    // typed-config launch: `--configfd <fd>` streams a serialized hl_config over the inherited fd
     // instead of the flag dialect below. Dispatched before all other flags.
-    if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return ddjit_run_configfd(atoi(argv[2]));
-    if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return ddjit_run_configfile(argv[2]);
+    if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return hl_run_configfd(atoi(argv[2]));
+    if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return hl_run_configfile(argv[2]);
     int ai = 1;
     for (; ai < argc && argv[ai][0] == '-'; ai++) { // flags (mirrors jit.c's CLI)
         if (!strcmp(argv[ai], "--rootfs") && ai + 1 < argc)

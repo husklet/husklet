@@ -8,8 +8,8 @@
 //
 // Shared by both the linux container code (os/linux/container/state.c) and the darwin jail
 // (os/darwin/darwinjail.c) so the rules + error messages are identical across all targets.
-#ifndef DD_CONTAINER_PARSE_H
-#define DD_CONTAINER_PARSE_H
+#ifndef HL_CONTAINER_PARSE_H
+#define HL_CONTAINER_PARSE_H
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -60,4 +60,4 @@ static unsigned dd_parse_port_field(const char *name, const char *s, const char 
     buf[n] = '\0';
     return dd_parse_port(name, buf);
 }
-#endif // DD_CONTAINER_PARSE_H
+#endif // HL_CONTAINER_PARSE_H

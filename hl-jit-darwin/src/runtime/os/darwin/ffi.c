@@ -1,14 +1,14 @@
-// dd-jit-darwin FFI spawn shim — the C side of the typed launch contract (see include/ddjit_api.h).
+// dd-jit-darwin FFI spawn shim — the C side of the typed launch contract (see include/hl_api.h).
 //
 // This TU deliberately references NO engine symbols (only libc: fork/execve/write/dup2/ioctl), so
 // it links into the Rust host process safely — the engine itself only ever runs in the spawned child.
 // The child is the arch-matching engine binary invoked as `<engine_path> --configfile <path>`. The
-// serialized `ddjit_config` is written to a private temp file beside the engine; the engine opens and
+// serialized `hl_config` is written to a private temp file beside the engine; the engine opens and
 // unlinks it at entry. We use a path instead of an inherited fd because some launch environments close all
 // non-stdio descriptors across exec despite FD_CLOEXEC being clear. We `fork()` rather than `posix_spawn`
 // because the caller may need the child to lead its own process group (pause/kill via killpg) and/or own a
 // controlling terminal (interactive PTY) — both require setpgid/setsid/TIOCSCTTY in the child before exec.
-#include "../../include/ddjit_api.h"
+#include "../../include/hl_api.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -29,7 +29,7 @@ extern char **environ;
 // the environ we hand execve(). Rather than rely on each caller (the Rust launcher, the daemon, tests)
 // remembering to put it in the environment, guarantee it for EVERY spawn here, at the one execve() that
 // starts an engine. The primary, load-independent fix is the engine's own startup prewarm
-// (vfs.c dd_gpu_prewarm_fork_safety, which forces those +initialize's to completion before any guest
+// (vfs.c hl_gpu_prewarm_fork_safety, which forces those +initialize's to completion before any guest
 // thread/fork); this is defense-in-depth.
 //
 // Built as a private envp copy so we neither mutate this host process's environ (other host threads may be
@@ -38,7 +38,7 @@ extern char **environ;
 // already present, else a malloc'd array the caller frees in the PARENT after fork (the forked child
 // inherits a COW copy for execve; only the pointer array is owned, its strings are borrowed from
 // `environ` + one static literal). NULL is never returned; on allocation failure we fall back to `environ`.
-static char **ddjit_child_env(void) {
+static char **hl_child_env(void) {
     static const char *KEY = "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=";
     size_t keylen = strlen(KEY);
     size_t n = 0;
@@ -67,7 +67,7 @@ static int write_all(int fd, const uint8_t *p, size_t n) {
     return 0;
 }
 
-pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_len,
+pid_t hl_spawn(const char *engine_path, const uint8_t *config, size_t config_len,
                   int in_fd, int out_fd, int err_fd, uint32_t flags) {
     char cfgpath[1024];
     char cfgdir[1024];
@@ -88,8 +88,8 @@ pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_
     }
     // Build the engine's environ (with OBJC_DISABLE_INITIALIZE_FORK_SAFETY guaranteed) BEFORE fork, so the
     // child only has to execve() with it — no malloc/setenv in the async-signal-only fork child.
-    char **child_env = ddjit_child_env();
-    int env_owned = (child_env != environ); // ddjit_child_env malloc'd it -> the parent must free it
+    char **child_env = hl_child_env();
+    int env_owned = (child_env != environ); // hl_child_env malloc'd it -> the parent must free it
     pid_t pid = fork();
     if (pid < 0) {
         int e = errno;
@@ -103,10 +103,10 @@ pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_
         // CHILD — only async-signal-safe calls until execve (fork left just this thread running).
 
         // Placement: own process group so the caller's killpg reaches the whole container.
-        if (flags & DDJIT_SPAWN_SETPGID) setpgid(0, 0);
+        if (flags & HL_SPAWN_SETPGID) setpgid(0, 0);
         // Controlling terminal: become a session leader, then claim the pty slave as our ctty. The caller
         // passes the SAME slave fd as in/out/err, so in_fd names it (0 = "don't steal from another session").
-        if (flags & DDJIT_SPAWN_TTY) {
+        if (flags & HL_SPAWN_TTY) {
             setsid();
             if (in_fd >= 0) ioctl(in_fd, TIOCSCTTY, 0);
         }

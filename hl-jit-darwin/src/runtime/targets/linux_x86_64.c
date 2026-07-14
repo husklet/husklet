@@ -85,7 +85,7 @@
 #include "../engine/dispatch.c"              // SHARED engine: run_guest loop (x86 drives it via dispatch_hooks.h;
                                              // keeps its own run_block/block_return in translate.c, G_OWN_TRAMPOLINES)
 #include "../translate/x86_64/elf.c"         // x86 ELF loader + stack + fault handlers (per-arch: machine/platform)
-#include "../os/ddjit_configfd.c"            // `--configfd` launch bridge -> re-hydrate DD_*/DDJIT_* env -> dd_run()
+#include "../os/hl_configfd.c"            // `--configfd` launch bridge -> re-hydrate DD_*/DDJIT_* env -> dd_run()
 
 // ---- entry + main ----
 // ---------------- entry ----------------
@@ -111,8 +111,8 @@ static void container_init(const char *rootfs) {
     if (rootfs) acct_container_reset();
     container_read_resource_env(); // docker --cpus / --read-only / --ulimit (DD_CPUS/DD_ROOTFS_RO/DD_ULIMITS)
     // #353: the daemon's DEFAULT launch path is the typed --configfd bridge, which hands the container
-    // model to the engine as DD_* ENV (ddjit_configfd.c), NOT as the --hostname/--mem-max/--pids-max CLI
-    // flags that ddjit_entry() parses. aarch64's container_init() already re-reads these from the env
+    // model to the engine as DD_* ENV (hl_configfd.c), NOT as the --hostname/--mem-max/--pids-max CLI
+    // flags that hl_entry() parses. aarch64's container_init() already re-reads these from the env
     // (linux_aarch64.c); x86-64 did not, so a `docker run --hostname h` on x86 dropped the hostname
     // (uname/gethostname/`/etc/hostname` returned "jit") and --memory/--pids-limit were ignored. The
     // out-of-process SpawnConfig::script() path passes them as CLI flags, which is why the default test
@@ -303,7 +303,7 @@ static int engine_global_init(void) {
     // inits to completion HERE, single-threaded and BEFORE any guest thread/fork, so a lazy +initialize can
     // never be mid-flight when a guest forks (which would abort the child via libobjc's fork-safety guard).
     // Gated on DD_GPU_IOSURFACE; a no-op for every other workload. Mirrors targets/linux_aarch64.c.
-    dd_gpu_prewarm_fork_safety();
+    hl_gpu_prewarm_fork_safety();
     g_engine_inited = 1;
     return 0;
 }
@@ -454,16 +454,16 @@ int dd_run(const char *rootfs, int argc, char *const argv[]) {
 #include "../os/linux/forkserver.c"
 
 #ifndef DDJIT_LIB
-// The engine entry point. Named `ddjit_entry` so the runtime can be linked as a library and launched
+// The engine entry point. Named `hl_entry` so the runtime can be linked as a library and launched
 // by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
 // harness) launching identically. The static-lib build defines DDJIT_NO_MAIN to drop the shim.
-int ddjit_entry(int argc, char **argv);
+int hl_entry(int argc, char **argv);
 #ifndef DDJIT_NO_MAIN
 int main(int argc, char **argv) {
-    return ddjit_entry(argc, argv);
+    return hl_entry(argc, argv);
 }
 #endif
-int ddjit_entry(int argc, char **argv) {
+int hl_entry(int argc, char **argv) {
     int ai = 1;
     const char *rootfs = NULL;
     static char self[4200];
@@ -471,10 +471,10 @@ int ddjit_entry(int argc, char **argv) {
         g_self_path = self;
     else
         g_self_path = argv[0];
-    // typed-config launch (the daemon's default path): `--configfd <fd>` streams a serialized ddjit_config
+    // typed-config launch (the daemon's default path): `--configfd <fd>` streams a serialized hl_config
     // over the inherited fd instead of the DD_* env/flag dialect. Dispatched before all other flags.
-    if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return ddjit_run_configfd(atoi(argv[2]));
-    if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return ddjit_run_configfile(argv[2]);
+    if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return hl_run_configfd(atoi(argv[2]));
+    if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return hl_run_configfile(argv[2]);
     // W3D fork-server dispatch (gated; standalone path untouched when neither flag is present):
     //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident ddjitd, listen on SOCK
     //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a ddjitd

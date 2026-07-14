@@ -10,8 +10,8 @@
  * and the cudaLaunchKernel / __cuda* calling conventions — match NVIDIA's published headers so the ABI
  * is compatible. cudaDeviceProp is a faithful clean-room reconstruction of the CUDA 12.x layout.
  */
-#ifndef DD_CUDART_MIN_H
-#define DD_CUDART_MIN_H
+#ifndef HL_CUDART_MIN_H
+#define HL_CUDART_MIN_H
 
 #include <stddef.h>
 
@@ -234,4 +234,4 @@ cudaError_t  __cudaPopCallConfiguration(dim3* gridDim, dim3* blockDim, size_t* s
 #ifdef __cplusplus
 }
 #endif
-#endif /* DD_CUDART_MIN_H */
+#endif /* HL_CUDART_MIN_H */

@@ -942,11 +942,11 @@ CUresult cuCtxDisablePeerAccess(CUcontext peer) { (void)peer; REQUIRE_INIT(); re
  * (docs/ideas/CUDART_PLAN.md §2), and it lets a driver-API app pass a fatbin to cuModuleLoadData too. */
 CUresult cuModuleLoadData(CUmodule* module, const void* image) {
     REQUIRE_INIT(); if (!module || !image) return CUDA_ERROR_INVALID_VALUE;
-    if (dd_image_is_elf(image)) return CUDA_ERROR_INVALID_IMAGE; /* cubin/SASS: PTX only */
+    if (hl_image_is_elf(image)) return CUDA_ERROR_INVALID_IMAGE; /* cubin/SASS: PTX only */
     char* extracted = NULL;
     const char* ptx;
-    if (dd_image_is_fatbin(image)) {
-        extracted = dd_fatbin_extract_ptx(image, NULL);
+    if (hl_image_is_fatbin(image)) {
+        extracted = hl_fatbin_extract_ptx(image, NULL);
         if (!extracted) return CUDA_ERROR_INVALID_IMAGE; /* SASS-only or compressed: no usable PTX */
         ptx = extracted;
     } else {

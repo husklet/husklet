@@ -1,43 +1,43 @@
 // dd-jit-darwin FFI: the typed launch contract between the Rust runtime and the C engine.
 //
 // The Rust side (dd-jit) builds a container purely as a typed value, serializes it into the
-// position-independent `ddjit_config` wire buffer below, and calls `ddjit_spawn()`. The C side
+// position-independent `hl_config` wire buffer below, and calls `hl_spawn()`. The C side
 // `posix_spawn`s the arch-matching engine with `--configfd <fd>` and writes the buffer to it — NO
 // argv flag soup, NO `DD_*` environment dialect. The engine reads the buffer, populates the same
 // container globals `container_init` sets, and runs the guest; guest exit `_exit()`s the worker, so
 // the returned pid is the whole container's lifetime. Engine *tuning* knobs (DDJIT_*, JT, …) are a
 // separate, engine-internal concern and are NOT part of this contract.
-#ifndef DDJIT_API_H
-#define DDJIT_API_H
+#ifndef HL_API_H
+#define HL_API_H
 
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
 
-#define DDJIT_CONFIG_MAGIC 0x44434647u /* 'DCFG' */
+#define HL_CONFIG_MAGIC 0x44434647u /* 'DCFG' */
 // ABI generation for the header field LAYOUT/MEANING. Bump this ONLY when an existing field changes
 // type or meaning (never for a pure tail-append — those are absorbed by `header_len` below). The engine
 // (reader) rejects a mismatched `abi` loudly instead of silently mis-parsing.
-#define DDJIT_CONFIG_ABI 1u
+#define HL_CONFIG_ABI 1u
 
 // The fixed header of the wire buffer. Every `*_off` is a byte offset into the string pool that
-// immediately follows this header (`buf = <ddjit_config header><pool[pool_len]>`); 0 means "unset"
+// immediately follows this header (`buf = <hl_config header><pool[pool_len]>`); 0 means "unset"
 // (offset 0 of the pool is always a lone NUL so 0 reads as the empty string). Strings are NUL-
 // terminated; list fields reuse the same delimiters the engine already parses (see the field notes).
 //
 // SKEW SAFETY: `magic`(@0), `pool_len`(@4), `header_len`(@8), `abi`(@12) are a FROZEN 16-byte prefix —
 // those four offsets never move. The engine reads that prefix first, so even a writer (ddcli) and reader
 // (engine) built from DIFFERENT commits agree on where the size + ABI live. `header_len` = the exact
-// `sizeof(struct ddjit_config)` the WRITER used, making the header/pool boundary explicit: the reader
+// `sizeof(struct hl_config)` the WRITER used, making the header/pool boundary explicit: the reader
 // consumes exactly `header_len` header bytes (zero-filling any tail fields it lacks, discarding any the
 // writer added) before the pool. This is what turns a build mismatch into either a transparent success
 // (pure tail-append) or a crisp ABI error — NOT the old cryptic "short read of N pool bytes" that looked
 // like a child-spawn race.
-struct ddjit_config {
-    uint32_t magic;      // @0 DDJIT_CONFIG_MAGIC (frozen offset)
+struct hl_config {
+    uint32_t magic;      // @0 HL_CONFIG_MAGIC (frozen offset)
     uint32_t pool_len;   // @4 bytes of string pool trailing this header (frozen offset)
-    uint32_t header_len; // @8 sizeof(struct ddjit_config) the writer used (frozen offset) — pool boundary
-    uint32_t abi;        // @12 DDJIT_CONFIG_ABI the writer used (frozen offset) — reader rejects a mismatch
+    uint32_t header_len; // @8 sizeof(struct hl_config) the writer used (frozen offset) — pool boundary
+    uint32_t abi;        // @12 HL_CONFIG_ABI the writer used (frozen offset) — reader rejects a mismatch
 
     uint64_t mem_max;    // cgroup memory.max bytes (0 = unlimited)
     uint32_t pids_max;   // pids.max (0 = unlimited)
@@ -72,9 +72,9 @@ struct ddjit_config {
                             // growth skew-safe, so no ABI bump is needed for a pure append.
 };
 
-// `flags` bits for ddjit_spawn(): how the child is placed relative to the caller's session/terminal.
-#define DDJIT_SPAWN_SETPGID 0x1u // child leads a new process group (setpgid(0,0)) — pause/kill reach it via killpg
-#define DDJIT_SPAWN_TTY     0x2u // child acquires a controlling terminal (setsid + TIOCSCTTY); in/out/err = pty slave
+// `flags` bits for hl_spawn(): how the child is placed relative to the caller's session/terminal.
+#define HL_SPAWN_SETPGID 0x1u // child leads a new process group (setpgid(0,0)) — pause/kill reach it via killpg
+#define HL_SPAWN_TTY     0x2u // child acquires a controlling terminal (setsid + TIOCSCTTY); in/out/err = pty slave
 
 // Spawn a container: `fork`, wire the child's stdio + placement per `flags`, `execve` the engine at
 // `engine_path` as `<engine> --configfd <fd>`, and stream the serialized config buffer to it over an
@@ -84,7 +84,7 @@ struct ddjit_config {
 // OWNS those fds and closes its own copies after this returns — the shim never closes them. `flags` is a
 // bitwise-OR of the DDJIT_SPAWN_* bits above. No engine symbols are referenced here, so this translation
 // unit links cleanly into the Rust host process without pulling the engine in.
-pid_t ddjit_spawn(const char *engine_path, const uint8_t *config, size_t config_len,
+pid_t hl_spawn(const char *engine_path, const uint8_t *config, size_t config_len,
                   int in_fd, int out_fd, int err_fd, uint32_t flags);
 
-#endif /* DDJIT_API_H */
+#endif /* HL_API_H */

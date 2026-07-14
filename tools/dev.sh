@@ -18,10 +18,10 @@ BIN="$HOME/.local/bin"
 mkdir -p "$HOME/.dd/run" "$IMAGES" "$BIN"
 
 echo "==> building dd-daemon + ddcli (release) ..."
-cargo build --release -p dd-daemon -p dd-cli
+cargo build --release -p hl-daemon -p hl-cli
 
 echo "==> building the macOS-container userland (for 'ddcli mac') ..."
-if DD_IMAGES="$IMAGES" bash "$ROOT/dd-gui/mac/mac-userland.sh" >/dev/null 2>&1; then
+if DD_IMAGES="$IMAGES" bash "$ROOT/hl-gui/mac/mac-userland.sh" >/dev/null 2>&1; then
   echo "    macos image ready in $IMAGES/macos"
 else
   echo "    (skipped -- needs a nix arm64 toolchain; 'ddcli mac' will be unavailable)"

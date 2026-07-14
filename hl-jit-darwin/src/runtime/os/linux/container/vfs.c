@@ -4592,7 +4592,7 @@ static const char *dev_node_hostpath(const char *gp) {
 #include <servers/bootstrap.h>
 
 // Mach message carrying an IOSurface send-right + its id to dd-display (must match dd-display's
-// mach_bridge.c dd_gpu_msg_t exactly).
+// mach_bridge.c hl_gpu_msg_t exactly).
 typedef struct {
     mach_msg_header_t header;
     mach_msg_body_t body;
@@ -4600,11 +4600,11 @@ typedef struct {
     uint32_t id;
     uint32_t generation; // allocation generation for `id` (0 = unversioned); the compositor stores it
                          // and rejects a guest dmabuf whose modifier carries a stale generation.
-} dd_gpu_msg_t;
+} hl_gpu_msg_t;
 
 // Send the IOSurface's send-right + id to dd-display's bootstrap mach service. Best-effort: if the
 // compositor isn't up (no service), silently skip — the alloc still succeeds for the guest.
-static void dd_gpu_send_port(uint32_t id, uint32_t generation, IOSurfaceRef surf) {
+static void hl_gpu_send_port(uint32_t id, uint32_t generation, IOSurfaceRef surf) {
     mach_port_t server = MACH_PORT_NULL;
     // DD_GPU_BRIDGE_NAME lets multiple dd-display instances coexist (one per agent/benchmark); the
     // compositor registers under the SAME name. Unset → the historical singleton "com.dd.display.gpu".
@@ -4616,7 +4616,7 @@ static void dd_gpu_send_port(uint32_t id, uint32_t generation, IOSurfaceRef surf
         mach_port_deallocate(mach_task_self(), server);
         return;
     }
-    dd_gpu_msg_t msg;
+    hl_gpu_msg_t msg;
     memset(&msg, 0, sizeof msg);
     msg.header.msgh_bits = MACH_MSGH_BITS_COMPLEX | MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
     msg.header.msgh_size = sizeof msg;
@@ -4656,12 +4656,12 @@ static int g_gpu_fork_child = 0;
 
 // Called from fork_child_hooks (child side) after every guest fork: this process can no longer create or
 // touch a freshly-created IOSurface, only reuse the pre-fork share-inherited pool it inherited.
-void dd_gpu_after_fork(void) { g_gpu_fork_child = 1; }
+void hl_gpu_after_fork(void) { g_gpu_fork_child = 1; }
 
 #ifdef __APPLE__
 // Force an IOSurface's backing pages to be SHARE-inherited by future fork() children (default is
 // NONE/COPY, which leaves the child with no valid mapping and a fault on first touch). Page-aligned.
-static void dd_gpu_share_inherit(void *base, size_t size) {
+static void hl_gpu_share_inherit(void *base, size_t size) {
     if (!base || !size) return;
     size_t pg = (size_t)getpagesize();
     vm_address_t a = (vm_address_t)base & ~(vm_address_t)(pg - 1);
@@ -4675,7 +4675,7 @@ static void dd_gpu_share_inherit(void *base, size_t size) {
 // same buffer each frame) and release every surface a render-node fd owns when it closes — so a
 // long-running GUI app doesn't accumulate IOSurfaces. Bounded, gated (only the GPU path touches it).
 #define DD_GPU_REG_MAX 256
-static struct dd_gpu_reg_ent {
+static struct hl_gpu_reg_ent {
     int owner_fd;  // the render-node fd that checked this surface out, or -1 = a FREE pool surface
     int pool;      // 1 = a pre-created, VM_INHERIT_SHARE'd pool surface (never per-fd CFRelease'd)
     uint32_t id, w, h, stride;
@@ -4686,7 +4686,7 @@ static struct dd_gpu_reg_ent {
     void *base;
 } g_gpu_reg[DD_GPU_REG_MAX];
 
-static int dd_gpu_reg_find(int fd, uint32_t w, uint32_t h) {
+static int hl_gpu_reg_find(int fd, uint32_t w, uint32_t h) {
     for (int i = 0; i < DD_GPU_REG_MAX; i++)
         if (g_gpu_reg[i].surf && g_gpu_reg[i].owner_fd == fd && g_gpu_reg[i].w == w && g_gpu_reg[i].h == h)
             return i;
@@ -4695,7 +4695,7 @@ static int dd_gpu_reg_find(int fd, uint32_t w, uint32_t h) {
 // Claim a FREE (owner_fd==-1) pool surface of size (w,h) for `fd`. Works in a forked child: it only reads
 // inherited plain data and writes owner_fd in the child's own COW copy — no IOSurface API call. Returns the
 // index or -1 if the pool has no free surface of that size.
-static int dd_gpu_reg_take_pool(int fd, uint32_t w, uint32_t h) {
+static int hl_gpu_reg_take_pool(int fd, uint32_t w, uint32_t h) {
     for (int i = 0; i < DD_GPU_REG_MAX; i++)
         if (g_gpu_reg[i].surf && g_gpu_reg[i].pool && g_gpu_reg[i].owner_fd == -1 && g_gpu_reg[i].w == w &&
             g_gpu_reg[i].h == h) {
@@ -4703,7 +4703,7 @@ static int dd_gpu_reg_take_pool(int fd, uint32_t w, uint32_t h) {
             // A re-checkout of a recycled id is a fresh logical allocation → advance the generation so a
             // stale reference to the previous checkout is rejected. Only the non-forked path bumps: a
             // forked child cannot re-announce the new generation to the compositor over mach (see
-            // dd_gpu_surface), so it keeps the inherited generation the compositor already knows (no
+            // hl_gpu_surface), so it keeps the inherited generation the compositor already knows (no
             // versioning, but also no false rejection of the child's own frames). 15-bit field, never 0.
             if (!g_gpu_fork_child) {
                 uint32_t g = (g_gpu_reg[i].gen + 1) & 0x7fff;
@@ -4713,7 +4713,7 @@ static int dd_gpu_reg_take_pool(int fd, uint32_t w, uint32_t h) {
         }
     return -1;
 }
-static void dd_gpu_reg_add(int fd, int pool, uint32_t id, uint32_t gen, uint32_t w, uint32_t h,
+static void hl_gpu_reg_add(int fd, int pool, uint32_t id, uint32_t gen, uint32_t w, uint32_t h,
                            uint32_t stride, IOSurfaceRef surf, void *base) {
     for (int i = 0; i < DD_GPU_REG_MAX; i++)
         if (!g_gpu_reg[i].surf) {
@@ -4734,7 +4734,7 @@ static void dd_gpu_reg_add(int fd, int pool, uint32_t id, uint32_t gen, uint32_t
 // surface is RETURNED to the pool (owner_fd=-1), never released — it is shared, inherited, and reused for
 // the process lifetime. Only a legacy (non-pool) surface is CFRelease'd, and never from a forked child
 // (CFRelease could run a fork-unsafe IOSurface dealloc).
-static void dd_gpu_free_fd(int fd) {
+static void hl_gpu_free_fd(int fd) {
     for (int i = 0; i < DD_GPU_REG_MAX; i++)
         if (g_gpu_reg[i].surf && g_gpu_reg[i].owner_fd == fd) {
             if (g_gpu_reg[i].pool) {
@@ -4747,15 +4747,15 @@ static void dd_gpu_free_fd(int fd) {
 }
 // Locate a registered surface by its DRM handle (== IOSurface global id). Used by the dumb-buffer
 // ioctls (MAP/DESTROY/GEM_CLOSE/PRIME) and the mem.c MAP_DUMB mmap branch. Returns index or -1.
-static int dd_gpu_reg_by_handle(uint32_t handle) {
+static int hl_gpu_reg_by_handle(uint32_t handle) {
     for (int i = 0; i < DD_GPU_REG_MAX; i++)
         if (g_gpu_reg[i].surf && g_gpu_reg[i].id == handle) return i;
     return -1;
 }
 // Release/return the surface for a DRM handle (DESTROY_DUMB / GEM_CLOSE). Pool surfaces are returned to the
 // pool (kept alive for reuse); legacy surfaces are released (never from a forked child).
-static void dd_gpu_free_handle(uint32_t handle) {
-    int i = dd_gpu_reg_by_handle(handle);
+static void hl_gpu_free_handle(uint32_t handle) {
+    int i = hl_gpu_reg_by_handle(handle);
     if (i >= 0) {
         if (g_gpu_reg[i].pool) {
             g_gpu_reg[i].owner_fd = -1;
@@ -4772,7 +4772,7 @@ static void dd_gpu_free_handle(uint32_t handle) {
 // (owner_fd,w,h), announce it to dd-display over mach, register it under owner_fd, and hand back its
 // id/stride/base. `reuse` selects redraw-in-place (glmark2) vs a fresh distinct surface per call
 // (gbm bo pool). Returns 0 or -errno. Gated: only ever reached on a render-node fd with the GPU path on.
-static uint32_t dd_gpu_align_u32(uint32_t v, uint32_t align) {
+static uint32_t hl_gpu_align_u32(uint32_t v, uint32_t align) {
     return (v + align - 1) & ~(align - 1);
 }
 
@@ -4787,8 +4787,8 @@ static int gpu_alloc_dbg(void) {
 // mark the backing pages VM_INHERIT_SHARE so every future fork() child inherits the SAME physical memory,
 // announce it to dd-display (composites by id), and register it as a FREE pool entry. Returns 0 or -errno.
 // MUST run in the root (a forked child's IOSurfaceCreate returns NULL).
-static int dd_gpu_pool_make_one(uint32_t w, uint32_t h) {
-    uint32_t stride = dd_gpu_align_u32(w * 4, 16);
+static int hl_gpu_pool_make_one(uint32_t w, uint32_t h) {
+    uint32_t stride = hl_gpu_align_u32(w * 4, 16);
     CFMutableDictionaryRef props =
         CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     if (!props) return -ENOMEM;
@@ -4817,9 +4817,9 @@ static int dd_gpu_pool_make_one(uint32_t w, uint32_t h) {
     void *base = IOSurfaceGetBaseAddress(surf);
     IOSurfaceUnlock(surf, 0, NULL);
     uint32_t astride = (uint32_t)IOSurfaceGetBytesPerRow(surf);
-    dd_gpu_share_inherit(base, (size_t)astride * h); // <-- make it survive fork as SHARED memory
-    dd_gpu_send_port(id, 1, surf);                   // dd-display caches it by id + generation 1
-    dd_gpu_reg_add(-1, 1, id, 1, w, h, astride, surf, base); // free pool entry (owner_fd=-1, pool=1, gen=1)
+    hl_gpu_share_inherit(base, (size_t)astride * h); // <-- make it survive fork as SHARED memory
+    hl_gpu_send_port(id, 1, surf);                   // dd-display caches it by id + generation 1
+    hl_gpu_reg_add(-1, 1, id, 1, w, h, astride, surf, base); // free pool entry (owner_fd=-1, pool=1, gen=1)
     if (gpu_alloc_dbg())
         fprintf(stderr, "[gpu-alloc-dbg] pool+ %ux%u id=%u stride=%u base=%p pid=%d\n", w, h, id, astride, base,
                 (int)getpid());
@@ -4827,10 +4827,10 @@ static int dd_gpu_pool_make_one(uint32_t w, uint32_t h) {
 }
 #endif
 
-static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint32_t *out_id,
+static int hl_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint32_t *out_id,
                           uint32_t *out_stride, void **out_base, uint32_t *out_gen) {
     if (w == 0 || h == 0 || w > 16384 || h > 16384) return -EINVAL;
-    uint32_t stride = dd_gpu_align_u32(w * 4, 16);
+    uint32_t stride = hl_gpu_align_u32(w * 4, 16);
     size_t size = (size_t)stride * h;
     (void)size;
     void *base = NULL;
@@ -4839,9 +4839,9 @@ static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint3
     // reuse=1 (EGL shim redraw-in-place): if this fd already holds a same-size surface, return it. Same
     // live allocation → same generation, no re-announce.
     if (reuse) {
-        int r = dd_gpu_reg_find(owner_fd, w, h);
+        int r = hl_gpu_reg_find(owner_fd, w, h);
         if (r >= 0) {
-            struct dd_gpu_reg_ent *e = &g_gpu_reg[r];
+            struct hl_gpu_reg_ent *e = &g_gpu_reg[r];
             *out_id = e->id;
             *out_stride = e->stride;
             *out_base = e->base;
@@ -4852,14 +4852,14 @@ static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint3
     // Take a distinct FREE surface from the pre-fork, share-inherited pool. THIS is the fork-safe path: it
     // works identically in the root and in a forked child (Chrome's GPU process), because it only reads
     // inherited plain data (base/id/stride) — no IOSurface API call, which would fault/NULL in the child.
-    int pi = dd_gpu_reg_take_pool(owner_fd, w, h);
+    int pi = hl_gpu_reg_take_pool(owner_fd, w, h);
     if (pi < 0 && !g_gpu_fork_child) {
         // Root, no free pool surface of this size yet: create a small BATCH so this alloc AND the sibling
         // buffers a forked child will soon request (gbm keeps a 2-4 bo pool) are all covered before the fork.
         int batch = 4;
         for (int k = 0; k < batch; k++)
-            if (dd_gpu_pool_make_one(w, h) != 0) break;
-        pi = dd_gpu_reg_take_pool(owner_fd, w, h);
+            if (hl_gpu_pool_make_one(w, h) != 0) break;
+        pi = hl_gpu_reg_take_pool(owner_fd, w, h);
     }
     if (pi < 0) {
         // Forked child needing a size the root never pre-created: cannot create here (fork-unsafe). Fail the
@@ -4869,16 +4869,16 @@ static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint3
                     w, h, reuse, g_gpu_fork_child, (int)getpid(), g_gpu_root_pid);
         return -ENOMEM;
     }
-    struct dd_gpu_reg_ent *e = &g_gpu_reg[pi];
+    struct hl_gpu_reg_ent *e = &g_gpu_reg[pi];
     id = e->id;
     stride = e->stride;
     base = e->base;
-    gen = e->gen; // bumped by dd_gpu_reg_take_pool on the non-forked path
+    gen = e->gen; // bumped by hl_gpu_reg_take_pool on the non-forked path
     // Re-announce the id's new generation to the compositor so its authentication matches this fresh
     // checkout. Only the non-forked path can do this (it re-creates the send-right via an IOSurface API,
     // fork-unsafe in a child); a forked child left `gen` unbumped and the compositor keeps the generation
     // it already has, so the child's own frames still validate.
-    if (!g_gpu_fork_child) dd_gpu_send_port(id, gen, e->surf);
+    if (!g_gpu_fork_child) hl_gpu_send_port(id, gen, e->surf);
     if (gpu_alloc_dbg())
         fprintf(stderr, "[gpu-alloc-dbg] take %ux%u id=%u gen=%u stride=%u base=%p reuse=%d fork_child=%d pid=%d\n",
                 w, h, id, gen, stride, base, reuse, g_gpu_fork_child, (int)getpid());
@@ -4901,13 +4901,13 @@ static int dd_gpu_surface(int owner_fd, uint32_t w, uint32_t h, int reuse, uint3
 // Service DD_IOCTL_GPU_ALLOC: host-allocate (or reuse) an IOSurface, return its base pointer
 // (guest==host VA), its global id, stride, and a throwaway dmabuf fd. `owner_fd` is the render node so
 // the surface's lifetime is tied to it. Returns 0 on success, a negative errno otherwise.
-static int64_t dd_gpu_alloc(int owner_fd, void *arg) {
-    struct dd_gpu_alloc *r = (struct dd_gpu_alloc *)arg;
+static int64_t hl_gpu_alloc(int owner_fd, void *arg) {
+    struct hl_gpu_alloc *r = (struct hl_gpu_alloc *)arg;
     if (!r) return -EFAULT;
     uint32_t id = 0, stride = 0, gen = 0;
     void *base = NULL;
     // reuse=1: redraw-in-place across frames (the EGL shim redraws the same-size surface each frame).
-    int rc = (int)dd_gpu_surface(owner_fd, r->width, r->height, 1, &id, &stride, &base, &gen);
+    int rc = (int)hl_gpu_surface(owner_fd, r->width, r->height, 1, &id, &stride, &base, &gen);
     if (rc) return rc;
     size_t size = (size_t)stride * r->height;
     // A throwaway anonymous fd to satisfy linux-dmabuf's params.add (its pages are unused; dd-display
@@ -4948,10 +4948,10 @@ static int64_t dd_gpu_alloc(int owner_fd, void *arg) {
 // lazy init to COMPLETION here, before any guest thread/fork exists, closes the race STRUCTURALLY and
 // deterministically, independent of host load (and independent of whether OBJC_DISABLE_INITIALIZE_FORK_-
 // SAFETY reached this process's libobjc at load time).
-static void dd_gpu_prewarm_fork_safety(void) {
+static void hl_gpu_prewarm_fork_safety(void) {
 #ifdef __APPLE__
     if (!gpu_iosurface_on()) return;
-    // Create a throwaway 1x1 BGRA IOSurface exactly the way dd_gpu_surface() does, so the SAME CF/IOSurface
+    // Create a throwaway 1x1 BGRA IOSurface exactly the way hl_gpu_surface() does, so the SAME CF/IOSurface
     // /Foundation lazy inits the first guest alloc triggers happen now instead.
     CFMutableDictionaryRef props =
         CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -4973,8 +4973,8 @@ static void dd_gpu_prewarm_fork_safety(void) {
     CFRelease(props);
     if (!surf) return;
     // Exercise the accessors AND the mach-port announce path (IOSurfaceCreateMachPort + bootstrap_look_up)
-    // that dd_gpu_send_port() uses, so THEIR one-time inits are warmed too — done directly here (not via
-    // dd_gpu_send_port) so it is independent of whether dd-display's mach service is already registered.
+    // that hl_gpu_send_port() uses, so THEIR one-time inits are warmed too — done directly here (not via
+    // hl_gpu_send_port) so it is independent of whether dd-display's mach service is already registered.
     (void)IOSurfaceGetID(surf);
     IOSurfaceLock(surf, 0, NULL);
     (void)IOSurfaceGetBaseAddress(surf);
@@ -5013,7 +5013,7 @@ static void dd_gpu_prewarm_fork_safety(void) {
             unsigned pw = 0, ph = 0;
             if (sscanf(tok, "%ux%u", &pw, &ph) == 2 && pw && ph)
                 for (int k = 0; k < per; k++)
-                    if (dd_gpu_pool_make_one(pw, ph) != 0) break;
+                    if (hl_gpu_pool_make_one(pw, ph) != 0) break;
         }
     } else {
         // Fallback: the --gui launcher already exports the window geometry as CHROME_WINDOW_SIZE="W,H";
@@ -5022,7 +5022,7 @@ static void dd_gpu_prewarm_fork_safety(void) {
         unsigned pw = 0, ph = 0;
         if (ws && sscanf(ws, "%u,%u", &pw, &ph) == 2 && pw && ph)
             for (int k = 0; k < per; k++)
-                if (dd_gpu_pool_make_one(pw, ph) != 0) break;
+                if (hl_gpu_pool_make_one(pw, ph) != 0) break;
     }
 #endif
 }
@@ -5371,7 +5371,7 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
         void *base = NULL;
         // The DRM dumb-buffer (Mesa/gbm) path builds its dmabuf modifier in the guest's Mesa winsys, not
         // dd's shim, so it does not carry the dd generation; `gen` is captured but unused here.
-        int rc = (int)dd_gpu_surface(fd, width, height, 0, &id, &stride, &base, &gen);
+        int rc = (int)hl_gpu_surface(fd, width, height, 0, &id, &stride, &base, &gen);
         if (rc) return rc;
         (void)gen;
         uint64_t size = (uint64_t)stride * height;
@@ -5397,7 +5397,7 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
         uint32_t handle;
         memcpy(&handle, d, 4);
 #ifdef __APPLE__
-        dd_gpu_free_handle(handle);
+        hl_gpu_free_handle(handle);
 #endif
         return 0;
     }
@@ -5407,7 +5407,7 @@ static int64_t drm_synth_ioctl(int fd, unsigned long rq, void *arg) {
         uint32_t handle;
         memcpy(&handle, d, 4);
 #ifdef __APPLE__
-        dd_gpu_free_handle(handle);
+        hl_gpu_free_handle(handle);
 #endif
         return 0;
     }

@@ -255,7 +255,7 @@ impl SpawnConfig {
     /// `exec env …` so DD_* survive the `mac` bridge, which drops ambient env). On macOS runs `bash -lc
     /// <script>`; on a non-macOS dev host it goes through the `mac` bridge. `None` if the guest's binary
     /// wasn't built. NOTE: the dd-jit runtime itself does NOT use this — it launches via the typed
-    /// [`spawn`]/[`spawn_io`] FFI (`ddjit_spawn`, C-side fork, no shell); this is the out-of-process path.
+    /// [`spawn`]/[`spawn_io`] FFI (`hl_spawn`, C-side fork, no shell); this is the out-of-process path.
     pub fn command(&self, guest: Guest) -> Option<(String, Vec<String>)> {
         let script = self.script(guest)?;
         Some(if cfg!(target_os = "macos") {

@@ -70,8 +70,8 @@ pub unsafe fn cfrelease(s: IOSurfaceRef) {
 
 // ---- GPU rung 2 mach-port handle bridge (see mach_bridge.c) ----
 extern "C" {
-    fn dd_mach_server_start(name: *const std::os::raw::c_char) -> std::os::raw::c_int;
-    fn dd_mach_recv(
+    fn hl_mach_server_start(name: *const std::os::raw::c_char) -> std::os::raw::c_int;
+    fn hl_mach_recv(
         out_id: *mut u32,
         out_generation: *mut u32,
         out_surface: *mut *mut c_void,
@@ -124,7 +124,7 @@ pub fn iosurface_generation(id: u32) -> u32 {
 pub fn start_gpu_bridge() -> bool {
     let svc = gpu_bridge_service();
     let name = std::ffi::CString::new(svc.clone()).unwrap();
-    let rc = unsafe { dd_mach_server_start(name.as_ptr()) };
+    let rc = unsafe { hl_mach_server_start(name.as_ptr()) };
     if rc != 0 {
         eprintln!("dd-display: GPU mach bridge failed to register ({svc}): rc={rc}");
         return false;
@@ -134,7 +134,7 @@ pub fn start_gpu_bridge() -> bool {
         let mut id: u32 = 0;
         let mut generation: u32 = 0;
         let mut surf: *mut c_void = std::ptr::null_mut();
-        let rc = unsafe { dd_mach_recv(&mut id, &mut generation, &mut surf) };
+        let rc = unsafe { hl_mach_recv(&mut id, &mut generation, &mut surf) };
         if rc != 0 || surf.is_null() {
             if rc != 0 {
                 eprintln!("dd-display: GPU mach recv error rc={rc}");

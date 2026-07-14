@@ -32,7 +32,7 @@ pub const DD_IOCTL_GPU_ALLOC: u64 = 0xC020_DD01;
 pub const DD_DMABUF_MOD_MAGIC: u32 = 0x6464;
 pub const DRM_FMT_XRGB8888: u32 = 0x3432_5258;
 
-/// Mirror of the C `struct dd_gpu_alloc` the ioctl reads/writes. `#[repr(C)]` pins the field order and
+/// Mirror of the C `struct hl_gpu_alloc` the ioctl reads/writes. `#[repr(C)]` pins the field order and
 /// padding so the 32-byte layout matches the engine handler byte-for-byte (0xC02**0**DD01 → 0x20 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

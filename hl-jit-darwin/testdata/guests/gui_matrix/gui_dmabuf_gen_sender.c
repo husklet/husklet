@@ -1,6 +1,6 @@
 // Test helper for the engine→compositor allocation-generation channel. Replicates the engine's
-// dd_gpu_send_port (dd-jit-darwin vfs.c): create a real host IOSurface, look up dd-display's GPU mach
-// bridge, and send the SAME dd_gpu_msg_t the engine sends — a complex message carrying the IOSurface
+// hl_gpu_send_port (dd-jit-darwin vfs.c): create a real host IOSurface, look up dd-display's GPU mach
+// bridge, and send the SAME hl_gpu_msg_t the engine sends — a complex message carrying the IOSurface
 // send-right + its id + its allocation generation. The Rust harness starts the real bridge, runs this,
 // and asserts dd_display::metal::iosurface_generation(id) reports the generation we sent — proving the
 // new generation field flows over the real mach ABI into the compositor's authenticated metadata.
@@ -15,14 +15,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-// MUST match dd-jit-darwin vfs.c dd_gpu_msg_t and dd-display mach_bridge.c dd_gpu_msg_t.
+// MUST match dd-jit-darwin vfs.c hl_gpu_msg_t and dd-display mach_bridge.c hl_gpu_msg_t.
 typedef struct {
     mach_msg_header_t header;
     mach_msg_body_t body;
     mach_msg_port_descriptor_t port;
     uint32_t id;
     uint32_t generation;
-} dd_gpu_msg_t;
+} hl_gpu_msg_t;
 
 static void put_i32(CFMutableDictionaryRef d, CFStringRef k, int32_t v) {
     CFNumberRef n = CFNumberCreate(NULL, kCFNumberSInt32Type, &v);
@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
     mach_port_t port = IOSurfaceCreateMachPort(surf);
     if (port == MACH_PORT_NULL) return 5;
 
-    dd_gpu_msg_t msg;
+    hl_gpu_msg_t msg;
     memset(&msg, 0, sizeof msg);
     msg.header.msgh_bits = MACH_MSGH_BITS_COMPLEX | MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
     msg.header.msgh_size = sizeof msg;

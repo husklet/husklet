@@ -197,7 +197,7 @@ fn launch(name: String, restore: bool, cwd: Option<String>, slot: Option<String>
     // Enter the workspace's IMAGE as a real container IN-PROCESS via dd-jit — no daemon, no docker, no
     // socket. When `restore`, resume the last whole-workspace checkpoint (process tree) instead of a fresh
     // shell. When this host's engine can't run the workspace's arch, fall back to a plain host shell.
-    let launched = match crate::ddjit_launcher::launch_ex(&ws, cols, rows, restore, cwd.as_deref(), slot.as_deref()) {
+    let launched = match crate::hl_launcher::launch_ex(&ws, cols, rows, restore, cwd.as_deref(), slot.as_deref()) {
         Ok(pty) => Ok(pty),
         Err(e) => {
             eprintln!("[dd] (dd-jit unavailable here — {e}; running a local shell instead)");

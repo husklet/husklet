@@ -216,7 +216,7 @@ typedef intptr_t GLsizeiptr;
 #define DD_IOCTL_GPU_ALLOC 0xC020DD01u
 #define DD_DMABUF_MOD_MAGIC 0x6464u
 #define DRM_FMT_XRGB8888 0x34325258u
-struct dd_gpu_alloc {
+struct hl_gpu_alloc {
     uint32_t width, height, format, stride, id;
     int32_t fd;
     uint64_t ptr;
@@ -375,7 +375,7 @@ static void vao_load(GLuint vao) {
 }
 
 // surface
-static struct dd_gpu_alloc g_surf;
+static struct hl_gpu_alloc g_surf;
 static int g_have_surf;
 static int g_default_surface_valid;
 static int g_default_full_clear_since_swap;

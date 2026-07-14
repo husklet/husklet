@@ -1,9 +1,9 @@
-// dd/runtime -- ddjit_aarch64: the aarch64-Linux-guest JIT runner (unity translation unit).
+// dd/runtime -- hl_aarch64: the aarch64-Linux-guest JIT runner (unity translation unit).
 //
 // A same-ISA aarch64->aarch64 JIT services the guest's Linux syscalls in userspace (no VM). This TU
 // pulls in the engine (jit/), the aarch64 guest frontend (frontend/aarch64/), the Linux personality +
 // container layer (os/linux/), and defines dd_run() (the Rust binding's entry) + main(). The x86-64
-// guest reuses os/linux/ + jit/ with frontend/x86_64/ (see ddjit_x86_64.c).
+// guest reuses os/linux/ + jit/ with frontend/x86_64/ (see hl_x86_64.c).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -84,9 +84,9 @@ static int engine_global_init(void);
 #include "../os/linux/elf.c"
 // native checkpoint/restore (multi-process tree): dump/restore guest RAM + cpu + path-backed fds + pty
 #include "../os/linux/checkpoint.c"
-// `--configfd` launch bridge: read the serialized ddjit_config from the fd, re-hydrate DD_*/DDJIT_* env,
+// `--configfd` launch bridge: read the serialized hl_config from the fd, re-hydrate DD_*/DDJIT_* env,
 // and dispatch to this TU's dd_run() (forward-declared inside; defined below).
-#include "../os/ddjit_configfd.c"
+#include "../os/hl_configfd.c"
 
 // ---- library entry (Rust binding) + main() ----
 // ---------------- library entry (Rust bindings call this) ----------------
@@ -773,7 +773,7 @@ static int engine_global_init(void) {
     // inits to completion HERE, single-threaded and BEFORE any guest thread/fork, so a lazy +initialize can
     // never be mid-flight when Chrome forks its zygote/broker (which would abort the child via libobjc's
     // fork-safety guard -> chromium EXIT=137). Gated on DD_GPU_IOSURFACE; a no-op for every other workload.
-    dd_gpu_prewarm_fork_safety();
+    hl_gpu_prewarm_fork_safety();
     g_engine_inited = 1;
     return 0;
 }
@@ -982,22 +982,22 @@ static void fsrv_restore_done_a64(const struct loaded *L, uint64_t span) {
 #include "../os/linux/forkserver.c"
 
 #ifndef DDJIT_LIB
-// The engine entry point. Named `ddjit_entry` so the runtime can be linked as a library and launched
+// The engine entry point. Named `hl_entry` so the runtime can be linked as a library and launched
 // by an in-process fork()+call; the thin `main` shim below keeps the standalone binary (used by the test
 // harness) launching identically. The static-lib build defines DDJIT_NO_MAIN to drop the shim.
-int ddjit_entry(int argc, char **argv);
+int hl_entry(int argc, char **argv);
 #ifndef DDJIT_NO_MAIN
 int main(int argc, char **argv) {
-    return ddjit_entry(argc, argv);
+    return hl_entry(argc, argv);
 }
 #endif
-int ddjit_entry(int argc, char **argv) {
+int hl_entry(int argc, char **argv) {
     int ai = 1;
     const char *rootfs = NULL;
-    // typed-config launch (the daemon's default path): `--configfd <fd>` streams a serialized ddjit_config
+    // typed-config launch (the daemon's default path): `--configfd <fd>` streams a serialized hl_config
     // over the inherited fd instead of the DD_* env/flag dialect. Dispatched before all other flags.
-    if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return ddjit_run_configfd(atoi(argv[2]));
-    if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return ddjit_run_configfile(argv[2]);
+    if (argc > 2 && strcmp(argv[1], "--configfd") == 0) return hl_run_configfd(atoi(argv[2]));
+    if (argc > 2 && strcmp(argv[1], "--configfile") == 0) return hl_run_configfile(argv[2]);
     // fork-server dispatch (gated; standalone path untouched when neither flag is present):
     //   --server SOCK [--rootfs DIR] [--prewarm PROG] : run resident ddjitd, listen on SOCK
     //   --client SOCK [--rootfs DIR] PROG [args...]   : forward a launch request to a ddjitd
