@@ -51,8 +51,27 @@ pub struct State {
     /// from the `wl_egl_window` in `eglCreateWindowSurface`.
     pub wl_surface_ptr: usize,
     /// The live self-contained `wl_shm` present session to the compositor (`None` in tests / when no
-    /// compositor is reachable — the present is then skipped, never faked).
+    /// compositor is reachable — the present is then skipped, never faked). This drives the shim's OWN
+    /// toplevel and is the FALLBACK when the app-surface presenter is unavailable.
     pub wl: Option<hl_gl::adapter::wayland::Wayland>,
+    /// The app-surface presenter: marshals the frame onto the app's OWN `wl_surface` via the app's
+    /// `libwayland-client` (the real-window path). Lazily brought up from [`Self::wl_surface_ptr`].
+    pub wl_app: Option<hl_gl::adapter::wayland_app::WaylandAppPresenter>,
+    /// Latched once the app-surface presenter proved unavailable (libwayland/symbols/global absent), so
+    /// bring-up is not retried every `eglSwapBuffers` — the self-owned [`Self::wl`] path is used instead.
+    pub wl_app_unavailable: bool,
+}
+
+/// The outcome of an app-surface present attempt, keying `eglSwapBuffers`' fall-back vs error handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppPresentOutcome {
+    /// The frame was committed onto the app's own `wl_surface`.
+    Presented,
+    /// The presenter is unavailable (not a wayland app / libwayland or a symbol / global absent). The
+    /// caller falls back to the self-owned [`State::wl`] present — never a faked frame.
+    Unavailable,
+    /// The presenter exists but a live commit/flush failed — surfaced as `EGL_CONTEXT_LOST`.
+    Failed,
 }
 
 impl State {
@@ -69,6 +88,38 @@ impl State {
             current_is_wayland: false,
             wl_surface_ptr: 0,
             wl: None,
+            wl_app: None,
+            wl_app_unavailable: false,
+        }
+    }
+
+    /// Present the read-back frame onto the app's OWN `wl_surface`, lazily bringing up the presenter from
+    /// [`Self::wl_surface_ptr`]. A soft (unavailable) bring-up latches [`Self::wl_app_unavailable`] so the
+    /// dlopen is not retried each frame; a live commit failure is [`AppPresentOutcome::Failed`]. Never
+    /// fakes a present.
+    pub fn present_to_app_surface(&mut self, xrgb: &[u8], w: u32, h: u32) -> AppPresentOutcome {
+        if self.wl_app.is_none() {
+            if self.wl_app_unavailable {
+                return AppPresentOutcome::Unavailable;
+            }
+            match hl_gl::adapter::wayland_app::WaylandAppPresenter::new(self.wl_surface_ptr) {
+                Ok(p) => self.wl_app = Some(p),
+                Err(_) => {
+                    self.wl_app_unavailable = true;
+                    return AppPresentOutcome::Unavailable;
+                }
+            }
+        }
+        match self.wl_app.as_mut().unwrap().present(xrgb, w, h) {
+            Ok(()) => AppPresentOutcome::Presented,
+            // A soft error here (e.g. the connection died) still means "no live app present": treat as a
+            // hard Failed only when it is genuinely a live-present failure, else fall back.
+            Err(e) if e.is_unavailable() => {
+                self.wl_app = None;
+                self.wl_app_unavailable = true;
+                AppPresentOutcome::Unavailable
+            }
+            Err(_) => AppPresentOutcome::Failed,
         }
     }
 

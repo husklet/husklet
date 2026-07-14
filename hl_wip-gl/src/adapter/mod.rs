@@ -9,6 +9,12 @@
 //!   recognition + advertised `EGL_*_platform_wayland` extensions, and a dependency-free `wl_shm` present
 //!   client. Ported from `hl-shim-gl/src/wayland.rs`; drives `eglCreateWindowSurface`/`eglSwapBuffers` for
 //!   real Wayland GUI apps (`weston-simple-egl`, GTK).
+//! * [`wayland_app`] — presents the read-back frame onto the app's OWN `wl_surface` (the real-window
+//!   milestone): `dlopen(RTLD_NOLOAD)`s the app's already-loaded `libwayland-client`, marshals a `wl_shm`
+//!   buffer + `attach`/`commit` onto the app's surface via `wl_proxy_marshal_flags` on a PRIVATE event
+//!   queue (the Mesa EGL-Wayland pattern). The preferred `eglSwapBuffers` present; [`wayland`]'s
+//!   self-owned toplevel is the fallback when this presenter is unavailable.
 
 pub mod glsl;
 pub mod wayland;
+pub mod wayland_app;

@@ -21,7 +21,7 @@ use hl_gl::result::{
 };
 use hl_gl::service::{compute, es3, intro, map, query, readpixels, record, swap, sync};
 
-use crate::state::{with, CONFIG_TOKEN, DISPLAY_TOKEN};
+use crate::state::{with, AppPresentOutcome, CONFIG_TOKEN, DISPLAY_TOKEN};
 
 // ---- EGL query enums the string getters key on (the GL_* query enums live in hl_gl::glconst) ------
 
@@ -767,9 +767,16 @@ fn create_window_surface(win: *mut c_void) -> *mut c_void {
         s.wl_surface_ptr = info.wl_surface;
         let tok = s.mint_token();
         s.current_surface = tok as usize;
-        // Deployed Wayland path: connect to the compositor + bring up an xdg-toplevel. `connect_and_handshake`
-        // returns None when `$WAYLAND_DISPLAY` is unset or the handshake fails (an honest "no compositor").
-        if std::env::var_os("HL_GL_NO_WAYLAND").is_none() {
+        // Compositor bring-up is DEFERRED so a real app window ends up with exactly ONE toplevel:
+        //  * a real app `wl_surface` (wl_surface != 0) is presented onto the app's OWN surface at swap
+        //    (via the app's libwayland-client) — so the shim must NOT stand up a competing self-owned
+        //    toplevel here. The self-owned session is brought up lazily at swap ONLY if that app-surface
+        //    presenter proves unavailable.
+        //  * a stock / headless / sizeless window (wl_surface == 0) has no app surface to present onto, so
+        //    the self-owned `wl_shm` toplevel is the only path — bring it up now (unless suppressed).
+        //    `connect_and_handshake` returns None when `$WAYLAND_DISPLAY` is unset or the handshake fails
+        //    (an honest "no compositor" — the present is then skipped, never faked).
+        if info.wl_surface == 0 && std::env::var_os("HL_GL_NO_WAYLAND").is_none() {
             let geom = hl_gl::adapter::wayland::Geometry::backing(width, height);
             s.wl = hl_gl::adapter::wayland::Wayland::connect_and_handshake(&geom);
         }
@@ -802,9 +809,15 @@ const EGL_CONTEXT_LOST: i32 = 0x300E;
 #[no_mangle]
 pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u32 {
     with(|s| {
-        // Wayland present: read the rendered frame back (draws intact) to feed a wl_shm buffer. Only when a
-        // live session exists (deployed path) — tests / no-compositor keep this None and skip it.
-        let wl_pixels = if s.wl.is_some() {
+        // Two present targets share the SAME read-back frame:
+        //  * the app's OWN `wl_surface` (the real-window path) — when this is a Wayland window that
+        //    carried an app `wl_surface*`, or
+        //  * the shim's self-owned `wl_shm` toplevel (`s.wl`) — the fallback / headless path.
+        let is_app_surface = s.current_is_wayland && s.wl_surface_ptr != 0;
+        let want_readback = is_app_surface || s.wl.is_some();
+
+        // Read the rendered frame back (draws intact) BEFORE the swap resets the draw-list.
+        let wl_pixels = if want_readback {
             let (w, h) = (s.ctx.surf.width as i32, s.ctx.surf.height as i32);
             readpixels::read_pixels(&mut s.ctx, &mut s.sink, 0, 0, w, h, GL_RGBA)
                 .ok()
@@ -821,7 +834,31 @@ pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u3
 
         // Commit the read-back frame to the compositor (a failure is surfaced, never a silent present).
         if let Some(px) = wl_pixels {
-            let geom = hl_gl::adapter::wayland::Geometry::backing(s.ctx.surf.width, s.ctx.surf.height);
+            let (w, h) = (s.ctx.surf.width, s.ctx.surf.height);
+
+            // Prefer presenting onto the app's OWN wl_surface (marshalled via the app's libwayland-client).
+            if is_app_surface {
+                match s.present_to_app_surface(&px, w, h) {
+                    AppPresentOutcome::Presented => return EGL_TRUE,
+                    // A live commit/flush failure is a lost frame — never faked.
+                    AppPresentOutcome::Failed => {
+                        s.set_egl_error(EGL_CONTEXT_LOST);
+                        return EGL_FALSE;
+                    }
+                    // Presenter unavailable (not a wayland app / libwayland or a symbol/global absent):
+                    // fall through to the self-owned present below.
+                    AppPresentOutcome::Unavailable => {}
+                }
+            }
+
+            // Fallback: the shim's self-owned `wl_shm` toplevel. For a deferred app surface whose presenter
+            // turned out unavailable, the self-owned session is brought up lazily now (a stock/headless
+            // window already brought one up in `eglCreateWindowSurface`).
+            if s.wl.is_none() && std::env::var_os("HL_GL_NO_WAYLAND").is_none() {
+                let geom = hl_gl::adapter::wayland::Geometry::backing(w, h);
+                s.wl = hl_gl::adapter::wayland::Wayland::connect_and_handshake(&geom);
+            }
+            let geom = hl_gl::adapter::wayland::Geometry::backing(w, h);
             if let Some(wl) = s.wl.as_mut() {
                 if wl.commit(&px, &geom).is_err() {
                     s.set_egl_error(EGL_CONTEXT_LOST);

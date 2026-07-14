@@ -663,13 +663,16 @@ impl Drop for Wayland {
 }
 
 /// A memfd-backed shared-memory buffer whose bytes are the pixel plane the compositor maps read-only.
-struct ShmBuffer {
-    fd: c_int,
+///
+/// `pub(crate)` so the app-surface presenter ([`super::wayland_app`]) reuses the SAME memfd allocator to
+/// back the `wl_shm` pool it marshals onto the app's own `libwayland-client` connection.
+pub(crate) struct ShmBuffer {
+    pub(crate) fd: c_int,
 }
 
 impl ShmBuffer {
     /// Allocate a `memfd`, size it, map it, copy `pixels` in, then unmap (the fd retains the contents).
-    fn new(pixels: &[u8]) -> WlResult<ShmBuffer> {
+    pub(crate) fn new(pixels: &[u8]) -> WlResult<ShmBuffer> {
         let name = b"hl-wl-shm\0";
         let fd = unsafe { memfd_create(name.as_ptr() as *const c_char, 0) };
         if fd < 0 {
