@@ -8,8 +8,9 @@
 //! from its broadcast, and `write_stdin`/`resize`/`waitpid` are plain synchronous calls.
 
 use crate::paths;
+use hl_cli::config::WorkspaceConfig;
 use hl_jit::DeviceProvider;
-use hl_ws::{Arch, Workspace};
+use hl_ws::Arch;
 use hl_ws_term::PtyBackend;
 use std::collections::VecDeque;
 use std::io;
@@ -93,7 +94,7 @@ fn split_ref(image: &str) -> (String, String) {
 /// `restore`, `DDJIT_RESTORE_DIR` is set too, so the engine rebuilds the saved process tree instead of
 /// starting a fresh shell. The container init's host pid is recorded so a separate `workspace checkpoint`
 /// invocation can signal the live tree.
-pub fn launch_ex(ws: &Workspace, cols: u16, rows: u16, restore: bool, cwd: Option<&str>, slot: Option<&str>) -> io::Result<Box<dyn PtyBackend>> {
+pub fn launch_ex(ws: &WorkspaceConfig, cols: u16, rows: u16, restore: bool, cwd: Option<&str>, slot: Option<&str>) -> io::Result<Box<dyn PtyBackend>> {
     let guest = guest_of(ws.arch);
     // Deterministic high placement + fixed image bases (required for a restore's MAP_FIXED to land on free
     // VAs) need the persistent translated-code cache ON, so give the runtime a per-workspace cache dir.

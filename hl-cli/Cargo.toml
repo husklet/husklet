@@ -5,25 +5,53 @@ edition = "2021"
 description = "The `ddcli` command — run dd containers with easy-access defaults and manage the daemon, without root."
 license = "MIT"
 
+# The library surface is the LIGHT `hl`-side workspace config (`config` module), std + hl-ws only, so the
+# GUI can consume it without pulling the engine. The engine-linked `ddcli` binary needs the full stack,
+# gated behind the default `cli` feature (see below) via `required-features`.
+[lib]
+name = "hl_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ddcli"
 path = "src/main.rs"
+required-features = ["cli"]
 
 [dependencies]
-hl-client = { path = "../hl-client" }
+# The bare workspace primitive the `config` module wraps — the ONLY non-optional dep, so a `default-
+# features = false` consumer (e.g. hl-gui) gets just the light config and none of the engine stack.
 hl-ws = { path = "../hl-ws" }
-hl-ws-term = { path = "../hl-ws-term" }
+
+hl-client = { path = "../hl-client", optional = true }
+hl-ws-term = { path = "../hl-ws-term", optional = true }
 # In-process container launch for `ddcli workspace launch` — NO daemon, NO docker, NO socket. dd-jit
 # runs the workspace's image via the linked engine; dd-images resolves/pulls its rootfs. (Both build on
 # Linux too — the engine simply reports NoBackend there, so launch falls back to a local shell.)
-hl-jit = { path = "../hl-jit" }
-hl-images = { path = "../hl-images" }
+hl-jit = { path = "../hl-jit", optional = true }
+hl-images = { path = "../hl-images", optional = true }
 # GPU/CUDA/display integration as a generic dd-jit DeviceProvider (see hl-gpu/src/integration.rs). The
 # launcher constructs a dd-gpu provider from the workspace's gui/cuda config + resolved host paths and
 # hands it to the dd-jit builder — dd-jit itself stays device-agnostic. `runtime` pulls the seam in.
-hl-gpu = { path = "../hl-gpu", features = ["runtime"] }
-libc = "0.2"
-clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-serde_json = "1"
-sha2 = "0.10"
+hl-gpu = { path = "../hl-gpu", features = ["runtime"], optional = true }
+libc = { version = "0.2", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+serde_json = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+
+[features]
+# `cli` = the full `ddcli` command (engine-linked). Default so plain `cargo build`/`cargo test` build the
+# binary. hl-gui depends on this crate with `default-features = false` to get only the light `config` lib.
+default = ["cli"]
+cli = [
+    "dep:hl-client",
+    "dep:hl-ws-term",
+    "dep:hl-jit",
+    "dep:hl-images",
+    "dep:hl-gpu",
+    "dep:libc",
+    "dep:clap",
+    "dep:tokio",
+    "dep:serde_json",
+    "dep:sha2",
+]

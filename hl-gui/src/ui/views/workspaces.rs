@@ -13,7 +13,8 @@
 use crate::ui::components::*;
 use crate::ui::theme::*;
 use crate::{AppModel, Msg};
-use hl_ws::{Arch, WorkspaceStore};
+use hl_cli::config::WorkspaceStore;
+use hl_ws::Arch;
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::path::PathBuf;

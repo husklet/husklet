@@ -8,7 +8,8 @@
 
 use crate::cli::WorkspaceCmd;
 use crate::paths;
-use hl_ws::{Arch, CudaDevice, Launcher, VpnConfig, Workspace, WorkspaceStore};
+use hl_cli::config::{CudaDevice, VpnConfig, WorkspaceConfig, WorkspaceStore};
+use hl_ws::{Arch, Launcher};
 use hl_ws_term::LocalShellLauncher;
 use std::io::Write;
 use std::os::unix::io::RawFd;
@@ -58,14 +59,14 @@ fn list() {
 /// (re)written, each with three-way semantics: absent → preserve prior, `off`/`none`/`""` → clear, else set.
 /// Returns `Err(message)` on any invalid input (bad arch / vpn / cuda spec).
 fn build_workspace(
-    prior: Option<&Workspace>,
+    prior: Option<&WorkspaceConfig>,
     name: &str,
     image: &str,
     arch: Option<&str>,
     vpn: Option<&str>,
     cuda: Option<&str>,
     gui: Option<&str>,
-) -> Result<Workspace, String> {
+) -> Result<WorkspaceConfig, String> {
     // arch: explicit `--arch` always wins; omitted keeps the prior workspace's arch, else defaults arm64.
     let arch = match arch {
         Some(s) => Arch::parse(s).ok_or_else(|| format!("unknown arch {s:?} (use arm64 | amd64 | darwin-arm64)"))?,
@@ -99,7 +100,7 @@ fn build_workspace(
     };
     // Start from the prior workspace so its non-CLI-exposed config survives the update; only re-create from
     // scratch (with the safe defaults) when this is a brand-new workspace.
-    let mut ws = prior.cloned().unwrap_or_else(|| Workspace::new(name, image, arch));
+    let mut ws = prior.cloned().unwrap_or_else(|| WorkspaceConfig::new(name, image, arch));
     ws.name = name.to_string();
     ws.image = image.to_string();
     ws.arch = arch;
@@ -361,12 +362,13 @@ impl Drop for RawMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hl_ws::{Mount, VpnKind};
+    use hl_cli::config::VpnKind;
+    use hl_ws::Mount;
 
     // A prior workspace carrying config that the `create` CLI does NOT expose as flags — exactly the
     // state a user builds via `~/.dd/workspaces.conf` or the GUI. Re-running `create` must preserve it.
-    fn prior_rich() -> Workspace {
-        let mut w = Workspace::new("api", "node:20", Arch::Amd64);
+    fn prior_rich() -> WorkspaceConfig {
+        let mut w = WorkspaceConfig::new("api", "node:20", Arch::Amd64);
         w.cpus = Some(4);
         w.memory_mb = Some(2048);
         w.docker_sock = false;
@@ -420,7 +422,7 @@ mod tests {
 
     #[test]
     fn vpn_three_way_semantics() {
-        let mut prior = Workspace::new("w", "img", Arch::Arm64);
+        let mut prior = WorkspaceConfig::new("w", "img", Arch::Arm64);
         prior.vpn = Some(VpnConfig::socks5("127.0.0.1:1080"));
         // absent → preserve
         let keep = build_workspace(Some(&prior), "w", "img", None, None, None, None).unwrap();
@@ -436,7 +438,7 @@ mod tests {
 
     #[test]
     fn cuda_three_way_semantics() {
-        let mut prior = Workspace::new("w", "img", Arch::Arm64);
+        let mut prior = WorkspaceConfig::new("w", "img", Arch::Arm64);
         prior.cuda = Some(CudaDevice::default_device());
         let keep = build_workspace(Some(&prior), "w", "img", None, None, None, None).unwrap();
         assert_eq!(keep.cuda, prior.cuda);
@@ -450,7 +452,7 @@ mod tests {
 
     #[test]
     fn gui_three_way_semantics() {
-        let mut prior = Workspace::new("w", "img", Arch::Arm64);
+        let mut prior = WorkspaceConfig::new("w", "img", Arch::Arm64);
         prior.gui = true;
         assert!(build_workspace(Some(&prior), "w", "img", None, None, None, None).unwrap().gui, "absent preserves on");
         assert!(!build_workspace(Some(&prior), "w", "img", None, None, None, Some("off")).unwrap().gui, "off clears");

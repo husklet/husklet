@@ -22,7 +22,8 @@ use vte4::TerminalExtManual;
 
 use hl_ws_term::config::{CursorShape, TermConfig};
 use hl_ws_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir};
-use hl_ws::{Arch, CudaDevice, Mount, VpnConfig, Workspace, WorkspaceStore};
+use hl_cli::config::{CudaDevice, VpnConfig, WorkspaceConfig, WorkspaceStore};
+use hl_ws::{Arch, Mount, Workspace};
 
 const APP_ID: &str = "com.dd.term";
 
@@ -399,7 +400,7 @@ fn arch_chip(arch: Arch) -> gtk::Label {
     l
 }
 
-fn workspace_row(app: &gtk::Application, ws: &Workspace, list: &gtk::ListBox) -> gtk::ListBoxRow {
+fn workspace_row(app: &gtk::Application, ws: &WorkspaceConfig, list: &gtk::ListBox) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     let bx = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     bx.add_css_class("wsrow");
@@ -1753,7 +1754,7 @@ fn save_workspace(form: &Rc<Form>) -> bool {
         (true, true) => Arch::Amd64,
         (true, false) => Arch::Arm64,
     };
-    let mut ws = Workspace::new(&name, &image, arch);
+    let mut ws = WorkspaceConfig::new(&name, &image, arch);
     let shell = form.shell.text().trim().to_string();
     if !shell.is_empty() {
         ws.shell = Some(shell);
@@ -1884,7 +1885,7 @@ fn spin_field(label: &str, s: &gtk::SpinButton) -> gtk::Box {
 struct TermWin {
     stack: gtk::Stack,
     tabs: gtk::Box,
-    ws: Workspace,
+    ws: WorkspaceConfig,
     focused: RefCell<Option<vte4::Terminal>>,
     entries: RefCell<Vec<TabEntry>>,
     pids: RefCell<HashMap<String, Vec<Rc<Cell<i32>>>>>,
@@ -1919,7 +1920,7 @@ struct SearchUi {
     caseless: Cell<bool>,
 }
 
-fn open_terminal_window(app: &gtk::Application, ws: &Workspace) {
+fn open_terminal_window(app: &gtk::Application, ws: &WorkspaceConfig) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title(&ws.name)
@@ -2926,7 +2927,7 @@ fn dump_terminal_history(term: &vte4::Terminal) -> String {
 /// Dashboard: a sidebar (Overview + docker resources + Processes) over a stack. Overview shows the
 /// workspace's real configuration now; the docker/htop panes populate once the per-workspace daemon
 /// is wired — shown as a clear "not connected yet" state, not fake data.
-fn build_dashboard(ws: &Workspace) -> gtk::Box {
+fn build_dashboard(ws: &WorkspaceConfig) -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     let side = gtk::Box::new(gtk::Orientation::Vertical, 2);
     side.add_css_class("dside");
@@ -3022,7 +3023,7 @@ fn build_dashboard(ws: &Workspace) -> gtk::Box {
 /// identity (name / image / arch — set once at creation) can be changed here: default shell, resource
 /// caps, environment variables, bind mounts, and the docker socket. Saving rewrites `workspaces.conf`;
 /// changes apply to newly-launched tabs (a running container can't be reconfigured live).
-fn dash_settings(ws: &Workspace) -> gtk::ScrolledWindow {
+fn dash_settings(ws: &WorkspaceConfig) -> gtk::ScrolledWindow {
     let form = Rc::new(build_form());
 
     // Pre-populate env + mount rows BEFORE their panes wrap the boxes, so existing entries show first.
@@ -3127,7 +3128,7 @@ fn dash_settings(ws: &Workspace) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder().child(&main).hexpand(true).vexpand(true).build()
 }
 
-fn dash_overview(ws: &Workspace) -> gtk::ScrolledWindow {
+fn dash_overview(ws: &WorkspaceConfig) -> gtk::ScrolledWindow {
     let main = gtk::Box::new(gtk::Orientation::Vertical, 10);
     main.add_css_class("dmain");
 

@@ -1,25 +1,23 @@
 //! hl-ws — the VERY THIN, shared workspace foundation for the `hl-ws-*` family.
 //!
-//! std-ONLY and the LEAF of its family: it holds only the bare-minimum types + trait seams common to all
-//! consumers, and references NO other hl crate (verify with `cargo tree -p hl-ws`: zero `hl-*` edges).
-//! Everything above depends UP onto it — `hl-ws-term` implements its [`terminal::PtyBackend`] +
-//! [`launch::Launcher`], the GUI + feature settings live in `hl`/`hl-ws-gui`, and `hl` composes it all.
+//! std-ONLY and the LEAF of its family: it holds only the bare-minimum run primitive + trait seams common
+//! to all consumers, and references NO other hl crate (verify with `cargo tree -p hl-ws`: zero `hl-*`
+//! edges). Everything above depends UP onto it — `hl-ws-term` implements its [`terminal::PtyBackend`] +
+//! [`launch::Launcher`], and `hl` (today `hl-cli`) owns the richer config (the bare [`model::Workspace`]
+//! PLUS feature settings) + its persistence and composes it all.
 //!
-//! It deliberately does NOT own: the generic settings-UI schema (that is shared between `hl` and
-//! `hl-ws-gui`), any feature/plugin trait, or any setting→engine-argument mapping (that is `hl`'s job).
+//! It deliberately does NOT own: any feature setting (vpn/cuda/gui/docker_sock/scrollback — those are
+//! `hl`-side config), the workspace-config PERSISTENCE (also `hl`-side), or any setting→engine-argument
+//! mapping (that is `hl`'s job).
 //!
-//! - [`model`]    — `Arch`, `Mount`, the `Workspace` identity/model, and its plain settings data types
-//!                  (`VpnConfig`/`VpnKind`, `CudaDevice`) that are fields of a workspace
-//! - [`store`]    — `WorkspaceStore` persistence
+//! - [`model`]    — `Arch`, `Mount`, and the bare `Workspace` run primitive
 //! - [`terminal`] — the `PtyBackend` terminal-interface trait (implemented by `hl-ws-term`)
 //! - [`launch`]   — the `Launcher` trait (implemented by `hl-ws-term` / `hl`)
 
 pub mod launch;
 pub mod model;
-pub mod store;
 pub mod terminal;
 
 pub use launch::Launcher;
-pub use model::{Arch, CudaDevice, Mount, VpnConfig, VpnKind, Workspace};
-pub use store::WorkspaceStore;
+pub use model::{Arch, Mount, Workspace};
 pub use terminal::PtyBackend;
