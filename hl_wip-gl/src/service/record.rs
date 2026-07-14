@@ -138,24 +138,218 @@ pub fn gen_framebuffer(ctx: &mut GlContext) -> u32 {
     ctx.framebuffers.gen()
 }
 
-/// `glBindFramebuffer(target, name)` — bind `name` as the current draw framebuffer (`0` = default).
-pub fn bind_framebuffer(ctx: &mut GlContext, _target: u32, name: u32) {
-    ctx.bound_fbo = name;
+/// `glBindFramebuffer(target, name)` — bind `name` as the draw and/or read framebuffer (`0` = default).
+/// `GL_FRAMEBUFFER` binds both; the split `GL_DRAW_FRAMEBUFFER`/`GL_READ_FRAMEBUFFER` bind one. A recorded
+/// draw's render target follows the draw binding; the read binding is the `glReadPixels`/blit source.
+pub fn bind_framebuffer(ctx: &mut GlContext, target: u32, name: u32) {
+    match target {
+        GL_FRAMEBUFFER => {
+            ctx.bound_fbo = name;
+            ctx.read_fbo = name;
+        }
+        GL_DRAW_FRAMEBUFFER => ctx.bound_fbo = name,
+        GL_READ_FRAMEBUFFER => ctx.read_fbo = name,
+        _ => ctx.set_gl_error(GL_INVALID_ENUM),
+    }
 }
 
-/// `glFramebufferTexture2D(GL_COLOR_ATTACHMENT0, tex)` — attach `tex` as the bound FBO's color target.
-/// Attaches to whichever FBO is currently bound (the default framebuffer `0` has no attachable slot).
-pub fn framebuffer_texture_2d(ctx: &mut GlContext, tex: u32) {
-    let fbo = ctx.bound_fbo;
+/// `glFramebufferTexture2D(target, attachment, textarget, tex, level)` — attach `tex` as the bound FBO's
+/// color target. Only `GL_COLOR_ATTACHMENT0` of a `GL_TEXTURE_2D` at level `0` is modeled; the default
+/// framebuffer `0` has no attachable slot. Honest GL errors: bad `target` → `GL_INVALID_ENUM`; an
+/// unmodeled attachment/textarget/level → `GL_INVALID_VALUE`; attaching to the default framebuffer or an
+/// unknown texture → `GL_INVALID_OPERATION` (all first-error-wins).
+pub fn framebuffer_texture_2d(ctx: &mut GlContext, target: u32, attachment: u32, textarget: u32, tex: u32, level: i32) {
+    if !matches!(target, GL_FRAMEBUFFER | GL_DRAW_FRAMEBUFFER | GL_READ_FRAMEBUFFER) {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    let fbo = if target == GL_READ_FRAMEBUFFER { ctx.read_fbo } else { ctx.bound_fbo };
+    if attachment != GL_COLOR_ATTACHMENT0 || textarget != GL_TEXTURE_2D || level != 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    if fbo == 0 {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if tex != 0 && ctx.textures.get(tex).is_none() {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
     ctx.framebuffers.attach_color(fbo, tex);
 }
 
-/// `glDeleteFramebuffers` (one name).
+/// `glDeleteFramebuffers` (one name). Deleting the bound draw/read FBO reverts that binding to the default.
 pub fn delete_framebuffer(ctx: &mut GlContext, name: u32) -> bool {
     if ctx.bound_fbo == name {
         ctx.bound_fbo = 0;
     }
+    if ctx.read_fbo == name {
+        ctx.read_fbo = 0;
+    }
     ctx.framebuffers.delete(name)
+}
+
+/// `glIsFramebuffer(name)` — true once `name` names a generated (non-default) framebuffer object.
+pub fn is_framebuffer(ctx: &GlContext, name: u32) -> bool {
+    ctx.framebuffers.exists(name)
+}
+
+/// `glCheckFramebufferStatus(target)` — completeness of the bound draw/read framebuffer. Returns
+/// `GL_FRAMEBUFFER_COMPLETE` for the default framebuffer or a user FBO with a sized color attachment,
+/// `GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT` for a user FBO with no color attachment, and
+/// `GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT` when the color attachment is unsized (e.g. a renderbuffer with
+/// no `glRenderbufferStorage` yet). A bad `target` raises `GL_INVALID_ENUM` and returns `0`.
+pub fn check_framebuffer_status(ctx: &mut GlContext, target: u32) -> u32 {
+    let fbo = match target {
+        GL_FRAMEBUFFER | GL_DRAW_FRAMEBUFFER => ctx.bound_fbo,
+        GL_READ_FRAMEBUFFER => ctx.read_fbo,
+        _ => {
+            ctx.set_gl_error(GL_INVALID_ENUM);
+            return 0;
+        }
+    };
+    framebuffer_status(ctx, fbo)
+}
+
+/// Completeness for the color-only framebuffer subset this model renders. The default framebuffer (`0`)
+/// is managed by EGL and is complete; a user FBO needs one sized, live color-texture attachment.
+fn framebuffer_status(ctx: &GlContext, fbo: u32) -> u32 {
+    if fbo == 0 {
+        return GL_FRAMEBUFFER_COMPLETE;
+    }
+    if !ctx.framebuffers.exists(fbo) {
+        return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+    }
+    let color = ctx.framebuffers.color_attachment(fbo);
+    if color == 0 {
+        return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+    }
+    match ctx.textures.get(color) {
+        Some(t) if t.w > 0 && t.h > 0 => GL_FRAMEBUFFER_COMPLETE,
+        _ => GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
+    }
+}
+
+// ---- renderbuffers (modeled as texture-backed color attachments) ---------------------------------
+
+/// `glGenRenderbuffers` (one name). Eagerly mints the RBO's stable backing texture (still unsized, so it
+/// reads back incomplete until `glRenderbufferStorage`), so a `glFramebufferRenderbuffer` that runs before
+/// the storage call still resolves to the right attachment once storage lands.
+pub fn gen_renderbuffer(ctx: &mut GlContext) -> u32 {
+    let name = ctx.renderbuffers.gen();
+    let tex = ctx.textures.gen();
+    ctx.renderbuffers.set_storage(name, tex, 0, 0);
+    name
+}
+
+/// `glBindRenderbuffer(GL_RENDERBUFFER, name)` — select the target of the next `glRenderbufferStorage`.
+pub fn bind_renderbuffer(ctx: &mut GlContext, target: u32, name: u32) {
+    if target != GL_RENDERBUFFER {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    ctx.bound_rbo = name;
+}
+
+/// `glRenderbufferStorage(GL_RENDERBUFFER, internalformat, w, h)` — size the bound renderbuffer's backing
+/// texture. The model materializes every renderbuffer as an RGBA8 color plane (its neutral render-target
+/// format), so `internalformat` selects only the extent here. Honest GL errors: bad `target` →
+/// `GL_INVALID_ENUM`; no bound renderbuffer → `GL_INVALID_OPERATION`; negative extent → `GL_INVALID_VALUE`.
+pub fn renderbuffer_storage(ctx: &mut GlContext, target: u32, _internalformat: u32, w: i32, h: i32) {
+    if target != GL_RENDERBUFFER {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    let rbo = ctx.bound_rbo;
+    if rbo == 0 {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if w < 0 || h < 0 {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
+    // Reuse the RBO's stable backing texture (minted at gen) so an earlier attachment stays wired.
+    let tex = match ctx.renderbuffers.backing_tex(rbo) {
+        0 => ctx.textures.gen(),
+        t => t,
+    };
+    ctx.textures.image_2d(tex, w, h, &[], TextureFormat::Rgba8Unorm);
+    ctx.renderbuffers.set_storage(rbo, tex, w, h);
+}
+
+/// `glDeleteRenderbuffers` (one name). Detaches the backing texture from every FBO color slot and drops
+/// the backing texture. Returns `false` for an unknown / zero name.
+pub fn delete_renderbuffer(ctx: &mut GlContext, name: u32) -> bool {
+    if ctx.bound_rbo == name {
+        ctx.bound_rbo = 0;
+    }
+    match ctx.renderbuffers.delete(name) {
+        Some(rb) => {
+            ctx.framebuffers.detach_color_texture(rb.tex);
+            ctx.textures.delete(rb.tex);
+            true
+        }
+        None => false,
+    }
+}
+
+/// `glIsRenderbuffer(name)` — true once `name` names a generated (non-default) renderbuffer object.
+pub fn is_renderbuffer(ctx: &GlContext, name: u32) -> bool {
+    ctx.renderbuffers.is_renderbuffer(name)
+}
+
+/// `glFramebufferRenderbuffer(target, attachment, renderbuffertarget, rbo)` — attach a renderbuffer to the
+/// bound FBO. The color attachment resolves to the renderbuffer's backing texture (reusing the exact
+/// texture-attachment render path); depth/stencil attachments are accepted as an honest no-op (this model
+/// has no depth/stencil buffer). Honest GL errors: bad `target`/`renderbuffertarget`/attachment →
+/// `GL_INVALID_ENUM`; attaching to the default framebuffer or an unknown renderbuffer → `GL_INVALID_OPERATION`.
+pub fn framebuffer_renderbuffer(ctx: &mut GlContext, target: u32, attachment: u32, rbtarget: u32, rbo: u32) {
+    if !matches!(target, GL_FRAMEBUFFER | GL_DRAW_FRAMEBUFFER | GL_READ_FRAMEBUFFER) || rbtarget != GL_RENDERBUFFER {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    }
+    let fbo = if target == GL_READ_FRAMEBUFFER { ctx.read_fbo } else { ctx.bound_fbo };
+    if fbo == 0 {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    if rbo != 0 && !ctx.renderbuffers.is_renderbuffer(rbo) {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return;
+    }
+    match attachment {
+        GL_COLOR_ATTACHMENT0 => {
+            // The renderbuffer's texture-backed storage becomes the FBO's color target (`0` detaches).
+            let tex = ctx.renderbuffers.backing_tex(rbo);
+            ctx.framebuffers.attach_color(fbo, tex);
+        }
+        // No depth/stencil buffer is modeled — accept the attach as a no-op so a guest that attaches a
+        // depth/stencil renderbuffer still runs (its color attachment is what this model renders).
+        GL_DEPTH_ATTACHMENT | GL_STENCIL_ATTACHMENT | GL_DEPTH_STENCIL_ATTACHMENT => {}
+        _ => ctx.set_gl_error(GL_INVALID_ENUM),
+    }
+}
+
+/// `glBlitFramebuffer(..., mask, filter)` — validate the read+draw framebuffers.
+///
+/// HONEST LIMIT: this is a deferred-lowering model. A frame's pixels only exist after its draw-list is
+/// lowered + executed (at `eglSwapBuffers`/`glReadPixels`), and a frame lowers exactly ONE render target —
+/// there is no materialized source color plane to sample at record time, and no multi-target frame to blit
+/// between. So a cross-FBO blit cannot be lowered here (a real Metal host lowers it to `Enc::BlitTexture`).
+/// The call still honestly validates: a non-color `mask` is a no-op, and an incomplete read or draw
+/// framebuffer raises `GL_INVALID_FRAMEBUFFER_OPERATION` (first-error-wins) exactly as a conforming driver
+/// does rather than sampling an incomplete attachment; the pixel copy itself is the documented no-op.
+pub fn blit_framebuffer(ctx: &mut GlContext, mask: u32) {
+    if mask & GL_COLOR_BUFFER_BIT == 0 {
+        return;
+    }
+    if framebuffer_status(ctx, ctx.read_fbo) != GL_FRAMEBUFFER_COMPLETE
+        || framebuffer_status(ctx, ctx.bound_fbo) != GL_FRAMEBUFFER_COMPLETE
+    {
+        ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+    }
 }
 
 // ---- vertex array objects ------------------------------------------------------------------------

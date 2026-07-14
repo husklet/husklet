@@ -161,8 +161,8 @@ fn offscreen_fbo_renders_into_the_attachment_texture_and_format() {
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d_format(&mut c, 32, 32, &[], TextureFormat::Rgba8Unorm);
     let fbo = record::gen_framebuffer(&mut c);
-    record::bind_framebuffer(&mut c, 0x8D40 /* GL_FRAMEBUFFER */, fbo);
-    record::framebuffer_texture_2d(&mut c, tex);
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+    record::framebuffer_texture_2d(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
 
     flat_program(&mut c);
     tri_vbo(&mut c, 8);
@@ -191,8 +191,8 @@ fn rebinding_default_framebuffer_returns_to_the_window_target() {
     let mut c = ctx_64();
     let mut sink = RecordingSink::with_full_caps();
     let fbo = record::gen_framebuffer(&mut c);
-    record::bind_framebuffer(&mut c, 0x8D40, fbo);
-    record::bind_framebuffer(&mut c, 0x8D40, 0); // back to the default framebuffer
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, 0); // back to the default framebuffer
     record::clear(&mut c);
     assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
     let (_id, d) = render_target_desc(&sink.batches[0]);

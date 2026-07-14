@@ -188,3 +188,21 @@ pub const GL_NO_ERROR: u32 = 0;
 pub const GL_INVALID_ENUM: u32 = 0x0500;
 pub const GL_INVALID_VALUE: u32 = 0x0501;
 pub const GL_INVALID_OPERATION: u32 = 0x0502;
+pub const GL_INVALID_FRAMEBUFFER_OPERATION: u32 = 0x0506;
+
+// framebuffer / renderbuffer objects (offscreen render targets).
+pub const GL_FRAMEBUFFER: u32 = 0x8D40;
+pub const GL_RENDERBUFFER: u32 = 0x8D41;
+pub const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
+pub const GL_DRAW_FRAMEBUFFER: u32 = 0x8CA9;
+pub const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
+pub const GL_DEPTH_ATTACHMENT: u32 = 0x8D00;
+pub const GL_STENCIL_ATTACHMENT: u32 = 0x8D20;
+pub const GL_DEPTH_STENCIL_ATTACHMENT: u32 = 0x821A;
+// framebuffer bindings (GL_DRAW_FRAMEBUFFER_BINDING == GL_FRAMEBUFFER_BINDING, 0x8CA6, above).
+pub const GL_READ_FRAMEBUFFER_BINDING: u32 = 0x8CAA;
+pub const GL_RENDERBUFFER_BINDING: u32 = 0x8CA7;
+// glCheckFramebufferStatus return values.
+pub const GL_FRAMEBUFFER_COMPLETE: u32 = 0x8CD5;
+pub const GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT: u32 = 0x8CD6;
+pub const GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT: u32 = 0x8CD7;

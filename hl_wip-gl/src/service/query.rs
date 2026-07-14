@@ -113,7 +113,10 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_ARRAY_BUFFER_BINDING => one(ctx.array_buffer as i32),
         GL_ELEMENT_ARRAY_BUFFER_BINDING => one(ctx.element_buffer as i32),
         GL_TEXTURE_BINDING_2D => one(ctx.tex_unit[ctx.active_texture] as i32),
+        // GL_DRAW_FRAMEBUFFER_BINDING shares GL_FRAMEBUFFER_BINDING's enum value (0x8CA6).
         GL_FRAMEBUFFER_BINDING => one(ctx.bound_fbo as i32),
+        GL_READ_FRAMEBUFFER_BINDING => one(ctx.read_fbo as i32),
+        GL_RENDERBUFFER_BINDING => one(ctx.bound_rbo as i32),
         GL_UNPACK_ALIGNMENT => one(ctx.pixel_store.unpack_alignment),
         GL_PACK_ALIGNMENT => one(ctx.pixel_store.pack_alignment),
         // Fixed-function caps read back as 1/0.

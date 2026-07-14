@@ -13,4 +13,5 @@ pub mod context;
 pub mod framebuffer;
 pub mod glconst;
 pub mod program;
+pub mod renderbuffer;
 pub mod texture;

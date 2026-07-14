@@ -297,6 +297,20 @@ const IMPLEMENTED: &[&str] = &[
     "glBindVertexArray",
     "glDeleteVertexArrays",
     "glIsVertexArray",
+    // ---- GLES: framebuffer + renderbuffer objects (offscreen render targets) ----
+    "glGenFramebuffers",
+    "glBindFramebuffer",
+    "glDeleteFramebuffers",
+    "glIsFramebuffer",
+    "glCheckFramebufferStatus",
+    "glFramebufferTexture2D",
+    "glGenRenderbuffers",
+    "glBindRenderbuffer",
+    "glDeleteRenderbuffers",
+    "glIsRenderbuffer",
+    "glRenderbufferStorage",
+    "glFramebufferRenderbuffer",
+    "glBlitFramebuffer",
     // ---- GLES: readback (device→host; render + CopyTextureToBuffer + read_buffer) ----
     "glReadPixels",
 ];

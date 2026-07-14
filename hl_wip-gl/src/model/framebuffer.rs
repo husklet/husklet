@@ -45,6 +45,26 @@ impl Framebuffers {
         self.color.get(&fbo).copied().unwrap_or(0)
     }
 
+    /// True once `name` names a generated (non-default) FBO object (`glIsFramebuffer`, and the
+    /// completeness check's "does this framebuffer exist" gate). Name `0` (the default framebuffer) is
+    /// never a generated object.
+    pub fn exists(&self, name: u32) -> bool {
+        name != 0 && self.color.contains_key(&name)
+    }
+
+    /// Detach texture `tex` from every FBO's color slot (used when the underlying object — a texture or a
+    /// renderbuffer's backing texture — is deleted, so a stale attachment can't leak into a later frame).
+    pub fn detach_color_texture(&mut self, tex: u32) {
+        if tex == 0 {
+            return;
+        }
+        for v in self.color.values_mut() {
+            if *v == tex {
+                *v = 0;
+            }
+        }
+    }
+
     /// `glDeleteFramebuffers` — drop the object. Returns `false` for an unknown name.
     pub fn delete(&mut self, name: u32) -> bool {
         self.color.remove(&name).is_some()

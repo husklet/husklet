@@ -14,6 +14,7 @@ use super::buffer::Buffers;
 use super::framebuffer::Framebuffers;
 use super::glconst;
 use super::program::{Attr, DrawCall, Programs, MAX_ATTR};
+use super::renderbuffer::Renderbuffers;
 use super::texture::Textures;
 use std::collections::HashMap;
 
@@ -84,6 +85,8 @@ pub struct GlContext {
     pub programs: Programs,
     /// GL framebuffer objects (`glGenFramebuffers`/`glFramebufferTexture2D`) — offscreen render targets.
     pub framebuffers: Framebuffers,
+    /// GL renderbuffer objects (`glGenRenderbuffers`/`glRenderbufferStorage`) — texture-backed attachments.
+    pub renderbuffers: Renderbuffers,
 
     // ---- currently-bound GL state ----------------------------------------------------------------
     /// The program bound by `glUseProgram`.
@@ -121,8 +124,15 @@ pub struct GlContext {
     pub cull_enabled: bool,
     pub cull_face: u32,
     pub front_face: u32,
-    /// The framebuffer bound by `glBindFramebuffer` (`0` = the default window framebuffer).
+    /// The draw framebuffer bound by `glBindFramebuffer` (`GL_FRAMEBUFFER`/`GL_DRAW_FRAMEBUFFER`; `0` =
+    /// the default window framebuffer). A recorded draw's render target follows this binding.
     pub bound_fbo: u32,
+    /// The read framebuffer bound by `glBindFramebuffer(GL_READ_FRAMEBUFFER, …)` (`GL_FRAMEBUFFER` binds
+    /// both). The `glReadPixels`/`glBlitFramebuffer` source; `0` = the default window framebuffer.
+    pub read_fbo: u32,
+    /// The renderbuffer bound by `glBindRenderbuffer` (`GL_RENDERBUFFER`; `0` = none). Names the target of
+    /// the next `glRenderbufferStorage`.
+    pub bound_rbo: u32,
 
     /// The Vertex Array Object currently bound by `glBindVertexArray` (`0` = the default VAO).
     pub cur_vao: u32,
@@ -176,6 +186,7 @@ impl GlContext {
             textures: Textures::new(),
             programs: Programs::new(),
             framebuffers: Framebuffers::new(),
+            renderbuffers: Renderbuffers::new(),
             cur_prog: 0,
             array_buffer: 0,
             element_buffer: 0,
@@ -201,6 +212,8 @@ impl GlContext {
             cull_face: glconst::GL_BACK,
             front_face: glconst::GL_CCW,
             bound_fbo: 0,
+            read_fbo: 0,
+            bound_rbo: 0,
             cur_vao: 0,
             vaos: HashMap::new(),
             next_vao: 1,

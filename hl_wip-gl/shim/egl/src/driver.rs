@@ -292,6 +292,20 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "glBindVertexArray" => p!(glBindVertexArray),
         "glDeleteVertexArrays" => p!(glDeleteVertexArrays),
         "glIsVertexArray" => p!(glIsVertexArray),
+        // ---- GLES: framebuffer + renderbuffer objects (offscreen render targets) ----
+        "glGenFramebuffers" => p!(glGenFramebuffers),
+        "glBindFramebuffer" => p!(glBindFramebuffer),
+        "glDeleteFramebuffers" => p!(glDeleteFramebuffers),
+        "glIsFramebuffer" => p!(glIsFramebuffer),
+        "glCheckFramebufferStatus" => p!(glCheckFramebufferStatus),
+        "glFramebufferTexture2D" => p!(glFramebufferTexture2D),
+        "glGenRenderbuffers" => p!(glGenRenderbuffers),
+        "glBindRenderbuffer" => p!(glBindRenderbuffer),
+        "glDeleteRenderbuffers" => p!(glDeleteRenderbuffers),
+        "glIsRenderbuffer" => p!(glIsRenderbuffer),
+        "glRenderbufferStorage" => p!(glRenderbufferStorage),
+        "glFramebufferRenderbuffer" => p!(glFramebufferRenderbuffer),
+        "glBlitFramebuffer" => p!(glBlitFramebuffer),
         // Unknown / extension name we do not advertise → spec-legal "not found".
         _ => core::ptr::null_mut(),
     }
@@ -1261,6 +1275,132 @@ pub extern "C" fn glDeleteVertexArrays(n: i32, arrays: *const u32) {
 #[no_mangle]
 pub extern "C" fn glIsVertexArray(array: u32) -> u32 {
     with(|s| record::is_vertex_array(&s.ctx, array)) as u32
+}
+
+// ==================================================================================================
+// GLES: framebuffer + renderbuffer objects (offscreen render targets)
+//
+// A guest drives offscreen rendering here: gen/bind a framebuffer, attach a color texture (or a
+// texture-backed renderbuffer), check completeness, then a draw recorded while the FBO is bound renders
+// into that attachment instead of the default window surface (resolved by `hl_gl::service::frame`). The
+// bodies marshal the C ABI and call the shared `hl_gl::service::record` ops, which own the GL semantics +
+// honest error register (the same deferred lowering the in-process render tests exercise).
+// ==================================================================================================
+
+#[no_mangle]
+pub extern "C" fn glGenFramebuffers(n: i32, framebuffers: *mut u32) {
+    if framebuffers.is_null() || n <= 0 {
+        return;
+    }
+    with(|s| unsafe {
+        for i in 0..n as isize {
+            *framebuffers.offset(i) = record::gen_framebuffer(&mut s.ctx);
+        }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn glBindFramebuffer(target: u32, framebuffer: u32) {
+    with(|s| record::bind_framebuffer(&mut s.ctx, target, framebuffer));
+}
+
+#[no_mangle]
+pub extern "C" fn glDeleteFramebuffers(n: i32, framebuffers: *const u32) {
+    if framebuffers.is_null() || n <= 0 {
+        return;
+    }
+    with(|s| unsafe {
+        for i in 0..n as isize {
+            record::delete_framebuffer(&mut s.ctx, *framebuffers.offset(i));
+        }
+    });
+}
+
+/// `glIsFramebuffer(framebuffer)` — `GL_TRUE`/`GL_FALSE`. Returns the `GLboolean` as the codegen's `u32`
+/// ABI (the low byte is the boolean a C caller reads), matching `glIsVertexArray`.
+#[no_mangle]
+pub extern "C" fn glIsFramebuffer(framebuffer: u32) -> u32 {
+    with(|s| record::is_framebuffer(&s.ctx, framebuffer)) as u32
+}
+
+/// `glCheckFramebufferStatus(target)` — the completeness enum of the bound draw/read framebuffer (see
+/// [`record::check_framebuffer_status`]). A GLES app calls this before rendering to an FBO and bails on a
+/// non-`GL_FRAMEBUFFER_COMPLETE` result.
+#[no_mangle]
+pub extern "C" fn glCheckFramebufferStatus(target: u32) -> u32 {
+    with(|s| record::check_framebuffer_status(&mut s.ctx, target))
+}
+
+#[no_mangle]
+pub extern "C" fn glFramebufferTexture2D(target: u32, attachment: u32, textarget: u32, texture: u32, level: i32) {
+    with(|s| record::framebuffer_texture_2d(&mut s.ctx, target, attachment, textarget, texture, level));
+}
+
+#[no_mangle]
+pub extern "C" fn glGenRenderbuffers(n: i32, renderbuffers: *mut u32) {
+    if renderbuffers.is_null() || n <= 0 {
+        return;
+    }
+    with(|s| unsafe {
+        for i in 0..n as isize {
+            *renderbuffers.offset(i) = record::gen_renderbuffer(&mut s.ctx);
+        }
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn glBindRenderbuffer(target: u32, renderbuffer: u32) {
+    with(|s| record::bind_renderbuffer(&mut s.ctx, target, renderbuffer));
+}
+
+#[no_mangle]
+pub extern "C" fn glDeleteRenderbuffers(n: i32, renderbuffers: *const u32) {
+    if renderbuffers.is_null() || n <= 0 {
+        return;
+    }
+    with(|s| unsafe {
+        for i in 0..n as isize {
+            record::delete_renderbuffer(&mut s.ctx, *renderbuffers.offset(i));
+        }
+    });
+}
+
+/// `glIsRenderbuffer(renderbuffer)` — `GL_TRUE`/`GL_FALSE` as the codegen's `u32` ABI (low byte is the
+/// boolean), matching `glIsFramebuffer`/`glIsVertexArray`.
+#[no_mangle]
+pub extern "C" fn glIsRenderbuffer(renderbuffer: u32) -> u32 {
+    with(|s| record::is_renderbuffer(&s.ctx, renderbuffer)) as u32
+}
+
+#[no_mangle]
+pub extern "C" fn glRenderbufferStorage(target: u32, internalformat: u32, width: i32, height: i32) {
+    with(|s| record::renderbuffer_storage(&mut s.ctx, target, internalformat, width, height));
+}
+
+#[no_mangle]
+pub extern "C" fn glFramebufferRenderbuffer(target: u32, attachment: u32, renderbuffertarget: u32, renderbuffer: u32) {
+    with(|s| record::framebuffer_renderbuffer(&mut s.ctx, target, attachment, renderbuffertarget, renderbuffer));
+}
+
+/// `glBlitFramebuffer(...)` — validate the read+draw framebuffers and record the blit. An honest partial:
+/// this deferred model cannot materialize a cross-FBO pixel copy at record time (no rendered source plane
+/// exists until swap), so the region/filter are validated but the copy is a documented no-op; see
+/// [`record::blit_framebuffer`].
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn glBlitFramebuffer(
+    _src_x0: i32,
+    _src_y0: i32,
+    _src_x1: i32,
+    _src_y1: i32,
+    _dst_x0: i32,
+    _dst_y0: i32,
+    _dst_x1: i32,
+    _dst_y1: i32,
+    mask: u32,
+    _filter: u32,
+) {
+    with(|s| record::blit_framebuffer(&mut s.ctx, mask));
 }
 
 // ==================================================================================================
