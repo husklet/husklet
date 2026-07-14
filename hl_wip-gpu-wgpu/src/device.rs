@@ -1,0 +1,82 @@
+//! wgpu instance / adapter / device acquisition — the one place platform selection happens.
+//!
+//! Headless by construction: no window, no surface. On this Linux host the loader is pointed at the
+//! software Vulkan ICD (lavapipe / `llvmpipe`) so the whole conformance suite runs with no GPU and no X
+//! display; the same code selects a real Vulkan/Metal/DX adapter on a workstation. The adapter is
+//! requested with `compatible_surface: None` (surfaceless) and `force_fallback_adapter` left to the
+//! caller's [`DeviceConfig`].
+
+use hl_gpu::{GpuError, Result};
+
+/// How the executor picks its wgpu adapter/device. Defaults are headless-software friendly.
+#[derive(Clone, Debug)]
+pub struct DeviceConfig {
+    /// wgpu backend bitset to consider. Defaults to `VULKAN` so the loader binds the lavapipe ICD on this
+    /// Linux host (rather than the GL software rasterizer, which wgpu would otherwise prefer). A Metal/DX
+    /// host overrides this with its own backend.
+    pub backends: wgpu::Backends,
+    /// Ask wgpu for its software fallback adapter. Off by default: with the loader pointed at lavapipe the
+    /// only Vulkan adapter *is* software, so the normal high-performance request already lands on it.
+    pub force_fallback: bool,
+    /// If set, force the Vulkan loader to this ICD manifest before enumerating adapters (the lavapipe
+    /// headless path). Applied process-wide via `VK_ICD_FILENAMES`.
+    pub vk_icd_filenames: Option<String>,
+}
+
+impl Default for DeviceConfig {
+    fn default() -> Self {
+        Self {
+            backends: wgpu::Backends::VULKAN,
+            force_fallback: false,
+            // The lavapipe manifest shipped on this host; harmless if the file is absent (the loader
+            // simply ignores an override pointing at a missing manifest and falls back to system ICDs).
+            vk_icd_filenames: Some("/usr/share/vulkan/icd.d/lvp_icd.json".to_string()),
+        }
+    }
+}
+
+/// A live wgpu device + queue and the human-readable adapter name (e.g. `"llvmpipe (LLVM ...)"`), plus
+/// the [`wgpu::AdapterInfo`] so the executor can report what it actually bound.
+pub struct Gpu {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub info: wgpu::AdapterInfo,
+}
+
+/// Acquire a headless (surfaceless) wgpu device per `cfg`. Blocks on the async requests with pollster.
+pub fn acquire(cfg: &DeviceConfig) -> Result<Gpu> {
+    if let Some(icd) = &cfg.vk_icd_filenames {
+        // Point the Vulkan loader at the software ICD before the instance enumerates drivers. Safe: done
+        // at device bring-up, before any wgpu/Vulkan call in this process.
+        std::env::set_var("VK_ICD_FILENAMES", icd);
+    }
+
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: cfg.backends,
+        ..Default::default()
+    });
+
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::None,
+        force_fallback_adapter: cfg.force_fallback,
+        compatible_surface: None, // headless: no swapchain surface
+    }))
+    .ok_or(GpuError::Unsupported("wgpu: no adapter (is a Vulkan ICD / lavapipe reachable?)"))?;
+
+    let info = adapter.get_info();
+
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("hl-gpu-wgpu"),
+            required_features: wgpu::Features::empty(),
+            // Downlevel/software-friendly: lavapipe advertises modest limits, so request the adapter's own
+            // limits rather than the desktop defaults (which a software device may not meet).
+            required_limits: adapter.limits(),
+            memory_hints: wgpu::MemoryHints::Performance,
+        },
+        None,
+    ))
+    .map_err(|e| GpuError::Kernel(format!("wgpu: request_device failed: {e}")))?;
+
+    Ok(Gpu { device, queue, info })
+}

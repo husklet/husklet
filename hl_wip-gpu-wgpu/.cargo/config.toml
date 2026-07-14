@@ -1,0 +1,9 @@
+# This host's cargo libcurl fails TLS verification against the sparse crates.io index, but the system
+# git (which uses the OS curl/openssl) verifies fine — so pull the index over the git protocol with the
+# git CLI. Scoped to this standalone crate only (it has its own [workspace]); does not affect the shared
+# root tree.
+[registries.crates-io]
+protocol = "git"
+
+[net]
+git-fetch-with-cli = true
