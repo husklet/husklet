@@ -198,7 +198,8 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     let d = d.clone();
     let prog_name = if d.prog != 0 { d.prog } else { ctx.cur_prog };
     let prog = ctx.programs.program(prog_name)?.clone();
-    let shader_ir = prog.shader_ir.clone()?;
+    let vs_ir = prog.vs_ir.clone()?;
+    let fs_ir = prog.fs_ir.clone()?;
     let vdecl = crate::adapter::glsl::collect_vertex_attrs(&prog.vs_src);
     let ndecl = vdecl.len();
 
@@ -307,9 +308,15 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     let has_u = prog.has_uniforms();
     let has_bg = has_u || !texbinds.is_empty();
 
-    // ---- shader + pipeline ----
-    let shader_ir_id = ctx.alloc_shader_ir();
-    cmds.push(Cmd::CreateShader { id: shader_ir_id, kind: ShaderPayloadKind::LegacyMsl, spirv: shader_ir });
+    // ---- shaders + pipeline ----
+    // The vertex and fragment GLSL are forwarded as two separate `Glsl` shader modules (each carries one
+    // stage's source led by GLSL_MAGIC); the render pipeline binds them by their `vmain`/`fmain` entries.
+    // naga's `glsl-in` compiles one stage per module, so the two stages are distinct modules (not one
+    // combined module as the old pre-translated-MSL path used).
+    let vs_id = ctx.alloc_shader_ir();
+    let fs_id = ctx.alloc_shader_ir();
+    cmds.push(Cmd::CreateShader { id: vs_id, kind: ShaderPayloadKind::Glsl, spirv: vs_ir });
+    cmds.push(Cmd::CreateShader { id: fs_id, kind: ShaderPayloadKind::Glsl, spirv: fs_ir });
 
     let nvb = nslot.max(1);
     let mut vbs: Vec<VertexLayout> = Vec::with_capacity(nvb);
@@ -369,8 +376,8 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     cmds.push(Cmd::CreateRenderPipeline(
         pipeline_ir,
         RenderPipelineDesc {
-            vertex: ShaderRef { module: shader_ir_id, entry: "vmain".into() },
-            fragment: Some(ShaderRef { module: shader_ir_id, entry: "fmain".into() }),
+            vertex: ShaderRef { module: vs_id, entry: "vmain".into() },
+            fragment: Some(ShaderRef { module: fs_id, entry: "fmain".into() }),
             vertex_buffers: vbs,
             color_targets: vec![ColorTargetState { format: target_fmt, blend, write_mask: 0xf }],
             depth,

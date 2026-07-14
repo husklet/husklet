@@ -36,11 +36,13 @@ pub struct Program {
     /// The vertex+fragment GLSL-ES sources captured at link, for the vertex-layout reflection at draw.
     pub vs_src: String,
     pub fs_src: String,
-    /// The translated shader-IR word payload (packed MSL), lowered to a single `CreateShader` at swap.
-    pub shader_ir: Option<Vec<u32>>,
+    /// The forwarded vertex/fragment GLSL `Glsl` shader payloads (each a `GlslDescriptor` led by
+    /// `GLSL_MAGIC`), lowered to two `CreateShader`s at swap — the host (naga) compiles the source.
+    pub vs_ir: Option<Vec<u32>>,
+    pub fs_ir: Option<Vec<u32>>,
     /// The captured compute GLSL-ES source (for a compute program), translated to `compute_ir` at link.
     pub cs_src: String,
-    /// The translated compute shader-IR word payload — lowered to a `CreateShader` +
+    /// The forwarded compute GLSL `Glsl` shader payload — lowered to a `CreateShader` +
     /// `CreateComputePipeline` at `glDispatchCompute`. `None` for a render (vertex+fragment) program.
     pub compute_ir: Option<Vec<u32>>,
     /// Uniform-block members (name → offset/size) — the layout `glUniform*` writes into `ubuf`.
@@ -63,16 +65,27 @@ impl Program {
     /// non-empty) translates the compute source to `compute_ir`, which `glDispatchCompute` lowers to a
     /// `CreateShader` + `CreateComputePipeline`.
     pub fn link(&mut self, vs_src: String, fs_src: String, cs_src: String) {
+        use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
         if !cs_src.is_empty() {
-            self.compute_ir = Some(glsl::to_words(&glsl::translate_compute(&cs_src)));
+            let source = glsl::translate_compute(&cs_src);
+            self.compute_ir = Some(
+                GlslDescriptor { stage: glsl_stage::COMPUTE, entry: "cmain".into(), source }.to_words(),
+            );
             self.cs_src = cs_src;
             self.linked = true;
             return;
         }
         let (unis, ubuf_size) = glsl::uni_layout(&vs_src, &fs_src);
         self.samp_names = glsl::program_samplers(&vs_src, &fs_src);
-        let msl = glsl::translate(&vs_src, &fs_src);
-        self.shader_ir = Some(glsl::to_words(&msl));
+        let (vs_glsl, fs_glsl) = glsl::translate_render(&vs_src, &fs_src);
+        self.vs_ir = Some(
+            GlslDescriptor { stage: glsl_stage::VERTEX, entry: "vmain".into(), source: vs_glsl }
+                .to_words(),
+        );
+        self.fs_ir = Some(
+            GlslDescriptor { stage: glsl_stage::FRAGMENT, entry: "fmain".into(), source: fs_glsl }
+                .to_words(),
+        );
         self.unis = unis;
         self.ubuf_size = ubuf_size;
         self.ubuf = vec![0u8; ubuf_size.max(0) as usize];

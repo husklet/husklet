@@ -170,8 +170,13 @@ fn textured_quad_uploads_buffer_and_texture() {
     };
     assert!(matches!(&batch[stage_pos + 1], Cmd::WriteBuffer { id, offset: 0, data } if *id == stage_id && data.len() == 16));
 
-    // the shader carries the translated GLSL as a LegacyMsl payload; a render pipeline references it.
-    assert!(batch.iter().any(|c| matches!(c, Cmd::CreateShader { kind: ShaderPayloadKind::LegacyMsl, .. })));
+    // the shader carries the forwarded GLSL as `Glsl` payloads (one per stage); a render pipeline uses them.
+    assert!(batch.iter().any(|c| matches!(c, Cmd::CreateShader { kind: ShaderPayloadKind::Glsl, .. })));
+    assert_eq!(
+        batch.iter().filter(|c| matches!(c, Cmd::CreateShader { kind: ShaderPayloadKind::Glsl, .. })).count(),
+        2,
+        "vertex + fragment GLSL are two separate Glsl shader modules"
+    );
     assert!(batch.iter().any(|c| matches!(c, Cmd::CreateRenderPipeline(_, _))));
 }
 
@@ -325,17 +330,29 @@ fn negative_instance_count_is_rejected_and_records_no_draw() {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// adapter/glsl — GLSL-ES → shader-IR
+// adapter/glsl — GLSL-ES → naga-acceptable desktop GLSL (forwarded, host-compiled)
 // ---------------------------------------------------------------------------------------------------
 
 #[test]
-fn glsl_translate_emits_metal_entry_points() {
-    let msl = glsl::translate(VS, FS);
-    assert!(msl.contains("vertex VOut vmain"), "vertex entry present");
-    assert!(msl.contains("fragment float4 fmain"), "fragment entry present");
-    // the GLSL vec/texture calls are lowered to MSL forms.
-    assert!(msl.contains("float4"), "vec4 -> float4");
-    assert!(msl.contains(".sample("), "texture2D -> sample");
+fn glsl_translate_forwards_desktop_glsl_per_stage() {
+    let (vs, fs) = glsl::translate_render(VS, FS);
+
+    // Vertex: a desktop `#version`, the attribute regenerated as a `layout(location) in`, the varying as a
+    // `layout(location) out`, and the body (incl. gl_Position) carried through verbatim.
+    assert!(vs.contains("#version 460"), "desktop version pinned");
+    assert!(vs.contains("layout(location = 0) in vec2 aPos;"), "attribute -> desktop in: {vs}");
+    assert!(vs.contains("layout(location = 0) out vec2 vUV;"), "varying -> desktop out: {vs}");
+    assert!(vs.contains("gl_Position ="), "vertex body carried through");
+
+    // Fragment: the varying as an `in`, the sampler as a `layout(binding) uniform sampler2D`, a synthesized
+    // `out vec4`, ES `gl_FragColor` rewritten onto it, and ES `texture2D(` lowered to desktop `texture(`.
+    assert!(fs.contains("#version 460"));
+    assert!(fs.contains("layout(location = 0) in vec2 vUV;"), "varying -> desktop in: {fs}");
+    assert!(fs.contains("layout(binding = 0) uniform sampler2D uTex;"), "sampler decl: {fs}");
+    assert!(fs.contains("out vec4 hl_FragColor;"), "synthesized fragment output: {fs}");
+    assert!(fs.contains("hl_FragColor = texture(uTex, vUV)"), "gl_FragColor + texture2D lowered: {fs}");
+    assert!(!fs.contains("gl_FragColor"), "the ES gl_FragColor builtin is gone: {fs}");
+    assert!(!fs.contains("texture2D"), "the ES texture2D builtin is gone: {fs}");
 }
 
 #[test]
@@ -345,12 +362,4 @@ fn glsl_collects_vertex_attrs_and_samplers() {
     assert_eq!(attrs[0].name, "aPos");
     assert_eq!(attrs[0].ty, "vec2");
     assert_eq!(glsl::program_samplers(VS, FS), vec!["uTex".to_string()]);
-}
-
-#[test]
-fn glsl_to_words_round_trips_the_source_length() {
-    let words = glsl::to_words("abcdef");
-    assert_eq!(words[0], 6); // byte length prefix
-    // 6 bytes -> 1 length word + 2 payload words.
-    assert_eq!(words.len(), 3);
 }

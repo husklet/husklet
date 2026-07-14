@@ -187,7 +187,12 @@ impl CpuExecutor {
                 }
                 ShaderModule::Spirv
             }
-            ShaderPayloadKind::LegacyMsl | ShaderPayloadKind::DemoBuiltin => ShaderModule::Spirv,
+            // GLSL / legacy-MSL / demo graphics payloads are opaque to the fixed-function CPU oracle: it
+            // rasterizes from the pipeline + vertex data, not the shader source, so any graphics module is
+            // an accepted opaque handle here (the real GLSL compile happens on the wgpu executor).
+            ShaderPayloadKind::Glsl
+            | ShaderPayloadKind::LegacyMsl
+            | ShaderPayloadKind::DemoBuiltin => ShaderModule::Spirv,
         };
         res.shaders.insert(id, Box::new(module))
     }

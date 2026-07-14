@@ -13,7 +13,9 @@ use crate::protocol::model::command::{
 use crate::protocol::model::descriptor::*;
 use crate::protocol::model::enums::*;
 use crate::protocol::model::error::{GpuError, Result};
-use crate::protocol::model::kernel::{KernelDescriptor, KERNEL_MAGIC, SPIRV_MAGIC};
+use crate::protocol::model::kernel::{
+    GlslDescriptor, KernelDescriptor, GLSL_MAGIC, KERNEL_MAGIC, SPIRV_MAGIC,
+};
 
 // ---------------------------------------------------------------------------------------------------
 // descriptors
@@ -377,6 +379,7 @@ impl Cmd {
                 // classified against the NEUTRAL magics in `model::kernel` (never a CUDA/PTX constant):
                 //   * SPIRV_MAGIC (0x07230203)  → SpirV     (translated Vulkan modules)
                 //   * KERNEL_MAGIC (0xDD6B0001) → PtxKernel (neutral kernel descriptor)
+                //   * GLSL_MAGIC  (0xDD670001)  → Glsl      (forwarded GLSL descriptor, WIRE_VERSION 6)
                 //   * anything else             → LegacyMsl (already-translated MSL words)
                 // MSL text words never collide with these magics (both decode to non-ASCII byte runs), so
                 // the inference is unambiguous for every payload that actually crosses the ring.
@@ -385,6 +388,7 @@ impl Cmd {
                 let kind = match spirv.first().copied() {
                     Some(SPIRV_MAGIC) => ShaderPayloadKind::SpirV,
                     Some(w) if w == KERNEL_MAGIC => ShaderPayloadKind::PtxKernel,
+                    Some(w) if w == GLSL_MAGIC => ShaderPayloadKind::Glsl,
                     _ => ShaderPayloadKind::LegacyMsl,
                 };
                 Cmd::CreateShader { id, kind, spirv }
@@ -532,6 +536,36 @@ impl KernelDescriptor {
             let entry = d.str()?;
             let block = [d.u32()?, d.u32()?, d.u32()?];
             Ok(KernelDescriptor { ptx, entry, block })
+        })())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// GLSL descriptor ← CreateShader words
+// ---------------------------------------------------------------------------------------------------
+
+impl GlslDescriptor {
+    /// Decode from shader words. Returns `None` if the words are not a GLSL descriptor (leading word is not
+    /// [`GLSL_MAGIC`]) — the mirror of [`KernelDescriptor::from_words`].
+    pub fn from_words(words: &[u32]) -> Option<Result<Self>> {
+        if words.len() < 2 || words[0] != GLSL_MAGIC {
+            return None;
+        }
+        let byte_len = words[1] as usize;
+        let mut bytes = Vec::with_capacity((words.len() - 2) * 4);
+        for &w in &words[2..] {
+            bytes.extend_from_slice(&w.to_le_bytes());
+        }
+        if bytes.len() < byte_len {
+            return Some(Err(GpuError::Kernel("glsl descriptor truncated".into())));
+        }
+        bytes.truncate(byte_len);
+        let mut d = Decoder::new(&bytes);
+        Some((|| {
+            let stage = d.u32()?;
+            let entry = d.str()?;
+            let source = d.str()?;
+            Ok(GlslDescriptor { stage, entry, source })
         })())
     }
 }

@@ -8,18 +8,16 @@
 //! `glReadPixels` triggers a REAL device→host readback (render → `CopyTextureToBuffer` → `read_buffer` over
 //! the socket).
 //!
-//! ASSERTED — the CLEAR path end to end: `glClearColor`+`glClear`+`glReadPixels` clears a 64x64 target on
-//! lavapipe and reads the color back over the socket; we assert the app got it AND (independently) read the
-//! same rendered target back off the host executor.
+//! ASSERTED — both the CLEAR and the GEOMETRY path end to end: `glClearColor`+`glClear` clears a 64x64
+//! target on lavapipe, then a real GLES2 vertex+fragment program draws a GREEN triangle over it and
+//! `glReadPixels` reads it back over the socket. We assert the guest saw the clear AND (independently) read
+//! the same RASTERIZED target back off the host executor (center = triangle, corner = clear color).
 //!
-//! REPORTED GAP — the GEOMETRY (triangle) path: our GL shim translates GLSL→MSL and tags the shader payload
-//! `ShaderPayloadKind::LegacyMsl` (`hl_wip-gl/src/service/frame.rs:312`), which the wgpu/naga host executor
-//! REJECTS (`hl_wip-gpu-wgpu/src/shader.rs:70` → `Unsupported("legacy MSL / demo-builtin payloads (no
-//! WGSL)")`). So a real GLES2 triangle CANNOT rasterize on lavapipe today: the geometry frame is Nacked and
-//! `glReadPixels` returns a GL error. The C program reproduces this live and reports it; this test records
-//! the gap (see the assertion at the end) without failing, since the CLEAR path is the furthest observable
-//! correct step. FIX: have the GL driver forward GLSL-ES verbatim as `ShaderPayloadKind::Glsl` (naga's
-//! `glsl-in` is enabled in the wgpu executor) instead of pre-translating to MSL.
+//! This used to report a GAP: the GL shim pre-translated GLSL→MSL and tagged the payload
+//! `ShaderPayloadKind::LegacyMsl`, which the wgpu/naga executor rejected — so geometry never rasterized.
+//! The driver now forwards GLSL-ES verbatim as `ShaderPayloadKind::Glsl` (two modules, vertex + fragment)
+//! and the executor compiles it via naga's `glsl-in`, so the triangle genuinely rasterizes. See
+//! `gl_geometry.rs` for the dedicated geometry milestone assertion.
 
 use std::process::Command;
 
@@ -92,46 +90,38 @@ fn real_gles2_clear_and_triangle_on_lavapipe() {
     );
     assert!(exec.submit_count() > 0, "guest submitted batches to the host executor");
 
-    // ---- Independently assert the SAME rendered target off the host executor ---------------------
+    // ---- ASSERT the geometry (triangle) path now RASTERIZES — the fixed behavior ------------------
+    // The GL driver forwards GLSL-ES verbatim as ShaderPayloadKind::Glsl and the wgpu/naga executor
+    // compiles it, so the real GLES2 triangle rasterizes on lavapipe (was the LegacyMsl gap this test used
+    // to report). The scene clears R=0.25 G=0.5 B=0.75 then draws a GREEN triangle covering the center.
+    assert!(
+        stdout.contains("GL_TRIANGLE_DRAW_OK"),
+        "the GLES2 triangle should rasterize on lavapipe (GLSL forwarded to naga), stdout:\n{stdout}"
+    );
+
+    // ---- Independently assert the SAME rasterized target off the host executor -------------------
     let cap = exec.captured();
-    if let Some(px) = cap.rgba8_texture(W, H) {
-        // The GL default target is Bgra8Unorm; read_texture returns native (B,G,R,A) order. The clear was
-        // R=0.25 G=0.5 B=0.75 → ~(64,128,191); in BGRA that is (191,128,64,255).
-        let i = (((H / 2) * W + (W / 2)) * 4) as usize;
-        let near = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 2;
-        assert!(
-            near(px[i], 191) && near(px[i + 1], 128) && near(px[i + 2], 64) && px[i + 3] == 255,
-            "host-side render target center (BGRA) should be the clear color, got {:?}",
-            &px[i..i + 4]
-        );
-    } else {
+    let Some(px) = cap.rgba8_texture(W, H) else {
         panic!(
-            "no 64x64 render target captured off the host executor for the GL clear frame; captured \
+            "no 64x64 render target captured off the host executor for the GL frame; captured \
              texture sizes: {:?}",
             cap.textures.values().map(|v| v.len()).collect::<Vec<_>>()
-        );
-    }
-
-    // ---- REPORT the geometry (triangle) gap: LegacyMsl shaders are rejected by the wgpu backend ---
-    // The C program reproduced it live. We record the outcome; a real GLES2 triangle raster on lavapipe is
-    // blocked until the GL driver forwards GLSL (not MSL). This is the valuable real bug this test surfaces.
-    if stdout.contains("GL_TRIANGLE_DRAW_OK") {
-        eprintln!(
-            "NOTE: the GLES2 triangle unexpectedly RASTERIZED on lavapipe — the LegacyMsl→WGSL gap may be \
-             fixed; consider promoting this to a hard triangle assertion."
-        );
-    } else {
-        assert!(
-            stdout.contains("GL_TRIANGLE_READBACK_FAILED") || stdout.contains("GL_TRIANGLE_WRONG_COLOR"),
-            "expected the GLES2 triangle path to be blocked (LegacyMsl shader rejected by the wgpu/naga \
-             executor) — stdout did not show the reproduced gap:\n{stdout}"
-        );
-        eprintln!(
-            "REPORTED GAP: real GLES2 triangle blocked — GL shim emits ShaderPayloadKind::LegacyMsl \
-             (frame.rs:312), wgpu executor rejects it (shader.rs:70). Fix: forward GLSL-ES verbatim as \
-             ShaderPayloadKind::Glsl (naga glsl-in is enabled)."
-        );
-    }
+        )
+    };
+    // The GL default target is Bgra8Unorm; read_texture returns native (B,G,R,A) order. Center is covered
+    // by the GREEN triangle (0,255,0); a corner keeps the clear color (BGRA 191,128,64).
+    let near = |a: u8, b: u8| (a as i32 - b as i32).abs() <= 2;
+    let c = (((H / 2) * W + (W / 2)) * 4) as usize;
+    assert!(
+        near(px[c], 0) && near(px[c + 1], 255) && near(px[c + 2], 0) && px[c + 3] == 255,
+        "host-side render target center (BGRA) should be the GREEN triangle, got {:?}",
+        &px[c..c + 4]
+    );
+    assert!(
+        near(px[0], 191) && near(px[1], 128) && near(px[2], 64) && px[3] == 255,
+        "host-side render target corner (BGRA) should be the clear color, got {:?}",
+        &px[0..4]
+    );
 
     let _ = std::fs::remove_dir_all(&out_dir);
 }

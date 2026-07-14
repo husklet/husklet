@@ -59,12 +59,13 @@ fn triangle(color: [f32; 4]) -> Vec<u8> {
 }
 
 /// Build the in-process sink over a fresh CpuExecutor, with the session's negotiated caps widened to
-/// accept the frame's `LegacyMsl` shader payload (see the module note) and byte-addressable copies.
+/// accept the frame's forwarded `Glsl` shader payloads (opaque to the fixed-function oracle, which
+/// rasterizes from the pipeline + vertex data) and byte-addressable copies.
 fn cpu_sink() -> InProcessCommandSink<CpuExecutor> {
     let exec = CpuExecutor::new();
     let mut limits = Limits::from_capabilities(exec.capabilities());
     limits.copy_alignment = 1;
-    limits.caps.shader_payloads |= shader_payload::MSL;
+    limits.caps.shader_payloads |= shader_payload::MSL | shader_payload::GLSL;
     let session = Session::new(limits, GlobalLedger::unbounded(), Box::new(FakeClock::new(0)));
     InProcessCommandSink::with_session(session, exec)
 }

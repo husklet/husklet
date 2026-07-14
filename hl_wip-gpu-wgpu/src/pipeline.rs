@@ -8,7 +8,7 @@
 //! bind groups independently of pipelines; the concrete `wgpu::BindGroup` is built at draw/dispatch time
 //! from the bound pipeline's own layout (see `bindgroup.rs`).
 
-use hl_gpu::protocol::model::descriptor::{ComputePipelineDesc, RenderPipelineDesc};
+use hl_gpu::protocol::model::descriptor::{ComputePipelineDesc, RenderPipelineDesc, VertexLayout};
 use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
@@ -139,12 +139,36 @@ impl WgpuExecutor {
             None => None,
         };
 
-        // Vertex-buffer layouts: the conformance triangle draws from `@builtin(vertex_index)` with no
-        // vertex buffers, so only the empty case is exercised. A non-empty layout would need the opaque
-        // WebGPU VertexFormat map and is rejected honestly until a case needs it.
-        if !desc.vertex_buffers.is_empty() {
-            return Err(GpuError::Unsupported("wgpu: vertex-buffer layouts not yet lowered"));
-        }
+        // Vertex-buffer layouts: lower each protocol `VertexLayout` (stride + step mode + packed-format
+        // attributes) into a `wgpu::VertexBufferLayout`. The attribute vecs must outlive the pipeline
+        // descriptor, so they are materialized here and borrowed below. A guest that draws from
+        // `@builtin(vertex_index)` (the conformance triangle) has no vertex buffers → an empty list.
+        let attr_sets: Vec<Vec<wgpu::VertexAttribute>> = desc
+            .vertex_buffers
+            .iter()
+            .map(|vl| {
+                vl.attrs
+                    .iter()
+                    .map(|a| {
+                        Ok(wgpu::VertexAttribute {
+                            format: vertex_format(a.format)?,
+                            offset: a.offset as u64,
+                            shader_location: a.location,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let vbuffers: Vec<wgpu::VertexBufferLayout> = desc
+            .vertex_buffers
+            .iter()
+            .zip(attr_sets.iter())
+            .map(|(vl, attrs)| wgpu::VertexBufferLayout {
+                array_stride: vl.stride as u64,
+                step_mode: step_mode(vl),
+                attributes: attrs,
+            })
+            .collect();
 
         let color_formats: Vec<TextureFormat> = desc.color_targets.iter().map(|c| c.format).collect();
         let mut targets: Vec<Option<wgpu::ColorTargetState>> = Vec::new();
@@ -162,7 +186,7 @@ impl WgpuExecutor {
             vertex: wgpu::VertexState {
                 module: &vs,
                 entry_point: Some(desc.vertex.entry.as_str()),
-                buffers: &[],
+                buffers: &vbuffers,
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             primitive: wgpu::PrimitiveState {
@@ -182,4 +206,56 @@ impl WgpuExecutor {
         });
         res.pipelines.insert(id, Box::new(PipelineNative::Render { pipeline, color_formats }))
     }
+}
+
+/// Per-slot vertex step mode: `step_mode == 0` steps per-vertex, non-zero steps per-instance (the encoding
+/// the GL driver emits from `glVertexAttribDivisor`).
+fn step_mode(vl: &VertexLayout) -> wgpu::VertexStepMode {
+    if vl.step_mode == 0 {
+        wgpu::VertexStepMode::Vertex
+    } else {
+        wgpu::VertexStepMode::Instance
+    }
+}
+
+/// Decode a protocol vertex-attribute format into a `wgpu::VertexFormat`. The wire packs
+/// `comps | (kind<<8) | (normalized<<16) | (integer<<17)` (the GL driver's `vertex_format_wire`): `comps`
+/// in 1..=4, `kind` 0=f32 1=u8 2=i8 3=u16 4=i16 5=u32 6=i32 7=f16. WebGPU has no 1-/3-component 8-/16-bit
+/// formats, so those combinations are rejected honestly rather than silently widened.
+pub(crate) fn vertex_format(packed: u32) -> Result<wgpu::VertexFormat> {
+    use wgpu::VertexFormat as F;
+    let comps = packed & 0xff;
+    let kind = (packed >> 8) & 0xff;
+    let normalized = (packed >> 16) & 1 != 0;
+    let bad = || GpuError::Unsupported("wgpu: unsupported vertex attribute format");
+    Ok(match (kind, comps) {
+        // 32-bit float
+        (0, 1) => F::Float32,
+        (0, 2) => F::Float32x2,
+        (0, 3) => F::Float32x3,
+        (0, 4) => F::Float32x4,
+        // 32-bit unsigned / signed integer
+        (5, 1) => F::Uint32,
+        (5, 2) => F::Uint32x2,
+        (5, 3) => F::Uint32x3,
+        (5, 4) => F::Uint32x4,
+        (6, 1) => F::Sint32,
+        (6, 2) => F::Sint32x2,
+        (6, 3) => F::Sint32x3,
+        (6, 4) => F::Sint32x4,
+        // 16-bit float (x2 / x4 only)
+        (7, 2) => F::Float16x2,
+        (7, 4) => F::Float16x4,
+        // 8-bit (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
+        (1, 2) => if normalized { F::Unorm8x2 } else { F::Uint8x2 },
+        (1, 4) => if normalized { F::Unorm8x4 } else { F::Uint8x4 },
+        (2, 2) => if normalized { F::Snorm8x2 } else { F::Sint8x2 },
+        (2, 4) => if normalized { F::Snorm8x4 } else { F::Sint8x4 },
+        // 16-bit integer (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
+        (3, 2) => if normalized { F::Unorm16x2 } else { F::Uint16x2 },
+        (3, 4) => if normalized { F::Unorm16x4 } else { F::Uint16x4 },
+        (4, 2) => if normalized { F::Snorm16x2 } else { F::Sint16x2 },
+        (4, 4) => if normalized { F::Snorm16x4 } else { F::Sint16x4 },
+        _ => return Err(bad()),
+    })
 }

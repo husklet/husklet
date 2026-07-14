@@ -194,7 +194,10 @@ pub struct CommandBuffer {
 /// `SpirV` is strict: an executor must translate it or return an error — it must never silently
 /// substitute a built-in shader. Legacy/demo payloads opt into compatibility handling explicitly, while
 /// neutral kernel descriptors remain a separate, self-identifying channel (classified by
-/// [`super::kernel::KERNEL_MAGIC`], never a CUDA/PTX constant).
+/// [`super::kernel::KERNEL_MAGIC`], never a CUDA/PTX constant). `Glsl` is the graphics analogue of the
+/// kernel channel: the guest GLES/GL driver forwards GLSL source (a [`super::kernel::GlslDescriptor`],
+/// classified by [`super::kernel::GLSL_MAGIC`]) and the host compiles it, so a driver never pre-translates
+/// to a backend IR (MSL) the executor cannot consume.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum ShaderPayloadKind {
@@ -202,6 +205,7 @@ pub enum ShaderPayloadKind {
     LegacyMsl = 2,
     PtxKernel = 3,
     DemoBuiltin = 4,
+    Glsl = 5,
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -245,7 +249,12 @@ pub enum Cmd {
 /// - v4: adds a distinct multisample resolve operation (etag 20).
 /// - v5: adds a buffer-fill (device memset) operation, `FillBuffer` (etag 21). Purely additive — no
 ///   existing message's bytes change; a v4 decoder rejects etag 21 as `BadTag` rather than aliasing it.
-pub const WIRE_VERSION: u32 = 5;
+/// - v6: adds the `Glsl` shader-payload channel — a `CreateShader` whose word payload leads with
+///   [`super::kernel::GLSL_MAGIC`] carries a [`super::kernel::GlslDescriptor`] (stage + entry + GLSL source)
+///   the host compiles. Purely additive: no `Cmd`/`Enc` tag or existing message's bytes change; the kind is
+///   re-derived from the payload's leading magic exactly as SPIR-V/kernel are, so a v5 decoder that never
+///   receives a GLSL payload is unaffected, and one that does classifies it by the new magic.
+pub const WIRE_VERSION: u32 = 6;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.

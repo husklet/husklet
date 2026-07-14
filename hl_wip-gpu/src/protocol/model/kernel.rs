@@ -18,6 +18,35 @@ pub const SPIRV_MAGIC: u32 = 0x0723_0203;
 /// a fixed wire constant (compatible with the shipping `hl-gpu`).
 pub const KERNEL_MAGIC: u32 = 0xDD6B_0001;
 
+/// Magic leading word marking `CreateShader.spirv` words as a **GLSL descriptor** ([`GlslDescriptor`]):
+/// a shader STAGE + entry-point + GLSL source the guest GLES/GL driver forwards VERBATIM for the host to
+/// compile (naga's `glsl-in` on the wgpu path). This is the graphics analogue of [`KERNEL_MAGIC`] — the
+/// driver ships source, the host owns the compiler — so a driver never has to pre-translate to a
+/// backend-specific IR (MSL) the executor cannot consume. Distinct from [`SPIRV_MAGIC`] (`0x07230203`) and
+/// [`KERNEL_MAGIC`] (`0xDD6B0001`); `0x67` is ASCII `g` (glsl). Added at `WIRE_VERSION` 6.
+pub const GLSL_MAGIC: u32 = 0xDD67_0001;
+
+/// GLSL shader-stage codes carried in a [`GlslDescriptor`] (kept neutral — the protocol never depends on a
+/// backend's stage enum such as `naga::ShaderStage`).
+pub mod glsl_stage {
+    pub const VERTEX: u32 = 0;
+    pub const FRAGMENT: u32 = 1;
+    pub const COMPUTE: u32 = 2;
+}
+
+/// The guest-forwarded GLSL shader: the shader stage ([`glsl_stage`]), the entry-point name the pipeline's
+/// `ShaderRef` binds, and the GLSL source the host compiles. Serialized to/from `CreateShader` shader words
+/// (led by [`GLSL_MAGIC`]) by [`crate::protocol::codec`] — the graphics counterpart of [`KernelDescriptor`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct GlslDescriptor {
+    /// Shader stage ([`glsl_stage::VERTEX`] / [`glsl_stage::FRAGMENT`] / [`glsl_stage::COMPUTE`]).
+    pub stage: u32,
+    /// Entry-point name the render/compute pipeline's `ShaderRef` selects (e.g. `vmain`/`fmain`/`cmain`).
+    pub entry: String,
+    /// GLSL source text the host compiles (naga `glsl-in` on the wgpu executor).
+    pub source: String,
+}
+
 /// The guest-forwarded kernel descriptor: the kernel source text, the entry point, and the launch block
 /// dims. The host compiles source → [`KernelProgram`]. Serialized to/from `CreateShader` shader words by
 /// [`crate::protocol::codec`].

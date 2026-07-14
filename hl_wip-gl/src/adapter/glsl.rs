@@ -1,13 +1,14 @@
-//! GLSL-ES → shader-IR front-end — a Rust port of `hl-shim-gl/src/translate.rs` (itself a byte-for-byte
-//! port of `gl_shim.c`'s `translate()`).
+//! GLSL-ES front-end — reflection + a GLSL-ES → naga-acceptable *desktop* GLSL rewrite.
 //!
-//! The host compiles MSL (not GLSL), so the guest driver transforms a vertex+fragment GLSL-ES pair into
-//! one combined MSL source at `glLinkProgram`; [`to_words`] then packs that source into the `Vec<u32>`
-//! shader-IR word payload a `Cmd::CreateShader` carries (classified `ShaderPayloadKind::LegacyMsl`).
-//! Every transform mirrors the C shim exactly (same passes, same order, same whitespace) so the emitted
-//! shader — and therefore the `CreateShader` IR — is identical. The public reflection helpers
-//! ([`collect_vertex_attrs`], [`uni_layout`], [`program_samplers`]) feed the pipeline's vertex layout +
-//! the uniform/sampler bind-group emission at swap.
+//! The host owns the shader compiler (naga's `glsl-in` on the wgpu executor), so the guest driver FORWARDS
+//! GLSL source rather than pre-translating to a backend IR. naga's `glsl-in` accepts only DESKTOP GLSL
+//! (`#version 440+`, `layout`-qualified `in`/`out`, explicit fragment outputs, `layout(binding=)` uniform
+//! blocks) — not the GLES `attribute`/`varying`/`gl_FragColor`/`#version N es` dialect — so
+//! [`translate_render`] regenerates each stage's DECLARATIONS into the desktop form from the reflected
+//! interface and carries the shader BODY through (desktop GLSL is a superset of the ES body syntax). Each
+//! stage is packed into its own `GlslDescriptor` (`ShaderPayloadKind::Glsl`) at `glLinkProgram`. The public
+//! reflection helpers ([`collect_vertex_attrs`], [`uni_layout`], [`program_samplers`]) feed the pipeline's
+//! vertex layout + the uniform/sampler bind-group emission at swap.
 
 /// A parsed `qualifier TYPE name;` declaration (gl_shim.c `struct decl`).
 #[derive(Clone, Debug, PartialEq)]
@@ -25,46 +26,157 @@ pub struct Uni {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// shader-IR packing (the CreateShader payload)
+// GLSL-ES compute → naga-acceptable desktop GLSL compute (the CreateShader Glsl payload)
 // ---------------------------------------------------------------------------------------------------
 
-/// Pack a translated MSL string into the `CreateShader` word vector (gl_shim.c `ir_shader`):
-/// `[byte_len, bytes/4…]` little-endian. This is the shader-IR payload the swap path ships.
-pub fn to_words(msl: &str) -> Vec<u32> {
-    let bytes = msl.as_bytes();
-    let len = bytes.len();
-    let nwords = 1 + len.div_ceil(4);
-    let mut w = Vec::with_capacity(nwords);
-    w.push(len as u32);
-    for i in 0..nwords - 1 {
-        let mut b = [0u8; 4];
-        let rem = len - i * 4;
-        let take = rem.min(4);
-        b[..take].copy_from_slice(&bytes[i * 4..i * 4 + take]);
-        w.push(u32::from_le_bytes(b));
-    }
-    w
-}
-
-/// GLSL-ES compute (`GL_COMPUTE_SHADER`) → MSL-ish kernel source with the `cmain` entry a
-/// `CreateComputePipeline` references. This is a lightweight wrap (comment-stripped body under a
-/// `kernel void cmain(...)` shell), NOT a full compute translation: the CPU software oracle cannot run a
-/// LegacyMsl compute payload anyway (it runs only neutral KERNEL programs), so `glDispatchCompute`
-/// asserts the lowered `Cmd` stream rather than a computed result — the entry-point name is what the
-/// pipeline binds. Kept deterministic so the `CreateShader` payload is stable across runs.
+/// GLSL-ES compute (`GL_COMPUTE_SHADER`) → desktop GLSL the host compiles. We FORWARD the source (the host
+/// owns the compiler — naga on the wgpu executor) rather than pre-translating to a backend IR: strip
+/// comments + any ES `#version … es` directive and pin a desktop `#version`, so naga's `glsl-in` accepts
+/// it. The entry point stays `main` in-source and is renamed to the pipeline-bound `cmain` host-side. The
+/// software oracle does not execute a GLSL compute payload (it runs only neutral KERNEL programs), so this
+/// is asserted at the `Cmd` level; on wgpu it is a real compute module.
 pub fn translate_compute(cs_in: &str) -> String {
-    let body = strip_comments(cs_in);
+    let mut body = strip_version(&strip_comments(cs_in));
+    strip_es_precision(&mut body);
     let mut out = String::new();
-    out.push_str("#include <metal_stdlib>\nusing namespace metal;\n");
-    out.push_str("// hl-gl compute (GLES3.1 GL_COMPUTE_SHADER) — entry: cmain\n");
-    out.push_str("kernel void cmain(uint3 gid [[thread_position_in_grid]]) {\n");
+    out.push_str(GLSL_VERSION);
     out.push_str(&body);
-    out.push_str("\n}\n");
     out
 }
 
 // ---------------------------------------------------------------------------------------------------
-// GLSL-ES → MSL translation (ported verbatim from hl-shim-gl/src/translate.rs)
+// GLSL-ES → naga-acceptable desktop GLSL (the CreateShader Glsl payload)
+//
+// naga's `glsl-in` (the host compiler on the wgpu executor) accepts only DESKTOP GLSL (>= 440) with
+// `layout`-qualified `in`/`out`, explicit fragment outputs and `layout(binding=)` uniform blocks — NOT the
+// GLES `attribute`/`varying`/`gl_FragColor`/`#version N es` dialect. So the driver forwards GLSL (source,
+// not a backend IR) but regenerates each stage's DECLARATIONS from the reflected interface into the desktop
+// form, carrying the shader BODY through (desktop GLSL is a superset of the ES body syntax, modulo ES
+// precision qualifiers and the `texture2D` builtin). The host compiles the result.
+// ---------------------------------------------------------------------------------------------------
+
+/// The desktop GLSL version naga's `glsl-in` accepts (440/450/460; ES profiles are rejected).
+const GLSL_VERSION: &str = "#version 460\n";
+
+/// Strip a leading `#version …` directive line (ES or desktop) so we can pin our own desktop version.
+fn strip_version(src: &str) -> String {
+    let mut out = String::new();
+    for line in src.lines() {
+        if line.trim_start().starts_with("#version") {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Remove ES precision qualifiers from a shader body — invalid as qualifiers in desktop core GLSL.
+fn strip_es_precision(body: &mut String) {
+    wreplace(body, "lowp", "");
+    wreplace(body, "mediump", "");
+    wreplace(body, "highp", "");
+}
+
+/// Emit the data-uniform interface block at `binding = 1` (matching the frame's uniform bind entry). An
+/// anonymous block puts its members in global scope so the shader body references them by their plain name.
+fn emit_uniform_block(out: &mut String, unis: &[Decl]) {
+    if unis.is_empty() {
+        return;
+    }
+    out.push_str("layout(std140, binding = 1) uniform HlUniforms {\n");
+    for u in unis {
+        out.push_str(&format!("    {} {};\n", u.ty, u.name));
+    }
+    out.push_str("};\n");
+}
+
+/// Emit the combined image-sampler declarations (`layout(binding=k) uniform sampler2D name;`), one per
+/// declared sampler, keyed by declaration index — matching the frame's per-texture bind index.
+fn emit_sampler_decls(out: &mut String, samps: &[Decl]) {
+    for (k, s) in samps.iter().enumerate() {
+        out.push_str(&format!("layout(binding = {k}) uniform {} {};\n", s.ty, s.name));
+    }
+}
+
+/// Translate a vertex+fragment GLSL-ES pair into the naga-acceptable desktop GLSL for each stage,
+/// returned as `(vertex_glsl, fragment_glsl)`. Each is packed into its own `Glsl` `CreateShader` payload
+/// (see [`crate::model::program::Program::link`]); the render pipeline binds them as separate modules.
+pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
+    let vs = strip_comments(vs_in);
+    let fs = strip_comments(fs_in);
+
+    let attrs = collect_vertex_attrs(&vs);
+    let mut vary = collect(&vs, "varying");
+    vary.truncate(16);
+    append_decls_unique(&mut vary, collect(&vs, "out"), 16);
+    let (unis, samps) = collect_uniforms(&vs, &fs);
+    let mut fragouts = collect(&fs, "out");
+    fragouts.truncate(4);
+
+    let mut consts = collect_consts(&vs);
+    for c in collect_consts(&fs) {
+        if consts.len() >= 16 {
+            break;
+        }
+        if !consts.iter().any(|x| *x == c) {
+            consts.push(c);
+        }
+    }
+
+    // ---- vertex stage ----
+    let mut vs_out = String::new();
+    vs_out.push_str(GLSL_VERSION);
+    for c in &consts {
+        vs_out.push_str(c);
+        vs_out.push('\n');
+    }
+    for (i, a) in attrs.iter().enumerate() {
+        vs_out.push_str(&format!("layout(location = {i}) in {} {};\n", a.ty, a.name));
+    }
+    for (j, v) in vary.iter().enumerate() {
+        vs_out.push_str(&format!("layout(location = {j}) out {} {};\n", v.ty, v.name));
+    }
+    emit_uniform_block(&mut vs_out, &unis);
+    emit_sampler_decls(&mut vs_out, &samps);
+    let mut vb = main_body(&vs);
+    strip_es_precision(&mut vb);
+    sreplace(&mut vb, "texture2D(", "texture(");
+    vs_out.push_str(&format!("void main() {{\n{vb}\n}}\n"));
+
+    // ---- fragment stage ----
+    let mut fs_out = String::new();
+    fs_out.push_str(GLSL_VERSION);
+    for c in &consts {
+        fs_out.push_str(c);
+        fs_out.push('\n');
+    }
+    for (j, v) in vary.iter().enumerate() {
+        fs_out.push_str(&format!("layout(location = {j}) in {} {};\n", v.ty, v.name));
+    }
+    emit_uniform_block(&mut fs_out, &unis);
+    emit_sampler_decls(&mut fs_out, &samps);
+    // The fragment output: reuse the ES3 `out vec4 NAME;` if declared, else synthesize one and rewrite the
+    // ES2 `gl_FragColor` builtin onto it (desktop core GLSL has no `gl_FragColor`).
+    let frag_name = fragouts
+        .first()
+        .map(|d| d.name.clone())
+        .unwrap_or_else(|| "hl_FragColor".to_string());
+    fs_out.push_str(&format!("layout(location = 0) out vec4 {frag_name};\n"));
+    let mut fb = main_body(&fs);
+    strip_es_precision(&mut fb);
+    sreplace(&mut fb, "texture2D(", "texture(");
+    if fragouts.is_empty() {
+        wreplace(&mut fb, "gl_FragColor", &frag_name);
+    }
+    fs_out.push_str(&format!("void main() {{\n{fb}\n}}\n"));
+
+    (vs_out, fs_out)
+}
+
+// ---------------------------------------------------------------------------------------------------
+// GLSL parsing / reflection helpers (shared by the desktop-GLSL emit above and the query/introspection
+// reflection). Ported from hl-shim-gl/src/translate.rs.
 // ---------------------------------------------------------------------------------------------------
 
 #[inline]
@@ -77,31 +189,6 @@ fn is_word(c: u8) -> bool {
 }
 fn is_precision_or_interp(t: &str) -> bool {
     matches!(t, "lowp" | "mediump" | "highp" | "flat" | "smooth" | "centroid")
-}
-
-fn gl_type_to_msl(t: &str) -> String {
-    match t {
-        "vec2" => "float2",
-        "vec3" => "float3",
-        "vec4" => "float4",
-        "ivec2" => "int2",
-        "ivec3" => "int3",
-        "ivec4" => "int4",
-        "uvec2" => "uint2",
-        "uvec3" => "uint3",
-        "uvec4" => "uint4",
-        "mat2" | "mat2x2" => "float2x2",
-        "mat3" | "mat3x3" => "float3x3",
-        "mat4" | "mat4x4" => "float4x4",
-        "mat2x3" => "float2x3",
-        "mat3x2" => "float3x2",
-        "mat2x4" => "float2x4",
-        "mat4x2" => "float4x2",
-        "mat3x4" => "float3x4",
-        "mat4x3" => "float4x3",
-        _ => return t.to_string(),
-    }
-    .to_string()
 }
 
 /// `collect` — parse `kw TYPE name;` declarations from `src` (skipping precision/interpolation
@@ -264,208 +351,6 @@ fn sreplace(buf: &mut String, from: &str, to: &str) {
     *buf = out;
 }
 
-fn type_fixups(b: &mut String) {
-    wreplace(b, "lowp", "");
-    wreplace(b, "mediump", "");
-    wreplace(b, "highp", "");
-    wreplace(b, "vec2", "float2");
-    wreplace(b, "vec3", "float3");
-    wreplace(b, "vec4", "float4");
-    wreplace(b, "ivec2", "int2");
-    wreplace(b, "ivec3", "int3");
-    wreplace(b, "ivec4", "int4");
-    wreplace(b, "uvec2", "uint2");
-    wreplace(b, "uvec3", "uint3");
-    wreplace(b, "uvec4", "uint4");
-    sreplace(b, "mat3x2(", "hl_mat3x2(");
-    wreplace(b, "mat2x2", "float2x2");
-    wreplace(b, "mat2x3", "float2x3");
-    wreplace(b, "mat2x4", "float2x4");
-    wreplace(b, "mat3x2", "float3x2");
-    wreplace(b, "mat3x3", "float3x3");
-    wreplace(b, "mat3x4", "float3x4");
-    wreplace(b, "mat4x2", "float4x2");
-    wreplace(b, "mat4x3", "float4x3");
-    wreplace(b, "mat4x4", "float4x4");
-    wreplace(b, "mat2", "float2x2");
-    wreplace(b, "mat3", "float3x3");
-    wreplace(b, "mat4", "float4x4");
-}
-
-/// `fn(a, b)` → `((a) op (b))` for the top-level 2-arg case (gl_shim.c `call2_fixup`).
-fn call2_fixup(buf: &mut String, func: &str, op: &str) {
-    let b = buf.as_bytes();
-    let fb = func.as_bytes();
-    let fl = fb.len();
-    let n = b.len();
-    let mut out = String::with_capacity(n);
-    let mut i = 0;
-    while i < n {
-        if i + fl < n && &b[i..i + fl] == fb && b[i + fl] == b'(' {
-            let before = if i > 0 { b[i - 1] } else { b' ' };
-            if !is_word(before) {
-                let a0 = i + fl + 1;
-                let mut j = a0;
-                let mut comma = 0usize;
-                let mut depth = 1i32;
-                while j < n && depth != 0 {
-                    match b[j] {
-                        b'(' => depth += 1,
-                        b')' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                break;
-                            }
-                        }
-                        b',' if depth == 1 && comma == 0 => comma = j,
-                        _ => {}
-                    }
-                    j += 1;
-                }
-                if j < n && b[j] == b')' && comma != 0 {
-                    out.push('(');
-                    out.push('(');
-                    out.push_str(&String::from_utf8_lossy(&b[a0..comma]));
-                    out.push(')');
-                    out.push(' ');
-                    out.push_str(op);
-                    out.push(' ');
-                    out.push('(');
-                    out.push_str(&String::from_utf8_lossy(&b[comma + 1..j]));
-                    out.push(')');
-                    out.push(')');
-                    i = j + 1;
-                    continue;
-                }
-            }
-        }
-        out.push(b[i] as char);
-        i += 1;
-    }
-    *buf = out;
-}
-
-fn relational_fixups(b: &mut String) {
-    call2_fixup(b, "greaterThanEqual", ">=");
-    call2_fixup(b, "lessThanEqual", "<=");
-    call2_fixup(b, "greaterThan", ">");
-    call2_fixup(b, "lessThan", "<");
-    call2_fixup(b, "notEqual", "!=");
-    call2_fixup(b, "equal", "==");
-}
-
-/// Rename `fn(...)`→`to(...)` only when it has a top-level comma (2+ args) — gl_shim.c `rename_call2`.
-fn rename_call2(buf: &mut String, func: &str, to: &str) {
-    let b = buf.as_bytes();
-    let fb = func.as_bytes();
-    let fl = fb.len();
-    let n = b.len();
-    let mut out = String::with_capacity(n);
-    let mut i = 0;
-    while i < n {
-        if i + fl < n && &b[i..i + fl] == fb && b[i + fl] == b'(' && (i == 0 || !is_word(b[i - 1])) {
-            let mut j = i + fl + 1;
-            let mut depth = 1i32;
-            let mut comma = false;
-            while j < n && depth != 0 {
-                match b[j] {
-                    b'(' => depth += 1,
-                    b')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    b',' if depth == 1 => comma = true,
-                    _ => {}
-                }
-                j += 1;
-            }
-            if comma {
-                out.push_str(to);
-                i += fl;
-                continue;
-            }
-        }
-        out.push(b[i] as char);
-        i += 1;
-    }
-    *buf = out;
-}
-
-fn builtin_fixups(b: &mut String) {
-    wreplace(b, "dFdx", "dfdx");
-    wreplace(b, "dFdy", "dfdy");
-    wreplace(b, "inversesqrt", "rsqrt");
-    rename_call2(b, "atan", "atan2");
-    wreplace(b, "mod", "hl_mod");
-}
-
-const HL_MOD_HELPERS: &str = "template<typename T> inline T hl_mod(T x, T y) { return x - y * floor(x / y); }\ninline float2 hl_mod(float2 x, float y) { return x - y * floor(x / y); }\ninline float3 hl_mod(float3 x, float y) { return x - y * floor(x / y); }\ninline float4 hl_mod(float4 x, float y) { return x - y * floor(x / y); }\n";
-const HL_MAT3X2_HELPER: &str = "inline float3x2 hl_mat3x2(float3x3 m) { return float3x2(m[0].xy, m[1].xy, m[2].xy); }\ninline float3x2 hl_mat3x2(float2 a, float2 b, float2 c) { return float3x2(a, b, c); }\n";
-
-fn local_decl_fixups(b: &mut String) {
-    for ty in ["float", "float2", "float3", "float4", "int", "int2", "int3", "int4", "uint", "uint2", "uint3", "uint4"] {
-        sreplace(b, &format!("{ty} in."), &format!("{ty} "));
-    }
-}
-
-/// Rewrite `vecN( EXPR )` truncations (single top-level arg containing a top-level `*`) to a swizzle
-/// (gl_shim.c `fix_trunc`). Runs before `type_fixups`.
-fn fix_trunc(buf: &mut String) {
-    let b = buf.as_bytes();
-    let n = b.len();
-    let mut out = String::with_capacity(n);
-    let mut i = 0;
-    while i < n {
-        let mut nn = 0;
-        if b[i..].starts_with(b"vec2(") {
-            nn = 2;
-        } else if b[i..].starts_with(b"vec3(") {
-            nn = 3;
-        }
-        if nn != 0 {
-            let before = if i > 0 { b[i - 1] } else { b' ' };
-            if is_word(before) {
-                nn = 0;
-            }
-        }
-        if nn != 0 {
-            let start = i + 5;
-            let mut j = start;
-            let mut depth = 1i32;
-            let mut topcomma = false;
-            let mut topstar = false;
-            while j < n && depth != 0 {
-                match b[j] {
-                    b'(' => depth += 1,
-                    b')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    b',' if depth == 1 => topcomma = true,
-                    b'*' if depth == 1 => topstar = true,
-                    _ => {}
-                }
-                j += 1;
-            }
-            if j < n && b[j] == b')' && !topcomma && topstar {
-                out.push('(');
-                out.push_str(&String::from_utf8_lossy(&b[start..j]));
-                out.push(')');
-                out.push_str(if nn == 3 { ".xyz" } else { ".xy" });
-                i = j + 1;
-                continue;
-            }
-        }
-        out.push(b[i] as char);
-        i += 1;
-    }
-    *buf = out;
-}
-
 /// Global `const TYPE name = …;` declarations before `main()` (gl_shim.c `collect_consts`).
 fn collect_consts(src: &str) -> Vec<String> {
     let b = src.as_bytes();
@@ -576,29 +461,6 @@ pub fn collect_vertex_attrs(vs: &str) -> Vec<Decl> {
     attrs
 }
 
-/// Append the per-stage texture/sampler MSL params for the samplers a stage references
-/// (gl_shim.c `emit_samp_params`).
-fn emit_samp_params(out: &mut String, body: &str, samps: &[Decl]) {
-    for (i, s) in samps.iter().enumerate() {
-        if !body.contains(&s.name) {
-            continue;
-        }
-        out.push_str(&format!(
-            ", texture2d<float> {} [[texture({})]], sampler {}Smplr [[sampler({})]]",
-            s.name, i, s.name, i
-        ));
-    }
-}
-
-/// `texture2D(NAME,` / `texture(NAME,` → `NAME.sample(NAMESmplr,` (gl_shim.c `sampler_fixups`).
-fn sampler_fixups(b: &mut String, samps: &[Decl]) {
-    for s in samps {
-        let to = format!("{}.sample({}Smplr", s.name, s.name);
-        sreplace(b, &format!("texture2D({}", s.name), &to);
-        sreplace(b, &format!("texture({}", s.name), &to);
-    }
-}
-
 /// MSL struct member (size, align) for a GLSL uniform type (gl_shim.c `msl_type_layout`).
 fn msl_type_layout(t: &str) -> Option<(i32, i32)> {
     Some(match t {
@@ -665,118 +527,4 @@ pub fn program_frag_outputs(fs: &str) -> Vec<Decl> {
     let mut outs = collect(&strip_comments(fs), "out");
     outs.truncate(4);
     outs
-}
-
-/// Translate a vertex+fragment GLSL-ES pair into one combined MSL source (gl_shim.c `translate`).
-pub fn translate(vs_in: &str, fs_in: &str) -> String {
-    let vs = strip_comments(vs_in);
-    let fs = strip_comments(fs_in);
-
-    let attrs = collect_vertex_attrs(&vs);
-    let mut vary = collect(&vs, "varying");
-    vary.truncate(16);
-    append_decls_unique(&mut vary, collect(&vs, "out"), 16);
-    let mut fragouts = collect(&fs, "out");
-    fragouts.truncate(4);
-    let (unis, samps) = collect_uniforms(&vs, &fs);
-    let mut consts = collect_consts(&vs);
-    for c in collect_consts(&fs) {
-        if consts.len() >= 16 {
-            break;
-        }
-        if !consts.iter().any(|x| *x == c) {
-            consts.push(c);
-        }
-    }
-
-    let mut out = String::new();
-    out.push_str("#include <metal_stdlib>\nusing namespace metal;\n");
-    if vs.contains("mod(") || fs.contains("mod(") {
-        out.push_str(HL_MOD_HELPERS);
-    }
-    if vs.contains("mat3x2(") || fs.contains("mat3x2(") {
-        out.push_str(HL_MAT3X2_HELPER);
-    }
-    for c in &consts {
-        let mut line = c.clone();
-        type_fixups(&mut line);
-        if let Some(pos) = line.find("const") {
-            let ok = pos == 0 || matches!(line.as_bytes()[pos - 1], b' ' | b'\n');
-            if ok {
-                out.push_str(&format!("constant {}\n", &line[pos + 5..]));
-            }
-        }
-    }
-
-    let has_u = !unis.is_empty();
-    if has_u {
-        out.push_str("struct Uniforms {\n");
-        for u in &unis {
-            out.push_str(&format!("  {} {};\n", gl_type_to_msl(&u.ty), u.name));
-        }
-        out.push_str("};\n");
-    }
-    out.push_str("struct VIn {\n");
-    for (i, a) in attrs.iter().enumerate() {
-        out.push_str(&format!("  {} {} [[attribute({})]];\n", gl_type_to_msl(&a.ty), a.name, i));
-    }
-    out.push_str("};\n");
-    out.push_str("struct VOut {\n  float4 position [[position]];\n");
-    for (i, v) in vary.iter().enumerate() {
-        out.push_str(&format!("  {} {} [[user(v{})]];\n", gl_type_to_msl(&v.ty), v.name, i));
-    }
-    out.push_str("};\n");
-    let uparam = if has_u { ", constant Uniforms& u [[buffer(1)]]" } else { "" };
-
-    // vertex
-    let mut vb = main_body(&vs);
-    fix_trunc(&mut vb);
-    type_fixups(&mut vb);
-    builtin_fixups(&mut vb);
-    sampler_fixups(&mut vb, &samps);
-    for a in &attrs {
-        wreplace(&mut vb, &a.name, &format!("in.{}", a.name));
-    }
-    for v in &vary {
-        wreplace(&mut vb, &v.name, &format!("out.{}", v.name));
-    }
-    for u in &unis {
-        wreplace(&mut vb, &u.name, &format!("u.{}", u.name));
-    }
-    wreplace(&mut vb, "gl_Position", "out.position");
-    local_decl_fixups(&mut vb);
-    out.push_str(&format!("vertex VOut vmain(VIn in [[stage_in]]{uparam}"));
-    emit_samp_params(&mut out, &vb, &samps);
-    out.push_str(&format!(") {{\n  VOut out;\n{vb}\n  return out;\n}}\n"));
-
-    // fragment
-    let mut fb = main_body(&fs);
-    let frag_uses_coord = fb.contains("gl_FragCoord");
-    fix_trunc(&mut fb);
-    type_fixups(&mut fb);
-    builtin_fixups(&mut fb);
-    sampler_fixups(&mut fb, &samps);
-    for v in &vary {
-        wreplace(&mut fb, &v.name, &format!("in.{}", v.name));
-    }
-    for u in &unis {
-        wreplace(&mut fb, &u.name, &format!("u.{}", u.name));
-    }
-    for fo in &fragouts {
-        wreplace(&mut fb, &fo.name, "_frag");
-    }
-    wreplace(&mut fb, "gl_FragColor", "_frag");
-    wreplace(&mut fb, "gl_FragCoord", "_dd_FragCoord");
-    relational_fixups(&mut fb);
-    local_decl_fixups(&mut fb);
-    out.push_str("fragment float4 fmain(VOut in [[stage_in]]");
-    out.push_str(uparam);
-    emit_samp_params(&mut out, &fb, &samps);
-    out.push_str(") {\n  float4 _frag = float4(0);\n");
-    if frag_uses_coord {
-        out.push_str("  float4 _dd_FragCoord = in.position;\n");
-    }
-    out.push_str(&format!("{fb}\n  return _frag;\n}}\n"));
-
-    out
 }

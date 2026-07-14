@@ -11,13 +11,21 @@
 
 use hl_gpu::protocol::model::command::{CommandBuffer, Enc};
 use hl_gpu::protocol::model::descriptor::ColorAttachment;
-use hl_gpu::protocol::model::enums::LoadOp;
+use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
 use crate::convert::{clear_texel, texel_bytes};
 use crate::pipeline::{self, PipelineNative};
-use crate::{bindgroup, fence, texture, WgpuExecutor};
+use crate::{bindgroup, buffer, fence, texture, WgpuExecutor};
+
+/// Protocol index format → wgpu index format.
+fn index_format(f: IndexFormat) -> wgpu::IndexFormat {
+    match f {
+        IndexFormat::U16 => wgpu::IndexFormat::Uint16,
+        IndexFormat::U32 => wgpu::IndexFormat::Uint32,
+    }
+}
 
 impl WgpuExecutor {
     pub(crate) fn submit_cb(&mut self, res: &mut SessionResources, cb: &CommandBuffer) -> Result<()> {
@@ -195,6 +203,14 @@ impl WgpuExecutor {
                         pass.set_viewport(*x, *y, *w, *h, *min_depth, *max_depth);
                     }
                     Enc::SetScissor { x, y, w, h } => pass.set_scissor_rect(*x, *y, *w, *h),
+                    Enc::SetVertexBuffer { slot, buffer, offset } => {
+                        let vb = buffer::native(res, *buffer)?;
+                        pass.set_vertex_buffer(*slot, vb.buffer.slice(*offset..));
+                    }
+                    Enc::SetIndexBuffer { buffer, offset, format } => {
+                        let ib = buffer::native(res, *buffer)?;
+                        pass.set_index_buffer(ib.buffer.slice(*offset..), index_format(*format));
+                    }
                     Enc::Draw { vertex_count, instance_count, first_vertex, first_instance } => {
                         let (pid, bg) = &draws[di];
                         di += 1;
@@ -206,6 +222,27 @@ impl WgpuExecutor {
                         }
                         pass.draw(
                             *first_vertex..*first_vertex + *vertex_count,
+                            *first_instance..*first_instance + *instance_count,
+                        );
+                    }
+                    Enc::DrawIndexed {
+                        index_count,
+                        instance_count,
+                        first_index,
+                        base_vertex,
+                        first_instance,
+                    } => {
+                        let (pid, bg) = &draws[di];
+                        di += 1;
+                        if let PipelineNative::Render { pipeline, .. } = pipeline::native(res, *pid)? {
+                            pass.set_pipeline(pipeline);
+                        }
+                        if let Some(bg) = bg {
+                            pass.set_bind_group(0, bg, &[]);
+                        }
+                        pass.draw_indexed(
+                            *first_index..*first_index + *index_count,
+                            *base_vertex,
                             *first_instance..*first_instance + *instance_count,
                         );
                     }

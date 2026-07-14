@@ -11,11 +11,11 @@ use hl_gpu::protocol::model::enums::*;
 use hl_gpu::{decode_stream, encode_stream, WIRE_VERSION};
 
 #[test]
-fn wire_version_is_pinned_at_5() {
+fn wire_version_is_pinned_at_6() {
     // A change here must be intentional: it is the negotiated handshake version that keeps a stale
-    // guest/backend pair from reinterpreting a tag it predates. Bumped 4 → 5 when the additive
-    // `FillBuffer` encoder op (etag 21) was introduced; no existing message's bytes changed.
-    assert_eq!(WIRE_VERSION, 5);
+    // guest/backend pair from reinterpreting a tag it predates. Bumped 5 → 6 when the additive `Glsl`
+    // shader-payload channel (leading `GLSL_MAGIC`) was introduced; no existing message's bytes changed.
+    assert_eq!(WIRE_VERSION, 6);
 }
 
 /// Stream A: buffer create + write + fence create + wait + destroy.
@@ -110,6 +110,38 @@ fn golden_c_shader_magic_bytes_are_stable() {
     let back = decode_stream(GOLDEN_C).unwrap();
     assert!(matches!(back[0], Cmd::CreateShader { kind: ShaderPayloadKind::SpirV, .. }));
     assert!(matches!(back[1], Cmd::CreateShader { kind: ShaderPayloadKind::PtxKernel, .. }));
+}
+
+/// Stream D: a forwarded GLSL vertex shader — the `Glsl` payload channel added at WIRE_VERSION 6. The
+/// payload leads with `GLSL_MAGIC` and carries `(stage, entry, source)`; the decoder re-derives the kind
+/// from the magic exactly as it does for SPIR-V / kernel. Frozen so a wire change to this new channel is a
+/// deliberate, reviewed edit.
+const GOLDEN_D: &[u8] = &[
+    0x08, 0x05, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x01, 0x00, 0x67,
+    0xdd, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00,
+    0x00, 0x76, 0x6d, 0x61, 0x69, 0x6e, 0x1b, 0x00, 0x00, 0x00, 0x23, 0x76,
+    0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x20, 0x34, 0x36, 0x30, 0x0a, 0x76,
+    0x6f, 0x69, 0x64, 0x20, 0x6d, 0x61, 0x69, 0x6e, 0x28, 0x29, 0x7b, 0x7d,
+    0x0a,
+];
+
+fn stream_d() -> Vec<Cmd> {
+    use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
+    let gd = GlslDescriptor {
+        stage: glsl_stage::VERTEX,
+        entry: "vmain".into(),
+        source: "#version 460\nvoid main(){}\n".into(),
+    };
+    vec![Cmd::CreateShader { id: 5, kind: ShaderPayloadKind::Glsl, spirv: gd.to_words() }]
+}
+
+#[test]
+fn golden_d_glsl_payload_bytes_are_stable() {
+    assert_eq!(encode_stream(&stream_d()), GOLDEN_D);
+    // The magic-led payload round-trips AND classifies as Glsl on decode.
+    assert_eq!(decode_stream(GOLDEN_D).unwrap(), stream_d());
+    let back = decode_stream(GOLDEN_D).unwrap();
+    assert!(matches!(back[0], Cmd::CreateShader { kind: ShaderPayloadKind::Glsl, .. }));
 }
 
 #[test]

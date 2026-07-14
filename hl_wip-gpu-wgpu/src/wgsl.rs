@@ -49,14 +49,18 @@ pub fn spirv_to_wgsl(words: &[u32]) -> Result<String> {
     module_to_wgsl(&module)
 }
 
-/// Translate GLSL source (the GLES path) to WGSL for `stage`. Part of the shader-translation surface
-/// (the guest GLES front end forwards GLSL); not exercised by the current conformance suite.
-#[allow(dead_code)]
-pub fn glsl_to_wgsl(src: &str, stage: naga::ShaderStage) -> Result<String> {
+/// Translate GLSL source (the forwarded GLES/GL driver path) to WGSL for `stage`, naming the emitted entry
+/// point `entry`. naga's `glsl-in` always names the single entry point `main`; the render/compute pipeline
+/// binds the driver-declared name (`vmain`/`fmain`/`cmain`) via its `ShaderRef`, so we rename the entry
+/// point to `entry` before `wgsl-out` writes it. Handles vertex, fragment, and compute stages.
+pub fn glsl_to_wgsl(src: &str, stage: naga::ShaderStage, entry: &str) -> Result<String> {
     let mut frontend = naga::front::glsl::Frontend::default();
-    let module = frontend
+    let mut module = frontend
         .parse(&naga::front::glsl::Options::from(stage), src)
         .map_err(|e| err(format!("glsl-in: {e:?}")))?;
+    if let Some(ep) = module.entry_points.first_mut() {
+        ep.name = entry.to_string();
+    }
     module_to_wgsl(&module)
 }
 

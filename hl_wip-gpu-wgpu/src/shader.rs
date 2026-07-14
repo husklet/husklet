@@ -1,13 +1,14 @@
 //! Native shader modules — the point where each protocol shader payload becomes something wgpu compiles.
 //!
-//! A SPIR-V (or GLSL) *graphics* payload is translated to WGSL by naga at create time and handed to
-//! `create_shader_module`, so the guest's real vertex/fragment SPIR-V executes on the device. A neutral
-//! *kernel* payload (`PtxKernel`) is kept as its compiled [`KernelProgram`] and lowered to a WGSL compute
-//! entry point when a compute pipeline references it (see `pipeline.rs`). Legacy MSL / demo-builtin
-//! payloads have no honest WGSL translation and are rejected rather than silently substituted.
+//! A SPIR-V payload (spv-in) or a forwarded GLSL payload (glsl-in, the `GlslDescriptor` the GLES/GL driver
+//! ships) is translated to WGSL by naga at create time and handed to `create_shader_module`, so the guest's
+//! real vertex/fragment shader executes on the device. A neutral *kernel* payload (`PtxKernel`) is kept as
+//! its compiled [`KernelProgram`] and lowered to a WGSL compute entry point when a compute pipeline
+//! references it (see `pipeline.rs`). Legacy MSL / demo-builtin payloads have no honest WGSL translation and
+//! are rejected rather than silently substituted.
 
 use hl_gpu::protocol::model::command::ShaderPayloadKind;
-use hl_gpu::protocol::model::kernel::{KernelDescriptor, KernelProgram};
+use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor, KernelDescriptor, KernelProgram};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
@@ -63,6 +64,28 @@ impl WgpuExecutor {
                 let src = wgsl::spirv_to_wgsl(words)?;
                 let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("hl-spirv"),
+                    source: wgpu::ShaderSource::Wgsl(src.into()),
+                });
+                ShaderNative::Graphics(module)
+            }
+            ShaderPayloadKind::Glsl => {
+                // The guest GLES/GL driver forwards its GLSL source VERBATIM (a `GlslDescriptor` led by
+                // `GLSL_MAGIC`); the host owns the compiler. naga's `glsl-in` lowers it to a naga module,
+                // which `wgsl-out` writes as the WGSL wgpu compiles — so real GL geometry rasterizes on the
+                // device instead of the old MSL-pretranslated payload the executor could not consume.
+                let desc = GlslDescriptor::from_words(words)
+                    .ok_or(GpuError::Invalid("wgpu: GLSL payload missing GLSL_MAGIC"))??;
+                let stage = match desc.stage {
+                    glsl_stage::VERTEX => naga::ShaderStage::Vertex,
+                    glsl_stage::FRAGMENT => naga::ShaderStage::Fragment,
+                    glsl_stage::COMPUTE => naga::ShaderStage::Compute,
+                    other => {
+                        return Err(GpuError::Kernel(format!("wgpu: unknown GLSL stage {other}")))
+                    }
+                };
+                let src = wgsl::glsl_to_wgsl(&desc.source, stage, &desc.entry)?;
+                let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("hl-glsl"),
                     source: wgpu::ShaderSource::Wgsl(src.into()),
                 });
                 ShaderNative::Graphics(module)

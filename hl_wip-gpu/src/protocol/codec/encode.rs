@@ -8,7 +8,7 @@ use super::wire::Encoder;
 use crate::protocol::model::capability::Capabilities;
 use crate::protocol::model::command::{etag, tag, Cmd, CommandBuffer, Enc};
 use crate::protocol::model::descriptor::*;
-use crate::protocol::model::kernel::{KernelDescriptor, KERNEL_MAGIC};
+use crate::protocol::model::kernel::{GlslDescriptor, KernelDescriptor, GLSL_MAGIC, KERNEL_MAGIC};
 
 // ---------------------------------------------------------------------------------------------------
 // descriptors
@@ -520,6 +520,33 @@ impl KernelDescriptor {
         let bytes = e.into_vec();
         let mut words = Vec::with_capacity(2 + bytes.len() / 4 + 1);
         words.push(KERNEL_MAGIC);
+        words.push(bytes.len() as u32);
+        for chunk in bytes.chunks(4) {
+            let mut b = [0u8; 4];
+            b[..chunk.len()].copy_from_slice(chunk);
+            words.push(u32::from_le_bytes(b));
+        }
+        words
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// GLSL descriptor → CreateShader words
+// ---------------------------------------------------------------------------------------------------
+
+impl GlslDescriptor {
+    /// Serialize into `CreateShader` shader words led by [`GLSL_MAGIC`]:
+    /// `[GLSL_MAGIC, byte_len, ...packed(stage, entry, source)...]`. The leading magic is what the decoder
+    /// classifies the payload by (→ [`super::super::model::command::ShaderPayloadKind::Glsl`]), exactly as
+    /// SPIR-V / kernel payloads are self-identifying.
+    pub fn to_words(&self) -> Vec<u32> {
+        let mut e = Encoder::new();
+        e.u32(self.stage);
+        e.str(&self.entry);
+        e.str(&self.source);
+        let bytes = e.into_vec();
+        let mut words = Vec::with_capacity(2 + bytes.len() / 4 + 1);
+        words.push(GLSL_MAGIC);
         words.push(bytes.len() as u32);
         for chunk in bytes.chunks(4) {
             let mut b = [0u8; 4];

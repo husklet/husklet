@@ -88,7 +88,7 @@ fn lower_dispatch(ctx: &mut GlContext, sink: &mut dyn CommandSink, grid: (u32, u
 
     // Compute shader + pipeline.
     let shader_ir = ctx.alloc_shader_ir();
-    cmds.push(Cmd::CreateShader { id: shader_ir, kind: ShaderPayloadKind::LegacyMsl, spirv: compute_ir });
+    cmds.push(Cmd::CreateShader { id: shader_ir, kind: ShaderPayloadKind::Glsl, spirv: compute_ir });
     let pipeline_ir = ctx.alloc_pipeline_ir();
     cmds.push(Cmd::CreateComputePipeline(
         pipeline_ir,
