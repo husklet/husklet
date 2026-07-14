@@ -333,6 +333,63 @@ fn texture_clear_then_copy_to_buffer() {
 }
 
 // -------------------------------------------------------------------------------------------------
+// FillBuffer — device-side memset (etag 21, WIRE_VERSION 5)
+// -------------------------------------------------------------------------------------------------
+
+#[test]
+fn fill_buffer_writes_repeating_pattern() {
+    // Fill an 8-byte buffer with the little-endian pattern of 0xAABBCCDD, then read it back: the pattern
+    // tiles from the fill offset (LE bytes DD CC BB AA repeated).
+    let mut exec = hl_gpu::CpuExecutor::new();
+    let s = run_batch(
+        &mut exec,
+        &[
+            Cmd::CreateBuffer(1, buf(8, buffer_usage::COPY_DST | buffer_usage::COPY_SRC)),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![Enc::FillBuffer { buffer: 1, offset: 0, size: 8, value: 0xAABB_CCDD }],
+                signal: None,
+            }),
+        ],
+    );
+    let mut out = [0u8; 8];
+    exec.read_buffer(&s.resources, BufferId(1), 0, &mut out).unwrap();
+    assert_eq!(out, [0xDD, 0xCC, 0xBB, 0xAA, 0xDD, 0xCC, 0xBB, 0xAA]);
+}
+
+#[test]
+fn fill_buffer_scopes_to_offset_and_size() {
+    // A sub-range fill must leave the bytes outside [offset, offset+size) untouched, and a size that is
+    // not a multiple of 4 fills a partial pattern at the tail.
+    let mut exec = hl_gpu::CpuExecutor::new();
+    let s = run_batch(
+        &mut exec,
+        &[
+            Cmd::CreateBuffer(1, buf(8, buffer_usage::COPY_DST | buffer_usage::COPY_SRC)),
+            Cmd::WriteBuffer { id: 1, offset: 0, data: vec![0xFF; 8] },
+            Cmd::Submit(CommandBuffer {
+                // fill bytes [2, 5): three bytes, pattern DD CC BB tiled from the region start.
+                encoder: vec![Enc::FillBuffer { buffer: 1, offset: 2, size: 3, value: 0xAABB_CCDD }],
+                signal: None,
+            }),
+        ],
+    );
+    let mut out = [0u8; 8];
+    exec.read_buffer(&s.resources, BufferId(1), 0, &mut out).unwrap();
+    assert_eq!(out, [0xFF, 0xFF, 0xDD, 0xCC, 0xBB, 0xFF, 0xFF, 0xFF]);
+}
+
+#[test]
+fn fill_buffer_round_trips_through_codec() {
+    // The new encoder op survives encode → decode unchanged (additive wire round-trip).
+    use hl_gpu::{decode_stream, encode_stream};
+    let cmds = vec![Cmd::Submit(CommandBuffer {
+        encoder: vec![Enc::FillBuffer { buffer: 7, offset: 16, size: 64, value: 0x1234_5678 }],
+        signal: None,
+    })];
+    assert_eq!(decode_stream(&encode_stream(&cmds)).unwrap(), cmds);
+}
+
+// -------------------------------------------------------------------------------------------------
 // compute dispatch — kernel-IR programs executed on the CPU oracle
 // -------------------------------------------------------------------------------------------------
 

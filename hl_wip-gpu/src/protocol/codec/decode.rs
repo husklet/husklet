@@ -318,6 +318,12 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
             dst_origin: dec_origin(d)?,
             extent: dec_extent(d)?,
         },
+        etag::FILL_BUFFER => Enc::FillBuffer {
+            buffer: d.u32()?,
+            offset: d.u64()?,
+            size: d.u64()?,
+            value: d.u32()?,
+        },
         t => return Err(GpuError::BadTag(t as u32)),
     })
 }

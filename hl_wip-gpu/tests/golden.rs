@@ -11,10 +11,11 @@ use hl_gpu::protocol::model::enums::*;
 use hl_gpu::{decode_stream, encode_stream, WIRE_VERSION};
 
 #[test]
-fn wire_version_is_pinned_at_4() {
+fn wire_version_is_pinned_at_5() {
     // A change here must be intentional: it is the negotiated handshake version that keeps a stale
-    // guest/backend pair from reinterpreting a tag it predates.
-    assert_eq!(WIRE_VERSION, 4);
+    // guest/backend pair from reinterpreting a tag it predates. Bumped 4 → 5 when the additive
+    // `FillBuffer` encoder op (etag 21) was introduced; no existing message's bytes changed.
+    assert_eq!(WIRE_VERSION, 5);
 }
 
 /// Stream A: buffer create + write + fence create + wait + destroy.

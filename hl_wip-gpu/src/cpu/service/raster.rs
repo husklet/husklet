@@ -9,8 +9,8 @@ use crate::cpu::format::{
 };
 use crate::cpu::model::pipeline::Pipeline;
 use crate::cpu::model::{pipeline, texture, texture_mut};
-use crate::protocol::model::descriptor::BlendState;
-use crate::protocol::model::enums::{IndexFormat, TextureFormat, Topology};
+use crate::protocol::model::descriptor::{BlendState, DepthState};
+use crate::protocol::model::enums::{compare, IndexFormat, TextureFormat, Topology};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::resources::SessionResources;
 
@@ -63,40 +63,69 @@ pub(crate) fn clear_rect(
     Ok(())
 }
 
-/// Fetch the pipeline's raster state (topology, per-target blend, slot-0 vertex stride) if it is a render
-/// pipeline whose first vertex layout can carry positions. `None` => nothing to rasterize.
+/// A `BeginRenderPass` `LoadOp::Clear` on a depth attachment: fill the whole `Depth32Float` plane with
+/// the packed clear depth (little-endian f32, one per texel).
+pub(crate) fn clear_depth_target(res: &mut SessionResources, texture_id: u32, clear: f32) -> Result<()> {
+    let (w, h) = {
+        let t = texture(res, texture_id)?;
+        (t.desc.width as usize, t.desc.height as usize)
+    };
+    let bytes = clear.to_le_bytes();
+    let t = texture_mut(res, texture_id)?;
+    let n = w * h;
+    t.pixels.clear();
+    t.pixels.reserve(n * 4);
+    for _ in 0..n {
+        t.pixels.extend_from_slice(&bytes);
+    }
+    Ok(())
+}
+
+/// Fetch the pipeline's raster state (topology, per-target blend, slot-0 vertex stride, depth state) if it
+/// is a render pipeline whose first vertex layout can carry positions. `None` => nothing to rasterize.
 fn raster_state(
     res: &SessionResources,
     pipeline_id: Option<u32>,
-) -> Result<Option<(Topology, Vec<Option<BlendState>>, usize)>> {
+) -> Result<Option<(Topology, Vec<Option<BlendState>>, usize, Option<DepthState>)>> {
     let pid = match pipeline_id {
         Some(p) => p,
         None => return Ok(None),
     };
     match pipeline(res, pid)? {
-        Pipeline::Render { vertex_layouts, topology, blends, .. } => {
+        Pipeline::Render { vertex_layouts, topology, blends, depth, .. } => {
             let stride = match vertex_layouts.first() {
                 Some(l) if l.stride as usize >= 8 => l.stride as usize,
                 _ => return Ok(None),
             };
-            Ok(Some((*topology, blends.clone(), stride)))
+            Ok(Some((*topology, blends.clone(), stride, depth.clone())))
         }
         Pipeline::Compute { .. } => Ok(None),
     }
 }
 
+/// Resolve the active depth attachment for a draw: pair the render pass's depth-attachment texture with
+/// the pipeline's depth state. Depth testing runs only when BOTH are present.
+fn active_depth(depth_tex: Option<u32>, depth_state: Option<DepthState>) -> Option<(u32, DepthState)> {
+    match (depth_tex, depth_state) {
+        (Some(t), Some(s)) => Some((t, s)),
+        _ => None,
+    }
+}
+
 /// Execute a non-indexed `Draw`: fetch `[first_vertex, first_vertex+vertex_count)` from slot-0's vertex
 /// buffer and rasterize into the bound color attachments.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn exec_draw(
     res: &mut SessionResources,
     pipeline_id: Option<u32>,
     targets: &[(u32, TextureFormat)],
+    depth_tex: Option<u32>,
     vertex_buffer: Option<(u32, u64)>,
     first_vertex: u32,
     vertex_count: u32,
     instance_count: u32,
 ) -> Result<()> {
-    let (topology, blends, stride) = match raster_state(res, pipeline_id)? {
+    let (topology, blends, stride, depth_state) = match raster_state(res, pipeline_id)? {
         Some(s) => s,
         None => return Ok(()),
     };
@@ -116,8 +145,9 @@ pub(crate) fn exec_draw(
         }
         out
     };
+    let depth = active_depth(depth_tex, depth_state);
     for _ in 0..instance_count.max(1) {
-        raster_draw(res, targets, &blends, topology, &verts)?;
+        raster_draw(res, targets, &blends, topology, &verts, depth.clone())?;
     }
     Ok(())
 }
@@ -129,6 +159,7 @@ pub(crate) fn exec_draw_indexed(
     res: &mut SessionResources,
     pipeline_id: Option<u32>,
     targets: &[(u32, TextureFormat)],
+    depth_tex: Option<u32>,
     vertex_buffer: Option<(u32, u64)>,
     index_buffer: Option<(u32, u64, IndexFormat)>,
     first_index: u32,
@@ -136,7 +167,7 @@ pub(crate) fn exec_draw_indexed(
     base_vertex: i32,
     instance_count: u32,
 ) -> Result<()> {
-    let (topology, blends, stride) = match raster_state(res, pipeline_id)? {
+    let (topology, blends, stride, depth_state) = match raster_state(res, pipeline_id)? {
         Some(s) => s,
         None => return Ok(()),
     };
@@ -189,8 +220,9 @@ pub(crate) fn exec_draw_indexed(
         }
         out
     };
+    let depth = active_depth(depth_tex, depth_state);
     for _ in 0..instance_count.max(1) {
-        raster_draw(res, targets, &blends, topology, &verts)?;
+        raster_draw(res, targets, &blends, topology, &verts, depth.clone())?;
     }
     Ok(())
 }
@@ -204,6 +236,7 @@ fn raster_draw(
     blends: &[Option<BlendState>],
     topology: Topology,
     verts: &[DrawVertex],
+    depth: Option<(u32, DepthState)>,
 ) -> Result<()> {
     let tris: Vec<[usize; 3]> = match topology {
         Topology::TriangleList => {
@@ -218,6 +251,21 @@ fn raster_draw(
         return Ok(());
     }
 
+    match depth {
+        Some((depth_tex, state)) => raster_draw_depth(res, targets, blends, &tris, verts, depth_tex, state),
+        None => raster_draw_no_depth(res, targets, blends, &tris, verts),
+    }
+}
+
+/// The depth-less fixed-function path (unchanged semantics): within one draw the first triangle to cover a
+/// pixel wins (`covered` mask), and across draws a later draw overwrites an earlier one (painter's order).
+fn raster_draw_no_depth(
+    res: &mut SessionResources,
+    targets: &[(u32, TextureFormat)],
+    blends: &[Option<BlendState>],
+    tris: &[[usize; 3]],
+    verts: &[DrawVertex],
+) -> Result<()> {
     for (ti, (tex_id, fmt)) in targets.iter().enumerate() {
         let order = rgba_channel_order(*fmt)
             .ok_or(GpuError::Unsupported("software: draw into a non-4-channel color format"))?;
@@ -232,7 +280,7 @@ fn raster_draw(
         }
         let mut covered = vec![false; w * h];
         let t = texture_mut(res, *tex_id)?;
-        for tri in &tris {
+        for tri in tris {
             let v = [verts[tri[0]], verts[tri[1]], verts[tri[2]]];
             let fb =
                 [ndc_to_fb(v[0].pos, w, h), ndc_to_fb(v[1].pos, w, h), ndc_to_fb(v[2].pos, w, h)];
@@ -248,41 +296,13 @@ fn raster_draw(
                         continue;
                     }
                     let c = [px as f32 + 0.5, py as f32 + 0.5];
-                    let e0 = edge(fb[1], fb[2], c);
-                    let e1 = edge(fb[2], fb[0], c);
-                    let e2 = edge(fb[0], fb[1], c);
-                    let inside = (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0)
-                        || (e0 <= 0.0 && e1 <= 0.0 && e2 <= 0.0);
-                    if !inside {
-                        continue;
-                    }
-                    let (l0, l1, l2) = (e0 / area, e1 / area, e2 / area);
-                    let mut src = [0f32; 4];
-                    for k in 0..4 {
-                        src[k] = l0 * v[0].color[k] + l1 * v[1].color[k] + l2 * v[2].color[k];
-                    }
+                    let bary = match barycentric(&fb, c, area) {
+                        Some(b) => b,
+                        None => continue,
+                    };
+                    let src = interp_color(&v, bary);
                     let texel = &mut t.pixels[idx * bpt..idx * bpt + bpt];
-                    if blend_enabled {
-                        let a = src[3].clamp(0.0, 1.0);
-                        let s_lin = |k: usize| {
-                            if srgb {
-                                srgb_to_linear(src[k].clamp(0.0, 1.0))
-                            } else {
-                                src[k].clamp(0.0, 1.0)
-                            }
-                        };
-                        let dst = load_texel_linear(texel, order, srgb);
-                        let out = [
-                            s_lin(0) * a + dst[0] * (1.0 - a),
-                            s_lin(1) * a + dst[1] * (1.0 - a),
-                            s_lin(2) * a + dst[2] * (1.0 - a),
-                            a + dst[3] * (1.0 - a),
-                        ];
-                        store_texel_linear(texel, order, srgb, out);
-                    } else {
-                        let bytes = clear_texel(*fmt, src)?;
-                        texel.copy_from_slice(&bytes);
-                    }
+                    write_fragment(texel, order, srgb, *fmt, blend_enabled, src)?;
                     covered[idx] = true;
                 }
             }
@@ -291,21 +311,200 @@ fn raster_draw(
     Ok(())
 }
 
-/// One vertex the software oracle's draw path consumes: position (NDC) at byte 0, straight-alpha color at
-/// byte 8. A vertex stride < 24 carries position only and color defaults to opaque white.
+/// The depth-tested path: interpolate per-fragment `z` from the vertex positions, compare it against the
+/// render pass's depth buffer with the pipeline's compare function, and (if the fragment passes) write the
+/// color to every target and, when `depth_write` is set, store the new `z`. Fragment ordering is governed
+/// by the depth test — not by draw/triangle order — so a nearer fragment wins an overlap regardless of the
+/// order it is drawn. The depth buffer is read once, updated in place, and written back.
+fn raster_draw_depth(
+    res: &mut SessionResources,
+    targets: &[(u32, TextureFormat)],
+    blends: &[Option<BlendState>],
+    tris: &[[usize; 3]],
+    verts: &[DrawVertex],
+    depth_tex: u32,
+    state: DepthState,
+) -> Result<()> {
+    // Dimensions come from the depth attachment (a render pass's color + depth attachments share extent).
+    let (w, h) = {
+        let t = texture(res, depth_tex)?;
+        (t.desc.width as usize, t.desc.height as usize)
+    };
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
+
+    // Load the depth plane (tight-packed little-endian f32, one per texel).
+    let mut depth_buf: Vec<f32> = {
+        let px = &texture(res, depth_tex)?.pixels;
+        (0..w * h)
+            .map(|i| {
+                let o = i * 4;
+                if o + 4 <= px.len() {
+                    f32::from_le_bytes([px[o], px[o + 1], px[o + 2], px[o + 3]])
+                } else {
+                    1.0
+                }
+            })
+            .collect()
+    };
+
+    // Resolve, per pixel, the winning interpolated source color (depth decides the winner).
+    let mut win: Vec<Option<[f32; 4]>> = vec![None; w * h];
+    for tri in tris {
+        let v = [verts[tri[0]], verts[tri[1]], verts[tri[2]]];
+        let fb = [ndc_to_fb(v[0].pos, w, h), ndc_to_fb(v[1].pos, w, h), ndc_to_fb(v[2].pos, w, h)];
+        let area = edge(fb[0], fb[1], fb[2]);
+        if area == 0.0 {
+            continue;
+        }
+        let (minx, miny, maxx, maxy) = tri_bbox(&fb, w, h);
+        for py in miny..maxy {
+            for px in minx..maxx {
+                let idx = py * w + px;
+                let c = [px as f32 + 0.5, py as f32 + 0.5];
+                let bary = match barycentric(&fb, c, area) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                let z = bary[0] * v[0].z + bary[1] * v[1].z + bary[2] * v[2].z;
+                if !compare::passes(state.depth_compare, z, depth_buf[idx]) {
+                    continue;
+                }
+                win[idx] = Some(interp_color(&v, bary));
+                if state.depth_write {
+                    depth_buf[idx] = z;
+                }
+            }
+        }
+    }
+
+    // Write the updated depth plane back.
+    {
+        let t = texture_mut(res, depth_tex)?;
+        for (i, z) in depth_buf.iter().enumerate() {
+            let o = i * 4;
+            if o + 4 <= t.pixels.len() {
+                t.pixels[o..o + 4].copy_from_slice(&z.to_le_bytes());
+            }
+        }
+    }
+
+    // Composite the winning fragments into every color attachment.
+    for (ti, (tex_id, fmt)) in targets.iter().enumerate() {
+        let order = rgba_channel_order(*fmt)
+            .ok_or(GpuError::Unsupported("software: draw into a non-4-channel color format"))?;
+        let srgb = is_srgb(*fmt);
+        let blend_enabled = blends.get(ti).map(|b| b.is_some()).unwrap_or(false);
+        let bpt = texel_bytes(texture(res, *tex_id)?.desc.format)?;
+        let t = texture_mut(res, *tex_id)?;
+        for (idx, winner) in win.iter().enumerate() {
+            if let Some(src) = *winner {
+                let texel = &mut t.pixels[idx * bpt..idx * bpt + bpt];
+                write_fragment(texel, order, srgb, *fmt, blend_enabled, src)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Barycentric weights of pixel-center `c` inside framebuffer-space triangle `fb` (signed area `area`),
+/// or `None` if the pixel is outside. Matches the two-sided inside test the oracle uses.
+fn barycentric(fb: &[[f32; 2]; 3], c: [f32; 2], area: f32) -> Option<[f32; 3]> {
+    let e0 = edge(fb[1], fb[2], c);
+    let e1 = edge(fb[2], fb[0], c);
+    let e2 = edge(fb[0], fb[1], c);
+    let inside =
+        (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0) || (e0 <= 0.0 && e1 <= 0.0 && e2 <= 0.0);
+    if !inside {
+        return None;
+    }
+    Some([e0 / area, e1 / area, e2 / area])
+}
+
+/// Barycentric-interpolate the straight-alpha vertex color at a fragment.
+fn interp_color(v: &[DrawVertex; 3], bary: [f32; 3]) -> [f32; 4] {
+    let mut src = [0f32; 4];
+    for k in 0..4 {
+        src[k] = bary[0] * v[0].color[k] + bary[1] * v[1].color[k] + bary[2] * v[2].color[k];
+    }
+    src
+}
+
+/// Composite one source fragment into a target texel: premultiplied linear-light source-over when the
+/// target's blend is enabled, else an opaque replace. Extracted so the depth-tested and depth-less paths
+/// share byte-identical color math.
+fn write_fragment(
+    texel: &mut [u8],
+    order: [usize; 4],
+    srgb: bool,
+    fmt: TextureFormat,
+    blend_enabled: bool,
+    src: [f32; 4],
+) -> Result<()> {
+    if blend_enabled {
+        let a = src[3].clamp(0.0, 1.0);
+        let s_lin = |k: usize| {
+            if srgb {
+                srgb_to_linear(src[k].clamp(0.0, 1.0))
+            } else {
+                src[k].clamp(0.0, 1.0)
+            }
+        };
+        let dst = load_texel_linear(texel, order, srgb);
+        let out = [
+            s_lin(0) * a + dst[0] * (1.0 - a),
+            s_lin(1) * a + dst[1] * (1.0 - a),
+            s_lin(2) * a + dst[2] * (1.0 - a),
+            a + dst[3] * (1.0 - a),
+        ];
+        store_texel_linear(texel, order, srgb, out);
+    } else {
+        let bytes = clear_texel(fmt, src)?;
+        texel.copy_from_slice(&bytes);
+    }
+    Ok(())
+}
+
+/// One vertex the software oracle's draw path consumes: NDC position `(x, y)` at byte 0, a per-fragment
+/// depth `z`, and a straight-alpha color. The stride selects the layout (all offsets little-endian f32):
+///
+/// * `>= 28`: `x,y,z` at 0/4/8, `color` (rgba) at 12/16/20/24  — 3D position + color (depth-tested draws)
+/// * `>= 24`: `x,y`   at 0/4,   `color` (rgba) at 8/12/16/20   — the historical 2D-pos+color layout (`z=0`)
+/// * `>= 12`: `x,y,z` at 0/4/8, color defaults to opaque white — 3D position only
+/// * else   : `x,y`   at 0/4,   color defaults to opaque white — 2D position only (`z=0`)
+///
+/// The `>= 24` arm is byte-for-byte the pre-depth behavior, so existing color draws are unchanged; the z
+/// component is an additive extension gated on the larger strides.
 #[derive(Clone, Copy)]
 struct DrawVertex {
     pos: [f32; 2],
+    z: f32,
     color: [f32; 4],
 }
 
 fn read_vertex(data: &[u8], base: usize, stride: usize) -> DrawVertex {
+    // Bounds-tolerant read: an offset past the slice yields 0.0 (submit-time validation already ensures a
+    // valid vertex fits, so this only guards against a defensive over-read, never a real payload).
     let f = |o: usize| {
-        f32::from_le_bytes([data[base + o], data[base + o + 1], data[base + o + 2], data[base + o + 3]])
+        let i = base + o;
+        if i + 4 <= data.len() {
+            f32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]])
+        } else {
+            0.0
+        }
     };
     let pos = [f(0), f(4)];
-    let color = if stride >= 24 { [f(8), f(12), f(16), f(20)] } else { [1.0, 1.0, 1.0, 1.0] };
-    DrawVertex { pos, color }
+    let (z, color) = if stride >= 28 {
+        (f(8), [f(12), f(16), f(20), f(24)])
+    } else if stride >= 24 {
+        (0.0, [f(8), f(12), f(16), f(20)])
+    } else if stride >= 12 {
+        (f(8), [1.0, 1.0, 1.0, 1.0])
+    } else {
+        (0.0, [1.0, 1.0, 1.0, 1.0])
+    };
+    DrawVertex { pos, z, color }
 }
 
 /// Map an NDC position (x right, y up, in [-1,1]) to framebuffer pixel space (origin top-left, y down).

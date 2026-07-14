@@ -314,6 +314,13 @@ fn enc_enc(e: &mut Encoder, op: &Enc) {
             enc_origin(e, dst_origin);
             enc_extent(e, extent);
         }
+        Enc::FillBuffer { buffer, offset, size, value } => {
+            e.u8(etag::FILL_BUFFER);
+            e.u32(*buffer);
+            e.u64(*offset);
+            e.u64(*size);
+            e.u32(*value);
+        }
     }
 }
 

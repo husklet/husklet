@@ -26,7 +26,7 @@ use crate::cpu::service::copy;
 use crate::cpu::service::raster;
 use crate::protocol::model::capability::{
     command_bits, format_bits, shader_payload, Capabilities, PresentKind, ALL_COMMANDS,
-    COLOR_FORMATS,
+    COLOR_FORMATS, DEPTH_FORMATS,
 };
 use crate::protocol::model::command::{Cmd, CommandBuffer, Enc, ShaderPayloadKind, WIRE_VERSION};
 use crate::protocol::model::descriptor::{
@@ -133,7 +133,13 @@ impl CpuExecutor {
         if !matches!(desc.sample_count, 1 | 2 | 4 | 8) {
             return Err(GpuError::Unsupported("software: unsupported sample count"));
         }
-        let bpt = texel_bytes(desc.format)?;
+        // A `Depth32Float` attachment is materialized as a tight-packed f32 depth plane (4 bytes/texel) so
+        // the rasterizer can run the per-fragment depth test/write against it; the color helpers still
+        // reject it (it is not a plain-color format). Other depth/stencil formats stay unsupported.
+        let bpt = match desc.format {
+            TextureFormat::Depth32Float => 4,
+            _ => texel_bytes(desc.format)?,
+        };
         let n = bpt
             .checked_mul(desc.width as usize)
             .and_then(|v| v.checked_mul(desc.height as usize))
@@ -210,6 +216,7 @@ impl CpuExecutor {
                 vertex_layouts: desc.vertex_buffers.clone(),
                 topology: desc.topology,
                 blends: desc.color_targets.iter().map(|c| c.blend.clone()).collect(),
+                depth: desc.depth.clone(),
             }),
         )
     }
@@ -269,6 +276,24 @@ impl CpuExecutor {
         Ok(())
     }
 
+    /// Execute a `FillBuffer`: write the repeating little-endian 4-byte pattern of `value` over
+    /// `[offset, offset+size)`. A device-side memset — the pattern tiles from `offset` (byte `i` of the
+    /// region takes pattern byte `i % 4`), so a `size` that is not a multiple of 4 fills a partial pattern
+    /// at the tail. Bounds are re-checked here (submit-time validation already verified them).
+    fn fill_buffer(&self, res: &mut SessionResources, id: u32, offset: u64, size: u64, value: u32) -> Result<()> {
+        let b = buffer_mut(res, id)?;
+        let start = offset as usize;
+        let end = offset
+            .checked_add(size)
+            .filter(|e| *e <= b.data.len() as u64)
+            .ok_or(GpuError::OutOfBounds)? as usize;
+        let pat = value.to_le_bytes();
+        for (i, byte) in b.data[start..end].iter_mut().enumerate() {
+            *byte = pat[i % 4];
+        }
+        Ok(())
+    }
+
     fn present(&self, res: &SessionResources, surface_id: u32, texture_id: u32) -> Result<Presented> {
         let sdesc = surface(res, surface_id)?.clone();
         let t = texture(res, texture_id)?;
@@ -289,11 +314,12 @@ impl CpuExecutor {
         let mut cur_pipeline: Option<u32> = None;
         let mut cur_bind_group: Option<u32> = None;
         let mut cur_targets: Vec<(u32, TextureFormat)> = Vec::new();
+        let mut cur_depth: Option<u32> = None;
         let mut cur_vertex: HashMap<u32, (u32, u64)> = HashMap::new();
         let mut cur_index: Option<(u32, u64, IndexFormat)> = None;
         for op in &cb.encoder {
             match op {
-                Enc::BeginRenderPass { color, .. } => {
+                Enc::BeginRenderPass { color, depth } => {
                     cur_targets.clear();
                     for c in color {
                         let fmt = texture(res, c.texture)?.desc.format;
@@ -302,8 +328,18 @@ impl CpuExecutor {
                             raster::clear_target(res, c.texture, c.clear)?;
                         }
                     }
+                    cur_depth = None;
+                    if let Some(dp) = depth {
+                        cur_depth = Some(dp.texture);
+                        if dp.load == LoadOp::Clear {
+                            raster::clear_depth_target(res, dp.texture, dp.clear_depth)?;
+                        }
+                    }
                 }
-                Enc::EndRenderPass => cur_targets.clear(),
+                Enc::EndRenderPass => {
+                    cur_targets.clear();
+                    cur_depth = None;
+                }
                 Enc::ClearRect { texture, x, y, w, h, color } => {
                     raster::clear_rect(res, *texture, *x, *y, *w, *h, *color)?;
                 }
@@ -319,7 +355,7 @@ impl CpuExecutor {
                     self.draws += 1;
                     let vb = cur_vertex.get(&0).copied();
                     raster::exec_draw(
-                        res, cur_pipeline, &cur_targets, vb, *first_vertex, *vertex_count,
+                        res, cur_pipeline, &cur_targets, cur_depth, vb, *first_vertex, *vertex_count,
                         *instance_count,
                     )?;
                 }
@@ -327,8 +363,8 @@ impl CpuExecutor {
                     self.draws += 1;
                     let vb = cur_vertex.get(&0).copied();
                     raster::exec_draw_indexed(
-                        res, cur_pipeline, &cur_targets, vb, cur_index, *first_index, *index_count,
-                        *base_vertex, *instance_count,
+                        res, cur_pipeline, &cur_targets, cur_depth, vb, cur_index, *first_index,
+                        *index_count, *base_vertex, *instance_count,
                     )?;
                 }
                 Enc::Dispatch { x, y, z } => {
@@ -361,6 +397,9 @@ impl CpuExecutor {
                 Enc::ResolveTexture { src, src_origin, dst, dst_origin, extent, .. } => {
                     copy::resolve_texture(res, *src, src_origin, *dst, dst_origin, extent)?;
                 }
+                Enc::FillBuffer { buffer, offset, size, value } => {
+                    self.fill_buffer(res, *buffer, *offset, *size, *value)?;
+                }
                 _ => {}
             }
         }
@@ -385,7 +424,8 @@ impl GpuExecutor for CpuExecutor {
             command_bits: command_bits(ALL_COMMANDS),
             // Executes compiled kernels; it cannot run a graphics (SPIR-V/MSL) shader.
             shader_payloads: shader_payload::KERNEL,
-            texture_formats: format_bits(COLOR_FORMATS),
+            // Color formats plus the depth formats the oracle materializes for depth-tested rendering.
+            texture_formats: format_bits(COLOR_FORMATS) | format_bits(DEPTH_FORMATS),
             max_frame_bytes: 64 << 20,
             max_buffer_bytes: 256 << 20,
             max_bind_groups: 4,
@@ -847,6 +887,10 @@ fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Resul
             copy::check_region_in_texture(s, src_origin, extent)?;
             let d = texture(res, *dst)?;
             copy::check_region_in_texture(d, dst_origin, extent)?;
+        }
+        Enc::FillBuffer { buffer, offset, size, .. } => {
+            let b = buffer_with_usage(res, *buffer, buffer_usage::COPY_DST, "fill dst lacks COPY_DST")?;
+            copy::check_range(b.data.len(), *offset, *size)?;
         }
     }
     Ok(())

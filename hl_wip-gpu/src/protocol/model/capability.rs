@@ -80,13 +80,17 @@ pub const COLOR_FORMATS: &[TextureFormat] = &[
     TextureFormat::R32Float,
 ];
 
+/// The depth/stencil formats a backend can materialize as a real depth target (the software oracle
+/// runs the per-fragment depth test against a `Depth32Float` plane).
+pub const DEPTH_FORMATS: &[TextureFormat] = &[TextureFormat::Depth32Float];
+
 /// Every encoder-op tag in the current IR (a backend that replays the whole set advertises this).
 pub const ALL_COMMANDS: &[u8] = &[
     etag::BEGIN_RENDER_PASS, etag::END_RENDER_PASS, etag::SET_PIPELINE, etag::SET_BIND_GROUP,
     etag::SET_VERTEX_BUFFER, etag::SET_INDEX_BUFFER, etag::SET_VIEWPORT, etag::SET_SCISSOR,
     etag::CLEAR_RECT, etag::DRAW, etag::DRAW_INDEXED, etag::BEGIN_COMPUTE_PASS, etag::END_COMPUTE_PASS,
     etag::DISPATCH, etag::COPY_B2B, etag::COPY_B2T, etag::COPY_T2B, etag::COPY_T2T, etag::BLIT_TEXTURE,
-    etag::RESOLVE_TEXTURE,
+    etag::RESOLVE_TEXTURE, etag::FILL_BUFFER,
 ];
 
 /// A versioned, serialized capability descriptor a backend advertises and a guest negotiates against

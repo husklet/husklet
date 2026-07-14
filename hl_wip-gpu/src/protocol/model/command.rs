@@ -141,6 +141,16 @@ pub enum Enc {
         dst_origin: Origin3d,
         extent: Extent3d,
     },
+    /// Fill a buffer range `[offset, offset+size)` with a repeating little-endian 4-byte pattern
+    /// (`value`), without expanding to a giant `WriteBuffer`. A device-side memset. Wire tag 21 (added
+    /// at [`WIRE_VERSION`] 5). `buffer` follows the [`Enc`] convention of a raw `u32` resource id (see the
+    /// copy ops); it names a [`super::id::BufferId`].
+    FillBuffer {
+        buffer: u32,
+        offset: u64,
+        size: u64,
+        value: u32,
+    },
 }
 
 impl Enc {
@@ -167,6 +177,7 @@ impl Enc {
             Self::CopyTextureToTexture { .. } => etag::COPY_T2T,
             Self::BlitTexture { .. } => etag::BLIT_TEXTURE,
             Self::ResolveTexture { .. } => etag::RESOLVE_TEXTURE,
+            Self::FillBuffer { .. } => etag::FILL_BUFFER,
         }
     }
 }
@@ -232,7 +243,9 @@ pub enum Cmd {
 /// - v2: adds texture subresources + `CopyTextureToTexture` (etag 18) and `BlitTexture` (etag 19).
 /// - v3: makes every shader payload's origin explicit; strict SPIR-V may not fall back to built-ins.
 /// - v4: adds a distinct multisample resolve operation (etag 20).
-pub const WIRE_VERSION: u32 = 4;
+/// - v5: adds a buffer-fill (device memset) operation, `FillBuffer` (etag 21). Purely additive — no
+///   existing message's bytes change; a v4 decoder rejects etag 21 as `BadTag` rather than aliasing it.
+pub const WIRE_VERSION: u32 = 5;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.
@@ -285,4 +298,6 @@ pub mod etag {
     pub const BLIT_TEXTURE: u8 = 19;
     // v4 (WIRE_VERSION 4): distinct multisample resolve.
     pub const RESOLVE_TEXTURE: u8 = 20;
+    // v5 (WIRE_VERSION 5): buffer fill (device memset). A v4 decoder rejects this as BadTag.
+    pub const FILL_BUFFER: u8 = 21;
 }

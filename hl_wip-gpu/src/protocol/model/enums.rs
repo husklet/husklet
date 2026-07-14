@@ -89,6 +89,35 @@ u32_enum!(
     AddressMode { ClampToEdge = 0, Repeat = 1, MirrorRepeat = 2 } "AddressMode"
 );
 
+/// Depth/stencil compare functions. `DepthState::depth_compare` carries an opaque WebGPU compare-function
+/// value on the wire; the software oracle interprets it with these stable constants (Vulkan `VkCompareOp`
+/// ordering). `passes(compare, frag, stored)` is the per-fragment test the depth rasterizer runs.
+pub mod compare {
+    pub const NEVER: u32 = 0;
+    pub const LESS: u32 = 1;
+    pub const EQUAL: u32 = 2;
+    pub const LESS_EQUAL: u32 = 3;
+    pub const GREATER: u32 = 4;
+    pub const NOT_EQUAL: u32 = 5;
+    pub const GREATER_EQUAL: u32 = 6;
+    pub const ALWAYS: u32 = 7;
+
+    /// Evaluate `frag <compare> stored`. An unrecognized opaque value is treated as `ALWAYS` so an
+    /// honest bring-up never hard-fails a draw on a compare code it does not model.
+    pub fn passes(compare: u32, frag: f32, stored: f32) -> bool {
+        match compare {
+            NEVER => false,
+            LESS => frag < stored,
+            EQUAL => frag == stored,
+            LESS_EQUAL => frag <= stored,
+            GREATER => frag > stored,
+            NOT_EQUAL => frag != stored,
+            GREATER_EQUAL => frag >= stored,
+            _ => true,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------
 // usage bitflags (hand-rolled u32 constants — no `bitflags` dep)
 // ---------------------------------------------------------------------------------------------------
