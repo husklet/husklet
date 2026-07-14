@@ -1205,7 +1205,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
-name = "hl-cli"
+name = "hl"
 version = "0.4.0"
 dependencies = [
  "clap",
@@ -1305,7 +1305,7 @@ name = "hl-gui"
 version = "0.4.0"
 dependencies = [
  "gtk4",
- "hl-cli",
+ "hl",
  "hl-client",
  "hl-ws",
  "hl-ws-term",

@@ -8,7 +8,7 @@
 
 use crate::cli::WorkspaceCmd;
 use crate::paths;
-use hl_cli::config::{CudaDevice, VpnConfig, WorkspaceConfig, WorkspaceStore};
+use hl::config::{CudaDevice, VpnConfig, WorkspaceConfig, WorkspaceStore};
 use hl_ws::{Arch, Launcher};
 use hl_ws_term::LocalShellLauncher;
 use std::io::Write;
@@ -362,7 +362,7 @@ impl Drop for RawMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hl_cli::config::VpnKind;
+    use hl::config::VpnKind;
     use hl_ws::Mount;
 
     // A prior workspace carrying config that the `create` CLI does NOT expose as flags — exactly the

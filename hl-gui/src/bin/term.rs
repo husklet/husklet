@@ -22,7 +22,7 @@ use vte4::TerminalExtManual;
 
 use hl_ws_term::config::{CursorShape, TermConfig};
 use hl_ws_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir};
-use hl_cli::config::{CudaDevice, VpnConfig, WorkspaceConfig, WorkspaceStore};
+use hl::config::{CudaDevice, VpnConfig, WorkspaceConfig, WorkspaceStore};
 use hl_ws::{Arch, Mount, Workspace};
 
 const APP_ID: &str = "com.dd.term";

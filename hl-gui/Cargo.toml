@@ -23,7 +23,7 @@ hl-client = { path = "../hl-client" }
 hl-ws = { path = "../hl-ws" }
 # The `hl`-side workspace config (VpnConfig/CudaDevice + WorkspaceConfig + WorkspaceStore persistence).
 # `default-features = false` = the light `config` lib ONLY — none of the engine stack (hl-jit/hl-gpu).
-hl-cli = { path = "../hl-cli", default-features = false }
+hl = { path = "../hl", default-features = false }
 # Terminal primitive (VT/session/config/png): the terminal window's grid + session model.
 hl-ws-term = { path = "../hl-ws-term" }
 # GUI stack (GTK4 via Relm4). Needs pkg-config + the GTK4 dev libs at build time, which only

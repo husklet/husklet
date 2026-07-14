@@ -389,7 +389,7 @@ impl Component for AppModel {
             // Workspaces are a local config file (`~/.dd/workspaces.conf`), not a daemon resource — mutate
             // the store inline; the view reloads it on the next render (which Relm4 runs after update()).
             Msg::CreateWorkspace(name, image, arch) => {
-                use hl_cli::config::{WorkspaceConfig, WorkspaceStore};
+                use hl::config::{WorkspaceConfig, WorkspaceStore};
                 use hl_ws::Arch;
                 if let Some(arch) = Arch::parse(&arch) {
                     let path = ui::views::workspaces::workspaces_conf();
@@ -398,7 +398,7 @@ impl Component for AppModel {
                 }
             }
             Msg::RemoveWorkspace(name) => {
-                use hl_cli::config::WorkspaceStore;
+                use hl::config::WorkspaceStore;
                 let path = ui::views::workspaces::workspaces_conf();
                 let mut store = WorkspaceStore::load(path);
                 let _ = store.remove(&name);

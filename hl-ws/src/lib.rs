@@ -3,7 +3,7 @@
 //! std-ONLY and the LEAF of its family: it holds only the bare-minimum run primitive + trait seams common
 //! to all consumers, and references NO other hl crate (verify with `cargo tree -p hl-ws`: zero `hl-*`
 //! edges). Everything above depends UP onto it — `hl-ws-term` implements its [`terminal::PtyBackend`] +
-//! [`launch::Launcher`], and `hl` (today `hl-cli`) owns the richer config (the bare [`model::Workspace`]
+//! [`launch::Launcher`], and `hl` owns the richer config (the bare [`model::Workspace`]
 //! PLUS feature settings) + its persistence and composes it all.
 //!
 //! It deliberately does NOT own: any feature setting (vpn/cuda/gui/docker_sock/scrollback — those are

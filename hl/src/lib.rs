@@ -1,4 +1,4 @@
-//! `hl-cli` library surface.
+//! `hl` library surface.
 //!
 //! The `ddcli` command itself is the engine-linked binary (`src/main.rs`, built only with the default
 //! `cli` feature). This LIBRARY exposes only the light, `hl`-side workspace [`config`] — the bare

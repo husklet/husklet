@@ -424,7 +424,7 @@ mod tests {
 
     fn tmp_path(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("hl-cli-store-{}-{}.conf", std::process::id(), tag));
+        p.push(format!("hl-store-{}-{}.conf", std::process::id(), tag));
         p
     }
 

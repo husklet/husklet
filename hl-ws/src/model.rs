@@ -4,7 +4,7 @@
 //! as a terminal. This type holds ONLY what is needed to run a workspace: identity + the isolated-environment
 //! knobs. Per-workspace FEATURE settings (egress/VPN, simulated CUDA device, the GUI display toggle, the
 //! docker-socket mount, terminal scrollback) are NOT here — they are `hl`-side config that extends this bare
-//! primitive (see `hl-cli`'s `config::WorkspaceConfig`). `hl-ws` never names a feature.
+//! primitive (see `hl`'s `config::WorkspaceConfig`). `hl-ws` never names a feature.
 
 use std::path::{Path, PathBuf};
 

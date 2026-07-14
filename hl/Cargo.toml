@@ -1,5 +1,5 @@
 [package]
-name = "hl-cli"
+name = "hl"
 version = "0.4.0"
 edition = "2021"
 description = "The `ddcli` command — run dd containers with easy-access defaults and manage the daemon, without root."
@@ -9,7 +9,7 @@ license = "MIT"
 # GUI can consume it without pulling the engine. The engine-linked `ddcli` binary needs the full stack,
 # gated behind the default `cli` feature (see below) via `required-features`.
 [lib]
-name = "hl_cli"
+name = "hl"
 path = "src/lib.rs"
 
 [[bin]]
