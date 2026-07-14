@@ -1188,7 +1188,7 @@ dependencies = [
  "hl-gpu",
  "hl-images",
  "hl-jit",
- "hl-term",
+ "hl-ws",
  "hl-ws-term",
  "libc",
  "serde_json",
@@ -1281,7 +1281,7 @@ version = "0.4.0"
 dependencies = [
  "gtk4",
  "hl-client",
- "hl-term",
+ "hl-ws",
  "hl-ws-term",
  "libc",
  "objc2",
@@ -1356,14 +1356,6 @@ dependencies = [
  "ash",
  "hl-gpu",
  "hl-shim",
-]
-
-[[package]]
-name = "hl-term"
-version = "0.1.0"
-dependencies = [
- "hl-ws-term",
- "libc",
 ]
 
 [[package]]

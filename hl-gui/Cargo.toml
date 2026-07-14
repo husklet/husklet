@@ -20,7 +20,7 @@ path = "src/bin/term.rs"
 # Shared dd daemon client (a thin façade over bollard); GUI + CLI both use it.
 hl-client = { path = "../hl-client" }
 # Workspace model + persistence (pure, no GTK): the WorkspaceStore the Workspaces view reads/writes.
-hl-term = { path = "../hl-term" }
+hl-ws = { path = "../hl-ws" }
 # Terminal primitive (VT/session/config/png): the terminal window's grid + session model.
 hl-ws-term = { path = "../hl-ws-term" }
 # GUI stack (GTK4 via Relm4). Needs pkg-config + the GTK4 dev libs at build time, which only

@@ -1,7 +1,7 @@
 #![allow(unused_imports, dead_code)]
 //! The Workspaces page: a named image+arch dev environment you configure once and LAUNCH as a terminal.
 //!
-//! The model + persistence live in `hl_term::workspace` (a plain `~/.dd/workspaces.conf`); this view
+//! The model + persistence live in `hl_ws` (a plain `~/.dd/workspaces.conf`); this view
 //! is a thin CRUD over a [`WorkspaceStore`] plus a Launch that opens a VTE tab running
 //! `ddcli workspace launch <name>` — a real interactive terminal inside the workspace's image.
 //!
@@ -13,7 +13,7 @@
 use crate::ui::components::*;
 use crate::ui::theme::*;
 use crate::{AppModel, Msg};
-use hl_term::workspace::{Arch, WorkspaceStore};
+use hl_ws::{Arch, WorkspaceStore};
 use gtk::prelude::*;
 use relm4::ComponentSender;
 use std::path::PathBuf;

@@ -2,7 +2,7 @@
 //! running a real shell session, composited into a single PNG — the whole dd-term pipeline
 //! (Layout → LocalPty → Vt → CpuRenderer) with no GPU/display.
 //!
-//!   cargo run -p hl-term --example demo -- /tmp/demo.png
+//!   cargo run -p hl-ws-term --example demo -- /tmp/demo.png
 
 use hl_ws_term::layout::{Dir, Layout, Rect};
 use hl_ws_term::pty::local::LocalPty;

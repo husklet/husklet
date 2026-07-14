@@ -1,7 +1,7 @@
 //! Headless screenshot: run a real shell session through the full pipeline (LocalPty → Vt → CpuRenderer)
 //! and write a PNG — the self-inspection tool that proves the terminal renders correctly with no GUI.
 //!
-//!   cargo run -p hl-term --example screenshot -- /tmp/out.png
+//!   cargo run -p hl-ws-term --example screenshot -- /tmp/out.png
 //!
 //! Defaults to `dd-term.png` in the current directory.
 

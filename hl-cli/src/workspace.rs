@@ -1,6 +1,6 @@
 //! `ddcli workspace` — configure and launch terminal workspaces (a named image+arch you develop in).
 //!
-//! The model + persistence live in `hl_term::workspace`; this is the CLI surface the dd-gui invokes
+//! The model + persistence live in `hl_ws`; this is the CLI surface the dd-gui invokes
 //! (`ddcli workspace launch <name>`). `launch` runs the workspace as an interactive terminal in the
 //! current window via a raw-mode PTY passthrough. The launcher is `LocalShellLauncher` today (a real
 //! shell, so this works + is exercisable everywhere); the macOS build swaps in a dd-jit launcher that
@@ -8,7 +8,8 @@
 
 use crate::cli::WorkspaceCmd;
 use crate::paths;
-use hl_term::workspace::{Arch, CudaDevice, LocalShellLauncher, Launcher, VpnConfig, Workspace, WorkspaceStore};
+use hl_ws::{Arch, CudaDevice, Launcher, VpnConfig, Workspace, WorkspaceStore};
+use hl_ws_term::LocalShellLauncher;
 use std::io::Write;
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -360,7 +361,7 @@ impl Drop for RawMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hl_term::workspace::{Mount, VpnKind};
+    use hl_ws::{Mount, VpnKind};
 
     // A prior workspace carrying config that the `create` CLI does NOT expose as flags — exactly the
     // state a user builds via `~/.dd/workspaces.conf` or the GUI. Re-running `create` must preserve it.

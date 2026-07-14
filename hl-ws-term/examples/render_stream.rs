@@ -1,7 +1,7 @@
 //! Render a raw terminal byte stream (from stdin) into a PNG — used to screenshot the output of a
 //! *real* launched session (e.g. the bytes captured from `ddcli workspace launch`).
 //!
-//!   some-command | cargo run -q -p hl-term --example render_stream -- out.png 80 24
+//!   some-command | cargo run -q -p hl-ws-term --example render_stream -- out.png 80 24
 
 use hl_ws_term::{CpuRenderer, Vt};
 use std::io::Read;

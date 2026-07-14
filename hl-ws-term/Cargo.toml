@@ -2,7 +2,7 @@
 name = "hl-ws-term"
 version = "0.1.0"
 edition = "2021"
-description = "hl-ws-term: the terminal primitive — a self-contained VT grid, input encoding, pane layout, and a CPU renderer (embedded bitmap font + PNG) — zero GPU/window/network deps so it is fully headless-testable. This is the workspace-agnostic terminal core (was hl-term minus the workspace model)."
+description = "hl-ws-term: the terminal primitive — a self-contained VT grid, input encoding, pane layout, and a CPU renderer (embedded bitmap font + PNG) — zero GPU/window/network deps so it is fully headless-testable. This is the workspace-agnostic terminal core (was dd-term core minus the workspace model)."
 license = "MIT"
 
 [lib]

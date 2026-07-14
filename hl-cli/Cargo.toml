@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 hl-client = { path = "../hl-client" }
-hl-term = { path = "../hl-term" }
+hl-ws = { path = "../hl-ws" }
 hl-ws-term = { path = "../hl-ws-term" }
 # In-process container launch for `ddcli workspace launch` — NO daemon, NO docker, NO socket. dd-jit
 # runs the workspace's image via the linked engine; dd-images resolves/pulls its rootfs. (Both build on
