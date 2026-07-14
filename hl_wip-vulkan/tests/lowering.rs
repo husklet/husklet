@@ -554,6 +554,40 @@ fn mapped_memory_flushes_as_write_buffer_at_submit() {
     }
 }
 
+#[test]
+fn map_memory_reads_bound_buffer_back_over_the_sink() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    // A host-visible allocation bound to a real device buffer (ir id 1). The staging bytes are the app's
+    // own upload, so reading device output requires a device→host readback.
+    let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 256).unwrap();
+    let buf_ir = d.buffers.get(&buf).unwrap().ir_id;
+    let mem = create::allocate_memory(&mut d, 256);
+    create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
+    create::map_memory(&mut d, mem).unwrap();
+
+    // Invalidating / mapping a whole bound allocation reads the buffer back over the sink's device→host
+    // port — the SAME `read_buffer` cuda's `cuMemcpyDtoH` and GL's `glReadPixels` issue.
+    create::read_mapped(&mut d, &mut sink, mem, 0, u64::MAX).unwrap();
+    assert_eq!(sink.reads, vec![(hl_gpu::BufferId(buf_ir), 0, 256)], "one whole-buffer readback");
+
+    // A bounded sub-range honours the mapped offset/size (buffer offset = mem offset − bound_offset = 64).
+    create::read_mapped(&mut d, &mut sink, mem, 64, 32).unwrap();
+    assert_eq!(sink.reads.last().copied(), Some((hl_gpu::BufferId(buf_ir), 64, 32)));
+}
+
+#[test]
+fn map_memory_of_unbound_host_staging_issues_no_readback() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    // Host-only staging: no buffer bound, so there is no readable device source. The readback must be a
+    // truthful no-op (never a faked/zero read), leaving the staging as-is.
+    let mem = create::allocate_memory(&mut d, 128);
+    create::map_memory(&mut d, mem).unwrap();
+    create::read_mapped(&mut d, &mut sink, mem, 0, u64::MAX).unwrap();
+    assert!(sink.reads.is_empty(), "unbound staging must not read back");
+}
+
 // ---------------------------------------------------------------------------------------------------
 // present
 // ---------------------------------------------------------------------------------------------------

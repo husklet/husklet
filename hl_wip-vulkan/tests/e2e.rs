@@ -150,3 +150,73 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
     // The bottom-left corner (below-left of the triangle's left edge) is also uncovered.
     assert_eq!(texel(0, H - 1), [0, 0, 255, 255], "bottom-left corner keeps the clear color");
 }
+
+/// The device→host mapped-memory readback, end-to-end: a device op produces bytes in a buffer bound to
+/// host-visible memory, then `vkMapMemory`'s readback (via `create::read_mapped`) makes those DEVICE bytes
+/// observable through the mapped pointer — the very bug this fixes. The host staging is never written, so
+/// if the readback did nothing the map would still show zeros; asserting it equals the device-computed
+/// result proves the pointer now reflects GPU output.
+///
+/// Device work: fill `src` with a pattern, then copy `src`→`dst` (`dst` is the mapped buffer). Both run on
+/// the reference `CpuExecutor` through the full runtime pipeline, so the bytes in `dst` are genuinely
+/// device-produced, not a host echo.
+#[test]
+fn map_memory_reflects_device_output_end_to_end() {
+    use hl_gpu::BufferId;
+
+    // Permissive caps so the lowering runs against the CPU oracle (as in the graphics test above).
+    let exec = CpuExecutor::new();
+    let session = Session::new(
+        Limits::from_capabilities(Capabilities::full("hl-cpu-mapreadback")),
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+    let mut sink = InProcessCommandSink::with_session(session, exec);
+
+    let inst = create::create_instance(HL_API_VERSION);
+    let mut d = create::create_device(&inst);
+
+    const N: u64 = 16; // 4 × u32
+    const PATTERN: u32 = 0xDEAD_BEEF;
+
+    // A transfer src (fillable) and a transfer dst bound to host-visible memory (its staging stays zero).
+    let src = create::create_buffer(
+        &mut d,
+        &mut sink,
+        vk_buffer_usage::TRANSFER_SRC | vk_buffer_usage::TRANSFER_DST,
+        N,
+    )
+    .unwrap();
+    let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, N).unwrap();
+    let dst_ir = d.buffers.get(&dst).unwrap().ir_id;
+    let mem = create::allocate_memory(&mut d, N);
+    create::bind_buffer_memory(&mut d, dst, mem, 0).unwrap();
+
+    // Device work: fill src with the pattern, then copy src → dst. No host write to dst's staging.
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_fill_buffer(&mut d, cb, src, 0, N, PATTERN).unwrap();
+    record::cmd_copy_buffer(&mut d, cb, src, dst, 0, 0, N).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    let expected: Vec<u8> = PATTERN.to_le_bytes().iter().copied().cycle().take(N as usize).collect();
+
+    // The device really produced the result (read straight off the runtime resources).
+    let device_bytes = sink.read_buffer(BufferId(dst_ir), 0, N as usize).unwrap();
+    assert_eq!(device_bytes, expected, "the device op produced the pattern in dst");
+
+    // Before the readback the host staging is still zero — a plain map would hand back stale bytes.
+    assert!(d.memories.get(&mem).unwrap().data.iter().all(|&b| b == 0), "staging is stale before map");
+
+    // vkMapMemory's device→host readback: refresh the whole mapped allocation with dst's device bytes.
+    create::map_memory(&mut d, mem).unwrap();
+    create::read_mapped(&mut d, &mut sink, mem, 0, u64::MAX).unwrap();
+
+    // The mapped staging now reflects the GPU's current contents — exactly the device-computed pattern.
+    assert_eq!(
+        d.memories.get(&mem).unwrap().data,
+        expected,
+        "mapped memory reflects device output after the readback"
+    );
+}

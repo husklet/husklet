@@ -25,7 +25,7 @@ use hl_gpu::protocol::model::descriptor::{
     BufferDesc, ComputePipelineDesc, RenderPipelineDesc, SamplerDesc, ShaderRef, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{AddressMode, Filter, TextureFormat, Topology};
-use hl_gpu::{Cmd, CommandSink, GpuError, Result};
+use hl_gpu::{BufferId, Cmd, CommandSink, GpuError, Result};
 
 // ---- instance / device (pure object model — no IR) -----------------------------------------------
 
@@ -124,6 +124,57 @@ pub fn write_mapped(
         return Err(GpuError::OutOfBounds);
     }
     m.data[offset as usize..end].copy_from_slice(bytes);
+    Ok(())
+}
+
+/// The `VkDeviceSize` sentinel meaning "to the end of the allocation" (`VK_WHOLE_SIZE`).
+const VK_WHOLE_SIZE: u64 = u64::MAX;
+
+/// Refresh a host-visible mapped memory's staging bytes with the CURRENT device contents of the buffer
+/// bound into it, reading them back over the sink — the device→host path, the SAME
+/// [`CommandSink::read_buffer`] that serves cuda's `cuMemcpyDtoH` and GL's `glReadPixels`. This is what
+/// makes GPU output observable through the mapped pointer: the staging bytes are the app's own last
+/// upload, so without a readback a reader sees only its stale writes, never what the device computed.
+///
+/// `offset`/`size` bound the refreshed region (`size == VK_WHOLE_SIZE` → to the end of the allocation),
+/// matching the `vkMapMemory` / `VkMappedMemoryRange` the app requested; only the sub-range that actually
+/// overlaps the bound buffer's footprint in the allocation is read (the buffer offset is `mem_offset -
+/// bound_offset`). Memory with NO bound buffer is host-only staging with no readable device source, so it
+/// is left exactly as-is — data is never faked. Errors only if the sink's readback transport itself fails;
+/// an unknown/unbound memory is a no-op success.
+pub fn read_mapped(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    memory: VkDeviceMemory,
+    offset: u64,
+    size: u64,
+) -> Result<()> {
+    // Resolve the bound buffer's ir id + its footprint in the allocation, plus the staging length.
+    let Some((ir_id, buf_size, bound_offset, mem_len)) = dev.memories.get(&memory).and_then(|m| {
+        let b = dev.buffers.get(&m.bound_buffer?)?;
+        Some((b.ir_id, b.size, b.bound_offset, m.data.len() as u64))
+    }) else {
+        return Ok(()); // unknown memory, or host-only staging with no device buffer to read back
+    };
+
+    // The requested map range, clamped to the allocation.
+    let map_start = offset.min(mem_len);
+    let map_end = if size == VK_WHOLE_SIZE { mem_len } else { offset.saturating_add(size).min(mem_len) };
+    // Intersect it with the buffer's footprint [bound_offset, bound_offset + buf_size) in the allocation.
+    let start = map_start.max(bound_offset);
+    let end = map_end.min(bound_offset.saturating_add(buf_size));
+    if end <= start {
+        return Ok(()); // the mapped range does not overlap the bound buffer — nothing to read back
+    }
+
+    // Read the buffer bytes backing memory[start..end] and drop them into the staging at that offset.
+    let read_off = start - bound_offset;
+    let len = (end - start) as usize;
+    let bytes = sink.read_buffer(BufferId(ir_id), read_off, len)?;
+    let m = dev.memories.get_mut(&memory).expect("memory validated above");
+    let dst = start as usize;
+    let n = bytes.len().min(m.data.len().saturating_sub(dst));
+    m.data[dst..dst + n].copy_from_slice(&bytes[..n]);
     Ok(())
 }
 

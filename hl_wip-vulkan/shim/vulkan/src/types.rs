@@ -1445,6 +1445,17 @@ pub struct VkSubmitInfo2 {
     pub p_signal_semaphore_infos: *const c_void,
 }
 
+/// `VkMappedMemoryRange` — one range for `vkFlush/InvalidateMappedMemoryRanges` (`size == VK_WHOLE_SIZE`
+/// means from `offset` to the end of the allocation).
+#[repr(C)]
+pub struct VkMappedMemoryRange {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub memory: u64,
+    pub offset: VkDeviceSize,
+    pub size: VkDeviceSize,
+}
+
 /// `VkMemoryMapInfo(KHR)` — the `vkMapMemory2` argument aggregate.
 #[repr(C)]
 pub struct VkMemoryMapInfo {

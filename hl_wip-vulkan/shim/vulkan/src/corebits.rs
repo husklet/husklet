@@ -15,10 +15,12 @@
 
 use core::ffi::c_void;
 
+use hl_vulkan::service::create;
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
+use hl_gpu::CommandSink;
 
 use crate::state::with;
-use crate::types::{Dispatchable, VkExtent2D, VkResult, VK_SUCCESS};
+use crate::types::{Dispatchable, VkExtent2D, VkMappedMemoryRange, VkResult, VK_SUCCESS};
 
 unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
@@ -26,6 +28,16 @@ unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
 
 fn dev<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
     with(|s| s.device.as_mut().map(f))
+}
+
+/// Run `f` with the logical device + the command sink (disjoint `State` fields) — the readback path
+/// `vkInvalidateMappedMemoryRanges` needs. `None` if no device exists yet.
+fn dev_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option<R> {
+    with(|s| {
+        let sink = &mut s.sink;
+        let dev = s.device.as_mut()?;
+        Some(f(dev, sink))
+    })
 }
 
 // ---- mapped-memory flush/invalidate (unified coherent memory → no-op success) ------------------
@@ -41,12 +53,31 @@ pub extern "C" fn vkFlushMappedMemoryRanges(
     VK_SUCCESS
 }
 
+/// `vkInvalidateMappedMemoryRanges` — the spec-correct point where the host must see the device's writes
+/// to a non-coherent mapped allocation. The model's memory is coherent, but a defensive app that maps a
+/// buffer and then invalidates before reading must still observe GPU output. So each range's staging bytes
+/// are refreshed with the bound buffer's CURRENT device contents via the device→host readback (the same
+/// path `vkMapMemory` and cuda's `cuMemcpyDtoH` use). Ranges over host-only (unbound) staging are the true
+/// no-op the coherent-memory contract promises.
 #[no_mangle]
 pub extern "C" fn vkInvalidateMappedMemoryRanges(
     _device: *mut c_void,
-    _memory_range_count: u32,
-    _p_memory_ranges: *const c_void,
+    memory_range_count: u32,
+    p_memory_ranges: *const c_void,
 ) -> VkResult {
+    if p_memory_ranges.is_null() || memory_range_count == 0 {
+        return VK_SUCCESS;
+    }
+    let ranges = unsafe {
+        core::slice::from_raw_parts(p_memory_ranges as *const VkMappedMemoryRange, memory_range_count as usize)
+    };
+    dev_sink(|dev, sink| {
+        for r in ranges {
+            // A readback transport error on one range is non-fatal to the invalidate; the memory stays
+            // valid host-visible staging.
+            let _ = create::read_mapped(dev, sink, r.memory, r.offset, r.size);
+        }
+    });
     VK_SUCCESS
 }
 

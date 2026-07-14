@@ -152,19 +152,23 @@ pub extern "C" fn vkMapMemory(
     _device: *mut c_void,
     memory: u64,
     offset: u64,
-    _size: u64,
+    size: u64,
     _flags: u32,
     pp_data: *mut *mut c_void,
 ) -> VkResult {
     if pp_data.is_null() {
         return VK_ERROR_MEMORY_MAP_FAILED;
     }
-    dev_sink(|dev, _| {
+    dev_sink(|dev, sink| {
         if create::map_memory(dev, memory).is_err() {
             return VK_ERROR_MEMORY_MAP_FAILED;
         }
-        // The app writes directly into the memory's staging bytes; those flush as a WriteBuffer at
-        // submit (mapped_uploads). Hand back a pointer into that Vec at `offset`.
+        // Device→host: refresh the mapped range with the bound buffer's CURRENT device bytes so a reader
+        // observes GPU output through the pointer (unbound host-only staging is left untouched). A
+        // readback transport error is non-fatal — the app still gets a valid staging pointer. The app's
+        // own writes into these bytes flush back as a WriteBuffer at submit (mapped_uploads).
+        let _ = create::read_mapped(dev, sink, memory, offset, size);
+        // Hand back a pointer into the staging Vec at `offset`.
         let Some(m) = dev.memories.get_mut(&memory) else {
             return VK_ERROR_MEMORY_MAP_FAILED;
         };
