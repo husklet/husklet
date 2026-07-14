@@ -1,7 +1,17 @@
-# Architecture & requirements (target)
+# Architecture & requirements
 
 Authoritative capture of the maintainer's direction (2026-07-13). The product brand is **husklet**;
 the code prefix is **`hl`** everywhere.
+
+**Status: LANDED.** The `hl` composition-root package now exists (renamed from `hl-cli`); the rebrand,
+platform seam, `doctor` removal, and env transition below are implemented and full-matrix-green. Remaining
+`target`-only notes are called out inline.
+
+The `hl` crate's shape: **`src/bin/hl.rs`** is the binary — clap `Cli`/`Cmd` parsing + dispatch only.
+The **library** owns all logic: `config` (always-on; the bare `hl-ws::Workspace` extended with feature
+settings + persistence, so the GUI depends on `hl` with `default-features = false`) and the command modules
+(`run`/`workspace`/`daemon`/`context`/`install`/`agent`/`hl_launcher`/… behind the default `cli` feature).
+The **platform seam** is `hl/src/platform/{macos,linux,windows}.rs`.
 
 ## 1. Guiding principle
 
@@ -57,25 +67,31 @@ its value, listens for user changes, and passes it to the engine. `hl-ws` never 
 
 ## 5. Platform seam (linux→linux, later Windows)
 
-`hl` hides all host specifics behind a `Platform` abstraction (`state_root`, `app_bundle`, `open_app`,
-`resolve_cli`, `install_service`, `prelaunch_env`, …): `MacPlatform` now, `LinuxPlatform` later — additive,
-not a rewrite. The macOS GPU/present stack (`hl-display`, cfg-gated Metal/IOSurface/Cocoa/Mach) is the
-model for how a platform-specific seam is isolated. Nothing macOS may leak into a host-neutral crate
-(`hl-cli`/`hl`, `hl-daemon`, `hl-images`, `hl-jit`, `hl-gpu`, `hl-ws*`). Known leaks to fix: install/log/
-service paths + `launchctl`/`open`/`xattr` in hl-cli; a hardcoded `/Users/x/.local/bin` in the gui.
+`hl` hides all host specifics behind the `platform` seam (`hl/src/platform/`, cfg-selected):
+service install/ensure/stop/restart/status/remove, `is_quarantined`, `app_bundle`, `logs_dir`. **Landed:**
+`macos.rs` = launchd (`launchctl` + plist) + Gatekeeper `xattr` + `/Applications/hl.app`; `linux.rs` = a
+real `systemctl --user` unit; `windows.rs` = graceful `Unsupported` stub. The macOS GPU/present stack
+(`hl-display`, cfg-gated Metal/IOSurface/Cocoa/Mach) is the model for isolating a platform-specific seam.
+Nothing macOS may leak into a host-neutral crate (`hl`, `hl-daemon`, `hl-images`, `hl-jit`, `hl-gpu`,
+`hl-ws*`). *Target:* a hardcoded `/Users/x/.local/bin` in the gui still to move behind the seam.
 
 ## 6. Cross-cutting requirements
 
 - **Rebrand:** `dd` → `hl` everywhere — `hl-*` packages, `hl_*` crates, `hl_`/`HL_` symbols + env vars,
-  product brand `husklet`. (Done: packages, FFI + internal symbols. Pending: env `DD_*`→`HL_*`, bin/artifact
-  names, state root `~/.dd`→fresh cutover, app/launchd/Docker/website, residue audit.)
+  product brand `husklet`. **DONE:** packages, FFI + internal symbols, env `DD_*`→`HL_*` (149 names,
+  engine+scripts lockstep), bin/artifact names (`hl` command, `hljit`, `hl-daemon`, `hl-app`), state root
+  `~/.dd`→`~/.hl` (fresh cutover), launchd label `com.hl.*`, docker context `hl`. No `dd` product token
+  remains in code (test payloads like `dd-value-42` deliberately spared). *Target:* website/ brand assets.
 - **No host-command shell-outs** for work Rust can do — implement natively (std::fs + a walk + `sha2`) or a
   real crate (`flate2` for gzip; the `tar` crate for archive extract, once vendorable). Legit external stay:
   git/gh, the docker CLI in daemon scenarios, the mac bridge, nix, engine/guest binaries, toolchain, launchctl.
 - **Minimal env vars:** map every project env var to `HL_XXXX` **and reduce the count** — pass values
   directly (args/config) parent→child wherever possible; keep an env var only for a true cross-process
-  contract or user override.
-- **Drop darwin-GUEST support** (the darwinjail that runs macOS binaries as guests). Keep the macOS **host**.
+  contract or user override. **DONE:** renamed to `HL_*`; the socket-path override hooks (`HL_DISPLAY_SOCK`,
+  `HL_GPU_EXEC_SOCK`) deleted — paths computed directly on both ends. Kept: engine-exec contracts (read
+  after `posix_spawn` via inherited `environ`), service-manager config, opt-in debug knobs.
+- **Drop darwin-GUEST support** (the darwinjail that runs macOS binaries as guests) — **DONE**; ~63 files
+  removed, the 3 coupling enums gone. The macOS **host** (ffi.c/`hl_spawn`, mach bridge, app bundle) stays.
 - **Prefer passing values directly** over env/globals; keep crates dependency-lean.
 
 ## 7. Rules
