@@ -68,6 +68,9 @@ pub struct State {
     limits: [usize; hl_cuda::result::CU_LIMIT_MAX as usize],
     /// Context preferred cache config (`cuCtxGetCacheConfig`/`cuCtxSetCacheConfig`).
     cache_config: i32,
+    /// Context shared-memory bank config (`cuCtxGetSharedMemConfig`/`cuCtxSetSharedMemConfig`); defaults
+    /// to `CU_SHARED_MEM_CONFIG_DEFAULT_BANK_SIZE` (0).
+    shared_config: i32,
 }
 
 impl State {
@@ -99,6 +102,7 @@ impl State {
             // stack / printf-fifo / malloc-heap / rt-sync-depth / rt-pending-launches / l2-fetch-gran / persisting-l2.
             limits: [1024, 1024 * 1024, 8 * 1024 * 1024, 2, 2048, 128, 0],
             cache_config: 0,
+            shared_config: 0,
         }
     }
 
@@ -119,6 +123,18 @@ impl State {
     /// `cuCtxSetCacheConfig`.
     pub fn set_ctx_cache_config(&mut self, c: i32) {
         self.cache_config = c;
+    }
+    /// `cuCtxGetSharedMemConfig` — the current context's shared-memory bank config.
+    pub fn ctx_shared_config(&self) -> i32 {
+        self.shared_config
+    }
+    /// `cuCtxSetSharedMemConfig`.
+    pub fn set_ctx_shared_config(&mut self, c: i32) {
+        self.shared_config = c;
+    }
+    /// The current context token as a raw `usize` (`0` = none) — the id `cuCtxGetId` reports.
+    pub fn current_ctx_token(&self) -> usize {
+        self.current_ctx
     }
 
     // ---- context tokens ---------------------------------------------------------------------------
@@ -241,6 +257,11 @@ impl State {
     }
     pub fn function(&self, h: *mut c_void) -> Option<Function> {
         self.func_index(h).map(|i| self.functions[i].0)
+    }
+    /// The interned entry-name pointer for `cuFuncGetName` (`None` for a bad handle). The `CString` is
+    /// owned by the process-global table for the process lifetime, so the pointer stays valid.
+    pub fn func_name_ptr(&self, h: *mut c_void) -> Option<*const core::ffi::c_char> {
+        self.func_index(h).map(|i| self.functions[i].1.as_ptr())
     }
     /// Index into the parallel `CUfunction` tables for a handle (`None` for null / out-of-range).
     fn func_index(&self, h: *mut c_void) -> Option<usize> {

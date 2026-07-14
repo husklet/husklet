@@ -1611,6 +1611,564 @@ pub extern "C" fn cuCtxGetStreamPriorityRange(least: *mut i32, greatest: *mut i3
 }
 
 // ==================================================================================================
+// device: peer access, PCI/LUID identity, legacy properties struct
+// ==================================================================================================
+
+/// `cuDeviceCanAccessPeer(out, a, b)` — the single simulated device has no peers, so peer access is
+/// always unavailable (a real single-GPU box reports the same).
+#[no_mangle]
+pub extern "C" fn cuDeviceCanAccessPeer(can_access_peer: *mut i32, a: i32, b: i32) -> i32 {
+    let _ = (a, b);
+    if can_access_peer.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    unsafe { *can_access_peer = 0 };
+    CUDA_SUCCESS
+}
+
+/// `cuDeviceGetByPCIBusId(dev, pciBusId)` — resolve a device by its PCI bus-id string. There is one
+/// simulated device, so any well-formed request resolves to device 0.
+#[no_mangle]
+pub extern "C" fn cuDeviceGetByPCIBusId(dev: *mut i32, s: *const c_char) -> i32 {
+    if dev.is_null() || s.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    unsafe { *dev = 0 };
+    CUDA_SUCCESS
+}
+
+/// `cuDeviceGetPCIBusId(dst, len, dev)` — write the device's PCI bus id (`domain:bus:device.function`)
+/// into the caller's buffer.
+#[no_mangle]
+pub extern "C" fn cuDeviceGetPCIBusId(s: *mut c_char, len: i32, dev: i32) -> i32 {
+    if s.is_null() || len <= 0 || dev != 0 {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|st| unsafe { write_cstr(s, len, &st.ctx.device.pci_bus_id) });
+    CUDA_SUCCESS
+}
+
+/// `cuDeviceGetLuid(luid, deviceNodeMask, dev)` — the device LUID is a Windows/TCC-only identity; the
+/// simulated Linux device has none, so this is honestly `CUDA_ERROR_NOT_SUPPORTED` (never a fake LUID).
+#[no_mangle]
+pub extern "C" fn cuDeviceGetLuid(luid: *mut c_char, mask: *mut u32, dev: i32) -> i32 {
+    let _ = (luid, mask);
+    if dev != 0 {
+        return CUDA_ERROR_INVALID_DEVICE;
+    }
+    crate::stub::unsupported("cuDeviceGetLuid", "LUID is Windows/TCC-only; not modeled");
+    CUDA_ERROR_NOT_SUPPORTED
+}
+
+/// The legacy `CUdevprop` struct `cuDeviceGetProperties` fills (layout matches cuda.h). Superseded by
+/// `cuDeviceGetAttribute`, but still queried by old apps.
+#[repr(C)]
+struct CuDevprop {
+    max_threads_per_block: i32,
+    max_threads_dim: [i32; 3],
+    max_grid_size: [i32; 3],
+    shared_mem_per_block: i32,
+    total_constant_memory: i32,
+    simd_width: i32,
+    mem_pitch: i32,
+    regs_per_block: i32,
+    clock_rate: i32,
+    texture_align: i32,
+}
+
+/// `cuDeviceGetProperties(prop, dev)` — the deprecated bulk device-properties query. Every field mirrors
+/// the value `cuDeviceGetAttribute` reports for the same property, sourced from the modeled device.
+#[no_mangle]
+pub extern "C" fn cuDeviceGetProperties(prop: *mut c_void, dev: i32) -> i32 {
+    if prop.is_null() || dev != 0 {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let p = with(|s| {
+        let d = &s.ctx.device;
+        CuDevprop {
+            max_threads_per_block: d.max_threads_per_block as i32,
+            max_threads_dim: [1024, 1024, 64],
+            max_grid_size: [2147483647, 65535, 65535],
+            shared_mem_per_block: 49152,
+            total_constant_memory: 65536,
+            simd_width: d.warp_size as i32,
+            mem_pitch: 2147483647,
+            regs_per_block: 65536,
+            clock_rate: d.clock_khz as i32,
+            texture_align: 512,
+        }
+    });
+    unsafe { *(prop as *mut CuDevprop) = p };
+    CUDA_SUCCESS
+}
+
+// ==================================================================================================
+// context: v3 create, id, shared-mem config, peer access, persisting-L2 reset
+// ==================================================================================================
+
+/// `cuCtxCreate_v3(pctx, execAffinityParams, numParams, flags, dev)` — context creation with execution
+/// affinity. The single simulated device has no partitionable SMs, so the affinity params are ignored
+/// and this shares `cuCtxCreate_v2`'s body.
+#[no_mangle]
+pub extern "C" fn cuCtxCreate_v3(
+    pctx: *mut *mut c_void,
+    params_array: *mut c_void,
+    num_params: i32,
+    flags: u32,
+    dev: i32,
+) -> i32 {
+    let _ = (params_array, num_params);
+    cuCtxCreate_v2(pctx, flags, dev)
+}
+
+/// `cuCtxGetId(ctx, id)` — a unique id for `ctx` (the current context when `ctx` is null). The context
+/// token is already a stable per-process id, so it is reported directly.
+#[no_mangle]
+pub extern "C" fn cuCtxGetId(ctx: *mut c_void, id: *mut u64) -> i32 {
+    if id.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let token = if ctx.is_null() {
+        with(|s| s.current_ctx_token())
+    } else {
+        ctx as usize
+    };
+    unsafe { *id = token as u64 };
+    CUDA_SUCCESS
+}
+
+/// `cuCtxGetSharedMemConfig(config)` — the current context's shared-memory bank width config.
+#[no_mangle]
+pub extern "C" fn cuCtxGetSharedMemConfig(c: *mut i32) -> i32 {
+    if c.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let v = with(|s| s.ctx_shared_config());
+    unsafe { *c = v };
+    CUDA_SUCCESS
+}
+
+/// `cuCtxSetSharedMemConfig(config)` — record the context's preferred shared-memory bank config (a hint
+/// the synchronous executor honors as a no-op but reports faithfully via the getter).
+#[no_mangle]
+pub extern "C" fn cuCtxSetSharedMemConfig(c: i32) -> i32 {
+    with(|s| s.set_ctx_shared_config(c));
+    CUDA_SUCCESS
+}
+
+/// `cuCtxEnablePeerAccess(peerContext, flags)` — the single simulated device has no peers, so enabling
+/// peer access is honestly unsupported (never a fake success).
+#[no_mangle]
+pub extern "C" fn cuCtxEnablePeerAccess(peer: *mut c_void, flags: u32) -> i32 {
+    let _ = (peer, flags);
+    CUDA_ERROR_PEER_ACCESS_UNSUPPORTED
+}
+
+/// `cuCtxDisablePeerAccess(peerContext)` — peer access was never (and can never be) enabled on the
+/// single simulated device, so this is honestly `CUDA_ERROR_PEER_ACCESS_NOT_ENABLED`.
+#[no_mangle]
+pub extern "C" fn cuCtxDisablePeerAccess(peer: *mut c_void) -> i32 {
+    let _ = peer;
+    CUDA_ERROR_PEER_ACCESS_NOT_ENABLED
+}
+
+/// `cuCtxResetPersistingL2Cache()` — the model advertises no persisting-L2 window (the attribute reports
+/// 0), so resetting it is a valid no-op.
+#[no_mangle]
+pub extern "C" fn cuCtxResetPersistingL2Cache() -> i32 {
+    CUDA_SUCCESS
+}
+
+// ==================================================================================================
+// function: owning module, entry name, shared-mem config
+// ==================================================================================================
+
+/// `cuFuncGetModule(hmod, hfunc)` — the module a function was resolved from.
+#[no_mangle]
+pub extern "C" fn cuFuncGetModule(m: *mut *mut c_void, f: *mut c_void) -> i32 {
+    if m.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| match s.function(f) {
+        Some(func) => {
+            // The module handle is `module id` interned as `index + 1` (see `intern_module`); the resolved
+            // `Function.module` IS that model id, so the guest handle is the id itself.
+            unsafe { *m = func.module as usize as *mut c_void };
+            CUDA_SUCCESS
+        }
+        None => CUDA_ERROR_INVALID_HANDLE,
+    })
+}
+
+/// `cuFuncGetName(name, hfunc)` — the entry-point name the function was resolved by. Returns a pointer to
+/// the interned name (stable for the process lifetime).
+#[no_mangle]
+pub extern "C" fn cuFuncGetName(name: *mut *const c_char, f: *mut c_void) -> i32 {
+    if name.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| match s.func_name_ptr(f) {
+        Some(p) => {
+            unsafe { *name = p };
+            CUDA_SUCCESS
+        }
+        None => CUDA_ERROR_INVALID_HANDLE,
+    })
+}
+
+/// `cuFuncSetSharedMemConfig(hfunc, config)` — record a per-function shared-memory bank config hint (a
+/// no-op for the synchronous executor). Validates the handle so a bogus function is rejected honestly.
+#[no_mangle]
+pub extern "C" fn cuFuncSetSharedMemConfig(f: *mut c_void, config: i32) -> i32 {
+    let _ = config;
+    with(|s| if s.function(f).is_some() { CUDA_SUCCESS } else { CUDA_ERROR_INVALID_HANDLE })
+}
+
+// ==================================================================================================
+// entry-point dispatch: cuGetProcAddress (+_v2) — resolve a cu* symbol to its function pointer
+// ==================================================================================================
+
+extern "C" {
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+/// Map a base (unversioned) `cu*` name to the newest versioned symbol the app should bind. A CUDA app
+/// that calls `cuGetProcAddress("cuMemAlloc", ...)` expects the `_v2` entry point back — the same alias
+/// table the real driver's dispatch applies.
+fn newest_symbol(name: &str) -> &str {
+    match name {
+        "cuDeviceTotalMem" => "cuDeviceTotalMem_v2",
+        "cuCtxCreate" => "cuCtxCreate_v2",
+        "cuCtxDestroy" => "cuCtxDestroy_v2",
+        "cuCtxPushCurrent" => "cuCtxPushCurrent_v2",
+        "cuCtxPopCurrent" => "cuCtxPopCurrent_v2",
+        "cuDevicePrimaryCtxRelease" => "cuDevicePrimaryCtxRelease_v2",
+        "cuDevicePrimaryCtxReset" => "cuDevicePrimaryCtxReset_v2",
+        "cuDevicePrimaryCtxSetFlags" => "cuDevicePrimaryCtxSetFlags_v2",
+        "cuModuleGetGlobal" => "cuModuleGetGlobal_v2",
+        "cuMemGetInfo" => "cuMemGetInfo_v2",
+        "cuMemAlloc" => "cuMemAlloc_v2",
+        "cuMemAllocPitch" => "cuMemAllocPitch_v2",
+        "cuMemFree" => "cuMemFree_v2",
+        "cuMemGetAddressRange" => "cuMemGetAddressRange_v2",
+        "cuMemAllocHost" => "cuMemAllocHost_v2",
+        "cuMemHostGetDevicePointer" => "cuMemHostGetDevicePointer_v2",
+        "cuMemHostRegister" => "cuMemHostRegister_v2",
+        "cuMemcpyHtoD" => "cuMemcpyHtoD_v2",
+        "cuMemcpyDtoH" => "cuMemcpyDtoH_v2",
+        "cuMemcpyDtoD" => "cuMemcpyDtoD_v2",
+        "cuMemcpyHtoDAsync" => "cuMemcpyHtoDAsync_v2",
+        "cuMemcpyDtoHAsync" => "cuMemcpyDtoHAsync_v2",
+        "cuMemcpyDtoDAsync" => "cuMemcpyDtoDAsync_v2",
+        "cuMemsetD8" => "cuMemsetD8_v2",
+        "cuMemsetD16" => "cuMemsetD16_v2",
+        "cuMemsetD32" => "cuMemsetD32_v2",
+        "cuStreamDestroy" => "cuStreamDestroy_v2",
+        "cuEventDestroy" => "cuEventDestroy_v2",
+        other => other, // already a real exported symbol (versioned or unversioned)
+    }
+}
+
+/// `cuGetProcAddress(symbol, pfn, cudaVersion, flags)` — resolve a driver-API entry point by name to its
+/// function pointer. Resolves against this object's own exported `cu*` surface via `dlsym(RTLD_DEFAULT)`
+/// (when deployed as `libcuda.so.1` every entry point is a dynamic symbol). A symbol this driver does not
+/// export is honestly `CUDA_ERROR_NOT_FOUND`.
+#[no_mangle]
+pub extern "C" fn cuGetProcAddress(
+    symbol: *const c_char,
+    pfn: *mut *mut c_void,
+    cuda_version: i32,
+    flags: u64,
+) -> i32 {
+    let _ = (cuda_version, flags);
+    if symbol.is_null() || pfn.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let Some(raw) = (unsafe { cstr_bytes(symbol) }) else {
+        return CUDA_ERROR_INVALID_VALUE;
+    };
+    let Ok(name) = String::from_utf8(raw) else {
+        return CUDA_ERROR_INVALID_VALUE;
+    };
+    let resolved = newest_symbol(&name);
+    let Ok(cname) = std::ffi::CString::new(resolved) else {
+        return CUDA_ERROR_INVALID_VALUE;
+    };
+    let p = unsafe { dlsym(core::ptr::null_mut(), cname.as_ptr()) }; // RTLD_DEFAULT
+    if p.is_null() {
+        unsafe { *pfn = core::ptr::null_mut() };
+        return CUDA_ERROR_NOT_FOUND;
+    }
+    unsafe { *pfn = p };
+    CUDA_SUCCESS
+}
+
+/// `cuGetProcAddress_v2(symbol, pfn, cudaVersion, flags, status)` — the same lookup as `cuGetProcAddress`,
+/// plus the driver's `CUdriverProcAddressQueryResult` status out-param.
+#[no_mangle]
+pub extern "C" fn cuGetProcAddress_v2(
+    symbol: *const c_char,
+    pfn: *mut *mut c_void,
+    cuda_version: i32,
+    flags: u64,
+    status: *mut i32,
+) -> i32 {
+    let r = cuGetProcAddress(symbol, pfn, cuda_version, flags);
+    if !status.is_null() {
+        unsafe {
+            *status = if r == CUDA_SUCCESS {
+                CU_GET_PROC_ADDRESS_SUCCESS
+            } else {
+                CU_GET_PROC_ADDRESS_SYMBOL_NOT_FOUND
+            };
+        }
+    }
+    r
+}
+
+// ==================================================================================================
+// launch: cooperative kernel, host callbacks
+// ==================================================================================================
+
+/// `cuLaunchCooperativeKernel(...)` — a cooperative grid launch. In hl's synchronous single-device model
+/// a cooperative launch is an ordinary grid launch (all blocks are "co-resident"), so it funnels through
+/// the exact same lowering as `cuLaunchKernel`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn cuLaunchCooperativeKernel(
+    f: *mut c_void,
+    gx: u32,
+    gy: u32,
+    gz: u32,
+    bx: u32,
+    by: u32,
+    bz: u32,
+    shared_mem_bytes: u32,
+    stream: *mut c_void,
+    kernel_params: *mut *mut c_void,
+) -> i32 {
+    cuLaunchKernel(
+        f, gx, gy, gz, bx, by, bz, shared_mem_bytes, stream, kernel_params, core::ptr::null_mut(),
+    )
+}
+
+/// `cuLaunchHostFunc(stream, fn, userData)` — enqueue a host callback in stream order. With the
+/// synchronous executor all previously-submitted stream work has already completed, so the callback runs
+/// inline. It is invoked OUTSIDE the state lock (a callback may re-enter the driver API). A bogus stream
+/// handle is `CUDA_ERROR_INVALID_HANDLE`; a null callback is `CUDA_ERROR_INVALID_VALUE`.
+#[no_mangle]
+pub extern "C" fn cuLaunchHostFunc(stream: *mut c_void, fn_: *mut c_void, user_data: *mut c_void) -> i32 {
+    if fn_.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if with(|s| s.stream(stream).is_none()) {
+        return CUDA_ERROR_INVALID_HANDLE;
+    }
+    // SAFETY: `fn_` is a `CUhostFn = void(*)(void*)` supplied by the caller.
+    let hostfn: extern "C" fn(*mut c_void) = unsafe { core::mem::transmute(fn_) };
+    hostfn(user_data);
+    CUDA_SUCCESS
+}
+
+/// `cuStreamAddCallback(stream, callback, userData, flags)` — the legacy stream-callback API. As with
+/// `cuLaunchHostFunc`, the synchronous executor has already completed preceding work, so the callback
+/// fires inline with `CUDA_SUCCESS`, OUTSIDE the state lock. A bogus stream is `INVALID_HANDLE`; a null
+/// callback is `INVALID_VALUE`.
+#[no_mangle]
+pub extern "C" fn cuStreamAddCallback(
+    s: *mut c_void,
+    cb: *mut c_void,
+    user_data: *mut c_void,
+    flags: u32,
+) -> i32 {
+    let _ = flags;
+    if cb.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if with(|st| st.stream(s).is_none()) {
+        return CUDA_ERROR_INVALID_HANDLE;
+    }
+    // SAFETY: `cb` is a `CUstreamCallback = void(*)(CUstream, CUresult, void*)`.
+    let callback: extern "C" fn(*mut c_void, i32, *mut c_void) = unsafe { core::mem::transmute(cb) };
+    callback(s, CUDA_SUCCESS, user_data);
+    CUDA_SUCCESS
+}
+
+// ==================================================================================================
+// memory: stream-ordered alloc/free, unified-memory hints, host-alloc flags, pointer set-attr
+// ==================================================================================================
+
+/// `cuMemAllocAsync(dptr, bytesize, stream)` — stream-ordered device allocation. The synchronous model
+/// completes it immediately, sharing `cuMemAlloc_v2`'s body once the stream validates.
+#[no_mangle]
+pub extern "C" fn cuMemAllocAsync(dptr: *mut u64, bytesize: usize, s: *mut c_void) -> i32 {
+    if with(|st| st.stream(s).is_none()) {
+        return CUDA_ERROR_INVALID_HANDLE;
+    }
+    cuMemAlloc_v2(dptr, bytesize)
+}
+
+/// `cuMemFreeAsync(dptr, stream)` — stream-ordered free; shares `cuMemFree_v2` once the stream validates.
+#[no_mangle]
+pub extern "C" fn cuMemFreeAsync(dptr: u64, s: *mut c_void) -> i32 {
+    if with(|st| st.stream(s).is_none()) {
+        return CUDA_ERROR_INVALID_HANDLE;
+    }
+    cuMemFree_v2(dptr)
+}
+
+/// `cuMemAdvise(devPtr, count, advice, device)` — a memory-usage hint for managed memory. The model's
+/// unified memory needs no migration, so advice is a valid no-op (the same observable result a real
+/// driver gives: the hint is accepted and changes no data).
+#[no_mangle]
+pub extern "C" fn cuMemAdvise(p: u64, n: usize, advice: i32, dev: i32) -> i32 {
+    let _ = (p, n, advice, dev);
+    CUDA_SUCCESS
+}
+
+/// `cuMemPrefetchAsync(devPtr, count, dstDevice, stream)` — prefetch managed memory. Unified memory is
+/// always resident in the model, so prefetch is a valid no-op once the stream validates.
+#[no_mangle]
+pub extern "C" fn cuMemPrefetchAsync(p: u64, n: usize, dst: i32, s: *mut c_void) -> i32 {
+    let _ = (p, n, dst);
+    if with(|st| st.stream(s).is_none()) {
+        return CUDA_ERROR_INVALID_HANDLE;
+    }
+    CUDA_SUCCESS
+}
+
+/// `cuStreamAttachMemAsync(stream, devPtr, length, flags)` — scope a managed allocation to a stream. The
+/// single-device unified model has no per-stream residency to change, so this is a valid no-op once the
+/// stream validates.
+#[no_mangle]
+pub extern "C" fn cuStreamAttachMemAsync(s: *mut c_void, dptr: u64, length: usize, flags: u32) -> i32 {
+    let _ = (dptr, length, flags);
+    if with(|st| st.stream(s).is_none()) {
+        return CUDA_ERROR_INVALID_HANDLE;
+    }
+    CUDA_SUCCESS
+}
+
+/// `cuMemHostGetFlags(pFlags, p)` — the flags a host allocation was created with. The modeled pinned
+/// allocator ignores the (portable/mapped/write-combined) flags, so a live host allocation reports 0.
+#[no_mangle]
+pub extern "C" fn cuMemHostGetFlags(pflags: *mut u32, p: *mut c_void) -> i32 {
+    if pflags.is_null() || p.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    unsafe { *pflags = 0 };
+    CUDA_SUCCESS
+}
+
+/// `cuPointerSetAttribute(value, attribute, ptr)` — set a writable pointer attribute. The only writable
+/// attribute is `SYNC_MEMOPS`, which the synchronous model already reports as enabled, so setting it is a
+/// valid no-op. A null value is rejected.
+#[no_mangle]
+pub extern "C" fn cuPointerSetAttribute(value: *const c_void, attr: i32, ptr: u64) -> i32 {
+    let _ = (attr, ptr);
+    if value.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+/// `cuOccupancyAvailableDynamicSMemPerBlock(dynSmem, f, numBlocks, blockSize)` — the dynamic shared bytes
+/// still available per block if `numBlocks` blocks of the function co-reside on an SM: the SM's shared
+/// budget split across the blocks, minus the function's static shared use.
+#[no_mangle]
+pub extern "C" fn cuOccupancyAvailableDynamicSMemPerBlock(
+    dyn_smem: *mut usize,
+    f: *mut c_void,
+    num_blocks: i32,
+    block_size: i32,
+) -> i32 {
+    let _ = block_size;
+    if dyn_smem.is_null() || num_blocks <= 0 {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| {
+        let Some((_num_regs, static_shared)) = func_resources(s, f) else {
+            return CUDA_ERROR_INVALID_HANDLE;
+        };
+        let per_block = MAX_SHARED_PER_SM / num_blocks; // the SM shared budget divided among the blocks
+        let avail = per_block.saturating_sub(static_shared as i32).max(0);
+        unsafe { *dyn_smem = avail as usize };
+        CUDA_SUCCESS
+    })
+}
+
+// ==================================================================================================
+// stream: priority create, capture status (capture unsupported → honest NONE)
+// ==================================================================================================
+
+/// `cuStreamCreateWithPriority(phStream, flags, priority)` — create a stream recording its `(flags,
+/// priority)`. The synchronous model has one priority band, but the requested priority round-trips through
+/// `cuStreamGetPriority` (as a real driver clamps then reports the honored priority).
+#[no_mangle]
+pub extern "C" fn cuStreamCreateWithPriority(phstream: *mut *mut c_void, flags: u32, priority: i32) -> i32 {
+    if phstream.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let h = with(|s| {
+        let stream = s.ctx.streams.create();
+        s.intern_stream(stream, flags, priority)
+    });
+    unsafe { *phstream = h };
+    CUDA_SUCCESS
+}
+
+/// `cuStreamIsCapturing(stream, status)` — graph capture is not modeled, so a valid stream is honestly
+/// never capturing (`CU_STREAM_CAPTURE_STATUS_NONE`). A bogus handle is `CUDA_ERROR_INVALID_HANDLE`.
+#[no_mangle]
+pub extern "C" fn cuStreamIsCapturing(s: *mut c_void, status: *mut i32) -> i32 {
+    with(|st| {
+        if st.stream(s).is_none() {
+            return CUDA_ERROR_INVALID_HANDLE;
+        }
+        if !status.is_null() {
+            unsafe { *status = 0 }; // CU_STREAM_CAPTURE_STATUS_NONE
+        }
+        CUDA_SUCCESS
+    })
+}
+
+/// `cuThreadExchangeStreamCaptureMode(mode)` — capture is unsupported, so there is no thread-local capture
+/// mode to change; the call validates its out-param and leaves the mode unchanged (the exchange is inert
+/// because no capture is ever in progress).
+#[no_mangle]
+pub extern "C" fn cuThreadExchangeStreamCaptureMode(mode: *mut i32) -> i32 {
+    if mode.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    CUDA_SUCCESS
+}
+
+// ==================================================================================================
+// profiler: deprecated collection controls (no host profiler → benign no-ops)
+// ==================================================================================================
+
+/// `cuProfilerInitialize(configFile, outputFile, outputMode)` — the deprecated profiler-config entry.
+/// There is no host profiler to configure, so it is a benign no-op.
+#[no_mangle]
+pub extern "C" fn cuProfilerInitialize(cfg: *const c_char, out: *const c_char, fmt: i32) -> i32 {
+    let _ = (cfg, out, fmt);
+    CUDA_SUCCESS
+}
+
+/// `cuProfilerStart()` — begin profile collection. No host profiler is attached, so this is a no-op that
+/// succeeds (the documented behavior when no profiling session is active).
+#[no_mangle]
+pub extern "C" fn cuProfilerStart() -> i32 {
+    CUDA_SUCCESS
+}
+
+/// `cuProfilerStop()` — end profile collection; the no-op counterpart to `cuProfilerStart`.
+#[no_mangle]
+pub extern "C" fn cuProfilerStop() -> i32 {
+    CUDA_SUCCESS
+}
+
+// ==================================================================================================
 // unit tests for the query/context/pointer entry points
 // ==================================================================================================
 //
@@ -2135,5 +2693,302 @@ mod tests {
         // A bad handle is rejected.
         assert_eq!(cuStreamGetFlags(0x9999 as *mut c_void, &mut flags), CUDA_ERROR_INVALID_HANDLE);
         assert_eq!(cuStreamGetId(0x9999 as *mut c_void, &mut id), CUDA_ERROR_INVALID_HANDLE);
+    }
+
+    // ---- newly-implemented tail: device identity / context / function / dispatch / hints ----------
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A `CUhostFn` test double: bumps the `AtomicUsize` its `userData` points at.
+    extern "C" fn host_cb(data: *mut c_void) {
+        let c = unsafe { &*(data as *const AtomicUsize) };
+        c.fetch_add(1, Ordering::SeqCst);
+    }
+    /// A `CUstreamCallback` test double: bumps the counter only when handed `CUDA_SUCCESS`.
+    extern "C" fn stream_cb(_s: *mut c_void, status: i32, data: *mut c_void) {
+        if status == CUDA_SUCCESS {
+            let c = unsafe { &*(data as *const AtomicUsize) };
+            c.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn host_func_and_stream_callback_run_inline() {
+        let _g = guard();
+        let counter = AtomicUsize::new(0);
+        let p = &counter as *const AtomicUsize as *mut c_void;
+        let hf: extern "C" fn(*mut c_void) = host_cb;
+        let sf: extern "C" fn(*mut c_void, i32, *mut c_void) = stream_cb;
+
+        // The host func runs inline on the default stream (synchronous executor).
+        assert_eq!(cuLaunchHostFunc(core::ptr::null_mut(), hf as *mut c_void, p), CUDA_SUCCESS);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        // A null callback / bogus stream are rejected honestly.
+        assert_eq!(
+            cuLaunchHostFunc(core::ptr::null_mut(), core::ptr::null_mut(), p),
+            CUDA_ERROR_INVALID_VALUE
+        );
+        assert_eq!(
+            cuLaunchHostFunc(0x9999 as *mut c_void, hf as *mut c_void, p),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+
+        // The stream callback fires with success.
+        assert_eq!(cuStreamAddCallback(core::ptr::null_mut(), sf as *mut c_void, p, 0), CUDA_SUCCESS);
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            cuStreamAddCallback(core::ptr::null_mut(), core::ptr::null_mut(), p, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
+        assert_eq!(
+            cuStreamAddCallback(0x9999 as *mut c_void, sf as *mut c_void, p, 0),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+    }
+
+    #[test]
+    fn get_proc_address_aliases_and_error_paths() {
+        let _g = guard();
+        // The alias table maps a base name to its newest versioned symbol (the app-facing contract).
+        assert_eq!(newest_symbol("cuMemAlloc"), "cuMemAlloc_v2");
+        assert_eq!(newest_symbol("cuCtxCreate"), "cuCtxCreate_v2");
+        assert_eq!(newest_symbol("cuLaunchKernel"), "cuLaunchKernel"); // already the real symbol
+
+        // Null args are rejected.
+        let mut pfn: *mut c_void = core::ptr::null_mut();
+        assert_eq!(
+            cuGetProcAddress(core::ptr::null(), &mut pfn, 12020, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
+        let sym = std::ffi::CString::new("cuInit").unwrap();
+        assert_eq!(
+            cuGetProcAddress(sym.as_ptr(), core::ptr::null_mut(), 12020, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
+
+        // A symbol this driver does not export is honestly NOT_FOUND, and _v2 reports the status.
+        let bogus = std::ffi::CString::new("cuNotARealEntryPoint").unwrap();
+        assert_eq!(cuGetProcAddress(bogus.as_ptr(), &mut pfn, 12020, 0), CUDA_ERROR_NOT_FOUND);
+        assert!(pfn.is_null());
+        let mut status = -1i32;
+        assert_eq!(
+            cuGetProcAddress_v2(bogus.as_ptr(), &mut pfn, 12020, 0, &mut status),
+            CUDA_ERROR_NOT_FOUND
+        );
+        assert_eq!(status, CU_GET_PROC_ADDRESS_SYMBOL_NOT_FOUND);
+    }
+
+    #[test]
+    fn ctx_id_and_shared_mem_config_round_trip() {
+        let _g = guard();
+        let mut ctx: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuCtxCreate_v2(&mut ctx, 0, 0), CUDA_SUCCESS);
+
+        // cuCtxGetId reports the current context's token; an explicit ctx reports its own.
+        let mut id = 0u64;
+        assert_eq!(cuCtxGetId(core::ptr::null_mut(), &mut id), CUDA_SUCCESS);
+        assert_eq!(id, ctx as u64);
+        assert_eq!(cuCtxGetId(ctx, &mut id), CUDA_SUCCESS);
+        assert_eq!(id, ctx as u64);
+        assert_eq!(cuCtxGetId(ctx, core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+
+        // v3 create is equivalent to v2 (affinity params ignored).
+        let mut ctx3: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuCtxCreate_v3(&mut ctx3, core::ptr::null_mut(), 0, 5, 0), CUDA_SUCCESS);
+        assert!(!ctx3.is_null());
+
+        // Shared-mem config round-trips; persisting-L2 reset is a valid no-op.
+        let mut c = -1i32;
+        assert_eq!(cuCtxGetSharedMemConfig(&mut c), CUDA_SUCCESS);
+        assert_eq!(c, 0);
+        assert_eq!(cuCtxSetSharedMemConfig(2), CUDA_SUCCESS);
+        assert_eq!(cuCtxGetSharedMemConfig(&mut c), CUDA_SUCCESS);
+        assert_eq!(c, 2);
+        assert_eq!(cuCtxResetPersistingL2Cache(), CUDA_SUCCESS);
+    }
+
+    #[test]
+    fn peer_access_is_honestly_unsupported() {
+        let _g = guard();
+        // A single simulated device has no peers.
+        let mut can = -1i32;
+        assert_eq!(cuDeviceCanAccessPeer(&mut can, 0, 0), CUDA_SUCCESS);
+        assert_eq!(can, 0);
+        assert_eq!(cuDeviceCanAccessPeer(core::ptr::null_mut(), 0, 0), CUDA_ERROR_INVALID_VALUE);
+        // Enable/disable peer access are honest, distinct errors (never a fake success).
+        assert_eq!(
+            cuCtxEnablePeerAccess(0x1 as *mut c_void, 0),
+            CUDA_ERROR_PEER_ACCESS_UNSUPPORTED
+        );
+        assert_eq!(
+            cuCtxDisablePeerAccess(0x1 as *mut c_void),
+            CUDA_ERROR_PEER_ACCESS_NOT_ENABLED
+        );
+    }
+
+    #[test]
+    fn device_identity_pci_luid_and_properties() {
+        let _g = guard();
+        // PCI bus id is written into the caller's buffer.
+        let mut buf = [0 as c_char; 32];
+        assert_eq!(cuDeviceGetPCIBusId(buf.as_mut_ptr(), 32, 0), CUDA_SUCCESS);
+        let s = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap();
+        assert_eq!(s, "0000:00:00.0");
+        assert_eq!(cuDeviceGetPCIBusId(core::ptr::null_mut(), 32, 0), CUDA_ERROR_INVALID_VALUE);
+
+        // By-PCI-id resolves the single device to ordinal 0.
+        let mut dev = -1i32;
+        let id = std::ffi::CString::new("0000:00:00.0").unwrap();
+        assert_eq!(cuDeviceGetByPCIBusId(&mut dev, id.as_ptr()), CUDA_SUCCESS);
+        assert_eq!(dev, 0);
+
+        // LUID is Windows/TCC-only → honest NOT_SUPPORTED (bad ordinal is INVALID_DEVICE).
+        let mut luid = [0 as c_char; 8];
+        let mut mask = 0u32;
+        assert_eq!(cuDeviceGetLuid(luid.as_mut_ptr(), &mut mask, 0), CUDA_ERROR_NOT_SUPPORTED);
+        assert_eq!(cuDeviceGetLuid(luid.as_mut_ptr(), &mut mask, 1), CUDA_ERROR_INVALID_DEVICE);
+
+        // The legacy properties struct mirrors the attribute values.
+        let mut prop = CuDevprop {
+            max_threads_per_block: 0,
+            max_threads_dim: [0; 3],
+            max_grid_size: [0; 3],
+            shared_mem_per_block: 0,
+            total_constant_memory: 0,
+            simd_width: 0,
+            mem_pitch: 0,
+            regs_per_block: 0,
+            clock_rate: 0,
+            texture_align: 0,
+        };
+        assert_eq!(
+            cuDeviceGetProperties(&mut prop as *mut CuDevprop as *mut c_void, 0),
+            CUDA_SUCCESS
+        );
+        let (want_max, want_warp) =
+            with(|s| (s.ctx.device.max_threads_per_block as i32, s.ctx.device.warp_size as i32));
+        assert_eq!(prop.max_threads_per_block, want_max);
+        assert_eq!(prop.simd_width, want_warp);
+        assert_eq!(prop.total_constant_memory, 65536);
+        assert_eq!(cuDeviceGetProperties(core::ptr::null_mut(), 0), CUDA_ERROR_INVALID_VALUE);
+    }
+
+    #[test]
+    fn func_module_name_and_shared_config() {
+        let _g = guard();
+        let f = load_vecadd();
+
+        // cuFuncGetName reports the entry the function was resolved by.
+        let mut np: *const c_char = core::ptr::null();
+        assert_eq!(cuFuncGetName(&mut np, f), CUDA_SUCCESS);
+        let name = unsafe { std::ffi::CStr::from_ptr(np) }.to_str().unwrap();
+        assert_eq!(name, "vecadd");
+        // cuFuncGetModule hands back a non-null module handle for a resolved function.
+        let mut m: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuFuncGetModule(&mut m, f), CUDA_SUCCESS);
+        assert!(!m.is_null());
+        // Shared-mem config validates the handle.
+        assert_eq!(cuFuncSetSharedMemConfig(f, 1), CUDA_SUCCESS);
+
+        // Bad handles are rejected honestly.
+        assert_eq!(cuFuncGetName(&mut np, 0x1234 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(cuFuncGetModule(&mut m, 0x1234 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuFuncSetSharedMemConfig(0x1234 as *mut c_void, 1),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(cuFuncGetName(core::ptr::null_mut(), f), CUDA_ERROR_INVALID_VALUE);
+    }
+
+    #[test]
+    fn stream_capture_priority_and_memory_hints() {
+        let _g = guard();
+        // A priority stream round-trips its priority through cuStreamGetPriority.
+        let mut stream: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuStreamCreateWithPriority(&mut stream, 1, -2), CUDA_SUCCESS);
+        let mut prio = 0i32;
+        assert_eq!(cuStreamGetPriority(stream, &mut prio), CUDA_SUCCESS);
+        assert_eq!(prio, -2);
+
+        // Capture is unsupported → a valid stream honestly reports NONE (0).
+        let mut status = -1i32;
+        assert_eq!(cuStreamIsCapturing(stream, &mut status), CUDA_SUCCESS);
+        assert_eq!(status, 0);
+        assert_eq!(cuStreamIsCapturing(0x9999 as *mut c_void, &mut status), CUDA_ERROR_INVALID_HANDLE);
+        let mut mode = 1i32;
+        assert_eq!(cuThreadExchangeStreamCaptureMode(&mut mode), CUDA_SUCCESS);
+        assert_eq!(cuThreadExchangeStreamCaptureMode(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+
+        // Unified-memory hints are valid no-ops; stream-scoped ones validate the stream.
+        assert_eq!(cuMemAdvise(0xdead_beef, 4096, 0, 0), CUDA_SUCCESS);
+        assert_eq!(cuMemPrefetchAsync(0xdead_beef, 4096, 0, stream), CUDA_SUCCESS);
+        assert_eq!(
+            cuMemPrefetchAsync(0xdead_beef, 4096, 0, 0x9999 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(cuStreamAttachMemAsync(stream, 0xdead_beef, 4096, 4), CUDA_SUCCESS);
+        // Stream-ordered alloc/free reject a bogus stream before touching the allocator.
+        let mut dptr = 0u64;
+        assert_eq!(
+            cuMemAllocAsync(&mut dptr, 64, 0x9999 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(cuMemFreeAsync(0xdead_beef, 0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+
+        // Host-alloc flags of a live pinned allocation are reported (0 for the modeled allocator).
+        let mut hp: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuMemAllocHost_v2(&mut hp, 32), CUDA_SUCCESS);
+        let mut fl = 9u32;
+        assert_eq!(cuMemHostGetFlags(&mut fl, hp), CUDA_SUCCESS);
+        assert_eq!(fl, 0);
+        assert_eq!(cuMemFreeHost(hp), CUDA_SUCCESS);
+        assert_eq!(cuMemHostGetFlags(&mut fl, core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+
+        // Pointer set-attribute (SYNC_MEMOPS) is a valid no-op; a null value is rejected.
+        let one = 1i32;
+        assert_eq!(
+            cuPointerSetAttribute(&one as *const i32 as *const c_void, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, 0),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuPointerSetAttribute(core::ptr::null(), CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
+    }
+
+    #[test]
+    fn available_dynamic_smem_is_sane() {
+        let _g = guard();
+        let f = load_vecadd();
+        // vecadd has no static shared, so the whole per-block SM budget is available as dynamic smem.
+        let mut smem = 0usize;
+        assert_eq!(cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, f, 1, 256), CUDA_SUCCESS);
+        assert_eq!(smem, MAX_SHARED_PER_SM as usize);
+        // Splitting across 2 co-resident blocks halves it.
+        assert_eq!(cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, f, 2, 256), CUDA_SUCCESS);
+        assert_eq!(smem, (MAX_SHARED_PER_SM / 2) as usize);
+        // Invalid args / bad handle rejected honestly.
+        assert_eq!(
+            cuOccupancyAvailableDynamicSMemPerBlock(core::ptr::null_mut(), f, 1, 256),
+            CUDA_ERROR_INVALID_VALUE
+        );
+        assert_eq!(
+            cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, f, 0, 256),
+            CUDA_ERROR_INVALID_VALUE
+        );
+        assert_eq!(
+            cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, 0x1234 as *mut c_void, 1, 256),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+    }
+
+    #[test]
+    fn profiler_controls_are_benign_noops() {
+        let _g = guard();
+        assert_eq!(cuProfilerStart(), CUDA_SUCCESS);
+        assert_eq!(cuProfilerStop(), CUDA_SUCCESS);
+        let cfg = std::ffi::CString::new("cfg").unwrap();
+        let out = std::ffi::CString::new("out").unwrap();
+        assert_eq!(cuProfilerInitialize(cfg.as_ptr(), out.as_ptr(), 0), CUDA_SUCCESS);
     }
 }

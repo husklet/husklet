@@ -18,13 +18,22 @@ pub const CUDA_ERROR_INVALID_DEVICE: i32 = 101;
 pub const CUDA_ERROR_INVALID_IMAGE: i32 = 200;
 pub const CUDA_ERROR_INVALID_CONTEXT: i32 = 201;
 pub const CUDA_ERROR_UNSUPPORTED_LIMIT: i32 = 215;
+/// Peer access between two contexts is not supported by the device (the single simulated device has no
+/// peers), returned by `cuCtxEnablePeerAccess`.
+pub const CUDA_ERROR_PEER_ACCESS_UNSUPPORTED: i32 = 217;
 pub const CUDA_ERROR_INVALID_PTX: i32 = 218;
 pub const CUDA_ERROR_FILE_NOT_FOUND: i32 = 301;
 pub const CUDA_ERROR_INVALID_HANDLE: i32 = 400;
 pub const CUDA_ERROR_NOT_FOUND: i32 = 500;
 pub const CUDA_ERROR_NOT_READY: i32 = 600;
+/// Peer access was never enabled between the contexts, returned by `cuCtxDisablePeerAccess`.
+pub const CUDA_ERROR_PEER_ACCESS_NOT_ENABLED: i32 = 705;
 pub const CUDA_ERROR_NOT_SUPPORTED: i32 = 801;
 pub const CUDA_ERROR_UNKNOWN: i32 = 999;
+
+// ---- CUdriverProcAddressQueryResult — the `status` out-param `cuGetProcAddress_v2` fills (from cuda.h).
+pub const CU_GET_PROC_ADDRESS_SUCCESS: i32 = 0;
+pub const CU_GET_PROC_ADDRESS_SYMBOL_NOT_FOUND: i32 = 1;
 
 /// The driver version `cuDriverGetVersion` reports: `major*1000 + minor*10`. 12020 == CUDA 12.2.
 pub const DRIVER_VERSION: i32 = 12020;

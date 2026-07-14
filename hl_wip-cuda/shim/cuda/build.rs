@@ -286,4 +286,46 @@ const IMPLEMENTED: &[&str] = &[
     "cuCtxGetCacheConfig",
     "cuCtxSetCacheConfig",
     "cuCtxGetStreamPriorityRange",
+    // device: peer access, PCI/LUID identity, legacy properties struct
+    "cuDeviceCanAccessPeer",
+    "cuDeviceGetByPCIBusId",
+    "cuDeviceGetPCIBusId",
+    "cuDeviceGetLuid", // honest NOT_SUPPORTED (LUID is Windows/TCC-only)
+    "cuDeviceGetProperties",
+    // context: v3 create, id, shared-mem config, peer access, persisting-L2 reset
+    "cuCtxCreate_v3",
+    "cuCtxGetId",
+    "cuCtxGetSharedMemConfig",
+    "cuCtxSetSharedMemConfig",
+    "cuCtxEnablePeerAccess",  // honest PEER_ACCESS_UNSUPPORTED (no peers)
+    "cuCtxDisablePeerAccess", // honest PEER_ACCESS_NOT_ENABLED
+    "cuCtxResetPersistingL2Cache",
+    // function: owning module, entry name, shared-mem config
+    "cuFuncGetModule",
+    "cuFuncGetName",
+    "cuFuncSetSharedMemConfig",
+    // entry-point dispatch (dlsym over this object's own cu* surface)
+    "cuGetProcAddress",
+    "cuGetProcAddress_v2",
+    // launch: cooperative kernel + host callbacks
+    "cuLaunchCooperativeKernel",
+    "cuLaunchHostFunc",
+    "cuStreamAddCallback",
+    // memory: stream-ordered alloc/free, unified-memory hints, host flags, pointer set-attr
+    "cuMemAllocAsync",
+    "cuMemFreeAsync",
+    "cuMemAdvise",
+    "cuMemPrefetchAsync",
+    "cuStreamAttachMemAsync",
+    "cuMemHostGetFlags",
+    "cuPointerSetAttribute",
+    "cuOccupancyAvailableDynamicSMemPerBlock",
+    // stream: priority create + capture status (capture unsupported → honest NONE)
+    "cuStreamCreateWithPriority",
+    "cuStreamIsCapturing",
+    "cuThreadExchangeStreamCaptureMode",
+    // profiler: deprecated collection controls (no host profiler → benign no-ops)
+    "cuProfilerInitialize",
+    "cuProfilerStart",
+    "cuProfilerStop",
 ];
