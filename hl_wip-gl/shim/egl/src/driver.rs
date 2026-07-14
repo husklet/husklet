@@ -458,6 +458,13 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
         "eglGetPlatformDisplayEXT" => p!(eglGetPlatformDisplayEXT),
         "eglCreatePlatformWindowSurfaceEXT" => p!(eglCreatePlatformWindowSurfaceEXT),
         "eglCreatePlatformPixmapSurfaceEXT" => p!(eglCreatePlatformPixmapSurfaceEXT),
+        // EGL_EXT_device_base / device_query / device_enumeration — advertised in the client + display
+        // extension strings (GDK/epoxy require one of the device_* set to find eglQueryDisplayAttribEXT).
+        // Resolved here only (extension functions, not exported ABI).
+        "eglQueryDisplayAttribEXT" => p!(eglQueryDisplayAttribEXT),
+        "eglQueryDeviceAttribEXT" => p!(eglQueryDeviceAttribEXT),
+        "eglQueryDeviceStringEXT" => p!(eglQueryDeviceStringEXT),
+        "eglQueryDevicesEXT" => p!(eglQueryDevicesEXT),
         "eglGetSyncAttrib" => p!(eglGetSyncAttrib),
         "eglQueryAPI" => p!(eglQueryAPI),
         "eglQueryContext" => p!(eglQueryContext),
@@ -3000,6 +3007,16 @@ const EGL_HEIGHT: i32 = 0x3056;
 /// is accepted but not separately tracked — one shared token keeps a `!= EGL_NO_SYNC` contract).
 const EGL_OBJECT_TOKEN: usize = 0x5171;
 
+// ---- EGL_EXT_device_base / device_query / device_enumeration enums + the single software device ----
+/// `EGL_DEVICE_EXT` — the `eglQueryDisplayAttribEXT` attribute GDK asks for to learn the display's backing
+/// `EGLDeviceEXT` (and the `eglCreatePlatformDisplay(EGL_PLATFORM_DEVICE_EXT, …)` platform enum).
+const EGL_DEVICE_EXT: i32 = 0x322C;
+/// `EGL_BAD_DEVICE_EXT` — the error for an `EGLDeviceEXT` handle we did not hand out.
+const EGL_BAD_DEVICE_EXT: i32 = 0x322B;
+/// The single, truthful `EGLDeviceEXT` handle this driver reports: our software (hl-gl) renderer. Non-null
+/// and distinct from the display/config/object tokens so `eglQueryDeviceStringEXT` et al. can validate it.
+const DEVICE_TOKEN: usize = 0xDE71;
+
 // ---- little-endian marshalling helpers (unsigned + non-square matrices) --------------------------
 
 /// Marshal a slice of `u32` scalars into little-endian bytes.
@@ -4188,6 +4205,109 @@ extern "C" fn eglCreatePlatformWindowSurfaceEXT(_dpy: *mut c_void, _config: *mut
 /// surface token (no native-pixmap target is modeled).
 extern "C" fn eglCreatePlatformPixmapSurfaceEXT(_dpy: *mut c_void, _config: *mut c_void, _native_pixmap: *mut c_void, _attrib_list: *const i32) -> *mut c_void {
     with(|s| s.mint_token())
+}
+
+// ---- EGL_EXT_device_base / device_query / device_enumeration entry points ------------------------
+//
+// Advertised in both the client and per-display extension strings, so a toolkit's GL loader (libepoxy
+// for GTK/GDK) resolves these via `eglGetProcAddress` + the extension string and CALLS them without a
+// null check. GDK's Wayland EGL bring-up specifically requires one of
+// `EGL_EXT_device_base`/`device_query`/`EGL_KHR_display_reference`/`EGL_NV_stream_metadata` and then
+// calls `eglQueryDisplayAttribEXT` to learn the display's backing device.
+//
+// The model is one truthful software device ([`DEVICE_TOKEN`]) representing our hl-gl renderer. Every
+// body is panic-free across the C-ABI seam (raw pointers null-checked, unknown handles/attributes raise
+// the accurate `EGL_*` error and return `EGL_FALSE`/null — never a deref crash or fabricated value),
+// mirroring the `eglGetConfigAttrib` / `eglGetConfigs` contract discipline. Resolved only via
+// `eglGetProcAddress` (extension functions are not part of the exported 402-symbol ABI), so they are
+// deliberately not `#[no_mangle]`.
+
+/// `eglQueryDisplayAttribEXT(dpy, attribute, value)` — a display attribute (`EGLAttrib`, i.e. `intptr_t`).
+/// GDK asks `EGL_DEVICE_EXT` to learn the display's backing `EGLDeviceEXT`; we answer with our single
+/// software device. A null `value` is `EGL_BAD_PARAMETER`; an attribute we do not model is
+/// `EGL_BAD_ATTRIBUTE` — both `EGL_FALSE` WITHOUT writing / dereferencing `value`.
+extern "C" fn eglQueryDisplayAttribEXT(_dpy: *mut c_void, attribute: i32, value: *mut isize) -> u32 {
+    if value.is_null() {
+        with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+        return EGL_FALSE;
+    }
+    match attribute {
+        EGL_DEVICE_EXT => {
+            unsafe { *value = DEVICE_TOKEN as isize };
+            EGL_TRUE
+        }
+        _ => {
+            with(|s| s.set_egl_error(EGL_BAD_ATTRIBUTE));
+            EGL_FALSE
+        }
+    }
+}
+
+/// `eglQueryDeviceAttribEXT(device, attribute, value)` — an integer attribute of an `EGLDeviceEXT`. A
+/// foreign device handle is `EGL_BAD_DEVICE_EXT`; a null `value` is `EGL_BAD_PARAMETER`. Our software
+/// device exposes no vendor integer attributes (those are e.g. `EGL_CUDA_DEVICE_NV`), so any recognized-
+/// device attribute is truthfully `EGL_BAD_ATTRIBUTE`. All paths return `EGL_FALSE` without a deref.
+extern "C" fn eglQueryDeviceAttribEXT(device: *mut c_void, _attribute: i32, value: *mut isize) -> u32 {
+    if device as usize != DEVICE_TOKEN {
+        with(|s| s.set_egl_error(EGL_BAD_DEVICE_EXT));
+        return EGL_FALSE;
+    }
+    if value.is_null() {
+        with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+        return EGL_FALSE;
+    }
+    // No integer device attributes are modeled for a software device.
+    with(|s| s.set_egl_error(EGL_BAD_ATTRIBUTE));
+    EGL_FALSE
+}
+
+/// `eglQueryDeviceStringEXT(device, name)` — a string describing the `EGLDeviceEXT`. `EGL_EXTENSIONS`
+/// returns the device-level extension string (empty: our software device advertises no device extensions).
+/// A foreign device handle is `EGL_BAD_DEVICE_EXT` + null; an unmodeled `name` is `EGL_BAD_PARAMETER` +
+/// null (never a dangling pointer). The returned pointer is process-static (valid for the app's lifetime).
+extern "C" fn eglQueryDeviceStringEXT(device: *mut c_void, name: i32) -> *const c_char {
+    if device as usize != DEVICE_TOKEN {
+        with(|s| s.set_egl_error(EGL_BAD_DEVICE_EXT));
+        return core::ptr::null();
+    }
+    match name {
+        // The device's own extension string (client/display device extensions live on eglQueryString).
+        EGL_EXTENSIONS_Q => b"\0".as_ptr() as *const c_char,
+        _ => {
+            with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+            core::ptr::null()
+        }
+    }
+}
+
+/// `eglQueryDevicesEXT(max_devices, devices, num_devices)` — enumerate the `EGLDeviceEXT`s. This driver
+/// reports its single software device. Same enumeration contract as `eglGetConfigs`: a null `devices`
+/// array reports the count in `num_devices`; a real array copies up to `max_devices` handles (bounded, no
+/// OOB store) and `num_devices` reports how many were written. `num_devices` is required (`EGL_BAD_PARAMETER`
+/// if null); a non-null `devices` with `max_devices <= 0` is `EGL_BAD_PARAMETER` (spec).
+extern "C" fn eglQueryDevicesEXT(max_devices: i32, devices: *mut *mut c_void, num_devices: *mut i32) -> u32 {
+    if num_devices.is_null() {
+        with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+        return EGL_FALSE;
+    }
+    const AVAILABLE: i32 = 1; // our single software device
+    if devices.is_null() {
+        // Count-only query.
+        unsafe { *num_devices = AVAILABLE };
+        return EGL_TRUE;
+    }
+    if max_devices <= 0 {
+        with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+        return EGL_FALSE;
+    }
+    let n = AVAILABLE.min(max_devices);
+    unsafe {
+        for i in 0..n as isize {
+            *devices.offset(i) = DEVICE_TOKEN as *mut c_void;
+        }
+        *num_devices = n;
+    }
+    EGL_TRUE
 }
 /// `eglQueryAPI()` — the API bound by `eglBindAPI`; this driver serves OpenGL ES.
 #[no_mangle]
