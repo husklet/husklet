@@ -1,0 +1,20 @@
+[package]
+name = "hl_wip_compositor"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Platform-neutral compositor policy (the `scene` brain) for the hl host renderer."
+
+[lib]
+name = "hl_compositor"
+path = "src/lib.rs"
+
+# STANDALONE crate: an empty [workspace] table excludes this directory from the shared repo workspace
+# (it is not a member of the root Cargo.toml). The neutral `scene` core is pure std — zero dependencies —
+# so it builds and tests with no Smithay / GPU / Cocoa / DRM. Build + test with:
+#   cargo test --manifest-path hl_wip-compositor/Cargo.toml
+[workspace]
+
+[dependencies]
+# Intentionally empty. The platform-neutral policy is pure std. Adapters (smithay, surface/macos,
+# surface/linux) are DEFERRED to later tasks and will carry their own heavy deps behind the ports here.
