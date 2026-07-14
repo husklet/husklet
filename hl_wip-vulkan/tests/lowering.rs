@@ -506,6 +506,97 @@ fn full_compute_dispatch_lowers_to_expected_stream() {
     }
 }
 
+/// The ir sampler id behind a `VkSampler` handle.
+fn samp_ir(d: &Device, h: u64) -> u32 {
+    d.samplers.get(&h).unwrap().ir_id
+}
+
+#[test]
+fn combined_image_sampler_descriptor_lowers_to_texture_and_sampler_binds() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+
+    // A sampled image (ir 1) + a sampler (ir 2).
+    let image =
+        create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED).unwrap();
+    let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
+
+    // A set with a single COMBINED_IMAGE_SAMPLER binding at binding 0.
+    let layout = create::create_descriptor_set_layout(
+        &mut d,
+        vec![LayoutBinding {
+            binding: 0,
+            descriptor_type: vk_descriptor_type::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: 1,
+            stage_flags: 0,
+        }],
+    );
+    let pool = create::create_descriptor_pool(&mut d, 1);
+    let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    // `vkUpdateDescriptorSets`: the shim resolves the write's imageView → this VkImage; drive the
+    // driver directly with (image, sampler) — the same tables the shim populates.
+    create::update_descriptor_image(&mut d, set, 0, Some(image), Some(sampler)).unwrap();
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
+    record::end(&mut d, cb).unwrap();
+
+    // The bind emits one CreateBindGroup (the last batch): a Texture(image) + Sampler(sampler), both at
+    // binding 0 (the combined-sampler layout the wgpu executor's WGSL declares).
+    match &sink.batches.last().unwrap()[0] {
+        Cmd::CreateBindGroup(_, desc) => {
+            assert_eq!(desc.set, 0);
+            assert_eq!(desc.entries.len(), 2);
+            assert_eq!(desc.entries[0].binding, 0);
+            assert_eq!(desc.entries[0].resource, BindResource::Texture { id: img_ir(&d, image) });
+            assert_eq!(desc.entries[1].binding, 0);
+            assert_eq!(desc.entries[1].resource, BindResource::Sampler { id: samp_ir(&d, sampler) });
+        }
+        other => panic!("expected CreateBindGroup, got {other:?}"),
+    }
+}
+
+#[test]
+fn separate_sampled_image_and_sampler_descriptors_lower_at_their_own_bindings() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+
+    let image =
+        create::create_image(&mut d, &mut sink, 32, 32, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED).unwrap();
+    let sampler = create::create_sampler(&mut d, &mut sink, 0, 0, 0, [0, 0, 0]);
+
+    // A SAMPLED_IMAGE at binding 0 and a separate SAMPLER at binding 1.
+    let layout = create::create_descriptor_set_layout(
+        &mut d,
+        vec![
+            LayoutBinding { binding: 0, descriptor_type: vk_descriptor_type::SAMPLED_IMAGE, descriptor_count: 1, stage_flags: 0 },
+            LayoutBinding { binding: 1, descriptor_type: vk_descriptor_type::SAMPLER, descriptor_count: 1, stage_flags: 0 },
+        ],
+    );
+    let pool = create::create_descriptor_pool(&mut d, 1);
+    let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
+    create::update_descriptor_image(&mut d, set, 0, Some(image), None).unwrap();
+    create::update_descriptor_image(&mut d, set, 1, None, Some(sampler)).unwrap();
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb).unwrap();
+    record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
+    record::end(&mut d, cb).unwrap();
+
+    // Two entries: a Texture at binding 0 and a Sampler at binding 1 (binding-ascending resolution).
+    match &sink.batches.last().unwrap()[0] {
+        Cmd::CreateBindGroup(_, desc) => {
+            assert_eq!(desc.entries.len(), 2);
+            assert_eq!(desc.entries[0].binding, 0);
+            assert_eq!(desc.entries[0].resource, BindResource::Texture { id: img_ir(&d, image) });
+            assert_eq!(desc.entries[1].binding, 1);
+            assert_eq!(desc.entries[1].resource, BindResource::Sampler { id: samp_ir(&d, sampler) });
+        }
+        other => panic!("expected CreateBindGroup, got {other:?}"),
+    }
+}
+
 #[test]
 fn submit_with_fence_signals_and_wait_lowers_to_command_sink_wait() {
     let mut d = dev();

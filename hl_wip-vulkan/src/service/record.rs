@@ -95,6 +95,11 @@ pub fn cmd_bind_descriptor_sets(
         let mut pairs: Vec<(u32, (VkBuffer, u64, u64))> =
             rec.buffers.iter().map(|(b, v)| (*b, *v)).collect();
         pairs.sort_by_key(|(b, _)| *b);
+        // Snapshot the set's sampled-image / sampler descriptors (binding-ascending; the borrow of
+        // `rec` ends here so `dev` can be mutated below).
+        let mut img_pairs: Vec<(u32, crate::model::descriptor::ImageBinding)> =
+            rec.images.iter().map(|(b, v)| (*b, *v)).collect();
+        img_pairs.sort_by_key(|(b, _)| *b);
         // Consume this set's dynamic offsets (its layout's dynamic-buffer bindings, ascending).
         let dyn_bindings = dev
             .set_layouts
@@ -120,6 +125,22 @@ pub fn cmd_bind_descriptor_sets(
                         size,
                     },
                 });
+            }
+        }
+        // Resolve each sampled-image / sampler descriptor to its hl-GPU id: a bound image → a
+        // `BindResource::Texture` and a bound sampler → a `BindResource::Sampler`, both at the same
+        // binding index (a `COMBINED_IMAGE_SAMPLER` thus emits both — the layout the wgpu executor's
+        // WGSL declares for a combined binding). An unresolvable handle is skipped (never faked).
+        for (binding, img) in img_pairs {
+            if let Some(image) = img.image {
+                if let Some(i) = dev.images.get(&image) {
+                    entries.push(BindEntry { binding, resource: BindResource::Texture { id: i.ir_id } });
+                }
+            }
+            if let Some(sampler) = img.sampler {
+                if let Some(s) = dev.samplers.get(&sampler) {
+                    entries.push(BindEntry { binding, resource: BindResource::Sampler { id: s.ir_id } });
+                }
             }
         }
         let ir_id = dev.alloc_ir();

@@ -447,6 +447,33 @@ pub fn update_descriptor_buffer(
     Ok(())
 }
 
+/// `vkUpdateDescriptorSets` (one image/sampler write) — record a sampled-image / sampler descriptor on
+/// the set at `binding`. `image` is the `VkImage` a `SAMPLED_IMAGE`/`COMBINED_IMAGE_SAMPLER` write's
+/// `imageView` resolves to (the shim owns the view→image mapping); `sampler` is the `VkSampler` a
+/// `SAMPLER`/`COMBINED_IMAGE_SAMPLER` write carries. Either may be `None` (a separate SAMPLED_IMAGE or
+/// SAMPLER write). Present fields overwrite; absent fields leave any prior value (so separate image + sampler
+/// writes to the same binding compose). Errors on an unknown set. No IR (resolved at bind time).
+pub fn update_descriptor_image(
+    dev: &mut Device,
+    set: VkDescriptorSet,
+    binding: u32,
+    image: Option<VkImage>,
+    sampler: Option<VkSampler>,
+) -> Result<()> {
+    let rec = dev
+        .descriptor_sets
+        .get_mut(&set)
+        .ok_or(GpuError::Invalid("vkUpdateDescriptorSets: unknown VkDescriptorSet"))?;
+    let entry = rec.images.entry(binding).or_default();
+    if image.is_some() {
+        entry.image = image;
+    }
+    if sampler.is_some() {
+        entry.sampler = sampler;
+    }
+    Ok(())
+}
+
 // ---- descriptor update templates -----------------------------------------------------------------
 
 /// `vkCreateDescriptorUpdateTemplate(KHR)` — retain the immutable entry table (offset/stride/binding/

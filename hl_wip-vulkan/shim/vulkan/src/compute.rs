@@ -10,7 +10,10 @@
 
 use core::ffi::{c_char, c_void};
 
-use hl_vulkan::model::descriptor::{DescriptorTemplateEntry, LayoutBinding};
+use hl_vulkan::model::descriptor::{
+    descriptor_binds_image, descriptor_binds_sampler, is_buffer_descriptor, is_image_descriptor,
+    DescriptorTemplateEntry, LayoutBinding,
+};
 use hl_vulkan::result::vk_result_from_gpu_error;
 use hl_vulkan::service::{create, record, submit};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
@@ -495,15 +498,43 @@ pub extern "C" fn vkUpdateDescriptorSets(
             descriptor_write_count as usize,
         )
     };
-    dev_sink(|dev, _| {
+    // The view→image mapping lives in the shim state (disjoint from the device), so borrow both fields.
+    with(|s| {
+        let crate::state::State { device, image_views, .. } = s;
+        let Some(dev) = device.as_mut() else { return };
         for w in writes {
-            if w.p_buffer_info.is_null() || w.descriptor_count == 0 {
-                continue; // image/texel writes are not modeled in the bring-up compute path
+            if w.descriptor_count == 0 {
+                continue;
             }
-            // Bring-up: bind the first buffer descriptor at (dstBinding). Array elements collapse onto
-            // the binding (the model keys a set's resources by binding).
-            let bi = unsafe { &*w.p_buffer_info };
-            let _ = create::update_descriptor_buffer(dev, w.dst_set, w.dst_binding, bi.buffer, bi.offset, bi.range);
+            if is_buffer_descriptor(w.descriptor_type) {
+                if w.p_buffer_info.is_null() {
+                    continue;
+                }
+                // Bring-up: bind the first buffer descriptor at (dstBinding). Array elements collapse onto
+                // the binding (the model keys a set's resources by binding).
+                let bi = unsafe { &*w.p_buffer_info };
+                let _ = create::update_descriptor_buffer(dev, w.dst_set, w.dst_binding, bi.buffer, bi.offset, bi.range);
+            } else if is_image_descriptor(w.descriptor_type) {
+                if w.p_image_info.is_null() {
+                    continue;
+                }
+                // Read the first `VkDescriptorImageInfo`, resolving its `imageView`→`VkImage` (for the
+                // sampled classes) and taking its `sampler` (for the sampler classes). A COMBINED_IMAGE_SAMPLER
+                // carries both; a separate SAMPLED_IMAGE only the view; a separate SAMPLER only the sampler.
+                let ii = unsafe { &*(w.p_image_info as *const VkDescriptorImageInfo) };
+                let image = if descriptor_binds_image(w.descriptor_type) {
+                    image_views.get(&ii.image_view).copied()
+                } else {
+                    None
+                };
+                let sampler = if descriptor_binds_sampler(w.descriptor_type) && ii.sampler != 0 {
+                    Some(ii.sampler)
+                } else {
+                    None
+                };
+                let _ = create::update_descriptor_image(dev, w.dst_set, w.dst_binding, image, sampler);
+            }
+            // Other descriptor classes (storage image, texel buffers) are not modeled: a truthful no-op.
         }
     });
 }
