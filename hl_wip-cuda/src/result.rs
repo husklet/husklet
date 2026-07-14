@@ -93,6 +93,21 @@ pub const CU_POINTER_ATTRIBUTE_RANGE_SIZE: i32 = 12;
 pub const CU_POINTER_ATTRIBUTE_MAPPED: i32 = 13;
 pub const CU_MEMORYTYPE_DEVICE: u32 = 2;
 
+// ---- CUfunction_attribute (the set `cuFuncGetAttribute`/`cuFuncSetAttribute` answer; from cuda.h) --
+pub const CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK: i32 = 0;
+pub const CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES: i32 = 1;
+pub const CU_FUNC_ATTRIBUTE_CONST_SIZE_BYTES: i32 = 2;
+pub const CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES: i32 = 3;
+pub const CU_FUNC_ATTRIBUTE_NUM_REGS: i32 = 4;
+pub const CU_FUNC_ATTRIBUTE_PTX_VERSION: i32 = 5;
+pub const CU_FUNC_ATTRIBUTE_BINARY_VERSION: i32 = 6;
+pub const CU_FUNC_ATTRIBUTE_CACHE_MODE_CA: i32 = 7;
+pub const CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES: i32 = 8;
+pub const CU_FUNC_ATTRIBUTE_PREFERRED_SHARED_MEMORY_CARVEOUT: i32 = 9;
+
+// ---- CUlimit — `CU_LIMIT_MAX` is one past the last valid `CUlimit`; the limit table has this many slots.
+pub const CU_LIMIT_MAX: i32 = 7;
+
 // ---- cudaError_t (runtime API; the subset the runtime entry points return) -----------------------
 pub const CUDART_SUCCESS: i32 = 0; // cudaSuccess
 pub const CUDART_ERROR_INVALID_VALUE: i32 = 1; // cudaErrorInvalidValue

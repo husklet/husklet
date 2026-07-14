@@ -244,6 +244,7 @@ const IMPLEMENTED: &[&str] = &[
     "cuModuleLoadData",
     "cuModuleGetFunction",
     "cuLaunchKernel",
+    "cuLaunchKernelEx",
     "cuStreamCreate",
     "cuStreamDestroy_v2",
     "cuStreamSynchronize",
@@ -251,4 +252,24 @@ const IMPLEMENTED: &[&str] = &[
     "cuEventRecord",
     "cuEventSynchronize",
     "cuEventDestroy_v2",
+    // function attributes + cache config
+    "cuFuncGetAttribute",
+    "cuFuncSetAttribute",
+    "cuFuncSetCacheConfig",
+    // occupancy (computed from the modeled device limits + function resource use)
+    "cuOccupancyMaxActiveBlocksPerMultiprocessor",
+    "cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags",
+    "cuOccupancyMaxPotentialBlockSize",
+    "cuOccupancyMaxPotentialBlockSizeWithFlags",
+    // stream getters: flags / priority / owning context / id
+    "cuStreamGetFlags",
+    "cuStreamGetPriority",
+    "cuStreamGetCtx",
+    "cuStreamGetId",
+    // context limits + cache config + stream-priority range
+    "cuCtxGetLimit",
+    "cuCtxSetLimit",
+    "cuCtxGetCacheConfig",
+    "cuCtxSetCacheConfig",
+    "cuCtxGetStreamPriorityRange",
 ];

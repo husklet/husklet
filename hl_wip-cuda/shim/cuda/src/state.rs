@@ -31,11 +31,20 @@ pub struct State {
 
     /// `CUfunction` table: an opaque handle is `index + 1`. Holds the resolved [`Function`] + entry name.
     functions: Vec<(Function, CString)>,
+    /// Parallel to `functions`: per-function dynamic-shared-memory bytes set via
+    /// `cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)` and read back by `cuFuncGetAttribute`.
+    func_dyn_shared: Vec<i32>,
+    /// Parallel to `functions`: the per-function preferred cache config recorded by
+    /// `cuFuncSetCacheConfig` (a hint the synchronous executor honors as a no-op, but reports faithfully).
+    func_cache_config: Vec<i32>,
     /// `CUmodule` table: an opaque handle is `index + 1`, storing the `hl_cuda` module id.
     modules: Vec<u32>,
     /// `CUstream` table: an opaque handle is `index + 1`, storing the `hl_cuda` [`Stream`]. The default
     /// stream is the null handle (token `0`).
     streams: Vec<Stream>,
+    /// Parallel to `streams`: the `(flags, priority)` a stream was created with, for
+    /// `cuStreamGetFlags`/`cuStreamGetPriority`.
+    stream_meta: Vec<(u32, i32)>,
     /// `CUevent` table: an opaque handle is `index + 1`, holding the record timestamp (`None` until
     /// `cuEventRecord`) for `cuEventElapsedTime`/`cuEventQuery`.
     events: Vec<Option<Instant>>,
@@ -53,6 +62,12 @@ pub struct State {
     primary_ctx: usize,
     primary_refcount: u32,
     primary_flags: u32,
+
+    /// Context-scoped resource limits (`cuCtxGetLimit`/`cuCtxSetLimit`), indexed by `CUlimit`. The
+    /// defaults match a real driver's stack/printf-fifo/malloc-heap/rt-sync-depth/rt-pending/l2-gran.
+    limits: [usize; hl_cuda::result::CU_LIMIT_MAX as usize],
+    /// Context preferred cache config (`cuCtxGetCacheConfig`/`cuCtxSetCacheConfig`).
+    cache_config: i32,
 }
 
 impl State {
@@ -68,8 +83,11 @@ impl State {
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
             sink: RemoteCommandSink::from_env(),
             functions: Vec::new(),
+            func_dyn_shared: Vec::new(),
+            func_cache_config: Vec::new(),
             modules: Vec::new(),
             streams: Vec::new(),
+            stream_meta: Vec::new(),
             events: Vec::new(),
             next_ctx: 1,
             current_ctx: 0,
@@ -78,7 +96,29 @@ impl State {
             primary_ctx: 0,
             primary_refcount: 0,
             primary_flags: 0,
+            // stack / printf-fifo / malloc-heap / rt-sync-depth / rt-pending-launches / l2-fetch-gran / persisting-l2.
+            limits: [1024, 1024 * 1024, 8 * 1024 * 1024, 2, 2048, 128, 0],
+            cache_config: 0,
         }
+    }
+
+    // ---- context limits + cache config ------------------------------------------------------------
+
+    /// `cuCtxGetLimit` — the modeled value of `CUlimit` slot `idx` (caller validates the range).
+    pub fn ctx_limit(&self, idx: usize) -> usize {
+        self.limits[idx]
+    }
+    /// `cuCtxSetLimit` — record `CUlimit` slot `idx` (caller validates the range).
+    pub fn set_ctx_limit(&mut self, idx: usize, value: usize) {
+        self.limits[idx] = value;
+    }
+    /// `cuCtxGetCacheConfig`.
+    pub fn ctx_cache_config(&self) -> i32 {
+        self.cache_config
+    }
+    /// `cuCtxSetCacheConfig`.
+    pub fn set_ctx_cache_config(&mut self, c: i32) {
+        self.cache_config = c;
     }
 
     // ---- context tokens ---------------------------------------------------------------------------
@@ -195,17 +235,48 @@ impl State {
 
     pub fn intern_function(&mut self, f: Function, name: &str) -> *mut c_void {
         self.functions.push((f, CString::new(name).unwrap_or_default()));
+        self.func_dyn_shared.push(0);
+        self.func_cache_config.push(0);
         self.functions.len() as *mut c_void
     }
     pub fn function(&self, h: *mut c_void) -> Option<Function> {
+        self.func_index(h).map(|i| self.functions[i].0)
+    }
+    /// Index into the parallel `CUfunction` tables for a handle (`None` for null / out-of-range).
+    fn func_index(&self, h: *mut c_void) -> Option<usize> {
         let idx = h as usize;
-        (idx != 0 && idx <= self.functions.len()).then(|| self.functions[idx - 1].0)
+        (idx != 0 && idx <= self.functions.len()).then_some(idx - 1)
+    }
+    /// Per-function dynamic-shared bytes (`cuFuncGetAttribute`); `None` for a bad handle.
+    pub fn func_dyn_shared(&self, h: *mut c_void) -> Option<i32> {
+        self.func_index(h).map(|i| self.func_dyn_shared[i])
+    }
+    /// Set per-function dynamic-shared bytes (`cuFuncSetAttribute`); `false` for a bad handle.
+    pub fn set_func_dyn_shared(&mut self, h: *mut c_void, v: i32) -> bool {
+        match self.func_index(h) {
+            Some(i) => {
+                self.func_dyn_shared[i] = v;
+                true
+            }
+            None => false,
+        }
+    }
+    /// Record a function's preferred cache config (`cuFuncSetCacheConfig`); `false` for a bad handle.
+    pub fn set_func_cache_config(&mut self, h: *mut c_void, c: i32) -> bool {
+        match self.func_index(h) {
+            Some(i) => {
+                self.func_cache_config[i] = c;
+                true
+            }
+            None => false,
+        }
     }
 
     // ---- stream handles ---------------------------------------------------------------------------
 
-    pub fn intern_stream(&mut self, s: Stream) -> *mut c_void {
+    pub fn intern_stream(&mut self, s: Stream, flags: u32, priority: i32) -> *mut c_void {
         self.streams.push(s);
+        self.stream_meta.push((flags, priority));
         self.streams.len() as *mut c_void
     }
     /// Resolve a `CUstream` handle to its [`Stream`]. The null handle is the default stream.
@@ -215,6 +286,15 @@ impl State {
             return Some(hl_cuda::model::stream::StreamTable::DEFAULT);
         }
         (idx <= self.streams.len()).then(|| self.streams[idx - 1])
+    }
+    /// The `(flags, priority)` a `CUstream` was created with. The null handle is the default stream
+    /// (flags `0`, priority `0`); an out-of-range handle is `None`.
+    pub fn stream_meta(&self, h: *mut c_void) -> Option<(u32, i32)> {
+        let idx = h as usize;
+        if idx == 0 {
+            return Some((0, 0));
+        }
+        (idx <= self.streams.len()).then(|| self.stream_meta[idx - 1])
     }
 
     // ---- event handles ----------------------------------------------------------------------------

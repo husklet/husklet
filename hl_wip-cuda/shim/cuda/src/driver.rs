@@ -882,20 +882,38 @@ pub extern "C" fn cuLaunchKernel(
     kernel_params: *mut *mut c_void,
     _extra: *mut *mut c_void,
 ) -> i32 {
+    launch_kernel_impl(f, (gx, gy, gz), (bx, by, bz), kernel_params, "cuLaunchKernel")
+}
+
+/// Shared launch lowering for `cuLaunchKernel` / `cuLaunchKernelEx`: recover the kernel's parameter
+/// layout by compiling its PTX with the launch block dims, marshal each `kernelParams[i]` slot per that
+/// layout, and submit the same compute IR through the sink. Both entry points funnel here so the lowered
+/// command stream is identical.
+///
+/// # Safety
+/// `kernel_params`, when non-null, must point at `prog.params.len()` valid `void*` slots, each pointing at
+/// a value of the parameter's natural width (the `cuLaunchKernel` ABI).
+fn launch_kernel_impl(
+    f: *mut c_void,
+    grid: (u32, u32, u32),
+    block: (u32, u32, u32),
+    kernel_params: *mut *mut c_void,
+    who: &'static str,
+) -> i32 {
     with(|s| {
         let Some(func) = s.function(f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
-        let block = [bx, by, bz];
+        let block_arr = [block.0, block.1, block.2];
         // Recover the kernel's parameter layout (which args are pointers vs scalars, and each width) by
         // compiling the module's PTX with the launch block dims — the same front-end the executor uses.
         let Some((src, entry)) = s.ctx.entry_source(func) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
-        let prog = match ptx::compile(&src, &entry, block) {
+        let prog = match ptx::compile(&src, &entry, block_arr) {
             Ok(p) => p,
             Err(e) => {
-                crate::stub::unsupported("cuLaunchKernel", &format!("entry `{entry}`: {e:?}"));
+                crate::stub::unsupported(who, &format!("entry `{entry}`: {e:?}"));
                 return cu_result_from_gpu_error(&e);
             }
         };
@@ -919,11 +937,242 @@ pub extern "C" fn cuLaunchKernel(
                 args.push(KernelArg::Scalar(raw.to_vec()));
             }
         }
-        match launch::launch(&mut s.ctx, &mut s.sink, func, (gx, gy, gz), (bx, by, bz), &args) {
+        match launch::launch(&mut s.ctx, &mut s.sink, func, grid, block, &args) {
             Ok(_) => CUDA_SUCCESS,
             Err(e) => cu_result_from_gpu_error(&e),
         }
     })
+}
+
+/// The `CUlaunchConfig` prefix `cuLaunchKernelEx` reads (cuda.h layout): `gridDimX/Y/Z`, `blockDimX/Y/Z`,
+/// `sharedMemBytes` are the first seven `u32`s (the trailing `hStream` + attribute list are not modeled).
+/// Returns `(grid, block, shared_mem_bytes)`; `None` if `cfg` is null.
+///
+/// # Safety
+/// `cfg`, when non-null, must point at a `CUlaunchConfig` whose first seven `u32` fields are initialized.
+unsafe fn parse_launch_config(cfg: *const c_void) -> Option<((u32, u32, u32), (u32, u32, u32), u32)> {
+    if cfg.is_null() {
+        return None;
+    }
+    let d = cfg as *const u32;
+    Some((
+        (*d.add(0), *d.add(1), *d.add(2)),
+        (*d.add(3), *d.add(4), *d.add(5)),
+        *d.add(6),
+    ))
+}
+
+/// `cuLaunchKernelEx(config, f, kernelParams, extra)` — the config-struct launch form. Parses the
+/// `CUlaunchConfig` grid/block dims and lowers through the exact same path as `cuLaunchKernel`.
+#[no_mangle]
+pub extern "C" fn cuLaunchKernelEx(
+    cfg: *const c_void,
+    f: *mut c_void,
+    kernel_params: *mut *mut c_void,
+    _extra: *mut *mut c_void,
+) -> i32 {
+    let Some((grid, block, _smem)) = (unsafe { parse_launch_config(cfg) }) else {
+        return CUDA_ERROR_INVALID_VALUE;
+    };
+    launch_kernel_impl(f, grid, block, kernel_params, "cuLaunchKernelEx")
+}
+
+// ==================================================================================================
+// function attributes + occupancy (computed from the modeled function + device limits)
+// ==================================================================================================
+
+// The modeled Ampere-class SM limits (the same fixed values `cuDeviceGetAttribute` reports), used by the
+// occupancy math. Kept here as named constants so the two entry points can't drift from the device table.
+const MAX_THREADS_PER_SM: i32 = 2048;
+const MAX_REGS_PER_SM: i32 = 65536;
+const MAX_SHARED_PER_SM: i32 = 102_400;
+const MAX_BLOCKS_PER_SM: i32 = 32;
+
+/// Compile the function's PTX to recover its real per-thread resource use `(num_regs, static_shared)`.
+/// `None` if the handle is bad; falls back to `Some((0, 0))` if the kernel is outside the modeled subset
+/// (so an attribute/occupancy query still answers rather than fabricating a value it cannot derive).
+fn func_resources(s: &crate::state::State, f: *mut c_void) -> Option<(u32, u32)> {
+    let func = s.function(f)?;
+    let Some((src, entry)) = s.ctx.entry_source(func) else {
+        return Some((0, 0));
+    };
+    match ptx::compile(&src, &entry, [1, 1, 1]) {
+        Ok(p) => Some((p.reg_count as u32, p.shared_bytes)),
+        Err(_) => Some((0, 0)),
+    }
+}
+
+/// The standard CUDA occupancy calculation: max resident blocks per SM, taken as the min over the
+/// per-block thread / register / shared-memory limits, capped at the hardware blocks-per-SM. `reg_regs`
+/// is registers/thread, `shared` is total static+dynamic shared bytes/block.
+fn max_blocks_per_sm(reg_regs: u32, shared: u32, block_size: i32) -> i32 {
+    if block_size <= 0 {
+        return 0;
+    }
+    let mut limit = MAX_THREADS_PER_SM / block_size; // thread-slot bound
+    if reg_regs > 0 {
+        let per_block = reg_regs as i64 * block_size as i64;
+        limit = limit.min((MAX_REGS_PER_SM as i64 / per_block.max(1)) as i32); // register bound
+    }
+    if shared > 0 {
+        limit = limit.min(MAX_SHARED_PER_SM / shared as i32); // shared-memory bound
+    }
+    limit.clamp(0, MAX_BLOCKS_PER_SM)
+}
+
+#[no_mangle]
+pub extern "C" fn cuFuncGetAttribute(pi: *mut i32, attrib: i32, f: *mut c_void) -> i32 {
+    if pi.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| {
+        // Validate the handle + recover the modeled function's resource use.
+        let Some((num_regs, static_shared)) = func_resources(s, f) else {
+            return CUDA_ERROR_INVALID_HANDLE;
+        };
+        let dyn_shared = s.func_dyn_shared(f).unwrap_or(0);
+        let cc = s.ctx.device.compute_capability;
+        let arch = cc.0 as i32 * 10 + cc.1 as i32; // e.g. sm_86 → 86
+        let val = match attrib {
+            CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK => s.ctx.device.max_threads_per_block as i32,
+            CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES => static_shared as i32,
+            CU_FUNC_ATTRIBUTE_CONST_SIZE_BYTES => 0, // constant banks not modeled
+            CU_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES => 0, // local (stack) spill not modeled
+            CU_FUNC_ATTRIBUTE_NUM_REGS => num_regs as i32,
+            CU_FUNC_ATTRIBUTE_PTX_VERSION => arch,
+            CU_FUNC_ATTRIBUTE_BINARY_VERSION => arch,
+            CU_FUNC_ATTRIBUTE_CACHE_MODE_CA => 0,
+            CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES => dyn_shared,
+            CU_FUNC_ATTRIBUTE_PREFERRED_SHARED_MEMORY_CARVEOUT => -1, // no preference
+            _ => 0, // spec-faithful default for the unmodeled attribute tail
+        };
+        unsafe { *pi = val };
+        CUDA_SUCCESS
+    })
+}
+
+/// `cuFuncSetAttribute` — record `MAX_DYNAMIC_SHARED_SIZE_BYTES` (the one attribute the model honors);
+/// any other attribute is accepted as a no-op once the handle validates.
+#[no_mangle]
+pub extern "C" fn cuFuncSetAttribute(f: *mut c_void, attrib: i32, value: i32) -> i32 {
+    with(|s| {
+        let ok = if attrib == CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES {
+            s.set_func_dyn_shared(f, value)
+        } else {
+            s.func_dyn_shared(f).is_some() // validate the handle
+        };
+        if ok {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_HANDLE
+        }
+    })
+}
+
+/// `cuFuncSetCacheConfig` — record the function's preferred L1/shared split (a hint the synchronous
+/// executor does not need to act on, but tracks faithfully). A bad handle is `INVALID_HANDLE`.
+#[no_mangle]
+pub extern "C" fn cuFuncSetCacheConfig(f: *mut c_void, config: i32) -> i32 {
+    with(|s| {
+        if s.set_func_cache_config(f, config) {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_HANDLE
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cuOccupancyMaxActiveBlocksPerMultiprocessor(
+    num_blocks: *mut i32,
+    f: *mut c_void,
+    block_size: i32,
+    dyn_smem: usize,
+) -> i32 {
+    if num_blocks.is_null() || block_size <= 0 {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| {
+        let Some((num_regs, static_shared)) = func_resources(s, f) else {
+            return CUDA_ERROR_INVALID_HANDLE;
+        };
+        let shared = static_shared.saturating_add(dyn_smem.min(i32::MAX as usize) as u32);
+        let n = max_blocks_per_sm(num_regs, shared, block_size);
+        unsafe { *num_blocks = n };
+        CUDA_SUCCESS
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
+    num_blocks: *mut i32,
+    f: *mut c_void,
+    block_size: i32,
+    dyn_smem: usize,
+    _flags: u32,
+) -> i32 {
+    cuOccupancyMaxActiveBlocksPerMultiprocessor(num_blocks, f, block_size, dyn_smem)
+}
+
+#[no_mangle]
+pub extern "C" fn cuOccupancyMaxPotentialBlockSize(
+    min_grid_size: *mut i32,
+    block_size: *mut i32,
+    f: *mut c_void,
+    _b2d: *mut c_void,
+    dyn_smem: usize,
+    block_size_limit: i32,
+) -> i32 {
+    with(|s| {
+        let Some((num_regs, static_shared)) = func_resources(s, f) else {
+            return CUDA_ERROR_INVALID_HANDLE;
+        };
+        let max_threads = s.ctx.device.max_threads_per_block as i32;
+        let sm_count = s.ctx.device.multiprocessor_count as i32;
+        // Search block sizes (in warp-size steps) for the one giving the most resident threads/SM, i.e.
+        // the highest occupancy — the same objective the real API optimizes.
+        let warp = s.ctx.device.warp_size as i32;
+        let cap = {
+            let mut c = max_threads;
+            if block_size_limit > 0 {
+                c = c.min(block_size_limit);
+            }
+            c
+        };
+        let shared = static_shared.saturating_add(dyn_smem.min(i32::MAX as usize) as u32);
+        let (mut best_bs, mut best_threads) = (warp.max(1), 0i32);
+        let mut bs = warp.max(1);
+        while bs <= cap {
+            let blocks = max_blocks_per_sm(num_regs, shared, bs);
+            let threads = blocks * bs;
+            if threads >= best_threads {
+                best_threads = threads;
+                best_bs = bs;
+            }
+            bs += warp.max(1);
+        }
+        if !block_size.is_null() {
+            unsafe { *block_size = best_bs };
+        }
+        if !min_grid_size.is_null() {
+            // Minimum grid to fill the device at peak occupancy: SMs × resident blocks/SM.
+            unsafe { *min_grid_size = sm_count * max_blocks_per_sm(num_regs, shared, best_bs) };
+        }
+        CUDA_SUCCESS
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cuOccupancyMaxPotentialBlockSizeWithFlags(
+    min_grid_size: *mut i32,
+    block_size: *mut i32,
+    f: *mut c_void,
+    b2d: *mut c_void,
+    dyn_smem: usize,
+    block_size_limit: i32,
+    _flags: u32,
+) -> i32 {
+    cuOccupancyMaxPotentialBlockSize(min_grid_size, block_size, f, b2d, dyn_smem, block_size_limit)
 }
 
 // ==================================================================================================
@@ -937,7 +1186,7 @@ pub extern "C" fn cuStreamCreate(phstream: *mut *mut c_void, _flags: u32) -> i32
     }
     let h = with(|s| {
         let stream = s.ctx.streams.create();
-        s.intern_stream(stream)
+        s.intern_stream(stream, _flags, 0)
     });
     unsafe { *phstream = h };
     CUDA_SUCCESS
@@ -1063,6 +1312,134 @@ pub extern "C" fn cuStreamWaitEvent(hstream: *mut c_void, hevent: *mut c_void, _
             CUDA_SUCCESS
         }
     })
+}
+
+// ==================================================================================================
+// stream getters: creation flags / priority / owning context / unique id
+// ==================================================================================================
+
+/// `cuStreamGetFlags` — the flags the stream was created with (the default stream reports `0`).
+#[no_mangle]
+pub extern "C" fn cuStreamGetFlags(hstream: *mut c_void, flags: *mut u32) -> i32 {
+    if flags.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| match s.stream_meta(hstream) {
+        Some((f, _)) => {
+            unsafe { *flags = f };
+            CUDA_SUCCESS
+        }
+        None => CUDA_ERROR_INVALID_HANDLE,
+    })
+}
+
+/// `cuStreamGetPriority` — the priority the stream was created with (the synchronous model uses a single
+/// priority band, so every stream created via `cuStreamCreate` reports `0`).
+#[no_mangle]
+pub extern "C" fn cuStreamGetPriority(hstream: *mut c_void, priority: *mut i32) -> i32 {
+    if priority.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| match s.stream_meta(hstream) {
+        Some((_, p)) => {
+            unsafe { *priority = p };
+            CUDA_SUCCESS
+        }
+        None => CUDA_ERROR_INVALID_HANDLE,
+    })
+}
+
+/// `cuStreamGetCtx` — the context a stream belongs to. The single simulated device has one active
+/// context, so a valid stream reports the current context.
+#[no_mangle]
+pub extern "C" fn cuStreamGetCtx(hstream: *mut c_void, pctx: *mut *mut c_void) -> i32 {
+    if pctx.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| {
+        if s.stream(hstream).is_none() {
+            return CUDA_ERROR_INVALID_HANDLE;
+        }
+        let cur = s.current_ctx();
+        unsafe { *pctx = cur };
+        CUDA_SUCCESS
+    })
+}
+
+/// `cuStreamGetId` — a unique id for the stream. The opaque handle value is already a stable per-process
+/// id (the default stream is `0`), so it is reported directly.
+#[no_mangle]
+pub extern "C" fn cuStreamGetId(hstream: *mut c_void, id: *mut u64) -> i32 {
+    if id.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    with(|s| {
+        if s.stream(hstream).is_none() {
+            return CUDA_ERROR_INVALID_HANDLE;
+        }
+        unsafe { *id = hstream as u64 };
+        CUDA_SUCCESS
+    })
+}
+
+// ==================================================================================================
+// context limits + cache config + stream-priority range
+// ==================================================================================================
+
+/// `cuCtxGetLimit` — read a modeled `CUlimit` slot. An out-of-range limit is `UNSUPPORTED_LIMIT`.
+#[no_mangle]
+pub extern "C" fn cuCtxGetLimit(pvalue: *mut usize, limit: i32) -> i32 {
+    if pvalue.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if limit < 0 || limit >= CU_LIMIT_MAX {
+        return CUDA_ERROR_UNSUPPORTED_LIMIT;
+    }
+    let v = with(|s| s.ctx_limit(limit as usize));
+    unsafe { *pvalue = v };
+    CUDA_SUCCESS
+}
+
+/// `cuCtxSetLimit` — record a modeled `CUlimit` slot (round-trips through `cuCtxGetLimit`). An
+/// out-of-range limit is `UNSUPPORTED_LIMIT`.
+#[no_mangle]
+pub extern "C" fn cuCtxSetLimit(limit: i32, value: usize) -> i32 {
+    if limit < 0 || limit >= CU_LIMIT_MAX {
+        return CUDA_ERROR_UNSUPPORTED_LIMIT;
+    }
+    with(|s| s.set_ctx_limit(limit as usize, value));
+    CUDA_SUCCESS
+}
+
+/// `cuCtxGetCacheConfig` — the current context's preferred L1/shared cache split.
+#[no_mangle]
+pub extern "C" fn cuCtxGetCacheConfig(pconfig: *mut i32) -> i32 {
+    if pconfig.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let v = with(|s| s.ctx_cache_config());
+    unsafe { *pconfig = v };
+    CUDA_SUCCESS
+}
+
+/// `cuCtxSetCacheConfig` — record the context's preferred cache split (round-trips through the getter).
+#[no_mangle]
+pub extern "C" fn cuCtxSetCacheConfig(config: i32) -> i32 {
+    with(|s| s.set_ctx_cache_config(config));
+    CUDA_SUCCESS
+}
+
+/// `cuCtxGetStreamPriorityRange` — the `[greatest, least]` numeric priority range. The synchronous model
+/// has a single priority band, so both ends are `0` (as a real driver reports when priorities collapse).
+#[no_mangle]
+pub extern "C" fn cuCtxGetStreamPriorityRange(least: *mut i32, greatest: *mut i32) -> i32 {
+    if !least.is_null() {
+        unsafe { *least = 0 };
+    }
+    if !greatest.is_null() {
+        unsafe { *greatest = 0 };
+    }
+    CUDA_SUCCESS
 }
 
 // ==================================================================================================
@@ -1375,5 +1752,173 @@ mod tests {
         assert_eq!(cuEventCreate(&mut ev, 0), CUDA_SUCCESS);
         assert_eq!(cuStreamWaitEvent(stream, ev, 0), CUDA_SUCCESS);
         assert_eq!(cuStreamWaitEvent(stream, 0x9999 as *mut c_void, 0), CUDA_ERROR_INVALID_HANDLE);
+    }
+
+    /// Load the reference `vecadd` PTX and resolve its `CUfunction` (no sink needed — module load +
+    /// function resolution are pure model operations).
+    fn load_vecadd() -> *mut c_void {
+        let img = std::ffi::CString::new(ptx::VECADD_PTX).unwrap();
+        let mut module: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuModuleLoadData(&mut module, img.as_ptr() as *const c_void), CUDA_SUCCESS);
+        let name = std::ffi::CString::new("vecadd").unwrap();
+        let mut func: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuModuleGetFunction(&mut func, module, name.as_ptr()), CUDA_SUCCESS);
+        assert!(!func.is_null());
+        func
+    }
+
+    #[test]
+    fn func_get_attribute_reports_modeled_function() {
+        let _g = guard();
+        let f = load_vecadd();
+        let want_max = with(|s| s.ctx.device.max_threads_per_block as i32);
+
+        let mut v = -1i32;
+        let get = |attr: i32, out: &mut i32, f: *mut c_void| cuFuncGetAttribute(out as *mut i32, attr, f);
+
+        // MAX_THREADS_PER_BLOCK is the modeled device's real value.
+        assert_eq!(get(CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, &mut v, f), CUDA_SUCCESS);
+        assert_eq!(v, want_max);
+        // NUM_REGS is the function's real recovered register count (> 0 for vecadd).
+        assert_eq!(get(CU_FUNC_ATTRIBUTE_NUM_REGS, &mut v, f), CUDA_SUCCESS);
+        assert!(v > 0, "vecadd uses registers, got {v}");
+        // PTX/BINARY version derive from the device compute capability (sm_86 → 86).
+        assert_eq!(get(CU_FUNC_ATTRIBUTE_PTX_VERSION, &mut v, f), CUDA_SUCCESS);
+        assert_eq!(v, 86);
+        // vecadd declares no static shared memory.
+        assert_eq!(get(CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, &mut v, f), CUDA_SUCCESS);
+        assert_eq!(v, 0);
+
+        // A bad handle / null out-pointer are rejected honestly.
+        assert_eq!(get(CU_FUNC_ATTRIBUTE_NUM_REGS, &mut v, 0x1234 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(cuFuncGetAttribute(core::ptr::null_mut(), CU_FUNC_ATTRIBUTE_NUM_REGS, f), CUDA_ERROR_INVALID_VALUE);
+    }
+
+    #[test]
+    fn func_set_attribute_and_cache_config_round_trip() {
+        let _g = guard();
+        let f = load_vecadd();
+
+        // dynamic-shared bytes round-trip through get.
+        assert_eq!(cuFuncSetAttribute(f, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, 2048), CUDA_SUCCESS);
+        let mut v = -1i32;
+        assert_eq!(
+            cuFuncGetAttribute(&mut v, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, f),
+            CUDA_SUCCESS
+        );
+        assert_eq!(v, 2048);
+
+        // cache config records (no-op hint) for a valid handle; a bad handle is rejected.
+        assert_eq!(cuFuncSetCacheConfig(f, 1), CUDA_SUCCESS);
+        assert_eq!(cuFuncSetCacheConfig(0x1234 as *mut c_void, 1), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuFuncSetAttribute(0x1234 as *mut c_void, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, 1),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+    }
+
+    #[test]
+    fn occupancy_is_sane_for_vecadd() {
+        let _g = guard();
+        let f = load_vecadd();
+
+        let mut n = -1i32;
+        assert_eq!(cuOccupancyMaxActiveBlocksPerMultiprocessor(&mut n, f, 256, 0), CUDA_SUCCESS);
+        assert!(n > 0 && n <= MAX_BLOCKS_PER_SM, "expected a sane block count, got {n}");
+        // WithFlags shares the body.
+        let mut n2 = -1i32;
+        assert_eq!(
+            cuOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(&mut n2, f, 256, 0, 0),
+            CUDA_SUCCESS
+        );
+        assert_eq!(n, n2);
+
+        // Invalid args rejected.
+        assert_eq!(cuOccupancyMaxActiveBlocksPerMultiprocessor(core::ptr::null_mut(), f, 256, 0), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(cuOccupancyMaxActiveBlocksPerMultiprocessor(&mut n, f, 0, 0), CUDA_ERROR_INVALID_VALUE);
+
+        // Potential-block-size returns a positive block size + a grid that fills the modeled device.
+        let (mut min_grid, mut block) = (-1i32, -1i32);
+        assert_eq!(
+            cuOccupancyMaxPotentialBlockSize(&mut min_grid, &mut block, f, core::ptr::null_mut(), 0, 0),
+            CUDA_SUCCESS
+        );
+        assert!(block > 0, "block size {block}");
+        assert!(min_grid > 0, "min grid {min_grid}");
+    }
+
+    #[test]
+    fn launch_config_parses_the_same_dims_cu_launch_kernel_takes() {
+        let _g = guard();
+        // CUlaunchConfig prefix: gridDim{X,Y,Z}, blockDim{X,Y,Z}, sharedMemBytes, then (unread) hStream.
+        let cfg: [u32; 8] = [10, 2, 1, 256, 1, 1, 48, 0];
+        let parsed = unsafe { parse_launch_config(cfg.as_ptr() as *const c_void) };
+        assert_eq!(parsed, Some(((10, 2, 1), (256, 1, 1), 48)));
+        // These are exactly the (grid, block) a `cuLaunchKernel` call would forward, so `cuLaunchKernelEx`
+        // funnels into the identical `launch_kernel_impl` lowering. A null config is rejected.
+        assert_eq!(unsafe { parse_launch_config(core::ptr::null()) }, None);
+        assert_eq!(cuLaunchKernelEx(core::ptr::null(), core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+    }
+
+    #[test]
+    fn ctx_limits_and_cache_config_round_trip() {
+        let _g = guard();
+        // A modeled limit reads its default, then round-trips a set value.
+        let mut v = 0usize;
+        assert_eq!(cuCtxGetLimit(&mut v, 0), CUDA_SUCCESS);
+        assert_eq!(v, 1024, "CU_LIMIT_STACK_SIZE default");
+        assert_eq!(cuCtxSetLimit(0, 4096), CUDA_SUCCESS);
+        assert_eq!(cuCtxGetLimit(&mut v, 0), CUDA_SUCCESS);
+        assert_eq!(v, 4096);
+
+        // Out-of-range limits are rejected on both get and set.
+        assert_eq!(cuCtxGetLimit(&mut v, CU_LIMIT_MAX), CUDA_ERROR_UNSUPPORTED_LIMIT);
+        assert_eq!(cuCtxSetLimit(CU_LIMIT_MAX, 1), CUDA_ERROR_UNSUPPORTED_LIMIT);
+        assert_eq!(cuCtxGetLimit(core::ptr::null_mut(), 0), CUDA_ERROR_INVALID_VALUE);
+
+        // Cache config round-trips.
+        let mut c = -1i32;
+        assert_eq!(cuCtxGetCacheConfig(&mut c), CUDA_SUCCESS);
+        assert_eq!(c, 0);
+        assert_eq!(cuCtxSetCacheConfig(2), CUDA_SUCCESS);
+        assert_eq!(cuCtxGetCacheConfig(&mut c), CUDA_SUCCESS);
+        assert_eq!(c, 2);
+
+        // Stream priority range collapses to a single band.
+        let (mut lo, mut hi) = (-9i32, -9i32);
+        assert_eq!(cuCtxGetStreamPriorityRange(&mut lo, &mut hi), CUDA_SUCCESS);
+        assert_eq!((lo, hi), (0, 0));
+    }
+
+    #[test]
+    fn stream_getters_report_creation_state() {
+        let _g = guard();
+        let mut ctx: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuCtxCreate_v2(&mut ctx, 0, 0), CUDA_SUCCESS);
+
+        let mut stream: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuStreamCreate(&mut stream, 1), CUDA_SUCCESS);
+
+        // Flags/priority reflect creation; ctx is the current context; id is a stable non-null value.
+        let mut flags = 0u32;
+        assert_eq!(cuStreamGetFlags(stream, &mut flags), CUDA_SUCCESS);
+        assert_eq!(flags, 1);
+        let mut prio = -9i32;
+        assert_eq!(cuStreamGetPriority(stream, &mut prio), CUDA_SUCCESS);
+        assert_eq!(prio, 0);
+        let mut owner: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuStreamGetCtx(stream, &mut owner), CUDA_SUCCESS);
+        assert_eq!(owner, ctx);
+        let mut id = 12345u64;
+        assert_eq!(cuStreamGetId(stream, &mut id), CUDA_SUCCESS);
+        assert_eq!(id, stream as u64);
+
+        // The default (null) stream reports flags/priority 0.
+        assert_eq!(cuStreamGetFlags(core::ptr::null_mut(), &mut flags), CUDA_SUCCESS);
+        assert_eq!(flags, 0);
+
+        // A bad handle is rejected.
+        assert_eq!(cuStreamGetFlags(0x9999 as *mut c_void, &mut flags), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(cuStreamGetId(0x9999 as *mut c_void, &mut id), CUDA_ERROR_INVALID_HANDLE);
     }
 }
