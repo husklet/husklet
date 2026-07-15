@@ -306,6 +306,11 @@ path = "tests/demo_shm_format_coverage.rs"
 required-features = ["smithay-adapter"]
 
 [[test]]
+name = "demo_dmabuf_present"
+path = "tests/demo_dmabuf_present.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
 name = "demo_transform_viewport_compose"
 path = "tests/demo_transform_viewport_compose.rs"
 required-features = ["smithay-adapter"]

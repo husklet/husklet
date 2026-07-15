@@ -87,6 +87,20 @@ use smithay::wayland::{
     viewporter::{ViewportCachedState, ViewporterState},
 };
 
+/// `zwp_linux_dmabuf_v1` server plumbing — the accelerated present path real toolkits + Chrome use.
+/// `DrmFormat`/`Fourcc`/`Modifier` name the DRM format+modifier pairs the global advertises and the
+/// importer validates; `Dmabuf` is the imported buffer (its `handles()`/`strides()`/`offsets()` are what
+/// [`read_dmabuf_rgba`] `pread`s). `Format` is aliased `DrmFormat` because `crate::scene::model::Format`
+/// already owns the `Format` name here. `Buffer as _` brings the `width()`/`height()`/`format()` accessors
+/// into scope for `Dmabuf`.
+use smithay::backend::allocator::{
+    dmabuf::Dmabuf, Buffer as _, Format as DrmFormat, Fourcc, Modifier,
+};
+use smithay::wayland::dmabuf::{
+    get_dmabuf, DmabufDeviceId, DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState,
+    ImportNotifier,
+};
+
 /// The `wp_presentation_feedback.presented` `flags` bitmask (vsync / hw-clock / …) — the presentation
 /// feedback sent when a surface's committed content reaches the screen.
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
@@ -165,6 +179,16 @@ pub struct HlState {
     display: DisplayHandle,
     pub compositor: CompositorState,
     pub shm: ShmState,
+    /// Owns the `zwp_linux_dmabuf_v1` global — the ACCELERATED present path real toolkits (GTK/Qt EGL)
+    /// and Chrome's ozone/GPU probe instead of `wl_shm`. Advertised as a v4/v5 feedback global carrying a
+    /// single main tranche of LINEAR ARGB8888/XRGB8888 (see [`dmabuf_formats`]); a v3 binder receives the
+    /// same pairs as `modifier` events. LINEAR is the only modifier a SOFTWARE presenter can truthfully
+    /// import: the buffer's plane fd is plain byte-linear CPU memory, so [`read_dmabuf_rgba`] `pread`s and
+    /// unpacks it exactly like an shm buffer (no GPU detile). A tiled/GPU-modifier or multi-plane buffer is
+    /// rejected at import ([`DmabufHandler::dmabuf_imported`]) so the client falls back to `wl_shm` rather
+    /// than committing a buffer the compositor could never turn into pixels. Held for the state's lifetime
+    /// so the global keeps advertising. See the `dmabuf_present` demo.
+    pub dmabuf: DmabufState,
     pub xdg_shell: XdgShellState,
     /// Owns the `zxdg_decoration_manager_v1` global. A client (GTK/Chrome/Qt) binds it, calls
     /// `get_toplevel_decoration` on its toplevel, and negotiates server-side vs client-side decorations;
@@ -384,6 +408,11 @@ impl HlState {
         // Abgr8888 / Xbgr8888 (R and B channels swapped), which `read_shm_rgba` unpacks. Toolkits that
         // prefer BGR-order buffers (some GL/EGL paths) can then present without a client-side repack.
         let shm = ShmState::new::<HlState>(dh, vec![wl_shm::Format::Abgr8888, wl_shm::Format::Xbgr8888]);
+        // Advertise `zwp_linux_dmabuf_v1` (accelerated present path). A v4/v5 feedback global carrying a
+        // single LINEAR ARGB8888/XRGB8888 tranche, so GTK/Qt EGL + Chrome's ozone/GPU get a TRUTHFUL
+        // format table to probe — and a client that hands us a LINEAR dmabuf has it CPU-imported by
+        // `pread` (a real fd import, no GPU). See [`new_dmabuf_state`].
+        let dmabuf = new_dmabuf_state(dh);
         let xdg_shell = XdgShellState::new::<HlState>(dh);
         // Advertise `zxdg_decoration_manager_v1` so CSD-vs-SSD negotiation resolves instead of hanging.
         let xdg_decoration = XdgDecorationState::new::<HlState>(dh);
@@ -481,7 +510,7 @@ impl HlState {
 
         hl_info!(
             tag::WAYLAND,
-            "globals bound: compositor shm xdg seat output data_device primary_selection relative_pointer pointer_constraints pointer_gestures tablet session_lock presentation xdg_activation idle_inhibit content_type text_input input_method"
+            "globals bound: compositor shm dmabuf xdg seat output data_device primary_selection relative_pointer pointer_constraints pointer_gestures tablet session_lock presentation xdg_activation idle_inhibit content_type text_input input_method"
         );
         // The pen tool declares pressure + distance + tilt axes on top of the mandatory x/y + tip.
         let tool_desc = TabletToolDescriptor {
@@ -496,6 +525,7 @@ impl HlState {
             display: dh.clone(),
             compositor,
             shm,
+            dmabuf,
             xdg_shell,
             xdg_decoration,
             data_device,
@@ -769,7 +799,12 @@ impl HlState {
         // Build the neutral commit from the buffer assignment, depositing pixels for the presenter.
         let commit = match assignment {
             Some(BufferAssignment::NewBuffer(buffer)) => {
-                match read_shm_rgba(&buffer) {
+                // Try the shm read first (the common path); if the buffer is a `zwp_linux_dmabuf_v1`
+                // buffer instead, CPU-import its LINEAR pixels by `pread`ing the plane fd. Either yields
+                // tight top-left RGBA the presenter composites identically — the dmabuf pixels are
+                // GENUINELY read from the client's fd (there is no GPU here), so the composited frame
+                // matches the buffer EXACTLY, just like shm.
+                match read_shm_rgba(&buffer).or_else(|| read_dmabuf_rgba(&buffer)) {
                     Some((stored, format)) => {
                         let state = BufferState {
                             tex_w: stored.width,
@@ -785,7 +820,7 @@ impl HlState {
                         c.damage = damage;
                         c
                     }
-                    // Not an shm buffer (or malformed) — treat as a no-content commit.
+                    // Neither an shm nor an importable dmabuf buffer (or malformed) — no-content commit.
                     None => Commit::default(),
                 }
             }
@@ -1903,6 +1938,34 @@ impl ShmHandler for HlState {
     }
 }
 
+impl DmabufHandler for HlState {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf
+    }
+
+    /// A client finished a `zwp_linux_buffer_params_v1` create/create_immed. Accept the buffer iff it is
+    /// something this SOFTWARE presenter can truthfully turn into pixels — a single-plane LINEAR
+    /// ARGB/XRGB (or byte-swapped ABGR/XBGR) buffer, whose plane fd is plain CPU memory we `pread` at
+    /// commit ([`read_dmabuf_rgba`]). REJECT anything else (a tiled/GPU modifier we cannot detile without
+    /// a GPU, or a multi-plane/YUV layout we do not unpack) via `notifier.failed()`, so the client falls
+    /// back to `wl_shm` rather than committing a buffer we could only ever present as blank. Honest by
+    /// construction: we never accept an import we cannot actually read.
+    fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
+        let fmt = dmabuf.format();
+        let importable = fmt.modifier == Modifier::Linear
+            && dmabuf.num_planes() == 1
+            && matches!(
+                fmt.code,
+                Fourcc::Argb8888 | Fourcc::Xrgb8888 | Fourcc::Abgr8888 | Fourcc::Xbgr8888
+            );
+        if importable {
+            let _ = notifier.successful::<HlState>();
+        } else {
+            notifier.failed();
+        }
+    }
+}
+
 impl SeatHandler for HlState {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;
@@ -2399,6 +2462,7 @@ smithay::delegate_text_input_manager!(HlState);
 smithay::delegate_input_method_manager!(HlState);
 smithay::delegate_compositor!(HlState);
 smithay::delegate_shm!(HlState);
+smithay::delegate_dmabuf!(HlState);
 smithay::delegate_xdg_shell!(HlState);
 smithay::delegate_xdg_decoration!(HlState);
 smithay::delegate_output!(HlState);
@@ -2759,6 +2823,121 @@ fn read_shm_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
         Some((StoredBuffer { width: w, height: h, rgba }, format))
     });
     result.ok().flatten()
+}
+
+/// The DRM format+modifier pairs the `zwp_linux_dmabuf_v1` global advertises AND the importer accepts:
+/// single-plane **LINEAR** ARGB8888 + XRGB8888. LINEAR is the ONE modifier a software (no-GPU) presenter
+/// can honestly import — the buffer is plain byte-linear memory the compositor `pread`s and unpacks like
+/// shm. No tiled/vendor modifiers are advertised because there is no GPU here to detile them; a client
+/// that needs those reads an empty tranche for them and falls back to `wl_shm`. The byte-swapped
+/// ABGR/XBGR fourccs are additionally ACCEPTED at import (mirroring the shm read path) but not advertised,
+/// since ARGB/XRGB is the universal pair GTK/Qt/Chrome negotiate.
+fn dmabuf_formats() -> [DrmFormat; 2] {
+    [
+        DrmFormat { code: Fourcc::Argb8888, modifier: Modifier::Linear },
+        DrmFormat { code: Fourcc::Xrgb8888, modifier: Modifier::Linear },
+    ]
+}
+
+/// A synthetic headless render-node `dev_t` the dmabuf v4/v5 feedback names as its `main_device`. There
+/// is NO real DRM device on this software backend, but the feedback protocol REQUIRES a main device for a
+/// client (Chrome's ozone/GPU) to resolve its render path against; `/dev/dri/renderD128`'s conventional
+/// `makedev(226, 128)` is advertised so a probe gets a coherent answer. The presenter never touches a
+/// real node — every buffer it imports is CPU-mapped LINEAR memory.
+const HEADLESS_RENDER_NODE: DmabufDeviceId = DmabufDeviceId::from_linux_dev_t((226u64 << 8) | 128);
+
+/// Stand up the `zwp_linux_dmabuf_v1` global and return the [`DmabufState`] delegate. Preferred: a
+/// **version 5** global carrying default dmabuf **feedback** (a single main tranche of [`dmabuf_formats`]
+/// targeting [`HEADLESS_RENDER_NODE`]) — the v4 feedback path Chrome's ozone/GPU needs. v3-and-lower
+/// binders receive the same LINEAR ARGB/XRGB pairs as `modifier` events from the main tranche, so plain
+/// GLES/EGL clients are unaffected. Fallback: if the feedback format-table backing file cannot be created
+/// (a host `shm_open`/memfd failure), fall back to the v3 modifier-list global so the compositor still
+/// advertises the format table. Success/failure is observable via the advertised global version (5 vs 3).
+fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
+    let mut state = DmabufState::new();
+    match DmabufFeedbackBuilder::new(HEADLESS_RENDER_NODE, dmabuf_formats()).build() {
+        Ok(feedback) => {
+            // The returned handle is only a reference; the global (and a clone of the feedback) live
+            // inside `state`, so dropping it does not remove the global.
+            let _global: DmabufGlobal =
+                state.create_global_with_default_feedback::<HlState>(dh, &feedback);
+        }
+        Err(e) => {
+            eprintln!(
+                "hl_wip-compositor: zwp_linux_dmabuf v4 feedback format-table could not be created \
+                 ({e}); falling back to the v3 modifier-list global"
+            );
+            let _global: DmabufGlobal = state.create_global::<HlState>(dh, dmabuf_formats());
+        }
+    }
+    state
+}
+
+/// Read a committed **LINEAR** dmabuf `wl_buffer`'s pixels into tight top-left RGBA8888 by `pread`ing its
+/// single plane fd — the genuine CPU import path for a byte-linear buffer on a software backend (no GPU
+/// detile step). This is a REAL fd import: the bytes come off the client's plane fd, not a fabricated
+/// copy. Returns `None` for a non-dmabuf buffer (the caller only reaches this after the shm read already
+/// returned `None`), or for any dmabuf the importer would not have accepted (non-LINEAR
+/// / multi-plane / unsupported fourcc / malformed geometry / backing too small). The four fourcc channel
+/// orders map exactly as in [`read_shm_rgba`].
+fn read_dmabuf_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
+    use std::os::unix::fs::FileExt;
+    let dmabuf = get_dmabuf(buffer).ok()?;
+    let drm = dmabuf.format();
+    // Only the single-plane LINEAR buffers we advertised/accepted are CPU-importable here.
+    if drm.modifier != Modifier::Linear || dmabuf.num_planes() != 1 {
+        return None;
+    }
+    let (format, swap_rb, has_alpha) = match drm.code {
+        Fourcc::Xrgb8888 => (Format::Xrgb8888, false, false),
+        Fourcc::Abgr8888 => (Format::Argb8888, true, true),
+        Fourcc::Xbgr8888 => (Format::Xrgb8888, true, false),
+        Fourcc::Argb8888 => (Format::Argb8888, false, true),
+        // An unsupported fourcc should never reach here (import rejects it), but be defensive.
+        _ => return None,
+    };
+    let (w, h) = (dmabuf.width() as i32, dmabuf.height() as i32);
+    let stride = dmabuf.strides().next()? as i64;
+    let offset = dmabuf.offsets().next()? as i64;
+    // Same geometry guard as the shm path (all widened to i64 so a hostile near-i32::MAX width cannot
+    // overflow the row-stride check before it fires): reject a stride/offset that under-describes a row.
+    if w <= 0 || h <= 0 || stride < w as i64 * 4 || offset < 0 {
+        return None;
+    }
+    // Highest byte we will read = offset + (h-1)*stride + w*4; compute the read span with checked math so
+    // an overflowing geometry is rejected (None) rather than panicking.
+    let span = offset
+        .checked_add((h as i64 - 1).checked_mul(stride)?)?
+        .checked_add(w as i64 * 4)?;
+    // Duplicate the BORROWED plane fd (the `Dmabuf` keeps ownership) and `read_at` the pixel region. A
+    // LINEAR dmabuf's plane fd is a plain CPU-readable memory object (here backed by the client's own
+    // file/memfd), so `read_exact_at` on the dup'd fd is the no-mmap equivalent of the shm mapping read;
+    // a short/undersized backing makes `read_exact_at` fail, which we map to `None` (backing too small).
+    let fd = dmabuf.handles().next()?;
+    let file = std::fs::File::from(fd.try_clone_to_owned().ok()?);
+    let read_len = (span - offset) as usize;
+    let mut raw = vec![0u8; read_len];
+    file.read_exact_at(&mut raw, offset as u64).ok()?;
+    // `raw[0]` corresponds to file offset `offset`, so pixel (x, y) begins at `raw[y*stride + x*4]`.
+    let mut rgba = vec![0u8; w as usize * h as usize * 4];
+    for y in 0..h {
+        let row = (y as i64 * stride) as usize;
+        for x in 0..w {
+            let si = row + (x as usize) * 4;
+            let c0 = raw[si];
+            let g = raw[si + 1];
+            let c2 = raw[si + 2];
+            let a = if has_alpha { raw[si + 3] } else { 255 };
+            // ARGB memory is `[B, G, R, A]` (c0=B, c2=R); *BGR memory is `[R, G, B, A]` (c0=R, c2=B).
+            let (r, b) = if swap_rb { (c0, c2) } else { (c2, c0) };
+            let di = ((y * w + x) * 4) as usize;
+            rgba[di] = r;
+            rgba[di + 1] = g;
+            rgba[di + 2] = b;
+            rgba[di + 3] = a;
+        }
+    }
+    Some((StoredBuffer { width: w, height: h, rgba }, format))
 }
 
 #[cfg(test)]
