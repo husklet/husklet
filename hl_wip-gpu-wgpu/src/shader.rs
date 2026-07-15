@@ -18,8 +18,11 @@ use crate::WgpuExecutor;
 
 /// The wgpu-native backing of one protocol shader module.
 pub enum ShaderNative {
-    /// A naga-translated graphics module (vertex/fragment), ready for a render pipeline.
-    Graphics(wgpu::ShaderModule),
+    /// A naga-translated wgpu shader module (from a SPIR-V or GLSL payload). Backs a render pipeline
+    /// (vertex/fragment) OR — when the payload declares a compute entry point — a compute pipeline built
+    /// with an auto layout (see `pipeline::create_compute_pipeline`). A single naga round-trip serves both
+    /// stages, so the variant is stage-neutral rather than graphics-only.
+    Module(wgpu::ShaderModule),
     /// A compiled compute kernel, lowered to WGSL lazily at compute-pipeline creation.
     Kernel(Box<KernelProgram>),
 }
@@ -72,7 +75,7 @@ impl WgpuExecutor {
                     label: Some("hl-spirv"),
                     source: wgpu::ShaderSource::Wgsl(src.into()),
                 });
-                ShaderNative::Graphics(module)
+                ShaderNative::Module(module)
             }
             ShaderPayloadKind::Glsl => {
                 // The guest GLES/GL driver forwards its GLSL source VERBATIM (a `GlslDescriptor` led by
@@ -98,7 +101,7 @@ impl WgpuExecutor {
                     label: Some("hl-glsl"),
                     source: wgpu::ShaderSource::Wgsl(src.into()),
                 });
-                ShaderNative::Graphics(module)
+                ShaderNative::Module(module)
             }
             ShaderPayloadKind::LegacyMsl | ShaderPayloadKind::DemoBuiltin => {
                 hl_log::hl_warn!(tag::WGPU, "shader rejected kind={:?} reason=no-wgsl", kind);

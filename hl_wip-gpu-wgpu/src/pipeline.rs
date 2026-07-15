@@ -29,11 +29,14 @@ pub enum PipelineNative {
         #[allow(dead_code)]
         color_formats: Vec<TextureFormat>,
     },
-    /// A compute pipeline plus the *explicit* group-0 layout it was built with. The layout is explicit
-    /// (not wgpu's auto layout) so a binding the WGSL happens not to read — e.g. the `params` blob in a
-    /// kernel that only writes its output region — is still present, and a bind group built from the full
-    /// protocol descriptor matches it (auto layouts drop unused bindings, which would mismatch).
-    Compute { pipeline: wgpu::ComputePipeline, layout: wgpu::BindGroupLayout },
+    /// A compute pipeline. Both the PTX-kernel ABI path (built with an *explicit* group-0 layout so a
+    /// binding the WGSL doesn't read — e.g. a kernel's `params` blob — is still declared) and the SPIR-V/
+    /// GLSL path (built with wgpu's *auto* layout, which derives the bind-group layouts + push-constant
+    /// range from the module) store just the pipeline: at dispatch the concrete per-group layout is taken
+    /// from the pipeline itself via `get_bind_group_layout(index)`, which returns the explicit layout for
+    /// the kernel path and the auto-derived one for the SPIR-V path — so a bind group built against it
+    /// matches in both cases, and 2+ groups bind at their declared indices.
+    Compute { pipeline: wgpu::ComputePipeline },
 }
 
 /// Downcast a live pipeline id to its native handle.
@@ -77,45 +80,83 @@ impl WgpuExecutor {
         desc: &ComputePipelineDesc,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::WGPU, "pipeline_create");
-        let prog = match shader::native(res, desc.compute.module)? {
-            ShaderNative::Kernel(p) => p.clone(),
-            ShaderNative::Graphics(_) => {
-                hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=compute reason=needs-kernel-shader");
-                return Err(GpuError::Unsupported("wgpu: compute pipeline needs a kernel shader"))
+        let pipeline = match shader::native(res, desc.compute.module)? {
+            // PTX-kernel ABI: lower the neutral kernel IR to a WGSL compute entry point and build with an
+            // EXPLICIT group-0 layout — binding 0 the read-only param blob, binding r+1 the read_write
+            // pointer region r. Declaring every binding (even one the WGSL doesn't read) keeps the bind
+            // group the protocol builds in lock-step with the layout that `get_bind_group_layout(0)` returns.
+            ShaderNative::Kernel(p) => {
+                let prog = p.clone();
+                let src = wgsl::kernel_to_wgsl(&prog)?;
+                let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("hl-kernel"),
+                    source: wgpu::ShaderSource::Wgsl(src.into()),
+                });
+                let mut entries = vec![storage_entry(0, true)];
+                for r in 0..prog.num_regions {
+                    entries.push(storage_entry(r + 1, false));
+                }
+                let layout =
+                    self.gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("hl-compute-bgl"),
+                        entries: &entries,
+                    });
+                let pipeline_layout =
+                    self.gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("hl-compute-pl"),
+                        bind_group_layouts: &[&layout],
+                        push_constant_ranges: &[],
+                    });
+                self.gpu.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("hl-compute"),
+                    layout: Some(&pipeline_layout),
+                    module: &module,
+                    entry_point: Some(desc.compute.entry.as_str()),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+            }
+            // SPIR-V / GLSL compute: naga already translated the payload to a wgpu `ShaderModule` carrying
+            // a compute entry point (`@compute @workgroup_size(..)`), exactly as it does for graphics
+            // stages. Build with an AUTO layout (`layout: None`): wgpu reflects the module and derives every
+            // bind-group layout AND the push-constant range from what the shader declares. This is the path
+            // wgpu-core's OWN internal indirect-draw-VALIDATION compute pipeline needs — the one Zed's guest
+            // wgpu builds during device creation (2 bind groups, a dynamic-offset buffer, a `var<push_constant>`).
+            // Restricting compute to Kernel here was what made that pipeline "needs-kernel-shader"-reject and
+            // cost Zed its device. Per-group layouts come from the pipeline itself at dispatch
+            // (`get_bind_group_layout(index)`), so 2+ groups bind at their declared set indices. Push
+            // constants require the PUSH_CONSTANTS feature, which `device::acquire` requests when the
+            // adapter advertises it (lavapipe does).
+            ShaderNative::Module(m) => {
+                let module = m.clone();
+                // A validation error scope turns wgpu's async device error (raised when the module has no
+                // compute entry point matching `entry` — e.g. a graphics-only SPIR-V module used for
+                // compute) into a clean typed error, instead of the default uncaptured handler PANICKING.
+                self.gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+                let pipeline =
+                    self.gpu.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("hl-compute-spirv"),
+                        layout: None,
+                        module: &module,
+                        entry_point: Some(desc.compute.entry.as_str()),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        cache: None,
+                    });
+                if let Some(e) = pollster::block_on(self.gpu.device.pop_error_scope()) {
+                    hl_log::hl_warn!(
+                        tag::WGPU,
+                        "pipeline rejected kind=compute reason=spirv-no-compute-entry err={}",
+                        e
+                    );
+                    return Err(GpuError::Kernel(format!(
+                        "wgpu: SPIR-V compute pipeline creation failed (entry {:?}): {e}",
+                        desc.compute.entry
+                    )));
+                }
+                pipeline
             }
         };
-        let src = wgsl::kernel_to_wgsl(&prog)?;
-        let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("hl-kernel"),
-            source: wgpu::ShaderSource::Wgsl(src.into()),
-        });
-
-        // Explicit group-0 layout matching the kernel ABI: binding 0 is the read-only param blob, binding
-        // r+1 is pointer region r (read_write). Declaring every binding (even one the WGSL doesn't read)
-        // keeps the bind group the protocol builds in lock-step with the layout.
-        let mut entries = vec![storage_entry(0, true)];
-        for r in 0..prog.num_regions {
-            entries.push(storage_entry(r + 1, false));
-        }
-        let layout = self.gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("hl-compute-bgl"),
-            entries: &entries,
-        });
-        let pipeline_layout =
-            self.gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("hl-compute-pl"),
-                bind_group_layouts: &[&layout],
-                push_constant_ranges: &[],
-            });
-        let pipeline = self.gpu.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("hl-compute"),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some(desc.compute.entry.as_str()),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-        res.pipelines.insert(id, Box::new(PipelineNative::Compute { pipeline, layout }))
+        res.pipelines.insert(id, Box::new(PipelineNative::Compute { pipeline }))
     }
 
     pub(crate) fn create_render_pipeline(
@@ -126,7 +167,7 @@ impl WgpuExecutor {
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::WGPU, "pipeline_create");
         let vs = match shader::native(res, desc.vertex.module)? {
-            ShaderNative::Graphics(m) => m.clone(),
+            ShaderNative::Module(m) => m.clone(),
             ShaderNative::Kernel(_) => {
                 hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render stage=vertex reason=needs-graphics-shader");
                 return Err(GpuError::Unsupported("wgpu: render pipeline vertex needs a graphics shader"))
@@ -134,7 +175,7 @@ impl WgpuExecutor {
         };
         let fs = match &desc.fragment {
             Some(f) => match shader::native(res, f.module)? {
-                ShaderNative::Graphics(m) => Some((m.clone(), f.entry.clone())),
+                ShaderNative::Module(m) => Some((m.clone(), f.entry.clone())),
                 ShaderNative::Kernel(_) => {
                     hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render stage=fragment reason=needs-graphics-shader");
                     return Err(GpuError::Unsupported(

@@ -1036,6 +1036,10 @@ fn demo_builtin_payload_rejected() {
 
 #[test]
 fn compute_pipeline_from_graphics_shader_errs() {
+    // A SPIR-V *compute* module is now accepted (see tests/spirv_compute.rs), but a graphics-ONLY module
+    // (here only the vertex/fragment entries of SEED_VINDEX_GREEN) used for compute must still fail —
+    // `vs_main` is a vertex entry, not a compute entry. The executor's error scope must turn wgpu's
+    // validation error into a clean typed Err, not a panic.
     let spirv = wgsl_to_spirv(SEED_VINDEX_GREEN);
     let mut g = exec();
     let r = try_batch(
@@ -1048,7 +1052,7 @@ fn compute_pipeline_from_graphics_shader_errs() {
             ),
         ],
     );
-    assert!(r.is_err(), "a compute pipeline needs a kernel shader, not a graphics module");
+    assert!(r.is_err(), "a graphics-only module (no compute entry point) must not build a compute pipeline");
 }
 
 #[test]

@@ -375,31 +375,62 @@ impl WgpuExecutor {
         Ok(())
     }
 
-    /// Execute one compute pass: build each dispatch's bind group from its pipeline's auto layout, replay,
-    /// submit, and wait.
+    /// Execute one compute pass: for each dispatch, build a concrete bind group for every set index the
+    /// stream currently has bound, each against THAT group's layout on the bound pipeline
+    /// (`get_bind_group_layout(index)`), then replay, submit, and wait.
+    ///
+    /// Unlike the earlier single-group path this honors `SetBindGroup.index`, so a SPIR-V compute pipeline
+    /// with 2+ bind groups (e.g. wgpu-core's own indirect-draw-validation pipeline: group 0 the params,
+    /// group 1 the indirect buffers) binds each group at its declared set. Dynamic offsets are already
+    /// baked into each `BindResource::Buffer.offset` by the shim (the protocol's `SetBindGroup` carries no
+    /// separate offset list, and an auto layout reflects no dynamic-offset binding), so the wgpu offsets
+    /// slice is empty. Push constants are likewise not a protocol op — a compute pipeline that declares a
+    /// `var<push_constant>` needs it only to CREATE (that is the wgpu-core validation pipeline Zed builds
+    /// during device creation, which is never dispatched through this executor); reading push constants at
+    /// a dispatch that the protocol never wrote is not reachable here.
     fn run_compute_pass(&mut self, res: &SessionResources, ops: &[Enc]) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::EXEC, "submit");
         hl_log::hl_count!(tag::EXEC, "passes");
+        // Current bind-group binding per set index. Sized to the advertised `max_bind_groups` (4); a higher
+        // index would have been rejected by the runtime before reaching here.
         let mut cur_pipeline: Option<u32> = None;
-        let mut cur_bind_group: Option<u32> = None;
-        // (pipeline id, bind group, (x,y,z)) per Dispatch.
-        let mut dispatches: Vec<(u32, wgpu::BindGroup, (u32, u32, u32))> = Vec::new();
+        let mut cur_groups: [Option<u32>; 4] = [None; 4];
+        // (pipeline id, [(set index, bind group)], (x,y,z)) per Dispatch.
+        #[allow(clippy::type_complexity)]
+        let mut dispatches: Vec<(u32, Vec<(u32, wgpu::BindGroup)>, (u32, u32, u32))> = Vec::new();
         for op in ops {
             match op {
                 Enc::SetPipeline(p) => cur_pipeline = Some(*p),
-                Enc::SetBindGroup { group, .. } => cur_bind_group = Some(*group),
+                Enc::SetBindGroup { index, group } => {
+                    let slot = *index as usize;
+                    if slot >= cur_groups.len() {
+                        return Err(GpuError::Invalid("wgpu: compute bind-group index out of range"));
+                    }
+                    cur_groups[slot] = Some(*group);
+                }
                 Enc::Dispatch { x, y, z } => {
                     hl_log::hl_count!(tag::EXEC, "dispatches");
                     let pid = cur_pipeline.ok_or(GpuError::Invalid("dispatch with no pipeline"))?;
-                    let layout = match pipeline::native(res, pid)? {
-                        PipelineNative::Compute { layout, .. } => layout,
-                        PipelineNative::Render { .. } => {
-                            return Err(GpuError::Unsupported("wgpu: dispatch on a render pipeline"))
+                    if let PipelineNative::Render { .. } = pipeline::native(res, pid)? {
+                        return Err(GpuError::Unsupported("wgpu: dispatch on a render pipeline"));
+                    }
+                    let mut groups = Vec::new();
+                    for (idx, bound) in cur_groups.iter().enumerate() {
+                        if let Some(g) = bound {
+                            let layout = match pipeline::native(res, pid)? {
+                                PipelineNative::Compute { pipeline } => {
+                                    pipeline.get_bind_group_layout(idx as u32)
+                                }
+                                PipelineNative::Render { .. } => unreachable!("checked above"),
+                            };
+                            let bg = self.build_bind_group(res, &layout, bindgroup::desc(res, *g)?)?;
+                            groups.push((idx as u32, bg));
                         }
-                    };
-                    let g = cur_bind_group.ok_or(GpuError::Invalid("dispatch with no bind group"))?;
-                    let bg = self.build_bind_group(res, layout, bindgroup::desc(res, g)?)?;
-                    dispatches.push((pid, bg, (*x, *y, *z)));
+                    }
+                    if groups.is_empty() {
+                        return Err(GpuError::Invalid("dispatch with no bind group"));
+                    }
+                    dispatches.push((pid, groups, (*x, *y, *z)));
                 }
                 _ => {}
             }
@@ -412,11 +443,13 @@ impl WgpuExecutor {
                 label: Some("hl-compute-pass"),
                 timestamp_writes: None,
             });
-            for (pid, bg, (x, y, z)) in &dispatches {
-                if let PipelineNative::Compute { pipeline, .. } = pipeline::native(res, *pid)? {
+            for (pid, groups, (x, y, z)) in &dispatches {
+                if let PipelineNative::Compute { pipeline } = pipeline::native(res, *pid)? {
                     pass.set_pipeline(pipeline);
                 }
-                pass.set_bind_group(0, bg, &[]);
+                for (idx, bg) in groups {
+                    pass.set_bind_group(*idx, bg, &[]);
+                }
                 pass.dispatch_workgroups(*x, *y, *z);
             }
         }
