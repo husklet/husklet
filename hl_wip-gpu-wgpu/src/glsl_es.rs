@@ -259,6 +259,7 @@ pub fn normalize(src: &str, stage: naga::ShaderStage) -> String {
 
     normalize_directives_and_precision(&mut toks);
     normalize_dual_source(&mut toks);
+    split_std140_mat2(&mut toks);
     split_aggregate_io(&mut toks, stage);
     let mut sampler_types = split_global_samplers(&mut toks);
     for p in split_param_samplers(&mut toks) {
@@ -529,17 +530,13 @@ fn normalize_directives_and_precision(toks: &mut Vec<Tok>) {
                 }
                 // skip the ';' too (loop's i += 1 below advances past it)
             }
-            // `gl_PointSize = <expr>;` — WGSL has no point-size builtin and naga's `wgsl-out` errors on it
-            // (`Unsupported builtin PointSize`); wgpu rasterizes points at a fixed 1px regardless. Drop the
-            // whole assignment statement so the shader compiles (point size cannot be honored on this target,
-            // and stripping it is exactly what a GL→WGSL translator can do). Reads elsewhere are not emitted
-            // by ES vertex shaders, so a statement strip is sufficient.
-            Tok::Word(w) if w == "gl_PointSize" => {
-                while i < toks.len() && toks[i] != Tok::Punct(';') {
-                    i += 1;
-                }
-                // fall through: the outer `i += 1` skips the ';'
-            }
+            // NOTE: `gl_PointSize` is deliberately NOT rewritten. WGSL has no point-size builtin, so naga's
+            // `wgsl-out` genuinely cannot represent it (`Unsupported builtin PointSize`) — no textual
+            // normalization can lower it faithfully. Rather than silently STRIP the assignment (which would
+            // fake a green while discarding the point size the shader asked for), we let it reach naga and
+            // fail, documented as the corpus's one inherent naga-24 limit (`ubo__mat2_std140`, previously the
+            // documented limit, is now normalized; `builtin__gl_pointsize` is the honest remaining wall). The
+            // real Chrome/GskGpu path draws instanced quads (triangles), never points, so it never emits it.
             other => out.push(other.clone()),
         }
         i += 1;
@@ -1252,6 +1249,194 @@ fn recombine_sampler_uses(toks: &mut Vec<Tok>, sampler_types: &[(String, String)
 }
 
 // ---------------------------------------------------------------------------------------------------
+// std140 2-row-matrix (mat2 / matNx2) uniform-block members
+// ---------------------------------------------------------------------------------------------------
+//
+// naga-24's `glsl-in` rejects a 2-ROW matrix (`mat2`, `mat3x2`, `mat4x2`) as a member of a `std140`
+// uniform block: `front/glsl/offset.rs` errors `UnsupportedMatrixTypeInStd140`, guarded by `rows ==
+// VectorSize::Bi`, because it does not model the 16-byte column padding std140 gives such a matrix. 3-/4-row
+// matrices (`mat3`, `mat4`, `mat3x4`, `mat4x3`) ARE accepted. ANGLE emits `mat2` in UBOs for 2D transforms,
+// so Chrome hits this wall.
+//
+// The fix is a std140-byte-preserving rewrite: std140 already lays out each column of a 2-row matrix in its
+// own 16-byte (vec4) slot, so a `matNx2 M` member and a `vec4 M__col[N]` member occupy the IDENTICAL bytes
+// (`M__col[k].xy` is column k; the upper two lanes are the padding std140 already reserves). We rewrite the
+// member declaration to `vec4 M__col[N]` — the app's uploaded UBO bytes need NO re-pack — and rebuild the
+// matrix value at every `block.M` USE as `matN2(block.M__col[0].xy, …, block.M__col[N-1].xy)`. A uniform is
+// read-only, so `block.M` is always an rvalue; the constructor rvalue is valid in every use form it appears
+// in verbatim: `block.M * v` (→ `matN2(…) * v`), `block.M[i]` / `block.M[i][j]` (indexing an rvalue matrix /
+// its column vector), and passing `block.M` to a function (`f(matN2(…))`). Scoped to std140 uniform-block
+// 2-row-matrix members only — a plain `uniform mat2` and a local/attribute `mat2` already validate.
+
+/// A parsed `layout(std140, …) uniform NAME { … } [instance];` interface block: brace span, instance name
+/// (only instance-named blocks are rewritten — an anonymous block's members are referenced bare), and the
+/// token index just past the terminating `;`.
+struct Std140Block {
+    lb: usize,               // index of the opening `{`
+    rb: usize,               // index of the matching `}`
+    instance: Option<String>,
+    end: usize,              // index just past the terminating `;`
+}
+
+/// Parse a `layout(std140, …) uniform NAME { … } [instance];` block whose `layout` word is at `i`. Returns
+/// `None` for any `layout`/block that is not a `std140`-qualified uniform interface block.
+fn parse_std140_uniform_block(toks: &[Tok], i: usize) -> Option<Std140Block> {
+    let lp = next_significant(toks, i + 1)?;
+    if toks[lp] != Tok::Punct('(') {
+        return None;
+    }
+    let rp = match_close(toks, lp, '(', ')');
+    if rp >= toks.len() {
+        return None;
+    }
+    let quals = detok(&toks[lp + 1..rp]);
+    // `std140` must appear as a whole qualifier word (not a substring of another identifier).
+    let is_std140 = quals
+        .split(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
+        .any(|w| w == "std140");
+    if !is_std140 {
+        return None;
+    }
+    let u = next_significant(toks, rp + 1)?;
+    if !matches!(&toks[u], Tok::Word(w) if w == "uniform") {
+        return None;
+    }
+    let bn = next_significant(toks, u + 1)?; // block type name
+    if !matches!(&toks[bn], Tok::Word(_)) {
+        return None;
+    }
+    let lb = next_significant(toks, bn + 1)?;
+    if toks[lb] != Tok::Punct('{') {
+        return None;
+    }
+    let rb = match_close(toks, lb, '{', '}');
+    if rb >= toks.len() {
+        return None;
+    }
+    let after = next_significant(toks, rb + 1)?;
+    let (instance, semi) = match &toks[after] {
+        Tok::Word(name) => (Some(name.clone()), next_significant(toks, after + 1)?),
+        Tok::Punct(';') => (None, after),
+        _ => return None, // an array instance (`… x[2];`) or other shape — leave untouched
+    };
+    if toks[semi] != Tok::Punct(';') {
+        return None;
+    }
+    Some(Std140Block { lb, rb, instance, end: semi + 1 })
+}
+
+/// Rewrite the body text of a std140 uniform block: each scalar `matNx2 NAME` member becomes `vec4
+/// NAME__col[N]`, recording `(instance, NAME, cols)` in `members`. Non-2-row members are kept verbatim.
+fn rewrite_std140_body(body: &str, instance: &str, members: &mut Vec<(String, String, u32)>) -> String {
+    body.split(';')
+        .map(|seg| match parse_mat2_member(seg) {
+            Some((name, cols)) => {
+                members.push((instance.to_string(), name.clone(), cols));
+                let lead: String = seg.chars().take_while(|c| c.is_whitespace()).collect();
+                format!("{lead}vec4 {name}__col[{cols}]")
+            }
+            None => seg.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// If `seg` is a scalar 2-row-matrix member declaration (`mat2`/`mat3x2`/`mat4x2 NAME`, no array), return
+/// `(NAME, cols)`; otherwise `None`. Precision qualifiers are already stripped before this pass runs.
+fn parse_mat2_member(seg: &str) -> Option<(String, u32)> {
+    let toks = tokenize(seg);
+    let sig: Vec<&Tok> = toks.iter().filter(|t| is_significant(t)).collect();
+    if sig.iter().any(|t| matches!(t, Tok::Punct('['))) {
+        return None; // an array member (`mat2 m[3]`) — not handled; leave for naga to reject
+    }
+    let base = match sig.first() {
+        Some(Tok::Word(w)) => w.clone(),
+        _ => return None,
+    };
+    let (cols, rows) = parse_matrix(&base)?;
+    if rows != 2 {
+        return None;
+    }
+    let name = sig.iter().skip(1).find_map(|t| match t {
+        Tok::Word(w) => Some(w.clone()),
+        _ => None,
+    })?;
+    Some((name, cols))
+}
+
+/// The reconstructed matrix rvalue for a `block.member` use: `matN2(block.member__col[0].xy, …)`.
+fn reconstruct_mat2(instance: &str, member: &str, cols: u32) -> String {
+    let ctor = match cols {
+        3 => "mat3x2",
+        4 => "mat4x2",
+        _ => "mat2",
+    };
+    let args: Vec<String> =
+        (0..cols).map(|k| format!("{instance}.{member}__col[{k}].xy")).collect();
+    format!("{ctor}({})", args.join(", "))
+}
+
+/// Rewrite every 2-row-matrix (`mat2`/`matNx2`) member of a `std140` uniform block to `vec4 col[N]` (same
+/// std140 bytes) and reconstruct the matrix at every `block.member` use. See the module section header.
+fn split_std140_mat2(toks: &mut Vec<Tok>) {
+    let mut members: Vec<(String, String, u32)> = Vec::new(); // (instance, member, cols)
+    let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        if matches!(&toks[i], Tok::Word(w) if w == "layout") {
+            if let Some(b) = parse_std140_uniform_block(toks, i) {
+                if let Some(instance) = b.instance.clone() {
+                    let before = members.len();
+                    let body = detok(&toks[b.lb + 1..b.rb]);
+                    let new_body = rewrite_std140_body(&body, &instance, &mut members);
+                    if members.len() == before {
+                        // No 2-row-matrix member — emit the block verbatim (byte-faithful).
+                        out.extend(toks[i..b.end].iter().cloned());
+                    } else {
+                        out.extend(toks[i..=b.lb].iter().cloned()); // through the opening `{`
+                        out.extend(tokenize(&new_body));
+                        out.extend(toks[b.rb..b.end].iter().cloned()); // `}` … `;`
+                    }
+                    i = b.end;
+                    continue;
+                }
+            }
+        }
+        out.push(toks[i].clone());
+        i += 1;
+    }
+    *toks = out;
+    if members.is_empty() {
+        return;
+    }
+    // Replace every `instance.member` use with the reconstructed matrix constructor.
+    let mut result: Vec<Tok> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        if let Tok::Word(w) = &toks[i] {
+            if let Some(dot) = next_significant(toks, i + 1) {
+                if toks[dot] == Tok::Punct('.') {
+                    if let Some(mem) = next_significant(toks, dot + 1) {
+                        if let Tok::Word(m) = &toks[mem] {
+                            if let Some((_, _, cols)) =
+                                members.iter().find(|(inst, name, _)| inst == w && name == m)
+                            {
+                                result.push(Tok::Word(reconstruct_mat2(w, m, *cols)));
+                                i = mem + 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        result.push(toks[i].clone());
+        i += 1;
+    }
+    *toks = result;
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Comment stripping (kept local so tokenization is self-contained)
 // ---------------------------------------------------------------------------------------------------
 
@@ -1346,6 +1531,42 @@ mod tests {
         assert!(out.contains("#define IN(_loc) layout(location = _loc) in"), "IN: {out}");
         assert!(out.contains("#define PASS(_loc) layout(location = _loc) out"), "PASS: {out}");
         assert!(out.contains("#define PASS_FLAT(_loc) layout(location = _loc) flat in"), "PASS_FLAT: {out}");
+    }
+
+    #[test]
+    fn rewrites_std140_mat2_member_to_vec4_columns_and_reconstructs_uses() {
+        // The ANGLE mat2-in-UBO shape naga-24 rejects. The member becomes `vec4 m2__col[2]` (identical
+        // std140 bytes) and each use is reconstructed with the column-vector constructor.
+        let src = "#version 300 es\nlayout(std140, binding = 0) uniform Xf { mat2 m2; } x;\nlayout(location = 0) in vec2 aPos;\nvoid main(){ gl_Position = vec4(x.m2 * aPos, 0.0, 1.0); }\n";
+        let out = normalize(src, naga::ShaderStage::Vertex);
+        assert!(out.contains("vec4 m2__col[2];"), "member rewritten to vec4 col array: {out}");
+        assert!(!out.contains("mat2 m2"), "original mat2 member gone: {out}");
+        assert!(out.contains("mat2(x.m2__col[0].xy, x.m2__col[1].xy)"), "use reconstructed: {out}");
+        assert!(!out.contains("x.m2 "), "raw block.m2 use gone: {out}");
+    }
+
+    #[test]
+    fn rewrites_std140_mat3x2_and_mat4x2_with_right_column_counts() {
+        let src = "#version 300 es\nlayout(std140, binding = 0) uniform Xf { mat3x2 a; mat4x2 b; } x;\nvoid main(){ vec2 p = x.a * vec3(1.0) + x.b * vec4(1.0); gl_Position = vec4(p, 0.0, 1.0); }\n";
+        let out = normalize(src, naga::ShaderStage::Vertex);
+        assert!(out.contains("vec4 a__col[3];"), "mat3x2 -> 3 columns: {out}");
+        assert!(out.contains("vec4 b__col[4];"), "mat4x2 -> 4 columns: {out}");
+        assert!(out.contains("mat3x2(x.a__col[0].xy, x.a__col[1].xy, x.a__col[2].xy)"), "mat3x2 recon: {out}");
+        assert!(out.contains("mat4x2(x.b__col[0].xy, x.b__col[1].xy, x.b__col[2].xy, x.b__col[3].xy)"), "mat4x2 recon: {out}");
+    }
+
+    #[test]
+    fn std140_mat2_pass_leaves_mat3_mat4_and_nonblock_mat2_untouched() {
+        // 3-/4-row matrices in a std140 block are accepted by naga and must NOT be reshaped.
+        let block = "#version 300 es\nlayout(std140, binding = 0) uniform Xf { mat3 m3; mat4 m4; } x;\nvoid main(){ gl_Position = x.m4 * vec4(x.m3 * vec3(1.0), 1.0); }\n";
+        let out = normalize(block, naga::ShaderStage::Vertex);
+        assert!(out.contains("mat3 m3;") && out.contains("mat4 m4;"), "mat3/mat4 members untouched: {out}");
+        assert!(!out.contains("__col"), "no column rewrite for 3/4-row matrices: {out}");
+        // A non-block (plain global) mat2 already validates and must be left alone.
+        let plain = "#version 300 es\nuniform mat2 uRot;\nlayout(location=0) in vec2 aPos;\nvoid main(){ gl_Position = vec4(uRot * aPos, 0.0, 1.0); }\n";
+        let out = normalize(plain, naga::ShaderStage::Vertex);
+        assert!(out.contains("uniform mat2 uRot;"), "plain uniform mat2 untouched: {out}");
+        assert!(!out.contains("__col"), "no column rewrite for plain mat2: {out}");
     }
 
     #[test]
