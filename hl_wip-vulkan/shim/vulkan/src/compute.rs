@@ -876,8 +876,9 @@ pub extern "C" fn vkCmdDispatch(command_buffer: *mut c_void, group_count_x: u32,
     });
 }
 
-/// `vkCmdDispatchIndirect` — validate the indirect buffer; the IR has no indirect dispatch op, so this
-/// records no encoder op (a documented bring-up limit), erroring only on a bad buffer.
+/// `vkCmdDispatchIndirect` — validate the indirect buffer, read its `VkDispatchIndirectCommand{x,y,z}`
+/// workgroup counts out of the host-visible backing, and lower to the same compute-pass `Dispatch{x,y,z}`
+/// the equivalent `vkCmdDispatch` would emit; erroring only on a bad buffer.
 #[no_mangle]
 pub extern "C" fn vkCmdDispatchIndirect(command_buffer: *mut c_void, buffer: u64, offset: u64) {
     let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {

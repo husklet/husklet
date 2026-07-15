@@ -1270,11 +1270,22 @@ fn indirect_draws_read_args_and_lower_to_direct_draws() {
         vec![Enc::DrawIndexed { index_count: 9, instance_count: 3, first_index: 2, base_vertex: 0, first_instance: 5 }]
     );
 
-    // vkCmdDispatchIndirect stays a validated no-op (no Enc::Dispatch arg-resolution path).
+    // vkCmdDispatchIndirect reads the 12-byte VkDispatchIndirectCommand{x,y,z} out of the same host-visible
+    // backing (the first three words of `args`: 6, 2, 3) and lowers to the SAME compute pass the equivalent
+    // vkCmdDispatch(6,2,3) would emit — no pipeline / bind group is bound here, so just the pass wrapper.
     let enc_disp = record_and_submit(&mut d, &mut sink, |d, cb| {
         record::cmd_dispatch_indirect(d, cb, indirect, 0).unwrap();
     });
-    assert!(enc_disp.is_empty(), "dispatch-indirect emits no encoder op, got {enc_disp:?}");
+    assert_eq!(
+        enc_disp,
+        vec![Enc::BeginComputePass, Enc::Dispatch { x: 6, y: 2, z: 3 }, Enc::EndComputePass],
+        "dispatch-indirect lowers the buffer-sourced workgroup counts to a direct Dispatch"
+    );
+    // The equivalent DIRECT dispatch produces the byte-identical encoder stream (indirect == direct).
+    let direct_disp = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_dispatch(d, cb, 6, 2, 3).unwrap();
+    });
+    assert_eq!(enc_disp, direct_disp, "an indirect dispatch must lower to its direct twin");
 
     // Truthful failure: an unknown buffer, a non-INDIRECT buffer, and an out-of-range span all error.
     let cb = record::allocate_command_buffer(&mut d);

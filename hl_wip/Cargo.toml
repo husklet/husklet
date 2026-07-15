@@ -187,6 +187,18 @@ name = "vk_blend"
 path = "tests/vk_blend.rs"
 
 [[test]]
+name = "vk_compute_saxpy"
+path = "tests/vk_compute_saxpy.rs"
+
+[[test]]
+name = "vk_dispatch_indirect"
+path = "tests/vk_dispatch_indirect.rs"
+
+[[test]]
+name = "vk_compute_shared"
+path = "tests/vk_compute_shared.rs"
+
+[[test]]
 name = "feature_combo_frame"
 path = "tests/feature_combo_frame.rs"
 

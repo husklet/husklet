@@ -685,7 +685,8 @@ pub fn cmd_push_constants(dev: &mut Device, cb: VkCommandBuffer, offset: u32, by
 // *between* record and submit (e.g. a compute shader that produces the draw args in the same batch) is
 // not reflected — that would need a real IR indirect op. An argument buffer that is not (yet) backed by
 // bound memory reads as zeros → a `Draw{0,..}` no-op (matching an unwritten buffer). `vkCmdDispatchIndirect`
-// stays a validated no-op (no `Enc::Dispatch` argument-resolution path here). A bad handle / missing
+// resolves its `VkDispatchIndirectCommand{x,y,z}` from the same host-visible backing and lowers to the
+// SAME `Enc::Dispatch{x,y,z}` the equivalent `vkCmdDispatch(x,y,z)` would emit. A bad handle / missing
 // INDIRECT usage / out-of-range span is always a truthful error, never a false success.
 
 /// Read `len` bytes from `buffer` at `offset` out of its bound host-visible allocation. Bytes past the
@@ -814,11 +815,29 @@ pub fn cmd_draw_indexed_indirect(
     Ok(())
 }
 
-/// `vkCmdDispatchIndirect` — validate the indirect buffer (`VkDispatchIndirectCommand` is 12 bytes) then
-/// record no encoder op (documented limit). Truthful error on a bad buffer.
+/// `vkCmdDispatchIndirect` — validate the indirect buffer (`VkDispatchIndirectCommand` is 12 bytes), read
+/// its `{x, y, z}` workgroup counts out of the host-visible backing, and lower to the SAME
+/// `BeginComputePass → SetPipeline → SetBindGroup* → Dispatch{x,y,z} → EndComputePass` sequence the
+/// equivalent `vkCmdDispatch(x,y,z)` would emit (pipeline + bind groups replayed) — so an indirect
+/// dispatch and its direct twin run byte-identically. Like the indirect-DRAW path the counts are
+/// snapshotted at RECORD time out of the mapped/HOST_COHERENT `VkDispatchIndirectCommand` (the common
+/// case); an unbacked buffer reads as zeros → a zero-count no-op dispatch. Truthful error on a bad buffer.
 pub fn cmd_dispatch_indirect(dev: &mut Device, cb: VkCommandBuffer, buffer: VkBuffer, offset: u64) -> Result<()> {
     validate_indirect(dev, buffer, offset, 1, 0, 12)?;
-    let _ = recording_mut(dev, cb)?;
+    let b = read_buffer_bytes(dev, buffer, offset, 12);
+    let (x, y, z) = (le_u32(&b, 0), le_u32(&b, 4), le_u32(&b, 8));
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    rec.enc.push(Enc::BeginComputePass);
+    if let Some(p) = pipeline {
+        rec.enc.push(Enc::SetPipeline(p));
+    }
+    for (index, group) in groups {
+        rec.enc.push(Enc::SetBindGroup { index, group });
+    }
+    rec.enc.push(Enc::Dispatch { x, y, z });
+    rec.enc.push(Enc::EndComputePass);
     Ok(())
 }
 
