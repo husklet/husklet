@@ -306,13 +306,18 @@ fn chrome_first_light_through_the_full_stack() {
              FAILED to build/apply: check the 'GAP #0 fd-ownership preload' line above, set \
              $HL_CHROME_PRELOAD to a prebuilt shim, or verify the system `cc` is available."
         } else if sigtrapped && reached_wayland {
-            "GAP #0b / POST-NEUTRALIZE downstream CHECK — GAP #0 is neutralized (no fd-ownership abort) and \
-             Chrome got PAST early ChromeMain all the way into the ozone-Wayland backend: it connected to \
-             OUR compositor and probed the DRM render node (see the wayland/drm lines above). It then hit a \
-             LATER Chromium IMMEDIATE_CRASH/CHECK (SIGTRAP) before lowering a GL frame (0 submits). This is \
-             a NEW, separate gap downstream of #0 (a Wayland/GPU-bring-up CHECK on this kernel), NOT the \
-             fd-ownership crash. NEXT: pin the new SIGTRAP site (base-relative PC) the same way GAP #0 was \
-             pinned and decide whether it is another environmental CHECK to neutralize or a real stack gap."
+            "GAP #0c / POST-NEUTRALIZE downstream CHECK — GAP #0 (fd-ownership) AND GAP #0b \
+             (TemplateURLRef::HandleReplacements NOTREACHED, link-vaddr 0x0af711d8 — see below) are both \
+             neutralized, and Chrome got PAST early ChromeMain into the ozone-Wayland backend: it connected \
+             to OUR compositor and probed the DRM render node (see the wayland/drm lines above). It then hit \
+             a NEW, later Chromium IMMEDIATE_CRASH/CHECK (SIGTRAP) before lowering a GL frame (0 submits) — \
+             a fresh gap downstream of #0b. NEXT: pin the new SIGTRAP site (base-relative PC, via \
+             scratchpad/traplr.so + HL_TRAP_LOG) the same way #0/#0b were pinned, and decide neutralize vs \
+             real stack gap. (GAP #0b was: this Debian Chromium's HandleReplacements switch has no case for \
+             search-URL replacement types 18 & 28, whose jump-table slots point at a NOTREACHED brk; the \
+             default search template expands a type-28 replacement at startup. Neutralized in \
+             csrc/chrome_fdguard.c by rerouting those two jump-table slots to the benign skip/continue \
+             target 0x0af6f7e0, dropping the unhandled replacement instead of aborting.)"
         } else if sigtrapped {
             "POST-NEUTRALIZE SIGTRAP (pre-Wayland) — GAP #0 is neutralized (no fd-ownership abort) but \
              Chrome SIGTRAPped at another CHECK before the ozone-Wayland backend came up. Pin the new PC."

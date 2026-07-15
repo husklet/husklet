@@ -84,6 +84,54 @@ static uintptr_t exe_base(void) {
 #define N_PATCH 3
 static const uintptr_t k_patch[N_PATCH] = {0x84e814cULL, 0x84e8198ULL, 0x84e8234ULL};
 
+// ---------------------------------------------------------------------------
+// GAP #0b — TemplateURLRef::HandleReplacements NOTREACHED on unhandled search-URL
+// replacement types. This Debian/community Chromium 150 build's switch over the
+// replacement-type enum (in TemplateURLRef::HandleReplacements, function head at
+// link-vaddr 0x0af6f334) leaves two enum values with NO case: 18 (0x12) and
+// 28 (0x1c). Their jump-table slots point at the shared IMMEDIATE_CRASH
+// (`brk #0; hlt #0` at link-vaddr 0x0af711d8) — a NOTREACHED(). At startup Chrome
+// expands the default (prepopulated) search provider's URL template, which on this
+// build contains a replacement of type 28, so the switch's default fires and the
+// browser dies with SIGTRAP (exit 133) AFTER ozone-Wayland bring-up, BEFORE any GL.
+//
+// The two neighbour cases 17 (0x11) and 27 (0x1b) route to link-vaddr 0x0af6f7e0 —
+// the loop's "skip this replacement, continue to the next" head (an empty/no-op
+// substitution). We reroute the two crash slots to that same benign target, so an
+// unhandled replacement is dropped instead of aborting — exactly how a build that
+// tolerates the extra enum value behaves. Verified race-free (one-shot in the
+// constructor) and it fixes `--dump-dom about:blank` (was exit 133, now exit 0).
+//
+// Jump table base link-vaddr (int32 offsets, added to the `adr` anchor 0x0af6f804):
+#define JT_BASE 0x2744c90ULL
+// int32 offset a crash slot currently holds (0x0af711d4 - 0x0af6f804):
+#define JT_CRASH_OFF 0x000019d0
+// int32 offset of the benign skip/continue target (0x0af6f7e0 - 0x0af6f804):
+#define JT_SKIP_OFF ((int32_t)-36)
+// The two unhandled replacement-type indices whose slots we reroute.
+#define N_JT 2
+static const int k_jt_idx[N_JT] = {18, 28};
+
+// Reroute one jump-table slot from the NOTREACHED crash target to the benign
+// skip target, ONLY if it currently holds the exact expected crash offset (so a
+// different build whose table differs is left untouched). Returns 0 on patch,
+// -1 mprotect fail, -2 slot did not hold the expected crash offset.
+static int patch_jt(uintptr_t base, int idx) {
+  uintptr_t at = base + JT_BASE + (uintptr_t)idx * 4;
+  int32_t cur = __atomic_load_n((int32_t *)at, __ATOMIC_SEQ_CST);
+  if (cur != (int32_t)JT_CRASH_OFF) {
+    return -2; // not the expected crash slot — refuse to patch
+  }
+  long pg = sysconf(_SC_PAGESIZE);
+  uintptr_t page = at & ~(uintptr_t)(pg - 1);
+  if (mprotect((void *)page, (size_t)pg, PROT_READ | PROT_WRITE) != 0) {
+    return -1;
+  }
+  __atomic_store_n((int32_t *)at, JT_SKIP_OFF, __ATOMIC_SEQ_CST);
+  mprotect((void *)page, (size_t)pg, PROT_READ); // restore read-only
+  return 0;
+}
+
 // Patch a single aarch64 instruction to NOP (0xd503201f) at runtime addr `at`,
 // but ONLY if it currently holds `tbnz w8,#0,<positive-target>` (mask
 // 0xFFF8001F == 0x37000008). If the opcode does not match — e.g. a different
@@ -156,6 +204,14 @@ __attribute__((constructor)) static void fdguard_init(void) {
     dbg("patched_at", at);
     dbg("patch_rc", (uintptr_t)rc);
   }
+  // GAP #0b: reroute the two unhandled HandleReplacements jump-table slots away
+  // from the NOTREACHED crash to the benign skip target.
+  for (int i = 0; i < N_JT; i++) {
+    int rc = patch_jt(base, k_jt_idx[i]);
+    dbg("jt_idx", (uintptr_t)k_jt_idx[i]);
+    dbg("jt_rc", (uintptr_t)rc);
+  }
+
   // Belt-and-suspenders: also clear the enforcement byte.
   g_flag = (volatile unsigned char *)(base + flag_off());
   *g_flag = 0;
