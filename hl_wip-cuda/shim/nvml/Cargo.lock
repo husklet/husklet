@@ -3,9 +3,14 @@
 version = 4
 
 [[package]]
+name = "hl-log"
+version = "0.1.0"
+
+[[package]]
 name = "hl_wip_cuda"
 version = "0.0.0"
 dependencies = [
+ "hl-log",
  "hl_wip_gpu",
 ]
 
@@ -20,6 +25,7 @@ dependencies = [
 name = "hl_wip_gpu"
 version = "0.0.0"
 dependencies = [
+ "hl-log",
  "libc",
 ]
 
