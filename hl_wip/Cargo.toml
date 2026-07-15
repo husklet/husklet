@@ -174,6 +174,12 @@ path = "tests/vk_blend.rs"
 name = "feature_combo_frame"
 path = "tests/feature_combo_frame.rs"
 
+# Render-path PERFORMANCE microbenchmark + regression tripwire (task #182). Debug-build numbers, generous
+# ENV-tunable thresholds; runs on the reference CPU executor so it needs no GPU device / ICD.
+[[test]]
+name = "perf_microbench"
+path = "tests/perf_microbench.rs"
+
 [[test]]
 name = "multi_driver_coexist"
 path = "tests/multi_driver_coexist.rs"
