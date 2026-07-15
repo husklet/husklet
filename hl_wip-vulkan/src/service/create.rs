@@ -22,7 +22,8 @@ use crate::model::pipeline::{PipelineCacheRec, PipelineKind, PipelineLayoutRec, 
 use crate::model::queue::FenceRec;
 use crate::*;
 use hl_gpu::protocol::model::descriptor::{
-    BufferDesc, ComputePipelineDesc, RenderPipelineDesc, SamplerDesc, ShaderRef, VertexLayout,
+    BufferDesc, ComputePipelineDesc, DepthState, RenderPipelineDesc, SamplerDesc, ShaderRef,
+    VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{AddressMode, Filter, TextureFormat, Topology};
 use hl_gpu::{BufferId, Cmd, CommandSink, GpuError, Result};
@@ -396,6 +397,13 @@ pub fn create_compute_pipeline(
 /// attachments in the classic path, or from the pipeline's `VkPipelineRenderingCreateInfo::pColorAttachmentFormats`
 /// pNext in the dynamic-rendering path (a null `renderPass`). An empty slice is valid (a depth-only /
 /// no-color pipeline), yielding a pipeline with no color targets.
+///
+/// `depth` is the pipeline's depth-test state (format + write-enable + compare op) when
+/// `VkPipelineDepthStencilStateCreateInfo::depthTestEnable` is set, else `None`. A `Some(..)` pipeline
+/// MUST be drawn in a pass carrying a matching depth attachment (wgpu enforces this) — the shim threads
+/// that attachment through the dynamic-rendering `vkCmdBeginRendering` depth target. Without this the
+/// depth-stencil state was dropped (`depth: None` hardcoded) and every depth-tested draw ran with the
+/// test disabled, so a far primitive could never be occluded by a nearer one.
 pub fn create_graphics_pipeline(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
@@ -403,6 +411,7 @@ pub fn create_graphics_pipeline(
     fragment: Option<(VkShaderModule, &str)>,
     vertex_layouts: Vec<VertexLayout>,
     color_formats: Vec<TextureFormat>,
+    depth: Option<DepthState>,
 ) -> Result<VkPipeline> {
     use hl_gpu::protocol::model::descriptor::ColorTargetState;
     let resolve = |dev: &Device, (module, entry): (VkShaderModule, &str)| -> Result<ShaderRef> {
@@ -432,7 +441,7 @@ pub fn create_graphics_pipeline(
             fragment: fragment_ref,
             vertex_buffers: vertex_layouts,
             color_targets,
-            depth: None,
+            depth,
             topology: Topology::TriangleList,
             cull: 0,
             front_face: 0,

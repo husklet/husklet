@@ -893,6 +893,23 @@ pub struct VkPipelineRenderingCreateInfo {
     pub stencil_attachment_format: i32,
 }
 
+/// `VkPipelineDepthStencilStateCreateInfo` — the depth/stencil fixed-function state of a graphics
+/// pipeline. Only the depth-test fields are read (the software rasterizer models no stencil / depth
+/// bounds), so the struct is truncated after `depthCompareOp`: the pointer is to the full Vulkan struct
+/// and no field past this prefix is ever accessed. `depthCompareOp` is a `VkCompareOp`, whose numeric
+/// ordering (NEVER=0 … ALWAYS=7) matches the neutral `hl_gpu` `compare::*` constants verbatim.
+#[repr(C)]
+pub struct VkPipelineDepthStencilStateCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub depth_test_enable: VkBool32,
+    pub depth_write_enable: VkBool32,
+    pub depth_compare_op: i32,
+    // Remaining fields (depthBoundsTestEnable, stencilTestEnable, front, back, min/maxDepthBounds) are
+    // NOT modeled by the software rasterizer and are never read through this pointer.
+}
+
 /// `VkPhysicalDeviceDynamicRenderingFeatures` — the feature pNext `vkGetPhysicalDeviceFeatures2` fills to
 /// advertise `dynamicRendering = VK_TRUE` (really backed by the `cmd_begin_rendering` lowering).
 #[repr(C)]

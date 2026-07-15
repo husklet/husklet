@@ -119,6 +119,26 @@ name = "vk_ubo"
 path = "tests/vk_ubo.rs"
 
 [[test]]
+name = "vk_transform"
+path = "tests/vk_transform.rs"
+
+[[test]]
+name = "vk_depth"
+path = "tests/vk_depth.rs"
+
+[[test]]
+name = "vk_instanced"
+path = "tests/vk_instanced.rs"
+
+[[test]]
+name = "vk_multidraw"
+path = "tests/vk_multidraw.rs"
+
+[[test]]
+name = "vk_scissor"
+path = "tests/vk_scissor.rs"
+
+[[test]]
 name = "weston_simple_egl_e2e"
 path = "tests/weston_simple_egl_e2e.rs"
 

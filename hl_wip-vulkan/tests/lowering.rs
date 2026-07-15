@@ -204,6 +204,7 @@ fn graphics_pipeline_emits_create_render_pipeline() {
         Some((fs, "fsmain")),
         vec![pos_color_layout()],
         vec![TextureFormat::Bgra8Unorm],
+        None,
     )
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
@@ -238,6 +239,7 @@ fn dynamic_rendering_pipeline_takes_color_formats_from_pnext_no_render_pass() {
         Some((fs, "fsmain")),
         vec![pos_color_layout()],
         vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
+        None,
     )
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
@@ -280,6 +282,7 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
         Some((fs, "fsmain")),
         vec![pos_color_layout()],
         vec![TextureFormat::Rgba8Unorm],
+        None,
     )
     .unwrap();
 

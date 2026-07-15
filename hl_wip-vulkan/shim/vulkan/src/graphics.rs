@@ -12,7 +12,7 @@
 
 use core::ffi::{c_char, c_void};
 
-use hl_gpu::protocol::model::descriptor::{VertexAttr, VertexLayout};
+use hl_gpu::protocol::model::descriptor::{DepthState, VertexAttr, VertexLayout};
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::CommandSink;
 use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
@@ -447,6 +447,43 @@ fn parse_pipeline_rendering_color_formats(p_next: *const c_void) -> Vec<TextureF
     Vec::new()
 }
 
+/// Walk a pNext chain for `VkPipelineRenderingCreateInfo` and read its `depthAttachmentFormat` — the depth
+/// format a dynamic-rendering (null `renderPass`) pipeline targets. `None` when the struct is absent or the
+/// format is `VK_FORMAT_UNDEFINED` (0), i.e. a color-only pipeline.
+fn parse_pipeline_rendering_depth_format(p_next: *const c_void) -> Option<TextureFormat> {
+    let mut node = p_next as *const VkBaseInStructure;
+    while let Some(n) = unsafe { node.as_ref() } {
+        if n.s_type == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO {
+            let pr = unsafe { &*(node as *const VkPipelineRenderingCreateInfo) };
+            // VK_FORMAT_UNDEFINED (0) => no depth attachment.
+            return (pr.depth_attachment_format != 0)
+                .then(|| tex_format_from_vk(pr.depth_attachment_format as u32));
+        }
+        node = n.p_next;
+    }
+    None
+}
+
+/// Translate a `VkPipelineDepthStencilStateCreateInfo` into the neutral [`DepthState`] when the depth test
+/// is enabled. `depth_format` is the pass's depth attachment format (from the dynamic-rendering pNext, or
+/// `Depth32Float` as the bring-up default when unresolved). Returns `None` for a null state pointer or a
+/// disabled depth test — exactly the pipelines that must NOT carry a depth attachment.
+fn parse_depth_state(
+    p_depth_stencil_state: *const c_void,
+    depth_format: Option<TextureFormat>,
+) -> Option<DepthState> {
+    let ds = unsafe { (p_depth_stencil_state as *const VkPipelineDepthStencilStateCreateInfo).as_ref() }?;
+    if ds.depth_test_enable == 0 {
+        return None;
+    }
+    Some(DepthState {
+        format: depth_format.unwrap_or(TextureFormat::Depth32Float),
+        depth_write: ds.depth_write_enable != 0,
+        // VkCompareOp shares the neutral `compare::*` numeric ordering (NEVER=0 … ALWAYS=7).
+        depth_compare: ds.depth_compare_op as u32,
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn vkCreateGraphicsPipelines(
     _device: *mut c_void,
@@ -502,9 +539,15 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             vec![fmt.unwrap_or(TextureFormat::Rgba8Unorm)]
         };
 
+        // Depth-test state: the depth attachment format comes from the dynamic-rendering pNext (a classic
+        // VkRenderPass depth attachment is not modeled), defaulting to Depth32Float when a depth-tested
+        // pipeline resolves no explicit format. A null pDepthStencilState / disabled test => no depth.
+        let depth_format = parse_pipeline_rendering_depth_format(ci.p_next);
+        let depth = parse_depth_state(ci.p_depth_stencil_state, depth_format);
+
         let r = dev_sink(|dev, sink| {
             let frag = fragment.as_ref().map(|(m, e)| (*m, e.as_str()));
-            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats)
+            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth)
         })
         .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkCreateGraphicsPipelines: no device")));
         match r {
