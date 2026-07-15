@@ -324,7 +324,7 @@ fn depth_attachment_for(
             },
         ));
     }
-    Some(DepthAttachment { texture: depth_tex, load: LoadOp::Clear, clear_depth })
+    Some(DepthAttachment { texture: depth_tex, load: LoadOp::Clear, clear_depth, clear_stencil: 0 })
 }
 
 /// Clear-only frame: a render pass over the target that clears it (`LoadOp::Clear`).
@@ -845,11 +845,11 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, n_
     // ATTACHMENT is emitted (this model has no depth buffer), so the state is recorded in the pipeline but
     // is not observable on the CPU oracle — an honest partial lowering, asserted at the Cmd level.
     let depth = if d.depth {
-        Some(DepthState {
-            format: TextureFormat::Depth32Float,
-            depth_write: d.depth_write,
-            depth_compare: compare_wire(d.depth_func),
-        })
+        Some(DepthState::depth_only(
+            TextureFormat::Depth32Float,
+            d.depth_write,
+            compare_wire(d.depth_func),
+        ))
     } else {
         None
     };

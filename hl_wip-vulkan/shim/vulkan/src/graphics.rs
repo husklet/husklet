@@ -22,7 +22,7 @@ use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachm
 use hl_vulkan::service::{create, present, record};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
-use crate::state::{with, RenderPassRec, WaylandWindow};
+use crate::state::{with, RenderPassDepth, RenderPassRec, WaylandWindow};
 use crate::types::*;
 use hl_log::tag;
 
@@ -301,6 +301,13 @@ pub extern "C" fn vkDestroySampler(_device: *mut c_void, sampler: u64, _p_alloca
 // render pass + framebuffer (bring-up bookkeeping resolved at vkCmdBeginRenderPass)
 // ==================================================================================================
 
+/// Whether a raw `VkFormat` is a depth/stencil format — the contiguous `VK_FORMAT_D16_UNORM`(124) …
+/// `VK_FORMAT_D32_SFLOAT_S8_UINT`(130) block (127 = `S8_UINT` is stencil-only, still a depth/stencil
+/// attachment). Used to pick the depth attachment out of a classic render pass's attachment table.
+fn is_depth_format(f: u32) -> bool {
+    (124..=130).contains(&f)
+}
+
 #[no_mangle]
 pub extern "C" fn vkCreateRenderPass(
     _device: *mut c_void,
@@ -311,17 +318,26 @@ pub extern "C" fn vkCreateRenderPass(
     let Some(ci) = (unsafe { (p_create_info as *const VkRenderPassCreateInfo).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    // Record the first color attachment's clear behaviour + format (the bring-up single-target subset).
-    let (clears, fmt) = if ci.p_attachments.is_null() || ci.attachment_count == 0 {
-        (false, 0u32)
+    // Record the first color attachment's clear behaviour + format (the bring-up single-target subset), and
+    // scan the attachment table for a depth/stencil attachment so the classic pass threads a real depth buffer.
+    let (clears, fmt, depth) = if ci.p_attachments.is_null() || ci.attachment_count == 0 {
+        (false, 0u32, None)
     } else {
-        let a0 = unsafe { &*ci.p_attachments };
-        (a0.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR, a0.format as u32)
+        let atts = unsafe { std::slice::from_raw_parts(ci.p_attachments, ci.attachment_count as usize) };
+        let a0 = &atts[0];
+        let depth = atts.iter().enumerate().find(|(_, a)| is_depth_format(a.format as u32)).map(|(i, a)| {
+            RenderPassDepth {
+                index: i as u32,
+                format_vk: a.format as u32,
+                clear: a.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
+            }
+        });
+        (a0.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR, a0.format as u32, depth)
     };
     let handle = with(|s| {
         let h = s.device.as_mut()?.alloc_handle();
         s.render_passes
-            .insert(h, RenderPassRec { first_attachment_clears: clears, color_format_vk: fmt });
+            .insert(h, RenderPassRec { first_attachment_clears: clears, color_format_vk: fmt, depth });
         Some(h)
     });
     match handle {
@@ -476,12 +492,13 @@ fn parse_depth_state(
     if ds.depth_test_enable == 0 {
         return None;
     }
-    Some(DepthState {
-        format: depth_format.unwrap_or(TextureFormat::Depth32Float),
-        depth_write: ds.depth_write_enable != 0,
-        // VkCompareOp shares the neutral `compare::*` numeric ordering (NEVER=0 … ALWAYS=7).
-        depth_compare: ds.depth_compare_op as u32,
-    })
+    // VkCompareOp shares the neutral `compare::*` numeric ordering (NEVER=0 … ALWAYS=7). The bring-up
+    // depth path models depth test/write only (no stencil), so use the depth-only DepthState shape.
+    Some(DepthState::depth_only(
+        depth_format.unwrap_or(TextureFormat::Depth32Float),
+        ds.depth_write_enable != 0,
+        ds.depth_compare_op as u32,
+    ))
 }
 
 /// Translate a `VkBlendFactor` onto the neutral `hl_gpu` blend-factor wire numbering the GL driver emits
@@ -599,10 +616,21 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             vec![fmt.unwrap_or(TextureFormat::Rgba8Unorm)]
         };
 
-        // Depth-test state: the depth attachment format comes from the dynamic-rendering pNext (a classic
-        // VkRenderPass depth attachment is not modeled), defaulting to Depth32Float when a depth-tested
-        // pipeline resolves no explicit format. A null pDepthStencilState / disabled test => no depth.
-        let depth_format = parse_pipeline_rendering_depth_format(ci.p_next);
+        // Depth-test state: the depth attachment format comes from the dynamic-rendering pNext
+        // (VkPipelineRenderingCreateInfo::depthAttachmentFormat) for a null-renderPass pipeline, or — for a
+        // classic pipeline bound to a VkRenderPass — from that pass's declared depth attachment. Falls back to
+        // Depth32Float when a depth-tested pipeline resolves no explicit format. A null pDepthStencilState /
+        // disabled test => no depth.
+        let depth_format = if ci.render_pass == 0 {
+            parse_pipeline_rendering_depth_format(ci.p_next)
+        } else {
+            with(|s| {
+                s.render_passes
+                    .get(&ci.render_pass)
+                    .and_then(|r| r.depth)
+                    .map(|d| tex_format_from_vk(d.format_vk))
+            })
+        };
         let depth = parse_depth_state(ci.p_depth_stencil_state, depth_format);
 
         // Color-blend state: the first attachment's blendEnable + factors/ops, mapped onto the neutral
@@ -645,17 +673,33 @@ pub extern "C" fn vkCmdBeginRenderPass(
     } else {
         unsafe { (*bi.p_clear_values).float32 }
     };
+    // The per-attachment clear values are indexed by attachment slot (color at 0, depth at its own slot).
+    let clear_values: &[VkClearValue] = if bi.p_clear_values.is_null() || bi.clear_value_count == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(bi.p_clear_values, bi.clear_value_count as usize) }
+    };
     with(|s| {
         // Resolve framebuffer → first attachment view → image handle; render pass → clear behaviour.
-        let image = s
-            .framebuffers
-            .get(&bi.framebuffer)
+        let views = s.framebuffers.get(&bi.framebuffer);
+        let image = views
             .and_then(|v| v.first().copied())
             .and_then(|view| s.image_views.get(&view).copied());
-        let clears = s.render_passes.get(&bi.render_pass).map(|r| r.first_attachment_clears).unwrap_or(true);
+        let rp = s.render_passes.get(&bi.render_pass);
+        let clears = rp.map(|r| r.first_attachment_clears).unwrap_or(true);
+        // Depth: the render pass's declared depth attachment picks the framebuffer's depth image view (by the
+        // shared attachment index) and the pass's depth loadOp + clearValue — the classic-path mirror of the
+        // dynamic-rendering pDepthAttachment. Its clearValue is read as depthStencil.depth (== float32[0]).
+        let depth = rp.and_then(|r| r.depth).and_then(|d| {
+            let image = views
+                .and_then(|v| v.get(d.index as usize).copied())
+                .and_then(|view| s.image_views.get(&view).copied())?;
+            let clear_depth = clear_values.get(d.index as usize).map(|c| c.float32[0]).unwrap_or(1.0);
+            Some(record::RenderingDepthAttachment { image, clear_depth, load_clear: d.clear })
+        });
         let Some(image) = image else { return };
         if let Some(dev) = s.device.as_mut() {
-            let _ = record::cmd_begin_render_pass(dev, cb, image, clear, clears);
+            let _ = record::cmd_begin_render_pass(dev, cb, image, clear, clears, depth);
         }
     });
 }
@@ -1246,16 +1290,24 @@ pub extern "C" fn vkCreateRenderPass2(
     let Some(ci) = (unsafe { (p_create_info as *const VkRenderPassCreateInfo2).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    let (clears, fmt) = if ci.p_attachments.is_null() || ci.attachment_count == 0 {
-        (false, 0u32)
+    let (clears, fmt, depth) = if ci.p_attachments.is_null() || ci.attachment_count == 0 {
+        (false, 0u32, None)
     } else {
-        let a0 = unsafe { &*ci.p_attachments };
-        (a0.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR, a0.format as u32)
+        let atts = unsafe { std::slice::from_raw_parts(ci.p_attachments, ci.attachment_count as usize) };
+        let a0 = &atts[0];
+        let depth = atts.iter().enumerate().find(|(_, a)| is_depth_format(a.format as u32)).map(|(i, a)| {
+            RenderPassDepth {
+                index: i as u32,
+                format_vk: a.format as u32,
+                clear: a.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
+            }
+        });
+        (a0.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR, a0.format as u32, depth)
     };
     let handle = with(|s| {
         let h = s.device.as_mut()?.alloc_handle();
         s.render_passes
-            .insert(h, RenderPassRec { first_attachment_clears: clears, color_format_vk: fmt });
+            .insert(h, RenderPassRec { first_attachment_clears: clears, color_format_vk: fmt, depth });
         Some(h)
     });
     match handle {

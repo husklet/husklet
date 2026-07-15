@@ -188,20 +188,43 @@ pub fn cmd_dispatch(dev: &mut Device, cb: VkCommandBuffer, x: u32, y: u32, z: u3
     Ok(())
 }
 
-/// `vkCmdBeginRenderPass` — begin a render pass targeting `color_image` with one color attachment
-/// (`Clear` when `load_clear`, else `Load`; always stored). Ported from `command.rs::vkCmdBeginRenderPass`.
+/// `vkCmdBeginRenderPass` — begin a classic render pass targeting `color_image` with one color attachment
+/// (`Clear` when `load_clear`, else `Load`; always stored), plus an optional `depth` attachment resolved
+/// from the render pass's depth/stencil attachment + the framebuffer's bound depth image view. The depth
+/// path is the exact mirror of the dynamic-rendering [`cmd_begin_rendering`] one — both emit the SAME
+/// [`Enc::BeginRenderPass`] with a real [`DepthAttachment`], so a classic depth-tested pipeline occludes.
+/// Ported from `command.rs::vkCmdBeginRenderPass`.
 pub fn cmd_begin_render_pass(
     dev: &mut Device,
     cb: VkCommandBuffer,
     color_image: VkImage,
     clear: [f32; 4],
     load_clear: bool,
+    depth: Option<RenderingDepthAttachment>,
 ) -> Result<()> {
     let texture = dev
         .images
         .get(&color_image)
         .ok_or(GpuError::Invalid("vkCmdBeginRenderPass: unknown color VkImage"))?
         .ir_id;
+    // Resolve the depth image → ir texture id up front (a bad handle fails before recording), exactly as
+    // the dynamic-rendering path does for its inline pDepthAttachment.
+    let depth_target = match depth {
+        Some(d) => {
+            let depth_tex = dev
+                .images
+                .get(&d.image)
+                .ok_or(GpuError::Invalid("vkCmdBeginRenderPass: unknown depth VkImage"))?
+                .ir_id;
+            Some(DepthAttachment {
+                texture: depth_tex,
+                load: if d.load_clear { LoadOp::Clear } else { LoadOp::Load },
+                clear_depth: d.clear_depth,
+                clear_stencil: 0,
+            })
+        }
+        None => None,
+    };
     let rec = recording_mut(dev, cb)?;
     rec.enc.push(Enc::BeginRenderPass {
         color: vec![ColorAttachment {
@@ -210,7 +233,7 @@ pub fn cmd_begin_render_pass(
             clear,
             store: true,
         }],
-        depth: None,
+        depth: depth_target,
     });
     rec.in_render_pass = true;
     rec.active_render_texture = Some(texture);
@@ -378,6 +401,7 @@ pub fn cmd_begin_rendering(
                 texture,
                 load: if d.load_clear { LoadOp::Clear } else { LoadOp::Load },
                 clear_depth: d.clear_depth,
+                clear_stencil: 0,
             })
         }
         None => None,

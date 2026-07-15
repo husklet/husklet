@@ -121,7 +121,7 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
     // record: begin render pass (clear) → bind pipeline → bind vertex buffer → draw 3 → end pass.
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb, false).unwrap();
-    record::cmd_begin_render_pass(&mut d, cb, target, clear, true).unwrap();
+    record::cmd_begin_render_pass(&mut d, cb, target, clear, true, None).unwrap();
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
     record::cmd_draw(&mut d, cb, 3, 1, 0, 0).unwrap();
@@ -218,7 +218,7 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
         // executor clears the image's REAL backing texture (fails if the image were not a real texture).
         let cb = record::allocate_command_buffer(&mut d);
         record::begin(&mut d, cb, false).unwrap();
-        record::cmd_begin_render_pass(&mut d, cb, acquired, clear, true).unwrap();
+        record::cmd_begin_render_pass(&mut d, cb, acquired, clear, true, None).unwrap();
         record::cmd_end_render_pass(&mut d, cb).unwrap();
         record::end(&mut d, cb).unwrap();
         submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
@@ -285,7 +285,7 @@ fn vkcube_style_multiframe_fence_and_resubmit_loop() {
         .map(|&img| {
             let cb = record::allocate_command_buffer(&mut d);
             record::begin(&mut d, cb, false).unwrap(); // NOT one-time-submit → re-submittable every frame
-            record::cmd_begin_render_pass(&mut d, cb, img, clear, true).unwrap();
+            record::cmd_begin_render_pass(&mut d, cb, img, clear, true, None).unwrap();
             record::cmd_end_render_pass(&mut d, cb).unwrap();
             record::end(&mut d, cb).unwrap();
             cb

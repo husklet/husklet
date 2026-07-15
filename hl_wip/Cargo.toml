@@ -147,6 +147,10 @@ name = "vk_depth"
 path = "tests/vk_depth.rs"
 
 [[test]]
+name = "vk_depth_renderpass"
+path = "tests/vk_depth_renderpass.rs"
+
+[[test]]
 name = "vk_instanced"
 path = "tests/vk_instanced.rs"
 

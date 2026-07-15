@@ -23,11 +23,28 @@ use core::ffi::c_void;
 
 /// A `VkRenderPass`'s bring-up bookkeeping: whether its first color attachment clears (loadOp == CLEAR)
 /// and that attachment's raw `VkFormat` (so a graphics pipeline created against this pass knows its one
-/// color-target format). Objects the `hl_vulkan` object model does not itself carry live here in the shim.
+/// color-target format), plus the depth/stencil attachment (when the pass declares one) so the classic
+/// `vkCmdBeginRenderPass` path can thread a real depth buffer — the mirror of the dynamic-rendering
+/// `pDepthAttachment`. Objects the `hl_vulkan` object model does not itself carry live here in the shim.
 #[derive(Clone, Copy)]
 pub struct RenderPassRec {
     pub first_attachment_clears: bool,
     pub color_format_vk: u32,
+    /// The depth/stencil attachment's bookkeeping, or `None` for a color-only pass.
+    pub depth: Option<RenderPassDepth>,
+}
+
+/// The depth/stencil attachment of a classic `VkRenderPass` (from its `VkAttachmentDescription` table).
+#[derive(Clone, Copy)]
+pub struct RenderPassDepth {
+    /// The attachment's slot in the render pass's attachment array — identical to its `VkImageView` index
+    /// in a `VkFramebuffer` built for this pass (and its `pClearValues` index in the begin info), so
+    /// `vkCmdBeginRenderPass` resolves the bound depth image view and its clear value from this index.
+    pub index: u32,
+    /// The depth attachment's raw `VkFormat` (a graphics pipeline created against this pass targets it).
+    pub format_vk: u32,
+    /// `loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR` — whether the pass clears depth to its `clearValue` on begin.
+    pub clear: bool,
 }
 
 /// The app's native wayland handles captured at `vkCreateWaylandSurfaceKHR` — the `wl_display*` /

@@ -295,7 +295,7 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
     // record the render pass: begin (clear) → bind pipeline → bind vertex buffer → draw → end.
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb, false).unwrap();
-    record::cmd_begin_render_pass(&mut d, cb, target, [0.0, 0.0, 1.0, 1.0], true).unwrap();
+    record::cmd_begin_render_pass(&mut d, cb, target, [0.0, 0.0, 1.0, 1.0], true, None).unwrap();
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
     record::cmd_draw(&mut d, cb, 3, 1, 0, 0).unwrap();
@@ -1098,7 +1098,7 @@ fn clear_attachments_lowers_to_clear_rect_on_active_target() {
             .unwrap();
     let ir = img_ir(&d, target);
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
-        record::cmd_begin_render_pass(d, cb, target, [0.0, 0.0, 0.0, 1.0], false).unwrap();
+        record::cmd_begin_render_pass(d, cb, target, [0.0, 0.0, 0.0, 1.0], false, None).unwrap();
         record::cmd_clear_attachment_rect(d, cb, 8, 8, 16, 16, [1.0, 0.0, 0.0, 1.0]).unwrap();
         record::cmd_end_render_pass(d, cb).unwrap();
     });
