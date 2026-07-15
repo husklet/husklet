@@ -23,7 +23,25 @@ pub fn dispatch(
     exec: &mut dyn GpuExecutor,
     batch: &[Cmd],
 ) -> Result<Vec<Presented>> {
-    let presents = exec.execute(&mut session.resources, batch)?;
+    // Execute inside an all-tables transaction so the batch's resource-lifecycle mutations are atomic:
+    // an executor that fails PART-WAY through a batch (a Submit that fails device validation, an unknown
+    // resource ref, a shader the backend can't compile — i.e. a NACK) would otherwise leave the id tables
+    // half-mutated (some creates applied, some destroys already dropped) while `account` has already
+    // committed the whole frame's residency charge. Rolling the tables back on failure restores them
+    // EXACTLY to the pre-frame state (the ledger is rolled back by `runtime::submit`), so the connection
+    // recovers: a subsequent destroy of a still-live id no longer `UnknownId`s and a retry no longer
+    // `DuplicateId`s. This is the executor-side "swap-reset-on-NACK".
+    session.resources.begin_txn();
+    let presents = match exec.execute(&mut session.resources, batch) {
+        Ok(presents) => {
+            session.resources.commit_txn();
+            presents
+        }
+        Err(e) => {
+            session.resources.rollback_txn();
+            return Err(e);
+        }
+    };
 
     // Reflect the batch's fence lifecycle + completion signals into the timeline only after the executor
     // has accepted the work, so a failed execute leaves the timeline untouched (failure atomicity).

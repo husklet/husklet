@@ -40,6 +40,24 @@ pub fn submit(
     batch: &[Cmd],
 ) -> Result<Vec<Presented>> {
     service::validate::validate(&session.limits, frame_bytes, batch)?;
+    // Snapshot the residency ledger BEFORE the charge so a later executor NACK can undo it. `account`
+    // commits the whole frame's charge up front (both the connection ledger and its slice of the shared
+    // global account); `dispatch` then hands the batch to the executor, which can still NACK it. Without
+    // this rollback the charge would stick even though nothing rendered, so the connection's residency
+    // would climb until every frame trips the cap — exactly the "NACK never recovers" failure.
+    let ledger_before = session.ledger.clone();
     service::account::charge_frame(session, batch)?;
-    service::dispatch::dispatch(session, exec, batch)
+    match service::dispatch::dispatch(session, exec, batch) {
+        Ok(presents) => Ok(presents),
+        Err(e) => {
+            // Executor NACK: `dispatch` already rolled the id tables back to the pre-frame state; roll the
+            // account charge back to match so the whole submit is atomic — the connection is left EXACTLY
+            // as before the frame (ledger + global + tables), ready for a retry or a subsequent destroy.
+            // Restoring a previously-valid, smaller-or-equal contribution can never exceed a ceiling, so
+            // the global re-commit cannot fail; ignore its result and always restore the local ledger.
+            let _ = session.global.commit(session.ledger.totals, ledger_before.totals);
+            session.ledger = ledger_before;
+            Err(e)
+        }
+    }
 }

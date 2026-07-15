@@ -68,6 +68,47 @@ impl SessionResources {
         }
     }
 
+    /// Begin an all-tables transaction so a whole batch's resource-lifecycle mutations (the executor's
+    /// creates/destroys during `execute`) can be rolled back as a unit if the frame NACKs. Paired with
+    /// [`commit_txn`](Self::commit_txn) on success or [`rollback_txn`](Self::rollback_txn) on failure.
+    pub fn begin_txn(&mut self) {
+        self.buffers.begin();
+        self.textures.begin();
+        self.samplers.begin();
+        self.shaders.begin();
+        self.pipelines.begin();
+        self.bind_groups.begin();
+        self.surfaces.begin();
+        self.fences.begin();
+    }
+
+    /// Commit the in-flight all-tables transaction: every destroyed native parked during the batch is
+    /// freed for real. Call after the executor accepted the whole batch.
+    pub fn commit_txn(&mut self) {
+        self.buffers.commit();
+        self.textures.commit();
+        self.samplers.commit();
+        self.shaders.commit();
+        self.pipelines.commit();
+        self.bind_groups.commit();
+        self.surfaces.commit();
+        self.fences.commit();
+    }
+
+    /// Roll back the in-flight all-tables transaction: every id created during the batch is dropped and
+    /// every id destroyed during the batch is restored, leaving the tables EXACTLY as they were before the
+    /// frame. Call when the executor NACKed (failed mid-batch) so a retry / subsequent destroy is consistent.
+    pub fn rollback_txn(&mut self) {
+        self.buffers.rollback();
+        self.textures.rollback();
+        self.samplers.rollback();
+        self.shaders.rollback();
+        self.pipelines.rollback();
+        self.bind_groups.rollback();
+        self.surfaces.rollback();
+        self.fences.rollback();
+    }
+
     /// Total live objects across every kind — a cheap invariant check for tests/diagnostics.
     pub fn live_count(&self) -> usize {
         self.buffers.len()

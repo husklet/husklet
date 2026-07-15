@@ -47,6 +47,17 @@ struct Slot<T> {
     val: T,
 }
 
+/// One recorded undo action for a table's in-flight transaction ([`ResourceTable::begin`]). The journal
+/// is replayed in reverse on [`rollback`](ResourceTable::rollback) so a whole batch of inserts/removes
+/// reverts as a unit — the executor-side half of "a NACKed frame leaves the tables EXACTLY as before".
+enum Undo<T> {
+    /// `id` was inserted during the transaction; undo removes it (dropping the created native).
+    Inserted(u32),
+    /// `id` was removed during the transaction; undo restores its saved slot — the native it OWNED, kept
+    /// alive in the journal instead of dropped, so a rolled-back destroy is truly reversible.
+    Removed(u32, Slot<T>),
+}
+
 /// Host-side id → object map with lifecycle checking. One per resource kind per backend.
 ///
 /// Generations come from a single monotonic counter rather than a per-id map, so destroy/recreate
@@ -57,6 +68,10 @@ pub struct ResourceTable<T> {
     live: HashMap<u32, Slot<T>>,
     /// Monotonic allocation counter; every `insert` consumes the next value as the slot's generation.
     next_gen: u32,
+    /// When `Some`, a transaction is in flight and every insert/remove is journaled so the batch can be
+    /// rolled back atomically on an executor NACK. `None` outside a transaction (the common, zero-overhead
+    /// path). A removed slot's native is parked in the journal (not dropped) until the transaction commits.
+    journal: Option<Vec<Undo<T>>>,
 }
 
 impl<T> ResourceTable<T> {
@@ -65,6 +80,39 @@ impl<T> ResourceTable<T> {
             kind,
             live: HashMap::new(),
             next_gen: 1,
+            journal: None,
+        }
+    }
+
+    /// Begin a transaction: subsequent inserts/removes are journaled so [`rollback`](Self::rollback) can
+    /// revert them as a unit and [`commit`](Self::commit) can finalize them. Idempotent-ish — a `begin`
+    /// while one is already open discards the prior (uncommitted) journal, matching one-transaction-per-frame.
+    pub fn begin(&mut self) {
+        self.journal = Some(Vec::new());
+    }
+
+    /// Commit the in-flight transaction: drop the journal so every parked (removed) native is freed for
+    /// real. A no-op if no transaction is open.
+    pub fn commit(&mut self) {
+        self.journal = None;
+    }
+
+    /// Roll back the in-flight transaction: replay the journal in REVERSE so the table is byte-for-byte
+    /// what it was at [`begin`](Self::begin) — inserted natives are dropped, removed natives restored. The
+    /// monotonic `next_gen` is intentionally NOT rewound (a consumed stamp is harmless; gens only need to
+    /// stay distinct). A no-op if no transaction is open.
+    pub fn rollback(&mut self) {
+        if let Some(journal) = self.journal.take() {
+            for undo in journal.into_iter().rev() {
+                match undo {
+                    Undo::Inserted(id) => {
+                        self.live.remove(&id);
+                    }
+                    Undo::Removed(id, slot) => {
+                        self.live.insert(id, slot);
+                    }
+                }
+            }
         }
     }
 
@@ -76,6 +124,9 @@ impl<T> ResourceTable<T> {
         let gen = self.next_gen;
         self.next_gen = self.next_gen.wrapping_add(1).max(1);
         self.live.insert(id, Slot { gen, val });
+        if let Some(journal) = &mut self.journal {
+            journal.push(Undo::Inserted(id));
+        }
         Ok(())
     }
 
@@ -95,12 +146,19 @@ impl<T> ResourceTable<T> {
             .ok_or(GpuError::UnknownId { kind, id })
     }
 
-    /// Remove (destroy) a live resource, returning it. Errors on double-free / use-after-free.
-    pub fn remove(&mut self, id: u32) -> Result<T> {
-        self.live
-            .remove(&id)
-            .map(|s| s.val)
-            .ok_or(GpuError::UnknownId { kind: self.kind, id })
+    /// Remove (destroy) a live resource. Errors on double-free / use-after-free (`UnknownId`).
+    ///
+    /// Outside a transaction the removed native is dropped immediately (freed). Inside a transaction the
+    /// slot is parked in the journal — kept alive, NOT dropped — so [`rollback`](Self::rollback) can restore
+    /// it if the frame NACKs; [`commit`](Self::commit) then frees it. Returns `()` (all call sites discard
+    /// the native), which is what lets a journaled removal retain ownership of the native for rollback.
+    pub fn remove(&mut self, id: u32) -> Result<()> {
+        let slot = self.live.remove(&id).ok_or(GpuError::UnknownId { kind: self.kind, id })?;
+        match &mut self.journal {
+            Some(journal) => journal.push(Undo::Removed(id, slot)),
+            None => drop(slot),
+        }
+        Ok(())
     }
 
     pub fn contains(&self, id: u32) -> bool {

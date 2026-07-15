@@ -95,6 +95,17 @@ pub fn glsl_to_wgsl_reflect(
     } else {
         src
     };
+    // naga's `wgsl-out` has no `IsInf` emitter, so a shader using `isinf()` (Chrome's GLES fragment
+    // shaders do) parses fine but NACKs at WGSL emission (`Unsupported relational function: IsInf`).
+    // Rewrite `isinf(x)` → `(abs(x) > FLT_MAX)` textually before parsing. Unconditional and cheap: a
+    // shader with no `isinf` is returned byte-for-byte, so non-isinf paths are unaffected.
+    let deinf;
+    let src = if src.contains("isinf") {
+        deinf = crate::glsl_es::rewrite_isinf(src);
+        deinf.as_str()
+    } else {
+        src
+    };
     let mut frontend = naga::front::glsl::Frontend::default();
     let mut module = frontend
         .parse(&naga::front::glsl::Options::from(stage), src)
@@ -952,6 +963,66 @@ void main (void)
             .expect("aggregate fragment varyings must split and compile");
         assert!(fwgsl.contains("fmain"), "entry renamed: {fwgsl}");
         assert!(fwgsl.contains("_outline_hlio0"), "array varying split on the fragment side: {fwgsl}");
+    }
+
+    // A GLES fragment shader that gates its output color on `isinf()` — the exact Chrome shape that NACKed
+    // the executor with `Kernel("wgsl-out: Unsupported relational function: IsInf")`.
+    const ISINF_FRAG: &str = r#"#version 320 es
+precision highp float;
+in float vScale;
+layout(location = 0) out vec4 outColor;
+void main() {
+    float s = 1.0 / vScale;
+    if (isinf(s)) {
+        outColor = vec4(1.0, 0.0, 0.0, 1.0);
+    } else {
+        outColor = vec4(0.0, s, 0.0, 1.0);
+    }
+}
+"#;
+
+    #[test]
+    fn isinf_fails_wgsl_out_directly_but_compiles_through_glsl_to_wgsl() {
+        // FAIL-BEFORE: naga's glsl-in ACCEPTS `isinf` (lowering it to a `RelationalFunction::IsInf`), but
+        // its `wgsl-out` writer has no emitter for it — validate-then-write NACKs with the IsInf message.
+        // (Feed the ES-normalized text so the ONLY remaining gap is the isinf builtin itself.)
+        let normalized = crate::glsl_es::normalize(ISINF_FRAG, naga::ShaderStage::Fragment);
+        let mut f = naga::front::glsl::Frontend::default();
+        let module = f
+            .parse(&naga::front::glsl::Options::from(naga::ShaderStage::Fragment), &normalized)
+            .expect("glsl-in accepts isinf");
+        match module_to_wgsl(&module) {
+            Err(GpuError::Kernel(m)) => {
+                assert!(m.contains("IsInf"), "expected the IsInf wgsl-out gap, got: {m}")
+            }
+            other => panic!("expected the IsInf wgsl-out failure, got {other:?}"),
+        }
+
+        // PASS-AFTER: the `isinf` → `(abs(x) > FLT_MAX)` rewrite compiles the shader to real WGSL — no
+        // `isinf`/`IsInf` survives and the finite-max-bound `abs(...)` is present.
+        let wgsl = glsl_to_wgsl(ISINF_FRAG, naga::ShaderStage::Fragment, "fmain")
+            .expect("isinf fragment must compile through the rewrite");
+        assert!(
+            !wgsl.contains("isinf") && !wgsl.contains("isInf") && !wgsl.contains("IsInf"),
+            "no isinf survives to WGSL: {wgsl}"
+        );
+        assert!(wgsl.contains("abs("), "the finite-max-bound rewrite is present: {wgsl}");
+    }
+
+    #[test]
+    fn rewrite_isinf_is_exact_and_leaves_isinf_free_source_untouched() {
+        use crate::glsl_es::rewrite_isinf;
+        // A shader with no isinf is returned byte-for-byte (fast path).
+        let plain = "void main() { float x = 1.0; }";
+        assert_eq!(rewrite_isinf(plain), plain, "isinf-free source is untouched");
+
+        // Scalar isinf on an expression argument, with a nested isinf, both rewritten to the abs bound; no
+        // `isinf` token remains and the `isinfx` identifier (a false prefix) is NOT touched.
+        let src = "bool a = isinf(u.v * 2.0); bool b = isinf(isinf(w) ? 1.0 : x); float isinfx = 3.0;";
+        let out = rewrite_isinf(src);
+        assert!(!out.contains("isinf("), "every isinf() call rewritten: {out}");
+        assert!(out.contains("(abs(u.v * 2.0) > 3.40282347e38)"), "scalar arg rewritten: {out}");
+        assert!(out.contains("isinfx"), "the `isinfx` identifier is not a false match: {out}");
     }
 }
 

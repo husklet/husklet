@@ -210,6 +210,82 @@ fn next_significant(toks: &[Tok], i: usize) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// isinf() rewrite (naga wgsl-out has no IsInf emitter)
+// ---------------------------------------------------------------------------------------------------
+
+/// The largest finite f32, as a GLSL float literal. A value's magnitude exceeds it iff the value is ±∞.
+const F32_FINITE_MAX_LIT: &str = "3.40282347e38";
+
+/// Rewrite every `isinf(x)` call to `(abs(x) > 3.40282347e38)` — a finite-max-bound test that survives
+/// naga's `wgsl-out`, which has NO `IsInf` emitter and otherwise NACKs the whole shader with
+/// `wgsl-out: Unsupported relational function: IsInf`. naga's `glsl-in` accepts `isinf` and lowers it to
+/// a `RelationalFunction::IsInf` expression; the crash is purely in the WGSL writer, so removing the call
+/// textually before parsing is the surgical fix.
+///
+/// Exactness (scalar f32, the shape Chrome's GLES shaders use): both `+∞` and `-∞` have `abs(x) == ∞ >
+/// FLT_MAX`; every finite value has `abs(x) <= FLT_MAX`; and `abs(NaN) > FLT_MAX` is `false`, matching
+/// `isinf(NaN) == false`. So the rewrite is bit-exact with `isinf` for every scalar float input.
+///
+/// A fast path leaves any shader WITHOUT `isinf` byte-for-byte untouched (no tokenize/strip). Comments are
+/// stripped only for a shader that does contain `isinf`, so an `isinf(` inside a comment cannot be
+/// rewritten and cannot leave a dangling fragment. Nested `isinf` in the argument is handled recursively.
+pub fn rewrite_isinf(src: &str) -> String {
+    if !src.contains("isinf") {
+        return src.to_string();
+    }
+    let s = strip_comments(src);
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + 32);
+    let mut i = 0usize;
+    let mut flush_from = 0usize;
+    while i < bytes.len() {
+        let on_boundary = i == 0 || !is_word_byte(bytes[i - 1]);
+        let followed_by_word = bytes.get(i + 5).is_some_and(|&c| is_word_byte(c));
+        if on_boundary && !followed_by_word && s[i..].starts_with("isinf") {
+            // Skip any whitespace between `isinf` and its opening paren.
+            let mut j = i + 5;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if bytes.get(j) == Some(&b'(') {
+                // Find the paren that closes this call.
+                let mut depth = 0i32;
+                let mut k = j;
+                let close = loop {
+                    match bytes.get(k) {
+                        None => break bytes.len(),
+                        Some(b'(') => depth += 1,
+                        Some(b')') => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break k;
+                            }
+                        }
+                        _ => {}
+                    }
+                    k += 1;
+                };
+                if close < bytes.len() {
+                    out.push_str(&s[flush_from..i]);
+                    let inner = rewrite_isinf(&s[j + 1..close]);
+                    out.push_str("(abs(");
+                    out.push_str(inner.trim());
+                    out.push_str(") > ");
+                    out.push_str(F32_FINITE_MAX_LIT);
+                    out.push(')');
+                    i = close + 1;
+                    flush_from = i;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out.push_str(&s[flush_from..]);
+    out
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Detection
 // ---------------------------------------------------------------------------------------------------
 
