@@ -39,7 +39,15 @@ const SPIRV_MAGIC: u32 = 0x0723_0203;
 /// Translate a SPIR-V word payload to WGSL via naga (spv-in → validate → wgsl-out). Returns the WGSL
 /// text wgpu compiles. A payload without the SPIR-V magic is rejected (the strict ABI never falls back
 /// to a built-in shader).
+#[cfg(test)]
 pub fn spirv_to_wgsl(words: &[u32]) -> Result<String> {
+    Ok(spirv_to_wgsl_reflect(words)?.0)
+}
+
+/// [`spirv_to_wgsl`] plus the module's DECLARED resource bindings ([`crate::reflect`]), reflected from the
+/// naga module before `wgsl-out` so the pipeline can build an explicit bind-group layout matching the
+/// driver's per-declared-resource bind group. See [`glsl_to_wgsl_reflect`].
+pub fn spirv_to_wgsl_reflect(words: &[u32]) -> Result<(String, crate::reflect::Reflected)> {
     if words.first().copied() != Some(SPIRV_MAGIC) {
         return Err(GpuError::Invalid("wgpu: shader payload is not SPIR-V"));
     }
@@ -50,14 +58,28 @@ pub fn spirv_to_wgsl(words: &[u32]) -> Result<String> {
     let bytes: &[u8] = bytemuck::cast_slice(&split);
     let module = naga::front::spv::parse_u8_slice(bytes, &naga::front::spv::Options::default())
         .map_err(|e| err(format!("spirv-in: {e:?}")))?;
-    module_to_wgsl(&module)
+    let reflected = crate::reflect::reflect(&module);
+    Ok((module_to_wgsl(&module)?, reflected))
 }
 
 /// Translate GLSL source (the forwarded GLES/GL driver path) to WGSL for `stage`, naming the emitted entry
 /// point `entry`. naga's `glsl-in` always names the single entry point `main`; the render/compute pipeline
 /// binds the driver-declared name (`vmain`/`fmain`/`cmain`) via its `ShaderRef`, so we rename the entry
 /// point to `entry` before `wgsl-out` writes it. Handles vertex, fragment, and compute stages.
+#[cfg(test)]
 pub fn glsl_to_wgsl(src: &str, stage: naga::ShaderStage, entry: &str) -> Result<String> {
+    Ok(glsl_to_wgsl_reflect(src, stage, entry)?.0)
+}
+
+/// [`glsl_to_wgsl`] plus the module's DECLARED resource bindings ([`crate::reflect`]). naga's `glsl-in`
+/// keeps every declared `layout(binding=)` global in the module even when `main()` never reads it, so this
+/// recovers the full set the GL driver bound a bind-group entry for — the datum
+/// `pipeline::create_render_pipeline` builds its explicit bind-group layout from.
+pub fn glsl_to_wgsl_reflect(
+    src: &str,
+    stage: naga::ShaderStage,
+    entry: &str,
+) -> Result<(String, crate::reflect::Reflected)> {
     // GskGpu (GTK4 "gl") and ANGLE (Chrome) emit GLSL-ES that naga's `glsl-in` rejects wholesale
     // (`#version … es`, `gl_VertexID`, combined `sampler2D` globals AND — the hard case — combined
     // `sampler2D` FUNCTION PARAMETERS). The host glslang/shaderc route that normally handles these is not
@@ -92,7 +114,8 @@ pub fn glsl_to_wgsl(src: &str, stage: naga::ShaderStage, entry: &str) -> Result<
     // (`InvalidHandle(ForwardDependency)`). Reorder the parsed module's functions into call-graph
     // (callee-before-caller) order so every call points backward, as naga requires.
     reorder_functions_topologically(&mut module);
-    module_to_wgsl(&module)
+    let reflected = crate::reflect::reflect(&module);
+    Ok((module_to_wgsl(&module)?, reflected))
 }
 
 /// Replace every bare `Return { value: None }` inside a value-returning function with a zero-value return

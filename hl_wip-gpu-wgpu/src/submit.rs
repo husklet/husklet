@@ -255,15 +255,19 @@ impl WgpuExecutor {
                     let pid = cur_pipeline.ok_or(GpuError::Invalid("draw with no pipeline bound"))?;
                     let bg = match cur_bind_group {
                         Some(g) => {
-                            let layout = match pipeline::native(res, pid)? {
-                                PipelineNative::Render { pipeline, .. } => {
-                                    pipeline.get_bind_group_layout(0)
+                            let (layout, filter) = match pipeline::native(res, pid)? {
+                                PipelineNative::Render { pipeline, used_bindings, .. } => {
+                                    (pipeline.get_bind_group_layout(0), used_bindings.as_slice())
                                 }
                                 PipelineNative::Compute { .. } => {
                                     return Err(GpuError::Unsupported("wgpu: draw on a compute pipeline"))
                                 }
                             };
-                            Some(self.build_bind_group(res, &layout, bindgroup::desc(res, g)?)?)
+                            // Filter the driver's bind-group entries to the bindings this pipeline's
+                            // shaders actually read (the auto layout's set), so a GskGpu bind group that
+                            // carries an unsampled texture/sampler pair still matches (see
+                            // `bindgroup::build_bind_group`).
+                            Some(self.build_bind_group(res, &layout, bindgroup::desc(res, g)?, Some(filter))?)
                         }
                         None => None,
                     };
@@ -423,7 +427,9 @@ impl WgpuExecutor {
                                 }
                                 PipelineNative::Render { .. } => unreachable!("checked above"),
                             };
-                            let bg = self.build_bind_group(res, &layout, bindgroup::desc(res, *g)?)?;
+                            // Compute bind groups already match their layout (the kernel path's explicit
+                            // layout / the SPIR-V path's auto layout are built to), so no filter is applied.
+                            let bg = self.build_bind_group(res, &layout, bindgroup::desc(res, *g)?, None)?;
                             groups.push((idx as u32, bg));
                         }
                     }

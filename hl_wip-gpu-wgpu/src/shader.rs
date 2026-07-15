@@ -22,7 +22,13 @@ pub enum ShaderNative {
     /// (vertex/fragment) OR — when the payload declares a compute entry point — a compute pipeline built
     /// with an auto layout (see `pipeline::create_compute_pipeline`). A single naga round-trip serves both
     /// stages, so the variant is stage-neutral rather than graphics-only.
-    Module(wgpu::ShaderModule),
+    ///
+    /// `reflected` carries each entry point's USED resource bindings ([`crate::reflect`]), captured from
+    /// the naga module at translate time — the exact set wgpu's auto layout exposes. A render pipeline
+    /// stores the union of its vertex + fragment entry points' sets and filters the driver's bind group to
+    /// it at draw time, so a bind group carrying resources the compiled shader never samples still matches
+    /// the auto layout. Unused by the compute path (whose bind groups match their layout as-is).
+    Module { module: wgpu::ShaderModule, reflected: crate::reflect::Reflected },
     /// A compiled compute kernel, lowered to WGSL lazily at compute-pipeline creation.
     Kernel(Box<KernelProgram>),
 }
@@ -66,7 +72,7 @@ impl WgpuExecutor {
                 ShaderNative::Kernel(Box::new(prog))
             }
             ShaderPayloadKind::SpirV => {
-                let src = wgsl::spirv_to_wgsl(words).map_err(|e| {
+                let (src, reflected) = wgsl::spirv_to_wgsl_reflect(words).map_err(|e| {
                     hl_log::hl_warn!(tag::WGPU, "shader compile failed kind=SpirV err={}", e);
                     hl_log::hl_count!(tag::WGPU, "shader_errors");
                     e
@@ -75,7 +81,7 @@ impl WgpuExecutor {
                     label: Some("hl-spirv"),
                     source: wgpu::ShaderSource::Wgsl(src.into()),
                 });
-                ShaderNative::Module(module)
+                ShaderNative::Module { module, reflected }
             }
             ShaderPayloadKind::Glsl => {
                 // The guest GLES/GL driver forwards its GLSL source VERBATIM (a `GlslDescriptor` led by
@@ -92,16 +98,17 @@ impl WgpuExecutor {
                         return Err(GpuError::Kernel(format!("wgpu: unknown GLSL stage {other}")))
                     }
                 };
-                let src = wgsl::glsl_to_wgsl(&desc.source, stage, &desc.entry).map_err(|e| {
-                    hl_log::hl_warn!(tag::WGPU, "shader compile failed kind=Glsl err={}", e);
-                    hl_log::hl_count!(tag::WGPU, "shader_errors");
-                    e
-                })?;
+                let (src, reflected) =
+                    wgsl::glsl_to_wgsl_reflect(&desc.source, stage, &desc.entry).map_err(|e| {
+                        hl_log::hl_warn!(tag::WGPU, "shader compile failed kind=Glsl err={}", e);
+                        hl_log::hl_count!(tag::WGPU, "shader_errors");
+                        e
+                    })?;
                 let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("hl-glsl"),
                     source: wgpu::ShaderSource::Wgsl(src.into()),
                 });
-                ShaderNative::Module(module)
+                ShaderNative::Module { module, reflected }
             }
             ShaderPayloadKind::LegacyMsl | ShaderPayloadKind::DemoBuiltin => {
                 hl_log::hl_warn!(tag::WGPU, "shader rejected kind={:?} reason=no-wgsl", kind);

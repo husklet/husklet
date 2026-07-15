@@ -28,6 +28,13 @@ pub enum PipelineNative {
         /// target already matches, so it is not yet consulted.
         #[allow(dead_code)]
         color_formats: Vec<TextureFormat>,
+        /// The `(group, binding)` slots this pipeline's shaders actually READ — the union of its vertex +
+        /// fragment entry points' usage ([`crate::reflect`]), which is exactly the set wgpu's auto layout
+        /// exposes. A bind group `submit` builds is FILTERED to these bindings so the GL driver's
+        /// per-bound-resource entries (which routinely include textures/samplers the compiled shader never
+        /// samples) match the auto layout's count instead of NACKing (5-vs-3). Empty ⇒ no filtering (a
+        /// bindingless pipeline, e.g. the conformance triangle).
+        used_bindings: Vec<(u32, u32)>,
     },
     /// A compute pipeline. Both the PTX-kernel ABI path (built with an *explicit* group-0 layout so a
     /// binding the WGSL doesn't read — e.g. a kernel's `params` blob — is still declared) and the SPIR-V/
@@ -127,7 +134,7 @@ impl WgpuExecutor {
             // (`get_bind_group_layout(index)`), so 2+ groups bind at their declared set indices. Push
             // constants require the PUSH_CONSTANTS feature, which `device::acquire` requests when the
             // adapter advertises it (lavapipe does).
-            ShaderNative::Module(m) => {
+            ShaderNative::Module { module: m, .. } => {
                 let module = m.clone();
                 // A validation error scope turns wgpu's async device error (raised when the module has no
                 // compute entry point matching `entry` — e.g. a graphics-only SPIR-V module used for
@@ -166,16 +173,23 @@ impl WgpuExecutor {
         desc: &RenderPipelineDesc,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::WGPU, "pipeline_create");
-        let vs = match shader::native(res, desc.vertex.module)? {
-            ShaderNative::Module(m) => m.clone(),
+        // Clone the module + the used `(group, binding)` set of the entry point this pipeline binds out of
+        // `res` (an immutable borrow), so the pipeline can be inserted (a mutable borrow) below carrying the
+        // auto layout's exact bindings for the draw-time bind-group filter (see `PipelineNative::Render`).
+        let (vs, vs_used) = match shader::native(res, desc.vertex.module)? {
+            ShaderNative::Module { module, reflected } => {
+                (module.clone(), reflected.used_for(&desc.vertex.entry).to_vec())
+            }
             ShaderNative::Kernel(_) => {
                 hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render stage=vertex reason=needs-graphics-shader");
                 return Err(GpuError::Unsupported("wgpu: render pipeline vertex needs a graphics shader"))
             }
         };
-        let fs = match &desc.fragment {
+        let (fs, fs_used) = match &desc.fragment {
             Some(f) => match shader::native(res, f.module)? {
-                ShaderNative::Module(m) => Some((m.clone(), f.entry.clone())),
+                ShaderNative::Module { module, reflected } => {
+                    (Some((module.clone(), f.entry.clone())), reflected.used_for(&f.entry).to_vec())
+                }
                 ShaderNative::Kernel(_) => {
                     hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render stage=fragment reason=needs-graphics-shader");
                     return Err(GpuError::Unsupported(
@@ -183,8 +197,19 @@ impl WgpuExecutor {
                     ))
                 }
             },
-            None => None,
+            None => (None, Vec::new()),
         };
+
+        // The auto layout's exact bindings = the union of the vertex + fragment entry points' used
+        // resources. The bind group `submit` builds at draw time is filtered to these (see
+        // `PipelineNative::Render.used_bindings`), reconciling the driver's per-bound-resource entries with
+        // what the compiled shader actually reads.
+        let mut used_bindings = vs_used;
+        for gb in fs_used {
+            if !used_bindings.contains(&gb) {
+                used_bindings.push(gb);
+            }
+        }
 
         // Vertex-buffer layouts: lower each protocol `VertexLayout` (stride + step mode + packed-format
         // attributes) into a `wgpu::VertexBufferLayout`. The attribute vecs must outlive the pipeline
@@ -244,7 +269,10 @@ impl WgpuExecutor {
 
         let pipeline = self.gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("hl-render"),
-            layout: None, // auto
+            // Auto layout: wgpu derives the bind-group layout from the shaders' entry-point USAGE. The
+            // bind group `submit` builds is filtered to that same used set (`used_bindings`), so the two
+            // match even when the driver binds resources the compiled shader never samples.
+            layout: None,
             vertex: wgpu::VertexState {
                 module: &vs,
                 entry_point: Some(desc.vertex.entry.as_str()),
@@ -266,7 +294,7 @@ impl WgpuExecutor {
             multiview: None,
             cache: None,
         });
-        res.pipelines.insert(id, Box::new(PipelineNative::Render { pipeline, color_formats }))
+        res.pipelines.insert(id, Box::new(PipelineNative::Render { pipeline, color_formats, used_bindings }))
     }
 }
 

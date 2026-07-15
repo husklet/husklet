@@ -28,6 +28,7 @@ mod fence;
 mod glsl_es;
 mod pipeline;
 mod present;
+mod reflect;
 mod sampler;
 mod shader;
 mod spirv_split;

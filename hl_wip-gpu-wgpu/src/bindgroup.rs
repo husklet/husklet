@@ -44,17 +44,29 @@ impl WgpuExecutor {
     }
 
     /// Build a concrete `wgpu::BindGroup` for `d` against `layout` (the bound pipeline's group-0 layout).
+    ///
+    /// `filter` — when `Some` — restricts the emitted entries to the `(group, binding)` slots the bound
+    /// pipeline's shaders actually READ (its auto layout's exact bindings; see
+    /// `PipelineNative::Render.used_bindings`). The GL driver emits a bind-group entry per *bound* resource,
+    /// which for a GskGpu program routinely includes textures/samplers the compiled shader never samples;
+    /// without the filter the entry count (e.g. 5) would not match the auto layout (e.g. 3) and wgpu NACKs.
+    /// Dropping an unsampled binding is semantically free — the shader never reads it. `None` keeps every
+    /// entry (the compute path, whose bind groups already match their layout).
     pub(crate) fn build_bind_group(
         &self,
         res: &SessionResources,
         layout: &wgpu::BindGroupLayout,
         d: &BindGroupDesc,
+        filter: Option<&[(u32, u32)]>,
     ) -> Result<wgpu::BindGroup> {
+        let keep = |e: &hl_gpu::protocol::model::descriptor::BindEntry| {
+            filter.map_or(true, |f| f.contains(&(d.set, e.binding)))
+        };
         // The wgpu entries borrow the resolved views/samplers; collect those first so they outlive the
-        // `BindGroupEntry` slice.
+        // `BindGroupEntry` slice. Only resources for KEPT entries are resolved + bound, in order.
         let mut views = Vec::new();
         let mut samplers = Vec::new();
-        for e in &d.entries {
+        for e in d.entries.iter().filter(|e| keep(e)) {
             match &e.resource {
                 BindResource::Texture { id } => views.push(texture::native(res, *id)?.view.clone()),
                 BindResource::Sampler { id } => samplers.push(sampler::native(res, *id)?.clone()),
@@ -64,7 +76,7 @@ impl WgpuExecutor {
         let mut vi = 0usize;
         let mut si = 0usize;
         let mut entries = Vec::with_capacity(d.entries.len());
-        for e in &d.entries {
+        for e in d.entries.iter().filter(|e| keep(e)) {
             let resource = match &e.resource {
                 BindResource::Buffer { id, offset, size } => {
                     let b = buffer::native(res, *id)?;
