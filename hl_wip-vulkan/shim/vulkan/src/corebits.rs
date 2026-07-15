@@ -7,20 +7,25 @@
 //! * `vkCreate/DestroyBufferView` mint/reclaim a real host-object handle;
 //! * `vkFreeDescriptorSets` / `vkResetDescriptorPool` actually drop the modeled sets;
 //! * sparse-image-format + tool + multisample property queries report the truthful empty/unsupported set;
-//! * `vkCmdClearDepthStencilImage` / `vkCmdResolveImage*` / `vkCmdDraw*IndirectCount*` validate the
-//!   command buffer and record NO encoder op — a documented limit of the single-sample color model, never
-//!   a faked result (they are `void`).
+//! * `vkCmdResolveImage*` lower to an image COPY (hl images are single-sample, so a resolve MOVES the
+//!   rendered content into the resolve target — see [`record::cmd_resolve_image`]);
+//! * `vkCmdDraw*IndirectCount*` read the actual draw count from the host-visible count buffer and lower
+//!   to direct draws (see [`record::cmd_draw_indirect_count`]);
+//! * `vkCmdClearDepthStencilImage` validates the command buffer and records NO encoder op — a documented
+//!   limit of the single-sample COLOR model (no depth/stencil aspect), never a faked result (it is `void`).
 
 #![allow(clippy::missing_safety_doc, unused_variables, clippy::too_many_arguments)]
 
 use core::ffi::c_void;
 
-use hl_vulkan::service::create;
+use hl_vulkan::service::{create, record};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 use hl_gpu::CommandSink;
 
 use crate::state::with;
-use crate::types::{Dispatchable, VkExtent2D, VkMappedMemoryRange, VkResult, VK_SUCCESS};
+use crate::types::{
+    Dispatchable, VkCopyImageInfo2, VkExtent2D, VkImageCopy, VkMappedMemoryRange, VkResult, VK_SUCCESS,
+};
 
 unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
@@ -302,44 +307,106 @@ pub extern "C" fn vkCmdClearDepthStencilImage(
     let _ = unsafe { cmdbuf_handle(command_buffer) };
 }
 
-/// `vkCmdResolveImage` — multisample resolve; images are single-sample, so there is nothing to resolve.
-/// Validate the command buffer and record nothing.
+/// `vkCmdResolveImage` — a multisample resolve. hl images are single-sample, so a resolve is exactly a
+/// same-extent image COPY that MOVES the source content into the resolve target: each `VkImageResolve`
+/// region (ABI-identical to `VkImageCopy`) lowers to the same `CopyTextureToTexture` a `vkCmdCopyImage`
+/// would emit (see [`record::cmd_resolve_image`]). A negative offset is skipped (the IR origin is
+/// unsigned), exactly like `vkCmdCopyImage`.
 #[no_mangle]
 pub extern "C" fn vkCmdResolveImage(
     command_buffer: *mut c_void,
-    _src_image: u64,
+    src_image: u64,
     _src_image_layout: i32,
-    _dst_image: u64,
+    dst_image: u64,
     _dst_image_layout: i32,
-    _region_count: u32,
-    _p_regions: *const c_void,
+    region_count: u32,
+    p_regions: *const c_void,
 ) {
-    let _ = unsafe { cmdbuf_handle(command_buffer) };
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    if p_regions.is_null() {
+        return;
+    }
+    // `VkImageResolve` has the exact layout of `VkImageCopy` (srcSubresource, srcOffset, dstSubresource,
+    // dstOffset, extent) — reinterpret and reuse the copy region parsing.
+    let regions = unsafe { std::slice::from_raw_parts(p_regions as *const VkImageCopy, region_count as usize) };
+    dev(|d| {
+        for r in regions {
+            if r.src_offset.x < 0 || r.src_offset.y < 0 || r.dst_offset.x < 0 || r.dst_offset.y < 0 {
+                continue;
+            }
+            let _ = record::cmd_resolve_image(
+                d,
+                cb,
+                src_image,
+                dst_image,
+                (r.src_offset.x as u32, r.src_offset.y as u32),
+                (r.dst_offset.x as u32, r.dst_offset.y as u32),
+                (r.extent.width, r.extent.height.max(1)),
+            );
+        }
+    });
 }
 
+/// `vkCmdResolveImage2(KHR)` — the aggregate-struct form of [`vkCmdResolveImage`]. `VkResolveImageInfo2` is
+/// ABI-identical to `VkCopyImageInfo2` and its `VkImageResolve2` regions to `VkImageCopy2`, so it reuses
+/// those struct views and lowers each region to the same image COPY.
 #[no_mangle]
-pub extern "C" fn vkCmdResolveImage2(command_buffer: *mut c_void, _p_resolve_image_info: *const c_void) {
-    let _ = unsafe { cmdbuf_handle(command_buffer) };
+pub extern "C" fn vkCmdResolveImage2(command_buffer: *mut c_void, p_resolve_image_info: *const c_void) {
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(info) = (unsafe { (p_resolve_image_info as *const VkCopyImageInfo2).as_ref() }) else { return };
+    if info.p_regions.is_null() {
+        return;
+    }
+    let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
+    dev(|d| {
+        for r in regions {
+            if r.src_offset.x < 0 || r.src_offset.y < 0 || r.dst_offset.x < 0 || r.dst_offset.y < 0 {
+                continue;
+            }
+            let _ = record::cmd_resolve_image(
+                d,
+                cb,
+                info.src_image,
+                info.dst_image,
+                (r.src_offset.x as u32, r.src_offset.y as u32),
+                (r.dst_offset.x as u32, r.dst_offset.y as u32),
+                (r.extent.width, r.extent.height.max(1)),
+            );
+        }
+    });
 }
 #[no_mangle]
 pub extern "C" fn vkCmdResolveImage2KHR(command_buffer: *mut c_void, p_resolve_image_info: *const c_void) {
     vkCmdResolveImage2(command_buffer, p_resolve_image_info)
 }
 
-/// `vkCmdDrawIndirectCount` / `vkCmdDrawIndexedIndirectCount` (+ KHR/AMD aliases) — the IR carries no
-/// indirect/count draw op (see `record::cmd_draw_indirect`); validate the command buffer and record
-/// nothing (documented limit; `void`).
+/// `vkCmdDrawIndirectCount` / `vkCmdDrawIndexedIndirectCount` (+ KHR/AMD aliases) — read the actual draw
+/// count from the host-visible `count_buffer` (clamped to `max_draw_count`) and lower that many argument
+/// structs to direct draws, exactly like the non-count indirect path (see
+/// [`record::cmd_draw_indirect_count`]). Previously a recorded no-op (blank output).
 #[no_mangle]
 pub extern "C" fn vkCmdDrawIndirectCount(
     command_buffer: *mut c_void,
-    _buffer: u64,
-    _offset: u64,
-    _count_buffer: u64,
-    _count_buffer_offset: u64,
-    _max_draw_count: u32,
-    _stride: u32,
+    buffer: u64,
+    offset: u64,
+    count_buffer: u64,
+    count_buffer_offset: u64,
+    max_draw_count: u32,
+    stride: u32,
 ) {
-    let _ = unsafe { cmdbuf_handle(command_buffer) };
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    dev(|d| {
+        let _ = record::cmd_draw_indirect_count(
+            d,
+            cb,
+            buffer,
+            offset,
+            count_buffer,
+            count_buffer_offset,
+            max_draw_count,
+            stride,
+        );
+    });
 }
 #[no_mangle]
 pub extern "C" fn vkCmdDrawIndirectCountKHR(command_buffer: *mut c_void, buffer: u64, offset: u64, count_buffer: u64, count_buffer_offset: u64, max_draw_count: u32, stride: u32) {
@@ -353,14 +420,26 @@ pub extern "C" fn vkCmdDrawIndirectCountAMD(command_buffer: *mut c_void, buffer:
 #[no_mangle]
 pub extern "C" fn vkCmdDrawIndexedIndirectCount(
     command_buffer: *mut c_void,
-    _buffer: u64,
-    _offset: u64,
-    _count_buffer: u64,
-    _count_buffer_offset: u64,
-    _max_draw_count: u32,
-    _stride: u32,
+    buffer: u64,
+    offset: u64,
+    count_buffer: u64,
+    count_buffer_offset: u64,
+    max_draw_count: u32,
+    stride: u32,
 ) {
-    let _ = unsafe { cmdbuf_handle(command_buffer) };
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    dev(|d| {
+        let _ = record::cmd_draw_indexed_indirect_count(
+            d,
+            cb,
+            buffer,
+            offset,
+            count_buffer,
+            count_buffer_offset,
+            max_draw_count,
+            stride,
+        );
+    });
 }
 #[no_mangle]
 pub extern "C" fn vkCmdDrawIndexedIndirectCountKHR(command_buffer: *mut c_void, buffer: u64, offset: u64, count_buffer: u64, count_buffer_offset: u64, max_draw_count: u32, stride: u32) {

@@ -1045,6 +1045,48 @@ fn copy_image_lowers_to_copy_texture_to_texture() {
 }
 
 #[test]
+fn resolve_image_lowers_to_copy_texture_to_texture() {
+    // hl images are single-sample, so a multisample resolve is exactly a same-extent image COPY: it must
+    // MOVE the source content into the resolve target (the old body recorded nothing → a blank target).
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src =
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC)
+            .unwrap();
+    let dst =
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+            .unwrap();
+    let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_resolve_image(d, cb, src, dst, (0, 0), (0, 0), (8, 8)).unwrap();
+    });
+    // A resolve lowers to the byte-identical op a same-region vkCmdCopyImage would emit (resolve == copy).
+    let copy = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_image(d, cb, src, dst, (0, 0), (0, 0), (8, 8)).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![Enc::CopyTextureToTexture {
+            src: s,
+            src_sub: TextureSubresource::base(),
+            src_origin: Origin3d { x: 0, y: 0, z: 0 },
+            dst: t,
+            dst_sub: TextureSubresource::base(),
+            dst_origin: Origin3d { x: 0, y: 0, z: 0 },
+            extent: Extent3d { width: 8, height: 8, depth: 1 },
+        }]
+    );
+    assert_eq!(enc, copy, "a single-sample resolve must lower to its copy twin");
+    // Truthful failure paths are inherited from cmd_copy_image: a missing-usage / format-mismatch target.
+    let bad =
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST)
+            .unwrap();
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb, false).unwrap();
+    assert!(record::cmd_resolve_image(&mut d, cb, src, bad, (0, 0), (0, 0), (8, 8)).is_err());
+}
+
+#[test]
 fn blit_image_lowers_to_blit_texture_with_filter() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
@@ -1295,6 +1337,74 @@ fn indirect_draws_read_args_and_lower_to_direct_draws() {
     assert!(record::cmd_draw_indirect(&mut d, cb, vbuf, 0, 1, 16).is_err());
     // 5 draws * 16 bytes = 80 > 64: out of bounds.
     assert!(record::cmd_draw_indirect(&mut d, cb, indirect, 0, 5, 16).is_err());
+}
+
+#[test]
+fn indirect_count_draws_read_count_from_buffer_and_clamp_to_max() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    // Argument buffer: three 16-byte VkDrawIndirectCommands, CPU-filled (the mapped indirect-args pattern).
+    let indirect =
+        create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
+    let amem = create::allocate_memory(&mut d, 64).unwrap();
+    create::bind_buffer_memory(&mut d, indirect, amem, 0).unwrap();
+    let mut args = Vec::new();
+    for w in [6u32, 2, 3, 1, 3, 1, 0, 0, 9, 4, 2, 5] {
+        args.extend_from_slice(&w.to_le_bytes());
+    }
+    create::write_mapped(&mut d, amem, 0, &args).unwrap();
+    // A separate host-visible count buffer holding the GPU/CPU-produced draw count `2`.
+    let count = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 16).unwrap();
+    let cmem = create::allocate_memory(&mut d, 16).unwrap();
+    create::bind_buffer_memory(&mut d, count, cmem, 0).unwrap();
+    create::write_mapped(&mut d, cmem, 0, &2u32.to_le_bytes()).unwrap();
+
+    // maxDrawCount = 3, count buffer says 2 → draws exactly the first two argument structs.
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_draw_indirect_count(d, cb, indirect, 0, count, 0, 3, 16).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![
+            Enc::Draw { vertex_count: 6, instance_count: 2, first_vertex: 3, first_instance: 1 },
+            Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+        ],
+        "an indirect-count draw reads the count from the buffer and lowers each arg to a direct Draw"
+    );
+
+    // maxDrawCount = 1 clamps the buffer's count of 2 down to 1 (spec: actual = min(count, maxDrawCount)).
+    let clamped = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_draw_indirect_count(d, cb, indirect, 0, count, 0, 1, 16).unwrap();
+    });
+    assert_eq!(
+        clamped,
+        vec![Enc::Draw { vertex_count: 6, instance_count: 2, first_vertex: 3, first_instance: 1 }],
+        "maxDrawCount must clamp the buffer-sourced count"
+    );
+
+    // vkCmdDrawIndexedIndirectCount reads a 20-byte struct per draw; maxDrawCount 1 clamps to one DrawIndexed.
+    let idx = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
+    let imem = create::allocate_memory(&mut d, 64).unwrap();
+    create::bind_buffer_memory(&mut d, idx, imem, 0).unwrap();
+    let mut ib = Vec::new();
+    for w in [9u32, 3, 2, 0, 5] {
+        ib.extend_from_slice(&w.to_le_bytes());
+    }
+    create::write_mapped(&mut d, imem, 0, &ib).unwrap();
+    let enc_idx = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_draw_indexed_indirect_count(d, cb, idx, 0, count, 0, 1, 20).unwrap();
+    });
+    assert_eq!(
+        enc_idx,
+        vec![Enc::DrawIndexed { index_count: 9, instance_count: 3, first_index: 2, base_vertex: 0, first_instance: 5 }]
+    );
+
+    // Truthful failure: a count buffer without INDIRECT usage, and an unknown count buffer, both error.
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb, false).unwrap();
+    let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 16).unwrap();
+    assert!(record::cmd_draw_indirect_count(&mut d, cb, indirect, 0, vbuf, 0, 3, 16).is_err());
+    assert!(record::cmd_draw_indirect_count(&mut d, cb, indirect, 0, 0xdead, 0, 3, 16).is_err());
 }
 
 #[test]

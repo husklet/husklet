@@ -815,6 +815,66 @@ pub fn cmd_draw_indexed_indirect(
     Ok(())
 }
 
+/// Read the draw count for an indirect-COUNT draw out of `count_buffer` at `count_offset` (a `u32` in the
+/// buffer's host-visible backing) and clamp it to `max_draw_count` — the spec rule
+/// `actual = min(countBuffer.value, maxDrawCount)`. Like the argument buffer, the count buffer is
+/// host-visible unified memory the shim already holds; an unbacked/unwritten count buffer reads as `0`
+/// (zero draws — a valid no-op). The count buffer must exist and carry INDIRECT usage (truthful error).
+fn read_indirect_count(
+    dev: &Device,
+    count_buffer: VkBuffer,
+    count_offset: u64,
+    max_draw_count: u32,
+) -> Result<u32> {
+    let b = dev
+        .buffers
+        .get(&count_buffer)
+        .ok_or(GpuError::Invalid("vkCmdDraw*IndirectCount: unknown count VkBuffer"))?;
+    if b.usage & buffer_usage::INDIRECT == 0 {
+        return Err(GpuError::Invalid("vkCmdDraw*IndirectCount: count buffer missing INDIRECT usage"));
+    }
+    let bytes = read_buffer_bytes(dev, count_buffer, count_offset, 4);
+    Ok(le_u32(&bytes, 0).min(max_draw_count))
+}
+
+/// `vkCmdDrawIndirectCount` (+ KHR/AMD aliases) — read the actual draw count from `count_buffer` (clamped
+/// to `max_draw_count`, spec §20.4), then lower exactly like [`cmd_draw_indirect`] does for that many
+/// `VkDrawIndirectCommand` structs: each argument struct is read out of the host-visible argument buffer
+/// and lowered to the SAME direct `Enc::Draw`. Previously a recorded no-op (blank output); the count is
+/// snapshotted at RECORD time out of the mapped count buffer (the common case), same honest limit as the
+/// non-count indirect path. Truthful error on a bad count/argument buffer.
+pub fn cmd_draw_indirect_count(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    count_buffer: VkBuffer,
+    count_offset: u64,
+    max_draw_count: u32,
+    stride: u32,
+) -> Result<()> {
+    let count = read_indirect_count(dev, count_buffer, count_offset, max_draw_count)?;
+    cmd_draw_indirect(dev, cb, buffer, offset, count, stride)
+}
+
+/// `vkCmdDrawIndexedIndirectCount` (+ KHR/AMD aliases) — the indexed twin of [`cmd_draw_indirect_count`]:
+/// read the actual draw count from `count_buffer` (clamped to `max_draw_count`) and lower that many
+/// `VkDrawIndexedIndirectCommand` structs like [`cmd_draw_indexed_indirect`]. Truthful error on a bad
+/// count/argument buffer.
+pub fn cmd_draw_indexed_indirect_count(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    count_buffer: VkBuffer,
+    count_offset: u64,
+    max_draw_count: u32,
+    stride: u32,
+) -> Result<()> {
+    let count = read_indirect_count(dev, count_buffer, count_offset, max_draw_count)?;
+    cmd_draw_indexed_indirect(dev, cb, buffer, offset, count, stride)
+}
+
 /// `vkCmdDispatchIndirect` — validate the indirect buffer (`VkDispatchIndirectCommand` is 12 bytes), read
 /// its `{x, y, z}` workgroup counts out of the host-visible backing, and lower to the SAME
 /// `BeginComputePass → SetPipeline → SetBindGroup* → Dispatch{x,y,z} → EndComputePass` sequence the
@@ -1126,6 +1186,27 @@ pub fn cmd_blit_image(
         filter: if linear { Filter::Linear } else { Filter::Nearest },
     });
     Ok(())
+}
+
+/// `vkCmdResolveImage` (one region, base subresource) — a multisample-resolve. hl materializes every image
+/// as single-sample (a requested MSAA `VkImage` is created at `sample_count: 1` — see
+/// `create::create_image`), so a resolve whose source is single-sample is exactly a same-extent,
+/// same-format image COPY: it MOVES the rendered content into the resolve target. Recording nothing (the
+/// former no-op) left the resolve target blank — an app that renders to a color attachment and resolves
+/// into its swapchain/present image would present an empty frame. Lower it to the SAME
+/// `CopyTextureToTexture` a `vkCmdCopyImage` of the region emits (formats must match, both usages present,
+/// region in-bounds — all enforced by [`cmd_copy_image`]). Truthful error on a bad handle / mismatch / OOB.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_resolve_image(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    src: VkImage,
+    dst: VkImage,
+    src_origin: (u32, u32),
+    dst_origin: (u32, u32),
+    extent: (u32, u32),
+) -> Result<()> {
+    cmd_copy_image(dev, cb, src, dst, src_origin, dst_origin, extent)
 }
 
 // ---- clears ------------------------------------------------------------------------------------
