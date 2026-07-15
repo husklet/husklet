@@ -444,7 +444,13 @@ pub extern "C" fn vkCmdClearAttachments(
     dev(|d| {
         for att in attachments {
             if att.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0 {
-                continue; // depth/stencil clears are not materialized in this bring-up model
+                // A DEPTH/STENCIL clear-attachment clears a sub-rect of the depth attachment MID-pass. The
+                // only depth-clear IR primitive is `BeginRenderPass`'s depth `LoadOp::Clear` (whole
+                // attachment, at pass start) — there is no mid-pass depth-clear-RECT op, and adding one is a
+                // protocol change. So a depth/stencil aspect is skipped (a truthful `void` no-op, never a
+                // faked success). A whole-image depth clear OUTSIDE a pass IS lowered — see
+                // `vkCmdClearDepthStencilImage`.
+                continue;
             }
             let color = att.clear_value.float32;
             for r in rects {

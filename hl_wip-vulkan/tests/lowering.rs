@@ -1132,6 +1132,74 @@ fn clear_color_image_lowers_to_full_extent_clear_rect() {
 }
 
 #[test]
+fn clear_depth_stencil_image_lowers_to_depth_clear_render_pass() {
+    use hl_gpu::protocol::model::descriptor::DepthAttachment;
+    use hl_gpu::protocol::model::enums::LoadOp;
+
+    // A depth-only image (D32) created as a DEPTH_STENCIL attachment + transfer-clear target.
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let usage = vk_image_usage::DEPTH_STENCIL_ATTACHMENT | vk_image_usage::TRANSFER_DST;
+    let img = create::create_image(&mut d, &mut sink, 16, 16, vk_format::D32_SFLOAT, usage).unwrap();
+    let ir = img_ir(&d, img);
+    // Depth-only aspect (has_stencil = false): a zero-draw BeginRenderPass(depth CLEAR) / EndRenderPass.
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_clear_depth_stencil_image(d, cb, img, 0.5, 7, false).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![
+            Enc::BeginRenderPass {
+                color: vec![],
+                depth: Some(DepthAttachment { texture: ir, load: LoadOp::Clear, clear_depth: 0.5, clear_stencil: 0 }),
+            },
+            Enc::EndRenderPass,
+        ],
+        "depth-only clear lowers to a depth-clear pass, stencil forced to 0"
+    );
+
+    // A combined depth+stencil image with the stencil aspect selected carries the stencil clear value.
+    let ds = create::create_image(&mut d, &mut sink, 8, 8, vk_format::D24_UNORM_S8_UINT, usage).unwrap();
+    let ds_ir = img_ir(&d, ds);
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_clear_depth_stencil_image(d, cb, ds, 1.0, 0x2a, true).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![
+            Enc::BeginRenderPass {
+                color: vec![],
+                depth: Some(DepthAttachment {
+                    texture: ds_ir,
+                    load: LoadOp::Clear,
+                    clear_depth: 1.0,
+                    clear_stencil: 0x2a,
+                }),
+            },
+            Enc::EndRenderPass,
+        ],
+        "combined depth+stencil clear carries the stencil value"
+    );
+
+    // Truthful errors: a color image is not a depth format; missing TRANSFER_DST usage is rejected.
+    let color = create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, usage).unwrap();
+    let no_dst = create::create_image(
+        &mut d,
+        &mut sink,
+        8,
+        8,
+        vk_format::D32_SFLOAT,
+        vk_image_usage::DEPTH_STENCIL_ATTACHMENT,
+    )
+    .unwrap();
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb, false).unwrap();
+    assert!(record::cmd_clear_depth_stencil_image(&mut d, cb, color, 0.0, 0, false).is_err());
+    assert!(record::cmd_clear_depth_stencil_image(&mut d, cb, no_dst, 0.0, 0, false).is_err());
+    assert!(record::cmd_clear_depth_stencil_image(&mut d, cb, 0xdead, 0.0, 0, false).is_err());
+}
+
+#[test]
 fn clear_attachments_lowers_to_clear_rect_on_active_target() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();

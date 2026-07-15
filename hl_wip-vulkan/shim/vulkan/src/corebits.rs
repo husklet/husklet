@@ -11,8 +11,9 @@
 //!   rendered content into the resolve target — see [`record::cmd_resolve_image`]);
 //! * `vkCmdDraw*IndirectCount*` read the actual draw count from the host-visible count buffer and lower
 //!   to direct draws (see [`record::cmd_draw_indirect_count`]);
-//! * `vkCmdClearDepthStencilImage` validates the command buffer and records NO encoder op — a documented
-//!   limit of the single-sample COLOR model (no depth/stencil aspect), never a faked result (it is `void`).
+//! * `vkCmdClearDepthStencilImage` lowers to a zero-draw depth-clear render pass — the executor clears a
+//!   depth attachment on a CLEAR loadOp, so a standalone depth clear reuses that (see
+//!   [`record::cmd_clear_depth_stencil_image`]).
 
 #![allow(clippy::missing_safety_doc, unused_variables, clippy::too_many_arguments)]
 
@@ -24,8 +25,12 @@ use hl_gpu::CommandSink;
 
 use crate::state::with;
 use crate::types::{
-    Dispatchable, VkCopyImageInfo2, VkExtent2D, VkImageCopy, VkMappedMemoryRange, VkResult, VK_SUCCESS,
+    Dispatchable, VkClearDepthStencilValue, VkCopyImageInfo2, VkExtent2D, VkImageCopy,
+    VkImageSubresourceRange, VkMappedMemoryRange, VkResult, VK_SUCCESS,
 };
+
+/// `VkImageAspectFlagBits::VK_IMAGE_ASPECT_STENCIL_BIT` (stable value from vk.xml).
+const VK_IMAGE_ASPECT_STENCIL_BIT: u32 = 0x0000_0004;
 
 unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
@@ -291,20 +296,36 @@ pub extern "C" fn vkGetPhysicalDeviceMultisamplePropertiesEXT(
     }
 }
 
-// ---- command-buffer ops the single-sample color model does not lower (validated no-ops) ---------
+// ---- command-buffer clears / resolves lowered to real IR ---------------------------------------
 
-/// `vkCmdClearDepthStencilImage` — the color model has no depth/stencil aspect; validate the command
-/// buffer and record nothing (a documented limit — `void`, so no result is faked).
+/// `vkCmdClearDepthStencilImage` — clear a depth/stencil `image` OUTSIDE a render pass. Lowers to a
+/// zero-draw depth-clear render pass (`Enc::BeginRenderPass` with the image as the depth attachment,
+/// `LoadOp::Clear`, then `EndRenderPass`) — the executor's real depth clear (see
+/// [`record::cmd_clear_depth_stencil_image`]). Reads the `VkClearDepthStencilValue`'s depth+stencil and
+/// each `VkImageSubresourceRange`'s `aspectMask` to decide whether the stencil plane is cleared. Previously
+/// a recorded no-op (the depth image was left untouched). `void`, so no result is faked.
 #[no_mangle]
 pub extern "C" fn vkCmdClearDepthStencilImage(
     command_buffer: *mut c_void,
-    _image: u64,
+    image: u64,
     _image_layout: i32,
-    _p_depth_stencil: *const c_void,
-    _range_count: u32,
-    _p_ranges: *const c_void,
+    p_depth_stencil: *const c_void,
+    range_count: u32,
+    p_ranges: *const c_void,
 ) {
-    let _ = unsafe { cmdbuf_handle(command_buffer) };
+    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(ds) = (unsafe { (p_depth_stencil as *const VkClearDepthStencilValue).as_ref() }) else { return };
+    // Whether ANY passed subresource range selects the stencil aspect (a depth-only aspect must not write
+    // the stencil plane). No ranges ⇒ nothing to clear.
+    let clears_stencil = if p_ranges.is_null() || range_count == 0 {
+        return;
+    } else {
+        let ranges = unsafe { std::slice::from_raw_parts(p_ranges as *const VkImageSubresourceRange, range_count as usize) };
+        ranges.iter().any(|r| r.aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT != 0)
+    };
+    dev(|d| {
+        let _ = record::cmd_clear_depth_stencil_image(d, cb, image, ds.depth, ds.stencil, clears_stencil);
+    });
 }
 
 /// `vkCmdResolveImage` — a multisample resolve. hl images are single-sample, so a resolve is exactly a

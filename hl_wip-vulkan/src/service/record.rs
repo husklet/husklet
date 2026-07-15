@@ -16,7 +16,7 @@ use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, ColorAttachment, DepthAttachment, Extent3d, Origin3d,
     TextureSubresource,
 };
-use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, Filter, IndexFormat, LoadOp};
+use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, Filter, IndexFormat, LoadOp, TextureFormat};
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
 use hl_log::tag;
 use std::collections::HashMap;
@@ -1231,6 +1231,54 @@ pub fn cmd_clear_color_image(
     }
     let rec = recording_mut(dev, cb)?;
     rec.enc.push(Enc::ClearRect { texture: ir, x: 0, y: 0, w, h, color });
+    Ok(())
+}
+
+/// `vkCmdClearDepthStencilImage` — clear a depth/stencil image OUTSIDE a render pass. hl has no standalone
+/// depth-clear IR op, but the executor DOES clear a depth attachment when a render pass's depth `LoadOp` is
+/// `Clear` (`Enc::BeginRenderPass`'s [`DepthAttachment`], landed in the depth-attachment work). So this
+/// lowers to a zero-draw depth-clear pass: begin a render pass with NO color target and the image as the
+/// depth attachment (`LoadOp::Clear`, `clear_depth`/`clear_stencil` = the `VkClearDepthStencilValue` the
+/// app passed), then immediately end it — exactly the depth clear a `vkCmdBeginRendering`/`BeginRenderPass`
+/// with a CLEAR depth loadOp performs, but standalone (the two-pass "clear then Load-and-test" pattern the
+/// executor already supports). Recording nothing (the former no-op) left the depth image untouched, so an
+/// app that cleared depth outside a pass then depth-tested against it saw stale/garbage depth.
+///
+/// `has_stencil` says the caller's aspect + the image format both carry a stencil plane; when false the
+/// stencil clear value is forced to `0` (a depth-only `Depth32Float` attachment has no stencil plane, and a
+/// depth-only aspect must not fabricate a stencil write). The image must be a depth/stencil format with
+/// `COPY_DST` (the `VK_IMAGE_USAGE_TRANSFER_DST_BIT` the spec requires of a clear target). Truthful error on
+/// a bad handle / non-depth format / missing usage.
+pub fn cmd_clear_depth_stencil_image(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    image: VkImage,
+    clear_depth: f32,
+    clear_stencil: u32,
+    has_stencil: bool,
+) -> Result<()> {
+    let (ir, format, usage) = {
+        let i = dev
+            .images
+            .get(&image)
+            .ok_or(GpuError::Invalid("vkCmdClearDepthStencilImage: unknown VkImage"))?;
+        (i.ir_id, i.format, i.usage)
+    };
+    let format_has_stencil = match format {
+        TextureFormat::Depth32Float => false,
+        TextureFormat::Depth24PlusStencil8 => true,
+        _ => return Err(GpuError::Invalid("vkCmdClearDepthStencilImage: image is not a depth/stencil format")),
+    };
+    if usage & texture_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid("vkCmdClearDepthStencilImage: image missing COPY_DST (TRANSFER_DST) usage"));
+    }
+    let clear_stencil = if has_stencil && format_has_stencil { clear_stencil } else { 0 };
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::BeginRenderPass {
+        color: Vec::new(),
+        depth: Some(DepthAttachment { texture: ir, load: LoadOp::Clear, clear_depth, clear_stencil }),
+    });
+    rec.enc.push(Enc::EndRenderPass);
     Ok(())
 }
 

@@ -1131,6 +1131,14 @@ pub struct VkClearColorValue {
     pub float32: [f32; 4],
 }
 
+/// `VkClearDepthStencilValue` — the depth (`f32`) + stencil (`u32`) a `vkCmdClearDepthStencilImage` clears to.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkClearDepthStencilValue {
+    pub depth: f32,
+    pub stencil: u32,
+}
+
 #[repr(C)]
 pub struct VkClearAttachment {
     pub aspect_mask: VkFlags,

@@ -41,6 +41,139 @@ fn vertex(x: f32, y: f32, c: [f32; 4]) -> Vec<u8> {
     [x, y, c[0], c[1], c[2], c[3]].iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
+/// Pack `[x, y, z, r, g, b, a]` (7 f32 = 28-byte stride) little-endian — a vertex carrying an explicit
+/// depth `z` (the CPU rasterizer reads z at offset 8 when the stride is ≥ 28; see `raster::read_vertex`).
+fn depth_vertex(x: f32, y: f32, z: f32, c: [f32; 4]) -> Vec<u8> {
+    [x, y, z, c[0], c[1], c[2], c[3]].iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// `vkCmdClearDepthStencilImage` clears depth OUTSIDE a render pass, end-to-end through the reference
+/// `CpuExecutor`. Proof it took effect: clear the depth image to `D`, then run a depth-tested (compare
+/// LESS, depth-write) render pass — with a `LoadOp::Load` depth attachment that PRESERVES the standalone
+/// clear — that draws a full-screen quad at z = 0.6 over a blue clear. The depth test is `0.6 < D`:
+///   * D = 0.5 ⇒ 0.6 < 0.5 is FALSE ⇒ the quad is occluded by the cleared depth ⇒ the pixel stays BLUE.
+///   * D = 1.0 ⇒ 0.6 < 1.0 is TRUE  ⇒ the quad passes ⇒ the pixel is RED.
+/// The two runs differ ONLY in the depth value the standalone clear wrote, so the color flip proves the
+/// clear reached the depth buffer (the former no-op left it untouched — the quad would always draw).
+#[test]
+fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
+    use hl_gpu::protocol::model::descriptor::DepthState;
+    use hl_gpu::protocol::model::enums::compare;
+
+    const W: u32 = 8;
+    const H: u32 = 8;
+    let clear = [0.0f32, 0.0, 1.0, 1.0]; // opaque blue background
+    let quad_color = [1.0f32, 0.0, 0.0, 1.0]; // opaque red quad, drawn at z = 0.6
+
+    // Render the frame with the depth image standalone-cleared to `clear_depth`; return the center pixel.
+    let render_with_clear_depth = |clear_depth: f32| -> [u8; 4] {
+        // `Capabilities::full` advertises only color formats; add the depth format so the depth image
+        // (and its depth-clear pass) validate against the runtime.
+        let mut caps = Capabilities::full("hl-cpu-depthclear");
+        caps.texture_formats |= hl_gpu::protocol::model::capability::format_bits(
+            hl_gpu::protocol::model::capability::DEPTH_FORMATS,
+        );
+        let exec = CpuExecutor::new();
+        let session = Session::new(
+            Limits::from_capabilities(caps),
+            GlobalLedger::unbounded(),
+            Box::new(FakeClock::new(0)),
+        );
+        let mut sink = InProcessCommandSink::with_session(session, exec);
+
+        let inst = create::create_instance(HL_API_VERSION);
+        let mut d = create::create_device(&inst);
+
+        // Color render target (RGBA8) + a D32 depth image that is BOTH a depth attachment and a
+        // transfer-clear target (DEPTH_STENCIL_ATTACHMENT ⇒ RENDER_TARGET, TRANSFER_DST ⇒ COPY_DST).
+        let target = create::create_image(&mut d, &mut sink, W, H, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT).unwrap();
+        let target_ir = d.images.get(&target).unwrap().ir_id;
+        let depth = create::create_image(
+            &mut d,
+            &mut sink,
+            W,
+            H,
+            vk_format::D32_SFLOAT,
+            vk_image_usage::DEPTH_STENCIL_ATTACHMENT | vk_image_usage::TRANSFER_DST,
+        )
+        .unwrap();
+
+        let vs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("vsmain")).unwrap();
+        let fs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("fsmain")).unwrap();
+
+        // Vertex layout: pos(vec2)@0, z@8, color(vec4)@12, stride 28 — the ≥28 stride the rasterizer reads z from.
+        let layout = VertexLayout {
+            stride: 28,
+            step_mode: 0,
+            attrs: vec![
+                VertexAttr { location: 0, format: 0, offset: 0 },
+                VertexAttr { location: 1, format: 0, offset: 12 },
+            ],
+        };
+        // Depth-tested pipeline: compare LESS, depth-write on, over a Depth32Float attachment.
+        let depth_state = DepthState::depth_only(TextureFormat::Depth32Float, true, compare::LESS);
+        let pipe = create::create_graphics_pipeline(
+            &mut d,
+            &mut sink,
+            (vs, "vsmain"),
+            Some((fs, "fsmain")),
+            vec![layout],
+            vec![TextureFormat::Rgba8Unorm],
+            Some(depth_state),
+            None,
+        )
+        .unwrap();
+
+        // A full-screen quad (two triangles) at z = 0.6, red.
+        let z = 0.6;
+        let mut verts = Vec::new();
+        for v in [
+            (-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), // tri 1
+            (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), // tri 2
+        ] {
+            verts.extend(depth_vertex(v.0, v.1, z, quad_color));
+        }
+        let vsize = verts.len() as u64;
+        let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, vsize).unwrap();
+        let mem = create::allocate_memory(&mut d, vsize).unwrap();
+        create::bind_buffer_memory(&mut d, vbuf, mem, 0).unwrap();
+        create::map_memory(&mut d, mem).unwrap();
+        create::write_mapped(&mut d, mem, 0, &verts).unwrap();
+
+        // Record: standalone depth clear → render pass (color CLEAR, depth LOAD to preserve it) → draw 6 → end.
+        let cb = record::allocate_command_buffer(&mut d);
+        record::begin(&mut d, cb, false).unwrap();
+        record::cmd_clear_depth_stencil_image(&mut d, cb, depth, clear_depth, 0, false).unwrap();
+        record::cmd_begin_render_pass(
+            &mut d,
+            cb,
+            target,
+            clear,
+            true,
+            Some(record::RenderingDepthAttachment { image: depth, clear_depth: 0.0, load_clear: false }),
+        )
+        .unwrap();
+        record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
+        record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
+        record::cmd_draw(&mut d, cb, 6, 1, 0, 0).unwrap();
+        record::cmd_end_render_pass(&mut d, cb).unwrap();
+        record::end(&mut d, cb).unwrap();
+        submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+        let mut pixels = vec![0u8; (W * H * 4) as usize];
+        sink.executor()
+            .read_texture(sink.resources(), TextureId(target_ir), &mut pixels)
+            .expect("read back the color target");
+        let o = ((H / 2 * W + W / 2) * 4) as usize;
+        [pixels[o], pixels[o + 1], pixels[o + 2], pixels[o + 3]]
+    };
+
+    // Cleared to 0.5: the z=0.6 quad fails `0.6 < 0.5` ⇒ occluded ⇒ blue clear survives.
+    assert_eq!(render_with_clear_depth(0.5), [0, 0, 255, 255], "depth cleared to 0.5 occludes the z=0.6 quad");
+    // Cleared to 1.0: the z=0.6 quad passes `0.6 < 1.0` ⇒ red quad drawn. Proves the clear VALUE is honored.
+    assert_eq!(render_with_clear_depth(1.0), [255, 0, 0, 255], "depth cleared to 1.0 lets the z=0.6 quad through");
+}
+
 #[test]
 fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_coverage() {
     const W: u32 = 8;
