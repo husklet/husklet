@@ -70,8 +70,8 @@ use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_to
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgToplevelState;
 
 use crate::scene::model::{
-    Anchor, BufferState, ConstraintAdjustment, Format, Gravity, Output, OutputId, PopupState,
-    Positioner, Rect, SubsurfaceState, SurfaceId, SurfaceRole, Viewport,
+    Anchor, BufferState, BufferTransform, ConstraintAdjustment, Format, Gravity, Output, OutputId,
+    PopupState, Positioner, Rect, SubsurfaceState, SurfaceId, SurfaceRole, Viewport,
 };
 use crate::scene::port::Clock;
 use crate::scene::service::{constrain_popup, surface_at, BufferChange, Commit};
@@ -224,7 +224,13 @@ impl HlState {
         let mut seat_state = SeatState::new();
 
         let mut engine = Compositor::new(presenter, MonotonicClock::new());
-        engine.scene.add_output(Output::new(OutputId(1), "HL-0", 1920, 1080, 60_000));
+        // The advertised output transform (`wl_output.transform`). Normally `Normal`; a host/test can
+        // configure a rotated/flipped output via `$HL_OUTPUT_TRANSFORM` (90/180/270/flipped/…), which
+        // rotates the logical geometry `wl_output` + xdg-output report and the scene sizes toplevels to.
+        let output_transform = env_output_transform();
+        engine
+            .scene
+            .add_output(Output::new(OutputId(1), "HL-0", 1920, 1080, 60_000).with_transform(output_transform));
 
         // Advertise a `wl_output` (+ xdg-output) driven from the scene's primary output, so toolkits that
         // enumerate outputs for HiDPI geometry / mode / scale / window sizing get a consistent answer.
@@ -414,7 +420,7 @@ impl HlState {
 
         // Snapshot the committed state Smithay applied, taking ownership of the buffer assignment and
         // draining this commit's damage + frame callbacks (the compositor is expected to consume both).
-        let (assignment, damage, scale, frame_callbacks, viewport) = with_states(surface, |states| {
+        let (assignment, damage, scale, transform, frame_callbacks, viewport) = with_states(surface, |states| {
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
             let cur = attrs.current();
             let assignment = cur.buffer.take();
@@ -426,6 +432,9 @@ impl HlState {
                 })
                 .collect();
             let scale = cur.buffer_scale.max(1);
+            // `wl_surface.set_buffer_transform` (double-buffered) — the rotation/flip the presenter applies
+            // to the buffer so it displays upright. Always re-read so a reverted transform reverts too.
+            let transform = map_buffer_transform(cur.buffer_transform);
             let callbacks = std::mem::take(&mut cur.frame_callbacks);
             drop(attrs);
             // The just-applied `wp_viewport` state (src crop in logical coords, dst logical size), mirrored
@@ -437,7 +446,7 @@ impl HlState {
                 src: cur_vp.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h)),
                 dst: cur_vp.dst.map(|s| (s.w, s.h)),
             };
-            (assignment, damage, scale, callbacks, viewport)
+            (assignment, damage, scale, transform, callbacks, viewport)
         });
 
         // Build the neutral commit from the buffer assignment, depositing pixels for the presenter.
@@ -469,9 +478,10 @@ impl HlState {
             }
             None => Commit { buffer: BufferChange::Keep, damage, ..Commit::default() },
         };
-        // Apply the just-read `wp_viewport` state on every commit (double-buffered): the scene resolves the
-        // logical size from it and the presenter samples the cropped+scaled region.
-        let commit = Commit { viewport: Some(viewport), ..commit };
+        // Apply the just-read `wp_viewport` state and `wl_surface.set_buffer_transform` on every commit
+        // (both double-buffered): the scene resolves the logical size from them and the presenter samples
+        // the cropped+scaled or rotated/flipped region.
+        let commit = Commit { viewport: Some(viewport), buffer_transform: Some(transform), ..commit };
 
         // Hold this commit's `wl_surface.frame` callbacks until the frame they belong to actually reaches
         // the presenter. Firing them here — before the present decision — would tell the client "your
@@ -1186,9 +1196,16 @@ smithay::delegate_fractional_scale!(HlState);
 /// has none registered (it always does, but keep this total).
 fn build_wl_output(dh: &DisplayHandle, scene: Option<&Output>) -> (WlOutputHandle, GlobalId) {
     // Values sourced from the scene so `wl_output` reports exactly what the scene composites onto.
-    let (name, mode_w, mode_h, refresh_mhz, scale) = match scene {
-        Some(o) => (o.name.clone(), o.mode_w, o.mode_h, o.refresh_mhz, o.scale.max(1)),
-        None => ("HL-0".to_string(), 1920, 1080, 60_000, 1),
+    let (name, mode_w, mode_h, refresh_mhz, scale, transform) = match scene {
+        Some(o) => (
+            o.name.clone(),
+            o.mode_w,
+            o.mode_h,
+            o.refresh_mhz,
+            o.scale.max(1),
+            buffer_transform_to_wl(o.transform),
+        ),
+        None => ("HL-0".to_string(), 1920, 1080, 60_000, 1, Transform::Normal),
     };
 
     // Physical size in mm assuming ~96 dpi (25.4 mm/inch) — a plausible value for toolkits that derive DPI
@@ -1211,7 +1228,7 @@ fn build_wl_output(dh: &DisplayHandle, scene: Option<&Output>) -> (WlOutputHandl
     let mode = OutputMode { size: (mode_w, mode_h).into(), refresh: refresh_mhz as i32 };
     output.change_current_state(
         Some(mode),
-        Some(Transform::Normal),
+        Some(transform),
         Some(Scale::Integer(scale)),
         Some((0, 0).into()),
     );
@@ -1288,6 +1305,64 @@ fn map_constraint(c: WireConstraint) -> ConstraintAdjustment {
 /// Lift a neutral [`Rect`] into the Smithay `Rectangle<i32, Logical>` the popup configure carries.
 fn rect_to_smithay(r: Rect) -> Rectangle<i32, smithay::utils::Logical> {
     Rectangle::new((r.x, r.y).into(), (r.w, r.h).into())
+}
+
+/// Map Smithay's `wl_output::Transform` (the wire enum `wl_surface.set_buffer_transform` speaks) onto the
+/// neutral [`BufferTransform`]. A straight enum translation; the rotation/flip math itself lives in the
+/// neutral `BufferTransform` (dimension swap) and the presenter (pixel remap), not here.
+fn map_buffer_transform(t: smithay::reexports::wayland_server::protocol::wl_output::Transform) -> BufferTransform {
+    use smithay::reexports::wayland_server::protocol::wl_output::Transform as WlT;
+    match t {
+        WlT::Normal => BufferTransform::Normal,
+        WlT::_90 => BufferTransform::_90,
+        WlT::_180 => BufferTransform::_180,
+        WlT::_270 => BufferTransform::_270,
+        WlT::Flipped => BufferTransform::Flipped,
+        WlT::Flipped90 => BufferTransform::Flipped90,
+        WlT::Flipped180 => BufferTransform::Flipped180,
+        WlT::Flipped270 => BufferTransform::Flipped270,
+        _ => BufferTransform::Normal,
+    }
+}
+
+/// The advertised output transform, from `$HL_OUTPUT_TRANSFORM` (default `Normal`). Accepts the
+/// `wl_output.transform` names: `normal`, `90`, `180`, `270`, `flipped`, `flipped-90`, `flipped-180`,
+/// `flipped-270` (also `flipped90` etc.). An unknown value falls back to `Normal`. This is the seam the
+/// `output_transform_geometry` demo uses to stand the compositor up on a rotated output.
+fn env_output_transform() -> BufferTransform {
+    let raw = match std::env::var("HL_OUTPUT_TRANSFORM") {
+        Ok(v) => v,
+        Err(_) => return BufferTransform::Normal,
+    };
+    match raw.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "" | "normal" | "0" => BufferTransform::Normal,
+        "90" => BufferTransform::_90,
+        "180" => BufferTransform::_180,
+        "270" => BufferTransform::_270,
+        "flipped" | "flipped-0" => BufferTransform::Flipped,
+        "flipped-90" => BufferTransform::Flipped90,
+        "flipped-180" => BufferTransform::Flipped180,
+        "flipped-270" => BufferTransform::Flipped270,
+        other => {
+            eprintln!("hl_wip-compositor: unknown HL_OUTPUT_TRANSFORM {other:?}, using Normal");
+            BufferTransform::Normal
+        }
+    }
+}
+
+/// Map the neutral [`BufferTransform`] onto Smithay's `utils::Transform` (what a `wl_output` advertises).
+/// The inverse of [`map_buffer_transform`], used to drive the output's advertised `wl_output.transform`.
+fn buffer_transform_to_wl(t: BufferTransform) -> Transform {
+    match t {
+        BufferTransform::Normal => Transform::Normal,
+        BufferTransform::_90 => Transform::_90,
+        BufferTransform::_180 => Transform::_180,
+        BufferTransform::_270 => Transform::_270,
+        BufferTransform::Flipped => Transform::Flipped,
+        BufferTransform::Flipped90 => Transform::Flipped90,
+        BufferTransform::Flipped180 => Transform::Flipped180,
+        BufferTransform::Flipped270 => Transform::Flipped270,
+    }
 }
 
 /// Read a `wl_shm` buffer's pixels into tight top-left RGBA8888 plus its neutral [`Format`].

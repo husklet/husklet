@@ -82,7 +82,7 @@ pub fn compose_frame(scene: &Scene, root: SurfaceId) -> Option<Frame> {
 fn present_item(scene: &Scene, sid: SurfaceId, x: i32, y: i32) -> Option<PresentItem> {
     let surface = scene.get(sid)?;
     let buffer = surface.buffer?;
-    let (w, h) = buffer.logical_size(&surface.viewport);
+    let (w, h) = buffer.logical_size(&surface.viewport, surface.transform);
     // If a `wp_viewport` src crop and/or dst scale is set, hand the presenter the source rectangle to
     // sample IN BUFFER PIXELS (logical src × buffer_scale; whole buffer when only a dst scale is set), so
     // it rasterizes exactly the cropped+scaled region into `w`×`h`. Absent a viewport, present verbatim.
@@ -103,6 +103,7 @@ fn present_item(scene: &Scene, sid: SurfaceId, x: i32, y: i32) -> Option<Present
         gpu: buffer.gpu,
         popup: popup_placement(scene, sid),
         present_crop,
+        transform: surface.transform,
     };
     let damage = layer_damage(scene, sid, x, y, w, h);
     Some(PresentItem { image, x, y, damage })

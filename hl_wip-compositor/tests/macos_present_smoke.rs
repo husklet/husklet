@@ -11,7 +11,7 @@
 
 #![cfg(all(feature = "macos-surface", target_os = "macos"))]
 
-use hl_compositor::scene::model::{Format, OutputId, PresentableImage, SurfaceId};
+use hl_compositor::scene::model::{BufferTransform, Format, OutputId, PresentableImage, SurfaceId};
 use hl_compositor::scene::port::{PresentOutcome, PresentTiming, Presenter};
 use hl_compositor::surface::macos::MacPresenter;
 
@@ -32,6 +32,7 @@ fn image(sid: SurfaceId, w: i32, h: i32) -> PresentableImage {
         gpu: false,
         popup: None,
         present_crop: None,
+        transform: BufferTransform::Normal,
     }
 }
 

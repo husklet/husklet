@@ -12,9 +12,9 @@ use std::cell::Cell;
 use std::sync::Mutex;
 
 use hl_compositor::scene::model::{
-    Anchor, BufferState, ConstraintAdjustment, DamageRegion, Format, Gravity, Output, OutputId,
-    PopupState, Positioner, PresentableImage, Rect, Scene, SubsurfaceState, Surface, SurfaceId,
-    SurfaceRole, Viewport, Visibility,
+    Anchor, BufferState, BufferTransform, ConstraintAdjustment, DamageRegion, Format, Gravity, Output,
+    OutputId, PopupState, Positioner, PresentableImage, Rect, Scene, SubsurfaceState, Surface,
+    SurfaceId, SurfaceRole, Viewport, Visibility,
 };
 use hl_compositor::scene::port::{
     Clock, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,
@@ -269,26 +269,26 @@ fn buffer_logical_size_honours_viewport_dst_then_src_then_scale() {
     // dst wins over everything.
     let b = shm(800, 600);
     let vp_dst = Viewport { dst: Some((320, 240)), src: None };
-    assert_eq!(b.logical_size(&vp_dst), (320, 240));
+    assert_eq!(b.logical_size(&vp_dst, BufferTransform::Normal), (320, 240));
 
     // A src crop's size wins when no dst.
     let vp_src = Viewport { dst: None, src: Some((0.0, 0.0, 100.4, 50.6)) };
-    assert_eq!(b.logical_size(&vp_src), (100, 51), "src size rounds to nearest, >=1");
+    assert_eq!(b.logical_size(&vp_src, BufferTransform::Normal), (100, 51), "src size rounds to nearest, >=1");
 
     // Neither: tex / buffer_scale (HiDPI), clamped to >= 1.
     let hidpi = BufferState { buffer_scale: 2, ..shm(800, 600) };
-    assert_eq!(hidpi.logical_size(&Viewport::default()), (400, 300));
+    assert_eq!(hidpi.logical_size(&Viewport::default(), BufferTransform::Normal), (400, 300));
 
     // A degenerate dst (0 or negative) is ignored and falls through to scale.
     let vp_bad_dst = Viewport { dst: Some((0, 240)), src: None };
-    assert_eq!(b.logical_size(&vp_bad_dst), (800, 600), "zero dst dimension ignored");
+    assert_eq!(b.logical_size(&vp_bad_dst, BufferTransform::Normal), (800, 600), "zero dst dimension ignored");
 }
 
 #[test]
 fn buffer_logical_size_never_zero_for_tiny_buffers() {
     // A 1×1 buffer at scale 4 must not collapse to 0×0.
     let b = BufferState { buffer_scale: 4, ..shm(1, 1) };
-    assert_eq!(b.logical_size(&Viewport::default()), (1, 1));
+    assert_eq!(b.logical_size(&Viewport::default(), BufferTransform::Normal), (1, 1));
 }
 
 #[test]

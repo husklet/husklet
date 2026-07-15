@@ -7,7 +7,7 @@
 //! Smithay `with_states` / `RepackCache` / GPU-import specifics are dropped — this is geometry + damage
 //! bookkeeping only.
 
-use crate::scene::model::{BufferState, Rect, Scene, SurfaceId, Viewport};
+use crate::scene::model::{BufferState, BufferTransform, Rect, Scene, SurfaceId, Viewport};
 
 /// What a commit does to the surface's attached buffer. Mirrors Smithay's `BufferAssignment` plus a
 /// "no change this commit" case (a frame-callback-only or region-only commit).
@@ -29,6 +29,9 @@ pub struct Commit {
     pub damage: Vec<Rect>,
     /// `wp_viewport` state to apply, if the commit set it.
     pub viewport: Option<Viewport>,
+    /// `wl_surface.set_buffer_transform` to apply, if the commit set it (double-buffered, re-read every
+    /// commit like `viewport`, so clearing back to `Normal` reverts too).
+    pub buffer_transform: Option<BufferTransform>,
     /// `wl_surface.set_opaque_region`: `Some(region)` replaces it (`None` inside = cleared); the outer
     /// `None` means the commit did not touch the opaque region.
     pub opaque_region: Option<Option<Rect>>,
@@ -46,6 +49,7 @@ impl Default for Commit {
             buffer: BufferChange::Keep,
             damage: Vec::new(),
             viewport: None,
+            buffer_transform: None,
             opaque_region: None,
             input_region: None,
             frame_callback: false,
@@ -84,6 +88,9 @@ pub fn commit_surface(scene: &mut Scene, sid: SurfaceId, commit: Commit) -> bool
     // Non-content state first (never on its own a reason to present).
     if let Some(vp) = commit.viewport {
         surface.viewport = vp;
+    }
+    if let Some(transform) = commit.buffer_transform {
+        surface.transform = transform;
     }
     if let Some(region) = commit.opaque_region {
         surface.opaque_region = region;

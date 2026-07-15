@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use hl_log::{hl_add, tag};
 
-use crate::scene::model::{OutputId, PresentableImage, Rect, SurfaceId, Visibility};
+use crate::scene::model::{BufferTransform, OutputId, PresentableImage, Rect, SurfaceId, Visibility};
 use crate::scene::port::{PresentTiming, PresentationFeedback, Presenter};
 
 /// Client pixels deposited by the adapter, unpacked to tight top-left RGBA8888.
@@ -136,14 +136,23 @@ impl Presenter for PngPresenter {
         // The presented logical size — the destination a `wp_viewport` scales to, or `tex/buffer_scale`,
         // as resolved by the scene into `image.width`/`image.height`.
         let (logical_width, logical_height) = (image.width.max(1), image.height.max(1));
-        // When a `wp_viewport` crop/scale is active, rasterize the sampled region into the logical size —
-        // the pixels a real backend would present. Otherwise capture the raw client buffer verbatim.
+        // Rasterize the pixels a real backend would present:
+        //  * a `wp_viewport` crop/scale samples the source region into the logical size;
+        //  * else a `wl_surface.set_buffer_transform` rotates/flips the buffer into surface space
+        //    (dimensions swapped for 90°/270°, which `logical_width`/`height` already reflect);
+        //  * else the raw client buffer verbatim.
+        // Composing a viewport crop WITH a buffer transform is not yet modeled — the viewport path wins and
+        // ignores the transform (no demo drives both at once; documented on `PresentableImage::transform`).
         let (width, height, rgba) = match image.present_crop {
             Some(src) => (
                 logical_width,
                 logical_height,
                 resample_nearest(buf, src, logical_width, logical_height),
             ),
+            None if image.transform != BufferTransform::Normal => {
+                let (tw, th) = image.transform.surface_size(buf.width, buf.height);
+                (tw, th, transform_buffer(buf, image.transform))
+            }
             None => (buf.width, buf.height, buf.rgba.clone()),
         };
         let frame = CapturedFrame {
@@ -173,6 +182,24 @@ impl Presenter for PngPresenter {
     }
 
     fn set_visibility(&mut self, _surface: SurfaceId, _visibility: Visibility) {}
+}
+
+/// Rotate/flip `buf` by a `wl_surface.set_buffer_transform` into surface space — the un-rotation a real
+/// backend applies so a client's pre-rotated buffer presents upright. Scatters each buffer pixel to its
+/// surface pixel via [`BufferTransform::map_point`] (a bijection over the rectangle, so every output pixel
+/// is written exactly once — no scaling, no holes). Output size is `transform.surface_size(buf)`.
+fn transform_buffer(buf: &StoredBuffer, transform: BufferTransform) -> Vec<u8> {
+    let (ow, oh) = transform.surface_size(buf.width, buf.height);
+    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    for by in 0..buf.height {
+        for bx in 0..buf.width {
+            let (sx, sy) = transform.map_point(bx, by, buf.width, buf.height);
+            let si = ((by * buf.width + bx) * 4) as usize;
+            let di = ((sy * ow + sx) * 4) as usize;
+            out[di..di + 4].copy_from_slice(&buf.rgba[si..si + 4]);
+        }
+    }
+    out
 }
 
 /// Nearest-neighbour sample the source rectangle `src = (x, y, w, h)` (in BUFFER PIXELS) of `buf` into a

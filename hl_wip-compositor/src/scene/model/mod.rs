@@ -15,7 +15,9 @@ pub use damage::{DamageRegion, Rect};
 pub use output::{Output, OutputId};
 pub use scene::Scene;
 pub use seat::Seat;
-pub use surface::{BufferState, Format, PresentableImage, Surface, SurfaceId, Viewport, Visibility};
+pub use surface::{
+    BufferState, BufferTransform, Format, PresentableImage, Surface, SurfaceId, Viewport, Visibility,
+};
 pub use window::{
     Anchor, ConstraintAdjustment, Gravity, PopupPlacement, PopupState, Positioner, SubsurfaceState,
     SurfaceRole,

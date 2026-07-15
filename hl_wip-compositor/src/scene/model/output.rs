@@ -5,6 +5,8 @@
 //! `wl_output` global. The logical size drives popup constraint + maximize/fullscreen sizing; the
 //! refresh interval drives frame pacing and `wp_presentation` feedback timing.
 
+use super::surface::BufferTransform;
+
 /// Stable identity of an output in the scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OutputId(pub u32);
@@ -20,11 +22,23 @@ pub struct Output {
     /// Refresh rate in millihertz (e.g. `60_000` = 60 Hz), mirroring `OUTPUT_REFRESH_MHZ`.
     pub refresh_mhz: i64,
     pub scale: i32,
+    /// `wl_output.transform` this output advertises — how the compositor's logical space is rotated/
+    /// flipped onto the physical panel. A 90°/270° transform swaps the logical width/height a client
+    /// lays out in (and that `wl_output`/xdg-output report).
+    pub transform: BufferTransform,
 }
 
 impl Output {
     pub fn new(id: OutputId, name: impl Into<String>, mode_w: i32, mode_h: i32, refresh_mhz: i64) -> Output {
-        Output { id, name: name.into(), mode_w, mode_h, refresh_mhz, scale: 1 }
+        Output {
+            id,
+            name: name.into(),
+            mode_w,
+            mode_h,
+            refresh_mhz,
+            scale: 1,
+            transform: BufferTransform::Normal,
+        }
     }
 
     pub fn with_scale(mut self, scale: i32) -> Output {
@@ -32,12 +46,20 @@ impl Output {
         self
     }
 
+    pub fn with_transform(mut self, transform: BufferTransform) -> Output {
+        self.transform = transform;
+        self
+    }
+
     /// The output's logical size `(w, h)` — device mode divided by the integer scale, each clamped to
-    /// at least 1. This is the bound a maximized/fullscreen toplevel is configured to and the target
-    /// area popup placement constrains against (mirrors `HlState::output_logical_size`).
+    /// at least 1, then swapped for a 90°/270° output transform (the rotated screen presents its mode's
+    /// height as logical width and vice versa). This is the bound a maximized/fullscreen toplevel is
+    /// configured to and the target area popup placement constrains against (mirrors
+    /// `HlState::output_logical_size`), and what `wl_output`/xdg-output report.
     pub fn logical_size(&self) -> (i32, i32) {
         let scale = self.scale.max(1);
-        ((self.mode_w / scale).max(1), (self.mode_h / scale).max(1))
+        let (w, h) = ((self.mode_w / scale).max(1), (self.mode_h / scale).max(1));
+        self.transform.surface_size(w, h)
     }
 
     /// Refresh interval in nanoseconds (`0` when the rate is unknown / non-positive). Derived the same

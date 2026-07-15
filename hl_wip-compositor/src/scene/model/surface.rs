@@ -28,6 +28,73 @@ impl Format {
     }
 }
 
+/// `wl_surface.set_buffer_transform` (and `wl_output.transform`): the rotation/flip relating a buffer's
+/// pixels to on-screen surface space. The enum values match `wl_output.transform` exactly (the same wire
+/// enum both requests speak). A client sets this to render pre-rotated content (e.g. for a rotated
+/// display); the compositor applies the INVERSE to present it upright. A 90/270 (or their flipped
+/// variants) rotation swaps the surface's width and height relative to the buffer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BufferTransform {
+    #[default]
+    Normal,
+    /// 90° counter-clockwise.
+    _90,
+    _180,
+    /// 270° counter-clockwise.
+    _270,
+    /// Mirror around a vertical axis (horizontal flip).
+    Flipped,
+    /// Flip, then rotate 90° counter-clockwise.
+    Flipped90,
+    /// Flip around a horizontal axis (vertical flip).
+    Flipped180,
+    /// Flip, then rotate 270° counter-clockwise.
+    Flipped270,
+}
+
+impl BufferTransform {
+    /// Whether this transform swaps width and height (any 90°/270° rotation, flipped or not).
+    pub fn swaps_dimensions(self) -> bool {
+        matches!(
+            self,
+            BufferTransform::_90
+                | BufferTransform::_270
+                | BufferTransform::Flipped90
+                | BufferTransform::Flipped270
+        )
+    }
+
+    /// The on-screen surface size a `bw`×`bh` buffer presents at under this transform — dimensions
+    /// swapped for a 90°/270° rotation, unchanged otherwise. (Buffer scale / viewport are applied
+    /// separately by [`BufferState::logical_size`].)
+    pub fn surface_size(self, bw: i32, bh: i32) -> (i32, i32) {
+        if self.swaps_dimensions() {
+            (bh, bw)
+        } else {
+            (bw, bh)
+        }
+    }
+
+    /// Map a BUFFER pixel `(bx, by)` (in a `bw`×`bh` buffer) to the SURFACE pixel it occupies once this
+    /// transform is applied. This is the compositor presenting the buffer upright: it is
+    /// `transform.invert().transform_point_in(buffer_point, buffer_size)` in Smithay's terms — the exact
+    /// inverse of the transform the client declared — so a client that rendered pre-rotated content sees
+    /// it displayed correctly. A bijection over the rectangle, so a per-buffer-pixel scatter fills every
+    /// surface pixel exactly once (no holes, no scaling).
+    pub fn map_point(self, bx: i32, by: i32, bw: i32, bh: i32) -> (i32, i32) {
+        match self {
+            BufferTransform::Normal => (bx, by),
+            BufferTransform::_90 => (by, bw - 1 - bx),
+            BufferTransform::_180 => (bw - 1 - bx, bh - 1 - by),
+            BufferTransform::_270 => (bh - 1 - by, bx),
+            BufferTransform::Flipped => (bw - 1 - bx, by),
+            BufferTransform::Flipped90 => (bh - 1 - by, bw - 1 - bx),
+            BufferTransform::Flipped180 => (bx, bh - 1 - by),
+            BufferTransform::Flipped270 => (by, bx),
+        }
+    }
+}
+
 /// `wp_viewport` state: an optional source crop over the backing texture and an optional destination
 /// logical size. Mirrors `ViewportCachedState` (src/dst) as read in `snapshot_surface`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -54,9 +121,12 @@ pub struct BufferState {
 }
 
 impl BufferState {
-    /// On-screen logical size `(w, h)` after `wp_viewport` and buffer scale, following
-    /// `logical_size_and_uv`: a viewport `dst` wins; else a `src` crop's size; else `tex / scale`.
-    pub fn logical_size(&self, viewport: &Viewport) -> (i32, i32) {
+    /// On-screen logical size `(w, h)` after `wp_viewport`, buffer scale, and buffer `transform`,
+    /// following `logical_size_and_uv`: a viewport `dst` wins; else a `src` crop's size; else
+    /// `transform(tex / scale)` — a 90°/270° buffer transform swaps the buffer's width and height into
+    /// the surface. (An explicit viewport `dst`/`src` is stated in already-oriented surface space, so the
+    /// transform swap applies only to the plain `tex / scale` path — the case the transform demos drive.)
+    pub fn logical_size(&self, viewport: &Viewport, transform: BufferTransform) -> (i32, i32) {
         match (viewport.dst, viewport.src) {
             (Some((dw, dh)), _) if dw > 0 && dh > 0 => (dw, dh),
             (None, Some((_, _, sw, sh))) if sw > 0.0 && sh > 0.0 => {
@@ -64,7 +134,8 @@ impl BufferState {
             }
             _ => {
                 let s = self.buffer_scale.max(1);
-                ((self.tex_w / s).max(1), (self.tex_h / s).max(1))
+                let (w, h) = ((self.tex_w / s).max(1), (self.tex_h / s).max(1));
+                transform.surface_size(w, h)
             }
         }
     }
@@ -108,6 +179,11 @@ pub struct PresentableImage {
     /// the buffer is presented verbatim. When `Some`, a presenter samples this source region and scales it
     /// to `width`×`height` (the destination logical size) — the crop+scale a real backend would rasterize.
     pub present_crop: Option<(f64, f64, f64, f64)>,
+    /// `wl_surface.set_buffer_transform`: the rotation/flip the presenter applies to the backing buffer to
+    /// present it upright (`width`×`height` already reflect the swapped dimensions for a 90°/270° value).
+    /// `Normal` ⇒ present verbatim. Applied on the non-viewport path (a plain rotated/flipped buffer);
+    /// composing a transform WITH a `present_crop` is not yet modeled (see the presenter).
+    pub transform: BufferTransform,
 }
 
 /// One node of the scene graph.
@@ -121,6 +197,10 @@ pub struct Surface {
     /// not re-attach). `None` before the first attach or after an explicit detach.
     pub buffer: Option<BufferState>,
     pub viewport: Viewport,
+    /// `wl_surface.set_buffer_transform` — the surface's current buffer transform (persists across
+    /// buffer attaches until changed, like `viewport`). Drives the swapped logical size and the
+    /// presenter's rotation/flip of the backing buffer.
+    pub transform: BufferTransform,
     /// Damage accumulated by commits since this surface's tree was last presented.
     pub damage: DamageRegion,
     /// `wl_surface.set_opaque_region`, in surface-local logical space. Drives conservative occlusion in
@@ -143,6 +223,7 @@ impl Surface {
             role: SurfaceRole::None,
             buffer: None,
             viewport: Viewport::default(),
+            transform: BufferTransform::default(),
             damage: DamageRegion::new(),
             opaque_region: None,
             input_region: None,
@@ -154,7 +235,7 @@ impl Surface {
     /// On-screen logical size `(w, h)`, or `None` when no buffer is committed. The size half of a
     /// present snapshot (mirrors `surface_logical_size`).
     pub fn logical_size(&self) -> Option<(i32, i32)> {
-        self.buffer.map(|b| b.logical_size(&self.viewport))
+        self.buffer.map(|b| b.logical_size(&self.viewport, self.transform))
     }
 
     /// Whether surface-local point `(x, y)` is input-sensitive: inside the surface bounds AND inside the

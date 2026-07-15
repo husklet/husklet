@@ -242,6 +242,25 @@ name = "demo_output_enter_leave"
 path = "tests/demo_output_enter_leave.rs"
 required-features = ["smithay-adapter"]
 
+# Output + buffer transform (rotate/flip) demos: a real in-process wayland-client sets
+# `wl_surface.set_buffer_transform` (90/180/270 + Flipped/Flipped_90) and asserts the composited output is
+# EXACTLY rotated/flipped (pixel-exact corner mapping + swapped logical size), and stands the compositor up
+# on a rotated `wl_output` (via `$HL_OUTPUT_TRANSFORM`) to assert the swapped advertised geometry.
+[[test]]
+name = "demo_buffer_transform_rotate"
+path = "tests/demo_buffer_transform_rotate.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_buffer_transform_flip"
+path = "tests/demo_buffer_transform_flip.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_output_transform_geometry"
+path = "tests/demo_output_transform_geometry.rs"
+required-features = ["smithay-adapter"]
+
 # Batch-5 ROBUSTNESS / hostile-client demos: prove the adapter SURVIVES abuse — never panics, rejects or
 # clamps bad input, and keeps serving OTHER clients. Each drives a hostile in-process wayland-client
 # (oversized/zero buffers, malformed protocol ops, a surface-create/destroy storm, a commit flood, bogus
