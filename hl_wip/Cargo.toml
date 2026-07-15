@@ -135,6 +135,26 @@ name = "gl_anim"
 path = "tests/gl_anim.rs"
 
 [[test]]
+name = "gl_occlusion_query"
+path = "tests/gl_occlusion_query.rs"
+
+[[test]]
+name = "gl_pbo_readback"
+path = "tests/gl_pbo_readback.rs"
+
+[[test]]
+name = "gl_ubo_ranges"
+path = "tests/gl_ubo_ranges.rs"
+
+[[test]]
+name = "gl_timer_query"
+path = "tests/gl_timer_query.rs"
+
+[[test]]
+name = "gl_transform_feedback"
+path = "tests/gl_transform_feedback.rs"
+
+[[test]]
 name = "vk_quad"
 path = "tests/vk_quad.rs"
 

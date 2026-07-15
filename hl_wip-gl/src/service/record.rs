@@ -1124,6 +1124,33 @@ fn capture_indexed(ctx: &GlContext, d: &mut DrawCall, count: i32, index_type: u3
     }
 }
 
+/// The scissor-clipped sample footprint of one draw — its viewport rectangle intersected with the scissor
+/// box (when `GL_SCISSOR_TEST` is enabled), times the instance count. Used to feed an open occlusion query
+/// so `GL_ANY_SAMPLES_PASSED` reflects reality: a visible draw contributes a positive area, a draw whose
+/// scissor excludes its viewport (or a zero-area scissor) contributes `0`. This is an UPPER BOUND on the
+/// true rasterized sample count (it does not clip to the primitive itself), which is exactly what the
+/// boolean `GL_ANY_SAMPLES_PASSED` needs — nonzero iff the draw could rasterize any sample.
+fn draw_coverage(d: &crate::model::program::DrawCall) -> u64 {
+    let [vx, vy, vw, vh] = d.viewport;
+    let (mut x0, mut y0, mut x1, mut y1) = (vx, vy, vx.saturating_add(vw), vy.saturating_add(vh));
+    if d.scissor_enabled {
+        let [sx, sy, sw, sh] = d.scissor;
+        x0 = x0.max(sx);
+        y0 = y0.max(sy);
+        x1 = x1.min(sx.saturating_add(sw));
+        y1 = y1.min(sy.saturating_add(sh));
+    }
+    let w = (x1 - x0).max(0) as u64;
+    let h = (y1 - y0).max(0) as u64;
+    w * h * d.instance_count.max(1) as u64
+}
+
+/// Feed `d`'s coverage into an open occlusion query (no-op when none is armed). Called for every recorded
+/// geometry draw (never for a `glClear` — clears do not affect occlusion queries).
+fn accumulate_occlusion(ctx: &mut GlContext, d: &crate::model::program::DrawCall) {
+    ctx.queries.accumulate(draw_coverage(d));
+}
+
 /// `glDrawArrays(mode, first, count)` — snapshot the bound state and append the draw (one instance).
 pub fn draw_arrays(ctx: &mut GlContext, mode: u32, first: i32, count: i32) {
     draw_arrays_instanced(ctx, mode, first, count, 1);
@@ -1148,6 +1175,7 @@ pub fn draw_arrays_instanced(ctx: &mut GlContext, mode: u32, first: i32, count: 
     d.instance_count = instances as u32;
     // Client-side vertex arrays span [0, first+count): the transient buffer is indexed by `first_vertex`.
     capture_client_vbufs(&mut d, first.max(0) as usize + count as usize);
+    accumulate_occlusion(ctx, &d);
     ctx.draws.push(d);
 }
 
@@ -1183,6 +1211,7 @@ pub fn draw_elements_instanced(
     d.instance_count = instances as u32;
     d.elem_buf = ctx.element_buffer;
     capture_indexed(ctx, &mut d, count, index_type, offset, 0);
+    accumulate_occlusion(ctx, &d);
     ctx.draws.push(d);
 }
 
@@ -1220,6 +1249,7 @@ pub fn draw_elements_instanced_base_vertex(
     d.base_vertex = base_vertex;
     d.elem_buf = ctx.element_buffer;
     capture_indexed(ctx, &mut d, count, index_type, offset, base_vertex);
+    accumulate_occlusion(ctx, &d);
     ctx.draws.push(d);
 }
 
@@ -1414,6 +1444,16 @@ fn resolve_block_ubo_bytes(ctx: &GlContext, prog_name: u32) -> Vec<u8> {
         Some(p) if p.has_uniforms() => p,
         _ => return Vec::new(),
     };
+    // MULTI-BLOCK program: the shader declares 2+ uniform blocks, each at its OWN binding point fed by its
+    // OWN `glBindBufferRange`d range. The translator flattens every block's members into ONE `HlUniforms`
+    // std140 block at IR binding 0 (declaration order — see `adapter::glsl::translate_render`), so the
+    // recorded binding-0 bytes are assembled block-by-block: each block contributes its own bound range's
+    // std140 bytes, 16-byte aligned to the next block (matching std140 for the vec4/mat-member blocks
+    // GskGpu-style programs use). This proves each `glBindBufferRange` fed the right binding.
+    let blocks = crate::adapter::glsl::uniform_blocks(&prog.vs_src, &prog.fs_src);
+    if blocks.len() >= 2 {
+        return assemble_multi_block_ubo_bytes(ctx, &blocks);
+    }
     // The block's binding point (see priority above).
     let bp = crate::adapter::glsl::uniform_block_binding_qualifier(&prog.vs_src)
         .or_else(|| crate::adapter::glsl::uniform_block_binding_qualifier(&prog.fs_src))
@@ -1443,4 +1483,35 @@ fn resolve_block_ubo_bytes(ctx: &GlContext, prog_name: u32) -> Vec<u8> {
     // `size == 0` (from `glBindBufferBase`) means the whole buffer from `offset`.
     let end = if ib.size <= 0 { buf.data.len() } else { (off + ib.size as usize).min(buf.data.len()) };
     buf.data[off..end].to_vec()
+}
+
+/// Assemble the flattened `HlUniforms` binding-0 bytes for a MULTI-block program from each block's own
+/// `glBindBufferRange`d range, in `blocks` (declaration) order. Each block appends its bound range's std140
+/// bytes, then pads to the next 16-byte boundary so the following block starts 16-aligned (std140 for a
+/// vec4/mat4-member block). A block with no bound range contributes a zero-filled std140 span (an honest
+/// hole, not a fake). This is what routes two ranges to two distinct binding points through the single
+/// flattened block the translator emits.
+fn assemble_multi_block_ubo_bytes(ctx: &GlContext, blocks: &[crate::adapter::glsl::UniformBlockDecl]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    for blk in blocks {
+        let bytes = ctx
+            .indexed_buffers
+            .get(&(GL_UNIFORM_BUFFER, blk.binding))
+            .and_then(|ib| {
+                let buf = ctx.buffers.get(ib.buffer)?;
+                let off = ib.offset.max(0) as usize;
+                if off > buf.data.len() {
+                    return Some(Vec::new());
+                }
+                let end = if ib.size <= 0 { buf.data.len() } else { (off + ib.size as usize).min(buf.data.len()) };
+                Some(buf.data[off..end].to_vec())
+            })
+            .unwrap_or_default();
+        out.extend_from_slice(&bytes);
+        // Pad this block's contribution up to the next 16-byte std140 boundary (each block is 16-aligned).
+        while out.len() % 16 != 0 {
+            out.push(0);
+        }
+    }
+    out
 }

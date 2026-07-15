@@ -1927,6 +1927,24 @@ pub extern "C" fn glReadPixels(
     if width == 0 || height == 0 {
         return;
     }
+    // ES3 PBO pack path: when a buffer is bound to `GL_PIXEL_PACK_BUFFER`, `glReadPixels` does NOT write to
+    // a client pointer — `pixels` is reinterpreted as a BYTE OFFSET into that pack buffer and the packed
+    // pixels are written into its host storage. The app then reads them back via `glMapBufferRange`
+    // (`GL_PIXEL_PACK_BUFFER`) — the async-readback-to-PBO round trip. Before this branch a bound PBO was
+    // ignored and the packed bytes were copied to `pixels`-as-pointer (a wild write of an integer offset).
+    let pbo = with(|s| s.ctx.buffer_for_target(GL_PIXEL_PACK_BUFFER));
+    if pbo != 0 {
+        let byte_off = pixels as usize; // GL: the offset is the `pixels` argument treated as an integer
+        let packed = with(|s| readpixels::read_pixels(&mut s.ctx, &mut s.sink, x, y, width, height, format));
+        match packed {
+            Ok(bytes) => with(|s| s.ctx.buffers.set_sub_data(pbo, byte_off, &bytes)),
+            Err(e) => with(|s| {
+                s.ctx.set_gl_error(GL_OUT_OF_MEMORY);
+                s.set_egl_error(egl_error_from_gpu_error(&e));
+            }),
+        }
+        return;
+    }
     if pixels.is_null() {
         fail(GL_INVALID_VALUE);
         return;

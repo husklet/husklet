@@ -128,7 +128,12 @@ pub fn default_sampler() -> SamplerObj {
 // Query objects
 // ==================================================================================================
 
-/// A valid `glBeginQuery` target (occlusion + transform-feedback primitives-written).
+/// A valid `glBeginQuery` target for this driver: the ES3-CORE occlusion targets (`GL_ANY_SAMPLES_PASSED[_
+/// CONSERVATIVE]`) and the transform-feedback primitives-written target. TIMER queries (`GL_TIME_ELAPSED`,
+/// `GL_TIMESTAMP`) are NOT core ES3 — they belong to the `EXT_disjoint_timer_query` extension, which this
+/// driver does NOT advertise (`crate::service::query::EXTENSIONS` is empty). So `glBeginQuery(GL_TIME_
+/// ELAPSED_EXT, …)` honestly raises `GL_INVALID_ENUM` here rather than faking a monotonic counter — an
+/// unadvertised extension must not silently appear to work. (See tests/gl_timer_query in hl_wip.)
 fn is_query_target(target: u32) -> bool {
     matches!(
         target,
@@ -200,9 +205,12 @@ pub fn get_queryiv(ctx: &mut GlContext, target: u32, pname: u32) -> Option<i32> 
 }
 
 /// `glGetQueryObjectuiv(id, pname)` — `GL_QUERY_RESULT_AVAILABLE` (this deferred model completes a query
-/// synchronously at `glEndQuery`, so an ended query is immediately available) or `GL_QUERY_RESULT` (a
-/// truthful `0` — no occlusion executor). `None` for an unknown/active query (`GL_INVALID_OPERATION`) or
-/// a bad pname (`GL_INVALID_ENUM`).
+/// synchronously at `glEndQuery`, so an ended query is immediately available) or `GL_QUERY_RESULT`. For an
+/// `GL_ANY_SAMPLES_PASSED[_CONSERVATIVE]` query the result is the boolean the ES3 spec defines: `1` iff any
+/// draw inside the begin/end scope had non-zero scissor-clipped coverage, `0` when everything was
+/// scissored/occluded away (see [`crate::model::es3::Queries::end`]). A transform-feedback query keeps `0`
+/// (its counter is not modeled). `None` for an unknown/active query (`GL_INVALID_OPERATION`) or a bad
+/// pname (`GL_INVALID_ENUM`).
 pub fn get_query_objectuiv(ctx: &mut GlContext, id: u32, pname: u32) -> Option<u32> {
     let (ended, result) = match ctx.queries.get(id) {
         Some(q) if !q.active => (q.ended, q.result),

@@ -148,7 +148,9 @@ pub struct QueryObj {
     pub active: bool,
     /// A completed `glEndQuery` has produced a result (so `GL_QUERY_RESULT_AVAILABLE` reads true).
     pub ended: bool,
-    /// Samples-passed / primitives-written. No executor counter yet ⇒ truthful `0`.
+    /// The query result read back by `glGetQueryObjectuiv(GL_QUERY_RESULT)`. For an occlusion query this is
+    /// the boolean any-samples-passed verdict computed from the scissor-clipped coverage of the draws in the
+    /// begin/end scope (see [`Queries::end`]); for a transform-feedback query it stays `0` (not modeled).
     pub result: u32,
 }
 
@@ -160,11 +162,23 @@ pub struct Queries {
     objects: HashMap<u32, QueryObj>,
     active: HashMap<u32, u32>,
     next_name: u32,
+    /// The occlusion accumulator armed by [`Queries::begin`] on an `GL_ANY_SAMPLES_PASSED[_CONSERVATIVE]`
+    /// query: every geometry draw recorded inside the begin/end scope adds its scissor-clipped footprint
+    /// (see [`Queries::accumulate`]), so [`Queries::end`] can resolve the query to REAL coverage instead of
+    /// a fake constant `0`. `None` when no occlusion query is open (a transform-feedback query never arms
+    /// it — that counter is not modeled, honest `0`). Mirrors the Vulkan occlusion fix (commit 5551f63a).
+    occlusion_accum: Option<u64>,
 }
 
 impl Queries {
     pub fn new() -> Self {
-        Self { reserved: HashSet::new(), objects: HashMap::new(), active: HashMap::new(), next_name: 1 }
+        Self {
+            reserved: HashSet::new(),
+            objects: HashMap::new(),
+            active: HashMap::new(),
+            next_name: 1,
+            occlusion_accum: None,
+        }
     }
 
     /// `glGenQueries` — mint one fresh reserved name.
@@ -195,7 +209,8 @@ impl Queries {
     }
 
     /// `glBeginQuery(target, id)` — mark `id` active for `target`. The caller has already validated the
-    /// name + that no query is active for the target.
+    /// name + that no query is active for the target. An occlusion target (`GL_ANY_SAMPLES_PASSED[_
+    /// CONSERVATIVE]`) arms the coverage accumulator so each draw inside the scope contributes its footprint.
     pub fn begin(&mut self, target: u32, id: u32) {
         self.reserved.remove(&id);
         let q = self.objects.entry(id).or_default();
@@ -204,16 +219,34 @@ impl Queries {
         q.ended = false;
         q.result = 0;
         self.active.insert(target, id);
+        self.occlusion_accum =
+            matches!(target, GL_ANY_SAMPLES_PASSED | GL_ANY_SAMPLES_PASSED_CONSERVATIVE).then_some(0);
     }
 
-    /// `glEndQuery(target)` — end the active query on `target` (its result is a truthful `0`, available).
+    /// Add a draw's scissor-clipped sample footprint to the open occlusion query's running total (no-op if
+    /// no occlusion query is armed). Called by [`crate::service::record`] for every geometry draw.
+    pub fn accumulate(&mut self, coverage: u64) {
+        if let Some(a) = self.occlusion_accum.as_mut() {
+            *a = a.saturating_add(coverage);
+        }
+    }
+
+    /// `glEndQuery(target)` — end the active query on `target`. An `GL_ANY_SAMPLES_PASSED[_CONSERVATIVE]`
+    /// query resolves to the boolean `GL_TRUE`/`GL_FALSE` (`1`/`0`) the ES3 spec defines for that target:
+    /// `1` iff any draw inside the scope had non-zero scissor-clipped coverage, `0` if everything was
+    /// scissored/occluded away. A non-occlusion (transform-feedback) query keeps the honest `0` (its counter
+    /// is not modeled). This replaces the old always-`0` constant with coverage that reflects reality.
     pub fn end(&mut self, target: u32) {
         let id = self.active_for(target);
         self.active.insert(target, 0);
+        let result = match self.occlusion_accum.take() {
+            Some(cov) => (cov > 0) as u32,
+            None => 0,
+        };
         if let Some(q) = self.objects.get_mut(&id) {
             q.active = false;
             q.ended = true;
-            q.result = 0;
+            q.result = result;
         }
     }
 
@@ -247,6 +280,13 @@ pub struct TransformFeedbackObj {
 
 /// The per-context transform-feedback table + the bound object + the per-program varying capture list
 /// (`glTransformFeedbackVaryings`, round-tripped through `glGetTransformFeedbackVarying`).
+///
+/// HONEST GAP (documented, not faked): the object LIFECYCLE (bind/begin/pause/resume/end) and the varying
+/// NAME reflection are real observable state, but per-vertex varying DATA capture into the bound
+/// `GL_TRANSFORM_FEEDBACK_BUFFER` is NOT modeled — this deferred driver lowers draws to GPU IR and has no
+/// CPU vertex-shader executor to evaluate each vertex's varyings, so the capture buffer is left untouched
+/// rather than filled with fabricated values. See `hl_wip/tests/gl_transform_feedback.rs`, which drives the
+/// lifecycle + reflection and asserts the buffer stays its sentinel (no fake capture).
 #[derive(Debug)]
 pub struct TransformFeedbacks {
     reserved: HashSet<u32>,

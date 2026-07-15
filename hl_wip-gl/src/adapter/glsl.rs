@@ -625,6 +625,111 @@ pub fn uni_layout(vs: &str, fs: &str) -> (Vec<Uni>, i32) {
     (out, total)
 }
 
+/// One declared uniform BLOCK: its `layout(binding = N)` point + its ordered member declarations. Used by
+/// [`crate::service::record`] to route a MULTI-block program (two `glBindBufferRange`d ranges bound to
+/// distinct binding points, each feeding its own block) — the translator flattens every block's members
+/// into one `HlUniforms` block at IR binding 0, so the recorded bytes must be assembled block-by-block from
+/// each block's own bound range in declaration order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UniformBlockDecl {
+    pub binding: u32,
+    pub members: Vec<Decl>,
+}
+
+/// Enumerate every uniform BLOCK (`layout(binding=N) uniform Name { members }`) a program declares, across
+/// both stages, in the SAME declaration order [`collect_uniforms`] flattens them into `HlUniforms` (vertex
+/// stage first, then fragment-only blocks), deduped by binding point. Plain `uniform TYPE name;` data /
+/// sampler uniforms are NOT blocks and are skipped. Returns an empty vec for a program with no interface
+/// block (the default-uniform `glUniform*` path).
+pub fn uniform_blocks(vs: &str, fs: &str) -> Vec<UniformBlockDecl> {
+    let mut out: Vec<UniformBlockDecl> = Vec::new();
+    for src in [vs, fs] {
+        for blk in scan_uniform_blocks(&strip_comments(src)) {
+            if !out.iter().any(|b| b.binding == blk.binding) {
+                out.push(blk);
+            }
+        }
+    }
+    out
+}
+
+/// Scan ONE (comment-stripped) stage for its `uniform Name { … }` blocks, capturing each block's
+/// `binding = N` (from the preceding `layout(...)`, default `0`) and its ordered member decls.
+fn scan_uniform_blocks(src: &str) -> Vec<UniformBlockDecl> {
+    let b = src.as_bytes();
+    let mut out = Vec::new();
+    let mut p = 0usize;
+    while let Some(rel) = find_from(b, b"uniform", p) {
+        let before = rel != 0 && is_word(b[rel - 1]);
+        let after = rel + 7 < b.len() && is_word(b[rel + 7]);
+        if before || after {
+            p = rel + 7;
+            continue;
+        }
+        // Skip the block NAME token, then require `{` (a plain `uniform TYPE name;` is not a block).
+        let mut q = rel + 7;
+        while q < b.len() && is_space(b[q]) {
+            q += 1;
+        }
+        while q < b.len() && is_word(b[q]) {
+            q += 1;
+        }
+        while q < b.len() && is_space(b[q]) {
+            q += 1;
+        }
+        if q >= b.len() || b[q] != b'{' {
+            p = rel + 7;
+            continue;
+        }
+        // The block's binding from the immediately-preceding `layout(...)` (default 0).
+        let binding = src[..rel]
+            .rfind("layout")
+            .map(|lpos| &src[lpos..rel])
+            .and_then(|seg| seg.find("binding").map(|bp| &seg[bp + "binding".len()..]))
+            .map(|tail| {
+                tail.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect::<String>()
+            })
+            .and_then(|d| d.parse::<u32>().ok())
+            .unwrap_or(0);
+        // Parse members `TYPE name;` until `}` (skipping precision/interpolation qualifiers before TYPE).
+        q += 1; // past `{`
+        let mut members = Vec::new();
+        while q < b.len() && b[q] != b'}' && members.len() < 32 {
+            while q < b.len() && (is_space(b[q]) || b[q] == b';') {
+                q += 1;
+            }
+            if q >= b.len() || b[q] == b'}' {
+                break;
+            }
+            let read_tok = |q: &mut usize| -> String {
+                let mut s = String::new();
+                while *q < b.len() && !is_space(b[*q]) && b[*q] != b';' && b[*q] != b'}' && s.len() < 31 {
+                    s.push(b[*q] as char);
+                    *q += 1;
+                }
+                s
+            };
+            let mut ty = read_tok(&mut q);
+            while is_precision_or_interp(&ty) {
+                while q < b.len() && is_space(b[q]) {
+                    q += 1;
+                }
+                ty = read_tok(&mut q);
+            }
+            while q < b.len() && is_space(b[q]) {
+                q += 1;
+            }
+            let name = read_tok(&mut q);
+            if !ty.is_empty() && !name.is_empty() {
+                members.push(Decl { ty, name });
+            }
+        }
+        out.push(UniformBlockDecl { binding, members });
+        p = q.max(rel + 7);
+    }
+    out
+}
+
 /// The explicit binding point a data-uniform BLOCK declares in its `layout(...)` qualifier — the GL
 /// binding index the app's `glBindBufferBase(GL_UNIFORM_BUFFER, N, buffer)` targets (GskGpu/GTK4 declares
 /// `layout(std140, binding = 0) uniform PushConstants { … }`). Scans `src` for a uniform-BLOCK declaration
