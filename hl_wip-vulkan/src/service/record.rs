@@ -445,6 +445,16 @@ pub fn cmd_execute_commands(
 
 /// `vkCmdSetViewport` (one viewport) — record `Enc::SetViewport`. The viewport transform is applied by
 /// the pass/rasterizer that consumes it.
+///
+/// A Vulkan app may supply a NEGATIVE-height viewport (`y = top+|h|`, `h < 0`) — the
+/// `VK_KHR_maintenance1` / core-1.1 Y-flip idiom that wgpu-hal's own Vulkan backend always emits so
+/// Vulkan's framebuffer-Y matches wgpu/D3D/Metal clip space. The hl-GPU IR viewport is consumed by the
+/// wgpu executor, whose `RenderPass::set_viewport` REJECTS a negative height (llvmpipe then clips every
+/// draw and the target keeps only its clear — a fully blank frame, e.g. Zed's GPUI/wgpu renderer). Since
+/// the host is itself wgpu (it re-derives the Vulkan Y-flip internally), we normalize a negative-height
+/// viewport to its equivalent upright positive-height rectangle here (`y' = y + h`, `h' = -h`) so the
+/// host renders right-side-up instead of clipping. A normal positive-height viewport (e.g. vkcube's) is
+/// carried through unchanged.
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_set_viewport(
     dev: &mut Device,
@@ -456,6 +466,7 @@ pub fn cmd_set_viewport(
     min_depth: f32,
     max_depth: f32,
 ) -> Result<()> {
+    let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };
     recording_mut(dev, cb)?.enc.push(Enc::SetViewport { x, y, w, h, min_depth, max_depth });
     Ok(())
 }
