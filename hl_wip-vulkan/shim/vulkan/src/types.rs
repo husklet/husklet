@@ -387,6 +387,8 @@ pub struct VkFormatProperties2 {
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES: i32 = 1_000_196_000;
 /// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES`.
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES: i32 = 1_000_168_000;
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES` (maintenance4, core in Vulkan 1.3).
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES: i32 = 1_000_413_001;
 
 /// `VkConformanceVersion` — the 4-byte version tuple in `VkPhysicalDeviceDriverProperties`.
 #[repr(C)]
@@ -417,6 +419,17 @@ pub struct VkPhysicalDeviceMaintenance3Properties {
     pub p_next: *mut c_void,
     pub max_per_set_descriptors: u32,
     pub max_memory_allocation_size: VkDeviceSize,
+}
+
+/// `VkPhysicalDeviceMaintenance4Properties` — the `maxBufferSize` ceiling a Vulkan-1.3 app (wgpu-hal)
+/// reads to size its buffers. maintenance4 is core in Vulkan 1.3, so an app that sees our advertised
+/// api_version (1.4.0) reads `maxBufferSize` from HERE; a zero-initialized node (no branch filling it)
+/// makes wgpu reject the device with "Limit 'max_buffer_size' value … is better than allowed 0".
+#[repr(C)]
+pub struct VkPhysicalDeviceMaintenance4Properties {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub max_buffer_size: VkDeviceSize,
 }
 
 // ==================================================================================================
