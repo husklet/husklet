@@ -107,6 +107,10 @@ name = "gl_depth"
 path = "tests/gl_depth.rs"
 
 [[test]]
+name = "gl_stencil"
+path = "tests/gl_stencil.rs"
+
+[[test]]
 name = "gl_texture_wrap"
 path = "tests/gl_texture_wrap.rs"
 

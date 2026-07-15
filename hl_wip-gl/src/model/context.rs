@@ -170,6 +170,32 @@ pub struct GlContext {
     pub depth: bool,
     pub depth_func: u32,
     pub depth_write: bool,
+    /// `GL_STENCIL_TEST` enabled + the front/back stencil test state. Set by
+    /// `glStencilFunc`/`glStencilFuncSeparate` (compare func + reference + value read mask),
+    /// `glStencilOp`/`glStencilOpSeparate` (stencil-fail / depth-fail / depth-pass ops), and
+    /// `glStencilMask`/`glStencilMaskSeparate` (write mask). WebGPU carries a SINGLE reference value + a
+    /// single read/write mask for both faces (only the per-face compare + ops differ), so the front-face
+    /// reference/masks are the ones lowered — an honest partial for the rare per-face-mask app.
+    pub stencil: bool,
+    /// Per-face stencil compare function (`glStencilFunc*`), GL enum (`GL_ALWAYS`/`GL_EQUAL`/…).
+    pub stencil_func_front: u32,
+    pub stencil_func_back: u32,
+    /// Per-face stencil ops (`glStencilOp*`): stencil-fail / depth-fail / depth-pass, GL enums.
+    pub stencil_fail_front: u32,
+    pub stencil_zfail_front: u32,
+    pub stencil_zpass_front: u32,
+    pub stencil_fail_back: u32,
+    pub stencil_zfail_back: u32,
+    pub stencil_zpass_back: u32,
+    /// Front-face reference value (`glStencilFunc*`), the dynamic value the compare tests against and a
+    /// `GL_REPLACE` op writes — lowered to `Enc::SetStencilReference`.
+    pub stencil_ref: i32,
+    /// Front-face value read mask (`glStencilFunc*`) — WebGPU `stencilReadMask`.
+    pub stencil_read_mask: u32,
+    /// Front-face write mask (`glStencilMask*`) — WebGPU `stencilWriteMask`.
+    pub stencil_write_mask: u32,
+    /// The stencil-buffer clear value (`glClearStencil`), lowered to `DepthAttachment.clear_stencil`.
+    pub clear_stencil: i32,
     /// `GL_CULL_FACE` enabled + the culled face (`glCullFace`) and front-face winding (`glFrontFace`).
     pub cull_enabled: bool,
     pub cull_face: u32,
@@ -273,12 +299,15 @@ pub struct GlContext {
     /// later frames (so re-rendering the same FBO does not re-create the target).
     fbo_targets: HashMap<u32, (u32, u32)>,
 
-    /// Per-render-target depth-buffer IR ids, keyed by the pass's COLOR-target texture IR → the
-    /// `Depth32Float` depth texture IR. A depth-tested draw (`glEnable(GL_DEPTH_TEST)`) builds a pipeline
-    /// with a depth-stencil state, and wgpu REQUIRES the render pass to carry a matching depth attachment;
-    /// the frame builder mints one depth texture per color target here, `CreateTexture`s it once, and
-    /// reuses its id on later frames (so re-rendering the same target does not re-create the depth buffer).
-    depth_targets: HashMap<u32, u32>,
+    /// Per-render-target depth-buffer IR ids, keyed by `(color-target texture IR, with_stencil)` → the
+    /// depth texture IR. A depth-tested draw (`glEnable(GL_DEPTH_TEST)`) builds a pipeline with a
+    /// depth-stencil state, and wgpu REQUIRES the render pass to carry a matching depth attachment; the
+    /// frame builder mints one depth texture per color target here, `CreateTexture`s it once, and reuses its
+    /// id on later frames (so re-rendering the same target does not re-create the depth buffer). The
+    /// `with_stencil` half of the key separates a `Depth32Float` depth-only buffer from a
+    /// `Depth24PlusStencil8` depth+stencil buffer, so a stencil-testing pass gets a stencil-aspect
+    /// attachment while a plain depth pass keeps its depth-only one (the two carry different formats).
+    depth_targets: HashMap<(u32, bool), u32>,
 
     /// Residency cache for sampled GL textures uploaded from CPU pixels: GL texture name → `(texture_ir,
     /// uploaded_gen)`. A texture is `CreateTexture`d + staged + `CopyBufferToTexture`d ONCE (per content
@@ -351,6 +380,19 @@ impl GlContext {
             depth: false,
             depth_func: glconst::GL_LESS,
             depth_write: true,
+            stencil: false,
+            stencil_func_front: glconst::GL_ALWAYS,
+            stencil_func_back: glconst::GL_ALWAYS,
+            stencil_fail_front: glconst::GL_KEEP,
+            stencil_zfail_front: glconst::GL_KEEP,
+            stencil_zpass_front: glconst::GL_KEEP,
+            stencil_fail_back: glconst::GL_KEEP,
+            stencil_zfail_back: glconst::GL_KEEP,
+            stencil_zpass_back: glconst::GL_KEEP,
+            stencil_ref: 0,
+            stencil_read_mask: 0xffff_ffff,
+            stencil_write_mask: 0xffff_ffff,
+            clear_stencil: 0,
             cull_enabled: false,
             cull_face: glconst::GL_BACK,
             front_face: glconst::GL_CCW,
@@ -567,16 +609,18 @@ impl GlContext {
         }
     }
 
-    /// The `Depth32Float` depth-buffer texture IR for the render pass whose COLOR target is texture IR
-    /// `color_tex`. Returns `(depth_texture, needs_create)`: `needs_create` is true exactly on the first
-    /// request for this color target, so the frame builder emits the depth `CreateTexture` once and reuses
-    /// the id on later frames. Only allocated when a depth-tested draw actually needs an attachment.
-    pub fn depth_target(&mut self, color_tex: u32) -> (u32, bool) {
-        if let Some(&depth) = self.depth_targets.get(&color_tex) {
+    /// The depth-buffer texture IR for the render pass whose COLOR target is texture IR `color_tex`, at the
+    /// depth format selected by `with_stencil` (`false` = `Depth32Float`, `true` = `Depth24PlusStencil8`).
+    /// Returns `(depth_texture, needs_create)`: `needs_create` is true exactly on the first request for this
+    /// `(color target, format)` pair, so the frame builder emits the depth `CreateTexture` once and reuses
+    /// the id on later frames. Only allocated when a depth- or stencil-tested draw actually needs an
+    /// attachment.
+    pub fn depth_target(&mut self, color_tex: u32, with_stencil: bool) -> (u32, bool) {
+        if let Some(&depth) = self.depth_targets.get(&(color_tex, with_stencil)) {
             (depth, false)
         } else {
             let depth = self.alloc_texture_ir();
-            self.depth_targets.insert(color_tex, depth);
+            self.depth_targets.insert((color_tex, with_stencil), depth);
             (depth, true)
         }
     }

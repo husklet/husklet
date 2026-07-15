@@ -35,12 +35,27 @@ pub const GL_TRIANGLES: u32 = 0x0004;
 pub const GL_TRIANGLE_STRIP: u32 = 0x0005;
 pub const GL_COLOR_BUFFER_BIT: u32 = 0x4000;
 pub const GL_DEPTH_BUFFER_BIT: u32 = 0x0100;
+pub const GL_STENCIL_BUFFER_BIT: u32 = 0x0400;
 
 // caps toggled by glEnable/glDisable
 pub const GL_DEPTH_TEST: u32 = 0x0B71;
+pub const GL_STENCIL_TEST: u32 = 0x0B90;
 pub const GL_BLEND: u32 = 0x0BE2;
 pub const GL_CULL_FACE: u32 = 0x0B44;
 pub const GL_SCISSOR_TEST: u32 = 0x0C11;
+
+// stencil operations (glStencilOp / glStencilOpSeparate). GL_ZERO (0) doubles as the ZERO stencil op.
+pub const GL_KEEP: u32 = 0x1E00;
+pub const GL_REPLACE: u32 = 0x1E01;
+pub const GL_INCR: u32 = 0x1E02;
+pub const GL_DECR: u32 = 0x1E03;
+pub const GL_INVERT: u32 = 0x150A;
+pub const GL_INCR_WRAP: u32 = 0x8507;
+pub const GL_DECR_WRAP: u32 = 0x8508;
+
+// renderbuffer depth/stencil internal formats (glRenderbufferStorage)
+pub const GL_DEPTH24_STENCIL8: u32 = 0x88F0;
+pub const GL_STENCIL_INDEX8: u32 = 0x8D48;
 
 // blend factors (glBlendFunc)
 pub const GL_ZERO: u32 = 0;

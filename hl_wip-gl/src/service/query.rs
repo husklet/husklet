@@ -134,6 +134,7 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_PACK_ALIGNMENT => one(ctx.pixel_store.pack_alignment),
         // Fixed-function caps read back as 1/0.
         GL_DEPTH_TEST => one(ctx.depth as i32),
+        GL_STENCIL_TEST => one(ctx.stencil as i32),
         GL_BLEND => one(ctx.blend as i32),
         GL_CULL_FACE => one(ctx.cull_enabled as i32),
         GL_SCISSOR_TEST => one(ctx.scissor_enabled as i32),
@@ -214,6 +215,7 @@ pub fn get_booleanv(ctx: &GlContext, pname: u32, out: &mut [u8; 4]) -> usize {
     let b = |on: bool| if on { GL_TRUE as u8 } else { GL_FALSE as u8 };
     out[0] = match pname {
         GL_DEPTH_TEST => b(ctx.depth),
+        GL_STENCIL_TEST => b(ctx.stencil),
         GL_BLEND => b(ctx.blend),
         GL_CULL_FACE => b(ctx.cull_enabled),
         GL_SCISSOR_TEST => b(ctx.scissor_enabled),

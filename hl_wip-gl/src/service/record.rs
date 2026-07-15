@@ -901,6 +901,68 @@ pub fn depth_mask(ctx: &mut GlContext, write: bool) {
     ctx.depth_write = write;
 }
 
+/// `glClearStencil(s)` — set the stencil-buffer clear value, lowered to `DepthAttachment.clear_stencil`.
+pub fn clear_stencil(ctx: &mut GlContext, s: i32) {
+    ctx.clear_stencil = s;
+}
+
+/// `glStencilFunc(func, ref, mask)` — set the compare func + reference + value read mask for BOTH faces.
+pub fn stencil_func(ctx: &mut GlContext, func: u32, reference: i32, mask: u32) {
+    ctx.stencil_func_front = func;
+    ctx.stencil_func_back = func;
+    ctx.stencil_ref = reference;
+    ctx.stencil_read_mask = mask;
+}
+
+/// `glStencilFuncSeparate(face, func, ref, mask)` — set the compare func + reference + value read mask for
+/// the selected face(s) (`GL_FRONT` / `GL_BACK` / `GL_FRONT_AND_BACK`). The reference/read-mask are single
+/// per-pass values on the wire, so setting them for either face updates the lowered value.
+pub fn stencil_func_separate(ctx: &mut GlContext, face: u32, func: u32, reference: i32, mask: u32) {
+    if face == GL_FRONT || face == GL_FRONT_AND_BACK {
+        ctx.stencil_func_front = func;
+    }
+    if face == GL_BACK || face == GL_FRONT_AND_BACK {
+        ctx.stencil_func_back = func;
+    }
+    ctx.stencil_ref = reference;
+    ctx.stencil_read_mask = mask;
+}
+
+/// `glStencilOp(sfail, dpfail, dppass)` — set the stencil-fail / depth-fail / depth-pass ops for BOTH faces.
+pub fn stencil_op(ctx: &mut GlContext, sfail: u32, dpfail: u32, dppass: u32) {
+    ctx.stencil_fail_front = sfail;
+    ctx.stencil_zfail_front = dpfail;
+    ctx.stencil_zpass_front = dppass;
+    ctx.stencil_fail_back = sfail;
+    ctx.stencil_zfail_back = dpfail;
+    ctx.stencil_zpass_back = dppass;
+}
+
+/// `glStencilOpSeparate(face, sfail, dpfail, dppass)` — set the three stencil ops for the selected face(s).
+pub fn stencil_op_separate(ctx: &mut GlContext, face: u32, sfail: u32, dpfail: u32, dppass: u32) {
+    if face == GL_FRONT || face == GL_FRONT_AND_BACK {
+        ctx.stencil_fail_front = sfail;
+        ctx.stencil_zfail_front = dpfail;
+        ctx.stencil_zpass_front = dppass;
+    }
+    if face == GL_BACK || face == GL_FRONT_AND_BACK {
+        ctx.stencil_fail_back = sfail;
+        ctx.stencil_zfail_back = dpfail;
+        ctx.stencil_zpass_back = dppass;
+    }
+}
+
+/// `glStencilMask(mask)` — set the stencil write mask for BOTH faces.
+pub fn stencil_mask(ctx: &mut GlContext, mask: u32) {
+    ctx.stencil_write_mask = mask;
+}
+
+/// `glStencilMaskSeparate(face, mask)` — set the stencil write mask for the selected face(s). The wire
+/// carries a single write mask for both faces, so setting either face updates the lowered value.
+pub fn stencil_mask_separate(ctx: &mut GlContext, _face: u32, mask: u32) {
+    ctx.stencil_write_mask = mask;
+}
+
 /// `glCullFace(mode)` — select the culled face (`GL_FRONT` / `GL_BACK` / `GL_FRONT_AND_BACK`).
 pub fn cull_face(ctx: &mut GlContext, mode: u32) {
     ctx.cull_face = mode;
@@ -994,6 +1056,7 @@ fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
     match cap {
         GL_BLEND => ctx.blend = on,
         GL_DEPTH_TEST => ctx.depth = on,
+        GL_STENCIL_TEST => ctx.stencil = on,
         GL_SCISSOR_TEST => ctx.scissor_enabled = on,
         GL_CULL_FACE => ctx.cull_enabled = on,
         _ => {}
@@ -1427,6 +1490,18 @@ fn snapshot(ctx: &GlContext) -> DrawCall {
         depth: ctx.depth,
         depth_func: ctx.depth_func,
         depth_write: ctx.depth_write,
+        stencil: ctx.stencil,
+        stencil_func_front: ctx.stencil_func_front,
+        stencil_func_back: ctx.stencil_func_back,
+        stencil_fail_front: ctx.stencil_fail_front,
+        stencil_zfail_front: ctx.stencil_zfail_front,
+        stencil_zpass_front: ctx.stencil_zpass_front,
+        stencil_fail_back: ctx.stencil_fail_back,
+        stencil_zfail_back: ctx.stencil_zfail_back,
+        stencil_zpass_back: ctx.stencil_zpass_back,
+        stencil_ref: ctx.stencil_ref,
+        stencil_read_mask: ctx.stencil_read_mask,
+        stencil_write_mask: ctx.stencil_write_mask,
         cull_enabled: ctx.cull_enabled,
         cull_face: ctx.cull_face,
         front_face: ctx.front_face,

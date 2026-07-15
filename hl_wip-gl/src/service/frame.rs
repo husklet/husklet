@@ -30,8 +30,8 @@ use crate::model::program::DrawCall;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment, ColorTargetState,
-    DepthAttachment, DepthState, Extent3d, Origin3d, RenderPipelineDesc, SamplerDesc, ShaderRef, SurfaceDesc,
-    TextureSubresource, TextureDesc, VertexAttr, VertexLayout,
+    DepthAttachment, DepthState, Extent3d, Origin3d, RenderPipelineDesc, SamplerDesc, ShaderRef, StencilFaceState,
+    SurfaceDesc, TextureSubresource, TextureDesc, VertexAttr, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, AddressMode, Filter, LoadOp, TextureDim, TextureFormat, Topology,
@@ -158,10 +158,11 @@ fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -
         // first geometry draw's snapshot). Each run clear-loads its target once, then replays its draws.
         let clear = run.first().map(|d| d.clear).unwrap_or([0.0; 4]);
 
+        let depth_fmt = pass_depth_format(run);
         let mut copies: Vec<Enc> = Vec::new();
         let mut draw_ops: Vec<Enc> = Vec::new();
         for d in run.iter().filter(|d| !d.is_clear) {
-            if let Some(l) = lower_draw(ctx, d, fmt, tw, th, &mut cmds, &fbo_tex_ir) {
+            if let Some(l) = lower_draw(ctx, d, fmt, depth_fmt, tw, th, &mut cmds, &fbo_tex_ir) {
                 copies.extend(l.copies);
                 draw_ops.extend(l.ops);
             }
@@ -288,13 +289,33 @@ fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, 
     ));
 }
 
-/// The depth attachment for a render pass, if any of `run`'s geometry draws is depth-tested. A pipeline
-/// built with a `DepthState` (see [`lower_draw`]) MUST run in a pass carrying a matching depth attachment —
-/// wgpu enforces this — so whenever a draw enables `GL_DEPTH_TEST` the pass needs a `Depth32Float` depth
-/// buffer. Mints one depth texture per color target (cached on the context), emits its `CreateTexture`
-/// once into `cmds`, and returns a `DepthAttachment` that clear-loads it to the far plane (`1.0`, the GL
-/// `glClearDepthf` default). Returns `None` when no draw in the pass is depth-tested (the common 2D path),
-/// leaving the pass depth-less exactly as before.
+/// The depth(+stencil) attachment FORMAT a render pass needs, if any of `run`'s geometry draws is depth-
+/// or stencil-tested. A stencil-testing draw requires a stencil aspect, so the pass upgrades to
+/// `Depth24PlusStencil8`; a purely depth-tested pass keeps the leaner `Depth32Float`. `None` when no draw
+/// needs a depth attachment at all (the common 2D path). Every depth-carrying pipeline in the run MUST use
+/// this ONE format — wgpu requires the pipeline's depth-stencil format to match the pass attachment — so a
+/// pass that stencil-tests any draw lowers ALL its depth pipelines as `Depth24PlusStencil8`.
+fn pass_depth_format(draws: &[DrawCall]) -> Option<TextureFormat> {
+    let any_stencil = draws.iter().any(|d| !d.is_clear && d.stencil);
+    let any_depth = draws.iter().any(|d| !d.is_clear && d.depth);
+    if any_stencil {
+        Some(TextureFormat::Depth24PlusStencil8)
+    } else if any_depth {
+        Some(TextureFormat::Depth32Float)
+    } else {
+        None
+    }
+}
+
+/// The depth attachment for a render pass, if any of `run`'s geometry draws is depth- or stencil-tested. A
+/// pipeline built with a `DepthState` (see [`lower_draw`]) MUST run in a pass carrying a matching depth
+/// attachment — wgpu enforces this — so whenever a draw enables `GL_DEPTH_TEST` (or `GL_STENCIL_TEST`) the
+/// pass needs a depth buffer of the format [`pass_depth_format`] chose. Mints one depth texture per
+/// `(color target, format)` (cached on the context), emits its `CreateTexture` once into `cmds`, and
+/// returns a `DepthAttachment` that clear-loads depth to the far plane (`1.0`, the GL `glClearDepthf`
+/// default) and — for a stencil-aspect format — the stencil plane to `glClearStencil`'s value. Returns
+/// `None` when no draw in the pass is depth/stencil-tested (the common 2D path), leaving the pass depth-less
+/// exactly as before.
 fn depth_attachment_for(
     ctx: &mut GlContext,
     color_tex: u32,
@@ -303,11 +324,12 @@ fn depth_attachment_for(
     draws: &[DrawCall],
     cmds: &mut Vec<Cmd>,
 ) -> Option<DepthAttachment> {
-    if !draws.iter().any(|d| !d.is_clear && d.depth) {
-        return None;
-    }
+    let format = pass_depth_format(draws)?;
+    let with_stencil = matches!(format, TextureFormat::Depth24PlusStencil8);
     let clear_depth = ctx.clear_depth;
-    let (depth_tex, needs_create) = ctx.depth_target(color_tex);
+    // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.
+    let clear_stencil = (ctx.clear_stencil as u32) & 0xff;
+    let (depth_tex, needs_create) = ctx.depth_target(color_tex, with_stencil);
     if needs_create {
         cmds.push(Cmd::CreateTexture(
             depth_tex,
@@ -318,13 +340,13 @@ fn depth_attachment_for(
                 mip_levels: 1,
                 sample_count: 1,
                 dim: TextureDim::D2,
-                format: TextureFormat::Depth32Float,
+                format,
                 usage: texture_usage::RENDER_TARGET,
-                label: "gl-depth".into(),
+                label: if with_stencil { "gl-depth-stencil".into() } else { "gl-depth".into() },
             },
         ));
     }
-    Some(DepthAttachment { texture: depth_tex, load: LoadOp::Clear, clear_depth, clear_stencil: 0 })
+    Some(DepthAttachment { texture: depth_tex, load: LoadOp::Clear, clear_depth, clear_stencil })
 }
 
 /// Clear-only frame: a render pass over the target that clears it (`LoadOp::Clear`).
@@ -380,10 +402,13 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
     // Single-target frame: no prior offscreen pass to sample, so cross-pass FBO sampling is empty and this
     // path lowers byte-identically to the pre-frame-graph builder.
     let no_fbo_tex = std::collections::HashMap::new();
+    // The pass's shared depth(+stencil) attachment format (if any draw is depth/stencil-tested) — every
+    // depth pipeline in the pass must be built at this format to match the attachment (wgpu requirement).
+    let depth_fmt = pass_depth_format(&geom);
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
     for d in &geom {
-        if let Some(lowered) = lower_draw(ctx, d, target_fmt, tw, th, &mut cmds, &no_fbo_tex) {
+        if let Some(lowered) = lower_draw(ctx, d, target_fmt, depth_fmt, tw, th, &mut cmds, &no_fbo_tex) {
             copies.extend(lowered.copies);
             draw_ops.extend(lowered.ops);
         }
@@ -452,7 +477,8 @@ fn build_mrt_geometry_frame(ctx: &mut GlContext, geom: &[DrawCall], fbo: u32, cl
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
     for d in geom {
-        if let Some(lowered) = lower_draw_n(ctx, d, fmt0, n, tw, th, &mut cmds, &no_fbo_tex) {
+        // MRT passes carry no depth/stencil attachment in this model, so no depth pipeline format.
+        if let Some(lowered) = lower_draw_n(ctx, d, fmt0, None, n, tw, th, &mut cmds, &no_fbo_tex) {
             copies.extend(lowered.copies);
             draw_ops.extend(lowered.ops);
         }
@@ -488,15 +514,17 @@ fn build_mrt_geometry_frame(ctx: &mut GlContext, geom: &[DrawCall], fbo: u32, cl
 /// Lower one geometry draw against a render target of format `target_fmt`: emit its resource creates +
 /// uploads into `cmds` and return the staging copies + in-pass encoder ops. `None` if the draw's program
 /// is unknown/unlinked (the caller skips it). The byte-shape mirrors gl_shim.c's per-draw lowering.
-fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: i32, th: i32, cmds: &mut Vec<Cmd>, fbo_tex_ir: &std::collections::HashMap<u32, u32>) -> Option<DrawLowering> {
-    lower_draw_n(ctx, d, target_fmt, 1, tw, th, cmds, fbo_tex_ir)
+fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, depth_fmt: Option<TextureFormat>, tw: i32, th: i32, cmds: &mut Vec<Cmd>, fbo_tex_ir: &std::collections::HashMap<u32, u32>) -> Option<DrawLowering> {
+    lower_draw_n(ctx, d, target_fmt, depth_fmt, 1, tw, th, cmds, fbo_tex_ir)
 }
 
 /// [`lower_draw`] with an explicit color-target count `n_color_targets` (≥ 1). One target is the ordinary
 /// path (every caller but the MRT frame passes 1, byte-identical to before); `n > 1` builds a pipeline with
 /// `n` identical color targets so a `glDrawBuffers` MRT draw writes all attachments of a multi-target pass.
+/// `depth_fmt` is the pass's depth-attachment format ([`pass_depth_format`]) that every depth/stencil
+/// pipeline in the pass must share; `None` for a pass with no depth attachment.
 #[allow(clippy::too_many_arguments)]
-fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, n_color_targets: usize, tw: i32, th: i32, cmds: &mut Vec<Cmd>, fbo_tex_ir: &std::collections::HashMap<u32, u32>) -> Option<DrawLowering> {
+fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, depth_fmt: Option<TextureFormat>, n_color_targets: usize, tw: i32, th: i32, cmds: &mut Vec<Cmd>, fbo_tex_ir: &std::collections::HashMap<u32, u32>) -> Option<DrawLowering> {
     let d = d.clone();
     let prog_name = if d.prog != 0 { d.prog } else { ctx.cur_prog };
     let prog = ctx.programs.program(prog_name)?.clone();
@@ -821,18 +849,15 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, n_
     } else {
         None
     };
-    // Depth test → a pipeline depth state carrying the compare func + write mask. NOTE: no depth
-    // ATTACHMENT is emitted (this model has no depth buffer), so the state is recorded in the pipeline but
-    // is not observable on the CPU oracle — an honest partial lowering, asserted at the Cmd level.
-    let depth = if d.depth {
-        Some(DepthState::depth_only(
-            TextureFormat::Depth32Float,
-            d.depth_write,
-            compare_wire(d.depth_func),
-        ))
-    } else {
-        None
-    };
+    // Depth/stencil test → a pipeline depth state carrying the depth compare + write mask AND the front/back
+    // stencil test+ops + read/write masks. When the PASS has a depth(+stencil) attachment (`depth_fmt` is
+    // `Some`, because SOME draw in it is depth/stencil-tested), EVERY pipeline in the pass MUST carry a depth
+    // state of that exact format — wgpu rejects a `depth: None` pipeline used in a pass that has a
+    // depth-stencil attachment. A draw that itself neither depth- nor stencil-tests gets a NEUTRAL state
+    // (never writes depth, `ALWAYS` compare, stencil `DISABLED`), so it renders unaffected while staying
+    // format-compatible with the attachment. A pass with NO depth attachment (the common 2D path) keeps
+    // `None` — unchanged.
+    let depth = depth_fmt.map(|fmt| build_depth_state(fmt, &d));
     let topology = if d.mode == GL_TRIANGLE_STRIP { Topology::TriangleStrip } else { Topology::TriangleList };
     // One color target for the ordinary path; `n_color_targets` identical targets for a `glDrawBuffers` MRT
     // pass (each attachment shares the draw's format + blend). The fragment shader's `layout(location = k)`
@@ -931,6 +956,13 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, n_
     ops.push(Enc::SetPipeline(pipeline_ir));
     ops.push(emit_viewport(&d, tw, th));
     ops.push(emit_scissor(&d, tw, th));
+    // Dynamic stencil reference — the value the pipeline's stencil compare tests against and a `GL_REPLACE`
+    // op writes. Emitted per-draw inside the pass like viewport/scissor (the compare/ops/masks live
+    // statically on the pipeline's `DepthState`), so two draws with different `glStencilFunc` references
+    // lower correctly. Masked to the 8-bit stencil buffer, and only when this draw stencil-tests.
+    if d.stencil {
+        ops.push(Enc::SetStencilReference { reference: (d.stencil_ref.max(0) as u32) & 0xff });
+    }
     if has_bg {
         ops.push(Enc::SetBindGroup { index: 0, group: bind_group_ir });
     }
@@ -1160,6 +1192,65 @@ fn compare_wire(func: u32) -> u32 {
         GL_GEQUAL => compare::GREATER_EQUAL,
         GL_ALWAYS => compare::ALWAYS,
         _ => compare::LESS, // GL_LESS default.
+    }
+}
+
+/// Build the pipeline `DepthState` (depth compare + write, and the front/back stencil test/ops + masks)
+/// for a depth- or stencil-tested draw, at the pass's depth-attachment `format`. When the draw only
+/// stencil-tests (no `GL_DEPTH_TEST`), depth is neutral (`ALWAYS` compare, writes off) so the stencil test
+/// alone governs; the stencil faces are `DISABLED` when the draw does not stencil-test, reproducing the
+/// pure-depth behavior on a `Depth24PlusStencil8` pass.
+fn build_depth_state(format: TextureFormat, d: &DrawCall) -> DepthState {
+    let (stencil_front, stencil_back, read_mask, write_mask) = if d.stencil {
+        (
+            StencilFaceState {
+                compare: compare_wire(d.stencil_func_front),
+                fail_op: stencil_op_wire(d.stencil_fail_front),
+                depth_fail_op: stencil_op_wire(d.stencil_zfail_front),
+                pass_op: stencil_op_wire(d.stencil_zpass_front),
+            },
+            StencilFaceState {
+                compare: compare_wire(d.stencil_func_back),
+                fail_op: stencil_op_wire(d.stencil_fail_back),
+                depth_fail_op: stencil_op_wire(d.stencil_zfail_back),
+                pass_op: stencil_op_wire(d.stencil_zpass_back),
+            },
+            d.stencil_read_mask & 0xff,
+            d.stencil_write_mask & 0xff,
+        )
+    } else {
+        (StencilFaceState::DISABLED, StencilFaceState::DISABLED, 0xff, 0xff)
+    };
+    DepthState {
+        format,
+        // A stencil-only draw (no GL_DEPTH_TEST) leaves depth neutral: never writes depth, always passes.
+        depth_write: d.depth && d.depth_write,
+        depth_compare: if d.depth {
+            compare_wire(d.depth_func)
+        } else {
+            hl_gpu::protocol::model::enums::compare::ALWAYS
+        },
+        stencil_front,
+        stencil_back,
+        stencil_read_mask: read_mask,
+        stencil_write_mask: write_mask,
+    }
+}
+
+/// GL stencil-operation enum (`glStencilOp*`) → the neutral protocol stencil-op wire code the executor
+/// decodes (`hl_gpu`'s `enums::stencil_op`, Vulkan `VkStencilOp` ordering). An unmodeled op maps to `KEEP`.
+fn stencil_op_wire(op: u32) -> u32 {
+    use hl_gpu::protocol::model::enums::stencil_op as so;
+    match op {
+        GL_KEEP => so::KEEP,
+        GL_ZERO => so::ZERO,
+        GL_REPLACE => so::REPLACE,
+        GL_INCR => so::INCREMENT_CLAMP,
+        GL_DECR => so::DECREMENT_CLAMP,
+        GL_INVERT => so::INVERT,
+        GL_INCR_WRAP => so::INCREMENT_WRAP,
+        GL_DECR_WRAP => so::DECREMENT_WRAP,
+        _ => so::KEEP,
     }
 }
 

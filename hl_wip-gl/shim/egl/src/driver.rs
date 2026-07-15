@@ -3027,14 +3027,21 @@ pub extern "C" fn glInvalidateSubFramebuffer(
 ) {
 }
 
-/// Separate-face stencil state — this model backs no stencil buffer (the default framebuffer has no
-/// stencil attachment), so these carry no observable state: an honest no-op (matches the reference shim).
+/// Separate-face stencil state — record the per-face compare/reference/masks + ops. A pass whose draw
+/// enables `GL_STENCIL_TEST` materializes a `Depth24PlusStencil8` attachment and lowers this into the
+/// pipeline's `DepthState` stencil faces + `Enc::SetStencilReference` (see `service::frame`).
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glStencilFuncSeparate(_face: u32, _func: u32, _ref: i32, _mask: u32) {}
+pub extern "C" fn glStencilFuncSeparate(face: u32, func: u32, ref_: i32, mask: u32) {
+    with(|s| record::stencil_func_separate(&mut s.ctx, face, func, ref_, mask));
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glStencilMaskSeparate(_face: u32, _mask: u32) {}
+pub extern "C" fn glStencilMaskSeparate(face: u32, mask: u32) {
+    with(|s| record::stencil_mask_separate(&mut s.ctx, face, mask));
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glStencilOpSeparate(_face: u32, _sfail: u32, _dpfail: u32, _dppass: u32) {}
+pub extern "C" fn glStencilOpSeparate(face: u32, sfail: u32, dpfail: u32, dppass: u32) {
+    with(|s| record::stencil_op_separate(&mut s.ctx, face, sfail, dpfail, dppass));
+}
 
 // ==================================================================================================
 // ES3 / GLES3.1 completeness pass — the remaining entry points, ported to real hand-written bodies.
@@ -3570,12 +3577,15 @@ pub extern "C" fn glClearBufferuiv(buffer: u32, _drawbuffer: i32, value: *const 
     }
 }
 
-/// `glClearBufferfi(GL_DEPTH_STENCIL, drawbuffer, depth, stencil)` — a combined depth+stencil clear. This
-/// model backs no depth/stencil attachment, so the depth-clear value is recorded (for a faithful
-/// `glGetFloatv(GL_DEPTH_CLEAR_VALUE)` round-trip) but no pass clear is lowered — an honest no-op.
+/// `glClearBufferfi(GL_DEPTH_STENCIL, drawbuffer, depth, stencil)` — a combined depth+stencil clear.
+/// Records both the depth-clear and stencil-clear values; a stencil-testing pass lowers the stencil value
+/// into its `Depth24PlusStencil8` attachment's clear (see `service::frame`).
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glClearBufferfi(_buffer: u32, _drawbuffer: i32, depth: f32, _stencil: i32) {
-    with(|s| record::clear_depth(&mut s.ctx, depth));
+pub extern "C" fn glClearBufferfi(_buffer: u32, _drawbuffer: i32, depth: f32, stencil: i32) {
+    with(|s| {
+        record::clear_depth(&mut s.ctx, depth);
+        record::clear_stencil(&mut s.ctx, stencil);
+    });
 }
 
 // ==================================================================================================
@@ -3775,16 +3785,26 @@ pub extern "C" fn glSampleCoverage(_value: f32, _invert: u8) {}
 pub extern "C" fn glSampleMaski(_mask_number: u32, _mask: u32) {}
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glMinSampleShading(_value: f32) {}
-/// `glStencilFunc` / `glStencilMask` / `glStencilOp` / `glClearStencil` — the default framebuffer models no
-/// stencil attachment (matches `glStencilFuncSeparate` &c.): honest no-ops.
+/// `glStencilFunc` / `glStencilMask` / `glStencilOp` / `glClearStencil` — record the stencil test state.
+/// A draw that enables `GL_STENCIL_TEST` lowers these into the pipeline's `DepthState` stencil faces +
+/// masks + `Enc::SetStencilReference`, and the pass materializes a `Depth24PlusStencil8` attachment (whose
+/// stencil plane clears to `glClearStencil`'s value) — see `service::frame`.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glStencilFunc(_func: u32, _ref_: i32, _mask: u32) {}
+pub extern "C" fn glStencilFunc(func: u32, ref_: i32, mask: u32) {
+    with(|s| record::stencil_func(&mut s.ctx, func, ref_, mask));
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glStencilMask(_mask: u32) {}
+pub extern "C" fn glStencilMask(mask: u32) {
+    with(|s| record::stencil_mask(&mut s.ctx, mask));
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glStencilOp(_fail: u32, _zfail: u32, _zpass: u32) {}
+pub extern "C" fn glStencilOp(fail: u32, zfail: u32, zpass: u32) {
+    with(|s| record::stencil_op(&mut s.ctx, fail, zfail, zpass));
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glClearStencil(_s: i32) {}
+pub extern "C" fn glClearStencil(s: i32) {
+    with(|st| record::clear_stencil(&mut st.ctx, s));
+}
 /// `glPatchParameteri` — no tessellation stage is modeled: an honest no-op.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPatchParameteri(_pname: u32, _value: i32) {}

@@ -271,6 +271,22 @@ pub struct DrawCall {
     /// Depth-compare function (GL enum) + depth-write mask, lowered to the pipeline depth state.
     pub depth_func: u32,
     pub depth_write: bool,
+    /// `GL_STENCIL_TEST` enabled at draw time, and the front/back stencil test snapshot: per-face compare
+    /// func + stencil-fail/depth-fail/depth-pass ops (GL enums), plus the front-face reference value and
+    /// read/write masks (WebGPU carries a single reference + read/write mask for both faces). Lowered to the
+    /// pipeline `DepthState` stencil fields + an `Enc::SetStencilReference`.
+    pub stencil: bool,
+    pub stencil_func_front: u32,
+    pub stencil_func_back: u32,
+    pub stencil_fail_front: u32,
+    pub stencil_zfail_front: u32,
+    pub stencil_zpass_front: u32,
+    pub stencil_fail_back: u32,
+    pub stencil_zfail_back: u32,
+    pub stencil_zpass_back: u32,
+    pub stencil_ref: i32,
+    pub stencil_read_mask: u32,
+    pub stencil_write_mask: u32,
     /// Face culling: whether `GL_CULL_FACE` is enabled, the culled face, and the front-face winding.
     pub cull_enabled: bool,
     pub cull_face: u32,
@@ -342,6 +358,18 @@ impl Default for DrawCall {
             depth: false,
             depth_func: crate::model::glconst::GL_LESS,
             depth_write: true,
+            stencil: false,
+            stencil_func_front: crate::model::glconst::GL_ALWAYS,
+            stencil_func_back: crate::model::glconst::GL_ALWAYS,
+            stencil_fail_front: crate::model::glconst::GL_KEEP,
+            stencil_zfail_front: crate::model::glconst::GL_KEEP,
+            stencil_zpass_front: crate::model::glconst::GL_KEEP,
+            stencil_fail_back: crate::model::glconst::GL_KEEP,
+            stencil_zfail_back: crate::model::glconst::GL_KEEP,
+            stencil_zpass_back: crate::model::glconst::GL_KEEP,
+            stencil_ref: 0,
+            stencil_read_mask: 0xffff_ffff,
+            stencil_write_mask: 0xffff_ffff,
             cull_enabled: false,
             cull_face: crate::model::glconst::GL_BACK,
             front_face: crate::model::glconst::GL_CCW,

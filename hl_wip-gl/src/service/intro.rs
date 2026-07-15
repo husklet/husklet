@@ -350,6 +350,7 @@ pub fn frag_data_location(ctx: &GlContext, program: u32, name: &str) -> i32 {
 pub fn is_enabled(ctx: &GlContext, cap: u32) -> bool {
     match cap {
         GL_DEPTH_TEST => ctx.depth,
+        GL_STENCIL_TEST => ctx.stencil,
         GL_BLEND => ctx.blend,
         GL_CULL_FACE => ctx.cull_enabled,
         GL_SCISSOR_TEST => ctx.scissor_enabled,
