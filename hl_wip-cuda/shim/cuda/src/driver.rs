@@ -2055,10 +2055,15 @@ pub extern "C" fn cuStreamAttachMemAsync(s: *mut c_void, dptr: u64, length: usiz
 }
 
 /// `cuMemHostGetFlags(pFlags, p)` — the flags a host allocation was created with. The modeled pinned
-/// allocator ignores the (portable/mapped/write-combined) flags, so a live host allocation reports 0.
+/// allocator ignores the (portable/mapped/write-combined) flags, so a *live* host allocation reports 0.
+/// A pointer that is not a host allocation we own is `CUDA_ERROR_INVALID_VALUE` — never a fake success
+/// reporting flags for memory that was never page-locked.
 #[no_mangle]
 pub extern "C" fn cuMemHostGetFlags(pflags: *mut u32, p: *mut c_void) -> i32 {
     if pflags.is_null() || p.is_null() {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    if !with(|s| s.ctx.host.is_host_base(p as u64)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
     unsafe { *pflags = 0 };
@@ -2137,14 +2142,28 @@ pub extern "C" fn cuStreamIsCapturing(s: *mut c_void, status: *mut i32) -> i32 {
     })
 }
 
-/// `cuThreadExchangeStreamCaptureMode(mode)` — capture is unsupported, so there is no thread-local capture
-/// mode to change; the call validates its out-param and leaves the mode unchanged (the exchange is inert
-/// because no capture is ever in progress).
+thread_local! {
+    /// The calling thread's `CUstreamCaptureMode` (0=Global default, 1=ThreadLocal, 2=Relaxed). No capture
+    /// is ever in progress, but the mode is real per-thread state an app sets and restores around a scope,
+    /// so `cuThreadExchangeStreamCaptureMode` must swap it and hand back the previous value.
+    static CAPTURE_MODE: core::cell::Cell<i32> = const { core::cell::Cell::new(0) };
+}
+
+/// `cuThreadExchangeStreamCaptureMode(mode)` — swap the calling thread's stream-capture mode with `*mode`,
+/// writing the PREVIOUS mode back into `*mode`. This is a genuine per-thread state exchange (not a no-op):
+/// an app that sets a scoped mode and restores it via a second exchange observes the correct prior value.
+/// An out-of-range mode (not 0..=2) is `CUDA_ERROR_INVALID_VALUE`, leaving the stored mode untouched.
 #[no_mangle]
 pub extern "C" fn cuThreadExchangeStreamCaptureMode(mode: *mut i32) -> i32 {
     if mode.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
+    let requested = unsafe { *mode };
+    if !(0..=2).contains(&requested) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+    let previous = CAPTURE_MODE.with(|m| m.replace(requested));
+    unsafe { *mode = previous };
     CUDA_SUCCESS
 }
 
@@ -2995,5 +3014,52 @@ mod tests {
         let cfg = std::ffi::CString::new("cfg").unwrap();
         let out = std::ffi::CString::new("out").unwrap();
         assert_eq!(cuProfilerInitialize(cfg.as_ptr(), out.as_ptr(), 0), CUDA_SUCCESS);
+    }
+
+    #[test]
+    fn thread_exchange_stream_capture_mode_is_a_real_swap() {
+        let _g = guard();
+        // Store ThreadLocal(1); the exchange returns whatever the thread's prior mode was and keeps 1.
+        let mut mode = 1i32;
+        assert_eq!(cuThreadExchangeStreamCaptureMode(&mut mode), CUDA_SUCCESS);
+        // A second exchange to Relaxed(2) MUST hand back exactly the 1 we stored — proving the exchange
+        // actually mutates thread-local state rather than no-op'ing (the old bug returned success but
+        // never wrote the previous mode back).
+        mode = 2;
+        assert_eq!(cuThreadExchangeStreamCaptureMode(&mut mode), CUDA_SUCCESS);
+        assert_eq!(mode, 1, "exchange must return the previously-stored mode");
+        // Restore to Global(0); it returns the 2 we just stored.
+        mode = 0;
+        assert_eq!(cuThreadExchangeStreamCaptureMode(&mut mode), CUDA_SUCCESS);
+        assert_eq!(mode, 2);
+        // An out-of-range mode is rejected and leaves both the caller's value and the stored mode untouched.
+        let mut bad = 7i32;
+        assert_eq!(cuThreadExchangeStreamCaptureMode(&mut bad), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(bad, 7, "a rejected exchange must not overwrite the caller's value");
+        let mut probe = 1i32;
+        assert_eq!(cuThreadExchangeStreamCaptureMode(&mut probe), CUDA_SUCCESS);
+        assert_eq!(probe, 0, "the rejected exchange left the stored mode at 0");
+        // Null is rejected.
+        assert_eq!(cuThreadExchangeStreamCaptureMode(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+    }
+
+    #[test]
+    fn mem_host_get_flags_rejects_a_non_host_pointer() {
+        let _g = guard();
+        // A live pinned allocation reports flags 0 (the modeled allocator ignores host-alloc flags).
+        let mut hp: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuMemAllocHost_v2(&mut hp, 32), CUDA_SUCCESS);
+        let mut fl = 9u32;
+        assert_eq!(cuMemHostGetFlags(&mut fl, hp), CUDA_SUCCESS);
+        assert_eq!(fl, 0);
+        // A pointer we never page-locked is INVALID_VALUE — not a fake success reporting flags for memory
+        // that is not a host allocation the model owns.
+        let mut junk = [0u8; 8];
+        let foreign = junk.as_mut_ptr() as *mut c_void;
+        assert_eq!(cuMemHostGetFlags(&mut fl, foreign), CUDA_ERROR_INVALID_VALUE);
+        // Freeing the pinned allocation makes its pointer foreign again.
+        assert_eq!(cuMemFreeHost(hp), CUDA_SUCCESS);
+        assert_eq!(cuMemHostGetFlags(&mut fl, hp), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(cuMemHostGetFlags(&mut fl, core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
     }
 }

@@ -10,6 +10,7 @@
 
 use core::ffi::{c_char, c_void};
 
+use hl_cuda::adapter::ptx;
 use hl_cuda::model::device::DevicePtr;
 use hl_cuda::result::{
     cudart_from_gpu_error, CUDART_ERROR_INVALID_DEVICE, CUDART_ERROR_INVALID_RESOURCE_HANDLE,
@@ -904,24 +905,36 @@ struct CudaFuncAttributes {
     reserved: [i32; 16],
 }
 
-/// `cudaFuncGetAttributes(attr, func)` — the launch-relevant attributes of a device function. hl's PTX
-/// model does not track per-kernel register/shared pressure, so these are the honest GPU-free modeled
-/// defaults (the same values the driver's `cuFuncGetAttribute` answers for the simulated device). `func`
-/// is nvcc's host stub pointer; a null `attr` is `cudaErrorInvalidValue`.
+/// `cudaFuncGetAttributes(attr, func)` — the launch-relevant attributes of a device function. `func` is
+/// nvcc's host stub pointer; when it resolves through the runtime-API [`register::Registry`] to a real
+/// device entry, the register + static-shared figures are recovered from the module PTX by the SAME
+/// front-end the driver-API `cuFuncGetAttribute` uses (never fabricated for a kernel we can inspect). A
+/// host pointer that was never registered falls back to the modeled defaults. A null `attr` is
+/// `cudaErrorInvalidValue`.
 #[no_mangle]
 pub extern "C" fn cudaFuncGetAttributes(attr: *mut c_void, func: *const c_void) -> i32 {
-    let _ = func;
     if attr.is_null() {
         return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    let cc = with(|s| s.ctx.device.compute_capability);
+    let (cc, num_regs, shared_size_bytes) = with(|s| {
+        // Resolve the host stub → device Function → real (reg_count, static-shared bytes) via the PTX
+        // front-end; fall back to the modeled defaults for an unregistered host pointer.
+        let (regs, shared) = s
+            .registry
+            .resolve(func as usize)
+            .and_then(|f| s.ctx.entry_source(f))
+            .and_then(|(src, entry)| ptx::compile(&src, &entry, [1, 1, 1]).ok())
+            .map(|p| (p.reg_count as i32, p.shared_bytes as usize))
+            .unwrap_or((32, 0));
+        (s.ctx.device.compute_capability, regs, shared)
+    });
     let ptx_ver = cc.0 as i32 * 10 + cc.1 as i32;
     let a = CudaFuncAttributes {
-        shared_size_bytes: 0,
+        shared_size_bytes,
         const_size_bytes: 0,
         local_size_bytes: 0,
         max_threads_per_block: 1024,
-        num_regs: 32,
+        num_regs,
         ptx_version: ptx_ver,
         binary_version: ptx_ver,
         cache_mode_ca: 0,

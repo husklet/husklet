@@ -80,10 +80,41 @@ mod tests {
         let pci_s = unsafe { std::ffi::CStr::from_ptr(pci.as_ptr()) }.to_string_lossy().into_owned();
         assert_eq!(pci_s, "0000:00:00.0");
 
-        // func attributes
+        // func attributes: an unregistered/null func falls back to the modeled defaults (success).
         let mut fattr = vec![0u8; 256];
         assert_eq!(cudaFuncGetAttributes(fattr.as_mut_ptr() as *mut c_void, core::ptr::null()), 0);
         assert_eq!(cudaFuncGetAttributes(core::ptr::null_mut(), core::ptr::null()), CUDART_ERR_INVALID_VALUE);
+
+        // A REGISTERED host stub resolves to its real device kernel, so cudaFuncGetAttributes reports the
+        // kernel's TRUE register + static-shared figures (recovered from the module PTX by the same
+        // front-end the driver-API cuFuncGetAttribute uses) — not a fabricated constant.
+        {
+            let fatbin = make_fatbin(hl_cuda::adapter::ptx::VECADD_PTX);
+            let handle = __cudaRegisterFatBinary(fatbin.as_ptr() as *mut c_void);
+            assert!(!handle.is_null(), "vecadd fatbin registers");
+            static STUB: u8 = 0;
+            let host_fn = &STUB as *const u8 as *const c_void;
+            let dev_name = std::ffi::CString::new("vecadd").unwrap();
+            __cudaRegisterFunction(
+                handle,
+                host_fn as *const c_char,
+                core::ptr::null_mut(),
+                dev_name.as_ptr(),
+                0,
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            );
+            let mut ra = vec![0u8; 256];
+            assert_eq!(cudaFuncGetAttributes(ra.as_mut_ptr() as *mut c_void, host_fn), 0);
+            // CudaFuncAttributes #[repr(C)]: shared_size_bytes @0 (usize), num_regs @28 (i32).
+            let shared = usize::from_le_bytes(ra[0..8].try_into().unwrap());
+            let num_regs = i32::from_le_bytes(ra[28..32].try_into().unwrap());
+            assert!(num_regs > 0, "vecadd uses registers, got {num_regs}");
+            assert_eq!(shared, 0, "vecadd declares no static shared memory");
+        }
 
         // pinned host memory (no command sink needed)
         let mut hp: *mut c_void = core::ptr::null_mut();
@@ -160,5 +191,25 @@ mod tests {
     /// The default-stream handle (null token).
     fn stream_default() -> *mut c_void {
         core::ptr::null_mut()
+    }
+
+    /// Wrap PTX text in a minimal nvcc-style fatbin container (one uncompressed PTX entry) — the exact
+    /// shape `__cudaRegisterFatBinary`'s `container_bytes` walks (bare container, magic 0xba55ed50).
+    fn make_fatbin(ptx: &str) -> Vec<u8> {
+        let payload = ptx.as_bytes();
+        let payload_len = payload.len() as u64;
+        let fat_size = 64u64 + payload_len; // one 64-byte entry header + the payload
+        let mut c = Vec::new();
+        c.extend_from_slice(&0xba55_ed50u32.to_le_bytes()); // magic
+        c.extend_from_slice(&1u16.to_le_bytes()); // version
+        c.extend_from_slice(&16u16.to_le_bytes()); // header_size
+        c.extend_from_slice(&fat_size.to_le_bytes()); // fat_size
+        let mut e = [0u8; 64];
+        e[0..2].copy_from_slice(&1u16.to_le_bytes()); // kind = PTX
+        e[4..8].copy_from_slice(&64u32.to_le_bytes()); // entry header_size
+        e[8..16].copy_from_slice(&payload_len.to_le_bytes()); // payload_size (flags @40 stay 0 → uncompressed)
+        c.extend_from_slice(&e);
+        c.extend_from_slice(payload);
+        c
     }
 }
