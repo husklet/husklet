@@ -82,6 +82,7 @@ fn tap(exec: &mut WgpuExecutor, filter: Filter, u: f32) -> [u8; 4] {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),

@@ -634,6 +634,7 @@ fn graphics_spirv_triangle_shades_pixels() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),

@@ -159,6 +159,12 @@ pub struct RenderPipelineDesc {
     pub cull: u32,
     /// 0 = CCW, 1 = CW.
     pub front_face: u32,
+    /// MSAA sample count the pipeline rasterizes at (WebGPU `GPUMultisampleState.count` / Vulkan
+    /// `rasterizationSamples`). `1` = single-sampled (the neutral wire default, byte-for-byte the
+    /// pre-v8 behavior); `> 1` (e.g. `4`) builds a multisampled pipeline that MUST draw into a color
+    /// attachment of the SAME `sample_count` and whose result is later resolved to a single-sample
+    /// texture via [`super::command::Enc::ResolveTexture`]. Added at [`super::command::WIRE_VERSION`] 8.
+    pub sample_count: u32,
     pub label: String,
 }
 

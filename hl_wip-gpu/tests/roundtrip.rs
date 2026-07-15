@@ -60,7 +60,7 @@ fn representative_stream() -> Vec<Cmd> {
                     write_mask: 0xF,
                 }],
                 depth: Some(DepthState::depth_only(TextureFormat::Depth32Float, true, 2)),
-                topology: Topology::TriangleList, cull: 2, front_face: 0, label: "pipe".into(),
+                topology: Topology::TriangleList, cull: 2, front_face: 0, sample_count: 1, label: "pipe".into(),
             },
         ),
         Cmd::CreateComputePipeline(

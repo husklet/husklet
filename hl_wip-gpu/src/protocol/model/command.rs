@@ -270,7 +270,14 @@ pub enum Cmd {
 ///   (`ALWAYS` compare + `KEEP` ops + `0` clear) reproduce the prior no-stencil behavior byte-for-behavior.
 ///   A v6 decoder rejects etag 22 as `BadTag` rather than aliasing it; the appended descriptor bytes are
 ///   gated by the negotiated version so a v6/v7 pair never mis-frames a `CreateRenderPipeline`.
-pub const WIRE_VERSION: u32 = 7;
+/// - v8: adds MSAA. `RenderPipelineDesc` gains a `sample_count` (WebGPU `GPUMultisampleState.count`),
+///   appended AFTER `front_face` and before `label`; the neutral default `1` (single-sampled) reproduces
+///   the prior behavior byte-for-behavior. A pipeline with `sample_count > 1` draws into a color
+///   attachment of the same sample count and is resolved to a single-sample texture through the (now
+///   implemented) `ResolveTexture` op (etag 20). Purely additive: only a `CreateRenderPipeline`'s bytes
+///   grow by the appended `u32`; a v7 decoder would mis-frame a v8 pipeline, so the negotiated version
+///   gates it exactly as the v7 stencil append did.
+pub const WIRE_VERSION: u32 = 8;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.

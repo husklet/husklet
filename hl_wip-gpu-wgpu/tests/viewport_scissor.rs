@@ -61,6 +61,7 @@ fn viewport_transforms_and_scissor_clips_to_exact_subrect() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),

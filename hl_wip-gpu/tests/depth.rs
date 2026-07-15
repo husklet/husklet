@@ -109,6 +109,7 @@ fn render(depth: bool) -> [[u8; 4]; 2] {
         topology: Topology::TriangleList,
         cull: 0,
         front_face: 0,
+        sample_count: 1,
         label: String::new(),
     };
 
@@ -217,6 +218,7 @@ fn depth_buffer_stores_written_depth() {
                 topology: Topology::TriangleList,
                 cull: 0,
                 front_face: 0,
+                sample_count: 1,
                 label: String::new(),
             },
         ),

@@ -187,6 +187,7 @@ fn combined_sampler_frag_samples_texture_through_the_split() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),

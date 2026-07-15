@@ -124,6 +124,7 @@ fn instanced_draw_reads_per_instance_geometry_from_a_vertex_storage_buffer() {
                     topology: Topology::TriangleStrip,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),

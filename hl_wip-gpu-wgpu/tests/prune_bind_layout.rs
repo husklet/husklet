@@ -146,6 +146,7 @@ fn bound_but_unsampled_bindings_filtered_to_used() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),

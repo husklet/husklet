@@ -67,6 +67,7 @@ fn run(exec: &mut WgpuExecutor, fmt: IndexFormat, idx: Vec<u8>) -> Vec<u8> {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),

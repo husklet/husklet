@@ -246,14 +246,15 @@ fn copy_texture_to_texture_subregion() {
 }
 
 #[test]
-fn blit_is_advertised_and_resolve_is_rejected() {
-    // BlitTexture (scaled/filtered) IS now implemented — resampled by a textured-triangle draw (`blit.rs`) —
-    // so it is advertised AND runs. ResolveTexture (multisample averaging) is still unimplemented, so it must
-    // stay un-advertised AND be rejected when submitted, never silently dropped (a capability lie).
+fn blit_and_resolve_are_advertised_and_run() {
+    // BlitTexture (scaled/filtered) is resampled by a textured-triangle draw (`blit.rs`), and ResolveTexture
+    // (multisample averaging) is now implemented as a zero-draw render-pass resolve (`submit::resolve_texture`).
+    // BOTH are advertised AND run. (This test previously asserted ResolveTexture was UN-advertised and any
+    // submitted resolve was REJECTED — the FAIL-before proof that the op landed.)
     let mut g = exec();
     let caps = g.capabilities();
     assert!(caps.supports_command(etag::BLIT_TEXTURE), "BlitTexture IS implemented + advertised");
-    assert!(!caps.supports_command(etag::RESOLVE_TEXTURE), "ResolveTexture must not be advertised");
+    assert!(caps.supports_command(etag::RESOLVE_TEXTURE), "ResolveTexture IS now implemented + advertised");
     assert!(caps.supports_command(etag::COPY_T2T), "CopyTextureToTexture IS implemented + advertised");
 
     let sub = TextureSubresource::base();
@@ -291,28 +292,66 @@ fn blit_is_advertised_and_resolve_is_rejected() {
         assert_eq!(out, texel, "dest texel {i} must be the upscaled source texel {texel:?}");
     }
 
-    // ResolveTexture is still un-advertised → the runtime rejects it at validate (never silently dropped).
-    let e = Extent3d { width: 1, height: 1, depth: 1 };
-    let r = try_batch(
+    // ResolveTexture now RUNS: clear a 4× MSAA target (all samples take the clear color), resolve it into a
+    // single-sample texture, and read back the resolved plane. With every sample equal, the average is the
+    // clear color EXACTLY — proving the resolve executed and wrote the destination (not a silent no-op).
+    let e = Extent3d { width: 2, height: 2, depth: 1 };
+    // 2×2, 4× MSAA render target (RENDER_TARGET only — a multisampled texture cannot be copied, only resolved).
+    let msaa = TextureDesc {
+        width: 2, height: 2, depth: 1, mip_levels: 1, sample_count: 4,
+        dim: TextureDim::D2, format: TextureFormat::Rgba8Unorm,
+        usage: texture_usage::RENDER_TARGET, label: String::new(),
+    };
+    let clear = [0.2_f32, 0.4, 0.6, 1.0];
+    let want = [51u8, 102, 153, 255]; // clear * 255, exact
+    let s = run_batch(
         &mut g,
         &[
-            Cmd::CreateTexture(3, tex(2, 2, TextureFormat::Rgba8Unorm, RT)),
-            Cmd::CreateTexture(4, tex(2, 2, TextureFormat::Rgba8Unorm, RT)),
+            Cmd::CreateTexture(3, msaa),
+            Cmd::CreateTexture(4, tex(2, 2, TextureFormat::Rgba8Unorm, RT | texture_usage::COPY_SRC)),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    // Clear-only MSAA pass: every sample of every texel becomes `clear` (stored).
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment { texture: 3, load: LoadOp::Clear, clear, store: true }],
+                        depth: None,
+                    },
+                    Enc::EndRenderPass,
+                    // Resolve the whole MSAA target into the single-sample destination.
+                    Enc::ResolveTexture {
+                        src: 3, src_sub: sub, src_origin: o,
+                        dst: 4, dst_sub: sub, dst_origin: o, extent: e,
+                    },
+                ],
+                signal: None,
+            }),
+        ],
+    );
+    let px = g.read_texture(&s.resources, 4).unwrap();
+    for (i, out) in px.chunks_exact(4).enumerate() {
+        let got = [out[0], out[1], out[2], out[3]];
+        assert!(
+            (0..4).all(|k| (got[k] as i16 - want[k] as i16).abs() <= 1),
+            "resolved texel {i} must be the (uniform-sample) clear color {want:?}, got {got:?}"
+        );
+    }
+
+    // The op is genuinely validated, not a blind pass: resolving a SINGLE-sampled source is rejected.
+    let bad = try_batch(
+        &mut g,
+        &[
+            Cmd::CreateTexture(5, tex(2, 2, TextureFormat::Rgba8Unorm, RT)),
+            Cmd::CreateTexture(6, tex(2, 2, TextureFormat::Rgba8Unorm, RT | texture_usage::COPY_SRC)),
             Cmd::Submit(CommandBuffer {
                 encoder: vec![Enc::ResolveTexture {
-                    src: 3,
-                    src_sub: sub,
-                    src_origin: o,
-                    dst: 4,
-                    dst_sub: sub,
-                    dst_origin: o,
-                    extent: e,
+                    src: 5, src_sub: sub, src_origin: o,
+                    dst: 6, dst_sub: sub, dst_origin: o, extent: e,
                 }],
                 signal: None,
             }),
         ],
     );
-    assert!(r.is_err(), "a submitted (un-advertised) resolve must be rejected, not silently dropped");
+    assert!(bad.is_err(), "resolving a non-multisampled source must be a clean typed error");
 }
 
 // =================================================================================================
@@ -664,6 +703,7 @@ fn vertex_buffer_two_attributes_float_and_unorm8() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),
@@ -722,6 +762,7 @@ fn indexed_quad_covers_target() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),
@@ -789,6 +830,7 @@ fn instanced_per_instance_step_mode_advances_attribute() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),
@@ -833,6 +875,7 @@ fn scissor_restricts_draw_to_subrect() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),
@@ -922,6 +965,7 @@ fn depth_two_draws(near_first: bool) -> Vec<u8> {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),
@@ -994,6 +1038,7 @@ fn glsl_vertex_fragment_triangle_renders() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),
@@ -1106,6 +1151,7 @@ fn render_pipeline_from_kernel_shader_errs() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),
@@ -1139,6 +1185,7 @@ fn unsupported_vertex_format_errs() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),
@@ -1179,15 +1226,14 @@ fn capability_advertisement_is_honest() {
     assert!(!caps.supports_timeline_fences, "fences are emulated via submit completion, not real timelines");
 
     // Command set: the ops with a real replay arm are advertised — including BLIT_TEXTURE (scaled/filtered,
-    // resampled by a textured-triangle draw). Only RESOLVE_TEXTURE (multisample averaging) is unimplemented
-    // and stays un-advertised, so a negotiation can never promise a command the executor drops.
+    // resampled by a textured-triangle draw) and RESOLVE_TEXTURE (multisample averaging, a zero-draw
+    // render-pass resolve), so a negotiation can never promise a command the executor drops.
     for &t in &[
         etag::BEGIN_RENDER_PASS, etag::DRAW, etag::DRAW_INDEXED, etag::DISPATCH, etag::CLEAR_RECT,
         etag::COPY_B2B, etag::COPY_B2T, etag::COPY_T2B, etag::COPY_T2T, etag::BLIT_TEXTURE,
-        etag::FILL_BUFFER, etag::SET_VERTEX_BUFFER, etag::SET_INDEX_BUFFER, etag::SET_SCISSOR,
-        etag::SET_VIEWPORT,
+        etag::RESOLVE_TEXTURE, etag::FILL_BUFFER, etag::SET_VERTEX_BUFFER, etag::SET_INDEX_BUFFER,
+        etag::SET_SCISSOR, etag::SET_VIEWPORT,
     ] {
         assert!(caps.supports_command(t), "etag {t} has a replay arm and must be advertised");
     }
-    assert!(!caps.supports_command(etag::RESOLVE_TEXTURE));
 }

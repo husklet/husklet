@@ -202,6 +202,7 @@ fn every_command() -> Vec<Cmd> {
                 topology: Topology::TriangleStrip,
                 cull: 2,
                 front_face: 1,
+                sample_count: 1,
                 label: "pipe".into(),
             },
         ),
@@ -583,7 +584,8 @@ fn boundary_field_values_round_trip() {
 #[test]
 fn wire_version_and_magics_are_pinned() {
     // A version bump or a magic change must be a deliberate, reviewed edit (matches the frozen goldens).
-    assert_eq!(WIRE_VERSION, 7);
+    // Bumped 7 → 8 when MSAA added `RenderPipelineDesc.sample_count` (appended after `front_face`).
+    assert_eq!(WIRE_VERSION, 8);
     assert_eq!(SPIRV_MAGIC, 0x0723_0203);
     assert_eq!(KERNEL_MAGIC, 0xDD6B_0001);
     assert_eq!(GLSL_MAGIC, 0xDD67_0001);

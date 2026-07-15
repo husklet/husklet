@@ -296,6 +296,7 @@ fn draw_overrunning_its_vertex_buffer_is_out_of_bounds() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),

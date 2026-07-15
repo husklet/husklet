@@ -77,6 +77,7 @@ const REPLAYED_COMMANDS: &[u8] = &[
     etag::COPY_T2B,
     etag::COPY_T2T,
     etag::BLIT_TEXTURE,
+    etag::RESOLVE_TEXTURE,
     etag::FILL_BUFFER,
     etag::SET_STENCIL_REFERENCE,
 ];

@@ -115,6 +115,9 @@ fn enc_render_pipeline(e: &mut Encoder, p: &RenderPipelineDesc) {
     e.u32(p.topology.to_u32());
     e.u32(p.cull);
     e.u32(p.front_face);
+    // v8: MSAA sample count, appended after front_face. Neutral default 1 = single-sampled, so a stream
+    // that never rasterizes multisampled is byte-identical in meaning to the pre-v8 layout.
+    e.u32(p.sample_count);
     e.str(&p.label);
 }
 

@@ -127,6 +127,7 @@ fn run(exec: &mut WgpuExecutor, fg_blend: Option<BlendState>) -> Vec<u8> {
                 topology: Topology::TriangleStrip,
                 cull: 0,
                 front_face: 0,
+                sample_count: 1,
                 label: String::new(),
             },
         )

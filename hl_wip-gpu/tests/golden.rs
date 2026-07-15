@@ -11,15 +11,17 @@ use hl_gpu::protocol::model::enums::*;
 use hl_gpu::{decode_stream, encode_stream, WIRE_VERSION};
 
 #[test]
-fn wire_version_is_pinned_at_7() {
+fn wire_version_is_pinned_at_8() {
     // A change here must be intentional: it is the negotiated handshake version that keeps a stale
     // guest/backend pair from reinterpreting a tag it predates. Bumped 5 → 6 when the additive `Glsl`
     // shader-payload channel (leading `GLSL_MAGIC`) was introduced, and 6 → 7 when stencil test/write was
     // added (front+back `StencilFaceState` + masks on `DepthState`, `clear_stencil` on `DepthAttachment`,
     // and the dynamic `SetStencilReference` etag 22). The stencil fields append AFTER the existing depth
     // fields and only when a pipeline/pass actually carries a depth attachment, so a `depth: None` stream
-    // (like the goldens below) is byte-for-byte unchanged.
-    assert_eq!(WIRE_VERSION, 7);
+    // (like the goldens below) is byte-for-byte unchanged. Bumped 7 → 8 when MSAA added
+    // `RenderPipelineDesc.sample_count` (appended after `front_face`); no golden stream below encodes a
+    // render pipeline, so every GOLDEN_* byte array is still valid unchanged.
+    assert_eq!(WIRE_VERSION, 8);
 }
 
 /// Stream A: buffer create + write + fence create + wait + destroy.

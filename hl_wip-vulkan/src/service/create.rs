@@ -451,6 +451,7 @@ pub fn create_graphics_pipeline(
             topology: Topology::TriangleList,
             cull: 0,
             front_face: 0,
+            sample_count: 1,
             label: format!("vkgpipe{ir_id}"),
         },
     )])?;

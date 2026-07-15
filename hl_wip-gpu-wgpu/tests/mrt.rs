@@ -81,6 +81,7 @@ fn two_color_attachments_each_hold_their_own_output() {
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
+                    sample_count: 1,
                     label: String::new(),
                 },
             ),

@@ -154,13 +154,16 @@ impl WgpuExecutor {
                     )?;
                     i += 1;
                 }
-                // Multisample resolve needs sample averaging this backend does not implement, and is NOT
-                // advertised (see `REPLAYED_COMMANDS`), so the runtime rejects it at validate. Erroring here
-                // (rather than the old silent no-op) is the defensive backstop for a direct executor call —
-                // a submitted-but-unimplemented op must never vanish without a trace.
-                Enc::ResolveTexture { .. } => {
-                    hl_log::hl_warn!(tag::WGPU, "op rejected op=ResolveTexture reason=unimplemented");
-                    return Err(GpuError::Unsupported("wgpu: ResolveTexture (multisample) unimplemented"))
+                // Multisample resolve: average the multisampled `src`'s samples into single-sample `dst`.
+                // wgpu has no standalone resolve command, so it is realized as a zero-draw render pass that
+                // LOADs the multisampled color attachment and hands `dst` as its `resolve_target` — the
+                // resolve happens at pass end (see `resolve_texture`). This is the executed analogue of the
+                // CPU oracle's sample averaging.
+                Enc::ResolveTexture { src, src_sub, src_origin, dst, dst_sub, dst_origin, extent } => {
+                    self.resolve_texture(
+                        res, *src, src_sub, src_origin, *dst, dst_sub, dst_origin, extent,
+                    )?;
+                    i += 1;
                 }
                 // Stray state-setters outside a pass cannot occur in a validated command buffer.
                 _ => i += 1,
@@ -253,6 +256,90 @@ impl WgpuExecutor {
             block.extend_from_slice(&plane[start..start + row]);
         }
         self.write_region(res, dst, dst_origin.x, dst_origin.y, 0, ew, eh, 1, 0, &block)
+    }
+
+    /// Multisample resolve: average the samples of multisampled `src` into single-sample `dst`. wgpu
+    /// exposes resolve only as a render-pass `resolve_target`, so this begins a zero-draw pass that LOADs
+    /// `src` as its color attachment (the samples a prior pass rendered + stored) and names `dst` as the
+    /// resolve target; wgpu resolves at pass end. Only the base subresource of a whole 2D color texture is
+    /// supported (wgpu resolves the WHOLE attachment, so a sub-rect origin/extent that is not the full
+    /// matching texture is a clean typed error, not a silent partial resolve). `src` must be multisampled
+    /// and `dst` single-sampled of the same size + format — anything else is rejected rather than guessed.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_texture(
+        &mut self,
+        res: &SessionResources,
+        src: u32,
+        src_sub: &TextureSubresource,
+        src_origin: &Origin3d,
+        dst: u32,
+        dst_sub: &TextureSubresource,
+        dst_origin: &Origin3d,
+        extent: &Extent3d,
+    ) -> Result<()> {
+        for sub in [src_sub, dst_sub] {
+            if sub.mip != 0 || sub.layer != 0 || sub.aspect != TextureAspect::All {
+                return Err(GpuError::Unsupported("wgpu: non-base subresource multisample resolve"));
+            }
+        }
+        let (src_view, src_samples, sw, sh, sfmt) = {
+            let t = texture::native(res, src)?;
+            (t.view.clone(), t.sample_count, t.width, t.height, t.format)
+        };
+        let (dst_view, dst_samples, dw, dh, dfmt) = {
+            let t = texture::native(res, dst)?;
+            (t.view.clone(), t.sample_count, t.width, t.height, t.format)
+        };
+        if src_samples <= 1 {
+            return Err(GpuError::Invalid("wgpu: resolve source is not multisampled"));
+        }
+        if dst_samples != 1 {
+            return Err(GpuError::Invalid("wgpu: resolve destination must be single-sampled"));
+        }
+        if sfmt != dfmt {
+            return Err(GpuError::Invalid("wgpu: resolve between incompatible formats"));
+        }
+        // A render-pass resolve resolves the ENTIRE attachment, so only a whole-texture resolve (origin 0,
+        // extent == both textures' matching size) is faithful; a sub-region resolve would silently resolve
+        // more than asked, so it is rejected.
+        if src_origin.x != 0
+            || src_origin.y != 0
+            || src_origin.z != 0
+            || dst_origin.x != 0
+            || dst_origin.y != 0
+            || dst_origin.z != 0
+            || extent.width != sw
+            || extent.height != sh
+            || extent.depth > 1
+            || sw != dw
+            || sh != dh
+        {
+            return Err(GpuError::Unsupported("wgpu: sub-region multisample resolve"));
+        }
+        let mut enc =
+            self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("hl-resolve-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &src_view,
+                    // The single-sample destination receives the averaged (resolved) samples at pass end.
+                    resolve_target: Some(&dst_view),
+                    ops: wgpu::Operations {
+                        // LOAD the samples a prior pass rendered + stored into this MSAA target.
+                        load: wgpu::LoadOp::Load,
+                        // The MSAA samples themselves need not be kept once resolved.
+                        store: wgpu::StoreOp::Discard,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+        self.gpu.queue.submit(Some(enc.finish()));
+        self.gpu.device.poll(wgpu::Maintain::Wait);
+        Ok(())
     }
 
     /// Execute one render pass: begin with the color attachments (clear/load), replay any pipeline/bind/
@@ -690,6 +777,7 @@ void main() {
                         topology: Topology::TriangleList,
                         cull: 0,
                         front_face: 0,
+                        sample_count: 1,
                         label: String::new(),
                     },
                 ),

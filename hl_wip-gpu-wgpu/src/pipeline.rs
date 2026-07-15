@@ -351,7 +351,14 @@ impl WgpuExecutor {
                 ..Default::default()
             },
             depth_stencil,
-            multisample: wgpu::MultisampleState::default(),
+            // MSAA: rasterize at the descriptor's sample count. `1` (the neutral default) is
+            // `MultisampleState::default()` (single-sampled) byte-for-byte; `> 1` (e.g. 4) builds a
+            // multisampled pipeline that wgpu requires to draw into a color attachment of the SAME
+            // sample count — its result is later averaged into a single-sample texture by `ResolveTexture`.
+            multisample: wgpu::MultisampleState {
+                count: desc.sample_count.max(1),
+                ..Default::default()
+            },
             fragment: fs.as_ref().map(|(m, entry)| wgpu::FragmentState {
                 module: m,
                 entry_point: Some(entry.as_str()),
@@ -794,6 +801,7 @@ void main() {
                         topology: Topology::TriangleList,
                         cull: 0,
                         front_face: 0,
+                        sample_count: 1,
                         label: String::new(),
                     },
                 ),

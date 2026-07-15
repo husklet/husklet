@@ -145,6 +145,8 @@ fn dec_render_pipeline(d: &mut Decoder) -> Result<RenderPipelineDesc> {
         topology: Topology::from_u32(d.u32()?)?,
         cull: d.u32()?,
         front_face: d.u32()?,
+        // v8: MSAA sample count, appended after front_face (see `enc_render_pipeline`).
+        sample_count: d.u32()?,
         label: d.str()?,
     })
 }

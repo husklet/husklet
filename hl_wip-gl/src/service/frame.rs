@@ -880,6 +880,7 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, n_
                 topology,
                 cull,
                 front_face,
+                sample_count: 1,
                 label: String::new(),
             },
         ));

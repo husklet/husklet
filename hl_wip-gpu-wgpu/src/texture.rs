@@ -29,6 +29,10 @@ pub struct WgpuTexture {
     /// non-base mip.
     #[allow(dead_code)]
     pub mip_levels: u32,
+    /// MSAA sample count (`>= 1`). `1` is a plain single-sampled texture; `> 1` is a multisampled render
+    /// target that can only be a `RENDER_ATTACHMENT` (never copied to/from) and is consumed by a
+    /// `ResolveTexture` op which averages its samples into a single-sample destination.
+    pub sample_count: u32,
     pub format: TextureFormat,
 }
 
@@ -61,13 +65,22 @@ impl WgpuExecutor {
             TextureDim::D3 => (wgpu::TextureDimension::D3, desc.depth.max(1)),
             _ => (wgpu::TextureDimension::D2, 1),
         };
-        let mip_levels = desc.mip_levels.max(1);
+        let sample_count = desc.sample_count.max(1);
+        // A multisampled texture is a MSAA render target only: WebGPU forbids `mipLevelCount > 1` and any
+        // COPY usage on a `sampleCount > 1` texture (you resolve it, never copy it), so those are dropped —
+        // it is exclusively a `RENDER_ATTACHMENT` drawn into then resolved by a `ResolveTexture` op.
+        let mip_levels = if sample_count > 1 { 1 } else { desc.mip_levels.max(1) };
         // A 3D texture cannot be a render attachment in WebGPU/wgpu, so that usage is dropped for `D3`
-        // (a volume is a sampled/copied resource here, never a color target). 2D keeps the full set.
-        let mut usage = wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST;
-        if dimension != wgpu::TextureDimension::D3 {
+        // (a volume is a sampled/copied resource here, never a color target). A single-sampled 2D texture
+        // keeps the full set; a multisampled one keeps only RENDER_ATTACHMENT (copies are invalid on it).
+        let mut usage = if sample_count > 1 {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        } else {
+            wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+        };
+        if dimension != wgpu::TextureDimension::D3 && sample_count == 1 {
             usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
         }
         let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -78,7 +91,7 @@ impl WgpuExecutor {
                 depth_or_array_layers: depth,
             },
             mip_level_count: mip_levels,
-            sample_count: desc.sample_count.max(1),
+            sample_count,
             dimension,
             format: wfmt,
             usage,
@@ -92,6 +105,7 @@ impl WgpuExecutor {
             height: desc.height,
             depth,
             mip_levels,
+            sample_count,
             format: desc.format,
         })
     }

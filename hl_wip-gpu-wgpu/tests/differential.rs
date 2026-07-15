@@ -557,6 +557,7 @@ fn draw_cmds(
             topology: Topology::TriangleList,
             cull: 0,
             front_face: 0,
+            sample_count: 1,
             label: String::new(),
         },
     ));
@@ -621,6 +622,7 @@ fn gen_draw_depth(seed: u64) -> Prog {
                 topology: Topology::TriangleList,
                 cull: 0,
                 front_face: 0,
+                sample_count: 1,
                 label: String::new(),
             },
         ),
@@ -690,6 +692,7 @@ fn gen_draw_blend(seed: u64) -> Prog {
                 topology: Topology::TriangleList,
                 cull: 0,
                 front_face: 0,
+                sample_count: 1,
                 label: String::new(),
             },
         )

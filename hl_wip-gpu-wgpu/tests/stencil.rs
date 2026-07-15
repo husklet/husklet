@@ -123,6 +123,7 @@ fn pipeline(module: u32, depth: DepthState, topology: Topology) -> RenderPipelin
         topology,
         cull: 0,
         front_face: 0,
+        sample_count: 1,
         label: String::new(),
     }
 }

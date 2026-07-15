@@ -186,6 +186,7 @@ fn pipeline(shader: u32, blend: Option<BlendState>, write_mask: u32, depth: Dept
         topology: Topology::TriangleList,
         cull: 0,
         front_face: 0,
+        sample_count: 1,
         label: String::new(),
     }
 }
