@@ -21,8 +21,9 @@ pub struct WgpuTexture {
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
-    /// Depth slices for a 3D texture (`depth_or_array_layers`); 1 for a plain 2D texture. A value > 1 is
-    /// the 3D-volume signal the `CopyBufferToTexture` upload path uses to fill every slice.
+    /// `depth_or_array_layers`: the depth-slice count for a 3D texture, the array-layer count for a 2D-array,
+    /// or 6 for a cube (its faces); 1 for a plain 2D / 1D texture. A value > 1 is the signal the
+    /// `CopyBufferToTexture` upload path uses to fill every slice / layer / face (origin.z selects it).
     pub depth: u32,
     /// Number of mip levels materialized (>= 1). A value > 1 means a `CopyBufferToTexture` may target a
     /// non-zero `mip` and a sampler may select a LOD. Retained for introspection / future readback of a
@@ -49,30 +50,64 @@ fn round256(n: u32) -> u32 {
 }
 
 impl WgpuExecutor {
-    /// Create a texture matching `desc`. A `D3` texture materializes `desc.depth` depth slices (a real 3D
-    /// volume); every other dimension stays a single-layer 2D image (the subset the render suite exercises).
-    /// `desc.mip_levels` mip levels are allocated, so a mipmapped source can be uploaded per level and
-    /// sampled at an explicit LOD. The default view spans all mips and (for a 3D texture) picks the `D3`
-    /// view dimension, which is exactly what a `texture3D`/`textureLod` sample validates against.
+    /// Create a texture matching `desc.dim` — honoring the true texture shape, not collapsing everything to
+    /// 2D. Each protocol `TextureDim` maps to its real wgpu texture + default-view dimension:
+    ///
+    /// * `D1`   → a wgpu 1D texture (`desc.height` must be 1; 1D forbids mips/MSAA), `D1` view.
+    /// * `D2`   → a wgpu 2D texture; `desc.depth` is the **array-layer** count (`1` = a plain 2D image), so
+    ///            `depth > 1` is a 2D-array whose default view is `D2Array` (else `D2`).
+    /// * `D3`   → a wgpu 3D texture, `desc.depth` depth slices, `D3` view.
+    /// * `Cube` → a wgpu 2D texture with exactly **6 array layers** (the faces) and a `Cube` default view —
+    ///            which is what a `samplerCube` bind-group binding, built from the shader's auto layout,
+    ///            requires. Collapsing this to a 2D texture (the old behaviour) made every cube draw fail
+    ///            device validation at bind time.
+    ///
+    /// `desc.mip_levels` mip levels are allocated so a mipmapped source can be uploaded per level and sampled
+    /// at an explicit LOD. The default view spans all mips and all layers/faces.
     pub(crate) fn make_texture(&self, desc: &TextureDesc) -> Result<WgpuTexture> {
         if desc.width == 0 || desc.height == 0 {
             return Err(GpuError::Invalid("zero-sized texture"));
         }
         let wfmt = texture_format(desc.format)?;
-        // Only `D3` becomes a native 3D texture (depth = slice count). D1/D2/Cube stay 2D single-layer,
-        // matching the pre-existing behaviour the frozen suite depends on.
-        let (dimension, depth) = match desc.dim {
-            TextureDim::D3 => (wgpu::TextureDimension::D3, desc.depth.max(1)),
-            _ => (wgpu::TextureDimension::D2, 1),
+        // Map the protocol dimension to (wgpu texture dimension, layer/slice count, default-view dimension).
+        // `depth_or_array_layers` is the array-layer count for D1/D2/Cube and the slice count for D3.
+        let layers = desc.depth.max(1);
+        let (dimension, depth, view_dim) = match desc.dim {
+            TextureDim::D1 => {
+                if desc.height != 1 {
+                    return Err(GpuError::Invalid("1D texture must have height == 1"));
+                }
+                (wgpu::TextureDimension::D1, 1, wgpu::TextureViewDimension::D1)
+            }
+            TextureDim::D2 if layers > 1 => {
+                (wgpu::TextureDimension::D2, layers, wgpu::TextureViewDimension::D2Array)
+            }
+            TextureDim::D2 => (wgpu::TextureDimension::D2, 1, wgpu::TextureViewDimension::D2),
+            TextureDim::D3 => (wgpu::TextureDimension::D3, layers, wgpu::TextureViewDimension::D3),
+            TextureDim::Cube => {
+                // A cube map is exactly 6 square faces. `desc.depth` carries the face count; a descriptor that
+                // left it at the 0/1 default is treated as the canonical 6, but any explicit non-6 count is a
+                // hard error (there is no cube-array support here).
+                let faces = if desc.depth <= 1 { 6 } else { desc.depth };
+                if faces != 6 {
+                    return Err(GpuError::Invalid("cube texture must have exactly 6 faces"));
+                }
+                if desc.width != desc.height {
+                    return Err(GpuError::Invalid("cube texture faces must be square"));
+                }
+                (wgpu::TextureDimension::D2, 6, wgpu::TextureViewDimension::Cube)
+            }
         };
         let sample_count = desc.sample_count.max(1);
         // A multisampled texture is a MSAA render target only: WebGPU forbids `mipLevelCount > 1` and any
         // COPY usage on a `sampleCount > 1` texture (you resolve it, never copy it), so those are dropped —
-        // it is exclusively a `RENDER_ATTACHMENT` drawn into then resolved by a `ResolveTexture` op.
-        let mip_levels = if sample_count > 1 { 1 } else { desc.mip_levels.max(1) };
-        // A 3D texture cannot be a render attachment in WebGPU/wgpu, so that usage is dropped for `D3`
-        // (a volume is a sampled/copied resource here, never a color target). A single-sampled 2D texture
-        // keeps the full set; a multisampled one keeps only RENDER_ATTACHMENT (copies are invalid on it).
+        // it is exclusively a `RENDER_ATTACHMENT` drawn into then resolved by a `ResolveTexture` op. A 1D
+        // texture likewise forbids `mipLevelCount > 1`.
+        let mip_levels = if sample_count > 1 || dimension == wgpu::TextureDimension::D1 {
+            1
+        } else {
+            desc.mip_levels.max(1)
+        };
         let mut usage = if sample_count > 1 {
             wgpu::TextureUsages::RENDER_ATTACHMENT
         } else {
@@ -80,7 +115,14 @@ impl WgpuExecutor {
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST
         };
-        if dimension != wgpu::TextureDimension::D3 && sample_count == 1 {
+        // Only a single-sampled plain 2D image gets RENDER_ATTACHMENT. A 3D volume cannot be a render
+        // attachment; a 1D texture cannot either; and a cube / 2D-array here is a sampled/copied resource
+        // whose default view is a Cube / D2Array (not a single-layer 2D view a color pass could target), so
+        // it is never a color target. This keeps the usage set valid for every shape.
+        if dimension == wgpu::TextureDimension::D2
+            && view_dim == wgpu::TextureViewDimension::D2
+            && sample_count == 1
+        {
             usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
         }
         let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -97,7 +139,13 @@ impl WgpuExecutor {
             usage,
             view_formats: &[],
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // The default view must carry the true view dimension: wgpu builds the sampler binding against the
+        // shader's declared texture dimension (Cube / D2Array / D3 / D1), and a mismatched view is rejected
+        // when the bind group is created at draw time.
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(view_dim),
+            ..Default::default()
+        });
         Ok(WgpuTexture {
             texture,
             view,
@@ -191,8 +239,9 @@ impl WgpuExecutor {
     }
 
     /// Upload a tight-packed `width*height*depth` texel region into `mip` of texture `id` at origin
-    /// `(x, y, z)`. `depth > 1` fills that many 3D slices (source rows advance `height` per slice), and
-    /// `mip > 0` targets a mip level (whose own dimensions the caller passes as `width`/`height`).
+    /// `(x, y, z)`. `depth > 1` fills that many destination layers — 3D depth slices, 2D-array layers, or
+    /// cube faces (origin.z selects the first one; source rows advance `height` per layer). `mip > 0` targets
+    /// a mip level (whose own dimensions the caller passes as `width`/`height`).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_region(
         &self,
