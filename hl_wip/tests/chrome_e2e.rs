@@ -166,6 +166,17 @@ fn chrome_first_light_through_the_full_stack() {
         ld_path.push(d);
     }
 
+    // GAP #0 neutralizer: LD_PRELOAD a shim that patches out Chromium's fatal fd-ownership enforcement so it
+    // gets past early ChromeMain on this kernel and reaches the Wayland/EGL/GL path we actually exercise.
+    let preload = build_fd_ownership_preload(&runtime_dir);
+    match &preload {
+        Some(p) => eprintln!("GAP #0 fd-ownership preload: {}", p.display()),
+        None => eprintln!(
+            "no fd-ownership preload (HL_CHROME_PRELOAD unset and csrc/chrome_fdguard.c did not compile) — \
+             Chrome will re-hit GAP #0."
+        ),
+    }
+
     let mut cmd = Command::new(&run_bin);
     cmd.arg("--ozone-platform=wayland")
         .arg("--enable-features=UseOzonePlatform")
@@ -175,6 +186,9 @@ fn chrome_first_light_through_the_full_stack() {
         .arg("--no-sandbox")
         .arg("--disable-setuid-sandbox")
         .arg("--disable-gpu-sandbox")
+        // With --no-sandbox the zygote is pointless, and this box's Chromium fatals with "Failed sending
+        // zygote boot message" once past GAP #0 — skip the zygote so it proceeds to Wayland/GPU bring-up.
+        .arg("--no-zygote")
         // Surface Chrome's OWN fatal reason on stderr instead of crashpad's opaque `pread64` EIO noise (this
         // box's Chromium aborts in early ChromeMain — see the GAP #0 diagnosis below).
         .arg("--disable-crashpad-for-testing")
@@ -196,6 +210,9 @@ fn chrome_first_light_through_the_full_stack() {
         .env("HL_GPU_EXEC", exec.sock())
         .env("HL_SHIM_DEBUG", "1")
         .env_remove("DISPLAY");
+    if let Some(p) = &preload {
+        cmd.env("LD_PRELOAD", p);
+    }
     // Propagate shim logging so a HL_LOG=gl,transport run surfaces the GL driver's per-frame diagnostics.
     for var in ["HL_LOG", "HL_LOG_LEVEL"] {
         if let Ok(v) = std::env::var(var) {
@@ -266,22 +283,39 @@ fn chrome_first_light_through_the_full_stack() {
     // CHECK/abort path. On THIS box that abort is a FD-ownership violation in early ChromeMain (see GAP #0).
     let exited = app_exited.or(killed_status);
     let sigtrapped = exited.map(|s| (s.into_raw() & 0x7f) == 5).unwrap_or(false);
-    let fd_ownership_abort =
-        stderr.contains("FD ownership violation") || (submit_count == 0 && sigtrapped);
+    // GAP #0 is the fd-ownership CHECK specifically — key it on Chromium's own message, NOT on a bare
+    // SIGTRAP: once the preload neutralizes GAP #0, Chrome reaches the Wayland/GPU layer and may still
+    // SIGTRAP at a LATER downstream CHECK, which must not be mis-attributed to GAP #0.
+    let fd_ownership_abort = stderr.contains("FD ownership violation");
+    // Did Chrome get as far as bringing up the ozone-Wayland backend (i.e. it connected to OUR compositor)?
+    let reached_wayland = stderr.contains("ozone/platform/wayland")
+        || stderr.contains("ozone_platform_wayland")
+        || stderr.contains("wayland_buffer_manager")
+        || stderr.to_lowercase().contains("drm render node");
 
     let rendered = orange_pct > 40.0;
     if !rendered {
         let stage = if fd_ownership_abort {
-            "GAP #0 / ENVIRONMENTAL — Chromium aborts in early ChromeMain with a 'FD ownership violation' \
-             (arm64 IMMEDIATE_CRASH / SIGTRAP), BEFORE any Wayland/EGL/GL. Reproduces even in `--headless \
-             --dump-dom about:blank` with NO compositor and NO GL, so it is a Chromium-vs-(OrbStack kernel) \
-             startup incompatibility entirely UPSTREAM of and independent from the hl_wip GL/compositor \
-             stack — NOT gap #1/#2. Some library or the loader closes an fd Chromium's fd-ownership \
-             enforcement tracks; the trap is at a FIXED offset in ChromeMain regardless of \
-             process-model / dbus / library ordering. Our libEGL is never reached (0 submits, no \
-             HL_SHIM_DEBUG). NEXT: obtain a Chromium build without fd-ownership enforcement (pre-~M120) or \
-             a build/runtime that tolerates this kernel; only then do gaps #1/#2 (GLSL-ES shaders / libEGL \
-             binding) become reachable."
+            "GAP #0 / NEUTRALIZER DID NOT APPLY — Chromium still aborts in early ChromeMain with a 'FD \
+             ownership violation' (arm64 IMMEDIATE_CRASH / SIGTRAP), BEFORE any Wayland/EGL/GL. This gap is \
+             PINNED and normally NEUTRALIZED by the LD_PRELOAD shim `csrc/chrome_fdguard.c`: Chromium's own \
+             global close()/ScopedFD Acquire/Free check a per-fd owned-bitmap and CHECK-crash (message from \
+             base/files/scoped_file.cc) when a fd is closed/acquired inconsistently — a race that only trips \
+             on this OrbStack kernel's fd-reuse timing. The shim runtime-patches the 3 enforcement branches \
+             to NOP, matching a stock release build. Seeing this stage means the preload was MISSING or \
+             FAILED to build/apply: check the 'GAP #0 fd-ownership preload' line above, set \
+             $HL_CHROME_PRELOAD to a prebuilt shim, or verify the system `cc` is available."
+        } else if sigtrapped && reached_wayland {
+            "GAP #0b / POST-NEUTRALIZE downstream CHECK — GAP #0 is neutralized (no fd-ownership abort) and \
+             Chrome got PAST early ChromeMain all the way into the ozone-Wayland backend: it connected to \
+             OUR compositor and probed the DRM render node (see the wayland/drm lines above). It then hit a \
+             LATER Chromium IMMEDIATE_CRASH/CHECK (SIGTRAP) before lowering a GL frame (0 submits). This is \
+             a NEW, separate gap downstream of #0 (a Wayland/GPU-bring-up CHECK on this kernel), NOT the \
+             fd-ownership crash. NEXT: pin the new SIGTRAP site (base-relative PC) the same way GAP #0 was \
+             pinned and decide whether it is another environmental CHECK to neutralize or a real stack gap."
+        } else if sigtrapped {
+            "POST-NEUTRALIZE SIGTRAP (pre-Wayland) — GAP #0 is neutralized (no fd-ownership abort) but \
+             Chrome SIGTRAPped at another CHECK before the ozone-Wayland backend came up. Pin the new PC."
         } else if submit_count == 0 {
             "GAP #2 / EGL bring-up: the host executor saw 0 GPU submits — Chrome never lowered a GL frame \
              to OUR shim. Either Chrome bound its own ANGLE (not ours), or it stopped BEFORE the first GL \
@@ -408,6 +442,43 @@ fn build_run_prefix(chromium_bin: &Path, gl_dir: &Path) -> std::io::Result<(Path
     deps.push(lib_dir.to_path_buf());
 
     Ok((prefix.join("chromium"), deps))
+}
+
+/// Build (or locate) the GAP #0 neutralizer: an LD_PRELOAD `.so` that patches out this Chromium's fatal
+/// fd-ownership enforcement (see the GAP #0 note above and `csrc/chrome_fdguard.c`). Without it the real
+/// arm64 Chromium aborts in early ChromeMain before any Wayland/EGL/GL is reached. Prefers a prebuilt path
+/// in `$HL_CHROME_PRELOAD`; otherwise compiles `csrc/chrome_fdguard.c` with the system `cc` into `out_dir`.
+/// Returns `None` (test proceeds, will re-diagnose GAP #0) if no compiler / source is available.
+fn build_fd_ownership_preload(out_dir: &Path) -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("HL_CHROME_PRELOAD") {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let src = PathBuf::from(&manifest).join("csrc").join("chrome_fdguard.c");
+    if !src.exists() {
+        return None;
+    }
+    let so = out_dir.join("chrome_fdguard.so");
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let out = Command::new(cc)
+        .args(["-shared", "-fPIC", "-O0", "-o"])
+        .arg(&so)
+        .arg(&src)
+        .arg("-lpthread")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        eprintln!(
+            "could not compile the fd-ownership preload ({}): {}",
+            src.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        return None;
+    }
+    Some(so)
 }
 
 /// A base directory on a roomy filesystem ($HOME/.cache/hl-wip-chrome) — the shared /tmp on this box is a
