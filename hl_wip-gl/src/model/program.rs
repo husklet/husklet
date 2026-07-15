@@ -77,7 +77,20 @@ impl Program {
         }
         let (unis, ubuf_size) = glsl::uni_layout(&vs_src, &fs_src);
         self.samp_names = glsl::program_samplers(&vs_src, &fs_src);
-        let (vs_glsl, fs_glsl) = glsl::translate_render(&vs_src, &fs_src);
+        // GskGpu (GTK4 "gl") / ANGLE (Chrome) source uses helper functions taking combined sampler
+        // parameters and `gl_VertexID` vertex-pulling — constructs `translate_render`'s reflect-and-
+        // regenerate would destroy (it keeps only `main` and reflects a flat ES2 interface). For such
+        // source, forward the stage VERBATIM so the host executor's ES route (`glsl_es` +
+        // `spirv_split`-style combined→separate sampler split) compiles the REAL text. The sampler /
+        // uniform reflection above still drives the bind-group layout, which stays on the shared
+        // `binding = 1+2k / 2+2k` scheme the executor emits. Simple ES2 shaders take `translate_render`.
+        let (vs_glsl, fs_glsl) = if glsl::is_forward_verbatim(&vs_src) || glsl::is_forward_verbatim(&fs_src)
+        {
+            hl_log::hl_debug!(hl_log::tag::GL, "link: GskGpu/ANGLE-shaped GLSL-ES → forward verbatim to host ES route");
+            (vs_src.clone(), fs_src.clone())
+        } else {
+            glsl::translate_render(&vs_src, &fs_src)
+        };
         self.vs_ir = Some(
             GlslDescriptor { stage: glsl_stage::VERTEX, entry: "vmain".into(), source: vs_glsl }
                 .to_words(),

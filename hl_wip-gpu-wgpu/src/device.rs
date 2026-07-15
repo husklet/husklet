@@ -86,10 +86,20 @@ pub fn acquire(cfg: &DeviceConfig) -> Result<Gpu> {
         info.device_type
     );
 
+    // Enable PUSH_CONSTANTS when the adapter really supports it (lavapipe does). A guest wgpu (e.g. Zed's
+    // gpui_wgpu) builds an internal indirect-draw-validation compute pipeline during device creation whose
+    // shader declares `var<push_constant>`. That SPIR-V reaches this executor's `Device::create_shader_module`,
+    // and naga's validator only enables the `PUSH_CONSTANT` capability when the device requested the
+    // PUSH_CONSTANTS feature — otherwise it rejects the module ("Capability PUSH_CONSTANT is not supported"),
+    // which the guest sees as a lost device. Requesting the feature only when advertised keeps this truthful
+    // on backends that lack it. `adapter.limits()` already carries the adapter's real `max_push_constant_size`,
+    // which the feature requires to be nonzero.
+    let required_features = adapter.features() & wgpu::Features::PUSH_CONSTANTS;
+
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: Some("hl-gpu-wgpu"),
-            required_features: wgpu::Features::empty(),
+            required_features,
             // Downlevel/software-friendly: lavapipe advertises modest limits, so request the adapter's own
             // limits rather than the desktop defaults (which a software device may not meet).
             required_limits: adapter.limits(),

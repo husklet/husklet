@@ -58,6 +58,21 @@ pub fn spirv_to_wgsl(words: &[u32]) -> Result<String> {
 /// binds the driver-declared name (`vmain`/`fmain`/`cmain`) via its `ShaderRef`, so we rename the entry
 /// point to `entry` before `wgsl-out` writes it. Handles vertex, fragment, and compute stages.
 pub fn glsl_to_wgsl(src: &str, stage: naga::ShaderStage, entry: &str) -> Result<String> {
+    // GskGpu (GTK4 "gl") and ANGLE (Chrome) emit GLSL-ES that naga's `glsl-in` rejects wholesale
+    // (`#version … es`, `gl_VertexID`, combined `sampler2D` globals AND — the hard case — combined
+    // `sampler2D` FUNCTION PARAMETERS). The host glslang/shaderc route that normally handles these is not
+    // buildable offline, so [`crate::glsl_es`] performs the naga-relevant lowering (ES→460, vertex-index
+    // builtins, and a combined→separate sampler split that crosses helper signatures) in pure Rust before
+    // naga parses. Simple ES2 conformance shaders the GL driver already rewrote to desktop form are NOT
+    // ES-shaped, so they keep the direct path below with zero change.
+    let normalized;
+    let src = if crate::glsl_es::is_es_glsl(src) {
+        hl_log::hl_debug!(hl_log::tag::WGPU, "glsl_to_wgsl: GLSL-ES/GskGpu source → es-normalize+sampler-split");
+        normalized = crate::glsl_es::normalize(src);
+        normalized.as_str()
+    } else {
+        src
+    };
     let mut frontend = naga::front::glsl::Frontend::default();
     let mut module = frontend
         .parse(&naga::front::glsl::Options::from(stage), src)
@@ -450,6 +465,79 @@ pub fn kernel_to_wgsl(prog: &KernelProgram) -> Result<String> {
         s.push_str("        }\n    }\n}\n");
     }
     Ok(s)
+}
+
+#[cfg(test)]
+mod gskgpu_tests {
+    //! The GskGpu (GTK4 "gl") / ANGLE unblock: a representative GLSL-ES texture-op pair — `#version 320
+    //! es`, `precision`, `gl_VertexID`, a combined `sampler2D` GLOBAL, and the hard case, a helper function
+    //! that takes a `sampler2D` PARAMETER — is rejected wholesale by naga's `glsl-in` (FAIL-before) but
+    //! compiles to real WGSL through [`glsl_to_wgsl`]'s ES-normalize + sampler-split (PASS-after), with the
+    //! texture and sampler landing at the coordinated bindings the driver binds to. Mirrors the
+    //! `spirv_split.rs` FAIL-before/PASS-after proof, sourced from GLSL instead of app SPIR-V.
+    use super::*;
+
+    // A GskGpu-shaped vertex shader: computes position from `gl_VertexID` (no position attribute), reads a
+    // `binding=0` push-constant-style UBO via `push.`, forwards a uv varying.
+    const GSK_VERT: &str = r#"#version 320 es
+precision highp float;
+layout(std140, binding = 0) uniform PushConstants { mat4 mvp; vec4 rect; } push;
+out vec2 vUV;
+void main() {
+    int id = gl_VertexID;
+    vec2 corner = vec2(float(id & 1), float((id >> 1) & 1));
+    vUV = corner;
+    gl_Position = push.mvp * vec4(push.rect.xy + corner * push.rect.zw, 0.0, 1.0);
+}
+"#;
+
+    // A GskGpu-shaped fragment shader: a combined `sampler2D` global sampled THROUGH a helper that takes a
+    // `sampler2D` parameter — the construct the spec calls a hard naga limit.
+    const GSK_FRAG: &str = r#"#version 320 es
+precision highp float;
+uniform sampler2D uTexture;
+in vec2 vUV;
+layout(location = 0) out vec4 outColor;
+vec4 gsk_texture(sampler2D tex, vec2 p) {
+    return texture(tex, p);
+}
+void main() {
+    outColor = gsk_texture(uTexture, vUV);
+}
+"#;
+
+    fn naga_direct(src: &str, stage: naga::ShaderStage) -> Result<()> {
+        let mut f = naga::front::glsl::Frontend::default();
+        f.parse(&naga::front::glsl::Options::from(stage), src)
+            .map(|_| ())
+            .map_err(|e| err(format!("{e:?}")))
+    }
+
+    #[test]
+    fn gskgpu_pair_fails_naga_directly_but_compiles_through_glsl_to_wgsl() {
+        // FAIL-BEFORE: naga's glsl-in rejects both stages as-is (ES version + gl_VertexID; combined
+        // sampler global + sampler2D parameter).
+        assert!(naga_direct(GSK_VERT, naga::ShaderStage::Vertex).is_err(), "vert must fail raw naga");
+        assert!(naga_direct(GSK_FRAG, naga::ShaderStage::Fragment).is_err(), "frag must fail raw naga");
+
+        // PASS-AFTER: the ES-normalize + sampler-split route compiles both to real WGSL.
+        let vwgsl = glsl_to_wgsl(GSK_VERT, naga::ShaderStage::Vertex, "vmain")
+            .expect("GskGpu vertex must compile through the ES route");
+        let fwgsl = glsl_to_wgsl(GSK_FRAG, naga::ShaderStage::Fragment, "fmain")
+            .expect("GskGpu fragment must compile through the ES route");
+
+        // Vertex: gl_VertexID lowered to the vertex-index builtin, entry renamed.
+        assert!(vwgsl.contains("vertex_index"), "vertex_index builtin expected: {vwgsl}");
+        assert!(vwgsl.contains("vmain"), "entry rename expected: {vwgsl}");
+
+        // Fragment: the combined sampler became a SEPARATE texture_2d + sampler at the coordinated bindings
+        // (sampler 0 → texture @binding(1), sampler @binding(2)), so the driver's bind-group entries match.
+        assert!(fwgsl.contains("texture_2d"), "expected a separate texture_2d: {fwgsl}");
+        assert!(fwgsl.contains(": sampler"), "expected a separate sampler: {fwgsl}");
+        assert!(fwgsl.contains("@binding(1)"), "texture must reflect at binding 1: {fwgsl}");
+        assert!(fwgsl.contains("@binding(2)"), "sampler must reflect at binding 2: {fwgsl}");
+        assert!(fwgsl.contains("textureSample"), "the helper's texture() lowered to a sample: {fwgsl}");
+    }
 }
 
 /// Emit a WGSL atomic read-modify-write on `ptr` (an `atomic<u32>`), optionally capturing the old value.

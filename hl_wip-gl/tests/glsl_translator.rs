@@ -20,6 +20,30 @@ fn assert_no_es_leaks(src: &str) {
 }
 
 #[test]
+fn forward_verbatim_gate_diverts_only_gskgpu_shaped_source() {
+    // GskGpu-shaped: a helper taking a combined sampler parameter — `translate_render` cannot preserve it,
+    // so the driver forwards it verbatim to the host ES route.
+    let gsk_frag = "#version 320 es\nprecision highp float;\nuniform sampler2D uTex;\nin vec2 vUV;\n\
+                    layout(location=0) out vec4 c;\nvec4 fetch(sampler2D t, vec2 p){ return texture(t,p); }\n\
+                    void main(){ c = fetch(uTex, vUV); }\n";
+    assert!(glsl::is_forward_verbatim(gsk_frag), "sampler-parameter helper must forward verbatim");
+    // GskGpu-shaped vertex: gl_VertexID vertex-pulling (no attributes).
+    let gsk_vert = "#version 320 es\nout vec2 vUV;\nvoid main(){ vUV = vec2(float(gl_VertexID)); }\n";
+    assert!(glsl::is_forward_verbatim(gsk_vert), "gl_VertexID must forward verbatim");
+
+    // Simple ES2 (attribute/varying/gl_FragColor, sampler only as a global) must NOT divert — it stays on
+    // `translate_render` (the ES route does not handle the ES2 dialect).
+    let es2_vs = "attribute vec3 aPos;\nvarying vec2 vUV;\nvoid main(){ gl_Position = vec4(aPos,1.0); }\n";
+    let es2_fs = "precision mediump float;\nvarying vec2 vUV;\nuniform sampler2D uTex;\n\
+                  void main(){ gl_FragColor = texture2D(uTex, vUV); }\n";
+    assert!(!glsl::is_forward_verbatim(es2_vs), "simple ES2 vertex must keep translate_render");
+    assert!(!glsl::is_forward_verbatim(es2_fs), "simple ES2 fragment (global sampler) must keep translate_render");
+    // The `sampler2D(t,s)` constructor is NOT a parameter — must not trip the gate.
+    let ctor = "void main(){ vec4 c = texture(sampler2D(a_hltex, a_hlsmp), vec2(0.0)); }\n";
+    assert!(!glsl::is_forward_verbatim(ctor), "sampler2D constructor must not be read as a parameter");
+}
+
+#[test]
 fn es2_attribute_varying_fragcolor_shader_is_fully_desktopized() {
     let vs = "attribute vec3 aPos;\nattribute vec2 aUV;\nvarying vec2 vUV;\nuniform mat4 uMVP;\n\
               void main(){ vUV = aUV; gl_Position = uMVP * vec4(aPos, 1.0); }\n";

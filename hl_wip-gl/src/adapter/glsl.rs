@@ -134,6 +134,74 @@ fn rewrite_sampler_refs(body: &mut String, samps: &[Decl]) {
     }
 }
 
+/// Whether a GLSL-ES stage source is GskGpu/ANGLE-shaped — i.e. it uses a construct the ES2
+/// reflect-and-regenerate [`translate_render`] cannot preserve, but the host executor's
+/// `glsl_es`/`glsl_to_wgsl` ES route CAN: a **combined sampler type as a function parameter** (helper
+/// functions like `vec4 gsk_texture(sampler2D tex, …)`, which this translator drops when it keeps only
+/// `main`), or **`gl_VertexID` vertex-pulling** (no vertex attributes — this translator would reflect an
+/// empty layout). For such source the driver forwards the stage VERBATIM so the executor gets the real
+/// text (helpers, push-constant UBO, and all) instead of a mangled regeneration. Simple ES2 shaders
+/// (`attribute`/`varying`/`gl_FragColor`, samplers only ever as globals) match NEITHER marker and keep the
+/// existing [`translate_render`] path unchanged — the executor's ES route does not rewrite the ES2
+/// `attribute`/`gl_FragColor` dialect, so they must stay on this path.
+pub fn is_forward_verbatim(src: &str) -> bool {
+    let src = strip_comments(src);
+    if src.contains("gl_VertexID") || src.contains("gl_InstanceID") {
+        return true;
+    }
+    has_sampler_parameter(&src)
+}
+
+/// Detect a sampler type used as a FUNCTION PARAMETER (a sampler-type word followed by an identifier while
+/// inside a parenthesized parameter list and NOT preceded by `uniform`), the construct `translate_render`
+/// cannot carry across a helper signature.
+fn has_sampler_parameter(src: &str) -> bool {
+    let b = src.as_bytes();
+    let mut depth = 0i32;
+    let mut prev_word = String::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'(' {
+            depth += 1;
+            i += 1;
+            prev_word.clear();
+            continue;
+        }
+        if c == b')' {
+            depth -= 1;
+            i += 1;
+            prev_word.clear();
+            continue;
+        }
+        if is_word(c) {
+            let start = i;
+            while i < b.len() && is_word(b[i]) {
+                i += 1;
+            }
+            let word = &src[start..i];
+            // A sampler type inside a param list, not the `uniform sampler …;` global form.
+            if depth > 0 && is_sampler_type(word) && prev_word != "uniform" {
+                // followed by an identifier (the parameter name), not `(` (the `sampler2D(t,s)` ctor).
+                let mut j = i;
+                while j < b.len() && is_space(b[j]) {
+                    j += 1;
+                }
+                if j < b.len() && is_word(b[j]) {
+                    return true;
+                }
+            }
+            prev_word = word.to_string();
+            continue;
+        }
+        if !is_space(c) {
+            prev_word.clear();
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Translate a vertex+fragment GLSL-ES pair into the naga-acceptable desktop GLSL for each stage,
 /// returned as `(vertex_glsl, fragment_glsl)`. Each is packed into its own `Glsl` `CreateShader` payload
 /// (see [`crate::model::program::Program::link`]); the render pipeline binds them as separate modules.

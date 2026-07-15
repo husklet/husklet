@@ -25,6 +25,7 @@ mod convert;
 mod device;
 mod executor;
 mod fence;
+mod glsl_es;
 mod pipeline;
 mod present;
 mod sampler;
