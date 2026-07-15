@@ -149,8 +149,15 @@ pub extern "C" fn cudaMemsetAsync(dev_ptr: *mut c_void, value: i32, count: usize
 }
 
 fn memset_impl(s: &mut crate::state::State, dev_ptr: *mut c_void, value: i32, count: usize) -> i32 {
-    let fill = vec![value as u8; count];
-    match transfer::memcpy_htod(&mut s.ctx, &mut s.sink, DevicePtr(dev_ptr as u64), &fill) {
+    if count == 0 {
+        return CUDART_SUCCESS;
+    }
+    // Lower through the bounded [`transfer::memset_elements`] (width = 1, the byte fill `cudaMemset`
+    // specifies) rather than building the fill `vec![value; count]` here: that expansion bounds `count`
+    // (checked, against the destination allocation) BEFORE allocating a single byte, so a hostile
+    // `count` (e.g. near `usize::MAX`) returns a truthful `cudaErrorInvalidValue` instead of driving an
+    // unbounded multi-GiB host allocation → OOM-abort.
+    match transfer::memset_elements(&mut s.ctx, &mut s.sink, DevicePtr(dev_ptr as u64), value as u8 as u64, 1, count) {
         Ok(()) => CUDART_SUCCESS,
         Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
     }

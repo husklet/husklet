@@ -44,8 +44,14 @@ mod tests {
 
     // One serial test drives the sink-free entry points (device/props/events/streams/errors/config), so
     // the process-global state is never raced across parallel tests.
+    /// Serializes the tests that drive the process-global [`crate::state`] (which is a single
+    /// `OnceLock<Mutex<State>>` shared across the whole test binary) so their `reset()` + `$HL_GPU_EXEC`
+    /// manipulation never interleave under the default parallel test runner.
+    static STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn runtime_entry_points_roundtrip() {
+        let _serial = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::state::reset();
 
         // device enumeration
@@ -211,5 +217,112 @@ mod tests {
         c.extend_from_slice(&e);
         c.extend_from_slice(payload);
         c
+    }
+
+    /// A runtime-backed host that serves BOTH the submit path (through a runtime `Session` + reference
+    /// `CpuExecutor`) and the device→host readback path over the real socket transport — so the cudart
+    /// shim's process-global `RemoteCommandSink` has a live executor for `cudaMalloc`/`cudaMemset`/
+    /// `cudaMemcpy` to actually land against (mirrors `hl_wip-gpu/tests/readback.rs::RuntimeHost`).
+    struct RuntimeHost {
+        session: hl_gpu::Session,
+        exec: hl_gpu::CpuExecutor,
+    }
+    impl hl_gpu::ConnectionHandler for RuntimeHost {
+        fn submit(&mut self, _h: &hl_gpu::transport::SubmitHeader, batch: &[hl_gpu::Cmd]) -> hl_gpu::transport::Verdict {
+            let frame_bytes = hl_gpu::encode_stream(batch).len();
+            match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
+                Ok(_) => hl_gpu::transport::Verdict::Ack,
+                Err(_) => hl_gpu::transport::Verdict::Nack,
+            }
+        }
+        fn read_buffer(&mut self, req: &hl_gpu::ReadbackRequest) -> Option<Vec<u8>> {
+            hl_gpu::runtime::service::dispatch::read_buffer(
+                &self.session,
+                &self.exec,
+                hl_gpu::BufferId(req.id),
+                req.offset,
+                req.len as usize,
+            )
+            .ok()
+        }
+    }
+
+    // A `cudaMemset`/`cudaMemsetAsync` whose `count` far exceeds the destination allocation must return the
+    // truthful `cudaErrorInvalidValue` WITHOUT building the `vec![value; count]` fill buffer first (a hostile
+    // `count` near `usize::MAX` would otherwise be an unbounded multi-GiB host alloc → OOM-abort). A legal
+    // memset must still write EXACTLY the right bytes — asserted via a real device→host readback.
+    #[test]
+    fn memset_hostile_count_is_bounded_and_legal_memset_is_exact() {
+        let _serial = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A runtime-backed host on a private temp socket, serving one connection (submit + readback).
+        let sock = std::env::temp_dir().join(format!(
+            "hl-cudart-memset-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&sock);
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            use hl_gpu::GpuExecutor as _; // brings `capabilities()` into scope for `CpuExecutor`
+            let (stream, _) = listener.accept().unwrap();
+            let caps = hl_gpu::Capabilities::full("host");
+            let exec = hl_gpu::CpuExecutor::new();
+            let limits = hl_gpu::Limits::from_capabilities(exec.capabilities());
+            let session = hl_gpu::Session::new(
+                limits,
+                hl_gpu::GlobalLedger::unbounded(),
+                Box::new(hl_gpu::FakeClock::new(0)),
+            );
+            let mut host = RuntimeHost { session, exec };
+            let _ = hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host);
+        });
+
+        // Point the process-global sink at our socket and rebuild the state so it reconnects there.
+        std::env::set_var("HL_GPU_EXEC", sock.to_string_lossy().into_owned());
+        crate::state::reset();
+
+        // A small 64-byte device allocation.
+        let mut dptr: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cudaMalloc(&mut dptr, 64), 0);
+        assert!(!dptr.is_null());
+
+        // HOSTILE: a count far larger than the 64-byte allocation → truthful cudaErrorInvalidValue, and
+        // (the point of the fix) NO multi-GiB fill allocation / OOM-abort / panic — the bound is applied
+        // BEFORE the fill buffer is built.
+        assert_eq!(cudaMemset(dptr, 0xAB, usize::MAX), CUDART_ERR_INVALID_VALUE);
+        assert_eq!(cudaMemset(dptr, 0xAB, 65), CUDART_ERR_INVALID_VALUE); // one byte past the end
+        assert_eq!(
+            cudaMemsetAsync(dptr, 0xAB, usize::MAX, core::ptr::null_mut()),
+            CUDART_ERR_INVALID_VALUE
+        );
+        // The sticky last-error reflects the failure — not a false success.
+        assert_eq!(cudaGetLastError(), CUDART_ERR_INVALID_VALUE);
+
+        // LEGAL full fill: exactly 64 bytes of 0xCD, verified by an exact device→host readback.
+        assert_eq!(cudaMemset(dptr, 0xCD, 64), 0);
+        let mut host_buf = vec![0u8; 64];
+        assert_eq!(cudaMemcpy(host_buf.as_mut_ptr() as *mut c_void, dptr, 64, 2 /* DtoH */), 0);
+        assert_eq!(host_buf, vec![0xCDu8; 64], "legal full memset must write exactly 64 bytes of 0xCD");
+
+        // LEGAL interior fill: clear, then fill 16 bytes at offset 8 with 0xEE — exactly that window
+        // changes, the rest stays zero (proves the bounded path still writes the correct range/offset).
+        assert_eq!(cudaMemset(dptr, 0x00, 64), 0);
+        let mid = unsafe { (dptr as *mut u8).add(8) } as *mut c_void;
+        assert_eq!(cudaMemset(mid, 0xEE, 16), 0);
+        let mut rb = vec![0u8; 64];
+        assert_eq!(cudaMemcpy(rb.as_mut_ptr() as *mut c_void, dptr, 64, 2), 0);
+        for (i, b) in rb.iter().enumerate() {
+            let want = if (8..24).contains(&i) { 0xEEu8 } else { 0x00 };
+            assert_eq!(*b, want, "byte {i} after interior memset");
+        }
+
+        // Tear down: freeing + resetting the state drops the connected sink, closing the socket so the
+        // server thread hits EOF and returns.
+        assert_eq!(cudaFree(dptr), 0);
+        std::env::remove_var("HL_GPU_EXEC");
+        crate::state::reset();
+        server.join().unwrap();
+        let _ = std::fs::remove_file(&sock);
     }
 }
