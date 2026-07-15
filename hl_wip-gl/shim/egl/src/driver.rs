@@ -1073,7 +1073,19 @@ pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
 
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, usage: u32) {
-    let d = unsafe { bytes(data, size) }.to_vec();
+    // `glBufferData(target, size, NULL, usage)` RESERVES `size` bytes of (initially undefined) storage —
+    // it does NOT leave the buffer empty. Model the NULL-data allocation as `size` zeroed bytes so a later
+    // `glBufferSubData` / `glMapBufferRange` write lands WITHIN bounds. Without this a NULL-allocated-then-
+    // filled buffer (Chrome/ANGLE's dynamic vertex path: `glBufferData(size, NULL)` then map/subData) kept
+    // ZERO storage, its fill writes were rejected out-of-range (`GL_INVALID_VALUE`), so its `has_data()`
+    // stayed false — and a draw whose vertex shader reads that VBO's attributes then lowered a render
+    // pipeline that DECLARES vertex buffer 0 while binding none, which wgpu rejects at pass validation
+    // (`MissingVertexBuffer`). Real data (`data != NULL`) is copied verbatim as before.
+    let d = if data.is_null() && size > 0 {
+        vec![0u8; size as usize]
+    } else {
+        unsafe { bytes(data, size) }.to_vec()
+    };
     with(|s| record::buffer_data(&mut s.ctx, target, &d, usage));
 }
 

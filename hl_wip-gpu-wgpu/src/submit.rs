@@ -224,7 +224,21 @@ impl WgpuExecutor {
         match (result, captured) {
             (Err(e), _) => Err(e),
             (Ok(()), Some(e)) => {
-                hl_log::hl_error!(tag::EXEC, "wgpu rejected a pass at validation: {e}");
+                // wgpu 24's `Display` for a validation error is the bare "Validation Error" — the ACTUAL
+                // rule violated (which attachment/pipeline/format) lives in the Debug form and the
+                // `std::error::Error::source()` chain, so surface both: `{e:?}` (Debug) plus every cause
+                // walked off `source()`. This is what pins the offending pass without a wgpu_core log build.
+                let mut chain = String::new();
+                let mut src: Option<&dyn std::error::Error> = std::error::Error::source(&e);
+                while let Some(s) = src {
+                    chain.push_str("\n  caused by: ");
+                    chain.push_str(&s.to_string());
+                    src = s.source();
+                }
+                hl_log::hl_error!(
+                    tag::EXEC,
+                    "wgpu rejected a pass at validation: {e}\n  debug: {e:?}{chain}"
+                );
                 Err(GpuError::Invalid("wgpu: pass failed device validation"))
             }
             (Ok(()), None) => Ok(()),
