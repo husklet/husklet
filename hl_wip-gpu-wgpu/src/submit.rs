@@ -80,6 +80,12 @@ impl WgpuExecutor {
                 Enc::CopyTextureToBuffer { src, width, height, dst, dst_offset, bytes_per_row, .. } => {
                     let t = texture::native(res, *src)?;
                     let bpt = texel_bytes(t.format)? as u32;
+                    // The copy region must lie inside the source texture: a `width`/`height` that runs past
+                    // the source edge would slice past the tight readback plane below (a Rust panic). The
+                    // runtime does not range-check this op, so guard it here into a typed `OutOfBounds`.
+                    if *width > t.width || *height > t.height {
+                        return Err(GpuError::OutOfBounds);
+                    }
                     // The tight readback plane is packed at the TEXTURE's width, not the copy region's
                     // width — the source row stride is `tex_width*bpt`, so a sub-region copy (width <
                     // texture width) advances by the full plane stride, exactly as the CPU oracle does.
@@ -99,6 +105,20 @@ impl WgpuExecutor {
                 Enc::CopyBufferToTexture { src, src_offset, bytes_per_row, dst, mip, width, height } => {
                     let (bpt, dst_depth) = {
                         let t = texture::native(res, *dst)?;
+                        // The destination region (`mip`, `width`, `height`) must fit the texture: an
+                        // out-of-range mip or a `width`/`height` overhanging the mip level would be handed
+                        // to `queue.write_texture`, whose bounds validation is a HARD wgpu error (its
+                        // uncaptured-error handler panics). The runtime does not range-check this op, so
+                        // guard it into a typed error here. Mip-level extent is the base extent halved per
+                        // level, floored at 1 (the WebGPU mip pyramid).
+                        if *mip >= t.mip_levels {
+                            return Err(GpuError::OutOfBounds);
+                        }
+                        let lw = (t.width >> *mip).max(1);
+                        let lh = (t.height >> *mip).max(1);
+                        if *width > lw || *height > lh {
+                            return Err(GpuError::OutOfBounds);
+                        }
                         (texel_bytes(t.format)? as u32, t.depth)
                     };
                     let row = (*width * bpt) as usize;
@@ -175,6 +195,33 @@ impl WgpuExecutor {
         Ok(())
     }
 
+    /// Convert any wgpu VALIDATION error raised while running `body` into a typed [`GpuError`], instead of
+    /// letting it reach wgpu 24's default uncaptured-error handler (which PANICS). A hostile IR op that wgpu
+    /// itself rejects — a draw whose vertex/index count overruns the bound buffer, a depth-tested pipeline
+    /// drawn in a pass with NO depth attachment, a stencil op on a non-stencil target, an over-large compute
+    /// dispatch — would otherwise abort the whole executor. wgpu validates a render/compute pass when the
+    /// pass is ENDED (dropped) and again at submit, so the scope must wrap the ENTIRE pass, not just the
+    /// submit. This pushes a validation scope, runs `body`, then ALWAYS pops it (balanced even on an early
+    /// return from `body`, so the scope stack never leaks): a captured wgpu error becomes `Err` and the
+    /// device is NOT lost (a following valid program still runs); `body`'s own typed error takes precedence.
+    /// A well-formed program raises no error, so this is a transparent pass-through.
+    fn with_validation_scope(
+        &mut self,
+        body: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
+        self.gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let result = body(self);
+        let captured = pollster::block_on(self.gpu.device.pop_error_scope());
+        match (result, captured) {
+            (Err(e), _) => Err(e),
+            (Ok(()), Some(e)) => {
+                hl_log::hl_error!(tag::EXEC, "wgpu rejected a pass at validation: {e}");
+                Err(GpuError::Invalid("wgpu: pass failed device validation"))
+            }
+            (Ok(()), None) => Ok(()),
+        }
+    }
+
     /// Fill `[offset, offset+size)` of buffer `id` with the repeating little-endian pattern of `value`
     /// (device memset). Read-modify-write over the 4-aligned window preserves neighbour bytes and matches
     /// the oracle's tiling (buffer byte `offset+i` takes pattern byte `i % 4`).
@@ -189,11 +236,18 @@ impl WgpuExecutor {
         if size == 0 {
             return Ok(());
         }
+        // The fill window `[offset, offset+size)` must lie inside the buffer. `offset + size` is computed
+        // below (twice, including a `div_ceil`); a hostile `offset`/`size` near `u64::MAX` overflows that
+        // arithmetic (a debug panic) and, unchecked, would also read/write past the allocation. The runtime
+        // does not range-check `FillBuffer`, so guard it into a typed `OutOfBounds` (matching `read_bytes`/
+        // `write_bytes`).
+        let b = buffer::native(res, id)?;
+        let end = offset.checked_add(size).filter(|e| *e <= b.size).ok_or(GpuError::OutOfBounds)?;
         let pat = value.to_le_bytes();
         let astart = offset & !3;
-        let aend = (offset + size).div_ceil(4) * 4;
+        let aend = end.div_ceil(4) * 4;
         let mut window = self.read_bytes(res, id, astart, (aend - astart) as usize)?;
-        for p in offset..offset + size {
+        for p in offset..end {
             window[(p - astart) as usize] = pat[((p - offset) % 4) as usize];
         }
         self.write_bytes(res, id, astart, &window)
@@ -358,6 +412,20 @@ impl WgpuExecutor {
         depth: Option<&DepthAttachment>,
         ops: &[Enc],
     ) -> Result<()> {
+        // Run the pass under a validation scope so a wgpu rejection at pass-end/submit (e.g. a draw whose
+        // vertex/index count overruns the bound buffer, or a depth-tested pipeline drawn with no depth
+        // attachment) is a typed error, not the panicking default handler — and the executor survives.
+        self.with_validation_scope(|s| s.run_render_pass_inner(res, color, depth, ops))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_render_pass_inner(
+        &mut self,
+        res: &SessionResources,
+        color: &[ColorAttachment],
+        depth: Option<&DepthAttachment>,
+        ops: &[Enc],
+    ) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::EXEC, "submit");
         hl_log::hl_count!(tag::EXEC, "passes");
         // Resolve attachment views up front (they must outlive the pass).
@@ -375,6 +443,12 @@ impl WgpuExecutor {
         let depth_view = match depth {
             Some(d) => {
                 let t = texture::native(res, d.texture)?;
+                // The depth attachment MUST be a depth(+stencil) format: a color-format texture handed as a
+                // `depth_stencil_attachment` is a hard wgpu validation error (its handler panics). The
+                // runtime does not type-check the attachment, so reject a non-depth format here.
+                if !matches!(t.format, TextureFormat::Depth32Float | TextureFormat::Depth24PlusStencil8) {
+                    return Err(GpuError::Invalid("wgpu: depth attachment is not a depth format"));
+                }
                 let has_stencil = matches!(t.format, TextureFormat::Depth24PlusStencil8);
                 Some((t.view.clone(), d.load, d.clear_depth, d.clear_stencil, has_stencil))
             }
@@ -497,10 +571,18 @@ impl WgpuExecutor {
                     Enc::SetStencilReference { reference } => pass.set_stencil_reference(*reference),
                     Enc::SetVertexBuffer { slot, buffer, offset } => {
                         let vb = buffer::native(res, *buffer)?;
+                        // `Buffer::slice(offset..)` PANICS (a hard Rust assert, not a routable wgpu error)
+                        // when `offset` runs past the buffer, so a hostile offset must be rejected here.
+                        if *offset > vb.size {
+                            return Err(GpuError::OutOfBounds);
+                        }
                         pass.set_vertex_buffer(*slot, vb.buffer.slice(*offset..));
                     }
                     Enc::SetIndexBuffer { buffer, offset, format } => {
                         let ib = buffer::native(res, *buffer)?;
+                        if *offset > ib.size {
+                            return Err(GpuError::OutOfBounds);
+                        }
                         pass.set_index_buffer(ib.buffer.slice(*offset..), index_format(*format));
                     }
                     Enc::Draw { vertex_count, instance_count, first_vertex, first_instance } => {
@@ -512,10 +594,16 @@ impl WgpuExecutor {
                         for (idx, bg) in groups {
                             pass.set_bind_group(*idx, bg, &[]);
                         }
-                        pass.draw(
-                            *first_vertex..*first_vertex + *vertex_count,
-                            *first_instance..*first_instance + *instance_count,
-                        );
+                        // Build the vertex/instance ranges with wrapping-safe arithmetic: a hostile
+                        // `first_vertex + vertex_count` (or instance) that overflows `u32` is a debug panic
+                        // here, before wgpu ever sees it. The runtime does not range-check Draw.
+                        let v_end = first_vertex
+                            .checked_add(*vertex_count)
+                            .ok_or(GpuError::Invalid("wgpu: draw vertex range overflow"))?;
+                        let i_end = first_instance
+                            .checked_add(*instance_count)
+                            .ok_or(GpuError::Invalid("wgpu: draw instance range overflow"))?;
+                        pass.draw(*first_vertex..v_end, *first_instance..i_end);
                     }
                     Enc::DrawIndexed {
                         index_count,
@@ -532,11 +620,13 @@ impl WgpuExecutor {
                         for (idx, bg) in groups {
                             pass.set_bind_group(*idx, bg, &[]);
                         }
-                        pass.draw_indexed(
-                            *first_index..*first_index + *index_count,
-                            *base_vertex,
-                            *first_instance..*first_instance + *instance_count,
-                        );
+                        let idx_end = first_index
+                            .checked_add(*index_count)
+                            .ok_or(GpuError::Invalid("wgpu: draw index range overflow"))?;
+                        let i_end = first_instance
+                            .checked_add(*instance_count)
+                            .ok_or(GpuError::Invalid("wgpu: draw instance range overflow"))?;
+                        pass.draw_indexed(*first_index..idx_end, *base_vertex, *first_instance..i_end);
                     }
                     _ => {}
                 }
@@ -561,6 +651,12 @@ impl WgpuExecutor {
     /// during device creation, which is never dispatched through this executor); reading push constants at
     /// a dispatch that the protocol never wrote is not reachable here.
     fn run_compute_pass(&mut self, res: &SessionResources, ops: &[Enc]) -> Result<()> {
+        // As `run_render_pass`: wrap the pass in a validation scope so an over-large dispatch or other wgpu
+        // rejection surfaces as a typed error instead of the panicking default handler.
+        self.with_validation_scope(|s| s.run_compute_pass_inner(res, ops))
+    }
+
+    fn run_compute_pass_inner(&mut self, res: &SessionResources, ops: &[Enc]) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::EXEC, "submit");
         hl_log::hl_count!(tag::EXEC, "passes");
         // Current bind-group binding per set index. Sized to the advertised `max_bind_groups` (4); a higher
@@ -603,6 +699,14 @@ impl WgpuExecutor {
                     }
                     if groups.is_empty() {
                         return Err(GpuError::Invalid("dispatch with no bind group"));
+                    }
+                    // A workgroup count that exceeds the device's per-dimension ceiling is a hard wgpu
+                    // validation error at submit (its handler panics). Reject an over-large dispatch here as
+                    // a typed error; the runtime does not range-check `Dispatch`. (A zero count is legal — a
+                    // no-op dispatch, exercised by `compute_zero_dispatch_is_noop_not_panic`.)
+                    let max = self.gpu.device.limits().max_compute_workgroups_per_dimension;
+                    if *x > max || *y > max || *z > max {
+                        return Err(GpuError::OutOfBounds);
                     }
                     dispatches.push((pid, groups, (*x, *y, *z)));
                 }
