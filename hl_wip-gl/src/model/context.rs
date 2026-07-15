@@ -332,14 +332,17 @@ impl GlContext {
     pub fn sampled_texture_ir(&mut self, gl_name: u32, gen: u64) -> (u32, bool) {
         if let Some(&(ir, up_gen)) = self.tex_ir_cache.get(&gl_name) {
             if up_gen == gen {
+                hl_log::hl_count!(hl_log::tag::GL, "tex_cache_hit");
                 return (ir, false);
             }
             // Content changed: a fresh id carries the new upload (the old resident id is simply abandoned —
             // content updates to a given texture are rare, so this does not accumulate).
+            hl_log::hl_count!(hl_log::tag::GL, "tex_upload");
             let ir = self.alloc_texture_ir();
             self.tex_ir_cache.insert(gl_name, (ir, gen));
             return (ir, true);
         }
+        hl_log::hl_count!(hl_log::tag::GL, "tex_upload");
         let ir = self.alloc_texture_ir();
         self.tex_ir_cache.insert(gl_name, (ir, gen));
         (ir, true)
@@ -352,12 +355,15 @@ impl GlContext {
     pub fn data_buffer_ir(&mut self, gl_name: u32, usage: u32, gen: u64) -> (u32, bool) {
         if let Some(&(ir, up_gen)) = self.buf_ir_cache.get(&(gl_name, usage)) {
             if up_gen == gen {
+                hl_log::hl_count!(hl_log::tag::GL, "buf_cache_hit");
                 return (ir, false);
             }
+            hl_log::hl_count!(hl_log::tag::GL, "buf_upload");
             let ir = self.alloc_buffer_ir();
             self.buf_ir_cache.insert((gl_name, usage), (ir, gen));
             return (ir, true);
         }
+        hl_log::hl_count!(hl_log::tag::GL, "buf_upload");
         let ir = self.alloc_buffer_ir();
         self.buf_ir_cache.insert((gl_name, usage), (ir, gen));
         (ir, true)
@@ -515,6 +521,7 @@ impl GlContext {
     /// does not overwrite a still-unread one (first-error-wins).
     pub fn set_gl_error(&mut self, e: u32) {
         if self.gl_error == glconst::GL_NO_ERROR {
+            hl_log::hl_debug!(hl_log::tag::GL, "gl_error set=0x{:x}", e);
             self.gl_error = e;
         }
     }

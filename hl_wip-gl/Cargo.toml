@@ -26,6 +26,10 @@ path = "src/lib.rs"
 # lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.
 hl_gpu = { package = "hl_wip_gpu", path = "../hl_wip-gpu" }
 
+# Tag-based logging + counters + timing (std-only, zero-cost when off, its own workspace). Links from the
+# lib AND the guest cdylibs (it is NOT `#[no_mangle]`, so the 402/44/358 exported-ABI split is unaffected).
+hl-log = { path = "../hl-log" }
+
 # The container-runtime driver-plugin seam (`hl_jit::Driver`). OPTIONAL + behind the `jit` feature so the
 # HOST composition root gets the `Gl` driver plug, while the GUEST shim cdylibs (which depend on this
 # crate for the lowering services) do NOT drag hl-jit / hl-jit-darwin / tokio into a guest .so — they set

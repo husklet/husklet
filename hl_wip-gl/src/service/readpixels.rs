@@ -50,6 +50,7 @@ pub fn read_pixels(
     h: i32,
     format: u32,
 ) -> Result<Vec<u8>> {
+    let _s = hl_log::hl_span!(hl_log::tag::PRESENT, "readpixels");
     let bpp = format_bpp(format);
     if w <= 0 || h <= 0 {
         return Ok(Vec::new());
@@ -90,6 +91,7 @@ pub fn read_pixels(
 
     sink.submit(&f.cmds)?;
     let raw = sink.read_buffer(BufferId(readback), 0, size as usize)?;
+    hl_log::hl_add!(hl_log::tag::PRESENT, "readback_bytes", raw.len() as u64);
 
     Ok(pack_region(&raw, tw, th, fmt, x, y, w, h, format, bpp))
 }

@@ -124,6 +124,7 @@ pub extern "C" fn eglGetDisplay(_display_id: *mut c_void) -> *mut c_void {
 
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglInitialize(_dpy: *mut c_void, major: *mut i32, minor: *mut i32) -> u32 {
+    hl_log::hl_info!(hl_log::tag::EGL, "eglInitialize egl=1.5");
     with(|s| s.inited = true);
     // Advertise EGL 1.5.
     unsafe {
@@ -761,7 +762,9 @@ pub extern "C" fn eglCreateContext(
     _share_context: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
-    with(|s| s.mint_token())
+    let ctx = with(|s| s.mint_token());
+    hl_log::hl_info!(hl_log::tag::EGL, "eglCreateContext ctx={}", ctx as usize);
+    ctx
 }
 
 #[cfg_attr(not(gles_client), no_mangle)]
@@ -783,6 +786,7 @@ pub extern "C" fn eglMakeCurrent(
     read: *mut c_void,
     ctx: *mut c_void,
 ) -> u32 {
+    hl_log::hl_info!(hl_log::tag::EGL, "eglMakeCurrent ctx={} draw={} read={}", ctx as usize, draw as usize, read as usize);
     current::make_current(dpy as usize, draw as usize, read as usize, ctx as usize);
     EGL_TRUE
 }
@@ -858,6 +862,8 @@ const EGL_CONTEXT_LOST: i32 = 0x300E;
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u32 {
     with(|s| {
+        let _sp = hl_log::hl_span!(hl_log::tag::PRESENT, "swap");
+        hl_log::hl_debug!(hl_log::tag::PRESENT, "eglSwapBuffers {}x{}", s.ctx.surf.width, s.ctx.surf.height);
         // Two present targets share the SAME read-back frame:
         //  * the app's OWN `wl_surface` (the real-window path) — when this is a Wayland window that
         //    carried an app `wl_surface*`, or
@@ -891,6 +897,7 @@ pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u3
                     AppPresentOutcome::Presented => return EGL_TRUE,
                     // A live commit/flush failure is a lost frame — never faked.
                     AppPresentOutcome::Failed => {
+                        hl_log::hl_warn!(hl_log::tag::PRESENT, "present-to-app-surface failed {}x{} -> EGL_CONTEXT_LOST", w, h);
                         s.set_egl_error(EGL_CONTEXT_LOST);
                         return EGL_FALSE;
                     }

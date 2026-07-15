@@ -175,6 +175,9 @@ pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
     emit_uniform_block(&mut vs_out, &unis);
     emit_sampler_decls(&mut vs_out, &samps);
     let mut vb = main_body(&vs);
+    if vb.is_empty() {
+        hl_log::hl_warn!(hl_log::tag::GL, "glsl vs translate: no main body");
+    }
     strip_es_precision(&mut vb);
     rewrite_sampler_refs(&mut vb, &samps);
     sreplace(&mut vb, "texture2D(", "texture(");
@@ -201,6 +204,9 @@ pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
         .unwrap_or_else(|| "hl_FragColor".to_string());
     fs_out.push_str(&format!("layout(location = 0) out vec4 {frag_name};\n"));
     let mut fb = main_body(&fs);
+    if fb.is_empty() {
+        hl_log::hl_warn!(hl_log::tag::GL, "glsl fs translate: no main body");
+    }
     strip_es_precision(&mut fb);
     rewrite_sampler_refs(&mut fb, &samps);
     sreplace(&mut fb, "texture2D(", "texture(");

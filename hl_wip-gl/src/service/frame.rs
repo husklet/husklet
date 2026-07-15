@@ -37,6 +37,7 @@ use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, AddressMode, Filter, LoadOp, TextureDim, TextureFormat, Topology,
 };
 use hl_gpu::{Cmd, CommandBuffer, ShaderPayloadKind};
+use hl_log::{hl_add, hl_count, hl_debug, tag};
 
 /// The assembled frame: the `Cmd` stream to submit, plus the `(surface, texture)` to `Present` at the
 /// end. Returned by [`build_frame_ir`] for [`crate::service::swap`] to ship.
@@ -50,6 +51,27 @@ pub struct Frame {
     pub target_width: i32,
     pub target_height: i32,
     pub target_format: TextureFormat,
+}
+
+/// Total upload bytes a lowered frame carries: the sum of every `WriteBuffer` payload (vertex / index /
+/// uniform data + hoisted texture-staging copies — the CreateTexture pixels ride a staging `WriteBuffer`).
+/// This is the single most valuable frame instrument: the 4.3 GiB GTK frame is exactly this number.
+fn frame_upload_bytes(cmds: &[Cmd]) -> u64 {
+    cmds.iter()
+        .map(|c| match c {
+            Cmd::WriteBuffer { data, .. } => data.len() as u64,
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Emit the per-frame observability: one scannable `key=val` debug line + the frame counters. Gated +
+/// zero-cost when `tag::GL` logging / counters are off.
+fn log_frame(w: i32, h: i32, draws: usize, passes: usize, cmds: usize, bytes: u64) {
+    hl_debug!(tag::GL, "frame {}x{} draws={} passes={} cmds={} bytes={}", w, h, draws, passes, cmds, bytes);
+    hl_add!(tag::GL, "frame_bytes", bytes);
+    hl_add!(tag::GL, "frame_cmds", cmds as u64);
+    hl_count!(tag::GL, "frames");
 }
 
 /// Assemble the frame's `Cmd` stream from the recorded draw-list, or `None` if there is nothing (or
@@ -147,6 +169,7 @@ fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -
     }
 
     let (surface, texture, tw, th, fmt) = present.or(last)?;
+    log_frame(tw, th, draws.len(), groups.len(), cmds.len(), frame_upload_bytes(&cmds));
     Some(Frame {
         cmds,
         present: (surface, texture),
@@ -231,6 +254,7 @@ fn build_clear_frame(ctx: &mut GlContext) -> Frame {
         Enc::EndRenderPass,
     ];
     cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
+    log_frame(w, h, ctx.draws.len(), 1, cmds.len(), frame_upload_bytes(&cmds));
     Frame { cmds, present: (surface, texture), target_width: w, target_height: h, target_format: fmt }
 }
 
@@ -281,6 +305,7 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
     ops.push(Enc::EndRenderPass);
 
     cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
+    log_frame(tw, th, ctx.draws.len(), 1, cmds.len(), frame_upload_bytes(&cmds));
     Some(Frame {
         cmds,
         present: (surface, target_tex),
