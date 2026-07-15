@@ -42,6 +42,13 @@ default = ["jit"]
 # Gate the host-side `driver` module (the `hl_jit::Driver` impl) + its hl-jit dependency.
 jit = ["dep:hl-jit"]
 
+# The GLSL corpus battery (`tests/glsl_corpus.rs`) compiles each translated shader through the SAME host
+# route the wgpu executor uses (naga `glsl-in` → validate → `wgsl-out`), so a translator gap surfaces as a
+# real naga error rather than a structural guess. naga 24 is already vendored (wgpu depends on it), so this
+# resolves offline. Test-only: it never links into the lib or the guest cdylibs.
+[dev-dependencies]
+naga = { version = "24.0.0", features = ["glsl-in", "wgsl-out"] }
+
 # Empty table => this file is its own workspace root, so the crate is EXCLUDED from the repo-root
 # workspace and keeps the shared tree green.
 [workspace]

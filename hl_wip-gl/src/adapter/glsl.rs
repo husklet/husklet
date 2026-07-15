@@ -100,7 +100,10 @@ fn emit_uniform_block(out: &mut String, unis: &[Decl]) {
 fn split_sampler(ty: &str) -> (&'static str, &'static str, &'static str) {
     match ty {
         "samplerCube" => ("textureCube", "sampler", "samplerCube"),
+        "sampler2DArray" => ("texture2DArray", "sampler", "sampler2DArray"),
         "sampler2DShadow" => ("texture2D", "samplerShadow", "sampler2DShadow"),
+        // `samplerExternalOES` (ANGLE's YUV external image) maps to a plain 2D sampler for this bring-up —
+        // correct for the single-plane RGBA path — matching the executor's `glsl_es::split_sampler_ty`.
         _ => ("texture2D", "sampler", "sampler2D"),
     }
 }
@@ -227,6 +230,26 @@ pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
         }
     }
 
+    // Carried-through globals per stage: the `struct` definitions + helper functions + plain globals the
+    // reflect-and-regenerate path used to drop (leaving `main` referencing undefined types/functions). Each
+    // is rewritten exactly like the `main` body (ES precision stripped, combined samplers recombined, the
+    // `texture2D`/`textureCube` builtins lowered) so a helper that samples a texture stays valid.
+    let (vs_structs, vs_funcs) = partition_globals(&vs);
+    let (fs_structs, fs_funcs) = partition_globals(&fs);
+    let rewrite = |items: &[String], samps: &[Decl]| -> String {
+        let mut out = String::new();
+        for it in items {
+            let mut t = it.clone();
+            strip_es_precision(&mut t);
+            rewrite_sampler_refs(&mut t, samps);
+            sreplace(&mut t, "texture2D(", "texture(");
+            sreplace(&mut t, "textureCube(", "texture(");
+            out.push_str(&t);
+            out.push('\n');
+        }
+        out
+    };
+
     // ---- vertex stage ----
     let mut vs_out = String::new();
     vs_out.push_str(GLSL_VERSION);
@@ -234,14 +257,17 @@ pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
         vs_out.push_str(c);
         vs_out.push('\n');
     }
+    vs_out.push_str(&rewrite(&vs_structs, &samps));
     for (i, a) in attrs.iter().enumerate() {
         vs_out.push_str(&format!("layout(location = {i}) in {} {};\n", a.ty, a.name));
     }
     for (j, v) in vary.iter().enumerate() {
-        vs_out.push_str(&format!("layout(location = {j}) out {} {};\n", v.ty, v.name));
+        let flat = if needs_flat(&v.ty) { "flat " } else { "" };
+        vs_out.push_str(&format!("layout(location = {j}) {flat}out {} {};\n", v.ty, v.name));
     }
     emit_uniform_block(&mut vs_out, &unis);
     emit_sampler_decls(&mut vs_out, &samps);
+    vs_out.push_str(&rewrite(&vs_funcs, &samps));
     let mut vb = main_body(&vs);
     if vb.is_empty() {
         hl_log::hl_warn!(hl_log::tag::GL, "glsl vs translate: no main body");
@@ -259,8 +285,10 @@ pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
         fs_out.push_str(c);
         fs_out.push('\n');
     }
+    fs_out.push_str(&rewrite(&fs_structs, &samps));
     for (j, v) in vary.iter().enumerate() {
-        fs_out.push_str(&format!("layout(location = {j}) in {} {};\n", v.ty, v.name));
+        let flat = if needs_flat(&v.ty) { "flat " } else { "" };
+        fs_out.push_str(&format!("layout(location = {j}) {flat}in {} {};\n", v.ty, v.name));
     }
     emit_uniform_block(&mut fs_out, &unis);
     emit_sampler_decls(&mut fs_out, &samps);
@@ -291,6 +319,7 @@ pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
     if fragouts.is_empty() {
         wreplace(&mut fb, "gl_FragColor", &frag_name);
     }
+    fs_out.push_str(&rewrite(&fs_funcs, &samps));
     fs_out.push_str(&format!("void main() {{\n{fb}\n}}\n"));
 
     (vs_out, fs_out)
@@ -313,8 +342,29 @@ fn is_precision_or_interp(t: &str) -> bool {
     matches!(t, "lowp" | "mediump" | "highp" | "flat" | "smooth" | "centroid")
 }
 
-/// `collect` — parse `kw TYPE name;` declarations from `src` (skipping precision/interpolation
-/// qualifiers before the type).
+/// Brace/paren nesting depth of byte offset `at` within `b` (counting only the delimiters before it). A
+/// TOP-LEVEL interface declaration sits at `(0, 0)`; anything inside a function body (`{ … }`) or a
+/// parameter list (`( … )`) is nested. Used by [`collect`] to reject an `in`/`out`/`inout` FUNCTION
+/// PARAMETER (paren depth > 0) or a body-local declaration (brace depth > 0), which are not interface decls.
+fn depth_at(b: &[u8], at: usize) -> (i32, i32) {
+    let (mut brace, mut paren) = (0i32, 0i32);
+    for &c in &b[..at.min(b.len())] {
+        match c {
+            b'{' => brace += 1,
+            b'}' => brace -= 1,
+            b'(' => paren += 1,
+            b')' => paren -= 1,
+            _ => {}
+        }
+    }
+    (brace, paren)
+}
+
+/// `collect` — parse TOP-LEVEL `kw TYPE name;` declarations from `src` (skipping precision/interpolation
+/// qualifiers before the type). Only declarations at brace/paren depth `(0, 0)` are interface declarations;
+/// a keyword occurrence inside a function body or a parameter list (e.g. an `out`/`inout` parameter, or an
+/// `in` vertex-puller helper argument) is NOT one and is skipped — otherwise a helper's `out float a`
+/// parameter would be reflected as a phantom fragment output / varying / attribute.
 fn collect(src: &str, kw: &str) -> Vec<Decl> {
     let b = src.as_bytes();
     let kb = kw.as_bytes();
@@ -326,6 +376,10 @@ fn collect(src: &str, kw: &str) -> Vec<Decl> {
         let before_word = at != 0 && is_word(b[at - 1]);
         let after_word = at + kl < b.len() && is_word(b[at + kl]);
         if before_word || after_word {
+            p = at + kl;
+            continue;
+        }
+        if depth_at(b, at) != (0, 0) {
             p = at + kl;
             continue;
         }
@@ -418,15 +472,52 @@ fn find_from(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     hay[from..].windows(needle.len()).position(|w| w == needle).map(|i| i + from)
 }
 
-/// Extract the body between `void main(){` and the matching final `}` (gl_shim.c `main_body`).
+/// Extract the body between `void main(){` and its DEPTH-MATCHED closing `}`. `main` is matched at a word
+/// boundary and must be followed by `(` — so a carried helper whose name merely CONTAINS "main" (e.g.
+/// `mainImage`) never hijacks the scan — and the closing brace is found by brace-depth counting rather than
+/// the last `}` in the source, so a helper function emitted AFTER `main` does not swallow the body.
 fn main_body(src: &str) -> String {
     let b = src.as_bytes();
-    let p = find_from(b, b"main", 0).and_then(|m| b[m..].iter().position(|&c| c == b'{').map(|i| m + i));
-    let e = b.iter().rposition(|&c| c == b'}');
-    match (p, e) {
-        (Some(p), Some(e)) if e > p => String::from_utf8_lossy(&b[p + 1..e]).into_owned(),
-        _ => String::new(),
+    let n = b.len();
+    let mut i = 0usize;
+    let mut open = None;
+    while let Some(rel) = find_from(b, b"main", i) {
+        let before = rel == 0 || !is_word(b[rel - 1]);
+        let after = rel + 4 >= n || !is_word(b[rel + 4]);
+        if before && after {
+            let mut j = rel + 4;
+            while j < n && is_space(b[j]) {
+                j += 1;
+            }
+            if j < n && b[j] == b'(' {
+                if let Some(brace_rel) = b[j..].iter().position(|&c| c == b'{') {
+                    open = Some(j + brace_rel);
+                    break;
+                }
+            }
+        }
+        i = rel + 4;
     }
+    let p = match open {
+        Some(p) => p,
+        None => return String::new(),
+    };
+    let mut depth = 0i32;
+    let mut k = p;
+    while k < n {
+        match b[k] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return String::from_utf8_lossy(&b[p + 1..k]).into_owned();
+                }
+            }
+            _ => {}
+        }
+        k += 1;
+    }
+    String::new()
 }
 
 /// Word-boundary replace `from`→`to` (gl_shim.c `wreplace`).
@@ -532,8 +623,167 @@ fn strip_comments(s: &str) -> String {
     out
 }
 
+/// Strip every preprocessor line (`#version`/`#define`/`#ifdef`/…). `translate_render` pins its own desktop
+/// `#version` and reflects the interface directly, so ES preprocessor directives are dropped on this path —
+/// the macro-heavy GskGpu/ANGLE shaders that actually depend on them take the VERBATIM host route (whose
+/// `glsl_es::normalize` runs naga's real preprocessor) instead of the reflect-and-regenerate path.
+fn strip_preprocessor(src: &str) -> String {
+    let mut out = String::new();
+    for line in src.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Split a (comment- and preprocessor-stripped) stage into TOP-LEVEL units — one per `struct`/interface
+/// declaration, global variable, or function definition — by tracking brace depth: a `;` at depth 0 ends a
+/// simple declaration; a `}` returning to depth 0 ends a block (a `struct`/uniform-block declaration then
+/// absorbs an optional instance name + terminating `;`, while a function definition ends at the `}`). This
+/// is what lets [`partition_globals`] carry the struct definitions and helper functions the old
+/// reflect-and-regenerate path silently dropped (leaving `main` referencing undefined types/functions).
+fn top_level_units(src: &str) -> Vec<String> {
+    let b = src.as_bytes();
+    let n = b.len();
+    let mut units = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < n {
+        match b[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth <= 0 {
+                    depth = 0;
+                    // A block just closed. If it is a `struct`/uniform block, an optional instance name and a
+                    // terminating `;` belong to THIS unit; a function definition (no trailing `;`) ends here.
+                    let mut j = i + 1;
+                    while j < n && is_space(b[j]) {
+                        j += 1;
+                    }
+                    if j < n && b[j] == b';' {
+                        j += 1; // `struct S { … };`
+                    } else if j < n && is_word(b[j]) {
+                        let mut k = j;
+                        while k < n && is_word(b[k]) {
+                            k += 1;
+                        }
+                        let mut m = k;
+                        while m < n && is_space(b[m]) {
+                            m += 1;
+                        }
+                        if m < n && b[m] == b';' {
+                            j = m + 1; // `uniform B { … } inst;`
+                        } else {
+                            j = i + 1; // a following declaration — this unit is a function, ends at `}`
+                        }
+                    }
+                    let u = src[start..j].trim();
+                    if !u.is_empty() {
+                        units.push(u.to_string());
+                    }
+                    start = j;
+                    i = j;
+                    continue;
+                }
+            }
+            b';' if depth == 0 => {
+                let u = src[start..=i].trim();
+                if !u.is_empty() {
+                    units.push(u.to_string());
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let tail = src[start..].trim();
+    if !tail.is_empty() {
+        units.push(tail.to_string());
+    }
+    units
+}
+
+/// The first whitespace-delimited word of a top-level unit (its leading qualifier/type/keyword).
+fn first_word(u: &str) -> &str {
+    u.split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("")
+}
+
+/// A leading qualifier/keyword whose top-level unit is an INTERFACE declaration the translator REGENERATES
+/// (attributes/varyings/uniforms) or a `precision`/`const` statement handled elsewhere — so it is NOT carried
+/// verbatim. Everything else at top level (a `struct`, a helper function, a plain global) IS carried.
+fn is_regenerated_qualifier(w: &str) -> bool {
+    matches!(
+        w,
+        "attribute" | "varying" | "uniform" | "precision" | "const" | "in" | "out" | "flat" | "smooth"
+            | "centroid" | "invariant" | "layout"
+    )
+}
+
+/// Partition a stage's carried-through globals into `(struct_defs, functions_and_globals)`, in source order.
+/// The interface declarations the translator regenerates (attribute/varying/uniform/const/precision) are
+/// dropped here; struct definitions are separated so they can be emitted BEFORE the uniform block and helper
+/// functions that reference them. `main` is excluded (its body is emitted by [`main_body`]). This is the fix
+/// for ANGLE/real-world shaders that declare helper functions, `struct`s, array-of-struct locals, etc. — the
+/// old path kept only `main`, so any such shader failed to compile with "unknown function/type".
+fn partition_globals(src: &str) -> (Vec<String>, Vec<String>) {
+    let stripped = strip_preprocessor(src);
+    let mut structs = Vec::new();
+    let mut funcs = Vec::new();
+    for u in top_level_units(&stripped) {
+        let fw = first_word(&u);
+        if is_regenerated_qualifier(fw) {
+            continue;
+        }
+        if fw == "struct" {
+            structs.push(u);
+            continue;
+        }
+        // A function definition/prototype whose name is `main` is emitted by `main_body`, not carried.
+        if let Some(paren) = u.find('(') {
+            let before_brace = u.find('{').map_or(true, |bp| paren < bp);
+            if before_brace {
+                let name = u[..paren].trim_end();
+                let name = name.rsplit(|c: char| c.is_whitespace() || c == '*').next().unwrap_or("");
+                if name == "main" {
+                    continue;
+                }
+            }
+        }
+        funcs.push(u);
+    }
+    (structs, funcs)
+}
+
 fn is_sampler_type(t: &str) -> bool {
-    matches!(t, "sampler2D" | "samplerCube" | "sampler2DShadow")
+    // Every combined-sampler GLSL-ES type the driver must keep OUT of the std140 data-uniform block (an
+    // opaque sampler is illegal as a block member — naga rejects `UnknownType`/opaque-in-UBO) and split into
+    // a separate `(texture, sampler)` pair. This MUST cover the executor's `glsl_es::split_sampler_ty` set
+    // (`sampler2D`/`samplerCube`/`sampler2DArray`/`sampler2DShadow`/`samplerExternalOES`) so a
+    // `sampler2DArray uArr;` uniform is reflected as a sampler, not mislaid into `HlUniforms`.
+    matches!(
+        t,
+        "sampler2D" | "samplerCube" | "sampler2DArray" | "sampler2DShadow" | "samplerExternalOES"
+    )
+}
+
+/// Whether a varying/interface type is an integer/bool aggregate that desktop GLSL (and naga) REQUIRE to
+/// carry the `flat` interpolation qualifier — an `int`/`uint`/`bool` (or `ivecN`/`uvecN`/`bvecN`) varying
+/// cannot be smoothly interpolated. GLSL-ES declares these `flat`, but the reflection [`collect`] drops the
+/// qualifier, so the regenerated declaration must re-add it or the stage fails to compile.
+fn needs_flat(ty: &str) -> bool {
+    matches!(
+        ty,
+        "int" | "uint" | "bool"
+            | "ivec2" | "ivec3" | "ivec4"
+            | "uvec2" | "uvec3" | "uvec4"
+            | "bvec2" | "bvec3" | "bvec4"
+    )
 }
 
 /// Collect uniforms from vs+fs (dedup by name), split into DATA uniforms and SAMPLER uniforms
