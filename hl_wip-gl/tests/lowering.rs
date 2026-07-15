@@ -34,6 +34,16 @@ fn submit_ops(batch: &[Cmd]) -> &[Enc] {
     panic!("no Submit in batch: {batch:?}");
 }
 
+/// How many `CreateShader` commands a batch carries (the host naga-compiles one per command).
+fn count_shaders(batch: &[Cmd]) -> usize {
+    batch.iter().filter(|c| matches!(c, Cmd::CreateShader { .. })).count()
+}
+
+/// How many `CreateRenderPipeline` commands a batch carries.
+fn count_pipelines(batch: &[Cmd]) -> usize {
+    batch.iter().filter(|c| matches!(c, Cmd::CreateRenderPipeline(_, _))).count()
+}
+
 // ---------------------------------------------------------------------------------------------------
 // recording layer (deferred — submits nothing)
 // ---------------------------------------------------------------------------------------------------
@@ -180,6 +190,89 @@ fn textured_quad_uploads_buffer_and_texture() {
     assert!(batch.iter().any(|c| matches!(c, Cmd::CreateRenderPipeline(_, _))));
 }
 
+/// A linked program's shader modules + render pipeline are created ONCE and re-referenced by their stable
+/// IR ids on every later frame/draw that reuses the program (the program-keyed residency cache), so a reused
+/// GskGpu program costs ZERO host shader compiles + pipeline builds after the first frame — the fix for the
+/// per-draw shader recompile that stalled GTK4. A relink invalidates the cache and re-creates both.
+#[test]
+fn reused_program_is_not_recreated_across_frames() {
+    let mut c = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+
+    // ---- shared resources + program, set up once ----
+    let vbo = record::gen_buffer(&mut c);
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
+    let verts: Vec<u8> = (0..48).map(|i| i as u8).collect();
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &verts, 0x88E4);
+    record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut c, 0);
+
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(&mut c, vs, VS);
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, FS);
+    record::compile_shader(&mut c, fs);
+    let prog = record::create_program(&mut c);
+    record::attach_shader(&mut c, prog, vs);
+    record::attach_shader(&mut c, prog, fs);
+    assert!(record::link_program(&mut c, prog));
+    record::use_program(&mut c, prog);
+    record::uniform_sampler(&mut c, 0, 0);
+
+    let tex = record::gen_texture(&mut c);
+    record::active_texture(&mut c, GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_image_2d(&mut c, 2, 2, &[0xABu8; 16]);
+    record::tex_parameter(&mut c, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    record::tex_parameter(&mut c, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    record::viewport(&mut c, [0, 0, 640, 480]);
+
+    // ---- frame 1: first sight → the program's 2 shader modules + its pipeline are created once ----
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 6);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    assert_eq!(count_shaders(&sink.batches[0]), 2, "frame 1 compiles the program's 2 shader modules");
+    assert_eq!(count_pipelines(&sink.batches[0]), 1, "frame 1 creates the program's pipeline");
+
+    // ---- frame 2: same program, same state → resident shaders + pipeline re-referenced, NOT re-emitted ----
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 6);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let f2 = &sink.batches[1];
+    assert_eq!(count_shaders(f2), 0, "a reused program emits NO new CreateShader on the 2nd frame");
+    assert_eq!(count_pipelines(f2), 0, "a reused program emits NO new CreateRenderPipeline on the 2nd frame");
+    // The frame still draws: the resident pipeline id is bound in the pass.
+    assert!(submit_ops(f2).iter().any(|e| matches!(e, Enc::SetPipeline(_))), "the reused pipeline is still bound");
+
+    // ---- relink: a new link generation invalidates the cache → shaders + pipeline created afresh ----
+    assert!(record::link_program(&mut c, prog));
+    record::use_program(&mut c, prog);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 6);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    assert_eq!(count_shaders(&sink.batches[2]), 2, "a relinked program re-creates its shader modules");
+    assert_eq!(count_pipelines(&sink.batches[2]), 1, "a relinked program re-creates its pipeline");
+}
+
+/// Two draws of the SAME program in ONE frame (the GskGpu shape: one program batched across many draws)
+/// share a single set of shader modules + pipeline — the 2nd draw adds no CreateShader / CreateRenderPipeline.
+#[test]
+fn same_program_across_draws_in_one_frame_compiles_once() {
+    let mut c = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+    record_textured_quad(&mut c);
+    // A second draw with the identical bound state (same program, same layout) within the same frame.
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 6);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    assert_eq!(count_shaders(batch), 2, "two draws of one program compile its 2 shader modules once, not per draw");
+    assert_eq!(count_pipelines(batch), 1, "two draws of one program build its pipeline once, not per draw");
+    // Both draws lowered into the single pass (two Draw ops share the one resident pipeline).
+    assert_eq!(
+        submit_ops(batch).iter().filter(|e| matches!(e, Enc::Draw { .. })).count(),
+        2,
+        "both draws are present in the pass"
+    );
+}
+
 #[test]
 fn textured_quad_encoder_sequence_and_present() {
     let mut c = ctx_640x480();
@@ -226,6 +319,106 @@ fn textured_quad_bind_group_binds_texture_and_sampler() {
     let bg = bg.expect("CreateBindGroup");
     assert!(bg.entries.iter().any(|e| matches!(e.resource, BindResource::Texture { .. })));
     assert!(bg.entries.iter().any(|e| matches!(e.resource, BindResource::Sampler { .. })));
+}
+
+// GskGpu forwards its GLSL-ES VERBATIM to the host executor's ES route, which numbers samplers by a
+// running `layout(binding=)` counter over EVERY host-recognized `uniform <samplerType> NAME;` in fragment
+// text order — INCLUDING the inactive `samplerExternalOES` declarations of GskGpu's
+// `#ifdef …_IS_EXTERNAL / #else` texture blocks. So the ACTIVE `sampler2D GSK_TEXTURE0` lands on host
+// binding k=1 (texture 3 / sampler 4), not k=0 — the external `GSK_TEXTURE0` before it consumed k=0. The
+// driver's own reflection skips the external decls and dedups, so its declaration index (0) differs from
+// the host's k (1). The lowering must bind the texture at the HOST binding the compiled shader declares,
+// or the bind group NACKs against the auto layout ("bindings … (1) does not match … (3)"). This asserts
+// the GSK_TEXTURE0 texture/sampler land at binding 3/4, and NOT at the naive declaration-index 1/2.
+#[test]
+fn gsk_style_verbatim_sampler_binds_at_host_binding_past_the_external_branch() {
+    // A vertex shader using `gl_VertexID` forces the forward-VERBATIM path (GskGpu vertex-pulling).
+    const GSK_VS: &str = "#version 320 es\nout vec2 vUV;\nvoid main(){ vUV = vec2(0.0); gl_Position = vec4(float(gl_VertexID), 0.0, 0.0, 1.0); }\n";
+    // The GskGpu texture-block shape: each texture is EITHER a `samplerExternalOES` OR a `sampler2D` triple,
+    // in two preprocessor branches. Both are textually present (neither side preprocesses here), so the host
+    // counts the external decl (k=0) before the active `sampler2D GSK_TEXTURE0` (k=1).
+    const GSK_FS: &str = "#version 320 es\nprecision highp float;\n\
+#ifdef GSK_TEXTURE0_IS_EXTERNAL\n\
+uniform samplerExternalOES GSK_TEXTURE0;\n\
+#else\n\
+uniform sampler2D GSK_TEXTURE0;\n\
+uniform sampler2D GSK_TEXTURE0_1;\n\
+uniform sampler2D GSK_TEXTURE0_2;\n\
+#endif\n\
+in vec2 vUV;\nout vec4 fragColor;\nvoid main(){ fragColor = texture(GSK_TEXTURE0, vUV); }\n";
+
+    let mut c = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+
+    // A minimal vertex buffer + attribute so the draw lowers.
+    let vbo = record::gen_buffer(&mut c);
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &vec![0u8; 48], 0x88E4);
+    record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut c, 0);
+
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(&mut c, vs, GSK_VS);
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, GSK_FS);
+    record::compile_shader(&mut c, fs);
+    let prog = record::create_program(&mut c);
+    record::attach_shader(&mut c, prog, vs);
+    record::attach_shader(&mut c, prog, fs);
+    assert!(record::link_program(&mut c, prog));
+    record::use_program(&mut c, prog);
+
+    // The driver reflects three sampler2D samplers (external skipped + deduped), but their HOST bindings
+    // start at k=1 because the external `GSK_TEXTURE0` consumed k=0.
+    let p = c.programs.program(prog).expect("linked program");
+    assert_eq!(p.samp_names, vec!["GSK_TEXTURE0", "GSK_TEXTURE0_1", "GSK_TEXTURE0_2"]);
+    assert_eq!(
+        p.samp_bindings,
+        vec![1, 2, 3],
+        "the active sampler2D GSK_TEXTURE0 is host binding k=1 (past the external branch's k=0), not the \
+         naive declaration index 0"
+    );
+
+    // GSK_TEXTURE0 -> texture unit 0, with a real texture bound there (the only sampled texture).
+    record::uniform_sampler(&mut c, 0, 0);
+    let tex = record::gen_texture(&mut c);
+    record::active_texture(&mut c, GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_image_2d(&mut c, 2, 2, &[0xABu8; 16]);
+    record::viewport(&mut c, [0, 0, 640, 480]);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 6);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let bg = batch
+        .iter()
+        .find_map(|cmd| match cmd {
+            Cmd::CreateBindGroup(_, d) => Some(d),
+            _ => None,
+        })
+        .expect("CreateBindGroup");
+
+    // The GSK_TEXTURE0 texture lands at host binding 3 and its sampler at 4 — the layout the compiled shader
+    // declares (UBO@0 / tex@1+2k / sampler@2+2k with k=1). NOT the naive declaration-index binding 1/2.
+    let tex_binding = bg
+        .entries
+        .iter()
+        .find(|e| matches!(e.resource, BindResource::Texture { .. }))
+        .map(|e| e.binding)
+        .expect("a texture bind entry");
+    let smp_binding = bg
+        .entries
+        .iter()
+        .find(|e| matches!(e.resource, BindResource::Sampler { .. }))
+        .map(|e| e.binding)
+        .expect("a sampler bind entry");
+    assert_eq!(tex_binding, 3, "GSK_TEXTURE0's texture must bind at the host k=1 texture binding (3)");
+    assert_eq!(smp_binding, 4, "GSK_TEXTURE0's sampler must bind at the host k=1 sampler binding (4)");
+    assert!(
+        !bg.entries.iter().any(|e| e.binding == 1),
+        "nothing lands on binding 1 — that is the external branch's k=0 texture slot the shader never uses"
+    );
 }
 
 #[test]

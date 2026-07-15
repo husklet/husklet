@@ -543,10 +543,16 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     // stage's source led by GLSL_MAGIC); the render pipeline binds them by their `vmain`/`fmain` entries.
     // naga's `glsl-in` compiles one stage per module, so the two stages are distinct modules (not one
     // combined module as the old pre-translated-MSL path used).
-    let vs_id = ctx.alloc_shader_ir();
-    let fs_id = ctx.alloc_shader_ir();
-    cmds.push(Cmd::CreateShader { id: vs_id, kind: ShaderPayloadKind::Glsl, spirv: vs_ir });
-    cmds.push(Cmd::CreateShader { id: fs_id, kind: ShaderPayloadKind::Glsl, spirv: fs_ir });
+    // Program-keyed shader residency: a linked GskGpu program's two shader modules are `CreateShader`d ONCE
+    // (per link generation) and re-referenced by their stable IR ids on every later draw/frame — so a reused
+    // program costs ZERO host naga compiles after the first sight. Before this cache the builder minted fresh
+    // ids + re-emitted `CreateShader` for the SAME program on every draw (a GTK frame reuses ~11 programs
+    // across ~260 draws → ~520 redundant compiles). See `GlContext::program_shader_ir`.
+    let (vs_id, fs_id, shaders_new) = ctx.program_shader_ir(prog_name, prog.link_gen);
+    if shaders_new {
+        cmds.push(Cmd::CreateShader { id: vs_id, kind: ShaderPayloadKind::Glsl, spirv: vs_ir });
+        cmds.push(Cmd::CreateShader { id: fs_id, kind: ShaderPayloadKind::Glsl, spirv: fs_ir });
+    }
 
     // Locations fed by an appended client slot (see below) are NOT folded into a VBO slot's layout.
     let mut client_loc = [false; crate::model::program::MAX_ATTR];
@@ -625,21 +631,31 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
         None
     };
     let topology = if d.mode == GL_TRIANGLE_STRIP { Topology::TriangleStrip } else { Topology::TriangleList };
-    let pipeline_ir = ctx.alloc_pipeline_ir();
-    cmds.push(Cmd::CreateRenderPipeline(
-        pipeline_ir,
-        RenderPipelineDesc {
-            vertex: ShaderRef { module: vs_id, entry: "vmain".into() },
-            fragment: Some(ShaderRef { module: fs_id, entry: "fmain".into() }),
-            vertex_buffers: vbs,
-            color_targets: vec![ColorTargetState { format: target_fmt, blend, write_mask: 0xf }],
-            depth,
-            topology,
-            cull: if d.cull_enabled { cull_wire(d.cull_face) } else { 0 },
-            front_face: front_face_wire(d.front_face),
-            label: String::new(),
-        },
-    ));
+    let color_targets = vec![ColorTargetState { format: target_fmt, blend, write_mask: 0xf }];
+    let cull = if d.cull_enabled { cull_wire(d.cull_face) } else { 0 };
+    let front_face = front_face_wire(d.front_face);
+    // Program-keyed pipeline residency: the render pipeline depends on the program's shaders PLUS this draw's
+    // fixed-function + vertex-layout state, so the cache key folds a signature of that state in. A program
+    // re-drawn with the SAME state reuses its resident pipeline (no `CreateRenderPipeline`); a genuinely new
+    // state variant creates one more. Reused across frames + invalidated on relink (see `program_pipeline_ir`).
+    let state_key = pipeline_state_key(&vbs, &color_targets, &depth, topology, cull, front_face);
+    let (pipeline_ir, pipe_new) = ctx.program_pipeline_ir(prog_name, state_key, prog.link_gen);
+    if pipe_new {
+        cmds.push(Cmd::CreateRenderPipeline(
+            pipeline_ir,
+            RenderPipelineDesc {
+                vertex: ShaderRef { module: vs_id, entry: "vmain".into() },
+                fragment: Some(ShaderRef { module: fs_id, entry: "fmain".into() }),
+                vertex_buffers: vbs,
+                color_targets,
+                depth,
+                topology,
+                cull,
+                front_face,
+                label: String::new(),
+            },
+        ));
+    }
 
     // ---- uniform buffer + bind group ----
     let mut uniform_ir = 0u32;
@@ -752,6 +768,30 @@ fn emit_scissor(d: &DrawCall, tw: i32, th: i32) -> Enc {
         h = th - y;
     }
     Enc::SetScissor { x: x as u32, y: y as u32, w: w.max(0) as u32, h: h.max(0) as u32 }
+}
+
+/// A stable signature of the pipeline-state a draw contributes on top of its program's (cached) shader
+/// modules: the vertex-buffer layouts, the color targets (format + blend), the depth state, the primitive
+/// topology, and the cull mode + front-face winding. Two draws of the same program with an equal signature
+/// share one render pipeline (see [`GlContext::program_pipeline_ir`]); any difference mints a new one.
+///
+/// These descriptor types derive `Debug` but not `Hash` (and live in the `hl_gpu` crate this shim does not
+/// modify), so a canonical `Debug` rendering is the hash input: structurally-equal state renders identically
+/// and hashes equal, while any change (blend, depth, topology, a vertex attribute, cull/winding, or the
+/// target format) renders differently and hashes apart. None of these fields carry floats, so the rendering
+/// is exact.
+fn pipeline_state_key(
+    vbs: &[VertexLayout],
+    color_targets: &[ColorTargetState],
+    depth: &Option<DepthState>,
+    topology: Topology,
+    cull: u32,
+    front_face: u32,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}", (vbs, color_targets, depth, topology, cull, front_face)).hash(&mut h);
+    h.finish()
 }
 
 /// Vertex-attribute format packing (`gl_shim.c` `vertex_format_wire`):

@@ -272,17 +272,36 @@ fn gtk4_composites_through_the_full_stack() {
         //   texture/sampler at `1+2k / 2+2k`, so the driver's entries match naga's auto layout. ES2 programs
         //   (which emit their own `layout(binding=)`) keep the identity `k == declaration index`.
         //
-        //   REMAINING — the frame now reaches host SHADER COMPILE, which fails naga validation on the GskGpu
-        //   VERTEX stage: `EntryPoint { stage: Vertex, name: "vmain", source: Argument(1, NotIOShareableType) }`.
-        //   A GskGpu vertex `in` (an `IN()`-macro instanced input — an integer/flat or otherwise non-IO type)
-        //   reaches naga as an entry-point argument whose type is not IO-shareable for a vertex input. This is
-        //   a HOST-side GLSL-ES lowering gap in hl_wip-gpu-wgpu (the vertex-input interface, e.g. a `flat`
-        //   integer attribute or a struct input), one stage downstream of the (now-fixed) bind group — the
-        //   next effort, in the wgpu executor's ES route, not the GL driver.
+        //   FIXED — GskGpu per-frame shader RECOMPILE (the stall that kept presented_frames at 0): GTK's
+        //   GskGL renderer compiles+links each of its ~11 programs ONCE and then reuses them across every
+        //   draw of every frame, but the GL driver's frame builder minted fresh IR shader ids and re-emitted
+        //   `CreateShader` (+ `CreateRenderPipeline`) for the SAME program on EVERY draw — so the host re-ran
+        //   naga's glsl→wgsl compile hundreds of times per frame (one real GTK frame = ~260 draws over ~11
+        //   programs → ~549 redundant compiles, 0 failures), burning the whole frame budget and completing
+        //   only ~2 submits with 0 presents. hl_wip-gl now has a program-keyed shader/pipeline residency cache
+        //   (context.rs `program_shader_ir` / `program_pipeline_ir`, keyed by GL program name + a `link_gen`
+        //   bumped on `glLinkProgram`, wired through service/frame.rs `lower_draw`) that mirrors the existing
+        //   texture/buffer residency caches: a linked program's two shader modules + its render pipeline are
+        //   `CreateShader`d/`CreateRenderPipeline`d ONCE and re-referenced by their stable IR ids on every
+        //   later draw+frame. The recompile count drops from ~549 to ~30 (once per program, per link).
+        //
+        //   REMAINING — with the shaders no longer thrashing, the frame now progresses to host BIND-GROUP
+        //   creation and stops there: `Device::create_bind_group` fails validation with "Number of bindings
+        //   in bind group descriptor (3) does not match the number of bindings defined in the bind group
+        //   layout (7)". A GskGpu fragment program declares THREE textures (its compiled auto layout is UBO
+        //   at binding 0 + three texture/sampler pairs at 1+2k/2+2k = 7 bindings), but the GL driver's
+        //   `lower_draw` only emits a bind-group ENTRY for a sampler whose bound GL texture actually has
+        //   uploaded data — so a draw that binds one populated atlas supplies 3 entries (UBO + one pair) and
+        //   the auto layout the pipeline derives from the shader wants all 7. This is a bind-group
+        //   COMPLETENESS gap (the driver must bind a placeholder for every sampler the shader declares, or the
+        //   executor must slim the pipeline's bind-group layout to the sampled subset) — distinct from the
+        //   now-fixed shader recompile, and NOT the vertex-input interface (the GskGpu vertex/fragment stages
+        //   now compile cleanly: 0 shader_errors). The next effort is the bind-group binding set, not the
+        //   shader cache.
         eprintln!(
             "MILESTONE DIAGNOSED (GTK4 reaches real GL rendering + cheap frame lowering; its GskGpu shaders \
-             compile + bind, and the next gap has moved one stage downstream to the host executor's vertex \
-             shader interface — suite stays green):\n\
+             compile AND are no longer recompiled per draw, and the next gap has moved one stage downstream \
+             to the host executor's BIND-GROUP binding set — suite stays green):\n\
              Stage evidence:\n\
              * host GPU executor submits (guest lowered GL IR over $HL_GPU_EXEC): {submit_count}\n\
                (>0 => the epoxy/GskGpu bring-up is LIVE; GTK lowers real GL to the host)\n\
@@ -309,12 +328,25 @@ fn gtk4_composites_through_the_full_stack() {
                 it to 1 entry vs the layout's 3 ('bindings (1) does not match (3)'). hl_wip-gl now recovers the \
                 host k per bound sampler (adapter/glsl.rs verbatim_sampler_bindings → Program::samp_bindings) and \
                 emits tex/sampler at 1+2k / 2+2k; ES2 programs keep the identity k == declaration index.\n\
+             * GskGpu per-frame shader recompile: FIXED — GskGL reuses each of its ~11 programs across every \
+                draw of every frame, but the GL driver re-emitted CreateShader (+ CreateRenderPipeline) for the \
+                SAME program on EVERY draw, so the host re-ran naga's glsl→wgsl compile ~549 times per run (0 \
+                failures) and burned the whole frame budget (~2 submits, 0 presents). hl_wip-gl now caches a \
+                linked program's shader modules + pipeline by GL program name + link generation \
+                (context.rs program_shader_ir / program_pipeline_ir, wired through service/frame.rs lower_draw), \
+                so a reused program compiles ONCE and costs nothing per later draw/frame — recompiles drop to \
+                ~30 (once per program/link) and gpu submits progress past the shader wall.\n\
              * compositor presented frames: 0\n\
-               (the frame now reaches host SHADER COMPILE, which fails naga validation on the GskGpu VERTEX \
-                stage: EntryPoint {{ stage: Vertex, name: \"vmain\", source: Argument(1, NotIOShareableType) }} \
-                — a GskGpu vertex `in` (an IN()-macro instanced input) reaches naga as an entry-point argument \
-                whose type is not IO-shareable for a vertex input. This is a HOST-side GLSL-ES lowering gap in \
-                hl_wip-gpu-wgpu's vertex-input interface, one stage downstream of the now-fixed bind group.)\n\
+               (with the shader thrash gone the frame now reaches host BIND-GROUP creation and stops there: \
+                Device::create_bind_group fails validation 'Number of bindings in bind group descriptor (3) \
+                does not match the number of bindings defined in the bind group layout (7)'. A GskGpu fragment \
+                program declares THREE textures (compiled auto layout = UBO@0 + three tex/sampler pairs at \
+                1+2k/2+2k = 7 bindings), but hl_wip-gl's lower_draw emits a bind-group entry only for a sampler \
+                whose bound GL texture has uploaded data, so a draw binding one populated atlas supplies just 3 \
+                entries. This is a bind-group COMPLETENESS gap — the driver must bind a placeholder for every \
+                declared sampler, or the executor must slim the pipeline layout to the sampled subset — distinct \
+                from the now-fixed shader recompile and NOT the vertex interface (the vertex+fragment stages \
+                compile cleanly, 0 shader_errors).)\n\
              --- decisive app stderr lines ---\n{}\n",
             decisive_lines(&stderr),
         );

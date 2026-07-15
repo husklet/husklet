@@ -55,6 +55,12 @@ pub struct Program {
     pub samp_names: Vec<String>,
     /// Sampler-uniform index → GL texture unit (set by `glUniform1i`).
     pub samp_units: [i32; 4],
+    /// The program's link generation: bumped on every `glLinkProgram`. The frame builder's program-keyed
+    /// shader/pipeline residency cache (`GlContext::program_shader_ir` / `program_pipeline_ir`) keys on this
+    /// so a RE-linked program (new shader source / new reflection) gets fresh IR shader modules + pipeline,
+    /// while a program that is merely re-used across draws+frames keeps its cached IR ids (created once). `0`
+    /// for a never-linked program; the first `glLinkProgram` makes it `1`.
+    pub link_gen: u64,
     /// Per-`samp_names` entry, the host bind-group binding INDEX `k` (→ texture `1+2k`, sampler `2+2k`) the
     /// executor's compiled shader declares for that sampler. For the driver-translated ES2 path this is the
     /// identity (`k == declaration index`, since the driver EMITS the `layout(binding=)` itself). For the
@@ -74,6 +80,9 @@ impl Program {
     /// `CreateShader` + `CreateComputePipeline`.
     pub fn link(&mut self, vs_src: String, fs_src: String, cs_src: String) {
         use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
+        // A (re)link produces fresh shader IR + reflection; bump the generation so the frame builder's
+        // program-keyed shader/pipeline cache invalidates any IR it created for the previous link.
+        self.link_gen += 1;
         if !cs_src.is_empty() {
             let source = glsl::translate_compute(&cs_src);
             self.compute_ir = Some(

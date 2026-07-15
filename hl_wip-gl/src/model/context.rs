@@ -244,6 +244,23 @@ pub struct GlContext {
     /// change is created + uploaded once and re-bound by id. Keyed on usage too so the rare GL buffer bound
     /// as BOTH a vertex and an index source gets a correctly-typed IR buffer for each role.
     buf_ir_cache: HashMap<(u32, u32), (u32, u64)>,
+
+    /// Residency cache for a linked GL program's two IR shader MODULES, keyed by GL program name →
+    /// `(vs_shader_ir, fs_shader_ir, link_gen)`. GskGpu compiles + links each of its programs ONCE and then
+    /// reuses it across every draw of every frame; without this cache the frame builder minted fresh IR
+    /// shader ids and re-emitted `CreateShader` for the SAME program on every draw, so the host re-ran naga's
+    /// glsl→wgsl compile hundreds of times per frame (a real GTK frame reuses ~11 programs across ~260 draws
+    /// → ~520 redundant compiles). A program's shader modules are `CreateShader`d ONCE per link generation
+    /// and re-referenced by their stable IR ids on every later draw+frame. Keyed on `link_gen` (bumped by
+    /// `glLinkProgram`) so a re-linked program gets fresh modules. Mirrors [`Self::tex_ir_cache`].
+    prog_shader_cache: HashMap<u32, (u32, u32, u64)>,
+    /// Residency cache for a program's render PIPELINE, keyed by `(GL program name, pipeline-state signature)`
+    /// → `(pipeline_ir, link_gen)`. The pipeline depends on the program's shaders PLUS the draw's
+    /// fixed-function + vertex-layout state (target format, blend, depth, topology, cull/front-face, vertex
+    /// buffers), so the key folds a hash of that state in: a program re-drawn with the SAME state reuses its
+    /// resident pipeline (no `CreateRenderPipeline`), while a genuinely new state variant creates one more.
+    /// Invalidated on relink via `link_gen`. Mirrors [`Self::prog_shader_cache`].
+    prog_pipeline_cache: HashMap<(u32, u64), (u32, u64)>,
 }
 
 impl Default for GlContext {
@@ -321,7 +338,46 @@ impl GlContext {
             fbo_targets: HashMap::new(),
             tex_ir_cache: HashMap::new(),
             buf_ir_cache: HashMap::new(),
+            prog_shader_cache: HashMap::new(),
+            prog_pipeline_cache: HashMap::new(),
         }
+    }
+
+    /// The stable IR shader-module ids `(vs_shader_ir, fs_shader_ir)` a linked render program (`prog`) at
+    /// link generation `gen` lowers to. Returns `(vs_ir, fs_ir, needs_create)`: `needs_create` is true on the
+    /// first sight of this program (or after a relink bumped `gen`), so the frame builder emits the two
+    /// `CreateShader`s exactly then and reuses the resident ids — emitting NOTHING and re-compiling NOTHING on
+    /// every later draw+frame that reuses the program. Mirrors [`Self::sampled_texture_ir`].
+    pub fn program_shader_ir(&mut self, prog: u32, gen: u64) -> (u32, u32, bool) {
+        if let Some(&(vs, fs, g)) = self.prog_shader_cache.get(&prog) {
+            if g == gen {
+                hl_log::hl_count!(hl_log::tag::GL, "prog_shader_hit");
+                return (vs, fs, false);
+            }
+        }
+        hl_log::hl_count!(hl_log::tag::GL, "prog_shader_compile");
+        let vs = self.alloc_shader_ir();
+        let fs = self.alloc_shader_ir();
+        self.prog_shader_cache.insert(prog, (vs, fs, gen));
+        (vs, fs, true)
+    }
+
+    /// The stable IR render-pipeline id for a program (`prog`) drawn with pipeline-state signature
+    /// `state_key`, at link generation `gen`. Returns `(pipeline_ir, needs_create)`: created ONCE per
+    /// `(program, state, link_gen)` and re-referenced by id thereafter — so a program re-drawn with the same
+    /// fixed-function + vertex-layout state emits no new `CreateRenderPipeline`. Mirrors
+    /// [`Self::program_shader_ir`].
+    pub fn program_pipeline_ir(&mut self, prog: u32, state_key: u64, gen: u64) -> (u32, bool) {
+        if let Some(&(ir, g)) = self.prog_pipeline_cache.get(&(prog, state_key)) {
+            if g == gen {
+                hl_log::hl_count!(hl_log::tag::GL, "prog_pipeline_hit");
+                return (ir, false);
+            }
+        }
+        hl_log::hl_count!(hl_log::tag::GL, "prog_pipeline_create");
+        let ir = self.alloc_pipeline_ir();
+        self.prog_pipeline_cache.insert((prog, state_key), (ir, gen));
+        (ir, true)
     }
 
     /// The stable IR texture id a sampled GL texture (`gl_name`) at content generation `gen` lowers to.
