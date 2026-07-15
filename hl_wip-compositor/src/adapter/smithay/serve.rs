@@ -22,6 +22,8 @@ use smithay::reexports::{
 };
 use smithay::wayland::socket::ListeningSocketSource;
 
+use hl_log::{hl_info, tag};
+
 use super::present::PngPresenter;
 use super::state::{ClientState, HlState, InputCommand};
 use crate::scene::port::Clock;
@@ -50,7 +52,9 @@ impl LoopData {
         let cs: Arc<ClientState> = Arc::new(self.state.new_client_state());
         if let Err(e) = self.display.handle().insert_client(stream, cs) {
             eprintln!("hl_wip-compositor: insert_client failed: {e}");
+            return;
         }
+        hl_info!(tag::WAYLAND, "client connected");
     }
 }
 
@@ -144,7 +148,9 @@ fn run_auto_inner(
     // reaches through `$WAYLAND_DISPLAY`.
     let source = ListeningSocketSource::new_auto()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("bind wayland socket: {e}")))?;
-    on_bound(source.socket_name().to_os_string());
+    let socket_name = source.socket_name().to_os_string();
+    hl_info!(tag::WAYLAND, "socket bound name={}", socket_name.to_string_lossy());
+    on_bound(socket_name);
 
     let event_loop: EventLoop<LoopData> = EventLoop::try_new().expect("calloop event loop");
     let handle = event_loop.handle();

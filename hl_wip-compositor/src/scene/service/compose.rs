@@ -8,6 +8,8 @@
 //! blend order the ported code uses — root, its subsurface descendants, then popups (by depth) and
 //! their descendants.
 
+use hl_log::{hl_debug, hl_span, tag};
+
 use crate::scene::model::{Format, PresentableImage, Rect, Scene, SurfaceId};
 
 use super::popup::popup_placement;
@@ -51,6 +53,7 @@ impl Frame {
 /// descendants, and every popup belonging to the root (and their descendants) — becomes one
 /// [`PresentItem`] at its accumulated root-relative offset, in composite order.
 pub fn compose_frame(scene: &Scene, root: SurfaceId) -> Option<Frame> {
+    let _span = hl_span!(tag::COMPOSITOR, "compose");
     // The root must have content; if not, there is nothing to present.
     scene.get(root)?.buffer?;
 
@@ -67,7 +70,10 @@ pub fn compose_frame(scene: &Scene, root: SurfaceId) -> Option<Frame> {
         };
         items.push(item);
     }
-    Some(Frame { root, items })
+    let frame = Frame { root, items };
+    let (w, h) = frame.items.first().map(|i| (i.image.width, i.image.height)).unwrap_or((0, 0));
+    hl_debug!(tag::COMPOSITOR, "compose root={} layers={} {}x{}", root.0, frame.items.len(), w, h);
+    Some(frame)
 }
 
 /// Build the [`PresentItem`] for one surface at root-space offset `(x, y)`, or `None` if it has no

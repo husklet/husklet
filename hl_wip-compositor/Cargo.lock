@@ -228,9 +228,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
+name = "hl-log"
+version = "0.1.0"
+
+[[package]]
 name = "hl_wip_compositor"
 version = "0.0.0"
 dependencies = [
+ "hl-log",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

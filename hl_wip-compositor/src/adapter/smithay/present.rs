@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use hl_log::{hl_add, tag};
+
 use crate::scene::model::{OutputId, PresentableImage, Rect, SurfaceId, Visibility};
 use crate::scene::port::{PresentTiming, PresentationFeedback, Presenter};
 
@@ -138,6 +140,8 @@ impl Presenter for PngPresenter {
             let path = dir.join(format!("frame-{serial}.png"));
             let _ = write_png(&path, frame.width, frame.height, &frame.rgba);
         }
+        hl_add!(tag::PRESENT, "captured_frames", 1);
+        hl_add!(tag::PRESENT, "captured_bytes", buf.rgba.len() as u64);
         self.captures.lock().unwrap().push(frame);
         PresentationFeedback::delivered(
             serial,

@@ -17,6 +17,8 @@ pub mod service;
 
 use std::collections::HashMap;
 
+use hl_log::{hl_count, hl_span, tag};
+
 use model::{Scene, SurfaceId, SurfaceRole};
 use port::{Clock, PresentOutcome, Presenter};
 use service::{
@@ -140,6 +142,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
     /// tree is composed into ordered layers, each presented through the port, and paced on the base
     /// layer's outcome.
     pub fn present_root(&mut self, root: SurfaceId) -> FrameOutcome {
+        let _span = hl_span!(tag::PRESENT, "present");
         // A root with no output is unpresentable.
         let Some(output) = self.scene.selected_output(root).cloned() else {
             let fired = self.pace_tree(root, FramePacing::TerminalFailure);
@@ -154,6 +157,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
 
         // Nothing visible changed: the previous frame still stands. Fire callbacks, discard feedback.
         if !is_tree_dirty(&self.scene, root) {
+            hl_count!(tag::PRESENT, "skipped");
             let fired = self.pace_tree(root, FramePacing::Skipped);
             return FrameOutcome { pacing: FramePacing::Skipped, presented: Vec::new(), callbacks_fired: fired, serial: None, throttled: false };
         }
@@ -163,6 +167,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
         let refresh = output.refresh_nanos();
         let last = self.last_present_ns.get(&root).copied();
         if !schedule::should_present(now, last, refresh) {
+            hl_count!(tag::PRESENT, "throttled");
             return FrameOutcome { pacing: FramePacing::Skipped, presented: Vec::new(), callbacks_fired: 0, serial: None, throttled: true };
         }
 
@@ -189,6 +194,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
         };
 
         if pacing == FramePacing::Presented {
+            hl_count!(tag::PRESENT, "presented");
             self.clear_tree_dirty(root);
             self.last_present_ns.insert(root, now);
         }

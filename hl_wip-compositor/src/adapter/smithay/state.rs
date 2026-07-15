@@ -11,6 +11,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use hl_log::{hl_count, hl_debug, hl_info, tag};
+
 use smithay::reexports::wayland_server::{
     backend::{ClientData, ClientId, DisconnectReason, GlobalId, ObjectId},
     protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_shm, wl_surface::WlSurface},
@@ -214,6 +216,7 @@ impl HlState {
             eprintln!("hl_wip-compositor: wl_seat keyboard keymap unavailable, pointer only: {e}");
         }
 
+        hl_info!(tag::WAYLAND, "globals bound: compositor shm xdg seat output data_device");
         HlState {
             display: dh.clone(),
             compositor,
@@ -422,7 +425,10 @@ impl HlState {
         self.pending_callbacks.entry(sid).or_default().extend(frame_callbacks);
 
         // Drive the neutral policy: apply + (unless cursor / sync-subsurface) compose, present, pace.
+        hl_count!(tag::WAYLAND, "commits");
         let outcome = self.engine.commit(sid, commit);
+        let (cw, ch) = self.engine.scene.get(sid).and_then(|s| s.logical_size()).unwrap_or((0, 0));
+        hl_debug!(tag::WAYLAND, "commit surf={} {}x{} changed={}", sid.0, cw, ch, outcome.changed);
 
         // Release or retain the held callbacks — and schedule a repaint if the frame was withheld.
         match outcome.frame {
@@ -655,6 +661,7 @@ impl HlState {
     /// client receives `wl_pointer.leave`/`enter` (on the surface under the cursor changing) and
     /// `wl_pointer.motion` at the correct surface-local coordinate (`(x, y)` minus the surface origin).
     pub fn inject_pointer_motion(&mut self, x: f64, y: f64) {
+        hl_debug!(tag::WAYLAND, "input motion x={:.0} y={:.0}", x, y);
         let Some(pointer) = self.seat.get_pointer() else { return };
         let hit = self.hit_test(x, y);
 
@@ -678,6 +685,7 @@ impl HlState {
     /// Press or release a pointer button. Uses the pointer's CURRENT focus (from the last motion), which
     /// smithay tracks internally — so a button lands on whatever surface the cursor is over.
     pub fn inject_pointer_button(&mut self, button: u32, pressed: bool) {
+        hl_debug!(tag::WAYLAND, "input button={} pressed={}", button, pressed);
         // An explicit popup grab (menu / context-menu) dismisses on a press that lands outside the whole
         // popup chain — the click-outside-closes-the-menu semantics. Uses the pointer's last known location
         // (set by the preceding `inject_pointer_motion`). The button itself is still delivered below.
@@ -698,6 +706,7 @@ impl HlState {
     /// Scroll the pointer by logical `horizontal`/`vertical` amounts (wheel source). A zero component is
     /// omitted so the client only sees the axes that actually moved.
     pub fn inject_pointer_axis(&mut self, horizontal: f64, vertical: f64) {
+        hl_debug!(tag::WAYLAND, "input axis h={:.1} v={:.1}", horizontal, vertical);
         let Some(pointer) = self.seat.get_pointer() else { return };
         let time = self.input_time_ms();
         let mut frame = AxisFrame::new(time).source(AxisSource::Wheel);
@@ -733,6 +742,7 @@ impl HlState {
     /// the caller speaks Linux `input-event-codes` and the client receives the same value. Modifiers are
     /// tracked by smithay's xkb state across presses. No compositor keybinding filter — always forward.
     pub fn inject_key(&mut self, keycode: u32, pressed: bool) {
+        hl_debug!(tag::WAYLAND, "input key={} pressed={}", keycode, pressed);
         let Some(keyboard) = self.seat.get_keyboard() else { return };
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.input_time_ms();
