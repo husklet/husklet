@@ -439,3 +439,55 @@ fn unmapped_host_write_reaches_the_device_end_to_end() {
     let device_bytes = sink.read_buffer(BufferId(buf_ir), 0, N as usize).unwrap();
     assert_eq!(device_bytes, payload, "the pre-unmap host write reached the device buffer");
 }
+
+/// `vkQueuePresentKHR`'s wl_shm marshalling readback, end-to-end: `present::read_presented_xrgb` reads a
+/// presented swapchain image back through the REAL device→host port and converts it to the
+/// `WL_SHM_FORMAT_XRGB8888` byte order (`[B,G,R,X]`, top-left origin) a `wl_surface` attach wants. Using an
+/// R8G8B8A8 (Rgba8) swapchain proves the R↔B channel REORDER actually happens (a Bgra8 source would pass
+/// through and hide the swap), and that the X byte is forced to 0xFF (never mistaken for the all-zero
+/// readback-failed fill). This is the last untested WSI service entry point.
+#[test]
+fn present_xrgb_readback_reorders_channels_end_to_end() {
+    const W: u32 = 4;
+    const H: u32 = 4;
+
+    let exec = CpuExecutor::new();
+    let session = Session::new(
+        Limits::from_capabilities(Capabilities::full("hl-cpu-xrgb")),
+        GlobalLedger::unbounded(),
+        Box::new(FakeClock::new(0)),
+    );
+    let mut sink = InProcessCommandSink::with_session(session, exec);
+
+    let inst = create::create_instance(HL_API_VERSION);
+    let mut d = create::create_device(&inst);
+
+    // An RGBA8 surface → the native readback is [R,G,B,A]; the XRGB convert must swap R↔B to [B,G,R,X].
+    let surface = present::create_surface(&mut d, &mut sink, W, H, vk_format::R8G8B8A8_UNORM, 0).unwrap();
+    let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
+    let images = present::get_swapchain_images(&d, swapchain).unwrap();
+
+    // Clear to a color with three DISTINCT channels so the reorder is unambiguous: R=0.2, G=0.4, B=0.6.
+    let clear = [0.2f32, 0.4, 0.6, 1.0];
+    let r = (0.2f32 * 255.0).round() as u8;
+    let g = (0.4f32 * 255.0).round() as u8;
+    let b = (0.6f32 * 255.0).round() as u8;
+
+    let idx = present::acquire_next_image(&mut d, swapchain).unwrap();
+    let acquired = images[idx as usize];
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb, false).unwrap();
+    record::cmd_begin_render_pass(&mut d, cb, acquired, clear, true, None).unwrap();
+    record::cmd_end_render_pass(&mut d, cb).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+    present::queue_present(&mut d, &mut sink, swapchain, idx).unwrap();
+
+    let (xrgb, w, h) = present::read_presented_xrgb(&mut d, &mut sink, swapchain, idx).unwrap();
+    assert_eq!((w, h), (W, H));
+    assert_eq!(xrgb.len(), (W * H * 4) as usize);
+    // Every texel is XRGB little-endian [B, G, R, 0xFF] — the R↔B swap and forced-opaque X.
+    for px in xrgb.chunks_exact(4) {
+        assert_eq!(px, [b, g, r, 0xFF], "XRGB reorder [B,G,R,X] of the RGBA source");
+    }
+}
