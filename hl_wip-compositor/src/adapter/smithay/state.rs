@@ -39,8 +39,8 @@ use smithay::wayland::{
     },
     compositor::{
         get_children, get_parent, is_sync_subsurface, with_states, BufferAssignment,
-        CompositorClientState, CompositorHandler, CompositorState, Damage, SubsurfaceCachedState,
-        SurfaceAttributes,
+        CompositorClientState, CompositorHandler, CompositorState, Damage, RectangleKind,
+        RegionAttributes, SubsurfaceCachedState, SurfaceAttributes,
     },
     fractional_scale::{
         with_fractional_scale, FractionalScaleHandler, FractionalScaleManagerState,
@@ -590,7 +590,7 @@ impl HlState {
 
         // Snapshot the committed state Smithay applied, taking ownership of the buffer assignment and
         // draining this commit's damage + frame callbacks (the compositor is expected to consume both).
-        let (assignment, damage, scale, transform, frame_callbacks, viewport, feedbacks) = with_states(surface, |states| {
+        let (assignment, damage, scale, transform, frame_callbacks, viewport, feedbacks, input_region, opaque_region) = with_states(surface, |states| {
             // Drain this commit's `wp_presentation_feedback` callbacks (double-buffered like the frame
             // callbacks): held until the frame they belong to actually presents, then answered
             // `presented`/`discarded` per the pacing outcome below.
@@ -612,6 +612,13 @@ impl HlState {
             // to the buffer so it displays upright. Always re-read so a reverted transform reverts too.
             let transform = map_buffer_transform(cur.buffer_transform);
             let callbacks = std::mem::take(&mut cur.frame_callbacks);
+            // `wl_surface.set_input_region` / `set_opaque_region` (both double-buffered, applied at commit).
+            // The neutral scene models each as a single logical `Rect` and USES them: the input region gates
+            // pointer hit-testing (`surface_at` → `accepts_input_at`), and the opaque region drives the
+            // occlusion present-skip (`is_tree_dirty` → `opaque_covers`). Re-read every commit (like the
+            // buffer transform / viewport) so a client that CLEARS its region reverts to the default.
+            let input_region = map_input_region(&cur.input_region);
+            let opaque_region = map_opaque_region(&cur.opaque_region);
             drop(attrs);
             // The just-applied `wp_viewport` state (src crop in logical coords, dst logical size), mirrored
             // into the neutral scene so it resolves the on-screen logical size and the presenter samples the
@@ -622,7 +629,7 @@ impl HlState {
                 src: cur_vp.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h)),
                 dst: cur_vp.dst.map(|s| (s.w, s.h)),
             };
-            (assignment, damage, scale, transform, callbacks, viewport, feedbacks)
+            (assignment, damage, scale, transform, callbacks, viewport, feedbacks, input_region, opaque_region)
         });
 
         // Build the neutral commit from the buffer assignment, depositing pixels for the presenter.
@@ -657,7 +664,15 @@ impl HlState {
         // Apply the just-read `wp_viewport` state and `wl_surface.set_buffer_transform` on every commit
         // (both double-buffered): the scene resolves the logical size from them and the presenter samples
         // the cropped+scaled or rotated/flipped region.
-        let commit = Commit { viewport: Some(viewport), buffer_transform: Some(transform), ..commit };
+        let commit = Commit {
+            viewport: Some(viewport),
+            buffer_transform: Some(transform),
+            // Apply the just-read regions on every commit (`Some(value)` = "this commit sets it"); smithay
+            // reports the current applied state, so a cleared region reverts to the whole-surface default.
+            input_region: Some(input_region),
+            opaque_region: Some(opaque_region),
+            ..commit
+        };
 
         // Hold this commit's `wl_surface.frame` callbacks until the frame they belong to actually reaches
         // the presenter. Firing them here — before the present decision — would tell the client "your
@@ -1420,6 +1435,46 @@ impl XdgShellHandler for HlState {
         surface.send_configure();
     }
 
+    /// `xdg_toplevel.move` — the client asked to start an interactive, pointer-driven window MOVE (dragging
+    /// its titlebar). HONEST INTENTIONAL NO-OP: the neutral headless scene models no global window position
+    /// (every toplevel roots its own tree at `(0, 0)` — there is no desktop plane to slide a window across)
+    /// and there is no live user drag to track. The request carries no reply event, so nothing is acked or
+    /// faked; a real on-screen compositor would begin a move grab here.
+    fn move_request(&mut self, _surface: ToplevelSurface, _seat: WlSeat, _serial: Serial) {}
+
+    /// `xdg_toplevel.resize` — the client asked to start an interactive, pointer-driven RESIZE (dragging a
+    /// window edge). HONEST INTENTIONAL NO-OP for the same reason as [`Self::move_request`]: an interactive
+    /// resize is driven by a live user drag the headless compositor has no input source for, and it carries
+    /// no reply event. (Programmatic sizing IS honored — `maximize_request` / `fullscreen_request` send real
+    /// `xdg_toplevel.configure`s with a new size.)
+    fn resize_request(
+        &mut self,
+        _surface: ToplevelSurface,
+        _seat: WlSeat,
+        _serial: Serial,
+        _edges: smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::ResizeEdge,
+    ) {
+    }
+
+    /// `xdg_toplevel.set_minimized` — the client asked to be minimized. HONEST INTENTIONAL NO-OP: this
+    /// headless single-window compositor has no taskbar/dock to restore a window FROM, so honoring it
+    /// (unmapping the surface) would strand the window with no way back and no configure to un-minimize it.
+    /// The request carries no required reply, so nothing is acked or faked.
+    fn minimize_request(&mut self, _surface: ToplevelSurface) {}
+
+    /// `xdg_toplevel.show_window_menu` — the client asked the compositor to show ITS server-side window
+    /// menu (maximize/minimize/close/…). HONEST INTENTIONAL NO-OP: this compositor draws no server-side
+    /// decorations or menus (it composites the client buffer verbatim — see [`XdgDecorationHandler`]), so
+    /// there is no menu to show. The request carries no reply event, so nothing is acked or faked.
+    fn show_window_menu(
+        &mut self,
+        _surface: ToplevelSurface,
+        _seat: WlSeat,
+        _serial: Serial,
+        _location: Point<i32, Logical>,
+    ) {
+    }
+
     /// An `xdg_popup` mapped (`xdg_surface.get_popup(parent, positioner)`): a menu / dropdown / combo-box
     /// list / tooltip / context menu. Resolve the client's `xdg_positioner` to a concrete on-screen
     /// geometry via the scene's placement math (anchor rect → anchor point → gravity → offset, then the
@@ -1784,6 +1839,57 @@ fn rect_to_smithay(r: Rect) -> Rectangle<i32, smithay::utils::Logical> {
     Rectangle::new((r.x, r.y).into(), (r.w, r.h).into())
 }
 
+/// Reduce a committed `wl_surface.set_input_region` into the neutral scene's single-[`Rect`] input region
+/// (which gates pointer hit-testing in `surface_at`/`accepts_input_at`). `None` — the client never set a
+/// region, or set it to null — means the WHOLE surface accepts input (the scene's `None`). A set region is
+/// reduced to the bounding box of its ADDITIVE rectangles: EXACT for the common single-rect region a
+/// toolkit sets (e.g. GTK excluding its CSD shadow from input), and a safe superset for a shaped one. An
+/// EMPTY region (a client making a surface click-through) has no additive rects and reduces to a zero-area
+/// `Rect`, which `accepts_input_at` rejects everywhere — so that surface correctly receives no pointer
+/// input. Without this the request would be silently dropped and every surface would accept input over its
+/// whole rectangle regardless of what the client requested.
+fn map_input_region(region: &Option<RegionAttributes>) -> Option<Rect> {
+    let attrs = region.as_ref()?;
+    Some(region_add_bounding_box(attrs).unwrap_or(Rect::new(0, 0, 0, 0)))
+}
+
+/// Reduce a committed `wl_surface.set_opaque_region` into the neutral scene's single-[`Rect`] opaque region
+/// — CONSERVATIVELY, because it drives the occlusion present-skip (`is_tree_dirty` → `opaque_covers`) where
+/// OVER-claiming opacity could wrongly hide a surface below and drop its update. Only a region that is
+/// exactly one additive rectangle (the common case — a client marking its whole opaque window so the
+/// compositor may skip redundant work behind it) is trusted verbatim. Anything a single rect cannot model
+/// without over-claiming — a subtracted hole, or multiple disjoint rects — reduces to `None` (proves
+/// nothing opaque), so a present is never wrongly skipped. `None` in (unset) ⇒ `None` out (the whole
+/// surface may be transparent).
+fn map_opaque_region(region: &Option<RegionAttributes>) -> Option<Rect> {
+    match region.as_ref()?.rects.as_slice() {
+        [(RectangleKind::Add, r)] if r.size.w > 0 && r.size.h > 0 => {
+            Some(Rect::new(r.loc.x, r.loc.y, r.size.w, r.size.h))
+        }
+        _ => None,
+    }
+}
+
+/// The bounding box of a region's ADDITIVE (`Add`) rectangles, or `None` if it has none. Subtract rects and
+/// degenerate (zero-area) rects are ignored — a single `Rect` cannot model a hole, and the resulting
+/// superset is the SAFE direction for an input region (over-accepting input is a hint, never a correctness
+/// hazard, unlike over-claiming opacity — see [`map_input_region`] vs [`map_opaque_region`]).
+fn region_add_bounding_box(attrs: &RegionAttributes) -> Option<Rect> {
+    // (min_x, min_y, max_right, max_bottom) accumulated over the additive rects.
+    let mut bounds: Option<(i32, i32, i32, i32)> = None;
+    for (kind, r) in &attrs.rects {
+        if !matches!(kind, RectangleKind::Add) || r.size.w <= 0 || r.size.h <= 0 {
+            continue;
+        }
+        let (x0, y0, x1, y1) = (r.loc.x, r.loc.y, r.loc.x + r.size.w, r.loc.y + r.size.h);
+        bounds = Some(match bounds {
+            Some((mx, my, mr, mb)) => (mx.min(x0), my.min(y0), mr.max(x1), mb.max(y1)),
+            None => (x0, y0, x1, y1),
+        });
+    }
+    bounds.map(|(mx, my, mr, mb)| Rect::new(mx, my, mr - mx, mb - my))
+}
+
 /// Map Smithay's `wl_output::Transform` (the wire enum `wl_surface.set_buffer_transform` speaks) onto the
 /// neutral [`BufferTransform`]. A straight enum translation; the rotation/flip math itself lives in the
 /// neutral `BufferTransform` (dimension swap) and the presenter (pixel remap), not here.
@@ -1965,4 +2071,73 @@ fn read_shm_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
         Some((StoredBuffer { width: w, height: h, rgba }, format))
     });
     result.ok().flatten()
+}
+
+#[cfg(test)]
+mod region_tests {
+    //! Lock the `wl_surface.set_input_region` / `set_opaque_region` reduction from a Smithay
+    //! `RegionAttributes` (union/difference of rects) onto the neutral scene's single-`Rect` model — the
+    //! decode the commit path feeds into `commit_surface`, driving pointer hit-testing (input) and the
+    //! occlusion present-skip (opaque). Pure logic, no Wayland socket.
+    use super::*;
+    use smithay::utils::{Logical, Rectangle};
+
+    fn add(x: i32, y: i32, w: i32, h: i32) -> (RectangleKind, Rectangle<i32, Logical>) {
+        (RectangleKind::Add, Rectangle::new((x, y).into(), (w, h).into()))
+    }
+    fn subtract(x: i32, y: i32, w: i32, h: i32) -> (RectangleKind, Rectangle<i32, Logical>) {
+        (RectangleKind::Subtract, Rectangle::new((x, y).into(), (w, h).into()))
+    }
+
+    #[test]
+    fn input_region_unset_means_whole_surface() {
+        assert_eq!(map_input_region(&None), None);
+    }
+
+    #[test]
+    fn input_region_single_rect_is_exact() {
+        // The common case: a client restricts input to a sub-rectangle (e.g. its content minus CSD shadow).
+        let region = RegionAttributes { rects: vec![add(100, 0, 100, 150)] };
+        assert_eq!(map_input_region(&Some(region)), Some(Rect::new(100, 0, 100, 150)));
+    }
+
+    #[test]
+    fn input_region_empty_is_click_through() {
+        // A region object with NO rects => the surface accepts input NOWHERE (click-through overlay).
+        let mapped = map_input_region(&Some(RegionAttributes { rects: vec![] }))
+            .expect("a set region always maps to Some(rect)");
+        assert!(mapped.is_empty(), "empty input region must reject all input");
+        assert!(!mapped.contains_point(0, 0));
+    }
+
+    #[test]
+    fn input_region_multi_rect_is_superset_bounding_box() {
+        // Two disjoint add rects reduce to their (safe, over-accepting) bounding box.
+        let region = RegionAttributes { rects: vec![add(0, 0, 10, 10), add(90, 90, 10, 10)] };
+        assert_eq!(map_input_region(&Some(region)), Some(Rect::new(0, 0, 100, 100)));
+    }
+
+    #[test]
+    fn opaque_region_unset_is_none() {
+        assert_eq!(map_opaque_region(&None), None);
+    }
+
+    #[test]
+    fn opaque_region_single_rect_is_trusted() {
+        let region = RegionAttributes { rects: vec![add(0, 0, 200, 150)] };
+        assert_eq!(map_opaque_region(&Some(region)), Some(Rect::new(0, 0, 200, 150)));
+    }
+
+    #[test]
+    fn opaque_region_with_hole_is_dropped_conservatively() {
+        // A subtracted hole can't be a single opaque rect without over-claiming => prove nothing opaque.
+        let region = RegionAttributes { rects: vec![add(0, 0, 200, 150), subtract(10, 10, 20, 20)] };
+        assert_eq!(map_opaque_region(&Some(region)), None);
+    }
+
+    #[test]
+    fn opaque_region_multi_rect_is_dropped_conservatively() {
+        let region = RegionAttributes { rects: vec![add(0, 0, 10, 10), add(90, 90, 10, 10)] };
+        assert_eq!(map_opaque_region(&Some(region)), None);
+    }
 }

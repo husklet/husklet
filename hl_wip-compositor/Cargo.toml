@@ -114,6 +114,16 @@ name = "wayland_input_socket"
 path = "tests/wayland_input_socket.rs"
 required-features = ["smithay-adapter"]
 
+# Input-region hit-testing proof: a real client maps a toplevel, sets a `wl_surface.set_input_region`
+# restricting input to the surface's RIGHT half, then the test injects pointer motion first OUTSIDE that
+# region (left half — the client must NOT receive `wl_pointer.enter`) and then INSIDE it (the client
+# receives `enter` at the correct surface-local coordinate). Locks that `set_input_region` actually gates
+# pointer focus rather than being silently dropped. Own binary — it mutates process-global env.
+[[test]]
+name = "wayland_input_region_socket"
+path = "tests/wayland_input_region_socket.rs"
+required-features = ["smithay-adapter"]
+
 # xdg_popup + wl_subsurface placement proof: a real wayland-client maps a toplevel, creates an xdg_popup
 # via get_popup with an xdg_positioner (anchor/gravity/offset) + takes a grab, and a wl_subsurface at a
 # set_position offset — each in a distinct color — then asserts both composited to the PngPresenter at
