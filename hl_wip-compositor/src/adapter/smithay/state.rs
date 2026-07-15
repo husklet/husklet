@@ -21,7 +21,7 @@ use smithay::reexports::wayland_server::{
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
 use smithay::input::{
     keyboard::{FilterResult, Keycode, XkbConfig},
-    pointer::{AxisFrame, ButtonEvent, MotionEvent},
+    pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle, RelativeMotionEvent},
     Seat, SeatHandler, SeatState,
 };
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
@@ -40,11 +40,17 @@ use smithay::wayland::{
         with_fractional_scale, FractionalScaleHandler, FractionalScaleManagerState,
     },
     output::{OutputHandler, OutputManagerState},
+    pointer_constraints::{
+        with_pointer_constraint, PointerConstraint, PointerConstraintsHandler, PointerConstraintsState,
+    },
+    presentation::{PresentationFeedbackCachedState, PresentationFeedbackCallback, PresentationState, Refresh},
+    relative_pointer::RelativePointerManagerState,
     selection::{
         data_device::{
             set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
             ServerDndGrabHandler,
         },
+        primary_selection::{set_primary_focus, PrimarySelectionHandler, PrimarySelectionState},
         SelectionHandler,
     },
     shell::xdg::{
@@ -54,6 +60,10 @@ use smithay::wayland::{
     shm::{with_buffer_contents, ShmHandler, ShmState},
     viewporter::{ViewportCachedState, ViewporterState},
 };
+
+/// The `wp_presentation_feedback.presented` `flags` bitmask (vsync / hw-clock / …) — the presentation
+/// feedback sent when a surface's committed content reaches the screen.
+use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
 /// The `xdg_positioner` anchor/gravity/constraint-adjustment wire enums — mapped onto the neutral
 /// [`crate::scene::model`] positioner value types so the scene's placement math (not Smithay's) resolves
@@ -137,6 +147,33 @@ pub struct HlState {
     /// keyboard focus via [`set_data_device_focus`]. Held for the state's lifetime so the global keeps
     /// advertising.
     pub data_device: DataDeviceState,
+    /// Owns the `zwp_primary_selection_device_manager_v1` global (the middle-click PRIMARY selection —
+    /// the X11-style select-to-copy / middle-click-to-paste clipboard, distinct from the CTRL+C
+    /// `wl_data_device` selection). GTK/Qt terminals + editors bind it; a `zwp_primary_selection_source`
+    /// set while a surface holds keyboard focus becomes readable by the next focused client over a real fd,
+    /// exactly like the data-device clipboard. Primary-selection focus follows keyboard focus via
+    /// [`set_primary_focus`] (see [`Self::set_keyboard_focus`]). Held for the state's lifetime so the global
+    /// keeps advertising.
+    pub primary_selection: PrimarySelectionState,
+    /// Owns the `zwp_relative_pointer_manager_v1` global. A client binds it and calls
+    /// `get_relative_pointer(wl_pointer)` to receive UNACCELERATED relative motion deltas
+    /// (`zwp_relative_pointer_v1.relative_motion`) independent of the absolute `wl_pointer.motion` — what
+    /// FPS games / 3D viewports / pointer-lock web content consume. The adapter delivers the delta on every
+    /// injected motion via [`PointerHandle::relative_motion`]. Held for the state's lifetime.
+    _relative_pointer: RelativePointerManagerState,
+    /// Owns the `zwp_pointer_constraints_v1` global (pointer lock / confinement). A client binds it and calls
+    /// `lock_pointer` / `confine_pointer` on a surface + `wl_pointer`; the compositor activates the
+    /// constraint while that surface holds pointer focus (see [`PointerConstraintsHandler::new_constraint`]).
+    /// A LOCKED pointer stops receiving absolute `wl_pointer.motion` (its position is frozen) and drives the
+    /// client purely through relative motion — the standard pointer-lock experience. Held for the state's
+    /// lifetime.
+    _pointer_constraints: PointerConstraintsState,
+    /// Owns the `wp_presentation` global (presentation timing feedback). A client binds it and calls
+    /// `feedback(surface, callback)` to learn WHEN a committed frame actually hit the screen; the adapter
+    /// answers `wp_presentation_feedback.presented` (monotonic timestamp + refresh + sequence) when that
+    /// frame's tree presents, or `.discarded` when the frame is torn down unshown. Advertised with
+    /// `CLOCK_MONOTONIC` as its clock id (matching [`MonotonicClock`]). Held for the state's lifetime.
+    _presentation: PresentationState,
     /// Owns the `wp_viewporter` global. A client binds it, calls `get_viewport(surface)`, and sets a
     /// source crop (`set_source`) and/or destination size (`set_destination`) — HiDPI/media clients
     /// (video, browsers) use it to crop letterboxing and scale a buffer to a logical size without
@@ -202,6 +239,22 @@ pub struct HlState {
     /// committed (mapped) buffer, off it once unmapped. Tracked so enter/leave are sent exactly once per
     /// transition. (Position-based multi-output routing is not modeled headless — there is one output.)
     entered_outputs: HashSet<SurfaceId>,
+    /// `wp_presentation_feedback` callbacks a client is owed but that have NOT yet been answered, keyed by
+    /// the neutral surface the `feedback` request named. Drained from the surface's committed
+    /// [`PresentationFeedbackCachedState`] at commit and held (like `pending_callbacks`) until the frame the
+    /// feedback belongs to actually reaches the presenter — then answered `presented` (see
+    /// [`Self::fire_tree_callbacks`]) or, if the frame is torn down unshown, `discarded`
+    /// ([`Self::drop_tree_callbacks`] / [`Self::teardown_surface`]).
+    pending_presentation: HashMap<SurfaceId, Vec<PresentationFeedbackCallback>>,
+    /// The last RAW injected pointer position in root space — the reference `inject_pointer_motion` computes
+    /// the relative-motion delta against. Distinct from the neutral seat's `pointer_location` (the delivered
+    /// ABSOLUTE position, which freezes under a `zwp_locked_pointer_v1` lock): the raw position keeps
+    /// tracking every injected move so relative motion reports the real device delta even while locked.
+    last_injected_pointer: (f64, f64),
+    /// Monotonic presentation SEQUENCE counter — the `seq` a `wp_presentation_feedback.presented` carries
+    /// (a frame counter for the output). Incremented once per answered feedback so a client sees a strictly
+    /// increasing sequence across frames.
+    present_seq: u64,
 }
 
 impl HlState {
@@ -218,6 +271,19 @@ impl HlState {
         // Advertise `wl_data_device_manager` (clipboard / drag-and-drop). GDK4 (and Chrome/Qt) require
         // this global at display-open; without it `gdk_display_open` aborts before any GL is created.
         let data_device = DataDeviceState::new::<HlState>(dh);
+        // Advertise `zwp_primary_selection_device_manager_v1` (the middle-click PRIMARY selection) so a
+        // GTK/Qt terminal or editor can set + read the select-to-copy clipboard, distinct from the
+        // CTRL+C `wl_data_device` one. Primary-selection focus follows keyboard focus like the data device.
+        let primary_selection = PrimarySelectionState::new::<HlState>(dh);
+        // Advertise `zwp_relative_pointer_manager_v1` (unaccelerated relative motion deltas) and
+        // `zwp_pointer_constraints_v1` (pointer lock / confinement) — the input protocols FPS games, 3D
+        // viewports, and pointer-lock web content require. The seat's `wl_pointer` backs both.
+        let relative_pointer = RelativePointerManagerState::new::<HlState>(dh);
+        let pointer_constraints = PointerConstraintsState::new::<HlState>(dh);
+        // Advertise `wp_presentation` (presentation-timing feedback). `CLOCK_MONOTONIC` (id 1) is the clock
+        // the reported timestamps are in — the same monotonic timeline [`MonotonicClock`] paces on.
+        const CLOCK_MONOTONIC: u32 = 1;
+        let presentation = PresentationState::new::<HlState>(dh, CLOCK_MONOTONIC);
         // Advertise `wp_viewporter` (surface crop/scale) and `wp_fractional_scale_manager_v1` (HiDPI
         // preferred-scale hint) so media/browser clients can crop+scale a buffer and learn the fractional
         // render scale — the surface-semantics globals a modern toolkit probes at startup.
@@ -250,7 +316,10 @@ impl HlState {
             eprintln!("hl_wip-compositor: wl_seat keyboard keymap unavailable, pointer only: {e}");
         }
 
-        hl_info!(tag::WAYLAND, "globals bound: compositor shm xdg seat output data_device");
+        hl_info!(
+            tag::WAYLAND,
+            "globals bound: compositor shm xdg seat output data_device primary_selection relative_pointer pointer_constraints presentation"
+        );
         HlState {
             display: dh.clone(),
             compositor,
@@ -258,6 +327,10 @@ impl HlState {
             xdg_shell,
             xdg_decoration,
             data_device,
+            primary_selection,
+            _relative_pointer: relative_pointer,
+            _pointer_constraints: pointer_constraints,
+            _presentation: presentation,
             _viewporter: viewporter,
             _fractional_scale: fractional_scale,
             seat_state,
@@ -272,6 +345,9 @@ impl HlState {
             pending_callbacks: HashMap::new(),
             pending_repaints: HashMap::new(),
             entered_outputs: HashSet::new(),
+            pending_presentation: HashMap::new(),
+            last_injected_pointer: (0.0, 0.0),
+            present_seq: 0,
         }
     }
 
@@ -313,6 +389,13 @@ impl HlState {
             self.pending_callbacks.remove(&sid);
             self.pending_repaints.remove(&sid);
             self.entered_outputs.remove(&sid);
+            // A destroyed surface's owed presentation feedback can never be answered `presented`; discard it
+            // (per spec: content the client did not see) so the client's `wp_presentation_feedback` resolves.
+            if let Some(feedbacks) = self.pending_presentation.remove(&sid) {
+                for feedback in feedbacks {
+                    feedback.discarded();
+                }
+            }
             // Re-present the owning root without the removed child: mark it dirty (so the compose is not
             // skipped as clean) and arm a repaint at the next refresh boundary. The serve loop's
             // `drive_due_repaints` ships it even if the client is now idle, so the child disappears.
@@ -422,7 +505,13 @@ impl HlState {
 
         // Snapshot the committed state Smithay applied, taking ownership of the buffer assignment and
         // draining this commit's damage + frame callbacks (the compositor is expected to consume both).
-        let (assignment, damage, scale, transform, frame_callbacks, viewport) = with_states(surface, |states| {
+        let (assignment, damage, scale, transform, frame_callbacks, viewport, feedbacks) = with_states(surface, |states| {
+            // Drain this commit's `wp_presentation_feedback` callbacks (double-buffered like the frame
+            // callbacks): held until the frame they belong to actually presents, then answered
+            // `presented`/`discarded` per the pacing outcome below.
+            let feedbacks = std::mem::take(
+                &mut states.cached_state.get::<PresentationFeedbackCachedState>().current().callbacks,
+            );
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
             let cur = attrs.current();
             let assignment = cur.buffer.take();
@@ -448,7 +537,7 @@ impl HlState {
                 src: cur_vp.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h)),
                 dst: cur_vp.dst.map(|s| (s.w, s.h)),
             };
-            (assignment, damage, scale, transform, callbacks, viewport)
+            (assignment, damage, scale, transform, callbacks, viewport, feedbacks)
         });
 
         // Build the neutral commit from the buffer assignment, depositing pixels for the presenter.
@@ -493,6 +582,11 @@ impl HlState {
         // count; the adapter owns the concrete `wl_callback` objects and releases them per the pacing
         // outcome below.
         self.pending_callbacks.entry(sid).or_default().extend(frame_callbacks);
+        // Hold this commit's presentation-feedback callbacks on the same terms: answered `presented` when
+        // the frame reaches the screen, `discarded` if it is torn down unshown.
+        if !feedbacks.is_empty() {
+            self.pending_presentation.entry(sid).or_default().extend(feedbacks);
+        }
 
         // Drive the neutral policy: apply + (unless cursor / sync-subsurface) compose, present, pace.
         hl_count!(tag::WAYLAND, "commits");
@@ -557,6 +651,12 @@ impl HlState {
     ///  - a retryable failure — keep the callbacks and retry at the next boundary (the engine keeps the
     ///    tree dirty).
     ///  - a terminal failure — the frame can never ship: drop the held callbacks and the repaint.
+    ///
+    /// `wp_presentation` feedback is answered on the SAME outcome, but keyed on the pacing's
+    /// `present_feedback` / `terminal_cleanup` (NOT `complete_callbacks`): only a `Presented` frame — real
+    /// pixels reaching the screen — answers `presented`; a `Skipped` (clean-tree) frame completes callbacks
+    /// but leaves the feedback held (its content was not newly shown), so a surface that never presents real
+    /// content is answered `discarded` when it is torn down instead of falsely `presented`.
     fn settle_frame(&mut self, root: SurfaceId, frame: &FrameOutcome) {
         if frame.throttled {
             self.arm_repaint(root);
@@ -572,6 +672,14 @@ impl HlState {
         } else {
             // Retryable: retain the callbacks and try again on a later tick.
             self.arm_repaint(root);
+        }
+        // Presentation feedback: `presented` only for a real pixel present; `discarded` on terminal cleanup.
+        // A `Skipped` frame leaves it held (answered when the tree next actually presents, or discarded at
+        // teardown).
+        if policy.present_feedback {
+            self.answer_tree_feedback(root, true);
+        } else if policy.terminal_cleanup {
+            self.answer_tree_feedback(root, false);
         }
     }
 
@@ -634,6 +742,47 @@ impl HlState {
             if let Some(callbacks) = self.pending_callbacks.remove(&sid) {
                 for callback in callbacks {
                     callback.done(time_ms);
+                }
+            }
+        }
+    }
+
+    /// Answer the `wp_presentation_feedback` callbacks held for `root`'s tree: `presented(now, refresh,
+    /// seq)` when `presented`, or `discarded` when the frame was torn down unshown. The timestamp is the
+    /// host-monotonic clock (`CLOCK_MONOTONIC`, the id `wp_presentation` advertised), the refresh is the
+    /// primary output's frame interval, and `seq` is the monotonic present counter — one increment per
+    /// answered feedback, so a client sees a strictly increasing sequence.
+    fn answer_tree_feedback(&mut self, root: SurfaceId, presented: bool) {
+        if self.pending_presentation.is_empty() {
+            return;
+        }
+        let targets: Vec<SurfaceId> = self
+            .pending_presentation
+            .keys()
+            .copied()
+            .filter(|&sid| self.engine.scene.window_root(sid) == Some(root) || sid == root)
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        let now = std::time::Duration::from_nanos(self.engine.clock().now_nanos());
+        // Frame interval from the primary output's refresh (mHz → ns): 60_000 mHz ⇒ ~16.67 ms.
+        let refresh_mhz = self.engine.scene.primary_output().map(|o| o.refresh_mhz.max(1)).unwrap_or(60_000);
+        let refresh = Refresh::fixed(std::time::Duration::from_nanos(1_000_000_000_000u64 / refresh_mhz as u64));
+        for sid in targets {
+            let Some(feedbacks) = self.pending_presentation.remove(&sid) else { continue };
+            for feedback in feedbacks {
+                if presented {
+                    self.present_seq += 1;
+                    feedback.presented(
+                        &self._wl_output,
+                        now,
+                        refresh,
+                        self.present_seq,
+                        wp_presentation_feedback::Kind::Vsync,
+                    );
+                } else {
+                    feedback.discarded();
                 }
             }
         }
@@ -786,10 +935,6 @@ impl HlState {
         let Some(pointer) = self.seat.get_pointer() else { return };
         let hit = self.hit_test(x, y);
 
-        // Keep the neutral seat consistent with what we deliver over the wire (for inspection/tests).
-        self.engine.scene.seat_mut().pointer_location = (x, y);
-        self.engine.scene.seat_mut().pointer_focus = hit.map(|(_, sid, _, _)| sid);
-
         // Build smithay's focus: the concrete `WlSurface` + its origin in global (root) space.
         let focus = hit.and_then(|(_, sid, ox, oy)| {
             self.surfaces_by_id
@@ -797,10 +942,54 @@ impl HlState {
                 .cloned()
                 .map(|wl| (wl, Point::<f64, Logical>::from((ox as f64, oy as f64))))
         });
+        // Whether the focused surface holds an ACTIVE `zwp_locked_pointer_v1` — if so the pointer is frozen
+        // in place: no absolute `wl_pointer.motion` is delivered and the neutral seat location does not move.
+        // The client drives purely off relative motion (below), the standard pointer-lock experience.
+        let locked = focus.as_ref().is_some_and(|(wl, _)| self.pointer_locked_on(wl));
+
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.input_time_ms();
+
+        // Relative motion (delta since the last RAW injected position) — delivered to any bound
+        // `zwp_relative_pointer_v1` on the focused surface. A no-op if the client bound no relative pointer.
+        // Computed against the raw position (not the delivered absolute one) so a locked pointer still
+        // reports the real per-move device delta while its absolute position stays frozen.
+        let (old_x, old_y) = self.last_injected_pointer;
+        self.last_injected_pointer = (x, y);
+        let (dx, dy) = (x - old_x, y - old_y);
+        if dx != 0.0 || dy != 0.0 {
+            pointer.relative_motion(
+                self,
+                focus.clone(),
+                &RelativeMotionEvent {
+                    delta: (dx, dy).into(),
+                    delta_unaccel: (dx, dy).into(),
+                    utime: time as u64 * 1_000, // ms → µs (the relative-pointer protocol's unit)
+                },
+            );
+        }
+
+        if locked {
+            // Pointer position is locked: skip absolute motion and leave the neutral seat frozen. Still
+            // emit a `wl_pointer.frame` so the relative motion above is a complete, framed update.
+            pointer.frame(self);
+            return;
+        }
+
+        // Keep the neutral seat consistent with what we deliver over the wire (for inspection/tests).
+        self.engine.scene.seat_mut().pointer_location = (x, y);
+        self.engine.scene.seat_mut().pointer_focus = hit.map(|(_, sid, _, _)| sid);
         pointer.motion(self, focus, &MotionEvent { location: (x, y).into(), serial, time });
         pointer.frame(self);
+    }
+
+    /// Whether `surface` currently holds an ACTIVE `zwp_locked_pointer_v1` constraint on this seat's
+    /// pointer — the check [`Self::inject_pointer_motion`] uses to freeze the absolute pointer position.
+    fn pointer_locked_on(&self, surface: &WlSurface) -> bool {
+        let Some(pointer) = self.seat.get_pointer() else { return false };
+        with_pointer_constraint(surface, &pointer, |constraint| {
+            matches!(constraint, Some(c) if c.is_active() && matches!(&*c, PointerConstraint::Locked(_)))
+        })
     }
 
     /// Press or release a pointer button. Uses the pointer's CURRENT focus (from the last motion), which
@@ -851,7 +1040,11 @@ impl HlState {
         // `wl_data_device` receives selection offers and its `set_selection` is honored — the standard
         // Wayland "clipboard follows keyboard focus" rule. `None` clears it (no client owns the clipboard).
         let focus_client = surface.as_ref().and_then(|s| self.display.get_client(s.id()).ok());
-        set_data_device_focus(&self.display, &self.seat, focus_client);
+        set_data_device_focus(&self.display, &self.seat, focus_client.clone());
+        // The PRIMARY (middle-click) selection follows keyboard focus by the same rule, so the newly focused
+        // client's `zwp_primary_selection_device_v1` receives the current primary offer and its
+        // `set_selection` is honored.
+        set_primary_focus(&self.display, &self.seat, focus_client);
         // Mirror into the neutral seat so scene focus bookkeeping stays truthful.
         self.engine.scene.seat_mut().keyboard_focus = sid;
         let serial = SERIAL_COUNTER.next_serial();
@@ -1182,6 +1375,49 @@ impl FractionalScaleHandler for HlState {
     }
 }
 
+/// Server-side handling of `zwp_primary_selection_device_manager_v1` (the middle-click PRIMARY selection).
+/// Hands Smithay the held [`PrimarySelectionState`]; the default selection transfer is enough for a client
+/// to set a `zwp_primary_selection_source_v1` while focused and for the next focused client to read it over
+/// a real fd — exactly like the data-device clipboard, but on the primary selection. Focus follows the
+/// keyboard via [`set_primary_focus`] (see [`HlState::set_keyboard_focus`]). See the
+/// `primary_selection_roundtrip` demo.
+impl PrimarySelectionHandler for HlState {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection
+    }
+}
+
+/// Server-side policy for `zwp_pointer_constraints_v1` (pointer lock / confinement). The compositor decides
+/// WHEN a constraint engages; the headless policy is the standard one: activate it as soon as it is created
+/// on a surface that currently holds pointer focus. Activation sends the client
+/// `zwp_locked_pointer_v1.locked` / `zwp_confined_pointer_v1.confined`; a LOCKED pointer then stops
+/// receiving absolute motion (see [`HlState::inject_pointer_motion`]). `cursor_position_hint` (the client's
+/// rendered-cursor position while locked) needs no action headless — there is no hardware cursor to warp.
+impl PointerConstraintsHandler for HlState {
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        // Engage immediately if the constrained surface already holds pointer focus (the common case: a
+        // client locks the pointer while the cursor is over it). Otherwise the constraint stays dormant
+        // until the surface next gains focus — smithay re-checks activation there is out of scope headless,
+        // so a client that constrains before entry re-issues after `wl_pointer.enter`.
+        let focused = pointer.current_focus().is_some_and(|f| &f == surface);
+        if focused {
+            with_pointer_constraint(surface, pointer, |constraint| {
+                if let Some(constraint) = constraint {
+                    constraint.activate();
+                }
+            });
+        }
+    }
+
+    fn cursor_position_hint(
+        &mut self,
+        _surface: &WlSurface,
+        _pointer: &PointerHandle<Self>,
+        _location: Point<f64, Logical>,
+    ) {
+    }
+}
+
 smithay::delegate_compositor!(HlState);
 smithay::delegate_shm!(HlState);
 smithay::delegate_xdg_shell!(HlState);
@@ -1189,6 +1425,10 @@ smithay::delegate_xdg_decoration!(HlState);
 smithay::delegate_output!(HlState);
 smithay::delegate_seat!(HlState);
 smithay::delegate_data_device!(HlState);
+smithay::delegate_primary_selection!(HlState);
+smithay::delegate_relative_pointer!(HlState);
+smithay::delegate_pointer_constraints!(HlState);
+smithay::delegate_presentation!(HlState);
 smithay::delegate_viewporter!(HlState);
 smithay::delegate_fractional_scale!(HlState);
 

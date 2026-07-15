@@ -65,7 +65,9 @@ objc2-quartz-core = { version = "0.2", optional = true, features = ["CALayer", "
 [dev-dependencies]
 # The headless end-to-end test spawns the compositor and drives a real Wayland CLIENT against it.
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
+# `unstable` unlocks the zwp_* client bindings the advanced-input demos drive (relative pointer, pointer
+# constraints, primary selection); presentation-time is a stable protocol (always compiled with `client`).
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 
 [[test]]
 name = "wayland_e2e"
@@ -304,6 +306,31 @@ required-features = ["smithay-adapter"]
 [[test]]
 name = "demo_bogus_stride_format"
 path = "tests/demo_bogus_stride_format.rs"
+required-features = ["smithay-adapter"]
+
+# Batch-6 ADVANCED INPUT / SELECTION / TIMING protocol demos — the protocols real toolkits use that were
+# previously unadvertised: zwp_relative_pointer_v1 (unaccelerated motion deltas), zwp_pointer_constraints_v1
+# (pointer lock), zwp_primary_selection (middle-click clipboard), and wp_presentation (present-timing
+# feedback). Each drives real in-process wayland-client(s) against the live adapter and asserts EXACT event
+# data / bytes / timing. Own binaries — each mutates process-global `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "demo_relative_pointer"
+path = "tests/demo_relative_pointer.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_pointer_constraints"
+path = "tests/demo_pointer_constraints.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_primary_selection"
+path = "tests/demo_primary_selection.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_presentation_time"
+path = "tests/demo_presentation_time.rs"
 required-features = ["smithay-adapter"]
 
 [[test]]
