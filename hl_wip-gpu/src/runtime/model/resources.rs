@@ -176,6 +176,22 @@ impl GlobalLedger {
         g.bytes = g.bytes.saturating_sub(totals.bytes);
         g.objects = g.objects.saturating_sub(totals.objects);
     }
+
+    /// A snapshot of the process-wide residency currently charged across every connection sharing this
+    /// account. A leak check: it must return to its baseline once all sharing connections tear down.
+    pub fn snapshot(&self) -> Totals {
+        *self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Process-wide bytes currently resident across every connection on this shared account.
+    pub fn residency_bytes(&self) -> u64 {
+        self.snapshot().bytes
+    }
+
+    /// Process-wide live object count across every connection on this shared account.
+    pub fn object_count(&self) -> u64 {
+        self.snapshot().objects
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------

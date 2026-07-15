@@ -17,7 +17,7 @@ use crate::cpu::CpuExecutor;
 use crate::protocol::codec::encode_stream;
 use crate::protocol::model::capability::{Capabilities, FeatureRequest};
 use crate::protocol::model::command::Cmd;
-use crate::protocol::model::error::Result;
+use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId};
 use crate::protocol::port::sink::CommandSink;
 use crate::runtime::model::resources::{GlobalLedger, SessionResources};
@@ -36,6 +36,10 @@ use crate::runtime::service::{dispatch, negotiate};
 pub struct InProcessCommandSink<E: GpuExecutor> {
     session: Session,
     exec: E,
+    /// Set once [`close`](InProcessCommandSink::close) has torn the session down. A closed sink rejects
+    /// every further `negotiate`/`submit`/`wait`/`read_buffer` with a typed error instead of silently
+    /// re-driving a released session, so a use-after-close is a clean `Err`, never a panic or a no-op.
+    closed: bool,
 }
 
 impl<E: GpuExecutor> InProcessCommandSink<E> {
@@ -45,12 +49,37 @@ impl<E: GpuExecutor> InProcessCommandSink<E> {
     pub fn new(exec: E) -> Self {
         let limits = Limits::from_capabilities(exec.capabilities());
         let session = Session::new(limits, GlobalLedger::unbounded(), Box::new(FakeClock::new(0)));
-        Self { session, exec }
+        Self { session, exec, closed: false }
     }
 
     /// Build a sink over an explicit `session` + `exec`, for callers that need custom ceilings/clock.
     pub fn with_session(session: Session, exec: E) -> Self {
-        Self { session, exec }
+        Self { session, exec, closed: false }
+    }
+
+    /// Explicitly tear this sink's session down: reclaim every live resource, refund this connection's
+    /// residency to the shared global account, and mark the sink closed. Idempotent — a second `close`
+    /// (double-teardown) is a no-op, never a panic or a double-refund. After `close`, every
+    /// `negotiate`/`submit`/`wait`/`read_buffer` returns `Err(GpuError::Invalid("session closed"))`.
+    pub fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        self.session.release_all();
+    }
+
+    /// Whether this sink has been [`close`](InProcessCommandSink::close)d.
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// The typed rejection a closed sink returns from every command entry point.
+    fn ensure_open(&self) -> Result<()> {
+        if self.closed {
+            return Err(GpuError::Invalid("session closed"));
+        }
+        Ok(())
     }
 
     /// The per-connection runtime session (its `resources` hold every created object's native state).
@@ -76,10 +105,12 @@ impl<E: GpuExecutor> InProcessCommandSink<E> {
 
 impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
     fn negotiate(&mut self, request: &FeatureRequest) -> Result<Capabilities> {
+        self.ensure_open()?;
         negotiate::negotiate(&mut self.session, &self.exec, request)
     }
 
     fn submit(&mut self, batch: &[Cmd]) -> Result<()> {
+        self.ensure_open()?;
         let _span = hl_log::hl_span!(tag::EXEC, "submit");
         // The runtime checks the encoded frame size against the negotiated ceiling; encode to get the
         // real byte count so the in-process path exercises the same frame-budget check the wire does.
@@ -89,6 +120,7 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
     }
 
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {
+        self.ensure_open()?;
         dispatch::wait(&mut self.session, &mut self.exec, fence, value)
     }
 
@@ -96,6 +128,7 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
     /// socket-free half of the readback port. Works for ANY `GpuExecutor` that implements readback (the
     /// default returns `Unsupported`); the CPU reference executor serves it directly.
     fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
+        self.ensure_open()?;
         let _span = hl_log::hl_span!(tag::EXEC, "readback");
         hl_log::hl_add!(tag::EXEC, "readback_bytes", len as u64);
         dispatch::read_buffer(&self.session, &self.exec, id, offset, len)
@@ -106,6 +139,7 @@ impl InProcessCommandSink<CpuExecutor> {
     /// Read `len` bytes back from buffer `id` at `offset`, delegating to the CPU executor's readback over
     /// the runtime-owned resources. The ergonomic result-readback for the CPU reference executor.
     pub fn read_buffer(&self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
+        self.ensure_open()?;
         let mut out = vec![0u8; len];
         self.exec.read_buffer(&self.session.resources, id, offset, &mut out)?;
         Ok(out)

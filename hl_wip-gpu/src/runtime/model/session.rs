@@ -86,6 +86,20 @@ impl Session {
     pub fn compiled_cache_bytes(&self) -> u64 {
         self.ledger.compiled_cache_bytes()
     }
+
+    /// Explicit teardown: drop every live native handle, clear the fence timeline, and refund this
+    /// connection's whole residency to the shared global account — then reset the accounting state so the
+    /// later [`Drop`] refunds nothing (no double-refund of the global budget). Idempotent: a second call
+    /// refunds `Totals::default()` (a no-op) and re-clears already-empty tables, so a `Drop` after an
+    /// explicit `release_all` is safe. Leaves the `Session` a valid, empty connection.
+    pub fn release_all(&mut self) {
+        self.global.refund(self.ledger.totals);
+        self.ledger = Ledger::default();
+        // Dropping the old table frees every native handle behind it; a fresh table restores the
+        // per-kind generation counters to their initial state for any reuse of this session object.
+        self.resources = SessionResources::new();
+        self.timeline = FenceTimeline::new();
+    }
 }
 
 impl Drop for Session {
