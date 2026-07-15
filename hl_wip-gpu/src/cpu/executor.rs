@@ -229,6 +229,9 @@ impl CpuExecutor {
                 vertex_layouts: desc.vertex_buffers.clone(),
                 topology: desc.topology,
                 blends: desc.color_targets.iter().map(|c| c.blend.clone()).collect(),
+                write_masks: desc.color_targets.iter().map(|c| c.write_mask).collect(),
+                cull: desc.cull,
+                front_face: desc.front_face,
                 depth: desc.depth.clone(),
             }),
         )

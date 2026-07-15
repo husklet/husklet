@@ -159,8 +159,27 @@ fn fcolor_opaque(seed: u64) -> [f32; 4] {
     [chan(seed, 0) as f32 / 255.0, chan(seed, 1) as f32 / 255.0, chan(seed, 2) as f32 / 255.0, 1.0]
 }
 
-// The fullscreen triangle: every pixel centre is strictly interior on any correct rasterizer.
+/// A deterministic straight-alpha float colour whose ALPHA is also a distinct mid-range value (never 1.0)
+/// — used by the write-mask programs so masking the alpha channel is observable (a fully-opaque colour
+/// would make an alpha-masked-vs-unmasked write indistinguishable).
+fn fcolor4(seed: u64) -> [f32; 4] {
+    [
+        chan(seed, 0) as f32 / 255.0,
+        chan(seed, 1) as f32 / 255.0,
+        chan(seed, 2) as f32 / 255.0,
+        chan(seed, 3) as f32 / 255.0,
+    ]
+}
+
+// The fullscreen triangle: every pixel centre is strictly interior on any correct rasterizer. Its NDC
+// winding is counter-clockwise (positive NDC signed area); through the y-down viewport transform the wgpu
+// executor + the oracle both rasterize in, that maps to a NEGATIVE framebuffer-space signed area.
 const FS_TRI: [(f32, f32); 3] = [(-1.0, -1.0), (3.0, -1.0), (-1.0, 3.0)];
+
+// The SAME fullscreen triangle with two vertices swapped — identical coverage, OPPOSITE winding
+// (clockwise in NDC / positive framebuffer-space signed area). Paired with `FS_TRI`, this lets the cull
+// programs prove the facing decision is winding-driven, not a constant.
+const FS_TRI_REV: [(f32, f32); 3] = [(-1.0, -1.0), (-1.0, 3.0), (3.0, -1.0)];
 
 // -------------------------------------------------------------------------------------------------
 // SPIR-V seeds (minted once via naga) — the wgpu backend executes these; the CPU oracle ignores them
@@ -766,7 +785,188 @@ fn gen_draw_blend(seed: u64) -> Prog {
     }
 }
 
-/// (12) COMPUTE `iota`: `out[gid] = gid` for `gid < n`, driven by the SAME neutral kernel-IR
+// -------------------------------------------------------------------------------------------------
+// write-mask programs (newly covered — the oracle now honors `ColorTargetState.write_mask`)
+// -------------------------------------------------------------------------------------------------
+
+/// A flat opaque (replace, blend-disabled) fullscreen draw of `fg` into an `Rgba8Unorm` target that was
+/// cleared to `bg` in the same pass, through a pipeline whose `write_mask` is `mask`. The clear ignores the
+/// write mask (it is a fixed-function attachment clear, not a masked ROP write), so afterwards each channel
+/// reads `fg` where `mask`'s bit is SET and the cleared `bg` where it is CLEAR. Both backends must produce
+/// the identical two-source image EXACTLY (tol 0): the masked channels are the exact clear and the written
+/// channels are a flat replace of an exact `k/255` constant (no half-way rounding case, so the CPU
+/// half-up and the GPU half-to-even quantizers land on the same byte). Used with `mask = 0x7` (RGB, alpha
+/// preserved) and `mask = 0x8` (alpha only, RGB preserved) — the two masks a `glColorMask` guest most
+/// commonly sets.
+fn mask_prog(seed: u64, category: &'static str, mask: u32) -> Prog {
+    let w = 4 + (seed % 5) as u32; // 4..=8
+    let h = 4 + (seed % 4) as u32; // 4..=7
+    let bg = fcolor4(seed);
+    let fg = fcolor4(seed.wrapping_add(21));
+    let vbytes: Vec<u8> =
+        FS_TRI.iter().flat_map(|(x, y)| le_f32(&[*x, *y, fg[0], fg[1], fg[2], fg[3]])).collect();
+    let spirv = wgsl_to_spirv(SEED_POS2_COLOR);
+    let cmds = vec![
+        Cmd::CreateTexture(1, tex(w, h)),
+        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
+        Cmd::CreateBuffer(1, buf(vbytes.len() as u64, buffer_usage::VERTEX | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer { id: 1, offset: 0, data: vbytes },
+        Cmd::CreateRenderPipeline(
+            1,
+            RenderPipelineDesc {
+                vertex: ShaderRef { module: 1, entry: "vs_main".into() },
+                fragment: Some(ShaderRef { module: 1, entry: "fs_main".into() }),
+                vertex_buffers: vec![pos2_color_layout()],
+                color_targets: vec![ColorTargetState {
+                    format: TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: mask,
+                }],
+                depth: None,
+                topology: Topology::TriangleList,
+                cull: 0,
+                front_face: 0,
+                sample_count: 1,
+                label: String::new(),
+            },
+        ),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: bg, store: true }],
+                    depth: None,
+                },
+                Enc::SetPipeline(1),
+                Enc::SetVertexBuffer { slot: 0, buffer: 1, offset: 0 },
+                Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                Enc::EndRenderPass,
+            ],
+            signal: None,
+        }),
+    ];
+    Prog {
+        seed,
+        category,
+        ops: vec!["BeginRenderPass", "SetPipeline", "SetVertexBuffer", "Draw(write_mask)", "EndRenderPass"],
+        cmds,
+        read: Read::Tex { id: 1, len: (w * h * 4) as usize },
+        tol: 0,
+        kernel: None,
+    }
+}
+
+/// (12) WRITE-MASK RGB: `write_mask = 0x7` — R,G,B written from the draw, ALPHA preserved from the clear.
+fn gen_draw_mask_rgb(seed: u64) -> Prog {
+    mask_prog(seed, "draw_mask_rgb", 0x7)
+}
+
+/// (13) WRITE-MASK ALPHA: `write_mask = 0x8` — only ALPHA written from the draw, R,G,B preserved from the
+/// clear. The complement of the RGB mask; together they prove every channel's mask bit is honored.
+fn gen_draw_mask_alpha(seed: u64) -> Prog {
+    mask_prog(seed, "draw_mask_alpha", 0x8)
+}
+
+// -------------------------------------------------------------------------------------------------
+// face-culling programs (newly covered — the oracle now honors `RenderPipelineDesc.cull`/`front_face`)
+// -------------------------------------------------------------------------------------------------
+
+/// A single flat fullscreen triangle of KNOWN winding (`tri`) drawn (replace, blend off) over a `bg` clear
+/// through a pipeline with the given `front_face` + `cull`. If the pipeline culls this triangle's facing the
+/// whole target stays `bg` (a pure attachment clear on both backends); otherwise it is filled with `fg` (a
+/// flat replace of an exact `k/255` constant). Either way the oracle and executor must AGREE EXACTLY
+/// (tol 0) — a cull-face / winding mismatch flips a whole target between `bg` and `fg`, a divergence far
+/// larger than any tolerance.
+/// The four generators below span {`FS_TRI`, `FS_TRI_REV`} × {CCW, CW} × {Front, Back} so both cull faces,
+/// both windings, and both front-face conventions are exercised, with a mix of culled + drawn outcomes.
+fn cull_prog(
+    seed: u64,
+    category: &'static str,
+    tri: &[(f32, f32); 3],
+    front_face: u32,
+    cull: u32,
+) -> Prog {
+    let w = 4 + (seed % 5) as u32; // 4..=8
+    let h = 4 + (seed % 4) as u32; // 4..=7
+    let bg = fcolor_opaque(seed);
+    let fg = fcolor_opaque(seed.wrapping_add(13));
+    let vbytes: Vec<u8> =
+        tri.iter().flat_map(|(x, y)| le_f32(&[*x, *y, fg[0], fg[1], fg[2], fg[3]])).collect();
+    let spirv = wgsl_to_spirv(SEED_POS2_COLOR);
+    let cmds = vec![
+        Cmd::CreateTexture(1, tex(w, h)),
+        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
+        Cmd::CreateBuffer(1, buf(vbytes.len() as u64, buffer_usage::VERTEX | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer { id: 1, offset: 0, data: vbytes },
+        Cmd::CreateRenderPipeline(
+            1,
+            RenderPipelineDesc {
+                vertex: ShaderRef { module: 1, entry: "vs_main".into() },
+                fragment: Some(ShaderRef { module: 1, entry: "fs_main".into() }),
+                vertex_buffers: vec![pos2_color_layout()],
+                color_targets: vec![ColorTargetState {
+                    format: TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: 0xF,
+                }],
+                depth: None,
+                topology: Topology::TriangleList,
+                cull,
+                front_face,
+                sample_count: 1,
+                label: String::new(),
+            },
+        ),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: bg, store: true }],
+                    depth: None,
+                },
+                Enc::SetPipeline(1),
+                Enc::SetVertexBuffer { slot: 0, buffer: 1, offset: 0 },
+                Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                Enc::EndRenderPass,
+            ],
+            signal: None,
+        }),
+    ];
+    Prog {
+        seed,
+        category,
+        ops: vec!["BeginRenderPass", "SetPipeline(cull)", "SetVertexBuffer", "Draw", "EndRenderPass"],
+        cmds,
+        read: Read::Tex { id: 1, len: (w * h * 4) as usize },
+        tol: 0,
+        kernel: None,
+    }
+}
+
+/// (14) CULL, CCW front + cull BACK, over `FS_TRI` (framebuffer-CW → back-facing under CCW) → CULLED.
+fn gen_cull_ccw_back(seed: u64) -> Prog {
+    cull_prog(seed, "cull_ccw_back", &FS_TRI, 0, 2)
+}
+
+/// (15) CULL, CCW front + cull FRONT, over `FS_TRI` (back-facing under CCW) → NOT culled → DRAWN. Same
+/// geometry + front_face as (14) but the opposite cull face, so the outcome flips — the executor and oracle
+/// must agree on which of the pair draws.
+fn gen_cull_ccw_front(seed: u64) -> Prog {
+    cull_prog(seed, "cull_ccw_front", &FS_TRI, 0, 1)
+}
+
+/// (16) CULL, CW front + cull FRONT, over `FS_TRI` (framebuffer-CW → front-facing under CW) → CULLED. Same
+/// geometry as (14)/(15) but the CW front-face convention, proving `front_face` flips the facing.
+fn gen_cull_cw_front(seed: u64) -> Prog {
+    cull_prog(seed, "cull_cw_front", &FS_TRI, 1, 1)
+}
+
+/// (17) CULL, CCW front + cull FRONT, over `FS_TRI_REV` (opposite winding → front-facing under CCW) →
+/// CULLED. The reversed-winding counterpart of (15): identical pipeline, swapped geometry winding, opposite
+/// outcome — the direct proof the facing decision follows the triangle's winding.
+fn gen_cull_rev_ccw_front(seed: u64) -> Prog {
+    cull_prog(seed, "cull_rev_ccw_front", &FS_TRI_REV, 0, 1)
+}
+
+/// (18) COMPUTE `iota`: `out[gid] = gid` for `gid < n`, driven by the SAME neutral kernel-IR
 /// (`KernelProgram`) on both backends — the CPU interpreter and the wgpu WGSL-lowered compute. EXACT.
 fn gen_compute_iota(seed: u64) -> Prog {
     let n = 8 + (seed % 25) as u32; // 8..=32
@@ -1094,6 +1294,12 @@ const GENERATORS: &[fn(u64) -> Prog] = &[
     gen_draw_gradient,
     gen_draw_depth,
     gen_draw_blend,
+    gen_draw_mask_rgb,
+    gen_draw_mask_alpha,
+    gen_cull_ccw_back,
+    gen_cull_ccw_front,
+    gen_cull_cw_front,
+    gen_cull_rev_ccw_front,
     gen_compute_iota,
     gen_clear_srgb,
     gen_draw_srgb,
@@ -1415,8 +1621,9 @@ fn analytic_msaa_resolve(exec: &mut WgpuExecutor) -> (u32, Vec<String>) {
 
 #[test]
 fn differential_cpu_oracle_vs_wgpu() {
-    // 17 generators × 10 seeds each — every generator (incl. the new sRGB + stencil ones) gets 10 seeds.
-    const N: u64 = 170;
+    // 23 generators × 10 seeds each — every generator (incl. the new write-mask + face-cull ones) gets 10
+    // seeds.
+    const N: u64 = 230;
 
     let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
         Ok(e) => e,
@@ -1490,6 +1697,11 @@ fn differential_cpu_oracle_vs_wgpu() {
         "compute_iota — neutral kernel-IR on both backends (EXACT)",
         "clear_srgb / draw_srgb — sRGB gamma-encode on write, oracle now matches the ROP (±2)",
         "stencil_equal / stencil_greater — two-pass mark-then-test, oracle now models stencil (EXACT)",
+        "draw_mask_rgb / draw_mask_alpha — per-channel write_mask, oracle now honors ColorTargetState.write_mask \
+         (masked channels keep the clear, written channels are a flat replace of an exact k/255 constant — EXACT)",
+        "cull_ccw_back / cull_ccw_front / cull_cw_front / cull_rev_ccw_front — face culling over triangles of \
+         known winding under both front_face conventions + both cull faces, oracle now honors \
+         RenderPipelineDesc.cull/front_face (culled → the exact bg clear; drawn → the exact fg replace — EXACT)",
     ];
     let analytic_only = [
         "MSAA + ResolveTexture — the oracle has no multisample-RENDER concept (validate rejects a \
@@ -1498,9 +1710,11 @@ fn differential_cpu_oracle_vs_wgpu() {
          against the oracle. Counted separately below.",
     ];
     let remaining_exclusions = [
-        "NONE for the op surface: stencil, sRGB, and MSAA-resolve are all now covered (stencil + sRGB \
-         oracle-compared; MSAA-resolve analytically checked). DrawIndexed stays out of the per-pixel fuzz \
-         only to avoid partial-coverage indexed edge-rule ambiguity (exercised by the coverage suite).",
+        "NONE for the op surface: stencil, sRGB, write_mask, face-culling, and MSAA-resolve are all now \
+         covered (stencil + sRGB + write_mask + cull oracle-compared; MSAA-resolve analytically checked). \
+         DrawIndexed stays out of the per-pixel fuzz only to avoid partial-coverage indexed edge-rule \
+         ambiguity (exercised by the coverage suite); the non-base-mip CopyTextureToBuffer readback stays a \
+         documented reject on both backends (the oracle stores only the base mip plane).",
     ];
     println!("======================== DIFFERENTIAL SUMMARY ========================");
     println!(
@@ -1552,7 +1766,18 @@ fn differential_cpu_oracle_vs_wgpu() {
     for op in ["SetStencilReference"] {
         assert!(ops_covered.contains(op), "expected `{op}` in the covered op set");
     }
-    for cat in ["clear_srgb", "draw_srgb", "stencil_equal", "stencil_greater"] {
+    for cat in [
+        "clear_srgb",
+        "draw_srgb",
+        "stencil_equal",
+        "stencil_greater",
+        "draw_mask_rgb",
+        "draw_mask_alpha",
+        "cull_ccw_back",
+        "cull_ccw_front",
+        "cull_cw_front",
+        "cull_rev_ccw_front",
+    ] {
         assert!(per_category.contains_key(cat), "expected category `{cat}` to run");
     }
 }
