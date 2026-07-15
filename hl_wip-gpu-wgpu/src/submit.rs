@@ -47,13 +47,29 @@ impl WgpuExecutor {
                     i = end + 1;
                 }
                 Enc::ClearRect { texture, x, y, w, h, color } => {
-                    let t = texture::native(res, *texture)?;
-                    let texel = clear_texel(t.format, *color)?;
-                    let mut data = Vec::with_capacity(texel.len() * (*w as usize) * (*h as usize));
-                    for _ in 0..(*w as usize * *h as usize) {
-                        data.extend_from_slice(&texel);
+                    let (fmt, tw, th) = {
+                        let t = texture::native(res, *texture)?;
+                        (t.format, t.width, t.height)
+                    };
+                    // Clamp the rect to the texture, exactly as the CPU oracle's `clear_rect` does: a rect
+                    // that runs past the texture edge fills ONLY the covered sub-rectangle. Without this the
+                    // raw `x,y,w,h` would be handed to `Queue::write_texture`, whose bounds validation
+                    // rejects an over-hang (a hard wgpu error) — where the oracle silently clamps. The
+                    // protocol/runtime `validate` does not bounds-check `ClearRect`, so an over-hanging rect
+                    // is a legal command; the two backends must handle it identically. An empty clamped rect
+                    // is a no-op.
+                    let x0 = (*x).min(tw);
+                    let y0 = (*y).min(th);
+                    let cw = x.saturating_add(*w).min(tw).saturating_sub(x0);
+                    let ch = y.saturating_add(*h).min(th).saturating_sub(y0);
+                    if cw != 0 && ch != 0 {
+                        let texel = clear_texel(fmt, *color)?;
+                        let mut data = Vec::with_capacity(texel.len() * cw as usize * ch as usize);
+                        for _ in 0..(cw as usize * ch as usize) {
+                            data.extend_from_slice(&texel);
+                        }
+                        self.write_region(res, *texture, x0, y0, 0, cw, ch, 1, 0, &data)?;
                     }
-                    self.write_region(res, *texture, *x, *y, 0, *w, *h, 1, 0, &data)?;
                     i += 1;
                 }
                 Enc::CopyBufferToBuffer { src, src_offset, dst, dst_offset, size } => {
