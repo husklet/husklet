@@ -31,6 +31,7 @@ fn image(sid: SurfaceId, w: i32, h: i32) -> PresentableImage {
         format: Format::Xrgb8888,
         gpu: false,
         popup: None,
+        present_crop: None,
     }
 }
 

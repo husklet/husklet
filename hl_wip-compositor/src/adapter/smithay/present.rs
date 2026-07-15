@@ -39,8 +39,16 @@ pub struct CapturedFrame {
     /// when the layer contributed no damage this cycle (a clean base layer re-presented under a child).
     pub x: i32,
     pub y: i32,
-    /// Tight `width*height*4` RGBA of the presented surface.
+    /// Tight `width*height*4` RGBA of the presented surface. When a `wp_viewport` transform is active this
+    /// is the CROPPED+SCALED region actually presented (size `width`×`height` == the logical size); with no
+    /// viewport it is the raw client buffer.
     pub rgba: Vec<u8>,
+    /// The on-screen LOGICAL size `(logical_width, logical_height)` this surface presented at — after
+    /// `wp_viewport` (dst/src) and `wl_surface.set_buffer_scale`. With no viewport and buffer scale 1 this
+    /// equals `width`/`height`; under a buffer scale N it is `tex/N`; under a viewport dst it is the dst
+    /// size. This is the "presented pixel size" a client's geometry is laid out in.
+    pub logical_width: i32,
+    pub logical_height: i32,
     pub serial: u64,
 }
 
@@ -125,14 +133,29 @@ impl Presenter for PngPresenter {
             .map(|r| (r.x, r.y))
             .next()
             .unwrap_or((0, 0));
+        // The presented logical size — the destination a `wp_viewport` scales to, or `tex/buffer_scale`,
+        // as resolved by the scene into `image.width`/`image.height`.
+        let (logical_width, logical_height) = (image.width.max(1), image.height.max(1));
+        // When a `wp_viewport` crop/scale is active, rasterize the sampled region into the logical size —
+        // the pixels a real backend would present. Otherwise capture the raw client buffer verbatim.
+        let (width, height, rgba) = match image.present_crop {
+            Some(src) => (
+                logical_width,
+                logical_height,
+                resample_nearest(buf, src, logical_width, logical_height),
+            ),
+            None => (buf.width, buf.height, buf.rgba.clone()),
+        };
         let frame = CapturedFrame {
             output,
             surface: image.surface,
-            width: buf.width,
-            height: buf.height,
+            width,
+            height,
             x,
             y,
-            rgba: buf.rgba.clone(),
+            rgba,
+            logical_width,
+            logical_height,
             serial,
         };
         if let Some(dir) = &self.out_dir {
@@ -150,6 +173,27 @@ impl Presenter for PngPresenter {
     }
 
     fn set_visibility(&mut self, _surface: SurfaceId, _visibility: Visibility) {}
+}
+
+/// Nearest-neighbour sample the source rectangle `src = (x, y, w, h)` (in BUFFER PIXELS) of `buf` into a
+/// tight `dw`×`dh` RGBA image — the `wp_viewport` crop+scale a real backend rasterizes. Each destination
+/// pixel maps through its center to a source coordinate, floored to a source texel (clamped in-bounds).
+/// With integer crop rectangles and integer scale ratios the mapping is exact.
+fn resample_nearest(buf: &StoredBuffer, src: (f64, f64, f64, f64), dw: i32, dh: i32) -> Vec<u8> {
+    let (sx, sy, sw, sh) = src;
+    let mut out = vec![0u8; (dw * dh * 4) as usize];
+    for dy in 0..dh {
+        let v = sy + (dy as f64 + 0.5) / dh as f64 * sh;
+        let by = (v.floor() as i32).clamp(0, buf.height - 1);
+        for dx in 0..dw {
+            let u = sx + (dx as f64 + 0.5) / dw as f64 * sw;
+            let bx = (u.floor() as i32).clamp(0, buf.width - 1);
+            let si = ((by * buf.width + bx) * 4) as usize;
+            let di = ((dy * dw + dx) * 4) as usize;
+            out[di..di + 4].copy_from_slice(&buf.rgba[si..si + 4]);
+        }
+    }
+    out
 }
 
 // ============================ minimal, dependency-free PNG encoder ============================

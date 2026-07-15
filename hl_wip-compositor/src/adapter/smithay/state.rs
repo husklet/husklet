@@ -8,7 +8,7 @@
 //! `ingest_buffer`), with the GPU/budget/Cocoa machinery dropped and Smithay reads mapped onto the
 //! neutral [`crate::scene::model`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use hl_log::{hl_count, hl_debug, hl_info, tag};
@@ -36,6 +36,9 @@ use smithay::wayland::{
         CompositorClientState, CompositorHandler, CompositorState, Damage, SubsurfaceCachedState,
         SurfaceAttributes,
     },
+    fractional_scale::{
+        with_fractional_scale, FractionalScaleHandler, FractionalScaleManagerState,
+    },
     output::{OutputHandler, OutputManagerState},
     selection::{
         data_device::{
@@ -49,6 +52,7 @@ use smithay::wayland::{
         PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
     },
     shm::{with_buffer_contents, ShmHandler, ShmState},
+    viewporter::{ViewportCachedState, ViewporterState},
 };
 
 /// The `xdg_positioner` anchor/gravity/constraint-adjustment wire enums — mapped onto the neutral
@@ -67,7 +71,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::Sta
 
 use crate::scene::model::{
     Anchor, BufferState, ConstraintAdjustment, Format, Gravity, Output, OutputId, PopupState,
-    Positioner, Rect, SubsurfaceState, SurfaceId, SurfaceRole,
+    Positioner, Rect, SubsurfaceState, SurfaceId, SurfaceRole, Viewport,
 };
 use crate::scene::port::Clock;
 use crate::scene::service::{constrain_popup, surface_at, BufferChange, Commit};
@@ -133,6 +137,18 @@ pub struct HlState {
     /// keyboard focus via [`set_data_device_focus`]. Held for the state's lifetime so the global keeps
     /// advertising.
     pub data_device: DataDeviceState,
+    /// Owns the `wp_viewporter` global. A client binds it, calls `get_viewport(surface)`, and sets a
+    /// source crop (`set_source`) and/or destination size (`set_destination`) — HiDPI/media clients
+    /// (video, browsers) use it to crop letterboxing and scale a buffer to a logical size without
+    /// re-rendering. Smithay caches the state (`ViewportCachedState`) per surface; the adapter reads it at
+    /// commit and mirrors it into the neutral scene, which resolves the on-screen logical size. Held for
+    /// the state's lifetime so the global keeps advertising.
+    _viewporter: ViewporterState,
+    /// Owns the `wp_fractional_scale_manager_v1` global. A client binds it and calls
+    /// `get_fractional_scale(surface)` to learn the compositor's preferred fractional scale
+    /// (`preferred_scale`, sent as scale×120) so it can render crisply on HiDPI without integer-only
+    /// `wl_surface.set_buffer_scale`. Held for the state's lifetime so the global keeps advertising.
+    _fractional_scale: FractionalScaleManagerState,
     /// Backs the `delegate_xdg_shell` `SeatHandler` bound (popup grabs reference a seat) AND owns the
     /// `wl_seat` capabilities the toolkits enumerate for input.
     pub seat_state: SeatState<HlState>,
@@ -181,6 +197,11 @@ pub struct HlState {
     /// retained frame ships and its callbacks release even if the client has since gone idle. A later real
     /// commit that presents the same root supersedes the entry (it is cleared on a completing present).
     pending_repaints: HashMap<SurfaceId, u64>,
+    /// Toplevel roots for which a `wl_surface.enter(wl_output)` has been sent and not yet balanced by a
+    /// `leave`. The compositor advertises a single `wl_output`; a toplevel is "on" it while it has a
+    /// committed (mapped) buffer, off it once unmapped. Tracked so enter/leave are sent exactly once per
+    /// transition. (Position-based multi-output routing is not modeled headless — there is one output.)
+    entered_outputs: HashSet<SurfaceId>,
 }
 
 impl HlState {
@@ -195,6 +216,11 @@ impl HlState {
         // Advertise `wl_data_device_manager` (clipboard / drag-and-drop). GDK4 (and Chrome/Qt) require
         // this global at display-open; without it `gdk_display_open` aborts before any GL is created.
         let data_device = DataDeviceState::new::<HlState>(dh);
+        // Advertise `wp_viewporter` (surface crop/scale) and `wp_fractional_scale_manager_v1` (HiDPI
+        // preferred-scale hint) so media/browser clients can crop+scale a buffer and learn the fractional
+        // render scale — the surface-semantics globals a modern toolkit probes at startup.
+        let viewporter = ViewporterState::new::<HlState>(dh);
+        let fractional_scale = FractionalScaleManagerState::new::<HlState>(dh);
         let mut seat_state = SeatState::new();
 
         let mut engine = Compositor::new(presenter, MonotonicClock::new());
@@ -224,6 +250,8 @@ impl HlState {
             xdg_shell,
             xdg_decoration,
             data_device,
+            _viewporter: viewporter,
+            _fractional_scale: fractional_scale,
             seat_state,
             seat,
             _output_manager: output_manager,
@@ -235,6 +263,7 @@ impl HlState {
             popup_grabs: Vec::new(),
             pending_callbacks: HashMap::new(),
             pending_repaints: HashMap::new(),
+            entered_outputs: HashSet::new(),
         }
     }
 
@@ -275,6 +304,7 @@ impl HlState {
             // re-driving a removed root, nor stale callback objects for a dead protocol resource.
             self.pending_callbacks.remove(&sid);
             self.pending_repaints.remove(&sid);
+            self.entered_outputs.remove(&sid);
             // Re-present the owning root without the removed child: mark it dirty (so the compose is not
             // skipped as clean) and arm a repaint at the next refresh boundary. The serve loop's
             // `drive_due_repaints` ships it even if the client is now idle, so the child disappears.
@@ -384,7 +414,7 @@ impl HlState {
 
         // Snapshot the committed state Smithay applied, taking ownership of the buffer assignment and
         // draining this commit's damage + frame callbacks (the compositor is expected to consume both).
-        let (assignment, damage, scale, frame_callbacks) = with_states(surface, |states| {
+        let (assignment, damage, scale, frame_callbacks, viewport) = with_states(surface, |states| {
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
             let cur = attrs.current();
             let assignment = cur.buffer.take();
@@ -397,7 +427,17 @@ impl HlState {
                 .collect();
             let scale = cur.buffer_scale.max(1);
             let callbacks = std::mem::take(&mut cur.frame_callbacks);
-            (assignment, damage, scale, callbacks)
+            drop(attrs);
+            // The just-applied `wp_viewport` state (src crop in logical coords, dst logical size), mirrored
+            // into the neutral scene so it resolves the on-screen logical size and the presenter samples the
+            // cropped+scaled region. Always re-read (double-buffered) so a cleared viewport reverts too.
+            let mut vp = states.cached_state.get::<ViewportCachedState>();
+            let cur_vp = vp.current();
+            let viewport = Viewport {
+                src: cur_vp.src.map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h)),
+                dst: cur_vp.dst.map(|s| (s.w, s.h)),
+            };
+            (assignment, damage, scale, callbacks, viewport)
         });
 
         // Build the neutral commit from the buffer assignment, depositing pixels for the presenter.
@@ -429,6 +469,9 @@ impl HlState {
             }
             None => Commit { buffer: BufferChange::Keep, damage, ..Commit::default() },
         };
+        // Apply the just-read `wp_viewport` state on every commit (double-buffered): the scene resolves the
+        // logical size from it and the presenter samples the cropped+scaled region.
+        let commit = Commit { viewport: Some(viewport), ..commit };
 
         // Hold this commit's `wl_surface.frame` callbacks until the frame they belong to actually reaches
         // the presenter. Firing them here — before the present decision — would tell the client "your
@@ -456,6 +499,37 @@ impl HlState {
             // here, so release immediately — matching the pre-existing behavior for these roles and
             // avoiding a stall if the parent never commits again.
             None => self.fire_callbacks_for(sid),
+        }
+
+        // Reflect this surface's tree onto the advertised `wl_output`: a toplevel that just mapped enters
+        // the output (so a client learns which output — and thus scale — it is displayed on); one that
+        // unmapped leaves it. Sent exactly once per map/unmap transition.
+        self.update_output_membership(sid);
+    }
+
+    /// Emit `wl_surface.enter` / `wl_surface.leave` for the primary `wl_output` as the toplevel root owning
+    /// `sid` maps (gains a committed buffer) or unmaps (loses it). Subsurfaces/popups follow their root, so
+    /// only the toplevel root is tracked. A no-op when the client has not (yet) bound `wl_output` beyond the
+    /// membership bookkeeping — smithay re-sends `enter` for tracked surfaces when the client binds the
+    /// output later.
+    fn update_output_membership(&mut self, sid: SurfaceId) {
+        let Some(root) = self.engine.scene.window_root(sid) else {
+            return;
+        };
+        if !matches!(self.engine.scene.get(root).map(|s| &s.role), Some(SurfaceRole::Toplevel)) {
+            return;
+        }
+        let Some(wl_surface) = self.surfaces_by_id.get(&root).cloned() else {
+            return;
+        };
+        let mapped = self.engine.scene.get(root).and_then(|s| s.buffer).is_some();
+        let entered = self.entered_outputs.contains(&root);
+        if mapped && !entered {
+            self._wl_output.enter(&wl_surface);
+            self.entered_outputs.insert(root);
+        } else if !mapped && entered {
+            self._wl_output.leave(&wl_surface);
+            self.entered_outputs.remove(&root);
         }
     }
 
@@ -1075,9 +1149,26 @@ impl XdgDecorationHandler for HlState {
     }
 }
 
-/// A client bound `wl_output`. Smithay has already sent geometry/mode/scale/name/done; nothing extra to
-/// do headless (no `wl_surface.enter`/`leave` tracking without live output routing).
+/// A client bound `wl_output`. Smithay has already sent geometry/mode/scale/name/done. Surface→output
+/// membership (`wl_surface.enter`/`leave`) is driven separately from commit (see
+/// [`HlState::update_output_membership`]); position-based multi-output routing is not modeled (there is
+/// one output).
 impl OutputHandler for HlState {}
+
+/// A client created a `wp_fractional_scale_v1` for a surface. Tell it the compositor's preferred
+/// fractional render scale so it can rasterize crisply on HiDPI without integer-only
+/// `wl_surface.set_buffer_scale`. We source the scale from the primary output's scale (consistent with the
+/// legacy integer `wl_output.scale`); smithay serializes it as `round(scale × 120)`.
+impl FractionalScaleHandler for HlState {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        let scale = self.engine.scene.primary_output().map(|o| o.scale.max(1)).unwrap_or(1) as f64;
+        with_states(&surface, |states| {
+            with_fractional_scale(states, |fractional| {
+                fractional.set_preferred_scale(scale);
+            });
+        });
+    }
+}
 
 smithay::delegate_compositor!(HlState);
 smithay::delegate_shm!(HlState);
@@ -1086,6 +1177,8 @@ smithay::delegate_xdg_decoration!(HlState);
 smithay::delegate_output!(HlState);
 smithay::delegate_seat!(HlState);
 smithay::delegate_data_device!(HlState);
+smithay::delegate_viewporter!(HlState);
+smithay::delegate_fractional_scale!(HlState);
 
 /// Build the compositor's single `wl_output` from the scene's primary [`Output`], creating its global and
 /// pushing the current mode / scale / preferred mode so a binding client receives geometry + mode + scale

@@ -212,6 +212,36 @@ name = "demo_frame_pacing_skip"
 path = "tests/demo_frame_pacing_skip.rs"
 required-features = ["smithay-adapter"]
 
+# Batch-4 exact-event/exact-pixel COMPOSITOR demos on untested Wayland protocol corners (surface
+# semantics + protocol completeness): subsurface sync/desync commit timing, xdg configure/ack roundtrip,
+# wp_viewporter crop+scale, wp_fractional_scale + set_buffer_scale sizing, and wl_output enter/leave. Each
+# drives real in-process wayland-client(s) against the live adapter and asserts EXACT event data / bytes /
+# pixels. Own binaries — each mutates process-global `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "demo_subsurface_sync_desync"
+path = "tests/demo_subsurface_sync_desync.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_xdg_configure_ack_roundtrip"
+path = "tests/demo_xdg_configure_ack_roundtrip.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_viewporter_crop_scale"
+path = "tests/demo_viewporter_crop_scale.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_fractional_scale_buffer_scale"
+path = "tests/demo_fractional_scale_buffer_scale.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_output_enter_leave"
+path = "tests/demo_output_enter_leave.rs"
+required-features = ["smithay-adapter"]
+
 [[test]]
 name = "macos_present_smoke"
 path = "tests/macos_present_smoke.rs"

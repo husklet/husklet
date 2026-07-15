@@ -83,6 +83,18 @@ fn present_item(scene: &Scene, sid: SurfaceId, x: i32, y: i32) -> Option<Present
     let surface = scene.get(sid)?;
     let buffer = surface.buffer?;
     let (w, h) = buffer.logical_size(&surface.viewport);
+    // If a `wp_viewport` src crop and/or dst scale is set, hand the presenter the source rectangle to
+    // sample IN BUFFER PIXELS (logical src × buffer_scale; whole buffer when only a dst scale is set), so
+    // it rasterizes exactly the cropped+scaled region into `w`×`h`. Absent a viewport, present verbatim.
+    let present_crop = if surface.viewport.src.is_some() || surface.viewport.dst.is_some() {
+        let s = buffer.buffer_scale.max(1) as f64;
+        Some(match surface.viewport.src {
+            Some((sx, sy, sw, sh)) => (sx * s, sy * s, sw * s, sh * s),
+            None => (0.0, 0.0, buffer.tex_w as f64, buffer.tex_h as f64),
+        })
+    } else {
+        None
+    };
     let image = PresentableImage {
         surface: sid,
         width: w,
@@ -90,6 +102,7 @@ fn present_item(scene: &Scene, sid: SurfaceId, x: i32, y: i32) -> Option<Present
         format: if buffer.format.is_opaque() { Format::Xrgb8888 } else { Format::Argb8888 },
         gpu: buffer.gpu,
         popup: popup_placement(scene, sid),
+        present_crop,
     };
     let damage = layer_damage(scene, sid, x, y, w, h);
     Some(PresentItem { image, x, y, damage })

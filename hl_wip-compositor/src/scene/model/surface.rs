@@ -102,6 +102,12 @@ pub struct PresentableImage {
     /// If this image is an `xdg_popup` presented as its own native window, where to open it. Inert on
     /// the composite-into-parent path. Mirrors `SurfaceBuffer::popup`.
     pub popup: Option<PopupPlacement>,
+    /// The `wp_viewport` source rectangle to sample from the backing buffer, in BUFFER PIXELS
+    /// `(x, y, w, h)` (i.e. logical `wp_viewport.set_source` already multiplied by `buffer_scale`), when a
+    /// viewport crop and/or destination scale is active on the surface. `None` ⇒ no viewport transform:
+    /// the buffer is presented verbatim. When `Some`, a presenter samples this source region and scales it
+    /// to `width`×`height` (the destination logical size) — the crop+scale a real backend would rasterize.
+    pub present_crop: Option<(f64, f64, f64, f64)>,
 }
 
 /// One node of the scene graph.
