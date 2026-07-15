@@ -339,6 +339,35 @@ pub const GL_RENDERBUFFER_HEIGHT: u32 = 0x8D43;
 pub const GL_RENDERBUFFER_INTERNAL_FORMAT: u32 = 0x8D44;
 pub const GL_RGBA8: u32 = 0x8058;
 
+// GLES3 sized (and lenient) color/depth internal formats accepted by glTexStorage2D/3D +
+// glRenderbufferStorage. glTexStorage* requires a SIZED internal format (the unsized GL_RGB/GL_RGBA are
+// accepted leniently for back-compat). Chrome's SharedImage GL-texture backing allocates its compositor
+// tiles with GL_RGBA8, so rejecting the sized spellings blanks every tile.
+pub const GL_RGB8: u32 = 0x8051;
+pub const GL_RGB565: u32 = 0x8D62;
+pub const GL_RGBA4: u32 = 0x8056;
+pub const GL_RGB5_A1: u32 = 0x8057;
+pub const GL_RGB10_A2: u32 = 0x8059;
+pub const GL_RGB10_A2UI: u32 = 0x906F;
+pub const GL_SRGB8: u32 = 0x8C41;
+pub const GL_SRGB8_ALPHA8: u32 = 0x8C43;
+pub const GL_BGRA8_EXT: u32 = 0x93A1;
+pub const GL_R8: u32 = 0x8229;
+pub const GL_RG8: u32 = 0x822B;
+pub const GL_R16F: u32 = 0x822D;
+pub const GL_RG16F: u32 = 0x822F;
+pub const GL_RGB16F: u32 = 0x881B;
+pub const GL_RGBA16F: u32 = 0x881A;
+pub const GL_R32F: u32 = 0x822E;
+pub const GL_RG32F: u32 = 0x8230;
+pub const GL_RGBA32F: u32 = 0x8814;
+pub const GL_R11F_G11F_B10F: u32 = 0x8C3A;
+pub const GL_RGB9_E5: u32 = 0x8C3D;
+pub const GL_DEPTH_COMPONENT16: u32 = 0x81A5;
+pub const GL_DEPTH_COMPONENT24: u32 = 0x81A6;
+pub const GL_DEPTH_COMPONENT32F: u32 = 0x8CAC;
+pub const GL_DEPTH32F_STENCIL8: u32 = 0x8CAD;
+
 // glGetFramebufferAttachmentParameteriv pnames + object-type values.
 pub const GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE: u32 = 0x8CD0;
 pub const GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME: u32 = 0x8CD1;

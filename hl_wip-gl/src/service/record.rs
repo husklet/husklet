@@ -274,7 +274,13 @@ pub fn tex_storage_2d(ctx: &mut GlContext, target: u32, levels: i32, internalfor
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
-    if levels != 1 || w <= 0 || h <= 0 || !matches!(internalformat, GL_RGB | GL_RGBA) {
+    // glTexStorage2D requires a SIZED internal format (Chrome's tiles use GL_RGBA8); the unsized
+    // GL_RGB/GL_RGBA spellings are accepted leniently. An unmodeled format is GL_INVALID_ENUM.
+    let Some(fmt) = internalformat_to_texture_format(internalformat) else {
+        ctx.set_gl_error(GL_INVALID_ENUM);
+        return;
+    };
+    if levels != 1 || w <= 0 || h <= 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
@@ -294,9 +300,33 @@ pub fn tex_storage_2d(ctx: &mut GlContext, target: u32, levels: i32, internalfor
             return;
         }
     }
-    if !ctx.textures.storage_2d(name, w, h, levels, TextureFormat::Rgba8Unorm) {
+    if !ctx.textures.storage_2d(name, w, h, levels, fmt) {
         ctx.set_gl_error(GL_INVALID_VALUE);
     }
+}
+
+/// Map a `glTexStorage2D`/`glTexStorage3D` (sized) internal format to the neutral IR [`TextureFormat`] the
+/// model materializes. glTexStorage* mandates a *sized* format; this also leniently accepts the unsized
+/// `GL_RGB`/`GL_RGBA` spellings the earlier shim allowed. Returns `None` for a format this driver does not
+/// model (→ `GL_INVALID_ENUM`). Formats without a distinct neutral variant fall back to `Rgba8Unorm` — the
+/// model stores an RGBA8 plane regardless, so the choice only steers an FBO color attachment's surface
+/// format (sRGB / BGRA / float), which the executor honors.
+pub fn internalformat_to_texture_format(internalformat: u32) -> Option<TextureFormat> {
+    Some(match internalformat {
+        // 8-bit unorm RGBA/RGB — sized + the lenient unsized spellings, plus the packed <=8bpc formats.
+        GL_RGBA | GL_RGBA8 | GL_RGB | GL_RGB8 | GL_RGB565 | GL_RGBA4 | GL_RGB5_A1 | GL_RGB10_A2
+        | GL_RGB10_A2UI | GL_R11F_G11F_B10F | GL_RGB9_E5 => TextureFormat::Rgba8Unorm,
+        GL_SRGB8_ALPHA8 | GL_SRGB8 => TextureFormat::Rgba8Srgb,
+        GL_BGRA8_EXT => TextureFormat::Bgra8Unorm,
+        GL_R8 | GL_R16F => TextureFormat::R8Unorm,
+        GL_RG8 | GL_RG16F => TextureFormat::Rg8Unorm,
+        GL_RGB16F | GL_RGBA16F => TextureFormat::Rgba16Float,
+        GL_RG32F | GL_RGBA32F => TextureFormat::Rgba32Float,
+        GL_R32F => TextureFormat::R32Float,
+        GL_DEPTH_COMPONENT16 | GL_DEPTH_COMPONENT24 | GL_DEPTH_COMPONENT32F => TextureFormat::Depth32Float,
+        GL_DEPTH24_STENCIL8 | GL_DEPTH32F_STENCIL8 => TextureFormat::Depth24PlusStencil8,
+        _ => return None,
+    })
 }
 
 /// `glTexStorage3D(target, levels, internalformat, w, h, depth)` — immutable storage for a 2D-array / 3D
