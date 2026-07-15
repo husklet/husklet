@@ -8,7 +8,7 @@
 //! `ingest_buffer`), with the GPU/budget/Cocoa machinery dropped and Smithay reads mapped onto the
 //! neutral [`crate::scene::model`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -230,13 +230,14 @@ pub struct HlState {
     /// output geometry gets an answer consistent with `wl_output`. Kept alive for the life of the state;
     /// the `wl_output` dispatch reads the [`WlOutputHandle`] out of its own per-global data, not this.
     _output_manager: OutputManagerState,
-    /// The single smithay `wl_output` this compositor advertises, driven from the scene's primary
-    /// [`crate::scene::model::Output`] (mode size in px + refresh, integer scale). Kept alive so its
-    /// global keeps advertising; a bind delivers geometry/mode/scale/name/done to the client. (Held as
-    /// the handle that would drive future scene→output changes; not mutated after construction yet.)
-    _wl_output: WlOutputHandle,
-    /// The `wl_output` global id (held so it stays advertised for the state's lifetime).
-    _output_global: GlobalId,
+    /// Every smithay `wl_output` this compositor advertises, one per scene [`crate::scene::model::Output`]
+    /// (mode size in px + refresh, integer scale, layout position), keyed by the neutral [`OutputId`] so
+    /// surface→output membership can pick the right one. The default single-output layout holds exactly one;
+    /// `$HL_OUTPUTS` stands up several. Kept alive so their globals keep advertising; a bind delivers
+    /// geometry/mode/scale/name/done for each to the client.
+    outputs: Vec<(OutputId, WlOutputHandle)>,
+    /// The `wl_output` global ids (held so they stay advertised for the state's lifetime).
+    _output_globals: Vec<GlobalId>,
     /// The neutral policy: scene graph + `PngPresenter` + monotonic clock. All compositing/pacing
     /// decisions live here; `HlState` only translates the wire into calls on it.
     pub engine: Compositor<PngPresenter, MonotonicClock>,
@@ -266,11 +267,12 @@ pub struct HlState {
     /// retained frame ships and its callbacks release even if the client has since gone idle. A later real
     /// commit that presents the same root supersedes the entry (it is cleared on a completing present).
     pending_repaints: HashMap<SurfaceId, u64>,
-    /// Toplevel roots for which a `wl_surface.enter(wl_output)` has been sent and not yet balanced by a
-    /// `leave`. The compositor advertises a single `wl_output`; a toplevel is "on" it while it has a
-    /// committed (mapped) buffer, off it once unmapped. Tracked so enter/leave are sent exactly once per
-    /// transition. (Position-based multi-output routing is not modeled headless — there is one output.)
-    entered_outputs: HashSet<SurfaceId>,
+    /// Toplevel roots that currently hold a `wl_surface.enter(wl_output)`, mapped to WHICH output they
+    /// entered. A toplevel is "on" its selected output (see [`crate::scene::model::Scene::selected_output`])
+    /// while it has a committed (mapped) buffer, off it once unmapped. Tracked so enter/leave are sent
+    /// exactly once per transition — and, under a multi-output layout, so a routing change emits a `leave`
+    /// for the old output and an `enter` for the new one (see [`Self::update_output_membership`]).
+    entered_outputs: HashMap<SurfaceId, OutputId>,
     /// `wp_presentation_feedback` callbacks a client is owed but that have NOT yet been answered, keyed by
     /// the neutral surface the `feedback` request named. Drained from the surface's committed
     /// [`PresentationFeedbackCachedState`] at commit and held (like `pending_callbacks`) until the frame the
@@ -338,18 +340,24 @@ impl HlState {
         let mut seat_state = SeatState::new();
 
         let mut engine = Compositor::new(presenter, MonotonicClock::new());
-        // The advertised output transform (`wl_output.transform`). Normally `Normal`; a host/test can
-        // configure a rotated/flipped output via `$HL_OUTPUT_TRANSFORM` (90/180/270/flipped/…), which
-        // rotates the logical geometry `wl_output` + xdg-output report and the scene sizes toplevels to.
-        let output_transform = env_output_transform();
-        engine
-            .scene
-            .add_output(Output::new(OutputId(1), "HL-0", 1920, 1080, 60_000).with_transform(output_transform));
+        // The scene's output layout. Default: one 1920×1080\@60 output at `(0, 0)` (with the advertised
+        // `wl_output.transform` from `$HL_OUTPUT_TRANSFORM` applied). `$HL_OUTPUTS` overrides it with a
+        // multi-output layout (`WxH@X,Y[*scale]` specs separated by `;`) so a demo can stand two monitors up
+        // side by side with distinct position / mode / scale; existing single-output demos leave it unset.
+        for output in env_outputs() {
+            engine.scene.add_output(output);
+        }
 
-        // Advertise a `wl_output` (+ xdg-output) driven from the scene's primary output, so toolkits that
-        // enumerate outputs for HiDPI geometry / mode / scale / window sizing get a consistent answer.
+        // Advertise a `wl_output` (+ xdg-output) for EACH scene output, so toolkits that enumerate outputs
+        // for HiDPI geometry / mode / scale / window sizing get a consistent answer per monitor.
         let output_manager = OutputManagerState::new_with_xdg_output::<HlState>(dh);
-        let (wl_output, output_global) = build_wl_output(dh, engine.scene.primary_output());
+        let mut outputs: Vec<(OutputId, WlOutputHandle)> = Vec::new();
+        let mut output_globals: Vec<GlobalId> = Vec::new();
+        for scene_output in engine.scene.outputs().to_vec() {
+            let (wl_output, output_global) = build_wl_output(dh, &scene_output);
+            outputs.push((scene_output.id, wl_output));
+            output_globals.push(output_global);
+        }
 
         // Advertise a `wl_seat` with pointer + keyboard capabilities so toolkits that bind it for input
         // succeed in creating `wl_pointer`/`wl_keyboard`. No live input is injected headless.
@@ -385,15 +393,15 @@ impl HlState {
             seat_state,
             seat,
             _output_manager: output_manager,
-            _wl_output: wl_output,
-            _output_global: output_global,
+            outputs,
+            _output_globals: output_globals,
             engine,
             surface_ids: HashMap::new(),
             surfaces_by_id: HashMap::new(),
             popup_grabs: Vec::new(),
             pending_callbacks: HashMap::new(),
             pending_repaints: HashMap::new(),
-            entered_outputs: HashSet::new(),
+            entered_outputs: HashMap::new(),
             pending_presentation: HashMap::new(),
             last_injected_pointer: (0.0, 0.0),
             present_seq: 0,
@@ -690,11 +698,14 @@ impl HlState {
         self.update_output_membership(sid);
     }
 
-    /// Emit `wl_surface.enter` / `wl_surface.leave` for the primary `wl_output` as the toplevel root owning
-    /// `sid` maps (gains a committed buffer) or unmaps (loses it). Subsurfaces/popups follow their root, so
-    /// only the toplevel root is tracked. A no-op when the client has not (yet) bound `wl_output` beyond the
-    /// membership bookkeeping — smithay re-sends `enter` for tracked surfaces when the client binds the
-    /// output later.
+    /// Emit `wl_surface.enter` / `wl_surface.leave` as the toplevel root owning `sid` maps (gains a
+    /// committed buffer), unmaps (loses it), or is routed to a different output. The target output is the
+    /// root's SELECTED output (its position-based route, else the primary — see
+    /// [`crate::scene::model::Scene::selected_output`]). Subsurfaces/popups follow their root, so only the
+    /// toplevel root is tracked. Sent exactly once per transition: a mapped surface whose selected output
+    /// changed gets a `leave` for the old `wl_output` and an `enter` for the new one; an unmapped surface
+    /// gets a `leave` for whichever it was on. A no-op when the client has not (yet) bound the target
+    /// `wl_output` beyond the bookkeeping — smithay re-sends `enter` for tracked surfaces on a later bind.
     fn update_output_membership(&mut self, sid: SurfaceId) {
         let Some(root) = self.engine.scene.window_root(sid) else {
             return;
@@ -706,14 +717,81 @@ impl HlState {
             return;
         };
         let mapped = self.engine.scene.get(root).and_then(|s| s.buffer).is_some();
-        let entered = self.entered_outputs.contains(&root);
-        if mapped && !entered {
-            self._wl_output.enter(&wl_surface);
-            self.entered_outputs.insert(root);
-        } else if !mapped && entered {
-            self._wl_output.leave(&wl_surface);
+        let current = self.entered_outputs.get(&root).copied();
+        let target = self.engine.scene.selected_output(root).map(|o| o.id);
+        if mapped {
+            let Some(target) = target else { return };
+            if current != Some(target) {
+                // Leave the output we were on (if any) before entering the new one, so a client observes a
+                // clean handoff (leave A, then enter B) rather than being on two outputs at once.
+                if let Some(cur) = current {
+                    if let Some(handle) = self.wl_output_handle(cur) {
+                        handle.leave(&wl_surface);
+                    }
+                }
+                if let Some(handle) = self.wl_output_handle(target) {
+                    handle.enter(&wl_surface);
+                }
+                self.entered_outputs.insert(root, target);
+            }
+        } else if let Some(cur) = current {
+            if let Some(handle) = self.wl_output_handle(cur) {
+                handle.leave(&wl_surface);
+            }
             self.entered_outputs.remove(&root);
         }
+    }
+
+    /// The smithay `wl_output` handle for a neutral [`OutputId`], if advertised.
+    fn wl_output_handle(&self, id: OutputId) -> Option<&WlOutputHandle> {
+        self.outputs.iter().find(|(oid, _)| *oid == id).map(|(_, h)| h)
+    }
+
+    /// The primary output's `wl_output` handle (the first advertised) — the fallback the presentation
+    /// feedback names when a surface has no resolvable selected output.
+    fn primary_wl_output(&self) -> Option<&WlOutputHandle> {
+        self.outputs.first().map(|(_, h)| h)
+    }
+
+    /// The integer scale of the output surface `sid`'s window root is displayed on (its selected output,
+    /// else the primary). Sources the fractional-scale hint so a surface on a HiDPI output learns a larger
+    /// preferred scale than one on a scale-1 output.
+    fn output_scale_for(&self, sid: SurfaceId) -> i32 {
+        let root = self.engine.scene.window_root(sid).unwrap_or(sid);
+        self.engine.scene.selected_output(root).map(|o| o.scale.max(1)).unwrap_or(1)
+    }
+
+    /// (Re)send `wp_fractional_scale_v1.preferred_scale` for `sid` from its current output's scale. A no-op
+    /// if the client created no `wp_fractional_scale_v1` on the surface, or if the value is unchanged
+    /// (smithay's `set_preferred_scale` dedups) — so it is safe to call on every route change.
+    fn send_preferred_fractional_scale(&self, sid: SurfaceId) {
+        let scale = self.output_scale_for(sid) as f64;
+        if let Some(surface) = self.surfaces_by_id.get(&sid) {
+            with_states(surface, |states| {
+                with_fractional_scale(states, |fractional| {
+                    fractional.set_preferred_scale(scale);
+                });
+            });
+        }
+    }
+
+    /// Route the toplevel at index `n` (ascending surface-id order) to the output whose logical rectangle
+    /// contains global logical point `(x, y)`, then emit the resulting `wl_surface.leave`/`enter` and
+    /// refresh its preferred fractional scale. The host/window-manager seam a multi-output demo drives to
+    /// "place" a window on a monitor: real position-based routing (the compositor decides which output a
+    /// window is on from where it sits), reduced to the smallest correct form — a point tested against each
+    /// output's `logical_rect`. A point outside every output, or an out-of-range index, is ignored.
+    fn move_toplevel_to_point(&mut self, n: usize, x: i32, y: i32) {
+        let Some(root) = self.toplevel_at(n) else { return };
+        let Some(output_id) = self.output_at_point(x, y) else { return };
+        self.engine.scene.route_surface_to_output(root, output_id);
+        self.update_output_membership(root);
+        self.send_preferred_fractional_scale(root);
+    }
+
+    /// The neutral [`OutputId`] whose logical rectangle contains global logical point `(x, y)`, if any.
+    fn output_at_point(&self, x: i32, y: i32) -> Option<OutputId> {
+        self.engine.scene.outputs().iter().find(|o| o.contains_point(x, y)).map(|o| o.id)
     }
 
     /// Act on the pacing outcome of a just-driven present for window root `root`: fire, retain, or drop
@@ -847,17 +925,33 @@ impl HlState {
         let refresh_mhz = self.engine.scene.primary_output().map(|o| o.refresh_mhz.max(1)).unwrap_or(60_000);
         let refresh = Refresh::fixed(std::time::Duration::from_nanos(1_000_000_000_000u64 / refresh_mhz as u64));
         for sid in targets {
+            // Name the output this surface's frame presented on: its currently-entered output, else its
+            // selected output, else the primary. Cloned (smithay's `Output` is an `Arc` handle) so the
+            // `present_seq` / `pending_presentation` mutations below don't conflict with the borrow.
+            let root = self.engine.scene.window_root(sid).unwrap_or(sid);
+            let output_handle = self
+                .entered_outputs
+                .get(&root)
+                .copied()
+                .or_else(|| self.engine.scene.selected_output(root).map(|o| o.id))
+                .and_then(|id| self.wl_output_handle(id))
+                .or_else(|| self.primary_wl_output())
+                .cloned();
             let Some(feedbacks) = self.pending_presentation.remove(&sid) else { continue };
             for feedback in feedbacks {
                 if presented {
-                    self.present_seq += 1;
-                    feedback.presented(
-                        &self._wl_output,
-                        now,
-                        refresh,
-                        self.present_seq,
-                        wp_presentation_feedback::Kind::Vsync,
-                    );
+                    if let Some(output_handle) = &output_handle {
+                        self.present_seq += 1;
+                        feedback.presented(
+                            output_handle,
+                            now,
+                            refresh,
+                            self.present_seq,
+                            wp_presentation_feedback::Kind::Vsync,
+                        );
+                    } else {
+                        feedback.discarded();
+                    }
                 } else {
                     feedback.discarded();
                 }
@@ -918,6 +1012,13 @@ pub enum InputCommand {
     /// Press/release a key by EVDEV keycode (Linux `input-event-codes`, e.g. `30` = KEY_A) — the same
     /// value the client receives on `wl_keyboard.key`.
     Key { keycode: u32, pressed: bool },
+    /// Route the toplevel at index `n` (ascending surface-id order, 0 = earliest-mapped) to the output
+    /// whose logical rectangle contains global logical point `(x, y)`, emitting the resulting
+    /// `wl_surface.leave`/`enter` and refreshing its preferred fractional scale. The host/window-manager
+    /// seam a multi-output demo drives to "place" a window on a monitor by position (see
+    /// [`HlState::move_toplevel_to_point`]). A point outside every output — or an out-of-range index — is
+    /// ignored. Under the default single-output layout every on-screen point resolves to that one output.
+    MoveToplevelToPoint { index: usize, x: i32, y: i32 },
     /// Give keyboard focus to the topmost toplevel (emits `wl_keyboard.leave`/`enter` + keymap).
     FocusTopmostKeyboard,
     /// Give keyboard focus to the toplevel at index `n` in ascending surface-id order (0 = the
@@ -937,6 +1038,7 @@ impl HlState {
             InputCommand::PointerMotion { x, y } => self.inject_pointer_motion(x, y),
             InputCommand::PointerButton { button, pressed } => self.inject_pointer_button(button, pressed),
             InputCommand::PointerAxis { horizontal, vertical } => self.inject_pointer_axis(horizontal, vertical),
+            InputCommand::MoveToplevelToPoint { index, x, y } => self.move_toplevel_to_point(index, x, y),
             InputCommand::Key { keycode, pressed } => self.inject_key(keycode, pressed),
             InputCommand::FocusTopmostKeyboard => {
                 let target = self.topmost_toplevel();
@@ -1433,8 +1535,9 @@ impl XdgDecorationHandler for HlState {
 
 /// A client bound `wl_output`. Smithay has already sent geometry/mode/scale/name/done. Surface→output
 /// membership (`wl_surface.enter`/`leave`) is driven separately from commit (see
-/// [`HlState::update_output_membership`]); position-based multi-output routing is not modeled (there is
-/// one output).
+/// [`HlState::update_output_membership`]): a surface enters its SELECTED output, and a position-based route
+/// (`InputCommand::MoveToplevelToPoint` → [`HlState::move_toplevel_to_point`]) moves it between the outputs
+/// a multi-output `$HL_OUTPUTS` layout advertises. The default layout is a single output.
 impl OutputHandler for HlState {}
 
 /// A client created a `wp_fractional_scale_v1` for a surface. Tell it the compositor's preferred
@@ -1443,12 +1546,19 @@ impl OutputHandler for HlState {}
 /// legacy integer `wl_output.scale`); smithay serializes it as `round(scale × 120)`.
 impl FractionalScaleHandler for HlState {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
-        let scale = self.engine.scene.primary_output().map(|o| o.scale.max(1)).unwrap_or(1) as f64;
-        with_states(&surface, |states| {
-            with_fractional_scale(states, |fractional| {
-                fractional.set_preferred_scale(scale);
-            });
-        });
+        // Source the preferred scale from the surface's OWN output (its selected output, else the primary),
+        // so a surface already routed to a HiDPI output learns the larger scale — not just the primary's.
+        match self.sid(&surface) {
+            Some(sid) => self.send_preferred_fractional_scale(sid),
+            None => {
+                let scale = self.engine.scene.primary_output().map(|o| o.scale.max(1)).unwrap_or(1) as f64;
+                with_states(&surface, |states| {
+                    with_fractional_scale(states, |fractional| {
+                        fractional.set_preferred_scale(scale);
+                    });
+                });
+            }
+        }
     }
 }
 
@@ -1561,23 +1671,17 @@ smithay::delegate_xdg_activation!(HlState);
 smithay::delegate_idle_inhibit!(HlState);
 smithay::delegate_content_type!(HlState);
 
-/// Build the compositor's single `wl_output` from the scene's primary [`Output`], creating its global and
-/// pushing the current mode / scale / preferred mode so a binding client receives geometry + mode + scale
-/// + name + done consistent with what compose/present uses. Falls back to a 1080p\@60 output if the scene
-/// has none registered (it always does, but keep this total).
-fn build_wl_output(dh: &DisplayHandle, scene: Option<&Output>) -> (WlOutputHandle, GlobalId) {
+/// Build one `wl_output` from a scene [`Output`], creating its global and pushing the current mode / scale
+/// / transform / LAYOUT POSITION + preferred mode so a binding client receives geometry (position +
+/// transform) + mode + scale + name + done consistent with what compose/present uses. Called once per
+/// scene output so a multi-output layout advertises a distinct `wl_output` per monitor.
+fn build_wl_output(dh: &DisplayHandle, scene: &Output) -> (WlOutputHandle, GlobalId) {
     // Values sourced from the scene so `wl_output` reports exactly what the scene composites onto.
-    let (name, mode_w, mode_h, refresh_mhz, scale, transform) = match scene {
-        Some(o) => (
-            o.name.clone(),
-            o.mode_w,
-            o.mode_h,
-            o.refresh_mhz,
-            o.scale.max(1),
-            buffer_transform_to_wl(o.transform),
-        ),
-        None => ("HL-0".to_string(), 1920, 1080, 60_000, 1, Transform::Normal),
-    };
+    let name = scene.name.clone();
+    let (mode_w, mode_h) = (scene.mode_w, scene.mode_h);
+    let refresh_mhz = scene.refresh_mhz;
+    let scale = scene.scale.max(1);
+    let transform = buffer_transform_to_wl(scene.transform);
 
     // Physical size in mm assuming ~96 dpi (25.4 mm/inch) — a plausible value for toolkits that derive DPI
     // from it; the pixel mode + scale below are the load-bearing fidelity, not the millimetre size.
@@ -1595,13 +1699,15 @@ fn build_wl_output(dh: &DisplayHandle, scene: Option<&Output>) -> (WlOutputHandl
     );
     let global = output.create_global::<HlState>(dh);
 
-    // `refresh` on a smithay `Mode` is millihertz (same unit as the scene's `refresh_mhz`).
+    // `refresh` on a smithay `Mode` is millihertz (same unit as the scene's `refresh_mhz`). The location is
+    // the output's layout position — smithay reports it as `wl_output.geometry.x/y` and derives xdg-output's
+    // `logical_position` from it, so a multi-output layout advertises each monitor at its own coordinates.
     let mode = OutputMode { size: (mode_w, mode_h).into(), refresh: refresh_mhz as i32 };
     output.change_current_state(
         Some(mode),
         Some(transform),
         Some(Scale::Integer(scale)),
-        Some((0, 0).into()),
+        Some((scene.pos_x, scene.pos_y).into()),
     );
     output.set_preferred(mode);
 
@@ -1719,6 +1825,73 @@ fn env_output_transform() -> BufferTransform {
             BufferTransform::Normal
         }
     }
+}
+
+/// The scene's output layout, from `$HL_OUTPUTS` (default: one output).
+///
+/// Unset (the default): a single `1920×1080@60` output "HL-0" at `(0, 0)`, carrying the advertised
+/// `wl_output.transform` from `$HL_OUTPUT_TRANSFORM` — byte-for-byte the pre-multi-output behaviour, so
+/// every existing single-output demo is unaffected.
+///
+/// Set: a `;`-separated list of output specs, each `WxH@X,Y[*S]` — pixel mode `W×H`, layout position
+/// `(X, Y)`, optional integer scale `S` (default 1). Refresh is fixed at 60 Hz. Outputs are numbered
+/// `HL-0`, `HL-1`, … with ids `1, 2, …`; the FIRST is the primary (new surfaces enter it). Example:
+/// `HL_OUTPUTS="1920x1080@0,0;2560x1440@1920,0*2"` — a scale-1 1080p output beside a scale-2 1440p one.
+/// A malformed spec is skipped with a warning; if nothing parses, the single default is used.
+fn env_outputs() -> Vec<Output> {
+    let raw = match std::env::var("HL_OUTPUTS") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => {
+            return vec![Output::new(OutputId(1), "HL-0", 1920, 1080, 60_000)
+                .with_transform(env_output_transform())];
+        }
+    };
+
+    let mut outputs = Vec::new();
+    for (i, spec) in raw.split(';').map(str::trim).filter(|s| !s.is_empty()).enumerate() {
+        match parse_output_spec(spec, i as u32) {
+            Some(o) => outputs.push(o),
+            None => eprintln!("hl_wip-compositor: ignoring malformed HL_OUTPUTS spec {spec:?}"),
+        }
+    }
+    if outputs.is_empty() {
+        eprintln!("hl_wip-compositor: HL_OUTPUTS parsed no outputs, using the single default");
+        return vec![Output::new(OutputId(1), "HL-0", 1920, 1080, 60_000)
+            .with_transform(env_output_transform())];
+    }
+    outputs
+}
+
+/// Parse one `$HL_OUTPUTS` spec `WxH@X,Y[*S]` into an [`Output`] with id/name index `i` (0 → `HL-0`,
+/// id `1`). Returns `None` on any malformed field.
+fn parse_output_spec(spec: &str, i: u32) -> Option<Output> {
+    // Split off an optional `*scale` suffix first.
+    let (geom, scale) = match spec.split_once('*') {
+        Some((g, s)) => (g, s.trim().parse::<i32>().ok().filter(|&s| s > 0)?),
+        None => (spec, 1),
+    };
+    // `WxH@X,Y` — the `@X,Y` position is optional (defaults to origin).
+    let (mode, pos) = match geom.split_once('@') {
+        Some((m, p)) => (m, Some(p)),
+        None => (geom, None),
+    };
+    let (w, h) = mode.trim().split_once('x')?;
+    let (w, h) = (w.trim().parse::<i32>().ok()?, h.trim().parse::<i32>().ok()?);
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let (x, y) = match pos {
+        Some(p) => {
+            let (x, y) = p.trim().split_once(',')?;
+            (x.trim().parse::<i32>().ok()?, y.trim().parse::<i32>().ok()?)
+        }
+        None => (0, 0),
+    };
+    Some(
+        Output::new(OutputId(i + 1), format!("HL-{i}"), w, h, 60_000)
+            .with_position(x, y)
+            .with_scale(scale),
+    )
 }
 
 /// Map the neutral [`BufferTransform`] onto Smithay's `utils::Transform` (what a `wl_output` advertises).

@@ -246,6 +246,26 @@ name = "demo_output_enter_leave"
 path = "tests/demo_output_enter_leave.rs"
 required-features = ["smithay-adapter"]
 
+# Multi-output (multi-monitor) demos: stand the compositor up on a two-output layout (via `$HL_OUTPUTS`)
+# and drive a real in-process wayland-client that enumerates both `wl_output`s and asserts each monitor's
+# exact geometry/mode/scale + xdg-output logical position/size; that a surface's `wl_surface.enter` names
+# the correct output as it is routed (by position) between them; and that its preferred fractional scale
+# tracks the per-output scale. Own binaries — each mutates process-global env.
+[[test]]
+name = "demo_multi_output_enumeration"
+path = "tests/demo_multi_output_enumeration.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_surface_enter_correct_output"
+path = "tests/demo_surface_enter_correct_output.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_per_output_scale"
+path = "tests/demo_per_output_scale.rs"
+required-features = ["smithay-adapter"]
+
 # Output + buffer transform (rotate/flip) demos: a real in-process wayland-client sets
 # `wl_surface.set_buffer_transform` (90/180/270 + Flipped/Flipped_90) and asserts the composited output is
 # EXACTLY rotated/flipped (pixel-exact corner mapping + swapped logical size), and stands the compositor up

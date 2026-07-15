@@ -22,6 +22,13 @@ pub struct Output {
     /// Refresh rate in millihertz (e.g. `60_000` = 60 Hz), mirroring `OUTPUT_REFRESH_MHZ`.
     pub refresh_mhz: i64,
     pub scale: i32,
+    /// This output's top-left position in the global LOGICAL layout (`wl_output.geometry.x/y` and
+    /// xdg-output `logical_position`). A single-output compositor sits at `(0, 0)`; a multi-output layout
+    /// places each output side by side (e.g. a 1920-wide output at `(0, 0)` and its neighbour at
+    /// `(1920, 0)`). Position-based surface→output routing (which `wl_output` a surface enters) tests a
+    /// point against each output's `logical_rect`.
+    pub pos_x: i32,
+    pub pos_y: i32,
     /// `wl_output.transform` this output advertises — how the compositor's logical space is rotated/
     /// flipped onto the physical panel. A 90°/270° transform swaps the logical width/height a client
     /// lays out in (and that `wl_output`/xdg-output report).
@@ -37,6 +44,8 @@ impl Output {
             mode_h,
             refresh_mhz,
             scale: 1,
+            pos_x: 0,
+            pos_y: 0,
             transform: BufferTransform::Normal,
         }
     }
@@ -46,9 +55,29 @@ impl Output {
         self
     }
 
+    /// Place this output's top-left at `(x, y)` in the global logical layout.
+    pub fn with_position(mut self, x: i32, y: i32) -> Output {
+        self.pos_x = x;
+        self.pos_y = y;
+        self
+    }
+
     pub fn with_transform(mut self, transform: BufferTransform) -> Output {
         self.transform = transform;
         self
+    }
+
+    /// This output's rectangle in the global logical layout — its `(pos_x, pos_y)` origin plus its
+    /// [`Self::logical_size`]. The bound position-based routing tests a global logical point against.
+    pub fn logical_rect(&self) -> (i32, i32, i32, i32) {
+        let (w, h) = self.logical_size();
+        (self.pos_x, self.pos_y, w, h)
+    }
+
+    /// Whether global logical point `(x, y)` falls inside this output's [`Self::logical_rect`].
+    pub fn contains_point(&self, x: i32, y: i32) -> bool {
+        let (ox, oy, w, h) = self.logical_rect();
+        x >= ox && y >= oy && x < ox + w && y < oy + h
     }
 
     /// The output's logical size `(w, h)` — device mode divided by the integer scale, each clamped to
