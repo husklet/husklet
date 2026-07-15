@@ -437,6 +437,13 @@ impl GlContext {
         }
     }
 
+    /// The shared placeholder sampler's IR id (`0` = not yet created). The frame builder must NOT free this
+    /// among a frame's per-draw ephemeral samplers — it is created once and reused across every frame (see
+    /// [`Self::default_placeholder`]).
+    pub fn placeholder_sampler_ir(&self) -> u32 {
+        self.default_placeholder_samp
+    }
+
     /// The stable IR shader-module ids `(vs_shader_ir, fs_shader_ir)` a linked render program (`prog`) at
     /// link generation `gen` lowers to. Returns `(vs_ir, fs_ir, needs_create)`: `needs_create` is true on the
     /// first sight of this program (or after a relink bumped `gen`), so the frame builder emits the two
@@ -486,7 +493,10 @@ impl GlContext {
                 return (ir, false);
             }
             // Content changed: a fresh id carries the new upload (the old resident id is simply abandoned —
-            // content updates to a given texture are rare, so this does not accumulate).
+            // content updates to a given texture are rare, so this does not accumulate). NOTE: the old id is
+            // NOT retired-for-destroy here — a draw retained across a NACKed swap may still reference it (the
+            // executor's NACK-retain keeps the old frame's draws live), and destroying it would then
+            // `UnknownId` the retained frame. Bounding this residency needs deferral past the last reference.
             hl_log::hl_count!(hl_log::tag::GL, "tex_upload");
             let ir = self.alloc_texture_ir();
             self.tex_ir_cache.insert(gl_name, (ir, gen));
@@ -607,6 +617,17 @@ impl GlContext {
             self.fbo_targets.insert(gl_tex, (surface, texture));
             (surface, texture, true)
         }
+    }
+
+    /// The persistent render-target texture IR a prior render pass wrote for the FBO whose color attachment
+    /// is GL texture `gl_tex`, if one has been materialized (via [`Self::fbo_target`]). Used by the frame
+    /// builder to sample an offscreen attachment's RENDERED pixels ACROSS frames — e.g. after a
+    /// `glFlush`/`glFinish` executed the offscreen tile passes into their targets (see
+    /// [`crate::service::swap::flush_offscreen`]) and a LATER window pass composites them. Returns `None`
+    /// when `gl_tex` has never been an FBO render target (so the caller keeps its normal upload/placeholder
+    /// resolution). Read-only (does not mint) so a mere sample never allocates a target.
+    pub fn resident_fbo_target_tex(&self, gl_tex: u32) -> Option<u32> {
+        self.fbo_targets.get(&gl_tex).map(|&(_surface, texture)| texture)
     }
 
     /// The depth-buffer texture IR for the render pass whose COLOR target is texture IR `color_tex`, at the

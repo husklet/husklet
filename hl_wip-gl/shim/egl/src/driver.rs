@@ -4229,16 +4229,32 @@ use core::sync::atomic::{AtomicU64, Ordering};
 static SUBMIT_SERIAL: AtomicU64 = AtomicU64::new(0);
 static COMPLETE_SERIAL: AtomicU64 = AtomicU64::new(0);
 
-/// `glFlush` — NONBLOCKING: advance the submission serial (hand queued work off) and return immediately.
+/// `glFlush` — NONBLOCKING: advance the submission serial, and incrementally flush any pending OFFSCREEN
+/// draw work (see [`swap::flush_offscreen`]) so a multi-context app (Chrome's gpu-raster workers render into
+/// FBOs and `glFlush` but never `eglSwapBuffers`) does not accumulate an unbounded draw-list into the
+/// eventual swap frame. Window (default-framebuffer) draws are retained for `eglSwapBuffers`.
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFlush() {
     SUBMIT_SERIAL.fetch_add(1, Ordering::SeqCst);
+    with(|s| {
+        if let Err(e) = swap::flush_offscreen(&mut s.ctx, &mut s.sink) {
+            // A flush is best-effort ordering, not a frame boundary: register the GL error but do not abort
+            // (the retained draws surface again at the next flush/swap).
+            s.set_egl_error(egl_error_from_gpu_error(&e));
+        }
+    });
 }
-/// `glFinish` — BLOCKING: advance the submission serial, then catch completion up to it (this deferred
+/// `glFinish` — BLOCKING: advance the submission serial, incrementally flush pending OFFSCREEN work (same as
+/// `glFlush` — bounds a multi-context app's draw-list), then catch completion up to the target (this deferred
 /// model completes synchronously — there is no in-flight host executor to wait on between swaps).
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFinish() {
     let target = SUBMIT_SERIAL.fetch_add(1, Ordering::SeqCst) + 1;
+    with(|s| {
+        if let Err(e) = swap::flush_offscreen(&mut s.ctx, &mut s.sink) {
+            s.set_egl_error(egl_error_from_gpu_error(&e));
+        }
+    });
     let mut done = COMPLETE_SERIAL.load(Ordering::SeqCst);
     while done < target {
         match COMPLETE_SERIAL.compare_exchange(done, target, Ordering::SeqCst, Ordering::SeqCst) {

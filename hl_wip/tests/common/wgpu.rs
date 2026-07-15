@@ -115,6 +115,33 @@ impl WgpuHost {
     }
 }
 
+/// Short kind tag for a `Cmd` (diagnostic NACK histograms).
+fn cmd_kind(c: &Cmd) -> &'static str {
+    match c {
+        Cmd::CreateBuffer(..) => "CreateBuffer",
+        Cmd::DestroyBuffer(..) => "DestroyBuffer",
+        Cmd::WriteBuffer { .. } => "WriteBuffer",
+        Cmd::CreateTexture(..) => "CreateTexture",
+        Cmd::DestroyTexture(..) => "DestroyTexture",
+        Cmd::CreateSampler(..) => "CreateSampler",
+        Cmd::DestroySampler(..) => "DestroySampler",
+        Cmd::CreateShader { .. } => "CreateShader",
+        Cmd::DestroyShader(..) => "DestroyShader",
+        Cmd::CreateRenderPipeline(..) => "CreateRenderPipeline",
+        Cmd::CreateComputePipeline(..) => "CreateComputePipeline",
+        Cmd::DestroyPipeline(..) => "DestroyPipeline",
+        Cmd::CreateBindGroup(..) => "CreateBindGroup",
+        Cmd::DestroyBindGroup(..) => "DestroyBindGroup",
+        Cmd::CreateSurface(..) => "CreateSurface",
+        Cmd::DestroySurface(..) => "DestroySurface",
+        Cmd::CreateFence(..) => "CreateFence",
+        Cmd::DestroyFence(..) => "DestroyFence",
+        Cmd::Submit(..) => "Submit",
+        Cmd::WaitFence { .. } => "WaitFence",
+        Cmd::Present { .. } => "Present",
+    }
+}
+
 impl ConnectionHandler for WgpuHost {
     fn submit(&mut self, _header: &SubmitHeader, batch: &[Cmd]) -> Verdict {
         self.submits.fetch_add(1, Ordering::Relaxed);
@@ -132,7 +159,21 @@ impl ConnectionHandler for WgpuHost {
                 self.capture(&exec);
                 Verdict::Ack
             }
-            Err(_) => Verdict::Nack,
+            Err(e) => {
+                // Surface the exact executor rejection reason (which frame op / resource / pipeline it
+                // choked on). The reason comes FROM hl_gpu::runtime::submit (→ WgpuExecutor); we only read
+                // and log it here so a NACK is diagnosable instead of an opaque `ack=0`.
+                let n = batch.len();
+                let kinds: std::collections::BTreeMap<&str, usize> = batch.iter().fold(
+                    std::collections::BTreeMap::new(),
+                    |mut m, c| {
+                        *m.entry(cmd_kind(c)).or_insert(0) += 1;
+                        m
+                    },
+                );
+                eprintln!("WGPU_HOST_NACK reason={e:?} frame_cmds={n} bytes={frame_bytes} kinds={kinds:?}");
+                Verdict::Nack
+            }
         }
     }
 

@@ -81,7 +81,54 @@ fn log_frame(w: i32, h: i32, draws: usize, passes: usize, cmds: usize, bytes: u6
 
 /// Assemble the frame's `Cmd` stream from the recorded draw-list, or `None` if there is nothing (or
 /// nothing yet supported) to present. Mints the IR ids it needs from `ctx`.
+///
+/// Wraps [`build_frame_ir_raw`] and then FREES the frame's PER-DRAW EPHEMERAL resources: the single-use
+/// `COPY_SRC` texture-staging buffers, the per-draw implicit `UNIFORM` uniform buffers, the per-draw bind
+/// groups, and the per-draw samplers (except the shared placeholder). Each is created + consumed ENTIRELY
+/// within THIS frame's own `Submit`s and never referenced by a later frame, so a `Destroy*` appended AFTER
+/// the submits (so the GPU work has run) and BEFORE the swap's `Present` (the builder's cmds carry no
+/// `Present` — swap appends that) makes their residency net to ZERO within the transactional per-frame
+/// charge (see `hl_wip-gpu/src/runtime/service/account.rs::charge_frame`). Without this a long-running
+/// multi-frame app (Chrome) leaks a uniform buffer + bind group + sampler PER DRAW every frame plus ~25 MiB
+/// of staging per flushed frame, and the executor NACKs `ResourceLimit("connection residency")`. Only
+/// FRAME-LOCAL resources are freed — persistent cached resources (vertex/index buffers, sampled textures,
+/// pipelines, shaders, render targets) are re-referenced by id next frame and left intact. (Cross-frame
+/// texture retirement is NOT done here: a draw retained across a NACKed swap can still reference an
+/// abandoned/deleted id, so destroying it would `UnknownId` the retained frame — a deeper deferral gap.)
 pub fn build_frame_ir(ctx: &mut GlContext) -> Option<Frame> {
+    let mut frame = build_frame_ir_raw(ctx)?;
+    // Append `Destroy*` for every PER-DRAW EPHEMERAL resource this frame created — the ones referenced ONLY
+    // within the frame's own `Submit`s and never reused across frames: the single-use `COPY_SRC` texture
+    // staging buffers, the per-draw implicit `UNIFORM` uniform buffers, the per-draw bind groups, and the
+    // per-draw samplers (EXCEPT the shared placeholder sampler, which persists). Freed AFTER the submits and
+    // BEFORE the swap's `Present` (the builder's cmds carry no `Present`), so their residency nets to ZERO in
+    // the transactional per-frame charge — without this a long-running app (Chrome) leaks a uniform buffer +
+    // sampler + bind group PER DRAW every frame and exhausts the connection residency + object caps. The
+    // PERSISTENT resources (cached vertex/index buffers, cached sampled textures, pipelines, shaders, render
+    // targets, the placeholder texture+sampler) are NOT freed — they are re-referenced by id next frame.
+    use hl_gpu::protocol::model::enums::buffer_usage;
+    let placeholder_samp = ctx.placeholder_sampler_ir();
+    let mut cleanup: Vec<Cmd> = Vec::new();
+    for c in &frame.cmds {
+        match c {
+            Cmd::CreateBuffer(id, d)
+                if d.usage == buffer_usage::COPY_SRC || d.usage == buffer_usage::UNIFORM =>
+            {
+                cleanup.push(Cmd::DestroyBuffer(*id));
+            }
+            Cmd::CreateBindGroup(id, _) => cleanup.push(Cmd::DestroyBindGroup(*id)),
+            Cmd::CreateSampler(id, _) if *id != placeholder_samp => {
+                cleanup.push(Cmd::DestroySampler(*id))
+            }
+            _ => {}
+        }
+    }
+    frame.cmds.extend(cleanup);
+    Some(frame)
+}
+
+/// The raw frame assembler (pre-residency-cleanup). See [`build_frame_ir`].
+fn build_frame_ir_raw(ctx: &mut GlContext) -> Option<Frame> {
     if !ctx.surf.have || ctx.draws.is_empty() {
         return None;
     }
@@ -685,6 +732,23 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, de
             cmds.push(Cmd::CreateSampler(samp_ir, sampler_desc_for(&t, &d.samp_objs[unit])));
             texbinds.push(TexBind { slot, tex_ir: rt_ir, samp_ir, stage_ir: 0, w: t.w as u32, h: t.h as u32 });
             continue;
+        }
+        // Cross-FRAME FBO sampling: if this GL texture has no uploaded CPU pixels but IS the color attachment
+        // a PRIOR frame's offscreen pass rendered into (e.g. a `glFlush`/`glFinish` executed the tile passes
+        // into their persistent render targets — see `crate::service::swap::flush_offscreen`), bind THAT
+        // resident render-target texture (its rendered pixels) rather than the blank placeholder. Only for a
+        // texture with no CPU data, so an ordinary sampled texture (which the `has_data()` arm below uploads)
+        // is never diverted — keeping the single-frame apps byte-identical.
+        let no_cpu_data = ctx.textures.get(gl_tex).map(|t| !t.has_data()).unwrap_or(false);
+        if no_cpu_data {
+            if let Some(rt_ir) = ctx.resident_fbo_target_tex(gl_tex) {
+                if let Some(t) = ctx.textures.get(gl_tex).cloned() {
+                    let samp_ir = ctx.alloc_sampler_ir();
+                    cmds.push(Cmd::CreateSampler(samp_ir, sampler_desc_for(&t, &d.samp_objs[unit])));
+                    texbinds.push(TexBind { slot, tex_ir: rt_ir, samp_ir, stage_ir: 0, w: t.w as u32, h: t.h as u32 });
+                    continue;
+                }
+            }
         }
         let t = match ctx.textures.get(gl_tex) {
             Some(t) if t.has_data() => t.clone(),
