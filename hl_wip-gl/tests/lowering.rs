@@ -190,6 +190,63 @@ fn textured_quad_uploads_buffer_and_texture() {
     assert!(batch.iter().any(|c| matches!(c, Cmd::CreateRenderPipeline(_, _))));
 }
 
+/// `glDeleteTextures`/`glDeleteBuffers` of a resource whose resident IR was created in a prior frame RETIRE
+/// that residency: the next submitted frame carries a matching `DestroyTexture`/`DestroyBuffer` for the exact
+/// ids, so a long-running multi-frame app (Chrome) does not climb the host's per-connection residency ledger
+/// to its cap. Bounded-residency is the fix for the Chrome swap-frame `ResourceLimit("connection residency")`
+/// NACK. A single-frame app that deletes mid-frame still renders (the destroy rides the frame's tail, after
+/// its Submits) — proven by the first frame lowering normally below.
+#[test]
+fn deleted_texture_and_buffer_retire_their_resident_ir() {
+    let mut c = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+
+    // Frame 1: a textured quad — creates the resident sampled-texture + vertex-buffer IR ids.
+    record_textured_quad(&mut c);
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch0 = sink.batches[0].clone();
+    // The resident sampled texture is the SAMPLED|COPY_DST CreateTexture (not a render target / placeholder;
+    // here the 2x2 texture with real pixels is the only sampled upload).
+    let tex_ir = batch0
+        .iter()
+        .find_map(|c| match c {
+            Cmd::CreateTexture(id, d)
+                if d.usage
+                    == (hl_gpu::protocol::model::enums::texture_usage::SAMPLED
+                        | hl_gpu::protocol::model::enums::texture_usage::COPY_DST)
+                    && d.width == 2 && d.height == 2 =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .expect("resident sampled texture");
+    let vbo_ir = batch0
+        .iter()
+        .find_map(|c| match c {
+            Cmd::CreateBuffer(id, d) if d.usage == buffer_usage::VERTEX => Some(*id),
+            _ => None,
+        })
+        .expect("resident vertex buffer");
+
+    // Frame 1 must NOT destroy these persistent resources (they are re-referenced next frame).
+    assert!(!batch0.contains(&Cmd::DestroyTexture(tex_ir)), "frame-1 must not retire a live texture");
+    assert!(!batch0.contains(&Cmd::DestroyBuffer(vbo_ir)), "frame-1 must not retire a live buffer");
+
+    // Now delete both GL objects. The next swap (no draws) submits a standalone destroy batch.
+    // The GL names: the textured-quad helper mints vbo=1, tex=1 (first of each kind).
+    record::delete_texture(&mut c, 1);
+    record::delete_buffer(&mut c, 1);
+    assert!(c.has_pending_destroys(), "delete must queue persistent destroys");
+
+    // A swap with nothing to draw returns false but still flushes the queued destroys.
+    assert!(!swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let destroy_batch = sink.batches.last().unwrap();
+    assert!(destroy_batch.contains(&Cmd::DestroyTexture(tex_ir)), "deleted texture's IR is destroyed: {destroy_batch:?}");
+    assert!(destroy_batch.contains(&Cmd::DestroyBuffer(vbo_ir)), "deleted buffer's IR is destroyed: {destroy_batch:?}");
+    assert!(!c.has_pending_destroys(), "destroys cleared after a successful submit");
+}
+
 /// A linked program's shader modules + render pipeline are created ONCE and re-referenced by their stable
 /// IR ids on every later frame/draw that reuses the program (the program-keyed residency cache), so a reused
 /// GskGpu program costs ZERO host shader compiles + pipeline builds after the first frame — the fix for the

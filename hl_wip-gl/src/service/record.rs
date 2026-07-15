@@ -70,6 +70,8 @@ pub fn delete_buffer(ctx: &mut GlContext, name: u32) -> bool {
     if ctx.element_buffer == name {
         ctx.element_buffer = 0;
     }
+    // Retire the buffer's resident IR ids (queued Destroy for the next frame) so its residency is reclaimed.
+    ctx.retire_buffer(name);
     ctx.buffers.delete(name)
 }
 
@@ -486,6 +488,9 @@ pub fn delete_texture(ctx: &mut GlContext, name: u32) -> bool {
             *u = 0;
         }
     }
+    // Retire the texture's resident IR ids (sampled texture + FBO render target + depth), queued Destroy for
+    // the next frame, so Chrome's fresh-tile churn does not climb the host residency ledger to its cap.
+    ctx.retire_texture(name);
     ctx.textures.delete(name)
 }
 
@@ -651,6 +656,8 @@ pub fn delete_renderbuffer(ctx: &mut GlContext, name: u32) -> bool {
     match ctx.renderbuffers.delete(name) {
         Some(rb) => {
             ctx.framebuffers.detach_color_texture(rb.tex);
+            // The renderbuffer's backing texture owns the offscreen render-target IR — retire it too.
+            ctx.retire_texture(rb.tex);
             ctx.textures.delete(rb.tex);
             true
         }

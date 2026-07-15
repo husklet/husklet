@@ -17,6 +17,7 @@ use super::glconst;
 use super::program::{Attr, DrawCall, Programs, MAX_ATTR};
 use super::renderbuffer::Renderbuffers;
 use super::texture::Textures;
+use hl_gpu::Cmd;
 use std::collections::HashMap;
 
 /// A recorded `glBlitFramebuffer` — a sub-rect copy from a read framebuffer's color attachment to a draw
@@ -337,6 +338,21 @@ pub struct GlContext {
     /// resident pipeline (no `CreateRenderPipeline`), while a genuinely new state variant creates one more.
     /// Invalidated on relink via `link_gen`. Mirrors [`Self::prog_shader_cache`].
     prog_pipeline_cache: HashMap<(u32, u64), (u32, u64)>,
+
+    /// Queued `Destroy*` IR for PERSISTENT resources the app has released — `glDeleteTextures`/`Buffers`/
+    /// `Renderbuffers` retire the resident IR ids the deleted GL object owned (its cached sampled-texture /
+    /// data-buffer / FBO render-target / depth-target ids), and a texture/buffer content change abandons its
+    /// prior generation's id. These accumulate here and are flushed into the NEXT submitted frame (the
+    /// offscreen `glFlush` flush or the `eglSwapBuffers` swap) AFTER that frame's `Submit`s and BEFORE its
+    /// `Present`, so the host frees the residency the moment the GPU work referencing them has run. Without
+    /// this the host's per-connection residency ledger climbs on every fresh Chrome tile/atlas texture until
+    /// it hits the 512 MiB / 65 536-object cap and every swap NACKs `ResourceLimit("connection residency")`.
+    ///
+    /// SAFE now that a NACKed frame rolls back atomically (executor #232): a retained-across-NACK draw is
+    /// gone, so it cannot reference a destroyed id; and a deleted GL name is removed from the residency caches
+    /// below, so any later reference re-resolves to a FRESH id — never the destroyed one. The #226 agent had
+    /// to leave this un-retired only because NACK-retain corrupted ids; that is fixed.
+    pending_destroys: Vec<Cmd>,
 }
 
 impl Default for GlContext {
@@ -434,7 +450,73 @@ impl GlContext {
             buf_ir_cache: HashMap::new(),
             prog_shader_cache: HashMap::new(),
             prog_pipeline_cache: HashMap::new(),
+            pending_destroys: Vec::new(),
         }
+    }
+
+    // ---- persistent-resource retirement (glDelete* / content change) -----------------------------
+
+    /// Retire GL texture `gl_name`'s resident IR resources (`glDeleteTextures`, or the backing texture of a
+    /// deleted renderbuffer): its cached sampled-texture id, its FBO render-target `(texture, surface)` if it
+    /// was ever an offscreen attachment, and any depth buffers keyed to that render target. The ids are
+    /// removed from the residency caches (so a subsequent bind of the same GL name re-resolves to a fresh id)
+    /// and their `Destroy*` are queued for the next submitted frame. A no-op when the name owns no IR yet.
+    pub fn retire_texture(&mut self, gl_name: u32) {
+        if let Some((ir, _)) = self.tex_ir_cache.remove(&gl_name) {
+            self.pending_destroys.push(Cmd::DestroyTexture(ir));
+        }
+        if let Some((surface, texture)) = self.fbo_targets.remove(&gl_name) {
+            // Any depth/stencil buffers minted for this color target die with it.
+            let mut dead_depth: Vec<u32> = Vec::new();
+            self.depth_targets.retain(|&(color, _), &mut depth| {
+                if color == texture {
+                    dead_depth.push(depth);
+                    false
+                } else {
+                    true
+                }
+            });
+            for depth in dead_depth {
+                self.pending_destroys.push(Cmd::DestroyTexture(depth));
+            }
+            self.pending_destroys.push(Cmd::DestroyTexture(texture));
+            self.pending_destroys.push(Cmd::DestroySurface(surface));
+        }
+    }
+
+    /// Retire GL data buffer `gl_name`'s resident IR buffers (`glDeleteBuffers`) — a buffer can be cached
+    /// under both the VERTEX and INDEX usage roles, so every cache entry for this name is dropped and its
+    /// `DestroyBuffer` queued. A no-op when the name owns no IR yet.
+    pub fn retire_buffer(&mut self, gl_name: u32) {
+        let mut dead: Vec<u32> = Vec::new();
+        self.buf_ir_cache.retain(|&(name, _), &mut (ir, _)| {
+            if name == gl_name {
+                dead.push(ir);
+                false
+            } else {
+                true
+            }
+        });
+        for ir in dead {
+            self.pending_destroys.push(Cmd::DestroyBuffer(ir));
+        }
+    }
+
+    /// The queued persistent `Destroy*` commands (see [`Self::pending_destroys`]). The service layer appends
+    /// these to a frame AFTER its `Submit`s (and before any `Present`), then [`Self::clear_pending_destroys`]
+    /// once the submit succeeds — so a NACK (which returns before the clear) re-emits them on the retry.
+    pub fn pending_destroys(&self) -> &[Cmd] {
+        &self.pending_destroys
+    }
+
+    /// Whether any persistent `Destroy*` are queued.
+    pub fn has_pending_destroys(&self) -> bool {
+        !self.pending_destroys.is_empty()
+    }
+
+    /// Clear the queued persistent `Destroy*` — called ONLY after the frame carrying them submitted OK.
+    pub fn clear_pending_destroys(&mut self) {
+        self.pending_destroys.clear();
     }
 
     /// The shared placeholder sampler's IR id (`0` = not yet created). The frame builder must NOT free this
@@ -492,12 +574,13 @@ impl GlContext {
                 hl_log::hl_count!(hl_log::tag::GL, "tex_cache_hit");
                 return (ir, false);
             }
-            // Content changed: a fresh id carries the new upload (the old resident id is simply abandoned —
-            // content updates to a given texture are rare, so this does not accumulate). NOTE: the old id is
-            // NOT retired-for-destroy here — a draw retained across a NACKed swap may still reference it (the
-            // executor's NACK-retain keeps the old frame's draws live), and destroying it would then
-            // `UnknownId` the retained frame. Bounding this residency needs deferral past the last reference.
+            // Content changed: a fresh id carries the new upload; the old resident id is RETIRED for destroy
+            // (queued into the next frame's tail). Safe now that a NACKed frame rolls back atomically (#232):
+            // a retained-across-NACK draw is gone, and every live reference to this GL name re-resolves to the
+            // fresh id below — so nothing still points at the old id when its `DestroyTexture` runs. Without
+            // this, a Chrome texture re-uploaded each frame leaks its prior generation's residency forever.
             hl_log::hl_count!(hl_log::tag::GL, "tex_upload");
+            self.pending_destroys.push(Cmd::DestroyTexture(ir));
             let ir = self.alloc_texture_ir();
             self.tex_ir_cache.insert(gl_name, (ir, gen));
             return (ir, true);
@@ -518,7 +601,10 @@ impl GlContext {
                 hl_log::hl_count!(hl_log::tag::GL, "buf_cache_hit");
                 return (ir, false);
             }
+            // Content changed: retire the prior generation's IR buffer (queued for the next frame's tail) and
+            // mint a fresh id for the new bytes — safe for the same reason as the texture path above.
             hl_log::hl_count!(hl_log::tag::GL, "buf_upload");
+            self.pending_destroys.push(Cmd::DestroyBuffer(ir));
             let ir = self.alloc_buffer_ir();
             self.buf_ir_cache.insert((gl_name, usage), (ir, gen));
             return (ir, true);

@@ -20,19 +20,32 @@ use hl_gpu::{Cmd, CommandSink, Result};
 pub fn swap_buffers(ctx: &mut GlContext, sink: &mut dyn CommandSink) -> Result<bool> {
     let built = frame::build_frame_ir(ctx);
     let Some(mut f) = built else {
-        // Nothing to present: still clear the (possibly empty / unsupported) draw-list so the next frame
-        // starts clean, exactly as the C shim resets after a no-IR swap.
+        // Nothing to present. A frame that ONLY deleted resources (all draws no-ops) can still carry queued
+        // persistent `Destroy*` — submit them standalone so the freed residency is reclaimed, then clear the
+        // (possibly empty / unsupported) draw-list so the next frame starts clean.
+        if ctx.has_pending_destroys() {
+            let destroys = ctx.pending_destroys().to_vec();
+            sink.submit(&destroys)?;
+            ctx.clear_pending_destroys();
+        }
         ctx.reset_frame();
         return Ok(false);
     };
+
+    // Flush the queued persistent `Destroy*` (glDelete* / content-change retirement) at the frame's tail —
+    // AFTER its `Submit`s (the GPU work referencing the freed ids has run) and BEFORE the `Present`, matching
+    // the per-draw ephemeral cleanup order. See `GlContext::pending_destroys`.
+    f.cmds.extend_from_slice(ctx.pending_destroys());
 
     // Append the Present of the rendered default target to its surface.
     let (surface, texture) = f.present;
     f.cmds.push(Cmd::Present { surface, texture });
 
-    // TRANSACTIONAL: submit BEFORE resetting. On failure the draws are retained and the error propagates.
+    // TRANSACTIONAL: submit BEFORE resetting. On failure the draws (and the un-cleared pending destroys) are
+    // retained and the error propagates; a rolled-back NACK re-emits the same destroys on the retry.
     sink.submit(&f.cmds)?;
 
+    ctx.clear_pending_destroys();
     ctx.reset_frame();
     Ok(true)
 }
@@ -56,7 +69,14 @@ pub fn swap_buffers(ctx: &mut GlContext, sink: &mut dyn CommandSink) -> Result<b
 /// flushed, `Ok(false)` if there was nothing to flush (empty, or a window draw is pending → retained).
 pub fn flush_offscreen(ctx: &mut GlContext, sink: &mut dyn CommandSink) -> Result<bool> {
     if ctx.draws.is_empty() || !ctx.draws.iter().any(|d| d.fbo != 0) {
-        // Nothing, or nothing OFFSCREEN, to drain — leave the (window-only) draws for the swap.
+        // Nothing OFFSCREEN to submit — leave the (window-only) draws for the swap. But a raster worker that
+        // `glFlush`es after deleting old tiles (no offscreen geometry pending) still queues persistent
+        // `Destroy*`; drain those standalone here so residency is reclaimed BETWEEN swaps, not only at swap.
+        if ctx.has_pending_destroys() {
+            let destroys = ctx.pending_destroys().to_vec();
+            sink.submit(&destroys)?;
+            ctx.clear_pending_destroys();
+        }
         return Ok(false);
     }
     // PARTITION the recorded draw-list: offscreen (`fbo != 0`) passes are EXECUTED now (submitted, no
@@ -75,14 +95,25 @@ pub fn flush_offscreen(ctx: &mut GlContext, sink: &mut dyn CommandSink) -> Resul
     // Restore the retained window draws for the swap; the blits were consumed with the offscreen flush.
     ctx.draws = window;
     ctx.blits.clear();
-    let Some(f) = built else {
+    let Some(mut f) = built else {
+        // No offscreen frame lowered, but a delete may still have queued persistent `Destroy*` — drain them.
+        if ctx.has_pending_destroys() {
+            let destroys = ctx.pending_destroys().to_vec();
+            sink.submit(&destroys)?;
+            ctx.clear_pending_destroys();
+        }
         return Ok(false);
     };
+    // Flush queued persistent `Destroy*` at the tail of this offscreen frame (after its `Submit`s). A deleted
+    // GL name is already out of the residency caches, so the retained window draws re-resolve to fresh ids and
+    // never reference a destroyed one.
+    f.cmds.extend_from_slice(ctx.pending_destroys());
     // NO Present: offscreen passes render into their FBO render-target textures (persistent IR ids); a later
     // window pass samples those by their stable ids. Submit is transactional (mirrors swap): on a sink error
     // the window draws are already restored, and the error propagates so the caller registers it.
     let cmds = f.cmds.len();
     sink.submit(&f.cmds)?;
+    ctx.clear_pending_destroys();
     hl_log::hl_debug!(
         hl_log::tag::GL,
         "flush_offscreen submitted cmds={} offscreen_of={} retained_window={}",
