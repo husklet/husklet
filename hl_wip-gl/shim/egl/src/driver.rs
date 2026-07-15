@@ -22,7 +22,7 @@ use hl_gl::result::{
 };
 use hl_gl::service::{compute, config, es3, intro, map, query, readpixels, record, swap, sync};
 
-use crate::state::{with, AppPresentOutcome, CONFIG_TOKEN, DISPLAY_TOKEN};
+use crate::state::{current, with, AppPresentOutcome, CONFIG_TOKEN, DISPLAY_TOKEN};
 
 // ---- EGL query enums the string getters key on (the GL_* query enums live in hl_gl::glconst) ------
 
@@ -30,6 +30,10 @@ const EGL_VENDOR: i32 = 0x3053;
 const EGL_VERSION_Q: i32 = 0x3054;
 const EGL_EXTENSIONS_Q: i32 = 0x3055;
 const EGL_CLIENT_APIS: i32 = 0x308D;
+
+// `eglGetCurrentSurface` selectors: which of the current binding's two surfaces to report.
+const EGL_DRAW: i32 = 0x3059;
+const EGL_READ: i32 = 0x305A;
 
 // ---- small C-ABI marshalling helpers -------------------------------------------------------------
 
@@ -642,8 +646,17 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
     }
 }
 
+/// `eglBindAPI(api)` — bind the client API for the CALLING THREAD (`eglQueryAPI` reads it back). This is
+/// a GLES-only driver, so only `EGL_OPENGL_ES_API` is honored; any other API (`EGL_OPENGL_API` /
+/// `EGL_OPENVG_API`) is `EGL_BAD_PARAMETER` (never silently accepted). libepoxy binds
+/// `EGL_OPENGL_ES_API` and then confirms it via `eglQueryAPI` to pick its GLES dispatch table.
 #[no_mangle]
-pub extern "C" fn eglBindAPI(_api: u32) -> u32 {
+pub extern "C" fn eglBindAPI(api: u32) -> u32 {
+    if api != EGL_OPENGL_ES_API {
+        with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
+        return EGL_FALSE;
+    }
+    current::bind_api(api);
     EGL_TRUE
 }
 
@@ -753,25 +766,24 @@ pub extern "C" fn eglCreateContext(
 
 #[no_mangle]
 pub extern "C" fn eglDestroyContext(_dpy: *mut c_void, ctx: *mut c_void) -> u32 {
-    with(|s| {
-        if s.current_ctx == ctx as usize {
-            s.current_ctx = 0;
-        }
-    });
+    // If this context is current on the calling thread, releasing it drops the thread's binding.
+    current::release_if_context(ctx as usize);
     EGL_TRUE
 }
 
+/// `eglMakeCurrent(dpy, draw, read, ctx)` — bind `ctx` (+ its draw/read surfaces + display) as the
+/// current binding FOR THE CALLING THREAD, so `eglGetCurrentContext` / `eglGetCurrentDisplay` /
+/// `eglGetCurrentSurface` report exactly these on this thread (what libepoxy probes). `ctx ==
+/// EGL_NO_CONTEXT` (null) releases the thread's binding. The binding is thread-local (real EGL semantics):
+/// another thread keeps its own current context.
 #[no_mangle]
 pub extern "C" fn eglMakeCurrent(
-    _dpy: *mut c_void,
+    dpy: *mut c_void,
     draw: *mut c_void,
-    _read: *mut c_void,
+    read: *mut c_void,
     ctx: *mut c_void,
 ) -> u32 {
-    with(|s| {
-        s.current_ctx = ctx as usize;
-        s.current_surface = draw as usize;
-    });
+    current::make_current(dpy as usize, draw as usize, read as usize, ctx as usize);
     EGL_TRUE
 }
 
@@ -802,8 +814,9 @@ fn create_window_surface(win: *mut c_void) -> *mut c_void {
         s.ctx.surf = GlSurface { have: true, width, height };
         s.current_is_wayland = info.wl_surface != 0;
         s.wl_surface_ptr = info.wl_surface;
+        // The surface token is not "current" until eglMakeCurrent binds it (real EGL): the per-thread
+        // current-surface binding is set there, never here.
         let tok = s.mint_token();
-        s.current_surface = tok as usize;
         // Compositor bring-up is DEFERRED so a real app window ends up with exactly ONE toplevel:
         //  * a real app `wl_surface` (wl_surface != 0) is presented onto the app's OWN surface at swap
         //    (via the app's libwayland-client) — so the shim must NOT stand up a competing self-owned
@@ -823,10 +836,9 @@ fn create_window_surface(win: *mut c_void) -> *mut c_void {
 
 #[no_mangle]
 pub extern "C" fn eglDestroySurface(_dpy: *mut c_void, surface: *mut c_void) -> u32 {
+    // Drop it from the calling thread's current binding (if it was the draw/read surface).
+    current::forget_surface(surface as usize);
     with(|s| {
-        if s.current_surface == surface as usize {
-            s.current_surface = 0;
-        }
         s.ctx.surf.have = false;
     });
     EGL_TRUE
@@ -912,19 +924,27 @@ pub extern "C" fn eglSwapInterval(_dpy: *mut c_void, _interval: i32) -> u32 {
     EGL_TRUE
 }
 
+/// `eglGetCurrentDisplay()` — the display of the CALLING THREAD's current context (bound by the last
+/// `eglMakeCurrent`), or `EGL_NO_DISPLAY` (null) when no context is current on this thread.
 #[no_mangle]
 pub extern "C" fn eglGetCurrentDisplay() -> *mut c_void {
-    with(|s| if s.inited { DISPLAY_TOKEN as *mut c_void } else { core::ptr::null_mut() })
+    current::display() as *mut c_void
 }
 
+/// `eglGetCurrentContext()` — the context current on the CALLING THREAD, or `EGL_NO_CONTEXT` (null) when
+/// none is. libepoxy probes this to select its GL-vs-GLES dispatch table (a NULL here aborts it), so it
+/// MUST return the live context on the thread that made it current.
 #[no_mangle]
 pub extern "C" fn eglGetCurrentContext() -> *mut c_void {
-    with(|s| s.current_ctx as *mut c_void)
+    current::context() as *mut c_void
 }
 
+/// `eglGetCurrentSurface(readdraw)` — the `EGL_DRAW` (default) or `EGL_READ` surface of the CALLING
+/// THREAD's current binding, or `EGL_NO_SURFACE` (null) when no context is current on this thread.
 #[no_mangle]
-pub extern "C" fn eglGetCurrentSurface(_readdraw: i32) -> *mut c_void {
-    with(|s| s.current_surface as *mut c_void)
+pub extern "C" fn eglGetCurrentSurface(readdraw: i32) -> *mut c_void {
+    let tok = if readdraw == EGL_READ { current::read_surface() } else { current::draw_surface() };
+    tok as *mut c_void
 }
 
 // ==================================================================================================
@@ -4309,14 +4329,17 @@ extern "C" fn eglQueryDevicesEXT(max_devices: i32, devices: *mut *mut c_void, nu
     }
     EGL_TRUE
 }
-/// `eglQueryAPI()` — the API bound by `eglBindAPI`; this driver serves OpenGL ES.
+/// `eglQueryAPI()` — the API bound by `eglBindAPI` on the CALLING THREAD (defaults to
+/// `EGL_OPENGL_ES_API`, the only API this driver serves). libepoxy reads this to confirm GLES dispatch.
 #[no_mangle]
 pub extern "C" fn eglQueryAPI() -> u32 {
-    EGL_OPENGL_ES_API
+    current::query_api()
 }
-/// `eglReleaseThread()` — release per-thread EGL state; nothing thread-local is held. Success.
+/// `eglReleaseThread()` — release the calling thread's EGL state: the current context/surface/display
+/// binding is dropped (the bound API resets to the `EGL_OPENGL_ES_API` default via the released cells).
 #[no_mangle]
 pub extern "C" fn eglReleaseThread() -> u32 {
+    current::release();
     EGL_TRUE
 }
 /// `eglWaitClient` / `eglWaitGL` / `eglWaitNative` — flush + wait for the client/native pipeline. The
@@ -4465,3 +4488,103 @@ pub extern "C" fn eglGetSyncAttrib(_dpy: *mut c_void, _sync: *mut c_void, _attri
 pub extern "C" fn glMemoryBarrier(_barriers: u32) {}
 #[no_mangle]
 pub extern "C" fn glMemoryBarrierByRegion(_barriers: u32) {}
+
+// ==================================================================================================
+// tests: the per-thread EGL "current" binding + bound-API tracking, and the glGet limit round-trip
+//
+// These drive the REAL C-ABI entry points (eglMakeCurrent / eglGetCurrent* / eglBindAPI / eglQueryAPI /
+// glGetIntegerv) exactly as libepoxy does when GTK brings a GLES context up. The binding is thread-local,
+// so each libtest thread starts clean; the tests reset explicitly where they depend on a starting value.
+// ==================================================================================================
+#[cfg(test)]
+mod current_binding_tests {
+    use super::*;
+
+    // Desktop OpenGL API enum — NOT served by this GLES-only driver (eglBindAPI must reject it).
+    const EGL_OPENGL_API: u32 = 0x30A2;
+
+    /// eglMakeCurrent records (ctx, draw, read, display) as THIS thread's current binding, and the
+    /// eglGetCurrent* getters return exactly those; EGL_NO_CONTEXT (null) clears the whole binding.
+    #[test]
+    fn make_current_round_trips_and_no_context_clears() {
+        let dpy = 0x0D15 as *mut c_void;
+        let draw = 0xD8A as *mut c_void;
+        let read = 0x8EAD as *mut c_void;
+        let ctx = 0xC0FFEE as *mut c_void;
+
+        assert_eq!(eglMakeCurrent(dpy, draw, read, ctx), EGL_TRUE);
+        assert_eq!(eglGetCurrentContext(), ctx, "current context is the one just made current");
+        assert_eq!(eglGetCurrentDisplay(), dpy, "current display is the one passed to makeCurrent");
+        assert_eq!(eglGetCurrentSurface(EGL_DRAW), draw, "EGL_DRAW surface round-trips");
+        assert_eq!(eglGetCurrentSurface(EGL_READ), read, "EGL_READ surface round-trips");
+
+        // EGL_NO_CONTEXT releases the binding: every getter returns null again.
+        assert_eq!(eglMakeCurrent(dpy, core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut()), EGL_TRUE);
+        assert!(eglGetCurrentContext().is_null(), "EGL_NO_CONTEXT clears the current context");
+        assert!(eglGetCurrentDisplay().is_null(), "EGL_NO_CONTEXT clears the current display");
+        assert!(eglGetCurrentSurface(EGL_DRAW).is_null(), "EGL_NO_CONTEXT clears the draw surface");
+        assert!(eglGetCurrentSurface(EGL_READ).is_null(), "EGL_NO_CONTEXT clears the read surface");
+    }
+
+    /// A getter on a thread that never made a context current returns null (EGL_NO_*), and one thread's
+    /// current binding is INDEPENDENT of another's — the thread-local guarantee libepoxy relies on.
+    #[test]
+    fn current_binding_is_thread_local_and_independent() {
+        let ctx_a = 0xA11 as usize;
+        eglMakeCurrent(0x1 as *mut c_void, 0x2 as *mut c_void, 0x2 as *mut c_void, ctx_a as *mut c_void);
+        assert_eq!(eglGetCurrentContext() as usize, ctx_a);
+
+        let observed = std::thread::spawn(|| {
+            // A fresh thread has NO current context, regardless of the parent's binding.
+            let before = eglGetCurrentContext();
+            // It can make its OWN context current without disturbing the parent.
+            let ctx_b = 0xB22 as usize;
+            eglMakeCurrent(0x1 as *mut c_void, 0x3 as *mut c_void, 0x3 as *mut c_void, ctx_b as *mut c_void);
+            (before as usize, eglGetCurrentContext() as usize)
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(observed.0, 0, "a fresh thread starts with EGL_NO_CONTEXT");
+        assert_eq!(observed.1, 0xB22, "the child thread bound its own context");
+        // The parent's binding is untouched by the child.
+        assert_eq!(eglGetCurrentContext() as usize, ctx_a, "the parent thread's current context is independent");
+        // Cleanup this thread's binding.
+        eglMakeCurrent(core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut());
+    }
+
+    /// eglQueryAPI defaults to EGL_OPENGL_ES_API and returns whatever eglBindAPI(EGL_OPENGL_ES_API) set;
+    /// a non-GLES API is rejected (EGL_BAD_PARAMETER) and does not change the queried API.
+    #[test]
+    fn bind_api_records_gles_and_rejects_other_apis() {
+        // Default (nothing bound on this fresh thread) is the GLES API epoxy expects.
+        assert_eq!(eglQueryAPI(), EGL_OPENGL_ES_API, "the default bound API is EGL_OPENGL_ES_API");
+
+        assert_eq!(eglBindAPI(EGL_OPENGL_ES_API), EGL_TRUE, "binding the GLES API succeeds");
+        assert_eq!(eglQueryAPI(), EGL_OPENGL_ES_API, "eglQueryAPI reports the bound GLES API");
+
+        // A GLES-only driver rejects desktop GL; the queried API is unchanged.
+        assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE, "binding desktop OpenGL is rejected");
+        assert_eq!(eglGetError(), EGL_BAD_PARAMETER, "the rejected bind raised EGL_BAD_PARAMETER");
+        assert_eq!(eglQueryAPI(), EGL_OPENGL_ES_API, "a rejected bind leaves the queried API as GLES");
+    }
+
+    /// glGetIntegerv / glGetInteger64v ALWAYS write the out-param (never leave it as uninitialized
+    /// garbage): GL_MAX_TEXTURE_SIZE is the 16384 executor ceiling and an unknown pname writes 0.
+    #[test]
+    fn gl_get_integerv_always_writes_the_out_param() {
+        // Seed with a garbage sentinel; a correct getter overwrites it.
+        let mut v: i32 = -455_764_240;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &mut v as *mut i32);
+        assert_eq!(v, 16384, "GL_MAX_TEXTURE_SIZE is the truthful executor ceiling, not garbage");
+
+        let mut v64: i64 = -1;
+        glGetInteger64v(GL_MAX_TEXTURE_SIZE, &mut v64 as *mut i64);
+        assert_eq!(v64, 16384, "glGetInteger64v writes the same truthful ceiling");
+
+        // An unhandled integer pname defaults to 0 — never the untouched garbage sentinel.
+        let mut u: i32 = -455_764_240;
+        glGetIntegerv(0xBEEF, &mut u as *mut i32);
+        assert_eq!(u, 0, "an unknown pname writes 0, never uninitialized memory");
+    }
+}

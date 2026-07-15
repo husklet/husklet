@@ -38,14 +38,23 @@ pub const ES_MINOR: i32 = 0;
 
 // ---- advertised capability limits ----------------------------------------------------------------
 
-pub const MAX_TEXTURE_SIZE: i32 = 4096;
+/// The largest 2D texture / renderbuffer edge. Kept consistent with the GPU-exec backend's advertised
+/// `max_texture_2d` ceiling (`hl_gpu` `Capabilities::full` = 16384) so the guest-visible limit does not
+/// over- or under-promise what the executor will actually validate a texture against.
+pub const MAX_TEXTURE_SIZE: i32 = 16384;
 pub const MAX_VERTEX_ATTRIBS: i32 = crate::model::program::MAX_ATTR as i32; // 16 (the modeled attr count)
 pub const MAX_TEXTURE_IMAGE_UNITS: i32 = 8; // the modeled `tex_unit` bank size
 pub const MAX_VERTEX_TEXTURE_IMAGE_UNITS: i32 = 4;
 pub const MAX_UNIFORM_VECTORS: i32 = 256;
 pub const MAX_VARYING_VECTORS: i32 = 15;
 pub const MAX_SAMPLES: i32 = 4;
-pub const VIEWPORT_DIM: i32 = 4096;
+pub const VIEWPORT_DIM: i32 = 16384;
+/// GLES3 MRT ceilings — the spec minimum of 4 color attachments / draw buffers this model backs.
+pub const MAX_COLOR_ATTACHMENTS: i32 = 4;
+pub const MAX_DRAW_BUFFERS: i32 = 4;
+/// `glDrawRangeElements` batch hints (GLES3). Large enough that a toolkit never clamps its draw batches.
+pub const MAX_ELEMENTS_VERTICES: i32 = 1_048_576;
+pub const MAX_ELEMENTS_INDICES: i32 = 1_048_576;
 
 /// The number of extensions advertised (`glGetIntegerv(GL_NUM_EXTENSIONS)`) — the length of the
 /// [`EXTENSIONS`] inventory `glGetStringi` enumerates, so the count and the indexed query agree.
@@ -101,6 +110,10 @@ pub fn get_integerv(ctx: &GlContext, pname: u32, out: &mut [i32; 4]) -> usize {
         GL_MAX_FRAGMENT_UNIFORM_VECTORS | GL_MAX_VERTEX_UNIFORM_VECTORS => one(MAX_UNIFORM_VECTORS),
         GL_MAX_VARYING_VECTORS => one(MAX_VARYING_VECTORS),
         GL_MAX_SAMPLES => one(MAX_SAMPLES),
+        GL_MAX_COLOR_ATTACHMENTS => one(MAX_COLOR_ATTACHMENTS),
+        GL_MAX_DRAW_BUFFERS => one(MAX_DRAW_BUFFERS),
+        GL_MAX_ELEMENTS_VERTICES => one(MAX_ELEMENTS_VERTICES),
+        GL_MAX_ELEMENTS_INDICES => one(MAX_ELEMENTS_INDICES),
         GL_NUM_COMPRESSED_TEXTURE_FORMATS | GL_SAMPLES => one(0),
         GL_MAJOR_VERSION => one(ES_MAJOR),
         GL_MINOR_VERSION => one(ES_MINOR),

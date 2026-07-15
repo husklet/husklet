@@ -71,7 +71,7 @@ const ALPHA: i32 = 8;
 const DEPTH: i32 = 24;
 const STENCIL: i32 = 8;
 const BUFFER: i32 = RED + GREEN + BLUE + ALPHA; // 32-bit color buffer
-const MAX_PBUFFER: i32 = 4096; // matches query::MAX_TEXTURE_SIZE / VIEWPORT_DIM
+const MAX_PBUFFER: i32 = 16384; // matches query::MAX_TEXTURE_SIZE / VIEWPORT_DIM
 
 /// Why `config_attrib` rejected a query — mapped by the shim to the EGL error it raises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

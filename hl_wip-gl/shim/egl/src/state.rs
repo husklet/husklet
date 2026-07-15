@@ -11,6 +11,7 @@
 //! config / context / surface tokens and the last-error registers `eglGetError`/`glGetError` report. The
 //! render semantics are NOT redefined here — they are the shared `hl_gl` services.
 
+use core::cell::Cell;
 use core::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
@@ -38,11 +39,11 @@ pub struct State {
     /// `ctx` ([`GlContext::gl_error`]) so it is unit-testable in the `hl_gl` lib crate.
     pub egl_error: i32,
 
-    /// `EGLContext` token allocator (opaque, non-null); the current bound context token (`0` = none).
+    /// `EGLContext` token allocator (opaque, non-null). The "current" binding (context / draw+read
+    /// surface / display) is NOT here: EGL keys it PER CALLING THREAD, so it lives in the thread-local
+    /// [`current`] cells below (a process-global is wrong under GTK's threads — libepoxy probes
+    /// `eglGetCurrentContext()` on the thread that made the context current).
     next_token: usize,
-    pub current_ctx: usize,
-    /// The current `EGLSurface` token (`0` = none). The single window surface lives in `ctx.surf`.
-    pub current_surface: usize,
 
     /// Whether the current window surface is a Wayland window (created from a `wl_egl_window`). Keys the
     /// `eglSwapBuffers` compositor-commit path.
@@ -83,8 +84,6 @@ impl State {
             sink: RemoteCommandSink::from_env(),
             egl_error: EGL_SUCCESS,
             next_token: 1,
-            current_ctx: 0,
-            current_surface: 0,
             current_is_wayland: false,
             wl_surface_ptr: 0,
             wl: None,
@@ -149,4 +148,102 @@ pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
     let m = STATE.get_or_init(|| Mutex::new(State::new()));
     let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
     f(&mut g)
+}
+
+/// The per-thread EGL "current" binding — what `eglGetCurrentContext` / `eglGetCurrentDisplay` /
+/// `eglGetCurrentSurface(EGL_DRAW|EGL_READ)` report, and the API `eglBindAPI` / `eglQueryAPI` track.
+///
+/// Real EGL keys ALL of this state to the CALLING THREAD (`eglMakeCurrent` binds a context to the current
+/// thread; another thread has its own binding). libepoxy's GL-vs-GLES dispatch selection probes
+/// `eglGetCurrentContext()` (and `eglQueryAPI()`) on whichever thread made the context current and aborts
+/// on a NULL context — so a process-global binding is not just imprecise, it is wrong under GTK's threads.
+///
+/// This is deliberately separate from the process-global [`State`]: the GL object model / draw-list / sink
+/// (the render state) are shared, but "which context is current on THIS thread" is not.
+pub mod current {
+    use super::Cell;
+
+    /// `EGL_OPENGL_ES_API` — the only client API this GLES driver serves and the EGL default a thread's
+    /// bound API starts at (matches real EGL, which defaults to `EGL_OPENGL_ES_API`).
+    pub const EGL_OPENGL_ES_API: u32 = 0x30A0;
+
+    thread_local! {
+        /// The context token bound current on this thread (`0` = `EGL_NO_CONTEXT`).
+        static CTX: Cell<usize> = const { Cell::new(0) };
+        /// The draw surface token of the current binding (`0` = `EGL_NO_SURFACE`).
+        static DRAW: Cell<usize> = const { Cell::new(0) };
+        /// The read surface token of the current binding (`0` = `EGL_NO_SURFACE`).
+        static READ: Cell<usize> = const { Cell::new(0) };
+        /// The display token of the current binding (`0` = `EGL_NO_DISPLAY`).
+        static DISPLAY: Cell<usize> = const { Cell::new(0) };
+        /// The API bound by `eglBindAPI` on this thread; defaults to `EGL_OPENGL_ES_API`.
+        static API: Cell<u32> = const { Cell::new(EGL_OPENGL_ES_API) };
+    }
+
+    /// Record `eglMakeCurrent(display, draw, read, ctx)` for this thread. A `ctx` of `0`
+    /// (`EGL_NO_CONTEXT`) RELEASES the binding — the surfaces + display are cleared too (EGL forbids a
+    /// live current surface/display with no current context).
+    pub fn make_current(display: usize, draw: usize, read: usize, ctx: usize) {
+        if ctx == 0 {
+            release();
+            return;
+        }
+        CTX.with(|c| c.set(ctx));
+        DRAW.with(|c| c.set(draw));
+        READ.with(|c| c.set(read));
+        DISPLAY.with(|c| c.set(display));
+    }
+
+    /// Clear this thread's current binding (context / surfaces / display) — `eglMakeCurrent` with
+    /// `EGL_NO_CONTEXT`, or a `eglReleaseThread`.
+    pub fn release() {
+        CTX.with(|c| c.set(0));
+        DRAW.with(|c| c.set(0));
+        READ.with(|c| c.set(0));
+        DISPLAY.with(|c| c.set(0));
+    }
+
+    /// If `ctx` is the context current on THIS thread, release the binding (used by `eglDestroyContext`).
+    pub fn release_if_context(ctx: usize) {
+        if CTX.with(|c| c.get()) == ctx {
+            release();
+        }
+    }
+
+    /// If `surface` is the draw or read surface of THIS thread's binding, forget it (used by
+    /// `eglDestroySurface`), leaving the context otherwise current.
+    pub fn forget_surface(surface: usize) {
+        if DRAW.with(|c| c.get()) == surface {
+            DRAW.with(|c| c.set(0));
+        }
+        if READ.with(|c| c.get()) == surface {
+            READ.with(|c| c.set(0));
+        }
+    }
+
+    /// The context current on this thread (`eglGetCurrentContext`; `0` = `EGL_NO_CONTEXT`).
+    pub fn context() -> usize {
+        CTX.with(|c| c.get())
+    }
+    /// The display of this thread's current binding (`eglGetCurrentDisplay`; `0` = `EGL_NO_DISPLAY`).
+    pub fn display() -> usize {
+        DISPLAY.with(|c| c.get())
+    }
+    /// The draw surface of this thread's current binding (`0` = `EGL_NO_SURFACE`).
+    pub fn draw_surface() -> usize {
+        DRAW.with(|c| c.get())
+    }
+    /// The read surface of this thread's current binding (`0` = `EGL_NO_SURFACE`).
+    pub fn read_surface() -> usize {
+        READ.with(|c| c.get())
+    }
+
+    /// Record `eglBindAPI(api)` for this thread.
+    pub fn bind_api(api: u32) {
+        API.with(|c| c.set(api));
+    }
+    /// The API bound on this thread (`eglQueryAPI`; defaults to `EGL_OPENGL_ES_API`).
+    pub fn query_api() -> u32 {
+        API.with(|c| c.get())
+    }
 }

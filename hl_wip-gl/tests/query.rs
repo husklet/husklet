@@ -96,6 +96,47 @@ fn get_integerv_limits_are_positive_and_sane() {
 }
 
 #[test]
+fn get_integerv_reports_truthful_executor_consistent_limits() {
+    // The limits GTK/epoxy query during GL init must be TRUTHFUL (no garbage / uninitialized memory) and
+    // consistent with the GPU-exec backend (`hl_gpu` Capabilities::full max_texture_2d = 16384).
+    let c = ctx_800x600();
+    let mut b = [0i32; 4];
+
+    // GL_MAX_TEXTURE_SIZE (and the cube-map / renderbuffer edges that share it) are the executor ceiling,
+    // not the old 4096 stand-in — and never the -455764240-style garbage of an untouched out-param.
+    for pname in [GL_MAX_TEXTURE_SIZE, GL_MAX_CUBE_MAP_TEXTURE_SIZE, GL_MAX_RENDERBUFFER_SIZE] {
+        assert_eq!(query::get_integerv(&c, pname, &mut b), 1);
+        assert_eq!(b[0], 16384, "limit {pname:#x} must be the 16384 executor ceiling");
+    }
+
+    // GL_MAX_VIEWPORT_DIMS reports two positive dims consistent with the texture ceiling.
+    assert_eq!(query::get_integerv(&c, GL_MAX_VIEWPORT_DIMS, &mut b), 2);
+    assert_eq!([b[0], b[1]], [16384, 16384]);
+
+    // GLES3 MRT + batch limits GTK reads (previously fell through to the unknown-pname 0).
+    query::get_integerv(&c, GL_MAX_COLOR_ATTACHMENTS, &mut b);
+    assert_eq!(b[0], 4);
+    query::get_integerv(&c, GL_MAX_DRAW_BUFFERS, &mut b);
+    assert_eq!(b[0], 4);
+    query::get_integerv(&c, GL_MAX_ELEMENTS_VERTICES, &mut b);
+    assert!(b[0] >= 65536, "GL_MAX_ELEMENTS_VERTICES must be a large sane batch hint, got {}", b[0]);
+    query::get_integerv(&c, GL_MAX_ELEMENTS_INDICES, &mut b);
+    assert!(b[0] >= 65536, "GL_MAX_ELEMENTS_INDICES must be a large sane batch hint, got {}", b[0]);
+
+    // The other GLES3 program limits epoxy caches are all positive (never uninitialized).
+    for pname in [
+        GL_MAX_VERTEX_UNIFORM_VECTORS,
+        GL_MAX_FRAGMENT_UNIFORM_VECTORS,
+        GL_MAX_VARYING_VECTORS,
+        GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS,
+        GL_MAX_SAMPLES,
+    ] {
+        query::get_integerv(&c, pname, &mut b);
+        assert!(b[0] > 0, "limit {pname:#x} must be > 0, got {}", b[0]);
+    }
+}
+
+#[test]
 fn get_integerv_reads_live_bindings_and_viewport() {
     let mut c = ctx_800x600();
     let mut b = [0i32; 4];

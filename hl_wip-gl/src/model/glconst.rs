@@ -145,6 +145,9 @@ pub const GL_GREEN_BITS: u32 = 0x0D53;
 pub const GL_BLUE_BITS: u32 = 0x0D54;
 pub const GL_ALPHA_BITS: u32 = 0x0D55;
 pub const GL_MAX_VIEWPORT_DIMS: u32 = 0x0D3A;
+// GLES3 index/vertex batch ceilings a toolkit (GTK/epoxy) queries before it sizes draw batches.
+pub const GL_MAX_ELEMENTS_VERTICES: u32 = 0x80E8;
+pub const GL_MAX_ELEMENTS_INDICES: u32 = 0x80E9;
 pub const GL_VIEWPORT: u32 = 0x0BA2;
 pub const GL_SCISSOR_BOX: u32 = 0x0C10;
 pub const GL_COLOR_CLEAR_VALUE: u32 = 0x0C22;
