@@ -246,41 +246,73 @@ fn copy_texture_to_texture_subregion() {
 }
 
 #[test]
-fn blit_and_resolve_are_not_advertised_and_rejected() {
-    // These two ops need image resampling this backend does not implement; advertising them (as the old
-    // ALL_COMMANDS did) while silently no-op'ing them was a capability lie. They must be un-advertised AND
-    // rejected when submitted, never silently dropped.
+fn blit_is_advertised_and_resolve_is_rejected() {
+    // BlitTexture (scaled/filtered) IS now implemented — resampled by a textured-triangle draw (`blit.rs`) —
+    // so it is advertised AND runs. ResolveTexture (multisample averaging) is still unimplemented, so it must
+    // stay un-advertised AND be rejected when submitted, never silently dropped (a capability lie).
     let mut g = exec();
     let caps = g.capabilities();
-    assert!(!caps.supports_command(etag::BLIT_TEXTURE), "BlitTexture must not be advertised");
+    assert!(caps.supports_command(etag::BLIT_TEXTURE), "BlitTexture IS implemented + advertised");
     assert!(!caps.supports_command(etag::RESOLVE_TEXTURE), "ResolveTexture must not be advertised");
     assert!(caps.supports_command(etag::COPY_T2T), "CopyTextureToTexture IS implemented + advertised");
 
     let sub = TextureSubresource::base();
     let o = Origin3d::default();
+
+    // A 1x1 → 2x2 nearest blit must run cleanly and replicate the single source texel across the whole dest
+    // (the op the old executor rejected as unimplemented — the before/after regression control).
+    let texel = [7u8, 8, 9, 10];
+    let mut cmds = vec![
+        Cmd::CreateTexture(1, tex(1, 1, TextureFormat::Rgba8Unorm, RT)),
+        Cmd::CreateTexture(2, tex(2, 2, TextureFormat::Rgba8Unorm, RT)),
+        Cmd::CreateBuffer(1, buf(4, buffer_usage::COPY_SRC | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer { id: 1, offset: 0, data: texel.to_vec() },
+    ];
+    cmds.push(Cmd::Submit(CommandBuffer {
+        encoder: vec![
+            Enc::CopyBufferToTexture { src: 1, src_offset: 0, bytes_per_row: 4, dst: 1, mip: 0, width: 1, height: 1 },
+            Enc::BlitTexture {
+                src: 1,
+                src_sub: sub,
+                src_origin: o,
+                src_extent: Extent3d { width: 1, height: 1, depth: 1 },
+                dst: 2,
+                dst_sub: sub,
+                dst_origin: o,
+                dst_extent: Extent3d { width: 2, height: 2, depth: 1 },
+                filter: Filter::Nearest,
+            },
+        ],
+        signal: None,
+    }));
+    let s = run_batch(&mut g, &cmds);
+    let px = g.read_texture(&s.resources, 2).unwrap();
+    for (i, out) in px.chunks_exact(4).enumerate() {
+        assert_eq!(out, texel, "dest texel {i} must be the upscaled source texel {texel:?}");
+    }
+
+    // ResolveTexture is still un-advertised → the runtime rejects it at validate (never silently dropped).
     let e = Extent3d { width: 1, height: 1, depth: 1 };
     let r = try_batch(
         &mut g,
         &[
-            Cmd::CreateTexture(1, tex(2, 2, TextureFormat::Rgba8Unorm, RT)),
-            Cmd::CreateTexture(2, tex(2, 2, TextureFormat::Rgba8Unorm, RT)),
+            Cmd::CreateTexture(3, tex(2, 2, TextureFormat::Rgba8Unorm, RT)),
+            Cmd::CreateTexture(4, tex(2, 2, TextureFormat::Rgba8Unorm, RT)),
             Cmd::Submit(CommandBuffer {
-                encoder: vec![Enc::BlitTexture {
-                    src: 1,
+                encoder: vec![Enc::ResolveTexture {
+                    src: 3,
                     src_sub: sub,
                     src_origin: o,
-                    src_extent: e,
-                    dst: 2,
+                    dst: 4,
                     dst_sub: sub,
                     dst_origin: o,
-                    dst_extent: e,
-                    filter: Filter::Linear,
+                    extent: e,
                 }],
                 signal: None,
             }),
         ],
     );
-    assert!(r.is_err(), "a submitted (un-advertised) blit must be rejected, not silently dropped");
+    assert!(r.is_err(), "a submitted (un-advertised) resolve must be rejected, not silently dropped");
 }
 
 // =================================================================================================
@@ -1146,15 +1178,16 @@ fn capability_advertisement_is_honest() {
     assert!(caps.supports_compute && caps.supports_graphics);
     assert!(!caps.supports_timeline_fences, "fences are emulated via submit completion, not real timelines");
 
-    // Command set: the ops with a real replay arm are advertised; the resampling ops that are not
-    // implemented (blit/resolve) are not — so a negotiation can never promise a command the executor drops.
+    // Command set: the ops with a real replay arm are advertised — including BLIT_TEXTURE (scaled/filtered,
+    // resampled by a textured-triangle draw). Only RESOLVE_TEXTURE (multisample averaging) is unimplemented
+    // and stays un-advertised, so a negotiation can never promise a command the executor drops.
     for &t in &[
         etag::BEGIN_RENDER_PASS, etag::DRAW, etag::DRAW_INDEXED, etag::DISPATCH, etag::CLEAR_RECT,
-        etag::COPY_B2B, etag::COPY_B2T, etag::COPY_T2B, etag::COPY_T2T, etag::FILL_BUFFER,
-        etag::SET_VERTEX_BUFFER, etag::SET_INDEX_BUFFER, etag::SET_SCISSOR, etag::SET_VIEWPORT,
+        etag::COPY_B2B, etag::COPY_B2T, etag::COPY_T2B, etag::COPY_T2T, etag::BLIT_TEXTURE,
+        etag::FILL_BUFFER, etag::SET_VERTEX_BUFFER, etag::SET_INDEX_BUFFER, etag::SET_SCISSOR,
+        etag::SET_VIEWPORT,
     ] {
         assert!(caps.supports_command(t), "etag {t} has a replay arm and must be advertised");
     }
-    assert!(!caps.supports_command(etag::BLIT_TEXTURE));
     assert!(!caps.supports_command(etag::RESOLVE_TEXTURE));
 }

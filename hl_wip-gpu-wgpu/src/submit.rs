@@ -118,14 +118,30 @@ impl WgpuExecutor {
                     self.fill_buffer(res, *buffer, *offset, *size, *value)?;
                     i += 1;
                 }
-                // Scaled blit + multisample resolve need image resampling this backend does not implement,
-                // and are NOT advertised (see `REPLAYED_COMMANDS`), so the runtime rejects them at validate.
-                // Erroring here (rather than the old silent no-op) is the defensive backstop for a direct
-                // executor call — a submitted-but-unimplemented op must never vanish without a trace.
-                Enc::BlitTexture { .. } => {
-                    hl_log::hl_warn!(tag::WGPU, "op rejected op=BlitTexture reason=unimplemented");
-                    return Err(GpuError::Unsupported("wgpu: BlitTexture (scaled/filtered) unimplemented"))
+                // Scaled/filtered blit: wgpu has no native image blit, so it is resampled by a
+                // textured-triangle draw into the destination rect (see `blit.rs`). This is the executed
+                // analogue of the CPU oracle's `blit_texture`.
+                Enc::BlitTexture {
+                    src,
+                    src_sub,
+                    src_origin,
+                    src_extent,
+                    dst,
+                    dst_sub,
+                    dst_origin,
+                    dst_extent,
+                    filter,
+                } => {
+                    self.blit_texture(
+                        res, *src, src_sub, src_origin, src_extent, *dst, dst_sub, dst_origin,
+                        dst_extent, *filter,
+                    )?;
+                    i += 1;
                 }
+                // Multisample resolve needs sample averaging this backend does not implement, and is NOT
+                // advertised (see `REPLAYED_COMMANDS`), so the runtime rejects it at validate. Erroring here
+                // (rather than the old silent no-op) is the defensive backstop for a direct executor call —
+                // a submitted-but-unimplemented op must never vanish without a trace.
                 Enc::ResolveTexture { .. } => {
                     hl_log::hl_warn!(tag::WGPU, "op rejected op=ResolveTexture reason=unimplemented");
                     return Err(GpuError::Unsupported("wgpu: ResolveTexture (multisample) unimplemented"))

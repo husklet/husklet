@@ -20,6 +20,7 @@
 //! ```
 
 mod bindgroup;
+mod blit;
 mod buffer;
 mod convert;
 mod device;
@@ -49,13 +50,13 @@ use hl_gpu::Result;
 
 pub use device::{DeviceConfig, Gpu};
 
-/// The encoder ops this executor actually replays — every command in the current IR EXCEPT the two that
-/// need image resampling this bring-up backend does not implement: `BlitTexture` (scaled/filtered
-/// texture→texture) and `ResolveTexture` (multisample resolve). Advertising `ALL_COMMANDS` would be a
-/// capability lie: the old `_ =>` replay arm silently no-op'd a submitted blit/resolve, so a guest that
-/// negotiated them saw its op vanish with no error and no effect. This set is the honest truth — the
-/// runtime rejects a negotiated blit/resolve at validate, and `submit` errors on one defensively.
-/// `CopyTextureToTexture` (exact, no scaling) IS implemented and stays advertised.
+/// The encoder ops this executor actually replays — every command in the current IR EXCEPT the one that
+/// needs sample averaging this bring-up backend does not implement: `ResolveTexture` (multisample resolve).
+/// Advertising `ALL_COMMANDS` would be a capability lie: the old `_ =>` replay arm silently no-op'd a
+/// submitted resolve, so a guest that negotiated it saw its op vanish with no error and no effect. This set
+/// is the honest truth — the runtime rejects a negotiated resolve at validate, and `submit` errors on one
+/// defensively. `CopyTextureToTexture` (exact, no scaling) AND `BlitTexture` (scaled/filtered, resampled by
+/// a textured-triangle draw — see `blit.rs`) are both implemented and advertised.
 const REPLAYED_COMMANDS: &[u8] = &[
     etag::BEGIN_RENDER_PASS,
     etag::END_RENDER_PASS,
@@ -75,6 +76,7 @@ const REPLAYED_COMMANDS: &[u8] = &[
     etag::COPY_B2T,
     etag::COPY_T2B,
     etag::COPY_T2T,
+    etag::BLIT_TEXTURE,
     etag::FILL_BUFFER,
     etag::SET_STENCIL_REFERENCE,
 ];
@@ -93,6 +95,10 @@ pub struct WgpuExecutor {
     /// across threads (a multi-tenant host holds it behind a lock).
     #[allow(clippy::type_complexity)]
     kernel_compiler: Option<Box<dyn Fn(&KernelDescriptor) -> Result<KernelProgram> + Send + Sync>>,
+    /// Lazily-built cache of the scaled-blit render pipeline/sampler/layout (`Enc::BlitTexture` has no
+    /// native wgpu image blit, so it is implemented by rendering — see [`blit`]). Built on first blit and
+    /// reused for the executor's lifetime; `None` until a blit is executed.
+    blit: Option<blit::BlitCache>,
 }
 
 impl WgpuExecutor {
@@ -101,7 +107,7 @@ impl WgpuExecutor {
     pub fn new(cfg: DeviceConfig) -> Result<Self> {
         let gpu = device::acquire(&cfg)?;
         let caps = Self::capabilities_for(&gpu.info.name);
-        Ok(Self { gpu, caps, kernels: HashMap::new(), kernel_compiler: None })
+        Ok(Self { gpu, caps, kernels: HashMap::new(), kernel_compiler: None, blit: None })
     }
 
     /// The human-readable name of the bound adapter (e.g. `"llvmpipe (LLVM 17.0.6, 128 bits)"`), so a
