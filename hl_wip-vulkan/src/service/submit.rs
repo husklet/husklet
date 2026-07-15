@@ -120,6 +120,23 @@ pub fn queue_submit(
     Ok(())
 }
 
+/// Apply a batch's queue-side timeline signals (`VkTimelineSemaphoreSubmitInfo::pSignalSemaphoreValues`
+/// / sync2 `VkSemaphoreSubmitInfo::value`) AFTER [`queue_submit`] has returned. The host replay is
+/// SYNCHRONOUS, so the producer's command buffers have fully executed by the time this runs — advancing
+/// each signalled TIMELINE semaphore's monotonic counter makes the timeline a truthful, already-satisfied
+/// ordering point: a subsequent `vkWaitSemaphores(>= value)` or a consumer submit waiting on it observes
+/// the producer's result. A binary or unknown semaphore in the set is skipped (a binary semaphore carries
+/// no counter, and a real driver ignores its supplied value). `VK_KHR_timeline_semaphore`.
+pub fn signal_timeline_values(dev: &mut Device, signals: &[(VkSemaphore, u64)]) {
+    for &(sem, value) in signals {
+        if let Some(sm) = dev.semaphores.get_mut(&sem) {
+            if sm.timeline {
+                sm.counter = sm.counter.max(value);
+            }
+        }
+    }
+}
+
 /// `vkWaitForFences` (one fence) — block on the fence's timeline value via [`CommandSink::wait`], then
 /// mark it signaled. Errors on an unknown fence. A never-submitted fence (value 0) waits on 0 (already
 /// satisfied) — matching a real driver returning immediately for an unsignalled-but-idle fence only

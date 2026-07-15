@@ -52,6 +52,18 @@ unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
 }
 
+/// Walk a `pNext` chain for a target `sType`, returning the first matching node (or NULL).
+unsafe fn find_pnext(mut p: *const c_void, target: i32) -> *const c_void {
+    while !p.is_null() {
+        let base = &*(p as *const VkBaseInStructure);
+        if base.s_type == target {
+            return p;
+        }
+        p = base.p_next as *const c_void;
+    }
+    core::ptr::null()
+}
+
 /// Borrow a nul-terminated C string as `&str` (`"main"` fallback on NULL / bad UTF-8, the usual entry).
 unsafe fn entry_str<'a>(p: *const c_char) -> &'a str {
     if p.is_null() {
@@ -924,24 +936,45 @@ pub extern "C" fn vkQueueSubmit(
     } else {
         unsafe { std::slice::from_raw_parts(p_submits as *const VkSubmitInfo, submit_count as usize) }
     };
-    // Gather every submitted command buffer (unwrapping each dispatchable to its u64 handle).
+    // Gather every submitted command buffer (unwrapping each dispatchable to its u64 handle) plus every
+    // queue-side timeline signal from each batch's VkTimelineSemaphoreSubmitInfo pNext.
     let mut cbs: Vec<VkCbHandle> = Vec::new();
+    let mut timeline_signals: Vec<(u64, u64)> = Vec::new();
     for si in submits {
-        if si.p_command_buffers.is_null() {
-            continue;
+        if !si.p_command_buffers.is_null() {
+            let ptrs = unsafe {
+                std::slice::from_raw_parts(si.p_command_buffers, si.command_buffer_count as usize)
+            };
+            for &p in ptrs {
+                if let Some(h) = unsafe { cmdbuf_handle(p) } {
+                    cbs.push(h);
+                }
+            }
         }
-        let ptrs = unsafe {
-            std::slice::from_raw_parts(si.p_command_buffers, si.command_buffer_count as usize)
-        };
-        for &p in ptrs {
-            if let Some(h) = unsafe { cmdbuf_handle(p) } {
-                cbs.push(h);
+        // VkTimelineSemaphoreSubmitInfo::pSignalSemaphoreValues[i] pairs positionally with
+        // VkSubmitInfo::pSignalSemaphores[i] — the value queue completion advances that semaphore to.
+        let node = unsafe { find_pnext(si.p_next, VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO) };
+        if !node.is_null() && !si.p_signal_semaphores.is_null() {
+            let ts = unsafe { &*(node as *const VkTimelineSemaphoreSubmitInfo) };
+            if !ts.p_signal_semaphore_values.is_null() {
+                let n = (si.signal_semaphore_count as usize).min(ts.signal_semaphore_value_count as usize);
+                let sems = unsafe { std::slice::from_raw_parts(si.p_signal_semaphores, n) };
+                let vals = unsafe { std::slice::from_raw_parts(ts.p_signal_semaphore_values, n) };
+                for i in 0..n {
+                    timeline_signals.push((sems[i], vals[i]));
+                }
             }
         }
     }
     let signal = if fence != 0 { Some(fence) } else { None };
-    let r = dev_sink(|dev, sink| vk(submit::queue_submit(dev, sink, &cbs, signal)))
-        .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
+    let r = dev_sink(|dev, sink| {
+        let r = vk(submit::queue_submit(dev, sink, &cbs, signal));
+        if r == VK_SUCCESS {
+            submit::signal_timeline_values(dev, &timeline_signals);
+        }
+        r
+    })
+    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
     if r != VK_SUCCESS {
         hl_log::hl_warn!(tag::SHIM, "vkQueueSubmit cbs={} -> {:?}", cbs.len(), r);
     }
@@ -977,22 +1010,40 @@ pub extern "C" fn vkQueueSubmit2(
         unsafe { std::slice::from_raw_parts(p_submits as *const VkSubmitInfo2, submit_count as usize) }
     };
     let mut cbs: Vec<VkCbHandle> = Vec::new();
+    let mut timeline_signals: Vec<(u64, u64)> = Vec::new();
     for si in submits {
-        if si.p_command_buffer_infos.is_null() {
-            continue;
+        if !si.p_command_buffer_infos.is_null() {
+            let infos = unsafe {
+                std::slice::from_raw_parts(si.p_command_buffer_infos, si.command_buffer_info_count as usize)
+            };
+            for info in infos {
+                if let Some(h) = unsafe { cmdbuf_handle(info.command_buffer) } {
+                    cbs.push(h);
+                }
+            }
         }
-        let infos = unsafe {
-            std::slice::from_raw_parts(si.p_command_buffer_infos, si.command_buffer_info_count as usize)
-        };
-        for info in infos {
-            if let Some(h) = unsafe { cmdbuf_handle(info.command_buffer) } {
-                cbs.push(h);
+        // sync2 carries the timeline value inline on each VkSemaphoreSubmitInfo (queue-side signal).
+        if !si.p_signal_semaphore_infos.is_null() {
+            let infos = unsafe {
+                std::slice::from_raw_parts(
+                    si.p_signal_semaphore_infos as *const VkSemaphoreSubmitInfo,
+                    si.signal_semaphore_info_count as usize,
+                )
+            };
+            for info in infos {
+                timeline_signals.push((info.semaphore, info.value));
             }
         }
     }
     let signal = if fence != 0 { Some(fence) } else { None };
-    dev_sink(|dev, sink| vk(submit::queue_submit(dev, sink, &cbs, signal)))
-        .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+    dev_sink(|dev, sink| {
+        let r = vk(submit::queue_submit(dev, sink, &cbs, signal));
+        if r == VK_SUCCESS {
+            submit::signal_timeline_values(dev, &timeline_signals);
+        }
+        r
+    })
+    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
 /// `vkQueueSubmit2KHR` — the `VK_KHR_synchronization2` alias.

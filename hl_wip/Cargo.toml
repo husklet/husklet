@@ -199,6 +199,18 @@ name = "vk_compute_shared"
 path = "tests/vk_compute_shared.rs"
 
 [[test]]
+name = "vk_timeline_semaphore"
+path = "tests/vk_timeline_semaphore.rs"
+
+[[test]]
+name = "vk_event"
+path = "tests/vk_event.rs"
+
+[[test]]
+name = "vk_fence"
+path = "tests/vk_fence.rs"
+
+[[test]]
 name = "feature_combo_frame"
 path = "tests/feature_combo_frame.rs"
 

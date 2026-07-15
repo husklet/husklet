@@ -1308,6 +1308,24 @@ pub struct VkSemaphoreSignalInfo {
     pub value: u64,
 }
 
+/// `VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO` — the `VkSubmitInfo` pNext carrying the per-wait /
+/// per-signal timeline VALUES paired positionally with `VkSubmitInfo::pWaitSemaphores` / `pSignalSemaphores`.
+pub const VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO: i32 = 1_000_207_003;
+
+/// `VkTimelineSemaphoreSubmitInfo` (`VK_KHR_timeline_semaphore`) — a `VkSubmitInfo` pNext supplying the
+/// timeline counter values for the submit's wait/signal semaphore arrays. `pSignalSemaphoreValues[i]` is
+/// the value queue completion advances `VkSubmitInfo::pSignalSemaphores[i]` to (ignored for a binary
+/// semaphore); `pWaitSemaphoreValues[i]` is the value the submit waits `pWaitSemaphores[i]` to reach.
+#[repr(C)]
+pub struct VkTimelineSemaphoreSubmitInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub wait_semaphore_value_count: u32,
+    pub p_wait_semaphore_values: *const u64,
+    pub signal_semaphore_value_count: u32,
+    pub p_signal_semaphore_values: *const u64,
+}
+
 #[repr(C)]
 pub struct VkSemaphoreWaitInfo {
     pub s_type: i32,
@@ -1531,8 +1549,21 @@ pub struct VkCommandBufferSubmitInfo {
     pub device_mask: u32,
 }
 
-/// `VkSubmitInfo2` — the `vkQueueSubmit2` batch (sync2). Only the command-buffer array is consumed by the
-/// synchronous model; the semaphore-info arrays are validated-then-ignored (as `vkQueueSubmit` does).
+/// `VkSemaphoreSubmitInfo` (sync2) — one wait/signal entry of a `vkQueueSubmit2` batch. Carries the
+/// timeline `value` inline (unlike v1's side-array `VkTimelineSemaphoreSubmitInfo`).
+#[repr(C)]
+pub struct VkSemaphoreSubmitInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub semaphore: u64,
+    pub value: u64,
+    pub stage_mask: u64,
+    pub device_index: u32,
+}
+
+/// `VkSubmitInfo2` — the `vkQueueSubmit2` batch (sync2). The command-buffer array and the signal
+/// semaphore infos (for queue-side timeline signals) are consumed; the wait infos are validated-then-
+/// ignored (the synchronous model has already satisfied them).
 #[repr(C)]
 pub struct VkSubmitInfo2 {
     pub s_type: i32,
