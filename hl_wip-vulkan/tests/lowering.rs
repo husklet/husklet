@@ -1217,19 +1217,64 @@ fn dynamic_state_is_recorded_but_emits_no_encoder_op() {
 }
 
 #[test]
-fn indirect_draws_validate_buffer_and_emit_no_op() {
+fn indirect_draws_read_args_and_lower_to_direct_draws() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    // A valid indirect buffer (INDIRECT usage) large enough for two 16-byte VkDrawIndirectCommands.
+    // A valid indirect buffer (INDIRECT usage) large enough for two 16-byte VkDrawIndirectCommands,
+    // backed by memory the app has filled on the CPU (the mapped-buffer indirect-args pattern).
     let indirect =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
+    let mem = create::allocate_memory(&mut d, 64);
+    create::bind_buffer_memory(&mut d, indirect, mem, 0).unwrap();
+    // cmd0 = {vertexCount:6, instanceCount:2, firstVertex:3, firstInstance:1}
+    // cmd1 = {vertexCount:3, instanceCount:1, firstVertex:0, firstInstance:0}
+    let mut args = Vec::new();
+    for w in [6u32, 2, 3, 1, 3, 1, 0, 0] {
+        args.extend_from_slice(&w.to_le_bytes());
+    }
+    create::write_mapped(&mut d, mem, 0, &args).unwrap();
+
+    // The indirect draw reads both argument structs and lowers each to the SAME direct Enc::Draw.
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
         record::cmd_draw_indirect(d, cb, indirect, 0, 2, 16).unwrap();
-        record::cmd_draw_indexed_indirect(d, cb, indirect, 0, 1, 20).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![
+            Enc::Draw { vertex_count: 6, instance_count: 2, first_vertex: 3, first_instance: 1 },
+            Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+        ]
+    );
+    // The equivalent DIRECT draws produce the byte-identical encoder stream (indirect == direct).
+    let direct = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_draw(d, cb, 6, 2, 3, 1).unwrap();
+        record::cmd_draw(d, cb, 3, 1, 0, 0).unwrap();
+    });
+    assert_eq!(enc, direct, "an indirect draw must lower to its direct twin");
+
+    // vkCmdDrawIndexedIndirect reads the 20-byte struct and lowers to the matching DrawIndexed.
+    let idx = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
+    let mem2 = create::allocate_memory(&mut d, 64);
+    create::bind_buffer_memory(&mut d, idx, mem2, 0).unwrap();
+    // {indexCount:9, instanceCount:3, firstIndex:2, vertexOffset:0, firstInstance:5}
+    let mut ib = Vec::new();
+    for w in [9u32, 3, 2, 0, 5] {
+        ib.extend_from_slice(&w.to_le_bytes());
+    }
+    create::write_mapped(&mut d, mem2, 0, &ib).unwrap();
+    let enc_idx = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_draw_indexed_indirect(d, cb, idx, 0, 1, 20).unwrap();
+    });
+    assert_eq!(
+        enc_idx,
+        vec![Enc::DrawIndexed { index_count: 9, instance_count: 3, first_index: 2, base_vertex: 0, first_instance: 5 }]
+    );
+
+    // vkCmdDispatchIndirect stays a validated no-op (no Enc::Dispatch arg-resolution path).
+    let enc_disp = record_and_submit(&mut d, &mut sink, |d, cb| {
         record::cmd_dispatch_indirect(d, cb, indirect, 0).unwrap();
     });
-    // The IR carries no indirect draw/dispatch op — validated, but a documented no-op.
-    assert!(enc.is_empty(), "indirect draws emit no encoder op, got {enc:?}");
+    assert!(enc_disp.is_empty(), "dispatch-indirect emits no encoder op, got {enc_disp:?}");
 
     // Truthful failure: an unknown buffer, a non-INDIRECT buffer, and an out-of-range span all error.
     let cb = record::allocate_command_buffer(&mut d);
@@ -1359,6 +1404,85 @@ fn query_pool_timestamp_records_and_results_readable() {
         sync::get_query_pool_results(&d, pool, 0, 1, &mut out, 4, false, false, false, false).unwrap(),
         false
     );
+}
+
+#[test]
+fn occlusion_query_counts_scissor_clipped_coverage() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let target = create::create_image(
+        &mut d,
+        &mut sink,
+        64,
+        64,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::COLOR_ATTACHMENT,
+    )
+    .unwrap();
+    // A 2-slot OCCLUSION pool (VkQueryType OCCLUSION = 0).
+    let pool = sync::create_query_pool(&mut d, 0, 2).unwrap();
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb, false).unwrap();
+    record::cmd_reset_query_pool(&mut d, cb, pool, 0, 2).unwrap();
+    record::cmd_begin_render_pass(&mut d, cb, target, [0.0; 4], true, None).unwrap();
+    // Query 0: a full-frame draw with no scissor covers the whole 64x64 = 4096 samples.
+    record::cmd_begin_query(&mut d, cb, pool, 0).unwrap();
+    record::cmd_draw(&mut d, cb, 6, 1, 0, 0).unwrap();
+    record::cmd_end_query(&mut d, cb, pool, 0).unwrap();
+    // Query 1: the same draw, scissored to the left half → 32x64 = 2048 samples.
+    record::cmd_set_scissor(&mut d, cb, 0, 0, 32, 64).unwrap();
+    record::cmd_begin_query(&mut d, cb, pool, 1).unwrap();
+    record::cmd_draw(&mut d, cb, 6, 1, 0, 0).unwrap();
+    record::cmd_end_query(&mut d, cb, pool, 1).unwrap();
+    record::cmd_end_render_pass(&mut d, cb).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    let mut out = [0u8; 8];
+    assert!(sync::get_query_pool_results(&d, pool, 0, 1, &mut out, 8, true, false, false, false).unwrap());
+    assert_eq!(u64::from_le_bytes(out), 4096, "a visible full-frame draw counts every sample");
+    let mut out = [0u8; 8];
+    assert!(sync::get_query_pool_results(&d, pool, 1, 1, &mut out, 8, true, false, false, false).unwrap());
+    assert_eq!(u64::from_le_bytes(out), 2048, "a scissor-clipped draw counts only the admitted samples");
+}
+
+#[test]
+fn occlusion_query_zero_when_fully_scissored_or_no_draw() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let target = create::create_image(
+        &mut d,
+        &mut sink,
+        64,
+        64,
+        vk_format::R8G8B8A8_UNORM,
+        vk_image_usage::COLOR_ATTACHMENT,
+    )
+    .unwrap();
+    let pool = sync::create_query_pool(&mut d, 0, 2).unwrap();
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb, false).unwrap();
+    record::cmd_reset_query_pool(&mut d, cb, pool, 0, 2).unwrap();
+    record::cmd_begin_render_pass(&mut d, cb, target, [0.0; 4], true, None).unwrap();
+    // Query 0: a draw fully scissored to an empty 0x0 rect passes zero samples (fully occluded).
+    record::cmd_set_scissor(&mut d, cb, 0, 0, 0, 0).unwrap();
+    record::cmd_begin_query(&mut d, cb, pool, 0).unwrap();
+    record::cmd_draw(&mut d, cb, 6, 1, 0, 0).unwrap();
+    record::cmd_end_query(&mut d, cb, pool, 0).unwrap();
+    // Query 1: no draw at all in the scope → zero samples.
+    record::cmd_begin_query(&mut d, cb, pool, 1).unwrap();
+    record::cmd_end_query(&mut d, cb, pool, 1).unwrap();
+    record::cmd_end_render_pass(&mut d, cb).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    for q in 0..2 {
+        let mut out = [0u8; 8];
+        assert!(sync::get_query_pool_results(&d, pool, q, 1, &mut out, 8, true, false, false, false).unwrap());
+        assert_eq!(u64::from_le_bytes(out), 0, "a fully-occluded / no-draw occlusion query reports 0");
+    }
 }
 
 #[test]

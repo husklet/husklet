@@ -202,11 +202,13 @@ pub fn cmd_begin_render_pass(
     load_clear: bool,
     depth: Option<RenderingDepthAttachment>,
 ) -> Result<()> {
-    let texture = dev
-        .images
-        .get(&color_image)
-        .ok_or(GpuError::Invalid("vkCmdBeginRenderPass: unknown color VkImage"))?
-        .ir_id;
+    let (texture, extent) = {
+        let img = dev
+            .images
+            .get(&color_image)
+            .ok_or(GpuError::Invalid("vkCmdBeginRenderPass: unknown color VkImage"))?;
+        (img.ir_id, (img.width, img.height))
+    };
     // Resolve the depth image → ir texture id up front (a bad handle fails before recording), exactly as
     // the dynamic-rendering path does for its inline pDepthAttachment.
     let depth_target = match depth {
@@ -237,6 +239,8 @@ pub fn cmd_begin_render_pass(
     });
     rec.in_render_pass = true;
     rec.active_render_texture = Some(texture);
+    rec.render_extent = extent;
+    rec.scissor = None;
     Ok(())
 }
 
@@ -298,7 +302,19 @@ pub fn cmd_draw(
         rec.enc.push(Enc::SetBindGroup { index, group });
     }
     rec.enc.push(Enc::Draw { vertex_count, instance_count, first_vertex, first_instance });
+    accumulate_occlusion(rec, instance_count);
     Ok(())
+}
+
+/// If an OCCLUSION query is open on this command buffer, add the draw's scissor-clipped sample footprint
+/// to its running total (see [`CmdBufRec::occlusion_coverage`]).
+fn accumulate_occlusion(rec: &mut CmdBufRec, instance_count: u32) {
+    if rec.occlusion_accum.is_some() {
+        let cov = rec.occlusion_coverage(instance_count);
+        if let Some(acc) = rec.occlusion_accum.as_mut() {
+            *acc = acc.saturating_add(cov);
+        }
+    }
 }
 
 /// `vkCmdDrawIndexed` — replay the bound pipeline + bind groups, then record `DrawIndexed` against the
@@ -328,6 +344,7 @@ pub fn cmd_draw_indexed(
         base_vertex: vertex_offset,
         first_instance,
     });
+    accumulate_occlusion(rec, instance_count);
     Ok(())
 }
 
@@ -377,14 +394,17 @@ pub fn cmd_begin_rendering(
 ) -> Result<()> {
     // Resolve every attachment image → ir texture id up front (a bad handle fails before recording).
     let mut color_targets: Vec<ColorAttachment> = Vec::with_capacity(colors.len());
+    let mut extent = (0u32, 0u32);
     for c in colors {
-        let texture = dev
+        let img = dev
             .images
             .get(&c.image)
-            .ok_or(GpuError::Invalid("vkCmdBeginRendering: unknown color VkImage"))?
-            .ir_id;
+            .ok_or(GpuError::Invalid("vkCmdBeginRendering: unknown color VkImage"))?;
+        if extent == (0, 0) {
+            extent = (img.width, img.height);
+        }
         color_targets.push(ColorAttachment {
-            texture,
+            texture: img.ir_id,
             load: if c.load_clear { LoadOp::Clear } else { LoadOp::Load },
             clear: c.clear,
             store: c.store,
@@ -411,6 +431,8 @@ pub fn cmd_begin_rendering(
     rec.enc.push(Enc::BeginRenderPass { color: color_targets, depth: depth_target });
     rec.in_render_pass = true;
     rec.active_render_texture = active;
+    rec.render_extent = extent;
+    rec.scissor = None;
     Ok(())
 }
 
@@ -498,7 +520,10 @@ pub fn cmd_set_viewport(
 /// `vkCmdSetScissor` (one rect) — record `Enc::SetScissor`. A negative `VkRect2D` offset is clamped to 0
 /// by the caller (the IR scissor is unsigned).
 pub fn cmd_set_scissor(dev: &mut Device, cb: VkCommandBuffer, x: u32, y: u32, w: u32, h: u32) -> Result<()> {
-    recording_mut(dev, cb)?.enc.push(Enc::SetScissor { x, y, w, h });
+    let rec = recording_mut(dev, cb)?;
+    // Track the current scissor so an open occlusion query counts only the samples this rect admits.
+    rec.scissor = Some((x, y, w, h));
+    rec.enc.push(Enc::SetScissor { x, y, w, h });
     Ok(())
 }
 
@@ -633,12 +658,44 @@ pub fn cmd_push_constants(dev: &mut Device, cb: VkCommandBuffer, offset: u32, by
 }
 
 // ---- indirect draws / dispatch -----------------------------------------------------------------
-// The indirect commands read their draw/dispatch arguments from a device buffer at execution time. The
-// hl-GPU IR carries only direct `Draw`/`Dispatch`/`DrawIndexed` (the argument words are not available at
-// record time and there is no indirect encoder op), so these validate the indirect buffer (handle,
-// INDIRECT usage, in-bounds argument span) and record NO encoder op — an honest, documented limit. A bad
-// handle / missing usage / out-of-range span is a truthful error, never a false success. Ported from
-// `command.rs::vkCmdDrawIndirect`/`indirect_ok`.
+// The indirect commands read their draw arguments from a device buffer at execution time. The hl-GPU IR
+// carries no indirect encoder op, BUT the argument buffer is host-visible unified memory (every hl device
+// buffer is MAP-able) whose bytes the shim already holds in `MemRec::data`. So an indirect DRAW whose
+// argument buffer was filled on the CPU before it was recorded (the overwhelmingly common case — a
+// mapped/HOST_COHERENT `VkDrawIndirectCommand[]`) is resolved HERE: the shim reads the argument words out
+// of the bound allocation and lowers each to the SAME direct `Enc::Draw` / `Enc::DrawIndexed` the
+// equivalent `vkCmdDraw` would emit, so an indirect draw and its direct twin rasterize byte-identically.
+//
+// Honest limits, all documented: the args are snapshotted at RECORD time, so a buffer written by the GPU
+// *between* record and submit (e.g. a compute shader that produces the draw args in the same batch) is
+// not reflected — that would need a real IR indirect op. An argument buffer that is not (yet) backed by
+// bound memory reads as zeros → a `Draw{0,..}` no-op (matching an unwritten buffer). `vkCmdDispatchIndirect`
+// stays a validated no-op (no `Enc::Dispatch` argument-resolution path here). A bad handle / missing
+// INDIRECT usage / out-of-range span is always a truthful error, never a false success.
+
+/// Read `len` bytes from `buffer` at `offset` out of its bound host-visible allocation. Bytes past the
+/// end of the backing store (or an unbound buffer) read as zero — an unwritten indirect arg is a `0`.
+fn read_buffer_bytes(dev: &Device, buffer: VkBuffer, offset: u64, len: usize) -> Vec<u8> {
+    let mut out = vec![0u8; len];
+    let Some(b) = dev.buffers.get(&buffer) else { return out };
+    let Some(mem_h) = b.bound_mem else { return out };
+    let Some(m) = dev.memories.get(&mem_h) else { return out };
+    let start = b.bound_offset.saturating_add(offset) as usize;
+    if start >= m.data.len() {
+        return out;
+    }
+    let n = (m.data.len() - start).min(len);
+    out[..n].copy_from_slice(&m.data[start..start + n]);
+    out
+}
+
+/// Little-endian `u32` at `off` in `bytes` (0 if out of range).
+fn le_u32(bytes: &[u8], off: usize) -> u32 {
+    bytes
+        .get(off..off + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .unwrap_or(0)
+}
 
 /// Validate that `buffer` is a valid INDIRECT source holding `draw_count` argument structs of
 /// `struct_size` bytes at `stride`, starting at `offset`, all within the buffer.
@@ -668,8 +725,11 @@ fn validate_indirect(
     }
 }
 
-/// `vkCmdDrawIndirect` — validate the indirect buffer (`VkDrawIndirectCommand` is 16 bytes) then record
-/// no encoder op (documented limit: the IR has no indirect draw). Truthful error on a bad buffer.
+/// `vkCmdDrawIndirect` — validate the indirect buffer (`VkDrawIndirectCommand` is 16 bytes), read each
+/// `{vertexCount, instanceCount, firstVertex, firstInstance}` argument struct out of its host-visible
+/// backing, and lower each to the SAME direct `Enc::Draw` (pipeline + bind groups replayed) the
+/// equivalent `vkCmdDraw` would emit — so an indirect draw and its direct twin rasterize identically.
+/// Truthful error on a bad buffer.
 pub fn cmd_draw_indirect(
     dev: &mut Device,
     cb: VkCommandBuffer,
@@ -679,12 +739,34 @@ pub fn cmd_draw_indirect(
     stride: u32,
 ) -> Result<()> {
     validate_indirect(dev, buffer, offset, draw_count, stride, 16)?;
-    let _ = recording_mut(dev, cb)?;
+    // Snapshot every argument struct up front (immutable dev borrow) before recording.
+    let args: Vec<[u32; 4]> = (0..draw_count)
+        .map(|i| {
+            let base = offset.saturating_add(i as u64 * stride as u64);
+            let b = read_buffer_bytes(dev, buffer, base, 16);
+            [le_u32(&b, 0), le_u32(&b, 4), le_u32(&b, 8), le_u32(&b, 12)]
+        })
+        .collect();
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    for [vertex_count, instance_count, first_vertex, first_instance] in args {
+        if let Some(p) = pipeline {
+            rec.enc.push(Enc::SetPipeline(p));
+        }
+        for (index, group) in &groups {
+            rec.enc.push(Enc::SetBindGroup { index: *index, group: *group });
+        }
+        rec.enc.push(Enc::Draw { vertex_count, instance_count, first_vertex, first_instance });
+        accumulate_occlusion(rec, instance_count);
+    }
     Ok(())
 }
 
-/// `vkCmdDrawIndexedIndirect` — validate the indirect buffer (`VkDrawIndexedIndirectCommand` is 20 bytes)
-/// then record no encoder op (documented limit). Truthful error on a bad buffer.
+/// `vkCmdDrawIndexedIndirect` — validate the indirect buffer (`VkDrawIndexedIndirectCommand` is 20
+/// bytes), read each `{indexCount, instanceCount, firstIndex, vertexOffset, firstInstance}` out of its
+/// host-visible backing, and lower each to the SAME direct `Enc::DrawIndexed` (against the bound index
+/// buffer) the equivalent `vkCmdDrawIndexed` would emit. Truthful error on a bad buffer.
 pub fn cmd_draw_indexed_indirect(
     dev: &mut Device,
     cb: VkCommandBuffer,
@@ -694,7 +776,26 @@ pub fn cmd_draw_indexed_indirect(
     stride: u32,
 ) -> Result<()> {
     validate_indirect(dev, buffer, offset, draw_count, stride, 20)?;
-    let _ = recording_mut(dev, cb)?;
+    let args: Vec<(u32, u32, u32, i32, u32)> = (0..draw_count)
+        .map(|i| {
+            let base = offset.saturating_add(i as u64 * stride as u64);
+            let b = read_buffer_bytes(dev, buffer, base, 20);
+            (le_u32(&b, 0), le_u32(&b, 4), le_u32(&b, 8), le_u32(&b, 12) as i32, le_u32(&b, 16))
+        })
+        .collect();
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    for (index_count, instance_count, first_index, base_vertex, first_instance) in args {
+        if let Some(p) = pipeline {
+            rec.enc.push(Enc::SetPipeline(p));
+        }
+        for (index, group) in &groups {
+            rec.enc.push(Enc::SetBindGroup { index: *index, group: *group });
+        }
+        rec.enc.push(Enc::DrawIndexed { index_count, instance_count, first_index, base_vertex, first_instance });
+        accumulate_occlusion(rec, instance_count);
+    }
     Ok(())
 }
 
@@ -1167,25 +1268,31 @@ pub fn cmd_reset_query_pool(
 /// of a type; a second open is ignored). Availability is set at `vkCmdEndQuery`. Errors on a bad pool/
 /// index. Ported from `query.rs::vkCmdBeginQuery`.
 pub fn cmd_begin_query(dev: &mut Device, cb: VkCommandBuffer, pool: VkQueryPool, query: u32) -> Result<()> {
-    match dev.query_pools.get(&pool) {
-        Some(p) if query < p.count => {}
+    // VkQueryType OCCLUSION == 0 — an occlusion query counts the fragments its scope draws pass.
+    let is_occlusion = match dev.query_pools.get(&pool) {
+        Some(p) if query < p.count => p.query_type == 0,
         _ => return Err(GpuError::Invalid("vkCmdBeginQuery: unknown pool or query index")),
-    }
+    };
     let rec = recording_mut(dev, cb)?;
     if rec.active_query.is_none() {
         rec.active_query = Some((pool, query));
+        // Arm the occlusion accumulator so each draw in [begin,end) adds its sample footprint.
+        rec.occlusion_accum = if is_occlusion { Some(0) } else { None };
     }
     Ok(())
 }
 
-/// `vkCmdEndQuery` — close the matching open query, recording it available at a bounded value (a
-/// conservative `0`: the synchronous model surfaces no real GPU sample count). Ported from
-/// `query.rs::vkCmdEndQuery`.
+/// `vkCmdEndQuery` — close the matching open query, recording it available at the accumulated OCCLUSION
+/// sample count (the scissor-clipped footprint of every draw in the query scope; `0` when nothing
+/// rasterized or the draws were fully scissored). A non-occlusion query resolves at `0`. Ported from
+/// `query.rs::vkCmdEndQuery`, upgraded from the old conservative-constant `0` to a coverage that reflects
+/// reality.
 pub fn cmd_end_query(dev: &mut Device, cb: VkCommandBuffer, pool: VkQueryPool, query: u32) -> Result<()> {
     let rec = recording_mut(dev, cb)?;
     if rec.active_query == Some((pool, query)) {
         rec.active_query = None;
-        rec.deferred.push(DeferredOp::QueryEnd { pool, query, value: 0 });
+        let value = rec.occlusion_accum.take().unwrap_or(0);
+        rec.deferred.push(DeferredOp::QueryEnd { pool, query, value });
     }
     Ok(())
 }

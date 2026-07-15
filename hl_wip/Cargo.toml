@@ -163,6 +163,22 @@ name = "vk_multidraw"
 path = "tests/vk_multidraw.rs"
 
 [[test]]
+name = "vk_draw_indirect"
+path = "tests/vk_draw_indirect.rs"
+
+[[test]]
+name = "vk_secondary_cmdbuf"
+path = "tests/vk_secondary_cmdbuf.rs"
+
+[[test]]
+name = "vk_occlusion_query"
+path = "tests/vk_occlusion_query.rs"
+
+[[test]]
+name = "vk_timestamp"
+path = "tests/vk_timestamp.rs"
+
+[[test]]
 name = "vk_scissor"
 path = "tests/vk_scissor.rs"
 
