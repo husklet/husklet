@@ -200,38 +200,54 @@ fn gtk4_composites_through_the_full_stack() {
         //     "Max texture size: 16384" (was uninitialized garbage) and realizes GskGLRenderer over our
         //     EGL/GLES — `gpu_submits` is now > 0 (GTK's GL IR reaches the host executor).
         //
-        // REMAINING GAP (the "next real bug"; both parts are downstream of the GL shim, OUT of hl_wip-gl's
-        // edit scope — the shim RECORDS GTK's frame correctly: build_frame_ir sees ~370 draws + ~22 clears):
-        //   A. FRAME-TARGET COLLAPSE (hl_wip-gl/src/service/frame.rs `build_geometry_frame`): GskGL renders
-        //      a real frame across MANY offscreen FBOs of varying sizes (glyph/mask atlases, blur passes)
-        //      and finally composites to the window's default framebuffer. build_frame_ir lowers the whole
-        //      frame onto a SINGLE render target = the FIRST geometry draw's framebuffer, which is a tiny
-        //      16x16 GskGL atlas FBO — so the presented target is 16x16, not the 1378x774 window. A faithful
-        //      lowering needs a per-FBO render-target frame graph (render each FBO to its own texture, then
-        //      the window pass sampling them), not one target for the frame.
-        //   B. GPU-EXEC TRANSPORT CEILING (hl_wip-gpu transport): the lowered GskGL frame is large (~7.6k
-        //      Cmds with MBs of vertex/texture uploads). The RemoteCommandSink -> host submit fails with
-        //      "transport: Broken pipe (os error 32)" — the host closes the connection on the oversized
-        //      frame (see hl_wip-gpu `Capabilities::max_frame_bytes` / transport MAX_FRAME_BYTES, and the
-        //      runtime frame-size validation). read_pixels' readback then errors and the following
-        //      eglSwapBuffers submit hits the dead pipe, so NO frame is presented (0 frames).
-        //   The same eglSwapBuffers + glReadPixels + app-surface present path is proven working by
-        //   weston_simple_egl_e2e (small 800x600 single-target frames present every swap), so A+B are the
-        //   GTK-specific (large, multi-FBO frame) deltas.
+        // REMAINING GAP (the "next real bug", now precisely one stage further downstream than the old
+        // frame-size wall — that wall is FIXED): the GL shim lowers GTK's frame correctly and CHEAPLY, and
+        // the frame reaches the host executor, but GTK's shaders do not COMPILE on the host.
+        //
+        //   FIXED — frame-size collapse: the GL shim now caches guest GL resources across frames+draws by
+        //   (GL name, content generation) — hl_wip-gl/src/model/context.rs `sampled_texture_ir` /
+        //   `data_buffer_ir`, wired through service/frame.rs `lower_draw`. Before, every one of GTK's ~348
+        //   draws re-`CreateTexture`d + re-uploaded the SAME glyph/mask atlas plane it sampled, so one frame
+        //   was ~4.3 GiB of redundant `WriteBuffer` (1145 CreateTexture, 1833 CreateBuffer) — far over the
+        //   64 MiB negotiated cap AND the 256 MiB transport cap, which desynced the socket and hung the app.
+        //   With caching a GTK frame lowers to ~30 MiB (13 CreateTexture, ~4.5 MiB of uploads) — comfortably
+        //   under the cap. The multi-FBO frame graph (per-FBO render target) already targets the 1378x774
+        //   window, not a 16x16 atlas.
+        //
+        //   REMAINING — GskGpu shader compilation on the host (naga glsl-in): GTK 4.14+'s "gl" renderer is
+        //   the unified GskGpu backend. Its shaders are 1200+-line `#version 320 es` sources driven entirely
+        //   by the C preprocessor (`#define`/`#if GSK_GLES`, macro-generated declarations, its own
+        //   `layout(std140, binding=N)` uniform blocks + `layout(binding=M)` samplers, `gl_VertexID`). The
+        //   shim's reflection-and-regenerate translator (hl_wip-gl/src/adapter/glsl.rs `translate_render`),
+        //   built for ES2 `attribute`/`varying`/`gl_FragColor` shaders, mis-parses the preprocessor lines
+        //   (it emits garbage like `layout(location=0) in #define PASS;`) — naga rejects it with
+        //   `PreprocessorError(UnexpectedHash)` + `NotImplemented("variable qualifier")`. Forwarding the RAW
+        //   source instead (naga's own preprocessor runs fine) gets much further but still hits naga-24
+        //   glsl-in gaps: `InvalidVersion(320)`, `InvalidProfile("es")`, `uniform/buffer blocks require
+        //   layout(binding=X)`, `UnknownVariable("gl_VertexID")`. So EVERY GskGpu program fails to compile
+        //   → every draw's pipeline create fails → the host NACKs the frame → readback + present fail → 0
+        //   presented. This is a large, separate shader-frontend effort (a GskGpu-aware GLSL forward path
+        //   PLUS a uniform-block/texture binding model matching GskGpu's own layout — the frame builder's
+        //   reflected binding scheme does not line up with GskGpu's declared bindings), well beyond the GL
+        //   shim's ES2-shaped translator. The small-app path (weston_simple_egl, gl_* e2e) presents fine
+        //   because those shaders ARE the ES2 dialect the translator targets.
         eprintln!(
-            "MILESTONE DIAGNOSED (GTK4 reached real GL rendering but did not composite a frame — reported \
-             as the next real gap, suite stays green):\n\
+            "MILESTONE DIAGNOSED (GTK4 reaches real GL rendering + cheap frame lowering, but its GskGpu \
+             shaders do not compile on the host — reported as the next real gap, suite stays green):\n\
              Stage evidence:\n\
              * host GPU executor submits (guest lowered GL IR over $HL_GPU_EXEC): {submit_count}\n\
-               (>0 => the epoxy/GskGL bring-up is LIVE; GTK lowers real GL to the host — the stop is the \
-                large multi-FBO GskGL frame, see gaps A+B below)\n\
-               (0 => a regression in the epoxy context classification / GskGL realize — re-check \
+               (>0 => the epoxy/GskGpu bring-up is LIVE; GTK lowers real GL to the host)\n\
+               (0 => a regression in the epoxy context classification / renderer realize — re-check \
                 eglQueryContext(EGL_CONTEXT_CLIENT_TYPE) and the GDK_DEBUG=opengl / GSK_DEBUG=renderer lines)\n\
+             * frame lowering: FIXED — cross-frame/draw resource caching (context.rs sampled_texture_ir / \
+                data_buffer_ir) took a GTK frame from ~4.3 GiB (per-draw atlas re-upload, over every cap) to \
+                ~30 MiB, well under the 64 MiB negotiated cap.\n\
              * compositor presented frames: 0\n\
-               (A: build_frame_ir collapses GTK's many-FBO frame onto the first draw's 16x16 atlas FBO — \
-                hl_wip-gl/src/service/frame.rs; B: the ~7.6k-Cmd frame trips the hl_wip-gpu transport \
-                frame-size ceiling -> \"Broken pipe\" -> readback + present fail. Both are downstream of the \
-                GL shim's record/lower seam.)\n\
+               (the ~30 MiB frame REACHES the executor but is NACKed: GTK's GskGpu `#version 320 es` \
+                preprocessor shaders don't compile through the host naga glsl-in. The shim's ES2-shaped \
+                reflection translator (adapter/glsl.rs) mangles the preprocessor source; raw-forwarding \
+                instead still hits naga-24 gaps: InvalidVersion(320)/InvalidProfile(es)/uniform-block \
+                binding/gl_VertexID. A GskGpu-aware GLSL forward + binding model is the next effort.)\n\
              --- decisive app stderr lines ---\n{}\n",
             decisive_lines(&stderr),
         );

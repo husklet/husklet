@@ -232,6 +232,18 @@ pub struct GlContext {
     /// `(surface_ir, texture_ir)`. Minted + `CreateTexture`/`CreateSurface`d on first use and reused on
     /// later frames (so re-rendering the same FBO does not re-create the target).
     fbo_targets: HashMap<u32, (u32, u32)>,
+
+    /// Residency cache for sampled GL textures uploaded from CPU pixels: GL texture name → `(texture_ir,
+    /// uploaded_gen)`. A texture is `CreateTexture`d + staged + `CopyBufferToTexture`d ONCE (per content
+    /// generation) and re-referenced by its stable IR id on every later draw and frame. Without this a
+    /// real toolkit frame (GskGL binds one glyph/mask atlas across hundreds of draws) re-uploads the whole
+    /// atlas plane per draw — gigabytes of redundant `WriteBuffer` that blow the negotiated frame cap.
+    tex_ir_cache: HashMap<u32, (u32, u64)>,
+    /// Residency cache for GL data buffers (vertex/index), keyed by `(GL buffer name, IR usage bits)` →
+    /// `(buffer_ir, uploaded_gen)`. Same idea as [`Self::tex_ir_cache`]: a buffer whose bytes did not
+    /// change is created + uploaded once and re-bound by id. Keyed on usage too so the rare GL buffer bound
+    /// as BOTH a vertex and an index source gets a correctly-typed IR buffer for each role.
+    buf_ir_cache: HashMap<(u32, u32), (u32, u64)>,
 }
 
 impl Default for GlContext {
@@ -307,7 +319,48 @@ impl GlContext {
             default_tex_ir: 0,
             default_surface_ir: 0,
             fbo_targets: HashMap::new(),
+            tex_ir_cache: HashMap::new(),
+            buf_ir_cache: HashMap::new(),
         }
+    }
+
+    /// The stable IR texture id a sampled GL texture (`gl_name`) at content generation `gen` lowers to.
+    /// Returns `(texture_ir, needs_upload)`: `needs_upload` is true on the first sight of this texture and
+    /// whenever its content generation changed since the last upload — the frame builder emits the
+    /// `CreateTexture` + staging `WriteBuffer` + `CopyBufferToTexture` exactly then, and reuses the resident
+    /// id (uploading nothing) on every later reference in this and subsequent frames.
+    pub fn sampled_texture_ir(&mut self, gl_name: u32, gen: u64) -> (u32, bool) {
+        if let Some(&(ir, up_gen)) = self.tex_ir_cache.get(&gl_name) {
+            if up_gen == gen {
+                return (ir, false);
+            }
+            // Content changed: a fresh id carries the new upload (the old resident id is simply abandoned —
+            // content updates to a given texture are rare, so this does not accumulate).
+            let ir = self.alloc_texture_ir();
+            self.tex_ir_cache.insert(gl_name, (ir, gen));
+            return (ir, true);
+        }
+        let ir = self.alloc_texture_ir();
+        self.tex_ir_cache.insert(gl_name, (ir, gen));
+        (ir, true)
+    }
+
+    /// The stable IR buffer id a GL data buffer (`gl_name`) at content generation `gen` lowers to for the
+    /// given IR `usage` bits (VERTEX/INDEX). Returns `(buffer_ir, needs_upload)`, mirroring
+    /// [`Self::sampled_texture_ir`]: created + `WriteBuffer`d once per content generation, re-bound by id
+    /// thereafter.
+    pub fn data_buffer_ir(&mut self, gl_name: u32, usage: u32, gen: u64) -> (u32, bool) {
+        if let Some(&(ir, up_gen)) = self.buf_ir_cache.get(&(gl_name, usage)) {
+            if up_gen == gen {
+                return (ir, false);
+            }
+            let ir = self.alloc_buffer_ir();
+            self.buf_ir_cache.insert((gl_name, usage), (ir, gen));
+            return (ir, true);
+        }
+        let ir = self.alloc_buffer_ir();
+        self.buf_ir_cache.insert((gl_name, usage), (ir, gen));
+        (ir, true)
     }
 
     // ---- IR id minting ---------------------------------------------------------------------------

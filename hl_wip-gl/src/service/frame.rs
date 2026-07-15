@@ -337,14 +337,18 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     }
     let nvd = d.attrs.iter().enumerate().filter(|(_, a)| a.enabled).map(|(i, _)| i + 1).max().unwrap_or(0);
 
-    // Mint IR buffer ids for the vertex slots + emit their uploads.
+    // Resolve the IR buffer id for each vertex slot, uploading its bytes ONLY on first sight / content
+    // change (the residency cache): a VBO bound across many draws or frames is created + written once.
     let mut slot_ir: Vec<u32> = Vec::with_capacity(nslot);
     for &gl_buf in &slot_gl_buf {
-        let ir = ctx.alloc_buffer_ir();
+        let gen = ctx.buffers.get(gl_buf).map(|b| b.gen).unwrap_or(0);
+        let (ir, needs_upload) = ctx.data_buffer_ir(gl_buf, buffer_usage::VERTEX, gen);
         slot_ir.push(ir);
-        let data = ctx.buffers.get(gl_buf).map(|b| b.data.clone()).unwrap_or_default();
-        cmds.push(Cmd::CreateBuffer(ir, BufferDesc { size: data.len() as u64, usage: buffer_usage::VERTEX, label: String::new() }));
-        cmds.push(Cmd::WriteBuffer { id: ir, offset: 0, data });
+        if needs_upload {
+            let data = ctx.buffers.get(gl_buf).map(|b| b.data.clone()).unwrap_or_default();
+            cmds.push(Cmd::CreateBuffer(ir, BufferDesc { size: data.len() as u64, usage: buffer_usage::VERTEX, label: String::new() }));
+            cmds.push(Cmd::WriteBuffer { id: ir, offset: 0, data });
+        }
     }
 
     // ---- client-side vertex arrays (no VBO bound) → transient per-draw VERTEX buffers ----
@@ -377,10 +381,14 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     // Index buffer: a bound element-array-buffer, else the captured client-side index array (transient).
     let mut index_ir = 0u32;
     if d.indexed && d.elem_buf != 0 && ctx.buffers.has_data(d.elem_buf) {
-        index_ir = ctx.alloc_buffer_ir();
-        let data = ctx.buffers.get(d.elem_buf).map(|b| b.data.clone()).unwrap_or_default();
-        cmds.push(Cmd::CreateBuffer(index_ir, BufferDesc { size: data.len() as u64, usage: buffer_usage::INDEX, label: String::new() }));
-        cmds.push(Cmd::WriteBuffer { id: index_ir, offset: 0, data });
+        let gen = ctx.buffers.get(d.elem_buf).map(|b| b.gen).unwrap_or(0);
+        let (ir, needs_upload) = ctx.data_buffer_ir(d.elem_buf, buffer_usage::INDEX, gen);
+        index_ir = ir;
+        if needs_upload {
+            let data = ctx.buffers.get(d.elem_buf).map(|b| b.data.clone()).unwrap_or_default();
+            cmds.push(Cmd::CreateBuffer(index_ir, BufferDesc { size: data.len() as u64, usage: buffer_usage::INDEX, label: String::new() }));
+            cmds.push(Cmd::WriteBuffer { id: index_ir, offset: 0, data });
+        }
     } else if d.indexed && !d.client_indices.is_empty() {
         index_ir = ctx.alloc_buffer_ir();
         let data = d.client_indices.clone();
@@ -430,23 +438,34 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
             Some(t) if t.has_data() => t.clone(),
             _ => continue,
         };
-        let tex_ir = ctx.alloc_texture_ir();
+        // Residency cache: a sampled texture (a GskGL glyph/mask atlas is bound across hundreds of draws
+        // and re-used every frame) is `CreateTexture`d + staged + copied ONLY on first sight / content
+        // change; later references reuse the resident IR id and upload nothing (`stage_ir == 0` marks the
+        // copy-free bind, the same convention the cross-pass FBO sample uses).
+        let (tex_ir, needs_upload) = ctx.sampled_texture_ir(gl_tex, t.gen);
         let samp_ir = ctx.alloc_sampler_ir();
-        let stage_ir = ctx.alloc_buffer_ir();
-        cmds.push(Cmd::CreateTexture(
-            tex_ir,
-            TextureDesc {
-                width: t.w as u32,
-                height: t.h as u32,
-                depth: 1,
-                mip_levels: 1,
-                sample_count: 1,
-                dim: TextureDim::D2,
-                format: t.ir_format,
-                usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
-                label: String::new(),
-            },
-        ));
+        let stage_ir = if needs_upload {
+            let stage_ir = ctx.alloc_buffer_ir();
+            cmds.push(Cmd::CreateTexture(
+                tex_ir,
+                TextureDesc {
+                    width: t.w as u32,
+                    height: t.h as u32,
+                    depth: 1,
+                    mip_levels: 1,
+                    sample_count: 1,
+                    dim: TextureDim::D2,
+                    format: t.ir_format,
+                    usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
+                    label: String::new(),
+                },
+            ));
+            cmds.push(Cmd::CreateBuffer(stage_ir, BufferDesc { size: t.data.len() as u64, usage: buffer_usage::COPY_SRC, label: String::new() }));
+            cmds.push(Cmd::WriteBuffer { id: stage_ir, offset: 0, data: t.data.clone() });
+            stage_ir
+        } else {
+            0
+        };
         cmds.push(Cmd::CreateSampler(
             samp_ir,
             SamplerDesc {
@@ -458,8 +477,6 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
                 address_w: AddressMode::ClampToEdge,
             },
         ));
-        cmds.push(Cmd::CreateBuffer(stage_ir, BufferDesc { size: t.data.len() as u64, usage: buffer_usage::COPY_SRC, label: String::new() }));
-        cmds.push(Cmd::WriteBuffer { id: stage_ir, offset: 0, data: t.data.clone() });
         texbinds.push(TexBind { slot: i, tex_ir, samp_ir, stage_ir, w: t.w as u32, h: t.h as u32 });
     }
     let has_u = prog.has_uniforms();
