@@ -72,7 +72,7 @@ pub fn allocate_memory(dev: &mut Device, size: u64) -> VkDeviceMemory {
     let handle = dev.alloc_handle();
     dev.memories.insert(
         handle,
-        MemRec { data: vec![0u8; size as usize], size, bound_buffer: None, mapped: false, pending_flush: None },
+        MemRec { data: vec![0u8; size as usize], size, bound_buffers: Vec::new(), mapped: false, pending_flush: None },
     );
     handle
 }
@@ -94,7 +94,13 @@ pub fn bind_buffer_memory(
         .ok_or(GpuError::Invalid("vkBindBufferMemory: unknown VkBuffer"))?;
     b.bound_mem = Some(memory);
     b.bound_offset = offset;
-    dev.memories.get_mut(&memory).unwrap().bound_buffer = Some(buffer);
+    // Record this buffer as bound into the allocation (many buffers may share one allocation — the
+    // sub-allocating arena pattern; see `MemRec::bound_buffers`). Dedup so a re-bind of the same buffer
+    // (legal before first use) does not duplicate its flush.
+    let bound = &mut dev.memories.get_mut(&memory).unwrap().bound_buffers;
+    if !bound.contains(&buffer) {
+        bound.push(buffer);
+    }
     Ok(())
 }
 
@@ -150,32 +156,40 @@ pub fn read_mapped(
     offset: u64,
     size: u64,
 ) -> Result<()> {
-    // Resolve the bound buffer's ir id + its footprint in the allocation, plus the staging length.
-    let Some((ir_id, buf_size, bound_offset, mem_len)) = dev.memories.get(&memory).and_then(|m| {
-        let b = dev.buffers.get(&m.bound_buffer?)?;
-        Some((b.ir_id, b.size, b.bound_offset, m.data.len() as u64))
+    // Resolve EVERY buffer bound into this allocation + its footprint (many buffers may share one arena;
+    // see `MemRec::bound_buffers`), plus the staging length.
+    let Some((buffers, mem_len)) = dev.memories.get(&memory).map(|m| {
+        let bufs: Vec<(u32, u64, u64)> = m
+            .bound_buffers
+            .iter()
+            .filter_map(|h| dev.buffers.get(h).map(|b| (b.ir_id, b.size, b.bound_offset)))
+            .collect();
+        (bufs, m.data.len() as u64)
     }) else {
-        return Ok(()); // unknown memory, or host-only staging with no device buffer to read back
+        return Ok(()); // unknown memory
     };
+    if buffers.is_empty() {
+        return Ok(()); // host-only staging with no device buffer to read back
+    }
 
     // The requested map range, clamped to the allocation.
     let map_start = offset.min(mem_len);
     let map_end = if size == VK_WHOLE_SIZE { mem_len } else { offset.saturating_add(size).min(mem_len) };
-    // Intersect it with the buffer's footprint [bound_offset, bound_offset + buf_size) in the allocation.
-    let start = map_start.max(bound_offset);
-    let end = map_end.min(bound_offset.saturating_add(buf_size));
-    if end <= start {
-        return Ok(()); // the mapped range does not overlap the bound buffer — nothing to read back
+    // Refresh each bound buffer whose footprint [bound_offset, bound_offset + buf_size) overlaps the range.
+    for (ir_id, buf_size, bound_offset) in buffers {
+        let start = map_start.max(bound_offset);
+        let end = map_end.min(bound_offset.saturating_add(buf_size));
+        if end <= start {
+            continue; // this buffer's footprint does not overlap the mapped range
+        }
+        let read_off = start - bound_offset;
+        let len = (end - start) as usize;
+        let bytes = sink.read_buffer(BufferId(ir_id), read_off, len)?;
+        let m = dev.memories.get_mut(&memory).expect("memory validated above");
+        let dst = start as usize;
+        let n = bytes.len().min(m.data.len().saturating_sub(dst));
+        m.data[dst..dst + n].copy_from_slice(&bytes[..n]);
     }
-
-    // Read the buffer bytes backing memory[start..end] and drop them into the staging at that offset.
-    let read_off = start - bound_offset;
-    let len = (end - start) as usize;
-    let bytes = sink.read_buffer(BufferId(ir_id), read_off, len)?;
-    let m = dev.memories.get_mut(&memory).expect("memory validated above");
-    let dst = start as usize;
-    let n = bytes.len().min(m.data.len().saturating_sub(dst));
-    m.data[dst..dst + n].copy_from_slice(&bytes[..n]);
     Ok(())
 }
 
@@ -190,7 +204,7 @@ pub fn read_mapped(
 pub fn unmap_memory(dev: &mut Device, memory: VkDeviceMemory) {
     if let Some(m) = dev.memories.get_mut(&memory) {
         m.mapped = false;
-        if m.bound_buffer.is_some() {
+        if !m.bound_buffers.is_empty() {
             m.pending_flush = Some((0, VK_WHOLE_SIZE));
         }
     }
@@ -204,7 +218,7 @@ pub fn unmap_memory(dev: &mut Device, memory: VkDeviceMemory) {
 /// another flush) never loses the earlier bytes.
 pub fn capture_pending_upload(dev: &mut Device, memory: VkDeviceMemory, offset: u64, size: u64) {
     if let Some(m) = dev.memories.get_mut(&memory) {
-        if m.bound_buffer.is_some() {
+        if !m.bound_buffers.is_empty() {
             m.pending_flush = Some(match m.pending_flush {
                 Some(prev) => widen_range(prev, (offset, size)),
                 None => (offset, size),

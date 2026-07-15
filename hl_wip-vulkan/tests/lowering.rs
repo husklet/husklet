@@ -648,6 +648,71 @@ fn mapped_memory_flushes_as_write_buffer_at_submit() {
 }
 
 #[test]
+fn arena_memory_flushes_every_bound_buffer_at_submit() {
+    // Regression: a single allocation sub-allocated into MANY buffers (the gpu-alloc/VMA arena pattern
+    // that blade/GPUI uses — hundreds of uniform/storage/vertex buffers in one HOST_COHERENT block).
+    // Tracking only the last-bound buffer silently dropped the host→device flush of every OTHER buffer,
+    // so their device bytes stayed zero — the vertex shader read a zero viewport/zero instance data,
+    // every draw collapsed off-screen, and the target kept only its clear (a fully blank Zed frame).
+    // Every bound buffer must now flush its own footprint.
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+
+    // Three buffers packed into one 3072-byte allocation at distinct offsets (globals, instances, verts).
+    let globals = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 16).unwrap();
+    let instances = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 32).unwrap();
+    let verts = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 16).unwrap();
+    let g_ir = d.buffers.get(&globals).unwrap().ir_id;
+    let i_ir = d.buffers.get(&instances).unwrap().ir_id;
+    let v_ir = d.buffers.get(&verts).unwrap().ir_id;
+
+    let mem = create::allocate_memory(&mut d, 3072);
+    create::bind_buffer_memory(&mut d, globals, mem, 0).unwrap();
+    create::bind_buffer_memory(&mut d, instances, mem, 1024).unwrap();
+    create::bind_buffer_memory(&mut d, verts, mem, 2048).unwrap(); // last-bound: the ONLY one the old model kept
+    create::map_memory(&mut d, mem).unwrap();
+
+    // The app memcpys each buffer's data at its own offset in the mapped arena.
+    create::write_mapped(&mut d, mem, 0, &[0xAA; 16]).unwrap(); // globals
+    create::write_mapped(&mut d, mem, 1024, &[0xBB; 32]).unwrap(); // instances
+    create::write_mapped(&mut d, mem, 2048, &[0xCC; 16]).unwrap(); // verts
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb, false).unwrap();
+    record::end(&mut d, cb).unwrap();
+    submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
+
+    // Collect the (id, first-byte) of every WriteBuffer flushed this submit.
+    let writes: Vec<(u32, u8)> = sink
+        .batches
+        .last()
+        .unwrap()
+        .iter()
+        .filter_map(|c| match c {
+            Cmd::WriteBuffer { id, offset, data } => {
+                assert_eq!(*offset, 0, "each arena buffer flushes to its own offset 0");
+                Some((*id, data[0]))
+            }
+            _ => None,
+        })
+        .collect();
+
+    // All THREE buffers flush — not just the last-bound `verts` — each carrying its own bytes.
+    assert!(writes.contains(&(g_ir, 0xAA)), "globals buffer must flush its own bytes, got {writes:?}");
+    assert!(writes.contains(&(i_ir, 0xBB)), "instances buffer must flush its own bytes, got {writes:?}");
+    assert!(writes.contains(&(v_ir, 0xCC)), "verts buffer must flush its own bytes, got {writes:?}");
+    assert_eq!(writes.len(), 3, "exactly one flush per bound buffer (no drops, no double-writes)");
+
+    // Sizes: each WriteBuffer carries exactly its buffer's footprint.
+    for c in sink.batches.last().unwrap() {
+        if let Cmd::WriteBuffer { id, data, .. } = c {
+            let want = if *id == g_ir || *id == v_ir { 16 } else { 32 };
+            assert_eq!(data.len(), want, "buffer {id} flushes its own footprint length");
+        }
+    }
+}
+
+#[test]
 fn unmapped_memory_still_flushes_its_write_at_submit() {
     // The data-loss edge: a real app stages into a mapped buffer, then vkUnmapMemory BEFORE submitting.
     // The upload must survive the unmap and still reach the device as a WriteBuffer at the next submit.

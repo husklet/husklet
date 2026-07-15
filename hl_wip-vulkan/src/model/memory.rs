@@ -36,7 +36,13 @@ pub struct BufferRec {
 pub struct MemRec {
     pub data: Vec<u8>,
     pub size: u64,
-    pub bound_buffer: Option<VkBuffer>,
+    /// Every `VkBuffer` bound into this allocation (`vkBindBufferMemory`), each at its own
+    /// `BufferRec::bound_offset`. A single allocation routinely backs MANY buffers — the sub-allocating
+    /// arena pattern of gpu-alloc/VMA (e.g. blade/GPUI binds hundreds of uniform/storage/vertex buffers
+    /// into one big HOST_COHERENT block). Tracking only the last-bound buffer here silently dropped the
+    /// host→device flush of every OTHER buffer in the arena (their device bytes stayed zero — a fully
+    /// blank frame), so this is the full set: each is flushed/refreshed against its own footprint.
+    pub bound_buffers: Vec<VkBuffer>,
     pub mapped: bool,
     /// A captured host→device upload range `(offset, size)` (allocation coordinates; `size ==
     /// VK_WHOLE_SIZE` → to the end) that must still flush at the next submit even though the app may

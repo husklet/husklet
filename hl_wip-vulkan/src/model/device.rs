@@ -147,28 +147,27 @@ impl Device {
     /// staging is never uploaded (no device buffer). Ported from `VkState::flush_mapped` (kept `Cmd`-free
     /// here — the model never builds a `Cmd`).
     pub fn mapped_uploads(&self) -> Vec<(u32, u64, Vec<u8>)> {
-        self.memories
-            .values()
-            .filter_map(|m| {
-                let b = self.buffers.get(&m.bound_buffer?)?;
+        let mut out = Vec::new();
+        for m in self.memories.values() {
+            // A single allocation routinely backs MANY buffers (the sub-allocating arena of
+            // gpu-alloc/VMA — e.g. blade/GPUI binds hundreds of buffers into one HOST_COHERENT block).
+            // Flush EVERY bound buffer against its own footprint; tracking only one silently dropped the
+            // upload of all the others (their device bytes stayed zero — a blank frame).
+            let mem_len = m.data.len() as u64;
+            for b in m.bound_buffers.iter().filter_map(|h| self.buffers.get(h)) {
                 if m.mapped {
                     // Still-mapped coherent flush: the whole buffer, read from its footprint in the
                     // allocation `[bound_offset, bound_offset + size)` and uploaded to buffer offset 0.
-                    // Honoring `bound_offset` matches the readback + pending-flush paths below; a buffer
-                    // suballocated at a non-zero offset (a big HOST_COHERENT arena bound to many buffers —
-                    // the common VMA/vkcube pattern) would otherwise flush the WRONG bytes (the arena from
-                    // offset 0). A zero bind offset is byte-for-byte the old behavior.
-                    let mem_len = m.data.len() as u64;
                     let start = b.bound_offset.min(mem_len);
                     let end = b.bound_offset.saturating_add(b.size).min(mem_len);
                     if end <= start {
-                        return None; // the buffer's footprint lies entirely past the allocation
+                        continue; // the buffer's footprint lies entirely past the allocation
                     }
-                    return Some((b.ir_id, 0u64, m.data[start as usize..end as usize].to_vec()));
+                    out.push((b.ir_id, 0u64, m.data[start as usize..end as usize].to_vec()));
+                    continue;
                 }
                 // Unmapped, but a pending host→device upload was captured — flush the honored range.
-                let (offset, size) = m.pending_flush?;
-                let mem_len = m.data.len() as u64;
+                let Some((offset, size)) = m.pending_flush else { continue };
                 let map_start = offset.min(mem_len);
                 let map_end =
                     if size == u64::MAX { mem_len } else { offset.saturating_add(size).min(mem_len) };
@@ -176,12 +175,13 @@ impl Device {
                 let start = map_start.max(b.bound_offset);
                 let end = map_end.min(b.bound_offset.saturating_add(b.size));
                 if end <= start {
-                    return None; // the pending range does not overlap the bound buffer
+                    continue; // the pending range does not overlap this bound buffer
                 }
                 let buf_off = start - b.bound_offset;
-                Some((b.ir_id, buf_off, m.data[start as usize..end as usize].to_vec()))
-            })
-            .collect()
+                out.push((b.ir_id, buf_off, m.data[start as usize..end as usize].to_vec()));
+            }
+        }
+        out
     }
 
     /// Clear every captured `pending_flush` after a `vkQueueSubmit` has flushed it — the pending
