@@ -7,7 +7,7 @@
 //! bytes with no row padding. Region uploads use `queue.write_texture`, which has no such stride rule.
 
 use hl_gpu::protocol::model::descriptor::TextureDesc;
-use hl_gpu::protocol::model::enums::TextureFormat;
+use hl_gpu::protocol::model::enums::{TextureDim, TextureFormat};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 use hl_log::tag;
@@ -21,6 +21,14 @@ pub struct WgpuTexture {
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
+    /// Depth slices for a 3D texture (`depth_or_array_layers`); 1 for a plain 2D texture. A value > 1 is
+    /// the 3D-volume signal the `CopyBufferToTexture` upload path uses to fill every slice.
+    pub depth: u32,
+    /// Number of mip levels materialized (>= 1). A value > 1 means a `CopyBufferToTexture` may target a
+    /// non-zero `mip` and a sampler may select a LOD. Retained for introspection / future readback of a
+    /// non-base mip.
+    #[allow(dead_code)]
+    pub mip_levels: u32,
     pub format: TextureFormat,
 }
 
@@ -37,31 +45,55 @@ fn round256(n: u32) -> u32 {
 }
 
 impl WgpuExecutor {
-    /// Create a 2D texture matching `desc` (single-layer, single-mip — the subset the oracle materializes).
+    /// Create a texture matching `desc`. A `D3` texture materializes `desc.depth` depth slices (a real 3D
+    /// volume); every other dimension stays a single-layer 2D image (the subset the render suite exercises).
+    /// `desc.mip_levels` mip levels are allocated, so a mipmapped source can be uploaded per level and
+    /// sampled at an explicit LOD. The default view spans all mips and (for a 3D texture) picks the `D3`
+    /// view dimension, which is exactly what a `texture3D`/`textureLod` sample validates against.
     pub(crate) fn make_texture(&self, desc: &TextureDesc) -> Result<WgpuTexture> {
         if desc.width == 0 || desc.height == 0 {
             return Err(GpuError::Invalid("zero-sized texture"));
         }
         let wfmt = texture_format(desc.format)?;
+        // Only `D3` becomes a native 3D texture (depth = slice count). D1/D2/Cube stay 2D single-layer,
+        // matching the pre-existing behaviour the frozen suite depends on.
+        let (dimension, depth) = match desc.dim {
+            TextureDim::D3 => (wgpu::TextureDimension::D3, desc.depth.max(1)),
+            _ => (wgpu::TextureDimension::D2, 1),
+        };
+        let mip_levels = desc.mip_levels.max(1);
+        // A 3D texture cannot be a render attachment in WebGPU/wgpu, so that usage is dropped for `D3`
+        // (a volume is a sampled/copied resource here, never a color target). 2D keeps the full set.
+        let mut usage = wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST;
+        if dimension != wgpu::TextureDimension::D3 {
+            usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
+        }
         let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hl-texture"),
             size: wgpu::Extent3d {
                 width: desc.width,
                 height: desc.height,
-                depth_or_array_layers: 1,
+                depth_or_array_layers: depth,
             },
-            mip_level_count: 1,
+            mip_level_count: mip_levels,
             sample_count: desc.sample_count.max(1),
-            dimension: wgpu::TextureDimension::D2,
+            dimension,
             format: wfmt,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Ok(WgpuTexture { texture, view, width: desc.width, height: desc.height, format: desc.format })
+        Ok(WgpuTexture {
+            texture,
+            view,
+            width: desc.width,
+            height: desc.height,
+            depth,
+            mip_levels,
+            format: desc.format,
+        })
     }
 
     /// Read back the whole tight-packed level-0 color plane of texture `id` — the texture-readback half of
@@ -123,15 +155,21 @@ impl WgpuExecutor {
         Ok(out)
     }
 
-    /// Upload a tight-packed `width*height` texel region into texture `id` at origin `(x, y)`.
+    /// Upload a tight-packed `width*height*depth` texel region into `mip` of texture `id` at origin
+    /// `(x, y, z)`. `depth > 1` fills that many 3D slices (source rows advance `height` per slice), and
+    /// `mip > 0` targets a mip level (whose own dimensions the caller passes as `width`/`height`).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_region(
         &self,
         res: &SessionResources,
         id: u32,
         x: u32,
         y: u32,
+        z: u32,
         width: u32,
         height: u32,
+        depth: u32,
+        mip: u32,
         data: &[u8],
     ) -> Result<()> {
         let t = native(res, id)?;
@@ -139,8 +177,8 @@ impl WgpuExecutor {
         self.gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &t.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
+                mip_level: mip,
+                origin: wgpu::Origin3d { x, y, z },
                 aspect: wgpu::TextureAspect::All,
             },
             data,
@@ -149,7 +187,7 @@ impl WgpuExecutor {
                 bytes_per_row: Some(width * bpt),
                 rows_per_image: Some(height),
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d { width, height, depth_or_array_layers: depth },
         );
         self.gpu.queue.submit(None::<wgpu::CommandBuffer>);
         Ok(())

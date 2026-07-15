@@ -53,7 +53,7 @@ impl WgpuExecutor {
                     for _ in 0..(*w as usize * *h as usize) {
                         data.extend_from_slice(&texel);
                     }
-                    self.write_region(res, *texture, *x, *y, *w, *h, &data)?;
+                    self.write_region(res, *texture, *x, *y, 0, *w, *h, 1, 0, &data)?;
                     i += 1;
                 }
                 Enc::CopyBufferToBuffer { src, src_offset, dst, dst_offset, size } => {
@@ -80,18 +80,24 @@ impl WgpuExecutor {
                     }
                     i += 1;
                 }
-                Enc::CopyBufferToTexture { src, src_offset, bytes_per_row, dst, width, height, .. } => {
-                    let t = texture::native(res, *dst)?;
-                    let bpt = texel_bytes(t.format)? as u32;
+                Enc::CopyBufferToTexture { src, src_offset, bytes_per_row, dst, mip, width, height } => {
+                    let (bpt, dst_depth) = {
+                        let t = texture::native(res, *dst)?;
+                        (texel_bytes(t.format)? as u32, t.depth)
+                    };
                     let row = (*width * bpt) as usize;
                     // `bytes_per_row == 0` means the source rows are tightly packed (the oracle convention).
                     let src_stride = if *bytes_per_row == 0 { row } else { *bytes_per_row as usize };
-                    let mut tight = Vec::with_capacity(row * *height as usize);
-                    for r in 0..*height as usize {
+                    // A 3D destination has no z/depth field on this op, so the copy fills the WHOLE volume:
+                    // the source holds `width*height*depth` tightly-stacked slices (rows advance `height`
+                    // per slice). A plain 2D texture keeps `depth == 1`, i.e. the original single-plane copy.
+                    let rows = *height as usize * dst_depth as usize;
+                    let mut tight = Vec::with_capacity(row * rows);
+                    for r in 0..rows {
                         let off = *src_offset + (r * src_stride) as u64;
                         tight.extend_from_slice(&self.read_bytes(res, *src, off, row)?);
                     }
-                    self.write_region(res, *dst, 0, 0, *width, *height, &tight)?;
+                    self.write_region(res, *dst, 0, 0, 0, *width, *height, dst_depth, *mip, &tight)?;
                     i += 1;
                 }
                 Enc::CopyTextureToTexture {
@@ -214,7 +220,7 @@ impl WgpuExecutor {
             let start = ((sy + r) * sw + sx) * bpt;
             block.extend_from_slice(&plane[start..start + row]);
         }
-        self.write_region(res, dst, dst_origin.x, dst_origin.y, ew, eh, &block)
+        self.write_region(res, dst, dst_origin.x, dst_origin.y, 0, ew, eh, 1, 0, &block)
     }
 
     /// Execute one render pass: begin with the color attachments (clear/load), replay any pipeline/bind/
