@@ -37,29 +37,39 @@
 //!   * ±3: linear (bilinear) scaled blits — the CPU's `sample_bilinear` and llvmpipe's hardware sampler use
 //!     the same pixel-centre + clamp-to-edge convention but not bit-identical filtering; a few unorm steps.
 //!
-//! ## Excluded op surface (oracle-unmodeled — logged, never silently skipped)
-//!   * STENCIL (`Enc::SetStencilReference` + the pipeline `DepthState` stencil face/masks): the CPU oracle
-//!     does NOT model the stencil test — `raster.rs` has no stencil arm and `executor.rs`'s
-//!     `SetStencilReference` is an explicit no-op (validate arm ~line 747). Comparing stencil would compare
-//!     the wgpu result against an un-modeled oracle, so no program here sets stencil state. Logged below.
-//!   * `Enc::ResolveTexture` (multisample averaging): the wgpu backend does not advertise it (see the
-//!     capability-honesty test), so a program using it can't run on wgpu at all. Excluded + logged.
-//!   * sRGB colour targets: the oracle blends in linear light and encodes sRGB around the blend; matching
-//!     that against hardware sRGB blend adds an encode/decode rounding surface orthogonal to this fuzzer's
-//!     goal. All targets here are LINEAR `Rgba8Unorm`. Logged.
+//! ## Newly-COVERED op surface (previously excluded; now folded into the differential)
+//!   * STENCIL (`Enc::SetStencilReference` + the pipeline `DepthState` stencil faces/masks): the CPU oracle
+//!     now MODELS the stencil test + ops (`raster.rs`'s depth path runs the stencil test/op against an
+//!     8-bit stencil plane; `executor.rs` applies `SetStencilReference`). A two-pass mark-then-test program
+//!     (`gen_stencil_equal` / `gen_stencil_greater`) is compared oracle-vs-executor EXACTLY (tol 0).
+//!   * sRGB colour targets (`Rgba8Srgb`): the oracle now gamma-ENCODES on a clear / replace draw into an
+//!     sRGB target (`cpu/format.rs::clear_texel`), matching the hardware ROP (linear 0.5 → 188, not 128).
+//!     `gen_clear_srgb` / `gen_draw_srgb` are compared oracle-vs-executor within ±2 (the encode's last-ULP
+//!     rounding — lavapipe's shader-write path rounds linear-0.5 to 187 where the clear path rounds 188).
+//!
+//! ## ANALYTIC-only op surface (executor-vs-hand-computed, NOT oracle-compared — documented)
+//!   * MSAA + `Enc::ResolveTexture`: the wgpu backend now advertises + implements the resolve, but the CPU
+//!     oracle has NO multisample-RENDER concept (its `validate` rejects a `sample_count > 1` colour
+//!     attachment — it can average existing samples but cannot PRODUCE coverage-antialiased samples). So we
+//!     do NOT fake an oracle result; instead the executor's 4× MSAA render + resolve is asserted against a
+//!     HAND-COMPUTED analytic expectation (full-coverage → the flat draw colour exactly; a diagonal
+//!     half-cover → exact fg interior, exact bg exterior, and averaged-gray edge pixels). See
+//!     `analytic_msaa_resolve` in the test body; these are counted + reported separately from the
+//!     oracle-compared programs.
 //!
 //! If no wgpu adapter is reachable (no lavapipe/Vulkan ICD) the whole test skips, like the rest of the suite.
 
 use std::collections::BTreeSet;
 
-use hl_gpu::protocol::model::capability::shader_payload;
+use hl_gpu::protocol::model::capability::{format_bits, shader_payload};
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment, ColorTargetState,
     ComputePipelineDesc, DepthAttachment, DepthState, Extent3d, Origin3d, RenderPipelineDesc, ShaderRef,
-    TextureDesc, TextureSubresource, VertexAttr, VertexLayout,
+    StencilFaceState, TextureDesc, TextureSubresource, VertexAttr, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{
-    buffer_usage, compare, texture_usage, Filter, IndexFormat, LoadOp, TextureDim, TextureFormat, Topology,
+    buffer_usage, compare, stencil_op, texture_usage, Filter, IndexFormat, LoadOp, TextureDim,
+    TextureFormat, Topology,
 };
 use hl_gpu::protocol::model::kernel::{
     gty, Inst, KernelProgram, Op, Param, CMP_GE, KERNEL_MAGIC, SR_CTAID_X, SR_NTID_X, SR_TID_X,
@@ -81,6 +91,12 @@ fn le_f32(vals: &[f32]) -> Vec<u8> {
 }
 
 fn tex(w: u32, h: u32) -> TextureDesc {
+    tex_fmt(w, h, TextureFormat::Rgba8Unorm)
+}
+
+/// A copyable `RENDER_TARGET | COPY_SRC | COPY_DST` colour texture in an arbitrary colour `format` (used by
+/// the sRGB programs, which render into `Rgba8Srgb`).
+fn tex_fmt(w: u32, h: u32, format: TextureFormat) -> TextureDesc {
     TextureDesc {
         width: w,
         height: h,
@@ -88,8 +104,24 @@ fn tex(w: u32, h: u32) -> TextureDesc {
         mip_levels: 1,
         sample_count: 1,
         dim: TextureDim::D2,
-        format: TextureFormat::Rgba8Unorm,
+        format,
         usage: RT,
+        label: String::new(),
+    }
+}
+
+/// A `Depth24PlusStencil8` render target — the depth+stencil attachment a stencil-testing pipeline requires
+/// (wgpu rejects a stencil pipeline paired with a depth-only attachment).
+fn ds_tex(w: u32, h: u32) -> TextureDesc {
+    TextureDesc {
+        width: w,
+        height: h,
+        depth: 1,
+        mip_levels: 1,
+        sample_count: 1,
+        dim: TextureDim::D2,
+        format: TextureFormat::Depth24PlusStencil8,
+        usage: texture_usage::RENDER_TARGET,
         label: String::new(),
     }
 }
@@ -811,6 +843,243 @@ fn iota_program() -> KernelProgram {
     }
 }
 
+// -------------------------------------------------------------------------------------------------
+// sRGB target programs (newly covered — the oracle now gamma-encodes on write, matching the ROP)
+// -------------------------------------------------------------------------------------------------
+
+/// (13) sRGB CLEAR: `LoadOp::Clear` an `Rgba8Srgb` target to a mid-range opaque colour. Both backends
+/// gamma-ENCODE the clear into sRGB on write (linear 0.5 → 188, not 128). ±2 for the encode's last-ULP
+/// rounding (the CPU rounds half-up; lavapipe's clear path agrees to within a step).
+fn gen_clear_srgb(seed: u64) -> Prog {
+    let w = 3 + (seed % 6) as u32; // 3..=8
+    let h = 2 + (seed % 5) as u32; // 2..=6
+    let c = fcolor_opaque(seed);
+    let cmds = vec![
+        Cmd::CreateTexture(1, tex_fmt(w, h, TextureFormat::Rgba8Srgb)),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: c, store: true }],
+                    depth: None,
+                },
+                Enc::EndRenderPass,
+            ],
+            signal: None,
+        }),
+    ];
+    Prog {
+        seed,
+        category: "clear_srgb",
+        ops: vec!["BeginRenderPass", "EndRenderPass"],
+        cmds,
+        read: Read::Tex { id: 1, len: (w * h * 4) as usize },
+        tol: 2,
+        kernel: None,
+    }
+}
+
+/// (14) sRGB DRAW: a flat opaque replace draw of a constant linear colour into an `Rgba8Srgb` target — the
+/// linear→sRGB encode happens on the fragment write on both backends. ±2 (lavapipe's shader-write path
+/// rounds linear 0.5 to 187 where the clear/theoretical value is 188 — the documented encode-rounding gap).
+fn gen_draw_srgb(seed: u64) -> Prog {
+    let w = 4 + (seed % 5) as u32;
+    let h = 4 + (seed % 4) as u32;
+    let c = fcolor_opaque(seed);
+    let vbytes: Vec<u8> = FS_TRI.iter().flat_map(|(x, y)| le_f32(&[*x, *y, c[0], c[1], c[2], c[3]])).collect();
+    let spirv = wgsl_to_spirv(SEED_POS2_COLOR);
+    let cmds = vec![
+        Cmd::CreateTexture(1, tex_fmt(w, h, TextureFormat::Rgba8Srgb)),
+        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
+        Cmd::CreateBuffer(1, buf(vbytes.len() as u64, buffer_usage::VERTEX | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer { id: 1, offset: 0, data: vbytes },
+        Cmd::CreateRenderPipeline(
+            1,
+            RenderPipelineDesc {
+                vertex: ShaderRef { module: 1, entry: "vs_main".into() },
+                fragment: Some(ShaderRef { module: 1, entry: "fs_main".into() }),
+                vertex_buffers: vec![pos2_color_layout()],
+                color_targets: vec![ColorTargetState { format: TextureFormat::Rgba8Srgb, blend: None, write_mask: 0xF }],
+                depth: None,
+                topology: Topology::TriangleList,
+                cull: 0,
+                front_face: 0,
+                sample_count: 1,
+                label: String::new(),
+            },
+        ),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }],
+                    depth: None,
+                },
+                Enc::SetPipeline(1),
+                Enc::SetVertexBuffer { slot: 0, buffer: 1, offset: 0 },
+                Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                Enc::EndRenderPass,
+            ],
+            signal: None,
+        }),
+    ];
+    Prog {
+        seed,
+        category: "draw_srgb",
+        ops: vec!["BeginRenderPass", "SetPipeline", "SetVertexBuffer", "Draw", "EndRenderPass"],
+        cmds,
+        read: Read::Tex { id: 1, len: (w * h * 4) as usize },
+        tol: 2,
+        kernel: None,
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// stencil programs (newly covered — the oracle now models the stencil test/op + reference)
+// -------------------------------------------------------------------------------------------------
+
+/// The centred quad (two triangles) spanning NDC `[-0.5, 0.5]^2` as 6 `pos2` vertices — the stencil MARK
+/// geometry. On an `n`x`n` target with `n` a multiple of 4 it rasterises to the clean `[n/4, 3n/4)` pixel
+/// block on BOTH backends (no pixel centre lands on the `±0.5` edge), so the marked region is byte-identical.
+const CQUAD: [(f32, f32); 6] = [
+    (-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5),
+    (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5),
+];
+
+/// The `pos2 @loc0 (0..8)` + `colour @loc1 (8..24)`, stride-24 vertex layout the `SEED_POS2_COLOR` forwarding
+/// shader (and the CPU oracle's `stride >= 24` arm) both read.
+fn pos2_color_layout() -> VertexLayout {
+    VertexLayout {
+        stride: 24,
+        step_mode: 0,
+        attrs: vec![
+            VertexAttr { location: 0, format: vfmt(2, 0, false), offset: 0 },
+            VertexAttr { location: 1, format: vfmt(4, 0, false), offset: 8 },
+        ],
+    }
+}
+
+/// One stencil face: `compare` op + `pass_op` (stencil-fail / depth-fail stay `KEEP`).
+fn stencil_face(cmp: u32, pass: u32) -> StencilFaceState {
+    StencilFaceState { compare: cmp, fail_op: stencil_op::KEEP, depth_fail_op: stencil_op::KEEP, pass_op: pass }
+}
+
+/// Two-pass stencil mark-then-test. Pass A marks the centred rect into the stencil plane (`REPLACE` the
+/// reference under `ALWAYS`). Pass B re-clears the colour target to `bg`, LOADs (preserves) the stencil, and
+/// draws a fullscreen `fg` triangle gated by `test_cmp` against the SAME reference. `test_cmp = EQUAL` draws
+/// INSIDE the marked rect (`ref == stored` there); `GREATER` draws OUTSIDE it (`ref > stored` holds only on
+/// the 0-cleared exterior). Both backends must produce the identical flat two-colour image — EXACT (tol 0).
+fn stencil_prog(seed: u64, category: &'static str, test_cmp: u32) -> Prog {
+    let n = 8 + 4 * (seed % 4) as u32; // 8,12,16,20 — a multiple of 4 keeps the marked-rect edges pixel-clean
+    let reference = 1 + (seed % 5) as u32; // 1..=5 (mark writes it, test compares against it)
+    let bg = fcolor_opaque(seed);
+    let fg = fcolor_opaque(seed.wrapping_add(3));
+    let spirv = wgsl_to_spirv(SEED_POS2_COLOR);
+
+    let quad: Vec<u8> =
+        CQUAD.iter().flat_map(|(x, y)| le_f32(&[*x, *y, fg[0], fg[1], fg[2], fg[3]])).collect();
+    let tri: Vec<u8> =
+        FS_TRI.iter().flat_map(|(x, y)| le_f32(&[*x, *y, fg[0], fg[1], fg[2], fg[3]])).collect();
+
+    let ds = TextureFormat::Depth24PlusStencil8;
+    let mark_depth = DepthState {
+        format: ds,
+        depth_write: false,
+        depth_compare: compare::ALWAYS,
+        stencil_front: stencil_face(compare::ALWAYS, stencil_op::REPLACE),
+        stencil_back: stencil_face(compare::ALWAYS, stencil_op::REPLACE),
+        stencil_read_mask: 0xFF,
+        stencil_write_mask: 0xFF,
+    };
+    let test_depth = DepthState {
+        format: ds,
+        depth_write: false,
+        depth_compare: compare::ALWAYS,
+        stencil_front: stencil_face(test_cmp, stencil_op::KEEP),
+        stencil_back: stencil_face(test_cmp, stencil_op::KEEP),
+        stencil_read_mask: 0xFF,
+        stencil_write_mask: 0x00,
+    };
+    let pipe = |id: u32, depth: DepthState| {
+        Cmd::CreateRenderPipeline(
+            id,
+            RenderPipelineDesc {
+                vertex: ShaderRef { module: 1, entry: "vs_main".into() },
+                fragment: Some(ShaderRef { module: 1, entry: "fs_main".into() }),
+                vertex_buffers: vec![pos2_color_layout()],
+                color_targets: vec![ColorTargetState { format: TextureFormat::Rgba8Unorm, blend: None, write_mask: 0xF }],
+                depth: Some(depth),
+                topology: Topology::TriangleList,
+                cull: 0,
+                front_face: 0,
+                sample_count: 1,
+                label: String::new(),
+            },
+        )
+    };
+    let cmds = vec![
+        Cmd::CreateTexture(1, tex(n, n)),
+        Cmd::CreateTexture(2, ds_tex(n, n)),
+        Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
+        Cmd::CreateBuffer(1, buf(quad.len() as u64, buffer_usage::VERTEX | buffer_usage::COPY_DST)),
+        Cmd::CreateBuffer(2, buf(tri.len() as u64, buffer_usage::VERTEX | buffer_usage::COPY_DST)),
+        Cmd::WriteBuffer { id: 1, offset: 0, data: quad },
+        Cmd::WriteBuffer { id: 2, offset: 0, data: tri },
+        pipe(1, mark_depth),
+        pipe(2, test_depth),
+        Cmd::Submit(CommandBuffer {
+            encoder: vec![
+                // Pass A — MARK: clear stencil to 0, REPLACE the reference under the centred rect.
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }],
+                    depth: Some(DepthAttachment { texture: 2, load: LoadOp::Clear, clear_depth: 1.0, clear_stencil: 0 }),
+                },
+                Enc::SetPipeline(1),
+                Enc::SetStencilReference { reference },
+                Enc::SetVertexBuffer { slot: 0, buffer: 1, offset: 0 },
+                Enc::Draw { vertex_count: 6, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                Enc::EndRenderPass,
+                // Pass B — TEST: re-clear colour to bg, LOAD (preserve) the stencil, draw fullscreen fg gated.
+                Enc::BeginRenderPass {
+                    color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: bg, store: true }],
+                    depth: Some(DepthAttachment { texture: 2, load: LoadOp::Load, clear_depth: 1.0, clear_stencil: 0 }),
+                },
+                Enc::SetPipeline(2),
+                Enc::SetStencilReference { reference },
+                Enc::SetVertexBuffer { slot: 0, buffer: 2, offset: 0 },
+                Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                Enc::EndRenderPass,
+            ],
+            signal: None,
+        }),
+    ];
+    Prog {
+        seed,
+        category,
+        ops: vec![
+            "BeginRenderPass(depth)",
+            "SetPipeline",
+            "SetStencilReference",
+            "SetVertexBuffer",
+            "Draw",
+            "EndRenderPass",
+        ],
+        cmds,
+        read: Read::Tex { id: 1, len: (n * n * 4) as usize },
+        tol: 0,
+        kernel: None,
+    }
+}
+
+/// (15) STENCIL EQUAL: mark then draw gated by `EQUAL` — fg fills the marked rect, bg elsewhere.
+fn gen_stencil_equal(seed: u64) -> Prog {
+    stencil_prog(seed, "stencil_equal", compare::EQUAL)
+}
+
+/// (16) STENCIL GREATER: mark then draw gated by `GREATER` (`ref > stored`) — the COMPLEMENT: fg fills the
+/// exterior (stored 0), bg the marked rect. Exercises a second compare + proves the gate both ways.
+fn gen_stencil_greater(seed: u64) -> Prog {
+    stencil_prog(seed, "stencil_greater", compare::GREATER)
+}
+
 // The generator table.
 const GENERATORS: &[fn(u64) -> Prog] = &[
     gen_clear,
@@ -826,6 +1095,10 @@ const GENERATORS: &[fn(u64) -> Prog] = &[
     gen_draw_depth,
     gen_draw_blend,
     gen_compute_iota,
+    gen_clear_srgb,
+    gen_draw_srgb,
+    gen_stencil_equal,
+    gen_stencil_greater,
 ];
 
 // =================================================================================================
@@ -846,6 +1119,12 @@ fn wgpu_session(exec: &WgpuExecutor) -> Session {
 fn cpu_session(exec: &CpuExecutor) -> Session {
     let mut caps = exec.capabilities();
     caps.shader_payloads |= shader_payload::SPIRV | shader_payload::GLSL;
+    // The oracle now MODELS the stencil test against a `Depth24PlusStencil8` plane, but its advertised
+    // (negotiated-wire) depth-format set is depth-only. Widen the CPU *session's* formats to admit the
+    // combined depth+stencil format so the identical stencil IR reaches the executor on both sides — exactly
+    // as we widen `shader_payloads` for SPIR-V. This changes nothing the oracle computes; it only lets the
+    // shared program past the runtime `validate` format gate.
+    caps.texture_formats |= format_bits(&[TextureFormat::Depth24PlusStencil8]);
     let mut limits = Limits::from_capabilities(caps);
     limits.copy_alignment = 1;
     Session::new(limits, GlobalLedger::unbounded(), Box::new(FakeClock::new(0)))
@@ -903,12 +1182,241 @@ fn diff(cpu: &[u8], gpu: &[u8], tol: i16) -> Option<String> {
 }
 
 // =================================================================================================
+// ANALYTIC MSAA-resolve checks (executor-vs-hand-computed — the oracle can NOT model multisampling)
+// =================================================================================================
+//
+// The CPU oracle's `validate` rejects a `sample_count > 1` colour attachment, so it cannot PRODUCE a
+// coverage-antialiased multisample render to compare against (it can average existing samples via
+// `resolve_texture`, but there is no oracle path that fills those samples from a draw). Rather than fake an
+// oracle result, the wgpu executor's 4× MSAA render + `ResolveTexture` is checked against a HAND-COMPUTED
+// expectation:
+//   * FULL coverage (a fullscreen triangle of one flat colour): every one of a pixel's 4 samples is that
+//     colour, so the resolve average is exactly that colour — the whole readback equals the packed draw
+//     colour (analytic, exact within ±1 unorm).
+//   * HALF coverage (a right triangle whose hypotenuse is the main diagonal): the deep interior is fully
+//     covered → exact fg, the deep exterior fully uncovered → exact bg (both analytic and sample-position
+//     independent), and the diagonal edge MUST carry averaged "intermediate" pixels (a partial coverage the
+//     hard 1× rasterizer never produces) — the structural proof the resolve averages sub-pixel coverage.
+
+// A fullscreen-triangle vertex shader (vertex_index driven — no vertex buffer needed on the executor-only
+// MSAA path) writing a constant colour whose channels are exact k/255 values, so the fragment→unorm8
+// round-trip is lossless and the analytic expected byte is unambiguous.
+const MSAA_FULL_WGSL: &str = r#"
+    @vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+        var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+        return vec4<f32>(p[vi], 0.0, 1.0);
+    }
+    @fragment fn fs_main() -> @location(0) vec4<f32> {
+        // 64/255, 128/255, 192/255 — exact unorm8 values (lossless round-trip).
+        return vec4<f32>(0.250980392, 0.501960784, 0.752941176, 1.0);
+    }
+"#;
+const MSAA_FULL_EXPECT: [u8; 4] = [64, 128, 192, 255];
+
+// A right triangle whose hypotenuse is the framebuffer main diagonal (fy == fx): covered side is the
+// lower-left half (fy > fx). White fg on the black clear, so a partially-covered edge pixel resolves to an
+// unmistakable mid-gray.
+const MSAA_HALF_WGSL: &str = r#"
+    @vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+        var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0));
+        return vec4<f32>(p[vi], 0.0, 1.0);
+    }
+    @fragment fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0, 1.0, 1.0, 1.0); }
+"#;
+
+/// Render a fullscreen (vertex_index) triangle from `wgsl` into a `sample_count`× `Rgba8Unorm` colour
+/// target and, when multisampled, `ResolveTexture` it into a single-sample destination; return the
+/// single-sample tight readback plane (`w*h*4`). Executor-only (there is no oracle multisample render).
+fn msaa_render_resolve(exec: &mut WgpuExecutor, w: u32, h: u32, wgsl: &str, sample_count: u32) -> hl_gpu::Result<Vec<u8>> {
+    fn ms_tex(w: u32, h: u32, sample_count: u32, usage: u32) -> TextureDesc {
+        TextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            mip_levels: 1,
+            sample_count,
+            dim: TextureDim::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage,
+            label: String::new(),
+        }
+    }
+    let spirv = wgsl_to_spirv(wgsl);
+    let pipe = |sc: u32| {
+        Cmd::CreateRenderPipeline(
+            1,
+            RenderPipelineDesc {
+                vertex: ShaderRef { module: 1, entry: "vs_main".into() },
+                fragment: Some(ShaderRef { module: 1, entry: "fs_main".into() }),
+                vertex_buffers: vec![],
+                color_targets: vec![ColorTargetState { format: TextureFormat::Rgba8Unorm, blend: None, write_mask: 0xF }],
+                depth: None,
+                topology: Topology::TriangleList,
+                cull: 0,
+                front_face: 0,
+                sample_count: sc,
+                label: String::new(),
+            },
+        )
+    };
+    let mut s = wgpu_session(exec);
+    let read_id = if sample_count > 1 {
+        // A multisampled colour target is RENDER_TARGET-only (never copied, only resolved); id 2 is the
+        // single-sample resolve destination that is read back.
+        let cmds = vec![
+            Cmd::CreateTexture(1, ms_tex(w, h, sample_count, texture_usage::RENDER_TARGET)),
+            Cmd::CreateTexture(2, ms_tex(w, h, 1, texture_usage::RENDER_TARGET | texture_usage::COPY_SRC)),
+            Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
+            pipe(sample_count),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                    Enc::EndRenderPass,
+                    Enc::ResolveTexture {
+                        src: 1,
+                        src_sub: TextureSubresource::base(),
+                        src_origin: Origin3d::default(),
+                        dst: 2,
+                        dst_sub: TextureSubresource::base(),
+                        dst_origin: Origin3d::default(),
+                        extent: Extent3d { width: w, height: h, depth: 1 },
+                    },
+                ],
+                signal: None,
+            }),
+        ];
+        hl_gpu::runtime::submit(&mut s, exec, 0, &cmds)?;
+        2
+    } else {
+        let cmds = vec![
+            Cmd::CreateTexture(1, ms_tex(w, h, 1, texture_usage::RENDER_TARGET | texture_usage::COPY_SRC)),
+            Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::SpirV, spirv },
+            pipe(1),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }),
+        ];
+        hl_gpu::runtime::submit(&mut s, exec, 0, &cmds)?;
+        1
+    };
+    exec.read_texture(&s.resources, read_id)
+}
+
+/// Run the analytic MSAA-resolve checks. Returns `(checks_run, failures)`; `failures` is empty on success.
+fn analytic_msaa_resolve(exec: &mut WgpuExecutor) -> (u32, Vec<String>) {
+    let mut checks = 0u32;
+    let mut fails: Vec<String> = Vec::new();
+    let (w, h) = (32u32, 32u32);
+
+    // ---- FULL coverage: resolve of 4 identical samples == the exact flat colour, every pixel. ----
+    checks += 1;
+    match msaa_render_resolve(exec, w, h, MSAA_FULL_WGSL, 4) {
+        Ok(plane) => {
+            let bad = plane
+                .chunks_exact(4)
+                .enumerate()
+                .find(|(_, p)| (0..4).any(|k| (p[k] as i16 - MSAA_FULL_EXPECT[k] as i16).abs() > 1));
+            if let Some((i, p)) = bad {
+                fails.push(format!(
+                    "MSAA full-coverage resolve: texel {i} = {:?} but analytic expected {:?} (±1) — a \
+                     fully-covered 4× MSAA target must resolve to the flat draw colour exactly",
+                    &p[..4], MSAA_FULL_EXPECT
+                ));
+            }
+        }
+        Err(e) => fails.push(format!("MSAA full-coverage render+resolve errored: {e:?}")),
+    }
+
+    // ---- HALF coverage: exact fg interior, exact bg exterior, averaged-gray edge pixels. ----
+    checks += 1;
+    match msaa_render_resolve(exec, w, h, MSAA_HALF_WGSL, 4) {
+        Ok(msaa) => {
+            let at = |x: u32, y: u32| {
+                let i = ((y * w + x) * 4) as usize;
+                [msaa[i], msaa[i + 1], msaa[i + 2], msaa[i + 3]]
+            };
+            let is_fg = |p: [u8; 4]| (0..3).all(|k| p[k] >= 254);
+            let is_bg = |p: [u8; 4]| (0..3).all(|k| p[k] <= 1);
+            // Deep interior (lower-left, fy >> fx) fully covered → exact fg; deep exterior exact bg.
+            let interior = at(2, h - 3);
+            let exterior = at(w - 3, 2);
+            if !is_fg(interior) {
+                fails.push(format!("MSAA half-coverage interior {interior:?} must be exact fg (white)"));
+            }
+            if !is_bg(exterior) {
+                fails.push(format!("MSAA half-coverage exterior {exterior:?} must be exact bg (black)"));
+            }
+            // The diagonal edge must carry averaged (neither pure-fg nor pure-bg) pixels — sub-pixel
+            // coverage the hard rasterizer cannot produce. Every such pixel must lie ON the diagonal.
+            let mut intermediates = 0u32;
+            let mut max_off_diag = 0i64;
+            for y in 0..h {
+                for x in 0..w {
+                    let p = at(x, y);
+                    if !is_fg(p) && !is_bg(p) {
+                        intermediates += 1;
+                        max_off_diag = max_off_diag.max((x as i64 - y as i64).abs());
+                    }
+                }
+            }
+            if intermediates < w / 2 {
+                fails.push(format!(
+                    "MSAA half-coverage must antialias the diagonal — expected many averaged edge pixels, got \
+                     {intermediates}"
+                ));
+            }
+            if max_off_diag > 2 {
+                fails.push(format!(
+                    "every MSAA intermediate pixel must lie ON the diagonal edge (|x-y| <= 2), max off-diagonal \
+                     was {max_off_diag}"
+                ));
+            }
+            // Control: the SAME geometry at 1× is hard-aliased — ZERO intermediate pixels.
+            checks += 1;
+            match msaa_render_resolve(exec, w, h, MSAA_HALF_WGSL, 1) {
+                Ok(noaa) => {
+                    let inter_1x = noaa
+                        .chunks_exact(4)
+                        .filter(|p| !((0..3).all(|k| p[k] >= 254)) && !((0..3).all(|k| p[k] <= 1)))
+                        .count();
+                    if inter_1x != 0 {
+                        fails.push(format!(
+                            "the 1× control must be hard-aliased (0 intermediate pixels), got {inter_1x} — the \
+                             gray edge is caused by MSAA averaging, not the geometry"
+                        ));
+                    }
+                }
+                Err(e) => fails.push(format!("MSAA 1× control render errored: {e:?}")),
+            }
+        }
+        Err(e) => fails.push(format!("MSAA half-coverage render+resolve errored: {e:?}")),
+    }
+
+    (checks, fails)
+}
+
+// =================================================================================================
 // the differential test
 // =================================================================================================
 
 #[test]
 fn differential_cpu_oracle_vs_wgpu() {
-    const N: u64 = 130; // 50..200 seeded programs; every generator gets 10 seeds
+    // 17 generators × 10 seeds each — every generator (incl. the new sRGB + stencil ones) gets 10 seeds.
+    const N: u64 = 170;
 
     let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
         Ok(e) => e,
@@ -971,26 +1479,57 @@ fn differential_cpu_oracle_vs_wgpu() {
         }
     }
 
+    // ---- ANALYTIC (executor-vs-hand-computed) MSAA-resolve checks — NOT oracle-compared ----------
+    let (msaa_checks, msaa_fails) = analytic_msaa_resolve(&mut exec);
+
     // ---- summary -------------------------------------------------------------------------------
-    let excluded = [
-        "STENCIL (SetStencilReference + DepthState stencil faces/masks) — oracle has no stencil model \
-         (raster.rs no stencil arm; executor.rs SetStencilReference is a no-op)",
-        "ResolveTexture (multisample averaging) — not advertised by the wgpu backend",
-        "sRGB colour targets — oracle blends/encodes in linear light; orthogonal rounding surface",
+    let oracle_compared = [
+        "clear / clear_rect / copies / fill_buffer — EXACT byte moves",
+        "draw_flat / draw_gradient / draw_depth / draw_blend — fixed-function raster (±1/±2)",
+        "blit_nearest (EXACT) / blit_linear (±3 bilinear)",
+        "compute_iota — neutral kernel-IR on both backends (EXACT)",
+        "clear_srgb / draw_srgb — sRGB gamma-encode on write, oracle now matches the ROP (±2)",
+        "stencil_equal / stencil_greater — two-pass mark-then-test, oracle now models stencil (EXACT)",
+    ];
+    let analytic_only = [
+        "MSAA + ResolveTexture — the oracle has no multisample-RENDER concept (validate rejects a \
+         sample_count>1 attachment), so the executor's 4× render+resolve is asserted against a HAND-COMPUTED \
+         analytic expectation (full-coverage exact colour; half-coverage exact fg/bg + averaged edge), NOT \
+         against the oracle. Counted separately below.",
+    ];
+    let remaining_exclusions = [
+        "NONE for the op surface: stencil, sRGB, and MSAA-resolve are all now covered (stencil + sRGB \
+         oracle-compared; MSAA-resolve analytically checked). DrawIndexed stays out of the per-pixel fuzz \
+         only to avoid partial-coverage indexed edge-rule ambiguity (exercised by the coverage suite).",
     ];
     println!("======================== DIFFERENTIAL SUMMARY ========================");
-    println!("programs run: {N}   agreed: {agreed}   divergences: {}", divergences.len());
+    println!(
+        "oracle-compared programs: {N}   agreed: {agreed}   divergences: {}",
+        divergences.len()
+    );
+    println!("analytic (executor-vs-hand-computed) MSAA checks: {msaa_checks}   failures: {}", msaa_fails.len());
     println!("per-category (agreed/total):");
     for (cat, (a, t)) in &per_category {
         println!("    {cat:<16} {a}/{t}");
     }
     println!("encoder ops covered ({}): {:?}", ops_covered.len(), ops_covered);
-    println!("excluded (oracle-unmodeled / unadvertised):");
-    for e in &excluded {
+    println!("oracle-compared op families:");
+    for e in &oracle_compared {
+        println!("    - {e}");
+    }
+    println!("analytic-only (executor-vs-hand-computed):");
+    for e in &analytic_only {
+        println!("    - {e}");
+    }
+    println!("remaining exclusions:");
+    for e in &remaining_exclusions {
         println!("    - {e}");
     }
     for d in &divergences {
         println!("  {d}");
+    }
+    for f in &msaa_fails {
+        println!("  ANALYTIC-MSAA FAILURE: {f}");
     }
     println!("======================================================================");
 
@@ -1001,8 +1540,21 @@ fn differential_cpu_oracle_vs_wgpu() {
         divergences.join("\n")
     );
     assert_eq!(agreed, N as u32, "every program must agree across both backends");
+    assert!(
+        msaa_fails.is_empty(),
+        "the executor's MSAA render+resolve diverged from the hand-computed analytic expectation:\n{}",
+        msaa_fails.join("\n")
+    );
+    assert!(msaa_checks >= 3, "expected the full + half + 1×-control MSAA checks to run, got {msaa_checks}");
     // Guard against an accidental empty/broken generator table hiding real coverage.
     assert!(ops_covered.len() >= 15, "expected broad op coverage, got {}", ops_covered.len());
+    // The newly-covered op surface must actually be present in the run.
+    for op in ["SetStencilReference"] {
+        assert!(ops_covered.contains(op), "expected `{op}` in the covered op set");
+    }
+    for cat in ["clear_srgb", "draw_srgb", "stencil_equal", "stencil_greater"] {
+        assert!(per_category.contains_key(cat), "expected category `{cat}` to run");
+    }
 }
 
 // The index-buffer path (DrawIndexed / IndexFormat) shares the same fixed-function raster + shader path as

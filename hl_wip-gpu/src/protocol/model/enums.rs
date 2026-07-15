@@ -132,6 +132,27 @@ pub mod stencil_op {
     pub const INVERT: u32 = 5;
     pub const INCREMENT_WRAP: u32 = 6;
     pub const DECREMENT_WRAP: u32 = 7;
+
+    /// Compute the new stencil value an op produces from the currently-`stored` value and the pass
+    /// `reference`, for the oracle's 8-bit (`Depth24PlusStencil8`) stencil plane — matching
+    /// `wgpu::StencilOperation` byte-for-byte. `*_CLAMP` clamps to the `[0, 255]` representable range of the
+    /// 8-bit buffer; `*_WRAP` wraps modulo 256; `INVERT` flips all eight bits. An unmodeled code falls back
+    /// to `KEEP` (the stencil analogue of [`super::compare::passes`]'s `ALWAYS` fallback). The write mask is
+    /// applied by the caller (only bits set in `stencilWriteMask` are updated), so this returns the raw
+    /// pre-mask candidate value.
+    pub fn apply(op: u32, stored: u8, reference: u8) -> u8 {
+        match op {
+            ZERO => 0,
+            REPLACE => reference,
+            INCREMENT_CLAMP => stored.saturating_add(1),
+            DECREMENT_CLAMP => stored.saturating_sub(1),
+            INVERT => !stored,
+            INCREMENT_WRAP => stored.wrapping_add(1),
+            DECREMENT_WRAP => stored.wrapping_sub(1),
+            // KEEP and any unmodeled code leave the stored value untouched.
+            _ => stored,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------

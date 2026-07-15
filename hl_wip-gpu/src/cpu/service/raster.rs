@@ -9,8 +9,8 @@ use crate::cpu::format::{
 };
 use crate::cpu::model::pipeline::Pipeline;
 use crate::cpu::model::{pipeline, texture, texture_mut};
-use crate::protocol::model::descriptor::{BlendState, DepthState};
-use crate::protocol::model::enums::{compare, IndexFormat, TextureFormat, Topology};
+use crate::protocol::model::descriptor::{BlendState, DepthState, StencilFaceState};
+use crate::protocol::model::enums::{compare, stencil_op, IndexFormat, TextureFormat, Topology};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::resources::SessionResources;
 
@@ -63,20 +63,43 @@ pub(crate) fn clear_rect(
     Ok(())
 }
 
-/// A `BeginRenderPass` `LoadOp::Clear` on a depth attachment: fill the whole `Depth32Float` plane with
-/// the packed clear depth (little-endian f32, one per texel).
-pub(crate) fn clear_depth_target(res: &mut SessionResources, texture_id: u32, clear: f32) -> Result<()> {
-    let (w, h) = {
+/// A `BeginRenderPass` `LoadOp::Clear` on a depth (or combined depth+stencil) attachment. A `Depth32Float`
+/// plane is filled with the packed clear depth (little-endian f32, one per texel); a `Depth24PlusStencil8`
+/// plane is filled per texel with `[depth: f32 le | stencil: clear_stencil as u8 @ byte 4 | 0,0,0]` — the
+/// oracle-internal 8-byte layout the depth/stencil rasterizer reads (`clear_stencil` is truncated to the
+/// 8-bit stencil buffer). Formats without a depth aspect are left unchanged.
+pub(crate) fn clear_depth_stencil_target(
+    res: &mut SessionResources,
+    texture_id: u32,
+    clear_depth: f32,
+    clear_stencil: u32,
+) -> Result<()> {
+    let (fmt, w, h) = {
         let t = texture(res, texture_id)?;
-        (t.desc.width as usize, t.desc.height as usize)
+        (t.desc.format, t.desc.width as usize, t.desc.height as usize)
     };
-    let bytes = clear.to_le_bytes();
-    let t = texture_mut(res, texture_id)?;
     let n = w * h;
-    t.pixels.clear();
-    t.pixels.reserve(n * 4);
-    for _ in 0..n {
-        t.pixels.extend_from_slice(&bytes);
+    let t = texture_mut(res, texture_id)?;
+    match fmt {
+        TextureFormat::Depth32Float => {
+            let bytes = clear_depth.to_le_bytes();
+            t.pixels.clear();
+            t.pixels.reserve(n * 4);
+            for _ in 0..n {
+                t.pixels.extend_from_slice(&bytes);
+            }
+        }
+        TextureFormat::Depth24PlusStencil8 => {
+            let d = clear_depth.to_le_bytes();
+            let s = clear_stencil as u8;
+            let texel = [d[0], d[1], d[2], d[3], s, 0, 0, 0];
+            t.pixels.clear();
+            t.pixels.reserve(n * 8);
+            for _ in 0..n {
+                t.pixels.extend_from_slice(&texel);
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -124,6 +147,7 @@ pub(crate) fn exec_draw(
     first_vertex: u32,
     vertex_count: u32,
     instance_count: u32,
+    stencil_ref: u32,
 ) -> Result<()> {
     let (topology, blends, stride, depth_state) = match raster_state(res, pipeline_id)? {
         Some(s) => s,
@@ -147,7 +171,7 @@ pub(crate) fn exec_draw(
     };
     let depth = active_depth(depth_tex, depth_state);
     for _ in 0..instance_count.max(1) {
-        raster_draw(res, targets, &blends, topology, &verts, depth.clone())?;
+        raster_draw(res, targets, &blends, topology, &verts, depth.clone(), stencil_ref)?;
     }
     Ok(())
 }
@@ -166,6 +190,7 @@ pub(crate) fn exec_draw_indexed(
     index_count: u32,
     base_vertex: i32,
     instance_count: u32,
+    stencil_ref: u32,
 ) -> Result<()> {
     let (topology, blends, stride, depth_state) = match raster_state(res, pipeline_id)? {
         Some(s) => s,
@@ -222,7 +247,7 @@ pub(crate) fn exec_draw_indexed(
     };
     let depth = active_depth(depth_tex, depth_state);
     for _ in 0..instance_count.max(1) {
-        raster_draw(res, targets, &blends, topology, &verts, depth.clone())?;
+        raster_draw(res, targets, &blends, topology, &verts, depth.clone(), stencil_ref)?;
     }
     Ok(())
 }
@@ -237,6 +262,7 @@ fn raster_draw(
     topology: Topology,
     verts: &[DrawVertex],
     depth: Option<(u32, DepthState)>,
+    stencil_ref: u32,
 ) -> Result<()> {
     let tris: Vec<[usize; 3]> = match topology {
         Topology::TriangleList => {
@@ -252,7 +278,9 @@ fn raster_draw(
     }
 
     match depth {
-        Some((depth_tex, state)) => raster_draw_depth(res, targets, blends, &tris, verts, depth_tex, state),
+        Some((depth_tex, state)) => {
+            raster_draw_depth(res, targets, blends, &tris, verts, depth_tex, state, stencil_ref)
+        }
         None => raster_draw_no_depth(res, targets, blends, &tris, verts),
     }
 }
@@ -311,11 +339,25 @@ fn raster_draw_no_depth(
     Ok(())
 }
 
-/// The depth-tested path: interpolate per-fragment `z` from the vertex positions, compare it against the
-/// render pass's depth buffer with the pipeline's compare function, and (if the fragment passes) write the
-/// color to every target and, when `depth_write` is set, store the new `z`. Fragment ordering is governed
-/// by the depth test — not by draw/triangle order — so a nearer fragment wins an overlap regardless of the
-/// order it is drawn. The depth buffer is read once, updated in place, and written back.
+/// The depth/stencil-tested path: interpolate per-fragment `z` from the vertex positions, run the STENCIL
+/// test (front-face state) and the DEPTH test against the render pass's depth/stencil buffer, apply the
+/// pipeline's stencil op (masked by `stencilWriteMask`), and — when BOTH tests pass — write the color to
+/// every target and, when `depth_write` is set, store the new `z`. Fragment ordering is governed by the
+/// tests, not by draw/triangle order, so a nearer fragment wins an overlap regardless of draw order. The
+/// depth (`Depth32Float`) or depth+stencil (`Depth24PlusStencil8`) buffer is read once, updated in place,
+/// and written back.
+///
+/// STENCIL MODEL (matches `wgpu`/Vulkan): for a `Depth24PlusStencil8` attachment the oracle keeps an 8-bit
+/// stencil value per texel (byte 4 of the 8-byte plane texel). Per covered fragment it evaluates
+/// `(reference & readMask) <compare> (stored & readMask)`; the outcome selects the op —
+/// `fail_op` on a stencil fail, `depth_fail_op` on a stencil-pass/depth-fail, `pass_op` on both passing —
+/// whose result ([`stencil_op::apply`]) is written back through `stencilWriteMask`
+/// (`stored = (stored & !mask) | (new & mask)`). Only the FRONT-face state is modeled: the differential
+/// programs set front == back, and the full-screen/centred geometry here is front-facing under the wire
+/// default winding, so front-face suffices. A `Depth32Float` attachment carries no stencil aspect and its
+/// pipeline's front/back are the inert `DISABLED` (`ALWAYS`/`KEEP`) default, so the stencil test always
+/// passes and never writes — the depth-only path stays byte-for-byte unchanged.
+#[allow(clippy::too_many_arguments)]
 fn raster_draw_depth(
     res: &mut SessionResources,
     targets: &[(u32, TextureFormat)],
@@ -324,32 +366,47 @@ fn raster_draw_depth(
     verts: &[DrawVertex],
     depth_tex: u32,
     state: DepthState,
+    stencil_ref: u32,
 ) -> Result<()> {
-    // Dimensions come from the depth attachment (a render pass's color + depth attachments share extent).
-    let (w, h) = {
+    // Dimensions + format come from the depth attachment (color + depth attachments share extent).
+    let (ds_fmt, w, h) = {
         let t = texture(res, depth_tex)?;
-        (t.desc.width as usize, t.desc.height as usize)
+        (t.desc.format, t.desc.width as usize, t.desc.height as usize)
     };
     if w == 0 || h == 0 {
         return Ok(());
     }
+    // A combined depth+stencil attachment stores 8 bytes/texel (`[depth f32 | stencil u8 | 0,0,0]`); a
+    // depth-only attachment stores 4 (`[depth f32]`). The stencil plane exists only for the former.
+    let has_stencil = ds_fmt == TextureFormat::Depth24PlusStencil8;
+    let stride = if has_stencil { 8 } else { 4 };
 
-    // Load the depth plane (tight-packed little-endian f32, one per texel).
-    let mut depth_buf: Vec<f32> = {
+    // Load the depth (f32) and — when present — stencil (u8) planes from the attachment.
+    let (mut depth_buf, mut stencil_buf): (Vec<f32>, Vec<u8>) = {
         let px = &texture(res, depth_tex)?.pixels;
-        (0..w * h)
-            .map(|i| {
-                let o = i * 4;
-                if o + 4 <= px.len() {
-                    f32::from_le_bytes([px[o], px[o + 1], px[o + 2], px[o + 3]])
-                } else {
-                    1.0
-                }
-            })
-            .collect()
+        let mut d = Vec::with_capacity(w * h);
+        let mut s = Vec::with_capacity(w * h);
+        for i in 0..w * h {
+            let o = i * stride;
+            let z = if o + 4 <= px.len() {
+                f32::from_le_bytes([px[o], px[o + 1], px[o + 2], px[o + 3]])
+            } else {
+                1.0
+            };
+            let sv = if has_stencil && o + 5 <= px.len() { px[o + 4] } else { 0 };
+            d.push(z);
+            s.push(sv);
+        }
+        (d, s)
     };
 
-    // Resolve, per pixel, the winning interpolated source color (depth decides the winner).
+    // Static front-face stencil state + masks (truncated to the 8-bit buffer) + the dynamic reference.
+    let sf: StencilFaceState = state.stencil_front;
+    let read_mask = (state.stencil_read_mask & 0xff) as u8;
+    let write_mask = (state.stencil_write_mask & 0xff) as u8;
+    let sref = (stencil_ref & 0xff) as u8;
+
+    // Resolve, per pixel, the winning interpolated source color (the depth+stencil tests decide the winner).
     let mut win: Vec<Option<[f32; 4]>> = vec![None; w * h];
     for tri in tris {
         let v = [verts[tri[0]], verts[tri[1]], verts[tri[2]]];
@@ -368,24 +425,51 @@ fn raster_draw_depth(
                     None => continue,
                 };
                 let z = bary[0] * v[0].z + bary[1] * v[1].z + bary[2] * v[2].z;
-                if !compare::passes(state.depth_compare, z, depth_buf[idx]) {
-                    continue;
+
+                // Stencil test: `(ref & readMask) <compare> (stored & readMask)` (integer values represent
+                // exactly in f32, so the shared `compare::passes` gives the exact stencil comparison).
+                let stored_s = stencil_buf[idx];
+                let s_pass = compare::passes(
+                    sf.compare,
+                    (sref & read_mask) as f32,
+                    (stored_s & read_mask) as f32,
+                );
+                let d_pass = compare::passes(state.depth_compare, z, depth_buf[idx]);
+
+                // Apply the stencil op selected by the test outcome, writing only `stencilWriteMask` bits.
+                if has_stencil {
+                    let op = if !s_pass {
+                        sf.fail_op
+                    } else if !d_pass {
+                        sf.depth_fail_op
+                    } else {
+                        sf.pass_op
+                    };
+                    let candidate = stencil_op::apply(op, stored_s, sref);
+                    stencil_buf[idx] = (stored_s & !write_mask) | (candidate & write_mask);
                 }
-                win[idx] = Some(interp_color(&v, bary));
-                if state.depth_write {
-                    depth_buf[idx] = z;
+
+                // Color + depth update only when BOTH the stencil and depth tests pass.
+                if s_pass && d_pass {
+                    win[idx] = Some(interp_color(&v, bary));
+                    if state.depth_write {
+                        depth_buf[idx] = z;
+                    }
                 }
             }
         }
     }
 
-    // Write the updated depth plane back.
+    // Write the updated depth (and stencil) plane back.
     {
         let t = texture_mut(res, depth_tex)?;
-        for (i, z) in depth_buf.iter().enumerate() {
-            let o = i * 4;
+        for i in 0..w * h {
+            let o = i * stride;
             if o + 4 <= t.pixels.len() {
-                t.pixels[o..o + 4].copy_from_slice(&z.to_le_bytes());
+                t.pixels[o..o + 4].copy_from_slice(&depth_buf[i].to_le_bytes());
+            }
+            if has_stencil && o + 5 <= t.pixels.len() {
+                t.pixels[o + 4] = stencil_buf[i];
             }
         }
     }

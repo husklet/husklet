@@ -137,9 +137,15 @@ impl CpuExecutor {
         }
         // A `Depth32Float` attachment is materialized as a tight-packed f32 depth plane (4 bytes/texel) so
         // the rasterizer can run the per-fragment depth test/write against it; the color helpers still
-        // reject it (it is not a plain-color format). Other depth/stencil formats stay unsupported.
+        // reject it (it is not a plain-color format). A `Depth24PlusStencil8` attachment is materialized as
+        // an 8-byte/texel plane — `[depth: f32 le | stencil: u8 @ byte 4, bytes 5..8 zero]` — so the
+        // rasterizer can run BOTH the depth test/write and the stencil test/op against it (see
+        // `raster::raster_draw_depth`). The stored byte layout is an oracle-internal detail: only the color
+        // target is ever read back and compared, so it need not match any hardware depth/stencil packing.
+        // Other depth/stencil formats stay unsupported.
         let bpt = match desc.format {
             TextureFormat::Depth32Float => 4,
+            TextureFormat::Depth24PlusStencil8 => 8,
             _ => texel_bytes(desc.format)?,
         };
         let n = bpt
@@ -326,10 +332,17 @@ impl CpuExecutor {
         let mut cur_depth: Option<u32> = None;
         let mut cur_vertex: HashMap<u32, (u32, u64)> = HashMap::new();
         let mut cur_index: Option<(u32, u64, IndexFormat)> = None;
+        // The dynamic stencil reference value (WebGPU `setStencilReference`). It resets to 0 per render pass
+        // (mirroring the wgpu executor, whose reference is pass-scoped state) and the stream's
+        // `SetStencilReference` ops update it for the draws that follow. The pipeline's `DepthState` carries
+        // the static stencil compare/ops/masks; this is the one dynamic operand the compare tests against
+        // and a `REPLACE` op writes.
+        let mut cur_stencil_ref: u32 = 0;
         for op in &cb.encoder {
             match op {
                 Enc::BeginRenderPass { color, depth } => {
                     cur_targets.clear();
+                    cur_stencil_ref = 0;
                     for c in color {
                         let fmt = texture(res, c.texture)?.desc.format;
                         cur_targets.push((c.texture, fmt));
@@ -341,7 +354,15 @@ impl CpuExecutor {
                     if let Some(dp) = depth {
                         cur_depth = Some(dp.texture);
                         if dp.load == LoadOp::Clear {
-                            raster::clear_depth_target(res, dp.texture, dp.clear_depth)?;
+                            // Clears both the depth plane (to `clear_depth`) and, for a combined
+                            // depth+stencil attachment, the stencil plane (to `clear_stencil`); a
+                            // `LoadOp::Load` preserves both, which a two-pass mark-then-test IR relies on.
+                            raster::clear_depth_stencil_target(
+                                res,
+                                dp.texture,
+                                dp.clear_depth,
+                                dp.clear_stencil,
+                            )?;
                         }
                     }
                 }
@@ -353,6 +374,7 @@ impl CpuExecutor {
                     raster::clear_rect(res, *texture, *x, *y, *w, *h, *color)?;
                 }
                 Enc::SetPipeline(p) => cur_pipeline = Some(*p),
+                Enc::SetStencilReference { reference } => cur_stencil_ref = *reference,
                 Enc::SetBindGroup { group, .. } => cur_bind_group = Some(*group),
                 Enc::SetVertexBuffer { slot, buffer, offset } => {
                     cur_vertex.insert(*slot, (*buffer, *offset));
@@ -366,7 +388,7 @@ impl CpuExecutor {
                     let vb = cur_vertex.get(&0).copied();
                     raster::exec_draw(
                         res, cur_pipeline, &cur_targets, cur_depth, vb, *first_vertex, *vertex_count,
-                        *instance_count,
+                        *instance_count, cur_stencil_ref,
                     )?;
                 }
                 Enc::DrawIndexed { index_count, first_index, base_vertex, instance_count, .. } => {
@@ -375,7 +397,7 @@ impl CpuExecutor {
                     let vb = cur_vertex.get(&0).copied();
                     raster::exec_draw_indexed(
                         res, cur_pipeline, &cur_targets, cur_depth, vb, cur_index, *first_index,
-                        *index_count, *base_vertex, *instance_count,
+                        *index_count, *base_vertex, *instance_count, cur_stencil_ref,
                     )?;
                 }
                 Enc::Dispatch { x, y, z } => {
@@ -742,8 +764,9 @@ fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Resul
             }
         }
         Enc::SetScissor { .. } => {}
-        // Dynamic stencil reference: the software oracle does not model the stencil test, so like
-        // `SetViewport`/`SetScissor` this carries no validation obligation (a no-op state setter).
+        // Dynamic stencil reference: pure dynamic pass state (the value the compare tests against and a
+        // `REPLACE` op writes). Like `SetViewport`/`SetScissor` it carries no validation obligation — the
+        // reference is any `u32`; the executor applies it to the draws that follow (see `submit`).
         Enc::SetStencilReference { .. } => {}
         Enc::ClearRect { texture, .. } => {
             let t = crate::cpu::model::texture(res, *texture)?;

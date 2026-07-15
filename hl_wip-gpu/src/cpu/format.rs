@@ -12,18 +12,24 @@ pub(crate) fn texel_bytes(fmt: TextureFormat) -> Result<usize> {
     fmt.bytes_per_texel().ok_or(GpuError::Unsupported("software: non-color texture format"))
 }
 
-/// Convert a normalized clear color to packed bytes for the 8-bit color formats (round-half-up).
+/// Convert a normalized (linear-light) color to packed bytes for the 8-bit color formats. Alpha — and
+/// every channel of a LINEAR format — is a plain unorm quantize (round half up). A COLOR channel of an
+/// sRGB format is gamma-ENCODED (the IEC 61966-2-1 linear→sRGB OETF) on write, exactly as the hardware ROP
+/// does for a `LoadOp::Clear` or a non-blended (replace) draw into an sRGB target — so the oracle stores
+/// e.g. 188 for linear 0.5, not the naive 128. (A BLENDED draw encodes via [`store_texel_linear`]; this is
+/// the clear / replace-draw path.)
 pub(crate) fn clear_texel(fmt: TextureFormat, c: [f32; 4]) -> Result<Vec<u8>> {
-    let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let lin = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let col = |v: f32| if is_srgb(fmt) { srgb_encode(v) } else { lin(v) };
     Ok(match fmt {
         TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => {
-            vec![to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), to_u8(c[3])]
+            vec![col(c[0]), col(c[1]), col(c[2]), lin(c[3])]
         }
         TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => {
-            vec![to_u8(c[2]), to_u8(c[1]), to_u8(c[0]), to_u8(c[3])]
+            vec![col(c[2]), col(c[1]), col(c[0]), lin(c[3])]
         }
-        TextureFormat::R8Unorm => vec![to_u8(c[0])],
-        TextureFormat::Rg8Unorm => vec![to_u8(c[0]), to_u8(c[1])],
+        TextureFormat::R8Unorm => vec![lin(c[0])],
+        TextureFormat::Rg8Unorm => vec![lin(c[0]), lin(c[1])],
         _ => return Err(GpuError::Unsupported("software: clear for this format")),
     })
 }
