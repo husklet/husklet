@@ -58,11 +58,102 @@ pub fn build_frame_ir(ctx: &mut GlContext) -> Option<Frame> {
     if !ctx.surf.have || ctx.draws.is_empty() {
         return None;
     }
+    // Partition the recorded draw-list into contiguous runs that share a bound framebuffer. A frame that
+    // renders to more than one framebuffer (the GskGL / offscreen-compositor shape: a glyph atlas + offscreen
+    // render targets, then a final default-framebuffer pass that SAMPLES them) lowers as a SEQUENCE of render
+    // passes, one per run — not collapsed onto the first draw's FBO. A single run is the single-target fast
+    // path (byte-identical to the pre-frame-graph lowering).
+    let groups = fbo_groups(&ctx.draws);
+    if groups.len() > 1 {
+        return build_multi_pass_frame(ctx, &groups);
+    }
     if ctx.draws.iter().all(|d| d.is_clear) {
         return Some(build_clear_frame(ctx));
     }
-    // One or more geometry draws (optionally led by a clear) → the single/multi-draw path.
+    // One framebuffer, one or more geometry draws (optionally led by a clear) → the single/multi-draw path.
     build_geometry_frame(ctx)
+}
+
+/// Partition the draw-list into maximal contiguous runs that share a bound framebuffer, in record order,
+/// as `(fbo, start, end)` half-open index ranges into `draws`. Each run becomes one render pass targeting
+/// that FBO's color attachment (fbo `0` = the default window framebuffer). A clear carries the FBO bound
+/// when it was recorded, so a `glClear` under an offscreen FBO groups with that FBO's geometry.
+fn fbo_groups(draws: &[DrawCall]) -> Vec<(u32, usize, usize)> {
+    let mut groups: Vec<(u32, usize, usize)> = Vec::new();
+    for (i, d) in draws.iter().enumerate() {
+        match groups.last_mut() {
+            Some((fbo, _, end)) if *fbo == d.fbo => *end = i + 1,
+            _ => groups.push((d.fbo, i, i + 1)),
+        }
+    }
+    groups
+}
+
+/// Lower a multi-framebuffer frame as a SEQUENCE of render passes, one per contiguous `fbo` run (see
+/// [`fbo_groups`]). Each offscreen run renders into its FBO's color-attachment texture; a later run that
+/// samples that attachment binds the render-target texture directly (see [`lower_draw`]'s cross-pass path),
+/// so the atlas/offscreen → window composite works. The DEFAULT framebuffer (fbo `0`) run renders into the
+/// window color target — and THAT target is what the frame presents and a `glReadPixels` reads back, at
+/// window dimensions (not an offscreen atlas). Falls back to the last run's target for a frame that never
+/// bound fbo `0` (a pure render-to-offscreen frame). Returns `None` if nothing could be lowered.
+fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -> Option<Frame> {
+    let draws = ctx.draws.clone();
+    let mut cmds: Vec<Cmd> = Vec::new();
+    // GL texture name of an FBO color attachment → the render-target texture IR a prior pass rendered into,
+    // so a later pass sampling that attachment reads the rendered pixels rather than re-uploading its CPU
+    // storage (an FBO attachment allocated via glTexImage2D(…, NULL) carries a zeroed plane, not the render).
+    let mut fbo_tex_ir: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    // The default-framebuffer (window) target to present + read back; the last run's target is the fallback.
+    let mut present: Option<(u32, u32, i32, i32, TextureFormat)> = None;
+    let mut last: Option<(u32, u32, i32, i32, TextureFormat)> = None;
+
+    for &(fbo, start, end) in groups {
+        let run = &draws[start..end];
+        let (surface, target_tex, tw, th, fmt) = resolve_target(ctx, fbo, &mut cmds);
+        // Register this run's offscreen attachment so a later run can sample its rendered pixels. Mirror
+        // resolve_target's offscreen condition (a sized attachment) so `target_tex` is the offscreen target.
+        if fbo != 0 {
+            let attach = ctx.framebuffers.color_attachment(fbo);
+            if attach != 0 && ctx.textures.get(attach).map(|t| t.w > 0 && t.h > 0).unwrap_or(false) {
+                fbo_tex_ir.insert(attach, target_tex);
+            }
+        }
+        // The pass clear color is the run's first recorded draw (a leading glClear if present, else the
+        // first geometry draw's snapshot). Each run clear-loads its target once, then replays its draws.
+        let clear = run.first().map(|d| d.clear).unwrap_or([0.0; 4]);
+
+        let mut copies: Vec<Enc> = Vec::new();
+        let mut draw_ops: Vec<Enc> = Vec::new();
+        for d in run.iter().filter(|d| !d.is_clear) {
+            if let Some(l) = lower_draw(ctx, d, fmt, tw, th, &mut cmds, &fbo_tex_ir) {
+                copies.extend(l.copies);
+                draw_ops.extend(l.ops);
+            }
+        }
+
+        let mut ops: Vec<Enc> = copies;
+        ops.push(Enc::BeginRenderPass {
+            color: vec![ColorAttachment { texture: target_tex, load: LoadOp::Clear, clear, store: true }],
+            depth: None,
+        });
+        ops.extend(draw_ops);
+        ops.push(Enc::EndRenderPass);
+        cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
+
+        last = Some((surface, target_tex, tw, th, fmt));
+        if fbo == 0 {
+            present = Some((surface, target_tex, tw, th, fmt));
+        }
+    }
+
+    let (surface, texture, tw, th, fmt) = present.or(last)?;
+    Some(Frame {
+        cmds,
+        present: (surface, texture),
+        target_width: tw,
+        target_height: th,
+        target_format: fmt,
+    })
 }
 
 /// The render target + presentable surface for a frame whose draws target framebuffer `fbo`. Mints the
@@ -81,7 +172,9 @@ fn resolve_target(ctx: &mut GlContext, fbo: u32, cmds: &mut Vec<Cmd>) -> (u32, u
             if let Some((w, h, fmt)) = ctx.textures.get(attach).filter(|t| t.w > 0 && t.h > 0).map(|t| (t.w, t.h, t.ir_format)) {
                 let (surface, texture, needs_create) = ctx.fbo_target(attach);
                 if needs_create {
-                    push_target_creates(cmds, surface, texture, w, h, fmt, "offscreen-fbo");
+                    // Offscreen targets add SAMPLED: a later default-framebuffer pass samples them (the
+                    // atlas/offscreen → window composite), which the CPU oracle's bind-group check requires.
+                    push_target_creates(cmds, surface, texture, w, h, fmt, "offscreen-fbo", true);
                 }
                 return (surface, texture, w, h, fmt);
             }
@@ -91,14 +184,17 @@ fn resolve_target(ctx: &mut GlContext, fbo: u32, cmds: &mut Vec<Cmd>) -> (u32, u
     let fmt = TextureFormat::Bgra8Unorm;
     let (surface, texture, needs_create) = ctx.default_target();
     if needs_create {
-        push_target_creates(cmds, surface, texture, w, h, fmt, "default-fbo");
+        push_target_creates(cmds, surface, texture, w, h, fmt, "default-fbo", false);
     }
     (surface, texture, w, h, fmt)
 }
 
-/// Emit the `CreateTexture(RENDER_TARGET | PRESENT)` + matching `CreateSurface` for a render target.
-fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, h: i32, fmt: TextureFormat, label: &str) {
+/// Emit the `CreateTexture(RENDER_TARGET | PRESENT)` + matching `CreateSurface` for a render target. When
+/// `sampled` a `SAMPLED` usage bit is added so a later render pass may bind this target as a texture (an
+/// offscreen FBO sampled by the default-framebuffer composite); the default window target is never sampled.
+fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, h: i32, fmt: TextureFormat, label: &str, sampled: bool) {
     let (w, h) = (w.max(1) as u32, h.max(1) as u32);
+    let sampled = if sampled { texture_usage::SAMPLED } else { 0 };
     cmds.push(Cmd::CreateTexture(
         texture,
         TextureDesc {
@@ -111,7 +207,7 @@ fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, 
             format: fmt,
             // COPY_SRC so a `glReadPixels` can copy the rendered target back to a host-readable buffer
             // (the CPU executor requires COPY_SRC on a `CopyTextureToBuffer` source).
-            usage: texture_usage::RENDER_TARGET | texture_usage::PRESENT | texture_usage::COPY_SRC,
+            usage: texture_usage::RENDER_TARGET | texture_usage::PRESENT | texture_usage::COPY_SRC | sampled,
             label: label.into(),
         },
     ));
@@ -160,10 +256,13 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
     let mut cmds: Vec<Cmd> = Vec::new();
     let (surface, target_tex, tw, th, target_fmt) = resolve_target(ctx, fbo, &mut cmds);
 
+    // Single-target frame: no prior offscreen pass to sample, so cross-pass FBO sampling is empty and this
+    // path lowers byte-identically to the pre-frame-graph builder.
+    let no_fbo_tex = std::collections::HashMap::new();
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
     for d in &geom {
-        if let Some(lowered) = lower_draw(ctx, d, target_fmt, tw, th, &mut cmds) {
+        if let Some(lowered) = lower_draw(ctx, d, target_fmt, tw, th, &mut cmds, &no_fbo_tex) {
             copies.extend(lowered.copies);
             draw_ops.extend(lowered.ops);
         }
@@ -194,7 +293,7 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
 /// Lower one geometry draw against a render target of format `target_fmt`: emit its resource creates +
 /// uploads into `cmds` and return the staging copies + in-pass encoder ops. `None` if the draw's program
 /// is unknown/unlinked (the caller skips it). The byte-shape mirrors gl_shim.c's per-draw lowering.
-fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: i32, th: i32, cmds: &mut Vec<Cmd>) -> Option<DrawLowering> {
+fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: i32, th: i32, cmds: &mut Vec<Cmd>, fbo_tex_ir: &std::collections::HashMap<u32, u32>) -> Option<DrawLowering> {
     let d = d.clone();
     let prog_name = if d.prog != 0 { d.prog } else { ctx.cur_prog };
     let prog = ctx.programs.program(prog_name)?.clone();
@@ -304,6 +403,29 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     for i in 0..prog.samp_names.len().min(4) {
         let unit = if (0..8).contains(&prog.samp_units[i]) { prog.samp_units[i] as usize } else { i };
         let gl_tex = d.tex_units[unit];
+        // Cross-pass FBO sampling: if this sampled GL texture is the color attachment an earlier render pass
+        // rendered into, bind THAT render-target texture (the rendered pixels) directly — no staging upload
+        // (its CPU plane is the pre-render zero storage). `stage_ir == 0` marks the copy-free bind.
+        if let Some(&rt_ir) = fbo_tex_ir.get(&gl_tex) {
+            let t = match ctx.textures.get(gl_tex) {
+                Some(t) => t.clone(),
+                None => continue,
+            };
+            let samp_ir = ctx.alloc_sampler_ir();
+            cmds.push(Cmd::CreateSampler(
+                samp_ir,
+                SamplerDesc {
+                    min_filter: t.ir_min_filter(),
+                    mag_filter: t.ir_mag_filter(),
+                    mip_filter: Filter::Nearest,
+                    address_u: t.ir_wrap_s(),
+                    address_v: t.ir_wrap_t(),
+                    address_w: AddressMode::ClampToEdge,
+                },
+            ));
+            texbinds.push(TexBind { slot: i, tex_ir: rt_ir, samp_ir, stage_ir: 0, w: t.w as u32, h: t.h as u32 });
+            continue;
+        }
         let t = match ctx.textures.get(gl_tex) {
             Some(t) if t.has_data() => t.clone(),
             _ => continue,
@@ -476,6 +598,10 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     // ---- staging copies (hoisted before BeginRenderPass) + the in-pass draw ops ----
     let mut copies: Vec<Enc> = Vec::new();
     for tb in &texbinds {
+        // A cross-pass FBO sample (stage_ir == 0) was rendered by a prior pass — no upload/copy to hoist.
+        if tb.stage_ir == 0 {
+            continue;
+        }
         copies.push(Enc::CopyBufferToTexture {
             src: tb.stage_ir,
             src_offset: 0,
