@@ -120,7 +120,63 @@ mod tests {
             let num_regs = i32::from_le_bytes(ra[28..32].try_into().unwrap());
             assert!(num_regs > 0, "vecadd uses registers, got {num_regs}");
             assert_eq!(shared, 0, "vecadd declares no static shared memory");
+
+            // __cudaRegisterVar binds a __device__/__constant__ global; hl's PTX model parses only kernel
+            // entries, so it is an honest no-op (must not panic across the C ABI).
+            let var_name = std::ffi::CString::new("gCounter").unwrap();
+            __cudaRegisterVar(
+                handle,
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                var_name.as_ptr(),
+                0,
+                4,
+                0,
+                1,
+            );
+            // __cudaUnregisterFatBinary drops the handle binding (the module stays resident); a bogus/null
+            // handle is a silent no-op, never a crash.
+            __cudaUnregisterFatBinary(handle);
+            __cudaUnregisterFatBinary(core::ptr::null_mut());
         }
+
+        // cudaGetDeviceProperties_v2 fills the same struct as the legacy alias: name @0, major/minor set.
+        let mut p2 = vec![0u8; 4096];
+        assert_eq!(cudaGetDeviceProperties_v2(p2.as_mut_ptr() as *mut c_void, 0), 0);
+        let n2 = unsafe { std::ffi::CStr::from_ptr(p2.as_ptr() as *const c_char) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(n2.contains("CUDA-sim"), "v2 name: {n2}");
+        assert_eq!(cudaGetDeviceProperties_v2(core::ptr::null_mut(), 0), CUDART_ERR_INVALID_DEVICE);
+
+        // cudaStreamCreateWithFlags mints a usable stream (shares cudaStreamCreate's body).
+        let mut sf: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cudaStreamCreateWithFlags(&mut sf, 0x1 /* cudaStreamNonBlocking */), 0);
+        assert!(!sf.is_null());
+        assert_eq!(cudaStreamQuery(sf), 0);
+        assert_eq!(cudaStreamDestroy(sf), 0);
+
+        // cudaHostAlloc hands back real writable pinned host memory (shares cudaMallocHost's body).
+        let mut ha: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cudaHostAlloc(&mut ha, 128, 0x2 /* cudaHostAllocMapped */), 0);
+        assert!(!ha.is_null());
+        unsafe { *(ha as *mut u8).add(64) = 0x5A };
+        assert_eq!(unsafe { *(ha as *mut u8).add(64) }, 0x5A);
+        assert_eq!(cudaFreeHost(ha), 0);
+
+        // cudaPeekAtLastError reads the sticky error WITHOUT clearing it; cudaGetLastError clears it;
+        // cudaDeviceReset clears it back to success. A failing call sets the sticky error truthfully.
+        assert_eq!(cudaSetDevice(7), CUDART_ERR_INVALID_DEVICE); // sets last_error = 101
+        assert_eq!(cudaPeekAtLastError(), CUDART_ERR_INVALID_DEVICE);
+        assert_eq!(cudaPeekAtLastError(), CUDART_ERR_INVALID_DEVICE, "peek does not clear");
+        assert_eq!(cudaGetLastError(), CUDART_ERR_INVALID_DEVICE); // reads + clears
+        assert_eq!(cudaPeekAtLastError(), 0, "cleared after get");
+        // reset restores a clean slate (device 0, no sticky error)
+        assert_eq!(cudaSetDevice(9), CUDART_ERR_INVALID_DEVICE);
+        assert_eq!(cudaDeviceReset(), 0);
+        assert_eq!(cudaPeekAtLastError(), 0, "reset clears the sticky error");
+        assert_eq!(cudaGetDevice(&mut dev), 0);
+        assert_eq!(dev, 0);
 
         // pinned host memory (no command sink needed)
         let mut hp: *mut c_void = core::ptr::null_mut();
@@ -316,6 +372,44 @@ mod tests {
             let want = if (8..24).contains(&i) { 0xEEu8 } else { 0x00 };
             assert_eq!(*b, want, "byte {i} after interior memset");
         }
+
+        // cudaMemcpyAsync (HtoD then DtoH) against the live executor: the async copy lowers identically to
+        // the synchronous one, so a round-trip through device memory returns the exact source bytes.
+        let src: Vec<u8> = (0..64u8).map(|i| i.wrapping_mul(5)).collect();
+        assert_eq!(
+            cudaMemcpyAsync(dptr, src.as_ptr() as *const c_void, 64, 1 /* HtoD */, core::ptr::null_mut()),
+            0
+        );
+        let mut got = vec![0u8; 64];
+        assert_eq!(
+            cudaMemcpyAsync(got.as_mut_ptr() as *mut c_void, dptr, 64, 2 /* DtoH */, core::ptr::null_mut()),
+            0
+        );
+        assert_eq!(got, src, "cudaMemcpyAsync round-trips the exact bytes through device memory");
+
+        // Synchronization barriers really submit + wait on a timeline fence over the live socket.
+        assert_eq!(cudaDeviceSynchronize(), 0);
+        assert_eq!(cudaThreadSynchronize(), 0);
+        let mut stream: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cudaStreamCreate(&mut stream), 0);
+        assert_eq!(cudaStreamSynchronize(stream), 0);
+        assert_eq!(cudaStreamSynchronize(core::ptr::null_mut()), 0); // default stream
+        let bogus = 0x9999usize as *mut c_void;
+        assert_eq!(cudaStreamSynchronize(bogus), 1 /* cudaErrorInvalidValue */);
+        assert_eq!(cudaStreamDestroy(stream), 0);
+
+        // cudaHostGetDevicePointer maps a pinned host allocation to a live device pointer (lazily backing
+        // it with a real device buffer over the sink); an unregistered host pointer is invalid.
+        let mut hp: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cudaHostAlloc(&mut hp, 256, 0), 0);
+        let mut hdev: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cudaHostGetDevicePointer(&mut hdev, hp, 0), 0);
+        assert!(!hdev.is_null());
+        let mut junk = [0u8; 8];
+        let foreign = junk.as_mut_ptr() as *mut c_void;
+        let mut jdev: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cudaHostGetDevicePointer(&mut jdev, foreign, 0), 1 /* invalid */);
+        assert_eq!(cudaFreeHost(hp), 0);
 
         // Tear down: freeing + resetting the state drops the connected sink, closing the socket so the
         // server thread hits EOF and returns.

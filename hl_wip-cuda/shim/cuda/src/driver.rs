@@ -3062,4 +3062,386 @@ mod tests {
         assert_eq!(cuMemHostGetFlags(&mut fl, hp), CUDA_ERROR_INVALID_VALUE);
         assert_eq!(cuMemHostGetFlags(&mut fl, core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
     }
+
+    // ---- bring-up + query surface (no command sink needed) ----------------------------------------
+
+    #[test]
+    fn bringup_device_and_context_queries() {
+        let _g = guard();
+
+        // cuInit + driver version.
+        assert_eq!(cuInit(0), CUDA_SUCCESS);
+        let mut ver = -1i32;
+        assert_eq!(cuDriverGetVersion(&mut ver), CUDA_SUCCESS);
+        assert_eq!(ver, DRIVER_VERSION);
+        assert_eq!(cuDriverGetVersion(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+
+        // error name / string lookups.
+        let mut sp: *const c_char = core::ptr::null();
+        assert_eq!(cuGetErrorName(CUDA_ERROR_OUT_OF_MEMORY, &mut sp), CUDA_SUCCESS);
+        assert_eq!(unsafe { std::ffi::CStr::from_ptr(sp) }.to_str().unwrap(), "CUDA_ERROR_OUT_OF_MEMORY");
+        assert_eq!(cuGetErrorString(CUDA_SUCCESS, &mut sp), CUDA_SUCCESS);
+        assert_eq!(unsafe { std::ffi::CStr::from_ptr(sp) }.to_str().unwrap(), "no error");
+        assert_eq!(cuGetErrorName(0, core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+
+        // device enumeration + identity.
+        let mut count = -1i32;
+        assert_eq!(cuDeviceGetCount(&mut count), CUDA_SUCCESS);
+        assert_eq!(count, 1);
+        let mut d = -1i32;
+        assert_eq!(cuDeviceGet(&mut d, 0), CUDA_SUCCESS);
+        assert_eq!(d, 0);
+        assert_eq!(cuDeviceGet(&mut d, 1), CUDA_ERROR_INVALID_VALUE); // no second device
+
+        let want = with(|s| s.ctx.device.clone());
+        let mut name = [0 as c_char; 128];
+        assert_eq!(cuDeviceGetName(name.as_mut_ptr(), 128, 0), CUDA_SUCCESS);
+        assert_eq!(unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_str().unwrap(), want.name);
+
+        let mut total = 0usize;
+        assert_eq!(cuDeviceTotalMem_v2(&mut total, 0), CUDA_SUCCESS);
+        assert_eq!(total, want.total_mem as usize);
+
+        let (mut maj, mut min) = (-1i32, -1i32);
+        assert_eq!(cuDeviceComputeCapability(&mut maj, &mut min, 0), CUDA_SUCCESS);
+        assert_eq!((maj as u32, min as u32), want.compute_capability);
+
+        // UUID (both spellings write the same 16 bytes).
+        let mut u1 = [0u8; 16];
+        let mut u2 = [0u8; 16];
+        assert_eq!(cuDeviceGetUuid(u1.as_mut_ptr() as *mut c_void, 0), CUDA_SUCCESS);
+        assert_eq!(cuDeviceGetUuid_v2(u2.as_mut_ptr() as *mut c_void, 0), CUDA_SUCCESS);
+        assert_eq!(u1, want.uuid);
+        assert_eq!(u1, u2);
+
+        // context create → set-current → get-device → destroy.
+        let mut ctx: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuCtxCreate_v2(&mut ctx, 0, 0), CUDA_SUCCESS);
+        assert_eq!(cuCtxSetCurrent(ctx), CUDA_SUCCESS);
+        let mut cd = -1i32;
+        assert_eq!(cuCtxGetDevice(&mut cd), CUDA_SUCCESS);
+        assert_eq!(cd, 0);
+        assert_eq!(cuCtxDestroy_v2(ctx), CUDA_SUCCESS);
+        // after destroy the current context is cleared.
+        let mut cur: *mut c_void = 0x1 as *mut c_void;
+        assert_eq!(cuCtxGetCurrent(&mut cur), CUDA_SUCCESS);
+        assert!(cur.is_null());
+
+        // primary-context reset + set-flags (device-ordinal validated).
+        assert_eq!(cuDevicePrimaryCtxSetFlags_v2(0, 4), CUDA_SUCCESS);
+        assert_eq!(cuDevicePrimaryCtxReset_v2(0), CUDA_SUCCESS);
+        assert_eq!(cuDevicePrimaryCtxReset_v2(1), CUDA_ERROR_INVALID_DEVICE);
+        assert_eq!(cuDevicePrimaryCtxSetFlags_v2(1, 0), CUDA_ERROR_INVALID_DEVICE);
+    }
+
+    #[test]
+    fn pointer_get_attributes_batch_and_occupancy_flags_and_module_variants() {
+        let _g = guard();
+
+        // cuPointerGetAttributes: a batched query of several attributes for one live allocation.
+        let ptr = record_alloc(2048);
+        let mut mtype = 0u32;
+        let mut ordinal = -1i32;
+        let mut is_managed = 9u32;
+        let attrs = [
+            CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+            CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL,
+            CU_POINTER_ATTRIBUTE_IS_MANAGED,
+        ];
+        let data: [*mut c_void; 3] = [
+            &mut mtype as *mut u32 as *mut c_void,
+            &mut ordinal as *mut i32 as *mut c_void,
+            &mut is_managed as *mut u32 as *mut c_void,
+        ];
+        assert_eq!(
+            cuPointerGetAttributes(3, attrs.as_ptr() as *mut i32, data.as_ptr() as *mut *mut c_void, ptr),
+            CUDA_SUCCESS
+        );
+        assert_eq!(mtype, CU_MEMORYTYPE_DEVICE);
+        assert_eq!(ordinal, 0);
+        assert_eq!(is_managed, 0);
+        // Null argument arrays are rejected.
+        assert_eq!(
+            cuPointerGetAttributes(1, core::ptr::null_mut(), data.as_ptr() as *mut *mut c_void, ptr),
+            CUDA_ERROR_INVALID_VALUE
+        );
+
+        // Occupancy WithFlags agrees with the non-flags form for the same function.
+        let f = load_vecadd();
+        let (mut mg1, mut bs1) = (-1i32, -1i32);
+        let (mut mg2, mut bs2) = (-1i32, -1i32);
+        assert_eq!(
+            cuOccupancyMaxPotentialBlockSize(&mut mg1, &mut bs1, f, core::ptr::null_mut(), 0, 0),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuOccupancyMaxPotentialBlockSizeWithFlags(&mut mg2, &mut bs2, f, core::ptr::null_mut(), 0, 0, 0),
+            CUDA_SUCCESS
+        );
+        assert_eq!((mg1, bs1), (mg2, bs2));
+
+        // cuModuleLoadDataEx / cuModuleLoadFatBinary both accept the PTX image and resolve the entry (the
+        // model treats a fatbin container and raw PTX text through the same load path).
+        let img = std::ffi::CString::new(ptx::VECADD_PTX).unwrap();
+        let name = std::ffi::CString::new("vecadd").unwrap();
+        for load in ["ex", "fatbin"] {
+            let mut m: *mut c_void = core::ptr::null_mut();
+            let r = if load == "ex" {
+                cuModuleLoadDataEx(&mut m, img.as_ptr() as *const c_void, 0, core::ptr::null_mut(), core::ptr::null_mut())
+            } else {
+                cuModuleLoadFatBinary(&mut m, img.as_ptr() as *const c_void)
+            };
+            assert_eq!(r, CUDA_SUCCESS, "load variant {load}");
+            let mut func: *mut c_void = core::ptr::null_mut();
+            assert_eq!(cuModuleGetFunction(&mut func, m, name.as_ptr()), CUDA_SUCCESS);
+            assert!(!func.is_null());
+        }
+
+        // cuModuleLoad reads a module from a file; a missing path is FILE_NOT_FOUND.
+        let path = std::env::temp_dir().join(format!("hl-cuda-mod-{}.ptx", std::process::id()));
+        std::fs::write(&path, ptx::VECADD_PTX).unwrap();
+        let cpath = std::ffi::CString::new(path.to_string_lossy().into_owned()).unwrap();
+        let mut fm: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuModuleLoad(&mut fm, cpath.as_ptr()), CUDA_SUCCESS);
+        let mut ff: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuModuleGetFunction(&mut ff, fm, name.as_ptr()), CUDA_SUCCESS);
+        let missing = std::ffi::CString::new("/nonexistent/hl/does_not_exist.ptx").unwrap();
+        assert_eq!(cuModuleLoad(&mut fm, missing.as_ptr()), CUDA_ERROR_FILE_NOT_FOUND);
+        let _ = std::fs::remove_file(&path);
+
+        // Stream + event destroy validate their handles.
+        let mut stream: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuStreamCreate(&mut stream, 0), CUDA_SUCCESS);
+        assert_eq!(cuStreamDestroy_v2(stream), CUDA_SUCCESS);
+        assert_eq!(cuStreamDestroy_v2(0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        let mut ev: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuEventCreate(&mut ev, 0), CUDA_SUCCESS);
+        assert_eq!(cuEventDestroy_v2(ev), CUDA_SUCCESS);
+        assert_eq!(cuEventDestroy_v2(0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+    }
+
+    // ---- the IR-wired compute path over a LIVE socket executor ------------------------------------
+    //
+    // The entry points below (device alloc/free/pitch, every memcpy + memset variant, the three launch
+    // forms, and the ctx/stream/event synchronize barriers) lower to protocol `Cmd`s and submit through
+    // the process-global `RemoteCommandSink` over `$HL_GPU_EXEC`. To exercise their REAL effect (not just
+    // arg validation) we stand up a reference `CpuExecutor` behind a Unix socket, point the sink at it,
+    // and read the computed bytes back — the same host wiring `tests/e2e.rs` drives in-process.
+
+    /// A runtime-backed host serving both submit (through a `Session` + reference `CpuExecutor` with the
+    /// PTX front-end injected, so kernel launches actually compute) and device→host readback over the
+    /// socket transport. Mirrors `shim/cudart/src/lib.rs`'s `RuntimeHost`, plus `set_kernel_compiler`.
+    struct RuntimeHost {
+        session: hl_gpu::Session,
+        exec: hl_gpu::CpuExecutor,
+    }
+    impl hl_gpu::ConnectionHandler for RuntimeHost {
+        fn submit(&mut self, _h: &hl_gpu::transport::SubmitHeader, batch: &[hl_gpu::Cmd]) -> hl_gpu::transport::Verdict {
+            let frame_bytes = hl_gpu::encode_stream(batch).len();
+            match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
+                Ok(_) => hl_gpu::transport::Verdict::Ack,
+                Err(_) => hl_gpu::transport::Verdict::Nack,
+            }
+        }
+        fn read_buffer(&mut self, req: &hl_gpu::ReadbackRequest) -> Option<Vec<u8>> {
+            hl_gpu::runtime::service::dispatch::read_buffer(
+                &self.session,
+                &self.exec,
+                hl_gpu::BufferId(req.id),
+                req.offset,
+                req.len as usize,
+            )
+            .ok()
+        }
+    }
+
+    fn f32s(v: &[f32]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+    fn as_f32s(b: &[u8]) -> Vec<f32> {
+        b.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
+    }
+
+    #[test]
+    fn compute_path_end_to_end_over_socket() {
+        use hl_gpu::protocol::model::kernel::KernelDescriptor;
+        use hl_gpu::GpuExecutor as _; // brings capabilities() into scope for CpuExecutor
+
+        let _g = guard(); // serialize + reset (no socket yet)
+
+        // A reference executor behind a private temp socket, serving one connection.
+        let sock = std::env::temp_dir().join(format!(
+            "hl-cuda-driver-{}-{:?}.sock",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&sock);
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let caps = hl_gpu::Capabilities::full("host");
+            let mut exec = hl_gpu::CpuExecutor::new();
+            exec.set_kernel_compiler(|desc: &KernelDescriptor| ptx::compile(&desc.ptx, &desc.entry, desc.block));
+            let limits = hl_gpu::Limits::from_capabilities(exec.capabilities());
+            let session = hl_gpu::Session::new(
+                limits,
+                hl_gpu::GlobalLedger::unbounded(),
+                Box::new(hl_gpu::FakeClock::new(0)),
+            );
+            let mut host = RuntimeHost { session, exec };
+            let _ = hl_gpu::serve_connection_with_handler(&stream, &caps, &mut host);
+        });
+
+        // Point the process-global sink at our socket and rebuild the state so it reconnects there.
+        std::env::set_var("HL_GPU_EXEC", sock.to_string_lossy().into_owned());
+        reset();
+
+        assert_eq!(cuInit(0), CUDA_SUCCESS);
+
+        // --- module load + kernel resolution ---
+        let img = std::ffi::CString::new(ptx::VECADD_PTX).unwrap();
+        let mut module: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuModuleLoadData(&mut module, img.as_ptr() as *const c_void), CUDA_SUCCESS);
+        let name = std::ffi::CString::new("vecadd").unwrap();
+        let mut func: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuModuleGetFunction(&mut func, module, name.as_ptr()), CUDA_SUCCESS);
+
+        let a = [1.0f32, 2.0, 3.0, 4.0];
+        let b = [10.0f32, 20.0, 30.0, 40.0];
+        let n = 4u32;
+        let nbytes = (n as usize) * 4;
+
+        // --- device alloc (cuMemAlloc_v2) ---
+        let (mut da, mut db, mut dc) = (0u64, 0u64, 0u64);
+        assert_eq!(cuMemAlloc_v2(&mut da, nbytes), CUDA_SUCCESS);
+        assert_eq!(cuMemAlloc_v2(&mut db, nbytes), CUDA_SUCCESS);
+        assert_eq!(cuMemAlloc_v2(&mut dc, nbytes), CUDA_SUCCESS);
+        assert!(da != 0 && db != 0 && dc != 0);
+
+        // --- HtoD upload: one sync, one async on the default stream ---
+        let ab = f32s(&a);
+        let bb = f32s(&b);
+        assert_eq!(cuMemcpyHtoD_v2(da, ab.as_ptr() as *const c_void, nbytes), CUDA_SUCCESS);
+        assert_eq!(
+            cuMemcpyHtoDAsync_v2(db, bb.as_ptr() as *const c_void, nbytes, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+
+        // --- launch (cuLaunchKernel): grid 1 block, block n threads ---
+        let (da_v, db_v, dc_v, n_v) = (da, db, dc, n as i32);
+        let params: [*mut c_void; 4] = [
+            &da_v as *const u64 as *mut c_void,
+            &db_v as *const u64 as *mut c_void,
+            &dc_v as *const u64 as *mut c_void,
+            &n_v as *const i32 as *mut c_void,
+        ];
+        assert_eq!(
+            cuLaunchKernel(func, 1, 1, 1, n, 1, 1, 0, core::ptr::null_mut(), params.as_ptr() as *mut *mut c_void, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+        // --- ctx synchronize (real fence barrier over the socket) ---
+        assert_eq!(cuCtxSynchronize(), CUDA_SUCCESS);
+
+        // --- DtoH readback (cuMemcpyDtoH_v2): the pipeline COMPUTED c = a + b ---
+        let mut out = vec![0u8; nbytes];
+        assert_eq!(cuMemcpyDtoH_v2(out.as_mut_ptr() as *mut c_void, dc, nbytes), CUDA_SUCCESS);
+        assert_eq!(as_f32s(&out), vec![11.0, 22.0, 33.0, 44.0], "vecadd computed sum");
+
+        // async DtoH gives the same bytes.
+        let mut out2 = vec![0u8; nbytes];
+        assert_eq!(
+            cuMemcpyDtoHAsync_v2(out2.as_mut_ptr() as *mut c_void, dc, nbytes, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+        assert_eq!(out2, out);
+
+        // --- on-device + unified + peer copies all land the same bytes into a fresh buffer ---
+        let mut de = 0u64;
+        assert_eq!(cuMemAlloc_v2(&mut de, nbytes), CUDA_SUCCESS);
+        assert_eq!(cuMemcpyDtoD_v2(de, dc, nbytes), CUDA_SUCCESS);
+        let mut rb = vec![0u8; nbytes];
+        assert_eq!(cuMemcpyDtoH_v2(rb.as_mut_ptr() as *mut c_void, de, nbytes), CUDA_SUCCESS);
+        assert_eq!(rb, out, "DtoD copy reproduced the result");
+        assert_eq!(cuMemcpyDtoDAsync_v2(de, dc, nbytes, core::ptr::null_mut()), CUDA_SUCCESS);
+        assert_eq!(cuMemcpy(de, dc, nbytes), CUDA_SUCCESS); // unified copy
+        assert_eq!(cuMemcpyAsync(de, dc, nbytes, core::ptr::null_mut()), CUDA_SUCCESS);
+        assert_eq!(cuMemcpyPeer(de, core::ptr::null_mut(), dc, core::ptr::null_mut(), nbytes), CUDA_SUCCESS);
+        assert_eq!(
+            cuMemcpyPeerAsync(de, core::ptr::null_mut(), dc, core::ptr::null_mut(), nbytes, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+        assert_eq!(cuMemcpyDtoH_v2(rb.as_mut_ptr() as *mut c_void, de, nbytes), CUDA_SUCCESS);
+        assert_eq!(rb, out, "unified/peer copies reproduced the result");
+
+        // --- every memset variant fills a 32-byte buffer; readback proves the exact bytes landed ---
+        let mut dm = 0u64;
+        assert_eq!(cuMemAlloc_v2(&mut dm, 32), CUDA_SUCCESS);
+        let mut mb = vec![0u8; 32];
+        // D8: 32 bytes of 0xAB.
+        assert_eq!(cuMemsetD8_v2(dm, 0xAB, 32), CUDA_SUCCESS);
+        assert_eq!(cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32), CUDA_SUCCESS);
+        assert_eq!(mb, vec![0xABu8; 32]);
+        // D16: 16 halfwords of 0xBEEF.
+        assert_eq!(cuMemsetD16_v2(dm, 0xBEEF, 16), CUDA_SUCCESS);
+        assert_eq!(cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32), CUDA_SUCCESS);
+        for c in mb.chunks_exact(2) {
+            assert_eq!(u16::from_le_bytes(c.try_into().unwrap()), 0xBEEF);
+        }
+        // D32: 8 words of 0xDEADBEEF.
+        assert_eq!(cuMemsetD32_v2(dm, 0xDEAD_BEEF, 8), CUDA_SUCCESS);
+        assert_eq!(cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32), CUDA_SUCCESS);
+        for c in mb.chunks_exact(4) {
+            assert_eq!(u32::from_le_bytes(c.try_into().unwrap()), 0xDEAD_BEEF);
+        }
+        // Async memset variants (default stream) succeed and are observable after a sync.
+        assert_eq!(cuMemsetD8Async(dm, 0x11, 32, core::ptr::null_mut()), CUDA_SUCCESS);
+        assert_eq!(cuMemsetD16Async(dm, 0x2222, 16, core::ptr::null_mut()), CUDA_SUCCESS);
+        assert_eq!(cuMemsetD32Async(dm, 0x3333_3333, 8, core::ptr::null_mut()), CUDA_SUCCESS);
+        assert_eq!(cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32), CUDA_SUCCESS);
+        assert_eq!(mb, vec![0x33u8; 32], "last async memset (D32 0x33333333) wins");
+
+        // --- pitched allocation: a 2D buffer with a 512-aligned row pitch ---
+        let (mut dp, mut pitch) = (0u64, 0usize);
+        assert_eq!(cuMemAllocPitch_v2(&mut dp, &mut pitch, 64, 8, 4), CUDA_SUCCESS);
+        assert!(dp != 0 && pitch >= 64 && pitch % 512 == 0, "pitch = {pitch}");
+
+        // --- stream + event synchronize barriers over the live socket ---
+        let mut stream: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuStreamCreate(&mut stream, 0), CUDA_SUCCESS);
+        assert_eq!(cuStreamSynchronize(stream), CUDA_SUCCESS);
+        assert_eq!(cuStreamSynchronize(0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        let mut ev: *mut c_void = core::ptr::null_mut();
+        assert_eq!(cuEventCreate(&mut ev, 0), CUDA_SUCCESS);
+        assert_eq!(cuEventRecord(ev, stream), CUDA_SUCCESS);
+        assert_eq!(cuEventSynchronize(ev), CUDA_SUCCESS);
+
+        // --- the other two launch forms lower through the identical path ---
+        assert_eq!(
+            cuLaunchCooperativeKernel(func, 1, 1, 1, n, 1, 1, 0, core::ptr::null_mut(), params.as_ptr() as *mut *mut c_void),
+            CUDA_SUCCESS
+        );
+        let cfg: [u32; 8] = [1, 1, 1, n, 1, 1, 0, 0];
+        assert_eq!(
+            cuLaunchKernelEx(cfg.as_ptr() as *const c_void, func, params.as_ptr() as *mut *mut c_void, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+        assert_eq!(cuCtxSynchronize(), CUDA_SUCCESS);
+        let mut fin = vec![0u8; nbytes];
+        assert_eq!(cuMemcpyDtoH_v2(fin.as_mut_ptr() as *mut c_void, dc, nbytes), CUDA_SUCCESS);
+        assert_eq!(as_f32s(&fin), vec![11.0, 22.0, 33.0, 44.0], "re-launches recomputed the sum");
+
+        // --- free (cuMemFree_v2): a freed pointer no longer resolves ---
+        assert_eq!(cuMemFree_v2(da), CUDA_SUCCESS);
+        assert_eq!(cuMemFree_v2(db), CUDA_SUCCESS);
+        assert_eq!(cuMemFree_v2(dc), CUDA_SUCCESS);
+        assert_eq!(cuMemFree_v2(de), CUDA_SUCCESS);
+        assert_eq!(cuMemFree_v2(dm), CUDA_SUCCESS);
+        assert_eq!(cuMemFree_v2(dp), CUDA_SUCCESS);
+
+        // Tear down: dropping the connected sink closes the socket so the server thread hits EOF.
+        std::env::remove_var("HL_GPU_EXEC");
+        reset();
+        server.join().unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
 }
