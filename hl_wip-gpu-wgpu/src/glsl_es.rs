@@ -233,11 +233,14 @@ pub fn is_es_glsl(src: &str) -> bool {
 
 /// Normalize GLSL-ES source into the naga-acceptable desktop GLSL the existing `glsl_to_wgsl` path
 /// compiles. Idempotent enough to run on already-desktop source, but only invoked when [`is_es_glsl`] is
-/// true. Returns the rewritten source; the caller feeds it to naga's `glsl-in`.
-pub fn normalize(src: &str) -> String {
+/// true. Returns the rewritten source; the caller feeds it to naga's `glsl-in`. `stage` selects the
+/// direction of GskGpu's `PASS`/`PASS_FLAT` varyings (out in the vertex stage, in in the fragment stage)
+/// when an aggregate interface member has to be split into per-location vectors.
+pub fn normalize(src: &str, stage: naga::ShaderStage) -> String {
     let mut toks = tokenize(src);
 
     normalize_directives_and_precision(&mut toks);
+    split_aggregate_io(&mut toks, stage);
     let mut sampler_names = split_global_samplers(&mut toks);
     for p in split_param_samplers(&mut toks) {
         if !sampler_names.contains(&p) {
@@ -546,6 +549,306 @@ fn rewrite_io_macro_def(pp: &str) -> Option<String> {
     Some(format!("#define {name}({param}) layout(location = {param}) {body}"))
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Aggregate vertex-input / varying splitting
+// ---------------------------------------------------------------------------------------------------
+//
+// naga requires every vertex `in`/`out` and inter-stage varying to be an *IO-shareable* type — a numeric
+// scalar or vector (or a struct of such with per-member `@location`s). A matrix or an array as a *single*
+// located interface member fails validation with `Argument(n, NotIOShareableType)`. GskGpu emits both:
+//
+//   IN(0) mat3x4 in_outline;               // a matrix vertex attribute (3 vec4 columns)
+//   PASS_FLAT(2) RoundedRect _outline;     // RoundedRect == `vec4[3]`, an array varying
+//
+// In real desktop GL a `matCxR`/array attribute silently consumes C (or N) consecutive locations; GskGpu's
+// own `_loc` numbering already leaves that room (the next input after `IN(0) mat3x4` is `IN(3)`). So we
+// split each aggregate interface member into its C/N per-location vector slots (`name_hlio0…`), keep a
+// private (non-interface) global of the original aggregate type so every *use* site is unchanged, and
+// bridge the two at the entry point: for an input, reconstruct the global from the slots at the top of
+// `main`; for an output, scatter the global into the slots at the end of `main`. No data the fragment
+// stage needs is dropped — the aggregate is carried in full across the (now IO-shareable) vector slots.
+//
+// The generated declarations are HOISTED to just after `#version`, not left at the original declaration
+// site: GskGpu's `main` (from the shared common.glsl) is emitted *before* the per-op I/O declarations, and
+// the entry-point bridge we inject into `main` would otherwise reference globals GLSL has not seen yet.
+
+/// A split aggregate interface member: `matCxR` columns or a `vec[N]` array, per-slot vector type, and the
+/// spelling of a private global of the whole aggregate type.
+enum AggTy {
+    /// `matCxR` → `cols` columns, each a `col_ty` (`vec{rows}`); global declared with the matrix token.
+    Matrix { tok: String, cols: u32, col_ty: String },
+    /// `elem[count]` array; global declared as `elem name[count]`.
+    Array { elem: String, count: u32 },
+}
+
+impl AggTy {
+    /// (slot count, per-slot vector type, private-global declaration for `name`).
+    fn parts(&self, name: &str) -> (u32, String, String) {
+        match self {
+            AggTy::Matrix { tok, cols, col_ty } => (*cols, col_ty.clone(), format!("{tok} {name};")),
+            AggTy::Array { elem, count } => (*count, elem.clone(), format!("{elem} {name}[{count}];")),
+        }
+    }
+}
+
+/// A parsed `IN(_loc) TYPE name;` / `PASS(_loc) …` / `PASS_FLAT(_loc) …` interface declaration.
+struct IoDecl {
+    macro_name: String, // IN | PASS | PASS_FLAT
+    loc: String,        // the `_loc` argument text (numeric for a real split)
+    agg: Option<AggTy>, // Some(_) only for a matrix/array member; None leaves the decl untouched
+    name: String,
+    end: usize, // token index just past the terminating `;`
+}
+
+/// `matCxR` / `matN` → `(cols, rows)`; `None` for any non-matrix word (`material`, `mat`, `vec4`, …).
+fn parse_matrix(tok: &str) -> Option<(u32, u32)> {
+    let rest = tok.strip_prefix("mat")?;
+    let mut it = rest.split('x');
+    let cols: u32 = it.next()?.parse().ok()?;
+    let rows: u32 = match it.next() {
+        Some(r) => r.parse().ok()?,
+        None => cols,
+    };
+    if it.next().is_some() {
+        return None;
+    }
+    Some((cols, rows))
+}
+
+/// Collect object-like `#define NAME BODY` type aliases (e.g. GskGpu's `#define RoundedRect vec4[3]`) so an
+/// aggregate interface member declared through the alias is recognized. Only the alias *body text* is kept.
+fn collect_type_aliases(toks: &[Tok]) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for t in toks {
+        if let Tok::Pp(p) = t {
+            if let Some(rest) = p.trim_start().strip_prefix('#').map(str::trim_start) {
+                if let Some(rest) = rest.strip_prefix("define") {
+                    if rest.starts_with(char::is_whitespace) {
+                        let rest = rest.trim_start();
+                        // object-like: NAME then whitespace then BODY (no '(' directly after NAME)
+                        let end = rest.find(|c: char| !(c == '_' || c.is_ascii_alphanumeric()));
+                        if let Some(e) = end {
+                            let (name, body) = rest.split_at(e);
+                            if body.starts_with(char::is_whitespace) && !name.is_empty() {
+                                map.insert(name.to_string(), body.trim().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
+/// Parse an `IN/PASS/PASS_FLAT (_loc) TYPE name [array];` declaration whose macro word is at `i`, resolving
+/// a type alias for the aggregate classification. `None` if the shape does not match (left untouched).
+fn parse_io_decl(
+    toks: &[Tok],
+    i: usize,
+    aliases: &std::collections::HashMap<String, String>,
+) -> Option<IoDecl> {
+    let macro_name = match &toks[i] {
+        Tok::Word(w) => w.clone(),
+        _ => return None,
+    };
+    let lp = next_significant(toks, i + 1)?;
+    if toks[lp] != Tok::Punct('(') {
+        return None;
+    }
+    let rp = match_close(toks, lp, '(', ')');
+    if rp >= toks.len() {
+        return None;
+    }
+    let loc = detok(&toks[lp + 1..rp]).trim().to_string();
+    // Everything from after `)` to the terminating `;` is `TYPE name [array]`.
+    let mut e = rp + 1;
+    while e < toks.len() && toks[e] != Tok::Punct(';') {
+        e += 1;
+    }
+    if e >= toks.len() {
+        return None;
+    }
+    let tail = detok(&toks[rp + 1..e]);
+    let tail = tail.trim();
+    // Expand a leading single-word type alias (`RoundedRect` → `vec4[3]`).
+    let expanded = {
+        let first_end = tail.find(|c: char| !(c == '_' || c.is_ascii_alphanumeric())).unwrap_or(tail.len());
+        let (first, rest) = tail.split_at(first_end);
+        match aliases.get(first) {
+            Some(body) => format!("{body}{rest}"),
+            None => tail.to_string(),
+        }
+    };
+    // Structurally read: base type word, optional `[N]` array size, and the identifier name.
+    let et = tokenize(&expanded);
+    let sig: Vec<&Tok> = et.iter().filter(|t| is_significant(t)).collect();
+    let base = match sig.first() {
+        Some(Tok::Word(w)) => w.clone(),
+        _ => return None,
+    };
+    let mut name: Option<String> = None;
+    for t in sig.iter().skip(1) {
+        if let Tok::Word(w) = t {
+            if w.parse::<u32>().is_err() {
+                name = Some(w.clone());
+                break;
+            }
+        }
+    }
+    let name = name?;
+    let mut count: Option<u32> = None;
+    for (idx, t) in sig.iter().enumerate() {
+        if let Tok::Punct('[') = t {
+            if let Some(Tok::Word(n)) = sig.get(idx + 1) {
+                count = n.parse().ok();
+            }
+        }
+    }
+    let agg = if let Some((cols, rows)) = parse_matrix(&base) {
+        Some(AggTy::Matrix { tok: base.clone(), cols, col_ty: format!("vec{rows}") })
+    } else {
+        count.map(|c| AggTy::Array { elem: base.clone(), count: c })
+    };
+    Some(IoDecl { macro_name, loc, agg, name, end: e + 1 })
+}
+
+/// Split every matrix/array GskGpu interface declaration into per-location vector slots + a private global,
+/// and bridge the global to the slots inside `main` (reconstruct inputs on entry, scatter outputs on exit).
+fn split_aggregate_io(toks: &mut Vec<Tok>, stage: naga::ShaderStage) {
+    let aliases = collect_type_aliases(toks);
+    let is_vertex = stage == naga::ShaderStage::Vertex;
+    let mut recon: Vec<String> = Vec::new(); // input:  global[k] = slot_k;  (top of main)
+    let mut scatter: Vec<String> = Vec::new(); // output: slot_k = global[k];  (end of main)
+    let mut hoist: Vec<String> = Vec::new(); // split interface + private-global declarations
+    let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        if matches!(&toks[i], Tok::Word(w) if matches!(w.as_str(), "IN" | "PASS" | "PASS_FLAT")) {
+            if let Some(decl) = parse_io_decl(toks, i, &aliases) {
+                if let Some(rep) = build_io_split(&decl, is_vertex, &mut recon, &mut scatter) {
+                    // Drop the original declaration; its replacement is hoisted to the top of the file.
+                    hoist.push(rep);
+                    i = decl.end;
+                    continue;
+                }
+            }
+        }
+        out.push(toks[i].clone());
+        i += 1;
+    }
+    if !hoist.is_empty() {
+        // Insert the hoisted declarations right after the version directive (`#version` must stay first).
+        let at = out
+            .iter()
+            .position(|t| matches!(t, Tok::Pp(p) if p.trim_start().starts_with("#version")))
+            .map(|v| v + 1)
+            .unwrap_or(0);
+        out.insert(at, Tok::Pp(format!("\n{}\n", hoist.join("\n"))));
+    }
+    *toks = out;
+    if !recon.is_empty() || !scatter.is_empty() {
+        inject_into_main(toks, &recon, &scatter);
+    }
+}
+
+/// Build the replacement text for one aggregate interface declaration, appending its entry-point bridge
+/// lines to `recon`/`scatter`. Returns `None` (leaving the declaration untouched) for a scalar/vector
+/// member, a non-numeric location, or an `IN(…)` seen while lowering the fragment stage (dead there).
+fn build_io_split(
+    decl: &IoDecl,
+    is_vertex: bool,
+    recon: &mut Vec<String>,
+    scatter: &mut Vec<String>,
+) -> Option<String> {
+    let agg = decl.agg.as_ref()?;
+    // Direction + interpolation + whether this member is an entry-point input.
+    let (dir, flat, is_input) = match decl.macro_name.as_str() {
+        "IN" if is_vertex => ("in", false, true),
+        "IN" => return None, // vertex attribute is dead in the fragment stage; leave it to be stripped
+        "PASS" if is_vertex => ("out", false, false),
+        "PASS" => ("in", false, true),
+        "PASS_FLAT" if is_vertex => ("out", true, false),
+        "PASS_FLAT" => ("in", true, true),
+        _ => return None,
+    };
+    let base_loc: i64 = decl.loc.trim().parse().ok()?;
+    let (count, slot_ty, global_decl) = agg.parts(&decl.name);
+    let flatq = if flat { "flat " } else { "" };
+    let mut s = String::new();
+    for k in 0..count {
+        s.push_str(&format!(
+            "layout(location = {}) {flatq}{dir} {slot_ty} {}_hlio{k};\n",
+            base_loc + k as i64,
+            decl.name
+        ));
+    }
+    s.push_str(&global_decl);
+    for k in 0..count {
+        if is_input {
+            recon.push(format!("{}[{k}] = {}_hlio{k};", decl.name, decl.name));
+        } else {
+            scatter.push(format!("{}_hlio{k} = {}[{k}];", decl.name, decl.name));
+        }
+    }
+    Some(s)
+}
+
+/// Insert `recon` statements just after every `main(){` and `scatter` statements just before its matching
+/// `}`. Both stages' `main` bodies are visited; the one gated out by the stage `#ifdef` is stripped by
+/// naga's preprocessor afterwards, so only the live `main` keeps the bridge.
+fn inject_into_main(toks: &mut Vec<Tok>, recon: &[String], scatter: &[String]) {
+    let pre = if recon.is_empty() { String::new() } else { format!("\n{}\n", recon.join("\n")) };
+    let post = if scatter.is_empty() { String::new() } else { format!("\n{}\n", scatter.join("\n")) };
+    let mut result: Vec<Tok> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        if matches!(&toks[i], Tok::Word(w) if w == "main") {
+            if let Some(open) = main_body_open(toks, i) {
+                let close = match_close(toks, open, '{', '}');
+                if close < toks.len() {
+                    for t in &toks[i..=open] {
+                        result.push(t.clone());
+                    }
+                    if !pre.is_empty() {
+                        result.push(Tok::Pp(pre.clone()));
+                    }
+                    for t in &toks[open + 1..close] {
+                        result.push(t.clone());
+                    }
+                    if !post.is_empty() {
+                        result.push(Tok::Pp(post.clone()));
+                    }
+                    result.push(toks[close].clone());
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        result.push(toks[i].clone());
+        i += 1;
+    }
+    *toks = result;
+}
+
+/// Index of the `{` opening the body of a `main ( … ) { … }` *definition* whose name word is at `i`; `None`
+/// for anything that is not that shape (a prototype, a `main_clip_*`, …).
+fn main_body_open(toks: &[Tok], i: usize) -> Option<usize> {
+    let lp = next_significant(toks, i + 1)?;
+    if toks[lp] != Tok::Punct('(') {
+        return None;
+    }
+    let rp = match_close(toks, lp, '(', ')');
+    if rp >= toks.len() {
+        return None;
+    }
+    let br = next_significant(toks, rp + 1)?;
+    if toks[br] != Tok::Punct('{') {
+        return None;
+    }
+    Some(br)
+}
+
 /// Word-boundary rewrite of the ES vertex-index builtins to naga's, wrapped in an `int(…)` cast (the naga
 /// builtins are `uint`, the ES ones `int`). Used on preprocessor-line text where the builtin can hide in a
 /// macro body (`#define GSK_VERTEX_INDEX gl_VertexID`) that naga's preprocessor later expands.
@@ -769,7 +1072,7 @@ mod tests {
     #[test]
     fn splits_global_sampler_and_recombines_at_builtin() {
         let src = "#version 320 es\nprecision highp float;\nuniform sampler2D uTex;\nin vec2 uv;\nout vec4 c;\nvoid main(){ c = texture(uTex, uv); }";
-        let out = normalize(src);
+        let out = normalize(src, naga::ShaderStage::Vertex);
         assert!(out.contains("#version 460"), "{out}");
         assert!(!out.contains("320 es"), "{out}");
         assert!(!out.contains("precision"), "precision stripped: {out}");
@@ -781,7 +1084,7 @@ mod tests {
     #[test]
     fn splits_sampler_function_parameter_and_call_site() {
         let src = "#version 320 es\nuniform sampler2D uTex;\nvec4 fetch(sampler2D tex, vec2 p){ return texture(tex, p); }\nvoid main(){ gl_Position = fetch(uTex, vec2(0.0)); }";
-        let out = normalize(src);
+        let out = normalize(src, naga::ShaderStage::Vertex);
         // parameter split into two
         assert!(out.contains("texture2D tex_hltex, sampler tex_hlsmp"), "param split: {out}");
         // recombine inside helper (texture builtin)
@@ -796,7 +1099,7 @@ mod tests {
     fn seeds_version_define_so_gsk_ubo_binding_branch_wins() {
         // GskGpu gates its UBO binding on `__VERSION__`, which naga's preprocessor leaves undefined (= 0),
         // so the pinned `#version 460` alone would still pick the no-binding branch. We inject the define.
-        let out = normalize("#version 320 es\n#define GSK_GLES 1\nvoid main(){}\n");
+        let out = normalize("#version 320 es\n#define GSK_GLES 1\nvoid main(){}\n", naga::ShaderStage::Vertex);
         assert!(out.contains("#version 460"), "version pinned: {out}");
         assert!(out.contains("#define __VERSION__ 460"), "__VERSION__ seeded: {out}");
         assert!(!out.contains("320 es"), "es version gone: {out}");
@@ -806,7 +1109,7 @@ mod tests {
     fn rewrites_gl_vertexid_hidden_in_gsk_vertex_index_macro() {
         // The exact GskGpu form: the builtin lives only inside the macro *body*.
         let src = "#version 320 es\n#define GSK_VERTEX_INDEX gl_VertexID\nvoid main(){ int i = int(GSK_VERTEX_INDEX); }\n";
-        let out = normalize(src);
+        let out = normalize(src, naga::ShaderStage::Vertex);
         assert!(out.contains("#define GSK_VERTEX_INDEX int(gl_VertexIndex)"), "macro body rewritten: {out}");
         assert!(!out.contains("gl_VertexID"), "no raw gl_VertexID survives: {out}");
     }
@@ -814,7 +1117,7 @@ mod tests {
     #[test]
     fn adds_explicit_location_to_gsk_io_macros() {
         let src = "#version 320 es\n#define IN(_loc) in\n#define PASS(_loc) out\n#define PASS_FLAT(_loc) flat in\nvoid main(){}\n";
-        let out = normalize(src);
+        let out = normalize(src, naga::ShaderStage::Vertex);
         assert!(out.contains("#define IN(_loc) layout(location = _loc) in"), "IN: {out}");
         assert!(out.contains("#define PASS(_loc) layout(location = _loc) out"), "PASS: {out}");
         assert!(out.contains("#define PASS_FLAT(_loc) layout(location = _loc) flat in"), "PASS_FLAT: {out}");
@@ -824,7 +1127,7 @@ mod tests {
     fn lowers_returning_switch_to_if_else_chain() {
         // A GskGpu color-state style switch: returning cases, stacked labels, and a `default`.
         let src = "#version 320 es\nint apply(uint cs){\n  switch (cs)\n    {\n    case 0u:\n      return 10;\n    case 1u:\n    case 2u:\n      return 20;\n    default:\n      return 0;\n    }\n}\nvoid main(){}\n";
-        let out = normalize(src);
+        let out = normalize(src, naga::ShaderStage::Vertex);
         assert!(!out.contains("switch"), "switch removed: {out}");
         assert!(!out.contains("case "), "case labels removed: {out}");
         assert!(out.contains("if ("), "if branch present: {out}");

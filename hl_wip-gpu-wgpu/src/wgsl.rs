@@ -90,7 +90,7 @@ pub fn glsl_to_wgsl_reflect(
     let normalized;
     let src = if crate::glsl_es::is_es_glsl(src) {
         hl_log::hl_debug!(hl_log::tag::WGPU, "glsl_to_wgsl: GLSL-ES/GskGpu source → es-normalize+sampler-split");
-        normalized = crate::glsl_es::normalize(src);
+        normalized = crate::glsl_es::normalize(src, stage);
         normalized.as_str()
     } else {
         src
@@ -818,6 +818,94 @@ void main ()
         assert!(wgsl.contains("vmain"), "entry renamed: {wgsl}");
         // The forward-declared `main_clip_none` and its callees resolved (no forward-dependency).
         assert!(wgsl.contains("main_clip_none"), "forward-declared fn present: {wgsl}");
+    }
+
+    // The GskGpu border/texture ops declare AGGREGATE interface members naga rejects as a single located
+    // slot — a `mat3x4` vertex attribute and a `RoundedRect` (== `vec4[3]`) inter-stage varying — and, like
+    // every GskGpu shader, define `main` (from the shared common.glsl) BEFORE the per-op I/O declarations.
+    // The real live vertex stop was `EntryPoint { stage: Vertex, source: Argument(1, NotIOShareableType) }`.
+    const GSK_AGG_VERT: &str = r#"#version 320 es
+#define GSK_GLES 1
+precision highp float;
+#define RoundedRect vec4[3]
+#if __VERSION__ < 420 || (defined(GSK_GLES) && __VERSION__ < 310)
+layout(std140)
+#else
+layout(std140, binding = 0)
+#endif
+uniform PushConstants { mat4 mvp; } push;
+#define GSK_VERTEX_INDEX gl_VertexID
+#define IN(_loc) in
+#define PASS(_loc) out
+#define PASS_FLAT(_loc) flat out
+void run (out vec2 pos);
+void main (void)
+{
+  vec2 pos;
+  run (pos);
+  gl_Position = push.mvp * vec4 (pos, 0.0, 1.0);
+}
+IN(0) mat3x4 in_outline;
+IN(3) vec4 in_color;
+PASS(0) vec2 _pos;
+PASS_FLAT(1) vec4 _color;
+PASS_FLAT(2) RoundedRect _outline;
+RoundedRect make (mat3x4 m)
+{
+  return RoundedRect (m[0], m[1], m[2]);
+}
+void run (out vec2 pos)
+{
+  RoundedRect o = make (in_outline);
+  pos = o[0].xy + float (GSK_VERTEX_INDEX);
+  _pos = pos;
+  _outline = o;
+  _color = in_color;
+}
+"#;
+
+    // The matching fragment stage: the SAME `RoundedRect` varying arrives as a `flat in` array and is read
+    // through a helper — the input-direction half of the aggregate split (reconstructed at the top of main).
+    const GSK_AGG_FRAG: &str = r#"#version 320 es
+precision highp float;
+#define RoundedRect vec4[3]
+#define PASS(_loc) in
+#define PASS_FLAT(_loc) flat in
+PASS(0) vec2 _pos;
+PASS_FLAT(1) vec4 _color;
+PASS_FLAT(2) RoundedRect _outline;
+layout(location = 0) out vec4 out_color;
+float coverage (RoundedRect r, vec2 p)
+{
+  return clamp (r[0].x - p.x, 0.0, 1.0);
+}
+void main (void)
+{
+  out_color = _color * coverage (_outline, _pos);
+}
+"#;
+
+    #[test]
+    fn gskgpu_aggregate_interface_members_split_into_ioshareable_slots() {
+        // FAIL-BEFORE: naga rejects `mat3x4` / array interface members at validation (NotIOShareableType).
+        // (The parse itself succeeds, so `naga_direct` catches the ES version; validation is the real wall.)
+        assert!(naga_direct(GSK_AGG_VERT, naga::ShaderStage::Vertex).is_err(), "vert must fail raw naga");
+
+        // PASS-AFTER: the `mat3x4` attribute is split into 3 vec4 columns at consecutive locations and the
+        // `vec4[3]` varying into 3 flat vec4 slots, each an IO-shareable vector; the aggregates survive as
+        // private globals bridged inside `main`, so the whole vertex program validates.
+        let vwgsl = glsl_to_wgsl(GSK_AGG_VERT, naga::ShaderStage::Vertex, "vmain")
+            .expect("aggregate vertex inputs/varyings must split and compile");
+        assert!(vwgsl.contains("vmain"), "entry renamed: {vwgsl}");
+        // The matrix input became per-column vector slots (no matrix survives as an entry-point argument).
+        assert!(vwgsl.contains("in_outline_hlio0"), "mat3x4 input split into column slots: {vwgsl}");
+        assert!(vwgsl.contains("_outline_hlio0"), "array varying split into vector slots: {vwgsl}");
+
+        // The fragment stage reads the same split array varying (reconstructed on entry) and compiles.
+        let fwgsl = glsl_to_wgsl(GSK_AGG_FRAG, naga::ShaderStage::Fragment, "fmain")
+            .expect("aggregate fragment varyings must split and compile");
+        assert!(fwgsl.contains("fmain"), "entry renamed: {fwgsl}");
+        assert!(fwgsl.contains("_outline_hlio0"), "array varying split on the fragment side: {fwgsl}");
     }
 }
 
