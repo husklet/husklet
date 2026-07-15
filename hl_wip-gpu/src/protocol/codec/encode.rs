@@ -74,6 +74,13 @@ fn enc_color_target(e: &mut Encoder, c: &ColorTargetState) {
     e.u32(c.write_mask);
 }
 
+fn enc_stencil_face(e: &mut Encoder, f: &StencilFaceState) {
+    e.u32(f.compare);
+    e.u32(f.fail_op);
+    e.u32(f.depth_fail_op);
+    e.u32(f.pass_op);
+}
+
 fn enc_render_pipeline(e: &mut Encoder, p: &RenderPipelineDesc) {
     enc_shader_ref(e, &p.vertex);
     match &p.fragment {
@@ -98,6 +105,11 @@ fn enc_render_pipeline(e: &mut Encoder, p: &RenderPipelineDesc) {
             e.u32(dp.format.to_u32());
             e.bool(dp.depth_write);
             e.u32(dp.depth_compare);
+            // v7: stencil front/back faces + read/write masks, appended after the depth fields.
+            enc_stencil_face(e, &dp.stencil_front);
+            enc_stencil_face(e, &dp.stencil_back);
+            e.u32(dp.stencil_read_mask);
+            e.u32(dp.stencil_write_mask);
         }
     }
     e.u32(p.topology.to_u32());
@@ -172,6 +184,7 @@ fn enc_enc(e: &mut Encoder, op: &Enc) {
                     e.u32(dp.texture);
                     e.u32(dp.load.to_u32());
                     e.f32(dp.clear_depth);
+                    e.u32(dp.clear_stencil); // v7
                 }
             }
         }
@@ -320,6 +333,10 @@ fn enc_enc(e: &mut Encoder, op: &Enc) {
             e.u64(*offset);
             e.u64(*size);
             e.u32(*value);
+        }
+        Enc::SetStencilReference { reference } => {
+            e.u8(etag::SET_STENCIL_REFERENCE);
+            e.u32(*reference);
         }
     }
 }

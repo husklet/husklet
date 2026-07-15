@@ -13,7 +13,7 @@ use hl_gpu::protocol::model::command::{CommandBuffer, Enc};
 use hl_gpu::protocol::model::descriptor::{
     ColorAttachment, DepthAttachment, Extent3d, Origin3d, TextureSubresource,
 };
-use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp, TextureAspect};
+use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp, TextureAspect, TextureFormat};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 use hl_log::tag;
@@ -250,8 +250,15 @@ impl WgpuExecutor {
         // built with a depth-stencil state MUST run in a pass with a matching depth attachment (wgpu
         // enforces this), so honoring the attachment here is what makes depth-tested draws real instead
         // of silently dropping the depth field.
+        // A stencil aspect exists only for a combined depth+stencil format; for a depth-only attachment the
+        // pass MUST NOT carry stencil ops (wgpu rejects `stencil_ops: Some(_)` on a `Depth32Float` view).
+        // So the attachment's stencil clear/store is honored precisely when the format has that aspect.
         let depth_view = match depth {
-            Some(d) => Some((texture::native(res, d.texture)?.view.clone(), d.load, d.clear_depth)),
+            Some(d) => {
+                let t = texture::native(res, d.texture)?;
+                let has_stencil = matches!(t.format, TextureFormat::Depth24PlusStencil8);
+                Some((t.view.clone(), d.load, d.clear_depth, d.clear_stencil, has_stencil))
+            }
             None => None,
         };
         // Pre-build the bind groups every draw in this pass needs, keyed to the pipeline it's drawn with.
@@ -331,19 +338,30 @@ impl WgpuExecutor {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("hl-render-pass"),
                 color_attachments: &attachments,
-                depth_stencil_attachment: depth_view.as_ref().map(|(view, load, clear)| {
-                    wgpu::RenderPassDepthStencilAttachment {
-                        view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: match load {
-                                LoadOp::Clear => wgpu::LoadOp::Clear(*clear),
-                                _ => wgpu::LoadOp::Load,
-                            },
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }
-                }),
+                depth_stencil_attachment: depth_view.as_ref().map(
+                    |(view, load, clear, clear_stencil, has_stencil)| {
+                        wgpu::RenderPassDepthStencilAttachment {
+                            view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: match load {
+                                    LoadOp::Clear => wgpu::LoadOp::Clear(*clear),
+                                    _ => wgpu::LoadOp::Load,
+                                },
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            // Honor the stencil clear/store only for a format that actually has a stencil
+                            // aspect; `LoadOp::Load` preserves a stencil written by an earlier pass (what a
+                            // two-pass stencil-mask-then-test IR relies on).
+                            stencil_ops: has_stencil.then(|| wgpu::Operations {
+                                load: match load {
+                                    LoadOp::Clear => wgpu::LoadOp::Clear(*clear_stencil),
+                                    _ => wgpu::LoadOp::Load,
+                                },
+                                store: wgpu::StoreOp::Store,
+                            }),
+                        }
+                    },
+                ),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
@@ -354,6 +372,10 @@ impl WgpuExecutor {
                         pass.set_viewport(*x, *y, *w, *h, *min_depth, *max_depth);
                     }
                     Enc::SetScissor { x, y, w, h } => pass.set_scissor_rect(*x, *y, *w, *h),
+                    // Dynamic stencil reference: the value the pipeline's stencil compare tests against and
+                    // that a `REPLACE` op writes. Applied in stream order, so it takes effect for the draws
+                    // that follow it — exactly like viewport/scissor.
+                    Enc::SetStencilReference { reference } => pass.set_stencil_reference(*reference),
                     Enc::SetVertexBuffer { slot, buffer, offset } => {
                         let vb = buffer::native(res, *buffer)?;
                         pass.set_vertex_buffer(*slot, vb.buffer.slice(*offset..));

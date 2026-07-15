@@ -151,6 +151,14 @@ pub enum Enc {
         size: u64,
         value: u32,
     },
+    /// Set the dynamic stencil reference value the render pass's stencil compare tests against (and that a
+    /// `REPLACE` stencil op writes) — WebGPU `setStencilReference` / Vulkan `vkCmdSetStencilReference`. It
+    /// is dynamic pass state, mirroring [`Self::SetViewport`] / [`Self::SetScissor`] (the stencil compare
+    /// op / masks themselves live statically on the pipeline's [`DepthState`]). Wire tag 22 (added at
+    /// [`WIRE_VERSION`] 7).
+    SetStencilReference {
+        reference: u32,
+    },
 }
 
 impl Enc {
@@ -178,6 +186,7 @@ impl Enc {
             Self::BlitTexture { .. } => etag::BLIT_TEXTURE,
             Self::ResolveTexture { .. } => etag::RESOLVE_TEXTURE,
             Self::FillBuffer { .. } => etag::FILL_BUFFER,
+            Self::SetStencilReference { .. } => etag::SET_STENCIL_REFERENCE,
         }
     }
 }
@@ -254,7 +263,14 @@ pub enum Cmd {
 ///   the host compiles. Purely additive: no `Cmd`/`Enc` tag or existing message's bytes change; the kind is
 ///   re-derived from the payload's leading magic exactly as SPIR-V/kernel are, so a v5 decoder that never
 ///   receives a GLSL payload is unaffected, and one that does classifies it by the new magic.
-pub const WIRE_VERSION: u32 = 6;
+/// - v7: adds stencil test/write. `DepthState` gains front+back [`super::descriptor::StencilFaceState`]
+///   (compare + fail/depth-fail/pass ops) plus stencil read/write masks; `DepthAttachment` gains a
+///   `clear_stencil`; and a dynamic `SetStencilReference` op (etag 22) sets the pass reference value. The
+///   pipeline/attachment fields are appended AFTER the existing depth fields, and the neutral defaults
+///   (`ALWAYS` compare + `KEEP` ops + `0` clear) reproduce the prior no-stencil behavior byte-for-behavior.
+///   A v6 decoder rejects etag 22 as `BadTag` rather than aliasing it; the appended descriptor bytes are
+///   gated by the negotiated version so a v6/v7 pair never mis-frames a `CreateRenderPipeline`.
+pub const WIRE_VERSION: u32 = 7;
 
 // tag constants (stable wire) --------------------------------------------------------------------
 /// Top-level [`Cmd`] tag numbers.
@@ -309,4 +325,6 @@ pub mod etag {
     pub const RESOLVE_TEXTURE: u8 = 20;
     // v5 (WIRE_VERSION 5): buffer fill (device memset). A v4 decoder rejects this as BadTag.
     pub const FILL_BUFFER: u8 = 21;
+    // v7 (WIRE_VERSION 7): dynamic stencil reference. A v6 decoder rejects this as BadTag.
+    pub const SET_STENCIL_REFERENCE: u8 = 22;
 }

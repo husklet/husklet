@@ -105,11 +105,7 @@ fn render(depth: bool) -> [[u8; 4]; 2] {
             ],
         }],
         color_targets: vec![ColorTargetState { format: color_fmt, blend: None, write_mask: 0xF }],
-        depth: depth.then(|| DepthState {
-            format: TextureFormat::Depth32Float,
-            depth_write: true,
-            depth_compare: compare::LESS,
-        }),
+        depth: depth.then(|| DepthState::depth_only(TextureFormat::Depth32Float, true, compare::LESS)),
         topology: Topology::TriangleList,
         cull: 0,
         front_face: 0,
@@ -122,7 +118,8 @@ fn render(depth: bool) -> [[u8; 4]; 2] {
         clear: [0.0, 0.0, 0.0, 1.0],
         store: true,
     };
-    let depth_att = depth.then_some(DepthAttachment { texture: 2, load: LoadOp::Clear, clear_depth: 1.0 });
+    let depth_att =
+        depth.then_some(DepthAttachment { texture: 2, load: LoadOp::Clear, clear_depth: 1.0, clear_stencil: 0 });
 
     let mut cmds = vec![
         Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::PtxKernel, spirv: kernel_words() },
@@ -216,11 +213,7 @@ fn depth_buffer_stores_written_depth() {
                     attrs: vec![VertexAttr { location: 0, format: 0, offset: 0 }],
                 }],
                 color_targets: vec![ColorTargetState { format: color_fmt, blend: None, write_mask: 0xF }],
-                depth: Some(DepthState {
-                    format: TextureFormat::Depth32Float,
-                    depth_write: true,
-                    depth_compare: compare::LESS,
-                }),
+                depth: Some(DepthState::depth_only(TextureFormat::Depth32Float, true, compare::LESS)),
                 topology: Topology::TriangleList,
                 cull: 0,
                 front_face: 0,
@@ -236,7 +229,7 @@ fn depth_buffer_stores_written_depth() {
         encoder: vec![
             Enc::BeginRenderPass {
                 color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0; 4], store: true }],
-                depth: Some(DepthAttachment { texture: 2, load: LoadOp::Clear, clear_depth: 1.0 }),
+                depth: Some(DepthAttachment { texture: 2, load: LoadOp::Clear, clear_depth: 1.0, clear_stencil: 0 }),
             },
             Enc::SetPipeline(1),
             Enc::SetVertexBuffer { slot: 0, buffer: 1, offset: 0 },

@@ -886,7 +886,7 @@ fn depth_two_draws(near_first: bool) -> Vec<u8> {
                     fragment: Some(ShaderRef { module: 1, entry: "fs_main".into() }),
                     vertex_buffers: vec![layout],
                     color_targets: vec![ColorTargetState { format: TextureFormat::Rgba8Unorm, blend: None, write_mask: 0xF }],
-                    depth: Some(DepthState { format: TextureFormat::Depth32Float, depth_write: true, depth_compare: compare::LESS }),
+                    depth: Some(DepthState::depth_only(TextureFormat::Depth32Float, true, compare::LESS)),
                     topology: Topology::TriangleList,
                     cull: 0,
                     front_face: 0,
@@ -897,7 +897,7 @@ fn depth_two_draws(near_first: bool) -> Vec<u8> {
                 encoder: vec![
                     Enc::BeginRenderPass {
                         color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }],
-                        depth: Some(DepthAttachment { texture: 2, load: LoadOp::Clear, clear_depth: 1.0 }),
+                        depth: Some(DepthAttachment { texture: 2, load: LoadOp::Clear, clear_depth: 1.0, clear_stencil: 0 }),
                     },
                     Enc::SetPipeline(1),
                     Enc::SetVertexBuffer { slot: 0, buffer: 1, offset: 0 },

@@ -90,7 +90,7 @@ pub const ALL_COMMANDS: &[u8] = &[
     etag::SET_VERTEX_BUFFER, etag::SET_INDEX_BUFFER, etag::SET_VIEWPORT, etag::SET_SCISSOR,
     etag::CLEAR_RECT, etag::DRAW, etag::DRAW_INDEXED, etag::BEGIN_COMPUTE_PASS, etag::END_COMPUTE_PASS,
     etag::DISPATCH, etag::COPY_B2B, etag::COPY_B2T, etag::COPY_T2B, etag::COPY_T2T, etag::BLIT_TEXTURE,
-    etag::RESOLVE_TEXTURE, etag::FILL_BUFFER,
+    etag::RESOLVE_TEXTURE, etag::FILL_BUFFER, etag::SET_STENCIL_REFERENCE,
 ];
 
 /// A versioned, serialized capability descriptor a backend advertises and a guest negotiates against

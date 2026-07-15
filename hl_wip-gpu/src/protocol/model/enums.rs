@@ -118,6 +118,22 @@ pub mod compare {
     }
 }
 
+/// Stencil operations. A [`super::descriptor::StencilFaceState`]'s `fail_op` / `depth_fail_op` / `pass_op`
+/// carry one of these opaque values on the wire, mirroring how [`compare`] numbers the compare functions
+/// (Vulkan `VkStencilOp` ordering). The executor maps each to the matching `wgpu::StencilOperation`; an
+/// unmodeled value falls back to `KEEP` so an honest bring-up never hard-fails a draw on a code it does not
+/// model (the stencil analogue of `compare::passes`'s `ALWAYS` fallback).
+pub mod stencil_op {
+    pub const KEEP: u32 = 0;
+    pub const ZERO: u32 = 1;
+    pub const REPLACE: u32 = 2;
+    pub const INCREMENT_CLAMP: u32 = 3;
+    pub const DECREMENT_CLAMP: u32 = 4;
+    pub const INVERT: u32 = 5;
+    pub const INCREMENT_WRAP: u32 = 6;
+    pub const DECREMENT_WRAP: u32 = 7;
+}
+
 // ---------------------------------------------------------------------------------------------------
 // usage bitflags (hand-rolled u32 constants — no `bitflags` dep)
 // ---------------------------------------------------------------------------------------------------

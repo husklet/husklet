@@ -28,7 +28,7 @@ use hl_gpu::{decode_stream, encode_stream, GpuError, ShaderPayloadKind, WIRE_VER
 // exhaustive op/command inventories (one canonical value of EVERY etag and EVERY tag)
 // ---------------------------------------------------------------------------------------------------
 
-/// One canonical, well-formed value of EVERY encoder op (all 21 etags), with finite floats + canonical
+/// One canonical, well-formed value of EVERY encoder op (all 22 etags), with finite floats + canonical
 /// bools so each participates in the value-round-trip guarantee.
 fn every_encoder_op() -> Vec<Enc> {
     let sub = TextureSubresource::base();
@@ -42,7 +42,7 @@ fn every_encoder_op() -> Vec<Enc> {
                 clear: [0.0, 0.5, 1.0, 1.0],
                 store: true,
             }],
-            depth: Some(DepthAttachment { texture: 3, load: LoadOp::Load, clear_depth: 1.0 }),
+            depth: Some(DepthAttachment { texture: 3, load: LoadOp::Load, clear_depth: 1.0, clear_stencil: 7 }),
         },
         Enc::SetPipeline(5),
         Enc::SetBindGroup { index: 0, group: 6 },
@@ -112,6 +112,7 @@ fn every_encoder_op() -> Vec<Enc> {
             extent: ext,
         },
         Enc::FillBuffer { buffer: 1, offset: 0, size: 8, value: 0xDEAD_BEEF },
+        Enc::SetStencilReference { reference: 0x0000_00A5 },
     ]
 }
 
@@ -180,9 +181,23 @@ fn every_command() -> Vec<Cmd> {
                     write_mask: 0xF,
                 }],
                 depth: Some(DepthState {
-                    format: TextureFormat::Depth32Float,
+                    format: TextureFormat::Depth24PlusStencil8,
                     depth_write: true,
                     depth_compare: 3,
+                    stencil_front: StencilFaceState {
+                        compare: compare::EQUAL,
+                        fail_op: stencil_op::KEEP,
+                        depth_fail_op: stencil_op::INCREMENT_CLAMP,
+                        pass_op: stencil_op::REPLACE,
+                    },
+                    stencil_back: StencilFaceState {
+                        compare: compare::NOT_EQUAL,
+                        fail_op: stencil_op::INVERT,
+                        depth_fail_op: stencil_op::ZERO,
+                        pass_op: stencil_op::DECREMENT_WRAP,
+                    },
+                    stencil_read_mask: 0x0000_00FF,
+                    stencil_write_mask: 0x0000_007F,
                 }),
                 topology: Topology::TriangleStrip,
                 cull: 2,
@@ -360,7 +375,7 @@ fn unknown_top_level_tag_is_bad_tag() {
 
 #[test]
 fn unknown_encoder_tag_inside_submit_is_bad_tag() {
-    for bad_etag in [0u8, 22, 99, 255] {
+    for bad_etag in [0u8, 23, 99, 255] {
         // Submit with one op whose etag byte is unknown.
         let mut e = Encoder::new();
         e.u8(tag::SUBMIT);
@@ -437,7 +452,7 @@ fn non_finite_render_floats_are_rejected_at_the_wire() {
             },
             Enc::BeginRenderPass {
                 color: vec![],
-                depth: Some(DepthAttachment { texture: 1, load: LoadOp::Clear, clear_depth: bad }),
+                depth: Some(DepthAttachment { texture: 1, load: LoadOp::Clear, clear_depth: bad, clear_stencil: 0 }),
             },
         ];
         for op in sites {
@@ -568,7 +583,7 @@ fn boundary_field_values_round_trip() {
 #[test]
 fn wire_version_and_magics_are_pinned() {
     // A version bump or a magic change must be a deliberate, reviewed edit (matches the frozen goldens).
-    assert_eq!(WIRE_VERSION, 6);
+    assert_eq!(WIRE_VERSION, 7);
     assert_eq!(SPIRV_MAGIC, 0x0723_0203);
     assert_eq!(KERNEL_MAGIC, 0xDD6B_0001);
     assert_eq!(GLSL_MAGIC, 0xDD67_0001);

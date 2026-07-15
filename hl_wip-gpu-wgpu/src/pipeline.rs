@@ -10,8 +10,10 @@
 
 use std::collections::BTreeMap;
 
-use hl_gpu::protocol::model::descriptor::{ComputePipelineDesc, RenderPipelineDesc, VertexLayout};
-use hl_gpu::protocol::model::enums::{compare, TextureFormat, Topology};
+use hl_gpu::protocol::model::descriptor::{
+    ComputePipelineDesc, RenderPipelineDesc, StencilFaceState, VertexLayout,
+};
+use hl_gpu::protocol::model::enums::{compare, stencil_op, TextureFormat, Topology};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 use hl_log::tag;
@@ -295,7 +297,17 @@ impl WgpuExecutor {
                 format: texture_format(ds.format)?,
                 depth_write_enabled: ds.depth_write,
                 depth_compare: compare_function(ds.depth_compare),
-                stencil: wgpu::StencilState::default(),
+                // Lower the protocol's real stencil state: front/back faces (compare + fail/depth-fail/pass
+                // ops) + read/write masks. The neutral default (front+back `DISABLED` → `ALWAYS`+`KEEP`)
+                // maps to `wgpu::StencilFaceState::IGNORE`, so `wgpu` sees the stencil as disabled and a
+                // depth-only (`Depth32Float`) pipeline still validates exactly as before; a real stencil
+                // pipeline requires (and here carries) the `Depth24PlusStencil8` stencil aspect.
+                stencil: wgpu::StencilState {
+                    front: stencil_face(&ds.stencil_front),
+                    back: stencil_face(&ds.stencil_back),
+                    read_mask: ds.stencil_read_mask,
+                    write_mask: ds.stencil_write_mask,
+                },
                 bias: wgpu::DepthBiasState::default(),
             }),
             None => None,
@@ -459,6 +471,35 @@ fn compare_function(code: u32) -> wgpu::CompareFunction {
         compare::NOT_EQUAL => C::NotEqual,
         compare::GREATER_EQUAL => C::GreaterEqual,
         _ => C::Always, // compare::ALWAYS and any unmodeled code
+    }
+}
+
+/// Map the protocol's opaque stencil-operation code (the neutral [`stencil_op`] numbering, Vulkan
+/// `VkStencilOp` ordering) to a `wgpu::StencilOperation`. An unrecognized code is treated as `Keep`,
+/// mirroring `compare_function`'s `Always` fallback — an honest bring-up never hard-fails on a code it does
+/// not model, it just leaves the stencil untouched.
+fn stencil_operation(code: u32) -> wgpu::StencilOperation {
+    use wgpu::StencilOperation as S;
+    match code {
+        stencil_op::ZERO => S::Zero,
+        stencil_op::REPLACE => S::Replace,
+        stencil_op::INCREMENT_CLAMP => S::IncrementClamp,
+        stencil_op::DECREMENT_CLAMP => S::DecrementClamp,
+        stencil_op::INVERT => S::Invert,
+        stencil_op::INCREMENT_WRAP => S::IncrementWrap,
+        stencil_op::DECREMENT_WRAP => S::DecrementWrap,
+        _ => S::Keep, // stencil_op::KEEP and any unmodeled code
+    }
+}
+
+/// Lower one protocol [`StencilFaceState`] (opaque compare + the three stencil ops) into a
+/// `wgpu::StencilFaceState`. Front+back both `DISABLED` collapse to `wgpu::StencilFaceState::IGNORE`.
+fn stencil_face(f: &StencilFaceState) -> wgpu::StencilFaceState {
+    wgpu::StencilFaceState {
+        compare: compare_function(f.compare),
+        fail_op: stencil_operation(f.fail_op),
+        depth_fail_op: stencil_operation(f.depth_fail_op),
+        pass_op: stencil_operation(f.pass_op),
     }
 }
 

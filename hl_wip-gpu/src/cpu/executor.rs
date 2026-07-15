@@ -742,6 +742,9 @@ fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Resul
             }
         }
         Enc::SetScissor { .. } => {}
+        // Dynamic stencil reference: the software oracle does not model the stencil test, so like
+        // `SetViewport`/`SetScissor` this carries no validation obligation (a no-op state setter).
+        Enc::SetStencilReference { .. } => {}
         Enc::ClearRect { texture, .. } => {
             let t = crate::cpu::model::texture(res, *texture)?;
             if t.desc.sample_count != 1 {

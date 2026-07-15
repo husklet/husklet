@@ -83,12 +83,68 @@ pub struct ColorTargetState {
     pub write_mask: u32,
 }
 
+/// One face's stencil test + operation set. `compare` is an opaque WebGPU compare-function value (the same
+/// neutral [`super::enums::compare`] numbering [`DepthState::depth_compare`] uses); `fail_op` /
+/// `depth_fail_op` / `pass_op` are opaque WebGPU stencil-operation values ([`super::enums::stencil_op`]).
+/// The neutral default — `ALWAYS` compare, `KEEP` on every outcome ([`StencilFaceState::DISABLED`]) — maps
+/// to `wgpu::StencilFaceState::IGNORE`, so a `DepthState` whose front+back are both `DISABLED` (with the
+/// masks the encoder appends) reproduces the prior no-stencil behavior — the wire-back-compat default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StencilFaceState {
+    pub compare: u32,
+    pub fail_op: u32,
+    pub depth_fail_op: u32,
+    pub pass_op: u32,
+}
+
+impl StencilFaceState {
+    /// The inert face: `ALWAYS` compare and `KEEP` on stencil-fail / depth-fail / pass. This is the neutral
+    /// wire default; front+back both `DISABLED` leave the stencil test off (`wgpu`'s `IGNORE`).
+    pub const DISABLED: StencilFaceState = StencilFaceState {
+        compare: super::enums::compare::ALWAYS,
+        fail_op: super::enums::stencil_op::KEEP,
+        depth_fail_op: super::enums::stencil_op::KEEP,
+        pass_op: super::enums::stencil_op::KEEP,
+    };
+}
+
+impl Default for StencilFaceState {
+    fn default() -> Self {
+        StencilFaceState::DISABLED
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct DepthState {
     pub format: TextureFormat,
     pub depth_write: bool,
     /// Opaque WebGPU compare-function value.
     pub depth_compare: u32,
+    /// Front-face stencil test + ops. Neutral default ([`StencilFaceState::DISABLED`]) = no stencil test.
+    pub stencil_front: StencilFaceState,
+    /// Back-face stencil test + ops.
+    pub stencil_back: StencilFaceState,
+    /// Bits of the stored stencil value the compare reads (WebGPU `stencilReadMask`).
+    pub stencil_read_mask: u32,
+    /// Bits of the stencil value a pass/fail op may write (WebGPU `stencilWriteMask`).
+    pub stencil_write_mask: u32,
+}
+
+impl DepthState {
+    /// A depth-only pipeline state (format + write-enable + compare) with the stencil test disabled — the
+    /// pre-stencil shape. The masks are the WebGPU defaults; because front+back are `DISABLED` the stencil
+    /// test stays off regardless, so this is byte-for-byte the old behavior.
+    pub fn depth_only(format: TextureFormat, depth_write: bool, depth_compare: u32) -> DepthState {
+        DepthState {
+            format,
+            depth_write,
+            depth_compare,
+            stencil_front: StencilFaceState::DISABLED,
+            stencil_back: StencilFaceState::DISABLED,
+            stencil_read_mask: 0xffff_ffff,
+            stencil_write_mask: 0xffff_ffff,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -194,4 +250,8 @@ pub struct DepthAttachment {
     pub texture: u32,
     pub load: super::enums::LoadOp,
     pub clear_depth: f32,
+    /// Stencil clear value, used when `load == Clear` and the attachment format carries a stencil aspect
+    /// (`Depth24PlusStencil8`); ignored for a depth-only format. Defaults to `0` — the value the executor
+    /// clears the stencil plane to for a pass that marks it (see the executor's `run_render_pass`).
+    pub clear_stencil: u32,
 }

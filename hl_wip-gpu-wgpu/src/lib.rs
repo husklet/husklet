@@ -42,6 +42,7 @@ use hl_gpu::protocol::model::capability::{
     command_bits, format_bits, shader_payload, Capabilities, PresentKind, COLOR_FORMATS,
     DEPTH_FORMATS,
 };
+use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::protocol::model::command::{etag, WIRE_VERSION};
 use hl_gpu::protocol::model::kernel::{KernelDescriptor, KernelProgram};
 use hl_gpu::Result;
@@ -75,6 +76,7 @@ const REPLAYED_COMMANDS: &[u8] = &[
     etag::COPY_T2B,
     etag::COPY_T2T,
     etag::FILL_BUFFER,
+    etag::SET_STENCIL_REFERENCE,
 ];
 
 /// The wgpu-backed [`hl_gpu::GpuExecutor`]. Holds the acquired device/queue, the negotiated capabilities
@@ -148,7 +150,12 @@ impl WgpuExecutor {
             wire_version: WIRE_VERSION,
             command_bits: command_bits(REPLAYED_COMMANDS),
             shader_payloads: shader_payload::SPIRV | shader_payload::GLSL | shader_payload::KERNEL,
-            texture_formats: format_bits(COLOR_FORMATS) | format_bits(DEPTH_FORMATS),
+            // This executor lowers a real `wgpu::StencilState`, so unlike the CPU oracle (whose shared
+            // `DEPTH_FORMATS` is depth-only) it also advertises the combined depth+stencil format that a
+            // stencil-testing pipeline/attachment requires.
+            texture_formats: format_bits(COLOR_FORMATS)
+                | format_bits(DEPTH_FORMATS)
+                | format_bits(&[TextureFormat::Depth24PlusStencil8]),
             max_frame_bytes: 64 << 20,
             max_buffer_bytes: 256 << 20,
             max_bind_groups: 4,

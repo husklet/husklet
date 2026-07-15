@@ -98,6 +98,15 @@ fn dec_color_target(d: &mut Decoder) -> Result<ColorTargetState> {
     })
 }
 
+fn dec_stencil_face(d: &mut Decoder) -> Result<StencilFaceState> {
+    Ok(StencilFaceState {
+        compare: d.u32()?,
+        fail_op: d.u32()?,
+        depth_fail_op: d.u32()?,
+        pass_op: d.u32()?,
+    })
+}
+
 fn dec_render_pipeline(d: &mut Decoder) -> Result<RenderPipelineDesc> {
     let vertex = dec_shader_ref(d)?;
     let fragment = if d.bool()? { Some(dec_shader_ref(d)?) } else { None };
@@ -118,6 +127,11 @@ fn dec_render_pipeline(d: &mut Decoder) -> Result<RenderPipelineDesc> {
             format: TextureFormat::from_u32(d.u32()?)?,
             depth_write: d.bool()?,
             depth_compare: d.u32()?,
+            // v7: stencil front/back faces + read/write masks, appended after the depth fields.
+            stencil_front: dec_stencil_face(d)?,
+            stencil_back: dec_stencil_face(d)?,
+            stencil_read_mask: d.u32()?,
+            stencil_write_mask: d.u32()?,
         })
     } else {
         None
@@ -200,6 +214,7 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
                     texture: d.u32()?,
                     load: LoadOp::from_u32(d.u32()?)?,
                     clear_depth: d.f32_finite("depth attachment clear")?,
+                    clear_stencil: d.u32()?, // v7
                 })
             } else {
                 None
@@ -326,6 +341,7 @@ fn dec_enc(d: &mut Decoder) -> Result<Enc> {
             size: d.u64()?,
             value: d.u32()?,
         },
+        etag::SET_STENCIL_REFERENCE => Enc::SetStencilReference { reference: d.u32()? },
         t => return Err(GpuError::BadTag(t as u32)),
     })
 }

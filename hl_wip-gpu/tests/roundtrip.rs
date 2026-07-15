@@ -59,7 +59,7 @@ fn representative_stream() -> Vec<Cmd> {
                     blend: Some(BlendState { src_color: 1, dst_color: 0, op_color: 0, src_alpha: 1, dst_alpha: 0, op_alpha: 0 }),
                     write_mask: 0xF,
                 }],
-                depth: Some(DepthState { format: TextureFormat::Depth32Float, depth_write: true, depth_compare: 2 }),
+                depth: Some(DepthState::depth_only(TextureFormat::Depth32Float, true, 2)),
                 topology: Topology::TriangleList, cull: 2, front_face: 0, label: "pipe".into(),
             },
         ),
