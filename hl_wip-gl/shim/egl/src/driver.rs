@@ -3023,6 +3023,12 @@ const EGL_OPENGL_ES_API: u32 = 0x30A0;
 const EGL_CONDITION_SATISFIED: i32 = 0x30F6;
 const EGL_WIDTH: i32 = 0x3057;
 const EGL_HEIGHT: i32 = 0x3056;
+/// `eglQueryContext` attributes: the client API type (`EGL_OPENGL_ES_API` for this driver), the requested
+/// client version (3 — this is an ES3 driver), and the render buffer of the bound surface (back-buffered).
+const EGL_CONTEXT_CLIENT_TYPE: i32 = 0x3097;
+const EGL_CONTEXT_CLIENT_VERSION: i32 = 0x3098;
+const EGL_RENDER_BUFFER: i32 = 0x3086;
+const EGL_BACK_BUFFER: i32 = 0x3084;
 /// A fixed non-null opaque token for the EGL sync / image objects this driver hands back (their lifecycle
 /// is accepted but not separately tracked — one shared token keeps a `!= EGL_NO_SYNC` contract).
 const EGL_OBJECT_TOKEN: usize = 0x5171;
@@ -4378,13 +4384,25 @@ pub extern "C" fn eglReleaseTexImage(_dpy: *mut c_void, _surface: *mut c_void, _
 pub extern "C" fn eglCopyBuffers(_dpy: *mut c_void, _surface: *mut c_void, _target: *mut c_void) -> u32 {
     EGL_TRUE
 }
-/// `eglQueryContext(dpy, ctx, attribute, value)` — write the queried context attribute (`0` for the
-/// attributes this model does not track) and succeed.
+/// `eglQueryContext(dpy, ctx, attribute, value)` — report a context attribute. This driver serves exactly
+/// one client API (OpenGL ES), so `EGL_CONTEXT_CLIENT_TYPE` MUST answer `EGL_OPENGL_ES_API` — libepoxy's
+/// `epoxy_egl_get_current_gl_context_api()` queries this to classify the current context, and treats any
+/// value other than `EGL_OPENGL_API`/`EGL_OPENGL_ES_API` as "no EGL context" (aborting
+/// `epoxy_get_proc_address` with "Couldn't find current GLX or EGL context"). Other attributes report the
+/// truthful fixed values of the single back-buffered ES3 context this driver models; unknown attributes
+/// read `0` and still succeed.
 #[cfg_attr(not(gles_client), no_mangle)]
-pub extern "C" fn eglQueryContext(_dpy: *mut c_void, _ctx: *mut c_void, _attribute: i32, value: *mut i32) -> u32 {
-    if !value.is_null() {
-        unsafe { *value = 0 };
+pub extern "C" fn eglQueryContext(_dpy: *mut c_void, _ctx: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
+    if value.is_null() {
+        return EGL_FALSE;
     }
+    let v = match attribute {
+        EGL_CONTEXT_CLIENT_TYPE => EGL_OPENGL_ES_API as i32,
+        EGL_CONTEXT_CLIENT_VERSION => 3,
+        EGL_RENDER_BUFFER => EGL_BACK_BUFFER,
+        _ => 0,
+    };
+    unsafe { *value = v };
     EGL_TRUE
 }
 /// `eglQuerySurface(dpy, surface, attribute, value)` — the surface geometry. `EGL_WIDTH`/`EGL_HEIGHT`
@@ -4567,6 +4585,45 @@ mod current_binding_tests {
         assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE, "binding desktop OpenGL is rejected");
         assert_eq!(eglGetError(), EGL_BAD_PARAMETER, "the rejected bind raised EGL_BAD_PARAMETER");
         assert_eq!(eglQueryAPI(), EGL_OPENGL_ES_API, "a rejected bind leaves the queried API as GLES");
+    }
+
+    /// eglQueryContext(EGL_CONTEXT_CLIENT_TYPE) MUST report EGL_OPENGL_ES_API. libepoxy's
+    /// `epoxy_egl_get_current_gl_context_api()` (dispatch_common.c) queries exactly this to classify the
+    /// current context; a `0`/EGL_NONE answer makes `epoxy_get_proc_address` abort with "Couldn't find
+    /// current GLX or EGL context" — which is what blocked GTK4's GskGL bring-up until this was fixed.
+    #[test]
+    fn query_context_reports_gles_client_type_for_epoxy() {
+        let dpy = 0x1 as *mut c_void;
+        let ctx = 0x2 as *mut c_void;
+
+        let mut client_type: i32 = -455_764_240; // garbage sentinel a correct getter overwrites
+        assert_eq!(
+            eglQueryContext(dpy, ctx, EGL_CONTEXT_CLIENT_TYPE, &mut client_type as *mut i32),
+            EGL_TRUE,
+            "eglQueryContext succeeds"
+        );
+        assert_eq!(
+            client_type as u32, EGL_OPENGL_ES_API,
+            "EGL_CONTEXT_CLIENT_TYPE is the GLES client API epoxy classifies on (not 0/garbage)"
+        );
+
+        // The client version this ES3 driver reports, and the back-buffered render buffer.
+        let mut version: i32 = -1;
+        eglQueryContext(dpy, ctx, EGL_CONTEXT_CLIENT_VERSION, &mut version as *mut i32);
+        assert_eq!(version, 3, "EGL_CONTEXT_CLIENT_VERSION reports ES3");
+        let mut rbuf: i32 = -1;
+        eglQueryContext(dpy, ctx, EGL_RENDER_BUFFER, &mut rbuf as *mut i32);
+        assert_eq!(rbuf, EGL_BACK_BUFFER, "EGL_RENDER_BUFFER reports the back buffer");
+
+        // A null out-param is rejected without a deref; an unknown attribute writes 0 and still succeeds.
+        assert_eq!(
+            eglQueryContext(dpy, ctx, EGL_CONTEXT_CLIENT_TYPE, core::ptr::null_mut()),
+            EGL_FALSE,
+            "a null value pointer is rejected"
+        );
+        let mut unknown: i32 = -455_764_240;
+        eglQueryContext(dpy, ctx, 0xBEEF, &mut unknown as *mut i32);
+        assert_eq!(unknown, 0, "an unknown attribute writes 0, never uninitialized memory");
     }
 
     /// glGetIntegerv / glGetInteger64v ALWAYS write the out-param (never leave it as uninitialized

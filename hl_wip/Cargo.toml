@@ -105,3 +105,7 @@ path = "tests/weston_simple_egl_e2e.rs"
 [[test]]
 name = "vkcube_e2e"
 path = "tests/vkcube_e2e.rs"
+
+[[test]]
+name = "gtk4_e2e"
+path = "tests/gtk4_e2e.rs"
