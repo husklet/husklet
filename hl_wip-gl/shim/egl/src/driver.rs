@@ -1869,18 +1869,22 @@ pub extern "C" fn glFramebufferRenderbuffer(target: u32, attachment: u32, render
 #[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glBlitFramebuffer(
-    _src_x0: i32,
-    _src_y0: i32,
-    _src_x1: i32,
-    _src_y1: i32,
-    _dst_x0: i32,
-    _dst_y0: i32,
-    _dst_x1: i32,
-    _dst_y1: i32,
+    src_x0: i32,
+    src_y0: i32,
+    src_x1: i32,
+    src_y1: i32,
+    dst_x0: i32,
+    dst_y0: i32,
+    dst_x1: i32,
+    dst_y1: i32,
     mask: u32,
     _filter: u32,
 ) {
-    with(|s| record::blit_framebuffer(&mut s.ctx, mask));
+    with(|s| {
+        record::blit_framebuffer(
+            &mut s.ctx, src_x0, src_y0, src_x1, src_y1, dst_x0, dst_y0, dst_x1, dst_y1, mask,
+        )
+    });
 }
 
 // ==================================================================================================

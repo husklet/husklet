@@ -479,7 +479,10 @@ pub fn framebuffer_texture_2d(ctx: &mut GlContext, target: u32, attachment: u32,
         return;
     }
     let fbo = if target == GL_READ_FRAMEBUFFER { ctx.read_fbo } else { ctx.bound_fbo };
-    if attachment != GL_COLOR_ATTACHMENT0 || textarget != GL_TEXTURE_2D || level != 0 {
+    // GL_COLOR_ATTACHMENT0..15 are all attachable (MRT); a non-color attachment / textarget / level is
+    // unmodeled. The attachment index is `attachment - GL_COLOR_ATTACHMENT0`.
+    let is_color = (GL_COLOR_ATTACHMENT0..=GL_COLOR_ATTACHMENT0 + 15).contains(&attachment);
+    if !is_color || textarget != GL_TEXTURE_2D || level != 0 {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
@@ -491,7 +494,7 @@ pub fn framebuffer_texture_2d(ctx: &mut GlContext, target: u32, attachment: u32,
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
-    ctx.framebuffers.attach_color(fbo, tex);
+    ctx.framebuffers.attach_color_index(fbo, attachment - GL_COLOR_ATTACHMENT0, tex);
 }
 
 /// `glDeleteFramebuffers` (one name). Deleting the bound draw/read FBO reverts that binding to the default.
@@ -649,16 +652,29 @@ pub fn framebuffer_renderbuffer(ctx: &mut GlContext, target: u32, attachment: u3
     }
 }
 
-/// `glBlitFramebuffer(..., mask, filter)` — validate the read+draw framebuffers.
+/// `glBlitFramebuffer(srcX0,srcY0,srcX1,srcY1, dstX0,dstY0,dstX1,dstY1, mask, filter)` — validate the
+/// read+draw framebuffers and RECORD the color blit for the frame builder.
 ///
-/// HONEST LIMIT: this is a deferred-lowering model. A frame's pixels only exist after its draw-list is
-/// lowered + executed (at `eglSwapBuffers`/`glReadPixels`), and a frame lowers exactly ONE render target —
-/// there is no materialized source color plane to sample at record time, and no multi-target frame to blit
-/// between. So a cross-FBO blit cannot be lowered here (a real Metal host lowers it to `Enc::BlitTexture`).
-/// The call still honestly validates: a non-color `mask` is a no-op, and an incomplete read or draw
-/// framebuffer raises `GL_INVALID_FRAMEBUFFER_OPERATION` (first-error-wins) exactly as a conforming driver
-/// does rather than sampling an incomplete attachment; the pixel copy itself is the documented no-op.
-pub fn blit_framebuffer(ctx: &mut GlContext, mask: u32) {
+/// The deferred model applies the blit AFTER the frame's render passes: its source is the read FBO's
+/// rendered color attachment and its destination is the draw FBO's, both materialized as render-target
+/// textures. For the equal-size (non-scaling) case the frame lowers this to `Enc::CopyTextureToTexture`
+/// (the executor implements exact texture→texture copy); a scaling blit would need the unimplemented
+/// `Enc::BlitTexture` and so is recorded but not lowered. A non-color `mask` is a no-op, and an incomplete
+/// read or draw framebuffer raises `GL_INVALID_FRAMEBUFFER_OPERATION` (first-error-wins) — a conforming
+/// driver never samples an incomplete attachment.
+#[allow(clippy::too_many_arguments)]
+pub fn blit_framebuffer(
+    ctx: &mut GlContext,
+    src_x0: i32,
+    src_y0: i32,
+    src_x1: i32,
+    src_y1: i32,
+    dst_x0: i32,
+    dst_y0: i32,
+    dst_x1: i32,
+    dst_y1: i32,
+    mask: u32,
+) {
     if mask & GL_COLOR_BUFFER_BIT == 0 {
         return;
     }
@@ -666,7 +682,14 @@ pub fn blit_framebuffer(ctx: &mut GlContext, mask: u32) {
         || framebuffer_status(ctx, ctx.bound_fbo) != GL_FRAMEBUFFER_COMPLETE
     {
         ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
+        return;
     }
+    ctx.blits.push(crate::model::context::BlitOp {
+        read_fbo: ctx.read_fbo,
+        draw_fbo: ctx.bound_fbo,
+        src: [src_x0, src_y0, src_x1, src_y1],
+        dst: [dst_x0, dst_y0, dst_x1, dst_y1],
+    });
 }
 
 // ---- vertex array objects ------------------------------------------------------------------------

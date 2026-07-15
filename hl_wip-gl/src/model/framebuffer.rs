@@ -14,15 +14,19 @@ use std::collections::HashMap;
 /// with a monotonic name counter. Name `0` is the reserved default framebuffer.
 #[derive(Debug, Default)]
 pub struct Framebuffers {
-    /// FBO name → its color-attachment texture GL name.
+    /// FBO name → its `GL_COLOR_ATTACHMENT0` texture GL name (the single-target fast path, unchanged).
     color: HashMap<u32, u32>,
+    /// FBO name → its extra `GL_COLOR_ATTACHMENT{i}` (i ≥ 1) texture GL names, for multiple render targets
+    /// (`glDrawBuffers` MRT). Keyed `(fbo, attachment_index)`; attachment 0 stays in `color` above so a
+    /// single-attachment FBO is byte-identical to before. `0` = no attachment at that index.
+    color_extra: HashMap<(u32, u32), u32>,
     next_name: u32,
 }
 
 impl Framebuffers {
     pub fn new() -> Self {
         // FBO names start at 1; name 0 is the default framebuffer.
-        Self { color: HashMap::new(), next_name: 1 }
+        Self { color: HashMap::new(), color_extra: HashMap::new(), next_name: 1 }
     }
 
     /// `glGenFramebuffers` — mint one fresh FBO name (materialized lazily on the first attach).
@@ -40,9 +44,46 @@ impl Framebuffers {
         }
     }
 
+    /// `glFramebufferTexture2D(GL_COLOR_ATTACHMENT{index}, tex)` — attach `tex` at color-attachment `index`.
+    /// Index 0 routes to [`attach_color`] (the single-target slot); index ≥ 1 is an MRT extra attachment.
+    pub fn attach_color_index(&mut self, fbo: u32, index: u32, tex: u32) {
+        if fbo == 0 {
+            return;
+        }
+        if index == 0 {
+            self.color.insert(fbo, tex);
+        } else {
+            self.color_extra.insert((fbo, index), tex);
+        }
+    }
+
     /// The GL texture attached as `fbo`'s color target (`0` = default framebuffer or no attachment).
     pub fn color_attachment(&self, fbo: u32) -> u32 {
         self.color.get(&fbo).copied().unwrap_or(0)
+    }
+
+    /// The GL texture attached at `fbo`'s `GL_COLOR_ATTACHMENT{index}` (`0` = none). Index 0 is the
+    /// single-target slot; index ≥ 1 an MRT extra attachment.
+    pub fn color_attachment_index(&self, fbo: u32, index: u32) -> u32 {
+        if index == 0 {
+            self.color.get(&fbo).copied().unwrap_or(0)
+        } else {
+            self.color_extra.get(&(fbo, index)).copied().unwrap_or(0)
+        }
+    }
+
+    /// The count of contiguous materialized color attachments on `fbo` starting at index 0 (so an FBO with
+    /// attachments 0 and 1 returns 2). Stops at the first missing index — the MRT frame path renders this
+    /// many targets.
+    pub fn color_attachment_count(&self, fbo: u32) -> u32 {
+        if fbo == 0 || self.color.get(&fbo).copied().unwrap_or(0) == 0 {
+            return 0;
+        }
+        let mut n = 1;
+        while self.color_extra.get(&(fbo, n)).copied().unwrap_or(0) != 0 {
+            n += 1;
+        }
+        n
     }
 
     /// True once `name` names a generated (non-default) FBO object (`glIsFramebuffer`, and the
@@ -63,10 +104,16 @@ impl Framebuffers {
                 *v = 0;
             }
         }
+        for v in self.color_extra.values_mut() {
+            if *v == tex {
+                *v = 0;
+            }
+        }
     }
 
     /// `glDeleteFramebuffers` — drop the object. Returns `false` for an unknown name.
     pub fn delete(&mut self, name: u32) -> bool {
+        self.color_extra.retain(|&(fbo, _), _| fbo != name);
         self.color.remove(&name).is_some()
     }
 

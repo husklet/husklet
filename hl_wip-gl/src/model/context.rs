@@ -19,6 +19,20 @@ use super::renderbuffer::Renderbuffers;
 use super::texture::Textures;
 use std::collections::HashMap;
 
+/// A recorded `glBlitFramebuffer` — a sub-rect copy from a read framebuffer's color attachment to a draw
+/// framebuffer's. Rects are GL window coordinates (bottom-left origin), captured verbatim; the frame
+/// builder resolves the two FBOs' render-target textures and, for the equal-size (non-scaling) case, lowers
+/// this to `Enc::CopyTextureToTexture` (flipping Y into the textures' top-left origin).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct BlitOp {
+    /// The read (source) and draw (destination) framebuffer names bound when the blit was recorded.
+    pub read_fbo: u32,
+    pub draw_fbo: u32,
+    /// Source rect `[x0, y0, x1, y1]` and destination rect, in GL bottom-left window coordinates.
+    pub src: [i32; 4],
+    pub dst: [i32; 4],
+}
+
 /// The presented window surface (the default framebuffer). Ported from `hl-shim-gl`'s `Surface`.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct GlSurface {
@@ -213,6 +227,11 @@ pub struct GlContext {
     /// The recorded draw-list, replayed into IR at `eglSwapBuffers`.
     pub draws: Vec<DrawCall>,
 
+    /// The recorded `glBlitFramebuffer` operations, in record order, applied AFTER the frame's render
+    /// passes (see [`crate::service::frame`]). Each copies a sub-rect from a read FBO's color attachment to
+    /// a draw FBO's — lowered to `Enc::CopyTextureToTexture` for the equal-size (non-scaling) case.
+    pub blits: Vec<BlitOp>,
+
     // ---- IR id counters (mint monotonic ids for the emitted commands; mirrors cuda's context) -----
     next_buffer: u32,
     next_texture: u32,
@@ -343,6 +362,7 @@ impl GlContext {
             next_sync_token: 1,
             gl_error: glconst::GL_NO_ERROR,
             draws: Vec::new(),
+            blits: Vec::new(),
             next_buffer: 1,
             next_texture: 1,
             next_sampler: 1,
@@ -619,6 +639,7 @@ impl GlContext {
     /// Reset the per-frame draw state after a successful swap (`eglSwapBuffers` tail).
     pub fn reset_frame(&mut self) {
         self.draws.clear();
+        self.blits.clear();
     }
 
     // ---- error register (glGetError) -------------------------------------------------------------

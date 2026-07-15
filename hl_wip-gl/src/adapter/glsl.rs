@@ -264,13 +264,22 @@ pub fn translate_render(vs_in: &str, fs_in: &str) -> (String, String) {
     }
     emit_uniform_block(&mut fs_out, &unis);
     emit_sampler_decls(&mut fs_out, &samps);
-    // The fragment output: reuse the ES3 `out vec4 NAME;` if declared, else synthesize one and rewrite the
-    // ES2 `gl_FragColor` builtin onto it (desktop core GLSL has no `gl_FragColor`).
+    // The fragment output(s). One output (the common case, ES2 `gl_FragColor` or a single ES3 `out`) stays
+    // byte-identical: reuse the ES3 `out vec4 NAME;` if declared, else synthesize one and rewrite the ES2
+    // `gl_FragColor` builtin onto it (desktop core GLSL has no `gl_FragColor`). TWO+ declared ES3 outputs
+    // (MRT via glDrawBuffers) emit one `layout(location = k) out <ty> NAME;` per declared output, preserving
+    // each output's type + its sequential location so the frame's N color targets receive the right value.
     let frag_name = fragouts
         .first()
         .map(|d| d.name.clone())
         .unwrap_or_else(|| "hl_FragColor".to_string());
-    fs_out.push_str(&format!("layout(location = 0) out vec4 {frag_name};\n"));
+    if fragouts.len() > 1 {
+        for (k, d) in fragouts.iter().enumerate() {
+            fs_out.push_str(&format!("layout(location = {k}) out {} {};\n", d.ty, d.name));
+        }
+    } else {
+        fs_out.push_str(&format!("layout(location = 0) out vec4 {frag_name};\n"));
+    }
     let mut fb = main_body(&fs);
     if fb.is_empty() {
         hl_log::hl_warn!(hl_log::tag::GL, "glsl fs translate: no main body");

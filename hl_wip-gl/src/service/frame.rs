@@ -30,8 +30,8 @@ use crate::model::program::DrawCall;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment, ColorTargetState,
-    DepthAttachment, DepthState, RenderPipelineDesc, SamplerDesc, ShaderRef, SurfaceDesc, TextureDesc,
-    VertexAttr, VertexLayout,
+    DepthAttachment, DepthState, Extent3d, Origin3d, RenderPipelineDesc, SamplerDesc, ShaderRef, SurfaceDesc,
+    TextureSubresource, TextureDesc, VertexAttr, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, AddressMode, Filter, LoadOp, TextureDim, TextureFormat, Topology,
@@ -51,6 +51,11 @@ pub struct Frame {
     pub target_width: i32,
     pub target_height: i32,
     pub target_format: TextureFormat,
+    /// For a multiple-render-target frame (`glDrawBuffers` MRT): the render-target texture IR id per
+    /// `GL_COLOR_ATTACHMENT{index}` this frame wrote, so `glReadPixels` under a `glReadBuffer(ATTACHMENT{i})`
+    /// selection reads the RIGHT attachment (not just `present`). Indexed by attachment index (0-based);
+    /// EMPTY for an ordinary single-target frame (the common path, `present` is the only target).
+    pub color_attachments: Vec<u32>,
 }
 
 /// Total upload bytes a lowered frame carries: the sum of every `WriteBuffer` payload (vertex / index /
@@ -86,7 +91,10 @@ pub fn build_frame_ir(ctx: &mut GlContext) -> Option<Frame> {
     // passes, one per run — not collapsed onto the first draw's FBO. A single run is the single-target fast
     // path (byte-identical to the pre-frame-graph lowering).
     let groups = fbo_groups(&ctx.draws);
-    if groups.len() > 1 {
+    // A `glBlitFramebuffer` frame (or a genuinely multi-framebuffer frame) lowers as a SEQUENCE of passes,
+    // one per FBO run, followed by the recorded blit copies — so route to the multi-pass builder whenever a
+    // blit was recorded, even if all draws share one framebuffer.
+    if groups.len() > 1 || !ctx.blits.is_empty() {
         return build_multi_pass_frame(ctx, &groups);
     }
     if ctx.draws.iter().all(|d| d.is_clear) {
@@ -120,11 +128,16 @@ fn fbo_groups(draws: &[DrawCall]) -> Vec<(u32, usize, usize)> {
 /// bound fbo `0` (a pure render-to-offscreen frame). Returns `None` if nothing could be lowered.
 fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -> Option<Frame> {
     let draws = ctx.draws.clone();
+    let blits = ctx.blits.clone();
     let mut cmds: Vec<Cmd> = Vec::new();
     // GL texture name of an FBO color attachment → the render-target texture IR a prior pass rendered into,
     // so a later pass sampling that attachment reads the rendered pixels rather than re-uploading its CPU
     // storage (an FBO attachment allocated via glTexImage2D(…, NULL) carries a zeroed plane, not the render).
     let mut fbo_tex_ir: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    // FBO name → its resolved render target `(surface, texture, w, h, fmt)`, so a recorded
+    // `glBlitFramebuffer` can find the source + destination attachment textures after the passes are built.
+    let mut fbo_target: std::collections::HashMap<u32, (u32, u32, i32, i32, TextureFormat)> =
+        std::collections::HashMap::new();
     // The default-framebuffer (window) target to present + read back; the last run's target is the fallback.
     let mut present: Option<(u32, u32, i32, i32, TextureFormat)> = None;
     let mut last: Option<(u32, u32, i32, i32, TextureFormat)> = None;
@@ -132,6 +145,7 @@ fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -
     for &(fbo, start, end) in groups {
         let run = &draws[start..end];
         let (surface, target_tex, tw, th, fmt) = resolve_target(ctx, fbo, &mut cmds);
+        fbo_target.insert(fbo, (surface, target_tex, tw, th, fmt));
         // Register this run's offscreen attachment so a later run can sample its rendered pixels. Mirror
         // resolve_target's offscreen condition (a sized attachment) so `target_tex` is the offscreen target.
         if fbo != 0 {
@@ -169,6 +183,35 @@ fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -
         }
     }
 
+    // Apply the recorded `glBlitFramebuffer` copies AFTER the render passes. Each copies a sub-rect from the
+    // read FBO's resolved render target into the draw FBO's, lowered to `Enc::CopyTextureToTexture` for the
+    // equal-size (non-scaling) case. The last blit's destination becomes the frame's present/read-back
+    // target so a `glReadPixels` after the blit observes the copied result.
+    for b in &blits {
+        // Resolve each side's render target (rendered/cleared by a pass above, or created on demand).
+        let src = match fbo_target.get(&b.read_fbo).copied() {
+            Some(t) => t,
+            None => {
+                let t = resolve_target(ctx, b.read_fbo, &mut cmds);
+                fbo_target.insert(b.read_fbo, t);
+                t
+            }
+        };
+        let dstt = match fbo_target.get(&b.draw_fbo).copied() {
+            Some(t) => t,
+            None => {
+                let t = resolve_target(ctx, b.draw_fbo, &mut cmds);
+                fbo_target.insert(b.draw_fbo, t);
+                t
+            }
+        };
+        if let Some(copy) = blit_copy_enc(&b.src, &b.dst, src.1, src.3, src.4, dstt.1, dstt.3, dstt.4) {
+            cmds.push(Cmd::Submit(CommandBuffer { encoder: vec![copy], signal: None }));
+        }
+        present = Some(dstt);
+        last = Some(dstt);
+    }
+
     let (surface, texture, tw, th, fmt) = present.or(last)?;
     log_frame(tw, th, draws.len(), groups.len(), cmds.len(), frame_upload_bytes(&cmds));
     Some(Frame {
@@ -177,6 +220,7 @@ fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -
         target_width: tw,
         target_height: th,
         target_format: fmt,
+        color_attachments: Vec::new(),
     })
 }
 
@@ -218,7 +262,10 @@ fn resolve_target(ctx: &mut GlContext, fbo: u32, cmds: &mut Vec<Cmd>) -> (u32, u
 /// offscreen FBO sampled by the default-framebuffer composite); the default window target is never sampled.
 fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, h: i32, fmt: TextureFormat, label: &str, sampled: bool) {
     let (w, h) = (w.max(1) as u32, h.max(1) as u32);
-    let sampled = if sampled { texture_usage::SAMPLED } else { 0 };
+    // Offscreen FBO targets (`sampled`) additionally take COPY_DST so a `glBlitFramebuffer` can copy into
+    // them (`Enc::CopyTextureToTexture` requires COPY_DST on its destination); the default window target
+    // never needs it. This only adds a usage bit — the render/present/copy-src behavior is unchanged.
+    let extra = if sampled { texture_usage::SAMPLED | texture_usage::COPY_DST } else { 0 };
     cmds.push(Cmd::CreateTexture(
         texture,
         TextureDesc {
@@ -231,7 +278,7 @@ fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, 
             format: fmt,
             // COPY_SRC so a `glReadPixels` can copy the rendered target back to a host-readable buffer
             // (the CPU executor requires COPY_SRC on a `CopyTextureToBuffer` source).
-            usage: texture_usage::RENDER_TARGET | texture_usage::PRESENT | texture_usage::COPY_SRC | sampled,
+            usage: texture_usage::RENDER_TARGET | texture_usage::PRESENT | texture_usage::COPY_SRC | extra,
             label: label.into(),
         },
     ));
@@ -295,7 +342,7 @@ fn build_clear_frame(ctx: &mut GlContext) -> Frame {
     ];
     cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
     log_frame(w, h, ctx.draws.len(), 1, cmds.len(), frame_upload_bytes(&cmds));
-    Frame { cmds, present: (surface, texture), target_width: w, target_height: h, target_format: fmt }
+    Frame { cmds, present: (surface, texture), target_width: w, target_height: h, target_format: fmt, color_attachments: Vec::new() }
 }
 
 /// The per-draw lowering result: the texture staging copies (hoisted before `BeginRenderPass`) and the
@@ -316,6 +363,16 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
     // frame's first recorded draw (a leading glClear if present, else the first draw's snapshot).
     let fbo = geom[0].fbo;
     let clear = ctx.draws.first().map(|d| d.clear).unwrap_or([0.0; 4]);
+
+    // A `glDrawBuffers` MRT frame: the bound FBO carries 2+ contiguous color attachments, so the frame
+    // renders ALL of them in ONE pass with N color targets (see [`build_mrt_geometry_frame`]). An FBO with
+    // one (or zero) attachment, or the default framebuffer, stays on the byte-identical single-target path.
+    if fbo != 0 && ctx.framebuffers.color_attachment_count(fbo) > 1 {
+        if let Some(f) = build_mrt_geometry_frame(ctx, &geom, fbo, clear) {
+            return Some(f);
+        }
+        // Fall through to the single-target path if the MRT attachments could not be fully resolved.
+    }
 
     let mut cmds: Vec<Cmd> = Vec::new();
     let (surface, target_tex, tw, th, target_fmt) = resolve_target(ctx, fbo, &mut cmds);
@@ -353,6 +410,78 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
         target_width: tw,
         target_height: th,
         target_format: target_fmt,
+        color_attachments: Vec::new(),
+    })
+}
+
+/// Multiple-render-target geometry frame (`glDrawBuffers` MRT): the bound `fbo` has N ≥ 2 contiguous color
+/// attachments (`GL_COLOR_ATTACHMENT0..N`), so all N are rendered in ONE pass with N color targets. The
+/// fragment shader's `layout(location = k) out` outputs land on attachment `k`. Each attachment texture is
+/// materialized (cached on the context) and returned in `Frame::color_attachments` so a later
+/// `glReadPixels` under a `glReadBuffer(GL_COLOR_ATTACHMENT{i})` selection reads the right one. `None` if an
+/// attachment texture is missing/unsized (the caller falls back to the single-target path).
+fn build_mrt_geometry_frame(ctx: &mut GlContext, geom: &[DrawCall], fbo: u32, clear: [f32; 4]) -> Option<Frame> {
+    let n = ctx.framebuffers.color_attachment_count(fbo) as usize;
+    // Resolve every attachment's render-target texture (all must share the pass dimensions, as wgpu
+    // requires). Attachment 0 sets the pass size/format.
+    let mut cmds: Vec<Cmd> = Vec::new();
+    let mut targets: Vec<u32> = Vec::with_capacity(n);
+    let mut dims: Option<(i32, i32)> = None;
+    let mut fmt0 = TextureFormat::Rgba8Unorm;
+    for idx in 0..n {
+        let gl_tex = ctx.framebuffers.color_attachment_index(fbo, idx as u32);
+        let (w, h, fmt) = ctx.textures.get(gl_tex).filter(|t| t.w > 0 && t.h > 0).map(|t| (t.w, t.h, t.ir_format))?;
+        match dims {
+            None => {
+                dims = Some((w, h));
+                fmt0 = fmt;
+            }
+            Some((dw, dh)) if dw == w && dh == h => {}
+            Some(_) => return None, // mismatched attachment sizes → not a lowerable MRT pass here
+        }
+        let (surface, texture, needs_create) = ctx.fbo_target(gl_tex);
+        if needs_create {
+            push_target_creates(&mut cmds, surface, texture, w, h, fmt, "mrt-fbo", true);
+        }
+        targets.push(texture);
+    }
+    let (tw, th) = dims?;
+
+    // Lower each draw with N color targets so the pipeline writes every attachment.
+    let no_fbo_tex = std::collections::HashMap::new();
+    let mut copies: Vec<Enc> = Vec::new();
+    let mut draw_ops: Vec<Enc> = Vec::new();
+    for d in geom {
+        if let Some(lowered) = lower_draw_n(ctx, d, fmt0, n, tw, th, &mut cmds, &no_fbo_tex) {
+            copies.extend(lowered.copies);
+            draw_ops.extend(lowered.ops);
+        }
+    }
+    if draw_ops.is_empty() {
+        return None;
+    }
+
+    let color: Vec<ColorAttachment> = targets
+        .iter()
+        .map(|&texture| ColorAttachment { texture, load: LoadOp::Clear, clear, store: true })
+        .collect();
+    let mut ops: Vec<Enc> = copies;
+    ops.push(Enc::BeginRenderPass { color, depth: None });
+    ops.extend(draw_ops);
+    ops.push(Enc::EndRenderPass);
+
+    cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
+    log_frame(tw, th, geom.len(), 1, cmds.len(), frame_upload_bytes(&cmds));
+    // Present + default readback target is attachment 0 (there is no default window surface — MRT renders
+    // only to the FBO textures); the full `color_attachments` list routes `glReadBuffer` selection.
+    let present_tex = targets[0];
+    Some(Frame {
+        cmds,
+        present: (0, present_tex),
+        target_width: tw,
+        target_height: th,
+        target_format: fmt0,
+        color_attachments: targets,
     })
 }
 
@@ -360,6 +489,14 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
 /// uploads into `cmds` and return the staging copies + in-pass encoder ops. `None` if the draw's program
 /// is unknown/unlinked (the caller skips it). The byte-shape mirrors gl_shim.c's per-draw lowering.
 fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: i32, th: i32, cmds: &mut Vec<Cmd>, fbo_tex_ir: &std::collections::HashMap<u32, u32>) -> Option<DrawLowering> {
+    lower_draw_n(ctx, d, target_fmt, 1, tw, th, cmds, fbo_tex_ir)
+}
+
+/// [`lower_draw`] with an explicit color-target count `n_color_targets` (≥ 1). One target is the ordinary
+/// path (every caller but the MRT frame passes 1, byte-identical to before); `n > 1` builds a pipeline with
+/// `n` identical color targets so a `glDrawBuffers` MRT draw writes all attachments of a multi-target pass.
+#[allow(clippy::too_many_arguments)]
+fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, n_color_targets: usize, tw: i32, th: i32, cmds: &mut Vec<Cmd>, fbo_tex_ir: &std::collections::HashMap<u32, u32>) -> Option<DrawLowering> {
     let d = d.clone();
     let prog_name = if d.prog != 0 { d.prog } else { ctx.cur_prog };
     let prog = ctx.programs.program(prog_name)?.clone();
@@ -717,7 +854,12 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
         None
     };
     let topology = if d.mode == GL_TRIANGLE_STRIP { Topology::TriangleStrip } else { Topology::TriangleList };
-    let color_targets = vec![ColorTargetState { format: target_fmt, blend, write_mask: 0xf }];
+    // One color target for the ordinary path; `n_color_targets` identical targets for a `glDrawBuffers` MRT
+    // pass (each attachment shares the draw's format + blend). The fragment shader's `layout(location = k)`
+    // outputs map onto target `k` (see `adapter::glsl::translate_render`).
+    let color_targets: Vec<ColorTargetState> = (0..n_color_targets.max(1))
+        .map(|_| ColorTargetState { format: target_fmt, blend: blend.clone(), write_mask: 0xf })
+        .collect();
     let cull = if d.cull_enabled { cull_wire(d.cull_face) } else { 0 };
     let front_face = front_face_wire(d.front_face);
     // Program-keyed pipeline residency: the render pipeline depends on the program's shaders PLUS this draw's
@@ -868,6 +1010,48 @@ fn emit_scissor(d: &DrawCall, tw: i32, th: i32) -> Enc {
         h = th - y;
     }
     Enc::SetScissor { x: x as u32, y: y as u32, w: w.max(0) as u32, h: h.max(0) as u32 }
+}
+
+/// Lower a `glBlitFramebuffer` color sub-rect into an `Enc::CopyTextureToTexture` (exact copy), flipping the
+/// GL bottom-left window rects into the render targets' top-left texel origin. Returns `None` for a
+/// degenerate (empty) rect or a SCALING blit (source extent ≠ destination extent) — the executor implements
+/// exact copies but not the scaled `Enc::BlitTexture`, so a resize blit is honestly not lowered here.
+#[allow(clippy::too_many_arguments)]
+fn blit_copy_enc(
+    src: &[i32; 4],
+    dst: &[i32; 4],
+    src_tex: u32,
+    src_th: i32,
+    _src_fmt: TextureFormat,
+    dst_tex: u32,
+    dst_th: i32,
+    _dst_fmt: TextureFormat,
+) -> Option<Enc> {
+    let (sx0, sx1) = (src[0].min(src[2]), src[0].max(src[2]));
+    let (sy0, sy1) = (src[1].min(src[3]), src[1].max(src[3]));
+    let (dx0, dx1) = (dst[0].min(dst[2]), dst[0].max(dst[2]));
+    let (dy0, dy1) = (dst[1].min(dst[3]), dst[1].max(dst[3]));
+    let (sw, sh) = (sx1 - sx0, sy1 - sy0);
+    let (dw, dh) = (dx1 - dx0, dy1 - dy0);
+    if sw <= 0 || sh <= 0 {
+        return None;
+    }
+    if sw != dw || sh != dh {
+        // Scaling blit → needs the unimplemented `Enc::BlitTexture`; not lowered.
+        return None;
+    }
+    // GL y is bottom-left; the region's TOP row in a top-left texture is `height - y_max`.
+    let src_oy = (src_th - sy1).max(0) as u32;
+    let dst_oy = (dst_th - dy1).max(0) as u32;
+    Some(Enc::CopyTextureToTexture {
+        src: src_tex,
+        src_sub: TextureSubresource::base(),
+        src_origin: Origin3d { x: sx0.max(0) as u32, y: src_oy, z: 0 },
+        dst: dst_tex,
+        dst_sub: TextureSubresource::base(),
+        dst_origin: Origin3d { x: dx0.max(0) as u32, y: dst_oy, z: 0 },
+        extent: Extent3d { width: sw as u32, height: sh as u32, depth: 1 },
+    })
 }
 
 /// A stable signature of the pipeline-state a draw contributes on top of its program's (cached) shader

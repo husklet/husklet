@@ -99,8 +99,28 @@ name = "gl_blend"
 path = "tests/gl_blend.rs"
 
 [[test]]
+name = "gl_blend_pipeline"
+path = "tests/gl_blend_pipeline.rs"
+
+[[test]]
 name = "gl_depth"
 path = "tests/gl_depth.rs"
+
+[[test]]
+name = "gl_texture_wrap"
+path = "tests/gl_texture_wrap.rs"
+
+[[test]]
+name = "gl_share_group"
+path = "tests/gl_share_group.rs"
+
+[[test]]
+name = "gl_mrt"
+path = "tests/gl_mrt.rs"
+
+[[test]]
+name = "gl_blit_framebuffer"
+path = "tests/gl_blit_framebuffer.rs"
 
 [[test]]
 name = "gl_instanced"

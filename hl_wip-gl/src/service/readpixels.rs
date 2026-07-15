@@ -62,7 +62,20 @@ pub fn read_pixels(
     let Some(mut f) = frame::build_frame_ir(ctx) else {
         return Ok(vec![0u8; out_len]);
     };
-    let (_surface, texture) = f.present;
+    let (_surface, mut texture) = f.present;
+    // Multiple-render-target frame: honor `glReadBuffer(GL_COLOR_ATTACHMENT{i})` — read the SELECTED
+    // attachment's texture, not just `present` (attachment 0). `read_buffer_src` is a GL_COLOR_ATTACHMENT*
+    // enum (else GL_BACK for the default framebuffer, which keeps `present`).
+    if !f.color_attachments.is_empty() {
+        const GL_COLOR_ATTACHMENT0: u32 = 0x8CE0;
+        let src = ctx.read_buffer_src;
+        if (GL_COLOR_ATTACHMENT0..=GL_COLOR_ATTACHMENT0 + 15).contains(&src) {
+            let idx = (src - GL_COLOR_ATTACHMENT0) as usize;
+            if let Some(&t) = f.color_attachments.get(idx) {
+                texture = t;
+            }
+        }
+    }
     let (tw, th, fmt) = (f.target_width, f.target_height, f.target_format);
     if tw <= 0 || th <= 0 {
         return Ok(vec![0u8; out_len]);
