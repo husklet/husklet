@@ -13,6 +13,7 @@ use crate::protocol::codec::decode_stream;
 use crate::protocol::model::capability::Capabilities;
 use crate::protocol::model::command::Cmd;
 use crate::transport::adapter::unix;
+use crate::transport::adapter::unix::FrameOutcome;
 use crate::transport::model::header::{SubmitHeader, ACK_FAIL, ACK_OK};
 use crate::transport::model::readback::{ReadbackRequest, READBACK_FAIL, READBACK_MAGIC, READBACK_OK};
 
@@ -87,26 +88,52 @@ fn serve_loop<H: ConnectionHandler>(
     // The guest reads this off the connection and negotiates before advertising any API feature.
     unix::write_handshake(stream, caps)?;
     loop {
-        let frame = match unix::read_frame(stream)? {
-            Some(f) => f,
-            None => return Ok(()), // peer closed the connection
+        let frame = match unix::read_frame_outcome(stream)? {
+            FrameOutcome::Frame(f) => f,
+            FrameOutcome::Eof => return Ok(()), // peer closed the connection
+            // An over-cap frame must NOT tear down the persistent connection (that drops the host's warm
+            // per-connection caches AND every subsequent frame — the guest sees `Broken pipe`). Drain the
+            // oversized payload to resync the stream, NACK it, and keep serving. A truncated drain means the
+            // peer is genuinely gone, which propagates as an error (the connection really did end).
+            FrameOutcome::TooLarge(header) => {
+                unix::drain_payload(stream, header.len)?;
+                unix::write_ack(stream, ACK_FAIL)?;
+                continue;
+            }
         };
         if frame.header.surface_id == READBACK_MAGIC {
             // Device→host readback: decode the fixed request, serve it, and reply with the disjoint
-            // length-prefixed response (never the 1-byte submit ack).
-            match ReadbackRequest::from_bytes(&frame.payload).and_then(|req| handler.read_buffer(&req)) {
+            // length-prefixed response (never the 1-byte submit ack). A panicking readback op is contained
+            // and failed rather than allowed to unwind the connection thread.
+            let bytes = ReadbackRequest::from_bytes(&frame.payload).and_then(|req| {
+                catch_handler(|| handler.read_buffer(&req)).unwrap_or(None)
+            });
+            match bytes {
                 Some(bytes) => unix::write_readback_response(stream, READBACK_OK, &bytes)?,
                 None => unix::write_readback_response(stream, READBACK_FAIL, &[])?,
             }
             continue;
         }
+        // Decode + execute one submit. A malformed payload is NACKed at the boundary (never handed to the
+        // handler); a handler that PANICS on some op is caught and NACKed rather than allowed to unwind the
+        // connection thread (which would drop the socket = `Broken pipe` for every later frame). Either way
+        // the connection stays alive and serves the next frame.
         let verdict = match decode_stream(&frame.payload) {
-            Ok(batch) => handler.submit(&frame.header, &batch),
-            // A malformed payload is rejected at the boundary, never handed to the handler.
+            Ok(batch) => catch_handler(|| handler.submit(&frame.header, &batch)).unwrap_or(Verdict::Nack),
             Err(_) => Verdict::Nack,
         };
         unix::write_ack(stream, verdict.ack_byte())?;
     }
+}
+
+/// Run one handler op under [`catch_unwind`](std::panic::catch_unwind) so a panicking executor op (an
+/// `unwrap`/`expect`/index-out-of-bounds deep in a backend) is CONTAINED to that one frame — the serve loop
+/// turns it into a NACK and keeps the connection alive — instead of unwinding the connection thread and
+/// dropping the socket (which the guest observes as `Broken pipe` on every subsequent frame). `Err(())` means
+/// the op panicked. `AssertUnwindSafe` is sound here: on a panic we abandon the in-flight op's result and
+/// only ever NACK, never observe partially-mutated state.
+fn catch_handler<R>(op: impl FnOnce() -> R) -> Result<R, ()> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(op)).map_err(|_| ())
 }
 
 /// Serve one connection to completion: advertise `caps`, then loop reading framed submits, decoding each

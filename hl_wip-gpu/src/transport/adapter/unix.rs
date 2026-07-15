@@ -48,24 +48,38 @@ pub fn write_frame(stream: &UnixStream, header: &SubmitHeader, payload: &[u8]) -
     Ok(())
 }
 
-/// Read one submit frame off the connection. Returns `Ok(None)` on a clean EOF at a frame boundary (the
-/// peer closed the connection), and `Err` on a partial/truncated frame.
-pub fn read_frame(stream: &UnixStream) -> io::Result<Option<Frame>> {
+/// The outcome of reading one frame off the connection, distinguishing the three cases the serve loop must
+/// treat differently: a complete frame, a clean end-of-stream, and an over-cap frame that must be REJECTED
+/// (NACK) without killing the connection.
+///
+/// The over-cap case is the crucial one for connection robustness: a single frame whose declared length
+/// exceeds [`MAX_FRAME_BYTES`] must NOT be allowed to tear down the persistent connection (which drops the
+/// host's warm per-connection caches AND every subsequent frame — the guest sees `Broken pipe`). Instead the
+/// header is surfaced here with its (still-unconsumed) payload so the serve loop can drain those bytes to
+/// keep the stream in sync and reply with a NACK, then keep serving.
+pub enum FrameOutcome {
+    /// A complete frame (header + fully-read payload).
+    Frame(Frame),
+    /// Clean EOF exactly at a frame boundary: the peer closed the connection.
+    Eof,
+    /// The header declared a payload above [`MAX_FRAME_BYTES`]; the payload has NOT been read (so no giant
+    /// allocation happened). The caller must drain `header.len` bytes with [`drain_payload`] to resync the
+    /// stream, then reject the frame. `header.len` carries the declared length to drain.
+    TooLarge(SubmitHeader),
+}
+
+/// Read the fixed 16-byte submit header off `stream`, distinguishing a CLEAN end-of-stream (no bytes at a
+/// frame boundary) from a TRUNCATED header (some header bytes then EOF). Returns `Ok(None)` on clean EOF.
+fn read_header(stream: &UnixStream) -> io::Result<Option<SubmitHeader>> {
     let mut s = stream;
-    // Read the fixed header by hand so we can distinguish a CLEAN end-of-stream (no bytes at all at a
-    // frame boundary) from a TRUNCATED header (some header bytes then EOF). `read_exact` collapses both
-    // into `UnexpectedEof`, which would silently treat a torn header as a clean close.
     let mut hdr = [0u8; SubmitHeader::SIZE];
     let mut filled = 0usize;
     while filled < hdr.len() {
         match s.read(&mut hdr[filled..]) {
             Ok(0) => {
-                // A clean close exactly at the header boundary is end-of-stream, not an error.
                 if filled == 0 {
                     return Ok(None);
                 }
-                // Some header bytes arrived then EOF: a truncated frame, surfaced like a truncated
-                // payload (below), never a silent clean-boundary `Ok(None)`.
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "truncated submit header (EOF mid-header)",
@@ -76,18 +90,70 @@ pub fn read_frame(stream: &UnixStream) -> io::Result<Option<Frame>> {
             Err(e) => return Err(e),
         }
     }
-    let header = SubmitHeader::from_bytes(&hdr);
+    Ok(Some(SubmitHeader::from_bytes(&hdr)))
+}
+
+/// Read one submit frame off the connection, reporting a [`FrameOutcome`]. Unlike [`read_frame`], an over-cap
+/// declared length is NOT an error here: it is surfaced as [`FrameOutcome::TooLarge`] so the serve loop can
+/// drain + NACK it and keep the connection alive rather than closing on one bad frame. The payload for an
+/// over-cap frame is left UNREAD (no allocation), and the caller MUST drain it (via [`drain_payload`]) before
+/// reading the next frame.
+pub fn read_frame_outcome(stream: &UnixStream) -> io::Result<FrameOutcome> {
+    let mut s = stream;
+    let header = match read_header(stream)? {
+        Some(h) => h,
+        None => return Ok(FrameOutcome::Eof),
+    };
     // Cap the declared payload length BEFORE allocating so an untrusted `u32` length cannot force a
-    // multi-GB preallocation (a memory-exhaustion DoS) ahead of reading any body bytes.
+    // multi-GB preallocation (a memory-exhaustion DoS) ahead of reading any body bytes. Report it as a
+    // recoverable TooLarge rather than reading the body.
     if header.len > MAX_FRAME_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("frame payload length {} exceeds cap {MAX_FRAME_BYTES} (FrameTooLarge)", header.len),
-        ));
+        return Ok(FrameOutcome::TooLarge(header));
     }
     let mut payload = vec![0u8; header.len as usize];
     s.read_exact(&mut payload)?;
-    Ok(Some(Frame { header, payload }))
+    Ok(FrameOutcome::Frame(Frame { header, payload }))
+}
+
+/// Discard exactly `len` payload bytes from `stream` in bounded chunks, WITHOUT allocating a buffer the size
+/// of the (possibly hundreds-of-MB) frame. Used by the serve loop to resync the stream after a
+/// [`FrameOutcome::TooLarge`] so the connection survives an over-cap frame. A truncated stream (peer closed
+/// mid-payload) surfaces as `UnexpectedEof` — the connection is genuinely gone.
+pub fn drain_payload(stream: &UnixStream, len: u32) -> io::Result<()> {
+    let mut s = stream;
+    let mut remaining = len as u64;
+    let mut scratch = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let want = remaining.min(scratch.len() as u64) as usize;
+        match s.read(&mut scratch[..want]) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "EOF while draining an over-cap frame payload",
+                ));
+            }
+            Ok(n) => remaining -= n as u64,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// Read one submit frame off the connection. Returns `Ok(None)` on a clean EOF at a frame boundary (the
+/// peer closed the connection), and `Err` on a partial/truncated frame or an over-cap declared length
+/// ([`InvalidData`](io::ErrorKind::InvalidData) "FrameTooLarge"). The over-cap payload is left unread (no
+/// draining), so a caller that must keep the connection alive should use [`read_frame_outcome`] +
+/// [`drain_payload`] instead of this convenience wrapper.
+pub fn read_frame(stream: &UnixStream) -> io::Result<Option<Frame>> {
+    match read_frame_outcome(stream)? {
+        FrameOutcome::Frame(f) => Ok(Some(f)),
+        FrameOutcome::Eof => Ok(None),
+        FrameOutcome::TooLarge(header) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("frame payload length {} exceeds cap {MAX_FRAME_BYTES} (FrameTooLarge)", header.len),
+        )),
+    }
 }
 
 /// Read the host executor's single ack byte answering a submitted frame.
