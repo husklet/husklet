@@ -3739,12 +3739,21 @@ pub extern "C" fn glBlendFuncSeparatei(buf: u32, src_rgb: u32, dst_rgb: u32, src
 /// constant color carries no observable state: an honest no-op (matches the reference shim).
 #[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendColor(_red: f32, _green: f32, _blue: f32, _alpha: f32) {}
-/// `glColorMask` / `glColorMaski` — this model always writes RGBA (no per-channel write-mask is lowered):
-/// an honest no-op.
+/// `glColorMask` / `glColorMaski` — record the per-channel framebuffer write mask; it lowers into every
+/// color target's `ColorTargetState::write_mask`, so a masked channel (e.g. `glColorMask(1,1,1,0)` to
+/// preserve framebuffer alpha, or an all-false mask for a depth-only pass) is honored rather than dropped.
+/// `glColorMaski` targets one draw buffer; this single-target model routes buffer 0 to the global mask and
+/// ignores other indices.
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glColorMask(_red: u8, _green: u8, _blue: u8, _alpha: u8) {}
+pub extern "C" fn glColorMask(red: u8, green: u8, blue: u8, alpha: u8) {
+    with(|s| record::color_mask(&mut s.ctx, red != 0, green != 0, blue != 0, alpha != 0));
+}
 #[cfg_attr(gles_client, no_mangle)]
-pub extern "C" fn glColorMaski(_index: u32, _r: u8, _g: u8, _b: u8, _a: u8) {}
+pub extern "C" fn glColorMaski(index: u32, r: u8, g: u8, b: u8, a: u8) {
+    if index == 0 {
+        with(|s| record::color_mask(&mut s.ctx, r != 0, g != 0, b != 0, a != 0));
+    }
+}
 /// `glDepthRangef` — the model maps NDC depth directly (fixed 0..1 range), so a custom depth range carries
 /// no lowered state: an honest no-op.
 #[cfg_attr(gles_client, no_mangle)]

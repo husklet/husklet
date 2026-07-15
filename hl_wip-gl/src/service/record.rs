@@ -911,6 +911,14 @@ pub fn front_face(ctx: &mut GlContext, mode: u32) {
     ctx.front_face = mode;
 }
 
+/// `glColorMask(r, g, b, a)` — set the per-channel framebuffer write mask. Packs the four booleans into
+/// the low 4 bits (`R<<0 | G<<1 | B<<2 | A<<3`), the exact `ColorTargetState::write_mask` encoding, so a
+/// masked channel is dropped by the lowered pipeline instead of being silently written anyway.
+pub fn color_mask(ctx: &mut GlContext, r: bool, g: bool, b: bool, a: bool) {
+    ctx.color_mask =
+        (r as u32) | ((g as u32) << 1) | ((b as u32) << 2) | ((a as u32) << 3);
+}
+
 /// `glViewport(x, y, w, h)`.
 pub fn viewport(ctx: &mut GlContext, vp: [i32; 4]) {
     ctx.viewport = vp;
@@ -1391,11 +1399,21 @@ pub fn detach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
 
 /// Snapshot the currently-bound draw state into a fresh [`DrawCall`] (the immutable per-draw record).
 fn snapshot(ctx: &GlContext) -> DrawCall {
+    // Capture the ES3 sampler OBJECT bound to each texture unit: a bound object overrides the texture's own
+    // filter/wrap at lowering time (ES 3.0 §3.8.13). `None` where no object is bound (texture params win).
+    let mut samp_objs: [Option<crate::model::es3::SamplerObj>; 8] = [None; 8];
+    for (unit, slot) in samp_objs.iter_mut().enumerate() {
+        let name = ctx.samplers.binding(unit as u32);
+        if name != 0 {
+            *slot = ctx.samplers.get(name).copied();
+        }
+    }
     let mut d = DrawCall {
         prog: ctx.cur_prog,
         fbo: ctx.bound_fbo,
         attrs: ctx.attr,
         tex_units: ctx.tex_unit,
+        samp_objs,
         viewport: ctx.viewport,
         scissor_enabled: ctx.scissor_enabled,
         scissor: ctx.scissor,
@@ -1412,6 +1430,7 @@ fn snapshot(ctx: &GlContext) -> DrawCall {
         cull_enabled: ctx.cull_enabled,
         cull_face: ctx.cull_face,
         front_face: ctx.front_face,
+        color_mask: ctx.color_mask,
         clear: ctx.clear_color,
         elem_buf: ctx.element_buffer,
         ..DrawCall::default()

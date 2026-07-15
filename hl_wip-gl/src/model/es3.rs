@@ -9,6 +9,7 @@
 //! layer drives them, submits nothing), and the deferred frame IR is unaffected.
 
 use super::glconst::*;
+use hl_gpu::protocol::model::enums::{AddressMode, Filter};
 use std::collections::{HashMap, HashSet};
 
 // ==================================================================================================
@@ -47,6 +48,35 @@ impl Default for SamplerObj {
 }
 
 impl SamplerObj {
+    /// The neutral min-filter for this sampler object's GL min-filter (Linear for `LINEAR` /
+    /// `LINEAR_MIPMAP_*`, else Nearest) — the exact mapping [`super::texture::GlTexture::ir_min_filter`]
+    /// uses, so a bound sampler object lowers identically to the equivalent texture parameters.
+    pub fn ir_min_filter(&self) -> Filter {
+        match self.min_filter as u32 {
+            GL_LINEAR | GL_LINEAR_MIPMAP_NEAREST | GL_LINEAR_MIPMAP_LINEAR => Filter::Linear,
+            _ => Filter::Nearest,
+        }
+    }
+
+    /// The neutral mag-filter (Linear only for exactly `LINEAR`).
+    pub fn ir_mag_filter(&self) -> Filter {
+        if self.mag_filter as u32 == GL_LINEAR {
+            Filter::Linear
+        } else {
+            Filter::Nearest
+        }
+    }
+
+    /// The neutral S wrap (ClampToEdge / MirrorRepeat / else Repeat).
+    pub fn ir_wrap_s(&self) -> AddressMode {
+        sampler_address_mode(self.wrap_s as u32)
+    }
+
+    /// The neutral T wrap.
+    pub fn ir_wrap_t(&self) -> AddressMode {
+        sampler_address_mode(self.wrap_t as u32)
+    }
+
     /// Read one parameter as `f32` (the int-typed getter rounds this to nearest). `None` for an unknown
     /// `pname` (the caller raises `GL_INVALID_ENUM`).
     pub fn get(&self, pname: u32) -> Option<f32> {
@@ -62,6 +92,16 @@ impl SamplerObj {
             GL_TEXTURE_MAX_LOD => self.max_lod,
             _ => return None,
         })
+    }
+}
+
+/// GL wrap enum → neutral address mode (ClampToEdge / MirrorRepeat / else Repeat), matching the texture
+/// path's `address_mode`.
+fn sampler_address_mode(gl: u32) -> AddressMode {
+    match gl {
+        GL_CLAMP_TO_EDGE => AddressMode::ClampToEdge,
+        GL_MIRRORED_REPEAT => AddressMode::MirrorRepeat,
+        _ => AddressMode::Repeat,
     }
 }
 

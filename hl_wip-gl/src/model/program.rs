@@ -249,6 +249,11 @@ pub struct DrawCall {
     pub attrs: [Attr; MAX_ATTR],
     /// Bound texture (GL name) per texture unit, at draw time.
     pub tex_units: [u32; 8],
+    /// The ES3 sampler OBJECT bound to each texture unit (`glBindSampler`), captured at draw time. A bound
+    /// sampler object OVERRIDES the texture's own filter/wrap (ES 3.0 §3.8.13) — the frame builder lowers
+    /// its params into the `SamplerDesc` instead of the texture's. `None` = no sampler object bound at the
+    /// unit, so the texture parameters win (the byte-identical pre-sampler-object path).
+    pub samp_objs: [Option<crate::model::es3::SamplerObj>; 8],
     /// Sampler-uniform index → texture unit, at draw time.
     pub samp_units: [i32; 4],
     pub viewport: [i32; 4],
@@ -270,6 +275,9 @@ pub struct DrawCall {
     pub cull_enabled: bool,
     pub cull_face: u32,
     pub front_face: u32,
+    /// `glColorMask` per-channel write enable at draw time, packed `R<<0 | G<<1 | B<<2 | A<<3` — lowered
+    /// verbatim into every color target's `ColorTargetState::write_mask`. `0xf` = write all channels.
+    pub color_mask: u32,
     /// The clear color in force for this draw / clear.
     pub clear: [f32; 4],
     /// For a clear call: the (x, y, w, h) rect being cleared.
@@ -319,6 +327,7 @@ impl Default for DrawCall {
             elem_buf: 0,
             attrs: [Attr::default(); MAX_ATTR],
             tex_units: [0; 8],
+            samp_objs: [None; 8],
             samp_units: [-1; 4],
             viewport: [0; 4],
             scissor_enabled: false,
@@ -336,6 +345,7 @@ impl Default for DrawCall {
             cull_enabled: false,
             cull_face: crate::model::glconst::GL_BACK,
             front_face: crate::model::glconst::GL_CCW,
+            color_mask: 0xf,
             clear: [0.0; 4],
             clear_rect: [0; 4],
             client_vbufs: Vec::new(),

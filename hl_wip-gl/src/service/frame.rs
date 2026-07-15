@@ -654,17 +654,7 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, n_
                 None => continue,
             };
             let samp_ir = ctx.alloc_sampler_ir();
-            cmds.push(Cmd::CreateSampler(
-                samp_ir,
-                SamplerDesc {
-                    min_filter: t.ir_min_filter(),
-                    mag_filter: t.ir_mag_filter(),
-                    mip_filter: Filter::Nearest,
-                    address_u: t.ir_wrap_s(),
-                    address_v: t.ir_wrap_t(),
-                    address_w: AddressMode::ClampToEdge,
-                },
-            ));
+            cmds.push(Cmd::CreateSampler(samp_ir, sampler_desc_for(&t, &d.samp_objs[unit])));
             texbinds.push(TexBind { slot, tex_ir: rt_ir, samp_ir, stage_ir: 0, w: t.w as u32, h: t.h as u32 });
             continue;
         }
@@ -745,17 +735,7 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, n_
         } else {
             0
         };
-        cmds.push(Cmd::CreateSampler(
-            samp_ir,
-            SamplerDesc {
-                min_filter: t.ir_min_filter(),
-                mag_filter: t.ir_mag_filter(),
-                mip_filter: Filter::Nearest,
-                address_u: t.ir_wrap_s(),
-                address_v: t.ir_wrap_t(),
-                address_w: AddressMode::ClampToEdge,
-            },
-        ));
+        cmds.push(Cmd::CreateSampler(samp_ir, sampler_desc_for(&t, &d.samp_objs[unit])));
         texbinds.push(TexBind { slot, tex_ir, samp_ir, stage_ir, w: t.w as u32, h: t.h as u32 });
     }
     let has_u = prog.has_uniforms();
@@ -858,7 +838,7 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, n_
     // pass (each attachment shares the draw's format + blend). The fragment shader's `layout(location = k)`
     // outputs map onto target `k` (see `adapter::glsl::translate_render`).
     let color_targets: Vec<ColorTargetState> = (0..n_color_targets.max(1))
-        .map(|_| ColorTargetState { format: target_fmt, blend: blend.clone(), write_mask: 0xf })
+        .map(|_| ColorTargetState { format: target_fmt, blend: blend.clone(), write_mask: d.color_mask & 0xf })
         .collect();
     let cull = if d.cull_enabled { cull_wire(d.cull_face) } else { 0 };
     let front_face = front_face_wire(d.front_face);
@@ -1108,6 +1088,30 @@ fn vertex_format_wire(kind_enum: u32, comps: i32, normalized: bool, integer: boo
         _ => 0, // GL_FLOAT and unknown
     };
     comps | (kind << 8) | ((normalized as u32) << 16) | ((integer as u32) << 17)
+}
+
+/// Build the `SamplerDesc` for a sampled texture, honoring a bound ES3 sampler OBJECT when present. A
+/// `glBindSampler`d object overrides the texture's own filter/wrap (ES 3.0 §3.8.13); with no object bound
+/// (`obj == None`) the texture parameters win — byte-identical to the pre-sampler-object path.
+fn sampler_desc_for(t: &crate::model::texture::GlTexture, obj: &Option<crate::model::es3::SamplerObj>) -> SamplerDesc {
+    match obj {
+        Some(o) => SamplerDesc {
+            min_filter: o.ir_min_filter(),
+            mag_filter: o.ir_mag_filter(),
+            mip_filter: Filter::Nearest,
+            address_u: o.ir_wrap_s(),
+            address_v: o.ir_wrap_t(),
+            address_w: AddressMode::ClampToEdge,
+        },
+        None => SamplerDesc {
+            min_filter: t.ir_min_filter(),
+            mag_filter: t.ir_mag_filter(),
+            mip_filter: Filter::Nearest,
+            address_u: t.ir_wrap_s(),
+            address_v: t.ir_wrap_t(),
+            address_w: AddressMode::ClampToEdge,
+        },
+    }
 }
 
 /// GL blend factor enum → opaque WebGPU blend-factor wire value (`gl_shim.c` `blend_factor_wire`).

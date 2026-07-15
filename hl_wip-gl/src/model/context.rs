@@ -174,6 +174,12 @@ pub struct GlContext {
     pub cull_enabled: bool,
     pub cull_face: u32,
     pub front_face: u32,
+    /// `glColorMask` per-channel write enable, packed into the low 4 bits as `R<<0 | G<<1 | B<<2 | A<<3`
+    /// (the exact `ColorTargetState::write_mask` encoding). Default `0xf` (all channels written). A guest
+    /// that masks a channel — e.g. `glColorMask(1,1,1,0)` to leave the framebuffer alpha untouched, or an
+    /// all-false mask for a depth/stencil-only pass — lowers this into the pipeline's color-target write
+    /// mask instead of being silently dropped.
+    pub color_mask: u32,
     /// The draw framebuffer bound by `glBindFramebuffer` (`GL_FRAMEBUFFER`/`GL_DRAW_FRAMEBUFFER`; `0` =
     /// the default window framebuffer). A recorded draw's render target follows this binding.
     pub bound_fbo: u32,
@@ -348,6 +354,7 @@ impl GlContext {
             cull_enabled: false,
             cull_face: glconst::GL_BACK,
             front_face: glconst::GL_CCW,
+            color_mask: 0xf,
             bound_fbo: 0,
             read_fbo: 0,
             bound_rbo: 0,
