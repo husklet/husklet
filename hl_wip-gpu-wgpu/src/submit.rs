@@ -532,7 +532,17 @@ impl WgpuExecutor {
                                 }),
                                 _ => wgpu::LoadOp::Load,
                             },
-                            store: wgpu::StoreOp::Store,
+                            // Honor the attachment's `store` flag: `true` (the common case) keeps the drawn
+                            // result so a later readback/present sees it; `false` is WebGPU `StoreOp::Discard`
+                            // — the guest declared it will not read this target, so its contents become
+                            // undefined after the pass. Previously this was hardcoded to `Store`, silently
+                            // ignoring the wire field (the same class of dropped-field bug the #209 audit
+                            // found for write_mask/cull/front_face).
+                            store: if c.store {
+                                wgpu::StoreOp::Store
+                            } else {
+                                wgpu::StoreOp::Discard
+                            },
                         },
                     })
                 })
