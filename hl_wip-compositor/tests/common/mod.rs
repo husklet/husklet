@@ -27,12 +27,22 @@ use hl_compositor::adapter::smithay::{
     self, input_channel, CapturedFrame, InputCommand, InputSender, PngPresenter,
 };
 
+use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{
     wl_buffer::WlBuffer,
+    wl_callback::WlCallback,
+    wl_compositor::WlCompositor,
+    wl_registry::WlRegistry,
     wl_shm::{self, WlShm},
     wl_shm_pool::WlShmPool,
+    wl_surface::WlSurface,
 };
-use wayland_client::{Dispatch, EventQueue, QueueHandle};
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+use wayland_protocols::xdg::shell::client::{
+    xdg_surface::{self, XdgSurface},
+    xdg_toplevel::XdgToplevel,
+    xdg_wm_base::{self, XdgWmBase},
+};
 
 /// Where the human-viewable PNGs land.
 pub const DEMO_DIR: &str = "/tmp/hl-demo";
@@ -275,3 +285,122 @@ pub fn save_composited(name: &str, cw: i32, ch: i32, bg: [u8; 4], layers: &[(&Ca
     let path = PathBuf::from(DEMO_DIR).join(format!("{name}.png"));
     let _ = write_png(&path, cw, ch, &rgba);
 }
+
+// =============================== well-behaved "neighbor" client ===============================
+//
+// The robustness demos (`demo_*` batch 5) prove the adapter SURVIVES a hostile client: after driving
+// abuse, a NORMAL client must still connect, map a toplevel, and composite an EXACT solid frame. That
+// well-behaved path is identical across those demos, so it lives here as one reusable client instead of
+// being re-plumbed per binary. Each demo also keeps its own hostile-client Dispatch types; this
+// `Neighbor` type is a DISTINCT type, so the two never collide inside one test binary.
+
+/// A minimal, correct Wayland client: binds globals, maps a solid-color toplevel, and drives the
+/// map + first-frame handshake to completion. Its own `Connection`/`EventQueue` are held so it stays
+/// alive (and can be pumped) for as long as the caller keeps it.
+pub struct Neighbor {
+    pub conn: Connection,
+    pub queue: EventQueue<NeighborApp>,
+    pub app: NeighborApp,
+    pub width: i32,
+    pub height: i32,
+    pub color: [u8; 4],
+}
+
+/// Dispatch state for a [`Neighbor`]. A distinct type from any demo's own client `App`, so both coexist
+/// in one test binary.
+pub struct NeighborApp {
+    surface: WlSurface,
+    buffer: WlBuffer,
+    drawn: bool,
+    frame_done: bool,
+}
+
+impl Neighbor {
+    /// Connect a fresh well-behaved client on the shared socket, map a `w`x`h` solid-`color` toplevel,
+    /// and block until it is mapped and has drawn its first frame. Panics (fails the test) if the
+    /// compositor never completes the handshake — the exact symptom of an adapter that a prior hostile
+    /// client wedged.
+    pub fn map(dir: &Path, tag: &str, w: i32, h: i32, color: [u8; 4]) -> Neighbor {
+        let conn = Connection::connect_to_env().expect("neighbor connect_to_env");
+        let (globals, mut queue) = registry_queue_init::<NeighborApp>(&conn).expect("neighbor registry init");
+        let qh = queue.handle();
+
+        let compositor: WlCompositor = globals.bind(&qh, 1..=6, ()).expect("wl_compositor");
+        let shm: WlShm = globals.bind(&qh, 1..=1, ()).expect("wl_shm");
+        let wm_base: XdgWmBase = globals.bind(&qh, 1..=6, ()).expect("xdg_wm_base");
+
+        let buffer = make_buffer(&shm, &qh, dir, tag, w, h, &solid(w, h, color));
+        let surface = compositor.create_surface(&qh, ());
+        let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+        let toplevel = xdg.get_toplevel(&qh, ());
+        toplevel.set_title(format!("neighbor-{tag}"));
+        surface.commit();
+
+        let mut app = NeighborApp { surface: surface.clone(), buffer, drawn: false, frame_done: false };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !(app.drawn && app.frame_done) {
+            assert!(Instant::now() < deadline, "neighbor {tag} never mapped (adapter wedged?)");
+            queue.blocking_dispatch(&mut app).expect("neighbor dispatch map");
+        }
+        // Keep the shell objects alive for the client's lifetime.
+        std::mem::forget(toplevel);
+        std::mem::forget(xdg);
+        Neighbor { conn, queue, app, width: w, height: h, color }
+    }
+
+    /// Pump this client and assert it composited an EXACT solid-`color` frame — proof the whole
+    /// wl → scene → present path still serves a normal client after abuse. Returns the captured frame.
+    pub fn assert_presents(&mut self, captures: &Arc<Mutex<Vec<CapturedFrame>>>) -> CapturedFrame {
+        let (w, h, color) = (self.width, self.height, self.color);
+        let frame = pump_until(&mut self.queue, &mut self.app, captures, 5, move |f| {
+            f.width == w && f.height == h && f.pixel_is(1, 1, color)
+        })
+        .expect("neighbor frame never composited after abuse (adapter did not survive)");
+        // Exact solid fill: center + all four corners are the neighbor's color, nothing smeared.
+        for (x, y) in [(w / 2, h / 2), (0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert_eq!(frame.pixel(x, y).unwrap(), color, "neighbor pixel ({x},{y}) is its solid color");
+        }
+        frame
+    }
+
+    /// Roundtrip the client's queue once (drain server events, flush requests).
+    pub fn pump(&mut self) {
+        let _ = self.queue.roundtrip(&mut self.app);
+    }
+}
+
+impl Dispatch<WlRegistry, GlobalListContents> for NeighborApp {
+    fn event(_: &mut Self, _: &WlRegistry, _: <WlRegistry as Proxy>::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+}
+impl Dispatch<XdgWmBase, ()> for NeighborApp {
+    fn event(_: &mut Self, wm: &XdgWmBase, e: <XdgWmBase as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let xdg_wm_base::Event::Ping { serial } = e { wm.pong(serial); }
+    }
+}
+impl Dispatch<XdgSurface, ()> for NeighborApp {
+    fn event(app: &mut Self, xdg: &XdgSurface, e: <XdgSurface as Proxy>::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
+        if let xdg_surface::Event::Configure { serial } = e {
+            xdg.ack_configure(serial);
+            if !app.drawn {
+                app.surface.attach(Some(&app.buffer), 0, 0);
+                app.surface.damage(0, 0, i32::MAX, i32::MAX);
+                let _cb: WlCallback = app.surface.frame(qh, ());
+                app.surface.commit();
+                app.drawn = true;
+            }
+        }
+    }
+}
+impl Dispatch<WlCallback, ()> for NeighborApp {
+    fn event(app: &mut Self, _: &WlCallback, e: <WlCallback as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let wayland_client::protocol::wl_callback::Event::Done { .. } = e { app.frame_done = true; }
+    }
+}
+macro_rules! neighbor_ignore {
+    ($($t:ty),*) => {$(
+        impl Dispatch<$t, ()> for NeighborApp {
+            fn event(_: &mut Self, _: &$t, _: <$t as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+        }
+    )*};
+}
+neighbor_ignore!(WlCompositor, WlSurface, WlShm, WlShmPool, WlBuffer, XdgToplevel);

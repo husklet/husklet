@@ -242,6 +242,36 @@ name = "demo_output_enter_leave"
 path = "tests/demo_output_enter_leave.rs"
 required-features = ["smithay-adapter"]
 
+# Batch-5 ROBUSTNESS / hostile-client demos: prove the adapter SURVIVES abuse — never panics, rejects or
+# clamps bad input, and keeps serving OTHER clients. Each drives a hostile in-process wayland-client
+# (oversized/zero buffers, malformed protocol ops, a surface-create/destroy storm, a commit flood, bogus
+# stride/format) against the live adapter, then asserts the compositor is still alive by having a fresh
+# well-behaved client composite an EXACT frame. Own binaries — each mutates process-global env.
+[[test]]
+name = "demo_oversized_buffer_rejected"
+path = "tests/demo_oversized_buffer_rejected.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_malformed_protocol_survives"
+path = "tests/demo_malformed_protocol_survives.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_surface_storm"
+path = "tests/demo_surface_storm.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_commit_flood_fairness"
+path = "tests/demo_commit_flood_fairness.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_bogus_stride_format"
+path = "tests/demo_bogus_stride_format.rs"
+required-features = ["smithay-adapter"]
+
 [[test]]
 name = "macos_present_smoke"
 path = "tests/macos_present_smoke.rs"
