@@ -12,8 +12,11 @@
 
 pub mod allocate;
 pub mod event;
+pub mod graph;
 pub mod launch;
 pub mod load_module;
 pub mod register;
+pub mod symbol;
 pub mod synchronize;
+pub mod texture;
 pub mod transfer;
