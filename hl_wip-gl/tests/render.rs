@@ -416,3 +416,47 @@ fn client_side_index_array_lowers_a_transient_index_buffer() {
         .any(|o| matches!(o, Enc::SetIndexBuffer { buffer, offset: 0, .. } if *buffer == iid)));
     assert!(ops.iter().any(|o| matches!(o, Enc::DrawIndexed { index_count: 6, .. })));
 }
+
+#[test]
+fn flush_offscreen_submits_offscreen_passes_and_retains_window_draws() {
+    // glFlush / glFinish drain the accumulated OFFSCREEN passes now (no Present) while retaining the
+    // window (default-framebuffer) draws for the eventual eglSwapBuffers — keeping the swap frame bounded.
+    let mut c = ctx_64();
+    let mut sink = RecordingSink::with_full_caps();
+
+    // An offscreen FBO with a color texture; render one triangle INTO it (fbo != 0).
+    let atlas = record::gen_texture(&mut c);
+    record::active_texture(&mut c, GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, atlas);
+    record::tex_image_2d_format(&mut c, 16, 16, &[], TextureFormat::Rgba8Unorm);
+    let fbo = record::gen_framebuffer(&mut c);
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+    record::framebuffer_texture_2d(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, atlas, 0);
+    flat_program(&mut c);
+    tri_vbo(&mut c, 8);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    // A window draw (default framebuffer, fbo == 0) that must be RETAINED for the swap.
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, 0);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+    assert_eq!(c.draws.len(), 2, "two draws recorded before flush");
+
+    // glFlush: drains the ONE offscreen pass (a Submit with NO Present), retains the window draw.
+    assert!(swap::flush_offscreen(&mut c, &mut sink).unwrap(), "offscreen work was flushed");
+    assert_eq!(c.draws.len(), 1, "the window draw is retained for the swap");
+    let flush_batch = &sink.batches[0];
+    assert!(flush_batch.iter().any(|c| matches!(c, Cmd::Submit(_))), "the offscreen pass is submitted");
+    assert!(
+        !flush_batch.iter().any(|c| matches!(c, Cmd::Present { .. })),
+        "the offscreen flush presents nothing (no window swap)"
+    );
+
+    // The retained window draw still presents at swap.
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    assert!(sink.batches[1].iter().any(|c| matches!(c, Cmd::Present { .. })), "the swap presents the window");
+
+    // With nothing offscreen pending, a second flush is a no-op (returns false, submits nothing).
+    let batches_before = sink.batches.len();
+    assert!(!swap::flush_offscreen(&mut c, &mut sink).unwrap());
+    assert_eq!(sink.batches.len(), batches_before, "an empty flush submits no batch");
+}

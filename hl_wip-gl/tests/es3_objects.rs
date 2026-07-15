@@ -8,7 +8,7 @@
 
 use hl_gl::model::context::{GlContext, GlSurface};
 use hl_gl::model::glconst::*;
-use hl_gl::service::{es3, query, record};
+use hl_gl::service::{es3, intro, query, record};
 
 fn ctx() -> GlContext {
     let mut c = GlContext::new();
@@ -285,4 +285,173 @@ fn copy_buffer_sub_data_copies_bytes_between_buffers() {
     record::copy_buffer_sub_data(&mut c, GL_ARRAY_BUFFER, GL_COPY_WRITE_BUFFER, 2, 0, 4);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
     assert_eq!(&c.buffers.get(dst).unwrap().data[0..4], &[3, 4, 5, 6]);
+}
+
+// ---- deletion lifecycle: glDeleteQueries / glDeleteTransformFeedbacks / glDeleteProgramPipelines ---
+
+#[test]
+fn delete_query_object_makes_it_no_longer_a_query() {
+    let mut c = ctx();
+    let q = es3::gen_query(&mut c);
+    es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q);
+    es3::end_query(&mut c, GL_ANY_SAMPLES_PASSED);
+    assert!(es3::is_query(&c, q), "an instantiated query object");
+
+    es3::delete_query(&mut c, q);
+    assert!(!es3::is_query(&c, q), "glDeleteQueries drops the object");
+    // A deleted name is unknown again: begin on it is GL_INVALID_OPERATION.
+    es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q);
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+    // Deleting 0 (and a never-generated name) is a silent no-op.
+    es3::delete_query(&mut c, 0);
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+}
+
+#[test]
+fn delete_transform_feedback_object_makes_it_no_longer_a_tf() {
+    let mut c = ctx();
+    let tf = es3::gen_transform_feedback(&mut c);
+    es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, tf);
+    assert!(es3::is_transform_feedback(&c, tf));
+
+    es3::delete_transform_feedback(&mut c, tf);
+    assert!(!es3::is_transform_feedback(&c, tf), "glDeleteTransformFeedbacks drops the object");
+    es3::delete_transform_feedback(&mut c, 0);
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+}
+
+#[test]
+fn delete_program_pipeline_object_makes_it_no_longer_a_pipeline() {
+    let mut c = ctx();
+    let pipe = es3::gen_program_pipeline(&mut c);
+    es3::bind_program_pipeline(&mut c, pipe);
+    assert!(es3::is_program_pipeline(&c, pipe));
+
+    es3::delete_program_pipeline(&mut c, pipe);
+    assert!(!es3::is_program_pipeline(&c, pipe), "glDeleteProgramPipelines drops the object");
+    // A getter on the deleted pipeline is GL_INVALID_OPERATION.
+    assert_eq!(es3::get_program_pipelineiv(&mut c, pipe, GL_ACTIVE_PROGRAM), None);
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+}
+
+// ---- immutable 3D / 2D-array texture storage + uploads (glTexStorage3D/glTexImage3D/glTexSubImage3D) ----
+
+#[test]
+fn tex_storage_3d_sizes_and_seals_the_array_texture() {
+    let mut c = ctx();
+    let t = record::gen_texture(&mut c);
+    record::active_texture(&mut c, GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D_ARRAY, t);
+
+    record::tex_storage_3d(&mut c, GL_TEXTURE_2D_ARRAY, 1, 16, 8, 4);
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    {
+        let tex = c.textures.get(t).expect("array texture exists");
+        assert_eq!((tex.w, tex.h), (16, 8), "layer-0 plane is sized to w*h");
+        assert!(tex.immutable, "glTexStorage3D makes the texture immutable");
+        assert_eq!(tex.data.len(), 16 * 8 * 4, "the RGBA8 base plane is allocated");
+    }
+
+    // Bad target → GL_INVALID_ENUM; bad extent → GL_INVALID_VALUE.
+    let t2 = record::gen_texture(&mut c);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, t2);
+    record::tex_storage_3d(&mut c, GL_TEXTURE_2D, 1, 4, 4, 4);
+    assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
+    record::bind_texture(&mut c, GL_TEXTURE_3D, t2);
+    record::tex_storage_3d(&mut c, GL_TEXTURE_3D, 0, 4, 4, 4);
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+}
+
+#[test]
+fn tex_image_3d_then_sub_image_3d_write_the_layer0_plane() {
+    let mut c = ctx();
+    let t = record::gen_texture(&mut c);
+    record::active_texture(&mut c, GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_3D, t);
+
+    // A full 4x4x2 upload of a solid blue layer-0 plane.
+    let blue = [0u8, 0, 255, 255].repeat(4 * 4);
+    record::tex_image_3d(&mut c, GL_TEXTURE_3D, 0, 4, 4, 2, &blue);
+    {
+        let tex = c.textures.get(t).expect("3D texture allocated");
+        assert_eq!((tex.w, tex.h), (4, 4));
+        assert_eq!(&tex.data[0..4], &[0, 0, 255, 255], "texel (0,0) is blue");
+    }
+
+    // Overwrite the top-left 2x2 with red (zoffset 0, layer-0 plane).
+    let red = [255u8, 0, 0, 255].repeat(2 * 2);
+    record::tex_sub_image_3d(&mut c, GL_TEXTURE_3D, 0, 0, 0, 0, 2, 2, 1, &red);
+    let tex = c.textures.get(t).unwrap();
+    assert_eq!(&tex.data[0..4], &[255, 0, 0, 255], "sub-image overwrote texel (0,0) to red");
+}
+
+// ---- glGetTexParameteriv: filter/wrap state of the bound texture round-trips ---------------------
+
+#[test]
+fn get_tex_parameteriv_reports_bound_texture_filter_and_wrap() {
+    let mut c = ctx();
+    let t = record::gen_texture(&mut c);
+    record::active_texture(&mut c, GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, t);
+    record::tex_image_2d(&mut c, 2, 2, &[0u8; 16]);
+
+    record::tex_parameter(&mut c, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    record::tex_parameter(&mut c, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    assert_eq!(query::get_tex_parameteriv(&c, GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER), GL_NEAREST as i32);
+    assert_eq!(query::get_tex_parameteriv(&c, GL_TEXTURE_2D, GL_TEXTURE_WRAP_S), GL_CLAMP_TO_EDGE as i32);
+    // MAG filter defaults to LINEAR; an unknown target reads 0.
+    assert_eq!(query::get_tex_parameteriv(&c, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER), GL_LINEAR as i32);
+    assert_eq!(query::get_tex_parameteriv(&c, GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER), 0);
+}
+
+// ---- glGetFramebufferAttachmentParameteriv: reflects the color attachment's type + name ----------
+
+#[test]
+fn framebuffer_attachment_parameter_reflects_default_and_texture_attachment() {
+    let mut c = ctx();
+
+    // The default framebuffer's back buffer reports FRAMEBUFFER_DEFAULT.
+    assert_eq!(
+        intro::framebuffer_attachment_parameter(&c, GL_DRAW_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE),
+        GL_FRAMEBUFFER_DEFAULT as i32
+    );
+
+    // Bind an FBO with a color texture attachment.
+    let tex = record::gen_texture(&mut c);
+    record::active_texture(&mut c, GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_image_2d(&mut c, 8, 8, &[0u8; 8 * 8 * 4]);
+    let fbo = record::gen_framebuffer(&mut c);
+    record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
+    record::framebuffer_texture_2d(&mut c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+
+    assert_eq!(
+        intro::framebuffer_attachment_parameter(&c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE),
+        GL_TEXTURE as i32,
+        "a texture-backed color attachment reports OBJECT_TYPE == GL_TEXTURE"
+    );
+    assert_eq!(
+        intro::framebuffer_attachment_parameter(&c, GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME),
+        tex as i32,
+        "the attachment object NAME is the attached texture"
+    );
+}
+
+// ---- glGetIntegeri_v et al.: indexed UBO/SSBO buffer bindings read back --------------------------
+
+#[test]
+fn get_integer_indexed_reads_back_indexed_buffer_bindings() {
+    let mut c = ctx();
+    let ubo = record::gen_buffer(&mut c);
+    record::bind_buffer(&mut c, GL_UNIFORM_BUFFER, ubo);
+    record::buffer_data(&mut c, GL_UNIFORM_BUFFER, &[0u8; 64], 0x88E4);
+    record::bind_buffer_base(&mut c, GL_UNIFORM_BUFFER, 2, ubo);
+
+    assert_eq!(
+        query::get_integer_indexed(&c, GL_UNIFORM_BUFFER_BINDING, 2),
+        ubo as i64,
+        "glGetIntegeri_v(GL_UNIFORM_BUFFER_BINDING, 2) reports the buffer bound at index 2"
+    );
+    // An unbound index reads 0.
+    assert_eq!(query::get_integer_indexed(&c, GL_UNIFORM_BUFFER_BINDING, 5), 0);
 }

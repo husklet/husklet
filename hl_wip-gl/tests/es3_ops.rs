@@ -232,3 +232,77 @@ fn draw_buffers_and_read_buffer_record_and_validate() {
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
     assert_eq!(c.read_buffer_src, GL_COLOR_ATTACHMENT1);
 }
+
+// ---------------------------------------------------------------------------------------------------
+// glFlushMappedBufferRange: an explicit sub-range flush of a still-mapped buffer → a WriteBuffer
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn flush_mapped_range_flushes_a_subrange_while_still_mapped() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+
+    let buf = record::gen_buffer(&mut c);
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, buf);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 32], 0x88E4);
+
+    // Map [4, 4+16) then write through the buffer's storage as the app would via the pointer.
+    let (name, off) = map::map_buffer_range(&mut c, GL_ARRAY_BUFFER, 4, 16, 0).expect("a mapped range");
+    assert_eq!((name, off), (buf, 4));
+    c.buffers.get_mut(buf).unwrap().data[off..off + 8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+    // Flush the FIRST 8 bytes of the mapping (relative offset 0, length 8) — still mapped, no unmap.
+    map::flush_mapped_range(&mut c, &mut sink, GL_ARRAY_BUFFER, 0, 8).unwrap();
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    let batch = &sink.batches[0];
+    let (offset, data) = batch
+        .iter()
+        .find_map(|c| match c {
+            Cmd::WriteBuffer { offset, data, .. } => Some((*offset, data.clone())),
+            _ => None,
+        })
+        .expect("a WriteBuffer emitted by the explicit flush");
+    assert_eq!(offset, 4, "the flush lands at the mapped base offset (map_off 4 + relative 0)");
+    assert_eq!(data, vec![1, 2, 3, 4, 5, 6, 7, 8], "exactly the flushed sub-range bytes are uploaded");
+
+    // A negative range is GL_INVALID_VALUE; flushing an unmapped buffer is GL_INVALID_OPERATION.
+    map::flush_mapped_range(&mut c, &mut sink, GL_ARRAY_BUFFER, -1, 4).unwrap();
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    let _ = map::unmap_buffer(&mut c, &mut sink, GL_ARRAY_BUFFER);
+    map::flush_mapped_range(&mut c, &mut sink, GL_ARRAY_BUFFER, 0, 4).unwrap();
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// glDispatchComputeIndirect: the grid is read from the bound GL_DISPATCH_INDIRECT_BUFFER → Dispatch
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn dispatch_compute_indirect_reads_grid_from_buffer_and_dispatches() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_compute(&mut c);
+
+    // An indirect buffer whose three little-endian u32 group counts are {3,5,7} at byte offset 4.
+    let ind = record::gen_buffer(&mut c);
+    record::bind_buffer(&mut c, GL_DISPATCH_INDIRECT_BUFFER, ind);
+    let mut bytes = vec![0u8; 4];
+    bytes.extend_from_slice(&3u32.to_le_bytes());
+    bytes.extend_from_slice(&5u32.to_le_bytes());
+    bytes.extend_from_slice(&7u32.to_le_bytes());
+    record::buffer_data(&mut c, GL_DISPATCH_INDIRECT_BUFFER, &bytes, 0x88E4);
+
+    compute::dispatch_compute_indirect(&mut c, &mut sink, 4).unwrap();
+    assert_eq!(c.take_gl_error(), GL_NO_ERROR);
+    let ops = submit_ops(&sink.batches[0]);
+    assert!(
+        ops.iter().any(|e| matches!(e, Enc::Dispatch { x: 3, y: 5, z: 7 })),
+        "the indirect group counts lower into a Dispatch{{3,5,7}}: {ops:?}"
+    );
+
+    // A misaligned offset is GL_INVALID_VALUE; an out-of-range read (no/short buffer) is INVALID_OPERATION.
+    compute::dispatch_compute_indirect(&mut c, &mut sink, 3).unwrap();
+    assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
+    compute::dispatch_compute_indirect(&mut c, &mut sink, 1024).unwrap();
+    assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
+}

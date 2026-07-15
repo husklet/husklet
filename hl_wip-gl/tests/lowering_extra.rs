@@ -226,3 +226,181 @@ fn a_draw_with_an_unlinked_program_presents_nothing() {
     // The frame state is still reset for the next frame.
     assert!(c.draws.is_empty());
 }
+
+// ---------------------------------------------------------------------------------------------------
+// stencil test → the pipeline DepthState front/back faces + SetStencilReference + a Depth24PlusStencil8
+// pass whose stencil plane clears to glClearStencil's value
+// ---------------------------------------------------------------------------------------------------
+
+fn begin_pass_depth_clear(ops: &[Enc]) -> (f32, u32) {
+    ops.iter()
+        .find_map(|e| match e {
+            Enc::BeginRenderPass { depth, .. } => {
+                let d = depth.as_ref().expect("a depth attachment");
+                Some((d.clear_depth, d.clear_stencil))
+            }
+            _ => None,
+        })
+        .expect("a BeginRenderPass")
+}
+
+#[test]
+fn stencil_test_lowers_to_pipeline_stencil_faces_and_reference_and_clear() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::clear_stencil(&mut c, 0x7);
+    record::clear_depth(&mut c, 0.25);
+    record::enable(&mut c, GL_STENCIL_TEST);
+    // Compare EQUAL, ref 0x12, masks; on pass REPLACE, on stencil-fail KEEP, on depth-fail INCR.
+    record::stencil_func(&mut c, GL_EQUAL, 0x12, 0xf0);
+    record::stencil_op(&mut c, GL_KEEP, GL_INCR, GL_REPLACE);
+    record::stencil_mask(&mut c, 0x0f);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+    let depth = pipeline_desc(&sink.batches[0]).depth.as_ref().expect("a stencil-tested draw carries a DepthState");
+    // Wire codes: compare::EQUAL = 2; stencil_op KEEP=0, INCREMENT_CLAMP=3, REPLACE=2.
+    assert_eq!(depth.stencil_front.compare, 2, "GL_EQUAL -> compare::EQUAL (2)");
+    assert_eq!(depth.stencil_front.fail_op, 0, "GL_KEEP -> stencil_op::KEEP (0)");
+    assert_eq!(depth.stencil_front.depth_fail_op, 3, "GL_INCR -> INCREMENT_CLAMP (3)");
+    assert_eq!(depth.stencil_front.pass_op, 2, "GL_REPLACE -> stencil_op::REPLACE (2)");
+    assert_eq!(depth.stencil_back, depth.stencil_front, "glStencilOp/Func set BOTH faces identically");
+    assert_eq!(depth.stencil_read_mask, 0xf0, "glStencilFunc mask is the read mask");
+    assert_eq!(depth.stencil_write_mask, 0x0f, "glStencilMask is the write mask");
+
+    let ops = submit_ops(&sink.batches[0]);
+    assert!(
+        ops.iter().any(|e| matches!(e, Enc::SetStencilReference { reference: 0x12 })),
+        "the stencil reference is emitted dynamically: {ops:?}"
+    );
+    let (clear_depth, clear_stencil) = begin_pass_depth_clear(ops);
+    assert_eq!(clear_stencil, 0x7, "glClearStencil sets the pass stencil clear value");
+    assert_eq!(clear_depth, 0.25, "glClearDepthf sets the pass depth clear value");
+}
+
+#[test]
+fn stencil_op_separate_lowers_distinct_front_and_back_faces() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::enable(&mut c, GL_STENCIL_TEST);
+    record::stencil_func_separate(&mut c, GL_FRONT, GL_EQUAL, 1, 0xff);
+    record::stencil_func_separate(&mut c, GL_BACK, GL_ALWAYS, 1, 0xff);
+    record::stencil_op_separate(&mut c, GL_FRONT, GL_KEEP, GL_KEEP, GL_REPLACE);
+    record::stencil_op_separate(&mut c, GL_BACK, GL_KEEP, GL_KEEP, GL_INCR);
+    record::stencil_mask_separate(&mut c, GL_FRONT_AND_BACK, 0x3c);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+    let depth = pipeline_desc(&sink.batches[0]).depth.as_ref().expect("DepthState");
+    // Front compares EQUAL(2) + REPLACE(2) pass op; back compares ALWAYS(7) + INCREMENT_CLAMP(3) pass op.
+    assert_eq!(depth.stencil_front.compare, 2, "front face GL_EQUAL");
+    assert_eq!(depth.stencil_front.pass_op, 2, "front face pass op REPLACE");
+    assert_eq!(depth.stencil_back.compare, 7, "back face GL_ALWAYS");
+    assert_eq!(depth.stencil_back.pass_op, 3, "back face pass op INCR");
+    assert_ne!(depth.stencil_front, depth.stencil_back, "separate faces lower distinctly");
+    assert_eq!(depth.stencil_write_mask, 0x3c, "glStencilMaskSeparate sets the write mask");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// glBlendEquation (non-separate) sets the SAME op for color + alpha
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn blend_equation_lowers_same_op_for_color_and_alpha() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    record::enable(&mut c, GL_BLEND);
+    record::blend_func(&mut c, GL_ONE, GL_ONE);
+    record::blend_equation(&mut c, GL_FUNC_REVERSE_SUBTRACT);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
+
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+    let blend = pipeline_desc(&sink.batches[0]).color_targets[0].blend.clone().expect("blend state");
+    // op wire: FUNC_REVERSE_SUBTRACT -> 2 (frame::blend_op_wire); glBlendEquation sets BOTH ops.
+    assert_eq!(blend.op_color, 2, "color equation = FUNC_REVERSE_SUBTRACT");
+    assert_eq!(blend.op_alpha, 2, "alpha equation = FUNC_REVERSE_SUBTRACT (same, non-separate)");
+}
+
+// ---------------------------------------------------------------------------------------------------
+// indirect draws: the args are read from the bound GL_DRAW_INDIRECT_BUFFER and lowered
+// ---------------------------------------------------------------------------------------------------
+
+fn set_indirect_buffer(c: &mut GlContext, words: &[u32]) {
+    let ind = record::gen_buffer(c);
+    record::bind_buffer(c, GL_DRAW_INDIRECT_BUFFER, ind);
+    let mut bytes = Vec::new();
+    for w in words {
+        bytes.extend_from_slice(&w.to_le_bytes());
+    }
+    record::buffer_data(c, GL_DRAW_INDIRECT_BUFFER, &bytes, 0x88E4);
+}
+
+#[test]
+fn draw_arrays_indirect_reads_count_and_instances_and_lowers_a_draw() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    // {count=3, instanceCount=4, first=0, baseInstance=0}
+    set_indirect_buffer(&mut c, &[3, 4, 0, 0]);
+    record::draw_arrays_indirect(&mut c, GL_TRIANGLES, 0);
+
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+    let ops = submit_ops(&sink.batches[0]);
+    let draw = ops.iter().find(|e| matches!(e, Enc::Draw { .. })).expect("a Draw");
+    match draw {
+        Enc::Draw { vertex_count, instance_count, .. } => {
+            assert_eq!(*vertex_count, 3, "count read from the indirect buffer");
+            assert_eq!(*instance_count, 4, "instanceCount read from the indirect buffer");
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn draw_elements_indirect_reads_indexed_args_and_lowers_draw_indexed() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    let ebo = record::gen_buffer(&mut c);
+    record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, ebo);
+    record::buffer_data(&mut c, GL_ELEMENT_ARRAY_BUFFER, &[0u8; 48], 0x88E4);
+    // {count=6, instanceCount=2, firstIndex=0, baseVertex=5, baseInstance=0}
+    set_indirect_buffer(&mut c, &[6, 2, 0, 5, 0]);
+    record::draw_elements_indirect(&mut c, GL_TRIANGLES, GL_UNSIGNED_INT, 0);
+
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+    let ops = submit_ops(&sink.batches[0]);
+    match ops.iter().find(|e| matches!(e, Enc::DrawIndexed { .. })).expect("DrawIndexed") {
+        Enc::DrawIndexed { index_count, instance_count, base_vertex, .. } => {
+            assert_eq!(*index_count, 6);
+            assert_eq!(*instance_count, 2);
+            assert_eq!(*base_vertex, 5, "baseVertex read from the indirect buffer");
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn draw_elements_instanced_base_vertex_lowers_instances_and_base_offset() {
+    let mut c = ctx();
+    let mut sink = RecordingSink::with_full_caps();
+    setup_geometry(&mut c);
+    let ebo = record::gen_buffer(&mut c);
+    record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, ebo);
+    record::buffer_data(&mut c, GL_ELEMENT_ARRAY_BUFFER, &[0u8; 24], 0x88E4);
+    record::draw_elements_instanced_base_vertex(&mut c, GL_TRIANGLES, 3, GL_UNSIGNED_INT, 0, 8, 2);
+
+    swap::swap_buffers(&mut c, &mut sink).unwrap();
+    let ops = submit_ops(&sink.batches[0]);
+    match ops.iter().find(|e| matches!(e, Enc::DrawIndexed { .. })).expect("DrawIndexed") {
+        Enc::DrawIndexed { index_count, instance_count, base_vertex, .. } => {
+            assert_eq!(*index_count, 3);
+            assert_eq!(*instance_count, 8, "instance count is lowered");
+            assert_eq!(*base_vertex, 2, "base vertex is lowered");
+        }
+        _ => unreachable!(),
+    }
+}
