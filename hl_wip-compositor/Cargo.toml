@@ -123,6 +123,64 @@ required-features = ["smithay-adapter"]
 # The macOS present smoke: build the Cocoa/Metal presenter, present one known-color frame, and read it
 # back (offscreen MTLTexture readback — GUI-session-free) to verify the pixels round-tripped on a real
 # Metal device. A second (ignored-by-default) test opens a real NSWindow + CAMetalLayer.
+# Exact-pixel COMPOSITOR demos: each drives a real in-process wayland-client, captures composited frames
+# through the PngPresenter, writes viewable PNGs to /tmp/hl-demo, and asserts EXACT pixel content +
+# placement (popup positioner rects, popup dismiss, subsurface offset/z-order, input->render fluency,
+# animation pacing). Own binaries — each mutates process-global `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "demo_popup_positioner"
+path = "tests/demo_popup_positioner.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_popup_dismiss"
+path = "tests/demo_popup_dismiss.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_subsurface_zorder"
+path = "tests/demo_subsurface_zorder.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_input_rerender"
+path = "tests/demo_input_rerender.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_animation"
+path = "tests/demo_animation.rs"
+required-features = ["smithay-adapter"]
+
+# Batch-2 exact-event/exact-pixel COMPOSITOR demos: multi-window keyboard focus, partial-damage tracking,
+# a real cross-client clipboard roundtrip, keyboard modifier state, and pointer axis/button framing. Each
+# drives real in-process wayland-client(s) against the live adapter and asserts EXACT event data / bytes /
+# pixels. Own binaries — each mutates process-global `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "demo_multi_window_keyboard_focus"
+path = "tests/demo_multi_window_keyboard_focus.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_damage_partial_update"
+path = "tests/demo_damage_partial_update.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_clipboard_selection_roundtrip"
+path = "tests/demo_clipboard_selection_roundtrip.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_keyboard_modifiers"
+path = "tests/demo_keyboard_modifiers.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_pointer_axis_and_buttons"
+path = "tests/demo_pointer_axis_and_buttons.rs"
+required-features = ["smithay-adapter"]
+
 [[test]]
 name = "macos_present_smoke"
 path = "tests/macos_present_smoke.rs"

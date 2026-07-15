@@ -608,6 +608,12 @@ pub enum InputCommand {
     Key { keycode: u32, pressed: bool },
     /// Give keyboard focus to the topmost toplevel (emits `wl_keyboard.leave`/`enter` + keymap).
     FocusTopmostKeyboard,
+    /// Give keyboard focus to the toplevel at index `n` in ascending surface-id order (0 = the
+    /// earliest-mapped toplevel). Lets a host/test target a SPECIFIC window in a multi-window stack —
+    /// `FocusTopmostKeyboard` can only reach the highest id. Out-of-range `n` clears focus (no such
+    /// window). The neutral scene models no global stacking, so ascending id (== map order for
+    /// sequentially-mapped windows) is the stable, inspectable ordering a driver can reason about.
+    FocusToplevelIndex(usize),
     /// Clear keyboard focus (emits `wl_keyboard.leave` to the previously focused surface).
     ClearKeyboardFocus,
 }
@@ -624,6 +630,10 @@ impl HlState {
                 let target = self.topmost_toplevel();
                 self.set_keyboard_focus(target);
             }
+            InputCommand::FocusToplevelIndex(n) => {
+                let target = self.toplevel_at(n);
+                self.set_keyboard_focus(target);
+            }
             InputCommand::ClearKeyboardFocus => self.set_keyboard_focus(None),
         }
     }
@@ -633,6 +643,16 @@ impl HlState {
     /// neutral scene does not model.
     pub fn topmost_toplevel(&self) -> Option<SurfaceId> {
         self.engine.scene.toplevels().max()
+    }
+
+    /// The toplevel at index `n` in ascending surface-id order (0 = earliest-mapped). `None` if `n` is
+    /// out of range. Backs [`InputCommand::FocusToplevelIndex`] — a stable, inspectable way for a
+    /// host/test to target a specific window in a multi-window stack (`toplevels()` is unordered, so it
+    /// is sorted here).
+    pub fn toplevel_at(&self, n: usize) -> Option<SurfaceId> {
+        let mut tls: Vec<SurfaceId> = self.engine.scene.toplevels().collect();
+        tls.sort();
+        tls.get(n).copied()
     }
 
     /// The current-frame timestamp (ms) events are stamped with — the same host-monotonic clock the
@@ -835,10 +855,14 @@ impl SeatHandler for HlState {
 
 /// Selection (clipboard / primary) plumbing for `wl_data_device`. Headless we carry no per-selection
 /// user data (`()`), and the default `new_selection` / `send_selection` (no-op / not-answered) are
-/// sufficient: the neutral core does no cross-client data transfer, so a `set_selection` succeeds at the
-/// object level (no protocol error) and clipboard focus tracking (via [`set_data_device_focus`], driven
-/// from keyboard focus) is what a toolkit checks at startup. Live paste across clients is out of scope
-/// for the headless adapter.
+/// sufficient: the compositor never provides a selection of its OWN (that is what `send_selection`
+/// would answer). CLIENT-to-client transfer is fully live — when the offered source is another client's
+/// `wl_data_source`, Smithay forwards the receiving client's `wl_data_offer.receive` fd straight to the
+/// source client as `wl_data_source.send`, and the source writes the bytes over that pipe. Combined with
+/// clipboard focus tracking (via [`set_data_device_focus`], driven from keyboard focus in
+/// [`Self::set_keyboard_focus`]), this makes a real cross-client copy/paste round-trip work headless —
+/// see the `clipboard_selection_roundtrip` demo, which asserts the exact bytes A "copies" are what B
+/// "pastes".
 impl SelectionHandler for HlState {
     type SelectionUserData = ();
 }
