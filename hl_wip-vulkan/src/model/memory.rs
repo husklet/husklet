@@ -102,6 +102,7 @@ pub mod vk_format {
     pub const R16G16B16A16_SFLOAT: u32 = 97;
     pub const R32G32B32A32_SFLOAT: u32 = 109;
     pub const R32_SFLOAT: u32 = 100;
+    pub const D16_UNORM: u32 = 124;
     pub const D32_SFLOAT: u32 = 126;
     pub const D24_UNORM_S8_UINT: u32 = 129;
 }
@@ -176,6 +177,10 @@ pub fn tex_format_from_vk(f: u32) -> TextureFormat {
         vk_format::R16G16B16A16_SFLOAT => T::Rgba16Float,
         vk_format::R32G32B32A32_SFLOAT => T::Rgba32Float,
         vk_format::R32_SFLOAT => T::R32Float,
+        // The hl model carries no 16-bit depth target; fold D16 onto the 32-bit float depth format so a
+        // classic pass declaring VK_FORMAT_D16_UNORM (vkcube) resolves to a real depth aspect — both the
+        // depth image and the pipeline's DepthState land on the same format, staying executor-valid.
+        vk_format::D16_UNORM => T::Depth32Float,
         vk_format::D32_SFLOAT => T::Depth32Float,
         vk_format::D24_UNORM_S8_UINT => T::Depth24PlusStencil8,
         _ => T::Rgba8Unorm,
