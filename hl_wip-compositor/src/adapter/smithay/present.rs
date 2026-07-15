@@ -136,24 +136,34 @@ impl Presenter for PngPresenter {
         // The presented logical size — the destination a `wp_viewport` scales to, or `tex/buffer_scale`,
         // as resolved by the scene into `image.width`/`image.height`.
         let (logical_width, logical_height) = (image.width.max(1), image.height.max(1));
-        // Rasterize the pixels a real backend would present:
-        //  * a `wp_viewport` crop/scale samples the source region into the logical size;
-        //  * else a `wl_surface.set_buffer_transform` rotates/flips the buffer into surface space
-        //    (dimensions swapped for 90°/270°, which `logical_width`/`height` already reflect);
-        //  * else the raw client buffer verbatim.
-        // Composing a viewport crop WITH a buffer transform is not yet modeled — the viewport path wins and
-        // ignores the transform (no demo drives both at once; documented on `PresentableImage::transform`).
-        let (width, height, rgba) = match image.present_crop {
-            Some(src) => (
-                logical_width,
-                logical_height,
-                resample_nearest(buf, src, logical_width, logical_height),
-            ),
-            None if image.transform != BufferTransform::Normal => {
+        // Rasterize the pixels a real backend would present, following the Wayland buffer→surface chain:
+        //  1. `wl_surface.set_buffer_transform` rotates/flips the buffer into SURFACE space (dimensions
+        //     swapped for 90°/270°);
+        //  2. `wp_viewport` src crop (stated in surface coordinates) + dst scale sample that surface-space
+        //     image into the destination logical size.
+        // The two COMPOSE: a rotated+cropped buffer un-rotates first, then the crop applies in surface
+        // space. Each step alone is the degenerate case of the general path.
+        let has_transform = image.transform != BufferTransform::Normal;
+        let (width, height, rgba) = match (image.present_crop, has_transform) {
+            // Transform + viewport composed: un-rotate the buffer into surface space, then sample the
+            // surface-space crop (`present_crop` is already in surface-space pixels) into the logical size.
+            (Some(src), true) => {
+                let (tw, th) = image.transform.surface_size(buf.width, buf.height);
+                let surface_buf =
+                    StoredBuffer { width: tw, height: th, rgba: transform_buffer(buf, image.transform) };
+                (logical_width, logical_height, resample_nearest(&surface_buf, src, logical_width, logical_height))
+            }
+            // Viewport only (no transform): sample the source region directly from the buffer.
+            (Some(src), false) => {
+                (logical_width, logical_height, resample_nearest(buf, src, logical_width, logical_height))
+            }
+            // Transform only: rotate/flip the whole buffer into surface space.
+            (None, true) => {
                 let (tw, th) = image.transform.surface_size(buf.width, buf.height);
                 (tw, th, transform_buffer(buf, image.transform))
             }
-            None => (buf.width, buf.height, buf.rgba.clone()),
+            // Neither: the raw client buffer verbatim.
+            (None, false) => (buf.width, buf.height, buf.rgba.clone()),
         };
         let frame = CapturedFrame {
             output,

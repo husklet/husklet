@@ -208,8 +208,10 @@ impl HlState {
     /// Stand up the protocol globals and the neutral engine, seeded with one output.
     pub fn new(dh: &DisplayHandle, presenter: PngPresenter) -> HlState {
         let compositor = CompositorState::new::<HlState>(dh);
-        // Smithay always advertises Argb8888 + Xrgb8888; pass no extra formats.
-        let shm = ShmState::new::<HlState>(dh, Vec::new());
+        // Smithay always advertises Argb8888 + Xrgb8888; additionally advertise the byte-swapped
+        // Abgr8888 / Xbgr8888 (R and B channels swapped), which `read_shm_rgba` unpacks. Toolkits that
+        // prefer BGR-order buffers (some GL/EGL paths) can then present without a client-side repack.
+        let shm = ShmState::new::<HlState>(dh, vec![wl_shm::Format::Abgr8888, wl_shm::Format::Xbgr8888]);
         let xdg_shell = XdgShellState::new::<HlState>(dh);
         // Advertise `zxdg_decoration_manager_v1` so CSD-vs-SSD negotiation resolves instead of hanging.
         let xdg_decoration = XdgDecorationState::new::<HlState>(dh);
@@ -1367,8 +1369,14 @@ fn buffer_transform_to_wl(t: BufferTransform) -> Transform {
 
 /// Read a `wl_shm` buffer's pixels into tight top-left RGBA8888 plus its neutral [`Format`].
 ///
-/// `wl_shm` Argb/Xrgb8888 are 32-bit little-endian, so bytes in memory are `[B, G, R, A]`; this unpacks
-/// them to `[R, G, B, A]`. A bounds check refuses a malformed geometry that would read past the mapping.
+/// The four supported 32-bit little-endian formats differ only in channel order and whether the 4th
+/// byte is alpha or ignored (opaque):
+///   * `Argb8888` → memory `[B, G, R, A]`, alpha honoured.
+///   * `Xrgb8888` → memory `[B, G, R, X]`, opaque (alpha forced to 255).
+///   * `Abgr8888` → memory `[R, G, B, A]`, alpha honoured (R/B swapped vs ARGB).
+///   * `Xbgr8888` → memory `[R, G, B, X]`, opaque.
+/// This unpacks any of them to tight `[R, G, B, A]`. A bounds check refuses a malformed geometry that
+/// would read past the mapping. Any other advertised/unknown format is treated as `Argb8888`.
 fn read_shm_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
     let result = with_buffer_contents(buffer, |ptr, len, data| {
         let (w, h, stride, offset) = (data.width, data.height, data.stride, data.offset);
@@ -1380,19 +1388,26 @@ fn read_shm_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
         if last_row.checked_add((w * 4) as usize).map(|m| m > len).unwrap_or(true) {
             return None;
         }
-        let (format, has_alpha) = match data.format {
-            wl_shm::Format::Xrgb8888 => (Format::Xrgb8888, false),
-            _ => (Format::Argb8888, true),
+        // `format` is the neutral opaque/alpha distinction (drives blend); `swap_rb` selects channel
+        // order; `has_alpha` whether the 4th byte is honoured or forced opaque.
+        let (format, swap_rb, has_alpha) = match data.format {
+            wl_shm::Format::Xrgb8888 => (Format::Xrgb8888, false, false),
+            wl_shm::Format::Abgr8888 => (Format::Argb8888, true, true),
+            wl_shm::Format::Xbgr8888 => (Format::Xrgb8888, true, false),
+            // Argb8888 and any other advertised/unknown format fall through to ARGB semantics.
+            _ => (Format::Argb8888, false, true),
         };
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         for y in 0..h {
             let row = offset as isize + y as isize * stride as isize;
             for x in 0..w {
                 let src = unsafe { ptr.offset(row + (x * 4) as isize) };
-                let b = unsafe { *src };
+                let c0 = unsafe { *src };
                 let g = unsafe { *src.offset(1) };
-                let r = unsafe { *src.offset(2) };
+                let c2 = unsafe { *src.offset(2) };
                 let a = if has_alpha { unsafe { *src.offset(3) } } else { 255 };
+                // ARGB memory is `[B, G, R, A]` (c0=B, c2=R); *BGR memory is `[R, G, B, A]` (c0=R, c2=B).
+                let (r, b) = if swap_rb { (c0, c2) } else { (c2, c0) };
                 let di = ((y * w + x) * 4) as usize;
                 rgba[di] = r;
                 rgba[di + 1] = g;

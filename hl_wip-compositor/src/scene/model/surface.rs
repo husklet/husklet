@@ -181,8 +181,8 @@ pub struct PresentableImage {
     pub present_crop: Option<(f64, f64, f64, f64)>,
     /// `wl_surface.set_buffer_transform`: the rotation/flip the presenter applies to the backing buffer to
     /// present it upright (`width`×`height` already reflect the swapped dimensions for a 90°/270° value).
-    /// `Normal` ⇒ present verbatim. Applied on the non-viewport path (a plain rotated/flipped buffer);
-    /// composing a transform WITH a `present_crop` is not yet modeled (see the presenter).
+    /// `Normal` ⇒ present verbatim. Composes with `present_crop`: the presenter first un-rotates the buffer
+    /// into surface space, then applies the viewport crop+scale in that space (see the presenter).
     pub transform: BufferTransform,
 }
 

@@ -89,8 +89,18 @@ fn present_item(scene: &Scene, sid: SurfaceId, x: i32, y: i32) -> Option<Present
     let present_crop = if surface.viewport.src.is_some() || surface.viewport.dst.is_some() {
         let s = buffer.buffer_scale.max(1) as f64;
         Some(match surface.viewport.src {
+            // A `wp_viewport` src crop is stated in surface-local (post buffer-transform) coordinates;
+            // scaling by `buffer_scale` puts it in surface-space PIXELS, the space the presenter samples
+            // the (already un-rotated) buffer in.
             Some((sx, sy, sw, sh)) => (sx * s, sy * s, sw * s, sh * s),
-            None => (0.0, 0.0, buffer.tex_w as f64, buffer.tex_h as f64),
+            // No src crop: sample the whole SURFACE-space image. A 90°/270° buffer transform swaps the
+            // buffer's width/height into surface space, so the default rect must use the swapped size (a
+            // no-op for Normal / 180°) — else a dst-only viewport over a rotated buffer would sample the
+            // wrong extent.
+            None => {
+                let (fw, fh) = surface.transform.surface_size(buffer.tex_w, buffer.tex_h);
+                (0.0, 0.0, fw as f64, fh as f64)
+            }
         })
     } else {
         None

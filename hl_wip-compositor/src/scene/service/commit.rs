@@ -85,11 +85,21 @@ pub fn commit_surface(scene: &mut Scene, sid: SurfaceId, commit: Commit) -> bool
         return false;
     };
 
-    // Non-content state first (never on its own a reason to present).
+    // Track whether a double-buffered GEOMETRY input (buffer transform / viewport) actually changed value
+    // this commit. Against an already-committed buffer that alone re-presents the SAME pixels under a new
+    // orientation/crop — even with no fresh attach and no damage — so a transform-only or viewport-only
+    // commit must still mark the surface dirty (else the rotation/crop would not appear until the next
+    // buffer). A no-op re-set (same value) is not a change and must not force a spurious present.
+    let mut geometry_changed = false;
+
+    // Non-content state first. A geometry input that changed value re-presents (handled below); the
+    // opaque/input regions and title never on their own are a reason to present.
     if let Some(vp) = commit.viewport {
+        geometry_changed |= surface.viewport != vp;
         surface.viewport = vp;
     }
     if let Some(transform) = commit.buffer_transform {
+        geometry_changed |= surface.transform != transform;
         surface.transform = transform;
     }
     if let Some(region) = commit.opaque_region {
@@ -135,6 +145,12 @@ pub fn commit_surface(scene: &mut Scene, sid: SurfaceId, commit: Commit) -> bool
             }
         }
     };
+
+    // A geometry-only change (new transform/viewport) re-presents the retained buffer under the new
+    // orientation/crop, so it counts as a change too — but only when a buffer is actually committed
+    // (nothing to re-present otherwise). `surface` was reborrowed inside the match, so re-fetch it.
+    let has_buffer = scene.get(sid).is_some_and(|s| s.buffer.is_some());
+    let changed = changed || (geometry_changed && has_buffer);
 
     if changed {
         scene.mark_dirty(sid);

@@ -145,6 +145,42 @@ where
     pool.create_buffer(0, w, h, stride, wl_shm::Format::Argb8888, qh, ())
 }
 
+/// Like [`make_buffer`] but tags the `wl_buffer` with an explicit `wl_shm` `format`, and takes the pixel
+/// bytes in the buffer's OWN memory order (whatever channel layout `format` implies — the caller lays out
+/// the bytes to match). Used by the shm-format-coverage demo to attach the same logical color under
+/// argb/xrgb/abgr/xbgr and assert the composited RGBA is identical.
+pub fn make_buffer_fmt<T>(
+    shm: &WlShm,
+    qh: &QueueHandle<T>,
+    dir: &Path,
+    tag: &str,
+    w: i32,
+    h: i32,
+    format: wl_shm::Format,
+    bytes: &[u8],
+) -> WlBuffer
+where
+    T: Dispatch<WlShmPool, ()> + Dispatch<WlBuffer, ()> + 'static,
+{
+    let stride = w * 4;
+    let size = (stride * h) as usize;
+    assert_eq!(bytes.len(), size, "pixel buffer size mismatch for {tag}");
+    let path = dir.join(format!("client-{tag}.shm"));
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)
+        .expect("shm file");
+    file.write_all(bytes).expect("write shm pixels");
+    file.flush().unwrap();
+    let _ = std::fs::remove_file(&path); // unlink; the fd + mapping stay valid
+    let pool: WlShmPool = shm.create_pool(file.as_fd(), size as i32, qh, ());
+    std::mem::forget(file); // the pool keeps the mapping alive via the fd
+    pool.create_buffer(0, w, h, stride, format, qh, ())
+}
+
 /// A `w`x`h` tight BGRA canvas filled with a solid RGBA color (little-endian ARGB memory order).
 pub fn solid(w: i32, h: i32, rgba: [u8; 4]) -> Vec<u8> {
     let [r, g, b, a] = rgba;

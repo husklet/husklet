@@ -261,6 +261,21 @@ name = "demo_output_transform_geometry"
 path = "tests/demo_output_transform_geometry.rs"
 required-features = ["smithay-adapter"]
 
+[[test]]
+name = "demo_shm_format_coverage"
+path = "tests/demo_shm_format_coverage.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_transform_viewport_compose"
+path = "tests/demo_transform_viewport_compose.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_transform_only_commit"
+path = "tests/demo_transform_only_commit.rs"
+required-features = ["smithay-adapter"]
+
 # Batch-5 ROBUSTNESS / hostile-client demos: prove the adapter SURVIVES abuse — never panics, rejects or
 # clamps bad input, and keeps serving OTHER clients. Each drives a hostile in-process wayland-client
 # (oversized/zero buffers, malformed protocol ops, a surface-create/destroy storm, a commit flood, bogus
