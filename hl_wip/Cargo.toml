@@ -167,6 +167,18 @@ name = "vk_blend"
 path = "tests/vk_blend.rs"
 
 [[test]]
+name = "feature_combo_frame"
+path = "tests/feature_combo_frame.rs"
+
+[[test]]
+name = "multi_driver_coexist"
+path = "tests/multi_driver_coexist.rs"
+
+[[test]]
+name = "driver_interleave_ordering"
+path = "tests/driver_interleave_ordering.rs"
+
+[[test]]
 name = "weston_simple_egl_e2e"
 path = "tests/weston_simple_egl_e2e.rs"
 
