@@ -109,3 +109,7 @@ path = "tests/vkcube_e2e.rs"
 [[test]]
 name = "gtk4_e2e"
 path = "tests/gtk4_e2e.rs"
+
+[[test]]
+name = "zed_e2e"
+path = "tests/zed_e2e.rs"
