@@ -45,14 +45,20 @@ pub fn buffer_data(ctx: &mut GlContext, target: u32, data: &[u8], usage: u32) {
     }
 }
 
-/// `glBufferSubData(target, offset, data)`.
+/// `glBufferSubData(target, offset, data)`. A range that overflows or reaches beyond the bound buffer's
+/// current size is `GL_INVALID_VALUE` (real GL) — this also bounds the write so a hostile `offset` can
+/// never grow the buffer's `Vec` to an unbounded (or overflowing) size and panic/OOM.
 pub fn buffer_sub_data(ctx: &mut GlContext, target: u32, offset: usize, data: &[u8]) {
     let name = bound_buffer(ctx, target);
     if std::env::var("HL_UBO_DUMP").is_ok() && (name >= 1 && name <= 9) {
         eprintln!("[UBO_DUMP] glBufferSubData target={target:#x} name={name} off={offset} len={}", data.len());
     }
     if name != 0 {
-        ctx.buffers.set_sub_data(name, offset, data);
+        let size = ctx.buffers.get(name).map(|b| b.data.len()).unwrap_or(0);
+        match offset.checked_add(data.len()) {
+            Some(end) if end <= size => ctx.buffers.set_sub_data(name, offset, data),
+            _ => ctx.set_gl_error(GL_INVALID_VALUE),
+        }
     }
 }
 
@@ -222,6 +228,13 @@ pub fn tex_image_2d(ctx: &mut GlContext, w: i32, h: i32, pixels: &[u8]) {
 /// FBO color attachments (which are rendered into, so the format becomes the render-target + surface
 /// format) and for non-RGBA8 sampled uploads (e.g. a `GL_BGRA_EXT` image → `Bgra8Unorm`).
 pub fn tex_image_2d_format(ctx: &mut GlContext, w: i32, h: i32, pixels: &[u8], format: TextureFormat) {
+    // A negative or over-max extent is GL_INVALID_VALUE (real GL rejects beyond GL_MAX_TEXTURE_SIZE). This
+    // also bounds the zeroed-storage allocation `image_2d` does for an empty (storage-only) upload, so a
+    // hostile `glTexImage2D(40000, 40000, NULL)` can never trigger a multi-GiB host allocation.
+    if w < 0 || h < 0 || w > crate::service::query::MAX_TEXTURE_SIZE || h > crate::service::query::MAX_TEXTURE_SIZE {
+        ctx.set_gl_error(GL_INVALID_VALUE);
+        return;
+    }
     let name = ctx.tex_unit[ctx.active_texture];
     if name != 0 {
         ctx.textures.image_2d(name, w, h, pixels, format);

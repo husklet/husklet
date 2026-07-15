@@ -56,13 +56,17 @@ impl Buffers {
         b.gen += 1;
     }
 
-    /// `glBufferSubData(target, offset, data)` — overwrite a sub-range, bumping its generation.
+    /// `glBufferSubData(target, offset, data)` — overwrite a sub-range, bumping its generation. Uses a
+    /// checked add so an adversarial `offset` near `usize::MAX` can never overflow (debug panic) — an
+    /// overflowing range is dropped. Callers (`record::buffer_sub_data`, `copy_buffer_sub_data`) validate
+    /// the range fits first, so the grow branch only ever covers an exact-fit write.
     pub fn set_sub_data(&mut self, name: u32, offset: usize, data: &[u8]) {
         if let Some(b) = self.map.get_mut(&name) {
-            if offset + data.len() > b.data.len() {
-                b.data.resize(offset + data.len(), 0);
+            let Some(end) = offset.checked_add(data.len()) else { return };
+            if end > b.data.len() {
+                b.data.resize(end, 0);
             }
-            b.data[offset..offset + data.len()].copy_from_slice(data);
+            b.data[offset..end].copy_from_slice(data);
             b.gen += 1;
         }
     }

@@ -55,7 +55,18 @@ pub fn read_pixels(
     if w <= 0 || h <= 0 {
         return Ok(Vec::new());
     }
-    let out_len = w as usize * h as usize * bpp;
+    // Bound the packed-region allocation: a hostile (or overflowing) `w*h*bpp` must never trigger an
+    // unbounded host allocation. The largest legitimate readback is the full render target (≤ 16384²), so a
+    // region whose packed size overflows `usize` or exceeds this generous cap is rejected as
+    // GL_INVALID_VALUE (never allocated, never an OOB read). Mirrors the CUDA/VK sweep's pre-alloc bounds.
+    const MAX_READBACK_BYTES: usize = 1 << 30; // 1 GiB
+    let out_len = match (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(bpp)) {
+        Some(n) if n <= MAX_READBACK_BYTES => n,
+        _ => {
+            ctx.set_gl_error(crate::model::glconst::GL_INVALID_VALUE);
+            return Ok(Vec::new());
+        }
+    };
 
     // Lower + render the recorded frame into its render-target texture. No draws → default-framebuffer
     // readback yields zeros (the model keeps no default-color plane), mirroring gl_shim.c.

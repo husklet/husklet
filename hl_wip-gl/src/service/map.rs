@@ -26,7 +26,23 @@ pub fn map_buffer_range(ctx: &mut GlContext, target: u32, offset: isize, length:
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return None;
     }
-    match ctx.buffers.map_range(name, offset as usize, length as usize) {
+    // An unknown (e.g. deleted) buffer name — the binding named a buffer with no object.
+    let Some(size) = ctx.buffers.get(name).map(|b| b.data.len()) else {
+        ctx.set_gl_error(GL_INVALID_OPERATION);
+        return None;
+    };
+    // The mapped range must lie within the buffer's current size (real GL: GL_INVALID_VALUE if
+    // `offset + length > GL_BUFFER_SIZE`). This bounds the mapping so a hostile `offset`/`length` can never
+    // grow the buffer's `Vec` to an unbounded (or overflowing) size and OOM/panic.
+    let (off, len) = (offset as usize, length as usize);
+    match off.checked_add(len) {
+        Some(end) if end <= size => {}
+        _ => {
+            ctx.set_gl_error(GL_INVALID_VALUE);
+            return None;
+        }
+    }
+    match ctx.buffers.map_range(name, off, len) {
         Some(off) => Some((name, off)),
         None => {
             ctx.set_gl_error(GL_INVALID_OPERATION);
