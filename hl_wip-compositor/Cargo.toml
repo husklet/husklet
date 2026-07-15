@@ -181,6 +181,37 @@ name = "demo_pointer_axis_and_buttons"
 path = "tests/demo_pointer_axis_and_buttons.rs"
 required-features = ["smithay-adapter"]
 
+# Batch-3 exact-event/exact-pixel COMPOSITOR demos, focused on perf + input fluency: input-order +
+# render-latency bound, present throughput (every committed frame presents exactly once), K-way subsurface
+# z-order paint order, overlapping-damage coalescing into one present, and the damage-skip pacing
+# optimization. Each drives real in-process wayland-client(s) against the live adapter and asserts EXACT
+# event data / bytes / pixels. Own binaries — each mutates process-global `$XDG_RUNTIME_DIR` /
+# `$WAYLAND_DISPLAY`.
+[[test]]
+name = "demo_input_latency_ordering"
+path = "tests/demo_input_latency_ordering.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_present_throughput"
+path = "tests/demo_present_throughput.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_many_surface_zorder"
+path = "tests/demo_many_surface_zorder.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_damage_coalescing"
+path = "tests/demo_damage_coalescing.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_frame_pacing_skip"
+path = "tests/demo_frame_pacing_skip.rs"
+required-features = ["smithay-adapter"]
+
 [[test]]
 name = "macos_present_smoke"
 path = "tests/macos_present_smoke.rs"
