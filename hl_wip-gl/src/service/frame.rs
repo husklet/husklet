@@ -447,8 +447,12 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
 
     // ---- sampler-bound textures ----
     struct TexBind {
-        /// The sampler's DECLARATION index (its `k` in the translator's `layout(binding=)` scheme). Keeps
-        /// the IR binding aligned to the emitted GLSL even when an earlier sampler had no bound texture.
+        /// The sampler's HOST binding index `k` (→ texture `1+2k`, sampler `2+2k`) — from
+        /// `prog.samp_bindings`, which equals the sampler's declaration index for the driver-translated ES2
+        /// path but is the host's cross-preprocessor-branch numbering for the forward-verbatim GskGpu/ANGLE
+        /// path (see [`crate::adapter::glsl::verbatim_sampler_bindings`]). Using `k` here keeps the IR
+        /// binding aligned to the layout the compiled shader actually declares even when the driver's own
+        /// declaration index differs (GskGpu's inactive `samplerExternalOES` decls shift the host's count).
         slot: usize,
         tex_ir: u32,
         samp_ir: u32,
@@ -458,6 +462,9 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     }
     let mut texbinds: Vec<TexBind> = Vec::new();
     for i in 0..prog.samp_names.len().min(4) {
+        // `i` indexes the driver's sampler reflection (the `glUniform1i` sampler→unit map); `slot` is the
+        // sampler's HOST binding index, which the verbatim path remaps away from `i`.
+        let slot = prog.samp_bindings.get(i).copied().unwrap_or(i as u32) as usize;
         let unit = if (0..8).contains(&prog.samp_units[i]) { prog.samp_units[i] as usize } else { i };
         let gl_tex = d.tex_units[unit];
         // Cross-pass FBO sampling: if this sampled GL texture is the color attachment an earlier render pass
@@ -480,7 +487,7 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
                     address_w: AddressMode::ClampToEdge,
                 },
             ));
-            texbinds.push(TexBind { slot: i, tex_ir: rt_ir, samp_ir, stage_ir: 0, w: t.w as u32, h: t.h as u32 });
+            texbinds.push(TexBind { slot, tex_ir: rt_ir, samp_ir, stage_ir: 0, w: t.w as u32, h: t.h as u32 });
             continue;
         }
         let t = match ctx.textures.get(gl_tex) {
@@ -526,7 +533,7 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
                 address_w: AddressMode::ClampToEdge,
             },
         ));
-        texbinds.push(TexBind { slot: i, tex_ir, samp_ir, stage_ir, w: t.w as u32, h: t.h as u32 });
+        texbinds.push(TexBind { slot, tex_ir, samp_ir, stage_ir, w: t.w as u32, h: t.h as u32 });
     }
     let has_u = prog.has_uniforms();
     let has_bg = has_u || !texbinds.is_empty();

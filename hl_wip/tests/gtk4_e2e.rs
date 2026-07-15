@@ -143,7 +143,15 @@ fn gtk4_composites_through_the_full_stack() {
         .env("GDK_DEBUG", "opengl") // GDK prints its GL/EGL context selection + errors (diagnosis)
         .env("GSK_DEBUG", "renderer") // GSK prints which renderer it realized (diagnosis)
         .env("GTK_A11Y", "none") // no at-spi bus in this sandbox; avoid an a11y stall
-        .env_remove("DISPLAY") // no X: force the wayland backend path
+        .env_remove("DISPLAY"); // no X: force the wayland backend path
+    // Propagate shim logging (HL_LOG / HL_LOG_LEVEL) into the child so a `HL_LOG=gl` run surfaces the GL
+    // driver's per-frame diagnostics from inside the real app process for this milestone's diagnosis.
+    for var in ["HL_LOG", "HL_LOG_LEVEL"] {
+        if let Ok(v) = std::env::var(var) {
+            cmd.env(var, v);
+        }
+    }
+    cmd
         .stdin(Stdio::null())
         .stdout(Stdio::from(out_file))
         .stderr(Stdio::from(err_file));
@@ -250,20 +258,31 @@ fn gtk4_composites_through_the_full_stack() {
         //   instance size and the slot steps per-instance. An ordinary draw (every offset already < stride) is
         //   byte-identical.
         //
-        //   REMAINING — the created pipeline now reaches `Device::create_bind_group`, which fails wgpu
-        //   validation: "Number of bindings in bind group descriptor (5) does not match the number of bindings
-        //   defined in the bind group layout (3)". This is a DRIVER-side bind-group gap (hl_wip-gl), one stage
-        //   downstream of the (now-unblocked) vertex layout: frame.rs emits an entry per reflected sampler on
-        //   the shared `binding = 0 (UBO) / 1+2k (tex) / 2+2k (sampler)` scheme (1 UBO + 2 tex/sampler pairs =
-        //   5 entries), but naga's auto-derived layout for the actual GskGpu program exposes only 3 bindings
-        //   (1 UBO + 1 tex/sampler pair) — GskGpu declares more sampler uniforms than the compiled `main`
-        //   actually samples, and naga prunes the unused one. Reconciling the emitted bind-group entries with
-        //   the shader's live bindings (bind only sampled textures, or match naga's pruned layout) is the next
-        //   effort, in hl_wip-gl.
+        //   FIXED — GskGpu bind-group binding alignment: the driver now binds each texture/sampler at the
+        //   HOST binding index the compiled shader declares. GskGpu declares each texture as EITHER a
+        //   `samplerExternalOES` OR a `sampler2D` triple in two preprocessor branches; the host executor's ES
+        //   route (`glsl_es::split_global_samplers`) numbers `layout(binding=)` with a running counter over
+        //   EVERY host-recognized sampler decl in text order — counting the inactive `samplerExternalOES`
+        //   branches too — so the active `sampler2D GSK_TEXTURE0` lands on binding k=1 (tex 3 / sampler 4), not
+        //   k=0. The driver's own reflection skipped the external decls + deduped, numbering GSK_TEXTURE0 as
+        //   k=0 (tex 1 / sampler 2); its bind group thus overlapped the shader's live bindings only on the
+        //   UBO, and the executor's used-binding filter cut it to 1 entry vs the layout's 3 ("bindings (1) does
+        //   not match (3)"). hl_wip-gl now recovers the host `k` per bound sampler
+        //   (adapter/glsl.rs `verbatim_sampler_bindings`, stored as `Program::samp_bindings`) and emits the
+        //   texture/sampler at `1+2k / 2+2k`, so the driver's entries match naga's auto layout. ES2 programs
+        //   (which emit their own `layout(binding=)`) keep the identity `k == declaration index`.
+        //
+        //   REMAINING — the frame now reaches host SHADER COMPILE, which fails naga validation on the GskGpu
+        //   VERTEX stage: `EntryPoint { stage: Vertex, name: "vmain", source: Argument(1, NotIOShareableType) }`.
+        //   A GskGpu vertex `in` (an `IN()`-macro instanced input — an integer/flat or otherwise non-IO type)
+        //   reaches naga as an entry-point argument whose type is not IO-shareable for a vertex input. This is
+        //   a HOST-side GLSL-ES lowering gap in hl_wip-gpu-wgpu (the vertex-input interface, e.g. a `flat`
+        //   integer attribute or a struct input), one stage downstream of the (now-fixed) bind group — the
+        //   next effort, in the wgpu executor's ES route, not the GL driver.
         eprintln!(
             "MILESTONE DIAGNOSED (GTK4 reaches real GL rendering + cheap frame lowering; its GskGpu shaders \
-             now COMPILE on the host, and the next gap has moved one stage downstream to the driver's vertex \
-             layout — suite stays green):\n\
+             compile + bind, and the next gap has moved one stage downstream to the host executor's vertex \
+             shader interface — suite stays green):\n\
              Stage evidence:\n\
              * host GPU executor submits (guest lowered GL IR over $HL_GPU_EXEC): {submit_count}\n\
                (>0 => the epoxy/GskGpu bring-up is LIVE; GTK lowers real GL to the host)\n\
@@ -272,7 +291,7 @@ fn gtk4_composites_through_the_full_stack() {
              * frame lowering: FIXED — cross-frame/draw resource caching (context.rs sampled_texture_ir / \
                 data_buffer_ir) took a GTK frame from ~4.3 GiB (per-draw atlas re-upload, over every cap) to \
                 ~30 MiB, well under the 64 MiB negotiated cap.\n\
-             * GskGpu shader compilation: FIXED — the `#version 320 es` GskGpu vertex+fragment programs now \
+             * GskGpu fragment shader compilation: FIXED — the `#version 320 es` GskGpu fragment programs now \
                 compile to WGSL (hl_wip-gpu-wgpu glsl_es.rs ES→desktop lowering: __VERSION__ seed + UBO \
                 binding, gl_VertexID-in-macro rewrite, IN/PASS location macros, switch→if/else; plus wgsl.rs \
                 naga-module passes: topological function reorder + zero-value bare returns).\n\
@@ -281,13 +300,21 @@ fn gtk4_composites_through_the_full_stack() {
                 the glVertexAttribPointer offset; hl_wip-gl/src/service/frame.rs now hoists that whole-stride \
                 base into the vertex-buffer bind offset (SetVertexBuffer offset), keeping each attribute offset \
                 within the array_stride (48) and the slot per-instance.\n\
+             * GskGpu bind-group binding alignment: FIXED — the driver binds each texture/sampler at the HOST \
+                binding index the compiled shader declares. GskGpu declares each texture as a samplerExternalOES \
+                OR a sampler2D triple in two #if branches; the host numbers layout(binding=) across ALL branches \
+                (counting the inactive external decls), so the active sampler2D GSK_TEXTURE0 is binding k=1 (tex \
+                3 / sampler 4), not k=0. The driver skipped the external decls + deduped (k=0), so its bind group \
+                overlapped the shader's live bindings only on the UBO and the executor's used-binding filter cut \
+                it to 1 entry vs the layout's 3 ('bindings (1) does not match (3)'). hl_wip-gl now recovers the \
+                host k per bound sampler (adapter/glsl.rs verbatim_sampler_bindings → Program::samp_bindings) and \
+                emits tex/sampler at 1+2k / 2+2k; ES2 programs keep the identity k == declaration index.\n\
              * compositor presented frames: 0\n\
-               (the created pipeline now reaches Device::create_bind_group, which NACKs with wgpu validation \
-                'Number of bindings in bind group descriptor (5) does not match the number of bindings defined \
-                in the bind group layout (3)' — a DRIVER-side bind-group gap in hl_wip-gl: frame.rs emits an \
-                entry per reflected sampler (1 UBO + 2 tex/sampler pairs = 5) but naga's auto-layout for the \
-                actual GskGpu program exposes only 3 bindings (it prunes sampler uniforms the compiled main \
-                never samples). Matching the emitted entries to the shader's live bindings is the next effort.)\n\
+               (the frame now reaches host SHADER COMPILE, which fails naga validation on the GskGpu VERTEX \
+                stage: EntryPoint {{ stage: Vertex, name: \"vmain\", source: Argument(1, NotIOShareableType) }} \
+                — a GskGpu vertex `in` (an IN()-macro instanced input) reaches naga as an entry-point argument \
+                whose type is not IO-shareable for a vertex input. This is a HOST-side GLSL-ES lowering gap in \
+                hl_wip-gpu-wgpu's vertex-input interface, one stage downstream of the now-fixed bind group.)\n\
              --- decisive app stderr lines ---\n{}\n",
             decisive_lines(&stderr),
         );

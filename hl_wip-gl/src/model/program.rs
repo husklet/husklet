@@ -55,6 +55,14 @@ pub struct Program {
     pub samp_names: Vec<String>,
     /// Sampler-uniform index → GL texture unit (set by `glUniform1i`).
     pub samp_units: [i32; 4],
+    /// Per-`samp_names` entry, the host bind-group binding INDEX `k` (→ texture `1+2k`, sampler `2+2k`) the
+    /// executor's compiled shader declares for that sampler. For the driver-translated ES2 path this is the
+    /// identity (`k == declaration index`, since the driver EMITS the `layout(binding=)` itself). For the
+    /// forward-VERBATIM GskGpu/ANGLE path the host numbers samplers across all preprocessor branches (incl.
+    /// the inactive `samplerExternalOES` decls), so `k` diverges from the declaration index and is recovered
+    /// by [`glsl::verbatim_sampler_bindings`]. Parallel to `samp_names`; consumed by the frame builder's
+    /// bind-group emission so the driver's texture/sampler bindings match the shader's live layout.
+    pub samp_bindings: Vec<u32>,
 }
 
 impl Program {
@@ -84,12 +92,20 @@ impl Program {
         // `spirv_split`-style combined→separate sampler split) compiles the REAL text. The sampler /
         // uniform reflection above still drives the bind-group layout, which stays on the shared
         // `binding = 1+2k / 2+2k` scheme the executor emits. Simple ES2 shaders take `translate_render`.
-        let (vs_glsl, fs_glsl) = if glsl::is_forward_verbatim(&vs_src) || glsl::is_forward_verbatim(&fs_src)
-        {
+        let verbatim = glsl::is_forward_verbatim(&vs_src) || glsl::is_forward_verbatim(&fs_src);
+        let (vs_glsl, fs_glsl) = if verbatim {
             hl_log::hl_debug!(hl_log::tag::GL, "link: GskGpu/ANGLE-shaped GLSL-ES → forward verbatim to host ES route");
             (vs_src.clone(), fs_src.clone())
         } else {
             glsl::translate_render(&vs_src, &fs_src)
+        };
+        // Bind-group binding index per sampler. The ES2 path EMITS its own `layout(binding=)` in declaration
+        // order, so `k == index`; the verbatim path is numbered by the HOST across all preprocessor branches
+        // (incl. inactive `samplerExternalOES` decls), so `k` is recovered from the forwarded fragment text.
+        self.samp_bindings = if verbatim {
+            glsl::verbatim_sampler_bindings(&self.samp_names, &fs_src)
+        } else {
+            (0..self.samp_names.len() as u32).collect()
         };
         self.vs_ir = Some(
             GlslDescriptor { stage: glsl_stage::VERTEX, entry: "vmain".into(), source: vs_glsl }
