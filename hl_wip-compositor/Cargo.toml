@@ -385,6 +385,62 @@ name = "demo_content_type"
 path = "tests/demo_content_type.rs"
 required-features = ["smithay-adapter"]
 
+# Batch-8 EVENT-PROPAGATION interaction loops — the closed inject→client-reacts→compositor-re-renders
+# chain, plus the previously-uncovered wire events (`wl_pointer.leave`, `wl_pointer.axis_value120`/
+# `axis_discrete`, `wl_keyboard.repeat_info`, `xdg_popup.repositioned`, focus-indicator re-render, nested
+# popup-chain dismissal, and clipboard/primary paste re-render). Each drives real in-process
+# wayland-client(s) against the live adapter and asserts EXACT event data AND the composited pixels the
+# client's reaction produced. Own binaries — each mutates process-global `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "demo_pointer_enter_leave"
+path = "tests/demo_pointer_enter_leave.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_pointer_drag_stream"
+path = "tests/demo_pointer_drag_stream.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_pointer_axis_discrete"
+path = "tests/demo_pointer_axis_discrete.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_key_drives_render"
+path = "tests/demo_key_drives_render.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_keyboard_repeat_info"
+path = "tests/demo_keyboard_repeat_info.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_focus_indicator_rerender"
+path = "tests/demo_focus_indicator_rerender.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_popup_nested_chain_dismiss"
+path = "tests/demo_popup_nested_chain_dismiss.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_popup_reposition"
+path = "tests/demo_popup_reposition.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_clipboard_paste_rerender"
+path = "tests/demo_clipboard_paste_rerender.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_primary_paste_rerender"
+path = "tests/demo_primary_paste_rerender.rs"
+required-features = ["smithay-adapter"]
+
 [[test]]
 name = "macos_present_smoke"
 path = "tests/macos_present_smoke.rs"

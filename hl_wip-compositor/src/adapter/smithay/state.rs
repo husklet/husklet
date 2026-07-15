@@ -829,10 +829,19 @@ impl HlState {
     /// content is answered `discarded` when it is torn down instead of falsely `presented`.
     fn settle_frame(&mut self, root: SurfaceId, frame: &FrameOutcome) {
         if frame.throttled {
+            hl_debug!(tag::PRESENT, "settle root={} throttled=1 (repaint armed)", root.0);
             self.arm_repaint(root);
             return;
         }
         let policy = frame.pacing.policy();
+        hl_debug!(
+            tag::PRESENT,
+            "settle root={} present_feedback={} complete_cb={} terminal={}",
+            root.0,
+            policy.present_feedback,
+            policy.complete_callbacks,
+            policy.terminal_cleanup
+        );
         if policy.complete_callbacks {
             self.pending_repaints.remove(&root);
             self.fire_tree_callbacks(root);
@@ -1024,6 +1033,12 @@ pub enum InputCommand {
     PointerButton { button: u32, pressed: bool },
     /// Scroll: `horizontal`/`vertical` are logical scroll amounts (wheel source).
     PointerAxis { horizontal: f64, vertical: f64 },
+    /// Scroll with DISCRETE steps — a real mouse WHEEL, which emits both a smooth value and a discrete
+    /// notch count. `horizontal`/`vertical` are the smooth logical amounts; `h120`/`v120` the
+    /// high-resolution discrete steps (120 units = one wheel detent, the `wl_pointer` v8 convention).
+    /// Delivered as `wl_pointer.axis` (smooth) + `axis_source(wheel)` + `axis_value120` (client v8+, or
+    /// the legacy `axis_discrete` on v5-7), all grouped in ONE `wl_pointer.frame`.
+    PointerAxisDiscrete { horizontal: f64, vertical: f64, h120: i32, v120: i32 },
     /// Press/release a key by EVDEV keycode (Linux `input-event-codes`, e.g. `30` = KEY_A) — the same
     /// value the client receives on `wl_keyboard.key`.
     Key { keycode: u32, pressed: bool },
@@ -1053,6 +1068,9 @@ impl HlState {
             InputCommand::PointerMotion { x, y } => self.inject_pointer_motion(x, y),
             InputCommand::PointerButton { button, pressed } => self.inject_pointer_button(button, pressed),
             InputCommand::PointerAxis { horizontal, vertical } => self.inject_pointer_axis(horizontal, vertical),
+            InputCommand::PointerAxisDiscrete { horizontal, vertical, h120, v120 } => {
+                self.inject_pointer_axis_discrete(horizontal, vertical, h120, v120)
+            }
             InputCommand::MoveToplevelToPoint { index, x, y } => self.move_toplevel_to_point(index, x, y),
             InputCommand::Key { keycode, pressed } => self.inject_key(keycode, pressed),
             InputCommand::FocusTopmostKeyboard => {
@@ -1170,9 +1188,22 @@ impl HlState {
             return;
         }
 
-        // Keep the neutral seat consistent with what we deliver over the wire (for inspection/tests).
+        // Keep the neutral seat consistent with what we deliver over the wire (for inspection/tests). Log
+        // the enter/leave transition (focus changed) so the pointer-focus handoff is traceable in a trace.
+        let new_focus = hit.map(|(_, sid, _, _)| sid);
+        let prev_focus = self.engine.scene.seat().pointer_focus;
+        if new_focus != prev_focus {
+            hl_debug!(
+                tag::WAYLAND,
+                "pointer focus from={:?} to={:?} at x={:.0} y={:.0}",
+                prev_focus.map(|s| s.0),
+                new_focus.map(|s| s.0),
+                x,
+                y
+            );
+        }
         self.engine.scene.seat_mut().pointer_location = (x, y);
-        self.engine.scene.seat_mut().pointer_focus = hit.map(|(_, sid, _, _)| sid);
+        self.engine.scene.seat_mut().pointer_focus = new_focus;
         pointer.motion(self, focus, &MotionEvent { location: (x, y).into(), serial, time });
         pointer.frame(self);
     }
@@ -1224,6 +1255,31 @@ impl HlState {
         pointer.frame(self);
     }
 
+    /// Scroll by DISCRETE wheel steps: emit the smooth `horizontal`/`vertical` value AND the discrete
+    /// `h120`/`v120` step counts (120 units = one detent) in one framed `wl_pointer` axis event, so a
+    /// client that reads discrete notches (`wl_pointer.axis_value120` on v8+, `axis_discrete` on v5-7)
+    /// sees the exact step count + sign alongside the smooth value — what a real mouse wheel delivers.
+    pub fn inject_pointer_axis_discrete(&mut self, horizontal: f64, vertical: f64, h120: i32, v120: i32) {
+        hl_debug!(tag::WAYLAND, "input axis h={:.1} v={:.1} h120={} v120={}", horizontal, vertical, h120, v120);
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let time = self.input_time_ms();
+        let mut frame = AxisFrame::new(time).source(AxisSource::Wheel);
+        if horizontal != 0.0 {
+            frame = frame.value(Axis::Horizontal, horizontal);
+        }
+        if vertical != 0.0 {
+            frame = frame.value(Axis::Vertical, vertical);
+        }
+        if h120 != 0 {
+            frame = frame.v120(Axis::Horizontal, h120);
+        }
+        if v120 != 0 {
+            frame = frame.v120(Axis::Vertical, v120);
+        }
+        pointer.axis(self, frame);
+        pointer.frame(self);
+    }
+
     /// Give keyboard focus to `sid` (or clear it with `None`). Drives smithay's `KeyboardHandle::set_focus`
     /// — which emits `wl_keyboard.leave` to the old focus and `wl_keyboard.enter` (+ the keymap already
     /// sent at bind) to the new — and mirrors the change into the neutral seat.
@@ -1240,8 +1296,16 @@ impl HlState {
         // `set_selection` is honored.
         set_primary_focus(&self.display, &self.seat, focus_client);
         // Mirror into the neutral seat so scene focus bookkeeping stays truthful.
+        let prev = self.engine.scene.seat().keyboard_focus;
         self.engine.scene.seat_mut().keyboard_focus = sid;
         let serial = SERIAL_COUNTER.next_serial();
+        hl_debug!(
+            tag::WAYLAND,
+            "focus kbd from={:?} to={:?} serial={:?}",
+            prev.map(|s| s.0),
+            sid.map(|s| s.0),
+            serial
+        );
         keyboard.set_focus(self, surface, serial);
     }
 
