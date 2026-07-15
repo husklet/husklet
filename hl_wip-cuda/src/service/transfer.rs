@@ -21,6 +21,41 @@ fn resolve(ctx: &CudaContext, p: DevicePtr, what: &'static str) -> Result<(Buffe
     })
 }
 
+/// Resolve `p` to its backing `(buffer, byte offset)` AND bound `len` against the containing allocation:
+/// the copy/fill must stay inside `[p, alloc_end)`. A dangling pointer is `Invalid`; a range that runs
+/// past the allocation end is `OutOfBounds` (the `CUDA_ERROR_INVALID_VALUE` analogue) — never a silent
+/// out-of-bounds `WriteBuffer`/readback and never an `offset + len` add-overflow (all arithmetic is
+/// saturating/checked). This is the single guard every copy/memset path funnels through so an
+/// attacker-controlled `len`/`offset` can neither corrupt a neighbouring allocation nor drive an
+/// unbounded host readback.
+fn resolve_range(
+    ctx: &CudaContext,
+    p: DevicePtr,
+    len: u64,
+    what: &'static str,
+) -> Result<(BufferId, u64)> {
+    let (buf, off) = resolve(ctx, p, what)?;
+    // `containing` returns the allocation base+size; `off` = p - base, so `size - off` (the bytes from `p`
+    // to the allocation end) never underflows — `resolve` already proved `off < size.max(1)`.
+    let (_base, size) = ctx
+        .mem
+        .containing(p)
+        .expect("a resolved device pointer always has a containing allocation");
+    let avail = size.saturating_sub(off);
+    if len > avail {
+        hl_log::hl_warn!(
+            hl_log::tag::CUDA,
+            "copy/memset out of bounds ptr={:#x} len={} avail={} at={}",
+            p.0,
+            len,
+            avail,
+            what
+        );
+        return Err(GpuError::OutOfBounds);
+    }
+    Ok((buf, off))
+}
+
 /// Validate a stream handle for a stream-ordered (`*Async`) op. The lowering is synchronous, so an async
 /// op is its sync counterpart guarded by this handle check — a bogus stream is a hard error, never a
 /// silent success.
@@ -41,7 +76,8 @@ pub fn memcpy_htod(
 ) -> Result<()> {
     let _s = hl_log::hl_span!(hl_log::tag::CUDA, "memcpy_htod");
     hl_log::hl_add!(hl_log::tag::CUDA, "h2d_bytes", src.len() as u64);
-    let (buf, off) = resolve(ctx, dst, "cuMemcpyHtoD: dangling destination pointer")?;
+    let (buf, off) =
+        resolve_range(ctx, dst, src.len() as u64, "cuMemcpyHtoD: dangling destination pointer")?;
     sink.submit(&[Cmd::WriteBuffer { id: buf.0, offset: off, data: src.to_vec() }])?;
     Ok(())
 }
@@ -56,8 +92,8 @@ pub fn memcpy_dtod(
 ) -> Result<()> {
     let _s = hl_log::hl_span!(hl_log::tag::CUDA, "memcpy_dtod");
     hl_log::hl_add!(hl_log::tag::CUDA, "d2d_bytes", n);
-    let (sbuf, soff) = resolve(ctx, src, "cuMemcpyDtoD: dangling source pointer")?;
-    let (dbuf, doff) = resolve(ctx, dst, "cuMemcpyDtoD: dangling destination pointer")?;
+    let (sbuf, soff) = resolve_range(ctx, src, n, "cuMemcpyDtoD: dangling source pointer")?;
+    let (dbuf, doff) = resolve_range(ctx, dst, n, "cuMemcpyDtoD: dangling destination pointer")?;
     sink.submit(&[Cmd::Submit(CommandBuffer {
         encoder: vec![Enc::CopyBufferToBuffer {
             src: sbuf.0,
@@ -89,7 +125,10 @@ pub fn read_dtoh(
 ) -> Result<Vec<u8>> {
     let _s = hl_log::hl_span!(hl_log::tag::CUDA, "memcpy_dtoh");
     hl_log::hl_add!(hl_log::tag::CUDA, "d2h_bytes", n as u64);
-    let (buf, off) = resolve(ctx, src, "cuMemcpyDtoH: dangling source pointer")?;
+    // Bound `n` against the source allocation BEFORE the readback: an attacker-controlled `n` must never
+    // drive the sink's `read_buffer` to allocate/return bytes past the allocation (an unbounded host
+    // readback / OOB read), so this is checked up front, not deferred to the executor.
+    let (buf, off) = resolve_range(ctx, src, n as u64, "cuMemcpyDtoH: dangling source pointer")?;
     sink.read_buffer(buf, off, n)
 }
 
@@ -103,9 +142,64 @@ pub fn memset(
     dst: DevicePtr,
     pattern: &[u8],
 ) -> Result<()> {
-    let (buf, off) = resolve(ctx, dst, "cuMemset: dangling destination pointer")?;
+    let (buf, off) =
+        resolve_range(ctx, dst, pattern.len() as u64, "cuMemset: dangling destination pointer")?;
     sink.submit(&[Cmd::WriteBuffer { id: buf.0, offset: off, data: pattern.to_vec() }])?;
     Ok(())
+}
+
+/// `cuMemsetD8/D16/D32(dst, value, count)` — the element-wise fill from the RAW `(value, width, count)`,
+/// expanded HERE rather than by the caller. Doing the expansion in the service is what makes it safe: an
+/// attacker-controlled `count` is bounded before a single byte is allocated.
+///
+/// * `width * count` is a **checked** multiply — a `usize`/`u64` product that overflows is `OutOfBounds`,
+///   never a wrap that under-allocates or a debug panic.
+/// * the total fill length is bounded against the destination allocation (via [`resolve_range`]) BEFORE
+///   the fill `Vec` is built, so `count = usize::MAX` can never drive a multi-GiB `Vec::with_capacity` /
+///   OOM abort — the pre-check caps it at the destination's size (a small, real allocation).
+///
+/// This is the path the `cuMemsetD*` shims lower through; the pre-expanded [`memset`] above remains for
+/// callers that already hold the byte pattern.
+pub fn memset_elements(
+    ctx: &mut CudaContext,
+    sink: &mut dyn CommandSink,
+    dst: DevicePtr,
+    value: u64,
+    width: usize,
+    count: usize,
+) -> Result<()> {
+    if width == 0 || width > 8 {
+        return Err(GpuError::Invalid("cuMemset: element width must be 1..=8 bytes"));
+    }
+    // Total fill bytes as a checked product — an attacker-controlled `count` can never overflow it.
+    let bytes = (width as u64)
+        .checked_mul(count as u64)
+        .ok_or(GpuError::OutOfBounds)?;
+    // Bound against the destination allocation BEFORE building the fill buffer: `bytes <= avail` after
+    // this, so the `Vec` below is capped by the (small, real) destination size — never unbounded.
+    let (buf, off) = resolve_range(ctx, dst, bytes, "cuMemset: dangling destination pointer")?;
+    let el = &value.to_le_bytes()[..width];
+    let mut data = Vec::with_capacity(bytes as usize);
+    for _ in 0..count {
+        data.extend_from_slice(el);
+    }
+    sink.submit(&[Cmd::WriteBuffer { id: buf.0, offset: off, data }])?;
+    Ok(())
+}
+
+/// `cuMemsetD*Async(dst, value, count, stream)` — the stream-ordered element-wise fill. Validates
+/// `stream`, then lowers the SAME bounded fill as [`memset_elements`].
+pub fn memset_elements_async(
+    ctx: &mut CudaContext,
+    sink: &mut dyn CommandSink,
+    stream: Stream,
+    dst: DevicePtr,
+    value: u64,
+    width: usize,
+    count: usize,
+) -> Result<()> {
+    check_stream(ctx, stream, "cuMemsetAsync: invalid stream handle")?;
+    memset_elements(ctx, sink, dst, value, width, count)
 }
 
 // --------------------------------------------------------------------------------------------------

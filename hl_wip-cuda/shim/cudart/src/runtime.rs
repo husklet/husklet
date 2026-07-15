@@ -13,7 +13,8 @@ use core::ffi::{c_char, c_void};
 use hl_cuda::model::device::DevicePtr;
 use hl_cuda::result::{
     cudart_from_gpu_error, CUDART_ERROR_INVALID_DEVICE, CUDART_ERROR_INVALID_RESOURCE_HANDLE,
-    CUDART_ERROR_INVALID_VALUE, CUDART_ERROR_NOT_SUPPORTED, CUDART_SUCCESS,
+    CUDART_ERROR_INVALID_VALUE, CUDART_ERROR_MEMORY_ALLOCATION, CUDART_ERROR_NOT_SUPPORTED,
+    CUDART_SUCCESS,
 };
 use hl_cuda::service::register::{self, FatbinHandle};
 use hl_cuda::service::{allocate, synchronize, transfer};
@@ -198,9 +199,13 @@ pub extern "C" fn cudaMallocHost(ptr: *mut *mut c_void, size: usize) -> i32 {
     if ptr.is_null() {
         return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    let base = with(|s| allocate::host_alloc(&mut s.ctx, size));
-    unsafe { *ptr = base as *mut c_void };
-    CUDART_SUCCESS
+    match with(|s| allocate::host_alloc(&mut s.ctx, size)) {
+        Some(base) => {
+            unsafe { *ptr = base as *mut c_void };
+            CUDART_SUCCESS
+        }
+        None => with(|s| s.fail(CUDART_ERROR_MEMORY_ALLOCATION)),
+    }
 }
 
 /// `cudaHostAlloc(ptr, size, flags)` — the flagged pinned-allocation form; the modeled semantics do not

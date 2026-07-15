@@ -570,9 +570,13 @@ pub extern "C" fn cuMemAllocHost_v2(pp: *mut *mut c_void, size: usize) -> i32 {
     if pp.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let base = with(|s| allocate::host_alloc(&mut s.ctx, size));
-    unsafe { *pp = base as *mut c_void };
-    CUDA_SUCCESS
+    match with(|s| allocate::host_alloc(&mut s.ctx, size)) {
+        Some(base) => {
+            unsafe { *pp = base as *mut c_void };
+            CUDA_SUCCESS
+        }
+        None => CUDA_ERROR_OUT_OF_MEMORY,
+    }
 }
 
 /// `cuMemHostAlloc(pp, size, flags)` — the flagged pinned-allocation form; the modeled semantics do not
@@ -686,40 +690,41 @@ pub extern "C" fn cuMemAllocPitch_v2(
     })
 }
 
-/// Expand a `width`-byte little-endian element `value` repeated `n` times into a byte pattern (the
-/// memset family's fill). `cuMemsetD8/D16/D32` set `width` = 1/2/4.
-fn expand_pattern(value: u64, width: usize, n: usize) -> Vec<u8> {
-    let el = &value.to_le_bytes()[..width];
-    let mut out = Vec::with_capacity(width * n);
-    for _ in 0..n {
-        out.extend_from_slice(el);
-    }
-    out
-}
-
-/// Shared memset body: lower the expanded fill into the device buffer at `dst`.
+/// Shared memset body: lower the `(value, width, count)` fill into the device buffer at `dst`. The
+/// expansion happens inside [`transfer::memset_elements`], which bounds `width * count` (checked, against
+/// the destination allocation) BEFORE allocating the fill buffer — so a huge `n` can never overflow
+/// `width * n` nor drive an unbounded multi-GiB `Vec` here.
 fn memset_sync(dst: u64, value: u64, width: usize, n: usize) -> i32 {
     if n == 0 {
         return CUDA_SUCCESS;
     }
-    let pattern = expand_pattern(value, width, n);
-    with(|s| match transfer::memset(&mut s.ctx, &mut s.sink, DevicePtr(dst), &pattern) {
-        Ok(()) => CUDA_SUCCESS,
-        Err(_) => CUDA_ERROR_INVALID_VALUE,
-    })
+    with(
+        |s| match transfer::memset_elements(&mut s.ctx, &mut s.sink, DevicePtr(dst), value, width, n) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        },
+    )
 }
 
-/// Shared stream-ordered memset body: validate the stream, then lower the same fill as [`memset_sync`].
+/// Shared stream-ordered memset body: validate the stream, then lower the same bounded fill as
+/// [`memset_sync`].
 fn memset_stream(dst: u64, value: u64, width: usize, n: usize, hstream: *mut c_void) -> i32 {
     if n == 0 {
         return CUDA_SUCCESS;
     }
-    let pattern = expand_pattern(value, width, n);
     with(|s| {
         let Some(st) = s.stream(hstream) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
-        match transfer::memset_async(&mut s.ctx, &mut s.sink, st, DevicePtr(dst), &pattern) {
+        match transfer::memset_elements_async(
+            &mut s.ctx,
+            &mut s.sink,
+            st,
+            DevicePtr(dst),
+            value,
+            width,
+            n,
+        ) {
             Ok(()) => CUDA_SUCCESS,
             Err(_) => CUDA_ERROR_INVALID_VALUE,
         }

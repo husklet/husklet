@@ -85,8 +85,13 @@ pub fn mem_alloc_pitch(
     if width_bytes == 0 || height == 0 {
         return Err(GpuError::Invalid("cuMemAllocPitch: zero width or height"));
     }
-    // 512-byte aligned rows, like a real allocator's CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT.
-    let pitch = (width_bytes + 511) & !511u64;
+    // 512-byte aligned rows, like a real allocator's CU_DEVICE_ATTRIBUTE_TEXTURE_ALIGNMENT. The
+    // round-up `width_bytes + 511` is a CHECKED add: a `width_bytes` near u64::MAX must surface a typed
+    // error, never an add-overflow (debug panic) / wrap to a tiny pitch.
+    let pitch = width_bytes
+        .checked_add(511)
+        .map(|w| w & !511u64)
+        .ok_or(GpuError::Invalid("cuMemAllocPitch: width alignment overflow"))?;
     let size = pitch
         .checked_mul(height)
         .ok_or(GpuError::Invalid("cuMemAllocPitch: pitch*height overflow"))?;
@@ -117,8 +122,23 @@ pub fn mem_free(ctx: &mut CudaContext, sink: &mut dyn CommandSink, ptr: DevicePt
 /// `cuMemAllocHost(size)` / `cuMemHostAlloc(size, flags)` → the base address of a fresh page-locked host
 /// buffer the model owns. The returned address is real, stable host memory the caller can read/write and
 /// pass directly to `cuMemcpy*` as a host source/destination.
-pub fn host_alloc(ctx: &mut CudaContext, size: usize) -> u64 {
-    ctx.host.alloc_pinned(size)
+///
+/// `size` is attacker-controlled, so it is BOUNDED against the modeled memory budget before the backing
+/// `vec![0u8; size]` is ever created: an over-budget request returns `None` (the
+/// `CUDA_ERROR_OUT_OF_MEMORY` / `cudaErrorMemoryAllocation` analogue a real driver returns) rather than
+/// attempting a multi-GiB host allocation that would abort the process on OOM. A real `cuMemAllocHost`
+/// likewise fails once the request exceeds what the host can back.
+pub fn host_alloc(ctx: &mut CudaContext, size: usize) -> Option<u64> {
+    if size as u64 > ctx.device.total_mem {
+        hl_log::hl_warn!(
+            hl_log::tag::CUDA,
+            "host_alloc OOM: size={} budget={}",
+            size,
+            ctx.device.total_mem
+        );
+        return None;
+    }
+    Some(ctx.host.alloc_pinned(size))
 }
 
 /// `cuMemFreeHost(p)` → free a pinned allocation. Errors if `base` is not a live pinned allocation.

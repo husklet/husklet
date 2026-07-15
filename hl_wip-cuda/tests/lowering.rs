@@ -215,7 +215,7 @@ fn pitch_alloc_aligns_pitch_and_sizes_buffer() {
 fn host_alloc_gives_usable_buffer_and_frees() {
     let mut c = ctx();
     // a pinned allocation is real, writable host memory of the requested size.
-    let base = allocate::host_alloc(&mut c, 64);
+    let base = allocate::host_alloc(&mut c, 64).unwrap();
     assert_ne!(base, 0);
     assert_eq!(c.host.size_of(base), Some(64));
     unsafe {
@@ -248,7 +248,7 @@ fn host_register_unregister_tracks_guest_range() {
 fn host_get_device_pointer_maps_to_a_device_buffer() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
-    let base = allocate::host_alloc(&mut c, 128);
+    let base = allocate::host_alloc(&mut c, 128).unwrap();
 
     let dptr = allocate::host_get_device_pointer(&mut c, &mut sink, base).unwrap();
     // it created exactly one backing device buffer sized to the host allocation …

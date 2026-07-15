@@ -208,7 +208,7 @@ fn host_free_of_a_device_pointer_and_vice_versa_are_rejected() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
     let dev = allocate::mem_alloc(&mut c, &mut sink, 128).unwrap();
-    let host = allocate::host_alloc(&mut c, 128);
+    let host = allocate::host_alloc(&mut c, 128).unwrap();
     // Cross-kind frees are rejected (a device pointer is not a pinned host base, and vice versa).
     assert!(allocate::host_free(&mut c, dev.0).is_err(), "device ptr is not a pinned host base");
     assert!(allocate::mem_free(&mut c, &mut sink, DevicePtr(host)).is_err(), "host base is not a device alloc");
@@ -247,7 +247,7 @@ fn managed_and_device_allocations_do_not_alias_managed_flag() {
 fn host_get_device_pointer_bounds_the_backing_buffer_to_the_host_size() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
-    let base = allocate::host_alloc(&mut c, 200);
+    let base = allocate::host_alloc(&mut c, 200).unwrap();
     let dptr = allocate::host_get_device_pointer(&mut c, &mut sink, base).unwrap();
     // The backing device buffer is exactly the host allocation size and resolves as a live allocation.
     assert_eq!(c.mem.containing(dptr), Some((dptr.0, 200)));
