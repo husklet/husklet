@@ -468,6 +468,44 @@ name = "demo_toplevel_close"
 path = "tests/demo_toplevel_close.rs"
 required-features = ["smithay-adapter"]
 
+# Batch-input: the remaining compositor input protocols (multi-touch, tablet/stylus, trackpad gestures) +
+# ext-session-lock, plus the interactive-latency battery (input→present is prompt, bounded, and fair). Each
+# drives a REAL wayland-client against the live Smithay adapter and asserts exact wire values / timing.
+[[test]]
+name = "demo_touch_multitouch"
+path = "tests/demo_touch_multitouch.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_tablet_tool"
+path = "tests/demo_tablet_tool.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_pointer_gestures"
+path = "tests/demo_pointer_gestures.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_session_lock"
+path = "tests/demo_session_lock.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_latency_input_to_present"
+path = "tests/demo_latency_input_to_present.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_latency_input_burst"
+path = "tests/demo_latency_input_burst.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_latency_flood_fairness"
+path = "tests/demo_latency_flood_fairness.rs"
+required-features = ["smithay-adapter"]
+
 [[test]]
 name = "macos_present_smoke"
 path = "tests/macos_present_smoke.rs"

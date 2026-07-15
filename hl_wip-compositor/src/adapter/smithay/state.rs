@@ -19,10 +19,18 @@ use smithay::reexports::wayland_server::{
     protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_shm, wl_surface::WlSurface},
     Client, DisplayHandle, Resource,
 };
-use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
+use smithay::backend::input::{
+    Axis, AxisSource, ButtonState, KeyState, TabletToolCapabilities, TabletToolDescriptor,
+    TabletToolType, TouchSlot,
+};
 use smithay::input::{
     keyboard::{FilterResult, Keycode, XkbConfig},
-    pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle, RelativeMotionEvent},
+    pointer::{
+        AxisFrame, ButtonEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
+        GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
+        GestureSwipeUpdateEvent, MotionEvent, PointerHandle, RelativeMotionEvent,
+    },
+    touch::{DownEvent as TouchDownEvent, MotionEvent as TouchMotionEvent, UpEvent as TouchUpEvent},
     Seat, SeatHandler, SeatState,
 };
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
@@ -49,8 +57,16 @@ use smithay::wayland::{
     pointer_constraints::{
         with_pointer_constraint, PointerConstraint, PointerConstraintsHandler, PointerConstraintsState,
     },
+    pointer_gestures::PointerGesturesState,
     presentation::{PresentationFeedbackCachedState, PresentationFeedbackCallback, PresentationState, Refresh},
     relative_pointer::RelativePointerManagerState,
+    session_lock::{
+        LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
+    },
+    tablet_manager::{
+        TabletDescriptor, TabletHandle, TabletManagerState, TabletSeatHandler, TabletSeatTrait,
+        TabletToolHandle,
+    },
     selection::{
         data_device::{
             set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
@@ -87,6 +103,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::{
     Anchor as WireAnchor, ConstraintAdjustment as WireConstraint, Gravity as WireGravity,
 };
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
+use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::utils::{Rectangle, Serial};
 
 /// The zxdg-decoration mode the wire speaks (`ServerSide` / `ClientSide`).
@@ -96,7 +113,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::Sta
 
 use crate::scene::model::{
     Anchor, BufferState, BufferTransform, ConstraintAdjustment, Format, Gravity, Output, OutputId,
-    PopupState, Positioner, Rect, SubsurfaceState, SurfaceId, SurfaceRole, Viewport,
+    PopupState, Positioner, Rect, SubsurfaceState, SurfaceId, SurfaceRole, Viewport, Visibility,
 };
 use crate::scene::port::Clock;
 use crate::scene::service::{constrain_popup, surface_at, BufferChange, Commit};
@@ -239,6 +256,46 @@ pub struct HlState {
     /// text-input events (driven by the host seam) with Smithay's own serial tracking. Held for the state's
     /// lifetime. See the `text_input_ime` demo.
     _input_method: InputMethodManagerState,
+    /// Owns the `zwp_pointer_gestures_v1` global (multi-finger touchpad gestures: pinch + swipe + hold).
+    /// A client binds it and calls `get_swipe_gesture`/`get_pinch_gesture(wl_pointer)` to receive
+    /// `zwp_pointer_gesture_swipe_v1` / `_pinch_v1` begin/update/end events grouped with the pointer focus —
+    /// what a browser (pinch-to-zoom) or a document viewer (two-finger swipe) consumes from a trackpad. The
+    /// adapter delivers them through the seat's [`PointerHandle`] gesture methods (see
+    /// [`HlState::inject_gesture_swipe_begin`] etc.); the focused surface (set by the last pointer motion) is
+    /// the target. Held for the state's lifetime so the global keeps advertising.
+    _pointer_gestures: PointerGesturesState,
+    /// Owns the `zwp_tablet_manager_v2` global (graphics tablet / stylus). A client binds it, calls
+    /// `get_tablet_seat(seat)`, and receives `tablet_added` + `tool_added` for the advertised
+    /// [`TabletHandle`] / [`TabletToolHandle`] below, then `zwp_tablet_tool_v2` proximity/tip/motion/pressure
+    /// events as the host seam drives the tool (see [`HlState::inject_tablet_tool_proximity_in`] etc.). Held
+    /// for the state's lifetime so the global keeps advertising.
+    _tablet_manager: TabletManagerState,
+    /// The single advertised graphics tablet — the device a `zwp_tablet_tool_v2` reports proximity against.
+    /// Added to the seat's tablet-seat at construction so a client that binds `get_tablet_seat` after the
+    /// fact still receives `tablet_added` for it (smithay re-advertises existing tablets on bind). Held so
+    /// the tool's proximity_in can name it.
+    tablet: TabletHandle,
+    /// The single advertised tablet TOOL (a pen with pressure + distance + tilt capabilities). The host
+    /// stylus seam ([`InputCommand::TabletToolProximityIn`] etc.) drives it; smithay serializes the
+    /// `zwp_tablet_tool_v2` wire events (proximity_in/out, down/up, motion, pressure, frame) to the focused
+    /// client. Held for the state's lifetime.
+    tablet_tool: TabletToolHandle,
+    /// Owns the `ext_session_lock_manager_v1` global (screen lock). A client (a lock screen / screensaver)
+    /// binds it and calls `lock`; the compositor confirms the lock ([`SessionLockHandler::lock`]), HIDES every
+    /// normal toplevel (sets it [`Visibility::Occluded`](crate::scene::model::Visibility) so its present is
+    /// withheld), and the client presents its own lock surface (given a toplevel role in
+    /// [`SessionLockHandler::new_surface`]). `unlock` restores every normal surface to visible. The lock state
+    /// is mirrored into [`Observations`] so a test asserts the lock/unlock transition. Held for the state's
+    /// lifetime so the global keeps advertising.
+    _session_lock: SessionLockManagerState,
+    /// Whether the session is currently locked (an `ext_session_lock_v1` is live and confirmed). While true,
+    /// every normal toplevel is occluded (its present withheld) and only the lock surface(s) present. Mirrored
+    /// into [`Observations::session_locked`](super::present::Observations) for the test.
+    session_locked: bool,
+    /// The scene surfaces that are ext-session-lock LOCK SURFACES (given a toplevel role in
+    /// [`SessionLockHandler::new_surface`]). Tracked so [`Self::set_session_locked`] never occludes a lock
+    /// surface (only the NORMAL toplevels are hidden), and pruned on teardown.
+    lock_surfaces: Vec<SurfaceId>,
     /// Backs the `delegate_xdg_shell` `SeatHandler` bound (popup grabs reference a seat) AND owns the
     /// `wl_seat` capabilities the toolkits enumerate for input.
     pub seat_state: SeatState<HlState>,
@@ -365,6 +422,13 @@ impl HlState {
         // manager (headless there is no trust boundary to enforce).
         let text_input = TextInputManagerState::new::<HlState>(dh);
         let input_method = InputMethodManagerState::new::<HlState, _>(dh, |_client| true);
+        // Advertise `zwp_pointer_gestures_v1` (trackpad pinch/swipe/hold), `zwp_tablet_manager_v2`
+        // (graphics tablet / stylus), and `ext_session_lock_manager_v1` (screen lock) — the remaining input
+        // + session protocols a modern desktop toolkit / lock screen probes. The `|_| true` filter lets any
+        // client bind the session-lock manager (headless there is no trust boundary to enforce).
+        let pointer_gestures = PointerGesturesState::new::<HlState>(dh);
+        let tablet_manager = TabletManagerState::new::<HlState>(dh);
+        let session_lock = SessionLockManagerState::new::<HlState, _>(dh, |_client| true);
         let mut seat_state = SeatState::new();
 
         let mut engine = Compositor::new(presenter, MonotonicClock::new());
@@ -387,10 +451,13 @@ impl HlState {
             output_globals.push(output_global);
         }
 
-        // Advertise a `wl_seat` with pointer + keyboard capabilities so toolkits that bind it for input
-        // succeed in creating `wl_pointer`/`wl_keyboard`. No live input is injected headless.
+        // Advertise a `wl_seat` with pointer + keyboard + TOUCH capabilities so toolkits that bind it for
+        // input succeed in creating `wl_pointer`/`wl_keyboard`/`wl_touch`. No live input is injected headless.
         let mut seat = seat_state.new_wl_seat(dh, "seat-0");
         seat.add_pointer();
+        // `wl_touch` — a multi-touch capability so a touchscreen client (Chrome/GTK on a tablet) receives
+        // down/motion/up/frame/cancel. Driven by the host touch seam ([`InputCommand::TouchDown`] etc.).
+        seat.add_touch();
         // A default xkb keymap (evdev rules) — enough for the keyboard object + keymap fd to be handed to
         // the client. If libxkbcommon cannot build even the default keymap the seat still advertises the
         // pointer; the keyboard capability is simply omitted rather than panicking the whole compositor.
@@ -398,11 +465,34 @@ impl HlState {
             eprintln!("hl_wip-compositor: wl_seat keyboard keymap unavailable, pointer only: {e}");
         }
 
+        // Advertise a single graphics tablet + pen tool on the seat's tablet-seat, so a client that binds
+        // `zwp_tablet_manager_v2.get_tablet_seat` receives `tablet_added` + `tool_added` and can then be
+        // driven with real stylus proximity/tip/motion/pressure. The tool declares PRESSURE + DISTANCE +
+        // TILT capabilities (what the host stylus seam feeds). `add_tablet` needs no `HlState` value; the
+        // `add_tool` below (which would notify already-bound clients) is deferred until after the struct is
+        // built, since it takes `&mut HlState`.
+        let tablet_seat = seat.tablet_seat();
+        let tablet_desc = TabletDescriptor {
+            name: "hl-virtual-tablet".to_string(),
+            usb_id: None,
+            syspath: None,
+        };
+        let tablet = tablet_seat.add_tablet::<HlState>(dh, &tablet_desc);
+
         hl_info!(
             tag::WAYLAND,
-            "globals bound: compositor shm xdg seat output data_device primary_selection relative_pointer pointer_constraints presentation xdg_activation idle_inhibit content_type text_input input_method"
+            "globals bound: compositor shm xdg seat output data_device primary_selection relative_pointer pointer_constraints pointer_gestures tablet session_lock presentation xdg_activation idle_inhibit content_type text_input input_method"
         );
-        HlState {
+        // The pen tool declares pressure + distance + tilt axes on top of the mandatory x/y + tip.
+        let tool_desc = TabletToolDescriptor {
+            tool_type: TabletToolType::Pen,
+            hardware_serial: 0xB007_0001,
+            hardware_id_wacom: 0,
+            capabilities: TabletToolCapabilities::PRESSURE
+                | TabletToolCapabilities::DISTANCE
+                | TabletToolCapabilities::TILT,
+        };
+        let mut state = HlState {
             display: dh.clone(),
             compositor,
             shm,
@@ -412,6 +502,13 @@ impl HlState {
             primary_selection,
             _text_input: text_input,
             _input_method: input_method,
+            _pointer_gestures: pointer_gestures,
+            _tablet_manager: tablet_manager,
+            tablet,
+            tablet_tool: TabletToolHandle::default(),
+            _session_lock: session_lock,
+            session_locked: false,
+            lock_surfaces: Vec::new(),
             _xdg_activation: xdg_activation,
             _idle_inhibit: idle_inhibit,
             _content_type: content_type,
@@ -436,7 +533,13 @@ impl HlState {
             last_injected_pointer: (0.0, 0.0),
             present_seq: 0,
             observations,
-        }
+        };
+        // Register the pen tool on the tablet-seat now that `state` exists (`add_tool` takes `&mut HlState`
+        // to notify already-bound clients; there are none yet at construction, but the signature requires
+        // it). The returned handle is what the host stylus seam drives.
+        let tablet_seat = state.seat.tablet_seat();
+        state.tablet_tool = tablet_seat.add_tool::<HlState>(&mut state, dh, &tool_desc);
+        state
     }
 
     /// Fresh per-client protocol state for `insert_client`.
@@ -462,6 +565,7 @@ impl HlState {
         // grab), so drop it from the chain before the scene reference is gone.
         self.popup_grabs.retain(|p| p.wl_surface() != surface);
         if let Some(sid) = self.surface_ids.remove(&surface.id()) {
+            self.lock_surfaces.retain(|&s| s != sid);
             // The window root this surface belonged to, resolved WHILE its tree links still exist. If the
             // surface was a child (popup/subsurface), its removal changes what the root composites — a
             // dismissed popup or a torn-down subsurface must visibly LEAVE the screen. Nothing else marks
@@ -1117,11 +1221,79 @@ pub enum InputCommand {
     /// typically tears the toplevel down; the compositor sends only the request (a `close` carries no
     /// reply). A no-op if no toplevel is mapped.
     CloseTopmostToplevel,
+
+    // ----- wl_touch (multi-touch) -----
+    /// A new touch point `id` appeared at root-local logical `(x, y)`. Hit-tests the surface under the point
+    /// and delivers `wl_touch.down` (with the surface-local coordinate) to the client that owns it. Each
+    /// live `id` is an independent finger; distinct ids coexist so a multi-touch gesture is expressed by
+    /// interleaving several. Delivered on the SAME touch frame until [`Self::TouchFrame`] closes it.
+    TouchDown { id: i32, x: f64, y: f64 },
+    /// Touch point `id` moved to root-local logical `(x, y)` — `wl_touch.motion` at the surface-local
+    /// coordinate. A no-op if `id` is not a live down point.
+    TouchMotion { id: i32, x: f64, y: f64 },
+    /// Touch point `id` lifted — `wl_touch.up`. The id is released and may be reused by a later down.
+    TouchUp { id: i32 },
+    /// Close the current touch frame — `wl_touch.frame`. Groups all the down/motion/up delivered since the
+    /// last frame into one atomic update the client applies together (the touch-protocol contract).
+    TouchFrame,
+    /// Cancel the whole active touch sequence — `wl_touch.cancel` (the compositor took the gesture over,
+    /// e.g. an edge swipe). The client discards every in-progress touch point.
+    TouchCancel,
+
+    // ----- zwp_pointer_gestures_v1 (trackpad pinch/swipe) -----
+    /// Begin a multi-finger SWIPE gesture with `fingers` fingers — `zwp_pointer_gesture_swipe_v1.begin` to
+    /// the pointer-focused surface (set the focus first with a [`Self::PointerMotion`]). A no-op if no
+    /// surface is focused or the client bound no swipe-gesture object.
+    GestureSwipeBegin { fingers: u32 },
+    /// Update the active swipe by logical center delta `(dx, dy)` — `zwp_pointer_gesture_swipe_v1.update`.
+    GestureSwipeUpdate { dx: f64, dy: f64 },
+    /// End the active swipe — `zwp_pointer_gesture_swipe_v1.end` (`cancelled` = the gesture was aborted, not
+    /// completed).
+    GestureSwipeEnd { cancelled: bool },
+    /// Begin a multi-finger PINCH gesture with `fingers` fingers — `zwp_pointer_gesture_pinch_v1.begin`
+    /// (pinch-to-zoom). Targets the pointer-focused surface. A no-op if no surface is focused or the client
+    /// bound no pinch-gesture object.
+    GesturePinchBegin { fingers: u32 },
+    /// Update the active pinch by logical center delta `(dx, dy)`, absolute `scale` (relative to begin, 1.0
+    /// = unchanged), and `rotation` degrees clockwise since the previous update —
+    /// `zwp_pointer_gesture_pinch_v1.update`.
+    GesturePinchUpdate { dx: f64, dy: f64, scale: f64, rotation: f64 },
+    /// End the active pinch — `zwp_pointer_gesture_pinch_v1.end` (`cancelled` = aborted).
+    GesturePinchEnd { cancelled: bool },
+
+    // ----- zwp_tablet_tool_v2 (stylus) -----
+    /// The pen entered proximity of the surface under root-local logical `(x, y)` —
+    /// `zwp_tablet_tool_v2.proximity_in(tablet, surface)` + a first `motion` + `frame`. The tool is now
+    /// hovering over that client. A no-op if no surface is under the point.
+    TabletToolProximityIn { x: f64, y: f64 },
+    /// The pen moved (while in proximity) to root-local logical `(x, y)`, reporting absolute `pressure`
+    /// (0.0–1.0; queued and sent with the motion) — `zwp_tablet_tool_v2.motion` (+ `pressure` + `frame`).
+    TabletToolMotion { x: f64, y: f64, pressure: f64 },
+    /// The pen tip made contact — `zwp_tablet_tool_v2.down` (+ `frame`). The stylus is now "drawing".
+    TabletToolTipDown,
+    /// The pen tip lifted — `zwp_tablet_tool_v2.up` (+ `frame`).
+    TabletToolTipUp,
+    /// The pen left proximity — `zwp_tablet_tool_v2.proximity_out` (+ `frame`). Hovering ends.
+    TabletToolProximityOut,
+
+    // ----- ext_session_lock_manager_v1 (screen lock) -----
+    /// Lock the session AS THE COMPOSITOR would on an incoming client `lock` — hide every normal toplevel
+    /// and mark the session locked. In practice the CLIENT drives the lock over the wire
+    /// (`ext_session_lock_manager_v1.lock`), so this host seam is mainly for a host-initiated lock; the demo
+    /// drives it through the real protocol. (Kept for symmetry / host control.)
+    SessionLock,
+    /// Unlock the session — restore every normal toplevel to visible. Mirrors [`Self::SessionLock`].
+    SessionUnlock,
 }
 
 impl HlState {
     /// Apply one host/test-driven [`InputCommand`], routing it through the seat's pointer/keyboard.
     pub fn apply_input(&mut self, cmd: InputCommand) {
+        // Latency trace: stamp the host-monotonic time this input was DISPATCHED into the compositor (the
+        // start of the input→present cycle). Terse key=val, gated with the rest of `tag::WAYLAND` — pairs
+        // with the `present_done … t_us=` line the engine logs when the resulting frame ships, so a trace
+        // can subtract the two for the real input→present latency.
+        hl_debug!(tag::WAYLAND, "input_dispatch t_us={}", self.engine.clock().now_nanos() / 1_000);
         match cmd {
             InputCommand::PointerMotion { x, y } => self.inject_pointer_motion(x, y),
             InputCommand::PointerButton { button, pressed } => self.inject_pointer_button(button, pressed),
@@ -1148,6 +1320,26 @@ impl HlState {
                 self.inject_ime_delete_surrounding(before_length, after_length)
             }
             InputCommand::CloseTopmostToplevel => self.close_topmost_toplevel(),
+            InputCommand::TouchDown { id, x, y } => self.inject_touch_down(id, x, y),
+            InputCommand::TouchMotion { id, x, y } => self.inject_touch_motion(id, x, y),
+            InputCommand::TouchUp { id } => self.inject_touch_up(id),
+            InputCommand::TouchFrame => self.inject_touch_frame(),
+            InputCommand::TouchCancel => self.inject_touch_cancel(),
+            InputCommand::GestureSwipeBegin { fingers } => self.inject_gesture_swipe_begin(fingers),
+            InputCommand::GestureSwipeUpdate { dx, dy } => self.inject_gesture_swipe_update(dx, dy),
+            InputCommand::GestureSwipeEnd { cancelled } => self.inject_gesture_swipe_end(cancelled),
+            InputCommand::GesturePinchBegin { fingers } => self.inject_gesture_pinch_begin(fingers),
+            InputCommand::GesturePinchUpdate { dx, dy, scale, rotation } => {
+                self.inject_gesture_pinch_update(dx, dy, scale, rotation)
+            }
+            InputCommand::GesturePinchEnd { cancelled } => self.inject_gesture_pinch_end(cancelled),
+            InputCommand::TabletToolProximityIn { x, y } => self.inject_tablet_proximity_in(x, y),
+            InputCommand::TabletToolMotion { x, y, pressure } => self.inject_tablet_motion(x, y, pressure),
+            InputCommand::TabletToolTipDown => self.inject_tablet_tip_down(),
+            InputCommand::TabletToolTipUp => self.inject_tablet_tip_up(),
+            InputCommand::TabletToolProximityOut => self.inject_tablet_proximity_out(),
+            InputCommand::SessionLock => self.lock_session(),
+            InputCommand::SessionUnlock => self.unlock_session(),
         }
     }
 
@@ -1448,6 +1640,219 @@ impl HlState {
             hl_debug!(tag::WAYLAND, "toplevel close surf={}", sid.0);
             toplevel.send_close();
         }
+    }
+
+    // ------------------------------------ wl_touch ------------------------------------------
+    //
+    // The touch seam mirrors the pointer seam: each touch point (a "slot", keyed by the client-facing
+    // touch id) hit-tests independently against the surface tree, and smithay's `TouchTarget` impl for
+    // `WlSurface` serializes down/motion/up/frame/cancel. Multiple live ids coexist (real multi-touch);
+    // the caller closes each atomic batch with `TouchFrame`.
+
+    /// Deliver `wl_touch.down` for point `id` at root-local logical `(x, y)`: hit-test the surface under
+    /// the point and hand smithay's `TouchHandle::down` the focus + surface-local coordinate.
+    pub fn inject_touch_down(&mut self, id: i32, x: f64, y: f64) {
+        hl_debug!(tag::WAYLAND, "input touch down id={} x={:.0} y={:.0}", id, x, y);
+        let Some(touch) = self.seat.get_touch() else { return };
+        let focus = self.touch_focus(x, y);
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        touch.down(
+            self,
+            focus,
+            &TouchDownEvent { slot: TouchSlot::from(Some(id as u32)), location: (x, y).into(), serial, time },
+        );
+    }
+
+    /// Deliver `wl_touch.motion` for point `id` at root-local logical `(x, y)`.
+    pub fn inject_touch_motion(&mut self, id: i32, x: f64, y: f64) {
+        hl_debug!(tag::WAYLAND, "input touch motion id={} x={:.0} y={:.0}", id, x, y);
+        let Some(touch) = self.seat.get_touch() else { return };
+        let focus = self.touch_focus(x, y);
+        let time = self.input_time_ms();
+        touch.motion(
+            self,
+            focus,
+            &TouchMotionEvent { slot: TouchSlot::from(Some(id as u32)), location: (x, y).into(), time },
+        );
+    }
+
+    /// Deliver `wl_touch.up` for point `id` (the finger lifted).
+    pub fn inject_touch_up(&mut self, id: i32) {
+        hl_debug!(tag::WAYLAND, "input touch up id={}", id);
+        let Some(touch) = self.seat.get_touch() else { return };
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        touch.up(self, &TouchUpEvent { slot: TouchSlot::from(Some(id as u32)), serial, time });
+    }
+
+    /// Deliver `wl_touch.frame` — close the current atomic touch batch.
+    pub fn inject_touch_frame(&mut self) {
+        hl_debug!(tag::WAYLAND, "input touch frame");
+        let Some(touch) = self.seat.get_touch() else { return };
+        touch.frame(self);
+    }
+
+    /// Deliver `wl_touch.cancel` — the compositor took the whole touch sequence over.
+    pub fn inject_touch_cancel(&mut self) {
+        hl_debug!(tag::WAYLAND, "input touch cancel");
+        let Some(touch) = self.seat.get_touch() else { return };
+        touch.cancel(self);
+    }
+
+    /// The touch focus `(WlSurface, origin)` under root-local logical `(x, y)`, matching the pointer
+    /// hit-test — the surface the touch point lands on and its origin in root space.
+    fn touch_focus(&self, x: f64, y: f64) -> Option<(WlSurface, Point<f64, Logical>)> {
+        self.hit_test(x, y).and_then(|(_, sid, ox, oy)| {
+            self.surfaces_by_id
+                .get(&sid)
+                .cloned()
+                .map(|wl| (wl, Point::<f64, Logical>::from((ox as f64, oy as f64))))
+        })
+    }
+
+    // ------------------------------ zwp_pointer_gestures_v1 ---------------------------------
+    //
+    // Trackpad pinch/swipe. These target the pointer's CURRENT focus (set by the last `PointerMotion`),
+    // so a demo positions the pointer over the surface first, then drives the gesture. smithay routes each
+    // to the focused surface's bound `zwp_pointer_gesture_{swipe,pinch}_v1`.
+
+    /// `zwp_pointer_gesture_swipe_v1.begin` with `fingers` fingers.
+    pub fn inject_gesture_swipe_begin(&mut self, fingers: u32) {
+        hl_debug!(tag::WAYLAND, "input gesture swipe begin fingers={}", fingers);
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        pointer.gesture_swipe_begin(self, &GestureSwipeBeginEvent { serial, time, fingers });
+    }
+
+    /// `zwp_pointer_gesture_swipe_v1.update` by logical center delta `(dx, dy)`.
+    pub fn inject_gesture_swipe_update(&mut self, dx: f64, dy: f64) {
+        hl_debug!(tag::WAYLAND, "input gesture swipe update dx={:.1} dy={:.1}", dx, dy);
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let time = self.input_time_ms();
+        pointer.gesture_swipe_update(self, &GestureSwipeUpdateEvent { time, delta: (dx, dy).into() });
+    }
+
+    /// `zwp_pointer_gesture_swipe_v1.end` (`cancelled` = aborted).
+    pub fn inject_gesture_swipe_end(&mut self, cancelled: bool) {
+        hl_debug!(tag::WAYLAND, "input gesture swipe end cancelled={}", cancelled);
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        pointer.gesture_swipe_end(self, &GestureSwipeEndEvent { serial, time, cancelled });
+    }
+
+    /// `zwp_pointer_gesture_pinch_v1.begin` with `fingers` fingers.
+    pub fn inject_gesture_pinch_begin(&mut self, fingers: u32) {
+        hl_debug!(tag::WAYLAND, "input gesture pinch begin fingers={}", fingers);
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        pointer.gesture_pinch_begin(self, &GesturePinchBeginEvent { serial, time, fingers });
+    }
+
+    /// `zwp_pointer_gesture_pinch_v1.update`: center delta `(dx, dy)`, absolute `scale`, `rotation` degrees.
+    pub fn inject_gesture_pinch_update(&mut self, dx: f64, dy: f64, scale: f64, rotation: f64) {
+        hl_debug!(tag::WAYLAND, "input gesture pinch update scale={:.2} rot={:.1}", scale, rotation);
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let time = self.input_time_ms();
+        pointer.gesture_pinch_update(
+            self,
+            &GesturePinchUpdateEvent { time, delta: (dx, dy).into(), scale, rotation },
+        );
+    }
+
+    /// `zwp_pointer_gesture_pinch_v1.end` (`cancelled` = aborted).
+    pub fn inject_gesture_pinch_end(&mut self, cancelled: bool) {
+        hl_debug!(tag::WAYLAND, "input gesture pinch end cancelled={}", cancelled);
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        pointer.gesture_pinch_end(self, &GesturePinchEndEvent { serial, time, cancelled });
+    }
+
+    // -------------------------------- zwp_tablet_tool_v2 ------------------------------------
+    //
+    // The pen. `proximity_in` hovers the tool over the surface under a point; `motion` (carrying a queued
+    // `pressure`) tracks it; `tip_down`/`tip_up` are contact; `proximity_out` ends the hover. smithay
+    // auto-frames each action and serializes the `zwp_tablet_tool_v2` wire events to the focused client.
+
+    /// `zwp_tablet_tool_v2.proximity_in` for the surface under root-local logical `(x, y)`.
+    pub fn inject_tablet_proximity_in(&mut self, x: f64, y: f64) {
+        hl_debug!(tag::WAYLAND, "input tablet proximity_in x={:.0} y={:.0}", x, y);
+        let Some((wl, origin)) = self.touch_focus(x, y) else { return };
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        self.tablet_tool.proximity_in((x, y).into(), (wl, origin), &self.tablet, serial, time);
+    }
+
+    /// `zwp_tablet_tool_v2.motion` (+ queued `pressure`) at root-local logical `(x, y)`.
+    pub fn inject_tablet_motion(&mut self, x: f64, y: f64, pressure: f64) {
+        hl_debug!(tag::WAYLAND, "input tablet motion x={:.0} y={:.0} p={:.2}", x, y, pressure);
+        let focus = self.touch_focus(x, y);
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        // Pressure is queued and shipped alongside the motion below.
+        self.tablet_tool.pressure(pressure);
+        self.tablet_tool.motion((x, y).into(), focus, &self.tablet, serial, time);
+    }
+
+    /// `zwp_tablet_tool_v2.down` — the tip made contact.
+    pub fn inject_tablet_tip_down(&mut self) {
+        hl_debug!(tag::WAYLAND, "input tablet tip_down");
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.input_time_ms();
+        self.tablet_tool.tip_down(serial, time);
+    }
+
+    /// `zwp_tablet_tool_v2.up` — the tip lifted.
+    pub fn inject_tablet_tip_up(&mut self) {
+        hl_debug!(tag::WAYLAND, "input tablet tip_up");
+        let time = self.input_time_ms();
+        self.tablet_tool.tip_up(time);
+    }
+
+    /// `zwp_tablet_tool_v2.proximity_out` — the pen left proximity.
+    pub fn inject_tablet_proximity_out(&mut self) {
+        hl_debug!(tag::WAYLAND, "input tablet proximity_out");
+        let time = self.input_time_ms();
+        self.tablet_tool.proximity_out(time);
+    }
+
+    // ---------------------------- ext_session_lock (screen lock) ---------------------------
+
+    /// Host-initiated session lock (the symmetric seam to the client-driven `ext_session_lock`).
+    pub fn lock_session(&mut self) {
+        self.set_session_locked(true);
+    }
+
+    /// Host-initiated session unlock.
+    pub fn unlock_session(&mut self) {
+        self.set_session_locked(false);
+    }
+
+    /// Apply a lock/unlock transition: occlude (hide) or restore every NORMAL toplevel, mirror the state
+    /// into [`Observations`], and — on unlock — mark the restored surfaces dirty + arm a repaint so they
+    /// visibly return at the next refresh boundary even if their clients are idle. Lock surfaces (tracked in
+    /// `lock_surfaces`) are never occluded: they are what stays on screen while locked.
+    fn set_session_locked(&mut self, locked: bool) {
+        hl_info!(tag::WAYLAND, "session lock={}", locked);
+        self.session_locked = locked;
+        let vis = if locked { Visibility::Occluded } else { Visibility::Visible };
+        let toplevels: Vec<SurfaceId> = self.engine.scene.toplevels().collect();
+        for tl in toplevels {
+            if self.lock_surfaces.contains(&tl) {
+                continue;
+            }
+            self.engine.scene.set_visibility(tl, vis);
+            if !locked {
+                // Restore: force a fresh present so the unhidden surface reappears.
+                self.engine.scene.mark_dirty(tl);
+                self.arm_repaint(tl);
+            }
+        }
+        self.observations.lock().unwrap().session_locked = locked;
     }
 }
 
@@ -1936,6 +2341,60 @@ impl InputMethodHandler for HlState {
     }
 }
 
+/// Server-side policy for `zwp_tablet_manager_v2`. The single advertised tablet + pen tool live on the
+/// seat's tablet-seat (added in [`HlState::new`]); a client that binds `get_tablet_seat` receives them and
+/// the host stylus seam drives the tool. `tablet_tool_image` (the client asking the compositor to set a
+/// hardware cursor for the tool) keeps its default no-op — headless there is no hardware cursor to warp.
+impl TabletSeatHandler for HlState {}
+
+/// Server-side handling of `ext_session_lock_manager_v1` (screen lock). A client's `lock` request lands in
+/// [`Self::lock`]: the compositor HIDES every normal toplevel (so their content stops presenting — the
+/// screen "blanks") and confirms the lock with [`SessionLocker::lock`], which sends the client the `locked`
+/// event. The client then creates a lock surface per output ([`Self::new_surface`]); the adapter gives it a
+/// toplevel role so its committed buffer composites + presents through the ordinary path, and configures it
+/// to the output size. `unlock` restores every normal toplevel to visible and re-presents it. The lock/unlock
+/// transition is mirrored into [`Observations::session_locked`](super::present::Observations) for the test.
+impl SessionLockHandler for HlState {
+    fn lock_state(&mut self) -> &mut SessionLockManagerState {
+        &mut self._session_lock
+    }
+
+    fn lock(&mut self, confirmation: SessionLocker) {
+        // Hide the normal surfaces first, THEN confirm — the client must not observe `locked` before the
+        // compositor has actually stopped presenting protected content.
+        self.set_session_locked(true);
+        confirmation.lock();
+    }
+
+    fn unlock(&mut self) {
+        self.set_session_locked(false);
+    }
+
+    fn new_surface(&mut self, surface: LockSurface, _output: WlOutput) {
+        // Give the lock surface a toplevel role so its committed buffer composes + presents as a window
+        // root (the neutral scene has no dedicated lock layer; a full-output toplevel is the faithful
+        // reduction). Track it so `set_session_locked` never occludes it.
+        if let Some(sid) = self.sid(surface.wl_surface()) {
+            self.engine.scene.set_role(sid, SurfaceRole::Toplevel);
+            self.engine.scene.set_visibility(sid, Visibility::Visible);
+            if !self.lock_surfaces.contains(&sid) {
+                self.lock_surfaces.push(sid);
+            }
+            // The lock surface takes keyboard focus (a real lock screen receives the unlock passphrase).
+            self.set_keyboard_focus(Some(sid));
+        }
+        // Configure it to the output's logical size, as the protocol requires, so the client draws.
+        let (w, h) = self.engine.scene.output_logical_size();
+        surface.with_pending_state(|state| {
+            state.size = Some((w.max(1) as u32, h.max(1) as u32).into());
+        });
+        surface.send_configure();
+    }
+}
+
+smithay::delegate_pointer_gestures!(HlState);
+smithay::delegate_tablet_manager!(HlState);
+smithay::delegate_session_lock!(HlState);
 smithay::delegate_text_input_manager!(HlState);
 smithay::delegate_input_method_manager!(HlState);
 smithay::delegate_compositor!(HlState);

@@ -17,7 +17,7 @@ pub mod service;
 
 use std::collections::HashMap;
 
-use hl_log::{hl_count, hl_span, tag};
+use hl_log::{hl_count, hl_debug, hl_span, tag};
 
 use model::{Scene, SurfaceId, SurfaceRole};
 use port::{Clock, PresentOutcome, Presenter};
@@ -195,6 +195,10 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
 
         if pacing == FramePacing::Presented {
             hl_count!(tag::PRESENT, "presented");
+            // Latency trace: stamp the host-monotonic time this frame actually reached the presenter (the
+            // END of the input→present cycle). Pairs with the adapter's `input_dispatch … t_us=` line so a
+            // trace can subtract them for the real input→present latency. Terse key=val, gated.
+            hl_debug!(tag::PRESENT, "present_done root={} serial={:?} t_us={}", root.0, serial, now / 1_000);
             self.clear_tree_dirty(root);
             self.last_present_ns.insert(root, now);
         }

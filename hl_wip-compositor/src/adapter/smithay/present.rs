@@ -101,6 +101,11 @@ pub struct Observations {
     /// that delivers `wl_data_device.drop` to the target (an un-negotiated release cancels instead), so a
     /// test asserts this is `true` for a completed transfer.
     pub dnd_drop_validated: bool,
+    /// Whether the session is currently LOCKED via `ext_session_lock_manager_v1` — set true once the
+    /// compositor confirms a client's `lock` (and has hidden the normal surfaces), cleared on `unlock`.
+    /// There is a client-visible `locked`/`finished` event, but this lets a test assert the SERVER-side
+    /// transition (that normal surfaces were occluded) directly. See the `session_lock` demo.
+    pub session_locked: bool,
 }
 
 /// A headless [`Presenter`] that captures composed frames (and optionally writes PNGs).
