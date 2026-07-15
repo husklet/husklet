@@ -22,8 +22,8 @@ use crate::model::pipeline::{PipelineCacheRec, PipelineKind, PipelineLayoutRec, 
 use crate::model::queue::FenceRec;
 use crate::*;
 use hl_gpu::protocol::model::descriptor::{
-    BufferDesc, ComputePipelineDesc, DepthState, RenderPipelineDesc, SamplerDesc, ShaderRef,
-    VertexLayout,
+    BlendState, BufferDesc, ComputePipelineDesc, DepthState, RenderPipelineDesc, SamplerDesc,
+    ShaderRef, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{AddressMode, Filter, TextureFormat, Topology};
 use hl_gpu::{BufferId, Cmd, CommandSink, GpuError, Result};
@@ -404,6 +404,11 @@ pub fn create_compute_pipeline(
 /// that attachment through the dynamic-rendering `vkCmdBeginRendering` depth target. Without this the
 /// depth-stencil state was dropped (`depth: None` hardcoded) and every depth-tested draw ran with the
 /// test disabled, so a far primitive could never be occluded by a nearer one.
+///
+/// `blend` is the pipeline's fixed-function color-blend state (src/dst factors + ops) when the color
+/// attachment's `VkPipelineColorBlendAttachmentState::blendEnable` is set, else `None`. It is applied to
+/// every color target. Without this the blend state was dropped (`blend: None` hardcoded) and a
+/// translucent (alpha-over) draw OVERWROTE the destination instead of compositing over it.
 pub fn create_graphics_pipeline(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
@@ -412,6 +417,7 @@ pub fn create_graphics_pipeline(
     vertex_layouts: Vec<VertexLayout>,
     color_formats: Vec<TextureFormat>,
     depth: Option<DepthState>,
+    blend: Option<BlendState>,
 ) -> Result<VkPipeline> {
     use hl_gpu::protocol::model::descriptor::ColorTargetState;
     let resolve = |dev: &Device, (module, entry): (VkShaderModule, &str)| -> Result<ShaderRef> {
@@ -428,7 +434,7 @@ pub fn create_graphics_pipeline(
     let fragment_ref = fragment.map(|f| resolve(dev, f)).transpose()?;
     let color_targets = color_formats
         .into_iter()
-        .map(|format| ColorTargetState { format, blend: None, write_mask: 0xf })
+        .map(|format| ColorTargetState { format, blend: blend.clone(), write_mask: 0xf })
         .collect::<Vec<_>>();
     let color_targets_len = color_targets.len();
     let has_fragment = fragment_ref.is_some();

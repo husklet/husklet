@@ -910,6 +910,39 @@ pub struct VkPipelineDepthStencilStateCreateInfo {
     // NOT modeled by the software rasterizer and are never read through this pointer.
 }
 
+/// `VkPipelineColorBlendAttachmentState` — the per-color-target fixed-function blend state. All fields are
+/// read: `blendEnable` gates whether the target composites (vs. overwrites), and the src/dst factors + ops
+/// (each a `VkBlendFactor` / `VkBlendOp`) are translated onto the neutral `hl_gpu` blend wire numbering by
+/// `parse_color_blend_state`. `colorWriteMask` is the last field, so this is the full struct.
+#[repr(C)]
+pub struct VkPipelineColorBlendAttachmentState {
+    pub blend_enable: VkBool32,
+    pub src_color_blend_factor: i32,
+    pub dst_color_blend_factor: i32,
+    pub color_blend_op: i32,
+    pub src_alpha_blend_factor: i32,
+    pub dst_alpha_blend_factor: i32,
+    pub alpha_blend_op: i32,
+    pub color_write_mask: VkFlags,
+}
+
+/// `VkPipelineColorBlendStateCreateInfo` — the color-blend fixed-function state of a graphics pipeline.
+/// Only the first attachment's blend is threaded (the software rasterizer applies one blend to all
+/// targets), so the struct is truncated after `pAttachments`: `logicOp`/`blendConstants` are NOT modeled
+/// and no field past this prefix is ever accessed. A null pointer / `blendEnable = VK_FALSE` => no blend
+/// (an opaque overwrite).
+#[repr(C)]
+pub struct VkPipelineColorBlendStateCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub logic_op_enable: VkBool32,
+    pub logic_op: i32,
+    pub attachment_count: u32,
+    pub p_attachments: *const VkPipelineColorBlendAttachmentState,
+    // Remaining field (blendConstants[4]) is NOT modeled and is never read through this pointer.
+}
+
 /// `VkPhysicalDeviceDynamicRenderingFeatures` — the feature pNext `vkGetPhysicalDeviceFeatures2` fills to
 /// advertise `dynamicRendering = VK_TRUE` (really backed by the `cmd_begin_rendering` lowering).
 #[repr(C)]

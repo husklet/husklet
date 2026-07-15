@@ -139,6 +139,10 @@ name = "vk_scissor"
 path = "tests/vk_scissor.rs"
 
 [[test]]
+name = "vk_blend"
+path = "tests/vk_blend.rs"
+
+[[test]]
 name = "weston_simple_egl_e2e"
 path = "tests/weston_simple_egl_e2e.rs"
 

@@ -12,7 +12,7 @@
 
 use core::ffi::{c_char, c_void};
 
-use hl_gpu::protocol::model::descriptor::{DepthState, VertexAttr, VertexLayout};
+use hl_gpu::protocol::model::descriptor::{BlendState, DepthState, VertexAttr, VertexLayout};
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::CommandSink;
 use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
@@ -484,6 +484,66 @@ fn parse_depth_state(
     })
 }
 
+/// Translate a `VkBlendFactor` onto the neutral `hl_gpu` blend-factor wire numbering the GL driver emits
+/// (0=ZERO 1=ONE 2=SRC_COLOR 3=1-SRC_COLOR 4=SRC_ALPHA 5=1-SRC_ALPHA 6=DST_COLOR 7=1-DST_COLOR 8=DST_ALPHA
+/// 9=1-DST_ALPHA 10=SRC_ALPHA_SATURATE) that `hl_wip-gpu-wgpu`'s `blend_factor` decodes. VkBlendFactor
+/// interleaves color/alpha differently (SRC_ALPHA=6, DST_COLOR=4) so the mapping is NOT identity. An
+/// unmodeled factor defaults to ONE, matching the executor's own fallback rather than dropping the blend.
+fn vk_blend_factor_wire(f: i32) -> u32 {
+    match f {
+        0 => 0,   // VK_BLEND_FACTOR_ZERO
+        1 => 1,   // VK_BLEND_FACTOR_ONE
+        2 => 2,   // VK_BLEND_FACTOR_SRC_COLOR
+        3 => 3,   // VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR
+        4 => 6,   // VK_BLEND_FACTOR_DST_COLOR
+        5 => 7,   // VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR
+        6 => 4,   // VK_BLEND_FACTOR_SRC_ALPHA
+        7 => 5,   // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+        8 => 8,   // VK_BLEND_FACTOR_DST_ALPHA
+        9 => 9,   // VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA
+        14 => 10, // VK_BLEND_FACTOR_SRC_ALPHA_SATURATE
+        _ => 1,
+    }
+}
+
+/// Translate a `VkBlendOp` onto the neutral blend-op wire numbering (0=ADD 1=SUBTRACT 2=REVERSE_SUBTRACT
+/// 3=MIN 4=MAX). `VkBlendOp` (ADD=0 … MAX=4) already matches this ordering 1:1; an unmodeled op defaults
+/// to ADD.
+fn vk_blend_op_wire(o: i32) -> u32 {
+    match o {
+        1 => 1, // VK_BLEND_OP_SUBTRACT
+        2 => 2, // VK_BLEND_OP_REVERSE_SUBTRACT
+        3 => 3, // VK_BLEND_OP_MIN
+        4 => 4, // VK_BLEND_OP_MAX
+        _ => 0, // VK_BLEND_OP_ADD (and unmodeled)
+    }
+}
+
+/// Translate a `VkPipelineColorBlendStateCreateInfo`'s FIRST attachment into the neutral [`BlendState`]
+/// when that attachment's `blendEnable` is set. The software rasterizer models one blend for all color
+/// targets, so only attachment 0 is read. Returns `None` for a null state pointer, an empty attachment
+/// list, or `blendEnable = VK_FALSE` — exactly the pipelines that must OVERWRITE (opaque replace) rather
+/// than composite. Without this the color-blend state was dropped (`blend: None` hardcoded) and a
+/// translucent draw overwrote the destination instead of alpha-compositing over it.
+fn parse_color_blend_state(p_color_blend_state: *const c_void) -> Option<BlendState> {
+    let cb = unsafe { (p_color_blend_state as *const VkPipelineColorBlendStateCreateInfo).as_ref() }?;
+    if cb.attachment_count == 0 || cb.p_attachments.is_null() {
+        return None;
+    }
+    let att = unsafe { &*cb.p_attachments };
+    if att.blend_enable == 0 {
+        return None;
+    }
+    Some(BlendState {
+        src_color: vk_blend_factor_wire(att.src_color_blend_factor),
+        dst_color: vk_blend_factor_wire(att.dst_color_blend_factor),
+        op_color: vk_blend_op_wire(att.color_blend_op),
+        src_alpha: vk_blend_factor_wire(att.src_alpha_blend_factor),
+        dst_alpha: vk_blend_factor_wire(att.dst_alpha_blend_factor),
+        op_alpha: vk_blend_op_wire(att.alpha_blend_op),
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn vkCreateGraphicsPipelines(
     _device: *mut c_void,
@@ -545,9 +605,14 @@ pub extern "C" fn vkCreateGraphicsPipelines(
         let depth_format = parse_pipeline_rendering_depth_format(ci.p_next);
         let depth = parse_depth_state(ci.p_depth_stencil_state, depth_format);
 
+        // Color-blend state: the first attachment's blendEnable + factors/ops, mapped onto the neutral
+        // blend wire numbering. A null pColorBlendState / blendEnable = VK_FALSE => None (opaque overwrite),
+        // preserving the pre-blend behavior.
+        let blend = parse_color_blend_state(ci.p_color_blend_state);
+
         let r = dev_sink(|dev, sink| {
             let frag = fragment.as_ref().map(|(m, e)| (*m, e.as_str()));
-            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth)
+            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth, blend)
         })
         .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkCreateGraphicsPipelines: no device")));
         match r {

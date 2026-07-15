@@ -399,7 +399,7 @@ fn graphics_pipeline_rejects_missing_fragment_entry() {
     let vs = create::create_shader_module_words(&mut d, &mut s, hl_vulkan::adapter::spirv::sample_compute_spirv("vs")).unwrap();
     let fs = create::create_shader_module_words(&mut d, &mut s, hl_vulkan::adapter::spirv::sample_compute_spirv("fs")).unwrap();
     // Bad fragment entry → the whole pipeline fails (no id-zero default).
-    let r = create::create_graphics_pipeline(&mut d, &mut s, (vs, "vs"), Some((fs, "bad")), vec![], vec![TextureFormat::Rgba8Unorm], None);
+    let r = create::create_graphics_pipeline(&mut d, &mut s, (vs, "vs"), Some((fs, "bad")), vec![], vec![TextureFormat::Rgba8Unorm], None, None);
     assert!(matches!(r, Err(GpuError::Invalid(_))));
 }
 
@@ -409,7 +409,7 @@ fn graphics_pipeline_with_no_color_targets_is_valid() {
     let mut s = sink();
     let vs = create::create_shader_module_words(&mut d, &mut s, hl_vulkan::adapter::spirv::sample_compute_spirv("vs")).unwrap();
     // Depth-only / no-color pipeline: an empty color-format slice is valid.
-    let pipe = create::create_graphics_pipeline(&mut d, &mut s, (vs, "vs"), None, Vec::<VertexLayout>::new(), vec![], None).unwrap();
+    let pipe = create::create_graphics_pipeline(&mut d, &mut s, (vs, "vs"), None, Vec::<VertexLayout>::new(), vec![], None, None).unwrap();
     match s.commands().find(|c| matches!(c, Cmd::CreateRenderPipeline(..))).unwrap() {
         Cmd::CreateRenderPipeline(_, desc) => {
             assert!(desc.color_targets.is_empty());
