@@ -84,6 +84,49 @@ fn topology(t: Topology) -> wgpu::PrimitiveTopology {
     }
 }
 
+/// Map the protocol's `cull` code (`RenderPipelineDesc::cull`: 0 = none, 1 = front, 2 = back — the GL
+/// driver's `glCullFace`/`GL_CULL_FACE` state) to wgpu's optional culled face. `0` (the neutral wire
+/// default, and the only value the frozen suite used) is `None` — byte-for-byte the previous `..default()`
+/// behavior; a real `glCullFace(GL_BACK)` guest now actually culls instead of the state silently vanishing.
+fn cull_mode(cull: u32) -> Option<wgpu::Face> {
+    match cull {
+        1 => Some(wgpu::Face::Front),
+        2 => Some(wgpu::Face::Back),
+        _ => None,
+    }
+}
+
+/// Map the protocol's `front_face` code (`RenderPipelineDesc::front_face`: 0 = CCW, 1 = CW — the GL
+/// driver's `glFrontFace`) to a `wgpu::FrontFace`. `0` (the neutral default) is `Ccw`, identical to the
+/// previous hardcoded default; it only changes an observable result together with a non-zero `cull`.
+fn front_face(front_face: u32) -> wgpu::FrontFace {
+    match front_face {
+        1 => wgpu::FrontFace::Cw,
+        _ => wgpu::FrontFace::Ccw,
+    }
+}
+
+/// Map the protocol's RGBA `write_mask` (`ColorTargetState::write_mask`, low 4 bits `R<<0|G<<1|B<<2|A<<3` —
+/// the GL driver's `glColorMask`) to `wgpu::ColorWrites`. `0xF` (the neutral default) is `ALL`, identical to
+/// the previous hardcoded value; a guest that masks a channel (e.g. `glColorMask(1,1,1,0)` to preserve the
+/// destination alpha) now actually leaves that channel untouched instead of the mask silently vanishing.
+fn color_writes(mask: u32) -> wgpu::ColorWrites {
+    let mut w = wgpu::ColorWrites::empty();
+    if mask & 1 != 0 {
+        w |= wgpu::ColorWrites::RED;
+    }
+    if mask & 2 != 0 {
+        w |= wgpu::ColorWrites::GREEN;
+    }
+    if mask & 4 != 0 {
+        w |= wgpu::ColorWrites::BLUE;
+    }
+    if mask & 8 != 0 {
+        w |= wgpu::ColorWrites::ALPHA;
+    }
+    w
+}
+
 impl WgpuExecutor {
     pub(crate) fn create_compute_pipeline(
         &self,
@@ -323,7 +366,9 @@ impl WgpuExecutor {
                 // per-target blend so an overlapping translucent draw composites instead of overwriting;
                 // `None` stays an opaque replace.
                 blend: c.blend.as_ref().map(blend_state),
-                write_mask: wgpu::ColorWrites::ALL,
+                // Honor the protocol RGBA write mask (`glColorMask`): a masked channel is left untouched in
+                // the target instead of the mask silently vanishing. `0xF` maps to `ALL` (the prior default).
+                write_mask: color_writes(c.write_mask),
             }));
         }
 
@@ -348,6 +393,12 @@ impl WgpuExecutor {
             },
             primitive: wgpu::PrimitiveState {
                 topology: topology(desc.topology),
+                // Honor the protocol face-culling + winding (`glCullFace`/`GL_CULL_FACE` + `glFrontFace`):
+                // the neutral wire defaults (cull 0 → None, front_face 0 → Ccw) reproduce the previous
+                // `..default()` byte-for-byte, while a real culling guest now actually discards the culled
+                // face instead of the state silently vanishing.
+                front_face: front_face(desc.front_face),
+                cull_mode: cull_mode(desc.cull),
                 ..Default::default()
             },
             depth_stencil,

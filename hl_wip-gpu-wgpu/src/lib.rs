@@ -50,13 +50,14 @@ use hl_gpu::Result;
 
 pub use device::{DeviceConfig, Gpu};
 
-/// The encoder ops this executor actually replays — every command in the current IR EXCEPT the one that
-/// needs sample averaging this bring-up backend does not implement: `ResolveTexture` (multisample resolve).
-/// Advertising `ALL_COMMANDS` would be a capability lie: the old `_ =>` replay arm silently no-op'd a
-/// submitted resolve, so a guest that negotiated it saw its op vanish with no error and no effect. This set
-/// is the honest truth — the runtime rejects a negotiated resolve at validate, and `submit` errors on one
-/// defensively. `CopyTextureToTexture` (exact, no scaling) AND `BlitTexture` (scaled/filtered, resampled by
-/// a textured-triangle draw — see `blit.rs`) are both implemented and advertised.
+/// The encoder ops this executor actually replays — now EVERY command in the current IR, each with a real
+/// handler (see `submit.rs`, `blit.rs`, `texture.rs`). Advertising a command it did not truly execute would
+/// be a capability lie: a catch-all `_ =>` replay arm would silently no-op a submitted op, so a guest that
+/// negotiated it would see its op vanish with no error and no effect. This set is the honest truth — the
+/// runtime rejects any command NOT listed here at validate. `CopyTextureToTexture` (exact, no scaling),
+/// `BlitTexture` (scaled/filtered, resampled by a textured-triangle draw — see `blit.rs`), and
+/// `ResolveTexture` (multisample resolve via a render-pass `resolve_target`) are all implemented and
+/// advertised; `CopyTextureToBuffer` reads back the exact `mip` level it names (see `texture.rs`).
 const REPLAYED_COMMANDS: &[u8] = &[
     etag::BEGIN_RENDER_PASS,
     etag::END_RENDER_PASS,

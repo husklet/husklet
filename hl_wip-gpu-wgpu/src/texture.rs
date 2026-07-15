@@ -119,16 +119,37 @@ impl WgpuExecutor {
 
     /// Read the whole tight-packed level-0 color plane of texture `id` (exactly `width*height*bpt` bytes).
     pub(crate) fn read_texture_tight(&self, res: &SessionResources, id: u32) -> Result<Vec<u8>> {
+        self.read_texture_tight_mip(res, id, 0)
+    }
+
+    /// Read the whole tight-packed color plane of a specific `mip` level of texture `id` — exactly
+    /// `mip_width*mip_height*bpt` bytes, where the mip's dimensions are the base extent halved per level
+    /// (floored at 1, the WebGPU mip pyramid). `mip == 0` is the full base plane (the `read_texture_tight`
+    /// case). A `mip` at or past the materialized `mip_levels` is a typed `OutOfBounds` rather than a wgpu
+    /// bounds panic. This is what makes `CopyTextureToBuffer { mip }` read the level it names instead of
+    /// silently returning the base level.
+    pub(crate) fn read_texture_tight_mip(
+        &self,
+        res: &SessionResources,
+        id: u32,
+        mip: u32,
+    ) -> Result<Vec<u8>> {
         let _sp = hl_log::hl_span!(tag::PRESENT, "readback");
         let t = native(res, id)?;
+        if mip >= t.mip_levels {
+            return Err(GpuError::OutOfBounds);
+        }
         let bpt = texel_bytes(t.format)? as u32;
-        let tight_bpr = t.width * bpt;
+        // The mip level's own dimensions (base extent halved per level, floored at 1).
+        let mw = (t.width >> mip).max(1);
+        let mh = (t.height >> mip).max(1);
+        let tight_bpr = mw * bpt;
         let padded_bpr = round256(tight_bpr);
-        hl_log::hl_add!(tag::PRESENT, "readback_bytes", (tight_bpr * t.height) as u64);
+        hl_log::hl_add!(tag::PRESENT, "readback_bytes", (tight_bpr * mh) as u64);
 
         let staging = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hl-tex-readback"),
-            size: (padded_bpr * t.height) as u64,
+            size: (padded_bpr * mh) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -137,7 +158,7 @@ impl WgpuExecutor {
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &t.texture,
-                mip_level: 0,
+                mip_level: mip,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
@@ -146,10 +167,10 @@ impl WgpuExecutor {
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bpr),
-                    rows_per_image: Some(t.height),
+                    rows_per_image: Some(mh),
                 },
             },
-            wgpu::Extent3d { width: t.width, height: t.height, depth_or_array_layers: 1 },
+            wgpu::Extent3d { width: mw, height: mh, depth_or_array_layers: 1 },
         );
         self.gpu.queue.submit(Some(enc.finish()));
 
@@ -157,8 +178,8 @@ impl WgpuExecutor {
         slice.map_async(wgpu::MapMode::Read, |_| {});
         self.gpu.device.poll(wgpu::Maintain::Wait);
         let mapped = slice.get_mapped_range();
-        let mut out = vec![0u8; (tight_bpr * t.height) as usize];
-        for row in 0..t.height {
+        let mut out = vec![0u8; (tight_bpr * mh) as usize];
+        for row in 0..mh {
             let src = (row * padded_bpr) as usize;
             let dst = (row * tight_bpr) as usize;
             out[dst..dst + tight_bpr as usize]

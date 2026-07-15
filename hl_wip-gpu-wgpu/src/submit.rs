@@ -77,20 +77,29 @@ impl WgpuExecutor {
                     self.write_bytes(res, *dst, *dst_offset, &bytes)?;
                     i += 1;
                 }
-                Enc::CopyTextureToBuffer { src, width, height, dst, dst_offset, bytes_per_row, .. } => {
-                    let t = texture::native(res, *src)?;
-                    let bpt = texel_bytes(t.format)? as u32;
-                    // The copy region must lie inside the source texture: a `width`/`height` that runs past
-                    // the source edge would slice past the tight readback plane below (a Rust panic). The
-                    // runtime does not range-check this op, so guard it here into a typed `OutOfBounds`.
-                    if *width > t.width || *height > t.height {
+                Enc::CopyTextureToBuffer { src, mip, width, height, dst, dst_offset, bytes_per_row } => {
+                    let (bpt, tw, th, mips) = {
+                        let t = texture::native(res, *src)?;
+                        (texel_bytes(t.format)? as u32, t.width, t.height, t.mip_levels)
+                    };
+                    // Honor the `mip` field: the readback below reads THAT level (not silently the base).
+                    // An out-of-range mip is a typed `OutOfBounds` (the runtime does not range-check this op).
+                    if *mip >= mips {
                         return Err(GpuError::OutOfBounds);
                     }
-                    // The tight readback plane is packed at the TEXTURE's width, not the copy region's
-                    // width — the source row stride is `tex_width*bpt`, so a sub-region copy (width <
-                    // texture width) advances by the full plane stride, exactly as the CPU oracle does.
-                    let src_stride = (t.width * bpt) as usize;
-                    let plane = self.read_texture_tight(res, *src)?;
+                    // The copy region must lie inside the SOURCE MIP LEVEL, whose dimensions are the base
+                    // extent halved per level (floored at 1). A `width`/`height` past the level edge would
+                    // slice past the tight readback plane below (a Rust panic), so guard it into `OutOfBounds`.
+                    let lw = (tw >> *mip).max(1);
+                    let lh = (th >> *mip).max(1);
+                    if *width > lw || *height > lh {
+                        return Err(GpuError::OutOfBounds);
+                    }
+                    // The tight readback plane is packed at the MIP LEVEL's width, not the copy region's
+                    // width — the source row stride is `mip_width*bpt`, so a sub-region copy (width < level
+                    // width) advances by the full plane stride, exactly as the CPU oracle does at level 0.
+                    let src_stride = (lw * bpt) as usize;
+                    let plane = self.read_texture_tight_mip(res, *src, *mip)?;
                     let row = (*width * bpt) as usize;
                     // `bytes_per_row == 0` means "tightly packed" on the destination (the protocol/oracle
                     // convention); a non-zero value is the explicit row stride.
