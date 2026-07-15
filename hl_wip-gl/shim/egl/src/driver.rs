@@ -112,17 +112,17 @@ fn default_surface_wh() -> (u32, u32) {
 // EGL: display / initialization / query
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetError() -> i32 {
     with(|s| s.take_egl_error())
 }
 
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetDisplay(_display_id: *mut c_void) -> *mut c_void {
     DISPLAY_TOKEN as *mut c_void
 }
 
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglInitialize(_dpy: *mut c_void, major: *mut i32, minor: *mut i32) -> u32 {
     with(|s| s.inited = true);
     // Advertise EGL 1.5.
@@ -137,7 +137,7 @@ pub extern "C" fn eglInitialize(_dpy: *mut c_void, major: *mut i32, minor: *mut 
     EGL_TRUE
 }
 
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglTerminate(_dpy: *mut c_void) -> u32 {
     with(|s| s.inited = false);
     EGL_TRUE
@@ -148,7 +148,7 @@ pub extern "C" fn eglTerminate(_dpy: *mut c_void) -> u32 {
 /// `EGL_*_platform_wayland` set a toolkit probes before opening a display), otherwise the per-display set.
 /// Advertising `EGL_EXT_platform_wayland` / `EGL_KHR_platform_wayland` is what makes a Wayland app take the
 /// `eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, …)` window path instead of surfaceless/pbuffer.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglQueryString(dpy: *mut c_void, name: i32) -> *const c_char {
     match name {
         EGL_VENDOR => b"hl-gl\0".as_ptr() as *const c_char,
@@ -185,7 +185,7 @@ fn egl_extensions_cstr(client: bool) -> *const c_char {
 /// `egl*`/`gl*` symbol this object hand-implements to its actual address (cast through `usize` so the
 /// `fn` → `*mut c_void` cast is legal). An unknown name (an extension trampoline we do not advertise)
 /// still returns null — the spec-legal "not found".
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
     if procname.is_null() {
         return core::ptr::null_mut();
@@ -650,7 +650,7 @@ pub extern "C" fn eglGetProcAddress(procname: *const c_char) -> *mut c_void {
 /// a GLES-only driver, so only `EGL_OPENGL_ES_API` is honored; any other API (`EGL_OPENGL_API` /
 /// `EGL_OPENVG_API`) is `EGL_BAD_PARAMETER` (never silently accepted). libepoxy binds
 /// `EGL_OPENGL_ES_API` and then confirms it via `eglQueryAPI` to pick its GLES dispatch table.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglBindAPI(api: u32) -> u32 {
     if api != EGL_OPENGL_ES_API {
         with(|s| s.set_egl_error(EGL_BAD_PARAMETER));
@@ -683,7 +683,7 @@ unsafe fn write_configs(configs: *mut *mut c_void, config_size: i32, num_config:
 /// pbuffer requests, so a null / empty `attrib_list` (match-all) and a populated list both return it. A
 /// null `configs` array is the count-only query (`num_config` = number available). `num_config` is
 /// required by the spec; a null one is `EGL_BAD_PARAMETER`.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglChooseConfig(
     _dpy: *mut c_void,
     _attrib_list: *const i32,
@@ -703,7 +703,7 @@ pub extern "C" fn eglChooseConfig(
 /// returns the total count in `num_config`; a real array is filled with up to `config_size` handles and
 /// `num_config` reports how many were written. `num_config` is required; a null one is
 /// `EGL_BAD_PARAMETER`.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetConfigs(
     _dpy: *mut c_void,
     configs: *mut *mut c_void,
@@ -722,7 +722,7 @@ pub extern "C" fn eglGetConfigs(
 /// Delegates the truthful value to [`config::config_attrib`]: a foreign config handle raises
 /// `EGL_BAD_CONFIG` and an unrecognized attribute raises `EGL_BAD_ATTRIBUTE` — both return `EGL_FALSE`
 /// WITHOUT writing `value` or dereferencing the unknown config, instead of the old silent `0`.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetConfigAttrib(
     _dpy: *mut c_void,
     config: *mut c_void,
@@ -754,7 +754,7 @@ pub extern "C" fn eglGetConfigAttrib(
 // EGL: context / surface lifecycle + present
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreateContext(
     _dpy: *mut c_void,
     _config: *mut c_void,
@@ -764,7 +764,7 @@ pub extern "C" fn eglCreateContext(
     with(|s| s.mint_token())
 }
 
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglDestroyContext(_dpy: *mut c_void, ctx: *mut c_void) -> u32 {
     // If this context is current on the calling thread, releasing it drops the thread's binding.
     current::release_if_context(ctx as usize);
@@ -776,7 +776,7 @@ pub extern "C" fn eglDestroyContext(_dpy: *mut c_void, ctx: *mut c_void) -> u32 
 /// `eglGetCurrentSurface` report exactly these on this thread (what libepoxy probes). `ctx ==
 /// EGL_NO_CONTEXT` (null) releases the thread's binding. The binding is thread-local (real EGL semantics):
 /// another thread keeps its own current context.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglMakeCurrent(
     dpy: *mut c_void,
     draw: *mut c_void,
@@ -794,7 +794,7 @@ pub extern "C" fn eglMakeCurrent(
 /// sizeless window falls back to `$HL_GL_SURFACE_W/_H`. When a `wl_surface` is present and a compositor is
 /// reachable (`$WAYLAND_DISPLAY`), a self-contained `wl_shm` present session is brought up so
 /// `eglSwapBuffers` shows the frame; otherwise the session stays `None` (present is skipped, never faked).
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreateWindowSurface(
     _dpy: *mut c_void,
     _config: *mut c_void,
@@ -834,7 +834,7 @@ fn create_window_surface(win: *mut c_void) -> *mut c_void {
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglDestroySurface(_dpy: *mut c_void, surface: *mut c_void) -> u32 {
     // Drop it from the calling thread's current binding (if it was the draw/read surface).
     current::forget_surface(surface as usize);
@@ -855,7 +855,7 @@ const EGL_CONTEXT_LOST: i32 = 0x300E;
 /// committed to the compositor as a `wl_shm` `wl_buffer` (the deployed present path). The read-back
 /// happens BEFORE the swap (which resets the draw-list); a commit failure is surfaced as
 /// `EGL_CONTEXT_LOST`.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u32 {
     with(|s| {
         // Two present targets share the SAME read-back frame:
@@ -919,14 +919,14 @@ pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u3
     })
 }
 
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglSwapInterval(_dpy: *mut c_void, _interval: i32) -> u32 {
     EGL_TRUE
 }
 
 /// `eglGetCurrentDisplay()` — the display of the CALLING THREAD's current context (bound by the last
 /// `eglMakeCurrent`), or `EGL_NO_DISPLAY` (null) when no context is current on this thread.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetCurrentDisplay() -> *mut c_void {
     current::display() as *mut c_void
 }
@@ -934,14 +934,14 @@ pub extern "C" fn eglGetCurrentDisplay() -> *mut c_void {
 /// `eglGetCurrentContext()` — the context current on the CALLING THREAD, or `EGL_NO_CONTEXT` (null) when
 /// none is. libepoxy probes this to select its GL-vs-GLES dispatch table (a NULL here aborts it), so it
 /// MUST return the live context on the thread that made it current.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetCurrentContext() -> *mut c_void {
     current::context() as *mut c_void
 }
 
 /// `eglGetCurrentSurface(readdraw)` — the `EGL_DRAW` (default) or `EGL_READ` surface of the CALLING
 /// THREAD's current binding, or `EGL_NO_SURFACE` (null) when no context is current on this thread.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetCurrentSurface(readdraw: i32) -> *mut c_void {
     let tok = if readdraw == EGL_READ { current::read_surface() } else { current::draw_surface() };
     tok as *mut c_void
@@ -954,7 +954,7 @@ pub extern "C" fn eglGetCurrentSurface(readdraw: i32) -> *mut c_void {
 /// `glGetError` — read + clear the context's error flag. A real app loops on this after batches of GL
 /// calls, so it must return the first error raised (GL keeps it until read) and then reset to
 /// `GL_NO_ERROR`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetError() -> u32 {
     with(|s| s.ctx.take_gl_error())
 }
@@ -962,7 +962,7 @@ pub extern "C" fn glGetError() -> u32 {
 /// `glGetString(name)` — the driver's GLES3 identity strings (`GL_VERSION` = "OpenGL ES 3.0 …", vendor /
 /// renderer / GLSL version / extensions). Served from [`query::gl_string`] so the guest-visible identity
 /// is defined once and unit-tested. Never null: a GLES app dereferences the result unconditionally.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetString(name: u32) -> *const u8 {
     query::gl_string(name).as_ptr()
 }
@@ -972,7 +972,7 @@ pub extern "C" fn glGetString(name: u32) -> *const u8 {
 /// three never disagree. An out-of-range index raises `GL_INVALID_VALUE` and returns null (never a
 /// dangling pointer); a non-`GL_EXTENSIONS` name raises `GL_INVALID_ENUM`. With no extensions advertised
 /// an app that honors the count of `0` never calls this.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const u8 {
     match query::string_i(name, index) {
         Some(bytes) => bytes.as_ptr(),
@@ -991,7 +991,7 @@ pub extern "C" fn glGetStringi(name: u32, index: u32) -> *const u8 {
 /// `glGetIntegerv(pname, data)` — capability limits + bound-object / fixed-function state. Writes the
 /// modeled value(s) for `pname` (1, 2, or 4 ints); a null `data` or unknown `pname` is handled by
 /// [`query::get_integerv`] (unknown → a single `0`).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
     if data.is_null() {
         return;
@@ -1006,7 +1006,7 @@ pub extern "C" fn glGetIntegerv(pname: u32, data: *mut i32) {
 }
 
 /// `glGetFloatv(pname, data)` — the float-typed state (clear color, depth-clear value, line width, …).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetFloatv(pname: u32, data: *mut f32) {
     if data.is_null() {
         return;
@@ -1021,7 +1021,7 @@ pub extern "C" fn glGetFloatv(pname: u32, data: *mut f32) {
 }
 
 /// `glGetBooleanv(pname, data)` — the boolean-typed state (fixed-function enables + depth write mask).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetBooleanv(pname: u32, data: *mut u8) {
     if data.is_null() {
         return;
@@ -1038,7 +1038,7 @@ pub extern "C" fn glGetBooleanv(pname: u32, data: *mut u8) {
 /// `glPixelStorei(pname, param)` — record a pack/unpack pixel-store parameter (e.g. `GL_UNPACK_ALIGNMENT`,
 /// which affects texture-upload row packing). An out-of-range value raises `GL_INVALID_VALUE` (first-error
 /// wins); see [`record::pixel_store`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPixelStorei(pname: u32, param: i32) {
     with(|s| record::pixel_store(&mut s.ctx, pname, param));
 }
@@ -1047,7 +1047,7 @@ pub extern "C" fn glPixelStorei(pname: u32, param: i32) {
 // GLES: buffers
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenBuffers(n: i32, buffers: *mut u32) {
     if buffers.is_null() || n <= 0 {
         return;
@@ -1059,24 +1059,24 @@ pub extern "C" fn glGenBuffers(n: i32, buffers: *mut u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindBuffer(target: u32, buffer: u32) {
     with(|s| record::bind_buffer(&mut s.ctx, target, buffer));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBufferData(target: u32, size: isize, data: *const c_void, usage: u32) {
     let d = unsafe { bytes(data, size) }.to_vec();
     with(|s| record::buffer_data(&mut s.ctx, target, &d, usage));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBufferSubData(target: u32, offset: isize, size: isize, data: *const c_void) {
     let d = unsafe { bytes(data, size) }.to_vec();
     with(|s| record::buffer_sub_data(&mut s.ctx, target, offset.max(0) as usize, &d));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
     if buffers.is_null() || n <= 0 {
         return;
@@ -1092,7 +1092,7 @@ pub extern "C" fn glDeleteBuffers(n: i32, buffers: *const u32) {
 // GLES: textures
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenTextures(n: i32, textures: *mut u32) {
     if textures.is_null() || n <= 0 {
         return;
@@ -1104,17 +1104,17 @@ pub extern "C" fn glGenTextures(n: i32, textures: *mut u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glActiveTexture(texture: u32) {
     with(|s| record::active_texture(&mut s.ctx, texture));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindTexture(target: u32, texture: u32) {
     with(|s| record::bind_texture(&mut s.ctx, target, texture));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glTexImage2D(
     _target: u32,
@@ -1131,7 +1131,7 @@ pub extern "C" fn glTexImage2D(
     with(|s| record::tex_image_2d(&mut s.ctx, width, height, &rgba));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexParameteri(_target: u32, pname: u32, param: i32) {
     with(|s| record::tex_parameter(&mut s.ctx, pname, param as u32));
 }
@@ -1139,13 +1139,13 @@ pub extern "C" fn glTexParameteri(_target: u32, pname: u32, param: i32) {
 /// `glTexParameterf(target, pname, param)` — the float-typed setter. GL's texture filter/wrap parameters
 /// are enum-valued; the app passes the enum as a float, so it is truncated back to the `GLenum` the
 /// integer path records (`glTexParameteri` parity).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexParameterf(_target: u32, pname: u32, param: f32) {
     with(|s| record::tex_parameter(&mut s.ctx, pname, param as u32));
 }
 
 /// `glTexParameterfv(target, pname, params)` — the single-element vector form; reads `params[0]`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexParameterfv(_target: u32, pname: u32, params: *const f32) {
     if params.is_null() {
         return;
@@ -1155,7 +1155,7 @@ pub extern "C" fn glTexParameterfv(_target: u32, pname: u32, params: *const f32)
 }
 
 /// `glTexParameteriv(target, pname, params)` — the single-element integer vector form; reads `params[0]`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexParameteriv(_target: u32, pname: u32, params: *const i32) {
     if params.is_null() {
         return;
@@ -1166,12 +1166,12 @@ pub extern "C" fn glTexParameteriv(_target: u32, pname: u32, params: *const i32)
 
 /// `glGenerateMipmap(target)` — validate + record (an honest no-op on the pixel data; this model samples
 /// the base level only). See [`record::generate_mipmap`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenerateMipmap(target: u32) {
     with(|s| record::generate_mipmap(&mut s.ctx, target));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteTextures(n: i32, textures: *const u32) {
     if textures.is_null() || n <= 0 {
         return;
@@ -1187,12 +1187,12 @@ pub extern "C" fn glDeleteTextures(n: i32, textures: *const u32) {
 // GLES: shaders + programs
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCreateShader(type_: u32) -> u32 {
     with(|s| record::create_shader(&mut s.ctx, type_))
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glShaderSource(
     shader: u32,
     count: i32,
@@ -1203,29 +1203,29 @@ pub extern "C" fn glShaderSource(
     with(|s| record::shader_source(&mut s.ctx, shader, &src));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCompileShader(shader: u32) {
     with(|s| record::compile_shader(&mut s.ctx, shader));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCreateProgram() -> u32 {
     with(|s| record::create_program(&mut s.ctx))
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glAttachShader(program: u32, shader: u32) {
     with(|s| record::attach_shader(&mut s.ctx, program, shader));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glLinkProgram(program: u32) {
     with(|s| {
         let _ = record::link_program(&mut s.ctx, program);
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUseProgram(program: u32) {
     with(|s| record::use_program(&mut s.ctx, program));
 }
@@ -1238,7 +1238,7 @@ pub extern "C" fn glUseProgram(program: u32) {
 
 /// `glGetShaderiv(shader, pname, params)` — `GL_COMPILE_STATUS` (TRUE for a compiled shader),
 /// `GL_INFO_LOG_LENGTH` (0), `GL_SHADER_SOURCE_LENGTH`, `GL_SHADER_TYPE`, `GL_DELETE_STATUS`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
@@ -1249,7 +1249,7 @@ pub extern "C" fn glGetShaderiv(shader: u32, pname: u32, params: *mut i32) {
 
 /// `glGetProgramiv(program, pname, params)` — `GL_LINK_STATUS`/`GL_VALIDATE_STATUS` (TRUE once linked),
 /// `GL_INFO_LOG_LENGTH` (0), `GL_ATTACHED_SHADERS`, `GL_ACTIVE_UNIFORMS`, `GL_ACTIVE_ATTRIBUTES`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
@@ -1260,7 +1260,7 @@ pub extern "C" fn glGetProgramiv(program: u32, pname: u32, params: *mut i32) {
 
 /// `glGetShaderInfoLog(shader, buf_size, length, info_log)` — the shader compiled successfully, so the
 /// diagnostic log is empty (an empty NUL-terminated string, length 0).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetShaderInfoLog(
     _shader: u32,
     buf_size: i32,
@@ -1272,7 +1272,7 @@ pub extern "C" fn glGetShaderInfoLog(
 
 /// `glGetProgramInfoLog(program, buf_size, length, info_log)` — the program linked successfully, so the
 /// diagnostic log is empty (an empty NUL-terminated string, length 0).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramInfoLog(
     _program: u32,
     buf_size: i32,
@@ -1296,7 +1296,7 @@ unsafe fn write_empty_info_log(buf_size: i32, length: *mut i32, info_log: *mut c
 
 /// `glGetUniformLocation(program, name)` — the location of a uniform in the linked program (its reflected
 /// declaration index), or `-1` if `name` is not an active uniform. Null-safe.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32 {
     let want = match unsafe { cstr(name) } {
         Some(s) => s,
@@ -1307,7 +1307,7 @@ pub extern "C" fn glGetUniformLocation(program: u32, name: *const c_char) -> i32
 
 /// `glGetAttribLocation(program, name)` — the vertex attribute's declaration-order slot in the linked
 /// program, or `-1` if `name` is not an active attribute. Null-safe.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetAttribLocation(program: u32, name: *const c_char) -> i32 {
     let want = match unsafe { cstr(name) } {
         Some(s) => s,
@@ -1319,7 +1319,7 @@ pub extern "C" fn glGetAttribLocation(program: u32, name: *const c_char) -> i32 
 /// `glBindAttribLocation(program, index, name)` — a no-op: the GLSL→MSL translator binds attributes by
 /// declaration order (`[[attribute(N)]]`), so an app-requested binding cannot be honored without
 /// re-linking. This matches the reference shim; `glGetAttribLocation` reports the declaration-order slot.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindAttribLocation(_program: u32, _index: u32, _name: *const c_char) {}
 
 /// Write an active-variable reflection into the `glGetActive{Uniform,Attrib}` out-params: `size`, GL
@@ -1358,7 +1358,7 @@ unsafe fn write_active_var(
 /// `glGetActiveUniform(program, index, …)` — the `index`-th active uniform's name/type/size from the
 /// reflected tables (data uniforms first, then samplers — matching `glGetUniformLocation`). An
 /// out-of-range index raises `GL_INVALID_VALUE` and reports an empty name.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glGetActiveUniform(
     program: u32,
@@ -1375,7 +1375,7 @@ pub extern "C" fn glGetActiveUniform(
 
 /// `glGetActiveAttrib(program, index, …)` — the `index`-th active vertex attribute's name/type/size, in
 /// the declaration order `glGetAttribLocation` resolves against. Out-of-range index → `GL_INVALID_VALUE`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glGetActiveAttrib(
     program: u32,
@@ -1412,7 +1412,7 @@ fn emit_active_var(
 
 /// `glUniform1i` — in this simplified model an integer uniform binds a sampler: `location` selects the
 /// sampler's declaration index, `v0` the texture unit (mirrors the lowering test's `uniform_sampler`).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1i(location: i32, v0: i32) {
     if location < 0 {
         return;
@@ -1491,79 +1491,79 @@ unsafe fn mat_bytes(n: usize, count: i32, transpose: bool, value: *const f32) ->
     out
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1f(location: i32, v0: f32) {
     set_uniform(location, &le_f32(&[v0]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2f(location: i32, v0: f32, v1: f32) {
     set_uniform(location, &le_f32(&[v0, v1]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3f(location: i32, v0: f32, v1: f32, v2: f32) {
     set_uniform(location, &le_f32(&[v0, v1, v2]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4f(location: i32, v0: f32, v1: f32, v2: f32, v3: f32) {
     set_uniform(location, &le_f32(&[v0, v1, v2, v3]));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2i(location: i32, v0: i32, v1: i32) {
     set_uniform(location, &le_i32(&[v0, v1]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3i(location: i32, v0: i32, v1: i32, v2: i32) {
     set_uniform(location, &le_i32(&[v0, v1, v2]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4i(location: i32, v0: i32, v1: i32, v2: i32, v3: i32) {
     set_uniform(location, &le_i32(&[v0, v1, v2, v3]));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1fv(location: i32, count: i32, value: *const f32) {
     set_uniform(location, &le_f32(unsafe { slice_f32(value, count, 1) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2fv(location: i32, count: i32, value: *const f32) {
     set_uniform(location, &le_f32(unsafe { slice_f32(value, count, 2) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3fv(location: i32, count: i32, value: *const f32) {
     set_uniform(location, &le_f32(unsafe { slice_f32(value, count, 3) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4fv(location: i32, count: i32, value: *const f32) {
     set_uniform(location, &le_f32(unsafe { slice_f32(value, count, 4) }));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1iv(location: i32, count: i32, value: *const i32) {
     set_uniform(location, &le_i32(unsafe { slice_i32(value, count, 1) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2iv(location: i32, count: i32, value: *const i32) {
     set_uniform(location, &le_i32(unsafe { slice_i32(value, count, 2) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3iv(location: i32, count: i32, value: *const i32) {
     set_uniform(location, &le_i32(unsafe { slice_i32(value, count, 3) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4iv(location: i32, count: i32, value: *const i32) {
     set_uniform(location, &le_i32(unsafe { slice_i32(value, count, 4) }));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix2fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     set_uniform(location, &unsafe { mat_bytes(2, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix3fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     set_uniform(location, &unsafe { mat_bytes(3, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix4fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     set_uniform(location, &unsafe { mat_bytes(4, count, transpose != 0, value) });
 }
@@ -1572,7 +1572,7 @@ pub extern "C" fn glUniformMatrix4fv(location: i32, count: i32, transpose: u8, v
 // GLES: vertex attributes + fixed-function state
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribPointer(
     index: u32,
     size: i32,
@@ -1594,79 +1594,79 @@ pub extern "C" fn glVertexAttribPointer(
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glEnableVertexAttribArray(index: u32) {
     with(|s| record::enable_vertex_attrib(&mut s.ctx, index as usize));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDisableVertexAttribArray(index: u32) {
     with(|s| record::disable_vertex_attrib(&mut s.ctx, index as usize));
 }
 
 /// `glVertexAttribDivisor(index, divisor)` — the instance-step rate for attribute `index` (`0` =
 /// per-vertex, `>0` = per-instance). See [`record::vertex_attrib_divisor`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribDivisor(index: u32, divisor: u32) {
     with(|s| record::vertex_attrib_divisor(&mut s.ctx, index as usize, divisor));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glClearColor(red: f32, green: f32, blue: f32, alpha: f32) {
     with(|s| record::clear_color(&mut s.ctx, [red, green, blue, alpha]));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glViewport(x: i32, y: i32, width: i32, height: i32) {
     with(|s| record::viewport(&mut s.ctx, [x, y, width, height]));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glScissor(x: i32, y: i32, width: i32, height: i32) {
     with(|s| record::scissor(&mut s.ctx, [x, y, width, height]));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glEnable(cap: u32) {
     with(|s| record::enable(&mut s.ctx, cap));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDisable(cap: u32) {
     with(|s| record::disable(&mut s.ctx, cap));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glClearDepthf(d: f32) {
     with(|s| record::clear_depth(&mut s.ctx, d));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendFunc(sfactor: u32, dfactor: u32) {
     with(|s| record::blend_func(&mut s.ctx, sfactor, dfactor));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendFuncSeparate(src_rgb: u32, dst_rgb: u32, src_alpha: u32, dst_alpha: u32) {
     with(|s| record::blend_func_separate(&mut s.ctx, src_rgb, dst_rgb, src_alpha, dst_alpha));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDepthFunc(func: u32) {
     with(|s| record::depth_func(&mut s.ctx, func));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDepthMask(flag: u8) {
     with(|s| record::depth_mask(&mut s.ctx, flag != 0));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCullFace(mode: u32) {
     with(|s| record::cull_face(&mut s.ctx, mode));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFrontFace(mode: u32) {
     with(|s| record::front_face(&mut s.ctx, mode));
 }
@@ -1675,31 +1675,31 @@ pub extern "C" fn glFrontFace(mode: u32) {
 // GLES: draw recording (frame draw-list; IR lowered at eglSwapBuffers)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glClear(_mask: u32) {
     with(|s| record::clear(&mut s.ctx));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawArrays(mode: u32, first: i32, count: i32) {
     with(|s| record::draw_arrays(&mut s.ctx, mode, first, count));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawElements(mode: u32, count: i32, type_: u32, indices: *const c_void) {
     with(|s| record::draw_elements(&mut s.ctx, mode, count, type_, indices as usize));
 }
 
 /// `glDrawArraysInstanced(mode, first, count, instancecount)` — record an instanced array draw; the
 /// frame builder lowers the recorded instance count into `Draw { instance_count }`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawArraysInstanced(mode: u32, first: i32, count: i32, instancecount: i32) {
     with(|s| record::draw_arrays_instanced(&mut s.ctx, mode, first, count, instancecount));
 }
 
 /// `glDrawElementsInstanced(mode, count, type, indices, instancecount)` — record an instanced indexed
 /// draw; lowered into `DrawIndexed { instance_count }`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawElementsInstanced(
     mode: u32,
     count: i32,
@@ -1714,7 +1714,7 @@ pub extern "C" fn glDrawElementsInstanced(
 // GLES: vertex array objects (GLES3 requires a bound VAO to draw)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenVertexArrays(n: i32, arrays: *mut u32) {
     if arrays.is_null() || n <= 0 {
         return;
@@ -1726,12 +1726,12 @@ pub extern "C" fn glGenVertexArrays(n: i32, arrays: *mut u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindVertexArray(array: u32) {
     with(|s| record::bind_vertex_array(&mut s.ctx, array));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteVertexArrays(n: i32, arrays: *const u32) {
     if arrays.is_null() || n <= 0 {
         return;
@@ -1745,7 +1745,7 @@ pub extern "C" fn glDeleteVertexArrays(n: i32, arrays: *const u32) {
 
 /// `glIsVertexArray(array)` — `GL_TRUE`/`GL_FALSE`. Returns the `GLboolean` as the codegen's `u32` ABI
 /// (the low byte is the boolean a C caller reads).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsVertexArray(array: u32) -> u32 {
     with(|s| record::is_vertex_array(&s.ctx, array)) as u32
 }
@@ -1760,7 +1760,7 @@ pub extern "C" fn glIsVertexArray(array: u32) -> u32 {
 // honest error register (the same deferred lowering the in-process render tests exercise).
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenFramebuffers(n: i32, framebuffers: *mut u32) {
     if framebuffers.is_null() || n <= 0 {
         return;
@@ -1772,12 +1772,12 @@ pub extern "C" fn glGenFramebuffers(n: i32, framebuffers: *mut u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindFramebuffer(target: u32, framebuffer: u32) {
     with(|s| record::bind_framebuffer(&mut s.ctx, target, framebuffer));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteFramebuffers(n: i32, framebuffers: *const u32) {
     if framebuffers.is_null() || n <= 0 {
         return;
@@ -1791,7 +1791,7 @@ pub extern "C" fn glDeleteFramebuffers(n: i32, framebuffers: *const u32) {
 
 /// `glIsFramebuffer(framebuffer)` — `GL_TRUE`/`GL_FALSE`. Returns the `GLboolean` as the codegen's `u32`
 /// ABI (the low byte is the boolean a C caller reads), matching `glIsVertexArray`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsFramebuffer(framebuffer: u32) -> u32 {
     with(|s| record::is_framebuffer(&s.ctx, framebuffer)) as u32
 }
@@ -1799,17 +1799,17 @@ pub extern "C" fn glIsFramebuffer(framebuffer: u32) -> u32 {
 /// `glCheckFramebufferStatus(target)` — the completeness enum of the bound draw/read framebuffer (see
 /// [`record::check_framebuffer_status`]). A GLES app calls this before rendering to an FBO and bails on a
 /// non-`GL_FRAMEBUFFER_COMPLETE` result.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCheckFramebufferStatus(target: u32) -> u32 {
     with(|s| record::check_framebuffer_status(&mut s.ctx, target))
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFramebufferTexture2D(target: u32, attachment: u32, textarget: u32, texture: u32, level: i32) {
     with(|s| record::framebuffer_texture_2d(&mut s.ctx, target, attachment, textarget, texture, level));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenRenderbuffers(n: i32, renderbuffers: *mut u32) {
     if renderbuffers.is_null() || n <= 0 {
         return;
@@ -1821,12 +1821,12 @@ pub extern "C" fn glGenRenderbuffers(n: i32, renderbuffers: *mut u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindRenderbuffer(target: u32, renderbuffer: u32) {
     with(|s| record::bind_renderbuffer(&mut s.ctx, target, renderbuffer));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteRenderbuffers(n: i32, renderbuffers: *const u32) {
     if renderbuffers.is_null() || n <= 0 {
         return;
@@ -1840,17 +1840,17 @@ pub extern "C" fn glDeleteRenderbuffers(n: i32, renderbuffers: *const u32) {
 
 /// `glIsRenderbuffer(renderbuffer)` — `GL_TRUE`/`GL_FALSE` as the codegen's `u32` ABI (low byte is the
 /// boolean), matching `glIsFramebuffer`/`glIsVertexArray`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsRenderbuffer(renderbuffer: u32) -> u32 {
     with(|s| record::is_renderbuffer(&s.ctx, renderbuffer)) as u32
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glRenderbufferStorage(target: u32, internalformat: u32, width: i32, height: i32) {
     with(|s| record::renderbuffer_storage(&mut s.ctx, target, internalformat, width, height));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFramebufferRenderbuffer(target: u32, attachment: u32, renderbuffertarget: u32, renderbuffer: u32) {
     with(|s| record::framebuffer_renderbuffer(&mut s.ctx, target, attachment, renderbuffertarget, renderbuffer));
 }
@@ -1859,7 +1859,7 @@ pub extern "C" fn glFramebufferRenderbuffer(target: u32, attachment: u32, render
 /// this deferred model cannot materialize a cross-FBO pixel copy at record time (no rendered source plane
 /// exists until swap), so the region/filter are validated but the copy is a documented no-op; see
 /// [`record::blit_framebuffer`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glBlitFramebuffer(
     _src_x0: i32,
@@ -1884,7 +1884,7 @@ pub extern "C" fn glBlitFramebuffer(
 /// rectangle of the resulting render target back into `pixels`. Only `GL_UNSIGNED_BYTE` RGBA/BGRA/RGB is
 /// modeled; the readback goes through the `hl_gl` service (render → `CopyTextureToBuffer` → `read_buffer`),
 /// the same device→host port as cuda's DtoH.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glReadPixels(
     x: i32,
@@ -1940,7 +1940,7 @@ pub extern "C" fn glReadPixels(
 /// `glDispatchCompute(x, y, z)` — lower the bound compute program + its SSBO/UBO bindings into a
 /// `CreateComputePipeline` + a `Dispatch` and submit (see [`compute::dispatch_compute`]). A sink error is
 /// surfaced through `eglGetError` (the frame's `EGL_*`), never a false success.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDispatchCompute(num_groups_x: u32, num_groups_y: u32, num_groups_z: u32) {
     with(|s| {
         if let Err(e) = compute::dispatch_compute(&mut s.ctx, &mut s.sink, num_groups_x, num_groups_y, num_groups_z) {
@@ -1951,7 +1951,7 @@ pub extern "C" fn glDispatchCompute(num_groups_x: u32, num_groups_y: u32, num_gr
 
 /// `glDispatchComputeIndirect(indirect)` — dispatch with the group counts read from the buffer bound to
 /// `GL_DISPATCH_INDIRECT_BUFFER` at byte offset `indirect` (see [`compute::dispatch_compute_indirect`]).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDispatchComputeIndirect(indirect: isize) {
     with(|s| {
         if let Err(e) = compute::dispatch_compute_indirect(&mut s.ctx, &mut s.sink, indirect) {
@@ -1966,7 +1966,7 @@ pub extern "C" fn glDispatchComputeIndirect(indirect: isize) {
 
 /// `glFenceSync(condition, flags)` — insert a fence into the command stream + return its `GLsync` token
 /// (an opaque non-null pointer), or null on a bad `condition`/`flags`. See [`sync::fence_sync`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFenceSync(condition: u32, flags: u32) -> *mut c_void {
     with(|s| match sync::fence_sync(&mut s.ctx, &mut s.sink, condition, flags) {
         Some(token) => token as *mut c_void,
@@ -1976,33 +1976,33 @@ pub extern "C" fn glFenceSync(condition: u32, flags: u32) -> *mut c_void {
 
 /// `glClientWaitSync(sync, flags, timeout)` — client-side wait on the fence value `sync` marks. See
 /// [`sync::client_wait_sync`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glClientWaitSync(sync: *mut c_void, flags: u32, timeout: u64) -> u32 {
     with(|s| sync::client_wait_sync(&mut s.ctx, &mut s.sink, sync as usize, flags, timeout))
 }
 
 /// `glWaitSync(sync, flags, timeout)` — device-side (queue) wait; lowers to a `WaitFence`. See
 /// [`sync::wait_sync`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glWaitSync(sync: *mut c_void, flags: u32, timeout: u64) {
     with(|s| sync::wait_sync(&mut s.ctx, &mut s.sink, sync as usize, flags, timeout));
 }
 
 /// `glDeleteSync(sync)` — drop the sync object (an unknown non-null sync raises `GL_INVALID_VALUE`).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteSync(sync: *mut c_void) {
     with(|s| sync::delete_sync(&mut s.ctx, sync as usize));
 }
 
 /// `glIsSync(sync)` — `GL_TRUE`/`GL_FALSE` as the codegen's `u8` (`GLboolean`) ABI.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsSync(sync: *mut c_void) -> u8 {
     with(|s| sync::is_sync(&s.ctx, sync as usize)) as u8
 }
 
 /// `glGetSynciv(sync, pname, buf_size, length, values)` — write the single integer state value for
 /// `pname` (see [`sync::get_synciv`]). Null-safe on both out-params.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetSynciv(sync: *mut c_void, pname: u32, buf_size: i32, length: *mut i32, values: *mut i32) {
     let v = with(|s| sync::get_synciv(&mut s.ctx, sync as usize, pname));
     if let Some(v) = v {
@@ -2025,14 +2025,14 @@ pub extern "C" fn glGetSynciv(sync: *mut c_void, pname: u32, buf_size: i32, leng
 
 /// `glBindBufferBase(target, index, buffer)` — bind the whole `buffer` to indexed slot `index`. See
 /// [`record::bind_buffer_base`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindBufferBase(target: u32, index: u32, buffer: u32) {
     with(|s| record::bind_buffer_base(&mut s.ctx, target, index, buffer));
 }
 
 /// `glBindBufferRange(target, index, buffer, offset, size)` — bind `[offset, offset+size)` of `buffer` to
 /// indexed slot `index`. See [`record::bind_buffer_range`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindBufferRange(target: u32, index: u32, buffer: u32, offset: isize, size: isize) {
     with(|s| record::bind_buffer_range(&mut s.ctx, target, index, buffer, offset, size));
 }
@@ -2044,7 +2044,7 @@ pub extern "C" fn glBindBufferRange(target: u32, index: u32, buffer: u32, offset
 /// `glMapBufferRange(target, offset, length, access)` — map a range of the bound buffer and return a
 /// pointer INTO its host storage (the app writes through it; `glUnmapBuffer` flushes). Null on error. The
 /// pointer stays valid until the buffer's storage reallocates (the reference shim's fragile contract).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glMapBufferRange(target: u32, offset: isize, length: isize, access: u32) -> *mut c_void {
     with(|s| match map::map_buffer_range(&mut s.ctx, target, offset, length, access) {
         Some((name, off)) => match s.ctx.buffers.get_mut(name) {
@@ -2057,7 +2057,7 @@ pub extern "C" fn glMapBufferRange(target: u32, offset: isize, length: isize, ac
 
 /// `glUnmapBuffer(target)` — flush the mapped range as a `WriteBuffer` + clear the mapping. Returns the
 /// `GLboolean` (`u8`) result; a sink error is surfaced via `eglGetError`. See [`map::unmap_buffer`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
     with(|s| match map::unmap_buffer(&mut s.ctx, &mut s.sink, target) {
         Ok(v) => v,
@@ -2070,7 +2070,7 @@ pub extern "C" fn glUnmapBuffer(target: u32) -> u8 {
 
 /// `glFlushMappedBufferRange(target, offset, length)` — flush a sub-range of a still-mapped buffer as a
 /// `WriteBuffer`. See [`map::flush_mapped_range`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFlushMappedBufferRange(target: u32, offset: isize, length: isize) {
     with(|s| {
         if let Err(e) = map::flush_mapped_range(&mut s.ctx, &mut s.sink, target, offset, length) {
@@ -2084,7 +2084,7 @@ pub extern "C" fn glFlushMappedBufferRange(target: u32, offset: isize, length: i
 // ==================================================================================================
 
 /// `glDrawBuffers(n, bufs)` — record the fragment-output color-buffer list. See [`record::draw_buffers`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawBuffers(n: i32, bufs: *const u32) {
     let list = if bufs.is_null() || n <= 0 {
         Vec::new()
@@ -2096,7 +2096,7 @@ pub extern "C" fn glDrawBuffers(n: i32, bufs: *const u32) {
 
 /// `glReadBuffer(src)` — select the color buffer subsequent readbacks read from. See
 /// [`record::read_buffer`].
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glReadBuffer(src: u32) {
     with(|s| record::read_buffer(&mut s.ctx, src));
 }
@@ -2105,7 +2105,7 @@ pub extern "C" fn glReadBuffer(src: u32) {
 // ES3 sampler objects (client-side state; no GPU IR) — glGen/Bind/Delete/SamplerParameter*
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenSamplers(count: i32, samplers: *mut u32) {
     if samplers.is_null() || count <= 0 {
         return;
@@ -2117,7 +2117,7 @@ pub extern "C" fn glGenSamplers(count: i32, samplers: *mut u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteSamplers(count: i32, samplers: *const u32) {
     if count < 0 {
         with(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
@@ -2133,28 +2133,28 @@ pub extern "C" fn glDeleteSamplers(count: i32, samplers: *const u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindSampler(unit: u32, sampler: u32) {
     with(|s| es3::bind_sampler(&mut s.ctx, unit, sampler));
 }
 
 /// `glIsSampler(sampler)` — `GLboolean` in the codegen's `u8` ABI (low byte is the boolean).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsSampler(sampler: u32) -> u8 {
     with(|s| es3::is_sampler(&s.ctx, sampler)) as u8
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glSamplerParameteri(sampler: u32, pname: u32, param: i32) {
     with(|s| es3::sampler_parameter(&mut s.ctx, sampler, pname, param, param as f32));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glSamplerParameterf(sampler: u32, pname: u32, param: f32) {
     with(|s| es3::sampler_parameter(&mut s.ctx, sampler, pname, param as i32, param));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glSamplerParameteriv(sampler: u32, pname: u32, param: *const i32) {
     if param.is_null() {
         return;
@@ -2163,7 +2163,7 @@ pub extern "C" fn glSamplerParameteriv(sampler: u32, pname: u32, param: *const i
     with(|s| es3::sampler_parameter(&mut s.ctx, sampler, pname, v, v as f32));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glSamplerParameterfv(sampler: u32, pname: u32, param: *const f32) {
     if param.is_null() {
         return;
@@ -2173,7 +2173,7 @@ pub extern "C" fn glSamplerParameterfv(sampler: u32, pname: u32, param: *const f
 }
 
 /// `glSamplerParameterIiv` — the integer (non-normalized) vector form; reads `param[0]` (same setter path).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glSamplerParameterIiv(sampler: u32, pname: u32, param: *const i32) {
     if param.is_null() {
         return;
@@ -2183,7 +2183,7 @@ pub extern "C" fn glSamplerParameterIiv(sampler: u32, pname: u32, param: *const 
 }
 
 /// `glSamplerParameterIuiv` — the unsigned integer vector form; reads `param[0]`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glSamplerParameterIuiv(sampler: u32, pname: u32, param: *const u32) {
     if param.is_null() {
         return;
@@ -2192,7 +2192,7 @@ pub extern "C" fn glSamplerParameterIuiv(sampler: u32, pname: u32, param: *const
     with(|s| es3::sampler_parameter(&mut s.ctx, sampler, pname, v, v as f32));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetSamplerParameteriv(sampler: u32, pname: u32, params: *mut i32) {
     let v = with(|s| es3::get_sampler_parameter(&mut s.ctx, sampler, pname));
     if let Some(v) = v {
@@ -2202,7 +2202,7 @@ pub extern "C" fn glGetSamplerParameteriv(sampler: u32, pname: u32, params: *mut
     }
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetSamplerParameterfv(sampler: u32, pname: u32, params: *mut f32) {
     let v = with(|s| es3::get_sampler_parameter(&mut s.ctx, sampler, pname));
     if let Some(v) = v {
@@ -2213,13 +2213,13 @@ pub extern "C" fn glGetSamplerParameterfv(sampler: u32, pname: u32, params: *mut
 }
 
 /// `glGetSamplerParameterIiv` — the integer view of `glGetSamplerParameteriv`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetSamplerParameterIiv(sampler: u32, pname: u32, params: *mut i32) {
     glGetSamplerParameteriv(sampler, pname, params);
 }
 
 /// `glGetSamplerParameterIuiv` — the unsigned-integer view of `glGetSamplerParameteriv`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetSamplerParameterIuiv(sampler: u32, pname: u32, params: *mut u32) {
     let v = with(|s| es3::get_sampler_parameter(&mut s.ctx, sampler, pname));
     if let Some(v) = v {
@@ -2233,7 +2233,7 @@ pub extern "C" fn glGetSamplerParameterIuiv(sampler: u32, pname: u32, params: *m
 // ES3 query objects (occlusion / transform-feedback; client-side lifecycle, no GPU counter yet)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenQueries(n: i32, ids: *mut u32) {
     if ids.is_null() || n <= 0 {
         return;
@@ -2245,7 +2245,7 @@ pub extern "C" fn glGenQueries(n: i32, ids: *mut u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteQueries(n: i32, ids: *const u32) {
     if n < 0 {
         with(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
@@ -2261,23 +2261,23 @@ pub extern "C" fn glDeleteQueries(n: i32, ids: *const u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBeginQuery(target: u32, id: u32) {
     with(|s| es3::begin_query(&mut s.ctx, target, id));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glEndQuery(target: u32) {
     with(|s| es3::end_query(&mut s.ctx, target));
 }
 
 /// `glIsQuery(id)` — `GLboolean` in the codegen's `u8` ABI.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsQuery(id: u32) -> u8 {
     with(|s| es3::is_query(&s.ctx, id)) as u8
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetQueryiv(target: u32, pname: u32, params: *mut i32) {
     let v = with(|s| es3::get_queryiv(&mut s.ctx, target, pname));
     if let (Some(v), false) = (v, params.is_null()) {
@@ -2285,7 +2285,7 @@ pub extern "C" fn glGetQueryiv(target: u32, pname: u32, params: *mut i32) {
     }
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetQueryObjectuiv(id: u32, pname: u32, params: *mut u32) {
     let v = with(|s| es3::get_query_objectuiv(&mut s.ctx, id, pname));
     if let (Some(v), false) = (v, params.is_null()) {
@@ -2297,7 +2297,7 @@ pub extern "C" fn glGetQueryObjectuiv(id: u32, pname: u32, params: *mut u32) {
 // ES3 transform-feedback objects (client-side lifecycle + per-program varying capture)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenTransformFeedbacks(n: i32, ids: *mut u32) {
     if ids.is_null() || n <= 0 {
         return;
@@ -2309,7 +2309,7 @@ pub extern "C" fn glGenTransformFeedbacks(n: i32, ids: *mut u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteTransformFeedbacks(n: i32, ids: *const u32) {
     if n < 0 {
         with(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
@@ -2325,38 +2325,38 @@ pub extern "C" fn glDeleteTransformFeedbacks(n: i32, ids: *const u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindTransformFeedback(target: u32, id: u32) {
     with(|s| es3::bind_transform_feedback(&mut s.ctx, target, id));
 }
 
 /// `glIsTransformFeedback(id)` — `GLboolean` in the codegen's `u8` ABI.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsTransformFeedback(id: u32) -> u8 {
     with(|s| es3::is_transform_feedback(&s.ctx, id)) as u8
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBeginTransformFeedback(primitive_mode: u32) {
     with(|s| es3::begin_transform_feedback(&mut s.ctx, primitive_mode));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glEndTransformFeedback() {
     with(|s| es3::end_transform_feedback(&mut s.ctx));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPauseTransformFeedback() {
     with(|s| es3::pause_transform_feedback(&mut s.ctx));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glResumeTransformFeedback() {
     with(|s| es3::resume_transform_feedback(&mut s.ctx));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTransformFeedbackVaryings(program: u32, count: i32, varyings: *const *const c_char, buffer_mode: u32) {
     // Marshal the NUL-terminated name array up front (a null entry with count>0 is GL_INVALID_VALUE).
     if count < 0 {
@@ -2385,7 +2385,7 @@ pub extern "C" fn glTransformFeedbackVaryings(program: u32, count: i32, varyings
 /// `glGetTransformFeedbackVarying(program, index, …)` — report the captured varying's name (real state)
 /// plus a best-effort `size = 1`, `type = GL_FLOAT_VEC4` (no GLSL reflection). Out of range →
 /// `GL_INVALID_VALUE` + empty name.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glGetTransformFeedbackVarying(
     program: u32,
@@ -2444,7 +2444,7 @@ unsafe fn write_c_name(bytes: &[u8], buf_size: i32, length: *mut i32, out: *mut 
 // ES3 separate-shader program pipelines (client-side object state)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGenProgramPipelines(n: i32, pipelines: *mut u32) {
     if pipelines.is_null() || n <= 0 {
         return;
@@ -2456,7 +2456,7 @@ pub extern "C" fn glGenProgramPipelines(n: i32, pipelines: *mut u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteProgramPipelines(n: i32, pipelines: *const u32) {
     if n < 0 {
         with(|s| s.ctx.set_gl_error(GL_INVALID_VALUE));
@@ -2472,23 +2472,23 @@ pub extern "C" fn glDeleteProgramPipelines(n: i32, pipelines: *const u32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindProgramPipeline(pipeline: u32) {
     with(|s| es3::bind_program_pipeline(&mut s.ctx, pipeline));
 }
 
 /// `glIsProgramPipeline(pipeline)` — `GLboolean` in the codegen's `u8` ABI.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsProgramPipeline(pipeline: u32) -> u8 {
     with(|s| es3::is_program_pipeline(&s.ctx, pipeline)) as u8
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUseProgramStages(pipeline: u32, stages: u32, program: u32) {
     with(|s| es3::use_program_stages(&mut s.ctx, pipeline, stages, program));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glActiveShaderProgram(pipeline: u32, program: u32) {
     with(|s| es3::active_shader_program(&mut s.ctx, pipeline, program));
 }
@@ -2496,7 +2496,7 @@ pub extern "C" fn glActiveShaderProgram(pipeline: u32, program: u32) {
 /// `glProgramParameteri(program, pname, value)` — only `GL_PROGRAM_SEPARABLE` is modeled (a linked
 /// program is separable by construction here, so the flag is accepted). An unknown program →
 /// `GL_INVALID_VALUE`; an unmodeled `pname` → `GL_INVALID_ENUM`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramParameteri(program: u32, pname: u32, value: i32) {
     let _ = value;
     with(|s| {
@@ -2508,7 +2508,7 @@ pub extern "C" fn glProgramParameteri(program: u32, pname: u32, value: i32) {
     });
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramPipelineiv(pipeline: u32, pname: u32, params: *mut i32) {
     let v = with(|s| es3::get_program_pipelineiv(&mut s.ctx, pipeline, pname));
     if let (Some(v), false) = (v, params.is_null()) {
@@ -2517,14 +2517,14 @@ pub extern "C" fn glGetProgramPipelineiv(pipeline: u32, pname: u32, params: *mut
 }
 
 /// `glGetProgramPipelineInfoLog` — the pipeline validates clean, so the log is empty (length 0).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramPipelineInfoLog(_pipeline: u32, buf_size: i32, length: *mut i32, info_log: *mut c_char) {
     unsafe { write_empty_info_log(buf_size, length, info_log) };
 }
 
 /// `glValidateProgramPipeline(pipeline)` — an unknown pipeline raises `GL_INVALID_OPERATION`; a known one
 /// validates clean (the pipeline carries no cross-stage interface to reject in this model).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glValidateProgramPipeline(pipeline: u32) {
     // A known pipeline validates clean; an unknown one raises GL_INVALID_OPERATION (via the getter).
     with(|s| {
@@ -2535,7 +2535,7 @@ pub extern "C" fn glValidateProgramPipeline(pipeline: u32) {
 /// `glCreateShaderProgramv(type, count, strings)` — create + compile + link a single-stage separable
 /// program from the joined source (a real body: the ES3 convenience constructor). Returns the new program
 /// name, or `0` on a bad `type` / empty source.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCreateShaderProgramv(type_: u32, count: i32, strings: *const *const c_char) -> u32 {
     if !matches!(type_, GL_VERTEX_SHADER | GL_FRAGMENT_SHADER | GL_COMPUTE_SHADER) {
         with(|s| s.ctx.set_gl_error(GL_INVALID_ENUM));
@@ -2557,17 +2557,17 @@ pub extern "C" fn glCreateShaderProgramv(type_: u32, count: i32, strings: *const
 // ES3 texture storage / upload (glTexStorage*, glTexImage3D, glTexSubImage*, glCopyTexSubImage*)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexStorage2D(target: u32, levels: i32, internalformat: u32, width: i32, height: i32) {
     with(|s| record::tex_storage_2d(&mut s.ctx, target, levels, internalformat, width, height));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexStorage3D(target: u32, levels: i32, _internalformat: u32, width: i32, height: i32, depth: i32) {
     with(|s| record::tex_storage_3d(&mut s.ctx, target, levels, width, height, depth));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glTexImage3D(
     target: u32,
@@ -2585,7 +2585,7 @@ pub extern "C" fn glTexImage3D(
     with(|s| record::tex_image_3d(&mut s.ctx, target, level, width, height, depth, &rgba));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glTexSubImage2D(
     target: u32,
@@ -2602,7 +2602,7 @@ pub extern "C" fn glTexSubImage2D(
     with(|s| record::tex_sub_image_2d(&mut s.ctx, target, level, xoffset, yoffset, width, height, &rgba));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glTexSubImage3D(
     target: u32,
@@ -2621,7 +2621,7 @@ pub extern "C" fn glTexSubImage3D(
     with(|s| record::tex_sub_image_3d(&mut s.ctx, target, level, xoffset, yoffset, zoffset, width, height, depth, &rgba));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCopyTexSubImage2D(target: u32, level: i32, xoffset: i32, yoffset: i32, x: i32, y: i32, width: i32, height: i32) {
     with(|s| record::copy_tex_sub_image_2d(&mut s.ctx, target, level, xoffset, yoffset, x, y, width, height));
@@ -2630,7 +2630,7 @@ pub extern "C" fn glCopyTexSubImage2D(target: u32, level: i32, xoffset: i32, yof
 /// `glCopyTexSubImage3D` — the deferred model has no materialized source color plane per layer at record
 /// time (see [`record::copy_tex_sub_image_2d`]); the layer copy is a documented no-op. Params validated
 /// only insofar as a bad `target` is left to the bound-texture path — an honest no-op body.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCopyTexSubImage3D(
     _target: u32,
@@ -2649,7 +2649,7 @@ pub extern "C" fn glCopyTexSubImage3D(
 /// model has no materialized default-framebuffer source plane at record time (only a color-attachment
 /// texture carries pixels), so the allocation of the destination extent is honored and the pixel copy is
 /// the documented no-op (mirrors `glCopyTexSubImage2D`/`glBlitFramebuffer`).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCopyTexImage2D(target: u32, level: i32, internalformat: u32, x: i32, y: i32, width: i32, height: i32, border: i32) {
     let _ = (x, y);
@@ -2677,7 +2677,7 @@ pub extern "C" fn glCopyTexImage2D(target: u32, level: i32, internalformat: u32,
 
 /// `glCompressedTexImage2D` — a compressed upload the RGBA8 model cannot decode. We allocate the bound
 /// texture's extent (so bookkeeping/bind proceeds) and truthfully do not materialize sampled pixels.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCompressedTexImage2D(
     target: u32,
@@ -2701,7 +2701,7 @@ pub extern "C" fn glCompressedTexImage2D(
 }
 
 /// `glCompressedTexImage3D` — the 2D-array / 3D compressed upload; layer-0 extent allocated, no decode.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCompressedTexImage3D(
     target: u32,
@@ -2727,7 +2727,7 @@ pub extern "C" fn glCompressedTexImage3D(
 
 /// `glCompressedTexSubImage2D` — a compressed sub-image the model cannot decode: an honest no-op (the
 /// texture's sampled pixels are unchanged).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCompressedTexSubImage2D(
     _target: u32,
@@ -2743,7 +2743,7 @@ pub extern "C" fn glCompressedTexSubImage2D(
 }
 
 /// `glCompressedTexSubImage3D` — the 2D-array / 3D compressed sub-image; an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCompressedTexSubImage3D(
     _target: u32,
@@ -2764,7 +2764,7 @@ pub extern "C" fn glCompressedTexSubImage3D(
 // ES3 buffer / texture / vertex-attribute state queries
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetBufferParameteriv(target: u32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
@@ -2774,7 +2774,7 @@ pub extern "C" fn glGetBufferParameteriv(target: u32, pname: u32, params: *mut i
 }
 
 /// `glGetBufferParameteri64v` — the 64-bit view of `glGetBufferParameteriv` (size/usage widened).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetBufferParameteri64v(target: u32, pname: u32, params: *mut i64) {
     if params.is_null() {
         return;
@@ -2783,7 +2783,7 @@ pub extern "C" fn glGetBufferParameteri64v(target: u32, pname: u32, params: *mut
     unsafe { *params = v as i64 };
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetTexParameteriv(target: u32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
@@ -2792,7 +2792,7 @@ pub extern "C" fn glGetTexParameteriv(target: u32, pname: u32, params: *mut i32)
     unsafe { *params = v };
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetTexParameterfv(target: u32, pname: u32, params: *mut f32) {
     if params.is_null() {
         return;
@@ -2802,13 +2802,13 @@ pub extern "C" fn glGetTexParameterfv(target: u32, pname: u32, params: *mut f32)
 }
 
 /// `glGetTexParameterIiv` — the integer view of `glGetTexParameteriv`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetTexParameterIiv(target: u32, pname: u32, params: *mut i32) {
     glGetTexParameteriv(target, pname, params);
 }
 
 /// `glGetTexParameterIuiv` — the unsigned-integer view.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetTexParameterIuiv(target: u32, pname: u32, params: *mut u32) {
     if params.is_null() {
         return;
@@ -2820,14 +2820,14 @@ pub extern "C" fn glGetTexParameterIuiv(target: u32, pname: u32, params: *mut u3
 /// `glGetVertexAttribfv`/`iv` — attribute readback. This model records the array pointer + enable state
 /// but reports the safe default `0` for the queried parameters (no attribute reflected back), matching the
 /// reference shim; the app's own `glVertexAttribPointer` state is authoritative.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetVertexAttribfv(_index: u32, _pname: u32, params: *mut f32) {
     if !params.is_null() {
         unsafe { *params = 0.0 };
     }
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetVertexAttribiv(_index: u32, _pname: u32, params: *mut i32) {
     if !params.is_null() {
         unsafe { *params = 0 };
@@ -2835,14 +2835,14 @@ pub extern "C" fn glGetVertexAttribiv(_index: u32, _pname: u32, params: *mut i32
 }
 
 /// `glGetVertexAttribIiv`/`Iuiv` — the integer forms; same `0` default.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetVertexAttribIiv(_index: u32, _pname: u32, params: *mut i32) {
     if !params.is_null() {
         unsafe { *params = 0 };
     }
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetVertexAttribIuiv(_index: u32, _pname: u32, params: *mut u32) {
     if !params.is_null() {
         unsafe { *params = 0 };
@@ -2851,7 +2851,7 @@ pub extern "C" fn glGetVertexAttribIuiv(_index: u32, _pname: u32, params: *mut u
 
 /// `glGetVertexAttribPointerv` — the attribute array pointer readback; reports null (the app's own bound
 /// pointer is authoritative), matching the reference.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetVertexAttribPointerv(_index: u32, _pname: u32, pointer: *mut *mut c_void) {
     if !pointer.is_null() {
         unsafe { *pointer = core::ptr::null_mut() };
@@ -2862,7 +2862,7 @@ pub extern "C" fn glGetVertexAttribPointerv(_index: u32, _pname: u32, pointer: *
 // ES3 buffer copy (glCopyBufferSubData) + readback with a bound size (glReadnPixels)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glCopyBufferSubData(read_target: u32, write_target: u32, read_offset: isize, write_offset: isize, size: isize) {
     with(|s| record::copy_buffer_sub_data(&mut s.ctx, read_target, write_target, read_offset, write_offset, size));
 }
@@ -2870,7 +2870,7 @@ pub extern "C" fn glCopyBufferSubData(read_target: u32, write_target: u32, read_
 /// `glReadnPixels(x, y, w, h, format, type, bufSize, data)` — the bounded-buffer form of `glReadPixels`:
 /// identical readback, but never writes more than `bufSize` bytes into `data` (a `bufSize` too small for
 /// the requested rect raises `GL_INVALID_OPERATION`).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glReadnPixels(
     x: i32,
@@ -2933,35 +2933,35 @@ pub extern "C" fn glReadnPixels(
 // shim and `gl_shim.c`). The integer attribute pointer/format entry points record into the same attribute
 // state the float pointer path uses.
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttrib1f(_index: u32, _x: f32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttrib2f(_index: u32, _x: f32, _y: f32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttrib3f(_index: u32, _x: f32, _y: f32, _z: f32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttrib4f(_index: u32, _x: f32, _y: f32, _z: f32, _w: f32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttrib1fv(_index: u32, _v: *const f32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttrib2fv(_index: u32, _v: *const f32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttrib3fv(_index: u32, _v: *const f32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttrib4fv(_index: u32, _v: *const f32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribI4i(_index: u32, _x: i32, _y: i32, _z: i32, _w: i32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribI4ui(_index: u32, _x: u32, _y: u32, _z: u32, _w: u32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribI4iv(_index: u32, _v: *const i32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribI4uiv(_index: u32, _v: *const u32) {}
 
 /// `glVertexAttribIPointer(index, size, type, stride, pointer)` — an integer vertex-attribute array;
 /// records into the same per-location attribute state as `glVertexAttribPointer` (marked integer, never
 /// normalized).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribIPointer(index: u32, size: i32, type_: u32, stride: i32, pointer: *const c_void) {
     with(|s| record::vertex_attrib_pointer(&mut s.ctx, index as usize, size, type_, false, stride, pointer as usize));
 }
@@ -2969,7 +2969,7 @@ pub extern "C" fn glVertexAttribIPointer(index: u32, size: i32, type_: u32, stri
 /// `glVertexAttribIFormat(attribindex, size, type, relativeoffset)` — the separate-format (VAO) integer
 /// attribute format; records size/type/offset into the attribute state (a no-op for the fields this model
 /// does not separately track).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribIFormat(attribindex: u32, size: i32, type_: u32, relativeoffset: u32) {
     with(|s| record::vertex_attrib_pointer(&mut s.ctx, attribindex as usize, size, type_, false, 0, relativeoffset as usize));
 }
@@ -2981,11 +2981,11 @@ pub extern "C" fn glVertexAttribIFormat(attribindex: u32, size: i32, type_: u32,
 /// `glInvalidateFramebuffer(target, n, attachments)` — a discard HINT that the listed attachments'
 /// contents are no longer needed. This deferred model rebuilds a fresh frame each swap (nothing is
 /// preserved across frames), so the hint is already satisfied — an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glInvalidateFramebuffer(_target: u32, _num_attachments: i32, _attachments: *const u32) {}
 
 /// `glInvalidateSubFramebuffer` — the sub-rectangle discard hint; same honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glInvalidateSubFramebuffer(
     _target: u32,
@@ -3000,11 +3000,11 @@ pub extern "C" fn glInvalidateSubFramebuffer(
 
 /// Separate-face stencil state — this model backs no stencil buffer (the default framebuffer has no
 /// stencil attachment), so these carry no observable state: an honest no-op (matches the reference shim).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glStencilFuncSeparate(_face: u32, _func: u32, _ref: i32, _mask: u32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glStencilMaskSeparate(_face: u32, _mask: u32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glStencilOpSeparate(_face: u32, _sfail: u32, _dpfail: u32, _dppass: u32) {}
 
 // ==================================================================================================
@@ -3086,60 +3086,60 @@ unsafe fn mat_bytes_cr(cols: usize, rows: usize, count: i32, transpose: bool, va
 // GLES3.0: unsigned-integer + non-square-matrix data uniforms (bound program's uniform block)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1ui(location: i32, v0: u32) {
     set_uniform(location, &le_u32(&[v0]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2ui(location: i32, v0: u32, v1: u32) {
     set_uniform(location, &le_u32(&[v0, v1]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3ui(location: i32, v0: u32, v1: u32, v2: u32) {
     set_uniform(location, &le_u32(&[v0, v1, v2]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4ui(location: i32, v0: u32, v1: u32, v2: u32, v3: u32) {
     set_uniform(location, &le_u32(&[v0, v1, v2, v3]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform1uiv(location: i32, count: i32, value: *const u32) {
     set_uniform(location, &le_u32(unsafe { slice_u32(value, count, 1) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform2uiv(location: i32, count: i32, value: *const u32) {
     set_uniform(location, &le_u32(unsafe { slice_u32(value, count, 2) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform3uiv(location: i32, count: i32, value: *const u32) {
     set_uniform(location, &le_u32(unsafe { slice_u32(value, count, 3) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniform4uiv(location: i32, count: i32, value: *const u32) {
     set_uniform(location, &le_u32(unsafe { slice_u32(value, count, 4) }));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix2x3fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     set_uniform(location, &unsafe { mat_bytes_cr(2, 3, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix3x2fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     set_uniform(location, &unsafe { mat_bytes_cr(3, 2, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix2x4fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     set_uniform(location, &unsafe { mat_bytes_cr(2, 4, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix4x2fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     set_uniform(location, &unsafe { mat_bytes_cr(4, 2, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix3x4fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     set_uniform(location, &unsafe { mat_bytes_cr(3, 4, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformMatrix4x3fv(location: i32, count: i32, transpose: u8, value: *const f32) {
     set_uniform(location, &unsafe { mat_bytes_cr(4, 3, count, transpose != 0, value) });
 }
@@ -3153,7 +3153,7 @@ fn set_program_uniform(program: u32, location: i32, bytes: &[u8]) {
     with(|s| record::program_uniform_at(&mut s.ctx, program, location, bytes));
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform1i(program: u32, location: i32, v0: i32) {
     // Parity with glUniform1i: an integer program-uniform selects a sampler's texture unit.
     if location < 0 {
@@ -3161,131 +3161,131 @@ pub extern "C" fn glProgramUniform1i(program: u32, location: i32, v0: i32) {
     }
     with(|s| record::program_uniform_sampler(&mut s.ctx, program, location as usize, v0));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform2i(program: u32, location: i32, v0: i32, v1: i32) {
     set_program_uniform(program, location, &le_i32(&[v0, v1]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform3i(program: u32, location: i32, v0: i32, v1: i32, v2: i32) {
     set_program_uniform(program, location, &le_i32(&[v0, v1, v2]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform4i(program: u32, location: i32, v0: i32, v1: i32, v2: i32, v3: i32) {
     set_program_uniform(program, location, &le_i32(&[v0, v1, v2, v3]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform1ui(program: u32, location: i32, v0: u32) {
     set_program_uniform(program, location, &le_u32(&[v0]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform2ui(program: u32, location: i32, v0: u32, v1: u32) {
     set_program_uniform(program, location, &le_u32(&[v0, v1]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform3ui(program: u32, location: i32, v0: u32, v1: u32, v2: u32) {
     set_program_uniform(program, location, &le_u32(&[v0, v1, v2]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform4ui(program: u32, location: i32, v0: u32, v1: u32, v2: u32, v3: u32) {
     set_program_uniform(program, location, &le_u32(&[v0, v1, v2, v3]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform1f(program: u32, location: i32, v0: f32) {
     set_program_uniform(program, location, &le_f32(&[v0]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform2f(program: u32, location: i32, v0: f32, v1: f32) {
     set_program_uniform(program, location, &le_f32(&[v0, v1]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform3f(program: u32, location: i32, v0: f32, v1: f32, v2: f32) {
     set_program_uniform(program, location, &le_f32(&[v0, v1, v2]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform4f(program: u32, location: i32, v0: f32, v1: f32, v2: f32, v3: f32) {
     set_program_uniform(program, location, &le_f32(&[v0, v1, v2, v3]));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform1fv(program: u32, location: i32, count: i32, value: *const f32) {
     set_program_uniform(program, location, &le_f32(unsafe { slice_f32(value, count, 1) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform2fv(program: u32, location: i32, count: i32, value: *const f32) {
     set_program_uniform(program, location, &le_f32(unsafe { slice_f32(value, count, 2) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform3fv(program: u32, location: i32, count: i32, value: *const f32) {
     set_program_uniform(program, location, &le_f32(unsafe { slice_f32(value, count, 3) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform4fv(program: u32, location: i32, count: i32, value: *const f32) {
     set_program_uniform(program, location, &le_f32(unsafe { slice_f32(value, count, 4) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform1iv(program: u32, location: i32, count: i32, value: *const i32) {
     set_program_uniform(program, location, &le_i32(unsafe { slice_i32(value, count, 1) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform2iv(program: u32, location: i32, count: i32, value: *const i32) {
     set_program_uniform(program, location, &le_i32(unsafe { slice_i32(value, count, 2) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform3iv(program: u32, location: i32, count: i32, value: *const i32) {
     set_program_uniform(program, location, &le_i32(unsafe { slice_i32(value, count, 3) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform4iv(program: u32, location: i32, count: i32, value: *const i32) {
     set_program_uniform(program, location, &le_i32(unsafe { slice_i32(value, count, 4) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform1uiv(program: u32, location: i32, count: i32, value: *const u32) {
     set_program_uniform(program, location, &le_u32(unsafe { slice_u32(value, count, 1) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform2uiv(program: u32, location: i32, count: i32, value: *const u32) {
     set_program_uniform(program, location, &le_u32(unsafe { slice_u32(value, count, 2) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform3uiv(program: u32, location: i32, count: i32, value: *const u32) {
     set_program_uniform(program, location, &le_u32(unsafe { slice_u32(value, count, 3) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniform4uiv(program: u32, location: i32, count: i32, value: *const u32) {
     set_program_uniform(program, location, &le_u32(unsafe { slice_u32(value, count, 4) }));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniformMatrix2fv(program: u32, location: i32, count: i32, transpose: u8, value: *const f32) {
     set_program_uniform(program, location, &unsafe { mat_bytes_cr(2, 2, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniformMatrix3fv(program: u32, location: i32, count: i32, transpose: u8, value: *const f32) {
     set_program_uniform(program, location, &unsafe { mat_bytes_cr(3, 3, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniformMatrix4fv(program: u32, location: i32, count: i32, transpose: u8, value: *const f32) {
     set_program_uniform(program, location, &unsafe { mat_bytes_cr(4, 4, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniformMatrix2x3fv(program: u32, location: i32, count: i32, transpose: u8, value: *const f32) {
     set_program_uniform(program, location, &unsafe { mat_bytes_cr(2, 3, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniformMatrix3x2fv(program: u32, location: i32, count: i32, transpose: u8, value: *const f32) {
     set_program_uniform(program, location, &unsafe { mat_bytes_cr(3, 2, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniformMatrix2x4fv(program: u32, location: i32, count: i32, transpose: u8, value: *const f32) {
     set_program_uniform(program, location, &unsafe { mat_bytes_cr(2, 4, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniformMatrix4x2fv(program: u32, location: i32, count: i32, transpose: u8, value: *const f32) {
     set_program_uniform(program, location, &unsafe { mat_bytes_cr(4, 2, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniformMatrix3x4fv(program: u32, location: i32, count: i32, transpose: u8, value: *const f32) {
     set_program_uniform(program, location, &unsafe { mat_bytes_cr(3, 4, count, transpose != 0, value) });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramUniformMatrix4x3fv(program: u32, location: i32, count: i32, transpose: u8, value: *const f32) {
     set_program_uniform(program, location, &unsafe { mat_bytes_cr(4, 3, count, transpose != 0, value) });
 }
@@ -3318,27 +3318,27 @@ unsafe fn read_uniform(program: u32, location: i32, out: *mut u8, elem: usize, m
     }
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetUniformfv(program: u32, location: i32, params: *mut f32) {
     unsafe { read_uniform(program, location, params as *mut u8, 4, usize::MAX) };
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetUniformiv(program: u32, location: i32, params: *mut i32) {
     unsafe { read_uniform(program, location, params as *mut u8, 4, usize::MAX) };
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetUniformuiv(program: u32, location: i32, params: *mut u32) {
     unsafe { read_uniform(program, location, params as *mut u8, 4, usize::MAX) };
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetnUniformfv(program: u32, location: i32, buf_size: i32, params: *mut f32) {
     unsafe { read_uniform(program, location, params as *mut u8, 4, buf_size.max(0) as usize) };
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetnUniformiv(program: u32, location: i32, buf_size: i32, params: *mut i32) {
     unsafe { read_uniform(program, location, params as *mut u8, 4, buf_size.max(0) as usize) };
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetnUniformuiv(program: u32, location: i32, buf_size: i32, params: *mut u32) {
     unsafe { read_uniform(program, location, params as *mut u8, 4, buf_size.max(0) as usize) };
 }
@@ -3349,7 +3349,7 @@ pub extern "C" fn glGetnUniformuiv(program: u32, location: i32, buf_size: i32, p
 
 /// `glGetUniformIndices(program, count, names, indices)` — resolve each uniform name to its active index
 /// (or `GL_INVALID_INDEX`). Real: keyed on the program's reflected uniform table.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetUniformIndices(program: u32, uniform_count: i32, uniform_names: *const *const c_char, uniform_indices: *mut u32) {
     if uniform_indices.is_null() || uniform_count <= 0 {
         return;
@@ -3369,7 +3369,7 @@ pub extern "C" fn glGetUniformIndices(program: u32, uniform_count: i32, uniform_
 
 /// `glGetActiveUniformsiv(program, count, indices, pname, params)` — one reflected property per named
 /// uniform index (type/size/offset/name-length/block-index), from the program's reflected tables.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetActiveUniformsiv(program: u32, uniform_count: i32, uniform_indices: *const u32, pname: u32, params: *mut i32) {
     if params.is_null() || uniform_indices.is_null() || uniform_count <= 0 {
         return;
@@ -3383,7 +3383,7 @@ pub extern "C" fn glGetActiveUniformsiv(program: u32, uniform_count: i32, unifor
 
 /// `glGetUniformBlockIndex(program, name)` — the named uniform block's index (lazily assigned, stable),
 /// or `GL_INVALID_INDEX`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetUniformBlockIndex(program: u32, uniform_block_name: *const c_char) -> u32 {
     let name = match unsafe { cstr(uniform_block_name) } {
         Some(n) => n,
@@ -3393,14 +3393,14 @@ pub extern "C" fn glGetUniformBlockIndex(program: u32, uniform_block_name: *cons
 }
 
 /// `glUniformBlockBinding(program, blockIndex, binding)` — assign the block's binding point (real state).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glUniformBlockBinding(program: u32, uniform_block_index: u32, uniform_block_binding: u32) {
     with(|s| intro::uniform_block_binding(&mut s.ctx, program, uniform_block_index, uniform_block_binding));
 }
 
 /// `glGetActiveUniformBlockiv(program, blockIndex, pname, params)` — binding / data size / active-uniform
 /// count / name length of the block. Out-of-range block → `GL_INVALID_VALUE`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetActiveUniformBlockiv(program: u32, uniform_block_index: u32, pname: u32, params: *mut i32) {
     let v = with(|s| intro::active_uniform_blockiv(&mut s.ctx, program, uniform_block_index, pname));
     match v {
@@ -3414,7 +3414,7 @@ pub extern "C" fn glGetActiveUniformBlockiv(program: u32, uniform_block_index: u
 }
 
 /// `glGetActiveUniformBlockName(program, blockIndex, bufSize, length, name)` — the block's declared name.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetActiveUniformBlockName(program: u32, uniform_block_index: u32, buf_size: i32, length: *mut i32, uniform_block_name: *mut c_char) {
     let name = with(|s| intro::active_uniform_block_name(&mut s.ctx, program, uniform_block_index));
     match name {
@@ -3430,7 +3430,7 @@ pub extern "C" fn glGetActiveUniformBlockName(program: u32, uniform_block_index:
 // GLES3.1: program-resource introspection (glGetProgramInterfaceiv / glGetProgramResource*)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramInterfaceiv(program: u32, program_interface: u32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
@@ -3439,7 +3439,7 @@ pub extern "C" fn glGetProgramInterfaceiv(program: u32, program_interface: u32, 
     unsafe { *params = v };
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramResourceIndex(program: u32, program_interface: u32, name: *const c_char) -> u32 {
     let want = match unsafe { cstr(name) } {
         Some(n) => n,
@@ -3448,7 +3448,7 @@ pub extern "C" fn glGetProgramResourceIndex(program: u32, program_interface: u32
     with(|s| intro::program_resource_index(&s.ctx, program, program_interface, &want))
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramResourceLocation(program: u32, program_interface: u32, name: *const c_char) -> i32 {
     let want = match unsafe { cstr(name) } {
         Some(n) => n,
@@ -3457,7 +3457,7 @@ pub extern "C" fn glGetProgramResourceLocation(program: u32, program_interface: 
     with(|s| intro::program_resource_location(&s.ctx, program, program_interface, &want))
 }
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramResourceName(program: u32, program_interface: u32, index: u32, buf_size: i32, length: *mut i32, name: *mut c_char) {
     let n = with(|s| intro::program_resource_name(&s.ctx, program, program_interface, index));
     match n {
@@ -3471,7 +3471,7 @@ pub extern "C" fn glGetProgramResourceName(program: u32, program_interface: u32,
 
 /// `glGetProgramResourceiv(program, interface, index, propCount, props, bufSize, length, params)` — one
 /// value per requested property of the resource (type / array size / name length / location).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glGetProgramResourceiv(
     program: u32,
@@ -3508,7 +3508,7 @@ pub extern "C" fn glGetProgramResourceiv(
 
 /// `glClearBufferfv(buffer, drawbuffer, value)` — a `GL_COLOR` clear records a scoped full-surface clear
 /// at the float color; a `GL_DEPTH` clear is an honest no-op (no depth attachment is modeled).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glClearBufferfv(buffer: u32, _drawbuffer: i32, value: *const f32) {
     if buffer == GL_COLOR && !value.is_null() {
         let c = unsafe { std::slice::from_raw_parts(value, 4) };
@@ -3518,7 +3518,7 @@ pub extern "C" fn glClearBufferfv(buffer: u32, _drawbuffer: i32, value: *const f
 
 /// `glClearBufferiv(buffer, drawbuffer, value)` — an integer color-buffer clear; records the clear with
 /// the values cast to the model's float clear color (a `GL_STENCIL` clear is an honest no-op).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glClearBufferiv(buffer: u32, _drawbuffer: i32, value: *const i32) {
     if buffer == GL_COLOR && !value.is_null() {
         let c = unsafe { std::slice::from_raw_parts(value, 4) };
@@ -3527,7 +3527,7 @@ pub extern "C" fn glClearBufferiv(buffer: u32, _drawbuffer: i32, value: *const i
 }
 
 /// `glClearBufferuiv(buffer, drawbuffer, value)` — the unsigned-integer color-buffer clear.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glClearBufferuiv(buffer: u32, _drawbuffer: i32, value: *const u32) {
     if buffer == GL_COLOR && !value.is_null() {
         let c = unsafe { std::slice::from_raw_parts(value, 4) };
@@ -3538,7 +3538,7 @@ pub extern "C" fn glClearBufferuiv(buffer: u32, _drawbuffer: i32, value: *const 
 /// `glClearBufferfi(GL_DEPTH_STENCIL, drawbuffer, depth, stencil)` — a combined depth+stencil clear. This
 /// model backs no depth/stencil attachment, so the depth-clear value is recorded (for a faithful
 /// `glGetFloatv(GL_DEPTH_CLEAR_VALUE)` round-trip) but no pass clear is lowered — an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glClearBufferfi(_buffer: u32, _drawbuffer: i32, depth: f32, _stencil: i32) {
     with(|s| record::clear_depth(&mut s.ctx, depth));
 }
@@ -3547,29 +3547,29 @@ pub extern "C" fn glClearBufferfi(_buffer: u32, _drawbuffer: i32, depth: f32, _s
 // GLES3.x: draw extensions (base-vertex / range / indirect) — real recorded draws
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawElementsBaseVertex(mode: u32, count: i32, type_: u32, indices: *const c_void, basevertex: i32) {
     with(|s| record::draw_elements_base_vertex(&mut s.ctx, mode, count, type_, indices as usize, basevertex));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawElementsInstancedBaseVertex(mode: u32, count: i32, type_: u32, indices: *const c_void, instancecount: i32, basevertex: i32) {
     with(|s| record::draw_elements_instanced_base_vertex(&mut s.ctx, mode, count, type_, indices as usize, instancecount, basevertex));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawRangeElements(mode: u32, start: u32, end: u32, count: i32, type_: u32, indices: *const c_void) {
     with(|s| record::draw_range_elements(&mut s.ctx, mode, start, end, count, type_, indices as usize, 0));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawRangeElementsBaseVertex(mode: u32, start: u32, end: u32, count: i32, type_: u32, indices: *const c_void, basevertex: i32) {
     with(|s| record::draw_range_elements(&mut s.ctx, mode, start, end, count, type_, indices as usize, basevertex));
 }
 /// `glDrawArraysIndirect(mode, indirect)` — `indirect` is a byte offset INTO the buffer bound to
 /// `GL_DRAW_INDIRECT_BUFFER` (a GLES3.1 draw always sources the indirect params from a buffer object).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawArraysIndirect(mode: u32, indirect: *const c_void) {
     with(|s| record::draw_arrays_indirect(&mut s.ctx, mode, indirect as usize));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const c_void) {
     with(|s| record::draw_elements_indirect(&mut s.ctx, mode, type_, indirect as usize));
 }
@@ -3578,21 +3578,21 @@ pub extern "C" fn glDrawElementsIndirect(mode: u32, type_: u32, indirect: *const
 // program / shader lifecycle + object-existence queries (glDelete* / glIs* / glGet*)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteProgram(program: u32) {
     with(|s| record::delete_program(&mut s.ctx, program));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDeleteShader(shader: u32) {
     with(|s| record::delete_shader(&mut s.ctx, shader));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDetachShader(program: u32, shader: u32) {
     with(|s| record::detach_shader(&mut s.ctx, program, shader));
 }
 /// `glValidateProgram(program)` — a linked program validates clean in this model; an unknown program
 /// raises `GL_INVALID_VALUE` (the getter path already reports `GL_VALIDATE_STATUS` from the link state).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glValidateProgram(program: u32) {
     with(|s| {
         if !s.ctx.programs.program_exists(program) {
@@ -3600,37 +3600,37 @@ pub extern "C" fn glValidateProgram(program: u32) {
         }
     });
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsProgram(program: u32) -> u32 {
     with(|s| s.ctx.programs.program_exists(program)) as u32
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsShader(shader: u32) -> u32 {
     with(|s| s.ctx.programs.shader_exists(shader)) as u32
 }
 /// `glIsBuffer(buffer)` — true once `buffer` names a live buffer object (this model materializes the
 /// object at `glGenBuffers`, so a generated name reads back as a buffer).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsBuffer(buffer: u32) -> u32 {
     with(|s| buffer != 0 && s.ctx.buffers.get(buffer).is_some()) as u32
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsTexture(texture: u32) -> u32 {
     with(|s| texture != 0 && s.ctx.textures.get(texture).is_some()) as u32
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsEnabled(cap: u32) -> u32 {
     with(|s| intro::is_enabled(&s.ctx, cap)) as u32
 }
 /// `glIsEnabledi(target, index)` — this model tracks no per-index (indexed) enable state, so it reports
 /// the non-indexed capability's state (the honest answer for a single-target model).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glIsEnabledi(target: u32, _index: u32) -> u32 {
     with(|s| intro::is_enabled(&s.ctx, target)) as u32
 }
 /// `glGetAttachedShaders(program, maxCount, count, shaders)` — the program's attached vertex/fragment/
 /// compute shader names (real reflection of the attachment slots).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetAttachedShaders(program: u32, max_count: i32, count: *mut i32, shaders: *mut u32) {
     let attached: Vec<u32> = with(|s| {
         s.ctx.programs.program(program).map(|p| [p.vs, p.fs, p.cs].into_iter().filter(|&x| x != 0).collect()).unwrap_or_default()
@@ -3647,13 +3647,13 @@ pub extern "C" fn glGetAttachedShaders(program: u32, max_count: i32, count: *mut
 }
 /// `glGetShaderSource(shader, bufSize, length, source)` — the exact GLSL-ES source stored at
 /// `glShaderSource` (real; `glGetShaderiv(GL_SHADER_SOURCE_LENGTH)` reports its matching length).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetShaderSource(shader: u32, buf_size: i32, length: *mut i32, source: *mut c_char) {
     let src = with(|s| intro::get_shader_source(&s.ctx, shader));
     unsafe { write_c_name(src.as_bytes(), buf_size, length, source) };
 }
 /// `glGetFragDataLocation(program, name)` — the fragment output's color index (real reflection).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetFragDataLocation(program: u32, name: *const c_char) -> i32 {
     let want = match unsafe { cstr(name) } {
         Some(n) => n,
@@ -3666,35 +3666,35 @@ pub extern "C" fn glGetFragDataLocation(program: u32, name: *const c_char) -> i3
 // fixed-function state — REAL where the model tracks it, honest no-op where it backs no state
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendEquation(mode: u32) {
     with(|s| record::blend_equation(&mut s.ctx, mode));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendEquationSeparate(mode_rgb: u32, mode_alpha: u32) {
     with(|s| record::blend_equation_separate(&mut s.ctx, mode_rgb, mode_alpha));
 }
 /// Per-draw-buffer blend variants: this model has a single color target, so buffer 0 delegates to the
 /// global blend state and any other buffer index is an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendEquationi(buf: u32, mode: u32) {
     if buf == 0 {
         with(|s| record::blend_equation(&mut s.ctx, mode));
     }
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendEquationSeparatei(buf: u32, mode_rgb: u32, mode_alpha: u32) {
     if buf == 0 {
         with(|s| record::blend_equation_separate(&mut s.ctx, mode_rgb, mode_alpha));
     }
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendFunci(buf: u32, src: u32, dst: u32) {
     if buf == 0 {
         with(|s| record::blend_func(&mut s.ctx, src, dst));
     }
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendFuncSeparatei(buf: u32, src_rgb: u32, dst_rgb: u32, src_alpha: u32, dst_alpha: u32) {
     if buf == 0 {
         with(|s| record::blend_func_separate(&mut s.ctx, src_rgb, dst_rgb, src_alpha, dst_alpha));
@@ -3702,65 +3702,65 @@ pub extern "C" fn glBlendFuncSeparatei(buf: u32, src_rgb: u32, dst_rgb: u32, src
 }
 /// `glBlendColor` — the constant blend color. This model lowers no `GL_*_CONSTANT_*` blend factor, so the
 /// constant color carries no observable state: an honest no-op (matches the reference shim).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendColor(_red: f32, _green: f32, _blue: f32, _alpha: f32) {}
 /// `glColorMask` / `glColorMaski` — this model always writes RGBA (no per-channel write-mask is lowered):
 /// an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glColorMask(_red: u8, _green: u8, _blue: u8, _alpha: u8) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glColorMaski(_index: u32, _r: u8, _g: u8, _b: u8, _a: u8) {}
 /// `glDepthRangef` — the model maps NDC depth directly (fixed 0..1 range), so a custom depth range carries
 /// no lowered state: an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDepthRangef(_n: f32, _f: f32) {}
 /// `glLineWidth` — `GL_LINE_WIDTH` is fixed at `1.0` (see `query::get_floatv`); an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glLineWidth(_width: f32) {}
 /// `glPolygonOffset` — no depth-bias pipeline state is lowered: an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPolygonOffset(_factor: f32, _units: f32) {}
 /// `glHint` — every hint is advisory; this model honors none observably: an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glHint(_target: u32, _mode: u32) {}
 /// `glSampleCoverage` / `glSampleMaski` / `glMinSampleShading` — no MSAA is materialized (single-sample
 /// render targets), so multisample coverage/mask carry no state: honest no-ops.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glSampleCoverage(_value: f32, _invert: u8) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glSampleMaski(_mask_number: u32, _mask: u32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glMinSampleShading(_value: f32) {}
 /// `glStencilFunc` / `glStencilMask` / `glStencilOp` / `glClearStencil` — the default framebuffer models no
 /// stencil attachment (matches `glStencilFuncSeparate` &c.): honest no-ops.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glStencilFunc(_func: u32, _ref_: i32, _mask: u32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glStencilMask(_mask: u32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glStencilOp(_fail: u32, _zfail: u32, _zpass: u32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glClearStencil(_s: i32) {}
 /// `glPatchParameteri` — no tessellation stage is modeled: an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPatchParameteri(_pname: u32, _value: i32) {}
 /// `glPrimitiveBoundingBox` — a tessellation/geometry hint (OES_primitive_bounding_box): an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glPrimitiveBoundingBox(_min_x: f32, _min_y: f32, _min_z: f32, _min_w: f32, _max_x: f32, _max_y: f32, _max_z: f32, _max_w: f32) {}
 /// `glBlendBarrier` — an advanced-blend (KHR_blend_equation_advanced) barrier; this model lowers no
 /// advanced blend, so there is nothing to order: an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBlendBarrier() {}
 /// `glEnablei` / `glDisablei` — indexed enable; this single-target model routes buffer 0 to the global
 /// capability and ignores other indices.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glEnablei(target: u32, index: u32) {
     if index == 0 {
         with(|s| record::enable(&mut s.ctx, target));
     }
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDisablei(target: u32, index: u32) {
     if index == 0 {
         with(|s| record::disable(&mut s.ctx, target));
@@ -3771,7 +3771,7 @@ pub extern "C" fn glDisablei(target: u32, index: u32) {
 // integer / indexed / capability state queries
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetInteger64v(pname: u32, data: *mut i64) {
     if data.is_null() {
         return;
@@ -3784,7 +3784,7 @@ pub extern "C" fn glGetInteger64v(pname: u32, data: *mut i64) {
         }
     }
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetIntegeri_v(target: u32, index: u32, data: *mut i32) {
     if data.is_null() {
         return;
@@ -3792,7 +3792,7 @@ pub extern "C" fn glGetIntegeri_v(target: u32, index: u32, data: *mut i32) {
     let v = with(|s| query::get_integer_indexed(&s.ctx, target, index));
     unsafe { *data = v as i32 };
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetInteger64i_v(target: u32, index: u32, data: *mut i64) {
     if data.is_null() {
         return;
@@ -3800,7 +3800,7 @@ pub extern "C" fn glGetInteger64i_v(target: u32, index: u32, data: *mut i64) {
     let v = with(|s| query::get_integer_indexed(&s.ctx, target, index));
     unsafe { *data = v };
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetBooleani_v(target: u32, index: u32, data: *mut u8) {
     if data.is_null() {
         return;
@@ -3810,7 +3810,7 @@ pub extern "C" fn glGetBooleani_v(target: u32, index: u32, data: *mut u8) {
 }
 /// `glGetInternalformativ(target, internalformat, pname, bufSize, params)` — supported sample counts for
 /// an internal format. This model advertises single-sample rendering with `GL_MAX_SAMPLES` as the peak.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetInternalformativ(_target: u32, _internalformat: u32, pname: u32, buf_size: i32, params: *mut i32) {
     if params.is_null() || buf_size <= 0 {
         return;
@@ -3826,7 +3826,7 @@ pub extern "C" fn glGetInternalformativ(_target: u32, _internalformat: u32, pnam
 /// `glGetShaderPrecisionFormat(shaderType, precisionType, range, precision)` — the IEEE-shaped ranges the
 /// host GPU backs: `float` → range {127,127}, precision 23 (single-precision); `int` → range {31,31},
 /// precision 0.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetShaderPrecisionFormat(_shadertype: u32, precisiontype: u32, range: *mut i32, precision: *mut i32) {
     let is_float = matches!(precisiontype, GL_LOW_FLOAT..=GL_HIGH_FLOAT);
     unsafe {
@@ -3841,7 +3841,7 @@ pub extern "C" fn glGetShaderPrecisionFormat(_shadertype: u32, precisiontype: u3
     }
 }
 /// `glGetRenderbufferParameteriv(target, pname, params)` — the bound renderbuffer's extent + format.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetRenderbufferParameteriv(target: u32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
@@ -3851,7 +3851,7 @@ pub extern "C" fn glGetRenderbufferParameteriv(target: u32, pname: u32, params: 
 }
 /// `glGetFramebufferAttachmentParameteriv(target, attachment, pname, params)` — the bound framebuffer's
 /// color-attachment object type + name (real reflection of the FBO's attachment).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetFramebufferAttachmentParameteriv(target: u32, attachment: u32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
@@ -3862,7 +3862,7 @@ pub extern "C" fn glGetFramebufferAttachmentParameteriv(target: u32, attachment:
 /// `glGetFramebufferParameteriv(target, pname, params)` — default-framebuffer parameters (default width/
 /// height/layers/samples). This model carries no `glFramebufferParameteri` state, so it reads `0` — an
 /// honest default.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetFramebufferParameteriv(_target: u32, _pname: u32, params: *mut i32) {
     if !params.is_null() {
         unsafe { *params = 0 };
@@ -3870,7 +3870,7 @@ pub extern "C" fn glGetFramebufferParameteriv(_target: u32, _pname: u32, params:
 }
 /// `glGetTexLevelParameteriv(target, level, pname, params)` — the bound texture's level-0 width/height/
 /// internal format (real reflection).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetTexLevelParameteriv(target: u32, level: i32, pname: u32, params: *mut i32) {
     if params.is_null() {
         return;
@@ -3878,7 +3878,7 @@ pub extern "C" fn glGetTexLevelParameteriv(target: u32, level: i32, pname: u32, 
     let v = with(|s| intro::tex_level_parameter(&s.ctx, target, level, pname));
     unsafe { *params = v };
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetTexLevelParameterfv(target: u32, level: i32, pname: u32, params: *mut f32) {
     if params.is_null() {
         return;
@@ -3888,7 +3888,7 @@ pub extern "C" fn glGetTexLevelParameterfv(target: u32, level: i32, pname: u32, 
 }
 /// `glGetMultisamplefv(pname, index, val)` — the sub-sample position. Single-sample rendering places the
 /// one sample at the pixel center (0.5, 0.5) — the honest answer for this model.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetMultisamplefv(_pname: u32, _index: u32, val: *mut f32) {
     if !val.is_null() {
         unsafe {
@@ -3898,20 +3898,20 @@ pub extern "C" fn glGetMultisamplefv(_pname: u32, _index: u32, val: *mut f32) {
     }
 }
 /// `glGetGraphicsResetStatus()` — the context has not been reset (no robustness reset is modeled).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetGraphicsResetStatus() -> u32 {
     GL_NO_ERROR
 }
 /// `glGetBufferPointerv(target, pname, params)` — the mapped-buffer pointer. This model does not retain a
 /// persistent host mapping pointer across the query, so it reports null — an honest default.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetBufferPointerv(_target: u32, _pname: u32, params: *mut *mut c_void) {
     if !params.is_null() {
         unsafe { *params = core::ptr::null_mut() };
     }
 }
 /// `glGetPointerv(pname, params)` — a KHR_debug callback/pointer query; no such pointer state is modeled.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetPointerv(_pname: u32, params: *mut *mut c_void) {
     if !params.is_null() {
         unsafe { *params = core::ptr::null_mut() };
@@ -3919,7 +3919,7 @@ pub extern "C" fn glGetPointerv(_pname: u32, params: *mut *mut c_void) {
 }
 /// `glGetProgramBinary(...)` — no program-binary formats are advertised (`GL_NUM_PROGRAM_BINARY_FORMATS`
 /// == 0), so the driver forces the source-compile path: an empty binary (length 0, format 0).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetProgramBinary(_program: u32, _buf_size: i32, length: *mut i32, binary_format: *mut u32, _binary: *mut c_void) {
     unsafe {
         if !length.is_null() {
@@ -3932,7 +3932,7 @@ pub extern "C" fn glGetProgramBinary(_program: u32, _buf_size: i32, length: *mut
 }
 /// `glProgramBinary(...)` — no binary formats are supported, so any supplied binary is rejected as
 /// `GL_INVALID_ENUM` (the program keeps its source-compiled link state; the app must re-link from source).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glProgramBinary(program: u32, _binary_format: u32, _binary: *const c_void, _length: i32) {
     with(|s| {
         if s.ctx.programs.program_exists(program) {
@@ -3947,15 +3947,15 @@ pub extern "C" fn glProgramBinary(program: u32, _binary_format: u32, _binary: *c
 // KHR_debug: message log + object labels — no debug state is modeled (honest empty/no-op)
 // ==================================================================================================
 
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDebugMessageCallback(_callback: *mut c_void, _user_param: *const c_void) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDebugMessageControl(_source: u32, _type_: u32, _severity: u32, _count: i32, _ids: *const u32, _enabled: u8) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glDebugMessageInsert(_source: u32, _type_: u32, _id: u32, _severity: u32, _length: i32, _buf: *const c_char) {}
 /// `glGetDebugMessageLog` — no messages are recorded (this driver logs GL diagnostics out-of-band), so it
 /// returns 0 messages.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glGetDebugMessageLog(
     _count: u32,
@@ -3969,20 +3969,20 @@ pub extern "C" fn glGetDebugMessageLog(
 ) -> u32 {
     0
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPushDebugGroup(_source: u32, _id: u32, _length: i32, _message: *const c_char) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glPopDebugGroup() {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glObjectLabel(_identifier: u32, _name: u32, _length: i32, _label: *const c_char) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glObjectPtrLabel(_ptr: *const c_void, _length: i32, _label: *const c_char) {}
 /// `glGetObjectLabel` / `glGetObjectPtrLabel` — no labels are stored: report an empty label (length 0).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetObjectLabel(_identifier: u32, _name: u32, buf_size: i32, length: *mut i32, label: *mut c_char) {
     unsafe { write_c_name(&[], buf_size, length, label) };
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glGetObjectPtrLabel(_ptr: *const c_void, buf_size: i32, length: *mut i32, label: *mut c_char) {
     unsafe { write_c_name(&[], buf_size, length, label) };
 }
@@ -3993,11 +3993,11 @@ pub extern "C" fn glGetObjectPtrLabel(_ptr: *const c_void, buf_size: i32, length
 
 /// `glReleaseShaderCompiler` — a hint that the compiler may free resources. This driver compiles from
 /// source at link (`GL_SHADER_COMPILER` == true), so there is nothing to release: an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glReleaseShaderCompiler() {}
 /// `glShaderBinary(...)` — no shader-binary formats are advertised (`GL_NUM_SHADER_BINARY_FORMATS` == 0),
 /// so a binary load is rejected as `GL_INVALID_ENUM` (the app must supply GLSL source).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glShaderBinary(_count: i32, _shaders: *const u32, _binaryformat: u32, _binary: *const c_void, _length: i32) {
     with(|s| s.ctx.set_gl_error(GL_INVALID_ENUM));
 }
@@ -4009,31 +4009,31 @@ pub extern "C" fn glShaderBinary(_count: i32, _shaders: *const u32, _binaryforma
 /// `glTexStorage2DMultisample` — immutable multisample 2D storage. This model materializes single-sample
 /// textures, so `samples` is ignored and the base RGBA8 plane is allocated (delegating to the 2D storage
 /// path); the texture is usable as a single-sample attachment.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexStorage2DMultisample(target: u32, _samples: i32, internalformat: u32, width: i32, height: i32, _fixedsamplelocations: u8) {
     with(|s| record::tex_storage_2d(&mut s.ctx, target, 1, internalformat, width, height));
 }
 /// `glTexStorage3DMultisample` — the 2D-array multisample form; `samples` ignored (single-sample plane).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexStorage3DMultisample(target: u32, _samples: i32, _internalformat: u32, width: i32, height: i32, depth: i32, _fixedsamplelocations: u8) {
     with(|s| record::tex_storage_3d(&mut s.ctx, target, 1, width, height, depth));
 }
 /// `glRenderbufferStorageMultisample` — a multisample renderbuffer; single-sample in this model, so the
 /// backing RGBA8 plane is sized (delegating to `glRenderbufferStorage`) and `samples` is ignored.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glRenderbufferStorageMultisample(target: u32, _samples: i32, internalformat: u32, width: i32, height: i32) {
     with(|s| record::renderbuffer_storage(&mut s.ctx, target, internalformat, width, height));
 }
 /// `glTexBuffer` / `glTexBufferRange` — buffer textures (sampling a buffer object as a 1D texel array).
 /// No buffer-texture sampling path is modeled (the render path samples 2D textures), so this is an honest
 /// no-op; a shader that samples one reads the texture's neutral (dataless) content.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexBuffer(_target: u32, _internalformat: u32, _buffer: u32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexBufferRange(_target: u32, _internalformat: u32, _buffer: u32, _offset: isize, _size: isize) {}
 /// `glTexParameterIiv` / `glTexParameterIuiv` — the integer (non-normalized) parameter vectors; reads
 /// `params[0]` into the same filter/wrap setter the scalar path uses.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexParameterIiv(_target: u32, pname: u32, params: *const i32) {
     if params.is_null() {
         return;
@@ -4041,7 +4041,7 @@ pub extern "C" fn glTexParameterIiv(_target: u32, pname: u32, params: *const i32
     let v = unsafe { *params };
     with(|s| record::tex_parameter(&mut s.ctx, pname, v as u32));
 }
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glTexParameterIuiv(_target: u32, pname: u32, params: *const u32) {
     if params.is_null() {
         return;
@@ -4052,7 +4052,7 @@ pub extern "C" fn glTexParameterIuiv(_target: u32, pname: u32, params: *const u3
 /// `glCopyImageSubData(...)` — a direct image-to-image copy. Both a 2D source and destination texture with
 /// materialized RGBA8 pixels can be copied CPU-side (real); a mixed/renderbuffer/level-`>0` case is an
 /// honest no-op (the deferred model has no non-texture source plane at record time).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glCopyImageSubData(
     src_name: u32,
@@ -4100,7 +4100,7 @@ pub extern "C" fn glCopyImageSubData(
 }
 /// `glBindImageTexture(...)` — bind a texture level as a shader image (image load/store). This model lowers
 /// no image load/store, so the binding carries no observable state: an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glBindImageTexture(_unit: u32, _texture: u32, _level: i32, _layered: u8, _layer: i32, _access: u32, _format: u32) {}
 
@@ -4111,19 +4111,19 @@ pub extern "C" fn glBindImageTexture(_unit: u32, _texture: u32, _level: i32, _la
 /// `glVertexAttribFormat(attribindex, size, type, normalized, relativeoffset)` — the separate-format
 /// vertex-attribute description; records size/type/normalized into the same per-location attribute state
 /// the pointer path uses (the relative offset is folded into the attribute offset).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribFormat(attribindex: u32, size: i32, type_: u32, normalized: u8, relativeoffset: u32) {
     with(|s| record::vertex_attrib_pointer(&mut s.ctx, attribindex as usize, size, type_, normalized != 0, 0, relativeoffset as usize));
 }
 /// `glVertexAttribBinding(attribindex, bindingindex)` — associate an attribute with a vertex-buffer binding
 /// slot. This model keys attributes to a single array-buffer binding, so the binding index is not
 /// separately tracked: an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexAttribBinding(_attribindex: u32, _bindingindex: u32) {}
 /// `glBindVertexBuffer(bindingindex, buffer, offset, stride)` — bind a buffer to a vertex-buffer slot. The
 /// separate binding slots are not modeled; binding slot 0 updates the array-buffer binding so a following
 /// `glVertexAttribFormat`-based draw still sources vertices, other slots are an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glBindVertexBuffer(bindingindex: u32, buffer: u32, _offset: isize, _stride: i32) {
     if bindingindex == 0 {
         with(|s| record::bind_buffer(&mut s.ctx, GL_ARRAY_BUFFER, buffer));
@@ -4131,25 +4131,25 @@ pub extern "C" fn glBindVertexBuffer(bindingindex: u32, buffer: u32, _offset: is
 }
 /// `glVertexBindingDivisor(bindingindex, divisor)` — the instance-step divisor for a binding slot; applied
 /// to the attribute at that index (single-slot model).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glVertexBindingDivisor(bindingindex: u32, divisor: u32) {
     with(|s| record::vertex_attrib_divisor(&mut s.ctx, bindingindex as usize, divisor));
 }
 /// `glFramebufferParameteri(target, pname, param)` — default-framebuffer parameters (default width/height/
 /// samples for a framebuffer with no attachments). No such state is materialized: an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFramebufferParameteri(_target: u32, _pname: u32, _param: i32) {}
 /// `glFramebufferTexture(target, attachment, texture, level)` — attach a whole texture as the FBO's color
 /// target (the layered/whole-texture form of `glFramebufferTexture2D`); delegates to the 2D color-attach
 /// path for `GL_COLOR_ATTACHMENT0`.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFramebufferTexture(target: u32, attachment: u32, texture: u32, level: i32) {
     with(|s| record::framebuffer_texture_2d(&mut s.ctx, target, attachment, GL_TEXTURE_2D, texture, level));
 }
 /// `glFramebufferTextureLayer(target, attachment, texture, level, layer)` — attach one layer of an array/3D
 /// texture as the color target. This model materializes the layer-0 plane, so the layer is folded into the
 /// color attachment via the same 2D color-attach path.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFramebufferTextureLayer(target: u32, attachment: u32, texture: u32, level: i32, _layer: i32) {
     with(|s| record::framebuffer_texture_2d(&mut s.ctx, target, attachment, GL_TEXTURE_2D, texture, level));
 }
@@ -4166,13 +4166,13 @@ static SUBMIT_SERIAL: AtomicU64 = AtomicU64::new(0);
 static COMPLETE_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 /// `glFlush` — NONBLOCKING: advance the submission serial (hand queued work off) and return immediately.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFlush() {
     SUBMIT_SERIAL.fetch_add(1, Ordering::SeqCst);
 }
 /// `glFinish` — BLOCKING: advance the submission serial, then catch completion up to it (this deferred
 /// model completes synchronously — there is no in-flight host executor to wait on between swaps).
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glFinish() {
     let target = SUBMIT_SERIAL.fetch_add(1, Ordering::SeqCst) + 1;
     let mut done = COMPLETE_SERIAL.load(Ordering::SeqCst);
@@ -4190,7 +4190,7 @@ pub extern "C" fn glFinish() {
 
 /// `eglGetPlatformDisplay(platform, native_display, attrib_list)` — the EGL 1.5 display getter; returns the
 /// same single display token as `eglGetDisplay` (this driver has one display).
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetPlatformDisplay(_platform: u32, _native_display: *mut c_void, _attrib_list: *const isize) -> *mut c_void {
     DISPLAY_TOKEN as *mut c_void
 }
@@ -4331,56 +4331,56 @@ extern "C" fn eglQueryDevicesEXT(max_devices: i32, devices: *mut *mut c_void, nu
 }
 /// `eglQueryAPI()` — the API bound by `eglBindAPI` on the CALLING THREAD (defaults to
 /// `EGL_OPENGL_ES_API`, the only API this driver serves). libepoxy reads this to confirm GLES dispatch.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglQueryAPI() -> u32 {
     current::query_api()
 }
 /// `eglReleaseThread()` — release the calling thread's EGL state: the current context/surface/display
 /// binding is dropped (the bound API resets to the `EGL_OPENGL_ES_API` default via the released cells).
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglReleaseThread() -> u32 {
     current::release();
     EGL_TRUE
 }
 /// `eglWaitClient` / `eglWaitGL` / `eglWaitNative` — flush + wait for the client/native pipeline. The
 /// deferred model completes synchronously at swap, so these succeed immediately.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglWaitClient() -> u32 {
     EGL_TRUE
 }
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglWaitGL() -> u32 {
     EGL_TRUE
 }
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglWaitNative(_engine: i32) -> u32 {
     EGL_TRUE
 }
 /// `eglSurfaceAttrib(dpy, surface, attribute, value)` — set a surface attribute (swap behavior, mipmap
 /// hint, …). This model tracks none of the settable attributes; the call is accepted. Success.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglSurfaceAttrib(_dpy: *mut c_void, _surface: *mut c_void, _attribute: i32, _value: i32) -> u32 {
     EGL_TRUE
 }
 /// `eglBindTexImage` / `eglReleaseTexImage` — bind/release a pbuffer as a texture image. No render-to-
 /// texture pbuffer path is modeled; the call is accepted as a no-op. Success.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglBindTexImage(_dpy: *mut c_void, _surface: *mut c_void, _buffer: i32) -> u32 {
     EGL_TRUE
 }
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglReleaseTexImage(_dpy: *mut c_void, _surface: *mut c_void, _buffer: i32) -> u32 {
     EGL_TRUE
 }
 /// `eglCopyBuffers(dpy, surface, target)` — copy the surface color buffer to a native pixmap. No native
 /// pixmap target is modeled; accepted as a no-op. Success.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCopyBuffers(_dpy: *mut c_void, _surface: *mut c_void, _target: *mut c_void) -> u32 {
     EGL_TRUE
 }
 /// `eglQueryContext(dpy, ctx, attribute, value)` — write the queried context attribute (`0` for the
 /// attributes this model does not track) and succeed.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglQueryContext(_dpy: *mut c_void, _ctx: *mut c_void, _attribute: i32, value: *mut i32) -> u32 {
     if !value.is_null() {
         unsafe { *value = 0 };
@@ -4389,7 +4389,7 @@ pub extern "C" fn eglQueryContext(_dpy: *mut c_void, _ctx: *mut c_void, _attribu
 }
 /// `eglQuerySurface(dpy, surface, attribute, value)` — the surface geometry. `EGL_WIDTH`/`EGL_HEIGHT`
 /// report the live window-surface size (real); other attributes read `0`.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglQuerySurface(_dpy: *mut c_void, _surface: *mut c_void, attribute: i32, value: *mut i32) -> u32 {
     if value.is_null() {
         return EGL_FALSE;
@@ -4404,7 +4404,7 @@ pub extern "C" fn eglQuerySurface(_dpy: *mut c_void, _surface: *mut c_void, attr
 }
 /// `eglCreatePbufferSurface(dpy, config, attrib_list)` — an offscreen pbuffer surface. Modeled as a window
 /// surface sized from the environment (the driver renders to one color target); returns a fresh token.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreatePbufferSurface(_dpy: *mut c_void, _config: *mut c_void, _attrib_list: *const i32) -> *mut c_void {
     let (width, height) = default_surface_wh();
     with(|s| {
@@ -4414,61 +4414,61 @@ pub extern "C" fn eglCreatePbufferSurface(_dpy: *mut c_void, _config: *mut c_voi
 }
 /// `eglCreatePixmapSurface(dpy, config, pixmap, attrib_list)` — a native-pixmap-backed surface; modeled as
 /// a fresh surface token (no separate pixmap storage).
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreatePixmapSurface(_dpy: *mut c_void, _config: *mut c_void, _pixmap: *mut c_void, _attrib_list: *const i32) -> *mut c_void {
     with(|s| s.mint_token())
 }
 /// `eglCreatePbufferFromClientBuffer(...)` — a pbuffer wrapping a client buffer (e.g. an OpenVG image);
 /// modeled as a fresh surface token.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreatePbufferFromClientBuffer(_dpy: *mut c_void, _buftype: u32, _buffer: *mut c_void, _config: *mut c_void, _attrib_list: *const i32) -> *mut c_void {
     with(|s| s.mint_token())
 }
 /// `eglCreatePlatformWindowSurface(dpy, config, native_window, attrib_list)` — the EGL 1.5 window-surface
 /// getter modern toolkits use. `native_window` is the same `wl_egl_window*`; brings up the window surface
 /// (size + Wayland present session) exactly like `eglCreateWindowSurface`.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreatePlatformWindowSurface(_dpy: *mut c_void, _config: *mut c_void, native_window: *mut c_void, _attrib_list: *const isize) -> *mut c_void {
     create_window_surface(native_window)
 }
 /// `eglCreatePlatformPixmapSurface(...)` — the EGL 1.5 pixmap-surface getter; a fresh surface token.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreatePlatformPixmapSurface(_dpy: *mut c_void, _config: *mut c_void, _native_pixmap: *mut c_void, _attrib_list: *const isize) -> *mut c_void {
     with(|s| s.mint_token())
 }
 /// `eglCreateImage(...)` / `eglDestroyImage` — an `EGLImage` (a shareable image handle). No cross-API image
 /// sharing is modeled; a fixed non-null token is handed back so a `!= EGL_NO_IMAGE` check passes.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreateImage(_dpy: *mut c_void, _ctx: *mut c_void, _target: u32, _buffer: *mut c_void, _attrib_list: *const isize) -> *mut c_void {
     EGL_OBJECT_TOKEN as *mut c_void
 }
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglDestroyImage(_dpy: *mut c_void, _image: *mut c_void) -> u32 {
     EGL_TRUE
 }
 /// `eglCreateSync(dpy, type, attrib_list)` — an `EGLSync`; a fixed non-null token (the GL fence timeline
 /// backs the actual GPU sync — `glFenceSync`). `eglClientWaitSync` reports it satisfied.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglCreateSync(_dpy: *mut c_void, _type_: u32, _attrib_list: *const isize) -> *mut c_void {
     EGL_OBJECT_TOKEN as *mut c_void
 }
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglDestroySync(_dpy: *mut c_void, _sync: *mut c_void) -> u32 {
     EGL_TRUE
 }
 /// `eglClientWaitSync(dpy, sync, flags, timeout)` — the deferred model completes work synchronously at
 /// swap, so a sync is already signaled: report `EGL_CONDITION_SATISFIED`.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglClientWaitSync(_dpy: *mut c_void, _sync: *mut c_void, _flags: i32, _timeout: u64) -> i32 {
     EGL_CONDITION_SATISFIED
 }
 /// `eglWaitSync(dpy, sync, flags)` — a device-side wait; always succeeds (the fence is already reached).
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglWaitSync(_dpy: *mut c_void, _sync: *mut c_void, _flags: i32) -> u32 {
     EGL_TRUE
 }
 /// `eglGetSyncAttrib(dpy, sync, attribute, value)` — write the sync attribute (`0`) and succeed.
-#[no_mangle]
+#[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglGetSyncAttrib(_dpy: *mut c_void, _sync: *mut c_void, _attribute: i32, value: *mut isize) -> u32 {
     if !value.is_null() {
         unsafe { *value = 0 };
@@ -4484,9 +4484,9 @@ pub extern "C" fn eglGetSyncAttrib(_dpy: *mut c_void, _sync: *mut c_void, _attri
 /// (image load/store, SSBO writes, atomic counters) against subsequent access. This deferred model submits
 /// each `glDispatchCompute` immediately and materializes no incoherent image/SSBO access between draws that
 /// a barrier would need to order, so the ordering is already satisfied — an honest no-op.
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glMemoryBarrier(_barriers: u32) {}
-#[no_mangle]
+#[cfg_attr(gles_client, no_mangle)]
 pub extern "C" fn glMemoryBarrierByRegion(_barriers: u32) {}
 
 // ==================================================================================================

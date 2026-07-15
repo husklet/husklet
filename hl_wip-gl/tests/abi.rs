@@ -1,41 +1,49 @@
-//! ABI conformance gate for the guest `libEGL.so.1` shim cdylib (the PRIMARY 402-symbol object).
+//! ABI conformance gate for the guest GL/EGL shim objects — now SPLIT across the two staged cdylibs,
+//! matching real Mesa's library layout:
 //!
-//! This:
-//!   1. natively builds the aarch64 cdylib (the host arch — the build MUST succeed here), then
-//!   2. `nm -D`s its exported dynamic symbols and asserts the API surface EQUALS the committed golden
-//!      symbol list exactly (no missing, no extra) and the count matches (402), and
-//!   3. cross-checks the generator's source: the shim's manifest names equal the same golden.
+//!   * `libGLESv2.so.2` exports the `gl*` core render set (358 entry points) in ITS OWN dynamic symbol
+//!     table — so libepoxy (GTK's GL loader) `dlsym`s core `gl*` directly from it, and
+//!   * `libEGL.so.1`   exports the `egl*` set (44) + the one shared-state accessor `hl_shim_state_ptr`
+//!     (and NO `gl*` — they are `local:`, hidden by the version script), so an EGL app binds its
+//!     lifecycle here.
 //!
-//! The build shares the dedicated `target/shim-build` dir with `build.rs`, so after the crate's build
-//! script has staged the shim this is a cache hit. It sets the `HL_GL_BUILDING_SHIM` recursion sentinel +
-//! `--offline` exactly like `build.rs`.
+//! Together the two objects cover the whole `gl*`+`egl*` surface with no leakage and no duplication of
+//! the exported names. This test:
+//!   1. reads the two committed goldens (`abi_symbols_gl.txt` = 358, `abi_symbols_egl.txt` = 44),
+//!   2. cross-checks the generator's SOURCE — the shim manifest's `GL`/`EGL` rows equal those goldens
+//!      (so the generated surface can't drift), and
+//!   3. `nm -D`s each STAGED `.so` (produced by this crate's `build.rs` during the test build) and asserts
+//!      its exported dynamic symbols EQUAL its golden exactly, that libEGL leaks NO `gl*`, and that
+//!      libGLESv2 leaks NO `egl*`.
+//!
+//! ABI GOLDEN SPLIT (intentional, correct): the old single golden pinned `libEGL == 402` (`gl*`+`egl*`).
+//! It is now split `libEGL == 44` (`egl*`) + `libGLESv2 == 358` (`gl*`) — same union, distributed to
+//! match Mesa so libepoxy stops aborting.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SHIM_DIR: &str = "shim/egl";
-const SHIM_LIB: &str = "libhl_egl_guest.so";
-const GOLDEN: &str = "shim/egl/tests/golden/abi_symbols.txt";
+const GOLDEN_GL: &str = "shim/egl/tests/golden/abi_symbols_gl.txt";
+const GOLDEN_EGL: &str = "shim/egl/tests/golden/abi_symbols_egl.txt";
 const MANIFEST: &str = "shim/egl/registry/gles2_egl.manifest";
-const EXPECTED: usize = 402;
-
-/// True if `sym` is part of the shim's advertised GLES2/EGL API surface (`gl*` or `egl*`).
-fn is_api(s: &str) -> bool {
-    s.starts_with("gl") || s.starts_with("egl")
-}
+const EXPECTED_GL: usize = 358;
+const EXPECTED_EGL: usize = 44;
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// The host rust target triple (this host is aarch64-unknown-linux-gnu; the test runs Linux-side).
-fn host_triple() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" => "aarch64-unknown-linux-gnu",
-        "x86_64" => "x86_64-unknown-linux-gnu",
+/// The staged shim dir for the host arch, e.g. `~/.hl/gl/aarch64` — where `build.rs` installs the two
+/// cdylibs (the exact artifacts the guest e2e apps load via `LD_LIBRARY_PATH`).
+fn staged_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "aarch64",
+        "x86_64" => "x86_64",
         other => panic!("unsupported host arch for the ABI test: {other}"),
-    }
+    };
+    Path::new(&home).join(".hl").join("gl").join(arch)
 }
 
 fn read_golden(path: &Path) -> BTreeSet<String> {
@@ -48,69 +56,83 @@ fn read_golden(path: &Path) -> BTreeSet<String> {
         .collect()
 }
 
-/// Names in the shim manifest (col 2 of each non-comment `LIB<TAB>name<TAB>ret<TAB>params` row).
-fn manifest_names(path: &Path) -> BTreeSet<String> {
+/// Names in the shim manifest whose `LIB` column (col 1) is `lib` (col 2 is the entry-point name).
+fn manifest_names(path: &Path, lib: &str) -> BTreeSet<String> {
     std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("read manifest {}: {e}", path.display()))
         .lines()
         .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
-        .filter_map(|l| l.split('\t').nth(1))
-        .map(str::to_string)
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            let col_lib = f.next()?;
+            let name = f.next()?;
+            (col_lib == lib).then(|| name.to_string())
+        })
         .collect()
 }
 
-/// Build the shim natively and return the exported dynamic symbols matching its API filter.
-fn built_exports(shim_target: &Path) -> BTreeSet<String> {
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let crate_manifest = manifest_dir().join(SHIM_DIR).join("Cargo.toml");
-    let triple = host_triple();
-
-    let status = Command::new(&cargo)
-        .args(["build", "--release", "--offline", "--manifest-path"])
-        .arg(&crate_manifest)
-        .args(["--target", triple, "--target-dir"])
-        .arg(shim_target)
-        .env("HL_GL_BUILDING_SHIM", "1")
-        .env_remove("RUSTFLAGS")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .status()
-        .unwrap_or_else(|e| panic!("spawn cargo build for {SHIM_DIR}: {e}"));
-    assert!(status.success(), "aarch64 build of {SHIM_DIR} must succeed");
-
-    let so = shim_target.join(triple).join("release").join(SHIM_LIB);
-    assert!(so.exists(), "expected built cdylib {} to exist", so.display());
-
+/// The exported (`nm -D --defined-only`) symbols of a staged `.so`, filtered to the API prefix `pred`.
+fn exports(so: &Path, pred: impl Fn(&str) -> bool) -> BTreeSet<String> {
+    assert!(
+        so.exists(),
+        "staged {} missing — run the crate build first so build.rs stages the shims",
+        so.display()
+    );
     let out = Command::new("nm")
         .args(["-D", "--defined-only"])
-        .arg(&so)
+        .arg(so)
         .output()
         .unwrap_or_else(|e| panic!("run nm on {}: {e}", so.display()));
     assert!(out.status.success(), "nm -D failed on {}", so.display());
-
     String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|l| l.split_whitespace().nth(2)) // "<addr> T <name>"
-        .filter(|s| is_api(s))
+        .filter(|s| pred(s))
         .map(str::to_string)
         .collect()
 }
 
+/// Is `s` a core `gl*` name (and NOT an `egl*` name — `egl*` starts with `e`, so this never overlaps)?
+fn is_gl(s: &str) -> bool {
+    s.starts_with("gl")
+}
+fn is_egl(s: &str) -> bool {
+    s.starts_with("egl")
+}
+
 #[test]
-fn shim_export_surface_matches_the_golden_abi() {
-    let shim_target = manifest_dir().join("target").join("shim-build");
+fn shim_export_surface_matches_the_split_golden_abi() {
+    let golden_gl = read_golden(&manifest_dir().join(GOLDEN_GL));
+    let golden_egl = read_golden(&manifest_dir().join(GOLDEN_EGL));
+    assert_eq!(golden_gl.len(), EXPECTED_GL, "golden {GOLDEN_GL} has an unexpected count");
+    assert_eq!(golden_egl.len(), EXPECTED_EGL, "golden {GOLDEN_EGL} has an unexpected count");
 
-    let golden = read_golden(&manifest_dir().join(GOLDEN));
-    assert_eq!(golden.len(), EXPECTED, "golden {GOLDEN} has an unexpected count");
+    // (a) the generator's SOURCE: manifest GL/EGL rows == the respective goldens (surface can't drift).
+    let manifest = manifest_dir().join(MANIFEST);
+    assert_eq!(manifest_names(&manifest, "GL"), golden_gl, "manifest GL rows differ from the gl golden");
+    assert_eq!(manifest_names(&manifest, "EGL"), golden_egl, "manifest EGL rows differ from the egl golden");
 
-    // (a) the generator's SOURCE: manifest names == golden (so the generated surface can't drift).
-    let manifest = manifest_names(&manifest_dir().join(MANIFEST));
-    assert_eq!(manifest, golden, "{SHIM_DIR}: manifest names differ from the golden ABI surface");
+    let dir = staged_dir();
+    let libgles = dir.join("libGLESv2.so.2");
+    let libegl = dir.join("libEGL.so.1");
 
-    // (b) the BUILT cdylib's exported dynamic symbols == golden, exactly.
-    let exports = built_exports(&shim_target);
-    let missing: Vec<_> = golden.difference(&exports).collect();
-    let extra: Vec<_> = exports.difference(&golden).collect();
-    assert!(missing.is_empty(), "{SHIM_DIR}: golden symbols missing from the .so: {missing:?}");
-    assert!(extra.is_empty(), "{SHIM_DIR}: .so exports symbols not in the golden: {extra:?}");
-    assert_eq!(exports.len(), EXPECTED, "{SHIM_DIR}: exported symbol count drifted");
+    // (b) libGLESv2.so.2 exports EXACTLY the gl* golden, and leaks NO egl*.
+    let gles_gl = exports(&libgles, is_gl);
+    let gles_egl = exports(&libgles, is_egl);
+    let missing: Vec<_> = golden_gl.difference(&gles_gl).collect();
+    let extra: Vec<_> = gles_gl.difference(&golden_gl).collect();
+    assert!(missing.is_empty(), "libGLESv2.so.2: gl* golden symbols missing: {missing:?}");
+    assert!(extra.is_empty(), "libGLESv2.so.2: exports gl* not in the golden: {extra:?}");
+    assert_eq!(gles_gl.len(), EXPECTED_GL, "libGLESv2.so.2: exported gl* count drifted");
+    assert!(gles_egl.is_empty(), "libGLESv2.so.2 must not export any egl*: {gles_egl:?}");
+
+    // (c) libEGL.so.1 exports EXACTLY the egl* golden, and leaks NO gl*.
+    let egl_egl = exports(&libegl, is_egl);
+    let egl_gl = exports(&libegl, is_gl);
+    let missing: Vec<_> = golden_egl.difference(&egl_egl).collect();
+    let extra: Vec<_> = egl_egl.difference(&golden_egl).collect();
+    assert!(missing.is_empty(), "libEGL.so.1: egl* golden symbols missing: {missing:?}");
+    assert!(extra.is_empty(), "libEGL.so.1: exports egl* not in the golden: {extra:?}");
+    assert_eq!(egl_egl.len(), EXPECTED_EGL, "libEGL.so.1: exported egl* count drifted");
+    assert!(egl_gl.is_empty(), "libEGL.so.1 must not export any gl* (they live in libGLESv2): {egl_gl:?}");
 }

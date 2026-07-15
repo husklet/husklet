@@ -1,13 +1,19 @@
-//! Cross-build the guest `libEGL.so.1` shim cdylib (`shim/egl`) for both guest arches, synthesize the
-//! thin `libGLESv2.so.2` forwarding stub, and stage the artifacts under `~/.hl/gl/<arch>/` where the
-//! [`crate::driver::Gl`] plug binds them.
+//! Cross-build the guest `libEGL.so.1` + `libGLESv2.so.2` shim cdylibs (`shim/egl`) for both guest
+//! arches and stage the artifacts under `~/.hl/gl/<arch>/` where the [`crate::driver::Gl`] plug binds them.
 //!
-//! Per arch it runs a nested `cargo build --release --target <triple>` of the egl shim into a dedicated
-//! target dir, installs the resulting `.so` as `~/.hl/gl/<arch>/libEGL.so.1` (DT_SONAME baked by that
-//! crate's build.rs), then links a minimal `libGLESv2.so.2` — an empty translation unit
-//! (`shim/gles/forward.c`) with `DT_SONAME=libGLESv2.so.2` and a `DT_NEEDED` on `libEGL.so.1` (kept via
-//! `--no-as-needed`), so a guest app that `DT_NEEDED`s libGLESv2.so.2 resolves every `gl*` symbol back to
-//! the primary libEGL object. Both land beside each other, plus an unversioned `lib*.so` symlink.
+//! The ONE `shim/egl` crate is cross-built TWICE per arch, in two roles (selected via `$HL_SHIM_ROLE`),
+//! matching real Mesa's `libGLESv2`/`libEGL` split:
+//!   * `egl`  → `libEGL.so.1`   — exports the `egl*` set + the shared-state accessor `hl_shim_state_ptr`;
+//!     OWNS the process-global `State`.
+//!   * `gles` → `libGLESv2.so.2` — exports the `gl*` set in ITS OWN dynsym (so libepoxy resolves core
+//!     `gl*` directly from it); built `cfg(gles_client)` with a `DT_NEEDED` on the just-staged
+//!     `libEGL.so.1`, from which it imports `hl_shim_state_ptr` so BOTH objects share ONE `State`
+//!     (`glDrawArrays` records the draw-list that `eglSwapBuffers` flushes).
+//!
+//! Each role is a nested `cargo build --release --target <triple>` into its own target subdir (so the two
+//! builds don't thrash each other's cache); its build.rs bakes the DT_SONAME + a version script pinning
+//! the exact exported-symbol set. Both `.so`s land beside each other, plus an unversioned `lib*.so`
+//! symlink. A third small object, `libwayland-egl.so.1`, is compiled from a one-file C shim.
 //!
 //! HOST NOTE: only the aarch64 rust std is installed here (system rust, no rustup), so the aarch64 build
 //! MUST succeed (a failure fails this build). For x86_64 the build is ATTEMPTED, but if the target std is
@@ -53,14 +59,12 @@ fn main() {
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("src").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("registry").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join(SHIM_DIR).join("build.rs").display());
-    println!("cargo:rerun-if-changed={}", manifest_dir.join("shim/gles/forward.c").display());
     println!("cargo:rerun-if-changed={}", manifest_dir.join("shim/wayland-egl/wayland_egl.c").display());
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let shim_target = manifest_dir.join("target").join("shim-build");
     let stage_root = stage_root();
     let sysroot = rustc_sysroot();
-    let forward_c = manifest_dir.join("shim/gles/forward.c");
     let wlegl_c = manifest_dir.join("shim/wayland-egl/wayland_egl.c");
 
     for (triple, cc, arch_dir) in ARCHES {
@@ -76,33 +80,45 @@ fn main() {
             );
             continue;
         }
+        let dst_dir = stage_root.join("gl").join(arch_dir);
 
-        // 1. Cross-build the libEGL shim cdylib.
-        if let Err(e) = build_shim(&cargo, &manifest_dir, &shim_target, triple, cc) {
+        // 1. Cross-build + stage libEGL.so.1 (the `egl*` object; OWNS the shared `State`). Each role uses
+        //    its OWN target subdir so the two builds of this one crate don't thrash each other's cache.
+        let egl_target = shim_target.join("egl");
+        if let Err(e) = build_shim(&cargo, &manifest_dir, &egl_target, triple, cc, "egl", None) {
             if host {
-                panic!("building {SHIM_DIR} for {triple}: {e}");
+                panic!("building {SHIM_DIR} ({EGL_SONAME}) for {triple}: {e}");
             }
-            println!("cargo:warning=hl_wip-gl: building {SHIM_DIR} for {triple} failed: {e}");
+            println!("cargo:warning=hl_wip-gl: building {EGL_SONAME} for {triple} failed: {e}");
             continue;
         }
-        // 2. Stage libEGL.so.1.
-        let dst_dir = stage_root.join("gl").join(arch_dir);
-        if let Err(e) = stage_lib(&shim_target, triple, &dst_dir) {
+        if let Err(e) = stage_lib(&egl_target, triple, &dst_dir, EGL_SONAME) {
             if host {
                 panic!("staging {EGL_SONAME} for {triple}: {e}");
             }
             println!("cargo:warning=hl_wip-gl: staging {EGL_SONAME} for {triple} failed: {e}");
             continue;
         }
-        // 3. Synthesize + stage the libGLESv2.so.2 DT_NEEDED->libEGL forwarding stub next to it.
-        if let Err(e) = generate_gles_stub(cc, &forward_c, &dst_dir) {
+        // 2. Cross-build + stage libGLESv2.so.2 (the `gl*` object; `cfg(gles_client)`, DT_NEEDED on the
+        //    just-staged libEGL.so.1 so it imports the shared-state accessor). Real gl* symbols in ITS
+        //    OWN dynsym — matching real Mesa, so libepoxy resolves core gl* directly from it.
+        let gles_target = shim_target.join("gles");
+        if let Err(e) = build_shim(&cargo, &manifest_dir, &gles_target, triple, cc, "gles", Some(&dst_dir))
+        {
             if host {
-                panic!("generating {GLES_SONAME} for {triple}: {e}");
+                panic!("building {SHIM_DIR} ({GLES_SONAME}) for {triple}: {e}");
             }
-            println!("cargo:warning=hl_wip-gl: generating {GLES_SONAME} for {triple} failed: {e}");
+            println!("cargo:warning=hl_wip-gl: building {GLES_SONAME} for {triple} failed: {e}");
             continue;
         }
-        // 4. Compile + stage the libwayland-egl.so.1 wayland-egl ABI object (the app's `wl_egl_window`
+        if let Err(e) = stage_lib(&gles_target, triple, &dst_dir, GLES_SONAME) {
+            if host {
+                panic!("staging {GLES_SONAME} for {triple}: {e}");
+            }
+            println!("cargo:warning=hl_wip-gl: staging {GLES_SONAME} for {triple} failed: {e}");
+            continue;
+        }
+        // 3. Compile + stage the libwayland-egl.so.1 wayland-egl ABI object (the app's `wl_egl_window`
         //    library). A SEPARATE object from libEGL — libEGL reads its `wl_egl_window` struct back.
         if let Err(e) = generate_wayland_egl(cc, &wlegl_c, &dst_dir) {
             if host {
@@ -116,21 +132,24 @@ fn main() {
     }
 }
 
-/// Cross-build the egl shim crate for `triple`, with the recursion sentinel + offline + the arch's cross
-/// linker.
+/// Cross-build the shim crate for `triple` in the given `role` (`egl` or `gles`), with the recursion
+/// sentinel + offline + the arch's cross linker. `egl_libdir` (Some only for the `gles` role) is the dir
+/// holding the staged `libEGL.so.1` the libGLESv2 object `DT_NEEDED`s for the shared-state accessor.
 fn build_shim(
     cargo: &str,
     manifest_dir: &Path,
     shim_target: &Path,
     triple: &str,
     linker: &str,
+    role: &str,
+    egl_libdir: Option<&Path>,
 ) -> Result<(), String> {
     let crate_manifest = manifest_dir.join(SHIM_DIR).join("Cargo.toml");
     // The linker env var cargo reads for a target: CARGO_TARGET_<TRIPLE>_LINKER (triple upper-cased, - -> _).
     let linker_env = format!("CARGO_TARGET_{}_LINKER", triple.to_uppercase().replace('-', "_"));
 
-    let status = Command::new(cargo)
-        .arg("build")
+    let mut cmd = Command::new(cargo);
+    cmd.arg("build")
         .arg("--release")
         .arg("--offline")
         .arg("--manifest-path")
@@ -140,12 +159,15 @@ fn build_shim(
         .arg("--target-dir")
         .arg(shim_target)
         .env("HL_GL_BUILDING_SHIM", "1")
+        .env("HL_SHIM_ROLE", role)
         .env(&linker_env, linker)
         // Don't inherit the parent build's RUSTFLAGS (e.g. a host-only flag) into the guest cdylib.
         .env_remove("RUSTFLAGS")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .status()
-        .map_err(|e| format!("spawn cargo: {e}"))?;
+        .env_remove("CARGO_ENCODED_RUSTFLAGS");
+    if let Some(libdir) = egl_libdir {
+        cmd.env("HL_SHIM_EGL_LIBDIR", libdir);
+    }
+    let status = cmd.status().map_err(|e| format!("spawn cargo: {e}"))?;
     if !status.success() {
         return Err(format!("cargo build exited with {status}"));
     }
@@ -156,41 +178,13 @@ fn build_shim(
     Ok(())
 }
 
-/// Install the built `.so` as `<dst_dir>/libEGL.so.1` (+ an unversioned `libEGL.so` symlink).
-fn stage_lib(shim_target: &Path, triple: &str, dst_dir: &Path) -> Result<(), String> {
+/// Install the built `.so` as `<dst_dir>/<soname>` (+ an unversioned `lib*.so` symlink).
+fn stage_lib(shim_target: &Path, triple: &str, dst_dir: &Path, soname: &str) -> Result<(), String> {
     let built = shim_target.join(triple).join("release").join(SHIM_LIB);
     std::fs::create_dir_all(dst_dir).map_err(|e| format!("mkdir {}: {e}", dst_dir.display()))?;
-    let dst = dst_dir.join(EGL_SONAME);
+    let dst = dst_dir.join(soname);
     std::fs::copy(&built, &dst).map_err(|e| format!("copy -> {}: {e}", dst.display()))?;
-    symlink_unversioned(dst_dir, EGL_SONAME);
-    Ok(())
-}
-
-/// Link the thin `libGLESv2.so.2` forwarding stub from an empty C TU: `DT_SONAME=libGLESv2.so.2` +
-/// a kept `DT_NEEDED` on the just-staged `libEGL.so.1`. Installs it next to libEGL (+ unversioned symlink).
-fn generate_gles_stub(cc: &str, forward_c: &Path, dst_dir: &Path) -> Result<(), String> {
-    let out = dst_dir.join(GLES_SONAME);
-    let status = Command::new(cc)
-        .arg("-shared")
-        .arg("-fPIC")
-        .arg("-nostdlib")
-        .arg("-o")
-        .arg(&out)
-        .arg(forward_c)
-        .arg(format!("-Wl,-soname,{GLES_SONAME}"))
-        .arg(format!("-L{}", dst_dir.display()))
-        .arg("-Wl,--no-as-needed")
-        .arg("-l:libEGL.so.1")
-        .arg("-Wl,--as-needed")
-        .status()
-        .map_err(|e| format!("spawn {cc}: {e}"))?;
-    if !status.success() {
-        return Err(format!("{cc} link exited with {status}"));
-    }
-    if !out.exists() {
-        return Err(format!("expected {} not produced", out.display()));
-    }
-    symlink_unversioned(dst_dir, GLES_SONAME);
+    symlink_unversioned(dst_dir, soname);
     Ok(())
 }
 
