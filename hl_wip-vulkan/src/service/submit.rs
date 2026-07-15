@@ -11,6 +11,7 @@ use crate::model::command::CommandBufferState;
 use crate::model::sync::{DeferredOp, QueryResult};
 use crate::*;
 use hl_gpu::{Cmd, CommandBuffer, CommandSink, FenceId, GpuError, Result};
+use hl_log::tag;
 
 /// `vkQueueSubmit` — flush mapped memory, then submit each command buffer's encoder as a `Cmd::Submit`;
 /// if `signal_fence` is given, the last submit signals it at a fresh timeline value. All command
@@ -21,6 +22,7 @@ pub fn queue_submit(
     command_buffers: &[VkCommandBuffer],
     signal_fence: Option<VkFence>,
 ) -> Result<()> {
+    let _submit_span = hl_log::hl_span!(tag::VULKAN, "submit");
     // Resolve the fence signal (ir id + a fresh monotonic timeline value) up front.
     let signal = match signal_fence {
         Some(f) => {
@@ -46,6 +48,7 @@ pub fn queue_submit(
             .get(&cb)
             .ok_or(GpuError::Invalid("vkQueueSubmit: unknown VkCommandBuffer"))?;
         if rec.state != CommandBufferState::Executable {
+            hl_log::hl_warn!(tag::VULKAN, "submit not-executable cb={cb:#x} state={:?}", rec.state);
             return Err(GpuError::Invalid("vkQueueSubmit: command buffer is not executable"));
         }
         encoders.push(rec.enc.clone());
@@ -84,6 +87,9 @@ pub fn queue_submit(
         }
     }
 
+    hl_log::hl_debug!(tag::VULKAN, "submit cbs={} cmds={} fence={}", command_buffers.len(), batch.len(), signal.is_some());
+    hl_log::hl_count!(tag::VULKAN, "submits");
+    hl_log::hl_add!(tag::VULKAN, "cmds", batch.len() as u64);
     sink.submit(&batch)?;
 
     // The captured pending host→device uploads (from vkUnmapMemory / vkFlushMappedMemoryRanges) have now

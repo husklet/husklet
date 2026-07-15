@@ -18,6 +18,7 @@ use hl_vulkan::result::vk_result_from_gpu_error;
 use hl_vulkan::service::{create, record, submit};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 use hl_gpu::CommandSink;
+use hl_log::tag;
 
 use crate::state::with;
 use crate::types::*;
@@ -162,7 +163,7 @@ pub extern "C" fn vkMapMemory(
     if pp_data.is_null() {
         return VK_ERROR_MEMORY_MAP_FAILED;
     }
-    dev_sink(|dev, sink| {
+    let r = dev_sink(|dev, sink| {
         if create::map_memory(dev, memory).is_err() {
             return VK_ERROR_MEMORY_MAP_FAILED;
         }
@@ -182,7 +183,11 @@ pub extern "C" fn vkMapMemory(
         unsafe { *pp_data = ptr as *mut c_void };
         VK_SUCCESS
     })
-    .unwrap_or(VK_ERROR_MEMORY_MAP_FAILED)
+    .unwrap_or(VK_ERROR_MEMORY_MAP_FAILED);
+    if r != VK_SUCCESS {
+        hl_log::hl_warn!(tag::SHIM, "vkMapMemory mem={memory:#x} -> {:?}", r);
+    }
+    r
 }
 
 #[no_mangle]
@@ -932,8 +937,12 @@ pub extern "C" fn vkQueueSubmit(
         }
     }
     let signal = if fence != 0 { Some(fence) } else { None };
-    dev_sink(|dev, sink| vk(submit::queue_submit(dev, sink, &cbs, signal)))
-        .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+    let r = dev_sink(|dev, sink| vk(submit::queue_submit(dev, sink, &cbs, signal)))
+        .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
+    if r != VK_SUCCESS {
+        hl_log::hl_warn!(tag::SHIM, "vkQueueSubmit cbs={} -> {:?}", cbs.len(), r);
+    }
+    r
 }
 
 #[no_mangle]

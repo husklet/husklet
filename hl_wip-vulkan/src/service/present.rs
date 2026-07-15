@@ -22,6 +22,7 @@ use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{BufferDesc, SurfaceDesc, TextureDesc};
 use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, TextureDim};
 use hl_gpu::{BufferId, Cmd, CommandBuffer, CommandSink, GpuError, Result};
+use hl_log::tag;
 
 // ---- WSI physical-device surface queries (modeled, physical-device-level — no Device/sink) --------
 
@@ -184,6 +185,7 @@ pub fn acquire_next_image(dev: &mut Device, swapchain: VkSwapchainKHR) -> Result
         .unwrap_or(start);
     sc.images[index].state = ImageState::Acquired;
     sc.acquire_cursor = ((index + 1) % count) as u32;
+    hl_log::hl_debug!(tag::PRESENT, "acquire idx={} of={}", index, count);
     Ok(index as u32)
 }
 
@@ -215,6 +217,8 @@ pub fn queue_present(
         .get(&surface_handle)
         .ok_or(GpuError::Invalid("vkQueuePresentKHR: swapchain surface lost"))?
         .ir_id;
+    hl_log::hl_debug!(tag::PRESENT, "present img={} surf={} tex={}", image_index, surface, texture);
+    hl_log::hl_count!(tag::PRESENT, "presents");
     sink.submit(&[Cmd::Present { surface, texture }])?;
     // The present engine is done with this image (immediate headless present) — return it to the pool so a
     // future acquire can hand it out again. Index was range-checked above, so the image is present.
@@ -251,6 +255,8 @@ pub fn read_presented_image(
             .ok_or(GpuError::Invalid("readback: image index out of range"))?;
         (img.ir_texture_id, sc.width, sc.height)
     };
+    let _readback_span = hl_log::hl_span!(tag::PRESENT, "readback");
+    hl_log::hl_debug!(tag::PRESENT, "readback img={} {}x{}", image_index, width, height);
     let readback = dev.alloc_ir();
     let row_bytes = width as u64 * 4;
     let size = row_bytes * height as u64;

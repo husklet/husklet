@@ -24,6 +24,7 @@ use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
 use crate::state::{with, RenderPassRec, WaylandWindow};
 use crate::types::*;
+use hl_log::tag;
 
 // ---- shared marshalling helpers ------------------------------------------------------------------
 
@@ -1033,7 +1034,10 @@ pub extern "C" fn vkAcquireNextImageKHR(
             }
             VK_SUCCESS
         }
-        Err(e) => vk_result_from_gpu_error(&e),
+        Err(e) => {
+            hl_log::hl_warn!(tag::SHIM, "vkAcquireNextImageKHR sc={swapchain:#x} -> {:?}", vk_result_from_gpu_error(&e));
+            vk_result_from_gpu_error(&e)
+        }
     })
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
@@ -1072,6 +1076,7 @@ pub extern "C" fn vkQueuePresentKHR(_queue: *mut c_void, p_present_info: *const 
             //    still VK_SUCCESS; a hard marshal/flush failure ⇒ VK_ERROR_OUT_OF_DATE/SURFACE_LOST).
             let vk = present_frame_to_app_surface(&mut s.presenters, &s.swapchain_windows, sc, plane);
             if vk != VK_SUCCESS {
+                hl_log::hl_warn!(tag::PRESENT, "commit failed sc={sc:#x} -> {:?}", vk);
                 res = vk;
             }
         }

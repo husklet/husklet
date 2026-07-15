@@ -28,6 +28,10 @@ crate-type = ["cdylib"]
 hl_vulkan = { package = "hl_wip_vulkan", path = "../..", default-features = false }
 # The neutral protocol + the guest-side RemoteCommandSink transport over $HL_GPU_EXEC.
 hl_gpu = { package = "hl_wip_gpu", path = "../../../hl_wip-gpu" }
+# Tag-based logging for the guest ICD front-end (honest-error `vk*` sites -> hl_warn!(tag::SHIM, ...)).
+# std-only, adds no exported symbols (not `#[no_mangle]`), so the 715-symbol ABI is unaffected. In the
+# release cdylib the verbose macros compile out to `{}` — zero cost unless built with `release-verbose`.
+hl-log = { path = "../../../hl-log" }
 
 [profile.release]
 # Injected .so: keep it small; abort-on-panic so a Rust panic can never unwind across the C-ABI seam.

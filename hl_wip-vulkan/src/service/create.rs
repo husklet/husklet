@@ -26,6 +26,7 @@ use hl_gpu::protocol::model::descriptor::{
 };
 use hl_gpu::protocol::model::enums::{AddressMode, Filter, TextureFormat, Topology};
 use hl_gpu::{BufferId, Cmd, CommandSink, GpuError, Result};
+use hl_log::tag;
 
 // ---- instance / device (pure object model — no IR) -----------------------------------------------
 
@@ -333,6 +334,7 @@ pub fn create_shader_module_words(
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
     sink.submit(&[spirv::create_shader(ir_id, words.clone())])?;
+    hl_log::hl_debug!(tag::VULKAN, "shader ir={} words={} entries={}", ir_id, words.len(), entries.len());
     dev.shaders.insert(handle, ShaderRec { ir_id, spirv: words, entries });
     Ok(handle)
 }
@@ -365,6 +367,7 @@ pub fn create_compute_pipeline(
             label: format!("vkcpipe{ir_id}"),
         },
     )])?;
+    hl_log::hl_debug!(tag::VULKAN, "pipeline kind=compute ir={} shader={} entry={}", ir_id, shader_ir, entry);
     dev.pipelines.insert(handle, PipelineRec { ir_id, kind: PipelineKind::Compute });
     Ok(handle)
 }
@@ -403,7 +406,9 @@ pub fn create_graphics_pipeline(
     let color_targets = color_formats
         .into_iter()
         .map(|format| ColorTargetState { format, blend: None, write_mask: 0xf })
-        .collect();
+        .collect::<Vec<_>>();
+    let color_targets_len = color_targets.len();
+    let has_fragment = fragment_ref.is_some();
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
     sink.submit(&[Cmd::CreateRenderPipeline(
@@ -420,6 +425,7 @@ pub fn create_graphics_pipeline(
             label: format!("vkgpipe{ir_id}"),
         },
     )])?;
+    hl_log::hl_debug!(tag::VULKAN, "pipeline kind=graphics ir={} frag={} targets={}", ir_id, has_fragment, color_targets_len);
     dev.pipelines.insert(handle, PipelineRec { ir_id, kind: PipelineKind::Graphics });
     Ok(handle)
 }

@@ -18,6 +18,7 @@ use hl_gpu::protocol::model::descriptor::{
 };
 use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, Filter, IndexFormat, LoadOp};
 use hl_gpu::{Cmd, CommandSink, GpuError, Result};
+use hl_log::tag;
 use std::collections::HashMap;
 
 /// The bind-group offset the sampler half of a split `COMBINED_IMAGE_SAMPLER` is placed at: the image keeps
@@ -160,6 +161,7 @@ pub fn cmd_bind_descriptor_sets(
             }
         }
         let ir_id = dev.alloc_ir();
+        hl_log::hl_debug!(tag::VULKAN, "bindgroup set={} ir={} entries={}", set_index, ir_id, entries.len());
         sink.submit(&[Cmd::CreateBindGroup(ir_id, BindGroupDesc { set: set_index, entries })])?;
         if let Ok(cbrec) = recording_mut(dev, cb) {
             cbrec.pending_bind_groups.push((set_index, ir_id));

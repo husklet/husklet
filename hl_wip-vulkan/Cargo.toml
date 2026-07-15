@@ -26,6 +26,11 @@ path = "src/lib.rs"
 # lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.
 hl_gpu = { package = "hl_wip_gpu", path = "../hl_wip-gpu" }
 
+# Tag-based logging + counters + timing. std-only, zero-dep, provably zero-cost when off. Used by the
+# lowering services (submit/present/create/record) AND — via the shim crate's own copy of this dep — by
+# the guest ICD cdylib. Its symbols are NOT `#[no_mangle]`, so it adds no exports (the 715 ABI is intact).
+hl-log = { path = "../hl-log" }
+
 # The container-runtime driver-plugin seam (`hl_jit::Driver`). OPTIONAL + behind the `jit` feature so
 # the HOST composition root gets the `Vulkan` driver plug, while the GUEST shim cdylib (which depends on
 # this crate for the lowering services) does NOT drag hl-jit / hl-jit-darwin / tokio into a guest .so —
