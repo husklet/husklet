@@ -11,6 +11,7 @@
 //! [`register`] (the CUDA Runtime API's `__cudaRegister*` fatbin/function registry + `cudaLaunchKernel`).
 
 pub mod allocate;
+pub mod event;
 pub mod launch;
 pub mod load_module;
 pub mod register;

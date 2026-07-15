@@ -46,6 +46,12 @@ pub fn launch(
     hl_log::hl_count!(hl_log::tag::CUDA, "launches");
     let _s = hl_log::hl_span!(hl_log::tag::CUDA, "launch");
 
+    // Validate the launch configuration against the modeled device BEFORE minting/caching any shader,
+    // pipeline, or parameter buffer — an out-of-range grid/block is `CUDA_ERROR_INVALID_VALUE` in a real
+    // driver, NOT a silently-accepted launch that the software oracle then happily runs (which would be a
+    // fake-success: the model would compute a result for a configuration hardware could never dispatch).
+    validate_launch_dims(ctx, grid, block)?;
+
     let block_arr = [block.0, block.1, block.2];
 
     // Marshal the arguments FIRST — before minting/caching any shader or pipeline id. A dangling
@@ -150,6 +156,46 @@ pub fn launch(
 
     sink.submit(&out)?;
     Ok(pipeline)
+}
+
+/// Validate a `cuLaunchKernel` grid/block against the modeled device limits, returning the
+/// `CUDA_ERROR_INVALID_VALUE` analogue ([`GpuError::Invalid`]) for a configuration a real driver rejects:
+///
+/// * a **zero** extent on any grid or block axis (CUDA requires every dim ≥ 1), and
+/// * a block whose total thread count (`block.x * block.y * block.z`) exceeds the device's
+///   `maxThreadsPerBlock` (1024 on the modeled Ampere-class device) — the exact
+///   `cudaErrorInvalidConfiguration`/`CUDA_ERROR_INVALID_VALUE` a real `cuLaunchKernel` returns.
+///
+/// This is a hard precondition: it runs before any `Cmd` is built, so an invalid launch surfaces an
+/// honest error and emits NOTHING to the sink.
+fn validate_launch_dims(
+    ctx: &CudaContext,
+    grid: (u32, u32, u32),
+    block: (u32, u32, u32),
+) -> Result<()> {
+    if grid.0 == 0 || grid.1 == 0 || grid.2 == 0 {
+        hl_log::hl_warn!(hl_log::tag::CUDA, "launch zero grid dim {:?}", grid);
+        return Err(GpuError::Invalid("cuLaunchKernel: grid dimension is zero"));
+    }
+    if block.0 == 0 || block.1 == 0 || block.2 == 0 {
+        hl_log::hl_warn!(hl_log::tag::CUDA, "launch zero block dim {:?}", block);
+        return Err(GpuError::Invalid("cuLaunchKernel: block dimension is zero"));
+    }
+    // Thread-count product in u64 so a `u32^3` block can never overflow past the comparison.
+    let threads = (block.0 as u64) * (block.1 as u64) * (block.2 as u64);
+    if threads > ctx.device.max_threads_per_block as u64 {
+        hl_log::hl_warn!(
+            hl_log::tag::CUDA,
+            "launch block {:?} = {} threads > maxThreadsPerBlock {}",
+            block,
+            threads,
+            ctx.device.max_threads_per_block
+        );
+        return Err(GpuError::Invalid(
+            "cuLaunchKernel: threads per block exceeds device maxThreadsPerBlock",
+        ));
+    }
+    Ok(())
 }
 
 /// Pad `blob` up to a natural-alignment boundary before appending the next kernel parameter.

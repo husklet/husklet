@@ -11,6 +11,7 @@
 //! [`hl_gpu::CommandSink`].
 
 use super::device::{CudaDeviceDesc, DevicePtr};
+use super::event::EventTable;
 use super::memory::{Allocations, HostMemory};
 use super::module::{Function, Modules};
 use super::stream::StreamTable;
@@ -27,6 +28,8 @@ pub struct CudaContext {
     pub modules: Modules,
     /// CUDA streams (validation + a synchronize target).
     pub streams: StreamTable,
+    /// CUDA events (cross-stream ordering markers: `cuEventRecord` / `cuStreamWaitEvent`).
+    pub events: EventTable,
     /// Launch pipeline cache: `(module, entry, block)` → `(shader id, pipeline id)`, so a repeated
     /// launch of the same kernel+block reuses the compiled shader/pipeline and emits no new
     /// `CreateShader`/`CreateComputePipeline`. The block dims are part of the key because they bake into
@@ -55,6 +58,7 @@ impl CudaContext {
             host: HostMemory::new(),
             modules: Modules::new(),
             streams: StreamTable::new(),
+            events: EventTable::new(),
             pipelines: HashMap::new(),
             global_allocs: HashMap::new(),
             next_buffer: 1,

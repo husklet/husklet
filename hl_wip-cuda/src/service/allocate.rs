@@ -20,8 +20,33 @@ pub(crate) fn create_buffer_cmd(buffer: u32, size: u64) -> Cmd {
     Cmd::CreateBuffer(buffer, BufferDesc { size, usage: cuda_buffer_usage(), label: String::new() })
 }
 
+/// Reject an allocation of `size` bytes that would push total live device memory past the modeled
+/// device's VRAM budget (`CudaDeviceDesc::total_mem`), returning the `CUDA_ERROR_OUT_OF_MEMORY` /
+/// `cudaErrorMemoryAllocation` analogue ([`GpuError::ResourceLimit`]).
+///
+/// A real driver fails `cuMemAlloc`/`cudaMalloc` with an out-of-memory status once the request exceeds
+/// what the device can back; without this check the model would MINT a device pointer for an
+/// impossible allocation (a fake success), then hand the guest a buffer the host could never populate.
+/// The check runs BEFORE any id is minted or `Cmd` submitted, so an over-budget request touches no state.
+fn check_budget(ctx: &CudaContext, size: u64) -> Result<()> {
+    let used = ctx.mem.total_bytes();
+    let budget = ctx.device.total_mem;
+    if used.checked_add(size).map(|total| total > budget).unwrap_or(true) {
+        hl_log::hl_warn!(
+            hl_log::tag::CUDA,
+            "mem_alloc OOM: size={} used={} budget={}",
+            size,
+            used,
+            budget
+        );
+        return Err(GpuError::ResourceLimit("cuMemAlloc: allocation exceeds device memory budget"));
+    }
+    Ok(())
+}
+
 /// `cuMemAlloc(size)` → a device pointer, submitting the backing [`Cmd::CreateBuffer`].
 pub fn mem_alloc(ctx: &mut CudaContext, sink: &mut dyn CommandSink, size: u64) -> Result<DevicePtr> {
+    check_budget(ctx, size)?;
     let buffer = ctx.alloc_buffer();
     let ptr = ctx.mem.record(buffer, size);
     sink.submit(&[create_buffer_cmd(buffer, size)])?;
@@ -39,6 +64,7 @@ pub fn mem_alloc_managed(
     sink: &mut dyn CommandSink,
     size: u64,
 ) -> Result<DevicePtr> {
+    check_budget(ctx, size)?;
     let buffer = ctx.alloc_buffer();
     let ptr = ctx.mem.record_managed(buffer, size);
     sink.submit(&[create_buffer_cmd(buffer, size)])?;
@@ -64,6 +90,7 @@ pub fn mem_alloc_pitch(
     let size = pitch
         .checked_mul(height)
         .ok_or(GpuError::Invalid("cuMemAllocPitch: pitch*height overflow"))?;
+    check_budget(ctx, size)?;
     let buffer = ctx.alloc_buffer();
     let ptr = ctx.mem.record(buffer, size);
     sink.submit(&[create_buffer_cmd(buffer, size)])?;
