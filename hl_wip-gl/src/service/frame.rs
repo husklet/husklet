@@ -492,7 +492,52 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
         }
         let t = match ctx.textures.get(gl_tex) {
             Some(t) if t.has_data() => t.clone(),
-            _ => continue,
+            _ => {
+                // The compiled shader DECLARES + samples this sampler (so wgpu's auto bind-group layout
+                // carries its texture+sampler bindings), but this draw has no real GL texture with uploaded
+                // pixels bound at its unit (an unbound unit, or a texture object with no storage yet). NEVER
+                // skip it: a skipped declared sampler leaves the bind group short of the layout and
+                // `create_bind_group` NACKs ("bindings (3) does not match (7)"). Bind a shared 1x1
+                // transparent-black placeholder texture + a default sampler (created ONCE, cached on the
+                // context) at this sampler's host binding so the driver covers every declared sampler; the
+                // executor's used-binding filter then trims to the shader's actually-sampled subset.
+                let (tex_ir, samp_ir, needs_create) = ctx.default_placeholder();
+                let stage_ir = if needs_create {
+                    let stage_ir = ctx.alloc_buffer_ir();
+                    cmds.push(Cmd::CreateTexture(
+                        tex_ir,
+                        TextureDesc {
+                            width: 1,
+                            height: 1,
+                            depth: 1,
+                            mip_levels: 1,
+                            sample_count: 1,
+                            dim: TextureDim::D2,
+                            format: TextureFormat::Rgba8Unorm,
+                            usage: texture_usage::SAMPLED | texture_usage::COPY_DST,
+                            label: "gl-placeholder-tex".into(),
+                        },
+                    ));
+                    cmds.push(Cmd::CreateBuffer(stage_ir, BufferDesc { size: 4, usage: buffer_usage::COPY_SRC, label: String::new() }));
+                    cmds.push(Cmd::WriteBuffer { id: stage_ir, offset: 0, data: vec![0u8; 4] });
+                    cmds.push(Cmd::CreateSampler(
+                        samp_ir,
+                        SamplerDesc {
+                            min_filter: Filter::Nearest,
+                            mag_filter: Filter::Nearest,
+                            mip_filter: Filter::Nearest,
+                            address_u: AddressMode::ClampToEdge,
+                            address_v: AddressMode::ClampToEdge,
+                            address_w: AddressMode::ClampToEdge,
+                        },
+                    ));
+                    stage_ir
+                } else {
+                    0
+                };
+                texbinds.push(TexBind { slot, tex_ir, samp_ir, stage_ir, w: 1, h: 1 });
+                continue;
+            }
         };
         // Residency cache: a sampled texture (a GskGL glyph/mask atlas is bound across hundreds of draws
         // and re-used every frame) is `CreateTexture`d + staged + copied ONLY on first sight / content

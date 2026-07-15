@@ -195,8 +195,14 @@ fn gtk4_composites_through_the_full_stack() {
         app_exited.or(killed_status),
     );
 
-    // ---- 7. Diagnose precisely if the pixels never arrived (stay GREEN as a diagnosed-gap tracker) ----
-    if frames.is_empty() {
+    // ---- 7. Diagnose precisely if REAL GTK content never arrived (stay GREEN as a diagnosed-gap tracker) --
+    // The bind-group completeness fix cleared the create_bind_group wall: GTK now builds pipelines, SUBMITS,
+    // and the compositor PRESENTS frames — but those pixels are still a uniform fill (no visible geometry).
+    // So "no frames at all" AND "frames present but blank" are the SAME diagnosed gap now: the next real stop
+    // is the frame CONTENT / data routing (below), one stage past the now-clean bind group. Both stay green.
+    let best_spread = frames.iter().map(luminance_spread).max().unwrap_or(0);
+    let has_real_content = best_spread > 40 && frames.iter().any(has_light_chrome);
+    if !has_real_content {
         // PROGRESS TO DATE (each of these WAS the stop and is now cleared):
         //   * GDK Wayland display-open: our compositor now advertises wl_data_device_manager (+ the other
         //     required globals), so `gdk_wayland_display_open` accepts our display.
@@ -285,23 +291,39 @@ fn gtk4_composites_through_the_full_stack() {
         //   `CreateShader`d/`CreateRenderPipeline`d ONCE and re-referenced by their stable IR ids on every
         //   later draw+frame. The recompile count drops from ~549 to ~30 (once per program, per link).
         //
-        //   REMAINING — with the shaders no longer thrashing, the frame now progresses to host BIND-GROUP
-        //   creation and stops there: `Device::create_bind_group` fails validation with "Number of bindings
-        //   in bind group descriptor (3) does not match the number of bindings defined in the bind group
-        //   layout (7)". A GskGpu fragment program declares THREE textures (its compiled auto layout is UBO
-        //   at binding 0 + three texture/sampler pairs at 1+2k/2+2k = 7 bindings), but the GL driver's
-        //   `lower_draw` only emits a bind-group ENTRY for a sampler whose bound GL texture actually has
-        //   uploaded data — so a draw that binds one populated atlas supplies 3 entries (UBO + one pair) and
-        //   the auto layout the pipeline derives from the shader wants all 7. This is a bind-group
-        //   COMPLETENESS gap (the driver must bind a placeholder for every sampler the shader declares, or the
-        //   executor must slim the pipeline's bind-group layout to the sampled subset) — distinct from the
-        //   now-fixed shader recompile, and NOT the vertex-input interface (the GskGpu vertex/fragment stages
-        //   now compile cleanly: 0 shader_errors). The next effort is the bind-group binding set, not the
-        //   shader cache.
+        //   FIXED — GskGpu bind-group COMPLETENESS: `Device::create_bind_group` now succeeds. A GskGpu
+        //   fragment program declares + samples THREE textures (compiled auto layout = UBO@0 + three
+        //   texture/sampler pairs at 1+2k/2+2k = 7 bindings), but for a given draw only some of those
+        //   samplers have a real GL texture with uploaded pixels bound; the driver's `lower_draw` USED to
+        //   emit a bind-group entry only for a sampler whose texture had data, so a draw with one populated
+        //   atlas supplied 3 entries and the 7-binding auto layout NACKed ("bindings (3) does not match (7)").
+        //   hl_wip-gl/src/service/frame.rs `lower_draw` now NEVER skips a declared sampler: it binds the
+        //   sampler's real bound texture when present, else a shared 1x1 transparent-black PLACEHOLDER
+        //   texture + default sampler (created ONCE and cached on the context via
+        //   `GlContext::default_placeholder`, mirroring the texture/buffer residency caches) at that sampler's
+        //   host binding. The bind group now carries an entry for every declared sampler, so it matches the
+        //   layout; the executor's used-binding filter then trims to the shader's sampled subset. With this,
+        //   gpu submits progress past the bind-group wall (~10) and the compositor PRESENTS frames (~3).
+        //
+        //   REMAINING — with the bind group complete, GTK now SUBMITS and the compositor PRESENTS frames, but
+        //   the presented pixels are a UNIFORM fill (luminance spread 0 — a flat buffer, not GTK's chrome).
+        //   There are NO host validation errors (create_bind_group / pipelines / shaders all clean, 0
+        //   shader_errors, 0 NACKs): the frame reaches the GPU and composites, but no GskGpu geometry is
+        //   VISIBLE in the result. The next stop is the frame CONTENT / DATA routing, one stage past the now
+        //   clean bind group — most likely the GskGpu std140 push-constant UBO + per-instance vertex data:
+        //   GskGpu reads `layout(std140, binding = 0) uniform GskPushConstants { mat4 mvp; mat3x4 clip; vec2
+        //   scale; } push;` and pulls per-instance geometry (in_rect/in_tex_rect) out of one frame VBO, so if
+        //   the driver's flat glUniform*-style uniform block bytes or the instance vertex-attribute routing do
+        //   not match that std140 layout, every primitive transforms to a degenerate/offscreen position and
+        //   the target keeps only its clear (a uniform frame). This is distinct from — and downstream of —
+        //   the now-fixed bind-group completeness; the next effort is the uniform/vertex DATA layout, not the
+        //   bind-group binding set.
         eprintln!(
             "MILESTONE DIAGNOSED (GTK4 reaches real GL rendering + cheap frame lowering; its GskGpu shaders \
-             compile AND are no longer recompiled per draw, and the next gap has moved one stage downstream \
-             to the host executor's BIND-GROUP binding set — suite stays green):\n\
+             compile AND are no longer recompiled per draw, its bind group is now COMPLETE so the host \
+             accepts it, GTK now SUBMITS and the compositor PRESENTS frames — but the pixels are still blank, \
+             so the next gap has moved one stage downstream to the frame CONTENT / data routing — suite stays \
+             green):\n\
              Stage evidence:\n\
              * host GPU executor submits (guest lowered GL IR over $HL_GPU_EXEC): {submit_count}\n\
                (>0 => the epoxy/GskGpu bring-up is LIVE; GTK lowers real GL to the host)\n\
@@ -336,19 +358,29 @@ fn gtk4_composites_through_the_full_stack() {
                 (context.rs program_shader_ir / program_pipeline_ir, wired through service/frame.rs lower_draw), \
                 so a reused program compiles ONCE and costs nothing per later draw/frame — recompiles drop to \
                 ~30 (once per program/link) and gpu submits progress past the shader wall.\n\
-             * compositor presented frames: 0\n\
-               (with the shader thrash gone the frame now reaches host BIND-GROUP creation and stops there: \
-                Device::create_bind_group fails validation 'Number of bindings in bind group descriptor (3) \
-                does not match the number of bindings defined in the bind group layout (7)'. A GskGpu fragment \
-                program declares THREE textures (compiled auto layout = UBO@0 + three tex/sampler pairs at \
-                1+2k/2+2k = 7 bindings), but hl_wip-gl's lower_draw emits a bind-group entry only for a sampler \
-                whose bound GL texture has uploaded data, so a draw binding one populated atlas supplies just 3 \
-                entries. This is a bind-group COMPLETENESS gap — the driver must bind a placeholder for every \
-                declared sampler, or the executor must slim the pipeline layout to the sampled subset — distinct \
-                from the now-fixed shader recompile and NOT the vertex interface (the vertex+fragment stages \
-                compile cleanly, 0 shader_errors).)\n\
+             * GskGpu bind-group COMPLETENESS: FIXED — Device::create_bind_group now succeeds. A GskGpu \
+                fragment program declares + samples THREE textures (auto layout = UBO@0 + three tex/sampler \
+                pairs at 1+2k/2+2k = 7 bindings), but a given draw populates only some of those samplers; the \
+                driver used to emit an entry only for a sampler with uploaded data (3 entries) and the 7-binding \
+                layout NACKed ('bindings (3) does not match (7)'). hl_wip-gl's lower_draw now NEVER skips a \
+                declared sampler — it binds the real texture when present, else a shared 1x1 transparent-black \
+                PLACEHOLDER texture + default sampler (created once, cached via GlContext::default_placeholder) \
+                at that sampler's host binding — so the bind group covers every declared sampler and matches the \
+                layout; the executor's used-binding filter trims to the sampled subset. gpu submits now progress \
+                past the bind-group wall (~10).\n\
+             * compositor presented frames: {presented} (best luminance spread {best_spread})\n\
+               (the bind group is complete, so GTK now SUBMITS and the compositor PRESENTS frames — but the \
+                presented pixels are a UNIFORM fill (spread {best_spread}), not GTK's chrome. There are NO host \
+                validation errors (bind group / pipelines / shaders all clean): the frame reaches the GPU and \
+                composites, but no GskGpu geometry is VISIBLE. The next stop is the frame CONTENT / DATA routing \
+                — most likely the GskGpu std140 push-constant UBO (layout(std140,binding=0) uniform \
+                GskPushConstants {{ mat4 mvp; mat3x4 clip; vec2 scale; }}) + the per-instance vertex data: if \
+                the driver's flat glUniform*-style uniform bytes or the instance attribute routing do not match \
+                that std140 layout, every primitive transforms offscreen/degenerate and the target keeps only \
+                its clear. Distinct from — and downstream of — the now-fixed bind-group completeness.)\n\
              --- decisive app stderr lines ---\n{}\n",
             decisive_lines(&stderr),
+            presented = frames.len(),
         );
         let _ = std::fs::remove_file(&socket_path);
         return;

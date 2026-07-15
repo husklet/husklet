@@ -421,6 +421,108 @@ in vec2 vUV;\nout vec4 fragColor;\nvoid main(){ fragColor = texture(GSK_TEXTURE0
     );
 }
 
+// Bind-group COMPLETENESS: a program that DECLARES three samplers but has a real texture bound at only ONE
+// of them must still emit a texture+sampler bind entry for EVERY declared sampler — the two empty slots get
+// a shared 1x1 placeholder texture + default sampler. The compiled shader's auto bind-group layout carries
+// an entry per declared+sampled binding (UBO@0 + three tex/sampler pairs at 1+2k / 2+2k = 7 bindings), so a
+// bind group that emitted only the one populated pair (3 entries) NACKs against the 7-binding layout
+// ("Number of bindings … (3) does not match … (7)"). This asserts the driver now covers all seven bindings
+// and reuses ONE placeholder texture (created once) for both empty slots.
+#[test]
+fn declared_but_unbound_samplers_get_a_placeholder_bind_entry() {
+    // Three sampler2D + a data uniform, all sampled — the plain ES2 (non-verbatim) path, so the sampler
+    // host bindings are the identity k = declaration index (0,1,2 → tex 1/3/5, sampler 2/4/6, UBO 0).
+    const VS3: &str =
+        "attribute vec2 aPos;\nvarying vec2 vUV;\nvoid main(){ vUV = aPos; gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+    const FS3: &str = "precision mediump float;\nvarying vec2 vUV;\nuniform vec4 uColor;\n\
+uniform sampler2D uTex0;\nuniform sampler2D uTex1;\nuniform sampler2D uTex2;\n\
+void main(){ gl_FragColor = texture2D(uTex0, vUV) + texture2D(uTex1, vUV) + texture2D(uTex2, vUV) + uColor; }\n";
+
+    let mut c = ctx_640x480();
+    let mut sink = RecordingSink::with_full_caps();
+
+    let vbo = record::gen_buffer(&mut c);
+    record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &vec![0u8; 48], 0x88E4);
+    record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
+    record::enable_vertex_attrib(&mut c, 0);
+
+    let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
+    record::shader_source(&mut c, vs, VS3);
+    record::compile_shader(&mut c, vs);
+    let fs = record::create_shader(&mut c, GL_FRAGMENT_SHADER);
+    record::shader_source(&mut c, fs, FS3);
+    record::compile_shader(&mut c, fs);
+    let prog = record::create_program(&mut c);
+    record::attach_shader(&mut c, prog, vs);
+    record::attach_shader(&mut c, prog, fs);
+    assert!(record::link_program(&mut c, prog));
+    record::use_program(&mut c, prog);
+
+    // The program reflects three samplers + one data uniform.
+    let p = c.programs.program(prog).expect("linked program");
+    assert_eq!(p.samp_names, vec!["uTex0", "uTex1", "uTex2"]);
+    assert_eq!(p.samp_bindings, vec![0, 1, 2], "ES2 path: sampler host binding == declaration index");
+    assert!(p.has_uniforms(), "uColor is a data uniform → a UBO at binding 0");
+
+    // Each sampler points at a distinct unit (as GskGpu's glUniform1i does), but a real texture is bound
+    // ONLY at unit 0 — units 1 and 2 stay empty, so uTex1/uTex2 are declared-but-unbound.
+    record::uniform_sampler(&mut c, 0, 0); // uTex0 -> unit 0 (populated)
+    record::uniform_sampler(&mut c, 1, 1); // uTex1 -> unit 1 (empty)
+    record::uniform_sampler(&mut c, 2, 2); // uTex2 -> unit 2 (empty)
+    let tex = record::gen_texture(&mut c);
+    record::active_texture(&mut c, GL_TEXTURE0);
+    record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
+    record::tex_image_2d(&mut c, 2, 2, &[0xABu8; 16]);
+    record::viewport(&mut c, [0, 0, 640, 480]);
+    record::draw_arrays(&mut c, GL_TRIANGLES, 0, 6);
+
+    assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
+    let batch = &sink.batches[0];
+    let bg = batch
+        .iter()
+        .find_map(|cmd| match cmd {
+            Cmd::CreateBindGroup(_, d) => Some(d),
+            _ => None,
+        })
+        .expect("CreateBindGroup");
+
+    // Every declared sampler is covered: 3 textures + 3 samplers + the UBO buffer = 7 entries, one per
+    // binding of the compiled shader's auto layout — no declared sampler is skipped.
+    let n_tex = bg.entries.iter().filter(|e| matches!(e.resource, BindResource::Texture { .. })).count();
+    let n_smp = bg.entries.iter().filter(|e| matches!(e.resource, BindResource::Sampler { .. })).count();
+    let n_buf = bg.entries.iter().filter(|e| matches!(e.resource, BindResource::Buffer { .. })).count();
+    assert_eq!(n_tex, 3, "a texture entry for EVERY declared sampler (1 real + 2 placeholder)");
+    assert_eq!(n_smp, 3, "a sampler entry for EVERY declared sampler");
+    assert_eq!(n_buf, 1, "the data-uniform UBO at binding 0");
+    assert_eq!(bg.entries.len(), 7, "UBO@0 + three tex/sampler pairs = 7 bindings, matching the auto layout");
+
+    // The bindings land exactly on the layout's slots: UBO 0, textures 1/3/5, samplers 2/4/6.
+    let mut tex_bindings: Vec<u32> =
+        bg.entries.iter().filter(|e| matches!(e.resource, BindResource::Texture { .. })).map(|e| e.binding).collect();
+    tex_bindings.sort_unstable();
+    assert_eq!(tex_bindings, vec![1, 3, 5], "texture bindings at 1+2k for k=0,1,2");
+
+    // The two empty slots (uTex1, uTex2) share ONE placeholder texture id — the default is created once.
+    let placeholder_ids: Vec<u32> = bg
+        .entries
+        .iter()
+        .filter_map(|e| match e.resource {
+            BindResource::Texture { id } if e.binding == 3 || e.binding == 5 => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(placeholder_ids.len(), 2);
+    assert_eq!(placeholder_ids[0], placeholder_ids[1], "both empty sampler slots reuse ONE placeholder texture");
+
+    // Exactly one 1x1 placeholder texture was created for the whole frame (created once, reused).
+    let placeholder_creates = batch
+        .iter()
+        .filter(|c| matches!(c, Cmd::CreateTexture(_, d) if d.width == 1 && d.height == 1))
+        .count();
+    assert_eq!(placeholder_creates, 1, "the 1x1 placeholder texture is created exactly once");
+}
+
 #[test]
 fn swap_resets_frame_state() {
     let mut c = ctx_640x480();

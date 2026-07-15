@@ -228,6 +228,17 @@ pub struct GlContext {
     default_tex_ir: u32,
     default_surface_ir: u32,
 
+    /// The shared 1x1 placeholder sampled-texture + default-sampler IR ids (0 = not yet created). A
+    /// GskGpu fragment program DECLARES + samples every one of its texture slots, so the executor's auto
+    /// bind-group layout carries an entry for each; but for a given draw only some of those samplers have a
+    /// real GL texture with uploaded pixels bound. The frame builder binds THIS transparent-black 1x1
+    /// placeholder (+ this default sampler) at every declared-but-unbound sampler so the bind group covers
+    /// every used binding of the layout (the executor's used-binding filter then trims to the sampled set).
+    /// Created ONCE (its `CreateTexture` + staging upload + `CreateSampler`) and reused across every draw
+    /// and frame — one placeholder texture + one sampler serve every empty sampler slot everywhere.
+    default_placeholder_tex: u32,
+    default_placeholder_samp: u32,
+
     /// Per-FBO offscreen render-target IR ids, keyed by the FBO's color-attachment GL texture name →
     /// `(surface_ir, texture_ir)`. Minted + `CreateTexture`/`CreateSurface`d on first use and reused on
     /// later frames (so re-rendering the same FBO does not re-create the target).
@@ -335,6 +346,8 @@ impl GlContext {
             next_fence: 1,
             default_tex_ir: 0,
             default_surface_ir: 0,
+            default_placeholder_tex: 0,
+            default_placeholder_samp: 0,
             fbo_targets: HashMap::new(),
             tex_ir_cache: HashMap::new(),
             buf_ir_cache: HashMap::new(),
@@ -481,6 +494,21 @@ impl GlContext {
             (self.default_surface_ir, self.default_tex_ir, true)
         } else {
             (self.default_surface_ir, self.default_tex_ir, false)
+        }
+    }
+
+    /// The shared 1x1 placeholder sampled-texture + default-sampler IR ids used to fill a
+    /// DECLARED-but-unbound sampler slot (see [`Self::default_placeholder_tex`]). Returns
+    /// `(texture_ir, sampler_ir, needs_create)`: `needs_create` is true exactly on the first call, so the
+    /// frame builder emits the `CreateTexture` + staging upload + `CreateSampler` once and reuses the ids
+    /// on every later empty sampler slot in this and subsequent frames.
+    pub fn default_placeholder(&mut self) -> (u32, u32, bool) {
+        if self.default_placeholder_tex == 0 {
+            self.default_placeholder_tex = self.alloc_texture_ir();
+            self.default_placeholder_samp = self.alloc_sampler_ir();
+            (self.default_placeholder_tex, self.default_placeholder_samp, true)
+        } else {
+            (self.default_placeholder_tex, self.default_placeholder_samp, false)
         }
     }
 
