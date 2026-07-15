@@ -10,6 +10,7 @@ use hl_gpu::protocol::model::descriptor::TextureDesc;
 use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
+use hl_log::tag;
 
 use crate::convert::{texel_bytes, texture_format};
 use crate::WgpuExecutor;
@@ -72,10 +73,12 @@ impl WgpuExecutor {
 
     /// Read the whole tight-packed level-0 color plane of texture `id` (exactly `width*height*bpt` bytes).
     pub(crate) fn read_texture_tight(&self, res: &SessionResources, id: u32) -> Result<Vec<u8>> {
+        let _sp = hl_log::hl_span!(tag::PRESENT, "readback");
         let t = native(res, id)?;
         let bpt = texel_bytes(t.format)? as u32;
         let tight_bpr = t.width * bpt;
         let padded_bpr = round256(tight_bpr);
+        hl_log::hl_add!(tag::PRESENT, "readback_bytes", (tight_bpr * t.height) as u64);
 
         let staging = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hl-tex-readback"),

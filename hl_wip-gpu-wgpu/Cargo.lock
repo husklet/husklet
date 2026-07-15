@@ -332,9 +332,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
+name = "hl-log"
+version = "0.1.0"
+
+[[package]]
 name = "hl_wip_gpu"
 version = "0.0.0"
 dependencies = [
+ "hl-log",
  "libc",
 ]
 
@@ -343,6 +348,7 @@ name = "hl_wip_gpu_wgpu"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "hl-log",
  "hl_wip_gpu",
  "naga",
  "pollster",

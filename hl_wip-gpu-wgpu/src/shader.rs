@@ -11,6 +11,7 @@ use hl_gpu::protocol::model::command::ShaderPayloadKind;
 use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor, KernelDescriptor, KernelProgram};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
+use hl_log::tag;
 
 use crate::wgsl;
 use crate::WgpuExecutor;
@@ -42,6 +43,7 @@ impl WgpuExecutor {
         if words.is_empty() {
             return Err(GpuError::Invalid("empty shader module"));
         }
+        hl_log::hl_debug!(tag::WGPU, "create_shader kind={:?} words={}", kind, words.len());
         let native = match kind {
             ShaderPayloadKind::PtxKernel => {
                 // Mirror the CPU oracle: a real driver-produced descriptor (non-empty source) compiles on
@@ -61,7 +63,11 @@ impl WgpuExecutor {
                 ShaderNative::Kernel(Box::new(prog))
             }
             ShaderPayloadKind::SpirV => {
-                let src = wgsl::spirv_to_wgsl(words)?;
+                let src = wgsl::spirv_to_wgsl(words).map_err(|e| {
+                    hl_log::hl_warn!(tag::WGPU, "shader compile failed kind=SpirV err={}", e);
+                    hl_log::hl_count!(tag::WGPU, "shader_errors");
+                    e
+                })?;
                 let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("hl-spirv"),
                     source: wgpu::ShaderSource::Wgsl(src.into()),
@@ -83,7 +89,11 @@ impl WgpuExecutor {
                         return Err(GpuError::Kernel(format!("wgpu: unknown GLSL stage {other}")))
                     }
                 };
-                let src = wgsl::glsl_to_wgsl(&desc.source, stage, &desc.entry)?;
+                let src = wgsl::glsl_to_wgsl(&desc.source, stage, &desc.entry).map_err(|e| {
+                    hl_log::hl_warn!(tag::WGPU, "shader compile failed kind=Glsl err={}", e);
+                    hl_log::hl_count!(tag::WGPU, "shader_errors");
+                    e
+                })?;
                 let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("hl-glsl"),
                     source: wgpu::ShaderSource::Wgsl(src.into()),
@@ -91,6 +101,7 @@ impl WgpuExecutor {
                 ShaderNative::Graphics(module)
             }
             ShaderPayloadKind::LegacyMsl | ShaderPayloadKind::DemoBuiltin => {
+                hl_log::hl_warn!(tag::WGPU, "shader rejected kind={:?} reason=no-wgsl", kind);
                 return Err(GpuError::Unsupported("wgpu: legacy MSL / demo-builtin payloads (no WGSL)"))
             }
         };

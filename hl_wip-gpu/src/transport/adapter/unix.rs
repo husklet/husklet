@@ -10,6 +10,8 @@ use std::io::{self, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 
+use hl_log::tag;
+
 use crate::protocol::model::capability::Capabilities;
 use crate::transport::model::frame::Frame;
 use crate::transport::model::handshake::{decode_handshake, encode_handshake};
@@ -108,10 +110,15 @@ pub fn read_frame_outcome(stream: &UnixStream) -> io::Result<FrameOutcome> {
     // multi-GB preallocation (a memory-exhaustion DoS) ahead of reading any body bytes. Report it as a
     // recoverable TooLarge rather than reading the body.
     if header.len > MAX_FRAME_BYTES {
+        // The detector: an over-cap declared length (e.g. a 4.3 GiB GTK frame) surfaces here before any
+        // body byte is read. Counted as a nack by the serve loop that drains it.
+        hl_log::hl_warn!(tag::TRANSPORT, "frame too large len={} cap={}", header.len, MAX_FRAME_BYTES);
         return Ok(FrameOutcome::TooLarge(header));
     }
     let mut payload = vec![0u8; header.len as usize];
     s.read_exact(&mut payload)?;
+    hl_log::hl_count!(tag::TRANSPORT, "frames");
+    hl_log::hl_add!(tag::TRANSPORT, "frame_bytes", header.len as u64);
     Ok(FrameOutcome::Frame(Frame { header, payload }))
 }
 
@@ -238,6 +245,7 @@ pub fn read_handshake(stream: &UnixStream) -> io::Result<Capabilities> {
     // Same untrusted-length cap as `read_frame`: refuse an absurd handshake length before allocating its
     // body buffer, so a hostile peer cannot force a multi-GB preallocation at connect time.
     if len_u32 > MAX_FRAME_BYTES {
+        hl_log::hl_warn!(tag::TRANSPORT, "handshake too large len={} cap={}", len_u32, MAX_FRAME_BYTES);
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("handshake length {len_u32} exceeds cap {MAX_FRAME_BYTES} (FrameTooLarge)"),

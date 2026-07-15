@@ -9,6 +9,8 @@
 use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
 
+use hl_log::tag;
+
 use crate::protocol::codec::decode_stream;
 use crate::protocol::model::capability::Capabilities;
 use crate::protocol::model::command::Cmd;
@@ -96,6 +98,7 @@ fn serve_loop<H: ConnectionHandler>(
             // oversized payload to resync the stream, NACK it, and keep serving. A truncated drain means the
             // peer is genuinely gone, which propagates as an error (the connection really did end).
             FrameOutcome::TooLarge(header) => {
+                hl_log::hl_count!(tag::TRANSPORT, "nacks");
                 unix::drain_payload(stream, header.len)?;
                 unix::write_ack(stream, ACK_FAIL)?;
                 continue;
@@ -119,9 +122,18 @@ fn serve_loop<H: ConnectionHandler>(
         // connection thread (which would drop the socket = `Broken pipe` for every later frame). Either way
         // the connection stays alive and serves the next frame.
         let verdict = match decode_stream(&frame.payload) {
-            Ok(batch) => catch_handler(|| handler.submit(&frame.header, &batch)).unwrap_or(Verdict::Nack),
-            Err(_) => Verdict::Nack,
+            Ok(batch) => {
+                hl_log::hl_debug!(tag::TRANSPORT, "frame bytes={} cmds={}", frame.payload.len(), batch.len());
+                catch_handler(|| handler.submit(&frame.header, &batch)).unwrap_or(Verdict::Nack)
+            }
+            Err(e) => {
+                hl_log::hl_warn!(tag::WIRE, "decode failed bytes={}: {}", frame.payload.len(), e);
+                Verdict::Nack
+            }
         };
+        if matches!(verdict, Verdict::Nack) {
+            hl_log::hl_count!(tag::TRANSPORT, "nacks");
+        }
         unix::write_ack(stream, verdict.ack_byte())?;
     }
 }

@@ -12,6 +12,7 @@ use hl_gpu::protocol::model::descriptor::{ComputePipelineDesc, RenderPipelineDes
 use hl_gpu::protocol::model::enums::{compare, TextureFormat, Topology};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
+use hl_log::tag;
 
 use crate::convert::texture_format;
 use crate::shader::{self, ShaderNative};
@@ -75,9 +76,11 @@ impl WgpuExecutor {
         id: u32,
         desc: &ComputePipelineDesc,
     ) -> Result<()> {
+        let _sp = hl_log::hl_span!(tag::WGPU, "pipeline_create");
         let prog = match shader::native(res, desc.compute.module)? {
             ShaderNative::Kernel(p) => p.clone(),
             ShaderNative::Graphics(_) => {
+                hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=compute reason=needs-kernel-shader");
                 return Err(GpuError::Unsupported("wgpu: compute pipeline needs a kernel shader"))
             }
         };
@@ -121,9 +124,11 @@ impl WgpuExecutor {
         id: u32,
         desc: &RenderPipelineDesc,
     ) -> Result<()> {
+        let _sp = hl_log::hl_span!(tag::WGPU, "pipeline_create");
         let vs = match shader::native(res, desc.vertex.module)? {
             ShaderNative::Graphics(m) => m.clone(),
             ShaderNative::Kernel(_) => {
+                hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render stage=vertex reason=needs-graphics-shader");
                 return Err(GpuError::Unsupported("wgpu: render pipeline vertex needs a graphics shader"))
             }
         };
@@ -131,6 +136,7 @@ impl WgpuExecutor {
             Some(f) => match shader::native(res, f.module)? {
                 ShaderNative::Graphics(m) => Some((m.clone(), f.entry.clone())),
                 ShaderNative::Kernel(_) => {
+                    hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render stage=fragment reason=needs-graphics-shader");
                     return Err(GpuError::Unsupported(
                         "wgpu: render pipeline fragment needs a graphics shader",
                     ))

@@ -16,6 +16,7 @@ use hl_gpu::protocol::model::descriptor::{
 use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp, TextureAspect};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
+use hl_log::tag;
 
 use crate::convert::{clear_texel, texel_bytes};
 use crate::pipeline::{self, PipelineNative};
@@ -116,9 +117,11 @@ impl WgpuExecutor {
                 // Erroring here (rather than the old silent no-op) is the defensive backstop for a direct
                 // executor call — a submitted-but-unimplemented op must never vanish without a trace.
                 Enc::BlitTexture { .. } => {
+                    hl_log::hl_warn!(tag::WGPU, "op rejected op=BlitTexture reason=unimplemented");
                     return Err(GpuError::Unsupported("wgpu: BlitTexture (scaled/filtered) unimplemented"))
                 }
                 Enc::ResolveTexture { .. } => {
+                    hl_log::hl_warn!(tag::WGPU, "op rejected op=ResolveTexture reason=unimplemented");
                     return Err(GpuError::Unsupported("wgpu: ResolveTexture (multisample) unimplemented"))
                 }
                 // Stray state-setters outside a pass cannot occur in a validated command buffer.
@@ -223,6 +226,8 @@ impl WgpuExecutor {
         depth: Option<&DepthAttachment>,
         ops: &[Enc],
     ) -> Result<()> {
+        let _sp = hl_log::hl_span!(tag::EXEC, "submit");
+        hl_log::hl_count!(tag::EXEC, "passes");
         // Resolve attachment views up front (they must outlive the pass).
         let mut views = Vec::with_capacity(color.len());
         for c in color {
@@ -246,6 +251,7 @@ impl WgpuExecutor {
                 Enc::SetPipeline(p) => cur_pipeline = Some(*p),
                 Enc::SetBindGroup { group, .. } => cur_bind_group = Some(*group),
                 Enc::Draw { .. } | Enc::DrawIndexed { .. } => {
+                    hl_log::hl_count!(tag::EXEC, "draws");
                     let pid = cur_pipeline.ok_or(GpuError::Invalid("draw with no pipeline bound"))?;
                     let bg = match cur_bind_group {
                         Some(g) => {
@@ -372,6 +378,8 @@ impl WgpuExecutor {
     /// Execute one compute pass: build each dispatch's bind group from its pipeline's auto layout, replay,
     /// submit, and wait.
     fn run_compute_pass(&mut self, res: &SessionResources, ops: &[Enc]) -> Result<()> {
+        let _sp = hl_log::hl_span!(tag::EXEC, "submit");
+        hl_log::hl_count!(tag::EXEC, "passes");
         let mut cur_pipeline: Option<u32> = None;
         let mut cur_bind_group: Option<u32> = None;
         // (pipeline id, bind group, (x,y,z)) per Dispatch.
@@ -381,6 +389,7 @@ impl WgpuExecutor {
                 Enc::SetPipeline(p) => cur_pipeline = Some(*p),
                 Enc::SetBindGroup { group, .. } => cur_bind_group = Some(*group),
                 Enc::Dispatch { x, y, z } => {
+                    hl_log::hl_count!(tag::EXEC, "dispatches");
                     let pid = cur_pipeline.ok_or(GpuError::Invalid("dispatch with no pipeline"))?;
                     let layout = match pipeline::native(res, pid)? {
                         PipelineNative::Compute { layout, .. } => layout,

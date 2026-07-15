@@ -443,6 +443,7 @@ impl Cmd {
 /// Decode a whole command stream produced by [`encode_stream`](super::encode::encode_stream) until the
 /// input is exhausted.
 pub fn decode_stream(bytes: &[u8]) -> Result<Vec<Cmd>> {
+    let _span = hl_log::hl_span!(hl_log::tag::WIRE, "decode");
     let mut d = Decoder::new(bytes);
     let mut out = Vec::new();
     while !d.is_empty() {
@@ -452,6 +453,7 @@ pub fn decode_stream(bytes: &[u8]) -> Result<Vec<Cmd>> {
         match Cmd::decode(&mut d) {
             Ok(cmd) => out.push(cmd),
             Err(e) => {
+                hl_log::hl_warn!(hl_log::tag::WIRE, "decode err cmd={} byte={}/{} tag={:?}", idx, pos, d.len(), tag);
                 return Err(GpuError::Decode(format!(
                     "command {idx} at byte {pos}/{} tag {:?} remaining {}: {e}",
                     d.len(),
@@ -461,6 +463,7 @@ pub fn decode_stream(bytes: &[u8]) -> Result<Vec<Cmd>> {
             }
         }
     }
+    hl_log::hl_add!(hl_log::tag::WIRE, "cmds_decoded", out.len() as u64);
     Ok(out)
 }
 

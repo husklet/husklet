@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 
+use hl_log::tag;
+
 use crate::cpu::format::texel_bytes;
 use crate::cpu::model::pipeline::Pipeline;
 use crate::cpu::model::shader::ShaderModule;
@@ -314,6 +316,8 @@ impl CpuExecutor {
     /// Validate the whole command buffer (failure atomicity), then execute its clears/copies/draws/
     /// dispatches. Ported from `SoftwareBackend::submit`.
     fn submit(&mut self, res: &mut SessionResources, cb: &CommandBuffer) -> Result<()> {
+        let _span = hl_log::hl_span!(tag::CPU, "submit");
+        hl_log::hl_count!(tag::CPU, "submits");
         validate_cb(res, cb)?;
 
         let mut cur_pipeline: Option<u32> = None;
@@ -358,6 +362,7 @@ impl CpuExecutor {
                 }
                 Enc::Draw { vertex_count, first_vertex, instance_count, .. } => {
                     self.draws += 1;
+                    hl_log::hl_count!(tag::CPU, "draws");
                     let vb = cur_vertex.get(&0).copied();
                     raster::exec_draw(
                         res, cur_pipeline, &cur_targets, cur_depth, vb, *first_vertex, *vertex_count,
@@ -366,6 +371,7 @@ impl CpuExecutor {
                 }
                 Enc::DrawIndexed { index_count, first_index, base_vertex, instance_count, .. } => {
                     self.draws += 1;
+                    hl_log::hl_count!(tag::CPU, "draws");
                     let vb = cur_vertex.get(&0).copied();
                     raster::exec_draw_indexed(
                         res, cur_pipeline, &cur_targets, cur_depth, vb, cur_index, *first_index,
@@ -374,6 +380,7 @@ impl CpuExecutor {
                 }
                 Enc::Dispatch { x, y, z } => {
                     self.dispatches += 1;
+                    hl_log::hl_count!(tag::CPU, "dispatches");
                     run_dispatch(res, cur_pipeline, cur_bind_group, (*x, *y, *z))?;
                 }
                 Enc::CopyBufferToBuffer { src, src_offset, dst, dst_offset, size } => {
@@ -440,6 +447,8 @@ impl GpuExecutor for CpuExecutor {
     }
 
     fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presented>> {
+        let _span = hl_log::hl_span!(tag::CPU, "dispatch");
+        hl_log::hl_debug!(tag::CPU, "execute cmds={}", batch.len());
         let mut presents = Vec::new();
         for cmd in batch {
             match cmd {

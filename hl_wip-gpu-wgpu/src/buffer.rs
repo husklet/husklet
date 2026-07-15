@@ -8,6 +8,7 @@
 
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
+use hl_log::tag;
 
 use crate::WgpuExecutor;
 
@@ -77,6 +78,8 @@ impl WgpuExecutor {
     /// window that runs into a buffer's tail padding is a valid read — the read-modify-write path relies on
     /// this to touch the 4-aligned window enclosing an unaligned logical range.
     fn read_span(&self, wbuf: &wgpu::Buffer, astart: u64, span: u64) -> Vec<u8> {
+        let _sp = hl_log::hl_span!(tag::PRESENT, "readback");
+        hl_log::hl_add!(tag::PRESENT, "readback_bytes", span);
         let staging = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hl-readback"),
             size: span,

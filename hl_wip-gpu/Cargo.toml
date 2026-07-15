@@ -19,6 +19,10 @@ path = "src/lib.rs"
 # the crate (protocol) stays dependency-free; libc is confined to `transport::adapter::unix`.
 libc = "0.2"
 
+# Tag-based logging + counters + timing spans. Provably zero-cost when off (gated by HL_LOG /
+# HL_LOG_COUNTERS env), so instrumenting the hot path adds no runtime cost and no wire bytes.
+hl-log = { path = "../hl-log" }
+
 # Empty table => this file is its own workspace root, so the crate is EXCLUDED from the repo-root
 # workspace and keeps the shared tree green.
 [workspace]

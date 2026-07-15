@@ -40,6 +40,7 @@
 use std::collections::{HashMap, HashSet};
 
 use hl_gpu::Result;
+use hl_log::tag;
 
 /// The bind-group binding offset the sampler half of a split `COMBINED_IMAGE_SAMPLER` is placed at (the
 /// image half keeps the descriptor's Vulkan binding `B`; the sampler goes to `B + SAMPLER_BINDING_OFFSET`).
@@ -176,6 +177,7 @@ pub fn split_combined_image_samplers(words: &[u32]) -> Result<Vec<u32>> {
     if combined_var_ids.is_empty() {
         return Ok(words.to_vec()); // nothing to split — leave the module untouched
     }
+    hl_log::hl_count!(tag::WGPU, "spirv_split");
     let combined_ids: HashSet<u32> = combined_var_ids.iter().map(|&(v, _, _)| v).collect();
 
     // A combined var used outside a plain `OpLoad` (e.g. an array `OpAccessChain`) is out of this pass's

@@ -7,6 +7,7 @@
 //! caller's [`DeviceConfig`].
 
 use hl_gpu::{GpuError, Result};
+use hl_log::tag;
 
 /// How the executor picks its wgpu adapter/device. Defaults are headless-software friendly.
 #[derive(Clone, Debug)]
@@ -77,6 +78,13 @@ pub fn acquire(cfg: &DeviceConfig) -> Result<Gpu> {
     .ok_or(GpuError::Unsupported("wgpu: no adapter (is a Vulkan ICD / lavapipe reachable?)"))?;
 
     let info = adapter.get_info();
+    hl_log::hl_info!(
+        tag::WGPU,
+        "adapter={} backend={:?} type={:?}",
+        info.name,
+        info.backend,
+        info.device_type
+    );
 
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {

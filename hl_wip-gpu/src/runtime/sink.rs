@@ -11,6 +11,8 @@
 //! socket-free here or over the wire through `RemoteCommandSink`. This sink is what makes a full CUDA →
 //! IR → runtime → CPU-executor → readback flow testable in a single process with no transport.
 
+use hl_log::tag;
+
 use crate::cpu::CpuExecutor;
 use crate::protocol::codec::encode_stream;
 use crate::protocol::model::capability::{Capabilities, FeatureRequest};
@@ -78,6 +80,7 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
     }
 
     fn submit(&mut self, batch: &[Cmd]) -> Result<()> {
+        let _span = hl_log::hl_span!(tag::EXEC, "submit");
         // The runtime checks the encoded frame size against the negotiated ceiling; encode to get the
         // real byte count so the in-process path exercises the same frame-budget check the wire does.
         let frame_bytes = encode_stream(batch).len();
@@ -93,6 +96,8 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
     /// socket-free half of the readback port. Works for ANY `GpuExecutor` that implements readback (the
     /// default returns `Unsupported`); the CPU reference executor serves it directly.
     fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let _span = hl_log::hl_span!(tag::EXEC, "readback");
+        hl_log::hl_add!(tag::EXEC, "readback_bytes", len as u64);
         dispatch::read_buffer(&self.session, &self.exec, id, offset, len)
     }
 }

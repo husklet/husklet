@@ -34,3 +34,7 @@ wgpu = "24"
 naga = { version = "24", features = ["spv-in", "spv-out", "wgsl-in", "wgsl-out", "glsl-in"] }
 pollster = "0.4"
 bytemuck = "1"
+
+# Tag-based logging + counters + timing. Zero-cost when off (verbose levels + counters/spans compile to
+# `{}` in a default release build); instrumentation is gated at runtime by HL_LOG / HL_LOG_COUNTERS.
+hl-log = { path = "../hl-log" }
