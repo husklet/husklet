@@ -8,6 +8,8 @@
 //! bind groups independently of pipelines; the concrete `wgpu::BindGroup` is built at draw/dispatch time
 //! from the bound pipeline's own layout (see `bindgroup.rs`).
 
+use std::collections::BTreeMap;
+
 use hl_gpu::protocol::model::descriptor::{ComputePipelineDesc, RenderPipelineDesc, VertexLayout};
 use hl_gpu::protocol::model::enums::{compare, TextureFormat, Topology};
 use hl_gpu::runtime::model::resources::SessionResources;
@@ -15,6 +17,7 @@ use hl_gpu::{GpuError, Result};
 use hl_log::tag;
 
 use crate::convert::texture_format;
+use crate::reflect::{BindingKind, TexDim, TexSample};
 use crate::shader::{self, ShaderNative};
 use crate::wgsl;
 use crate::WgpuExecutor;
@@ -29,11 +32,11 @@ pub enum PipelineNative {
         #[allow(dead_code)]
         color_formats: Vec<TextureFormat>,
         /// The `(group, binding)` slots this pipeline's shaders actually READ — the union of its vertex +
-        /// fragment entry points' usage ([`crate::reflect`]), which is exactly the set wgpu's auto layout
-        /// exposes. A bind group `submit` builds is FILTERED to these bindings so the GL driver's
-        /// per-bound-resource entries (which routinely include textures/samplers the compiled shader never
-        /// samples) match the auto layout's count instead of NACKing (5-vs-3). Empty ⇒ no filtering (a
-        /// bindingless pipeline, e.g. the conformance triangle).
+        /// fragment entry points' usage ([`crate::reflect`]), which is exactly the set the EXPLICIT pipeline
+        /// layout exposes (that layout is built from the same merge). A bind group `submit` builds is
+        /// FILTERED to these bindings so the GL driver's per-bound-resource entries (which routinely include
+        /// textures/samplers the compiled shader never samples) match the layout's set instead of NACKing
+        /// (5-vs-3). Empty ⇒ no filtering (a bindingless pipeline, e.g. the conformance triangle).
         used_bindings: Vec<(u32, u32)>,
     },
     /// A compute pipeline. Both the PTX-kernel ABI path (built with an *explicit* group-0 layout so a
@@ -173,9 +176,9 @@ impl WgpuExecutor {
         desc: &RenderPipelineDesc,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::WGPU, "pipeline_create");
-        // Clone the module + the used `(group, binding)` set of the entry point this pipeline binds out of
+        // Clone the module + the used bindings (slot + type) of the entry point this pipeline binds out of
         // `res` (an immutable borrow), so the pipeline can be inserted (a mutable borrow) below carrying the
-        // auto layout's exact bindings for the draw-time bind-group filter (see `PipelineNative::Render`).
+        // explicit layout's exact bindings for the draw-time bind-group filter (see `PipelineNative::Render`).
         let (vs, vs_used) = match shader::native(res, desc.vertex.module)? {
             ShaderNative::Module { module, reflected } => {
                 (module.clone(), reflected.used_for(&desc.vertex.entry).to_vec())
@@ -200,16 +203,57 @@ impl WgpuExecutor {
             None => (None, Vec::new()),
         };
 
-        // The auto layout's exact bindings = the union of the vertex + fragment entry points' used
-        // resources. The bind group `submit` builds at draw time is filtered to these (see
-        // `PipelineNative::Render.used_bindings`), reconciling the driver's per-bound-resource entries with
-        // what the compiled shader actually reads.
-        let mut used_bindings = vs_used;
-        for gb in fs_used {
-            if !used_bindings.contains(&gb) {
-                used_bindings.push(gb);
+        // Merge the vertex + fragment entry points' used resources into ONE reconciled layout description,
+        // keyed by `(group, binding)`. For each slot: the `visibility` is the UNION of the stages that use
+        // it (VERTEX and/or FRAGMENT), and the binding TYPE is reconciled across the two stages
+        // (`reconcile_kind`). A genuine type collision (e.g. a buffer in one stage, a texture in the other)
+        // is a real shader bug and is reported, not papered over. This SUBSUMES the old `layout: None` +
+        // used-set filter: wgpu's auto-derivation fails outright when a binding's type is not consistent
+        // between stages (Zed's `(group 1, binding 1)`), so we build the layout EXPLICITLY from this merge.
+        let mut merged: BTreeMap<(u32, u32), (wgpu::ShaderStages, BindingKind)> = BTreeMap::new();
+        for (stage, binds) in
+            [(wgpu::ShaderStages::VERTEX, &vs_used), (wgpu::ShaderStages::FRAGMENT, &fs_used)]
+        {
+            for b in binds {
+                match merged.entry((b.group, b.binding)) {
+                    std::collections::btree_map::Entry::Vacant(v) => {
+                        v.insert((stage, b.kind));
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut o) => {
+                        let (vis, kind) = o.get_mut();
+                        *vis |= stage;
+                        *kind = reconcile_kind(*kind, b.kind).ok_or_else(|| {
+                            hl_log::hl_warn!(
+                                tag::WGPU,
+                                "pipeline rejected kind=render reason=binding-type-collision group={} binding={} vs={:?} fs={:?}",
+                                b.group, b.binding, *kind, b.kind
+                            );
+                            GpuError::Invalid(
+                                "wgpu: render pipeline binding declared with incompatible types across stages",
+                            )
+                        })?;
+                    }
+                }
             }
         }
+
+        // The used `(group, binding)` set = the merged slots; the bind group `submit` builds at draw time is
+        // filtered to these (see `PipelineNative::Render.used_bindings`), so it matches this explicit layout
+        // EXACTLY even when the GL driver binds resources the compiled shader never samples.
+        let used_bindings: Vec<(u32, u32)> = merged.keys().copied().collect();
+
+        // Build one `BindGroupLayout` per group in `0..=max_group` (a gap group gets an empty layout, so the
+        // `PipelineLayout`'s array stays dense from index 0), then the `PipelineLayout`. `submit` binds group
+        // 0 at draw time (`get_bind_group_layout(0)`); a pipeline that uses a higher group reaches the layout
+        // but its multi-group draw is the next gap, not an executor error here.
+        let group_layouts = self.build_render_bind_group_layouts(&merged);
+        let layout_refs: Vec<&wgpu::BindGroupLayout> = group_layouts.iter().collect();
+        let pipeline_layout =
+            self.gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("hl-render-pl"),
+                bind_group_layouts: &layout_refs,
+                push_constant_ranges: &[],
+            });
 
         // Vertex-buffer layouts: lower each protocol `VertexLayout` (stride + step mode + packed-format
         // attributes) into a `wgpu::VertexBufferLayout`. The attribute vecs must outlive the pipeline
@@ -267,12 +311,19 @@ impl WgpuExecutor {
             }));
         }
 
+        // A validation error scope turns wgpu's async device error (e.g. a shader that uses a binding the
+        // explicit layout does not expose, or a stage/type the reconciliation could not satisfy) into a
+        // clean typed error instead of the default uncaptured handler PANICKING on the wgpu thread — which
+        // is exactly what marked the device lost and cost Zed its device before this explicit layout.
+        self.gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let pipeline = self.gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("hl-render"),
-            // Auto layout: wgpu derives the bind-group layout from the shaders' entry-point USAGE. The
-            // bind group `submit` builds is filtered to that same used set (`used_bindings`), so the two
-            // match even when the driver binds resources the compiled shader never samples.
-            layout: None,
+            // Explicit layout: built from the reconciled union of the vertex + fragment entry points' used
+            // bindings (types + stage visibility), so a binding whose type auto-derivation cannot merge
+            // across stages no longer aborts pipeline creation. The bind group `submit` builds is filtered
+            // to the same used set (`used_bindings`), so the two match even when the driver binds resources
+            // the compiled shader never samples.
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &vs,
                 entry_point: Some(desc.vertex.entry.as_str()),
@@ -294,7 +345,98 @@ impl WgpuExecutor {
             multiview: None,
             cache: None,
         });
+        if let Some(e) = pollster::block_on(self.gpu.device.pop_error_scope()) {
+            hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render reason=explicit-layout-invalid err={}", e);
+            return Err(GpuError::Kernel(format!("wgpu: render pipeline creation failed: {e}")));
+        }
         res.pipelines.insert(id, Box::new(PipelineNative::Render { pipeline, color_formats, used_bindings }))
+    }
+
+    /// Build the per-group `BindGroupLayout`s for a render pipeline from the reconciled `merged` binding map.
+    /// One layout per group index in `0..=max_group`; a group with no bindings gets an EMPTY layout so the
+    /// returned vec is dense from index 0 (a `PipelineLayout`'s `bind_group_layouts` array must have no
+    /// gaps). An empty map ⇒ no layouts (a bindingless pipeline, e.g. the conformance triangle).
+    fn build_render_bind_group_layouts(
+        &self,
+        merged: &BTreeMap<(u32, u32), (wgpu::ShaderStages, BindingKind)>,
+    ) -> Vec<wgpu::BindGroupLayout> {
+        let max_group = match merged.keys().map(|(g, _)| *g).max() {
+            Some(m) => m,
+            None => return Vec::new(),
+        };
+        (0..=max_group)
+            .map(|group| {
+                let entries: Vec<wgpu::BindGroupLayoutEntry> = merged
+                    .iter()
+                    .filter(|((g, _), _)| *g == group)
+                    .map(|((_, binding), (visibility, kind))| wgpu::BindGroupLayoutEntry {
+                        binding: *binding,
+                        visibility: *visibility,
+                        ty: binding_type(*kind),
+                        count: None,
+                    })
+                    .collect();
+                self.gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("hl-render-bgl"),
+                    entries: &entries,
+                })
+            })
+            .collect()
+    }
+}
+
+/// Reconcile the binding TYPE the same `(group, binding)` slot declares in the two graphics stages. Equal
+/// types pass through; two storage buffers merge to the WIDER access (writable subsumes read-only). Any
+/// other disagreement (buffer vs texture, uniform vs storage, texture-shape mismatch, …) is a genuine
+/// shader bug across stages and yields `None` so the caller reports it rather than guessing.
+fn reconcile_kind(a: BindingKind, b: BindingKind) -> Option<BindingKind> {
+    match (a, b) {
+        (BindingKind::StorageBuffer { read_only: r1 }, BindingKind::StorageBuffer { read_only: r2 }) => {
+            Some(BindingKind::StorageBuffer { read_only: r1 && r2 })
+        }
+        _ if a == b => Some(a),
+        _ => None,
+    }
+}
+
+/// Lower a neutral [`BindingKind`] to the `wgpu::BindingType` a `BindGroupLayoutEntry` carries. Buffers use
+/// `min_binding_size: None` (so a per-stage size disagreement never rejects the layout — the shader's own
+/// access is validated against the module, not the layout) and no dynamic offset (the shim bakes offsets
+/// into each `BindResource::Buffer.offset`).
+fn binding_type(kind: BindingKind) -> wgpu::BindingType {
+    match kind {
+        BindingKind::UniformBuffer => wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        BindingKind::StorageBuffer { read_only } => wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        BindingKind::Texture { dim, sample, multi } => wgpu::BindingType::Texture {
+            sample_type: match sample {
+                TexSample::Float { filterable } => wgpu::TextureSampleType::Float { filterable },
+                TexSample::Sint => wgpu::TextureSampleType::Sint,
+                TexSample::Uint => wgpu::TextureSampleType::Uint,
+                TexSample::Depth => wgpu::TextureSampleType::Depth,
+            },
+            view_dimension: match dim {
+                TexDim::D1 => wgpu::TextureViewDimension::D1,
+                TexDim::D2 => wgpu::TextureViewDimension::D2,
+                TexDim::D2Array => wgpu::TextureViewDimension::D2Array,
+                TexDim::D3 => wgpu::TextureViewDimension::D3,
+                TexDim::Cube => wgpu::TextureViewDimension::Cube,
+                TexDim::CubeArray => wgpu::TextureViewDimension::CubeArray,
+            },
+            multisampled: multi,
+        },
+        BindingKind::Sampler { comparison } => wgpu::BindingType::Sampler(if comparison {
+            wgpu::SamplerBindingType::Comparison
+        } else {
+            wgpu::SamplerBindingType::Filtering
+        }),
     }
 }
 
@@ -366,4 +508,235 @@ pub(crate) fn vertex_format(packed: u32) -> Result<wgpu::VertexFormat> {
         (4, 4) => if normalized { F::Snorm16x4 } else { F::Sint16x4 },
         _ => return Err(bad()),
     })
+}
+
+#[cfg(test)]
+mod explicit_layout_proof {
+    //! The Zed render-pipeline unblock, FAIL-before / PASS-after in one test.
+    //!
+    //! Zed's GPUI/wgpu renderer builds a render pipeline whose vertex + fragment stages BOTH declare the
+    //! same `(group, binding)` UBO but with DIFFERENT block layouts (the fragment reaches a member at a
+    //! higher offset), so each stage's naga usage derives a different `min_binding_size` for that buffer.
+    //! wgpu's AUTO layout (`layout: None`) merges the per-stage derived layouts and, seeing two different
+    //! derived types for one binding, aborts with `InconsistentlyDerivedType` — "Derived bind group layout
+    //! type is not consistent between stages". That validation error was UNCAPTURED on the executor's wgpu
+    //! thread, panicked it, and cost Zed its device.
+    //!
+    //! `create_render_pipeline` now builds an EXPLICIT layout from the reconciled union of the two stages'
+    //! used bindings (visibility = VERTEX|FRAGMENT, buffer `min_binding_size: None` so the per-stage size
+    //! disagreement no longer collides), so the pipeline creates, a bind group of exactly the used entries
+    //! matches it, a draw runs, and the readback carries the sampled texel — the pixel a mis-built pipeline
+    //! could never produce.
+
+    use hl_gpu::protocol::model::descriptor::{
+        BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, ColorTargetState,
+        RenderPipelineDesc, SamplerDesc, ShaderRef, TextureDesc,
+    };
+    use hl_gpu::protocol::model::enums::{
+        buffer_usage, texture_usage, AddressMode, Filter, LoadOp, TextureDim, TextureFormat, Topology,
+    };
+    use hl_gpu::protocol::model::kernel::{glsl_stage, GlslDescriptor};
+    use hl_gpu::{
+        Cmd, CommandBuffer, Enc, FakeClock, GlobalLedger, GpuExecutor, Limits, Session,
+        ShaderPayloadKind,
+    };
+
+    use crate::{DeviceConfig, WgpuExecutor};
+
+    // Vertex: declares binding 0 as a ONE-vec4 block (16 bytes) → naga derives a 16-byte min size.
+    const VS: &str = r#"#version 460
+layout(std140, binding = 0) uniform U { vec4 scale; } u;
+layout(location = 0) out vec2 uv;
+void main() {
+    vec2 p[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    uv = vec2(0.5, 0.5);
+    gl_Position = vec4(p[gl_VertexIndex], 0.0, u.scale.w);
+}
+"#;
+
+    // Fragment: declares binding 0 as a TWO-vec4 block (32 bytes) → naga derives a 32-byte min size,
+    // DIFFERENT from the vertex stage's 16 — the inconsistency wgpu's auto-derive cannot merge. It also
+    // samples a texture (binding 1) through a sampler (binding 2), the fragment-only part of the union.
+    const FS: &str = r#"#version 460
+layout(std140, binding = 0) uniform U { vec4 scale; vec4 tint; } u;
+layout(binding = 1) uniform texture2D t0_tex;
+layout(binding = 2) uniform sampler   t0_smp;
+layout(location = 0) in vec2 uv;
+layout(location = 0) out vec4 color;
+void main() {
+    color = texture(sampler2D(t0_tex, t0_smp), uv) * u.tint;
+}
+"#;
+
+    fn glsl(stage: u32, entry: &str, source: &str) -> Vec<u32> {
+        GlslDescriptor { stage, entry: entry.to_string(), source: source.to_string() }.to_words()
+    }
+
+    fn tex(w: u32, h: u32, usage: u32) -> TextureDesc {
+        TextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            mip_levels: 1,
+            sample_count: 1,
+            dim: TextureDim::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage,
+            label: String::new(),
+        }
+    }
+
+    fn nearest() -> SamplerDesc {
+        SamplerDesc {
+            min_filter: Filter::Nearest,
+            mag_filter: Filter::Nearest,
+            mip_filter: Filter::Nearest,
+            address_u: AddressMode::ClampToEdge,
+            address_v: AddressMode::ClampToEdge,
+            address_w: AddressMode::ClampToEdge,
+        }
+    }
+
+    /// FAIL-before: raw wgpu auto-derive (`layout: None`) over the two stages' translated WGSL rejects the
+    /// pipeline because binding 0's derived type is inconsistent between the stages. Returns the wgpu error
+    /// text so the test can assert it is the cross-stage inconsistency (not some unrelated failure).
+    fn autoderive_error(exec: &WgpuExecutor) -> Option<String> {
+        let dev = &exec.gpu.device;
+        let vs_wgsl = crate::wgsl::glsl_to_wgsl(VS, naga::ShaderStage::Vertex, "vmain").expect("vs wgsl");
+        let fs_wgsl =
+            crate::wgsl::glsl_to_wgsl(FS, naga::ShaderStage::Fragment, "fmain").expect("fs wgsl");
+        let vs = dev.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(vs_wgsl.into()),
+        });
+        let fs = dev.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(fs_wgsl.into()),
+        });
+        let targets =
+            [Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8Unorm, blend: None, write_mask: wgpu::ColorWrites::ALL })];
+        dev.push_error_scope(wgpu::ErrorFilter::Validation);
+        let _p = dev.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: None, // the OLD path — auto-derive
+            vertex: wgpu::VertexState {
+                module: &vs,
+                entry_point: Some("vmain"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &fs,
+                entry_point: Some("fmain"),
+                targets: &targets,
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+        pollster::block_on(dev.pop_error_scope()).map(|e| e.to_string())
+    }
+
+    #[test]
+    fn cross_stage_inconsistent_binding_builds_via_explicit_layout() {
+        let mut exec = match WgpuExecutor::new(DeviceConfig::default()) {
+            Ok(e) => e,
+            // No adapter (no lavapipe/Vulkan ICD reachable) — skip, mirroring the suite's other gpu tests.
+            Err(_) => return,
+        };
+
+        // FAIL-BEFORE: the old auto-derive path rejects this exact stage pair as inconsistent.
+        let err = autoderive_error(&exec).expect(
+            "auto-derive (layout: None) MUST reject binding 0 as inconsistent between stages — if it did \
+             not, this test no longer reproduces the Zed pipeline gap",
+        );
+        assert!(
+            err.contains("consistent") || err.contains("Derived bind group"),
+            "the auto-derive failure must be the cross-stage inconsistency, got: {err}"
+        );
+
+        // PASS-AFTER: the executor's explicit-layout path creates the pipeline, matches a bind group of the
+        // used entries, draws, and reads back the sampled texel.
+        let texel: [u8; 4] = [30, 150, 220, 255]; // texture-0's single texel
+        let ubo: [f32; 8] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]; // scale=(…), tint=(1,1,1,1) → passthrough
+
+        let caps = exec.capabilities();
+        let mut limits = Limits::from_capabilities(caps);
+        limits.copy_alignment = 1;
+        let mut s = Session::new(limits, GlobalLedger::unbounded(), Box::new(FakeClock::new(0)));
+
+        hl_gpu::runtime::submit(
+            &mut s,
+            &mut exec,
+            0,
+            &[
+                Cmd::CreateTexture(1, tex(4, 4, texture_usage::RENDER_TARGET | texture_usage::COPY_SRC)),
+                Cmd::CreateTexture(2, tex(1, 1, texture_usage::SAMPLED | texture_usage::COPY_DST)),
+                Cmd::CreateBuffer(1, BufferDesc { size: 32, usage: buffer_usage::UNIFORM, label: String::new() }),
+                Cmd::WriteBuffer { id: 1, offset: 0, data: ubo.iter().flat_map(|f| f.to_le_bytes()).collect() },
+                Cmd::CreateBuffer(2, BufferDesc { size: 4, usage: buffer_usage::COPY_SRC, label: String::new() }),
+                Cmd::WriteBuffer { id: 2, offset: 0, data: texel.to_vec() },
+                Cmd::CreateShader { id: 1, kind: ShaderPayloadKind::Glsl, spirv: glsl(glsl_stage::VERTEX, "vmain", VS) },
+                Cmd::CreateShader { id: 2, kind: ShaderPayloadKind::Glsl, spirv: glsl(glsl_stage::FRAGMENT, "fmain", FS) },
+                Cmd::CreateSampler(1, nearest()),
+                Cmd::CreateRenderPipeline(
+                    1,
+                    RenderPipelineDesc {
+                        vertex: ShaderRef { module: 1, entry: "vmain".into() },
+                        fragment: Some(ShaderRef { module: 2, entry: "fmain".into() }),
+                        vertex_buffers: vec![],
+                        color_targets: vec![ColorTargetState { format: TextureFormat::Rgba8Unorm, blend: None, write_mask: 0xF }],
+                        depth: None,
+                        topology: Topology::TriangleList,
+                        cull: 0,
+                        front_face: 0,
+                        label: String::new(),
+                    },
+                ),
+                // The bind group = exactly the used union {0,1,2}: UBO@0 (used by BOTH stages), texture@1
+                // and sampler@2 (fragment). This matches the explicit reconciled layout entry-for-entry.
+                Cmd::CreateBindGroup(
+                    1,
+                    BindGroupDesc {
+                        set: 0,
+                        entries: vec![
+                            BindEntry { binding: 0, resource: BindResource::Buffer { id: 1, offset: 0, size: 32 } },
+                            BindEntry { binding: 1, resource: BindResource::Texture { id: 2 } },
+                            BindEntry { binding: 2, resource: BindResource::Sampler { id: 1 } },
+                        ],
+                    },
+                ),
+                Cmd::Submit(CommandBuffer {
+                    encoder: vec![
+                        Enc::CopyBufferToTexture { src: 2, src_offset: 0, bytes_per_row: 4, dst: 2, mip: 0, width: 1, height: 1 },
+                        Enc::BeginRenderPass {
+                            color: vec![ColorAttachment { texture: 1, load: LoadOp::Clear, clear: [0.0, 0.0, 0.0, 1.0], store: true }],
+                            depth: None,
+                        },
+                        Enc::SetPipeline(1),
+                        Enc::SetBindGroup { index: 0, group: 1 },
+                        Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
+                        Enc::EndRenderPass,
+                    ],
+                    signal: None,
+                }),
+            ],
+        )
+        .expect(
+            "the cross-stage-inconsistent binding must create + draw cleanly through the explicit reconciled \
+             layout (the exact pipeline auto-derive rejected above)",
+        );
+
+        let px = exec.read_texture(&s.resources, 1).unwrap();
+        for (i, out) in px.chunks_exact(4).enumerate() {
+            assert_eq!(
+                out, texel,
+                "pixel {i}: must be the sampled texture-0 texel {texel:?} (tint is white), proving the \
+                 explicit-layout pipeline drew and the bind group matched its layout"
+            );
+        }
+    }
 }
