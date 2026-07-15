@@ -7,7 +7,7 @@
 //! `.png` to disk. A test reads the captured frames back through the shared `captures` handle and asserts
 //! the client's pixels made it all the way through wl → scene → present, fully headless.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -63,12 +63,38 @@ impl CapturedFrame {
     }
 }
 
+/// Non-pixel adapter state a headless test needs to observe but that produces NO client-visible wire
+/// event — so it cannot be asserted by watching the client, only by reading the server directly.
+///
+/// Two of the batch-7 protocols are like this: `zwp_idle_inhibit` (the compositor merely *tracks* an
+/// inhibitor; nothing is sent back to the client) and `wp_content_type` (a per-surface hint the compositor
+/// *reads at commit*; again no reply). To prove the adapter genuinely honours them — not just that the
+/// global binds — the handlers record the observed state here, and a test reads it back through a shared
+/// handle. It rides on [`PngPresenter`] because the presenter is ALREADY the one object threaded across the
+/// serve-thread boundary that hands the test a shared `Arc` (`captures`); this is the same seam, for the
+/// state a frame capture cannot carry. Keyed by the `wl_surface` PROTOCOL id, which is client-assigned and
+/// therefore identical on both ends of the socket, so a test can name the surface it created.
+#[derive(Clone, Debug, Default)]
+pub struct Observations {
+    /// `wl_surface` protocol ids that currently hold at least one live `zwp_idle_inhibitor_v1`. Inserted by
+    /// `IdleInhibitHandler::inhibit`, removed by `uninhibit` — so a test sees a surface appear on create and
+    /// disappear on the inhibitor's destroy.
+    pub idle_inhibited: BTreeSet<u32>,
+    /// `wl_surface` protocol id → the `wp_content_type_v1` hint (wire value: 0 none / 1 photo / 2 video /
+    /// 3 game) last read from the surface's COMMITTED `ContentTypeSurfaceCachedState`. Re-read every commit,
+    /// so a test sees the exact hint the client set (and its reversion to `none`).
+    pub content_type: BTreeMap<u32, u32>,
+}
+
 /// A headless [`Presenter`] that captures composed frames (and optionally writes PNGs).
 pub struct PngPresenter {
     /// Client pixels deposited by the adapter at commit, keyed by surface.
     store: HashMap<SurfaceId, StoredBuffer>,
     /// Frames presented, shared so a test thread can read them while the compositor thread writes.
     captures: Arc<Mutex<Vec<CapturedFrame>>>,
+    /// Non-pixel adapter observations (idle-inhibit / content-type), shared so a test thread reads them
+    /// while the compositor thread (the protocol handlers) writes. See [`Observations`].
+    observations: Arc<Mutex<Observations>>,
     /// If set, each presented frame is also written to `<dir>/frame-<serial>.png`.
     out_dir: Option<PathBuf>,
     serial: u64,
@@ -77,7 +103,13 @@ pub struct PngPresenter {
 impl PngPresenter {
     /// A presenter that only captures frames in memory.
     pub fn new() -> PngPresenter {
-        PngPresenter { store: HashMap::new(), captures: Arc::new(Mutex::new(Vec::new())), out_dir: None, serial: 0 }
+        PngPresenter {
+            store: HashMap::new(),
+            captures: Arc::new(Mutex::new(Vec::new())),
+            observations: Arc::new(Mutex::new(Observations::default())),
+            out_dir: None,
+            serial: 0,
+        }
     }
 
     /// A presenter that also writes each presented frame to a PNG under `dir`.
@@ -89,6 +121,14 @@ impl PngPresenter {
     /// compositor thread, then read presented frames back from the test thread.
     pub fn captures(&self) -> Arc<Mutex<Vec<CapturedFrame>>> {
         Arc::clone(&self.captures)
+    }
+
+    /// A clonable handle onto the [`Observations`] — grab this BEFORE moving the presenter into the
+    /// compositor thread (exactly like [`Self::captures`]), then read the adapter's idle-inhibit /
+    /// content-type tracking back from the test thread. The adapter clones the same handle into `HlState`
+    /// at construction so its protocol handlers write where the test reads.
+    pub fn observations(&self) -> Arc<Mutex<Observations>> {
+        Arc::clone(&self.observations)
     }
 
     /// Deposit a surface's just-committed client pixels. The adapter calls this from its commit handler

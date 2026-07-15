@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use hl_compositor::adapter::smithay::present::write_png;
 use hl_compositor::adapter::smithay::{
-    self, input_channel, CapturedFrame, InputCommand, InputSender, PngPresenter,
+    self, input_channel, CapturedFrame, InputCommand, InputSender, Observations, PngPresenter,
 };
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
@@ -53,6 +53,10 @@ pub struct Harness {
     pub stop: Arc<AtomicBool>,
     /// The presenter's captured-frame log (compositor thread writes, test thread reads).
     pub captures: Arc<Mutex<Vec<CapturedFrame>>>,
+    /// Non-pixel adapter observations (idle-inhibit / content-type) — the state protocols that emit NO
+    /// client-visible event record here, for demos that assert the compositor tracked them. Written by the
+    /// compositor thread's protocol handlers, read by the test thread. See [`Observations`].
+    pub observations: Arc<Mutex<Observations>>,
     /// Host input seam: inject pointer/keyboard events that reach the focused client on the wire.
     pub input_tx: InputSender<InputCommand>,
     /// The bound `wayland-N` socket name (already published to `$WAYLAND_DISPLAY`).
@@ -76,6 +80,7 @@ impl Harness {
         let stop = Arc::new(AtomicBool::new(false));
         let presenter = PngPresenter::with_png_dir(PathBuf::from(DEMO_DIR).join(tag));
         let captures = presenter.captures();
+        let observations = presenter.observations();
         let (name_tx, name_rx) = mpsc::channel::<OsString>();
         let (input_tx, input_rx) = input_channel();
 
@@ -98,7 +103,7 @@ impl Harness {
             std::thread::sleep(Duration::from_millis(10));
         }
 
-        Harness { runtime_dir, stop, captures, input_tx, socket_name, handle: Some(handle) }
+        Harness { runtime_dir, stop, captures, observations, input_tx, socket_name, handle: Some(handle) }
     }
 
     /// Stop the serve loop, join its thread, and remove the private runtime dir.

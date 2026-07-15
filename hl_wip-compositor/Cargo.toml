@@ -66,8 +66,10 @@ objc2-quartz-core = { version = "0.2", optional = true, features = ["CALayer", "
 # The headless end-to-end test spawns the compositor and drives a real Wayland CLIENT against it.
 wayland-client = "0.31"
 # `unstable` unlocks the zwp_* client bindings the advanced-input demos drive (relative pointer, pointer
-# constraints, primary selection); presentation-time is a stable protocol (always compiled with `client`).
-wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+# constraints, primary selection, idle-inhibit); presentation-time is a stable protocol (always compiled
+# with `client`). `staging` unlocks the STAGING client bindings the batch-7 demos drive: `xdg_activation_v1`,
+# `wp_content_type_v1`.
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
 
 [[test]]
 name = "wayland_e2e"
@@ -331,6 +333,26 @@ required-features = ["smithay-adapter"]
 [[test]]
 name = "demo_presentation_time"
 path = "tests/demo_presentation_time.rs"
+required-features = ["smithay-adapter"]
+
+# Batch-7 WINDOW-MANAGEMENT / SURFACE-SEMANTICS protocol demos — more previously-unadvertised protocols real
+# toolkits use: xdg_activation_v1 (cross-client activation / focus request), zwp_idle_inhibit_manager_v1
+# (screensaver inhibition), wp_content_type_v1 (per-surface content-type hint). Each drives a real in-process
+# wayland-client against the live adapter and asserts EXACT honored-focus / tracked-state. Own binaries —
+# each mutates process-global `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "demo_xdg_activation"
+path = "tests/demo_xdg_activation.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_idle_inhibit"
+path = "tests/demo_idle_inhibit.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_content_type"
+path = "tests/demo_content_type.rs"
 required-features = ["smithay-adapter"]
 
 [[test]]

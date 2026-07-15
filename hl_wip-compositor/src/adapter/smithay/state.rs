@@ -9,6 +9,7 @@
 //! neutral [`crate::scene::model`].
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use hl_log::{hl_count, hl_debug, hl_info, tag};
@@ -31,6 +32,11 @@ use smithay::output::{
 use smithay::utils::Transform;
 use smithay::wayland::{
     buffer::BufferHandler,
+    content_type::{ContentTypeState, ContentTypeSurfaceCachedState},
+    idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState},
+    xdg_activation::{
+        XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
+    },
     compositor::{
         get_children, get_parent, is_sync_subsurface, with_states, BufferAssignment,
         CompositorClientState, CompositorHandler, CompositorState, Damage, SubsurfaceCachedState,
@@ -65,6 +71,11 @@ use smithay::wayland::{
 /// feedback sent when a surface's committed content reaches the screen.
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 
+/// The `wp_content_type_v1.set_content_type` hint enum (`none`/`photo`/`video`/`game`) a client attaches to
+/// a surface. Read from the committed [`ContentTypeSurfaceCachedState`] and recorded (as its wire value) for
+/// the test to assert; the neutral scene carries no content-type policy headless.
+use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type as ContentType;
+
 /// The `xdg_positioner` anchor/gravity/constraint-adjustment wire enums — mapped onto the neutral
 /// [`crate::scene::model`] positioner value types so the scene's placement math (not Smithay's) resolves
 /// the popup geometry.
@@ -87,7 +98,7 @@ use crate::scene::port::Clock;
 use crate::scene::service::{constrain_popup, surface_at, BufferChange, Commit};
 use crate::{Compositor, FrameOutcome};
 
-use super::present::{PngPresenter, StoredBuffer};
+use super::present::{Observations, PngPresenter, StoredBuffer};
 
 /// Initial floating size a toplevel is configured to before it commits real content.
 const INITIAL_TOPLEVEL_SIZE: (i32, i32) = (800, 600);
@@ -155,6 +166,27 @@ pub struct HlState {
     /// [`set_primary_focus`] (see [`Self::set_keyboard_focus`]). Held for the state's lifetime so the global
     /// keeps advertising.
     pub primary_selection: PrimarySelectionState,
+    /// Owns the `xdg_activation_v1` global (cross-client focus stealing / startup notification). A launcher
+    /// client requests an activation token (`xdg_activation_token_v1`, optionally carrying the seat+serial of
+    /// the input event that triggered a launch), hands the token string to the client it launched, and that
+    /// client calls `xdg_activation_v1.activate(token, surface)` to ask the compositor to bring `surface` to
+    /// the front. The headless policy honours it by giving the target surface keyboard focus (see
+    /// [`XdgActivationHandler::request_activation`]) — the client observes the activation as a
+    /// `wl_keyboard.enter`. Held for the state's lifetime so the global keeps advertising.
+    _xdg_activation: XdgActivationState,
+    /// Owns the `zwp_idle_inhibit_manager_v1` global (inhibit the screensaver / DPMS while a surface is
+    /// visible — video players, presentations). A client calls `create_inhibitor(surface)`; the compositor
+    /// TRACKS the inhibitor (there is no reply event) and, on a real host, suppresses idle while the surface
+    /// is mapped. Headless there is nothing to suppress, so the handler records the inhibited surface in
+    /// [`Observations`] (create → tracked, `zwp_idle_inhibitor_v1.destroy` → untracked). Held for the state's
+    /// lifetime so the global keeps advertising.
+    _idle_inhibit: IdleInhibitManagerState,
+    /// Owns the `wp_content_type_manager_v1` global (the per-surface content-type hint: `photo`/`video`/
+    /// `game`, used to pick tearing/scaling/latency policy). A client calls `get_surface_content_type(surface)`
+    /// then `set_content_type(hint)`; the hint is double-buffered and applied at commit. The adapter reads it
+    /// from the committed [`ContentTypeSurfaceCachedState`] each commit and records it in [`Observations`]
+    /// (there is no reply event). Held for the state's lifetime so the global keeps advertising.
+    _content_type: ContentTypeState,
     /// Owns the `zwp_relative_pointer_manager_v1` global. A client binds it and calls
     /// `get_relative_pointer(wl_pointer)` to receive UNACCELERATED relative motion deltas
     /// (`zwp_relative_pointer_v1.relative_motion`) independent of the absolute `wl_pointer.motion` — what
@@ -255,11 +287,18 @@ pub struct HlState {
     /// (a frame counter for the output). Incremented once per answered feedback so a client sees a strictly
     /// increasing sequence across frames.
     present_seq: u64,
+    /// Shared handle onto the presenter's [`Observations`] — the non-pixel adapter state (idle-inhibit /
+    /// content-type) a test reads back. Cloned from the presenter at construction (before it moves into the
+    /// engine), so the protocol handlers here write exactly where the test reads. See [`Observations`].
+    observations: Arc<Mutex<Observations>>,
 }
 
 impl HlState {
     /// Stand up the protocol globals and the neutral engine, seeded with one output.
     pub fn new(dh: &DisplayHandle, presenter: PngPresenter) -> HlState {
+        // Grab the presenter's shared observation handle BEFORE it moves into the engine, so the
+        // idle-inhibit / content-type handlers below write exactly where a test reads (mirrors `captures`).
+        let observations = presenter.observations();
         let compositor = CompositorState::new::<HlState>(dh);
         // Smithay always advertises Argb8888 + Xrgb8888; additionally advertise the byte-swapped
         // Abgr8888 / Xbgr8888 (R and B channels swapped), which `read_shm_rgba` unpacks. Toolkits that
@@ -275,6 +314,13 @@ impl HlState {
         // GTK/Qt terminal or editor can set + read the select-to-copy clipboard, distinct from the
         // CTRL+C `wl_data_device` one. Primary-selection focus follows keyboard focus like the data device.
         let primary_selection = PrimarySelectionState::new::<HlState>(dh);
+        // Advertise `xdg_activation_v1` (cross-client activation / focus request), `zwp_idle_inhibit_manager_v1`
+        // (screensaver inhibition), and `wp_content_type_manager_v1` (per-surface content-type hint) — the
+        // window-management/surface-semantics globals real toolkits (GTK/Qt/players) probe. Activation is
+        // honoured as a keyboard-focus change; idle-inhibit + content-type are tracked into `Observations`.
+        let xdg_activation = XdgActivationState::new::<HlState>(dh);
+        let idle_inhibit = IdleInhibitManagerState::new::<HlState>(dh);
+        let content_type = ContentTypeState::new::<HlState>(dh);
         // Advertise `zwp_relative_pointer_manager_v1` (unaccelerated relative motion deltas) and
         // `zwp_pointer_constraints_v1` (pointer lock / confinement) — the input protocols FPS games, 3D
         // viewports, and pointer-lock web content require. The seat's `wl_pointer` backs both.
@@ -318,7 +364,7 @@ impl HlState {
 
         hl_info!(
             tag::WAYLAND,
-            "globals bound: compositor shm xdg seat output data_device primary_selection relative_pointer pointer_constraints presentation"
+            "globals bound: compositor shm xdg seat output data_device primary_selection relative_pointer pointer_constraints presentation xdg_activation idle_inhibit content_type"
         );
         HlState {
             display: dh.clone(),
@@ -328,6 +374,9 @@ impl HlState {
             xdg_decoration,
             data_device,
             primary_selection,
+            _xdg_activation: xdg_activation,
+            _idle_inhibit: idle_inhibit,
+            _content_type: content_type,
             _relative_pointer: relative_pointer,
             _pointer_constraints: pointer_constraints,
             _presentation: presentation,
@@ -348,6 +397,7 @@ impl HlState {
             pending_presentation: HashMap::new(),
             last_injected_pointer: (0.0, 0.0),
             present_seq: 0,
+            observations,
         }
     }
 
@@ -487,6 +537,28 @@ impl HlState {
         true
     }
 
+    /// Record `surface`'s committed `wp_content_type_v1` hint into the shared [`Observations`], keyed by the
+    /// `wl_surface` protocol id. Read from the committed [`ContentTypeSurfaceCachedState`] (default `none`
+    /// when the client attached no content-type object), stored as the wire value so a test can assert the
+    /// exact hint. A no-op beyond the write; the headless compositor applies no content-type-driven policy.
+    fn record_content_type(&mut self, surface: &WlSurface) {
+        let ct = with_states(surface, |states| {
+            *states.cached_state.get::<ContentTypeSurfaceCachedState>().current().content_type()
+        });
+        let wire = match ct {
+            ContentType::None => 0,
+            ContentType::Photo => 1,
+            ContentType::Video => 2,
+            ContentType::Game => 3,
+            _ => 0,
+        };
+        self.observations
+            .lock()
+            .unwrap()
+            .content_type
+            .insert(surface.id().protocol_id(), wire);
+    }
+
     /// The commit → present path (the neutral analogue of `on_commit`): read the committed double-buffered
     /// state Smithay has already applied, deposit the surface's pixels for the presenter, translate the
     /// commit into a [`Commit`], drive the neutral engine (which composes + presents + paces), then fire
@@ -502,6 +574,11 @@ impl HlState {
         // committed subtree, not just this surface. Without this the scene would composite a subsurface at a
         // stale offset (or present a sync child that should ship with its parent).
         self.sync_subsurface_tree(surface);
+
+        // Record the surface's just-committed `wp_content_type_v1` hint (double-buffered like the buffer /
+        // damage, applied at commit) into the shared observations. There is no reply event, so this is the
+        // only way a test can assert the compositor read the exact hint the client set.
+        self.record_content_type(surface);
 
         // Snapshot the committed state Smithay applied, taking ownership of the buffer assignment and
         // draining this commit's damage + frame callbacks (the compositor is expected to consume both).
@@ -1418,6 +1495,55 @@ impl PointerConstraintsHandler for HlState {
     }
 }
 
+/// Server-side policy for `xdg_activation_v1` (cross-client activation / focus request). A client that
+/// obtained an activation token (optionally carrying the seat+serial of the input event that triggered it)
+/// calls `activate(token, surface)`; the headless single-window policy honours EVERY activation of a known
+/// toplevel by granting it keyboard focus — the standard "bring the target to the front / make it active"
+/// behaviour, observable to the client as a `wl_keyboard.enter` on the activated surface (and the clipboard /
+/// primary selection follow, via [`HlState::set_keyboard_focus`]). `token_created` keeps its default (every
+/// token is accepted); a real compositor might reject stale or seat-less tokens here. The token stays in the
+/// pool after use — we do not `remove_token`, so it can be inspected — mirroring Smithay's contract that the
+/// compositor owns token lifetime.
+impl XdgActivationHandler for HlState {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self._xdg_activation
+    }
+
+    fn request_activation(
+        &mut self,
+        _token: XdgActivationToken,
+        _token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        // Honour the activation by focusing the target toplevel. Only a known toplevel root is activated (a
+        // popup/subsurface is not a focus target); an unknown or non-toplevel surface is ignored.
+        let Some(sid) = self.sid(&surface) else { return };
+        let is_toplevel = matches!(
+            self.engine.scene.get(sid).map(|s| &s.role),
+            Some(SurfaceRole::Toplevel)
+        );
+        if is_toplevel {
+            self.set_keyboard_focus(Some(sid));
+        }
+    }
+}
+
+/// Server-side handling of `zwp_idle_inhibit_manager_v1`. A client creating a `zwp_idle_inhibitor_v1` on a
+/// surface asks the compositor to keep the system awake (no screensaver / DPMS) while that surface is
+/// visible. There is no reply event — the compositor simply tracks it — so headless the handler records the
+/// inhibited surface in the shared [`Observations`] (and drops it on the inhibitor's `destroy`), which is
+/// the exact state a test asserts. A real host would additionally suppress its idle timer while the set is
+/// non-empty and the surface is mapped.
+impl IdleInhibitHandler for HlState {
+    fn inhibit(&mut self, surface: WlSurface) {
+        self.observations.lock().unwrap().idle_inhibited.insert(surface.id().protocol_id());
+    }
+
+    fn uninhibit(&mut self, surface: WlSurface) {
+        self.observations.lock().unwrap().idle_inhibited.remove(&surface.id().protocol_id());
+    }
+}
+
 smithay::delegate_compositor!(HlState);
 smithay::delegate_shm!(HlState);
 smithay::delegate_xdg_shell!(HlState);
@@ -1431,6 +1557,9 @@ smithay::delegate_pointer_constraints!(HlState);
 smithay::delegate_presentation!(HlState);
 smithay::delegate_viewporter!(HlState);
 smithay::delegate_fractional_scale!(HlState);
+smithay::delegate_xdg_activation!(HlState);
+smithay::delegate_idle_inhibit!(HlState);
+smithay::delegate_content_type!(HlState);
 
 /// Build the compositor's single `wl_output` from the scene's primary [`Output`], creating its global and
 /// pushing the current mode / scale / preferred mode so a binding client receives geometry + mode + scale
