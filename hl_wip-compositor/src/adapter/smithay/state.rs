@@ -261,6 +261,12 @@ impl HlState {
         // grab), so drop it from the chain before the scene reference is gone.
         self.popup_grabs.retain(|p| p.wl_surface() != surface);
         if let Some(sid) = self.surface_ids.remove(&surface.id()) {
+            // The window root this surface belonged to, resolved WHILE its tree links still exist. If the
+            // surface was a child (popup/subsurface), its removal changes what the root composites — a
+            // dismissed popup or a torn-down subsurface must visibly LEAVE the screen. Nothing else marks
+            // the root dirty (the client owning the toplevel may never commit again after closing its own
+            // popup), so a removed child would otherwise linger on the last presented frame forever.
+            let owning_root = self.engine.scene.window_root(sid).filter(|&r| r != sid);
             self.surfaces_by_id.remove(&sid);
             self.engine.presenter_mut().forget(sid);
             self.engine.scene.remove_surface(sid);
@@ -269,6 +275,15 @@ impl HlState {
             // re-driving a removed root, nor stale callback objects for a dead protocol resource.
             self.pending_callbacks.remove(&sid);
             self.pending_repaints.remove(&sid);
+            // Re-present the owning root without the removed child: mark it dirty (so the compose is not
+            // skipped as clean) and arm a repaint at the next refresh boundary. The serve loop's
+            // `drive_due_repaints` ships it even if the client is now idle, so the child disappears.
+            if let Some(root) = owning_root {
+                if self.engine.scene.contains(root) {
+                    self.engine.scene.mark_dirty(root);
+                    self.arm_repaint(root);
+                }
+            }
         }
     }
 
