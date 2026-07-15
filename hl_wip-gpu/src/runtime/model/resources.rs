@@ -213,6 +213,25 @@ pub const KIND_EXTERNAL: u8 = 9;
 /// Fixed residency charged for a timeline fence's host-side signal/wait state.
 pub const FENCE_BYTES: u64 = 128;
 
+/// The human-readable resource-kind tag for an accounting `kind` byte — the SAME string the executor's
+/// [`ResourceTable`] carries for that kind, so a `DuplicateId`/`UnknownId` the account raises is
+/// byte-identical to the one the executor would raise for the same id. `KIND_EXTERNAL` has no protocol
+/// resource table (it is an imported allocation, not an IR-created object), so it names itself.
+pub fn kind_name(kind: u8) -> &'static str {
+    match kind {
+        KIND_BUFFER => BufferId::KIND,
+        KIND_TEXTURE => TextureId::KIND,
+        KIND_SAMPLER => SamplerId::KIND,
+        KIND_SHADER => ShaderId::KIND,
+        KIND_PIPELINE => PipelineId::KIND,
+        KIND_BIND_GROUP => BindGroupId::KIND,
+        KIND_SURFACE => SurfaceId::KIND,
+        KIND_FENCE => FenceId::KIND,
+        KIND_EXTERNAL => "external allocation",
+        _ => "resource",
+    }
+}
+
 /// Backing residency (bytes) an executor keeps resident for a presentable surface: one full-frame render
 /// target at the surface's format footprint.
 pub fn surface_bytes(d: &SurfaceDesc) -> u64 {

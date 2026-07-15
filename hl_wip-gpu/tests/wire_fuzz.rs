@@ -373,8 +373,9 @@ fn decode_then_submit(bytes: &[u8]) -> Result<()> {
 
 #[test]
 fn duplicate_id_in_a_decoded_stream_is_typed_duplicate_id() {
-    // Two creates of the same fence id — a self-referential/duplicate stream. account treats a re-create
-    // as a residency swap, so the DuplicateId surfaces from the executor's id table, end-to-end from bytes.
+    // Two creates of the same fence id — a self-referential/duplicate stream. account rejects the
+    // re-create over a still-live id as DuplicateId before charging (failure-atomic), the same typed
+    // error the executor's id table would raise, end-to-end from bytes.
     let bytes = encode_stream(&[Cmd::CreateFence(1), Cmd::CreateFence(1)]);
     assert_eq!(decode_then_submit(&bytes), Err(GpuError::DuplicateId { kind: "fence", id: 1 }));
 }

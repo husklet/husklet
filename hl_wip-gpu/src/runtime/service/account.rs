@@ -13,25 +13,26 @@ use std::collections::HashMap;
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::{GpuError, Result};
 use crate::runtime::model::resources::{
-    create_charge, destroy_key, Totals, KIND_EXTERNAL, KIND_PIPELINE,
+    create_charge, destroy_key, kind_name, Totals, KIND_EXTERNAL, KIND_PIPELINE,
 };
 use crate::runtime::model::session::Session;
 
 /// Charge a whole validated frame's creates (and refund its destroys) transactionally against the
-/// connection. A `Create*` over a still-live id is treated as a residency *swap* (drop the old charge,
-/// add the new) rather than a fatal duplicate — real guests re-create under a stable id every frame —
-/// while the ceiling is still enforced on the delta.
+/// connection. A `Create*` over a still-live id (one not destroyed earlier in this same frame) is a
+/// `DuplicateId` — exactly what the executor's id table raises for it in `dispatch` — so it is rejected
+/// HERE, before any ledger mutation, keeping the account/dispatch seam failure-atomic: account and
+/// dispatch agree on rejection and the ledger never drifts on a create the executor will refuse. A legal
+/// same-frame destroy-then-recreate is unaffected (the destroy clears the id from `next_live` first).
 pub fn charge_frame(session: &mut Session, cmds: &[Cmd]) -> Result<()> {
     let mut next_live = session.ledger.live.clone();
     let mut next = session.ledger.totals;
     for cmd in cmds {
         if let Some((kind, id, bytes)) = create_charge(cmd)? {
-            if let Some(old) = next_live.insert((kind, id), bytes) {
-                next.bytes = next.bytes.saturating_sub(old);
-                if kind == KIND_PIPELINE {
-                    next.compiled_bytes = next.compiled_bytes.saturating_sub(old);
-                }
-                next.objects = next.objects.saturating_sub(1);
+            if next_live.insert((kind, id), bytes).is_some() {
+                // The id is already live (from a prior frame, or an earlier create in this frame with no
+                // intervening destroy) — a duplicate create. The executor would reject it as DuplicateId;
+                // reject it here first so no residency is charged for a create that will never happen.
+                return Err(GpuError::DuplicateId { kind: kind_name(kind), id });
             }
             next.bytes =
                 next.bytes.checked_add(bytes).ok_or(GpuError::ResourceLimit("residency overflow"))?;
