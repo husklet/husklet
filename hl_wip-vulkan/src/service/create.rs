@@ -69,13 +69,25 @@ pub fn destroy_buffer(dev: &mut Device, sink: &mut dyn CommandSink, buffer: VkBu
 
 /// `vkAllocateMemory` — allocate `size` bytes of host-visible unified memory (zeroed). No IR: the bytes
 /// upload to the host lazily (mapped-flush at `vkQueueSubmit`).
-pub fn allocate_memory(dev: &mut Device, size: u64) -> VkDeviceMemory {
+///
+/// A zero `allocationSize` is a usage error (VUID-VkMemoryAllocateInfo-allocationSize-00638). A request
+/// that cannot be satisfied from the modeled unified heap ([`crate::model::instance::PhysicalDeviceDesc::
+/// memory_heap_bytes`]) is a truthful `VK_ERROR_OUT_OF_DEVICE_MEMORY` analogue ([`GpuError::ResourceLimit`])
+/// — NEVER a fake success, and (crucially) never a host `Vec` capacity-overflow/OOM abort from
+/// `vec![0u8; huge as usize]`: the budget check rejects an over-heap size before any host allocation.
+pub fn allocate_memory(dev: &mut Device, size: u64) -> Result<VkDeviceMemory> {
+    if size == 0 {
+        return Err(GpuError::Invalid("vkAllocateMemory: allocationSize must be greater than 0"));
+    }
+    if size > dev.physical_device.memory_heap_bytes {
+        return Err(GpuError::ResourceLimit("vkAllocateMemory: allocation exceeds the device memory heap"));
+    }
     let handle = dev.alloc_handle();
     dev.memories.insert(
         handle,
         MemRec { data: vec![0u8; size as usize], size, bound_buffers: Vec::new(), mapped: false, pending_flush: None },
     );
-    handle
+    Ok(handle)
 }
 
 /// `vkBindBufferMemory` — bind `memory` to `buffer` at `offset`. Errors on an unknown handle. No IR
@@ -127,11 +139,14 @@ pub fn write_mapped(
         .memories
         .get_mut(&memory)
         .ok_or(GpuError::Invalid("write_mapped: unknown VkDeviceMemory"))?;
-    let end = offset as usize + bytes.len();
-    if end > m.data.len() {
+    // u64 checked math: a hostile `offset` near `u64::MAX` must be a truthful OutOfBounds, never an
+    // `offset as usize + len` add-overflow panic.
+    let end = offset.checked_add(bytes.len() as u64).ok_or(GpuError::OutOfBounds)?;
+    if end > m.data.len() as u64 {
         return Err(GpuError::OutOfBounds);
     }
-    m.data[offset as usize..end].copy_from_slice(bytes);
+    let start = offset as usize;
+    m.data[start..start + bytes.len()].copy_from_slice(bytes);
     Ok(())
 }
 
@@ -255,6 +270,15 @@ pub fn create_image(
 ) -> Result<VkImage> {
     use hl_gpu::protocol::model::descriptor::TextureDesc;
     use hl_gpu::protocol::model::enums::TextureDim;
+    // A zero extent is a spec violation (VUID-VkImageCreateInfo-extent), and an extent past the modeled
+    // `maxImageDimension2D` cannot be created — both truthful usage errors, never a fake success.
+    if width == 0 || height == 0 {
+        return Err(GpuError::Invalid("vkCreateImage: image extent width/height must be greater than 0"));
+    }
+    let max_dim = dev.physical_device.limits.max_image_dimension_2d;
+    if width > max_dim || height > max_dim {
+        return Err(GpuError::Invalid("vkCreateImage: image extent exceeds maxImageDimension2D"));
+    }
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
     let format = tex_format_from_vk(vk_format);

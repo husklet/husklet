@@ -632,7 +632,7 @@ fn mapped_memory_flushes_as_write_buffer_at_submit() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 256).unwrap();
-    let mem = create::allocate_memory(&mut d, 256);
+    let mem = create::allocate_memory(&mut d, 256).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[1, 2, 3, 4]).unwrap();
@@ -672,7 +672,7 @@ fn arena_memory_flushes_every_bound_buffer_at_submit() {
     let i_ir = d.buffers.get(&instances).unwrap().ir_id;
     let v_ir = d.buffers.get(&verts).unwrap().ir_id;
 
-    let mem = create::allocate_memory(&mut d, 3072);
+    let mem = create::allocate_memory(&mut d, 3072).unwrap();
     create::bind_buffer_memory(&mut d, globals, mem, 0).unwrap();
     create::bind_buffer_memory(&mut d, instances, mem, 1024).unwrap();
     create::bind_buffer_memory(&mut d, verts, mem, 2048).unwrap(); // last-bound: the ONLY one the old model kept
@@ -726,7 +726,7 @@ fn unmapped_memory_still_flushes_its_write_at_submit() {
     let mut sink = RecordingSink::with_full_caps();
     let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 256).unwrap();
     let buf_ir = d.buffers.get(&buf).unwrap().ir_id;
-    let mem = create::allocate_memory(&mut d, 256);
+    let mem = create::allocate_memory(&mut d, 256).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[9, 8, 7, 6]).unwrap();
@@ -766,7 +766,7 @@ fn mapped_write_without_unmap_flushes_exactly_once() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 256).unwrap();
-    let mem = create::allocate_memory(&mut d, 256);
+    let mem = create::allocate_memory(&mut d, 256).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[1, 2, 3, 4]).unwrap();
@@ -794,7 +794,7 @@ fn unmapped_unbound_host_staging_flushes_nothing() {
     // nothing (a truthful no-op) so the submit emits no WriteBuffer.
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    let mem = create::allocate_memory(&mut d, 128);
+    let mem = create::allocate_memory(&mut d, 128).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[1, 2, 3, 4]).unwrap();
     create::unmap_memory(&mut d, mem);
@@ -818,7 +818,7 @@ fn map_memory_reads_bound_buffer_back_over_the_sink() {
     // own upload, so reading device output requires a device→host readback.
     let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 256).unwrap();
     let buf_ir = d.buffers.get(&buf).unwrap().ir_id;
-    let mem = create::allocate_memory(&mut d, 256);
+    let mem = create::allocate_memory(&mut d, 256).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
     create::map_memory(&mut d, mem).unwrap();
 
@@ -838,7 +838,7 @@ fn map_memory_of_unbound_host_staging_issues_no_readback() {
     let mut sink = RecordingSink::with_full_caps();
     // Host-only staging: no buffer bound, so there is no readable device source. The readback must be a
     // truthful no-op (never a faked/zero read), leaving the staging as-is.
-    let mem = create::allocate_memory(&mut d, 128);
+    let mem = create::allocate_memory(&mut d, 128).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     create::read_mapped(&mut d, &mut sink, mem, 0, u64::MAX).unwrap();
     assert!(sink.reads.is_empty(), "unbound staging must not read back");
@@ -1224,7 +1224,7 @@ fn indirect_draws_read_args_and_lower_to_direct_draws() {
     // backed by memory the app has filled on the CPU (the mapped-buffer indirect-args pattern).
     let indirect =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
-    let mem = create::allocate_memory(&mut d, 64);
+    let mem = create::allocate_memory(&mut d, 64).unwrap();
     create::bind_buffer_memory(&mut d, indirect, mem, 0).unwrap();
     // cmd0 = {vertexCount:6, instanceCount:2, firstVertex:3, firstInstance:1}
     // cmd1 = {vertexCount:3, instanceCount:1, firstVertex:0, firstInstance:0}
@@ -1254,7 +1254,7 @@ fn indirect_draws_read_args_and_lower_to_direct_draws() {
 
     // vkCmdDrawIndexedIndirect reads the 20-byte struct and lowers to the matching DrawIndexed.
     let idx = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
-    let mem2 = create::allocate_memory(&mut d, 64);
+    let mem2 = create::allocate_memory(&mut d, 64).unwrap();
     create::bind_buffer_memory(&mut d, idx, mem2, 0).unwrap();
     // {indexCount:9, instanceCount:3, firstIndex:2, vertexOffset:0, firstInstance:5}
     let mut ib = Vec::new();

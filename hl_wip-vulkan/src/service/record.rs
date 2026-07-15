@@ -100,7 +100,9 @@ pub fn cmd_bind_descriptor_sets(
 ) -> Result<()> {
     let mut dyn_cursor = 0usize; // global cursor across all bound sets
     for (i, &dset) in sets.iter().enumerate() {
-        let set_index = first_set + i as u32;
+        // Saturating add: a hostile `first_set` near `u32::MAX` with >1 set must not overflow the set
+        // index (it is only a bind-group label here; a real firstSet is bounded by maxBoundDescriptorSets).
+        let set_index = first_set.saturating_add(i as u32);
         // Snapshot the set's (binding -> buffer) table + its layout handle (owned; borrows end here).
         let Some(rec) = dev.descriptor_sets.get(&dset) else { continue };
         let layout_handle = rec.layout;
@@ -626,9 +628,15 @@ pub fn set_dynamic_attachment_array(
     values: &[u32],
     select: impl FnOnce(&mut crate::model::command::DynamicState) -> &mut Vec<u32>,
 ) -> Result<()> {
+    // The written range indexes color attachments, bounded by `maxColorAttachments`. Without this a
+    // hostile `first` near `u32::MAX` would `resize` the state vector to multiple GiB and abort the host
+    // on the allocation — reject an out-of-range attachment span as a truthful usage error instead.
+    let end = first as usize + values.len();
+    if end > dev.physical_device.limits.max_color_attachments as usize {
+        return Err(GpuError::Invalid("vkCmdSet*EXT: attachment range exceeds maxColorAttachments"));
+    }
     let ds = &mut recording_mut(dev, cb)?.dynamic;
     let target = select(ds);
-    let end = first as usize + values.len();
     if target.len() < end {
         target.resize(end, 0);
     }
@@ -647,6 +655,13 @@ pub fn set_dynamic_attachment_array(
 pub fn cmd_push_constants(dev: &mut Device, cb: VkCommandBuffer, offset: u32, bytes: &[u8]) -> Result<()> {
     if offset % 4 != 0 || bytes.is_empty() || bytes.len() % 4 != 0 {
         return Err(GpuError::Invalid("vkCmdPushConstants: offset/size must be nonzero and 4-byte aligned"));
+    }
+    // `offset + size` must lie within `maxPushConstantsSize` (spec §17.1, VUID-vkCmdPushConstants-offset).
+    // Without this a hostile `offset`/`size` near `u32::MAX` would `resize` the block to multiple GiB and
+    // abort the host on the allocation — reject it as a truthful usage error instead.
+    let max_push = dev.physical_device.limits.max_push_constants_size as u64;
+    if offset as u64 + bytes.len() as u64 > max_push {
+        return Err(GpuError::Invalid("vkCmdPushConstants: offset+size exceeds maxPushConstantsSize"));
     }
     let rec = recording_mut(dev, cb)?;
     let end = offset as usize + bytes.len();
@@ -1002,7 +1017,14 @@ pub fn cmd_copy_image(
     if w == 0 || h == 0 {
         return Err(GpuError::OutOfBounds);
     }
-    if src_origin.0 + w > siw || src_origin.1 + h > sih || dst_origin.0 + w > diw || dst_origin.1 + h > dih {
+    // Checked add: a hostile `origin` near `u32::MAX` must be a truthful OutOfBounds, never an
+    // `origin + extent` add-overflow panic.
+    let in_bounds = |o: u32, e: u32, dim: u32| o.checked_add(e).is_some_and(|end| end <= dim);
+    if !in_bounds(src_origin.0, w, siw)
+        || !in_bounds(src_origin.1, h, sih)
+        || !in_bounds(dst_origin.0, w, diw)
+        || !in_bounds(dst_origin.1, h, dih)
+    {
         return Err(GpuError::OutOfBounds);
     }
     // A same-image overlapping self-copy is undefined; reject it (the reference does).
@@ -1062,10 +1084,13 @@ pub fn cmd_blit_image(
     if src_extent.0 == 0 || src_extent.1 == 0 || dst_extent.0 == 0 || dst_extent.1 == 0 {
         return Err(GpuError::OutOfBounds);
     }
-    if src_origin.0 + src_extent.0 > siw
-        || src_origin.1 + src_extent.1 > sih
-        || dst_origin.0 + dst_extent.0 > diw
-        || dst_origin.1 + dst_extent.1 > dih
+    // Checked add: a hostile `origin` near `u32::MAX` must be a truthful OutOfBounds, never an
+    // `origin + extent` add-overflow panic.
+    let in_bounds = |o: u32, e: u32, dim: u32| o.checked_add(e).is_some_and(|end| end <= dim);
+    if !in_bounds(src_origin.0, src_extent.0, siw)
+        || !in_bounds(src_origin.1, src_extent.1, sih)
+        || !in_bounds(dst_origin.0, dst_extent.0, diw)
+        || !in_bounds(dst_origin.1, dst_extent.1, dih)
     {
         return Err(GpuError::OutOfBounds);
     }
@@ -1347,7 +1372,11 @@ pub fn cmd_copy_query_pool_results(
         .unwrap_or(Some(0))
         .and_then(|off| off.checked_add(per))
         .ok_or(GpuError::OutOfBounds)?;
-    let dst_size = count as u64 * stride.max(per);
+    // The written region is exactly `span` bytes from `dst_offset`; sizing the copy to `span` (not the
+    // looser `count * max(stride, per)`, which can overflow `u64` for a hostile count/stride and then
+    // abort the host on a multi-EiB `vec![0u8; dst_size]`) keeps the emitted WriteBuffer inside the
+    // bounds validated below.
+    let dst_size = span;
     match dst_offset.checked_add(span) {
         Some(end) if end <= bsize => {}
         _ => return Err(GpuError::OutOfBounds),

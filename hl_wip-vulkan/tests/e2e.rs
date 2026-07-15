@@ -113,7 +113,7 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
     verts.extend(vertex(0.8, -0.8, tri)); // bottom-right
     let vsize = verts.len() as u64;
     let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, vsize).unwrap();
-    let mem = create::allocate_memory(&mut d, vsize);
+    let mem = create::allocate_memory(&mut d, vsize).unwrap();
     create::bind_buffer_memory(&mut d, vbuf, mem, 0).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &verts).unwrap();
@@ -363,7 +363,7 @@ fn map_memory_reflects_device_output_end_to_end() {
     .unwrap();
     let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, N).unwrap();
     let dst_ir = d.buffers.get(&dst).unwrap().ir_id;
-    let mem = create::allocate_memory(&mut d, N);
+    let mem = create::allocate_memory(&mut d, N).unwrap();
     create::bind_buffer_memory(&mut d, dst, mem, 0).unwrap();
 
     // Device work: fill src with the pattern, then copy src → dst. No host write to dst's staging.
@@ -421,7 +421,7 @@ fn unmapped_host_write_reaches_the_device_end_to_end() {
     // A host-visible buffer the app stages into (TRANSFER_DST so the device accepts the write).
     let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, N).unwrap();
     let buf_ir = d.buffers.get(&buf).unwrap().ir_id;
-    let mem = create::allocate_memory(&mut d, N);
+    let mem = create::allocate_memory(&mut d, N).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
 
     // map → write → UNMAP, all BEFORE any submit.

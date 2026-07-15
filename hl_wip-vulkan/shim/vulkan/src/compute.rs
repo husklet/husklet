@@ -121,14 +121,16 @@ pub extern "C" fn vkAllocateMemory(
     let Some(ai) = (unsafe { (p_allocate_info as *const VkMemoryAllocateInfo).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    let h = dev_sink(|dev, _| create::allocate_memory(dev, ai.allocation_size));
-    match h {
-        Some(handle) => {
+    // `allocate_memory` is fallible: a zero/over-heap `allocationSize` surfaces as the honest VkResult
+    // (`VK_ERROR_OUT_OF_DEVICE_MEMORY` for an over-budget request), never a fake success.
+    match dev_sink(|dev, _| create::allocate_memory(dev, ai.allocation_size)) {
+        Some(Ok(handle)) => {
             if !p_memory.is_null() {
                 unsafe { *p_memory = handle };
             }
             VK_SUCCESS
         }
+        Some(Err(e)) => vk_result_from_gpu_error(&e),
         None => VK_ERROR_INITIALIZATION_FAILED,
     }
 }

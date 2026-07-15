@@ -164,20 +164,25 @@ pub fn get_query_pool_results(
     let mut all_ready = true;
     for i in 0..count as usize {
         let slot = p.results[first as usize + i];
-        let base = i * stride as usize;
+        // u64 checked math: a hostile `stride` near `u64::MAX` must not overflow `i * stride` (an
+        // out-of-`out` element is simply skipped, matching the in-range `base + elem <= len` guard).
+        let base = (i as u64).checked_mul(stride).and_then(|b| usize::try_from(b).ok());
         // Availability gates the value write unless the caller opted into WAIT (satisfied immediately in
         // the synchronous model) or PARTIAL (write whatever is there). Missing availability → not ready.
         if slot.available || wait || partial {
-            if base + elem <= len {
-                write_le(out, base, slot.value, wide);
+            if let Some(base) = base {
+                if base.checked_add(elem).is_some_and(|end| end <= len) {
+                    write_le(out, base, slot.value, wide);
+                }
             }
         } else {
             all_ready = false;
         }
         if with_availability {
-            let a = base + elem;
-            if a + elem <= len {
-                write_le(out, a, slot.available as u64, wide);
+            if let Some(a) = base.and_then(|b| b.checked_add(elem)) {
+                if a.checked_add(elem).is_some_and(|end| end <= len) {
+                    write_le(out, a, slot.available as u64, wide);
+                }
             }
         }
     }

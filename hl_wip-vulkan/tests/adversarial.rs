@@ -78,7 +78,7 @@ fn still_mapped_flush_honors_bind_offset() {
     // 32-byte allocation; a 16-byte buffer bound at offset 16 (a second suballocation in one arena).
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::UNIFORM_BUFFER, 16).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 32);
+    let mem = create::allocate_memory(&mut d, 32).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 16).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     // The app writes the buffer's bytes through the mapped pointer at allocation offset 16.
@@ -111,7 +111,7 @@ fn read_mapped_bind_offset_reads_buffer_relative_range() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 16).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 32);
+    let mem = create::allocate_memory(&mut d, 32).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 16).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     // Map the whole allocation (offset 0, WHOLE_SIZE); only the [16,32) footprint overlaps the buffer.
@@ -126,7 +126,7 @@ fn pending_flush_bind_offset_targets_buffer_relative_offset() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 16).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 32);
+    let mem = create::allocate_memory(&mut d, 32).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 16).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     let pattern: Vec<u8> = (100..=115u8).collect();
@@ -158,7 +158,7 @@ fn pending_upload_is_cleared_after_one_submit() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 8).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 8);
+    let mem = create::allocate_memory(&mut d, 8).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[9u8; 8]).unwrap();
@@ -182,7 +182,7 @@ fn flush_ranges_widen_and_cover_both_writes() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 16).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 16);
+    let mem = create::allocate_memory(&mut d, 16).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
     create::map_memory(&mut d, mem).unwrap();
     let all: Vec<u8> = (1..=16u8).collect();
@@ -215,7 +215,7 @@ fn flush_ranges_widen_and_cover_both_writes() {
 #[test]
 fn write_mapped_out_of_range_is_out_of_bounds() {
     let mut d = dev();
-    let mem = create::allocate_memory(&mut d, 8);
+    let mem = create::allocate_memory(&mut d, 8).unwrap();
     let err = create::write_mapped(&mut d, mem, 4, &[0u8; 8]).unwrap_err();
     assert!(matches!(err, GpuError::OutOfBounds));
 }
@@ -233,7 +233,7 @@ fn bind_unknown_memory_or_buffer_errors_and_read_of_unbound_is_noop() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 16).unwrap();
     assert!(matches!(create::bind_buffer_memory(&mut d, buf, 0xdead, 0), Err(GpuError::Invalid(_))));
-    let mem = create::allocate_memory(&mut d, 16);
+    let mem = create::allocate_memory(&mut d, 16).unwrap();
     assert!(matches!(create::bind_buffer_memory(&mut d, 0xdead, mem, 0), Err(GpuError::Invalid(_))));
     // read_mapped on host-only staging (no bound buffer) issues no readback and no error.
     create::map_memory(&mut d, mem).unwrap();
