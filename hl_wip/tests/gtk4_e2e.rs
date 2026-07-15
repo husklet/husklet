@@ -237,14 +237,29 @@ fn gtk4_composites_through_the_full_stack() {
         //     6. sample-op `if/else if` helpers with no final `else` get a bare `return;` from naga that fails a
         //        value-returning function; each is replaced with a zero-value return of the result type.
         //
-        //   REMAINING — the compiled shaders now reach `Device::create_render_pipeline`, which fails wgpu
-        //   validation: "Vertex attribute at location 0 stride 26032 exceeds the limit 48". This is a
-        //   DRIVER-side vertex-attribute layout bug (hl_wip-gl frame/program reflection), NOT a shader gap:
-        //   GskGpu computes vertex position from `gl_VertexID` (vertex-pulling, no position attribute) and
-        //   feeds per-instance `IN()` data (in_rect/in_tex_rect/in_color = 48 bytes/instance), but the shim
-        //   hands wgpu a nonsense array_stride (26032). Building the correct instanced VertexBufferLayout for
-        //   GskGpu's vertex-pulling model is the next effort, in hl_wip-gl — one stage downstream of the shader
-        //   frontend, which is now unblocked.
+        //   FIXED — GskGpu instanced vertex layout: `Device::create_render_pipeline` now succeeds. GskGpu
+        //   computes vertex position from `gl_VertexID` (vertex-pulling, no position attribute) and feeds
+        //   per-instance `IN()` data (in_rect/in_tex_rect/in_color, ~48 bytes/instance) out of ONE big frame
+        //   VBO. With the GL `base-instance` feature UNAVAILABLE (see "base-instance: ✗" above) it BAKES the
+        //   per-instance region base (`first_instance * stride`, e.g. instance 542 → 26016) into the
+        //   `glVertexAttribPointer` offset, so an attribute offset can hit the tens of thousands. wgpu rejects
+        //   an attribute whose `offset + size` exceeds the vertex-buffer `array_stride` (48) — hence the old
+        //   "stride 26032 exceeds the limit 48" NACK. hl_wip-gl/src/service/frame.rs now hoists the whole-stride
+        //   base out of the attributes into the vertex-buffer BIND offset (`Enc::SetVertexBuffer { offset }`),
+        //   leaving each attribute's in-stride offset in `[0, stride)`; the array_stride stays the packed
+        //   instance size and the slot steps per-instance. An ordinary draw (every offset already < stride) is
+        //   byte-identical.
+        //
+        //   REMAINING — the created pipeline now reaches `Device::create_bind_group`, which fails wgpu
+        //   validation: "Number of bindings in bind group descriptor (5) does not match the number of bindings
+        //   defined in the bind group layout (3)". This is a DRIVER-side bind-group gap (hl_wip-gl), one stage
+        //   downstream of the (now-unblocked) vertex layout: frame.rs emits an entry per reflected sampler on
+        //   the shared `binding = 0 (UBO) / 1+2k (tex) / 2+2k (sampler)` scheme (1 UBO + 2 tex/sampler pairs =
+        //   5 entries), but naga's auto-derived layout for the actual GskGpu program exposes only 3 bindings
+        //   (1 UBO + 1 tex/sampler pair) — GskGpu declares more sampler uniforms than the compiled `main`
+        //   actually samples, and naga prunes the unused one. Reconciling the emitted bind-group entries with
+        //   the shader's live bindings (bind only sampled textures, or match naga's pruned layout) is the next
+        //   effort, in hl_wip-gl.
         eprintln!(
             "MILESTONE DIAGNOSED (GTK4 reaches real GL rendering + cheap frame lowering; its GskGpu shaders \
              now COMPILE on the host, and the next gap has moved one stage downstream to the driver's vertex \
@@ -261,11 +276,18 @@ fn gtk4_composites_through_the_full_stack() {
                 compile to WGSL (hl_wip-gpu-wgpu glsl_es.rs ES→desktop lowering: __VERSION__ seed + UBO \
                 binding, gl_VertexID-in-macro rewrite, IN/PASS location macros, switch→if/else; plus wgsl.rs \
                 naga-module passes: topological function reorder + zero-value bare returns).\n\
+             * GskGpu instanced vertex layout: FIXED — Device::create_render_pipeline now succeeds. GskGpu \
+                bakes the per-instance region base (first_instance*stride, base-instance being unavailable) into \
+                the glVertexAttribPointer offset; hl_wip-gl/src/service/frame.rs now hoists that whole-stride \
+                base into the vertex-buffer bind offset (SetVertexBuffer offset), keeping each attribute offset \
+                within the array_stride (48) and the slot per-instance.\n\
              * compositor presented frames: 0\n\
-               (the compiled shaders reach Device::create_render_pipeline, which NACKs with wgpu validation \
-                'Vertex attribute at location 0 stride 26032 exceeds the limit 48' — a DRIVER-side vertex \
-                layout bug in hl_wip-gl: GskGpu's gl_VertexID vertex-pulling + instanced IN() attributes get a \
-                nonsense array_stride. A correct instanced VertexBufferLayout is the next effort.)\n\
+               (the created pipeline now reaches Device::create_bind_group, which NACKs with wgpu validation \
+                'Number of bindings in bind group descriptor (5) does not match the number of bindings defined \
+                in the bind group layout (3)' — a DRIVER-side bind-group gap in hl_wip-gl: frame.rs emits an \
+                entry per reflected sampler (1 UBO + 2 tex/sampler pairs = 5) but naga's auto-layout for the \
+                actual GskGpu program exposes only 3 bindings (it prunes sampler uniforms the compiled main \
+                never samples). Matching the emitted entries to the shader's live bindings is the next effort.)\n\
              --- decisive app stderr lines ---\n{}\n",
             decisive_lines(&stderr),
         );

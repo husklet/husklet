@@ -360,6 +360,30 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
             *st = 16;
         }
     }
+    // Per-slot BASE byte offset — the whole-stride multiple hoisted out of the attributes into the
+    // vertex-buffer BIND offset (`Enc::SetVertexBuffer { offset }`). GskGpu's vertex-pulling model
+    // (position from `gl_VertexID`, real data PER-INSTANCE) draws every op's instances out of ONE big
+    // frame VBO; with the `base-instance` GL feature UNAVAILABLE it bakes the per-instance region base
+    // (`first_instance * stride`) straight into the `glVertexAttribPointer` offset, so an attribute's GL
+    // offset routinely runs into the tens of thousands (e.g. instance 542 → offset 26016). wgpu forbids a
+    // vertex attribute whose `offset + format_size` exceeds the buffer's `array_stride`, so the
+    // stride-multiple part of the offset is moved to the buffer bind offset, leaving each attribute's
+    // in-stride offset in `[0, stride)`. For an ordinary draw every attribute offset is already `< stride`,
+    // so the base is `0` and the lowering is byte-identical to before.
+    let mut slot_base = vec![0u32; nslot.max(1)];
+    for sl in 0..nslot {
+        let min_off = d
+            .attrs
+            .iter()
+            .enumerate()
+            .filter(|(i, a)| attr_slot[*i] == sl as i32 && a.enabled)
+            .map(|(_, a)| a.offset as u32)
+            .min();
+        if let Some(min_off) = min_off {
+            let stride = slot_stride[sl].max(1);
+            slot_base[sl] = (min_off / stride) * stride;
+        }
+    }
     let nvd = d.attrs.iter().enumerate().filter(|(_, a)| a.enabled).map(|(i, _)| i + 1).max().unwrap_or(0);
 
     // Resolve the IR buffer id for each vertex slot, uploading its bytes ONLY on first sight / content
@@ -529,6 +553,9 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     let nvb = if client_slots.is_empty() { nslot.max(1) } else { nslot };
     let mut vbs: Vec<VertexLayout> = Vec::with_capacity(nvb + client_slots.len());
     for sl in 0..nvb {
+        // The base offset hoisted into this slot's bind offset (see `slot_base`); subtracted from each
+        // attribute so its in-stride offset stays in `[0, stride)`. Phantom slots (`sl >= nslot`) carry 0.
+        let base = if sl < nslot { slot_base[sl] } else { 0 };
         let mut attrs = Vec::new();
         for l in 0..nvd {
             if l < crate::model::program::MAX_ATTR && client_loc[l] {
@@ -540,7 +567,7 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
             }
             let (fmt, off) = if l < crate::model::program::MAX_ATTR && d.attrs[l].enabled && attr_slot[l] >= 0 {
                 let a = &d.attrs[l];
-                (vertex_format_wire(a.kind, a.size, a.normalized, a.integer), a.offset as u32)
+                (vertex_format_wire(a.kind, a.size, a.normalized, a.integer), (a.offset as u32).saturating_sub(base))
             } else {
                 let t = if l < ndecl { vdecl[l].ty.as_str() } else { "vec4" };
                 (decl_format_wire(t), 0)
@@ -662,7 +689,9 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
         ops.push(Enc::SetBindGroup { index: 0, group: bind_group_ir });
     }
     for (sl, &ir) in slot_ir.iter().enumerate() {
-        ops.push(Enc::SetVertexBuffer { slot: sl as u32, buffer: ir, offset: 0 });
+        // The per-instance region base (GskGpu's baked `first_instance * stride`) rides the bind offset;
+        // it is 0 for an ordinary draw, so this stays byte-identical to the old `offset: 0`.
+        ops.push(Enc::SetVertexBuffer { slot: sl as u32, buffer: ir, offset: slot_base[sl] as u64 });
     }
     // Client-side transient buffers bind to the slots appended after the VBO slots.
     for (i, cs) in client_slots.iter().enumerate() {
