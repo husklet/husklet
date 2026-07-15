@@ -80,7 +80,197 @@ pub fn glsl_to_wgsl(src: &str, stage: naga::ShaderStage, entry: &str) -> Result<
     if let Some(ep) = module.entry_points.first_mut() {
         ep.name = entry.to_string();
     }
+    // GskGpu's texture-sampling helpers are `if/else if` chains with no final `else` (a valid-input-only
+    // GLSL idiom), so naga's `glsl-in` fills the missing path with a bare `return;`
+    // (`proc::ensure_block_returns`). In a value-returning function that bare return fails validation
+    // (`InvalidReturnType(None)`). Replace each such fallthrough return with a zero-value return of the
+    // function's result type — the path is unreachable for the values GskGpu emits.
+    default_bare_returns(&mut module);
+    // GskGpu declares functions top-down (`main` → `main_clip_*` → `run`) behind forward prototypes, which
+    // GLSL permits but naga does not: naga assigns each function's handle at its first sighting (prototype
+    // or definition) and its validator rejects any `Call` to a higher-indexed function
+    // (`InvalidHandle(ForwardDependency)`). Reorder the parsed module's functions into call-graph
+    // (callee-before-caller) order so every call points backward, as naga requires.
+    reorder_functions_topologically(&mut module);
     module_to_wgsl(&module)
+}
+
+/// Replace every bare `Return { value: None }` inside a value-returning function with a zero-value return
+/// of the declared result type. naga's `glsl-in` inserts such a bare return to terminate a control-flow
+/// path the GLSL left open (an `if/else if` with no final `else`); the validator then rejects it because
+/// the function must return a value. `Expression::ZeroValue` is pre-emitted, so no `Emit` is needed.
+fn default_bare_returns(module: &mut naga::Module) {
+    fn fix(block: &mut [naga::Statement], exprs: &mut naga::Arena<naga::Expression>, ty: naga::Handle<naga::Type>) {
+        use naga::Statement;
+        for stmt in block.iter_mut() {
+            match stmt {
+                Statement::Return { value } if value.is_none() => {
+                    let zero = exprs.append(naga::Expression::ZeroValue(ty), naga::Span::default());
+                    *value = Some(zero);
+                }
+                Statement::Block(b) => fix(b, exprs, ty),
+                Statement::If { accept, reject, .. } => {
+                    fix(accept, exprs, ty);
+                    fix(reject, exprs, ty);
+                }
+                Statement::Switch { cases, .. } => {
+                    for c in cases.iter_mut() {
+                        fix(&mut c.body, exprs, ty);
+                    }
+                }
+                Statement::Loop { body, continuing, .. } => {
+                    fix(body, exprs, ty);
+                    fix(continuing, exprs, ty);
+                }
+                _ => {}
+            }
+        }
+    }
+    for (_h, f) in module.functions.iter_mut() {
+        if let Some(ty) = f.result.as_ref().map(|r| r.ty) {
+            fix(&mut f.body, &mut f.expressions, ty);
+        }
+    }
+    for ep in module.entry_points.iter_mut() {
+        if let Some(ty) = ep.function.result.as_ref().map(|r| r.ty) {
+            fix(&mut ep.function.body, &mut ep.function.expressions, ty);
+        }
+    }
+}
+
+/// Reorder `module.functions` into topological (callee-before-caller) order and remap every `Call` to the
+/// new handles, so naga's handle validator (which forbids a function calling a higher-indexed one) accepts
+/// modules whose source used forward prototypes. A no-op in effect for modules already in a valid order.
+fn reorder_functions_topologically(module: &mut naga::Module) {
+    use naga::{Function, Handle, Span};
+
+    let old = std::mem::take(&mut module.functions);
+    let mut owned: Vec<Option<(Function, Span)>> =
+        old.iter().map(|(h, f)| Some((f.clone(), old.get_span(h)))).collect();
+    let n = owned.len();
+
+    // Call graph over old indices (a function's handle index equals its position in the old arena).
+    let mut callees: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, slot) in owned.iter().enumerate() {
+        collect_call_targets(&slot.as_ref().expect("present").0.body, &mut callees[i]);
+    }
+
+    // Iterative postorder DFS: a node is emitted after all its callees, i.e. callees get lower new indices.
+    // Back edges (would-be recursion, which naga/GLSL disallow anyway) are skipped so this always terminates.
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    let mut state = vec![0u8; n]; // 0 = unseen, 1 = on stack, 2 = emitted
+    for start in 0..n {
+        if state[start] != 0 {
+            continue;
+        }
+        let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
+        while let Some(&(node, ci)) = stack.last() {
+            state[node] = 1;
+            if ci < callees[node].len() {
+                stack.last_mut().expect("non-empty").1 += 1;
+                let next = callees[node][ci];
+                if state[next] == 0 {
+                    stack.push((next, 0));
+                }
+            } else {
+                if state[node] != 2 {
+                    state[node] = 2;
+                    order.push(node);
+                }
+                stack.pop();
+            }
+        }
+    }
+
+    let mut new_arena: naga::Arena<Function> = naga::Arena::default();
+    let mut map: Vec<Option<Handle<Function>>> = vec![None; n];
+    for &old_i in &order {
+        let (f, span) = owned[old_i].take().expect("each function emitted once");
+        map[old_i] = Some(new_arena.append(f, span));
+    }
+
+    for (_h, f) in new_arena.iter_mut() {
+        remap_call_targets(&mut f.body, &map);
+        remap_call_result_exprs(f, &map);
+    }
+    for ep in module.entry_points.iter_mut() {
+        remap_call_targets(&mut ep.function.body, &map);
+        remap_call_result_exprs(&mut ep.function, &map);
+    }
+    module.functions = new_arena;
+}
+
+/// Rewrite every `Expression::CallResult(function)` in `f`'s expression arena through `map`. The function
+/// handle a value-returning call yields is stored here (not only in `Statement::Call`), and naga's handle
+/// validator checks it against the enclosing function, so it must be remapped alongside the call statement.
+fn remap_call_result_exprs(f: &mut naga::Function, map: &[Option<naga::Handle<naga::Function>>]) {
+    for (_h, expr) in f.expressions.iter_mut() {
+        if let naga::Expression::CallResult(function) = expr {
+            if let Some(new_h) = map[function.index()] {
+                *function = new_h;
+            }
+        }
+    }
+}
+
+/// Collect (deduplicated) old-index call targets reachable in `block`, recursing through nested blocks.
+fn collect_call_targets(block: &[naga::Statement], out: &mut Vec<usize>) {
+    use naga::Statement;
+    for stmt in block {
+        match stmt {
+            Statement::Call { function, .. } => {
+                let idx = function.index();
+                if !out.contains(&idx) {
+                    out.push(idx);
+                }
+            }
+            Statement::Block(b) => collect_call_targets(b, out),
+            Statement::If { accept, reject, .. } => {
+                collect_call_targets(accept, out);
+                collect_call_targets(reject, out);
+            }
+            Statement::Switch { cases, .. } => {
+                for c in cases {
+                    collect_call_targets(&c.body, out);
+                }
+            }
+            Statement::Loop { body, continuing, .. } => {
+                collect_call_targets(body, out);
+                collect_call_targets(continuing, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Rewrite every `Statement::Call` target in `block` through `map` (old index → new handle), recursing
+/// through nested blocks.
+fn remap_call_targets(block: &mut [naga::Statement], map: &[Option<naga::Handle<naga::Function>>]) {
+    use naga::Statement;
+    for stmt in block.iter_mut() {
+        match stmt {
+            Statement::Call { function, .. } => {
+                if let Some(new_h) = map[function.index()] {
+                    *function = new_h;
+                }
+            }
+            Statement::Block(b) => remap_call_targets(b, map),
+            Statement::If { accept, reject, .. } => {
+                remap_call_targets(accept, map);
+                remap_call_targets(reject, map);
+            }
+            Statement::Switch { cases, .. } => {
+                for c in cases.iter_mut() {
+                    remap_call_targets(&mut c.body, map);
+                }
+            }
+            Statement::Loop { body, continuing, .. } => {
+                remap_call_targets(body, map);
+                remap_call_targets(continuing, map);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn module_to_wgsl(module: &naga::Module) -> Result<String> {
@@ -537,6 +727,74 @@ void main() {
         assert!(fwgsl.contains("@binding(1)"), "texture must reflect at binding 1: {fwgsl}");
         assert!(fwgsl.contains("@binding(2)"), "sampler must reflect at binding 2: {fwgsl}");
         assert!(fwgsl.contains("textureSample"), "the helper's texture() lowered to a sample: {fwgsl}");
+    }
+
+    // A vertex program that reproduces the *structural* GskGpu constructs the live GTK4 source hit past the
+    // sampler/version gate: the `#if __VERSION__`-gated UBO binding, `gl_VertexID` hidden in the
+    // `GSK_VERTEX_INDEX` macro, the location-dropping `IN`/`PASS` macros, a returning `switch`, and — the
+    // two naga *module* passes — a forward-declared function called before its definition, and a
+    // value-returning `if/else if` helper with no final `else`.
+    const GSK_REAL_VERT: &str = r#"#version 320 es
+#define GSK_GLES 1
+void main_clip_none (void);
+precision highp float;
+#if __VERSION__ < 420 || (defined(GSK_GLES) && __VERSION__ < 310)
+layout(std140)
+#else
+layout(std140, binding = 0)
+#endif
+uniform PushConstants { mat4 mvp; } push;
+#define GSK_VERTEX_INDEX gl_VertexID
+#define IN(_loc) in
+#define PASS(_loc) out
+IN(0) vec4 in_rect;
+IN(1) vec4 in_color;
+PASS(0) vec2 _uv;
+int classify (uint op)
+{
+  switch (op)
+    {
+    case 0u:
+      return 1;
+    case 1u:
+    case 2u:
+      return 2;
+    default:
+      return 0;
+    }
+}
+vec4 pick (int op)
+{
+  if (op == 1)
+    return in_rect;
+  else if (op == 2)
+    return in_color;
+}
+void main_clip_none (void)
+{
+  int c = classify (uint (GSK_VERTEX_INDEX & 3));
+  _uv = pick (c).xy;
+  gl_Position = push.mvp * (in_rect + in_color);
+}
+void main ()
+{
+  main_clip_none ();
+}
+"#;
+
+    #[test]
+    fn gskgpu_real_structural_constructs_compile_through_glsl_to_wgsl() {
+        // FAIL-BEFORE: raw naga rejects the ES version / gl_VertexID outright.
+        assert!(naga_direct(GSK_REAL_VERT, naga::ShaderStage::Vertex).is_err(), "must fail raw naga");
+
+        // PASS-AFTER: the ES lowering + the two module passes (forward-decl reorder, bare-return default)
+        // produce a validated WGSL vertex program.
+        let wgsl = glsl_to_wgsl(GSK_REAL_VERT, naga::ShaderStage::Vertex, "vmain")
+            .expect("real GskGpu structural constructs must compile through the ES route");
+        assert!(wgsl.contains("vertex_index"), "gl_VertexID → vertex_index builtin: {wgsl}");
+        assert!(wgsl.contains("vmain"), "entry renamed: {wgsl}");
+        // The forward-declared `main_clip_none` and its callees resolved (no forward-dependency).
+        assert!(wgsl.contains("main_clip_none"), "forward-declared fn present: {wgsl}");
     }
 }
 

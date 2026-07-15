@@ -39,8 +39,13 @@
 const TEX_SUFFIX: &str = "_hltex";
 const SMP_SUFFIX: &str = "_hlsmp";
 
-/// The desktop GLSL version naga's `glsl-in` accepts (ES profiles are rejected).
-const DESKTOP_VERSION: &str = "#version 460\n";
+/// The desktop GLSL version naga's `glsl-in` accepts (ES profiles are rejected). We also seed
+/// `__VERSION__` as a preprocessor define: naga's preprocessor (pp_rs) starts with *no* built-in defines,
+/// so an unset `__VERSION__` evaluates to `0` inside `#if` expressions. GskGpu gates its `layout(binding)`
+/// on `#if __VERSION__ < 420 …` (binding present only on the `#else`/desktop branch), so without this the
+/// no-binding branch is taken and naga rejects the bindingless uniform block. Defining it to match the
+/// pinned `#version` makes every `__VERSION__` conditional resolve as the desktop 460 it now is.
+const DESKTOP_VERSION: &str = "#version 460\n#define __VERSION__ 460";
 
 /// GLSL-ES sampler types this bring-up splits, mapped to the naga-accepted `(texture type, sampler type)`
 /// pair. `samplerExternalOES` (ANGLE's YUV external image) is mapped to a plain 2D sampler for bring-up —
@@ -241,8 +246,227 @@ pub fn normalize(src: &str) -> String {
     }
     map_es_texture_builtins(&mut toks);
     recombine_sampler_uses(&mut toks, &sampler_names);
+    let toks = lower_switches(&toks);
 
     detok(&toks)
+}
+
+/// True if a token carries a significant (non-whitespace) spelling.
+fn is_significant(t: &Tok) -> bool {
+    !matches!(t, Tok::Ws(_))
+}
+
+/// One `case`/`default` group of a lowered switch: the label constant expressions it matches (empty for a
+/// pure `default`), whether it is the `default`, and its statement body as source text.
+struct SwitchGroup {
+    values: Vec<String>,
+    is_default: bool,
+    body: String,
+}
+
+/// A lowered switch and the token index just past its closing `}`.
+struct SwitchRewrite {
+    text: String,
+    end: usize,
+}
+
+/// Index of the `Punct(close)` matching the `Punct(open)` at `open_idx`, counting nesting; `toks.len()` if
+/// unbalanced. Only `Tok::Punct` participates — punctuation embedded inside a merged `Tok::Word` (e.g. the
+/// `sampler2D(a, b)` recombination) is opaque and always balanced, so it never disturbs the count.
+fn match_close(toks: &[Tok], open_idx: usize, open: char, close: char) -> usize {
+    let mut depth = 0i32;
+    for (i, t) in toks.iter().enumerate().skip(open_idx) {
+        if let Tok::Punct(c) = t {
+            if *c == open {
+                depth += 1;
+            } else if *c == close {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+        }
+    }
+    toks.len()
+}
+
+/// Index of the first top-level `:` (paren/brace depth 0) at or after `start`, ending a `case`/`default`
+/// label; `None` if absent.
+fn find_top_colon(toks: &[Tok], start: usize) -> Option<usize> {
+    let (mut p, mut b) = (0i32, 0i32);
+    for (i, t) in toks.iter().enumerate().skip(start) {
+        match t {
+            Tok::Punct('(') => p += 1,
+            Tok::Punct(')') => p -= 1,
+            Tok::Punct('{') => b += 1,
+            Tok::Punct('}') => b -= 1,
+            Tok::Punct(':') if p == 0 && b == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Lower every GLSL `switch` statement to an equivalent `if / else if / else` chain.
+///
+/// naga's `glsl-in` marks a `switch` case as `fall_through` unless it ends in a *literal* `break`: its
+/// case-terminator is recorded with `get_or_insert` (`front/glsl/parser/functions.rs`), so a case whose
+/// first terminator is a `return` — every GskGpu color-state / slice `switch` — stays fall-through, and
+/// `wgsl-out` then rejects the non-empty fall-through case (`back/wgsl/writer.rs`). GskGpu never falls
+/// through a *non-empty* case (each ends in `return`), so an if/else chain is semantically identical and
+/// sidesteps naga's switch modeling entirely. The selector is a side-effect-free expression (`cs`,
+/// `slice`, …), so it is repeated in each equality test rather than spilled to a temporary whose type we
+/// would have to infer. Stacked (empty) labels OR into the following case's condition; `default` (wherever
+/// it appears) becomes the trailing `else`. Nested switches are lowered first.
+fn lower_switches(toks: &[Tok]) -> Vec<Tok> {
+    let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
+    let mut i = 0;
+    while i < toks.len() {
+        if matches!(&toks[i], Tok::Word(w) if w == "switch") {
+            if let Some(rep) = try_lower_switch(toks, i) {
+                out.extend(tokenize(&rep.text));
+                i = rep.end;
+                continue;
+            }
+        }
+        out.push(toks[i].clone());
+        i += 1;
+    }
+    out
+}
+
+/// Attempt to lower the `switch` whose keyword is at `switch_idx`. Returns `None` (leaving the switch
+/// untouched) if the shape is not the expected `switch (SELECTOR) { … }`.
+fn try_lower_switch(toks: &[Tok], switch_idx: usize) -> Option<SwitchRewrite> {
+    let lp = next_significant(toks, switch_idx + 1)?;
+    if toks[lp] != Tok::Punct('(') {
+        return None;
+    }
+    let rp = match_close(toks, lp, '(', ')');
+    if rp >= toks.len() {
+        return None;
+    }
+    let lb = next_significant(toks, rp + 1)?;
+    if toks[lb] != Tok::Punct('{') {
+        return None;
+    }
+    let rb = match_close(toks, lb, '{', '}');
+    if rb >= toks.len() {
+        return None;
+    }
+
+    let selector = detok(&toks[lp + 1..rp]);
+    let selector = selector.trim();
+    // Lower any nested switches in the body before parsing this one, so inner `case`s are gone.
+    let body = lower_switches(&toks[lb + 1..rb]);
+    let groups = parse_switch_groups(&body)?;
+
+    let mut nondefault: Vec<&SwitchGroup> = Vec::new();
+    let mut default_body: Option<&str> = None;
+    for g in &groups {
+        if g.body.trim().is_empty() && !g.is_default {
+            continue; // a degenerate empty non-default group matches nothing meaningful
+        }
+        if g.is_default {
+            default_body = Some(g.body.as_str());
+        } else {
+            nondefault.push(g);
+        }
+    }
+
+    let mut text = String::from("{\n");
+    for (k, g) in nondefault.iter().enumerate() {
+        let cond = g
+            .values
+            .iter()
+            .map(|v| format!("(({selector}) == ({}))", v.trim()))
+            .collect::<Vec<_>>()
+            .join(" || ");
+        let kw = if k == 0 { "if" } else { "else if" };
+        text.push_str(&format!("{kw} ({cond}) {{\n{}\n}}\n", g.body));
+    }
+    if let Some(db) = default_body {
+        if nondefault.is_empty() {
+            text.push_str(&format!("{{\n{db}\n}}\n"));
+        } else {
+            text.push_str(&format!("else {{\n{db}\n}}\n"));
+        }
+    }
+    text.push_str("}\n");
+    Some(SwitchRewrite { text, end: rb + 1 })
+}
+
+/// Split a switch body's tokens into `case`/`default` groups, merging stacked (empty-body) labels into the
+/// following group. Returns `None` only if a label is missing its `:`.
+fn parse_switch_groups(body: &[Tok]) -> Option<Vec<SwitchGroup>> {
+    let mut groups: Vec<SwitchGroup> = Vec::new();
+    let mut cur_values: Vec<String> = Vec::new();
+    let mut cur_default = false;
+    let mut cur_body: Vec<Tok> = Vec::new();
+    let (mut paren, mut brace) = (0i32, 0i32);
+    let mut i = 0;
+    while i < body.len() {
+        let at_top = paren == 0 && brace == 0;
+        if at_top {
+            if let Tok::Word(w) = &body[i] {
+                if w == "case" || w == "default" {
+                    // A new label closes the previous group only once that group has a real body.
+                    if cur_body.iter().any(is_significant) {
+                        groups.push(SwitchGroup {
+                            values: std::mem::take(&mut cur_values),
+                            is_default: std::mem::take(&mut cur_default),
+                            body: strip_trailing_break(&cur_body),
+                        });
+                        cur_body.clear();
+                    }
+                    let colon = find_top_colon(body, i + 1)?;
+                    if w == "default" {
+                        cur_default = true;
+                    } else {
+                        cur_values.push(detok(&body[i + 1..colon]));
+                    }
+                    i = colon + 1;
+                    continue;
+                }
+            }
+        }
+        if let Tok::Punct(c) = &body[i] {
+            match c {
+                '(' => paren += 1,
+                ')' => paren -= 1,
+                '{' => brace += 1,
+                '}' => brace -= 1,
+                _ => {}
+            }
+        }
+        cur_body.push(body[i].clone());
+        i += 1;
+    }
+    if cur_default || !cur_values.is_empty() || cur_body.iter().any(is_significant) {
+        groups.push(SwitchGroup {
+            values: cur_values,
+            is_default: cur_default,
+            body: strip_trailing_break(&cur_body),
+        });
+    }
+    Some(groups)
+}
+
+/// Detokenize a case body, dropping a trailing `break;` (illegal inside the `if/else` the switch becomes,
+/// and redundant once the case is a branch).
+fn strip_trailing_break(body: &[Tok]) -> String {
+    let sig: Vec<usize> = (0..body.len()).filter(|&j| is_significant(&body[j])).collect();
+    if sig.len() >= 2 {
+        let last = sig[sig.len() - 1];
+        let prev = sig[sig.len() - 2];
+        if matches!(&body[last], Tok::Punct(';')) && matches!(&body[prev], Tok::Word(w) if w == "break")
+        {
+            let kept: Vec<Tok> =
+                body.iter().enumerate().filter(|(j, _)| *j != last && *j != prev).map(|(_, t)| t.clone()).collect();
+            return detok(&kept);
+        }
+    }
+    detok(body)
 }
 
 /// `#version … [es]` → `#version 460`; `gl_VertexID`/`gl_InstanceID` → the naga builtins; drop `precision
@@ -254,6 +478,14 @@ fn normalize_directives_and_precision(toks: &mut Vec<Tok>) {
         match &toks[i] {
             Tok::Pp(p) if p.trim_start().starts_with("#version") => {
                 out.push(Tok::Pp(DESKTOP_VERSION.trim_end().to_string()));
+            }
+            // Preprocessor lines are opaque tokens, but GskGpu hides the vertex-index builtin inside a
+            // `#define GSK_VERTEX_INDEX gl_VertexID` macro *body*: naga's preprocessor expands that macro at
+            // every use site, so the raw `gl_VertexID` would reach the parser and be rejected. Rewrite the
+            // builtins textually inside the directive so the expanded token is already the naga builtin.
+            Tok::Pp(p) => {
+                let rewritten = rewrite_io_macro_def(p).unwrap_or_else(|| rewrite_vertex_builtins(p));
+                out.push(Tok::Pp(rewritten));
             }
             // naga's `gl_VertexIndex`/`gl_InstanceIndex` builtins are `uint`, but the GLES `gl_VertexID`/
             // `gl_InstanceID` they replace are `int`; wrap in an `int(…)` cast so a `int id = gl_VertexID;`
@@ -280,6 +512,70 @@ fn normalize_directives_and_precision(toks: &mut Vec<Tok>) {
         i += 1;
     }
     *toks = out;
+}
+
+/// GskGpu declares vertex inputs and inter-stage varyings through the `IN(_loc)` / `PASS(_loc)` /
+/// `PASS_FLAT(_loc)` macros, whose bodies *drop* the location (`#define IN(_loc) in`) because the GL driver
+/// binds attributes by name. naga has no by-name binding: without an explicit `layout(location)` it assigns
+/// every bindingless `in`/`out` location 0, and validation fails with a `BindingCollision`. The macro's
+/// `_loc` argument *is* the intended location (and the same value is used for a varying in both stages, so
+/// they still match), so rewrite the macro *definition* to prepend `layout(location = _loc)` — every
+/// expansion then carries the explicit slot. Returns `None` for any preprocessor line that is not one of
+/// these definitions.
+fn rewrite_io_macro_def(pp: &str) -> Option<String> {
+    let rest = pp.trim_start().strip_prefix('#')?.trim_start().strip_prefix("define")?;
+    if !rest.starts_with(char::is_whitespace) {
+        return None; // `#defineX` — not a define directive
+    }
+    let rest = rest.trim_start();
+    let paren = rest.find('(')?;
+    let name = rest[..paren].trim();
+    if !matches!(name, "IN" | "PASS" | "PASS_FLAT") {
+        return None;
+    }
+    let after = &rest[paren + 1..];
+    let close = after.find(')')?;
+    let param = after[..close].trim();
+    if param.is_empty() {
+        return None;
+    }
+    let body = after[close + 1..].trim();
+    if !matches!(body, "in" | "out" | "flat in" | "flat out") {
+        return None;
+    }
+    Some(format!("#define {name}({param}) layout(location = {param}) {body}"))
+}
+
+/// Word-boundary rewrite of the ES vertex-index builtins to naga's, wrapped in an `int(…)` cast (the naga
+/// builtins are `uint`, the ES ones `int`). Used on preprocessor-line text where the builtin can hide in a
+/// macro body (`#define GSK_VERTEX_INDEX gl_VertexID`) that naga's preprocessor later expands.
+fn rewrite_vertex_builtins(s: &str) -> String {
+    let s = replace_ident(s, "gl_VertexID", "int(gl_VertexIndex)");
+    replace_ident(&s, "gl_InstanceID", "int(gl_InstanceIndex)")
+}
+
+/// Replace every whole-identifier occurrence of `from` with `to` (neither neighbor an identifier char), so
+/// `gl_VertexID` matches but `gl_VertexIDx` or a longer name containing it does not.
+fn replace_ident(s: &str, from: &str, to: &str) -> String {
+    let b = s.as_bytes();
+    let fb = from.as_bytes();
+    let is_ident = |c: u8| c == b'_' || c.is_ascii_alphanumeric();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i..].starts_with(fb) {
+            let prev_ok = i == 0 || !is_ident(b[i - 1]);
+            let next_ok = i + fb.len() >= b.len() || !is_ident(b[i + fb.len()]);
+            if prev_ok && next_ok {
+                out.push_str(to);
+                i += fb.len();
+                continue;
+            }
+        }
+        out.push(b[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// Rewrite every `uniform <samplerType> NAME;` global into a separate `texture`/`sampler` pair at
@@ -492,5 +788,49 @@ mod tests {
         assert!(out.contains("texture(sampler2D(tex_hltex, tex_hlsmp), p)"), "helper recombine: {out}");
         // pass split pair at the user-function call site
         assert!(out.contains("fetch(uTex_hltex, uTex_hlsmp, vec2(0.0))"), "call-site pair: {out}");
+    }
+
+    // --- The REAL GskGpu constructs (verbatim shapes from the GTK4 GskGpu source our shim forwards) -------
+
+    #[test]
+    fn seeds_version_define_so_gsk_ubo_binding_branch_wins() {
+        // GskGpu gates its UBO binding on `__VERSION__`, which naga's preprocessor leaves undefined (= 0),
+        // so the pinned `#version 460` alone would still pick the no-binding branch. We inject the define.
+        let out = normalize("#version 320 es\n#define GSK_GLES 1\nvoid main(){}\n");
+        assert!(out.contains("#version 460"), "version pinned: {out}");
+        assert!(out.contains("#define __VERSION__ 460"), "__VERSION__ seeded: {out}");
+        assert!(!out.contains("320 es"), "es version gone: {out}");
+    }
+
+    #[test]
+    fn rewrites_gl_vertexid_hidden_in_gsk_vertex_index_macro() {
+        // The exact GskGpu form: the builtin lives only inside the macro *body*.
+        let src = "#version 320 es\n#define GSK_VERTEX_INDEX gl_VertexID\nvoid main(){ int i = int(GSK_VERTEX_INDEX); }\n";
+        let out = normalize(src);
+        assert!(out.contains("#define GSK_VERTEX_INDEX int(gl_VertexIndex)"), "macro body rewritten: {out}");
+        assert!(!out.contains("gl_VertexID"), "no raw gl_VertexID survives: {out}");
+    }
+
+    #[test]
+    fn adds_explicit_location_to_gsk_io_macros() {
+        let src = "#version 320 es\n#define IN(_loc) in\n#define PASS(_loc) out\n#define PASS_FLAT(_loc) flat in\nvoid main(){}\n";
+        let out = normalize(src);
+        assert!(out.contains("#define IN(_loc) layout(location = _loc) in"), "IN: {out}");
+        assert!(out.contains("#define PASS(_loc) layout(location = _loc) out"), "PASS: {out}");
+        assert!(out.contains("#define PASS_FLAT(_loc) layout(location = _loc) flat in"), "PASS_FLAT: {out}");
+    }
+
+    #[test]
+    fn lowers_returning_switch_to_if_else_chain() {
+        // A GskGpu color-state style switch: returning cases, stacked labels, and a `default`.
+        let src = "#version 320 es\nint apply(uint cs){\n  switch (cs)\n    {\n    case 0u:\n      return 10;\n    case 1u:\n    case 2u:\n      return 20;\n    default:\n      return 0;\n    }\n}\nvoid main(){}\n";
+        let out = normalize(src);
+        assert!(!out.contains("switch"), "switch removed: {out}");
+        assert!(!out.contains("case "), "case labels removed: {out}");
+        assert!(out.contains("if ("), "if branch present: {out}");
+        assert!(out.contains("else if ("), "else-if branch present: {out}");
+        assert!(out.contains("else {"), "default became else: {out}");
+        // Stacked labels 1u/2u OR into one condition.
+        assert!(out.contains("== (1u)") && out.contains("== (2u)") && out.contains("||"), "stacked labels OR'd: {out}");
     }
 }
