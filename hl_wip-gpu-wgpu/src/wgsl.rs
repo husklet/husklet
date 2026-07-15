@@ -114,8 +114,54 @@ pub fn glsl_to_wgsl_reflect(
     // (`InvalidHandle(ForwardDependency)`). Reorder the parsed module's functions into call-graph
     // (callee-before-caller) order so every call points backward, as naga requires.
     reorder_functions_topologically(&mut module);
+    // Dual-source blending: `crate::glsl_es` dropped the `index=` layout qualifier naga can't parse and
+    // marked each `index>=1` fragment output with `BLEND_SRC1_SUFFIX`. Flip `second_blend_source` on those
+    // outputs (and strip the marker) so the two same-location outputs validate as the dual-source pair.
+    fix_dual_source_blend(&mut module);
     let reflected = crate::reflect::reflect(&module);
     Ok((module_to_wgsl(&module)?, reflected))
+}
+
+/// Turn each fragment-output struct member named `<name>_hlbsrc1` (the marker `crate::glsl_es` stamps on a
+/// `layout(location=L, index=1)` dual-source output) into a real `@second_blend_source` output: set the
+/// member's `Binding::Location { second_blend_source: true }` and restore its original name. naga's `glsl-in`
+/// gathers a fragment stage's multiple `out` variables into the entry point's result STRUCT (one
+/// `StructMember` per output, each carrying a `Location` binding), so the fix rewrites that struct type in
+/// place (`UniqueArena::replace`). Modules with no such marker are left untouched.
+fn fix_dual_source_blend(module: &mut naga::Module) {
+    use naga::{Binding, Type, TypeInner};
+    let suffix = crate::glsl_es::BLEND_SRC1_SUFFIX;
+    let result_tys: Vec<naga::Handle<Type>> = module
+        .entry_points
+        .iter()
+        .filter(|ep| ep.stage == naga::ShaderStage::Fragment)
+        .filter_map(|ep| ep.function.result.as_ref().map(|r| r.ty))
+        .collect();
+    for ty_handle in result_tys {
+        let rebuilt = {
+            let Ok(ty) = module.types.get_handle(ty_handle) else { continue };
+            let TypeInner::Struct { members, span } = &ty.inner else { continue };
+            let mut new_members = members.clone();
+            let mut changed = false;
+            for m in new_members.iter_mut() {
+                let Some(name) = m.name.clone() else { continue };
+                if let Some(stripped) = name.strip_suffix(suffix) {
+                    m.name = Some(stripped.to_string());
+                    if let Some(Binding::Location { second_blend_source, .. }) = &mut m.binding {
+                        *second_blend_source = true;
+                        changed = true;
+                    }
+                }
+            }
+            changed.then(|| Type {
+                name: ty.name.clone(),
+                inner: TypeInner::Struct { members: new_members, span: *span },
+            })
+        };
+        if let Some(new_ty) = rebuilt {
+            module.types.replace(ty_handle, new_ty);
+        }
+    }
 }
 
 /// Replace every bare `Return { value: None }` inside a value-returning function with a zero-value return

@@ -39,6 +39,12 @@
 const TEX_SUFFIX: &str = "_hltex";
 const SMP_SUFFIX: &str = "_hlsmp";
 
+/// Marker suffix stamped onto a `layout(location=L, index=1)` dual-source-blend output. naga's `glsl-in`
+/// cannot parse the `index=` qualifier (and hardcodes `second_blend_source: false`), so [`normalize`] drops
+/// the qualifier and renames the second-source output with this suffix; a module post-pass in `wgsl.rs`
+/// then flips `second_blend_source` on the matching fragment-output member and strips the suffix again.
+pub(crate) const BLEND_SRC1_SUFFIX: &str = "_hlbsrc1";
+
 /// The desktop GLSL version naga's `glsl-in` accepts (ES profiles are rejected). We also seed
 /// `__VERSION__` as a preprocessor define: naga's preprocessor (pp_rs) starts with *no* built-in defines,
 /// so an unset `__VERSION__` evaluates to `0` inside `#if` expressions. GskGpu gates its `layout(binding)`
@@ -62,6 +68,18 @@ fn split_sampler_ty(ty: &str) -> Option<(&'static str, &'static str)> {
 
 fn is_sampler_ty(ty: &str) -> bool {
     split_sampler_ty(ty).is_some()
+}
+
+/// The GLSL combining-constructor spelling that recombines a split `(texture, sampler)` pair back into the
+/// sampler value a texture built-in wants. It is the ORIGINAL combined sampler type — `sampler2D(t,s)`,
+/// `samplerCube(t,s)`, `sampler2DArray(t,s)`, `sampler2DShadow(t,s)` — NOT a hardcoded `sampler2D`, which
+/// naga rejects with `Unknown function 'sampler2D'` when the halves are cube/array/shadow typed.
+/// `samplerExternalOES` is sampled through the 2D path (single-plane RGBA), so it recombines as `sampler2D`.
+fn sampler_ctor(ty: &str) -> &str {
+    match ty {
+        "samplerExternalOES" => "sampler2D",
+        other => other,
+    }
 }
 
 /// GLSL texture built-ins: at a call to one of these, a sampler argument is recombined into a
@@ -240,15 +258,16 @@ pub fn normalize(src: &str, stage: naga::ShaderStage) -> String {
     let mut toks = tokenize(src);
 
     normalize_directives_and_precision(&mut toks);
+    normalize_dual_source(&mut toks);
     split_aggregate_io(&mut toks, stage);
-    let mut sampler_names = split_global_samplers(&mut toks);
+    let mut sampler_types = split_global_samplers(&mut toks);
     for p in split_param_samplers(&mut toks) {
-        if !sampler_names.contains(&p) {
-            sampler_names.push(p);
+        if !sampler_types.iter().any(|(n, _)| *n == p.0) {
+            sampler_types.push(p);
         }
     }
     map_es_texture_builtins(&mut toks);
-    recombine_sampler_uses(&mut toks, &sampler_names);
+    recombine_sampler_uses(&mut toks, &sampler_types);
     let toks = lower_switches(&toks);
 
     detok(&toks)
@@ -510,6 +529,17 @@ fn normalize_directives_and_precision(toks: &mut Vec<Tok>) {
                 }
                 // skip the ';' too (loop's i += 1 below advances past it)
             }
+            // `gl_PointSize = <expr>;` — WGSL has no point-size builtin and naga's `wgsl-out` errors on it
+            // (`Unsupported builtin PointSize`); wgpu rasterizes points at a fixed 1px regardless. Drop the
+            // whole assignment statement so the shader compiles (point size cannot be honored on this target,
+            // and stripping it is exactly what a GL→WGSL translator can do). Reads elsewhere are not emitted
+            // by ES vertex shaders, so a statement strip is sufficient.
+            Tok::Word(w) if w == "gl_PointSize" => {
+                while i < toks.len() && toks[i] != Tok::Punct(';') {
+                    i += 1;
+                }
+                // fall through: the outer `i += 1` skips the ';'
+            }
             other => out.push(other.clone()),
         }
         i += 1;
@@ -670,7 +700,18 @@ fn parse_io_decl(
         return None;
     }
     let tail = detok(&toks[rp + 1..e]);
-    let tail = tail.trim();
+    let (agg, name) = classify_io_tail(tail.trim(), aliases)?;
+    Some(IoDecl { macro_name, loc, agg, name, end: e + 1 })
+}
+
+/// Classify a `TYPE name [array]` interface tail (after alias expansion) into `(aggregate?, name)`. An
+/// aggregate is a `matCxR` (→ per-column vectors) or an array (→ per-element slots); a scalar/vector member
+/// returns `(None, name)` and is left untouched. Shared by the GskGpu macro path ([`parse_io_decl`]) and the
+/// raw `layout(location=N) in/out …` ANGLE path ([`parse_raw_io_decl`]).
+fn classify_io_tail(
+    tail: &str,
+    aliases: &std::collections::HashMap<String, String>,
+) -> Option<(Option<AggTy>, String)> {
     // Expand a leading single-word type alias (`RoundedRect` → `vec4[3]`).
     let expanded = {
         let first_end = tail.find(|c: char| !(c == '_' || c.is_ascii_alphanumeric())).unwrap_or(tail.len());
@@ -710,7 +751,177 @@ fn parse_io_decl(
     } else {
         count.map(|c| AggTy::Array { elem: base.clone(), count: c })
     };
-    Some(IoDecl { macro_name, loc, agg, name, end: e + 1 })
+    Some((agg, name))
+}
+
+/// Parse a RAW ANGLE-style interface declaration `layout(location = N[, …]) [flat] (in|out) TYPE name
+/// [array];` whose `layout` word is at `i`. This is the non-macro sibling of [`parse_io_decl`]: ANGLE
+/// emits explicit `layout(location=N) in mat4 aModel;` / `out vec4 v[3];` (a matrix attribute or an array
+/// varying) that naga rejects as a single located slot (`NotIOShareableType`), where GskGpu hid the same
+/// shapes behind `IN`/`PASS` macros. Returns `None` for a scalar/vector member, a `uniform`/sampler block
+/// (no `in`/`out`), a missing `location`, or a fragment `out` (a color target, never split). The direction
+/// is encoded as the SAME synthetic macro name `build_io_split` already interprets, so the split/bridge
+/// logic is shared verbatim.
+fn parse_raw_io_decl(
+    toks: &[Tok],
+    i: usize,
+    is_vertex: bool,
+    aliases: &std::collections::HashMap<String, String>,
+) -> Option<IoDecl> {
+    let lp = next_significant(toks, i + 1)?;
+    if toks[lp] != Tok::Punct('(') {
+        return None;
+    }
+    let rp = match_close(toks, lp, '(', ')');
+    if rp >= toks.len() {
+        return None;
+    }
+    let loc = parse_location_qualifier(&detok(&toks[lp + 1..rp]))?;
+    // After `)`: an optional `flat` interpolation qualifier, then the `in`/`out` storage qualifier.
+    let mut j = next_significant(toks, rp + 1)?;
+    let flat = matches!(&toks[j], Tok::Word(w) if w == "flat");
+    if flat {
+        j = next_significant(toks, j + 1)?;
+    }
+    let kw = match &toks[j] {
+        Tok::Word(w) if w == "in" || w == "out" => w.clone(),
+        _ => return None, // `uniform`, `buffer`, a type — not an interface in/out decl
+    };
+    // A fragment `out` is a color attachment (vec4), never an aggregate we split.
+    if !is_vertex && kw == "out" {
+        return None;
+    }
+    let mut e = j + 1;
+    while e < toks.len() && toks[e] != Tok::Punct(';') {
+        e += 1;
+    }
+    if e >= toks.len() {
+        return None;
+    }
+    let tail = detok(&toks[j + 1..e]);
+    let (agg, name) = classify_io_tail(tail.trim(), aliases)?;
+    // Map direction to the synthetic macro name `build_io_split` understands: a vertex input is an
+    // attribute (`IN`); every other direction is a varying (`PASS`/`PASS_FLAT`), whose in/out sense
+    // `build_io_split` derives from the stage.
+    let macro_name = if is_vertex && kw == "in" {
+        "IN"
+    } else if flat {
+        "PASS_FLAT"
+    } else {
+        "PASS"
+    };
+    Some(IoDecl { macro_name: macro_name.to_string(), loc, agg, name, end: e + 1 })
+}
+
+/// Rewrite dual-source-blend fragment outputs (`layout(location = L, index = X) out vec4 name;`) into a form
+/// naga's `glsl-in` can parse. naga rejects the `index=` layout qualifier outright ("Unexpected qualifier")
+/// and always emits `second_blend_source: false`, yet its IR and `wgsl-out` DO model dual-source blending
+/// (`@second_blend_source`). So: strip the `index=` qualifier from every such `layout(...)`, and rename each
+/// `index >= 1` output (declaration AND uses) with [`BLEND_SRC1_SUFFIX`]. Both sources then carry the same
+/// `location = L`; the module post-pass [`crate::wgsl::fix_dual_source_blend`] flips `second_blend_source` on
+/// the suffixed fragment-output member before validation, so the two same-location outputs are the legal
+/// dual-source pair rather than a binding collision.
+fn normalize_dual_source(toks: &mut Vec<Tok>) {
+    let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
+    let mut second_src_names: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        if matches!(&toks[i], Tok::Word(w) if w == "layout") {
+            if let Some(lp) = next_significant(toks, i + 1) {
+                if toks[lp] == Tok::Punct('(') {
+                    let rp = match_close(toks, lp, '(', ')');
+                    if rp < toks.len() {
+                        if let Some((loc, idx)) = parse_index_qualifier(&detok(&toks[lp + 1..rp])) {
+                            // Rewrite the whole `layout(...)` group to keep only the location.
+                            out.extend(tokenize(&format!("layout(location = {loc})")));
+                            if idx >= 1 {
+                                if let Some(name) = output_var_name(toks, rp) {
+                                    second_src_names.push(name);
+                                }
+                            }
+                            i = rp + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        out.push(toks[i].clone());
+        i += 1;
+    }
+    if second_src_names.is_empty() {
+        *toks = out;
+        return;
+    }
+    // Rename each index>=1 output (declaration + every use) so the module pass can find it by name.
+    let mut src = detok(&out);
+    for n in &second_src_names {
+        src = replace_ident(&src, n, &format!("{n}{BLEND_SRC1_SUFFIX}"));
+    }
+    *toks = tokenize(&src);
+}
+
+/// Parse a layout-qualifier list's text for a dual-source output. Returns `Some((location, index))` only
+/// when an `index` qualifier is present (`location` defaults to `"0"` if omitted); `None` otherwise.
+fn parse_index_qualifier(quals: &str) -> Option<(String, u32)> {
+    let toks = tokenize(quals);
+    let mut loc: Option<String> = None;
+    let mut idx: Option<u32> = None;
+    for (k, t) in toks.iter().enumerate() {
+        if let Tok::Word(w) = t {
+            if (w == "location" || w == "index") && next_significant(&toks, k + 1).map(|e| toks[e] == Tok::Punct('=')) == Some(true) {
+                let eq = next_significant(&toks, k + 1).unwrap();
+                if let Some(v) = next_significant(&toks, eq + 1) {
+                    if let Tok::Word(n) = &toks[v] {
+                        if w == "location" {
+                            loc = Some(n.clone());
+                        } else {
+                            idx = n.parse::<u32>().ok();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    idx.map(|x| (loc.unwrap_or_else(|| "0".to_string()), x))
+}
+
+/// The identifier name of the `out` variable declared just after a `layout(...)` group whose `)` is at
+/// `rp`: `) [flat|centroid|smooth]* out TYPE NAME`. `None` if the following tokens are not an `out` decl.
+fn output_var_name(toks: &[Tok], rp: usize) -> Option<String> {
+    let mut j = next_significant(toks, rp + 1)?;
+    while matches!(&toks[j], Tok::Word(w) if matches!(w.as_str(), "flat" | "centroid" | "smooth" | "noperspective")) {
+        j = next_significant(toks, j + 1)?;
+    }
+    if !matches!(&toks[j], Tok::Word(w) if w == "out") {
+        return None;
+    }
+    let ty = next_significant(toks, j + 1)?; // TYPE word
+    let name = next_significant(toks, ty + 1)?; // NAME word
+    match &toks[name] {
+        Tok::Word(n) => Some(n.clone()),
+        _ => None,
+    }
+}
+
+/// Extract the `location = N` value from a layout-qualifier list's text (`"location = 3"`,
+/// `"std140, binding = 0"`, `"location = 0, index = 1"`). `None` if no `location` qualifier is present.
+fn parse_location_qualifier(quals: &str) -> Option<String> {
+    let toks = tokenize(quals);
+    for (k, t) in toks.iter().enumerate() {
+        if matches!(t, Tok::Word(w) if w == "location") {
+            let eq = next_significant(&toks, k + 1)?;
+            if toks[eq] == Tok::Punct('=') {
+                let v = next_significant(&toks, eq + 1)?;
+                if let Tok::Word(n) = &toks[v] {
+                    if n.parse::<i64>().is_ok() {
+                        return Some(n.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Split every matrix/array GskGpu interface declaration into per-location vector slots + a private global,
@@ -728,6 +939,16 @@ fn split_aggregate_io(toks: &mut Vec<Tok>, stage: naga::ShaderStage) {
             if let Some(decl) = parse_io_decl(toks, i, &aliases) {
                 if let Some(rep) = build_io_split(&decl, is_vertex, &mut recon, &mut scatter) {
                     // Drop the original declaration; its replacement is hoisted to the top of the file.
+                    hoist.push(rep);
+                    i = decl.end;
+                    continue;
+                }
+            }
+        }
+        // The raw ANGLE form: a `layout(location = N) [flat] in/out <matrix|array> name;` interface member.
+        if matches!(&toks[i], Tok::Word(w) if w == "layout") {
+            if let Some(decl) = parse_raw_io_decl(toks, i, is_vertex, &aliases) {
+                if let Some(rep) = build_io_split(&decl, is_vertex, &mut recon, &mut scatter) {
                     hoist.push(rep);
                     i = decl.end;
                     continue;
@@ -883,17 +1104,18 @@ fn replace_ident(s: &str, from: &str, to: &str) -> String {
 
 /// Rewrite every `uniform <samplerType> NAME;` global into a separate `texture`/`sampler` pair at
 /// coordinated bindings (uniform block reserved at 0; sampler `k` → texture `1+2k`, sampler `2+2k`),
-/// returning the sampler names in declaration order.
-fn split_global_samplers(toks: &mut Vec<Tok>) -> Vec<String> {
+/// returning `(name, original sampler type)` in declaration order so [`recombine_sampler_uses`] can pick
+/// the matching combining constructor for cube/array/shadow samplers.
+fn split_global_samplers(toks: &mut Vec<Tok>) -> Vec<(String, String)> {
     let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
-    let mut names: Vec<String> = Vec::new();
+    let mut names: Vec<(String, String)> = Vec::new();
     let mut i = 0;
     while i < toks.len() {
         if matches!(&toks[i], Tok::Word(w) if w == "uniform") {
             // Look ahead: uniform <ws> <samplerType> <ws> NAME <ws?> [ [ .. ] ] ;
             if let Some(ty_idx) = next_significant(toks, i + 1) {
-                if let Tok::Word(ty) = &toks[ty_idx] {
-                    if let Some((tex_ty, smp_ty)) = split_sampler_ty(ty) {
+                if let Tok::Word(ty) = toks[ty_idx].clone() {
+                    if let Some((tex_ty, smp_ty)) = split_sampler_ty(&ty) {
                         if let Some(name_idx) = next_significant(toks, ty_idx + 1) {
                             if let Tok::Word(name) = toks[name_idx].clone() {
                                 // find the terminating ';'
@@ -907,7 +1129,7 @@ fn split_global_samplers(toks: &mut Vec<Tok>) -> Vec<String> {
                                     out.push(Tok::Pp(format!(
                                         "layout(binding = {tex_b}) uniform {tex_ty} {name}{TEX_SUFFIX};\nlayout(binding = {smp_b}) uniform {smp_ty} {name}{SMP_SUFFIX};"
                                     )));
-                                    names.push(name);
+                                    names.push((name, ty));
                                     i = j + 1; // resume after ';'
                                     continue;
                                 }
@@ -929,17 +1151,17 @@ fn split_global_samplers(toks: &mut Vec<Tok>) -> Vec<String> {
 /// [`split_global_samplers`] has consumed the `uniform …` globals, so any remaining sampler-typed word is
 /// a parameter (GLSL-ES has no local sampler variables and the `sampler2D(…)` constructor is not emitted
 /// yet).
-fn split_param_samplers(toks: &mut Vec<Tok>) -> Vec<String> {
+fn split_param_samplers(toks: &mut Vec<Tok>) -> Vec<(String, String)> {
     let mut out: Vec<Tok> = Vec::with_capacity(toks.len());
-    let mut names: Vec<String> = Vec::new();
+    let mut names: Vec<(String, String)> = Vec::new();
     let mut i = 0;
     while i < toks.len() {
-        if let Tok::Word(ty) = &toks[i] {
-            if let Some((tex_ty, smp_ty)) = split_sampler_ty(ty) {
+        if let Tok::Word(ty) = toks[i].clone() {
+            if let Some((tex_ty, smp_ty)) = split_sampler_ty(&ty) {
                 if let Some(name_idx) = next_significant(toks, i + 1) {
                     if let Tok::Word(name) = &toks[name_idx].clone() {
                         out.push(Tok::Word(format!("{tex_ty} {name}{TEX_SUFFIX}, {smp_ty} {name}{SMP_SUFFIX}")));
-                        names.push(name.clone());
+                        names.push((name.clone(), ty));
                         i = name_idx + 1;
                         continue;
                     }
@@ -977,7 +1199,7 @@ fn map_es_texture_builtins(toks: &mut [Tok]) {
 /// Replace each *use* of a split sampler name with either the recombined `sampler2D(NAME_hltex,
 /// NAME_hlsmp)` expression (inside a texture built-in call) or the two split arguments `NAME_hltex,
 /// NAME_hlsmp` (inside a user-function call), tracking the enclosing call while scanning.
-fn recombine_sampler_uses(toks: &mut Vec<Tok>, sampler_names: &[String]) {
+fn recombine_sampler_uses(toks: &mut Vec<Tok>, sampler_types: &[(String, String)]) {
     // Enclosing-call stack: each `(` pushes whether its call is a texture built-in (`Some(true)`), a user
     // call (`Some(false)`), or a grouping/keyword paren (`None`).
     let mut stack: Vec<Option<bool>> = Vec::new();
@@ -1001,11 +1223,14 @@ fn recombine_sampler_uses(toks: &mut Vec<Tok>, sampler_names: &[String]) {
                 out.push(toks[k].clone());
                 last_word = None;
             }
-            Tok::Word(w) if sampler_names.iter().any(|s| s == w) => {
+            Tok::Word(w) if sampler_types.iter().any(|(n, _)| n == w) => {
                 // A sampler value use. Nearest enclosing CALL determines the expansion.
                 let builtin = stack.iter().rev().find_map(|c| *c).unwrap_or(true);
                 let expansion = if builtin {
-                    format!("sampler2D({w}{TEX_SUFFIX}, {w}{SMP_SUFFIX})")
+                    // Recombine with the ORIGINAL sampler type's constructor (samplerCube/2DArray/2DShadow),
+                    // not a blanket `sampler2D`, so the `(texture, sampler)` halves type-check in naga.
+                    let ty = sampler_types.iter().find(|(n, _)| n == w).map(|(_, t)| t.as_str()).unwrap_or("sampler2D");
+                    format!("{}({w}{TEX_SUFFIX}, {w}{SMP_SUFFIX})", sampler_ctor(ty))
                 } else {
                     format!("{w}{TEX_SUFFIX}, {w}{SMP_SUFFIX}")
                 };

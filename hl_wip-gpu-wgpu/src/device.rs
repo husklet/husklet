@@ -94,7 +94,15 @@ pub fn acquire(cfg: &DeviceConfig) -> Result<Gpu> {
     // which the guest sees as a lost device. Requesting the feature only when advertised keeps this truthful
     // on backends that lack it. `adapter.limits()` already carries the adapter's real `max_push_constant_size`,
     // which the feature requires to be nonzero.
-    let required_features = adapter.features() & wgpu::Features::PUSH_CONSTANTS;
+    //
+    // DUAL_SOURCE_BLENDING is enabled on the same truthful terms: ANGLE (Chrome, via
+    // `EXT_blend_func_extended`) forwards GLSL-ES fragment shaders with a second blend source
+    // (`layout(location=0, index=1) out`), which `crate::glsl_es` + `crate::wgsl::fix_dual_source_blend`
+    // lower to a `@second_blend_source` WGSL output. naga's validator only enables the
+    // `DUAL_SOURCE_BLENDING` capability when the device requested the feature, so a shader module using it
+    // is rejected otherwise. Requesting it only when the adapter advertises it keeps the capability honest.
+    let required_features =
+        adapter.features() & (wgpu::Features::PUSH_CONSTANTS | wgpu::Features::DUAL_SOURCE_BLENDING);
 
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
