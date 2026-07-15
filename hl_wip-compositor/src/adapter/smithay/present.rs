@@ -84,6 +84,23 @@ pub struct Observations {
     /// 3 game) last read from the surface's COMMITTED `ContentTypeSurfaceCachedState`. Re-read every commit,
     /// so a test sees the exact hint the client set (and its reversion to `none`).
     pub content_type: BTreeMap<u32, u32>,
+    /// Whether a client-initiated `wl_data_device` drag-and-drop grab is currently active — set true by
+    /// [`ClientDndGrabHandler::started`](super::state::HlState) when a client's `start_drag` is honoured
+    /// (its implicit pointer grab is replaced by Smithay's DnD grab), cleared on the drop. There is no
+    /// client-visible "the drag started" event on the SOURCE side beyond the grab itself, so a DnD test
+    /// reads this to know WHEN the grab is live and it may inject the drag pointer motion that carries the
+    /// offer to a target. See the `drag_and_drop` demo.
+    pub dnd_active: bool,
+    /// Set true once a client-initiated DnD grab reached its drop (the user released the last button) —
+    /// written by [`ClientDndGrabHandler::dropped`](super::state::HlState). Distinct from `dnd_active`
+    /// (which the same event clears): `dnd_dropped` latches so a test can assert the drop happened even
+    /// after the grab is gone.
+    pub dnd_dropped: bool,
+    /// Whether the drop that ended the DnD was NEGOTIATED (the target accepted a mime and a non-empty
+    /// action was chosen) — the `validated` flag Smithay passes to `dropped`. A validated drop is the one
+    /// that delivers `wl_data_device.drop` to the target (an un-negotiated release cancels instead), so a
+    /// test asserts this is `true` for a completed transfer.
+    pub dnd_drop_validated: bool,
 }
 
 /// A headless [`Presenter`] that captures composed frames (and optionally writes PNGs).

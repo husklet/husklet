@@ -64,6 +64,10 @@ use smithay::wayland::{
         PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
     },
     shm::{with_buffer_contents, ShmHandler, ShmState},
+    text_input::{TextInputManagerState, TextInputSeat},
+    input_method::{
+        InputMethodHandler, InputMethodManagerState, PopupSurface as ImePopupSurface,
+    },
     viewporter::{ViewportCachedState, ViewporterState},
 };
 
@@ -218,6 +222,23 @@ pub struct HlState {
     /// (`preferred_scale`, sent as scale×120) so it can render crisply on HiDPI without integer-only
     /// `wl_surface.set_buffer_scale`. Held for the state's lifetime so the global keeps advertising.
     _fractional_scale: FractionalScaleManagerState,
+    /// Owns the `zwp_text_input_manager_v3` global (on-screen keyboard / IME text entry). A client
+    /// (GTK/Qt/Chrome) binds it, calls `get_text_input(seat)`, `enable`s text input on its focused surface,
+    /// and then receives `preedit_string` (composing text) + `commit_string` (+ `delete_surrounding_text`)
+    /// from the compositor's input method, applied on each `done`. Smithay routes text-input entirely
+    /// through an input method (`zwp_input_method_v2`): a text-input request is only honoured, and `enter`
+    /// only sent, while an input method instance exists — which is why the manager below is also advertised.
+    /// The host IME seam ([`InputCommand::ImeCommitString`] etc.) delivers the events on the focused
+    /// text-input; Smithay stamps the correct `done` serial. Held for the state's lifetime.
+    _text_input: TextInputManagerState,
+    /// Owns the `zwp_input_method_manager_v2` global (the INPUT-METHOD side of text entry — what an IME
+    /// backend like ibus/fcitx binds). Advertised because Smithay gates all `zwp_text_input_v3` delivery on
+    /// an input method instance existing on the seat (`TextInputHandle` only sends `enter` and only routes
+    /// commit/preedit while `input_method.has_instance()`). A headless IME "backend" client binds this and
+    /// calls `get_input_method(seat)` so `has_instance()` is true; the compositor then sends the real
+    /// text-input events (driven by the host seam) with Smithay's own serial tracking. Held for the state's
+    /// lifetime. See the `text_input_ime` demo.
+    _input_method: InputMethodManagerState,
     /// Backs the `delegate_xdg_shell` `SeatHandler` bound (popup grabs reference a seat) AND owns the
     /// `wl_seat` capabilities the toolkits enumerate for input.
     pub seat_state: SeatState<HlState>,
@@ -337,6 +358,13 @@ impl HlState {
         // render scale — the surface-semantics globals a modern toolkit probes at startup.
         let viewporter = ViewporterState::new::<HlState>(dh);
         let fractional_scale = FractionalScaleManagerState::new::<HlState>(dh);
+        // Advertise `zwp_text_input_manager_v3` (client text-input / IME) + `zwp_input_method_manager_v2`
+        // (the input-method backend side). Both are required for real text entry: Smithay only delivers
+        // text-input events while an input method instance exists on the seat, so GTK/Chrome text-input +
+        // an IME backend are both first-class. The `|_| true` filter lets any client bind the input-method
+        // manager (headless there is no trust boundary to enforce).
+        let text_input = TextInputManagerState::new::<HlState>(dh);
+        let input_method = InputMethodManagerState::new::<HlState, _>(dh, |_client| true);
         let mut seat_state = SeatState::new();
 
         let mut engine = Compositor::new(presenter, MonotonicClock::new());
@@ -372,7 +400,7 @@ impl HlState {
 
         hl_info!(
             tag::WAYLAND,
-            "globals bound: compositor shm xdg seat output data_device primary_selection relative_pointer pointer_constraints presentation xdg_activation idle_inhibit content_type"
+            "globals bound: compositor shm xdg seat output data_device primary_selection relative_pointer pointer_constraints presentation xdg_activation idle_inhibit content_type text_input input_method"
         );
         HlState {
             display: dh.clone(),
@@ -382,6 +410,8 @@ impl HlState {
             xdg_decoration,
             data_device,
             primary_selection,
+            _text_input: text_input,
+            _input_method: input_method,
             _xdg_activation: xdg_activation,
             _idle_inhibit: idle_inhibit,
             _content_type: content_type,
@@ -1025,9 +1055,18 @@ impl HlState {
 /// [`super::serve::run_auto_with_input`]) or applied directly via [`HlState::apply_input`]. Keyboard
 /// focus is expressed by intent (`FocusTopmostKeyboard`) rather than a surface id, because a remote
 /// driver across the serve-thread boundary has no handle to the neutral [`SurfaceId`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum InputCommand {
     /// Move the pointer to root-local logical `(x, y)`; re-hit-tests focus and emits enter/leave/motion.
+    ///
+    /// This is ALSO the seam that drives a `wl_data_device` drag-and-drop: once a source client's
+    /// `start_drag` is honoured (in response to a [`Self::PointerButton`] press, whose serial anchors the
+    /// implicit grab), Smithay replaces the pointer's grab with its DnD grab, and every subsequent
+    /// `PointerMotion` routes through it — carrying the drag over whatever surface the point hit-tests to
+    /// (`wl_data_device.enter`/`motion`, or `leave` on moving off). A [`Self::PointerButton`] release then
+    /// performs the drop. So no bespoke drag command is needed: the ordinary pointer seam IS the drag
+    /// pointer path (watch [`Observations::dnd_active`](super::present::Observations) to know the grab is
+    /// live). See the `drag_and_drop` demo.
     PointerMotion { x: f64, y: f64 },
     /// Press/release a pointer button (Linux `input-event-codes`, e.g. `0x110` = BTN_LEFT).
     PointerButton { button: u32, pressed: bool },
@@ -1059,6 +1098,25 @@ pub enum InputCommand {
     FocusToplevelIndex(usize),
     /// Clear keyboard focus (emits `wl_keyboard.leave` to the previously focused surface).
     ClearKeyboardFocus,
+    /// Deliver an IME `commit_string` to the focused, enabled `zwp_text_input_v3` — the committed text the
+    /// client inserts at its cursor (what an input method produces when a composition is accepted, e.g.
+    /// typing "hello"). Wrapped in a `done` so the client applies it immediately. A no-op if no text-input
+    /// is focused+active. The host IME seam, mirroring [`Self::Key`] for composed text.
+    ImeCommitString(String),
+    /// Deliver an IME `preedit_string` to the focused, enabled `zwp_text_input_v3` — the COMPOSING
+    /// (pre-edit / underlined) text, with `cursor_begin`/`cursor_end` byte offsets into it. Wrapped in a
+    /// `done`. This is the transient text shown before a commit; a following [`Self::ImeCommitString`]
+    /// (with an empty preedit) replaces it.
+    ImePreeditString { text: String, cursor_begin: i32, cursor_end: i32 },
+    /// Deliver an IME `delete_surrounding_text` to the focused, enabled `zwp_text_input_v3` — delete
+    /// `before_length` bytes before and `after_length` bytes after the cursor (what an IME does when a
+    /// composition rewrites already-committed text). Wrapped in a `done`.
+    ImeDeleteSurrounding { before_length: u32, after_length: u32 },
+    /// Ask the topmost mapped toplevel to close (`xdg_toplevel.close`) — the compositor-initiated close
+    /// request (e.g. a window-manager close button / `wm_close`). The client receives the event and
+    /// typically tears the toplevel down; the compositor sends only the request (a `close` carries no
+    /// reply). A no-op if no toplevel is mapped.
+    CloseTopmostToplevel,
 }
 
 impl HlState {
@@ -1082,6 +1140,14 @@ impl HlState {
                 self.set_keyboard_focus(target);
             }
             InputCommand::ClearKeyboardFocus => self.set_keyboard_focus(None),
+            InputCommand::ImeCommitString(text) => self.inject_ime_commit_string(text),
+            InputCommand::ImePreeditString { text, cursor_begin, cursor_end } => {
+                self.inject_ime_preedit_string(text, cursor_begin, cursor_end)
+            }
+            InputCommand::ImeDeleteSurrounding { before_length, after_length } => {
+                self.inject_ime_delete_surrounding(before_length, after_length)
+            }
+            InputCommand::CloseTopmostToplevel => self.close_topmost_toplevel(),
         }
     }
 
@@ -1328,6 +1394,61 @@ impl HlState {
             |_, _, _| FilterResult::Forward,
         );
     }
+
+    /// Deliver an IME `commit_string` (+ `done`) to the focused, enabled `zwp_text_input_v3` — the host
+    /// text-entry seam, mirroring [`Self::inject_key`] but for composed text. Smithay routes text-input
+    /// through the seat's [`TextInputHandle`](smithay::wayland::text_input); `with_active_text_input` targets
+    /// the text-input instance the focused client ENABLED (which requires an input method instance to exist,
+    /// hence the advertised `zwp_input_method_manager_v2`), and `done(false)` stamps the correct serial (the
+    /// client's own commit count, tracked by Smithay) so the client applies the change. A no-op if no
+    /// text-input is focused+active.
+    pub fn inject_ime_commit_string(&mut self, text: String) {
+        hl_debug!(tag::WAYLAND, "input ime commit {:?}", text);
+        let ti = self.seat.text_input();
+        ti.with_active_text_input(|obj, _surface| obj.commit_string(Some(text.clone())));
+        ti.done(false);
+    }
+
+    /// Deliver an IME `preedit_string` (composing text, with byte-offset cursor) + `done` to the focused,
+    /// enabled `zwp_text_input_v3`. See [`Self::inject_ime_commit_string`] for the routing; the preedit is
+    /// transient text the client shows before a commit replaces it.
+    pub fn inject_ime_preedit_string(&mut self, text: String, cursor_begin: i32, cursor_end: i32) {
+        hl_debug!(tag::WAYLAND, "input ime preedit {:?} [{},{}]", text, cursor_begin, cursor_end);
+        let ti = self.seat.text_input();
+        ti.with_active_text_input(|obj, _surface| {
+            obj.preedit_string(Some(text.clone()), cursor_begin, cursor_end)
+        });
+        ti.done(false);
+    }
+
+    /// Deliver an IME `delete_surrounding_text` (+ `done`) to the focused, enabled `zwp_text_input_v3` —
+    /// delete `before`/`after` bytes around the cursor. See [`Self::inject_ime_commit_string`] for routing.
+    pub fn inject_ime_delete_surrounding(&mut self, before: u32, after: u32) {
+        hl_debug!(tag::WAYLAND, "input ime delete_surrounding before={} after={}", before, after);
+        let ti = self.seat.text_input();
+        ti.with_active_text_input(|obj, _surface| obj.delete_surrounding_text(before, after));
+        ti.done(false);
+    }
+
+    /// Ask the topmost mapped toplevel to close (`xdg_toplevel.close`). The compositor-initiated close
+    /// request a window-manager close affordance sends: the client receives `close` and typically destroys
+    /// the toplevel (there is no reply event, so nothing is acked). A no-op if no toplevel is mapped or its
+    /// Smithay `ToplevelSurface` is no longer live. Resolves the concrete [`ToplevelSurface`] by matching the
+    /// topmost neutral surface's `wl_surface` against the shell's live toplevels (which own `send_close`).
+    pub fn close_topmost_toplevel(&mut self) {
+        let Some(sid) = self.topmost_toplevel() else { return };
+        let Some(wl) = self.surfaces_by_id.get(&sid).cloned() else { return };
+        let toplevel = self
+            .xdg_shell
+            .toplevel_surfaces()
+            .iter()
+            .find(|t| t.wl_surface() == &wl)
+            .cloned();
+        if let Some(toplevel) = toplevel {
+            hl_debug!(tag::WAYLAND, "toplevel close surf={}", sid.0);
+            toplevel.send_close();
+        }
+    }
 }
 
 // ------------------------------------- protocol handlers -------------------------------------
@@ -1404,9 +1525,37 @@ impl SelectionHandler for HlState {
     type SelectionUserData = ();
 }
 
-/// A client-initiated drag-and-drop grab (a client dragging one of its surfaces). No compositor-side DnD
-/// policy headless — accept the defaults; the client manages its own data transfer.
-impl ClientDndGrabHandler for HlState {}
+/// A client-initiated drag-and-drop grab (a client dragging one of its surfaces). The neutral headless
+/// compositor applies no DnD policy of its own — the client manages the data transfer — but the two grab
+/// lifecycle callbacks are recorded into the shared [`Observations`] so a test can observe the SOURCE side
+/// of the drag (which emits no client-visible wire event beyond the grab itself): `started` fires when a
+/// `start_drag` is honoured (Smithay has replaced the implicit pointer grab with its DnD grab, so the drag
+/// pointer path is now live and a test may inject the motion that carries the offer to a target), and
+/// `dropped` fires when the user releases the last button, carrying whether the drop was NEGOTIATED
+/// (`validated` — the target accepted a mime + a non-empty action, so `wl_data_device.drop` was delivered).
+/// See the `drag_and_drop` demo.
+impl ClientDndGrabHandler for HlState {
+    fn started(
+        &mut self,
+        _source: Option<smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource>,
+        _icon: Option<WlSurface>,
+        _seat: Seat<HlState>,
+    ) {
+        hl_debug!(tag::WAYLAND, "dnd started");
+        let mut o = self.observations.lock().unwrap();
+        o.dnd_active = true;
+        o.dnd_dropped = false;
+        o.dnd_drop_validated = false;
+    }
+
+    fn dropped(&mut self, _target: Option<WlSurface>, validated: bool, _seat: Seat<HlState>) {
+        hl_debug!(tag::WAYLAND, "dnd dropped validated={}", validated);
+        let mut o = self.observations.lock().unwrap();
+        o.dnd_active = false;
+        o.dnd_dropped = true;
+        o.dnd_drop_validated = validated;
+    }
+}
 
 /// A server-initiated drag-and-drop grab (the compositor starting a DnD). Never initiated headless, so
 /// the default (empty) handler is correct.
@@ -1773,6 +1922,22 @@ impl IdleInhibitHandler for HlState {
     }
 }
 
+/// Compositor-side hooks for `zwp_input_method_v2` popups (the candidate-list window an IME draws near the
+/// cursor). Headless there is no on-screen IME popup surface to place or composite — the text-input round
+/// trip a test drives (preedit/commit) needs no popup — so `parent_geometry` reports a zero rectangle and
+/// the popup lifecycle callbacks are honest no-ops. The text-input DELIVERY path (enter + commit/preedit +
+/// done) does not depend on any of these; they exist only so `delegate_input_method_manager!` can bind.
+impl InputMethodHandler for HlState {
+    fn new_popup(&mut self, _surface: ImePopupSurface) {}
+    fn dismiss_popup(&mut self, _surface: ImePopupSurface) {}
+    fn popup_repositioned(&mut self, _surface: ImePopupSurface) {}
+    fn parent_geometry(&self, _parent: &WlSurface) -> Rectangle<i32, Logical> {
+        Rectangle::default()
+    }
+}
+
+smithay::delegate_text_input_manager!(HlState);
+smithay::delegate_input_method_manager!(HlState);
 smithay::delegate_compositor!(HlState);
 smithay::delegate_shm!(HlState);
 smithay::delegate_xdg_shell!(HlState);

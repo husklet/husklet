@@ -70,6 +70,11 @@ wayland-client = "0.31"
 # with `client`). `staging` unlocks the STAGING client bindings the batch-7 demos drive: `xdg_activation_v1`,
 # `wp_content_type_v1`.
 wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
+# `zwp_input_method_manager_v2` CLIENT bindings — the input-method (IME backend) side of text entry. The
+# `text_input_ime` demo stands up a minimal in-process IME "backend" client with these so the compositor's
+# `zwp_input_method_manager_v2` has a live instance (Smithay only delivers `zwp_text_input_v3` events while
+# one exists). Server side is already pulled in by Smithay's `wayland_frontend`; this adds the client half.
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
 
 [[test]]
 name = "wayland_e2e"
@@ -439,6 +444,28 @@ required-features = ["smithay-adapter"]
 [[test]]
 name = "demo_primary_paste_rerender"
 path = "tests/demo_primary_paste_rerender.rs"
+required-features = ["smithay-adapter"]
+
+# Desktop-interaction protocol demos (task #228): the interactions Chrome/GTK need that were previously
+# unwired. `drag_and_drop` drives a real `wl_data_device` DnD (source `start_drag` → drag enter/motion over
+# a target → drop → the target reads the dragged bytes over a real fd, + a leave on moving off). `text_input`
+# drives a real `zwp_text_input_v3` IME round-trip (preedit then commit "hello" → the client's committed
+# text updates). `toplevel_close` asks a mapped toplevel to close (`xdg_toplevel.close`) and asserts the
+# client receives it. Each drives real in-process wayland-client(s) + the host inject seam. Own binaries —
+# each mutates process-global `$XDG_RUNTIME_DIR` / `$WAYLAND_DISPLAY`.
+[[test]]
+name = "demo_drag_and_drop"
+path = "tests/demo_drag_and_drop.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_text_input"
+path = "tests/demo_text_input.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_toplevel_close"
+path = "tests/demo_toplevel_close.rs"
 required-features = ["smithay-adapter"]
 
 [[test]]
