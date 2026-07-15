@@ -32,14 +32,24 @@ pub fn module_load_data(ctx: &mut CudaContext, image: &[u8]) -> Result<u32> {
     };
     let ptx = std::str::from_utf8(&ptx_bytes)
         .map_err(|_| GpuError::Invalid("cuModuleLoadData: image is not valid PTX text"))?;
-    Ok(ctx.modules.load(ptx))
+    let id = ctx.modules.load(ptx);
+    hl_log::hl_debug!(
+        hl_log::tag::CUDA,
+        "module_load id={} bytes={} fatbin={}",
+        id,
+        image.len(),
+        fatbin::is_fatbin(image)
+    );
+    hl_log::hl_count!(hl_log::tag::CUDA, "modules");
+    Ok(id)
 }
 
 /// `cuModuleGetFunction(module, name)` → the function handle, or `CUDA_ERROR_NOT_FOUND` analogue.
 pub fn module_get_function(ctx: &CudaContext, module: u32, name: &str) -> Result<Function> {
-    ctx.modules
-        .get_function(module, name)
-        .ok_or(GpuError::Invalid("cuModuleGetFunction: no such entry in module"))
+    ctx.modules.get_function(module, name).ok_or_else(|| {
+        hl_log::hl_warn!(hl_log::tag::CUDA, "get_function miss mod={} name={}", module, name);
+        GpuError::Invalid("cuModuleGetFunction: no such entry in module")
+    })
 }
 
 /// `cuModuleGetGlobal(module, name)` → the device pointer + byte size of the module's `.global`/`.const`
@@ -65,5 +75,13 @@ pub fn module_get_global(
     let ptr = ctx.mem.record(buffer, size.max(1));
     ctx.record_global_alloc(module, name, ptr.0, size);
     sink.submit(&[create_buffer_cmd(buffer, size.max(1))])?;
+    hl_log::hl_debug!(
+        hl_log::tag::CUDA,
+        "module_global mod={} name={} size={} ptr={:#x}",
+        module,
+        name,
+        size,
+        ptr.0
+    );
     Ok(Some((ptr, size)))
 }

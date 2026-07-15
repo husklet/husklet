@@ -11,8 +11,10 @@ use hl_gpu::{Cmd, CommandBuffer, CommandSink, FenceId, GpuError, Result};
 
 /// Emit `CreateFence` + an empty signalling `Submit`, block on the fence, then `DestroyFence`.
 fn barrier(ctx: &mut CudaContext, sink: &mut dyn CommandSink) -> Result<()> {
+    let _s = hl_log::hl_span!(hl_log::tag::CUDA, "sync");
     let fence = ctx.alloc_fence();
     let value = ctx.next_fence_value();
+    hl_log::hl_debug!(hl_log::tag::CUDA, "sync fence={} value={}", fence, value);
     sink.submit(&[
         Cmd::CreateFence(fence),
         Cmd::Submit(CommandBuffer { encoder: Vec::new(), signal: Some((fence, value)) }),
@@ -35,6 +37,7 @@ pub fn stream_synchronize(
     stream: Stream,
 ) -> Result<()> {
     if !ctx.streams.is_valid(stream) {
+        hl_log::hl_warn!(hl_log::tag::CUDA, "stream_sync invalid handle");
         return Err(GpuError::Invalid("cuStreamSynchronize: invalid stream handle"));
     }
     barrier(ctx, sink)

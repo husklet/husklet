@@ -34,6 +34,18 @@ pub fn launch(
     block: (u32, u32, u32),
     args: &[KernelArg],
 ) -> Result<u32> {
+    hl_log::hl_debug!(
+        hl_log::tag::CUDA,
+        "launch mod={} entry={} grid={:?} block={:?} args={}",
+        func.module,
+        func.entry,
+        grid,
+        block,
+        args.len()
+    );
+    hl_log::hl_count!(hl_log::tag::CUDA, "launches");
+    let _s = hl_log::hl_span!(hl_log::tag::CUDA, "launch");
+
     let block_arr = [block.0, block.1, block.2];
 
     // Marshal the arguments FIRST — before minting/caching any shader or pipeline id. A dangling
@@ -53,9 +65,12 @@ pub fn launch(
                 align_blob(&mut blob, 8);
                 blob.extend_from_slice(&p.0.to_le_bytes());
                 if p.0 != 0 {
-                    let (buf, off) = ctx.resolve(*p).ok_or(GpuError::Invalid(
-                        "cuLaunchKernel: kernel argument is a dangling device pointer",
-                    ))?;
+                    let (buf, off) = ctx.resolve(*p).ok_or_else(|| {
+                        hl_log::hl_warn!(hl_log::tag::CUDA, "launch dangling arg ptr={:#x}", p.0);
+                        GpuError::Invalid(
+                            "cuLaunchKernel: kernel argument is a dangling device pointer",
+                        )
+                    })?;
                     entries.push(BindEntry {
                         binding: region + 1,
                         resource: BindResource::Buffer { id: buf.0, offset: off, size: 0 },

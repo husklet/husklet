@@ -58,6 +58,8 @@ impl Registry {
         let handle = self.next_handle;
         self.next_handle += 1;
         self.modules.insert(handle, module);
+        hl_log::hl_debug!(hl_log::tag::CUDA, "register_fatbin handle={} mod={}", handle, module);
+        hl_log::hl_count!(hl_log::tag::CUDA, "fatbins");
         Ok(FatbinHandle(handle))
     }
 
@@ -77,6 +79,13 @@ impl Registry {
             .ok_or(GpuError::Invalid("__cudaRegisterFunction: unknown fatbin handle"))?;
         let func = load_module::module_get_function(ctx, module, device_name)?;
         self.functions.insert(host_fn, func);
+        hl_log::hl_debug!(
+            hl_log::tag::CUDA,
+            "register_fn host={:#x} mod={} name={}",
+            host_fn,
+            module,
+            device_name
+        );
         Ok(())
     }
 
@@ -119,9 +128,10 @@ pub unsafe fn launch_kernel(
     block: (u32, u32, u32),
     args: *const *const c_void,
 ) -> Result<()> {
-    let func = registry
-        .resolve(host_fn)
-        .ok_or(GpuError::Invalid("cudaLaunchKernel: host function not registered"))?;
+    let func = registry.resolve(host_fn).ok_or_else(|| {
+        hl_log::hl_warn!(hl_log::tag::CUDA, "launch_kernel unregistered host={:#x}", host_fn);
+        GpuError::Invalid("cudaLaunchKernel: host function not registered")
+    })?;
 
     // Recover the parameter layout by compiling the module's PTX with the launch block dims — the exact
     // front-end the executor uses, so pointer/scalar classification + widths agree with the compiled kernel.

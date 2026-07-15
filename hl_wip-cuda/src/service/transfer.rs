@@ -15,7 +15,10 @@ use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::{BufferId, Cmd, CommandBuffer, CommandSink, GpuError, Result};
 
 fn resolve(ctx: &CudaContext, p: DevicePtr, what: &'static str) -> Result<(BufferId, u64)> {
-    ctx.resolve(p).ok_or(GpuError::Invalid(what))
+    ctx.resolve(p).ok_or_else(|| {
+        hl_log::hl_warn!(hl_log::tag::CUDA, "memcpy dangling ptr={:#x} at={}", p.0, what);
+        GpuError::Invalid(what)
+    })
 }
 
 /// Validate a stream handle for a stream-ordered (`*Async`) op. The lowering is synchronous, so an async
@@ -36,6 +39,8 @@ pub fn memcpy_htod(
     dst: DevicePtr,
     src: &[u8],
 ) -> Result<()> {
+    let _s = hl_log::hl_span!(hl_log::tag::CUDA, "memcpy_htod");
+    hl_log::hl_add!(hl_log::tag::CUDA, "h2d_bytes", src.len() as u64);
     let (buf, off) = resolve(ctx, dst, "cuMemcpyHtoD: dangling destination pointer")?;
     sink.submit(&[Cmd::WriteBuffer { id: buf.0, offset: off, data: src.to_vec() }])?;
     Ok(())
@@ -49,6 +54,8 @@ pub fn memcpy_dtod(
     src: DevicePtr,
     n: u64,
 ) -> Result<()> {
+    let _s = hl_log::hl_span!(hl_log::tag::CUDA, "memcpy_dtod");
+    hl_log::hl_add!(hl_log::tag::CUDA, "d2d_bytes", n);
     let (sbuf, soff) = resolve(ctx, src, "cuMemcpyDtoD: dangling source pointer")?;
     let (dbuf, doff) = resolve(ctx, dst, "cuMemcpyDtoD: dangling destination pointer")?;
     sink.submit(&[Cmd::Submit(CommandBuffer {
@@ -80,6 +87,8 @@ pub fn read_dtoh(
     src: DevicePtr,
     n: usize,
 ) -> Result<Vec<u8>> {
+    let _s = hl_log::hl_span!(hl_log::tag::CUDA, "memcpy_dtoh");
+    hl_log::hl_add!(hl_log::tag::CUDA, "d2h_bytes", n as u64);
     let (buf, off) = resolve(ctx, src, "cuMemcpyDtoH: dangling source pointer")?;
     sink.read_buffer(buf, off, n)
 }

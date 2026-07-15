@@ -25,6 +25,9 @@ pub fn mem_alloc(ctx: &mut CudaContext, sink: &mut dyn CommandSink, size: u64) -
     let buffer = ctx.alloc_buffer();
     let ptr = ctx.mem.record(buffer, size);
     sink.submit(&[create_buffer_cmd(buffer, size)])?;
+    hl_log::hl_debug!(hl_log::tag::CUDA, "mem_alloc size={} buf={} ptr={:#x}", size, buffer, ptr.0);
+    hl_log::hl_count!(hl_log::tag::CUDA, "allocs");
+    hl_log::hl_add!(hl_log::tag::CUDA, "alloc_bytes", size);
     Ok(ptr)
 }
 
@@ -70,11 +73,12 @@ pub fn mem_alloc_pitch(
 /// `cuMemFree(ptr)` → destroy the backing buffer. Errors (`CUDA_ERROR_INVALID_VALUE` analogue) if `ptr`
 /// is not a live allocation base.
 pub fn mem_free(ctx: &mut CudaContext, sink: &mut dyn CommandSink, ptr: DevicePtr) -> Result<()> {
-    let buffer = ctx
-        .mem
-        .free(ptr)
-        .ok_or(GpuError::Invalid("cuMemFree: pointer is not a live allocation base"))?;
+    let buffer = ctx.mem.free(ptr).ok_or_else(|| {
+        hl_log::hl_warn!(hl_log::tag::CUDA, "mem_free bad ptr={:#x}", ptr.0);
+        GpuError::Invalid("cuMemFree: pointer is not a live allocation base")
+    })?;
     sink.submit(&[Cmd::DestroyBuffer(buffer)])?;
+    hl_log::hl_debug!(hl_log::tag::CUDA, "mem_free buf={} ptr={:#x}", buffer, ptr.0);
     Ok(())
 }
 
