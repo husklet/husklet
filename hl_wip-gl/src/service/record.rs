@@ -37,6 +37,9 @@ pub fn bind_buffer(ctx: &mut GlContext, target: u32, name: u32) {
 /// `glBufferData(target, data, usage)` — fills the buffer currently bound to `target`.
 pub fn buffer_data(ctx: &mut GlContext, target: u32, data: &[u8], usage: u32) {
     let name = bound_buffer(ctx, target);
+    if std::env::var("HL_UBO_DUMP").is_ok() && (name >= 1 && name <= 9) {
+        eprintln!("[UBO_DUMP] glBufferData target={target:#x} name={name} len={} usage={usage:#x}", data.len());
+    }
     if name != 0 {
         ctx.buffers.set_data(name, target, data, usage);
     }
@@ -45,6 +48,9 @@ pub fn buffer_data(ctx: &mut GlContext, target: u32, data: &[u8], usage: u32) {
 /// `glBufferSubData(target, offset, data)`.
 pub fn buffer_sub_data(ctx: &mut GlContext, target: u32, offset: usize, data: &[u8]) {
     let name = bound_buffer(ctx, target);
+    if std::env::var("HL_UBO_DUMP").is_ok() && (name >= 1 && name <= 9) {
+        eprintln!("[UBO_DUMP] glBufferSubData target={target:#x} name={name} off={offset} len={}", data.len());
+    }
     if name != 0 {
         ctx.buffers.set_sub_data(name, offset, data);
     }
@@ -75,6 +81,9 @@ pub fn copy_buffer_sub_data(ctx: &mut GlContext, read_target: u32, write_target:
     }
     let rb = ctx.buffer_for_target(read_target);
     let wb = ctx.buffer_for_target(write_target);
+    if std::env::var("HL_UBO_DUMP").is_ok() {
+        eprintln!("[UBO_DUMP] glCopyBufferSubData rt={read_target:#x} wt={write_target:#x} rb={rb} wb={wb} ro={read_off} wo={write_off} size={size}");
+    }
     let (ro, wo, n) = (read_off as usize, write_off as usize, size as usize);
     if rb == 0 || wb == 0 {
         return;
@@ -129,6 +138,9 @@ pub fn bind_buffer_range(ctx: &mut GlContext, target: u32, index: u32, buffer: u
     if buffer != 0 && size != 0 && (size < 0 || offset < 0) {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
+    }
+    if std::env::var("HL_UBO_DUMP").is_ok() && target == GL_UNIFORM_BUFFER {
+        eprintln!("[UBO_DUMP] glBindBufferRange target={target:#x} index={index} buffer={buffer} offset={offset} size={size}");
     }
     // Bind the generic target too (GL binds both), so a later glBufferData(target, …) fills this buffer.
     bind_buffer(ctx, target, buffer);
@@ -1332,6 +1344,59 @@ fn snapshot(ctx: &GlContext) -> DrawCall {
     };
     if let Some(p) = ctx.programs.program(ctx.cur_prog) {
         d.samp_units = p.samp_units;
+        // Snapshot the default-block `glUniform*` bytes for THIS draw: `Program::ubuf` is mutable state,
+        // so a later draw that changes a uniform must not retroactively alter this draw's bytes.
+        let sz = p.ubuf_size.max(0) as usize;
+        if sz > 0 {
+            d.ubuf_bytes = p.ubuf[..sz.min(p.ubuf.len())].to_vec();
+        }
     }
+    d.ubo_bytes = resolve_block_ubo_bytes(ctx, ctx.cur_prog);
     d
+}
+
+/// Resolve the app's uniform-BLOCK bytes for `prog_name` at draw time — the std140 data the shader's
+/// `layout(std140, binding = 0) uniform … { … }` block reads. The chain is:
+/// `glBindBufferBase(GL_UNIFORM_BUFFER, blockBinding, buffer)` bound a buffer to the block's binding point,
+/// and `glBufferData`/`glBufferSubData` filled it. We locate the block's binding point, then the indexed
+/// UBO binding at that point, then that buffer's bytes.
+///
+/// Binding-point priority: the shader's explicit `layout(binding = N)` qualifier (GskGpu/GTK4 declares
+/// `binding = 0` in-shader and binds via `glBindBufferBase`), else an app-assigned `glUniformBlockBinding`
+/// value, else `0`. Returns EMPTY when the program has no data uniforms, declares no block, or has no UBO
+/// bound at the resolved point (the default-uniform `glUniform*` path — the caller then keeps `Program::ubuf`).
+fn resolve_block_ubo_bytes(ctx: &GlContext, prog_name: u32) -> Vec<u8> {
+    let prog = match ctx.programs.program(prog_name) {
+        Some(p) if p.has_uniforms() => p,
+        _ => return Vec::new(),
+    };
+    // The block's binding point (see priority above).
+    let bp = crate::adapter::glsl::uniform_block_binding_qualifier(&prog.vs_src)
+        .or_else(|| crate::adapter::glsl::uniform_block_binding_qualifier(&prog.fs_src))
+        .or_else(|| ctx.uniform_blocks.get(&prog_name).and_then(|blocks| blocks.first()).map(|b| b.binding))
+        .unwrap_or(0);
+    if std::env::var("HL_UBO_DUMP").is_ok() {
+        let keys: Vec<_> = ctx.indexed_buffers.keys().collect();
+        eprintln!("[UBO_DUMP] prog={prog_name} has_uniforms=true ubuf_size={} bp={bp} indexed_keys={keys:?}", prog.ubuf_size);
+    }
+    let ib = match ctx.indexed_buffers.get(&(GL_UNIFORM_BUFFER, bp)) {
+        Some(ib) => *ib,
+        None => return Vec::new(),
+    };
+    if std::env::var("HL_UBO_DUMP").is_ok() {
+        let sz = ctx.buffers.get(ib.buffer).map(|b| b.data.len()).unwrap_or(0);
+        let head: Vec<u8> = ctx.buffers.get(ib.buffer).map(|b| b.data.iter().take(16).copied().collect()).unwrap_or_default();
+        eprintln!("[UBO_DUMP]   ib buffer={} off={} size={} bufbytes={sz} head={head:?}", ib.buffer, ib.offset, ib.size);
+    }
+    let buf = match ctx.buffers.get(ib.buffer) {
+        Some(b) => b,
+        None => return Vec::new(),
+    };
+    let off = ib.offset.max(0) as usize;
+    if off >= buf.data.len() {
+        return Vec::new();
+    }
+    // `size == 0` (from `glBindBufferBase`) means the whole buffer from `offset`.
+    let end = if ib.size <= 0 { buf.data.len() } else { (off + ib.size as usize).min(buf.data.len()) };
+    buf.data[off..end].to_vec()
 }

@@ -103,7 +103,10 @@ fn depth_test_lowers_to_pipeline_depth_state() {
 
     assert!(swap::swap_buffers(&mut c, &mut sink).unwrap());
     let depth = pipeline_desc(&sink.batches[0]).depth.as_ref().expect("depth-test → Some(DepthState)");
-    assert_eq!(depth.depth_compare, 4, "GL_LEQUAL -> WebGPU LessEqual (4)");
+    // The neutral protocol compare code the wgpu executor decodes (`hl_gpu` `enums::compare`, Vulkan
+    // VkCompareOp ordering): LESS_EQUAL = 3. (Previously this asserted 4, the WebGPU 1-based numbering,
+    // which the executor decoded as GREATER — silently mis-testing every depth-tested draw.)
+    assert_eq!(depth.depth_compare, 3, "GL_LEQUAL -> neutral compare::LESS_EQUAL (3)");
     assert!(!depth.depth_write, "glDepthMask(false) disables writes");
 }
 

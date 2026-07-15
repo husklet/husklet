@@ -157,3 +157,106 @@ pub fn staged_dir(driver: &str) -> PathBuf {
     let home = std::env::var("HOME").expect("HOME set");
     PathBuf::from(home).join(".hl").join(driver).join("aarch64")
 }
+
+/// The shared output directory for the GL render-correctness demo PNGs (`/tmp/hl-demo/`). Created on
+/// demand so a fresh checkout can run the demos without a manual `mkdir`.
+pub fn demo_png_dir() -> PathBuf {
+    let dir = PathBuf::from("/tmp/hl-demo");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Write an RGBA8 image (`w*h*4` bytes, row-major top-to-bottom) to `path` as a real PNG so a human can
+/// eyeball what actually rasterized. A dependency-free encoder: one IDAT of raw-DEFLATE STORED blocks
+/// (no compression, so no `flate2`/`miniz` needed) wrapped in a zlib stream, with correct CRC-32 chunk
+/// checksums and an Adler-32 over the raw filtered scanlines. Small (64×64) demo frames make the STORED
+/// overhead irrelevant while keeping the crate offline + dep-free.
+pub fn write_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {
+    assert_eq!(rgba.len(), (w * h * 4) as usize, "write_png: rgba len must be w*h*4");
+
+    // ---- CRC-32 (IEEE, as PNG chunks require) --------------------------------------------------
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc: u32 = 0xFFFF_FFFF;
+        for &b in bytes {
+            crc ^= b as u32;
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+            }
+        }
+        !crc
+    }
+    // ---- Adler-32 (the zlib trailer checksum over the uncompressed data) -----------------------
+    fn adler32(bytes: &[u8]) -> u32 {
+        let (mut a, mut b): (u32, u32) = (1, 0);
+        for &byte in bytes {
+            a = (a + byte as u32) % 65521;
+            b = (b + a) % 65521;
+        }
+        (b << 16) | a
+    }
+
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]); // signature
+
+    let chunk = |out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]| {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let mut crc_in = Vec::with_capacity(4 + data.len());
+        crc_in.extend_from_slice(kind);
+        crc_in.extend_from_slice(data);
+        out.extend_from_slice(&crc32(&crc_in).to_be_bytes());
+    };
+
+    // IHDR: width, height, bit depth 8, color type 6 (RGBA), no interlace.
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr);
+
+    // Raw scanlines, each prefixed with filter byte 0 (None).
+    let mut raw: Vec<u8> = Vec::with_capacity((h * (1 + w * 4)) as usize);
+    for y in 0..h {
+        raw.push(0);
+        let row = &rgba[(y * w * 4) as usize..((y + 1) * w * 4) as usize];
+        raw.extend_from_slice(row);
+    }
+
+    // zlib stream: 0x78 0x01 header, STORED DEFLATE blocks, Adler-32 trailer.
+    let mut zlib: Vec<u8> = vec![0x78, 0x01];
+    let mut off = 0usize;
+    while off < raw.len() {
+        let n = (raw.len() - off).min(0xFFFF);
+        let last = (off + n >= raw.len()) as u8;
+        zlib.push(last); // BFINAL in bit0, BTYPE=00 (stored)
+        zlib.extend_from_slice(&(n as u16).to_le_bytes());
+        zlib.extend_from_slice(&(!(n as u16)).to_le_bytes());
+        zlib.extend_from_slice(&raw[off..off + n]);
+        off += n;
+    }
+    zlib.extend_from_slice(&adler32(&raw).to_be_bytes());
+    chunk(&mut out, b"IDAT", &zlib);
+    chunk(&mut out, b"IEND", &[]);
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(path, &out).expect("write PNG");
+}
+
+/// Convert a captured host render target (BGRA8, the GL default `Bgra8Unorm` order `read_texture` returns)
+/// to RGBA8 for [`write_png`]. Row order is preserved (the wgpu render target is already top-left origin,
+/// so the PNG comes out upright).
+pub fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
+    let mut rgba = vec![0u8; bgra.len()];
+    for (o, px) in bgra.chunks_exact(4).enumerate() {
+        let i = o * 4;
+        rgba[i] = px[2];
+        rgba[i + 1] = px[1];
+        rgba[i + 2] = px[0];
+        rgba[i + 3] = px[3];
+    }
+    rgba
+}

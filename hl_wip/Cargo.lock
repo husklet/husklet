@@ -537,6 +537,10 @@ name = "hl-jit-darwin"
 version = "0.4.0"
 
 [[package]]
+name = "hl-log"
+version = "0.1.0"
+
+[[package]]
 name = "hl_wip"
 version = "0.0.0"
 dependencies = [
@@ -555,6 +559,7 @@ dependencies = [
 name = "hl_wip_compositor"
 version = "0.0.0"
 dependencies = [
+ "hl-log",
  "smithay",
 ]
 
@@ -563,6 +568,7 @@ name = "hl_wip_cuda"
 version = "0.0.0"
 dependencies = [
  "hl-jit",
+ "hl-log",
  "hl_wip_gpu",
 ]
 
@@ -571,6 +577,7 @@ name = "hl_wip_gl"
 version = "0.0.0"
 dependencies = [
  "hl-jit",
+ "hl-log",
  "hl_wip_gpu",
 ]
 
@@ -578,6 +585,7 @@ dependencies = [
 name = "hl_wip_gpu"
 version = "0.0.0"
 dependencies = [
+ "hl-log",
  "libc",
 ]
 
@@ -586,6 +594,7 @@ name = "hl_wip_gpu_wgpu"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "hl-log",
  "hl_wip_gpu",
  "naga",
  "pollster",
@@ -597,6 +606,7 @@ name = "hl_wip_vulkan"
 version = "0.0.0"
 dependencies = [
  "hl-jit",
+ "hl-log",
  "hl_wip_gpu",
 ]
 

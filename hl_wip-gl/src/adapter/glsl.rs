@@ -616,6 +616,58 @@ pub fn uni_layout(vs: &str, fs: &str) -> (Vec<Uni>, i32) {
     (out, total)
 }
 
+/// The explicit binding point a data-uniform BLOCK declares in its `layout(...)` qualifier — the GL
+/// binding index the app's `glBindBufferBase(GL_UNIFORM_BUFFER, N, buffer)` targets (GskGpu/GTK4 declares
+/// `layout(std140, binding = 0) uniform PushConstants { … }`). Scans `src` for a uniform-BLOCK declaration
+/// (`uniform NAME {`), then reads `binding = N` from the immediately-preceding `layout(...)`. Returns
+/// `Some(N)` (or `Some(0)` for a block with no explicit `binding`), or `None` if `src` declares no uniform
+/// block (only plain `uniform TYPE name;` data/sampler uniforms — those never carry a block binding). Used
+/// to resolve which `glBindBufferBase`d buffer feeds the shader's std140 UBO at IR binding 0.
+pub fn uniform_block_binding_qualifier(src: &str) -> Option<u32> {
+    let src = strip_comments(src);
+    let b = src.as_bytes();
+    let mut p = 0usize;
+    while let Some(rel) = find_from(b, b"uniform", p) {
+        let before = rel != 0 && is_word(b[rel - 1]);
+        let after = rel + 7 < b.len() && is_word(b[rel + 7]);
+        if before || after {
+            p = rel + 7;
+            continue;
+        }
+        // A BLOCK is `uniform NAME {` — skip the name, then require `{` (a plain `uniform TYPE name;`
+        // data/sampler uniform has no `{` and is not a block).
+        let mut q = rel + 7;
+        while q < b.len() && is_space(b[q]) {
+            q += 1;
+        }
+        while q < b.len() && is_word(b[q]) {
+            q += 1;
+        }
+        while q < b.len() && is_space(b[q]) {
+            q += 1;
+        }
+        if q < b.len() && b[q] == b'{' {
+            // The block's `layout(...)` qualifier sits just before the `uniform` keyword; read `binding = N`.
+            if let Some(lpos) = src[..rel].rfind("layout") {
+                let seg = &src[lpos..rel];
+                if let Some(bpos) = seg.find("binding") {
+                    let digits: String = seg[bpos + "binding".len()..]
+                        .chars()
+                        .skip_while(|c| !c.is_ascii_digit())
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect();
+                    if let Ok(n) = digits.parse::<u32>() {
+                        return Some(n);
+                    }
+                }
+            }
+            return Some(0);
+        }
+        p = rel + 7;
+    }
+    None
+}
+
 /// The samplers a linked program declares, in declaration order (for `glUniform1i` → texture-unit
 /// mapping and the bind-group emission).
 pub fn program_samplers(vs: &str, fs: &str) -> Vec<String> {

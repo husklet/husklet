@@ -283,6 +283,22 @@ pub struct DrawCall {
     /// unsigned-byte source is promoted to `u16` here (the index IR has no `u8` format), and `index_type`
     /// is rewritten to `GL_UNSIGNED_SHORT` to match. Lowered to a transient index buffer + `SetIndexBuffer`.
     pub client_indices: Vec<u8>,
+    /// The std140 bytes of the app's uniform BLOCK for this draw, snapshotted at record time from the
+    /// buffer bound via `glBindBufferBase(GL_UNIFORM_BUFFER, blockBinding, buffer)` to the program's block
+    /// binding point (GskGpu/GTK4's per-frame `PushConstants { mat4 mvp; mat3x4 clip; vec2 scale; }`). The
+    /// app already laid these out std140, so the frame builder binds them VERBATIM at IR binding 0 — this
+    /// is what carries the real per-draw transform to the shader. EMPTY when the program feeds its uniforms
+    /// the default-block `glUniform*` way (the ES2 `gl_multitex`/`gl_geometry` path), which stays on
+    /// `Program::ubuf` unchanged. Snapshotted (not resolved at swap) because the app updates the UBO
+    /// per-draw — the bytes must be captured at the draw they belong to, exactly like `client_vbufs`.
+    pub ubo_bytes: Vec<u8>,
+    /// The default-block `glUniform*` bytes (`Program::ubuf[..ubuf_size]`) snapshotted at record time.
+    /// Like `ubo_bytes`, this is captured PER DRAW because `Program::ubuf` is mutable program state: a
+    /// frame that draws the same program twice with different `glUniform*` values between the draws (e.g.
+    /// a background color then an overlay color) would otherwise see every draw take the LAST-set values.
+    /// EMPTY when the program feeds its uniforms via a `glBindBufferBase`d block (`ubo_bytes`) or has no
+    /// default uniforms — the frame builder then falls back to `Program::ubuf` (byte-identical old path).
+    pub ubuf_bytes: Vec<u8>,
 }
 
 impl Default for DrawCall {
@@ -324,6 +340,8 @@ impl Default for DrawCall {
             clear_rect: [0; 4],
             client_vbufs: Vec::new(),
             client_indices: Vec::new(),
+            ubo_bytes: Vec::new(),
+            ubuf_bytes: Vec::new(),
         }
     }
 }

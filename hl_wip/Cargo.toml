@@ -91,6 +91,26 @@ name = "gl_triangle"
 path = "tests/gl_triangle.rs"
 
 [[test]]
+name = "gl_ubo_transform"
+path = "tests/gl_ubo_transform.rs"
+
+[[test]]
+name = "gl_blend"
+path = "tests/gl_blend.rs"
+
+[[test]]
+name = "gl_depth"
+path = "tests/gl_depth.rs"
+
+[[test]]
+name = "gl_instanced"
+path = "tests/gl_instanced.rs"
+
+[[test]]
+name = "gl_anim"
+path = "tests/gl_anim.rs"
+
+[[test]]
 name = "vk_quad"
 path = "tests/vk_quad.rs"
 

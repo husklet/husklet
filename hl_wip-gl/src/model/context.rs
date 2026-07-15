@@ -244,6 +244,13 @@ pub struct GlContext {
     /// later frames (so re-rendering the same FBO does not re-create the target).
     fbo_targets: HashMap<u32, (u32, u32)>,
 
+    /// Per-render-target depth-buffer IR ids, keyed by the pass's COLOR-target texture IR → the
+    /// `Depth32Float` depth texture IR. A depth-tested draw (`glEnable(GL_DEPTH_TEST)`) builds a pipeline
+    /// with a depth-stencil state, and wgpu REQUIRES the render pass to carry a matching depth attachment;
+    /// the frame builder mints one depth texture per color target here, `CreateTexture`s it once, and
+    /// reuses its id on later frames (so re-rendering the same target does not re-create the depth buffer).
+    depth_targets: HashMap<u32, u32>,
+
     /// Residency cache for sampled GL textures uploaded from CPU pixels: GL texture name → `(texture_ir,
     /// uploaded_gen)`. A texture is `CreateTexture`d + staged + `CopyBufferToTexture`d ONCE (per content
     /// generation) and re-referenced by its stable IR id on every later draw and frame. Without this a
@@ -349,6 +356,7 @@ impl GlContext {
             default_placeholder_tex: 0,
             default_placeholder_samp: 0,
             fbo_targets: HashMap::new(),
+            depth_targets: HashMap::new(),
             tex_ir_cache: HashMap::new(),
             buf_ir_cache: HashMap::new(),
             prog_shader_cache: HashMap::new(),
@@ -525,6 +533,20 @@ impl GlContext {
             self.next_surface += 1;
             self.fbo_targets.insert(gl_tex, (surface, texture));
             (surface, texture, true)
+        }
+    }
+
+    /// The `Depth32Float` depth-buffer texture IR for the render pass whose COLOR target is texture IR
+    /// `color_tex`. Returns `(depth_texture, needs_create)`: `needs_create` is true exactly on the first
+    /// request for this color target, so the frame builder emits the depth `CreateTexture` once and reuses
+    /// the id on later frames. Only allocated when a depth-tested draw actually needs an attachment.
+    pub fn depth_target(&mut self, color_tex: u32) -> (u32, bool) {
+        if let Some(&depth) = self.depth_targets.get(&color_tex) {
+            (depth, false)
+        } else {
+            let depth = self.alloc_texture_ir();
+            self.depth_targets.insert(color_tex, depth);
+            (depth, true)
         }
     }
 

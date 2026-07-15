@@ -30,8 +30,8 @@ use crate::model::program::DrawCall;
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment, ColorTargetState,
-    DepthState, RenderPipelineDesc, SamplerDesc, ShaderRef, SurfaceDesc, TextureDesc, VertexAttr,
-    VertexLayout,
+    DepthAttachment, DepthState, RenderPipelineDesc, SamplerDesc, ShaderRef, SurfaceDesc, TextureDesc,
+    VertexAttr, VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, AddressMode, Filter, LoadOp, TextureDim, TextureFormat, Topology,
@@ -153,10 +153,11 @@ fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -
             }
         }
 
+        let depth = depth_attachment_for(ctx, target_tex, tw, th, run, &mut cmds);
         let mut ops: Vec<Enc> = copies;
         ops.push(Enc::BeginRenderPass {
             color: vec![ColorAttachment { texture: target_tex, load: LoadOp::Clear, clear, store: true }],
-            depth: None,
+            depth,
         });
         ops.extend(draw_ops);
         ops.push(Enc::EndRenderPass);
@@ -240,6 +241,45 @@ fn push_target_creates(cmds: &mut Vec<Cmd>, surface: u32, texture: u32, w: i32, 
     ));
 }
 
+/// The depth attachment for a render pass, if any of `run`'s geometry draws is depth-tested. A pipeline
+/// built with a `DepthState` (see [`lower_draw`]) MUST run in a pass carrying a matching depth attachment —
+/// wgpu enforces this — so whenever a draw enables `GL_DEPTH_TEST` the pass needs a `Depth32Float` depth
+/// buffer. Mints one depth texture per color target (cached on the context), emits its `CreateTexture`
+/// once into `cmds`, and returns a `DepthAttachment` that clear-loads it to the far plane (`1.0`, the GL
+/// `glClearDepthf` default). Returns `None` when no draw in the pass is depth-tested (the common 2D path),
+/// leaving the pass depth-less exactly as before.
+fn depth_attachment_for(
+    ctx: &mut GlContext,
+    color_tex: u32,
+    w: i32,
+    h: i32,
+    draws: &[DrawCall],
+    cmds: &mut Vec<Cmd>,
+) -> Option<DepthAttachment> {
+    if !draws.iter().any(|d| !d.is_clear && d.depth) {
+        return None;
+    }
+    let clear_depth = ctx.clear_depth;
+    let (depth_tex, needs_create) = ctx.depth_target(color_tex);
+    if needs_create {
+        cmds.push(Cmd::CreateTexture(
+            depth_tex,
+            TextureDesc {
+                width: w.max(1) as u32,
+                height: h.max(1) as u32,
+                depth: 1,
+                mip_levels: 1,
+                sample_count: 1,
+                dim: TextureDim::D2,
+                format: TextureFormat::Depth32Float,
+                usage: texture_usage::RENDER_TARGET,
+                label: "gl-depth".into(),
+            },
+        ));
+    }
+    Some(DepthAttachment { texture: depth_tex, load: LoadOp::Clear, clear_depth })
+}
+
 /// Clear-only frame: a render pass over the target that clears it (`LoadOp::Clear`).
 fn build_clear_frame(ctx: &mut GlContext) -> Frame {
     let mut cmds: Vec<Cmd> = Vec::new();
@@ -296,10 +336,11 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
         return None;
     }
 
+    let depth = depth_attachment_for(ctx, target_tex, tw, th, &geom, &mut cmds);
     let mut ops: Vec<Enc> = copies;
     ops.push(Enc::BeginRenderPass {
         color: vec![ColorAttachment { texture: target_tex, load: LoadOp::Clear, clear, store: true }],
-        depth: None,
+        depth,
     });
     ops.extend(draw_ops);
     ops.push(Enc::EndRenderPass);
@@ -703,12 +744,26 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
     }
 
     // ---- uniform buffer + bind group ----
+    // The std140 bytes for the shader's binding-0 UBO. Two sources, mutually exclusive per draw:
+    //   * a uniform BLOCK fed by the app's `glBindBufferBase`d buffer (GskGpu/GTK4) — `d.ubo_bytes`, already
+    //     std140 as the app wrote it, so bound VERBATIM (this carries the real per-draw mvp/clip/scale); OR
+    //   * the default-block `glUniform*` uniforms (ES2 `gl_multitex`/`gl_geometry`) — `d.ubuf_bytes`, the
+    //     PER-DRAW snapshot of `Program::ubuf` (so two draws of one program with different `glUniform*`
+    //     values between them each keep their own bytes, not the last-set ones).
+    // A UBO-block draw prefers its snapshotted block bytes, then the per-draw `glUniform*` snapshot, and
+    // only falls back to the live `Program::ubuf` for a draw recorded before this snapshotting existed.
+    let ubuf: Vec<u8> = if !d.ubo_bytes.is_empty() {
+        d.ubo_bytes.clone()
+    } else if !d.ubuf_bytes.is_empty() {
+        d.ubuf_bytes.clone()
+    } else {
+        prog.ubuf[..prog.ubuf_size.max(0) as usize].to_vec()
+    };
     let mut uniform_ir = 0u32;
     if has_u {
         uniform_ir = ctx.alloc_buffer_ir();
-        let ubuf = prog.ubuf[..prog.ubuf_size.max(0) as usize].to_vec();
         cmds.push(Cmd::CreateBuffer(uniform_ir, BufferDesc { size: ubuf.len() as u64, usage: buffer_usage::UNIFORM, label: String::new() }));
-        cmds.push(Cmd::WriteBuffer { id: uniform_ir, offset: 0, data: ubuf });
+        cmds.push(Cmd::WriteBuffer { id: uniform_ir, offset: 0, data: ubuf.clone() });
     }
     let mut bind_group_ir = 0u32;
     if has_bg {
@@ -721,7 +776,7 @@ fn lower_draw(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, tw: 
         // 1 collided with the 2nd sampler, also at 1).
         let mut entries = Vec::new();
         if has_u {
-            entries.push(BindEntry { binding: 0, resource: BindResource::Buffer { id: uniform_ir, offset: 0, size: prog.ubuf_size as u64 } });
+            entries.push(BindEntry { binding: 0, resource: BindResource::Buffer { id: uniform_ir, offset: 0, size: ubuf.len() as u64 } });
         }
         for tb in texbinds.iter() {
             let tex_binding = 1 + 2 * tb.slot as u32;
@@ -885,18 +940,23 @@ fn blend_op_wire(e: u32) -> u32 {
     }
 }
 
-/// GL depth-compare enum → opaque WebGPU compare-function wire value (WebGPU `CompareFunction`, 1..=8).
+/// GL depth-compare enum → the neutral protocol compare code the executor decodes (`hl_gpu`'s
+/// `enums::compare`, Vulkan `VkCompareOp` ordering: NEVER=0 … ALWAYS=7). This MUST match those constants,
+/// NOT WebGPU's 1-based `CompareFunction`: the wgpu executor maps the wire value through `compare::*`
+/// (`pipeline::compare_function`), so an off-by-one here silently turns `GL_LESS` into `EQUAL` and rejects
+/// every depth-tested fragment.
 fn compare_wire(func: u32) -> u32 {
+    use hl_gpu::protocol::model::enums::compare;
     match func {
-        GL_NEVER => 1,
-        GL_LESS => 2,
-        GL_EQUAL => 3,
-        GL_LEQUAL => 4,
-        GL_GREATER => 5,
-        GL_NOTEQUAL => 6,
-        GL_GEQUAL => 7,
-        GL_ALWAYS => 8,
-        _ => 2, // GL_LESS default.
+        GL_NEVER => compare::NEVER,
+        GL_LESS => compare::LESS,
+        GL_EQUAL => compare::EQUAL,
+        GL_LEQUAL => compare::LESS_EQUAL,
+        GL_GREATER => compare::GREATER,
+        GL_NOTEQUAL => compare::NOT_EQUAL,
+        GL_GEQUAL => compare::GREATER_EQUAL,
+        GL_ALWAYS => compare::ALWAYS,
+        _ => compare::LESS, // GL_LESS default.
     }
 }
 
