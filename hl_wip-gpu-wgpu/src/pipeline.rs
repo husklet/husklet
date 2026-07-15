@@ -306,7 +306,11 @@ impl WgpuExecutor {
         for c in &desc.color_targets {
             targets.push(Some(wgpu::ColorTargetState {
                 format: texture_format(c.format)?,
-                blend: None,
+                // Honor the protocol's fixed-function blend: `Some(_)` lowers the GL `glBlendFunc`/
+                // `GL_BLEND` (and Vulkan `VkPipelineColorBlendStateCreateInfo`) state into wgpu's
+                // per-target blend so an overlapping translucent draw composites instead of overwriting;
+                // `None` stays an opaque replace.
+                blend: c.blend.as_ref().map(blend_state),
                 write_mask: wgpu::ColorWrites::ALL,
             }));
         }
@@ -455,6 +459,62 @@ fn compare_function(code: u32) -> wgpu::CompareFunction {
         compare::NOT_EQUAL => C::NotEqual,
         compare::GREATER_EQUAL => C::GreaterEqual,
         _ => C::Always, // compare::ALWAYS and any unmodeled code
+    }
+}
+
+/// Decode a protocol blend-factor wire value into a `wgpu::BlendFactor`. The wire numbering is the neutral
+/// one the GL driver emits from `glBlendFunc`/`glBlendFuncSeparate` (`hl_wip-gl` `blend_factor_wire`):
+/// 0=ZERO 1=ONE 2=SRC_COLOR 3=1-SRC_COLOR 4=SRC_ALPHA 5=1-SRC_ALPHA 6=DST_COLOR 7=1-DST_COLOR
+/// 8=DST_ALPHA 9=1-DST_ALPHA 10=SRC_ALPHA_SATURATE. Every value the protocol can carry maps to a concrete
+/// wgpu factor; an unmodeled code defaults to `One` (matching the GL driver's own fallback) rather than
+/// silently dropping the blend.
+fn blend_factor(code: u32) -> wgpu::BlendFactor {
+    use wgpu::BlendFactor as F;
+    match code {
+        0 => F::Zero,
+        1 => F::One,
+        2 => F::Src,
+        3 => F::OneMinusSrc,
+        4 => F::SrcAlpha,
+        5 => F::OneMinusSrcAlpha,
+        6 => F::Dst,
+        7 => F::OneMinusDst,
+        8 => F::DstAlpha,
+        9 => F::OneMinusDstAlpha,
+        10 => F::SrcAlphaSaturated,
+        _ => F::One,
+    }
+}
+
+/// Decode a protocol blend-op wire value into a `wgpu::BlendOperation`. The wire numbering is the neutral
+/// one the GL driver emits from `glBlendEquation` (`hl_wip-gl` `blend_op_wire`): 0=ADD 1=SUBTRACT
+/// 2=REVERSE_SUBTRACT 3=MIN 4=MAX. An unmodeled code defaults to `Add`.
+fn blend_operation(code: u32) -> wgpu::BlendOperation {
+    use wgpu::BlendOperation as O;
+    match code {
+        1 => O::Subtract,
+        2 => O::ReverseSubtract,
+        3 => O::Min,
+        4 => O::Max,
+        _ => O::Add,
+    }
+}
+
+/// Lower a protocol [`BlendState`] into a `wgpu::BlendState`, translating the separate color/alpha
+/// src+dst factors and equations. A target whose protocol blend is `None` is an opaque replace, which
+/// wgpu represents as `blend: None` on the color target.
+fn blend_state(b: &hl_gpu::protocol::model::descriptor::BlendState) -> wgpu::BlendState {
+    wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: blend_factor(b.src_color),
+            dst_factor: blend_factor(b.dst_color),
+            operation: blend_operation(b.op_color),
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: blend_factor(b.src_alpha),
+            dst_factor: blend_factor(b.dst_alpha),
+            operation: blend_operation(b.op_alpha),
+        },
     }
 }
 
