@@ -21,14 +21,16 @@ impl Rect {
         Rect { x, y, w, h }
     }
 
-    /// The exclusive right edge (`x + w`).
+    /// The exclusive right edge (`x + w`). Saturating so a hostile origin+extent near `i32::MAX` clamps
+    /// to the axis end instead of overflowing (a wrapped negative edge would corrupt every containment /
+    /// occlusion decision built on it).
     pub const fn right(&self) -> i32 {
-        self.x + self.w
+        self.x.saturating_add(self.w)
     }
 
-    /// The exclusive bottom edge (`y + h`).
+    /// The exclusive bottom edge (`y + h`). Saturating for the same reason as [`Self::right`].
     pub const fn bottom(&self) -> i32 {
-        self.y + self.h
+        self.y.saturating_add(self.h)
     }
 
     /// A rect with no area (either dimension `<= 0`) covers/contains nothing.
@@ -64,9 +66,11 @@ impl Rect {
             && self.bottom() > other.y
     }
 
-    /// Translate by `(dx, dy)` — used to lift a surface-local damage/opaque rect into root space.
+    /// Translate by `(dx, dy)` — used to lift a surface-local damage/opaque rect into root space by a
+    /// (client-controlled) subsurface/popup offset. Saturating so an absurd offset cannot overflow the
+    /// origin (a wrapped coordinate would place the rect on the wrong side of the plane).
     pub fn translate(&self, dx: i32, dy: i32) -> Rect {
-        Rect { x: self.x + dx, y: self.y + dy, w: self.w, h: self.h }
+        Rect { x: self.x.saturating_add(dx), y: self.y.saturating_add(dy), w: self.w, h: self.h }
     }
 
     /// The smallest rect containing both inputs. An empty input is ignored (the other is returned);
@@ -82,7 +86,9 @@ impl Rect {
         let y = self.y.min(other.y);
         let right = self.right().max(other.right());
         let bottom = self.bottom().max(other.bottom());
-        Rect { x, y, w: right - x, h: bottom - y }
+        // Saturating: with both edges already saturated, `right - x` of a full-plane span can exceed
+        // `i32::MAX`, so clamp the extent rather than overflow.
+        Rect { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }
     }
 }
 

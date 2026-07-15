@@ -184,6 +184,26 @@ impl Presenter for PngPresenter {
         // The two COMPOSE: a rotated+cropped buffer un-rotates first, then the crop applies in surface
         // space. Each step alone is the degenerate case of the general path.
         let has_transform = image.transform != BufferTransform::Normal;
+        // Defend the rasterizer against hostile geometry (task #205). The dimensions we would actually
+        // allocate into differ per viewport/transform combination; compute them, then REFUSE (report
+        // offscreen so pacing does not advance) any frame whose source buffer is degenerate/inconsistent
+        // with its rgba, or whose destination axis is non-positive or beyond `MAX_PRESENT_DIM`. Without
+        // this a `wp_viewport` dst of a few billion, or a buffer size whose `w*h*4` overflows `i32`, would
+        // panic (debug) or drive a multi-GiB allocation — the exact attacker-size→unchecked-mul pattern
+        // the driver sweeps found. Passing this gate guarantees `transform_buffer`/`resample_nearest`
+        // receive a consistent buffer and bounded, in-range dimensions, so their index math cannot
+        // overflow or slice out of bounds.
+        let (out_w, out_h) = match (image.present_crop.is_some(), has_transform) {
+            (true, _) => (logical_width, logical_height),
+            (false, true) => image.transform.surface_size(buf.width, buf.height),
+            (false, false) => (buf.width, buf.height),
+        };
+        let buffer_consistent =
+            tight_rgba_bytes(buf.width, buf.height).is_some_and(|need| buf.rgba.len() >= need);
+        if !buffer_consistent || out_w <= 0 || out_h <= 0 || out_w > MAX_PRESENT_DIM || out_h > MAX_PRESENT_DIM
+        {
+            return PresentationFeedback::offscreen();
+        }
         let (width, height, rgba) = match (image.present_crop, has_transform) {
             // Transform + viewport composed: un-rotate the buffer into surface space, then sample the
             // surface-space crop (`present_crop` is already in surface-space pixels) into the logical size.
@@ -234,18 +254,40 @@ impl Presenter for PngPresenter {
     fn set_visibility(&mut self, _surface: SurfaceId, _visibility: Visibility) {}
 }
 
+/// Hard cap on any single presented axis. A real display dimension is far below this; a hostile
+/// `wp_viewport` destination or buffer size beyond it is refused by [`Presenter::present`] rather than
+/// rasterized, so no attacker-chosen geometry can drive an unbounded (or `i32`-overflowing) allocation.
+/// Mirrors the bound-before-alloc guards the driver sweeps installed. (`16384²·4` ≈ 1 GiB is the hard
+/// ceiling; every real frame is orders of magnitude smaller.)
+const MAX_PRESENT_DIM: i32 = 1 << 14;
+
+/// The tight RGBA byte count (`w·h·4`) for a `w`×`h` image, or `None` if the dimensions are non-positive
+/// or the product overflows `i64` — i.e. a buffer the presenter must refuse rather than trust.
+fn tight_rgba_bytes(w: i32, h: i32) -> Option<usize> {
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    (w as i64).checked_mul(h as i64)?.checked_mul(4).map(|b| b as usize)
+}
+
 /// Rotate/flip `buf` by a `wl_surface.set_buffer_transform` into surface space — the un-rotation a real
 /// backend applies so a client's pre-rotated buffer presents upright. Scatters each buffer pixel to its
 /// surface pixel via [`BufferTransform::map_point`] (a bijection over the rectangle, so every output pixel
 /// is written exactly once — no scaling, no holes). Output size is `transform.surface_size(buf)`.
+///
+/// The caller ([`Presenter::present`]) gates dimensions: `buf` is consistent (`rgba.len() >= w·h·4`, both
+/// `> 0`) and the surface size is within `MAX_PRESENT_DIM`, so the `usize` index math below cannot
+/// overflow or slice out of bounds.
 fn transform_buffer(buf: &StoredBuffer, transform: BufferTransform) -> Vec<u8> {
+    let bw = buf.width as usize;
     let (ow, oh) = transform.surface_size(buf.width, buf.height);
-    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    let (ow_u, oh_u) = (ow as usize, oh as usize);
+    let mut out = vec![0u8; ow_u * oh_u * 4];
     for by in 0..buf.height {
         for bx in 0..buf.width {
             let (sx, sy) = transform.map_point(bx, by, buf.width, buf.height);
-            let si = ((by * buf.width + bx) * 4) as usize;
-            let di = ((sy * ow + sx) * 4) as usize;
+            let si = (by as usize * bw + bx as usize) * 4;
+            let di = (sy as usize * ow_u + sx as usize) * 4;
             out[di..di + 4].copy_from_slice(&buf.rgba[si..si + 4]);
         }
     }
@@ -256,17 +298,24 @@ fn transform_buffer(buf: &StoredBuffer, transform: BufferTransform) -> Vec<u8> {
 /// tight `dw`×`dh` RGBA image — the `wp_viewport` crop+scale a real backend rasterizes. Each destination
 /// pixel maps through its center to a source coordinate, floored to a source texel (clamped in-bounds).
 /// With integer crop rectangles and integer scale ratios the mapping is exact.
+///
+/// The caller ([`Presenter::present`]) gates dimensions: `buf` is non-empty and consistent, and
+/// `dw`/`dh` are in `1..=MAX_PRESENT_DIM`, so `buf.height - 1` / `buf.width - 1` are non-negative (a
+/// zero-dimension buffer would otherwise make `clamp(0, -1)` panic) and the `usize` index math cannot
+/// overflow or slice out of bounds.
 fn resample_nearest(buf: &StoredBuffer, src: (f64, f64, f64, f64), dw: i32, dh: i32) -> Vec<u8> {
     let (sx, sy, sw, sh) = src;
-    let mut out = vec![0u8; (dw * dh * 4) as usize];
+    let bw = buf.width as usize;
+    let (dw_u, dh_u) = (dw as usize, dh as usize);
+    let mut out = vec![0u8; dw_u * dh_u * 4];
     for dy in 0..dh {
         let v = sy + (dy as f64 + 0.5) / dh as f64 * sh;
         let by = (v.floor() as i32).clamp(0, buf.height - 1);
         for dx in 0..dw {
             let u = sx + (dx as f64 + 0.5) / dw as f64 * sw;
             let bx = (u.floor() as i32).clamp(0, buf.width - 1);
-            let si = ((by * buf.width + bx) * 4) as usize;
-            let di = ((dy * dw + dx) * 4) as usize;
+            let si = (by as usize * bw + bx as usize) * 4;
+            let di = (dy as usize * dw_u + dx as usize) * 4;
             out[di..di + 4].copy_from_slice(&buf.rgba[si..si + 4]);
         }
     }

@@ -301,7 +301,9 @@ impl Scene {
                 Some(SurfaceRole::Subsurface(s)) => (s.x, s.y),
                 _ => (0, 0),
             };
-            self.collect_subtree_offsets(child, x + cx, y + cy, out);
+            // Saturating: a chain of subsurfaces each at a hostile (near-`i32::MAX`) `set_position`
+            // would overflow the accumulated root offset; clamp instead of wrapping the layer off-plane.
+            self.collect_subtree_offsets(child, x.saturating_add(cx), y.saturating_add(cy), out);
         }
     }
 
@@ -314,8 +316,10 @@ impl Scene {
         for _ in 0..MAX_TREE_DEPTH {
             let geo = self.popup_geometry(cur)?;
             let parent = self.popup_parent(cur)?;
-            x += geo.x;
-            y += geo.y;
+            // Saturating: a deep submenu chain with hostile geometry origins must not overflow the
+            // accumulated offset back to the toplevel.
+            x = x.saturating_add(geo.x);
+            y = y.saturating_add(geo.y);
             depth += 1;
             if self.popup_parent(parent).is_some() {
                 cur = parent; // parent is itself a popup — keep climbing the submenu chain

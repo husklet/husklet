@@ -1922,12 +1922,15 @@ fn buffer_transform_to_wl(t: BufferTransform) -> Transform {
 fn read_shm_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
     let result = with_buffer_contents(buffer, |ptr, len, data| {
         let (w, h, stride, offset) = (data.width, data.height, data.stride, data.offset);
-        if w <= 0 || h <= 0 || stride < w * 4 || offset < 0 {
+        // `w * 4` is computed in `i64` so a hostile width near `i32::MAX` (reachable with a large `wl_shm`
+        // pool) cannot overflow the row-stride check itself before the geometry is rejected.
+        if w <= 0 || h <= 0 || (stride as i64) < w as i64 * 4 || offset < 0 {
             return None;
         }
-        // Highest byte read = offset + (h-1)*stride + w*4; must fit the mapping.
+        // Highest byte read = offset + (h-1)*stride + w*4; must fit the mapping. All widened to `usize`
+        // (each factor is now known positive) so the bound check can never overflow before it fires.
         let last_row = offset as usize + (h as usize - 1) * stride as usize;
-        if last_row.checked_add((w * 4) as usize).map(|m| m > len).unwrap_or(true) {
+        if last_row.checked_add(w as usize * 4).map(|m| m > len).unwrap_or(true) {
             return None;
         }
         // `format` is the neutral opaque/alpha distinction (drives blend); `swap_rb` selects channel
@@ -1939,7 +1942,9 @@ fn read_shm_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
             // Argb8888 and any other advertised/unknown format fall through to ARGB semantics.
             _ => (Format::Argb8888, false, true),
         };
-        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        // `w`/`h` are positive and `w·h·4 <= len` (the bound check above), so this `usize` product is
+        // bounded by the mapping size and cannot overflow.
+        let mut rgba = vec![0u8; w as usize * h as usize * 4];
         for y in 0..h {
             let row = offset as isize + y as isize * stride as isize;
             for x in 0..w {
