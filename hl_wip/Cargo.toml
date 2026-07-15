@@ -123,6 +123,10 @@ name = "gl_blit_framebuffer"
 path = "tests/gl_blit_framebuffer.rs"
 
 [[test]]
+name = "gl_blit_scale"
+path = "tests/gl_blit_scale.rs"
+
+[[test]]
 name = "gl_instanced"
 path = "tests/gl_instanced.rs"
 

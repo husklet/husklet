@@ -205,7 +205,7 @@ fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -
                 t
             }
         };
-        if let Some(copy) = blit_copy_enc(&b.src, &b.dst, src.1, src.3, src.4, dstt.1, dstt.3, dstt.4) {
+        if let Some(copy) = blit_copy_enc(&b.src, &b.dst, src.1, src.3, src.4, dstt.1, dstt.3, dstt.4, b.filter) {
             cmds.push(Cmd::Submit(CommandBuffer { encoder: vec![copy], signal: None }));
         }
         present = Some(dstt);
@@ -1012,10 +1012,12 @@ fn emit_scissor(d: &DrawCall, tw: i32, th: i32) -> Enc {
     Enc::SetScissor { x: x as u32, y: y as u32, w: w.max(0) as u32, h: h.max(0) as u32 }
 }
 
-/// Lower a `glBlitFramebuffer` color sub-rect into an `Enc::CopyTextureToTexture` (exact copy), flipping the
-/// GL bottom-left window rects into the render targets' top-left texel origin. Returns `None` for a
-/// degenerate (empty) rect or a SCALING blit (source extent ≠ destination extent) — the executor implements
-/// exact copies but not the scaled `Enc::BlitTexture`, so a resize blit is honestly not lowered here.
+/// Lower a `glBlitFramebuffer` color sub-rect, flipping the GL bottom-left window rects into the render
+/// targets' top-left texel origin. The equal-size (non-scaling) case lowers to an exact
+/// `Enc::CopyTextureToTexture`; a SCALING case (source extent != destination extent) lowers to
+/// `Enc::BlitTexture` carrying `filter` (`GL_LINEAR`→`Filter::Linear`, `GL_NEAREST`→`Filter::Nearest`), which
+/// the executor resamples into the destination rect. Returns `None` only for a degenerate (empty) source or
+/// destination rect.
 #[allow(clippy::too_many_arguments)]
 fn blit_copy_enc(
     src: &[i32; 4],
@@ -1026,6 +1028,7 @@ fn blit_copy_enc(
     dst_tex: u32,
     dst_th: i32,
     _dst_fmt: TextureFormat,
+    filter: Filter,
 ) -> Option<Enc> {
     let (sx0, sx1) = (src[0].min(src[2]), src[0].max(src[2]));
     let (sy0, sy1) = (src[1].min(src[3]), src[1].max(src[3]));
@@ -1033,16 +1036,27 @@ fn blit_copy_enc(
     let (dy0, dy1) = (dst[1].min(dst[3]), dst[1].max(dst[3]));
     let (sw, sh) = (sx1 - sx0, sy1 - sy0);
     let (dw, dh) = (dx1 - dx0, dy1 - dy0);
-    if sw <= 0 || sh <= 0 {
+    if sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 {
         return None;
     }
-    if sw != dw || sh != dh {
-        // Scaling blit → needs the unimplemented `Enc::BlitTexture`; not lowered.
-        return None;
-    }
-    // GL y is bottom-left; the region's TOP row in a top-left texture is `height - y_max`.
+    // GL y is bottom-left; a region's TOP row in a top-left texture is `height - y_max`.
     let src_oy = (src_th - sy1).max(0) as u32;
     let dst_oy = (dst_th - dy1).max(0) as u32;
+    if sw != dw || sh != dh {
+        // Scaling blit: resample the source rect into the (differently-sized) destination rect. The wgpu
+        // executor draws a filtered textured quad for this (its `Enc::BlitTexture` implementation).
+        return Some(Enc::BlitTexture {
+            src: src_tex,
+            src_sub: TextureSubresource::base(),
+            src_origin: Origin3d { x: sx0.max(0) as u32, y: src_oy, z: 0 },
+            src_extent: Extent3d { width: sw as u32, height: sh as u32, depth: 1 },
+            dst: dst_tex,
+            dst_sub: TextureSubresource::base(),
+            dst_origin: Origin3d { x: dx0.max(0) as u32, y: dst_oy, z: 0 },
+            dst_extent: Extent3d { width: dw as u32, height: dh as u32, depth: 1 },
+            filter,
+        });
+    }
     Some(Enc::CopyTextureToTexture {
         src: src_tex,
         src_sub: TextureSubresource::base(),

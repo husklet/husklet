@@ -658,8 +658,8 @@ pub fn framebuffer_renderbuffer(ctx: &mut GlContext, target: u32, attachment: u3
 /// The deferred model applies the blit AFTER the frame's render passes: its source is the read FBO's
 /// rendered color attachment and its destination is the draw FBO's, both materialized as render-target
 /// textures. For the equal-size (non-scaling) case the frame lowers this to `Enc::CopyTextureToTexture`
-/// (the executor implements exact texture→texture copy); a scaling blit would need the unimplemented
-/// `Enc::BlitTexture` and so is recorded but not lowered. A non-color `mask` is a no-op, and an incomplete
+/// (the executor implements exact texture→texture copy); a SCALING blit (source extent != destination
+/// extent) lowers to `Enc::BlitTexture` carrying the resampling `filter`. A non-color `mask` is a no-op, and an incomplete
 /// read or draw framebuffer raises `GL_INVALID_FRAMEBUFFER_OPERATION` (first-error-wins) — a conforming
 /// driver never samples an incomplete attachment.
 #[allow(clippy::too_many_arguments)]
@@ -674,6 +674,7 @@ pub fn blit_framebuffer(
     dst_x1: i32,
     dst_y1: i32,
     mask: u32,
+    filter: u32,
 ) {
     if mask & GL_COLOR_BUFFER_BIT == 0 {
         return;
@@ -684,11 +685,18 @@ pub fn blit_framebuffer(
         ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
         return;
     }
+    // GL defines only GL_NEAREST and GL_LINEAR for a color blit; anything else falls back to Nearest.
+    let filter = if filter == crate::model::glconst::GL_LINEAR {
+        hl_gpu::protocol::model::enums::Filter::Linear
+    } else {
+        hl_gpu::protocol::model::enums::Filter::Nearest
+    };
     ctx.blits.push(crate::model::context::BlitOp {
         read_fbo: ctx.read_fbo,
         draw_fbo: ctx.bound_fbo,
         src: [src_x0, src_y0, src_x1, src_y1],
         dst: [dst_x0, dst_y0, dst_x1, dst_y1],
+        filter,
     });
 }
 

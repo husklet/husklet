@@ -21,8 +21,9 @@ use std::collections::HashMap;
 
 /// A recorded `glBlitFramebuffer` — a sub-rect copy from a read framebuffer's color attachment to a draw
 /// framebuffer's. Rects are GL window coordinates (bottom-left origin), captured verbatim; the frame
-/// builder resolves the two FBOs' render-target textures and, for the equal-size (non-scaling) case, lowers
-/// this to `Enc::CopyTextureToTexture` (flipping Y into the textures' top-left origin).
+/// builder resolves the two FBOs' render-target textures and lowers the equal-size (non-scaling) case to
+/// `Enc::CopyTextureToTexture` and the scaling case (source extent ≠ destination extent) to
+/// `Enc::BlitTexture` with `filter` (both flipping Y into the textures' top-left origin).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct BlitOp {
     /// The read (source) and draw (destination) framebuffer names bound when the blit was recorded.
@@ -31,6 +32,9 @@ pub struct BlitOp {
     /// Source rect `[x0, y0, x1, y1]` and destination rect, in GL bottom-left window coordinates.
     pub src: [i32; 4],
     pub dst: [i32; 4],
+    /// The resampling filter for a SCALING blit (`glBlitFramebuffer`'s `filter` arg: `GL_LINEAR` →
+    /// [`Filter::Linear`], `GL_NEAREST` → [`Filter::Nearest`]). Ignored for the equal-size copy path.
+    pub filter: hl_gpu::protocol::model::enums::Filter,
 }
 
 /// The presented window surface (the default framebuffer). Ported from `hl-shim-gl`'s `Surface`.

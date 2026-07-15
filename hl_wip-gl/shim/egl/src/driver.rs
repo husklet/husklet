@@ -1862,10 +1862,10 @@ pub extern "C" fn glFramebufferRenderbuffer(target: u32, attachment: u32, render
     with(|s| record::framebuffer_renderbuffer(&mut s.ctx, target, attachment, renderbuffertarget, renderbuffer));
 }
 
-/// `glBlitFramebuffer(...)` — validate the read+draw framebuffers and record the blit. An honest partial:
-/// this deferred model cannot materialize a cross-FBO pixel copy at record time (no rendered source plane
-/// exists until swap), so the region/filter are validated but the copy is a documented no-op; see
-/// [`record::blit_framebuffer`].
+/// `glBlitFramebuffer(...)` — validate the read+draw framebuffers and record the color blit for the frame
+/// builder. The deferred model applies it after the frame's render passes: an equal-size blit lowers to
+/// `Enc::CopyTextureToTexture`, a scaling blit to `Enc::BlitTexture` with `filter` mapped from GL's
+/// `GL_NEAREST`/`GL_LINEAR`; see [`record::blit_framebuffer`].
 #[cfg_attr(gles_client, no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn glBlitFramebuffer(
@@ -1878,11 +1878,11 @@ pub extern "C" fn glBlitFramebuffer(
     dst_x1: i32,
     dst_y1: i32,
     mask: u32,
-    _filter: u32,
+    filter: u32,
 ) {
     with(|s| {
         record::blit_framebuffer(
-            &mut s.ctx, src_x0, src_y0, src_x1, src_y1, dst_x0, dst_y0, dst_x1, dst_y1, mask,
+            &mut s.ctx, src_x0, src_y0, src_x1, src_y1, dst_x0, dst_y0, dst_x1, dst_y1, mask, filter,
         )
     });
 }
