@@ -306,6 +306,83 @@ impl Interner {
     }
 }
 
+/// Allocates a real register for each distinct special register that appears in an OPERAND position
+/// (e.g. `mad.lo.s32 %idx, %ntid.x, %ctaid.x, %tid.x` — legal PTX). A `mov %r, %sreg` lowers straight to
+/// [`Inst::MovSReg`]; an operand-position special register instead needs a register to read from, so its
+/// value is materialized once by a [`Inst::MovSReg`] PRELUDE emitted at the very top of the instruction
+/// stream (special registers are thread/block-invariant, so a single leading read is always correct) and
+/// operand references then read that register. This routes operand-position special registers through the
+/// EXACT same runtime resolution as the `mov` form — instead of the old footgun of silently interning
+/// `%ntid.x` as a fresh, zero-valued virtual register (→ every thread computing index 0).
+#[derive(Default)]
+struct SRegAlloc {
+    /// `(sreg code, assigned register)` in first-use order — also the prelude emission order.
+    regs: Vec<(u8, u16)>,
+}
+impl SRegAlloc {
+    /// The register holding special register `sreg`, allocating it (and scheduling its prelude
+    /// `MovSReg`) on first use. The synthetic interner key starts with `$`, which a real `%`-register
+    /// (stripped of its `%`) never can — so it cannot collide with a virtual register name.
+    fn reg_for(&mut self, sreg: u8, interner: &mut Interner) -> u16 {
+        if let Some(&(_, r)) = self.regs.iter().find(|(s, _)| *s == sreg) {
+            return r;
+        }
+        let r = interner.get(&format!("$sreg${sreg}"));
+        self.regs.push((sreg, r));
+        r
+    }
+    /// The leading `MovSReg` block that materializes every operand-position special register.
+    fn prelude(&self) -> Vec<Inst> {
+        self.regs.iter().map(|&(sreg, d)| Inst::MovSReg { d, sreg }).collect()
+    }
+}
+
+/// Classify a `%`-prefixed OPERAND token:
+/// - `Ok(Some(sr))` — a recognized special register (resolve it via [`SRegAlloc`]);
+/// - `Ok(None)`     — a plain virtual register (intern it normally);
+/// - `Err(..)`      — a special-register-SHAPED token we do not recognize. A namespaced `%ns.field`
+///   token (`%tid.w`, `%bogus.x`) or a known dotless special register we do not model (`%laneid`,
+///   `%warpid`, …) is REJECTED rather than silently interned as a fresh zero register — that silent path
+///   is the wrong-result footgun this guards against. A plain virtual register never contains a `.`.
+fn classify_reg_operand(tok: &str) -> Result<Option<u8>> {
+    if let Some(sr) = parse_sreg(tok) {
+        return Ok(Some(sr));
+    }
+    let name = strip_reg(tok);
+    let base = name.split('.').next().unwrap_or(name);
+    if name.contains('.') || is_special_reg_base(base) {
+        return Err(err(format!(
+            "unknown/unsupported special register `%{name}` used as operand \
+             (modeled: %tid/%ntid/%ctaid/%nctaid with a .x/.y/.z component)"
+        )));
+    }
+    Ok(None)
+}
+
+/// Dotless special-register names PTX defines that we do NOT model. Recognized here ONLY so that an
+/// operand use errors honestly instead of silently interning a fresh zero register. The dimension/index
+/// roots (`tid`/`ntid`/`ctaid`/`nctaid`) are deliberately NOT listed: they are only ever special
+/// registers WITH a `.x/.y/.z` component (handled by the dot rule in [`classify_reg_operand`]), and a
+/// bare `%tid`/`%ntid`/… is a perfectly ordinary virtual-register name real kernels use.
+fn is_special_reg_base(base: &str) -> bool {
+    matches!(
+        base,
+        "laneid" | "warpid" | "nwarpid" | "warpsize" | "gridid" | "smid" | "nsmid"
+            | "lanemask_eq" | "lanemask_le" | "lanemask_lt" | "lanemask_ge" | "lanemask_gt"
+            | "clock" | "clock64" | "clock_hi" | "globaltimer"
+    )
+}
+
+/// Resolve a `%`-register operand token to a register index: a recognized special register routes to its
+/// [`SRegAlloc`]-assigned register (materialized by the prelude); a plain virtual register is interned;
+/// an unrecognized special-register-shaped token errors (via [`classify_reg_operand`]).
+fn resolve_reg(tok: &str, interner: &mut Interner, sregs: &mut SRegAlloc) -> Result<u16> {
+    match classify_reg_operand(tok)? {
+        Some(sr) => Ok(sregs.reg_for(sr, interner)),
+        None => Ok(interner.get(strip_reg(tok))),
+    }
+}
+
 /// Strip PTX comments (`//` line, `/* … */` block), replacing each with a space to keep token bounds.
 fn strip_comments(src: &str) -> String {
     let b = src.as_bytes();
@@ -385,14 +462,31 @@ fn parse_body(body: &str, params: &[(String, u32)], interner: &mut Interner) -> 
         .map(|(i, (n, _))| (n.as_str(), i as u16))
         .collect();
 
+    let mut sregs = SRegAlloc::default();
     let mut insts = Vec::with_capacity(stmts.len());
     let mut ld_param = Vec::new();
     for s in &stmts {
-        let inst = parse_inst(s, &param_idx, &labels, &shared_syms, interner)?;
+        let inst = parse_inst(s, &param_idx, &labels, &shared_syms, interner, &mut sregs)?;
         if let Inst::LdParam { d, param } = inst {
             ld_param.push((d, param));
         }
         insts.push(inst);
+    }
+
+    // Materialize operand-position special registers: emit their `MovSReg` prelude at the top of the
+    // stream, then shift every branch target past it. Branch targets are instruction indices (== statement
+    // ordinals here), so they move by the prelude length; `ld_param` seeds are register indices, unaffected.
+    let prelude = sregs.prelude();
+    if !prelude.is_empty() {
+        let n = prelude.len() as u32;
+        for inst in &mut insts {
+            if let Inst::Bra { target, .. } = inst {
+                *target += n;
+            }
+        }
+        let mut all = prelude;
+        all.extend(insts);
+        insts = all;
     }
 
     Ok(RawFn { insts, reg_count: interner.count(), ld_param, shared_bytes })
@@ -442,6 +536,7 @@ fn parse_inst(
     labels: &std::collections::HashMap<String, u32>,
     shared_syms: &std::collections::HashMap<String, u32>,
     interner: &mut Interner,
+    sregs: &mut SRegAlloc,
 ) -> Result<Inst> {
     // optional predicate guard: `@%p1` or `@!%p1`
     let mut rest = stmt.trim();
@@ -488,10 +583,13 @@ fn parse_inst(
             need!(2);
             let d = reg(interner, &ops[0]);
             let src = &ops[1];
-            if let Some(sr) = parse_sreg(src) {
-                Inst::MovSReg { d, sreg: sr }
-            } else if is_reg(src) {
-                Inst::MovReg { d, s: reg(interner, src) }
+            if is_reg(src) {
+                // A `%`-source is a special register (→ MovSReg) or a plain register (→ MovReg); an
+                // unrecognized special-register-shaped token errors instead of silently reading a zero reg.
+                match classify_reg_operand(src)? {
+                    Some(sr) => Inst::MovSReg { d, sreg: sr },
+                    None => Inst::MovReg { d, s: reg(interner, src) },
+                }
             } else if let Some(&off) = shared_syms.get(src.trim()) {
                 Inst::MovImmI { d, imm: off as u64 }
             } else if has("f32") {
@@ -510,10 +608,10 @@ fn parse_inst(
                     .ok_or_else(|| err(format!("unknown param `{name}`")))?;
                 Inst::LdParam { d, param: p }
             } else if has("global") {
-                let (addr, off) = parse_mem(&ops[1], interner)?;
+                let (addr, off) = parse_mem(&ops[1], interner, sregs)?;
                 Inst::LdGlobal { d, addr, off, ty: gtype(opcode)? }
             } else if has("shared") {
-                let (base, off) = parse_shared_mem(&ops[1], shared_syms, interner)?;
+                let (base, off) = parse_shared_mem(&ops[1], shared_syms, interner, sregs)?;
                 Inst::LdShared { d, base, off, ty: gtype(opcode)? }
             } else {
                 return Err(err(format!("unsupported ld space: `{stmt}`")));
@@ -522,12 +620,12 @@ fn parse_inst(
         "st" => {
             need!(2);
             if has("global") {
-                let (addr, off) = parse_mem(&ops[0], interner)?;
-                let src = parse_op(&ops[1], interner, has("f32"))?;
+                let (addr, off) = parse_mem(&ops[0], interner, sregs)?;
+                let src = parse_op(&ops[1], interner, has("f32"), sregs)?;
                 Inst::StGlobal { addr, off, src, ty: gtype(opcode)? }
             } else if has("shared") {
-                let (base, off) = parse_shared_mem(&ops[0], shared_syms, interner)?;
-                let src = parse_op(&ops[1], interner, has("f32"))?;
+                let (base, off) = parse_shared_mem(&ops[0], shared_syms, interner, sregs)?;
+                let src = parse_op(&ops[1], interner, has("f32"), sregs)?;
                 Inst::StShared { base, off, src, ty: gtype(opcode)? }
             } else {
                 return Err(err(format!("unsupported st space: `{stmt}`")));
@@ -541,12 +639,12 @@ fn parse_inst(
             need!(3);
             let d = reg(interner, &ops[0]);
             if has("f32") {
-                Inst::FAdd { d, a: parse_op(&ops[1], interner, true)?, b: parse_op(&ops[2], interner, true)? }
+                Inst::FAdd { d, a: parse_op(&ops[1], interner, true, sregs)?, b: parse_op(&ops[2], interner, true, sregs)? }
             } else {
                 Inst::IAdd {
                     d,
-                    a: parse_op(&ops[1], interner, false)?,
-                    b: parse_op(&ops[2], interner, false)?,
+                    a: parse_op(&ops[1], interner, false, sregs)?,
+                    b: parse_op(&ops[2], interner, false, sregs)?,
                     wide: has("s64") || has("u64") || has("b64"),
                 }
             }
@@ -555,12 +653,12 @@ fn parse_inst(
             need!(3);
             let d = reg(interner, &ops[0]);
             if has("f32") {
-                Inst::FSub { d, a: parse_op(&ops[1], interner, true)?, b: parse_op(&ops[2], interner, true)? }
+                Inst::FSub { d, a: parse_op(&ops[1], interner, true, sregs)?, b: parse_op(&ops[2], interner, true, sregs)? }
             } else {
                 Inst::ISub {
                     d,
-                    a: parse_op(&ops[1], interner, false)?,
-                    b: parse_op(&ops[2], interner, false)?,
+                    a: parse_op(&ops[1], interner, false, sregs)?,
+                    b: parse_op(&ops[2], interner, false, sregs)?,
                     wide: has("s64") || has("u64") || has("b64"),
                 }
             }
@@ -569,12 +667,12 @@ fn parse_inst(
             need!(3);
             let d = reg(interner, &ops[0]);
             if has("f32") {
-                Inst::FMul { d, a: parse_op(&ops[1], interner, true)?, b: parse_op(&ops[2], interner, true)? }
+                Inst::FMul { d, a: parse_op(&ops[1], interner, true, sregs)?, b: parse_op(&ops[2], interner, true, sregs)? }
             } else {
                 Inst::IMul {
                     d,
-                    a: parse_op(&ops[1], interner, false)?,
-                    b: parse_op(&ops[2], interner, false)?,
+                    a: parse_op(&ops[1], interner, false, sregs)?,
+                    b: parse_op(&ops[2], interner, false, sregs)?,
                     wide: has("wide"),
                     unsigned: has("u32") || has("u16") || has("u8"),
                 }
@@ -585,9 +683,9 @@ fn parse_inst(
             let d = reg(interner, &ops[0]);
             Inst::IMad {
                 d,
-                a: parse_op(&ops[1], interner, false)?,
-                b: parse_op(&ops[2], interner, false)?,
-                c: parse_op(&ops[3], interner, false)?,
+                a: parse_op(&ops[1], interner, false, sregs)?,
+                b: parse_op(&ops[2], interner, false, sregs)?,
+                c: parse_op(&ops[3], interner, false, sregs)?,
             }
         }
         "fma" => {
@@ -595,9 +693,9 @@ fn parse_inst(
             let d = reg(interner, &ops[0]);
             Inst::FFma {
                 d,
-                a: parse_op(&ops[1], interner, true)?,
-                b: parse_op(&ops[2], interner, true)?,
-                c: parse_op(&ops[3], interner, true)?,
+                a: parse_op(&ops[1], interner, true, sregs)?,
+                b: parse_op(&ops[2], interner, true, sregs)?,
+                c: parse_op(&ops[3], interner, true, sregs)?,
             }
         }
         "setp" => {
@@ -620,8 +718,8 @@ fn parse_inst(
             };
             Inst::Setp {
                 d,
-                a: parse_op(&ops[1], interner, false)?,
-                b: parse_op(&ops[2], interner, false)?,
+                a: parse_op(&ops[1], interner, false, sregs)?,
+                b: parse_op(&ops[2], interner, false, sregs)?,
                 cmp,
                 unsigned: has("u32") || has("u64") || has("u16") || has("u8"),
             }
@@ -629,7 +727,7 @@ fn parse_inst(
         "cvt" => {
             need!(2);
             let d = reg(interner, &ops[0]);
-            let s = parse_op(&ops[1], interner, has("f32"))?;
+            let s = parse_op(&ops[1], interner, has("f32"), sregs)?;
             let mods: Vec<&str> = opcode.split('.').skip(1).collect();
             let tys: Vec<&str> = mods
                 .into_iter()
@@ -648,8 +746,8 @@ fn parse_inst(
             let d = reg(interner, &ops[0]);
             Inst::Shift {
                 d,
-                a: parse_op(&ops[1], interner, false)?,
-                b: parse_op(&ops[2], interner, false)?,
+                a: parse_op(&ops[1], interner, false, sregs)?,
+                b: parse_op(&ops[2], interner, false, sregs)?,
                 dir: if base == "shl" { SHIFT_LEFT } else { SHIFT_RIGHT },
                 unsigned: has("u32") || has("u64") || has("u16") || has("b32") || has("b64") || has("b16"),
             }
@@ -664,8 +762,8 @@ fn parse_inst(
             };
             Inst::BitOp {
                 d,
-                a: parse_op(&ops[1], interner, false)?,
-                b: parse_op(&ops[2], interner, false)?,
+                a: parse_op(&ops[1], interner, false, sregs)?,
+                b: parse_op(&ops[2], interner, false, sregs)?,
                 op,
             }
         }
@@ -689,17 +787,17 @@ fn parse_inst(
             i += 1;
             let (cmp, val) = if op == ATOM_CAS {
                 need!(i + 2);
-                let cmp = parse_op(&ops[i], interner, false)?;
-                let val = parse_op(&ops[i + 1], interner, false)?;
+                let cmp = parse_op(&ops[i], interner, false, sregs)?;
+                let val = parse_op(&ops[i + 1], interner, false, sregs)?;
                 (cmp, val)
             } else {
-                (Op::ImmI(0), parse_op(&ops[i], interner, false)?)
+                (Op::ImmI(0), parse_op(&ops[i], interner, false, sregs)?)
             };
             if has("shared") {
-                let (b, off) = parse_shared_mem(addr_tok, shared_syms, interner)?;
+                let (b, off) = parse_shared_mem(addr_tok, shared_syms, interner, sregs)?;
                 Inst::AtomShared { d, base: b, off, op, cmp, val, unsigned }
             } else if has("global") || !has("shared") {
-                let (addr, off) = parse_mem(addr_tok, interner)?;
+                let (addr, off) = parse_mem(addr_tok, interner, sregs)?;
                 Inst::AtomGlobal { d, addr, off, op, cmp, val, unsigned }
             } else {
                 return Err(err(format!("unsupported atom space: `{stmt}`")));
@@ -739,6 +837,7 @@ fn parse_shared_mem(
     tok: &str,
     shared_syms: &std::collections::HashMap<String, u32>,
     interner: &mut Interner,
+    sregs: &mut SRegAlloc,
 ) -> Result<(Op, i64)> {
     let inner = tok.trim().trim_start_matches('[').trim_end_matches(']').trim();
     let (base_tok, off) = if let Some(pos) = inner.find(['+', '-']) {
@@ -748,7 +847,7 @@ fn parse_shared_mem(
         (inner, 0)
     };
     if is_reg(base_tok) {
-        Ok((Op::Reg(interner.get(strip_reg(base_tok))), off))
+        Ok((Op::Reg(resolve_reg(base_tok, interner, sregs)?), off))
     } else if let Some(&sym) = shared_syms.get(base_tok) {
         Ok((Op::ImmI(sym as i64), off))
     } else {
@@ -815,21 +914,21 @@ fn gtype(opcode: &str) -> Result<u8> {
 }
 
 /// `[%reg]`, `[%reg+off]`, or `[%reg-off]` → (reg, byte offset).
-fn parse_mem(tok: &str, interner: &mut Interner) -> Result<(u16, i64)> {
+fn parse_mem(tok: &str, interner: &mut Interner, sregs: &mut SRegAlloc) -> Result<(u16, i64)> {
     let inner = tok.trim().trim_start_matches('[').trim_end_matches(']').trim();
     if let Some(pos) = inner.find(['+', '-']) {
         let (r, o) = inner.split_at(pos);
         let off = parse_imm_i(o.trim())?;
-        Ok((interner.get(strip_reg(r.trim())), off))
+        Ok((resolve_reg(r.trim(), interner, sregs)?, off))
     } else {
-        Ok((interner.get(strip_reg(inner)), 0))
+        Ok((resolve_reg(inner, interner, sregs)?, 0))
     }
 }
 
-fn parse_op(tok: &str, interner: &mut Interner, want_float: bool) -> Result<Op> {
+fn parse_op(tok: &str, interner: &mut Interner, want_float: bool, sregs: &mut SRegAlloc) -> Result<Op> {
     let t = tok.trim();
     if is_reg(t) {
-        Ok(Op::Reg(interner.get(strip_reg(t))))
+        Ok(Op::Reg(resolve_reg(t, interner, sregs)?))
     } else if want_float {
         Ok(Op::ImmF(parse_imm_f(t)?))
     } else {
