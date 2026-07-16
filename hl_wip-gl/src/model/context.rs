@@ -502,6 +502,38 @@ impl GlContext {
         }
     }
 
+    /// Retire GL program `gl_name`'s resident IR resources (`glDeleteProgram`): its two cached shader MODULES
+    /// (`prog_shader_cache`) and EVERY render PIPELINE it minted across the fixed-function / vertex-layout
+    /// state variants it was drawn with (`prog_pipeline_cache`). Both caches key on the GL program name, so
+    /// every entry for `gl_name` is dropped and a `DestroyShader` / `DestroyPipeline` queued for the next
+    /// submitted frame — so a deleted Skia/GskGpu program stops holding host residency instead of leaking its
+    /// modules + pipelines forever (Chrome deletes + relinks programs across its lifetime). Removing the cache
+    /// entries is ALSO what keeps a RECYCLED program name correct: GL reuses a freed name, and a fresh
+    /// `glCreateProgram` + `glLinkProgram` on that name starts back at `link_gen == 1` — the SAME generation
+    /// the dead program's stale entry carried — so without this removal [`Self::program_shader_ir`] /
+    /// [`Self::program_pipeline_ir`] would HIT the stale entry and hand the new (different-source) program the
+    /// dead program's shader/pipeline ids (a silent id collision, or an `UnknownId` once the dead ids are
+    /// destroyed). A no-op when the name owns no IR yet. Mirrors [`Self::retire_texture`] /
+    /// [`Self::retire_buffer`].
+    pub fn retire_program(&mut self, gl_name: u32) {
+        if let Some((vs, fs, _)) = self.prog_shader_cache.remove(&gl_name) {
+            self.pending_destroys.push(Cmd::DestroyShader(vs));
+            self.pending_destroys.push(Cmd::DestroyShader(fs));
+        }
+        let mut dead: Vec<u32> = Vec::new();
+        self.prog_pipeline_cache.retain(|&(name, _), &mut (ir, _)| {
+            if name == gl_name {
+                dead.push(ir);
+                false
+            } else {
+                true
+            }
+        });
+        for ir in dead {
+            self.pending_destroys.push(Cmd::DestroyPipeline(ir));
+        }
+    }
+
     /// The queued persistent `Destroy*` commands (see [`Self::pending_destroys`]). The service layer appends
     /// these to a frame AFTER its `Submit`s (and before any `Present`), then [`Self::clear_pending_destroys`]
     /// once the submit succeeds — so a NACK (which returns before the clear) re-emits them on the retry.

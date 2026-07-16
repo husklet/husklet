@@ -1475,8 +1475,14 @@ pub fn program_uniform_sampler(ctx: &mut GlContext, program: u32, sampler_index:
 /// `glDeleteProgram(program)` — drop the program object; clears the current-program binding if it names
 /// the deleted program.
 pub fn delete_program(ctx: &mut GlContext, program: u32) {
-    if ctx.programs.delete_program(program) && ctx.cur_prog == program {
-        ctx.cur_prog = 0;
+    if ctx.programs.delete_program(program) {
+        // Retire the program's resident IR shader modules + render pipelines (queued Destroy for the next
+        // frame), so a deleted Skia/GskGpu program stops holding host residency and a recycled GL program
+        // name cannot collide with the dead program's cached ids. See `GlContext::retire_program`.
+        ctx.retire_program(program);
+        if ctx.cur_prog == program {
+            ctx.cur_prog = 0;
+        }
     }
 }
 
