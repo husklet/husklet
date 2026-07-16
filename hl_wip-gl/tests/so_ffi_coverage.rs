@@ -250,11 +250,16 @@ fn gl_identity_and_scalar_state_queries_marshal() {
     assert_eq!(getint(GL_STENCIL_BITS), 8);
     assert_eq!(getint(0xBEEF), 0, "an unknown pname writes a single 0, never garbage");
 
-    // A multi-slot query (GL_VIEWPORT writes 4 ints): the default viewport is the surface extent.
+    // A multi-slot query (GL_VIEWPORT writes 4 ints). Drive glViewport (4 ints in) then read it back so
+    // the round-trip is DETERMINISTIC and self-contained: the default viewport falls back to the surface
+    // extent, which is 0x0 until some surface is made current — so asserting a non-zero default made this
+    // depend on another (serialized-but-unordered) test having seeded a surface first. Setting the viewport
+    // explicitly exercises the same multi-slot out-param marshalling without that ordering dependency.
+    let gl_viewport = f!(sh.gles, "glViewport", extern "C" fn(i32, i32, i32, i32));
+    gl_viewport(0, 0, 800, 600);
     let mut vp = [-1i32; 4];
     gl_get_integerv(GL_VIEWPORT, vp.as_mut_ptr());
-    assert_eq!((vp[0], vp[1]), (0, 0), "viewport origin");
-    assert!(vp[2] > 0 && vp[3] > 0, "viewport extent is the surface size, got {vp:?}");
+    assert_eq!(vp, [0, 0, 800, 600], "glViewport -> glGetIntegerv(GL_VIEWPORT) round-trips 4 ints");
 
     // glGetInteger64v: the SAME ceiling widened to i64 (width-conversion marshalling).
     let mut v64: i64 = -1;
