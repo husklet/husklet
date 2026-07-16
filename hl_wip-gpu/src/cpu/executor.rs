@@ -463,7 +463,10 @@ impl GpuExecutor for CpuExecutor {
             shader_payloads: shader_payload::KERNEL,
             // Color formats plus the depth formats the oracle materializes for depth-tested rendering.
             texture_formats: format_bits(COLOR_FORMATS) | format_bits(DEPTH_FORMATS),
-            max_frame_bytes: 64 << 20,
+            // Browser-class per-frame wire-byte ceiling (256 MiB): a hostile-DoS guard, not a correctness
+            // bound — the `GlobalLedger` is the true host-OOM guard. Raised from 64 MiB, which tripped
+            // healthy browser frames. (Matches the wgpu executor; see its rationale.)
+            max_frame_bytes: 256 << 20,
             max_buffer_bytes: 256 << 20,
             max_bind_groups: 4,
             // Synchronous; a fence only reaches a value a submit signalled.

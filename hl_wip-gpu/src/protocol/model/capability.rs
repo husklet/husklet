@@ -223,7 +223,10 @@ impl Capabilities {
                 | shader_payload::WGSL
                 | shader_payload::KERNEL,
             texture_formats: format_bits(COLOR_FORMATS),
-            max_frame_bytes: 64 << 20,
+            // Browser-class per-frame wire-byte ceiling (hostile-DoS guard, not a correctness bound; the
+            // `GlobalLedger` is the true host-OOM guard). Raised from 64 MiB — mis-sized for a browser, whose
+            // real frames run to 89–168 MB — to a finite 256 MiB. See the wgpu executor for the full rationale.
+            max_frame_bytes: 256 << 20,
             max_buffer_bytes: 1 << 30,
             max_bind_groups: 8,
             supports_timeline_fences: true,

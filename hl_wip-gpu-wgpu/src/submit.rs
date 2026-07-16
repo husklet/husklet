@@ -30,6 +30,37 @@ fn index_format(f: IndexFormat) -> wgpu::IndexFormat {
     }
 }
 
+/// Intersect a GL-style viewport rect `(x, y, w, h)` with the render target `[0, tw] × [0, th]` so it
+/// satisfies wgpu's strict `RenderPass::set_viewport` bounds (`x,y >= 0`, `x+w <= tw`, `y+h <= th`, `w,h > 0`
+/// — see `wgpu_core::command::render::set_viewport`). Returns the in-bounds sub-rect, or `None` when the
+/// intersection is empty (the whole viewport lies outside the target — nothing should rasterize).
+///
+/// WHY this exists: GL's `glViewport` is only the NDC→window transform and permits a rect that starts
+/// negative or overhangs the framebuffer; GL simply lets the framebuffer clip the fragments. wgpu forbids
+/// such a rect outright, so forwarding Chrome's legitimate scrolled-layer viewport (`y=-386, h=642` into a
+/// 256-tall target) verbatim NACKs the frame and orphans its resources. Intersecting makes the frame VALID
+/// and keeps the whole in-bounds path (every non-scrolled draw) pixel-exact.
+///
+/// FIDELITY NOTE: wgpu ties the NDC→window transform to the (necessarily in-bounds) rect, so for a viewport
+/// that is genuinely larger than / offset outside the target the transform cannot be reproduced exactly
+/// without baking a compensating scale+bias into every vertex shader's `gl_Position` (ANGLE's driver-uniform
+/// technique) — a follow-up. This intersection is the standard "make it valid" clamp: it stops the
+/// validation NACK + downstream `UnknownId` orphan cascade and confines rasterization to the visible region.
+fn clamp_viewport(x: f32, y: f32, w: f32, h: f32, tw: u32, th: u32) -> Option<(f32, f32, f32, f32)> {
+    let (tw, th) = (tw as f32, th as f32);
+    let x0 = x.max(0.0);
+    let y0 = y.max(0.0);
+    let x1 = (x + w).min(tw);
+    let y1 = (y + h).min(th);
+    let cw = x1 - x0;
+    let ch = y1 - y0;
+    if cw.is_finite() && ch.is_finite() && cw > 0.0 && ch > 0.0 {
+        Some((x0, y0, cw, ch))
+    } else {
+        None
+    }
+}
+
 impl WgpuExecutor {
     pub(crate) fn submit_cb(&mut self, res: &mut SessionResources, cb: &CommandBuffer) -> Result<()> {
         let ops = &cb.encoder;
@@ -485,10 +516,18 @@ impl WgpuExecutor {
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(tag::EXEC, "submit");
         hl_log::hl_count!(tag::EXEC, "passes");
-        // Resolve attachment views up front (they must outlive the pass).
+        // Resolve attachment views up front (they must outlive the pass). While resolving, track the render
+        // pass's render extent (`target_w`/`target_h`) — the MIN width/height across all attachments, which
+        // is exactly the bound wgpu validates a viewport against (`state.info.extent`). It is the clip
+        // rectangle a GL-style out-of-bounds viewport must be intersected with (see `clamp_viewport`).
         let mut views = Vec::with_capacity(color.len());
+        let mut target_w = u32::MAX;
+        let mut target_h = u32::MAX;
         for c in color {
-            views.push((texture::native(res, c.texture)?.view.clone(), c));
+            let t = texture::native(res, c.texture)?;
+            target_w = target_w.min(t.width);
+            target_h = target_h.min(t.height);
+            views.push((t.view.clone(), c));
         }
         // Resolve the depth attachment's view + load/clear (it too must outlive the pass). A pipeline
         // built with a depth-stencil state MUST run in a pass with a matching depth attachment (wgpu
@@ -507,6 +546,9 @@ impl WgpuExecutor {
                     return Err(GpuError::Invalid("wgpu: depth attachment is not a depth format"));
                 }
                 let has_stencil = matches!(t.format, TextureFormat::Depth24PlusStencil8);
+                // The depth attachment participates in the render extent wgpu validates against.
+                target_w = target_w.min(t.width);
+                target_h = target_h.min(t.height);
                 Some((t.view.clone(), d.load, d.clear_depth, d.clear_stencil, has_stencil))
             }
             None => None,
@@ -626,10 +668,39 @@ impl WgpuExecutor {
                 occlusion_query_set: None,
             });
             let mut di = 0usize;
+            // Tracks whether the CURRENTLY-bound viewport intersected the render target to an EMPTY rect
+            // (the whole GL viewport lies outside the attachment). wgpu has no way to express such a viewport,
+            // and GL would rasterize nothing through it, so draws issued while this is set are dropped (they
+            // produce no pixels — exactly GL's result) instead of falling back to wgpu's default full-target
+            // viewport, which would wrongly paint the geometry. Reset by the next in-bounds SetViewport.
+            let mut vp_degenerate = false;
             for op in ops {
                 match op {
                     Enc::SetViewport { x, y, w, h, min_depth, max_depth } => {
-                        pass.set_viewport(*x, *y, *w, *h, *min_depth, *max_depth);
+                        // GL's glViewport permits a rect that starts negative or extends past the framebuffer
+                        // — GL treats the viewport purely as the NDC→window transform and lets the framebuffer
+                        // clip fragments. wgpu's `set_viewport` instead REJECTS any rect not fully inside the
+                        // attachment (`x,y>=0`, `x+w<=tw`, `y+h<=th`, `w,h>0`) as a device-validation error,
+                        // which is what NACKed Chrome's first real frame (a scrolled layer sends e.g.
+                        // `y=-386, h=642` into a 256-tall target) and orphaned its pass resources downstream.
+                        // Intersect the GL rect with the render target so wgpu accepts it; drop the draws when
+                        // the intersection is empty. See `clamp_viewport` for the fidelity note.
+                        match clamp_viewport(*x, *y, *w, *h, target_w, target_h) {
+                            Some((cx, cy, cw, ch)) => {
+                                vp_degenerate = false;
+                                // Depth range is clamped into [0,1] so a stray out-of-range depth (which wgpu
+                                // also rejects) can't reintroduce the very NACK we're clearing.
+                                pass.set_viewport(
+                                    cx,
+                                    cy,
+                                    cw,
+                                    ch,
+                                    min_depth.clamp(0.0, 1.0),
+                                    max_depth.clamp(0.0, 1.0),
+                                );
+                            }
+                            None => vp_degenerate = true,
+                        }
                     }
                     Enc::SetScissor { x, y, w, h } => pass.set_scissor_rect(*x, *y, *w, *h),
                     // Dynamic stencil reference: the value the pipeline's stencil compare tests against and
@@ -670,7 +741,11 @@ impl WgpuExecutor {
                         let i_end = first_instance
                             .checked_add(*instance_count)
                             .ok_or(GpuError::Invalid("wgpu: draw instance range overflow"))?;
-                        pass.draw(*first_vertex..v_end, *first_instance..i_end);
+                        // A draw under a wholly-out-of-bounds viewport rasterizes nothing in GL; skip it
+                        // (di/pipeline/binds already advanced) rather than draw through the default viewport.
+                        if !vp_degenerate {
+                            pass.draw(*first_vertex..v_end, *first_instance..i_end);
+                        }
                     }
                     Enc::DrawIndexed {
                         index_count,
@@ -693,7 +768,10 @@ impl WgpuExecutor {
                         let i_end = first_instance
                             .checked_add(*instance_count)
                             .ok_or(GpuError::Invalid("wgpu: draw instance range overflow"))?;
-                        pass.draw_indexed(*first_index..idx_end, *base_vertex, *first_instance..i_end);
+                        // See the `Draw` arm: a wholly-out-of-bounds viewport draws nothing in GL.
+                        if !vp_degenerate {
+                            pass.draw_indexed(*first_index..idx_end, *base_vertex, *first_instance..i_end);
+                        }
                     }
                     _ => {}
                 }
@@ -1036,5 +1114,38 @@ void main() {
                  proving the set-1 bind group matched GROUP 1's layout and the draw sampled it"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod clamp_viewport_tests {
+    //! Unit coverage for the GL→wgpu viewport intersection (no GPU needed).
+    use super::clamp_viewport;
+
+    #[test]
+    fn fully_in_bounds_is_unchanged() {
+        // A viewport already inside the target passes through verbatim — the common (non-scrolled) path
+        // stays pixel-exact.
+        assert_eq!(clamp_viewport(4.0, 4.0, 24.0, 16.0, 32, 32), Some((4.0, 4.0, 24.0, 16.0)));
+        assert_eq!(clamp_viewport(0.0, 0.0, 32.0, 32.0, 32, 32), Some((0.0, 0.0, 32.0, 32.0)));
+    }
+
+    #[test]
+    fn negative_origin_and_oversize_clamp_to_visible_subrect() {
+        // Chrome's scrolled-layer shape: negative Y + a height taller than the target. Intersecting a rect
+        // `x=-8,y=-16,w=48,h=40` with a 32×32 target yields `[0,32)×[0,24)`.
+        assert_eq!(clamp_viewport(-8.0, -16.0, 48.0, 40.0, 32, 32), Some((0.0, 0.0, 32.0, 24.0)));
+        // The precise Chrome frame from the bug report: y=-386, h=642 into a 256-tall target → rows [0,256).
+        assert_eq!(clamp_viewport(0.0, -386.0, 832.0, 642.0, 832, 256), Some((0.0, 0.0, 832.0, 256.0)));
+    }
+
+    #[test]
+    fn wholly_out_of_bounds_is_empty() {
+        // Entirely past the right/bottom edge, entirely above/left, or a zero/negative size → None (the
+        // caller drops the draw; GL would rasterize nothing through such a viewport).
+        assert_eq!(clamp_viewport(100.0, 100.0, 32.0, 32.0, 32, 32), None);
+        assert_eq!(clamp_viewport(-64.0, -64.0, 32.0, 32.0, 32, 32), None);
+        assert_eq!(clamp_viewport(10.0, 10.0, 0.0, 10.0, 32, 32), None);
+        assert_eq!(clamp_viewport(10.0, 10.0, 10.0, -5.0, 32, 32), None);
     }
 }

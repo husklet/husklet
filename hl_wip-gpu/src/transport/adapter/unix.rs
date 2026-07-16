@@ -30,11 +30,11 @@ use crate::transport::model::readback::{ReadbackRequest, READBACK_MAGIC, READBAC
 /// This is a RUNTIME transport cap, not a wire-format change: no bytes are added to any frame, and every
 /// legitimate frame stays byte-identical. It is set comfortably above the largest legitimate frame: the
 /// negotiated [`Capabilities::max_frame_bytes`](crate::protocol::model::capability::Capabilities) default
-/// is 64 MiB (`64 << 20`) and the runtime validation pass rejects any decoded frame above that negotiated
-/// ceiling, so this 256 MiB transport cap sits well above anything the negotiated limits would accept — it
-/// only refuses the pathological hundreds-of-MB/GB preallocation. Exceeding it yields a typed
-/// `InvalidData` IO error (a "FrameTooLarge"/protocol rejection) instead of a giant allocation.
-pub const MAX_FRAME_BYTES: u32 = 256 << 20; // 256 MiB
+/// is 256 MiB (`256 << 20`, browser-class) and the runtime validation pass rejects any decoded frame above
+/// that negotiated ceiling, so this 512 MiB transport cap sits well above anything the negotiated limits
+/// would accept — it only refuses the pathological hundreds-of-MB/GB preallocation. Exceeding it yields a
+/// typed `InvalidData` IO error (a "FrameTooLarge"/protocol rejection) instead of a giant allocation.
+pub const MAX_FRAME_BYTES: u32 = 512 << 20; // 512 MiB
 
 /// `write(2)` all of `buf`, retrying short writes and `EINTR` (the `write_full` of `gl_shim.c`).
 pub fn write_full(stream: &UnixStream, buf: &[u8]) -> io::Result<()> {

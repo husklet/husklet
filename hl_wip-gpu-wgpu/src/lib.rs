@@ -176,7 +176,16 @@ impl WgpuExecutor {
             texture_formats: format_bits(COLOR_FORMATS)
                 | format_bits(DEPTH_FORMATS)
                 | format_bits(&[TextureFormat::Depth24PlusStencil8]),
-            max_frame_bytes: 64 << 20,
+            // Per-frame wire-byte ceiling: a hostile-guest DoS guard (one decoded frame can't force an
+            // unbounded transient allocation), NOT a correctness bound — the process-wide `GlobalLedger` is
+            // the real host-OOM guard across all connections. Sized BROWSER-CLASS at 256 MiB: the old 64 MiB
+            // was mis-sized for a browser — Chrome's real frames were seen at 89–168 MB, and even a healthy
+            // browser frame runs well past 64 MiB (the extreme end of that range was inflated by the
+            // viewport-NACK roll-back replaying a growing working set, fixed at its root by the viewport
+            // clamp in `submit.rs`; 256 MiB is comfortable headroom over a legitimate peak). Stays below the
+            // 512 MiB coarse transport pre-read guard (`transport::adapter::unix::MAX_FRAME_BYTES`), which
+            // refuses an oversized frame before a body byte is read. Finite by construction.
+            max_frame_bytes: 256 << 20,
             max_buffer_bytes: 256 << 20,
             max_bind_groups: 4,
             supports_timeline_fences: false,
