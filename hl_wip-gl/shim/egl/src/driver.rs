@@ -17,7 +17,8 @@ use core::ffi::{c_char, c_void};
 use hl_gl::model::context::GlSurface;
 use hl_gl::model::glconst::*;
 use hl_gl::result::{
-    egl_error_from_gpu_error, EGL_BAD_ATTRIBUTE, EGL_BAD_CONFIG, EGL_BAD_PARAMETER, EGL_FALSE, EGL_TRUE,
+    egl_error_from_gpu_error, EGL_BAD_ATTRIBUTE, EGL_BAD_CONFIG, EGL_BAD_PARAMETER, EGL_BAD_SURFACE,
+    EGL_FALSE, EGL_TRUE,
     GL_INVALID_ENUM, GL_INVALID_VALUE, GL_OUT_OF_MEMORY,
 };
 use hl_gl::service::{compute, config, es3, intro, map, query, readpixels, record, swap, sync};
@@ -795,6 +796,11 @@ pub extern "C" fn eglMakeCurrent(
 ) -> u32 {
     hl_log::hl_info!(hl_log::tag::EGL, "eglMakeCurrent ctx={} draw={} read={}", ctx as usize, draw as usize, read as usize);
     current::make_current(dpy as usize, draw as usize, read as usize, ctx as usize);
+    // A successful eglMakeCurrent resets the calling thread's EGL error to EGL_SUCCESS (EGL 1.5 §3.1).
+    // Without this, a stale EGL_CONTEXT_LOST left by an earlier failed present would make Chrome treat a
+    // freshly-bound, valid context as lost the next time it polls eglGetError — collapsing every shared
+    // context and rasterizing the whole page black.
+    with(|s| s.clear_egl_error());
     EGL_TRUE
 }
 
@@ -855,17 +861,14 @@ pub extern "C" fn eglDestroySurface(_dpy: *mut c_void, surface: *mut c_void) -> 
     EGL_TRUE
 }
 
-/// `EGL_CONTEXT_LOST` — reported when the compositor commit of a Wayland frame fails (delivery / protocol /
-/// pacing), so a failed present is never mistaken for a shown frame.
-const EGL_CONTEXT_LOST: i32 = 0x300E;
-
-/// `eglSwapBuffers` — the one sink-touching op: lower + submit + present the recorded frame. On a sink
-/// error the frame is retained and `EGL_*` is registered (surfaced by the next `eglGetError`).
-///
-/// On a Wayland window surface with a live present session, the rendered frame is ALSO read back and
-/// committed to the compositor as a `wl_shm` `wl_buffer` (the deployed present path). The read-back
-/// happens BEFORE the swap (which resets the draw-list); a commit failure is surfaced as
-/// `EGL_CONTEXT_LOST`.
+/// `eglSwapBuffers` — the one sink-touching op: lower + submit + present the recorded frame. The
+/// AUTHORITATIVE present is the frame-IR submit to the GPU-exec host (`swap::swap_buffers`); only ITS
+/// failure fails the swap. The Wayland `wl_shm` commit (onto the app's own `wl_surface`, or the shim's
+/// self-owned toplevel) is a best-effort LOCAL display MIRROR of that present: a transient commit failure
+/// is logged but does NOT fail `eglSwapBuffers`. This matters because Chrome maps ANY swap failure to a
+/// LOST GL CONTEXT and tears down its whole shared-context GPU stack — so a mere present hiccup used to
+/// collapse raster and rasterize the entire page black. The read-back happens BEFORE the swap (which
+/// resets the draw-list).
 #[cfg_attr(not(gles_client), no_mangle)]
 pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u32 {
     with(|s| {
@@ -902,11 +905,16 @@ pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u3
             if is_app_surface {
                 match s.present_to_app_surface(&px, w, h) {
                     AppPresentOutcome::Presented => return EGL_TRUE,
-                    // A live commit/flush failure is a lost frame — never faked.
+                    // A commit/flush to the app's wl_surface failed. This is a display-delivery miss, NOT a
+                    // lost GL context: the authoritative present already happened above (`swap::swap_buffers`
+                    // submitted the frame IR to the GPU-exec host). Do NOT fail eglSwapBuffers — Chrome maps
+                    // ANY swap failure (EGL_FALSE, or a non-SUCCESS eglGetError) to a LOST GL CONTEXT and
+                    // tears down its whole shared-context GPU stack, after which every raster MakeCurrent
+                    // fails and the page rasterizes black. Log the miss and report success; the next swap
+                    // re-presents the (retained) frame.
                     AppPresentOutcome::Failed => {
-                        hl_log::hl_warn!(hl_log::tag::PRESENT, "present-to-app-surface failed {}x{} -> EGL_CONTEXT_LOST", w, h);
-                        s.set_egl_error(EGL_CONTEXT_LOST);
-                        return EGL_FALSE;
+                        hl_log::hl_warn!(hl_log::tag::PRESENT, "present-to-app-surface failed {}x{} — best-effort skip, authoritative present already done", w, h);
+                        return EGL_TRUE;
                     }
                     // Presenter unavailable (not a wayland app / libwayland or a symbol/global absent):
                     // fall through to the self-owned present below.
@@ -923,9 +931,16 @@ pub extern "C" fn eglSwapBuffers(_dpy: *mut c_void, _surface: *mut c_void) -> u3
             }
             let geom = hl_gl::adapter::wayland::Geometry::backing(w, h);
             if let Some(wl) = s.wl.as_mut() {
-                if wl.commit(&px, &geom).is_err() {
-                    s.set_egl_error(EGL_CONTEXT_LOST);
-                    return EGL_FALSE;
+                if let Err(e) = wl.commit(&px, &geom) {
+                    // The self-owned wl_shm toplevel is a best-effort LOCAL MIRROR of the authoritative
+                    // present that already succeeded above (`swap::swap_buffers` submitted + presented the
+                    // frame IR to the GPU-exec host). A transient commit failure of this mirror (compositor
+                    // pacing, or a second surface racing the app's own wl_surface) must NOT fail
+                    // eglSwapBuffers: Chrome maps ANY swap failure to a LOST GL CONTEXT and tears down its
+                    // entire shared-context GPU stack, after which every raster MakeCurrent fails and the
+                    // whole page rasterizes black. Log the miss and report the swap as succeeded — the
+                    // authoritative GPU present did happen; only this dev-compositor mirror was skipped.
+                    hl_log::hl_warn!(hl_log::tag::PRESENT, "self-owned wl_shm mirror commit failed ({e:?}) — best-effort skip, authoritative present already done");
                 }
             }
         }
@@ -4662,6 +4677,42 @@ mod current_binding_tests {
         assert_eq!(eglGetCurrentContext() as usize, ctx_a, "the parent thread's current context is independent");
         // Cleanup this thread's binding.
         eglMakeCurrent(core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut());
+    }
+
+    /// A successful `eglMakeCurrent` resets the CALLING THREAD's EGL error to `EGL_SUCCESS` (EGL 1.5 §3.1).
+    /// REGRESSION (#144): a transient Wayland present failure records `EGL_BAD_SURFACE`/`EGL_CONTEXT_LOST`;
+    /// without this reset the stale error survived, and the next time Chrome polled `eglGetError` after
+    /// binding a perfectly valid context it read the old error as a freshly-lost context — losing every
+    /// shared context and rasterizing the whole page black. Binding a context must clear it.
+    #[test]
+    fn egl_make_current_clears_the_thread_egl_error() {
+        // A real failing EGL call leaves a pending error on this thread.
+        assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE);
+        let dpy = 0x1 as *mut c_void;
+        let ctx = 0x2 as *mut c_void;
+        assert_eq!(eglMakeCurrent(dpy, ctx, ctx, ctx), EGL_TRUE);
+        assert_eq!(
+            eglGetError(),
+            hl_gl::result::EGL_SUCCESS,
+            "a successful eglMakeCurrent must reset the thread's EGL error (no stale error survives)"
+        );
+        // Cleanup this thread's binding.
+        eglMakeCurrent(core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut());
+    }
+
+    /// EGL errors are scoped to the CALLING THREAD (EGL 1.5 §3.1). REGRESSION (#144): the error register was
+    /// a process-global, so a Wayland-commit failure on Chrome's compositor thread surfaced as a lost
+    /// context on its raster/GPU thread (they shared the cell) and collapsed the entire shared-context GPU
+    /// stack. A pending error on one thread must be invisible to another.
+    #[test]
+    fn egl_error_does_not_leak_across_threads() {
+        // Record a pending error on THIS thread via a real failing EGL call.
+        assert_eq!(eglBindAPI(EGL_OPENGL_API), EGL_FALSE);
+        // A different thread must observe EGL_SUCCESS — never this thread's error.
+        let child = std::thread::spawn(|| eglGetError()).join().unwrap();
+        assert_eq!(child, hl_gl::result::EGL_SUCCESS, "a present failure on one thread must not poison another");
+        // This thread still holds its own error until it reads it.
+        assert_eq!(eglGetError(), EGL_BAD_PARAMETER, "the setting thread keeps its own pending error");
     }
 
     /// eglQueryAPI defaults to EGL_OPENGL_ES_API and returns whatever eglBindAPI(EGL_OPENGL_ES_API) set;

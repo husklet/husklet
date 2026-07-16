@@ -35,9 +35,11 @@ pub struct State {
     /// The guest→host boundary: encodes the frame batch and ships it framed over `$HL_GPU_EXEC`.
     pub sink: RemoteCommandSink,
 
-    /// Last EGL error (`eglGetError` reads + clears it). The GL error register lives on the modeled
-    /// `ctx` ([`GlContext::gl_error`]) so it is unit-testable in the `hl_gl` lib crate.
-    pub egl_error: i32,
+    // The last EGL error is NOT stored here: EGL keys `eglGetError` PER CALLING THREAD (EGL 1.5 §3.1),
+    // exactly like the current-binding cells below. A process-global error is wrong under Chrome's
+    // multi-threaded GPU service — a present/commit failure on the compositor thread would otherwise
+    // poison the raster thread's context (it reads the same error and treats it as `EGL_CONTEXT_LOST`,
+    // losing every shared context). It lives in the thread-local [`EGL_ERROR`] cell instead.
 
     /// `EGLContext` token allocator (opaque, non-null). The "current" binding (context / draw+read
     /// surface / display) is NOT here: EGL keys it PER CALLING THREAD, so it lives in the thread-local
@@ -90,7 +92,6 @@ impl State {
             ctx: GlContext::new(),
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
             sink: RemoteCommandSink::from_env(),
-            egl_error: EGL_SUCCESS,
             next_token: 1,
             current_is_wayland: false,
             wl_surface_ptr: 0,
@@ -155,15 +156,32 @@ impl State {
         t as *mut c_void
     }
 
-    /// Record an EGL error (kept until `eglGetError` clears it).
+    /// Record an EGL error for the CALLING THREAD (kept until `eglGetError` clears it). Per-thread so a
+    /// present failure on one thread never surfaces as a lost context on another (see [`EGL_ERROR`]).
     pub fn set_egl_error(&mut self, e: i32) {
-        self.egl_error = e;
+        EGL_ERROR.with(|c| c.set(e));
     }
 
-    /// Read + clear the last EGL error.
+    /// Read + clear the calling thread's last EGL error.
     pub fn take_egl_error(&mut self) -> i32 {
-        std::mem::replace(&mut self.egl_error, EGL_SUCCESS)
+        EGL_ERROR.with(|c| c.replace(EGL_SUCCESS))
     }
+
+    /// Clear the calling thread's EGL error to `EGL_SUCCESS`. A successful EGL entry point resets the
+    /// error (EGL 1.5 §3.1: "the error is set to EGL_SUCCESS on a successful call"). `eglMakeCurrent`
+    /// relies on this so a stale error from an earlier failed call cannot make a fresh, valid current
+    /// binding look lost.
+    pub fn clear_egl_error(&mut self) {
+        EGL_ERROR.with(|c| c.set(EGL_SUCCESS));
+    }
+}
+
+thread_local! {
+    /// The last EGL error for THIS thread (`eglGetError` reads + clears it). Thread-local because EGL
+    /// scopes errors to the calling thread; a process-global error let a Wayland-commit failure on the
+    /// compositor thread poison Chrome's raster/GPU threads (they read the same cell and lose their
+    /// shared GL context — the whole page then rasterizes black).
+    static EGL_ERROR: core::cell::Cell<i32> = const { core::cell::Cell::new(EGL_SUCCESS) };
 }
 
 // ---- The single process-global `State`, shared across BOTH guest objects --------------------------
