@@ -54,6 +54,15 @@ libc = "0.2"
 # Mint real SPIR-V / GLSL-ES shaders for the graphics tests from WGSL seeds (wgsl-in → spv-out), the same
 # naga the wgpu executor uses to translate them back. Version-matched to hl_wip-gpu-wgpu (naga 24).
 naga = { version = "24", features = ["wgsl-in", "spv-out"] }
+# The INTERACTION proof (tests/chrome_interaction.rs) drives a real in-process Wayland CLIENT against our
+# live compositor and asserts injected pointer/keyboard/scroll/configure events reach it in order with
+# bounded latency — the input round-trip a real desktop app (Chrome) experiences. Version-matched to the
+# compositor's own client-side demo tests (wayland-client 0.31 / wayland-protocols 0.32, `client`).
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+# Tag-based logging so the interaction test emits hl-log evidence at the INJECT + client-DELIVER hops that
+# closes the loop with the compositor's own `input_dispatch` line (tag `wayland`). Enable with HL_LOG=wayland.
+hl_log = { package = "hl-log", path = "../hl-log" }
 
 # The real-software tests are single-connection socket servers driving real subprocesses; force serial so
 # a shared `$HL_GPU_EXEC` / staged-shim environment never races. Also declared here so each carries its
