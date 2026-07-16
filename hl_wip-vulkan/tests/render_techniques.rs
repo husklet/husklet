@@ -82,7 +82,7 @@ fn pipeline_samples(
     use hl_vulkan::adapter::spirv;
     let vs = create::create_shader_module_words(d, sink, spirv::sample_compute_spirv("vsmain")).unwrap();
     let fs = create::create_shader_module_words(d, sink, spirv::sample_compute_spirv("fsmain")).unwrap();
-    create::create_graphics_pipeline(d, sink, (vs, "vsmain"), Some((fs, "fsmain")), vec![], color_formats, depth, None, sample_count, Topology::TriangleList)
+    create::create_graphics_pipeline(d, sink, (vs, "vsmain"), Some((fs, "fsmain")), vec![], color_formats, depth, None, sample_count, Topology::TriangleList, 0, 0, 0xf)
         .unwrap()
 }
 

@@ -221,7 +221,7 @@ fn graphics_pipeline_emits_create_render_pipeline() {
         vec![pos_color_layout()],
         vec![TextureFormat::Bgra8Unorm],
         None,
-        None, 1, Topology::TriangleList)
+        None, 1, Topology::TriangleList, 0, 0, 0xf)
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::CreateRenderPipeline(_, desc)] => {
@@ -255,11 +255,106 @@ fn graphics_pipeline_threads_multisample_count() {
         vec![TextureFormat::Bgra8Unorm],
         None,
         None,
-        4, Topology::TriangleList)
+        4, Topology::TriangleList, 0, 0, 0xf)
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::CreateRenderPipeline(_, desc)] => {
             assert_eq!(desc.sample_count, 4, "rasterizationSamples=_4_BIT threads to sample_count == 4");
+        }
+        other => panic!("expected CreateRenderPipeline, got {other:?}"),
+    }
+}
+
+#[test]
+fn graphics_pipeline_threads_cull_front_face_and_color_write_mask() {
+    // The rasterization cull state (VkPipelineRasterizationStateCreateInfo::cullMode/frontFace) and the
+    // first color attachment's colorWriteMask were previously HARDCODED in `create.rs` (`cull: 0`,
+    // `front_face: 0`, `write_mask: 0xF`), silently dropping the guest's real values. Prove each threads
+    // into the emitted RenderPipelineDesc.
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let vs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("vsmain")).unwrap();
+    let fs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("fsmain")).unwrap();
+    // cull BACK (2), front-face CW (1), RED-only write mask (0x1) — every field non-default.
+    create::create_graphics_pipeline(
+        &mut d,
+        &mut sink,
+        (vs, "vsmain"),
+        Some((fs, "fsmain")),
+        vec![pos_color_layout()],
+        vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
+        None,
+        None,
+        1,
+        Topology::TriangleList,
+        2,
+        1,
+        0x1,
+    )
+    .unwrap();
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::CreateRenderPipeline(_, desc)] => {
+            assert_eq!(desc.cull, 2, "VkCullMode BACK threads to cull == 2 (was hardcoded 0)");
+            assert_eq!(desc.front_face, 1, "VkFrontFace CW threads to front_face == 1 (was hardcoded 0)");
+            for t in &desc.color_targets {
+                assert_eq!(t.write_mask, 0x1, "RED-only colorWriteMask threads to every target (was hardcoded 0xF)");
+            }
+        }
+        other => panic!("expected CreateRenderPipeline, got {other:?}"),
+    }
+}
+
+#[test]
+fn graphics_pipeline_preserves_stencil_state_into_the_ir() {
+    // A stencil-enabled VkPipelineDepthStencilStateCreateInfo is now translated to a neutral DepthState
+    // carrying per-face stencil ops + masks (the shim's `parse_depth_stencil_state`, replacing the old
+    // `DepthState::depth_only` that FORCED the inert `DISABLED` faces). Prove `create_graphics_pipeline`
+    // carries that stencil state through to the IR untouched.
+    use hl_gpu::protocol::model::descriptor::{DepthState, StencilFaceState};
+    use hl_gpu::protocol::model::enums::{compare, stencil_op};
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let vs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("vsmain")).unwrap();
+    let fs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("fsmain")).unwrap();
+    let face = StencilFaceState {
+        compare: compare::EQUAL,
+        fail_op: stencil_op::KEEP,
+        depth_fail_op: stencil_op::KEEP,
+        pass_op: stencil_op::REPLACE,
+    };
+    let depth = DepthState {
+        format: TextureFormat::Depth24PlusStencil8,
+        depth_write: false,
+        depth_compare: compare::ALWAYS,
+        stencil_front: face,
+        stencil_back: face,
+        stencil_read_mask: 0xff,
+        stencil_write_mask: 0xff,
+    };
+    create::create_graphics_pipeline(
+        &mut d,
+        &mut sink,
+        (vs, "vsmain"),
+        Some((fs, "fsmain")),
+        vec![pos_color_layout()],
+        vec![TextureFormat::Rgba8Unorm],
+        Some(depth),
+        None,
+        1,
+        Topology::TriangleList,
+        0,
+        0,
+        0xf,
+    )
+    .unwrap();
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::CreateRenderPipeline(_, desc)] => {
+            let ds = desc.depth.as_ref().expect("a stencil pipeline carries a depth-stencil state");
+            assert_eq!(ds.stencil_front.compare, compare::EQUAL);
+            assert_eq!(ds.stencil_front.pass_op, stencil_op::REPLACE);
+            assert_eq!(ds.stencil_back.compare, compare::EQUAL);
+            assert_eq!(ds.stencil_read_mask, 0xff);
+            assert_eq!(ds.stencil_write_mask, 0xff);
         }
         other => panic!("expected CreateRenderPipeline, got {other:?}"),
     }
@@ -285,7 +380,7 @@ fn dynamic_rendering_pipeline_takes_color_formats_from_pnext_no_render_pass() {
         vec![pos_color_layout()],
         vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
         None,
-        None, 1, Topology::TriangleList)
+        None, 1, Topology::TriangleList, 0, 0, 0xf)
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::CreateRenderPipeline(_, desc)] => {
@@ -328,7 +423,7 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
         vec![pos_color_layout()],
         vec![TextureFormat::Rgba8Unorm],
         None,
-        None, 1, Topology::TriangleList)
+        None, 1, Topology::TriangleList, 0, 0, 0xf)
     .unwrap();
 
     // a vertex buffer (ir 5).

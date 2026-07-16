@@ -12,8 +12,8 @@
 
 use core::ffi::{c_char, c_void};
 
-use hl_gpu::protocol::model::descriptor::{BlendState, DepthState, VertexAttr, VertexLayout};
-use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
+use hl_gpu::protocol::model::descriptor::{BlendState, DepthState, StencilFaceState, VertexAttr, VertexLayout};
+use hl_gpu::protocol::model::enums::{compare, TextureFormat, Topology};
 use hl_gpu::CommandSink;
 use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
 use hl_vulkan::model::memory::tex_format_from_vk;
@@ -483,25 +483,64 @@ fn parse_pipeline_rendering_depth_format(p_next: *const c_void) -> Option<Textur
     None
 }
 
-/// Translate a `VkPipelineDepthStencilStateCreateInfo` into the neutral [`DepthState`] when the depth test
-/// is enabled. `depth_format` is the pass's depth attachment format (from the dynamic-rendering pNext, or
-/// `Depth32Float` as the bring-up default when unresolved). Returns `None` for a null state pointer or a
-/// disabled depth test — exactly the pipelines that must NOT carry a depth attachment.
-fn parse_depth_state(
+/// Translate one `VkStencilOpState` face onto the neutral [`StencilFaceState`]. `VkStencilOp`
+/// (KEEP=0 … DECREMENT_AND_WRAP=7) and `VkCompareOp` (NEVER=0 … ALWAYS=7) share the neutral
+/// `stencil_op::*` / `compare::*` numbering verbatim, so every field maps 1:1.
+fn parse_stencil_face(s: &VkStencilOpState) -> StencilFaceState {
+    StencilFaceState {
+        compare: s.compare_op as u32,
+        fail_op: s.fail_op as u32,
+        depth_fail_op: s.depth_fail_op as u32,
+        pass_op: s.pass_op as u32,
+    }
+}
+
+/// Translate a `VkPipelineDepthStencilStateCreateInfo` into the neutral [`DepthState`] when the depth OR
+/// stencil test is enabled. `depth_format` is the pass's depth attachment format (from the render pass /
+/// dynamic-rendering pNext); when unresolved it defaults to `Depth24PlusStencil8` for a stencil-enabled
+/// pipeline (the stencil plane must exist) else `Depth32Float`. Returns `None` for a null state pointer or a
+/// pipeline with BOTH tests disabled — exactly the pipelines that must NOT carry a depth attachment.
+///
+/// A disabled depth test with an enabled stencil test yields an `ALWAYS` depth compare + no depth write (a
+/// stencil-only pass — UI masking / portals), so the stencil op runs without occluding. The per-face
+/// `VkStencilOpState` (fail/pass/depthFail ops + compareOp) threads to `stencil_front`/`stencil_back`, and
+/// the front face's `compareMask`/`writeMask` thread to the neutral single read/write masks (WebGPU/wgpu
+/// carry ONE mask pair for both faces). Without this the stencil state was DROPPED (`DepthState::depth_only`
+/// forced the inert `DISABLED` faces) and every stencil-gated draw ran with the stencil test off.
+fn parse_depth_stencil_state(
     p_depth_stencil_state: *const c_void,
     depth_format: Option<TextureFormat>,
 ) -> Option<DepthState> {
     let ds = unsafe { (p_depth_stencil_state as *const VkPipelineDepthStencilStateCreateInfo).as_ref() }?;
-    if ds.depth_test_enable == 0 {
+    let depth_enabled = ds.depth_test_enable != 0;
+    let stencil_enabled = ds.stencil_test_enable != 0;
+    if !depth_enabled && !stencil_enabled {
         return None;
     }
-    // VkCompareOp shares the neutral `compare::*` numeric ordering (NEVER=0 … ALWAYS=7). The bring-up
-    // depth path models depth test/write only (no stencil), so use the depth-only DepthState shape.
-    Some(DepthState::depth_only(
-        depth_format.unwrap_or(TextureFormat::Depth32Float),
-        ds.depth_write_enable != 0,
-        ds.depth_compare_op as u32,
-    ))
+    let format = depth_format.unwrap_or(if stencil_enabled {
+        TextureFormat::Depth24PlusStencil8
+    } else {
+        TextureFormat::Depth32Float
+    });
+    let (stencil_front, stencil_back, read_mask, write_mask) = if stencil_enabled {
+        (
+            parse_stencil_face(&ds.front),
+            parse_stencil_face(&ds.back),
+            ds.front.compare_mask,
+            ds.front.write_mask,
+        )
+    } else {
+        (StencilFaceState::DISABLED, StencilFaceState::DISABLED, 0xffff_ffff, 0xffff_ffff)
+    };
+    Some(DepthState {
+        format,
+        depth_write: depth_enabled && ds.depth_write_enable != 0,
+        depth_compare: if depth_enabled { ds.depth_compare_op as u32 } else { compare::ALWAYS },
+        stencil_front,
+        stencil_back,
+        stencil_read_mask: read_mask,
+        stencil_write_mask: write_mask,
+    })
 }
 
 /// Translate a `VkBlendFactor` onto the neutral `hl_gpu` blend-factor wire numbering the GL driver emits
@@ -602,6 +641,48 @@ fn parse_input_assembly_topology(p_input_assembly_state: *const c_void) -> Topol
     }
 }
 
+/// Read a `VkPipelineRasterizationStateCreateInfo`'s `cullMode` + `frontFace` as the pipeline's neutral
+/// `(cull, front_face)`. `VkCullModeFlags` (NONE=0, FRONT_BIT=1, BACK_BIT=2, FRONT_AND_BACK=3) maps to the
+/// neutral `cull` (0 none / 1 front / 2 back); `FRONT_AND_BACK` (cull-all) is not expressible in the neutral
+/// pipeline and folds to `0` (none) — content is drawn rather than silently vanishing. `VkFrontFace`
+/// (COUNTER_CLOCKWISE=0, CLOCKWISE=1) matches the neutral `front_face` (0 CCW / 1 CW) verbatim. A null
+/// pRasterizationState folds to `(0, 0)`. Without this the cull + winding were DROPPED (`cull: 0`,
+/// `front_face: 0` hardcoded in create.rs) and a back-face-culled solid mesh drew its interior/back
+/// triangles bleeding through the front.
+fn parse_rasterization_state(p_rasterization_state: *const c_void) -> (u32, u32) {
+    let Some(rs) =
+        (unsafe { (p_rasterization_state as *const VkPipelineRasterizationStateCreateInfo).as_ref() })
+    else {
+        return (0, 0);
+    };
+    let cull = match rs.cull_mode {
+        1 => 1,
+        2 => 2,
+        _ => 0,
+    };
+    let front_face = if rs.front_face == 1 { 1 } else { 0 };
+    (cull, front_face)
+}
+
+/// Read a `VkPipelineColorBlendStateCreateInfo`'s FIRST attachment's `colorWriteMask` as the pipeline's
+/// neutral RGBA write mask (the software rasterizer applies one write mask to all targets, mirroring the
+/// one-blend model). `VkColorComponentFlags` (R=0x1 G=0x2 B=0x4 A=0x8) matches the neutral `write_mask` low
+/// 4 bits verbatim. A null state / empty attachment list folds to `0xf` (write all channels — the prior
+/// default). Without this the write mask was DROPPED (`write_mask: 0xf` hardcoded in create.rs) and a
+/// channel-masked draw (e.g. a depth-prepass `colorWriteMask = 0`, or preserving destination alpha) wrote
+/// color it must have left untouched.
+fn parse_color_write_mask(p_color_blend_state: *const c_void) -> u32 {
+    let Some(cb) =
+        (unsafe { (p_color_blend_state as *const VkPipelineColorBlendStateCreateInfo).as_ref() })
+    else {
+        return 0xf;
+    };
+    if cb.attachment_count == 0 || cb.p_attachments.is_null() {
+        return 0xf;
+    }
+    (unsafe { &*cb.p_attachments }.color_write_mask) & 0xf
+}
+
 #[no_mangle]
 pub extern "C" fn vkCreateGraphicsPipelines(
     _device: *mut c_void,
@@ -672,7 +753,7 @@ pub extern "C" fn vkCreateGraphicsPipelines(
                     .map(|d| tex_format_from_vk(d.format_vk))
             })
         };
-        let depth = parse_depth_state(ci.p_depth_stencil_state, depth_format);
+        let depth = parse_depth_stencil_state(ci.p_depth_stencil_state, depth_format);
 
         // Color-blend state: the first attachment's blendEnable + factors/ops, mapped onto the neutral
         // blend wire numbering. A null pColorBlendState / blendEnable = VK_FALSE => None (opaque overwrite),
@@ -685,9 +766,16 @@ pub extern "C" fn vkCreateGraphicsPipelines(
         // Input-assembly topology: the real VkPrimitiveTopology (GPUI's quads are 4-vertex TRIANGLE_STRIP).
         let topology = parse_input_assembly_topology(ci.p_input_assembly_state);
 
+        // Rasterization cull state: cullMode + frontFace (a back-face-culled solid mesh must not show its
+        // interior). Null pRasterizationState => (none, CCW).
+        let (cull, front_face) = parse_rasterization_state(ci.p_rasterization_state);
+
+        // Per-attachment colorWriteMask (attachment 0, applied to every color target — the one-mask model).
+        let color_write_mask = parse_color_write_mask(ci.p_color_blend_state);
+
         let r = dev_sink(|dev, sink| {
             let frag = fragment.as_ref().map(|(m, e)| (*m, e.as_str()));
-            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth, blend, sample_count, topology)
+            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth, blend, sample_count, topology, cull, front_face, color_write_mask)
         })
         .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkCreateGraphicsPipelines: no device")));
         match r {

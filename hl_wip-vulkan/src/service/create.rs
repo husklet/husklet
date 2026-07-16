@@ -452,6 +452,13 @@ pub fn create_compute_pipeline(
 /// topology was DROPPED (`Topology::TriangleList` hardcoded) and a pipeline drawing 4-vertex TRIANGLE_STRIP
 /// quads — GPUI/wgpu's entire UI: every window/panel/glyph quad — rasterized only the FIRST triangle of each
 /// quad, so each rectangle collapsed to a half-rectangle triangle (Zed rendered as scattered triangles).
+///
+/// `cull` (0 none / 1 front / 2 back) + `front_face` (0 CCW / 1 CW) are the rasterization cull state from
+/// `VkPipelineRasterizationStateCreateInfo`; `color_write_mask` (RGBA, low 4 bits) is the first color
+/// attachment's `colorWriteMask`, applied to every target. All three were previously hardcoded (`cull: 0`,
+/// `front_face: 0`, `write_mask: 0xf`), silently dropping a guest's real cull/winding/channel-mask — a
+/// back-face-culled mesh drew its interior and a masked channel was overwritten.
+#[allow(clippy::too_many_arguments)]
 pub fn create_graphics_pipeline(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
@@ -463,6 +470,9 @@ pub fn create_graphics_pipeline(
     blend: Option<BlendState>,
     sample_count: u32,
     topology: Topology,
+    cull: u32,
+    front_face: u32,
+    color_write_mask: u32,
 ) -> Result<VkPipeline> {
     use hl_gpu::protocol::model::descriptor::ColorTargetState;
     let resolve = |dev: &Device, (module, entry): (VkShaderModule, &str)| -> Result<ShaderRef> {
@@ -479,7 +489,7 @@ pub fn create_graphics_pipeline(
     let fragment_ref = fragment.map(|f| resolve(dev, f)).transpose()?;
     let color_targets = color_formats
         .into_iter()
-        .map(|format| ColorTargetState { format, blend: blend.clone(), write_mask: 0xf })
+        .map(|format| ColorTargetState { format, blend: blend.clone(), write_mask: color_write_mask & 0xf })
         .collect::<Vec<_>>();
     let color_targets_len = color_targets.len();
     let has_fragment = fragment_ref.is_some();
@@ -494,8 +504,8 @@ pub fn create_graphics_pipeline(
             color_targets,
             depth,
             topology,
-            cull: 0,
-            front_face: 0,
+            cull,
+            front_face,
             sample_count: sample_count.max(1),
             label: format!("vkgpipe{ir_id}"),
         },

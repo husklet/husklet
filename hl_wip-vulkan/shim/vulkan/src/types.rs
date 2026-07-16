@@ -903,11 +903,30 @@ pub struct VkPipelineRenderingCreateInfo {
     pub stencil_attachment_format: i32,
 }
 
+/// `VkStencilOpState` — one face's stencil test + operation set. `failOp`/`passOp`/`depthFailOp` are
+/// `VkStencilOp` values whose numbering (KEEP=0, ZERO=1, REPLACE=2, INCREMENT_AND_CLAMP=3,
+/// DECREMENT_AND_CLAMP=4, INVERT=5, INCREMENT_AND_WRAP=6, DECREMENT_AND_WRAP=7) matches the neutral
+/// `hl_gpu` `stencil_op::*` constants verbatim; `compareOp` is a `VkCompareOp` (NEVER=0 … ALWAYS=7) that
+/// matches `compare::*` verbatim.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VkStencilOpState {
+    pub fail_op: i32,
+    pub pass_op: i32,
+    pub depth_fail_op: i32,
+    pub compare_op: i32,
+    pub compare_mask: u32,
+    pub write_mask: u32,
+    pub reference: u32,
+}
+
 /// `VkPipelineDepthStencilStateCreateInfo` — the depth/stencil fixed-function state of a graphics
-/// pipeline. Only the depth-test fields are read (the software rasterizer models no stencil / depth
-/// bounds), so the struct is truncated after `depthCompareOp`: the pointer is to the full Vulkan struct
-/// and no field past this prefix is ever accessed. `depthCompareOp` is a `VkCompareOp`, whose numeric
-/// ordering (NEVER=0 … ALWAYS=7) matches the neutral `hl_gpu` `compare::*` constants verbatim.
+/// pipeline. The full struct is declared: `depthTestEnable`/`depthWriteEnable`/`depthCompareOp` thread to
+/// the neutral [`DepthState`] depth test, and `stencilTestEnable` + `front`/`back` (`VkStencilOpState`)
+/// thread to its per-face stencil state (the executor honors both — wgpu `StencilState` + the CPU oracle's
+/// `Depth24PlusStencil8` stencil plane). `depthBoundsTestEnable` + `min/maxDepthBounds` are NOT modeled (no
+/// neutral field expresses depth bounds), but the struct is declared in full so `front`/`back` are read at
+/// their correct offsets.
 #[repr(C)]
 pub struct VkPipelineDepthStencilStateCreateInfo {
     pub s_type: i32,
@@ -916,8 +935,12 @@ pub struct VkPipelineDepthStencilStateCreateInfo {
     pub depth_test_enable: VkBool32,
     pub depth_write_enable: VkBool32,
     pub depth_compare_op: i32,
-    // Remaining fields (depthBoundsTestEnable, stencilTestEnable, front, back, min/maxDepthBounds) are
-    // NOT modeled by the software rasterizer and are never read through this pointer.
+    pub depth_bounds_test_enable: VkBool32,
+    pub stencil_test_enable: VkBool32,
+    pub front: VkStencilOpState,
+    pub back: VkStencilOpState,
+    pub min_depth_bounds: f32,
+    pub max_depth_bounds: f32,
 }
 
 /// `VkPipelineColorBlendAttachmentState` — the per-color-target fixed-function blend state. All fields are
@@ -937,10 +960,11 @@ pub struct VkPipelineColorBlendAttachmentState {
 }
 
 /// `VkPipelineColorBlendStateCreateInfo` — the color-blend fixed-function state of a graphics pipeline.
-/// Only the first attachment's blend is threaded (the software rasterizer applies one blend to all
-/// targets), so the struct is truncated after `pAttachments`: `logicOp`/`blendConstants` are NOT modeled
-/// and no field past this prefix is ever accessed. A null pointer / `blendEnable = VK_FALSE` => no blend
-/// (an opaque overwrite).
+/// The first attachment's blend AND `colorWriteMask` are threaded (the software rasterizer applies one
+/// blend + one write mask to all targets), so the struct is truncated after `pAttachments`:
+/// `logicOp`/`blendConstants` are NOT modeled and no field past this prefix is ever accessed. A null
+/// pointer / `blendEnable = VK_FALSE` => no blend (an opaque overwrite); an absent state => `colorWriteMask`
+/// defaults to `0xf` (write all channels).
 #[repr(C)]
 pub struct VkPipelineColorBlendStateCreateInfo {
     pub s_type: i32,
@@ -967,6 +991,28 @@ pub struct VkPipelineMultisampleStateCreateInfo {
     pub rasterization_samples: i32,
     // Remaining fields (sampleShadingEnable, minSampleShading, pSampleMask, alphaToCoverageEnable,
     // alphaToOneEnable) are NOT modeled and are never read through this pointer.
+}
+
+/// `VkPipelineRasterizationStateCreateInfo` — the rasterization fixed-function state of a graphics
+/// pipeline. Only `cullMode` + `frontFace` are read (threaded to the neutral `RenderPipelineDesc::cull` /
+/// `front_face`, honored by wgpu's `PrimitiveState` and the CPU oracle's face-cull). The struct is
+/// truncated after `frontFace`: `polygonMode` (line/point fill), `depthClampEnable`,
+/// `rasterizerDiscardEnable`, and the depthBias / lineWidth tail are NOT expressible in the neutral
+/// pipeline and are never read through this pointer.
+#[repr(C)]
+pub struct VkPipelineRasterizationStateCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub depth_clamp_enable: VkBool32,
+    pub rasterizer_discard_enable: VkBool32,
+    pub polygon_mode: i32,
+    /// `VkCullModeFlags` — 0 NONE, 1 FRONT_BIT, 2 BACK_BIT, 3 FRONT_AND_BACK.
+    pub cull_mode: VkFlags,
+    /// `VkFrontFace` — 0 COUNTER_CLOCKWISE, 1 CLOCKWISE.
+    pub front_face: i32,
+    // Remaining fields (depthBiasEnable, depthBiasConstantFactor, depthBiasClamp, depthBiasSlopeFactor,
+    // lineWidth) are NOT modeled and are never read through this pointer.
 }
 
 /// `VkPhysicalDeviceDynamicRenderingFeatures` — the feature pNext `vkGetPhysicalDeviceFeatures2` fills to
