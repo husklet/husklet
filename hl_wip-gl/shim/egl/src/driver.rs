@@ -762,7 +762,11 @@ pub extern "C" fn eglCreateContext(
     _share_context: *mut c_void,
     _attrib_list: *const i32,
 ) -> *mut c_void {
-    let ctx = with(|s| s.mint_token());
+    let ctx = with(|s| {
+        let tok = s.mint_token();
+        s.create_context();
+        tok
+    });
     hl_log::hl_info!(hl_log::tag::EGL, "eglCreateContext ctx={}", ctx as usize);
     ctx
 }
@@ -771,6 +775,9 @@ pub extern "C" fn eglCreateContext(
 pub extern "C" fn eglDestroyContext(_dpy: *mut c_void, ctx: *mut c_void) -> u32 {
     // If this context is current on the calling thread, releasing it drops the thread's binding.
     current::release_if_context(ctx as usize);
+    // Account the teardown; destroying the LAST live context retires the shared model's whole working set so
+    // its host residency is refunded (the fix for Chrome's lost-context accumulation — see `destroy_context`).
+    with(|s| s.destroy_context());
     EGL_TRUE
 }
 

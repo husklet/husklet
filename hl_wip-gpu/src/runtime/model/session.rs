@@ -30,13 +30,40 @@ pub struct Limits {
 
 impl Limits {
     /// Default ceilings derived from a backend's advertised capabilities.
+    ///
+    /// The per-connection residency ceiling is a hostile-guest DoS guard — a single connection must never be
+    /// able to pin so much host GPU memory / so many objects that it OOMs the host — NOT a correctness bound
+    /// on a well-behaved client. It is sized for a BROWSER-CLASS client (the demanding real case): Chrome
+    /// keeps a large live working set resident — hundreds of compositor tiles + glyph/mask atlases + per-GPU-
+    /// context render targets, shaders and pipelines across its many worker contexts — that legitimately runs
+    /// to well over the old 512 MiB / 65 536-object figures. Those old caps were mis-sized for a browser and
+    /// made a healthy Chrome frame NACK `ResourceLimit("connection residency")`.
+    ///
+    /// The true unbounded-accumulation bug (Chrome loses a GL context and recreates its whole working set with
+    /// fresh ids every cycle, and the guest never retired the abandoned set) is fixed at its ROOT by
+    /// context-teardown retirement in the GL shim (`GlContext::retire_all`), so the resident set is now BOUNDED
+    /// to what is actually live. This ceiling is therefore headroom for the live working set, not a band-aid
+    /// over a leak — raising it alone would only have delayed the wall.
+    ///
+    /// Derived from the advertised `max_buffer_bytes` (a backend that accepts bigger single allocations grants
+    /// proportionally bigger working-set headroom) and floored at 2 GiB so even a conservative backend gives a
+    /// browser room. It stays FINITE and per-connection; the process-wide [`GlobalLedger`] remains the real
+    /// host-OOM guard across all connections.
     pub fn from_capabilities(caps: Capabilities) -> Self {
+        // Browser-class working-set headroom: 2× the largest single allocation the backend accepts, never
+        // below 2 GiB. Finite by construction (a hostile guest still cannot pin unbounded host memory).
+        let max_connection_bytes = caps.max_buffer_bytes.saturating_mul(2).max(2 << 30);
         Self {
             caps,
-            max_connection_bytes: 512 << 20,
-            max_connection_objects: 65_536,
+            max_connection_bytes,
+            // A rich page's LIVE working set (per-tile textures + per-program shaders/pipelines across many GPU
+            // contexts) can hold well over 64k distinct objects at once; 256k keeps the object guard finite
+            // without tripping a healthy browser frame.
+            max_connection_objects: 262_144,
             copy_alignment: 4,
-            max_compiled_cache_bytes: 64 << 20,
+            // Chrome links a large program set; 128 MiB of compiled PSO/AIR cache is browser-class headroom
+            // while still bounding the compiled-pipeline residency separately from raw data.
+            max_compiled_cache_bytes: 128 << 20,
         }
     }
 }

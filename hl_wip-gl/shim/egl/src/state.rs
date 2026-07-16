@@ -61,6 +61,14 @@ pub struct State {
     /// Latched once the app-surface presenter proved unavailable (libwayland/symbols/global absent), so
     /// bring-up is not retried every `eglSwapBuffers` — the self-owned [`Self::wl`] path is used instead.
     pub wl_app_unavailable: bool,
+
+    /// Count of live `EGLContext`s (bumped by `eglCreateContext`, dropped by `eglDestroyContext`). All EGL
+    /// contexts multiplex onto the single shared [`Self::ctx`] (one implicit share group), so the shim
+    /// cannot free a single context's resources in isolation — but when this reaches `0` NO context remains,
+    /// and the whole working set can be safely retired (see [`Self::destroy_context`]). This is what breaks
+    /// Chrome's lost-context death spiral: each recreate cycle's abandoned working set is refunded when the
+    /// prior context is destroyed, instead of piling onto the host residency ledger forever.
+    pub live_contexts: u32,
 }
 
 /// The outcome of an app-surface present attempt, keying `eglSwapBuffers`' fall-back vs error handling.
@@ -89,6 +97,24 @@ impl State {
             wl: None,
             wl_app: None,
             wl_app_unavailable: false,
+            live_contexts: 0,
+        }
+    }
+
+    /// Record an `eglCreateContext` — one more live EGL context on the shared model.
+    pub fn create_context(&mut self) {
+        self.live_contexts = self.live_contexts.saturating_add(1);
+    }
+
+    /// Record an `eglDestroyContext`. When it drops the LAST live context, retire the whole working set the
+    /// shared model has made resident on the host — queueing a `Destroy*` for every cached IR resource so the
+    /// next submitted frame refunds its per-connection residency. See [`GlContext::retire_all`] and
+    /// [`Self::live_contexts`]. Idempotent-ish: a stray destroy with no live context is a no-op sweep of the
+    /// (already empty) caches.
+    pub fn destroy_context(&mut self) {
+        self.live_contexts = self.live_contexts.saturating_sub(1);
+        if self.live_contexts == 0 {
+            self.ctx.retire_all();
         }
     }
 

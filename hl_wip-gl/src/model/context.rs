@@ -534,6 +534,68 @@ impl GlContext {
         }
     }
 
+    /// Retire the WHOLE working set this context has made resident on the host — every IR resource in every
+    /// residency cache — queueing a `Destroy*` for each and clearing the caches. Called at CONTEXT TEARDOWN
+    /// (the last live EGL context on the shared model is destroyed): Chrome (and Skia/GskGpu generally) frees
+    /// its GL objects by DESTROYING THE CONTEXT, never by `glDeleteTexture`/`glDeleteProgram` — so without a
+    /// context-granular sweep a lost-context cycle (Chrome loses a context, recreates its entire working set
+    /// with FRESH GL names, repeats) piles another full working set onto the host residency ledger every cycle
+    /// until the per-connection cap NACKs every swap. This refunds it.
+    ///
+    /// Every resident IR id is enumerated ONCE from the cache that owns it (a given IR id lives in exactly one
+    /// cache — sampled textures, FBO render targets, and depth buffers are all distinct ids — so nothing is
+    /// double-destroyed), its `Destroy*` queued for the next submitted frame's tail (same path as the
+    /// `glDelete*` retirement), and its cache entry dropped so a later bind of a RECYCLED GL name re-resolves
+    /// to a fresh id. The `default_*` / `placeholder_*` / `fence_ir` one-shot ids are reset to `0` so a
+    /// still-running process (a new context on the same shared model) re-creates them on next use. The
+    /// monotonic `next_*` id counters are deliberately NOT reset: a re-created resource must get a FRESH id
+    /// that cannot collide with a just-retired one still pending destroy on the host.
+    ///
+    /// Share-group safe: the shim multiplexes ALL EGL contexts onto this one `GlContext` (one implicit share
+    /// group), so this only fires when NO context remains — there is no other live context whose resources
+    /// this could wrongly free.
+    pub fn retire_all(&mut self) {
+        for (_gl_name, (ir, _gen)) in self.tex_ir_cache.drain() {
+            self.pending_destroys.push(Cmd::DestroyTexture(ir));
+        }
+        for (_key, (ir, _gen)) in self.buf_ir_cache.drain() {
+            self.pending_destroys.push(Cmd::DestroyBuffer(ir));
+        }
+        for (_gl_name, (vs, fs, _gen)) in self.prog_shader_cache.drain() {
+            self.pending_destroys.push(Cmd::DestroyShader(vs));
+            self.pending_destroys.push(Cmd::DestroyShader(fs));
+        }
+        for (_key, (ir, _gen)) in self.prog_pipeline_cache.drain() {
+            self.pending_destroys.push(Cmd::DestroyPipeline(ir));
+        }
+        for (_gl_tex, (surface, texture)) in self.fbo_targets.drain() {
+            self.pending_destroys.push(Cmd::DestroyTexture(texture));
+            self.pending_destroys.push(Cmd::DestroySurface(surface));
+        }
+        for (_key, depth) in self.depth_targets.drain() {
+            self.pending_destroys.push(Cmd::DestroyTexture(depth));
+        }
+        if self.default_tex_ir != 0 {
+            self.pending_destroys.push(Cmd::DestroyTexture(self.default_tex_ir));
+            self.pending_destroys.push(Cmd::DestroySurface(self.default_surface_ir));
+            self.default_tex_ir = 0;
+            self.default_surface_ir = 0;
+        }
+        if self.default_placeholder_tex != 0 {
+            self.pending_destroys.push(Cmd::DestroyTexture(self.default_placeholder_tex));
+            self.pending_destroys.push(Cmd::DestroySampler(self.default_placeholder_samp));
+            self.default_placeholder_tex = 0;
+            self.default_placeholder_samp = 0;
+        }
+        if self.fence_ir != 0 {
+            self.pending_destroys.push(Cmd::DestroyFence(self.fence_ir));
+            self.fence_ir = 0;
+            self.fence_next_value = 1;
+            self.fence_signaled_through = 0;
+            self.syncs.clear();
+        }
+    }
+
     /// The queued persistent `Destroy*` commands (see [`Self::pending_destroys`]). The service layer appends
     /// these to a frame AFTER its `Submit`s (and before any `Present`), then [`Self::clear_pending_destroys`]
     /// once the submit succeeds — so a NACK (which returns before the clear) re-emits them on the retry.
