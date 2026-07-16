@@ -195,13 +195,24 @@ fn gtk4_composites_through_the_full_stack() {
         app_exited.or(killed_status),
     );
 
-    // ---- 7. Diagnose precisely if REAL GTK content never arrived (stay GREEN as a diagnosed-gap tracker) --
-    // The bind-group completeness fix cleared the create_bind_group wall: GTK now builds pipelines, SUBMITS,
-    // and the compositor PRESENTS frames — but those pixels are still a uniform fill (no visible geometry).
-    // So "no frames at all" AND "frames present but blank" are the SAME diagnosed gap now: the next real stop
-    // is the frame CONTENT / data routing (below), one stage past the now-clean bind group. Both stay green.
+    // ---- 7. The milestone is ACHIEVED: GTK now renders PROPER content, so blank/degenerate is a FAILURE ----
+    // Every prior stop is fixed (see the history below) AND the last one — the GskGpu std140 PushConstants
+    // MVP/clip/scale globals that GTK 4.22's GL renderer never delivers over any observed GL upload — is now
+    // reconstructed by the driver (hl_wip-gl `service::frame::gsk_globals_std140`), so `push.mvp` actually
+    // transforms the gl_VertexID-pulled vertices and GTK's real widgets land at the right positions. This test
+    // therefore no longer "stays green as a diagnosed-gap tracker": it DEMANDS proper content and FAILS if the
+    // frame regresses to a uniform clear / degenerate geometry (a collapsed MVP still composites a light-gray
+    // frame that a bare spread/chrome check would wave through). The gate below requires GTK's rich, varied
+    // widget surface — thousands of accent-blue and dark-text pixels, not the handful a near-uniform clear has.
     let best_spread = frames.iter().map(luminance_spread).max().unwrap_or(0);
-    let has_real_content = best_spread > 40 && frames.iter().any(has_light_chrome);
+    let has_real_content = frames
+        .iter()
+        .max_by_key(|f| luminance_spread(f))
+        .map(|f| {
+            let (blue, _warm, dark) = adwaita_color_counts(f);
+            luminance_spread(f) > 40 && has_light_chrome(f) && blue > 3000 && dark > 1000
+        })
+        .unwrap_or(false);
     if !has_real_content {
         // PROGRESS TO DATE (each of these WAS the stop and is now cleared):
         //   * GDK Wayland display-open: our compositor now advertises wl_data_device_manager (+ the other
@@ -383,7 +394,14 @@ fn gtk4_composites_through_the_full_stack() {
             presented = frames.len(),
         );
         let _ = std::fs::remove_file(&socket_path);
-        return;
+        panic!(
+            "GTK4 composited {presented} frame(s) through the full stack but did NOT render PROPER content \
+             (best luminance spread {best_spread}) — the frame is a uniform clear / degenerate geometry, not \
+             GTK's real widgets. This milestone is ACHIEVED in-tree (the GskGpu PushConstants MVP is \
+             reconstructed in hl_wip-gl service::frame), so a blank frame is a REGRESSION, not a diagnosed \
+             gap. See the stage evidence above.",
+            presented = frames.len(),
+        );
     }
 
     // ---- 8. ASSERT the captured pixels are the REAL GTK4 app's rendered window -------------------------
@@ -419,6 +437,55 @@ fn gtk4_composites_through_the_full_stack() {
         has_light_chrome(&frame),
         "expected GTK's light-gray chrome (bright light pixels) somewhere in the frame"
     );
+
+    // ---- PROPER CONTENT, not just "non-blank": confront the actual GskGpu geometry -------------------
+    // "GTK composites" is NOT "GTK renders correctly". A collapsed GskGpu MVP (`push.mvp == 0`) STILL
+    // composites a frame and still carries the light-gray chrome clear — every primitive just transforms
+    // onto the origin, so the window is a uniform fill that sneaks past a bare spread/chrome check. So we
+    // assert GTK's REAL widgets are present AND land at their expected screen positions, which only holds
+    // when the std140 PushConstants MVP actually transforms the gl_VertexID-pulled vertices:
+    //   * across the whole toplevel, thousands of Adwaita ACCENT-BLUE pixels (sliders / the color button /
+    //     the selected row) and thousands of DARK text-glyph pixels — a rich, varied widget surface, not
+    //     the handful a near-uniform clear yields; AND
+    //   * for gtk4-widget-factory (which `which_gtk4_app` picks first) at its 1378x774 toplevel, two
+    //     distinctive, layout-stable regions carry their real colors: the color-button swatch (~x505,y393)
+    //     is solid accent BLUE, and the "Sunset" photo thumbnail (bottom-left, ~x185,y690) is a WARM orange
+    //     sunrise — a real sampled TEXTURE, so it also proves textured-node placement.
+    let (blue_px, warm_px, dark_px) = adwaita_color_counts(&frame);
+    eprintln!("proper-content pixels: accent-blue={blue_px} warm={warm_px} dark-text={dark_px}");
+    assert!(
+        blue_px > 3000,
+        "expected GTK's accent-blue widgets (sliders / color button / selection) spread across the frame, \
+         but only {blue_px} accent-blue px — a collapsed GskGpu MVP left the window as its clear"
+    );
+    assert!(
+        dark_px > 1000,
+        "expected GTK's dark text glyphs across the frame, but only {dark_px} dark px — no real widget \
+         content, just chrome"
+    );
+    let is_widget_factory = app_bin
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.contains("widget-factory"))
+        .unwrap_or(false);
+    if is_widget_factory && w == 1378 && h == 774 {
+        let swatch = region_avg(&frame, 490, 388, 520, 398);
+        assert!(
+            swatch.2 > 130 && swatch.2 as i32 > swatch.0 as i32 + 40 && swatch.0 < 120,
+            "the color-button swatch at (~505,393) must be Adwaita accent BLUE, got RGB {swatch:?} — the \
+             GskGpu geometry is mis-placed/collapsed (this region should be a solid blue rectangle)"
+        );
+        let sunset = region_avg(&frame, 150, 675, 220, 710);
+        assert!(
+            sunset.0 > 150 && sunset.0 as i32 > sunset.2 as i32 + 60 && sunset.2 < 130,
+            "the Sunset photo thumbnail at (~185,690) must be WARM orange, got RGB {sunset:?} — the textured \
+             node is mis-placed/collapsed (this region should be a sampled sunrise image)"
+        );
+        assert!(
+            warm_px > 3000,
+            "expected widget-factory's warm Sunset photo, but only {warm_px} warm px"
+        );
+    }
 
     // A real, viewable PNG of the composited app frame was written.
     let png = png_dir.join(format!("frame-{}.png", frame.serial));
@@ -461,6 +528,50 @@ fn has_light_chrome(f: &CapturedFrame) -> bool {
     f.rgba
         .chunks_exact(4)
         .any(|p| p[0] >= 200 && p[1] >= 200 && p[2] >= 200)
+}
+
+/// Count the distinctive Adwaita colors across the frame: `(accent_blue, warm, dark)`. Accent blue is GTK's
+/// selection/slider/button highlight (blue dominant over red+green); warm is the reddish-orange of a photo
+/// (red dominant over green+blue, e.g. widget-factory's Sunset image); dark is near-black text glyphs. A
+/// properly MVP-transformed GTK window has thousands of each; a collapsed-MVP uniform clear has ~none.
+fn adwaita_color_counts(f: &CapturedFrame) -> (u32, u32, u32) {
+    let (mut blue, mut warm, mut dark) = (0u32, 0u32, 0u32);
+    for p in f.rgba.chunks_exact(4) {
+        let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+        if b > 120 && b - r > 40 && b - g > 25 {
+            blue += 1;
+        }
+        if r > 120 && r - b > 40 && r - g > 20 {
+            warm += 1;
+        }
+        if r + g + b < 90 {
+            dark += 1;
+        }
+    }
+    (blue, warm, dark)
+}
+
+/// The average `(r, g, b)` over the pixel box `[x0,x1) × [y0,y1)` of the frame (clamped to its extent) — used
+/// to assert a KNOWN widget lands at a KNOWN screen position with its real color (only true when the GskGpu
+/// MVP transforms the geometry correctly).
+fn region_avg(f: &CapturedFrame, x0: i32, y0: i32, x1: i32, y1: i32) -> (u32, u32, u32) {
+    let (w, h) = (f.width, f.height);
+    let (mut r, mut g, mut b, mut n) = (0u64, 0u64, 0u64, 0u64);
+    for y in y0..y1.min(h) {
+        for x in x0..x1.min(w) {
+            let o = ((y * w + x) * 4) as usize;
+            if o + 2 < f.rgba.len() {
+                r += f.rgba[o] as u64;
+                g += f.rgba[o + 1] as u64;
+                b += f.rgba[o + 2] as u64;
+                n += 1;
+            }
+        }
+    }
+    if n == 0 {
+        return (0, 0, 0);
+    }
+    ((r / n) as u32, (g / n) as u32, (b / n) as u32)
 }
 
 /// Extract the lines from the app's stderr most likely to name the decisive stop (EGL/GL/GDK/GSK/epoxy

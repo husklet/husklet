@@ -964,13 +964,37 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, de
     //     values between them each keep their own bytes, not the last-set ones).
     // A UBO-block draw prefers its snapshotted block bytes, then the per-draw `glUniform*` snapshot, and
     // only falls back to the live `Program::ubuf` for a draw recorded before this snapshotting existed.
-    let ubuf: Vec<u8> = if !d.ubo_bytes.is_empty() {
+    let mut ubuf: Vec<u8> = if !d.ubo_bytes.is_empty() {
         d.ubo_bytes.clone()
     } else if !d.ubuf_bytes.is_empty() {
         d.ubuf_bytes.clone()
     } else {
         prog.ubuf[..prog.ubuf_size.max(0) as usize].to_vec()
     };
+    // GskGpu (GTK 4.14+ GL renderer) drives ALL geometry through a std140 push-constant UBO at binding 0:
+    //   layout(std140, binding = 0) uniform PushConstants { mat4 mvp; mat3x4 clip; vec2 scale; } push;
+    // every vertex is `gl_Position = push.mvp * vec4(in_rect_scaled, 0, 1)` and clipped by `push.clip`. GTK
+    // 4.22's GskGL allocates this globals buffer (`glBufferData(GL_UNIFORM_BUFFER, 16384, NULL)`) and binds it
+    // via `glBindBufferBase(GL_UNIFORM_BUFFER, 0, buf)`, but its per-pass CONTENTS never arrive over any GL
+    // upload this deferred driver observes: there is NO `glBufferSubData` / `glMapBufferRange` / `glUniform*`
+    // to the bound globals buffer (only the instance/vertex VBO is filled via `glBufferSubData`) — so the block
+    // `resolve_block_ubo_bytes` reads back is all-zero and `push.mvp == 0` collapses every primitive onto the
+    // origin (the presented frame keeps only its clear → a uniform blank). Because a GskGpu render pass's mvp
+    // IS just the orthographic projection of that pass's render target (top-left origin flipped into GL clip
+    // space), its scale is the device pixel scale (1 on our compositor), and its clip is the full target rect,
+    // we reconstruct those globals here from the pass's target extent when the bound block is empty-of-data.
+    // This is exactly what GskGpu would have written, so `gl_VertexID`-pulled vertices land at the correct
+    // screen positions and GTK's real widget geometry becomes visible. Gated on the GskGpu shader signature
+    // (`GSK_GLOBAL_MVP`) + an all-zero 128-byte block, so a non-GskGpu app that legitimately binds its own UBO
+    // (any non-zero bytes) or uses a different layout is never touched.
+    if ubuf.len() == 128
+        && tw > 0
+        && th > 0
+        && ubuf.iter().all(|&b| b == 0)
+        && prog.vs_src.contains("GSK_GLOBAL_MVP")
+    {
+        ubuf = gsk_globals_std140(tw as f32, th as f32);
+    }
     let mut uniform_ir = 0u32;
     if has_u {
         uniform_ir = ctx.alloc_buffer_ir();
@@ -1055,6 +1079,37 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, de
     }
 
     Some(DrawLowering { copies, ops })
+}
+
+/// The 128-byte std140 bytes of GskGpu's `PushConstants { mat4 mvp; mat3x4 clip; vec2 scale; }` for a render
+/// pass targeting a `w`×`h` (device-pixel) target — reconstructed when GTK's GskGL renderer never delivers
+/// the block's contents over any observed GL upload (see the call site in `lower_draw_n`).
+///
+/// std140 layout: `mat4 mvp` at offset 0 (four column vec4s, column-major), `mat3x4 clip` at offset 64 (three
+/// column vec4s), `vec2 scale` at offset 112. The mvp is the orthographic projection GskGpu uses for a pass:
+/// device-pixel coordinates with a top-left origin map to GL clip space, Y-flipped (`x' = 2x/w − 1`,
+/// `y' = 1 − 2y/h`). The clip's first column carries the clip rect as `(x, y, w, h)` (the shader reads
+/// `push.clip[0]` and forms bounds `(x, y, x+w, y+h)`); a full-target rect (with a 1px margin so edge coverage
+/// is not trimmed) disables clipping. `scale` is the device pixel scale (1 on our compositor, so `in_rect`
+/// logical units already equal device pixels).
+fn gsk_globals_std140(w: f32, h: f32) -> Vec<u8> {
+    let mut m = [0f32; 32];
+    // mat4 mvp @0 (column-major): cols 0..3 at floats 0,4,8,12.
+    m[0] = 2.0 / w; // col0.x
+    m[5] = -2.0 / h; // col1.y (top-left origin → GL clip space)
+    m[10] = 1.0; // col2.z
+    m[12] = -1.0; // col3.x
+    m[13] = 1.0; // col3.y
+    m[15] = 1.0; // col3.w
+    // mat3x4 clip @64 (floats 16..28): clip[0] = (x, y, w, h) covering the whole target; clip[1]/clip[2] = 0.
+    m[16] = -1.0;
+    m[17] = -1.0;
+    m[18] = w + 2.0;
+    m[19] = h + 2.0;
+    // vec2 scale @112 (floats 28..30).
+    m[28] = 1.0;
+    m[29] = 1.0;
+    m.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
 /// `SetViewport` with the GL→Metal Y-flip (`gl_shim.c` `emit_viewport_h`), against a `tw`×`th` target.
