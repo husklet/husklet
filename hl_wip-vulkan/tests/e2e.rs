@@ -30,7 +30,7 @@ use hl_vulkan::result::HL_API_VERSION;
 use hl_vulkan::service::{create, present, record, submit};
 
 use hl_gpu::protocol::model::descriptor::{VertexAttr, VertexLayout};
-use hl_gpu::protocol::model::enums::TextureFormat;
+use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
 use hl_gpu::protocol::model::id::TextureId;
 use hl_gpu::{
     Capabilities, CpuExecutor, FakeClock, GlobalLedger, InProcessCommandSink, Limits, Session,
@@ -120,8 +120,7 @@ fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
             vec![layout],
             vec![TextureFormat::Rgba8Unorm],
             Some(depth_state),
-            None, 1
-        )
+            None, 1, Topology::TriangleList)
         .unwrap();
 
         // A full-screen quad (two triangles) at z = 0.6, red.
@@ -234,8 +233,7 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
         vec![layout],
         vec![TextureFormat::Rgba8Unorm],
         None,
-        None, 1
-    )
+        None, 1, Topology::TriangleList)
     .unwrap();
 
     // vkCreateBuffer(VERTEX) + vkAllocateMemory + vkBindBufferMemory + vkMapMemory + write the 3 verts.

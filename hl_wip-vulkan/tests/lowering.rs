@@ -18,7 +18,7 @@ use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
     BindResource, Extent3d, Origin3d, TextureSubresource, VertexAttr, VertexLayout,
 };
-use hl_gpu::protocol::model::enums::{buffer_usage, Filter, IndexFormat, TextureFormat};
+use hl_gpu::protocol::model::enums::{buffer_usage, Filter, IndexFormat, TextureFormat, Topology};
 use hl_gpu::{Cmd, FenceId, GpuError, RecordingSink, ShaderPayloadKind};
 
 /// A slot-0 vertex layout carrying interleaved position (offset 0) + color (offset 8), stride 24 — the
@@ -221,8 +221,7 @@ fn graphics_pipeline_emits_create_render_pipeline() {
         vec![pos_color_layout()],
         vec![TextureFormat::Bgra8Unorm],
         None,
-        None, 1
-    )
+        None, 1, Topology::TriangleList)
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::CreateRenderPipeline(_, desc)] => {
@@ -256,8 +255,7 @@ fn graphics_pipeline_threads_multisample_count() {
         vec![TextureFormat::Bgra8Unorm],
         None,
         None,
-        4,
-    )
+        4, Topology::TriangleList)
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::CreateRenderPipeline(_, desc)] => {
@@ -287,8 +285,7 @@ fn dynamic_rendering_pipeline_takes_color_formats_from_pnext_no_render_pass() {
         vec![pos_color_layout()],
         vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
         None,
-        None, 1
-    )
+        None, 1, Topology::TriangleList)
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::CreateRenderPipeline(_, desc)] => {
@@ -331,8 +328,7 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
         vec![pos_color_layout()],
         vec![TextureFormat::Rgba8Unorm],
         None,
-        None, 1
-    )
+        None, 1, Topology::TriangleList)
     .unwrap();
 
     // a vertex buffer (ir 5).

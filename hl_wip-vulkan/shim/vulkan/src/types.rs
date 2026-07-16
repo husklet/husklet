@@ -781,6 +781,16 @@ pub struct VkGraphicsPipelineCreateInfo {
 }
 
 #[repr(C)]
+pub struct VkPipelineInputAssemblyStateCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    /// `VkPrimitiveTopology` — 0 POINT_LIST, 1 LINE_LIST, 2 LINE_STRIP, 3 TRIANGLE_LIST, 4 TRIANGLE_STRIP.
+    pub topology: i32,
+    pub primitive_restart_enable: u32,
+}
+
+#[repr(C)]
 pub struct VkAttachmentDescription {
     pub flags: VkFlags,
     pub format: i32,

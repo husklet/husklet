@@ -446,6 +446,12 @@ pub fn create_compute_pipeline(
 /// as a raw `VkSampleCountFlagBits` count value). It threads to [`RenderPipelineDesc::sample_count`] so an
 /// MSAA pipeline rasterizes into a matching multisampled color attachment (the executor honors it, #179).
 /// `0`/`1` collapse to single-sample so an existing single-sample pipeline is byte-identical.
+///
+/// `topology` is the pipeline's `VkPipelineInputAssemblyStateCreateInfo::topology` mapped onto the wire
+/// [`Topology`] (the shim parses it; a null/unsupported topology folds to `TriangleList`). Without this the
+/// topology was DROPPED (`Topology::TriangleList` hardcoded) and a pipeline drawing 4-vertex TRIANGLE_STRIP
+/// quads — GPUI/wgpu's entire UI: every window/panel/glyph quad — rasterized only the FIRST triangle of each
+/// quad, so each rectangle collapsed to a half-rectangle triangle (Zed rendered as scattered triangles).
 pub fn create_graphics_pipeline(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
@@ -456,6 +462,7 @@ pub fn create_graphics_pipeline(
     depth: Option<DepthState>,
     blend: Option<BlendState>,
     sample_count: u32,
+    topology: Topology,
 ) -> Result<VkPipeline> {
     use hl_gpu::protocol::model::descriptor::ColorTargetState;
     let resolve = |dev: &Device, (module, entry): (VkShaderModule, &str)| -> Result<ShaderRef> {
@@ -486,7 +493,7 @@ pub fn create_graphics_pipeline(
             vertex_buffers: vertex_layouts,
             color_targets,
             depth,
-            topology: Topology::TriangleList,
+            topology,
             cull: 0,
             front_face: 0,
             sample_count: sample_count.max(1),

@@ -13,7 +13,7 @@
 use core::ffi::{c_char, c_void};
 
 use hl_gpu::protocol::model::descriptor::{BlendState, DepthState, VertexAttr, VertexLayout};
-use hl_gpu::protocol::model::enums::TextureFormat;
+use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
 use hl_gpu::CommandSink;
 use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
 use hl_vulkan::model::memory::tex_format_from_vk;
@@ -578,6 +578,30 @@ fn parse_multisample_samples(p_multisample_state: *const c_void) -> u32 {
     (ms.rasterization_samples as u32).max(1)
 }
 
+/// Read a `VkPipelineInputAssemblyStateCreateInfo`'s `topology` as the pipeline's primitive-assembly mode.
+/// `VkPrimitiveTopology` shares WebGPU's numbering for every mode our IR carries (0 POINT_LIST, 1 LINE_LIST,
+/// 2 LINE_STRIP, 3 TRIANGLE_LIST, 4 TRIANGLE_STRIP), so those map straight onto the wire [`Topology`]. A null
+/// pInputAssemblyState or a topology our IR/executor cannot express (TRIANGLE_FAN, the *_ADJACENCY modes,
+/// PATCH_LIST) folds to `TriangleList`. Without this the topology was DROPPED (`Topology::TriangleList`
+/// hardcoded in create.rs) and a pipeline drawing 4-vertex TRIANGLE_STRIP quads (GPUI's entire UI: the
+/// window/panel/glyph quads) rasterized only the FIRST triangle of each quad — every rectangle collapsed to
+/// a half-rectangle triangle.
+fn parse_input_assembly_topology(p_input_assembly_state: *const c_void) -> Topology {
+    let Some(ia) =
+        (unsafe { (p_input_assembly_state as *const VkPipelineInputAssemblyStateCreateInfo).as_ref() })
+    else {
+        return Topology::TriangleList;
+    };
+    match ia.topology {
+        0 => Topology::PointList,
+        1 => Topology::LineList,
+        2 => Topology::LineStrip,
+        3 => Topology::TriangleList,
+        4 => Topology::TriangleStrip,
+        _ => Topology::TriangleList,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn vkCreateGraphicsPipelines(
     _device: *mut c_void,
@@ -658,9 +682,12 @@ pub extern "C" fn vkCreateGraphicsPipelines(
         // Multisample state: rasterizationSamples → the pipeline's MSAA count. Null / _1_BIT => single-sample.
         let sample_count = parse_multisample_samples(ci.p_multisample_state);
 
+        // Input-assembly topology: the real VkPrimitiveTopology (GPUI's quads are 4-vertex TRIANGLE_STRIP).
+        let topology = parse_input_assembly_topology(ci.p_input_assembly_state);
+
         let r = dev_sink(|dev, sink| {
             let frag = fragment.as_ref().map(|(m, e)| (*m, e.as_str()));
-            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth, blend, sample_count)
+            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth, blend, sample_count, topology)
         })
         .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkCreateGraphicsPipelines: no device")));
         match r {
