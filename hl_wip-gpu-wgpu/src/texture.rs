@@ -184,6 +184,16 @@ impl WgpuExecutor {
     ) -> Result<Vec<u8>> {
         let _sp = hl_log::hl_span!(tag::PRESENT, "readback");
         let t = native(res, id)?;
+        // A multisampled texture is built RENDER_ATTACHMENT-only (WebGPU forbids COPY usage on
+        // sampleCount>1), so copy_texture_to_buffer against it is a hard wgpu validation error that would
+        // panic the executor thread and NACK the whole frame (guest sees DEVICE_LOST). A readback request
+        // must never do that: report it as unsupported and let the caller skip it. Real MSAA content is
+        // read only after a resolve to a single-sample target (Enc::ResolveTexture), never here.
+        if t.sample_count > 1 {
+            return Err(GpuError::Unsupported(
+                "read_texture: multisampled texture cannot be copied to a buffer; resolve first",
+            ));
+        }
         if mip >= t.mip_levels {
             return Err(GpuError::OutOfBounds);
         }
