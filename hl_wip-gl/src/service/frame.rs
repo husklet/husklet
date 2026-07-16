@@ -922,7 +922,11 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, de
     // format-compatible with the attachment. A pass with NO depth attachment (the common 2D path) keeps
     // `None` — unchanged.
     let depth = depth_fmt.map(|fmt| build_depth_state(fmt, &d));
-    let topology = if d.mode == GL_TRIANGLE_STRIP { Topology::TriangleStrip } else { Topology::TriangleList };
+    let topology = gl_topology(d.mode);
+    // MSAA sample count the pipeline must declare so a multisampled attachment actually resolves (the GL
+    // analogue of the Vulkan `sample_count` drop). Sourced from the bound draw framebuffer's attachments;
+    // see `framebuffer_sample_count` for this model's (single-sampled-only) status.
+    let sample_count = framebuffer_sample_count(ctx, d.fbo);
     // One color target for the ordinary path; `n_color_targets` identical targets for a `glDrawBuffers` MRT
     // pass (each attachment shares the draw's format + blend). The fragment shader's `layout(location = k)`
     // outputs map onto target `k` (see `adapter::glsl::translate_render`).
@@ -935,7 +939,7 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, de
     // fixed-function + vertex-layout state, so the cache key folds a signature of that state in. A program
     // re-drawn with the SAME state reuses its resident pipeline (no `CreateRenderPipeline`); a genuinely new
     // state variant creates one more. Reused across frames + invalidated on relink (see `program_pipeline_ir`).
-    let state_key = pipeline_state_key(&vbs, &color_targets, &depth, topology, cull, front_face);
+    let state_key = pipeline_state_key(&vbs, &color_targets, &depth, topology, cull, front_face, sample_count);
     let (pipeline_ir, pipe_new) = ctx.program_pipeline_ir(prog_name, state_key, prog.link_gen);
     if pipe_new {
         cmds.push(Cmd::CreateRenderPipeline(
@@ -949,7 +953,7 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, de
                 topology,
                 cull,
                 front_face,
-                sample_count: 1,
+                sample_count,
                 label: String::new(),
             },
         ));
@@ -1202,14 +1206,15 @@ fn blit_copy_enc(
 
 /// A stable signature of the pipeline-state a draw contributes on top of its program's (cached) shader
 /// modules: the vertex-buffer layouts, the color targets (format + blend), the depth state, the primitive
-/// topology, and the cull mode + front-face winding. Two draws of the same program with an equal signature
-/// share one render pipeline (see [`GlContext::program_pipeline_ir`]); any difference mints a new one.
+/// topology, the cull mode + front-face winding, and the MSAA sample count. Two draws of the same program
+/// with an equal signature share one render pipeline (see [`GlContext::program_pipeline_ir`]); any
+/// difference mints a new one.
 ///
 /// These descriptor types derive `Debug` but not `Hash` (and live in the `hl_gpu` crate this shim does not
 /// modify), so a canonical `Debug` rendering is the hash input: structurally-equal state renders identically
-/// and hashes equal, while any change (blend, depth, topology, a vertex attribute, cull/winding, or the
-/// target format) renders differently and hashes apart. None of these fields carry floats, so the rendering
-/// is exact.
+/// and hashes equal, while any change (blend, depth, topology, a vertex attribute, cull/winding, the sample
+/// count, or the target format) renders differently and hashes apart. None of these fields carry floats, so
+/// the rendering is exact.
 fn pipeline_state_key(
     vbs: &[VertexLayout],
     color_targets: &[ColorTargetState],
@@ -1217,11 +1222,60 @@ fn pipeline_state_key(
     topology: Topology,
     cull: u32,
     front_face: u32,
+    sample_count: u32,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    format!("{:?}", (vbs, color_targets, depth, topology, cull, front_face)).hash(&mut h);
+    format!("{:?}", (vbs, color_targets, depth, topology, cull, front_face, sample_count)).hash(&mut h);
     h.finish()
+}
+
+/// GL primitive mode → the neutral pipeline [`Topology`] the executor rasterizes with. Previously only
+/// `GL_TRIANGLE_STRIP` was distinguished and EVERY other mode folded to `TriangleList`, so a
+/// `glDrawArrays(GL_LINES)` / `GL_POINTS` / `GL_LINE_STRIP` silently rasterized as triangles. Each GL mode
+/// with a neutral equivalent now maps to it — the protocol's `Topology` offers `PointList` / `LineList` /
+/// `LineStrip` / `TriangleList` / `TriangleStrip` (see `hl_gpu::protocol::model::enums::Topology`), all of
+/// which the wgpu executor honors (`hl_gpu-wgpu` `pipeline::topology`).
+///
+/// Two GL modes have NO neutral variant and are handled as documented, honest gaps (never a silent
+/// cross-class fold):
+///   * `GL_LINE_LOOP` → `LineStrip`: the closest honored LINE topology; it draws every segment EXCEPT the
+///     implicit closing edge (an approximation that stays a line primitive, not triangles).
+///   * `GL_TRIANGLE_FAN` → `TriangleList`: no neutral fan topology, so it keeps the safe TRIANGLE fallback
+///     (a fan drawn as an independent-triangle list mis-connects its shared-vertex fan, but stays a
+///     triangle primitive rather than a wrong class).
+///
+/// Any unrecognized mode also falls back to `TriangleList` and never panics.
+fn gl_topology(mode: u32) -> Topology {
+    // GL_LINE_LOOP (0x0002) and GL_TRIANGLE_FAN (0x0006) have no glconst here; matched by raw value.
+    match mode {
+        GL_POINTS => Topology::PointList,
+        GL_LINES => Topology::LineList,
+        0x0002 /* GL_LINE_LOOP */ => Topology::LineStrip,
+        GL_LINE_STRIP => Topology::LineStrip,
+        GL_TRIANGLE_STRIP => Topology::TriangleStrip,
+        // GL_TRIANGLES, GL_TRIANGLE_FAN (0x0006, no neutral fan), and any unknown mode → safe TriangleList.
+        _ => Topology::TriangleList,
+    }
+}
+
+/// The MSAA sample count the pass's render pipeline must declare so a multisampled attachment resolves (the
+/// GL analogue of the Vulkan `sample_count` drop fixed earlier) — the count shared by the bound draw
+/// framebuffer's color (and depth) attachments.
+///
+/// HONEST GAP: this GL model has no multisample-attachment representation yet. There is no
+/// `glRenderbufferStorageMultisample` / `glTexStorage2DMultisample` entry point, no per-resource `samples`
+/// field (`model::renderbuffer::Renderbuffer`, `model::texture::GlTexture`), and the `GL_SAMPLES` query
+/// reads back 0 — so EVERY framebuffer this model can currently represent is single-sampled and this
+/// returns 1. That is CORRECT for every representable state; the value is now sourced from ONE documented
+/// place instead of a blind hardcode at the pipeline descriptor. When multisample-attachment tracking lands
+/// (a `samples` field on the color/depth attachment + a `glRenderbufferStorageMultisample` /
+/// `glTexStorage2DMultisample` recorder), read the attachment's sample count here AND raise the matching
+/// `TextureDesc.sample_count` on the render-target + depth textures (`push_target_creates` /
+/// `depth_attachment_for`) — MSAA then flows end to end with no other change to this lowering. Never panics;
+/// a plain or unknown FBO yields 1.
+fn framebuffer_sample_count(_ctx: &GlContext, _fbo: u32) -> u32 {
+    1
 }
 
 /// Vertex-attribute format packing (`gl_shim.c` `vertex_format_wire`):
