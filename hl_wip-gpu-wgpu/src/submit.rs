@@ -13,12 +13,12 @@ use hl_gpu::protocol::model::command::{CommandBuffer, Enc};
 use hl_gpu::protocol::model::descriptor::{
     ColorAttachment, DepthAttachment, Extent3d, Origin3d, TextureSubresource,
 };
-use hl_gpu::protocol::model::enums::{IndexFormat, LoadOp, TextureAspect, TextureFormat};
+use hl_gpu::protocol::model::enums::{Filter, IndexFormat, LoadOp, TextureAspect, TextureFormat};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 use hl_log::tag;
 
-use crate::convert::{clear_texel, texel_bytes};
+use crate::convert::{clear_texel, texel_bytes, texture_format};
 use crate::pipeline::{self, PipelineNative};
 use crate::{bindgroup, buffer, fence, texture, WgpuExecutor};
 
@@ -283,7 +283,7 @@ impl WgpuExecutor {
     /// clean typed error rather than a panic (the runtime does not range-check this op).
     #[allow(clippy::too_many_arguments)]
     fn copy_texture_to_texture(
-        &self,
+        &mut self,
         res: &SessionResources,
         src: u32,
         src_sub: &TextureSubresource,
@@ -293,6 +293,37 @@ impl WgpuExecutor {
         dst_origin: &Origin3d,
         extent: &Extent3d,
     ) -> Result<()> {
+        // Copy-compatibility gate. wgpu's raw texel copy — and the CPU-mediated byte copy below, which
+        // reinterprets the source bytes verbatim in the destination — is only correct when the two formats
+        // share an IDENTICAL byte layout: the same wgpu format ignoring an sRGB suffix
+        // (`Rgba8Unorm` ↔ `Rgba8UnormSrgb` differ only in transfer interpretation, not bytes). A copy across
+        // a DIFFERENT layout — a channel-order swap (`Rgba8` ↔ `Bgra8`), a different texel size, or an sRGB
+        // vs linear reinterpretation — is what GL permits through a CONVERTING copy (`glBlitFramebuffer` /
+        // `glCopyTexSubImage2D` / `glCopyImageSubData`): it re-samples the source and RE-ENCODES into the
+        // destination format. A byte copy would silently corrupt (wrong channel order) or, on a size
+        // mismatch, be rejected. So for a format mismatch we route through a CONVERTING BLIT — sample the
+        // source region, render it into the destination region, and let wgpu channel-swap / re-encode on
+        // write — a 1:1 (`src_extent == dst_extent == extent`) blit with NEAREST filter, i.e. an exact
+        // texel remap with no resampling. Copy-COMPATIBLE formats keep the fast raw byte copy below, so
+        // there is no behaviour or perf change for existing apps.
+        let (src_wfmt, dst_wfmt) = {
+            let s = texture::native(res, src)?;
+            let d = texture::native(res, dst)?;
+            (texture_format(s.format)?, texture_format(d.format)?)
+        };
+        if src_wfmt.remove_srgb_suffix() != dst_wfmt.remove_srgb_suffix() {
+            hl_log::hl_debug!(
+                tag::EXEC,
+                "t2t converting-copy: src={src_wfmt:?} dst={dst_wfmt:?} (incompatible formats → blit)"
+            );
+            hl_log::hl_count!(tag::EXEC, "t2t_converting_copy");
+            // A 1:1 blit: same source and destination extent (no scaling), nearest sampling (exact texel
+            // mapping). `blit_texture` performs the same base-subresource / bounds / 2D-only validation the
+            // fast path does, so a bad subresource or out-of-range region is the same typed error.
+            return self.blit_texture(
+                res, src, src_sub, src_origin, extent, dst, dst_sub, dst_origin, extent, Filter::Nearest,
+            );
+        }
         for sub in [src_sub, dst_sub] {
             if sub.mip != 0 || sub.layer != 0 || sub.aspect != TextureAspect::All {
                 return Err(GpuError::Unsupported("wgpu: non-base subresource texture copy"));
@@ -309,6 +340,9 @@ impl WgpuExecutor {
             let t = texture::native(res, dst)?;
             (t.width, t.height, texel_bytes(t.format)? as u32)
         };
+        // Copy-compatible formats (checked above) always share a texel size; keep the guard as a defensive
+        // invariant so a future format whose sRGB base collides but whose byte size differs cannot slip
+        // through as a silent mis-copy.
         if s_bpt != d_bpt {
             return Err(GpuError::Invalid("wgpu: texture-to-texture copy between incompatible formats"));
         }
