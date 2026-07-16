@@ -415,6 +415,31 @@ name = "demo_content_type"
 path = "tests/demo_content_type.rs"
 required-features = ["smithay-adapter"]
 
+# Batch-9 MODERN-WAYLAND protocols Chrome/Ozone + GTK/Qt bind that were previously missing:
+# `wp_cursor_shape` (named cursors), `wp_single_pixel_buffer` (1x1 solid-color quads),
+# `zwp_keyboard_shortcuts_inhibit` (key-grab), and `wp_tearing_control` (present hint). Each drives a real
+# in-process client that binds the newly-wired global and asserts a REAL effect (the composited pixel, the
+# recorded hint/shape, the delivered wire event), not merely that the global binds.
+[[test]]
+name = "demo_cursor_shape"
+path = "tests/demo_cursor_shape.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_single_pixel_buffer"
+path = "tests/demo_single_pixel_buffer.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_keyboard_shortcuts_inhibit"
+path = "tests/demo_keyboard_shortcuts_inhibit.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_tearing_control"
+path = "tests/demo_tearing_control.rs"
+required-features = ["smithay-adapter"]
+
 # Batch-8 EVENT-PROPAGATION interaction loops — the closed inject→client-reacts→compositor-re-renders
 # chain, plus the previously-uncovered wire events (`wl_pointer.leave`, `wl_pointer.axis_value120`/
 # `axis_discrete`, `wl_keyboard.repeat_info`, `xdg_popup.repositioned`, focus-indicator re-render, nested

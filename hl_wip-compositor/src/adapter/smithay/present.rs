@@ -106,6 +106,22 @@ pub struct Observations {
     /// There is a client-visible `locked`/`finished` event, but this lets a test assert the SERVER-side
     /// transition (that normal surfaces were occluded) directly. See the `session_lock` demo.
     pub session_locked: bool,
+    /// The CSS name (`pointer` / `text` / `grab` / …) of the last `wp_cursor_shape_device_v1.set_shape` the
+    /// focused client requested, as decoded by Smithay and delivered through `SeatHandler::cursor_image`.
+    /// `None` before any named shape is set, or once the client switches to a surface cursor / hides it.
+    /// `wp_cursor_shape` carries no reply event, so this is the only way a test can assert the exact shape
+    /// name Chrome/Ozone set reached the seat. See the `cursor_shape` demo.
+    pub cursor_shape: Option<String>,
+    /// `wl_surface` protocol ids that currently hold an ACTIVE `zwp_keyboard_shortcuts_inhibitor_v1`.
+    /// Inserted (and the inhibitor activated) by `KeyboardShortcutsInhibitHandler::new_inhibitor`, removed by
+    /// `inhibitor_destroyed`. The client also receives the `active` wire event, but this lets a test assert
+    /// the SERVER-side grant + tracking directly. See the `keyboard_shortcuts_inhibit` demo.
+    pub shortcuts_inhibited: BTreeSet<u32>,
+    /// `wl_surface` protocol id → the `wp_tearing_control_v1` presentation hint (wire value: `0` vsync — do
+    /// not tear / `1` async — tearing allowed) last read from the surface's COMMITTED
+    /// `TearingControlCachedState`. Re-read every commit, so a test sees the exact hint the client committed
+    /// (and its reversion to `vsync`). See the `tearing_control` demo.
+    pub tearing_hint: BTreeMap<u32, u32>,
 }
 
 /// A headless [`Presenter`] that captures composed frames (and optionally writes PNGs).

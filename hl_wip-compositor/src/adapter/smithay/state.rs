@@ -17,7 +17,7 @@ use hl_log::{hl_count, hl_debug, hl_info, tag};
 use smithay::reexports::wayland_server::{
     backend::{ClientData, ClientId, DisconnectReason, GlobalId, ObjectId},
     protocol::{wl_buffer::WlBuffer, wl_callback::WlCallback, wl_shm, wl_surface::WlSurface},
-    Client, DisplayHandle, Resource,
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, WEnum, Weak,
 };
 use smithay::backend::input::{
     Axis, AxisSource, ButtonState, KeyState, TabletToolCapabilities, TabletToolDescriptor,
@@ -41,6 +41,12 @@ use smithay::utils::Transform;
 use smithay::wayland::{
     buffer::BufferHandler,
     content_type::{ContentTypeState, ContentTypeSurfaceCachedState},
+    cursor_shape::CursorShapeManagerState,
+    single_pixel_buffer::{get_single_pixel_buffer, SinglePixelBufferState},
+    keyboard_shortcuts_inhibit::{
+        KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitState, KeyboardShortcutsInhibitor,
+    },
+    compositor::Cacheable,
     idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState},
     xdg_activation::{
         XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
@@ -109,6 +115,17 @@ use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_pre
 /// a surface. Read from the committed [`ContentTypeSurfaceCachedState`] and recorded (as its wire value) for
 /// the test to assert; the neutral scene carries no content-type policy headless.
 use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type as ContentType;
+
+/// `wp_tearing_control_v1` (staging) — the Chrome/Ozone "present hint" protocol. Smithay 0.7 ships NO
+/// handler for it, so the manager + per-surface object are dispatched by hand below (mirroring the shape of
+/// Smithay's own `content_type` handler). A client attaches a `wp_tearing_control_v1` to a `wl_surface` and
+/// sets a per-surface presentation hint (`vsync` = the compositor should not tear / `async` = tearing is
+/// acceptable for lowest latency). The hint is double-buffered (applied at `wl_surface.commit`), read at
+/// commit into [`Observations`] exactly like `content_type`.
+use smithay::reexports::wayland_protocols::wp::tearing_control::v1::server::{
+    wp_tearing_control_manager_v1::{self, WpTearingControlManagerV1},
+    wp_tearing_control_v1::{self, PresentationHint, WpTearingControlV1},
+};
 
 /// The `xdg_positioner` anchor/gravity/constraint-adjustment wire enums — mapped onto the neutral
 /// [`crate::scene::model`] positioner value types so the scene's placement math (not Smithay's) resolves
@@ -393,6 +410,26 @@ pub struct HlState {
     /// `now` timestamp), so a client sees a strictly increasing, contiguous, gap-free sequence — one number
     /// per frame that actually reached the screen. See [`Self::answer_tree_feedback`].
     present_seq: u64,
+    /// Owns the `wp_cursor_shape_manager_v1` global (named cursor shapes). Chrome/Ozone and modern GTK/Qt
+    /// set the pointer cursor by SHAPE NAME (`pointer`/`text`/`grab`/…) through this instead of attaching a
+    /// pixel buffer. Smithay decodes `set_shape` and routes it through [`SeatHandler::cursor_image`] as
+    /// `CursorImageStatus::Named`; the handler records the requested shape name into [`Observations`]. Held
+    /// for the state's lifetime so the global keeps advertising.
+    _cursor_shape: CursorShapeManagerState,
+    /// Owns the `wp_single_pixel_buffer_manager_v1` global (a 1×1 solid-color `wl_buffer` with no shm pool).
+    /// Chrome/Ozone and video players use it for solid-color quads (backgrounds / letterbox bars) without a
+    /// shared-memory allocation. The commit read path ([`read_single_pixel_rgba`]) turns the buffer's RGBA
+    /// color into a real 1×1 pixel the presenter composites. Held for the state's lifetime.
+    _single_pixel_buffer: SinglePixelBufferState,
+    /// Owns the `zwp_keyboard_shortcuts_inhibit_manager_v1` global (key-grab). Terminals, remote-desktop /
+    /// VNC clients, and games ask the compositor to stop intercepting its own keyboard shortcuts for a
+    /// surface so ALL keys reach the app. The handler activates each inhibitor (sending the client the
+    /// `active` event) and records the inhibited surface into [`Observations`]; the neutral seat exposes
+    /// `keyboard_shortcuts_inhibited()` so a shortcut handler could consult it. Held for the state's lifetime.
+    keyboard_shortcuts_inhibit: KeyboardShortcutsInhibitState,
+    /// The `wp_tearing_control_manager_v1` global id (staging, hand-dispatched — Smithay ships no handler).
+    /// Held so the global keeps advertising for the state's lifetime.
+    _tearing_manager: GlobalId,
     /// Shared handle onto the presenter's [`Observations`] — the non-pixel adapter state (idle-inhibit /
     /// content-type) a test reads back. Cloned from the presenter at construction (before it moves into the
     /// engine), so the protocol handlers here write exactly where the test reads. See [`Observations`].
@@ -432,6 +469,20 @@ impl HlState {
         let xdg_activation = XdgActivationState::new::<HlState>(dh);
         let idle_inhibit = IdleInhibitManagerState::new::<HlState>(dh);
         let content_type = ContentTypeState::new::<HlState>(dh);
+        // Advertise `wp_cursor_shape_manager_v1` (named cursors), `wp_single_pixel_buffer_manager_v1` (1×1
+        // solid-color buffers), and `zwp_keyboard_shortcuts_inhibit_manager_v1` (key-grab) — the
+        // surface/seat protocols Chrome/Ozone + modern GTK/Qt bind. Cursor shapes route through the seat's
+        // `cursor_image`, single-pixel buffers composite via `read_single_pixel_rgba`, and each shortcut
+        // inhibitor is activated + tracked in `Observations`.
+        let cursor_shape = CursorShapeManagerState::new::<HlState>(dh);
+        let single_pixel_buffer = SinglePixelBufferState::new::<HlState>(dh);
+        let keyboard_shortcuts_inhibit = KeyboardShortcutsInhibitState::new::<HlState>(dh);
+        // Advertise `wp_tearing_control_manager_v1` (staging) — Chrome/Ozone requests it to hint immediate
+        // (`async`, tearing-allowed) vs `vsync` present. Smithay ships no handler, so its manager + per-
+        // surface object are dispatched by the hand-written `GlobalDispatch`/`Dispatch` impls below; the
+        // per-surface hint is double-buffered and read at commit into `Observations`.
+        let tearing_manager =
+            dh.create_global::<HlState, WpTearingControlManagerV1, ()>(1, ());
         // Advertise `zwp_relative_pointer_manager_v1` (unaccelerated relative motion deltas) and
         // `zwp_pointer_constraints_v1` (pointer lock / confinement) — the input protocols FPS games, 3D
         // viewports, and pointer-lock web content require. The seat's `wl_pointer` backs both.
@@ -512,7 +563,7 @@ impl HlState {
 
         hl_info!(
             tag::WAYLAND,
-            "globals bound: compositor shm dmabuf xdg seat output data_device primary_selection relative_pointer pointer_constraints pointer_gestures tablet session_lock presentation xdg_activation idle_inhibit content_type text_input input_method"
+            "globals bound: compositor shm dmabuf xdg seat output data_device primary_selection relative_pointer pointer_constraints pointer_gestures tablet session_lock presentation xdg_activation idle_inhibit content_type cursor_shape single_pixel_buffer keyboard_shortcuts_inhibit tearing_control text_input input_method"
         );
         // The pen tool declares pressure + distance + tilt axes on top of the mandatory x/y + tip.
         let tool_desc = TabletToolDescriptor {
@@ -544,6 +595,10 @@ impl HlState {
             _xdg_activation: xdg_activation,
             _idle_inhibit: idle_inhibit,
             _content_type: content_type,
+            _cursor_shape: cursor_shape,
+            _single_pixel_buffer: single_pixel_buffer,
+            keyboard_shortcuts_inhibit,
+            _tearing_manager: tearing_manager,
             _relative_pointer: relative_pointer,
             _pointer_constraints: pointer_constraints,
             _presentation: presentation,
@@ -733,6 +788,23 @@ impl HlState {
             .insert(surface.id().protocol_id(), wire);
     }
 
+    /// Record `surface`'s committed `wp_tearing_control_v1` presentation hint into the shared
+    /// [`Observations`], keyed by the `wl_surface` protocol id. Read from the committed
+    /// [`TearingControlCachedState`] (default `vsync` = wire 0 when no `wp_tearing_control_v1` is attached),
+    /// stored as the wire value (`0` vsync / `1` async) so a test can assert the exact hint. Like
+    /// `wp_content_type`, there is no reply event and the headless presenter applies no tearing policy — this
+    /// write is the observable proof the present path read the hint the client committed.
+    fn record_tearing_hint(&mut self, surface: &WlSurface) {
+        let hint = with_states(surface, |states| {
+            states.cached_state.get::<TearingControlCachedState>().current().hint
+        });
+        self.observations
+            .lock()
+            .unwrap()
+            .tearing_hint
+            .insert(surface.id().protocol_id(), hint);
+    }
+
     /// The commit → present path (the neutral analogue of `on_commit`): read the committed double-buffered
     /// state Smithay has already applied, deposit the surface's pixels for the presenter, translate the
     /// commit into a [`Commit`], drive the neutral engine (which composes + presents + paces), then fire
@@ -753,6 +825,11 @@ impl HlState {
         // damage, applied at commit) into the shared observations. There is no reply event, so this is the
         // only way a test can assert the compositor read the exact hint the client set.
         self.record_content_type(surface);
+
+        // Record the surface's just-committed `wp_tearing_control_v1` presentation hint (also double-buffered
+        // and applied at commit) into the shared observations — the present path's honest read of whether the
+        // client asked for `async` (tearing-allowed) vs `vsync` present.
+        self.record_tearing_hint(surface);
 
         // Snapshot the committed state Smithay applied, taking ownership of the buffer assignment and
         // draining this commit's damage + frame callbacks (the compositor is expected to consume both).
@@ -806,7 +883,10 @@ impl HlState {
                 // tight top-left RGBA the presenter composites identically — the dmabuf pixels are
                 // GENUINELY read from the client's fd (there is no GPU here), so the composited frame
                 // matches the buffer EXACTLY, just like shm.
-                match read_shm_rgba(&buffer).or_else(|| read_dmabuf_rgba(&buffer)) {
+                match read_shm_rgba(&buffer)
+                    .or_else(|| read_dmabuf_rgba(&buffer))
+                    .or_else(|| read_single_pixel_rgba(&buffer))
+                {
                     Some((stored, format)) => {
                         let state = BufferState {
                             tex_w: stored.width,
@@ -1997,7 +2077,24 @@ impl SeatHandler for HlState {
     }
 
     fn focus_changed(&mut self, _seat: &Seat<HlState>, _focused: Option<&WlSurface>) {}
-    fn cursor_image(&mut self, _seat: &Seat<HlState>, _image: smithay::input::pointer::CursorImageStatus) {}
+
+    /// The focused client set the pointer cursor. A `wp_cursor_shape_device_v1.set_shape` arrives here as
+    /// [`CursorImageStatus::Named`] (Smithay decoded the shape enum to a `CursorIcon`); a legacy
+    /// `wl_pointer.set_cursor` with a surface arrives as `Surface`, and hiding it as `Hidden`. Headless there
+    /// is no on-screen cursor to repaint, but recording the requested NAMED shape into [`Observations`] is
+    /// the observable proof the compositor honoured `wp_cursor_shape` (it carries no reply event), and lets a
+    /// test assert Chrome's cursor name reached the seat. `Surface`/`Hidden` clear the recorded name.
+    fn cursor_image(&mut self, _seat: &Seat<HlState>, image: smithay::input::pointer::CursorImageStatus) {
+        use smithay::input::pointer::CursorImageStatus;
+        let named = match image {
+            CursorImageStatus::Named(icon) => Some(icon.name().to_string()),
+            CursorImageStatus::Hidden | CursorImageStatus::Surface(_) => None,
+        };
+        if let Some(name) = &named {
+            hl_debug!(tag::WAYLAND, "wp_cursor_shape set_shape -> named cursor '{name}'");
+        }
+        self.observations.lock().unwrap().cursor_shape = named;
+    }
 }
 
 /// Selection (clipboard / primary) plumbing for `wl_data_device`. Headless we carry no per-selection
@@ -2411,6 +2508,35 @@ impl IdleInhibitHandler for HlState {
     }
 }
 
+/// Server-side policy for `zwp_keyboard_shortcuts_inhibit_v1` (key-grab). A client (a terminal, an
+/// embedded VNC/RDP viewer, a game) that must receive EVERY key — including combos the compositor would
+/// otherwise swallow as its own shortcuts — creates an inhibitor for its surface + this seat. Headless
+/// there is no compositor shortcut table to suppress, so the policy is to ALWAYS grant: each new inhibitor
+/// is immediately [`activate`](KeyboardShortcutsInhibitor::activate)d — which sends the client the `active`
+/// event (the client-visible proof the grab took) and flips
+/// [`Seat::keyboard_shortcuts_inhibited`](smithay::input::Seat) so a real shortcut handler could consult it
+/// — and the inhibited surface is recorded into [`Observations`]. Destroying the inhibitor (or the client
+/// vanishing) removes it again.
+impl KeyboardShortcutsInhibitHandler for HlState {
+    fn keyboard_shortcuts_inhibit_state(&mut self) -> &mut KeyboardShortcutsInhibitState {
+        &mut self.keyboard_shortcuts_inhibit
+    }
+
+    fn new_inhibitor(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
+        // Grant the grab: activate it (delivers `active` to the client) and track the surface so a test can
+        // assert BOTH the wire event and the server-side record.
+        inhibitor.activate();
+        let sid = inhibitor.wl_surface().id().protocol_id();
+        hl_debug!(tag::WAYLAND, "zwp_keyboard_shortcuts_inhibit: activated for surface {sid}");
+        self.observations.lock().unwrap().shortcuts_inhibited.insert(sid);
+    }
+
+    fn inhibitor_destroyed(&mut self, inhibitor: KeyboardShortcutsInhibitor) {
+        let sid = inhibitor.wl_surface().id().protocol_id();
+        self.observations.lock().unwrap().shortcuts_inhibited.remove(&sid);
+    }
+}
+
 /// Compositor-side hooks for `zwp_input_method_v2` popups (the candidate-list window an IME draws near the
 /// cursor). Headless there is no on-screen IME popup surface to place or composite — the text-input round
 /// trip a test drives (preedit/commit) needs no popup — so `parent_geometry` reports a zero rectangle and
@@ -2498,6 +2624,157 @@ smithay::delegate_fractional_scale!(HlState);
 smithay::delegate_xdg_activation!(HlState);
 smithay::delegate_idle_inhibit!(HlState);
 smithay::delegate_content_type!(HlState);
+smithay::delegate_cursor_shape!(HlState);
+smithay::delegate_single_pixel_buffer!(HlState);
+smithay::delegate_keyboard_shortcuts_inhibit!(HlState);
+
+// ===================== wp_tearing_control_v1 (staging) — hand-dispatched =====================
+//
+// Smithay 0.7 ships no handler for `wp_tearing_control_v1`, so its manager + per-surface object are
+// dispatched here directly on `HlState` (the wayland-server `GlobalDispatch`/`Dispatch` impls), mirroring
+// the shape of Smithay's own `content_type` handler. The per-surface presentation hint is double-buffered
+// through the compositor's cached-state machinery (a `Cacheable`) so it applies at `wl_surface.commit` and
+// reverts correctly — read back at commit by [`HlState::record_tearing_hint`]. The one-inhibitor-per-surface
+// rule from the protocol is enforced with a surface-local attached flag (posting `tearing_control_exists`
+// on a second `get_tearing_control`), and destroying the object resets the surface to `vsync` at the next
+// commit, exactly as the spec requires.
+
+/// The double-buffered `wp_tearing_control_v1` presentation hint (wire value: `0` vsync — do not tear /
+/// `1` async — tearing allowed for lowest latency). Committed via the compositor's cached-state machinery so
+/// it is applied at `wl_surface.commit` and read back at commit into [`Observations`] — the neutral
+/// analogue of Smithay's `ContentTypeSurfaceCachedState`. Default `vsync` (no hint attached).
+#[derive(Debug, Clone, Copy, Default)]
+struct TearingControlCachedState {
+    hint: u32,
+}
+
+impl Cacheable for TearingControlCachedState {
+    fn commit(&mut self, _dh: &DisplayHandle) -> Self {
+        *self
+    }
+    fn merge_into(self, into: &mut Self, _dh: &DisplayHandle) {
+        *into = self;
+    }
+}
+
+/// Surface-local flag: does this `wl_surface` already have a live `wp_tearing_control_v1`? Enforces the
+/// protocol's one-object-per-surface rule (a second `get_tearing_control` is a `tearing_control_exists`
+/// protocol error, not a silent overwrite). Set on create, cleared on the object's `destroy`.
+#[derive(Debug, Default)]
+struct TearingControlSurfaceData {
+    attached: std::sync::atomic::AtomicBool,
+}
+
+/// User data of a `wp_tearing_control_v1` object — a weak handle to the `wl_surface` it controls, so
+/// `set_presentation_hint` / `destroy` can find the surface whose cached hint to update.
+#[derive(Debug)]
+struct TearingControlUserData(Mutex<Weak<WlSurface>>);
+
+impl TearingControlUserData {
+    fn wl_surface(&self) -> Option<WlSurface> {
+        self.0.lock().unwrap().upgrade().ok()
+    }
+}
+
+impl GlobalDispatch<WpTearingControlManagerV1, ()> for HlState {
+    fn bind(
+        _state: &mut HlState,
+        _dh: &DisplayHandle,
+        _client: &Client,
+        resource: New<WpTearingControlManagerV1>,
+        _global_data: &(),
+        data_init: &mut DataInit<'_, HlState>,
+    ) {
+        hl_debug!(tag::WAYLAND, "wp_tearing_control_manager_v1 bound");
+        data_init.init(resource, ());
+    }
+}
+
+impl Dispatch<WpTearingControlManagerV1, ()> for HlState {
+    fn request(
+        _state: &mut HlState,
+        _client: &Client,
+        manager: &WpTearingControlManagerV1,
+        request: wp_tearing_control_manager_v1::Request,
+        _data: &(),
+        _dh: &DisplayHandle,
+        data_init: &mut DataInit<'_, HlState>,
+    ) {
+        use std::sync::atomic::Ordering;
+        match request {
+            wp_tearing_control_manager_v1::Request::GetTearingControl { id, surface } => {
+                // Enforce one `wp_tearing_control_v1` per surface (protocol error otherwise).
+                let already = with_states(&surface, |states| {
+                    states
+                        .data_map
+                        .insert_if_missing_threadsafe(TearingControlSurfaceData::default);
+                    let data = states.data_map.get::<TearingControlSurfaceData>().unwrap();
+                    if data.attached.load(Ordering::Acquire) {
+                        true
+                    } else {
+                        data.attached.store(true, Ordering::Release);
+                        false
+                    }
+                });
+                if already {
+                    manager.post_error(
+                        wp_tearing_control_manager_v1::Error::TearingControlExists,
+                        "wl_surface already has a wp_tearing_control_v1",
+                    );
+                } else {
+                    data_init.init(id, TearingControlUserData(Mutex::new(surface.downgrade())));
+                }
+            }
+            wp_tearing_control_manager_v1::Request::Destroy => {}
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WpTearingControlV1, TearingControlUserData> for HlState {
+    fn request(
+        _state: &mut HlState,
+        _client: &Client,
+        _resource: &WpTearingControlV1,
+        request: wp_tearing_control_v1::Request,
+        data: &TearingControlUserData,
+        _dh: &DisplayHandle,
+        _data_init: &mut DataInit<'_, HlState>,
+    ) {
+        use std::sync::atomic::Ordering;
+        match request {
+            wp_tearing_control_v1::Request::SetPresentationHint { hint } => {
+                let Some(surface) = data.wl_surface() else { return };
+                // `async` = tearing allowed (wire 1); `vsync` (or any unknown value) = do not tear (wire 0).
+                let value = match hint {
+                    WEnum::Value(PresentationHint::Async) => 1,
+                    _ => 0,
+                };
+                hl_debug!(
+                    tag::WAYLAND,
+                    "wp_tearing_control set_presentation_hint -> {}",
+                    if value == 1 { "async" } else { "vsync" }
+                );
+                with_states(&surface, |states| {
+                    states.cached_state.get::<TearingControlCachedState>().pending().hint = value;
+                });
+            }
+            wp_tearing_control_v1::Request::Destroy => {
+                // Destroying the object resets the surface to `vsync` at its next commit and frees the
+                // per-surface slot so a fresh `wp_tearing_control_v1` may be created.
+                if let Some(surface) = data.wl_surface() {
+                    with_states(&surface, |states| {
+                        states.cached_state.get::<TearingControlCachedState>().pending().hint = 0;
+                        if let Some(sd) = states.data_map.get::<TearingControlSurfaceData>() {
+                            sd.attached.store(false, Ordering::Release);
+                        }
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 /// Build one `wl_output` from a scene [`Output`], creating its global and pushing the current mode / scale
 /// / transform / LAYOUT POSITION + preferred mode so a binding client receives geometry (position +
@@ -2844,6 +3121,21 @@ fn read_shm_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
         Some((StoredBuffer { width: w, height: h, rgba }, format))
     });
     result.ok().flatten()
+}
+
+/// Turn a committed `wp_single_pixel_buffer_v1` `wl_buffer` into a tight 1×1 top-left RGBA8888 pixel — the
+/// solid-color quad Chrome/Ozone + video players attach without a shm pool. The buffer carries only a
+/// 4-channel color (no pixels, no fd); [`get_single_pixel_buffer`] returns it and `rgba8888()` collapses the
+/// 32-bit-per-channel wire values to 8-bit R,G,B,A (already the byte order [`StoredBuffer`] stores). A
+/// 1×1 buffer composites like any other — a client that also attaches a `wp_viewport` dst scales it to fill
+/// its surface. Returns `None` for any non-single-pixel buffer (the caller reaches this only after the shm
+/// and dmabuf reads both returned `None`). The neutral [`Format`] is opaque `Xrgb8888` when the color is
+/// fully opaque, else alpha `Argb8888`, so the presenter blends a translucent single-pixel quad correctly.
+fn read_single_pixel_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
+    let data = get_single_pixel_buffer(buffer).ok()?;
+    let rgba = data.rgba8888();
+    let format = if data.has_alpha() { Format::Argb8888 } else { Format::Xrgb8888 };
+    Some((StoredBuffer { width: 1, height: 1, rgba: rgba.to_vec() }, format))
 }
 
 /// The DRM format+modifier pairs the `zwp_linux_dmabuf_v1` global advertises AND the importer accepts:
