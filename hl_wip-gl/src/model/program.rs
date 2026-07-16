@@ -110,9 +110,14 @@ impl Program {
             // binding-0 `HlUniforms` std140 block (using the combined cross-stage layout so it matches the
             // `Program::ubuf` bytes the frame builder binds at binding 0) and inject bindings into any explicit
             // block that lacks one. GskGpu's already-bound `binding = 0` block path stays byte-identical.
-            // Combined samplers are left untouched for the host's `split_global_samplers`.
+            // Combined samplers are left untouched for the host's `split_global_samplers`. naga ALSO rejects
+            // Skia's BARE (bindingless) vertex inputs / varyings / outputs (`in highp vec4 fillBounds;
+            // flat out mediump vec4 vcolor_S0;`) — it collapses every one to location 0
+            // (`BindingCollision`) — so inject `layout(location = N)` across BOTH stages (name-matching a
+            // vertex `out` to the fragment `in` varying). GskGpu's `IN()`/`PASS()` macro varyings already
+            // carry a location, so its stages stay byte-identical.
             let combined = glsl::program_uniform_decls(&vs_src, &fs_src);
-            (glsl::prepare_verbatim_stage(&vs_src, &combined), glsl::prepare_verbatim_stage(&fs_src, &combined))
+            glsl::prepare_verbatim_program(&vs_src, &fs_src, &combined)
         } else {
             glsl::translate_render(&vs_src, &fs_src)
         };

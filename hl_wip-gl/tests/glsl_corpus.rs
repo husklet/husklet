@@ -313,13 +313,20 @@ fn run_case(case: &Case) -> Result<(), String> {
         }
         Path::Translate => compile_translated(&vs_out, &fs_out),
         Path::Verbatim => {
-            // The driver forwards the ORIGINAL ES source untouched (the executor's ES route compiles it).
+            // The driver forwards the ES source to the executor's ES route (rather than desktopizing via
+            // `translate_render`), applying ONLY the documented naga-acceptance injection so `glsl-in` /
+            // `validate` accept it: bare default-block uniforms wrapped into a `layout(binding=0)` block and
+            // `layout(location=N)` added to bare `in`/`out` attributes/varyings/outputs
+            // ([`glsl::prepare_verbatim_program`]). The body + verbatim constructs (gl_VertexID, combined
+            // sampler helpers) are carried untouched.
             let routed = glsl::is_forward_verbatim(case.vs) || glsl::is_forward_verbatim(case.fs);
             if !routed {
                 return Err("expected verbatim routing but the driver desktopized it".into());
             }
-            if vs_out != case.vs || fs_out != case.fs {
-                return Err("verbatim route must forward the untranslated source".into());
+            let combined = glsl::program_uniform_decls(case.vs, case.fs);
+            let (evs, efs) = glsl::prepare_verbatim_program(case.vs, case.fs, &combined);
+            if vs_out != evs || fs_out != efs {
+                return Err("verbatim route must forward source with the documented binding/location injection".into());
             }
             Ok(())
         }

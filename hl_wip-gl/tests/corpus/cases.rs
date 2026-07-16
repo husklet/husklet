@@ -15,6 +15,16 @@ fn corpus() -> Vec<Case> {
             path: Path::Translate,
         },
         Case {
+            // Skia's Gaussian-blur shape: a DEFAULT-BLOCK uniform ARRAY (`uniform vec4 uKernel[8];`) indexed
+            // in the loop. The translator's reflection must keep the `[8]` dimension in the emitted
+            // `HlUniforms` block (with a 128-B std140 span) — else naga sees a scalar `vec4` indexed and the
+            // store `vec4 s = uKernel[i];` fails validation (`InvalidStoreTypes`). Was the head Skia NACK.
+            name: "default_block_array_uniform_indexed",
+            vs: "#version 300 es\nin vec2 aPos;\nout vec2 vUV;\nvoid main(){ vUV=aPos; gl_Position=vec4(aPos,0.0,1.0); }\n",
+            fs: "#version 300 es\nprecision highp float;\nin vec2 vUV;\nuniform vec4 uKernel[8];\nout vec4 o;\nvoid main(){ vec4 s=vec4(0.0); for(int i=0;i<8;++i){ s+=uKernel[i]; } o=s; }\n",
+            path: Path::Translate,
+        },
+        Case {
             name: "while_loop_dynamic_bound",
             vs: "#version 300 es\nin vec2 aPos;\nout float vN;\nuniform int uCount;\nvoid main(){ vN=float(uCount); gl_Position=vec4(aPos,0.0,1.0); }\n",
             fs: "#version 300 es\nprecision highp float;\nin float vN;\nout vec4 o;\nvoid main(){ float s=0.0; int i=0; while(i<int(vN)){ s+=0.05; i++; } o=vec4(s); }\n",
