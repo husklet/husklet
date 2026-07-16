@@ -14,7 +14,7 @@ use hl_vulkan::model::descriptor::{
     descriptor_binds_image, descriptor_binds_sampler, is_buffer_descriptor, is_image_descriptor,
     DescriptorTemplateEntry, LayoutBinding,
 };
-use hl_vulkan::result::vk_result_from_gpu_error;
+use hl_vulkan::result::{vk_result_from_gpu_error, VK_ERROR_OUT_OF_POOL_MEMORY};
 use hl_vulkan::service::{create, record, submit};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 use hl_gpu::CommandSink;
@@ -494,6 +494,12 @@ pub extern "C" fn vkAllocateDescriptorSets(
             .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkAllocateDescriptorSets: no device")));
         match r {
             Ok(h) => out[i] = h,
+            // Pool exhaustion is the only `ResourceLimit` this path produces, and its spec code is
+            // `VK_ERROR_OUT_OF_POOL_MEMORY` (which `allocate_descriptor_set`'s own doc comment names) — an
+            // allocator like wgpu's RECOVERS from it by growing/adding a descriptor pool and retrying. The
+            // generic error map instead returns `VK_ERROR_OUT_OF_DEVICE_MEMORY`, a FATAL device-OOM that
+            // would make wgpu lose the device the moment a pool fills. Emit the correct, recoverable code.
+            Err(hl_gpu::GpuError::ResourceLimit(_)) => return VK_ERROR_OUT_OF_POOL_MEMORY,
             Err(e) => return vk_result_from_gpu_error(&e),
         }
     }

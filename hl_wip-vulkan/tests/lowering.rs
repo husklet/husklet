@@ -1129,6 +1129,67 @@ fn copy_buffer_to_image_lowers_to_copy_buffer_to_texture() {
 }
 
 #[test]
+fn copy_buffer_to_image_r8_coverage_atlas_uses_one_byte_per_texel() {
+    // GPUI's glyph-coverage atlas is `R8Unorm` (1 byte/texel), uploaded region-by-region via
+    // `queue.write_texture` → `vkCmdCopyBufferToImage` from a TIGHTLY-PACKED staging buffer. Regression
+    // guard: the lowering must use the image's real bytes-per-texel (1 for R8), not a hardcoded 4. With the
+    // old `* 4` assumption the implied span was 4x oversized, FAILED the `end <= buf_size` bounds check, and
+    // the copy was rejected — silently, because `vkCmdCopyBufferToImage` returns void — so every glyph
+    // upload was dropped and text never rasterized.
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    // An 8x8 R8 region: tight bytes_per_row = 8*1 = 8; total staging = 8*8 = 64 bytes. (Under the old bug
+    // the implied span was 8*4*7 + 8*4 = 256 > 64, so this exact copy errored.)
+    let src = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 64).unwrap();
+    let dst = create::create_image(
+        &mut d,
+        &mut sink,
+        16,
+        16,
+        vk_format::R8_UNORM,
+        vk_image_usage::TRANSFER_DST | vk_image_usage::SAMPLED,
+        1,
+    )
+    .unwrap();
+    let (s, t) = (buf_ir(&d, src), img_ir(&d, dst));
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_buffer_to_image(d, cb, src, dst, 0, 0, 0, 8, 8).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![Enc::CopyBufferToTexture { src: s, src_offset: 0, bytes_per_row: 8, dst: t, mip: 0, width: 8, height: 8 }],
+        "an R8 coverage-atlas upload must lower with bytes_per_row = width*1, not width*4"
+    );
+}
+
+#[test]
+fn copy_image_to_buffer_r8_uses_one_byte_per_texel() {
+    // The reverse (glyph atlas readback) path shares the same bytes-per-texel helper; an R8 image → tight
+    // buffer copy must likewise use 1 byte/texel.
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let src = create::create_image(
+        &mut d,
+        &mut sink,
+        16,
+        16,
+        vk_format::R8_UNORM,
+        vk_image_usage::TRANSFER_SRC,
+        1,
+    )
+    .unwrap();
+    let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
+    let (s, t) = (img_ir(&d, src), buf_ir(&d, dst));
+    let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
+        record::cmd_copy_image_to_buffer(d, cb, src, dst, 0, 0, 0, 8, 8).unwrap();
+    });
+    assert_eq!(
+        enc,
+        vec![Enc::CopyTextureToBuffer { src: s, mip: 0, width: 8, height: 8, dst: t, dst_offset: 0, bytes_per_row: 8 }]
+    );
+}
+
+#[test]
 fn copy_image_to_buffer_lowers_to_copy_texture_to_buffer() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
