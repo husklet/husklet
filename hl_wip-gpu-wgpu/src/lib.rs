@@ -23,6 +23,7 @@ mod bindgroup;
 mod blit;
 mod buffer;
 mod convert;
+mod dedup;
 mod device;
 mod executor;
 mod fence;
@@ -101,6 +102,10 @@ pub struct WgpuExecutor {
     /// native wgpu image blit, so it is implemented by rendering — see [`blit`]). Built on first blit and
     /// reused for the executor's lifetime; `None` until a blit is executed.
     blit: Option<blit::BlitCache>,
+    /// Content-dedup caches for `CreateShader` / `CreateRenderPipeline`: an identical source or descriptor
+    /// aliases an already-compiled backing (shared `Arc` handle, ~0 incremental residency) instead of
+    /// recompiling and re-charging. See [`dedup`].
+    dedup: dedup::DedupCaches,
 }
 
 impl WgpuExecutor {
@@ -109,7 +114,14 @@ impl WgpuExecutor {
     pub fn new(cfg: DeviceConfig) -> Result<Self> {
         let gpu = device::acquire(&cfg)?;
         let caps = Self::capabilities_for(&gpu.info.name);
-        Ok(Self { gpu, caps, kernels: HashMap::new(), kernel_compiler: None, blit: None })
+        Ok(Self {
+            gpu,
+            caps,
+            kernels: HashMap::new(),
+            kernel_compiler: None,
+            blit: None,
+            dedup: dedup::DedupCaches::default(),
+        })
     }
 
     /// The human-readable name of the bound adapter (e.g. `"llvmpipe (LLVM 17.0.6, 128 bits)"`), so a
@@ -169,5 +181,33 @@ impl WgpuExecutor {
             max_bind_groups: 4,
             supports_timeline_fences: false,
         }
+    }
+
+    /// Executor-side residency (bytes) of the deduped compiled-shader backings — one unique source's worth
+    /// per distinct live source, NOT per alias id. After N `CreateShader`s of the same source this is a
+    /// single module's charge, not N. See [`dedup`].
+    pub fn shader_backing_resident_bytes(&self) -> u64 {
+        self.dedup.shader_resident_bytes()
+    }
+
+    /// Executor-side residency (bytes) of the deduped compiled-render-pipeline backings — one unique
+    /// descriptor's worth per distinct live descriptor, NOT per alias id.
+    pub fn pipeline_backing_resident_bytes(&self) -> u64 {
+        self.dedup.pipeline_resident_bytes()
+    }
+
+    /// Total deduped backing residency (shaders + render pipelines).
+    pub fn dedup_resident_bytes(&self) -> u64 {
+        self.dedup.resident_bytes()
+    }
+
+    /// Number of DISTINCT live compiled-shader backings (unique modules currently resident).
+    pub fn shader_backing_count(&self) -> usize {
+        self.dedup.shader_backing_count()
+    }
+
+    /// Number of DISTINCT live compiled-render-pipeline backings (unique pipelines currently resident).
+    pub fn pipeline_backing_count(&self) -> usize {
+        self.dedup.pipeline_backing_count()
     }
 }

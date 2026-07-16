@@ -28,7 +28,15 @@ pub enum ShaderNative {
     /// stores the union of its vertex + fragment entry points' sets and filters the driver's bind group to
     /// it at draw time, so a bind group carrying resources the compiled shader never samples still matches
     /// the auto layout. Unused by the compute path (whose bind groups match their layout as-is).
-    Module { module: wgpu::ShaderModule, reflected: crate::reflect::Reflected },
+    ///
+    /// `key` is this module's content identity ([`crate::dedup::ShaderKey`]) — the payload kind + verbatim
+    /// words it was compiled from. Every `Module` shares its backing through the executor's dedup cache
+    /// keyed on this; on `DestroyShader` it releases this id's alias of that shared backing.
+    Module {
+        module: wgpu::ShaderModule,
+        reflected: crate::reflect::Reflected,
+        key: crate::dedup::ShaderKey,
+    },
     /// A compiled compute kernel, lowered to WGSL lazily at compute-pipeline creation.
     Kernel(Box<KernelProgram>),
 }
@@ -43,7 +51,7 @@ pub fn native<'a>(res: &'a SessionResources, id: u32) -> Result<&'a ShaderNative
 
 impl WgpuExecutor {
     pub(crate) fn create_shader(
-        &self,
+        &mut self,
         res: &mut SessionResources,
         id: u32,
         kind: ShaderPayloadKind,
@@ -53,35 +61,53 @@ impl WgpuExecutor {
             return Err(GpuError::Invalid("empty shader module"));
         }
         hl_log::hl_debug!(tag::WGPU, "create_shader kind={:?} words={}", kind, words.len());
-        let native = match kind {
-            ShaderPayloadKind::PtxKernel => {
-                // Mirror the CPU oracle: a real driver-produced descriptor (non-empty source) compiles on
-                // the fly via the injected front-end; an empty placeholder resolves to a `define_kernel`
-                // pre-registered program (the hand-built kernels the conformance suite injects).
-                let prog = match KernelDescriptor::from_words(words) {
-                    Some(Ok(desc)) if !desc.ptx.is_empty() => {
-                        let compiler = self.kernel_compiler.as_ref().ok_or(GpuError::Unsupported(
-                            "wgpu: PtxKernel payload needs a kernel compiler (set_kernel_compiler)",
-                        ))?;
-                        compiler(&desc)?
-                    }
-                    _ => self.kernels.get(&id).cloned().ok_or(GpuError::Unsupported(
-                        "wgpu: no compiled kernel registered for PtxKernel shader id",
-                    ))?,
-                };
-                ShaderNative::Kernel(Box::new(prog))
-            }
+
+        // Kernel payloads are compiled per-id (a `define_kernel`/front-end program keyed on the id) and are
+        // not on the Chrome recreate-every-flush hot path, so they are NOT content-deduped: each keeps its
+        // own `KernelProgram`.
+        if let ShaderPayloadKind::PtxKernel = kind {
+            // Mirror the CPU oracle: a real driver-produced descriptor (non-empty source) compiles on the
+            // fly via the injected front-end; an empty placeholder resolves to a `define_kernel`
+            // pre-registered program (the hand-built kernels the conformance suite injects).
+            let prog = match KernelDescriptor::from_words(words) {
+                Some(Ok(desc)) if !desc.ptx.is_empty() => {
+                    let compiler = self.kernel_compiler.as_ref().ok_or(GpuError::Unsupported(
+                        "wgpu: PtxKernel payload needs a kernel compiler (set_kernel_compiler)",
+                    ))?;
+                    compiler(&desc)?
+                }
+                _ => self.kernels.get(&id).cloned().ok_or(GpuError::Unsupported(
+                    "wgpu: no compiled kernel registered for PtxKernel shader id",
+                ))?,
+            };
+            return res.shaders.insert(id, Box::new(ShaderNative::Kernel(Box::new(prog))));
+        }
+
+        if matches!(kind, ShaderPayloadKind::LegacyMsl | ShaderPayloadKind::DemoBuiltin) {
+            hl_log::hl_warn!(tag::WGPU, "shader rejected kind={:?} reason=no-wgsl", kind);
+            return Err(GpuError::Unsupported("wgpu: legacy MSL / demo-builtin payloads (no WGSL)"));
+        }
+
+        // Content-dedup the two compiled-module payload kinds (SPIR-V + forwarded GLSL). The key is the
+        // EXACT compilation input — payload kind + verbatim words — so a `CreateShader` whose source matches
+        // an already-compiled module ALIASES it (a cheap `Arc` clone of the shared `wgpu::ShaderModule`,
+        // ~0 incremental residency) instead of re-running naga + recompiling. Distinct sources never share
+        // (full-value key compare, no lossy hash).
+        let key = crate::dedup::ShaderKey { kind: kind as u8, words: words.to_vec() };
+        if let Some((module, reflected)) = self.dedup.shader_get(&key) {
+            hl_log::hl_count!(tag::WGPU, "shader_dedup_hit");
+            return res.shaders.insert(id, Box::new(ShaderNative::Module { module, reflected, key }));
+        }
+
+        // Cache miss: translate to WGSL and compile a fresh module, then charge one backing's residency.
+        let (src, reflected, label) = match kind {
             ShaderPayloadKind::SpirV => {
                 let (src, reflected) = wgsl::spirv_to_wgsl_reflect(words).map_err(|e| {
                     hl_log::hl_warn!(tag::WGPU, "shader compile failed kind=SpirV err={}", e);
                     hl_log::hl_count!(tag::WGPU, "shader_errors");
                     e
                 })?;
-                let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("hl-spirv"),
-                    source: wgpu::ShaderSource::Wgsl(src.into()),
-                });
-                ShaderNative::Module { module, reflected }
+                (src, reflected, "hl-spirv")
             }
             ShaderPayloadKind::Glsl => {
                 // The guest GLES/GL driver forwards its GLSL source VERBATIM (a `GlslDescriptor` led by
@@ -104,17 +130,47 @@ impl WgpuExecutor {
                         hl_log::hl_count!(tag::WGPU, "shader_errors");
                         e
                     })?;
-                let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("hl-glsl"),
-                    source: wgpu::ShaderSource::Wgsl(src.into()),
-                });
-                ShaderNative::Module { module, reflected }
+                (src, reflected, "hl-glsl")
             }
-            ShaderPayloadKind::LegacyMsl | ShaderPayloadKind::DemoBuiltin => {
-                hl_log::hl_warn!(tag::WGPU, "shader rejected kind={:?} reason=no-wgsl", kind);
-                return Err(GpuError::Unsupported("wgpu: legacy MSL / demo-builtin payloads (no WGSL)"))
-            }
+            // PtxKernel / LegacyMsl / DemoBuiltin already returned above.
+            _ => unreachable!("kernel and non-WGSL kinds handled above"),
         };
-        res.shaders.insert(id, Box::new(native))
+        let module = self.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
+        });
+        let bytes = crate::dedup::shader_backing_bytes(words);
+        // Insert the per-id native FIRST (it may reject a duplicate id); only register the shared backing
+        // once the id is genuinely live, so a `DuplicateId` does not leave a phantom refcount.
+        res.shaders.insert(
+            id,
+            Box::new(ShaderNative::Module {
+                module: module.clone(),
+                reflected: reflected.clone(),
+                key: key.clone(),
+            }),
+        )?;
+        self.dedup.shader_install(key, module, reflected, bytes);
+        Ok(())
+    }
+
+    /// Destroy a shader id, releasing its alias of the shared compiled-module backing (a no-op for a kernel
+    /// payload, which is not deduped). Reads the id's content key BEFORE removing it, then removes (which
+    /// may raise `UnknownId` for a double-free — propagated before any refcount change).
+    pub(crate) fn destroy_shader(&mut self, res: &mut SessionResources, id: u32) -> Result<()> {
+        let key = match res.shaders.get(id) {
+            Ok(n) => n
+                .downcast_ref::<ShaderNative>()
+                .and_then(|n| match n {
+                    ShaderNative::Module { key, .. } => Some(key.clone()),
+                    ShaderNative::Kernel(_) => None,
+                }),
+            Err(_) => None,
+        };
+        res.shaders.remove(id)?;
+        if let Some(key) = key {
+            self.dedup.shader_release(&key);
+        }
+        Ok(())
     }
 }

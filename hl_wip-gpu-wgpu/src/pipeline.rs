@@ -40,6 +40,10 @@ pub enum PipelineNative {
         /// textures/samplers the compiled shader never samples) match the layout's set instead of NACKing
         /// (5-vs-3). Empty ⇒ no filtering (a bindingless pipeline, e.g. the conformance triangle).
         used_bindings: Vec<(u32, u32)>,
+        /// The dedup-cache backing id this render pipeline aliases. Identical descriptors share one
+        /// compiled `wgpu::RenderPipeline`; this is the handle a `DestroyPipeline` releases so the backing
+        /// is freed only when its last alias is gone (see [`crate::dedup`]).
+        backing: u64,
     },
     /// A compute pipeline. Both the PTX-kernel ABI path (built with an *explicit* group-0 layout so a
     /// binding the WGSL doesn't read — e.g. a kernel's `params` blob — is still declared) and the SPIR-V/
@@ -215,7 +219,7 @@ impl WgpuExecutor {
     }
 
     pub(crate) fn create_render_pipeline(
-        &self,
+        &mut self,
         res: &mut SessionResources,
         id: u32,
         desc: &RenderPipelineDesc,
@@ -224,20 +228,24 @@ impl WgpuExecutor {
         // Clone the module + the used bindings (slot + type) of the entry point this pipeline binds out of
         // `res` (an immutable borrow), so the pipeline can be inserted (a mutable borrow) below carrying the
         // explicit layout's exact bindings for the draw-time bind-group filter (see `PipelineNative::Render`).
-        let (vs, vs_used) = match shader::native(res, desc.vertex.module)? {
-            ShaderNative::Module { module, reflected } => {
-                (module.clone(), reflected.used_for(&desc.vertex.entry).to_vec())
+        // Also capture each stage module's CONTENT key so identical descriptors built from different shader
+        // ids (but the same source) dedup to one compiled pipeline.
+        let (vs, vs_used, vs_key) = match shader::native(res, desc.vertex.module)? {
+            ShaderNative::Module { module, reflected, key } => {
+                (module.clone(), reflected.used_for(&desc.vertex.entry).to_vec(), key.clone())
             }
             ShaderNative::Kernel(_) => {
                 hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render stage=vertex reason=needs-graphics-shader");
                 return Err(GpuError::Unsupported("wgpu: render pipeline vertex needs a graphics shader"))
             }
         };
-        let (fs, fs_used) = match &desc.fragment {
+        let (fs, fs_used, fs_key) = match &desc.fragment {
             Some(f) => match shader::native(res, f.module)? {
-                ShaderNative::Module { module, reflected } => {
-                    (Some((module.clone(), f.entry.clone())), reflected.used_for(&f.entry).to_vec())
-                }
+                ShaderNative::Module { module, reflected, key } => (
+                    Some((module.clone(), f.entry.clone())),
+                    reflected.used_for(&f.entry).to_vec(),
+                    Some(key.clone()),
+                ),
                 ShaderNative::Kernel(_) => {
                     hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render stage=fragment reason=needs-graphics-shader");
                     return Err(GpuError::Unsupported(
@@ -245,8 +253,23 @@ impl WgpuExecutor {
                     ))
                 }
             },
-            None => (None, Vec::new()),
+            None => (None, Vec::new(), None),
         };
+
+        // Content-dedup on the full pipeline identity: each stage's deduped shader CONTENT + entry point,
+        // plus every fixed-function state field. An identical descriptor ALIASES the already-compiled
+        // `wgpu::RenderPipeline` (a cheap `Arc` clone, ~0 incremental residency) and skips the naga merge +
+        // layout build + PSO compile entirely. Distinct descriptors never share (full-value key compare).
+        let pipe_key = crate::dedup::RenderPipeKey::from_desc(desc, vs_key, fs_key);
+        if let Some((pipeline, color_formats, used_bindings, backing)) =
+            self.dedup.pipeline_get(&pipe_key)
+        {
+            hl_log::hl_count!(tag::WGPU, "pipeline_dedup_hit");
+            return res.pipelines.insert(
+                id,
+                Box::new(PipelineNative::Render { pipeline, color_formats, used_bindings, backing }),
+            );
+        }
 
         // Merge the vertex + fragment entry points' used resources into ONE reconciled layout description,
         // keyed by `(group, binding)`. For each slot: the `visibility` is the UNION of the stages that use
@@ -423,7 +446,46 @@ impl WgpuExecutor {
             hl_log::hl_warn!(tag::WGPU, "pipeline rejected kind=render reason=explicit-layout-invalid err={}", e);
             return Err(GpuError::Kernel(format!("wgpu: render pipeline creation failed: {e}")));
         }
-        res.pipelines.insert(id, Box::new(PipelineNative::Render { pipeline, color_formats, used_bindings }))
+        // Register the freshly-compiled pipeline as a new shared backing (refcount 1) and store its backing
+        // id on the per-id native. Insert the id FIRST (it may reject a duplicate id), then install the
+        // backing, so a `DuplicateId` leaves no phantom refcount.
+        let backing = self.dedup.pipeline_install(
+            pipe_key,
+            pipeline.clone(),
+            color_formats.clone(),
+            used_bindings.clone(),
+            crate::dedup::PIPELINE_BACKING_BYTES,
+        );
+        if let Err(e) = res.pipelines.insert(
+            id,
+            Box::new(PipelineNative::Render {
+                pipeline,
+                color_formats,
+                used_bindings,
+                backing,
+            }),
+        ) {
+            // The id was already live: undo the backing we just installed so residency does not drift, then
+            // surface the duplicate. (The whole batch will also roll back, but keep this path self-consistent.)
+            self.dedup.pipeline_release(backing);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Destroy a pipeline id, releasing a render pipeline's alias of its shared compiled backing (a no-op
+    /// for a compute pipeline, which is not deduped). Reads the id's backing id BEFORE removing it, then
+    /// removes (which may raise `UnknownId` for a double-free — propagated before any refcount change).
+    pub(crate) fn destroy_pipeline(&mut self, res: &mut SessionResources, id: u32) -> Result<()> {
+        let backing = match native(res, id) {
+            Ok(PipelineNative::Render { backing, .. }) => Some(*backing),
+            _ => None,
+        };
+        res.pipelines.remove(id)?;
+        if let Some(backing) = backing {
+            self.dedup.pipeline_release(backing);
+        }
+        Ok(())
     }
 
     /// Build the per-group `BindGroupLayout`s for a render pipeline from the reconciled `merged` binding map.
