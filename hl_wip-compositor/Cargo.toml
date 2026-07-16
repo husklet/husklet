@@ -186,6 +186,26 @@ path = "tests/demo_damage_partial_update.rs"
 required-features = ["smithay-adapter"]
 
 [[test]]
+name = "demo_presentation_timing_accuracy"
+path = "tests/demo_presentation_timing_accuracy.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_damage_region_precision"
+path = "tests/demo_damage_region_precision.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_buffer_offset_present"
+path = "tests/demo_buffer_offset_present.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
+name = "demo_sustained_load_timing"
+path = "tests/demo_sustained_load_timing.rs"
+required-features = ["smithay-adapter"]
+
+[[test]]
 name = "demo_clipboard_selection_roundtrip"
 path = "tests/demo_clipboard_selection_roundtrip.rs"
 required-features = ["smithay-adapter"]

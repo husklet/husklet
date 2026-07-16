@@ -388,8 +388,10 @@ pub struct HlState {
     /// tracking every injected move so relative motion reports the real device delta even while locked.
     last_injected_pointer: (f64, f64),
     /// Monotonic presentation SEQUENCE counter — the `seq` a `wp_presentation_feedback.presented` carries
-    /// (a frame counter for the output). Incremented once per answered feedback so a client sees a strictly
-    /// increasing sequence across frames.
+    /// (a per-output vblank / frame counter). Incremented once per PRESENT CYCLE that answers feedback (not
+    /// once per feedback): every feedback released together by one present shares the frame's `seq` (and its
+    /// `now` timestamp), so a client sees a strictly increasing, contiguous, gap-free sequence — one number
+    /// per frame that actually reached the screen. See [`Self::answer_tree_feedback`].
     present_seq: u64,
     /// Shared handle onto the presenter's [`Observations`] — the non-pixel adapter state (idle-inhibit /
     /// content-type) a test reads back. Cloned from the presenter at construction (before it moves into the
@@ -1099,7 +1101,8 @@ impl HlState {
     /// seq)` when `presented`, or `discarded` when the frame was torn down unshown. The timestamp is the
     /// host-monotonic clock (`CLOCK_MONOTONIC`, the id `wp_presentation` advertised), the refresh is the
     /// primary output's frame interval, and `seq` is the monotonic present counter — one increment per
-    /// answered feedback, so a client sees a strictly increasing sequence.
+    /// PRESENT CYCLE (all feedbacks released by this one present share the frame's `seq` + `now`), so a
+    /// client sees a strictly increasing, contiguous sequence: one number per frame that reached the screen.
     fn answer_tree_feedback(&mut self, root: SurfaceId, presented: bool) {
         if self.pending_presentation.is_empty() {
             return;
@@ -1117,6 +1120,15 @@ impl HlState {
         // Frame interval from the primary output's refresh (mHz → ns): 60_000 mHz ⇒ ~16.67 ms.
         let refresh_mhz = self.engine.scene.primary_output().map(|o| o.refresh_mhz.max(1)).unwrap_or(60_000);
         let refresh = Refresh::fixed(std::time::Duration::from_nanos(1_000_000_000_000u64 / refresh_mhz as u64));
+        // ONE presentation sequence number for THIS present cycle. Every feedback answered in this call
+        // resolved against the SAME frame reaching the screen at the SAME timestamp `now` (a burst of
+        // commits coalesced by the vsync throttle accumulates several feedbacks that all release on this one
+        // present), so they must all carry the SAME `seq`: a `wp_presentation` sequence is a per-output
+        // vblank counter — one frame is one number. Stamping each feedback with a distinct `seq` would
+        // report several vblanks at one identical instant, which no real display can produce and which
+        // corrupts a client's (Chrome's) vsync-phase estimate. Allocated lazily so a cycle that only
+        // discards never advances the counter, which would otherwise leave a gap in the presented run.
+        let mut frame_seq: Option<u64> = None;
         for sid in targets {
             // Name the output this surface's frame presented on: its currently-entered output, else its
             // selected output, else the primary. Cloned (smithay's `Output` is an `Arc` handle) so the
@@ -1134,12 +1146,21 @@ impl HlState {
             for feedback in feedbacks {
                 if presented {
                     if let Some(output_handle) = &output_handle {
-                        self.present_seq += 1;
+                        // Allocate this cycle's sequence number on first real present, then reuse it for
+                        // every remaining feedback in the cycle (same frame ⇒ same seq + same `now`).
+                        let seq = match frame_seq {
+                            Some(s) => s,
+                            None => {
+                                self.present_seq += 1;
+                                frame_seq = Some(self.present_seq);
+                                self.present_seq
+                            }
+                        };
                         feedback.presented(
                             output_handle,
                             now,
                             refresh,
-                            self.present_seq,
+                            seq,
                             wp_presentation_feedback::Kind::Vsync,
                         );
                     } else {
