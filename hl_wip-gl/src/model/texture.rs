@@ -31,6 +31,16 @@ pub struct GlTexture {
     /// texture is a framebuffer color attachment — the render-target + surface format). Chosen from the
     /// `glTexImage2D` internal format; defaults to `Rgba8Unorm` (the RGBA8 upload the model materializes).
     pub ir_format: TextureFormat,
+    /// Whether this texture's `data` plane holds REAL uploaded pixel content (a `glTexImage2D` /
+    /// `glTexSubImage2D` / `glCopyTexSubImage2D` upload) rather than a zero-filled STORAGE allocation. A
+    /// `glTexImage2D(…, NULL)` or `glTexStorage2D` allocates a zeroed plane so a later `glTexSubImage*` has a
+    /// target — but that plane is NOT content: it is exactly the shape an FBO color attachment takes before
+    /// it is rendered into. `has_data()` (`!data.is_empty()`) is TRUE for such an attachment even though its
+    /// real pixels live only in the FBO render target, so the frame builder uses this flag (via
+    /// [`GlTexture::has_real_pixels`]) to prefer the resident FBO render target over the zeroed plane when
+    /// sampling an offscreen attachment across frames (Chrome's tile→window composite). `false` until a real
+    /// upload lands; reset to `false` by a `glTexImage2D(…, NULL)` re-define (GL discards the old content).
+    pub real_pixels: bool,
 }
 
 impl Default for GlTexture {
@@ -48,6 +58,7 @@ impl Default for GlTexture {
             immutable: false,
             levels: 1,
             ir_format: TextureFormat::Rgba8Unorm,
+            real_pixels: false,
         }
     }
 }
@@ -84,6 +95,15 @@ impl GlTexture {
     /// Has this texture usable sampled content (materialized pixels)?
     pub fn has_data(&self) -> bool {
         !self.data.is_empty()
+    }
+
+    /// Has this texture received a REAL pixel upload (`glTexImage2D`-with-pixels / `glTexSubImage2D` /
+    /// `glCopyTexSubImage2D`), as opposed to only a zero-filled STORAGE allocation (`glTexImage2D(…, NULL)` /
+    /// `glTexStorage2D`)? A texture that is an FBO color attachment allocated with NULL storage has a zeroed
+    /// `data` plane (`has_data()` true) but NO real content — its pixels live in the FBO render target — so
+    /// the frame builder samples the resident render target rather than the zeroed plane when this is `false`.
+    pub fn has_real_pixels(&self) -> bool {
+        self.real_pixels
     }
 }
 
@@ -130,10 +150,14 @@ impl Textures {
         t.ir_format = format;
         if !pixels.is_empty() {
             t.data = pixels.to_vec();
+            t.real_pixels = true;
         } else if let Some(want) = want {
             if t.data.len() != want {
                 t.data = vec![0u8; want];
             }
+            // A NULL-storage (re)define carries no content — GL discards any prior pixels — so the plane is
+            // no longer real content (it is the pre-render shape of an FBO color attachment).
+            t.real_pixels = false;
         }
         t.gen += 1;
     }
@@ -153,6 +177,9 @@ impl Textures {
         t.data = vec![0u8; size];
         t.immutable = true;
         t.levels = levels;
+        // Zeroed immutable storage is not real content until a `glTexSubImage*` fills it (an FBO attachment
+        // allocated this way renders its pixels into the render target, not this plane).
+        t.real_pixels = false;
         t.gen += 1;
         true
     }
@@ -171,6 +198,7 @@ impl Textures {
         if t.data.len() != size {
             t.data = vec![0u8; size];
         }
+        t.real_pixels = false;
         t.gen += 1;
         true
     }
@@ -193,6 +221,7 @@ impl Textures {
             let src = row * w * 4;
             t.data[dst..dst + w * 4].copy_from_slice(&rgba[src..src + w * 4]);
         }
+        t.real_pixels = true;
         t.gen += 1;
         true
     }

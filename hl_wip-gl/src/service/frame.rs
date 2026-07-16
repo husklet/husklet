@@ -201,21 +201,23 @@ fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -
                 fbo_tex_ir.insert(attach, target_tex);
             }
         }
-        // The pass clear color is the run's first recorded draw (a leading glClear if present, else the
-        // first geometry draw's snapshot). Each run clear-loads its target once, then replays its draws.
-        let clear = run.first().map(|d| d.clear).unwrap_or([0.0; 4]);
+        // An unscissored full-framebuffer clear wipes the run's target, so the pass clear-loads with the LAST
+        // such clear's color and replays only the draws recorded AFTER it (see [`effective_clear`]); with no
+        // full clear this is the run's first-draw clear + replay-all (byte-identical to before).
+        let (clear, rstart) = effective_clear(run);
+        let survivors = &run[rstart..];
 
-        let depth_fmt = pass_depth_format(run);
+        let depth_fmt = pass_depth_format(survivors);
         let mut copies: Vec<Enc> = Vec::new();
         let mut draw_ops: Vec<Enc> = Vec::new();
-        for d in run.iter().filter(|d| !d.is_clear) {
+        for d in survivors.iter().filter(|d| !d.is_clear) {
             if let Some(l) = lower_draw(ctx, d, fmt, depth_fmt, tw, th, &mut cmds, &fbo_tex_ir) {
                 copies.extend(l.copies);
                 draw_ops.extend(l.ops);
             }
         }
 
-        let depth = depth_attachment_for(ctx, target_tex, tw, th, run, &mut cmds);
+        let depth = depth_attachment_for(ctx, target_tex, tw, th, survivors, &mut cmds);
         let mut ops: Vec<Enc> = copies;
         ops.push(Enc::BeginRenderPass {
             color: vec![ColorAttachment { texture: target_tex, load: LoadOp::Clear, clear, store: true }],
@@ -396,12 +398,47 @@ fn depth_attachment_for(
     Some(DepthAttachment { texture: depth_tex, load: LoadOp::Clear, clear_depth, clear_stencil })
 }
 
-/// Clear-only frame: a render pass over the target that clears it (`LoadOp::Clear`).
+/// The effective `LoadOp::Clear` color for a framebuffer run and the index in `run` from which draws still
+/// survive. GL semantics: an UNSCISSORED `glClear(GL_COLOR_BUFFER_BIT)` overwrites the ENTIRE color buffer,
+/// discarding every prior draw + clear to that framebuffer. So the pass must clear to the color of the LAST
+/// unscissored clear in the run and replay ONLY the draws recorded AFTER it — the earlier draws were wiped.
+///
+/// This is what makes Chrome's window composite render: its default-framebuffer frame interleaves several
+/// full clears with geometry (`clear(transparent); …; clear(white); …; clear(orange); …draw tiles`), where
+/// the LAST full clear (`#ff7700`, the page background) plus the draws after it are the visible frame. The
+/// old "use the first draw's clear + replay all geometry" folded the leading transparent clear onto the pass
+/// and kept the wiped pre-clear draws, so the page background (orange) was dropped and the frame read blank.
+///
+/// A scissored clear only touches its rect, so it does NOT wipe — it is not a boundary here. With no
+/// unscissored clear at all the run falls back to `(first-draw clear, 0)` = the prior leading-clear behavior,
+/// so an ordinary "clear then draw" frame lowers byte-identically.
+fn effective_clear(run: &[DrawCall]) -> ([f32; 4], usize) {
+    let mut last_full: Option<usize> = None;
+    for (i, d) in run.iter().enumerate() {
+        if d.is_clear && !d.scissor_enabled {
+            last_full = Some(i);
+        }
+    }
+    match last_full {
+        Some(i) => (run[i].clear, i + 1),
+        None => (run.first().map(|d| d.clear).unwrap_or([0.0; 4]), 0),
+    }
+}
+
+/// Clear-only frame: a render pass over the target that clears it (`LoadOp::Clear`), honoring the LAST
+/// unscissored clear's color (see [`effective_clear`]).
 fn build_clear_frame(ctx: &mut GlContext) -> Frame {
     let mut cmds: Vec<Cmd> = Vec::new();
     let fbo = ctx.draws.last().map(|d| d.fbo).unwrap_or(0);
+    let clear = effective_clear(&ctx.draws).0;
+    build_clear_frame_color(ctx, fbo, clear, cmds)
+}
+
+/// A clear-only frame for framebuffer `fbo` with an explicit clear `color`: the pass clears the resolved
+/// target and presents it. Shared by [`build_clear_frame`] and by [`build_geometry_frame`] when a trailing
+/// full-framebuffer clear wiped every geometry draw (the frame is then just that clear color).
+fn build_clear_frame_color(ctx: &mut GlContext, fbo: u32, clear: [f32; 4], mut cmds: Vec<Cmd>) -> Frame {
     let (surface, texture, w, h, fmt) = resolve_target(ctx, fbo, &mut cmds);
-    let clear = ctx.draws.last().map(|d| d.clear).unwrap_or([0.0; 4]);
     let ops = vec![
         Enc::BeginRenderPass {
             color: vec![ColorAttachment { texture, load: LoadOp::Clear, clear, store: true }],
@@ -424,19 +461,32 @@ struct DrawLowering {
 /// Geometry frame: clear once, then replay every geometry draw into a single render pass over the target.
 /// Handles single-draw, multi-draw, and clear-then-draw, against the default surface or an offscreen FBO.
 fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
-    let geom: Vec<DrawCall> = ctx.draws.iter().filter(|d| !d.is_clear).cloned().collect();
-    if geom.is_empty() {
-        return None;
+    // An unscissored full-framebuffer `glClear` wipes all prior rendering, so the effective pass clear is the
+    // LAST such clear's color and only draws recorded AFTER it survive (see [`effective_clear`]). Chrome's
+    // window frame clears the default framebuffer to `#ff7700` (the page background) partway through its
+    // draw-list, then composites tiles — replaying the wiped pre-clear draws or using the leading transparent
+    // clear (the old behavior) dropped that background and read back blank.
+    let (clear, start) = effective_clear(&ctx.draws);
+    let survivors: Vec<DrawCall> = ctx.draws[start..].to_vec();
+    let geom: Vec<DrawCall> = survivors.iter().filter(|d| !d.is_clear).cloned().collect();
+    // A SCISSORED `glClear` among the survivors fills a sub-rect with a color (GskGpu/Chrome fill the page
+    // background this way: `glEnable(GL_SCISSOR_TEST); glClear(#ff7700)` over the content rect). It is a real
+    // paint op, not a pass boundary — lowered below as an `Enc::ClearRect` between render-pass segments.
+    let has_scissored_clear = survivors.iter().any(|d| d.is_clear && d.scissor_enabled);
+    if geom.is_empty() && !has_scissored_clear {
+        // Every geometry draw was erased by a trailing full-framebuffer clear — present just that clear color.
+        // All draws in this single-group path share one framebuffer, so the last draw's fbo is the target.
+        let fbo = ctx.draws.last().map(|d| d.fbo).unwrap_or(0);
+        return Some(build_clear_frame_color(ctx, fbo, clear, Vec::new()));
     }
-    // The render target follows the first geometry draw's framebuffer binding; the clear color is the
-    // frame's first recorded draw (a leading glClear if present, else the first draw's snapshot).
-    let fbo = geom[0].fbo;
-    let clear = ctx.draws.first().map(|d| d.clear).unwrap_or([0.0; 4]);
+    // The render target follows the surviving geometry's (or the first survivor's) framebuffer binding.
+    let fbo = geom.first().or_else(|| survivors.first()).map(|d| d.fbo).unwrap_or(0);
 
     // A `glDrawBuffers` MRT frame: the bound FBO carries 2+ contiguous color attachments, so the frame
     // renders ALL of them in ONE pass with N color targets (see [`build_mrt_geometry_frame`]). An FBO with
     // one (or zero) attachment, or the default framebuffer, stays on the byte-identical single-target path.
-    if fbo != 0 && ctx.framebuffers.color_attachment_count(fbo) > 1 {
+    // MRT never co-occurs with a scissored clear in practice, so it keeps the single-pass path.
+    if !has_scissored_clear && fbo != 0 && ctx.framebuffers.color_attachment_count(fbo) > 1 {
         if let Some(f) = build_mrt_geometry_frame(ctx, &geom, fbo, clear) {
             return Some(f);
         }
@@ -445,34 +495,70 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
 
     let mut cmds: Vec<Cmd> = Vec::new();
     let (surface, target_tex, tw, th, target_fmt) = resolve_target(ctx, fbo, &mut cmds);
-
-    // Single-target frame: no prior offscreen pass to sample, so cross-pass FBO sampling is empty and this
-    // path lowers byte-identically to the pre-frame-graph builder.
     let no_fbo_tex = std::collections::HashMap::new();
-    // The pass's shared depth(+stencil) attachment format (if any draw is depth/stencil-tested) — every
-    // depth pipeline in the pass must be built at this format to match the attachment (wgpu requirement).
-    let depth_fmt = pass_depth_format(&geom);
-    let mut copies: Vec<Enc> = Vec::new();
-    let mut draw_ops: Vec<Enc> = Vec::new();
-    for d in &geom {
-        if let Some(lowered) = lower_draw(ctx, d, target_fmt, depth_fmt, tw, th, &mut cmds, &no_fbo_tex) {
-            copies.extend(lowered.copies);
-            draw_ops.extend(lowered.ops);
+
+    if !has_scissored_clear {
+        // ---- single-pass path (byte-identical to the pre-scissored-clear builder) ----
+        // The pass's shared depth(+stencil) attachment format (if any draw is depth/stencil-tested) — every
+        // depth pipeline in the pass must be built at this format to match the attachment (wgpu requirement).
+        let depth_fmt = pass_depth_format(&geom);
+        let mut copies: Vec<Enc> = Vec::new();
+        let mut draw_ops: Vec<Enc> = Vec::new();
+        for d in &geom {
+            if let Some(lowered) = lower_draw(ctx, d, target_fmt, depth_fmt, tw, th, &mut cmds, &no_fbo_tex) {
+                copies.extend(lowered.copies);
+                draw_ops.extend(lowered.ops);
+            }
+        }
+        // Not one geometry draw could be lowered (e.g. every program was unlinked) → present nothing.
+        if draw_ops.is_empty() {
+            return None;
+        }
+        let depth = depth_attachment_for(ctx, target_tex, tw, th, &geom, &mut cmds);
+        let mut ops: Vec<Enc> = copies;
+        ops.push(Enc::BeginRenderPass {
+            color: vec![ColorAttachment { texture: target_tex, load: LoadOp::Clear, clear, store: true }],
+            depth,
+        });
+        ops.extend(draw_ops);
+        ops.push(Enc::EndRenderPass);
+        cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
+        log_frame(tw, th, ctx.draws.len(), 1, cmds.len(), frame_upload_bytes(&cmds));
+        return Some(Frame {
+            cmds,
+            present: (surface, target_tex),
+            target_width: tw,
+            target_height: th,
+            target_format: target_fmt,
+            color_attachments: Vec::new(),
+        });
+    }
+
+    // ---- segmented path: a scissored clear paints a rect, so the frame is a SEQUENCE of render-pass
+    // segments separated by `Enc::ClearRect` fills, all writing the ONE target in draw order. The first
+    // segment's pass clear-loads the target (`clear`, the effective full clear); every later segment
+    // load-preserves what the prior segments + fills already wrote (`LoadOp::Load`). This is what renders
+    // Chrome's page background: `clear(full transparent); …draws; SCISSORED clear(#ff7700 over the content
+    // rect); …composite tile draws` → transparent clear, orange rect fill, tiles composited on top.
+    let mut ops: Vec<Enc> = Vec::new();
+    let mut seg: Vec<DrawCall> = Vec::new();
+    let mut first_pass = true;
+    for d in &survivors {
+        if d.is_clear {
+            if d.scissor_enabled {
+                emit_segment_pass(ctx, &mut cmds, &mut ops, &seg, target_tex, target_fmt, tw, th, clear, first_pass, &no_fbo_tex);
+                first_pass = false;
+                seg.clear();
+                if let Some(cr) = scissored_clear_rect_enc(d, target_tex, tw, th) {
+                    ops.push(cr);
+                }
+            }
+            // A non-scissored clear cannot appear after `start` (that index is past the last full clear).
+        } else {
+            seg.push(d.clone());
         }
     }
-    // Not one geometry draw could be lowered (e.g. every program was unlinked) → present nothing.
-    if draw_ops.is_empty() {
-        return None;
-    }
-
-    let depth = depth_attachment_for(ctx, target_tex, tw, th, &geom, &mut cmds);
-    let mut ops: Vec<Enc> = copies;
-    ops.push(Enc::BeginRenderPass {
-        color: vec![ColorAttachment { texture: target_tex, load: LoadOp::Clear, clear, store: true }],
-        depth,
-    });
-    ops.extend(draw_ops);
-    ops.push(Enc::EndRenderPass);
+    emit_segment_pass(ctx, &mut cmds, &mut ops, &seg, target_tex, target_fmt, tw, th, clear, first_pass, &no_fbo_tex);
 
     cmds.push(Cmd::Submit(CommandBuffer { encoder: ops, signal: None }));
     log_frame(tw, th, ctx.draws.len(), 1, cmds.len(), frame_upload_bytes(&cmds));
@@ -484,6 +570,69 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
         target_format: target_fmt,
         color_attachments: Vec::new(),
     })
+}
+
+/// Emit one render-pass SEGMENT of the scissored-clear-split geometry frame (see [`build_geometry_frame`]):
+/// lower `seg`'s draws, hoist their staging copies ahead of the pass, then a `BeginRenderPass` that
+/// clear-loads (`clear`) on the FIRST segment or load-preserves (`LoadOp::Load`) on later ones, the draws,
+/// and `EndRenderPass`. An empty `seg` still emits its pass so a leading scissored clear's full-target clear
+/// (or a load boundary) is established.
+#[allow(clippy::too_many_arguments)]
+fn emit_segment_pass(
+    ctx: &mut GlContext,
+    cmds: &mut Vec<Cmd>,
+    ops: &mut Vec<Enc>,
+    seg: &[DrawCall],
+    target_tex: u32,
+    target_fmt: TextureFormat,
+    tw: i32,
+    th: i32,
+    clear: [f32; 4],
+    first_pass: bool,
+    no_fbo_tex: &std::collections::HashMap<u32, u32>,
+) {
+    let depth_fmt = pass_depth_format(seg);
+    let mut copies: Vec<Enc> = Vec::new();
+    let mut draw_ops: Vec<Enc> = Vec::new();
+    for d in seg {
+        if let Some(lowered) = lower_draw(ctx, d, target_fmt, depth_fmt, tw, th, cmds, no_fbo_tex) {
+            copies.extend(lowered.copies);
+            draw_ops.extend(lowered.ops);
+        }
+    }
+    let depth = depth_attachment_for(ctx, target_tex, tw, th, seg, cmds);
+    ops.extend(copies);
+    let load = if first_pass { LoadOp::Clear } else { LoadOp::Load };
+    ops.push(Enc::BeginRenderPass {
+        color: vec![ColorAttachment { texture: target_tex, load, clear, store: true }],
+        depth,
+    });
+    ops.extend(draw_ops);
+    ops.push(Enc::EndRenderPass);
+}
+
+/// Lower a SCISSORED `glClear` to an `Enc::ClearRect` fill of `target_tex`, flipping the GL bottom-left
+/// scissor rect into the render target's top-left texel origin and clamping to the target. `None` for a
+/// degenerate (empty) rect.
+fn scissored_clear_rect_enc(d: &DrawCall, target_tex: u32, tw: i32, th: i32) -> Option<Enc> {
+    let [sx, sy, sw, sh] = d.scissor;
+    if sw <= 0 || sh <= 0 {
+        return None;
+    }
+    let x = sx.clamp(0, tw);
+    let y_top = (th - sy - sh).max(0);
+    let mut w = sw;
+    let mut h = sh;
+    if x + w > tw {
+        w = tw - x;
+    }
+    if y_top + h > th {
+        h = th - y_top;
+    }
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    Some(Enc::ClearRect { texture: target_tex, x: x as u32, y: y_top as u32, w: w as u32, h: h as u32, color: d.clear })
 }
 
 /// Multiple-render-target geometry frame (`glDrawBuffers` MRT): the bound `fbo` has N ≥ 2 contiguous color
@@ -733,14 +882,19 @@ fn lower_draw_n(ctx: &mut GlContext, d: &DrawCall, target_fmt: TextureFormat, de
             texbinds.push(TexBind { slot, tex_ir: rt_ir, samp_ir, stage_ir: 0, w: t.w as u32, h: t.h as u32 });
             continue;
         }
-        // Cross-FRAME FBO sampling: if this GL texture has no uploaded CPU pixels but IS the color attachment
-        // a PRIOR frame's offscreen pass rendered into (e.g. a `glFlush`/`glFinish` executed the tile passes
-        // into their persistent render targets — see `crate::service::swap::flush_offscreen`), bind THAT
-        // resident render-target texture (its rendered pixels) rather than the blank placeholder. Only for a
-        // texture with no CPU data, so an ordinary sampled texture (which the `has_data()` arm below uploads)
-        // is never diverted — keeping the single-frame apps byte-identical.
-        let no_cpu_data = ctx.textures.get(gl_tex).map(|t| !t.has_data()).unwrap_or(false);
-        if no_cpu_data {
+        // Cross-FRAME FBO sampling: if this GL texture holds no REAL uploaded pixels but IS the color
+        // attachment a PRIOR frame's offscreen pass rendered into (e.g. a `glFlush`/`glFinish` executed the
+        // tile passes into their persistent render targets — see `crate::service::swap::flush_offscreen`),
+        // bind THAT resident render-target texture (its rendered pixels) rather than its CPU plane. The gate
+        // is `!has_real_pixels()`, NOT `!has_data()`: an FBO color attachment allocated via
+        // `glTexImage2D(…, NULL)` / `glTexStorage2D` carries a ZEROED plane (so `has_data()` is TRUE) whose
+        // real content lives only in the render target. Sampling the zeroed plane instead of the rendered
+        // tile was exactly why Chrome's tile→window composite read back blank. An ordinary sampled texture
+        // (a real `glTexImage2D`/`glTexSubImage2D` upload) has `has_real_pixels()` TRUE, so it is never
+        // diverted — single-frame apps stay byte-identical, and a NULL-allocated texture that was never an
+        // FBO target falls through to the upload arm below (uploading its zeroed plane) exactly as before.
+        let render_target_only = ctx.textures.get(gl_tex).map(|t| !t.has_real_pixels()).unwrap_or(false);
+        if render_target_only {
             if let Some(rt_ir) = ctx.resident_fbo_target_tex(gl_tex) {
                 if let Some(t) = ctx.textures.get(gl_tex).cloned() {
                     let samp_ir = ctx.alloc_sampler_ir();
