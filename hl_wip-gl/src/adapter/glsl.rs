@@ -1032,6 +1032,283 @@ pub fn uniform_block_binding_qualifier(src: &str) -> Option<u32> {
     None
 }
 
+/// Inject `layout(binding = N)` into every uniform BLOCK that LACKS an explicit binding, before a stage is
+/// forwarded VERBATIM to the host's naga `glsl-in`. GLSL-ES 3.00 allows a bindingless `uniform Block { … }`,
+/// but naga's `glsl-in` REQUIRES the binding (`uniform/buffer blocks require layout(binding=X)`), so
+/// Chrome/ANGLE's forward-verbatim GLSL — which declares its blocks WITHOUT a binding — otherwise fails
+/// `CreateRenderPipeline`. GskGpu/GTK4 already writes `layout(std140, binding = 0) uniform PushConstants`,
+/// so its blocks ALREADY carry a binding and are left byte-for-byte untouched; a stage whose every block is
+/// already bound is returned unchanged (the whole GskGpu verbatim path stays identical).
+///
+/// The injected N is the block's ORDINAL among the stage's uniform blocks. For the dominant single-block
+/// Chrome shape that is `binding = 0`, matching the frame builder's binding-0 UBO
+/// ([`crate::service::frame::build_frame_ir`]) and the `glBindBufferBase(GL_UNIFORM_BUFFER, 0, …)`
+/// resolution in [`crate::service::record`] (both key off the ORIGINAL `vs_src`/`fs_src`, whose bindingless
+/// block reflects as binding `0` too — so the injected IR and the byte resolution agree). An existing
+/// `layout(std140)`/`layout(std430)` qualifier is PRESERVED — `binding = N` is merged into its list; a block
+/// with no `layout(...)` at all gets a fresh `layout(binding = N)` prepended. Combined sampler globals are
+/// deliberately NOT touched: the host executor's `glsl_es::split_global_samplers` splits each
+/// `uniform sampler2D s;` into a `texture`/`sampler` pair and assigns their `1+2k`/`2+2k` bindings itself,
+/// so injecting here would double-qualify them.
+pub fn inject_uniform_block_bindings(src: &str) -> String {
+    let b = src.as_bytes();
+    let n = b.len();
+    // (byte position, text to insert there) — collected in ascending position order.
+    let mut edits: Vec<(usize, String)> = Vec::new();
+    let mut ordinal: u32 = 0;
+    let mut i = 0usize;
+    while i < n {
+        // Skip comments so a `uniform` inside one is never matched (the forwarded source keeps comments —
+        // naga runs its own preprocessor/comment strip on the result).
+        if i + 1 < n && b[i] == b'/' && b[i + 1] == b'/' {
+            while i < n && b[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < n && b[i] == b'/' && b[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(n);
+            continue;
+        }
+        // Match the `uniform` keyword at a word boundary.
+        let is_kw = b[i..].starts_with(b"uniform")
+            && (i == 0 || !is_word(b[i - 1]))
+            && (i + 7 >= n || !is_word(b[i + 7]));
+        if !is_kw {
+            i += 1;
+            continue;
+        }
+        // A BLOCK is `uniform NAME {` — skip the block name, then require `{` (a plain `uniform TYPE name;`
+        // data/sampler uniform has no `{` and is left alone).
+        let mut q = i + 7;
+        while q < n && is_space(b[q]) {
+            q += 1;
+        }
+        let name_start = q;
+        while q < n && is_word(b[q]) {
+            q += 1;
+        }
+        let has_name = q > name_start;
+        while q < n && is_space(b[q]) {
+            q += 1;
+        }
+        if !(has_name && q < n && b[q] == b'{') {
+            i += 7; // a `uniform TYPE name;` — not a block; skip past the keyword.
+            continue;
+        }
+        // A uniform block. Resolve its immediately-preceding `layout(...)` qualifier(s), if any.
+        let (merge_at, has_binding) = preceding_layout_binding(b, i);
+        if !has_binding {
+            match merge_at {
+                // Merge into the existing `layout(...)` list: insert `, binding = N` before its `)`.
+                Some(rparen) => edits.push((rparen, format!(", binding = {ordinal}"))),
+                // No layout at all: prepend a fresh qualifier before the `uniform` keyword.
+                None => edits.push((i, format!("layout(binding = {ordinal}) "))),
+            }
+        }
+        ordinal += 1;
+        i = q + 1;
+    }
+    if edits.is_empty() {
+        return src.to_string();
+    }
+    let mut out = String::with_capacity(n + edits.len() * 20);
+    let mut last = 0usize;
+    for (pos, text) in &edits {
+        out.push_str(&src[last..*pos]);
+        out.push_str(text);
+        last = *pos;
+    }
+    out.push_str(&src[last..]);
+    out
+}
+
+/// For the uniform-BLOCK whose `uniform` keyword is at `uniform_pos`, walk backward over the block's
+/// immediately-preceding `layout(...)` qualifier group(s) (whitespace-separated). Returns
+/// `(merge_position, has_binding)`: `merge_position` is `Some(byte index of the rightmost group's `)`)` (the
+/// point to splice `, binding = N` into) or `None` when the block has no preceding `layout(...)`; `has_binding`
+/// is true when ANY of those groups already declares a `binding`, in which case the block is left untouched.
+fn preceding_layout_binding(b: &[u8], uniform_pos: usize) -> (Option<usize>, bool) {
+    let mut end = uniform_pos;
+    while end > 0 && is_space(b[end - 1]) {
+        end -= 1;
+    }
+    if end == 0 || b[end - 1] != b')' {
+        return (None, false);
+    }
+    let rparen = end - 1;
+    // Find the `(` matching this `)`.
+    let mut depth = 0i32;
+    let mut k = rparen;
+    let lparen = loop {
+        match b[k] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    break k;
+                }
+            }
+            _ => {}
+        }
+        if k == 0 {
+            return (None, false);
+        }
+        k -= 1;
+    };
+    // The `layout` keyword must sit just before `(` (whitespace allowed) for this to be a layout group.
+    let mut p = lparen;
+    while p > 0 && is_space(b[p - 1]) {
+        p -= 1;
+    }
+    if p < 6 || &b[p - 6..p] != b"layout" || (p > 6 && is_word(b[p - 7])) {
+        return (None, false);
+    }
+    let group_has_binding = b[lparen..=rparen].windows(7).any(|w| w == b"binding");
+    // Chained groups (`layout(std140) layout(binding=0) uniform …`): recurse to the earlier group, but keep
+    // the RIGHTMOST group's `)` as the merge point (closest to the block).
+    let (_, earlier_binding) = preceding_layout_binding(b, p - 6);
+    (Some(rparen), group_has_binding || earlier_binding)
+}
+
+/// Prepare ONE stage of a forward-VERBATIM program for naga's `glsl-in`: wrap its bare default-block data
+/// uniforms into the binding-0 `HlUniforms` block ([`wrap_default_block_uniforms`]) AND inject a binding
+/// into any explicit uniform block that lacks one ([`inject_uniform_block_bindings`]). `combined` is the
+/// program's data uniforms across BOTH stages (from [`program_uniform_decls`]) so the wrapped block's std140
+/// layout matches the `Program::ubuf` bytes the frame builder binds at binding 0. A stage with no bare data
+/// uniforms and only already-bound blocks (GskGpu/GTK4) is returned byte-identical.
+pub fn prepare_verbatim_stage(src: &str, combined: &[Decl]) -> String {
+    let wrapped = wrap_default_block_uniforms(src, combined);
+    inject_uniform_block_bindings(&wrapped)
+}
+
+/// Wrap a verbatim stage's BARE default-block data uniforms (`uniform highp vec4 x;` at global scope) into a
+/// single anonymous `layout(std140, binding = 0) uniform HlUniforms { … };` block naga's `glsl-in` accepts —
+/// GLSL-ES 3.00's implicit default uniform block is rejected by naga ("uniform/buffer blocks require
+/// layout(binding=X)"). Skia (Chrome's GPU-raster) emits `uniform highp vec4 sk_RTAdjust;` style default
+/// uniforms; GskGpu/GTK4 keeps its uniforms inside an explicit `layout(std140, binding=0) uniform
+/// PushConstants` block, so it has NO bare depth-0 data uniform and is left byte-identical.
+///
+/// `combined` is the program's data uniforms from BOTH stages ([`program_uniform_decls`], the same list
+/// [`uni_layout`] lays out into `Program::ubuf`), so the emitted block carries the FULL combined member set
+/// in the FULL std140 layout the frame builder binds at binding 0 — a stage that references only a subset
+/// keeps its members at the shared offsets (an unused member is harmless). The bare declarations are removed
+/// and the block spliced in at the first removed site; a sampler global or a block member is never touched.
+/// Returns the source unchanged when the stage has no bare depth-0 data uniform.
+fn wrap_default_block_uniforms(src: &str, combined: &[Decl]) -> String {
+    if combined.is_empty() {
+        return src.to_string();
+    }
+    let b = src.as_bytes();
+    let n = b.len();
+    // Byte spans of the bare `uniform … name;` declarations to delete (depth-0, non-block, non-sampler).
+    let mut removals: Vec<(usize, usize)> = Vec::new();
+    let mut brace: i32 = 0;
+    let mut i = 0usize;
+    while i < n {
+        // Skip comments so a `uniform` inside one is never matched.
+        if i + 1 < n && b[i] == b'/' && b[i + 1] == b'/' {
+            while i < n && b[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < n && b[i] == b'/' && b[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(n);
+            continue;
+        }
+        match b[i] {
+            b'{' => {
+                brace += 1;
+                i += 1;
+                continue;
+            }
+            b'}' => {
+                brace -= 1;
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        let is_kw = brace == 0
+            && b[i..].starts_with(b"uniform")
+            && (i == 0 || !is_word(b[i - 1]))
+            && (i + 7 >= n || !is_word(b[i + 7]));
+        if !is_kw {
+            i += 1;
+            continue;
+        }
+        // Read the type token (skipping precision/interpolation qualifiers), mirroring `collect`.
+        let mut q = i + 7;
+        let read_tok = |q: &mut usize| -> String {
+            while *q < n && is_space(b[*q]) {
+                *q += 1;
+            }
+            let start = *q;
+            while *q < n && (is_word(b[*q])) {
+                *q += 1;
+            }
+            String::from_utf8_lossy(&b[start..*q]).into_owned()
+        };
+        let mut ty = read_tok(&mut q);
+        while is_precision_or_interp(&ty) {
+            ty = read_tok(&mut q);
+        }
+        while q < n && is_space(b[q]) {
+            q += 1;
+        }
+        // A BLOCK (`uniform NAME { … }`) or a sampler global is NOT a bare data uniform — leave it.
+        if q < n && b[q] == b'{' {
+            i += 7;
+            continue;
+        }
+        if is_sampler_type(&ty) {
+            i += 7;
+            continue;
+        }
+        // `uniform TYPE name … ;` — a bare default-block data uniform; delete the whole statement.
+        let mut e = q;
+        while e < n && b[e] != b';' {
+            e += 1;
+        }
+        if e < n {
+            e += 1; // include the ';'
+            removals.push((i, e));
+            i = e;
+            continue;
+        }
+        i += 7;
+    }
+    if removals.is_empty() {
+        return src.to_string();
+    }
+    // Emit the combined std140 block once, at the first removed declaration's site.
+    let mut block = String::new();
+    emit_uniform_block(&mut block, combined);
+    let insert_at = removals[0].0;
+    let mut out = String::with_capacity(n + block.len());
+    let mut cursor = 0usize;
+    for (idx, (s, e)) in removals.iter().enumerate() {
+        out.push_str(&src[cursor..*s]);
+        if idx == 0 {
+            // Splice the block where the first bare declaration was.
+            debug_assert_eq!(*s, insert_at);
+            out.push_str(&block);
+        }
+        cursor = *e;
+    }
+    out.push_str(&src[cursor..]);
+    out
+}
+
 /// The samplers a linked program declares, in declaration order (for `glUniform1i` → texture-unit
 /// mapping and the bind-group emission).
 pub fn program_samplers(vs: &str, fs: &str) -> Vec<String> {
