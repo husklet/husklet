@@ -154,6 +154,36 @@ pub fn get_swapchain_images(dev: &Device, swapchain: VkSwapchainKHR) -> Result<V
     Ok(sc.images.iter().map(|i| i.handle).collect())
 }
 
+/// `vkDestroySwapchainKHR` — retire a swapchain AND everything [`create_swapchain`] allocated for it: each
+/// presentable image's backing render-target texture (a [`Cmd::DestroyTexture`] frees the host texture, and
+/// its `dev.images` + `image_layouts` bookkeeping is dropped) and the swapchain's own presentation surface
+/// (a [`Cmd::DestroySurface`] frees it, and its `dev.surfaces` entry is dropped).
+///
+/// Without retiring the images, a swapchain RECREATION — every window resize builds a fresh swapchain over
+/// the new extent and destroys the old one — would ORPHAN the old set's `ImageRec` entries (and the old
+/// swapchain's surface) in the device tables forever: a per-resize `VkImage`/surface handle leak that grows
+/// unbounded across a session of resizes. Retiring them here keeps `dev.images` holding EXACTLY the live
+/// swapchains' images. A no-op on an unknown / already-retired swapchain (`VK_NULL_HANDLE`); a still-live
+/// swapchain keeps all of its own images (only the destroyed one's are retired).
+pub fn destroy_swapchain(dev: &mut Device, sink: &mut dyn CommandSink, swapchain: VkSwapchainKHR) -> Result<()> {
+    let Some(sc) = dev.swapchains.remove(&swapchain) else {
+        return Ok(()); // unknown / already retired — nothing to free (VK_NULL_HANDLE)
+    };
+    // Retire every presentable image: free its host texture, then drop its device-table bookkeeping so no
+    // stale `VkImage` handle survives the swapchain.
+    for img in &sc.images {
+        sink.submit(&[Cmd::DestroyTexture(img.ir_texture_id)])?;
+        dev.images.remove(&img.handle);
+        dev.image_layouts.remove(&img.handle);
+    }
+    // Retire the swapchain's own presentation surface (minted per-swapchain at create time — the app's
+    // instance-level `VkSurfaceKHR` is a different object, retired separately by `vkDestroySurfaceKHR`).
+    if let Some(surf) = dev.surfaces.remove(&sc.surface) {
+        sink.submit(&[Cmd::DestroySurface(surf.ir_id)])?;
+    }
+    Ok(())
+}
+
 /// `vkAcquireNextImageKHR` — return the index of the next presentable image in genuine FIFO round-robin
 /// order. Starting at the swapchain's `acquire_cursor`, this scans the images cyclically for the first one
 /// in the pool ([`ImageState::Available`]), marks it [`ImageState::Acquired`] (so it is not handed out

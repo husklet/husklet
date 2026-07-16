@@ -1143,8 +1143,12 @@ fn create_surface_for_swapchain(
 #[no_mangle]
 pub extern "C" fn vkDestroySwapchainKHR(_device: *mut c_void, swapchain: u64, _p_allocator: *const c_void) {
     with(|s| {
+        let sink = &mut s.sink;
         if let Some(dev) = s.device.as_mut() {
-            dev.swapchains.remove(&swapchain);
+            // Retire the swapchain AND its presentable images + presentation surface (dropping their
+            // `dev.images`/`dev.surfaces` bookkeeping + freeing the host textures/surface). Removing only the
+            // `SwapchainRec` would orphan the images in `dev.images` forever — a per-resize handle leak.
+            let _ = present::destroy_swapchain(dev, sink, swapchain);
         }
         // Tear down the app-surface presenter + its window binding (drops the private queue wrappers +
         // the bound `wl_shm`, releasing the app's connection).
