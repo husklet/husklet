@@ -139,12 +139,20 @@ pub struct WlWindowInfo {
 }
 
 /// Parse the app's native window handle to `(width, height, wl_surface)`. Recognises OUR
-/// `wl_egl_window` (the `HL_WL_EGL_MAGIC` struct the staged `libwayland-egl` hands the app); for a stray /
-/// stock struct it falls back to the two-`int` `(width, height)` heuristic Mesa's `wl_egl_window` shares
-/// (first two words are the size). Sizes are clamped to a sane `1..=8192`, defaulting to 256.
+/// `wl_egl_window` (the `HL_WL_EGL_MAGIC` struct the staged `libwayland-egl` hands the app) AND a REAL
+/// `libwayland-egl` `wl_egl_window` (the stable `wayland-egl-backend.h` ABI a bundled/system libwayland-egl
+/// — Chrome/ANGLE's — hands us). Sizes are clamped to a sane `1..=8192`, defaulting to 256.
+///
+/// The real ABI is `intptr_t version; int width, height, dx, dy; struct wl_surface *surface; …`, so on LP64
+/// the `version` occupies the FIRST 8 bytes and the size lives at offset 8/12, with the wrapped `wl_surface*`
+/// at offset 24 — NOT at offset 0/4. Reading offset 0/4 as `(width, height)` (the old heuristic) misreads a
+/// real window's `version` (`WL_EGL_WINDOW_VERSION`, e.g. 3) as `width=3` and its zero high word as
+/// `height→256`, which is exactly the bogus 3×256 window Chrome presented. Our OWN magic struct shares the
+/// width@8/height@12 offsets but keeps its `surface` at the end, so it is handled by the magic branch.
 ///
 /// # Safety
-/// `w` must be null or point at a readable native-window struct.
+/// `w` must be null or point at a readable `wl_egl_window`-ABI struct (what `eglCreateWindowSurface` is
+/// always handed on Wayland).
 pub unsafe fn parse_native_window(w: *const c_void) -> WlWindowInfo {
     let clamp = |v: i32| if v > 0 && v <= 8192 { v as u32 } else { 256 };
     if w.is_null() {
@@ -160,9 +168,16 @@ pub unsafe fn parse_native_window(w: *const c_void) -> WlWindowInfo {
         }
         return WlWindowInfo { width: clamp(ww), height: clamp(hh), wl_surface: win.surface as usize };
     }
-    // Stock / Mesa two-int window: the first two 32-bit words are (width, height).
-    let p = w as *const i32;
-    WlWindowInfo { width: clamp(*p), height: clamp(*p.add(1)), wl_surface: 0 }
+    // A REAL libwayland-egl `wl_egl_window` (Mesa / the reference wayland-egl backend). Its stable ABI puts an
+    // `intptr_t version` in the first 8 bytes (LP64), then `int width;`@8, `int height;`@12, `int dx;`@16,
+    // `int dy;`@20, and `struct wl_surface *surface;`@24. Read those real fields so the size is the app's
+    // actual window and the wrapped `wl_surface*` drives the app-surface present path (present onto the app's
+    // OWN toplevel), instead of misreading the version word as a 3×256 window.
+    let words = w as *const i32;
+    let width = *words.add(2); // offset 8
+    let height = *words.add(3); // offset 12
+    let surface = *((w as *const u8).add(24) as *const *mut c_void); // offset 24
+    WlWindowInfo { width: clamp(width), height: clamp(height), wl_surface: surface as usize }
 }
 
 // ==================================================================================================
@@ -818,12 +833,34 @@ mod tests {
         assert_eq!(info, WlWindowInfo { width: 1024, height: 768, wl_surface: 0x7777_0000 });
     }
 
-    /// A stock two-int native window (first two words = size) is read by the fallback heuristic.
+    /// A REAL `libwayland-egl` `wl_egl_window` (the bundled/system one Chrome/ANGLE hands us): the stable
+    /// `wayland-egl-backend.h` ABI is `intptr_t version; int width, height, dx, dy; struct wl_surface*;`, so
+    /// the size lives at offset 8/12 and the wrapped surface at offset 24 — NOT at offset 0/4. The fallback
+    /// must read those real fields (a regression guard for the 3×256 Chrome window: `version`=3 must NOT be
+    /// read as width).
     #[test]
-    fn parse_native_window_falls_back_to_two_int_window() {
-        let stock: [i32; 2] = [1280, 720];
-        let info = unsafe { parse_native_window(stock.as_ptr() as *const c_void) };
-        assert_eq!((info.width, info.height, info.wl_surface), (1280, 720, 0));
+    fn parse_native_window_reads_the_real_libwayland_egl_window() {
+        // Mirror the real ABI in a byte buffer: version(3)@0, width(800)@8, height(600)@12, dx@16, dy@20,
+        // surface(ptr)@24. `#[repr(C)]` so the field offsets are exactly the C ABI's.
+        #[repr(C)]
+        struct MesaWlEglWindow {
+            version: isize,
+            width: i32,
+            height: i32,
+            dx: i32,
+            dy: i32,
+            surface: *mut c_void,
+        }
+        let win = MesaWlEglWindow {
+            version: 3, // WL_EGL_WINDOW_VERSION — the value the old heuristic misread as width=3
+            width: 800,
+            height: 600,
+            dx: 0,
+            dy: 0,
+            surface: 0x5150_0000usize as *mut c_void,
+        };
+        let info = unsafe { parse_native_window(&win as *const _ as *const c_void) };
+        assert_eq!((info.width, info.height, info.wl_surface), (800, 600, 0x5150_0000));
         // A null window is the clamped default.
         let d = unsafe { parse_native_window(core::ptr::null()) };
         assert_eq!((d.width, d.height), (256, 256));
