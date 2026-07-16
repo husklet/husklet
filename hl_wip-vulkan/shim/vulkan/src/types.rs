@@ -943,6 +943,22 @@ pub struct VkPipelineColorBlendStateCreateInfo {
     // Remaining field (blendConstants[4]) is NOT modeled and is never read through this pointer.
 }
 
+/// `VkPipelineMultisampleStateCreateInfo` — the multisample fixed-function state of a graphics pipeline.
+/// Only `rasterizationSamples` is read (a `VkSampleCountFlagBits` whose bit VALUE is the sample count:
+/// `_1_BIT`=1, `_2_BIT`=2, `_4_BIT`=4, …), threaded to [`RenderPipelineDesc::sample_count`] so an MSAA
+/// pipeline rasterizes multisampled. The struct is truncated after `rasterizationSamples`: the remaining
+/// fields (sampleShadingEnable, minSampleShading, pSampleMask, alphaToCoverage/OneEnable) are NOT modeled and
+/// are never read through this pointer. A null pointer / `_1_BIT` => single-sample.
+#[repr(C)]
+pub struct VkPipelineMultisampleStateCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub rasterization_samples: i32,
+    // Remaining fields (sampleShadingEnable, minSampleShading, pSampleMask, alphaToCoverageEnable,
+    // alphaToOneEnable) are NOT modeled and are never read through this pointer.
+}
+
 /// `VkPhysicalDeviceDynamicRenderingFeatures` — the feature pNext `vkGetPhysicalDeviceFeatures2` fills to
 /// advertise `dynamicRendering = VK_TRUE` (really backed by the `cmd_begin_rendering` lowering).
 #[repr(C)]

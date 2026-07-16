@@ -259,7 +259,11 @@ fn widen_range(a: (u64, u64), b: (u64, u64)) -> (u64, u64) {
 // ---- images / samplers ---------------------------------------------------------------------------
 
 /// `vkCreateImage` — mint an hl-GPU texture id, translate format/usage, and submit [`Cmd::CreateTexture`].
-/// `vk_format` is a raw `VkFormat`; `vk_usage` a raw `VkImageUsageFlags`.
+/// `vk_format` is a raw `VkFormat`; `vk_usage` a raw `VkImageUsageFlags`; `vk_samples` a raw
+/// `VkSampleCountFlagBits` (whose bit VALUE is the sample count: `_1_BIT`=1, `_2_BIT`=2, `_4_BIT`=4, …).
+/// The sample count threads to [`TextureDesc::sample_count`] so a real MSAA `VkImage` is materialized as a
+/// multisampled texture (the executor honors it — `TextureDesc.sample_count` + `Enc::ResolveTexture`, #179);
+/// `0`/`1` collapse to a single-sample texture so an existing single-sample app is byte-identical.
 pub fn create_image(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
@@ -267,6 +271,7 @@ pub fn create_image(
     height: u32,
     vk_format: u32,
     vk_usage: u32,
+    vk_samples: u32,
 ) -> Result<VkImage> {
     use hl_gpu::protocol::model::descriptor::TextureDesc;
     use hl_gpu::protocol::model::enums::TextureDim;
@@ -283,6 +288,9 @@ pub fn create_image(
     let handle = dev.alloc_handle();
     let format = tex_format_from_vk(vk_format);
     let usage = texture_usage_from_vk(vk_usage);
+    // `VkSampleCountFlagBits` encodes the count AS its bit value (1/2/4/8/16/32/64); an absent/`_1_BIT`
+    // field is single-sample. Anything else threads through as the requested multisample count.
+    let sample_count = vk_samples.max(1);
     sink.submit(&[Cmd::CreateTexture(
         ir_id,
         TextureDesc {
@@ -290,7 +298,7 @@ pub fn create_image(
             height,
             depth: 1,
             mip_levels: 1,
-            sample_count: 1,
+            sample_count,
             dim: TextureDim::D2,
             format,
             usage,
@@ -299,7 +307,7 @@ pub fn create_image(
     )])?;
     dev.images.insert(
         handle,
-        ImageRec { ir_id, width, height, format, usage, is_render_target: is_render_target(vk_usage) },
+        ImageRec { ir_id, width, height, format, usage, sample_count, is_render_target: is_render_target(vk_usage) },
     );
     Ok(handle)
 }
@@ -433,6 +441,11 @@ pub fn create_compute_pipeline(
 /// attachment's `VkPipelineColorBlendAttachmentState::blendEnable` is set, else `None`. It is applied to
 /// every color target. Without this the blend state was dropped (`blend: None` hardcoded) and a
 /// translucent (alpha-over) draw OVERWROTE the destination instead of compositing over it.
+///
+/// `sample_count` is the pipeline's multisample count (`VkPipelineMultisampleStateCreateInfo::rasterizationSamples`
+/// as a raw `VkSampleCountFlagBits` count value). It threads to [`RenderPipelineDesc::sample_count`] so an
+/// MSAA pipeline rasterizes into a matching multisampled color attachment (the executor honors it, #179).
+/// `0`/`1` collapse to single-sample so an existing single-sample pipeline is byte-identical.
 pub fn create_graphics_pipeline(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
@@ -442,6 +455,7 @@ pub fn create_graphics_pipeline(
     color_formats: Vec<TextureFormat>,
     depth: Option<DepthState>,
     blend: Option<BlendState>,
+    sample_count: u32,
 ) -> Result<VkPipeline> {
     use hl_gpu::protocol::model::descriptor::ColorTargetState;
     let resolve = |dev: &Device, (module, entry): (VkShaderModule, &str)| -> Result<ShaderRef> {
@@ -475,7 +489,7 @@ pub fn create_graphics_pipeline(
             topology: Topology::TriangleList,
             cull: 0,
             front_face: 0,
-            sample_count: 1,
+            sample_count: sample_count.max(1),
             label: format!("vkgpipe{ir_id}"),
         },
     )])?;

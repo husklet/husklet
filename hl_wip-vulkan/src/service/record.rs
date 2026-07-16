@@ -1188,14 +1188,21 @@ pub fn cmd_blit_image(
     Ok(())
 }
 
-/// `vkCmdResolveImage` (one region, base subresource) — a multisample-resolve. hl materializes every image
-/// as single-sample (a requested MSAA `VkImage` is created at `sample_count: 1` — see
-/// `create::create_image`), so a resolve whose source is single-sample is exactly a same-extent,
-/// same-format image COPY: it MOVES the rendered content into the resolve target. Recording nothing (the
-/// former no-op) left the resolve target blank — an app that renders to a color attachment and resolves
-/// into its swapchain/present image would present an empty frame. Lower it to the SAME
-/// `CopyTextureToTexture` a `vkCmdCopyImage` of the region emits (formats must match, both usages present,
-/// region in-bounds — all enforced by [`cmd_copy_image`]). Truthful error on a bad handle / mismatch / OOB.
+/// `vkCmdResolveImage` (one region, base subresource) — a multisample-resolve.
+///
+/// When the SOURCE `VkImage` is multisampled (`sample_count > 1`, threaded from `VkImageCreateInfo::samples`
+/// by [`create::create_image`]), this is a TRUE resolve: it averages the source's samples down into the
+/// single-sample destination. It lowers to [`Enc::ResolveTexture`] (the executor's real multisample resolve,
+/// #179) — NOT a copy, which would only pick one sample and drop the antialiasing.
+///
+/// When the source is single-sample (`sample_count == 1`), a same-extent same-format resolve is exactly an
+/// image COPY: it MOVES the rendered content into the resolve target. Recording nothing (the former no-op)
+/// left the resolve target blank — an app that renders to a color attachment and resolves into its
+/// swapchain/present image would present an empty frame. Lower it to the SAME `CopyTextureToTexture` a
+/// `vkCmdCopyImage` of the region emits.
+///
+/// Both paths enforce matching formats, both usages present, and region in-bounds (via [`cmd_copy_image`]'s
+/// validation, which the resolve path reuses). Truthful error on a bad handle / mismatch / OOB.
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_resolve_image(
     dev: &mut Device,
@@ -1206,7 +1213,54 @@ pub fn cmd_resolve_image(
     dst_origin: (u32, u32),
     extent: (u32, u32),
 ) -> Result<()> {
-    cmd_copy_image(dev, cb, src, dst, src_origin, dst_origin, extent)
+    let src_samples = dev
+        .images
+        .get(&src)
+        .ok_or(GpuError::Invalid("vkCmdResolveImage: unknown src VkImage"))?
+        .sample_count;
+    if src_samples <= 1 {
+        // Single-sample source: resolve degenerates to a content-moving copy.
+        return cmd_copy_image(dev, cb, src, dst, src_origin, dst_origin, extent);
+    }
+    // Multisample source: emit the real resolve. Validate identically to a copy (formats/usages/bounds) so a
+    // bad resolve is a truthful error, then push ResolveTexture instead of CopyTextureToTexture.
+    let (src_ir, src_fmt, src_usage, siw, sih) = {
+        let i = dev.images.get(&src).ok_or(GpuError::Invalid("vkCmdResolveImage: unknown src VkImage"))?;
+        (i.ir_id, i.format, i.usage, i.width, i.height)
+    };
+    let (dst_ir, dst_fmt, dst_usage, diw, dih) = {
+        let i = dev.images.get(&dst).ok_or(GpuError::Invalid("vkCmdResolveImage: unknown dst VkImage"))?;
+        (i.ir_id, i.format, i.usage, i.width, i.height)
+    };
+    if src_fmt != dst_fmt {
+        return Err(GpuError::Invalid("vkCmdResolveImage: source and destination formats differ"));
+    }
+    if src_usage & texture_usage::COPY_SRC == 0 || dst_usage & texture_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid("vkCmdResolveImage: missing COPY_SRC/COPY_DST usage"));
+    }
+    let (w, h) = extent;
+    if w == 0 || h == 0 {
+        return Err(GpuError::OutOfBounds);
+    }
+    let in_bounds = |o: u32, e: u32, dim: u32| o.checked_add(e).is_some_and(|end| end <= dim);
+    if !in_bounds(src_origin.0, w, siw)
+        || !in_bounds(src_origin.1, h, sih)
+        || !in_bounds(dst_origin.0, w, diw)
+        || !in_bounds(dst_origin.1, h, dih)
+    {
+        return Err(GpuError::OutOfBounds);
+    }
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::ResolveTexture {
+        src: src_ir,
+        src_sub: TextureSubresource::base(),
+        src_origin: Origin3d { x: src_origin.0, y: src_origin.1, z: 0 },
+        dst: dst_ir,
+        dst_sub: TextureSubresource::base(),
+        dst_origin: Origin3d { x: dst_origin.0, y: dst_origin.1, z: 0 },
+        extent: Extent3d { width: w, height: h, depth: 1 },
+    });
+    Ok(())
 }
 
 // ---- clears ------------------------------------------------------------------------------------

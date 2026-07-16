@@ -399,7 +399,7 @@ fn graphics_pipeline_rejects_missing_fragment_entry() {
     let vs = create::create_shader_module_words(&mut d, &mut s, hl_vulkan::adapter::spirv::sample_compute_spirv("vs")).unwrap();
     let fs = create::create_shader_module_words(&mut d, &mut s, hl_vulkan::adapter::spirv::sample_compute_spirv("fs")).unwrap();
     // Bad fragment entry → the whole pipeline fails (no id-zero default).
-    let r = create::create_graphics_pipeline(&mut d, &mut s, (vs, "vs"), Some((fs, "bad")), vec![], vec![TextureFormat::Rgba8Unorm], None, None);
+    let r = create::create_graphics_pipeline(&mut d, &mut s, (vs, "vs"), Some((fs, "bad")), vec![], vec![TextureFormat::Rgba8Unorm], None, None, 1);
     assert!(matches!(r, Err(GpuError::Invalid(_))));
 }
 
@@ -409,7 +409,7 @@ fn graphics_pipeline_with_no_color_targets_is_valid() {
     let mut s = sink();
     let vs = create::create_shader_module_words(&mut d, &mut s, hl_vulkan::adapter::spirv::sample_compute_spirv("vs")).unwrap();
     // Depth-only / no-color pipeline: an empty color-format slice is valid.
-    let pipe = create::create_graphics_pipeline(&mut d, &mut s, (vs, "vs"), None, Vec::<VertexLayout>::new(), vec![], None, None).unwrap();
+    let pipe = create::create_graphics_pipeline(&mut d, &mut s, (vs, "vs"), None, Vec::<VertexLayout>::new(), vec![], None, None, 1).unwrap();
     match s.commands().find(|c| matches!(c, Cmd::CreateRenderPipeline(..))).unwrap() {
         Cmd::CreateRenderPipeline(_, desc) => {
             assert!(desc.color_targets.is_empty());
@@ -515,7 +515,7 @@ fn multiple_sets_get_distinct_set_indices_from_first_set() {
 fn separate_image_and_sampler_writes_compose_on_one_binding() {
     let mut d = dev();
     let mut s = sink();
-    let img = create::create_image(&mut d, &mut s, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED).unwrap();
+    let img = create::create_image(&mut d, &mut s, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED, 1).unwrap();
     let samp = create::create_sampler(&mut d, &mut s, 1, 1, 1, [0, 0, 0]);
     let img_ir = d.images.get(&img).unwrap().ir_id;
     let samp_ir = d.samplers.get(&samp).unwrap().ir_id;
@@ -550,7 +550,7 @@ fn copy_buffer_to_image_usage_and_bounds_errors() {
     let mut s = sink();
     // src lacks TRANSFER_SRC.
     let bad_src = create::create_buffer(&mut d, &mut s, vk_buffer_usage::UNIFORM_BUFFER, 4096).unwrap();
-    let img = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST).unwrap();
+    let img = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_copy_buffer_to_image(&mut d, cb, bad_src, img, 0, 0, 0, 8, 8), Err(GpuError::Invalid(_))));
@@ -563,8 +563,8 @@ fn copy_buffer_to_image_usage_and_bounds_errors() {
 fn copy_image_format_mismatch_and_self_overlap_rejected() {
     let mut d = dev();
     let mut s = sink();
-    let a = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST).unwrap();
-    let b = create::create_image(&mut d, &mut s, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST).unwrap();
+    let a = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST, 1).unwrap();
+    let b = create::create_image(&mut d, &mut s, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST, 1).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb, false).unwrap();
     // Format mismatch.
@@ -579,8 +579,8 @@ fn copy_image_format_mismatch_and_self_overlap_rejected() {
 fn blit_same_image_rejected_and_zero_extent_rejected() {
     let mut d = dev();
     let mut s = sink();
-    let a = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST).unwrap();
-    let b = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST).unwrap();
+    let a = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST, 1).unwrap();
+    let b = create::create_image(&mut d, &mut s, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_blit_image(&mut d, cb, a, a, (0, 0), (4, 4), (0, 0), (4, 4), true), Err(GpuError::Invalid(_))));
@@ -635,7 +635,7 @@ fn update_buffer_size_limits() {
 fn clear_color_image_requires_copy_dst() {
     let mut d = dev();
     let mut s = sink();
-    let img = create::create_image(&mut d, &mut s, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED).unwrap();
+    let img = create::create_image(&mut d, &mut s, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED, 1).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb, false).unwrap();
     assert!(matches!(record::cmd_clear_color_image(&mut d, cb, img, [1.0; 4]), Err(GpuError::Invalid(_))));
@@ -702,7 +702,7 @@ fn push_constants_alignment_rules() {
 fn pipeline_barrier_records_known_and_skips_unknown() {
     let mut d = dev();
     let mut s = sink();
-    let img = create::create_image(&mut d, &mut s, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT).unwrap();
+    let img = create::create_image(&mut d, &mut s, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT, 1).unwrap();
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb, false).unwrap();
     // Known image: layout recorded; unknown image: skipped (no panic, no entry).
@@ -1031,7 +1031,7 @@ fn execute_commands_requires_recording_primary_and_executable_secondaries() {
 fn image_subresource_layout_and_unknown() {
     let mut d = dev();
     let mut s = sink();
-    let img = create::create_image(&mut d, &mut s, 10, 6, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST).unwrap();
+    let img = create::create_image(&mut d, &mut s, 10, 6, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1).unwrap();
     let layout = create::image_subresource_layout(&d, img).unwrap();
     assert_eq!(layout.offset, 0);
     assert_eq!(layout.row_pitch, 40); // width*4

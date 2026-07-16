@@ -86,7 +86,7 @@ fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
 
         // Color render target (RGBA8) + a D32 depth image that is BOTH a depth attachment and a
         // transfer-clear target (DEPTH_STENCIL_ATTACHMENT ⇒ RENDER_TARGET, TRANSFER_DST ⇒ COPY_DST).
-        let target = create::create_image(&mut d, &mut sink, W, H, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT).unwrap();
+        let target = create::create_image(&mut d, &mut sink, W, H, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT, 1).unwrap();
         let target_ir = d.images.get(&target).unwrap().ir_id;
         let depth = create::create_image(
             &mut d,
@@ -94,7 +94,7 @@ fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
             W,
             H,
             vk_format::D32_SFLOAT,
-            vk_image_usage::DEPTH_STENCIL_ATTACHMENT | vk_image_usage::TRANSFER_DST,
+            vk_image_usage::DEPTH_STENCIL_ATTACHMENT | vk_image_usage::TRANSFER_DST, 1
         )
         .unwrap();
 
@@ -120,7 +120,7 @@ fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
             vec![layout],
             vec![TextureFormat::Rgba8Unorm],
             Some(depth_state),
-            None,
+            None, 1
         )
         .unwrap();
 
@@ -204,7 +204,7 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
         W,
         H,
         vk_format::R8G8B8A8_UNORM,
-        vk_image_usage::COLOR_ATTACHMENT,
+        vk_image_usage::COLOR_ATTACHMENT, 1
     )
     .unwrap();
     let target_ir = d.images.get(&target).unwrap().ir_id;
@@ -234,7 +234,7 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
         vec![layout],
         vec![TextureFormat::Rgba8Unorm],
         None,
-        None,
+        None, 1
     )
     .unwrap();
 

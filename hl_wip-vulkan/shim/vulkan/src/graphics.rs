@@ -81,6 +81,9 @@ pub extern "C" fn vkCreateImage(
             ci.extent.height.max(1),
             ci.format as u32,
             ci.usage,
+            // `VkImageCreateInfo::samples` is a `VkSampleCountFlagBits` whose bit VALUE is the sample count.
+            // `create::create_image` collapses 0 to single-sample, so an absent field stays byte-identical.
+            ci.samples as u32,
         ) {
             Ok(h) => {
                 if !p_image.is_null() {
@@ -561,6 +564,20 @@ fn parse_color_blend_state(p_color_blend_state: *const c_void) -> Option<BlendSt
     })
 }
 
+/// Read a `VkPipelineMultisampleStateCreateInfo`'s `rasterizationSamples` as the pipeline's multisample
+/// count. `rasterizationSamples` is a `VkSampleCountFlagBits` whose bit VALUE is the count itself
+/// (`_1_BIT`=1, `_2_BIT`=2, `_4_BIT`=4, `_8_BIT`=8, …), so the value is returned verbatim. A null pointer
+/// (a pipeline with no multisample state — spec-legal for a rasterization-discard pipeline) or a `0`/`_1_BIT`
+/// count folds to `1` (single-sample), keeping an existing non-MSAA pipeline byte-identical. Without this
+/// the sample count was dropped (`sample_count: 1` hardcoded) and an MSAA pipeline rasterized single-sampled.
+fn parse_multisample_samples(p_multisample_state: *const c_void) -> u32 {
+    let Some(ms) = (unsafe { (p_multisample_state as *const VkPipelineMultisampleStateCreateInfo).as_ref() })
+    else {
+        return 1;
+    };
+    (ms.rasterization_samples as u32).max(1)
+}
+
 #[no_mangle]
 pub extern "C" fn vkCreateGraphicsPipelines(
     _device: *mut c_void,
@@ -638,9 +655,12 @@ pub extern "C" fn vkCreateGraphicsPipelines(
         // preserving the pre-blend behavior.
         let blend = parse_color_blend_state(ci.p_color_blend_state);
 
+        // Multisample state: rasterizationSamples → the pipeline's MSAA count. Null / _1_BIT => single-sample.
+        let sample_count = parse_multisample_samples(ci.p_multisample_state);
+
         let r = dev_sink(|dev, sink| {
             let frag = fragment.as_ref().map(|(m, e)| (*m, e.as_str()));
-            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth, blend)
+            create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth, blend, sample_count)
         })
         .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkCreateGraphicsPipelines: no device")));
         match r {

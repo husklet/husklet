@@ -59,6 +59,10 @@ pub struct ImageRec {
     pub format: TextureFormat,
     /// hl-GPU `texture_usage` bits (translated from `VkImageUsageFlags`).
     pub usage: u32,
+    /// Multisample count (`VkSampleCountFlagBits` → the count: 1/2/4/8/…). `1` for a single-sample image.
+    /// A `vkCmdResolveImage` whose SOURCE carries `sample_count > 1` lowers to a true `Enc::ResolveTexture`
+    /// (a multisample resolve); a single-sample source is a same-extent copy — see `record::cmd_resolve_image`.
+    pub sample_count: u32,
     pub is_render_target: bool,
 }
 

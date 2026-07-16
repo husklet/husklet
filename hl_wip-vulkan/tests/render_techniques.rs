@@ -8,12 +8,14 @@
 //! shipping ICD marshals into) against a `RecordingSink`, and asserts the exact `Enc` IR — the
 //! `BeginRenderPass` color/depth attachments, the pipeline/draw ops, and the cross-pass sampler bindings.
 //!
-//! Two techniques are DOCUMENTED LIMITS of the VK→IR lowering (not bugs, and not fixable here):
-//!   * MSAA sample count — `vkCreateImage` models every image as single-sample (`sample_count: 1`), so a
-//!     multisample resolve lowers to a same-extent content-moving COPY, not `Enc::ResolveTexture`. The
-//!     executor (owned by a concurrent agent) *does* support true MSAA (`TextureDesc.sample_count` +
-//!     `Enc::ResolveTexture`), but the VK create path deliberately drops `VkSampleCountFlagBits`. See
-//!     `msaa_resolve_pass_lowers_to_content_moving_copy`.
+//! MSAA is now threaded end to end (#240): `vkCreateImage` maps `VkImageCreateInfo::samples` →
+//! `TextureDesc.sample_count` and `vkCreateGraphicsPipelines` maps
+//! `VkPipelineMultisampleStateCreateInfo::rasterizationSamples` → `RenderPipelineDesc.sample_count`, so a
+//! multisample `vkCmdResolveImage` lowers to the executor's real `Enc::ResolveTexture` (#179) — averaging
+//! the samples — while a single-sample resolve stays a same-extent content-moving COPY. See
+//! `msaa_resolve_pass_lowers_to_a_real_resolve` and `single_sample_resolve_still_lowers_to_a_copy`.
+//!
+//! One technique remains a DOCUMENTED LIMIT of the VK→IR lowering (not a bug, and not fixable here):
 //!   * Render-to-layer / render-to-mip — the IR `ColorAttachment`/`DepthAttachment` carry only a whole
 //!     `texture` id (no mip/layer subresource selector), and `vkCreateImage` models single-mip
 //!     (`mip_levels: 1`) single-layer (`depth: 1`) 2D images. Selecting a layer/mip as a render target is
@@ -55,20 +57,32 @@ fn samp_ir(d: &Device, h: u64) -> u32 {
 
 /// A `SAMPLED | COLOR_ATTACHMENT` render-then-sample color texture (the G-buffer / ping-pong workhorse).
 fn sampled_color(d: &mut Device, sink: &mut RecordingSink, w: u32, h: u32) -> u64 {
-    create::create_image(d, sink, w, h, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::SAMPLED).unwrap()
+    create::create_image(d, sink, w, h, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::SAMPLED, 1).unwrap()
 }
 
-/// A minimal graphics pipeline over `color_formats` (+ optional depth), reusing the passthrough SPIR-V vs/fs.
+/// A minimal single-sample graphics pipeline over `color_formats` (+ optional depth).
 fn pipeline(
     d: &mut Device,
     sink: &mut RecordingSink,
     color_formats: Vec<TextureFormat>,
     depth: Option<DepthState>,
 ) -> u64 {
+    pipeline_samples(d, sink, color_formats, depth, 1)
+}
+
+/// A minimal graphics pipeline over `color_formats` (+ optional depth) at `sample_count`, reusing the
+/// passthrough SPIR-V vs/fs. `sample_count > 1` yields a multisample pipeline (`RenderPipelineDesc.sample_count`).
+fn pipeline_samples(
+    d: &mut Device,
+    sink: &mut RecordingSink,
+    color_formats: Vec<TextureFormat>,
+    depth: Option<DepthState>,
+    sample_count: u32,
+) -> u64 {
     use hl_vulkan::adapter::spirv;
     let vs = create::create_shader_module_words(d, sink, spirv::sample_compute_spirv("vsmain")).unwrap();
     let fs = create::create_shader_module_words(d, sink, spirv::sample_compute_spirv("fsmain")).unwrap();
-    create::create_graphics_pipeline(d, sink, (vs, "vsmain"), Some((fs, "fsmain")), vec![], color_formats, depth, None)
+    create::create_graphics_pipeline(d, sink, (vs, "vsmain"), Some((fs, "fsmain")), vec![], color_formats, depth, None, sample_count)
         .unwrap()
 }
 
@@ -243,7 +257,7 @@ fn shadow_mapping_depth_only_pass_then_samples_depth_map() {
         1024,
         1024,
         vk_format::D32_SFLOAT,
-        vk_image_usage::DEPTH_STENCIL_ATTACHMENT | vk_image_usage::SAMPLED,
+        vk_image_usage::DEPTH_STENCIL_ATTACHMENT | vk_image_usage::SAMPLED, 1
     )
     .unwrap();
     let shadow_ir = img_ir(&d, shadow);
@@ -381,27 +395,29 @@ fn post_process_chain_ping_pongs_sampler_and_target() {
 }
 
 // ===================================================================================================
-// 4. MSAA RESOLVE — a color pass + a resolve into a single-sample texture (DOCUMENTED single-sample limit).
+// 4. MSAA RESOLVE — a real multisample color pass resolved into a single-sample texture (#240).
 // ===================================================================================================
 
-/// A multisample-style pass renders into a color target, then `vkCmdResolveImage` resolves it into a
-/// single-sample texture. Because `vkCreateImage` models every image as single-sample (`sample_count: 1`),
-/// the resolve lowers to a same-extent content-MOVING `CopyTextureToTexture` (a same-region copy), NOT
-/// `Enc::ResolveTexture`. This test asserts that honest lowering AND documents the single-sample model by
-/// asserting both textures' `CreateTexture` descs carry `sample_count == 1`.
+/// A 4x-MSAA pass renders into a multisampled color target, then `vkCmdResolveImage` resolves it into a
+/// single-sample texture. The VK create path now threads `VkImageCreateInfo::samples` →
+/// `TextureDesc.sample_count` and `VkPipelineMultisampleStateCreateInfo::rasterizationSamples` →
+/// `RenderPipelineDesc.sample_count` (#240), so the multisampled source materializes as a real MSAA texture
+/// and the resolve lowers to the executor's TRUE `Enc::ResolveTexture` (#179) — averaging the samples — NOT
+/// a same-extent copy (which would drop the antialiasing). This test asserts the threaded sample counts AND
+/// that the resolve emits `ResolveTexture`.
 #[test]
-fn msaa_resolve_pass_lowers_to_content_moving_copy() {
-    use hl_gpu::protocol::model::descriptor::{Extent3d, Origin3d, TextureSubresource};
+fn msaa_resolve_pass_lowers_to_a_real_resolve() {
+    use hl_gpu::protocol::model::descriptor::{Extent3d, Origin3d, RenderPipelineDesc, TextureSubresource};
 
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
 
-    // The "MSAA" color target (also TRANSFER_SRC so it can be resolved) and the single-sample resolve dest.
-    let msaa = create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::TRANSFER_SRC).unwrap();
-    let resolve = create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST | vk_image_usage::SAMPLED).unwrap();
+    // The 4x-MSAA color target (also TRANSFER_SRC so it can be resolved) and the single-sample resolve dest.
+    let msaa = create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::TRANSFER_SRC, 4).unwrap();
+    let resolve = create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST | vk_image_usage::SAMPLED, 1).unwrap();
     let (msaa_ir, resolve_ir) = (img_ir(&d, msaa), img_ir(&d, resolve));
 
-    // DOCUMENTED LIMIT: both textures are single-sample (the VK layer drops VkSampleCountFlagBits).
+    // The MSAA source materializes at sample_count == 4; the resolve dest stays single-sample.
     let sample_counts: Vec<(u32, u32)> = sink
         .batches
         .iter()
@@ -412,9 +428,25 @@ fn msaa_resolve_pass_lowers_to_content_moving_copy() {
         })
         .collect();
     assert_eq!(sample_counts.len(), 2);
-    assert!(sample_counts.iter().all(|(_, sc)| *sc == 1), "vkCreateImage models single-sample textures, got {sample_counts:?}");
+    assert_eq!(sample_counts.iter().find(|(id, _)| *id == msaa_ir).unwrap().1, 4, "MSAA src threads sample_count == 4");
+    assert_eq!(sample_counts.iter().find(|(id, _)| *id == resolve_ir).unwrap().1, 1, "resolve dst is single-sample");
 
-    let pipe = pipeline(&mut d, &mut sink, vec![TextureFormat::Rgba8Unorm], None);
+    // A 4x-MSAA graphics pipeline: its RenderPipelineDesc must carry sample_count == 4.
+    let pipe = pipeline_samples(&mut d, &mut sink, vec![TextureFormat::Rgba8Unorm], None, 4);
+    let pipe_ir = d.pipelines.get(&pipe).unwrap().ir_id;
+    let pipe_samples = sink
+        .batches
+        .iter()
+        .flatten()
+        .find_map(|c| match c {
+            Cmd::CreateRenderPipeline(id, desc) if *id == pipe_ir => Some({
+                let d: &RenderPipelineDesc = desc;
+                d.sample_count
+            }),
+            _ => None,
+        })
+        .expect("render pipeline CreateRenderPipeline recorded");
+    assert_eq!(pipe_samples, 4, "MSAA pipeline threads RenderPipelineDesc.sample_count == 4");
 
     // ---- One command buffer: render into the MSAA target, then resolve it into the single-sample dest.
     let cb = record::allocate_command_buffer(&mut d);
@@ -434,11 +466,11 @@ fn msaa_resolve_pass_lowers_to_content_moving_copy() {
                 color: vec![ColorAttachment { texture: msaa_ir, load: LoadOp::Clear, clear: [0.2, 0.4, 0.6, 1.0], store: true }],
                 depth: None,
             },
-            Enc::SetPipeline(d.pipelines.get(&pipe).unwrap().ir_id),
+            Enc::SetPipeline(pipe_ir),
             Enc::Draw { vertex_count: 3, instance_count: 1, first_vertex: 0, first_instance: 0 },
             Enc::EndRenderPass,
-            // The resolve MOVES the rendered content into the single-sample target (resolve == copy here).
-            Enc::CopyTextureToTexture {
+            // A multisample source resolves for real: average the samples into the single-sample dest.
+            Enc::ResolveTexture {
                 src: msaa_ir,
                 src_sub: TextureSubresource::base(),
                 src_origin: Origin3d { x: 0, y: 0, z: 0 },
@@ -448,11 +480,48 @@ fn msaa_resolve_pass_lowers_to_content_moving_copy() {
                 extent: Extent3d { width: 64, height: 64, depth: 1 },
             },
         ],
-        "MSAA pass + resolve lowers to the color draw followed by a content-moving copy (single-sample model)"
+        "a 4x-MSAA pass + resolve lowers to the color draw followed by a real ResolveTexture"
     );
-    // NOTE: no Enc::ResolveTexture is emitted — the executor supports it, but the VK create path is
-    // single-sample, so a Vulkan MSAA app's resolve is a same-extent copy (documented in this file's header).
-    assert!(!enc.iter().any(|e| matches!(e, Enc::ResolveTexture { .. })), "single-sample model emits a copy, not a ResolveTexture");
+    assert!(
+        !enc.iter().any(|e| matches!(e, Enc::CopyTextureToTexture { .. })),
+        "a multisample resolve is a ResolveTexture, never a copy"
+    );
+}
+
+/// A single-sample source resolves as a same-extent content-MOVING copy — the resolve degenerates to
+/// `CopyTextureToTexture` (a legit no-op/move), NOT `Enc::ResolveTexture`. This pins that a non-MSAA app's
+/// `vkCmdResolveImage` is byte-identical to the pre-#240 copy lowering.
+#[test]
+fn single_sample_resolve_still_lowers_to_a_copy() {
+    use hl_gpu::protocol::model::descriptor::{Extent3d, Origin3d, TextureSubresource};
+
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+
+    let src = create::create_image(&mut d, &mut sink, 32, 32, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::TRANSFER_SRC, 1).unwrap();
+    let dst = create::create_image(&mut d, &mut sink, 32, 32, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST | vk_image_usage::SAMPLED, 1).unwrap();
+    let (src_ir, dst_ir) = (img_ir(&d, src), img_ir(&d, dst));
+
+    let cb = record::allocate_command_buffer(&mut d);
+    record::begin(&mut d, cb, false).unwrap();
+    record::cmd_resolve_image(&mut d, cb, src, dst, (0, 0), (0, 0), (32, 32)).unwrap();
+    record::end(&mut d, cb).unwrap();
+    let enc = submit_encoder(&mut d, &mut sink, cb);
+
+    assert_eq!(
+        enc,
+        vec![Enc::CopyTextureToTexture {
+            src: src_ir,
+            src_sub: TextureSubresource::base(),
+            src_origin: Origin3d { x: 0, y: 0, z: 0 },
+            dst: dst_ir,
+            dst_sub: TextureSubresource::base(),
+            dst_origin: Origin3d { x: 0, y: 0, z: 0 },
+            extent: Extent3d { width: 32, height: 32, depth: 1 },
+        }],
+        "a single-sample resolve is a content-moving copy"
+    );
+    assert!(!enc.iter().any(|e| matches!(e, Enc::ResolveTexture { .. })), "single-sample source emits a copy, not a ResolveTexture");
 }
 
 // ===================================================================================================

@@ -132,7 +132,7 @@ pub fn create_swapchain(
         let handle = dev.alloc_handle();
         dev.images.insert(
             handle,
-            ImageRec { ir_id: ir_texture_id, width, height, format, usage, is_render_target: true },
+            ImageRec { ir_id: ir_texture_id, width, height, format, usage, sample_count: 1, is_render_target: true },
         );
         images.push(SwapImage { ir_texture_id, handle, state: ImageState::Available });
     }

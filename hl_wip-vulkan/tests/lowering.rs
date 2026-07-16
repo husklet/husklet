@@ -120,12 +120,28 @@ fn create_image_emits_create_texture() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let usage = vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::SAMPLED;
-    create::create_image(&mut d, &mut sink, 256, 128, vk_format::B8G8R8A8_UNORM, usage).unwrap();
+    create::create_image(&mut d, &mut sink, 256, 128, vk_format::B8G8R8A8_UNORM, usage, 1).unwrap();
     match &sink.batches[0][0] {
         Cmd::CreateTexture(id, desc) => {
             assert_eq!(*id, 1);
             assert_eq!((desc.width, desc.height), (256, 128));
             assert_eq!(desc.format, TextureFormat::Bgra8Unorm);
+            assert_eq!(desc.sample_count, 1, "a samples=_1_BIT image is single-sample");
+        }
+        other => panic!("expected CreateTexture, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_image_threads_multisample_count() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    // VkSampleCountFlagBits value IS the count: _4_BIT == 4.
+    let usage = vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::TRANSFER_SRC;
+    create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, usage, 4).unwrap();
+    match &sink.batches[0][0] {
+        Cmd::CreateTexture(_, desc) => {
+            assert_eq!(desc.sample_count, 4, "VkImageCreateInfo::samples=_4_BIT threads to sample_count == 4");
         }
         other => panic!("expected CreateTexture, got {other:?}"),
     }
@@ -205,7 +221,7 @@ fn graphics_pipeline_emits_create_render_pipeline() {
         vec![pos_color_layout()],
         vec![TextureFormat::Bgra8Unorm],
         None,
-        None,
+        None, 1
     )
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
@@ -216,6 +232,36 @@ fn graphics_pipeline_emits_create_render_pipeline() {
             assert_eq!(desc.vertex_buffers.len(), 1);
             assert_eq!(desc.vertex_buffers[0].stride, 24);
             assert_eq!(desc.vertex_buffers[0].attrs.len(), 2);
+            assert_eq!(desc.sample_count, 1, "a rasterizationSamples=_1_BIT pipeline is single-sample");
+        }
+        other => panic!("expected CreateRenderPipeline, got {other:?}"),
+    }
+}
+
+#[test]
+fn graphics_pipeline_threads_multisample_count() {
+    let mut d = dev();
+    let mut sink = RecordingSink::with_full_caps();
+    let vs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("vsmain"))
+        .unwrap();
+    let fs = create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("fsmain"))
+        .unwrap();
+    // A 4x-MSAA pipeline (VkPipelineMultisampleStateCreateInfo::rasterizationSamples == _4_BIT).
+    create::create_graphics_pipeline(
+        &mut d,
+        &mut sink,
+        (vs, "vsmain"),
+        Some((fs, "fsmain")),
+        vec![pos_color_layout()],
+        vec![TextureFormat::Bgra8Unorm],
+        None,
+        None,
+        4,
+    )
+    .unwrap();
+    match sink.batches.last().unwrap().as_slice() {
+        [Cmd::CreateRenderPipeline(_, desc)] => {
+            assert_eq!(desc.sample_count, 4, "rasterizationSamples=_4_BIT threads to sample_count == 4");
         }
         other => panic!("expected CreateRenderPipeline, got {other:?}"),
     }
@@ -241,7 +287,7 @@ fn dynamic_rendering_pipeline_takes_color_formats_from_pnext_no_render_pass() {
         vec![pos_color_layout()],
         vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
         None,
-        None,
+        None, 1
     )
     .unwrap();
     match sink.batches.last().unwrap().as_slice() {
@@ -270,7 +316,7 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
         64,
         64,
         vk_format::R8G8B8A8_UNORM,
-        vk_image_usage::COLOR_ATTACHMENT,
+        vk_image_usage::COLOR_ATTACHMENT, 1
     )
     .unwrap();
     let vs =
@@ -285,7 +331,7 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
         vec![pos_color_layout()],
         vec![TextureFormat::Rgba8Unorm],
         None,
-        None,
+        None, 1
     )
     .unwrap();
 
@@ -347,7 +393,7 @@ fn begin_rendering_lowers_to_begin_render_pass_with_clear_attachment() {
         128,
         128,
         vk_format::B8G8R8A8_UNORM,
-        vk_image_usage::COLOR_ATTACHMENT,
+        vk_image_usage::COLOR_ATTACHMENT, 1
     )
     .unwrap();
     let ir = img_ir(&d, target);
@@ -524,7 +570,7 @@ fn combined_image_sampler_descriptor_lowers_to_texture_and_sampler_binds() {
 
     // A sampled image (ir 1) + a sampler (ir 2).
     let image =
-        create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED).unwrap();
+        create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED, 1).unwrap();
     let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
 
     // A set with a single COMBINED_IMAGE_SAMPLER binding at binding 0.
@@ -571,7 +617,7 @@ fn separate_sampled_image_and_sampler_descriptors_lower_at_their_own_bindings() 
     let mut sink = RecordingSink::with_full_caps();
 
     let image =
-        create::create_image(&mut d, &mut sink, 32, 32, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED).unwrap();
+        create::create_image(&mut d, &mut sink, 32, 32, vk_format::R8G8B8A8_UNORM, vk_image_usage::SAMPLED, 1).unwrap();
     let sampler = create::create_sampler(&mut d, &mut sink, 0, 0, 0, [0, 0, 0]);
 
     // A SAMPLED_IMAGE at binding 0 and a separate SAMPLER at binding 1.
@@ -979,7 +1025,7 @@ fn copy_buffer_to_image_lowers_to_copy_buffer_to_texture() {
     // A 4x4 RGBA8 target: tight-packed bytes_per_row = 4*4 = 16; span = 16*3 + 16 = 64.
     let src = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_SRC, 64).unwrap();
     let dst =
-        create::create_image(&mut d, &mut sink, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+        create::create_image(&mut d, &mut sink, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1)
             .unwrap();
     let (s, t) = (buf_ir(&d, src), img_ir(&d, dst));
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
@@ -996,7 +1042,7 @@ fn copy_image_to_buffer_lowers_to_copy_texture_to_buffer() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let src =
-        create::create_image(&mut d, &mut sink, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC)
+        create::create_image(&mut d, &mut sink, 4, 4, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC, 1)
             .unwrap();
     let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
     let (s, t) = (img_ir(&d, src), buf_ir(&d, dst));
@@ -1014,10 +1060,10 @@ fn copy_image_lowers_to_copy_texture_to_texture() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let src =
-        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC)
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC, 1)
             .unwrap();
     let dst =
-        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1)
             .unwrap();
     let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
@@ -1037,7 +1083,7 @@ fn copy_image_lowers_to_copy_texture_to_texture() {
     );
     // Copy-compatible-format rejection: differing formats are a typed error, not a silent mis-copy.
     let other =
-        create::create_image(&mut d, &mut sink, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST)
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST, 1)
             .unwrap();
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb, false).unwrap();
@@ -1051,10 +1097,10 @@ fn resolve_image_lowers_to_copy_texture_to_texture() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let src =
-        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC)
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC, 1)
             .unwrap();
     let dst =
-        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1)
             .unwrap();
     let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
@@ -1079,7 +1125,7 @@ fn resolve_image_lowers_to_copy_texture_to_texture() {
     assert_eq!(enc, copy, "a single-sample resolve must lower to its copy twin");
     // Truthful failure paths are inherited from cmd_copy_image: a missing-usage / format-mismatch target.
     let bad =
-        create::create_image(&mut d, &mut sink, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST)
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::B8G8R8A8_UNORM, vk_image_usage::TRANSFER_DST, 1)
             .unwrap();
     let cb = record::allocate_command_buffer(&mut d);
     record::begin(&mut d, cb, false).unwrap();
@@ -1091,10 +1137,10 @@ fn blit_image_lowers_to_blit_texture_with_filter() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let src =
-        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC)
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_SRC, 1)
             .unwrap();
     let dst =
-        create::create_image(&mut d, &mut sink, 16, 16, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+        create::create_image(&mut d, &mut sink, 16, 16, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1)
             .unwrap();
     let (s, t) = (img_ir(&d, src), img_ir(&d, dst));
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
@@ -1122,7 +1168,7 @@ fn clear_color_image_lowers_to_full_extent_clear_rect() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let img =
-        create::create_image(&mut d, &mut sink, 32, 16, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+        create::create_image(&mut d, &mut sink, 32, 16, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1)
             .unwrap();
     let ir = img_ir(&d, img);
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
@@ -1140,7 +1186,7 @@ fn clear_depth_stencil_image_lowers_to_depth_clear_render_pass() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let usage = vk_image_usage::DEPTH_STENCIL_ATTACHMENT | vk_image_usage::TRANSFER_DST;
-    let img = create::create_image(&mut d, &mut sink, 16, 16, vk_format::D32_SFLOAT, usage).unwrap();
+    let img = create::create_image(&mut d, &mut sink, 16, 16, vk_format::D32_SFLOAT, usage, 1).unwrap();
     let ir = img_ir(&d, img);
     // Depth-only aspect (has_stencil = false): a zero-draw BeginRenderPass(depth CLEAR) / EndRenderPass.
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
@@ -1159,7 +1205,7 @@ fn clear_depth_stencil_image_lowers_to_depth_clear_render_pass() {
     );
 
     // A combined depth+stencil image with the stencil aspect selected carries the stencil clear value.
-    let ds = create::create_image(&mut d, &mut sink, 8, 8, vk_format::D24_UNORM_S8_UINT, usage).unwrap();
+    let ds = create::create_image(&mut d, &mut sink, 8, 8, vk_format::D24_UNORM_S8_UINT, usage, 1).unwrap();
     let ds_ir = img_ir(&d, ds);
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
         record::cmd_clear_depth_stencil_image(d, cb, ds, 1.0, 0x2a, true).unwrap();
@@ -1182,14 +1228,14 @@ fn clear_depth_stencil_image_lowers_to_depth_clear_render_pass() {
     );
 
     // Truthful errors: a color image is not a depth format; missing TRANSFER_DST usage is rejected.
-    let color = create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, usage).unwrap();
+    let color = create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, usage, 1).unwrap();
     let no_dst = create::create_image(
         &mut d,
         &mut sink,
         8,
         8,
         vk_format::D32_SFLOAT,
-        vk_image_usage::DEPTH_STENCIL_ATTACHMENT,
+        vk_image_usage::DEPTH_STENCIL_ATTACHMENT, 1
     )
     .unwrap();
     let cb = record::allocate_command_buffer(&mut d);
@@ -1204,7 +1250,7 @@ fn clear_attachments_lowers_to_clear_rect_on_active_target() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let target =
-        create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT)
+        create::create_image(&mut d, &mut sink, 64, 64, vk_format::R8G8B8A8_UNORM, vk_image_usage::COLOR_ATTACHMENT, 1)
             .unwrap();
     let ir = img_ir(&d, target);
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
@@ -1495,7 +1541,7 @@ fn pipeline_barrier_records_layout_transition_and_emits_no_ir() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let img =
-        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST)
+        create::create_image(&mut d, &mut sink, 8, 8, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1)
             .unwrap();
     // VK_IMAGE_LAYOUT_UNDEFINED (0) -> VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL (7).
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
@@ -1605,7 +1651,7 @@ fn occlusion_query_counts_scissor_clipped_coverage() {
         64,
         64,
         vk_format::R8G8B8A8_UNORM,
-        vk_image_usage::COLOR_ATTACHMENT,
+        vk_image_usage::COLOR_ATTACHMENT, 1
     )
     .unwrap();
     // A 2-slot OCCLUSION pool (VkQueryType OCCLUSION = 0).
@@ -1646,7 +1692,7 @@ fn occlusion_query_zero_when_fully_scissored_or_no_draw() {
         64,
         64,
         vk_format::R8G8B8A8_UNORM,
-        vk_image_usage::COLOR_ATTACHMENT,
+        vk_image_usage::COLOR_ATTACHMENT, 1
     )
     .unwrap();
     let pool = sync::create_query_pool(&mut d, 0, 2).unwrap();
@@ -1884,7 +1930,7 @@ fn surface_queries_report_modeled_values() {
 fn image_subresource_layout_reports_linear_rgba8_layout() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    let img = create::create_image(&mut d, &mut sink, 64, 32, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST).unwrap();
+    let img = create::create_image(&mut d, &mut sink, 64, 32, vk_format::R8G8B8A8_UNORM, vk_image_usage::TRANSFER_DST, 1).unwrap();
     let l = create::image_subresource_layout(&d, img).unwrap();
     assert_eq!(l.offset, 0);
     assert_eq!(l.row_pitch, 64 * 4); // width * 4 bytes/texel
