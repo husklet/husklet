@@ -1,0 +1,1979 @@
+//! Command-buffer recording — the `vkCmd*` → [`Enc`] lowering, plus the descriptor-set → bind-group
+//! lowering `vkCmdBindDescriptorSets` performs.
+//!
+//! Ported from `hl-shim-vk/src/command.rs`. Each `vkCmd*` appends the encoder op(s) it lowers to onto
+//! the target command buffer's recording; `vkQueueSubmit` ([`super::submit`]) ships the recorded
+//! encoder as one [`hl_gpu::Cmd::Submit`]. The one command that emits a resource-level `Cmd` while
+//! recording is `vkCmdBindDescriptorSets`: it resolves each set's `binding -> buffer` table into a
+//! [`Cmd::CreateBindGroup`] (dynamic offsets applied here) and remembers the `(set, bind-group)` pair
+//! to replay into the next pass.
+
+use crate::model::command::{CmdBufRec, CommandBufferState};
+use crate::model::sync::DeferredOp;
+use crate::*;
+use hl_gpu::protocol::model::command::Enc;
+use hl_gpu::protocol::model::descriptor::{
+    BindEntry, BindGroupDesc, BindResource, ColorAttachment, DepthAttachment, Extent3d, Origin3d,
+    TextureSubresource,
+};
+use hl_gpu::protocol::model::enums::{
+    buffer_usage, texture_usage, Filter, IndexFormat, LoadOp, TextureFormat,
+};
+use hl_gpu::{Cmd, CommandSink, GpuError, Result};
+use std::collections::HashMap;
+
+/// The bind-group offset the sampler half of a split `COMBINED_IMAGE_SAMPLER` is placed at: the image keeps
+/// the descriptor's Vulkan binding `B`, the sampler goes to `B + SAMPLER_BINDING_OFFSET`. MUST equal
+/// `hl-gpu-wgpu::spirv_split::SAMPLER_BINDING_OFFSET` — the executor rewrites glslang's combined
+/// `sampler2D` into a separate texture + sampler at exactly these bindings, and this is where the driver
+/// binds the matching resources. (Duplicated, not shared, because the two crates only share the protocol.)
+const SAMPLER_BINDING_OFFSET: u32 = 16;
+
+/// `vkAllocateCommandBuffers` (one buffer) — mint an `Initial` command buffer.
+pub fn allocate_command_buffer(dev: &mut Device) -> VkCommandBuffer {
+    let handle = dev.alloc_handle();
+    dev.command_buffers.insert(handle, CmdBufRec::initial());
+    handle
+}
+
+/// `vkBeginCommandBuffer` — move the buffer to `Recording` and clear any prior recording. `one_time_submit`
+/// records `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT`: a one-time buffer is not resubmittable, whereas a
+/// buffer without it returns to `Executable` after its (synchronous) submit completes so it can be
+/// re-submitted every frame (the standard vkcube per-image draw pattern).
+pub fn begin(dev: &mut Device, cb: VkCommandBuffer, one_time_submit: bool) -> Result<()> {
+    let rec = dev.command_buffers.get_mut(&cb).ok_or(GpuError::Invalid(
+        "vkBeginCommandBuffer: unknown VkCommandBuffer",
+    ))?;
+    rec.reset_recording();
+    rec.one_time_submit = one_time_submit;
+    rec.state = CommandBufferState::Recording;
+    Ok(())
+}
+
+/// `vkEndCommandBuffer` — move the buffer to `Executable` (submittable).
+pub fn end(dev: &mut Device, cb: VkCommandBuffer) -> Result<()> {
+    let rec = dev.command_buffers.get_mut(&cb).ok_or(GpuError::Invalid(
+        "vkEndCommandBuffer: unknown VkCommandBuffer",
+    ))?;
+    if rec.state != CommandBufferState::Recording {
+        return Err(GpuError::Invalid(
+            "vkEndCommandBuffer: buffer is not recording",
+        ));
+    }
+    rec.state = CommandBufferState::Executable;
+    Ok(())
+}
+
+/// Borrow a command buffer ONLY if it is `Recording` (the Vulkan rule that a `vkCmd*` outside an active
+/// begin/end is invalid). Ported from `VkState::recording_mut`.
+fn recording_mut<'a>(dev: &'a mut Device, cb: VkCommandBuffer) -> Result<&'a mut CmdBufRec> {
+    match dev.command_buffers.get_mut(&cb) {
+        Some(r) if r.state == CommandBufferState::Recording => Ok(r),
+        _ => Err(GpuError::Invalid("vkCmd*: command buffer is not recording")),
+    }
+}
+
+/// `vkCmdBindPipeline` — remember the bound hl-GPU pipeline id + kind for the next pass.
+pub fn cmd_bind_pipeline(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    pipeline: VkPipeline,
+) -> Result<()> {
+    let (ir, kind) = {
+        let p = dev
+            .pipelines
+            .get(&pipeline)
+            .ok_or(GpuError::Invalid("vkCmdBindPipeline: unknown VkPipeline"))?;
+        (p.ir_id, p.kind)
+    };
+    let rec = recording_mut(dev, cb)?;
+    rec.bound_pipeline = Some(ir);
+    rec.bound_pipeline_kind = Some(kind);
+    Ok(())
+}
+
+/// `vkCmdBindDescriptorSets` — resolve each set's `binding -> (buffer, offset, range)` table into a
+/// [`Cmd::CreateBindGroup`] (applying that set's `pDynamicOffsets`) and record the `(set, bind-group)`
+/// pair to replay into the next pass. Ported from `command.rs::vkCmdBindDescriptorSets`.
+pub fn cmd_bind_descriptor_sets(
+    dev: &mut Device,
+    sink: &mut dyn CommandSink,
+    cb: VkCommandBuffer,
+    first_set: u32,
+    sets: &[VkDescriptorSet],
+    dynamic_offsets: &[u32],
+) -> Result<()> {
+    let mut dyn_cursor = 0usize; // global cursor across all bound sets
+    for (i, &dset) in sets.iter().enumerate() {
+        // Saturating add: a hostile `first_set` near `u32::MAX` with >1 set must not overflow the set
+        // index (it is only a bind-group label here; a real firstSet is bounded by maxBoundDescriptorSets).
+        let set_index = first_set.saturating_add(i as u32);
+        // Snapshot the set's (binding -> buffer) table + its layout handle (owned; borrows end here).
+        let Some(rec) = dev.descriptor_sets.get(&dset) else {
+            continue;
+        };
+        let layout_handle = rec.layout;
+        let mut pairs: Vec<(u32, (VkBuffer, u64, u64))> =
+            rec.buffers.iter().map(|(b, v)| (*b, *v)).collect();
+        pairs.sort_by_key(|(b, _)| *b);
+        // Snapshot the set's sampled-image / sampler descriptors (binding-ascending; the borrow of
+        // `rec` ends here so `dev` can be mutated below).
+        let mut img_pairs: Vec<(u32, crate::model::descriptor::ImageBinding)> =
+            rec.images.iter().map(|(b, v)| (*b, *v)).collect();
+        img_pairs.sort_by_key(|(b, _)| *b);
+        // Consume this set's dynamic offsets (its layout's dynamic-buffer bindings, ascending).
+        let dyn_bindings = dev
+            .set_layouts
+            .get(&layout_handle)
+            .map(|l| l.dynamic_bindings())
+            .unwrap_or_default();
+        let mut extra: HashMap<u32, u64> = HashMap::new();
+        for db in dyn_bindings {
+            if dyn_cursor < dynamic_offsets.len() {
+                extra.insert(db, dynamic_offsets[dyn_cursor] as u64);
+                dyn_cursor += 1;
+            }
+        }
+        // Resolve each binding's buffer handle to its hl-GPU id, applying the dynamic offset.
+        let mut entries: Vec<BindEntry> = Vec::new();
+        for (binding, (buf_handle, offset, size)) in pairs {
+            if let Some(b) = dev.buffers.get(&buf_handle) {
+                entries.push(BindEntry {
+                    binding,
+                    resource: BindResource::Buffer {
+                        id: b.ir_id,
+                        offset: offset + extra.get(&binding).copied().unwrap_or(0),
+                        size,
+                    },
+                });
+            }
+        }
+        // Resolve each sampled-image / sampler descriptor to its hl-GPU id: a bound image → a
+        // `BindResource::Texture` and a bound sampler → a `BindResource::Sampler`. A `COMBINED_IMAGE_SAMPLER`
+        // (both set on one binding) must land on TWO DISTINCT bind-group bindings, because the wgpu executor
+        // splits glslang's combined `sampler2D` into a separate `texture_2d` + `sampler` (naga rejects the
+        // combined model): the image keeps binding `B`, the sampler moves to `B + SAMPLER_BINDING_OFFSET`,
+        // matching `hl-gpu-wgpu::spirv_split`. A SEPARATE `SAMPLED_IMAGE`/`SAMPLER` keeps its own binding
+        // (the shader already declares it separately). An unresolvable handle is skipped (never faked).
+        for (binding, img) in img_pairs {
+            let combined = img.image.is_some() && img.sampler.is_some();
+            if let Some(image) = img.image {
+                if let Some(i) = dev.images.get(&image) {
+                    entries.push(BindEntry {
+                        binding,
+                        resource: BindResource::Texture { id: i.ir_id },
+                    });
+                }
+            }
+            if let Some(sampler) = img.sampler {
+                if let Some(s) = dev.samplers.get(&sampler) {
+                    let sampler_binding = if combined {
+                        binding + SAMPLER_BINDING_OFFSET
+                    } else {
+                        binding
+                    };
+                    entries.push(BindEntry {
+                        binding: sampler_binding,
+                        resource: BindResource::Sampler { id: s.ir_id },
+                    });
+                }
+            }
+        }
+        let ir_id = dev.alloc_ir();
+        hl_log::hl_debug!(
+            hl_log::tag::VULKAN,
+            "bindgroup set={} ir={} entries={}",
+            set_index,
+            ir_id,
+            entries.len()
+        );
+        sink.submit(&[Cmd::CreateBindGroup(
+            ir_id,
+            BindGroupDesc {
+                set: set_index,
+                entries,
+            },
+        )])?;
+        if let Ok(cbrec) = recording_mut(dev, cb) {
+            cbrec.pending_bind_groups.push((set_index, ir_id));
+        }
+    }
+    Ok(())
+}
+
+/// `vkCmdDispatch` — record a compute pass: `BeginComputePass` → `SetPipeline` → `SetBindGroup`* →
+/// `Dispatch` → `EndComputePass`. Ported from `command.rs::vkCmdDispatch`.
+pub fn cmd_dispatch(dev: &mut Device, cb: VkCommandBuffer, x: u32, y: u32, z: u32) -> Result<()> {
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    rec.enc.push(Enc::BeginComputePass);
+    if let Some(p) = pipeline {
+        rec.enc.push(Enc::SetPipeline(p));
+    }
+    for (index, group) in groups {
+        rec.enc.push(Enc::SetBindGroup { index, group });
+    }
+    rec.enc.push(Enc::Dispatch { x, y, z });
+    rec.enc.push(Enc::EndComputePass);
+    Ok(())
+}
+
+/// `vkCmdBeginRenderPass` — begin a classic render pass targeting `color_image` with one color attachment
+/// (`Clear` when `load_clear`, else `Load`; always stored), plus an optional `depth` attachment resolved
+/// from the render pass's depth/stencil attachment + the framebuffer's bound depth image view. The depth
+/// path is the exact mirror of the dynamic-rendering [`cmd_begin_rendering`] one — both emit the SAME
+/// [`Enc::BeginRenderPass`] with a real [`DepthAttachment`], so a classic depth-tested pipeline occludes.
+/// Ported from `command.rs::vkCmdBeginRenderPass`.
+pub fn cmd_begin_render_pass(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    color_image: VkImage,
+    clear: [f32; 4],
+    load_clear: bool,
+    depth: Option<RenderingDepthAttachment>,
+) -> Result<()> {
+    let (texture, extent) = {
+        let img = dev.images.get(&color_image).ok_or(GpuError::Invalid(
+            "vkCmdBeginRenderPass: unknown color VkImage",
+        ))?;
+        (img.ir_id, (img.width, img.height))
+    };
+    // Resolve the depth image → ir texture id up front (a bad handle fails before recording), exactly as
+    // the dynamic-rendering path does for its inline pDepthAttachment.
+    let depth_target = match depth {
+        Some(d) => {
+            let depth_tex = dev
+                .images
+                .get(&d.image)
+                .ok_or(GpuError::Invalid(
+                    "vkCmdBeginRenderPass: unknown depth VkImage",
+                ))?
+                .ir_id;
+            Some(DepthAttachment {
+                texture: depth_tex,
+                load: if d.load_clear {
+                    LoadOp::Clear
+                } else {
+                    LoadOp::Load
+                },
+                clear_depth: d.clear_depth,
+                clear_stencil: 0,
+            })
+        }
+        None => None,
+    };
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::BeginRenderPass {
+        color: vec![ColorAttachment {
+            texture,
+            load: if load_clear {
+                LoadOp::Clear
+            } else {
+                LoadOp::Load
+            },
+            clear,
+            store: true,
+        }],
+        depth: depth_target,
+    });
+    rec.in_render_pass = true;
+    rec.active_render_texture = Some(texture);
+    rec.render_extent = extent;
+    rec.scissor = None;
+    Ok(())
+}
+
+/// `vkCmdBindVertexBuffers` (one binding) — record `SetVertexBuffer`.
+pub fn cmd_bind_vertex_buffer(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    slot: u32,
+    buffer: VkBuffer,
+    offset: u64,
+) -> Result<()> {
+    let ir = dev
+        .buffers
+        .get(&buffer)
+        .ok_or(GpuError::Invalid(
+            "vkCmdBindVertexBuffers: unknown VkBuffer",
+        ))?
+        .ir_id;
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::SetVertexBuffer {
+        slot,
+        buffer: ir,
+        offset,
+    });
+    Ok(())
+}
+
+/// `vkCmdBindIndexBuffer` — record `SetIndexBuffer` for the bound index buffer. `vk_index_type` is a raw
+/// `VkIndexType` (`VK_INDEX_TYPE_UINT16` = 0, `VK_INDEX_TYPE_UINT32` = 1).
+pub fn cmd_bind_index_buffer(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    vk_index_type: u32,
+) -> Result<()> {
+    let ir = dev
+        .buffers
+        .get(&buffer)
+        .ok_or(GpuError::Invalid("vkCmdBindIndexBuffer: unknown VkBuffer"))?
+        .ir_id;
+    let format = if vk_index_type == 1 {
+        IndexFormat::U32
+    } else {
+        IndexFormat::U16
+    };
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::SetIndexBuffer {
+        buffer: ir,
+        offset,
+        format,
+    });
+    Ok(())
+}
+
+/// `vkCmdDraw` — replay the bound pipeline + bind groups, then record `Draw`. Ported from
+/// `command.rs::vkCmdDraw`.
+pub fn cmd_draw(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    vertex_count: u32,
+    instance_count: u32,
+    first_vertex: u32,
+    first_instance: u32,
+) -> Result<()> {
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    if let Some(p) = pipeline {
+        rec.enc.push(Enc::SetPipeline(p));
+    }
+    for (index, group) in groups {
+        rec.enc.push(Enc::SetBindGroup { index, group });
+    }
+    rec.enc.push(Enc::Draw {
+        vertex_count,
+        instance_count,
+        first_vertex,
+        first_instance,
+    });
+    accumulate_occlusion(rec, instance_count);
+    Ok(())
+}
+
+/// If an OCCLUSION query is open on this command buffer, add the draw's scissor-clipped sample footprint
+/// to its running total (see [`CmdBufRec::occlusion_coverage`]).
+fn accumulate_occlusion(rec: &mut CmdBufRec, instance_count: u32) {
+    if rec.occlusion_accum.is_some() {
+        let cov = rec.occlusion_coverage(instance_count);
+        if let Some(acc) = rec.occlusion_accum.as_mut() {
+            *acc = acc.saturating_add(cov);
+        }
+    }
+}
+
+/// `vkCmdDrawIndexed` — replay the bound pipeline + bind groups, then record `DrawIndexed` against the
+/// bound index buffer. Ported from `command.rs::vkCmdDrawIndexed`.
+pub fn cmd_draw_indexed(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    vertex_offset: i32,
+    first_instance: u32,
+) -> Result<()> {
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    if let Some(p) = pipeline {
+        rec.enc.push(Enc::SetPipeline(p));
+    }
+    for (index, group) in groups {
+        rec.enc.push(Enc::SetBindGroup { index, group });
+    }
+    rec.enc.push(Enc::DrawIndexed {
+        index_count,
+        instance_count,
+        first_index,
+        base_vertex: vertex_offset,
+        first_instance,
+    });
+    accumulate_occlusion(rec, instance_count);
+    Ok(())
+}
+
+// ---- dynamic rendering (VK_KHR_dynamic_rendering / core 1.3) ------------------------------------
+// A dynamic-rendering pass carries its attachments inline in `VkRenderingInfo` — no `VkRenderPass` or
+// `VkFramebuffer` object. `vkCmdBeginRendering` lowers to the SAME `Enc::BeginRenderPass` a
+// `vkCmdBeginRenderPass` does; the only difference is where the color/depth targets come from (the
+// inline `pColorAttachments`/`pDepthAttachment`, resolved to image ir ids by the shim). `vkCmdEndRendering`
+// is identical to `vkCmdEndRenderPass` (`Enc::EndRenderPass`), so it reuses [`cmd_end_render_pass`].
+
+/// One parsed `VkRenderingAttachmentInfo` color target: the color `VkImage` (resolved from the
+/// attachment's `imageView` by the shim), its clear value, and whether its `loadOp`/`storeOp` are
+/// CLEAR/STORE. Neutral (no C ABI) so the lowering is unit-testable against a `RecordingSink`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RenderingColorAttachment {
+    /// The color `VkImage` handle the attachment's `imageView` resolves to.
+    pub image: VkImage,
+    /// The RGBA clear value (`VkRenderingAttachmentInfo::clearValue.color`).
+    pub clear: [f32; 4],
+    /// `loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR` (else the existing contents are loaded).
+    pub load_clear: bool,
+    /// `storeOp == VK_ATTACHMENT_STORE_OP_STORE` (else the result may be discarded).
+    pub store: bool,
+}
+
+/// One parsed `VkRenderingAttachmentInfo` depth target.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RenderingDepthAttachment {
+    /// The depth `VkImage` handle the attachment's `imageView` resolves to.
+    pub image: VkImage,
+    /// The depth clear value (`VkRenderingAttachmentInfo::clearValue.depthStencil.depth`).
+    pub clear_depth: f32,
+    /// `loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR`.
+    pub load_clear: bool,
+}
+
+/// `vkCmdBeginRendering(KHR)` — begin a render-pass-object-free pass from `VkRenderingInfo`: each color
+/// attachment lowers to a [`ColorAttachment`] (`Clear` when its `loadOp` is CLEAR, else `Load`) and an
+/// optional depth attachment to a [`DepthAttachment`], emitted as one [`Enc::BeginRenderPass`] — the SAME
+/// op a classic render pass lowers to (§ dynamic rendering). Every attachment image must exist. The active
+/// clear target (`vkCmdClearAttachments`) is the first color attachment.
+pub fn cmd_begin_rendering(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    colors: &[RenderingColorAttachment],
+    depth: Option<RenderingDepthAttachment>,
+) -> Result<()> {
+    // Resolve every attachment image → ir texture id up front (a bad handle fails before recording).
+    let mut color_targets: Vec<ColorAttachment> = Vec::with_capacity(colors.len());
+    let mut extent = (0u32, 0u32);
+    for c in colors {
+        let img = dev.images.get(&c.image).ok_or(GpuError::Invalid(
+            "vkCmdBeginRendering: unknown color VkImage",
+        ))?;
+        if extent == (0, 0) {
+            extent = (img.width, img.height);
+        }
+        color_targets.push(ColorAttachment {
+            texture: img.ir_id,
+            load: if c.load_clear {
+                LoadOp::Clear
+            } else {
+                LoadOp::Load
+            },
+            clear: c.clear,
+            store: c.store,
+        });
+    }
+    let depth_target = match depth {
+        Some(d) => {
+            let texture = dev
+                .images
+                .get(&d.image)
+                .ok_or(GpuError::Invalid(
+                    "vkCmdBeginRendering: unknown depth VkImage",
+                ))?
+                .ir_id;
+            Some(DepthAttachment {
+                texture,
+                load: if d.load_clear {
+                    LoadOp::Clear
+                } else {
+                    LoadOp::Load
+                },
+                clear_depth: d.clear_depth,
+                clear_stencil: 0,
+            })
+        }
+        None => None,
+    };
+    let active = color_targets.first().map(|c| c.texture);
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::BeginRenderPass {
+        color: color_targets,
+        depth: depth_target,
+    });
+    rec.in_render_pass = true;
+    rec.active_render_texture = active;
+    rec.render_extent = extent;
+    rec.scissor = None;
+    Ok(())
+}
+
+/// `vkCmdEndRenderPass` — close the render pass.
+pub fn cmd_end_render_pass(dev: &mut Device, cb: VkCommandBuffer) -> Result<()> {
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::EndRenderPass);
+    rec.in_render_pass = false;
+    rec.active_render_texture = None;
+    Ok(())
+}
+
+// ---- secondary command buffers -----------------------------------------------------------------
+
+/// `vkCmdExecuteCommands` — replay recorded secondary command buffers into this primary: each
+/// secondary's encoder ops, its deferred device query/event ops, and its inline buffer writes are
+/// appended to the primary in order (so a later `vkQueueSubmit` of the primary ships the spliced work as
+/// one stream). The primary must be `Recording`; every secondary must exist and be `Executable`
+/// (validated up front so a bad batch splices nothing). Ported from
+/// `hl-shim-vk/src/command.rs::vkCmdExecuteCommands` (`MVKCmdExecuteCommands`).
+pub fn cmd_execute_commands(
+    dev: &mut Device,
+    primary: VkCommandBuffer,
+    secondaries: &[VkCommandBuffer],
+) -> Result<()> {
+    // The primary must be recording.
+    let _ = recording_mut(dev, primary)?;
+    // Every secondary must exist and be Executable — validate before splicing anything.
+    for &sec in secondaries {
+        match dev.command_buffers.get(&sec) {
+            Some(r) if r.state == CommandBufferState::Executable => {}
+            _ => {
+                return Err(GpuError::Invalid(
+                    "vkCmdExecuteCommands: secondary is unknown or not executable",
+                ))
+            }
+        }
+    }
+    // Snapshot each secondary's recorded work (immutable borrows end), then splice in order.
+    let mut spliced: Vec<(Vec<Enc>, Vec<(u32, u64, Vec<u8>)>, Vec<DeferredOp>)> = Vec::new();
+    for &sec in secondaries {
+        if let Some(r) = dev.command_buffers.get(&sec) {
+            spliced.push((r.enc.clone(), r.buffer_writes.clone(), r.deferred.clone()));
+        }
+    }
+    let primary_rec = recording_mut(dev, primary)?;
+    for (enc, writes, deferred) in spliced {
+        primary_rec.enc.extend(enc);
+        primary_rec.buffer_writes.extend(writes);
+        primary_rec.deferred.extend(deferred);
+    }
+    Ok(())
+}
+
+// ---- dynamic state -----------------------------------------------------------------------------
+// Viewport + scissor are modeled by the IR (etag 7 / 16) and lower to real encoder ops. The remaining
+// `vkCmdSet*` dynamic state is recorded into the command buffer's [`DynamicState`] (observable, honest)
+// but carries no encoder op — the software color rasterizer does not model wide lines, depth bias,
+// constant-color blend, or stencil. Ported from `command.rs`'s state-setting commands.
+
+/// `vkCmdSetViewport` (one viewport) — record `Enc::SetViewport`. The viewport transform is applied by
+/// the pass/rasterizer that consumes it.
+///
+/// A Vulkan app may supply a NEGATIVE-height viewport (`y = top+|h|`, `h < 0`) — the
+/// `VK_KHR_maintenance1` / core-1.1 Y-flip idiom that wgpu-hal's own Vulkan backend always emits so
+/// Vulkan's framebuffer-Y matches wgpu/D3D/Metal clip space. The hl-GPU IR viewport is consumed by the
+/// wgpu executor, whose `RenderPass::set_viewport` REJECTS a negative height (llvmpipe then clips every
+/// draw and the target keeps only its clear — a fully blank frame, e.g. Zed's GPUI/wgpu renderer). Since
+/// the host is itself wgpu (it re-derives the Vulkan Y-flip internally), we normalize a negative-height
+/// viewport to its equivalent upright positive-height rectangle here (`y' = y + h`, `h' = -h`) so the
+/// host renders right-side-up instead of clipping. A normal positive-height viewport (e.g. vkcube's) is
+/// carried through unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_set_viewport(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    min_depth: f32,
+    max_depth: f32,
+) -> Result<()> {
+    let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };
+    recording_mut(dev, cb)?.enc.push(Enc::SetViewport {
+        x,
+        y,
+        w,
+        h,
+        min_depth,
+        max_depth,
+    });
+    Ok(())
+}
+
+/// `vkCmdSetScissor` (one rect) — record `Enc::SetScissor`. A negative `VkRect2D` offset is clamped to 0
+/// by the caller (the IR scissor is unsigned).
+pub fn cmd_set_scissor(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> Result<()> {
+    let rec = recording_mut(dev, cb)?;
+    // Track the current scissor so an open occlusion query counts only the samples this rect admits.
+    rec.scissor = Some((x, y, w, h));
+    rec.enc.push(Enc::SetScissor { x, y, w, h });
+    Ok(())
+}
+
+/// `vkCmdSetLineWidth` — record the dynamic line width (honest command state; the fill rasterizer draws
+/// no wide lines, so this emits no encoder op — documented in [`DynamicState`]).
+pub fn cmd_set_line_width(dev: &mut Device, cb: VkCommandBuffer, line_width: f32) -> Result<()> {
+    recording_mut(dev, cb)?.dynamic.line_width = line_width;
+    Ok(())
+}
+
+/// `vkCmdSetDepthBias` — record `(constantFactor, clamp, slopeFactor)` (no depth buffer; no encoder op).
+pub fn cmd_set_depth_bias(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    constant_factor: f32,
+    clamp: f32,
+    slope_factor: f32,
+) -> Result<()> {
+    recording_mut(dev, cb)?.dynamic.depth_bias = (constant_factor, clamp, slope_factor);
+    Ok(())
+}
+
+/// `vkCmdSetBlendConstants` — record the RGBA blend constants (no constant-color blend; no encoder op).
+pub fn cmd_set_blend_constants(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    constants: [f32; 4],
+) -> Result<()> {
+    recording_mut(dev, cb)?.dynamic.blend_constants = constants;
+    Ok(())
+}
+
+/// Apply `value` to the stencil-face pair selected by `face_mask` (VkStencilFaceFlags: FRONT = 0x1,
+/// BACK = 0x2, FRONT_AND_BACK = 0x3).
+fn set_stencil_faces(pair: &mut (u32, u32), face_mask: u32, value: u32) {
+    if face_mask & 0x1 != 0 {
+        pair.0 = value;
+    }
+    if face_mask & 0x2 != 0 {
+        pair.1 = value;
+    }
+}
+
+/// `vkCmdSetStencilCompareMask` — record the compare mask for the selected face(s) (no stencil buffer).
+pub fn cmd_set_stencil_compare_mask(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    face_mask: u32,
+    mask: u32,
+) -> Result<()> {
+    set_stencil_faces(
+        &mut recording_mut(dev, cb)?.dynamic.stencil_compare_mask,
+        face_mask,
+        mask,
+    );
+    Ok(())
+}
+
+/// `vkCmdSetStencilWriteMask` — record the write mask for the selected face(s) (no stencil buffer).
+pub fn cmd_set_stencil_write_mask(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    face_mask: u32,
+    mask: u32,
+) -> Result<()> {
+    set_stencil_faces(
+        &mut recording_mut(dev, cb)?.dynamic.stencil_write_mask,
+        face_mask,
+        mask,
+    );
+    Ok(())
+}
+
+/// `vkCmdSetStencilReference` — record the reference value for the selected face(s) (no stencil buffer).
+pub fn cmd_set_stencil_reference(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    face_mask: u32,
+    reference: u32,
+) -> Result<()> {
+    set_stencil_faces(
+        &mut recording_mut(dev, cb)?.dynamic.stencil_reference,
+        face_mask,
+        reference,
+    );
+    Ok(())
+}
+
+// ---- extended dynamic state 1/2/3 --------------------------------------------------------------
+// The core-promoted `VK_EXT_extended_dynamic_state{,2,3}` `vkCmdSet*` commands set fixed-function
+// pipeline state the software color rasterizer does not model (cull mode, depth/stencil test enables,
+// blend/logic-op state, ...). Each is recorded verbatim into the command buffer's [`DynamicState`] —
+// observable, honest command state — and carries NO encoder op. `set_dynamic` is the single seam the
+// shim's extended-dynamic-state bodies mutate through (it enforces the "must be recording" rule).
+
+/// Mutate the recording command buffer's [`DynamicState`] with `f`. The one entry point every extended
+/// `vkCmdSet*` records through. Errors if `cb` is not currently recording (the Vulkan rule).
+pub fn set_dynamic<R>(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    f: impl FnOnce(&mut crate::model::command::DynamicState) -> R,
+) -> Result<R> {
+    Ok(f(&mut recording_mut(dev, cb)?.dynamic))
+}
+
+/// Set the extended-stencil-op state for the face(s) selected by `face_mask` (FRONT = 0x1, BACK = 0x2).
+/// Helper for `vkCmdSetStencilOp` (`(failOp, passOp, depthFailOp, compareOp)`).
+pub fn set_stencil_op(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    face_mask: u32,
+    ops: (i32, i32, i32, i32),
+) -> Result<()> {
+    let ds = &mut recording_mut(dev, cb)?.dynamic;
+    if face_mask & 0x1 != 0 {
+        ds.stencil_op_front = ops;
+    }
+    if face_mask & 0x2 != 0 {
+        ds.stencil_op_back = ops;
+    }
+    Ok(())
+}
+
+/// Record a per-attachment extended-dynamic-state array (`vkCmdSetColorBlendEnableEXT` /
+/// `vkCmdSetColorWriteMaskEXT` / `vkCmdSetColorWriteEnableEXT`): overwrite `[first, first+values.len())`
+/// of `target`, growing it as needed. `select` picks which `DynamicState` vector to write.
+pub fn set_dynamic_attachment_array(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    first: u32,
+    values: &[u32],
+    select: impl FnOnce(&mut crate::model::command::DynamicState) -> &mut Vec<u32>,
+) -> Result<()> {
+    // The written range indexes color attachments, bounded by `maxColorAttachments`. Without this a
+    // hostile `first` near `u32::MAX` would `resize` the state vector to multiple GiB and abort the host
+    // on the allocation — reject an out-of-range attachment span as a truthful usage error instead.
+    let end = first as usize + values.len();
+    if end > dev.physical_device.limits.max_color_attachments as usize {
+        return Err(GpuError::Invalid(
+            "vkCmdSet*EXT: attachment range exceeds maxColorAttachments",
+        ));
+    }
+    let ds = &mut recording_mut(dev, cb)?.dynamic;
+    let target = select(ds);
+    if target.len() < end {
+        target.resize(end, 0);
+    }
+    target[first as usize..end].copy_from_slice(values);
+    Ok(())
+}
+
+// ---- push constants ----------------------------------------------------------------------------
+
+/// `vkCmdPushConstants` — write `bytes` at `offset` into the command buffer's push-constant block. The
+/// bytes are retained as honest command state (grown on demand): the hl-GPU IR has no push-constant
+/// channel yet, so a draw/dispatch cannot bind them, but they are never silently dropped (a later
+/// increment stages them as a per-draw uniform bind). `offset`/size must be 4-byte aligned + nonzero
+/// (spec §17.1). Ported from `command.rs::vkCmdPushConstants` (range-vs-layout validation omitted — the
+/// bring-up pipeline-layout model does not carry push-constant ranges).
+pub fn cmd_push_constants(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    offset: u32,
+    bytes: &[u8],
+) -> Result<()> {
+    if offset % 4 != 0 || bytes.is_empty() || bytes.len() % 4 != 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdPushConstants: offset/size must be nonzero and 4-byte aligned",
+        ));
+    }
+    // `offset + size` must lie within `maxPushConstantsSize` (spec §17.1, VUID-vkCmdPushConstants-offset).
+    // Without this a hostile `offset`/`size` near `u32::MAX` would `resize` the block to multiple GiB and
+    // abort the host on the allocation — reject it as a truthful usage error instead.
+    let max_push = dev.physical_device.limits.max_push_constants_size as u64;
+    if offset as u64 + bytes.len() as u64 > max_push {
+        return Err(GpuError::Invalid(
+            "vkCmdPushConstants: offset+size exceeds maxPushConstantsSize",
+        ));
+    }
+    let rec = recording_mut(dev, cb)?;
+    let end = offset as usize + bytes.len();
+    if rec.push_constants.len() < end {
+        rec.push_constants.resize(end, 0);
+    }
+    rec.push_constants[offset as usize..end].copy_from_slice(bytes);
+    Ok(())
+}
+
+// ---- indirect draws / dispatch -----------------------------------------------------------------
+// The indirect commands read their draw arguments from a device buffer at execution time. The hl-GPU IR
+// carries no indirect encoder op, BUT the argument buffer is host-visible unified memory (every hl device
+// buffer is MAP-able) whose bytes the shim already holds in `MemRec::data`. So an indirect DRAW whose
+// argument buffer was filled on the CPU before it was recorded (the overwhelmingly common case — a
+// mapped/HOST_COHERENT `VkDrawIndirectCommand[]`) is resolved HERE: the shim reads the argument words out
+// of the bound allocation and lowers each to the SAME direct `Enc::Draw` / `Enc::DrawIndexed` the
+// equivalent `vkCmdDraw` would emit, so an indirect draw and its direct twin rasterize byte-identically.
+//
+// Honest limits, all documented: the args are snapshotted at RECORD time, so a buffer written by the GPU
+// *between* record and submit (e.g. a compute shader that produces the draw args in the same batch) is
+// not reflected — that would need a real IR indirect op. An argument buffer that is not (yet) backed by
+// bound memory reads as zeros → a `Draw{0,..}` no-op (matching an unwritten buffer). `vkCmdDispatchIndirect`
+// resolves its `VkDispatchIndirectCommand{x,y,z}` from the same host-visible backing and lowers to the
+// SAME `Enc::Dispatch{x,y,z}` the equivalent `vkCmdDispatch(x,y,z)` would emit. A bad handle / missing
+// INDIRECT usage / out-of-range span is always a truthful error, never a false success.
+
+/// Read `len` bytes from `buffer` at `offset` out of its bound host-visible allocation. Bytes past the
+/// end of the backing store (or an unbound buffer) read as zero — an unwritten indirect arg is a `0`.
+fn read_buffer_bytes(dev: &Device, buffer: VkBuffer, offset: u64, len: usize) -> Vec<u8> {
+    let mut out = vec![0u8; len];
+    let Some(b) = dev.buffers.get(&buffer) else {
+        return out;
+    };
+    let Some(mem_h) = b.bound_mem else { return out };
+    let Some(m) = dev.memories.get(&mem_h) else {
+        return out;
+    };
+    let start = b.bound_offset.saturating_add(offset) as usize;
+    if start >= m.data.len() {
+        return out;
+    }
+    let n = (m.data.len() - start).min(len);
+    out[..n].copy_from_slice(&m.data[start..start + n]);
+    out
+}
+
+/// Little-endian `u32` at `off` in `bytes` (0 if out of range).
+fn le_u32(bytes: &[u8], off: usize) -> u32 {
+    bytes
+        .get(off..off + 4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .unwrap_or(0)
+}
+
+/// Validate that `buffer` is a valid INDIRECT source holding `draw_count` argument structs of
+/// `struct_size` bytes at `stride`, starting at `offset`, all within the buffer.
+fn validate_indirect(
+    dev: &Device,
+    buffer: VkBuffer,
+    offset: u64,
+    draw_count: u32,
+    stride: u32,
+    struct_size: u64,
+) -> Result<()> {
+    let b = dev
+        .buffers
+        .get(&buffer)
+        .ok_or(GpuError::Invalid("vkCmd*Indirect: unknown VkBuffer"))?;
+    if b.usage & buffer_usage::INDIRECT == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmd*Indirect: buffer missing INDIRECT usage",
+        ));
+    }
+    if draw_count == 0 {
+        return Ok(()); // a zero-count indirect draw is a valid no-op.
+    }
+    // Span from `offset` through the last argument struct's end.
+    let last = (draw_count as u64 - 1)
+        .checked_mul(stride as u64)
+        .ok_or(GpuError::OutOfBounds)?;
+    match last
+        .checked_add(struct_size)
+        .and_then(|span| offset.checked_add(span))
+    {
+        Some(end) if end <= b.size => Ok(()),
+        _ => Err(GpuError::OutOfBounds),
+    }
+}
+
+/// `vkCmdDrawIndirect` — validate the indirect buffer (`VkDrawIndirectCommand` is 16 bytes), read each
+/// `{vertexCount, instanceCount, firstVertex, firstInstance}` argument struct out of its host-visible
+/// backing, and lower each to the SAME direct `Enc::Draw` (pipeline + bind groups replayed) the
+/// equivalent `vkCmdDraw` would emit — so an indirect draw and its direct twin rasterize identically.
+/// Truthful error on a bad buffer.
+pub fn cmd_draw_indirect(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    draw_count: u32,
+    stride: u32,
+) -> Result<()> {
+    validate_indirect(dev, buffer, offset, draw_count, stride, 16)?;
+    // Snapshot every argument struct up front (immutable dev borrow) before recording.
+    let args: Vec<[u32; 4]> = (0..draw_count)
+        .map(|i| {
+            let base = offset.saturating_add(i as u64 * stride as u64);
+            let b = read_buffer_bytes(dev, buffer, base, 16);
+            [le_u32(&b, 0), le_u32(&b, 4), le_u32(&b, 8), le_u32(&b, 12)]
+        })
+        .collect();
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    for [vertex_count, instance_count, first_vertex, first_instance] in args {
+        if let Some(p) = pipeline {
+            rec.enc.push(Enc::SetPipeline(p));
+        }
+        for (index, group) in &groups {
+            rec.enc.push(Enc::SetBindGroup {
+                index: *index,
+                group: *group,
+            });
+        }
+        rec.enc.push(Enc::Draw {
+            vertex_count,
+            instance_count,
+            first_vertex,
+            first_instance,
+        });
+        accumulate_occlusion(rec, instance_count);
+    }
+    Ok(())
+}
+
+/// `vkCmdDrawIndexedIndirect` — validate the indirect buffer (`VkDrawIndexedIndirectCommand` is 20
+/// bytes), read each `{indexCount, instanceCount, firstIndex, vertexOffset, firstInstance}` out of its
+/// host-visible backing, and lower each to the SAME direct `Enc::DrawIndexed` (against the bound index
+/// buffer) the equivalent `vkCmdDrawIndexed` would emit. Truthful error on a bad buffer.
+pub fn cmd_draw_indexed_indirect(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    draw_count: u32,
+    stride: u32,
+) -> Result<()> {
+    validate_indirect(dev, buffer, offset, draw_count, stride, 20)?;
+    let args: Vec<(u32, u32, u32, i32, u32)> = (0..draw_count)
+        .map(|i| {
+            let base = offset.saturating_add(i as u64 * stride as u64);
+            let b = read_buffer_bytes(dev, buffer, base, 20);
+            (
+                le_u32(&b, 0),
+                le_u32(&b, 4),
+                le_u32(&b, 8),
+                le_u32(&b, 12) as i32,
+                le_u32(&b, 16),
+            )
+        })
+        .collect();
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    for (index_count, instance_count, first_index, base_vertex, first_instance) in args {
+        if let Some(p) = pipeline {
+            rec.enc.push(Enc::SetPipeline(p));
+        }
+        for (index, group) in &groups {
+            rec.enc.push(Enc::SetBindGroup {
+                index: *index,
+                group: *group,
+            });
+        }
+        rec.enc.push(Enc::DrawIndexed {
+            index_count,
+            instance_count,
+            first_index,
+            base_vertex,
+            first_instance,
+        });
+        accumulate_occlusion(rec, instance_count);
+    }
+    Ok(())
+}
+
+/// Read the draw count for an indirect-COUNT draw out of `count_buffer` at `count_offset` (a `u32` in the
+/// buffer's host-visible backing) and clamp it to `max_draw_count` — the spec rule
+/// `actual = min(countBuffer.value, maxDrawCount)`. Like the argument buffer, the count buffer is
+/// host-visible unified memory the shim already holds; an unbacked/unwritten count buffer reads as `0`
+/// (zero draws — a valid no-op). The count buffer must exist and carry INDIRECT usage (truthful error).
+fn read_indirect_count(
+    dev: &Device,
+    count_buffer: VkBuffer,
+    count_offset: u64,
+    max_draw_count: u32,
+) -> Result<u32> {
+    let b = dev.buffers.get(&count_buffer).ok_or(GpuError::Invalid(
+        "vkCmdDraw*IndirectCount: unknown count VkBuffer",
+    ))?;
+    if b.usage & buffer_usage::INDIRECT == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdDraw*IndirectCount: count buffer missing INDIRECT usage",
+        ));
+    }
+    let bytes = read_buffer_bytes(dev, count_buffer, count_offset, 4);
+    Ok(le_u32(&bytes, 0).min(max_draw_count))
+}
+
+/// `vkCmdDrawIndirectCount` (+ KHR/AMD aliases) — read the actual draw count from `count_buffer` (clamped
+/// to `max_draw_count`, spec §20.4), then lower exactly like [`cmd_draw_indirect`] does for that many
+/// `VkDrawIndirectCommand` structs: each argument struct is read out of the host-visible argument buffer
+/// and lowered to the SAME direct `Enc::Draw`. Previously a recorded no-op (blank output); the count is
+/// snapshotted at RECORD time out of the mapped count buffer (the common case), same honest limit as the
+/// non-count indirect path. Truthful error on a bad count/argument buffer.
+pub fn cmd_draw_indirect_count(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    count_buffer: VkBuffer,
+    count_offset: u64,
+    max_draw_count: u32,
+    stride: u32,
+) -> Result<()> {
+    let count = read_indirect_count(dev, count_buffer, count_offset, max_draw_count)?;
+    cmd_draw_indirect(dev, cb, buffer, offset, count, stride)
+}
+
+/// `vkCmdDrawIndexedIndirectCount` (+ KHR/AMD aliases) — the indexed twin of [`cmd_draw_indirect_count`]:
+/// read the actual draw count from `count_buffer` (clamped to `max_draw_count`) and lower that many
+/// `VkDrawIndexedIndirectCommand` structs like [`cmd_draw_indexed_indirect`]. Truthful error on a bad
+/// count/argument buffer.
+pub fn cmd_draw_indexed_indirect_count(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+    count_buffer: VkBuffer,
+    count_offset: u64,
+    max_draw_count: u32,
+    stride: u32,
+) -> Result<()> {
+    let count = read_indirect_count(dev, count_buffer, count_offset, max_draw_count)?;
+    cmd_draw_indexed_indirect(dev, cb, buffer, offset, count, stride)
+}
+
+/// `vkCmdDispatchIndirect` — validate the indirect buffer (`VkDispatchIndirectCommand` is 12 bytes), read
+/// its `{x, y, z}` workgroup counts out of the host-visible backing, and lower to the SAME
+/// `BeginComputePass → SetPipeline → SetBindGroup* → Dispatch{x,y,z} → EndComputePass` sequence the
+/// equivalent `vkCmdDispatch(x,y,z)` would emit (pipeline + bind groups replayed) — so an indirect
+/// dispatch and its direct twin run byte-identically. Like the indirect-DRAW path the counts are
+/// snapshotted at RECORD time out of the mapped/HOST_COHERENT `VkDispatchIndirectCommand` (the common
+/// case); an unbacked buffer reads as zeros → a zero-count no-op dispatch. Truthful error on a bad buffer.
+pub fn cmd_dispatch_indirect(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: u64,
+) -> Result<()> {
+    validate_indirect(dev, buffer, offset, 1, 0, 12)?;
+    let b = read_buffer_bytes(dev, buffer, offset, 12);
+    let (x, y, z) = (le_u32(&b, 0), le_u32(&b, 4), le_u32(&b, 8));
+    let rec = recording_mut(dev, cb)?;
+    let pipeline = rec.bound_pipeline;
+    let groups = rec.pending_bind_groups.clone();
+    rec.enc.push(Enc::BeginComputePass);
+    if let Some(p) = pipeline {
+        rec.enc.push(Enc::SetPipeline(p));
+    }
+    for (index, group) in groups {
+        rec.enc.push(Enc::SetBindGroup { index, group });
+    }
+    rec.enc.push(Enc::Dispatch { x, y, z });
+    rec.enc.push(Enc::EndComputePass);
+    Ok(())
+}
+
+/// `vkCmdCopyBuffer` (one region) — record a `CopyBufferToBuffer`. Ported from
+/// `command.rs::vkCmdCopyBuffer`.
+pub fn cmd_copy_buffer(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    src: VkBuffer,
+    dst: VkBuffer,
+    src_offset: u64,
+    dst_offset: u64,
+    size: u64,
+) -> Result<()> {
+    let src_ir = dev
+        .buffers
+        .get(&src)
+        .ok_or(GpuError::Invalid("vkCmdCopyBuffer: unknown src VkBuffer"))?
+        .ir_id;
+    let dst_ir = dev
+        .buffers
+        .get(&dst)
+        .ok_or(GpuError::Invalid("vkCmdCopyBuffer: unknown dst VkBuffer"))?
+        .ir_id;
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::CopyBufferToBuffer {
+        src: src_ir,
+        src_offset,
+        dst: dst_ir,
+        dst_offset,
+        size,
+    });
+    Ok(())
+}
+
+// ---- buffer <-> image copies -------------------------------------------------------------------
+// The hl model images are single-mip, single-layer 2D render/transfer targets (base subresource); the
+// copies below lower one `VkBufferImageCopy` region to the matching encoder op with mip 0 / layer 0.
+// Ported (simplified for that model) from `command.rs::vkCmdCopyBufferToImage` / `vkCmdCopyImageToBuffer`.
+
+/// The `bytes_per_row` a `VkBufferImageCopy` implies (`bufferRowLength` in texels, 0 = tight-packed to
+/// `width`), plus a bounds check that the described span fits in `buf_size`. `bpt` is the destination/source
+/// image's bytes-per-texel — 1 for `R8Unorm` (the GPUI glyph-coverage atlas), 2 for `Rg8`, 4 for the RGBA8/
+/// BGRA8 color subset — so a non-RGBA upload computes the right stride instead of a 4×-oversized span that
+/// would fail the bounds check and silently drop the copy (a void `vkCmdCopyBufferToImage` cannot report the
+/// error). `None` (rejected) on a too-narrow row, a too-short image height, or an out-of-bounds span.
+/// Mirrors the reference's `checked` buffer-span math.
+fn buffer_image_bytes_per_row(
+    buffer_offset: u64,
+    row_length_texels: u32,
+    image_height_rows: u32,
+    width: u32,
+    height: u32,
+    bpt: u32,
+    buf_size: u64,
+) -> Option<u32> {
+    if width == 0 || height == 0 || bpt == 0 {
+        return None;
+    }
+    let row_texels = if row_length_texels == 0 {
+        width
+    } else {
+        row_length_texels
+    };
+    let image_rows = if image_height_rows == 0 {
+        height
+    } else {
+        image_height_rows
+    };
+    if row_texels < width || image_rows < height {
+        return None;
+    }
+    let bytes_per_row = row_texels.checked_mul(bpt)?;
+    let end = (bytes_per_row as u64)
+        .checked_mul(height.saturating_sub(1) as u64)?
+        .checked_add(width as u64 * bpt as u64)?
+        .checked_add(buffer_offset)?;
+    (end <= buf_size).then_some(bytes_per_row)
+}
+
+/// `vkCmdCopyBufferToImage` (one region, base subresource) — record `CopyBufferToTexture`. The src buffer
+/// must be `COPY_SRC` and the dst image `COPY_DST`; the region must fit the buffer + the image extent.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_copy_buffer_to_image(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    src: VkBuffer,
+    dst: VkImage,
+    buffer_offset: u64,
+    row_length_texels: u32,
+    image_height_rows: u32,
+    width: u32,
+    height: u32,
+) -> Result<()> {
+    let (src_ir, buf_size, buf_usage) = {
+        let b = dev.buffers.get(&src).ok_or(GpuError::Invalid(
+            "vkCmdCopyBufferToImage: unknown src VkBuffer",
+        ))?;
+        (b.ir_id, b.size, b.usage)
+    };
+    let (dst_ir, img_usage, iw, ih, dst_fmt) = {
+        let i = dev.images.get(&dst).ok_or(GpuError::Invalid(
+            "vkCmdCopyBufferToImage: unknown dst VkImage",
+        ))?;
+        (i.ir_id, i.usage, i.width, i.height, i.format)
+    };
+    if buf_usage & buffer_usage::COPY_SRC == 0 || img_usage & texture_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdCopyBufferToImage: missing COPY_SRC/COPY_DST usage",
+        ));
+    }
+    if width > iw || height > ih {
+        return Err(GpuError::OutOfBounds);
+    }
+    // The image's bytes-per-texel — an R8 coverage atlas is 1, not 4. Using it makes the stride/bounds math
+    // correct so an R8 (or Rg8) upload is not rejected as out-of-bounds.
+    let bpt = dst_fmt.bytes_per_texel().ok_or(GpuError::Unsupported(
+        "vkCmdCopyBufferToImage: image format has no packed texel layout",
+    ))? as u32;
+    let bytes_per_row = buffer_image_bytes_per_row(
+        buffer_offset,
+        row_length_texels,
+        image_height_rows,
+        width,
+        height,
+        bpt,
+        buf_size,
+    )
+    .ok_or(GpuError::OutOfBounds)?;
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::CopyBufferToTexture {
+        src: src_ir,
+        src_offset: buffer_offset,
+        bytes_per_row,
+        dst: dst_ir,
+        mip: 0,
+        width,
+        height,
+    });
+    Ok(())
+}
+
+/// `vkCmdCopyImageToBuffer` (one region, base subresource) — record `CopyTextureToBuffer`. The src image
+/// must be `COPY_SRC` and the dst buffer `COPY_DST`; the region must fit the image extent + the buffer.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_copy_image_to_buffer(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    src: VkImage,
+    dst: VkBuffer,
+    buffer_offset: u64,
+    row_length_texels: u32,
+    image_height_rows: u32,
+    width: u32,
+    height: u32,
+) -> Result<()> {
+    let (src_ir, img_usage, iw, ih, src_fmt) = {
+        let i = dev.images.get(&src).ok_or(GpuError::Invalid(
+            "vkCmdCopyImageToBuffer: unknown src VkImage",
+        ))?;
+        (i.ir_id, i.usage, i.width, i.height, i.format)
+    };
+    let (dst_ir, buf_size, buf_usage) = {
+        let b = dev.buffers.get(&dst).ok_or(GpuError::Invalid(
+            "vkCmdCopyImageToBuffer: unknown dst VkBuffer",
+        ))?;
+        (b.ir_id, b.size, b.usage)
+    };
+    if img_usage & texture_usage::COPY_SRC == 0 || buf_usage & buffer_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdCopyImageToBuffer: missing COPY_SRC/COPY_DST usage",
+        ));
+    }
+    if width > iw || height > ih {
+        return Err(GpuError::OutOfBounds);
+    }
+    let bpt = src_fmt.bytes_per_texel().ok_or(GpuError::Unsupported(
+        "vkCmdCopyImageToBuffer: image format has no packed texel layout",
+    ))? as u32;
+    let bytes_per_row = buffer_image_bytes_per_row(
+        buffer_offset,
+        row_length_texels,
+        image_height_rows,
+        width,
+        height,
+        bpt,
+        buf_size,
+    )
+    .ok_or(GpuError::OutOfBounds)?;
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::CopyTextureToBuffer {
+        src: src_ir,
+        mip: 0,
+        width,
+        height,
+        dst: dst_ir,
+        dst_offset: buffer_offset,
+        bytes_per_row,
+    });
+    Ok(())
+}
+
+/// `vkCmdCopyImage` (one region, base subresource) — record an exact-size `CopyTextureToTexture`. Formats
+/// must match; both usages present; both regions in-bounds; overlapping same-image self-copy rejected.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_copy_image(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    src: VkImage,
+    dst: VkImage,
+    src_origin: (u32, u32),
+    dst_origin: (u32, u32),
+    extent: (u32, u32),
+) -> Result<()> {
+    let (src_ir, src_fmt, src_usage, siw, sih) = {
+        let i = dev
+            .images
+            .get(&src)
+            .ok_or(GpuError::Invalid("vkCmdCopyImage: unknown src VkImage"))?;
+        (i.ir_id, i.format, i.usage, i.width, i.height)
+    };
+    let (dst_ir, dst_fmt, dst_usage, diw, dih) = {
+        let i = dev
+            .images
+            .get(&dst)
+            .ok_or(GpuError::Invalid("vkCmdCopyImage: unknown dst VkImage"))?;
+        (i.ir_id, i.format, i.usage, i.width, i.height)
+    };
+    if src_fmt != dst_fmt {
+        return Err(GpuError::Invalid(
+            "vkCmdCopyImage: source and destination formats differ",
+        ));
+    }
+    if src_usage & texture_usage::COPY_SRC == 0 || dst_usage & texture_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdCopyImage: missing COPY_SRC/COPY_DST usage",
+        ));
+    }
+    let (w, h) = extent;
+    if w == 0 || h == 0 {
+        return Err(GpuError::OutOfBounds);
+    }
+    // Checked add: a hostile `origin` near `u32::MAX` must be a truthful OutOfBounds, never an
+    // `origin + extent` add-overflow panic.
+    let in_bounds = |o: u32, e: u32, dim: u32| o.checked_add(e).is_some_and(|end| end <= dim);
+    if !in_bounds(src_origin.0, w, siw)
+        || !in_bounds(src_origin.1, h, sih)
+        || !in_bounds(dst_origin.0, w, diw)
+        || !in_bounds(dst_origin.1, h, dih)
+    {
+        return Err(GpuError::OutOfBounds);
+    }
+    // A same-image overlapping self-copy is undefined; reject it (the reference does).
+    if src == dst
+        && src_origin.0 < dst_origin.0 + w
+        && dst_origin.0 < src_origin.0 + w
+        && src_origin.1 < dst_origin.1 + h
+        && dst_origin.1 < src_origin.1 + h
+    {
+        return Err(GpuError::Invalid("vkCmdCopyImage: overlapping self-copy"));
+    }
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::CopyTextureToTexture {
+        src: src_ir,
+        src_sub: TextureSubresource::base(),
+        src_origin: Origin3d {
+            x: src_origin.0,
+            y: src_origin.1,
+            z: 0,
+        },
+        dst: dst_ir,
+        dst_sub: TextureSubresource::base(),
+        dst_origin: Origin3d {
+            x: dst_origin.0,
+            y: dst_origin.1,
+            z: 0,
+        },
+        extent: Extent3d {
+            width: w,
+            height: h,
+            depth: 1,
+        },
+    });
+    Ok(())
+}
+
+/// `vkCmdBlitImage` (one region, base subresource) — record a scaled/filtered `BlitTexture`. Distinct
+/// images, matching formats, both usages present, positive src/dst extents in-bounds. `linear` selects
+/// the resampling filter (`VK_FILTER_LINEAR` → [`Filter::Linear`], else [`Filter::Nearest`]).
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_blit_image(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    src: VkImage,
+    dst: VkImage,
+    src_origin: (u32, u32),
+    src_extent: (u32, u32),
+    dst_origin: (u32, u32),
+    dst_extent: (u32, u32),
+    linear: bool,
+) -> Result<()> {
+    if src == dst {
+        return Err(GpuError::Invalid(
+            "vkCmdBlitImage: src and dst image must differ",
+        ));
+    }
+    let (src_ir, src_fmt, src_usage, siw, sih) = {
+        let i = dev
+            .images
+            .get(&src)
+            .ok_or(GpuError::Invalid("vkCmdBlitImage: unknown src VkImage"))?;
+        (i.ir_id, i.format, i.usage, i.width, i.height)
+    };
+    let (dst_ir, dst_fmt, dst_usage, diw, dih) = {
+        let i = dev
+            .images
+            .get(&dst)
+            .ok_or(GpuError::Invalid("vkCmdBlitImage: unknown dst VkImage"))?;
+        (i.ir_id, i.format, i.usage, i.width, i.height)
+    };
+    if src_fmt != dst_fmt {
+        return Err(GpuError::Invalid(
+            "vkCmdBlitImage: source and destination formats differ",
+        ));
+    }
+    if src_usage & texture_usage::COPY_SRC == 0 || dst_usage & texture_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdBlitImage: missing COPY_SRC/COPY_DST usage",
+        ));
+    }
+    if src_extent.0 == 0 || src_extent.1 == 0 || dst_extent.0 == 0 || dst_extent.1 == 0 {
+        return Err(GpuError::OutOfBounds);
+    }
+    // Checked add: a hostile `origin` near `u32::MAX` must be a truthful OutOfBounds, never an
+    // `origin + extent` add-overflow panic.
+    let in_bounds = |o: u32, e: u32, dim: u32| o.checked_add(e).is_some_and(|end| end <= dim);
+    if !in_bounds(src_origin.0, src_extent.0, siw)
+        || !in_bounds(src_origin.1, src_extent.1, sih)
+        || !in_bounds(dst_origin.0, dst_extent.0, diw)
+        || !in_bounds(dst_origin.1, dst_extent.1, dih)
+    {
+        return Err(GpuError::OutOfBounds);
+    }
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::BlitTexture {
+        src: src_ir,
+        src_sub: TextureSubresource::base(),
+        src_origin: Origin3d {
+            x: src_origin.0,
+            y: src_origin.1,
+            z: 0,
+        },
+        src_extent: Extent3d {
+            width: src_extent.0,
+            height: src_extent.1,
+            depth: 1,
+        },
+        dst: dst_ir,
+        dst_sub: TextureSubresource::base(),
+        dst_origin: Origin3d {
+            x: dst_origin.0,
+            y: dst_origin.1,
+            z: 0,
+        },
+        dst_extent: Extent3d {
+            width: dst_extent.0,
+            height: dst_extent.1,
+            depth: 1,
+        },
+        filter: if linear {
+            Filter::Linear
+        } else {
+            Filter::Nearest
+        },
+    });
+    Ok(())
+}
+
+/// `vkCmdResolveImage` (one region, base subresource) — a multisample-resolve.
+///
+/// When the SOURCE `VkImage` is multisampled (`sample_count > 1`, threaded from `VkImageCreateInfo::samples`
+/// by [`create::create_image`]), this is a TRUE resolve: it averages the source's samples down into the
+/// single-sample destination. It lowers to [`Enc::ResolveTexture`] (the executor's real multisample resolve,
+/// #179) — NOT a copy, which would only pick one sample and drop the antialiasing.
+///
+/// When the source is single-sample (`sample_count == 1`), a same-extent same-format resolve is exactly an
+/// image COPY: it MOVES the rendered content into the resolve target. Recording nothing (the former no-op)
+/// left the resolve target blank — an app that renders to a color attachment and resolves into its
+/// swapchain/present image would present an empty frame. Lower it to the SAME `CopyTextureToTexture` a
+/// `vkCmdCopyImage` of the region emits.
+///
+/// Both paths enforce matching formats, both usages present, and region in-bounds (via [`cmd_copy_image`]'s
+/// validation, which the resolve path reuses). Truthful error on a bad handle / mismatch / OOB.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_resolve_image(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    src: VkImage,
+    dst: VkImage,
+    src_origin: (u32, u32),
+    dst_origin: (u32, u32),
+    extent: (u32, u32),
+) -> Result<()> {
+    let src_samples = dev
+        .images
+        .get(&src)
+        .ok_or(GpuError::Invalid("vkCmdResolveImage: unknown src VkImage"))?
+        .sample_count;
+    if src_samples <= 1 {
+        // Single-sample source: resolve degenerates to a content-moving copy.
+        return cmd_copy_image(dev, cb, src, dst, src_origin, dst_origin, extent);
+    }
+    // Multisample source: emit the real resolve. Validate identically to a copy (formats/usages/bounds) so a
+    // bad resolve is a truthful error, then push ResolveTexture instead of CopyTextureToTexture.
+    let (src_ir, src_fmt, src_usage, siw, sih) = {
+        let i = dev
+            .images
+            .get(&src)
+            .ok_or(GpuError::Invalid("vkCmdResolveImage: unknown src VkImage"))?;
+        (i.ir_id, i.format, i.usage, i.width, i.height)
+    };
+    let (dst_ir, dst_fmt, dst_usage, diw, dih) = {
+        let i = dev
+            .images
+            .get(&dst)
+            .ok_or(GpuError::Invalid("vkCmdResolveImage: unknown dst VkImage"))?;
+        (i.ir_id, i.format, i.usage, i.width, i.height)
+    };
+    if src_fmt != dst_fmt {
+        return Err(GpuError::Invalid(
+            "vkCmdResolveImage: source and destination formats differ",
+        ));
+    }
+    if src_usage & texture_usage::COPY_SRC == 0 || dst_usage & texture_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdResolveImage: missing COPY_SRC/COPY_DST usage",
+        ));
+    }
+    let (w, h) = extent;
+    if w == 0 || h == 0 {
+        return Err(GpuError::OutOfBounds);
+    }
+    let in_bounds = |o: u32, e: u32, dim: u32| o.checked_add(e).is_some_and(|end| end <= dim);
+    if !in_bounds(src_origin.0, w, siw)
+        || !in_bounds(src_origin.1, h, sih)
+        || !in_bounds(dst_origin.0, w, diw)
+        || !in_bounds(dst_origin.1, h, dih)
+    {
+        return Err(GpuError::OutOfBounds);
+    }
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::ResolveTexture {
+        src: src_ir,
+        src_sub: TextureSubresource::base(),
+        src_origin: Origin3d {
+            x: src_origin.0,
+            y: src_origin.1,
+            z: 0,
+        },
+        dst: dst_ir,
+        dst_sub: TextureSubresource::base(),
+        dst_origin: Origin3d {
+            x: dst_origin.0,
+            y: dst_origin.1,
+            z: 0,
+        },
+        extent: Extent3d {
+            width: w,
+            height: h,
+            depth: 1,
+        },
+    });
+    Ok(())
+}
+
+// ---- clears ------------------------------------------------------------------------------------
+
+/// `vkCmdClearColorImage` (base subresource) — record a full-extent `ClearRect` on the image. The image
+/// must be `COPY_DST` (a transfer-clear target). Ported from `command.rs::vkCmdClearColorImage`.
+pub fn cmd_clear_color_image(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    image: VkImage,
+    color: [f32; 4],
+) -> Result<()> {
+    let (ir, usage, w, h) = {
+        let i = dev
+            .images
+            .get(&image)
+            .ok_or(GpuError::Invalid("vkCmdClearColorImage: unknown VkImage"))?;
+        (i.ir_id, i.usage, i.width, i.height)
+    };
+    if usage & texture_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdClearColorImage: image missing COPY_DST usage",
+        ));
+    }
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::ClearRect {
+        texture: ir,
+        x: 0,
+        y: 0,
+        w,
+        h,
+        color,
+    });
+    Ok(())
+}
+
+/// `vkCmdClearDepthStencilImage` — clear a depth/stencil image OUTSIDE a render pass. hl has no standalone
+/// depth-clear IR op, but the executor DOES clear a depth attachment when a render pass's depth `LoadOp` is
+/// `Clear` (`Enc::BeginRenderPass`'s [`DepthAttachment`], landed in the depth-attachment work). So this
+/// lowers to a zero-draw depth-clear pass: begin a render pass with NO color target and the image as the
+/// depth attachment (`LoadOp::Clear`, `clear_depth`/`clear_stencil` = the `VkClearDepthStencilValue` the
+/// app passed), then immediately end it — exactly the depth clear a `vkCmdBeginRendering`/`BeginRenderPass`
+/// with a CLEAR depth loadOp performs, but standalone (the two-pass "clear then Load-and-test" pattern the
+/// executor already supports). Recording nothing (the former no-op) left the depth image untouched, so an
+/// app that cleared depth outside a pass then depth-tested against it saw stale/garbage depth.
+///
+/// `has_stencil` says the caller's aspect + the image format both carry a stencil plane; when false the
+/// stencil clear value is forced to `0` (a depth-only `Depth32Float` attachment has no stencil plane, and a
+/// depth-only aspect must not fabricate a stencil write). The image must be a depth/stencil format with
+/// `COPY_DST` (the `VK_IMAGE_USAGE_TRANSFER_DST_BIT` the spec requires of a clear target). Truthful error on
+/// a bad handle / non-depth format / missing usage.
+pub fn cmd_clear_depth_stencil_image(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    image: VkImage,
+    clear_depth: f32,
+    clear_stencil: u32,
+    has_stencil: bool,
+) -> Result<()> {
+    let (ir, format, usage) = {
+        let i = dev.images.get(&image).ok_or(GpuError::Invalid(
+            "vkCmdClearDepthStencilImage: unknown VkImage",
+        ))?;
+        (i.ir_id, i.format, i.usage)
+    };
+    let format_has_stencil = match format {
+        TextureFormat::Depth32Float => false,
+        TextureFormat::Depth24PlusStencil8 => true,
+        _ => {
+            return Err(GpuError::Invalid(
+                "vkCmdClearDepthStencilImage: image is not a depth/stencil format",
+            ))
+        }
+    };
+    if usage & texture_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdClearDepthStencilImage: image missing COPY_DST (TRANSFER_DST) usage",
+        ));
+    }
+    let clear_stencil = if has_stencil && format_has_stencil {
+        clear_stencil
+    } else {
+        0
+    };
+    let rec = recording_mut(dev, cb)?;
+    rec.enc.push(Enc::BeginRenderPass {
+        color: Vec::new(),
+        depth: Some(DepthAttachment {
+            texture: ir,
+            load: LoadOp::Clear,
+            clear_depth,
+            clear_stencil,
+        }),
+    });
+    rec.enc.push(Enc::EndRenderPass);
+    Ok(())
+}
+
+/// `vkCmdClearAttachments` (one color rect) — record a `ClearRect` on the active render pass's color
+/// target. Must be inside a render pass. Ported from `command.rs::vkCmdClearAttachments` (color subset).
+pub fn cmd_clear_attachment_rect(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: [f32; 4],
+) -> Result<()> {
+    if w == 0 || h == 0 {
+        return Ok(()); // an empty rect clears nothing (spec-valid no-op).
+    }
+    let rec = recording_mut(dev, cb)?;
+    let texture = rec.active_render_texture.ok_or(GpuError::Invalid(
+        "vkCmdClearAttachments: not inside a render pass",
+    ))?;
+    rec.enc.push(Enc::ClearRect {
+        texture,
+        x,
+        y,
+        w,
+        h,
+        color,
+    });
+    Ok(())
+}
+
+// ---- buffer fills / updates (flushed as WriteBuffer at submit) ----------------------------------
+
+/// `vkCmdFillBuffer` — fill `[dst_offset, dst_offset+size)` of `dst` with the 32-bit `data` value,
+/// flushed as a `Cmd::WriteBuffer` at the start of the owning submit. `size == u64::MAX` = `VK_WHOLE_SIZE`
+/// (fill to the end). The buffer must be `COPY_DST`. Ported from `command.rs::vkCmdFillBuffer`.
+pub fn cmd_fill_buffer(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    dst: VkBuffer,
+    dst_offset: u64,
+    size: u64,
+    data: u32,
+) -> Result<()> {
+    if dst_offset % 4 != 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdFillBuffer: dstOffset must be 4-byte aligned",
+        ));
+    }
+    let (ir, bsize, usage) = {
+        let b = dev
+            .buffers
+            .get(&dst)
+            .ok_or(GpuError::Invalid("vkCmdFillBuffer: unknown VkBuffer"))?;
+        (b.ir_id, b.size, b.usage)
+    };
+    if usage & buffer_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdFillBuffer: buffer missing COPY_DST usage",
+        ));
+    }
+    let fill_size = if size == u64::MAX {
+        bsize.saturating_sub(dst_offset)
+    } else {
+        size
+    };
+    if fill_size == 0 || fill_size % 4 != 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdFillBuffer: size must be a nonzero multiple of 4",
+        ));
+    }
+    match dst_offset.checked_add(fill_size) {
+        Some(end) if end <= bsize => {}
+        _ => return Err(GpuError::OutOfBounds),
+    }
+    let words = (fill_size / 4) as usize;
+    let le = data.to_le_bytes();
+    let mut bytes = Vec::with_capacity(words * 4);
+    for _ in 0..words {
+        bytes.extend_from_slice(&le);
+    }
+    recording_mut(dev, cb)?
+        .buffer_writes
+        .push((ir, dst_offset, bytes));
+    Ok(())
+}
+
+/// `vkCmdUpdateBuffer` — inline-update `[dst_offset, dst_offset+len)` of `dst` from `data`, flushed as a
+/// `Cmd::WriteBuffer` at the start of the owning submit. `data` ≤ 65536 bytes, a multiple of 4;
+/// `dst_offset` 4-byte aligned. The buffer must be `COPY_DST`. Ported from `command.rs::vkCmdUpdateBuffer`.
+pub fn cmd_update_buffer(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    dst: VkBuffer,
+    dst_offset: u64,
+    data: &[u8],
+) -> Result<()> {
+    if data.is_empty() || data.len() > 65536 || data.len() % 4 != 0 || dst_offset % 4 != 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdUpdateBuffer: bad dataSize/dstOffset (≤64KiB, 4-byte multiple)",
+        ));
+    }
+    let (ir, bsize, usage) = {
+        let b = dev
+            .buffers
+            .get(&dst)
+            .ok_or(GpuError::Invalid("vkCmdUpdateBuffer: unknown VkBuffer"))?;
+        (b.ir_id, b.size, b.usage)
+    };
+    if usage & buffer_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdUpdateBuffer: buffer missing COPY_DST usage",
+        ));
+    }
+    match dst_offset.checked_add(data.len() as u64) {
+        Some(end) if end <= bsize => {}
+        _ => return Err(GpuError::OutOfBounds),
+    }
+    recording_mut(dev, cb)?
+        .buffer_writes
+        .push((ir, dst_offset, data.to_vec()));
+    Ok(())
+}
+
+// ---- pipeline barriers (layout bookkeeping; layout-implicit IR emits nothing) -------------------
+
+/// `vkCmdPipelineBarrier` / `vkCmdPipelineBarrier2` (image memory barriers) — record each image's
+/// `oldLayout → newLayout` transition in the device's layout bookkeeping and emit NO IR. The hl-GPU IR
+/// is layout-implicit (the executor tracks/transitions resource state itself), so an explicit barrier
+/// carries no encoder op — it is honest correctness bookkeeping. An unknown image is skipped. Ported
+/// (simplified for the layout-implicit IR) from `command.rs::commit_barriers`.
+pub fn cmd_pipeline_barrier(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    transitions: &[(VkImage, i32, i32)],
+) -> Result<()> {
+    // The barrier is only valid while recording; validate the buffer state (records/emits nothing else).
+    let _ = recording_mut(dev, cb)?;
+    for &(image, _old, new_layout) in transitions {
+        if dev.images.contains_key(&image) {
+            dev.image_layouts.insert(image, new_layout);
+        }
+    }
+    Ok(())
+}
+
+// ---- events (device set/reset, applied at submit completion) ------------------------------------
+
+/// `vkCmdSetEvent` / `vkCmdResetEvent` — record a device set/reset of `event`, applied at (synchronous)
+/// submit completion. Errors on an unknown event. Ported from `event.rs::cmd_event`.
+pub fn cmd_set_event(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    event: VkEvent,
+    set: bool,
+) -> Result<()> {
+    if !dev.events.contains_key(&event) {
+        return Err(GpuError::Invalid(
+            "vkCmdSetEvent/ResetEvent: unknown VkEvent",
+        ));
+    }
+    recording_mut(dev, cb)?
+        .deferred
+        .push(DeferredOp::Event { event, set });
+    Ok(())
+}
+
+/// `vkCmdWaitEvents` — validate the waited events all exist (a wait on an unknown event is a usage
+/// error). In this synchronous single-queue model the waited dependency has already resolved by submit
+/// completion, so the wait records no op. Ported from `event.rs::vkCmdWaitEvents`.
+pub fn cmd_wait_events(dev: &mut Device, cb: VkCommandBuffer, events: &[VkEvent]) -> Result<()> {
+    let _ = recording_mut(dev, cb)?;
+    if !events.iter().all(|e| dev.events.contains_key(e)) {
+        return Err(GpuError::Invalid("vkCmdWaitEvents: unknown VkEvent"));
+    }
+    Ok(())
+}
+
+// ---- queries (device reset/begin/end/timestamp/copy, applied at submit completion) --------------
+
+/// `vkCmdResetQueryPool` — record a device reset of `[first, first+count)` (applied at completion).
+/// Errors on an unknown pool or out-of-range span. Ported from `query.rs::vkCmdResetQueryPool`.
+pub fn cmd_reset_query_pool(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    pool: VkQueryPool,
+    first: u32,
+    count: u32,
+) -> Result<()> {
+    match dev.query_pools.get(&pool) {
+        Some(p) if first.checked_add(count).is_some_and(|e| e <= p.count) => {}
+        _ => {
+            return Err(GpuError::Invalid(
+                "vkCmdResetQueryPool: unknown pool or out-of-range span",
+            ))
+        }
+    }
+    recording_mut(dev, cb)?
+        .deferred
+        .push(DeferredOp::QueryReset { pool, first, count });
+    Ok(())
+}
+
+/// `vkCmdBeginQuery` — open `(pool, query)` on the command buffer (spec §17.4: at most one active query
+/// of a type; a second open is ignored). Availability is set at `vkCmdEndQuery`. Errors on a bad pool/
+/// index. Ported from `query.rs::vkCmdBeginQuery`.
+pub fn cmd_begin_query(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    pool: VkQueryPool,
+    query: u32,
+) -> Result<()> {
+    // VkQueryType OCCLUSION == 0 — an occlusion query counts the fragments its scope draws pass.
+    let is_occlusion = match dev.query_pools.get(&pool) {
+        Some(p) if query < p.count => p.query_type == 0,
+        _ => {
+            return Err(GpuError::Invalid(
+                "vkCmdBeginQuery: unknown pool or query index",
+            ))
+        }
+    };
+    let rec = recording_mut(dev, cb)?;
+    if rec.active_query.is_none() {
+        rec.active_query = Some((pool, query));
+        // Arm the occlusion accumulator so each draw in [begin,end) adds its sample footprint.
+        rec.occlusion_accum = if is_occlusion { Some(0) } else { None };
+    }
+    Ok(())
+}
+
+/// `vkCmdEndQuery` — close the matching open query, recording it available at the accumulated OCCLUSION
+/// sample count (the scissor-clipped footprint of every draw in the query scope; `0` when nothing
+/// rasterized or the draws were fully scissored). A non-occlusion query resolves at `0`. Ported from
+/// `query.rs::vkCmdEndQuery`, upgraded from the old conservative-constant `0` to a coverage that reflects
+/// reality.
+pub fn cmd_end_query(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    pool: VkQueryPool,
+    query: u32,
+) -> Result<()> {
+    let rec = recording_mut(dev, cb)?;
+    if rec.active_query == Some((pool, query)) {
+        rec.active_query = None;
+        let value = rec.occlusion_accum.take().unwrap_or(0);
+        rec.deferred
+            .push(DeferredOp::QueryEnd { pool, query, value });
+    }
+    Ok(())
+}
+
+/// `vkCmdWriteTimestamp` — record a timestamp write into `(pool, query)`, resolved to a host-monotonic
+/// serial at submit completion. Errors on a bad pool/index. Ported from `query.rs::vkCmdWriteTimestamp`.
+pub fn cmd_write_timestamp(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    pool: VkQueryPool,
+    query: u32,
+) -> Result<()> {
+    match dev.query_pools.get(&pool) {
+        Some(p) if query < p.count => {}
+        _ => {
+            return Err(GpuError::Invalid(
+                "vkCmdWriteTimestamp: unknown pool or query index",
+            ))
+        }
+    }
+    recording_mut(dev, cb)?
+        .deferred
+        .push(DeferredOp::QueryTimestamp { pool, query });
+    Ok(())
+}
+
+/// `vkCmdCopyQueryPoolResults` — record a write of the pool's `[first, first+count)` results into
+/// `dst_buffer` at completion (an IR `WriteBuffer`). The destination must be `COPY_DST` and the written
+/// span must fit. Ported from `query.rs::vkCmdCopyQueryPoolResults`.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_copy_query_pool_results(
+    dev: &mut Device,
+    cb: VkCommandBuffer,
+    pool: VkQueryPool,
+    first: u32,
+    count: u32,
+    dst_buffer: VkBuffer,
+    dst_offset: u64,
+    stride: u64,
+    wide: bool,
+    with_availability: bool,
+) -> Result<()> {
+    match dev.query_pools.get(&pool) {
+        Some(p) if first.checked_add(count).is_some_and(|e| e <= p.count) => {}
+        _ => {
+            return Err(GpuError::Invalid(
+                "vkCmdCopyQueryPoolResults: unknown pool or out-of-range span",
+            ))
+        }
+    }
+    let (dst_ir, bsize, usage) = {
+        let b = dev.buffers.get(&dst_buffer).ok_or(GpuError::Invalid(
+            "vkCmdCopyQueryPoolResults: unknown dst VkBuffer",
+        ))?;
+        (b.ir_id, b.size, b.usage)
+    };
+    if usage & buffer_usage::COPY_DST == 0 {
+        return Err(GpuError::Invalid(
+            "vkCmdCopyQueryPoolResults: dst missing COPY_DST usage",
+        ));
+    }
+    let elem = if wide { 8u64 } else { 4u64 };
+    let per = if with_availability { elem * 2 } else { elem };
+    // Span from dst_offset through the last written element.
+    let span = count
+        .checked_sub(1)
+        .map(|last| (last as u64).checked_mul(stride))
+        .unwrap_or(Some(0))
+        .and_then(|off| off.checked_add(per))
+        .ok_or(GpuError::OutOfBounds)?;
+    // The written region is exactly `span` bytes from `dst_offset`; sizing the copy to `span` (not the
+    // looser `count * max(stride, per)`, which can overflow `u64` for a hostile count/stride and then
+    // abort the host on a multi-EiB `vec![0u8; dst_size]`) keeps the emitted WriteBuffer inside the
+    // bounds validated below.
+    let dst_size = span;
+    match dst_offset.checked_add(span) {
+        Some(end) if end <= bsize => {}
+        _ => return Err(GpuError::OutOfBounds),
+    }
+    recording_mut(dev, cb)?
+        .deferred
+        .push(DeferredOp::CopyResults {
+            pool,
+            first,
+            count,
+            dst_ir,
+            dst_offset,
+            dst_size,
+            stride,
+            wide,
+            with_availability,
+        });
+    Ok(())
+}

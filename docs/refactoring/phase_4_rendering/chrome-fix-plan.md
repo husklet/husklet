@@ -1,8 +1,8 @@
 # Chrome multi-process content — root cause and fix plan
 
-Status (2026-07-12): **mechanism reproduced and localized to the engine.** Interim
-`--single-process` renders content today; the no-arg multi-process fix is a bounded change to the
-engine's epoll→kqueue readiness emulation. This document is the actionable plan.
+Status (2026-07-16): **engine fix implemented and the renderer-pump gate is stable for 50 consecutive
+runs.** The full `ext_ipc` matrix passes on both guest architectures. Live default multi-process Chrome
+remains the required capstone and has not been run on this host because no Chromium binary is installed.
 
 ## 1. Symptom → verdict (settled)
 
@@ -75,7 +75,7 @@ So the residual is specifically: **re-`ADD`/`MOD` of an already-readable *level-
 received socket does not re-arm level readiness cross-thread.** Linux epoll always reports it (its
 `epoll_ctl` is internally serialized and a level-ready fd is returned on the very next `epoll_wait`).
 
-## 4. The fix
+## 4. The fix (implemented)
 
 In `event.c`, on the `EPOLL_CTL_ADD` / `EPOLL_CTL_MOD` registration path:
 
@@ -101,13 +101,12 @@ In `event.c`, on the `EPOLL_CTL_ADD` / `EPOLL_CTL_MOD` registration path:
 This keeps the fast single-threaded path byte-unchanged (uncontended; `poll()` prime is best-effort and
 only adds work when an fd is actually ready at registration) and closes the cross-thread re-arm race.
 
-## 5. Validation (required before claiming the fix)
+## 5. Validation
 
-- The bug is **intermittent**, so a couple of green runs prove nothing. Run the sharpened gate
-  `pump-primary-channel` **50–100 iterations** and require **zero** stalls.
-- **No regression** to the epoll path: all prior `ext_ipc` gates stay green — `scm-recv-epoll`,
-  `exec-fd-epoll`, `xproc-inbound`, `scm-futex`, and the pump-`et`/`oneshot`/`worker-dispatch`/
-  `epollout-rearm`/`epoll-shared-xthread` gates.
+- `pump-primary-channel`: **50/50 consecutive aarch64 runs passed with zero stalls** on 2026-07-16.
+- Full `ext_ipc`: **114 passed, 0 failed, 2 architecture-declared skips** across Linux aarch64 and
+  x86_64. This includes `scm-recv-epoll`, `exec-fd-epoll`, `xproc-inbound`, `scm-futex`, and every
+  pump/epoll re-arm gate named above.
 - Full engine harness green (the epoll emulation underpins every guest).
 - **Capstone (proof gap):** a live no-arg multi-process Chrome run rendering real content. This is
   currently **egress/image-blocked** (release Chromium images not provisioned; Little Snitch blocks the
@@ -117,6 +116,7 @@ only adds work when an fd is actually ready at registration) and closes the cros
 ## 6. Ownership / status
 
 - Reproduction gate: committed on branch `worktree-agent-aaf0a61da...` (`177102bf`, `da051b8a`).
-- Fix: in progress in `event.c` per §4; to be committed separately, then validated per §5.
+- Fix: implemented in `hl-jit-darwin/src/runtime/os/linux/syscall/event.c`; registration-time readiness
+  priming now applies to level-triggered as well as edge-triggered ADD/MOD operations.
 - Interim for users today: launch Chrome `--single-process` (renders real content on the accelerated
   Metal path; trades the renderer sandbox). Not the final answer — the no-arg fix is §4.

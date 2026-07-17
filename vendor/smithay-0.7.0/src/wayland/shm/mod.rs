@@ -133,7 +133,8 @@ pub fn truncate_and_probe_pool(fd: std::os::fd::OwnedFd, size: std::num::NonZero
     if unsafe { libc::ftruncate(raw, 0) } != 0 {
         return false;
     }
-    pool.with_data(|ptr, len| unsafe { std::ptr::read_volatile(ptr.add(len - 1)) }).is_err()
+    pool.with_data(|ptr, len| unsafe { std::ptr::read_volatile(ptr.add(len - 1)) })
+        .is_err()
 }
 
 use super::buffer::BufferHandler;

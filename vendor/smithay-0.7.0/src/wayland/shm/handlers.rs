@@ -144,7 +144,9 @@ where
                     if stride < row_bytes {
                         return None;
                     }
-                    offset.checked_add((height - 1).checked_mul(stride)?)?.checked_add(row_bytes)
+                    offset
+                        .checked_add((height - 1).checked_mul(stride)?)?
+                        .checked_add(row_bytes)
                 };
                 let message = if offset < 0 {
                     Some("offset must not be negative".to_string())
@@ -209,7 +211,10 @@ where
                         }
 
                         ResizeError::BackingTooSmall => {
-                            pool.post_error(wl_shm::Error::InvalidFd, "fd backing is smaller than requested pool");
+                            pool.post_error(
+                                wl_shm::Error::InvalidFd,
+                                "fd backing is smaller than requested pool",
+                            );
                         }
 
                         ResizeError::BudgetExceeded => {

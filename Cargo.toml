@@ -1,31 +1,44 @@
 # hl — VM-less Linux container runtime on macOS. Cargo workspace.
 [workspace]
 resolver = "2"
-members = ["hl-jit", "hl-jit-darwin", "hl-images", "hl-daemon", "hl-client", "hl", "hl-gui", "hl-ws-term", "hl-ws", "hl-gpu", "hl-display", "hl-compositor", "hl-gpu-wgpu", "hl-shim", "hl-shim-gl", "hl-shim-cuda", "hl-shim-cudart", "hl-shim-vk"]
+members = [
+    "src/engine/hl-jit",
+    "src/engine/hl-jit-darwin",
+    "src/containers/hl-images",
+    "src/containers/hl-daemon",
+    "src/containers/hl-client",
+    "src/gpu/hl-gpu",
+    "src/gpu/hl-gpu-wgpu",
+    "src/surface/hl-compositor",
+    "src/surface/hl-cuda",
+    "src/surface/hl-gl",
+    "src/surface/hl-vulkan",
+    "src/workspaces/hl-gui",
+    "src/workspaces/hl-ws-term",
+    "src/workspaces/hl-ws",
+    "src/packages/hl-log",
+    "src/apps/husklet",
+]
 # hl-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
 # Keep it out of the default set so a bare `cargo build` works everywhere; build it
 # explicitly with `cargo build -p hl-gui` (or `make app`) on the macOS host.
-# hl-compositor pulls in smithay (needs the system libxkbcommon at link/run time) and is macOS-first;
-# it is likewise kept out of default-members so the Linux headless `cargo build -p hl-display` core
-# build never compiles smithay and stays offline. Build it explicitly on the mac:
-#   RUSTFLAGS="-L native=<libxkbcommon>/lib" cargo build --release -p hl-compositor
+# hl-compositor pulls in Smithay and is kept out of default-members so a bare headless build does not
+# compile the Wayland adapter. Its build script locates the platform's versioned libxkbcommon library.
 # hl-gpu-wgpu wraps wgpu/naga (macOS-gated deps; compiles to an empty lib elsewhere) and is likewise
 # kept out of default-members so a bare Linux `cargo build` never fetches/compiles wgpu.
-# hl-shim-common / hl-shim-gl are the GUEST GPU shims (cross-compiled to the guest ELF targets to build
-# libEGL.so.1/libGLESv2.so.2). They build for the host too (aarch64 host == aarch64 guest) but are kept
-# out of default-members so the engine gate's `cargo build` surface is unchanged; test with
-# `cargo test -p hl-shim` and build the guest .so with `cargo build -p hl-shim-gl --release`.
-# hl-shim-cuda is the third guest GPU shim (CUDA Driver API -> libcuda.so.1); same rationale, likewise
-# out of default-members. Test with `cargo test -p hl-shim-cuda`, build the guest .so with
-# `cargo build -p hl-shim-cuda --release`.
-# hl-shim-cudart is the fourth guest GPU shim (CUDA Runtime API -> libcudart.so.1, layered on
-# hl-shim-cuda); same rationale, likewise out of default-members. Test with `cargo test -p
-# hl-shim-cudart`, build the guest .so with `cargo build -p hl-shim-cudart --release`.
-# hl-shim-vk is the fifth guest GPU driver (a Vulkan ICD -> libvk_hl.so, discovered by the standard
-# Vulkan loader via icd.json); same rationale, likewise out of default-members. Test with `cargo test
-# -p hl-shim-vk`, build the guest .so with `cargo build -p hl-shim-vk --release`, and enumerate it
-# through a real loader with `VK_ICD_FILENAMES=<...>/icd.json vulkaninfo` (see hl-shim-vk/icd.json).
-default-members =["hl-jit", "hl-jit-darwin", "hl-images", "hl-daemon", "hl-client", "hl", "hl-ws-term", "hl-ws", "hl-gpu", "hl-display"]
+# Guest GPU libraries now belong to their drivers: hl-gl owns EGL/GLES, hl-cuda owns CUDA/CUDART/NVML,
+# and hl-vulkan owns its ICD. Their cdylib packages remain outside default-members because they are
+# cross-built for guest ELF targets by the owning driver packages.
+default-members = [
+    "src/engine/hl-jit",
+    "src/engine/hl-jit-darwin",
+    "src/containers/hl-images",
+    "src/containers/hl-daemon",
+    "src/containers/hl-client",
+    "src/gpu/hl-gpu",
+    "src/workspaces/hl-ws-term",
+    "src/workspaces/hl-ws",
+]
 
 # Offline-vendored smithay 0.7.0 with a single macOS-only fix: its `zwp_linux_dmabuf` v4-feedback
 # format-table is backed by a POSIX shm object whose name (`smithay-dmabuffeedback-format-table` +

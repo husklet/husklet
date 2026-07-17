@@ -22,7 +22,7 @@ history. It did not treat source-string sentinels as correctness evidence.
 | GLES query results (R2) | lifecycle is implemented, but backend counters resolve to a deliberate zero |
 | Cocoa visible timing (R3) | presenter reads native timing, but no required visible multi-frame device journey closes it |
 | XWayland supervision (R4) | model tests exist; default runtime activation does not start and supervise the feature-gated server/XWM path |
-| Chrome content (R5) | browser chrome can render, while default multi-process page content still depends on the retained engine fix plan |
+| Chrome content (R5) | engine readiness fix passes 50 renderer-pump soaks and the full cross-process IPC matrix; live default multi-process page pixels remain unverified |
 | Smithay app parity (R6) | protocol/unit coverage does not yet prove the unmodified workload matrix or permit legacy-compositor deletion |
 | production shader/query breadth (R7) | generated inventories cannot establish semantics exercised only by real application traces |
 

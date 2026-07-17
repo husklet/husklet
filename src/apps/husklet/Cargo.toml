@@ -1,0 +1,108 @@
+[package]
+name = "husklet"
+version = "0.4.0"
+edition = "2021"
+description = "The `hl` command — run hl containers with easy-access defaults and manage the daemon, without root."
+license = "MIT"
+
+# The library surface is the LIGHT `hl`-side workspace config (`config` module), std + hl-ws only, so the
+# GUI can consume it without pulling the engine. The engine-linked `hl` binary needs the full stack,
+# gated behind the default `cli` feature (see below) via `required-features`.
+[lib]
+name = "hl"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hl"
+path = "src/bin/hl.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "hl-app"
+path = "src/bin/gui.rs"
+required-features = ["gui"]
+
+[[bin]]
+name = "hl-term"
+path = "src/bin/term.rs"
+required-features = ["gui"]
+
+[dependencies]
+# The bare workspace primitive the `config` module wraps — the ONLY non-optional dep, so a `default-
+# features = false` consumer (e.g. hl-gui) gets just the light config and none of the engine stack.
+hl-ws = { path = "../../workspaces/hl-ws" }
+hl-log = { path = "../../packages/hl-log" }
+
+hl-client = { path = "../../containers/hl-client", optional = true }
+hl-ws-term = { path = "../../workspaces/hl-ws-term", optional = true }
+# In-process container launch for `hl workspace launch` — NO daemon, NO docker, NO socket. hl-jit
+# runs the workspace's image via the linked engine; hl-images resolves/pulls its rootfs. (Both build on
+# Linux too — the engine simply reports NoBackend there, so launch falls back to a local shell.)
+hl-jit = { path = "../../engine/hl-jit", optional = true }
+hl-images = { path = "../../containers/hl-images", optional = true }
+# GPU composition is being moved into this crate. The new hl-gpu exposes protocol/runtime ports;
+# hl will construct the selected drivers and executor rather than enabling an integration sidecar.
+hl-gpu = { path = "../../gpu/hl-gpu", optional = true }
+hl-cuda = { path = "../../surface/hl-cuda", optional = true }
+hl-gl = { path = "../../surface/hl-gl", optional = true }
+hl-vulkan = { path = "../../surface/hl-vulkan", optional = true }
+hl-gpu-wgpu = { path = "../../gpu/hl-gpu-wgpu", optional = true }
+hl-compositor = { path = "../../surface/hl-compositor", features = ["smithay-adapter", "macos-surface"], optional = true }
+hl-gui = { path = "../../workspaces/hl-gui", optional = true }
+libc = { version = "0.2", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+serde_json = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+relm4 = { version = "0.9", default-features = false, features = ["macros", "gnome_42"], optional = true }
+gtk = { version = "0.9", package = "gtk4", features = ["v4_10"], optional = true }
+vte4 = { version = "0.8", features = ["v0_72"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.5", optional = true }
+objc2-foundation = { version = "0.2", optional = true }
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSView", "NSAppearance", "NSColor"], optional = true }
+
+[dev-dependencies]
+naga = { version = "24", features = ["wgsl-in", "spv-out"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+
+[features]
+# `cli` = the full `hl` command (engine-linked). Default so plain `cargo build`/`cargo test` build the
+# binary. hl-gui depends on this crate with `default-features = false` to get only the light `config` lib.
+default = ["cli"]
+# Compile optimized rich logs and timing spans for live product profiling. Runtime emission remains
+# controlled by HL_LOG / HL_LOG_LEVEL / HL_LOG_COUNTERS.
+profile = ["hl-log/release-verbose"]
+cli = [
+    "dep:hl-client",
+    "dep:hl-ws-term",
+    "dep:hl-jit",
+    "dep:hl-images",
+    "dep:hl-gpu",
+    "dep:hl-cuda",
+    "dep:hl-gl",
+    "dep:hl-vulkan",
+    "dep:hl-gpu-wgpu",
+    "dep:hl-compositor",
+    "dep:libc",
+    "dep:clap",
+    "dep:tokio",
+    "dep:serde_json",
+    "dep:sha2",
+]
+gui = [
+    "dep:hl-client",
+    "dep:hl-ws-term",
+    "components",
+    "dep:relm4",
+    "dep:gtk",
+    "dep:vte4",
+    "dep:serde",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-app-kit",
+]
+components = ["dep:hl-gui"]

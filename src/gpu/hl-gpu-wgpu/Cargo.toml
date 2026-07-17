@@ -1,0 +1,37 @@
+# hl-gpu-wgpu — the cross-platform GPU executor implementing `hl_gpu::runtime::port::GpuExecutor`
+# on wgpu + naga. Stores native wgpu resources behind the protocol ids in `SessionResources` (exactly as
+# the CPU reference executor does), lowers the neutral kernel-IR (`KernelProgram`) and SPIR-V/GLSL shader
+# payloads to WGSL host-side via naga, and runs them on a real GPU/adapter (here: the software Vulkan
+# device, lavapipe, headless). It is the "conformance on wgpu" DoD: the SAME frozen conformance suite the
+# CPU oracle runs, but with real SPIR-V/WGSL shaders EXECUTING on the device.
+#
+[package]
+name = "hl-gpu-wgpu"
+version = "0.1.0"
+edition = "2021"
+description = "wgpu + naga host executor implementing hl_gpu::runtime::port::GpuExecutor — the cross-platform (Vulkan/lavapipe now, Metal/DX later) real-shader-executing backend + wgpu conformance."
+license = "MIT"
+
+[lib]
+name = "hl_gpu_wgpu"
+path = "src/lib.rs"
+
+[dependencies]
+# The protocol + runtime + GpuExecutor port this crate implements (pure-std, no platform deps).
+hl_gpu = { package = "hl-gpu", path = "../hl-gpu" }
+
+# The real executor stack. wgpu 24 / naga 24 / pollster 0.4 — the versions the reference `hl-gpu-wgpu`
+# proved. On Linux wgpu 24 auto-enables the Vulkan + GLES backends (they are target-gated, not cargo
+# features) and WGSL is always compiled in, so default features suffice; the loader selects the lavapipe
+# software Vulkan ICD headlessly at adapter-request time.
+wgpu = "24"
+# naga does all host-side shader translation: spv-in/wgsl-out lower SPIR-V graphics shaders to WGSL,
+# glsl-in accepts the GLES path, wgsl-in/spv-out let the conformance test mint real SPIR-V from a WGSL
+# seed (the round trip the SPIR-V ABI relies on).
+naga = { version = "24", features = ["spv-in", "spv-out", "wgsl-in", "wgsl-out", "glsl-in"] }
+pollster = "0.4"
+bytemuck = "1"
+
+# Tag-based logging + counters + timing. Zero-cost when off (verbose levels + counters/spans compile to
+# `{}` in a default release build); instrumentation is gated at runtime by HL_LOG / HL_LOG_COUNTERS.
+hl-log = { path = "../../packages/hl-log" }

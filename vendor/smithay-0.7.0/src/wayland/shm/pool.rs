@@ -51,7 +51,9 @@ pub struct Pool {
 
 impl std::fmt::Debug for Pool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Pool").field("size", &self.size()).finish_non_exhaustive()
+        f.debug_struct("Pool")
+            .field("size", &self.size())
+            .finish_non_exhaustive()
     }
 }
 
@@ -81,11 +83,7 @@ pub enum ResizeError {
 
 impl InnerPool {
     #[instrument(level = "trace", skip_all, name = "wayland_shm")]
-    pub fn new(
-        fd: OwnedFd,
-        size: NonZeroUsize,
-        quota: Box<dyn ShmPoolQuota>,
-    ) -> Result<InnerPool, OwnedFd> {
+    pub fn new(fd: OwnedFd, size: NonZeroUsize, quota: Box<dyn ShmPoolQuota>) -> Result<InnerPool, OwnedFd> {
         if !fd_supports_mapping(fd.as_fd(), size.into()) {
             return Err(fd);
         }
@@ -204,11 +202,7 @@ impl InnerPool {
 }
 
 impl Pool {
-    pub fn new(
-        fd: OwnedFd,
-        size: NonZeroUsize,
-        quota: Box<dyn ShmPoolQuota>,
-    ) -> Result<Self, OwnedFd> {
+    pub fn new(fd: OwnedFd, size: NonZeroUsize, quota: Box<dyn ShmPoolQuota>) -> Result<Self, OwnedFd> {
         InnerPool::new(fd, size, quota).map(|p| Self { inner: Some(p) })
     }
 
@@ -435,9 +429,15 @@ mod tests {
     fn pool_rejects_short_backing_and_failed_resize_preserves_mapping() {
         assert!(Pool::new(memfd(16), NonZeroUsize::new(32).unwrap(), Box::new(Unlimited)).is_err());
         let pool = Pool::new(memfd(64), NonZeroUsize::new(32).unwrap(), Box::new(Unlimited)).unwrap();
-        assert!(matches!(pool.resize(NonZeroUsize::new(16).unwrap()), Err(ResizeError::InvalidSize)));
+        assert!(matches!(
+            pool.resize(NonZeroUsize::new(16).unwrap()),
+            Err(ResizeError::InvalidSize)
+        ));
         assert_eq!(pool.size(), 32);
-        assert!(matches!(pool.resize(NonZeroUsize::new(128).unwrap()), Err(ResizeError::BackingTooSmall)));
+        assert!(matches!(
+            pool.resize(NonZeroUsize::new(128).unwrap()),
+            Err(ResizeError::BackingTooSmall)
+        ));
         assert_eq!(pool.size(), 32);
         assert!(pool.with_data(|ptr, len| unsafe { (*ptr, len) }).is_ok());
     }

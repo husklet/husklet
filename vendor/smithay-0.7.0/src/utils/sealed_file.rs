@@ -75,8 +75,7 @@ impl SealedFile {
         let dir = std::env::var_os("TMPDIR")
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "/tmp".into());
-        let mut templ: Vec<u8> =
-            format!("{}/smithay-sealed-XXXXXX", dir.trim_end_matches('/')).into_bytes();
+        let mut templ: Vec<u8> = format!("{}/smithay-sealed-XXXXXX", dir.trim_end_matches('/')).into_bytes();
         templ.push(0); // NUL terminator that mkstemp overwrites the X's within, in place
 
         let fd_rdwr = unsafe { libc::mkstemp(templ.as_mut_ptr() as *mut libc::c_char) };

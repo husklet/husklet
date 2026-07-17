@@ -78,12 +78,14 @@ The actual header should be split into append-only sub-tables so a backend can a
 | network | socket/connect/bind/listen/accept/send/recv, options in host-neutral enums | Linux domains/options/errors, netns, netlink synthesis, port publishing policy |
 | host identity | stable file identity, process resource sample, CPU/memory topology | synthetic `/proc`/`/sys`, cgroup limits, guest uname/cpu feature claims |
 | shared IPC | named/shared memory object, cross-process wait/wake primitive | SysV/POSIX namespaces, Linux permissions/limits and futex keys |
-| optional GPU | allocate/export/import render resource, generation/identity | Linux render-node ioctl contract and guest-visible dmabuf identity |
+| external resource | allocate/export/import opaque host resource, map regions, transfer handles, synchronize | provider protocol, Linux-visible node/ioctl model and guest resource identity |
 | diagnostics | structured log/event sink, crash context capture | stable event ids and redaction; never correctness behavior |
 
-Capabilities declare optional groups (`GPU`, checkpoint acceleration, native process cloning), not ordinary functions
-that happen to be hard on one host. Missing optional capability must yield a defined Linux-visible unsupported result
-or select a portable engine implementation.
+Capabilities declare optional mechanisms (external host resources, checkpoint acceleration, native process cloning),
+not product domains and not ordinary functions that happen to be hard on one host. The external-resource group is
+generic enough for graphics buffers, compute allocations, audio buffers, USB transfers, shared command rings and
+future accelerators; IOSurface, DRM, Vulkan and CUDA never appear in this ABI. Missing optional capability must yield
+a defined Linux-visible unsupported result or select a portable engine implementation.
 
 ## Process and fork rule
 

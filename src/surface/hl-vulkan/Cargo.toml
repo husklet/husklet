@@ -1,0 +1,40 @@
+# hl-vulkan — the standalone Vulkan guest-driver crate.
+#
+# Its ONLY dependency is the neutral protocol crate `hl-gpu` (package `hl_gpu`, lib `hl_gpu`):
+# a Vulkan operation lowers to protocol `Cmd`s and is submitted through a `CommandSink`. Nothing
+# Vulkan-specific leaks into the protocol; nothing protocol-transport-specific leaks into the driver.
+# The keystone: a `VkShaderModule` IS SPIR-V and the IR shader ABI is ALSO SPIR-V, so Vulkan shaders
+# forward with ZERO translation — the thinnest possible guest seam.
+#
+[package]
+name = "hl-vulkan"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+# Downstream reads the driver through `hl_vulkan::…`.
+name = "hl_vulkan"
+path = "src/lib.rs"
+
+[dependencies]
+# The neutral hl-GPU protocol (Cmd/Enc, descriptors, kernel-IR, CommandSink). Package `hl_gpu`,
+# lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.
+hl_gpu = { package = "hl-gpu", path = "../../gpu/hl-gpu" }
+
+# Tag-based logging + counters + timing. std-only, zero-dep, provably zero-cost when off. Used by the
+# lowering services (submit/present/create/record) AND — via the shim crate's own copy of this dep — by
+# the guest ICD cdylib. Its symbols are NOT `#[no_mangle]`, so it adds no exports (the 715 ABI is intact).
+hl-log = { path = "../../packages/hl-log" }
+
+# The container-runtime driver-plugin seam (`hl_jit::Driver`). OPTIONAL + behind the `jit` feature so
+# the HOST composition root gets the `Vulkan` driver plug, while the GUEST shim cdylib (which depends on
+# this crate for the lowering services) does NOT drag hl-jit / hl-jit-darwin / tokio into a guest .so —
+# it sets `default-features = false`. hl-jit builds on this Linux host.
+hl-jit = { path = "../../engine/hl-jit", optional = true }
+
+[features]
+# On by default so `cargo test --manifest-path hl-vulkan/Cargo.toml` builds the `Vulkan` driver plug.
+default = ["jit"]
+# Gate the host-side `driver` module (the `hl_jit::Driver` impl) + its hl-jit dependency.
+jit = ["dep:hl-jit"]

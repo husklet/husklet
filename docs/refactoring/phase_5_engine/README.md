@@ -31,6 +31,9 @@ host-services ABI
   platform matrix.
 - [`host-services-api.md`](host-services-api.md) — concrete C ABI design for the portability seam.
 - [`surface-api.md`](surface-api.md) — engine lifecycle and Rust `hl-engine` binding contract.
+- [`../engine-extension-capabilities.md`](../engine-extension-capabilities.md) — product-facing high/low-level API,
+  mount/volume/device/provider primitives and required Linux ABI facility matrix.
+- [`api-gap-matrix.md`](api-gap-matrix.md) — current exposed API versus required API and the first migration seam.
 - [`migration-plan.md`](migration-plan.md) — ordered extraction with rollback and acceptance gates.
 - [`testing-and-performance.md`](testing-and-performance.md) — C/Rust test ownership and non-regression method.
 - [`validation-ledger.md`](validation-ledger.md) — claims checked in code/history and unresolved decisions.

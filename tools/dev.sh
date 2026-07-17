@@ -18,14 +18,7 @@ BIN="$HOME/.local/bin"
 mkdir -p "$HOME/.hl/run" "$IMAGES" "$BIN"
 
 echo "==> building hl-daemon + hl (release) ..."
-cargo build --release -p hl-daemon -p hl-cli
-
-echo "==> building the macOS-container userland (for 'hl mac') ..."
-if HL_IMAGES="$IMAGES" bash "$ROOT/hl-gui/mac/mac-userland.sh" >/dev/null 2>&1; then
-  echo "    macos image ready in $IMAGES/macos"
-else
-  echo "    (skipped -- needs a nix arm64 toolchain; 'hl mac' will be unavailable)"
-fi
+cargo build --release -p hl-daemon -p husklet
 
 echo "==> putting hl on your PATH ($BIN/hl)"
 ln -sf "$ROOT/target/release/hl" "$BIN/hl"

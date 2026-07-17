@@ -47,6 +47,14 @@ uint32_t hl_engine_abi(void);
 The final config may use the existing validated offset/string-pool wire as `payload` during migration. Do not expose
 Rust `repr(C)` structs containing pointers, platform `pid_t`, native fds or enums with compiler-dependent size.
 
+The replacement payload must encode the complete typed machine specification: root/overlay, mounts and volumes,
+process/identity/PTY, namespaces, networking, resource/security policy, cache/checkpoint/observability policy, and a
+versioned list of extension specifications. Dedicated product flags such as `gpu_iosurface`, `render_node`, VPN kind,
+or compositor backend are forbidden. A domain provider instead contributes namespace entries, provider-backed open
+services, memory/resource requirements, guest files/libraries/environment and lifecycle policy through a generic
+extension specification. See [`../engine-extension-capabilities.md`](../engine-extension-capabilities.md) for the
+high/low-level API and Linux facility checklist.
+
 Errors from API calls are engine-domain values. Guest exit/signal/core status is returned in `hl_engine_exit`, not
 collapsed into a host process exit code. Diagnostic strings are copied into caller buffers or emitted through the
 structured sink; no borrowed global error string crosses threads.
@@ -77,7 +85,7 @@ named Rust runtime crate.
 ```text
 pub enum GuestIsa { Aarch64, X86_64 }
 pub struct EngineArtifacts { runner: PathBuf, abi: u32, host: HostKind }
-pub struct LaunchConfig { /* owned typed fields */ }
+pub struct LaunchConfig { /* owned MachineSpec: mounts, process, network, limits, extensions */ }
 pub struct SpawnIo { /* OwnedFd/borrowed-fd distinctions */ }
 pub struct Child { /* pid/process handle + control channel */ }
 pub enum Error { NoArtifact, AbiMismatch, InvalidConfig, Spawn, Engine, Protocol }

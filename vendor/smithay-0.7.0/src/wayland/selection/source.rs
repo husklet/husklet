@@ -26,6 +26,15 @@ impl SelectionSource {
     pub fn mime_types(&self) -> Vec<String> {
         self.provider.mime_types()
     }
+
+    /// Ask this client selection source to write `mime_type` into `fd`.
+    ///
+    /// Selection handlers are invoked before the seat installs the new source, so querying the seat from
+    /// `new_selection` can only see the previous selection. Exposing the already-validated source lets a
+    /// compositor bridge a newly copied value to its host clipboard without that ordering race.
+    pub fn send(&self, mime_type: String, fd: OwnedFd) {
+        self.provider.send(mime_type, fd);
+    }
 }
 
 /// Provider of the selection data.

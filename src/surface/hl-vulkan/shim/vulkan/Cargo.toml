@@ -1,0 +1,42 @@
+# hl-vulkan shim: the guest Vulkan ICD front-end, deployed as `libvk_hl.so.1` (+ its `icd.json`).
+#
+# A single cdylib whose exported C-ABI surface is the whole `vk*` command set — code-generated from
+# `registry/vk_commands.manifest` (build.rs) so it can never drift from the golden (712 `vk*` commands)
+# — PLUS the 3 hand-written loader-facing `vk_icd*` negotiation/proc-addr entries (715 total). The
+# bring-up + compute core (instance/device/memory/buffer/shader/pipeline/descriptor/command-record/
+# submit/fence) have real bodies that marshal the Vulkan C ABI and call the `hl_vulkan` lowering
+# services through a process-global `hl_gpu::RemoteCommandSink` ($HL_GPU_EXEC); the long tail are
+# benign, truthful, correct-ABI stubs.
+#
+# Carries an EMPTY `[workspace]` so it is its own workspace root — excluded from the shared repo
+# workspace AND from the hl-vulkan workspace, and cross-compiled standalone by hl-vulkan/build.rs.
+[package]
+name = "hl-vulkan-shim-vulkan"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+# Output object is `libvk_hl_guest.so`; build.rs bakes DT_SONAME=libvk_hl.so.1 and the stager installs
+# it under that name (+ an unversioned `libvk_hl.so` symlink the icd.json `library_path` names). The
+# name is deliberately hl-prefixed so it never collides on the host build.
+name = "vk_hl_guest"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The Vulkan -> hl-GPU-IR lowering services (create/record/submit/present) + the Vulkan object model.
+hl_vulkan = { package = "hl-vulkan", path = "../..", default-features = false }
+# The neutral protocol + the guest-side RemoteCommandSink transport over $HL_GPU_EXEC.
+hl_gpu = { package = "hl-gpu", path = "../../../../gpu/hl-gpu" }
+# Tag-based logging for the guest ICD front-end (honest-error `vk*` sites -> hl_warn!(tag::SHIM, ...)).
+# std-only, adds no exported symbols (not `#[no_mangle]`), so the 715-symbol ABI is unaffected. In the
+# release cdylib the verbose macros compile out to `{}` — zero cost unless built with `release-verbose`.
+hl-log = { path = "../../../../packages/hl-log" }
+
+[profile.release]
+# Injected .so: keep it small; abort-on-panic so a Rust panic can never unwind across the C-ABI seam.
+panic = "abort"
+opt-level = "z"
+
+# Empty table => own workspace root, excluded from every surrounding workspace.
+[workspace]
