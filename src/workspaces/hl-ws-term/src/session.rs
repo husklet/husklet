@@ -46,9 +46,7 @@ pub struct Pane {
     pub cwd: Option<String>,
     /// Relative filename (under the session dir) holding this pane's saved scrollback text, if any.
     pub history_file: Option<String>,
-    /// Per-pane checkpoint SLOT: each terminal pane is its own engine, frozen into
-    /// `<storage>/checkpoint/<slot>`. Persisted so the pane reuses the SAME slot across close→reopen
-    /// (and thus restores its own frozen process tree). `None` on a brand-new pane / an old session file.
+    /// Stable per-pane layout identity persisted across close and reopen.
     pub slot: Option<String>,
 }
 
@@ -210,7 +208,7 @@ impl<'a> Layout<'a> {
             "leaf" => {
                 let cwd = self.next().map(Self::value).unwrap_or(None);
                 let history_file = self.next().map(Self::value).unwrap_or(None);
-                // Optional third field: the pane's checkpoint slot (new format). Old session files have only
+                // Optional third field: the pane's stable layout slot. Old session files have only
                 // cwd + history_file, where the NEXT token is a structural keyword (`leaf`/`hsplit`/`vsplit`/
                 // `tab`) or EOF — so only consume a third token when it is NOT one of those, i.e. a real slot.
                 let slot = match self.peek() {
@@ -437,7 +435,7 @@ mod tests {
         // ratio is formatted to 4 decimals; compare the structure with tolerance.
         assert_eq!(back.tabs[0].root, s.tabs[0].root);
         assert_eq!(back.tabs[1].root, s.tabs[1].root);
-        // Each pane's checkpoint slot round-trips (per-pane freeze/restore depends on it).
+        // Each pane's layout slot round-trips.
         assert_eq!(back.tabs[0].root.leaves()[0].slot.as_deref(), Some("0"));
         assert_eq!(back.tabs[1].root.leaves()[0].slot.as_deref(), Some("1"));
         assert_eq!(back.tabs[1].root.leaves()[1].slot.as_deref(), Some("2"));

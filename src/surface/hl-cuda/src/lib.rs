@@ -23,13 +23,9 @@
 //! `cuModuleLoadData` (+ fatbin/PTX extract), `cuModuleGetFunction`, `cuLaunchKernel`. Around that
 //! lowering core, the packaging + injection is now wired: the three guest shim cdylibs (`shim/cuda`,
 //! `shim/cudart`, `shim/nvml`) marshal the C ABI and call these services through a process-global
-//! [`hl_gpu::RemoteCommandSink`]; `build.rs` cross-compiles + stages them for both guest arches; and
-//! [`driver::Cuda`] (behind the `jit` feature) is the [`hl_jit::Driver`] plug a composition root attaches
-//! with `engine.add(Cuda::new(spec))`.
+//! [`hl_gpu::RemoteCommandSink`]; `build.rs` cross-compiles + stages them for both guest arches.
 
 pub mod adapter;
-#[cfg(feature = "jit")]
-pub mod driver;
 pub mod model;
 pub mod result;
 pub mod service;
@@ -38,8 +34,3 @@ pub mod service;
 pub use model::context::CudaContext;
 pub use model::device::{CudaDeviceDesc, DevicePtr};
 pub use model::module::{Function, KernelArg, PtxModule};
-
-// The host-side driver plug (`engine.add(Cuda::new(..))`). Behind the `jit` feature so a guest shim never
-// pulls hl-jit into its `.so`.
-#[cfg(feature = "jit")]
-pub use driver::{Arch, Cuda, CudaSpec};

@@ -29,12 +29,9 @@
 //! packaging + injection is now wired: the `shim/egl` guest cdylib (`libEGL.so.1`) marshals the `egl*`/`gl*`
 //! C ABI and calls these services through a process-global [`hl_gpu::RemoteCommandSink`]; `build.rs`
 //! cross-compiles + stages it (plus the thin `libGLESv2.so.2` DT_NEEDED→libEGL forwarding stub) for both
-//! guest arches under `~/.hl/gl/<arch>/`; and [`driver::Gl`] (behind the `jit` feature) is the
-//! [`hl_jit::Driver`] plug a composition root attaches with `engine.add(Gl::new(spec))`.
+//! guest arches under `~/.hl/gl/<arch>/`.
 
 pub mod adapter;
-#[cfg(feature = "jit")]
-pub mod driver;
 pub mod model;
 pub mod result;
 pub mod service;
@@ -44,8 +41,3 @@ pub use model::buffer::GlBuffer;
 pub use model::context::{GlContext, GlSurface};
 pub use model::program::{DrawCall, Program, Shader};
 pub use model::texture::GlTexture;
-
-// The host-side driver plug (`engine.add(Gl::new(..))`). Behind the `jit` feature so a guest shim never
-// pulls hl-jit into its `.so`.
-#[cfg(feature = "jit")]
-pub use driver::{Arch, Gl, GlSpec};

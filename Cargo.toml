@@ -2,11 +2,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "src/engine/hl-jit",
-    "src/engine/hl-jit-darwin",
-    "src/containers/hl-images",
-    "src/containers/hl-daemon",
-    "src/containers/hl-client",
     "src/gpu/hl-gpu",
     "src/gpu/hl-gpu-wgpu",
     "src/surface/hl-compositor",
@@ -32,11 +27,6 @@ members = [
 # and hl-vulkan owns its ICD. Their cdylib packages remain outside default-members because they are
 # cross-built for guest ELF targets by the owning driver packages.
 default-members = [
-    "src/engine/hl-jit",
-    "src/engine/hl-jit-darwin",
-    "src/containers/hl-images",
-    "src/containers/hl-daemon",
-    "src/containers/hl-client",
     "src/gpu/hl-gpu",
     "src/workspaces/hl-ws-term",
     "src/workspaces/hl-ws",
@@ -52,6 +42,7 @@ default-members = [
 # no-op for the Linux headless build — resolution reads the manifest but never compiles smithay there.
 [patch.crates-io]
 smithay = { path = "vendor/smithay-0.7.0" }
+hl-engine = { path = "../engine/pkgs/rust-mongo-fix" }
 
 [profile.release]
 opt-level = 2

@@ -11,11 +11,10 @@ impl Worker {
         let slot = arguments.next().filter(|value| !value.is_empty());
         Some(match operation.as_str() {
             "launch" => {
-                let restore = arguments.next().as_deref() == Some("restore");
+                let _mode = arguments.next();
                 let cwd = arguments.next().filter(|value| !value.is_empty());
-                hl::runtime::worker::Worker::launch(&name, restore, cwd.as_deref(), slot.as_deref())
+                hl::runtime::worker::Worker::launch(&name, cwd.as_deref(), slot.as_deref())
             }
-            "checkpoint" => hl::runtime::worker::Worker::checkpoint(&name, slot.as_deref()),
             "daemon" => match hl::runtime::worker::Worker::daemon(&name) {
                 Ok(socket) => {
                     println!("{}", socket.display());

@@ -16,11 +16,9 @@ impl PaneWidget {
                     .history_file
                     .as_ref()
                     .and_then(|f| std::fs::read_to_string(Session::history_path(storage, f)).ok());
-                // Reuse the pane's saved slot (fresh one if the session predates slots), and restore ONLY if
-                // that slot actually has a frozen checkpoint on disk.
+                // Reuse the pane's saved layout slot (fresh one if the session predates slots).
                 let slot = Slots::new(tw).adopt(&pane.slot);
-                let restore = Slots::has_checkpoint(&tw.ws, &slot);
-                let (term, pid) = make_terminal_ex(tw, pane.cwd.clone(), history, slot, restore);
+                let (term, pid) = make_terminal_ex(tw, pane.cwd.clone(), history, slot);
                 pids.push(pid);
                 (term.clone().upcast(), Some(term))
             }
@@ -144,7 +142,7 @@ impl<'a> Tabs<'a> {
             .borrow()
             .as_ref()
             .and_then(|terminal| Terminal::new(terminal).working_directory());
-        let (term, pid) = make_terminal_ex(tw, cwd, None, Slots::new(tw).allocate(), false);
+        let (term, pid) = make_terminal_ex(tw, cwd, None, Slots::new(tw).allocate());
         paneroot.append(&term);
         let name = self.add(&format!("shell {n}"), None, &paneroot, true);
         tw.pids.borrow_mut().entry(name).or_default().push(pid);
@@ -203,7 +201,7 @@ impl<'a> Page<'a> {
             ProcessGroup::new(p.get()).hangup();
         }
         if let Some(child) = tw.stack.child_by_name(name) {
-            // A user-closed tab must forget its panes' frozen checkpoints so they don't restore next time.
+            // A user-closed tab must forget its pane registry entries.
             Slots::new(tw).discard_page(&child);
             tw.stack.remove(&child);
         }
@@ -286,7 +284,7 @@ impl<'a> TerminalPane<'a> {
         let split_cwd = old
             .current_directory_uri()
             .and_then(|u| session::WorkingDirectory::from_osc7(&u).map(|path| path.into_string()));
-        let (new, pid) = make_terminal_ex(tw, split_cwd, None, Slots::new(tw).allocate(), false);
+        let (new, pid) = make_terminal_ex(tw, split_cwd, None, Slots::new(tw).allocate());
         if let Some(name) = &page {
             tw.pids
                 .borrow_mut()
@@ -330,14 +328,11 @@ impl<'a> TerminalPane<'a> {
     pub(crate) fn close(&self) {
         let tw = self.window;
         let term = &self.terminal;
-        // During a window close we deliberately kill the shells AFTER freezing them — that kill fires this
-        // handler, but the freeze must survive, so do nothing here.
+        // Window teardown owns registry cleanup while it terminates worker processes.
         if tw.closing.get() {
             return;
         }
-        // The shell exited (or a split is collapsing) → this pane is gone for good; drop its slot + any stale
-        // frozen checkpoint so a reopen won't resurrect it. (If this closes the whole tab, close_page handles
-        // the rest; this terminal is already out of the registry so there's no double work.)
+        // The shell exited (or a split is collapsing), so this pane is gone from the live registry.
         Slots::new(tw).discard(term);
         let Some(parent) = term.parent() else { return };
         if let Some(paned) = parent.downcast_ref::<gtk::Paned>() {

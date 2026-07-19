@@ -1,3 +1,10 @@
+use hl_container::{Containers, Input, Signal, Size};
+use hl_ws_term::PtyBackend;
+use std::collections::VecDeque;
+use std::io;
+use std::os::unix::io::RawFd;
+use std::sync::{Arc, Mutex};
+
 pub(super) struct Shell;
 
 impl Shell {
@@ -6,132 +13,86 @@ impl Shell {
     }
 }
 
-/// Sanitize a workspace name into a hostname/netns-safe token.
 pub(super) struct Hostname;
 
 impl Hostname {
     pub(super) fn sanitize(name: &str) -> String {
-        let s: String = name
+        let value: String = name
             .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' {
-                    c
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '-' {
+                    character
                 } else {
                     '-'
                 }
             })
             .collect();
-        let t = s.trim_matches('-');
-        if t.is_empty() {
-            "workspace".to_string()
-        } else {
-            t.to_string()
+        match value.trim_matches('-') {
+            "" => "workspace".to_owned(),
+            value => value.to_owned(),
         }
     }
 }
 
-pub(super) struct WindowSize;
-
-impl WindowSize {
-    pub(super) fn parse(value: &str) -> Option<(u32, u32)> {
-        let (width, height) = value
-            .trim()
-            .split_once(|character| character == ',' || character == 'x')?;
-        let width: u32 = width.trim().parse().ok()?;
-        let height: u32 = height.trim().parse().ok()?;
-        (width > 0 && height > 0 && width <= 16384 && height <= 16384).then_some((width, height))
-    }
-}
-
-/// A synchronous [`PtyBackend`] over a hl-jit-launched container: output drained from the pre-subscribed
-/// broadcast, input pushed to the guest stdin channel, resize/reap via the master fd + pid.
-pub(super) struct HlJitPty {
-    /// Kept alive so hl-jit's IO pump tasks keep running (they feed the broadcast we drain).
-    pub(super) _rt: tokio::runtime::Runtime,
-    /// Owns the per-launch GPU endpoint for as long as the guest can use its injected socket.
-    pub(super) _gpu_service: Option<crate::runtime::gpu::Service>,
-    /// Owns the per-launch Wayland endpoint for as long as the guest can use it.
-    pub(super) _compositor_service: Option<crate::runtime::compositor::Service>,
-    pub(super) stdin_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
-    pub(super) rx: tokio::sync::broadcast::Receiver<(u8, Vec<u8>)>,
-    pub(super) master: Option<RawFd>,
-    pub(super) pid: libc::pid_t,
-    /// Bytes received from the broadcast that didn't fit the last `read` buffer.
+pub(super) struct ContainerPty {
+    pub(super) runtime: tokio::runtime::Runtime,
+    pub(super) containers: Containers,
+    pub(super) name: String,
+    pub(super) input: Input,
+    pub(super) output: std::sync::mpsc::Receiver<Vec<u8>>,
     pub(super) pending: VecDeque<u8>,
-    pub(super) exited: Option<i32>,
+    pub(super) exited: Arc<Mutex<Option<i32>>>,
+    pub(super) _gpu_service: Option<crate::runtime::gpu::Service>,
+    pub(super) _compositor_service: Option<crate::runtime::compositor::Service>,
 }
 
-impl PtyBackend for HlJitPty {
+impl PtyBackend for ContainerPty {
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let _ = self.stdin_tx.try_send(bytes.to_vec());
-        Ok(())
+        self.runtime
+            .block_on(self.input.write(bytes.to_vec()))
+            .map_err(io::Error::other)
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        use tokio::sync::broadcast::error::TryRecvError;
-        let mut n = 0;
-        while n < buf.len() {
-            if let Some(b) = self.pending.pop_front() {
-                buf[n] = b;
-                n += 1;
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let mut read = 0;
+        while read < buffer.len() {
+            if let Some(byte) = self.pending.pop_front() {
+                buffer[read] = byte;
+                read += 1;
                 continue;
             }
-            match self.rx.try_recv() {
-                Ok((_stream, bytes)) => self.pending.extend(bytes),
-                Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
-                Err(TryRecvError::Lagged(_)) => continue, // dropped under burst; keep draining
+            match self.output.try_recv() {
+                Ok(bytes) => self.pending.extend(bytes),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+                | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
         }
-        Ok(n)
+        Ok(read)
     }
 
-    fn resize(&mut self, cols: u16, rows: u16) {
-        if let Some(fd) = self.master {
-            let ws = libc::winsize {
-                ws_row: rows.max(1),
-                ws_col: cols.max(1),
-                ws_xpixel: 0,
-                ws_ypixel: 0,
-            };
-            unsafe {
-                libc::ioctl(fd, libc::TIOCSWINSZ, &ws);
-            }
+    fn resize(&mut self, columns: u16, rows: u16) {
+        if let Ok(size) = Size::new(rows.max(1), columns.max(1)) {
+            let _ = self
+                .runtime
+                .block_on(self.containers.resize(&self.name, size));
         }
     }
 
     fn master_fd(&self) -> Option<RawFd> {
-        None // output is drained from the broadcast, not the fd (hl-jit's pump owns the fd)
+        None
     }
 
     fn try_wait(&mut self) -> Option<i32> {
-        if self.exited.is_some() {
-            return self.exited;
-        }
-        let mut status: libc::c_int = 0;
-        let r = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
-        if r == self.pid {
-            let code = if libc::WIFEXITED(status) {
-                libc::WEXITSTATUS(status)
-            } else if libc::WIFSIGNALED(status) {
-                128 + libc::WTERMSIG(status)
-            } else {
-                -1
-            };
-            self.exited = Some(code);
-        }
-        self.exited
+        *self.exited.lock().expect("container exit status")
     }
 }
 
-impl Drop for HlJitPty {
+impl Drop for ContainerPty {
     fn drop(&mut self) {
-        // Stop the guest's process group (pid == pgid); the pumps end when the PTY closes. ESRCH (already
-        // gone) is fine.
-        if self.exited.is_none() {
-            unsafe {
-                libc::killpg(self.pid, libc::SIGHUP);
-            }
+        if self.try_wait().is_none() {
+            let _ = self
+                .runtime
+                .block_on(self.containers.signal(&self.name, Signal::Hangup));
         }
     }
 }
-use super::*;

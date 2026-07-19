@@ -161,7 +161,7 @@ impl TabEntry {
 }
 
 /// Walk a page's widget subtree into a [`PaneNode`], dumping each terminal's history to a file and
-/// recording each pane's checkpoint slot (so the pane re-attaches to its frozen tree on reopen).
+/// recording each pane's stable layout slot.
 pub(crate) struct PaneSnapshot;
 
 impl PaneSnapshot {

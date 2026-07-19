@@ -25,7 +25,7 @@ use document::{WorkspaceDocument, WorkspaceText};
 use hl_ws_term::config::{CursorShape, TermConfig};
 
 /// The kind of VPN/proxy a workspace routes its egress through (see [`VpnConfig`] / `docs/VPN.md`). Pure
-/// data — the routing MECHANISM is an engine (`hl-jit`) primitive, applied by `hl` at launch.
+/// data; the container domain applies the routing mechanism at launch.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VpnKind {
     /// A SOCKS5 proxy `host:port` (the natively-supported case — becomes the engine's egress-socks argument).
@@ -185,7 +185,7 @@ impl CudaDevice {
 
 /// The full `hl`-side per-workspace config: the bare [`Workspace`] run primitive PLUS the feature settings
 /// `hl` maps to engine primitives at launch. Derefs to the inner `Workspace`, so identity/run fields
-/// (`name`, `image`, `arch`, `env`, `mounts`, `storage_dir(..)`, `checkpoint_*`, …) read through directly;
+/// (`name`, `image`, `arch`, `env`, `mounts`, `storage_dir(..)`, …) read through directly;
 /// the feature settings are the wrapper's own fields.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WorkspaceConfig {

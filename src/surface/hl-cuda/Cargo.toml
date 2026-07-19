@@ -26,14 +26,5 @@ hl_gpu = { package = "hl-gpu", path = "../../gpu/hl-gpu" }
 # `--release` cdylib the verbose macros + counters compile to nothing (zero-cost); debug/tests keep them.
 hl-log = { path = "../../packages/hl-log" }
 
-# The container-runtime driver-plugin seam (`hl_jit::Driver`). OPTIONAL + behind the `jit` feature so the
-# HOST composition root gets the `Cuda` driver plug, while the GUEST shim cdylibs (which depend on this
-# crate for the lowering services) do NOT drag hl-jit / hl-jit-darwin / tokio into a guest .so — they set
-# `default-features = false`. hl-jit builds on this Linux host.
-hl-jit = { path = "../../engine/hl-jit", optional = true }
-
 [features]
-# On by default so `cargo test --manifest-path hl-cuda/Cargo.toml` builds the `Cuda` driver plug.
-default = ["jit"]
-# Gate the host-side `driver` module (the `hl_jit::Driver` impl) + its hl-jit dependency.
-jit = ["dep:hl-jit"]
+default = []

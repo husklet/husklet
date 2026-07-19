@@ -37,8 +37,7 @@ impl Daemon {
     /// reused; otherwise the daemon is spawned detached and we wait (briefly) for it to listen.
     pub fn ensure(&self) -> std::io::Result<PathBuf> {
         let dir = &self.directory;
-        std::fs::create_dir_all(dir.join("volumes"))?;
-        std::fs::create_dir_all(dir.join("images"))?;
+        std::fs::create_dir_all(dir)?;
         let sock = self.socket();
 
         if self.is_up() {
@@ -64,21 +63,13 @@ impl Daemon {
             .open(dir.join("daemon.log"))?;
         let errlog = log.try_clone()?;
         let mut cmd = std::process::Command::new(&bin);
-        cmd.env("HL_DOCKER_SOCK", &sock)
-            .env("HL_IMAGES", dir.join("images")) // per-workspace image store (fully isolated)
-            .env("HL_STATE", dir.join("state.json")) // per-workspace container state
-            .env("HL_VOLUMES", dir.join("volumes")) // per-workspace volumes
+        cmd.arg("--root")
+            .arg(dir)
+            .arg("--socket")
+            .arg(&sock)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(log))
             .stderr(std::process::Stdio::from(errlog));
-        // Where the hljit-* engines live (needed to actually run containers): HL_ENGINE_DIR, else next
-        // to the daemon binary.
-        let engine_dir = std::env::var_os("HL_ENGINE_DIR")
-            .map(PathBuf::from)
-            .or_else(|| bin.parent().map(|p| p.to_path_buf()));
-        if let Some(d) = engine_dir {
-            cmd.env("HL_JIT_DIR", d);
-        }
         // Detach into its own session so it outlives the launching command.
         unsafe {
             use std::os::unix::process::CommandExt;

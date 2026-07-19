@@ -370,7 +370,7 @@ fn spawn_overview_poller(
                 None => d.error = Some("workspace daemon unavailable".into()),
             }
             // Workspace processes = the launched shells + their guest subprocesses, read from the host
-            // process table (they run in-process via hl-jit, NOT through the daemon).
+            // process table (terminal sessions use the embedded container service).
             d.processes = WorkspaceProcesses::new(&ws_name, &shell).read();
             if let Ok(mut g) = data.lock() {
                 *g = d;

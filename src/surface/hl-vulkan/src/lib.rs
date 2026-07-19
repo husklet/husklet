@@ -32,12 +32,9 @@
 //! `vkBindBufferMemory`, `vkCreateImage`, `vkCreateSampler`, `vkCreateShaderModule` (SPIR-V forwarded),
 //! `vkCreate{Compute,Graphics}Pipelines`, descriptor set → bind group, `vkCmd*` recording,
 //! `vkQueueSubmit`, and `vkQueuePresentKHR`. Deferred to later passes (called out in the module docs):
-//! the injectable ICD shim cdylib (`shim/`), the `build.rs` dual-arch cross-compile, and the
-//! `hl_jit::Driver` plug (`Vulkan::new`/`inject`). Those are wiring, not lowering.
+//! the injectable ICD shim cdylib (`shim/`) and the `build.rs` dual-arch cross-compile.
 
 pub mod adapter;
-#[cfg(feature = "jit")]
-pub mod driver;
 pub mod model;
 pub mod result;
 pub mod service;
@@ -72,8 +69,3 @@ pub const VK_NULL_HANDLE: u64 = 0;
 pub use model::device::Device;
 pub use model::instance::{Instance, PhysicalDeviceDesc};
 pub use model::pipeline::PipelineKind;
-
-// The host-side driver plug (`engine.add(Vulkan::new(..))`). Behind the `jit` feature so the guest ICD
-// shim never pulls hl-jit into its `.so`.
-#[cfg(feature = "jit")]
-pub use driver::{Arch, Vulkan, VulkanSpec};

@@ -11,11 +11,6 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use hl_cuda::{Cuda as CudaDriver, CudaSpec};
-use hl_gl::{Gl, GlSpec};
-use hl_jit::{DeviceProvider, DeviceRequest, Drivers};
-use hl_vulkan::{Vulkan, VulkanSpec};
-
 use hl_gpu::protocol::model::kernel::{KernelDescriptor, KernelProgram};
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
@@ -23,145 +18,115 @@ use hl_gpu::{
     ReadbackRequest, Session, SystemClock,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GuestArch {
-    Aarch64,
-    X86_64,
+/// Product-owned guest injection translated into the container domain's neutral mounts and process
+/// environment. Surface crates remain independent of container implementations.
+pub struct Injection {
+    pub mounts: Vec<hl_container::Mount>,
+    pub environment: Vec<(String, String)>,
+    pub library_path: Option<String>,
+    pub service: Option<Service>,
+    pub compositor: Option<crate::runtime::compositor::Service>,
 }
 
-impl GuestArch {
-    fn cuda(self) -> hl_cuda::Arch {
-        match self {
-            Self::Aarch64 => hl_cuda::Arch::Aarch64,
-            Self::X86_64 => hl_cuda::Arch::X86_64,
+impl Injection {
+    pub fn for_workspace(workspace: &crate::config::WorkspaceConfig) -> io::Result<Self> {
+        let enabled = workspace.gui || workspace.cuda.is_some();
+        if !enabled {
+            return Ok(Self {
+                mounts: Vec::new(),
+                environment: Vec::new(),
+                library_path: None,
+                service: None,
+                compositor: None,
+            });
         }
-    }
-
-    fn gl(self) -> hl_gl::Arch {
-        match self {
-            Self::Aarch64 => hl_gl::Arch::Aarch64,
-            Self::X86_64 => hl_gl::Arch::X86_64,
-        }
-    }
-
-    fn vulkan(self) -> hl_vulkan::Arch {
-        match self {
-            Self::Aarch64 => hl_vulkan::Arch::Aarch64,
-            Self::X86_64 => hl_vulkan::Arch::X86_64,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Display {
-    pub wayland_socket: PathBuf,
-    pub surface_size: Option<(u32, u32)>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Cuda {
-    pub device: crate::config::CudaDevice,
-    pub nvidia_smi: Option<PathBuf>,
-}
-
-pub struct Gpu {
-    arch: GuestArch,
-    stage_root: PathBuf,
-    socket: PathBuf,
-    display: Option<Display>,
-    cuda: Option<Cuda>,
-}
-
-impl Gpu {
-    pub fn new(
-        arch: GuestArch,
-        stage_root: impl Into<PathBuf>,
-        socket: impl Into<PathBuf>,
-    ) -> Self {
-        Self {
-            arch,
-            stage_root: stage_root.into(),
-            socket: socket.into(),
-            display: None,
-            cuda: None,
-        }
-    }
-
-    pub fn with_display(mut self, display: Display) -> Self {
-        self.display = Some(display);
-        self
-    }
-
-    pub fn with_cuda(mut self, cuda: Cuda) -> Self {
-        self.cuda = Some(cuda);
-        self
-    }
-
-    pub fn is_inert(&self) -> bool {
-        self.display.is_none() && self.cuda.is_none()
-    }
-
-    fn drivers(&self) -> Drivers {
-        let mut drivers = Drivers::new();
-
-        if let Some(display) = &self.display {
-            let mut gl = GlSpec::new(self.arch.gl(), &self.socket).stage_root(&self.stage_root);
-            if let Some((width, height)) = display.surface_size {
-                gl = gl.surface_size(width, height);
-            }
-            drivers.add(Gl::new(gl));
-            drivers.add(Vulkan::new(
-                VulkanSpec::new(self.arch.vulkan(), &self.socket).stage_root(&self.stage_root),
-            ));
-        }
-
-        if let Some(cuda) = &self.cuda {
-            let bytes = u64::from(cuda.device.vram_mb).saturating_mul(1024 * 1024);
-            let spec = CudaSpec::new(self.arch.cuda(), &self.socket)
-                .stage_root(&self.stage_root)
-                .advertise(&cuda.device.name, &cuda.device.compute_capability, bytes);
-            drivers.add(CudaDriver::new(spec));
-        }
-
-        drivers
-    }
-}
-
-impl DeviceProvider for Gpu {
-    fn device_request(&self, guest_env: &[String]) -> DeviceRequest {
-        // The render node belongs to the composed display/GPU service, not to any one API shim. GL and
-        // Vulkan only contribute guest libraries; when a display is present Husklet also asks the engine
-        // for the shared host-backed allocation device those libraries and Wayland clients discover.
-        let mut request = DeviceRequest {
-            render_node: self.display.is_some(),
-            ..DeviceRequest::default()
+        let token: String = workspace
+            .name
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let root = crate::paths::hl_root();
+        let socket =
+            crate::paths::run_dir().join(format!("gpu-{token}-{}.sock", std::process::id()));
+        let wayland =
+            crate::paths::run_dir().join(format!("wayland-{token}-{}", std::process::id()));
+        let service = Some(Service::start(&socket, Configuration::configured()?)?);
+        let compositor = workspace
+            .gui
+            .then(|| {
+                crate::runtime::compositor::Service::start_with(
+                    &wayland,
+                    workspace.storage_dir(&root).join("frames"),
+                    crate::runtime::compositor::Presentation::configured()?,
+                )
+            })
+            .transpose()?;
+        let (arch, library) = match workspace.arch {
+            hl_ws::Arch::Arm64 => ("aarch64", "/usr/lib/aarch64-linux-gnu"),
+            hl_ws::Arch::Amd64 => ("x86_64", "/usr/lib/x86_64-linux-gnu"),
         };
-        let mut env = guest_env.to_vec();
-
-        for driver in self.drivers().requests(&env) {
-            request.mounts.extend(driver.mounts);
-            request.render_node |= driver.render_node;
-            env.extend(driver.env.iter().cloned());
-            request.env.extend(driver.env);
+        let mut mounts = vec![hl_container::Mount::read_write(&socket, "/run/hl-gpu.sock")];
+        let mut environment = vec![("HL_GPU_EXEC".to_owned(), "/run/hl-gpu.sock".to_owned())];
+        if workspace.gui {
+            for (family, source, target) in [
+                ("gl", "libEGL.so.1", "libEGL.so.1"),
+                ("gl", "libEGL.so.1", "libEGL.so"),
+                ("gl", "libGLESv2.so.2", "libGLESv2.so.2"),
+                ("gl", "libGLESv2.so.2", "libGLESv2.so"),
+                ("vulkan", "libvk_hl.so.1", "libvk_hl.so.1"),
+                ("vulkan", "libvk_hl.so.1", "libvk_hl.so"),
+                ("vulkan", "icd.json", "hl_vulkan_icd.json"),
+            ] {
+                mounts.push(hl_container::Mount::read_only(
+                    root.join(family).join(arch).join(source),
+                    format!("{library}/{target}"),
+                ));
+            }
+            mounts.push(hl_container::Mount::read_write(&wayland, "/run/wayland-0"));
+            environment.extend([
+                ("WAYLAND_DISPLAY".to_owned(), "wayland-0".to_owned()),
+                ("XDG_RUNTIME_DIR".to_owned(), "/run".to_owned()),
+                (
+                    "VK_ICD_FILENAMES".to_owned(),
+                    format!("{library}/hl_vulkan_icd.json"),
+                ),
+            ]);
         }
-
-        if let Some(tool) = self.cuda.as_ref().and_then(|cuda| cuda.nvidia_smi.as_ref()) {
-            request.mounts.push(hl_jit::DeviceMount::ro(
-                tool.to_string_lossy().into_owned(),
-                "/usr/local/bin/nvidia-smi",
-            ));
+        if let Some(cuda) = &workspace.cuda {
+            for (family, library_name) in [
+                ("cuda", "libcuda.so.1"),
+                ("cuda", "libcudart.so.1"),
+                ("nvml", "libnvidia-ml.so.1"),
+            ] {
+                mounts.push(hl_container::Mount::read_only(
+                    root.join(family).join(arch).join(library_name),
+                    format!("{library}/{library_name}"),
+                ));
+            }
+            environment.extend([
+                ("HL_CUDA_NAME".to_owned(), cuda.name.clone()),
+                ("HL_CUDA_CC".to_owned(), cuda.compute_capability.clone()),
+                (
+                    "HL_CUDA_VRAM_BYTES".to_owned(),
+                    u64::from(cuda.vram_mb)
+                        .saturating_mul(1024 * 1024)
+                        .to_string(),
+                ),
+            ]);
         }
-
-        if let Some(display) = &self.display {
-            request.mounts.push(hl_jit::DeviceMount::rw(
-                display.wayland_socket.to_string_lossy().into_owned(),
-                "/run/wayland-0",
-            ));
-            request.env.push("WAYLAND_DISPLAY=wayland-0".into());
-            request.env.push("XDG_RUNTIME_DIR=/run".into());
-        }
-
-        request
+        Ok(Self {
+            mounts,
+            environment,
+            library_path: Some(library.to_owned()),
+            service,
+            compositor,
+        })
     }
 }
 
@@ -390,68 +355,6 @@ impl Drop for Service {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn display_composes_gl_vulkan_and_wayland() {
-        let gpu =
-            Gpu::new(GuestArch::X86_64, "/stage", "/host/hl-gpu.sock").with_display(Display {
-                wayland_socket: "/host/wayland-0".into(),
-                surface_size: Some((800, 600)),
-            });
-        let request = gpu.device_request(&["LD_LIBRARY_PATH=/usr/lib".into()]);
-
-        assert!(request
-            .env
-            .iter()
-            .any(|line| line == "WAYLAND_DISPLAY=wayland-0"));
-        assert!(request.env.iter().any(|line| line == "HL_GL_SURFACE_W=800"));
-        assert!(request
-            .env
-            .iter()
-            .any(|line| line.starts_with("VK_ICD_FILENAMES=")));
-        assert!(request
-            .mounts
-            .iter()
-            .any(|mount| mount.container.ends_with("libEGL.so.1")));
-        assert!(request
-            .mounts
-            .iter()
-            .any(|mount| mount.container.ends_with("libvk_hl.so.1")));
-        assert!(
-            request.render_node,
-            "a composed display needs the shared host-backed render node"
-        );
-    }
-
-    #[test]
-    fn headless_cuda_does_not_attach_display_drivers() {
-        let gpu = Gpu::new(GuestArch::Aarch64, "/stage", "/host/hl-gpu.sock").with_cuda(Cuda {
-            device: crate::config::CudaDevice {
-                name: "test".into(),
-                compute_capability: "8.6".into(),
-                vram_mb: 512,
-            },
-            nvidia_smi: None,
-        });
-        let request = gpu.device_request(&[]);
-
-        assert!(request
-            .env
-            .iter()
-            .any(|line| line == "HL_CUDA_VRAM_BYTES=536870912"));
-        assert!(!request
-            .env
-            .iter()
-            .any(|line| line.starts_with("VK_ICD_FILENAMES=")));
-        assert!(!request
-            .env
-            .iter()
-            .any(|line| line.starts_with("WAYLAND_DISPLAY=")));
-        assert!(
-            !request.render_node,
-            "headless CUDA must not enable the display allocation device"
-        );
-    }
 
     #[test]
     fn service_publishes_and_removes_a_ready_endpoint() {

@@ -7,20 +7,15 @@ pub(crate) struct TermWin {
     pids: RefCell<HashMap<String, Vec<Rc<Cell<i32>>>>>,
     counter: Cell<u32>,
     shell_no: Cell<u32>,
-    /// Monotonic per-pane checkpoint-slot allocator. Each terminal pane (its own engine) gets a stable
-    /// slot string ("0", "1", …) that survives close→reopen (persisted in the session `Pane.slot`), so
-    /// the pane freezes/restores its OWN process tree independently of the others.
+    /// Monotonic stable identity allocator for persisted pane layouts.
     pub(crate) slot_ctr: Cell<u32>,
-    /// Registry of every live pane: its terminal (weak), its checkpoint slot, and its init pid. The
-    /// window's close handler iterates this to freeze EACH pane into its own slot (a multi-tab/split
-    /// window has no single coherent freeze — one slot per pane fixes that).
+    /// Registry of every live pane: its terminal (weak), layout slot, and worker pid.
     pub(crate) panes: RefCell<Vec<(glib::WeakRef<vte4::Terminal>, String, Rc<Cell<i32>>)>>,
     /// Slim Cmd+F search bar over the focused terminal.
     search: Search,
     /// Keyboard scrollback-navigation ("copy") mode is active.
     copymode: CopyMode,
-    /// The window is closing (freezing every pane). While set, a shell dying from our own kill must NOT
-    /// discard its slot — that would destroy the checkpoint we just wrote.
+    /// The window is closing; child exits should not mutate the saved layout during teardown.
     closing: Cell<bool>,
     overview_page: Option<screens::workspace::Page>,
 }
@@ -209,54 +204,13 @@ impl TerminalWindow {
         }
         window.add_controller(keys);
 
-        // On close: FREEZE every live pane into its OWN checkpoint slot (each pane is a separate engine), so
-        // reopening restores ALL the shells' process trees — not just a single-shell window. A pane whose
-        // freeze fails has just its own slot discarded (so it reopens fresh); the others are unaffected.
+        // Persist layout and scrollback, then terminate each container-backed terminal session.
         {
             let tw = tw.clone();
             window.connect_close_request(move |_| {
-                // Mark closing FIRST so terminating the process groups below (→ shells die → child-watch)
-                // does not discard the very slots we're about to freeze.
                 tw.closing.set(true);
-                // Persist the session layout (with each pane's slot) + scrollback BEFORE tearing down, so
-                // reopening restores the tabs/splits + on-screen history and re-attaches each pane to its slot.
                 WindowSession::new(&tw).save();
-                let base = Home::current().root();
-                // Snapshot the live panes (upgradeable weak refs = still-open panes).
                 let live = PaneRegistry::live(&tw);
-                // Checkpoint every slot CONCURRENTLY: spawn all the per-slot `hl workspace checkpoint`
-                // children at once, then join. Each pane is a SEPARATE engine/slot, so the freezes are
-                // independent — running them sequentially made closing an N-tab window take N× a single engine
-                // dump (seconds of frozen UI = the "window takes a while to close" report). MUST go through the
-                // clean-env `Hl::command` (Husklet runs under the nix devshell; a raw Command would poison
-                // hl's loader + its forked engine and silently lose the processes). Every child is joined
-                // before termination below, so all slots are fully frozen before any pane is torn down.
-                let mut freezes: Vec<(String, Option<std::process::Child>)> = live
-                    .iter()
-                    .map(|(slot, _pid)| {
-                        let child = Hl::command(&["checkpoint", &tw.ws.name, slot]).spawn().ok();
-                        (slot.clone(), child)
-                    })
-                    .collect();
-                for (slot, child) in &mut freezes {
-                    let ok = child
-                        .take()
-                        .and_then(|mut c| c.wait().ok())
-                        .map(|s| s.success())
-                        .unwrap_or(false);
-                    if !ok {
-                        eprintln!(
-                            "[husklet] freeze of {:?} slot {slot} failed — discarding that slot",
-                            tw.ws.name
-                        );
-                        let d = tw.ws.checkpoint_slot_dir(&base, slot);
-                        let _ = std::fs::remove_dir_all(&d);
-                        // Also drop the control-channel leftovers so the discarded slot reopens truly fresh.
-                        let ds = d.to_string_lossy().into_owned();
-                        let _ = std::fs::remove_file(format!("{ds}.trigger"));
-                        let _ = std::fs::remove_file(format!("{ds}.pid"));
-                    }
-                }
                 for (_slot, pid) in &live {
                     ProcessGroup::new(pid.get()).hangup();
                 }

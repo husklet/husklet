@@ -7,7 +7,7 @@
 #
 # Produces Husklet.app with:
 #   Contents/MacOS/husklet                    the workspace application
-#   Contents/Resources/hl-daemon, hljit-*     the daemon + JIT engines (allow-jit signed)
+#   Contents/Resources/hl-daemon              the container daemon with its engine linked in
 #   Contents/Frameworks/*.dylib               the relocated GTK dylib graph (dylibbundler)
 #   Contents/Frameworks/gdk-pixbuf-.../       svg+png loaders with a relative loaders.cache
 #   Contents/Resources/glib-2.0/schemas/      compiled gschemas
@@ -20,7 +20,7 @@ export HL_VERSION="${HL_VERSION:-$VERSION}"
 TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 APP="$TARGET/Husklet.app"
 C="$APP/Contents"; MACOS="$C/MacOS"; RES="$C/Resources"; FW="$C/Frameworks"
-ENT="$ROOT/src/engine/hl-jit/jit.entitlements"
+ENT="${HL_ENGINE_ENTITLEMENTS:-$ROOT/../engine/packaging/macos/jit.entitlements}"
 
 log() { printf '\033[1;34m[bundle]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[bundle] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -29,13 +29,12 @@ die() { printf '\033[1;31m[bundle] %s\033[0m\n' "$*" >&2; exit 1; }
 [ -n "${HL_GTK4:-}" ] || die "run inside the nix dev shell: nix develop \"path:$ROOT/nix\" --command tools/bundle.sh"
 command -v dylibbundler >/dev/null || die "dylibbundler not found (nix dev shell)"
 
-# 1. Release GUI binary. The daemon + hljit-* engines are built OUTSIDE this dev shell (by the
-#    Makefile `app` target) using the known-good native toolchain for the JIT's build.rs, since
-#    the Nix stdenv clang may not find the macOS SDK headers the JIT C needs.
+# 1. Release GUI binary. The daemon is built from the sibling containers repository by `make app`.
 log "building release husklet"
 ( cd "$ROOT" && RUSTFLAGS="-L native=$HL_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" \
     cargo build --release -p husklet --features gui --bin husklet )
 [ -f "$TARGET/release/hl-daemon" ] || die "target/release/hl-daemon missing — run 'cargo build --release -p hl-daemon' first (the Makefile 'app' target does this)"
+[ -f "$ENT" ] || die "engine entitlements missing at $ENT"
 
 # 2. Skeleton.
 log "laying out bundle skeleton"
@@ -49,21 +48,6 @@ sed "s/@VERSION@/$VERSION/g" "$ROOT/src/apps/husklet/package/Info.plist.in" > "$
 [ -f "$ROOT/src/apps/husklet/package/husklet.icns" ] && cp "$ROOT/src/apps/husklet/package/husklet.icns" "$RES/husklet.icns" || true
 [ -f "$ROOT/assets/logo.png" ] && cp "$ROOT/assets/logo.png" "$RES/logo.png" || true # onboarding logo
 [ -d "$ROOT/assets/images" ] && cp -R "$ROOT/assets/images" "$RES/images" || true # bundled starter images
-
-# JIT engines, copied next to the daemon (resolved at runtime next to the executable / via HL_JIT_DIR).
-# Every guest engine is REQUIRED: a bundle missing hljit-linux_* installs and pulls images fine, then HANGS
-# the instant you `docker run` a Linux container (no engine -> the daemon can't spawn the guest). build.rs
-# silently downgrades a failed engine compile to a cargo:warning, so guard HERE and fail the build loudly
-# rather than ship a half-working .app -- this is exactly the bug that shipped a darwin-only v0.5.7.
-for t in linux_aarch64 linux_x86_64; do
-  f="$(find "$TARGET/release/build" -name "hljit-$t" -type f 2>/dev/null | head -1)"
-  [ -n "$f" ] || die "hljit-$t was not built -- refusing to ship an engine-incomplete bundle. Run 'cargo clean -p hljit --release && cargo build --release -p hl-daemon' and check build.rs's clang/codesign output."
-  cp "$f" "$RES/hljit-$t"; log "  + hljit-$t"
-done
-# darwinjail.dylib — the DYLD_INSERT jail dylib for `hl mac`; MUST ship next to the engines or
-# `hl mac` falls back to the build-time path and dyld can't find it on the user's machine.
-djf="$(find "$TARGET/release/build" -name "darwinjail.dylib" -type f 2>/dev/null | head -1)"
-if [ -n "$djf" ]; then cp "$djf" "$RES/darwinjail.dylib"; log "  + darwinjail.dylib"; else log "  ! darwinjail.dylib not built (skipping)"; fi
 
 # hl-compositor — the host Wayland renderer for GUI workspaces.
 # hl-compositor links the system libxkbcommon at link+run time (its Smithay keymap seat); the nix dev
@@ -200,10 +184,9 @@ find "$FW" "$RES/lib" -type f \( -name '*.dylib' -o -name '*.so' \) -print0 2>/d
   /usr/bin/strip -x "$f" 2>/dev/null || true
   codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$f" >/dev/null 2>&1 || true
 done
-for b in hl-daemon hljit-linux_aarch64 hljit-linux_x86_64; do
+for b in hl-daemon; do
   [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f --entitlements "$ENT" "$RES/$b" >/dev/null 2>&1 || true
 done
-[ -f "$RES/darwinjail.dylib" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/darwinjail.dylib" >/dev/null 2>&1 || true
 # The compositor has no JIT entitlement and is signed like the CLI.
 for b in hl-compositor; do [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/$b" >/dev/null 2>&1 || true; done
 codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$MACOS/husklet" >/dev/null 2>&1 || true

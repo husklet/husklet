@@ -1,24 +1,18 @@
-//! Launch a workspace's image as a real container **in-process via hl-jit** — no daemon, no `docker`,
-//! no socket. `hl_jit::Runtime::start` forks the linked engine and gives us the guest's PTY directly;
-//! `hl_images::Store` resolves (and pulls, if missing) the image rootfs; a per-workspace persistent
-//! overlay upper makes it a dev environment you return to.
-//!
-//! [`HlJitPty`] adapts the async `RunningContainer` to the synchronous [`PtyBackend`] the CLI runner
-//! drives: a background multi-thread tokio runtime keeps hl-jit's IO pumps alive, output is drained
-//! from its broadcast, and `write_stdin`/`resize`/`waitpid` are plain synchronous calls.
+//! Workspace execution through the standalone container domain.
 
 use crate::config::WorkspaceConfig;
 use crate::paths;
-use hl_jit::DeviceProvider;
+use hl_container::{Config, Console, ContainerSpec, Containers, Guest, Mount, Size};
+use hl_images::remote::{Auth, Registry};
+use hl_images::{Images, Platform, Reference, RuntimeOverrides};
 use hl_ws::Arch;
 use hl_ws_term::PtyBackend;
-use std::collections::VecDeque;
+use std::collections::BTreeMap;
 use std::io;
-use std::os::unix::io::RawFd;
 
 mod process;
 
-use process::{HlJitPty, Hostname, Shell, WindowSize};
+use process::{ContainerPty, Hostname, Shell};
 
 struct LauncherError;
 
@@ -28,432 +22,179 @@ impl LauncherError {
     }
 }
 
-/// Launch `ws` as an in-process hl-jit container and return a [`PtyBackend`] over its shell. Errors
-/// (including "this host's engine can't run that arch") let the caller fall back to a local shell.
-/// Launch (or, when `restore`, RESUME from the last whole-workspace checkpoint) `ws`. Checkpointing is always
-/// armed: the engine's `HL_JIT_CHECKPOINT_DIR` is exported (inherited by the posix_spawn'd engine and every
-/// guest process it forks), so the running tree can be frozen later with `Runtime::checkpoint`. When
-/// `restore`, `HL_JIT_RESTORE_DIR` is set too, so the engine rebuilds the saved process tree instead of
-/// starting a fresh shell. The container init's host pid is recorded so a separate `workspace checkpoint`
-/// invocation can signal the live tree.
-pub fn launch_ex(
-    ws: &WorkspaceConfig,
-    cols: u16,
+pub fn launch(
+    workspace: &WorkspaceConfig,
+    columns: u16,
     rows: u16,
-    restore: bool,
     cwd: Option<&str>,
     slot: Option<&str>,
 ) -> io::Result<Box<dyn PtyBackend>> {
-    let guest = match ws.arch {
-        Arch::Arm64 => hl_jit::Guest::LinuxAarch64,
-        Arch::Amd64 => hl_jit::Guest::LinuxX86_64,
-    };
-    // Deterministic high placement + fixed image bases (required for a restore's MAP_FIXED to land on free
-    // VAs) need the persistent translated-code cache ON, so give the runtime a per-workspace cache dir.
-    // Each terminal pane is its OWN engine, so a per-pane SLOT freezes/restores into its own checkpoint
-    // dir (`<storage>/checkpoint/<slot>`); None keeps the single shared slot (back-compat). The pcache is
-    // a translation cache — safe (and cheaper) to SHARE across all of a workspace's slots.
-    let (ckpt_dir, ckpt_pid_file) = match slot {
-        Some(s) => (
-            ws.checkpoint_slot_dir(&paths::hl_root(), s),
-            ws.checkpoint_slot_pid_file(&paths::hl_root(), s),
-        ),
-        None => (
-            ws.checkpoint_dir(&paths::hl_root()),
-            ws.checkpoint_pid_file(&paths::hl_root()),
-        ),
-    };
-    let pcache_dir = ws.storage_dir(&paths::hl_root()).join("pcache");
-    let _ = std::fs::create_dir_all(&pcache_dir);
-    if let Some(p) = ckpt_dir.parent() {
-        let _ = std::fs::create_dir_all(p);
-    }
-    // Arm checkpoint/restore for the engine this process spawns (ffi.c execve()s with our environ). Each
-    // `hl workspace launch` is its own process, so these process-global vars never race across workspaces.
-    std::env::set_var("HL_JIT_CHECKPOINT_DIR", &ckpt_dir);
-    // The engine implements guest fork() as a real host fork() of a multithreaded, objc-using process
-    // (Metal/IOSurface/NSString on the GPU path), and a guest execve() reloads the image IN-PLACE (no
-    // host exec), so libobjc's initialize-fork-safety poison survives into every guest process. If a
-    // guest fork races another thread's +initialize, the child later aborts on its first Foundation use
-    // (objc_initializeAfterForkError) — e.g. a multiprocess Wayland client dies right after gl_shim
-    // surface_up. The engine's process model requires the suppression; guarantee it here instead of relying on the launcher's
-    // environment. libobjc reads it once at the engine's exec (ffi.c passes our environ). An explicit
-    // caller-provided value (e.g. NO, to debug fork hygiene) is honored.
-    if std::env::var_os("OBJC_DISABLE_INITIALIZE_FORK_SAFETY").is_none() {
-        std::env::set_var("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES");
-    }
-    if restore && ckpt_dir.join("MANIFEST").exists() {
-        std::env::set_var("HL_JIT_RESTORE_DIR", &ckpt_dir);
-    } else {
-        std::env::remove_var("HL_JIT_RESTORE_DIR");
-        if restore {
-            eprintln!(
-                "[hl] no checkpoint to restore for {:?}; starting a fresh workspace",
-                ws.name
-            );
-        }
-        // A FRESH launch (not resuming a saved tree): wipe any leftover checkpoint dir + control-channel
-        // files for this slot so the new engine starts from a clean, self-contained slot and never inherits
-        // a stale trigger generation or pid from a prior session. The engine re-creates the trigger fresh.
-        let ckpt_str = ckpt_dir.to_string_lossy().into_owned();
-        let _ = std::fs::remove_dir_all(&ckpt_dir);
-        let _ = std::fs::remove_file(format!("{ckpt_str}.trigger"));
-        let _ = std::fs::remove_file(format!("{ckpt_str}.pid"));
-        // GUI reliability: a fresh `--gui` launch resets the persistent pcache first. The persistent
-        // translated-code cache bakes host-arena-relative absolute addresses that are only valid when the
-        // engine re-secures the SAME fixed arena base it was written at. A large C++/PIE Wayland binary
-        // (e.g. glmark2 or a browser engine) that was cached in a PRIOR session can be re-loaded in a later
-        // session at a MISMATCHED base (the fixed VA is occupied → NULL-hint fallback) → stale absolutes → an
-        // intermittent SIGSEGV (exit 139) or garbage reads during EGL/config init, BEFORE any draw. This is
-        // the "rendered one session, exit-139'd the next with no code change" flakiness. Building the cache
-        // cold at the current session's base (then reusing it in-session, where the base stays available) is
-        // 100% reliable and costs only a one-time re-translation at startup (negligible for an interactive
-        // GUI app). A `restore` keeps the cache (its MAP_FIXED placement needs it) — this only fires on a
-        // fresh gui launch. Opt out of the wipe (keep the persistent cache) with `HL_GUI_KEEP_PCACHE=1`.
-        let keep_gui_pcache = std::env::var("HL_GUI_KEEP_PCACHE").ok().as_deref() == Some("1");
-        if ws.gui && !keep_gui_pcache {
-            let _ = std::fs::remove_dir_all(&pcache_dir);
-            let _ = std::fs::create_dir_all(&pcache_dir);
-        }
-    }
-    let rt = hl_jit::Runtime::new()
-        .map_err(LauncherError::io)?
-        .cache_dir(pcache_dir.to_string_lossy().into_owned());
-    if !rt.supports(guest) {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            format!("no engine for {} on this host", ws.arch.as_str()),
-        ));
-    }
-
-    // Resolve the image rootfs, pulling on first use. The store keys a rootfs by image ref ONLY (no
-    // arch), so an `alpine` pulled as arm64 elsewhere would otherwise be reused for an amd64 workspace
-    // and fed to the x86 engine (→ `e_machine` mismatch). Guard against that two ways: give each arch
-    // its own store dir, and verify the unpacked rootfs's real ISA matches before use.
-    let want = match ws.arch {
-        Arch::Arm64 => hl_images::Arch::LinuxAarch64,
-        Arch::Amd64 => hl_images::Arch::LinuxX86_64,
-    };
-    let images_dir = paths::images_dir()
-        .join(ws.arch.as_str())
-        .to_string_lossy()
-        .into_owned();
-    let store = hl_images::Store::new(&images_dir);
-    let iref = hl_images::ImageRef::from(&ws.image);
-    let rootfs_pb = store.rootfs_path(&iref);
-    let present_ok = rootfs_pb.is_dir()
-        && hl_images::Rootfs::new(&rootfs_pb)
-            .architecture()
-            .map(|a| a == want)
-            .unwrap_or(false);
-    if !present_ok {
-        eprintln!("[hl] pulling {} ({}) …", ws.image, ws.arch.as_str());
-        store
-            .pull_archs(
-                &ws.image,
-                &iref.tag,
-                hl_images::Credentials::none(),
-                &[want.oci().1],
-                &mut |_| {},
-            )
-            .map_err(LauncherError::io)?;
-    }
-    let rootfs = rootfs_pb.to_string_lossy().into_owned();
-
-    // Per-workspace persistent writable upper: the dev environment that survives across launches.
-    let upper_pb = ws.upper_dir(&paths::hl_root());
-    std::fs::create_dir_all(&upper_pb)?;
-    let upper = upper_pb.to_string_lossy().into_owned();
-
-    // Build the container: the persistent upper overlays the image rootfs; a FORCED-interactive login
-    // shell (bash if present, else sh) with a real controlling PTY; a private loopback keyed by the
-    // workspace. `-i` forces the prompt even though our parent `sh -c` is non-interactive.
-    let image = hl_jit::Image::overlay(upper, [rootfs]).guest(guest);
-    // Pick the shell WITHOUT redirecting the final exec's stderr: interactive bash decides it's
-    // interactive from isatty(stderr) AND writes its prompt (PS1) to stderr, so a `2>/dev/null` would
-    // silently make it non-interactive with a hidden prompt (looks hung).
-    // Honor a configured shell; else auto-pick bash (interactive login) then sh.
-    let base = match ws.shell.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => format!("exec {s}"),
-        None => "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi"
-            .to_string(),
-    };
-    // OSC-7 "new tab in same cwd": start in `cwd` when the GUI passes one (a plain guest path). Guarded
-    // with `2>/dev/null` so a stale/removed dir just falls back to the default working dir. Ignored on a
-    // restore (the checkpoint already carries every process's cwd).
-    let start_dir = cwd
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && s.starts_with('/') && !restore)
-        .map(|s| s.to_string());
-    let inner = match &start_dir {
-        Some(dir) => format!("cd {} 2>/dev/null; {base}", Shell::quote(dir)),
-        None => base,
-    };
-    let shell = vec!["/bin/sh".to_string(), "-c".to_string(), inner];
-
-    let mut env = vec![
-        "TERM=xterm-256color".to_string(),
-        "HOME=/root".to_string(),
-        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
-    ];
-    // The workspace's configured environment variables.
-    for (k, v) in &ws.env {
-        env.push(format!("{k}={v}"));
-    }
-    // Generic Wayland/GL rendering diagnostics for a `--gui` workspace: opt-in HOST env knobs forwarded
-    // into the guest only when set, so an ordinary launch keeps its configured environment byte-for-byte.
-    // They are consumed by the injected GL shim (libEGL/libGLESv2) and libwayland — no application is
-    // special-cased; any Wayland client honors them. App-specific launch tuning (flags, profile dirs,
-    // timeouts) belongs in the workspace's own configured env, never hard-coded here.
-    for k in [
-        "WAYLAND_DEBUG",
-        "HL_SHIM_DEBUG",
-        "HL_SHADER_DUMP_DIR",
-        "HL_TEXTURE_DUMP_DIR",
-    ] {
-        if let Ok(v) = std::env::var(k) {
-            env.push(format!("{k}={v}"));
-        }
-    }
-
-    let mut builder = hl_jit::Container::builder(image)
-        .cmd(shell)
-        .cwd(start_dir.clone().unwrap_or_else(|| "/root".to_string()))
-        .guest_env(&env, true)
-        .hostname(Hostname::sanitize(&ws.name))
-        .private_network(format!("ws-{}", Hostname::sanitize(&ws.name)));
-    // Per-workspace VPN egress (docs/VPN.md): when the workspace is configured with a VPN that resolves to a
-    // SOCKS5 endpoint, arm the engine's egress redirect so every genuine external TCP connect the guest makes
-    // is funneled through that proxy. Absent a VPN (the default), nothing is set and the engine's direct
-    // connect() path runs unchanged — zero overhead, no behavior change. Tunnel kinds (WireGuard/OpenVPN)
-    // model a config path but need the userspace-tunnel helper to front them as SOCKS first (future `wsvpn`).
-    if let Some(vpn) = &ws.vpn {
-        match vpn.socks_endpoint() {
-            Some(sock) => {
-                builder = builder.egress_socks(sock.to_string());
-            }
-            None => eprintln!(
-                "[hl] workspace {:?} VPN kind {:?} needs the userspace-tunnel helper (not yet wired); egress is direct",
-                ws.name, vpn.kind
-            ),
-        }
-    }
-    // Configured bind mounts + resource caps from the workspace definition.
-    for m in &ws.mounts {
-        builder = builder.bind(m.host.clone(), m.container.clone(), m.ro);
-    }
-    // Mount the workspace's ISOLATED daemon socket so the normal `docker` CLI works inside. Bind at the
-    // canonical /run/docker.sock (in the image /var/run is a symlink to /run).
-    if ws.docker_sock {
-        if let Ok(sock) = crate::runtime::resources::Daemon::new(&ws.name).ensure() {
-            builder = builder.bind(
-                sock.to_string_lossy().into_owned(),
-                "/run/docker.sock".to_string(),
-                false,
-            );
-            env.push("DOCKER_HOST=unix:///run/docker.sock".to_string());
-            // Inject a static `docker` CLI (matching the workspace arch) so it works even in a bare image.
-            let docker_bin = paths::hl_root().join("bin").join(match ws.arch {
-                Arch::Amd64 => "docker-amd64",
-                _ => "docker-arm64",
-            });
-            if docker_bin.exists() {
-                builder = builder.bind(
-                    docker_bin.to_string_lossy().into_owned(),
-                    "/usr/local/bin/docker".to_string(),
-                    true,
-                );
-            }
-            builder = builder.guest_env(&env, true); // re-apply so DOCKER_HOST is included
-        }
-    }
-    // GPU integration (accelerated `--gui` display + simulated CUDA device) is now expressed to hl-jit
-    // through a generic device-provider seam: the application runtime
-    // resolves *where the host artifacts live* (the `~/.hl/...` drop-ins, the socket paths, the guest ISA)
-    // and hands a `crate::runtime::gpu::Gpu` to the hl-jit builder as a `DeviceProvider`. The
-    // provider (in hl-gpu) owns *how a GPU maps into a guest* — target multiarch lib dir, guest socket
-    // paths, the WAYLAND_DISPLAY/HL_GPU_EXEC/HL_CUDA_* env contract, the LD_LIBRARY_PATH composition, and
-    // the render-node request — while hl-jit / the engine stay device-agnostic (they only see mounts +
-    // env + a render-node bool; no CUDA/IOSurface/Wayland vocabulary crosses the runtime boundary). Inert
-    // unless the workspace is `gui` and/or configures a `cuda` device → headless workspaces byte-identical.
-    let gpu_socket = paths::run_dir().join(format!(
-        "gpu-{}-{}.sock",
-        Hostname::sanitize(&ws.name),
-        std::process::id(),
-    ));
-    let wayland_socket = paths::run_dir().join(format!(
-        "wayland-{}-{}",
-        Hostname::sanitize(&ws.name),
-        std::process::id(),
-    ));
-    let gpu_service = if ws.gui || ws.cuda.is_some() {
-        Some(crate::runtime::gpu::Service::start(
-            &gpu_socket,
-            crate::runtime::gpu::Configuration::configured()?,
-        )?)
-    } else {
-        None
-    };
-    let compositor_service = if ws.gui {
-        Some(crate::runtime::compositor::Service::start_with(
-            &wayland_socket,
-            ws.storage_dir(&paths::hl_root()).join("frames"),
-            crate::runtime::compositor::Presentation::configured()?,
-        )?)
-    } else {
-        None
-    };
-    let mut gpu = crate::runtime::gpu::Gpu::new(
-        match ws.arch {
-            Arch::Amd64 => crate::runtime::gpu::GuestArch::X86_64,
-            _ => crate::runtime::gpu::GuestArch::Aarch64,
-        },
-        paths::hl_root(),
-        &gpu_socket,
-    );
-    if ws.gui {
-        gpu = gpu.with_display(crate::runtime::gpu::Display {
-            wayland_socket: wayland_socket.clone(),
-            surface_size: None,
-        });
-        // Fork-safe IOSurface pool pre-seed for a NO-ARGUMENT `--gui` launch. Chrome's GPU/render process
-        // is a host fork()-WITHOUT-exec child that can NEITHER create an IOSurface nor receive one over a
-        // mach port — it can only reuse surfaces the non-forked ROOT engine pre-created, marked
-        // VM_INHERIT_SHARE, BEFORE the fork. The engine seeds that pool in `hl_gpu_prewarm_fork_safety`
-        // (vfs.c) from `HL_GPU_POOL="WxH[,WxH…]"` read from ITS OWN process env — and ffi.c forwards our
-        // `environ` to the engine's execve (the very same channel as the `HL_JIT_CHECKPOINT_DIR` /
-        // `OBJC_DISABLE_INITIALIZE_FORK_SAFETY` vars set above). On a plain launch nothing exports it, so
-        // the forked GPU child MISSes every size and cold Chrome renders 0 frames on an idle Mac. Derive
-        // the geometry here and export it so a true no-arg launch pre-seeds automatically. An explicit
-        // caller-provided `HL_GPU_POOL` (e.g. the validation harness) is honored untouched.
-        if std::env::var_os("HL_GPU_POOL").is_none() {
-            // The size the guest's Chrome launcher passes to `--window-size`: our process env first (a
-            // harness/user `HL_WINDOW_SIZE=W,H`), else the workspace's configured value. The guest
-            // `hlrun` script defaults to 512x384 when unset, so we match that default below. The wire form
-            // is "W,H"; the pool wants "WxH". `x`-separated input is accepted too, for convenience.
-            let configured = std::env::var("HL_WINDOW_SIZE").ok().or_else(|| {
-                ws.env
-                    .iter()
-                    .find(|(k, _)| k == "HL_WINDOW_SIZE")
-                    .map(|(_, v)| v.clone())
-            });
-            let mut sizes: Vec<(u32, u32)> = Vec::new();
-            if let Some((w, h)) = configured.as_deref().and_then(WindowSize::parse) {
-                sizes.push((w, h));
-            }
-            // The guest default (`${HL_WINDOW_SIZE:-512,384}`) plus a compact set of common desktop
-            // sizes. The GPU child inherits the pool ONLY at fork time, so any size it may later scan out
-            // on a window RESIZE must be pre-seeded NOW (a surface the root creates AFTER the child forked
-            // is not in that child's address space). This covers a resize to a typical target; an arbitrary
-            // drag to an unseeded size is the documented limitation (needs a root-services-child bridge).
-            // `HL_GPU_POOL_N` (engine side, default 6) bounds how many per size.
-            for (w, h) in [(512u32, 384u32), (800, 600), (1280, 720)] {
-                if !sizes.contains(&(w, h)) {
-                    sizes.push((w, h));
-                }
-            }
-            let pool = sizes
-                .iter()
-                .map(|(w, h)| format!("{w}x{h}"))
-                .collect::<Vec<_>>()
-                .join(",");
-            std::env::set_var("HL_GPU_POOL", pool);
-        }
-    }
-    if let Some(cuda) = &ws.cuda {
-        // The driver package owns CUDA/CUDART/NVML. The optional proprietary nvidia-smi executable is a
-        // user-provided tool, so hl only selects and mounts it into the composed launch.
-        let smi_arch = match ws.arch {
-            Arch::Amd64 => "nvidia-smi-amd64",
-            _ => "nvidia-smi-arm64",
-        };
-        let root = paths::hl_root();
-        // Prefer the arch-specific nvidia-smi name, then a generic `nvidia-smi`. Never ship the closed binary.
-        let smi_a = root.join("bin").join(smi_arch);
-        let smi_g = root.join("bin").join("nvidia-smi");
-        let nvidia_smi = if smi_a.exists() {
-            smi_a.to_string_lossy().into_owned()
-        } else if smi_g.exists() {
-            smi_g.to_string_lossy().into_owned()
-        } else {
-            eprintln!(
-                "[hl] workspace {:?}: drop the real nvidia-smi at {} (or {}) to run it against hl's NVML; \
-                 the NVML shim is still injected so any NVML client sees the device.",
-                ws.name,
-                smi_a.display(),
-                smi_g.display()
-            );
-            String::new()
-        };
-        gpu = gpu.with_cuda(crate::runtime::gpu::Cuda {
-            device: cuda.clone(),
-            nvidia_smi: if nvidia_smi.is_empty() {
-                None
-            } else {
-                Some(nvidia_smi.into())
-            },
-        });
-    }
-    if !gpu.is_inert() {
-        // Ask the provider what it needs (composing its LD_LIBRARY_PATH against the current guest `env`),
-        // apply the mounts + render-node generically, fold its env in, and re-apply the guest env once so
-        // the added K=V lines go through the normal docker last-wins dedup — byte-identical to the old
-        // inline gui+cuda blocks (same volumes, same env order, same HL_GPU_IOSURFACE flag).
-        let req = gpu.device_request(&env);
-        builder = builder.apply_device(&req);
-        env.extend(req.env);
-        builder = builder.guest_env(&env, true);
-    }
-    if let Some(c) = ws.cpus {
-        builder = builder.cpus(c);
-    }
-    if let Some(mb) = ws.memory_mb {
-        builder = builder.memory_mb(mb as u64);
-    }
-    let container = builder.build().map_err(LauncherError::io)?;
-
-    // hl-jit's start_into() spawns tokio IO pumps, so it must run inside a runtime; keep that runtime
-    // alive in the handle so the pumps keep feeding the broadcast we drain synchronously.
-    let trt = tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()?;
-
-    // CRITICAL: subscribe to the output BEFORE launching so the shell's first prompt (emitted the instant
-    // the guest starts) is never lost — otherwise the terminal shows only the banner and looks hung.
-    let (out, rx) = {
-        let (tx, rx) = tokio::sync::broadcast::channel::<(u8, Vec<u8>)>(4096);
-        (tx, rx)
+    let root = workspace.storage_dir(&paths::hl_root()).join("containers");
+    let images = Images::open(paths::images_dir()).map_err(LauncherError::io)?;
+    let containers = runtime
+        .block_on(
+            Containers::builder(Config::new(root))
+                .images(images.clone())
+                .build(),
+        )
+        .map_err(LauncherError::io)?;
+    let platform = match workspace.arch {
+        Arch::Arm64 => Platform::linux_arm64(),
+        Arch::Amd64 => Platform::linux_amd64(),
     };
-    let log_chunks = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    let (stdin_tx, stdin_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
-    let launched = trt
-        .block_on(async {
-            rt.start_into(
-                &container,
-                hl_jit::Stdio3 { tty: true },
-                out,
-                log_chunks,
-                stdin_rx,
-            )
-        })
+    let reference: Reference = workspace.image.parse().map_err(LauncherError::io)?;
+    let image = match images.resolve(&reference).map_err(LauncherError::io)? {
+        Some(image) => image,
+        None => runtime
+            .block_on(images.pull(&Registry::new(Auth::Anonymous), reference, &platform))
+            .map_err(LauncherError::io)?,
+    };
+    let unpacked = images
+        .unpack(&image, &platform)
+        .map_err(LauncherError::io)?;
+    let injection = crate::runtime::gpu::Injection::for_workspace(workspace)?;
+
+    let start_dir = cwd
+        .map(str::trim)
+        .filter(|value| value.starts_with('/') && !value.is_empty())
+        .unwrap_or("/root");
+    let base = workspace
+        .shell
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map_or_else(
+            || {
+                "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi"
+                    .to_owned()
+            },
+            |shell| format!("exec {shell}"),
+        );
+    let command = format!("cd {} 2>/dev/null; {base}", Shell::quote(start_dir));
+    let mut environment = BTreeMap::from([
+        ("TERM".to_owned(), "xterm-256color".to_owned()),
+        ("HOME".to_owned(), "/root".to_owned()),
+        (
+            "PATH".to_owned(),
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_owned(),
+        ),
+    ]);
+    environment.extend(workspace.env.iter().cloned());
+    environment.extend(injection.environment.iter().cloned());
+    if let Some(library) = &injection.library_path {
+        let value = environment
+            .get("LD_LIBRARY_PATH")
+            .filter(|value| !value.is_empty())
+            .map(|value| format!("{library}:{value}"))
+            .unwrap_or_else(|| library.clone());
+        environment.insert("LD_LIBRARY_PATH".to_owned(), value);
+    }
+    let daemon_socket = workspace
+        .docker_sock
+        .then(|| crate::runtime::resources::Daemon::new(&workspace.name).ensure())
+        .transpose()?;
+    if daemon_socket.is_some() {
+        environment.insert(
+            "DOCKER_HOST".to_owned(),
+            "unix:///run/docker.sock".to_owned(),
+        );
+    }
+    let overrides = RuntimeOverrides {
+        entrypoint: Some(vec!["/bin/sh".to_owned()]),
+        command: Some(vec!["-c".to_owned(), command]),
+        environment,
+        working_directory: Some(start_dir.to_owned()),
+        user: Some("0:0".to_owned()),
+    };
+    let name = format!(
+        "{}-{}-{}",
+        Hostname::sanitize(&workspace.name),
+        slot.map(Hostname::sanitize)
+            .unwrap_or_else(|| "terminal".to_owned()),
+        std::process::id()
+    );
+    let size = Size::new(rows.max(1), columns.max(1)).map_err(LauncherError::io)?;
+    let container = runtime
+        .block_on(
+            containers.create_image(&unpacked, overrides, |mut spec: ContainerSpec| {
+                spec = spec
+                    .name(name.clone())
+                    .hostname(Hostname::sanitize(&workspace.name))
+                    .guest(match workspace.arch {
+                        Arch::Arm64 => Guest::Aarch64,
+                        Arch::Amd64 => Guest::X86_64,
+                    });
+                spec.process.console = Console {
+                    stdin: true,
+                    terminal: Some(size),
+                };
+                for mount in &workspace.mounts {
+                    spec = spec.mount(if mount.ro {
+                        Mount::read_only(&mount.host, &mount.container)
+                    } else {
+                        Mount::read_write(&mount.host, &mount.container)
+                    });
+                }
+                for mount in &injection.mounts {
+                    spec = spec.mount(mount.clone());
+                }
+                if let Some(socket) = &daemon_socket {
+                    spec = spec.mount(Mount::read_write(socket, "/run/docker.sock"));
+                }
+                spec
+            }),
+        )
+        .map_err(LauncherError::io)?;
+    let name = container
+        .spec
+        .name
+        .as_deref()
+        .unwrap_or(container.id.as_str())
+        .to_owned();
+    let mut session = runtime
+        .block_on(containers.attach(&name))
+        .map_err(LauncherError::io)?;
+    let input = session.input();
+    runtime
+        .block_on(containers.start(&name))
         .map_err(LauncherError::io)?;
 
-    // Record the container init's host pid so a separate `workspace checkpoint` can signal the live tree
-    // (per-pane slot when given, else the shared slot).
-    let _ = std::fs::write(&ckpt_pid_file, launched.pid.to_string());
+    let (output_tx, output) = std::sync::mpsc::channel();
+    let exited = std::sync::Arc::new(std::sync::Mutex::new(None));
+    runtime.spawn(async move {
+        while let Ok(Some(entry)) = session.next().await {
+            if output_tx.send(entry.bytes).is_err() {
+                return;
+            }
+        }
+    });
+    let waiting = containers.clone();
+    let waiting_name = name.clone();
+    let exit = std::sync::Arc::clone(&exited);
+    runtime.spawn(async move {
+        if let Ok(status) = waiting.wait(&waiting_name).await {
+            let code = match status {
+                hl_container::ExitStatus::Code(code) => code,
+                hl_container::ExitStatus::Signal(signal) => 128 + signal,
+                hl_container::ExitStatus::Fault { status, .. } => status,
+            };
+            *exit.lock().expect("container exit status") = Some(code);
+        }
+    });
 
-    let mut pty = HlJitPty {
-        _rt: trt,
-        _gpu_service: gpu_service,
-        _compositor_service: compositor_service,
-        stdin_tx,
-        rx,
-        master: launched.pty_master,
-        pid: launched.pid as libc::pid_t,
-        pending: VecDeque::new(),
-        exited: None,
-    };
-    pty.resize(cols, rows);
-    Ok(Box::new(pty))
+    Ok(Box::new(ContainerPty {
+        runtime,
+        containers,
+        name,
+        input,
+        output,
+        pending: Default::default(),
+        exited,
+        _gpu_service: injection.service,
+        _compositor_service: injection.compositor,
+    }))
 }

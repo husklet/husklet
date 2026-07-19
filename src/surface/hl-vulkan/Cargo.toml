@@ -30,14 +30,5 @@ hl_gpu = { package = "hl-gpu", path = "../../gpu/hl-gpu" }
 # the guest ICD cdylib. Its symbols are NOT `#[no_mangle]`, so it adds no exports (the 715 ABI is intact).
 hl-log = { path = "../../packages/hl-log" }
 
-# The container-runtime driver-plugin seam (`hl_jit::Driver`). OPTIONAL + behind the `jit` feature so
-# the HOST composition root gets the `Vulkan` driver plug, while the GUEST shim cdylib (which depends on
-# this crate for the lowering services) does NOT drag hl-jit / hl-jit-darwin / tokio into a guest .so —
-# it sets `default-features = false`. hl-jit builds on this Linux host.
-hl-jit = { path = "../../engine/hl-jit", optional = true }
-
 [features]
-# On by default so `cargo test --manifest-path hl-vulkan/Cargo.toml` builds the `Vulkan` driver plug.
-default = ["jit"]
-# Gate the host-side `driver` module (the `hl_jit::Driver` impl) + its hl-jit dependency.
-jit = ["dep:hl-jit"]
+default = []

@@ -100,36 +100,12 @@ impl Workspace {
                 .join(Self::path_component(&self.name))
         })
     }
-    /// The persistent writable-upper directory, passed to `Image::overlay(upper, [rootfs])`.
-    pub fn upper_dir(&self, base: &Path) -> PathBuf {
-        self.storage_dir(base).join("upper")
-    }
-    /// Where a whole-workspace checkpoint (the frozen process tree) is written on close / read on reopen.
-    pub fn checkpoint_dir(&self, base: &Path) -> PathBuf {
-        self.storage_dir(base).join("checkpoint")
-    }
-    /// The file recording the running container init's host pid.
-    pub fn checkpoint_pid_file(&self, base: &Path) -> PathBuf {
-        self.storage_dir(base).join("checkpoint.pid")
-    }
-    /// Per-pane checkpoint dir (each tab/split-pane is its own engine, frozen into its own slot).
-    pub fn checkpoint_slot_dir(&self, base: &Path, slot: &str) -> PathBuf {
-        self.storage_dir(base)
-            .join("checkpoint")
-            .join(Self::path_component(slot))
-    }
-    /// The pid file for a per-pane checkpoint slot.
-    pub fn checkpoint_slot_pid_file(&self, base: &Path, slot: &str) -> PathBuf {
-        self.storage_dir(base)
-            .join("checkpoint")
-            .join(format!("{}.pid", Self::path_component(slot)))
-    }
     /// The default shell command to run in the workspace.
     pub fn default_shell() -> Vec<String> {
         vec!["/bin/bash".to_string(), "-l".to_string()]
     }
 
-    /// Encode workspace and checkpoint-slot names as one safe path component.
+    /// Encode a workspace name as one safe path component.
     fn path_component(name: &str) -> String {
         name.chars()
             .map(|character| {
@@ -163,26 +139,5 @@ mod tests {
     fn os_arch_label_is_full_os_slash_arch() {
         assert_eq!(Arch::Arm64.os_arch_label(), "linux/aarch64");
         assert_eq!(Arch::Amd64.os_arch_label(), "linux/x86_64");
-    }
-
-    #[test]
-    fn upper_dir_is_named_and_stable() {
-        let ws = Workspace::new("My Cool WS!", "ubuntu", Arch::Arm64);
-        let dir = ws.upper_dir(Path::new("/home/u/.hl"));
-        assert_eq!(dir, Path::new("/home/u/.hl/workspaces/My_Cool_WS_/upper"));
-    }
-
-    #[test]
-    fn checkpoint_slot_paths_cannot_escape_workspace_storage() {
-        let ws = Workspace::new("demo", "ubuntu", Arch::Arm64);
-        let base = Path::new("/home/u/.hl");
-        assert_eq!(
-            ws.checkpoint_slot_dir(base, "../pane 1"),
-            Path::new("/home/u/.hl/workspaces/demo/checkpoint/___pane_1")
-        );
-        assert_eq!(
-            ws.checkpoint_slot_pid_file(base, "../pane 1"),
-            Path::new("/home/u/.hl/workspaces/demo/checkpoint/___pane_1.pid")
-        );
     }
 }

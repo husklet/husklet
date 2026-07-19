@@ -6,7 +6,7 @@
 //!   * [`local::LocalPty`] — `openpty` + fork a host shell. Works on any Unix (this is what makes the
 //!     whole terminal testable headlessly on the Linux dev host: spawn a real `bash`, drive it, assert
 //!     the resulting grid).
-//!   * `hl_jit::HlJitPty` (macOS) — a shell inside a hl workspace *container* via `hl_jit::Runtime`.
+//!   * Husklet's container adapter — a shell inside a workspace container.
 //!
 //! Both expose a real pollable master fd, so the GUI event loop can `poll`/`epoll`/`kqueue` them uniformly.
 

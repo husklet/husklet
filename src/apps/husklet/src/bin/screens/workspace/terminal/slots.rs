@@ -29,14 +29,7 @@ impl<'a> Slots<'a> {
         saved.clone()
     }
 
-    /// True if this pane slot has a frozen checkpoint on disk (a written MANIFEST) to restore.
-    pub(crate) fn has_checkpoint(ws: &Workspace, slot: &str) -> bool {
-        ws.checkpoint_slot_dir(&Home::current().root(), slot)
-            .join("MANIFEST")
-            .exists()
-    }
-
-    /// Find the checkpoint slot registered for `term` (pruning dead registry entries as it scans).
+    /// Find the layout slot registered for `term` (pruning dead registry entries as it scans).
     pub(crate) fn of(&self, term: &vte4::Terminal) -> Option<String> {
         let tw = self.0;
         let mut found = None;
@@ -53,25 +46,19 @@ impl<'a> Slots<'a> {
         found
     }
 
-    /// A pane closed by the user (not a window close) → drop it from the registry and DISCARD its slot's
-    /// stale checkpoint, so a later reopen doesn't wrongly resurrect a shell the user deliberately closed.
+    /// A pane closed by the user is dropped from the live registry.
     pub(crate) fn discard(&self, term: &vte4::Terminal) {
         let tw = self.0;
-        let mut removed = None;
         tw.panes
             .borrow_mut()
             .retain(|(w, slot, _)| match w.upgrade() {
                 Some(t) if &t == term => {
-                    removed = Some(slot.clone());
+                    let _ = slot;
                     false
                 }
                 Some(_) => true,
                 None => false, // prune dead entries while we're here
             });
-        if let Some(slot) = removed {
-            let _ =
-                std::fs::remove_dir_all(tw.ws.checkpoint_slot_dir(&Home::current().root(), &slot));
-        }
     }
 
     /// Discard the slots of every terminal under a page's widget subtree (a whole tab being closed).

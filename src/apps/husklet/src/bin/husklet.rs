@@ -4,7 +4,7 @@
 //! * Native macOS title bars (real traffic lights); content — including the full-width tab strip — sits
 //!   directly below, so nothing needs a traffic-light gap.
 //! * DAEMON-FREE launch: each terminal tab runs `hl workspace launch <name>`, entering the image
-//!   in-process via hl-jit. GPU-rendered through GTK4's GSK renderer; VTE is the grid.
+//!   through the container domain. GPU-rendered through GTK4's GSK renderer; VTE is the grid.
 //! * No onboarding, no popups — the app opens straight onto workspaces.
 //!
 //! Build + run on macOS: `nix develop ./nix -c cargo run -p husklet --features gui --bin husklet`.
@@ -21,7 +21,7 @@ use vte4::TerminalExtManual;
 
 use hl::config::{CudaDevice, TerminalPreferences, VpnConfig, WorkspaceConfig, WorkspaceStore};
 use hl_gui::gtk::{ColorPicker, FontPicker};
-use hl_ws::{Arch, Mount, Workspace};
+use hl_ws::{Arch, Mount};
 use hl_ws_term::config::{CursorShape, TermConfig};
 use hl_ws_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir};
 

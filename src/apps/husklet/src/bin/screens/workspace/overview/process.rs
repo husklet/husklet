@@ -125,7 +125,7 @@ pub(crate) fn filter_workspace_procs(
 
 /// The Processes pane: a header + a body that [`fill_proc_table`] repopulates with a NAME column and
 /// per-row Stop (SIGTERM) / Force-kill (SIGKILL) buttons. These act on the host launcher process — i.e.
-/// the terminal shell session — because the workspace's guest processes run in-process (inside the hl-jit
+/// the terminal shell session — because the workspace's guest processes run inside the container
 /// engine) and aren't individually visible in the host process table.
 pub(crate) fn live_proc_pane() -> (gtk::ScrolledWindow, gtk::Box) {
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);

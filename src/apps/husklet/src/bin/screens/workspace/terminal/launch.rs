@@ -1,12 +1,11 @@
 use super::*;
 
-/// Builds a terminal for one checkpoint slot and optionally restores its process tree.
+/// Builds a terminal for one persisted layout slot.
 pub(crate) fn make_terminal_ex(
     tw: &Rc<TermWin>,
     cwd: Option<String>,
     history: Option<String>,
     slot: String,
-    restore: bool,
 ) -> (vte4::Terminal, Rc<Cell<i32>>) {
     let term = vte4::Terminal::new();
     let cfg = tw.ws.terminal_config();
@@ -59,9 +58,6 @@ pub(crate) fn make_terminal_ex(
         )
     });
     let cwd_arg = cwd.filter(|c| c.starts_with('/'));
-    // Always pass this pane's `--slot`; add `--restore` when this slot has a frozen tree to resume, else
-    // a `--cwd` for OSC-7 new-tab-in-cwd. (Restore ignores cwd — the checkpoint carries every cwd.)
-    let restore_arg = if restore { "restore" } else { "" };
     let directory = cwd_arg.as_deref().unwrap_or("");
     let launch_args: Vec<&str> = vec![
         application.as_str(),
@@ -69,7 +65,7 @@ pub(crate) fn make_terminal_ex(
         "launch",
         tw.ws.name.as_str(),
         slot.as_str(),
-        restore_arg,
+        "",
         directory,
     ];
     let argv: Vec<&str> = if let Some(c) = &testcmd {
