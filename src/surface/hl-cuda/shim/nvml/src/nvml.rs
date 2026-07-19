@@ -66,16 +66,24 @@ impl Nvml {
         if let Ok(cc) = std::env::var("HL_CUDA_CC") {
             let mut it = cc.split('.');
             if let Some(maj) = it.next().and_then(|s| s.trim().parse::<u32>().ok()) {
-                let min = it.next().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0);
+                let min = it
+                    .next()
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                    .unwrap_or(0);
                 self.desc.compute_capability = (maj, min);
             }
         }
         // Reported VRAM: prefer the launcher's byte-exact HL_CUDA_VRAM_BYTES, else the C-oracle's
         // HL_CUDA_VRAM (megabytes).
-        if let Some(bytes) = std::env::var("HL_CUDA_VRAM_BYTES").ok().and_then(|s| s.parse::<u64>().ok())
+        if let Some(bytes) = std::env::var("HL_CUDA_VRAM_BYTES")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
         {
             self.desc.total_mem = bytes;
-        } else if let Some(mb) = std::env::var("HL_CUDA_VRAM").ok().and_then(|s| s.parse::<u64>().ok()) {
+        } else if let Some(mb) = std::env::var("HL_CUDA_VRAM")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+        {
             if mb > 0 {
                 self.desc.total_mem = mb * 1024 * 1024;
             }
@@ -95,26 +103,28 @@ impl Nvml {
         if let Ok(cd) = std::env::var("HL_CUDA_DRIVER_CUDA") {
             let mut it = cd.split('.');
             if let Some(maj) = it.next().and_then(|s| s.trim().parse::<i32>().ok()) {
-                let min = it.next().and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(0);
+                let min = it
+                    .next()
+                    .and_then(|s| s.trim().parse::<i32>().ok())
+                    .unwrap_or(0);
                 self.cuda_driver_version = maj * 1000 + min * 10;
             }
         }
     }
 }
 
-fn state() -> &'static Mutex<Nvml> {
-    static S: OnceLock<Mutex<Nvml>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(Nvml::new()))
-}
+impl Nvml {
+    fn with<R>(f: impl FnOnce(&mut Nvml) -> R) -> R {
+        static STATE: OnceLock<Mutex<Nvml>> = OnceLock::new();
+        let state = STATE.get_or_init(|| Mutex::new(Nvml::new()));
+        let mut nvml = state.lock().unwrap_or_else(|error| error.into_inner());
+        f(&mut nvml)
+    }
 
-fn with<R>(f: impl FnOnce(&mut Nvml) -> R) -> R {
-    let mut g = state().lock().unwrap_or_else(|e| e.into_inner());
-    f(&mut g)
-}
-
-/// Is `d` the one valid device handle?
-fn is_valid(d: *mut c_void) -> bool {
-    d as usize == DEVICE_TOKEN
+    /// Is `device` the one valid device handle?
+    fn is_valid(device: *mut c_void) -> bool {
+        device as usize == DEVICE_TOKEN
+    }
 }
 
 /// Copy `s` (with a trailing nul) into the caller's `dst[..len]` buffer, truncating to fit. A null
@@ -135,7 +145,7 @@ unsafe fn write_cstr(dst: *mut c_char, len: u32, s: &str) -> i32 {
 // ==================================================================================================
 
 fn init_impl() -> i32 {
-    with(|s| {
+    Nvml::with(|s| {
         if !s.inited {
             s.seed_from_env();
             s.inited = true;
@@ -161,7 +171,7 @@ pub extern "C" fn nvmlInitWithFlags(_flags: u32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn nvmlShutdown() -> i32 {
-    with(|s| s.inited = false);
+    Nvml::with(|s| s.inited = false);
     NVML_SUCCESS
 }
 
@@ -188,30 +198,32 @@ pub extern "C" fn nvmlErrorString(result: i32) -> *const c_char {
 
 #[no_mangle]
 pub extern "C" fn nvmlSystemGetDriverVersion(v: *mut c_char, len: u32) -> i32 {
-    with(|s| unsafe { write_cstr(v, len, &s.driver_version) })
+    Nvml::with(|s| unsafe { write_cstr(v, len, &s.driver_version) })
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlSystemGetNVMLVersion(v: *mut c_char, len: u32) -> i32 {
-    with(|s| unsafe { write_cstr(v, len, &s.nvml_version) })
+    Nvml::with(|s| unsafe { write_cstr(v, len, &s.nvml_version) })
 }
 
-fn cuda_driver_version(v: *mut i32) -> i32 {
-    if v.is_null() {
-        return NVML_ERROR_INVALID_ARGUMENT;
+impl Nvml {
+    fn cuda_driver_version(v: *mut i32) -> i32 {
+        if v.is_null() {
+            return NVML_ERROR_INVALID_ARGUMENT;
+        }
+        Self::with(|s| unsafe { *v = s.cuda_driver_version });
+        NVML_SUCCESS
     }
-    with(|s| unsafe { *v = s.cuda_driver_version });
-    NVML_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlSystemGetCudaDriverVersion(v: *mut i32) -> i32 {
-    cuda_driver_version(v)
+    Nvml::cuda_driver_version(v)
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlSystemGetCudaDriverVersion_v2(v: *mut i32) -> i32 {
-    cuda_driver_version(v)
+    Nvml::cuda_driver_version(v)
 }
 
 #[no_mangle]
@@ -224,58 +236,62 @@ pub extern "C" fn nvmlSystemGetProcessName(_pid: u32, name: *mut c_char, len: u3
 // device enumeration
 // ==================================================================================================
 
-fn count_impl(count: *mut u32) -> i32 {
-    if with(|s| !s.inited) {
-        return NVML_ERROR_UNINITIALIZED;
+impl Nvml {
+    fn count(count: *mut u32) -> i32 {
+        if Self::with(|s| !s.inited) {
+            return NVML_ERROR_UNINITIALIZED;
+        }
+        if count.is_null() {
+            return NVML_ERROR_INVALID_ARGUMENT;
+        }
+        unsafe { *count = 1 };
+        NVML_SUCCESS
     }
-    if count.is_null() {
-        return NVML_ERROR_INVALID_ARGUMENT;
-    }
-    unsafe { *count = 1 };
-    NVML_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetCount(count: *mut u32) -> i32 {
-    count_impl(count)
+    Nvml::count(count)
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetCount_v2(count: *mut u32) -> i32 {
-    count_impl(count)
+    Nvml::count(count)
 }
 
-fn handle_by_index_impl(index: u32, dev: *mut *mut c_void) -> i32 {
-    if with(|s| !s.inited) {
-        return NVML_ERROR_UNINITIALIZED;
+impl Nvml {
+    fn handle_by_index(index: u32, dev: *mut *mut c_void) -> i32 {
+        if Self::with(|s| !s.inited) {
+            return NVML_ERROR_UNINITIALIZED;
+        }
+        if dev.is_null() || index != 0 {
+            return NVML_ERROR_INVALID_ARGUMENT;
+        }
+        unsafe { *dev = DEVICE_TOKEN as *mut c_void };
+        NVML_SUCCESS
     }
-    if dev.is_null() || index != 0 {
-        return NVML_ERROR_INVALID_ARGUMENT;
-    }
-    unsafe { *dev = DEVICE_TOKEN as *mut c_void };
-    NVML_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetHandleByIndex(index: u32, dev: *mut *mut c_void) -> i32 {
-    handle_by_index_impl(index, dev)
+    Nvml::handle_by_index(index, dev)
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetHandleByIndex_v2(index: u32, dev: *mut *mut c_void) -> i32 {
-    handle_by_index_impl(index, dev)
+    Nvml::handle_by_index(index, dev)
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetHandleByUUID(uuid: *const c_char, dev: *mut *mut c_void) -> i32 {
-    if with(|s| !s.inited) {
+    if Nvml::with(|s| !s.inited) {
         return NVML_ERROR_UNINITIALIZED;
     }
     if uuid.is_null() || dev.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     let requested = unsafe { std::ffi::CStr::from_ptr(uuid) }.to_string_lossy();
-    let ours = with(|s| s.desc.uuid_str());
+    let ours = Nvml::with(|s| s.desc.uuid_str());
     if requested != ours {
         return NVML_ERROR_NOT_FOUND;
     }
@@ -283,26 +299,31 @@ pub extern "C" fn nvmlDeviceGetHandleByUUID(uuid: *const c_char, dev: *mut *mut 
     NVML_SUCCESS
 }
 
-fn handle_by_pci_impl(pci: *const c_char, dev: *mut *mut c_void) -> i32 {
-    if with(|s| !s.inited) {
-        return NVML_ERROR_UNINITIALIZED;
+impl Nvml {
+    fn handle_by_pci(pci: *const c_char, dev: *mut *mut c_void) -> i32 {
+        if Self::with(|s| !s.inited) {
+            return NVML_ERROR_UNINITIALIZED;
+        }
+        if pci.is_null() || dev.is_null() {
+            return NVML_ERROR_INVALID_ARGUMENT;
+        }
+        // Only one device on a fixed bus; accept any well-formed id.
+        unsafe { *dev = DEVICE_TOKEN as *mut c_void };
+        NVML_SUCCESS
     }
-    if pci.is_null() || dev.is_null() {
-        return NVML_ERROR_INVALID_ARGUMENT;
-    }
-    // Only one device on a fixed bus; accept any well-formed id.
-    unsafe { *dev = DEVICE_TOKEN as *mut c_void };
-    NVML_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetHandleByPciBusId(pci: *const c_char, dev: *mut *mut c_void) -> i32 {
-    handle_by_pci_impl(pci, dev)
+    Nvml::handle_by_pci(pci, dev)
 }
 
 #[no_mangle]
-pub extern "C" fn nvmlDeviceGetHandleByPciBusId_v2(pci: *const c_char, dev: *mut *mut c_void) -> i32 {
-    handle_by_pci_impl(pci, dev)
+pub extern "C" fn nvmlDeviceGetHandleByPciBusId_v2(
+    pci: *const c_char,
+    dev: *mut *mut c_void,
+) -> i32 {
+    Nvml::handle_by_pci(pci, dev)
 }
 
 // ==================================================================================================
@@ -311,31 +332,31 @@ pub extern "C" fn nvmlDeviceGetHandleByPciBusId_v2(pci: *const c_char, dev: *mut
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetName(dev: *mut c_void, name: *mut c_char, len: u32) -> i32 {
-    if !is_valid(dev) {
+    if !Nvml::is_valid(dev) {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
-    with(|s| unsafe { write_cstr(name, len, &s.desc.name) })
+    Nvml::with(|s| unsafe { write_cstr(name, len, &s.desc.name) })
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetUUID(dev: *mut c_void, uuid: *mut c_char, len: u32) -> i32 {
-    if !is_valid(dev) {
+    if !Nvml::is_valid(dev) {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
-    with(|s| unsafe { write_cstr(uuid, len, &s.desc.uuid_str()) })
+    Nvml::with(|s| unsafe { write_cstr(uuid, len, &s.desc.uuid_str()) })
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetSerial(dev: *mut c_void, serial: *mut c_char, len: u32) -> i32 {
-    if !is_valid(dev) {
+    if !Nvml::is_valid(dev) {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
-    with(|s| unsafe { write_cstr(serial, len, &s.serial) })
+    Nvml::with(|s| unsafe { write_cstr(serial, len, &s.serial) })
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetIndex(dev: *mut c_void, index: *mut u32) -> i32 {
-    if !is_valid(dev) || index.is_null() {
+    if !Nvml::is_valid(dev) || index.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *index = 0 };
@@ -344,7 +365,7 @@ pub extern "C" fn nvmlDeviceGetIndex(dev: *mut c_void, index: *mut u32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetMinorNumber(dev: *mut c_void, minor: *mut u32) -> i32 {
-    if !is_valid(dev) || minor.is_null() {
+    if !Nvml::is_valid(dev) || minor.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *minor = 0 };
@@ -353,7 +374,7 @@ pub extern "C" fn nvmlDeviceGetMinorNumber(dev: *mut c_void, minor: *mut u32) ->
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetBrand(dev: *mut c_void, brand: *mut i32) -> i32 {
-    if !is_valid(dev) || brand.is_null() {
+    if !Nvml::is_valid(dev) || brand.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *brand = NVML_BRAND_NVS };
@@ -366,10 +387,10 @@ pub extern "C" fn nvmlDeviceGetCudaComputeCapability(
     major: *mut i32,
     minor: *mut i32,
 ) -> i32 {
-    if !is_valid(dev) || major.is_null() || minor.is_null() {
+    if !Nvml::is_valid(dev) || major.is_null() || minor.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
-    with(|s| unsafe {
+    Nvml::with(|s| unsafe {
         *major = s.desc.compute_capability.0 as i32;
         *minor = s.desc.compute_capability.1 as i32;
     });
@@ -380,10 +401,10 @@ pub extern "C" fn nvmlDeviceGetCudaComputeCapability(
 /// (KEPLER=2 MAXWELL=3 PASCAL=4 VOLTA=5 TURING=6 AMPERE=7 ADA=8 HOPPER=9).
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetArchitecture(dev: *mut c_void, arch: *mut u32) -> i32 {
-    if !is_valid(dev) || arch.is_null() {
+    if !Nvml::is_valid(dev) || arch.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
-    with(|s| {
+    Nvml::with(|s| {
         let (maj, min) = s.desc.compute_capability;
         let a: u32 = match maj {
             3 => 2,
@@ -413,7 +434,7 @@ pub extern "C" fn nvmlDeviceGetArchitecture(dev: *mut c_void, arch: *mut u32) ->
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetVbiosVersion(dev: *mut c_void, v: *mut c_char, len: u32) -> i32 {
-    if !is_valid(dev) {
+    if !Nvml::is_valid(dev) {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { write_cstr(v, len, "00.00.00.00.00") }
@@ -450,10 +471,10 @@ struct NvmlUtilization {
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetMemoryInfo(dev: *mut c_void, m: *mut c_void) -> i32 {
-    if !is_valid(dev) || m.is_null() {
+    if !Nvml::is_valid(dev) || m.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
-    let total = with(|s| s.desc.total_mem);
+    let total = Nvml::with(|s| s.desc.total_mem);
     let out = unsafe { &mut *(m as *mut NvmlMemory) };
     out.total = total;
     out.used = 0;
@@ -463,10 +484,10 @@ pub extern "C" fn nvmlDeviceGetMemoryInfo(dev: *mut c_void, m: *mut c_void) -> i
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetMemoryInfo_v2(dev: *mut c_void, m: *mut c_void) -> i32 {
-    if !is_valid(dev) || m.is_null() {
+    if !Nvml::is_valid(dev) || m.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
-    let total = with(|s| s.desc.total_mem);
+    let total = Nvml::with(|s| s.desc.total_mem);
     let out = unsafe { &mut *(m as *mut NvmlMemoryV2) };
     // Keep the caller-provided version tag; fill the v2 byte counts.
     out.total = total;
@@ -478,7 +499,7 @@ pub extern "C" fn nvmlDeviceGetMemoryInfo_v2(dev: *mut c_void, m: *mut c_void) -
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetUtilizationRates(dev: *mut c_void, u: *mut c_void) -> i32 {
-    if !is_valid(dev) || u.is_null() {
+    if !Nvml::is_valid(dev) || u.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     // Idle simulated device: no outstanding compute → 0% GPU / 0% memory-controller utilization.
@@ -494,7 +515,7 @@ pub extern "C" fn nvmlDeviceGetEncoderUtilization(
     util: *mut u32,
     sampling: *mut u32,
 ) -> i32 {
-    if !is_valid(dev) || util.is_null() || sampling.is_null() {
+    if !Nvml::is_valid(dev) || util.is_null() || sampling.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe {
@@ -510,7 +531,7 @@ pub extern "C" fn nvmlDeviceGetDecoderUtilization(
     util: *mut u32,
     sampling: *mut u32,
 ) -> i32 {
-    if !is_valid(dev) || util.is_null() || sampling.is_null() {
+    if !Nvml::is_valid(dev) || util.is_null() || sampling.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe {
@@ -537,51 +558,55 @@ struct NvmlPciInfo {
 }
 
 /// Write `s` (nul-terminated, truncated to fit) into a fixed C char array field.
-unsafe fn fill_field(field: &mut [c_char], s: &str) {
-    let cap = field.len().saturating_sub(1);
-    let n = s.len().min(cap);
-    std::ptr::copy_nonoverlapping(s.as_ptr(), field.as_mut_ptr() as *mut u8, n);
-    field[n] = 0;
-}
+impl NvmlPciInfo {
+    unsafe fn fill(field: &mut [c_char], value: &str) {
+        let cap = field.len().saturating_sub(1);
+        let length = value.len().min(cap);
+        std::ptr::copy_nonoverlapping(value.as_ptr(), field.as_mut_ptr() as *mut u8, length);
+        field[length] = 0;
+    }
 
-fn pci_impl(dev: *mut c_void, p: *mut c_void) -> i32 {
-    if !is_valid(dev) || p.is_null() {
-        return NVML_ERROR_INVALID_ARGUMENT;
+    fn write(device: *mut c_void, output: *mut c_void) -> i32 {
+        if !Nvml::is_valid(device) || output.is_null() {
+            return NVML_ERROR_INVALID_ARGUMENT;
+        }
+        let out = unsafe { &mut *(output as *mut Self) };
+        unsafe {
+            core::ptr::write_bytes(out as *mut Self as *mut u8, 0, core::mem::size_of::<Self>())
+        };
+        out.domain = 0;
+        out.bus = 0;
+        out.device = 0;
+        out.pci_device_id = 0x1EB8_10DE; // fabricated device:vendor (vendor 0x10DE = NVIDIA)
+        out.pci_sub_system_id = 0x1EB8_10DE;
+        unsafe {
+            Self::fill(&mut out.bus_id, "00000000:00:00.0");
+            Self::fill(&mut out.bus_id_legacy, "0000:00:00.0");
+        }
+        NVML_SUCCESS
     }
-    let out = unsafe { &mut *(p as *mut NvmlPciInfo) };
-    unsafe { core::ptr::write_bytes(out as *mut NvmlPciInfo as *mut u8, 0, core::mem::size_of::<NvmlPciInfo>()) };
-    out.domain = 0;
-    out.bus = 0;
-    out.device = 0;
-    out.pci_device_id = 0x1EB8_10DE; // fabricated device:vendor (vendor 0x10DE = NVIDIA)
-    out.pci_sub_system_id = 0x1EB8_10DE;
-    unsafe {
-        fill_field(&mut out.bus_id, "00000000:00:00.0");
-        fill_field(&mut out.bus_id_legacy, "0000:00:00.0");
-    }
-    NVML_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetPciInfo_v3(dev: *mut c_void, p: *mut c_void) -> i32 {
-    pci_impl(dev, p)
+    NvmlPciInfo::write(dev, p)
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetPciInfo_v2(dev: *mut c_void, p: *mut c_void) -> i32 {
-    pci_impl(dev, p)
+    NvmlPciInfo::write(dev, p)
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetPciInfo(dev: *mut c_void, p: *mut c_void) -> i32 {
-    pci_impl(dev, p)
+    NvmlPciInfo::write(dev, p)
 }
 
 /// `nvmlDeviceGetPciInfoExt` — the extended PCI-info struct is an undocumented private layout; honestly
 /// report it unsupported (nvidia-smi falls back to the public `nvmlDeviceGetPciInfo`).
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetPciInfoExt(dev: *mut c_void, _p: *mut c_void) -> i32 {
-    if is_valid(dev) {
+    if Nvml::is_valid(dev) {
         NVML_ERROR_NOT_SUPPORTED
     } else {
         NVML_ERROR_INVALID_ARGUMENT
@@ -590,7 +615,7 @@ pub extern "C" fn nvmlDeviceGetPciInfoExt(dev: *mut c_void, _p: *mut c_void) -> 
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetCurrPcieLinkGeneration(dev: *mut c_void, g: *mut u32) -> i32 {
-    if !is_valid(dev) || g.is_null() {
+    if !Nvml::is_valid(dev) || g.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *g = 4 };
@@ -599,7 +624,7 @@ pub extern "C" fn nvmlDeviceGetCurrPcieLinkGeneration(dev: *mut c_void, g: *mut 
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetMaxPcieLinkGeneration(dev: *mut c_void, g: *mut u32) -> i32 {
-    if !is_valid(dev) || g.is_null() {
+    if !Nvml::is_valid(dev) || g.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *g = 4 };
@@ -608,7 +633,7 @@ pub extern "C" fn nvmlDeviceGetMaxPcieLinkGeneration(dev: *mut c_void, g: *mut u
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetCurrPcieLinkWidth(dev: *mut c_void, w: *mut u32) -> i32 {
-    if !is_valid(dev) || w.is_null() {
+    if !Nvml::is_valid(dev) || w.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *w = 16 };
@@ -617,7 +642,7 @@ pub extern "C" fn nvmlDeviceGetCurrPcieLinkWidth(dev: *mut c_void, w: *mut u32) 
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetMaxPcieLinkWidth(dev: *mut c_void, w: *mut u32) -> i32 {
-    if !is_valid(dev) || w.is_null() {
+    if !Nvml::is_valid(dev) || w.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *w = 16 };
@@ -626,7 +651,7 @@ pub extern "C" fn nvmlDeviceGetMaxPcieLinkWidth(dev: *mut c_void, w: *mut u32) -
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetMemoryBusWidth(dev: *mut c_void, w: *mut u32) -> i32 {
-    if !is_valid(dev) || w.is_null() {
+    if !Nvml::is_valid(dev) || w.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *w = 256 };
@@ -635,7 +660,7 @@ pub extern "C" fn nvmlDeviceGetMemoryBusWidth(dev: *mut c_void, w: *mut u32) -> 
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetNumGpuCores(dev: *mut c_void, n: *mut u32) -> i32 {
-    if !is_valid(dev) || n.is_null() {
+    if !Nvml::is_valid(dev) || n.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *n = 4096 };
@@ -648,7 +673,7 @@ pub extern "C" fn nvmlDeviceGetNumGpuCores(dev: *mut c_void, n: *mut u32) -> i32
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetTemperature(dev: *mut c_void, _sensor: i32, t: *mut u32) -> i32 {
-    if !is_valid(dev) || t.is_null() {
+    if !Nvml::is_valid(dev) || t.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *t = 35 };
@@ -656,8 +681,12 @@ pub extern "C" fn nvmlDeviceGetTemperature(dev: *mut c_void, _sensor: i32, t: *m
 }
 
 #[no_mangle]
-pub extern "C" fn nvmlDeviceGetTemperatureThreshold(dev: *mut c_void, _kind: u32, t: *mut u32) -> i32 {
-    if !is_valid(dev) || t.is_null() {
+pub extern "C" fn nvmlDeviceGetTemperatureThreshold(
+    dev: *mut c_void,
+    _kind: u32,
+    t: *mut u32,
+) -> i32 {
+    if !Nvml::is_valid(dev) || t.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *t = 90 }; // slowdown/shutdown threshold
@@ -666,7 +695,7 @@ pub extern "C" fn nvmlDeviceGetTemperatureThreshold(dev: *mut c_void, _kind: u32
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetPowerUsage(dev: *mut c_void, mw: *mut u32) -> i32 {
-    if !is_valid(dev) || mw.is_null() {
+    if !Nvml::is_valid(dev) || mw.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *mw = 25000 };
@@ -675,7 +704,7 @@ pub extern "C" fn nvmlDeviceGetPowerUsage(dev: *mut c_void, mw: *mut u32) -> i32
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetPowerManagementLimit(dev: *mut c_void, mw: *mut u32) -> i32 {
-    if !is_valid(dev) || mw.is_null() {
+    if !Nvml::is_valid(dev) || mw.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *mw = 70000 };
@@ -684,7 +713,7 @@ pub extern "C" fn nvmlDeviceGetPowerManagementLimit(dev: *mut c_void, mw: *mut u
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetEnforcedPowerLimit(dev: *mut c_void, mw: *mut u32) -> i32 {
-    if !is_valid(dev) || mw.is_null() {
+    if !Nvml::is_valid(dev) || mw.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *mw = 70000 };
@@ -692,10 +721,16 @@ pub extern "C" fn nvmlDeviceGetEnforcedPowerLimit(dev: *mut c_void, mw: *mut u32
 }
 
 fn clock_impl(dev: *mut c_void, clock_type: i32, mhz: *mut u32) -> i32 {
-    if !is_valid(dev) || mhz.is_null() {
+    if !Nvml::is_valid(dev) || mhz.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
-    unsafe { *mhz = if clock_type == NVML_CLOCK_MEM { 6000 } else { 1500 } };
+    unsafe {
+        *mhz = if clock_type == NVML_CLOCK_MEM {
+            6000
+        } else {
+            1500
+        }
+    };
     NVML_SUCCESS
 }
 
@@ -705,7 +740,11 @@ pub extern "C" fn nvmlDeviceGetClockInfo(dev: *mut c_void, clock_type: i32, mhz:
 }
 
 #[no_mangle]
-pub extern "C" fn nvmlDeviceGetMaxClockInfo(dev: *mut c_void, clock_type: i32, mhz: *mut u32) -> i32 {
+pub extern "C" fn nvmlDeviceGetMaxClockInfo(
+    dev: *mut c_void,
+    clock_type: i32,
+    mhz: *mut u32,
+) -> i32 {
     clock_impl(dev, clock_type, mhz)
 }
 
@@ -713,7 +752,7 @@ pub extern "C" fn nvmlDeviceGetMaxClockInfo(dev: *mut c_void, clock_type: i32, m
 /// (nvidia-smi → "N/A").
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetFanSpeed(dev: *mut c_void, _pct: *mut u32) -> i32 {
-    if is_valid(dev) {
+    if Nvml::is_valid(dev) {
         NVML_ERROR_NOT_SUPPORTED
     } else {
         NVML_ERROR_INVALID_ARGUMENT
@@ -725,7 +764,7 @@ pub extern "C" fn nvmlDeviceGetFanSpeed(dev: *mut c_void, _pct: *mut u32) -> i32
 // ==================================================================================================
 
 fn enable_state(dev: *mut c_void, m: *mut i32, value: i32) -> i32 {
-    if !is_valid(dev) || m.is_null() {
+    if !Nvml::is_valid(dev) || m.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *m = value };
@@ -744,35 +783,37 @@ pub extern "C" fn nvmlDeviceGetDisplayMode(dev: *mut c_void, m: *mut i32) -> i32
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetComputeMode(dev: *mut c_void, m: *mut i32) -> i32 {
-    if !is_valid(dev) || m.is_null() {
+    if !Nvml::is_valid(dev) || m.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *m = NVML_COMPUTEMODE_DEFAULT };
     NVML_SUCCESS
 }
 
-fn pstate_impl(dev: *mut c_void, p: *mut i32) -> i32 {
-    if !is_valid(dev) || p.is_null() {
-        return NVML_ERROR_INVALID_ARGUMENT;
+impl Nvml {
+    fn performance_state(device: *mut c_void, state: *mut i32) -> i32 {
+        if !Self::is_valid(device) || state.is_null() {
+            return NVML_ERROR_INVALID_ARGUMENT;
+        }
+        unsafe { *state = NVML_PSTATE_0 }; // maximum-performance state (idle unified device)
+        NVML_SUCCESS
     }
-    unsafe { *p = NVML_PSTATE_0 }; // maximum-performance state (idle unified device)
-    NVML_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetPerformanceState(dev: *mut c_void, p: *mut i32) -> i32 {
-    pstate_impl(dev, p)
+    Nvml::performance_state(dev, p)
 }
 
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetPowerState(dev: *mut c_void, p: *mut i32) -> i32 {
-    pstate_impl(dev, p)
+    Nvml::performance_state(dev, p)
 }
 
 /// `nvmlDeviceGetMigMode` — MIG partitioning is unsupported on the simulated device (nvidia-smi → "N/A").
 #[no_mangle]
 pub extern "C" fn nvmlDeviceGetMigMode(dev: *mut c_void, _cur: *mut u32, _pend: *mut u32) -> i32 {
-    if is_valid(dev) {
+    if Nvml::is_valid(dev) {
         NVML_ERROR_NOT_SUPPORTED
     } else {
         NVML_ERROR_INVALID_ARGUMENT
@@ -786,7 +827,7 @@ pub extern "C" fn nvmlDeviceGetMigMode(dev: *mut c_void, _cur: *mut u32, _pend: 
 /// Shared body for the compute/graphics running-process queries: the simulated device runs no external
 /// processes, so report a count of zero and leave the caller's array untouched.
 fn no_procs(dev: *mut c_void, count: *mut u32, _infos: *mut c_void) -> i32 {
-    if !is_valid(dev) || count.is_null() {
+    if !Nvml::is_valid(dev) || count.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
     unsafe { *count = 0 };
@@ -794,32 +835,56 @@ fn no_procs(dev: *mut c_void, count: *mut u32, _infos: *mut c_void) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn nvmlDeviceGetComputeRunningProcesses_v3(dev: *mut c_void, c: *mut u32, i: *mut c_void) -> i32 {
+pub extern "C" fn nvmlDeviceGetComputeRunningProcesses_v3(
+    dev: *mut c_void,
+    c: *mut u32,
+    i: *mut c_void,
+) -> i32 {
     no_procs(dev, c, i)
 }
 
 #[no_mangle]
-pub extern "C" fn nvmlDeviceGetComputeRunningProcesses_v2(dev: *mut c_void, c: *mut u32, i: *mut c_void) -> i32 {
+pub extern "C" fn nvmlDeviceGetComputeRunningProcesses_v2(
+    dev: *mut c_void,
+    c: *mut u32,
+    i: *mut c_void,
+) -> i32 {
     no_procs(dev, c, i)
 }
 
 #[no_mangle]
-pub extern "C" fn nvmlDeviceGetComputeRunningProcesses(dev: *mut c_void, c: *mut u32, i: *mut c_void) -> i32 {
+pub extern "C" fn nvmlDeviceGetComputeRunningProcesses(
+    dev: *mut c_void,
+    c: *mut u32,
+    i: *mut c_void,
+) -> i32 {
     no_procs(dev, c, i)
 }
 
 #[no_mangle]
-pub extern "C" fn nvmlDeviceGetGraphicsRunningProcesses_v3(dev: *mut c_void, c: *mut u32, i: *mut c_void) -> i32 {
+pub extern "C" fn nvmlDeviceGetGraphicsRunningProcesses_v3(
+    dev: *mut c_void,
+    c: *mut u32,
+    i: *mut c_void,
+) -> i32 {
     no_procs(dev, c, i)
 }
 
 #[no_mangle]
-pub extern "C" fn nvmlDeviceGetGraphicsRunningProcesses_v2(dev: *mut c_void, c: *mut u32, i: *mut c_void) -> i32 {
+pub extern "C" fn nvmlDeviceGetGraphicsRunningProcesses_v2(
+    dev: *mut c_void,
+    c: *mut u32,
+    i: *mut c_void,
+) -> i32 {
     no_procs(dev, c, i)
 }
 
 #[no_mangle]
-pub extern "C" fn nvmlDeviceGetGraphicsRunningProcesses(dev: *mut c_void, c: *mut u32, i: *mut c_void) -> i32 {
+pub extern "C" fn nvmlDeviceGetGraphicsRunningProcesses(
+    dev: *mut c_void,
+    c: *mut u32,
+    i: *mut c_void,
+) -> i32 {
     no_procs(dev, c, i)
 }
 
@@ -838,23 +903,28 @@ const HL_ET_HEADER: usize = 0x7a8; // real slot[0] value (table byte size)
 
 /// Build the internal export table once and leak it (nvidia-smi keeps the pointer for the process
 /// lifetime). Returns its stable address as a `usize` (the slots are `void*`-sized).
-fn export_table_addr() -> usize {
-    static ADDR: OnceLock<usize> = OnceLock::new();
-    *ADDR.get_or_init(|| {
-        // NULL slot positions observed in the real table (besides the header at [0]).
-        const NULLS: &[usize] = &[
-            1, 2, 24, 35, 60, 64, 90, 104, 121, 122, 139, 150, 157, 158, 159, 160, 161, 162, 163,
-            167, 176, 177, 178, 187, 190, 191, 198, 201, 202, 207, 211, 216, 217, 235, 236,
-        ];
-        let notsup = hl_et_notsup as *const () as usize;
-        let mut table: Vec<usize> = vec![notsup; HL_ET_SLOTS];
-        table[0] = HL_ET_HEADER;
-        for &k in NULLS {
-            table[k] = 0;
-        }
-        // Leak the table so the returned pointer stays valid for the process lifetime.
-        Box::leak(table.into_boxed_slice()).as_ptr() as usize
-    })
+struct ExportTable;
+
+impl ExportTable {
+    fn address() -> usize {
+        static ADDR: OnceLock<usize> = OnceLock::new();
+        *ADDR.get_or_init(|| {
+            // NULL slot positions observed in the real table (besides the header at [0]).
+            const NULLS: &[usize] = &[
+                1, 2, 24, 35, 60, 64, 90, 104, 121, 122, 139, 150, 157, 158, 159, 160, 161, 162,
+                163, 167, 176, 177, 178, 187, 190, 191, 198, 201, 202, 207, 211, 216, 217, 235,
+                236,
+            ];
+            let notsup = hl_et_notsup as *const () as usize;
+            let mut table: Vec<usize> = vec![notsup; HL_ET_SLOTS];
+            table[0] = HL_ET_HEADER;
+            for &k in NULLS {
+                table[k] = 0;
+            }
+            // Leak the table so the returned pointer stays valid for the process lifetime.
+            Box::leak(table.into_boxed_slice()).as_ptr() as usize
+        })
+    }
 }
 
 /// `nvmlInternalGetExportTable(ppExportTable, pExportTableId)` — the undocumented private symbol
@@ -869,6 +939,6 @@ pub extern "C" fn nvmlInternalGetExportTable(
     if pp_export_table.is_null() {
         return NVML_ERROR_INVALID_ARGUMENT;
     }
-    unsafe { *pp_export_table = export_table_addr() as *const c_void };
+    unsafe { *pp_export_table = ExportTable::address() as *const c_void };
     NVML_SUCCESS
 }

@@ -9,7 +9,7 @@ use axum::response::IntoResponse;
 async fn network_delete_with_connected_container_is_403() {
     let app = test_app();
     seed_network(&app, "mynet", /*with_container=*/ true).await;
-    let resp = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+    let resp = crate::networks::Networks::delete(State(app.clone()), Path("mynet".into())).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert!(
         app.inner
@@ -26,7 +26,7 @@ async fn network_delete_with_connected_container_is_403() {
 async fn network_delete_predefined_bridge_is_403() {
     let app = test_app();
     seed_predefined_bridge(&app).await;
-    let resp = crate::networks::network_delete(State(app.clone()), Path("bridge".into())).await;
+    let resp = crate::networks::Networks::delete(State(app.clone()), Path("bridge".into())).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert!(app
         .inner
@@ -41,7 +41,7 @@ async fn network_delete_predefined_bridge_is_403() {
 async fn network_delete_empty_user_net_is_204_and_removed() {
     let app = test_app();
     seed_network(&app, "mynet", /*with_container=*/ false).await;
-    let resp = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+    let resp = crate::networks::Networks::delete(State(app.clone()), Path("mynet".into())).await;
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert!(
         !app.inner
@@ -59,7 +59,7 @@ async fn network_delete_empty_user_net_is_204_and_removed() {
 async fn network_create_then_duplicate() {
     let app = test_app();
     let body = axum::Json(serde_json::from_value(serde_json::json!({"Name":"net1"})).unwrap());
-    let resp = crate::networks::networks_create(State(app.clone()), body).await;
+    let resp = crate::networks::Networks::create(State(app.clone()), body).await;
     assert_eq!(resp.status(), StatusCode::CREATED);
     assert!(app
         .inner
@@ -70,7 +70,7 @@ async fn network_create_then_duplicate() {
         .any(|n| n.name == "net1"));
 
     let body2 = axum::Json(serde_json::from_value(serde_json::json!({"Name":"net1"})).unwrap());
-    let resp2 = crate::networks::networks_create(State(app.clone()), body2).await;
+    let resp2 = crate::networks::Networks::create(State(app.clone()), body2).await;
     assert_eq!(resp2.status(), StatusCode::CONFLICT);
     assert_eq!(
         app.inner
@@ -90,7 +90,7 @@ async fn network_create_then_duplicate() {
 async fn network_inspect_wire_shape() {
     let app = test_app();
     seed_network(&app, "mynet", /*with_container=*/ false).await;
-    let resp = crate::networks::network_inspect(State(app.clone()), Path("mynet".into()))
+    let resp = crate::networks::Networks::inspect(State(app.clone()), Path("mynet".into()))
         .await
         .into_response();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -121,7 +121,7 @@ async fn network_inspect_wire_shape() {
 #[tokio::test]
 async fn network_inspect_missing_is_404() {
     let app = test_app();
-    let resp = crate::networks::network_inspect(State(app.clone()), Path("ghost".into()))
+    let resp = crate::networks::Networks::inspect(State(app.clone()), Path("ghost".into()))
         .await
         .into_response();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -136,7 +136,7 @@ async fn network_connect_missing_container_is_404_no_phantom() {
     // silently insert a phantom endpoint — which used to return 200 and make the network permanently
     // undeletable (403 forever). Also: a missing NETWORK still 404s first.
     let app = test_app();
-    let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+    let r = crate::networks::Networks::create(State(app.clone()), net_create_body("mynet")).await;
     assert_eq!(r.status(), StatusCode::CREATED);
 
     let r = crate::networks::network_connect(
@@ -162,7 +162,7 @@ async fn network_connect_missing_container_is_404_no_phantom() {
     );
 
     // The network stays deletable (the phantom endpoint had made this a permanent 403).
-    let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+    let r = crate::networks::Networks::delete(State(app.clone()), Path("mynet".into())).await;
     assert_eq!(
         r.status(),
         StatusCode::NO_CONTENT,
@@ -189,7 +189,7 @@ async fn network_connect_missing_container_is_404_no_phantom() {
 #[tokio::test]
 async fn network_disconnect_missing_container_is_404_noop() {
     let app = test_app();
-    let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+    let r = crate::networks::Networks::create(State(app.clone()), net_create_body("mynet")).await;
     assert_eq!(r.status(), StatusCode::CREATED);
 
     let r = crate::networks::network_disconnect(
@@ -224,7 +224,7 @@ async fn flow_network_endpoint_refcount_lifecycle() {
     seed_container(&app, "c1", "running").await;
 
     // Step 1: create the network — 201, present, no members yet.
-    let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+    let r = crate::networks::Networks::create(State(app.clone()), net_create_body("mynet")).await;
     assert_eq!(r.status(), StatusCode::CREATED);
     assert_eq!(
         net_members(&app, "mynet").await.len(),
@@ -253,7 +253,7 @@ async fn flow_network_endpoint_refcount_lifecycle() {
     );
 
     // Step 3: delete while an endpoint is attached — 403, network survives (the refcount gate).
-    let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+    let r = crate::networks::Networks::delete(State(app.clone()), Path("mynet".into())).await;
     assert_eq!(
         r.status(),
         StatusCode::FORBIDDEN,
@@ -289,7 +289,7 @@ async fn flow_network_endpoint_refcount_lifecycle() {
     );
 
     // Step 5: delete now that the last endpoint is gone — 204, network removed.
-    let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+    let r = crate::networks::Networks::delete(State(app.clone()), Path("mynet".into())).await;
     assert_eq!(
         r.status(),
         StatusCode::NO_CONTENT,
@@ -317,7 +317,7 @@ async fn live_network_connect_disconnect_refreshes_reach_by_name_table() {
     let app = test_app();
     seed_container(&app, "web", "running").await;
     seed_container(&app, "db", "running").await;
-    let r = crate::networks::networks_create(State(app.clone()), net_create_body("appnet")).await;
+    let r = crate::networks::Networks::create(State(app.clone()), net_create_body("appnet")).await;
     assert_eq!(r.status(), StatusCode::CREATED);
 
     // The live names file the engine reads per DNS query, keyed by network id (matches spawn/net.rs).
@@ -388,9 +388,9 @@ async fn flow_network_duplicate_predefined_and_prune_selectivity() {
     seed_predefined_bridge(&app).await;
 
     // Duplicate create: first `mynet` 201, second 409, count stays 1.
-    let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+    let r = crate::networks::Networks::create(State(app.clone()), net_create_body("mynet")).await;
     assert_eq!(r.status(), StatusCode::CREATED);
-    let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+    let r = crate::networks::Networks::create(State(app.clone()), net_create_body("mynet")).await;
     assert_eq!(
         r.status(),
         StatusCode::CONFLICT,
@@ -409,7 +409,7 @@ async fn flow_network_duplicate_predefined_and_prune_selectivity() {
     );
 
     // Predefined delete: `bridge` is 403 and stays.
-    let r = crate::networks::network_delete(State(app.clone()), Path("bridge".into())).await;
+    let r = crate::networks::Networks::delete(State(app.clone()), Path("bridge".into())).await;
     assert_eq!(
         r.status(),
         StatusCode::FORBIDDEN,
@@ -424,11 +424,11 @@ async fn flow_network_duplicate_predefined_and_prune_selectivity() {
         .any(|n| n.name == "bridge"));
 
     // Add an EMPTY user net (prunable) and a BUSY user net (an endpoint -> not prunable).
-    crate::networks::networks_create(State(app.clone()), net_create_body("emptyuser")).await;
+    crate::networks::Networks::create(State(app.clone()), net_create_body("emptyuser")).await;
     seed_network(&app, "busyuser", /*with_container=*/ true).await;
 
     // Prune: reclaims `emptyuser` + `mynet` only; keeps bridge/host/none AND the busy net.
-    let axum::Json(report) = crate::networks::networks_prune(State(app.clone())).await;
+    let axum::Json(report) = crate::networks::Networks::prune(State(app.clone())).await;
     let pruned: std::collections::HashSet<&str> =
         report.networks_deleted.iter().map(|s| s.as_str()).collect();
     assert!(
@@ -471,9 +471,9 @@ async fn flow_events_emitted_across_network_lifecycle() {
     let app = test_app();
     let mut rx = app.events.subscribe(); // must precede any emit (bus skips with 0 receivers)
 
-    let r = crate::networks::networks_create(State(app.clone()), net_create_body("evnet")).await;
+    let r = crate::networks::Networks::create(State(app.clone()), net_create_body("evnet")).await;
     assert_eq!(r.status(), StatusCode::CREATED);
-    let r = crate::networks::network_delete(State(app.clone()), Path("evnet".into())).await;
+    let r = crate::networks::Networks::delete(State(app.clone()), Path("evnet".into())).await;
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
 
     // Drain everything the bus buffered for us.
@@ -504,7 +504,7 @@ async fn flow_events_emitted_across_network_lifecycle() {
 async fn flow_network_connect_idempotent_no_refcount_leak() {
     let app = test_app();
     seed_container(&app, "c1", "running").await;
-    let r = crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+    let r = crate::networks::Networks::create(State(app.clone()), net_create_body("mynet")).await;
     assert_eq!(r.status(), StatusCode::CREATED);
 
     // Step 1: connect c1 — 200, one endpoint.
@@ -585,7 +585,7 @@ async fn flow_network_connect_idempotent_no_refcount_leak() {
     );
 
     // The now-empty net is deletable (proving the refcount truly reached zero).
-    let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+    let r = crate::networks::Networks::delete(State(app.clone()), Path("mynet".into())).await;
     assert_eq!(
         r.status(),
         StatusCode::NO_CONTENT,
@@ -608,7 +608,7 @@ async fn network_create_fails_when_state_cannot_persist() {
         )
         .unwrap(),
     );
-    let r = crate::networks::networks_create(State(app.clone()), body).await;
+    let r = crate::networks::Networks::create(State(app.clone()), body).await;
     assert_eq!(r.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
         app.inner

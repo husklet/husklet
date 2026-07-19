@@ -80,7 +80,7 @@ fn readback(
     p: DevicePtr,
     len: usize,
 ) -> Vec<u8> {
-    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    let (buf, off): (BufferId, u64) = ctx.device_location(p).unwrap();
     sink.read_buffer(buf, off, len).unwrap()
 }
 
@@ -224,7 +224,7 @@ fn batched_strided_gemm_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, GEMM_BATCHED_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(GEMM_BATCHED_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "mm_batched").unwrap();
 
     let da = upload(&mut sink, &mut ctx, &i32s_to_bytes(&a));
@@ -382,7 +382,7 @@ fn conv2d_nchw_multichannel_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, CONV2D_NCHW_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(CONV2D_NCHW_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "conv2d_nchw").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
@@ -523,7 +523,7 @@ fn pool2x2_max_and_avg_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, POOL_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(POOL_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "pool2x2").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&img));
@@ -667,7 +667,7 @@ fn softmax_rowwise_fixedpoint_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, SOFTMAX_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(SOFTMAX_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "softmax_rows").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
@@ -835,7 +835,7 @@ fn layernorm_stats_fixedpoint_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, LAYERNORM_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(LAYERNORM_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "layernorm_stats").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
@@ -963,7 +963,7 @@ fn relu_and_gelu_cubic_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, ACT_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(ACT_PTX.as_bytes()).unwrap();
     let relu_fn = load_module::module_get_function(&ctx, module, "relu").unwrap();
     let gelu_fn = load_module::module_get_function(&ctx, module, "gelu_cubic").unwrap();
 
@@ -1143,7 +1143,7 @@ fn gemv_and_argmax_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, GEMV_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(GEMV_PTX.as_bytes()).unwrap();
     let gemv_fn = load_module::module_get_function(&ctx, module, "gemv").unwrap();
     let max_fn = load_module::module_get_function(&ctx, module, "reduce_max").unwrap();
     let arg_fn = load_module::module_get_function(&ctx, module, "arg_of_max").unwrap();
@@ -1355,7 +1355,7 @@ fn im2col_and_embedding_gather_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, IM2COL_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(IM2COL_PTX.as_bytes()).unwrap();
     let im2col_fn = load_module::module_get_function(&ctx, module, "im2col").unwrap();
     let embed_fn = load_module::module_get_function(&ctx, module, "embedding").unwrap();
 

@@ -78,7 +78,7 @@ fn readback(
     p: DevicePtr,
     len: usize,
 ) -> Vec<u8> {
-    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    let (buf, off): (BufferId, u64) = ctx.device_location(p).unwrap();
     sink.read_buffer(buf, off, len).unwrap()
 }
 
@@ -221,7 +221,7 @@ fn error_bad_launch_returns_honest_error() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, AFFINE_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(AFFINE_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "affine").unwrap();
 
     let dx = upload(&mut sink, &mut ctx, &f32s_to_bytes(&x));
@@ -265,16 +265,16 @@ fn error_bad_launch_returns_honest_error() {
     )
     .unwrap_err();
     assert_eq!(
-        result::cu_result_from_gpu_error(&err),
+        result::DriverStatus::from(&err).code(),
         result::CUDA_ERROR_INVALID_VALUE,
         "over-maxThreadsPerBlock launch → CUDA_ERROR_INVALID_VALUE"
     );
     assert_eq!(
-        result::cudart_from_gpu_error(&err),
+        result::RuntimeStatus::from(&err).code(),
         result::CUDART_ERROR_INVALID_VALUE
     );
     assert_ne!(
-        result::cu_result_from_gpu_error(&err),
+        result::DriverStatus::from(&err).code(),
         result::CUDA_SUCCESS,
         "NOT a faked success"
     );
@@ -290,7 +290,7 @@ fn error_bad_launch_returns_honest_error() {
     )
     .unwrap_err();
     assert_eq!(
-        result::cu_result_from_gpu_error(&zerr),
+        result::DriverStatus::from(&zerr).code(),
         result::CUDA_ERROR_INVALID_VALUE
     );
     // …and so is a zero grid dimension.
@@ -304,7 +304,7 @@ fn error_bad_launch_returns_honest_error() {
     )
     .unwrap_err();
     assert_eq!(
-        result::cu_result_from_gpu_error(&gerr),
+        result::DriverStatus::from(&gerr).code(),
         result::CUDA_ERROR_INVALID_VALUE
     );
 
@@ -334,12 +334,12 @@ fn stream_event_ordering_dependent_work_observes_producer() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, AFFINE_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(AFFINE_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "affine").unwrap();
 
     let stream_a: Stream = ctx.streams.create();
     let stream_b: Stream = ctx.streams.create();
-    let ev: Event = event::event_create(&mut ctx);
+    let ev: Event = ctx.event_create();
 
     // Producer on stream A: async-upload x, then r = 2*x + 0.
     let d_in = allocate::mem_alloc(&mut ctx, &mut sink, (n * 4) as u64).unwrap();
@@ -363,12 +363,12 @@ fn stream_event_ordering_dependent_work_observes_producer() {
     .unwrap();
 
     // Record the producer's completion on stream A; stream B must wait for it before its consumer runs.
-    event::event_record(&mut ctx, ev, stream_a).unwrap();
+    ctx.event_record(ev, stream_a).unwrap();
     assert!(
-        event::event_query(&ctx, ev).unwrap(),
+        ctx.event_query(ev).unwrap(),
         "event is complete after record (synchronous model)"
     );
-    event::stream_wait_event(&ctx, stream_b, ev).unwrap();
+    ctx.stream_wait_event(stream_b, ev).unwrap();
 
     // Consumer on stream B: o = 1*r + 1 = r + 1. If ordering were NOT honored, r would still be zero here.
     let d_out = allocate::mem_alloc(&mut ctx, &mut sink, (n * 4) as u64).unwrap();
@@ -389,8 +389,8 @@ fn stream_event_ordering_dependent_work_observes_producer() {
     )
     .unwrap();
 
-    event::event_synchronize(&ctx, ev).unwrap();
-    synchronize::stream_synchronize(&mut ctx, &mut sink, stream_b).unwrap();
+    ctx.event_synchronize(ev).unwrap();
+    ctx.synchronize_stream(&mut sink, stream_b).unwrap();
 
     let got =
         bytes_to_f32s(&transfer::read_dtoh_async(&ctx, &mut sink, stream_b, d_out, n * 4).unwrap());
@@ -402,28 +402,25 @@ fn stream_event_ordering_dependent_work_observes_producer() {
 
     // Honest handle validation: a bogus event / stream handle is a hard error, never a silent success.
     assert!(
-        event::event_record(&mut ctx, Event(9999), stream_a).is_err(),
+        ctx.event_record(Event(9999), stream_a).is_err(),
         "record on bad event errors"
     );
     assert!(
-        event::event_record(&mut ctx, ev, Stream(9999)).is_err(),
+        ctx.event_record(ev, Stream(9999)).is_err(),
         "record on bad stream errors"
     );
     assert!(
-        event::stream_wait_event(&ctx, stream_b, Event(9999)).is_err(),
+        ctx.stream_wait_event(stream_b, Event(9999)).is_err(),
         "wait on bad event errors"
     );
     assert!(
-        event::event_query(&ctx, Event(9999)).is_err(),
+        ctx.event_query(Event(9999)).is_err(),
         "query on bad event errors"
     );
 
     // Clean teardown validates the destroy path too.
-    event::event_destroy(&mut ctx, ev).unwrap();
-    assert!(
-        event::event_destroy(&mut ctx, ev).is_err(),
-        "double-destroy is rejected"
-    );
+    ctx.event_destroy(ev).unwrap();
+    assert!(ctx.event_destroy(ev).is_err(), "double-destroy is rejected");
 }
 
 // ==================================================================================================
@@ -438,7 +435,7 @@ fn async_overlap_produces_bit_exact_result() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, ISCALE_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(ISCALE_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "iscale").unwrap();
 
     let stream: Stream = ctx.streams.create();
@@ -456,7 +453,7 @@ fn async_overlap_produces_bit_exact_result() {
     ];
     launch::launch(&mut ctx, &mut sink, func, (32, 1, 1), (128, 1, 1), &args).unwrap();
     let raw = transfer::read_dtoh_async(&ctx, &mut sink, stream, d_out, n * 4).unwrap();
-    synchronize::stream_synchronize(&mut ctx, &mut sink, stream).unwrap();
+    ctx.synchronize_stream(&mut sink, stream).unwrap();
 
     let got = bytes_to_i32s(&raw);
     let want: Vec<i32> = a
@@ -491,17 +488,17 @@ fn oom_alloc_rejected_with_honest_code() {
     // minted pointer into memory the host could never back (a fake success), and no null-deref.
     let err = allocate::mem_alloc(&mut ctx, &mut sink, budget + 1).unwrap_err();
     assert_eq!(
-        result::cu_result_from_gpu_error(&err),
+        result::DriverStatus::from(&err).code(),
         result::CUDA_ERROR_OUT_OF_MEMORY,
         "over-budget cuMemAlloc → CUDA_ERROR_OUT_OF_MEMORY"
     );
     assert_eq!(
-        result::cudart_from_gpu_error(&err),
+        result::RuntimeStatus::from(&err).code(),
         result::CUDART_ERROR_MEMORY_ALLOCATION,
         "over-budget cudaMalloc → cudaErrorMemoryAllocation"
     );
     assert_ne!(
-        result::cu_result_from_gpu_error(&err),
+        result::DriverStatus::from(&err).code(),
         result::CUDA_SUCCESS,
         "NOT a faked success"
     );
@@ -516,7 +513,7 @@ fn oom_alloc_rejected_with_honest_code() {
     // A cumulative over-budget request (would push total past the budget) is also rejected.
     let big = allocate::mem_alloc(&mut ctx, &mut sink, budget).unwrap_err();
     assert_eq!(
-        result::cu_result_from_gpu_error(&big),
+        result::DriverStatus::from(&big).code(),
         result::CUDA_ERROR_OUT_OF_MEMORY
     );
     assert_eq!(ctx.mem.len(), 1);
@@ -541,7 +538,7 @@ fn run_reduction(input: &[i32]) -> (i32, i32) {
     // grid sized so grid.x * 128 >= n; the `i >= n` guard masks the tail lanes.
     let blocks = ((n + 127) / 128) as u32;
 
-    let sum_mod = load_module::module_load_data(&mut ctx, REDUCE_SUM_PTX.as_bytes()).unwrap();
+    let sum_mod = ctx.load_module(REDUCE_SUM_PTX.as_bytes()).unwrap();
     let sum_fn = load_module::module_get_function(&ctx, sum_mod, "reduce_sum").unwrap();
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(input));
     let d_sum = allocate::mem_alloc(&mut ctx, &mut sink, 4).unwrap();
@@ -562,7 +559,7 @@ fn run_reduction(input: &[i32]) -> (i32, i32) {
     .unwrap();
     let sum = bytes_to_i32s(&readback(&mut sink, &ctx, d_sum, 4))[0];
 
-    let max_mod = load_module::module_load_data(&mut ctx, REDUCE_MAX_PTX.as_bytes()).unwrap();
+    let max_mod = ctx.load_module(REDUCE_MAX_PTX.as_bytes()).unwrap();
     let max_fn = load_module::module_get_function(&ctx, max_mod, "reduce_max").unwrap();
     let d_max = allocate::mem_alloc(&mut ctx, &mut sink, 4).unwrap();
     transfer::memset(&mut ctx, &mut sink, d_max, &i32::MIN.to_le_bytes()).unwrap();
@@ -627,7 +624,7 @@ fn run_three_streams(input: &[i32], coeffs: [(i32, i32); 3], order: [usize; 3]) 
     let n = input.len();
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, ISCALE_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(ISCALE_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "iscale").unwrap();
 
     let streams: Vec<Stream> = (0..3).map(|_| ctx.streams.create()).collect();
@@ -659,7 +656,7 @@ fn run_three_streams(input: &[i32], coeffs: [(i32, i32); 3], order: [usize; 3]) 
         launch::launch(&mut ctx, &mut sink, func, (16, 1, 1), (128, 1, 1), &args).unwrap();
     }
     for &s in &streams {
-        synchronize::stream_synchronize(&mut ctx, &mut sink, s).unwrap();
+        ctx.synchronize_stream(&mut sink, s).unwrap();
     }
 
     [

@@ -53,9 +53,11 @@ pub fn add_kernel_node(
 
 /// `cudaGraphInstantiate(&exec, graph, ...)` — freeze the template into an executable graph. Cheap here
 /// (a node-list snapshot); a real driver would resolve dependencies + pre-build launch state.
-pub fn instantiate(graph: &Graph) -> ExecGraph {
-    ExecGraph {
-        nodes: graph.nodes.clone(),
+impl Graph {
+    pub fn instantiate(&self) -> ExecGraph {
+        ExecGraph {
+            nodes: self.nodes.clone(),
+        }
     }
 }
 

@@ -5,6 +5,7 @@
 //! The shared import header below lives in this `mod.rs`; each sibling file does
 //! `use super::*;` to inherit it (child modules can see a parent's private `use`
 //! imports), so no per-file bookkeeping is needed and behavior is unchanged.
+pub(crate) use crate::api::ErrorMessage;
 use crate::images::*;
 use crate::model::*;
 use crate::prelude::*;

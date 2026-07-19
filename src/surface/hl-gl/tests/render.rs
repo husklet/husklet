@@ -45,7 +45,7 @@ fn flat_program(c: &mut GlContext) -> u32 {
 
 /// Upload a 3-vertex position VBO and point attribute 0 at it (`stride` bytes/vertex).
 fn tri_vbo(c: &mut GlContext, stride: i32) -> u32 {
-    let vbo = record::gen_buffer(c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(c, GL_ARRAY_BUFFER, vbo);
     let verts = vec![0u8; 3 * stride as usize];
     record::buffer_data(c, GL_ARRAY_BUFFER, &verts, 0x88E4);
@@ -194,11 +194,11 @@ fn offscreen_fbo_renders_into_the_attachment_texture_and_format() {
     let mut sink = RecordingSink::with_full_caps();
 
     // A 32x32 Rgba8 offscreen color texture, attached to a framebuffer that we bind before drawing.
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d_format(&mut c, 32, 32, &[], TextureFormat::Rgba8Unorm);
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut c,
@@ -245,7 +245,7 @@ fn rebinding_default_framebuffer_returns_to_the_window_target() {
     // Binding FBO 0 restores the default framebuffer, so the next frame targets the window surface again.
     let mut c = ctx_64();
     let mut sink = RecordingSink::with_full_caps();
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, 0); // back to the default framebuffer
     record::clear(&mut c);
@@ -284,11 +284,11 @@ fn multi_fbo_frame_lowers_a_pass_per_framebuffer_and_presents_the_window() {
     let mut sink = RecordingSink::with_full_caps();
 
     // A 16x16 offscreen atlas texture attached to FBO A (the GskGL glyph-atlas shape, tiny vs the window).
-    let atlas = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let atlas = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, atlas);
     record::tex_image_2d_format(&mut c, 16, 16, &[], TextureFormat::Rgba8Unorm);
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut c,
@@ -309,7 +309,7 @@ fn multi_fbo_frame_lowers_a_pass_per_framebuffer_and_presents_the_window() {
     let comp = textured_program(&mut c);
     record::use_program(&mut c, comp);
     record::uniform_sampler(&mut c, 0, 0); // uTex -> texture unit 0
-    record::active_texture(&mut c, GL_TEXTURE0);
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, atlas); // sample the FBO's color attachment
     tri_vbo(&mut c, 8);
     record::draw_arrays(&mut c, GL_TRIANGLES, 0, 3);
@@ -534,11 +534,11 @@ fn flush_offscreen_submits_offscreen_passes_and_retains_window_draws() {
     let mut sink = RecordingSink::with_full_caps();
 
     // An offscreen FBO with a color texture; render one triangle INTO it (fbo != 0).
-    let atlas = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let atlas = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, atlas);
     record::tex_image_2d_format(&mut c, 16, 16, &[], TextureFormat::Rgba8Unorm);
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut c,

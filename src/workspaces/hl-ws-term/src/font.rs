@@ -3,7 +3,7 @@
 //! The glyph bitmaps are the classic public-domain 8x8 "font8x8" set (letters, digits, punctuation),
 //! reproduced here as hardcoded data — no external font files. The source table is stored in the
 //! original font8x8 orientation (LSB = leftmost pixel) and re-emitted MSB-first at lookup time so the
-//! public [`glyph`] API matches the documented "bit 7 is the leftmost pixel" contract.
+//! public [`Font::lookup`] API matches the documented "bit 7 is the leftmost pixel" contract.
 
 /// Glyph cell dimensions in pixels.
 pub const GLYPH_W: usize = 8;
@@ -18,40 +18,35 @@ const LAST: u32 = 0x7e;
 /// layout. Authored directly in the public MSB-first orientation (bit 7 = leftmost).
 const FALLBACK: [u8; GLYPH_H] = [0xff, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xff];
 
-/// Reverse the 8 bits of a byte, mapping the font8x8 LSB-first column order to the public MSB-first
-/// order (font8x8 bit 0 = leftmost column → contract bit 7 = leftmost column).
-const fn reverse_bits(b: u8) -> u8 {
-    let mut r = 0u8;
-    let mut i = 0;
-    while i < 8 {
-        r |= ((b >> i) & 1) << (7 - i);
-        i += 1;
+/// The crate's embedded monospace glyph collection.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Font;
+
+/// Embedded font used by the CPU renderer and GPU atlas.
+pub const EMBEDDED: Font = Font;
+
+impl Font {
+    /// Whether this font has a dedicated bitmap instead of the fallback glyph.
+    pub fn contains(self, ch: char) -> bool {
+        let codepoint = ch as u32;
+        (FIRST..=LAST).contains(&codepoint)
     }
-    r
-}
 
-/// True if `ch` has a dedicated (non-fallback) glyph.
-pub fn has_glyph(ch: char) -> bool {
-    let c = ch as u32;
-    c >= FIRST && c <= LAST
-}
-
-/// The 1bpp bitmap for `ch`: GLYPH_H rows, each a u8 where bit 7 (0x80) is the LEFTMOST pixel, bit
-/// (8-GLYPH_W) the rightmost. A set bit = foreground (ink) pixel. Unknown/non-printable chars return a
-/// consistent fallback (an outline box) so nothing panics and missing glyphs are visible.
-pub fn glyph(ch: char) -> [u8; GLYPH_H] {
-    let c = ch as u32;
-    if c >= FIRST && c <= LAST {
-        let raw = BASIC[(c - FIRST) as usize];
-        let mut out = [0u8; GLYPH_H];
-        let mut i = 0;
-        while i < GLYPH_H {
-            out[i] = reverse_bits(raw[i]);
-            i += 1;
+    /// Look up the MSB-first 1bpp bitmap for `ch`, using a visible fallback for unsupported chars.
+    pub fn lookup(self, ch: char) -> [u8; GLYPH_H] {
+        let codepoint = ch as u32;
+        if self.contains(ch) {
+            let raw = BASIC[(codepoint - FIRST) as usize];
+            let mut bitmap = [0u8; GLYPH_H];
+            let mut row = 0;
+            while row < GLYPH_H {
+                bitmap[row] = raw[row].reverse_bits();
+                row += 1;
+            }
+            bitmap
+        } else {
+            FALLBACK
         }
-        out
-    } else {
-        FALLBACK
     }
 }
 
@@ -168,24 +163,33 @@ mod tests {
 
     #[test]
     fn space_is_blank() {
-        assert_eq!(glyph(' '), [0u8; GLYPH_H]);
-        assert!(has_glyph(' '));
+        assert_eq!(EMBEDDED.lookup(' '), [0u8; GLYPH_H]);
+        assert!(EMBEDDED.contains(' '));
     }
 
     #[test]
     fn all_printable_ascii_have_glyphs() {
         for c in 0x20u8..=0x7e {
             let ch = c as char;
-            assert!(has_glyph(ch), "missing glyph for {:?} (0x{:02x})", ch, c);
+            assert!(
+                EMBEDDED.contains(ch),
+                "missing glyph for {:?} (0x{:02x})",
+                ch,
+                c
+            );
         }
     }
 
     #[test]
     fn unknown_chars_use_box_fallback() {
         for ch in ['\u{0}', '\u{1b}', 'あ', '€'] {
-            assert!(!has_glyph(ch), "{:?} should not have a dedicated glyph", ch);
+            assert!(
+                !EMBEDDED.contains(ch),
+                "{:?} should not have a dedicated glyph",
+                ch
+            );
             assert_eq!(
-                glyph(ch),
+                EMBEDDED.lookup(ch),
                 FALLBACK,
                 "{:?} should map to the box fallback",
                 ch
@@ -201,9 +205,9 @@ mod tests {
 
     #[test]
     fn sample_letters_nonzero_and_distinct() {
-        let a = glyph('A');
-        let o = glyph('o');
-        let eight = glyph('8');
+        let a = EMBEDDED.lookup('A');
+        let o = EMBEDDED.lookup('o');
+        let eight = EMBEDDED.lookup('8');
         for (name, g) in [("A", &a), ("o", &o), ("8", &eight)] {
             assert!(
                 g.iter().any(|&r| r != 0),
@@ -218,9 +222,9 @@ mod tests {
     #[test]
     fn glyph_matches_msb_orientation() {
         // '1' top row in font8x8 is 0x0C (LSB-first cols 2,3) → MSB-first 0x30 (cols 2,3 from left).
-        assert_eq!(glyph('1')[0], 0x30);
+        assert_eq!(EMBEDDED.lookup('1')[0], 0x30);
         // '_' is a solid underline on the bottom row only.
-        assert_eq!(glyph('_'), [0, 0, 0, 0, 0, 0, 0, 0xff]);
+        assert_eq!(EMBEDDED.lookup('_'), [0, 0, 0, 0, 0, 0, 0, 0xff]);
     }
 
     #[test]
@@ -233,7 +237,7 @@ mod tests {
             !((1u16 << (8 - GLYPH_W)) - 1) as u8
         };
         for c in 0x20u8..=0x7e {
-            for (row, &bits) in glyph(c as char).iter().enumerate() {
+            for (row, &bits) in EMBEDDED.lookup(c as char).iter().enumerate() {
                 assert_eq!(
                     bits & !mask,
                     0,

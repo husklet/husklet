@@ -12,7 +12,6 @@
 //! IR → runtime → CPU-executor → readback flow testable in a single process with no transport.
 
 use crate::cpu::CpuExecutor;
-use crate::protocol::codec::encode_stream;
 use crate::protocol::model::capability::{Capabilities, FeatureRequest};
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::{GpuError, Result};
@@ -124,7 +123,7 @@ impl<E: GpuExecutor> CommandSink for InProcessCommandSink<E> {
         let _span = hl_log::hl_span!(hl_log::tag::EXEC, "submit");
         // The runtime checks the encoded frame size against the negotiated ceiling; encode to get the
         // real byte count so the in-process path exercises the same frame-budget check the wire does.
-        let frame_bytes = encode_stream(batch).len();
+        let frame_bytes = crate::protocol::codec::Encoder::stream(batch).len();
         crate::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch)?;
         Ok(())
     }

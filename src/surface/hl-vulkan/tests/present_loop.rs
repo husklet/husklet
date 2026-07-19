@@ -11,15 +11,15 @@ use hl_vulkan::model::memory::{vk_buffer_usage, vk_format};
 use hl_vulkan::model::queue::ImageState;
 use hl_vulkan::result;
 use hl_vulkan::service::{create, present, record, submit, sync};
-use hl_vulkan::Device;
+use hl_vulkan::{Device, Instance};
 
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::enums::{texture_usage, TextureFormat};
 use hl_gpu::{Cmd, RecordingSink};
 
 fn dev() -> Device {
-    let inst = create::create_instance(result::HL_API_VERSION);
-    create::create_device(&inst)
+    let inst = Instance::new(result::HL_API_VERSION);
+    inst.create_device()
 }
 
 /// The backing hl-GPU texture id behind a swapchain image's `VkImage` handle.
@@ -50,7 +50,7 @@ fn swapchain_create_and_images_tracks_real_render_targets() {
     let sc = present::create_swapchain(&mut d, &mut sink, surface, N).unwrap();
 
     // vkGetSwapchainImagesKHR: exactly N handles, all live + distinct + non-null.
-    let images = present::get_swapchain_images(&d, sc).unwrap();
+    let images = d.swapchain_images(sc).unwrap();
     assert_eq!(
         images.len(),
         N as usize,
@@ -68,7 +68,7 @@ fn swapchain_create_and_images_tracks_real_render_targets() {
     );
     // Real Vulkan returns identical handles on every call — the shim must too.
     assert_eq!(
-        present::get_swapchain_images(&d, sc).unwrap(),
+        d.swapchain_images(sc).unwrap(),
         images,
         "image handles are stable across calls"
     );
@@ -125,11 +125,11 @@ fn swapchain_create_and_images_tracks_real_render_targets() {
     // BeginRenderPass naming that image's own texture id.
     for &h in &images {
         let tex = tex_of(&d, h);
-        let cb = record::allocate_command_buffer(&mut d);
-        record::begin(&mut d, cb, false).unwrap();
+        let cb = d.allocate_command_buffer();
+        d.begin_command_buffer(cb, false).unwrap();
         record::cmd_begin_render_pass(&mut d, cb, h, [0.0, 0.0, 0.0, 1.0], true, None).unwrap();
-        record::cmd_end_render_pass(&mut d, cb).unwrap();
-        record::end(&mut d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
+        d.end_command_buffer(cb).unwrap();
         submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
         match sink.batches.last().unwrap().as_slice() {
             [Cmd::Submit(cbuf)] => match cbuf.encoder.as_slice() {
@@ -166,12 +166,12 @@ fn acquire_round_robin_present_sources_the_acquired_image() {
     let surface =
         present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
     let sc = present::create_swapchain(&mut d, &mut sink, surface, N).unwrap();
-    let images = present::get_swapchain_images(&d, sc).unwrap();
+    let images = d.swapchain_images(sc).unwrap();
     let texids: Vec<u32> = images.iter().map(|&h| tex_of(&d, h)).collect();
 
     let mut acquired = Vec::new();
     for _ in 0..ITERS {
-        let idx = present::acquire_next_image(&mut d, sc).unwrap();
+        let idx = d.acquire_next_image(sc).unwrap();
         acquired.push(idx);
         // The acquired image is owned by the app (Acquired) until presented — not re-handed out.
         assert_eq!(
@@ -181,8 +181,8 @@ fn acquire_round_robin_present_sources_the_acquired_image() {
         );
 
         // Render THIS frame into the ACQUIRED image.
-        let cb = record::allocate_command_buffer(&mut d);
-        record::begin(&mut d, cb, false).unwrap();
+        let cb = d.allocate_command_buffer();
+        d.begin_command_buffer(cb, false).unwrap();
         record::cmd_begin_render_pass(
             &mut d,
             cb,
@@ -192,8 +192,8 @@ fn acquire_round_robin_present_sources_the_acquired_image() {
             None,
         )
         .unwrap();
-        record::cmd_end_render_pass(&mut d, cb).unwrap();
-        record::end(&mut d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
+        d.end_command_buffer(cb).unwrap();
         submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
         let rendered_tex = match sink.batches.last().unwrap().as_slice() {
             [Cmd::Submit(cbuf)] => match cbuf.encoder.as_slice() {
@@ -258,12 +258,12 @@ fn multi_frame_resource_lifetime_reuses_transients_without_id_leak() {
     let surface =
         present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
     let sc = present::create_swapchain(&mut d, &mut sink, surface, N).unwrap();
-    let images = present::get_swapchain_images(&d, sc).unwrap();
+    let images = d.swapchain_images(sc).unwrap();
     let texids: Vec<u32> = images.iter().map(|&h| tex_of(&d, h)).collect();
 
     // ONE reusable command buffer + ONE fence (created signaled, so the first wait passes — vkcube's model)
     // + ONE timeline semaphore, all reused every frame.
-    let cb = record::allocate_command_buffer(&mut d);
+    let cb = d.allocate_command_buffer();
     let fence = create::create_fence(&mut d, &mut sink, true).unwrap();
     let sem = sync::create_semaphore(&mut d, true, 0);
     let fence_ir = d.fences.get(&fence).unwrap().ir_id;
@@ -279,10 +279,10 @@ fn multi_frame_resource_lifetime_reuses_transients_without_id_leak() {
     for frame in 0..FRAMES {
         // Reuse the fence (wait for the prior frame's work, then reset) and reuse the cb (begin resets it).
         submit::wait_for_fence(&mut d, &mut sink, fence).unwrap();
-        submit::reset_fence(&mut d, fence).unwrap();
+        d.reset_fence(fence).unwrap();
 
-        let idx = present::acquire_next_image(&mut d, sc).unwrap();
-        record::begin(&mut d, cb, false).unwrap(); // reset_recording clears the prior frame's encoder
+        let idx = d.acquire_next_image(sc).unwrap();
+        d.begin_command_buffer(cb, false).unwrap(); // reset_recording clears the prior frame's encoder
         record::cmd_begin_render_pass(
             &mut d,
             cb,
@@ -292,8 +292,8 @@ fn multi_frame_resource_lifetime_reuses_transients_without_id_leak() {
             None,
         )
         .unwrap();
-        record::cmd_end_render_pass(&mut d, cb).unwrap();
-        record::end(&mut d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
+        d.end_command_buffer(cb).unwrap();
         submit::queue_submit(&mut d, &mut sink, &[cb], Some(fence)).unwrap();
 
         // The re-recorded encoder is CORRECT: exactly this frame's acquired image, no stale ops appended.
@@ -330,9 +330,9 @@ fn multi_frame_resource_lifetime_reuses_transients_without_id_leak() {
 
         // Reuse the timeline semaphore: signal it to a fresh value each frame — its counter advances, but
         // it is the SAME object (never re-created).
-        sync::signal_semaphore(&mut d, sem, (frame + 1) as u64).unwrap();
+        d.signal_semaphore(sem, (frame + 1) as u64).unwrap();
         assert_eq!(
-            sync::semaphore_counter(&d, sem).unwrap(),
+            d.semaphore_counter(sem).unwrap(),
             (frame + 1) as u64,
             "frame {frame}: semaphore reused"
         );
@@ -395,7 +395,7 @@ fn swapchain_recreation_retires_old_images_without_leak() {
     let surf_a =
         present::create_surface(&mut d, &mut sink, 640, 480, vk_format::B8G8R8A8_UNORM, 0).unwrap();
     let sc_a = present::create_swapchain(&mut d, &mut sink, surf_a, 2).unwrap();
-    let imgs_a = present::get_swapchain_images(&d, sc_a).unwrap();
+    let imgs_a = d.swapchain_images(sc_a).unwrap();
     let texs_a: Vec<u32> = imgs_a.iter().map(|&h| tex_of(&d, h)).collect();
     let surf_a_ir = d.surfaces.get(&surf_a).unwrap().ir_id;
     assert_eq!(d.images.len(), 2, "A's two presentable images are tracked");
@@ -405,7 +405,7 @@ fn swapchain_recreation_retires_old_images_without_leak() {
     let surf_b =
         present::create_surface(&mut d, &mut sink, 800, 600, vk_format::B8G8R8A8_UNORM, 0).unwrap();
     let sc_b = present::create_swapchain(&mut d, &mut sink, surf_b, 3).unwrap();
-    let imgs_b = present::get_swapchain_images(&d, sc_b).unwrap();
+    let imgs_b = d.swapchain_images(sc_b).unwrap();
     assert_eq!(
         d.images.len(),
         5,
@@ -421,7 +421,7 @@ fn swapchain_recreation_retires_old_images_without_leak() {
     }
 
     // Destroy the OLD swapchain A (the resize completes).
-    present::destroy_swapchain(&mut d, &mut sink, sc_a).unwrap();
+    d.destroy_swapchain(&mut sink, sc_a).unwrap();
 
     // A is FULLY retired — record, every image, and surface gone from the device tables.
     assert!(
@@ -472,7 +472,7 @@ fn swapchain_recreation_retires_old_images_without_leak() {
             "B's image {h:#x} survives A's destruction"
         );
     }
-    let idx = present::acquire_next_image(&mut d, sc_b).unwrap();
+    let idx = d.acquire_next_image(sc_b).unwrap();
     assert!(
         present::queue_present(&mut d, &mut sink, sc_b, idx).is_ok(),
         "B still presents after A is gone"
@@ -485,7 +485,7 @@ fn swapchain_recreation_retires_old_images_without_leak() {
     );
 
     // Retiring an already-dead / unknown swapchain is a harmless no-op (VK_NULL_HANDLE) — no double-free.
-    present::destroy_swapchain(&mut d, &mut sink, sc_a).unwrap();
-    present::destroy_swapchain(&mut d, &mut sink, 0).unwrap();
+    d.destroy_swapchain(&mut sink, sc_a).unwrap();
+    d.destroy_swapchain(&mut sink, 0).unwrap();
     assert_eq!(d.images.len(), 3, "a no-op retire frees nothing");
 }

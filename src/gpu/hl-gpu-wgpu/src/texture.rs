@@ -11,7 +11,7 @@ use hl_gpu::protocol::model::enums::{TextureDim, TextureFormat};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
-use crate::convert::{texel_bytes, texture_format};
+use crate::convert::Format;
 use crate::WgpuExecutor;
 
 /// The wgpu-native backing of one protocol texture.
@@ -36,16 +36,18 @@ pub struct WgpuTexture {
     pub format: TextureFormat,
 }
 
-/// Downcast a live texture id to its native handle.
-pub fn native<'a>(res: &'a SessionResources, id: u32) -> Result<&'a WgpuTexture> {
-    res.textures
-        .get(id)?
-        .downcast_ref::<WgpuTexture>()
-        .ok_or(GpuError::Invalid("wgpu: texture native type mismatch"))
-}
+impl WgpuTexture {
+    /// Downcast a live protocol texture to its wgpu backing.
+    pub fn get(res: &SessionResources, id: u32) -> Result<&Self> {
+        res.textures
+            .get(id)?
+            .downcast_ref::<Self>()
+            .ok_or(GpuError::Invalid("wgpu: texture native type mismatch"))
+    }
 
-fn round256(n: u32) -> u32 {
-    n.div_ceil(256) * 256
+    fn row_pitch(bytes: u32) -> u32 {
+        bytes.div_ceil(256) * 256
+    }
 }
 
 impl WgpuExecutor {
@@ -67,7 +69,7 @@ impl WgpuExecutor {
         if desc.width == 0 || desc.height == 0 {
             return Err(GpuError::Invalid("zero-sized texture"));
         }
-        let wfmt = texture_format(desc.format)?;
+        let wfmt = Format::from(desc.format).native();
         // Map the protocol dimension to (wgpu texture dimension, layer/slice count, default-view dimension).
         // `depth_or_array_layers` is the array-layer count for D1/D2/Cube and the slice count for D3.
         let layers = desc.depth.max(1);
@@ -200,7 +202,7 @@ impl WgpuExecutor {
         mip: u32,
     ) -> Result<Vec<u8>> {
         let _sp = hl_log::hl_span!(hl_log::tag::PRESENT, "readback");
-        let t = native(res, id)?;
+        let t = WgpuTexture::get(res, id)?;
         // A multisampled texture is built RENDER_ATTACHMENT-only (WebGPU forbids COPY usage on
         // sampleCount>1), so copy_texture_to_buffer against it is a hard wgpu validation error that would
         // panic the executor thread and NACK the whole frame (guest sees DEVICE_LOST). A readback request
@@ -214,12 +216,12 @@ impl WgpuExecutor {
         if mip >= t.mip_levels {
             return Err(GpuError::OutOfBounds);
         }
-        let bpt = texel_bytes(t.format)? as u32;
+        let bpt = Format::from(t.format).texel_bytes()? as u32;
         // The mip level's own dimensions (base extent halved per level, floored at 1).
         let mw = (t.width >> mip).max(1);
         let mh = (t.height >> mip).max(1);
         let tight_bpr = mw * bpt;
-        let padded_bpr = round256(tight_bpr);
+        let padded_bpr = WgpuTexture::row_pitch(tight_bpr);
         hl_log::hl_add!(
             hl_log::tag::PRESENT,
             "readback_bytes",
@@ -293,8 +295,8 @@ impl WgpuExecutor {
         mip: u32,
         data: &[u8],
     ) -> Result<()> {
-        let t = native(res, id)?;
-        let bpt = texel_bytes(t.format)? as u32;
+        let t = WgpuTexture::get(res, id)?;
+        let bpt = Format::from(t.format).texel_bytes()? as u32;
         self.gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &t.texture,

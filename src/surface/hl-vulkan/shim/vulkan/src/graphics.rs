@@ -16,21 +16,23 @@ use hl_gpu::protocol::model::descriptor::{BlendState, DepthState, StencilFaceSta
 use hl_gpu::protocol::model::enums::{compare, TextureFormat, Topology};
 use hl_gpu::CommandSink;
 use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
-use hl_vulkan::model::memory::tex_format_from_vk;
-use hl_vulkan::result::vk_result_from_gpu_error;
+use hl_vulkan::model::memory::Format;
+use hl_vulkan::result::Status;
 use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachment};
 use hl_vulkan::service::{create, present, record};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
-use crate::state::{with, RenderPassDepth, RenderPassRec, WaylandWindow};
+use crate::state::{StateStore, RenderPassDepth, RenderPassRec, WaylandWindow};
 use crate::types::*;
 
 // ---- shared marshalling helpers ------------------------------------------------------------------
 
 /// Run `f` with the logical device + the command sink (disjoint `State` fields). `None` if no device
 /// has been created yet — the caller maps that to `VK_ERROR_INITIALIZATION_FAILED`.
-fn dev_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option<R> {
-    with(|s| {
+struct ShimState;
+impl ShimState {
+fn with_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option<R> {
+    StateStore::with(|s| {
         let sink = &mut s.sink;
         let dev = s.device.as_mut()?;
         Some(f(dev, sink))
@@ -38,21 +40,28 @@ fn dev_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option
 }
 
 /// Run `f` with just the logical device (for pure-bookkeeping / recording bodies that emit no `Cmd`).
-fn dev<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
-    with(|s| s.device.as_mut().map(f))
+fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
+    StateStore::with(|s| s.device.as_mut().map(f))
+}
 }
 
 /// Borrow a nul-terminated C string as `&str` (`"main"` fallback on NULL / bad UTF-8).
-unsafe fn entry_str<'a>(p: *const c_char) -> &'a str {
+struct EntryPoint;
+impl EntryPoint {
+unsafe fn read<'a>(p: *const c_char) -> &'a str {
     if p.is_null() {
         return "main";
     }
     core::ffi::CStr::from_ptr(p).to_str().unwrap_or("main")
 }
+}
 
 /// Unwrap a dispatchable `VkCommandBuffer` to its `hl_vulkan` `u64` command-buffer handle.
-unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
+struct CommandBuffer;
+impl CommandBuffer {
+unsafe fn handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
+}
 }
 
 // ==================================================================================================
@@ -72,7 +81,7 @@ pub extern "C" fn vkCreateImage(
     if !p_image.is_null() {
         unsafe { *p_image = 0 };
     }
-    dev_sink(|dev, sink| {
+    ShimState::with_sink(|dev, sink| {
         match create::create_image(
             dev,
             sink,
@@ -90,7 +99,7 @@ pub extern "C" fn vkCreateImage(
                 }
                 VK_SUCCESS
             }
-            Err(e) => vk_result_from_gpu_error(&e),
+            Err(e) => Status::from_error(&e),
         }
     })
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
@@ -98,7 +107,7 @@ pub extern "C" fn vkCreateImage(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyImage(_device: *mut c_void, image: u64, _p_allocator: *const c_void) {
-    dev(|dev| {
+    ShimState::with_device(|dev| {
         dev.images.remove(&image);
     });
 }
@@ -117,7 +126,7 @@ pub extern "C" fn vkGetImageMemoryRequirements(
     // format-aware: a blind *4 over-reports a 1-byte R8 coverage atlas 4x, and once GPUI grows its glyph
     // atlas that inflated requirement crosses gpu-alloc's 2 GiB max-allocation ceiling and spuriously
     // OutOfMemory-device-losts wgpu with the real heap wide open.
-    let size = dev(|dev| {
+    let size = ShimState::with_device(|dev| {
         dev.images
             .get(&image)
             .map(|i| i.width as u64 * i.height as u64 * i.format.bytes_per_texel().unwrap_or(4) as u64)
@@ -128,7 +137,7 @@ pub extern "C" fn vkGetImageMemoryRequirements(
     out.alignment = 256;
     // Every advertised memory type can back this image (all our memory is host RAM): expose the full
     // set so gpu-alloc picks a suitable (e.g. DEVICE_LOCAL) type. See PhysicalDeviceDesc::memory_types.
-    out.memory_type_bits = with(|s| s.physical_device().all_memory_type_bits());
+    out.memory_type_bits = StateStore::with(|s| s.physical_device().all_memory_type_bits());
 }
 
 /// `vkGetImageSubresourceLayout` — report the linear byte layout (offset/size/rowPitch) of `image`'s
@@ -145,7 +154,7 @@ pub extern "C" fn vkGetImageSubresourceLayout(
         return;
     };
     *out = VkSubresourceLayout::default();
-    if let Some(Ok(l)) = dev(|d| create::image_subresource_layout(d, image)) {
+    if let Some(Ok(l)) = ShimState::with_device(|d| d.image_subresource_layout(image)) {
         out.offset = l.offset;
         out.size = l.size;
         out.row_pitch = l.row_pitch;
@@ -248,7 +257,7 @@ pub extern "C" fn vkCreateImageView(
     }
     // A view is a thin alias of its image (the hl model renders into images directly); record the
     // view→image mapping so vkCmdBeginRenderPass can resolve a framebuffer attachment back to its image.
-    let handle = with(|s| {
+    let handle = StateStore::with(|s| {
         let h = s.device.as_mut()?.alloc_handle();
         s.image_views.insert(h, ci.image);
         Some(h)
@@ -266,7 +275,7 @@ pub extern "C" fn vkCreateImageView(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyImageView(_device: *mut c_void, image_view: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         s.image_views.remove(&image_view);
     });
 }
@@ -281,7 +290,7 @@ pub extern "C" fn vkCreateSampler(
     let Some(ci) = (unsafe { (p_create_info as *const VkSamplerCreateInfo).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    let h = dev_sink(|dev, sink| {
+    let h = ShimState::with_sink(|dev, sink| {
         create::create_sampler(
             dev,
             sink,
@@ -304,7 +313,7 @@ pub extern "C" fn vkCreateSampler(
 
 #[no_mangle]
 pub extern "C" fn vkDestroySampler(_device: *mut c_void, sampler: u64, _p_allocator: *const c_void) {
-    dev(|dev| {
+    ShimState::with_device(|dev| {
         dev.samplers.remove(&sampler);
     });
 }
@@ -316,8 +325,11 @@ pub extern "C" fn vkDestroySampler(_device: *mut c_void, sampler: u64, _p_alloca
 /// Whether a raw `VkFormat` is a depth/stencil format — the contiguous `VK_FORMAT_D16_UNORM`(124) …
 /// `VK_FORMAT_D32_SFLOAT_S8_UINT`(130) block (127 = `S8_UINT` is stencil-only, still a depth/stencil
 /// attachment). Used to pick the depth attachment out of a classic render pass's attachment table.
-fn is_depth_format(f: u32) -> bool {
+struct AttachmentFormat;
+impl AttachmentFormat {
+fn is_depth(f: u32) -> bool {
     (124..=130).contains(&f)
+}
 }
 
 #[no_mangle]
@@ -337,7 +349,7 @@ pub extern "C" fn vkCreateRenderPass(
     } else {
         let atts = unsafe { std::slice::from_raw_parts(ci.p_attachments, ci.attachment_count as usize) };
         let a0 = &atts[0];
-        let depth = atts.iter().enumerate().find(|(_, a)| is_depth_format(a.format as u32)).map(|(i, a)| {
+        let depth = atts.iter().enumerate().find(|(_, a)| AttachmentFormat::is_depth(a.format as u32)).map(|(i, a)| {
             RenderPassDepth {
                 index: i as u32,
                 format_vk: a.format as u32,
@@ -346,7 +358,7 @@ pub extern "C" fn vkCreateRenderPass(
         });
         (a0.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR, a0.format as u32, depth)
     };
-    let handle = with(|s| {
+    let handle = StateStore::with(|s| {
         let h = s.device.as_mut()?.alloc_handle();
         s.render_passes
             .insert(h, RenderPassRec { first_attachment_clears: clears, color_format_vk: fmt, depth });
@@ -365,7 +377,7 @@ pub extern "C" fn vkCreateRenderPass(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyRenderPass(_device: *mut c_void, render_pass: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         s.render_passes.remove(&render_pass);
     });
 }
@@ -385,7 +397,7 @@ pub extern "C" fn vkCreateFramebuffer(
     } else {
         unsafe { std::slice::from_raw_parts(ci.p_attachments, ci.attachment_count as usize) }.to_vec()
     };
-    let handle = with(|s| {
+    let handle = StateStore::with(|s| {
         let h = s.device.as_mut()?.alloc_handle();
         s.framebuffers.insert(h, views);
         Some(h)
@@ -403,7 +415,7 @@ pub extern "C" fn vkCreateFramebuffer(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyFramebuffer(_device: *mut c_void, framebuffer: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         s.framebuffers.remove(&framebuffer);
     });
 }
@@ -414,7 +426,9 @@ pub extern "C" fn vkDestroyFramebuffer(_device: *mut c_void, framebuffer: u64, _
 
 /// Translate a `VkPipelineVertexInputStateCreateInfo` into the neutral per-binding vertex layouts (the
 /// host rasterizer fetches slot-0 positions/colors from these).
-fn parse_vertex_layouts(vi: *const VkPipelineVertexInputStateCreateInfo) -> Vec<VertexLayout> {
+struct VertexLayouts;
+impl VertexLayouts {
+fn parse(vi: *const VkPipelineVertexInputStateCreateInfo) -> Vec<VertexLayout> {
     let Some(vi) = (unsafe { vi.as_ref() }) else {
         return Vec::new();
     };
@@ -453,11 +467,14 @@ fn parse_vertex_layouts(vi: *const VkPipelineVertexInputStateCreateInfo) -> Vec<
         })
         .collect()
 }
+}
 
 /// Walk a pNext chain for `VkPipelineRenderingCreateInfo` and read its `pColorAttachmentFormats` into the
 /// neutral color-target formats (a dynamic-rendering pipeline's color targets). Empty when absent / no
 /// color formats (a valid depth-only or no-color pipeline).
-fn parse_pipeline_rendering_color_formats(p_next: *const c_void) -> Vec<TextureFormat> {
+struct RenderingInfo;
+impl RenderingInfo {
+fn color_formats(p_next: *const c_void) -> Vec<TextureFormat> {
     let mut node = p_next as *const VkBaseInStructure;
     while let Some(n) = unsafe { node.as_ref() } {
         if n.s_type == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO {
@@ -468,7 +485,7 @@ fn parse_pipeline_rendering_color_formats(p_next: *const c_void) -> Vec<TextureF
             let fmts = unsafe {
                 std::slice::from_raw_parts(pr.p_color_attachment_formats, pr.color_attachment_count as usize)
             };
-            return fmts.iter().map(|&f| tex_format_from_vk(f as u32)).collect();
+            return fmts.iter().map(|&f| Format(f as u32).wire()).collect();
         }
         node = n.p_next;
     }
@@ -478,30 +495,34 @@ fn parse_pipeline_rendering_color_formats(p_next: *const c_void) -> Vec<TextureF
 /// Walk a pNext chain for `VkPipelineRenderingCreateInfo` and read its `depthAttachmentFormat` — the depth
 /// format a dynamic-rendering (null `renderPass`) pipeline targets. `None` when the struct is absent or the
 /// format is `VK_FORMAT_UNDEFINED` (0), i.e. a color-only pipeline.
-fn parse_pipeline_rendering_depth_format(p_next: *const c_void) -> Option<TextureFormat> {
+fn depth_format(p_next: *const c_void) -> Option<TextureFormat> {
     let mut node = p_next as *const VkBaseInStructure;
     while let Some(n) = unsafe { node.as_ref() } {
         if n.s_type == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO {
             let pr = unsafe { &*(node as *const VkPipelineRenderingCreateInfo) };
             // VK_FORMAT_UNDEFINED (0) => no depth attachment.
             return (pr.depth_attachment_format != 0)
-                .then(|| tex_format_from_vk(pr.depth_attachment_format as u32));
+                .then(|| Format(pr.depth_attachment_format as u32).wire());
         }
         node = n.p_next;
     }
     None
 }
+}
 
 /// Translate one `VkStencilOpState` face onto the neutral [`StencilFaceState`]. `VkStencilOp`
 /// (KEEP=0 … DECREMENT_AND_WRAP=7) and `VkCompareOp` (NEVER=0 … ALWAYS=7) share the neutral
 /// `stencil_op::*` / `compare::*` numbering verbatim, so every field maps 1:1.
-fn parse_stencil_face(s: &VkStencilOpState) -> StencilFaceState {
+struct Stencil;
+impl Stencil {
+fn face(s: &VkStencilOpState) -> StencilFaceState {
     StencilFaceState {
         compare: s.compare_op as u32,
         fail_op: s.fail_op as u32,
         depth_fail_op: s.depth_fail_op as u32,
         pass_op: s.pass_op as u32,
     }
+}
 }
 
 /// Translate a `VkPipelineDepthStencilStateCreateInfo` into the neutral [`DepthState`] when the depth OR
@@ -516,7 +537,9 @@ fn parse_stencil_face(s: &VkStencilOpState) -> StencilFaceState {
 /// the front face's `compareMask`/`writeMask` thread to the neutral single read/write masks (WebGPU/wgpu
 /// carry ONE mask pair for both faces). Without this the stencil state was DROPPED (`DepthState::depth_only`
 /// forced the inert `DISABLED` faces) and every stencil-gated draw ran with the stencil test off.
-fn parse_depth_stencil_state(
+struct DepthStencil;
+impl DepthStencil {
+fn parse(
     p_depth_stencil_state: *const c_void,
     depth_format: Option<TextureFormat>,
 ) -> Option<DepthState> {
@@ -533,8 +556,8 @@ fn parse_depth_stencil_state(
     });
     let (stencil_front, stencil_back, read_mask, write_mask) = if stencil_enabled {
         (
-            parse_stencil_face(&ds.front),
-            parse_stencil_face(&ds.back),
+            Stencil::face(&ds.front),
+            Stencil::face(&ds.back),
             ds.front.compare_mask,
             ds.front.write_mask,
         )
@@ -551,13 +574,16 @@ fn parse_depth_stencil_state(
         stencil_write_mask: write_mask,
     })
 }
+}
 
 /// Translate a `VkBlendFactor` onto the neutral `hl_gpu` blend-factor wire numbering the GL driver emits
 /// (0=ZERO 1=ONE 2=SRC_COLOR 3=1-SRC_COLOR 4=SRC_ALPHA 5=1-SRC_ALPHA 6=DST_COLOR 7=1-DST_COLOR 8=DST_ALPHA
 /// 9=1-DST_ALPHA 10=SRC_ALPHA_SATURATE) that `hl-gpu-wgpu`'s `blend_factor` decodes. VkBlendFactor
 /// interleaves color/alpha differently (SRC_ALPHA=6, DST_COLOR=4) so the mapping is NOT identity. An
 /// unmodeled factor defaults to ONE, matching the executor's own fallback rather than dropping the blend.
-fn vk_blend_factor_wire(f: i32) -> u32 {
+struct Blend;
+impl Blend {
+fn factor(f: i32) -> u32 {
     match f {
         0 => 0,   // VK_BLEND_FACTOR_ZERO
         1 => 1,   // VK_BLEND_FACTOR_ONE
@@ -577,7 +603,7 @@ fn vk_blend_factor_wire(f: i32) -> u32 {
 /// Translate a `VkBlendOp` onto the neutral blend-op wire numbering (0=ADD 1=SUBTRACT 2=REVERSE_SUBTRACT
 /// 3=MIN 4=MAX). `VkBlendOp` (ADD=0 … MAX=4) already matches this ordering 1:1; an unmodeled op defaults
 /// to ADD.
-fn vk_blend_op_wire(o: i32) -> u32 {
+fn operation(o: i32) -> u32 {
     match o {
         1 => 1, // VK_BLEND_OP_SUBTRACT
         2 => 2, // VK_BLEND_OP_REVERSE_SUBTRACT
@@ -593,7 +619,7 @@ fn vk_blend_op_wire(o: i32) -> u32 {
 /// list, or `blendEnable = VK_FALSE` — exactly the pipelines that must OVERWRITE (opaque replace) rather
 /// than composite. Without this the color-blend state was dropped (`blend: None` hardcoded) and a
 /// translucent draw overwrote the destination instead of alpha-compositing over it.
-fn parse_color_blend_state(p_color_blend_state: *const c_void) -> Option<BlendState> {
+fn parse(p_color_blend_state: *const c_void) -> Option<BlendState> {
     let cb = unsafe { (p_color_blend_state as *const VkPipelineColorBlendStateCreateInfo).as_ref() }?;
     if cb.attachment_count == 0 || cb.p_attachments.is_null() {
         return None;
@@ -603,13 +629,14 @@ fn parse_color_blend_state(p_color_blend_state: *const c_void) -> Option<BlendSt
         return None;
     }
     Some(BlendState {
-        src_color: vk_blend_factor_wire(att.src_color_blend_factor),
-        dst_color: vk_blend_factor_wire(att.dst_color_blend_factor),
-        op_color: vk_blend_op_wire(att.color_blend_op),
-        src_alpha: vk_blend_factor_wire(att.src_alpha_blend_factor),
-        dst_alpha: vk_blend_factor_wire(att.dst_alpha_blend_factor),
-        op_alpha: vk_blend_op_wire(att.alpha_blend_op),
+        src_color: Blend::factor(att.src_color_blend_factor),
+        dst_color: Blend::factor(att.dst_color_blend_factor),
+        op_color: Blend::operation(att.color_blend_op),
+        src_alpha: Blend::factor(att.src_alpha_blend_factor),
+        dst_alpha: Blend::factor(att.dst_alpha_blend_factor),
+        op_alpha: Blend::operation(att.alpha_blend_op),
     })
+}
 }
 
 /// Read a `VkPipelineMultisampleStateCreateInfo`'s `rasterizationSamples` as the pipeline's multisample
@@ -618,12 +645,15 @@ fn parse_color_blend_state(p_color_blend_state: *const c_void) -> Option<BlendSt
 /// (a pipeline with no multisample state — spec-legal for a rasterization-discard pipeline) or a `0`/`_1_BIT`
 /// count folds to `1` (single-sample), keeping an existing non-MSAA pipeline byte-identical. Without this
 /// the sample count was dropped (`sample_count: 1` hardcoded) and an MSAA pipeline rasterized single-sampled.
-fn parse_multisample_samples(p_multisample_state: *const c_void) -> u32 {
+struct Multisample;
+impl Multisample {
+fn samples(p_multisample_state: *const c_void) -> u32 {
     let Some(ms) = (unsafe { (p_multisample_state as *const VkPipelineMultisampleStateCreateInfo).as_ref() })
     else {
         return 1;
     };
     (ms.rasterization_samples as u32).max(1)
+}
 }
 
 /// Read a `VkPipelineInputAssemblyStateCreateInfo`'s `topology` as the pipeline's primitive-assembly mode.
@@ -634,7 +664,9 @@ fn parse_multisample_samples(p_multisample_state: *const c_void) -> u32 {
 /// hardcoded in create.rs) and a pipeline drawing 4-vertex TRIANGLE_STRIP quads (GPUI's entire UI: the
 /// window/panel/glyph quads) rasterized only the FIRST triangle of each quad — every rectangle collapsed to
 /// a half-rectangle triangle.
-fn parse_input_assembly_topology(p_input_assembly_state: *const c_void) -> Topology {
+struct InputAssembly;
+impl InputAssembly {
+fn topology(p_input_assembly_state: *const c_void) -> Topology {
     let Some(ia) =
         (unsafe { (p_input_assembly_state as *const VkPipelineInputAssemblyStateCreateInfo).as_ref() })
     else {
@@ -649,6 +681,7 @@ fn parse_input_assembly_topology(p_input_assembly_state: *const c_void) -> Topol
         _ => Topology::TriangleList,
     }
 }
+}
 
 /// Read a `VkPipelineRasterizationStateCreateInfo`'s `cullMode` + `frontFace` as the pipeline's neutral
 /// `(cull, front_face)`. `VkCullModeFlags` (NONE=0, FRONT_BIT=1, BACK_BIT=2, FRONT_AND_BACK=3) maps to the
@@ -658,7 +691,9 @@ fn parse_input_assembly_topology(p_input_assembly_state: *const c_void) -> Topol
 /// pRasterizationState folds to `(0, 0)`. Without this the cull + winding were DROPPED (`cull: 0`,
 /// `front_face: 0` hardcoded in create.rs) and a back-face-culled solid mesh drew its interior/back
 /// triangles bleeding through the front.
-fn parse_rasterization_state(p_rasterization_state: *const c_void) -> (u32, u32) {
+struct Rasterization;
+impl Rasterization {
+fn parse(p_rasterization_state: *const c_void) -> (u32, u32) {
     let Some(rs) =
         (unsafe { (p_rasterization_state as *const VkPipelineRasterizationStateCreateInfo).as_ref() })
     else {
@@ -672,6 +707,7 @@ fn parse_rasterization_state(p_rasterization_state: *const c_void) -> (u32, u32)
     let front_face = if rs.front_face == 1 { 1 } else { 0 };
     (cull, front_face)
 }
+}
 
 /// Read a `VkPipelineColorBlendStateCreateInfo`'s FIRST attachment's `colorWriteMask` as the pipeline's
 /// neutral RGBA write mask (the software rasterizer applies one write mask to all targets, mirroring the
@@ -680,7 +716,9 @@ fn parse_rasterization_state(p_rasterization_state: *const c_void) -> (u32, u32)
 /// default). Without this the write mask was DROPPED (`write_mask: 0xf` hardcoded in create.rs) and a
 /// channel-masked draw (e.g. a depth-prepass `colorWriteMask = 0`, or preserving destination alpha) wrote
 /// color it must have left untouched.
-fn parse_color_write_mask(p_color_blend_state: *const c_void) -> u32 {
+struct ColorMask;
+impl ColorMask {
+fn parse(p_color_blend_state: *const c_void) -> u32 {
     let Some(cb) =
         (unsafe { (p_color_blend_state as *const VkPipelineColorBlendStateCreateInfo).as_ref() })
     else {
@@ -690,6 +728,7 @@ fn parse_color_write_mask(p_color_blend_state: *const c_void) -> u32 {
         return 0xf;
     }
     (unsafe { &*cb.p_attachments }.color_write_mask) & 0xf
+}
 }
 
 #[no_mangle]
@@ -723,7 +762,7 @@ pub extern "C" fn vkCreateGraphicsPipelines(
         let mut vertex: Option<(u64, String)> = None;
         let mut fragment: Option<(u64, String)> = None;
         for st in stages {
-            let entry = unsafe { entry_str(st.p_name) }.to_string();
+            let entry = unsafe { EntryPoint::read(st.p_name) }.to_string();
             if st.stage & VK_SHADER_STAGE_VERTEX_BIT != 0 {
                 vertex = Some((st.module, entry));
             } else if st.stage & VK_SHADER_STAGE_FRAGMENT_BIT != 0 {
@@ -734,15 +773,15 @@ pub extern "C" fn vkCreateGraphicsPipelines(
             result = VK_ERROR_UNKNOWN;
             continue;
         };
-        let layouts = parse_vertex_layouts(ci.p_vertex_input_state);
+        let layouts = VertexLayouts::parse(ci.p_vertex_input_state);
         // The color-target formats: from the bound VkRenderPass's attachment in the classic path, or —
         // for a VK_KHR_dynamic_rendering pipeline (null renderPass) — from the
         // VkPipelineRenderingCreateInfo::pColorAttachmentFormats carried in the pNext chain.
         let color_formats: Vec<TextureFormat> = if ci.render_pass == 0 {
-            parse_pipeline_rendering_color_formats(ci.p_next)
+            RenderingInfo::color_formats(ci.p_next)
         } else {
-            let fmt = with(|s| {
-                s.render_passes.get(&ci.render_pass).map(|r| tex_format_from_vk(r.color_format_vk))
+            let fmt = StateStore::with(|s| {
+                s.render_passes.get(&ci.render_pass).map(|r| Format(r.color_format_vk).wire())
             });
             vec![fmt.unwrap_or(TextureFormat::Rgba8Unorm)]
         };
@@ -753,43 +792,43 @@ pub extern "C" fn vkCreateGraphicsPipelines(
         // Depth32Float when a depth-tested pipeline resolves no explicit format. A null pDepthStencilState /
         // disabled test => no depth.
         let depth_format = if ci.render_pass == 0 {
-            parse_pipeline_rendering_depth_format(ci.p_next)
+            RenderingInfo::depth_format(ci.p_next)
         } else {
-            with(|s| {
+            StateStore::with(|s| {
                 s.render_passes
                     .get(&ci.render_pass)
                     .and_then(|r| r.depth)
-                    .map(|d| tex_format_from_vk(d.format_vk))
+                    .map(|d| Format(d.format_vk).wire())
             })
         };
-        let depth = parse_depth_stencil_state(ci.p_depth_stencil_state, depth_format);
+        let depth = DepthStencil::parse(ci.p_depth_stencil_state, depth_format);
 
         // Color-blend state: the first attachment's blendEnable + factors/ops, mapped onto the neutral
         // blend wire numbering. A null pColorBlendState / blendEnable = VK_FALSE => None (opaque overwrite),
         // preserving the pre-blend behavior.
-        let blend = parse_color_blend_state(ci.p_color_blend_state);
+        let blend = Blend::parse(ci.p_color_blend_state);
 
         // Multisample state: rasterizationSamples → the pipeline's MSAA count. Null / _1_BIT => single-sample.
-        let sample_count = parse_multisample_samples(ci.p_multisample_state);
+        let sample_count = Multisample::samples(ci.p_multisample_state);
 
         // Input-assembly topology: the real VkPrimitiveTopology (GPUI's quads are 4-vertex TRIANGLE_STRIP).
-        let topology = parse_input_assembly_topology(ci.p_input_assembly_state);
+        let topology = InputAssembly::topology(ci.p_input_assembly_state);
 
         // Rasterization cull state: cullMode + frontFace (a back-face-culled solid mesh must not show its
         // interior). Null pRasterizationState => (none, CCW).
-        let (cull, front_face) = parse_rasterization_state(ci.p_rasterization_state);
+        let (cull, front_face) = Rasterization::parse(ci.p_rasterization_state);
 
         // Per-attachment colorWriteMask (attachment 0, applied to every color target — the one-mask model).
-        let color_write_mask = parse_color_write_mask(ci.p_color_blend_state);
+        let color_write_mask = ColorMask::parse(ci.p_color_blend_state);
 
-        let r = dev_sink(|dev, sink| {
+        let r = ShimState::with_sink(|dev, sink| {
             let frag = fragment.as_ref().map(|(m, e)| (*m, e.as_str()));
             create::create_graphics_pipeline(dev, sink, (vmod, ventry.as_str()), frag, layouts, color_formats, depth, blend, sample_count, topology, cull, front_face, color_write_mask)
         })
         .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkCreateGraphicsPipelines: no device")));
         match r {
             Ok(h) => out[i] = h,
-            Err(e) => result = vk_result_from_gpu_error(&e),
+            Err(e) => result = Status::from_error(&e),
         }
     }
     result
@@ -805,7 +844,7 @@ pub extern "C" fn vkCmdBeginRenderPass(
     p_render_pass_begin: *const c_void,
     _contents: i32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
     let Some(bi) = (unsafe { (p_render_pass_begin as *const VkRenderPassBeginInfo).as_ref() }) else {
@@ -823,7 +862,7 @@ pub extern "C" fn vkCmdBeginRenderPass(
     } else {
         unsafe { std::slice::from_raw_parts(bi.p_clear_values, bi.clear_value_count as usize) }
     };
-    with(|s| {
+    StateStore::with(|s| {
         // Resolve framebuffer → first attachment view → image handle; render pass → clear behaviour.
         let views = s.framebuffers.get(&bi.framebuffer);
         let image = views
@@ -850,11 +889,11 @@ pub extern "C" fn vkCmdBeginRenderPass(
 
 #[no_mangle]
 pub extern "C" fn vkCmdEndRenderPass(command_buffer: *mut c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|dev| {
-        let _ = record::cmd_end_render_pass(dev, cb);
+    ShimState::with_device(|dev| {
+        let _ = dev.end_render_pass(cb);
     });
 }
 
@@ -864,13 +903,16 @@ pub extern "C" fn vkCmdEndRenderPass(command_buffer: *mut c_void) {
 
 /// Resolve one `VkRenderingAttachmentInfo`'s `imageView` back to the `VkImage` handle it views (the hl
 /// model renders into images directly). `None` on a null view / unmapped view (skipped as a no-attachment).
-fn rendering_attachment_image(s: &crate::state::State, att: &VkRenderingAttachmentInfo) -> Option<u64> {
+struct RenderingAttachment;
+impl RenderingAttachment {
+fn image(s: &crate::state::State, att: &VkRenderingAttachmentInfo) -> Option<u64> {
     s.image_views.get(&att.image_view).copied()
+}
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdBeginRendering(command_buffer: *mut c_void, p_rendering_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
     let Some(ri) = (unsafe { (p_rendering_info as *const VkRenderingInfo).as_ref() }) else {
@@ -883,12 +925,12 @@ pub extern "C" fn vkCmdBeginRendering(command_buffer: *mut c_void, p_rendering_i
             unsafe { std::slice::from_raw_parts(ri.p_color_attachments, ri.color_attachment_count as usize) }
         };
     let depth_c = unsafe { ri.p_depth_attachment.as_ref() };
-    with(|s| {
+    StateStore::with(|s| {
         // Resolve each attachment view → image up front (image_views is disjoint from the device field).
         let colors: Vec<RenderingColorAttachment> = colors_c
             .iter()
             .filter_map(|att| {
-                rendering_attachment_image(s, att).map(|image| RenderingColorAttachment {
+                RenderingAttachment::image(s, att).map(|image| RenderingColorAttachment {
                     image,
                     clear: att.clear_value.float32,
                     load_clear: att.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -897,7 +939,7 @@ pub extern "C" fn vkCmdBeginRendering(command_buffer: *mut c_void, p_rendering_i
             })
             .collect();
         let depth = depth_c.and_then(|att| {
-            rendering_attachment_image(s, att).map(|image| RenderingDepthAttachment {
+            RenderingAttachment::image(s, att).map(|image| RenderingDepthAttachment {
                 image,
                 clear_depth: att.clear_value.float32[0],
                 load_clear: att.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -919,11 +961,11 @@ pub extern "C" fn vkCmdBeginRenderingKHR(command_buffer: *mut c_void, p_renderin
 /// `Enc::EndRenderPass`).
 #[no_mangle]
 pub extern "C" fn vkCmdEndRendering(command_buffer: *mut c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|dev| {
-        let _ = record::cmd_end_render_pass(dev, cb);
+    ShimState::with_device(|dev| {
+        let _ = dev.end_render_pass(cb);
     });
 }
 
@@ -941,7 +983,7 @@ pub extern "C" fn vkCmdBindVertexBuffers(
     p_buffers: *const u64,
     p_offsets: *const u64,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
     if p_buffers.is_null() {
@@ -953,7 +995,7 @@ pub extern "C" fn vkCmdBindVertexBuffers(
     } else {
         unsafe { std::slice::from_raw_parts(p_offsets, binding_count as usize) }.to_vec()
     };
-    dev(|dev| {
+    ShimState::with_device(|dev| {
         for (i, &buf) in buffers.iter().enumerate() {
             let slot = first_binding + i as u32;
             let offset = offsets.get(i).copied().unwrap_or(0);
@@ -969,10 +1011,10 @@ pub extern "C" fn vkCmdBindIndexBuffer(
     offset: u64,
     index_type: i32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|dev| {
+    ShimState::with_device(|dev| {
         let _ = record::cmd_bind_index_buffer(dev, cb, buffer, offset, index_type as u32);
     });
 }
@@ -985,10 +1027,10 @@ pub extern "C" fn vkCmdDraw(
     first_vertex: u32,
     first_instance: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|dev| {
+    ShimState::with_device(|dev| {
         let _ = record::cmd_draw(dev, cb, vertex_count, instance_count, first_vertex, first_instance);
     });
 }
@@ -1002,10 +1044,10 @@ pub extern "C" fn vkCmdDrawIndexed(
     vertex_offset: i32,
     first_instance: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|dev| {
+    ShimState::with_device(|dev| {
         let _ = record::cmd_draw_indexed(
             dev,
             cb,
@@ -1029,14 +1071,14 @@ pub extern "C" fn vkCmdSetViewport(
     viewport_count: u32,
     p_viewports: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
     if p_viewports.is_null() || viewport_count == 0 {
         return;
     }
     let v = unsafe { &*(p_viewports as *const VkViewport) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_set_viewport(d, cb, v.x, v.y, v.width, v.height, v.min_depth, v.max_depth);
     });
 }
@@ -1048,14 +1090,14 @@ pub extern "C" fn vkCmdSetScissor(
     scissor_count: u32,
     p_scissors: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
     if p_scissors.is_null() || scissor_count == 0 {
         return;
     }
     let r = unsafe { &*(p_scissors as *const VkRect2D) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_set_scissor(
             d,
             cb,
@@ -1069,10 +1111,10 @@ pub extern "C" fn vkCmdSetScissor(
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetLineWidth(command_buffer: *mut c_void, line_width: f32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_set_line_width(d, cb, line_width);
     });
 }
@@ -1084,10 +1126,10 @@ pub extern "C" fn vkCmdSetDepthBias(
     depth_bias_clamp: f32,
     depth_bias_slope_factor: f32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_set_depth_bias(
             d,
             cb,
@@ -1100,44 +1142,44 @@ pub extern "C" fn vkCmdSetDepthBias(
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetBlendConstants(command_buffer: *mut c_void, blend_constants: *const f32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
     if blend_constants.is_null() {
         return;
     }
     let c = unsafe { std::slice::from_raw_parts(blend_constants, 4) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_set_blend_constants(d, cb, [c[0], c[1], c[2], c[3]]);
     });
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetStencilCompareMask(command_buffer: *mut c_void, face_mask: u32, compare_mask: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_set_stencil_compare_mask(d, cb, face_mask, compare_mask);
     });
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetStencilWriteMask(command_buffer: *mut c_void, face_mask: u32, write_mask: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_set_stencil_write_mask(d, cb, face_mask, write_mask);
     });
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetStencilReference(command_buffer: *mut c_void, face_mask: u32, reference: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_set_stencil_reference(d, cb, face_mask, reference);
     });
 }
@@ -1155,14 +1197,14 @@ pub extern "C" fn vkCmdPushConstants(
     size: u32,
     p_values: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
     if p_values.is_null() || size == 0 {
         return;
     }
     let bytes = unsafe { std::slice::from_raw_parts(p_values as *const u8, size as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_push_constants(d, cb, offset, bytes);
     });
 }
@@ -1179,10 +1221,10 @@ pub extern "C" fn vkCmdDrawIndirect(
     draw_count: u32,
     stride: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_draw_indirect(d, cb, buffer, offset, draw_count, stride);
     });
 }
@@ -1195,10 +1237,10 @@ pub extern "C" fn vkCmdDrawIndexedIndirect(
     draw_count: u32,
     stride: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_draw_indexed_indirect(d, cb, buffer, offset, draw_count, stride);
     });
 }
@@ -1224,13 +1266,13 @@ pub extern "C" fn vkCreateSwapchainKHR(
     // then register the swapchain's presentable images against it. On success, carry the app's wayland
     // window (captured at `vkCreateWaylandSurfaceKHR` under `ci.surface`) onto the swapchain so a present
     // can marshal the readback onto the app's own `wl_surface`.
-    with(|s| {
+    StateStore::with(|s| {
         let sink = &mut s.sink;
         let Some(dev) = s.device.as_mut() else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         let r = (|| {
-            let surface = create_surface_for_swapchain(dev, sink, ci)?;
+            let surface = Swapchain::create_surface(dev, sink, ci)?;
             present::create_swapchain(dev, sink, surface, ci.min_image_count)
         })();
         match r {
@@ -1243,13 +1285,15 @@ pub extern "C" fn vkCreateSwapchainKHR(
                 }
                 VK_SUCCESS
             }
-            Err(e) => vk_result_from_gpu_error(&e),
+            Err(e) => Status::from_error(&e),
         }
     })
 }
 
 /// Create the GPU surface a swapchain presents through (extent/format from the swapchain create info).
-fn create_surface_for_swapchain(
+struct Swapchain;
+impl Swapchain {
+fn create_surface(
     dev: &mut Device,
     sink: &mut dyn CommandSink,
     ci: &VkSwapchainCreateInfoKHR,
@@ -1263,16 +1307,17 @@ fn create_surface_for_swapchain(
         0,
     )
 }
+}
 
 #[no_mangle]
 pub extern "C" fn vkDestroySwapchainKHR(_device: *mut c_void, swapchain: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         let sink = &mut s.sink;
         if let Some(dev) = s.device.as_mut() {
             // Retire the swapchain AND its presentable images + presentation surface (dropping their
             // `dev.images`/`dev.surfaces` bookkeeping + freeing the host textures/surface). Removing only the
             // `SwapchainRec` would orphan the images in `dev.images` forever — a per-resize handle leak.
-            let _ = present::destroy_swapchain(dev, sink, swapchain);
+            let _ = dev.destroy_swapchain(sink, swapchain);
         }
         // Tear down the app-surface presenter + its window binding (drops the private queue wrappers +
         // the bound `wl_shm`, releasing the app's connection).
@@ -1291,10 +1336,10 @@ pub extern "C" fn vkGetSwapchainImagesKHR(
     if p_swapchain_image_count.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-    dev(|dev| {
+    ShimState::with_device(|dev| {
         // The swapchain's presentable images (real render-target textures + their VkImage handles) were
         // created with the swapchain; return the SAME handles here (identical on every call).
-        let Ok(handles) = present::get_swapchain_images(dev, swapchain) else {
+        let Ok(handles) = dev.swapchain_images(swapchain) else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
         let count = handles.len() as u32;
@@ -1327,7 +1372,7 @@ pub extern "C" fn vkAcquireNextImageKHR(
     _fence: u64,
     p_image_index: *mut u32,
 ) -> VkResult {
-    dev(|dev| match present::acquire_next_image(dev, swapchain) {
+    ShimState::with_device(|dev| match dev.acquire_next_image(swapchain) {
         Ok(idx) => {
             if !p_image_index.is_null() {
                 unsafe { *p_image_index = idx };
@@ -1335,8 +1380,8 @@ pub extern "C" fn vkAcquireNextImageKHR(
             VK_SUCCESS
         }
         Err(e) => {
-            hl_log::hl_warn!(hl_log::tag::SHIM, "vkAcquireNextImageKHR sc={swapchain:#x} -> {:?}", vk_result_from_gpu_error(&e));
-            vk_result_from_gpu_error(&e)
+            hl_log::hl_warn!(hl_log::tag::SHIM, "vkAcquireNextImageKHR sc={swapchain:#x} -> {:?}", Status::from_error(&e));
+            Status::from_error(&e)
         }
     })
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
@@ -1352,7 +1397,7 @@ pub extern "C" fn vkQueuePresentKHR(_queue: *mut c_void, p_present_info: *const 
     }
     let swapchains = unsafe { std::slice::from_raw_parts(pi.p_swapchains, pi.swapchain_count as usize) };
     let indices = unsafe { std::slice::from_raw_parts(pi.p_image_indices, pi.swapchain_count as usize) };
-    with(|s| {
+    StateStore::with(|s| {
         let sink = &mut s.sink;
         let Some(dev) = s.device.as_mut() else {
             return VK_ERROR_INITIALIZATION_FAILED;
@@ -1361,20 +1406,20 @@ pub extern "C" fn vkQueuePresentKHR(_queue: *mut c_void, p_present_info: *const 
         for (&sc, &idx) in swapchains.iter().zip(indices) {
             // 1) The present lowering (`Cmd::Present` names the surface + presented image).
             if let Err(e) = present::queue_present(dev, sink, sc, idx) {
-                res = vk_result_from_gpu_error(&e);
+                res = Status::from_error(&e);
                 continue;
             }
             // 2) Read the presented image back + convert to the XRGB plane a `wl_shm` buffer wants.
             let plane = match present::read_presented_xrgb(dev, sink, sc, idx) {
                 Ok(p) => p,
                 Err(e) => {
-                    res = vk_result_from_gpu_error(&e);
+                    res = Status::from_error(&e);
                     continue;
                 }
             };
             // 3) Marshal that plane onto the app's OWN `wl_surface` (soft-unavailable ⇒ readback-only,
             //    still VK_SUCCESS; a hard marshal/flush failure ⇒ VK_ERROR_OUT_OF_DATE/SURFACE_LOST).
-            let vk = present_frame_to_app_surface(&mut s.presenters, &s.swapchain_windows, sc, plane);
+            let vk = Presentation::frame_to_app_surface(&mut s.presenters, &s.swapchain_windows, sc, plane);
             if vk != VK_SUCCESS {
                 hl_log::hl_warn!(hl_log::tag::PRESENT, "commit failed sc={sc:#x} -> {:?}", vk);
                 res = vk;
@@ -1390,7 +1435,9 @@ pub extern "C" fn vkQueuePresentKHR(_queue: *mut c_void, p_present_info: *const 
 /// *soft* bring-up error (libwayland/global absent) caches `None` (so it is not re-probed each frame) and
 /// is likewise `VK_SUCCESS`. A *hard* per-frame marshal/flush/size failure maps to
 /// `VK_ERROR_OUT_OF_DATE_KHR` / `VK_ERROR_SURFACE_LOST_KHR` — never a faked present.
-fn present_frame_to_app_surface(
+struct Presentation;
+impl Presentation {
+fn frame_to_app_surface(
     presenters: &mut std::collections::HashMap<u64, Option<WaylandAppPresenter>>,
     windows: &std::collections::HashMap<u64, WaylandWindow>,
     swapchain: u64,
@@ -1420,6 +1467,7 @@ fn present_frame_to_app_surface(
         _ => VK_SUCCESS, // soft-unavailable: readback-only present
     }
 }
+}
 
 // ==================================================================================================
 // render pass 2 (VK_KHR_create_renderpass2 / core 1.2) — the `...2` create + begin/next/end aliases
@@ -1443,7 +1491,7 @@ pub extern "C" fn vkCreateRenderPass2(
     } else {
         let atts = unsafe { std::slice::from_raw_parts(ci.p_attachments, ci.attachment_count as usize) };
         let a0 = &atts[0];
-        let depth = atts.iter().enumerate().find(|(_, a)| is_depth_format(a.format as u32)).map(|(i, a)| {
+        let depth = atts.iter().enumerate().find(|(_, a)| AttachmentFormat::is_depth(a.format as u32)).map(|(i, a)| {
             RenderPassDepth {
                 index: i as u32,
                 format_vk: a.format as u32,
@@ -1452,7 +1500,7 @@ pub extern "C" fn vkCreateRenderPass2(
         });
         (a0.load_op == VK_ATTACHMENT_LOAD_OP_CLEAR, a0.format as u32, depth)
     };
-    let handle = with(|s| {
+    let handle = StateStore::with(|s| {
         let h = s.device.as_mut()?.alloc_handle();
         s.render_passes
             .insert(h, RenderPassRec { first_attachment_clears: clears, color_format_vk: fmt, depth });
@@ -1517,7 +1565,7 @@ pub extern "C" fn vkCmdEndRenderPass2KHR(command_buffer: *mut c_void, p_subpass_
 /// this validates the command buffer and records nothing (a multi-subpass pass is not lowered).
 #[no_mangle]
 pub extern "C" fn vkCmdNextSubpass(command_buffer: *mut c_void, _contents: i32) {
-    let _ = unsafe { cmdbuf_handle(command_buffer) };
+    let _ = unsafe { CommandBuffer::handle(command_buffer) };
 }
 
 /// `vkCmdNextSubpass2` — the `VkSubpassBeginInfo`/`VkSubpassEndInfo` form (single-subpass model no-op).
@@ -1527,7 +1575,7 @@ pub extern "C" fn vkCmdNextSubpass2(
     _p_subpass_begin_info: *const c_void,
     _p_subpass_end_info: *const c_void,
 ) {
-    let _ = unsafe { cmdbuf_handle(command_buffer) };
+    let _ = unsafe { CommandBuffer::handle(command_buffer) };
 }
 
 /// `vkCmdNextSubpass2KHR` — the `VK_KHR_create_renderpass2` alias.
@@ -1555,7 +1603,7 @@ mod present_tests {
         let mut presenters: HashMap<u64, Option<WaylandAppPresenter>> = HashMap::new();
         let windows: HashMap<u64, WaylandWindow> = HashMap::new();
         let plane = (vec![0xFFu8; 2 * 2 * 4], 2, 2);
-        assert_eq!(present_frame_to_app_surface(&mut presenters, &windows, 0xABC, plane), VK_SUCCESS);
+        assert_eq!(Presentation::frame_to_app_surface(&mut presenters, &windows, 0xABC, plane), VK_SUCCESS);
         assert!(presenters.is_empty(), "no window ⇒ no presenter bring-up");
     }
 
@@ -1570,12 +1618,12 @@ mod present_tests {
         // surface == 0 ⇒ WaylandAppPresenter::new short-circuits to NoSurface (soft) WITHOUT dlopen/deref.
         windows.insert(sc, WaylandWindow { display: 0xD15, surface: 0 });
 
-        let vk = present_frame_to_app_surface(&mut presenters, &windows, sc, (vec![0xFFu8; 16], 2, 2));
+        let vk = Presentation::frame_to_app_surface(&mut presenters, &windows, sc, (vec![0xFFu8; 16], 2, 2));
         assert_eq!(vk, VK_SUCCESS, "soft-unavailable bring-up ⇒ readback-only VK_SUCCESS");
         assert!(matches!(presenters.get(&sc), Some(None)), "soft outcome must be cached as None");
 
         // Second frame: cache hit, still readback-only VK_SUCCESS.
-        let vk2 = present_frame_to_app_surface(&mut presenters, &windows, sc, (vec![0xFFu8; 16], 2, 2));
+        let vk2 = Presentation::frame_to_app_surface(&mut presenters, &windows, sc, (vec![0xFFu8; 16], 2, 2));
         assert_eq!(vk2, VK_SUCCESS);
     }
 
@@ -1589,7 +1637,7 @@ mod present_tests {
         let mut windows: HashMap<u64, WaylandWindow> = HashMap::new();
         windows.insert(sc, WaylandWindow { display: 0xD15, surface: 0xF00 });
         assert_eq!(
-            present_frame_to_app_surface(&mut presenters, &windows, sc, (vec![0xFFu8; 16], 2, 2)),
+            Presentation::frame_to_app_surface(&mut presenters, &windows, sc, (vec![0xFFu8; 16], 2, 2)),
             VK_SUCCESS
         );
     }

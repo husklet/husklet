@@ -93,7 +93,7 @@ fn cuda_vecadd_runs_end_to_end_and_reads_back_the_elementwise_sum() {
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
 
     // cuModuleLoadData(PTX) + cuModuleGetFunction("vecadd").
-    let module = load_module::module_load_data(&mut ctx, ptx::VECADD_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(ptx::VECADD_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "vecadd").unwrap();
 
     // cuMemAlloc for the two inputs and the output (4 f32 = 16 bytes each).
@@ -117,7 +117,7 @@ fn cuda_vecadd_runs_end_to_end_and_reads_back_the_elementwise_sum() {
     launch::launch(&mut ctx, &mut sink, func, (1, 1, 1), (n, 1, 1), &args).unwrap();
 
     // --- readback: cuMemcpyDtoH resolves the output pointer; read it back off the sink ---------------
-    let (out_buf, off): (BufferId, u64) = transfer::memcpy_dtoh(&ctx, dc).unwrap();
+    let (out_buf, off): (BufferId, u64) = ctx.device_location(dc).unwrap();
     let raw = sink.read_buffer(out_buf, off, bytes as usize).unwrap();
     let got: Vec<f32> = raw
         .chunks_exact(4)
@@ -241,7 +241,7 @@ fn cuda_runtime_api_vecadd_registers_and_launches_end_to_end() {
     }
 
     // --- cudaMemcpyDtoH readback + assert -----------------------------------------------------------
-    let (out_buf, off): (BufferId, u64) = transfer::memcpy_dtoh(&ctx, dc).unwrap();
+    let (out_buf, off): (BufferId, u64) = ctx.device_location(dc).unwrap();
     let raw = sink.read_buffer(out_buf, off, bytes as usize).unwrap();
     let got: Vec<f32> = raw
         .chunks_exact(4)
@@ -288,7 +288,7 @@ fn readback(
     p: DevicePtr,
     len: usize,
 ) -> Vec<u8> {
-    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    let (buf, off): (BufferId, u64) = ctx.device_location(p).unwrap();
     sink.read_buffer(buf, off, len).unwrap()
 }
 
@@ -340,7 +340,7 @@ fn cuda_vecadd_over_a_multi_block_grid_computes_all_elements() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, ptx::VECADD_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(ptx::VECADD_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "vecadd").unwrap();
 
     let bytes = (n as u64) * 4;
@@ -419,7 +419,7 @@ fn cuda_saxpy_with_f32_scalar_computes_end_to_end() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, SAXPY_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(SAXPY_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "saxpy").unwrap();
 
     let bytes = (n as u64) * 4;

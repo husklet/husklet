@@ -23,7 +23,7 @@ mod metal;
 mod present;
 mod window;
 
-pub use iosurface::{create_iosurface, IOSurfaceRef};
-pub use metal::{bgra_to_rgba, MetalCtx};
+pub use iosurface::IOSurface;
+pub use metal::{BgraFrame, MetalCtx};
 pub use present::MacPresenter;
-pub use window::primary_output_spec;
+pub use window::DisplayConfig;

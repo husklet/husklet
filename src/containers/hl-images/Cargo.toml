@@ -20,3 +20,5 @@ sha2 = "0.10"
 # In-process gzip (pure-Rust miniz_oxide backend — no C zlib, offline-friendly). Replaces the former
 # `gzip -dc` / `gzip -n` subprocesses in image/digest.rs (sha256_gz_file) + registry/layer.rs (tar_gzip).
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Typed member and link inspection; extraction remains on host tar for owner/xattr/device compatibility.
+tar = "0.4"

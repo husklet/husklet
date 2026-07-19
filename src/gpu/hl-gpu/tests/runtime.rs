@@ -5,12 +5,12 @@
 
 use std::any::Any;
 
-use hl_gpu::protocol::model::capability::{command_bits, shader_payload, ALL_COMMANDS};
+use hl_gpu::protocol::model::capability::{shader_payload, ALL_COMMANDS};
 use hl_gpu::protocol::model::command::CommandBuffer;
 use hl_gpu::protocol::model::descriptor::{BufferDesc, SurfaceDesc, TextureDesc};
 use hl_gpu::protocol::model::enums::{buffer_usage, texture_usage, TextureDim, TextureFormat};
 use hl_gpu::runtime::model::resources::SessionResources;
-use hl_gpu::runtime::port::executor::{GpuExecutor, Presented};
+use hl_gpu::runtime::port::executor::{GpuExecutor, Presentation};
 use hl_gpu::runtime::service;
 use hl_gpu::{
     Capabilities, Cmd, Enc, FakeClock, FeatureRequest, FenceId, GlobalLedger, GpuError, Limits,
@@ -44,7 +44,7 @@ impl GpuExecutor for FakeExecutor {
         self.caps.clone()
     }
 
-    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presented>> {
+    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presentation>> {
         self.executed.push(batch.to_vec());
         let native = || -> Box<dyn Any> { Box::new(()) };
         let mut presents = Vec::new();
@@ -62,7 +62,7 @@ impl GpuExecutor for FakeExecutor {
                 Cmd::DestroyFence(id) => {
                     res.fences.remove(*id)?;
                 }
-                Cmd::Present { surface, texture } => presents.push(Presented {
+                Cmd::Present { surface, texture } => presents.push(Presentation {
                     surface: SurfaceId(*surface),
                     texture: TextureId(*texture),
                 }),
@@ -128,7 +128,7 @@ impl GpuExecutor for NackOnPresentExecutor {
         self.caps.clone()
     }
 
-    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presented>> {
+    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presentation>> {
         let native = || -> Box<dyn Any> { Box::new(()) };
         for cmd in batch {
             match cmd {
@@ -175,7 +175,7 @@ fn negotiate_then_submit_good_batch_executes_and_accounts() {
     let req = FeatureRequest {
         wire_version: caps.wire_version,
         shader_payloads: shader_payload::SPIRV,
-        command_bits: command_bits(ALL_COMMANDS),
+        command_bits: hl_gpu::Capabilities::command_bits(ALL_COMMANDS),
         texture_formats: 0,
     };
     let negotiated = service::negotiate::negotiate(&mut s, &exec, &req).expect("negotiate ok");
@@ -216,7 +216,7 @@ fn negotiate_then_submit_good_batch_executes_and_accounts() {
 
     assert_eq!(
         presents,
-        vec![Presented {
+        vec![Presentation {
             surface: SurfaceId(10),
             texture: TextureId(10)
         }]
@@ -235,7 +235,7 @@ fn negotiate_then_submit_good_batch_executes_and_accounts() {
         "executor tracked natives behind the ids"
     );
     // Fence 20 signalled to 7, stamped with the fake clock.
-    assert_eq!(s.timeline.value(20), Some(7));
+    assert_eq!(s.timeline.get(20), Some(7));
     assert!(s.timeline.is_reached(20, 7) && !s.timeline.is_reached(20, 8));
 }
 
@@ -273,7 +273,7 @@ fn validation_rejects_over_limit_batch_before_any_execute() {
 fn validation_rejects_unnegotiated_command_before_any_execute() {
     // Advertise a command set WITHOUT Dispatch, then submit a Dispatch.
     let mut caps = Capabilities::full("fake");
-    caps.command_bits = command_bits(&[
+    caps.command_bits = hl_gpu::Capabilities::command_bits(&[
         hl_gpu::protocol::model::command::etag::BEGIN_RENDER_PASS,
         hl_gpu::protocol::model::command::etag::CLEAR_RECT,
     ]);

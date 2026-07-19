@@ -4,12 +4,8 @@
 
 use super::*;
 
-mod archive;
 mod curl;
-mod util;
 mod verbs;
 
-pub(super) use archive::*;
 pub(super) use curl::*;
-pub(super) use util::*;
 pub(super) use verbs::*;

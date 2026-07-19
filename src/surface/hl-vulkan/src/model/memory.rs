@@ -113,80 +113,95 @@ pub mod vk_format {
 
 /// Translate `VkBufferUsageFlags` → hl-GPU `buffer_usage` bits. Ported from `memory.rs::buffer_usage`.
 /// Every hl device buffer additionally gets `MAP` (unified memory is host-visible).
-pub fn buffer_usage_from_vk(u: u32) -> u32 {
-    use hl_gpu::protocol::model::enums::buffer_usage as bu;
-    let mut out = bu::MAP;
-    if u & vk_buffer_usage::STORAGE_BUFFER != 0 {
-        out |= bu::STORAGE;
+pub struct BufferUsage(pub u32);
+
+impl BufferUsage {
+    pub fn wire(&self) -> u32 {
+        let u = self.0;
+        use hl_gpu::protocol::model::enums::buffer_usage as bu;
+        let mut out = bu::MAP;
+        if u & vk_buffer_usage::STORAGE_BUFFER != 0 {
+            out |= bu::STORAGE;
+        }
+        if u & vk_buffer_usage::UNIFORM_BUFFER != 0 {
+            out |= bu::UNIFORM;
+        }
+        if u & vk_buffer_usage::VERTEX_BUFFER != 0 {
+            out |= bu::VERTEX;
+        }
+        if u & vk_buffer_usage::INDEX_BUFFER != 0 {
+            out |= bu::INDEX;
+        }
+        if u & vk_buffer_usage::TRANSFER_SRC != 0 {
+            out |= bu::COPY_SRC;
+        }
+        if u & vk_buffer_usage::TRANSFER_DST != 0 {
+            out |= bu::COPY_DST;
+        }
+        if u & vk_buffer_usage::INDIRECT_BUFFER != 0 {
+            out |= bu::INDIRECT;
+        }
+        out
     }
-    if u & vk_buffer_usage::UNIFORM_BUFFER != 0 {
-        out |= bu::UNIFORM;
-    }
-    if u & vk_buffer_usage::VERTEX_BUFFER != 0 {
-        out |= bu::VERTEX;
-    }
-    if u & vk_buffer_usage::INDEX_BUFFER != 0 {
-        out |= bu::INDEX;
-    }
-    if u & vk_buffer_usage::TRANSFER_SRC != 0 {
-        out |= bu::COPY_SRC;
-    }
-    if u & vk_buffer_usage::TRANSFER_DST != 0 {
-        out |= bu::COPY_DST;
-    }
-    if u & vk_buffer_usage::INDIRECT_BUFFER != 0 {
-        out |= bu::INDIRECT;
-    }
-    out
 }
 
 /// Translate `VkImageUsageFlags` → hl-GPU `texture_usage` bits. Ported from `memory.rs::texture_usage`.
-pub fn texture_usage_from_vk(u: u32) -> u32 {
-    use hl_gpu::protocol::model::enums::texture_usage as tu;
-    let mut out = 0;
-    if u & vk_image_usage::SAMPLED != 0 {
-        out |= tu::SAMPLED;
-    }
-    if u & vk_image_usage::STORAGE != 0 {
-        out |= tu::STORAGE;
-    }
-    if u & (vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::DEPTH_STENCIL_ATTACHMENT) != 0 {
-        out |= tu::RENDER_TARGET;
-    }
-    if u & vk_image_usage::TRANSFER_SRC != 0 {
-        out |= tu::COPY_SRC;
-    }
-    if u & vk_image_usage::TRANSFER_DST != 0 {
-        out |= tu::COPY_DST;
-    }
-    out
-}
+pub struct ImageUsage(pub u32);
 
-/// Whether a `VkImageUsageFlags` marks the image as a render target (color/depth attachment).
-pub fn is_render_target(u: u32) -> bool {
-    u & (vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::DEPTH_STENCIL_ATTACHMENT) != 0
+impl ImageUsage {
+    pub fn wire(&self) -> u32 {
+        let u = self.0;
+        use hl_gpu::protocol::model::enums::texture_usage as tu;
+        let mut out = 0;
+        if u & vk_image_usage::SAMPLED != 0 {
+            out |= tu::SAMPLED;
+        }
+        if u & vk_image_usage::STORAGE != 0 {
+            out |= tu::STORAGE;
+        }
+        if u & (vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::DEPTH_STENCIL_ATTACHMENT) != 0 {
+            out |= tu::RENDER_TARGET;
+        }
+        if u & vk_image_usage::TRANSFER_SRC != 0 {
+            out |= tu::COPY_SRC;
+        }
+        if u & vk_image_usage::TRANSFER_DST != 0 {
+            out |= tu::COPY_DST;
+        }
+        out
+    }
+
+    /// Whether a `VkImageUsageFlags` marks the image as a render target (color/depth attachment).
+    pub fn is_render_target(&self) -> bool {
+        self.0 & (vk_image_usage::COLOR_ATTACHMENT | vk_image_usage::DEPTH_STENCIL_ATTACHMENT) != 0
+    }
 }
 
 /// Translate `VkFormat` → hl-GPU `TextureFormat` (the color/depth subset the bring-up render path
 /// needs). Ported from `memory.rs::tex_format`; an unmapped format folds to `Rgba8Unorm`.
-pub fn tex_format_from_vk(f: u32) -> TextureFormat {
-    use TextureFormat as T;
-    match f {
-        vk_format::R8G8B8A8_UNORM => T::Rgba8Unorm,
-        vk_format::R8G8B8A8_SRGB => T::Rgba8Srgb,
-        vk_format::B8G8R8A8_UNORM => T::Bgra8Unorm,
-        vk_format::B8G8R8A8_SRGB => T::Bgra8Srgb,
-        vk_format::R8_UNORM => T::R8Unorm,
-        vk_format::R8G8_UNORM => T::Rg8Unorm,
-        vk_format::R16G16B16A16_SFLOAT => T::Rgba16Float,
-        vk_format::R32G32B32A32_SFLOAT => T::Rgba32Float,
-        vk_format::R32_SFLOAT => T::R32Float,
-        // The hl model carries no 16-bit depth target; fold D16 onto the 32-bit float depth format so a
-        // classic pass declaring VK_FORMAT_D16_UNORM (vkcube) resolves to a real depth aspect — both the
-        // depth image and the pipeline's DepthState land on the same format, staying executor-valid.
-        vk_format::D16_UNORM => T::Depth32Float,
-        vk_format::D32_SFLOAT => T::Depth32Float,
-        vk_format::D24_UNORM_S8_UINT => T::Depth24PlusStencil8,
-        _ => T::Rgba8Unorm,
+pub struct Format(pub u32);
+
+impl Format {
+    pub fn wire(&self) -> TextureFormat {
+        let f = self.0;
+        use TextureFormat as T;
+        match f {
+            vk_format::R8G8B8A8_UNORM => T::Rgba8Unorm,
+            vk_format::R8G8B8A8_SRGB => T::Rgba8Srgb,
+            vk_format::B8G8R8A8_UNORM => T::Bgra8Unorm,
+            vk_format::B8G8R8A8_SRGB => T::Bgra8Srgb,
+            vk_format::R8_UNORM => T::R8Unorm,
+            vk_format::R8G8_UNORM => T::Rg8Unorm,
+            vk_format::R16G16B16A16_SFLOAT => T::Rgba16Float,
+            vk_format::R32G32B32A32_SFLOAT => T::Rgba32Float,
+            vk_format::R32_SFLOAT => T::R32Float,
+            // The hl model carries no 16-bit depth target; fold D16 onto the 32-bit float depth format so a
+            // classic pass declaring VK_FORMAT_D16_UNORM (vkcube) resolves to a real depth aspect — both the
+            // depth image and the pipeline's DepthState land on the same format, staying executor-valid.
+            vk_format::D16_UNORM => T::Depth32Float,
+            vk_format::D32_SFLOAT => T::Depth32Float,
+            vk_format::D24_UNORM_S8_UINT => T::Depth24PlusStencil8,
+            _ => T::Rgba8Unorm,
+        }
     }
 }

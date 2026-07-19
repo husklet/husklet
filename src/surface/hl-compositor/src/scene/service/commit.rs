@@ -23,6 +23,9 @@ pub enum BufferChange {
 
 /// The double-buffered state a single commit carries. A field left at its default makes no change.
 #[derive(Clone, Debug)]
+#[hl_design::naming(
+    reason = "commit is the Wayland protocol noun for a pending surface-state transaction"
+)]
 pub struct Commit {
     pub buffer: BufferChange,
     /// Damage rects in surface-local logical space (`wl_surface.damage` / `damage_buffer`, unified).

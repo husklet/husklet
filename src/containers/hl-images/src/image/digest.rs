@@ -1,65 +1,73 @@
 //! The one sha256 helper in `hl-images`. Both the registry (layer/config blob digests) and the build
-//! cache (step-key hashing) need sha256; this module owns the single implementation so those call sites
-//! don't each re-derive it. Hashing is done in-process with the `sha2` crate (already in the workspace
-//! lock via `hl-cli`), so we no longer shell out to `sha256sum` — one fewer external tool to depend on.
-//! The only subprocess left is `gzip -dc` in [`sha256_gz_file`], and only for *decompression* (there is
-//! no in-tree gzip decoder); its stdout is streamed straight into the hasher.
+//! cache (step-key hashing) need sha256; this module owns the value and streaming implementation so those
+//! call sites don't each re-derive it. Hashing and gzip decoding run in-process.
 
 use crate::Error;
-use sha2::{Digest, Sha256};
+use sha2::{Digest as _, Sha256};
+use std::fmt::{self, Display, Formatter};
 use std::io::Read;
 use std::path::Path;
 
-/// Lowercase-hex sha256 of `bytes`, WITHOUT the `sha256:` prefix. Always 64 hex chars.
-pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    hex(&h.finalize())
-}
+/// A computed SHA-256 content digest.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Sha256Digest([u8; 32]);
 
-/// `sha256:<hex>` of a file's raw contents, streamed (never read whole into memory).
-pub(crate) fn sha256_file(path: &Path) -> Result<String, Error> {
-    let mut f = std::fs::File::open(path)
-        .map_err(|e| Error::Digest(format!("open {}: {e}", path.display())))?;
-    let mut h = Sha256::new();
-    std::io::copy(&mut f, &mut h)
-        .map_err(|e| Error::Digest(format!("read {}: {e}", path.display())))?;
-    Ok(prefixed(&h.finalize()))
-}
+impl Sha256Digest {
+    /// Computes the digest of bytes already in memory.
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        Self::from_hasher(hasher)
+    }
 
-/// `sha256:<hex>` of the DECOMPRESSED contents of a gzip file (an OCI `diff_id`). Decompression runs
-/// in-process via `flate2` (pure-Rust miniz_oxide backend), streamed into the hasher — no subprocess.
-pub(crate) fn sha256_gz_file(path: &Path) -> Result<String, Error> {
-    let f = std::fs::File::open(path)
-        .map_err(|e| Error::Digest(format!("open {}: {e}", path.display())))?;
-    let mut dec = flate2::read::GzDecoder::new(std::io::BufReader::new(f));
-    let mut h = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = dec
-            .read(&mut buf)
-            .map_err(|e| Error::Digest(format!("gunzip {}: {e}", path.display())))?;
-        if n == 0 {
-            break;
+    /// Finishes an incrementally populated SHA-256 hasher.
+    pub(crate) fn from_hasher(hasher: Sha256) -> Self {
+        Self(hasher.finalize().into())
+    }
+
+    /// Computes the digest of a reader without buffering its complete contents.
+    pub(crate) fn read(mut reader: impl Read) -> std::io::Result<Self> {
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
         }
-        h.update(&buf[..n]);
+        Ok(Self::from_hasher(hasher))
     }
-    Ok(prefixed(&h.finalize()))
+
+    /// Computes the digest of a file without reading it wholly into memory.
+    pub(crate) fn file(path: &Path) -> Result<Self, Error> {
+        let file = std::fs::File::open(path)
+            .map_err(|error| Error::Digest(format!("open {}: {error}", path.display())))?;
+        Self::read(file).map_err(|error| Error::Digest(format!("read {}: {error}", path.display())))
+    }
+
+    /// Computes the digest of the decompressed contents of a gzip file.
+    pub(crate) fn gzip_file(path: &Path) -> Result<Self, Error> {
+        let file = std::fs::File::open(path)
+            .map_err(|error| Error::Digest(format!("open {}: {error}", path.display())))?;
+        let decoder = flate2::read::GzDecoder::new(std::io::BufReader::new(file));
+        Self::read(decoder)
+            .map_err(|error| Error::Digest(format!("gunzip {}: {error}", path.display())))
+    }
+
+    /// Encodes the OCI digest representation used by registry descriptors.
+    pub fn oci(self) -> String {
+        format!("sha256:{self}")
+    }
 }
 
-/// `sha256:` + [`hex`] of a raw 32-byte digest.
-fn prefixed(digest: &[u8]) -> String {
-    format!("sha256:{}", hex(digest))
-}
-
-/// Lowercase-hex encode of raw bytes.
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-        s.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+impl Display for Sha256Digest {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
     }
-    s
 }
 
 #[cfg(test)]
@@ -70,11 +78,11 @@ mod tests {
     fn known_vectors() {
         // Standard sha256("") and sha256("abc").
         assert_eq!(
-            sha256_hex(b""),
+            Sha256Digest::from_bytes(b"").to_string(),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         assert_eq!(
-            sha256_hex(b"abc"),
+            Sha256Digest::from_bytes(b"abc").to_string(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
@@ -86,7 +94,7 @@ mod tests {
         let raw = dir.join("f");
         std::fs::write(&raw, b"abc").unwrap();
         assert_eq!(
-            sha256_file(&raw).unwrap(),
+            Sha256Digest::file(&raw).unwrap().oci(),
             "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         // gzip the file, then confirm the gz helper hashes the DECOMPRESSED bytes.
@@ -97,7 +105,10 @@ mod tests {
             .status()
             .unwrap();
         assert!(st.success());
-        assert_eq!(sha256_gz_file(&gz).unwrap(), sha256_file(&raw).unwrap());
+        assert_eq!(
+            Sha256Digest::gzip_file(&gz).unwrap(),
+            Sha256Digest::file(&raw).unwrap()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

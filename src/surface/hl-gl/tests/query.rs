@@ -173,7 +173,7 @@ fn get_integerv_reads_live_bindings_and_viewport() {
     assert_eq!([b[0], b[1], b[2], b[3]], [10, 20, 320, 240]);
 
     // Bound array buffer + current program surface through the integer queries.
-    let vbo = record::gen_buffer(&mut c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
     query::get_integerv(&c, GL_ARRAY_BUFFER_BINDING, &mut b);
     assert_eq!(b[0], vbo as i32);
@@ -183,7 +183,7 @@ fn get_integerv_reads_live_bindings_and_viewport() {
     assert_eq!(b[0], prog as i32);
 
     // Active texture unit tracks glActiveTexture.
-    record::active_texture(&mut c, GL_TEXTURE0 + 3);
+    c.active_texture(GL_TEXTURE0 + 3);
     query::get_integerv(&c, GL_ACTIVE_TEXTURE, &mut b);
     assert_eq!(b[0] as u32, GL_TEXTURE0 + 3);
 }

@@ -97,7 +97,7 @@ pub fn queue_submit(
     // synchronous, so they resolve at submit completion. `vkCmdCopyQueryPoolResults` reads the resolved
     // pool state and appends its result copy as a trailing `Cmd::WriteBuffer` in the same frame.
     for op in deferred {
-        if let Some(write) = apply_deferred(dev, op) {
+        if let Some(write) = dev.apply_deferred(op) {
             batch.push(write);
         }
     }
@@ -148,130 +148,116 @@ pub fn queue_submit(
 /// ordering point: a subsequent `vkWaitSemaphores(>= value)` or a consumer submit waiting on it observes
 /// the producer's result. A binary or unknown semaphore in the set is skipped (a binary semaphore carries
 /// no counter, and a real driver ignores its supplied value). `VK_KHR_timeline_semaphore`.
-pub fn signal_timeline_values(dev: &mut Device, signals: &[(VkSemaphore, u64)]) {
-    for &(sem, value) in signals {
-        if let Some(sm) = dev.semaphores.get_mut(&sem) {
-            if sm.timeline {
-                sm.counter = sm.counter.max(value);
+impl Device {
+    pub fn signal_timeline_values(&mut self, signals: &[(VkSemaphore, u64)]) {
+        for &(sem, value) in signals {
+            if let Some(sm) = self.semaphores.get_mut(&sem) {
+                if sm.timeline {
+                    sm.counter = sm.counter.max(value);
+                }
             }
         }
     }
-}
 
-/// `vkWaitForFences` (one fence) — block on the fence's timeline value via [`CommandSink::wait`], then
-/// mark it signaled. Errors on an unknown fence. A never-submitted fence (value 0) waits on 0 (already
-/// satisfied) — matching a real driver returning immediately for an unsignalled-but-idle fence only
-/// once armed; here the guest-side `signaled` flag is the observable state.
-pub fn wait_for_fence(dev: &mut Device, sink: &mut dyn CommandSink, fence: VkFence) -> Result<()> {
-    let (ir, value) = {
-        let f = dev
-            .fences
-            .get(&fence)
-            .ok_or(GpuError::Invalid("vkWaitForFences: unknown VkFence"))?;
-        (f.ir_id, f.value)
-    };
-    sink.wait(FenceId(ir), value)?;
-    dev.fences.get_mut(&fence).unwrap().signaled = true;
-    Ok(())
-}
+    /// `vkWaitForFences` (one fence) — block on the fence's timeline value via [`CommandSink::wait`], then
+    /// mark it signaled. Errors on an unknown fence. A never-submitted fence (value 0) waits on 0 (already
+    /// satisfied) — matching a real driver returning immediately for an unsignalled-but-idle fence only
+    /// once armed; here the guest-side `signaled` flag is the observable state.
+    pub fn wait_for_fence(
+        dev: &mut Device,
+        sink: &mut dyn CommandSink,
+        fence: VkFence,
+    ) -> Result<()> {
+        let (ir, value) = {
+            let f = dev
+                .fences
+                .get(&fence)
+                .ok_or(GpuError::Invalid("vkWaitForFences: unknown VkFence"))?;
+            (f.ir_id, f.value)
+        };
+        sink.wait(FenceId(ir), value)?;
+        dev.fences.get_mut(&fence).unwrap().signaled = true;
+        Ok(())
+    }
 
-/// `vkGetFenceStatus` — the fence's current guest-side signaled state (`true` → `VK_SUCCESS`, `false`
-/// → `VK_NOT_READY`). A non-blocking poll of the same `signaled` flag `vkWaitForFences`/`vkResetFences`
-/// drive. Errors on an unknown fence.
-pub fn fence_status(dev: &Device, fence: VkFence) -> Result<bool> {
-    Ok(dev
-        .fences
-        .get(&fence)
-        .ok_or(GpuError::Invalid("vkGetFenceStatus: unknown VkFence"))?
-        .signaled)
-}
-
-/// `vkResetFences` (one fence) — clear the fence's signaled state.
-pub fn reset_fence(dev: &mut Device, fence: VkFence) -> Result<()> {
-    dev.fences
-        .get_mut(&fence)
-        .ok_or(GpuError::Invalid("vkResetFences: unknown VkFence"))?
-        .signaled = false;
-    Ok(())
-}
-
-/// Apply one recorded device event/query op to the device state at (synchronous) submit completion,
-/// returning a `Cmd::WriteBuffer` for the one op (`CopyResults`) that emits IR. Ported from
-/// `query.rs::apply_deferred`.
-fn apply_deferred(dev: &mut Device, op: DeferredOp) -> Option<Cmd> {
-    match op {
-        DeferredOp::Event { event, set } => {
-            if let Some(e) = dev.events.get_mut(&event) {
-                e.signaled = set;
+    /// Apply one recorded device event/query op to the device state at (synchronous) submit completion,
+    /// returning a `Cmd::WriteBuffer` for the one op (`CopyResults`) that emits IR. Ported from
+    /// `query.rs::apply_deferred`.
+    fn apply_deferred(&mut self, op: DeferredOp) -> Option<Cmd> {
+        match op {
+            DeferredOp::Event { event, set } => {
+                if let Some(e) = self.events.get_mut(&event) {
+                    e.signaled = set;
+                }
+                None
             }
-            None
-        }
-        DeferredOp::QueryReset { pool, first, count } => {
-            if let Some(p) = dev.query_pools.get_mut(&pool) {
-                for i in first..first.saturating_add(count) {
-                    if let Some(slot) = p.results.get_mut(i as usize) {
-                        *slot = QueryResult::default();
+            DeferredOp::QueryReset { pool, first, count } => {
+                if let Some(p) = self.query_pools.get_mut(&pool) {
+                    for i in first..first.saturating_add(count) {
+                        if let Some(slot) = p.results.get_mut(i as usize) {
+                            *slot = QueryResult::default();
+                        }
                     }
                 }
+                None
             }
-            None
-        }
-        DeferredOp::QueryEnd { pool, query, value } => {
-            if let Some(p) = dev.query_pools.get_mut(&pool) {
-                if let Some(slot) = p.results.get_mut(query as usize) {
-                    slot.available = true;
-                    slot.value = value;
-                }
-            }
-            None
-        }
-        DeferredOp::QueryTimestamp { pool, query } => {
-            let ts = dev.next_timestamp();
-            if let Some(p) = dev.query_pools.get_mut(&pool) {
-                if let Some(slot) = p.results.get_mut(query as usize) {
-                    slot.available = true;
-                    slot.value = ts;
-                }
-            }
-            None
-        }
-        DeferredOp::CopyResults {
-            pool,
-            first,
-            count,
-            dst_ir,
-            dst_offset,
-            dst_size,
-            stride,
-            wide,
-            with_availability,
-        } => {
-            let p = dev.query_pools.get(&pool)?;
-            let elem = if wide { 8usize } else { 4usize };
-            let mut bytes = vec![0u8; dst_size as usize];
-            let len = bytes.len();
-            for i in 0..count as usize {
-                let slot = p
-                    .results
-                    .get(first as usize + i)
-                    .copied()
-                    .unwrap_or_default();
-                let base = i * stride as usize;
-                if base + elem <= len {
-                    write_le(&mut bytes, base, slot.value, wide);
-                }
-                if with_availability {
-                    let a = base + elem;
-                    if a + elem <= len {
-                        write_le(&mut bytes, a, slot.available as u64, wide);
+            DeferredOp::QueryEnd { pool, query, value } => {
+                if let Some(p) = self.query_pools.get_mut(&pool) {
+                    if let Some(slot) = p.results.get_mut(query as usize) {
+                        slot.available = true;
+                        slot.value = value;
                     }
                 }
+                None
             }
-            Some(Cmd::WriteBuffer {
-                id: dst_ir,
-                offset: dst_offset,
-                data: bytes,
-            })
+            DeferredOp::QueryTimestamp { pool, query } => {
+                let ts = self.next_timestamp();
+                if let Some(p) = self.query_pools.get_mut(&pool) {
+                    if let Some(slot) = p.results.get_mut(query as usize) {
+                        slot.available = true;
+                        slot.value = ts;
+                    }
+                }
+                None
+            }
+            DeferredOp::CopyResults {
+                pool,
+                first,
+                count,
+                dst_ir,
+                dst_offset,
+                dst_size,
+                stride,
+                wide,
+                with_availability,
+            } => {
+                let p = self.query_pools.get(&pool)?;
+                let elem = if wide { 8usize } else { 4usize };
+                let mut bytes = vec![0u8; dst_size as usize];
+                let len = bytes.len();
+                for i in 0..count as usize {
+                    let slot = p
+                        .results
+                        .get(first as usize + i)
+                        .copied()
+                        .unwrap_or_default();
+                    let base = i * stride as usize;
+                    if base + elem <= len {
+                        write_le(&mut bytes, base, slot.value, wide);
+                    }
+                    if with_availability {
+                        let a = base + elem;
+                        if a + elem <= len {
+                            write_le(&mut bytes, a, slot.available as u64, wide);
+                        }
+                    }
+                }
+                Some(Cmd::WriteBuffer {
+                    id: dst_ir,
+                    offset: dst_offset,
+                    data: bytes,
+                })
+            }
         }
     }
 }

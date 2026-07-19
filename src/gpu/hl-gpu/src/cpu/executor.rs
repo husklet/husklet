@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 
-use crate::cpu::format::texel_bytes;
 use crate::cpu::model::pipeline::Pipeline;
 use crate::cpu::model::shader::ShaderModule;
 use crate::cpu::model::{
@@ -25,8 +24,7 @@ use crate::cpu::service::compute::run_dispatch;
 use crate::cpu::service::copy;
 use crate::cpu::service::raster;
 use crate::protocol::model::capability::{
-    command_bits, format_bits, shader_payload, Capabilities, PresentKind, ALL_COMMANDS,
-    COLOR_FORMATS, DEPTH_FORMATS,
+    shader_payload, Capabilities, PresentKind, ALL_COMMANDS, COLOR_FORMATS, DEPTH_FORMATS,
 };
 use crate::protocol::model::command::{Cmd, CommandBuffer, Enc, ShaderPayloadKind, WIRE_VERSION};
 use crate::protocol::model::descriptor::{
@@ -39,7 +37,7 @@ use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::id::{BufferId, FenceId, SurfaceId, TextureId};
 use crate::protocol::model::kernel::{KernelDescriptor, KernelProgram, SPIRV_MAGIC};
 use crate::runtime::model::resources::SessionResources;
-use crate::runtime::port::executor::{GpuExecutor, Presented};
+use crate::runtime::port::executor::{GpuExecutor, Presentation};
 
 /// The pure CPU reference executor. Holds no resources of its own (those live in the runtime-owned
 /// [`SessionResources`]); it carries only the pre-compiled kernels a `PtxKernel` shader resolves to and a
@@ -151,7 +149,7 @@ impl CpuExecutor {
         let bpt = match desc.format {
             TextureFormat::Depth32Float => 4,
             TextureFormat::Depth24PlusStencil8 => 8,
-            _ => texel_bytes(desc.format)?,
+            _ => desc.format.software_texel_bytes()?,
         };
         let n = bpt
             .checked_mul(desc.width as usize)
@@ -364,7 +362,7 @@ impl CpuExecutor {
         res: &SessionResources,
         surface_id: u32,
         texture_id: u32,
-    ) -> Result<Presented> {
+    ) -> Result<Presentation> {
         let sdesc = surface(res, surface_id)?.clone();
         let t = texture(res, texture_id)?;
         if t.desc.sample_count != 1 {
@@ -377,7 +375,7 @@ impl CpuExecutor {
                 "present texture size does not match surface",
             ));
         }
-        Ok(Presented {
+        Ok(Presentation {
             surface: SurfaceId(surface_id),
             texture: TextureId(texture_id),
         })
@@ -388,7 +386,7 @@ impl CpuExecutor {
     fn submit(&mut self, res: &mut SessionResources, cb: &CommandBuffer) -> Result<()> {
         let _span = hl_log::hl_span!(hl_log::tag::CPU, "submit");
         hl_log::hl_count!(hl_log::tag::CPU, "submits");
-        validate_cb(res, cb)?;
+        EncoderState::validate(res, cb)?;
 
         let mut cur_pipeline: Option<u32> = None;
         let mut cur_bind_group: Option<u32> = None;
@@ -622,11 +620,12 @@ impl GpuExecutor for CpuExecutor {
             max_texture_2d: 8192,
             present_kinds: vec![PresentKind::Shm],
             wire_version: WIRE_VERSION,
-            command_bits: command_bits(ALL_COMMANDS),
+            command_bits: Capabilities::command_bits(ALL_COMMANDS),
             // Executes compiled kernels; it cannot run a graphics (SPIR-V/MSL) shader.
             shader_payloads: shader_payload::KERNEL,
             // Color formats plus the depth formats the oracle materializes for depth-tested rendering.
-            texture_formats: format_bits(COLOR_FORMATS) | format_bits(DEPTH_FORMATS),
+            texture_formats: TextureFormat::bits(COLOR_FORMATS)
+                | TextureFormat::bits(DEPTH_FORMATS),
             // Browser-class per-frame wire-byte ceiling (256 MiB): a hostile-DoS guard, not a correctness
             // bound — the `GlobalLedger` is the true host-OOM guard. Raised from 64 MiB, which tripped
             // healthy browser frames. (Matches the wgpu executor; see its rationale.)
@@ -638,7 +637,7 @@ impl GpuExecutor for CpuExecutor {
         }
     }
 
-    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presented>> {
+    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presentation>> {
         let _span = hl_log::hl_span!(hl_log::tag::CPU, "dispatch");
         hl_log::hl_debug!(hl_log::tag::CPU, "execute cmds={}", batch.len());
         let mut presents = Vec::new();
@@ -736,7 +735,7 @@ impl GpuExecutor for CpuExecutor {
 }
 
 // ===================================================================================================
-// submit-time command-buffer validation (ported from SoftwareBackend::validate_cb / validate_op)
+// Submit-time command-buffer validation, ported from the original software backend.
 // ===================================================================================================
 
 /// Simulated encoder state used by the validation pass.
@@ -753,6 +752,17 @@ struct EncoderState {
 }
 
 impl EncoderState {
+    fn validate(resources: &SessionResources, commands: &CommandBuffer) -> Result<()> {
+        let mut state = Self::default();
+        for command in &commands.encoder {
+            validate_op(resources, command, &mut state)?;
+        }
+        if state.in_render_pass || state.in_compute_pass {
+            return Err(GpuError::Invalid("command buffer ends inside an open pass"));
+        }
+        Ok(())
+    }
+
     fn end_pass(&mut self) {
         self.in_render_pass = false;
         self.in_compute_pass = false;
@@ -785,37 +795,6 @@ fn texture_with_usage<'a>(
         return Err(GpuError::Invalid(what));
     }
     Ok(t)
-}
-
-/// Re-check that every resource a bind group referenced is still live *and* still the same allocation it
-/// was bound against (generation match).
-fn check_bind_group_live<'a>(res: &'a SessionResources, bgid: u32) -> Result<&'a BindGroupState> {
-    let bg = bind_group(res, bgid)?;
-    for r in &bg.buffers {
-        if res.buffers.generation(r.id) != Some(r.gen) {
-            return Err(GpuError::UnknownId {
-                kind: BufferId::KIND,
-                id: r.id,
-            });
-        }
-    }
-    for r in &bg.textures {
-        if res.textures.generation(r.id) != Some(r.gen) {
-            return Err(GpuError::UnknownId {
-                kind: TextureId::KIND,
-                id: r.id,
-            });
-        }
-    }
-    for r in &bg.samplers {
-        if res.samplers.generation(r.id) != Some(r.gen) {
-            return Err(GpuError::UnknownId {
-                kind: crate::protocol::model::id::SamplerId::KIND,
-                id: r.id,
-            });
-        }
-    }
-    Ok(bg)
 }
 
 fn check_vertex_range(
@@ -871,7 +850,8 @@ where
         per_layout(layout, slot as u32)?;
     }
     if let Some(bg) = st.bind_group {
-        let bg = check_bind_group_live(res, bg)?;
+        let bg = bind_group(res, bg)?;
+        bg.validate(res)?;
         for r in &bg.textures {
             if st.color_targets.contains(&r.id) {
                 return Err(GpuError::Invalid(
@@ -883,19 +863,7 @@ where
     Ok(())
 }
 
-fn validate_cb(res: &SessionResources, cb: &CommandBuffer) -> Result<()> {
-    let mut st = EncoderState::default();
-    for op in &cb.encoder {
-        validate_op(res, op, &mut st)?;
-    }
-    if st.in_render_pass || st.in_compute_pass {
-        return Err(GpuError::Invalid("command buffer ends inside an open pass"));
-    }
-    Ok(())
-}
-
 fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Result<()> {
-    use crate::cpu::format::clear_texel;
     match op {
         Enc::BeginRenderPass { color, depth } => {
             if st.in_render_pass || st.in_compute_pass {
@@ -915,7 +883,7 @@ fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Resul
                     ));
                 }
                 if c.load == LoadOp::Clear {
-                    clear_texel(t.desc.format, c.clear)?;
+                    t.desc.format.clear_texel(c.clear)?;
                 }
                 formats.push(t.desc.format);
             }
@@ -1073,8 +1041,8 @@ fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Resul
                 },
                 None => return Err(GpuError::Invalid("Dispatch with no pipeline bound")),
             }
-            if let Some(bg) = st.bind_group {
-                check_bind_group_live(res, bg)?;
+            if let Some(id) = st.bind_group {
+                bind_group(res, id)?.validate(res)?;
             }
         }
         Enc::CopyBufferToBuffer {
@@ -1144,7 +1112,7 @@ fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Resul
                     "software: multisample texture readback copy",
                 ));
             }
-            let bpt = texel_bytes(t.desc.format)?;
+            let bpt = t.desc.format.software_texel_bytes()?;
             if *dst_offset % bpt as u64 != 0 {
                 return Err(GpuError::Invalid(
                     "texture readback offset not texel-aligned",
@@ -1185,7 +1153,7 @@ fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Resul
             if s_samples != 1 || d.desc.sample_count != 1 {
                 return Err(GpuError::Unsupported("software: multisample texture copy"));
             }
-            if texel_bytes(s_fmt)? != texel_bytes(d.desc.format)? {
+            if s_fmt.software_texel_bytes()? != d.desc.format.software_texel_bytes()? {
                 return Err(GpuError::Invalid(
                     "texture copy between incompatible texel sizes",
                 ));
@@ -1232,7 +1200,7 @@ fn validate_op(res: &SessionResources, op: &Enc, st: &mut EncoderState) -> Resul
             if s_samples != 1 || d.desc.sample_count != 1 {
                 return Err(GpuError::Unsupported("software: multisample blit"));
             }
-            if texel_bytes(s_fmt)? != texel_bytes(d.desc.format)? {
+            if s_fmt.software_texel_bytes()? != d.desc.format.software_texel_bytes()? {
                 return Err(GpuError::Invalid("blit between incompatible texel sizes"));
             }
             let s = texture(res, *src)?;

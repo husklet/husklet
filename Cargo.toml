@@ -17,6 +17,8 @@ members = [
     "src/workspaces/hl-ws-term",
     "src/workspaces/hl-ws",
     "src/packages/hl-log",
+    "src/packages/hl-design",
+    "src/packages/hl-design-lint",
     "src/apps/husklet",
 ]
 # hl-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.

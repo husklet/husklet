@@ -29,11 +29,15 @@ const GL_RGB: u32 = 0x1907;
 const GL_BGRA_EXT: u32 = 0x80E1;
 
 /// Bytes per packed pixel for a supported readback `format` (`GL_RGB` = 3, else 4).
-pub fn format_bpp(format: u32) -> usize {
-    if format == GL_RGB {
-        3
-    } else {
-        4
+struct PixelFormat(u32);
+
+impl PixelFormat {
+    fn bytes_per_pixel(self) -> usize {
+        if self.0 == GL_RGB {
+            3
+        } else {
+            4
+        }
     }
 }
 
@@ -51,7 +55,7 @@ pub fn read_pixels(
     format: u32,
 ) -> Result<Vec<u8>> {
     let _s = hl_log::hl_span!(hl_log::tag::PRESENT, "readpixels");
-    let bpp = format_bpp(format);
+    let bpp = PixelFormat(format).bytes_per_pixel();
     if w <= 0 || h <= 0 {
         return Ok(Vec::new());
     }
@@ -73,7 +77,7 @@ pub fn read_pixels(
 
     // Lower + render the recorded frame into its render-target texture. No draws → default-framebuffer
     // readback yields zeros (the model keeps no default-color plane), mirroring gl_shim.c.
-    let Some(mut f) = frame::build_frame_ir(ctx) else {
+    let Some(mut f) = frame::Frame::build(ctx) else {
         return Ok(vec![0u8; out_len]);
     };
     let (_surface, mut texture) = f.present;

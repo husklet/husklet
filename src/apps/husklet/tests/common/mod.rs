@@ -25,8 +25,8 @@ use std::thread;
 use hl_gpu::protocol::model::kernel::KernelDescriptor;
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
-    encode_stream, BufferId, Capabilities, Cmd, ConnectionHandler, CpuExecutor, FakeClock,
-    GlobalLedger, Limits, ReadbackRequest, Session,
+    BufferId, Capabilities, Cmd, ConnectionHandler, CpuExecutor, FakeClock, GlobalLedger, Limits,
+    ReadbackRequest, Session,
 };
 
 /// A host that owns a runtime `Session` + a `CpuExecutor` with the CUDA PTX kernel compiler injected, and
@@ -66,7 +66,7 @@ impl RuntimeHost {
 impl ConnectionHandler for RuntimeHost {
     fn submit(&mut self, _header: &SubmitHeader, batch: &[Cmd]) -> Verdict {
         self.submits.fetch_add(1, Ordering::Relaxed);
-        let frame_bytes = encode_stream(batch).len();
+        let frame_bytes = hl_gpu::Encoder::stream(batch).len();
         match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
             Ok(_) => Verdict::Ack,
             Err(_) => Verdict::Nack,

@@ -20,8 +20,8 @@ use std::collections::HashMap;
 use hl_log::{hl_count, hl_debug, hl_span, tag};
 
 use model::{Scene, SurfaceId, SurfaceRole};
-use port::{Clock, PresentOutcome, Presenter};
-use service::{commit_surface, compose_frame, is_tree_dirty, schedule, Commit, FramePacing};
+use port::{Clock, PresentOutcome, PresentTiming, Presenter};
+use service::{commit_surface, schedule, Commit, FramePacing};
 
 /// Terminal bound on callbacks retained across failed presents (mirrors `MAX_RETAINED_CALLBACKS`): a
 /// permanently-dead presenter must not grow a surface's retained-callback queue without limit.
@@ -184,7 +184,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
         }
 
         // Nothing visible changed: the previous frame still stands. Fire callbacks, discard feedback.
-        if !is_tree_dirty(&self.scene, root) {
+        if !self.scene.is_tree_dirty(root) {
             hl_count!(tag::PRESENT, "skipped");
             let fired = self.pace_tree(root, FramePacing::Skipped);
             return FrameOutcome {
@@ -212,7 +212,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
         }
 
         // Compose the ordered layers, then present each through the port (scene borrow released first).
-        let Some(frame) = compose_frame(&self.scene, root) else {
+        let Some(frame) = self.scene.compose_frame(root) else {
             let fired = self.pace_tree(root, FramePacing::TerminalFailure);
             return FrameOutcome {
                 pacing: FramePacing::TerminalFailure,
@@ -222,7 +222,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
                 throttled: false,
             };
         };
-        let timing = schedule::fallback_timing(now, refresh);
+        let timing = PresentTiming::fallback(now, refresh);
 
         let output_id = output.id;
         let mut presented = Vec::new();
@@ -236,7 +236,7 @@ impl<P: Presenter, C: Clock> Compositor<P, C> {
         }
 
         let pacing = base_outcome
-            .map(schedule::from_outcome)
+            .map(FramePacing::from)
             .unwrap_or(FramePacing::TerminalFailure);
         let serial = match base_outcome {
             Some(PresentOutcome::Delivered { serial, .. }) => Some(serial),

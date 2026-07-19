@@ -17,7 +17,7 @@ use hl_gpu::protocol::model::enums::{compare, stencil_op, TextureFormat, Topolog
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
-use crate::convert::texture_format;
+use crate::convert::Format;
 use crate::reflect::{BindingKind, TexDim, TexSample};
 use crate::shader::{self, ShaderNative};
 use crate::wgsl;
@@ -55,35 +55,44 @@ pub enum PipelineNative {
 }
 
 /// Downcast a live pipeline id to its native handle.
-pub fn native<'a>(res: &'a SessionResources, id: u32) -> Result<&'a PipelineNative> {
-    res.pipelines
-        .get(id)?
-        .downcast_ref::<PipelineNative>()
-        .ok_or(GpuError::Invalid("wgpu: pipeline native type mismatch"))
+impl PipelineNative {
+    pub fn get(res: &SessionResources, id: u32) -> Result<&PipelineNative> {
+        res.pipelines
+            .get(id)?
+            .downcast_ref::<PipelineNative>()
+            .ok_or(GpuError::Invalid("wgpu: pipeline native type mismatch"))
+    }
 }
 
 /// A compute storage-buffer bind-group-layout entry at `binding` (`read_only` selects the param blob vs a
 /// writable region), runtime-sized (`min_binding_size: None`) to match the WGSL `array<u32>` view.
-fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
+struct ComputeLayout;
+impl ComputeLayout {
+    fn storage(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+        wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }
     }
 }
 
-fn topology(t: Topology) -> wgpu::PrimitiveTopology {
-    match t {
-        Topology::PointList => wgpu::PrimitiveTopology::PointList,
-        Topology::LineList => wgpu::PrimitiveTopology::LineList,
-        Topology::LineStrip => wgpu::PrimitiveTopology::LineStrip,
-        Topology::TriangleList => wgpu::PrimitiveTopology::TriangleList,
-        Topology::TriangleStrip => wgpu::PrimitiveTopology::TriangleStrip,
+struct PrimitiveTopology(Topology);
+
+impl PrimitiveTopology {
+    fn native(self) -> wgpu::PrimitiveTopology {
+        match self.0 {
+            Topology::PointList => wgpu::PrimitiveTopology::PointList,
+            Topology::LineList => wgpu::PrimitiveTopology::LineList,
+            Topology::LineStrip => wgpu::PrimitiveTopology::LineStrip,
+            Topology::TriangleList => wgpu::PrimitiveTopology::TriangleList,
+            Topology::TriangleStrip => wgpu::PrimitiveTopology::TriangleStrip,
+        }
     }
 }
 
@@ -91,21 +100,29 @@ fn topology(t: Topology) -> wgpu::PrimitiveTopology {
 /// driver's `glCullFace`/`GL_CULL_FACE` state) to wgpu's optional culled face. `0` (the neutral wire
 /// default, and the only value the frozen suite used) is `None` — byte-for-byte the previous `..default()`
 /// behavior; a real `glCullFace(GL_BACK)` guest now actually culls instead of the state silently vanishing.
-fn cull_mode(cull: u32) -> Option<wgpu::Face> {
-    match cull {
-        1 => Some(wgpu::Face::Front),
-        2 => Some(wgpu::Face::Back),
-        _ => None,
+struct CullMode(u32);
+
+impl CullMode {
+    fn native(self) -> Option<wgpu::Face> {
+        match self.0 {
+            1 => Some(wgpu::Face::Front),
+            2 => Some(wgpu::Face::Back),
+            _ => None,
+        }
     }
 }
 
 /// Map the protocol's `front_face` code (`RenderPipelineDesc::front_face`: 0 = CCW, 1 = CW — the GL
 /// driver's `glFrontFace`) to a `wgpu::FrontFace`. `0` (the neutral default) is `Ccw`, identical to the
 /// previous hardcoded default; it only changes an observable result together with a non-zero `cull`.
-fn front_face(front_face: u32) -> wgpu::FrontFace {
-    match front_face {
-        1 => wgpu::FrontFace::Cw,
-        _ => wgpu::FrontFace::Ccw,
+struct FrontFace(u32);
+
+impl FrontFace {
+    fn native(self) -> wgpu::FrontFace {
+        match self.0 {
+            1 => wgpu::FrontFace::Cw,
+            _ => wgpu::FrontFace::Ccw,
+        }
     }
 }
 
@@ -113,21 +130,25 @@ fn front_face(front_face: u32) -> wgpu::FrontFace {
 /// the GL driver's `glColorMask`) to `wgpu::ColorWrites`. `0xF` (the neutral default) is `ALL`, identical to
 /// the previous hardcoded value; a guest that masks a channel (e.g. `glColorMask(1,1,1,0)` to preserve the
 /// destination alpha) now actually leaves that channel untouched instead of the mask silently vanishing.
-fn color_writes(mask: u32) -> wgpu::ColorWrites {
-    let mut w = wgpu::ColorWrites::empty();
-    if mask & 1 != 0 {
-        w |= wgpu::ColorWrites::RED;
+struct ColorMask(u32);
+
+impl ColorMask {
+    fn native(self) -> wgpu::ColorWrites {
+        let mut w = wgpu::ColorWrites::empty();
+        if self.0 & 1 != 0 {
+            w |= wgpu::ColorWrites::RED;
+        }
+        if self.0 & 2 != 0 {
+            w |= wgpu::ColorWrites::GREEN;
+        }
+        if self.0 & 4 != 0 {
+            w |= wgpu::ColorWrites::BLUE;
+        }
+        if self.0 & 8 != 0 {
+            w |= wgpu::ColorWrites::ALPHA;
+        }
+        w
     }
-    if mask & 2 != 0 {
-        w |= wgpu::ColorWrites::GREEN;
-    }
-    if mask & 4 != 0 {
-        w |= wgpu::ColorWrites::BLUE;
-    }
-    if mask & 8 != 0 {
-        w |= wgpu::ColorWrites::ALPHA;
-    }
-    w
 }
 
 impl WgpuExecutor {
@@ -138,14 +159,14 @@ impl WgpuExecutor {
         desc: &ComputePipelineDesc,
     ) -> Result<()> {
         let _sp = hl_log::hl_span!(hl_log::tag::WGPU, "pipeline_create");
-        let pipeline = match shader::native(res, desc.compute.module)? {
+        let pipeline = match shader::ShaderNative::get(res, desc.compute.module)? {
             // PTX-kernel ABI: lower the neutral kernel IR to a WGSL compute entry point and build with an
             // EXPLICIT group-0 layout — binding 0 the read-only param blob, binding r+1 the read_write
             // pointer region r. Declaring every binding (even one the WGSL doesn't read) keeps the bind
             // group the protocol builds in lock-step with the layout that `get_bind_group_layout(0)` returns.
             ShaderNative::Kernel(p) => {
                 let prog = p.clone();
-                let src = wgsl::kernel_to_wgsl(&prog)?;
+                let src = wgsl::Kernel::translate(&prog)?;
                 let module = self
                     .gpu
                     .device
@@ -153,9 +174,9 @@ impl WgpuExecutor {
                         label: Some("hl-kernel"),
                         source: wgpu::ShaderSource::Wgsl(src.into()),
                     });
-                let mut entries = vec![storage_entry(0, true)];
+                let mut entries = vec![ComputeLayout::storage(0, true)];
                 for r in 0..prog.num_regions {
-                    entries.push(storage_entry(r + 1, false));
+                    entries.push(ComputeLayout::storage(r + 1, false));
                 }
                 let layout =
                     self.gpu
@@ -243,7 +264,7 @@ impl WgpuExecutor {
         // explicit layout's exact bindings for the draw-time bind-group filter (see `PipelineNative::Render`).
         // Also capture each stage module's CONTENT key so identical descriptors built from different shader
         // ids (but the same source) dedup to one compiled pipeline.
-        let (vs, vs_used, vs_key) = match shader::native(res, desc.vertex.module)? {
+        let (vs, vs_used, vs_key) = match shader::ShaderNative::get(res, desc.vertex.module)? {
             ShaderNative::Module {
                 module,
                 reflected,
@@ -265,7 +286,7 @@ impl WgpuExecutor {
         };
         let (fs, fs_used, fs_key) = match &desc.fragment {
             Some(f) => {
-                match shader::native(res, f.module)? {
+                match shader::ShaderNative::get(res, f.module)? {
                     ShaderNative::Module {
                         module,
                         reflected,
@@ -326,7 +347,7 @@ impl WgpuExecutor {
                     std::collections::btree_map::Entry::Occupied(mut o) => {
                         let (vis, kind) = o.get_mut();
                         *vis |= stage;
-                        *kind = reconcile_kind(*kind, b.kind).ok_or_else(|| {
+                        *kind = BindingLayout::reconcile(*kind, b.kind).ok_or_else(|| {
                             hl_log::hl_warn!(
                                 hl_log::tag::WGPU,
                                 "pipeline rejected kind=render reason=binding-type-collision group={} binding={} vs={:?} fs={:?}",
@@ -373,7 +394,7 @@ impl WgpuExecutor {
                     .iter()
                     .map(|a| {
                         Ok(wgpu::VertexAttribute {
-                            format: vertex_format(a.format)?,
+                            format: VertexState::format(a.format)?,
                             offset: a.offset as u64,
                             shader_location: a.location,
                         })
@@ -387,7 +408,7 @@ impl WgpuExecutor {
             .zip(attr_sets.iter())
             .map(|(vl, attrs)| wgpu::VertexBufferLayout {
                 array_stride: vl.stride as u64,
-                step_mode: step_mode(vl),
+                step_mode: VertexState::step_mode(vl),
                 attributes: attrs,
             })
             .collect();
@@ -398,17 +419,17 @@ impl WgpuExecutor {
         // attachment (see `submit::run_render_pass`).
         let depth_stencil = match &desc.depth {
             Some(ds) => Some(wgpu::DepthStencilState {
-                format: texture_format(ds.format)?,
+                format: Format::from(ds.format).native(),
                 depth_write_enabled: ds.depth_write,
-                depth_compare: compare_function(ds.depth_compare),
+                depth_compare: CompareFunction(ds.depth_compare).native(),
                 // Lower the protocol's real stencil state: front/back faces (compare + fail/depth-fail/pass
                 // ops) + read/write masks. The neutral default (front+back `DISABLED` → `ALWAYS`+`KEEP`)
                 // maps to `wgpu::StencilFaceState::IGNORE`, so `wgpu` sees the stencil as disabled and a
                 // depth-only (`Depth32Float`) pipeline still validates exactly as before; a real stencil
                 // pipeline requires (and here carries) the `Depth24PlusStencil8` stencil aspect.
                 stencil: wgpu::StencilState {
-                    front: stencil_face(&ds.stencil_front),
-                    back: stencil_face(&ds.stencil_back),
+                    front: StencilState::face(&ds.stencil_front),
+                    back: StencilState::face(&ds.stencil_back),
                     read_mask: ds.stencil_read_mask,
                     write_mask: ds.stencil_write_mask,
                 },
@@ -422,15 +443,15 @@ impl WgpuExecutor {
         let mut targets: Vec<Option<wgpu::ColorTargetState>> = Vec::new();
         for c in &desc.color_targets {
             targets.push(Some(wgpu::ColorTargetState {
-                format: texture_format(c.format)?,
+                format: Format::from(c.format).native(),
                 // Honor the protocol's fixed-function blend: `Some(_)` lowers the GL `glBlendFunc`/
                 // `GL_BLEND` (and Vulkan `VkPipelineColorBlendStateCreateInfo`) state into wgpu's
                 // per-target blend so an overlapping translucent draw composites instead of overwriting;
                 // `None` stays an opaque replace.
-                blend: c.blend.as_ref().map(blend_state),
+                blend: c.blend.as_ref().map(BlendState::lower),
                 // Honor the protocol RGBA write mask (`glColorMask`): a masked channel is left untouched in
                 // the target instead of the mask silently vanishing. `0xF` maps to `ALL` (the prior default).
-                write_mask: color_writes(c.write_mask),
+                write_mask: ColorMask(c.write_mask).native(),
             }));
         }
 
@@ -459,13 +480,13 @@ impl WgpuExecutor {
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 primitive: wgpu::PrimitiveState {
-                    topology: topology(desc.topology),
+                    topology: PrimitiveTopology(desc.topology).native(),
                     // Honor the protocol face-culling + winding (`glCullFace`/`GL_CULL_FACE` + `glFrontFace`):
                     // the neutral wire defaults (cull 0 → None, front_face 0 → Ccw) reproduce the previous
                     // `..default()` byte-for-byte, while a real culling guest now actually discards the culled
                     // face instead of the state silently vanishing.
-                    front_face: front_face(desc.front_face),
-                    cull_mode: cull_mode(desc.cull),
+                    front_face: FrontFace(desc.front_face).native(),
+                    cull_mode: CullMode(desc.cull).native(),
                     ..Default::default()
                 },
                 depth_stencil,
@@ -527,7 +548,7 @@ impl WgpuExecutor {
     /// for a compute pipeline, which is not deduped). Reads the id's backing id BEFORE removing it, then
     /// removes (which may raise `UnknownId` for a double-free — propagated before any refcount change).
     pub(crate) fn destroy_pipeline(&mut self, res: &mut SessionResources, id: u32) -> Result<()> {
-        let backing = match native(res, id) {
+        let backing = match PipelineNative::get(res, id) {
             Ok(PipelineNative::Render { backing, .. }) => Some(*backing),
             _ => None,
         };
@@ -559,7 +580,7 @@ impl WgpuExecutor {
                         |((_, binding), (visibility, kind))| wgpu::BindGroupLayoutEntry {
                             binding: *binding,
                             visibility: *visibility,
-                            ty: binding_type(*kind),
+                            ty: BindingLayout::binding_type(*kind),
                             count: None,
                         },
                     )
@@ -579,57 +600,62 @@ impl WgpuExecutor {
 /// types pass through; two storage buffers merge to the WIDER access (writable subsumes read-only). Any
 /// other disagreement (buffer vs texture, uniform vs storage, texture-shape mismatch, …) is a genuine
 /// shader bug across stages and yields `None` so the caller reports it rather than guessing.
-fn reconcile_kind(a: BindingKind, b: BindingKind) -> Option<BindingKind> {
-    match (a, b) {
-        (
-            BindingKind::StorageBuffer { read_only: r1 },
-            BindingKind::StorageBuffer { read_only: r2 },
-        ) => Some(BindingKind::StorageBuffer {
-            read_only: r1 && r2,
-        }),
-        _ if a == b => Some(a),
-        _ => None,
+struct BindingLayout;
+impl BindingLayout {
+    fn reconcile(a: BindingKind, b: BindingKind) -> Option<BindingKind> {
+        match (a, b) {
+            (
+                BindingKind::StorageBuffer { read_only: r1 },
+                BindingKind::StorageBuffer { read_only: r2 },
+            ) => Some(BindingKind::StorageBuffer {
+                read_only: r1 && r2,
+            }),
+            _ if a == b => Some(a),
+            _ => None,
+        }
     }
-}
 
-/// Lower a neutral [`BindingKind`] to the `wgpu::BindingType` a `BindGroupLayoutEntry` carries. Buffers use
-/// `min_binding_size: None` (so a per-stage size disagreement never rejects the layout — the shader's own
-/// access is validated against the module, not the layout) and no dynamic offset (the shim bakes offsets
-/// into each `BindResource::Buffer.offset`).
-fn binding_type(kind: BindingKind) -> wgpu::BindingType {
-    match kind {
-        BindingKind::UniformBuffer => wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        BindingKind::StorageBuffer { read_only } => wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        BindingKind::Texture { dim, sample, multi } => wgpu::BindingType::Texture {
-            sample_type: match sample {
-                TexSample::Float { filterable } => wgpu::TextureSampleType::Float { filterable },
-                TexSample::Sint => wgpu::TextureSampleType::Sint,
-                TexSample::Uint => wgpu::TextureSampleType::Uint,
-                TexSample::Depth => wgpu::TextureSampleType::Depth,
+    /// Lower a neutral [`BindingKind`] to the `wgpu::BindingType` a `BindGroupLayoutEntry` carries. Buffers use
+    /// `min_binding_size: None` (so a per-stage size disagreement never rejects the layout — the shader's own
+    /// access is validated against the module, not the layout) and no dynamic offset (the shim bakes offsets
+    /// into each `BindResource::Buffer.offset`).
+    fn binding_type(kind: BindingKind) -> wgpu::BindingType {
+        match kind {
+            BindingKind::UniformBuffer => wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            view_dimension: match dim {
-                TexDim::D1 => wgpu::TextureViewDimension::D1,
-                TexDim::D2 => wgpu::TextureViewDimension::D2,
-                TexDim::D2Array => wgpu::TextureViewDimension::D2Array,
-                TexDim::D3 => wgpu::TextureViewDimension::D3,
-                TexDim::Cube => wgpu::TextureViewDimension::Cube,
-                TexDim::CubeArray => wgpu::TextureViewDimension::CubeArray,
+            BindingKind::StorageBuffer { read_only } => wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            multisampled: multi,
-        },
-        BindingKind::Sampler { comparison } => wgpu::BindingType::Sampler(if comparison {
-            wgpu::SamplerBindingType::Comparison
-        } else {
-            wgpu::SamplerBindingType::Filtering
-        }),
+            BindingKind::Texture { dim, sample, multi } => wgpu::BindingType::Texture {
+                sample_type: match sample {
+                    TexSample::Float { filterable } => {
+                        wgpu::TextureSampleType::Float { filterable }
+                    }
+                    TexSample::Sint => wgpu::TextureSampleType::Sint,
+                    TexSample::Uint => wgpu::TextureSampleType::Uint,
+                    TexSample::Depth => wgpu::TextureSampleType::Depth,
+                },
+                view_dimension: match dim {
+                    TexDim::D1 => wgpu::TextureViewDimension::D1,
+                    TexDim::D2 => wgpu::TextureViewDimension::D2,
+                    TexDim::D2Array => wgpu::TextureViewDimension::D2Array,
+                    TexDim::D3 => wgpu::TextureViewDimension::D3,
+                    TexDim::Cube => wgpu::TextureViewDimension::Cube,
+                    TexDim::CubeArray => wgpu::TextureViewDimension::CubeArray,
+                },
+                multisampled: multi,
+            },
+            BindingKind::Sampler { comparison } => wgpu::BindingType::Sampler(if comparison {
+                wgpu::SamplerBindingType::Comparison
+            } else {
+                wgpu::SamplerBindingType::Filtering
+            }),
+        }
     }
 }
 
@@ -637,17 +663,21 @@ fn binding_type(kind: BindingKind) -> wgpu::BindingType {
 /// Vulkan `VkCompareOp` ordering) to a `wgpu::CompareFunction`. An unrecognized code is treated as
 /// `Always` — matching the CPU oracle's `compare::passes`, which never hard-fails a draw on a code it does
 /// not model.
-fn compare_function(code: u32) -> wgpu::CompareFunction {
-    use wgpu::CompareFunction as C;
-    match code {
-        compare::NEVER => C::Never,
-        compare::LESS => C::Less,
-        compare::EQUAL => C::Equal,
-        compare::LESS_EQUAL => C::LessEqual,
-        compare::GREATER => C::Greater,
-        compare::NOT_EQUAL => C::NotEqual,
-        compare::GREATER_EQUAL => C::GreaterEqual,
-        _ => C::Always, // compare::ALWAYS and any unmodeled code
+struct CompareFunction(u32);
+
+impl CompareFunction {
+    fn native(self) -> wgpu::CompareFunction {
+        use wgpu::CompareFunction as C;
+        match self.0 {
+            compare::NEVER => C::Never,
+            compare::LESS => C::Less,
+            compare::EQUAL => C::Equal,
+            compare::LESS_EQUAL => C::LessEqual,
+            compare::GREATER => C::Greater,
+            compare::NOT_EQUAL => C::NotEqual,
+            compare::GREATER_EQUAL => C::GreaterEqual,
+            _ => C::Always, // compare::ALWAYS and any unmodeled code
+        }
     }
 }
 
@@ -655,28 +685,31 @@ fn compare_function(code: u32) -> wgpu::CompareFunction {
 /// `VkStencilOp` ordering) to a `wgpu::StencilOperation`. An unrecognized code is treated as `Keep`,
 /// mirroring `compare_function`'s `Always` fallback — an honest bring-up never hard-fails on a code it does
 /// not model, it just leaves the stencil untouched.
-fn stencil_operation(code: u32) -> wgpu::StencilOperation {
-    use wgpu::StencilOperation as S;
-    match code {
-        stencil_op::ZERO => S::Zero,
-        stencil_op::REPLACE => S::Replace,
-        stencil_op::INCREMENT_CLAMP => S::IncrementClamp,
-        stencil_op::DECREMENT_CLAMP => S::DecrementClamp,
-        stencil_op::INVERT => S::Invert,
-        stencil_op::INCREMENT_WRAP => S::IncrementWrap,
-        stencil_op::DECREMENT_WRAP => S::DecrementWrap,
-        _ => S::Keep, // stencil_op::KEEP and any unmodeled code
+struct StencilState;
+impl StencilState {
+    fn operation(code: u32) -> wgpu::StencilOperation {
+        use wgpu::StencilOperation as S;
+        match code {
+            stencil_op::ZERO => S::Zero,
+            stencil_op::REPLACE => S::Replace,
+            stencil_op::INCREMENT_CLAMP => S::IncrementClamp,
+            stencil_op::DECREMENT_CLAMP => S::DecrementClamp,
+            stencil_op::INVERT => S::Invert,
+            stencil_op::INCREMENT_WRAP => S::IncrementWrap,
+            stencil_op::DECREMENT_WRAP => S::DecrementWrap,
+            _ => S::Keep, // stencil_op::KEEP and any unmodeled code
+        }
     }
-}
 
-/// Lower one protocol [`StencilFaceState`] (opaque compare + the three stencil ops) into a
-/// `wgpu::StencilFaceState`. Front+back both `DISABLED` collapse to `wgpu::StencilFaceState::IGNORE`.
-fn stencil_face(f: &StencilFaceState) -> wgpu::StencilFaceState {
-    wgpu::StencilFaceState {
-        compare: compare_function(f.compare),
-        fail_op: stencil_operation(f.fail_op),
-        depth_fail_op: stencil_operation(f.depth_fail_op),
-        pass_op: stencil_operation(f.pass_op),
+    /// Lower one protocol [`StencilFaceState`] (opaque compare + the three stencil ops) into a
+    /// `wgpu::StencilFaceState`. Front+back both `DISABLED` collapse to `wgpu::StencilFaceState::IGNORE`.
+    fn face(f: &StencilFaceState) -> wgpu::StencilFaceState {
+        wgpu::StencilFaceState {
+            compare: CompareFunction(f.compare).native(),
+            fail_op: Self::operation(f.fail_op),
+            depth_fail_op: Self::operation(f.depth_fail_op),
+            pass_op: Self::operation(f.pass_op),
+        }
     }
 }
 
@@ -686,156 +719,162 @@ fn stencil_face(f: &StencilFaceState) -> wgpu::StencilFaceState {
 /// 8=DST_ALPHA 9=1-DST_ALPHA 10=SRC_ALPHA_SATURATE 11=CONSTANT 12=1-CONSTANT. Every value the protocol can carry maps to a concrete
 /// wgpu factor; an unmodeled code defaults to `One` (matching the GL driver's own fallback) rather than
 /// silently dropping the blend.
-fn blend_factor(code: u32) -> wgpu::BlendFactor {
-    use wgpu::BlendFactor as F;
-    match code {
-        0 => F::Zero,
-        1 => F::One,
-        2 => F::Src,
-        3 => F::OneMinusSrc,
-        4 => F::SrcAlpha,
-        5 => F::OneMinusSrcAlpha,
-        6 => F::Dst,
-        7 => F::OneMinusDst,
-        8 => F::DstAlpha,
-        9 => F::OneMinusDstAlpha,
-        10 => F::SrcAlphaSaturated,
-        11 => F::Constant,
-        12 => F::OneMinusConstant,
-        _ => F::One,
+struct BlendState;
+impl BlendState {
+    fn factor(code: u32) -> wgpu::BlendFactor {
+        use wgpu::BlendFactor as F;
+        match code {
+            0 => F::Zero,
+            1 => F::One,
+            2 => F::Src,
+            3 => F::OneMinusSrc,
+            4 => F::SrcAlpha,
+            5 => F::OneMinusSrcAlpha,
+            6 => F::Dst,
+            7 => F::OneMinusDst,
+            8 => F::DstAlpha,
+            9 => F::OneMinusDstAlpha,
+            10 => F::SrcAlphaSaturated,
+            11 => F::Constant,
+            12 => F::OneMinusConstant,
+            _ => F::One,
+        }
     }
-}
 
-/// Decode a protocol blend-op wire value into a `wgpu::BlendOperation`. The wire numbering is the neutral
-/// one the GL driver emits from `glBlendEquation` (`hl-gl` `blend_op_wire`): 0=ADD 1=SUBTRACT
-/// 2=REVERSE_SUBTRACT 3=MIN 4=MAX. An unmodeled code defaults to `Add`.
-fn blend_operation(code: u32) -> wgpu::BlendOperation {
-    use wgpu::BlendOperation as O;
-    match code {
-        1 => O::Subtract,
-        2 => O::ReverseSubtract,
-        3 => O::Min,
-        4 => O::Max,
-        _ => O::Add,
+    /// Decode a protocol blend-op wire value into a `wgpu::BlendOperation`. The wire numbering is the neutral
+    /// one the GL driver emits from `glBlendEquation` (`hl-gl` `blend_op_wire`): 0=ADD 1=SUBTRACT
+    /// 2=REVERSE_SUBTRACT 3=MIN 4=MAX. An unmodeled code defaults to `Add`.
+    fn operation(code: u32) -> wgpu::BlendOperation {
+        use wgpu::BlendOperation as O;
+        match code {
+            1 => O::Subtract,
+            2 => O::ReverseSubtract,
+            3 => O::Min,
+            4 => O::Max,
+            _ => O::Add,
+        }
     }
-}
 
-/// Lower a protocol [`BlendState`] into a `wgpu::BlendState`, translating the separate color/alpha
-/// src+dst factors and equations. A target whose protocol blend is `None` is an opaque replace, which
-/// wgpu represents as `blend: None` on the color target.
-fn blend_state(b: &hl_gpu::protocol::model::descriptor::BlendState) -> wgpu::BlendState {
-    wgpu::BlendState {
-        color: wgpu::BlendComponent {
-            src_factor: blend_factor(b.src_color),
-            dst_factor: blend_factor(b.dst_color),
-            operation: blend_operation(b.op_color),
-        },
-        alpha: wgpu::BlendComponent {
-            src_factor: blend_factor(b.src_alpha),
-            dst_factor: blend_factor(b.dst_alpha),
-            operation: blend_operation(b.op_alpha),
-        },
+    /// Lower a protocol [`BlendState`] into a `wgpu::BlendState`, translating the separate color/alpha
+    /// src+dst factors and equations. A target whose protocol blend is `None` is an opaque replace, which
+    /// wgpu represents as `blend: None` on the color target.
+    fn lower(b: &hl_gpu::protocol::model::descriptor::BlendState) -> wgpu::BlendState {
+        wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: Self::factor(b.src_color),
+                dst_factor: Self::factor(b.dst_color),
+                operation: Self::operation(b.op_color),
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: Self::factor(b.src_alpha),
+                dst_factor: Self::factor(b.dst_alpha),
+                operation: Self::operation(b.op_alpha),
+            },
+        }
     }
 }
 
 /// Per-slot vertex step mode: `step_mode == 0` steps per-vertex, non-zero steps per-instance (the encoding
 /// the GL driver emits from `glVertexAttribDivisor`).
-fn step_mode(vl: &VertexLayout) -> wgpu::VertexStepMode {
-    if vl.step_mode == 0 {
-        wgpu::VertexStepMode::Vertex
-    } else {
-        wgpu::VertexStepMode::Instance
+struct VertexState;
+impl VertexState {
+    fn step_mode(vl: &VertexLayout) -> wgpu::VertexStepMode {
+        if vl.step_mode == 0 {
+            wgpu::VertexStepMode::Vertex
+        } else {
+            wgpu::VertexStepMode::Instance
+        }
     }
-}
 
-/// Decode a protocol vertex-attribute format into a `wgpu::VertexFormat`. The wire packs
-/// `comps | (kind<<8) | (normalized<<16) | (integer<<17)` (the GL driver's `vertex_format_wire`): `comps`
-/// in 1..=4, `kind` 0=f32 1=u8 2=i8 3=u16 4=i16 5=u32 6=i32 7=f16. WebGPU has no 1-/3-component 8-/16-bit
-/// formats, so those combinations are rejected honestly rather than silently widened.
-pub(crate) fn vertex_format(packed: u32) -> Result<wgpu::VertexFormat> {
-    use wgpu::VertexFormat as F;
-    let comps = packed & 0xff;
-    let kind = (packed >> 8) & 0xff;
-    let normalized = (packed >> 16) & 1 != 0;
-    let bad = || GpuError::Unsupported("wgpu: unsupported vertex attribute format");
-    Ok(match (kind, comps) {
-        // 32-bit float
-        (0, 1) => F::Float32,
-        (0, 2) => F::Float32x2,
-        (0, 3) => F::Float32x3,
-        (0, 4) => F::Float32x4,
-        // 32-bit unsigned / signed integer
-        (5, 1) => F::Uint32,
-        (5, 2) => F::Uint32x2,
-        (5, 3) => F::Uint32x3,
-        (5, 4) => F::Uint32x4,
-        (6, 1) => F::Sint32,
-        (6, 2) => F::Sint32x2,
-        (6, 3) => F::Sint32x3,
-        (6, 4) => F::Sint32x4,
-        // 16-bit float (x2 / x4 only)
-        (7, 2) => F::Float16x2,
-        (7, 4) => F::Float16x4,
-        // 8-bit (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
-        (1, 2) => {
-            if normalized {
-                F::Unorm8x2
-            } else {
-                F::Uint8x2
+    /// Decode a protocol vertex-attribute format into a `wgpu::VertexFormat`. The wire packs
+    /// `comps | (kind<<8) | (normalized<<16) | (integer<<17)` (the GL driver's `vertex_format_wire`): `comps`
+    /// in 1..=4, `kind` 0=f32 1=u8 2=i8 3=u16 4=i16 5=u32 6=i32 7=f16. WebGPU has no 1-/3-component 8-/16-bit
+    /// formats, so those combinations are rejected honestly rather than silently widened.
+    pub(crate) fn format(packed: u32) -> Result<wgpu::VertexFormat> {
+        use wgpu::VertexFormat as F;
+        let comps = packed & 0xff;
+        let kind = (packed >> 8) & 0xff;
+        let normalized = (packed >> 16) & 1 != 0;
+        let bad = || GpuError::Unsupported("wgpu: unsupported vertex attribute format");
+        Ok(match (kind, comps) {
+            // 32-bit float
+            (0, 1) => F::Float32,
+            (0, 2) => F::Float32x2,
+            (0, 3) => F::Float32x3,
+            (0, 4) => F::Float32x4,
+            // 32-bit unsigned / signed integer
+            (5, 1) => F::Uint32,
+            (5, 2) => F::Uint32x2,
+            (5, 3) => F::Uint32x3,
+            (5, 4) => F::Uint32x4,
+            (6, 1) => F::Sint32,
+            (6, 2) => F::Sint32x2,
+            (6, 3) => F::Sint32x3,
+            (6, 4) => F::Sint32x4,
+            // 16-bit float (x2 / x4 only)
+            (7, 2) => F::Float16x2,
+            (7, 4) => F::Float16x4,
+            // 8-bit (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
+            (1, 2) => {
+                if normalized {
+                    F::Unorm8x2
+                } else {
+                    F::Uint8x2
+                }
             }
-        }
-        (1, 4) => {
-            if normalized {
-                F::Unorm8x4
-            } else {
-                F::Uint8x4
+            (1, 4) => {
+                if normalized {
+                    F::Unorm8x4
+                } else {
+                    F::Uint8x4
+                }
             }
-        }
-        (2, 2) => {
-            if normalized {
-                F::Snorm8x2
-            } else {
-                F::Sint8x2
+            (2, 2) => {
+                if normalized {
+                    F::Snorm8x2
+                } else {
+                    F::Sint8x2
+                }
             }
-        }
-        (2, 4) => {
-            if normalized {
-                F::Snorm8x4
-            } else {
-                F::Sint8x4
+            (2, 4) => {
+                if normalized {
+                    F::Snorm8x4
+                } else {
+                    F::Sint8x4
+                }
             }
-        }
-        // 16-bit integer (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
-        (3, 2) => {
-            if normalized {
-                F::Unorm16x2
-            } else {
-                F::Uint16x2
+            // 16-bit integer (x2 / x4 only), normalized → Unorm/Snorm else Uint/Sint
+            (3, 2) => {
+                if normalized {
+                    F::Unorm16x2
+                } else {
+                    F::Uint16x2
+                }
             }
-        }
-        (3, 4) => {
-            if normalized {
-                F::Unorm16x4
-            } else {
-                F::Uint16x4
+            (3, 4) => {
+                if normalized {
+                    F::Unorm16x4
+                } else {
+                    F::Uint16x4
+                }
             }
-        }
-        (4, 2) => {
-            if normalized {
-                F::Snorm16x2
-            } else {
-                F::Sint16x2
+            (4, 2) => {
+                if normalized {
+                    F::Snorm16x2
+                } else {
+                    F::Sint16x2
+                }
             }
-        }
-        (4, 4) => {
-            if normalized {
-                F::Snorm16x4
-            } else {
-                F::Sint16x4
+            (4, 4) => {
+                if normalized {
+                    F::Snorm16x4
+                } else {
+                    F::Sint16x4
+                }
             }
-        }
-        _ => return Err(bad()),
-    })
+            _ => return Err(bad()),
+        })
+    }
 }
 
 #[cfg(test)]

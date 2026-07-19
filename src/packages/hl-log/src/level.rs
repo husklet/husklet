@@ -29,7 +29,7 @@ impl Level {
         }
     }
 
-    /// Lowercase name, as accepted by `HL_LOG_LEVEL`.
+    /// Lowercase name for configuration adapters.
     #[inline]
     pub const fn name(self) -> &'static str {
         match self {

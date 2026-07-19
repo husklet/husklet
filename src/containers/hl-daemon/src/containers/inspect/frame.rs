@@ -5,26 +5,34 @@ use super::super::*;
 /// Parse a docker `since`/`until` value into unix seconds. Docker accepts unix `secs[.nanos]`, RFC3339 /
 /// RFC3339Nano, and Go durations relative to now — all handled via the shared [`crate::util::parse_docker_ts`].
 /// Returns None for absent/0/unparsable (a 0/negative result disables the filter, matching prior behavior).
-pub(super) fn parse_unix_ts(s: &Option<String>) -> Option<i64> {
-    let v = s.as_deref().filter(|x| !x.is_empty())?;
-    crate::util::parse_docker_ts(v, crate::util::now_secs()).filter(|n| *n > 0)
-}
-
 /// Split a log buffer into newline-terminated lines, keeping the trailing `\n` on each line and any
 /// final unterminated fragment as its own line. Used to apply `--tail` and `--timestamps` per line.
-pub(super) fn split_log_lines(buf: &[u8]) -> Vec<Vec<u8>> {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    for (i, b) in buf.iter().enumerate() {
-        if *b == b'\n' {
-            lines.push(buf[start..=i].to_vec());
-            start = i + 1;
+pub(super) struct Logs<'a>(&'a [u8]);
+
+impl<'a> Logs<'a> {
+    pub(super) fn new(buf: &'a [u8]) -> Self {
+        Self(buf)
+    }
+    pub(super) fn timestamp(value: Option<&str>) -> Option<i64> {
+        let value = value.filter(|value| !value.is_empty())?;
+        crate::util::Timestamp::docker(value, crate::util::now_secs())
+            .filter(|seconds| *seconds > 0)
+    }
+    pub(super) fn lines(&self) -> Vec<Vec<u8>> {
+        let buf = self.0;
+        let mut lines = Vec::new();
+        let mut start = 0;
+        for (i, b) in buf.iter().enumerate() {
+            if *b == b'\n' {
+                lines.push(buf[start..=i].to_vec());
+                start = i + 1;
+            }
         }
+        if start < buf.len() {
+            lines.push(buf[start..].to_vec());
+        }
+        lines
     }
-    if start < buf.len() {
-        lines.push(buf[start..].to_vec());
-    }
-    lines
 }
 
 /// Frame a chunk of guest output for the docker logs wire. TTY containers stream raw bytes (no demux
@@ -43,15 +51,15 @@ pub(super) fn frame_chunk(
         return if tty {
             data.to_vec()
         } else {
-            log_frame(stream, data)
+            LogFrame::new(stream, data)
         };
     }
     // Docker `logs --timestamps` emits RFC3339Nano (zero-padded fractional nanoseconds), e.g.
     // `2023-11-14T22:13:20.000000000Z`. Our chunk times are second-granular, so pad the fraction to nine
     // zeros rather than dropping it — matching docker's wire shape (a second-precision stamp diverged).
-    let ts = fmt_rfc3339_nanos(ts_secs.saturating_mul(1_000_000_000));
+    let ts = Timestamp::nanos(ts_secs.saturating_mul(1_000_000_000)).to_string();
     let mut out = Vec::new();
-    for line in split_log_lines(data) {
+    for line in Logs::new(data).lines() {
         let mut p = Vec::with_capacity(ts.len() + 1 + line.len());
         p.extend_from_slice(ts.as_bytes());
         p.push(b' ');
@@ -59,7 +67,7 @@ pub(super) fn frame_chunk(
         if tty {
             out.extend_from_slice(&p);
         } else {
-            out.extend(log_frame(stream, &p));
+            out.extend(LogFrame::new(stream, &p));
         }
     }
     out
@@ -92,20 +100,14 @@ mod tests {
     #[test]
     fn parse_unix_ts_variants() {
         // Plain seconds.
-        assert_eq!(
-            parse_unix_ts(&Some("1700000000".into())),
-            Some(1_700_000_000)
-        );
+        assert_eq!(Logs::timestamp(Some("1700000000")), Some(1_700_000_000));
         // `.nanos` suffix is dropped, integer seconds kept.
-        assert_eq!(
-            parse_unix_ts(&Some("1700000000.5".into())),
-            Some(1_700_000_000)
-        );
+        assert_eq!(Logs::timestamp(Some("1700000000.5")), Some(1_700_000_000));
         // Absent / empty / zero / unparsable -> None.
-        assert_eq!(parse_unix_ts(&None), None);
-        assert_eq!(parse_unix_ts(&Some("".into())), None);
-        assert_eq!(parse_unix_ts(&Some("0".into())), None);
-        assert_eq!(parse_unix_ts(&Some("notanumber".into())), None);
+        assert_eq!(Logs::timestamp(None), None);
+        assert_eq!(Logs::timestamp(Some("")), None);
+        assert_eq!(Logs::timestamp(Some("0")), None);
+        assert_eq!(Logs::timestamp(Some("notanumber")), None);
     }
 
     #[test]
@@ -113,11 +115,11 @@ mod tests {
         // Docker also sends RFC3339 / RFC3339Nano for --since/--until; these must apply the filter,
         // not disable it (a previous integer-only parse returned None and streamed everything).
         assert_eq!(
-            parse_unix_ts(&Some("2023-11-14T22:13:20Z".into())),
+            Logs::timestamp(Some("2023-11-14T22:13:20Z")),
             Some(1_700_000_000)
         );
         assert_eq!(
-            parse_unix_ts(&Some("2023-11-14T22:13:20.123456789Z".into())),
+            Logs::timestamp(Some("2023-11-14T22:13:20.123456789Z")),
             Some(1_700_000_000)
         );
     }
@@ -126,7 +128,7 @@ mod tests {
     fn split_log_lines_keeps_trailing_newline_and_fragment() {
         // Each complete line keeps its `\n`; a final unterminated fragment is its own line.
         assert_eq!(
-            split_log_lines(b"a\nbb\nc"),
+            Logs::new(b"a\nbb\nc").lines(),
             vec![b"a\n".to_vec(), b"bb\n".to_vec(), b"c".to_vec()]
         );
     }
@@ -134,14 +136,14 @@ mod tests {
     #[test]
     fn split_log_lines_all_terminated_has_no_trailing_fragment() {
         assert_eq!(
-            split_log_lines(b"x\ny\n"),
+            Logs::new(b"x\ny\n").lines(),
             vec![b"x\n".to_vec(), b"y\n".to_vec()]
         );
     }
 
     #[test]
     fn split_log_lines_empty_is_empty() {
-        assert!(split_log_lines(b"").is_empty());
+        assert!(Logs::new(b"").lines().is_empty());
     }
 
     #[test]
@@ -153,13 +155,16 @@ mod tests {
     #[test]
     fn frame_chunk_nontty_no_timestamps_uses_log_frame() {
         // Non-TTY without timestamps is exactly one multiplexed frame.
-        assert_eq!(frame_chunk(1, b"hi", false, false, 0), log_frame(1, b"hi"));
+        assert_eq!(
+            frame_chunk(1, b"hi", false, false, 0),
+            LogFrame::new(1, b"hi")
+        );
     }
 
     #[test]
     fn frame_chunk_tty_timestamps_prefixes_each_line() {
         // With timestamps + TTY, each split line gets an RFC3339Nano prefix and a space, no demux header.
-        let ts = fmt_rfc3339_nanos(1_700_000_000i64 * 1_000_000_000); // "2023-11-14T22:13:20.000000000Z"
+        let ts = Timestamp::nanos(1_700_000_000i64 * 1_000_000_000).to_string(); // "2023-11-14T22:13:20.000000000Z"
         let out = frame_chunk(1, b"a\nb", true, true, 1_700_000_000);
         let expected = format!("{ts} a\n{ts} b");
         assert_eq!(out, expected.into_bytes());
@@ -175,9 +180,9 @@ mod tests {
     #[test]
     fn frame_chunk_nontty_timestamps_frames_each_stamped_line() {
         // With timestamps + non-TTY, each stamped line is wrapped in its own log frame.
-        let ts = fmt_rfc3339_nanos(1_700_000_000i64 * 1_000_000_000);
+        let ts = Timestamp::nanos(1_700_000_000i64 * 1_000_000_000).to_string();
         let out = frame_chunk(2, b"a\n", false, true, 1_700_000_000);
-        let expected = log_frame(2, format!("{ts} a\n").as_bytes());
+        let expected = LogFrame::new(2, format!("{ts} a\n").as_bytes());
         assert_eq!(out, expected);
     }
 

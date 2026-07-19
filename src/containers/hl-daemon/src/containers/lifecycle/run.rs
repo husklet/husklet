@@ -4,57 +4,59 @@
 //! is re-used by the delete path in `manage.rs`.
 use super::super::*;
 
-pub(crate) async fn containers_start(State(a): State<App>, Path(id): Path<String>) -> Response {
-    let (c, vols, live) = {
-        let mut g = a.inner.lock().await;
-        let full = match resolve_cid(&g, &id) {
-            Some(f) => f,
-            None => return no_such(&id),
-        };
-        let c = match g.containers.get(&full).cloned() {
-            Some(c) => c,
-            None => return no_such(&id),
-        };
-        // `docker start` on an already-running (or paused) container is a 304 Not Modified — a no-op
-        // that must NOT re-spawn or reset started_at. Only a stopped container follows the start path.
-        if c.status == "running" || c.status == "paused" {
-            return StatusCode::NOT_MODIFIED.into_response();
-        }
-        let live = g.live.entry(full.clone()).or_insert_with(Live::new).clone();
-        // An explicit start clears the durable manual-stop flag (the container is deliberately up again).
-        if let Some(cc) = g.containers.get_mut(&full) {
-            cc.status = "running".into();
-            cc.started_at = now_secs();
-            cc.started_at_ns = now_nanos();
-            cc.manually_stopped = false;
-            // Install the initial `starting` health state SYNCHRONOUSLY as part of the start transition, so
-            // an inspect immediately after start sees `State.Health.Status=starting`. The async health
-            // monitor (spawned in spawn_live) otherwise leaves a timing gap where a poller sees running with
-            // no health object yet, missing the initial health lifecycle.
-            if cc.healthcheck.is_some() {
-                cc.health = Some(crate::model::HealthState {
-                    status: "starting".into(),
-                    ..Default::default()
-                });
+impl Containers {
+    pub(crate) async fn start(State(a): State<App>, Path(id): Path<String>) -> Response {
+        let (c, vols, live) = {
+            let mut g = a.inner.lock().await;
+            let full = match ContainerId::resolve(&g, &id) {
+                Some(f) => f,
+                None => return ErrorMessage::no_such(&id),
+            };
+            let c = match g.containers.get(&full).cloned() {
+                Some(c) => c,
+                None => return ErrorMessage::no_such(&id),
+            };
+            // `docker start` on an already-running (or paused) container is a 304 Not Modified — a no-op
+            // that must NOT re-spawn or reset started_at. Only a stopped container follows the start path.
+            if c.status == "running" || c.status == "paused" {
+                return StatusCode::NOT_MODIFIED.into_response();
             }
+            let live = g.live.entry(full.clone()).or_insert_with(Live::new).clone();
+            // An explicit start clears the durable manual-stop flag (the container is deliberately up again).
+            if let Some(cc) = g.containers.get_mut(&full) {
+                cc.status = "running".into();
+                cc.started_at = now_secs();
+                cc.started_at_ns = now_nanos();
+                cc.manually_stopped = false;
+                // Install the initial `starting` health state SYNCHRONOUSLY as part of the start transition, so
+                // an inspect immediately after start sees `State.Health.Status=starting`. The async health
+                // monitor (spawned in spawn_live) otherwise leaves a timing gap where a poller sees running with
+                // no health object yet, missing the initial health lifecycle.
+                if cc.healthcheck.is_some() {
+                    cc.health = Some(crate::model::HealthState {
+                        status: "starting".into(),
+                        ..Default::default()
+                    });
+                }
+            }
+            (c, g.volumes.clone(), live)
+        };
+        if std::env::var("HL_DEBUG").is_ok() {
+            eprintln!("[start] {} cmd={:?}", &c.id[..12], c.cmd);
         }
-        (c, g.volumes.clone(), live)
-    };
-    if std::env::var("HL_DEBUG").is_ok() {
-        eprintln!("[start] {} cmd={:?}", &c.id[..12], c.cmd);
+        // Emit `start` BEFORE spawning: spawn_live launches the reaper on a concurrent task, and a very
+        // short-lived container could otherwise fire `die` from that task before this handler emitted `start`,
+        // giving event consumers an impossible die-before-start ordering. Emitting first guarantees the order.
+        crate::events::emit_event(
+            &a.events,
+            "container",
+            "start",
+            &c.id,
+            json!({"name": c.name, "image": c.image}),
+        );
+        spawn_live(&a, &c, &vols, live).await;
+        StatusCode::NO_CONTENT.into_response()
     }
-    // Emit `start` BEFORE spawning: spawn_live launches the reaper on a concurrent task, and a very
-    // short-lived container could otherwise fire `die` from that task before this handler emitted `start`,
-    // giving event consumers an impossible die-before-start ordering. Emitting first guarantees the order.
-    crate::events::emit_event(
-        &a.events,
-        "container",
-        "start",
-        &c.id,
-        json!({"name": c.name, "image": c.image}),
-    );
-    spawn_live(&a, &c, &vols, live).await;
-    StatusCode::NO_CONTENT.into_response()
 }
 
 #[derive(Deserialize)]
@@ -74,11 +76,11 @@ pub(crate) async fn containers_stop(
     Path(id): Path<String>,
     Query(q): Query<StopQ>,
 ) -> Response {
-    let (def_sig, def_t) = resolve_stop_defaults(&a, &id).await;
+    let (def_sig, def_t) = Containers::stop_defaults(&a, &id).await;
     let sig = q
         .signal
         .as_deref()
-        .map(|s| parse_signal(s, def_sig))
+        .map(|s| Signal::parse(s, def_sig))
         .unwrap_or(def_sig);
     let t = q.t.unwrap_or(def_t).max(0);
     do_stop(&a, &id, sig, t).await
@@ -88,23 +90,25 @@ pub(crate) async fn containers_stop(
 /// StopSignal (image `Config.StopSignal` / `--stop-signal` — nginx SIGQUIT, postgres SIGINT) and
 /// StopTimeout (`--stop-timeout`), each falling back to docker's defaults SIGTERM / 10s when unset. This
 /// is the §8.3-3 repair: the stop path was hardcoded SIGTERM/10s and ignored both.
-async fn resolve_stop_defaults(a: &App, id: &str) -> (i32, i64) {
-    let g = a.inner.lock().await;
-    resolve_get(&g, id)
-        .map(|(_, c)| {
-            let s = if c.stop_signal.is_empty() {
-                libc::SIGTERM
-            } else {
-                parse_signal(&c.stop_signal, libc::SIGTERM)
-            };
-            let t = if c.stop_timeout > 0 {
-                c.stop_timeout
-            } else {
-                10
-            };
-            (s, t)
-        })
-        .unwrap_or((libc::SIGTERM, 10))
+impl Containers {
+    async fn stop_defaults(a: &App, id: &str) -> (i32, i64) {
+        let g = a.inner.lock().await;
+        ContainerId::get(&g, id)
+            .map(|(_, c)| {
+                let s = if c.stop_signal.is_empty() {
+                    libc::SIGTERM
+                } else {
+                    Signal::parse(&c.stop_signal, libc::SIGTERM)
+                };
+                let t = if c.stop_timeout > 0 {
+                    c.stop_timeout
+                } else {
+                    10
+                };
+                (s, t)
+            })
+            .unwrap_or((libc::SIGTERM, 10))
+    }
 }
 
 /// Signal a container's whole process group. The JIT leader is its own group leader (setpgid at spawn
@@ -112,30 +116,24 @@ async fn resolve_stop_defaults(a: &App, id: &str) -> (i32, i64) {
 /// pgid == leader pid) reaches the leader AND every forked child, so a multi-process container dies
 /// completely instead of leaving orphans. Only if the group signal fails (e.g. the leader is mid-
 /// teardown) do we fall back to the leader pid alone. Mirrors freeze()'s group-signal pattern.
-pub(super) fn kill_group(pid: i32, sig: i32) {
-    unsafe {
-        if libc::kill(-pid, sig) != 0 {
-            libc::kill(pid, sig);
-        }
-    }
-}
-
 /// Whether a signal's DEFAULT disposition terminates the process. The handful that do NOT — child/urgent
 /// notifications (SIGCHLD, SIGURG), job-control stop/continue (SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU,
 /// SIGCONT), and window-resize (SIGWINCH) — leave a running container alive, so `docker kill` with one of
 /// them must not fabricate an `exited` state. Everything else terminates (or core-dumps) by default.
-pub(crate) fn signal_terminates_by_default(sig: i32) -> bool {
-    !matches!(
-        sig,
-        libc::SIGCHLD
-            | libc::SIGURG
-            | libc::SIGSTOP
-            | libc::SIGTSTP
-            | libc::SIGTTIN
-            | libc::SIGTTOU
-            | libc::SIGCONT
-            | libc::SIGWINCH
-    )
+impl Signal {
+    pub(crate) fn terminates_by_default(sig: i32) -> bool {
+        !matches!(
+            sig,
+            libc::SIGCHLD
+                | libc::SIGURG
+                | libc::SIGSTOP
+                | libc::SIGTSTP
+                | libc::SIGTTIN
+                | libc::SIGTTOU
+                | libc::SIGCONT
+                | libc::SIGWINCH
+        )
+    }
 }
 
 /// POST /containers/:id/kill?signal=SIG -- default signal SIGKILL, delivered immediately.
@@ -145,8 +143,8 @@ pub(crate) async fn containers_kill(
     Query(q): Query<KillQ>,
 ) -> Response {
     let mut g = a.inner.lock().await;
-    let Some(full) = resolve_cid(&g, &id) else {
-        return no_such(&id);
+    let Some(full) = ContainerId::resolve(&g, &id) else {
+        return ErrorMessage::no_such(&id);
     };
     // `docker kill` on a non-running container is a 409 and mutates nothing (matches Moby: kill only
     // signals a live container; a stopped/exited one is rejected verbatim, no state change, no event).
@@ -156,27 +154,27 @@ pub(crate) async fn containers_kill(
         .map(|c| c.status == "running" || c.status == "paused")
         .unwrap_or(false);
     if !running {
-        return conflict(format!(
+        return ErrorMessage::conflict(format!(
             "Cannot kill container: {id}: Container {id} is not running"
         ));
     }
     let sig = q
         .signal
         .as_deref()
-        .map(|s| parse_signal(s, libc::SIGKILL))
+        .map(|s| Signal::parse(s, libc::SIGKILL))
         .unwrap_or(libc::SIGKILL);
     // A non-terminating signal (SIGWINCH/SIGCONT/SIGURG/SIGCHLD/…) does NOT kill the process, so the
     // container must stay running — only a signal whose default disposition is "terminate" transitions it
     // to exited. Without this, `docker kill --signal SIGWINCH` fabricated an `exited` state (and freed the
     // host ports) while the guest was still alive.
-    let terminates = signal_terminates_by_default(sig);
+    let terminates = Signal::terminates_by_default(sig);
     if let Some(l) = g.live.get(&full) {
         if terminates {
             l.stop_requested
                 .store(true, std::sync::atomic::Ordering::SeqCst); // deliberate stop: no auto-restart
         }
         if let Some(pid) = *l.pid.lock().unwrap() {
-            kill_group(pid as i32, sig);
+            Process::new(pid as i32).signal(sig);
         } // whole group, not just the leader
     }
     if !terminates {
@@ -184,7 +182,7 @@ pub(crate) async fn containers_kill(
         // container to exited if the process actually dies later.
         return StatusCode::NO_CONTENT.into_response();
     }
-    crate::containers::ports::stop(&full); // free published host ports (docker kill releases the binding)
+    crate::containers::ports::Forwarders::stop(&full); // free published host ports (docker kill releases the binding)
     if let Some(c) = g.containers.get_mut(&full) {
         c.status = "exited".into();
         c.finished_at = now_secs();
@@ -203,7 +201,7 @@ pub(crate) async fn containers_kill(
         &full,
         json!({"name": cname, "image": cimage}),
     );
-    save_state(&g, &a.state_path);
+    Store::save(&g, &a.state_path);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -219,11 +217,11 @@ pub(crate) async fn containers_restart(
     Path(id): Path<String>,
     Query(q): Query<StopQ>,
 ) -> Response {
-    let (def_sig, def_t) = resolve_stop_defaults(&a, &id).await;
+    let (def_sig, def_t) = Containers::stop_defaults(&a, &id).await;
     let sig = q
         .signal
         .as_deref()
-        .map(|s| parse_signal(s, def_sig))
+        .map(|s| Signal::parse(s, def_sig))
         .unwrap_or(def_sig);
     let t = q.t.unwrap_or(def_t).max(0);
     // Stop the running process (if any). `do_stop` blocks until the old reaper flips status to "exited"
@@ -231,13 +229,13 @@ pub(crate) async fn containers_restart(
     let _ = do_stop(&a, &id, sig, t).await;
     let (c, vols, live) = {
         let mut g = a.inner.lock().await;
-        let full = match resolve_cid(&g, &id) {
+        let full = match ContainerId::resolve(&g, &id) {
             Some(f) => f,
-            None => return no_such(&id),
+            None => return ErrorMessage::no_such(&id),
         };
         let c = match g.containers.get(&full).cloned() {
             Some(c) => c,
-            None => return no_such(&id),
+            None => return ErrorMessage::no_such(&id),
         };
         // Replace the spent Live with a fresh one (mirrors maybe_restart / start's spawn).
         let live = Live::new();
@@ -274,12 +272,14 @@ pub(crate) async fn containers_restart(
 // ---- container control: pause / unpause -------------------------------------
 /// POST /containers/:id/(un)pause -- hl has no freezer cgroup, so it SIGSTOP/SIGCONTs the container's
 /// whole process group (see `freeze`) and flips the recorded status.
-pub(crate) async fn containers_pause(State(a): State<App>, Path(id): Path<String>) -> Response {
-    freeze(a, id, true).await
-}
+impl Containers {
+    pub(crate) async fn pause(State(a): State<App>, Path(id): Path<String>) -> Response {
+        freeze(a, id, true).await
+    }
 
-pub(crate) async fn containers_unpause(State(a): State<App>, Path(id): Path<String>) -> Response {
-    freeze(a, id, false).await
+    pub(crate) async fn unpause(State(a): State<App>, Path(id): Path<String>) -> Response {
+        freeze(a, id, false).await
+    }
 }
 
 /// docker pause/unpause. macOS has no freezer cgroup, but the container runs in its own process group
@@ -291,26 +291,29 @@ pub(crate) async fn containers_unpause(State(a): State<App>, Path(id): Path<Stri
 /// running container; unpause requires a paused one. Anything else (created/exited/restarting) is a 409
 /// — otherwise pausing an exited container would fake a `paused` state with no live process behind it,
 /// and a later unpause would mark it `running` again.
-pub(crate) fn freeze_allowed(status: &str, pause: bool) -> bool {
-    if pause {
-        status == "running"
-    } else {
-        status == "paused"
+struct Freezer;
+impl Freezer {
+    fn allowed(status: &str, pause: bool) -> bool {
+        if pause {
+            status == "running"
+        } else {
+            status == "paused"
+        }
     }
 }
 
 pub(crate) async fn freeze(a: App, id: String, pause: bool) -> Response {
     let mut g = a.inner.lock().await;
-    let Some(full) = resolve_cid(&g, &id) else {
-        return no_such(&id);
+    let Some(full) = ContainerId::resolve(&g, &id) else {
+        return ErrorMessage::no_such(&id);
     };
     let status = g
         .containers
         .get(&full)
         .map(|c| c.status.clone())
         .unwrap_or_default();
-    if !freeze_allowed(&status, pause) {
-        return conflict(format!(
+    if !Freezer::allowed(&status, pause) {
+        return ErrorMessage::conflict(format!(
             "Container {id} is not {}",
             if pause { "running" } else { "paused" }
         ));
@@ -319,7 +322,7 @@ pub(crate) async fn freeze(a: App, id: String, pause: bool) -> Response {
         let pid = pid as i32;
         let sig = if pause { libc::SIGSTOP } else { libc::SIGCONT };
         // pid is the group leader, so -pid is the container's process group id (pgid == leader pid).
-        kill_group(pid, sig);
+        Process::new(pid).signal(sig);
     }
     if let Some(c) = g.containers.get_mut(&full) {
         c.status = if pause {
@@ -328,7 +331,7 @@ pub(crate) async fn freeze(a: App, id: String, pause: bool) -> Response {
             "running".into()
         };
     }
-    save_state(&g, &a.state_path);
+    Store::save(&g, &a.state_path);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -348,7 +351,7 @@ mod tests {
             libc::SIGHUP,
         ] {
             assert!(
-                signal_terminates_by_default(sig),
+                Signal::terminates_by_default(sig),
                 "sig {sig} should terminate"
             );
         }
@@ -363,7 +366,7 @@ mod tests {
             libc::SIGTTOU,
         ] {
             assert!(
-                !signal_terminates_by_default(sig),
+                !Signal::terminates_by_default(sig),
                 "sig {sig} must NOT fabricate exit"
             );
         }
@@ -373,30 +376,33 @@ mod tests {
     // unpause needs a paused one; anything else is a 409, never a fake state flip.
     #[test]
     fn pause_only_from_running_unpause_only_from_paused() {
-        assert!(freeze_allowed("running", true), "pause a running container");
         assert!(
-            !freeze_allowed("exited", true),
+            Freezer::allowed("running", true),
+            "pause a running container"
+        );
+        assert!(
+            !Freezer::allowed("exited", true),
             "pause an exited container must be rejected"
         );
         assert!(
-            !freeze_allowed("created", true),
+            !Freezer::allowed("created", true),
             "pause a created container must be rejected"
         );
         assert!(
-            !freeze_allowed("paused", true),
+            !Freezer::allowed("paused", true),
             "double-pause must be rejected"
         );
 
         assert!(
-            freeze_allowed("paused", false),
+            Freezer::allowed("paused", false),
             "unpause a paused container"
         );
         assert!(
-            !freeze_allowed("running", false),
+            !Freezer::allowed("running", false),
             "unpause a running container must be rejected"
         );
         assert!(
-            !freeze_allowed("exited", false),
+            !Freezer::allowed("exited", false),
             "unpause an exited container must be rejected"
         );
     }

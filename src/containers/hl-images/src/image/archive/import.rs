@@ -24,14 +24,16 @@ impl Store {
         }
         // run_extract requests owner/perm/xattr preservation (findings 3/11) and tolerates unprivileged
         // device-node mknod failures (finding 12) while still failing a genuinely broken archive.
-        let extract = run_extract(&tmp, &rootfs);
+        let extract = Archive(&tmp).extract(&rootfs);
         let _ = std::fs::remove_file(&tmp);
         if let Err(e) = extract {
             let _ = std::fs::remove_dir_all(&target);
             return Err(e);
         }
-        let arch = detect_arch(&rootfs).unwrap_or(Arch::LinuxAarch64);
-        let cmd = default_shell(&rootfs);
+        let arch = Rootfs::new(&rootfs)
+            .architecture()
+            .unwrap_or(Arch::LinuxAarch64);
+        let cmd = Rootfs::new(&rootfs).default_command();
         let _ = std::fs::write(
             target.join("hl-image.json"),
             json!({ "name": name, "cmd": cmd }).to_string(),

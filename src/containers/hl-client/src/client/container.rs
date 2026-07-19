@@ -1,6 +1,5 @@
 //! Container endpoints.
 
-use bollard::container::LogOutput;
 use bollard::models::ContainerCreateBody;
 use bollard::query_parameters::{
     ListContainersOptionsBuilder, LogsOptionsBuilder, RemoveContainerOptionsBuilder,
@@ -74,12 +73,9 @@ impl Client {
         let mut stream = self.docker()?.logs(id, Some(opts));
         let mut out = Vec::new();
         while let Some(item) = stream.next().await {
-            out.extend_from_slice(&log_bytes(item?));
+            let output = item?;
+            out.extend_from_slice(&output.into_bytes());
         }
         Ok(out)
     }
-}
-
-fn log_bytes(o: LogOutput) -> bytes::Bytes {
-    o.into_bytes()
 }

@@ -43,6 +43,26 @@ pub(crate) struct CpuStats {
     pub throttling_data: ThrottlingData,
 }
 
+impl CpuStats {
+    /// Build one `cpu_stats`/`precpu_stats` block from the sampled process and host totals.
+    pub(crate) fn new(total: u64, system: u64) -> Self {
+        Self {
+            cpu_usage: CpuUsage {
+                total_usage: total,
+                usage_in_kernelmode: 0,
+                usage_in_usermode: total,
+            },
+            system_cpu_usage: system,
+            online_cpus: 1,
+            throttling_data: ThrottlingData {
+                periods: 0,
+                throttled_periods: 0,
+                throttled_time: 0,
+            },
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct CpuUsage {
     pub total_usage: u64,

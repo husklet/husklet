@@ -61,15 +61,15 @@ pub fn launch(
     // that computed nothing). A NULL pointer (`0`) is a legal kernel argument and binds no region.
     // Validating up front also guarantees we never cache a pipeline whose `CreateShader`/`CreatePipeline`
     // never actually reached the backend (this function returns before `sink.submit`).
-    let mut blob: Vec<u8> = Vec::new();
+    let mut blob = ParameterBlob::default();
     let mut entries: Vec<BindEntry> = Vec::new();
     let mut region = 0u32;
     for a in args {
         match a {
             KernelArg::Ptr(p) => {
                 // natural-align to 8 (pointer width), then store the device address in the blob.
-                align_blob(&mut blob, 8);
-                blob.extend_from_slice(&p.0.to_le_bytes());
+                blob.align(8);
+                blob.extend(&p.0.to_le_bytes());
                 if p.0 != 0 {
                     let (buf, off) = ctx.resolve(*p).ok_or_else(|| {
                         hl_log::hl_warn!(hl_log::tag::CUDA, "launch dangling arg ptr={:#x}", p.0);
@@ -89,8 +89,8 @@ pub fn launch(
                 region += 1;
             }
             KernelArg::Scalar(bytes) => {
-                align_blob(&mut blob, bytes.len().max(1) as u64);
-                blob.extend_from_slice(bytes);
+                blob.align(bytes.len().max(1));
+                blob.extend(bytes);
             }
         }
     }
@@ -143,7 +143,7 @@ pub fn launch(
         out.push(Cmd::WriteBuffer {
             id: param_buf,
             offset: 0,
-            data: blob,
+            data: blob.into_vec(),
         });
     }
     entries.insert(
@@ -232,9 +232,29 @@ fn validate_launch_dims(
 }
 
 /// Pad `blob` up to a natural-alignment boundary before appending the next kernel parameter.
-fn align_blob(blob: &mut Vec<u8>, align: u64) {
-    let a = align as usize;
-    while blob.len() % a != 0 {
-        blob.push(0);
+#[derive(Default)]
+struct ParameterBlob(Vec<u8>);
+
+impl ParameterBlob {
+    fn align(&mut self, alignment: usize) {
+        while self.0.len() % alignment != 0 {
+            self.0.push(0);
+        }
+    }
+
+    fn extend(&mut self, bytes: &[u8]) {
+        self.0.extend_from_slice(bytes);
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn into_vec(self) -> Vec<u8> {
+        self.0
     }
 }

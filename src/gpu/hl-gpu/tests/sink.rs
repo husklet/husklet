@@ -1,9 +1,7 @@
 //! `CommandSink` port test: a driver-style flow drives a [`RecordingSink`] test double and we assert it
 //! captured the negotiation, the submitted batch contents, and the fence wait — no socket, no GPU.
 
-use hl_gpu::protocol::model::capability::{
-    command_bits, format_bits, shader_payload, ALL_COMMANDS, COLOR_FORMATS,
-};
+use hl_gpu::protocol::model::capability::{shader_payload, ALL_COMMANDS, COLOR_FORMATS};
 use hl_gpu::protocol::model::command::*;
 use hl_gpu::protocol::model::descriptor::*;
 use hl_gpu::protocol::model::enums::*;
@@ -14,8 +12,8 @@ fn feature_request() -> FeatureRequest {
     FeatureRequest {
         wire_version: WIRE_VERSION,
         shader_payloads: shader_payload::SPIRV,
-        command_bits: command_bits(ALL_COMMANDS),
-        texture_formats: format_bits(COLOR_FORMATS),
+        command_bits: hl_gpu::Capabilities::command_bits(ALL_COMMANDS),
+        texture_formats: TextureFormat::bits(COLOR_FORMATS),
     }
 }
 

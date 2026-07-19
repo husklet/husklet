@@ -28,6 +28,7 @@ use hl_vulkan::adapter::spirv;
 use hl_vulkan::model::memory::{vk_buffer_usage, vk_format, vk_image_usage};
 use hl_vulkan::result::HL_API_VERSION;
 use hl_vulkan::service::{create, present, record, submit};
+use hl_vulkan::Instance;
 
 use hl_gpu::protocol::model::descriptor::{VertexAttr, VertexLayout};
 use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
@@ -87,8 +88,8 @@ fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
         );
         let mut sink = InProcessCommandSink::with_session(session, exec);
 
-        let inst = create::create_instance(HL_API_VERSION);
-        let mut d = create::create_device(&inst);
+        let inst = Instance::new(HL_API_VERSION);
+        let mut d = inst.create_device();
 
         // Color render target (RGBA8) + a D32 depth image that is BOTH a depth attachment and a
         // transfer-clear target (DEPTH_STENCIL_ATTACHMENT ⇒ RENDER_TARGET, TRANSFER_DST ⇒ COPY_DST).
@@ -117,13 +118,13 @@ fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
         let vs = create::create_shader_module_words(
             &mut d,
             &mut sink,
-            spirv::sample_compute_spirv("vsmain"),
+            spirv::Module::sample_compute("vsmain"),
         )
         .unwrap();
         let fs = create::create_shader_module_words(
             &mut d,
             &mut sink,
-            spirv::sample_compute_spirv("fsmain"),
+            spirv::Module::sample_compute("fsmain"),
         )
         .unwrap();
 
@@ -179,14 +180,14 @@ fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
         let vsize = verts.len() as u64;
         let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, vsize)
             .unwrap();
-        let mem = create::allocate_memory(&mut d, vsize).unwrap();
+        let mem = d.allocate_memory(vsize).unwrap();
         create::bind_buffer_memory(&mut d, vbuf, mem, 0).unwrap();
-        create::map_memory(&mut d, mem).unwrap();
+        d.map_memory(mem).unwrap();
         create::write_mapped(&mut d, mem, 0, &verts).unwrap();
 
         // Record: standalone depth clear → render pass (color CLEAR, depth LOAD to preserve it) → draw 6 → end.
-        let cb = record::allocate_command_buffer(&mut d);
-        record::begin(&mut d, cb, false).unwrap();
+        let cb = d.allocate_command_buffer();
+        d.begin_command_buffer(cb, false).unwrap();
         record::cmd_clear_depth_stencil_image(&mut d, cb, depth, clear_depth, 0, false).unwrap();
         record::cmd_begin_render_pass(
             &mut d,
@@ -204,8 +205,8 @@ fn clear_depth_stencil_image_occludes_a_depth_tested_draw_end_to_end() {
         record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
         record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
         record::cmd_draw(&mut d, cb, 6, 1, 0, 0).unwrap();
-        record::cmd_end_render_pass(&mut d, cb).unwrap();
-        record::end(&mut d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
+        d.end_command_buffer(cb).unwrap();
         submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
         let mut pixels = vec![0u8; (W * H * 4) as usize];
@@ -250,8 +251,8 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
     let mut sink = InProcessCommandSink::with_session(session, exec);
 
     // --- guest side: the real hl-vulkan driver services -------------------------------------------
-    let inst = create::create_instance(HL_API_VERSION);
-    let mut d = create::create_device(&inst);
+    let inst = Instance::new(HL_API_VERSION);
+    let mut d = inst.create_device();
 
     // vkCreateImage: an RGBA8 color render target (COLOR_ATTACHMENT ⇒ RENDER_TARGET usage).
     let target = create::create_image(
@@ -271,13 +272,13 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
     let vs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("vsmain"),
+        spirv::Module::sample_compute("vsmain"),
     )
     .unwrap();
     let fs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("fsmain"),
+        spirv::Module::sample_compute("fsmain"),
     )
     .unwrap();
 
@@ -325,20 +326,20 @@ fn graphics_triangle_renders_end_to_end_and_reads_back_the_cleared_target_and_co
     let vsize = verts.len() as u64;
     let vbuf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, vsize).unwrap();
-    let mem = create::allocate_memory(&mut d, vsize).unwrap();
+    let mem = d.allocate_memory(vsize).unwrap();
     create::bind_buffer_memory(&mut d, vbuf, mem, 0).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &verts).unwrap();
 
     // record: begin render pass (clear) → bind pipeline → bind vertex buffer → draw 3 → end pass.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_begin_render_pass(&mut d, cb, target, clear, true, None).unwrap();
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
     record::cmd_draw(&mut d, cb, 3, 1, 0, 0).unwrap();
-    record::cmd_end_render_pass(&mut d, cb).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_render_pass(cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
 
     // vkQueueSubmit — the whole frame (WriteBuffer flush + the render-pass Submit) goes to the executor.
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
@@ -405,8 +406,8 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
     );
     let mut sink = InProcessCommandSink::with_session(session, exec);
 
-    let inst = create::create_instance(HL_API_VERSION);
-    let mut d = create::create_device(&inst);
+    let inst = Instance::new(HL_API_VERSION);
+    let mut d = inst.create_device();
 
     // vkCreateSurfaceKHR + vkCreateSwapchainKHR (2 presentable images, real render-target textures).
     let surface =
@@ -414,7 +415,7 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
     let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
 
     // vkGetSwapchainImagesKHR → the presentable images' VkImage handles.
-    let images = present::get_swapchain_images(&d, swapchain).unwrap();
+    let images = d.swapchain_images(swapchain).unwrap();
     assert_eq!(
         images.len(),
         2,
@@ -439,17 +440,17 @@ fn swapchain_present_loop_reads_back_the_presented_image_end_to_end() {
         let expected = [(10 + frame) as u8, 102, 51, 255]; // BGRA readback of the above
 
         // vkAcquireNextImageKHR — the next image in round-robin order.
-        let idx = present::acquire_next_image(&mut d, swapchain).unwrap();
+        let idx = d.acquire_next_image(swapchain).unwrap();
         acquired_indices.push(idx);
         let acquired = images[idx as usize];
 
         // Record a render pass that CLEARS the acquired image to this frame's color, then submit — the
         // executor clears the image's REAL backing texture (fails if the image were not a real texture).
-        let cb = record::allocate_command_buffer(&mut d);
-        record::begin(&mut d, cb, false).unwrap();
+        let cb = d.allocate_command_buffer();
+        d.begin_command_buffer(cb, false).unwrap();
         record::cmd_begin_render_pass(&mut d, cb, acquired, clear, true, None).unwrap();
-        record::cmd_end_render_pass(&mut d, cb).unwrap();
-        record::end(&mut d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
+        d.end_command_buffer(cb).unwrap();
         submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
         // vkQueuePresentKHR — presents the rendered image (Cmd::Present names its real texture id) and
@@ -515,24 +516,24 @@ fn vkcube_style_multiframe_fence_and_resubmit_loop() {
     );
     let mut sink = InProcessCommandSink::with_session(session, exec);
 
-    let inst = create::create_instance(HL_API_VERSION);
-    let mut d = create::create_device(&inst);
+    let inst = Instance::new(HL_API_VERSION);
+    let mut d = inst.create_device();
 
     let surface =
         present::create_surface(&mut d, &mut sink, W, H, vk_format::B8G8R8A8_UNORM, 0).unwrap();
     let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
-    let images = present::get_swapchain_images(&d, swapchain).unwrap();
+    let images = d.swapchain_images(swapchain).unwrap();
 
     // Record ONE reusable command buffer PER swapchain image, ONCE, up front — the vkcube setup pattern.
     let clear = [51.0 / 255.0, 102.0 / 255.0, 153.0 / 255.0, 1.0];
     let per_image_cbs: Vec<_> = images
         .iter()
         .map(|&img| {
-            let cb = record::allocate_command_buffer(&mut d);
-            record::begin(&mut d, cb, false).unwrap(); // NOT one-time-submit → re-submittable every frame
+            let cb = d.allocate_command_buffer();
+            d.begin_command_buffer(cb, false).unwrap(); // NOT one-time-submit → re-submittable every frame
             record::cmd_begin_render_pass(&mut d, cb, img, clear, true, None).unwrap();
-            record::cmd_end_render_pass(&mut d, cb).unwrap();
-            record::end(&mut d, cb).unwrap();
+            d.end_render_pass(cb).unwrap();
+            d.end_command_buffer(cb).unwrap();
             cb
         })
         .collect();
@@ -551,18 +552,18 @@ fn vkcube_style_multiframe_fence_and_resubmit_loop() {
         // vkWaitForFences → the per-frame fence (signaled from its prior frame, or created signaled).
         submit::wait_for_fence(&mut d, &mut sink, fence).unwrap();
         assert!(
-            submit::fence_status(&d, fence).unwrap(),
+            d.is_fence_signaled(fence).unwrap(),
             "frame {frame}: fence is signaled after wait"
         );
         // vkResetFences → back to unsignaled before this frame's submit re-arms it.
-        submit::reset_fence(&mut d, fence).unwrap();
+        d.reset_fence(fence).unwrap();
         assert!(
-            !submit::fence_status(&d, fence).unwrap(),
+            !d.is_fence_signaled(fence).unwrap(),
             "frame {frame}: fence unsignaled after reset"
         );
 
         // vkAcquireNextImageKHR → the next image round-robin.
-        let idx = present::acquire_next_image(&mut d, swapchain).unwrap();
+        let idx = d.acquire_next_image(swapchain).unwrap();
         let cb = per_image_cbs[idx as usize];
 
         // vkQueueSubmit → RE-SUBMIT that image's pre-recorded buffer, signaling this frame's fence. Before
@@ -572,7 +573,7 @@ fn vkcube_style_multiframe_fence_and_resubmit_loop() {
         // vkWaitForFences → the submit's signal is now observable (synchronous executor).
         submit::wait_for_fence(&mut d, &mut sink, fence).unwrap();
         assert!(
-            submit::fence_status(&d, fence).unwrap(),
+            d.is_fence_signaled(fence).unwrap(),
             "frame {frame}: fence signaled by its submit"
         );
 
@@ -603,8 +604,8 @@ fn map_memory_reflects_device_output_end_to_end() {
     );
     let mut sink = InProcessCommandSink::with_session(session, exec);
 
-    let inst = create::create_instance(HL_API_VERSION);
-    let mut d = create::create_device(&inst);
+    let inst = Instance::new(HL_API_VERSION);
+    let mut d = inst.create_device();
 
     const N: u64 = 16; // 4 × u32
     const PATTERN: u32 = 0xDEAD_BEEF;
@@ -619,15 +620,15 @@ fn map_memory_reflects_device_output_end_to_end() {
     .unwrap();
     let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, N).unwrap();
     let dst_ir = d.buffers.get(&dst).unwrap().ir_id;
-    let mem = create::allocate_memory(&mut d, N).unwrap();
+    let mem = d.allocate_memory(N).unwrap();
     create::bind_buffer_memory(&mut d, dst, mem, 0).unwrap();
 
     // Device work: fill src with the pattern, then copy src → dst. No host write to dst's staging.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_fill_buffer(&mut d, cb, src, 0, N, PATTERN).unwrap();
     record::cmd_copy_buffer(&mut d, cb, src, dst, 0, 0, N).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     let expected: Vec<u8> = PATTERN
@@ -652,7 +653,7 @@ fn map_memory_reflects_device_output_end_to_end() {
     );
 
     // vkMapMemory's device→host readback: refresh the whole mapped allocation with dst's device bytes.
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     create::read_mapped(&mut d, &mut sink, mem, 0, u64::MAX).unwrap();
 
     // The mapped staging now reflects the GPU's current contents — exactly the device-computed pattern.
@@ -680,8 +681,8 @@ fn unmapped_host_write_reaches_the_device_end_to_end() {
     );
     let mut sink = InProcessCommandSink::with_session(session, exec);
 
-    let inst = create::create_instance(HL_API_VERSION);
-    let mut d = create::create_device(&inst);
+    let inst = Instance::new(HL_API_VERSION);
+    let mut d = inst.create_device();
 
     const N: u64 = 16;
     let payload: Vec<u8> = (0..N as u8).collect();
@@ -689,18 +690,18 @@ fn unmapped_host_write_reaches_the_device_end_to_end() {
     // A host-visible buffer the app stages into (TRANSFER_DST so the device accepts the write).
     let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, N).unwrap();
     let buf_ir = d.buffers.get(&buf).unwrap().ir_id;
-    let mem = create::allocate_memory(&mut d, N).unwrap();
+    let mem = d.allocate_memory(N).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
 
     // map → write → UNMAP, all BEFORE any submit.
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &payload).unwrap();
-    create::unmap_memory(&mut d, mem);
+    d.unmap_memory(mem);
 
     // An empty submit — the only device traffic is the pending host→device flush of the unmapped write.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     // The device buffer now holds exactly the bytes the app wrote before unmapping.
@@ -730,14 +731,14 @@ fn present_xrgb_readback_reorders_channels_end_to_end() {
     );
     let mut sink = InProcessCommandSink::with_session(session, exec);
 
-    let inst = create::create_instance(HL_API_VERSION);
-    let mut d = create::create_device(&inst);
+    let inst = Instance::new(HL_API_VERSION);
+    let mut d = inst.create_device();
 
     // An RGBA8 surface → the native readback is [R,G,B,A]; the XRGB convert must swap R↔B to [B,G,R,X].
     let surface =
         present::create_surface(&mut d, &mut sink, W, H, vk_format::R8G8B8A8_UNORM, 0).unwrap();
     let swapchain = present::create_swapchain(&mut d, &mut sink, surface, 2).unwrap();
-    let images = present::get_swapchain_images(&d, swapchain).unwrap();
+    let images = d.swapchain_images(swapchain).unwrap();
 
     // Clear to a color with three DISTINCT channels so the reorder is unambiguous: R=0.2, G=0.4, B=0.6.
     let clear = [0.2f32, 0.4, 0.6, 1.0];
@@ -745,13 +746,13 @@ fn present_xrgb_readback_reorders_channels_end_to_end() {
     let g = (0.4f32 * 255.0).round() as u8;
     let b = (0.6f32 * 255.0).round() as u8;
 
-    let idx = present::acquire_next_image(&mut d, swapchain).unwrap();
+    let idx = d.acquire_next_image(swapchain).unwrap();
     let acquired = images[idx as usize];
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_begin_render_pass(&mut d, cb, acquired, clear, true, None).unwrap();
-    record::cmd_end_render_pass(&mut d, cb).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_render_pass(cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
     present::queue_present(&mut d, &mut sink, swapchain, idx).unwrap();
 
@@ -788,8 +789,8 @@ fn color_write_mask_red_only_leaves_green_and_blue_untouched_end_to_end() {
             Box::new(FakeClock::new(0)),
         );
         let mut sink = InProcessCommandSink::with_session(session, exec);
-        let inst = create::create_instance(HL_API_VERSION);
-        let mut d = create::create_device(&inst);
+        let inst = Instance::new(HL_API_VERSION);
+        let mut d = inst.create_device();
         let target = create::create_image(
             &mut d,
             &mut sink,
@@ -804,13 +805,13 @@ fn color_write_mask_red_only_leaves_green_and_blue_untouched_end_to_end() {
         let vs = create::create_shader_module_words(
             &mut d,
             &mut sink,
-            spirv::sample_compute_spirv("vsmain"),
+            spirv::Module::sample_compute("vsmain"),
         )
         .unwrap();
         let fs = create::create_shader_module_words(
             &mut d,
             &mut sink,
-            spirv::sample_compute_spirv("fsmain"),
+            spirv::Module::sample_compute("fsmain"),
         )
         .unwrap();
         let layout = VertexLayout {
@@ -860,18 +861,18 @@ fn color_write_mask_red_only_leaves_green_and_blue_untouched_end_to_end() {
         let vsize = verts.len() as u64;
         let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, vsize)
             .unwrap();
-        let mem = create::allocate_memory(&mut d, vsize).unwrap();
+        let mem = d.allocate_memory(vsize).unwrap();
         create::bind_buffer_memory(&mut d, vbuf, mem, 0).unwrap();
-        create::map_memory(&mut d, mem).unwrap();
+        d.map_memory(mem).unwrap();
         create::write_mapped(&mut d, mem, 0, &verts).unwrap();
-        let cb = record::allocate_command_buffer(&mut d);
-        record::begin(&mut d, cb, false).unwrap();
+        let cb = d.allocate_command_buffer();
+        d.begin_command_buffer(cb, false).unwrap();
         record::cmd_begin_render_pass(&mut d, cb, target, clear, true, None).unwrap();
         record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
         record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
         record::cmd_draw(&mut d, cb, 6, 1, 0, 0).unwrap();
-        record::cmd_end_render_pass(&mut d, cb).unwrap();
-        record::end(&mut d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
+        d.end_command_buffer(cb).unwrap();
         submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
         let mut pixels = vec![0u8; (W * H * 4) as usize];
         sink.executor()
@@ -915,8 +916,8 @@ fn cull_mode_and_front_face_select_the_triangle_facing_end_to_end() {
             Box::new(FakeClock::new(0)),
         );
         let mut sink = InProcessCommandSink::with_session(session, exec);
-        let inst = create::create_instance(HL_API_VERSION);
-        let mut d = create::create_device(&inst);
+        let inst = Instance::new(HL_API_VERSION);
+        let mut d = inst.create_device();
         let target = create::create_image(
             &mut d,
             &mut sink,
@@ -931,13 +932,13 @@ fn cull_mode_and_front_face_select_the_triangle_facing_end_to_end() {
         let vs = create::create_shader_module_words(
             &mut d,
             &mut sink,
-            spirv::sample_compute_spirv("vsmain"),
+            spirv::Module::sample_compute("vsmain"),
         )
         .unwrap();
         let fs = create::create_shader_module_words(
             &mut d,
             &mut sink,
-            spirv::sample_compute_spirv("fsmain"),
+            spirv::Module::sample_compute("fsmain"),
         )
         .unwrap();
         let layout = VertexLayout {
@@ -980,18 +981,18 @@ fn cull_mode_and_front_face_select_the_triangle_facing_end_to_end() {
         let vsize = verts.len() as u64;
         let vbuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, vsize)
             .unwrap();
-        let mem = create::allocate_memory(&mut d, vsize).unwrap();
+        let mem = d.allocate_memory(vsize).unwrap();
         create::bind_buffer_memory(&mut d, vbuf, mem, 0).unwrap();
-        create::map_memory(&mut d, mem).unwrap();
+        d.map_memory(mem).unwrap();
         create::write_mapped(&mut d, mem, 0, &verts).unwrap();
-        let cb = record::allocate_command_buffer(&mut d);
-        record::begin(&mut d, cb, false).unwrap();
+        let cb = d.allocate_command_buffer();
+        d.begin_command_buffer(cb, false).unwrap();
         record::cmd_begin_render_pass(&mut d, cb, target, clear, true, None).unwrap();
         record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
         record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
         record::cmd_draw(&mut d, cb, 3, 1, 0, 0).unwrap();
-        record::cmd_end_render_pass(&mut d, cb).unwrap();
-        record::end(&mut d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
+        d.end_command_buffer(cb).unwrap();
         submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
         let mut pixels = vec![0u8; (W * H * 4) as usize];
         sink.executor()

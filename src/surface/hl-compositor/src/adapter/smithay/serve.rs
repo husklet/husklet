@@ -24,14 +24,18 @@ use smithay::wayland::socket::ListeningSocketSource;
 
 use hl_log::{hl_info, tag};
 
-#[cfg(all(target_os = "macos", feature = "macos-surface"))]
-fn with_platform_pool<T>(f: impl FnOnce() -> T) -> T {
-    objc2::rc::autoreleasepool(|_| f())
-}
+struct PlatformPool;
 
-#[cfg(not(all(target_os = "macos", feature = "macos-surface")))]
-fn with_platform_pool<T>(f: impl FnOnce() -> T) -> T {
-    f()
+impl PlatformPool {
+    #[cfg(all(target_os = "macos", feature = "macos-surface"))]
+    fn execute<T>(f: impl FnOnce() -> T) -> T {
+        objc2::rc::autoreleasepool(|_| f())
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "macos-surface")))]
+    fn execute<T>(f: impl FnOnce() -> T) -> T {
+        f()
+    }
 }
 
 use super::present::AdapterPresenter;
@@ -235,7 +239,7 @@ fn drive(
 
     let mut event_loop = event_loop;
     while !stop.load(Ordering::Relaxed) {
-        with_platform_pool(|| {
+        PlatformPool::execute(|| {
             let _tick = hl_log::hl_span!(tag::COMPOSITOR, "event_loop_tick");
             // Wake no later than the nearest owed repaint, so a throttled frame ships at its refresh boundary
             // instead of a whole tick late; otherwise sleep a full tick waiting on the socket.

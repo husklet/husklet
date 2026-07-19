@@ -67,7 +67,7 @@ fn readback(
     p: DevicePtr,
     len: usize,
 ) -> Vec<u8> {
-    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    let (buf, off): (BufferId, u64) = ctx.device_location(p).unwrap();
     sink.read_buffer(buf, off, len).unwrap()
 }
 
@@ -79,11 +79,11 @@ fn assert_oob(err: &GpuError) {
         "expected OutOfBounds, got {err:?}"
     );
     assert_eq!(
-        result::cu_result_from_gpu_error(err),
+        result::DriverStatus::from(err).code(),
         result::CUDA_ERROR_INVALID_VALUE
     );
     assert_ne!(
-        result::cu_result_from_gpu_error(err),
+        result::DriverStatus::from(err).code(),
         result::CUDA_SUCCESS,
         "NOT a faked success"
     );
@@ -279,7 +279,7 @@ fn async_ops_enforce_both_stream_validation_and_bounds() {
 
     // A valid async fill + sync works and lands.
     transfer::memset_elements_async(&mut c, &mut sink, good, p, 0x0707_0707, 4, 16).unwrap();
-    synchronize::stream_synchronize(&mut c, &mut sink, good).unwrap();
+    c.synchronize_stream(&mut sink, good).unwrap();
     assert_eq!(readback(&mut sink, &c, p, 64), vec![7u8; 64]);
 }
 
@@ -296,7 +296,7 @@ fn allocation_paths_use_checked_math_and_bounded_host_allocation() {
     // A single u64::MAX device alloc: `used + size` is a checked add in the budget guard → OOM, no wrap.
     let err = allocate::mem_alloc(&mut c, &mut sink, u64::MAX).unwrap_err();
     assert_eq!(
-        result::cu_result_from_gpu_error(&err),
+        result::DriverStatus::from(&err).code(),
         result::CUDA_ERROR_OUT_OF_MEMORY
     );
 
@@ -312,17 +312,17 @@ fn allocation_paths_use_checked_math_and_bounded_host_allocation() {
     // near-usize::MAX size returns None (OOM analogue), never a multi-GiB host allocation / abort.
     let mut small = CudaContext::new(CudaDeviceDesc::apple_default(1 << 20)); // 1 MiB budget
     assert!(
-        allocate::host_alloc(&mut small, (1 << 20) + 1).is_none(),
+        small.host_alloc((1 << 20) + 1).is_none(),
         "over-budget pinned host → None"
     );
     assert!(
-        allocate::host_alloc(&mut small, usize::MAX).is_none(),
+        small.host_alloc(usize::MAX).is_none(),
         "usize::MAX pinned host → None"
     );
     // A within-budget pinned host allocation is real and usable.
-    let base = allocate::host_alloc(&mut small, 4096).expect("within-budget host alloc");
+    let base = small.host_alloc(4096).expect("within-budget host alloc");
     assert!(base != 0);
-    allocate::host_free(&mut small, base).unwrap();
+    small.host_free(base).unwrap();
 }
 
 // ==================================================================================================
@@ -396,7 +396,7 @@ fn launch_with_stale_or_dangling_handles_never_panics_but_a_valid_launch_compute
     // A dangling pointer argument (freed) is likewise a hard error that dispatches nothing.
     let dead = allocate::mem_alloc(&mut c, &mut sink, (n * 4) as u64).unwrap();
     allocate::mem_free(&mut c, &mut sink, dead).unwrap();
-    let module = load_module::module_load_data(&mut c, AFFINE_PTX.as_bytes()).unwrap();
+    let module = c.load_module(AFFINE_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&c, module, "affine").unwrap();
     let bad_args = vec![
         KernelArg::Ptr(dead), // dangling

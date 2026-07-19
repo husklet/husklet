@@ -1,5 +1,6 @@
 /target/
 **/target/
+/artifacts/
 *.o
 /website/docs/
 dd.sock
@@ -27,3 +28,4 @@ reference/
 
 # pcachex libmap test generates these at runtime (O_CREAT); never commit them
 pclib_blob_*.bin
+.agents

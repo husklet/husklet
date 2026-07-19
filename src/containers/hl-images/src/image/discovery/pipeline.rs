@@ -1,42 +1,51 @@
 //! Ranking + dedup: score each [`DiscoveredImage`] and collapse duplicate tags to a single best entry.
 
 use super::*;
+use crate::registry::ImageRef;
 
 /// A coarse "richness" score for a [`DiscoveredImage`], used to pick the best entry when several
 /// directories resolve to the same tag (see `dedup_images`). A non-empty environment is the decisive
 /// signal: `poc/images` ships some images twice — a single-underscore hl-format dir whose sidecar
 /// recorded an empty `env`, AND a umoci bundle dir carrying the full OCI config — and the bundle one
 /// (real env) must win. The remaining run metadata break finer ties.
-pub fn image_score(img: &DiscoveredImage) -> i32 {
-    let mut s = 0;
-    if !img.env.is_empty() {
-        s += 1000;
+impl DiscoveredImage {
+    /// Metadata richness used for deterministic duplicate selection.
+    pub fn score(&self) -> i32 {
+        let mut s = 0;
+        if !self.env.is_empty() {
+            s += 1000;
+        }
+        if !self.entrypoint.is_empty() {
+            s += 10;
+        }
+        if !self.workdir.is_empty() {
+            s += 5;
+        }
+        // A recorded CMD beats the `/bin/sh` default the discovery fallback substitutes.
+        if self.cmd.len() != 1 || self.cmd[0] != "/bin/sh" {
+            s += 1;
+        }
+        s
     }
-    if !img.entrypoint.is_empty() {
-        s += 10;
-    }
-    if !img.workdir.is_empty() {
-        s += 5;
-    }
-    // A recorded CMD beats the `/bin/sh` default the discovery fallback substitutes.
-    if img.cmd.len() != 1 || img.cmd[0] != "/bin/sh" {
-        s += 1;
-    }
-    s
 }
 
 /// Collapse images that resolve to the same `repository:tag` down to a single best entry so lookup is
 /// deterministic regardless of `read_dir` order. Ranks by [`image_score`] (richest wins) and breaks
 /// exact ties on the name string so the survivor is stable across runs and machines.
-pub(super) fn dedup_images(mut imgs: Vec<DiscoveredImage>) -> Vec<DiscoveredImage> {
-    imgs.sort_by(|a, b| {
-        image_score(b)
-            .cmp(&image_score(a))
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    let mut seen = std::collections::HashSet::new();
-    imgs.retain(|i| seen.insert(repo_tag(&i.name)));
-    imgs
+pub(super) struct DiscoveredImages(Vec<DiscoveredImage>);
+
+impl DiscoveredImages {
+    pub(super) fn from_vec(images: Vec<DiscoveredImage>) -> Self {
+        Self(images)
+    }
+    pub(super) fn deduplicate(mut self) -> Vec<DiscoveredImage> {
+        self.0
+            .sort_by(|a, b| b.score().cmp(&a.score()).then_with(|| a.name.cmp(&b.name)));
+        let mut seen = std::collections::HashSet::new();
+        self.0
+            .retain(|i| seen.insert(ImageRef::from(&i.name).short()));
+        self.0
+    }
 }
 
 #[cfg(test)]
@@ -66,20 +75,20 @@ mod tests {
     #[test]
     fn image_score_env_is_decisive() {
         // A poor bundle scores 0; env alone is worth more than every finer signal combined.
-        assert_eq!(image_score(&base("x")), 0);
+        assert_eq!(base("x").score(), 0);
 
         let mut with_env = base("x");
         with_env.env = vec!["PATH=/usr/bin".to_string()];
-        assert_eq!(image_score(&with_env), 1000);
+        assert_eq!(with_env.score(), 1000);
 
         // The finer tie-breakers: entrypoint (+10), workdir (+5), non-default cmd (+1).
         let mut rich_but_no_env = base("x");
         rich_but_no_env.entrypoint = vec!["/entry".to_string()];
         rich_but_no_env.workdir = "/app".to_string();
         rich_but_no_env.cmd = vec!["/run".to_string()];
-        assert_eq!(image_score(&rich_but_no_env), 16);
+        assert_eq!(rich_but_no_env.score(), 16);
         // env still wins outright over all finer metadata combined.
-        assert!(image_score(&with_env) > image_score(&rich_but_no_env));
+        assert!(with_env.score() > rich_but_no_env.score());
     }
 
     #[test]
@@ -94,7 +103,7 @@ mod tests {
             vec![poor.clone(), rich.clone()],
             vec![rich.clone(), poor.clone()],
         ] {
-            let out = dedup_images(imgs);
+            let out = DiscoveredImages::from_vec(imgs).deduplicate();
             assert_eq!(out.len(), 1, "same tag collapses to one entry");
             assert_eq!(
                 out[0].env,
@@ -106,7 +115,7 @@ mod tests {
 
     #[test]
     fn dedup_keeps_distinct_tags() {
-        let out = dedup_images(vec![base("busybox"), base("alpine")]);
+        let out = DiscoveredImages::from_vec(vec![base("busybox"), base("alpine")]).deduplicate();
         assert_eq!(out.len(), 2);
     }
 }

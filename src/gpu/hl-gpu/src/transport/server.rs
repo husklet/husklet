@@ -9,7 +9,6 @@
 use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
 
-use crate::protocol::codec::decode_stream;
 use crate::protocol::model::capability::Capabilities;
 use crate::protocol::model::command::Cmd;
 use crate::transport::adapter::unix;
@@ -66,15 +65,26 @@ pub trait ConnectionHandler {
 
 /// Adapts a bare submit closure into a [`ConnectionHandler`] whose readback half always fails — the
 /// back-compat shim behind [`serve_connection`].
-struct SubmitOnly<H>(H);
+struct SubmitHandler<H>(H);
 
-impl<H, V> ConnectionHandler for SubmitOnly<H>
+impl<H, V> ConnectionHandler for SubmitHandler<H>
 where
     H: FnMut(&SubmitHeader, &[Cmd]) -> V,
     V: Into<Verdict>,
 {
     fn submit(&mut self, header: &SubmitHeader, batch: &[Cmd]) -> Verdict {
         (self.0)(header, batch).into()
+    }
+}
+
+/// Contains backend panics to one protocol operation so the connection remains usable.
+struct HandlerBoundary;
+
+impl HandlerBoundary {
+    /// Run one handler operation across the unwind boundary. On panic, the caller discards the operation's
+    /// result and emits a failure response without inspecting potentially partial backend state.
+    fn call<R>(op: impl FnOnce() -> R) -> Result<R, ()> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(op)).map_err(|_| ())
     }
 }
 
@@ -88,9 +98,9 @@ fn serve_loop<H: ConnectionHandler>(
     handler: &mut H,
 ) -> io::Result<()> {
     // The guest reads this off the connection and negotiates before advertising any API feature.
-    unix::write_handshake(stream, caps)?;
+    unix::Connection::new(stream).write_handshake(caps)?;
     loop {
-        let frame = match unix::read_frame_outcome(stream)? {
+        let frame = match unix::Connection::new(stream).read_frame_outcome()? {
             FrameOutcome::Frame(f) => f,
             FrameOutcome::Eof => return Ok(()), // peer closed the connection
             // An over-cap frame must NOT tear down the persistent connection (that drops the host's warm
@@ -99,8 +109,8 @@ fn serve_loop<H: ConnectionHandler>(
             // peer is genuinely gone, which propagates as an error (the connection really did end).
             FrameOutcome::TooLarge(header) => {
                 hl_log::hl_count!(hl_log::tag::TRANSPORT, "nacks");
-                unix::drain_payload(stream, header.len)?;
-                unix::write_ack(stream, ACK_FAIL)?;
+                unix::Connection::new(stream).drain_payload(header.len)?;
+                unix::Connection::new(stream).write_ack(ACK_FAIL)?;
                 continue;
             }
         };
@@ -108,11 +118,16 @@ fn serve_loop<H: ConnectionHandler>(
             // Device→host readback: decode the fixed request, serve it, and reply with the disjoint
             // length-prefixed response (never the 1-byte submit ack). A panicking readback op is contained
             // and failed rather than allowed to unwind the connection thread.
-            let bytes = ReadbackRequest::from_bytes(&frame.payload)
-                .and_then(|req| catch_handler(|| handler.read_buffer(&req)).unwrap_or(None));
+            let bytes = ReadbackRequest::from_bytes(&frame.payload).and_then(|req| {
+                HandlerBoundary::call(|| handler.read_buffer(&req)).unwrap_or(None)
+            });
             match bytes {
-                Some(bytes) => unix::write_readback_response(stream, READBACK_OK, &bytes)?,
-                None => unix::write_readback_response(stream, READBACK_FAIL, &[])?,
+                Some(bytes) => {
+                    unix::Connection::new(stream).write_readback_response(READBACK_OK, &bytes)?
+                }
+                None => {
+                    unix::Connection::new(stream).write_readback_response(READBACK_FAIL, &[])?
+                }
             }
             continue;
         }
@@ -120,7 +135,7 @@ fn serve_loop<H: ConnectionHandler>(
         // handler); a handler that PANICS on some op is caught and NACKed rather than allowed to unwind the
         // connection thread (which would drop the socket = `Broken pipe` for every later frame). Either way
         // the connection stays alive and serves the next frame.
-        let verdict = match decode_stream(&frame.payload) {
+        let verdict = match crate::protocol::codec::Decoder::stream(&frame.payload) {
             Ok(batch) => {
                 hl_log::hl_debug!(
                     hl_log::tag::TRANSPORT,
@@ -128,7 +143,8 @@ fn serve_loop<H: ConnectionHandler>(
                     frame.payload.len(),
                     batch.len()
                 );
-                catch_handler(|| handler.submit(&frame.header, &batch)).unwrap_or(Verdict::Nack)
+                HandlerBoundary::call(|| handler.submit(&frame.header, &batch))
+                    .unwrap_or(Verdict::Nack)
             }
             Err(_error) => {
                 hl_log::hl_warn!(
@@ -143,18 +159,8 @@ fn serve_loop<H: ConnectionHandler>(
         if matches!(verdict, Verdict::Nack) {
             hl_log::hl_count!(hl_log::tag::TRANSPORT, "nacks");
         }
-        unix::write_ack(stream, verdict.ack_byte())?;
+        unix::Connection::new(stream).write_ack(verdict.ack_byte())?;
     }
-}
-
-/// Run one handler op under [`catch_unwind`](std::panic::catch_unwind) so a panicking executor op (an
-/// `unwrap`/`expect`/index-out-of-bounds deep in a backend) is CONTAINED to that one frame — the serve loop
-/// turns it into a NACK and keeps the connection alive — instead of unwinding the connection thread and
-/// dropping the socket (which the guest observes as `Broken pipe` on every subsequent frame). `Err(())` means
-/// the op panicked. `AssertUnwindSafe` is sound here: on a panic we abandon the in-flight op's result and
-/// only ever NACK, never observe partially-mutated state.
-fn catch_handler<R>(op: impl FnOnce() -> R) -> Result<R, ()> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(op)).map_err(|_| ())
 }
 
 /// Serve one connection to completion: advertise `caps`, then loop reading framed submits, decoding each
@@ -175,7 +181,7 @@ where
     H: FnMut(&SubmitHeader, &[Cmd]) -> V,
     V: Into<Verdict>,
 {
-    serve_loop(stream, caps, &mut SubmitOnly(handler))
+    serve_loop(stream, caps, &mut SubmitHandler(handler))
 }
 
 /// Serve one connection to completion driving a [`ConnectionHandler`], which serves BOTH submit and the

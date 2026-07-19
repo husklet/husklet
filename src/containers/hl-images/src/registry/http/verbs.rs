@@ -27,28 +27,31 @@ pub(in crate::registry) fn get(
     // WorkingDir (this is exactly the layer path's `download_to_file`, which already uses `-sSL`).
     // Safe on manifest/non-redirected GETs (curl only redirects on a 3xx), and curl strips the
     // Authorization header on a cross-host redirect (the CDN URL is pre-signed, so no auth is needed).
-    run_curl(&with_auth(vec!["-L".into(), url.into()], accept, token))
+    Curl::execute(&with_auth(vec!["-L".into(), url.into()], accept, token))
 }
-pub(in crate::registry) fn get_with_basic(
-    url: &str,
-    creds: Option<&Credentials>,
-) -> Result<Resp, Error> {
-    let mut args = vec![url.to_string()];
-    if let Some(c) = creds {
-        args.push("-u".into());
-        args.push(format!("{}:{}", c.username, c.password));
+pub(in crate::registry) struct Request;
+impl Request {
+    pub(in crate::registry) fn get_with_basic(
+        url: &str,
+        creds: Option<&Credentials>,
+    ) -> Result<Resp, Error> {
+        let mut args = vec![url.to_string()];
+        if let Some(c) = creds {
+            args.push("-u".into());
+            args.push(format!("{}:{}", c.username, c.password));
+        }
+        Curl::execute(&args)
     }
-    run_curl(&args)
-}
-pub(in crate::registry) fn head(url: &str, token: Option<&str>) -> Result<u16, Error> {
-    run_curl(&with_auth(vec!["-I".into(), url.into()], None, token)).map(|r| r.status)
-}
-pub(in crate::registry) fn post(url: &str, token: Option<&str>) -> Result<Resp, Error> {
-    run_curl(&with_auth(
-        vec!["-X".into(), "POST".into(), url.into()],
-        None,
-        token,
-    ))
+    pub(in crate::registry) fn head(url: &str, token: Option<&str>) -> Result<u16, Error> {
+        Curl::execute(&with_auth(vec!["-I".into(), url.into()], None, token)).map(|r| r.status)
+    }
+    pub(in crate::registry) fn post(url: &str, token: Option<&str>) -> Result<Resp, Error> {
+        Curl::execute(&with_auth(
+            vec!["-X".into(), "POST".into(), url.into()],
+            None,
+            token,
+        ))
+    }
 }
 pub(in crate::registry) fn put_file(
     url: &str,
@@ -71,7 +74,7 @@ pub(in crate::registry) fn put_file(
         None,
         token,
     );
-    run_curl(&args)
+    Curl::execute(&args)
 }
 pub(in crate::registry) fn put_bytes(
     url: &str,

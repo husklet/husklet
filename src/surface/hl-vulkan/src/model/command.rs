@@ -9,6 +9,7 @@ use super::pipeline::PipelineKind;
 use super::sync::DeferredOp;
 use crate::VkQueryPool;
 use hl_gpu::protocol::model::command::Enc;
+use hl_gpu::{GpuError, Result};
 
 /// The Vulkan command-buffer lifecycle state (spec §6). Ported from MoltenVK's flag model:
 /// * `Initial`    — freshly allocated or reset; can only be begun.
@@ -239,6 +240,32 @@ impl CmdBufRec {
     /// A freshly-allocated command buffer (pool-owned, `Initial`).
     pub fn initial() -> Self {
         CmdBufRec::default()
+    }
+
+    /// Starts a fresh recording, replacing any prior executable contents.
+    pub fn begin(&mut self, one_time_submit: bool) {
+        self.reset_recording();
+        self.one_time_submit = one_time_submit;
+        self.state = CommandBufferState::Recording;
+    }
+
+    /// Completes an active recording and makes the command buffer executable.
+    pub fn end(&mut self) -> Result<()> {
+        if self.state != CommandBufferState::Recording {
+            return Err(GpuError::Invalid(
+                "vkEndCommandBuffer: buffer is not recording",
+            ));
+        }
+        self.state = CommandBufferState::Executable;
+        Ok(())
+    }
+
+    /// Requires the lifecycle state accepted by every `vkCmd*` recording operation.
+    pub fn require_recording(&mut self) -> Result<&mut Self> {
+        if self.state != CommandBufferState::Recording {
+            return Err(GpuError::Invalid("vkCmd*: command buffer is not recording"));
+        }
+        Ok(self)
     }
 
     /// The OCCLUSION-query sample footprint of one draw: the current scissor (or the full render

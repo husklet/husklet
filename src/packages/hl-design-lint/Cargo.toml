@@ -1,0 +1,12 @@
+[package]
+name = "hl-design-lint"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+english-pos-tagger = "0.1"
+wordnet-lemmatizer = "0.1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "visit"] }
+thiserror = "2"

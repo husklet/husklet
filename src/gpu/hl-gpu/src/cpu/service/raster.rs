@@ -3,10 +3,7 @@
 //! `SoftwareBackend::submit`, `clear_rect`, `raster_draw`, `exec_draw`, `exec_draw_indexed`,
 //! `raster_state`, and the draw-vertex helpers in `hl-gpu/src/software.rs`.
 
-use crate::cpu::format::{
-    clear_texel, is_srgb, load_texel_linear, rgba_channel_order, srgb_to_linear,
-    store_texel_linear, texel_bytes,
-};
+use crate::cpu::format::{load_texel_linear, store_texel_linear};
 use crate::cpu::model::pipeline::Pipeline;
 use crate::cpu::model::{pipeline, texture, texture_mut};
 use crate::protocol::model::descriptor::{BlendState, DepthState, StencilFaceState};
@@ -25,7 +22,7 @@ pub(crate) fn clear_target(
         let t = texture(res, texture_id)?;
         (t.desc.format, t.desc.width, t.desc.height)
     };
-    let texel = clear_texel(fmt, color)?;
+    let texel = fmt.clear_texel(color)?;
     let t = texture_mut(res, texture_id)?;
     let n = (w * h) as usize;
     t.pixels.clear();
@@ -50,7 +47,7 @@ pub(crate) fn clear_rect(
         let t = texture(res, texture_id)?;
         (t.desc.format, t.desc.width, t.desc.height)
     };
-    let texel = clear_texel(fmt, color)?;
+    let texel = fmt.clear_texel(color)?;
     let bpt = texel.len();
     let x0 = x.min(tw) as usize;
     let y0 = y.min(th) as usize;
@@ -126,52 +123,40 @@ struct RasterState {
     front_face: u32,
 }
 
-/// Fetch the pipeline's raster state (topology, per-target blend + write mask, slot-0 vertex stride, depth
-/// state, cull + front_face) if it is a render pipeline whose first vertex layout can carry positions.
-/// `None` => nothing to rasterize.
-fn raster_state(res: &SessionResources, pipeline_id: Option<u32>) -> Result<Option<RasterState>> {
-    let pid = match pipeline_id {
-        Some(p) => p,
-        None => return Ok(None),
-    };
-    match pipeline(res, pid)? {
-        Pipeline::Render {
-            vertex_layouts,
-            topology,
-            blends,
-            write_masks,
-            cull,
-            front_face,
-            depth,
-            ..
-        } => {
-            let stride = match vertex_layouts.first() {
-                Some(l) if l.stride as usize >= 8 => l.stride as usize,
-                _ => return Ok(None),
-            };
-            Ok(Some(RasterState {
-                topology: *topology,
-                blends: blends.clone(),
-                write_masks: write_masks.clone(),
-                stride,
-                depth: depth.clone(),
-                cull: *cull,
-                front_face: *front_face,
-            }))
+impl RasterState {
+    /// Resolve the bound pipeline's fixed-function raster state. `None` means there is nothing to draw.
+    fn resolve(res: &SessionResources, pipeline_id: Option<u32>) -> Result<Option<Self>> {
+        let pid = match pipeline_id {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        match pipeline(res, pid)? {
+            Pipeline::Render {
+                vertex_layouts,
+                topology,
+                blends,
+                write_masks,
+                cull,
+                front_face,
+                depth,
+                ..
+            } => {
+                let stride = match vertex_layouts.first() {
+                    Some(l) if l.stride as usize >= 8 => l.stride as usize,
+                    _ => return Ok(None),
+                };
+                Ok(Some(Self {
+                    topology: *topology,
+                    blends: blends.clone(),
+                    write_masks: write_masks.clone(),
+                    stride,
+                    depth: depth.clone(),
+                    cull: *cull,
+                    front_face: *front_face,
+                }))
+            }
+            Pipeline::Compute { .. } => Ok(None),
         }
-        Pipeline::Compute { .. } => Ok(None),
-    }
-}
-
-/// Resolve the active depth attachment for a draw: pair the render pass's depth-attachment texture with
-/// the pipeline's depth state. Depth testing runs only when BOTH are present.
-fn active_depth(
-    depth_tex: Option<u32>,
-    depth_state: Option<DepthState>,
-) -> Option<(u32, DepthState)> {
-    match (depth_tex, depth_state) {
-        (Some(t), Some(s)) => Some((t, s)),
-        _ => None,
     }
 }
 
@@ -197,7 +182,7 @@ pub(crate) fn exec_draw(
         depth: depth_state,
         cull,
         front_face,
-    } = match raster_state(res, pipeline_id)? {
+    } = match RasterState::resolve(res, pipeline_id)? {
         Some(s) => s,
         None => return Ok(()),
     };
@@ -217,7 +202,7 @@ pub(crate) fn exec_draw(
         }
         out
     };
-    let depth = active_depth(depth_tex, depth_state);
+    let depth = depth_tex.zip(depth_state);
     for _ in 0..instance_count.max(1) {
         raster_draw(
             res,
@@ -259,7 +244,7 @@ pub(crate) fn exec_draw_indexed(
         depth: depth_state,
         cull,
         front_face,
-    } = match raster_state(res, pipeline_id)? {
+    } = match RasterState::resolve(res, pipeline_id)? {
         Some(s) => s,
         None => return Ok(()),
     };
@@ -312,7 +297,7 @@ pub(crate) fn exec_draw_indexed(
         }
         out
     };
-    let depth = active_depth(depth_tex, depth_state);
+    let depth = depth_tex.zip(depth_state);
     for _ in 0..instance_count.max(1) {
         raster_draw(
             res,
@@ -434,10 +419,10 @@ fn raster_draw_no_depth(
     front_face: u32,
 ) -> Result<()> {
     for (ti, (tex_id, fmt)) in targets.iter().enumerate() {
-        let order = rgba_channel_order(*fmt).ok_or(GpuError::Unsupported(
+        let order = fmt.rgba_channel_order().ok_or(GpuError::Unsupported(
             "software: draw into a non-4-channel color format",
         ))?;
-        let srgb = is_srgb(*fmt);
+        let srgb = fmt.is_srgb();
         let blend_enabled = blends.get(ti).map(|b| b.is_some()).unwrap_or(false);
         let write_mask = write_masks.get(ti).copied().unwrap_or(0xF);
         let (w, h, bpt) = {
@@ -445,7 +430,7 @@ fn raster_draw_no_depth(
             (
                 t.desc.width as usize,
                 t.desc.height as usize,
-                texel_bytes(t.desc.format)?,
+                t.desc.format.software_texel_bytes()?,
             )
         };
         if w == 0 || h == 0 {
@@ -476,7 +461,7 @@ fn raster_draw_no_depth(
                         Some(b) => b,
                         None => continue,
                     };
-                    let src = interp_color(&v, bary);
+                    let src = DrawVertex::interpolate_color(&v, bary);
                     let texel = &mut t.pixels[idx * bpt..idx * bpt + bpt];
                     write_fragment(texel, order, srgb, *fmt, blend_enabled, write_mask, src)?;
                     covered[idx] = true;
@@ -612,7 +597,7 @@ fn raster_draw_depth(
 
                 // Color + depth update only when BOTH the stencil and depth tests pass.
                 if s_pass && d_pass {
-                    win[idx] = Some(interp_color(&v, bary));
+                    win[idx] = Some(DrawVertex::interpolate_color(&v, bary));
                     if state.depth_write {
                         depth_buf[idx] = z;
                     }
@@ -637,13 +622,13 @@ fn raster_draw_depth(
 
     // Composite the winning fragments into every color attachment.
     for (ti, (tex_id, fmt)) in targets.iter().enumerate() {
-        let order = rgba_channel_order(*fmt).ok_or(GpuError::Unsupported(
+        let order = fmt.rgba_channel_order().ok_or(GpuError::Unsupported(
             "software: draw into a non-4-channel color format",
         ))?;
-        let srgb = is_srgb(*fmt);
+        let srgb = fmt.is_srgb();
         let blend_enabled = blends.get(ti).map(|b| b.is_some()).unwrap_or(false);
         let write_mask = write_masks.get(ti).copied().unwrap_or(0xF);
-        let bpt = texel_bytes(texture(res, *tex_id)?.desc.format)?;
+        let bpt = texture(res, *tex_id)?.desc.format.software_texel_bytes()?;
         let t = texture_mut(res, *tex_id)?;
         for (idx, winner) in win.iter().enumerate() {
             if let Some(src) = *winner {
@@ -666,15 +651,6 @@ fn barycentric(fb: &[[f32; 2]; 3], c: [f32; 2], area: f32) -> Option<[f32; 3]> {
         return None;
     }
     Some([e0 / area, e1 / area, e2 / area])
-}
-
-/// Barycentric-interpolate the straight-alpha vertex color at a fragment.
-fn interp_color(v: &[DrawVertex; 3], bary: [f32; 3]) -> [f32; 4] {
-    let mut src = [0f32; 4];
-    for k in 0..4 {
-        src[k] = bary[0] * v[0].color[k] + bary[1] * v[1].color[k] + bary[2] * v[2].color[k];
-    }
-    src
 }
 
 /// Composite one source fragment into a target texel: premultiplied linear-light source-over when the
@@ -713,7 +689,7 @@ fn write_fragment(
         let a = src[3].clamp(0.0, 1.0);
         let s_lin = |k: usize| {
             if srgb {
-                srgb_to_linear(src[k].clamp(0.0, 1.0))
+                TextureFormat::srgb_to_linear(src[k].clamp(0.0, 1.0))
             } else {
                 src[k].clamp(0.0, 1.0)
             }
@@ -727,7 +703,7 @@ fn write_fragment(
         ];
         store_texel_linear(texel, order, srgb, out);
     } else {
-        let bytes = clear_texel(fmt, src)?;
+        let bytes = fmt.clear_texel(src)?;
         texel.copy_from_slice(&bytes);
     }
     // Restore the channels the mask leaves untouched (logical R,G,B,A at byte indices `order[0..4]`).
@@ -756,6 +732,19 @@ struct DrawVertex {
     pos: [f32; 2],
     z: f32,
     color: [f32; 4],
+}
+
+impl DrawVertex {
+    /// Barycentric-interpolate this triangle's straight-alpha vertex color at a fragment.
+    fn interpolate_color(vertices: &[Self; 3], bary: [f32; 3]) -> [f32; 4] {
+        let mut color = [0f32; 4];
+        for channel in 0..4 {
+            color[channel] = bary[0] * vertices[0].color[channel]
+                + bary[1] * vertices[1].color[channel]
+                + bary[2] * vertices[2].color[channel];
+        }
+        color
+    }
 }
 
 fn read_vertex(data: &[u8], base: usize, stride: usize) -> DrawVertex {

@@ -10,22 +10,13 @@
 //! (parent+instruction[+context]) step recorded — bit-identical to that run; anything we cannot prove
 //! identical misses and re-runs.
 
+use crate::{Error, Sha256Digest};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fmt::{self, Display, Formatter};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-
-/// A deterministic non-crypto fallback id (FNV-1a, widened) matching the daemon's, used only when the
-/// `sha256sum` CLI is unavailable so cache ids still key deterministically (never empty/colliding).
-fn fake_id(seed: &str) -> String {
-    let mut h: u64 = 1469598103934665603;
-    for b in seed.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(1099511628211);
-    }
-    format!("{h:016x}{h:016x}{h:016x}{h:08x}")
-}
 
 /// Current unix time in whole seconds (0 before the epoch / on a clock error) — the `created` stamp on a
 /// stored cache layer's metadata. Informational only; never folded into a cache key.
@@ -36,176 +27,166 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// sha256 (lowercase hex, no `sha256:` prefix) of arbitrary bytes. Thin re-export of the crate's single
-/// digest helper (`crate::image::digest::sha256_hex`); kept here as the public `hl_images::build`
-/// surface external callers (the daemon's build handler/prune) already import.
-pub fn sha256_hex(data: &[u8]) -> String {
-    crate::image::digest::sha256_hex(data)
-}
-
-/// A deterministic content digest of an assembled rootfs: hash of a sorted
-/// (type,mode,nlink,size,symlink-target,path) listing combined with the sha256 of every regular file's
-/// contents. Including the mode means a permission change (e.g. `0644 -> 0755`) changes the digest, so
-/// image/cache identity tracks the executable bit and other mode/metadata; nlink/symlink-target fold in
-/// hardlink count and symlink target so topology/target changes are not aliased. Same tree -> same hash,
-/// independent of filesystem iteration order. Returns "" on failure.
-///
-/// Computed by a native in-process walk (see [`dir_digest`]) — the former `sh -c` find/sort/sha256sum
-/// pipeline is gone, removing the crate's last shell-injection surface. The serialization is our own
-/// canonical form and is NOT byte-compatible with the old GNU-tool output, so existing cache keys rotate
-/// once on rollout (a one-time miss + re-run, allowed by the module's CORRECTNESS RULE); it is
-/// self-consistent thereafter.
-pub fn rootfs_digest(rootfs: &Path) -> String {
-    dir_digest(rootfs).unwrap_or_default()
-}
-
-/// Deterministic content+metadata digest of a file or directory subtree at `p` (absolute host path):
-/// type, mode, hardlink count, symlink target and size of every entry plus the sha256 of each regular
-/// file's contents, sorted so it is independent of fs iteration order. A changed symlink target
-/// (`link -> aa` vs `link -> bb`) changes the digest; folding in hardlink count distinguishes a
-/// hardlinked tree from independent files with identical bytes, so a `COPY`/`ADD` cache key does not
-/// alias those. Used to make COPY/ADD cache keys content-addressed. Returns "" on failure or a
-/// missing/unreadable path (the caller then forces a miss rather than risk serving a stale layer).
-///
-/// Native in-process implementation (no `sh -c`/find/stat/sha256sum subprocess); the canonical
-/// serialization differs from the old GNU-tool output, so keys rotate once on rollout — see
-/// [`rootfs_digest`].
-pub fn path_digest(p: &Path) -> String {
-    let Ok(md) = std::fs::symlink_metadata(p) else {
-        return String::new(); // missing/unreadable -> force a cache miss
-    };
-    let ft = md.file_type();
-    if ft.is_dir() {
-        return dir_digest(p).unwrap_or_default();
-    }
-    // A single file / symlink / special node: hash a small canonical descriptor of just this entry.
-    let mut h = Sha256::new();
-    if ft.is_symlink() {
-        let tgt = std::fs::read_link(p)
-            .map(|t| t.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        h.update(format!("l {:o} {tgt}", md.mode() & 0o7777).as_bytes());
-    } else if ft.is_file() {
-        h.update(format!("f {:o} {} {}", md.mode() & 0o7777, md.nlink(), md.len()).as_bytes());
-        if let Some(hexd) = file_sha256(p) {
-            h.update(b" ");
-            h.update(hexd.as_bytes());
+/// Build-cache content and metadata digests.
+impl Sha256Digest {
+    /// Hashes one filesystem entry or tree, including runtime-relevant metadata.
+    pub fn build_path(path: &Path) -> Result<Self, Error> {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| Error::Digest(format!("inspect {}: {error}", path.display())))?;
+        let kind = metadata.file_type();
+        if kind.is_dir() {
+            return TreeDigest::read(path);
         }
-    } else {
-        // char/block/fifo/socket special — fold in rdev so a different device node digests differently.
-        h.update(
-            format!(
-                "s {:o} {} rdev={}",
-                md.mode() & 0o7777,
-                md.nlink(),
-                md.rdev()
-            )
-            .as_bytes(),
-        );
+
+        let mut hasher = Sha256::new();
+        if kind.is_symlink() {
+            let target = std::fs::read_link(path)
+                .map_err(|error| Error::Digest(format!("read link {}: {error}", path.display())))?
+                .to_string_lossy()
+                .into_owned();
+            hasher.update(format!("l {:o} {target}", metadata.mode() & 0o7777).as_bytes());
+        } else if kind.is_file() {
+            hasher.update(
+                format!(
+                    "f {:o} {} {}",
+                    metadata.mode() & 0o7777,
+                    metadata.nlink(),
+                    metadata.len()
+                )
+                .as_bytes(),
+            );
+            let digest = Sha256Digest::file(path)?;
+            hasher.update(b" ");
+            hasher.update(digest.to_string().as_bytes());
+        } else {
+            hasher.update(
+                format!(
+                    "s {:o} {} rdev={}",
+                    metadata.mode() & 0o7777,
+                    metadata.nlink(),
+                    metadata.rdev()
+                )
+                .as_bytes(),
+            );
+        }
+        Ok(Sha256Digest::from_hasher(hasher))
     }
-    hex_lower(&h.finalize())
 }
 
-/// The shared directory-subtree digester behind [`rootfs_digest`] and [`path_digest`]'s dir branch: one
-/// hand-rolled recursive walk that records a canonical metadata line per entry plus the sha256 of each
-/// regular file's contents, sorts both listings (so the result is independent of fs iteration order), and
-/// hashes the concatenation. Symlinks are recorded (type + target) but NOT followed, so a malicious
-/// symlink in the tree can't redirect the walk elsewhere. Returns `None` only if `root` itself can't be
-/// read as a directory (caller maps that to "" -> forced cache miss).
-fn dir_digest(root: &Path) -> Option<String> {
-    // `root` must be a readable directory; otherwise there is nothing to digest deterministically.
-    if !std::fs::symlink_metadata(root).ok()?.is_dir() {
-        return None;
-    }
-    let mut meta_lines: Vec<String> = Vec::new();
-    let mut file_lines: Vec<String> = Vec::new();
-    record_entry(root, root, &mut meta_lines, &mut file_lines);
-    meta_lines.sort();
-    file_lines.sort();
-    let mut h = Sha256::new();
-    for l in &meta_lines {
-        h.update(l.as_bytes());
-        h.update(b"\n");
-    }
-    h.update(b"--\n"); // separate the metadata section from the content-hash section unambiguously
-    for l in &file_lines {
-        h.update(l.as_bytes());
-        h.update(b"\n");
-    }
-    Some(hex_lower(&h.finalize()))
+/// Stateful canonical traversal behind [`Sha256Digest::build_path`].
+struct TreeDigest<'a> {
+    root: &'a Path,
+    metadata: Vec<String>,
+    files: Vec<String>,
 }
 
-/// Record `path`'s canonical metadata line (and, for a regular file, its content sha256), recursing into
-/// real subdirectories only. `root` anchors the rootfs-relative path so the listing is location-stable.
-fn record_entry(root: &Path, path: &Path, meta: &mut Vec<String>, files: &mut Vec<String>) {
-    let Ok(md) = std::fs::symlink_metadata(path) else {
-        return;
-    };
-    let ft = md.file_type();
-    let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
-    let mode = md.mode() & 0o7777;
-    if ft.is_dir() {
-        meta.push(format!("d {mode:o} {} {} {rel}", md.nlink(), md.len()));
-        if let Ok(entries) = std::fs::read_dir(path) {
-            for e in entries.flatten() {
-                record_entry(root, &e.path(), meta, files);
+impl<'a> TreeDigest<'a> {
+    fn read(root: &'a Path) -> Result<Sha256Digest, Error> {
+        let metadata = std::fs::symlink_metadata(root)
+            .map_err(|error| Error::Digest(format!("inspect {}: {error}", root.display())))?;
+        if !metadata.is_dir() {
+            return Err(Error::Digest(format!(
+                "digest tree is not a directory: {}",
+                root.display()
+            )));
+        }
+
+        let mut tree = Self {
+            root,
+            metadata: Vec::new(),
+            files: Vec::new(),
+        };
+        tree.scan(root)?;
+        tree.metadata.sort();
+        tree.files.sort();
+
+        let mut hasher = Sha256::new();
+        for line in &tree.metadata {
+            hasher.update(line.as_bytes());
+            hasher.update(b"\n");
+        }
+        hasher.update(b"--\n");
+        for line in &tree.files {
+            hasher.update(line.as_bytes());
+            hasher.update(b"\n");
+        }
+        Ok(Sha256Digest::from_hasher(hasher))
+    }
+
+    /// Records one entry and descends only into real directories, never through symlinks.
+    fn scan(&mut self, path: &Path) -> Result<(), Error> {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| Error::Digest(format!("inspect {}: {error}", path.display())))?;
+        let kind = metadata.file_type();
+        let relative = path
+            .strip_prefix(self.root)
+            .unwrap_or(path)
+            .to_string_lossy();
+        let mode = metadata.mode() & 0o7777;
+
+        if kind.is_dir() {
+            self.metadata.push(format!(
+                "d {mode:o} {} {} {relative}",
+                metadata.nlink(),
+                metadata.len()
+            ));
+            let entries = std::fs::read_dir(path)
+                .map_err(|error| Error::Digest(format!("read {}: {error}", path.display())))?;
+            for entry in entries {
+                let entry = entry
+                    .map_err(|error| Error::Digest(format!("read {}: {error}", path.display())))?;
+                self.scan(&entry.path())?;
             }
+        } else if kind.is_symlink() {
+            let target = std::fs::read_link(path)
+                .map_err(|error| Error::Digest(format!("read link {}: {error}", path.display())))?
+                .to_string_lossy()
+                .into_owned();
+            self.metadata.push(format!(
+                "l {mode:o} {} {relative} -> {target}",
+                metadata.nlink()
+            ));
+        } else if kind.is_file() {
+            self.metadata.push(format!(
+                "f {mode:o} {} {} {relative}",
+                metadata.nlink(),
+                metadata.len()
+            ));
+            let digest = Sha256Digest::file(path)?;
+            self.files.push(format!("{digest}  {relative}"));
+        } else {
+            self.metadata.push(format!(
+                "s {mode:o} {} rdev={} {relative}",
+                metadata.nlink(),
+                metadata.rdev()
+            ));
         }
-    } else if ft.is_symlink() {
-        let tgt = std::fs::read_link(path)
-            .map(|t| t.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        meta.push(format!("l {mode:o} {} {rel} -> {tgt}", md.nlink()));
-    } else if ft.is_file() {
-        meta.push(format!("f {mode:o} {} {} {rel}", md.nlink(), md.len()));
-        if let Some(hexd) = file_sha256(path) {
-            files.push(format!("{hexd}  {rel}"));
-        }
-    } else {
-        meta.push(format!(
-            "s {mode:o} {} rdev={} {rel}",
-            md.nlink(),
-            md.rdev()
-        ));
+        Ok(())
     }
 }
 
-/// Streaming lowercase-hex sha256 of a file's contents (no `sha256:` prefix); `None` if it can't be read.
-fn file_sha256(p: &Path) -> Option<String> {
-    let mut f = std::fs::File::open(p).ok()?;
-    let mut h = Sha256::new();
-    std::io::copy(&mut f, &mut h).ok()?;
-    Some(hex_lower(&h.finalize()))
-}
+/// Stable identity of one step in a parent-linked build-cache chain.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct CacheId(Sha256Digest);
 
-/// Lowercase-hex encode of raw digest bytes (32 bytes -> 64 chars).
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-        s.push(char::from_digit((b & 0x0f) as u32, 16).unwrap());
+impl CacheId {
+    /// Derives a step identity from its parent identity and normalized descriptor.
+    pub fn from_step(parent: Option<&Self>, descriptor: &str) -> Self {
+        let parent = parent.map(ToString::to_string).unwrap_or_default();
+        Self(Sha256Digest::from_bytes(
+            format!("{parent}\n{descriptor}").as_bytes(),
+        ))
     }
-    s
 }
 
-/// Chain hash for a step's cache id: sha256(parent + descriptor), falling back to a stable non-crypto id
-/// if `sha256sum` is unavailable so the cache still keys deterministically (never an empty/colliding id).
-pub fn cache_id(parent: &str, descriptor: &str) -> String {
-    let seed = format!("{parent}\n{descriptor}");
-    let h = sha256_hex(seed.as_bytes());
-    if h.len() == 64 {
-        h
-    } else {
-        fake_id(&seed)
+impl Display for CacheId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.0, formatter)
     }
 }
 
 /// Instructions that mutate the rootfs (so their cache layer needs a full snapshot). Everything else is
 /// config-only (ENV/CMD/ENTRYPOINT/LABEL/EXPOSE/USER/...) and stores just metadata.
-pub fn is_fs_inst(inst: &str) -> bool {
-    matches!(inst, "RUN" | "COPY" | "ADD" | "WORKDIR")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,10 +217,14 @@ mod tests {
         let f = root.join("tool");
         std::fs::write(&f, b"#!/bin/sh\n").unwrap();
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let before = rootfs_digest(&root);
+        let before = Sha256Digest::build_path(&root).unwrap();
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let after = rootfs_digest(&root);
-        assert_eq!(before.len(), 64, "digest is a sha256 hex string");
+        let after = Sha256Digest::build_path(&root).unwrap();
+        assert_eq!(
+            before.to_string().len(),
+            64,
+            "digest is a sha256 hex string"
+        );
         assert_ne!(before, after, "0644 -> 0755 must change the rootfs digest");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -253,9 +238,9 @@ mod tests {
         let b = scratch("sym-b");
         symlink("aa", a.join("link")).unwrap();
         symlink("bb", b.join("link")).unwrap();
-        let da = path_digest(&a);
-        let db = path_digest(&b);
-        assert_eq!(da.len(), 64);
+        let da = Sha256Digest::build_path(&a).unwrap();
+        let db = Sha256Digest::build_path(&b).unwrap();
+        assert_eq!(da.to_string().len(), 64);
         assert_ne!(
             da, db,
             "link -> aa and link -> bb must produce distinct digests"
@@ -275,9 +260,9 @@ mod tests {
         std::fs::hard_link(linked.join("a"), linked.join("b")).unwrap();
         std::fs::write(indep.join("a"), b"same bytes\n").unwrap();
         std::fs::write(indep.join("b"), b"same bytes\n").unwrap();
-        let dl = path_digest(&linked);
-        let di = path_digest(&indep);
-        assert_eq!(dl.len(), 64);
+        let dl = Sha256Digest::build_path(&linked).unwrap();
+        let di = Sha256Digest::build_path(&indep).unwrap();
+        assert_eq!(dl.to_string().len(), 64);
         assert_ne!(
             dl, di,
             "hardlinked tree must digest differently from independent files"
@@ -295,7 +280,7 @@ mod tests {
         let root = base.join("O'Brien's rootfs");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("file"), b"data\n").unwrap();
-        let d = rootfs_digest(&root);
+        let d = Sha256Digest::build_path(&root).unwrap().to_string();
         assert_eq!(
             d.len(),
             64,
@@ -311,7 +296,7 @@ mod tests {
         let dir = base.join("can't stop");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("f"), b"x\n").unwrap();
-        let d = path_digest(&dir);
+        let d = Sha256Digest::build_path(&dir).unwrap().to_string();
         assert_eq!(
             d.len(),
             64,
@@ -323,7 +308,7 @@ mod tests {
         let dir2 = base.join("won't stop");
         std::fs::create_dir_all(&dir2).unwrap();
         std::fs::write(dir2.join("f"), b"y\n").unwrap();
-        assert_ne!(d, path_digest(&dir2));
+        assert_ne!(d, Sha256Digest::build_path(&dir2).unwrap().to_string());
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -343,25 +328,29 @@ mod tests {
         std::fs::create_dir_all(b.join("d1")).unwrap();
         std::fs::write(b.join("d1").join("x"), b"hello\n").unwrap();
 
-        let da = rootfs_digest(&a);
-        let db = rootfs_digest(&b);
-        assert_eq!(da.len(), 64);
-        assert!(da.chars().all(|c| c.is_ascii_hexdigit()));
+        let da = Sha256Digest::build_path(&a).unwrap();
+        let db = Sha256Digest::build_path(&b).unwrap();
+        assert_eq!(da.to_string().len(), 64);
+        assert!(da.to_string().chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(
             da, db,
             "identical trees must digest identically regardless of build order"
         );
         // The same call is stable across invocations.
-        assert_eq!(da, rootfs_digest(&a), "digest must be stable across calls");
+        assert_eq!(
+            da,
+            Sha256Digest::build_path(&a).unwrap(),
+            "digest must be stable across calls"
+        );
         // Changing one file's contents changes the digest.
         std::fs::write(b.join("d1").join("x"), b"HELLO\n").unwrap();
         assert_ne!(
             da,
-            rootfs_digest(&b),
+            Sha256Digest::build_path(&b).unwrap(),
             "a content change must change the digest"
         );
         // A missing/unreadable path digests to "" so the caller forces a miss.
-        assert_eq!(path_digest(&a.join("does-not-exist")), "");
+        assert!(Sha256Digest::build_path(&a.join("does-not-exist")).is_err());
         let _ = std::fs::remove_dir_all(&a);
         let _ = std::fs::remove_dir_all(&b);
     }
@@ -369,7 +358,14 @@ mod tests {
     #[test]
     fn fs_instructions_true() {
         for i in ["RUN", "COPY", "ADD", "WORKDIR"] {
-            assert!(is_fs_inst(i), "{i} should be an fs instruction");
+            let instruction = crate::build::Instruction {
+                name: i.into(),
+                arguments: String::new(),
+            };
+            assert!(
+                instruction.mutates_filesystem(),
+                "{i} should be an fs instruction"
+            );
         }
     }
     #[test]
@@ -383,33 +379,55 @@ mod tests {
             "FROM",
             "ENTRYPOINT",
         ] {
-            assert!(!is_fs_inst(i), "{i} should NOT be an fs instruction");
+            let instruction = crate::build::Instruction {
+                name: i.into(),
+                arguments: String::new(),
+            };
+            assert!(
+                !instruction.mutates_filesystem(),
+                "{i} should NOT be an fs instruction"
+            );
         }
         // match is exact/case-sensitive.
-        assert!(!is_fs_inst("run"));
-        assert!(!is_fs_inst(""));
+        assert!(!crate::build::Instruction {
+            name: "run".into(),
+            arguments: String::new()
+        }
+        .mutates_filesystem());
+        assert!(!crate::build::Instruction {
+            name: String::new(),
+            arguments: String::new()
+        }
+        .mutates_filesystem());
     }
 
     #[test]
     fn cache_id_is_deterministic() {
-        let a = cache_id("parent-a", "RUN echo hi");
-        let b = cache_id("parent-a", "RUN echo hi");
+        let root = CacheId::from_step(None, "RUN echo hi");
+        assert_eq!(
+            root.to_string(),
+            "dfc02a1c1ecdab159ee1d69e02af9dc1eaf5e2e693507a094503c9842779f9bb"
+        );
+
+        let parent = CacheId::from_step(None, "parent-a");
+        let a = CacheId::from_step(Some(&parent), "RUN echo hi");
+        let b = CacheId::from_step(Some(&parent), "RUN echo hi");
         assert_eq!(a, b);
-        assert_eq!(a.len(), 64);
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(a.to_string().len(), 64);
+        assert!(a.to_string().chars().all(|c| c.is_ascii_hexdigit()));
     }
     #[test]
     fn cache_id_diverges_on_parent() {
         assert_ne!(
-            cache_id("parent-a", "RUN echo hi"),
-            cache_id("parent-b", "RUN echo hi")
+            CacheId::from_step(Some(&CacheId::from_step(None, "parent-a")), "RUN echo hi"),
+            CacheId::from_step(Some(&CacheId::from_step(None, "parent-b")), "RUN echo hi")
         );
     }
     #[test]
     fn cache_id_diverges_on_descriptor() {
         assert_ne!(
-            cache_id("parent-a", "RUN echo hi"),
-            cache_id("parent-a", "RUN echo bye")
+            CacheId::from_step(Some(&CacheId::from_step(None, "parent-a")), "RUN echo hi"),
+            CacheId::from_step(Some(&CacheId::from_step(None, "parent-a")), "RUN echo bye")
         );
     }
 }
@@ -430,13 +448,13 @@ impl BuildCache {
         }
     }
 
-    fn layer_dir(&self, cache_id: &str) -> PathBuf {
-        self.layers_dir.join(cache_id)
+    fn layer_dir(&self, id: &CacheId) -> PathBuf {
+        self.layers_dir.join(id.to_string())
     }
 
     /// Load a cache layer's metadata iff it is present AND complete (an fs layer's rootfs snapshot must
     /// exist). Returns None on any miss so a partial/corrupt layer is never served as a hit.
-    pub fn load_layer(&self, id: &str) -> Option<Value> {
+    pub fn load_layer(&self, id: &CacheId) -> Option<Value> {
         let dir = self.layer_dir(id);
         let meta: Value =
             serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
@@ -449,7 +467,7 @@ impl BuildCache {
 
     /// Materialize a cached fs layer's rootfs snapshot into `dst` (the live stage rootfs), replacing it.
     /// Returns false on failure — the caller aborts the build rather than continue on a wrong rootfs.
-    pub fn materialize(&self, id: &str, dst: &Path) -> bool {
+    pub fn materialize(&self, id: &CacheId, dst: &Path) -> bool {
         let src = self.layer_dir(id).join("rootfs");
         if !src.is_dir() {
             return false;
@@ -469,8 +487,8 @@ impl BuildCache {
     #[allow(clippy::too_many_arguments)]
     pub fn store_layer(
         &self,
-        id: &str,
-        parent: &str,
+        id: &CacheId,
+        parent: Option<&CacheId>,
         inst: &str,
         args: &str,
         rootfs: &Path,
@@ -485,7 +503,11 @@ impl BuildCache {
         if std::fs::create_dir_all(&dir).is_err() {
             return;
         }
-        let fs = is_fs_inst(inst);
+        let fs = crate::build::Instruction {
+            name: inst.into(),
+            arguments: args.into(),
+        }
+        .mutates_filesystem();
         if fs {
             let lr = dir.join("rootfs");
             if !matches!(std::process::Command::new("cp").arg("-a").arg(rootfs).arg(&lr).status(), Ok(s) if s.success())
@@ -494,6 +516,7 @@ impl BuildCache {
                 return;
             }
         }
+        let parent = parent.map(ToString::to_string).unwrap_or_default();
         let meta = json!({"v": 1, "parent": parent, "inst": inst, "args": args, "fs": fs,
             "created": now_secs(), "cmd": cmd, "entrypoint": entrypoint, "workdir": workdir,
             "env": env, "labels": labels});

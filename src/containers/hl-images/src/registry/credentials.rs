@@ -1,6 +1,5 @@
 //! Registry credentials as sent by the CLI in the `X-Registry-Auth` header.
 
-use super::*;
 use serde_json::Value;
 
 /// Credentials for a registry, as sent by the CLI in the `X-Registry-Auth` header.
@@ -19,7 +18,7 @@ impl Credentials {
 
     /// Decode docker's base64-encoded `X-Registry-Auth` JSON (`{username,password,...}`).
     pub fn from_x_registry_auth(b64: &str) -> Option<Credentials> {
-        let json = base64_decode(b64.trim())?;
+        let json = Self::decode(b64.trim())?;
         let v: Value = serde_json::from_slice(&json).ok()?;
         Some(Credentials {
             username: v["username"].as_str().unwrap_or_default().to_string(),
@@ -28,6 +27,33 @@ impl Credentials {
     }
     pub(super) fn is_empty(&self) -> bool {
         self.username.is_empty() && self.password.is_empty()
+    }
+
+    fn decode(source: &str) -> Option<Vec<u8>> {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut table = [255u8; 256];
+        for (index, byte) in ALPHABET.iter().copied().enumerate() {
+            table[byte as usize] = index as u8;
+        }
+        table[b'-' as usize] = 62;
+        table[b'_' as usize] = 63;
+        let (mut bits, mut count, mut output) = (0u32, 0, Vec::new());
+        for byte in source.bytes() {
+            if matches!(byte, b'=' | b'\n' | b'\r') {
+                continue;
+            }
+            let value = table[byte as usize];
+            if value == 255 {
+                return None;
+            }
+            bits = (bits << 6) | u32::from(value);
+            count += 6;
+            if count >= 8 {
+                count -= 8;
+                output.push((bits >> count) as u8);
+            }
+        }
+        Some(output)
     }
 }
 
@@ -73,6 +99,12 @@ mod tests {
     fn invalid_base64_is_none() {
         // `!` is outside the base64 alphabet.
         assert!(Credentials::from_x_registry_auth("not valid base64 !!!").is_none());
+    }
+
+    #[test]
+    fn accepts_unpadded_url_safe_base64() {
+        assert_eq!(Credentials::decode("aGVsbG8"), Some(b"hello".to_vec()));
+        assert_eq!(Credentials::decode("-_8"), Some(vec![0xfb, 0xff]));
     }
 
     #[test]

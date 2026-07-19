@@ -152,7 +152,7 @@ use crate::scene::model::{
     PopupState, Positioner, Rect, SubsurfaceState, SurfaceId, SurfaceRole, Viewport, Visibility,
 };
 use crate::scene::port::{Clock, Presenter};
-use crate::scene::service::{constrain_popup_for_parent, surface_at, BufferChange, Commit};
+use crate::scene::service::{surface_at, BufferChange, Commit};
 use crate::{Compositor, FrameOutcome};
 
 use super::present::{AdapterPresenter, Observations, StoredBuffer};
@@ -468,7 +468,7 @@ impl HlState {
         // single LINEAR ARGB8888/XRGB8888 tranche, so GTK/Qt EGL + Chrome's ozone/GPU get a TRUTHFUL
         // format table to probe — and a client that hands us a LINEAR dmabuf has it CPU-imported by
         // `pread` (a real fd import, no GPU). See [`new_dmabuf_state`].
-        let dmabuf = new_dmabuf_state(dh);
+        let dmabuf = DmabufAdapter::new(dh).state();
         let xdg_shell = XdgShellState::new::<HlState>(dh);
         // Advertise `zxdg_decoration_manager_v1` so CSD-vs-SSD negotiation resolves instead of hanging.
         let xdg_decoration = XdgDecorationState::new::<HlState>(dh);
@@ -544,7 +544,7 @@ impl HlState {
         let mut outputs: Vec<(OutputId, WlOutputHandle)> = Vec::new();
         let mut output_globals: Vec<GlobalId> = Vec::new();
         for scene_output in engine.scene.outputs().to_vec() {
-            let (wl_output, output_global) = build_wl_output(dh, &scene_output);
+            let (wl_output, output_global) = WaylandOutput::new(dh, &scene_output).build();
             outputs.push((scene_output.id, wl_output));
             output_globals.push(output_global);
         }
@@ -669,7 +669,11 @@ impl HlState {
         set_data_device_selection::<HlState>(
             &display,
             &seat,
-            vec!["text/plain;charset=utf-8".into(), "text/plain".into(), "UTF8_STRING".into()],
+            vec![
+                "text/plain;charset=utf-8".into(),
+                "text/plain".into(),
+                "UTF8_STRING".into(),
+            ],
             text,
         );
     }
@@ -965,15 +969,15 @@ impl HlState {
             let scale = cur.buffer_scale.max(1);
             // `wl_surface.set_buffer_transform` (double-buffered) — the rotation/flip the presenter applies
             // to the buffer so it displays upright. Always re-read so a reverted transform reverts too.
-            let transform = map_buffer_transform(cur.buffer_transform);
+            let transform = BufferTransform::from(cur.buffer_transform);
             let callbacks = std::mem::take(&mut cur.frame_callbacks);
             // `wl_surface.set_input_region` / `set_opaque_region` (both double-buffered, applied at commit).
             // The neutral scene models each as a single logical `Rect` and USES them: the input region gates
             // pointer hit-testing (`surface_at` → `accepts_input_at`), and the opaque region drives the
             // occlusion present-skip (`is_tree_dirty` → `opaque_covers`). Re-read every commit (like the
             // buffer transform / viewport) so a client that CLEARS its region reverts to the default.
-            let input_region = map_input_region(&cur.input_region);
-            let opaque_region = map_opaque_region(&cur.opaque_region);
+            let input_region = Region::new(&cur.input_region).input();
+            let opaque_region = Region::new(&cur.opaque_region).opaque();
             drop(attrs);
             // The just-applied `wp_viewport` state (src crop in logical coords, dst logical size), mirrored
             // into the neutral scene so it resolves the on-screen logical size and the presenter samples the
@@ -1027,9 +1031,11 @@ impl HlState {
                 // tight top-left RGBA the presenter composites identically — the dmabuf pixels are
                 // GENUINELY read from the client's fd (there is no GPU here), so the composited frame
                 // matches the buffer EXACTLY, just like shm.
-                match read_shm_rgba(&buffer)
-                    .or_else(|| read_dmabuf_rgba(&buffer))
-                    .or_else(|| read_single_pixel_rgba(&buffer))
+                let reader = BufferReader::new(&buffer);
+                match reader
+                    .shm_rgba()
+                    .or_else(|| reader.dmabuf_rgba())
+                    .or_else(|| reader.single_pixel_rgba())
                 {
                     Some((mut stored, format)) => {
                         stored.damage = buffer_damage.filter(|damage| !damage.is_empty());
@@ -1764,9 +1770,8 @@ impl HlState {
                 maximized,
                 fullscreen,
                 resizing,
-            } => self.configure_native_resize(
-                surface, width, height, maximized, fullscreen, resizing,
-            ),
+            } => self
+                .configure_native_resize(surface, width, height, maximized, fullscreen, resizing),
             InputCommand::ResizeSurfaceEnd { surface } => self.finish_native_resize(surface),
             InputCommand::PointerAxis {
                 horizontal,
@@ -2794,7 +2799,11 @@ impl SelectionHandler for HlState {
         }
         let Some(source) = source else { return };
         let mime_types = source.mime_types();
-        hl_debug!(tag::WAYLAND, "clipboard client source mimes={:?}", mime_types);
+        hl_debug!(
+            tag::WAYLAND,
+            "clipboard client source mimes={:?}",
+            mime_types
+        );
         let mime = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"]
             .into_iter()
             .find(|candidate| mime_types.iter().any(|mime| mime == candidate));
@@ -3097,10 +3106,14 @@ impl XdgShellHandler for HlState {
     /// ordinary commit path: `window_root` climbs it to its toplevel, whose present composites every popup
     /// in its tree at the resolved offset (`Scene::collect_popups_for_root`).
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
-        let neutral = map_positioner(&positioner);
+        let neutral = Positioner::from(&positioner);
         let parent = surface.get_parent_surface().and_then(|p| self.sid(&p));
         let geometry = parent
-            .map(|parent| constrain_popup_for_parent(&self.engine.scene, parent, &neutral))
+            .map(|parent| {
+                self.engine
+                    .scene
+                    .constrain_popup_for_parent(parent, &neutral)
+            })
             .unwrap_or_default();
         // Link the scene popup to its parent (toplevel or parent popup). Without a mapped parent we still
         // configure the client, but it cannot composite until its parent exists.
@@ -3120,7 +3133,10 @@ impl XdgShellHandler for HlState {
         // geometry, paired with `xdg_surface.configure`). MUST precede the client's first buffer attach.
         surface.with_pending_state(|state| {
             state.positioner = positioner;
-            state.geometry = rect_to_smithay(geometry);
+            state.geometry = Rectangle::new(
+                (geometry.x, geometry.y).into(),
+                (geometry.w, geometry.h).into(),
+            );
         });
         surface.send_configure().ok();
     }
@@ -3155,11 +3171,15 @@ impl XdgShellHandler for HlState {
         positioner: PositionerState,
         token: u32,
     ) {
-        let neutral = map_positioner(&positioner);
+        let neutral = Positioner::from(&positioner);
         let sid = self.sid(surface.wl_surface());
         let geometry = sid
             .and_then(|sid| self.engine.scene.popup_parent(sid))
-            .map(|parent| constrain_popup_for_parent(&self.engine.scene, parent, &neutral))
+            .map(|parent| {
+                self.engine
+                    .scene
+                    .constrain_popup_for_parent(parent, &neutral)
+            })
             .unwrap_or_default();
         if let Some(sid) = sid {
             if let Some(SurfaceRole::Popup(p)) = self.engine.scene.get_mut(sid).map(|s| &mut s.role)
@@ -3171,7 +3191,10 @@ impl XdgShellHandler for HlState {
         }
         surface.with_pending_state(|state| {
             state.positioner = positioner;
-            state.geometry = rect_to_smithay(geometry);
+            state.geometry = Rectangle::new(
+                (geometry.x, geometry.y).into(),
+                (geometry.w, geometry.h).into(),
+            );
         });
         surface.send_repositioned(token);
     }
@@ -3665,116 +3688,131 @@ impl Dispatch<WpTearingControlV1, TearingControlUserData> for HlState {
 /// / transform / LAYOUT POSITION + preferred mode so a binding client receives geometry (position +
 /// transform) + mode + scale + name + done consistent with what compose/present uses. Called once per
 /// scene output so a multi-output layout advertises a distinct `wl_output` per monitor.
-fn build_wl_output(dh: &DisplayHandle, scene: &Output) -> (WlOutputHandle, GlobalId) {
-    // Values sourced from the scene so `wl_output` reports exactly what the scene composites onto.
-    let name = scene.name.clone();
-    let (mode_w, mode_h) = (scene.mode_w, scene.mode_h);
-    let refresh_mhz = scene.refresh_mhz;
-    let scale = scene.scale.max(1);
-    let transform = buffer_transform_to_wl(scene.transform);
+struct WaylandOutput<'a> {
+    display: &'a DisplayHandle,
+    scene: &'a Output,
+}
 
-    // Physical size in mm assuming ~96 dpi (25.4 mm/inch) — a plausible value for toolkits that derive DPI
-    // from it; the pixel mode + scale below are the load-bearing fidelity, not the millimetre size.
-    let phys_w_mm = (mode_w as f64 / 96.0 * 25.4).round() as i32;
-    let phys_h_mm = (mode_h as f64 / 96.0 * 25.4).round() as i32;
+impl<'a> WaylandOutput<'a> {
+    fn new(display: &'a DisplayHandle, scene: &'a Output) -> Self {
+        Self { display, scene }
+    }
 
-    let output = WlOutputHandle::new(
-        name,
-        PhysicalProperties {
-            size: (phys_w_mm, phys_h_mm).into(),
-            subpixel: Subpixel::Unknown,
-            make: "hl".into(),
-            model: "hl-virtual".into(),
-        },
-    );
-    let global = output.create_global::<HlState>(dh);
+    fn build(self) -> (WlOutputHandle, GlobalId) {
+        let scene = self.scene;
+        // Values sourced from the scene so `wl_output` reports exactly what the scene composites onto.
+        let name = scene.name.clone();
+        let (mode_w, mode_h) = (scene.mode_w, scene.mode_h);
+        let refresh_mhz = scene.refresh_mhz;
+        let scale = scene.scale.max(1);
+        let transform = Transform::from(scene.transform);
 
-    // `refresh` on a smithay `Mode` is millihertz (same unit as the scene's `refresh_mhz`). The location is
-    // the output's layout position — smithay reports it as `wl_output.geometry.x/y` and derives xdg-output's
-    // `logical_position` from it, so a multi-output layout advertises each monitor at its own coordinates.
-    let mode = OutputMode {
-        size: (mode_w, mode_h).into(),
-        refresh: refresh_mhz as i32,
-    };
-    output.change_current_state(
-        Some(mode),
-        Some(transform),
-        Some(Scale::Integer(scale)),
-        Some((scene.pos_x, scene.pos_y).into()),
-    );
-    output.set_preferred(mode);
+        // Physical size in mm assuming ~96 dpi (25.4 mm/inch) — a plausible value for toolkits that derive DPI
+        // from it; the pixel mode + scale below are the load-bearing fidelity, not the millimetre size.
+        let phys_w_mm = (mode_w as f64 / 96.0 * 25.4).round() as i32;
+        let phys_h_mm = (mode_h as f64 / 96.0 * 25.4).round() as i32;
 
-    (output, global)
+        let output = WlOutputHandle::new(
+            name,
+            PhysicalProperties {
+                size: (phys_w_mm, phys_h_mm).into(),
+                subpixel: Subpixel::Unknown,
+                make: "hl".into(),
+                model: "hl-virtual".into(),
+            },
+        );
+        let global = output.create_global::<HlState>(self.display);
+
+        // `refresh` on a smithay `Mode` is millihertz (same unit as the scene's `refresh_mhz`). The location is
+        // the output's layout position — smithay reports it as `wl_output.geometry.x/y` and derives xdg-output's
+        // `logical_position` from it, so a multi-output layout advertises each monitor at its own coordinates.
+        let mode = OutputMode {
+            size: (mode_w, mode_h).into(),
+            refresh: refresh_mhz as i32,
+        };
+        output.change_current_state(
+            Some(mode),
+            Some(transform),
+            Some(Scale::Integer(scale)),
+            Some((scene.pos_x, scene.pos_y).into()),
+        );
+        output.set_preferred(mode);
+
+        (output, global)
+    }
 }
 
 /// Map a Smithay `xdg_positioner` [`PositionerState`] onto the neutral [`Positioner`] value type the
 /// scene's `place_popup` resolves. A straight field/enum translation — the placement math itself
 /// (anchor/gravity/offset + flip/slide/resize) lives in `scene::service::popup`, not here, so the neutral
 /// core owns the policy and the adapter only decodes the wire.
-fn map_positioner(p: &PositionerState) -> Positioner {
-    Positioner {
-        anchor_rect: Rect::new(
-            p.anchor_rect.loc.x,
-            p.anchor_rect.loc.y,
-            p.anchor_rect.size.w,
-            p.anchor_rect.size.h,
-        ),
-        size: (p.rect_size.w, p.rect_size.h),
-        anchor: map_anchor(p.anchor_edges),
-        gravity: map_gravity(p.gravity),
-        constraint_adjustment: map_constraint(p.constraint_adjustment),
-        offset: (p.offset.x, p.offset.y),
+impl From<&PositionerState> for Positioner {
+    fn from(p: &PositionerState) -> Self {
+        Self {
+            anchor_rect: Rect::new(
+                p.anchor_rect.loc.x,
+                p.anchor_rect.loc.y,
+                p.anchor_rect.size.w,
+                p.anchor_rect.size.h,
+            ),
+            size: (p.rect_size.w, p.rect_size.h),
+            anchor: p.anchor_edges.into(),
+            gravity: p.gravity.into(),
+            constraint_adjustment: p.constraint_adjustment.into(),
+            offset: (p.offset.x, p.offset.y),
+        }
     }
 }
 
 /// Translate the `xdg_positioner.set_anchor` edge onto the neutral [`Anchor`].
-fn map_anchor(a: WireAnchor) -> Anchor {
-    match a {
-        WireAnchor::None => Anchor::None,
-        WireAnchor::Top => Anchor::Top,
-        WireAnchor::Bottom => Anchor::Bottom,
-        WireAnchor::Left => Anchor::Left,
-        WireAnchor::Right => Anchor::Right,
-        WireAnchor::TopLeft => Anchor::TopLeft,
-        WireAnchor::BottomLeft => Anchor::BottomLeft,
-        WireAnchor::TopRight => Anchor::TopRight,
-        WireAnchor::BottomRight => Anchor::BottomRight,
-        _ => Anchor::None,
+impl From<WireAnchor> for Anchor {
+    fn from(a: WireAnchor) -> Self {
+        match a {
+            WireAnchor::None => Anchor::None,
+            WireAnchor::Top => Anchor::Top,
+            WireAnchor::Bottom => Anchor::Bottom,
+            WireAnchor::Left => Anchor::Left,
+            WireAnchor::Right => Anchor::Right,
+            WireAnchor::TopLeft => Anchor::TopLeft,
+            WireAnchor::BottomLeft => Anchor::BottomLeft,
+            WireAnchor::TopRight => Anchor::TopRight,
+            WireAnchor::BottomRight => Anchor::BottomRight,
+            _ => Anchor::None,
+        }
     }
 }
 
 /// Translate the `xdg_positioner.set_gravity` direction onto the neutral [`Gravity`].
-fn map_gravity(g: WireGravity) -> Gravity {
-    match g {
-        WireGravity::None => Gravity::None,
-        WireGravity::Top => Gravity::Top,
-        WireGravity::Bottom => Gravity::Bottom,
-        WireGravity::Left => Gravity::Left,
-        WireGravity::Right => Gravity::Right,
-        WireGravity::TopLeft => Gravity::TopLeft,
-        WireGravity::BottomLeft => Gravity::BottomLeft,
-        WireGravity::TopRight => Gravity::TopRight,
-        WireGravity::BottomRight => Gravity::BottomRight,
-        _ => Gravity::None,
+impl From<WireGravity> for Gravity {
+    fn from(g: WireGravity) -> Self {
+        match g {
+            WireGravity::None => Gravity::None,
+            WireGravity::Top => Gravity::Top,
+            WireGravity::Bottom => Gravity::Bottom,
+            WireGravity::Left => Gravity::Left,
+            WireGravity::Right => Gravity::Right,
+            WireGravity::TopLeft => Gravity::TopLeft,
+            WireGravity::BottomLeft => Gravity::BottomLeft,
+            WireGravity::TopRight => Gravity::TopRight,
+            WireGravity::BottomRight => Gravity::BottomRight,
+            _ => Gravity::None,
+        }
     }
 }
 
 /// Translate the `xdg_positioner.set_constraint_adjustment` bitmask onto the neutral per-axis
 /// flip/slide/resize flags the scene applies in that order.
-fn map_constraint(c: WireConstraint) -> ConstraintAdjustment {
-    ConstraintAdjustment {
-        flip_x: c.contains(WireConstraint::FlipX),
-        flip_y: c.contains(WireConstraint::FlipY),
-        slide_x: c.contains(WireConstraint::SlideX),
-        slide_y: c.contains(WireConstraint::SlideY),
-        resize_x: c.contains(WireConstraint::ResizeX),
-        resize_y: c.contains(WireConstraint::ResizeY),
+impl From<WireConstraint> for ConstraintAdjustment {
+    fn from(c: WireConstraint) -> Self {
+        Self {
+            flip_x: c.contains(WireConstraint::FlipX),
+            flip_y: c.contains(WireConstraint::FlipY),
+            slide_x: c.contains(WireConstraint::SlideX),
+            slide_y: c.contains(WireConstraint::SlideY),
+            resize_x: c.contains(WireConstraint::ResizeX),
+            resize_y: c.contains(WireConstraint::ResizeY),
+        }
     }
-}
-
-/// Lift a neutral [`Rect`] into the Smithay `Rectangle<i32, Logical>` the popup configure carries.
-fn rect_to_smithay(r: Rect) -> Rectangle<i32, smithay::utils::Logical> {
-    Rectangle::new((r.x, r.y).into(), (r.w, r.h).into())
 }
 
 /// Reduce a committed `wl_surface.set_input_region` into the neutral scene's single-[`Rect`] input region
@@ -3786,65 +3824,75 @@ fn rect_to_smithay(r: Rect) -> Rectangle<i32, smithay::utils::Logical> {
 /// `Rect`, which `accepts_input_at` rejects everywhere — so that surface correctly receives no pointer
 /// input. Without this the request would be silently dropped and every surface would accept input over its
 /// whole rectangle regardless of what the client requested.
-fn map_input_region(region: &Option<RegionAttributes>) -> Option<Rect> {
-    let attrs = region.as_ref()?;
-    Some(region_add_bounding_box(attrs).unwrap_or(Rect::new(0, 0, 0, 0)))
+struct Region<'a> {
+    attributes: &'a Option<RegionAttributes>,
 }
 
-/// Reduce a committed `wl_surface.set_opaque_region` into the neutral scene's single-[`Rect`] opaque region
-/// — CONSERVATIVELY, because it drives the occlusion present-skip (`is_tree_dirty` → `opaque_covers`) where
-/// OVER-claiming opacity could wrongly hide a surface below and drop its update. Only a region that is
-/// exactly one additive rectangle (the common case — a client marking its whole opaque window so the
-/// compositor may skip redundant work behind it) is trusted verbatim. Anything a single rect cannot model
-/// without over-claiming — a subtracted hole, or multiple disjoint rects — reduces to `None` (proves
-/// nothing opaque), so a present is never wrongly skipped. `None` in (unset) ⇒ `None` out (the whole
-/// surface may be transparent).
-fn map_opaque_region(region: &Option<RegionAttributes>) -> Option<Rect> {
-    match region.as_ref()?.rects.as_slice() {
-        [(RectangleKind::Add, r)] if r.size.w > 0 && r.size.h > 0 => {
-            Some(Rect::new(r.loc.x, r.loc.y, r.size.w, r.size.h))
-        }
-        _ => None,
+impl<'a> Region<'a> {
+    fn new(attributes: &'a Option<RegionAttributes>) -> Self {
+        Self { attributes }
     }
-}
 
-/// The bounding box of a region's ADDITIVE (`Add`) rectangles, or `None` if it has none. Subtract rects and
-/// degenerate (zero-area) rects are ignored — a single `Rect` cannot model a hole, and the resulting
-/// superset is the SAFE direction for an input region (over-accepting input is a hint, never a correctness
-/// hazard, unlike over-claiming opacity — see [`map_input_region`] vs [`map_opaque_region`]).
-fn region_add_bounding_box(attrs: &RegionAttributes) -> Option<Rect> {
-    // (min_x, min_y, max_right, max_bottom) accumulated over the additive rects.
-    let mut bounds: Option<(i32, i32, i32, i32)> = None;
-    for (kind, r) in &attrs.rects {
-        if !matches!(kind, RectangleKind::Add) || r.size.w <= 0 || r.size.h <= 0 {
-            continue;
-        }
-        let (x0, y0, x1, y1) = (r.loc.x, r.loc.y, r.loc.x + r.size.w, r.loc.y + r.size.h);
-        bounds = Some(match bounds {
-            Some((mx, my, mr, mb)) => (mx.min(x0), my.min(y0), mr.max(x1), mb.max(y1)),
-            None => (x0, y0, x1, y1),
-        });
+    fn input(&self) -> Option<Rect> {
+        let attrs = self.attributes.as_ref()?;
+        Some(Self::additive_bounds(attrs).unwrap_or(Rect::new(0, 0, 0, 0)))
     }
-    bounds.map(|(mx, my, mr, mb)| Rect::new(mx, my, mr - mx, mb - my))
+
+    /// Reduce a committed `wl_surface.set_opaque_region` into the neutral scene's single-[`Rect`] opaque region
+    /// — CONSERVATIVELY, because it drives the occlusion present-skip (`is_tree_dirty` → `opaque_covers`) where
+    /// OVER-claiming opacity could wrongly hide a surface below and drop its update. Only a region that is
+    /// exactly one additive rectangle (the common case — a client marking its whole opaque window so the
+    /// compositor may skip redundant work behind it) is trusted verbatim. Anything a single rect cannot model
+    /// without over-claiming — a subtracted hole, or multiple disjoint rects — reduces to `None` (proves
+    /// nothing opaque), so a present is never wrongly skipped. `None` in (unset) ⇒ `None` out (the whole
+    /// surface may be transparent).
+    fn opaque(&self) -> Option<Rect> {
+        match self.attributes.as_ref()?.rects.as_slice() {
+            [(RectangleKind::Add, r)] if r.size.w > 0 && r.size.h > 0 => {
+                Some(Rect::new(r.loc.x, r.loc.y, r.size.w, r.size.h))
+            }
+            _ => None,
+        }
+    }
+
+    /// The bounding box of a region's ADDITIVE (`Add`) rectangles, or `None` if it has none. Subtract rects and
+    /// degenerate (zero-area) rects are ignored — a single `Rect` cannot model a hole, and the resulting
+    /// superset is the SAFE direction for an input region (over-accepting input is a hint, never a correctness
+    /// hazard, unlike over-claiming opacity — see [`map_input_region`] vs [`map_opaque_region`]).
+    fn additive_bounds(attrs: &RegionAttributes) -> Option<Rect> {
+        // (min_x, min_y, max_right, max_bottom) accumulated over the additive rects.
+        let mut bounds: Option<(i32, i32, i32, i32)> = None;
+        for (kind, r) in &attrs.rects {
+            if !matches!(kind, RectangleKind::Add) || r.size.w <= 0 || r.size.h <= 0 {
+                continue;
+            }
+            let (x0, y0, x1, y1) = (r.loc.x, r.loc.y, r.loc.x + r.size.w, r.loc.y + r.size.h);
+            bounds = Some(match bounds {
+                Some((mx, my, mr, mb)) => (mx.min(x0), my.min(y0), mr.max(x1), mb.max(y1)),
+                None => (x0, y0, x1, y1),
+            });
+        }
+        bounds.map(|(mx, my, mr, mb)| Rect::new(mx, my, mr - mx, mb - my))
+    }
 }
 
 /// Map Smithay's `wl_output::Transform` (the wire enum `wl_surface.set_buffer_transform` speaks) onto the
 /// neutral [`BufferTransform`]. A straight enum translation; the rotation/flip math itself lives in the
 /// neutral `BufferTransform` (dimension swap) and the presenter (pixel remap), not here.
-fn map_buffer_transform(
-    t: smithay::reexports::wayland_server::protocol::wl_output::Transform,
-) -> BufferTransform {
-    use smithay::reexports::wayland_server::protocol::wl_output::Transform as WlT;
-    match t {
-        WlT::Normal => BufferTransform::Normal,
-        WlT::_90 => BufferTransform::_90,
-        WlT::_180 => BufferTransform::_180,
-        WlT::_270 => BufferTransform::_270,
-        WlT::Flipped => BufferTransform::Flipped,
-        WlT::Flipped90 => BufferTransform::Flipped90,
-        WlT::Flipped180 => BufferTransform::Flipped180,
-        WlT::Flipped270 => BufferTransform::Flipped270,
-        _ => BufferTransform::Normal,
+impl From<smithay::reexports::wayland_server::protocol::wl_output::Transform> for BufferTransform {
+    fn from(t: smithay::reexports::wayland_server::protocol::wl_output::Transform) -> Self {
+        use smithay::reexports::wayland_server::protocol::wl_output::Transform as WlT;
+        match t {
+            WlT::Normal => BufferTransform::Normal,
+            WlT::_90 => BufferTransform::_90,
+            WlT::_180 => BufferTransform::_180,
+            WlT::_270 => BufferTransform::_270,
+            WlT::Flipped => BufferTransform::Flipped,
+            WlT::Flipped90 => BufferTransform::Flipped90,
+            WlT::Flipped180 => BufferTransform::Flipped180,
+            WlT::Flipped270 => BufferTransform::Flipped270,
+            _ => BufferTransform::Normal,
+        }
     }
 }
 
@@ -3953,16 +4001,18 @@ fn parse_output_spec(spec: &str, i: u32, refresh_mhz: i64) -> Option<Output> {
 
 /// Map the neutral [`BufferTransform`] onto Smithay's `utils::Transform` (what a `wl_output` advertises).
 /// The inverse of [`map_buffer_transform`], used to drive the output's advertised `wl_output.transform`.
-fn buffer_transform_to_wl(t: BufferTransform) -> Transform {
-    match t {
-        BufferTransform::Normal => Transform::Normal,
-        BufferTransform::_90 => Transform::_90,
-        BufferTransform::_180 => Transform::_180,
-        BufferTransform::_270 => Transform::_270,
-        BufferTransform::Flipped => Transform::Flipped,
-        BufferTransform::Flipped90 => Transform::Flipped90,
-        BufferTransform::Flipped180 => Transform::Flipped180,
-        BufferTransform::Flipped270 => Transform::Flipped270,
+impl From<BufferTransform> for Transform {
+    fn from(t: BufferTransform) -> Self {
+        match t {
+            BufferTransform::Normal => Transform::Normal,
+            BufferTransform::_90 => Transform::_90,
+            BufferTransform::_180 => Transform::_180,
+            BufferTransform::_270 => Transform::_270,
+            BufferTransform::Flipped => Transform::Flipped,
+            BufferTransform::Flipped90 => Transform::Flipped90,
+            BufferTransform::Flipped180 => Transform::Flipped180,
+            BufferTransform::Flipped270 => Transform::Flipped270,
+        }
     }
 }
 
@@ -3976,95 +4026,105 @@ fn buffer_transform_to_wl(t: BufferTransform) -> Transform {
 ///   * `Xbgr8888` → memory `[R, G, B, X]`, opaque.
 /// This unpacks any of them to tight `[R, G, B, A]`. A bounds check refuses a malformed geometry that
 /// would read past the mapping. Any other advertised/unknown format is treated as `Argb8888`.
-fn read_shm_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
-    let result = with_buffer_contents(buffer, |ptr, len, data| {
-        let (w, h, stride, offset) = (data.width, data.height, data.stride, data.offset);
-        // `w * 4` is computed in `i64` so a hostile width near `i32::MAX` (reachable with a large `wl_shm`
-        // pool) cannot overflow the row-stride check itself before the geometry is rejected.
-        if w <= 0 || h <= 0 || (stride as i64) < w as i64 * 4 || offset < 0 {
-            return None;
-        }
-        // Highest byte read = offset + (h-1)*stride + w*4; must fit the mapping. All widened to `usize`
-        // (each factor is now known positive) so the bound check can never overflow before it fires.
-        let last_row = offset as usize + (h as usize - 1) * stride as usize;
-        if last_row
-            .checked_add(w as usize * 4)
-            .map(|m| m > len)
-            .unwrap_or(true)
-        {
-            return None;
-        }
-        // `format` is the neutral opaque/alpha distinction (drives blend); `swap_rb` selects channel
-        // order; `has_alpha` whether the 4th byte is honoured or forced opaque.
-        let (format, bgra, has_alpha) = match data.format {
-            wl_shm::Format::Xrgb8888 => (Format::Xrgb8888, true, false),
-            wl_shm::Format::Abgr8888 => (Format::Argb8888, false, true),
-            wl_shm::Format::Xbgr8888 => (Format::Xrgb8888, false, false),
-            // Argb8888 and any other advertised/unknown format fall through to ARGB semantics.
-            _ => (Format::Argb8888, true, true),
-        };
-        // `w`/`h` are positive and `w·h·4 <= len` (the bound check above), so this `usize` product is
-        // bounded by the mapping size and cannot overflow.
-        let mut rgba = vec![0u8; w as usize * h as usize * 4];
-        for y in 0..h {
-            let row = offset as isize + y as isize * stride as isize;
-            let di = y as usize * w as usize * 4;
-            // Both supported channel orders already match a backend-native four-byte layout. Copy each
-            // tight row wholesale; only XRGB/XBGR need a small alpha-fix pass. This replaces the former
-            // scalar BGRA→RGBA conversion which macOS immediately reversed before upload.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    ptr.offset(row),
-                    rgba.as_mut_ptr().add(di),
-                    w as usize * 4,
-                );
+struct BufferReader<'a> {
+    buffer: &'a WlBuffer,
+}
+
+impl<'a> BufferReader<'a> {
+    fn new(buffer: &'a WlBuffer) -> Self {
+        Self { buffer }
+    }
+
+    fn shm_rgba(&self) -> Option<(StoredBuffer, Format)> {
+        let result = with_buffer_contents(self.buffer, |ptr, len, data| {
+            let (w, h, stride, offset) = (data.width, data.height, data.stride, data.offset);
+            // `w * 4` is computed in `i64` so a hostile width near `i32::MAX` (reachable with a large `wl_shm`
+            // pool) cannot overflow the row-stride check itself before the geometry is rejected.
+            if w <= 0 || h <= 0 || (stride as i64) < w as i64 * 4 || offset < 0 {
+                return None;
             }
-            if !has_alpha {
-                for pixel in rgba[di..di + w as usize * 4].chunks_exact_mut(4) {
-                    pixel[3] = 255;
+            // Highest byte read = offset + (h-1)*stride + w*4; must fit the mapping. All widened to `usize`
+            // (each factor is now known positive) so the bound check can never overflow before it fires.
+            let last_row = offset as usize + (h as usize - 1) * stride as usize;
+            if last_row
+                .checked_add(w as usize * 4)
+                .map(|m| m > len)
+                .unwrap_or(true)
+            {
+                return None;
+            }
+            // `format` is the neutral opaque/alpha distinction (drives blend); `swap_rb` selects channel
+            // order; `has_alpha` whether the 4th byte is honoured or forced opaque.
+            let (format, bgra, has_alpha) = match data.format {
+                wl_shm::Format::Xrgb8888 => (Format::Xrgb8888, true, false),
+                wl_shm::Format::Abgr8888 => (Format::Argb8888, false, true),
+                wl_shm::Format::Xbgr8888 => (Format::Xrgb8888, false, false),
+                // Argb8888 and any other advertised/unknown format fall through to ARGB semantics.
+                _ => (Format::Argb8888, true, true),
+            };
+            // `w`/`h` are positive and `w·h·4 <= len` (the bound check above), so this `usize` product is
+            // bounded by the mapping size and cannot overflow.
+            let mut rgba = vec![0u8; w as usize * h as usize * 4];
+            for y in 0..h {
+                let row = offset as isize + y as isize * stride as isize;
+                let di = y as usize * w as usize * 4;
+                // Both supported channel orders already match a backend-native four-byte layout. Copy each
+                // tight row wholesale; only XRGB/XBGR need a small alpha-fix pass. This replaces the former
+                // scalar BGRA→RGBA conversion which macOS immediately reversed before upload.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        ptr.offset(row),
+                        rgba.as_mut_ptr().add(di),
+                        w as usize * 4,
+                    );
+                }
+                if !has_alpha {
+                    for pixel in rgba[di..di + w as usize * 4].chunks_exact_mut(4) {
+                        pixel[3] = 255;
+                    }
                 }
             }
-        }
+            Some((
+                StoredBuffer {
+                    width: w,
+                    height: h,
+                    rgba,
+                    bgra,
+                    damage: None,
+                },
+                format,
+            ))
+        });
+        result.ok().flatten()
+    }
+
+    /// Turn a committed `wp_single_pixel_buffer_v1` `wl_buffer` into a tight 1×1 top-left RGBA8888 pixel — the
+    /// solid-color quad Chrome/Ozone + video players attach without a shm pool. The buffer carries only a
+    /// 4-channel color (no pixels, no fd); [`get_single_pixel_buffer`] returns it and `rgba8888()` collapses the
+    /// 32-bit-per-channel wire values to 8-bit R,G,B,A (already the byte order [`StoredBuffer`] stores). A
+    /// 1×1 buffer composites like any other — a client that also attaches a `wp_viewport` dst scales it to fill
+    /// its surface. Returns `None` for any non-single-pixel buffer (the caller reaches this only after the shm
+    /// and dmabuf reads both returned `None`). The neutral [`Format`] is opaque `Xrgb8888` when the color is
+    /// fully opaque, else alpha `Argb8888`, so the presenter blends a translucent single-pixel quad correctly.
+    fn single_pixel_rgba(&self) -> Option<(StoredBuffer, Format)> {
+        let data = get_single_pixel_buffer(self.buffer).ok()?;
+        let rgba = data.rgba8888();
+        let format = if data.has_alpha() {
+            Format::Argb8888
+        } else {
+            Format::Xrgb8888
+        };
         Some((
             StoredBuffer {
-                width: w,
-                height: h,
-                rgba,
-                bgra,
+                width: 1,
+                height: 1,
+                rgba: rgba.to_vec(),
+                bgra: false,
                 damage: None,
             },
             format,
         ))
-    });
-    result.ok().flatten()
-}
-
-/// Turn a committed `wp_single_pixel_buffer_v1` `wl_buffer` into a tight 1×1 top-left RGBA8888 pixel — the
-/// solid-color quad Chrome/Ozone + video players attach without a shm pool. The buffer carries only a
-/// 4-channel color (no pixels, no fd); [`get_single_pixel_buffer`] returns it and `rgba8888()` collapses the
-/// 32-bit-per-channel wire values to 8-bit R,G,B,A (already the byte order [`StoredBuffer`] stores). A
-/// 1×1 buffer composites like any other — a client that also attaches a `wp_viewport` dst scales it to fill
-/// its surface. Returns `None` for any non-single-pixel buffer (the caller reaches this only after the shm
-/// and dmabuf reads both returned `None`). The neutral [`Format`] is opaque `Xrgb8888` when the color is
-/// fully opaque, else alpha `Argb8888`, so the presenter blends a translucent single-pixel quad correctly.
-fn read_single_pixel_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
-    let data = get_single_pixel_buffer(buffer).ok()?;
-    let rgba = data.rgba8888();
-    let format = if data.has_alpha() {
-        Format::Argb8888
-    } else {
-        Format::Xrgb8888
-    };
-    Some((
-        StoredBuffer {
-            width: 1,
-            height: 1,
-            rgba: rgba.to_vec(),
-            bgra: false,
-            damage: None,
-        },
-        format,
-    ))
+    }
 }
 
 /// The DRM format+modifier pairs the `zwp_linux_dmabuf_v1` global advertises AND the importer accepts:
@@ -4095,21 +4155,32 @@ const HUSKLET_RENDER_NODE: DmabufDeviceId = DmabufDeviceId::from_linux_dev_t((22
 /// `/dev/dri/renderD128`; the engine implements that node's discovery and allocation ioctls, while this
 /// compositor imports the resulting linear/IOSurface-backed buffers. Keeping the device identity here
 /// aligned with the engine wire contract is required for Chromium's Wayland buffer manager.
-fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
-    let mut state = DmabufState::new();
-    match DmabufFeedbackBuilder::new(HUSKLET_RENDER_NODE, dmabuf_formats()).build() {
-        Ok(feedback) => {
-            let _global: DmabufGlobal =
-                state.create_global_with_default_feedback::<HlState>(dh, &feedback);
-        }
-        Err(error) => {
-            eprintln!(
+struct DmabufAdapter<'a> {
+    display: &'a DisplayHandle,
+}
+
+impl<'a> DmabufAdapter<'a> {
+    fn new(display: &'a DisplayHandle) -> Self {
+        Self { display }
+    }
+
+    fn state(&self) -> DmabufState {
+        let mut state = DmabufState::new();
+        match DmabufFeedbackBuilder::new(HUSKLET_RENDER_NODE, dmabuf_formats()).build() {
+            Ok(feedback) => {
+                let _global: DmabufGlobal =
+                    state.create_global_with_default_feedback::<HlState>(self.display, &feedback);
+            }
+            Err(error) => {
+                eprintln!(
                 "hl-compositor: dmabuf feedback unavailable ({error}); advertising the v3 linear-import contract"
             );
-            let _global: DmabufGlobal = state.create_global::<HlState>(dh, dmabuf_formats());
+                let _global: DmabufGlobal =
+                    state.create_global::<HlState>(self.display, dmabuf_formats());
+            }
         }
+        state
     }
-    state
 }
 
 /// Read a committed **LINEAR** dmabuf `wl_buffer`'s pixels into tight top-left RGBA8888 by `pread`ing its
@@ -4119,73 +4190,75 @@ fn new_dmabuf_state(dh: &DisplayHandle) -> DmabufState {
 /// returned `None`), or for any dmabuf the importer would not have accepted (non-LINEAR
 /// / multi-plane / unsupported fourcc / malformed geometry / backing too small). The four fourcc channel
 /// orders map exactly as in [`read_shm_rgba`].
-fn read_dmabuf_rgba(buffer: &WlBuffer) -> Option<(StoredBuffer, Format)> {
-    use std::os::unix::fs::FileExt;
-    let dmabuf = get_dmabuf(buffer).ok()?;
-    let drm = dmabuf.format();
-    // Only the single-plane LINEAR buffers we advertised/accepted are CPU-importable here.
-    if drm.modifier != Modifier::Linear || dmabuf.num_planes() != 1 {
-        return None;
-    }
-    let (format, swap_rb, has_alpha) = match drm.code {
-        Fourcc::Xrgb8888 => (Format::Xrgb8888, false, false),
-        Fourcc::Abgr8888 => (Format::Argb8888, true, true),
-        Fourcc::Xbgr8888 => (Format::Xrgb8888, true, false),
-        Fourcc::Argb8888 => (Format::Argb8888, false, true),
-        // An unsupported fourcc should never reach here (import rejects it), but be defensive.
-        _ => return None,
-    };
-    let (w, h) = (dmabuf.width() as i32, dmabuf.height() as i32);
-    let stride = dmabuf.strides().next()? as i64;
-    let offset = dmabuf.offsets().next()? as i64;
-    // Same geometry guard as the shm path (all widened to i64 so a hostile near-i32::MAX width cannot
-    // overflow the row-stride check before it fires): reject a stride/offset that under-describes a row.
-    if w <= 0 || h <= 0 || stride < w as i64 * 4 || offset < 0 {
-        return None;
-    }
-    // Highest byte we will read = offset + (h-1)*stride + w*4; compute the read span with checked math so
-    // an overflowing geometry is rejected (None) rather than panicking.
-    let span = offset
-        .checked_add((h as i64 - 1).checked_mul(stride)?)?
-        .checked_add(w as i64 * 4)?;
-    // Duplicate the BORROWED plane fd (the `Dmabuf` keeps ownership) and `read_at` the pixel region. A
-    // LINEAR dmabuf's plane fd is a plain CPU-readable memory object (here backed by the client's own
-    // file/memfd), so `read_exact_at` on the dup'd fd is the no-mmap equivalent of the shm mapping read;
-    // a short/undersized backing makes `read_exact_at` fail, which we map to `None` (backing too small).
-    let fd = dmabuf.handles().next()?;
-    let file = std::fs::File::from(fd.try_clone_to_owned().ok()?);
-    let read_len = (span - offset) as usize;
-    let mut raw = vec![0u8; read_len];
-    file.read_exact_at(&mut raw, offset as u64).ok()?;
-    // `raw[0]` corresponds to file offset `offset`, so pixel (x, y) begins at `raw[y*stride + x*4]`.
-    let mut rgba = vec![0u8; w as usize * h as usize * 4];
-    for y in 0..h {
-        let row = (y as i64 * stride) as usize;
-        for x in 0..w {
-            let si = row + (x as usize) * 4;
-            let c0 = raw[si];
-            let g = raw[si + 1];
-            let c2 = raw[si + 2];
-            let a = if has_alpha { raw[si + 3] } else { 255 };
-            // ARGB memory is `[B, G, R, A]` (c0=B, c2=R); *BGR memory is `[R, G, B, A]` (c0=R, c2=B).
-            let (r, b) = if swap_rb { (c0, c2) } else { (c2, c0) };
-            let di = ((y * w + x) * 4) as usize;
-            rgba[di] = r;
-            rgba[di + 1] = g;
-            rgba[di + 2] = b;
-            rgba[di + 3] = a;
+impl<'a> BufferReader<'a> {
+    fn dmabuf_rgba(&self) -> Option<(StoredBuffer, Format)> {
+        use std::os::unix::fs::FileExt;
+        let dmabuf = get_dmabuf(self.buffer).ok()?;
+        let drm = dmabuf.format();
+        // Only the single-plane LINEAR buffers we advertised/accepted are CPU-importable here.
+        if drm.modifier != Modifier::Linear || dmabuf.num_planes() != 1 {
+            return None;
         }
+        let (format, swap_rb, has_alpha) = match drm.code {
+            Fourcc::Xrgb8888 => (Format::Xrgb8888, false, false),
+            Fourcc::Abgr8888 => (Format::Argb8888, true, true),
+            Fourcc::Xbgr8888 => (Format::Xrgb8888, true, false),
+            Fourcc::Argb8888 => (Format::Argb8888, false, true),
+            // An unsupported fourcc should never reach here (import rejects it), but be defensive.
+            _ => return None,
+        };
+        let (w, h) = (dmabuf.width() as i32, dmabuf.height() as i32);
+        let stride = dmabuf.strides().next()? as i64;
+        let offset = dmabuf.offsets().next()? as i64;
+        // Same geometry guard as the shm path (all widened to i64 so a hostile near-i32::MAX width cannot
+        // overflow the row-stride check before it fires): reject a stride/offset that under-describes a row.
+        if w <= 0 || h <= 0 || stride < w as i64 * 4 || offset < 0 {
+            return None;
+        }
+        // Highest byte we will read = offset + (h-1)*stride + w*4; compute the read span with checked math so
+        // an overflowing geometry is rejected (None) rather than panicking.
+        let span = offset
+            .checked_add((h as i64 - 1).checked_mul(stride)?)?
+            .checked_add(w as i64 * 4)?;
+        // Duplicate the BORROWED plane fd (the `Dmabuf` keeps ownership) and `read_at` the pixel region. A
+        // LINEAR dmabuf's plane fd is a plain CPU-readable memory object (here backed by the client's own
+        // file/memfd), so `read_exact_at` on the dup'd fd is the no-mmap equivalent of the shm mapping read;
+        // a short/undersized backing makes `read_exact_at` fail, which we map to `None` (backing too small).
+        let fd = dmabuf.handles().next()?;
+        let file = std::fs::File::from(fd.try_clone_to_owned().ok()?);
+        let read_len = (span - offset) as usize;
+        let mut raw = vec![0u8; read_len];
+        file.read_exact_at(&mut raw, offset as u64).ok()?;
+        // `raw[0]` corresponds to file offset `offset`, so pixel (x, y) begins at `raw[y*stride + x*4]`.
+        let mut rgba = vec![0u8; w as usize * h as usize * 4];
+        for y in 0..h {
+            let row = (y as i64 * stride) as usize;
+            for x in 0..w {
+                let si = row + (x as usize) * 4;
+                let c0 = raw[si];
+                let g = raw[si + 1];
+                let c2 = raw[si + 2];
+                let a = if has_alpha { raw[si + 3] } else { 255 };
+                // ARGB memory is `[B, G, R, A]` (c0=B, c2=R); *BGR memory is `[R, G, B, A]` (c0=R, c2=B).
+                let (r, b) = if swap_rb { (c0, c2) } else { (c2, c0) };
+                let di = ((y * w + x) * 4) as usize;
+                rgba[di] = r;
+                rgba[di + 1] = g;
+                rgba[di + 2] = b;
+                rgba[di + 3] = a;
+            }
+        }
+        Some((
+            StoredBuffer {
+                width: w,
+                height: h,
+                rgba,
+                bgra: false,
+                damage: None,
+            },
+            format,
+        ))
     }
-    Some((
-        StoredBuffer {
-            width: w,
-            height: h,
-            rgba,
-            bgra: false,
-            damage: None,
-        },
-        format,
-    ))
 }
 
 #[cfg(test)]
@@ -4212,7 +4285,7 @@ mod region_tests {
 
     #[test]
     fn input_region_unset_means_whole_surface() {
-        assert_eq!(map_input_region(&None), None);
+        assert_eq!(Region::new(&None).input(), None);
     }
 
     #[test]
@@ -4222,7 +4295,7 @@ mod region_tests {
             rects: vec![add(100, 0, 100, 150)],
         };
         assert_eq!(
-            map_input_region(&Some(region)),
+            Region::new(&Some(region)).input(),
             Some(Rect::new(100, 0, 100, 150))
         );
     }
@@ -4230,7 +4303,8 @@ mod region_tests {
     #[test]
     fn input_region_empty_is_click_through() {
         // A region object with NO rects => the surface accepts input NOWHERE (click-through overlay).
-        let mapped = map_input_region(&Some(RegionAttributes { rects: vec![] }))
+        let mapped = Region::new(&Some(RegionAttributes { rects: vec![] }))
+            .input()
             .expect("a set region always maps to Some(rect)");
         assert!(
             mapped.is_empty(),
@@ -4246,14 +4320,14 @@ mod region_tests {
             rects: vec![add(0, 0, 10, 10), add(90, 90, 10, 10)],
         };
         assert_eq!(
-            map_input_region(&Some(region)),
+            Region::new(&Some(region)).input(),
             Some(Rect::new(0, 0, 100, 100))
         );
     }
 
     #[test]
     fn opaque_region_unset_is_none() {
-        assert_eq!(map_opaque_region(&None), None);
+        assert_eq!(Region::new(&None).opaque(), None);
     }
 
     #[test]
@@ -4262,7 +4336,7 @@ mod region_tests {
             rects: vec![add(0, 0, 200, 150)],
         };
         assert_eq!(
-            map_opaque_region(&Some(region)),
+            Region::new(&Some(region)).opaque(),
             Some(Rect::new(0, 0, 200, 150))
         );
     }
@@ -4273,7 +4347,7 @@ mod region_tests {
         let region = RegionAttributes {
             rects: vec![add(0, 0, 200, 150), subtract(10, 10, 20, 20)],
         };
-        assert_eq!(map_opaque_region(&Some(region)), None);
+        assert_eq!(Region::new(&Some(region)).opaque(), None);
     }
 
     #[test]
@@ -4281,6 +4355,6 @@ mod region_tests {
         let region = RegionAttributes {
             rects: vec![add(0, 0, 10, 10), add(90, 90, 10, 10)],
         };
-        assert_eq!(map_opaque_region(&Some(region)), None);
+        assert_eq!(Region::new(&Some(region)).opaque(), None);
     }
 }

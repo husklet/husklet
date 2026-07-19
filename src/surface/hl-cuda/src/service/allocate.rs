@@ -16,15 +16,22 @@ pub(crate) fn cuda_buffer_usage() -> u32 {
 }
 
 /// Build the `CreateBuffer` command for a CUDA allocation of `size` bytes backed by `buffer`.
-pub(crate) fn create_buffer_cmd(buffer: u32, size: u64) -> Cmd {
-    Cmd::CreateBuffer(
-        buffer,
-        BufferDesc {
-            size,
-            usage: cuda_buffer_usage(),
-            label: String::new(),
-        },
-    )
+pub(crate) struct Allocation {
+    pub buffer: u32,
+    pub size: u64,
+}
+
+impl Allocation {
+    pub(crate) fn command(&self) -> Cmd {
+        Cmd::CreateBuffer(
+            self.buffer,
+            BufferDesc {
+                size: self.size,
+                usage: cuda_buffer_usage(),
+                label: String::new(),
+            },
+        )
+    }
 }
 
 /// Reject an allocation of `size` bytes that would push total live device memory past the modeled
@@ -35,26 +42,28 @@ pub(crate) fn create_buffer_cmd(buffer: u32, size: u64) -> Cmd {
 /// what the device can back; without this check the model would MINT a device pointer for an
 /// impossible allocation (a fake success), then hand the guest a buffer the host could never populate.
 /// The check runs BEFORE any id is minted or `Cmd` submitted, so an over-budget request touches no state.
-fn check_budget(ctx: &CudaContext, size: u64) -> Result<()> {
-    let used = ctx.mem.total_bytes();
-    let budget = ctx.device.total_mem;
-    if used
-        .checked_add(size)
-        .map(|total| total > budget)
-        .unwrap_or(true)
-    {
-        hl_log::hl_warn!(
-            hl_log::tag::CUDA,
-            "mem_alloc OOM: size={} used={} budget={}",
-            size,
-            used,
-            budget
-        );
-        return Err(GpuError::ResourceLimit(
-            "cuMemAlloc: allocation exceeds device memory budget",
-        ));
+impl CudaContext {
+    fn check_budget(&self, size: u64) -> Result<()> {
+        let used = self.mem.total_bytes();
+        let budget = self.device.total_mem;
+        if used
+            .checked_add(size)
+            .map(|total| total > budget)
+            .unwrap_or(true)
+        {
+            hl_log::hl_warn!(
+                hl_log::tag::CUDA,
+                "mem_alloc OOM: size={} used={} budget={}",
+                size,
+                used,
+                budget
+            );
+            return Err(GpuError::ResourceLimit(
+                "cuMemAlloc: allocation exceeds device memory budget",
+            ));
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 /// `cuMemAlloc(size)` → a device pointer, submitting the backing [`Cmd::CreateBuffer`].
@@ -63,10 +72,10 @@ pub fn mem_alloc(
     sink: &mut dyn CommandSink,
     size: u64,
 ) -> Result<DevicePtr> {
-    check_budget(ctx, size)?;
+    ctx.check_budget(size)?;
     let buffer = ctx.alloc_buffer();
-    let ptr = ctx.mem.record(buffer, size);
-    sink.submit(&[create_buffer_cmd(buffer, size)])?;
+    let ptr = ctx.mem.insert(buffer, size);
+    sink.submit(&[Allocation { buffer, size }.command()])?;
     hl_log::hl_debug!(
         hl_log::tag::CUDA,
         "mem_alloc size={} buf={} ptr={:#x}",
@@ -87,10 +96,10 @@ pub fn mem_alloc_managed(
     sink: &mut dyn CommandSink,
     size: u64,
 ) -> Result<DevicePtr> {
-    check_budget(ctx, size)?;
+    ctx.check_budget(size)?;
     let buffer = ctx.alloc_buffer();
-    let ptr = ctx.mem.record_managed(buffer, size);
-    sink.submit(&[create_buffer_cmd(buffer, size)])?;
+    let ptr = ctx.mem.insert_managed(buffer, size);
+    sink.submit(&[Allocation { buffer, size }.command()])?;
     Ok(ptr)
 }
 
@@ -120,10 +129,10 @@ pub fn mem_alloc_pitch(
     let size = pitch
         .checked_mul(height)
         .ok_or(GpuError::Invalid("cuMemAllocPitch: pitch*height overflow"))?;
-    check_budget(ctx, size)?;
+    ctx.check_budget(size)?;
     let buffer = ctx.alloc_buffer();
-    let ptr = ctx.mem.record(buffer, size);
-    sink.submit(&[create_buffer_cmd(buffer, size)])?;
+    let ptr = ctx.mem.insert(buffer, size);
+    sink.submit(&[Allocation { buffer, size }.command()])?;
     Ok((ptr, pitch))
 }
 
@@ -158,72 +167,74 @@ pub fn mem_free(ctx: &mut CudaContext, sink: &mut dyn CommandSink, ptr: DevicePt
 /// `CUDA_ERROR_OUT_OF_MEMORY` / `cudaErrorMemoryAllocation` analogue a real driver returns) rather than
 /// attempting a multi-GiB host allocation that would abort the process on OOM. A real `cuMemAllocHost`
 /// likewise fails once the request exceeds what the host can back.
-pub fn host_alloc(ctx: &mut CudaContext, size: usize) -> Option<u64> {
-    if size as u64 > ctx.device.total_mem {
-        hl_log::hl_warn!(
-            hl_log::tag::CUDA,
-            "host_alloc OOM: size={} budget={}",
-            size,
-            ctx.device.total_mem
-        );
-        return None;
+impl CudaContext {
+    pub fn host_alloc(&mut self, size: usize) -> Option<u64> {
+        if size as u64 > self.device.total_mem {
+            hl_log::hl_warn!(
+                hl_log::tag::CUDA,
+                "host_alloc OOM: size={} budget={}",
+                size,
+                self.device.total_mem
+            );
+            return None;
+        }
+        Some(self.host.alloc_pinned(size))
     }
-    Some(ctx.host.alloc_pinned(size))
-}
 
-/// `cuMemFreeHost(p)` → free a pinned allocation. Errors if `base` is not a live pinned allocation.
-pub fn host_free(ctx: &mut CudaContext, base: u64) -> Result<()> {
-    if ctx.host.free_pinned(base) {
-        Ok(())
-    } else {
-        Err(GpuError::Invalid(
-            "cuMemFreeHost: pointer is not a live pinned allocation",
-        ))
+    /// `cuMemFreeHost(p)` → free a pinned allocation. Errors if `base` is not a live pinned allocation.
+    pub fn host_free(&mut self, base: u64) -> Result<()> {
+        if self.host.free_pinned(base) {
+            Ok(())
+        } else {
+            Err(GpuError::Invalid(
+                "cuMemFreeHost: pointer is not a live pinned allocation",
+            ))
+        }
     }
-}
 
-/// `cuMemHostRegister(p, size, flags)` → page-lock an existing guest host range. Errors if it is already
-/// a live host allocation (the `CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED` analogue).
-pub fn host_register(ctx: &mut CudaContext, base: u64, size: u64) -> Result<()> {
-    if ctx.host.register(base, size) {
-        Ok(())
-    } else {
-        Err(GpuError::Invalid(
-            "cuMemHostRegister: host range is already registered",
-        ))
+    /// `cuMemHostRegister(p, size, flags)` → page-lock an existing guest host range. Errors if it is already
+    /// a live host allocation (the `CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED` analogue).
+    pub fn host_register(&mut self, base: u64, size: u64) -> Result<()> {
+        if self.host.register(base, size) {
+            Ok(())
+        } else {
+            Err(GpuError::Invalid(
+                "cuMemHostRegister: host range is already registered",
+            ))
+        }
     }
-}
 
-/// `cuMemHostUnregister(p)` → unlock a previously registered host range. Errors if `base` was not
-/// registered (the `CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED` analogue).
-pub fn host_unregister(ctx: &mut CudaContext, base: u64) -> Result<()> {
-    if ctx.host.unregister(base) {
-        Ok(())
-    } else {
-        Err(GpuError::Invalid(
-            "cuMemHostUnregister: host range is not registered",
-        ))
+    /// `cuMemHostUnregister(p)` → unlock a previously registered host range. Errors if `base` was not
+    /// registered (the `CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED` analogue).
+    pub fn host_unregister(&mut self, base: u64) -> Result<()> {
+        if self.host.unregister(base) {
+            Ok(())
+        } else {
+            Err(GpuError::Invalid(
+                "cuMemHostUnregister: host range is not registered",
+            ))
+        }
     }
-}
 
-/// `cuMemHostGetDevicePointer(p, flags)` → the device pointer that maps the host allocation based at
-/// `base`. The first call lazily creates a backing device buffer (sized to the host allocation) with a
-/// single [`Cmd::CreateBuffer`] and records the device allocation; repeat calls return the same device
-/// pointer. Errors if `base` is not a live host allocation.
-pub fn host_get_device_pointer(
-    ctx: &mut CudaContext,
-    sink: &mut dyn CommandSink,
-    base: u64,
-) -> Result<DevicePtr> {
-    if let Some((_, ptr)) = ctx.host.device_mapping(base) {
-        return Ok(DevicePtr(ptr));
+    /// `cuMemHostGetDevicePointer(p, flags)` → the device pointer that maps the host allocation based at
+    /// `base`. The first call lazily creates a backing device buffer (sized to the host allocation) with a
+    /// single [`Cmd::CreateBuffer`] and records the device allocation; repeat calls return the same device
+    /// pointer. Errors if `base` is not a live host allocation.
+    pub fn host_get_device_pointer(
+        &mut self,
+        sink: &mut dyn CommandSink,
+        base: u64,
+    ) -> Result<DevicePtr> {
+        if let Some((_, ptr)) = self.host.device_mapping(base) {
+            return Ok(DevicePtr(ptr));
+        }
+        let size = self.host.size_of(base).ok_or(GpuError::Invalid(
+            "cuMemHostGetDevicePointer: not a live host allocation",
+        ))?;
+        let buffer = self.alloc_buffer();
+        let ptr = self.mem.insert(buffer, size);
+        self.host.set_device_mapping(base, buffer, ptr.0);
+        sink.submit(&[Allocation { buffer, size }.command()])?;
+        Ok(ptr)
     }
-    let size = ctx.host.size_of(base).ok_or(GpuError::Invalid(
-        "cuMemHostGetDevicePointer: not a live host allocation",
-    ))?;
-    let buffer = ctx.alloc_buffer();
-    let ptr = ctx.mem.record(buffer, size);
-    ctx.host.set_device_mapping(base, buffer, ptr.0);
-    sink.submit(&[create_buffer_cmd(buffer, size)])?;
-    Ok(ptr)
 }

@@ -3,16 +3,8 @@ use super::*;
 
 #[derive(Deserialize)]
 pub(crate) struct ExecCreateBody {
-    #[serde(rename = "Cmd")]
-    cmd: Option<Vec<String>>,
-    #[serde(rename = "Tty")]
-    tty: Option<bool>,
-    #[serde(rename = "Env")]
-    env: Option<Vec<String>>,
-    #[serde(rename = "WorkingDir")]
-    working_dir: Option<String>,
-    #[serde(rename = "User")]
-    user: Option<String>,
+    #[serde(flatten)]
+    process: ProcessCreateBody,
     #[serde(rename = "Privileged")]
     privileged: Option<bool>,
 }
@@ -24,8 +16,8 @@ pub(crate) async fn exec_create(
     Json(body): Json<ExecCreateBody>,
 ) -> Response {
     let mut g = a.inner.lock().await;
-    let Some(full) = resolve_cid(&g, &id) else {
-        return no_such(&id);
+    let Some(full) = ContainerId::resolve(&g, &id) else {
+        return ErrorMessage::no_such(&id);
     };
     // `docker exec` requires a running container. Docker distinguishes two 409s: a PAUSED container gets
     // "is paused, unpause the container before exec"; anything else not-running gets "is not running".
@@ -36,18 +28,18 @@ pub(crate) async fn exec_create(
         .map(|c| c.status.clone())
         .unwrap_or_default();
     if status == "paused" {
-        return conflict(format!(
+        return ErrorMessage::conflict(format!(
             "Container {full} is paused, unpause the container before exec"
         ));
     }
     if status != "running" {
-        return conflict(format!("Container {full} is not running"));
+        return ErrorMessage::conflict(format!("Container {full} is not running"));
     }
-    let cmd = body.cmd.unwrap_or_default();
+    let cmd = body.process.cmd.unwrap_or_default();
     if cmd.is_empty() {
-        return bad_request("No exec command specified");
+        return ErrorMessage::bad_request("No exec command specified");
     }
-    let exec_id = new_id(&format!("exec-{full}"));
+    let exec_id = ContainerId::new(&format!("exec-{full}"));
     // Docker emits a container `exec_create: <cmd>` event (Actor = the parent container) so event mirrors
     // track exec lifecycle. The action carries the command, matching docker's shape.
     crate::events::emit_event(
@@ -62,11 +54,11 @@ pub(crate) async fn exec_create(
         Exec {
             container_id: full.clone(),
             cmd,
-            tty: body.tty.unwrap_or(false),
+            tty: body.process.tty.unwrap_or(false),
             started: false,
-            env: body.env.unwrap_or_default(),
-            working_dir: body.working_dir.unwrap_or_default(),
-            user: body.user.unwrap_or_default(),
+            env: body.process.env.unwrap_or_default(),
+            working_dir: body.process.working_dir.unwrap_or_default(),
+            user: body.process.user.unwrap_or_default(),
             // `--privileged`: metadata only (no Linux-cap enforcement in the JIT). Accept + record it so
             // exec inspect reflects it; the spawn path is unchanged (mirrors -e/-w/-u being plain fields).
             privileged: body.privileged.unwrap_or(false),

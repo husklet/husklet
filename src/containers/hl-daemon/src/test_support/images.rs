@@ -15,7 +15,7 @@ async fn seed_image(app: &App, name: &str, created: i64) {
 
 /// Serialize `images_json`'s list and collect the flattened set of RepoTags strings.
 async fn image_repotags(app: &App) -> std::collections::HashSet<String> {
-    let axum::Json(list) = crate::images::images_json(State(app.clone())).await;
+    let axum::Json(list) = crate::images::ImageApi::list(State(app.clone())).await;
     let v = serde_json::to_value(&list).unwrap();
     let mut set = std::collections::HashSet::new();
     for img in v.as_array().unwrap() {
@@ -60,7 +60,7 @@ async fn save_load_round_trips_lifecycle_metadata() {
     // docker save -> tar bytes.
     let q: crate::images::SaveQ =
         serde_json::from_value(serde_json::json!({"names": "lifecycle:latest"})).unwrap();
-    let resp = crate::images::image_save(State(app.clone()), Query(q)).await;
+    let resp = crate::images::Images::save(State(app.clone()), Query(q)).await;
     assert_eq!(resp.status(), StatusCode::OK, "save succeeds");
     let tar = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
@@ -68,7 +68,8 @@ async fn save_load_round_trips_lifecycle_metadata() {
 
     // Fresh daemon; docker load the archive back.
     let app2 = test_app();
-    let resp = crate::images::image_load(State(app2.clone()), axum::body::Bytes::from(tar)).await;
+    let resp =
+        crate::images::ImageLoad::handle(State(app2.clone()), axum::body::Bytes::from(tar)).await;
     assert_eq!(resp.status(), StatusCode::OK, "load succeeds");
     let loaded = app2
         .inner
@@ -97,13 +98,13 @@ async fn image_id_is_stable_sha256_shared_by_list_and_inspect() {
     seed_image_rootfs(&app, "idimg:1.0", "/store/idimg-rootfs").await;
 
     // list id
-    let axum::Json(list) = crate::images::images_json(State(app.clone())).await;
+    let axum::Json(list) = crate::images::ImageApi::list(State(app.clone())).await;
     let list_id = serde_json::to_value(&list).unwrap()[0]["Id"]
         .as_str()
         .unwrap()
         .to_string();
     // inspect id
-    let resp = crate::images::image_inspect(State(app.clone()), Path("idimg:1.0".into())).await;
+    let resp = crate::images::ImageApi::inspect(State(app.clone()), Path("idimg:1.0".into())).await;
     let inspect = to_body_json(resp).await;
     let inspect_id = inspect["Id"].as_str().unwrap().to_string();
 
@@ -120,7 +121,7 @@ async fn image_id_is_stable_sha256_shared_by_list_and_inspect() {
         "lowercase hex"
     );
     // Deterministic for the same content.
-    let axum::Json(list2) = crate::images::images_json(State(app.clone())).await;
+    let axum::Json(list2) = crate::images::ImageApi::list(State(app.clone())).await;
     let list_id2 = serde_json::to_value(&list2).unwrap()[0]["Id"]
         .as_str()
         .unwrap()
@@ -133,7 +134,7 @@ async fn image_id_is_stable_sha256_shared_by_list_and_inspect() {
 async fn images_json_wire_shape() {
     let app = test_app();
     seed_image(&app, "alpine:3.19", 12345).await;
-    let axum::Json(list) = crate::images::images_json(State(app.clone())).await;
+    let axum::Json(list) = crate::images::ImageApi::list(State(app.clone())).await;
     assert_eq!(list.len(), 1);
     let v = serde_json::to_value(&list).unwrap();
     let img = &v.as_array().unwrap()[0];
@@ -177,7 +178,7 @@ async fn system_df_wire_shape_and_counts() {
     seed_image(&app, "alpine:3.19", 1).await;
     seed_volume(&app, "dfvol", /*in_use=*/ false).await;
 
-    let axum::Json(df) = crate::system::system_df(State(app.clone())).await;
+    let axum::Json(df) = crate::system::System::df(State(app.clone())).await;
     let v = serde_json::to_value(&df).unwrap();
     let obj = v.as_object().unwrap();
     // Top-level flat arrays + scalars.
@@ -271,7 +272,7 @@ async fn image_tag_missing_source_is_404() {
 async fn image_tag_empty_repo_is_400() {
     let app = test_app();
     seed_image_rootfs(&app, "alpine:3.19", "/store/alpine-rootfs").await;
-    // repo param absent -> unwrap_or_default() == "" -> bad_request("repo required").
+    // repo param absent -> unwrap_or_default() == "" -> ErrorMessage::bad_request("repo required").
     let q: crate::images::TagQ = serde_json::from_value(serde_json::json!({})).unwrap();
     let resp =
         crate::images::image_tag(State(app.clone()), Path("alpine:3.19".into()), Query(q)).await;
@@ -724,7 +725,7 @@ async fn commit_captures_upper_writes_and_user() {
         "container": "commitme0000", "repo": "committed", "tag": "v1"
     }))
     .unwrap();
-    let r = crate::build::commit_container(State(app.clone()), Query(q)).await;
+    let r = crate::model::Container::commit(State(app.clone()), Query(q)).await;
     assert_eq!(r.status(), StatusCode::CREATED, "commit succeeds");
     // The committed image records the container's User.
     let g = app.inner.lock().await;
@@ -762,7 +763,7 @@ async fn discover_images_restores_labels_and_arch_from_sidecar() {
         .to_string(),
     )
     .unwrap();
-    let imgs = crate::util::discover_images(&app.images_dir);
+    let imgs = crate::util::Discovery::new(&app.images_dir).images();
     let img = imgs
         .iter()
         .find(|i| i.name == "scratchx86:latest")
@@ -832,7 +833,8 @@ async fn export_includes_upper_layer_writes() {
         );
     }
     let resp =
-        crate::containers::containers_export(State(app.clone()), Path("exportme0000".into())).await;
+        crate::containers::Containers::export(State(app.clone()), Path("exportme0000".into()))
+            .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
@@ -876,7 +878,7 @@ async fn tag_alias_survives_discovery() {
         crate::images::image_tag(State(app.clone()), Path("base:latest".into()), Query(q)).await;
     assert_eq!(r.status(), StatusCode::CREATED);
     // Simulate a daemon restart: rediscover from disk. The alias must still resolve.
-    let rediscovered = crate::util::discover_images(&app.images_dir);
+    let rediscovered = crate::util::Discovery::new(&app.images_dir).images();
     assert!(
         rediscovered
             .iter()
@@ -920,7 +922,7 @@ async fn stats_num_procs_agrees_with_pids_and_memory_shape() {
 async fn distribution_inspect_is_honest_not_fabricated() {
     // hl cannot resolve remote registry manifests, so it must NOT invent a descriptor. The response is
     // a Docker-shaped 404 error, and its body carries no fabricated `Descriptor`/`Digest`.
-    let resp = crate::images::distribution_inspect(Path("busybox:latest".into())).await;
+    let resp = crate::images::ImageApi::distribution(Path("busybox:latest".into())).await;
     assert_eq!(
         resp.status(),
         StatusCode::NOT_FOUND,

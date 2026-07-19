@@ -35,19 +35,21 @@ pub enum ShaderNative {
     /// keyed on this; on `DestroyShader` it releases this id's alias of that shared backing.
     Module {
         module: wgpu::ShaderModule,
-        reflected: crate::reflect::Reflected,
+        reflected: crate::reflect::ModuleUsage,
         key: crate::dedup::ShaderKey,
     },
     /// A compiled compute kernel, lowered to WGSL lazily at compute-pipeline creation.
     Kernel(Box<KernelProgram>),
 }
 
-/// Downcast a live shader id to its native handle.
-pub fn native<'a>(res: &'a SessionResources, id: u32) -> Result<&'a ShaderNative> {
-    res.shaders
-        .get(id)?
-        .downcast_ref::<ShaderNative>()
-        .ok_or(GpuError::Invalid("wgpu: shader native type mismatch"))
+impl ShaderNative {
+    /// Downcast a live shader id to its native handle.
+    pub fn get(res: &SessionResources, id: u32) -> Result<&Self> {
+        res.shaders
+            .get(id)?
+            .downcast_ref::<Self>()
+            .ok_or(GpuError::Invalid("wgpu: shader native type mismatch"))
+    }
 }
 
 impl WgpuExecutor {
@@ -129,7 +131,7 @@ impl WgpuExecutor {
         // Cache miss: translate to WGSL and compile a fresh module, then charge one backing's residency.
         let (src, reflected, label) = match kind {
             ShaderPayloadKind::SpirV => {
-                let (src, reflected) = wgsl::spirv_to_wgsl_reflect(words).map_err(|e| {
+                let (src, reflected) = wgsl::Spirv::translate_reflect(words).map_err(|e| {
                     hl_log::hl_warn!(
                         hl_log::tag::WGPU,
                         "shader compile failed kind=SpirV err={}",
@@ -179,7 +181,7 @@ impl WgpuExecutor {
                 label: Some(label),
                 source: wgpu::ShaderSource::Wgsl(src.into()),
             });
-        let bytes = crate::dedup::shader_backing_bytes(words);
+        let bytes = key.backing_bytes();
         // Insert the per-id native FIRST (it may reject a duplicate id); only register the shared backing
         // once the id is genuinely live, so a `DuplicateId` does not leave a phantom refcount.
         res.shaders.insert(

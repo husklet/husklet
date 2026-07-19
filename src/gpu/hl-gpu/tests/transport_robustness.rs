@@ -214,7 +214,7 @@ fn an_over_cap_frame_is_drained_and_nacked_without_closing_the_connection() {
 
     let stream = UnixStream::connect(&sock.0).unwrap();
     // Consume the host's capability handshake first (the guest reads this on connect).
-    let _caps = unix::read_handshake(&stream).unwrap();
+    let _caps = unix::Connection::new(&stream).read_handshake().unwrap();
 
     // Forge an over-cap frame: a header declaring a payload just past MAX_FRAME_BYTES, then stream that many
     // real bytes (in chunks, so we never allocate the whole thing). The host must drain all of it and NACK.
@@ -244,14 +244,16 @@ fn an_over_cap_frame_is_drained_and_nacked_without_closing_the_connection() {
     assert_eq!(ack[0], ACK_FAIL, "an over-cap frame is NACKed");
 
     // The SAME connection must still serve a normal small frame — the pipe survived the over-cap frame.
-    let good = hl_gpu::encode_stream(&[Cmd::CreateFence(3)]);
+    let good = hl_gpu::Encoder::stream(&[Cmd::CreateFence(3)]);
     let good_hdr = SubmitHeader {
         surface_id: 5,
         width: 0,
         height: 0,
         len: good.len() as u32,
     };
-    unix::write_frame(&stream, &good_hdr, &good).unwrap();
+    unix::Connection::new(&stream)
+        .write_frame(&good_hdr, &good)
+        .unwrap();
     (&stream)
         .read_exact(&mut ack)
         .expect("the same connection served a good frame after the over-cap one");

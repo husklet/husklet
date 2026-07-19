@@ -2,7 +2,6 @@
 //! of the former `lifecycle.rs`; behavior unchanged. The force-delete path reuses
 //! `kill_group` from the sibling `run` module.
 use super::super::*;
-use super::run::kill_group;
 
 #[derive(Deserialize)]
 pub(crate) struct RenameQ {
@@ -15,8 +14,8 @@ pub(crate) async fn containers_rename(
     Query(q): Query<RenameQ>,
 ) -> Response {
     let mut g = a.inner.lock().await;
-    let Some(full) = resolve_cid(&g, &id) else {
-        return no_such(&id);
+    let Some(full) = ContainerId::resolve(&g, &id) else {
+        return ErrorMessage::no_such(&id);
     };
     if let Some(name) = q.name {
         let new_name = name.trim_start_matches('/').to_string();
@@ -27,13 +26,13 @@ pub(crate) async fn containers_rename(
             .values()
             .any(|c| c.id != full && c.name == new_name)
         {
-            return conflict(format!(
+            return ErrorMessage::conflict(format!(
                 "Conflict. The container name \"/{new_name}\" is already in use"
             ));
         }
         // Re-alias the container's network endpoints so `network inspect` and the live DNS `.names`
         // track the rename (endpoints are keyed by container id, not name).
-        crate::networks::rename_endpoints(&mut g.networks, &full, &new_name);
+        Net::rename_endpoints(&mut g.networks, &full, &new_name);
         let old_name = g
             .containers
             .get(&full)
@@ -55,7 +54,7 @@ pub(crate) async fn containers_rename(
             json!({"name": new_name, "oldName": old_name, "image": image}),
         );
     }
-    save_state(&g, &a.state_path);
+    Store::save(&g, &a.state_path);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -83,9 +82,9 @@ pub(crate) async fn containers_wait(
 ) -> Response {
     let full = {
         let g = a.inner.lock().await;
-        match resolve_cid(&g, &id) {
+        match ContainerId::resolve(&g, &id) {
             Some(f) => f,
-            None => return no_such(&id),
+            None => return ErrorMessage::no_such(&id),
         }
     };
     let condition = q.condition.unwrap_or_default();
@@ -159,11 +158,11 @@ pub(crate) async fn containers_delete(
     Path(id): Path<String>,
     Query(q): Query<DeleteQ>,
 ) -> Response {
-    let force = q_truthy(&q.force);
+    let force = QueryFlag::is_true(&q.force);
     let mut g = a.inner.lock().await;
-    let full = match resolve_cid(&g, &id) {
+    let full = match ContainerId::resolve(&g, &id) {
         Some(f) => f,
-        None => return no_such(&id),
+        None => return ErrorMessage::no_such(&id),
     };
     // `docker rm` of a running container without `-f` is a 409: docker refuses to remove a live
     // container and tells the user to stop it (or use `--force`). With `--force` we stop it first.
@@ -174,7 +173,7 @@ pub(crate) async fn containers_delete(
         .unwrap_or(false);
     if running && !force {
         let short = &full[..12.min(full.len())];
-        return conflict(format!(
+        return ErrorMessage::conflict(format!(
             "cannot remove a running container {short}: Stop the container before removing or force remove"
         ));
     }
@@ -185,12 +184,12 @@ pub(crate) async fn containers_delete(
             .store(true, std::sync::atomic::Ordering::SeqCst);
         if force && running {
             if let Some(pid) = *l.pid.lock().unwrap() {
-                kill_group(pid as i32, libc::SIGKILL);
+                Process::new(pid as i32).signal(libc::SIGKILL);
             }
         } // whole group, not just the leader
     }
-    crate::containers::ports::stop(&full); // free any published host ports before the container is gone
-    let rm_vols = q_truthy(&q.v);
+    crate::containers::ports::Forwarders::stop(&full); // free any published host ports before the container is gone
+    let rm_vols = QueryFlag::is_true(&q.v);
     if let Some(dc) = g.containers.remove(&full) {
         crate::events::emit_event(
             &a.events,
@@ -220,21 +219,28 @@ pub(crate) async fn containers_delete(
         let _ = std::fs::remove_dir_all(hl_home().join("containers").join(&full).join("tmpfs"));
         // Drop the container from any network membership too.
         for n in g.networks.iter_mut() {
-            leave_network(n, &full);
+            n.leave(&full);
         }
         // Reclaim the container's private writable upper layer (Docker discards the writable layer on rm).
         // The shared image rootfs (the read-only lower) is never touched. If that cleanup FAILS, restore
         // the container to state (retryable) and return an error rather than orphaning the layer while
         // reporting a successful remove.
-        if let Err(e) = discard_container_layer(&dc.upper) {
+        if let Err(e) = (Overlay {
+            upper: &dc.upper,
+            rootfs: &dc.rootfs,
+        })
+        .discard()
+        {
             g.containers.insert(full.clone(), dc);
-            return server_error(format!("failed to remove container writable layer: {e}"));
+            return ErrorMessage::server_error(format!(
+                "failed to remove container writable layer: {e}"
+            ));
         }
         // Also drop its live IO plumbing (log buffers + channels); otherwise `docker rm` leaks them.
         g.live.remove(&full);
-        save_state(&g, &a.state_path);
+        Store::save(&g, &a.state_path);
         StatusCode::NO_CONTENT.into_response()
     } else {
-        no_such(&id)
+        ErrorMessage::no_such(&id)
     }
 }

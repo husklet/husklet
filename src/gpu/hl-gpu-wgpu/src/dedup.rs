@@ -28,14 +28,7 @@ use hl_gpu::protocol::model::descriptor::{
 };
 use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
 
-use crate::reflect::Reflected;
-
-/// Residency (bytes) charged for one unique compiled shader backing. Mirrors the runtime's `KIND_SHADER`
-/// footprint estimate (`payload_words * 4`), so the executor-side residency of a deduped set of shaders is
-/// "one payload's worth", not N.
-pub fn shader_backing_bytes(words: &[u32]) -> u64 {
-    (words.len() as u64).saturating_mul(4)
-}
+use crate::reflect::ModuleUsage;
 
 /// Residency (bytes) charged for one unique compiled render-pipeline backing. Mirrors the runtime's
 /// `KIND_PIPELINE` compiled-cache footprint estimate (a flat 4096).
@@ -48,6 +41,13 @@ pub const PIPELINE_BACKING_BYTES: u64 = 4096;
 pub struct ShaderKey {
     pub kind: u8,
     pub words: Vec<u32>,
+}
+
+impl ShaderKey {
+    /// Residency charged for this unique compiled shader backing.
+    pub fn backing_bytes(&self) -> u64 {
+        (self.words.len() as u64).saturating_mul(4)
+    }
 }
 
 /// The full content identity of a render pipeline: each stage's deduped shader identity + entry point, plus
@@ -96,7 +96,7 @@ impl RenderPipeKey {
 /// One compiled shader backing shared by every id aliasing this content.
 struct ShaderBacking {
     module: wgpu::ShaderModule,
-    reflected: Reflected,
+    reflected: ModuleUsage,
     bytes: u64,
     /// Live alias ids referencing this backing. The backing is resident (its bytes counted) while > 0.
     refcount: u32,
@@ -245,7 +245,7 @@ impl DedupCaches {
     /// re-count residency if the backing had been released this batch) and return a cheap clone of the
     /// shared module + its reflection for the new id. On a miss, returns `None` (the caller compiles then
     /// calls [`shader_install`](Self::shader_install)).
-    pub fn shader_get(&mut self, key: &ShaderKey) -> Option<(wgpu::ShaderModule, Reflected)> {
+    pub fn shader_get(&mut self, key: &ShaderKey) -> Option<(wgpu::ShaderModule, ModuleUsage)> {
         let e = self.shaders.get_mut(key)?;
         if e.refcount == 0 {
             self.shader_bytes = self.shader_bytes.saturating_add(e.bytes);
@@ -262,7 +262,7 @@ impl DedupCaches {
         &mut self,
         key: ShaderKey,
         module: wgpu::ShaderModule,
-        reflected: Reflected,
+        reflected: ModuleUsage,
         bytes: u64,
     ) {
         self.shader_bytes = self.shader_bytes.saturating_add(bytes);

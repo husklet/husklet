@@ -22,10 +22,12 @@ mod mounts;
 mod stats;
 mod top;
 
+/// HTTP adapter namespace for container collection queries and maintenance operations.
+pub(crate) struct Containers;
+
 pub(crate) use admin::*;
-pub(crate) use detail::*;
 pub(crate) use diff::*;
-pub(crate) use list::*;
+#[cfg(test)]
+pub(crate) use list::PsQ;
 pub(crate) use logs::*;
 pub(crate) use stats::*;
-pub(crate) use top::*;

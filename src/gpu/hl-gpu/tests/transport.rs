@@ -9,10 +9,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
-use hl_gpu::protocol::codec::{decode_stream, encode_stream};
-use hl_gpu::protocol::model::capability::{
-    command_bits, format_bits, shader_payload, ALL_COMMANDS, COLOR_FORMATS,
-};
+use hl_gpu::protocol::model::capability::{shader_payload, ALL_COMMANDS, COLOR_FORMATS};
 use hl_gpu::protocol::model::command::*;
 use hl_gpu::protocol::model::descriptor::*;
 use hl_gpu::protocol::model::enums::*;
@@ -74,8 +71,8 @@ fn feature_request() -> FeatureRequest {
     FeatureRequest {
         wire_version: WIRE_VERSION,
         shader_payloads: shader_payload::SPIRV,
-        command_bits: command_bits(ALL_COMMANDS),
-        texture_formats: format_bits(COLOR_FORMATS),
+        command_bits: hl_gpu::Capabilities::command_bits(ALL_COMMANDS),
+        texture_formats: TextureFormat::bits(COLOR_FORMATS),
     }
 }
 
@@ -84,7 +81,7 @@ fn remote_sink_submits_a_batch_a_server_decodes_identically() {
     let sock = TempSock::new("roundtrip");
     let listener = UnixListener::bind(&sock.0).unwrap();
     let batch = sample_batch();
-    let expected_payload = encode_stream(&batch);
+    let expected_payload = hl_gpu::Encoder::stream(&batch);
 
     // Server: advertise caps, decode exactly one frame, report it back to the test.
     let (tx, rx) = mpsc::channel();
@@ -120,7 +117,7 @@ fn remote_sink_submits_a_batch_a_server_decodes_identically() {
     );
     // Bytes: the payload the server saw re-encodes to the same bytes the sink encoded.
     assert_eq!(
-        encode_stream(&decoded),
+        hl_gpu::Encoder::stream(&decoded),
         expected_payload,
         "payload bytes are byte-identical"
     );
@@ -270,7 +267,9 @@ fn reconnect_replays_acknowledged_residency_once_before_new_work() {
     let server = thread::spawn(move || {
         // Read one framed submit's payload after sending the handshake.
         fn hs_then_frame(stream: &mut UnixStream, caps: &Capabilities) -> Vec<u8> {
-            hl_gpu::transport::adapter::unix::write_handshake(stream, caps).unwrap();
+            hl_gpu::transport::adapter::unix::Connection::new(stream)
+                .write_handshake(caps)
+                .unwrap();
             let mut hdr = [0u8; 16];
             stream.read_exact(&mut hdr).unwrap();
             let len = u32::from_le_bytes(hdr[12..16].try_into().unwrap()) as usize;
@@ -308,11 +307,11 @@ fn reconnect_replays_acknowledged_residency_once_before_new_work() {
 
     let (first_body, recovered) = server.join().unwrap();
     assert_eq!(
-        decode_stream(&first_body).unwrap(),
+        hl_gpu::Decoder::stream(&first_body).unwrap(),
         upload,
         "first executor saw the upload"
     );
-    let recovered = decode_stream(&recovered).unwrap();
+    let recovered = hl_gpu::Decoder::stream(&recovered).unwrap();
     assert_eq!(
         &recovered[..upload.len()],
         upload.as_slice(),

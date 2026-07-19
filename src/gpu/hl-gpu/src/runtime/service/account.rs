@@ -12,9 +12,7 @@ use std::collections::HashMap;
 
 use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::{GpuError, Result};
-use crate::runtime::model::resources::{
-    create_charge, destroy_key, kind_name, Totals, KIND_EXTERNAL, KIND_PIPELINE,
-};
+use crate::runtime::model::resources::{ResourceKind, Totals, KIND_EXTERNAL, KIND_PIPELINE};
 use crate::runtime::model::session::Session;
 
 /// Charge a whole validated frame's creates (and refund its destroys) transactionally against the
@@ -23,79 +21,83 @@ use crate::runtime::model::session::Session;
 /// HERE, before any ledger mutation, keeping the account/dispatch seam failure-atomic: account and
 /// dispatch agree on rejection and the ledger never drifts on a create the executor will refuse. A legal
 /// same-frame destroy-then-recreate is unaffected (the destroy clears the id from `next_live` first).
-pub fn charge_frame(session: &mut Session, cmds: &[Cmd]) -> Result<()> {
-    let mut next_live = session.ledger.live.clone();
-    let mut next = session.ledger.totals;
-    for cmd in cmds {
-        if let Some((kind, id, bytes)) = create_charge(cmd)? {
-            if next_live.insert((kind, id), bytes).is_some() {
-                // The id is already live (from a prior frame, or an earlier create in this frame with no
-                // intervening destroy) — a duplicate create. The executor would reject it as DuplicateId;
-                // reject it here first so no residency is charged for a create that will never happen.
-                return Err(GpuError::DuplicateId {
-                    kind: kind_name(kind),
-                    id,
-                });
-            }
-            next.bytes = next
-                .bytes
-                .checked_add(bytes)
-                .ok_or(GpuError::ResourceLimit("residency overflow"))?;
-            next.objects = next
-                .objects
-                .checked_add(1)
-                .ok_or(GpuError::ResourceLimit("object count overflow"))?;
-            if kind == KIND_PIPELINE {
-                next.compiled_bytes = next
-                    .compiled_bytes
+impl Session {
+    pub fn charge_frame(&mut self, cmds: &[Cmd]) -> Result<()> {
+        let session = self;
+        let mut next_live = session.ledger.live.clone();
+        let mut next = session.ledger.totals;
+        for cmd in cmds {
+            if let Some((kind, id, bytes)) = cmd.create_charge()? {
+                if next_live.insert((kind, id), bytes).is_some() {
+                    // The id is already live (from a prior frame, or an earlier create in this frame with no
+                    // intervening destroy) — a duplicate create. The executor would reject it as DuplicateId;
+                    // reject it here first so no residency is charged for a create that will never happen.
+                    return Err(GpuError::DuplicateId {
+                        kind: ResourceKind::from_code(kind).name(),
+                        id,
+                    });
+                }
+                next.bytes = next
+                    .bytes
                     .checked_add(bytes)
-                    .ok_or(GpuError::ResourceLimit("compiled cache overflow"))?;
-            }
-        } else if let Some((kind, id)) = destroy_key(cmd) {
-            if let Some(bytes) = next_live.remove(&(kind, id)) {
-                next.bytes -= bytes;
-                next.objects -= 1;
+                    .ok_or(GpuError::ResourceLimit("residency overflow"))?;
+                next.objects = next
+                    .objects
+                    .checked_add(1)
+                    .ok_or(GpuError::ResourceLimit("object count overflow"))?;
                 if kind == KIND_PIPELINE {
-                    next.compiled_bytes -= bytes;
+                    next.compiled_bytes = next
+                        .compiled_bytes
+                        .checked_add(bytes)
+                        .ok_or(GpuError::ResourceLimit("compiled cache overflow"))?;
+                }
+            } else if let Some((kind, id)) = cmd.destroy_key() {
+                if let Some(bytes) = next_live.remove(&(kind, id)) {
+                    next.bytes -= bytes;
+                    next.objects -= 1;
+                    if kind == KIND_PIPELINE {
+                        next.compiled_bytes -= bytes;
+                    }
                 }
             }
         }
+        commit(session, next_live, next)
     }
-    commit(session, next_live, next)
-}
 
-/// Charge an external allocation (a dma-buf / IOSurface imported from the guest, not produced by the IR
-/// stream) against this connection. Transactional; a duplicate external id is a typed error.
-pub fn charge_external(session: &mut Session, id: u32, bytes: u64) -> Result<()> {
-    let mut next_live = session.ledger.live.clone();
-    let mut next = session.ledger.totals;
-    if next_live.insert((KIND_EXTERNAL, id), bytes).is_some() {
-        return Err(GpuError::Invalid("duplicate external allocation id"));
+    /// Charge an external allocation (a dma-buf / IOSurface imported from the guest, not produced by the IR
+    /// stream) against this connection. Transactional; a duplicate external id is a typed error.
+    pub fn charge_external(session: &mut Session, id: u32, bytes: u64) -> Result<()> {
+        let mut next_live = session.ledger.live.clone();
+        let mut next = session.ledger.totals;
+        if next_live.insert((KIND_EXTERNAL, id), bytes).is_some() {
+            return Err(GpuError::Invalid("duplicate external allocation id"));
+        }
+        next.bytes = next
+            .bytes
+            .checked_add(bytes)
+            .ok_or(GpuError::ResourceLimit("residency overflow"))?;
+        next.objects = next
+            .objects
+            .checked_add(1)
+            .ok_or(GpuError::ResourceLimit("object count overflow"))?;
+        commit(session, next_live, next)
     }
-    next.bytes = next
-        .bytes
-        .checked_add(bytes)
-        .ok_or(GpuError::ResourceLimit("residency overflow"))?;
-    next.objects = next
-        .objects
-        .checked_add(1)
-        .ok_or(GpuError::ResourceLimit("object count overflow"))?;
-    commit(session, next_live, next)
-}
 
-/// Release a previously-charged external allocation. Errors if the id was never charged.
-pub fn release_external(session: &mut Session, id: u32) -> Result<()> {
-    let mut next_live = session.ledger.live.clone();
-    let mut next = session.ledger.totals;
-    let bytes = next_live
-        .remove(&(KIND_EXTERNAL, id))
-        .ok_or(GpuError::UnknownId {
-            kind: "external allocation",
-            id,
-        })?;
-    next.bytes -= bytes;
-    next.objects -= 1;
-    commit(session, next_live, next)
+    /// Release a previously-charged external allocation. Errors if the id was never charged.
+    pub fn release_external(&mut self, id: u32) -> Result<()> {
+        let session = self;
+        let mut next_live = session.ledger.live.clone();
+        let mut next = session.ledger.totals;
+        let bytes = next_live
+            .remove(&(KIND_EXTERNAL, id))
+            .ok_or(GpuError::UnknownId {
+                kind: "external allocation",
+                id,
+            })?;
+        next.bytes -= bytes;
+        next.objects -= 1;
+        commit(session, next_live, next)
+    }
 }
 
 /// Accept ownership of an object transferred INTO this connection, charging it under `(kind, id)`.

@@ -3,10 +3,10 @@
 //!
 //! Ported from `hl-compositor`'s `FramePacing` / `PacingPolicy` state machine (`handlers/compositor.rs`)
 //! and the present-timing derivation. [`FramePacing`] classifies what happened to a frame; [`PacingPolicy`]
-//! says what to do with the surface's callbacks/feedback; [`from_outcome`] maps a presenter's
+//! says what to do with the surface's callbacks/feedback; [`FramePacing::from`] maps a presenter's
 //! [`PresentOutcome`] onto pacing; [`should_present`] is the neutral vsync throttle a `FakeClock` drives.
 
-use crate::scene::port::{PresentOutcome, PresentTiming};
+use crate::scene::port::PresentOutcome;
 
 /// How a presented tree should advance its per-surface frame pacing. Exact port of the ported enum:
 /// `Presented` (a new frame reached the screen), `Skipped` (clean tree — the last frame still stands),
@@ -68,12 +68,14 @@ impl FramePacing {
 /// Map a presenter's structured [`PresentOutcome`] onto frame pacing — the exact classification
 /// `present_render_root` performs: only a visibly `Delivered` frame advances callbacks/feedback; an
 /// `Offscreen` present is a retryable failure; explicit failures pass through.
-pub fn from_outcome(outcome: PresentOutcome) -> FramePacing {
-    match outcome {
-        PresentOutcome::Delivered { .. } => FramePacing::Presented,
-        PresentOutcome::Offscreen => FramePacing::RetryableFailure,
-        PresentOutcome::RetryableFailure => FramePacing::RetryableFailure,
-        PresentOutcome::TerminalFailure => FramePacing::TerminalFailure,
+impl From<PresentOutcome> for FramePacing {
+    fn from(outcome: PresentOutcome) -> Self {
+        match outcome {
+            PresentOutcome::Delivered { .. } => FramePacing::Presented,
+            PresentOutcome::Offscreen => FramePacing::RetryableFailure,
+            PresentOutcome::RetryableFailure => FramePacing::RetryableFailure,
+            PresentOutcome::TerminalFailure => FramePacing::TerminalFailure,
+        }
     }
 }
 
@@ -88,16 +90,5 @@ pub fn should_present(now_ns: u64, last_present_ns: Option<u64>, refresh_ns: u64
         None => true,
         Some(_) if refresh_ns == 0 => true,
         Some(last) => now_ns.saturating_sub(last) >= refresh_ns,
-    }
-}
-
-/// Build the [`PresentTiming`] for a frame delivered at `now_ns` on an output with `refresh_ns`. The
-/// neutral analogue of `PresentedFrame::from_fallback` (compositor-clock timing when the backend
-/// reports none): a vsync flag is set only when the refresh interval is known.
-pub fn fallback_timing(now_ns: u64, refresh_ns: u64) -> PresentTiming {
-    PresentTiming {
-        present_ns: now_ns,
-        refresh_ns,
-        vsync: refresh_ns > 0,
     }
 }

@@ -48,6 +48,39 @@ impl Default for SamplerObj {
 }
 
 impl SamplerObj {
+    pub fn accepts(pname: u32, value: i32) -> bool {
+        match pname {
+            GL_TEXTURE_MIN_FILTER => matches!(
+                value as u32,
+                GL_NEAREST
+                    | GL_LINEAR
+                    | GL_NEAREST_MIPMAP_NEAREST
+                    | GL_LINEAR_MIPMAP_NEAREST
+                    | GL_NEAREST_MIPMAP_LINEAR
+                    | GL_LINEAR_MIPMAP_LINEAR
+            ),
+            GL_TEXTURE_MAG_FILTER => matches!(value as u32, GL_NEAREST | GL_LINEAR),
+            GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T | GL_TEXTURE_WRAP_R => matches!(
+                value as u32,
+                GL_REPEAT | GL_CLAMP_TO_EDGE | GL_MIRRORED_REPEAT
+            ),
+            GL_TEXTURE_COMPARE_MODE => matches!(value as u32, GL_NONE | GL_COMPARE_REF_TO_TEXTURE),
+            GL_TEXTURE_COMPARE_FUNC => matches!(
+                value as u32,
+                GL_NEVER
+                    | GL_LESS
+                    | GL_EQUAL
+                    | GL_LEQUAL
+                    | GL_GREATER
+                    | GL_NOTEQUAL
+                    | GL_GEQUAL
+                    | GL_ALWAYS
+            ),
+            GL_TEXTURE_MIN_LOD | GL_TEXTURE_MAX_LOD => true,
+            _ => false,
+        }
+    }
+
     /// The neutral min-filter for this sampler object's GL min-filter (Linear for `LINEAR` /
     /// `LINEAR_MIPMAP_*`, else Nearest) — the exact mapping [`super::texture::GlTexture::ir_min_filter`]
     /// uses, so a bound sampler object lowers identically to the equivalent texture parameters.
@@ -69,12 +102,12 @@ impl SamplerObj {
 
     /// The neutral S wrap (ClampToEdge / MirrorRepeat / else Repeat).
     pub fn ir_wrap_s(&self) -> AddressMode {
-        sampler_address_mode(self.wrap_s as u32)
+        Self::address_mode(self.wrap_s as u32)
     }
 
     /// The neutral T wrap.
     pub fn ir_wrap_t(&self) -> AddressMode {
-        sampler_address_mode(self.wrap_t as u32)
+        Self::address_mode(self.wrap_t as u32)
     }
 
     /// Read one parameter as `f32` (the int-typed getter rounds this to nearest). `None` for an unknown
@@ -97,11 +130,13 @@ impl SamplerObj {
 
 /// GL wrap enum → neutral address mode (ClampToEdge / MirrorRepeat / else Repeat), matching the texture
 /// path's `address_mode`.
-fn sampler_address_mode(gl: u32) -> AddressMode {
-    match gl {
-        GL_CLAMP_TO_EDGE => AddressMode::ClampToEdge,
-        GL_MIRRORED_REPEAT => AddressMode::MirrorRepeat,
-        _ => AddressMode::Repeat,
+impl SamplerObj {
+    fn address_mode(gl: u32) -> AddressMode {
+        match gl {
+            GL_CLAMP_TO_EDGE => AddressMode::ClampToEdge,
+            GL_MIRRORED_REPEAT => AddressMode::MirrorRepeat,
+            _ => AddressMode::Repeat,
+        }
     }
 }
 
@@ -140,7 +175,7 @@ impl Samplers {
 
     /// `glIsSampler` — true only once the name names a CREATED object (bound/parameterized), not merely
     /// reserved (the lazy-instantiation model GL's buffer/texture names use).
-    pub fn is_sampler(&self, id: u32) -> bool {
+    pub fn contains(&self, id: u32) -> bool {
         self.objects.contains_key(&id)
     }
 
@@ -216,6 +251,15 @@ pub struct Queries {
 }
 
 impl Queries {
+    pub fn supports(target: u32) -> bool {
+        matches!(
+            target,
+            GL_ANY_SAMPLES_PASSED
+                | GL_ANY_SAMPLES_PASSED_CONSERVATIVE
+                | GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN
+        )
+    }
+
     pub fn new() -> Self {
         Self {
             reserved: HashSet::new(),
@@ -240,7 +284,7 @@ impl Queries {
     }
 
     /// `glIsQuery` — true once the name names a CREATED (begun) object, not merely reserved.
-    pub fn is_query(&self, id: u32) -> bool {
+    pub fn contains(&self, id: u32) -> bool {
         self.objects.contains_key(&id)
     }
 
@@ -378,7 +422,7 @@ impl TransformFeedbacks {
     }
 
     /// `glIsTransformFeedback` — true for a created named object (not the default `0`, not reserved).
-    pub fn is_transform_feedback(&self, id: u32) -> bool {
+    pub fn contains(&self, id: u32) -> bool {
         id != 0 && self.objects.contains_key(&id)
     }
 
@@ -486,7 +530,7 @@ impl ProgramPipelines {
     }
 
     /// `glIsProgramPipeline` — true once the name names a created (bound) object, not merely reserved.
-    pub fn is_pipeline(&self, id: u32) -> bool {
+    pub fn contains(&self, id: u32) -> bool {
         self.objects.contains_key(&id)
     }
 

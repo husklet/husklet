@@ -12,6 +12,32 @@ pub(in crate::registry) struct Resp {
     pub(in crate::registry) body: Vec<u8>,
 }
 
+pub(super) struct Curl;
+
+impl Resp {
+    fn parse_status(headers: &str) -> Option<u16> {
+        headers.lines().rev().find_map(|line| {
+            line.strip_prefix("HTTP/")
+                .and_then(|rest| rest.split_whitespace().nth(1))
+                .and_then(|code| code.parse().ok())
+        })
+    }
+
+    #[cfg(test)]
+    fn status(headers: &str) -> u16 {
+        Self::parse_status(headers).unwrap_or(0)
+    }
+
+    pub(in crate::registry) fn header(&self, name: &str) -> Option<String> {
+        let wanted = format!("{}:", name.to_ascii_lowercase());
+        self.headers
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with(&wanted))
+            .and_then(|line| line.split_once(':'))
+            .map(|(_, value)| value.trim().to_owned())
+    }
+}
+
 // curl args are strings. Shared by every curl path (`run_curl` and the blob `download_to_file`) so the
 // two can't drift: `--connect-timeout` bounds only the TCP/TLS connect phase (fail fast on an
 // unreachable/firewalled registry), while `--max-time` caps the whole transfer.
@@ -24,52 +50,45 @@ fn tmp_headers() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("hl-reg-{}-{n}.hdr", std::process::id()))
 }
 
-pub(super) fn run_curl(args: &[String]) -> Result<Resp, Error> {
-    let hdr = tmp_headers();
-    let mut c = Command::new("curl");
-    // `--connect-timeout` bounds only the TCP/TLS connect phase (not the transfer, which keeps the
-    // 10-min `--max-time`), so an unreachable/firewalled registry fails fast instead of hanging. This
-    // matters for the best-effort config refresh on a re-pull of an already-present tag:
-    // when the dev host's egress is blocked, the refresh must give up quickly and keep the cached
-    // config rather than stalling `docker pull` for minutes.
-    c.arg("-sS")
-        .arg("--connect-timeout")
-        .arg(CONNECT_TIMEOUT_SECS)
-        .arg("--max-time")
-        .arg(MAX_TIME_SECS)
-        .arg("-D")
-        .arg(&hdr);
-    for a in args {
-        c.arg(a);
-    }
-    let out = c
-        .output()
-        .map_err(|e| Error::Registry(format!("curl: {e}")))?;
-    let headers = std::fs::read_to_string(&hdr).unwrap_or_default();
-    let _ = std::fs::remove_file(&hdr);
-    if !out.status.success() && headers.is_empty() {
-        return Err(Error::Registry(format!(
-            "curl failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )));
-    }
-    Ok(Resp {
-        status: status_of(&headers),
-        headers,
-        body: out.stdout,
-    })
-}
-/// The status of the *last* response (after any redirects curl followed).
-fn status_of(headers: &str) -> u16 {
-    headers
-        .lines()
-        .rev()
-        .find_map(|l| {
-            l.strip_prefix("HTTP/")
-                .and_then(|r| r.split_whitespace().nth(1))
+impl Curl {
+    pub(super) fn execute(args: &[String]) -> Result<Resp, Error> {
+        let hdr = tmp_headers();
+        let mut c = Command::new("curl");
+        // `--connect-timeout` bounds only the TCP/TLS connect phase (not the transfer, which keeps the
+        // 10-min `--max-time`), so an unreachable/firewalled registry fails fast instead of hanging. This
+        // matters for the best-effort config refresh on a re-pull of an already-present tag:
+        // when the dev host's egress is blocked, the refresh must give up quickly and keep the cached
+        // config rather than stalling `docker pull` for minutes.
+        c.arg("-sS")
+            .arg("--connect-timeout")
+            .arg(CONNECT_TIMEOUT_SECS)
+            .arg("--max-time")
+            .arg(MAX_TIME_SECS)
+            .arg("-D")
+            .arg(&hdr);
+        for a in args {
+            c.arg(a);
+        }
+        let out = c
+            .output()
+            .map_err(|e| Error::Registry(format!("curl: {e}")))?;
+        let headers = std::fs::read_to_string(&hdr).unwrap_or_default();
+        let _ = std::fs::remove_file(&hdr);
+        if !out.status.success() && headers.is_empty() {
+            return Err(Error::Registry(format!(
+                "curl failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+        let status = Resp::parse_status(&headers).ok_or_else(|| {
+            Error::Registry("curl returned malformed HTTP response headers".to_owned())
+        })?;
+        Ok(Resp {
+            status,
+            headers,
+            body: out.stdout,
         })
-        .and_then(|c| c.parse().ok())
-        .unwrap_or(0)
+    }
 }
 
 pub(super) fn with_auth(
@@ -97,17 +116,17 @@ mod tests {
     #[test]
     fn status_of_normal_response() {
         assert_eq!(
-            status_of("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"),
+            Resp::status("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"),
             200
         );
         assert_eq!(
-            status_of("HTTP/1.1 301 Moved Permanently\r\nLocation: /x\r\n\r\n"),
+            Resp::status("HTTP/1.1 301 Moved Permanently\r\nLocation: /x\r\n\r\n"),
             301
         );
-        assert_eq!(status_of("HTTP/1.1 404 Not Found\r\n\r\n"), 404);
-        assert_eq!(status_of("HTTP/1.1 401 Unauthorized\r\n\r\n"), 401);
+        assert_eq!(Resp::status("HTTP/1.1 404 Not Found\r\n\r\n"), 404);
+        assert_eq!(Resp::status("HTTP/1.1 401 Unauthorized\r\n\r\n"), 401);
         // HTTP/2 has no "OK" reason phrase after the code; nth(1) still lands on the code.
-        assert_eq!(status_of("HTTP/2 200\r\n\r\n"), 200);
+        assert_eq!(Resp::status("HTTP/2 200\r\n\r\n"), 200);
     }
 
     #[test]
@@ -116,22 +135,40 @@ mod tests {
         // the LAST HTTP status line — the final response after redirects, not the 301/307.
         let chain = "HTTP/1.1 301 Moved Permanently\r\nLocation: https://cdn/x\r\n\r\n\
                      HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n";
-        assert_eq!(status_of(chain), 200);
+        assert_eq!(Resp::status(chain), 200);
 
         // A chain whose final hop is an error resolves to that error, not the intermediate 307.
         let to_404 = "HTTP/1.1 307 Temporary Redirect\r\nLocation: /gone\r\n\r\n\
                       HTTP/1.1 404 Not Found\r\n\r\n";
-        assert_eq!(status_of(to_404), 404);
+        assert_eq!(Resp::status(to_404), 404);
     }
 
     #[test]
     fn status_of_empty_or_garbage_is_zero() {
         // No "HTTP/" line -> find_map None -> unwrap_or(0). This is the sentinel the callers treat as
         // "no usable response".
-        assert_eq!(status_of(""), 0);
-        assert_eq!(status_of("not headers at all\r\ngarbage\r\n"), 0);
+        assert_eq!(Resp::status(""), 0);
+        assert_eq!(Resp::status("not headers at all\r\ngarbage\r\n"), 0);
         // A truncated status line with no code also falls through to 0.
-        assert_eq!(status_of("HTTP/1.1\r\n"), 0);
+        assert_eq!(Resp::status("HTTP/1.1\r\n"), 0);
+    }
+
+    #[test]
+    fn response_header_is_case_insensitive_and_preserves_colons() {
+        let response = Resp {
+            status: 200,
+            headers: "Content-Type: text/plain\r\nLocation: https://host:5000/path\r\n".to_owned(),
+            body: Vec::new(),
+        };
+        assert_eq!(
+            response.header("content-type").as_deref(),
+            Some("text/plain")
+        );
+        assert_eq!(
+            response.header("LOCATION").as_deref(),
+            Some("https://host:5000/path")
+        );
+        assert_eq!(response.header("missing"), None);
     }
 
     // ---- with_auth: append -H Accept / -H Authorization curl args ----

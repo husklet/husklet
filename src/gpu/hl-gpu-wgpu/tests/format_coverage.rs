@@ -38,7 +38,7 @@
 mod common;
 use common::*;
 
-use hl_gpu::protocol::model::capability::{format_bits, COLOR_FORMATS, DEPTH_FORMATS};
+use hl_gpu::protocol::model::capability::{COLOR_FORMATS, DEPTH_FORMATS};
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, ColorTargetState,
     DepthAttachment, DepthState, RenderPipelineDesc, SamplerDesc, ShaderRef, TextureDesc,
@@ -693,9 +693,9 @@ fn executor_advertises_exactly_the_formats_this_suite_proves() {
 
     // The set this file round-trips: all COLOR_FORMATS + Depth32Float (DEPTH_FORMATS) + Depth24PlusStencil8
     // (the combined depth+stencil format this stencil-lowering executor additionally advertises).
-    let proven = format_bits(COLOR_FORMATS)
-        | format_bits(DEPTH_FORMATS)
-        | format_bits(&[TextureFormat::Depth24PlusStencil8]);
+    let proven = TextureFormat::bits(COLOR_FORMATS)
+        | TextureFormat::bits(DEPTH_FORMATS)
+        | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]);
 
     assert_eq!(advertised, proven,
         "the executor's advertised texture_formats bitset ({advertised:#b}) must equal EXACTLY the set this \

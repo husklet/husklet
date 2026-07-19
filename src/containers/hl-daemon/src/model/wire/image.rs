@@ -26,6 +26,110 @@ pub(crate) struct Image {
     pub(crate) onbuild: Vec<String>,
 }
 
+impl Image {
+    pub(crate) fn id(&self) -> String {
+        let mut labels: Vec<_> = self.labels.iter().collect();
+        labels.sort();
+        let labels = labels
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let manifest = format!(
+            "rootfs:{}\narch:{}\ncmd:{}\nentrypoint:{}\nenv:{}\nworkdir:{}\nuser:{}\nlabels:\n{}",
+            self.rootfs,
+            self.arch.arch(),
+            self.cmd.join("\u{1}"),
+            self.entrypoint.join("\u{1}"),
+            self.env.join("\u{1}"),
+            self.workdir,
+            self.user,
+            labels,
+        );
+        format!(
+            "sha256:{}",
+            hl_images::Sha256Digest::from_bytes(manifest.as_bytes())
+        )
+    }
+
+    pub(crate) fn oci_config(&self) -> serde_json::Value {
+        use serde_json::{json, Map, Value};
+        let mut config = Map::new();
+        for (key, value) in [
+            ("Cmd", (!self.cmd.is_empty()).then(|| json!(self.cmd))),
+            (
+                "Entrypoint",
+                (!self.entrypoint.is_empty()).then(|| json!(self.entrypoint)),
+            ),
+            ("Env", (!self.env.is_empty()).then(|| json!(self.env))),
+            (
+                "WorkingDir",
+                (!self.workdir.is_empty()).then(|| json!(self.workdir)),
+            ),
+            ("User", (!self.user.is_empty()).then(|| json!(self.user))),
+            (
+                "StopSignal",
+                (!self.stop_signal.is_empty()).then(|| json!(self.stop_signal)),
+            ),
+        ] {
+            if let Some(value) = value {
+                config.insert(key.into(), value);
+            }
+        }
+        if !self.exposed_ports.is_empty() {
+            config.insert(
+                "ExposedPorts".into(),
+                Value::Object(
+                    self.exposed_ports
+                        .iter()
+                        .map(|p| (p.clone(), json!({})))
+                        .collect(),
+                ),
+            );
+        }
+        if !self.labels.is_empty() {
+            let mut labels: Vec<_> = self.labels.iter().collect();
+            labels.sort_by(|a, b| a.0.cmp(b.0));
+            config.insert(
+                "Labels".into(),
+                Value::Object(
+                    labels
+                        .into_iter()
+                        .map(|(k, v)| (k.clone(), json!(v)))
+                        .collect(),
+                ),
+            );
+        }
+        if !self.img_volumes.is_empty() {
+            config.insert(
+                "Volumes".into(),
+                Value::Object(
+                    self.img_volumes
+                        .iter()
+                        .map(|v| (v.clone(), json!({})))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(value) = self
+            .healthcheck
+            .as_ref()
+            .and_then(|h| serde_json::to_value(h).ok())
+        {
+            config.insert("Healthcheck".into(), value);
+        }
+        Value::Object(config)
+    }
+
+    pub(crate) fn score(&self) -> i32 {
+        (!self.env.is_empty()) as i32 * 1000
+            + (!self.entrypoint.is_empty()) as i32 * 10
+            + (!self.workdir.is_empty()) as i32 * 5
+            + self.labels.len() as i32
+            + (self.cmd.len() != 1 || self.cmd[0] != "/bin/sh") as i32
+    }
+}
+
 /// One `docker history` row (a build instruction). `empty_layer` is true for config-only instructions
 /// (ENV/LABEL/CMD/…) that add no filesystem layer, matching Docker's history schema.
 #[derive(Clone, Default)]

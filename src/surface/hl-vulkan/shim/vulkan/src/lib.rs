@@ -401,7 +401,7 @@ mod tests {
         let enables: [u32; 2] = [1, 0];
         crate::dynstate::vkCmdSetColorBlendEnableEXT(cb, 0, 2, enables.as_ptr() as *const c_void);
 
-        let ds = crate::state::with(|s| {
+        let ds = crate::state::StateStore::with(|s| {
             s.device.as_ref().unwrap().command_buffers.get(&handle).unwrap().dynamic.clone()
         });
         assert_eq!(ds.cull_mode, 2);
@@ -423,7 +423,7 @@ mod tests {
         let (cb, handle) = recording_command_buffer();
         let vps = [VkViewport { x: 0.0, y: 0.0, width: 64.0, height: 48.0, min_depth: 0.0, max_depth: 1.0 }];
         crate::dynstate::vkCmdSetViewportWithCount(cb, 1, vps.as_ptr() as *const c_void);
-        let n = crate::state::with(|s| {
+        let n = crate::state::StateStore::with(|s| {
             use hl_gpu::protocol::model::command::Enc;
             s.device
                 .as_ref()
@@ -444,7 +444,7 @@ mod tests {
         let _g = test_guard();
         let (cb, handle) = recording_command_buffer();
         crate::devgroup::vkCmdDispatchBase(cb, 0, 0, 0, 4, 5, 6);
-        let has = crate::state::with(|s| {
+        let has = crate::state::StateStore::with(|s| {
             use hl_gpu::protocol::model::command::Enc;
             s.device
                 .as_ref()
@@ -471,7 +471,7 @@ mod tests {
         );
         // Insert buffer records directly (a real `vkCreateBuffer` needs the remote GPU-exec sink, which
         // is not connected in a unit test); the address query only reads `dev.buffers`.
-        let (buf1, buf2) = crate::state::with(|s| {
+        let (buf1, buf2) = crate::state::StateStore::with(|s| {
             use hl_vulkan::model::memory::BufferRec;
             let d = s.device.as_mut().unwrap();
             let mk = |d: &mut hl_vulkan::Device, size: u64| {
@@ -527,7 +527,7 @@ mod tests {
             crate::debug::vkSetDebugUtilsObjectNameEXT(core::ptr::null_mut(), &ni as *const _ as *const c_void),
             VK_SUCCESS
         );
-        let stored = crate::state::with(|s| s.debug_object_names.get(&(9, 0xABCD)).cloned());
+        let stored = crate::state::StateStore::with(|s| s.debug_object_names.get(&(9, 0xABCD)).cloned());
         assert_eq!(stored.as_deref(), Some("my-object"));
         // a debug messenger create mints a live handle and destroy reclaims it.
         let mut messenger: u64 = 0;

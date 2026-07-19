@@ -6,9 +6,9 @@
 
 use core::ffi::c_void;
 
-use hl_vulkan::service::create;
+use hl_vulkan::Instance;
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::*;
 
 #[no_mangle]
@@ -21,14 +21,14 @@ pub extern "C" fn vkCreateDevice(
     if p_device.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-    let token = with(|s| {
+    let token = StateStore::with(|s| {
         // Build the logical device over the instance's physical device (materialize a default instance
         // if a device is somehow requested before `vkCreateInstance`).
         let inst = s
             .instance
-            .get_or_insert_with(|| create::create_instance(HL_API_VERSION))
+            .get_or_insert_with(|| Instance::new(HL_API_VERSION))
             .clone();
-        s.device = Some(create::create_device(&inst));
+        s.device = Some(inst.create_device());
         s.device_token()
     });
     unsafe { *p_device = token };
@@ -37,7 +37,7 @@ pub extern "C" fn vkCreateDevice(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyDevice(_device: *mut c_void, _p_allocator: *const c_void) {
-    with(|s| s.device = None);
+    StateStore::with(|s| s.device = None);
 }
 
 #[no_mangle]
@@ -50,7 +50,7 @@ pub extern "C" fn vkGetDeviceQueue(
     if p_queue.is_null() {
         return;
     }
-    let q = with(|s| s.queue_token());
+    let q = StateStore::with(|s| s.queue_token());
     unsafe { *p_queue = q };
 }
 
@@ -73,6 +73,6 @@ pub extern "C" fn vkGetDeviceQueue2(
     if info.queue_family_index != 0 || info.queue_index != 0 {
         return; // only the single (family 0, index 0) queue exists.
     }
-    let q = with(|s| s.queue_token());
+    let q = StateStore::with(|s| s.queue_token());
     unsafe { *p_queue = q };
 }

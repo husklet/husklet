@@ -165,16 +165,19 @@ impl State {
     }
 }
 
-static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+pub struct ShimState;
 
-pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
-    let m = STATE.get_or_init(|| Mutex::new(State::new()));
-    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
-    f(&mut g)
+impl ShimState {
+    pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        let state = STATE.get_or_init(|| Mutex::new(State::new()));
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        f(&mut state)
+    }
 }
 
 /// Reset the process-global state to a clean slate (test-only, so a unit test starts deterministic).
 #[cfg(test)]
 pub fn reset() {
-    with(|s| *s = State::new());
+    ShimState::with(|state| *state = State::new());
 }

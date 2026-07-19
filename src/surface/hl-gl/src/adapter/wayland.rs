@@ -39,8 +39,11 @@ pub const EGL_PLATFORM_WAYLAND_EXT: u32 = 0x31D8;
 pub const EGL_PLATFORM_GBM_KHR: u32 = 0x31D7;
 
 /// Whether `platform` selects the Wayland window system (the only windowed platform this driver backs).
-pub fn is_wayland_platform(platform: u32) -> bool {
-    platform == EGL_PLATFORM_WAYLAND_KHR
+pub struct WaylandPlatform;
+impl WaylandPlatform {
+    pub fn contains(platform: u32) -> bool {
+        platform == EGL_PLATFORM_WAYLAND_KHR
+    }
 }
 
 /// The CLIENT extension string (`eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS)`): the toolkits probe this
@@ -161,46 +164,48 @@ pub struct WlWindowInfo {
 /// # Safety
 /// `w` must be null or point at a readable `wl_egl_window`-ABI struct (what `eglCreateWindowSurface` is
 /// always handed on Wayland).
-pub unsafe fn parse_native_window(w: *const c_void) -> WlWindowInfo {
-    let clamp = |v: i32| if v > 0 && v <= 8192 { v as u32 } else { 256 };
-    if w.is_null() {
-        return WlWindowInfo {
-            width: 256,
-            height: 256,
-            wl_surface: 0,
-        };
-    }
-    let version = *(w as *const isize);
-    if version == HL_WL_EGL_MAGIC {
-        let win = &*(w as *const WlEglWindow);
-        let (mut ww, mut hh) = (win.width, win.height);
-        if win.attached_width > 0
-            && win.attached_height > 0
-            && win.attached_width <= 8192
-            && win.attached_height <= 8192
-        {
-            ww = ww.max(win.attached_width);
-            hh = hh.max(win.attached_height);
+impl WlWindowInfo {
+    pub unsafe fn parse(w: *const c_void) -> Self {
+        let clamp = |v: i32| if v > 0 && v <= 8192 { v as u32 } else { 256 };
+        if w.is_null() {
+            return WlWindowInfo {
+                width: 256,
+                height: 256,
+                wl_surface: 0,
+            };
         }
-        return WlWindowInfo {
-            width: clamp(ww),
-            height: clamp(hh),
-            wl_surface: win.surface as usize,
-        };
-    }
-    // A REAL libwayland-egl `wl_egl_window` (Mesa / the reference wayland-egl backend). Its stable ABI puts an
-    // `intptr_t version` in the first 8 bytes (LP64), then `int width;`@8, `int height;`@12, `int dx;`@16,
-    // `int dy;`@20, and `struct wl_surface *surface;`@24. Read those real fields so the size is the app's
-    // actual window and the wrapped `wl_surface*` drives the app-surface present path (present onto the app's
-    // OWN toplevel), instead of misreading the version word as a 3×256 window.
-    let words = w as *const i32;
-    let width = *words.add(2); // offset 8
-    let height = *words.add(3); // offset 12
-    let surface = *((w as *const u8).add(24) as *const *mut c_void); // offset 24
-    WlWindowInfo {
-        width: clamp(width),
-        height: clamp(height),
-        wl_surface: surface as usize,
+        let version = *(w as *const isize);
+        if version == HL_WL_EGL_MAGIC {
+            let win = &*(w as *const WlEglWindow);
+            let (mut ww, mut hh) = (win.width, win.height);
+            if win.attached_width > 0
+                && win.attached_height > 0
+                && win.attached_width <= 8192
+                && win.attached_height <= 8192
+            {
+                ww = ww.max(win.attached_width);
+                hh = hh.max(win.attached_height);
+            }
+            return WlWindowInfo {
+                width: clamp(ww),
+                height: clamp(hh),
+                wl_surface: win.surface as usize,
+            };
+        }
+        // A REAL libwayland-egl `wl_egl_window` (Mesa / the reference wayland-egl backend). Its stable ABI puts an
+        // `intptr_t version` in the first 8 bytes (LP64), then `int width;`@8, `int height;`@12, `int dx;`@16,
+        // `int dy;`@20, and `struct wl_surface *surface;`@24. Read those real fields so the size is the app's
+        // actual window and the wrapped `wl_surface*` drives the app-surface present path (present onto the app's
+        // OWN toplevel), instead of misreading the version word as a 3×256 window.
+        let words = w as *const i32;
+        let width = *words.add(2); // offset 8
+        let height = *words.add(3); // offset 12
+        let surface = *((w as *const u8).add(24) as *const *mut c_void); // offset 24
+        WlWindowInfo {
+            width: clamp(width),
+            height: clamp(height),
+            wl_surface: surface as usize,
+        }
     }
 }
 
@@ -563,7 +568,7 @@ impl Wayland {
                     return Err(WlError::Protocol { object, code });
                 }
                 (OBJ_REGISTRY, 0) => {
-                    if let Some((name, interface, version)) = parse_registry_global(body) {
+                    if let Some((name, interface, version)) = RegistryEvent::parse(body) {
                         self.globals.push(RegistryGlobal {
                             name,
                             interface,
@@ -819,20 +824,23 @@ impl Drop for ShmBuffer {
 }
 
 /// Decode a `wl_registry.global` event body: `name(u32), interface(string), version(u32)`.
-fn parse_registry_global(body: &[u8]) -> Option<(u32, String, u32)> {
-    if body.len() < 8 {
-        return None;
+struct RegistryEvent;
+impl RegistryEvent {
+    fn parse(body: &[u8]) -> Option<(u32, String, u32)> {
+        if body.len() < 8 {
+            return None;
+        }
+        let name = u32::from_le_bytes(body[0..4].try_into().ok()?);
+        let slen = u32::from_le_bytes(body[4..8].try_into().ok()?) as usize;
+        let padded = (slen + 3) & !3;
+        if 8 + padded + 4 > body.len() {
+            return None;
+        }
+        let raw = &body[8..8 + slen.saturating_sub(1)]; // exclude the NUL terminator
+        let interface = String::from_utf8_lossy(raw).into_owned();
+        let version = u32::from_le_bytes(body[8 + padded..8 + padded + 4].try_into().ok()?);
+        Some((name, interface, version))
     }
-    let name = u32::from_le_bytes(body[0..4].try_into().ok()?);
-    let slen = u32::from_le_bytes(body[4..8].try_into().ok()?) as usize;
-    let padded = (slen + 3) & !3;
-    if 8 + padded + 4 > body.len() {
-        return None;
-    }
-    let raw = &body[8..8 + slen.saturating_sub(1)]; // exclude the NUL terminator
-    let interface = String::from_utf8_lossy(raw).into_owned();
-    let version = u32::from_le_bytes(body[8 + padded..8 + padded + 4].try_into().ok()?);
-    Some((name, interface, version))
 }
 
 fn now_ms() -> u64 {
@@ -884,9 +892,9 @@ mod tests {
 
     #[test]
     fn platform_recognition_and_extensions() {
-        assert!(is_wayland_platform(EGL_PLATFORM_WAYLAND_KHR));
-        assert!(is_wayland_platform(EGL_PLATFORM_WAYLAND_EXT));
-        assert!(!is_wayland_platform(EGL_PLATFORM_GBM_KHR));
+        assert!(WaylandPlatform::contains(EGL_PLATFORM_WAYLAND_KHR));
+        assert!(WaylandPlatform::contains(EGL_PLATFORM_WAYLAND_EXT));
+        assert!(!WaylandPlatform::contains(EGL_PLATFORM_GBM_KHR));
         assert!(egl_client_extensions().contains("EGL_EXT_platform_wayland"));
         assert!(egl_client_extensions().contains("EGL_KHR_platform_wayland"));
         assert!(egl_display_extensions().contains("EGL_KHR_platform_wayland"));
@@ -927,7 +935,7 @@ mod tests {
     fn parse_native_window_reads_the_magic_wl_egl_window() {
         let surf = 0x7777_0000usize as *mut c_void;
         let win = WlEglWindow::new(surf, 1024, 768);
-        let info = unsafe { parse_native_window(&win as *const _ as *const c_void) };
+        let info = unsafe { WlWindowInfo::parse(&win as *const _ as *const c_void) };
         assert_eq!(
             info,
             WlWindowInfo {
@@ -964,13 +972,13 @@ mod tests {
             dy: 0,
             surface: 0x5150_0000usize as *mut c_void,
         };
-        let info = unsafe { parse_native_window(&win as *const _ as *const c_void) };
+        let info = unsafe { WlWindowInfo::parse(&win as *const _ as *const c_void) };
         assert_eq!(
             (info.width, info.height, info.wl_surface),
             (800, 600, 0x5150_0000)
         );
         // A null window is the clamped default.
-        let d = unsafe { parse_native_window(core::ptr::null()) };
+        let d = unsafe { WlWindowInfo::parse(core::ptr::null()) };
         assert_eq!((d.width, d.height), (256, 256));
     }
 

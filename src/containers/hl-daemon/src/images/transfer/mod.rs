@@ -25,4 +25,5 @@ mod save;
 pub(crate) use import::*;
 pub(crate) use load::*;
 pub(crate) use push::*;
-pub(crate) use save::*;
+#[cfg(test)]
+pub(crate) use save::SaveQ;

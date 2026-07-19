@@ -26,11 +26,10 @@ pub(super) async fn refresh_local_config(
             .flatten();
     let Some(fresh) = fresh else { return };
     let mut g = a.inner.lock().await;
-    if let Some(slot) = g
-        .images
-        .iter_mut()
-        .find(|i| repo_tag(&i.name) == want && docker_arch(i.arch) == docker_arch(fresh.arch))
-    {
+    if let Some(slot) = g.images.iter_mut().find(|i| {
+        ImageRef::from(&i.name).short() == want
+            && ImagePlatform::docker(i.arch) == ImagePlatform::docker(fresh.arch)
+    }) {
         *slot = fresh;
     }
 }
@@ -67,8 +66,11 @@ pub(crate) fn refresh_image_config(
     creds: Credentials,
     archs: &[&str],
 ) -> Option<Image> {
-    let iref = image_ref(from_image, tag);
-    let rootfs = std::path::PathBuf::from(format!("{images_dir}/{}/rootfs", safe_name(&iref)));
+    let iref = ImageRef::with_tag(from_image, tag);
+    let rootfs = std::path::PathBuf::from(format!(
+        "{images_dir}/{}/rootfs",
+        Key::from_reference(&iref).as_str()
+    ));
     if !rootfs.is_dir() {
         return None;
     }
@@ -93,30 +95,30 @@ pub(crate) fn image_from_config(
 ) -> Image {
     // Distroless/scratch images carry no ELF/Mach-O to sniff, so the rootfs scan comes up empty.
     // Fall back to the config's `architecture`+`os`, then to native arm64 — never fail on undetectable arch.
-    let arch = detect_arch(rootfs)
-        .or_else(|| manifest_arch(config))
+    let arch = Rootfs::new(rootfs)
+        .architecture()
+        .map(ImagePlatform::guest)
+        .or_else(|| ImagePlatform::manifest(config))
         .unwrap_or(Guest::LinuxAarch64);
     // Keep Entrypoint and Cmd *separate* (NOT flattened like `config_cmd`) so docker's override semantics
     // survive the round-trip — `containers_create` rebuilds argv = entrypoint ++ cmd and `--entrypoint`/CMD
     // overrides act on the right half (see containers.rs).
-    let entrypoint = config_strs(config, "Entrypoint");
-    let env = config_strs(config, "Env");
-    let workdir = config["config"]["WorkingDir"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let user = config["config"]["User"].as_str().unwrap_or("").to_string();
-    let exposed_ports = config_exposed_ports(config);
-    let labels = config_labels(config);
+    let image_config = OciImageConfig::from(config);
+    let entrypoint = image_config.entrypoint();
+    let env = image_config.environment();
+    let workdir = image_config.working_directory();
+    let user = image_config.user();
+    let exposed_ports = image_config.exposed_ports();
+    let labels = image_config.labels();
     // Lifecycle/volume image config a container inherits at run (Moby §6/§8).
-    let stop_signal = config_stop_signal(config);
-    let img_volumes = config_volumes(config);
-    let healthcheck = config_healthcheck(config);
+    let stop_signal = image_config.stop_signal();
+    let img_volumes = image_config.volumes();
+    let healthcheck = crate::model::HealthConfig::from_oci(config);
     // Fall back to the rootfs's default shell only when the config supplies neither Entrypoint nor Cmd
     // (an entrypoint-only image keeps an empty cmd).
-    let mut cmd = config_strs(config, "Cmd");
+    let mut cmd = image_config.command();
     if cmd.is_empty() && entrypoint.is_empty() {
-        cmd = default_shell(rootfs);
+        cmd = Rootfs::new(rootfs).default_command();
     }
     let name = iref.short();
     // Record name + the full OCI run config (cmd/env/entrypoint/workdir, +os) so the image keeps
@@ -129,7 +131,10 @@ pub(crate) fn image_from_config(
                            "healthcheck": healthcheck.clone(),
                            "arch": arch.arch(), "os": arch.os() });
     let _ = std::fs::write(
-        format!("{images_dir}/{}/hl-image.json", safe_name(iref)),
+        format!(
+            "{images_dir}/{}/hl-image.json",
+            Key::from_reference(iref).as_str()
+        ),
         meta.to_string(),
     );
     Image {
@@ -155,30 +160,6 @@ pub(crate) fn image_from_config(
 
 /// The `config.config.Healthcheck` of an OCI image config → [`HealthConfig`]. `Test=["NONE"]` (or absent)
 /// yields None — no probe. Durations are the config's nanoseconds, carried through verbatim.
-pub(crate) fn config_healthcheck(config: &Value) -> Option<crate::model::HealthConfig> {
-    let hc = config["config"]["Healthcheck"].as_object()?;
-    let test: Vec<String> = hc
-        .get("Test")
-        .and_then(|t| t.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    if test.is_empty() || test.first().map(|s| s.as_str()) == Some("NONE") {
-        return None;
-    }
-    let num = |k: &str| hc.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
-    Some(crate::model::HealthConfig {
-        test,
-        interval: num("Interval"),
-        timeout: num("Timeout"),
-        retries: num("Retries"),
-        start_period: num("StartPeriod"),
-    })
-}
-
 #[cfg(test)]
 mod refresh_tests {
     use super::*;
@@ -191,8 +172,8 @@ mod refresh_tests {
     fn image_from_config_uses_real_entrypoint_not_bin_sh() {
         let dir =
             std::env::temp_dir().join(format!("hl-refresh-{}-{}", std::process::id(), now_nanos()));
-        let iref = ImageRef::parse("nginx:latest");
-        let img_dir = dir.join(safe_name(&iref));
+        let iref = ImageRef::from("nginx:latest");
+        let img_dir = dir.join(Key::from_reference(&iref).as_str());
         let rootfs = img_dir.join("rootfs");
         std::fs::create_dir_all(&rootfs).unwrap();
         let config = json!({
@@ -232,8 +213,8 @@ mod refresh_tests {
             std::process::id(),
             now_nanos()
         ));
-        let iref = ImageRef::parse("busybox:latest");
-        let rootfs = dir.join(safe_name(&iref)).join("rootfs");
+        let iref = ImageRef::from("busybox:latest");
+        let rootfs = dir.join(Key::from_reference(&iref).as_str()).join("rootfs");
         std::fs::create_dir_all(&rootfs).unwrap();
         let config = json!({ "architecture": "arm64", "os": "linux",
                              "config": { "Entrypoint": ["/bin/busybox"] } });

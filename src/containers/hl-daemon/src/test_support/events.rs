@@ -37,7 +37,7 @@ async fn body_bytes(resp: axum::response::Response) -> Vec<u8> {
 async fn events_until_in_the_past_closes_immediately() {
     let app = test_app();
     // A far-past bound: the stream must be empty and complete (not hang).
-    let resp = crate::events::events(
+    let resp = crate::events::Events::stream(
         State(app.clone()),
         Query(events_q(serde_json::json!({"until":"1"}))),
     )
@@ -79,7 +79,7 @@ async fn container_prune_emits_destroy_and_clears_network_endpoint() {
         });
     }
     let mut rx = app.events.subscribe();
-    let _ = crate::containers::containers_prune(State(app.clone())).await;
+    let _ = crate::containers::Containers::prune(State(app.clone())).await;
     let evs = drain_events(&mut rx);
     assert!(
         evs.contains(&("container".into(), "destroy".into())),
@@ -99,7 +99,7 @@ async fn network_prune_emits_destroy_events() {
     let app = test_app();
     seed_network(&app, "idle", false).await;
     let mut rx = app.events.subscribe();
-    let _ = crate::networks::networks_prune(State(app.clone())).await;
+    let _ = crate::networks::Networks::prune(State(app.clone())).await;
     let evs = drain_events(&mut rx);
     assert!(
         evs.contains(&("network".into(), "destroy".into())),
@@ -112,7 +112,7 @@ async fn volume_prune_emits_destroy_events() {
     let app = test_app();
     seed_volume(&app, "scratch", false).await;
     let mut rx = app.events.subscribe();
-    let _ = crate::volumes::volumes_prune(State(app.clone())).await;
+    let _ = crate::volumes::Volumes::prune(State(app.clone())).await;
     let evs = drain_events(&mut rx);
     assert!(
         evs.contains(&("volume".into(), "destroy".into())),
@@ -190,7 +190,7 @@ async fn image_prune_removes_dangling_unreferenced_image() {
             ..Default::default()
         });
     }
-    let report = crate::images::images_prune(State(app.clone())).await.0;
+    let report = crate::images::ImageApi::prune(State(app.clone())).await.0;
     assert!(
         !report.images_deleted.is_empty(),
         "dangling image should be reported deleted"
@@ -256,7 +256,7 @@ async fn system_df_counts_are_consistent() {
         });
         g.containers.get_mut("c1aaaaaaaaaa").unwrap().binds = vec!["data:/data".into()];
     }
-    let df = crate::system::system_df(State(app.clone())).await.0;
+    let df = crate::system::System::df(State(app.clone())).await.0;
     let df = serde_json::to_value(&df).unwrap();
     assert_eq!(
         df["ImageUsage"]["ActiveCount"], 1,

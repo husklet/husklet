@@ -18,6 +18,9 @@ name = "hl_vulkan"
 path = "src/lib.rs"
 
 [dependencies]
+# Temporary design classifications for emerging Vulkan model values.
+hl-design = { path = "../../packages/hl-design" }
+
 # The neutral hl-GPU protocol (Cmd/Enc, descriptors, kernel-IR, CommandSink). Package `hl_gpu`,
 # lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.
 hl_gpu = { package = "hl-gpu", path = "../../gpu/hl-gpu" }

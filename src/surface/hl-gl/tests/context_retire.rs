@@ -52,7 +52,7 @@ fn vertex(pos: [f32; 2]) -> Vec<u8> {
 /// clear + triangle draw targeting the default framebuffer (which mints the default render-target texture +
 /// presentable surface). Enough distinct resource KINDS that "retire everything" is a real claim.
 fn record_working_set(c: &mut GlContext) {
-    let vbo = record::gen_buffer(c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(c, GL_ARRAY_BUFFER, vbo);
     let mut verts = Vec::new();
     for p in [[-0.8f32, -0.8], [0.8, -0.8], [0.0, 0.8]] {

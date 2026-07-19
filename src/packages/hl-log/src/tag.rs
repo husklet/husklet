@@ -1,114 +1,217 @@
-//! Tags: a `u64` bitmask, one bit per subsystem.
-//!
-//! A tag is a single bit. A call site names one tag (or an OR of several), and the
-//! global `ENABLED` mask decides whether that call site is live. There is room for
-//! up to 64 tags. `ALL = !0` matches every tag.
-//!
-//! # Adding a new tag
-//! 1. Add a `pub const NAME: u64 = 1 << N;` below using the next free bit `N`.
-//! 2. Add a `(NAME, "name")` row to the `TAGS` table.
-//! That is the entire change — `from_name`, `name`, env parsing, and every macro pick
-//! it up automatically.
+//! Typed subsystem tags and tag sets.
 
-/// A subsystem tag: a single bit in the `u64` enable mask (alias for readability at call sites
-/// and in signatures — the consts below are plain `u64`).
-pub type Tag = u64;
+use std::convert::Infallible;
+use std::fmt::{self, Display, Formatter};
+use std::ops::{BitOr, BitOrAssign};
+use std::str::FromStr;
 
-/// Every tag on.
-pub const ALL: u64 = !0;
-/// No tags.
-pub const NONE: u64 = 0;
+/// One registered logging subsystem.
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Tag {
+    bits: u64,
+    name: &'static str,
+}
 
-pub const GPU: u64 = 1 << 0;
-pub const WGPU: u64 = 1 << 1;
-pub const VULKAN: u64 = 1 << 2;
-pub const GL: u64 = 1 << 3;
-pub const CUDA: u64 = 1 << 4;
-pub const COMPOSITOR: u64 = 1 << 5;
-pub const TRANSPORT: u64 = 1 << 6;
-pub const WIRE: u64 = 1 << 7;
-pub const PRESENT: u64 = 1 << 8;
-pub const EXEC: u64 = 1 << 9;
-pub const SHIM: u64 = 1 << 10;
-pub const RUNTIME: u64 = 1 << 11;
-pub const CPU: u64 = 1 << 12;
-pub const EGL: u64 = 1 << 13;
-pub const WAYLAND: u64 = 1 << 14;
+impl Tag {
+    const fn new(bits: u64, name: &'static str) -> Self {
+        Self { bits, name }
+    }
 
-/// The registry of predefined tags: `(bit, lowercase name)`.
-///
-/// Order matters only for the deterministic output of [`name`] when several bits
-/// share a call (the first matching name wins) and for `HL_LOG` name listing.
-pub const TAGS: &[(u64, &str)] = &[
-    (GPU, "gpu"),
-    (WGPU, "wgpu"),
-    (VULKAN, "vulkan"),
-    (GL, "gl"),
-    (CUDA, "cuda"),
-    (COMPOSITOR, "compositor"),
-    (TRANSPORT, "transport"),
-    (WIRE, "wire"),
-    (PRESENT, "present"),
-    (EXEC, "exec"),
-    (SHIM, "shim"),
-    (RUNTIME, "runtime"),
-    (CPU, "cpu"),
-    (EGL, "egl"),
-    (WAYLAND, "wayland"),
-];
+    /// The stable lowercase configuration and display name.
+    pub const fn name(self) -> &'static str {
+        self.name
+    }
 
-/// Resolve a lowercase tag name to its bit. Also accepts `"all"` and
-/// `"none"`/`"off"`. Case-insensitive. Returns `None` for unknown names.
-pub fn from_name(s: &str) -> Option<u64> {
-    let s = s.trim().to_ascii_lowercase();
-    match s.as_str() {
-        "" => None,
-        "all" => Some(ALL),
-        "none" | "off" => Some(NONE),
-        _ => TAGS.iter().find(|(_, n)| *n == s).map(|(b, _)| *b),
+    /// The bit assigned to this tag.
+    pub const fn bits(self) -> u64 {
+        self.bits
     }
 }
 
-/// The lowercase name for a single tag bit. If several bits are set, the first
-/// matching name in [`TAGS`] is returned. `ALL` yields `"all"`, `0` yields `"-"`,
-/// and an unnamed bit yields `"?"`.
-pub fn name(bit: u64) -> &'static str {
-    if bit == ALL {
-        return "all";
+impl Display for Tag {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.name)
     }
-    if bit == 0 {
-        return "-";
+}
+
+/// An unknown subsystem tag name.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ParseTagError;
+
+impl Display for ParseTagError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown log tag")
     }
-    for (b, n) in TAGS {
-        if bit & *b != 0 {
-            return n;
+}
+
+impl std::error::Error for ParseTagError {}
+
+impl FromStr for Tag {
+    type Err = ParseTagError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value.trim();
+        TAGS.iter()
+            .copied()
+            .find(|tag| tag.name.eq_ignore_ascii_case(value))
+            .ok_or(ParseTagError)
+    }
+}
+
+/// A set of logging subsystem tags.
+#[derive(Copy, Clone, Debug, Default, Eq, Hash, PartialEq)]
+#[repr(transparent)]
+pub struct Tags(u64);
+
+impl Tags {
+    /// Every tag enabled.
+    pub const ALL: Self = Self(!0);
+    /// No tags enabled.
+    pub const NONE: Self = Self(0);
+
+    /// Construct a set from its raw bit representation.
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
+    /// The raw bit representation used by the atomic runtime gate.
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+
+    /// Whether this set intersects `other`.
+    pub const fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+}
+
+impl From<Tag> for Tags {
+    fn from(tag: Tag) -> Self {
+        Self(tag.bits)
+    }
+}
+
+impl From<u64> for Tags {
+    fn from(bits: u64) -> Self {
+        Self(bits)
+    }
+}
+
+impl From<Tags> for u64 {
+    fn from(tags: Tags) -> Self {
+        tags.0
+    }
+}
+
+impl BitOr for Tag {
+    type Output = Tags;
+
+    fn bitor(self, right: Self) -> Self::Output {
+        Tags(self.bits | right.bits)
+    }
+}
+
+impl BitOr<Tag> for Tags {
+    type Output = Self;
+
+    fn bitor(self, right: Tag) -> Self::Output {
+        Self(self.0 | right.bits)
+    }
+}
+
+impl BitOr for Tags {
+    type Output = Self;
+
+    fn bitor(self, right: Self) -> Self::Output {
+        Self(self.0 | right.0)
+    }
+}
+
+impl BitOrAssign<Tag> for Tags {
+    fn bitor_assign(&mut self, right: Tag) {
+        self.0 |= right.bits;
+    }
+}
+
+impl BitOrAssign for Tags {
+    fn bitor_assign(&mut self, right: Self) {
+        self.0 |= right.0;
+    }
+}
+
+impl Display for Tags {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        if *self == Self::ALL {
+            return formatter.write_str("all");
         }
+        if *self == Self::NONE {
+            return formatter.write_str("-");
+        }
+
+        let mut separator = "";
+        for tag in TAGS.iter().filter(|tag| self.0 & tag.bits != 0) {
+            formatter.write_str(separator)?;
+            formatter.write_str(tag.name)?;
+            separator = "|";
+        }
+        if separator.is_empty() {
+            formatter.write_str("?")?;
+        }
+        Ok(())
     }
-    "?"
 }
 
-/// Write every set tag name into `out`, joined by `|` (e.g. `gpu|wgpu`). Used by
-/// the emitter so a multi-tag call shows all its tags.
-pub fn write_names(bit: u64, out: &mut String) {
-    if bit == ALL {
-        out.push_str("all");
-        return;
-    }
-    if bit == 0 {
-        out.push('-');
-        return;
-    }
-    let mut first = true;
-    for (b, n) in TAGS {
-        if bit & *b != 0 {
-            if !first {
-                out.push('|');
+/// Environment tag lists intentionally ignore unknown names for compatibility.
+impl FromStr for Tags {
+    type Err = Infallible;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("all") {
+            return Ok(Self::ALL);
+        }
+        if value.is_empty()
+            || value.eq_ignore_ascii_case("off")
+            || value.eq_ignore_ascii_case("none")
+        {
+            return Ok(Self::NONE);
+        }
+
+        let mut tags = Self::NONE;
+        for name in
+            value.split(|character| character == ',' || character == '|' || character == ' ')
+        {
+            if let Ok(tag) = name.parse::<Tag>() {
+                tags |= tag;
             }
-            out.push_str(n);
-            first = false;
         }
-    }
-    if first {
-        out.push('?');
+        Ok(tags)
     }
 }
+
+pub const GPU: Tag = Tag::new(1 << 0, "gpu");
+pub const WGPU: Tag = Tag::new(1 << 1, "wgpu");
+pub const VULKAN: Tag = Tag::new(1 << 2, "vulkan");
+pub const GL: Tag = Tag::new(1 << 3, "gl");
+pub const CUDA: Tag = Tag::new(1 << 4, "cuda");
+pub const COMPOSITOR: Tag = Tag::new(1 << 5, "compositor");
+pub const TRANSPORT: Tag = Tag::new(1 << 6, "transport");
+pub const WIRE: Tag = Tag::new(1 << 7, "wire");
+pub const PRESENT: Tag = Tag::new(1 << 8, "present");
+pub const EXEC: Tag = Tag::new(1 << 9, "exec");
+pub const SHIM: Tag = Tag::new(1 << 10, "shim");
+pub const RUNTIME: Tag = Tag::new(1 << 11, "runtime");
+pub const CPU: Tag = Tag::new(1 << 12, "cpu");
+pub const EGL: Tag = Tag::new(1 << 13, "egl");
+pub const WAYLAND: Tag = Tag::new(1 << 14, "wayland");
+
+/// Every tag enabled.
+pub const ALL: Tags = Tags::ALL;
+/// No tags enabled.
+pub const NONE: Tags = Tags::NONE;
+
+/// Registered tags in deterministic display order.
+pub const TAGS: &[Tag] = &[
+    GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU,
+    EGL, WAYLAND,
+];

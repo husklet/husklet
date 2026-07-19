@@ -53,7 +53,7 @@ fn main() {
         return;
     }
 
-    let manifest_dir = PathBuf::from(env("CARGO_MANIFEST_DIR"));
+    let manifest_dir = PathBuf::from(BuildEnvironment::required("CARGO_MANIFEST_DIR"));
     // Rerun when the shim's sources / manifest / this script / the forwarding stub change — AND when this
     // crate's own library sources change: the shim cdylib links `hl_gl` (this crate) as a path dependency,
     // so a change to the lowering/translator (e.g. `src/adapter/glsl.rs`, `src/service/frame.rs`) must
@@ -90,7 +90,7 @@ fn main() {
 
     for (triple, cc, arch_dir) in ARCHES {
         let host = *triple == host_triple();
-        if !std_available(&sysroot, triple) {
+        if !BuildEnvironment::std_available(&sysroot, triple) {
             // aarch64 std is guaranteed on this host; a missing HOST std is a real, fail-loud error.
             if host {
                 panic!(
@@ -224,7 +224,7 @@ fn stage_lib(shim_target: &Path, triple: &str, dst_dir: &Path, soname: &str) -> 
     std::fs::create_dir_all(dst_dir).map_err(|e| format!("mkdir {}: {e}", dst_dir.display()))?;
     let dst = dst_dir.join(soname);
     std::fs::copy(&built, &dst).map_err(|e| format!("copy -> {}: {e}", dst.display()))?;
-    symlink_unversioned(dst_dir, soname);
+    StagedLibrary::link_unversioned(dst_dir, soname);
     Ok(())
 }
 
@@ -250,20 +250,23 @@ fn generate_wayland_egl(cc: &str, wlegl_c: &Path, dst_dir: &Path) -> Result<(), 
     if !out.exists() {
         return Err(format!("expected {} not produced", out.display()));
     }
-    symlink_unversioned(dst_dir, WLEGL_SONAME);
+    StagedLibrary::link_unversioned(dst_dir, WLEGL_SONAME);
     Ok(())
 }
 
 /// Create an unversioned `lib*.so -> <soname>` symlink some loaders/ldconfig setups want.
-fn symlink_unversioned(dst_dir: &Path, soname: &str) {
-    // Strip the trailing `.N` version (libEGL.so.1 -> libEGL.so, libGLESv2.so.2 -> libGLESv2.so).
-    if let Some(dot) = soname.rfind(".so.") {
-        let unversioned = &soname[..dot + 3]; // include ".so"
-        let link = dst_dir.join(unversioned);
-        let _ = std::fs::remove_file(&link);
-        #[cfg(unix)]
-        {
-            let _ = std::os::unix::fs::symlink(soname, &link);
+struct StagedLibrary;
+impl StagedLibrary {
+    fn link_unversioned(dst_dir: &Path, soname: &str) {
+        // Strip the trailing `.N` version (libEGL.so.1 -> libEGL.so, libGLESv2.so.2 -> libGLESv2.so).
+        if let Some(dot) = soname.rfind(".so.") {
+            let unversioned = &soname[..dot + 3]; // include ".so"
+            let link = dst_dir.join(unversioned);
+            let _ = std::fs::remove_file(&link);
+            #[cfg(unix)]
+            {
+                let _ = std::os::unix::fs::symlink(soname, &link);
+            }
         }
     }
 }
@@ -287,20 +290,23 @@ fn rustc_sysroot() -> PathBuf {
 }
 
 /// Is the rust std library for `triple` installed under `sysroot`?
-fn std_available(sysroot: &Path, triple: &str) -> bool {
-    sysroot
-        .join("lib")
-        .join("rustlib")
-        .join(triple)
-        .join("lib")
-        .is_dir()
+struct BuildEnvironment;
+impl BuildEnvironment {
+    fn std_available(sysroot: &Path, triple: &str) -> bool {
+        sysroot
+            .join("lib")
+            .join("rustlib")
+            .join(triple)
+            .join("lib")
+            .is_dir()
+    }
+
+    fn required(key: &str) -> String {
+        std::env::var(key).unwrap_or_else(|_| panic!("env {key} not set"))
+    }
 }
 
 /// The build host's target triple (`cargo` sets `HOST` for build scripts).
 fn host_triple() -> String {
     std::env::var("HOST").unwrap_or_default()
-}
-
-fn env(k: &str) -> String {
-    std::env::var(k).unwrap_or_else(|_| panic!("env {k} not set"))
 }

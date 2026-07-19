@@ -13,23 +13,23 @@
 
 #![cfg(all(feature = "macos-surface", target_os = "macos"))]
 
-use hl_compositor::surface::macos::bgra_to_rgba;
+use hl_compositor::surface::macos::BgraFrame;
 
 #[test]
 fn bgra_to_rgba_swaps_channels_and_preserves_alpha() {
     // Two pixels: (B,G,R,A) = (10,20,30,40) and (200,150,100,0).
     let bgra = vec![10, 20, 30, 40, 200, 150, 100, 0];
-    let rgba = bgra_to_rgba(&bgra);
+    let rgba = BgraFrame::new(&bgra).rgba();
     // R<->B swapped, G and alpha preserved.
     assert_eq!(rgba, vec![30, 20, 10, 40, 100, 150, 200, 0]);
 }
 
 #[test]
 fn bgra_to_rgba_empty_input() {
-    assert!(bgra_to_rgba(&[]).is_empty());
+    assert!(BgraFrame::new(&[]).rgba().is_empty());
 }
 
 #[test]
 fn bgra_to_rgba_ignores_incomplete_trailing_pixel_without_panicking() {
-    assert_eq!(bgra_to_rgba(&[1, 2, 3, 4, 5]), vec![3, 2, 1, 4]);
+    assert_eq!(BgraFrame::new(&[1, 2, 3, 4, 5]).rgba(), vec![3, 2, 1, 4]);
 }

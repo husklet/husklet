@@ -24,7 +24,7 @@ async fn seed_container_binding_volume(app: &App, id: &str, vol: &str) {
 async fn volume_create_is_201_and_present() {
     let app = test_app();
     let body = axum::Json(serde_json::from_value(serde_json::json!({"Name":"vol1"})).unwrap());
-    let resp = crate::volumes::volumes_create(State(app.clone()), body).await;
+    let resp = crate::volumes::Volumes::create(State(app.clone()), body).await;
     assert_eq!(resp.status(), StatusCode::CREATED);
     assert!(app
         .inner
@@ -39,7 +39,7 @@ async fn volume_create_is_201_and_present() {
 async fn volume_delete_in_use_is_409() {
     let app = test_app();
     seed_volume(&app, "vol1", /*in_use=*/ true).await;
-    let resp = crate::volumes::volume_delete(State(app.clone()), Path("vol1".into())).await;
+    let resp = crate::volumes::Volumes::delete(State(app.clone()), Path("vol1".into())).await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     assert!(
         app.inner
@@ -56,7 +56,7 @@ async fn volume_delete_in_use_is_409() {
 async fn volume_delete_free_is_204_and_removed() {
     let app = test_app();
     seed_volume(&app, "vol1", /*in_use=*/ false).await;
-    let resp = crate::volumes::volume_delete(State(app.clone()), Path("vol1".into())).await;
+    let resp = crate::volumes::Volumes::delete(State(app.clone()), Path("vol1".into())).await;
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert!(
         !app.inner
@@ -74,7 +74,7 @@ async fn volume_delete_free_is_204_and_removed() {
 async fn volume_inspect_wire_shape() {
     let app = test_app();
     seed_volume(&app, "vol1", /*in_use=*/ false).await;
-    let resp = crate::volumes::volume_inspect(State(app.clone()), Path("vol1".into()))
+    let resp = crate::volumes::Volumes::inspect(State(app.clone()), Path("vol1".into()))
         .await
         .into_response();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -102,7 +102,7 @@ async fn volume_inspect_wire_shape() {
 #[tokio::test]
 async fn volume_inspect_missing_is_404() {
     let app = test_app();
-    let resp = crate::volumes::volume_inspect(State(app.clone()), Path("ghost".into()))
+    let resp = crate::volumes::Volumes::inspect(State(app.clone()), Path("ghost".into()))
         .await
         .into_response();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -117,7 +117,7 @@ async fn flow_volume_in_use_then_free() {
 
     // Step 1: create v1 — 201, present.
     let body = axum::Json(serde_json::from_value(serde_json::json!({"Name":"v1"})).unwrap());
-    let r = crate::volumes::volumes_create(State(app.clone()), body).await;
+    let r = crate::volumes::Volumes::create(State(app.clone()), body).await;
     assert_eq!(r.status(), StatusCode::CREATED);
     assert!(app
         .inner
@@ -131,7 +131,7 @@ async fn flow_volume_in_use_then_free() {
     seed_container_binding_volume(&app, "user1", "v1").await;
 
     // Step 3: delete while bound — 409, volume survives.
-    let r = crate::volumes::volume_delete(State(app.clone()), Path("v1".into())).await;
+    let r = crate::volumes::Volumes::delete(State(app.clone()), Path("v1".into())).await;
     assert_eq!(
         r.status(),
         StatusCode::CONFLICT,
@@ -151,7 +151,7 @@ async fn flow_volume_in_use_then_free() {
     app.inner.lock().await.containers.remove("user1");
 
     // Step 5: delete now that nothing binds it — 204, volume removed.
-    let r = crate::volumes::volume_delete(State(app.clone()), Path("v1".into())).await;
+    let r = crate::volumes::Volumes::delete(State(app.clone()), Path("v1".into())).await;
     assert_eq!(
         r.status(),
         StatusCode::NO_CONTENT,
@@ -176,7 +176,7 @@ async fn flow_volume_in_use_then_free() {
 async fn flow_volume_prune_in_use_kept_then_reclaimed() {
     let app = test_app();
     for name in ["v1", "v2"] {
-        let r = crate::volumes::volumes_create(
+        let r = crate::volumes::Volumes::create(
             State(app.clone()),
             axum::Json(serde_json::from_value(serde_json::json!({ "Name": name })).unwrap()),
         )
@@ -187,7 +187,7 @@ async fn flow_volume_prune_in_use_kept_then_reclaimed() {
     seed_container_binding_volume(&app, "user1", "v1").await;
 
     // Prune #1: only v2 reclaimed; v1 kept (in use).
-    let axum::Json(rep) = crate::volumes::volumes_prune(State(app.clone())).await;
+    let axum::Json(rep) = crate::volumes::Volumes::prune(State(app.clone())).await;
     let pruned: std::collections::HashSet<&str> =
         rep.volumes_deleted.iter().map(|s| s.as_str()).collect();
     assert!(pruned.contains("v2"), "free v2 reclaimed: {pruned:?}");
@@ -206,7 +206,7 @@ async fn flow_volume_prune_in_use_kept_then_reclaimed() {
 
     // Drop the referencing container, then prune #2: v1 now reclaimed.
     app.inner.lock().await.containers.remove("user1");
-    let axum::Json(rep) = crate::volumes::volumes_prune(State(app.clone())).await;
+    let axum::Json(rep) = crate::volumes::Volumes::prune(State(app.clone())).await;
     assert!(
         rep.volumes_deleted.iter().any(|s| s == "v1"),
         "v1 reclaimed once its last reference is gone: {:?}",
@@ -266,7 +266,7 @@ async fn flow_volume_prune_keeps_referenced_anon_reclaims_after_rm() {
     );
 
     // Prune #1 while a (stopped) container still references the anon volume — it is KEPT.
-    let axum::Json(rep) = crate::volumes::volumes_prune(State(app.clone())).await;
+    let axum::Json(rep) = crate::volumes::Volumes::prune(State(app.clone())).await;
     assert!(
         !rep.volumes_deleted.iter().any(|s| s == &anon),
         "a still-referenced anon volume must NOT be pruned (even for a stopped container): {:?}",
@@ -301,7 +301,7 @@ async fn flow_volume_prune_keeps_referenced_anon_reclaims_after_rm() {
     );
 
     // Prune #2: now nothing references it, so the dangling anon volume is reclaimed.
-    let axum::Json(rep) = crate::volumes::volumes_prune(State(app.clone())).await;
+    let axum::Json(rep) = crate::volumes::Volumes::prune(State(app.clone())).await;
     assert!(
         rep.volumes_deleted.iter().any(|s| s == &anon),
         "the now-unreferenced dangling anon volume is reclaimed by prune #2: {:?}",

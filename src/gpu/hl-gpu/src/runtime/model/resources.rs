@@ -255,6 +255,52 @@ pub const KIND_SURFACE: u8 = 7;
 pub const KIND_FENCE: u8 = 8;
 pub const KIND_EXTERNAL: u8 = 9;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResourceKind {
+    Buffer,
+    Texture,
+    Sampler,
+    Shader,
+    Pipeline,
+    BindGroup,
+    Surface,
+    Fence,
+    External,
+    Unknown,
+}
+
+impl ResourceKind {
+    pub fn from_code(code: u8) -> Self {
+        match code {
+            KIND_BUFFER => Self::Buffer,
+            KIND_TEXTURE => Self::Texture,
+            KIND_SAMPLER => Self::Sampler,
+            KIND_SHADER => Self::Shader,
+            KIND_PIPELINE => Self::Pipeline,
+            KIND_BIND_GROUP => Self::BindGroup,
+            KIND_SURFACE => Self::Surface,
+            KIND_FENCE => Self::Fence,
+            KIND_EXTERNAL => Self::External,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Buffer => BufferId::KIND,
+            Self::Texture => TextureId::KIND,
+            Self::Sampler => SamplerId::KIND,
+            Self::Shader => ShaderId::KIND,
+            Self::Pipeline => PipelineId::KIND,
+            Self::BindGroup => BindGroupId::KIND,
+            Self::Surface => SurfaceId::KIND,
+            Self::Fence => FenceId::KIND,
+            Self::External => "external allocation",
+            Self::Unknown => "resource",
+        }
+    }
+}
+
 /// Fixed residency charged for a timeline fence's host-side signal/wait state.
 pub const FENCE_BYTES: u64 = 128;
 
@@ -262,144 +308,136 @@ pub const FENCE_BYTES: u64 = 128;
 /// [`ResourceTable`] carries for that kind, so a `DuplicateId`/`UnknownId` the account raises is
 /// byte-identical to the one the executor would raise for the same id. `KIND_EXTERNAL` has no protocol
 /// resource table (it is an imported allocation, not an IR-created object), so it names itself.
-pub fn kind_name(kind: u8) -> &'static str {
-    match kind {
-        KIND_BUFFER => BufferId::KIND,
-        KIND_TEXTURE => TextureId::KIND,
-        KIND_SAMPLER => SamplerId::KIND,
-        KIND_SHADER => ShaderId::KIND,
-        KIND_PIPELINE => PipelineId::KIND,
-        KIND_BIND_GROUP => BindGroupId::KIND,
-        KIND_SURFACE => SurfaceId::KIND,
-        KIND_FENCE => FenceId::KIND,
-        KIND_EXTERNAL => "external allocation",
-        _ => "resource",
-    }
-}
-
 /// Backing residency (bytes) an executor keeps resident for a presentable surface: one full-frame render
 /// target at the surface's format footprint.
-pub fn surface_bytes(d: &SurfaceDesc) -> u64 {
-    let texel = d.format.bytes_per_texel().unwrap_or(4) as u64;
-    (d.width as u64)
-        .saturating_mul(d.height as u64)
-        .saturating_mul(texel)
+impl SurfaceDesc {
+    pub(crate) fn residency_bytes(&self) -> u64 {
+        let texel = self.format.bytes_per_texel().unwrap_or(4) as u64;
+        (self.width as u64)
+            .saturating_mul(self.height as u64)
+            .saturating_mul(texel)
+    }
 }
 
 /// Full mip-chain byte footprint of a texture, also validating its shape (zero/oversized dims, mip count
 /// vs. extent, dimensionality-specific constraints) — a malformed descriptor is a typed `ResourceLimit`
 /// rejection before any charge or executor allocation.
-pub fn texture_bytes(d: &TextureDesc) -> Result<u64> {
-    if d.width == 0 || d.height == 0 || d.depth == 0 {
-        return Err(GpuError::ResourceLimit("zero texture dimension"));
-    }
-    if d.mip_levels == 0 {
-        return Err(GpuError::ResourceLimit("zero texture mip levels"));
-    }
-    if d.sample_count == 0 {
-        return Err(GpuError::ResourceLimit("zero texture sample count"));
-    }
-    match d.dim {
-        TextureDim::D1 if d.height != 1 || d.sample_count != 1 => {
-            return Err(GpuError::ResourceLimit("invalid 1D texture shape"));
+impl TextureDesc {
+    pub(crate) fn residency_bytes(&self) -> Result<u64> {
+        let d = self;
+        if d.width == 0 || d.height == 0 || d.depth == 0 {
+            return Err(GpuError::ResourceLimit("zero texture dimension"));
         }
-        TextureDim::D2 => {}
-        TextureDim::D3 if d.sample_count != 1 => {
-            return Err(GpuError::ResourceLimit("invalid 3D texture sample count"));
+        if d.mip_levels == 0 {
+            return Err(GpuError::ResourceLimit("zero texture mip levels"));
         }
-        TextureDim::Cube if d.width != d.height || d.depth % 6 != 0 || d.sample_count != 1 => {
-            return Err(GpuError::ResourceLimit("invalid cube texture shape"));
+        if d.sample_count == 0 {
+            return Err(GpuError::ResourceLimit("zero texture sample count"));
         }
-        _ => {}
-    }
-    let max_mip_dimension = match d.dim {
-        TextureDim::D1 => d.width,
-        TextureDim::D2 | TextureDim::Cube => d.width.max(d.height),
-        TextureDim::D3 => d.width.max(d.height).max(d.depth),
-    };
-    let max_mips = u32::BITS - max_mip_dimension.leading_zeros();
-    if d.mip_levels > max_mips {
-        return Err(GpuError::ResourceLimit(
-            "texture mip levels exceed dimensions",
-        ));
-    }
-    // Depth/stencil formats report `bytes_per_texel() == None` (the software backend can't clear-fill
-    // them) but for footprint accounting they occupy a real 4-byte-per-texel target; charge that instead
-    // of rejecting a valid depth render target.
-    let texel = d.format.bytes_per_texel().unwrap_or(4) as u64;
-    let mut total = 0u64;
-    let mut w = d.width as u64;
-    let mut h = d.height as u64;
-    let mut depth = d.depth as u64;
-    for _ in 0..d.mip_levels {
-        let level = w
-            .max(1)
-            .checked_mul(h.max(1))
-            .and_then(|v| v.checked_mul(depth.max(1)))
-            .and_then(|v| v.checked_mul(d.sample_count as u64))
-            .and_then(|v| v.checked_mul(texel))
-            .ok_or(GpuError::ResourceLimit("texture footprint overflow"))?;
-        total = total
-            .checked_add(level)
-            .ok_or(GpuError::ResourceLimit("texture footprint overflow"))?;
-        w >>= 1;
-        h >>= 1;
-        if d.dim == TextureDim::D3 {
-            depth >>= 1;
+        match d.dim {
+            TextureDim::D1 if d.height != 1 || d.sample_count != 1 => {
+                return Err(GpuError::ResourceLimit("invalid 1D texture shape"));
+            }
+            TextureDim::D2 => {}
+            TextureDim::D3 if d.sample_count != 1 => {
+                return Err(GpuError::ResourceLimit("invalid 3D texture sample count"));
+            }
+            TextureDim::Cube if d.width != d.height || d.depth % 6 != 0 || d.sample_count != 1 => {
+                return Err(GpuError::ResourceLimit("invalid cube texture shape"));
+            }
+            _ => {}
         }
+        let max_mip_dimension = match d.dim {
+            TextureDim::D1 => d.width,
+            TextureDim::D2 | TextureDim::Cube => d.width.max(d.height),
+            TextureDim::D3 => d.width.max(d.height).max(d.depth),
+        };
+        let max_mips = u32::BITS - max_mip_dimension.leading_zeros();
+        if d.mip_levels > max_mips {
+            return Err(GpuError::ResourceLimit(
+                "texture mip levels exceed dimensions",
+            ));
+        }
+        // Depth/stencil formats report `bytes_per_texel() == None` (the software backend can't clear-fill
+        // them) but for footprint accounting they occupy a real 4-byte-per-texel target; charge that instead
+        // of rejecting a valid depth render target.
+        let texel = d.format.bytes_per_texel().unwrap_or(4) as u64;
+        let mut total = 0u64;
+        let mut w = d.width as u64;
+        let mut h = d.height as u64;
+        let mut depth = d.depth as u64;
+        for _ in 0..d.mip_levels {
+            let level = w
+                .max(1)
+                .checked_mul(h.max(1))
+                .and_then(|v| v.checked_mul(depth.max(1)))
+                .and_then(|v| v.checked_mul(d.sample_count as u64))
+                .and_then(|v| v.checked_mul(texel))
+                .ok_or(GpuError::ResourceLimit("texture footprint overflow"))?;
+            total = total
+                .checked_add(level)
+                .ok_or(GpuError::ResourceLimit("texture footprint overflow"))?;
+            w >>= 1;
+            h >>= 1;
+            if d.dim == TextureDim::D3 {
+                depth >>= 1;
+            }
+        }
+        Ok(total)
     }
-    Ok(total)
 }
 
 /// The residency charge a `Create*` command incurs: `(kind, id, bytes)`, or `None` for a non-charging
 /// command. Errors only when a texture descriptor is malformed (via [`texture_bytes`]).
-pub fn create_charge(cmd: &Cmd) -> Result<Option<(u8, u32, u64)>> {
-    Ok(match cmd {
-        Cmd::CreateBuffer(id, d) => Some((KIND_BUFFER, *id, d.size)),
-        Cmd::CreateTexture(id, d) => Some((KIND_TEXTURE, *id, texture_bytes(d)?)),
-        Cmd::CreateSampler(id, _) => Some((KIND_SAMPLER, *id, 64)),
-        Cmd::CreateShader { id, spirv, .. } => {
-            Some((KIND_SHADER, *id, (spirv.len() as u64).saturating_mul(4)))
-        }
-        // A pipeline's charge is its compiled-cache (PSO/AIR) footprint; the account service also meters
-        // it against the negotiated per-connection compiled-cache ceiling.
-        Cmd::CreateRenderPipeline(id, _) | Cmd::CreateComputePipeline(id, _) => {
-            Some((KIND_PIPELINE, *id, 4096))
-        }
-        Cmd::CreateBindGroup(id, d) => {
-            let referenced = d
-                .entries
-                .iter()
-                .map(|e| match e.resource {
-                    BindResource::Buffer { size, .. } => size,
-                    _ => 64,
-                })
-                .sum::<u64>();
-            Some((
-                KIND_BIND_GROUP,
-                *id,
-                256u64.saturating_add(referenced.min(4096)),
-            ))
-        }
-        // A presentable surface pins one full-frame render target resident on the executor.
-        Cmd::CreateSurface(id, d) => Some((KIND_SURFACE, *id, surface_bytes(d))),
-        // A timeline fence pins a small amount of host-side signal state.
-        Cmd::CreateFence(id) => Some((KIND_FENCE, *id, FENCE_BYTES)),
-        _ => None,
-    })
-}
+impl Cmd {
+    pub(crate) fn create_charge(&self) -> Result<Option<(u8, u32, u64)>> {
+        Ok(match self {
+            Cmd::CreateBuffer(id, d) => Some((KIND_BUFFER, *id, d.size)),
+            Cmd::CreateTexture(id, d) => Some((KIND_TEXTURE, *id, d.residency_bytes()?)),
+            Cmd::CreateSampler(id, _) => Some((KIND_SAMPLER, *id, 64)),
+            Cmd::CreateShader { id, spirv, .. } => {
+                Some((KIND_SHADER, *id, (spirv.len() as u64).saturating_mul(4)))
+            }
+            // A pipeline's charge is its compiled-cache (PSO/AIR) footprint; the account service also meters
+            // it against the negotiated per-connection compiled-cache ceiling.
+            Cmd::CreateRenderPipeline(id, _) | Cmd::CreateComputePipeline(id, _) => {
+                Some((KIND_PIPELINE, *id, 4096))
+            }
+            Cmd::CreateBindGroup(id, d) => {
+                let referenced = d
+                    .entries
+                    .iter()
+                    .map(|e| match e.resource {
+                        BindResource::Buffer { size, .. } => size,
+                        _ => 64,
+                    })
+                    .sum::<u64>();
+                Some((
+                    KIND_BIND_GROUP,
+                    *id,
+                    256u64.saturating_add(referenced.min(4096)),
+                ))
+            }
+            // A presentable surface pins one full-frame render target resident on the executor.
+            Cmd::CreateSurface(id, d) => Some((KIND_SURFACE, *id, d.residency_bytes())),
+            // A timeline fence pins a small amount of host-side signal state.
+            Cmd::CreateFence(id) => Some((KIND_FENCE, *id, FENCE_BYTES)),
+            _ => None,
+        })
+    }
 
-/// The `(kind, id)` a `Destroy*` command refunds, or `None` for a non-refunding command.
-pub fn destroy_key(cmd: &Cmd) -> Option<(u8, u32)> {
-    match cmd {
-        Cmd::DestroyBuffer(id) => Some((KIND_BUFFER, *id)),
-        Cmd::DestroyTexture(id) => Some((KIND_TEXTURE, *id)),
-        Cmd::DestroySampler(id) => Some((KIND_SAMPLER, *id)),
-        Cmd::DestroyShader(id) => Some((KIND_SHADER, *id)),
-        Cmd::DestroyPipeline(id) => Some((KIND_PIPELINE, *id)),
-        Cmd::DestroyBindGroup(id) => Some((KIND_BIND_GROUP, *id)),
-        Cmd::DestroySurface(id) => Some((KIND_SURFACE, *id)),
-        Cmd::DestroyFence(id) => Some((KIND_FENCE, *id)),
-        _ => None,
+    /// The `(kind, id)` a `Destroy*` command refunds, or `None` for a non-refunding command.
+    pub(crate) fn destroy_key(&self) -> Option<(u8, u32)> {
+        match self {
+            Cmd::DestroyBuffer(id) => Some((KIND_BUFFER, *id)),
+            Cmd::DestroyTexture(id) => Some((KIND_TEXTURE, *id)),
+            Cmd::DestroySampler(id) => Some((KIND_SAMPLER, *id)),
+            Cmd::DestroyShader(id) => Some((KIND_SHADER, *id)),
+            Cmd::DestroyPipeline(id) => Some((KIND_PIPELINE, *id)),
+            Cmd::DestroyBindGroup(id) => Some((KIND_BIND_GROUP, *id)),
+            Cmd::DestroySurface(id) => Some((KIND_SURFACE, *id)),
+            Cmd::DestroyFence(id) => Some((KIND_FENCE, *id)),
+            _ => None,
+        }
     }
 }

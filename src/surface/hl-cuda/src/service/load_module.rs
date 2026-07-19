@@ -10,39 +10,39 @@ use crate::adapter::fatbin;
 use crate::model::context::CudaContext;
 use crate::model::device::DevicePtr;
 use crate::model::module::Function;
-use crate::service::allocate::create_buffer_cmd;
+use crate::service::allocate::Allocation;
 use hl_gpu::{CommandSink, GpuError, Result};
 
 /// `cuModuleLoadData(image)` where `image` is raw PTX text (as the CUDA driver API receives it). Returns
 /// the module id.
-pub fn module_load_ptx(ctx: &mut CudaContext, ptx: &str) -> u32 {
-    ctx.modules.load(ptx)
-}
+impl CudaContext {
+    pub fn load_ptx(&mut self, ptx: &str) -> u32 {
+        self.modules.load(ptx)
+    }
 
-/// `cuModuleLoadData(image)` on an arbitrary image: if it is an nvcc fatbin container, walk it and load
-/// the embedded uncompressed PTX; otherwise interpret the bytes as raw PTX text. Errors
-/// (`CUDA_ERROR_INVALID_PTX`/`INVALID_IMAGE` analogue) if a fatbin carries no usable PTX or the bytes
-/// are not valid UTF-8 PTX text.
-pub fn module_load_data(ctx: &mut CudaContext, image: &[u8]) -> Result<u32> {
-    let ptx_bytes = if fatbin::is_fatbin(image) {
-        fatbin::extract_ptx(image).ok_or(GpuError::Invalid(
-            "cuModuleLoadData: fatbin carries no uncompressed PTX",
-        ))?
-    } else {
-        image.to_vec()
-    };
-    let ptx = std::str::from_utf8(&ptx_bytes)
-        .map_err(|_| GpuError::Invalid("cuModuleLoadData: image is not valid PTX text"))?;
-    let id = ctx.modules.load(ptx);
-    hl_log::hl_debug!(
-        hl_log::tag::CUDA,
-        "module_load id={} bytes={} fatbin={}",
-        id,
-        image.len(),
-        fatbin::is_fatbin(image)
-    );
-    hl_log::hl_count!(hl_log::tag::CUDA, "modules");
-    Ok(id)
+    /// Load an arbitrary module image, interpreting an nvcc fatbin container or raw UTF-8 PTX.
+    pub fn load_module(&mut self, image: &[u8]) -> Result<u32> {
+        let fatbin = fatbin::Image::new(image);
+        let ptx_bytes = if fatbin.is_fatbin() {
+            fatbin.ptx().ok_or(GpuError::Invalid(
+                "cuModuleLoadData: fatbin carries no uncompressed PTX",
+            ))?
+        } else {
+            image.to_vec()
+        };
+        let ptx = std::str::from_utf8(&ptx_bytes)
+            .map_err(|_| GpuError::Invalid("cuModuleLoadData: image is not valid PTX text"))?;
+        let id = self.modules.load(ptx);
+        hl_log::hl_debug!(
+            hl_log::tag::CUDA,
+            "module_load id={} bytes={} fatbin={}",
+            id,
+            image.len(),
+            fatbin.is_fatbin()
+        );
+        hl_log::hl_count!(hl_log::tag::CUDA, "modules");
+        Ok(id)
+    }
 }
 
 /// `cuModuleGetFunction(module, name)` → the function handle, or `CUDA_ERROR_NOT_FOUND` analogue.
@@ -78,9 +78,13 @@ pub fn module_get_global(
     // A zero-length declaration (e.g. an `extern` array of unknown extent) still gets a 1-byte backing
     // buffer so the returned pointer is a live, resolvable device allocation; the reported size is honest.
     let buffer = ctx.alloc_buffer();
-    let ptr = ctx.mem.record(buffer, size.max(1));
+    let ptr = ctx.mem.insert(buffer, size.max(1));
     ctx.record_global_alloc(module, name, ptr.0, size);
-    sink.submit(&[create_buffer_cmd(buffer, size.max(1))])?;
+    sink.submit(&[Allocation {
+        buffer,
+        size: size.max(1),
+    }
+    .command()])?;
     hl_log::hl_debug!(
         hl_log::tag::CUDA,
         "module_global mod={} name={} size={} ptr={:#x}",

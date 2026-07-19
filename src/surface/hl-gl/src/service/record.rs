@@ -12,11 +12,6 @@ use hl_gpu::protocol::model::enums::TextureFormat;
 
 // ---- buffers -------------------------------------------------------------------------------------
 
-/// `glGenBuffers` (one name).
-pub fn gen_buffer(ctx: &mut GlContext) -> u32 {
-    ctx.buffers.gen()
-}
-
 /// `glBindBuffer(target, name)`. `GL_ARRAY_BUFFER`/`GL_ELEMENT_ARRAY_BUFFER` use their dedicated bindings;
 /// every other ES3 target (UBO/SSBO/PBO/dispatch-indirect/…) records into the general binding map so
 /// `glMapBufferRange`/`glDispatchComputeIndirect` can resolve it.
@@ -36,7 +31,7 @@ pub fn bind_buffer(ctx: &mut GlContext, target: u32, name: u32) {
 
 /// `glBufferData(target, data, usage)` — fills the buffer currently bound to `target`.
 pub fn buffer_data(ctx: &mut GlContext, target: u32, data: &[u8], usage: u32) {
-    let name = bound_buffer(ctx, target);
+    let name = ctx.buffer_for_target(target);
     if std::env::var("HL_UBO_DUMP").is_ok() && (name >= 1 && name <= 9) {
         eprintln!(
             "[UBO_DUMP] glBufferData target={target:#x} name={name} len={} usage={usage:#x}",
@@ -52,7 +47,7 @@ pub fn buffer_data(ctx: &mut GlContext, target: u32, data: &[u8], usage: u32) {
 /// current size is `GL_INVALID_VALUE` (real GL) — this also bounds the write so a hostile `offset` can
 /// never grow the buffer's `Vec` to an unbounded (or overflowing) size and panic/OOM.
 pub fn buffer_sub_data(ctx: &mut GlContext, target: u32, offset: usize, data: &[u8]) {
-    let name = bound_buffer(ctx, target);
+    let name = ctx.buffer_for_target(target);
     if std::env::var("HL_UBO_DUMP").is_ok() && (name >= 1 && name <= 9) {
         eprintln!(
             "[UBO_DUMP] glBufferSubData target={target:#x} name={name} off={offset} len={}",
@@ -69,20 +64,18 @@ pub fn buffer_sub_data(ctx: &mut GlContext, target: u32, offset: usize, data: &[
 }
 
 /// `glDeleteBuffers` (one name).
-pub fn delete_buffer(ctx: &mut GlContext, name: u32) -> bool {
-    if ctx.array_buffer == name {
-        ctx.array_buffer = 0;
+impl GlContext {
+    pub fn delete_buffer(&mut self, name: u32) -> bool {
+        if self.array_buffer == name {
+            self.array_buffer = 0;
+        }
+        if self.element_buffer == name {
+            self.element_buffer = 0;
+        }
+        // Retire the buffer's resident IR ids (queued Destroy for the next frame) so its residency is reclaimed.
+        self.retire_buffer(name);
+        self.buffers.delete(name)
     }
-    if ctx.element_buffer == name {
-        ctx.element_buffer = 0;
-    }
-    // Retire the buffer's resident IR ids (queued Destroy for the next frame) so its residency is reclaimed.
-    ctx.retire_buffer(name);
-    ctx.buffers.delete(name)
-}
-
-fn bound_buffer(ctx: &GlContext, target: u32) -> u32 {
-    ctx.buffer_for_target(target)
 }
 
 /// `glCopyBufferSubData(readTarget, writeTarget, readOffset, writeOffset, size)` — copy `size` bytes
@@ -131,13 +124,15 @@ use crate::model::context::IndexedBinding;
 
 /// The per-index binding cap for an indexed-buffer `target`, or `None` if `target` is not a valid indexed
 /// target (`glBindBufferBase`/`glBindBufferRange` raise `GL_INVALID_ENUM`).
-fn indexed_target_cap(target: u32) -> Option<u32> {
-    match target {
-        GL_UNIFORM_BUFFER => Some(MAX_UNIFORM_BUFFER_BINDINGS),
-        GL_SHADER_STORAGE_BUFFER => Some(MAX_SHADER_STORAGE_BUFFER_BINDINGS),
-        GL_ATOMIC_COUNTER_BUFFER => Some(MAX_ATOMIC_COUNTER_BUFFER_BINDINGS),
-        GL_TRANSFORM_FEEDBACK_BUFFER => Some(MAX_TRANSFORM_FEEDBACK_BUFFERS),
-        _ => None,
+impl IndexedBinding {
+    fn target_cap(target: u32) -> Option<u32> {
+        match target {
+            GL_UNIFORM_BUFFER => Some(MAX_UNIFORM_BUFFER_BINDINGS),
+            GL_SHADER_STORAGE_BUFFER => Some(MAX_SHADER_STORAGE_BUFFER_BINDINGS),
+            GL_ATOMIC_COUNTER_BUFFER => Some(MAX_ATOMIC_COUNTER_BUFFER_BINDINGS),
+            GL_TRANSFORM_FEEDBACK_BUFFER => Some(MAX_TRANSFORM_FEEDBACK_BUFFERS),
+            _ => None,
+        }
     }
 }
 
@@ -159,7 +154,7 @@ pub fn bind_buffer_range(
     offset: isize,
     size: isize,
 ) {
-    let Some(cap) = indexed_target_cap(target) else {
+    let Some(cap) = IndexedBinding::target_cap(target) else {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     };
@@ -203,44 +198,48 @@ pub fn indexed_buffer_binding(ctx: &GlContext, target: u32, index: u32) -> Optio
 /// `GL_BACK` (default framebuffer), or a `GL_COLOR_ATTACHMENT{i}` (FBO) — else `GL_INVALID_ENUM`. This
 /// model renders a single color target, so the list round-trips faithfully but only the first attachment
 /// is materialized (an honest partial).
-pub fn draw_buffers(ctx: &mut GlContext, bufs: &[u32]) {
-    for &b in bufs {
-        let ok = b == GL_NONE
-            || b == GL_BACK
-            || (GL_COLOR_ATTACHMENT0..=GL_COLOR_ATTACHMENT0 + 15).contains(&b);
+impl GlContext {
+    pub fn set_draw_buffers(&mut self, bufs: &[u32]) {
+        for &b in bufs {
+            let ok = b == GL_NONE
+                || b == GL_BACK
+                || (GL_COLOR_ATTACHMENT0..=GL_COLOR_ATTACHMENT0 + 15).contains(&b);
+            if !ok {
+                self.set_gl_error(GL_INVALID_ENUM);
+                return;
+            }
+        }
+        self.draw_buffers = bufs.to_vec();
+    }
+
+    /// `glReadBuffer(src)` — select the color buffer subsequent `glReadPixels`/blit reads from. `src` must be
+    /// `GL_NONE`, `GL_BACK`, or a `GL_COLOR_ATTACHMENT{i}` (else `GL_INVALID_ENUM`).
+    pub fn set_read_buffer(&mut self, src: u32) {
+        let ok = src == GL_NONE
+            || src == GL_BACK
+            || (GL_COLOR_ATTACHMENT0..=GL_COLOR_ATTACHMENT0 + 15).contains(&src);
         if !ok {
-            ctx.set_gl_error(GL_INVALID_ENUM);
+            self.set_gl_error(GL_INVALID_ENUM);
             return;
         }
+        self.read_buffer_src = src;
     }
-    ctx.draw_buffers = bufs.to_vec();
 }
 
-/// `glReadBuffer(src)` — select the color buffer subsequent `glReadPixels`/blit reads from. `src` must be
-/// `GL_NONE`, `GL_BACK`, or a `GL_COLOR_ATTACHMENT{i}` (else `GL_INVALID_ENUM`).
-pub fn read_buffer(ctx: &mut GlContext, src: u32) {
-    let ok = src == GL_NONE
-        || src == GL_BACK
-        || (GL_COLOR_ATTACHMENT0..=GL_COLOR_ATTACHMENT0 + 15).contains(&src);
-    if !ok {
-        ctx.set_gl_error(GL_INVALID_ENUM);
-        return;
-    }
-    ctx.read_buffer_src = src;
-}
+pub const DRAW_BUFFERS: fn(&mut GlContext, &[u32]) = GlContext::set_draw_buffers;
+pub const READ_BUFFER: fn(&mut GlContext, u32) = GlContext::set_read_buffer;
+pub use DRAW_BUFFERS as draw_buffers;
+pub use READ_BUFFER as read_buffer;
 
 // ---- textures ------------------------------------------------------------------------------------
 
-/// `glGenTextures` (one name).
-pub fn gen_texture(ctx: &mut GlContext) -> u32 {
-    ctx.textures.gen()
-}
-
 /// `glActiveTexture(GL_TEXTURE0 + i)`.
-pub fn active_texture(ctx: &mut GlContext, texture: u32) {
-    let unit = texture.wrapping_sub(GL_TEXTURE0) as usize;
-    if unit < ctx.tex_unit.len() {
-        ctx.active_texture = unit;
+impl GlContext {
+    pub fn active_texture(&mut self, texture: u32) {
+        let unit = texture.wrapping_sub(GL_TEXTURE0) as usize;
+        if unit < self.tex_unit.len() {
+            self.active_texture = unit;
+        }
     }
 }
 
@@ -297,13 +296,15 @@ pub fn tex_parameter(ctx: &mut GlContext, pname: u32, value: u32) {
 /// neutral-IR textures carry a single mip), so the mip chain is not materialized — an honest no-op on
 /// the pixel data. `target` must be a 2D/cube texture target (else `GL_INVALID_ENUM`) with a texture
 /// bound to the active unit (else `GL_INVALID_OPERATION`); the state is otherwise unchanged.
-pub fn generate_mipmap(ctx: &mut GlContext, target: u32) {
-    if target != GL_TEXTURE_2D && target != GL_TEXTURE_CUBE_MAP {
-        ctx.set_gl_error(GL_INVALID_ENUM);
-        return;
-    }
-    if ctx.tex_unit[ctx.active_texture] == 0 {
-        ctx.set_gl_error(GL_INVALID_OPERATION);
+impl GlContext {
+    pub fn generate_mipmap(&mut self, target: u32) {
+        if target != GL_TEXTURE_2D && target != GL_TEXTURE_CUBE_MAP {
+            self.set_gl_error(GL_INVALID_ENUM);
+            return;
+        }
+        if self.tex_unit[self.active_texture] == 0 {
+            self.set_gl_error(GL_INVALID_OPERATION);
+        }
     }
 }
 
@@ -327,7 +328,7 @@ pub fn tex_storage_2d(
     }
     // glTexStorage2D requires a SIZED internal format (Chrome's tiles use GL_RGBA8); the unsized
     // GL_RGB/GL_RGBA spellings are accepted leniently. An unmodeled format is GL_INVALID_ENUM.
-    let Some(fmt) = internalformat_to_texture_format(internalformat) else {
+    let Ok(fmt) = TextureFormat::try_from(InternalFormat(internalformat)) else {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     };
@@ -362,24 +363,30 @@ pub fn tex_storage_2d(
 /// model (→ `GL_INVALID_ENUM`). Formats without a distinct neutral variant fall back to `Rgba8Unorm` — the
 /// model stores an RGBA8 plane regardless, so the choice only steers an FBO color attachment's surface
 /// format (sRGB / BGRA / float), which the executor honors.
-pub fn internalformat_to_texture_format(internalformat: u32) -> Option<TextureFormat> {
-    Some(match internalformat {
-        // 8-bit unorm RGBA/RGB — sized + the lenient unsized spellings, plus the packed <=8bpc formats.
-        GL_RGBA | GL_RGBA8 | GL_RGB | GL_RGB8 | GL_RGB565 | GL_RGBA4 | GL_RGB5_A1 | GL_RGB10_A2
-        | GL_RGB10_A2UI | GL_R11F_G11F_B10F | GL_RGB9_E5 => TextureFormat::Rgba8Unorm,
-        GL_SRGB8_ALPHA8 | GL_SRGB8 => TextureFormat::Rgba8Srgb,
-        GL_BGRA8_EXT => TextureFormat::Bgra8Unorm,
-        GL_R8 | GL_R16F => TextureFormat::R8Unorm,
-        GL_RG8 | GL_RG16F => TextureFormat::Rg8Unorm,
-        GL_RGB16F | GL_RGBA16F => TextureFormat::Rgba16Float,
-        GL_RG32F | GL_RGBA32F => TextureFormat::Rgba32Float,
-        GL_R32F => TextureFormat::R32Float,
-        GL_DEPTH_COMPONENT16 | GL_DEPTH_COMPONENT24 | GL_DEPTH_COMPONENT32F => {
-            TextureFormat::Depth32Float
-        }
-        GL_DEPTH24_STENCIL8 | GL_DEPTH32F_STENCIL8 => TextureFormat::Depth24PlusStencil8,
-        _ => return None,
-    })
+struct InternalFormat(u32);
+impl TryFrom<InternalFormat> for TextureFormat {
+    type Error = ();
+    fn try_from(internalformat: InternalFormat) -> Result<Self, Self::Error> {
+        Ok(match internalformat.0 {
+            // 8-bit unorm RGBA/RGB — sized + the lenient unsized spellings, plus the packed <=8bpc formats.
+            GL_RGBA | GL_RGBA8 | GL_RGB | GL_RGB8 | GL_RGB565 | GL_RGBA4 | GL_RGB5_A1
+            | GL_RGB10_A2 | GL_RGB10_A2UI | GL_R11F_G11F_B10F | GL_RGB9_E5 => {
+                TextureFormat::Rgba8Unorm
+            }
+            GL_SRGB8_ALPHA8 | GL_SRGB8 => TextureFormat::Rgba8Srgb,
+            GL_BGRA8_EXT => TextureFormat::Bgra8Unorm,
+            GL_R8 | GL_R16F => TextureFormat::R8Unorm,
+            GL_RG8 | GL_RG16F => TextureFormat::Rg8Unorm,
+            GL_RGB16F | GL_RGBA16F => TextureFormat::Rgba16Float,
+            GL_RG32F | GL_RGBA32F => TextureFormat::Rgba32Float,
+            GL_R32F => TextureFormat::R32Float,
+            GL_DEPTH_COMPONENT16 | GL_DEPTH_COMPONENT24 | GL_DEPTH_COMPONENT32F => {
+                TextureFormat::Depth32Float
+            }
+            GL_DEPTH24_STENCIL8 | GL_DEPTH32F_STENCIL8 => TextureFormat::Depth24PlusStencil8,
+            _ => return Err(()),
+        })
+    }
 }
 
 /// `glTexStorage3D(target, levels, internalformat, w, h, depth)` — immutable storage for a 2D-array / 3D
@@ -570,24 +577,21 @@ pub fn copy_tex_sub_image_2d(
 }
 
 /// `glDeleteTextures` (one name).
-pub fn delete_texture(ctx: &mut GlContext, name: u32) -> bool {
-    for u in ctx.tex_unit.iter_mut() {
-        if *u == name {
-            *u = 0;
+impl GlContext {
+    pub fn delete_texture(&mut self, name: u32) -> bool {
+        for u in self.tex_unit.iter_mut() {
+            if *u == name {
+                *u = 0;
+            }
         }
+        // Retire the texture's resident IR ids (sampled texture + FBO render target + depth), queued Destroy for
+        // the next frame, so Chrome's fresh-tile churn does not climb the host residency ledger to its cap.
+        self.retire_texture(name);
+        self.textures.delete(name)
     }
-    // Retire the texture's resident IR ids (sampled texture + FBO render target + depth), queued Destroy for
-    // the next frame, so Chrome's fresh-tile churn does not climb the host residency ledger to its cap.
-    ctx.retire_texture(name);
-    ctx.textures.delete(name)
 }
 
 // ---- framebuffers (offscreen render targets) -----------------------------------------------------
-
-/// `glGenFramebuffers` (one name).
-pub fn gen_framebuffer(ctx: &mut GlContext) -> u32 {
-    ctx.framebuffers.gen()
-}
 
 /// `glBindFramebuffer(target, name)` — bind `name` as the draw and/or read framebuffer (`0` = default).
 /// `GL_FRAMEBUFFER` binds both; the split `GL_DRAW_FRAMEBUFFER`/`GL_READ_FRAMEBUFFER` bind one. A recorded
@@ -649,67 +653,79 @@ pub fn framebuffer_texture_2d(
 }
 
 /// `glDeleteFramebuffers` (one name). Deleting the bound draw/read FBO reverts that binding to the default.
-pub fn delete_framebuffer(ctx: &mut GlContext, name: u32) -> bool {
-    if ctx.bound_fbo == name {
-        ctx.bound_fbo = 0;
-    }
-    if ctx.read_fbo == name {
-        ctx.read_fbo = 0;
-    }
-    ctx.framebuffers.delete(name)
-}
-
-/// `glIsFramebuffer(name)` — true once `name` names a generated (non-default) framebuffer object.
-pub fn is_framebuffer(ctx: &GlContext, name: u32) -> bool {
-    ctx.framebuffers.exists(name)
-}
-
-/// `glCheckFramebufferStatus(target)` — completeness of the bound draw/read framebuffer. Returns
-/// `GL_FRAMEBUFFER_COMPLETE` for the default framebuffer or a user FBO with a sized color attachment,
-/// `GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT` for a user FBO with no color attachment, and
-/// `GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT` when the color attachment is unsized (e.g. a renderbuffer with
-/// no `glRenderbufferStorage` yet). A bad `target` raises `GL_INVALID_ENUM` and returns `0`.
-pub fn check_framebuffer_status(ctx: &mut GlContext, target: u32) -> u32 {
-    let fbo = match target {
-        GL_FRAMEBUFFER | GL_DRAW_FRAMEBUFFER => ctx.bound_fbo,
-        GL_READ_FRAMEBUFFER => ctx.read_fbo,
-        _ => {
-            ctx.set_gl_error(GL_INVALID_ENUM);
-            return 0;
+impl GlContext {
+    pub fn delete_framebuffer(&mut self, name: u32) -> bool {
+        if self.bound_fbo == name {
+            self.bound_fbo = 0;
         }
-    };
-    framebuffer_status(ctx, fbo)
+        if self.read_fbo == name {
+            self.read_fbo = 0;
+        }
+        self.framebuffers.delete(name)
+    }
+
+    /// `glIsFramebuffer(name)` — true once `name` names a generated (non-default) framebuffer object.
+    pub fn has_framebuffer(&self, name: u32) -> bool {
+        self.framebuffers.exists(name)
+    }
+
+    /// `glCheckFramebufferStatus(target)` — completeness of the bound draw/read framebuffer. Returns
+    /// `GL_FRAMEBUFFER_COMPLETE` for the default framebuffer or a user FBO with a sized color attachment,
+    /// `GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT` for a user FBO with no color attachment, and
+    /// `GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT` when the color attachment is unsized (e.g. a renderbuffer with
+    /// no `glRenderbufferStorage` yet). A bad `target` raises `GL_INVALID_ENUM` and returns `0`.
+    pub fn check_framebuffer_status(&mut self, target: u32) -> u32 {
+        let fbo = match target {
+            GL_FRAMEBUFFER | GL_DRAW_FRAMEBUFFER => self.bound_fbo,
+            GL_READ_FRAMEBUFFER => self.read_fbo,
+            _ => {
+                self.set_gl_error(GL_INVALID_ENUM);
+                return 0;
+            }
+        };
+        self.framebuffer_status(fbo)
+    }
+
+    /// Completeness for the color-only framebuffer subset this model renders. The default framebuffer (`0`)
+    /// is managed by EGL and is complete; a user FBO needs one sized, live color-texture attachment.
+    fn framebuffer_status(&self, fbo: u32) -> u32 {
+        if fbo == 0 {
+            return GL_FRAMEBUFFER_COMPLETE;
+        }
+        if !self.framebuffers.exists(fbo) {
+            return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+        }
+        let color = self.framebuffers.color_attachment(fbo);
+        if color == 0 {
+            return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+        }
+        match self.textures.get(color) {
+            Some(t) if t.w > 0 && t.h > 0 => GL_FRAMEBUFFER_COMPLETE,
+            _ => GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
+        }
+    }
 }
 
-/// Completeness for the color-only framebuffer subset this model renders. The default framebuffer (`0`)
-/// is managed by EGL and is complete; a user FBO needs one sized, live color-texture attachment.
-fn framebuffer_status(ctx: &GlContext, fbo: u32) -> u32 {
-    if fbo == 0 {
-        return GL_FRAMEBUFFER_COMPLETE;
-    }
-    if !ctx.framebuffers.exists(fbo) {
-        return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
-    }
-    let color = ctx.framebuffers.color_attachment(fbo);
-    if color == 0 {
-        return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
-    }
-    match ctx.textures.get(color) {
-        Some(t) if t.w > 0 && t.h > 0 => GL_FRAMEBUFFER_COMPLETE,
-        _ => GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT,
-    }
-}
+pub const DELETE_FRAMEBUFFER: fn(&mut GlContext, u32) -> bool = GlContext::delete_framebuffer;
+pub const IS_FRAMEBUFFER: fn(&GlContext, u32) -> bool = GlContext::has_framebuffer;
+pub const CHECK_FRAMEBUFFER_STATUS: fn(&mut GlContext, u32) -> u32 =
+    GlContext::check_framebuffer_status;
+pub use CHECK_FRAMEBUFFER_STATUS as check_framebuffer_status;
+pub use DELETE_FRAMEBUFFER as delete_framebuffer;
+pub use IS_FRAMEBUFFER as is_framebuffer;
 
 // ---- renderbuffers (modeled as texture-backed color attachments) ---------------------------------
 
 /// `glGenRenderbuffers` (one name). Eagerly mints the RBO's stable backing texture (still unsized, so it
 /// reads back incomplete until `glRenderbufferStorage`), so a `glFramebufferRenderbuffer` that runs before
 /// the storage call still resolves to the right attachment once storage lands.
-pub fn gen_renderbuffer(ctx: &mut GlContext) -> u32 {
-    let name = ctx.renderbuffers.gen();
-    let tex = ctx.textures.gen();
-    ctx.renderbuffers.set_storage(name, tex, 0, 0);
-    name
+impl GlContext {
+    pub fn gen_renderbuffer(&mut self) -> u32 {
+        let name = self.renderbuffers.gen();
+        let tex = self.textures.gen();
+        self.renderbuffers.set_storage(name, tex, 0, 0);
+        name
+    }
 }
 
 /// `glBindRenderbuffer(GL_RENDERBUFFER, name)` — select the target of the next `glRenderbufferStorage`.
@@ -763,26 +779,35 @@ pub fn renderbuffer_storage(
 
 /// `glDeleteRenderbuffers` (one name). Detaches the backing texture from every FBO color slot and drops
 /// the backing texture. Returns `false` for an unknown / zero name.
-pub fn delete_renderbuffer(ctx: &mut GlContext, name: u32) -> bool {
-    if ctx.bound_rbo == name {
-        ctx.bound_rbo = 0;
-    }
-    match ctx.renderbuffers.delete(name) {
-        Some(rb) => {
-            ctx.framebuffers.detach_color_texture(rb.tex);
-            // The renderbuffer's backing texture owns the offscreen render-target IR — retire it too.
-            ctx.retire_texture(rb.tex);
-            ctx.textures.delete(rb.tex);
-            true
+impl GlContext {
+    pub fn delete_renderbuffer(&mut self, name: u32) -> bool {
+        if self.bound_rbo == name {
+            self.bound_rbo = 0;
         }
-        None => false,
+        match self.renderbuffers.delete(name) {
+            Some(rb) => {
+                self.framebuffers.detach_color_texture(rb.tex);
+                // The renderbuffer's backing texture owns the offscreen render-target IR — retire it too.
+                self.retire_texture(rb.tex);
+                self.textures.delete(rb.tex);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `glIsRenderbuffer(name)` — true once `name` names a generated (non-default) renderbuffer object.
+    pub fn is_renderbuffer(&self, name: u32) -> bool {
+        self.renderbuffers.contains(name)
     }
 }
 
-/// `glIsRenderbuffer(name)` — true once `name` names a generated (non-default) renderbuffer object.
-pub fn is_renderbuffer(ctx: &GlContext, name: u32) -> bool {
-    ctx.renderbuffers.is_renderbuffer(name)
-}
+pub const GEN_RENDERBUFFER: fn(&mut GlContext) -> u32 = GlContext::gen_renderbuffer;
+pub const DELETE_RENDERBUFFER: fn(&mut GlContext, u32) -> bool = GlContext::delete_renderbuffer;
+pub const IS_RENDERBUFFER: fn(&GlContext, u32) -> bool = GlContext::is_renderbuffer;
+pub use DELETE_RENDERBUFFER as delete_renderbuffer;
+pub use GEN_RENDERBUFFER as gen_renderbuffer;
+pub use IS_RENDERBUFFER as is_renderbuffer;
 
 /// `glFramebufferRenderbuffer(target, attachment, renderbuffertarget, rbo)` — attach a renderbuffer to the
 /// bound FBO. The color attachment resolves to the renderbuffer's backing texture (reusing the exact
@@ -813,7 +838,7 @@ pub fn framebuffer_renderbuffer(
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
-    if rbo != 0 && !ctx.renderbuffers.is_renderbuffer(rbo) {
+    if rbo != 0 && !ctx.renderbuffers.contains(rbo) {
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
@@ -857,8 +882,8 @@ pub fn blit_framebuffer(
     if mask & GL_COLOR_BUFFER_BIT == 0 {
         return;
     }
-    if framebuffer_status(ctx, ctx.read_fbo) != GL_FRAMEBUFFER_COMPLETE
-        || framebuffer_status(ctx, ctx.bound_fbo) != GL_FRAMEBUFFER_COMPLETE
+    if ctx.framebuffer_status(ctx.read_fbo) != GL_FRAMEBUFFER_COMPLETE
+        || ctx.framebuffer_status(ctx.bound_fbo) != GL_FRAMEBUFFER_COMPLETE
     {
         ctx.set_gl_error(GL_INVALID_FRAMEBUFFER_OPERATION);
         return;
@@ -881,31 +906,29 @@ pub fn blit_framebuffer(
 // ---- vertex array objects ------------------------------------------------------------------------
 
 /// `glGenVertexArrays` (one name).
-pub fn gen_vertex_array(ctx: &mut GlContext) -> u32 {
-    ctx.gen_vertex_array()
-}
+pub const GEN_VERTEX_ARRAY: fn(&mut GlContext) -> u32 = GlContext::gen_vertex_array;
 
 /// `glBindVertexArray(vao)` — swap the captured attrib/element-buffer state (see
 /// [`GlContext::bind_vertex_array`]).
-pub fn bind_vertex_array(ctx: &mut GlContext, vao: u32) {
-    ctx.bind_vertex_array(vao);
-}
+pub const BIND_VERTEX_ARRAY: fn(&mut GlContext, u32) = GlContext::bind_vertex_array;
 
 /// `glDeleteVertexArrays` (one name).
-pub fn delete_vertex_array(ctx: &mut GlContext, vao: u32) -> bool {
-    ctx.delete_vertex_array(vao)
-}
+pub const DELETE_VERTEX_ARRAY: fn(&mut GlContext, u32) -> bool = GlContext::delete_vertex_array;
 
 /// `glIsVertexArray(vao)`.
-pub fn is_vertex_array(ctx: &GlContext, vao: u32) -> bool {
-    ctx.is_vertex_array(vao)
-}
+pub const IS_VERTEX_ARRAY: fn(&GlContext, u32) -> bool = GlContext::is_vertex_array;
+pub use BIND_VERTEX_ARRAY as bind_vertex_array;
+pub use DELETE_VERTEX_ARRAY as delete_vertex_array;
+pub use GEN_VERTEX_ARRAY as gen_vertex_array;
+pub use IS_VERTEX_ARRAY as is_vertex_array;
 
 // ---- shaders + programs --------------------------------------------------------------------------
 
 /// `glCreateShader(kind)`.
-pub fn create_shader(ctx: &mut GlContext, kind: u32) -> u32 {
-    ctx.programs.create_shader(kind)
+impl GlContext {
+    pub fn create_shader(&mut self, kind: u32) -> u32 {
+        self.programs.create_shader(kind)
+    }
 }
 
 /// `glShaderSource(shader, src)`.
@@ -914,13 +937,17 @@ pub fn shader_source(ctx: &mut GlContext, shader: u32, src: &str) {
 }
 
 /// `glCompileShader(shader)`.
-pub fn compile_shader(ctx: &mut GlContext, shader: u32) {
-    ctx.programs.compile_shader(shader);
+impl GlContext {
+    pub fn compile_shader(&mut self, shader: u32) {
+        self.programs.compile_shader(shader);
+    }
 }
 
 /// `glCreateProgram()`.
-pub fn create_program(ctx: &mut GlContext) -> u32 {
-    ctx.programs.create_program()
+impl GlContext {
+    pub fn create_program(&mut self) -> u32 {
+        self.programs.create()
+    }
 }
 
 /// `glAttachShader(program, shader)`.
@@ -929,19 +956,32 @@ pub fn attach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
 }
 
 /// `glLinkProgram(program)` — translate the attached GLSL-ES pair to shader-IR + reflect the layout.
-pub fn link_program(ctx: &mut GlContext, program: u32) -> bool {
-    ctx.programs.link(program)
+impl GlContext {
+    pub fn link_program(&mut self, program: u32) -> bool {
+        self.programs.link(program)
+    }
+
+    /// `glUseProgram(program)`.
+    pub fn use_program(&mut self, program: u32) {
+        self.cur_prog = program;
+    }
 }
 
-/// `glUseProgram(program)`.
-pub fn use_program(ctx: &mut GlContext, program: u32) {
-    ctx.cur_prog = program;
-}
+pub const CREATE_SHADER: fn(&mut GlContext, u32) -> u32 = GlContext::create_shader;
+pub const COMPILE_SHADER: fn(&mut GlContext, u32) = GlContext::compile_shader;
+pub const CREATE_PROGRAM: fn(&mut GlContext) -> u32 = GlContext::create_program;
+pub const LINK_PROGRAM: fn(&mut GlContext, u32) -> bool = GlContext::link_program;
+pub const USE_PROGRAM: fn(&mut GlContext, u32) = GlContext::use_program;
+pub use COMPILE_SHADER as compile_shader;
+pub use CREATE_PROGRAM as create_program;
+pub use CREATE_SHADER as create_shader;
+pub use LINK_PROGRAM as link_program;
+pub use USE_PROGRAM as use_program;
 
 /// `glUniform1i(samplerLocation, unit)` — map a sampler uniform (by declaration index) to a texture
 /// unit. Simplified: `sampler_index` is the sampler's position in the program's `samp_names`.
 pub fn uniform_sampler(ctx: &mut GlContext, sampler_index: usize, unit: i32) {
-    if let Some(p) = ctx.programs.program_mut(ctx.cur_prog) {
+    if let Some(p) = ctx.programs.get_mut(ctx.cur_prog) {
         if sampler_index < p.samp_units.len() {
             p.samp_units[sampler_index] = unit;
         }
@@ -951,7 +991,7 @@ pub fn uniform_sampler(ctx: &mut GlContext, sampler_index: usize, unit: i32) {
 /// `glUniform*` for a data uniform — write `bytes` into the bound program's uniform-block buffer at the
 /// named member's offset. Simplified name-keyed write (real GL uses integer locations).
 pub fn uniform_data(ctx: &mut GlContext, name: &str, bytes: &[u8]) {
-    if let Some(p) = ctx.programs.program_mut(ctx.cur_prog) {
+    if let Some(p) = ctx.programs.get_mut(ctx.cur_prog) {
         if let Some(u) = p.unis.iter().find(|u| u.name == name) {
             let off = u.off as usize;
             let end = (off + bytes.len()).min(p.ubuf.len());
@@ -968,7 +1008,7 @@ pub fn uniform_data(ctx: &mut GlContext, name: &str, bytes: &[u8]) {
 /// [`uniform_sampler`]; the frame builder ships the resulting `ubuf` at binding 1 so the draw's shader
 /// reads the value. Out-of-range writes (bad location / oversized payload) are truncated to the slot.
 pub fn uniform_at(ctx: &mut GlContext, location: usize, bytes: &[u8]) {
-    if let Some(p) = ctx.programs.program_mut(ctx.cur_prog) {
+    if let Some(p) = ctx.programs.get_mut(ctx.cur_prog) {
         let (off, sz) = match p.unis.get(location) {
             Some(u) => (u.off as usize, u.sz as usize),
             None => return,
@@ -1017,27 +1057,29 @@ pub fn vertex_attrib_divisor(ctx: &mut GlContext, index: usize, divisor: u32) {
 }
 
 /// `glEnableVertexAttribArray(location)`.
-pub fn enable_vertex_attrib(ctx: &mut GlContext, location: usize) {
-    if location < ctx.attr.len() {
-        ctx.attr[location].enabled = true;
+impl GlContext {
+    pub fn enable_vertex_attrib(&mut self, location: usize) {
+        if location < self.attr.len() {
+            self.attr[location].enabled = true;
+        }
     }
-}
 
-/// `glDisableVertexAttribArray(location)`.
-pub fn disable_vertex_attrib(ctx: &mut GlContext, location: usize) {
-    if location < ctx.attr.len() {
-        ctx.attr[location].enabled = false;
+    /// `glDisableVertexAttribArray(location)`.
+    pub fn disable_vertex_attrib(&mut self, location: usize) {
+        if location < self.attr.len() {
+            self.attr[location].enabled = false;
+        }
     }
-}
 
-/// `glClearColor(r, g, b, a)`.
-pub fn clear_color(ctx: &mut GlContext, rgba: [f32; 4]) {
-    ctx.clear_color = rgba;
-}
+    /// `glClearColor(r, g, b, a)`.
+    pub fn set_clear_color(&mut self, rgba: [f32; 4]) {
+        self.clear_color = rgba;
+    }
 
-/// `glClearDepthf(d)` — recorded for completeness (no depth attachment is modeled, so it is not lowered).
-pub fn clear_depth(ctx: &mut GlContext, d: f32) {
-    ctx.clear_depth = d;
+    /// `glClearDepthf(d)` — recorded for completeness (no depth attachment is modeled, so it is not lowered).
+    pub fn set_clear_depth(&mut self, d: f32) {
+        self.clear_depth = d;
+    }
 }
 
 /// `glBlendFunc(src, dst)` — set the same factor pair for RGB and alpha.
@@ -1063,23 +1105,25 @@ pub fn blend_func_separate(
 }
 
 /// `glBlendColor` — set the constant color used by the CONSTANT blend factors. GLES clamps each channel.
-pub fn blend_color(ctx: &mut GlContext, color: [f32; 4]) {
-    ctx.blend_color = color.map(|value| value.clamp(0.0, 1.0));
-}
+impl GlContext {
+    pub fn set_blend_color(&mut self, color: [f32; 4]) {
+        self.blend_color = color.map(|value| value.clamp(0.0, 1.0));
+    }
 
-/// `glDepthFunc(func)` — set the depth-compare function.
-pub fn depth_func(ctx: &mut GlContext, func: u32) {
-    ctx.depth_func = func;
-}
+    /// `glDepthFunc(func)` — set the depth-compare function.
+    pub fn set_depth_func(&mut self, func: u32) {
+        self.depth_func = func;
+    }
 
-/// `glDepthMask(flag)` — enable/disable depth writes.
-pub fn depth_mask(ctx: &mut GlContext, write: bool) {
-    ctx.depth_write = write;
-}
+    /// `glDepthMask(flag)` — enable/disable depth writes.
+    pub fn set_depth_mask(&mut self, write: bool) {
+        self.depth_write = write;
+    }
 
-/// `glClearStencil(s)` — set the stencil-buffer clear value, lowered to `DepthAttachment.clear_stencil`.
-pub fn clear_stencil(ctx: &mut GlContext, s: i32) {
-    ctx.clear_stencil = s;
+    /// `glClearStencil(s)` — set the stencil-buffer clear value, lowered to `DepthAttachment.clear_stencil`.
+    pub fn set_clear_stencil(&mut self, s: i32) {
+        self.clear_stencil = s;
+    }
 }
 
 /// `glStencilFunc(func, ref, mask)` — set the compare func + reference + value read mask for BOTH faces.
@@ -1129,8 +1173,10 @@ pub fn stencil_op_separate(ctx: &mut GlContext, face: u32, sfail: u32, dpfail: u
 }
 
 /// `glStencilMask(mask)` — set the stencil write mask for BOTH faces.
-pub fn stencil_mask(ctx: &mut GlContext, mask: u32) {
-    ctx.stencil_write_mask = mask;
+impl GlContext {
+    pub fn set_stencil_mask(&mut self, mask: u32) {
+        self.stencil_write_mask = mask;
+    }
 }
 
 /// `glStencilMaskSeparate(face, mask)` — set the stencil write mask for the selected face(s). The wire
@@ -1140,13 +1186,15 @@ pub fn stencil_mask_separate(ctx: &mut GlContext, _face: u32, mask: u32) {
 }
 
 /// `glCullFace(mode)` — select the culled face (`GL_FRONT` / `GL_BACK` / `GL_FRONT_AND_BACK`).
-pub fn cull_face(ctx: &mut GlContext, mode: u32) {
-    ctx.cull_face = mode;
-}
+impl GlContext {
+    pub fn set_cull_face(&mut self, mode: u32) {
+        self.cull_face = mode;
+    }
 
-/// `glFrontFace(mode)` — select the front-face winding (`GL_CW` / `GL_CCW`).
-pub fn front_face(ctx: &mut GlContext, mode: u32) {
-    ctx.front_face = mode;
+    /// `glFrontFace(mode)` — select the front-face winding (`GL_CW` / `GL_CCW`).
+    pub fn set_front_face(&mut self, mode: u32) {
+        self.front_face = mode;
+    }
 }
 
 /// `glColorMask(r, g, b, a)` — set the per-channel framebuffer write mask. Packs the four booleans into
@@ -1157,8 +1205,10 @@ pub fn color_mask(ctx: &mut GlContext, r: bool, g: bool, b: bool, a: bool) {
 }
 
 /// `glViewport(x, y, w, h)`.
-pub fn viewport(ctx: &mut GlContext, vp: [i32; 4]) {
-    ctx.viewport = vp;
+impl GlContext {
+    pub fn set_viewport(&mut self, vp: [i32; 4]) {
+        self.viewport = vp;
+    }
 }
 
 /// `glPixelStorei(pname, value)` — record a pack/unpack pixel-store parameter (affecting texture upload /
@@ -1219,18 +1269,20 @@ pub fn pixel_store(ctx: &mut GlContext, pname: u32, value: i32) {
 }
 
 /// `glScissor(x, y, w, h)`.
-pub fn scissor(ctx: &mut GlContext, sc: [i32; 4]) {
-    ctx.scissor = sc;
-}
+impl GlContext {
+    pub fn set_scissor(&mut self, sc: [i32; 4]) {
+        self.scissor = sc;
+    }
 
-/// `glEnable(cap)`.
-pub fn enable(ctx: &mut GlContext, cap: u32) {
-    set_cap(ctx, cap, true);
-}
+    /// `glEnable(cap)`.
+    pub fn enable(&mut self, cap: u32) {
+        set_cap(self, cap, true);
+    }
 
-/// `glDisable(cap)`.
-pub fn disable(ctx: &mut GlContext, cap: u32) {
-    set_cap(ctx, cap, false);
+    /// `glDisable(cap)`.
+    pub fn disable(&mut self, cap: u32) {
+        set_cap(self, cap, false);
+    }
 }
 
 fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
@@ -1247,15 +1299,50 @@ fn set_cap(ctx: &mut GlContext, cap: u32, on: bool) {
 // ---- draw + clear recording ----------------------------------------------------------------------
 
 /// `glClear(mask)` — record a full-surface clear rect at the current clear color (color bit assumed).
-pub fn clear(ctx: &mut GlContext) {
-    let (w, h) = ctx.target_wh();
-    let mut d = DrawCall {
-        is_clear: true,
-        ..snapshot(ctx)
-    };
-    d.clear_rect = [0, 0, w, h];
-    ctx.draws.push(d);
+impl GlContext {
+    pub fn record_clear(&mut self) {
+        let (w, h) = self.target_wh();
+        let mut d = DrawCall {
+            is_clear: true,
+            ..self.snapshot()
+        };
+        d.clear_rect = [0, 0, w, h];
+        self.draws.push(d);
+    }
 }
+
+pub const ENABLE_VERTEX_ATTRIB: fn(&mut GlContext, usize) = GlContext::enable_vertex_attrib;
+pub const DISABLE_VERTEX_ATTRIB: fn(&mut GlContext, usize) = GlContext::disable_vertex_attrib;
+pub const CLEAR_COLOR: fn(&mut GlContext, [f32; 4]) = GlContext::set_clear_color;
+pub const CLEAR_DEPTH: fn(&mut GlContext, f32) = GlContext::set_clear_depth;
+pub const BLEND_COLOR: fn(&mut GlContext, [f32; 4]) = GlContext::set_blend_color;
+pub const DEPTH_FUNC: fn(&mut GlContext, u32) = GlContext::set_depth_func;
+pub const DEPTH_MASK: fn(&mut GlContext, bool) = GlContext::set_depth_mask;
+pub const CLEAR_STENCIL: fn(&mut GlContext, i32) = GlContext::set_clear_stencil;
+pub const STENCIL_MASK: fn(&mut GlContext, u32) = GlContext::set_stencil_mask;
+pub const CULL_FACE: fn(&mut GlContext, u32) = GlContext::set_cull_face;
+pub const FRONT_FACE: fn(&mut GlContext, u32) = GlContext::set_front_face;
+pub const VIEWPORT: fn(&mut GlContext, [i32; 4]) = GlContext::set_viewport;
+pub const SCISSOR: fn(&mut GlContext, [i32; 4]) = GlContext::set_scissor;
+pub const ENABLE: fn(&mut GlContext, u32) = GlContext::enable;
+pub const DISABLE: fn(&mut GlContext, u32) = GlContext::disable;
+pub const CLEAR: fn(&mut GlContext) = GlContext::record_clear;
+pub use BLEND_COLOR as blend_color;
+pub use CLEAR as clear;
+pub use CLEAR_COLOR as clear_color;
+pub use CLEAR_DEPTH as clear_depth;
+pub use CLEAR_STENCIL as clear_stencil;
+pub use CULL_FACE as cull_face;
+pub use DEPTH_FUNC as depth_func;
+pub use DEPTH_MASK as depth_mask;
+pub use DISABLE as disable;
+pub use DISABLE_VERTEX_ATTRIB as disable_vertex_attrib;
+pub use ENABLE as enable;
+pub use ENABLE_VERTEX_ATTRIB as enable_vertex_attrib;
+pub use FRONT_FACE as front_face;
+pub use SCISSOR as scissor;
+pub use STENCIL_MASK as stencil_mask;
+pub use VIEWPORT as viewport;
 
 /// Read one enabled CLIENT-side vertex attribute's bytes into a tightly-packed, de-interleaved buffer
 /// spanning logical vertices `[0, vert_end)`, honoring `stride` (`0` = tightly packed by
@@ -1273,7 +1360,7 @@ unsafe fn read_client_attr(
     vert_end: usize,
 ) -> Vec<u8> {
     let comp = size.clamp(1, 4) as usize;
-    let elem = comp * crate::model::glconst::gl_component_size(kind);
+    let elem = comp * crate::model::glconst::GlType(kind).component_size();
     let st = if stride > 0 { stride as usize } else { elem };
     let mut out = Vec::with_capacity(vert_end * elem);
     for v in 0..vert_end {
@@ -1286,25 +1373,27 @@ unsafe fn read_client_attr(
 /// Capture every enabled attribute drawn with NO vertex buffer bound (`buffer == 0`, a client pointer) into
 /// the draw's `client_vbufs`, each spanning `[0, vert_end)`. A null client pointer (`offset == 0`) is
 /// skipped (nothing to read). An all-VBO draw records nothing here, so it lowers unchanged.
-fn capture_client_vbufs(d: &mut DrawCall, vert_end: usize) {
-    if vert_end == 0 {
-        return;
-    }
-    let attrs = d.attrs; // `[Attr; MAX_ATTR]` is Copy — snapshot before borrowing `d` mutably below.
-    for (i, a) in attrs.iter().enumerate() {
-        if !a.enabled || a.buffer != 0 || a.offset == 0 {
-            continue;
+impl DrawCall {
+    fn capture_client_vbufs(&mut self, vert_end: usize) {
+        if vert_end == 0 {
+            return;
         }
-        let data = unsafe { read_client_attr(a.offset, a.size, a.kind, a.stride, vert_end) };
-        d.client_vbufs.push(crate::model::program::ClientArray {
-            location: i,
-            data,
-            size: a.size,
-            kind: a.kind,
-            normalized: a.normalized,
-            integer: a.integer,
-            divisor: a.divisor,
-        });
+        let attrs = self.attrs;
+        for (i, a) in attrs.iter().enumerate() {
+            if !a.enabled || a.buffer != 0 || a.offset == 0 {
+                continue;
+            }
+            let data = unsafe { read_client_attr(a.offset, a.size, a.kind, a.stride, vert_end) };
+            self.client_vbufs.push(crate::model::program::ClientArray {
+                location: i,
+                data,
+                size: a.size,
+                kind: a.kind,
+                normalized: a.normalized,
+                integer: a.integer,
+                divisor: a.divisor,
+            });
+        }
     }
 }
 
@@ -1357,7 +1446,7 @@ fn capture_indexed(
     if !has_client_vbuf && !client_index {
         return; // pure-VBO indexed draw — the existing VBO path handles everything.
     }
-    let isz = crate::model::glconst::gl_component_size(index_type);
+    let isz = crate::model::glconst::GlType(index_type).component_size();
     let need = count.max(0) as usize * isz;
     // The raw index bytes: from the client pointer, or from the bound element-array-buffer at `offset`.
     let idx_bytes: Vec<u8> = if client_index {
@@ -1399,7 +1488,7 @@ fn capture_indexed(
             }
         }
         let vert_end = max_idx + base_vertex.max(0) as usize + 1;
-        capture_client_vbufs(d, vert_end);
+        d.capture_client_vbufs(vert_end);
     }
 }
 
@@ -1409,25 +1498,30 @@ fn capture_indexed(
 /// scissor excludes its viewport (or a zero-area scissor) contributes `0`. This is an UPPER BOUND on the
 /// true rasterized sample count (it does not clip to the primitive itself), which is exactly what the
 /// boolean `GL_ANY_SAMPLES_PASSED` needs — nonzero iff the draw could rasterize any sample.
-fn draw_coverage(d: &crate::model::program::DrawCall) -> u64 {
-    let [vx, vy, vw, vh] = d.viewport;
-    let (mut x0, mut y0, mut x1, mut y1) = (vx, vy, vx.saturating_add(vw), vy.saturating_add(vh));
-    if d.scissor_enabled {
-        let [sx, sy, sw, sh] = d.scissor;
-        x0 = x0.max(sx);
-        y0 = y0.max(sy);
-        x1 = x1.min(sx.saturating_add(sw));
-        y1 = y1.min(sy.saturating_add(sh));
+impl DrawCall {
+    fn coverage(&self) -> u64 {
+        let [vx, vy, vw, vh] = self.viewport;
+        let (mut x0, mut y0, mut x1, mut y1) =
+            (vx, vy, vx.saturating_add(vw), vy.saturating_add(vh));
+        if self.scissor_enabled {
+            let [sx, sy, sw, sh] = self.scissor;
+            x0 = x0.max(sx);
+            y0 = y0.max(sy);
+            x1 = x1.min(sx.saturating_add(sw));
+            y1 = y1.min(sy.saturating_add(sh));
+        }
+        let w = (x1 - x0).max(0) as u64;
+        let h = (y1 - y0).max(0) as u64;
+        w * h * self.instance_count.max(1) as u64
     }
-    let w = (x1 - x0).max(0) as u64;
-    let h = (y1 - y0).max(0) as u64;
-    w * h * d.instance_count.max(1) as u64
 }
 
 /// Feed `d`'s coverage into an open occlusion query (no-op when none is armed). Called for every recorded
 /// geometry draw (never for a `glClear` — clears do not affect occlusion queries).
-fn accumulate_occlusion(ctx: &mut GlContext, d: &crate::model::program::DrawCall) {
-    ctx.queries.accumulate(draw_coverage(d));
+impl GlContext {
+    fn accumulate_occlusion(&mut self, d: &DrawCall) {
+        self.queries.accumulate(d.coverage());
+    }
 }
 
 /// `glDrawArrays(mode, first, count)` — snapshot the bound state and append the draw (one instance).
@@ -1453,14 +1547,14 @@ pub fn draw_arrays_instanced(
     if count == 0 || instances == 0 {
         return;
     }
-    let mut d = snapshot(ctx);
+    let mut d = ctx.snapshot();
     d.mode = mode;
     d.first = first;
     d.count = count;
     d.instance_count = instances as u32;
     // Client-side vertex arrays span [0, first+count): the transient buffer is indexed by `first_vertex`.
-    capture_client_vbufs(&mut d, first.max(0) as usize + count as usize);
-    accumulate_occlusion(ctx, &d);
+    d.capture_client_vbufs(first.max(0) as usize + count as usize);
+    ctx.accumulate_occlusion(&d);
     ctx.draws.push(d);
 }
 
@@ -1487,7 +1581,7 @@ pub fn draw_elements_instanced(
     if count == 0 || instances == 0 {
         return;
     }
-    let mut d = snapshot(ctx);
+    let mut d = ctx.snapshot();
     d.mode = mode;
     d.count = count;
     d.indexed = true;
@@ -1496,7 +1590,7 @@ pub fn draw_elements_instanced(
     d.instance_count = instances as u32;
     d.elem_buf = ctx.element_buffer;
     capture_indexed(ctx, &mut d, count, index_type, offset, 0);
-    accumulate_occlusion(ctx, &d);
+    ctx.accumulate_occlusion(&d);
     ctx.draws.push(d);
 }
 
@@ -1531,7 +1625,7 @@ pub fn draw_elements_instanced_base_vertex(
     if count == 0 || instances == 0 {
         return;
     }
-    let mut d = snapshot(ctx);
+    let mut d = ctx.snapshot();
     d.mode = mode;
     d.count = count;
     d.indexed = true;
@@ -1541,7 +1635,7 @@ pub fn draw_elements_instanced_base_vertex(
     d.base_vertex = base_vertex;
     d.elem_buf = ctx.element_buffer;
     capture_indexed(ctx, &mut d, count, index_type, offset, base_vertex);
-    accumulate_occlusion(ctx, &d);
+    ctx.accumulate_occlusion(&d);
     ctx.draws.push(d);
 }
 
@@ -1620,18 +1714,25 @@ pub fn draw_elements_indirect(ctx: &mut GlContext, mode: u32, index_type: u32, i
 /// `glClearBufferfv(GL_COLOR, drawbuffer, value)` — clear the current render target to `rgba`. Recorded as
 /// a full-surface clear at the given color (the same deferred clear `glClear` records), so the frame
 /// builder lowers a pass clear-load with this color.
-pub fn clear_buffer_color(ctx: &mut GlContext, rgba: [f32; 4]) {
-    ctx.clear_color = rgba;
-    clear(ctx);
+impl GlContext {
+    pub fn clear_buffer_color(&mut self, rgba: [f32; 4]) {
+        self.clear_color = rgba;
+        self.record_clear();
+    }
+
+    // ---- blend equation (glBlendEquation*) -----------------------------------------------------------
+
+    /// `glBlendEquation(mode)` — set the same blend equation for RGB and alpha.
+    pub fn set_blend_equation(&mut self, mode: u32) {
+        self.blend_eq_rgb = mode;
+        self.blend_eq_alpha = mode;
+    }
 }
 
-// ---- blend equation (glBlendEquation*) -----------------------------------------------------------
-
-/// `glBlendEquation(mode)` — set the same blend equation for RGB and alpha.
-pub fn blend_equation(ctx: &mut GlContext, mode: u32) {
-    ctx.blend_eq_rgb = mode;
-    ctx.blend_eq_alpha = mode;
-}
+pub const CLEAR_BUFFER_COLOR: fn(&mut GlContext, [f32; 4]) = GlContext::clear_buffer_color;
+pub const BLEND_EQUATION: fn(&mut GlContext, u32) = GlContext::set_blend_equation;
+pub use BLEND_EQUATION as blend_equation;
+pub use CLEAR_BUFFER_COLOR as clear_buffer_color;
 
 /// `glBlendEquationSeparate(modeRGB, modeAlpha)`.
 pub fn blend_equation_separate(ctx: &mut GlContext, rgb: u32, alpha: u32) {
@@ -1648,7 +1749,7 @@ pub fn program_uniform_at(ctx: &mut GlContext, program: u32, location: i32, byte
     if location < 0 {
         return;
     }
-    if let Some(p) = ctx.programs.program_mut(program) {
+    if let Some(p) = ctx.programs.get_mut(program) {
         let (off, sz) = match p.unis.get(location as usize) {
             Some(u) => (u.off as usize, u.sz as usize),
             None => return,
@@ -1664,7 +1765,7 @@ pub fn program_uniform_at(ctx: &mut GlContext, program: u32, location: i32, byte
 /// `glProgramUniform1i(program, samplerLocation, unit)` — map `program`'s sampler uniform (declaration
 /// index) to a texture unit (the DSA form of [`uniform_sampler`]).
 pub fn program_uniform_sampler(ctx: &mut GlContext, program: u32, sampler_index: usize, unit: i32) {
-    if let Some(p) = ctx.programs.program_mut(program) {
+    if let Some(p) = ctx.programs.get_mut(program) {
         if sampler_index < p.samp_units.len() {
             p.samp_units[sampler_index] = unit;
         }
@@ -1675,27 +1776,34 @@ pub fn program_uniform_sampler(ctx: &mut GlContext, program: u32, sampler_index:
 
 /// `glDeleteProgram(program)` — drop the program object; clears the current-program binding if it names
 /// the deleted program.
-pub fn delete_program(ctx: &mut GlContext, program: u32) {
-    if ctx.programs.delete_program(program) {
-        // Retire the program's resident IR shader modules + render pipelines (queued Destroy for the next
-        // frame), so a deleted Skia/GskGpu program stops holding host residency and a recycled GL program
-        // name cannot collide with the dead program's cached ids. See `GlContext::retire_program`.
-        ctx.retire_program(program);
-        if ctx.cur_prog == program {
-            ctx.cur_prog = 0;
+impl GlContext {
+    pub fn delete_program(&mut self, program: u32) {
+        if self.programs.delete(program) {
+            // Retire the program's resident IR shader modules + render pipelines (queued Destroy for the next
+            // frame), so a deleted Skia/GskGpu program stops holding host residency and a recycled GL program
+            // name cannot collide with the dead program's cached ids. See `GlContext::retire_program`.
+            self.retire_program(program);
+            if self.cur_prog == program {
+                self.cur_prog = 0;
+            }
         }
+    }
+
+    /// `glDeleteShader(shader)` — drop the shader object (its source + compile state).
+    pub fn delete_shader(&mut self, shader: u32) {
+        self.programs.delete_shader(shader);
     }
 }
 
-/// `glDeleteShader(shader)` — drop the shader object (its source + compile state).
-pub fn delete_shader(ctx: &mut GlContext, shader: u32) {
-    ctx.programs.delete_shader(shader);
-}
+pub const DELETE_PROGRAM: fn(&mut GlContext, u32) = GlContext::delete_program;
+pub const DELETE_SHADER: fn(&mut GlContext, u32) = GlContext::delete_shader;
+pub use DELETE_PROGRAM as delete_program;
+pub use DELETE_SHADER as delete_shader;
 
 /// `glDetachShader(program, shader)` — clear the matching attachment slot. Honest GL errors: an unknown
 /// program or shader → `GL_INVALID_VALUE`; a shader not attached to the program → `GL_INVALID_OPERATION`.
 pub fn detach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
-    if !ctx.programs.program_exists(program) || !ctx.programs.shader_exists(shader) {
+    if !ctx.programs.contains(program) || !ctx.programs.shader_exists(shader) {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
@@ -1705,112 +1813,115 @@ pub fn detach_shader(ctx: &mut GlContext, program: u32, shader: u32) {
 }
 
 /// Snapshot the currently-bound draw state into a fresh [`DrawCall`] (the immutable per-draw record).
-fn snapshot(ctx: &GlContext) -> DrawCall {
-    // Capture the ES3 sampler OBJECT bound to each texture unit: a bound object overrides the texture's own
-    // filter/wrap at lowering time (ES 3.0 §3.8.13). `None` where no object is bound (texture params win).
-    let mut samp_objs: [Option<crate::model::es3::SamplerObj>; 8] = [None; 8];
-    for (unit, slot) in samp_objs.iter_mut().enumerate() {
-        let name = ctx.samplers.binding(unit as u32);
-        if name != 0 {
-            *slot = ctx.samplers.get(name).copied();
+impl GlContext {
+    fn snapshot(&self) -> DrawCall {
+        let ctx = self;
+        // Capture the ES3 sampler OBJECT bound to each texture unit: a bound object overrides the texture's own
+        // filter/wrap at lowering time (ES 3.0 §3.8.13). `None` where no object is bound (texture params win).
+        let mut samp_objs: [Option<crate::model::es3::SamplerObj>; 8] = [None; 8];
+        for (unit, slot) in samp_objs.iter_mut().enumerate() {
+            let name = ctx.samplers.binding(unit as u32);
+            if name != 0 {
+                *slot = ctx.samplers.get(name).copied();
+            }
         }
-    }
-    let mut d = DrawCall {
-        prog: ctx.cur_prog,
-        fbo: ctx.bound_fbo,
-        attrs: ctx.attr,
-        tex_units: ctx.tex_unit,
-        samp_objs,
-        viewport: ctx.viewport,
-        scissor_enabled: ctx.scissor_enabled,
-        scissor: ctx.scissor,
-        blend: ctx.blend,
-        blend_src_rgb: ctx.blend_src_rgb,
-        blend_dst_rgb: ctx.blend_dst_rgb,
-        blend_src_alpha: ctx.blend_src_alpha,
-        blend_dst_alpha: ctx.blend_dst_alpha,
-        blend_eq_rgb: ctx.blend_eq_rgb,
-        blend_eq_alpha: ctx.blend_eq_alpha,
-        blend_color: ctx.blend_color,
-        depth: ctx.depth,
-        depth_func: ctx.depth_func,
-        depth_write: ctx.depth_write,
-        stencil: ctx.stencil,
-        stencil_func_front: ctx.stencil_func_front,
-        stencil_func_back: ctx.stencil_func_back,
-        stencil_fail_front: ctx.stencil_fail_front,
-        stencil_zfail_front: ctx.stencil_zfail_front,
-        stencil_zpass_front: ctx.stencil_zpass_front,
-        stencil_fail_back: ctx.stencil_fail_back,
-        stencil_zfail_back: ctx.stencil_zfail_back,
-        stencil_zpass_back: ctx.stencil_zpass_back,
-        stencil_ref: ctx.stencil_ref,
-        stencil_read_mask: ctx.stencil_read_mask,
-        stencil_write_mask: ctx.stencil_write_mask,
-        cull_enabled: ctx.cull_enabled,
-        cull_face: ctx.cull_face,
-        front_face: ctx.front_face,
-        color_mask: ctx.color_mask,
-        clear: ctx.clear_color,
-        elem_buf: ctx.element_buffer,
-        ..DrawCall::default()
-    };
-    d.target = if ctx.bound_fbo == 0 {
-        None
-    } else {
-        let texture = ctx.framebuffers.color_attachment(ctx.bound_fbo);
-        ctx.textures
-            .get(texture)
-            .filter(|t| t.w > 0 && t.h > 0)
-            .map(|t| crate::model::program::TargetSnapshot {
-                texture,
-                generation: t.gen,
-                width: t.w,
-                height: t.h,
-                format: t.ir_format,
-            })
-    };
-    for unit in 0..d.tex_units.len() {
-        d.tex_generations[unit] = ctx
-            .textures
-            .get(d.tex_units[unit])
-            .map(|t| t.gen)
-            .unwrap_or(0);
-    }
-    if let Some(p) = ctx.programs.program(ctx.cur_prog) {
-        d.samp_units = p.samp_units;
-        // Snapshot the default-block `glUniform*` bytes for THIS draw: `Program::ubuf` is mutable state,
-        // so a later draw that changes a uniform must not retroactively alter this draw's bytes.
-        let sz = p.ubuf_size.max(0) as usize;
-        if sz > 0 {
-            d.ubuf_bytes = p.ubuf[..sz.min(p.ubuf.len())].to_vec();
-        }
-    }
-    d.ubo_bytes = resolve_block_ubo_bytes(ctx, ctx.cur_prog);
-    let mut names: Vec<u32> = d
-        .attrs
-        .iter()
-        .filter(|attr| attr.enabled && attr.buffer != 0)
-        .map(|attr| attr.buffer)
-        .collect();
-    if d.elem_buf != 0 {
-        names.push(d.elem_buf);
-    }
-    names.sort_unstable();
-    names.dedup();
-    d.buffers = names
-        .into_iter()
-        .filter_map(|name| {
-            ctx.buffers
-                .get(name)
-                .map(|buffer| crate::model::program::BufferSnapshot {
-                    name,
-                    generation: buffer.gen,
-                    data: buffer.data.clone(),
+        let mut d = DrawCall {
+            prog: ctx.cur_prog,
+            fbo: ctx.bound_fbo,
+            attrs: ctx.attr,
+            tex_units: ctx.tex_unit,
+            samp_objs,
+            viewport: ctx.viewport,
+            scissor_enabled: ctx.scissor_enabled,
+            scissor: ctx.scissor,
+            blend: ctx.blend,
+            blend_src_rgb: ctx.blend_src_rgb,
+            blend_dst_rgb: ctx.blend_dst_rgb,
+            blend_src_alpha: ctx.blend_src_alpha,
+            blend_dst_alpha: ctx.blend_dst_alpha,
+            blend_eq_rgb: ctx.blend_eq_rgb,
+            blend_eq_alpha: ctx.blend_eq_alpha,
+            blend_color: ctx.blend_color,
+            depth: ctx.depth,
+            depth_func: ctx.depth_func,
+            depth_write: ctx.depth_write,
+            stencil: ctx.stencil,
+            stencil_func_front: ctx.stencil_func_front,
+            stencil_func_back: ctx.stencil_func_back,
+            stencil_fail_front: ctx.stencil_fail_front,
+            stencil_zfail_front: ctx.stencil_zfail_front,
+            stencil_zpass_front: ctx.stencil_zpass_front,
+            stencil_fail_back: ctx.stencil_fail_back,
+            stencil_zfail_back: ctx.stencil_zfail_back,
+            stencil_zpass_back: ctx.stencil_zpass_back,
+            stencil_ref: ctx.stencil_ref,
+            stencil_read_mask: ctx.stencil_read_mask,
+            stencil_write_mask: ctx.stencil_write_mask,
+            cull_enabled: ctx.cull_enabled,
+            cull_face: ctx.cull_face,
+            front_face: ctx.front_face,
+            color_mask: ctx.color_mask,
+            clear: ctx.clear_color,
+            elem_buf: ctx.element_buffer,
+            ..DrawCall::default()
+        };
+        d.target = if ctx.bound_fbo == 0 {
+            None
+        } else {
+            let texture = ctx.framebuffers.color_attachment(ctx.bound_fbo);
+            ctx.textures
+                .get(texture)
+                .filter(|t| t.w > 0 && t.h > 0)
+                .map(|t| crate::model::program::TargetSnapshot {
+                    texture,
+                    generation: t.gen,
+                    width: t.w,
+                    height: t.h,
+                    format: t.ir_format,
                 })
-        })
-        .collect();
-    d
+        };
+        for unit in 0..d.tex_units.len() {
+            d.tex_generations[unit] = ctx
+                .textures
+                .get(d.tex_units[unit])
+                .map(|t| t.gen)
+                .unwrap_or(0);
+        }
+        if let Some(p) = ctx.programs.program(ctx.cur_prog) {
+            d.samp_units = p.samp_units;
+            // Snapshot the default-block `glUniform*` bytes for THIS draw: `Program::ubuf` is mutable state,
+            // so a later draw that changes a uniform must not retroactively alter this draw's bytes.
+            let sz = p.ubuf_size.max(0) as usize;
+            if sz > 0 {
+                d.ubuf_bytes = p.ubuf[..sz.min(p.ubuf.len())].to_vec();
+            }
+        }
+        d.ubo_bytes = self.resolve_block_ubo_bytes(ctx.cur_prog);
+        let mut names: Vec<u32> = d
+            .attrs
+            .iter()
+            .filter(|attr| attr.enabled && attr.buffer != 0)
+            .map(|attr| attr.buffer)
+            .collect();
+        if d.elem_buf != 0 {
+            names.push(d.elem_buf);
+        }
+        names.sort_unstable();
+        names.dedup();
+        d.buffers = names
+            .into_iter()
+            .filter_map(|name| {
+                ctx.buffers
+                    .get(name)
+                    .map(|buffer| crate::model::program::BufferSnapshot {
+                        name,
+                        generation: buffer.gen,
+                        data: buffer.data.clone(),
+                    })
+            })
+            .collect();
+        d
+    }
 }
 
 /// Resolve the app's uniform-BLOCK bytes for `prog_name` at draw time — the std140 data the shader's
@@ -1823,106 +1934,112 @@ fn snapshot(ctx: &GlContext) -> DrawCall {
 /// `binding = 0` in-shader and binds via `glBindBufferBase`), else an app-assigned `glUniformBlockBinding`
 /// value, else `0`. Returns EMPTY when the program has no data uniforms, declares no block, or has no UBO
 /// bound at the resolved point (the default-uniform `glUniform*` path — the caller then keeps `Program::ubuf`).
-fn resolve_block_ubo_bytes(ctx: &GlContext, prog_name: u32) -> Vec<u8> {
-    let prog = match ctx.programs.program(prog_name) {
-        Some(p) if p.has_uniforms() => p,
-        _ => return Vec::new(),
-    };
-    // MULTI-BLOCK program: the shader declares 2+ uniform blocks, each at its OWN binding point fed by its
-    // OWN `glBindBufferRange`d range. The translator flattens every block's members into ONE `HlUniforms`
-    // std140 block at IR binding 0 (declaration order — see `adapter::glsl::translate_render`), so the
-    // recorded binding-0 bytes are assembled block-by-block: each block contributes its own bound range's
-    // std140 bytes, 16-byte aligned to the next block (matching std140 for the vec4/mat-member blocks
-    // GskGpu-style programs use). This proves each `glBindBufferRange` fed the right binding.
-    let blocks = crate::adapter::glsl::uniform_blocks(&prog.vs_src, &prog.fs_src);
-    if blocks.len() >= 2 {
-        return assemble_multi_block_ubo_bytes(ctx, &blocks);
-    }
-    // The block's binding point (see priority above).
-    let bp = crate::adapter::glsl::uniform_block_binding_qualifier(&prog.vs_src)
-        .or_else(|| crate::adapter::glsl::uniform_block_binding_qualifier(&prog.fs_src))
-        .or_else(|| {
-            ctx.uniform_blocks
-                .get(&prog_name)
-                .and_then(|blocks| blocks.first())
-                .map(|b| b.binding)
-        })
-        .unwrap_or(0);
-    if std::env::var("HL_UBO_DUMP").is_ok() {
-        let keys: Vec<_> = ctx.indexed_buffers.keys().collect();
-        eprintln!("[UBO_DUMP] prog={prog_name} has_uniforms=true ubuf_size={} bp={bp} indexed_keys={keys:?}", prog.ubuf_size);
-    }
-    let ib = match ctx.indexed_buffers.get(&(GL_UNIFORM_BUFFER, bp)) {
-        Some(ib) => *ib,
-        None => return Vec::new(),
-    };
-    if std::env::var("HL_UBO_DUMP").is_ok() {
-        let sz = ctx
-            .buffers
-            .get(ib.buffer)
-            .map(|b| b.data.len())
-            .unwrap_or(0);
-        let head: Vec<u8> = ctx
-            .buffers
-            .get(ib.buffer)
-            .map(|b| b.data.iter().take(16).copied().collect())
-            .unwrap_or_default();
-        eprintln!(
-            "[UBO_DUMP]   ib buffer={} off={} size={} bufbytes={sz} head={head:?}",
-            ib.buffer, ib.offset, ib.size
-        );
-    }
-    let buf = match ctx.buffers.get(ib.buffer) {
-        Some(b) => b,
-        None => return Vec::new(),
-    };
-    let off = ib.offset.max(0) as usize;
-    if off >= buf.data.len() {
-        return Vec::new();
-    }
-    // `size == 0` (from `glBindBufferBase`) means the whole buffer from `offset`.
-    let end = if ib.size <= 0 {
-        buf.data.len()
-    } else {
-        (off + ib.size as usize).min(buf.data.len())
-    };
-    buf.data[off..end].to_vec()
-}
-
-/// Assemble the flattened `HlUniforms` binding-0 bytes for a MULTI-block program from each block's own
-/// `glBindBufferRange`d range, in `blocks` (declaration) order. Each block appends its bound range's std140
-/// bytes, then pads to the next 16-byte boundary so the following block starts 16-aligned (std140 for a
-/// vec4/mat4-member block). A block with no bound range contributes a zero-filled std140 span (an honest
-/// hole, not a fake). This is what routes two ranges to two distinct binding points through the single
-/// flattened block the translator emits.
-fn assemble_multi_block_ubo_bytes(
-    ctx: &GlContext,
-    blocks: &[crate::adapter::glsl::UniformBlockDecl],
-) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::new();
-    for blk in blocks {
-        let bytes = ctx
-            .indexed_buffers
-            .get(&(GL_UNIFORM_BUFFER, blk.binding))
-            .and_then(|ib| {
-                let buf = ctx.buffers.get(ib.buffer)?;
-                let off = ib.offset.max(0) as usize;
-                if off > buf.data.len() {
-                    return Some(Vec::new());
-                }
-                let end = if ib.size <= 0 {
-                    buf.data.len()
-                } else {
-                    (off + ib.size as usize).min(buf.data.len())
-                };
-                Some(buf.data[off..end].to_vec())
-            })
-            .unwrap_or_default();
-        out.extend_from_slice(&bytes);
-        // Pad this block's contribution up to the next 16-byte std140 boundary (each block is 16-aligned).
-        while out.len() % 16 != 0 {
-            out.push(0);
+impl GlContext {
+    fn resolve_block_ubo_bytes(&self, prog_name: u32) -> Vec<u8> {
+        let ctx = self;
+        let prog = match ctx.programs.program(prog_name) {
+            Some(p) if p.has_uniforms() => p,
+            _ => return Vec::new(),
+        };
+        // MULTI-BLOCK program: the shader declares 2+ uniform blocks, each at its OWN binding point fed by its
+        // OWN `glBindBufferRange`d range. The translator flattens every block's members into ONE `HlUniforms`
+        // std140 block at IR binding 0 (declaration order — see `adapter::glsl::translate_render`), so the
+        // recorded binding-0 bytes are assembled block-by-block: each block contributes its own bound range's
+        // std140 bytes, 16-byte aligned to the next block (matching std140 for the vec4/mat-member blocks
+        // GskGpu-style programs use). This proves each `glBindBufferRange` fed the right binding.
+        let blocks =
+            crate::adapter::glsl::StageSources::new(&prog.vs_src, &prog.fs_src).uniform_blocks();
+        if blocks.len() >= 2 {
+            return self.assemble_multi_block_ubo_bytes(&blocks);
         }
+        // The block's binding point (see priority above).
+        let bp = crate::adapter::glsl::Source::new(&prog.vs_src)
+            .uniform_block_binding()
+            .or_else(|| crate::adapter::glsl::Source::new(&prog.fs_src).uniform_block_binding())
+            .or_else(|| {
+                ctx.uniform_blocks
+                    .get(&prog_name)
+                    .and_then(|blocks| blocks.first())
+                    .map(|b| b.binding)
+            })
+            .unwrap_or(0);
+        if std::env::var("HL_UBO_DUMP").is_ok() {
+            let keys: Vec<_> = ctx.indexed_buffers.keys().collect();
+            eprintln!("[UBO_DUMP] prog={prog_name} has_uniforms=true ubuf_size={} bp={bp} indexed_keys={keys:?}", prog.ubuf_size);
+        }
+        let ib = match ctx.indexed_buffers.get(&(GL_UNIFORM_BUFFER, bp)) {
+            Some(ib) => *ib,
+            None => return Vec::new(),
+        };
+        if std::env::var("HL_UBO_DUMP").is_ok() {
+            let sz = ctx
+                .buffers
+                .get(ib.buffer)
+                .map(|b| b.data.len())
+                .unwrap_or(0);
+            let head: Vec<u8> = ctx
+                .buffers
+                .get(ib.buffer)
+                .map(|b| b.data.iter().take(16).copied().collect())
+                .unwrap_or_default();
+            eprintln!(
+                "[UBO_DUMP]   ib buffer={} off={} size={} bufbytes={sz} head={head:?}",
+                ib.buffer, ib.offset, ib.size
+            );
+        }
+        let buf = match ctx.buffers.get(ib.buffer) {
+            Some(b) => b,
+            None => return Vec::new(),
+        };
+        let off = ib.offset.max(0) as usize;
+        if off >= buf.data.len() {
+            return Vec::new();
+        }
+        // `size == 0` (from `glBindBufferBase`) means the whole buffer from `offset`.
+        let end = if ib.size <= 0 {
+            buf.data.len()
+        } else {
+            (off + ib.size as usize).min(buf.data.len())
+        };
+        buf.data[off..end].to_vec()
     }
-    out
+
+    /// Assemble the flattened `HlUniforms` binding-0 bytes for a MULTI-block program from each block's own
+    /// `glBindBufferRange`d range, in `blocks` (declaration) order. Each block appends its bound range's std140
+    /// bytes, then pads to the next 16-byte boundary so the following block starts 16-aligned (std140 for a
+    /// vec4/mat4-member block). A block with no bound range contributes a zero-filled std140 span (an honest
+    /// hole, not a fake). This is what routes two ranges to two distinct binding points through the single
+    /// flattened block the translator emits.
+    fn assemble_multi_block_ubo_bytes(
+        &self,
+        blocks: &[crate::adapter::glsl::UniformBlockDecl],
+    ) -> Vec<u8> {
+        let ctx = self;
+        let mut out: Vec<u8> = Vec::new();
+        for blk in blocks {
+            let bytes = ctx
+                .indexed_buffers
+                .get(&(GL_UNIFORM_BUFFER, blk.binding))
+                .and_then(|ib| {
+                    let buf = ctx.buffers.get(ib.buffer)?;
+                    let off = ib.offset.max(0) as usize;
+                    if off > buf.data.len() {
+                        return Some(Vec::new());
+                    }
+                    let end = if ib.size <= 0 {
+                        buf.data.len()
+                    } else {
+                        (off + ib.size as usize).min(buf.data.len())
+                    };
+                    Some(buf.data[off..end].to_vec())
+                })
+                .unwrap_or_default();
+            out.extend_from_slice(&bytes);
+            // Pad this block's contribution up to the next 16-byte std140 boundary (each block is 16-aligned).
+            while out.len() % 16 != 0 {
+                out.push(0);
+            }
+        }
+        out
+    }
 }

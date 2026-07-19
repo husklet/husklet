@@ -1,6 +1,6 @@
 //! Line formatting + dispatch to the sink.
 //!
-//! [`emit`] is only ever reached after the gate in [`crate::enabled`] passed, so it
+//! [`emit`] is only ever reached after [`crate::Logging::enabled`] passed, so it
 //! is off the hot path — it may allocate a small `String` and format freely. The
 //! line shape is:
 //!
@@ -14,7 +14,7 @@
 
 use crate::level::Level;
 use crate::sink;
-use crate::tag;
+use crate::tag::Tags;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -32,10 +32,10 @@ fn millis_since_start() -> u128 {
 ///
 /// Not `inline` — keeping the cold formatting path out of the caller keeps the hot
 /// (disabled) call site tiny.
-pub fn emit(tag_bits: u64, level: Level, module: &str, line: u32, args: std::fmt::Arguments) {
+pub fn emit(tags: Tags, level: Level, module: &str, line: u32, args: std::fmt::Arguments) {
     let mut buf = String::with_capacity(96);
     buf.push('[');
-    tag::write_names(tag_bits, &mut buf);
+    let _ = write!(buf, "{tags}");
     buf.push_str("] ");
     buf.push(level.short());
     // Relative timestamp + thread id, kept compact.
@@ -46,7 +46,7 @@ pub fn emit(tag_bits: u64, level: Level, module: &str, line: u32, args: std::fmt
     buf.push_str(": ");
     let _ = buf.write_fmt(args);
     buf.push('\n');
-    sink::write_line(&buf);
+    sink::Output::global().write(&buf);
 }
 
 /// A cheap, stable-per-thread numeric id. `ThreadId`'s `Debug` is `ThreadId(N)`;

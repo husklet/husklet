@@ -6,16 +6,18 @@ use super::*;
 /// docker, which measures the container's writable diff) and SizeRootFs is the full image rootfs walk.
 /// The host-fs `macos` image (rootfs "/") is skipped -- walking it would be catastrophic, exactly as
 /// `image_size` guards against.
-pub(crate) fn container_sizes(c: &Container) -> (i64, i64) {
-    if c.image == "macos" || c.rootfs.is_empty() || c.rootfs == "/" {
-        return (0, 0);
+impl Container {
+    pub(crate) fn sizes(&self) -> (i64, i64) {
+        if self.image == "macos" || self.rootfs.is_empty() || self.rootfs == "/" {
+            return (0, 0);
+        }
+        let rw = if self.upper.is_empty() {
+            0
+        } else {
+            PathSize::size(std::path::Path::new(&self.upper))
+        };
+        (rw, PathSize::size(std::path::Path::new(&self.rootfs)))
     }
-    let rw = if c.upper.is_empty() {
-        0
-    } else {
-        dir_size(std::path::Path::new(&c.upper))
-    };
-    (rw, dir_size(std::path::Path::new(&c.rootfs)))
 }
 
 #[cfg(test)]
@@ -28,11 +30,11 @@ mod tests {
         let mut c = ctr();
         c.image = "macos".into();
         c.rootfs = "/".into();
-        assert_eq!(container_sizes(&c), (0, 0));
+        assert_eq!(c.sizes(), (0, 0));
         c.image = "nginx".into();
         c.rootfs = "".into();
-        assert_eq!(container_sizes(&c), (0, 0));
+        assert_eq!(c.sizes(), (0, 0));
         c.rootfs = "/".into();
-        assert_eq!(container_sizes(&c), (0, 0));
+        assert_eq!(c.sizes(), (0, 0));
     }
 }

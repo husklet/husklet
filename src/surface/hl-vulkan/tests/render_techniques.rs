@@ -28,7 +28,7 @@ use hl_vulkan::model::memory::{vk_format, vk_image_usage};
 use hl_vulkan::result;
 use hl_vulkan::service::record::{RenderingColorAttachment, RenderingDepthAttachment};
 use hl_vulkan::service::{create, record, submit};
-use hl_vulkan::Device;
+use hl_vulkan::{Device, Instance};
 
 use hl_gpu::protocol::model::command::Enc;
 use hl_gpu::protocol::model::descriptor::{
@@ -42,8 +42,8 @@ use hl_gpu::{Cmd, RecordingSink};
 // ---------------------------------------------------------------------------------------------------
 
 fn dev() -> Device {
-    let inst = create::create_instance(result::HL_API_VERSION);
-    create::create_device(&inst)
+    let inst = Instance::new(result::HL_API_VERSION);
+    inst.create_device()
 }
 
 /// The ir texture id behind a `VkImage` handle (the id an emitted `ColorAttachment`/`BindResource` names).
@@ -89,10 +89,10 @@ fn pipeline_samples(
     sample_count: u32,
 ) -> u64 {
     use hl_vulkan::adapter::spirv;
-    let vs =
-        create::create_shader_module_words(d, sink, spirv::sample_compute_spirv("vsmain")).unwrap();
-    let fs =
-        create::create_shader_module_words(d, sink, spirv::sample_compute_spirv("fsmain")).unwrap();
+    let vs = create::create_shader_module_words(d, sink, spirv::Module::sample_compute("vsmain"))
+        .unwrap();
+    let fs = create::create_shader_module_words(d, sink, spirv::Module::sample_compute("fsmain"))
+        .unwrap();
     create::create_graphics_pipeline(
         d,
         sink,
@@ -129,8 +129,8 @@ fn combined_sampler_set(
             stage_flags: 0,
         })
         .collect();
-    let layout = create::create_descriptor_set_layout(d, bindings);
-    let pool = create::create_descriptor_pool(d, 1);
+    let layout = d.create_descriptor_set_layout(bindings);
+    let pool = d.create_descriptor_pool(1);
     let set = create::allocate_descriptor_set(d, pool, layout, 0).unwrap();
     for (b, &img) in images.iter().enumerate() {
         create::update_descriptor_image(d, set, b as u32, Some(img), Some(sampler)).unwrap();
@@ -186,8 +186,8 @@ fn deferred_shading_mrt_gbuffer_then_lighting_samples_three_targets() {
     let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
 
     // ---- Pass 1: fill the G-buffer with a geometry draw (MRT: 3 color attachments, all CLEAR+STORE).
-    let cb1 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb1, false).unwrap();
+    let cb1 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb1, false).unwrap();
     record::cmd_begin_rendering(
         &mut d,
         cb1,
@@ -201,8 +201,8 @@ fn deferred_shading_mrt_gbuffer_then_lighting_samples_three_targets() {
     .unwrap();
     record::cmd_bind_pipeline(&mut d, cb1, geo).unwrap();
     record::cmd_draw(&mut d, cb1, 36, 1, 0, 0).unwrap();
-    record::cmd_end_render_pass(&mut d, cb1).unwrap();
-    record::end(&mut d, cb1).unwrap();
+    d.end_render_pass(cb1).unwrap();
+    d.end_command_buffer(cb1).unwrap();
     let enc1 = submit_encoder(&mut d, &mut sink, cb1);
 
     assert_eq!(
@@ -244,8 +244,8 @@ fn deferred_shading_mrt_gbuffer_then_lighting_samples_three_targets() {
     );
 
     // ---- Pass 2: bind the 3 G-buffer textures as samplers, then a fullscreen lighting draw reads them.
-    let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2, false).unwrap();
+    let cb2 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb2, false).unwrap();
     let entries =
         combined_sampler_set(&mut d, &mut sink, cb2, &[albedo, normal, position], sampler);
 
@@ -286,8 +286,8 @@ fn deferred_shading_mrt_gbuffer_then_lighting_samples_three_targets() {
     record::cmd_begin_rendering(&mut d, cb2, &[color_clear(out, [0.0; 4])], None).unwrap();
     record::cmd_bind_pipeline(&mut d, cb2, light).unwrap();
     record::cmd_draw(&mut d, cb2, 3, 1, 0, 0).unwrap();
-    record::cmd_end_render_pass(&mut d, cb2).unwrap();
-    record::end(&mut d, cb2).unwrap();
+    d.end_render_pass(cb2).unwrap();
+    d.end_command_buffer(cb2).unwrap();
     let enc2 = submit_encoder(&mut d, &mut sink, cb2);
 
     // The lighting pass targets the output and replays the sampled bind group into the fullscreen draw.
@@ -371,8 +371,8 @@ fn shadow_mapping_depth_only_pass_then_samples_depth_map() {
     let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
 
     // ---- Pass 1: depth-only shadow pass. No color attachment, one CLEAR depth attachment.
-    let cb1 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb1, false).unwrap();
+    let cb1 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb1, false).unwrap();
     record::cmd_begin_rendering(
         &mut d,
         cb1,
@@ -386,8 +386,8 @@ fn shadow_mapping_depth_only_pass_then_samples_depth_map() {
     .unwrap();
     record::cmd_bind_pipeline(&mut d, cb1, occluder).unwrap();
     record::cmd_draw(&mut d, cb1, 24, 1, 0, 0).unwrap();
-    record::cmd_end_render_pass(&mut d, cb1).unwrap();
-    record::end(&mut d, cb1).unwrap();
+    d.end_render_pass(cb1).unwrap();
+    d.end_command_buffer(cb1).unwrap();
     let enc1 = submit_encoder(&mut d, &mut sink, cb1);
 
     assert_eq!(
@@ -405,8 +405,8 @@ fn shadow_mapping_depth_only_pass_then_samples_depth_map() {
     );
 
     // ---- Pass 2: sample the depth texture as a shadow map, then the main scene draw reads it.
-    let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2, false).unwrap();
+    let cb2 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb2, false).unwrap();
     let entries = combined_sampler_set(&mut d, &mut sink, cb2, &[shadow], sampler);
     let s = samp_ir(&d, sampler);
     assert_eq!(
@@ -433,8 +433,8 @@ fn shadow_mapping_depth_only_pass_then_samples_depth_map() {
     .unwrap();
     record::cmd_bind_pipeline(&mut d, cb2, main).unwrap();
     record::cmd_draw(&mut d, cb2, 3, 1, 0, 0).unwrap();
-    record::cmd_end_render_pass(&mut d, cb2).unwrap();
-    record::end(&mut d, cb2).unwrap();
+    d.end_render_pass(cb2).unwrap();
+    d.end_command_buffer(cb2).unwrap();
     let enc2 = submit_encoder(&mut d, &mut sink, cb2);
     assert!(
         enc2.contains(&Enc::BeginRenderPass {
@@ -471,13 +471,13 @@ fn post_process_chain_ping_pongs_sampler_and_target() {
     let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
 
     // ---- Stage 0: render the scene into A.
-    let cb0 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb0, false).unwrap();
+    let cb0 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb0, false).unwrap();
     record::cmd_begin_rendering(&mut d, cb0, &[color_clear(a, [0.0; 4])], None).unwrap();
     record::cmd_bind_pipeline(&mut d, cb0, scene).unwrap();
     record::cmd_draw(&mut d, cb0, 3, 1, 0, 0).unwrap();
-    record::cmd_end_render_pass(&mut d, cb0).unwrap();
-    record::end(&mut d, cb0).unwrap();
+    d.end_render_pass(cb0).unwrap();
+    d.end_command_buffer(cb0).unwrap();
     let enc0 = submit_encoder(&mut d, &mut sink, cb0);
     assert_eq!(
         enc0[0],
@@ -494,8 +494,8 @@ fn post_process_chain_ping_pongs_sampler_and_target() {
 
     // A closure for one ping-pong stage: SAMPLE `src`, render into `dst`. Returns (sampled ir, target ir).
     let stage = |d: &mut Device, sink: &mut RecordingSink, src: u64, dst: u64| -> (u32, u32) {
-        let cb = record::allocate_command_buffer(d);
-        record::begin(d, cb, false).unwrap();
+        let cb = d.allocate_command_buffer();
+        d.begin_command_buffer(cb, false).unwrap();
         let entries = combined_sampler_set(d, sink, cb, &[src], sampler);
         // The stage samples EXACTLY the previous stage's texture.
         let sampled = match entries[0].resource {
@@ -505,8 +505,8 @@ fn post_process_chain_ping_pongs_sampler_and_target() {
         record::cmd_begin_rendering(d, cb, &[color_clear(dst, [0.0; 4])], None).unwrap();
         record::cmd_bind_pipeline(d, cb, blur).unwrap();
         record::cmd_draw(d, cb, 3, 1, 0, 0).unwrap();
-        record::cmd_end_render_pass(d, cb).unwrap();
-        record::end(d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
+        d.end_command_buffer(cb).unwrap();
         let enc = submit_encoder(d, sink, cb);
         let target = match &enc[0] {
             Enc::BeginRenderPass { color, .. } => color[0].texture,
@@ -627,15 +627,15 @@ fn msaa_resolve_pass_lowers_to_a_real_resolve() {
     );
 
     // ---- One command buffer: render into the MSAA target, then resolve it into the single-sample dest.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_begin_rendering(&mut d, cb, &[color_clear(msaa, [0.2, 0.4, 0.6, 1.0])], None)
         .unwrap();
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_draw(&mut d, cb, 3, 1, 0, 0).unwrap();
-    record::cmd_end_render_pass(&mut d, cb).unwrap();
+    d.end_render_pass(cb).unwrap();
     record::cmd_resolve_image(&mut d, cb, msaa, resolve, (0, 0), (0, 0), (64, 64)).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     let enc = submit_encoder(&mut d, &mut sink, cb);
 
     assert_eq!(
@@ -714,10 +714,10 @@ fn single_sample_resolve_still_lowers_to_a_copy() {
     .unwrap();
     let (src_ir, dst_ir) = (img_ir(&d, src), img_ir(&d, dst));
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_resolve_image(&mut d, cb, src, dst, (0, 0), (0, 0), (32, 32)).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     let enc = submit_encoder(&mut d, &mut sink, cb);
 
     assert_eq!(
@@ -784,11 +784,11 @@ fn render_to_layer_and_mip_is_a_documented_whole_texture_limit() {
     }
 
     // Rendering into it names the WHOLE texture — the ColorAttachment has no mip/layer field to select one.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_begin_rendering(&mut d, cb, &[color_clear(tex, [0.0; 4])], None).unwrap();
-    record::cmd_end_render_pass(&mut d, cb).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_render_pass(cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     let enc = submit_encoder(&mut d, &mut sink, cb);
 
     // The attachment is exactly `ColorAttachment { texture, load, clear, store }` — no subresource. The

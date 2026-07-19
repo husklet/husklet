@@ -476,7 +476,6 @@ fn fill_buffer_scopes_to_offset_and_size() {
 #[test]
 fn fill_buffer_round_trips_through_codec() {
     // The new encoder op survives encode → decode unchanged (additive wire round-trip).
-    use hl_gpu::{decode_stream, encode_stream};
     let cmds = vec![Cmd::Submit(CommandBuffer {
         encoder: vec![Enc::FillBuffer {
             buffer: 7,
@@ -486,7 +485,10 @@ fn fill_buffer_round_trips_through_codec() {
         }],
         signal: None,
     })];
-    assert_eq!(decode_stream(&encode_stream(&cmds)).unwrap(), cmds);
+    assert_eq!(
+        hl_gpu::Decoder::stream(&hl_gpu::Encoder::stream(&cmds)).unwrap(),
+        cmds
+    );
 }
 
 // -------------------------------------------------------------------------------------------------

@@ -90,7 +90,7 @@ fn readback(
     p: DevicePtr,
     len: usize,
 ) -> Vec<u8> {
-    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    let (buf, off): (BufferId, u64) = ctx.device_location(p).unwrap();
     sink.read_buffer(buf, off, len).unwrap()
 }
 
@@ -237,7 +237,7 @@ fn merge_sort_multiblock_u32_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, MERGE_PASS_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(MERGE_PASS_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "merge_pass").unwrap();
 
     let mut buf_a = upload(&mut sink, &mut ctx, &u32s_to_bytes(&input));
@@ -387,7 +387,7 @@ fn dft_fixed_point_integer_twiddle_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, DFT_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(DFT_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "dft").unwrap();
 
     let d_x = upload(&mut sink, &mut ctx, &i32s_to_bytes(&x));
@@ -549,7 +549,7 @@ fn bfs_frontier_expansion_step_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, BFS_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(BFS_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "bfs_step").unwrap();
 
     let d_roff = upload(&mut sink, &mut ctx, &i32s_to_bytes(&row_off));
@@ -711,7 +711,7 @@ fn spmv_csr_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, SPMV_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(SPMV_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "spmv").unwrap();
 
     let d_roff = upload(&mut sink, &mut ctx, &i32s_to_bytes(&row_off));
@@ -944,12 +944,12 @@ fn stream_compaction_predicate_scan_scatter_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let m_pred = load_module::module_load_data(&mut ctx, PREDICATE_PTX.as_bytes()).unwrap();
+    let m_pred = ctx.load_module(PREDICATE_PTX.as_bytes()).unwrap();
     let pred_fn = load_module::module_get_function(&ctx, m_pred, "predicate").unwrap();
-    let m_scan = load_module::module_load_data(&mut ctx, SCAN_PTX.as_bytes()).unwrap();
+    let m_scan = ctx.load_module(SCAN_PTX.as_bytes()).unwrap();
     let scan_fn = load_module::module_get_function(&ctx, m_scan, "block_scan").unwrap();
     let add_fn = load_module::module_get_function(&ctx, m_scan, "add_offset").unwrap();
-    let m_scat = load_module::module_load_data(&mut ctx, SCATTER_PTX.as_bytes()).unwrap();
+    let m_scat = ctx.load_module(SCATTER_PTX.as_bytes()).unwrap();
     let scat_fn = load_module::module_get_function(&ctx, m_scat, "scatter").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
@@ -1129,7 +1129,7 @@ fn monte_carlo_pi_deterministic_hit_count_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, MONTECARLO_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(MONTECARLO_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "mc_pi").unwrap();
 
     let d_cnt = alloc_zeroed_i32(&mut sink, &mut ctx, 1);
@@ -1275,7 +1275,7 @@ fn kmeans_step_assign_and_accumulate_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, KMEANS_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(KMEANS_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "kmeans").unwrap();
 
     let d_px = upload(&mut sink, &mut ctx, &i32s_to_bytes(&px));
@@ -1460,7 +1460,7 @@ fn running_minmax_prefix_scan_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, RUNNING_MINMAX_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(RUNNING_MINMAX_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "running_minmax").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));

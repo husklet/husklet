@@ -14,19 +14,22 @@ use core::ffi::c_void;
 
 use hl_vulkan::service::present;
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::*;
 
 // ---- platform surface constructors (all mint the same modeled surface) ---------------------------
 
 /// Mint a modeled `VkSurfaceKHR`, writing it to `p_surface`. Every platform constructor funnels here.
-fn create_surface(p_surface: *mut u64) -> VkResult {
+struct Surface;
+impl Surface {
+fn create(p_surface: *mut u64) -> VkResult {
     if p_surface.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-    let handle = with(|s| s.mint_surface());
+    let handle = StateStore::with(|s| s.mint_surface());
     unsafe { *p_surface = handle };
     VK_SUCCESS
+}
 }
 
 #[no_mangle]
@@ -36,7 +39,7 @@ pub extern "C" fn vkCreateXcbSurfaceKHR(
     _p_allocator: *const c_void,
     p_surface: *mut u64,
 ) -> VkResult {
-    create_surface(p_surface)
+    Surface::create(p_surface)
 }
 
 #[no_mangle]
@@ -46,7 +49,7 @@ pub extern "C" fn vkCreateXlibSurfaceKHR(
     _p_allocator: *const c_void,
     p_surface: *mut u64,
 ) -> VkResult {
-    create_surface(p_surface)
+    Surface::create(p_surface)
 }
 
 #[no_mangle]
@@ -66,7 +69,7 @@ pub extern "C" fn vkCreateWaylandSurfaceKHR(
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     let window = crate::state::WaylandWindow { display: ci.display as usize, surface: ci.surface as usize };
-    let handle = with(|s| {
+    let handle = StateStore::with(|s| {
         let h = s.mint_surface();
         s.wayland_surfaces.insert(h, window);
         h
@@ -82,12 +85,12 @@ pub extern "C" fn vkCreateHeadlessSurfaceEXT(
     _p_allocator: *const c_void,
     p_surface: *mut u64,
 ) -> VkResult {
-    create_surface(p_surface)
+    Surface::create(p_surface)
 }
 
 #[no_mangle]
 pub extern "C" fn vkDestroySurfaceKHR(_instance: *mut c_void, surface: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         s.surfaces.remove(&surface);
         s.wayland_surfaces.remove(&surface);
     });
@@ -102,7 +105,7 @@ pub extern "C" fn vkGetPhysicalDeviceXcbPresentationSupportKHR(
     _connection: *mut c_void,
     _visual_id: u32,
 ) -> VkBool32 {
-    present_support(queue_family_index)
+    PresentationSupport::query(queue_family_index)
 }
 
 #[no_mangle]
@@ -112,7 +115,7 @@ pub extern "C" fn vkGetPhysicalDeviceXlibPresentationSupportKHR(
     _dpy: *mut c_void,
     _visual_id: u64,
 ) -> VkBool32 {
-    present_support(queue_family_index)
+    PresentationSupport::query(queue_family_index)
 }
 
 #[no_mangle]
@@ -121,15 +124,18 @@ pub extern "C" fn vkGetPhysicalDeviceWaylandPresentationSupportKHR(
     queue_family_index: u32,
     _display: *mut c_void,
 ) -> VkBool32 {
-    present_support(queue_family_index)
+    PresentationSupport::query(queue_family_index)
 }
 
-fn present_support(queue_family_index: u32) -> VkBool32 {
-    if present::surface_supports_present(queue_family_index) {
+struct PresentationSupport;
+impl PresentationSupport {
+fn query(queue_family_index: u32) -> VkBool32 {
+    if present::QueueFamily(queue_family_index).supports_present() {
         VK_TRUE
     } else {
         VK_FALSE
     }
+}
 }
 
 // ---- physical-device surface queries -------------------------------------------------------------
@@ -144,10 +150,10 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceSupportKHR(
     let Some(out) = (unsafe { p_supported.as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    if !with(|s| s.surface_valid(surface)) {
+    if !StateStore::with(|s| s.surface_valid(surface)) {
         return VK_ERROR_SURFACE_LOST_KHR;
     }
-    *out = if present::surface_supports_present(queue_family_index) { VK_TRUE } else { VK_FALSE };
+    *out = if present::QueueFamily(queue_family_index).supports_present() { VK_TRUE } else { VK_FALSE };
     VK_SUCCESS
 }
 
@@ -160,7 +166,7 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     let Some(out) = (unsafe { p_surface_capabilities.as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    if !with(|s| s.surface_valid(surface)) {
+    if !StateStore::with(|s| s.surface_valid(surface)) {
         return VK_ERROR_SURFACE_LOST_KHR;
     }
     let c = present::surface_capabilities();
@@ -186,7 +192,7 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceFormatsKHR(
     p_surface_format_count: *mut u32,
     p_surface_formats: *mut VkSurfaceFormatKHR,
 ) -> VkResult {
-    if !with(|s| s.surface_valid(surface)) {
+    if !StateStore::with(|s| s.surface_valid(surface)) {
         return VK_ERROR_SURFACE_LOST_KHR;
     }
     let formats: Vec<VkSurfaceFormatKHR> = present::surface_formats()
@@ -203,7 +209,7 @@ pub extern "C" fn vkGetPhysicalDeviceSurfacePresentModesKHR(
     p_present_mode_count: *mut u32,
     p_present_modes: *mut i32,
 ) -> VkResult {
-    if !with(|s| s.surface_valid(surface)) {
+    if !StateStore::with(|s| s.surface_valid(surface)) {
         return VK_ERROR_SURFACE_LOST_KHR;
     }
     let modes = present::surface_present_modes();
@@ -233,7 +239,7 @@ unsafe fn write_enumeration<T: Copy>(items: &[T], p_count: *mut u32, p_data: *mu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::with;
+    use crate::state::StateStore;
 
     /// `vkCreateWaylandSurfaceKHR` records the app's OWN `wl_display*` + `wl_surface*` (from
     /// `VkWaylandSurfaceCreateInfoKHR`) against the minted `VkSurfaceKHR`, so a later present can marshal
@@ -262,15 +268,15 @@ mod tests {
         );
         assert_ne!(handle, 0, "a live VkSurfaceKHR must be minted");
         // The captured pointers are stored (as raw addresses) keyed by the surface handle.
-        let win = with(|s| s.wayland_surfaces.get(&handle).copied()).expect("wayland window captured");
+        let win = StateStore::with(|s| s.wayland_surfaces.get(&handle).copied()).expect("wayland window captured");
         assert_eq!(win.display, fake_display as usize);
         assert_eq!(win.surface, fake_surface as usize);
-        assert!(with(|s| s.surface_valid(handle)), "surface handle must be live");
+        assert!(StateStore::with(|s| s.surface_valid(handle)), "surface handle must be live");
 
         // Destroy clears both the surface set and the captured window.
         vkDestroySurfaceKHR(core::ptr::null_mut(), handle, core::ptr::null());
-        assert!(with(|s| s.wayland_surfaces.get(&handle).is_none()));
-        assert!(!with(|s| s.surface_valid(handle)));
+        assert!(StateStore::with(|s| s.wayland_surfaces.get(&handle).is_none()));
+        assert!(!StateStore::with(|s| s.surface_valid(handle)));
     }
 
     /// A null `pCreateInfo` is rejected (no faked capture), and a null `pSurface` too.

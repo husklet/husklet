@@ -20,7 +20,11 @@ impl Store {
 
     /// The on-disk rootfs path for a reference (whether or not it is present yet).
     pub fn rootfs_path(&self, iref: &ImageRef) -> PathBuf {
-        PathBuf::from(format!("{}/{}/rootfs", self.dir, safe_name(iref)))
+        PathBuf::from(format!(
+            "{}/{}/rootfs",
+            self.dir,
+            Key::from_reference(iref).as_str()
+        ))
     }
 
     /// Pull `from:tag` from its registry and unpack it into the store, preferring the native arm64
@@ -44,13 +48,13 @@ impl Store {
         archs: &[&str],
         progress: &mut dyn FnMut(PullEvent),
     ) -> Result<LocalImage, Error> {
-        let iref = image_ref(from, tag);
+        let iref = ImageRef::with_tag(from, tag);
         let rootfs = self.rootfs_path(&iref);
         let pulled = Client::new(iref.clone(), creds).pull(&rootfs, archs, progress)?;
-        // Map the config's os/arch; a PRESENT but unsupported os yields `None` from `arch_from_config`
+        // Map the config's os/arch; a PRESENT but unsupported os yields `None`
         // (finding 9). Only fall back to the linux/arm64 default when the os is acceptable (absent/empty/
         // linux) but the arch simply couldn't be classified — never for an explicitly-unsupported os.
-        let arch = match arch_from_config(&pulled.config) {
+        let arch = match Arch::from_config(&pulled.config) {
             Some(a) => a,
             None => match pulled.config["os"].as_str() {
                 Some(os) if !os.is_empty() && os != "linux" => {
@@ -75,7 +79,7 @@ mod tests {
     #[test]
     fn rootfs_path_uses_canonical_safe_name_layout() {
         let store = Store::new("/var/lib/hl/images");
-        let iref = ImageRef::parse("nginx");
+        let iref = ImageRef::from("nginx");
         // safe_name(nginx) == canonical "docker.io/library/nginx:latest" percent-encoded (`/`->%2F, `:`->%3A).
         assert_eq!(
             store.rootfs_path(&iref),

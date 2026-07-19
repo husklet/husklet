@@ -11,20 +11,26 @@
 use core::ffi::c_void;
 
 use hl_vulkan::model::command::CommandBufferState;
-use hl_vulkan::model::memory::tex_format_from_vk;
+use hl_vulkan::model::memory::Format;
 use hl_vulkan::Device;
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::*;
 
 /// Run `f` with the logical device, or `VK_ERROR_INITIALIZATION_FAILED` if none has been created.
-fn dev_res(f: impl FnOnce(&mut Device) -> VkResult) -> VkResult {
-    with(|s| s.device.as_mut().map(f)).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+struct ShimState;
+impl ShimState {
+fn with_device_result(f: impl FnOnce(&mut Device) -> VkResult) -> VkResult {
+    StateStore::with(|s| s.device.as_mut().map(f)).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+}
 }
 
 /// Unwrap a dispatchable `VkCommandBuffer` to its `hl_vulkan` `u64` command-buffer handle.
-unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<u64> {
+struct CommandBuffer;
+impl CommandBuffer {
+unsafe fn handle(p: *mut c_void) -> Option<u64> {
     Dispatchable::<u64>::inner(p).map(|h| *h)
+}
 }
 
 // ==================================================================================================
@@ -41,7 +47,7 @@ pub extern "C" fn vkTrimCommandPool(_device: *mut c_void, _command_pool: u64, _f
 /// single-pool bring-up flow). Clears each recording.
 #[no_mangle]
 pub extern "C" fn vkResetCommandPool(_device: *mut c_void, _command_pool: u64, _flags: u32) -> VkResult {
-    dev_res(|d| {
+    ShimState::with_device_result(|d| {
         for rec in d.command_buffers.values_mut() {
             rec.reset_recording();
             rec.state = CommandBufferState::Initial;
@@ -54,10 +60,10 @@ pub extern "C" fn vkResetCommandPool(_device: *mut c_void, _command_pool: u64, _
 /// unknown handle.
 #[no_mangle]
 pub extern "C" fn vkResetCommandBuffer(command_buffer: *mut c_void, _flags: u32) -> VkResult {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    dev_res(|d| match d.command_buffers.get_mut(&cb) {
+    ShimState::with_device_result(|d| match d.command_buffers.get_mut(&cb) {
         Some(rec) => {
             rec.reset_recording();
             rec.state = CommandBufferState::Initial;
@@ -84,8 +90,8 @@ pub extern "C" fn vkFreeCommandBuffers(
         if p.is_null() {
             continue;
         }
-        if let Some(h) = unsafe { cmdbuf_handle(p) } {
-            with(|s| {
+        if let Some(h) = unsafe { CommandBuffer::handle(p) } {
+            StateStore::with(|s| {
                 if let Some(d) = s.device.as_mut() {
                     d.command_buffers.remove(&h);
                 }
@@ -125,11 +131,14 @@ pub extern "C" fn vkGetDescriptorSetLayoutSupportKHR(
 /// Fill a `VkMemoryRequirements2`'s base requirements with `size`. Every advertised memory type can back
 /// the resource (all our memory is host RAM), so `memoryTypeBits` exposes the full set — matching the
 /// v1 `vkGetBuffer/ImageMemoryRequirements` path. See `PhysicalDeviceDesc::memory_types`.
-fn write_mem_reqs2(p_memory_requirements: *mut c_void, size: u64) {
+struct MemoryRequirements;
+impl MemoryRequirements {
+fn write(p_memory_requirements: *mut c_void, size: u64) {
     if let Some(out) = unsafe { (p_memory_requirements as *mut VkMemoryRequirements2).as_mut() } {
-        let type_bits = with(|s| s.physical_device().all_memory_type_bits());
+        let type_bits = StateStore::with(|s| s.physical_device().all_memory_type_bits());
         out.memory_requirements = VkMemoryRequirements { size, alignment: 256, memory_type_bits: type_bits };
     }
+}
 }
 
 /// `vkGetDeviceBufferMemoryRequirements(KHR)` — derive a buffer's requirements from its create info
@@ -147,7 +156,7 @@ pub extern "C" fn vkGetDeviceBufferMemoryRequirements(
             .map(|ci| ci.size)
             .unwrap_or(0)
     };
-    write_mem_reqs2(p_memory_requirements, size);
+    MemoryRequirements::write(p_memory_requirements, size);
 }
 
 /// `vkGetDeviceBufferMemoryRequirementsKHR` — the `VK_KHR_maintenance4` alias.
@@ -176,12 +185,12 @@ pub extern "C" fn vkGetDeviceImageMemoryRequirements(
             .as_ref()
             .and_then(|i| i.p_create_info.as_ref())
             .map(|ci| {
-                let bpt = tex_format_from_vk(ci.format as u32).bytes_per_texel().unwrap_or(4) as u64;
+                let bpt = Format(ci.format as u32).wire().bytes_per_texel().unwrap_or(4) as u64;
                 ci.extent.width as u64 * ci.extent.height.max(1) as u64 * bpt
             })
             .unwrap_or(0)
     };
-    write_mem_reqs2(p_memory_requirements, size);
+    MemoryRequirements::write(p_memory_requirements, size);
 }
 
 /// `vkGetDeviceImageMemoryRequirementsKHR` — the `VK_KHR_maintenance4` alias.
@@ -200,10 +209,13 @@ pub extern "C" fn vkGetDeviceImageMemoryRequirementsKHR(
 
 /// Write the two-call sparse-requirement count as 0 (the modeled device supports no sparse residency, so
 /// an image has no sparse memory requirements). `p_count` is set to 0 whether or not the array is present.
-fn no_sparse_requirements(p_count: *mut u32) {
+struct SparseRequirements;
+impl SparseRequirements {
+fn write_empty(p_count: *mut u32) {
     if let Some(c) = unsafe { p_count.as_mut() } {
         *c = 0;
     }
+}
 }
 
 #[no_mangle]
@@ -213,7 +225,7 @@ pub extern "C" fn vkGetImageSparseMemoryRequirements(
     p_sparse_memory_requirement_count: *mut u32,
     _p_sparse_memory_requirements: *mut c_void,
 ) {
-    no_sparse_requirements(p_sparse_memory_requirement_count);
+    SparseRequirements::write_empty(p_sparse_memory_requirement_count);
 }
 
 #[no_mangle]
@@ -223,7 +235,7 @@ pub extern "C" fn vkGetImageSparseMemoryRequirements2(
     p_sparse_memory_requirement_count: *mut u32,
     _p_sparse_memory_requirements: *mut c_void,
 ) {
-    no_sparse_requirements(p_sparse_memory_requirement_count);
+    SparseRequirements::write_empty(p_sparse_memory_requirement_count);
 }
 
 #[no_mangle]
@@ -243,7 +255,7 @@ pub extern "C" fn vkGetDeviceImageSparseMemoryRequirements(
     p_sparse_memory_requirement_count: *mut u32,
     _p_sparse_memory_requirements: *mut c_void,
 ) {
-    no_sparse_requirements(p_sparse_memory_requirement_count);
+    SparseRequirements::write_empty(p_sparse_memory_requirement_count);
 }
 
 #[no_mangle]
@@ -270,7 +282,7 @@ pub extern "C" fn vkCreatePrivateDataSlot(
     if !p_private_data_slot.is_null() {
         unsafe { *p_private_data_slot = 0 };
     }
-    with(|s| {
+    StateStore::with(|s| {
         let Some(d) = s.device.as_mut() else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
@@ -295,7 +307,7 @@ pub extern "C" fn vkCreatePrivateDataSlotEXT(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyPrivateDataSlot(_device: *mut c_void, private_data_slot: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         s.private_data_slots.remove(&private_data_slot);
         s.private_data.retain(|(_, _, slot), _| *slot != private_data_slot);
     });
@@ -314,7 +326,7 @@ pub extern "C" fn vkSetPrivateData(
     private_data_slot: u64,
     data: u64,
 ) -> VkResult {
-    with(|s| {
+    StateStore::with(|s| {
         if !s.private_data_slots.contains(&private_data_slot) {
             return VK_ERROR_INITIALIZATION_FAILED;
         }
@@ -342,7 +354,7 @@ pub extern "C" fn vkGetPrivateData(
     private_data_slot: u64,
     p_data: *mut u64,
 ) {
-    let v = with(|s| {
+    let v = StateStore::with(|s| {
         s.private_data
             .get(&(object_type, object_handle, private_data_slot))
             .copied()
@@ -381,7 +393,7 @@ pub extern "C" fn vkCreateSamplerYcbcrConversion(
     if p_create_info.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-    with(|s| {
+    StateStore::with(|s| {
         let Some(d) = s.device.as_mut() else {
             return VK_ERROR_INITIALIZATION_FAILED;
         };
@@ -406,7 +418,7 @@ pub extern "C" fn vkCreateSamplerYcbcrConversionKHR(
 
 #[no_mangle]
 pub extern "C" fn vkDestroySamplerYcbcrConversion(_device: *mut c_void, ycbcr_conversion: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         s.ycbcr_conversions.remove(&ycbcr_conversion);
     });
 }
@@ -435,7 +447,7 @@ pub extern "C" fn vkGetCalibratedTimestampsKHR(
     }
     let n = timestamp_count as usize;
     let out = unsafe { std::slice::from_raw_parts_mut(p_timestamps, n) };
-    dev_res(|d| {
+    ShimState::with_device_result(|d| {
         for slot in out.iter_mut() {
             *slot = d.next_timestamp();
         }

@@ -3,8 +3,8 @@
 //! hl's archive format is intentionally simple (not full OCI): a tar whose top level is the image's
 //! `rootfs/` directory plus a [`Manifest`] sidecar (`hl-manifest.json`). [`Store::save_archive`] produces
 //! it, [`Store::load_archive`] consumes it; [`Store::import_rootfs`] instead takes a bare rootfs tar (no
-//! manifest) whose files land directly in a new image's rootfs. All tar work shells out to the system
-//! `tar` (no crate dependency, no runtime) so the on-disk layout matches Docker/hl exactly.
+//! manifest) whose files land directly in a new image's rootfs. Archives are inspected in-process and
+//! extracted through one encapsulated host-tar adapter so security policy cannot be bypassed by callers.
 //!
 //! Split by operation across sibling files: [`Store::save_archive`] (`save.rs`),
 //! [`Store::load_archive`] (`load.rs`), [`Store::import_rootfs`] (`import.rs`). This module holds the
@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// GNU-tar flags for EXTRACTING a load/import archive: `--xattrs` round-trips extended attributes,
 /// `--numeric-owner`/`--same-owner`/`-p` preserve the numeric uid/gid + permission bits (effective only
 /// when the daemon runs privileged; a warning otherwise). Device-node / ownership refusals are tolerated
-/// by [`run_extract`], so an unprivileged extract still lands every regular file.
+/// by [`Archive::extract`], so an unprivileged extract still lands every regular file.
 pub(super) const EXTRACT_FLAGS: &[&str] = &["--xattrs", "--numeric-owner", "--same-owner", "-p"];
 
 /// GNU-tar flags for CREATING a save archive: `--format=posix` (pax) keeps nanosecond mtimes,
@@ -32,8 +32,22 @@ pub(super) const SAVE_FLAGS: &[&str] = &["--format=posix", "--xattrs", "--sparse
 /// device-node `mknod`, ownership/permission/xattr restoration refusals, and tar's trailing
 /// "Error exit delayed" summary. Real corruption ("not a tar archive", "Unexpected EOF", "No space
 /// left", …) is never benign, so it still fails the extract.
-fn benign_extract_line(l: &str) -> bool {
-    l.is_empty()
+pub(crate) struct Archive<'a>(&'a Path);
+
+struct Member {
+    path: PathBuf,
+    link: Option<PathBuf>,
+    hardlink: bool,
+    directory: bool,
+}
+
+impl Archive<'_> {
+    pub(crate) fn new(path: &Path) -> Archive<'_> {
+        Archive(path)
+    }
+
+    fn accepts(l: &str) -> bool {
+        l.is_empty()
         || l.contains("Cannot mknod")
         || l.contains("Cannot create symlink")
         || l.contains("Operation not permitted")
@@ -45,46 +59,265 @@ fn benign_extract_line(l: &str) -> bool {
         || l.contains("Error exit delayed")
         // tar's trailing summary; only benign because every REAL error also prints its own fatal line.
         || l.contains("Exiting with failure status")
-}
-
-/// Extract `archive` into `dest` with [`EXTRACT_FLAGS`], tolerating unprivileged device-node / ownership
-/// noise (a valid device-node tar must not abort the whole extract). Returns `Err` only on a genuinely
-/// fatal tar failure (bad archive, I/O error), so every regular file still lands.
-pub(super) fn run_extract(archive: &Path, dest: &Path) -> Result<(), Error> {
-    run_extract_args(archive, dest, &[])
-}
-
-/// Like [`run_extract`] but with `extra` tar arguments inserted before `-xf` (e.g. `--exclude` patterns
-/// used to drop AUFS/OCI whiteout markers when flattening docker-save layers).
-pub(super) fn run_extract_args(archive: &Path, dest: &Path, extra: &[&str]) -> Result<(), Error> {
-    // SECURITY (traversal guard): `docker load` / `docker import` / docker-save layer tars are all
-    // attacker-controlled archives extracted here. Reject any member that would ESCAPE `dest` — an
-    // absolute path or a `..` component — BEFORE unpacking, so a hostile member like `../../etc/foo`
-    // can't let `tar` write outside the store. Lists with `tar tf` (no extraction); a `tar tf` that
-    // itself fails is left for the real extract below to surface.
-    tar_members_contained(archive).map_err(Error::Archive)?;
-    let out = Command::new("tar")
-        .args(EXTRACT_FLAGS)
-        .args(extra)
-        .arg("-xf")
-        .arg(archive)
-        .arg("-C")
-        .arg(dest)
-        .output()
-        .map_err(|e| Error::Archive(e.to_string()))?;
-    if out.status.success() {
-        return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let fatal: Vec<&str> = stderr
-        .lines()
-        .map(str::trim)
-        .filter(|l| !benign_extract_line(l))
-        .collect();
-    if fatal.is_empty() {
+
+    /// Extract `archive` into `dest` with [`EXTRACT_FLAGS`], tolerating unprivileged device-node / ownership
+    /// noise (a valid device-node tar must not abort the whole extract). Returns `Err` only on a genuinely
+    /// fatal tar failure (bad archive, I/O error), so every regular file still lands.
+    fn extract(&self, dest: &Path) -> Result<(), Error> {
+        self.extract_with(dest, &[])
+    }
+
+    /// Like [`Archive::extract`] but with `extra` tar arguments inserted before `-xf` (e.g. `--exclude` patterns
+    /// used to drop AUFS/OCI whiteout markers when flattening docker-save layers).
+    fn extract_with(&self, dest: &Path, extra: &[&str]) -> Result<(), Error> {
+        // SECURITY (traversal guard): `docker load` / `docker import` / docker-save layer tars are all
+        // attacker-controlled archives extracted here. Reject any member that would ESCAPE `dest` — an
+        // absolute path or a `..` component — BEFORE unpacking, so a hostile member like `../../etc/foo`
+        // can't let `tar` write outside the store. Inspection is in-process and every parse failure aborts.
+        self.validate()?;
+        let out = Command::new("tar")
+            .args(EXTRACT_FLAGS)
+            .args(extra)
+            .arg("-xf")
+            .arg(self.0)
+            .arg("-C")
+            .arg(dest)
+            .output()
+            .map_err(|e| Error::Archive(e.to_string()))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let fatal: Vec<&str> = stderr
+            .lines()
+            .map(str::trim)
+            .filter(|l| !Self::accepts(l))
+            .collect();
+        if fatal.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Archive(fatal.join("; ")))
+        }
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        for member in self.members()? {
+            let path = &member.path;
+            if path.is_absolute()
+                || path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                return Err(Error::Archive(format!(
+                    "unsafe archive member (path traversal): {}",
+                    path.display()
+                )));
+            }
+            if let Some(target) = &member.link {
+                let base = if member.hardlink {
+                    Path::new("")
+                } else {
+                    path.parent().unwrap_or(Path::new(""))
+                };
+                if !Self::link_contained(base, target) {
+                    return Err(Error::Archive(format!(
+                        "unsafe archive link target: {} -> {}",
+                        path.display(),
+                        target.display()
+                    )));
+                }
+            }
+        }
         Ok(())
-    } else {
-        Err(Error::Archive(fatal.join("; ")))
+    }
+
+    fn paths(&self) -> Result<Vec<PathBuf>, Error> {
+        self.members()
+            .map(|members| members.into_iter().map(|member| member.path).collect())
+    }
+
+    fn members(&self) -> Result<Vec<Member>, Error> {
+        use std::io::{BufReader, Read, Seek};
+        let mut file = std::fs::File::open(self.0).map_err(|e| Error::Archive(e.to_string()))?;
+        let mut magic = [0; 2];
+        let read = file
+            .read(&mut magic)
+            .map_err(|e| Error::Archive(e.to_string()))?;
+        file.rewind().map_err(|e| Error::Archive(e.to_string()))?;
+        let reader: Box<dyn Read> = if read == magic.len() && magic == [0x1f, 0x8b] {
+            Box::new(flate2::read::GzDecoder::new(BufReader::new(file)))
+        } else {
+            Box::new(BufReader::new(file))
+        };
+        let mut archive = tar::Archive::new(reader);
+        archive
+            .entries()
+            .map_err(|e| Error::Archive(e.to_string()))?
+            .map(|entry| {
+                let entry = entry.map_err(|e| Error::Archive(e.to_string()))?;
+                let path = entry
+                    .path()
+                    .map_err(|e| Error::Archive(e.to_string()))?
+                    .into_owned();
+                let link = entry
+                    .link_name()
+                    .map_err(|e| Error::Archive(e.to_string()))?
+                    .map(|path| path.into_owned());
+                Ok(Member {
+                    path,
+                    link,
+                    hardlink: entry.header().entry_type().is_hard_link(),
+                    directory: entry.header().entry_type().is_dir(),
+                })
+            })
+            .collect()
+    }
+
+    fn link_contained(base: &Path, target: &Path) -> bool {
+        if target.is_absolute() {
+            return false;
+        }
+        let mut depth = base
+            .components()
+            .filter(|component| matches!(component, std::path::Component::Normal(_)))
+            .count();
+        for component in target.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::Normal(_) => depth += 1,
+                std::path::Component::ParentDir if depth > 0 => depth -= 1,
+                std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_) => return false,
+            }
+        }
+        true
+    }
+
+    /// Extract an OCI gzip layer without following a symlink left at a member prefix by an earlier layer.
+    /// Device entries are excluded because the runtime synthesizes `/dev`; permission failures caused by a
+    /// lower read-only directory trigger one contained writable-directory retry.
+    pub(crate) fn extract_layer(&self, rootfs: &Path) -> Result<(), Error> {
+        self.validate()?;
+        self.scrub_prefixes(rootfs)?;
+        let attempt = || {
+            Command::new("tar")
+                .args(["--exclude", "dev/*", "--exclude", "./dev/*", "-xzf"])
+                .arg(self.0)
+                .arg("-C")
+                .arg(rootfs)
+                .output()
+                .map_err(|e| Error::Archive(format!("tar: {e}")))
+        };
+        let output = attempt()?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let (retry, fatal) = Self::diagnose(&String::from_utf8_lossy(&output.stderr));
+        if !fatal.is_empty() {
+            return Err(Error::Archive(format!(
+                "tar extract failed: {}",
+                fatal.join("; ")
+            )));
+        }
+        if !retry {
+            return Ok(());
+        }
+        Self::make_writable(rootfs);
+        let output = attempt()?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let (_, fatal) = Self::diagnose(&String::from_utf8_lossy(&output.stderr));
+        if fatal.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Archive(format!(
+                "tar extract failed after making dirs writable: {}",
+                fatal.join("; ")
+            )))
+        }
+    }
+
+    fn diagnose(stderr: &str) -> (bool, Vec<String>) {
+        let (mut retry, mut fatal) = (false, Vec::new());
+        for line in stderr.lines().map(str::trim) {
+            if line.is_empty()
+                || line.contains("Operation not permitted")
+                || line.contains("Cannot mknod")
+                || line.contains("Error exit delayed from previous errors")
+            {
+                continue;
+            }
+            if line.contains("Permission denied") {
+                retry = true;
+            } else {
+                fatal.push(line.to_owned());
+            }
+        }
+        (retry, fatal)
+    }
+
+    fn scrub_prefixes(&self, rootfs: &Path) -> Result<(), Error> {
+        for member in self.members()? {
+            let path = member.path;
+            let mut current = rootfs.to_path_buf();
+            let components: Vec<_> = path.components().collect();
+            let prefixes = if member.directory {
+                components.len()
+            } else {
+                components.len().saturating_sub(1)
+            };
+            for component in components.iter().take(prefixes) {
+                match component {
+                    std::path::Component::CurDir => continue,
+                    std::path::Component::Normal(name) => current.push(name),
+                    _ => {
+                        return Err(Error::Archive(format!(
+                            "unsafe archive member (path traversal): {}",
+                            path.display()
+                        )))
+                    }
+                }
+                match std::fs::symlink_metadata(&current) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        std::fs::remove_file(&current).map_err(|error| {
+                            Error::Archive(format!("remove symlink {}: {error}", current.display()))
+                        })?;
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                    Err(error) => return Err(Error::Archive(error.to_string())),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn make_writable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            return;
+        };
+        if !metadata.is_dir() {
+            return;
+        }
+        let mut permissions = metadata.permissions();
+        let mode = permissions.mode();
+        if mode & 0o200 == 0 {
+            permissions.set_mode(mode | 0o200);
+            let _ = std::fs::set_permissions(path, permissions);
+        }
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                Self::make_writable(&entry.path());
+            }
+        }
     }
 }
 
@@ -140,28 +373,6 @@ pub struct LoadedImage {
     pub healthcheck: Option<Value>,
 }
 
-/// Reject an archive whose members would ESCAPE the extraction root — an absolute path (leading `/`) or a
-/// `..` path component. Runs `tar tf` (list, no extraction) first. This is the traversal half of extraction
-/// safety; the symlink-follow half is covered by modern `tar` (GNU ≥1.32 / bsdtar refuse to extract through
-/// an in-archive symlink). A `tar tf` that itself fails is left for the real extract to surface.
-pub(crate) fn tar_members_contained(tar: &Path) -> Result<(), String> {
-    let out = std::process::Command::new("tar")
-        .arg("tf")
-        .arg(tar)
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Ok(());
-    }
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let m = line.trim_end_matches('/');
-        if m.starts_with('/') || m.split('/').any(|c| c == "..") {
-            return Err(format!("unsafe archive member (path traversal): {line}"));
-        }
-    }
-    Ok(())
-}
-
 impl Store {
     /// The store directory for an image `name`. The name is reduced to a SINGLE, injective, path-safe
     /// component via [`encode_store_component`](crate::image::config::encode_store_component) — `/` and `:`
@@ -171,11 +382,7 @@ impl Store {
     /// This is the RAW-name layout the load/import paths use (distinct from [`safe_name`]'s
     /// canonicalized-reference layout used by pull — but both now share the same reversible encoding).
     fn dir_for(&self, name: &str) -> PathBuf {
-        PathBuf::from(format!(
-            "{}/{}",
-            self.dir,
-            crate::image::config::encode_store_component(name)
-        ))
+        PathBuf::from(format!("{}/{}", self.dir, Key::from_name(name).as_str()))
     }
 
     /// Install a fully-staged image directory `staged` at `target`, swapping any existing image aside so
@@ -349,6 +556,43 @@ pub(super) mod testutil {
 mod tests {
     use super::*;
     use crate::image::archive::testutil::unique_dir;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn layer_does_not_write_through_existing_symlink() {
+        let root = unique_dir("layer-symlink");
+        let rootfs = root.join("rootfs");
+        let outside = root.join("outside");
+        let source = root.join("source");
+        std::fs::create_dir_all(&rootfs).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(source.join("linkout")).unwrap();
+        std::fs::write(source.join("linkout/file.txt"), b"contained").unwrap();
+        symlink("../outside", rootfs.join("linkout")).unwrap();
+
+        let layer = root.join("layer.tar.gz");
+        let status = Command::new("tar")
+            .arg("-czf")
+            .arg(&layer)
+            .arg("-C")
+            .arg(&source)
+            .arg(".")
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        Archive::new(&layer).extract_layer(&rootfs).unwrap();
+        assert!(!outside.join("file.txt").exists());
+        assert_eq!(
+            std::fs::read(rootfs.join("linkout/file.txt")).unwrap(),
+            b"contained"
+        );
+        assert!(!std::fs::symlink_metadata(rootfs.join("linkout"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn remove_image_dir_deletes_dir_under_store_root() {

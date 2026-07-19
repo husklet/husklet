@@ -42,32 +42,58 @@ pub const GL_INVALID_FRAMEBUFFER_OPERATION: u32 = 0x0506;
 /// Map a lowering [`GpuError`] onto the `EGLint` error `eglGetError` reports after a failed frame. A
 /// delivery/transport failure at swap is `EGL_CONTEXT_LOST` (the frame could not be presented — matching
 /// a real driver losing its context); a bad handle/argument maps to the closest `EGL_BAD_*`.
-pub fn egl_error_from_gpu_error(e: &GpuError) -> i32 {
-    match e {
-        GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => EGL_BAD_SURFACE,
-        GpuError::ResourceLimit(_) => EGL_BAD_ALLOC,
-        GpuError::Unsupported(_) => EGL_BAD_MATCH,
-        GpuError::Invalid(_)
-        | GpuError::BadEnum { .. }
-        | GpuError::BadTag(_)
-        | GpuError::OutOfBounds
-        | GpuError::NonFinite(_)
-        | GpuError::NonCanonicalBool(_)
-        | GpuError::Utf8
-        | GpuError::ShortBuffer
-        | GpuError::TrailingBytes => EGL_BAD_PARAMETER,
-        GpuError::Kernel(_) | GpuError::Decode(_) => EGL_CONTEXT_LOST,
+pub struct EglError(i32);
+
+impl From<&GpuError> for EglError {
+    fn from(e: &GpuError) -> Self {
+        Self(match e {
+            GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => EGL_BAD_SURFACE,
+            GpuError::ResourceLimit(_) => EGL_BAD_ALLOC,
+            GpuError::Unsupported(_) => EGL_BAD_MATCH,
+            GpuError::Invalid(_)
+            | GpuError::BadEnum { .. }
+            | GpuError::BadTag(_)
+            | GpuError::OutOfBounds
+            | GpuError::NonFinite(_)
+            | GpuError::NonCanonicalBool(_)
+            | GpuError::Utf8
+            | GpuError::ShortBuffer
+            | GpuError::TrailingBytes => EGL_BAD_PARAMETER,
+            GpuError::Kernel(_) | GpuError::Decode(_) => EGL_CONTEXT_LOST,
+        })
     }
 }
 
-/// Map a lowering [`GpuError`] onto the `GLenum` a GLES entry point would raise via `glGetError`. A
-/// resource-limit error is `GL_OUT_OF_MEMORY`; a bad enum/argument is `GL_INVALID_ENUM`/`GL_INVALID_VALUE`.
-pub fn gl_error_from_gpu_error(e: &GpuError) -> u32 {
-    match e {
-        GpuError::ResourceLimit(_) => GL_OUT_OF_MEMORY,
-        GpuError::BadEnum { .. } => GL_INVALID_ENUM,
-        GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => GL_INVALID_OPERATION,
-        GpuError::Unsupported(_) => GL_INVALID_OPERATION,
-        _ => GL_INVALID_VALUE,
+impl From<EglError> for i32 {
+    fn from(value: EglError) -> Self {
+        value.0
     }
 }
+
+pub const EGL_ERROR_FROM_GPU_ERROR: fn(&GpuError) -> i32 = |error| EglError::from(error).into();
+pub use EGL_ERROR_FROM_GPU_ERROR as egl_error_from_gpu_error;
+
+/// Map a lowering [`GpuError`] onto the `GLenum` a GLES entry point would raise via `glGetError`. A
+/// resource-limit error is `GL_OUT_OF_MEMORY`; a bad enum/argument is `GL_INVALID_ENUM`/`GL_INVALID_VALUE`.
+pub struct GlError(u32);
+
+impl From<&GpuError> for GlError {
+    fn from(e: &GpuError) -> Self {
+        Self(match e {
+            GpuError::ResourceLimit(_) => GL_OUT_OF_MEMORY,
+            GpuError::BadEnum { .. } => GL_INVALID_ENUM,
+            GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => GL_INVALID_OPERATION,
+            GpuError::Unsupported(_) => GL_INVALID_OPERATION,
+            _ => GL_INVALID_VALUE,
+        })
+    }
+}
+
+impl From<GlError> for u32 {
+    fn from(value: GlError) -> Self {
+        value.0
+    }
+}
+
+pub const GL_ERROR_FROM_GPU_ERROR: fn(&GpuError) -> u32 = |error| GlError::from(error).into();
+pub use GL_ERROR_FROM_GPU_ERROR as gl_error_from_gpu_error;

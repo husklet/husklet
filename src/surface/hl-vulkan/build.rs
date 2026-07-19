@@ -41,7 +41,7 @@ fn main() {
         return;
     }
 
-    let manifest_dir = PathBuf::from(env("CARGO_MANIFEST_DIR"));
+    let manifest_dir = PathBuf::from(BuildEnvironment::required("CARGO_MANIFEST_DIR"));
     // Rerun when the shim's sources / manifest / this script / the icd.json change — AND when this
     // crate's own `src/` changes: the guest ICD cdylib links this crate (e.g. the shim's
     // `vkEnumerateInstanceExtensionProperties` reads `capability::INSTANCE_EXTENSIONS`), so a change to
@@ -77,7 +77,7 @@ fn main() {
 
     for (triple, linker, arch_dir) in ARCHES {
         let host = *triple == host_triple();
-        if !std_available(&sysroot, triple) {
+        if !BuildEnvironment::std_available(&sysroot, triple) {
             // aarch64 std is guaranteed on this host; a missing HOST std is a real, fail-loud error.
             if host {
                 panic!(
@@ -213,20 +213,23 @@ fn rustc_sysroot() -> PathBuf {
 }
 
 /// Is the rust std library for `triple` installed under `sysroot`?
-fn std_available(sysroot: &Path, triple: &str) -> bool {
-    sysroot
-        .join("lib")
-        .join("rustlib")
-        .join(triple)
-        .join("lib")
-        .is_dir()
+struct BuildEnvironment;
+impl BuildEnvironment {
+    fn std_available(sysroot: &Path, triple: &str) -> bool {
+        sysroot
+            .join("lib")
+            .join("rustlib")
+            .join(triple)
+            .join("lib")
+            .is_dir()
+    }
+
+    fn required(key: &str) -> String {
+        std::env::var(key).unwrap_or_else(|_| panic!("env {key} not set"))
+    }
 }
 
 /// The build host's target triple (`cargo` sets `HOST` for build scripts).
 fn host_triple() -> String {
     std::env::var("HOST").unwrap_or_default()
-}
-
-fn env(k: &str) -> String {
-    std::env::var(k).unwrap_or_else(|_| panic!("env {k} not set"))
 }

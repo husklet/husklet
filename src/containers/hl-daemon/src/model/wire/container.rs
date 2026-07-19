@@ -1,5 +1,19 @@
 use super::*;
 
+#[derive(Deserialize, Default)]
+pub(crate) struct ProcessCreateBody {
+    #[serde(rename = "Cmd")]
+    pub(crate) cmd: Option<Vec<String>>,
+    #[serde(rename = "Tty")]
+    pub(crate) tty: Option<bool>,
+    #[serde(rename = "Env")]
+    pub(crate) env: Option<Vec<String>>,
+    #[serde(rename = "WorkingDir")]
+    pub(crate) working_dir: Option<String>,
+    #[serde(rename = "User")]
+    pub(crate) user: Option<String>,
+}
+
 /// `--restart` policy (HostConfig.RestartPolicy). `name` is one of "" / "no" / "always" /
 /// "unless-stopped" / "on-failure"; `max_retry` caps `on-failure` restarts. Serde-renamed so it both
 /// deserializes from the create body and round-trips verbatim back through inspect HostConfig.
@@ -38,19 +52,23 @@ pub(crate) struct Ulimit {
 /// Serialize `Container.arch` (an `Option<Guest>`) as the guest's stable `target()` string (e.g.
 /// `"linux_x86_64"`) in `state.json`, so the arch survives a daemon restart even when the backing image
 /// is gone. `Guest` itself has no serde derive, so this bridges it without touching the hljit crate.
-mod arch_serde {
-    use super::Guest;
-    use serde::{Deserialize, Deserializer, Serializer};
+pub(crate) struct ArchOption;
 
-    pub(super) fn serialize<S: Serializer>(g: &Option<Guest>, s: S) -> Result<S::Ok, S::Error> {
+impl ArchOption {
+    pub(crate) fn serialize<S: serde::Serializer>(
+        g: &Option<Guest>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
         match g {
             Some(g) => s.serialize_some(g.target()),
             None => s.serialize_none(),
         }
     }
 
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Guest>, D::Error> {
-        let opt = Option::<String>::deserialize(d)?;
+    pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Guest>, D::Error> {
+        let opt = <Option<String> as serde::Deserialize>::deserialize(d)?;
         Ok(opt.and_then(|t| Guest::ALL.into_iter().find(|g| g.target() == t)))
     }
 }
@@ -212,7 +230,11 @@ pub(crate) struct Container {
     // persisted (as the target string) so a container whose image has since disappeared keeps its correct
     // arch across a daemon restart instead of defaulting to arm64 (which would run x86 code on the wrong
     // engine). See `load_state`: the persisted value is the fallback when no image resolves.
-    #[serde(default, with = "arch_serde")]
+    #[serde(
+        default,
+        serialize_with = "ArchOption::serialize",
+        deserialize_with = "ArchOption::deserialize"
+    )]
     pub(crate) arch: Option<Guest>,
     // `docker exec` only: overrides the id-derived HL_NETNS loopback key so the exec'd process SHARES the
     // TARGET container's 127.0.0.1 address space instead of getting its own isolated loopback. Set to the

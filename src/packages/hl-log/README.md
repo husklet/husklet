@@ -47,13 +47,14 @@ Even when a macro is compiled in, it is fronted by:
 
 ```rust
 #[inline(always)]
-pub fn enabled(tag: u64, level: Level) -> bool {
-    ENABLED.load(Relaxed) & tag != 0 && (level as u8) <= MIN_LEVEL.load(Relaxed)
+pub fn enabled(&self, tags: Tags, level: Level) -> bool {
+    self.enabled.load(Relaxed) & tags.bits() != 0
+        && (level as u8) <= self.level.load(Relaxed)
 }
 ```
 
 One relaxed atomic load, an AND, a compare, and a branch predicted **not-taken** when
-logging is off. With `HL_LOG` unset the enabled mask is `0`, so a live call site costs
+logging is off. With the default configuration the enabled mask is `0`, so a live call site costs
 a couple of nanoseconds and **never evaluates its arguments** — `format_args!` lives
 *inside* the `if`, so no formatting, no allocation, no side effects happen when off.
 
@@ -73,8 +74,9 @@ CPU EGL WAYLAND`. Plus `ALL = !0` and `NONE = 0`.
 
 ```rust
 use hl_log::tag;
-tag::from_name("gpu");     // -> Some(tag::GPU)   (also "all", "off")
-tag::name(tag::VULKAN);    // -> "vulkan"
+"gpu".parse::<hl_log::Tag>(); // -> Ok(tag::GPU)
+tag::VULKAN.name();            // -> "vulkan"
+"gpu,wgpu".parse::<hl_log::Tags>(); // -> Ok(tag::GPU | tag::WGPU)
 hl_log::hl_debug!(tag::GPU | tag::PRESENT, "..."); // multi-tag: prints "gpu|present"
 ```
 
@@ -82,17 +84,18 @@ hl_log::hl_debug!(tag::GPU | tag::PRESENT, "..."); // multi-tag: prints "gpu|pre
 
 Edit `src/tag.rs`:
 
-1. Add a const with the next free bit: `pub const MYSUB: u64 = 1 << 15;`
-2. Add a row to the `TAGS` table: `(MYSUB, "mysub"),`
+1. Add a const with the next free bit: `pub const MYSUB: Tag = Tag::new(1 << 15, "mysub");`
+2. Add `MYSUB` to the `TAGS` table.
 
-That's the whole change — `from_name`, `name`, env parsing (`HL_LOG=mysub`), and every
+That's the whole change — `FromStr`, display, application configuration parsing, and every
 macro pick it up automatically.
 
 ---
 
 ## Environment variables
 
-Parsed once by `init()` (and auto-parsed on first macro use):
+Husklet translates these compatibility variables at its composition root; `hl-log`
+itself never reads ambient process state:
 
 | var | meaning | examples |
 |---|---|---|
@@ -104,9 +107,15 @@ Parsed once by `init()` (and auto-parsed on first macro use):
 HL_LOG=gpu,wgpu HL_LOG_LEVEL=debug HL_LOG_COUNTERS=gpu ./app
 ```
 
-Programmatic equivalents (for the app and tests):
-`init()`, `enable(mask)`, `disable(mask)`, `set_enabled(mask)`, `set_level(Level)`,
-`enable_counters(mask)`, `set_counters(mask)`. `init()` is idempotent and re-callable.
+Applications and tests apply one typed configuration:
+
+```rust
+hl_log::Config {
+    logging: tag::GPU.into(),
+    level: hl_log::Level::Debug,
+    profiling: tag::GPU.into(),
+}.apply();
+```
 
 ---
 
@@ -142,16 +151,16 @@ Emitted line shape:
 
 ## Counters
 
-Named `u64` totals, gated by `HL_LOG_COUNTERS`. A counter under a disabled tag is a pure
+Named `u64` totals, gated by `Config::profiling`. A counter under a disabled tag is a pure
 no-op (gate load + branch, no lock), so profiling is opt-in and zero-cost off.
 
 ```rust
 hl_count!(tag::GPU, "frames");        // += 1
 hl_add!(tag::GPU, "bytes", n as u64); // += n
 
-hl_log::counters_snapshot();          // -> Vec<(&str, u64)>, sorted
-hl_log::counters_dump();              // pretty table -> sink
-hl_log::counters_reset();
+hl_log::Counters::global().snapshot(); // -> Vec<(&str, u64)>, sorted
+hl_log::Counters::global().dump();     // pretty table -> sink
+hl_log::Counters::global().reset();
 ```
 
 ## Timing spans
@@ -165,9 +174,9 @@ enabled; otherwise the guard is inert and its drop does nothing.
     do_readback(); // timed
 } // elapsed folded into name -> {count, sum_ns, max_ns}
 
-hl_log::timing_snapshot(); // -> Vec<(&str, TimingStat)>, sorted
-hl_log::timing_dump();     // name / count / total ms / avg us / max us -> sink
-hl_log::timing_reset();
+hl_log::Timings::global().snapshot(); // -> Vec<(&str, TimingStat)>, sorted
+hl_log::Timings::global().dump();     // name / count / total ms / avg us / max us -> sink
+hl_log::Timings::global().reset();
 ```
 
 Counters and timing use a **sharded** registry (striped locks by name hash) so concurrent

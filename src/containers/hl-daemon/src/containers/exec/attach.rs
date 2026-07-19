@@ -8,8 +8,10 @@ use super::*;
 /// deliver process output, so upgrading the connection to a hijack stream would hang the client forever;
 /// Docker returns a conflict ("You cannot attach to a stopped container"). A `created` container (the
 /// `docker run` create→attach→start flow) legitimately has no live yet, so it is allowed — start fills it.
-pub(crate) fn attach_conflicts(status: &str, has_live: bool) -> bool {
-    !has_live && matches!(status, "exited" | "dead")
+impl Container {
+    pub(crate) fn attach_conflicts(status: &str, has_live: bool) -> bool {
+        !has_live && matches!(status, "exited" | "dead")
+    }
 }
 
 /// `docker attach` stream selectors (`?stdin=1&stdout=1&stderr=1`). When NONE are set docker defaults to
@@ -41,15 +43,15 @@ pub(crate) async fn containers_attach(
         }
     } else {
         HijackStreams {
-            stdin: q_truthy(&q.stdin),
-            stdout: q_truthy(&q.stdout),
-            stderr: q_truthy(&q.stderr),
+            stdin: QueryFlag::is_true(&q.stdin),
+            stdout: QueryFlag::is_true(&q.stdout),
+            stderr: QueryFlag::is_true(&q.stderr),
         }
     };
     let (full, tty, status) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, &id) else {
-            return no_such(&id);
+        let Some(full) = ContainerId::resolve(&g, &id) else {
+            return ErrorMessage::no_such(&id);
         };
         let (tty, status) = g
             .containers
@@ -60,8 +62,8 @@ pub(crate) async fn containers_attach(
     };
     let live = {
         let mut g = a.inner.lock().await;
-        if attach_conflicts(&status, g.live.contains_key(&full)) {
-            return conflict(format!("container {id} is not running"));
+        if Container::attach_conflicts(&status, g.live.contains_key(&full)) {
+            return ErrorMessage::conflict(format!("container {id} is not running"));
         }
         g.live.entry(full).or_insert_with(Live::new).clone()
     };
@@ -71,27 +73,30 @@ pub(crate) async fn containers_attach(
 
 #[cfg(test)]
 mod tests {
-    use super::attach_conflicts;
+    use crate::model::Container;
 
     // "Attach Exited Container Without Live State Creates Hijack" (P1): attaching to an exited/dead
     // container that has no retained live IO must be refused (409), not upgraded to a dead hijack stream.
     #[test]
     fn attach_rejected_only_for_stopped_without_live() {
         assert!(
-            attach_conflicts("exited", false),
+            Container::attach_conflicts("exited", false),
             "exited + no live -> reject"
         );
-        assert!(attach_conflicts("dead", false), "dead + no live -> reject");
-        // A running/paused container, or one that still has retained live IO, is attachable.
-        assert!(!attach_conflicts("running", false));
-        assert!(!attach_conflicts("paused", false));
         assert!(
-            !attach_conflicts("exited", true),
+            Container::attach_conflicts("dead", false),
+            "dead + no live -> reject"
+        );
+        // A running/paused container, or one that still has retained live IO, is attachable.
+        assert!(!Container::attach_conflicts("running", false));
+        assert!(!Container::attach_conflicts("paused", false));
+        assert!(
+            !Container::attach_conflicts("exited", true),
             "exited but live IO retained -> allowed"
         );
         // `created` (the run create->attach->start flow) has no live yet but must be allowed.
         assert!(
-            !attach_conflicts("created", false),
+            !Container::attach_conflicts("created", false),
             "created must be attachable"
         );
     }

@@ -73,7 +73,7 @@ fn readback(
     p: DevicePtr,
     len: usize,
 ) -> Vec<u8> {
-    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    let (buf, off): (BufferId, u64) = ctx.device_location(p).unwrap();
     sink.read_buffer(buf, off, len).unwrap()
 }
 
@@ -135,7 +135,7 @@ fn saxpy_multiblock_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, SAXPY_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(SAXPY_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "saxpy").unwrap();
 
     let dx = upload(&mut sink, &mut ctx, &f32s_to_bytes(&x));
@@ -235,7 +235,7 @@ fn reduction_sum_and_max_multiblock_exact() {
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
 
     // ---- sum ----
-    let sum_mod = load_module::module_load_data(&mut ctx, REDUCE_SUM_PTX.as_bytes()).unwrap();
+    let sum_mod = ctx.load_module(REDUCE_SUM_PTX.as_bytes()).unwrap();
     let sum_fn = load_module::module_get_function(&ctx, sum_mod, "reduce_sum").unwrap();
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
     let d_sum = allocate::mem_alloc(&mut ctx, &mut sink, 4).unwrap();
@@ -266,7 +266,7 @@ fn reduction_sum_and_max_multiblock_exact() {
     );
 
     // ---- max ----
-    let max_mod = load_module::module_load_data(&mut ctx, REDUCE_MAX_PTX.as_bytes()).unwrap();
+    let max_mod = ctx.load_module(REDUCE_MAX_PTX.as_bytes()).unwrap();
     let max_fn = load_module::module_get_function(&ctx, max_mod, "reduce_max").unwrap();
     let d_max = allocate::mem_alloc(&mut ctx, &mut sink, 4).unwrap();
     transfer::memset(&mut ctx, &mut sink, d_max, &i32::MIN.to_le_bytes()).unwrap(); // -inf seed
@@ -368,7 +368,7 @@ fn matmul_tiled_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, MATMUL_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(MATMUL_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "matmul").unwrap();
 
     let da = upload(&mut sink, &mut ctx, &f32s_to_bytes(&a));
@@ -493,7 +493,7 @@ fn elementwise_mul_add_min_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, ELEMENTWISE_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(ELEMENTWISE_PTX.as_bytes()).unwrap();
 
     let grid = (2u32, 1, 1);
     let block = (256u32, 1, 1); // 512 lanes total
@@ -600,7 +600,7 @@ fn strided_subrect_copy_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, SUBRECT_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(SUBRECT_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "subrect").unwrap();
 
     let d_src = upload(&mut sink, &mut ctx, &i32s_to_bytes(&src));
@@ -703,7 +703,7 @@ fn shared_memory_block_reduction_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, BLOCKREDUCE_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(BLOCKREDUCE_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "blockreduce").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));

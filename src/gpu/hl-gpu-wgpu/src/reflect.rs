@@ -82,11 +82,11 @@ pub struct EntryUsage {
 
 /// A module's per-entry-point resource usage.
 #[derive(Clone, Debug, Default)]
-pub struct Reflected {
+pub struct ModuleUsage {
     pub entries: Vec<EntryUsage>,
 }
 
-impl Reflected {
+impl ModuleUsage {
     /// The used resource bindings of the entry point named `entry`, or an empty slice if the module has no
     /// such entry point (a stage with no reflected usage contributes nothing to the layout / filter).
     pub fn used_for(&self, entry: &str) -> &[Binding] {
@@ -96,103 +96,100 @@ impl Reflected {
             .map(|e| e.bindings.as_slice())
             .unwrap_or(&[])
     }
+
+    /// Reflect each entry point's used resource bindings and declared types.
+    pub fn from_module(module: &naga::Module) -> Self {
+        let info = match naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(module)
+        {
+            Ok(info) => info,
+            Err(_) => return Self::default(),
+        };
+        let entries = module
+            .entry_points
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let entry_info = info.get_entry_point(index);
+                let bindings = module
+                    .global_variables
+                    .iter()
+                    .filter_map(|(handle, variable)| {
+                        let resource = variable.binding.as_ref()?;
+                        if entry_info[handle].is_empty() {
+                            return None;
+                        }
+                        let kind = BindingKind::from_global(module, variable)?;
+                        Some(Binding {
+                            group: resource.group,
+                            binding: resource.binding,
+                            kind,
+                        })
+                    })
+                    .collect();
+                EntryUsage {
+                    entry: entry.name.clone(),
+                    bindings,
+                }
+            })
+            .collect();
+        Self { entries }
+    }
 }
 
 /// The declared type of the naga global `gv` (its handle `ty` resolved in `module.types`), as the neutral
 /// [`BindingKind`] a layout entry is built from. Returns `None` for a global in an address space that
 /// carries no bind-group entry (function/private/workgroup/push-constant locals).
-fn binding_kind(module: &naga::Module, gv: &naga::GlobalVariable) -> Option<BindingKind> {
-    match gv.space {
-        naga::AddressSpace::Uniform => Some(BindingKind::UniformBuffer),
-        naga::AddressSpace::Storage { access } => Some(BindingKind::StorageBuffer {
-            read_only: !access.contains(naga::StorageAccess::STORE),
-        }),
-        naga::AddressSpace::Handle => match &module.types[gv.ty].inner {
-            naga::TypeInner::Image {
-                dim,
-                arrayed,
-                class,
-            } => {
-                let dim = match (dim, arrayed) {
-                    (naga::ImageDimension::D1, _) => TexDim::D1,
-                    (naga::ImageDimension::D2, false) => TexDim::D2,
-                    (naga::ImageDimension::D2, true) => TexDim::D2Array,
-                    (naga::ImageDimension::D3, _) => TexDim::D3,
-                    (naga::ImageDimension::Cube, false) => TexDim::Cube,
-                    (naga::ImageDimension::Cube, true) => TexDim::CubeArray,
-                };
-                let sample = match class {
-                    naga::ImageClass::Sampled { kind, .. } => match kind {
-                        naga::ScalarKind::Sint => TexSample::Sint,
-                        naga::ScalarKind::Uint => TexSample::Uint,
-                        // Float (and any non-integer kind) is a filterable float texture.
-                        _ => TexSample::Float { filterable: true },
-                    },
-                    naga::ImageClass::Depth { .. } => TexSample::Depth,
-                    // A storage image is not a sampled texture; the render suite never binds one, so treat
-                    // it as a float texture for the layout entry rather than inventing a storage-texture
-                    // reflection this path never exercises.
-                    naga::ImageClass::Storage { .. } => TexSample::Float { filterable: true },
-                };
-                let multi = matches!(
-                    class,
-                    naga::ImageClass::Sampled { multi: true, .. }
-                        | naga::ImageClass::Depth { multi: true }
-                );
-                Some(BindingKind::Texture { dim, sample, multi })
-            }
-            naga::TypeInner::Sampler { comparison } => Some(BindingKind::Sampler {
-                comparison: *comparison,
+impl BindingKind {
+    fn from_global(module: &naga::Module, variable: &naga::GlobalVariable) -> Option<Self> {
+        match variable.space {
+            naga::AddressSpace::Uniform => Some(BindingKind::UniformBuffer),
+            naga::AddressSpace::Storage { access } => Some(BindingKind::StorageBuffer {
+                read_only: !access.contains(naga::StorageAccess::STORE),
             }),
+            naga::AddressSpace::Handle => match &module.types[variable.ty].inner {
+                naga::TypeInner::Image {
+                    dim,
+                    arrayed,
+                    class,
+                } => {
+                    let dim = match (dim, arrayed) {
+                        (naga::ImageDimension::D1, _) => TexDim::D1,
+                        (naga::ImageDimension::D2, false) => TexDim::D2,
+                        (naga::ImageDimension::D2, true) => TexDim::D2Array,
+                        (naga::ImageDimension::D3, _) => TexDim::D3,
+                        (naga::ImageDimension::Cube, false) => TexDim::Cube,
+                        (naga::ImageDimension::Cube, true) => TexDim::CubeArray,
+                    };
+                    let sample = match class {
+                        naga::ImageClass::Sampled { kind, .. } => match kind {
+                            naga::ScalarKind::Sint => TexSample::Sint,
+                            naga::ScalarKind::Uint => TexSample::Uint,
+                            // Float (and any non-integer kind) is a filterable float texture.
+                            _ => TexSample::Float { filterable: true },
+                        },
+                        naga::ImageClass::Depth { .. } => TexSample::Depth,
+                        // A storage image is not a sampled texture; the render suite never binds one, so treat
+                        // it as a float texture for the layout entry rather than inventing a storage-texture
+                        // reflection this path never exercises.
+                        naga::ImageClass::Storage { .. } => TexSample::Float { filterable: true },
+                    };
+                    let multi = matches!(
+                        class,
+                        naga::ImageClass::Sampled { multi: true, .. }
+                            | naga::ImageClass::Depth { multi: true }
+                    );
+                    Some(BindingKind::Texture { dim, sample, multi })
+                }
+                naga::TypeInner::Sampler { comparison } => Some(BindingKind::Sampler {
+                    comparison: *comparison,
+                }),
+                _ => None,
+            },
             _ => None,
-        },
-        _ => None,
+        }
     }
-}
-
-/// Reflect each entry point's used resource bindings + their declared types (see the module docs).
-/// Validation mirrors `module_to_wgsl`; on the rare validation failure this returns no usage (the subsequent
-/// `module_to_wgsl` surfaces the real error and shader creation aborts), so the filter simply keeps every
-/// entry — no worse than the pre-fix behaviour.
-pub fn reflect(module: &naga::Module) -> Reflected {
-    let info = match naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    )
-    .validate(module)
-    {
-        Ok(info) => info,
-        Err(_) => return Reflected::default(),
-    };
-    let entries = module
-        .entry_points
-        .iter()
-        .enumerate()
-        .map(|(i, ep)| {
-            let ep_info = info.get_entry_point(i);
-            let bindings = module
-                .global_variables
-                .iter()
-                .filter_map(|(h, gv)| {
-                    let rb = gv.binding.as_ref()?;
-                    // A global the entry point neither reads nor writes carries an empty use-flag set —
-                    // exactly the bindings wgpu prunes from the auto layout.
-                    if ep_info[h].is_empty() {
-                        return None;
-                    }
-                    let kind = binding_kind(module, gv)?;
-                    Some(Binding {
-                        group: rb.group,
-                        binding: rb.binding,
-                        kind,
-                    })
-                })
-                .collect();
-            EntryUsage {
-                entry: ep.name.clone(),
-                bindings,
-            }
-        })
-        .collect();
-    Reflected { entries }
 }

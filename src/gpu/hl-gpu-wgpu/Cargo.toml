@@ -19,6 +19,7 @@ path = "src/lib.rs"
 [dependencies]
 # The protocol + runtime + GpuExecutor port this crate implements (pure-std, no platform deps).
 hl_gpu = { package = "hl-gpu", path = "../hl-gpu" }
+hl-design = { path = "../../packages/hl-design" }
 
 # The real executor stack. wgpu 24 / naga 24 / pollster 0.4 — the versions the reference `hl-gpu-wgpu`
 # proved. On Linux wgpu 24 auto-enables the Vulkan + GLES backends (they are target-gated, not cargo

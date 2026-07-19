@@ -5,5 +5,4 @@
 mod alloc;
 mod defaults;
 
-pub(crate) use alloc::*;
 pub(crate) use defaults::*;

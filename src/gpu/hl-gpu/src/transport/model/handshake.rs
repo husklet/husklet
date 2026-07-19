@@ -7,19 +7,8 @@
 //! `negotiate_host_capabilities`. This module is a thin, transport-owned view over the protocol codec: the
 //! handshake bytes themselves are 100% protocol, the transport only decides *when* they cross the wire.
 
+#[cfg(test)]
 use crate::protocol::model::capability::Capabilities;
-use crate::protocol::model::error::Result;
-
-/// Serialize the host's capability advertisement into the handshake frame (`[u32 len][body]`).
-pub fn encode_handshake(caps: &Capabilities) -> Vec<u8> {
-    caps.to_handshake()
-}
-
-/// Decode a handshake frame (`[u32 len][body]`, as produced by [`encode_handshake`]) back to the
-/// advertised [`Capabilities`].
-pub fn decode_handshake(bytes: &[u8]) -> Result<Capabilities> {
-    Capabilities::from_handshake(bytes)
-}
 
 #[cfg(test)]
 mod tests {
@@ -28,7 +17,7 @@ mod tests {
     #[test]
     fn handshake_roundtrips_through_protocol_codec() {
         let caps = Capabilities::full("transport-host");
-        let bytes = encode_handshake(&caps);
-        assert_eq!(decode_handshake(&bytes).unwrap(), caps);
+        let bytes = caps.to_handshake();
+        assert_eq!(Capabilities::from_handshake(&bytes).unwrap(), caps);
     }
 }

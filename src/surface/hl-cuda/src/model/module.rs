@@ -26,14 +26,18 @@ pub struct PtxModule {
 }
 
 /// Byte size of a PTX scalar type suffix (`.b8`/`.u32`/`.f64`/…). `None` for a non-type token.
-fn ptx_type_size(tok: &str) -> Option<u64> {
-    match tok {
-        ".b8" | ".u8" | ".s8" => Some(1),
-        ".b16" | ".u16" | ".s16" | ".f16" => Some(2),
-        ".b32" | ".u32" | ".s32" | ".f32" => Some(4),
-        ".b64" | ".u64" | ".s64" | ".f64" => Some(8),
-        ".b128" | ".u128" | ".s128" => Some(16),
-        _ => None,
+struct PtxType<'a>(&'a str);
+
+impl PtxType<'_> {
+    fn bytes(&self) -> Option<u64> {
+        match self.0 {
+            ".b8" | ".u8" | ".s8" => Some(1),
+            ".b16" | ".u16" | ".s16" | ".f16" => Some(2),
+            ".b32" | ".u32" | ".s32" | ".f32" => Some(4),
+            ".b64" | ".u64" | ".s64" | ".f64" => Some(8),
+            ".b128" | ".u128" | ".s128" => Some(16),
+            _ => None,
+        }
     }
 }
 
@@ -42,54 +46,56 @@ fn ptx_type_size(tok: &str) -> Option<u64> {
 /// instructions start with `ld`/`st`/`cvta`, never a bare `.global` state-space directive, so they are
 /// rejected here). Handles optional linkage qualifiers, `.align`, and `.vN` vector widths, and the
 /// `name[count]` array form (an initializer, if any, is ignored).
-fn parse_global_decl(line: &str) -> Option<GlobalVar> {
-    let mut toks = line.trim().split_whitespace();
-    // Skip leading linkage qualifiers to reach the state-space directive.
-    let mut tok = toks.next()?;
-    while matches!(
-        tok,
-        ".visible" | ".extern" | ".weak" | ".common" | ".hidden" | ".protected"
-    ) {
-        tok = toks.next()?;
-    }
-    // A variable declaration's state space is `.global` or `.const`; anything else (incl. instructions
-    // like `ld.global.f32`, whose first token is `ld.global.f32`) is not a global we model here.
-    if tok != ".global" && tok != ".const" {
-        return None;
-    }
-    // Walk `.align N` / `.vN` qualifiers until the scalar type, then take the name token.
-    let mut vec_width = 1u64;
-    let mut elem = None;
-    let mut name_tok = None;
-    while let Some(t) = toks.next() {
-        if t == ".align" {
-            toks.next(); // consume the alignment value
-        } else if let Some(w) = t.strip_prefix(".v").and_then(|n| n.parse::<u64>().ok()) {
-            vec_width = w.max(1);
-        } else if let Some(sz) = ptx_type_size(t) {
-            elem = Some(sz);
-            name_tok = toks.next();
-            break;
+impl GlobalVar {
+    fn parse(line: &str) -> Option<Self> {
+        let mut toks = line.trim().split_whitespace();
+        // Skip leading linkage qualifiers to reach the state-space directive.
+        let mut tok = toks.next()?;
+        while matches!(
+            tok,
+            ".visible" | ".extern" | ".weak" | ".common" | ".hidden" | ".protected"
+        ) {
+            tok = toks.next()?;
         }
-    }
-    let elem = elem?;
-    let raw = name_tok?;
-    // name is up to `[` (array), `=` (initializer), or `;`; the count lives between `[` and `]`.
-    let (name, count) = match raw.split_once('[') {
-        Some((n, rest)) => {
-            let inner = rest.split(']').next().unwrap_or("").trim();
-            (n, inner.parse::<u64>().unwrap_or(1).max(1))
+        // A variable declaration's state space is `.global` or `.const`; anything else (incl. instructions
+        // like `ld.global.f32`, whose first token is `ld.global.f32`) is not a global we model here.
+        if tok != ".global" && tok != ".const" {
+            return None;
         }
-        None => (raw.trim_end_matches([';', '=']), 1),
-    };
-    let name = name.trim_end_matches([';', '=']).trim();
-    if name.is_empty() {
-        return None;
+        // Walk `.align N` / `.vN` qualifiers until the scalar type, then take the name token.
+        let mut vec_width = 1u64;
+        let mut elem = None;
+        let mut name_tok = None;
+        while let Some(t) = toks.next() {
+            if t == ".align" {
+                toks.next(); // consume the alignment value
+            } else if let Some(w) = t.strip_prefix(".v").and_then(|n| n.parse::<u64>().ok()) {
+                vec_width = w.max(1);
+            } else if let Some(sz) = PtxType(t).bytes() {
+                elem = Some(sz);
+                name_tok = toks.next();
+                break;
+            }
+        }
+        let elem = elem?;
+        let raw = name_tok?;
+        // name is up to `[` (array), `=` (initializer), or `;`; the count lives between `[` and `]`.
+        let (name, count) = match raw.split_once('[') {
+            Some((n, rest)) => {
+                let inner = rest.split(']').next().unwrap_or("").trim();
+                (n, inner.parse::<u64>().unwrap_or(1).max(1))
+            }
+            None => (raw.trim_end_matches([';', '=']), 1),
+        };
+        let name = name.trim_end_matches([';', '=']).trim();
+        if name.is_empty() {
+            return None;
+        }
+        Some(Self {
+            name: name.to_string(),
+            size: elem * vec_width * count,
+        })
     }
-    Some(GlobalVar {
-        name: name.to_string(),
-        size: elem * vec_width * count,
-    })
 }
 
 impl PtxModule {
@@ -115,7 +121,7 @@ impl PtxModule {
                 if !name.is_empty() {
                     entries.push(name);
                 }
-            } else if let Some(g) = parse_global_decl(l) {
+            } else if let Some(g) = GlobalVar::parse(l) {
                 globals.push(g);
             }
         }

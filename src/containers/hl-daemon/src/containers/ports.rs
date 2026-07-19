@@ -31,7 +31,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::task::JoinHandle;
 
-use crate::containers::parse_publish;
+use crate::containers::Publish;
 use crate::model::Container;
 
 /// One published binding's resolved plan: the host address to listen on and the container-switch inode
@@ -54,15 +54,22 @@ fn registry() -> &'static Mutex<HashMap<String, Vec<JoinHandle<()>>>> {
 
 /// Truncate a key the way the engine's `snprintf("%.40s")` does, so daemon-computed switch paths
 /// byte-match the engine's binds.
-fn t40(s: &str) -> &str {
-    &s[..s.len().min(40)]
+struct Switch;
+
+impl Switch {
+    fn key(s: &str) -> &str {
+        &s[..s.len().min(40)]
+    }
 }
+
+pub(crate) struct Forwarders;
 
 /// Compute the per-binding forwarding plan from live daemon state. `bridge` is this container's
 /// (netid, ip) endpoint on its first network (as `spawn_cfg` resolves it); `netns_key` is the container's
 /// loopback-namespace key (its own id, or for an exec the target container's id).
 fn plan(c: &Container, bridge: &Option<(String, String)>, netns_key: &str) -> Vec<Binding> {
-    parse_publish(&c.publish)
+    Publish::new(&c.publish)
+        .bindings()
         .into_iter()
         .filter(|p| p.proto == "tcp")
         .map(|p| {
@@ -70,14 +77,14 @@ fn plan(c: &Container, bridge: &Option<(String, String)>, netns_key: &str) -> Ve
             if let Some((netid, ip)) = bridge {
                 switch_paths.push(format!(
                     "/tmp/.hlbr-{}/{}:{}",
-                    t40(netid),
+                    Switch::key(netid),
                     ip,
                     p.container_port
                 ));
             }
             switch_paths.push(format!(
                 "/tmp/.hlnet-{}/p{}",
-                t40(netns_key),
+                Switch::key(netns_key),
                 p.container_port
             ));
             Binding {
@@ -92,55 +99,57 @@ fn plan(c: &Container, bridge: &Option<(String, String)>, netns_key: &str) -> Ve
 /// Start (idempotently) the host→container forwarders for a container. Called from `spawn_live` after the
 /// guest is spawned; a no-op when the container publishes nothing or forwarders are already running (the
 /// restart path re-enters `spawn_live` but the daemon-owned listeners persist).
-pub(crate) async fn start(
-    c: &Container,
-    bridge: &Option<(String, String)>,
-    netns_key: &str,
-) -> Result<(), String> {
-    let bindings = plan(c, bridge, netns_key);
-    if bindings.is_empty() {
-        return Ok(());
-    }
-    let cid = c.id.clone();
-    {
-        let reg = registry().lock().unwrap();
-        if reg.get(&cid).map_or(false, |v| !v.is_empty()) {
+impl Forwarders {
+    async fn start(
+        c: &Container,
+        bridge: &Option<(String, String)>,
+        netns_key: &str,
+    ) -> Result<(), String> {
+        let bindings = plan(c, bridge, netns_key);
+        if bindings.is_empty() {
             return Ok(());
-        } // already forwarding (restart)
-    }
-    // Bind EVERY host listener SYNCHRONOUSLY up front: an occupied host port must FAIL the start with a
-    // port-allocation error (docker's "port is already allocated"), not silently no-op in a background
-    // acceptor task and leave the container reporting running while no hl listener owns the published port.
-    let mut bound = Vec::new();
-    for b in bindings {
-        let addr = format!("{}:{}", b.host_ip, b.host_port);
-        match TcpListener::bind(&addr).await {
-            Ok(l) => bound.push((l, b)),
-            Err(e) => {
-                // Release the listeners already bound for this start (dropping a TcpListener closes it),
-                // then fail — the caller aborts the whole start.
-                return Err(format!(
-                    "driver failed programming external connectivity: Bind for {addr} failed: \
+        }
+        let cid = c.id.clone();
+        {
+            let reg = registry().lock().unwrap();
+            if reg.get(&cid).map_or(false, |v| !v.is_empty()) {
+                return Ok(());
+            } // already forwarding (restart)
+        }
+        // Bind EVERY host listener SYNCHRONOUSLY up front: an occupied host port must FAIL the start with a
+        // port-allocation error (docker's "port is already allocated"), not silently no-op in a background
+        // acceptor task and leave the container reporting running while no hl listener owns the published port.
+        let mut bound = Vec::new();
+        for b in bindings {
+            let addr = format!("{}:{}", b.host_ip, b.host_port);
+            match TcpListener::bind(&addr).await {
+                Ok(l) => bound.push((l, b)),
+                Err(e) => {
+                    // Release the listeners already bound for this start (dropping a TcpListener closes it),
+                    // then fail — the caller aborts the whole start.
+                    return Err(format!(
+                        "driver failed programming external connectivity: Bind for {addr} failed: \
                      port is already allocated ({e})"
-                ));
+                    ));
+                }
             }
         }
+        let mut handles = Vec::new();
+        for (listener, b) in bound {
+            let h = tokio::spawn(accept_loop(listener, b, cid.clone()));
+            handles.push(h);
+        }
+        registry().lock().unwrap().insert(cid, handles);
+        Ok(())
     }
-    let mut handles = Vec::new();
-    for (listener, b) in bound {
-        let h = tokio::spawn(accept_loop(listener, b, cid.clone()));
-        handles.push(h);
-    }
-    registry().lock().unwrap().insert(cid, handles);
-    Ok(())
-}
 
-/// Stop + release a container's forwarders (host ports freed). Called from stop/kill/remove and the `--rm`
-/// autoremove reaper. Safe to call when none are active.
-pub(crate) fn stop(cid: &str) {
-    let handles = registry().lock().unwrap().remove(cid).unwrap_or_default();
-    for h in handles {
-        h.abort();
+    /// Stop + release a container's forwarders (host ports freed). Called from stop/kill/remove and the `--rm`
+    /// autoremove reaper. Safe to call when none are active.
+    pub(crate) fn stop(cid: &str) {
+        let handles = registry().lock().unwrap().remove(cid).unwrap_or_default();
+        for h in handles {
+            h.abort();
+        }
     }
 }
 
@@ -156,8 +165,8 @@ async fn accept_loop(listener: TcpListener, b: Binding, cid: String) {
         };
         let paths = b.switch_paths.clone();
         tokio::spawn(async move {
-            if let Some(guest_conn) = dial_switch(&paths).await {
-                relay(host_conn, guest_conn).await;
+            if let Some(guest_conn) = Switch::dial(&paths).await {
+                Relay::run(host_conn, guest_conn).await;
             }
         });
     }
@@ -167,74 +176,82 @@ async fn accept_loop(listener: TcpListener, b: Binding, cid: String) {
 /// mid-rebind; ECONNREFUSED: stale inode, nothing accepting yet). Mirrors `netns.c switch_dial`: retry a
 /// fresh socket for ~1.2s (≈TCP SYN retransmit), trying each candidate path, and reject a "dead on
 /// arrival" connection (a `-w N` listener whose accept window just closed HUPs with no data).
-async fn dial_switch(paths: &[String]) -> Option<UnixStream> {
-    for _ in 0..60 {
-        for p in paths {
-            if let Ok(s) = UnixStream::connect(p).await {
-                if !dead_on_arrival(&s).await {
-                    return Some(s);
+impl Switch {
+    async fn dial(paths: &[String]) -> Option<UnixStream> {
+        for _ in 0..60 {
+            for p in paths {
+                if let Ok(s) = UnixStream::connect(p).await {
+                    if !Self::dead_on_arrival(&s).await {
+                        return Some(s);
+                    }
                 }
             }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        None
     }
-    None
-}
 
-/// A connection that immediately HUPs with zero readable bytes is a peer mid-exit (see `netns.c
-/// switch_dead_on_arrival`): a listener whose `-w N` window just closed accepted nothing. Distinguish it
-/// from a live-but-idle peer (client-first protocol: server awaits our request) with a brief readable wait
-/// + a MSG_PEEK that consumes nothing. Returns true → caller retries a fresh dial.
-async fn dead_on_arrival(s: &UnixStream) -> bool {
-    // ~40ms: returns at once when readable/closed; the small wait only bites a truly-idle live peer.
-    match tokio::time::timeout(Duration::from_millis(40), s.readable()).await {
-        Ok(Ok(())) => {
-            let fd = s.as_raw_fd();
-            let mut byte = [0u8; 1];
-            // MSG_PEEK|MSG_DONTWAIT: consumes nothing (the guest's later read still sees any data).
-            let n = unsafe {
-                libc::recv(
-                    fd,
-                    byte.as_mut_ptr().cast(),
-                    1,
-                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
-                )
-            };
-            if n == 0 {
-                return true;
-            } // clean EOF, no data -> dead
-            if n < 0 {
-                let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                if e == libc::EAGAIN || e == libc::EWOULDBLOCK {
-                    return false;
-                } // spurious wake, live
-                return true; // ECONNRESET/REFUSED -> dead
+    /// A connection that immediately HUPs with zero readable bytes is a peer mid-exit (see `netns.c
+    /// switch_dead_on_arrival`): a listener whose `-w N` window just closed accepted nothing. Distinguish it
+    /// from a live-but-idle peer (client-first protocol: server awaits our request) with a brief readable wait
+    /// + a MSG_PEEK that consumes nothing. Returns true → caller retries a fresh dial.
+    async fn dead_on_arrival(s: &UnixStream) -> bool {
+        // ~40ms: returns at once when readable/closed; the small wait only bites a truly-idle live peer.
+        match tokio::time::timeout(Duration::from_millis(40), s.readable()).await {
+            Ok(Ok(())) => {
+                let fd = s.as_raw_fd();
+                let mut byte = [0u8; 1];
+                // MSG_PEEK|MSG_DONTWAIT: consumes nothing (the guest's later read still sees any data).
+                let n = unsafe {
+                    libc::recv(
+                        fd,
+                        byte.as_mut_ptr().cast(),
+                        1,
+                        libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                    )
+                };
+                if n == 0 {
+                    return true;
+                } // clean EOF, no data -> dead
+                if n < 0 {
+                    let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                    if e == libc::EAGAIN || e == libc::EWOULDBLOCK {
+                        return false;
+                    } // spurious wake, live
+                    return true; // ECONNRESET/REFUSED -> dead
+                }
+                false // real data pending -> live
             }
-            false // real data pending -> live
+            _ => false, // not readable within the window (idle but live) or timer error -> keep it
         }
-        _ => false, // not readable within the window (idle but live) or timer error -> keep it
     }
 }
 
 /// Bidirectional byte pump between the host connection and the guest switch connection, with half-close so
 /// a one-shot request/response (and a server that closes after replying) finishes cleanly.
-async fn relay(mut host: TcpStream, mut guest: UnixStream) {
-    let _ = tokio::io::copy_bidirectional(&mut host, &mut guest).await;
-    let _ = host.shutdown().await;
-    let _ = guest.shutdown().await;
+struct Relay;
+
+impl Relay {
+    async fn run(mut host: TcpStream, mut guest: UnixStream) {
+        let _ = tokio::io::copy_bidirectional(&mut host, &mut guest).await;
+        let _ = host.shutdown().await;
+        let _ = guest.shutdown().await;
+    }
 }
 
 /// Resolve `(bridge, netns_key)` for a container the way `spawn_cfg`/`spawn_live` do, then start its
 /// forwarders. Convenience used by `spawn_live`. `bridge` must already be resolved by the caller (it holds
 /// the state lock); we only need the netns key, derivable from the container itself.
-pub(crate) async fn start_for(
-    c: &Container,
-    bridge: &Option<(String, String)>,
-) -> Result<(), String> {
-    // Matches `spawn_cfg`: an exec shares the target container's netns via `netns_key`; a normal container
-    // uses its own id. The engine truncates to 40, so pass the untruncated key (t40 clips inside `plan`).
-    let ns_key = c.netns_key.as_deref().unwrap_or(&c.id).to_string();
-    start(c, bridge, &ns_key).await
+impl Forwarders {
+    pub(crate) async fn start_for(
+        c: &Container,
+        bridge: &Option<(String, String)>,
+    ) -> Result<(), String> {
+        // Matches `spawn_cfg`: an exec shares the target container's netns via `netns_key`; a normal container
+        // uses its own id. The engine truncates to 40, so pass the untruncated key (t40 clips inside `plan`).
+        let ns_key = c.netns_key.as_deref().unwrap_or(&c.id).to_string();
+        Self::start(c, bridge, &ns_key).await
+    }
 }
 
 #[cfg(test)]
@@ -251,18 +268,18 @@ mod tests {
     // ---- t40: byte-truncate to 40, mirroring the engine's snprintf("%.40s") ----
     #[test]
     fn t40_short_unchanged() {
-        assert_eq!(t40("abc"), "abc");
-        assert_eq!(t40(""), "");
+        assert_eq!(Switch::key("abc"), "abc");
+        assert_eq!(Switch::key(""), "");
     }
     #[test]
     fn t40_exactly_40_unchanged() {
         let s = "a".repeat(40);
-        assert_eq!(t40(&s), s);
+        assert_eq!(Switch::key(&s), s);
     }
     #[test]
     fn t40_over_40_truncated() {
         let s = "b".repeat(50);
-        let got = t40(&s);
+        let got = Switch::key(&s);
         assert_eq!(got.len(), 40);
         assert_eq!(got, "b".repeat(40));
     }

@@ -12,6 +12,8 @@
 //! are used by both attach and exec-start.
 use super::*;
 
+pub(crate) struct Execs;
+
 mod attach;
 mod create;
 mod inspect;
@@ -20,7 +22,6 @@ mod start;
 
 pub(crate) use attach::*;
 pub(crate) use create::*;
-pub(crate) use inspect::*;
 pub(crate) use resize::*;
 pub(crate) use start::*;
 
@@ -90,7 +91,11 @@ pub(crate) fn spawn_hijack_io_sel(
                         if !want(kind) {
                             continue;
                         }
-                        let f = if tty { chunk } else { log_frame(kind, &chunk) };
+                        let f = if tty {
+                            chunk
+                        } else {
+                            LogFrame::new(kind, &chunk)
+                        };
                         let _ = wr.write_all(&f).await;
                     }
                     break;
@@ -100,7 +105,7 @@ pub(crate) fn spawn_hijack_io_sel(
                     m = rx.recv() => match m {
                         Ok((kind, chunk)) => {
                             if !want(kind) { continue; }
-                            let f = if tty { chunk } else { log_frame(kind, &chunk) };
+                            let f = if tty { chunk } else { LogFrame::new(kind, &chunk) };
                             if wr.write_all(&f).await.is_err() { return; }
                         }
                         Err(broadcast::error::RecvError::Lagged(_)) => continue,

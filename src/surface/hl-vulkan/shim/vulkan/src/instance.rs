@@ -9,13 +9,16 @@
 use core::ffi::{c_char, c_void};
 
 use hl_vulkan::model::capability::{self, ExtensionProp};
-use hl_vulkan::service::create;
+use hl_vulkan::model::memory::Format;
+use hl_vulkan::Instance;
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::*;
 
 /// Write `s` (nul-terminated) into a fixed-size `c_char` array, zero-filling and truncating to fit.
-fn write_name(dst: &mut [c_char], s: &str) {
+struct Name;
+impl Name {
+fn write(dst: &mut [c_char], s: &str) {
     for d in dst.iter_mut() {
         *d = 0;
     }
@@ -24,6 +27,7 @@ fn write_name(dst: &mut [c_char], s: &str) {
     for i in 0..n {
         dst[i] = b[i] as c_char;
     }
+}
 }
 
 /// The Vulkan two-call enumeration idiom: with `p_data` NULL, write the item count; otherwise copy up
@@ -50,10 +54,12 @@ unsafe fn write_enumeration<T: Copy>(items: &[T], p_count: *mut u32, p_data: *mu
 }
 
 /// Build a `VkExtensionProperties` from an advertised extension descriptor.
-fn ext_prop(e: &ExtensionProp) -> VkExtensionProperties {
+impl From<&ExtensionProp> for VkExtensionProperties {
+fn from(e: &ExtensionProp) -> Self {
     let mut p = VkExtensionProperties { extension_name: [0; VK_MAX_EXTENSION_NAME_SIZE], spec_version: e.spec_version };
-    write_name(&mut p.extension_name, e.name);
+    Name::write(&mut p.extension_name, e.name);
     p
+}
 }
 
 // ==================================================================================================
@@ -78,7 +84,7 @@ pub extern "C" fn vkCreateInstance(
             .filter(|&v| v != 0)
             .unwrap_or(HL_API_VERSION)
     };
-    with(|s| s.instance = Some(create::create_instance(app_api)));
+    StateStore::with(|s| s.instance = Some(Instance::new(app_api)));
     let token = Dispatchable::new(());
     unsafe { *p_instance = token };
     VK_SUCCESS
@@ -86,7 +92,7 @@ pub extern "C" fn vkCreateInstance(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyInstance(instance: *mut c_void, _p_allocator: *const c_void) {
-    with(|s| s.instance = None);
+    StateStore::with(|s| s.instance = None);
     unsafe { Dispatchable::<()>::free(instance) };
 }
 
@@ -109,7 +115,7 @@ pub extern "C" fn vkEnumerateInstanceExtensionProperties(
     p_property_count: *mut u32,
     p_properties: *mut c_void,
 ) -> VkResult {
-    let exts: Vec<VkExtensionProperties> = capability::INSTANCE_EXTENSIONS.iter().map(ext_prop).collect();
+    let exts: Vec<VkExtensionProperties> = capability::INSTANCE_EXTENSIONS.iter().map(VkExtensionProperties::from).collect();
     unsafe { write_enumeration(&exts, p_property_count, p_properties as *mut VkExtensionProperties) }
 }
 
@@ -144,7 +150,7 @@ pub extern "C" fn vkEnumeratePhysicalDevices(
         unsafe { *p_physical_device_count = 0 };
         return VK_INCOMPLETE;
     }
-    let pd = with(|s| s.phys_dev_handle());
+    let pd = StateStore::with(|s| s.phys_dev_handle());
     unsafe {
         *p_physical_devices = pd;
         *p_physical_device_count = 1;
@@ -160,13 +166,13 @@ pub extern "C" fn vkGetPhysicalDeviceProperties(
     let Some(p) = (unsafe { (p_properties as *mut VkPhysicalDeviceProperties).as_mut() }) else {
         return VK_SUCCESS;
     };
-    let desc = with(|s| s.physical_device());
+    let desc = StateStore::with(|s| s.physical_device());
     p.api_version = desc.api_version;
     p.driver_version = desc.driver_version;
     p.vendor_id = desc.vendor_id;
     p.device_id = desc.device_id;
     p.device_type = desc.device_type as i32;
-    write_name(&mut p.device_name, &desc.name);
+    Name::write(&mut p.device_name, &desc.name);
     p.pipeline_cache_uuid = desc.pipeline_cache_uuid;
     p.limits = metal_limits();
     p.sparse_properties = VkPhysicalDeviceSparseProperties::default();
@@ -196,7 +202,7 @@ pub extern "C" fn vkGetPhysicalDeviceMemoryProperties(
     else {
         return;
     };
-    let pd = with(|s| s.physical_device());
+    let pd = StateStore::with(|s| s.physical_device());
     m.memory_types = [VkMemoryType::default(); VK_MAX_MEMORY_TYPES];
     m.memory_heaps = [VkMemoryHeap::default(); VK_MAX_MEMORY_HEAPS];
     // The STANDARD software-Vulkan memory layout (mirrors lavapipe): one unified DEVICE_LOCAL heap and
@@ -233,7 +239,7 @@ pub extern "C" fn vkGetPhysicalDeviceQueueFamilyProperties(
         unsafe { *p_queue_family_property_count = 0 };
         return;
     }
-    let qf = with(|s| s.physical_device().queue_family);
+    let qf = StateStore::with(|s| s.physical_device().queue_family);
     let out = p_queue_family_properties as *mut VkQueueFamilyProperties;
     unsafe {
         *out = VkQueueFamilyProperties {
@@ -255,7 +261,7 @@ pub extern "C" fn vkEnumerateDeviceExtensionProperties(
     p_property_count: *mut u32,
     p_properties: *mut c_void,
 ) -> VkResult {
-    let exts: Vec<VkExtensionProperties> = capability::DEVICE_EXTENSIONS.iter().map(ext_prop).collect();
+    let exts: Vec<VkExtensionProperties> = capability::DEVICE_EXTENSIONS.iter().map(VkExtensionProperties::from).collect();
     unsafe { write_enumeration(&exts, p_property_count, p_properties as *mut VkExtensionProperties) }
 }
 
@@ -285,7 +291,7 @@ pub extern "C" fn vkGetPhysicalDeviceFormatProperties(
     let Some(out) = (unsafe { (p_format_properties as *mut VkFormatProperties).as_mut() }) else {
         return;
     };
-    let ff = capability::format_features(format as u32);
+    let ff = Format(format as u32).features();
     out.linear_tiling_features = ff.linear_tiling;
     out.optimal_tiling_features = ff.optimal_tiling;
     out.buffer_features = ff.buffer;
@@ -310,13 +316,13 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
     let Some(out) = (unsafe { (p_image_format_properties as *mut VkImageFormatProperties).as_mut() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    if !capability::image_format_supported(format as u32)
+    if !Format(format as u32).is_image_supported()
         || image_type != VK_IMAGE_TYPE_2D
         || tiling != VK_IMAGE_TILING_OPTIMAL
     {
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     }
-    let dim = with(|s| s.physical_device().limits.max_image_dimension_2d);
+    let dim = StateStore::with(|s| s.physical_device().limits.max_image_dimension_2d);
     *out = VkImageFormatProperties {
         max_extent: VkExtent3D { width: dim, height: dim, depth: 1 },
         max_mip_levels: 1 + (dim as f32).log2() as u32,
@@ -330,11 +336,6 @@ pub extern "C" fn vkGetPhysicalDeviceImageFormatProperties(
 // ==================================================================================================
 // the `...2` physical-device queries (VK_KHR_get_physical_device_properties2 / core 1.1)
 // ==================================================================================================
-
-/// Write a NUL-terminated C string into a fixed `[c_char; N]` array (truncating).
-fn write_cstr(dst: &mut [c_char], s: &str) {
-    write_name(dst, s);
-}
 
 /// `vkGetPhysicalDeviceProperties2` — the base properties + the pNext payloads apps read back
 /// (driver name/info, maintenance3 descriptor ceilings, maintenance4 buffer-size ceiling). Each node's
@@ -353,8 +354,8 @@ pub extern "C" fn vkGetPhysicalDeviceProperties2(
         if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES {
             if let Some(d) = unsafe { (node as *mut VkPhysicalDeviceDriverProperties).as_mut() } {
                 d.driver_id = 8; // VK_DRIVER_ID_MESA_LLVMPIPE — a valid id (hl has no registered one)
-                write_cstr(&mut d.driver_name, "hl");
-                write_cstr(&mut d.driver_info, "hl Metal (Vulkan) 0.1");
+                Name::write(&mut d.driver_name, "hl");
+                Name::write(&mut d.driver_info, "hl Metal (Vulkan) 0.1");
                 d.conformance_version = VkConformanceVersion { major: 1, minor: 4, subminor: 0, patch: 0 };
             }
         } else if n.s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES {

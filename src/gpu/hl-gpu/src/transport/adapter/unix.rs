@@ -12,7 +12,6 @@ use std::os::unix::net::UnixStream;
 
 use crate::protocol::model::capability::Capabilities;
 use crate::transport::model::frame::Frame;
-use crate::transport::model::handshake::{decode_handshake, encode_handshake};
 use crate::transport::model::header::SubmitHeader;
 use crate::transport::model::readback::{ReadbackRequest, READBACK_MAGIC, READBACK_OK};
 
@@ -34,18 +33,31 @@ use crate::transport::model::readback::{ReadbackRequest, READBACK_MAGIC, READBAC
 /// typed `InvalidData` IO error (a "FrameTooLarge"/protocol rejection) instead of a giant allocation.
 pub const MAX_FRAME_BYTES: u32 = 512 << 20; // 512 MiB
 
-/// `write(2)` all of `buf`, retrying short writes and `EINTR` (the `write_full` of `gl_shim.c`).
-pub fn write_full(stream: &UnixStream, buf: &[u8]) -> io::Result<()> {
-    let mut s = stream;
-    s.write_all(buf)
+/// Borrowed Unix transport connection with complete framing and ancillary-handle behavior.
+pub struct Connection<'a> {
+    stream: &'a UnixStream,
 }
 
-/// Write one submit frame (`[16-byte header][payload]`) over the connection.
-pub fn write_frame(stream: &UnixStream, header: &SubmitHeader, payload: &[u8]) -> io::Result<()> {
-    let mut s = stream;
-    s.write_all(&header.to_bytes())?;
-    s.write_all(payload)?;
-    Ok(())
+impl<'a> Connection<'a> {
+    pub fn new(stream: &'a UnixStream) -> Self {
+        Self { stream }
+    }
+
+    /// `write(2)` all of `buf`, retrying short writes and `EINTR` (the `write_full` of `gl_shim.c`).
+    pub fn write_full(&self, buf: &[u8]) -> io::Result<()> {
+        let stream = self.stream;
+        let mut s = stream;
+        s.write_all(buf)
+    }
+
+    /// Write one submit frame (`[16-byte header][payload]`) over the connection.
+    pub fn write_frame(&self, header: &SubmitHeader, payload: &[u8]) -> io::Result<()> {
+        let stream = self.stream;
+        let mut s = stream;
+        s.write_all(&header.to_bytes())?;
+        s.write_all(payload)?;
+        Ok(())
+    }
 }
 
 /// The outcome of reading one frame off the connection, distinguishing the three cases the serve loop must
@@ -68,287 +80,298 @@ pub enum FrameOutcome {
     TooLarge(SubmitHeader),
 }
 
-/// Read the fixed 16-byte submit header off `stream`, distinguishing a CLEAN end-of-stream (no bytes at a
-/// frame boundary) from a TRUNCATED header (some header bytes then EOF). Returns `Ok(None)` on clean EOF.
-fn read_header(stream: &UnixStream) -> io::Result<Option<SubmitHeader>> {
-    let mut s = stream;
-    let mut hdr = [0u8; SubmitHeader::SIZE];
-    let mut filled = 0usize;
-    while filled < hdr.len() {
-        match s.read(&mut hdr[filled..]) {
-            Ok(0) => {
-                if filled == 0 {
-                    return Ok(None);
+impl Connection<'_> {
+    /// Read the fixed 16-byte submit header off `stream`, distinguishing a CLEAN end-of-stream (no bytes at a
+    /// frame boundary) from a TRUNCATED header (some header bytes then EOF). Returns `Ok(None)` on clean EOF.
+    fn read_header(&self) -> io::Result<Option<SubmitHeader>> {
+        let stream = self.stream;
+        let mut s = stream;
+        let mut hdr = [0u8; SubmitHeader::SIZE];
+        let mut filled = 0usize;
+        while filled < hdr.len() {
+            match s.read(&mut hdr[filled..]) {
+                Ok(0) => {
+                    if filled == 0 {
+                        return Ok(None);
+                    }
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated submit header (EOF mid-header)",
+                    ));
                 }
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "truncated submit header (EOF mid-header)",
-                ));
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
             }
-            Ok(n) => filled += n,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
         }
+        Ok(Some(SubmitHeader::from_bytes(&hdr)))
     }
-    Ok(Some(SubmitHeader::from_bytes(&hdr)))
-}
 
-/// Read one submit frame off the connection, reporting a [`FrameOutcome`]. Unlike [`read_frame`], an over-cap
-/// declared length is NOT an error here: it is surfaced as [`FrameOutcome::TooLarge`] so the serve loop can
-/// drain + NACK it and keep the connection alive rather than closing on one bad frame. The payload for an
-/// over-cap frame is left UNREAD (no allocation), and the caller MUST drain it (via [`drain_payload`]) before
-/// reading the next frame.
-pub fn read_frame_outcome(stream: &UnixStream) -> io::Result<FrameOutcome> {
-    let mut s = stream;
-    let header = match read_header(stream)? {
-        Some(h) => h,
-        None => return Ok(FrameOutcome::Eof),
-    };
-    // Cap the declared payload length BEFORE allocating so an untrusted `u32` length cannot force a
-    // multi-GB preallocation (a memory-exhaustion DoS) ahead of reading any body bytes. Report it as a
-    // recoverable TooLarge rather than reading the body.
-    if header.len > MAX_FRAME_BYTES {
-        // The detector: an over-cap declared length (e.g. a 4.3 GiB GTK frame) surfaces here before any
-        // body byte is read. Counted as a nack by the serve loop that drains it.
-        hl_log::hl_warn!(
-            hl_log::tag::TRANSPORT,
-            "frame too large len={} cap={}",
-            header.len,
-            MAX_FRAME_BYTES
-        );
-        return Ok(FrameOutcome::TooLarge(header));
+    /// Read one submit frame off the connection, reporting a [`FrameOutcome`]. Unlike [`read_frame`], an over-cap
+    /// declared length is NOT an error here: it is surfaced as [`FrameOutcome::TooLarge`] so the serve loop can
+    /// drain + NACK it and keep the connection alive rather than closing on one bad frame. The payload for an
+    /// over-cap frame is left UNREAD (no allocation), and the caller MUST drain it (via [`drain_payload`]) before
+    /// reading the next frame.
+    pub fn read_frame_outcome(&self) -> io::Result<FrameOutcome> {
+        let stream = self.stream;
+        let mut s = stream;
+        let header = match self.read_header()? {
+            Some(h) => h,
+            None => return Ok(FrameOutcome::Eof),
+        };
+        // Cap the declared payload length BEFORE allocating so an untrusted `u32` length cannot force a
+        // multi-GB preallocation (a memory-exhaustion DoS) ahead of reading any body bytes. Report it as a
+        // recoverable TooLarge rather than reading the body.
+        if header.len > MAX_FRAME_BYTES {
+            // The detector: an over-cap declared length (e.g. a 4.3 GiB GTK frame) surfaces here before any
+            // body byte is read. Counted as a nack by the serve loop that drains it.
+            hl_log::hl_warn!(
+                hl_log::tag::TRANSPORT,
+                "frame too large len={} cap={}",
+                header.len,
+                MAX_FRAME_BYTES
+            );
+            return Ok(FrameOutcome::TooLarge(header));
+        }
+        let mut payload = vec![0u8; header.len as usize];
+        s.read_exact(&mut payload)?;
+        hl_log::hl_count!(hl_log::tag::TRANSPORT, "frames");
+        hl_log::hl_add!(hl_log::tag::TRANSPORT, "frame_bytes", header.len as u64);
+        Ok(FrameOutcome::Frame(Frame { header, payload }))
     }
-    let mut payload = vec![0u8; header.len as usize];
-    s.read_exact(&mut payload)?;
-    hl_log::hl_count!(hl_log::tag::TRANSPORT, "frames");
-    hl_log::hl_add!(hl_log::tag::TRANSPORT, "frame_bytes", header.len as u64);
-    Ok(FrameOutcome::Frame(Frame { header, payload }))
-}
 
-/// Discard exactly `len` payload bytes from `stream` in bounded chunks, WITHOUT allocating a buffer the size
-/// of the (possibly hundreds-of-MB) frame. Used by the serve loop to resync the stream after a
-/// [`FrameOutcome::TooLarge`] so the connection survives an over-cap frame. A truncated stream (peer closed
-/// mid-payload) surfaces as `UnexpectedEof` — the connection is genuinely gone.
-pub fn drain_payload(stream: &UnixStream, len: u32) -> io::Result<()> {
-    let mut s = stream;
-    let mut remaining = len as u64;
-    let mut scratch = [0u8; 64 * 1024];
-    while remaining > 0 {
-        let want = remaining.min(scratch.len() as u64) as usize;
-        match s.read(&mut scratch[..want]) {
-            Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "EOF while draining an over-cap frame payload",
-                ));
+    /// Discard exactly `len` payload bytes from `stream` in bounded chunks, WITHOUT allocating a buffer the size
+    /// of the (possibly hundreds-of-MB) frame. Used by the serve loop to resync the stream after a
+    /// [`FrameOutcome::TooLarge`] so the connection survives an over-cap frame. A truncated stream (peer closed
+    /// mid-payload) surfaces as `UnexpectedEof` — the connection is genuinely gone.
+    pub fn drain_payload(&self, len: u32) -> io::Result<()> {
+        let stream = self.stream;
+        let mut s = stream;
+        let mut remaining = len as u64;
+        let mut scratch = [0u8; 64 * 1024];
+        while remaining > 0 {
+            let want = remaining.min(scratch.len() as u64) as usize;
+            match s.read(&mut scratch[..want]) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "EOF while draining an over-cap frame payload",
+                    ));
+                }
+                Ok(n) => remaining -= n as u64,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
             }
-            Ok(n) => remaining -= n as u64,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
+        }
+        Ok(())
+    }
+
+    /// Read one submit frame off the connection. Returns `Ok(None)` on a clean EOF at a frame boundary (the
+    /// peer closed the connection), and `Err` on a partial/truncated frame or an over-cap declared length
+    /// ([`InvalidData`](io::ErrorKind::InvalidData) "FrameTooLarge"). The over-cap payload is left unread (no
+    /// draining), so a caller that must keep the connection alive should use [`read_frame_outcome`] +
+    /// [`drain_payload`] instead of this convenience wrapper.
+    pub fn read_frame(&self) -> io::Result<Option<Frame>> {
+        match self.read_frame_outcome()? {
+            FrameOutcome::Frame(f) => Ok(Some(f)),
+            FrameOutcome::Eof => Ok(None),
+            FrameOutcome::TooLarge(header) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "frame payload length {} exceeds cap {MAX_FRAME_BYTES} (FrameTooLarge)",
+                    header.len
+                ),
+            )),
         }
     }
-    Ok(())
-}
 
-/// Read one submit frame off the connection. Returns `Ok(None)` on a clean EOF at a frame boundary (the
-/// peer closed the connection), and `Err` on a partial/truncated frame or an over-cap declared length
-/// ([`InvalidData`](io::ErrorKind::InvalidData) "FrameTooLarge"). The over-cap payload is left unread (no
-/// draining), so a caller that must keep the connection alive should use [`read_frame_outcome`] +
-/// [`drain_payload`] instead of this convenience wrapper.
-pub fn read_frame(stream: &UnixStream) -> io::Result<Option<Frame>> {
-    match read_frame_outcome(stream)? {
-        FrameOutcome::Frame(f) => Ok(Some(f)),
-        FrameOutcome::Eof => Ok(None),
-        FrameOutcome::TooLarge(header) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "frame payload length {} exceeds cap {MAX_FRAME_BYTES} (FrameTooLarge)",
-                header.len
-            ),
-        )),
+    /// Read the host executor's single ack byte answering a submitted frame.
+    pub fn read_ack(&self) -> io::Result<u8> {
+        let stream = self.stream;
+        let mut s = stream;
+        let mut ack = [0u8; 1];
+        s.read_exact(&mut ack)?;
+        Ok(ack[0])
     }
-}
 
-/// Read the host executor's single ack byte answering a submitted frame.
-pub fn read_ack(stream: &UnixStream) -> io::Result<u8> {
-    let mut s = stream;
-    let mut ack = [0u8; 1];
-    s.read_exact(&mut ack)?;
-    Ok(ack[0])
-}
-
-/// Write the host executor's single ack byte for a frame.
-pub fn write_ack(stream: &UnixStream, ack: u8) -> io::Result<()> {
-    let mut s = stream;
-    s.write_all(&[ack])
-}
-
-// ---------------------------------------------------------------------------------------------------
-// readback IO (device→host buffer readback; additive, disjoint from the submit ack)
-// ---------------------------------------------------------------------------------------------------
-
-/// Write a device→host readback REQUEST as a submit frame whose header carries the reserved
-/// [`READBACK_MAGIC`] sentinel in `surface_id` (so the server routes it to readback, never to submit) and
-/// whose payload is the serialized [`ReadbackRequest`]. Reuses the exact submit-frame writer, keeping every
-/// real submit byte-identical.
-pub fn write_readback_request(stream: &UnixStream, req: &ReadbackRequest) -> io::Result<()> {
-    let payload = req.to_bytes();
-    let header = SubmitHeader {
-        surface_id: READBACK_MAGIC,
-        width: 0,
-        height: 0,
-        len: payload.len() as u32,
-    };
-    write_frame(stream, &header, &payload)
-}
-
-/// Write the host's readback RESPONSE: a status byte then a `u32` length-prefixed byte payload. On failure
-/// `status` is [`READBACK_FAIL`](crate::transport::model::readback::READBACK_FAIL) and `bytes` must be
-/// empty. This is deliberately NOT the 1-byte submit ack — only a peer that issued a readback request reads
-/// this framing.
-pub fn write_readback_response(stream: &UnixStream, status: u8, bytes: &[u8]) -> io::Result<()> {
-    let mut out = Vec::with_capacity(1 + 4 + bytes.len());
-    out.push(status);
-    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    out.extend_from_slice(bytes);
-    write_full(stream, &out)
-}
-
-/// Read a host readback RESPONSE written by [`write_readback_response`]. Returns the returned bytes on
-/// success; a failure status maps to an `Other` IO error the caller surfaces as a typed
-/// [`GpuError`](crate::protocol::model::error::GpuError).
-pub fn read_readback_response(stream: &UnixStream) -> io::Result<Vec<u8>> {
-    let mut s = stream;
-    let mut status = [0u8; 1];
-    s.read_exact(&mut status)?;
-    let mut len_bytes = [0u8; 4];
-    s.read_exact(&mut len_bytes)?;
-    let len = u32::from_le_bytes(len_bytes) as usize;
-    let mut body = vec![0u8; len];
-    s.read_exact(&mut body)?;
-    match status[0] {
-        READBACK_OK => Ok(body),
-        _ => Err(io::Error::new(io::ErrorKind::Other, "host readback failed")),
+    /// Write the host executor's single ack byte for a frame.
+    pub fn write_ack(&self, ack: u8) -> io::Result<()> {
+        let stream = self.stream;
+        let mut s = stream;
+        s.write_all(&[ack])
     }
-}
 
-// ---------------------------------------------------------------------------------------------------
-// handshake IO (length-prefixed protocol capability descriptor)
-// ---------------------------------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------------------------------
+    // readback IO (device→host buffer readback; additive, disjoint from the submit ack)
+    // ---------------------------------------------------------------------------------------------------
 
-/// Write the host's capability advertisement as the connection handshake (`[u32 len][body]`).
-pub fn write_handshake(stream: &UnixStream, caps: &Capabilities) -> io::Result<()> {
-    write_full(stream, &encode_handshake(caps))
-}
-
-/// Read the host's capability advertisement off a freshly-connected socket. The handshake is a
-/// length-prefixed frame; we read the `u32` length, then the body, then decode via the protocol codec.
-pub fn read_handshake(stream: &UnixStream) -> io::Result<Capabilities> {
-    let mut s = stream;
-    let mut len_bytes = [0u8; 4];
-    s.read_exact(&mut len_bytes)?;
-    let len_u32 = u32::from_le_bytes(len_bytes);
-    // Same untrusted-length cap as `read_frame`: refuse an absurd handshake length before allocating its
-    // body buffer, so a hostile peer cannot force a multi-GB preallocation at connect time.
-    if len_u32 > MAX_FRAME_BYTES {
-        hl_log::hl_warn!(
-            hl_log::tag::TRANSPORT,
-            "handshake too large len={} cap={}",
-            len_u32,
-            MAX_FRAME_BYTES
-        );
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("handshake length {len_u32} exceeds cap {MAX_FRAME_BYTES} (FrameTooLarge)"),
-        ));
-    }
-    let len = len_u32 as usize;
-    // Reconstruct the full `[len][body]` frame so we reuse `Capabilities::from_handshake` verbatim.
-    let mut full = Vec::with_capacity(4 + len);
-    full.extend_from_slice(&len_bytes);
-    let mut body = vec![0u8; len];
-    s.read_exact(&mut body)?;
-    full.extend_from_slice(&body);
-    decode_handshake(&full)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("bad handshake: {e}")))
-}
-
-// ---------------------------------------------------------------------------------------------------
-// out-of-band handle transfer: SCM_RIGHTS fd passing
-// ---------------------------------------------------------------------------------------------------
-
-/// Send a single file descriptor to the peer over `stream` as an `SCM_RIGHTS` control message (one
-/// payload byte carries it). This is the out-of-band handle channel §10 of the overview describes:
-/// the fd (dma-buf / shm) is passed here and correlated to a submit by its surface id.
-pub fn send_fd(stream: &UnixStream, fd: RawFd) -> io::Result<()> {
-    // SAFETY: we build a well-formed `msghdr` with a single SCM_RIGHTS cmsg carrying one fd; the cmsg
-    // scratch is 8-byte aligned (a `[u64; _]`) and large enough for `CMSG_SPACE(size_of::<RawFd>())`.
-    unsafe {
-        let mut byte = [0u8; 1];
-        let mut iov = libc::iovec {
-            iov_base: byte.as_mut_ptr().cast(),
-            iov_len: 1,
+    /// Write a device→host readback REQUEST as a submit frame whose header carries the reserved
+    /// [`READBACK_MAGIC`] sentinel in `surface_id` (so the server routes it to readback, never to submit) and
+    /// whose payload is the serialized [`ReadbackRequest`]. Reuses the exact submit-frame writer, keeping every
+    /// real submit byte-identical.
+    pub fn write_readback_request(&self, req: &ReadbackRequest) -> io::Result<()> {
+        let payload = req.to_bytes();
+        let header = SubmitHeader {
+            surface_id: READBACK_MAGIC,
+            width: 0,
+            height: 0,
+            len: payload.len() as u32,
         };
-        let mut cmsg_buf = [0u64; 8]; // 64 bytes, 8-byte aligned cmsg scratch
-        let mut msg: libc::msghdr = std::mem::zeroed();
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = cmsg_buf.as_mut_ptr().cast();
-        msg.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) as _;
-        let cmsg = libc::CMSG_FIRSTHDR(&msg);
-        (*cmsg).cmsg_level = libc::SOL_SOCKET;
-        (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-        (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
-        std::ptr::copy_nonoverlapping(
-            &fd as *const RawFd as *const u8,
-            libc::CMSG_DATA(cmsg),
-            std::mem::size_of::<RawFd>(),
-        );
-        let n = libc::sendmsg(stream.as_raw_fd(), &msg, 0);
-        if n < 0 {
-            return Err(io::Error::last_os_error());
+        self.write_frame(&header, &payload)
+    }
+
+    /// Write the host's readback RESPONSE: a status byte then a `u32` length-prefixed byte payload. On failure
+    /// `status` is [`READBACK_FAIL`](crate::transport::model::readback::READBACK_FAIL) and `bytes` must be
+    /// empty. This is deliberately NOT the 1-byte submit ack — only a peer that issued a readback request reads
+    /// this framing.
+    pub fn write_readback_response(&self, status: u8, bytes: &[u8]) -> io::Result<()> {
+        let mut out = Vec::with_capacity(1 + 4 + bytes.len());
+        out.push(status);
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(bytes);
+        self.write_full(&out)
+    }
+
+    /// Read a host readback RESPONSE written by [`write_readback_response`]. Returns the returned bytes on
+    /// success; a failure status maps to an `Other` IO error the caller surfaces as a typed
+    /// [`GpuError`](crate::protocol::model::error::GpuError).
+    pub fn read_readback_response(&self) -> io::Result<Vec<u8>> {
+        let stream = self.stream;
+        let mut s = stream;
+        let mut status = [0u8; 1];
+        s.read_exact(&mut status)?;
+        let mut len_bytes = [0u8; 4];
+        s.read_exact(&mut len_bytes)?;
+        let len = u32::from_le_bytes(len_bytes) as usize;
+        let mut body = vec![0u8; len];
+        s.read_exact(&mut body)?;
+        match status[0] {
+            READBACK_OK => Ok(body),
+            _ => Err(io::Error::new(io::ErrorKind::Other, "host readback failed")),
         }
     }
-    Ok(())
-}
 
-/// Receive a single file descriptor sent by [`send_fd`]. Returns the new fd number in this process (which
-/// refers to the same open file description as the sender's fd).
-pub fn recv_fd(stream: &UnixStream) -> io::Result<RawFd> {
-    // SAFETY: mirror of `send_fd`; the cmsg scratch is 8-byte aligned and sized for one fd.
-    unsafe {
-        let mut byte = [0u8; 1];
-        let mut iov = libc::iovec {
-            iov_base: byte.as_mut_ptr().cast(),
-            iov_len: 1,
-        };
-        let mut cmsg_buf = [0u64; 8];
-        let mut msg: libc::msghdr = std::mem::zeroed();
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = cmsg_buf.as_mut_ptr().cast();
-        msg.msg_controllen = std::mem::size_of_val(&cmsg_buf) as _;
-        let n = libc::recvmsg(stream.as_raw_fd(), &mut msg, 0);
-        if n < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let cmsg = libc::CMSG_FIRSTHDR(&msg);
-        if cmsg.is_null()
-            || (*cmsg).cmsg_level != libc::SOL_SOCKET
-            || (*cmsg).cmsg_type != libc::SCM_RIGHTS
-        {
+    // ---------------------------------------------------------------------------------------------------
+    // handshake IO (length-prefixed protocol capability descriptor)
+    // ---------------------------------------------------------------------------------------------------
+
+    /// Write the host's capability advertisement as the connection handshake (`[u32 len][body]`).
+    pub fn write_handshake(&self, caps: &Capabilities) -> io::Result<()> {
+        self.write_full(&caps.to_handshake())
+    }
+
+    /// Read the host's capability advertisement off a freshly-connected socket. The handshake is a
+    /// length-prefixed frame; we read the `u32` length, then the body, then decode via the protocol codec.
+    pub fn read_handshake(&self) -> io::Result<Capabilities> {
+        let stream = self.stream;
+        let mut s = stream;
+        let mut len_bytes = [0u8; 4];
+        s.read_exact(&mut len_bytes)?;
+        let len_u32 = u32::from_le_bytes(len_bytes);
+        // Same untrusted-length cap as `read_frame`: refuse an absurd handshake length before allocating its
+        // body buffer, so a hostile peer cannot force a multi-GB preallocation at connect time.
+        if len_u32 > MAX_FRAME_BYTES {
+            hl_log::hl_warn!(
+                hl_log::tag::TRANSPORT,
+                "handshake too large len={} cap={}",
+                len_u32,
+                MAX_FRAME_BYTES
+            );
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "no SCM_RIGHTS cmsg received",
+                format!("handshake length {len_u32} exceeds cap {MAX_FRAME_BYTES} (FrameTooLarge)"),
             ));
         }
-        let mut fd: RawFd = -1;
-        std::ptr::copy_nonoverlapping(
-            libc::CMSG_DATA(cmsg),
-            &mut fd as *mut RawFd as *mut u8,
-            std::mem::size_of::<RawFd>(),
-        );
-        Ok(fd)
+        let len = len_u32 as usize;
+        // Reconstruct the full `[len][body]` frame so we reuse `Capabilities::from_handshake` verbatim.
+        let mut full = Vec::with_capacity(4 + len);
+        full.extend_from_slice(&len_bytes);
+        let mut body = vec![0u8; len];
+        s.read_exact(&mut body)?;
+        full.extend_from_slice(&body);
+        Capabilities::from_handshake(&full)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("bad handshake: {e}")))
+    }
+
+    // ---------------------------------------------------------------------------------------------------
+    // out-of-band handle transfer: SCM_RIGHTS fd passing
+    // ---------------------------------------------------------------------------------------------------
+
+    /// Send a single file descriptor to the peer over `stream` as an `SCM_RIGHTS` control message (one
+    /// payload byte carries it). This is the out-of-band handle channel §10 of the overview describes:
+    /// the fd (dma-buf / shm) is passed here and correlated to a submit by its surface id.
+    pub fn send_fd(&self, fd: RawFd) -> io::Result<()> {
+        let stream = self.stream;
+        // SAFETY: we build a well-formed `msghdr` with a single SCM_RIGHTS cmsg carrying one fd; the cmsg
+        // scratch is 8-byte aligned (a `[u64; _]`) and large enough for `CMSG_SPACE(size_of::<RawFd>())`.
+        unsafe {
+            let mut byte = [0u8; 1];
+            let mut iov = libc::iovec {
+                iov_base: byte.as_mut_ptr().cast(),
+                iov_len: 1,
+            };
+            let mut cmsg_buf = [0u64; 8]; // 64 bytes, 8-byte aligned cmsg scratch
+            let mut msg: libc::msghdr = std::mem::zeroed();
+            msg.msg_iov = &mut iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = cmsg_buf.as_mut_ptr().cast();
+            msg.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) as _;
+            let cmsg = libc::CMSG_FIRSTHDR(&msg);
+            (*cmsg).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+            (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+            std::ptr::copy_nonoverlapping(
+                &fd as *const RawFd as *const u8,
+                libc::CMSG_DATA(cmsg),
+                std::mem::size_of::<RawFd>(),
+            );
+            let n = libc::sendmsg(stream.as_raw_fd(), &msg, 0);
+            if n < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    }
+
+    /// Receive a single file descriptor sent by [`send_fd`]. Returns the new fd number in this process (which
+    /// refers to the same open file description as the sender's fd).
+    pub fn recv_fd(&self) -> io::Result<RawFd> {
+        let stream = self.stream;
+        // SAFETY: mirror of `send_fd`; the cmsg scratch is 8-byte aligned and sized for one fd.
+        unsafe {
+            let mut byte = [0u8; 1];
+            let mut iov = libc::iovec {
+                iov_base: byte.as_mut_ptr().cast(),
+                iov_len: 1,
+            };
+            let mut cmsg_buf = [0u64; 8];
+            let mut msg: libc::msghdr = std::mem::zeroed();
+            msg.msg_iov = &mut iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = cmsg_buf.as_mut_ptr().cast();
+            msg.msg_controllen = std::mem::size_of_val(&cmsg_buf) as _;
+            let n = libc::recvmsg(stream.as_raw_fd(), &mut msg, 0);
+            if n < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let cmsg = libc::CMSG_FIRSTHDR(&msg);
+            if cmsg.is_null()
+                || (*cmsg).cmsg_level != libc::SOL_SOCKET
+                || (*cmsg).cmsg_type != libc::SCM_RIGHTS
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "no SCM_RIGHTS cmsg received",
+                ));
+            }
+            let mut fd: RawFd = -1;
+            std::ptr::copy_nonoverlapping(
+                libc::CMSG_DATA(cmsg),
+                &mut fd as *mut RawFd as *mut u8,
+                std::mem::size_of::<RawFd>(),
+            );
+            Ok(fd)
+        }
     }
 }
 
@@ -435,6 +458,32 @@ impl Doorbell {
     pub fn raw_fd(&self) -> RawFd {
         self.fd
     }
+
+    /// Wake up to `n` waiters parked on a live, aligned shared futex word.
+    ///
+    /// # Safety
+    /// `addr` must point to a live, correctly aligned `u32` shared with the host for the syscall duration.
+    #[cfg(target_os = "linux")]
+    pub unsafe fn wake_futex(addr: *mut u32, n: i32) -> i64 {
+        // SAFETY: the caller guarantees the futex word is live and aligned; syscall only observes its address.
+        unsafe {
+            libc::syscall(
+                libc::SYS_futex,
+                addr,
+                libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG,
+                n,
+            ) as i64
+        }
+    }
+
+    /// Off Linux the ring transport is unavailable, so waking its futex has no effect.
+    ///
+    /// # Safety
+    /// Kept identical to the Linux signature so platform-neutral ring wiring can compile.
+    #[cfg(not(target_os = "linux"))]
+    pub unsafe fn wake_futex(_addr: *mut u32, _n: i32) -> i64 {
+        0
+    }
 }
 
 impl Drop for Doorbell {
@@ -447,29 +496,6 @@ impl Drop for Doorbell {
     }
 }
 
-/// Wake up to `n` waiters parked on the futex word at `addr` (`FUTEX_WAKE`, private). The completion
-/// primitive for the shared-ring path; unused by the socket-ack path but part of the transport mechanism
-/// so a ring-mode transport shares it.
-///
-/// # Safety
-/// `addr` must point to a live, correctly-aligned `u32` shared with the host.
-#[cfg(target_os = "linux")]
-pub unsafe fn futex_wake(addr: *mut u32, n: i32) -> i64 {
-    libc::syscall(
-        libc::SYS_futex,
-        addr,
-        libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG,
-        n,
-    ) as i64
-}
-
-/// macOS/BSD have no `futex` syscall (the ring-mode path is Linux-only); the socket-ack transport
-/// never calls this, so off-Linux it is a no-op returning 0.
-#[cfg(not(target_os = "linux"))]
-pub unsafe fn futex_wake(_addr: *mut u32, _n: i32) -> i64 {
-    0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,8 +504,8 @@ mod tests {
     fn handshake_writes_and_reads_over_a_socketpair() {
         let (a, b) = UnixStream::pair().unwrap();
         let caps = Capabilities::full("adapter-host");
-        write_handshake(&a, &caps).unwrap();
-        assert_eq!(read_handshake(&b).unwrap(), caps);
+        Connection::new(&a).write_handshake(&caps).unwrap();
+        assert_eq!(Connection::new(&b).read_handshake().unwrap(), caps);
     }
 
     #[test]
@@ -491,8 +517,8 @@ mod tests {
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
         let (read_end, write_end) = (fds[0], fds[1]);
 
-        send_fd(&a, read_end).unwrap();
-        let got = recv_fd(&b).unwrap();
+        Connection::new(&a).send_fd(read_end).unwrap();
+        let got = Connection::new(&b).recv_fd().unwrap();
         assert!(got >= 0);
 
         let payload = *b"Z";

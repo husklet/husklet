@@ -14,10 +14,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use hl_gpu::transport::adapter::unix::{
-    read_ack, read_frame, read_readback_response, write_frame, write_readback_request,
-    write_readback_response, MAX_FRAME_BYTES,
-};
+use hl_gpu::transport::adapter::unix::{Connection, MAX_FRAME_BYTES};
 use hl_gpu::transport::model::header::{SubmitHeader, ACK_FAIL, ACK_OK};
 use hl_gpu::transport::model::readback::{
     ReadbackRequest, READBACK_FAIL, READBACK_MAGIC, READBACK_OK,
@@ -40,8 +37,13 @@ fn read_frame_reassembles_a_full_frame() {
         height: 32,
         len: 5,
     };
-    write_frame(&a, &header, &[1, 2, 3, 4, 5]).unwrap();
-    let frame = read_frame(&b).unwrap().expect("a full frame");
+    Connection::new(&a)
+        .write_frame(&header, &[1, 2, 3, 4, 5])
+        .unwrap();
+    let frame = Connection::new(&b)
+        .read_frame()
+        .unwrap()
+        .expect("a full frame");
     assert_eq!(frame.header, header);
     assert_eq!(frame.payload, vec![1, 2, 3, 4, 5]);
 }
@@ -51,7 +53,7 @@ fn read_frame_returns_none_on_clean_eof() {
     let (a, b) = UnixStream::pair().unwrap();
     drop(a); // peer closes with nothing sent — EOF exactly at a frame boundary
     assert!(
-        read_frame(&b).unwrap().is_none(),
+        Connection::new(&b).read_frame().unwrap().is_none(),
         "a clean close is Ok(None), not an error"
     );
 }
@@ -73,7 +75,7 @@ fn read_frame_errors_on_a_truncated_payload() {
     writer.write_all(&bytes).unwrap();
     drop(writer); // EOF mid-payload
     assert!(
-        read_frame(&b).is_err(),
+        Connection::new(&b).read_frame().is_err(),
         "a truncated payload is a transport error"
     );
 }
@@ -97,7 +99,8 @@ fn read_frame_reassembles_across_interleaved_partial_writes() {
         thread::sleep(Duration::from_millis(20));
         w.write_all(&[8, 8, 8, 8]).unwrap(); // the rest
     });
-    let frame = read_frame(&b)
+    let frame = Connection::new(&b)
+        .read_frame()
         .unwrap()
         .expect("frame reassembled from partial writes");
     assert_eq!(frame.header.len, 8);
@@ -122,7 +125,9 @@ fn read_frame_caps_an_untrusted_over_cap_length_but_still_passes_legit_frames() 
     let mut w = a;
     w.write_all(&huge.to_bytes()).unwrap(); // header only; the promised giant payload is never sent
     drop(w);
-    let err = read_frame(&b).expect_err("an over-cap frame length must error, not preallocate");
+    let err = Connection::new(&b)
+        .read_frame()
+        .expect_err("an over-cap frame length must error, not preallocate");
     assert_eq!(
         err.kind(),
         std::io::ErrorKind::InvalidData,
@@ -138,8 +143,11 @@ fn read_frame_caps_an_untrusted_over_cap_length_but_still_passes_legit_frames() 
         height: 4,
         len: 6,
     };
-    write_frame(&c, &header, &[1, 2, 3, 4, 5, 6]).unwrap();
-    let frame = read_frame(&d)
+    Connection::new(&c)
+        .write_frame(&header, &[1, 2, 3, 4, 5, 6])
+        .unwrap();
+    let frame = Connection::new(&d)
+        .read_frame()
         .unwrap()
         .expect("a legit frame round-trips under the cap");
     assert_eq!(frame.header, header);
@@ -152,7 +160,7 @@ fn read_frame_errors_on_a_truncated_header_but_ok_none_on_a_clean_boundary() {
     let (a, b) = UnixStream::pair().unwrap();
     drop(a);
     assert!(
-        read_frame(&b).unwrap().is_none(),
+        Connection::new(&b).read_frame().unwrap().is_none(),
         "a clean close at a frame boundary is still Ok(None)"
     );
 
@@ -162,7 +170,9 @@ fn read_frame_errors_on_a_truncated_header_but_ok_none_on_a_clean_boundary() {
     let mut w = c;
     w.write_all(&[0xAB; 8]).unwrap(); // only 8 of the 16 header bytes, then close
     drop(w);
-    let err = read_frame(&d).expect_err("a partial header then EOF is a truncated-frame error");
+    let err = Connection::new(&d)
+        .read_frame()
+        .expect_err("a partial header then EOF is a truncated-frame error");
     assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
 }
 
@@ -173,8 +183,10 @@ fn read_frame_errors_on_a_truncated_header_but_ok_none_on_a_clean_boundary() {
 #[test]
 fn readback_response_ok_round_trips() {
     let (a, b) = UnixStream::pair().unwrap();
-    write_readback_response(&a, READBACK_OK, &[0xDE, 0xAD, 0xBE, 0xEF]).unwrap();
-    let got = read_readback_response(&b).unwrap();
+    Connection::new(&a)
+        .write_readback_response(READBACK_OK, &[0xDE, 0xAD, 0xBE, 0xEF])
+        .unwrap();
+    let got = Connection::new(&b).read_readback_response().unwrap();
     assert_eq!(got, vec![0xDE, 0xAD, 0xBE, 0xEF]);
 }
 
@@ -183,9 +195,11 @@ fn readback_response_fail_is_a_typed_error_not_empty_bytes() {
     // A FAIL status with a zero-length body must surface as an error, so a caller never mistakes a failed
     // readback for a legitimate empty result.
     let (a, b) = UnixStream::pair().unwrap();
-    write_readback_response(&a, READBACK_FAIL, &[]).unwrap();
+    Connection::new(&a)
+        .write_readback_response(READBACK_FAIL, &[])
+        .unwrap();
     assert!(
-        read_readback_response(&b).is_err(),
+        Connection::new(&b).read_readback_response().is_err(),
         "a FAIL readback response is an error"
     );
 }
@@ -249,7 +263,7 @@ fn server_nacks_a_malformed_submit_payload_without_calling_the_handler() {
     };
     client.write_all(&header.to_bytes()).unwrap();
     client.write_all(&payload).unwrap();
-    let ack = read_ack(&client).unwrap();
+    let ack = Connection::new(&client).read_ack().unwrap();
     assert_eq!(ack, ACK_FAIL, "an undecodable payload is NACKed");
     drop(client);
 
@@ -301,7 +315,7 @@ fn readback_frame_routes_to_readback_never_to_submit() {
     client.read_exact(&mut hs).unwrap();
 
     // 1) A real submit (a single valid CreateFence) -> ACK_OK.
-    let submit_payload = hl_gpu::encode_stream(&[Cmd::CreateFence(1)]);
+    let submit_payload = hl_gpu::Encoder::stream(&[Cmd::CreateFence(1)]);
     let submit_hdr = SubmitHeader {
         surface_id: 5,
         width: 0,
@@ -310,11 +324,13 @@ fn readback_frame_routes_to_readback_never_to_submit() {
     };
     client.write_all(&submit_hdr.to_bytes()).unwrap();
     client.write_all(&submit_payload).unwrap();
-    assert_eq!(read_ack(&client).unwrap(), ACK_OK);
+    assert_eq!(Connection::new(&client).read_ack().unwrap(), ACK_OK);
 
     // 2) A readback for buffer 42 -> the readback response (never the 1-byte ack), disjoint on the wire.
-    write_readback_request(&client, &ReadbackRequest::buffer(42, 0, 3)).unwrap();
-    let bytes = read_readback_response(&client).unwrap();
+    Connection::new(&client)
+        .write_readback_request(&ReadbackRequest::buffer(42, 0, 3))
+        .unwrap();
+    let bytes = Connection::new(&client).read_readback_response().unwrap();
     assert_eq!(
         bytes,
         vec![0x10, 0x20, 0x30],
@@ -322,9 +338,11 @@ fn readback_frame_routes_to_readback_never_to_submit() {
     );
 
     // 3) A readback for an unknown buffer -> FAIL (surfaces as an error, never garbage).
-    write_readback_request(&client, &ReadbackRequest::buffer(7, 0, 3)).unwrap();
+    Connection::new(&client)
+        .write_readback_request(&ReadbackRequest::buffer(7, 0, 3))
+        .unwrap();
     assert!(
-        read_readback_response(&client).is_err(),
+        Connection::new(&client).read_readback_response().is_err(),
         "unknown-buffer readback fails cleanly"
     );
 

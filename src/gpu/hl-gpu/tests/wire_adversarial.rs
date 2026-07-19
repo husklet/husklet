@@ -22,7 +22,7 @@ use hl_gpu::protocol::model::enums::*;
 use hl_gpu::protocol::model::kernel::{
     glsl_stage, GlslDescriptor, KernelDescriptor, GLSL_MAGIC, KERNEL_MAGIC, SPIRV_MAGIC,
 };
-use hl_gpu::{decode_stream, encode_stream, GpuError, ShaderPayloadKind, WIRE_VERSION};
+use hl_gpu::{GpuError, ShaderPayloadKind, WIRE_VERSION};
 
 // ---------------------------------------------------------------------------------------------------
 // exhaustive op/command inventories (one canonical value of EVERY etag and EVERY tag)
@@ -370,7 +370,7 @@ fn every_command() -> Vec<Cmd> {
 
 fn no_panic(bytes: &[u8]) -> hl_gpu::Result<Vec<Cmd>> {
     let owned = bytes.to_vec();
-    match catch_unwind(move || decode_stream(&owned)) {
+    match catch_unwind(move || hl_gpu::Decoder::stream(&owned)) {
         Ok(r) => r,
         Err(_) => panic!(
             "decode_stream PANICKED on {} bytes: {:02x?}",
@@ -387,9 +387,9 @@ fn no_panic(bytes: &[u8]) -> hl_gpu::Result<Vec<Cmd>> {
 #[test]
 fn every_command_and_op_value_round_trips() {
     let s = every_command();
-    let bytes = encode_stream(&s);
+    let bytes = hl_gpu::Encoder::stream(&s);
     assert_eq!(
-        decode_stream(&bytes).unwrap(),
+        hl_gpu::Decoder::stream(&bytes).unwrap(),
         s,
         "the full tag/etag inventory round-trips by value"
     );
@@ -398,10 +398,10 @@ fn every_command_and_op_value_round_trips() {
 #[test]
 fn full_inventory_is_byte_stable() {
     // encode(decode(encode(x))) == encode(x): the decoder consumes exactly and re-encodes identically.
-    let bytes = encode_stream(&every_command());
-    let decoded = decode_stream(&bytes).unwrap();
+    let bytes = hl_gpu::Encoder::stream(&every_command());
+    let decoded = hl_gpu::Decoder::stream(&bytes).unwrap();
     assert_eq!(
-        encode_stream(&decoded),
+        hl_gpu::Encoder::stream(&decoded),
         bytes,
         "decode∘encode is byte-stable across every op"
     );
@@ -416,9 +416,9 @@ fn truncating_each_op_at_every_prefix_never_panics() {
             encoder: vec![op.clone()],
             signal: None,
         };
-        let bytes = encode_stream(&[Cmd::Submit(cb.clone())]);
+        let bytes = hl_gpu::Encoder::stream(&[Cmd::Submit(cb.clone())]);
         assert_eq!(
-            decode_stream(&bytes).unwrap(),
+            hl_gpu::Decoder::stream(&bytes).unwrap(),
             vec![Cmd::Submit(cb)],
             "op {op:?} round-trips"
         );
@@ -431,9 +431,9 @@ fn truncating_each_op_at_every_prefix_never_panics() {
 #[test]
 fn truncating_each_command_at_every_prefix_never_panics() {
     for cmd in every_command() {
-        let bytes = encode_stream(&[cmd.clone()]);
+        let bytes = hl_gpu::Encoder::stream(&[cmd.clone()]);
         assert_eq!(
-            decode_stream(&bytes).unwrap(),
+            hl_gpu::Decoder::stream(&bytes).unwrap(),
             vec![cmd.clone()],
             "cmd round-trips"
         );
@@ -458,7 +458,7 @@ fn lcg(state: &mut u64) -> u8 {
 
 #[test]
 fn any_decodable_mutation_re_encodes_to_itself() {
-    let base = encode_stream(&every_command());
+    let base = hl_gpu::Encoder::stream(&every_command());
     let mut state = 0xA5A5_1234_DEAD_0001u64;
     let mut decodable = 0u64;
     for _ in 0..40_000u32 {
@@ -481,7 +481,7 @@ fn any_decodable_mutation_re_encodes_to_itself() {
             // THE INVARIANT: a stream the decoder accepted must re-encode to the exact same bytes it
             // consumed. decode_stream drains the whole input, so equality is total, not prefix.
             assert_eq!(
-                encode_stream(&cmds),
+                hl_gpu::Encoder::stream(&cmds),
                 bad,
                 "decode accepted bytes that re-encode differently (normalization/desync bug)"
             );
@@ -506,7 +506,7 @@ fn random_bytes_never_panic_and_are_byte_stable_when_accepted() {
         }
         if let Ok(cmds) = no_panic(&bytes) {
             assert_eq!(
-                encode_stream(&cmds),
+                hl_gpu::Encoder::stream(&cmds),
                 bytes,
                 "accepted random bytes must be byte-stable"
             );
@@ -520,13 +520,13 @@ fn random_bytes_never_panic_and_are_byte_stable_when_accepted() {
 
 #[test]
 fn empty_stream_decodes_to_no_commands() {
-    assert_eq!(decode_stream(&[]).unwrap(), Vec::<Cmd>::new());
+    assert_eq!(hl_gpu::Decoder::stream(&[]).unwrap(), Vec::<Cmd>::new());
 }
 
 #[test]
 fn unknown_top_level_tag_is_bad_tag() {
     for bad_tag in [0u8, 22, 100, 255] {
-        let err = decode_stream(&[bad_tag]).unwrap_err();
+        let err = hl_gpu::Decoder::stream(&[bad_tag]).unwrap_err();
         assert!(
             matches!(&err, GpuError::Decode(m) if m.contains(&format!("bad command/encoder tag {bad_tag}"))),
             "tag {bad_tag} -> {err:?}"
@@ -542,7 +542,7 @@ fn unknown_encoder_tag_inside_submit_is_bad_tag() {
         e.u8(tag::SUBMIT);
         e.u32(1); // encoder len
         e.u8(bad_etag); // the op tag
-        let err = decode_stream(&e.into_vec()).unwrap_err();
+        let err = hl_gpu::Decoder::stream(&e.into_vec()).unwrap_err();
         assert!(
             matches!(&err, GpuError::Decode(m) if m.contains(&format!("bad command/encoder tag {bad_etag}"))),
             "etag {bad_etag} -> {err:?}"
@@ -637,7 +637,7 @@ fn bad_enum_in_a_real_stream_is_rejected() {
     e.u32(1); // format
     e.u32(0); // usage
     e.str(""); // label
-    let err = decode_stream(&e.into_vec()).unwrap_err();
+    let err = hl_gpu::Decoder::stream(&e.into_vec()).unwrap_err();
     assert!(
         matches!(&err, GpuError::Decode(m) if m.contains("bad TextureDim enum value 99")),
         "{err:?}"
@@ -687,11 +687,11 @@ fn non_finite_render_floats_are_rejected_at_the_wire() {
             },
         ];
         for op in sites {
-            let bytes = encode_stream(&[Cmd::Submit(CommandBuffer {
+            let bytes = hl_gpu::Encoder::stream(&[Cmd::Submit(CommandBuffer {
                 encoder: vec![op.clone()],
                 signal: None,
             })]);
-            let err = decode_stream(&bytes).unwrap_err();
+            let err = hl_gpu::Decoder::stream(&bytes).unwrap_err();
             assert!(
                 matches!(&err, GpuError::Decode(m) if m.contains("non-finite")),
                 "op {op:?} with {bad} must reject non-finite: {err:?}"
@@ -708,7 +708,7 @@ fn non_canonical_bool_byte_is_rejected() {
     e.u32(1); // encoder len
     e.u8(etag::END_RENDER_PASS);
     e.u8(2); // signal-present bool <-- non-canonical
-    let err = decode_stream(&e.into_vec()).unwrap_err();
+    let err = hl_gpu::Decoder::stream(&e.into_vec()).unwrap_err();
     assert!(
         matches!(&err, GpuError::Decode(m) if m.contains("non-canonical boolean wire byte 2")),
         "{err:?}"
@@ -725,7 +725,7 @@ fn bad_bindresource_tag_is_typed_bad_enum() {
     e.u32(1); // one entry
     e.u32(0); // binding
     e.u8(9); // resource tag <-- unknown
-    let err = decode_stream(&e.into_vec()).unwrap_err();
+    let err = hl_gpu::Decoder::stream(&e.into_vec()).unwrap_err();
     assert!(
         matches!(&err, GpuError::Decode(m) if m.contains("bad BindResource enum value 9")),
         "{err:?}"
@@ -740,7 +740,7 @@ fn bogus_length_prefix_is_short_buffer_not_a_giant_prealloc() {
     e.u32(1); // id
     e.u64(0); // offset
     e.u32(0xFFFF_FFF0); // data length, nothing follows
-    let err = decode_stream(&e.into_vec()).unwrap_err();
+    let err = hl_gpu::Decoder::stream(&e.into_vec()).unwrap_err();
     assert!(
         matches!(&err, GpuError::Decode(m) if m.contains("short buffer")),
         "{err:?}"
@@ -751,7 +751,7 @@ fn bogus_length_prefix_is_short_buffer_not_a_giant_prealloc() {
     e.u8(tag::CREATE_SHADER);
     e.u32(1); // id
     e.u32(0xFFFF_FFF0); // word count, no words follow
-    let err = decode_stream(&e.into_vec()).unwrap_err();
+    let err = hl_gpu::Decoder::stream(&e.into_vec()).unwrap_err();
     assert!(
         matches!(&err, GpuError::Decode(m) if m.contains("short buffer")),
         "{err:?}"
@@ -839,14 +839,14 @@ fn boundary_field_values_round_trip() {
             .to_words(),
         },
     ];
-    let bytes = encode_stream(&cmds);
+    let bytes = hl_gpu::Encoder::stream(&cmds);
     assert_eq!(
-        decode_stream(&bytes).unwrap(),
+        hl_gpu::Decoder::stream(&bytes).unwrap(),
         cmds,
         "boundary values survive the wire unchanged"
     );
     assert_eq!(
-        encode_stream(&decode_stream(&bytes).unwrap()),
+        hl_gpu::Encoder::stream(&hl_gpu::Decoder::stream(&bytes).unwrap()),
         bytes,
         "and are byte-stable"
     );

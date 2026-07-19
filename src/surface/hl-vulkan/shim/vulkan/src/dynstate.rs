@@ -19,26 +19,35 @@ use core::ffi::c_void;
 use hl_vulkan::service::record;
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::*;
 
 /// Run `f` with just the logical device (recording bodies emit no `Cmd`). `None` if no device yet.
-fn dev<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
-    with(|s| s.device.as_mut().map(f))
+struct ShimState;
+impl ShimState {
+fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
+    StateStore::with(|s| s.device.as_mut().map(f))
+}
 }
 
 /// Unwrap a dispatchable `VkCommandBuffer` to its `hl_vulkan` `u64` command-buffer handle.
-unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
+struct CommandBuffer;
+impl CommandBuffer {
+unsafe fn handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
+}
 }
 
 /// The shared body of a scalar extended-dynamic-state `vkCmdSet*`: resolve the command buffer, then
 /// record `f` into its `DynamicState` (a no-op if no device / not recording — an invalid call is inert).
-fn record_dynamic(cb: *mut c_void, f: impl FnOnce(&mut hl_vulkan::model::command::DynamicState)) {
-    let Some(h) = (unsafe { cmdbuf_handle(cb) }) else { return };
-    dev(|d| {
+struct DynamicState;
+impl DynamicState {
+fn record(cb: *mut c_void, f: impl FnOnce(&mut hl_vulkan::model::command::DynamicState)) {
+    let Some(h) = (unsafe { CommandBuffer::handle(cb) }) else { return };
+    ShimState::with_device(|d| {
         let _ = record::set_dynamic(d, h, f);
     });
+}
 }
 
 // ==================================================================================================
@@ -47,7 +56,7 @@ fn record_dynamic(cb: *mut c_void, f: impl FnOnce(&mut hl_vulkan::model::command
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetCullMode(command_buffer: *mut c_void, cull_mode: u32) {
-    record_dynamic(command_buffer, |ds| ds.cull_mode = cull_mode);
+    DynamicState::record(command_buffer, |ds| ds.cull_mode = cull_mode);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetCullModeEXT(command_buffer: *mut c_void, cull_mode: u32) {
@@ -56,7 +65,7 @@ pub extern "C" fn vkCmdSetCullModeEXT(command_buffer: *mut c_void, cull_mode: u3
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetFrontFace(command_buffer: *mut c_void, front_face: i32) {
-    record_dynamic(command_buffer, |ds| ds.front_face = front_face);
+    DynamicState::record(command_buffer, |ds| ds.front_face = front_face);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetFrontFaceEXT(command_buffer: *mut c_void, front_face: i32) {
@@ -65,7 +74,7 @@ pub extern "C" fn vkCmdSetFrontFaceEXT(command_buffer: *mut c_void, front_face: 
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetPrimitiveTopology(command_buffer: *mut c_void, primitive_topology: i32) {
-    record_dynamic(command_buffer, |ds| ds.primitive_topology = primitive_topology);
+    DynamicState::record(command_buffer, |ds| ds.primitive_topology = primitive_topology);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetPrimitiveTopologyEXT(command_buffer: *mut c_void, primitive_topology: i32) {
@@ -78,12 +87,12 @@ pub extern "C" fn vkCmdSetViewportWithCount(
     viewport_count: u32,
     p_viewports: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_viewports.is_null() || viewport_count == 0 {
         return;
     }
     let vps = unsafe { core::slice::from_raw_parts(p_viewports as *const VkViewport, viewport_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for v in vps {
             let _ = record::cmd_set_viewport(d, cb, v.x, v.y, v.width, v.height, v.min_depth, v.max_depth);
         }
@@ -104,12 +113,12 @@ pub extern "C" fn vkCmdSetScissorWithCount(
     scissor_count: u32,
     p_scissors: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_scissors.is_null() || scissor_count == 0 {
         return;
     }
     let rects = unsafe { core::slice::from_raw_parts(p_scissors as *const VkRect2D, scissor_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in rects {
             let _ = record::cmd_set_scissor(
                 d,
@@ -133,7 +142,7 @@ pub extern "C" fn vkCmdSetScissorWithCountEXT(
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthTestEnable(command_buffer: *mut c_void, depth_test_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.depth_test_enable = depth_test_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.depth_test_enable = depth_test_enable != 0);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthTestEnableEXT(command_buffer: *mut c_void, depth_test_enable: u32) {
@@ -142,7 +151,7 @@ pub extern "C" fn vkCmdSetDepthTestEnableEXT(command_buffer: *mut c_void, depth_
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthWriteEnable(command_buffer: *mut c_void, depth_write_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.depth_write_enable = depth_write_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.depth_write_enable = depth_write_enable != 0);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthWriteEnableEXT(command_buffer: *mut c_void, depth_write_enable: u32) {
@@ -151,7 +160,7 @@ pub extern "C" fn vkCmdSetDepthWriteEnableEXT(command_buffer: *mut c_void, depth
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthCompareOp(command_buffer: *mut c_void, depth_compare_op: i32) {
-    record_dynamic(command_buffer, |ds| ds.depth_compare_op = depth_compare_op);
+    DynamicState::record(command_buffer, |ds| ds.depth_compare_op = depth_compare_op);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthCompareOpEXT(command_buffer: *mut c_void, depth_compare_op: i32) {
@@ -160,7 +169,7 @@ pub extern "C" fn vkCmdSetDepthCompareOpEXT(command_buffer: *mut c_void, depth_c
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthBoundsTestEnable(command_buffer: *mut c_void, depth_bounds_test_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.depth_bounds_test_enable = depth_bounds_test_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.depth_bounds_test_enable = depth_bounds_test_enable != 0);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthBoundsTestEnableEXT(command_buffer: *mut c_void, depth_bounds_test_enable: u32) {
@@ -169,7 +178,7 @@ pub extern "C" fn vkCmdSetDepthBoundsTestEnableEXT(command_buffer: *mut c_void, 
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetStencilTestEnable(command_buffer: *mut c_void, stencil_test_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.stencil_test_enable = stencil_test_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.stencil_test_enable = stencil_test_enable != 0);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetStencilTestEnableEXT(command_buffer: *mut c_void, stencil_test_enable: u32) {
@@ -185,8 +194,8 @@ pub extern "C" fn vkCmdSetStencilOp(
     depth_fail_op: i32,
     compare_op: i32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    dev(|d| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    ShimState::with_device(|d| {
         let _ = record::set_stencil_op(d, cb, face_mask, (fail_op, pass_op, depth_fail_op, compare_op));
     });
 }
@@ -208,7 +217,7 @@ pub extern "C" fn vkCmdSetStencilOpEXT(
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetRasterizerDiscardEnable(command_buffer: *mut c_void, rasterizer_discard_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.rasterizer_discard_enable = rasterizer_discard_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.rasterizer_discard_enable = rasterizer_discard_enable != 0);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetRasterizerDiscardEnableEXT(command_buffer: *mut c_void, rasterizer_discard_enable: u32) {
@@ -217,7 +226,7 @@ pub extern "C" fn vkCmdSetRasterizerDiscardEnableEXT(command_buffer: *mut c_void
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthBiasEnable(command_buffer: *mut c_void, depth_bias_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.depth_bias_enable = depth_bias_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.depth_bias_enable = depth_bias_enable != 0);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthBiasEnableEXT(command_buffer: *mut c_void, depth_bias_enable: u32) {
@@ -226,7 +235,7 @@ pub extern "C" fn vkCmdSetDepthBiasEnableEXT(command_buffer: *mut c_void, depth_
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetPrimitiveRestartEnable(command_buffer: *mut c_void, primitive_restart_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.primitive_restart_enable = primitive_restart_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.primitive_restart_enable = primitive_restart_enable != 0);
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetPrimitiveRestartEnableEXT(command_buffer: *mut c_void, primitive_restart_enable: u32) {
@@ -235,12 +244,12 @@ pub extern "C" fn vkCmdSetPrimitiveRestartEnableEXT(command_buffer: *mut c_void,
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetLogicOpEXT(command_buffer: *mut c_void, logic_op: i32) {
-    record_dynamic(command_buffer, |ds| ds.logic_op = logic_op);
+    DynamicState::record(command_buffer, |ds| ds.logic_op = logic_op);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetPatchControlPointsEXT(command_buffer: *mut c_void, patch_control_points: u32) {
-    record_dynamic(command_buffer, |ds| ds.patch_control_points = patch_control_points);
+    DynamicState::record(command_buffer, |ds| ds.patch_control_points = patch_control_points);
 }
 
 // ==================================================================================================
@@ -250,12 +259,12 @@ pub extern "C" fn vkCmdSetPatchControlPointsEXT(command_buffer: *mut c_void, pat
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthBounds(command_buffer: *mut c_void, min_depth_bounds: f32, max_depth_bounds: f32) {
-    record_dynamic(command_buffer, |ds| ds.depth_bounds = (min_depth_bounds, max_depth_bounds));
+    DynamicState::record(command_buffer, |ds| ds.depth_bounds = (min_depth_bounds, max_depth_bounds));
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetLineStipple(command_buffer: *mut c_void, line_stipple_factor: u32, line_stipple_pattern: u16) {
-    record_dynamic(command_buffer, |ds| ds.line_stipple = (line_stipple_factor, line_stipple_pattern));
+    DynamicState::record(command_buffer, |ds| ds.line_stipple = (line_stipple_factor, line_stipple_pattern));
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetLineStippleEXT(command_buffer: *mut c_void, line_stipple_factor: u32, line_stipple_pattern: u16) {
@@ -264,7 +273,7 @@ pub extern "C" fn vkCmdSetLineStippleEXT(command_buffer: *mut c_void, line_stipp
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetLineStippleEnableEXT(command_buffer: *mut c_void, stippled_line_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.line_stipple_enable = stippled_line_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.line_stipple_enable = stippled_line_enable != 0);
 }
 
 /// `VkDepthBiasInfoEXT` head: `sType`, `pNext`, then `depthBiasConstantFactor`, `depthBiasClamp`,
@@ -281,11 +290,11 @@ struct VkDepthBiasInfoEXTHead {
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthBias2EXT(command_buffer: *mut c_void, p_depth_bias_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(info) = (unsafe { (p_depth_bias_info as *const VkDepthBiasInfoEXTHead).as_ref() }) else {
         return;
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_set_depth_bias(d, cb, info.constant_factor, info.clamp, info.slope_factor);
     });
 }
@@ -298,7 +307,7 @@ pub extern "C" fn vkCmdSetVertexInputEXT(
     _vertex_attribute_description_count: u32,
     _p_vertex_attribute_descriptions: *const c_void,
 ) {
-    record_dynamic(command_buffer, |ds| ds.vertex_binding_count = vertex_binding_description_count);
+    DynamicState::record(command_buffer, |ds| ds.vertex_binding_count = vertex_binding_description_count);
 }
 
 // ==================================================================================================
@@ -315,7 +324,7 @@ pub extern "C" fn vkCmdBindVertexBuffers2(
     _p_sizes: *const c_void,
     _p_strides: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_buffers.is_null() || binding_count == 0 {
         return;
     }
@@ -325,7 +334,7 @@ pub extern "C" fn vkCmdBindVertexBuffers2(
     } else {
         Some(unsafe { core::slice::from_raw_parts(p_offsets as *const u64, binding_count as usize) })
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for i in 0..binding_count as usize {
             let slot = first_binding + i as u32;
             let offset = offsets.map(|o| o[i]).unwrap_or(0);
@@ -352,7 +361,7 @@ pub extern "C" fn vkCmdBindVertexBuffers2EXT(
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetRasterizationSamplesEXT(command_buffer: *mut c_void, rasterization_samples: u32) {
-    record_dynamic(command_buffer, |ds| ds.rasterization_samples = rasterization_samples);
+    DynamicState::record(command_buffer, |ds| ds.rasterization_samples = rasterization_samples);
 }
 
 #[no_mangle]
@@ -362,77 +371,77 @@ pub extern "C" fn vkCmdSetSampleMaskEXT(
     p_sample_mask: *const c_void,
 ) {
     let mask = if p_sample_mask.is_null() { 0 } else { unsafe { *(p_sample_mask as *const u32) } };
-    record_dynamic(command_buffer, |ds| ds.sample_mask = mask);
+    DynamicState::record(command_buffer, |ds| ds.sample_mask = mask);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetAlphaToCoverageEnableEXT(command_buffer: *mut c_void, alpha_to_coverage_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.alpha_to_coverage_enable = alpha_to_coverage_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.alpha_to_coverage_enable = alpha_to_coverage_enable != 0);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetAlphaToOneEnableEXT(command_buffer: *mut c_void, alpha_to_one_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.alpha_to_one_enable = alpha_to_one_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.alpha_to_one_enable = alpha_to_one_enable != 0);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetLogicOpEnableEXT(command_buffer: *mut c_void, logic_op_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.logic_op_enable = logic_op_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.logic_op_enable = logic_op_enable != 0);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetPolygonModeEXT(command_buffer: *mut c_void, polygon_mode: i32) {
-    record_dynamic(command_buffer, |ds| ds.polygon_mode = polygon_mode);
+    DynamicState::record(command_buffer, |ds| ds.polygon_mode = polygon_mode);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetTessellationDomainOriginEXT(command_buffer: *mut c_void, domain_origin: i32) {
-    record_dynamic(command_buffer, |ds| ds.tessellation_domain_origin = domain_origin);
+    DynamicState::record(command_buffer, |ds| ds.tessellation_domain_origin = domain_origin);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetProvokingVertexModeEXT(command_buffer: *mut c_void, provoking_vertex_mode: i32) {
-    record_dynamic(command_buffer, |ds| ds.provoking_vertex_mode = provoking_vertex_mode);
+    DynamicState::record(command_buffer, |ds| ds.provoking_vertex_mode = provoking_vertex_mode);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetLineRasterizationModeEXT(command_buffer: *mut c_void, line_rasterization_mode: i32) {
-    record_dynamic(command_buffer, |ds| ds.line_rasterization_mode = line_rasterization_mode);
+    DynamicState::record(command_buffer, |ds| ds.line_rasterization_mode = line_rasterization_mode);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthClampEnableEXT(command_buffer: *mut c_void, depth_clamp_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.depth_clamp_enable = depth_clamp_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.depth_clamp_enable = depth_clamp_enable != 0);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthClipEnableEXT(command_buffer: *mut c_void, depth_clip_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.depth_clip_enable = depth_clip_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.depth_clip_enable = depth_clip_enable != 0);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetDepthClipNegativeOneToOneEXT(command_buffer: *mut c_void, negative_one_to_one: u32) {
-    record_dynamic(command_buffer, |ds| ds.depth_clip_negative_one_to_one = negative_one_to_one != 0);
+    DynamicState::record(command_buffer, |ds| ds.depth_clip_negative_one_to_one = negative_one_to_one != 0);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetConservativeRasterizationModeEXT(command_buffer: *mut c_void, mode: i32) {
-    record_dynamic(command_buffer, |ds| ds.conservative_rasterization_mode = mode);
+    DynamicState::record(command_buffer, |ds| ds.conservative_rasterization_mode = mode);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetExtraPrimitiveOverestimationSizeEXT(command_buffer: *mut c_void, size: f32) {
-    record_dynamic(command_buffer, |ds| ds.extra_primitive_overestimation_size = size);
+    DynamicState::record(command_buffer, |ds| ds.extra_primitive_overestimation_size = size);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetSampleLocationsEnableEXT(command_buffer: *mut c_void, sample_locations_enable: u32) {
-    record_dynamic(command_buffer, |ds| ds.sample_locations_enable = sample_locations_enable != 0);
+    DynamicState::record(command_buffer, |ds| ds.sample_locations_enable = sample_locations_enable != 0);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetRasterizationStreamEXT(command_buffer: *mut c_void, rasterization_stream: u32) {
-    record_dynamic(command_buffer, |ds| ds.rasterization_stream = rasterization_stream);
+    DynamicState::record(command_buffer, |ds| ds.rasterization_stream = rasterization_stream);
 }
 
 // ---- extended dynamic state 3 — per-attachment arrays -------------------------------------------
@@ -444,12 +453,12 @@ pub extern "C" fn vkCmdSetColorBlendEnableEXT(
     attachment_count: u32,
     p_color_blend_enables: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_color_blend_enables.is_null() || attachment_count == 0 {
         return;
     }
     let vals = unsafe { core::slice::from_raw_parts(p_color_blend_enables as *const u32, attachment_count as usize) }.to_vec();
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::set_dynamic_attachment_array(d, cb, first_attachment, &vals, |ds| &mut ds.color_blend_enables);
     });
 }
@@ -461,12 +470,12 @@ pub extern "C" fn vkCmdSetColorWriteMaskEXT(
     attachment_count: u32,
     p_color_write_masks: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_color_write_masks.is_null() || attachment_count == 0 {
         return;
     }
     let vals = unsafe { core::slice::from_raw_parts(p_color_write_masks as *const u32, attachment_count as usize) }.to_vec();
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::set_dynamic_attachment_array(d, cb, first_attachment, &vals, |ds| &mut ds.color_write_masks);
     });
 }
@@ -477,12 +486,12 @@ pub extern "C" fn vkCmdSetColorWriteEnableEXT(
     attachment_count: u32,
     p_color_write_enables: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_color_write_enables.is_null() || attachment_count == 0 {
         return;
     }
     let vals = unsafe { core::slice::from_raw_parts(p_color_write_enables as *const u32, attachment_count as usize) }.to_vec();
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::set_dynamic_attachment_array(d, cb, 0, &vals, |ds| &mut ds.color_write_enables);
     });
 }
@@ -497,13 +506,13 @@ pub extern "C" fn vkCmdSetColorBlendEquationEXT(
     attachment_count: u32,
     _p_color_blend_equations: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if attachment_count == 0 {
         return;
     }
     // Ensure the blend-enable vector covers the touched attachments (honest observable state).
     let ext = vec![0u32; attachment_count as usize];
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::set_dynamic_attachment_array(d, cb, first_attachment, &ext, |ds| &mut ds.color_blend_enables);
     });
 }
@@ -517,12 +526,12 @@ pub extern "C" fn vkCmdSetColorBlendAdvancedEXT(
     attachment_count: u32,
     _p_color_blend_advanced: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if attachment_count == 0 {
         return;
     }
     let ext = vec![0u32; attachment_count as usize];
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::set_dynamic_attachment_array(d, cb, first_attachment, &ext, |ds| &mut ds.color_blend_enables);
     });
 }

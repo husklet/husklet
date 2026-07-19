@@ -1,18 +1,12 @@
-//! Canonical filesystem locations for a hl install. Everything lives under the user's `$HOME`
-//! so install/uninstall never needs root. The socket sits at `~/.hl/run/docker.sock` — short and
-//! space-free so it stays under the ~104-byte `sun_path` limit (never under "Application Support").
+//! Canonical workspace runtime locations.
 
 use std::path::PathBuf;
-
-/// The base service label/id for the per-user daemon (launchd label on macOS, the systemd unit
-/// stem on Linux).
-pub const AGENT_LABEL: &str = "com.hl.daemon";
 
 /// `$HOME`, or `.` as a last resort.
 pub fn home() -> PathBuf {
     std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+        .map(Into::into)
+        .unwrap_or_else(|| ".".into())
 }
 
 /// `~/.hl` — state root (images, volumes, state.json, run/).
@@ -25,48 +19,45 @@ pub fn run_dir() -> PathBuf {
     hl_root().join("run")
 }
 
-/// `~/.hl/run/docker.sock` — the daemon's listen socket (== `HL_DOCKER_SOCK`).
-pub fn socket() -> PathBuf {
-    run_dir().join("docker.sock")
-}
-
 /// `~/.hl/images` — image rootfs dirs (== `HL_IMAGES`).
 pub fn images_dir() -> PathBuf {
     hl_root().join("images")
 }
 
-/// Daemon stdout/stderr logs dir. Platform-specific (macOS `~/Library/Logs/hl`, Linux `~/.hl/logs`).
-pub fn logs_dir() -> PathBuf {
-    crate::platform::logs_dir()
-}
-
-/// The `hl-daemon` binary the agent should launch. Order: `$HL_DAEMON_BIN`, the installed app
-/// bundle (macOS only), then a binary sitting next to this `hl` executable (the dev/`cargo` layout).
+/// Workspace resource daemon shipped beside the application or in its macOS resource directory.
 pub fn daemon_bin() -> PathBuf {
-    if let Some(p) = std::env::var_os("HL_DAEMON_BIN") {
-        return PathBuf::from(p);
-    }
-    if let Some(bundle) = crate::platform::app_bundle() {
-        let bundled = bundle.join("Contents/Resources/hl-daemon");
-        if bundled.exists() {
-            return bundled;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sib = dir.join("hl-daemon");
-            if sib.exists() {
-                return sib;
-            }
-        }
-    }
-    // Fallback: the bundle path on macOS, else a `~/.hl`-relative location.
-    crate::platform::app_bundle()
-        .map(|b| b.join("Contents/Resources/hl-daemon"))
-        .unwrap_or_else(|| hl_root().join("hl-daemon"))
+    DaemonBinary::resolve()
 }
 
-/// `unix://<socket>` — the DOCKER_HOST / docker-context endpoint.
-pub fn docker_host() -> String {
-    format!("unix://{}", socket().display())
+struct DaemonBinary;
+
+impl DaemonBinary {
+    fn resolve() -> PathBuf {
+        if let Some(p) = std::env::var_os("HL_DAEMON_BIN") {
+            return PathBuf::from(p);
+        }
+        if let Some(binary) = Self::bundle() {
+            return binary;
+        }
+        if let Some(sibling) = Self::sibling() {
+            return sibling;
+        }
+        hl_root().join("hl-daemon")
+    }
+
+    fn sibling() -> Option<PathBuf> {
+        let executable = std::env::current_exe().ok()?;
+        let sibling = executable.parent()?.join("hl-daemon");
+        sibling.exists().then_some(sibling)
+    }
+
+    fn bundle() -> Option<PathBuf> {
+        let executable = std::env::current_exe().ok()?;
+        let macos = executable.parent()?;
+        if macos.file_name()? != "MacOS" {
+            return None;
+        }
+        let binary = macos.parent()?.join("Resources/hl-daemon");
+        binary.exists().then_some(binary)
+    }
 }

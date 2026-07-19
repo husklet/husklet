@@ -288,18 +288,18 @@ fn program_resource_introspection_reflects_uniforms_inputs_outputs() {
 #[test]
 fn is_enabled_and_shader_source_reflect_state() {
     let mut c = ctx_800x600();
-    assert!(!intro::is_enabled(&c, GL_BLEND));
+    assert!(!c.is_enabled(GL_BLEND));
     record::enable(&mut c, GL_BLEND);
-    assert!(intro::is_enabled(&c, GL_BLEND));
-    assert!(!intro::is_enabled(&c, GL_DEPTH_TEST));
+    assert!(c.is_enabled(GL_BLEND));
+    assert!(!c.is_enabled(GL_DEPTH_TEST));
     // An unmodeled cap is honestly false.
-    assert!(!intro::is_enabled(&c, 0xBEEF));
+    assert!(!c.is_enabled(0xBEEF));
 
     let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
     record::shader_source(&mut c, vs, VS);
-    assert_eq!(intro::get_shader_source(&c, vs), VS);
+    assert_eq!(c.get_shader_source(vs), VS);
     // An unknown shader has empty source.
-    assert_eq!(intro::get_shader_source(&c, 9999), "");
+    assert_eq!(c.get_shader_source(9999), "");
 }
 
 #[test]
@@ -324,8 +324,8 @@ fn renderbuffer_and_tex_level_parameters_report_real_extents() {
     );
 
     // A bound texture's level-0 extent round-trips through glGetTexLevelParameteriv.
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     let rgba = vec![0u8; 32 * 16 * 4];
     record::tex_image_2d(&mut c, 32, 16, &rgba);
@@ -345,11 +345,11 @@ fn renderbuffer_and_tex_level_parameters_report_real_extents() {
 fn delete_and_detach_mutate_program_state() {
     let mut c = ctx_800x600();
     let prog = linked_program(&mut c);
-    assert!(c.programs.program_exists(prog));
+    assert!(c.programs.contains(prog));
 
     // glDeleteProgram of the current program removes it and clears the binding.
     record::delete_program(&mut c, prog);
-    assert!(!c.programs.program_exists(prog));
+    assert!(!c.programs.contains(prog));
     assert_eq!(c.cur_prog, 0);
 
     // glDetachShader errors: unknown program → GL_INVALID_VALUE.

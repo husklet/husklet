@@ -145,16 +145,29 @@ impl Filters {
             return Ok(f);
         };
         let v: Value = serde_json::from_str(s).map_err(|e| format!("invalid filters JSON: {e}"))?;
-        f.types = filter_values(&v, "type");
-        f.actions = filter_values(&v, "event");
-        f.actions.extend(filter_values(&v, "action"));
-        f.containers = filter_values(&v, "container");
-        f.images = filter_values(&v, "image");
-        f.labels = filter_values(&v, "label");
-        f.networks = filter_values(&v, "network");
-        f.volumes = filter_values(&v, "volume");
-        f.scopes = filter_values(&v, "scope");
+        f.types = Self::values(&v, "type");
+        f.actions = Self::values(&v, "event");
+        f.actions.extend(Self::values(&v, "action"));
+        f.containers = Self::values(&v, "container");
+        f.images = Self::values(&v, "image");
+        f.labels = Self::values(&v, "label");
+        f.networks = Self::values(&v, "network");
+        f.volumes = Self::values(&v, "volume");
+        f.scopes = Self::values(&v, "scope");
         Ok(f)
+    }
+
+    /// Extract values from Docker's array, set-object, or legacy string encoding.
+    fn values(value: &Value, key: &str) -> Vec<String> {
+        match &value[key] {
+            Value::Array(values) => values
+                .iter()
+                .filter_map(|value| value.as_str().map(String::from))
+                .collect(),
+            Value::Object(values) => values.keys().cloned().collect(),
+            Value::String(value) => vec![value.clone()],
+            _ => Vec::new(),
+        }
     }
 
     /// Does this event pass every active filter? (An empty filter list = "match all" for that key.)
@@ -238,136 +251,128 @@ impl Filters {
     }
 }
 
-/// Extract the string values a Docker filter key carries. The wire format is `map[string][]string`
-/// (`{"type":["container"]}`); older/CLI encodings use a set-as-object (`{"type":{"container":true}}`).
-/// Both are handled; anything else yields an empty list.
-fn filter_values(v: &Value, key: &str) -> Vec<String> {
-    match &v[key] {
-        Value::Array(a) => a
-            .iter()
-            .filter_map(|x| x.as_str().map(String::from))
-            .collect(),
-        Value::Object(m) => m.keys().cloned().collect(),
-        Value::String(s) => vec![s.clone()],
-        _ => Vec::new(),
-    }
-}
-
 /// `GET /events` — `docker events`. Subscribes to the bus and streams matching events as
 /// newline-delimited JSON (one object per line, chunked) on a long-lived connection. The stream ends
 /// only when the client disconnects or the bus is torn down (daemon shutdown).
-pub(crate) async fn events(State(a): State<App>, Query(q): Query<EventsQ>) -> Response {
-    let rx = a.events.subscribe();
-    let mut filters = match Filters::parse(&q.filters) {
-        Ok(f) => f,
-        Err(e) => return crate::util::bad_request(e),
-    };
-    // `--filter container=<name|id>` is matched against each event's Actor.ID / name. Some lifecycle
-    // events (die/stop/kill) carry no `name` attribute, so a name-only filter would miss them. Resolve
-    // every container filter value to its FULL id now (by name or id-prefix) and add it to the match
-    // set, so the id-based match catches all of that container's events regardless of the attributes.
-    if !filters.containers.is_empty() {
-        let g = a.inner.lock().await;
-        let resolved: Vec<String> = filters
-            .containers
-            .iter()
-            .filter_map(|c| crate::util::resolve_cid(&g, c))
-            .collect();
-        for id in resolved {
-            if !filters.containers.contains(&id) {
-                filters.containers.push(id);
+pub(crate) struct Events;
+
+impl Events {
+    pub(crate) async fn stream(State(a): State<App>, Query(q): Query<EventsQ>) -> Response {
+        let rx = a.events.subscribe();
+        let mut filters = match Filters::parse(&q.filters) {
+            Ok(f) => f,
+            Err(e) => return crate::util::ErrorMessage::bad_request(e),
+        };
+        // `--filter container=<name|id>` is matched against each event's Actor.ID / name. Some lifecycle
+        // events (die/stop/kill) carry no `name` attribute, so a name-only filter would miss them. Resolve
+        // every container filter value to its FULL id now (by name or id-prefix) and add it to the match
+        // set, so the id-based match catches all of that container's events regardless of the attributes.
+        if !filters.containers.is_empty() {
+            let g = a.inner.lock().await;
+            let resolved: Vec<String> = filters
+                .containers
+                .iter()
+                .filter_map(|c| crate::util::ContainerId::resolve(&g, c))
+                .collect();
+            for id in resolved {
+                if !filters.containers.contains(&id) {
+                    filters.containers.push(id);
+                }
             }
         }
-    }
 
-    // `--until <t>` makes `docker events` a BOUNDED command: it replays matching events up to `t` then
-    // closes the stream and the CLI exits. hl keeps no historical event store, so an `--until` already in
-    // the past has nothing to replay and closes IMMEDIATELY (an unbounded live stream here would hang the
-    // client forever, e.g. `docker events --until $(date +%s)`); a future `--until` ends the live stream
-    // once wall-clock passes it. Without `--until` the stream stays unbounded (ends on client disconnect).
-    let now = crate::util::now_secs();
-    let until = q
-        .until
-        .as_deref()
-        .and_then(|s| crate::util::parse_docker_ts(s, now));
-    let since_ts = q
-        .since
-        .as_deref()
-        .and_then(|s| crate::util::parse_docker_ts(s, now));
-    let bounded_past = matches!(until, Some(u) if u <= now);
+        // `--until <t>` makes `docker events` a BOUNDED command: it replays matching events up to `t` then
+        // closes the stream and the CLI exits. hl keeps no historical event store, so an `--until` already in
+        // the past has nothing to replay and closes IMMEDIATELY (an unbounded live stream here would hang the
+        // client forever, e.g. `docker events --until $(date +%s)`); a future `--until` ends the live stream
+        // once wall-clock passes it. Without `--until` the stream stays unbounded (ends on client disconnect).
+        let now = crate::util::now_secs();
+        let until = q
+            .until
+            .as_deref()
+            .and_then(|s| crate::util::Timestamp::docker(s, now));
+        let since_ts = q
+            .since
+            .as_deref()
+            .and_then(|s| crate::util::Timestamp::docker(s, now));
+        let bounded_past = matches!(until, Some(u) if u <= now);
 
-    // `--since <t>` replays recorded events at/after `t` from the bounded history ring (a live-only bus
-    // lost them). Also used to satisfy a fully-past `--until` window `[since, until]`. Filter the replay
-    // by the same filters and the `--until` upper bound.
-    let replay: Vec<Result<Vec<u8>, std::io::Error>> = if since_ts.is_some() || bounded_past {
-        a.events
-            .history_since(since_ts.unwrap_or(0))
-            .into_iter()
-            .filter(|ev| filters.matches(ev))
-            .filter(|ev| until.map_or(true, |u| ev["time"].as_i64().unwrap_or(0) <= u))
-            .map(|ev| {
-                let mut line = serde_json::to_vec(&ev).unwrap_or_default();
-                line.push(b'\n');
-                Ok(line)
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+        // `--since <t>` replays recorded events at/after `t` from the bounded history ring (a live-only bus
+        // lost them). Also used to satisfy a fully-past `--until` window `[since, until]`. Filter the replay
+        // by the same filters and the `--until` upper bound.
+        let replay: Vec<Result<Vec<u8>, std::io::Error>> = if since_ts.is_some() || bounded_past {
+            a.events
+                .history_since(since_ts.unwrap_or(0))
+                .into_iter()
+                .filter(|ev| filters.matches(ev))
+                .filter(|ev| until.map_or(true, |u| ev["time"].as_i64().unwrap_or(0) <= u))
+                .map(|ev| {
+                    let mut line = serde_json::to_vec(&ev).unwrap_or_default();
+                    line.push(b'\n');
+                    Ok(line)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
-    // A fully-past `--until` is a BOUNDED command with nothing more to stream live: emit the replay window
-    // and close (an unbounded live stream here would hang the client, e.g. `docker events --until <now>`).
-    if bounded_past {
-        let body = stream::iter(replay);
-        return Response::builder()
+        // A fully-past `--until` is a BOUNDED command with nothing more to stream live: emit the replay window
+        // and close (an unbounded live stream here would hang the client, e.g. `docker events --until <now>`).
+        if bounded_past {
+            let body = stream::iter(replay);
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from_stream(body))
+                .unwrap();
+        }
+
+        // `unfold` drives the broadcast receiver into a byte stream. Returning `Some` yields a line;
+        // `continue` skips a filtered-out / lagged event; `None` ends the stream (bus closed, or `--until`).
+        let live = stream::unfold(
+            (rx, filters, until),
+            |(mut rx, filters, until)| async move {
+                loop {
+                    // End the stream the moment a future `--until` bound passes (docker closes the bounded stream
+                    // then). Recomputed each iteration so a filtered-out event doesn't reset the deadline.
+                    let ev = match until {
+                        Some(u) => {
+                            let remaining = (u - crate::util::now_secs()).max(0) as u64;
+                            tokio::select! {
+                                r = rx.recv() => r,
+                                _ = tokio::time::sleep(std::time::Duration::from_secs(remaining)) => return None,
+                            }
+                        }
+                        None => rx.recv().await,
+                    };
+                    match ev {
+                        Ok(ev) => {
+                            if !filters.matches(&ev) {
+                                continue;
+                            }
+                            let mut line = serde_json::to_vec(&ev).unwrap_or_default();
+                            line.push(b'\n');
+                            return Some((
+                                Ok::<Vec<u8>, std::io::Error>(line),
+                                (rx, filters, until),
+                            ));
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => return None,
+                    }
+                }
+            },
+        );
+
+        // Replay the `--since` history first, THEN the live stream (docker replays past then follows live).
+        use futures_util::StreamExt;
+        let body = stream::iter(replay).chain(live);
+        Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/json")
             .body(Body::from_stream(body))
-            .unwrap();
+            .unwrap()
     }
-
-    // `unfold` drives the broadcast receiver into a byte stream. Returning `Some` yields a line;
-    // `continue` skips a filtered-out / lagged event; `None` ends the stream (bus closed, or `--until`).
-    let live = stream::unfold(
-        (rx, filters, until),
-        |(mut rx, filters, until)| async move {
-            loop {
-                // End the stream the moment a future `--until` bound passes (docker closes the bounded stream
-                // then). Recomputed each iteration so a filtered-out event doesn't reset the deadline.
-                let ev = match until {
-                    Some(u) => {
-                        let remaining = (u - crate::util::now_secs()).max(0) as u64;
-                        tokio::select! {
-                            r = rx.recv() => r,
-                            _ = tokio::time::sleep(std::time::Duration::from_secs(remaining)) => return None,
-                        }
-                    }
-                    None => rx.recv().await,
-                };
-                match ev {
-                    Ok(ev) => {
-                        if !filters.matches(&ev) {
-                            continue;
-                        }
-                        let mut line = serde_json::to_vec(&ev).unwrap_or_default();
-                        line.push(b'\n');
-                        return Some((Ok::<Vec<u8>, std::io::Error>(line), (rx, filters, until)));
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => return None,
-                }
-            }
-        },
-    );
-
-    // Replay the `--since` history first, THEN the live stream (docker replays past then follows live).
-    use futures_util::StreamExt;
-    let body = stream::iter(replay).chain(live);
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/json")
-        .body(Body::from_stream(body))
-        .unwrap()
 }
 
 #[cfg(test)]

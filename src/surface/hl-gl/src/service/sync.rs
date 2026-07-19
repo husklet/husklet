@@ -12,14 +12,27 @@ use crate::model::glconst::*;
 use hl_gpu::protocol::model::id::FenceId;
 use hl_gpu::{Cmd, CommandBuffer, CommandSink};
 
-/// Ensure the context's backing IR fence exists, pushing its `CreateFence` into `cmds` on first creation.
-/// Returns the fence IR id.
-fn ensure_fence(ctx: &mut GlContext, cmds: &mut Vec<Cmd>) -> u32 {
-    if ctx.fence_ir == 0 {
-        ctx.fence_ir = ctx.alloc_fence_ir();
-        cmds.push(Cmd::CreateFence(ctx.fence_ir));
+impl GlContext {
+    /// Ensure the context's backing IR fence exists.
+    fn ensure_fence(&mut self, commands: &mut Vec<Cmd>) -> u32 {
+        if self.fence_ir == 0 {
+            self.fence_ir = self.alloc_fence_ir();
+            commands.push(Cmd::CreateFence(self.fence_ir));
+        }
+        self.fence_ir
     }
-    ctx.fence_ir
+
+    /// Drop a sync object, recording `GL_INVALID_VALUE` for an unknown token.
+    pub fn delete_sync(&mut self, sync: usize) {
+        if self.syncs.remove(&sync).is_none() {
+            self.set_gl_error(GL_INVALID_VALUE);
+        }
+    }
+
+    /// Return whether `sync` names a live object.
+    pub fn has_sync(&self, sync: usize) -> bool {
+        self.syncs.contains_key(&sync)
+    }
 }
 
 /// `glFenceSync(condition, flags)` — insert a fence into the command stream: signal the IR fence at the
@@ -40,7 +53,7 @@ pub fn fence_sync(
         return None;
     }
     let mut cmds: Vec<Cmd> = Vec::new();
-    let fence = ensure_fence(ctx, &mut cmds);
+    let fence = ctx.ensure_fence(&mut cmds);
     let value = ctx.fence_next_value;
     ctx.fence_next_value += 1;
     cmds.push(Cmd::Submit(CommandBuffer {
@@ -110,18 +123,6 @@ pub fn wait_sync(
         id: ctx.fence_ir,
         value,
     }]);
-}
-
-/// `glDeleteSync(sync)` — drop the sync object. An unknown (non-null) sync raises `GL_INVALID_VALUE`.
-pub fn delete_sync(ctx: &mut GlContext, sync: usize) {
-    if ctx.syncs.remove(&sync).is_none() {
-        ctx.set_gl_error(GL_INVALID_VALUE);
-    }
-}
-
-/// `glIsSync(sync)` — true once `sync` names a live sync object.
-pub fn is_sync(ctx: &GlContext, sync: usize) -> bool {
-    ctx.syncs.contains_key(&sync)
 }
 
 /// `glGetSynciv(sync, pname, …)` — the single integer value for `pname`: `GL_SYNC_STATUS` →

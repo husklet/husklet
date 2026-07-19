@@ -12,7 +12,7 @@ use hl_vulkan::model::descriptor::{
     VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
 };
 use hl_vulkan::model::memory::{vk_buffer_usage, vk_format, vk_image_usage};
-use hl_vulkan::result::{self, vk_result_from_gpu_error};
+use hl_vulkan::result::{self, Status::from_error};
 use hl_vulkan::service::{create, present, record, submit, sync};
 use hl_vulkan::{Device, Instance};
 
@@ -22,8 +22,8 @@ use hl_gpu::protocol::model::enums::{TextureFormat, Topology};
 use hl_gpu::{BufferId, Cmd, GpuError, RecordingSink};
 
 fn dev() -> Device {
-    let inst = create::create_instance(result::HL_API_VERSION);
-    create::create_device(&inst)
+    let inst = Instance::new(result::HL_API_VERSION);
+    inst.create_device()
 }
 fn sink() -> RecordingSink {
     RecordingSink::with_full_caps()
@@ -64,16 +64,16 @@ fn still_mapped_flush_honors_bind_offset() {
     // 32-byte allocation; a 16-byte buffer bound at offset 16 (a second suballocation in one arena).
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::UNIFORM_BUFFER, 16).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 32).unwrap();
+    let mem = d.allocate_memory(32).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 16).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     // The app writes the buffer's bytes through the mapped pointer at allocation offset 16.
     let pattern: Vec<u8> = (1..=16u8).collect();
     create::write_mapped(&mut d, mem, 16, &pattern).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
 
     // Exactly one WriteBuffer for our buffer, at buffer offset 0, carrying the FOOTPRINT bytes.
@@ -100,9 +100,9 @@ fn read_mapped_bind_offset_reads_buffer_relative_range() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 16).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 32).unwrap();
+    let mem = d.allocate_memory(32).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 16).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     // Map the whole allocation (offset 0, WHOLE_SIZE); only the [16,32) footprint overlaps the buffer.
     create::read_mapped(&mut d, &mut s, mem, 0, u64::MAX).unwrap();
     assert_eq!(
@@ -119,16 +119,16 @@ fn pending_flush_bind_offset_targets_buffer_relative_offset() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 16).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 32).unwrap();
+    let mem = d.allocate_memory(32).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 16).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     let pattern: Vec<u8> = (100..=115u8).collect();
     create::write_mapped(&mut d, mem, 16, &pattern).unwrap();
-    create::unmap_memory(&mut d, mem); // captures pending (0, WHOLE) intersected with footprint
+    d.unmap_memory(mem); // captures pending (0, WHOLE) intersected with footprint
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
     let write = s
         .batches
@@ -151,16 +151,16 @@ fn pending_upload_is_cleared_after_one_submit() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 8).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 8).unwrap();
+    let mem = d.allocate_memory(8).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[9u8; 8]).unwrap();
-    create::unmap_memory(&mut d, mem);
+    d.unmap_memory(mem);
 
     for expect_write in [true, false] {
-        let cb = record::allocate_command_buffer(&mut d);
-        record::begin(&mut d, cb, false).unwrap();
-        record::end(&mut d, cb).unwrap();
+        let cb = d.allocate_command_buffer();
+        d.begin_command_buffer(cb, false).unwrap();
+        d.end_command_buffer(cb).unwrap();
         submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
         let has = s
             .batches
@@ -180,19 +180,19 @@ fn flush_ranges_widen_and_cover_both_writes() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 16).unwrap();
     let ir = buf_ir(&d, buf);
-    let mem = create::allocate_memory(&mut d, 16).unwrap();
+    let mem = d.allocate_memory(16).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     let all: Vec<u8> = (1..=16u8).collect();
     create::write_mapped(&mut d, mem, 0, &all).unwrap();
     // Two disjoint sub-range flushes: [0,4) then [12,16). The union must reach [0,16).
     create::capture_pending_upload(&mut d, mem, 0, 4);
     create::capture_pending_upload(&mut d, mem, 12, 4);
-    create::unmap_memory(&mut d, mem); // still-mapped? no — unmap keeps pending and widens to whole
+    d.unmap_memory(mem); // still-mapped? no — unmap keeps pending and widens to whole
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
     let (off, data) = s
         .batches
@@ -213,7 +213,7 @@ fn flush_ranges_widen_and_cover_both_writes() {
 #[test]
 fn write_mapped_out_of_range_is_out_of_bounds() {
     let mut d = dev();
-    let mem = create::allocate_memory(&mut d, 8).unwrap();
+    let mem = d.allocate_memory(8).unwrap();
     let err = create::write_mapped(&mut d, mem, 4, &[0u8; 8]).unwrap_err();
     assert!(matches!(err, GpuError::OutOfBounds));
 }
@@ -221,10 +221,7 @@ fn write_mapped_out_of_range_is_out_of_bounds() {
 #[test]
 fn map_and_write_unknown_memory_error() {
     let mut d = dev();
-    assert!(matches!(
-        create::map_memory(&mut d, 0xdead),
-        Err(GpuError::Invalid(_))
-    ));
+    assert!(matches!(d.map_memory(0xdead), Err(GpuError::Invalid(_))));
     assert!(matches!(
         create::write_mapped(&mut d, 0xdead, 0, &[0]),
         Err(GpuError::Invalid(_))
@@ -240,13 +237,13 @@ fn bind_unknown_memory_or_buffer_errors_and_read_of_unbound_is_noop() {
         create::bind_buffer_memory(&mut d, buf, 0xdead, 0),
         Err(GpuError::Invalid(_))
     ));
-    let mem = create::allocate_memory(&mut d, 16).unwrap();
+    let mem = d.allocate_memory(16).unwrap();
     assert!(matches!(
         create::bind_buffer_memory(&mut d, 0xdead, mem, 0),
         Err(GpuError::Invalid(_))
     ));
     // read_mapped on host-only staging (no bound buffer) issues no readback and no error.
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     create::read_mapped(&mut d, &mut s, mem, 0, u64::MAX).unwrap();
     assert!(
         s.reads.is_empty(),
@@ -263,14 +260,14 @@ fn cmd_outside_recording_is_rejected() {
     let mut d = dev();
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::VERTEX_BUFFER, 16).unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
+    let cb = d.allocate_command_buffer();
     // Initial (not begun): a vkCmd* must fail.
     assert!(matches!(
         record::cmd_bind_vertex_buffer(&mut d, cb, 0, buf, 0),
         Err(GpuError::Invalid(_))
     ));
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     // Executable (ended): a vkCmd* must fail again.
     assert!(matches!(
         record::cmd_bind_vertex_buffer(&mut d, cb, 0, buf, 0),
@@ -281,19 +278,22 @@ fn cmd_outside_recording_is_rejected() {
 #[test]
 fn end_without_begin_is_rejected() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d);
-    assert!(matches!(record::end(&mut d, cb), Err(GpuError::Invalid(_))));
+    let cb = d.allocate_command_buffer();
+    assert!(matches!(
+        d.end_command_buffer(cb),
+        Err(GpuError::Invalid(_))
+    ));
 }
 
 #[test]
 fn begin_unknown_command_buffer_errors() {
     let mut d = dev();
     assert!(matches!(
-        record::begin(&mut d, 0xdead, false),
+        d.begin_command_buffer(0xdead, false),
         Err(GpuError::Invalid(_))
     ));
     assert!(matches!(
-        record::end(&mut d, 0xdead),
+        d.end_command_buffer(0xdead),
         Err(GpuError::Invalid(_))
     ));
 }
@@ -302,14 +302,14 @@ fn begin_unknown_command_buffer_errors() {
 fn submit_non_executable_buffer_is_rejected() {
     let mut d = dev();
     let mut s = sink();
-    let cb = record::allocate_command_buffer(&mut d);
+    let cb = d.allocate_command_buffer();
     // Initial state → not executable.
     assert!(matches!(
         submit::queue_submit(&mut d, &mut s, &[cb], None),
         Err(GpuError::Invalid(_))
     ));
     // Recording → still not executable.
-    record::begin(&mut d, cb, false).unwrap();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
         submit::queue_submit(&mut d, &mut s, &[cb], None),
         Err(GpuError::Invalid(_))
@@ -323,9 +323,9 @@ fn resubmit_semantics_one_time_vs_reusable() {
 
     // A ONE-TIME-SUBMIT buffer is single-use: after its (synchronous) submit completes it is not
     // resubmittable, so a second submit of the same buffer is rejected.
-    let once = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, once, true).unwrap();
-    record::end(&mut d, once).unwrap();
+    let once = d.allocate_command_buffer();
+    d.begin_command_buffer(once, true).unwrap();
+    d.end_command_buffer(once).unwrap();
     submit::queue_submit(&mut d, &mut s, &[once], None).unwrap();
     assert!(matches!(
         submit::queue_submit(&mut d, &mut s, &[once], None),
@@ -335,9 +335,9 @@ fn resubmit_semantics_one_time_vs_reusable() {
     // A REUSABLE buffer (no ONE_TIME_SUBMIT) records once and re-submits every frame — the vkcube
     // per-image draw pattern. The synchronous executor completes each submit, returning it to Executable,
     // so repeated submits all succeed.
-    let reuse = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, reuse, false).unwrap();
-    record::end(&mut d, reuse).unwrap();
+    let reuse = d.allocate_command_buffer();
+    d.begin_command_buffer(reuse, false).unwrap();
+    d.end_command_buffer(reuse).unwrap();
     for _ in 0..5 {
         submit::queue_submit(&mut d, &mut s, &[reuse], None).unwrap();
     }
@@ -358,12 +358,12 @@ fn begin_resets_prior_recording() {
     let mut d = dev();
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::VERTEX_BUFFER, 16).unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, cb, 0, buf, 0).unwrap();
     // A fresh begin must clear the earlier SetVertexBuffer.
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
     match s.batches.last().unwrap().as_slice() {
         [Cmd::Submit(cbuf)] => {
@@ -383,8 +383,8 @@ fn use_after_destroy_buffer_is_rejected() {
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::VERTEX_BUFFER, 16).unwrap();
     create::destroy_buffer(&mut d, &mut s, buf).unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
         record::cmd_bind_vertex_buffer(&mut d, cb, 0, buf, 0),
         Err(GpuError::Invalid(_))
@@ -444,7 +444,7 @@ fn compute_pipeline_unknown_module_and_missing_entry() {
     let sh = create::create_shader_module_words(
         &mut d,
         &mut s,
-        hl_vulkan::adapter::spirv::sample_compute_spirv("main"),
+        hl_vulkan::adapter::spirv::Module::sample_compute("main"),
     )
     .unwrap();
     assert!(matches!(
@@ -460,13 +460,13 @@ fn graphics_pipeline_rejects_missing_fragment_entry() {
     let vs = create::create_shader_module_words(
         &mut d,
         &mut s,
-        hl_vulkan::adapter::spirv::sample_compute_spirv("vs"),
+        hl_vulkan::adapter::spirv::Module::sample_compute("vs"),
     )
     .unwrap();
     let fs = create::create_shader_module_words(
         &mut d,
         &mut s,
-        hl_vulkan::adapter::spirv::sample_compute_spirv("fs"),
+        hl_vulkan::adapter::spirv::Module::sample_compute("fs"),
     )
     .unwrap();
     // Bad fragment entry → the whole pipeline fails (no id-zero default).
@@ -495,7 +495,7 @@ fn graphics_pipeline_with_no_color_targets_is_valid() {
     let vs = create::create_shader_module_words(
         &mut d,
         &mut s,
-        hl_vulkan::adapter::spirv::sample_compute_spirv("vs"),
+        hl_vulkan::adapter::spirv::Module::sample_compute("vs"),
     )
     .unwrap();
     // Depth-only / no-color pipeline: an empty color-format slice is valid.
@@ -536,18 +536,18 @@ fn graphics_pipeline_with_no_color_targets_is_valid() {
 #[test]
 fn descriptor_pool_exhaustion_and_unknown_pool() {
     let mut d = dev();
-    let layout = create::create_descriptor_set_layout(&mut d, vec![]);
+    let layout = d.create_descriptor_set_layout(vec![]);
     assert!(matches!(
         create::allocate_descriptor_set(&mut d, 0xdead, layout, 0),
         Err(GpuError::Invalid(_))
     ));
-    let pool = create::create_descriptor_pool(&mut d, 1);
+    let pool = d.create_descriptor_pool(1);
     create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     // The pool's single set is consumed → the second allocation is a resource-limit error.
     let err = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap_err();
     assert!(matches!(err, GpuError::ResourceLimit(_)));
     assert_eq!(
-        vk_result_from_gpu_error(&err),
+        Status::from_error(&err),
         result::VK_ERROR_OUT_OF_DEVICE_MEMORY
     );
 }
@@ -575,30 +575,27 @@ fn dynamic_offsets_apply_to_dynamic_bindings_only() {
     let b2 = create::create_buffer(&mut d, &mut s, vk_buffer_usage::UNIFORM_BUFFER, 256).unwrap();
     let (ir0, ir2) = (buf_ir(&d, b0), buf_ir(&d, b2));
     // binding 0 = static storage; binding 2 = dynamic uniform (consumes one pDynamicOffset).
-    let layout = create::create_descriptor_set_layout(
-        &mut d,
-        vec![
-            LayoutBinding {
-                binding: 0,
-                descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: 0,
-            },
-            LayoutBinding {
-                binding: 2,
-                descriptor_type: vk_descriptor_type::UNIFORM_BUFFER_DYNAMIC,
-                descriptor_count: 1,
-                stage_flags: 0,
-            },
-        ],
-    );
-    let pool = create::create_descriptor_pool(&mut d, 1);
+    let layout = d.create_descriptor_set_layout(vec![
+        LayoutBinding {
+            binding: 0,
+            descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+            descriptor_count: 1,
+            stage_flags: 0,
+        },
+        LayoutBinding {
+            binding: 2,
+            descriptor_type: vk_descriptor_type::UNIFORM_BUFFER_DYNAMIC,
+            descriptor_count: 1,
+            stage_flags: 0,
+        },
+    ]);
+    let pool = d.create_descriptor_pool(1);
     let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     create::update_descriptor_buffer(&mut d, set, 0, b0, 0, 256).unwrap();
     create::update_descriptor_buffer(&mut d, set, 2, b2, 8, 64).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut s, cb, 0, &[set], &[100]).unwrap();
     let bg = last_bind_group(&s);
     use hl_gpu::protocol::model::descriptor::BindResource;
@@ -627,23 +624,20 @@ fn multiple_sets_get_distinct_set_indices_from_first_set() {
     let mut s = sink();
     let ba = create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 64).unwrap();
     let bb = create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 64).unwrap();
-    let layout = create::create_descriptor_set_layout(
-        &mut d,
-        vec![LayoutBinding {
-            binding: 0,
-            descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
-            descriptor_count: 1,
-            stage_flags: 0,
-        }],
-    );
-    let pool = create::create_descriptor_pool(&mut d, 2);
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 0,
+        descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+        descriptor_count: 1,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(2);
     let sa = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     let sb = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     create::update_descriptor_buffer(&mut d, sa, 0, ba, 0, 64).unwrap();
     create::update_descriptor_buffer(&mut d, sb, 0, bb, 0, 64).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // first_set = 1 → the two sets land at set indices 1 and 2.
     record::cmd_bind_descriptor_sets(&mut d, &mut s, cb, 1, &[sa, sb], &[]).unwrap();
     let sets: Vec<u32> = s
@@ -673,23 +667,20 @@ fn separate_image_and_sampler_writes_compose_on_one_binding() {
     let samp = create::create_sampler(&mut d, &mut s, 1, 1, 1, [0, 0, 0]);
     let img_ir = d.images.get(&img).unwrap().ir_id;
     let samp_ir = d.samplers.get(&samp).unwrap().ir_id;
-    let layout = create::create_descriptor_set_layout(
-        &mut d,
-        vec![LayoutBinding {
-            binding: 3,
-            descriptor_type: vk_descriptor_type::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: 1,
-            stage_flags: 0,
-        }],
-    );
-    let pool = create::create_descriptor_pool(&mut d, 1);
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 3,
+        descriptor_type: vk_descriptor_type::COMBINED_IMAGE_SAMPLER,
+        descriptor_count: 1,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(1);
     let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     // Two separate writes to the SAME binding: image first, sampler later — must compose (both survive).
     create::update_descriptor_image(&mut d, set, 3, Some(img), None).unwrap();
     create::update_descriptor_image(&mut d, set, 3, None, Some(samp)).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut s, cb, 0, &[set], &[]).unwrap();
     use hl_gpu::protocol::model::descriptor::BindResource;
     let bg = last_bind_group(&s);
@@ -728,8 +719,8 @@ fn copy_buffer_to_image_usage_and_bounds_errors() {
         1,
     )
     .unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
         record::cmd_copy_buffer_to_image(&mut d, cb, bad_src, img, 0, 0, 0, 8, 8),
         Err(GpuError::Invalid(_))
@@ -766,8 +757,8 @@ fn copy_image_format_mismatch_and_self_overlap_rejected() {
         1,
     )
     .unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // Format mismatch.
     assert!(matches!(
         record::cmd_copy_image(&mut d, cb, a, b, (0, 0), (0, 0), (4, 4)),
@@ -806,8 +797,8 @@ fn blit_same_image_rejected_and_zero_extent_rejected() {
         1,
     )
     .unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
         record::cmd_blit_image(&mut d, cb, a, a, (0, 0), (4, 4), (0, 0), (4, 4), true),
         Err(GpuError::Invalid(_))
@@ -826,8 +817,8 @@ fn fill_buffer_alignment_usage_and_whole_size() {
     let ir = buf_ir(&d, buf);
     let no_dst =
         create::create_buffer(&mut d, &mut s, vk_buffer_usage::UNIFORM_BUFFER, 64).unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // Misaligned dstOffset.
     assert!(matches!(
         record::cmd_fill_buffer(&mut d, cb, buf, 3, 4, 0),
@@ -845,7 +836,7 @@ fn fill_buffer_alignment_usage_and_whole_size() {
     ));
     // VK_WHOLE_SIZE fills to the end and flushes as a WriteBuffer of the whole buffer (64 bytes = 16 words).
     record::cmd_fill_buffer(&mut d, cb, buf, 0, u64::MAX, 0xAA).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
     let (off, data) = s
         .batches
@@ -868,8 +859,8 @@ fn update_buffer_size_limits() {
     let mut d = dev();
     let mut s = sink();
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // Empty data.
     assert!(matches!(
         record::cmd_update_buffer(&mut d, cb, buf, 0, &[]),
@@ -901,8 +892,8 @@ fn clear_color_image_requires_copy_dst() {
         1,
     )
     .unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
         record::cmd_clear_color_image(&mut d, cb, img, [1.0; 4]),
         Err(GpuError::Invalid(_))
@@ -914,8 +905,8 @@ fn clear_attachments_outside_render_pass_errors() {
     let mut d = dev();
     let mut s = sink();
     let _ = &mut s;
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // Non-empty rect, no active render pass → error.
     assert!(matches!(
         record::cmd_clear_attachment_rect(&mut d, cb, 0, 0, 4, 4, [1.0; 4]),
@@ -936,8 +927,8 @@ fn indirect_validation_missing_usage_and_out_of_range() {
     // Missing INDIRECT usage.
     let plain =
         create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 256).unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
         record::cmd_draw_indirect(&mut d, cb, plain, 0, 1, 16),
         Err(GpuError::Invalid(_))
@@ -965,8 +956,8 @@ fn indirect_validation_missing_usage_and_out_of_range() {
 #[test]
 fn push_constants_alignment_rules() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
         record::cmd_push_constants(&mut d, cb, 2, &[0u8; 4]),
         Err(GpuError::Invalid(_))
@@ -1005,11 +996,11 @@ fn pipeline_barrier_records_known_and_skips_unknown() {
         1,
     )
     .unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // Known image: layout recorded; unknown image: skipped (no panic, no entry).
     record::cmd_pipeline_barrier(&mut d, cb, &[(img, 0, 7), (0xdead, 0, 7)]).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
     assert_eq!(d.image_layouts.get(&img), Some(&7));
     assert!(!d.image_layouts.contains_key(&0xdead));
@@ -1027,32 +1018,26 @@ fn pipeline_barrier_records_known_and_skips_unknown() {
 #[test]
 fn event_host_lifecycle_and_unknown_errors() {
     let mut d = dev();
-    let e = sync::create_event(&mut d);
-    assert!(!sync::event_status(&d, e).unwrap());
-    sync::set_event(&mut d, e, true).unwrap();
-    assert!(sync::event_status(&d, e).unwrap());
-    sync::set_event(&mut d, e, false).unwrap();
-    assert!(!sync::event_status(&d, e).unwrap());
+    let e = d.create_event();
+    assert!(!d.event_status(e).unwrap());
+    d.set_event(e, true).unwrap();
+    assert!(d.event_status(e).unwrap());
+    d.set_event(e, false).unwrap();
+    assert!(!d.event_status(e).unwrap());
     assert!(matches!(
-        sync::set_event(&mut d, 0xdead, true),
+        d.set_event(0xdead, true),
         Err(GpuError::Invalid(_))
     ));
-    assert!(matches!(
-        sync::event_status(&d, 0xdead),
-        Err(GpuError::Invalid(_))
-    ));
-    sync::destroy_event(&mut d, e);
-    assert!(matches!(
-        sync::event_status(&d, e),
-        Err(GpuError::Invalid(_))
-    ));
+    assert!(matches!(d.event_status(0xdead), Err(GpuError::Invalid(_))));
+    d.destroy_event(e);
+    assert!(matches!(d.event_status(e), Err(GpuError::Invalid(_))));
 }
 
 #[test]
 fn cmd_set_event_unknown_is_rejected() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(matches!(
         record::cmd_set_event(&mut d, cb, 0xdead, true),
         Err(GpuError::Invalid(_))
@@ -1067,22 +1052,19 @@ fn cmd_set_event_unknown_is_rejected() {
 fn timeline_semaphore_monotonic_and_binary_rejected() {
     let mut d = dev();
     let t = sync::create_semaphore(&mut d, true, 5);
-    assert_eq!(sync::semaphore_counter(&d, t).unwrap(), 5);
-    sync::signal_semaphore(&mut d, t, 10).unwrap();
-    assert_eq!(sync::semaphore_counter(&d, t).unwrap(), 10);
+    assert_eq!(d.semaphore_counter(t).unwrap(), 5);
+    d.signal_semaphore(t, 10).unwrap();
+    assert_eq!(d.semaphore_counter(t).unwrap(), 10);
     // A signal to a lower value never regresses the counter.
-    sync::signal_semaphore(&mut d, t, 3).unwrap();
-    assert_eq!(sync::semaphore_counter(&d, t).unwrap(), 10);
+    d.signal_semaphore(t, 3).unwrap();
+    assert_eq!(d.semaphore_counter(t).unwrap(), 10);
     // A binary semaphore has no counter / cannot be host-signalled by value.
     let b = sync::create_semaphore(&mut d, false, 0);
     assert!(matches!(
-        sync::signal_semaphore(&mut d, b, 1),
+        d.signal_semaphore(b, 1),
         Err(GpuError::Invalid(_))
     ));
-    assert!(matches!(
-        sync::semaphore_counter(&d, b),
-        Err(GpuError::Invalid(_))
-    ));
+    assert!(matches!(d.semaphore_counter(b), Err(GpuError::Invalid(_))));
 }
 
 #[test]
@@ -1111,8 +1093,8 @@ fn query_pool_zero_count_rejected_and_span_bounds() {
         Err(GpuError::Invalid(_))
     ));
     let pool = sync::create_query_pool(&mut d, 2, 4).unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // Out-of-range reset span.
     assert!(matches!(
         record::cmd_reset_query_pool(&mut d, cb, pool, 2, 4),
@@ -1171,10 +1153,10 @@ fn get_query_pool_results_availability_wait_partial() {
     sync::get_query_pool_results(&d, pool, 0, 1, &mut wide, 8, false, false, true, false).unwrap();
     assert_eq!(u32::from_le_bytes([wide[4], wide[5], wide[6], wide[7]]), 0);
     // After a device write-timestamp submit, the slot is available with a monotonic serial.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_write_timestamp(&mut d, cb, pool, 0).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut s, &[cb], None).unwrap();
     let mut out = [0u8; 4];
     assert!(
@@ -1193,11 +1175,11 @@ fn fence_status_reset_and_fence_only_submit_signals() {
     let mut d = dev();
     let mut s = sink();
     let signaled = create::create_fence(&mut d, &mut s, true).unwrap();
-    assert!(submit::fence_status(&d, signaled).unwrap());
-    submit::reset_fence(&mut d, signaled).unwrap();
-    assert!(!submit::fence_status(&d, signaled).unwrap());
+    assert!(d.is_fence_signaled(signaled).unwrap());
+    d.reset_fence(signaled).unwrap();
+    assert!(!d.is_fence_signaled(signaled).unwrap());
     assert!(matches!(
-        submit::fence_status(&d, 0xdead),
+        d.is_fence_signaled(0xdead),
         Err(GpuError::Invalid(_))
     ));
 
@@ -1214,7 +1196,7 @@ fn fence_status_reset_and_fence_only_submit_signals() {
     }
     // Waiting the fence blocks on the sink at the signalled value and marks it signaled.
     submit::wait_for_fence(&mut d, &mut s, fence).unwrap();
-    assert!(submit::fence_status(&d, fence).unwrap());
+    assert!(d.is_fence_signaled(fence).unwrap());
     assert!(!s.waits.is_empty());
 }
 
@@ -1222,9 +1204,9 @@ fn fence_status_reset_and_fence_only_submit_signals() {
 fn submit_unknown_fence_errors_before_emitting() {
     let mut d = dev();
     let mut s = sink();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     assert!(matches!(
         submit::queue_submit(&mut d, &mut s, &[cb], Some(0xdead)),
         Err(GpuError::Invalid(_))
@@ -1248,7 +1230,7 @@ fn present_unknown_swapchain_and_out_of_range_index() {
         Err(GpuError::Invalid(_))
     ));
     assert!(matches!(
-        present::acquire_next_image(&mut d, 0xdead),
+        d.acquire_next_image(0xdead),
         Err(GpuError::Invalid(_))
     ));
     assert!(matches!(
@@ -1259,7 +1241,7 @@ fn present_unknown_swapchain_and_out_of_range_index() {
     let surf =
         present::create_surface(&mut d, &mut s, 64, 64, vk_format::B8G8R8A8_UNORM, 7).unwrap();
     let sc = present::create_swapchain(&mut d, &mut s, surf, 2).unwrap();
-    assert_eq!(present::acquire_next_image(&mut d, sc).unwrap(), 0);
+    assert_eq!(d.acquire_next_image(sc).unwrap(), 0);
     // An image index past the swapchain image count is rejected.
     assert!(matches!(
         present::queue_present(&mut d, &mut s, sc, 99),
@@ -1274,8 +1256,8 @@ fn present_unknown_swapchain_and_out_of_range_index() {
 
 #[test]
 fn surface_queries_report_modeled_values() {
-    assert!(present::surface_supports_present(0));
-    assert!(!present::surface_supports_present(1));
+    assert!(present::QueueFamily(0).supports_present());
+    assert!(!present::QueueFamily(1).supports_present());
     let caps = present::surface_capabilities();
     assert_eq!(caps.min_image_count, 2);
     assert_eq!(caps.max_image_count, 3);
@@ -1290,7 +1272,7 @@ fn surface_queries_report_modeled_values() {
 #[test]
 fn pipeline_cache_roundtrip_merge_and_unknown() {
     let mut d = dev();
-    let header = create::pipeline_cache_header(&d);
+    let header = create::PipelineCache::header(&d);
     assert_eq!(header.len(), 32);
     assert_eq!(
         u32::from_le_bytes([header[0], header[1], header[2], header[3]]),
@@ -1302,30 +1284,30 @@ fn pipeline_cache_roundtrip_merge_and_unknown() {
     ); // version ONE
 
     // A short initial blob falls back to a fresh valid header.
-    let c = create::create_pipeline_cache(&mut d, &[1, 2, 3]);
-    assert_eq!(create::get_pipeline_cache_data(&d, c).unwrap().len(), 32);
+    let c = create::PipelineCache::create(&mut d, &[1, 2, 3]);
+    assert_eq!(create::PipelineCache::data(&d, c).unwrap().len(), 32);
     // A >=32-byte initial blob is retained verbatim.
     let mut blob = header.clone();
     blob.extend_from_slice(&[7u8; 8]);
-    let c2 = create::create_pipeline_cache(&mut d, &blob);
-    assert_eq!(create::get_pipeline_cache_data(&d, c2).unwrap(), blob);
+    let c2 = create::PipelineCache::create(&mut d, &blob);
+    assert_eq!(create::PipelineCache::data(&d, c2).unwrap(), blob);
     // Merge validates handles.
-    assert!(create::merge_pipeline_caches(&d, c, &[c2]).is_ok());
+    assert!(create::PipelineCache::merge(&d, c, &[c2]).is_ok());
     assert!(matches!(
-        create::merge_pipeline_caches(&d, 0xdead, &[c2]),
+        create::PipelineCache::merge(&d, 0xdead, &[c2]),
         Err(GpuError::Invalid(_))
     ));
     assert!(matches!(
-        create::merge_pipeline_caches(&d, c, &[0xdead]),
+        create::PipelineCache::merge(&d, c, &[0xdead]),
         Err(GpuError::Invalid(_))
     ));
     assert!(matches!(
-        create::get_pipeline_cache_data(&d, 0xdead),
+        create::PipelineCache::data(&d, 0xdead),
         Err(GpuError::Invalid(_))
     ));
-    create::destroy_pipeline_cache(&mut d, c);
+    create::PipelineCache::destroy(&mut d, c);
     assert!(matches!(
-        create::get_pipeline_cache_data(&d, c),
+        create::PipelineCache::data(&d, c),
         Err(GpuError::Invalid(_))
     ));
 }
@@ -1341,16 +1323,13 @@ fn descriptor_template_array_stride_and_short_blob() {
     let b0 = create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 256).unwrap();
     let b1 = create::create_buffer(&mut d, &mut s, vk_buffer_usage::STORAGE_BUFFER, 256).unwrap();
     let (ir0, ir1) = (buf_ir(&d, b0), buf_ir(&d, b1));
-    let layout = create::create_descriptor_set_layout(
-        &mut d,
-        vec![LayoutBinding {
-            binding: 0,
-            descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
-            descriptor_count: 2,
-            stage_flags: 0,
-        }],
-    );
-    let pool = create::create_descriptor_pool(&mut d, 1);
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 0,
+        descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+        descriptor_count: 2,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(1);
     let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
 
     // One entry: 2 array elements of a buffer descriptor at offset 0, stride 24 (sizeof VkDescriptorBufferInfo).
@@ -1369,7 +1348,7 @@ fn descriptor_template_array_stride_and_short_blob() {
     )
     .unwrap();
     // The exact byte count the shim must present: offset + (count-1)*stride + 24 = 48.
-    assert_eq!(create::descriptor_template_data_len(&d, tmpl), Some(48));
+    assert_eq!(d.descriptor_template_data_len(tmpl), Some(48));
 
     let mut data = Vec::new();
     push_buffer_info(&mut data, b0, 0, 128);
@@ -1404,7 +1383,7 @@ fn descriptor_template_wrong_type_is_unsupported() {
     let err = create::create_descriptor_update_template(&mut d, 1, vec![]).unwrap_err();
     assert!(matches!(err, GpuError::Unsupported(_)));
     assert_eq!(
-        vk_result_from_gpu_error(&err),
+        Status::from_error(&err),
         result::VK_ERROR_FEATURE_NOT_PRESENT
     );
 }
@@ -1420,22 +1399,22 @@ fn execute_commands_requires_recording_primary_and_executable_secondaries() {
     let buf = create::create_buffer(&mut d, &mut s, vk_buffer_usage::VERTEX_BUFFER, 16).unwrap();
     let ir = buf_ir(&d, buf);
     // A recorded, ended (Executable) secondary.
-    let sec = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, sec, false).unwrap();
+    let sec = d.allocate_command_buffer();
+    d.begin_command_buffer(sec, false).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, sec, 0, buf, 0).unwrap();
-    record::end(&mut d, sec).unwrap();
+    d.end_command_buffer(sec).unwrap();
 
     // A non-recording primary is rejected.
-    let prim0 = record::allocate_command_buffer(&mut d);
+    let prim0 = d.allocate_command_buffer();
     assert!(matches!(
         record::cmd_execute_commands(&mut d, prim0, &[sec]),
         Err(GpuError::Invalid(_))
     ));
 
     // A recording primary + a NON-executable secondary is rejected, and splices nothing.
-    let prim = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, prim, false).unwrap();
-    let not_ready = record::allocate_command_buffer(&mut d);
+    let prim = d.allocate_command_buffer();
+    d.begin_command_buffer(prim, false).unwrap();
+    let not_ready = d.allocate_command_buffer();
     assert!(matches!(
         record::cmd_execute_commands(&mut d, prim, &[not_ready]),
         Err(GpuError::Invalid(_))
@@ -1444,7 +1423,7 @@ fn execute_commands_requires_recording_primary_and_executable_secondaries() {
 
     // The valid splice replays the secondary's ops into the primary.
     record::cmd_execute_commands(&mut d, prim, &[sec]).unwrap();
-    record::end(&mut d, prim).unwrap();
+    d.end_command_buffer(prim).unwrap();
     submit::queue_submit(&mut d, &mut s, &[prim], None).unwrap();
     match s.batches.last().unwrap().as_slice() {
         [Cmd::Submit(cbuf)] => assert_eq!(
@@ -1477,12 +1456,12 @@ fn image_subresource_layout_and_unknown() {
         1,
     )
     .unwrap();
-    let layout = create::image_subresource_layout(&d, img).unwrap();
+    let layout = d.image_subresource_layout(img).unwrap();
     assert_eq!(layout.offset, 0);
     assert_eq!(layout.row_pitch, 40); // width*4
     assert_eq!(layout.size, 240); // row_pitch*height
     assert!(matches!(
-        create::image_subresource_layout(&d, 0xdead),
+        d.image_subresource_layout(0xdead),
         Err(GpuError::Invalid(_))
     ));
 }
@@ -1494,19 +1473,19 @@ fn image_subresource_layout_and_unknown() {
 #[test]
 fn gpu_error_maps_to_expected_vk_results() {
     assert_eq!(
-        vk_result_from_gpu_error(&GpuError::Invalid("x")),
+        Status::from_error(&GpuError::Invalid("x")),
         result::VK_ERROR_INITIALIZATION_FAILED
     );
     assert_eq!(
-        vk_result_from_gpu_error(&GpuError::OutOfBounds),
+        Status::from_error(&GpuError::OutOfBounds),
         result::VK_ERROR_MEMORY_MAP_FAILED
     );
     assert_eq!(
-        vk_result_from_gpu_error(&GpuError::Unsupported("x")),
+        Status::from_error(&GpuError::Unsupported("x")),
         result::VK_ERROR_FEATURE_NOT_PRESENT
     );
     assert_eq!(
-        vk_result_from_gpu_error(&GpuError::ResourceLimit("x")),
+        Status::from_error(&GpuError::ResourceLimit("x")),
         result::VK_ERROR_OUT_OF_DEVICE_MEMORY
     );
 }

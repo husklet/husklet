@@ -68,25 +68,34 @@ pub const fn num_extensions() -> i32 {
 /// [`EXTENSIONS`] list every index is out of range, so the caller returns a null pointer (never a
 /// dangling one) and raises the spec error — an app that honored the `GL_NUM_EXTENSIONS` count of `0`
 /// never reaches this.
-pub fn string_i(name: u32, index: u32) -> Option<&'static [u8]> {
-    if name != GL_EXTENSIONS {
-        return None;
+pub struct DriverIdentity;
+
+impl DriverIdentity {
+    pub fn indexed(name: u32, index: u32) -> Option<&'static [u8]> {
+        if name != GL_EXTENSIONS {
+            return None;
+        }
+        EXTENSIONS.get(index as usize).copied()
     }
-    EXTENSIONS.get(index as usize).copied()
+
+    /// `glGetString(name)` — the identity strings, NUL-terminated. An unrecognized name returns the empty
+    /// string (never null: a GLES app dereferences the result unconditionally).
+    pub fn string(name: u32) -> &'static [u8] {
+        match name {
+            GL_VENDOR => IDENT_VENDOR,
+            GL_RENDERER => IDENT_RENDERER,
+            GL_VERSION => IDENT_VERSION,
+            GL_SHADING_LANGUAGE_VERSION => IDENT_GLSL_VERSION,
+            GL_EXTENSIONS => IDENT_EXTENSIONS,
+            _ => b"\0",
+        }
+    }
 }
 
-/// `glGetString(name)` — the identity strings, NUL-terminated. An unrecognized name returns the empty
-/// string (never null: a GLES app dereferences the result unconditionally).
-pub fn gl_string(name: u32) -> &'static [u8] {
-    match name {
-        GL_VENDOR => IDENT_VENDOR,
-        GL_RENDERER => IDENT_RENDERER,
-        GL_VERSION => IDENT_VERSION,
-        GL_SHADING_LANGUAGE_VERSION => IDENT_GLSL_VERSION,
-        GL_EXTENSIONS => IDENT_EXTENSIONS,
-        _ => b"\0",
-    }
-}
+pub const STRING_I: fn(u32, u32) -> Option<&'static [u8]> = DriverIdentity::indexed;
+pub const GL_STRING: fn(u32) -> &'static [u8] = DriverIdentity::string;
+pub use GL_STRING as gl_string;
+pub use STRING_I as string_i;
 
 // ---- glGetIntegerv / glGetFloatv / glGetBooleanv -------------------------------------------------
 
@@ -287,7 +296,9 @@ pub fn get_programiv(ctx: &GlContext, program: u32, pname: u32) -> i32 {
         GL_DELETE_STATUS => GL_FALSE as i32,
         GL_ATTACHED_SHADERS => (p.vs != 0) as i32 + (p.fs != 0) as i32,
         GL_ACTIVE_UNIFORMS => (p.unis.len() + p.samp_names.len()) as i32,
-        GL_ACTIVE_ATTRIBUTES => crate::adapter::glsl::collect_vertex_attrs(&p.vs_src).len() as i32,
+        GL_ACTIVE_ATTRIBUTES => crate::adapter::glsl::Source::new(&p.vs_src)
+            .vertex_attrs()
+            .len() as i32,
         _ => 0,
     }
 }
@@ -363,29 +374,42 @@ pub struct ActiveVar {
 
 /// Map a GLSL-ES type keyword to the GL type enum `glGetActiveUniform`/`glGetActiveAttrib` report. An
 /// unrecognized type falls back to `GL_FLOAT` (the safest scalar an app is likely to accept).
-pub fn gl_type_enum(ty: &str) -> u32 {
-    match ty {
-        "float" => GL_FLOAT,
-        "vec2" => GL_FLOAT_VEC2,
-        "vec3" => GL_FLOAT_VEC3,
-        "vec4" => GL_FLOAT_VEC4,
-        "int" => GL_INT,
-        "ivec2" => GL_INT_VEC2,
-        "ivec3" => GL_INT_VEC3,
-        "ivec4" => GL_INT_VEC4,
-        "uint" => GL_UNSIGNED_INT,
-        "uvec2" => GL_UNSIGNED_INT_VEC2,
-        "uvec3" => GL_UNSIGNED_INT_VEC3,
-        "uvec4" => GL_UNSIGNED_INT_VEC4,
-        "bool" => GL_BOOL,
-        "mat2" | "mat2x2" => GL_FLOAT_MAT2,
-        "mat3" | "mat3x3" => GL_FLOAT_MAT3,
-        "mat4" | "mat4x4" => GL_FLOAT_MAT4,
-        "samplerCube" => GL_SAMPLER_CUBE,
-        "sampler2D" | "sampler2DShadow" => GL_SAMPLER_2D,
-        _ => GL_FLOAT,
+pub struct GlType(u32);
+
+impl From<&str> for GlType {
+    fn from(ty: &str) -> Self {
+        Self(match ty {
+            "float" => GL_FLOAT,
+            "vec2" => GL_FLOAT_VEC2,
+            "vec3" => GL_FLOAT_VEC3,
+            "vec4" => GL_FLOAT_VEC4,
+            "int" => GL_INT,
+            "ivec2" => GL_INT_VEC2,
+            "ivec3" => GL_INT_VEC3,
+            "ivec4" => GL_INT_VEC4,
+            "uint" => GL_UNSIGNED_INT,
+            "uvec2" => GL_UNSIGNED_INT_VEC2,
+            "uvec3" => GL_UNSIGNED_INT_VEC3,
+            "uvec4" => GL_UNSIGNED_INT_VEC4,
+            "bool" => GL_BOOL,
+            "mat2" | "mat2x2" => GL_FLOAT_MAT2,
+            "mat3" | "mat3x3" => GL_FLOAT_MAT3,
+            "mat4" | "mat4x4" => GL_FLOAT_MAT4,
+            "samplerCube" => GL_SAMPLER_CUBE,
+            "sampler2D" | "sampler2DShadow" => GL_SAMPLER_2D,
+            _ => GL_FLOAT,
+        })
     }
 }
+
+impl From<GlType> for u32 {
+    fn from(value: GlType) -> Self {
+        value.0
+    }
+}
+
+pub const GL_TYPE_ENUM: fn(&str) -> u32 = |ty| GlType::from(ty).into();
+pub use GL_TYPE_ENUM as gl_type_enum;
 
 /// `glGetActiveUniform(program, index)` — the reflection of the `index`-th active uniform. The uniforms
 /// are enumerated data-uniforms-first then samplers, matching both `glGetProgramiv(GL_ACTIVE_UNIFORMS)`
@@ -396,7 +420,7 @@ pub fn active_uniform(ctx: &GlContext, program: u32, index: u32) -> Option<Activ
     if !p.linked {
         return None;
     }
-    let data = crate::adapter::glsl::program_uniform_decls(&p.vs_src, &p.fs_src);
+    let data = crate::adapter::glsl::StageSources::new(&p.vs_src, &p.fs_src).uniform_decls();
     let i = index as usize;
     if let Some(d) = data.get(i) {
         return Some(ActiveVar {
@@ -405,7 +429,7 @@ pub fn active_uniform(ctx: &GlContext, program: u32, index: u32) -> Option<Activ
             size: 1,
         });
     }
-    let samps = crate::adapter::glsl::program_sampler_decls(&p.vs_src, &p.fs_src);
+    let samps = crate::adapter::glsl::StageSources::new(&p.vs_src, &p.fs_src).sampler_decls();
     samps.get(i - data.len()).map(|d| ActiveVar {
         name: d.name.clone(),
         gl_type: gl_type_enum(&d.ty),
@@ -421,7 +445,8 @@ pub fn active_attrib(ctx: &GlContext, program: u32, index: u32) -> Option<Active
     if !p.linked {
         return None;
     }
-    crate::adapter::glsl::collect_vertex_attrs(&p.vs_src)
+    crate::adapter::glsl::Source::new(&p.vs_src)
+        .vertex_attrs()
         .get(index as usize)
         .map(|d| ActiveVar {
             name: d.name.clone(),

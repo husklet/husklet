@@ -38,8 +38,11 @@ use super::wayland::ShmBuffer;
 /// [`super::wayland::rgba_to_xrgb8888`] returns when the readback was too short). A valid convert always
 /// stamps the `X` byte `0xFF`, so a genuine frame is never all-zero — this rejects a failed readback
 /// rather than committing a blank buffer.
-fn plane_is_present(xrgb: &[u8]) -> bool {
-    xrgb.iter().any(|&b| b != 0)
+struct FramePlane;
+impl FramePlane {
+    fn is_present(xrgb: &[u8]) -> bool {
+        xrgb.iter().any(|&b| b != 0)
+    }
 }
 
 /// `WL_SHM_FORMAT_XRGB8888` — the byte order [`super::wayland::rgba_to_xrgb8888`] packs into.
@@ -273,7 +276,7 @@ impl WaylandAppPresenter {
         let (w, h) = (w.max(1), h.max(1));
         let stride = (w * 4) as i32;
         let size = (stride as usize) * h as usize;
-        if xrgb.len() < size || !plane_is_present(&xrgb[..size]) {
+        if xrgb.len() < size || !FramePlane::is_present(&xrgb[..size]) {
             return Err(WlAppError::BadSize);
         }
         // Reuse the SAME memfd allocator the self-owned present uses.
@@ -452,73 +455,72 @@ impl SysWlAbi {
         // # Safety: each symbol is transmuted to its known `libwayland-client` prototype.
         unsafe {
             Ok(SysWlAbi {
-                marshal: core::mem::transmute::<*mut c_void, MarshalFlags>(sym(
+                marshal: core::mem::transmute::<*mut c_void, MarshalFlags>(WaylandLibrary::symbol(
                     handle,
                     b"wl_proxy_marshal_flags\0",
                 )?),
-                get_display: core::mem::transmute::<*mut c_void, GetDisplayFn>(sym(
-                    handle,
-                    b"wl_proxy_get_display\0",
-                )?),
-                get_version: core::mem::transmute::<*mut c_void, GetVersionFn>(sym(
-                    handle,
-                    b"wl_proxy_get_version\0",
-                )?),
-                create_queue: core::mem::transmute::<*mut c_void, CreateQueueFn>(sym(
-                    handle,
-                    b"wl_display_create_queue\0",
-                )?),
-                create_wrapper: core::mem::transmute::<*mut c_void, CreateWrapperFn>(sym(
-                    handle,
-                    b"wl_proxy_create_wrapper\0",
-                )?),
-                wrapper_destroy: core::mem::transmute::<*mut c_void, WrapperDestroyFn>(sym(
-                    handle,
-                    b"wl_proxy_wrapper_destroy\0",
-                )?),
-                set_queue: core::mem::transmute::<*mut c_void, SetQueueFn>(sym(
+                get_display: core::mem::transmute::<*mut c_void, GetDisplayFn>(
+                    WaylandLibrary::symbol(handle, b"wl_proxy_get_display\0")?,
+                ),
+                get_version: core::mem::transmute::<*mut c_void, GetVersionFn>(
+                    WaylandLibrary::symbol(handle, b"wl_proxy_get_version\0")?,
+                ),
+                create_queue: core::mem::transmute::<*mut c_void, CreateQueueFn>(
+                    WaylandLibrary::symbol(handle, b"wl_display_create_queue\0")?,
+                ),
+                create_wrapper: core::mem::transmute::<*mut c_void, CreateWrapperFn>(
+                    WaylandLibrary::symbol(handle, b"wl_proxy_create_wrapper\0")?,
+                ),
+                wrapper_destroy: core::mem::transmute::<*mut c_void, WrapperDestroyFn>(
+                    WaylandLibrary::symbol(handle, b"wl_proxy_wrapper_destroy\0")?,
+                ),
+                set_queue: core::mem::transmute::<*mut c_void, SetQueueFn>(WaylandLibrary::symbol(
                     handle,
                     b"wl_proxy_set_queue\0",
                 )?),
-                destroy: core::mem::transmute::<*mut c_void, DestroyFn>(sym(
+                destroy: core::mem::transmute::<*mut c_void, DestroyFn>(WaylandLibrary::symbol(
                     handle,
                     b"wl_proxy_destroy\0",
                 )?),
-                roundtrip_queue: core::mem::transmute::<*mut c_void, RoundtripQueueFn>(sym(
-                    handle,
-                    b"wl_display_roundtrip_queue\0",
-                )?),
-                flush: core::mem::transmute::<*mut c_void, FlushFn>(sym(
+                roundtrip_queue: core::mem::transmute::<*mut c_void, RoundtripQueueFn>(
+                    WaylandLibrary::symbol(handle, b"wl_display_roundtrip_queue\0")?,
+                ),
+                flush: core::mem::transmute::<*mut c_void, FlushFn>(WaylandLibrary::symbol(
                     handle,
                     b"wl_display_flush\0",
                 )?),
-                add_listener: core::mem::transmute::<*mut c_void, AddListenerFn>(sym(
-                    handle,
-                    b"wl_proxy_add_listener\0",
-                )?),
-                iface_registry: sym(handle, b"wl_registry_interface\0")? as *const c_void,
-                iface_shm: sym(handle, b"wl_shm_interface\0")? as *const c_void,
-                iface_shm_pool: sym(handle, b"wl_shm_pool_interface\0")? as *const c_void,
-                iface_buffer: sym(handle, b"wl_buffer_interface\0")? as *const c_void,
+                add_listener: core::mem::transmute::<*mut c_void, AddListenerFn>(
+                    WaylandLibrary::symbol(handle, b"wl_proxy_add_listener\0")?,
+                ),
+                iface_registry: WaylandLibrary::symbol(handle, b"wl_registry_interface\0")?
+                    as *const c_void,
+                iface_shm: WaylandLibrary::symbol(handle, b"wl_shm_interface\0")? as *const c_void,
+                iface_shm_pool: WaylandLibrary::symbol(handle, b"wl_shm_pool_interface\0")?
+                    as *const c_void,
+                iface_buffer: WaylandLibrary::symbol(handle, b"wl_buffer_interface\0")?
+                    as *const c_void,
             })
         }
     }
 }
 
 /// `dlsym` a required symbol, mapping absence to [`WlAppError::SymbolMissing`] (never a null fn pointer).
-fn sym(handle: *mut c_void, name: &'static [u8]) -> WlAppResult<*mut c_void> {
-    let p = unsafe { dlsym(handle, name.as_ptr() as *const c_char) };
-    if p.is_null() {
-        // Strip the trailing NUL for the error label.
-        let label = core::str::from_utf8(&name[..name.len() - 1]).unwrap_or("?");
-        return Err(WlAppError::SymbolMissing(label));
+struct WaylandLibrary;
+impl WaylandLibrary {
+    fn symbol(handle: *mut c_void, name: &'static [u8]) -> WlAppResult<*mut c_void> {
+        let p = unsafe { dlsym(handle, name.as_ptr() as *const c_char) };
+        if p.is_null() {
+            // Strip the trailing NUL for the error label.
+            let label = core::str::from_utf8(&name[..name.len() - 1]).unwrap_or("?");
+            return Err(WlAppError::SymbolMissing(label));
+        }
+        Ok(p)
     }
-    Ok(p)
-}
 
-/// Read `interface->name` (the first pointer of a `struct wl_interface`) as a `*const c_char`.
-unsafe fn iface_name(iface: *const c_void) -> *const c_char {
-    *(iface as *const *const c_char)
+    /// Read `interface->name` (the first pointer of a `struct wl_interface`) as a `*const c_char`.
+    unsafe fn interface_name(iface: *const c_void) -> *const c_char {
+        *(iface as *const *const c_char)
+    }
 }
 
 impl WlAbi for SysWlAbi {
@@ -594,7 +596,7 @@ impl WlAbi for SysWlAbi {
     fn bind_shm(&self, registry: *mut c_void, name: u32, version: u32) -> *mut c_void {
         // wl_registry.bind(name, wl_shm, version): the generic new_id carries interface name + version.
         unsafe {
-            let ifname = iface_name(self.iface_shm);
+            let ifname = WaylandLibrary::interface_name(self.iface_shm);
             (self.marshal)(
                 registry,
                 OP_REGISTRY_BIND,

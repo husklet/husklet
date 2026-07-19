@@ -14,9 +14,9 @@ use hl_gpu::protocol::model::descriptor::BufferDesc;
 use hl_gpu::protocol::model::enums::buffer_usage;
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
-    encode_stream, BufferId, Capabilities, Cmd, CommandSink, ConnectionHandler, CpuExecutor,
-    FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink, Limits, ReadbackRequest,
-    RemoteCommandSink, Session,
+    BufferId, Capabilities, Cmd, CommandSink, ConnectionHandler, CpuExecutor, FakeClock,
+    GlobalLedger, GpuExecutor, InProcessCommandSink, Limits, ReadbackRequest, RemoteCommandSink,
+    Session,
 };
 
 /// A unique temp socket path for one test, removed on drop.
@@ -63,7 +63,7 @@ impl RuntimeHost {
 
 impl ConnectionHandler for RuntimeHost {
     fn submit(&mut self, _header: &SubmitHeader, batch: &[Cmd]) -> Verdict {
-        let frame_bytes = encode_stream(batch).len();
+        let frame_bytes = hl_gpu::Encoder::stream(batch).len();
         match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
             Ok(_) => Verdict::Ack,
             Err(_) => Verdict::Nack,

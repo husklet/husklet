@@ -46,7 +46,7 @@ impl Rect {
 
     /// Whether this rect provably contains the WHOLE of `other`. An empty `other` is never contained
     /// (there is nothing to prove opaque — matches `region_covers_rect`'s empty-target rule).
-    pub fn contains_rect(&self, other: &Rect) -> bool {
+    pub fn contains(&self, other: &Rect) -> bool {
         if self.is_empty() || other.is_empty() {
             return false;
         }
@@ -64,6 +64,14 @@ impl Rect {
             && self.right() > other.x
             && self.y < other.bottom()
             && self.bottom() > other.y
+    }
+
+    pub(crate) fn violates_x(&self, bounds: &Rect) -> bool {
+        self.x < bounds.x || self.right() > bounds.right()
+    }
+
+    pub(crate) fn violates_y(&self, bounds: &Rect) -> bool {
+        self.y < bounds.y || self.bottom() > bounds.bottom()
     }
 
     /// Translate by `(dx, dy)` — used to lift a surface-local damage/opaque rect into root space by a

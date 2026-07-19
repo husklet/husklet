@@ -377,8 +377,8 @@ fn chrome_interaction_input_roundtrip() {
     // Force the hl-log evidence mask ON for this whole process (compositor thread shares these atomics),
     // so the INJECT (this test) / DISPATCH (compositor) / DELIVER (this test) lines all fire regardless of
     // the ambient env — the closed loop is visible under `--nocapture`.
-    hl_log::set_enabled(hl_log::tag::WAYLAND);
-    hl_log::set_level(hl_log::Level::Debug);
+    hl_log::Logging::global().set(hl_log::tag::WAYLAND);
+    hl_log::Logging::global().set_level(hl_log::Level::Debug);
 
     let h = Harness::start("roundtrip");
 

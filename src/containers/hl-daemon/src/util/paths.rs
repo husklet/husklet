@@ -5,22 +5,25 @@ use super::*;
 /// (leading `/`) or a `..` path component. Lists with `tar tf` (no extraction) first. The symlink-follow
 /// half of extraction safety is covered by modern `tar` (it won't extract through an in-archive symlink).
 /// A `tar tf` that fails is left for the real extract to surface. Used by the build-context / `ADD` paths.
-pub(crate) fn tar_members_contained(tar: &std::path::Path) -> Result<(), String> {
-    let out = std::process::Command::new("tar")
-        .arg("tf")
-        .arg(tar)
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Ok(());
-    }
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let m = line.trim_end_matches('/');
-        if m.starts_with('/') || m.split('/').any(|c| c == "..") {
-            return Err(format!("unsafe archive member (path traversal): {line}"));
+pub(crate) struct Archive;
+impl Archive {
+    pub(crate) fn validate(tar: &std::path::Path) -> Result<(), String> {
+        let out = std::process::Command::new("tar")
+            .arg("tf")
+            .arg(tar)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Ok(());
         }
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let m = line.trim_end_matches('/');
+            if m.starts_with('/') || m.split('/').any(|c| c == "..") {
+                return Err(format!("unsafe archive member (path traversal): {line}"));
+            }
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 /// `~/.hl` (or `./.hl` if `$HOME` is unset) — the default state/volumes root.
@@ -39,41 +42,44 @@ pub(crate) fn buildcache_dir() -> PathBuf {
 
 /// On-disk size of an image's rootfs, cached per rootfs path (computed once; rootfs rarely changes).
 /// The host-fs `macos` image is skipped (walking `/` would be catastrophic).
-pub(crate) fn image_size(rootfs: &str, name: &str) -> i64 {
-    if name == "macos" {
-        return 0;
-    }
-    use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(s) = cache.lock().unwrap().get(rootfs) {
-        return *s;
-    }
-    let s = dir_size(std::path::Path::new(rootfs));
-    cache.lock().unwrap().insert(rootfs.to_string(), s);
-    s
-}
-
-/// Recursively sum the size of regular files under `p` (symlinks are not followed).
-pub(crate) fn dir_size(p: &std::path::Path) -> i64 {
-    let mut total = 0i64;
-    let Ok(rd) = std::fs::read_dir(p) else {
-        return 0;
-    };
-    for e in rd.flatten() {
-        let Ok(md) = e.path().symlink_metadata() else {
-            continue;
-        };
-        let ft = md.file_type();
-        if ft.is_symlink() {
-            continue;
-        } else if ft.is_dir() {
-            total += dir_size(&e.path());
-        } else {
-            total += md.len() as i64;
+pub(crate) struct PathSize;
+impl PathSize {
+    pub(crate) fn image(rootfs: &str, name: &str) -> i64 {
+        if name == "macos" {
+            return 0;
         }
+        use std::sync::{Mutex, OnceLock};
+        static CACHE: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Some(s) = cache.lock().unwrap().get(rootfs) {
+            return *s;
+        }
+        let s = Self::size(std::path::Path::new(rootfs));
+        cache.lock().unwrap().insert(rootfs.to_string(), s);
+        s
     }
-    total
+
+    /// Recursively sum the size of regular files under `p` (symlinks are not followed).
+    pub(crate) fn size(p: &std::path::Path) -> i64 {
+        let mut total = 0i64;
+        let Ok(rd) = std::fs::read_dir(p) else {
+            return 0;
+        };
+        for e in rd.flatten() {
+            let Ok(md) = e.path().symlink_metadata() else {
+                continue;
+            };
+            let ft = md.file_type();
+            if ft.is_symlink() {
+                continue;
+            } else if ft.is_dir() {
+                total += Self::size(&e.path());
+            } else {
+                total += md.len() as i64;
+            }
+        }
+        total
+    }
 }
 
 #[cfg(test)]
@@ -99,7 +105,7 @@ mod tests {
             .unwrap()
             .success());
         assert!(
-            tar_members_contained(&safe).is_ok(),
+            Archive::validate(&safe).is_ok(),
             "a normal archive is accepted"
         );
         // An UNSAFE archive: GNU tar --transform prepends `../` -> member "../x".
@@ -122,7 +128,7 @@ mod tests {
                 .unwrap();
             if String::from_utf8_lossy(&listed.stdout).contains("..") {
                 assert!(
-                    tar_members_contained(&evil).is_err(),
+                    Archive::validate(&evil).is_err(),
                     "a `..` member must be rejected"
                 );
             }
@@ -156,13 +162,16 @@ mod tests {
     #[test]
     fn dir_size_empty_is_zero() {
         let t = Tmp::new("empty");
-        assert_eq!(dir_size(&t.0), 0);
+        assert_eq!(PathSize::size(&t.0), 0);
     }
 
     #[test]
     fn dir_size_missing_path_is_zero() {
         // An unreadable/absent path is 0, not an error.
-        assert_eq!(dir_size(std::path::Path::new("/hl/no/such/path/xyzzy")), 0);
+        assert_eq!(
+            PathSize::size(std::path::Path::new("/hl/no/such/path/xyzzy")),
+            0
+        );
     }
 
     #[test]
@@ -172,7 +181,7 @@ mod tests {
         let sub = t.0.join("sub");
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(sub.join("b"), b"abc").unwrap(); // 3 bytes
-        assert_eq!(dir_size(&t.0), 8);
+        assert_eq!(PathSize::size(&t.0), 8);
     }
 
     #[test]
@@ -181,6 +190,6 @@ mod tests {
         std::fs::write(t.0.join("real"), b"1234").unwrap(); // 4 bytes
                                                             // A symlink is neither followed nor counted (its own len is excluded).
         std::os::unix::fs::symlink(t.0.join("real"), t.0.join("link")).unwrap();
-        assert_eq!(dir_size(&t.0), 4);
+        assert_eq!(PathSize::size(&t.0), 4);
     }
 }

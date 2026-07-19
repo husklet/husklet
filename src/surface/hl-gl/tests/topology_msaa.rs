@@ -55,7 +55,7 @@ fn flat_program(c: &mut GlContext) -> u32 {
 }
 
 fn tri_vbo(c: &mut GlContext) {
-    let vbo = record::gen_buffer(c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(c, GL_ARRAY_BUFFER, vbo);
     record::buffer_data(c, GL_ARRAY_BUFFER, &vec![0u8; 24], 0x88E4);
     record::vertex_attrib_pointer(c, 0, 2, GL_FLOAT, false, 8, 0);
@@ -93,7 +93,7 @@ fn lower_indexed_batch(mode: u32, values: &[u16]) -> Vec<Cmd> {
     let mut sink = RecordingSink::with_full_caps();
     flat_program(&mut c);
     tri_vbo(&mut c);
-    let ebo = record::gen_buffer(&mut c);
+    let ebo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, ebo);
     let bytes = values
         .iter()
@@ -217,11 +217,11 @@ fn plain_offscreen_fbo_draw_is_single_sampled() {
     let mut c = ctx_64();
     let mut sink = RecordingSink::with_full_caps();
 
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d_format(&mut c, 32, 32, &[], TextureFormat::Rgba8Unorm);
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut c,

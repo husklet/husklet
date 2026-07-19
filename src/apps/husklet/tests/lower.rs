@@ -92,15 +92,15 @@ fn all_three_drivers_lower_onto_one_shared_runtime_and_cpu_executor() {
     // =============================================================================================
     {
         // Exact lowered Cmd against a RecordingSink (fresh device, ir buffer id 1).
-        let inst = vk_create::create_instance(HL_API_VERSION);
-        let mut rec_dev = vk_create::create_device(&inst);
+        let inst = hl_vulkan::model::instance::Instance::new(HL_API_VERSION);
+        let mut rec_dev = inst.create_device();
         let mut rec = RecordingSink::with_full_caps();
         vk_create::create_buffer(&mut rec_dev, &mut rec, vk_buffer_usage::VERTEX_BUFFER, SIZE)
             .unwrap();
         assert_create_buffer(&rec.batches[0], 1, SIZE);
 
         // Real op through the SHARED sink.
-        let mut dev = vk_create::create_device(&inst);
+        let mut dev = inst.create_device();
         let handle =
             vk_create::create_buffer(&mut dev, &mut sink, vk_buffer_usage::VERTEX_BUFFER, SIZE)
                 .unwrap();
@@ -170,7 +170,7 @@ fn all_three_drivers_lower_onto_one_shared_runtime_and_cpu_executor() {
         record::clear_color(&mut ctx, clear);
         record::clear(&mut ctx);
 
-        let mut f = frame::build_frame_ir(&mut ctx).expect("a clear frame to present");
+        let mut f = frame::Frame::build(&mut ctx).expect("a clear frame to present");
         let (surface, texture) = f.present;
         f.cmds.push(Cmd::Present { surface, texture });
         sink.submit(&f.cmds)

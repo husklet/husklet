@@ -7,7 +7,6 @@
 use hl_gpu::protocol::model::command::*;
 use hl_gpu::protocol::model::descriptor::*;
 use hl_gpu::protocol::model::enums::*;
-use hl_gpu::{decode_stream, encode_stream};
 use std::panic::catch_unwind;
 
 /// Reproducible byte generator (SplitMix64-ish over an LCG); no external RNG.
@@ -22,7 +21,7 @@ fn lcg(state: &mut u64) -> u8 {
 fn assert_no_panic(bytes: &[u8]) {
     let owned = bytes.to_vec();
     let r = catch_unwind(move || {
-        let _ = decode_stream(&owned);
+        let _ = hl_gpu::Decoder::stream(&owned);
     });
     assert!(
         r.is_ok(),
@@ -96,10 +95,10 @@ fn decode_never_panics_on_random_bytes() {
 #[test]
 fn decode_never_panics_on_bitflipped_valid_streams() {
     for stream in representative_streams() {
-        let good = encode_stream(&stream);
+        let good = hl_gpu::Encoder::stream(&stream);
         // A valid stream must decode cleanly...
         assert!(
-            decode_stream(&good).is_ok(),
+            hl_gpu::Decoder::stream(&good).is_ok(),
             "valid stream failed to decode"
         );
         // ...and every single-byte corruption must fail-or-decode, never panic.
@@ -117,7 +116,7 @@ fn decode_never_panics_on_bitflipped_valid_streams() {
 #[test]
 fn decode_never_panics_on_truncations() {
     for stream in representative_streams() {
-        let good = encode_stream(&stream);
+        let good = hl_gpu::Encoder::stream(&stream);
         for cut in 0..=good.len() {
             assert_no_panic(&good[..cut]);
         }

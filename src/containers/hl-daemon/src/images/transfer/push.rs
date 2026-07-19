@@ -21,11 +21,14 @@ pub(crate) async fn image_push(
         let g = a.inner.lock().await;
         g.images
             .iter()
-            .find(|i| ref_name(&i.name) == ref_name(&name) && ref_tag(&i.name) == want_tag)
+            .find(|i| {
+                ImageRef::from(&i.name).name() == ImageRef::from(&name).name()
+                    && ImageRef::from(&i.name).tag == want_tag
+            })
             .or_else(|| {
                 g.images
                     .iter()
-                    .find(|i| ref_name(&i.name) == ref_name(&name))
+                    .find(|i| ImageRef::from(&i.name).name() == ImageRef::from(&name).name())
             })
             .cloned()
     };
@@ -34,14 +37,14 @@ pub(crate) async fn image_push(
             .into_response();
     };
     let tag = want_tag;
-    let iref = image_ref(&img.name, &tag);
-    let arch = docker_arch(img.arch).to_string();
+    let iref = ImageRef::with_tag(&img.name, &tag);
+    let arch = ImagePlatform::docker(img.arch).to_string();
     let os = img.arch.os().to_string(); // "linux"
-    let creds = registry_auth(&headers);
+    let creds = Progress::auth(&headers);
     // On-disk rootfs size, captured before `img` is moved into the push task; reported as the layer
     // `Size` in the push progress/aux lines (a real registry manifest size would need registry.rs to
     // surface it — see note below).
-    let size = image_size(&img.rootfs, &img.name);
+    let size = PathSize::image(&img.rootfs, &img.name);
     // Unique per request: a bare `.push-<pid>` collides when two pushes run concurrently in one daemon
     // process (see `next_staging_seq`). (Only the staging PATH is per-request; the push payload/config
     // serialization is unchanged.)
@@ -54,7 +57,7 @@ pub(crate) async fn image_push(
     // Assemble the FULL OCI config.config object so the pushed image starts + inspects like the local one
     // (Docker push preserves entrypoint/env/user/workdir/ports/labels/volumes/stop-signal/healthcheck,
     // not just Cmd).
-    let config_obj = oci_config_from_image(&img);
+    let config_obj = img.oci_config();
     let rootfs = img.rootfs.clone();
     let res = tokio::task::spawn_blocking(move || {
         Client::new(iref, creds)
@@ -96,7 +99,7 @@ pub(crate) fn push_progress(
 ) -> Response {
     let body = match result {
         Ok(digest) => {
-            let layer_id = layer_short(&digest);
+            let layer_id = LayerId::from_digest(&digest).as_str().to_owned();
             let half = (size / 2).max(0);
             let status = |s: String| StreamStatus {
                 status: s,
@@ -150,63 +153,6 @@ pub(crate) fn push_progress(
     (StatusCode::OK, [("Content-Type", "application/json")], body).into_response()
 }
 
-/// Assemble the OCI image `config.config` object from a stored [`Image`] so `docker push` uploads the
-/// image's FULL runtime metadata — Docker preserves `Entrypoint`, `Env`, `WorkingDir`, `User`,
-/// `ExposedPorts`, `Labels`, `StopSignal`, `Volumes`, and `Healthcheck`, not just `Cmd`. Unset/empty
-/// fields are omitted (Docker only emits keys the image actually sets); `ExposedPorts`/`Volumes` are OCI
-/// sets (`{key: {}}`), `Labels` is a sorted object for deterministic output, and `Healthcheck` reuses the
-/// docker-shaped `HealthConfig` serialization.
-fn oci_config_from_image(img: &Image) -> serde_json::Value {
-    use serde_json::{json, Map, Value};
-    let mut c = Map::new();
-    if !img.cmd.is_empty() {
-        c.insert("Cmd".into(), json!(img.cmd));
-    }
-    if !img.entrypoint.is_empty() {
-        c.insert("Entrypoint".into(), json!(img.entrypoint));
-    }
-    if !img.env.is_empty() {
-        c.insert("Env".into(), json!(img.env));
-    }
-    if !img.workdir.is_empty() {
-        c.insert("WorkingDir".into(), json!(img.workdir));
-    }
-    if !img.user.is_empty() {
-        c.insert("User".into(), json!(img.user));
-    }
-    if !img.exposed_ports.is_empty() {
-        let ports: Map<String, Value> = img
-            .exposed_ports
-            .iter()
-            .map(|p| (p.clone(), json!({})))
-            .collect();
-        c.insert("ExposedPorts".into(), Value::Object(ports));
-    }
-    if !img.labels.is_empty() {
-        let mut kv: Vec<(&String, &String)> = img.labels.iter().collect();
-        kv.sort_by(|a, b| a.0.cmp(b.0));
-        let m: Map<String, Value> = kv.into_iter().map(|(k, v)| (k.clone(), json!(v))).collect();
-        c.insert("Labels".into(), Value::Object(m));
-    }
-    if !img.stop_signal.is_empty() {
-        c.insert("StopSignal".into(), json!(img.stop_signal));
-    }
-    if !img.img_volumes.is_empty() {
-        let vols: Map<String, Value> = img
-            .img_volumes
-            .iter()
-            .map(|v| (v.clone(), json!({})))
-            .collect();
-        c.insert("Volumes".into(), Value::Object(vols));
-    }
-    if let Some(hc) = &img.healthcheck {
-        if let Ok(v) = serde_json::to_value(hc) {
-            c.insert("Healthcheck".into(), v);
-        }
-    }
-    Value::Object(c)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,7 +179,7 @@ mod tests {
             ..Default::default()
         });
 
-        let c = oci_config_from_image(&img);
+        let c = img.oci_config();
         assert_eq!(c["Cmd"], serde_json::json!(["/bin/sh"]));
         assert_eq!(c["Entrypoint"], serde_json::json!(["/entry"]));
         assert_eq!(c["Env"], serde_json::json!(["A=1", "B=2"]));
@@ -253,7 +199,7 @@ mod tests {
             cmd: vec!["/bin/sh".into()],
             ..Default::default()
         };
-        let c = oci_config_from_image(&img);
+        let c = img.oci_config();
         assert!(c.get("Entrypoint").is_none());
         assert!(c.get("Env").is_none());
         assert!(c.get("Healthcheck").is_none());

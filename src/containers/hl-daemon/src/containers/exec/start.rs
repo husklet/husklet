@@ -42,22 +42,25 @@ pub(crate) async fn exec_start(
         // An exec is SINGLE-USE: a second `/exec/{id}/start` must not spawn a duplicate process (which
         // could then race the first's Live entry). Docker returns 409 for an already-started exec.
         if exec.started {
-            return conflict(format!("Container exec {id} is already running"));
+            return ErrorMessage::conflict(format!("Container exec {id} is already running"));
         }
         let Some(c) = g.containers.get(&exec.container_id).cloned() else {
-            return no_such(&exec.container_id);
+            return ErrorMessage::no_such(&exec.container_id);
         };
         // Re-validate the PARENT container's current state: it may have stopped/paused between exec create
         // and start. Docker rejects an exec start against a non-running container (the stale exec handle
         // must not run against a dead lifecycle).
         if c.status == "paused" {
-            return conflict(format!(
+            return ErrorMessage::conflict(format!(
                 "Container {} is paused, unpause the container before exec",
                 exec.container_id
             ));
         }
         if c.status != "running" {
-            return conflict(format!("Container {} is not running", exec.container_id));
+            return ErrorMessage::conflict(format!(
+                "Container {} is not running",
+                exec.container_id
+            ));
         }
         let mut temp = c; // share the container's rootfs/volumes/arch; distinct id -> own process
         temp.id = id.clone();

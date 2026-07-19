@@ -87,80 +87,87 @@ pub struct FormatFeatures {
     pub buffer: u32,
 }
 
+use crate::model::memory::Format;
+
 /// Whether `vk_format` is one of the color formats the render/transfer path materializes (matches the
 /// translated set in [`crate::model::memory::tex_format_from_vk`] /
 /// [`crate::service::create::create_image`]).
-pub fn is_color_format(vk_format: u32) -> bool {
-    matches!(
-        vk_format,
-        vk_format::R8G8B8A8_UNORM
-            | vk_format::R8G8B8A8_SRGB
-            | vk_format::B8G8R8A8_UNORM
-            | vk_format::B8G8R8A8_SRGB
-    )
-}
+impl Format {
+    pub fn is_color(&self) -> bool {
+        let vk_format = self.0;
+        matches!(
+            vk_format,
+            vk_format::R8G8B8A8_UNORM
+                | vk_format::R8G8B8A8_SRGB
+                | vk_format::B8G8R8A8_UNORM
+                | vk_format::B8G8R8A8_SRGB
+        )
+    }
 
-/// Whether `vk_format` is a depth/stencil format the render path materializes.
-pub fn is_depth_format(vk_format: u32) -> bool {
-    matches!(
-        vk_format,
-        vk_format::D32_SFLOAT | vk_format::D24_UNORM_S8_UINT
-    )
-}
+    /// Whether `vk_format` is a depth/stencil format the render path materializes.
+    pub fn is_depth(&self) -> bool {
+        let vk_format = self.0;
+        matches!(
+            vk_format,
+            vk_format::D32_SFLOAT | vk_format::D24_UNORM_S8_UINT
+        )
+    }
 
-/// Whether a `(format, 2D, optimal-tiling)` image is creatable — the subset
-/// `vkGetPhysicalDeviceImageFormatProperties` reports as supported (color formats only; anything else
-/// is truthfully `VK_ERROR_FORMAT_NOT_SUPPORTED`).
-pub fn image_format_supported(vk_format: u32) -> bool {
-    is_color_format(vk_format)
-}
+    /// Whether a `(format, 2D, optimal-tiling)` image is creatable — the subset
+    /// `vkGetPhysicalDeviceImageFormatProperties` reports as supported (color formats only; anything else
+    /// is truthfully `VK_ERROR_FORMAT_NOT_SUPPORTED`).
+    pub fn is_image_supported(&self) -> bool {
+        self.is_color()
+    }
 
-/// The truthful per-format `VkFormatProperties` feature masks. A color format advertises
-/// color-attachment + blend + sampled + storage + blit + transfer; a depth/stencil format advertises
-/// depth-stencil-attachment + sampled + transfer (never color-attachment, and vice-versa); vertex float
-/// formats advertise `VERTEX_BUFFER`. Reporting the same flags for every format (the old all-broad stub)
-/// made a client build wrong per-format capabilities. Ported from
-/// `MVKPixelFormats::getVkFormatProperties`.
-pub fn format_features(vk_format: u32) -> FormatFeatures {
-    use format_feature as f;
-    let color = is_color_format(vk_format);
-    let depth = is_depth_format(vk_format);
-    let optimal = if color {
-        f::SAMPLED_IMAGE
-            | f::STORAGE_IMAGE
-            | f::COLOR_ATTACHMENT
-            | f::COLOR_ATTACHMENT_BLEND
-            | f::BLIT_SRC
-            | f::BLIT_DST
-            | f::SAMPLED_IMAGE_FILTER_LINEAR
-            | f::TRANSFER_SRC
-            | f::TRANSFER_DST
-    } else if depth {
-        f::SAMPLED_IMAGE | f::DEPTH_STENCIL_ATTACHMENT | f::TRANSFER_SRC | f::TRANSFER_DST
-    } else {
-        0
-    };
-    // Vertex-attribute float formats (a client's vertex buffers); a color format also serves as a
-    // uniform/storage texel buffer.
-    let buffer = match vk_format {
-        vk_format::R32_SFLOAT | vk_format::R16G16B16A16_SFLOAT | vk_format::R32G32B32A32_SFLOAT => {
-            f::VERTEX_BUFFER
+    /// The truthful per-format `VkFormatProperties` feature masks. A color format advertises
+    /// color-attachment + blend + sampled + storage + blit + transfer; a depth/stencil format advertises
+    /// depth-stencil-attachment + sampled + transfer (never color-attachment, and vice-versa); vertex float
+    /// formats advertise `VERTEX_BUFFER`. Reporting the same flags for every format (the old all-broad stub)
+    /// made a client build wrong per-format capabilities. Ported from
+    /// `MVKPixelFormats::getVkFormatProperties`.
+    pub fn features(&self) -> FormatFeatures {
+        let vk_format = self.0;
+        use format_feature as f;
+        let color = self.is_color();
+        let depth = self.is_depth();
+        let optimal = if color {
+            f::SAMPLED_IMAGE
+                | f::STORAGE_IMAGE
+                | f::COLOR_ATTACHMENT
+                | f::COLOR_ATTACHMENT_BLEND
+                | f::BLIT_SRC
+                | f::BLIT_DST
+                | f::SAMPLED_IMAGE_FILTER_LINEAR
+                | f::TRANSFER_SRC
+                | f::TRANSFER_DST
+        } else if depth {
+            f::SAMPLED_IMAGE | f::DEPTH_STENCIL_ATTACHMENT | f::TRANSFER_SRC | f::TRANSFER_DST
+        } else {
+            0
+        };
+        // Vertex-attribute float formats (a client's vertex buffers); a color format also serves as a
+        // uniform/storage texel buffer.
+        let buffer = match vk_format {
+            vk_format::R32_SFLOAT
+            | vk_format::R16G16B16A16_SFLOAT
+            | vk_format::R32G32B32A32_SFLOAT => f::VERTEX_BUFFER,
+            _ if color => f::UNIFORM_TEXEL_BUFFER | f::STORAGE_TEXEL_BUFFER,
+            _ => 0,
+        };
+        FormatFeatures {
+            // LINEAR tiling advertises NOTHING materializable. Vulkan's linear tiling exists so an app can
+            // populate an image through host-mapped memory (`vkMapMemory` + memcpy) — but this backend stores
+            // every image as a device-only wgpu texture and materializes texel content solely through device
+            // commands (`vkCmdCopyBufferToImage` / render passes), never from host-mapped image memory. So
+            // advertising e.g. SAMPLED for a linear image would be a capability lie: it steers an app (vkcube's
+            // default texture path keys on `linearTilingFeatures & SAMPLED_IMAGE`) into a host-mapped upload
+            // whose texels never reach the sampled texture — the cube then samples black. Reporting 0 forces the
+            // staging-buffer + `vkCmdCopyBufferToImage` → optimal-image path this backend actually materializes.
+            linear_tiling: 0,
+            optimal_tiling: optimal,
+            buffer,
         }
-        _ if color => f::UNIFORM_TEXEL_BUFFER | f::STORAGE_TEXEL_BUFFER,
-        _ => 0,
-    };
-    FormatFeatures {
-        // LINEAR tiling advertises NOTHING materializable. Vulkan's linear tiling exists so an app can
-        // populate an image through host-mapped memory (`vkMapMemory` + memcpy) — but this backend stores
-        // every image as a device-only wgpu texture and materializes texel content solely through device
-        // commands (`vkCmdCopyBufferToImage` / render passes), never from host-mapped image memory. So
-        // advertising e.g. SAMPLED for a linear image would be a capability lie: it steers an app (vkcube's
-        // default texture path keys on `linearTilingFeatures & SAMPLED_IMAGE`) into a host-mapped upload
-        // whose texels never reach the sampled texture — the cube then samples black. Reporting 0 forces the
-        // staging-buffer + `vkCmdCopyBufferToImage` → optimal-image path this backend actually materializes.
-        linear_tiling: 0,
-        optimal_tiling: optimal,
-        buffer,
     }
 }
 
@@ -194,7 +201,7 @@ mod tests {
 
     #[test]
     fn rgba8_reports_color_attachment_and_sampled() {
-        let ff = format_features(vk_format::R8G8B8A8_UNORM);
+        let ff = Format(vk_format::R8G8B8A8_UNORM).features();
         assert_ne!(ff.optimal_tiling & format_feature::COLOR_ATTACHMENT, 0);
         assert_ne!(ff.optimal_tiling & format_feature::SAMPLED_IMAGE, 0);
         // A color format is never depth-stencil-capable.
@@ -212,7 +219,7 @@ mod tests {
 
     #[test]
     fn depth_reports_depth_stencil_not_color() {
-        let ff = format_features(vk_format::D32_SFLOAT);
+        let ff = Format(vk_format::D32_SFLOAT).features();
         assert_ne!(
             ff.optimal_tiling & format_feature::DEPTH_STENCIL_ATTACHMENT,
             0
@@ -224,13 +231,13 @@ mod tests {
 
     #[test]
     fn vertex_float_reports_vertex_buffer() {
-        let ff = format_features(vk_format::R32G32B32A32_SFLOAT);
+        let ff = Format(vk_format::R32G32B32A32_SFLOAT).features();
         assert_ne!(ff.buffer & format_feature::VERTEX_BUFFER, 0);
     }
 
     #[test]
     fn unknown_format_reports_nothing() {
-        let ff = format_features(0);
+        let ff = Format(0).features();
         assert_eq!(ff, FormatFeatures::default());
     }
 }

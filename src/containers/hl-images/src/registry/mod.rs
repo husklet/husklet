@@ -19,20 +19,16 @@ mod reference;
 
 pub use client::Client;
 pub use credentials::Credentials;
-pub use events::{layer_short, PullEvent, Pulled};
-pub(crate) use reference::split_tag;
+pub use events::{LayerId, PullEvent, Pulled};
 pub use reference::ImageRef;
 
 // Internal flat namespace: siblings reach layer/http free fns (whiteouts, tar, curl helpers) via
 // `use super::*`, so re-glob the two modules whose private surface is shared across the module.
-use http::*;
 use layer::*;
 // The tests below reach `BearerChallenge` (client) and `is_local_registry` (reference) through the
 // same flat namespace; those private items have no non-test consumer, so gate their re-glob on test.
 #[cfg(test)]
 use client::*;
-#[cfg(test)]
-use reference::*;
 
 const DOCKER_HUB: &str = "registry-1.docker.io";
 const MANIFEST_ACCEPT: &str = "application/vnd.docker.distribution.manifest.list.v2+json,\
@@ -48,16 +44,24 @@ const MEDIA_LAYER_OCI_GZIP: &str = "application/vnd.oci.image.layer.v1.tar+gzip"
 /// A single image manifest's `mediaType` we understand (NOT an index — that's resolved earlier). An
 /// absent `mediaType` is tolerated (some registries omit it on the manifest body); a present one must be
 /// one of these.
-fn is_supported_manifest_media(m: &str) -> bool {
-    m == MEDIA_MANIFEST || m == MEDIA_MANIFEST_OCI
-}
+struct MediaType<'a>(&'a str);
 
-/// A layer `mediaType` we can actually unpack. Extraction is `tar xzf` (gzip), so only the docker/OCI
-/// GZIP layer types are supported; zstd (`…tar+zstd`), plain uncompressed tar, and foreign/unknown types
-/// are rejected rather than blindly gzip-extracted. An empty/absent type defaults to the docker gzip type
-/// (older registries omit it).
-fn is_supported_layer_media(m: &str) -> bool {
-    m.is_empty() || m == MEDIA_LAYER || m == MEDIA_LAYER_OCI_GZIP
+impl MediaType<'_> {
+    fn new(value: &str) -> MediaType<'_> {
+        MediaType(value)
+    }
+
+    fn supports_manifest(&self) -> bool {
+        self.0 == MEDIA_MANIFEST || self.0 == MEDIA_MANIFEST_OCI
+    }
+
+    /// A layer `mediaType` we can actually unpack. Extraction is `tar xzf` (gzip), so only the docker/OCI
+    /// GZIP layer types are supported; zstd (`…tar+zstd`), plain uncompressed tar, and foreign/unknown types
+    /// are rejected rather than blindly gzip-extracted. An empty/absent type defaults to the docker gzip type
+    /// (older registries omit it).
+    fn supports_layer(&self) -> bool {
+        self.0.is_empty() || self.0 == MEDIA_LAYER || self.0 == MEDIA_LAYER_OCI_GZIP
+    }
 }
 
 #[cfg(test)]
@@ -67,24 +71,24 @@ mod tests {
 
     #[test]
     fn parse_refs() {
-        let h = ImageRef::parse("ubuntu");
+        let h = ImageRef::from("ubuntu");
         assert_eq!(
             (h.registry.as_str(), h.repository.as_str(), h.tag.as_str()),
             (DOCKER_HUB, "library/ubuntu", "latest")
         );
-        assert_eq!(ImageRef::parse("alpine:3.19").tag, "3.19");
-        assert_eq!(ImageRef::parse("user/app").repository, "user/app");
-        let g = ImageRef::parse("ghcr.io/owner/app:v2");
+        assert_eq!(ImageRef::from("alpine:3.19").tag, "3.19");
+        assert_eq!(ImageRef::from("user/app").repository, "user/app");
+        let g = ImageRef::from("ghcr.io/owner/app:v2");
         assert_eq!(
             (g.registry.as_str(), g.repository.as_str(), g.tag.as_str()),
             ("ghcr.io", "owner/app", "v2")
         );
-        let l = ImageRef::parse("localhost:5000/img");
+        let l = ImageRef::from("localhost:5000/img");
         assert_eq!(
             (l.registry.as_str(), l.repository.as_str()),
             ("localhost:5000", "img")
         );
-        assert!(is_local_registry(&l.registry));
+        assert!(l.local_registry());
     }
     #[test]
     fn whiteouts() {
@@ -102,7 +106,7 @@ mod tests {
         std::fs::write(sub.join(".wh."), b"").unwrap(); // malformed: must NOT delete sub/
         std::fs::write(sub.join(".wh.."), b"").unwrap(); // malformed: target "." must be ignored
 
-        apply_whiteouts(&root).unwrap();
+        LayerRootfs::new(&root).apply_whiteouts().unwrap();
 
         assert!(root.join("keep").exists(), "unrelated file preserved");
         assert!(sub.exists(), "parent dir must survive a bare .wh. marker");
@@ -143,12 +147,17 @@ mod tests {
         assert!(st.success(), "build layer tar");
 
         // The opaque dir is detected from the tar.
-        assert_eq!(opaque_dirs_in_tar(&tar), vec!["app".to_string()]);
+        assert_eq!(
+            LayerRootfs::opaque_dirs_in_tar(&tar),
+            vec!["app".to_string()]
+        );
 
         // Apply the layer exactly as unpack_layer does: clear opaque dirs, extract, apply whiteouts.
-        clear_opaque_dirs(&root, &opaque_dirs_in_tar(&tar));
-        http::extract_targz(&tar, &root).unwrap();
-        apply_whiteouts(&root).unwrap();
+        LayerRootfs::new(&root).clear_opaque(&LayerRootfs::opaque_dirs_in_tar(&tar));
+        crate::image::archive::Archive::new(&tar)
+            .extract_layer(&root)
+            .unwrap();
+        LayerRootfs::new(&root).apply_whiteouts().unwrap();
 
         assert!(
             !root.join("app/stale.txt").exists(),

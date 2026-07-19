@@ -40,9 +40,12 @@ pub(super) fn cache_desc(
                             } else {
                                 root.join(src)
                             };
-                            let dg = path_digest(&sp);
+                            let digest = Sha256Digest::build_path(&sp);
                             d.push('\n');
-                            d.push_str(if dg.is_empty() { nonce } else { &dg });
+                            match digest {
+                                Ok(digest) => d.push_str(&digest.to_string()),
+                                Err(_) => d.push_str(nonce),
+                            }
                         }
                     }
                     None => d.push_str("\n?unknown-stage"),
@@ -309,14 +312,24 @@ mod tests {
         std::fs::create_dir_all(&rootfs).unwrap();
         std::fs::write(ctx.join("file"), b"x\n").unwrap();
 
-        // The numeric chown parse is what feeds the (best-effort, root-only) lchown request.
-        assert_eq!(parse_numeric_chown("1000:1000"), (Some(1000), Some(1000)));
-        assert_eq!(parse_numeric_chown("1000"), (Some(1000), None));
+        // Parsed COPY attributes feed the best-effort, root-only lchown request.
         assert_eq!(
-            parse_numeric_chown("root"),
-            (None, None),
-            "symbolic names aren't numeric-resolved"
+            CopyAttributes::parse("--chown=1000:1000").unwrap(),
+            CopyAttributes {
+                mode: None,
+                uid: Some(1000),
+                gid: Some(1000),
+            }
         );
+        assert_eq!(
+            CopyAttributes::parse("--chown=1000").unwrap(),
+            CopyAttributes {
+                mode: None,
+                uid: Some(1000),
+                gid: None,
+            }
+        );
+        assert!(CopyAttributes::parse("--chown=root").is_err());
 
         let sn: HashMap<String, usize> = HashMap::new();
         let stages: Vec<PathBuf> = Vec::new();
@@ -343,6 +356,14 @@ mod tests {
             assert_eq!(md.gid(), 1000, "root run applies the requested gid");
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn copy_attributes_reject_malformed_values() {
+        assert!(CopyAttributes::parse("--chmod=888").is_err());
+        assert!(CopyAttributes::parse("--chmod=").is_err());
+        assert!(CopyAttributes::parse("--chown=1000:wheel").is_err());
+        assert!(CopyAttributes::parse("--chown=:1000").is_err());
     }
 }
 
@@ -425,27 +446,30 @@ pub(super) async fn run_step(
 /// Whether `p` is a local archive that Dockerfile `ADD` auto-extracts (identity tar, gzip, bzip2, xz,
 /// zstd). Detected by leading magic bytes plus the `ustar` magic at offset 257 for an uncompressed tar,
 /// matching Docker's `archive.DecompressStream` sniffing. Only regular local files are candidates.
-fn is_local_archive(p: &std::path::Path) -> bool {
-    use std::io::Read;
-    let Ok(mut f) = std::fs::File::open(p) else {
-        return false;
-    };
-    let mut buf = [0u8; 262];
-    let n = f.read(&mut buf).unwrap_or(0);
-    if n >= 2 && buf[0] == 0x1f && buf[1] == 0x8b {
-        return true; // gzip
+struct LocalArchive;
+impl LocalArchive {
+    fn matches(p: &std::path::Path) -> bool {
+        use std::io::Read;
+        let Ok(mut f) = std::fs::File::open(p) else {
+            return false;
+        };
+        let mut buf = [0u8; 262];
+        let n = f.read(&mut buf).unwrap_or(0);
+        if n >= 2 && buf[0] == 0x1f && buf[1] == 0x8b {
+            return true; // gzip
+        }
+        if n >= 3 && &buf[0..3] == b"BZh" {
+            return true; // bzip2
+        }
+        if n >= 6 && &buf[0..6] == b"\xfd7zXZ\x00" {
+            return true; // xz
+        }
+        if n >= 4 && buf[0] == 0x28 && buf[1] == 0xb5 && buf[2] == 0x2f && buf[3] == 0xfd {
+            return true; // zstd
+        }
+        // Uncompressed tar: POSIX ustar magic ("ustar\0" or "ustar  ") at offset 257.
+        n >= 262 && &buf[257..262] == b"ustar"
     }
-    if n >= 3 && &buf[0..3] == b"BZh" {
-        return true; // bzip2
-    }
-    if n >= 6 && &buf[0..6] == b"\xfd7zXZ\x00" {
-        return true; // xz
-    }
-    if n >= 4 && buf[0] == 0x28 && buf[1] == 0xb5 && buf[2] == 0x2f && buf[3] == 0xfd {
-        return true; // zstd
-    }
-    // Uncompressed tar: POSIX ustar magic ("ustar\0" or "ustar  ") at offset 257.
-    n >= 262 && &buf[257..262] == b"ustar"
 }
 
 /// Execute a `COPY`/`ADD` instruction: copy each source (from the build context, or `--from=<stage>`'s
@@ -465,17 +489,7 @@ pub(super) fn copy_step(
     let from_stage = args
         .split_whitespace()
         .find_map(|p| p.strip_prefix("--from="));
-    // `COPY/ADD --chmod=MODE --chown=U[:G]` apply permissions/ownership to the copied destination
-    // (finding 1). chmod is applied via mode bits; chown is numeric best-effort (needs root).
-    let chmod = args
-        .split_whitespace()
-        .find_map(|p| p.strip_prefix("--chmod="))
-        .and_then(parse_octal_mode);
-    let (chown_uid, chown_gid) = args
-        .split_whitespace()
-        .find_map(|p| p.strip_prefix("--chown="))
-        .map(parse_numeric_chown)
-        .unwrap_or((None, None));
+    let attributes = CopyAttributes::parse(args)?;
     let parts: Vec<&str> = args
         .split_whitespace()
         .filter(|p| !p.starts_with("--"))
@@ -526,18 +540,18 @@ pub(super) fn copy_step(
         if inst == "ADD"
             && from_stage.is_none()
             && src_host.is_file()
-            && is_local_archive(&src_host)
+            && LocalArchive::matches(&src_host)
         {
             let _ = std::fs::create_dir_all(&dst_host);
             // Refuse a traversal-laden archive before extracting it into the stage rootfs.
-            if let Err(e) = crate::util::tar_members_contained(&src_host) {
+            if let Err(e) = crate::util::Archive::validate(&src_host) {
                 return Err(format!("{inst} {src}: {e}"));
             }
             if !matches!(std::process::Command::new("tar").arg("--no-same-owner").arg("-xf").arg(&src_host).arg("-C").arg(&dst_host).status(), Ok(s) if s.success())
             {
                 return Err(format!("{inst} {src}: failed to extract archive"));
             }
-            apply_copy_perms(&dst_host, chmod, chown_uid, chown_gid);
+            attributes.apply(&dst_host);
             continue;
         }
         if !matches!(std::process::Command::new("cp").arg("-a").arg(&src_host).arg(&dst_host).status(), Ok(s) if s.success())
@@ -553,61 +567,93 @@ pub(super) fn copy_step(
         } else {
             dst_host.clone()
         };
-        apply_copy_perms(&target, chmod, chown_uid, chown_gid);
+        attributes.apply(&target);
     }
     Ok(())
 }
 
-/// Parse a `--chmod=` octal mode (`0755`/`755`) into permission bits, or `None` if malformed.
-fn parse_octal_mode(s: &str) -> Option<u32> {
-    let t = s.trim();
-    if t.is_empty() || !t.bytes().all(|b| (b'0'..=b'7').contains(&b)) {
-        return None;
-    }
-    u32::from_str_radix(t, 8).ok()
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct CopyAttributes {
+    mode: Option<u32>,
+    uid: Option<u32>,
+    gid: Option<u32>,
 }
 
-/// Parse a `--chown=` value into NUMERIC (uid, gid). Symbolic names can't be resolved against the target
-/// rootfs here, so only numeric ids are honored (best-effort, matching the finding); a bare `U` sets uid.
-fn parse_numeric_chown(s: &str) -> (Option<u32>, Option<u32>) {
-    let (u, g) = match s.split_once(':') {
-        Some((u, g)) => (u, Some(g)),
-        None => (s, None),
-    };
-    (u.parse::<u32>().ok(), g.and_then(|g| g.parse::<u32>().ok()))
-}
+impl CopyAttributes {
+    fn parse(arguments: &str) -> Result<Self, String> {
+        let mode = arguments
+            .split_whitespace()
+            .find_map(|argument| argument.strip_prefix("--chmod="))
+            .map(|value| {
+                if value.is_empty() || !value.bytes().all(|byte| (b'0'..=b'7').contains(&byte)) {
+                    return Err(format!("invalid COPY --chmod mode '{value}'"));
+                }
 
-/// Apply `--chmod`/`--chown` to a copied destination, recursing into directories. chmod uses mode bits
-/// (works unprivileged); chown is a best-effort numeric `lchown` (a no-op without root — `-1` leaves a
-/// component unchanged), so the correct request is always issued even where privilege is unavailable.
-fn apply_copy_perms(path: &std::path::Path, mode: Option<u32>, uid: Option<u32>, gid: Option<u32>) {
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::PermissionsExt;
-    if mode.is_none() && uid.is_none() && gid.is_none() {
-        return;
+                u32::from_str_radix(value, 8)
+                    .map_err(|_| format!("invalid COPY --chmod mode '{value}'"))
+            })
+            .transpose()?;
+
+        let (uid, gid) = match arguments
+            .split_whitespace()
+            .find_map(|argument| argument.strip_prefix("--chown="))
+        {
+            Some(value) => {
+                let (user, group) = match value.split_once(':') {
+                    Some((user, group)) => (user, Some(group)),
+                    None => (value, None),
+                };
+                let uid = user
+                    .parse::<u32>()
+                    .map_err(|_| format!("COPY --chown requires a numeric user: '{value}'"))?;
+                let gid = group
+                    .map(|group| {
+                        group.parse::<u32>().map_err(|_| {
+                            format!("COPY --chown requires a numeric group: '{value}'")
+                        })
+                    })
+                    .transpose()?;
+                (Some(uid), gid)
+            }
+            None => (None, None),
+        };
+
+        Ok(Self { mode, uid, gid })
     }
-    let is_symlink = std::fs::symlink_metadata(path)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false);
-    if let Some(m) = mode {
-        if !is_symlink {
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(m));
+
+    /// Apply the requested metadata recursively. Ownership remains best-effort because unprivileged
+    /// daemon processes cannot honor `lchown`; `u32::MAX` leaves an unspecified component unchanged.
+    fn apply(&self, path: &std::path::Path) {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        if self.mode.is_none() && self.uid.is_none() && self.gid.is_none() {
+            return;
         }
-    }
-    if uid.is_some() || gid.is_some() {
-        if let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
-            // -1 (u32::MAX cast) leaves that id unchanged.
-            let u = uid.unwrap_or(u32::MAX);
-            let g = gid.unwrap_or(u32::MAX);
-            unsafe {
-                libc::lchown(c.as_ptr(), u, g);
+        let is_symlink = std::fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false);
+        if let Some(mode) = self.mode {
+            if !is_symlink {
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
             }
         }
-    }
-    if !is_symlink && path.is_dir() {
-        if let Ok(rd) = std::fs::read_dir(path) {
-            for e in rd.flatten() {
-                apply_copy_perms(&e.path(), mode, uid, gid);
+        if self.uid.is_some() || self.gid.is_some() {
+            if let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
+                let uid = self.uid.unwrap_or(u32::MAX);
+                let gid = self.gid.unwrap_or(u32::MAX);
+                // SAFETY: `path` is a live, NUL-terminated C string. `lchown` only reads it for the
+                // duration of the call; both identifiers use the platform's documented `u32` values.
+                unsafe {
+                    libc::lchown(path.as_ptr(), uid, gid);
+                }
+            }
+        }
+        if !is_symlink && path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    self.apply(&entry.path());
+                }
             }
         }
     }

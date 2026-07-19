@@ -20,7 +20,7 @@ use crate::runtime::model::resources::SessionResources;
 /// (The out-of-band presentable-image handle is delivered to the compositor on a separate channel; the
 /// runtime surfaces only the protocol-id pairing here.)
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Presented {
+pub struct Presentation {
     pub surface: SurfaceId,
     pub texture: TextureId,
 }
@@ -40,12 +40,12 @@ pub trait GpuExecutor {
     /// Execute a validated, accounted batch against the runtime-owned `resources`. The executor inserts
     /// its native object behind each created id and removes it on destroy (lifecycle errors surface as
     /// typed [`GpuError`](crate::protocol::model::error::GpuError)s from the resource tables), records
-    /// encoder work on `Submit`, and returns one [`Presented`] per `Present` command in order.
+    /// encoder work on `Submit`, and returns one [`Presentation`] per `Present` command in order.
     fn execute(
         &mut self,
         resources: &mut SessionResources,
         batch: &[Cmd],
-    ) -> Result<Vec<Presented>>;
+    ) -> Result<Vec<Presentation>>;
 
     /// Block until timeline fence `fence` reaches `value`. Serves the `CommandSink::wait` path (an
     /// out-of-band wait not carried inside a command batch); `resources` is passed so the executor can

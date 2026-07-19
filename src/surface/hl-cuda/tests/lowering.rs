@@ -7,7 +7,7 @@
 use hl_cuda::adapter::{fatbin, ptx};
 use hl_cuda::model::stream::Stream;
 use hl_cuda::result;
-use hl_cuda::service::{allocate, launch, load_module, synchronize, transfer};
+use hl_cuda::service::{allocate, launch, load_module, transfer};
 use hl_cuda::{CudaContext, CudaDeviceDesc, KernelArg};
 
 use hl_gpu::protocol::model::command::Enc;
@@ -173,7 +173,7 @@ fn dtoh_resolves_without_submitting() {
     let mut sink = RecordingSink::with_full_caps();
     let p = allocate::mem_alloc(&mut c, &mut sink, 256).unwrap();
     let batches_before = sink.batches.len();
-    let (buf, off) = transfer::memcpy_dtoh(&c, hl_cuda::DevicePtr(p.0 + 8)).unwrap();
+    let (buf, off) = c.device_location(hl_cuda::DevicePtr(p.0 + 8)).unwrap();
     assert_eq!((buf.0, off), (1, 8));
     // no command was submitted for the readback.
     assert_eq!(sink.batches.len(), batches_before);
@@ -231,7 +231,7 @@ fn pitch_alloc_aligns_pitch_and_sizes_buffer() {
 fn host_alloc_gives_usable_buffer_and_frees() {
     let mut c = ctx();
     // a pinned allocation is real, writable host memory of the requested size.
-    let base = allocate::host_alloc(&mut c, 64).unwrap();
+    let base = c.host_alloc(64).unwrap();
     assert_ne!(base, 0);
     assert_eq!(c.host.size_of(base), Some(64));
     unsafe {
@@ -242,8 +242,8 @@ fn host_alloc_gives_usable_buffer_and_frees() {
         assert_eq!(*p.add(10), 10);
     }
     // free reclaims it; a second free is a typed error.
-    allocate::host_free(&mut c, base).unwrap();
-    assert!(allocate::host_free(&mut c, base).is_err());
+    c.host_free(base).unwrap();
+    assert!(c.host_free(base).is_err());
 }
 
 #[test]
@@ -251,22 +251,22 @@ fn host_register_unregister_tracks_guest_range() {
     let mut c = ctx();
     let mut buf = [0u8; 32];
     let base = buf.as_mut_ptr() as u64;
-    allocate::host_register(&mut c, base, 32).unwrap();
+    c.host_register(base, 32).unwrap();
     assert_eq!(c.host.size_of(base), Some(32));
     // double-register is rejected.
-    assert!(allocate::host_register(&mut c, base, 32).is_err());
-    allocate::host_unregister(&mut c, base).unwrap();
+    assert!(c.host_register(base, 32).is_err());
+    c.host_unregister(base).unwrap();
     // unregister of an unknown base is rejected.
-    assert!(allocate::host_unregister(&mut c, base).is_err());
+    assert!(c.host_unregister(base).is_err());
 }
 
 #[test]
 fn host_get_device_pointer_maps_to_a_device_buffer() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
-    let base = allocate::host_alloc(&mut c, 128).unwrap();
+    let base = c.host_alloc(128).unwrap();
 
-    let dptr = allocate::host_get_device_pointer(&mut c, &mut sink, base).unwrap();
+    let dptr = c.host_get_device_pointer(&mut sink, base).unwrap();
     // it created exactly one backing device buffer sized to the host allocation …
     match sink.batches.last().unwrap()[0] {
         Cmd::CreateBuffer(id, ref desc) => {
@@ -280,7 +280,7 @@ fn host_get_device_pointer_maps_to_a_device_buffer() {
 
     // repeat calls return the SAME device pointer and emit no new buffer.
     let batches = sink.batches.len();
-    let dptr2 = allocate::host_get_device_pointer(&mut c, &mut sink, base).unwrap();
+    let dptr2 = c.host_get_device_pointer(&mut sink, base).unwrap();
     assert_eq!(dptr, dptr2);
     assert_eq!(
         sink.batches.len(),
@@ -289,7 +289,7 @@ fn host_get_device_pointer_maps_to_a_device_buffer() {
     );
 
     // an unknown host pointer is a typed error.
-    assert!(allocate::host_get_device_pointer(&mut c, &mut sink, 0xdead_beef).is_err());
+    assert!(c.host_get_device_pointer(&mut sink, 0xdead_beef).is_err());
 }
 
 #[test]
@@ -388,7 +388,7 @@ fn dtod_async_emits_copy_buffer_to_buffer() {
 #[test]
 fn module_load_and_get_function() {
     let mut c = ctx();
-    let m = load_module::module_load_ptx(&mut c, ptx::VECADD_PTX);
+    let m = c.load_ptx(ptx::VECADD_PTX);
     let f = load_module::module_get_function(&c, m, "vecadd").unwrap();
     assert_eq!(f.module, m);
     assert_eq!(f.entry, 0);
@@ -420,20 +420,20 @@ fn build_fatbin(ptx: &[u8]) -> Vec<u8> {
 fn module_load_data_walks_fatbin() {
     let mut c = ctx();
     let image = build_fatbin(ptx::VECADD_PTX.as_bytes());
-    assert!(fatbin::is_fatbin(&image));
+    assert!(fatbin::Image::new(&image).is_fatbin());
     assert_eq!(
-        fatbin::extract_ptx(&image).unwrap(),
+        fatbin::Image::new(&image).ptx().unwrap(),
         ptx::VECADD_PTX.as_bytes()
     );
 
-    let m = load_module::module_load_data(&mut c, &image).unwrap();
+    let m = c.load_module(&image).unwrap();
     assert!(load_module::module_get_function(&c, m, "vecadd").is_ok());
 }
 
 #[test]
 fn module_load_data_accepts_raw_ptx_text() {
     let mut c = ctx();
-    let m = load_module::module_load_data(&mut c, ptx::VECADD_PTX.as_bytes()).unwrap();
+    let m = c.load_module(ptx::VECADD_PTX.as_bytes()).unwrap();
     assert!(load_module::module_get_function(&c, m, "vecadd").is_ok());
 }
 
@@ -480,7 +480,7 @@ fn ptx_parse_recovers_global_declarations() {
 fn module_get_global_returns_backing_buffer_and_size() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
-    let m = load_module::module_load_ptx(&mut c, GLOBALS_PTX);
+    let m = c.load_ptx(GLOBALS_PTX);
 
     // The global resolves to a live device pointer + its declared byte size, backed by exactly one
     // CreateBuffer sized to the global.
@@ -528,8 +528,8 @@ fn module_get_global_returns_backing_buffer_and_size() {
 
 #[test]
 fn fatbin_rejects_non_container() {
-    assert!(!fatbin::is_fatbin(b"not a fatbin"));
-    assert!(fatbin::extract_ptx(b"not a fatbin").is_none());
+    assert!(!fatbin::Image::new(b"not a fatbin").is_fatbin());
+    assert!(fatbin::Image::new(b"not a fatbin").ptx().is_none());
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -543,7 +543,7 @@ fn setup_vecadd(
     let a = allocate::mem_alloc(c, sink, 1024).unwrap();
     let b = allocate::mem_alloc(c, sink, 1024).unwrap();
     let out = allocate::mem_alloc(c, sink, 1024).unwrap();
-    let m = load_module::module_load_ptx(c, ptx::VECADD_PTX);
+    let m = c.load_ptx(ptx::VECADD_PTX);
     let f = load_module::module_get_function(c, m, "vecadd").unwrap();
     let args = vec![
         KernelArg::Ptr(a),
@@ -655,7 +655,7 @@ fn launch_with_different_block_makes_new_pipeline() {
 fn ctx_synchronize_emits_fence_barrier() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
-    synchronize::ctx_synchronize(&mut c, &mut sink).unwrap();
+    c.synchronize(&mut sink).unwrap();
 
     // batch 0: CreateFence + signalling Submit. batch 1: DestroyFence. one recorded wait.
     match sink.batches[0].as_slice() {
@@ -675,17 +675,13 @@ fn stream_synchronize_validates_handle() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
     // the default stream is always valid.
-    synchronize::stream_synchronize(
-        &mut c,
-        &mut sink,
-        hl_cuda::model::stream::StreamTable::DEFAULT,
-    )
-    .unwrap();
+    c.synchronize_stream(&mut sink, hl_cuda::model::stream::StreamTable::DEFAULT)
+        .unwrap();
     // a created stream is valid.
     let s = c.streams.create();
-    synchronize::stream_synchronize(&mut c, &mut sink, s).unwrap();
+    c.synchronize_stream(&mut sink, s).unwrap();
     // a bogus handle errors.
-    let err = synchronize::stream_synchronize(&mut c, &mut sink, Stream(9999)).unwrap_err();
+    let err = c.synchronize_stream(&mut sink, Stream(9999)).unwrap_err();
     assert!(matches!(err, GpuError::Invalid(_)));
 }
 
@@ -754,19 +750,19 @@ fn ptx_unsupported_opcode_errors() {
 #[test]
 fn gpu_error_maps_to_curesult() {
     assert_eq!(
-        result::cu_result_from_gpu_error(&GpuError::Kernel("x".into())),
+        result::DriverStatus::from(&GpuError::Kernel("x".into())).code(),
         result::CUDA_ERROR_INVALID_PTX
     );
     assert_eq!(
-        result::cu_result_from_gpu_error(&GpuError::Unsupported("x")),
+        result::DriverStatus::from(&GpuError::Unsupported("x")).code(),
         result::CUDA_ERROR_NOT_SUPPORTED
     );
     assert_eq!(
-        result::cu_result_from_gpu_error(&GpuError::Invalid("x")),
+        result::DriverStatus::from(&GpuError::Invalid("x")).code(),
         result::CUDA_ERROR_INVALID_VALUE
     );
     assert_eq!(
-        result::cudart_from_gpu_error(&GpuError::Kernel("x".into())),
+        result::RuntimeStatus::from(&GpuError::Kernel("x".into())).code(),
         result::CUDART_ERROR_INVALID_PTX
     );
 }

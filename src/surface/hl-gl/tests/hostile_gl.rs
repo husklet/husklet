@@ -51,7 +51,7 @@ fn junk_enums_to_state_setters_never_panic_and_valid_still_works() {
     assert!(!c.blend);
 
     // A bogus glBindTexture target + a junk texture name: no panic, no crash.
-    record::active_texture(&mut c, GL_TEXTURE0);
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, 0xDEAD, 424242);
     // A junk glBlendFunc factor pair is stored verbatim (validated at lowering); no panic.
     record::blend_func(&mut c, 0xDEAD, 0xBEEF);
@@ -103,7 +103,7 @@ fn dangling_object_names_to_bind_use_attach_never_panic() {
     let mut c = ctx();
     // Binding never-created names is a safe no-op (state stores the name; nothing dereferenced).
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, 777);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, 888);
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, 999);
     record::bind_vertex_array(&mut c, 4242);
@@ -141,8 +141,8 @@ fn dangling_object_names_to_bind_use_attach_never_panic() {
 #[test]
 fn deleting_and_detaching_unknown_names_is_safe() {
     let mut c = ctx();
-    assert!(!record::delete_buffer(&mut c, 5000));
-    assert!(!record::delete_texture(&mut c, 5000));
+    assert!(!c.delete_buffer(5000));
+    assert!(!c.delete_texture(5000));
     assert!(!record::delete_framebuffer(&mut c, 5000));
     assert!(!record::delete_renderbuffer(&mut c, 5000));
     assert!(!record::delete_vertex_array(&mut c, 5000));
@@ -170,7 +170,7 @@ fn out_of_range_indices_are_guarded_no_ops() {
     record::enable_vertex_attrib(&mut c, 9999);
     record::disable_vertex_attrib(&mut c, 9999);
     // A texture unit far past the modeled bank leaves the active unit unchanged.
-    record::active_texture(&mut c, GL_TEXTURE0 + 9999);
+    c.active_texture(GL_TEXTURE0 + 9999);
     assert_eq!(
         c.active_texture, 0,
         "an out-of-range unit does not move the active unit"
@@ -239,8 +239,8 @@ fn extreme_viewport_and_scissor_dims_do_not_panic() {
 #[test]
 fn tex_image_2d_oversized_extent_does_not_unbounded_alloc() {
     let mut c = ctx();
-    let t = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, t);
 
     // 40000×40000 RGBA8 = 6.4 GiB of zeroed storage — must be rejected, not allocated.
@@ -266,7 +266,7 @@ fn tex_image_2d_oversized_extent_does_not_unbounded_alloc() {
 #[test]
 fn buffer_sub_data_out_of_range_does_not_unbounded_alloc() {
     let mut c = ctx();
-    let b = record::gen_buffer(&mut c);
+    let b = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, b);
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[7u8; 32], 0);
 
@@ -298,7 +298,7 @@ fn buffer_sub_data_out_of_range_does_not_unbounded_alloc() {
 #[test]
 fn map_buffer_range_out_of_range_does_not_unbounded_alloc() {
     let mut c = ctx();
-    let b = record::gen_buffer(&mut c);
+    let b = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, b);
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 32], 0);
 
@@ -328,7 +328,7 @@ fn map_buffer_range_out_of_range_does_not_unbounded_alloc() {
 #[test]
 fn oversized_indexed_binding_dispatch_and_storage_are_bounded() {
     let mut c = ctx();
-    let b = record::gen_buffer(&mut c);
+    let b = c.buffers.gen();
     record::bind_buffer_base(&mut c, GL_UNIFORM_BUFFER, u32::MAX, b);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
 
@@ -337,8 +337,8 @@ fn oversized_indexed_binding_dispatch_and_storage_are_bounded() {
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
     assert!(sink.batches.is_empty());
 
-    let t = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, t);
     record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, GL_RGBA, i32::MAX, i32::MAX);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
@@ -391,7 +391,7 @@ fn read_pixels_out_of_bounds_region_is_zero_filled_no_oob() {
 #[test]
 fn incomplete_framebuffer_blit_and_draw_are_safe() {
     let mut c = ctx();
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     // No color attachment yet → INCOMPLETE_MISSING_ATTACHMENT.
     assert_eq!(
@@ -419,8 +419,8 @@ fn incomplete_framebuffer_blit_and_draw_are_safe() {
     assert_eq!(c.draws.len(), 1);
 
     // Attaching a real texture makes it complete.
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(&mut c, 4, 4, &[0u8; 64]);
     record::framebuffer_texture_2d(
@@ -442,7 +442,7 @@ fn incomplete_framebuffer_blit_and_draw_are_safe() {
 #[test]
 fn framebuffer_texture_2d_bad_attachment_and_dangling_texture() {
     let mut c = ctx();
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     // A non-2D textarget is GL_INVALID_VALUE.
     record::framebuffer_texture_2d(
@@ -466,8 +466,8 @@ fn framebuffer_texture_2d_bad_attachment_and_dangling_texture() {
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
 
     // A valid attach succeeds.
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(&mut c, 4, 4, &[0u8; 64]);
     record::framebuffer_texture_2d(
@@ -496,7 +496,7 @@ fn hostile_object_service_edges_never_panic() {
     // Sampler: unknown name → INVALID_OPERATION; junk pname → INVALID_ENUM.
     es3::sampler_parameter(&mut c, 9090, GL_TEXTURE_MIN_FILTER, GL_LINEAR as i32, 0.0);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
-    let s = es3::gen_sampler(&mut c);
+    let s = c.samplers.gen();
     es3::sampler_parameter(&mut c, s, 0xDEAD, 0, 0.0);
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
 
@@ -509,7 +509,7 @@ fn hostile_object_service_edges_never_panic() {
     // Program pipeline: use-stages on unknown pipeline → INVALID_OPERATION; bad stage bits → INVALID_VALUE.
     es3::use_program_stages(&mut c, 4242, GL_VERTEX_SHADER_BIT, 0);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
-    let pp = es3::gen_program_pipeline(&mut c);
+    let pp = c.program_pipelines.gen();
     es3::use_program_stages(&mut c, pp, 0x8000_0000, 0);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
 
@@ -530,7 +530,7 @@ fn hostile_object_service_edges_never_panic() {
     // Transform feedback: bad varyings program → INVALID_VALUE; junk primitive mode → INVALID_ENUM.
     es3::transform_feedback_varyings(&mut c, 0, vec!["v".into()], GL_INTERLEAVED_ATTRIBS);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
-    es3::begin_transform_feedback(&mut c, 0xDEAD);
+    c.begin_transform_feedback(0xDEAD);
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
 
     // A valid sampler parameter still sticks afterwards.

@@ -18,7 +18,7 @@
 //! release. `hl_log!` also survives as the runtime-level escape hatch.
 //!
 //! In debug builds every macro is present but still fronted by the runtime gate, so a
-//! debug build with `HL_LOG` unset is also near-free (one relaxed load + branch).
+//! debug build with the default configuration is also near-free (one relaxed load + branch).
 //!
 //! # Why `format_args!` lives INSIDE the `if`
 //! The real body is `if enabled(..) { emit(.., format_args!(..)) }`. When the gate is
@@ -37,9 +37,9 @@
 #[doc(hidden)]
 macro_rules! __hl_do {
     ($tag:expr, $level:expr, $($arg:tt)+) => {{
-        $crate::ensure_init();
-        if $crate::enabled($tag, $level) {
-            $crate::emit($tag, $level, module_path!(), line!(), format_args!($($arg)+));
+        let tags = $crate::Tags::from($tag);
+        if $crate::Logging::global().enabled(tags, $level) {
+            $crate::emit(tags, $level, module_path!(), line!(), format_args!($($arg)+));
         }
     }};
 }
@@ -176,9 +176,8 @@ macro_rules! hl_trace {
 #[macro_export]
 macro_rules! hl_count {
     ($tag:expr, $name:expr) => {{
-        $crate::ensure_init();
-        if $crate::counters_enabled($tag) {
-            $crate::counters::add($name, 1);
+        if $crate::Profiling::global().enabled($crate::Tags::from($tag)) {
+            $crate::Counters::global().add($name, 1);
         }
     }};
 }
@@ -198,9 +197,8 @@ macro_rules! hl_count {
 #[macro_export]
 macro_rules! hl_add {
     ($tag:expr, $name:expr, $n:expr) => {{
-        $crate::ensure_init();
-        if $crate::counters_enabled($tag) {
-            $crate::counters::add($name, $n);
+        if $crate::Profiling::global().enabled($crate::Tags::from($tag)) {
+            $crate::Counters::global().add($name, $n);
         }
     }};
 }
@@ -214,7 +212,7 @@ macro_rules! hl_add {
 }
 
 /// Open a timing span. Bind the result: `let _s = hl_span!(tag::WGPU, "readback");`.
-/// Records elapsed time on drop when `HL_LOG_COUNTERS` includes the tag; otherwise the
+/// Records elapsed time on drop when profiling includes the tag; otherwise the
 /// returned guard is inert. In release (without `release-verbose`) it is always inert.
 #[cfg(all(
     not(feature = "disabled"),
@@ -223,11 +221,10 @@ macro_rules! hl_add {
 #[macro_export]
 macro_rules! hl_span {
     ($tag:expr, $name:expr) => {{
-        $crate::ensure_init();
-        if $crate::counters_enabled($tag) {
-            $crate::timing::start($name)
+        if $crate::Profiling::global().enabled($crate::Tags::from($tag)) {
+            $crate::Timings::global().start($name)
         } else {
-            $crate::timing::Span::disabled()
+            $crate::Span::disabled()
         }
     }};
 }
@@ -238,6 +235,6 @@ macro_rules! hl_span {
 #[macro_export]
 macro_rules! hl_span {
     ($tag:expr, $name:expr) => {
-        $crate::timing::Span::disabled()
+        $crate::Span::disabled()
     };
 }

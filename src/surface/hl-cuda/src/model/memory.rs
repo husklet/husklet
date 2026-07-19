@@ -26,11 +26,6 @@ pub struct Allocations {
     next_ptr: u64,
 }
 
-/// Round `v` up to a multiple of `a` (a power of two).
-fn align_up(v: u64, a: u64) -> u64 {
-    (v + a - 1) & !(a - 1)
-}
-
 impl Allocations {
     /// A fresh table with the bump cursor started well above 0 and page-aligned, like a real allocator.
     pub fn new() -> Self {
@@ -43,17 +38,17 @@ impl Allocations {
 
     /// Record a new allocation of `size` bytes backed by buffer id `buffer`, returning its device
     /// pointer. The cursor bumps with 256-byte alignment (CUDA guarantees ≥256 B alignment).
-    pub fn record(&mut self, buffer: u32, size: u64) -> DevicePtr {
+    pub fn insert(&mut self, buffer: u32, size: u64) -> DevicePtr {
         let ptr = self.next_ptr;
-        self.next_ptr = align_up(self.next_ptr + size.max(1), 256);
+        self.next_ptr = (self.next_ptr + size.max(1) + 255) & !255;
         self.map.insert(ptr, Alloc { buffer, size });
         DevicePtr(ptr)
     }
 
-    /// Record a *managed* allocation (`cuMemAllocManaged`): identical bookkeeping to [`record`](Self::record)
+    /// Record a *managed* allocation (`cuMemAllocManaged`): identical bookkeeping to [`insert`](Self::insert)
     /// but the base is flagged managed so pointer-attribute queries report it as unified/managed memory.
-    pub fn record_managed(&mut self, buffer: u32, size: u64) -> DevicePtr {
-        let p = self.record(buffer, size);
+    pub fn insert_managed(&mut self, buffer: u32, size: u64) -> DevicePtr {
+        let p = self.insert(buffer, size);
         self.managed.insert(p.0);
         p
     }

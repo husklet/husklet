@@ -11,7 +11,6 @@ use std::collections::HashSet;
 use std::io::{self, ErrorKind};
 use std::os::unix::net::UnixStream;
 
-use crate::protocol::codec::encode_stream;
 use crate::protocol::model::capability::{Capabilities, FeatureRequest};
 use crate::protocol::model::command::{Cmd, Enc};
 use crate::protocol::model::descriptor::BindResource;
@@ -63,7 +62,7 @@ impl ResidencyJournal {
         }
     }
 
-    fn record(&mut self, cmds: &[Cmd]) {
+    fn append(&mut self, cmds: &[Cmd]) {
         if !self.replayable && !self.cmds.is_empty() {
             return;
         }
@@ -72,10 +71,10 @@ impl ResidencyJournal {
             if matches!(cmd, Cmd::Present { .. } | Cmd::WaitFence { .. }) {
                 continue;
             }
-            if is_destroy(cmd) {
+            if cmd.is_destroy() {
                 saw_destroy = true;
             }
-            let encoded = encode_stream(core::slice::from_ref(cmd));
+            let encoded = crate::protocol::codec::Encoder::stream(core::slice::from_ref(cmd));
             self.bytes = self.bytes.saturating_add(encoded.len());
             self.cmds.push(cmd.clone());
         }
@@ -103,10 +102,10 @@ impl ResidencyJournal {
         let mut created: HashSet<(u8, u32)> = HashSet::new();
         let mut destroyed: HashSet<(u8, u32)> = HashSet::new();
         for cmd in &self.cmds {
-            if let Some(key) = created_key(cmd) {
+            if let Some(key) = cmd.created_key() {
                 created.insert(key);
             }
-            if let Some(key) = destroyed_key(cmd) {
+            if let Some(key) = cmd.destroyed_key() {
                 destroyed.insert(key);
             }
         }
@@ -122,7 +121,7 @@ impl ResidencyJournal {
         loop {
             let mut evict: Vec<(u8, u32)> = Vec::new();
             for cmd in &self.cmds {
-                let refs = resource_refs(cmd);
+                let refs = cmd.resource_refs();
                 if refs.is_empty() {
                     continue;
                 }
@@ -149,168 +148,156 @@ impl ResidencyJournal {
             .cmds
             .drain(..)
             .filter(|cmd| {
-                let refs = resource_refs(cmd);
+                let refs = cmd.resource_refs();
                 refs.is_empty() || !refs.iter().all(|k| dead.contains(k))
             })
             .collect();
         self.cmds = kept;
-        self.bytes = encode_stream(&self.cmds).len();
+        self.bytes = crate::protocol::codec::Encoder::stream(&self.cmds).len();
     }
 
     fn replay_bytes(&self) -> io::Result<Vec<u8>> {
         if !self.replayable && !self.cmds.is_empty() {
-            return Err(api_loss("executor residency exceeded replay budget"));
+            return Err(RemoteCommandSink::api_loss(
+                "executor residency exceeded replay budget",
+            ));
         }
-        Ok(encode_stream(&self.cmds))
+        Ok(crate::protocol::codec::Encoder::stream(&self.cmds))
     }
 }
 
 /// Whether `cmd` frees a resource (a `Destroy*`), the signal to compact the journal.
-fn is_destroy(cmd: &Cmd) -> bool {
-    matches!(
-        cmd,
-        Cmd::DestroyBuffer(_)
-            | Cmd::DestroyTexture(_)
-            | Cmd::DestroySampler(_)
-            | Cmd::DestroyShader(_)
-            | Cmd::DestroyPipeline(_)
-            | Cmd::DestroyBindGroup(_)
-            | Cmd::DestroySurface(_)
-            | Cmd::DestroyFence(_)
-    )
-}
-
-/// The `(kind, id)` a `Create*` introduces, or `None`.
-fn created_key(cmd: &Cmd) -> Option<(u8, u32)> {
-    Some(match cmd {
-        Cmd::CreateBuffer(id, _) => (KIND_BUFFER, *id),
-        Cmd::CreateTexture(id, _) => (KIND_TEXTURE, *id),
-        Cmd::CreateSampler(id, _) => (KIND_SAMPLER, *id),
-        Cmd::CreateShader { id, .. } => (KIND_SHADER, *id),
-        Cmd::CreateRenderPipeline(id, _) | Cmd::CreateComputePipeline(id, _) => {
-            (KIND_PIPELINE, *id)
-        }
-        Cmd::CreateBindGroup(id, _) => (KIND_BIND_GROUP, *id),
-        Cmd::CreateSurface(id, _) => (KIND_SURFACE, *id),
-        Cmd::CreateFence(id) => (KIND_FENCE, *id),
-        _ => return None,
-    })
-}
-
-/// The `(kind, id)` a `Destroy*` releases, or `None`.
-fn destroyed_key(cmd: &Cmd) -> Option<(u8, u32)> {
-    Some(match cmd {
-        Cmd::DestroyBuffer(id) => (KIND_BUFFER, *id),
-        Cmd::DestroyTexture(id) => (KIND_TEXTURE, *id),
-        Cmd::DestroySampler(id) => (KIND_SAMPLER, *id),
-        Cmd::DestroyShader(id) => (KIND_SHADER, *id),
-        Cmd::DestroyPipeline(id) => (KIND_PIPELINE, *id),
-        Cmd::DestroyBindGroup(id) => (KIND_BIND_GROUP, *id),
-        Cmd::DestroySurface(id) => (KIND_SURFACE, *id),
-        Cmd::DestroyFence(id) => (KIND_FENCE, *id),
-        _ => return None,
-    })
-}
-
-/// Every resource `(kind, id)` a journaled command references — the id it creates/destroys plus every id it
-/// DEPENDS on (a pipeline's shader modules, a bind group's buffers/textures/samplers, a submit's bound
-/// pipeline/groups/buffers, its render-pass attachment textures, copy/blit sources+destinations, and a
-/// signalled fence). Used by [`ResidencyJournal::compact`] to decide, safely, when a create/destroy pair is
-/// fully retired and can leave the journal.
-fn resource_refs(cmd: &Cmd) -> Vec<(u8, u32)> {
-    let mut refs: Vec<(u8, u32)> = Vec::new();
-    match cmd {
-        Cmd::CreateBuffer(id, _) | Cmd::DestroyBuffer(id) => refs.push((KIND_BUFFER, *id)),
-        Cmd::WriteBuffer { id, .. } => refs.push((KIND_BUFFER, *id)),
-        Cmd::CreateTexture(id, _) | Cmd::DestroyTexture(id) => refs.push((KIND_TEXTURE, *id)),
-        Cmd::CreateSampler(id, _) | Cmd::DestroySampler(id) => refs.push((KIND_SAMPLER, *id)),
-        Cmd::CreateShader { id, .. } | Cmd::DestroyShader(id) => refs.push((KIND_SHADER, *id)),
-        Cmd::CreateRenderPipeline(id, d) => {
-            refs.push((KIND_PIPELINE, *id));
-            refs.push((KIND_SHADER, d.vertex.module));
-            if let Some(fs) = &d.fragment {
-                refs.push((KIND_SHADER, fs.module));
-            }
-        }
-        Cmd::CreateComputePipeline(id, d) => {
-            refs.push((KIND_PIPELINE, *id));
-            refs.push((KIND_SHADER, d.compute.module));
-        }
-        Cmd::DestroyPipeline(id) => refs.push((KIND_PIPELINE, *id)),
-        Cmd::CreateBindGroup(id, d) => {
-            refs.push((KIND_BIND_GROUP, *id));
-            for e in &d.entries {
-                match e.resource {
-                    BindResource::Buffer { id, .. } => refs.push((KIND_BUFFER, id)),
-                    BindResource::Texture { id } => refs.push((KIND_TEXTURE, id)),
-                    BindResource::Sampler { id } => refs.push((KIND_SAMPLER, id)),
-                }
-            }
-        }
-        Cmd::DestroyBindGroup(id) => refs.push((KIND_BIND_GROUP, *id)),
-        Cmd::CreateSurface(id, _) | Cmd::DestroySurface(id) => refs.push((KIND_SURFACE, *id)),
-        Cmd::CreateFence(id) | Cmd::DestroyFence(id) => refs.push((KIND_FENCE, *id)),
-        Cmd::Submit(cb) => {
-            for enc in &cb.encoder {
-                match enc {
-                    Enc::SetPipeline(p) => refs.push((KIND_PIPELINE, *p)),
-                    Enc::SetBindGroup { group, .. } => refs.push((KIND_BIND_GROUP, *group)),
-                    Enc::SetVertexBuffer { buffer, .. } | Enc::SetIndexBuffer { buffer, .. } => {
-                        refs.push((KIND_BUFFER, *buffer))
-                    }
-                    Enc::ClearRect { texture, .. } => refs.push((KIND_TEXTURE, *texture)),
-                    Enc::BeginRenderPass { color, depth } => {
-                        for c in color {
-                            refs.push((KIND_TEXTURE, c.texture));
-                        }
-                        if let Some(d) = depth {
-                            refs.push((KIND_TEXTURE, d.texture));
-                        }
-                    }
-                    Enc::CopyBufferToBuffer { src, dst, .. } => {
-                        refs.push((KIND_BUFFER, *src));
-                        refs.push((KIND_BUFFER, *dst));
-                    }
-                    Enc::CopyBufferToTexture { src, dst, .. } => {
-                        refs.push((KIND_BUFFER, *src));
-                        refs.push((KIND_TEXTURE, *dst));
-                    }
-                    Enc::CopyTextureToBuffer { src, dst, .. } => {
-                        refs.push((KIND_TEXTURE, *src));
-                        refs.push((KIND_BUFFER, *dst));
-                    }
-                    Enc::CopyTextureToTexture { src, dst, .. }
-                    | Enc::BlitTexture { src, dst, .. }
-                    | Enc::ResolveTexture { src, dst, .. } => {
-                        refs.push((KIND_TEXTURE, *src));
-                        refs.push((KIND_TEXTURE, *dst));
-                    }
-                    Enc::FillBuffer { buffer, .. } => refs.push((KIND_BUFFER, *buffer)),
-                    _ => {}
-                }
-            }
-            if let Some((fence, _)) = cb.signal {
-                refs.push((KIND_FENCE, fence));
-            }
-        }
-        _ => {}
+impl Cmd {
+    fn is_destroy(&self) -> bool {
+        matches!(
+            self,
+            Cmd::DestroyBuffer(_)
+                | Cmd::DestroyTexture(_)
+                | Cmd::DestroySampler(_)
+                | Cmd::DestroyShader(_)
+                | Cmd::DestroyPipeline(_)
+                | Cmd::DestroyBindGroup(_)
+                | Cmd::DestroySurface(_)
+                | Cmd::DestroyFence(_)
+        )
     }
-    refs
-}
 
-fn api_loss(message: &'static str) -> io::Error {
-    io::Error::new(
-        ErrorKind::ConnectionAborted,
-        format!("API/device/context lost: {message}"),
-    )
-}
+    /// The `(kind, id)` a `Create*` introduces, or `None`.
+    fn created_key(&self) -> Option<(u8, u32)> {
+        Some(match self {
+            Cmd::CreateBuffer(id, _) => (KIND_BUFFER, *id),
+            Cmd::CreateTexture(id, _) => (KIND_TEXTURE, *id),
+            Cmd::CreateSampler(id, _) => (KIND_SAMPLER, *id),
+            Cmd::CreateShader { id, .. } => (KIND_SHADER, *id),
+            Cmd::CreateRenderPipeline(id, _) | Cmd::CreateComputePipeline(id, _) => {
+                (KIND_PIPELINE, *id)
+            }
+            Cmd::CreateBindGroup(id, _) => (KIND_BIND_GROUP, *id),
+            Cmd::CreateSurface(id, _) => (KIND_SURFACE, *id),
+            Cmd::CreateFence(id) => (KIND_FENCE, *id),
+            _ => return None,
+        })
+    }
 
-/// Map a transport (IO) failure onto the protocol's typed error. The protocol error type has no dedicated
-/// transport/IO variant (it is a leaf that never links a socket), so a connect/frame/ack failure is
-/// surfaced as [`GpuError::Decode`] with a `transport:` prefix — a clean, typed boundary error the driver
-/// can act on rather than a panic.
-fn to_gpu_err(e: io::Error) -> GpuError {
-    GpuError::Decode(format!("transport: {e}"))
+    /// The `(kind, id)` a `Destroy*` releases, or `None`.
+    fn destroyed_key(&self) -> Option<(u8, u32)> {
+        Some(match self {
+            Cmd::DestroyBuffer(id) => (KIND_BUFFER, *id),
+            Cmd::DestroyTexture(id) => (KIND_TEXTURE, *id),
+            Cmd::DestroySampler(id) => (KIND_SAMPLER, *id),
+            Cmd::DestroyShader(id) => (KIND_SHADER, *id),
+            Cmd::DestroyPipeline(id) => (KIND_PIPELINE, *id),
+            Cmd::DestroyBindGroup(id) => (KIND_BIND_GROUP, *id),
+            Cmd::DestroySurface(id) => (KIND_SURFACE, *id),
+            Cmd::DestroyFence(id) => (KIND_FENCE, *id),
+            _ => return None,
+        })
+    }
+
+    /// Every resource `(kind, id)` a journaled command references — the id it creates/destroys plus every id it
+    /// DEPENDS on (a pipeline's shader modules, a bind group's buffers/textures/samplers, a submit's bound
+    /// pipeline/groups/buffers, its render-pass attachment textures, copy/blit sources+destinations, and a
+    /// signalled fence). Used by [`ResidencyJournal::compact`] to decide, safely, when a create/destroy pair is
+    /// fully retired and can leave the journal.
+    fn resource_refs(&self) -> Vec<(u8, u32)> {
+        let mut refs: Vec<(u8, u32)> = Vec::new();
+        match self {
+            Cmd::CreateBuffer(id, _) | Cmd::DestroyBuffer(id) => refs.push((KIND_BUFFER, *id)),
+            Cmd::WriteBuffer { id, .. } => refs.push((KIND_BUFFER, *id)),
+            Cmd::CreateTexture(id, _) | Cmd::DestroyTexture(id) => refs.push((KIND_TEXTURE, *id)),
+            Cmd::CreateSampler(id, _) | Cmd::DestroySampler(id) => refs.push((KIND_SAMPLER, *id)),
+            Cmd::CreateShader { id, .. } | Cmd::DestroyShader(id) => refs.push((KIND_SHADER, *id)),
+            Cmd::CreateRenderPipeline(id, d) => {
+                refs.push((KIND_PIPELINE, *id));
+                refs.push((KIND_SHADER, d.vertex.module));
+                if let Some(fs) = &d.fragment {
+                    refs.push((KIND_SHADER, fs.module));
+                }
+            }
+            Cmd::CreateComputePipeline(id, d) => {
+                refs.push((KIND_PIPELINE, *id));
+                refs.push((KIND_SHADER, d.compute.module));
+            }
+            Cmd::DestroyPipeline(id) => refs.push((KIND_PIPELINE, *id)),
+            Cmd::CreateBindGroup(id, d) => {
+                refs.push((KIND_BIND_GROUP, *id));
+                for e in &d.entries {
+                    match e.resource {
+                        BindResource::Buffer { id, .. } => refs.push((KIND_BUFFER, id)),
+                        BindResource::Texture { id } => refs.push((KIND_TEXTURE, id)),
+                        BindResource::Sampler { id } => refs.push((KIND_SAMPLER, id)),
+                    }
+                }
+            }
+            Cmd::DestroyBindGroup(id) => refs.push((KIND_BIND_GROUP, *id)),
+            Cmd::CreateSurface(id, _) | Cmd::DestroySurface(id) => refs.push((KIND_SURFACE, *id)),
+            Cmd::CreateFence(id) | Cmd::DestroyFence(id) => refs.push((KIND_FENCE, *id)),
+            Cmd::Submit(cb) => {
+                for enc in &cb.encoder {
+                    match enc {
+                        Enc::SetPipeline(p) => refs.push((KIND_PIPELINE, *p)),
+                        Enc::SetBindGroup { group, .. } => refs.push((KIND_BIND_GROUP, *group)),
+                        Enc::SetVertexBuffer { buffer, .. }
+                        | Enc::SetIndexBuffer { buffer, .. } => refs.push((KIND_BUFFER, *buffer)),
+                        Enc::ClearRect { texture, .. } => refs.push((KIND_TEXTURE, *texture)),
+                        Enc::BeginRenderPass { color, depth } => {
+                            for c in color {
+                                refs.push((KIND_TEXTURE, c.texture));
+                            }
+                            if let Some(d) = depth {
+                                refs.push((KIND_TEXTURE, d.texture));
+                            }
+                        }
+                        Enc::CopyBufferToBuffer { src, dst, .. } => {
+                            refs.push((KIND_BUFFER, *src));
+                            refs.push((KIND_BUFFER, *dst));
+                        }
+                        Enc::CopyBufferToTexture { src, dst, .. } => {
+                            refs.push((KIND_BUFFER, *src));
+                            refs.push((KIND_TEXTURE, *dst));
+                        }
+                        Enc::CopyTextureToBuffer { src, dst, .. } => {
+                            refs.push((KIND_TEXTURE, *src));
+                            refs.push((KIND_BUFFER, *dst));
+                        }
+                        Enc::CopyTextureToTexture { src, dst, .. }
+                        | Enc::BlitTexture { src, dst, .. }
+                        | Enc::ResolveTexture { src, dst, .. } => {
+                            refs.push((KIND_TEXTURE, *src));
+                            refs.push((KIND_TEXTURE, *dst));
+                        }
+                        Enc::FillBuffer { buffer, .. } => refs.push((KIND_BUFFER, *buffer)),
+                        _ => {}
+                    }
+                }
+                if let Some((fence, _)) = cb.signal {
+                    refs.push((KIND_FENCE, fence));
+                }
+            }
+            _ => {}
+        }
+        refs
+    }
 }
 
 /// A persistent connection to the host GPU-exec service, implementing the [`CommandSink`] port by encoding
@@ -338,6 +325,12 @@ pub struct RemoteCommandSink {
 }
 
 impl RemoteCommandSink {
+    fn api_loss(message: &'static str) -> io::Error {
+        io::Error::new(
+            ErrorKind::ConnectionAborted,
+            format!("API/device/context lost: {message}"),
+        )
+    }
     /// Connect target from `$HL_GPU_EXEC`, falling back to [`DEFAULT_EXEC_SOCK`].
     pub fn from_env() -> Self {
         let path = std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_string());
@@ -402,7 +395,7 @@ impl RemoteCommandSink {
             .is_some_and(|old| old != &signature)
             && !self.residency.cmds.is_empty()
         {
-            return Err(api_loss(
+            return Err(Self::api_loss(
                 "executor capabilities changed with live residency",
             ));
         }
@@ -421,7 +414,7 @@ impl RemoteCommandSink {
         let s = UnixStream::connect(&self.path)?;
         // The host advertises its capabilities first thing on every connection; read + pin them, which
         // also detects an incompatible profile change across a reconnect that has live residency.
-        let caps = unix::read_handshake(&s)?;
+        let caps = unix::Connection::new(&s).read_handshake()?;
         self.set_negotiated_capabilities(&caps)?;
         if self.connects >= 1 {
             self.residency_reset = true;
@@ -457,13 +450,13 @@ impl RemoteCommandSink {
                     .sock
                     .as_ref()
                     .expect("ensure installed executor socket");
-                unix::write_frame(s, &header, &payload)?;
-                unix::read_ack(s)
+                unix::Connection::new(s).write_frame(&header, &payload)?;
+                unix::Connection::new(s).read_ack()
             })();
             match r {
                 Ok(ACK_OK) => {
                     self.residency_reset = false;
-                    self.residency.record(current);
+                    self.residency.append(current);
                     return Ok(());
                 }
                 // The executor NACKed this frame (replay failed / surface missing). Surface it as an error
@@ -493,7 +486,7 @@ impl CommandSink for RemoteCommandSink {
     fn negotiate(&mut self, request: &FeatureRequest) -> Result<Capabilities> {
         // Read (if not already) the host's advertised capabilities off the connection, then check the
         // guest's required features against them BEFORE advertising any matching API feature to the app.
-        self.ensure().map_err(to_gpu_err)?;
+        self.ensure().map_err(GpuError::transport)?;
         let caps = self
             .host_caps
             .clone()
@@ -503,8 +496,8 @@ impl CommandSink for RemoteCommandSink {
     }
 
     fn submit(&mut self, batch: &[Cmd]) -> Result<()> {
-        let ir = encode_stream(batch);
-        self.submit_ir(&ir, batch).map_err(to_gpu_err)
+        let ir = crate::protocol::codec::Encoder::stream(batch);
+        self.submit_ir(&ir, batch).map_err(GpuError::transport)
     }
 
     fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {
@@ -514,27 +507,31 @@ impl CommandSink for RemoteCommandSink {
             id: fence.raw(),
             value,
         }];
-        let ir = encode_stream(&batch);
-        self.submit_ir(&ir, &batch).map_err(to_gpu_err)
+        let ir = crate::protocol::codec::Encoder::stream(&batch);
+        self.submit_ir(&ir, &batch).map_err(GpuError::transport)
     }
 
     /// Read `len` bytes of buffer `id` back from the host executor over the wire (the socketed
     /// `cuMemcpyDtoH` / `glReadPixels` path). Sends a readback-magic REQUEST frame — disjoint from a submit,
     /// so it never collides on the wire — and reads the host's length-prefixed byte response.
     fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
-        self.ensure().map_err(to_gpu_err)?;
+        self.ensure().map_err(GpuError::transport)?;
         // If a reconnect emptied the host's resource cache, flush acknowledged residency first so the buffer
         // being read is actually resident on the current executor before we query it.
         if self.residency_reset {
-            self.submit_ir(&[], &[]).map_err(to_gpu_err)?;
+            self.submit_ir(&[], &[]).map_err(GpuError::transport)?;
         }
         let req = ReadbackRequest::buffer(id.raw(), offset, len as u64);
         let s = self
             .sock
             .as_ref()
             .expect("ensure installed executor socket");
-        unix::write_readback_request(s, &req).map_err(to_gpu_err)?;
-        unix::read_readback_response(s).map_err(to_gpu_err)
+        unix::Connection::new(s)
+            .write_readback_request(&req)
+            .map_err(GpuError::transport)?;
+        unix::Connection::new(s)
+            .read_readback_response()
+            .map_err(GpuError::transport)
     }
 }
 
@@ -559,12 +556,12 @@ mod tests {
             )
         };
         let mut journal = ResidencyJournal::with_budget(30);
-        journal.record(&[mk(1)]);
+        journal.append(&[mk(1)]);
         assert!(
             journal.replay_bytes().is_ok(),
             "residency within budget replays"
         );
-        journal.record(&[mk(2)]); // pushes the encoded journal past the replay budget
+        journal.append(&[mk(2)]); // pushes the encoded journal past the replay budget
         let err = journal
             .replay_bytes()
             .expect_err("over-budget residency must not silently truncate");
@@ -577,7 +574,7 @@ mod tests {
         let mut conn = RemoteCommandSink::new("unused");
         let caps = Capabilities::full("host");
         conn.set_negotiated_capabilities(&caps).unwrap();
-        conn.residency.record(&[Cmd::CreateFence(1)]);
+        conn.residency.append(&[Cmd::CreateFence(1)]);
 
         let mut changed = caps;
         changed.wire_version += 1;
@@ -591,7 +588,7 @@ mod tests {
     #[test]
     fn residency_skips_presents_and_waits() {
         let mut journal = ResidencyJournal::default();
-        journal.record(&[
+        journal.append(&[
             Cmd::CreateFence(1),
             Cmd::Present {
                 surface: 1,
@@ -642,13 +639,13 @@ mod tests {
         // teardown pattern. After the destroys the journal must hold NOTHING: a reconnect would otherwise
         // replay every dead resource's create and re-inflate the host ledger.
         let mut journal = ResidencyJournal::default();
-        journal.record(&[buf(1), buf(2), submit_refs(&[1, 2])]);
+        journal.append(&[buf(1), buf(2), submit_refs(&[1, 2])]);
         assert!(
             !journal.cmds.is_empty() && journal.bytes > 0,
             "working set recorded"
         );
 
-        journal.record(&[Cmd::DestroyBuffer(1), Cmd::DestroyBuffer(2)]);
+        journal.append(&[Cmd::DestroyBuffer(1), Cmd::DestroyBuffer(2)]);
         assert!(
             journal.cmds.is_empty(),
             "a fully torn-down working set leaves the journal empty"
@@ -669,8 +666,8 @@ mod tests {
         // used by its OWN submit B, then destroyed. Only buf 2's create + submit B may leave the journal;
         // buf 1's create + submit A must survive so a reconnect still rebuilds the live resource.
         let mut journal = ResidencyJournal::default();
-        journal.record(&[buf(1), buf(2), submit_refs(&[1]), submit_refs(&[2])]);
-        journal.record(&[Cmd::DestroyBuffer(2)]);
+        journal.append(&[buf(1), buf(2), submit_refs(&[1]), submit_refs(&[2])]);
+        journal.append(&[Cmd::DestroyBuffer(2)]);
 
         assert!(
             journal.cmds.contains(&buf(1)),
@@ -706,8 +703,8 @@ mod tests {
         for gen in 0..500u32 {
             let a = gen * 2 + 1;
             let b = gen * 2 + 2;
-            journal.record(&[buf(a), buf(b), submit_refs(&[a, b])]);
-            journal.record(&[Cmd::DestroyBuffer(a), Cmd::DestroyBuffer(b)]);
+            journal.append(&[buf(a), buf(b), submit_refs(&[a, b])]);
+            journal.append(&[Cmd::DestroyBuffer(a), Cmd::DestroyBuffer(b)]);
         }
         assert!(
             journal.cmds.is_empty(),

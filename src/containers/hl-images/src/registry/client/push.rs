@@ -23,10 +23,10 @@ impl Client {
         os: &str,
         work: &Path,
     ) -> Result<String, Error> {
-        reset_dir(work)?;
+        LayerRootfs::new(work).reset()?;
         let layer = work.join("layer.tar.gz");
-        let (layer_digest, layer_size) = tar_gzip(rootfs, &layer)?; // compressed digest = blob id
-        let diff_id = crate::image::digest::sha256_gz_file(&layer)?; // uncompressed digest = rootfs diff_id
+        let (layer_digest, layer_size) = Tar::gzip(rootfs, &layer)?; // compressed digest = blob id
+        let diff_id = crate::image::digest::Sha256Digest::gzip_file(&layer)?.oci(); // uncompressed digest = rootfs diff_id
 
         let config = json!({
             "architecture": arch, "os": os, // os=darwin for mac containers; the manifest is os/arch-tagged
@@ -37,7 +37,7 @@ impl Client {
         let config_bytes =
             serde_json::to_vec(&config).map_err(|e| Error::Manifest(e.to_string()))?;
         std::fs::write(&config_path, &config_bytes).map_err(|e| Error::Archive(e.to_string()))?;
-        let config_digest = crate::image::digest::sha256_file(&config_path)?;
+        let config_digest = crate::image::digest::Sha256Digest::file(&config_path)?.oci();
 
         self.authenticate("push,pull")?;
         self.upload_blob(&config_digest, &config_path)?;
@@ -56,11 +56,11 @@ impl Client {
     fn upload_blob(&self, digest: &str, file: &Path) -> Result<(), Error> {
         let base = self.image.base_url();
         // already present?
-        if http::head(&format!("{base}/blobs/{digest}"), self.token.as_deref())? == 200 {
+        if http::Request::head(&format!("{base}/blobs/{digest}"), self.token.as_deref())? == 200 {
             return Ok(());
         }
         // start an upload session -> Location, then monolithic PUT with ?digest=
-        let start = http::post(&format!("{base}/blobs/uploads/"), self.token.as_deref())?;
+        let start = http::Request::post(&format!("{base}/blobs/uploads/"), self.token.as_deref())?;
         if start.status == 401 || start.status == 403 {
             return Err(Error::Registry(DENIED.to_string()));
         }
@@ -70,10 +70,11 @@ impl Client {
                 start.status
             )));
         }
-        let location = header(&start.headers, "location")
+        let location = start
+            .header("location")
             .ok_or_else(|| Error::Registry("upload returned no Location".to_string()))?;
         let sep = if location.contains('?') { '&' } else { '?' };
-        let put = format!("{}{sep}digest={digest}", absolute(&location, &base));
+        let put = format!("{}{sep}digest={digest}", self.image.resolve(&location)?);
         let r = http::put_file(
             &put,
             file,
@@ -90,7 +91,7 @@ impl Client {
         let url = format!("{}/manifests/{}", self.image.base_url(), self.image.tag);
         let r = http::put_bytes(&url, body, MEDIA_MANIFEST, self.token.as_deref())?;
         if r.status == 201 {
-            Ok(header(&r.headers, "docker-content-digest").unwrap_or_default())
+            Ok(r.header("docker-content-digest").unwrap_or_default())
         } else {
             Err(Error::Registry(format!(
                 "manifest PUT -> {} {}",

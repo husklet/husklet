@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 fn main() {
-    let manifest = PathBuf::from(env("CARGO_MANIFEST_DIR")).join("registry/gles2_egl.manifest");
+    let manifest = PathBuf::from(BuildEnvironment::get("CARGO_MANIFEST_DIR")).join("registry/gles2_egl.manifest");
     println!("cargo:rerun-if-changed={}", manifest.display());
     println!("cargo:rerun-if-changed=build.rs");
     // `gles_client` is set by this script (never by the user) to select the libGLESv2 role; declare it so
@@ -69,7 +69,7 @@ fn main() {
     writeln!(out, "/// Entry points with real hand-written bodies in `src/driver.rs`.").unwrap();
     writeln!(out, "pub const IMPLEMENTED_ENTRYPOINTS: usize = {};", IMPLEMENTED.len()).unwrap();
 
-    let out_path = PathBuf::from(env("OUT_DIR")).join("generated_entrypoints.rs");
+    let out_path = PathBuf::from(BuildEnvironment::get("OUT_DIR")).join("generated_entrypoints.rs");
     std::fs::write(&out_path, out).unwrap();
 }
 
@@ -116,8 +116,8 @@ fn emit_stub(out: &mut String, lib: &str, name: &str, ret: &str, params: &str) {
     if !params.is_empty() {
         for (i, p) in params.split(';').enumerate() {
             let (ty, pname) = p.split_once('|').unwrap_or_else(|| panic!("bad param {p:?} in {name}"));
-            let rty = map_type(ty.trim(), name);
-            let pn = sanitize(pname.trim(), i);
+            let rty = Binding::new(ty.trim(), name).rust_type();
+            let pn = Signature::parameter(pname.trim(), i);
             if i > 0 {
                 sig.push_str(", ");
             }
@@ -125,12 +125,12 @@ fn emit_stub(out: &mut String, lib: &str, name: &str, ret: &str, params: &str) {
             argnames.push(pn);
         }
     }
-    let rmap = map_ret(ret.trim(), name);
+    let rmap = Binding::new(ret.trim(), name).return_type();
     let arrow = rmap.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
     let touch: String = argnames.iter().map(|a| format!("let _ = {a}; ")).collect();
     let body = match &rmap {
         None => format!("{touch}crate::stub::hit(\"{name}\");"),
-        Some(r) => format!("{touch}crate::stub::hit(\"{name}\"); {}", default_for(r)),
+        Some(r) => format!("{touch}crate::stub::hit(\"{name}\"); {}", Binding::default_value(r)),
     };
     // Export the symbol only from the object that OWNS this half of the surface: `gl*` from libGLESv2
     // (`cfg(gles_client)`), `egl*` from libEGL (`cfg(not(gles_client))`). The other object still COMPILES
@@ -144,88 +144,105 @@ fn emit_stub(out: &mut String, lib: &str, name: &str, ret: &str, params: &str) {
     writeln!(out, "{export_cfg}\npub extern \"C\" fn {name}({sig}){arrow} {{ {body} }}\n").unwrap();
 }
 
-fn map_ret(c: &str, ctx: &str) -> Option<String> {
-    if c == "void" {
-        return None;
-    }
-    Some(map_type(c, ctx))
+struct Binding<'a> {
+    c: &'a str,
+    context: &'a str,
 }
 
-fn map_type(c: &str, ctx: &str) -> String {
-    let c = c.trim();
-    if let Some(base) = c.strip_suffix("*const*") {
-        return format!("*const *const {}", pointee(base, ctx));
+impl<'a> Binding<'a> {
+    fn new(c: &'a str, context: &'a str) -> Self {
+        Self { c, context }
     }
-    if let Some(base) = c.strip_suffix("**") {
-        return format!("*mut *mut {}", pointee(base, ctx));
+
+    fn return_type(&self) -> Option<String> {
+        if self.c == "void" {
+            return None;
+        }
+        Some(self.rust_type())
     }
-    if let Some(base) = c.strip_suffix('*') {
-        let is_const = base.trim_start().starts_with("const ");
-        let q = if is_const { "*const" } else { "*mut" };
-        return format!("{q} {}", pointee(base, ctx));
+
+    fn rust_type(&self) -> String {
+        let c = self.c.trim();
+        if let Some(base) = c.strip_suffix("*const*") {
+            return format!("*const *const {}", Self::pointee(base, self.context));
+        }
+        if let Some(base) = c.strip_suffix("**") {
+            return format!("*mut *mut {}", Self::pointee(base, self.context));
+        }
+        if let Some(base) = c.strip_suffix('*') {
+            let is_const = base.trim_start().starts_with("const ");
+            let q = if is_const { "*const" } else { "*mut" };
+            return format!("{q} {}", Self::pointee(base, self.context));
+        }
+        Self::scalar(c, self.context).to_string()
     }
-    scalar(c, ctx).to_string()
+
+    fn pointee(base: &str, context: &str) -> String {
+        let b = base.trim();
+        let b = b.strip_prefix("const ").unwrap_or(b).trim();
+        Self::scalar(b, context).to_string()
+    }
+
+    /// A bare (by-value) scalar / opaque-handle C type -> Rust C-ABI type. Opaque handles (`EGLDisplay`,
+    /// `GLsync`, `EGLConfig`, …) are `void*`-shaped, so a value-of-that-type is a `*mut c_void`. Panics on an
+    /// unknown base type so an API bump surfaces at build time rather than silently mis-typing the ABI.
+    fn scalar(c: &str, context: &str) -> &'static str {
+        match c {
+            "void" => "core::ffi::c_void", // only meaningful as a pointee; bare `void` -> map_ret == None
+            "char" | "GLchar" => "core::ffi::c_char",
+            "GLbyte" => "i8",
+            "GLubyte" | "GLboolean" => "u8",
+            "GLshort" => "i16",
+            "GLushort" => "u16",
+            "GLenum" | "GLbitfield" | "GLuint" | "EGLenum" | "EGLBoolean" => "u32",
+            "GLint" | "GLsizei" | "GLfixed" | "EGLint" => "i32",
+            "GLfloat" | "GLclampf" => "f32",
+            "GLdouble" => "f64",
+            "GLint64" => "i64",
+            "GLuint64" | "EGLTime" | "EGLTimeKHR" | "EGLuint64KHR" => "u64",
+            "GLintptr" | "GLsizeiptr" | "EGLAttrib" => "isize",
+            // opaque handles (all `void*`-shaped)
+            "GLsync" | "GLDEBUGPROC" | "EGLClientBuffer" | "EGLContext" | "EGLDisplay" | "EGLImage"
+            | "EGLImageKHR" | "EGLSurface" | "EGLSync" | "EGLSyncKHR" | "EGLConfig"
+            | "EGLNativeDisplayType" | "EGLNativeWindowType" | "EGLNativePixmapType"
+            | "__eglMustCastToProperFunctionPointerType" => "*mut core::ffi::c_void",
+            other => panic!("unmapped C base type {other:?} (in {context}); extend scalar() in build.rs"),
+        }
+    }
+
+    fn default_value(rust_ty: &str) -> &'static str {
+        if rust_ty.starts_with("*const") {
+            "core::ptr::null()"
+        } else if rust_ty.starts_with("*mut") {
+            "core::ptr::null_mut()"
+        } else {
+            "0" // spec default: GL_NO_ERROR / EGL_FALSE / 0 handle — a stub performs no work.
+        }
+    }
 }
 
-fn pointee(base: &str, ctx: &str) -> String {
-    let b = base.trim();
-    let b = b.strip_prefix("const ").unwrap_or(b).trim();
-    scalar(b, ctx).to_string()
-}
-
-/// A bare (by-value) scalar / opaque-handle C type -> Rust C-ABI type. Opaque handles (`EGLDisplay`,
-/// `GLsync`, `EGLConfig`, …) are `void*`-shaped, so a value-of-that-type is a `*mut c_void`. Panics on an
-/// unknown base type so an API bump surfaces at build time rather than silently mis-typing the ABI.
-fn scalar(c: &str, ctx: &str) -> &'static str {
-    match c {
-        "void" => "core::ffi::c_void", // only meaningful as a pointee; bare `void` -> map_ret == None
-        "char" | "GLchar" => "core::ffi::c_char",
-        "GLbyte" => "i8",
-        "GLubyte" | "GLboolean" => "u8",
-        "GLshort" => "i16",
-        "GLushort" => "u16",
-        "GLenum" | "GLbitfield" | "GLuint" | "EGLenum" | "EGLBoolean" => "u32",
-        "GLint" | "GLsizei" | "GLfixed" | "EGLint" => "i32",
-        "GLfloat" | "GLclampf" => "f32",
-        "GLdouble" => "f64",
-        "GLint64" => "i64",
-        "GLuint64" | "EGLTime" | "EGLTimeKHR" | "EGLuint64KHR" => "u64",
-        "GLintptr" | "GLsizeiptr" | "EGLAttrib" => "isize",
-        // opaque handles (all `void*`-shaped)
-        "GLsync" | "GLDEBUGPROC" | "EGLClientBuffer" | "EGLContext" | "EGLDisplay" | "EGLImage"
-        | "EGLImageKHR" | "EGLSurface" | "EGLSync" | "EGLSyncKHR" | "EGLConfig"
-        | "EGLNativeDisplayType" | "EGLNativeWindowType" | "EGLNativePixmapType"
-        | "__eglMustCastToProperFunctionPointerType" => "*mut core::ffi::c_void",
-        other => panic!("unmapped C base type {other:?} (in {ctx}); extend scalar() in build.rs"),
+struct Signature;
+impl Signature {
+    fn parameter(name: &str, i: usize) -> String {
+        const KW: &[&str] = &[
+            "type", "ref", "box", "in", "fn", "let", "match", "move", "mut", "as", "impl", "loop",
+            "where", "self", "final", "override", "become",
+        ];
+        if name.is_empty() {
+            return format!("a{i}");
+        }
+        if KW.contains(&name) {
+            return format!("{name}_");
+        }
+        name.to_string()
     }
 }
 
-fn default_for(rust_ty: &str) -> &'static str {
-    if rust_ty.starts_with("*const") {
-        "core::ptr::null()"
-    } else if rust_ty.starts_with("*mut") {
-        "core::ptr::null_mut()"
-    } else {
-        "0" // spec default: GL_NO_ERROR / EGL_FALSE / 0 handle — a stub performs no work.
+struct BuildEnvironment;
+impl BuildEnvironment {
+    fn get(k: &str) -> String {
+        std::env::var(k).unwrap_or_else(|_| panic!("env {k} not set"))
     }
-}
-
-fn sanitize(name: &str, i: usize) -> String {
-    const KW: &[&str] = &[
-        "type", "ref", "box", "in", "fn", "let", "match", "move", "mut", "as", "impl", "loop",
-        "where", "self", "final", "override", "become",
-    ];
-    if name.is_empty() {
-        return format!("a{i}");
-    }
-    if KW.contains(&name) {
-        return format!("{name}_");
-    }
-    name.to_string()
-}
-
-fn env(k: &str) -> String {
-    std::env::var(k).unwrap_or_else(|_| panic!("env {k} not set"))
 }
 
 /// Entry points hand-written in `src/driver.rs` (the generator skips them to avoid duplicate symbols):

@@ -40,6 +40,18 @@ pub enum GpuError {
     Decode(String),
 }
 
+impl GpuError {
+    /// Construct an interpreter/kernel diagnostic while keeping its owned context.
+    pub(crate) fn kernel(message: impl Into<String>) -> Self {
+        Self::Kernel(message.into())
+    }
+
+    /// Convert a socket/framing failure at the transport boundary into the protocol error surface.
+    pub(crate) fn transport(error: std::io::Error) -> Self {
+        Self::Decode(format!("transport: {error}"))
+    }
+}
+
 impl std::fmt::Display for GpuError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

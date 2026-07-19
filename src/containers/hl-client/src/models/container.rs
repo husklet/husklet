@@ -87,7 +87,11 @@ impl From<ContainerSummary> for Container {
 impl Container {
     /// Short 12-char id like the docker CLI shows.
     pub fn short_id(&self) -> String {
-        short(&self.id)
+        self.id
+            .trim_start_matches("sha256:")
+            .chars()
+            .take(12)
+            .collect()
     }
     /// Display name (first `Names` entry without the leading slash), falling back to short id.
     pub fn name(&self) -> String {

@@ -10,11 +10,11 @@
 
 use core::ffi::c_void;
 
-use hl_vulkan::result::vk_result_from_gpu_error;
+use hl_vulkan::result::Status;
 use hl_vulkan::service::{record, sync};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::*;
 
 // VkResult / VkEventStatus values not already in scope via `types::*`.
@@ -22,16 +22,24 @@ const VK_EVENT_SET: VkResult = 3;
 const VK_EVENT_RESET: VkResult = 4;
 
 /// Run `f` with the logical device, or `VK_ERROR_INITIALIZATION_FAILED` if none has been created.
-fn dev_res(f: impl FnOnce(&mut Device) -> VkResult) -> VkResult {
-    with(|s| s.device.as_mut().map(f)).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+struct ShimState;
+impl ShimState {
+fn with_device_result(f: impl FnOnce(&mut Device) -> VkResult) -> VkResult {
+    StateStore::with(|s| s.device.as_mut().map(f)).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+}
 }
 
-unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
+struct CommandBuffer;
+impl CommandBuffer {
+unsafe fn handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
+}
 }
 
 /// Walk a `pNext` chain for a target `sType`.
-unsafe fn find_pnext(mut p: *const c_void, target: i32) -> *const c_void {
+struct ExtensionChain;
+impl ExtensionChain {
+unsafe fn find(mut p: *const c_void, target: i32) -> *const c_void {
     while !p.is_null() {
         let base = &*(p as *const VkBaseInStructure);
         if base.s_type == target {
@@ -41,18 +49,22 @@ unsafe fn find_pnext(mut p: *const c_void, target: i32) -> *const c_void {
     }
     core::ptr::null()
 }
+}
 
 /// Parse a `VkSemaphoreCreateInfo` pNext for `VkSemaphoreTypeCreateInfo` → `(is_timeline, initial_value)`.
-fn parse_semaphore_type(p_create_info: *const c_void) -> (bool, u64) {
+struct SemaphoreInfo;
+impl SemaphoreInfo {
+fn parse_type(p_create_info: *const c_void) -> (bool, u64) {
     let Some(ci) = (unsafe { (p_create_info as *const VkSemaphoreCreateInfo).as_ref() }) else {
         return (false, 0);
     };
-    let node = unsafe { find_pnext(ci.p_next, VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO) };
+    let node = unsafe { ExtensionChain::find(ci.p_next, VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO) };
     if node.is_null() {
         return (false, 0);
     }
     let ti = unsafe { &*(node as *const VkSemaphoreTypeCreateInfo) };
     (ti.semaphore_type == VK_SEMAPHORE_TYPE_TIMELINE, ti.initial_value)
+}
 }
 
 // ==================================================================================================
@@ -66,8 +78,8 @@ pub extern "C" fn vkCreateSemaphore(
     _p_allocator: *const c_void,
     p_semaphore: *mut u64,
 ) -> VkResult {
-    let (timeline, initial) = parse_semaphore_type(p_create_info);
-    let handle = with(|s| {
+    let (timeline, initial) = SemaphoreInfo::parse_type(p_create_info);
+    let handle = StateStore::with(|s| {
         let d = s.device.as_mut()?;
         Some(sync::create_semaphore(d, timeline, initial))
     });
@@ -84,9 +96,9 @@ pub extern "C" fn vkCreateSemaphore(
 
 #[no_mangle]
 pub extern "C" fn vkDestroySemaphore(_device: *mut c_void, semaphore: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
-            sync::destroy_semaphore(d, semaphore);
+            d.destroy_semaphore(semaphore);
         }
     });
 }
@@ -97,9 +109,9 @@ pub extern "C" fn vkSignalSemaphore(_device: *mut c_void, p_signal_info: *const 
     let Some(info) = (unsafe { (p_signal_info as *const VkSemaphoreSignalInfo).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    dev_res(|d| match sync::signal_semaphore(d, info.semaphore, info.value) {
+    ShimState::with_device_result(|d| match d.signal_semaphore(info.semaphore, info.value) {
         Ok(()) => VK_SUCCESS,
-        Err(e) => vk_result_from_gpu_error(&e),
+        Err(e) => Status::from_error(&e),
     })
 }
 
@@ -110,14 +122,14 @@ pub extern "C" fn vkGetSemaphoreCounterValue(
     semaphore: u64,
     p_value: *mut u64,
 ) -> VkResult {
-    dev_res(|d| match sync::semaphore_counter(d, semaphore) {
+    ShimState::with_device_result(|d| match d.semaphore_counter(semaphore) {
         Ok(v) => {
             if let Some(out) = unsafe { p_value.as_mut() } {
                 *out = v;
             }
             VK_SUCCESS
         }
-        Err(e) => vk_result_from_gpu_error(&e),
+        Err(e) => Status::from_error(&e),
     })
 }
 
@@ -134,7 +146,7 @@ pub extern "C" fn vkWaitSemaphores(_device: *mut c_void, p_wait_info: *const c_v
     let sems = unsafe { std::slice::from_raw_parts(info.p_semaphores, info.semaphore_count as usize) };
     let vals = unsafe { std::slice::from_raw_parts(info.p_values, info.semaphore_count as usize) };
     let any = info.flags & VK_SEMAPHORE_WAIT_ANY_BIT != 0;
-    dev_res(|d| if sync::wait_semaphores(d, sems, vals, any) { VK_SUCCESS } else { VK_TIMEOUT })
+    ShimState::with_device_result(|d| if sync::wait_semaphores(d, sems, vals, any) { VK_SUCCESS } else { VK_TIMEOUT })
 }
 
 // ==================================================================================================
@@ -148,7 +160,7 @@ pub extern "C" fn vkCreateEvent(
     _p_allocator: *const c_void,
     p_event: *mut u64,
 ) -> VkResult {
-    let handle = with(|s| s.device.as_mut().map(sync::create_event));
+    let handle = StateStore::with(|s| s.device.as_mut().map(Device::create_event));
     match handle {
         Some(h) => {
             if !p_event.is_null() {
@@ -162,9 +174,9 @@ pub extern "C" fn vkCreateEvent(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyEvent(_device: *mut c_void, event: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
-            sync::destroy_event(d, event);
+            d.destroy_event(event);
         }
     });
 }
@@ -172,33 +184,33 @@ pub extern "C" fn vkDestroyEvent(_device: *mut c_void, event: u64, _p_allocator:
 /// `vkGetEventStatus` — `VK_EVENT_SET` (3) if signaled, `VK_EVENT_RESET` (4) if not.
 #[no_mangle]
 pub extern "C" fn vkGetEventStatus(_device: *mut c_void, event: u64) -> VkResult {
-    dev_res(|d| match sync::event_status(d, event) {
+    ShimState::with_device_result(|d| match d.event_status(event) {
         Ok(true) => VK_EVENT_SET,
         Ok(false) => VK_EVENT_RESET,
-        Err(e) => vk_result_from_gpu_error(&e),
+        Err(e) => Status::from_error(&e),
     })
 }
 
 #[no_mangle]
 pub extern "C" fn vkSetEvent(_device: *mut c_void, event: u64) -> VkResult {
-    dev_res(|d| match sync::set_event(d, event, true) {
+    ShimState::with_device_result(|d| match d.set_event(event, true) {
         Ok(()) => VK_SUCCESS,
-        Err(e) => vk_result_from_gpu_error(&e),
+        Err(e) => Status::from_error(&e),
     })
 }
 
 #[no_mangle]
 pub extern "C" fn vkResetEvent(_device: *mut c_void, event: u64) -> VkResult {
-    dev_res(|d| match sync::set_event(d, event, false) {
+    ShimState::with_device_result(|d| match d.set_event(event, false) {
         Ok(()) => VK_SUCCESS,
-        Err(e) => vk_result_from_gpu_error(&e),
+        Err(e) => Status::from_error(&e),
     })
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdSetEvent(command_buffer: *mut c_void, event: u64, _stage_mask: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    with(|s| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_set_event(d, cb, event, true);
         }
@@ -207,8 +219,8 @@ pub extern "C" fn vkCmdSetEvent(command_buffer: *mut c_void, event: u64, _stage_
 
 #[no_mangle]
 pub extern "C" fn vkCmdResetEvent(command_buffer: *mut c_void, event: u64, _stage_mask: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    with(|s| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_set_event(d, cb, event, false);
         }
@@ -230,13 +242,13 @@ pub extern "C" fn vkCmdWaitEvents(
     _image_memory_barrier_count: u32,
     _p_image_memory_barriers: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let events = if event_count == 0 || p_events.is_null() {
         Vec::new()
     } else {
         unsafe { std::slice::from_raw_parts(p_events, event_count as usize) }.to_vec()
     };
-    with(|s| {
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_wait_events(d, cb, &events);
         }
@@ -260,22 +272,22 @@ pub extern "C" fn vkCreateQueryPool(
     if !p_query_pool.is_null() {
         unsafe { *p_query_pool = 0 };
     }
-    dev_res(|d| match sync::create_query_pool(d, ci.query_type, ci.query_count) {
+    ShimState::with_device_result(|d| match sync::create_query_pool(d, ci.query_type, ci.query_count) {
         Ok(h) => {
             if !p_query_pool.is_null() {
                 unsafe { *p_query_pool = h };
             }
             VK_SUCCESS
         }
-        Err(e) => vk_result_from_gpu_error(&e),
+        Err(e) => Status::from_error(&e),
     })
 }
 
 #[no_mangle]
 pub extern "C" fn vkDestroyQueryPool(_device: *mut c_void, query_pool: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
-            sync::destroy_query_pool(d, query_pool);
+            d.destroy_query_pool(query_pool);
         }
     });
 }
@@ -301,13 +313,13 @@ pub extern "C" fn vkGetQueryPoolResults(
     let wait = flags & VK_QUERY_RESULT_WAIT_BIT != 0;
     let with_avail = flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT != 0;
     let partial = flags & VK_QUERY_RESULT_PARTIAL_BIT != 0;
-    dev_res(|d| {
+    ShimState::with_device_result(|d| {
         match sync::get_query_pool_results(
             d, query_pool, first_query, query_count, out, stride, wide, wait, with_avail, partial,
         ) {
             Ok(true) => VK_SUCCESS,
             Ok(false) => VK_NOT_READY,
-            Err(e) => vk_result_from_gpu_error(&e),
+            Err(e) => Status::from_error(&e),
         }
     })
 }
@@ -315,7 +327,7 @@ pub extern "C" fn vkGetQueryPoolResults(
 /// `vkResetQueryPool` (Vulkan 1.2 / `VK_EXT_host_query_reset`) — host reset of a query-pool range.
 #[no_mangle]
 pub extern "C" fn vkResetQueryPool(_device: *mut c_void, query_pool: u64, first_query: u32, query_count: u32) {
-    with(|s| {
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             sync::reset_query_pool(d, query_pool, first_query, query_count);
         }
@@ -324,8 +336,8 @@ pub extern "C" fn vkResetQueryPool(_device: *mut c_void, query_pool: u64, first_
 
 #[no_mangle]
 pub extern "C" fn vkCmdBeginQuery(command_buffer: *mut c_void, query_pool: u64, query: u32, _flags: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    with(|s| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_begin_query(d, cb, query_pool, query);
         }
@@ -334,8 +346,8 @@ pub extern "C" fn vkCmdBeginQuery(command_buffer: *mut c_void, query_pool: u64, 
 
 #[no_mangle]
 pub extern "C" fn vkCmdEndQuery(command_buffer: *mut c_void, query_pool: u64, query: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    with(|s| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_end_query(d, cb, query_pool, query);
         }
@@ -344,8 +356,8 @@ pub extern "C" fn vkCmdEndQuery(command_buffer: *mut c_void, query_pool: u64, qu
 
 #[no_mangle]
 pub extern "C" fn vkCmdResetQueryPool(command_buffer: *mut c_void, query_pool: u64, first_query: u32, query_count: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    with(|s| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_reset_query_pool(d, cb, query_pool, first_query, query_count);
         }
@@ -359,8 +371,8 @@ pub extern "C" fn vkCmdWriteTimestamp(
     query_pool: u64,
     query: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    with(|s| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_write_timestamp(d, cb, query_pool, query);
         }
@@ -403,8 +415,8 @@ pub extern "C" fn vkResetQueryPoolEXT(device: *mut c_void, query_pool: u64, firs
 /// as `vkCmdWriteTimestamp`.
 #[no_mangle]
 pub extern "C" fn vkCmdWriteTimestamp2(command_buffer: *mut c_void, _stage: u64, query_pool: u64, query: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    with(|s| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_write_timestamp(d, cb, query_pool, query);
         }
@@ -420,8 +432,8 @@ pub extern "C" fn vkCmdWriteTimestamp2KHR(command_buffer: *mut c_void, stage: u6
 /// `vkCmdSetEvent2` — record a device set of `event` (the `VkDependencyInfo` scope is not modeled).
 #[no_mangle]
 pub extern "C" fn vkCmdSetEvent2(command_buffer: *mut c_void, event: u64, _p_dependency_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    with(|s| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_set_event(d, cb, event, true);
         }
@@ -437,8 +449,8 @@ pub extern "C" fn vkCmdSetEvent2KHR(command_buffer: *mut c_void, event: u64, p_d
 /// `vkCmdResetEvent2` — record a device reset of `event` (the 64-bit `stageMask` is not modeled).
 #[no_mangle]
 pub extern "C" fn vkCmdResetEvent2(command_buffer: *mut c_void, event: u64, _stage_mask: u64) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    with(|s| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_set_event(d, cb, event, false);
         }
@@ -460,13 +472,13 @@ pub extern "C" fn vkCmdWaitEvents2(
     p_events: *const u64,
     _p_dependency_infos: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let events = if event_count == 0 || p_events.is_null() {
         Vec::new()
     } else {
         unsafe { std::slice::from_raw_parts(p_events, event_count as usize) }.to_vec()
     };
-    with(|s| {
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_wait_events(d, cb, &events);
         }
@@ -496,10 +508,10 @@ pub extern "C" fn vkCmdCopyQueryPoolResults(
     stride: u64,
     flags: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let wide = flags & VK_QUERY_RESULT_64_BIT != 0;
     let with_avail = flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT != 0;
-    with(|s| {
+    StateStore::with(|s| {
         if let Some(d) = s.device.as_mut() {
             let _ = record::cmd_copy_query_pool_results(
                 d, cb, query_pool, first_query, query_count, dst_buffer, dst_offset, stride, wide, with_avail,

@@ -15,50 +15,53 @@
 use super::*;
 
 /// The container's external-writer generation file (see the module comment above).
-pub(crate) fn fsgen_path(cid: &str) -> PathBuf {
-    hl_home().join("containers").join(cid).join("fsgen")
-}
+pub(crate) struct Generation;
+impl Generation {
+    pub(crate) fn path(cid: &str) -> PathBuf {
+        hl_home().join("containers").join(cid).join("fsgen")
+    }
 
-/// Create the generation file (value 1) if it doesn't exist yet; returns its path. Called before any
-/// engine of the container spawns (spawn_cfg) and defensively by [`fsgen_bump`]. Best-effort.
-pub(crate) fn fsgen_ensure(cid: &str) -> PathBuf {
-    let p = fsgen_path(cid);
-    if !p.exists() {
-        if let Some(d) = p.parent() {
-            let _ = std::fs::create_dir_all(d);
+    /// Create the generation file (value 1) if it doesn't exist yet; returns its path. Called before any
+    /// engine of the container spawns (spawn_cfg) and defensively by [`fsgen_bump`]. Best-effort.
+    pub(crate) fn ensure(cid: &str) -> PathBuf {
+        let p = Self::path(cid);
+        if !p.exists() {
+            if let Some(d) = p.parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            let _ = std::fs::write(&p, 1u32.to_ne_bytes());
         }
-        let _ = std::fs::write(&p, 1u32.to_ne_bytes());
+        p
     }
-    p
-}
 
-/// Atomically increment the container's external-writer generation — call AFTER a daemon-side write into
-/// the container's filesystem completes. mmap + atomic fetch_add matches the engine's read side (same
-/// 32-bit width; Release pairs with the engine's acquire load so the flush orders after our file writes).
-/// Best-effort: a failure only means the engine re-learns the write through its normal (slower) paths.
-pub(crate) fn fsgen_bump(cid: &str) {
-    use std::os::fd::AsRawFd;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    let p = fsgen_ensure(cid);
-    let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(&p) else {
-        return;
-    };
-    if f.metadata().map(|m| m.len()).unwrap_or(0) < 4 && f.set_len(4).is_err() {
-        return;
-    }
-    unsafe {
-        let m = libc::mmap(
-            std::ptr::null_mut(),
-            4,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            f.as_raw_fd(),
-            0,
-        );
-        if m == libc::MAP_FAILED {
+    /// Atomically increment the container's external-writer generation — call AFTER a daemon-side write into
+    /// the container's filesystem completes. mmap + atomic fetch_add matches the engine's read side (same
+    /// 32-bit width; Release pairs with the engine's acquire load so the flush orders after our file writes).
+    /// Best-effort: a failure only means the engine re-learns the write through its normal (slower) paths.
+    pub(crate) fn bump(cid: &str) {
+        use std::os::fd::AsRawFd;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let p = Self::ensure(cid);
+        let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(&p) else {
+            return;
+        };
+        if f.metadata().map(|m| m.len()).unwrap_or(0) < 4 && f.set_len(4).is_err() {
             return;
         }
-        (*(m as *const AtomicU32)).fetch_add(1, Ordering::Release);
-        libc::munmap(m, 4);
+        unsafe {
+            let m = libc::mmap(
+                std::ptr::null_mut(),
+                4,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                f.as_raw_fd(),
+                0,
+            );
+            if m == libc::MAP_FAILED {
+                return;
+            }
+            (*(m as *const AtomicU32)).fetch_add(1, Ordering::Release);
+            libc::munmap(m, 4);
+        }
     }
 }

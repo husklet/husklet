@@ -225,8 +225,12 @@ impl State {
         }
     }
     /// `cuDevicePrimaryCtxGetState` — `(flags, active)` where `active` is 1 while a reference is held.
-    pub fn primary_ctx_state(&self) -> (u32, i32) {
-        let flags = if self.primary_ctx != 0 { self.primary_flags } else { 0 };
+    pub fn report_primary_context(&self) -> (u32, i32) {
+        let flags = if self.primary_ctx != 0 {
+            self.primary_flags
+        } else {
+            0
+        };
         (flags, (self.primary_refcount > 0) as i32)
     }
     /// `cuDevicePrimaryCtxSetFlags` — record the primary context's flags (only while it exists).
@@ -250,7 +254,8 @@ impl State {
     // ---- function handles -------------------------------------------------------------------------
 
     pub fn intern_function(&mut self, f: Function, name: &str) -> *mut c_void {
-        self.functions.push((f, CString::new(name).unwrap_or_default()));
+        self.functions
+            .push((f, CString::new(name).unwrap_or_default()));
         self.func_dyn_shared.push(0);
         self.func_cache_config.push(0);
         self.functions.len() as *mut c_void
@@ -369,18 +374,20 @@ impl State {
     }
 }
 
-static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+pub struct ShimState;
 
-/// Run `f` with exclusive access to the global shim state. Non-reentrant — never call [`with`] from
-/// inside an `f` (the `Mutex` is not recursive); each entry point does exactly one `with`.
-pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
-    let m = STATE.get_or_init(|| Mutex::new(State::new()));
-    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
-    f(&mut g)
+impl ShimState {
+    /// Run `f` with exclusive global shim-state access. This operation is non-reentrant.
+    pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        let state = STATE.get_or_init(|| Mutex::new(State::new()));
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        f(&mut state)
+    }
 }
 
 /// Reset the process-global state to a clean slate (test-only, so a unit test starts deterministic).
 #[cfg(test)]
 pub fn reset() {
-    with(|s| *s = State::new());
+    ShimState::with(|state| *state = State::new());
 }

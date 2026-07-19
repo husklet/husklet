@@ -33,6 +33,7 @@ macos-surface = [
 ]
 
 [dependencies]
+hl-design = { path = "../../packages/hl-design" }
 # Tag-based logging + counters + timing (zero-cost when off). Pure std, zero external deps — safe for the
 # neutral `scene` core. Tags used here: `compositor`, `present`, `wayland`.
 hl-log = { path = "../../packages/hl-log" }

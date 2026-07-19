@@ -11,7 +11,7 @@
 
 use crate::model::instance::QUEUE_FAMILY_INDEX;
 use crate::model::memory::ImageRec;
-use crate::model::memory::{tex_format_from_vk, vk_format};
+use crate::model::memory::{vk_format, Format};
 use crate::model::queue::{
     ImageState, SurfaceCapabilities, SurfaceFormat, SurfaceRec, SwapImage, SwapchainRec,
     COMPOSITE_ALPHA_OPAQUE_BIT, CURRENT_EXTENT_UNDEFINED, SURFACE_IMAGE_USAGE,
@@ -27,8 +27,12 @@ use hl_gpu::{BufferId, Cmd, CommandBuffer, CommandSink, GpuError, Result};
 
 /// `vkGetPhysicalDeviceSurfaceSupportKHR` — whether `queue_family_index` can present. The lone family
 /// (graphics+compute+transfer) is the present family; any other index cannot present.
-pub fn surface_supports_present(queue_family_index: u32) -> bool {
-    queue_family_index == QUEUE_FAMILY_INDEX
+pub struct QueueFamily(pub u32);
+
+impl QueueFamily {
+    pub fn supports_present(&self) -> bool {
+        self.0 == QUEUE_FAMILY_INDEX
+    }
 }
 
 /// `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` — the modeled surface capabilities (double/triple
@@ -84,7 +88,7 @@ pub fn create_surface(
     vk_format: u32,
     hlp_surface: u32,
 ) -> Result<VkSurfaceKHR> {
-    let format = tex_format_from_vk(vk_format);
+    let format = Format(vk_format).wire();
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
     sink.submit(&[Cmd::CreateSurface(
@@ -184,81 +188,86 @@ pub fn create_swapchain(
 /// order. These are the SAME handles minted at [`create_swapchain`] (real Vulkan returns identical image
 /// handles on every call); `vkAcquireNextImageKHR`'s returned index selects one of them. Errors on an
 /// unknown swapchain.
-pub fn get_swapchain_images(dev: &Device, swapchain: VkSwapchainKHR) -> Result<Vec<VkImage>> {
-    let sc = dev.swapchains.get(&swapchain).ok_or(GpuError::Invalid(
-        "vkGetSwapchainImagesKHR: unknown VkSwapchainKHR",
-    ))?;
-    Ok(sc.images.iter().map(|i| i.handle).collect())
-}
+impl Device {
+    pub fn swapchain_images(&self, swapchain: VkSwapchainKHR) -> Result<Vec<VkImage>> {
+        let sc = self.swapchains.get(&swapchain).ok_or(GpuError::Invalid(
+            "vkGetSwapchainImagesKHR: unknown VkSwapchainKHR",
+        ))?;
+        Ok(sc.images.iter().map(|i| i.handle).collect())
+    }
 
-/// `vkDestroySwapchainKHR` — retire a swapchain AND everything [`create_swapchain`] allocated for it: each
-/// presentable image's backing render-target texture (a [`Cmd::DestroyTexture`] frees the host texture, and
-/// its `dev.images` + `image_layouts` bookkeeping is dropped) and the swapchain's own presentation surface
-/// (a [`Cmd::DestroySurface`] frees it, and its `dev.surfaces` entry is dropped).
-///
-/// Without retiring the images, a swapchain RECREATION — every window resize builds a fresh swapchain over
-/// the new extent and destroys the old one — would ORPHAN the old set's `ImageRec` entries (and the old
-/// swapchain's surface) in the device tables forever: a per-resize `VkImage`/surface handle leak that grows
-/// unbounded across a session of resizes. Retiring them here keeps `dev.images` holding EXACTLY the live
-/// swapchains' images. A no-op on an unknown / already-retired swapchain (`VK_NULL_HANDLE`); a still-live
-/// swapchain keeps all of its own images (only the destroyed one's are retired).
-pub fn destroy_swapchain(
-    dev: &mut Device,
-    sink: &mut dyn CommandSink,
-    swapchain: VkSwapchainKHR,
-) -> Result<()> {
-    let Some(sc) = dev.swapchains.remove(&swapchain) else {
-        return Ok(()); // unknown / already retired — nothing to free (VK_NULL_HANDLE)
-    };
-    // Retire every presentable image: free its host texture, then drop its device-table bookkeeping so no
-    // stale `VkImage` handle survives the swapchain.
-    for img in &sc.images {
-        sink.submit(&[Cmd::DestroyTexture(img.ir_texture_id)])?;
-        dev.images.remove(&img.handle);
-        dev.image_layouts.remove(&img.handle);
+    /// `vkDestroySwapchainKHR` — retire a swapchain AND everything [`create_swapchain`] allocated for it: each
+    /// presentable image's backing render-target texture (a [`Cmd::DestroyTexture`] frees the host texture, and
+    /// its `dev.images` + `image_layouts` bookkeeping is dropped) and the swapchain's own presentation surface
+    /// (a [`Cmd::DestroySurface`] frees it, and its `dev.surfaces` entry is dropped).
+    ///
+    /// Without retiring the images, a swapchain RECREATION — every window resize builds a fresh swapchain over
+    /// the new extent and destroys the old one — would ORPHAN the old set's `ImageRec` entries (and the old
+    /// swapchain's surface) in the device tables forever: a per-resize `VkImage`/surface handle leak that grows
+    /// unbounded across a session of resizes. Retiring them here keeps `dev.images` holding EXACTLY the live
+    /// swapchains' images. A no-op on an unknown / already-retired swapchain (`VK_NULL_HANDLE`); a still-live
+    /// swapchain keeps all of its own images (only the destroyed one's are retired).
+    pub fn destroy_swapchain(
+        &mut self,
+        sink: &mut dyn CommandSink,
+        swapchain: VkSwapchainKHR,
+    ) -> Result<()> {
+        let Some(sc) = self.swapchains.remove(&swapchain) else {
+            return Ok(()); // unknown / already retired — nothing to free (VK_NULL_HANDLE)
+        };
+        // Retire every presentable image: free its host texture, then drop its device-table bookkeeping so no
+        // stale `VkImage` handle survives the swapchain.
+        for img in &sc.images {
+            sink.submit(&[Cmd::DestroyTexture(img.ir_texture_id)])?;
+            self.images.remove(&img.handle);
+            self.image_layouts.remove(&img.handle);
+        }
+        // Retire the swapchain's own presentation surface (minted per-swapchain at create time — the app's
+        // instance-level `VkSurfaceKHR` is a different object, retired separately by `vkDestroySurfaceKHR`).
+        if let Some(surf) = self.surfaces.remove(&sc.surface) {
+            sink.submit(&[Cmd::DestroySurface(surf.ir_id)])?;
+        }
+        Ok(())
     }
-    // Retire the swapchain's own presentation surface (minted per-swapchain at create time — the app's
-    // instance-level `VkSurfaceKHR` is a different object, retired separately by `vkDestroySurfaceKHR`).
-    if let Some(surf) = dev.surfaces.remove(&sc.surface) {
-        sink.submit(&[Cmd::DestroySurface(surf.ir_id)])?;
-    }
-    Ok(())
-}
 
-/// `vkAcquireNextImageKHR` — return the index of the next presentable image in genuine FIFO round-robin
-/// order. Starting at the swapchain's `acquire_cursor`, this scans the images cyclically for the first one
-/// in the pool ([`ImageState::Available`]), marks it [`ImageState::Acquired`] (so it is not handed out
-/// again until [`queue_present`] returns it to the pool), advances the cursor past it, and returns its
-/// index — so a real present loop cycles `0,1,..,N-1,0,..` instead of being pinned to image 0 (which would
-/// re-hand the app an image the presentation engine still owns, aborting the loop after one frame).
-///
-/// If NO image is currently available (the app acquired more than it presented), the headless model —
-/// where a present completes immediately — would normally already have returned one; as a defensive
-/// fallback it returns the cursor image anyway (re-marking it acquired) so acquisition still makes forward
-/// progress rather than failing. Errors on an unknown or empty swapchain.
-///
-/// The `_semaphore`/`_fence` the app may pass are signalled by the shim's existing sync path (unchanged);
-/// this driver-level entry only advances the acquire cursor and image ownership.
-pub fn acquire_next_image(dev: &mut Device, swapchain: VkSwapchainKHR) -> Result<u32> {
-    let sc = dev.swapchains.get_mut(&swapchain).ok_or(GpuError::Invalid(
-        "vkAcquireNextImageKHR: unknown VkSwapchainKHR",
-    ))?;
-    let count = sc.images.len();
-    if count == 0 {
-        return Err(GpuError::Invalid(
-            "vkAcquireNextImageKHR: swapchain has no images",
-        ));
+    /// `vkAcquireNextImageKHR` — return the index of the next presentable image in genuine FIFO round-robin
+    /// order. Starting at the swapchain's `acquire_cursor`, this scans the images cyclically for the first one
+    /// in the pool ([`ImageState::Available`]), marks it [`ImageState::Acquired`] (so it is not handed out
+    /// again until [`queue_present`] returns it to the pool), advances the cursor past it, and returns its
+    /// index — so a real present loop cycles `0,1,..,N-1,0,..` instead of being pinned to image 0 (which would
+    /// re-hand the app an image the presentation engine still owns, aborting the loop after one frame).
+    ///
+    /// If NO image is currently available (the app acquired more than it presented), the headless model —
+    /// where a present completes immediately — would normally already have returned one; as a defensive
+    /// fallback it returns the cursor image anyway (re-marking it acquired) so acquisition still makes forward
+    /// progress rather than failing. Errors on an unknown or empty swapchain.
+    ///
+    /// The `_semaphore`/`_fence` the app may pass are signalled by the shim's existing sync path (unchanged);
+    /// this driver-level entry only advances the acquire cursor and image ownership.
+    pub fn acquire_next_image(&mut self, swapchain: VkSwapchainKHR) -> Result<u32> {
+        let sc = self
+            .swapchains
+            .get_mut(&swapchain)
+            .ok_or(GpuError::Invalid(
+                "vkAcquireNextImageKHR: unknown VkSwapchainKHR",
+            ))?;
+        let count = sc.images.len();
+        if count == 0 {
+            return Err(GpuError::Invalid(
+                "vkAcquireNextImageKHR: swapchain has no images",
+            ));
+        }
+        let start = (sc.acquire_cursor as usize) % count;
+        // Scan cyclically from the cursor for the first pool image; fall back to the cursor image itself.
+        let index = (0..count)
+            .map(|off| (start + off) % count)
+            .find(|&i| sc.images[i].state == ImageState::Available)
+            .unwrap_or(start);
+        sc.images[index].state = ImageState::Acquired;
+        sc.acquire_cursor = ((index + 1) % count) as u32;
+        hl_log::hl_debug!(hl_log::tag::PRESENT, "acquire idx={} of={}", index, count);
+        Ok(index as u32)
     }
-    let start = (sc.acquire_cursor as usize) % count;
-    // Scan cyclically from the cursor for the first pool image; fall back to the cursor image itself.
-    let index = (0..count)
-        .map(|off| (start + off) % count)
-        .find(|&i| sc.images[i].state == ImageState::Available)
-        .unwrap_or(start);
-    sc.images[index].state = ImageState::Acquired;
-    sc.acquire_cursor = ((index + 1) % count) as u32;
-    hl_log::hl_debug!(hl_log::tag::PRESENT, "acquire idx={} of={}", index, count);
-    Ok(index as u32)
 }
 
 /// `vkQueuePresentKHR` (one swapchain) — submit [`Cmd::Present`] naming the swapchain's surface + the

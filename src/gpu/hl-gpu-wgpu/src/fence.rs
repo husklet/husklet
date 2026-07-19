@@ -7,22 +7,27 @@
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
-/// The signalled high-water value of fence `id`.
-pub fn value(res: &SessionResources, id: u32) -> Result<u64> {
-    res.fences
-        .get(id)?
-        .downcast_ref::<u64>()
-        .copied()
-        .ok_or(GpuError::Invalid("wgpu: fence native type mismatch"))
-}
+/// Operations on one timeline fence stored in session resources.
+pub struct Fence;
 
-/// Raise fence `id` to `max(current, v)` (a submit-completion signal).
-pub fn signal(res: &mut SessionResources, id: u32, v: u64) -> Result<()> {
-    let slot = res
-        .fences
-        .get_mut(id)?
-        .downcast_mut::<u64>()
-        .ok_or(GpuError::Invalid("wgpu: fence native type mismatch"))?;
-    *slot = (*slot).max(v);
-    Ok(())
+impl Fence {
+    /// Return the signalled high-water value of fence `id`.
+    pub fn value(res: &SessionResources, id: u32) -> Result<u64> {
+        res.fences
+            .get(id)?
+            .downcast_ref::<u64>()
+            .copied()
+            .ok_or(GpuError::Invalid("wgpu: fence native type mismatch"))
+    }
+
+    /// Raise fence `id` to `max(current, value)`.
+    pub fn signal(res: &mut SessionResources, id: u32, value: u64) -> Result<()> {
+        let slot = res
+            .fences
+            .get_mut(id)?
+            .downcast_mut::<u64>()
+            .ok_or(GpuError::Invalid("wgpu: fence native type mismatch"))?;
+        *slot = (*slot).max(value);
+        Ok(())
+    }
 }

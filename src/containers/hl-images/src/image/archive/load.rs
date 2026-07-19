@@ -4,7 +4,6 @@
 use super::*;
 use crate::Error;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 impl Store {
     /// `docker load`: materialize an archive into a new image directory under the store and return the
@@ -32,7 +31,7 @@ impl Store {
             return Err(Error::Archive(e.to_string()));
         }
         // Extract the OUTER archive tolerantly (xattrs/owners preserved; device nodes don't abort it).
-        let extract = run_extract(&tmp, &staging);
+        let extract = Archive(&tmp).extract(&staging);
         let _ = std::fs::remove_file(&tmp);
         if let Err(e) = extract {
             let _ = std::fs::remove_dir_all(&staging);
@@ -87,11 +86,11 @@ impl Store {
             .arch
             .as_deref()
             .and_then(|a| Arch::detect("linux", a))
-            .or_else(|| detect_arch(&rootfs))
+            .or_else(|| Rootfs::new(&rootfs).architecture())
             .unwrap_or(Arch::LinuxAarch64);
         let mut cmd = manifest.cmd.clone();
         if cmd.is_empty() {
-            cmd = default_shell(&rootfs);
+            cmd = Rootfs::new(&rootfs).default_command();
         }
         let loaded = LoadedImage {
             name,
@@ -159,7 +158,7 @@ impl Store {
         let merged = build.join("rootfs");
         std::fs::create_dir_all(&merged).map_err(|e| Error::Archive(e.to_string()))?;
         for layer in &layers {
-            if let Err(e) = apply_layer(&staging.join(layer), &merged) {
+            if let Err(e) = Archive(&staging.join(layer)).apply_layer(&merged) {
                 let _ = std::fs::remove_dir_all(&build);
                 return Err(e);
             }
@@ -171,8 +170,8 @@ impl Store {
             return Err(e);
         }
         let rootfs = target.join("rootfs");
-        let arch = arch_from_config(&blob)
-            .or_else(|| detect_arch(&rootfs))
+        let arch = Arch::from_config(&blob)
+            .or_else(|| Rootfs::new(&rootfs).architecture())
             .unwrap_or(Arch::LinuxAarch64);
 
         // The run config lives under `config` (OCI image config) or `Config` (docker container config).
@@ -201,7 +200,7 @@ impl Store {
         };
         let mut cmd = strs("Cmd");
         if cmd.is_empty() {
-            cmd = default_shell(&rootfs);
+            cmd = Rootfs::new(&rootfs).default_command();
         }
         let healthcheck = match &section["Healthcheck"] {
             Value::Null => None,
@@ -244,72 +243,62 @@ impl Store {
 /// layer's real content over the merged tree (dropping the `.wh.*` markers themselves). Whiteouts:
 /// `<dir>/.wh.<name>` deletes `<dir>/<name>`; `<dir>/.wh..wh..opq` makes `<dir>` opaque (its lower
 /// contents are cleared before this layer's content is applied).
-fn apply_layer(layer: &Path, merged: &Path) -> Result<(), Error> {
-    // List the layer's members to discover whiteout markers (GNU tar auto-detects gzip on read).
-    let listing = Command::new("tar")
-        .arg("tf")
-        .arg(layer)
-        .output()
-        .map_err(|e| Error::Archive(e.to_string()))?;
-    if !listing.status.success() {
-        return Err(Error::Archive(format!(
-            "layer {}: {}",
-            layer.display(),
-            String::from_utf8_lossy(&listing.stderr).trim()
-        )));
-    }
-    let text = String::from_utf8_lossy(&listing.stdout);
-    let mut opaque_dirs: Vec<&str> = Vec::new();
-    let mut whiteouts: Vec<(&str, &str)> = Vec::new(); // (parent dir, deleted name)
-    for raw in text.lines() {
-        let e = raw.strip_prefix("./").unwrap_or(raw).trim_end_matches('/');
-        let (dir, base) = match e.rsplit_once('/') {
-            Some((d, b)) => (d, b),
-            None => ("", e),
-        };
-        if base == ".wh..wh..opq" {
-            opaque_dirs.push(dir);
-        } else if let Some(name) = base.strip_prefix(".wh.") {
-            whiteouts.push((dir, name));
+impl Archive<'_> {
+    fn apply_layer(&self, merged: &Path) -> Result<(), Error> {
+        let mut opaque_dirs = Vec::new();
+        let mut whiteouts = Vec::new();
+        for path in self.paths()? {
+            use std::os::unix::ffi::{OsStrExt, OsStringExt};
+            let Some(base) = path.file_name() else {
+                continue;
+            };
+            let dir = path
+                .parent()
+                .filter(|path| *path != Path::new("."))
+                .unwrap_or(Path::new(""));
+            if base == ".wh..wh..opq" {
+                opaque_dirs.push(dir.to_path_buf());
+            } else if let Some(name) = base.as_bytes().strip_prefix(b".wh.") {
+                whiteouts.push((
+                    dir.to_path_buf(),
+                    std::ffi::OsString::from_vec(name.to_vec()),
+                ));
+            }
         }
-    }
-    // Opaque: clear the merged dir's existing (lower) contents before applying this layer.
-    for dir in opaque_dirs {
-        let d = if dir.is_empty() {
-            merged.to_path_buf()
-        } else {
-            merged.join(dir)
-        };
-        if let Ok(rd) = std::fs::read_dir(&d) {
-            for ent in rd.flatten() {
-                let p = ent.path();
-                if p.is_dir() && !p.is_symlink() {
-                    let _ = std::fs::remove_dir_all(&p);
-                } else {
-                    let _ = std::fs::remove_file(&p);
+        // Opaque: clear the merged dir's existing (lower) contents before applying this layer.
+        for dir in opaque_dirs {
+            let d = if dir.as_os_str().is_empty() {
+                merged.to_path_buf()
+            } else {
+                merged.join(&dir)
+            };
+            if let Ok(rd) = std::fs::read_dir(&d) {
+                for ent in rd.flatten() {
+                    let p = ent.path();
+                    if p.is_dir() && !p.is_symlink() {
+                        let _ = std::fs::remove_dir_all(&p);
+                    } else {
+                        let _ = std::fs::remove_file(&p);
+                    }
                 }
             }
         }
-    }
-    // Regular whiteouts: delete the named entry from the merged tree.
-    for (dir, name) in whiteouts {
-        let victim = if dir.is_empty() {
-            merged.join(name)
-        } else {
-            merged.join(dir).join(name)
-        };
-        if victim.is_dir() && !victim.is_symlink() {
-            let _ = std::fs::remove_dir_all(&victim);
-        } else {
-            let _ = std::fs::remove_file(&victim);
+        // Regular whiteouts: delete the named entry from the merged tree.
+        for (dir, name) in whiteouts {
+            let victim = if dir.as_os_str().is_empty() {
+                merged.join(&name)
+            } else {
+                merged.join(&dir).join(&name)
+            };
+            if victim.is_dir() && !victim.is_symlink() {
+                let _ = std::fs::remove_dir_all(&victim);
+            } else {
+                let _ = std::fs::remove_file(&victim);
+            }
         }
+        // Extract the layer's real content over the merged tree, dropping the whiteout markers.
+        self.extract_with(merged, &["--exclude", ".wh.*", "--exclude", "*/.wh.*"])
     }
-    // Extract the layer's real content over the merged tree, dropping the whiteout markers.
-    run_extract_args(
-        layer,
-        merged,
-        &["--exclude", ".wh.*", "--exclude", "*/.wh.*"],
-    )
 }
 
 #[cfg(test)]

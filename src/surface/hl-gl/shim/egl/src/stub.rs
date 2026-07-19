@@ -15,6 +15,8 @@ fn seen() -> &'static Mutex<HashSet<&'static str>> {
 
 /// Called by every generated stub. First hit of each name (when `HL_SHIM_DEBUG` is set) logs; the rest
 /// are silent. Cheap and thread-safe.
+pub struct Diagnostics;
+impl Diagnostics {
 #[inline]
 pub fn hit(name: &'static str) {
     if std::env::var_os("HL_SHIM_DEBUG").is_none() {
@@ -50,3 +52,11 @@ pub fn trace(cmd: &'static str, detail: &str) {
         }
     }
 }
+}
+
+pub const HIT: fn(&'static str) = Diagnostics::hit;
+pub const UNSUPPORTED: fn(&'static str, &str) = Diagnostics::unsupported;
+pub const TRACE: fn(&'static str, &str) = Diagnostics::trace;
+pub use HIT as hit;
+pub use TRACE as trace;
+pub use UNSUPPORTED as unsupported;

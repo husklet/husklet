@@ -33,10 +33,13 @@ impl From<ImageSummary> for Image {
 impl Image {
     /// First repo tag (e.g. `alpine:latest`), or the short id.
     pub fn name(&self) -> String {
-        self.repo_tags
-            .first()
-            .cloned()
-            .unwrap_or_else(|| short(&self.id))
+        self.repo_tags.first().cloned().unwrap_or_else(|| {
+            self.id
+                .trim_start_matches("sha256:")
+                .chars()
+                .take(12)
+                .collect()
+        })
     }
 }
 

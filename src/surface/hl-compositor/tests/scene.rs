@@ -17,8 +17,7 @@ use hl_compositor::scene::port::{
     Clock, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,
 };
 use hl_compositor::scene::service::{
-    self, commit_surface, compose_frame, focus, is_tree_dirty, place_popup, schedule, BufferChange,
-    Commit, FramePacing,
+    commit_surface, focus, schedule, BufferChange, Commit, FramePacing,
 };
 use hl_compositor::Compositor;
 
@@ -312,7 +311,7 @@ fn compose_frame_walks_subsurfaces_and_popups_in_z_order() {
     );
     commit_surface(&mut scene, popup, Commit::attach(shm(180, 240)));
 
-    let frame = compose_frame(&scene, top).expect("root has a buffer");
+    let frame = scene.compose_frame(top).expect("root has a buffer");
 
     // Composite order (bottom → top): root, its subsurfaces (registration order = z-order), then the
     // popup on top.
@@ -392,7 +391,7 @@ fn nested_popup_offsets_accumulate_up_the_chain() {
     scene.set_role(submenu, popup_role(menu, Rect::new(60, 30, 150, 250)));
     commit_surface(&mut scene, submenu, Commit::attach(shm(150, 250)));
 
-    let frame = compose_frame(&scene, top).unwrap();
+    let frame = scene.compose_frame(top).unwrap();
     // Parent-before-child order; submenu offset = menu origin + submenu origin.
     assert_eq!(frame.present_order(), vec![top, menu, submenu]);
     let submenu_item = frame
@@ -417,7 +416,7 @@ fn popup_placement_anchors_and_applies_gravity() {
         constraint_adjustment: ConstraintAdjustment::NONE,
         offset: (0, 0),
     };
-    let geo = place_popup(&p, 2000, 2000);
+    let geo = p.place(2000, 2000);
     assert_eq!(geo, Rect::new(40, 50, 150, 200));
 
     // The extra offset shifts the result.
@@ -425,7 +424,7 @@ fn popup_placement_anchors_and_applies_gravity() {
         offset: (5, -7),
         ..p
     };
-    assert_eq!(place_popup(&p2, 2000, 2000), Rect::new(45, 43, 150, 200));
+    assert_eq!(p2.place(2000, 2000), Rect::new(45, 43, 150, 200));
 }
 
 #[test]
@@ -444,7 +443,7 @@ fn popup_placement_flips_then_slides_to_stay_on_screen() {
         },
         offset: (0, 0),
     };
-    let geo = place_popup(&p, 500, 400);
+    let geo = p.place(500, 400);
     // Flipped to gravity top about the flipped anchor (top, y=380): top-left y = 380 - 150 = 230.
     assert_eq!(geo.y, 230, "flip_y mirrors the popup back on-screen");
     assert!(geo.bottom() <= 400, "flipped popup fits within the output");
@@ -461,7 +460,7 @@ fn popup_placement_flips_then_slides_to_stay_on_screen() {
         },
         offset: (0, 0),
     };
-    let geo = place_popup(&slide, 500, 400);
+    let geo = slide.place(500, 400);
     assert_eq!(
         geo.right(),
         500,
@@ -484,7 +483,7 @@ fn popup_placement_resizes_when_it_cannot_fit() {
         },
         offset: (0, 0),
     };
-    let geo = place_popup(&p, 500, 400);
+    let geo = p.place(500, 400);
     assert!(
         geo.right() <= 500 && geo.x >= 0,
         "resized popup fits the target"
@@ -638,11 +637,11 @@ fn pacing_policy_matches_the_ported_state_machine() {
     assert!(FramePacing::TerminalFailure.policy().terminal_cleanup);
     // Outcome → pacing mapping: Offscreen is a retryable failure, not a delivery.
     assert_eq!(
-        service::from_outcome(PresentOutcome::Offscreen),
+        FramePacing::from(PresentOutcome::Offscreen),
         FramePacing::RetryableFailure
     );
     assert_eq!(
-        service::from_outcome(PresentOutcome::Delivered {
+        FramePacing::from(PresentOutcome::Delivered {
             serial: 9,
             timing: None
         }),
@@ -713,7 +712,7 @@ fn fully_occluded_surface_does_not_force_a_present() {
         .with_damage(Rect::new(10, 10, 20, 20)),
     );
     assert!(
-        !is_tree_dirty(&c.scene, top),
+        !c.scene.is_tree_dirty(top),
         "a surface fully behind an opaque cover is not visible"
     );
 
@@ -727,7 +726,7 @@ fn fully_occluded_surface_does_not_force_a_present() {
         .with_damage(Rect::new(500, 500, 20, 20)),
     );
     assert!(
-        is_tree_dirty(&c.scene, top),
+        c.scene.is_tree_dirty(top),
         "an un-occluded surface forces a present"
     );
 }
@@ -741,23 +740,23 @@ fn focus_follows_window_map_raise_and_close() {
     let b = map_toplevel(&mut scene, 800, 600);
 
     // Map/focus A, then B.
-    let ch = focus::focus_surface(&mut scene, a);
+    let ch = scene.focus(a);
     assert_eq!((ch.previous, ch.current), (None, Some(a)));
     assert!(scene.seat().has_keyboard_focus(a));
 
-    let ch = focus::activate(&mut scene, b);
+    let ch = scene.activate(b);
     assert!(ch.changed());
     assert_eq!((ch.previous, ch.current), (Some(a), Some(b)));
     assert!(scene.seat().has_keyboard_focus(b));
 
     // Closing B (the focused window) drops focus to nothing (no auto-refocus).
-    let ch = focus::on_window_gone(&mut scene, b);
+    let ch = scene.on_window_gone(b);
     assert_eq!((ch.previous, ch.current), (Some(b), None));
     assert_eq!(scene.seat().keyboard_focus, None);
 
     // Closing an UNFOCUSED window does not touch focus.
-    focus::focus_surface(&mut scene, a);
-    let ch = focus::on_window_gone(&mut scene, b);
+    scene.focus(a);
+    let ch = scene.on_window_gone(b);
     assert!(!ch.changed());
     assert_eq!(scene.seat().keyboard_focus, Some(a));
 }

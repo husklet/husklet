@@ -5,9 +5,16 @@
 
 mod component;
 mod settings;
+mod size;
 
-pub use component::{Component, Element, Event, EventId, Events, ListItem, View};
+#[cfg(feature = "gtk")]
+pub mod gtk;
+
+pub use component::{
+    Action, Component, Dialog, Element, Event, EventId, Events, ListItem, Role, View,
+};
 pub use settings::{Choice, Field, FieldId, FieldKind, Settings, Value};
+pub use size::ByteSize;
 
 /// A toolkit adapter renders a declarative view and reports interaction through an event sink.
 pub trait Renderer {

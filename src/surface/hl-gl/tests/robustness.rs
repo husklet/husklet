@@ -54,8 +54,8 @@ fn renderbuffer_storage_rejects_oversized_extent_without_panicking() {
 #[test]
 fn tex_storage_2d_rejects_oversized_extent() {
     let mut c = ctx();
-    let t = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, t);
     record::tex_storage_2d(&mut c, GL_TEXTURE_2D, 1, GL_RGBA, 100000, 1);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
@@ -66,8 +66,8 @@ fn tex_storage_2d_rejects_oversized_extent() {
 #[test]
 fn copy_tex_sub_image_rejects_huge_offset_without_panicking() {
     let mut c = ctx();
-    let t = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, t);
     record::tex_image_2d(&mut c, 4, 4, &[0u8; 64]);
     record::copy_tex_sub_image_2d(
@@ -133,7 +133,7 @@ fn gl_error_is_first_error_wins_across_ops_then_clears() {
 #[test]
 fn indexed_buffer_binding_validates_target_and_index() {
     let mut c = ctx();
-    let b = record::gen_buffer(&mut c);
+    let b = c.buffers.gen();
     // A non-indexed target is INVALID_ENUM.
     record::bind_buffer_range(&mut c, GL_ARRAY_BUFFER, 0, b, 0, 16);
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
@@ -169,8 +169,8 @@ fn draw_calls_reject_negative_counts_and_bad_ranges_recording_nothing() {
 #[test]
 fn framebuffer_texture_2d_error_matrix() {
     let mut c = ctx();
-    let fbo = record::gen_framebuffer(&mut c);
-    let tex = record::gen_texture(&mut c);
+    let fbo = c.framebuffers.gen();
+    let tex = c.textures.gen();
     // Bad target -> INVALID_ENUM (checked first).
     record::framebuffer_texture_2d(
         &mut c,
@@ -218,12 +218,12 @@ fn framebuffer_texture_2d_error_matrix() {
 #[test]
 fn generate_mipmap_validates_target_and_bound_texture() {
     let mut c = ctx();
-    record::active_texture(&mut c, GL_TEXTURE0);
+    c.active_texture(GL_TEXTURE0);
     // Bad target.
-    record::generate_mipmap(&mut c, GL_ARRAY_BUFFER);
+    c.generate_mipmap(GL_ARRAY_BUFFER);
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
     // No texture bound on the active unit.
-    record::generate_mipmap(&mut c, GL_TEXTURE_2D);
+    c.generate_mipmap(GL_TEXTURE_2D);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
 }
 
@@ -248,8 +248,8 @@ fn pixel_store_rejects_bad_alignment_and_leaves_state_unchanged() {
 #[test]
 fn tex_sub_image_2d_rejects_out_of_bounds_rect() {
     let mut c = ctx();
-    let t = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, t);
     record::tex_image_2d(&mut c, 4, 4, &[0u8; 64]);
     // A rect that exceeds the texture bounds.
@@ -263,8 +263,8 @@ fn tex_sub_image_2d_rejects_out_of_bounds_rect() {
 #[test]
 fn copy_buffer_sub_data_rejects_negative_and_no_ops_out_of_range() {
     let mut c = ctx();
-    let src = record::gen_buffer(&mut c);
-    let dst = record::gen_buffer(&mut c);
+    let src = c.buffers.gen();
+    let dst = c.buffers.gen();
     record::bind_buffer(&mut c, GL_COPY_READ_BUFFER, src);
     record::buffer_data(&mut c, GL_COPY_READ_BUFFER, &[1u8; 32], 0);
     record::bind_buffer(&mut c, GL_COPY_WRITE_BUFFER, dst);
@@ -288,8 +288,8 @@ fn copy_buffer_sub_data_rejects_negative_and_no_ops_out_of_range() {
 #[test]
 fn deleting_unknown_objects_returns_false_and_no_error() {
     let mut c = ctx();
-    assert!(!record::delete_buffer(&mut c, 999));
-    assert!(!record::delete_texture(&mut c, 999));
+    assert!(!c.delete_buffer(999));
+    assert!(!c.delete_texture(999));
     assert!(!record::is_vertex_array(&c, 999));
     assert!(!record::is_framebuffer(&c, 999));
     assert!(!record::is_renderbuffer(&c, 999));
@@ -305,11 +305,11 @@ fn deleting_the_bound_program_and_texture_clears_the_binding() {
     record::delete_program(&mut c, p);
     assert_eq!(c.cur_prog, 0, "deleting the current program unbinds it");
 
-    let t = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, t);
     assert_eq!(c.tex_unit[0], t);
-    record::delete_texture(&mut c, t);
+    c.delete_texture(t);
     assert_eq!(
         c.tex_unit[0], 0,
         "deleting a bound texture clears the unit binding"
@@ -370,7 +370,7 @@ fn fence_and_sync_error_edges() {
         GL_WAIT_FAILED
     );
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
-    sync::delete_sync(&mut c, 777);
+    c.delete_sync(777);
     assert_eq!(c.take_gl_error(), GL_INVALID_VALUE);
 }
 
@@ -381,7 +381,7 @@ fn sampler_and_query_object_error_edges() {
     es3::sampler_parameter(&mut c, 55, GL_TEXTURE_MIN_FILTER, GL_LINEAR as i32, 0.0);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
     // A generated sampler with a bad enum value.
-    let s = es3::gen_sampler(&mut c);
+    let s = c.samplers.gen();
     es3::sampler_parameter(&mut c, s, GL_TEXTURE_MIN_FILTER, 0xDEAD, 0.0);
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
     // A valid parameter sticks.

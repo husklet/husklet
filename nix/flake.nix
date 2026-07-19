@@ -1,11 +1,11 @@
 {
-  # Dev shell that provides the GTK4 build/runtime deps for `hl-gui` (the `hl-app` GUI) on
+  # Dev shell that provides the GTK4 build/runtime dependencies for Husklet on
   # macOS. Pinned to the exact nixpkgs rev that already has gtk4 cached in this machine's store,
   # so entering the shell never rebuilds GTK. libadwaita is deliberately absent: its `appstream`
-  # dependency fails to build under nixpkgs on aarch64-darwin, so hl-app uses pure GTK4.
+  # dependency fails to build under nixpkgs on aarch64-darwin, so Husklet uses pure GTK4.
   #
   #   nix develop ./nix --command bash -lc 'cargo build -p hl-gui'
-  description = "hl-app GTK4 dev shell";
+  description = "Husklet GTK4 development shell";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/89570f24e97e614aa34aa9ab1c927b6578a43775";
 

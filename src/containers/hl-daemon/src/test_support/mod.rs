@@ -157,7 +157,7 @@ fn net_create_body(name: &str) -> axum::Json<crate::networks::NetCreateBody> {
 fn net_attach_body(cref: &str) -> axum::Json<crate::networks::NetAttachBody> {
     axum::Json(serde_json::from_value(serde_json::json!({ "Container": cref })).unwrap())
 }
-/// Snapshot a network's membership list (`Net.containers`) by name.
+/// Persisted a network's membership list (`Net.containers`) by name.
 async fn net_members(app: &App, name: &str) -> Vec<String> {
     app.inner
         .lock()

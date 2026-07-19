@@ -22,9 +22,7 @@ pub struct Network {
     /// True if IPv6 is enabled on the network.
     pub ipv6: bool,
     /// User-defined labels, sorted by key.
-    pub labels: Vec<(String, String)>,
-    /// Driver-specific options, sorted by key.
-    pub options: Vec<(String, String)>,
+    pub metadata: Metadata,
     /// IDs of the containers attached to this network (from the inspect `Containers` map).
     pub containers: Vec<String>,
     /// ISO-8601 creation time (sorts chronologically as a string) — for newest-first sorting.
@@ -49,8 +47,7 @@ impl From<bollard::models::Network> for Network {
             internal: n.internal.unwrap_or_default(),
             attachable: n.attachable.unwrap_or_default(),
             ipv6: n.enable_ipv6.unwrap_or_default(),
-            labels: sorted_pairs(n.labels.unwrap_or_default()),
-            options: sorted_pairs(n.options.unwrap_or_default()),
+            metadata: Metadata::new(n.labels.unwrap_or_default(), n.options.unwrap_or_default()),
             // bollard's list `Network` model carries no container map (only on inspect).
             containers: Vec::new(),
             created_at: n.created.unwrap_or_default(),
@@ -61,7 +58,11 @@ impl From<bollard::models::Network> for Network {
 impl Network {
     /// Short 12-char id.
     pub fn short_id(&self) -> String {
-        short(&self.id)
+        self.id
+            .trim_start_matches("sha256:")
+            .chars()
+            .take(12)
+            .collect()
     }
 }
 

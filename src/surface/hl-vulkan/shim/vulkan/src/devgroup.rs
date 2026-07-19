@@ -14,15 +14,21 @@ use core::ffi::c_void;
 use hl_vulkan::service::record;
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::{Dispatchable, VkResult, VK_SUCCESS};
 
-unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
+struct CommandBuffer;
+impl CommandBuffer {
+unsafe fn handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
 }
+}
 
-fn dev<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
-    with(|s| s.device.as_mut().map(f))
+struct ShimState;
+impl ShimState {
+fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
+    StateStore::with(|s| s.device.as_mut().map(f))
+}
 }
 
 /// `VkPeerMemoryFeatureFlagBits` (stable ABI): COPY_SRC|COPY_DST|GENERIC_SRC|GENERIC_DST.
@@ -61,7 +67,7 @@ pub extern "C" fn vkGetDeviceGroupPeerMemoryFeaturesKHR(
 /// no-op (validate the command buffer is live).
 #[no_mangle]
 pub extern "C" fn vkCmdSetDeviceMask(command_buffer: *mut c_void, _device_mask: u32) {
-    let _ = unsafe { cmdbuf_handle(command_buffer) };
+    let _ = unsafe { CommandBuffer::handle(command_buffer) };
 }
 #[no_mangle]
 pub extern "C" fn vkCmdSetDeviceMaskKHR(command_buffer: *mut c_void, device_mask: u32) {
@@ -80,8 +86,8 @@ pub extern "C" fn vkCmdDispatchBase(
     group_count_y: u32,
     group_count_z: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    dev(|d| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    ShimState::with_device(|d| {
         let _ = record::cmd_dispatch(d, cb, group_count_x, group_count_y, group_count_z);
     });
 }
@@ -214,7 +220,7 @@ pub extern "C" fn vkEnumeratePhysicalDeviceGroups(
     if unsafe { *count } == 0 {
         return crate::types::VK_INCOMPLETE;
     }
-    let phys = with(|s| s.phys_dev_handle());
+    let phys = StateStore::with(|s| s.phys_dev_handle());
     unsafe {
         let props = &mut *(p_physical_device_group_properties as *mut VkPhysicalDeviceGroupProperties);
         props.physical_device_count = 1;
@@ -240,13 +246,16 @@ pub extern "C" fn vkEnumeratePhysicalDeviceGroupsKHR(
 // zeroes the three words at byte offset 16 (after sType+pad+pNext on LP64).
 
 /// Zero the three `u32` capability words at byte offset 16 of a `Vk*Properties` output struct.
-unsafe fn zero_external_props(p: *mut c_void) {
+struct ExternalProperties;
+impl ExternalProperties {
+unsafe fn zero(p: *mut c_void) {
     if !p.is_null() {
         let words = (p as *mut u8).add(16) as *mut u32;
         *words.add(0) = 0;
         *words.add(1) = 0;
         *words.add(2) = 0;
     }
+}
 }
 
 #[no_mangle]
@@ -255,7 +264,7 @@ pub extern "C" fn vkGetPhysicalDeviceExternalBufferProperties(
     _p_external_buffer_info: *const c_void,
     p_external_buffer_properties: *mut c_void,
 ) {
-    unsafe { zero_external_props(p_external_buffer_properties) };
+    unsafe { ExternalProperties::zero(p_external_buffer_properties) };
 }
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalBufferPropertiesKHR(
@@ -272,7 +281,7 @@ pub extern "C" fn vkGetPhysicalDeviceExternalFenceProperties(
     _p_external_fence_info: *const c_void,
     p_external_fence_properties: *mut c_void,
 ) {
-    unsafe { zero_external_props(p_external_fence_properties) };
+    unsafe { ExternalProperties::zero(p_external_fence_properties) };
 }
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalFencePropertiesKHR(
@@ -289,7 +298,7 @@ pub extern "C" fn vkGetPhysicalDeviceExternalSemaphoreProperties(
     _p_external_semaphore_info: *const c_void,
     p_external_semaphore_properties: *mut c_void,
 ) {
-    unsafe { zero_external_props(p_external_semaphore_properties) };
+    unsafe { ExternalProperties::zero(p_external_semaphore_properties) };
 }
 #[no_mangle]
 pub extern "C" fn vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(

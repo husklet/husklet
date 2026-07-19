@@ -24,7 +24,7 @@
 //! asserts the driver's `tex2d` against a hand-computed reference, exactly as a kernel `tex2D` must return.
 
 use hl_cuda::adapter::ptx;
-use hl_cuda::model::texture::{FilterMode, SamplerDesc};
+use hl_cuda::model::texture::{CudaArray, FilterMode, SamplerDesc, TextureObject};
 use hl_cuda::service::{
     allocate, graph, launch, load_module, symbol, synchronize, texture, transfer,
 };
@@ -81,7 +81,7 @@ fn readback(
     p: DevicePtr,
     len: usize,
 ) -> Vec<u8> {
-    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    let (buf, off): (BufferId, u64) = ctx.device_location(p).unwrap();
     sink.read_buffer(buf, off, len).unwrap()
 }
 
@@ -108,11 +108,11 @@ fn texture_object_point_and_linear_fetch_exact() {
         .collect();
     let t = |r: usize, c: usize| texels[r * w as usize + c];
 
-    let mut array = texture::malloc_array(w, h).unwrap();
-    texture::memcpy_to_array(&mut array, &texels).unwrap();
+    let mut array = CudaArray::new(w, h).unwrap();
+    array.upload(&texels).unwrap();
 
     // ---- POINT filter: nearest texel, no interpolation ----
-    let point_tex = texture::create_texture_object(&array, SamplerDesc::point_clamp());
+    let point_tex = TextureObject::from_array(&array, SamplerDesc::point_clamp());
     assert_eq!(point_tex.desc.filter, FilterMode::Point);
     // (1.5, 0.5) → floor → col 1, row 0 → exactly T[0][1] = 10.0.
     assert_eq!(texture::tex2d(&point_tex, 1.5, 0.5), t(0, 1));
@@ -122,7 +122,7 @@ fn texture_object_point_and_linear_fetch_exact() {
     assert_eq!(texture::tex2d(&point_tex, 3.9, 2.1), 230.0);
 
     // ---- LINEAR filter: bilinear interpolation ----
-    let lin_tex = texture::create_texture_object(&array, SamplerDesc::linear_clamp());
+    let lin_tex = TextureObject::from_array(&array, SamplerDesc::linear_clamp());
     // Horizontal midpoint (2.0, 0.5): xb=1.5 → i0=1, a=0.5; yb=0.0 → b=0 → 0.5·T[0][1] + 0.5·T[0][2].
     let hmid = texture::tex2d(&lin_tex, 2.0, 0.5);
     assert_eq!(hmid, 0.5 * t(0, 1) + 0.5 * t(0, 2));
@@ -201,7 +201,7 @@ fn managed_memory_unified_pointer_round_trips_exact() {
     transfer::memcpy_htod(&mut ctx, &mut sink, managed, &f32s_to_bytes(&pattern)).unwrap();
 
     // A kernel reads + transforms the SAME managed allocation in place.
-    let module = load_module::module_load_data(&mut ctx, TRANSFORM_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(TRANSFORM_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "transform").unwrap();
     let args = vec![
         KernelArg::Ptr(managed),
@@ -268,7 +268,7 @@ fn cuda_graph_replay_equals_eager_sequence_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, SAXPY_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(SAXPY_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "saxpy").unwrap();
     let grid = (6u32, 1, 1);
     let block = (128u32, 1, 1);
@@ -306,7 +306,7 @@ fn cuda_graph_replay_equals_eager_sequence_exact() {
         "graph has 3 nodes: two H2D copies + one kernel"
     );
 
-    let exec = graph::instantiate(&g);
+    let exec = g.instantiate();
     graph::launch_graph(&mut ctx, &mut sink, &exec).unwrap();
     let graphed = bytes_to_f32s(&readback(&mut sink, &ctx, gy, n * 4));
 
@@ -378,7 +378,7 @@ fn constant_memory_symbol_set_from_host_read_in_kernel_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, CONST_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(CONST_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "apply").unwrap();
 
     // cudaGetSymbolAddress: the `.const kCoeff` symbol resolves to a real device pointer of 16 bytes.
@@ -469,7 +469,7 @@ fn run_four_streams(input: &[i32], coeffs: [(i32, i32); 4], order: [usize; 4]) -
     let n = input.len();
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, ISCALE_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(ISCALE_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "iscale").unwrap();
 
     let streams: Vec<_> = (0..4).map(|_| ctx.streams.create()).collect();
@@ -496,7 +496,7 @@ fn run_four_streams(input: &[i32], coeffs: [(i32, i32); 4], order: [usize; 4]) -
         launch::launch(&mut ctx, &mut sink, func, (16, 1, 1), (128, 1, 1), &args).unwrap();
     }
     for &s in &streams {
-        synchronize::stream_synchronize(&mut ctx, &mut sink, s).unwrap();
+        ctx.synchronize_stream(&mut sink, s).unwrap();
     }
 
     (0..4)

@@ -15,60 +15,65 @@ const STATS_MEM_FALLBACK: u64 = 8 * 1024 * 1024;
 /// idle guest -- the docker CLI then renders a sane non-zero %CPU. Real `ps` CPU time is added on top.
 const STATS_CPU_FLOOR_NS: u64 = 30_000_000;
 
-/// Best-effort (rss_bytes, cpu_nanos) for a host pid via `ps` (portable across Linux + macOS):
-/// `ps -o rss=,time= -p <pid>` -> e.g. `" 12345 00:01:23"` (RSS in KiB, accumulated CPU time).
-/// Returns (0, 0) if the pid is gone or `ps` can't be run.
-fn pid_metrics(pid: u32) -> (u64, u64) {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "rss=,time=", "-p", &pid.to_string()])
-        .output();
-    if let Ok(o) = out {
-        if o.status.success() {
-            let s = String::from_utf8_lossy(&o.stdout);
-            let mut it = s.split_whitespace();
-            let rss_kb = it.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
-            let cpu_ns = it.next().map(parse_ps_time).unwrap_or(0);
-            return (rss_kb * 1024, cpu_ns);
+#[derive(Default)]
+struct ProcessMetrics {
+    memory: u64,
+    cpu: u64,
+}
+
+/// Host-process metrics adapter for the platform `ps` command.
+struct Ps {
+    executable: &'static str,
+}
+
+const PS: Ps = Ps { executable: "ps" };
+
+impl Ps {
+    /// Read best-effort metrics for a host process. A missing process, unavailable `ps`, or an
+    /// incompatible response produces the existing all-zero fallback.
+    fn metrics(&self, pid: u32) -> ProcessMetrics {
+        let output = std::process::Command::new(self.executable)
+            .args(["-o", "rss=,time=", "-p", &pid.to_string()])
+            .output();
+
+        match output {
+            Ok(output) if output.status.success() => {
+                Self::parse(&String::from_utf8_lossy(&output.stdout))
+            }
+            _ => ProcessMetrics::default(),
         }
     }
-    (0, 0)
-}
 
-/// Parse a `ps` accumulated-CPU-time field `"[[hl-]hh:]mm:ss[.frac]"` into nanoseconds.
-fn parse_ps_time(s: &str) -> u64 {
-    let (days, rest) = match s.split_once('-') {
-        Some((d, r)) => (d.parse::<u64>().unwrap_or(0), r),
-        None => (0, s),
-    };
-    // Fold the colon-separated h:m:s (or m:s) groups; drop any fractional seconds.
-    let mut acc = 0u64;
-    for p in rest.split(':') {
-        let v = p
-            .split('.')
+    /// Parse `ps -o rss=,time=` output into bytes and accumulated CPU nanoseconds.
+    fn parse(output: &str) -> ProcessMetrics {
+        let mut fields = output.split_whitespace();
+        let memory = fields
             .next()
-            .unwrap_or("0")
-            .parse::<u64>()
-            .unwrap_or(0);
-        acc = acc * 60 + v;
-    }
-    (days * 86400 + acc) * 1_000_000_000
-}
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0)
+            * 1024;
+        let cpu = fields.next().map(Self::parse_time).unwrap_or(0);
 
-/// One `cpu_stats`/`precpu_stats` block in Docker's shape.
-fn stats_cpu_block(total: u64, system: u64) -> crate::api::CpuStats {
-    crate::api::CpuStats {
-        cpu_usage: crate::api::CpuUsage {
-            total_usage: total,
-            usage_in_kernelmode: 0,
-            usage_in_usermode: total,
-        },
-        system_cpu_usage: system,
-        online_cpus: 1,
-        throttling_data: crate::api::ThrottlingData {
-            periods: 0,
-            throttled_periods: 0,
-            throttled_time: 0,
-        },
+        ProcessMetrics { memory, cpu }
+    }
+
+    /// Parse `[[hl-]hh:]mm:ss[.frac]` into nanoseconds.
+    fn parse_time(value: &str) -> u64 {
+        let (days, time) = match value.split_once('-') {
+            Some((days, time)) => (days.parse::<u64>().unwrap_or(0), time),
+            None => (0, value),
+        };
+        let mut seconds = 0u64;
+        for component in time.split(':') {
+            let value = component
+                .split('.')
+                .next()
+                .unwrap_or("0")
+                .parse::<u64>()
+                .unwrap_or(0);
+            seconds = seconds * 60 + value;
+        }
+        (days * 86400 + seconds) * 1_000_000_000
     }
 }
 
@@ -88,11 +93,15 @@ fn stats_sample(
 ) -> (crate::api::ContainerStats, u64, u64) {
     let (total, system, mem, cur) = match pid {
         Some(p) => {
-            let (rss, cpu) = pid_metrics(p);
-            let mem = if rss == 0 { STATS_MEM_FALLBACK } else { rss };
+            let metrics = PS.metrics(p);
+            let mem = if metrics.memory == 0 {
+                STATS_MEM_FALLBACK
+            } else {
+                metrics.memory
+            };
             // system: monotonic host-clock proxy so the per-sample delta is real wall time.
             let system = 100_000_000_000u64 + base.elapsed().as_nanos() as u64;
-            (cpu + idx * STATS_CPU_FLOOR_NS, system, mem, 1u64)
+            (metrics.cpu + idx * STATS_CPU_FLOOR_NS, system, mem, 1u64)
         }
         None => (0, 0, 0, 0),
     };
@@ -108,15 +117,15 @@ fn stats_sample(
         (pre_total, pre_sys)
     };
     let v = crate::api::ContainerStats {
-        read: fmt_rfc3339(now_secs()),
+        read: Timestamp::seconds(now_secs()).to_string(),
         // Go zero-time: hl doesn't thread the prior sample's read timestamp, and CPU% is derived from
         // the usage deltas (not these timestamps), so this is docker-accurate for the no-precpu case.
         preread: "0001-01-01T00:00:00Z".to_string(),
         name: format!("/{name}"),
         id: id.to_string(),
         pids_stats: crate::api::PidsStats { current: cur },
-        cpu_stats: stats_cpu_block(total, system),
-        precpu_stats: stats_cpu_block(pre_total, pre_sys),
+        cpu_stats: crate::api::CpuStats::new(total, system),
+        precpu_stats: crate::api::CpuStats::new(pre_total, pre_sys),
         memory_stats: crate::api::MemoryStats {
             usage: mem,
             max_usage: mem,
@@ -145,8 +154,8 @@ pub(crate) async fn containers_stats(
 ) -> Response {
     let (full, name, mem_limit, pid) = {
         let g = a.inner.lock().await;
-        let Some((full, c)) = resolve_get(&g, &id) else {
-            return no_such(&id);
+        let Some((full, c)) = ContainerId::get(&g, &id) else {
+            return ErrorMessage::no_such(&id);
         };
         let name = if c.name.is_empty() {
             c.id[..12.min(c.id.len())].to_string()
@@ -232,35 +241,42 @@ mod tests {
     #[test]
     fn ps_time_mm_ss() {
         // `mm:ss` — the common two-group form.
-        assert_eq!(parse_ps_time("00:00"), 0);
-        assert_eq!(parse_ps_time("01:23"), 83 * NS); // 1m23s
+        assert_eq!(Ps::parse_time("00:00"), 0);
+        assert_eq!(Ps::parse_time("01:23"), 83 * NS); // 1m23s
     }
 
     #[test]
     fn ps_time_hh_mm_ss() {
         // `hh:mm:ss` folds left: 0*60+... so 00:01:23 is also 83s, and 01:00:00 is one hour.
-        assert_eq!(parse_ps_time("00:01:23"), 83 * NS);
-        assert_eq!(parse_ps_time("01:00:00"), 3600 * NS);
+        assert_eq!(Ps::parse_time("00:01:23"), 83 * NS);
+        assert_eq!(Ps::parse_time("01:00:00"), 3600 * NS);
     }
 
     #[test]
     fn ps_time_with_days_prefix() {
         // `hl-hh:mm:ss` — the leading `N-` is whole days.
-        assert_eq!(parse_ps_time("2-00:00:00"), 2 * 86400 * NS);
-        assert_eq!(parse_ps_time("1-02:03:04"), (86400 + 7384) * NS);
+        assert_eq!(Ps::parse_time("2-00:00:00"), 2 * 86400 * NS);
+        assert_eq!(Ps::parse_time("1-02:03:04"), (86400 + 7384) * NS);
     }
 
     #[test]
     fn ps_time_drops_fractional_seconds() {
         // Any `.frac` on the seconds group is truncated (not rounded).
-        assert_eq!(parse_ps_time("00:01.50"), 1 * NS);
-        assert_eq!(parse_ps_time("00:00:09.999"), 9 * NS);
+        assert_eq!(Ps::parse_time("00:01.50"), 1 * NS);
+        assert_eq!(Ps::parse_time("00:00:09.999"), 9 * NS);
     }
 
     #[test]
     fn ps_time_garbage_groups_parse_as_zero() {
         // Unparsable groups contribute 0 rather than erroring.
-        assert_eq!(parse_ps_time("xx:yy"), 0);
+        assert_eq!(Ps::parse_time("xx:yy"), 0);
+    }
+
+    #[test]
+    fn ps_output_maps_rss_and_cpu_time() {
+        let metrics = Ps::parse(" 12345 00:01:23\n");
+        assert_eq!(metrics.memory, 12_641_280);
+        assert_eq!(metrics.cpu, 83 * NS);
     }
 
     #[test]

@@ -231,12 +231,15 @@ fn state_ptr() -> *const Mutex<State> {
 
 /// Run `f` with exclusive access to the global shim state. Non-reentrant — never call [`with`] from
 /// inside an `f` (the `Mutex` is not recursive); each entry point does exactly one `with`.
-pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
+pub struct GlobalState;
+impl GlobalState {
+pub fn access<R>(f: impl FnOnce(&mut State) -> R) -> R {
     // SAFETY: `state_ptr` returns a `&'static Mutex<State>` (as a raw pointer) that is either the owner's
     // own `OnceLock`-backed cell or the same cell imported from libEGL — never null, never dangling.
     let m: &Mutex<State> = unsafe { &*state_ptr() };
     let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
     f(&mut g)
+}
 }
 
 /// The per-thread EGL "current" binding — what `eglGetCurrentContext` / `eglGetCurrentDisplay` /
@@ -293,6 +296,8 @@ pub mod current {
     }
 
     /// If `ctx` is the context current on THIS thread, release the binding (used by `eglDestroyContext`).
+    pub struct Binding;
+    impl Binding {
     pub fn release_if_context(ctx: usize) {
         if CTX.with(|c| c.get()) == ctx {
             release();
@@ -308,6 +313,7 @@ pub mod current {
         if READ.with(|c| c.get()) == surface {
             READ.with(|c| c.set(0));
         }
+    }
     }
 
     /// The context current on this thread (`eglGetCurrentContext`; `0` = `EGL_NO_CONTEXT`).
@@ -328,8 +334,10 @@ pub mod current {
     }
 
     /// Record `eglBindAPI(api)` for this thread.
+    impl Binding {
     pub fn bind_api(api: u32) {
         API.with(|c| c.set(api));
+    }
     }
     /// The API bound on this thread (`eglQueryAPI`; defaults to `EGL_OPENGL_ES_API`).
     pub fn query_api() -> u32 {

@@ -14,50 +14,6 @@ use crate::model::glconst::*;
 // Sampler objects
 // ==================================================================================================
 
-/// `glGenSamplers` (one name).
-pub fn gen_sampler(ctx: &mut GlContext) -> u32 {
-    ctx.samplers.gen()
-}
-
-/// Validate a sampler-parameter enum value for `pname`. `Some(GL_INVALID_ENUM)` for an out-of-range
-/// enum-typed value or an unknown `pname`; `None` if acceptable (enum-valid, or a non-enum LOD).
-fn sampler_param_error(pname: u32, v: i32) -> Option<u32> {
-    let ok = match pname {
-        GL_TEXTURE_MIN_FILTER => matches!(
-            v as u32,
-            GL_NEAREST
-                | GL_LINEAR
-                | GL_NEAREST_MIPMAP_NEAREST
-                | GL_LINEAR_MIPMAP_NEAREST
-                | GL_NEAREST_MIPMAP_LINEAR
-                | GL_LINEAR_MIPMAP_LINEAR
-        ),
-        GL_TEXTURE_MAG_FILTER => matches!(v as u32, GL_NEAREST | GL_LINEAR),
-        GL_TEXTURE_WRAP_S | GL_TEXTURE_WRAP_T | GL_TEXTURE_WRAP_R => {
-            matches!(v as u32, GL_REPEAT | GL_CLAMP_TO_EDGE | GL_MIRRORED_REPEAT)
-        }
-        GL_TEXTURE_COMPARE_MODE => matches!(v as u32, GL_NONE | GL_COMPARE_REF_TO_TEXTURE),
-        GL_TEXTURE_COMPARE_FUNC => matches!(
-            v as u32,
-            GL_NEVER
-                | GL_LESS
-                | GL_EQUAL
-                | GL_LEQUAL
-                | GL_GREATER
-                | GL_NOTEQUAL
-                | GL_GEQUAL
-                | GL_ALWAYS
-        ),
-        GL_TEXTURE_MIN_LOD | GL_TEXTURE_MAX_LOD => return None, // non-enum LOD: any value
-        _ => return Some(GL_INVALID_ENUM),
-    };
-    if ok {
-        None
-    } else {
-        Some(GL_INVALID_ENUM)
-    }
-}
-
 /// Core setter shared by every `glSamplerParameter{i,f,iv,fv,Iiv,Iuiv}` — validate before mutating (an
 /// invalid enum leaves the object untouched). An unknown sampler name raises `GL_INVALID_OPERATION`.
 pub fn sampler_parameter(ctx: &mut GlContext, sampler: u32, pname: u32, iv: i32, fv: f32) {
@@ -65,8 +21,8 @@ pub fn sampler_parameter(ctx: &mut GlContext, sampler: u32, pname: u32, iv: i32,
         ctx.set_gl_error(GL_INVALID_OPERATION);
         return;
     }
-    if let Some(e) = sampler_param_error(pname, iv) {
-        ctx.set_gl_error(e);
+    if !SamplerObj::accepts(pname, iv) {
+        ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
     let obj = ctx.samplers.instantiate(sampler);
@@ -116,16 +72,6 @@ pub fn bind_sampler(ctx: &mut GlContext, unit: u32, sampler: u32) {
     ctx.samplers.bind(unit, sampler);
 }
 
-/// `glDeleteSamplers` (one name; deleting `0` is silently ignored).
-pub fn delete_sampler(ctx: &mut GlContext, sampler: u32) {
-    ctx.samplers.delete(sampler);
-}
-
-/// `glIsSampler(sampler)`.
-pub fn is_sampler(ctx: &GlContext, sampler: u32) -> bool {
-    ctx.samplers.is_sampler(sampler)
-}
-
 /// The default sampler state (for a test to compare a fresh object against).
 pub fn default_sampler() -> SamplerObj {
     SamplerObj::default()
@@ -141,24 +87,10 @@ pub fn default_sampler() -> SamplerObj {
 /// driver does NOT advertise (`crate::service::query::EXTENSIONS` is empty). So `glBeginQuery(GL_TIME_
 /// ELAPSED_EXT, …)` honestly raises `GL_INVALID_ENUM` here rather than faking a monotonic counter — an
 /// unadvertised extension must not silently appear to work. (See tests/gl_timer_query in hl_wip.)
-fn is_query_target(target: u32) -> bool {
-    matches!(
-        target,
-        GL_ANY_SAMPLES_PASSED
-            | GL_ANY_SAMPLES_PASSED_CONSERVATIVE
-            | GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN
-    )
-}
-
-/// `glGenQueries` (one name).
-pub fn gen_query(ctx: &mut GlContext) -> u32 {
-    ctx.queries.gen()
-}
-
 /// `glBeginQuery(target, id)`. Honest errors: a bad target → `GL_INVALID_ENUM`; an unknown/zero id, a
 /// query already active on the target, this id already active, or a type mismatch → `GL_INVALID_OPERATION`.
 pub fn begin_query(ctx: &mut GlContext, target: u32, id: u32) {
-    if !is_query_target(target) {
+    if !crate::model::es3::Queries::supports(target) {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return;
     }
@@ -181,32 +113,24 @@ pub fn begin_query(ctx: &mut GlContext, target: u32, id: u32) {
 
 /// `glEndQuery(target)`. A bad target → `GL_INVALID_ENUM`; no active query on the target →
 /// `GL_INVALID_OPERATION`.
-pub fn end_query(ctx: &mut GlContext, target: u32) {
-    if !is_query_target(target) {
-        ctx.set_gl_error(GL_INVALID_ENUM);
-        return;
+impl GlContext {
+    pub fn end_query(&mut self, target: u32) {
+        if !crate::model::es3::Queries::supports(target) {
+            self.set_gl_error(GL_INVALID_ENUM);
+            return;
+        }
+        if self.queries.active_for(target) == 0 {
+            self.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        self.queries.end(target);
     }
-    if ctx.queries.active_for(target) == 0 {
-        ctx.set_gl_error(GL_INVALID_OPERATION);
-        return;
-    }
-    ctx.queries.end(target);
-}
-
-/// `glDeleteQueries` (one name; deleting `0` is ignored).
-pub fn delete_query(ctx: &mut GlContext, id: u32) {
-    ctx.queries.delete(id);
-}
-
-/// `glIsQuery(id)`.
-pub fn is_query(ctx: &GlContext, id: u32) -> bool {
-    ctx.queries.is_query(id)
 }
 
 /// `glGetQueryiv(target, pname)` — only `GL_CURRENT_QUERY` is defined; returns the active query id (or
 /// `0`). A bad target or pname raises `GL_INVALID_ENUM` and returns `None`.
 pub fn get_queryiv(ctx: &mut GlContext, target: u32, pname: u32) -> Option<i32> {
-    if !is_query_target(target) || pname != GL_CURRENT_QUERY {
+    if !crate::model::es3::Queries::supports(target) || pname != GL_CURRENT_QUERY {
         ctx.set_gl_error(GL_INVALID_ENUM);
         return None;
     }
@@ -242,11 +166,6 @@ pub fn get_query_objectuiv(ctx: &mut GlContext, id: u32, pname: u32) -> Option<u
 // Transform-feedback objects
 // ==================================================================================================
 
-/// `glGenTransformFeedbacks` (one name).
-pub fn gen_transform_feedback(ctx: &mut GlContext) -> u32 {
-    ctx.transform_feedbacks.gen()
-}
-
 /// `glBindTransformFeedback(target, id)`. A bad target → `GL_INVALID_ENUM`; binding while feedback is
 /// active-and-not-paused, or an unknown id, → `GL_INVALID_OPERATION`.
 pub fn bind_transform_feedback(ctx: &mut GlContext, target: u32, id: u32) {
@@ -268,64 +187,61 @@ pub fn bind_transform_feedback(ctx: &mut GlContext, target: u32, id: u32) {
 
 /// `glDeleteTransformFeedbacks` (one name). Deleting the default `0` is ignored; deleting an active
 /// object raises `GL_INVALID_OPERATION`.
-pub fn delete_transform_feedback(ctx: &mut GlContext, id: u32) {
-    if id == 0 {
-        return;
+impl GlContext {
+    pub fn delete_transform_feedback(&mut self, id: u32) {
+        if id == 0 {
+            return;
+        }
+        // Deleting the currently-bound object while it is active is a spec error.
+        if self.transform_feedbacks.bound() == id && self.transform_feedbacks.bound_obj().active {
+            self.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        self.transform_feedbacks.delete(id);
     }
-    // Deleting the currently-bound object while it is active is a spec error.
-    if ctx.transform_feedbacks.bound() == id && ctx.transform_feedbacks.bound_obj().active {
-        ctx.set_gl_error(GL_INVALID_OPERATION);
-        return;
-    }
-    ctx.transform_feedbacks.delete(id);
-}
 
-/// `glIsTransformFeedback(id)`.
-pub fn is_transform_feedback(ctx: &GlContext, id: u32) -> bool {
-    ctx.transform_feedbacks.is_transform_feedback(id)
-}
+    /// `glBeginTransformFeedback(primitiveMode)`. A bad mode → `GL_INVALID_ENUM`; already active →
+    /// `GL_INVALID_OPERATION`.
+    pub fn begin_transform_feedback(&mut self, primitive_mode: u32) {
+        if !matches!(primitive_mode, GL_POINTS | GL_LINES | GL_TRIANGLES) {
+            self.set_gl_error(GL_INVALID_ENUM);
+            return;
+        }
+        if self.transform_feedbacks.bound_obj().active {
+            self.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        self.transform_feedbacks.set_active(true, false);
+    }
 
-/// `glBeginTransformFeedback(primitiveMode)`. A bad mode → `GL_INVALID_ENUM`; already active →
-/// `GL_INVALID_OPERATION`.
-pub fn begin_transform_feedback(ctx: &mut GlContext, primitive_mode: u32) {
-    if !matches!(primitive_mode, GL_POINTS | GL_LINES | GL_TRIANGLES) {
-        ctx.set_gl_error(GL_INVALID_ENUM);
-        return;
+    /// `glEndTransformFeedback()`. Not active → `GL_INVALID_OPERATION`.
+    pub fn end_transform_feedback(&mut self) {
+        if !self.transform_feedbacks.bound_obj().active {
+            self.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        self.transform_feedbacks.set_active(false, false);
     }
-    if ctx.transform_feedbacks.bound_obj().active {
-        ctx.set_gl_error(GL_INVALID_OPERATION);
-        return;
-    }
-    ctx.transform_feedbacks.set_active(true, false);
-}
 
-/// `glEndTransformFeedback()`. Not active → `GL_INVALID_OPERATION`.
-pub fn end_transform_feedback(ctx: &mut GlContext) {
-    if !ctx.transform_feedbacks.bound_obj().active {
-        ctx.set_gl_error(GL_INVALID_OPERATION);
-        return;
+    /// `glPauseTransformFeedback()`. Not active, or already paused → `GL_INVALID_OPERATION`.
+    pub fn pause_transform_feedback(&mut self) {
+        let o = self.transform_feedbacks.bound_obj();
+        if !o.active || o.paused {
+            self.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        self.transform_feedbacks.set_active(true, true);
     }
-    ctx.transform_feedbacks.set_active(false, false);
-}
 
-/// `glPauseTransformFeedback()`. Not active, or already paused → `GL_INVALID_OPERATION`.
-pub fn pause_transform_feedback(ctx: &mut GlContext) {
-    let o = ctx.transform_feedbacks.bound_obj();
-    if !o.active || o.paused {
-        ctx.set_gl_error(GL_INVALID_OPERATION);
-        return;
+    /// `glResumeTransformFeedback()`. Not active, or not paused → `GL_INVALID_OPERATION`.
+    pub fn resume_transform_feedback(&mut self) {
+        let o = self.transform_feedbacks.bound_obj();
+        if !o.active || !o.paused {
+            self.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        self.transform_feedbacks.set_active(true, false);
     }
-    ctx.transform_feedbacks.set_active(true, true);
-}
-
-/// `glResumeTransformFeedback()`. Not active, or not paused → `GL_INVALID_OPERATION`.
-pub fn resume_transform_feedback(ctx: &mut GlContext) {
-    let o = ctx.transform_feedbacks.bound_obj();
-    if !o.active || !o.paused {
-        ctx.set_gl_error(GL_INVALID_OPERATION);
-        return;
-    }
-    ctx.transform_feedbacks.set_active(true, false);
 }
 
 /// `glTransformFeedbackVaryings(program, names, bufferMode)` — record the capture list on `program`.
@@ -360,28 +276,15 @@ pub fn transform_feedback_varying(ctx: &GlContext, program: u32, index: u32) -> 
 // Program pipeline objects (separate shaders)
 // ==================================================================================================
 
-/// `glGenProgramPipelines` (one name).
-pub fn gen_program_pipeline(ctx: &mut GlContext) -> u32 {
-    ctx.program_pipelines.gen()
-}
-
 /// `glBindProgramPipeline(id)`. An unknown non-zero id → `GL_INVALID_OPERATION`.
-pub fn bind_program_pipeline(ctx: &mut GlContext, id: u32) {
-    if id != 0 && !ctx.program_pipelines.known(id) {
-        ctx.set_gl_error(GL_INVALID_OPERATION);
-        return;
+impl GlContext {
+    pub fn bind_program_pipeline(&mut self, id: u32) {
+        if id != 0 && !self.program_pipelines.known(id) {
+            self.set_gl_error(GL_INVALID_OPERATION);
+            return;
+        }
+        self.program_pipelines.bind(id);
     }
-    ctx.program_pipelines.bind(id);
-}
-
-/// `glDeleteProgramPipelines` (one name; `0` ignored).
-pub fn delete_program_pipeline(ctx: &mut GlContext, id: u32) {
-    ctx.program_pipelines.delete(id);
-}
-
-/// `glIsProgramPipeline(id)`.
-pub fn is_program_pipeline(ctx: &GlContext, id: u32) -> bool {
-    ctx.program_pipelines.is_pipeline(id)
 }
 
 /// `glUseProgramStages(pipeline, stages, program)` — set the program for each named stage bit of

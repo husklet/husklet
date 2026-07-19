@@ -44,10 +44,11 @@ pub(crate) fn ps_match(
     if let Some(vals) = f.get("ancestor") {
         // Repository-aware: `ancestor=nginx` must not also match a `linuxserver/nginx`
         // container just because the basenames coincide. Compare the fully qualified repository.
-        if !vals
-            .iter()
-            .any(|v| c.image == *v || ref_repo(&c.image) == ref_repo(v))
-        {
+        if !vals.iter().any(|v| {
+            c.image == *v
+                || ImageRef::from(&c.image).repository_identity()
+                    == ImageRef::from(v).repository_identity()
+        }) {
             return false;
         }
     }

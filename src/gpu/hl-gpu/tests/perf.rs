@@ -25,7 +25,6 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hl_gpu::protocol::codec::{decode_stream, encode_stream};
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ComputePipelineDesc, ShaderRef,
 };
@@ -233,13 +232,13 @@ fn representative_stream() -> Vec<Cmd> {
 #[test]
 fn perf_codec_encode_decode_throughput() {
     let cmds = representative_stream();
-    let bytes = encode_stream(&cmds).len();
+    let bytes = hl_gpu::Encoder::stream(&cmds).len();
     let mb = bytes as f64 / (1024.0 * 1024.0);
 
     // Warm up (fill caches / branch predictors).
     for _ in 0..3 {
-        let e = encode_stream(&cmds);
-        let _ = decode_stream(&e).unwrap();
+        let e = hl_gpu::Encoder::stream(&cmds);
+        let _ = hl_gpu::Decoder::stream(&e).unwrap();
     }
 
     let iters = 50u32;
@@ -247,14 +246,14 @@ fn perf_codec_encode_decode_throughput() {
     let t0 = Instant::now();
     let mut last = Vec::new();
     for _ in 0..iters {
-        last = encode_stream(&cmds);
+        last = hl_gpu::Encoder::stream(&cmds);
     }
     let enc_elapsed = t0.elapsed();
     let enc_mbps = (mb * iters as f64) / enc_elapsed.as_secs_f64();
 
     let t1 = Instant::now();
     for _ in 0..iters {
-        let _ = decode_stream(&last).unwrap();
+        let _ = hl_gpu::Decoder::stream(&last).unwrap();
     }
     let dec_elapsed = t1.elapsed();
     let dec_mbps = (mb * iters as f64) / dec_elapsed.as_secs_f64();
@@ -500,7 +499,7 @@ impl RuntimeHost {
 }
 impl ConnectionHandler for RuntimeHost {
     fn submit(&mut self, _header: &SubmitHeader, batch: &[Cmd]) -> Verdict {
-        let frame_bytes = encode_stream(batch).len();
+        let frame_bytes = hl_gpu::Encoder::stream(batch).len();
         match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
             Ok(_) => Verdict::Ack,
             Err(_) => Verdict::Nack,

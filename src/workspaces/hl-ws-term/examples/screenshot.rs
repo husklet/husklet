@@ -39,7 +39,7 @@ printf '\033[1;32mdd-term\033[0m:\033[1;34m~/project\033[0m$ '
         &[sh, "-c", script],
         cols as u16,
         rows as u16,
-        &[("TERM", "xterm-256color")],
+        &std::collections::BTreeMap::from([(String::from("TERM"), String::from("xterm-256color"))]),
     )
     .expect("spawn shell");
 

@@ -97,8 +97,12 @@ fn address(idx: i64, extent: i64, mode: AddressMode) -> i64 {
 
 /// Quantize a filter fractional weight to CUDA's 1.8 fixed point (8 fraction bits), round-to-nearest.
 /// At exactly-representable fractions (`0.0`, `0.5`, …) this is the identity, so a midpoint sample is exact.
-fn quantize_weight(frac: f32) -> f32 {
-    (frac * 256.0).round() / 256.0
+struct FilterWeight(f32);
+
+impl FilterWeight {
+    fn quantized(&self) -> f32 {
+        (self.0 * 256.0).round() / 256.0
+    }
 }
 
 /// A `cudaTextureObject_t`: a [`CudaArray`] bound to a [`SamplerDesc`]. Owns a copy of the texel data so a
@@ -136,8 +140,8 @@ impl TextureObject {
                 let yb = ys - 0.5;
                 let i0 = xb.floor();
                 let j0 = yb.floor();
-                let a = quantize_weight(xb - i0);
-                let b = quantize_weight(yb - j0);
+                let a = FilterWeight(xb - i0).quantized();
+                let b = FilterWeight(yb - j0).quantized();
                 let (ci, cj) = (i0 as i64, j0 as i64);
                 let t00 = self.array.texel(ci, cj, &self.desc);
                 let t10 = self.array.texel(ci + 1, cj, &self.desc);

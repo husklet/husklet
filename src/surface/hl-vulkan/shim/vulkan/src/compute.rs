@@ -10,65 +10,77 @@
 
 use core::ffi::{c_char, c_void};
 
-use hl_vulkan::model::descriptor::{
-    descriptor_binds_image, descriptor_binds_sampler, is_buffer_descriptor, is_image_descriptor,
-    DescriptorTemplateEntry, LayoutBinding,
-};
-use hl_vulkan::result::{vk_result_from_gpu_error, VK_ERROR_OUT_OF_POOL_MEMORY};
+use hl_gpu::CommandSink;
+use hl_vulkan::model::descriptor::{DescriptorTemplateEntry, DescriptorType, LayoutBinding};
+use hl_vulkan::result::{Status, VK_ERROR_OUT_OF_POOL_MEMORY};
 use hl_vulkan::service::{create, record, submit};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
-use hl_gpu::CommandSink;
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::*;
 
 // ---- shared marshalling helpers ------------------------------------------------------------------
 
 /// Run `f` with the logical device + the command sink (disjoint `State` fields). `None` if no device
 /// has been created yet — the caller maps that to `VK_ERROR_INITIALIZATION_FAILED`.
-fn dev_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option<R> {
-    with(|s| {
-        let sink = &mut s.sink;
-        let dev = s.device.as_mut()?;
-        Some(f(dev, sink))
-    })
+struct ShimState;
+impl ShimState {
+    fn with_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option<R> {
+        StateStore::with(|s| {
+            let sink = &mut s.sink;
+            let dev = s.device.as_mut()?;
+            Some(f(dev, sink))
+        })
+    }
 }
 
 /// Turn a `Result<()>` from a service into a `VkResult`.
-fn vk(r: hl_gpu::Result<()>) -> VkResult {
-    match r {
-        Ok(()) => VK_SUCCESS,
-        Err(e) => vk_result_from_gpu_error(&e),
+struct ResultStatus;
+impl ResultStatus {
+    fn from_gpu(r: hl_gpu::Result<()>) -> VkResult {
+        match r {
+            Ok(()) => VK_SUCCESS,
+            Err(e) => Status::from_error(&e),
+        }
     }
 }
 
 /// A dispatchable `VkCommandBuffer` carries the `hl_vulkan` `u64` command-buffer handle behind the
 /// loader-magic slot.
-fn cmdbuf_new(h: VkCbHandle) -> *mut c_void {
-    Dispatchable::new(h)
-}
-unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
-    Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
+struct CommandBuffer;
+impl CommandBuffer {
+    fn from_handle(h: VkCbHandle) -> *mut c_void {
+        Dispatchable::new(h)
+    }
+    unsafe fn handle(p: *mut c_void) -> Option<VkCbHandle> {
+        Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
+    }
 }
 
 /// Walk a `pNext` chain for a target `sType`, returning the first matching node (or NULL).
-unsafe fn find_pnext(mut p: *const c_void, target: i32) -> *const c_void {
-    while !p.is_null() {
-        let base = &*(p as *const VkBaseInStructure);
-        if base.s_type == target {
-            return p;
+struct ExtensionChain;
+impl ExtensionChain {
+    unsafe fn find(mut p: *const c_void, target: i32) -> *const c_void {
+        while !p.is_null() {
+            let base = &*(p as *const VkBaseInStructure);
+            if base.s_type == target {
+                return p;
+            }
+            p = base.p_next as *const c_void;
         }
-        p = base.p_next as *const c_void;
+        core::ptr::null()
     }
-    core::ptr::null()
 }
 
 /// Borrow a nul-terminated C string as `&str` (`"main"` fallback on NULL / bad UTF-8, the usual entry).
-unsafe fn entry_str<'a>(p: *const c_char) -> &'a str {
-    if p.is_null() {
-        return "main";
+struct EntryPoint;
+impl EntryPoint {
+    unsafe fn read<'a>(p: *const c_char) -> &'a str {
+        if p.is_null() {
+            return "main";
+        }
+        core::ffi::CStr::from_ptr(p).to_str().unwrap_or("main")
     }
-    core::ffi::CStr::from_ptr(p).to_str().unwrap_or("main")
 }
 
 // ==================================================================================================
@@ -88,21 +100,23 @@ pub extern "C" fn vkCreateBuffer(
     if !p_buffer.is_null() {
         unsafe { *p_buffer = 0 };
     }
-    dev_sink(|dev, sink| match create::create_buffer(dev, sink, ci.usage, ci.size) {
-        Ok(h) => {
-            if !p_buffer.is_null() {
-                unsafe { *p_buffer = h };
+    ShimState::with_sink(
+        |dev, sink| match create::create_buffer(dev, sink, ci.usage, ci.size) {
+            Ok(h) => {
+                if !p_buffer.is_null() {
+                    unsafe { *p_buffer = h };
+                }
+                VK_SUCCESS
             }
-            VK_SUCCESS
-        }
-        Err(e) => vk_result_from_gpu_error(&e),
-    })
+            Err(e) => Status::from_error(&e),
+        },
+    )
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
 #[no_mangle]
 pub extern "C" fn vkDestroyBuffer(_device: *mut c_void, buffer: u64, _p_allocator: *const c_void) {
-    dev_sink(|dev, sink| {
+    ShimState::with_sink(|dev, sink| {
         let _ = create::destroy_buffer(dev, sink, buffer);
     });
 }
@@ -113,15 +127,17 @@ pub extern "C" fn vkGetBufferMemoryRequirements(
     buffer: u64,
     p_memory_requirements: *mut c_void,
 ) {
-    let Some(out) = (unsafe { (p_memory_requirements as *mut VkMemoryRequirements).as_mut() }) else {
+    let Some(out) = (unsafe { (p_memory_requirements as *mut VkMemoryRequirements).as_mut() })
+    else {
         return;
     };
-    let size = dev_sink(|dev, _| dev.buffers.get(&buffer).map(|b| b.size).unwrap_or(0)).unwrap_or(0);
+    let size = ShimState::with_sink(|dev, _| dev.buffers.get(&buffer).map(|b| b.size).unwrap_or(0))
+        .unwrap_or(0);
     out.size = size;
     out.alignment = 256;
     // Every advertised memory type can back this buffer (all our memory is host RAM): expose the full
     // set so gpu-alloc picks the type matching the buffer's usage. See PhysicalDeviceDesc::memory_types.
-    out.memory_type_bits = with(|s| s.physical_device().all_memory_type_bits());
+    out.memory_type_bits = StateStore::with(|s| s.physical_device().all_memory_type_bits());
 }
 
 #[no_mangle]
@@ -136,21 +152,21 @@ pub extern "C" fn vkAllocateMemory(
     };
     // `allocate_memory` is fallible: a zero/over-heap `allocationSize` surfaces as the honest VkResult
     // (`VK_ERROR_OUT_OF_DEVICE_MEMORY` for an over-budget request), never a fake success.
-    match dev_sink(|dev, _| create::allocate_memory(dev, ai.allocation_size)) {
+    match ShimState::with_sink(|dev, _| dev.allocate_memory(ai.allocation_size)) {
         Some(Ok(handle)) => {
             if !p_memory.is_null() {
                 unsafe { *p_memory = handle };
             }
             VK_SUCCESS
         }
-        Some(Err(e)) => vk_result_from_gpu_error(&e),
+        Some(Err(e)) => Status::from_error(&e),
         None => VK_ERROR_INITIALIZATION_FAILED,
     }
 }
 
 #[no_mangle]
 pub extern "C" fn vkFreeMemory(_device: *mut c_void, memory: u64, _p_allocator: *const c_void) {
-    dev_sink(|dev, _| {
+    ShimState::with_sink(|dev, _| {
         dev.memories.remove(&memory);
     });
 }
@@ -162,8 +178,15 @@ pub extern "C" fn vkBindBufferMemory(
     memory: u64,
     memory_offset: u64,
 ) -> VkResult {
-    dev_sink(|dev, _| vk(create::bind_buffer_memory(dev, buffer, memory, memory_offset)))
-        .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+    ShimState::with_sink(|dev, _| {
+        ResultStatus::from_gpu(create::bind_buffer_memory(
+            dev,
+            buffer,
+            memory,
+            memory_offset,
+        ))
+    })
+    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
 #[no_mangle]
@@ -178,8 +201,8 @@ pub extern "C" fn vkMapMemory(
     if pp_data.is_null() {
         return VK_ERROR_MEMORY_MAP_FAILED;
     }
-    let r = dev_sink(|dev, sink| {
-        if create::map_memory(dev, memory).is_err() {
+    let r = ShimState::with_sink(|dev, sink| {
+        if dev.map_memory(memory).is_err() {
             return VK_ERROR_MEMORY_MAP_FAILED;
         }
         // Device→host: refresh the mapped range with the bound buffer's CURRENT device bytes so a reader
@@ -207,7 +230,7 @@ pub extern "C" fn vkMapMemory(
 
 #[no_mangle]
 pub extern "C" fn vkUnmapMemory(_device: *mut c_void, memory: u64) {
-    dev_sink(|dev, _| create::unmap_memory(dev, memory));
+    ShimState::with_sink(|dev, _| dev.unmap_memory(memory));
 }
 
 // ---- bind-memory-2 / memory-requirements-2 (core 1.1 / KHR) — delegate to the v1 bodies -----------
@@ -224,7 +247,10 @@ pub extern "C" fn vkBindBufferMemory2(
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     let infos = unsafe {
-        std::slice::from_raw_parts(p_bind_infos as *const VkBindBufferMemoryInfo, bind_info_count as usize)
+        std::slice::from_raw_parts(
+            p_bind_infos as *const VkBindBufferMemoryInfo,
+            bind_info_count as usize,
+        )
     };
     let mut result = VK_SUCCESS;
     for bi in infos {
@@ -254,10 +280,12 @@ pub extern "C" fn vkGetBufferMemoryRequirements2(
     p_info: *const c_void,
     p_memory_requirements: *mut c_void,
 ) {
-    let Some(info) = (unsafe { (p_info as *const VkBufferMemoryRequirementsInfo2).as_ref() }) else {
+    let Some(info) = (unsafe { (p_info as *const VkBufferMemoryRequirementsInfo2).as_ref() })
+    else {
         return;
     };
-    let Some(out) = (unsafe { (p_memory_requirements as *mut VkMemoryRequirements2).as_mut() }) else {
+    let Some(out) = (unsafe { (p_memory_requirements as *mut VkMemoryRequirements2).as_mut() })
+    else {
         return;
     };
     vkGetBufferMemoryRequirements(
@@ -298,21 +326,27 @@ pub extern "C" fn vkCreateShaderModule(
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     let code = unsafe { std::slice::from_raw_parts(ci.p_code as *const u8, ci.code_size) };
-    dev_sink(|dev, sink| match create::create_shader_module(dev, sink, code) {
-        Ok(h) => {
-            if !p_shader_module.is_null() {
-                unsafe { *p_shader_module = h };
+    ShimState::with_sink(
+        |dev, sink| match create::create_shader_module(dev, sink, code) {
+            Ok(h) => {
+                if !p_shader_module.is_null() {
+                    unsafe { *p_shader_module = h };
+                }
+                VK_SUCCESS
             }
-            VK_SUCCESS
-        }
-        Err(e) => vk_result_from_gpu_error(&e),
-    })
+            Err(e) => Status::from_error(&e),
+        },
+    )
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyShaderModule(_device: *mut c_void, shader_module: u64, _p_allocator: *const c_void) {
-    dev_sink(|dev, _| {
+pub extern "C" fn vkDestroyShaderModule(
+    _device: *mut c_void,
+    shader_module: u64,
+    _p_allocator: *const c_void,
+) {
+    ShimState::with_sink(|dev, _| {
         dev.shaders.remove(&shader_module);
     });
 }
@@ -324,15 +358,17 @@ pub extern "C" fn vkCreatePipelineLayout(
     _p_allocator: *const c_void,
     p_pipeline_layout: *mut u64,
 ) -> VkResult {
-    let Some(ci) = (unsafe { (p_create_info as *const VkPipelineLayoutCreateInfo).as_ref() }) else {
+    let Some(ci) = (unsafe { (p_create_info as *const VkPipelineLayoutCreateInfo).as_ref() })
+    else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     let set_layouts: Vec<u64> = if ci.p_set_layouts.is_null() || ci.set_layout_count == 0 {
         Vec::new()
     } else {
-        unsafe { std::slice::from_raw_parts(ci.p_set_layouts, ci.set_layout_count as usize) }.to_vec()
+        unsafe { std::slice::from_raw_parts(ci.p_set_layouts, ci.set_layout_count as usize) }
+            .to_vec()
     };
-    let h = dev_sink(|dev, _| create::create_pipeline_layout(dev, set_layouts));
+    let h = ShimState::with_sink(|dev, _| dev.create_pipeline_layout(set_layouts));
     match h {
         Some(handle) => {
             if !p_pipeline_layout.is_null() {
@@ -345,8 +381,12 @@ pub extern "C" fn vkCreatePipelineLayout(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyPipelineLayout(_device: *mut c_void, pipeline_layout: u64, _p_allocator: *const c_void) {
-    dev_sink(|dev, _| {
+pub extern "C" fn vkDestroyPipelineLayout(
+    _device: *mut c_void,
+    pipeline_layout: u64,
+    _p_allocator: *const c_void,
+) {
+    ShimState::with_sink(|dev, _| {
         dev.pipeline_layouts.remove(&pipeline_layout);
     });
 }
@@ -374,13 +414,17 @@ pub extern "C" fn vkCreateComputePipelines(
     for (i, ci) in infos.iter().enumerate() {
         out[i] = 0;
         let module = ci.stage.module;
-        let entry = unsafe { entry_str(ci.stage.p_name) };
-        let r = dev_sink(|dev, sink| create::create_compute_pipeline(dev, sink, module, entry))
-            .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkCreateComputePipelines: no device")));
+        let entry = unsafe { EntryPoint::read(ci.stage.p_name) };
+        let r = ShimState::with_sink(|dev, sink| {
+            create::create_compute_pipeline(dev, sink, module, entry)
+        })
+        .unwrap_or(Err(hl_gpu::GpuError::Invalid(
+            "vkCreateComputePipelines: no device",
+        )));
         match r {
             Ok(h) => out[i] = h,
             Err(e) => {
-                result = vk_result_from_gpu_error(&e);
+                result = Status::from_error(&e);
             }
         }
     }
@@ -388,8 +432,12 @@ pub extern "C" fn vkCreateComputePipelines(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyPipeline(_device: *mut c_void, pipeline: u64, _p_allocator: *const c_void) {
-    dev_sink(|dev, _| {
+pub extern "C" fn vkDestroyPipeline(
+    _device: *mut c_void,
+    pipeline: u64,
+    _p_allocator: *const c_void,
+) {
+    ShimState::with_sink(|dev, _| {
         dev.pipelines.remove(&pipeline);
     });
 }
@@ -405,7 +453,8 @@ pub extern "C" fn vkCreateDescriptorSetLayout(
     _p_allocator: *const c_void,
     p_set_layout: *mut u64,
 ) -> VkResult {
-    let Some(ci) = (unsafe { (p_create_info as *const VkDescriptorSetLayoutCreateInfo).as_ref() }) else {
+    let Some(ci) = (unsafe { (p_create_info as *const VkDescriptorSetLayoutCreateInfo).as_ref() })
+    else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     let bindings: Vec<LayoutBinding> = if ci.p_bindings.is_null() || ci.binding_count == 0 {
@@ -421,7 +470,7 @@ pub extern "C" fn vkCreateDescriptorSetLayout(
             })
             .collect()
     };
-    let h = dev_sink(|dev, _| create::create_descriptor_set_layout(dev, bindings));
+    let h = ShimState::with_sink(|dev, _| dev.create_descriptor_set_layout(bindings));
     match h {
         Some(handle) => {
             if !p_set_layout.is_null() {
@@ -434,8 +483,12 @@ pub extern "C" fn vkCreateDescriptorSetLayout(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyDescriptorSetLayout(_device: *mut c_void, set_layout: u64, _p_allocator: *const c_void) {
-    dev_sink(|dev, _| {
+pub extern "C" fn vkDestroyDescriptorSetLayout(
+    _device: *mut c_void,
+    set_layout: u64,
+    _p_allocator: *const c_void,
+) {
+    ShimState::with_sink(|dev, _| {
         dev.set_layouts.remove(&set_layout);
     });
 }
@@ -447,10 +500,11 @@ pub extern "C" fn vkCreateDescriptorPool(
     _p_allocator: *const c_void,
     p_descriptor_pool: *mut u64,
 ) -> VkResult {
-    let Some(ci) = (unsafe { (p_create_info as *const VkDescriptorPoolCreateInfo).as_ref() }) else {
+    let Some(ci) = (unsafe { (p_create_info as *const VkDescriptorPoolCreateInfo).as_ref() })
+    else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    let h = dev_sink(|dev, _| create::create_descriptor_pool(dev, ci.max_sets));
+    let h = ShimState::with_sink(|dev, _| dev.create_descriptor_pool(ci.max_sets));
     match h {
         Some(handle) => {
             if !p_descriptor_pool.is_null() {
@@ -463,8 +517,12 @@ pub extern "C" fn vkCreateDescriptorPool(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyDescriptorPool(_device: *mut c_void, descriptor_pool: u64, _p_allocator: *const c_void) {
-    dev_sink(|dev, _| {
+pub extern "C" fn vkDestroyDescriptorPool(
+    _device: *mut c_void,
+    descriptor_pool: u64,
+    _p_allocator: *const c_void,
+) {
+    ShimState::with_sink(|dev, _| {
         dev.descriptor_pools.remove(&descriptor_pool);
     });
 }
@@ -475,7 +533,8 @@ pub extern "C" fn vkAllocateDescriptorSets(
     p_allocate_info: *const c_void,
     p_descriptor_sets: *mut u64,
 ) -> VkResult {
-    let Some(ai) = (unsafe { (p_allocate_info as *const VkDescriptorSetAllocateInfo).as_ref() }) else {
+    let Some(ai) = (unsafe { (p_allocate_info as *const VkDescriptorSetAllocateInfo).as_ref() })
+    else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     if p_descriptor_sets.is_null() {
@@ -491,8 +550,12 @@ pub extern "C" fn vkAllocateDescriptorSets(
     for i in 0..n {
         out[i] = 0;
         let layout = layouts.get(i).copied().unwrap_or(0);
-        let r = dev_sink(|dev, _| create::allocate_descriptor_set(dev, ai.descriptor_pool, layout, i as u32))
-            .unwrap_or(Err(hl_gpu::GpuError::Invalid("vkAllocateDescriptorSets: no device")));
+        let r = ShimState::with_sink(|dev, _| {
+            create::allocate_descriptor_set(dev, ai.descriptor_pool, layout, i as u32)
+        })
+        .unwrap_or(Err(hl_gpu::GpuError::Invalid(
+            "vkAllocateDescriptorSets: no device",
+        )));
         match r {
             Ok(h) => out[i] = h,
             // Pool exhaustion is the only `ResourceLimit` this path produces, and its spec code is
@@ -501,7 +564,7 @@ pub extern "C" fn vkAllocateDescriptorSets(
             // generic error map instead returns `VK_ERROR_OUT_OF_DEVICE_MEMORY`, a FATAL device-OOM that
             // would make wgpu lose the device the moment a pool fills. Emit the correct, recoverable code.
             Err(hl_gpu::GpuError::ResourceLimit(_)) => return VK_ERROR_OUT_OF_POOL_MEMORY,
-            Err(e) => return vk_result_from_gpu_error(&e),
+            Err(e) => return Status::from_error(&e),
         }
     }
     VK_SUCCESS
@@ -525,22 +588,34 @@ pub extern "C" fn vkUpdateDescriptorSets(
         )
     };
     // The view→image mapping lives in the shim state (disjoint from the device), so borrow both fields.
-    with(|s| {
-        let crate::state::State { device, image_views, .. } = s;
+    StateStore::with(|s| {
+        let crate::state::State {
+            device,
+            image_views,
+            ..
+        } = s;
         let Some(dev) = device.as_mut() else { return };
         for w in writes {
             if w.descriptor_count == 0 {
                 continue;
             }
-            if is_buffer_descriptor(w.descriptor_type) {
+            let descriptor_type = DescriptorType::from(w.descriptor_type);
+            if descriptor_type.is_buffer() {
                 if w.p_buffer_info.is_null() {
                     continue;
                 }
                 // Bring-up: bind the first buffer descriptor at (dstBinding). Array elements collapse onto
                 // the binding (the model keys a set's resources by binding).
                 let bi = unsafe { &*w.p_buffer_info };
-                let _ = create::update_descriptor_buffer(dev, w.dst_set, w.dst_binding, bi.buffer, bi.offset, bi.range);
-            } else if is_image_descriptor(w.descriptor_type) {
+                let _ = create::update_descriptor_buffer(
+                    dev,
+                    w.dst_set,
+                    w.dst_binding,
+                    bi.buffer,
+                    bi.offset,
+                    bi.range,
+                );
+            } else if descriptor_type.is_image() {
                 if w.p_image_info.is_null() {
                     continue;
                 }
@@ -548,17 +623,18 @@ pub extern "C" fn vkUpdateDescriptorSets(
                 // sampled classes) and taking its `sampler` (for the sampler classes). A COMBINED_IMAGE_SAMPLER
                 // carries both; a separate SAMPLED_IMAGE only the view; a separate SAMPLER only the sampler.
                 let ii = unsafe { &*(w.p_image_info as *const VkDescriptorImageInfo) };
-                let image = if descriptor_binds_image(w.descriptor_type) {
+                let image = if descriptor_type.binds_image() {
                     image_views.get(&ii.image_view).copied()
                 } else {
                     None
                 };
-                let sampler = if descriptor_binds_sampler(w.descriptor_type) && ii.sampler != 0 {
+                let sampler = if descriptor_type.binds_sampler() && ii.sampler != 0 {
                     Some(ii.sampler)
                 } else {
                     None
                 };
-                let _ = create::update_descriptor_image(dev, w.dst_set, w.dst_binding, image, sampler);
+                let _ =
+                    create::update_descriptor_image(dev, w.dst_set, w.dst_binding, image, sampler);
             }
             // Other descriptor classes (storage image, texel buffers) are not modeled: a truthful no-op.
         }
@@ -581,7 +657,9 @@ pub extern "C" fn vkCreateDescriptorUpdateTemplate(
     if !p_descriptor_update_template.is_null() {
         unsafe { *p_descriptor_update_template = 0 };
     }
-    let Some(ci) = (unsafe { (p_create_info as *const VkDescriptorUpdateTemplateCreateInfo).as_ref() }) else {
+    let Some(ci) =
+        (unsafe { (p_create_info as *const VkDescriptorUpdateTemplateCreateInfo).as_ref() })
+    else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     let entries: Vec<DescriptorTemplateEntry> =
@@ -589,7 +667,10 @@ pub extern "C" fn vkCreateDescriptorUpdateTemplate(
             Vec::new()
         } else {
             unsafe {
-                std::slice::from_raw_parts(ci.p_descriptor_update_entries, ci.descriptor_update_entry_count as usize)
+                std::slice::from_raw_parts(
+                    ci.p_descriptor_update_entries,
+                    ci.descriptor_update_entry_count as usize,
+                )
             }
             .iter()
             .map(|e| DescriptorTemplateEntry {
@@ -602,7 +683,9 @@ pub extern "C" fn vkCreateDescriptorUpdateTemplate(
             })
             .collect()
         };
-    let r = dev_sink(|dev, _| create::create_descriptor_update_template(dev, ci.template_type, entries));
+    let r = ShimState::with_sink(|dev, _| {
+        create::create_descriptor_update_template(dev, ci.template_type, entries)
+    });
     match r {
         Some(Ok(handle)) => {
             if !p_descriptor_update_template.is_null() {
@@ -610,7 +693,7 @@ pub extern "C" fn vkCreateDescriptorUpdateTemplate(
             }
             VK_SUCCESS
         }
-        Some(Err(e)) => vk_result_from_gpu_error(&e),
+        Some(Err(e)) => Status::from_error(&e),
         None => VK_ERROR_INITIALIZATION_FAILED,
     }
 }
@@ -623,7 +706,12 @@ pub extern "C" fn vkCreateDescriptorUpdateTemplateKHR(
     p_allocator: *const c_void,
     p_descriptor_update_template: *mut u64,
 ) -> VkResult {
-    vkCreateDescriptorUpdateTemplate(device, p_create_info, p_allocator, p_descriptor_update_template)
+    vkCreateDescriptorUpdateTemplate(
+        device,
+        p_create_info,
+        p_allocator,
+        p_descriptor_update_template,
+    )
 }
 
 #[no_mangle]
@@ -632,7 +720,9 @@ pub extern "C" fn vkDestroyDescriptorUpdateTemplate(
     descriptor_update_template: u64,
     _p_allocator: *const c_void,
 ) {
-    dev_sink(|dev, _| create::destroy_descriptor_update_template(dev, descriptor_update_template));
+    ShimState::with_sink(|dev, _| {
+        dev.destroy_descriptor_update_template(descriptor_update_template)
+    });
 }
 
 #[no_mangle]
@@ -659,16 +749,21 @@ pub extern "C" fn vkUpdateDescriptorSetWithTemplate(
         return;
     }
     // Determine exactly how many bytes the template reads, then build a bounded slice over pData.
-    let Some(len) = with(|s| {
+    let Some(len) = StateStore::with(|s| {
         s.device
             .as_ref()
-            .and_then(|d| create::descriptor_template_data_len(d, descriptor_update_template))
+            .and_then(|d| d.descriptor_template_data_len(descriptor_update_template))
     }) else {
         return;
     };
     let data = unsafe { std::slice::from_raw_parts(p_data as *const u8, len) };
-    dev_sink(|dev, _| {
-        let _ = create::update_descriptor_set_with_template(dev, descriptor_set, descriptor_update_template, data);
+    ShimState::with_sink(|dev, _| {
+        let _ = create::update_descriptor_set_with_template(
+            dev,
+            descriptor_set,
+            descriptor_update_template,
+            data,
+        );
     });
 }
 
@@ -698,13 +793,15 @@ pub extern "C" fn vkCreatePipelineCache(
     }
     unsafe { *p_pipeline_cache = 0 };
     // The optional initialData blob (may be absent — a fresh cache).
-    let initial: Vec<u8> = match unsafe { (p_create_info as *const VkPipelineCacheCreateInfo).as_ref() } {
-        Some(ci) if !ci.p_initial_data.is_null() && ci.initial_data_size > 0 => {
-            unsafe { std::slice::from_raw_parts(ci.p_initial_data as *const u8, ci.initial_data_size) }.to_vec()
-        }
-        _ => Vec::new(),
-    };
-    match dev_sink(|dev, _| create::create_pipeline_cache(dev, &initial)) {
+    let initial: Vec<u8> =
+        match unsafe { (p_create_info as *const VkPipelineCacheCreateInfo).as_ref() } {
+            Some(ci) if !ci.p_initial_data.is_null() && ci.initial_data_size > 0 => unsafe {
+                std::slice::from_raw_parts(ci.p_initial_data as *const u8, ci.initial_data_size)
+            }
+            .to_vec(),
+            _ => Vec::new(),
+        };
+    match ShimState::with_sink(|dev, _| create::PipelineCache::create(dev, &initial)) {
         Some(handle) => {
             unsafe { *p_pipeline_cache = handle };
             VK_SUCCESS
@@ -714,8 +811,12 @@ pub extern "C" fn vkCreatePipelineCache(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyPipelineCache(_device: *mut c_void, pipeline_cache: u64, _p_allocator: *const c_void) {
-    dev_sink(|dev, _| create::destroy_pipeline_cache(dev, pipeline_cache));
+pub extern "C" fn vkDestroyPipelineCache(
+    _device: *mut c_void,
+    pipeline_cache: u64,
+    _p_allocator: *const c_void,
+) {
+    ShimState::with_sink(|dev, _| create::PipelineCache::destroy(dev, pipeline_cache));
 }
 
 #[no_mangle]
@@ -730,9 +831,9 @@ pub extern "C" fn vkMergePipelineCaches(
     } else {
         unsafe { std::slice::from_raw_parts(p_src_caches, src_cache_count as usize) }.to_vec()
     };
-    match dev_sink(|dev, _| create::merge_pipeline_caches(dev, dst_cache, &srcs)) {
+    match ShimState::with_sink(|dev, _| create::PipelineCache::merge(dev, dst_cache, &srcs)) {
         Some(Ok(())) => VK_SUCCESS,
-        Some(Err(e)) => vk_result_from_gpu_error(&e),
+        Some(Err(e)) => Status::from_error(&e),
         None => VK_ERROR_INITIALIZATION_FAILED,
     }
 }
@@ -749,9 +850,10 @@ pub extern "C" fn vkGetPipelineCacheData(
     if p_data_size.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-    let data = match dev_sink(|dev, _| create::get_pipeline_cache_data(dev, pipeline_cache)) {
+    let data = match ShimState::with_sink(|dev, _| create::PipelineCache::data(dev, pipeline_cache))
+    {
         Some(Ok(d)) => d,
-        Some(Err(e)) => return vk_result_from_gpu_error(&e),
+        Some(Err(e)) => return Status::from_error(&e),
         None => return VK_ERROR_INITIALIZATION_FAILED,
     };
     if p_data.is_null() {
@@ -784,7 +886,7 @@ pub extern "C" fn vkCreateCommandPool(
 ) -> VkResult {
     // No dedicated pool object in the model; hand back a fresh opaque handle (command buffers are
     // allocated straight off the device).
-    let h = dev_sink(|dev, _| dev.alloc_handle());
+    let h = ShimState::with_sink(|dev, _| dev.alloc_handle());
     match h {
         Some(handle) => {
             if !p_command_pool.is_null() {
@@ -797,7 +899,12 @@ pub extern "C" fn vkCreateCommandPool(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyCommandPool(_device: *mut c_void, _command_pool: u64, _p_allocator: *const c_void) {}
+pub extern "C" fn vkDestroyCommandPool(
+    _device: *mut c_void,
+    _command_pool: u64,
+    _p_allocator: *const c_void,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn vkAllocateCommandBuffers(
@@ -805,7 +912,8 @@ pub extern "C" fn vkAllocateCommandBuffers(
     p_allocate_info: *const c_void,
     p_command_buffers: *mut *mut c_void,
 ) -> VkResult {
-    let Some(ai) = (unsafe { (p_allocate_info as *const VkCommandBufferAllocateInfo).as_ref() }) else {
+    let Some(ai) = (unsafe { (p_allocate_info as *const VkCommandBufferAllocateInfo).as_ref() })
+    else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     if p_command_buffers.is_null() {
@@ -814,43 +922,55 @@ pub extern "C" fn vkAllocateCommandBuffers(
     let n = ai.command_buffer_count as usize;
     let out = unsafe { std::slice::from_raw_parts_mut(p_command_buffers, n) };
     for slot in out.iter_mut().take(n) {
-        let handle = match dev_sink(|dev, _| record::allocate_command_buffer(dev)) {
+        let handle = match ShimState::with_sink(|dev, _| dev.allocate_command_buffer()) {
             Some(h) => h,
             None => return VK_ERROR_INITIALIZATION_FAILED,
         };
-        *slot = cmdbuf_new(handle);
+        *slot = CommandBuffer::from_handle(handle);
     }
     VK_SUCCESS
 }
 
 #[no_mangle]
-pub extern "C" fn vkBeginCommandBuffer(command_buffer: *mut c_void, p_begin_info: *const c_void) -> VkResult {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+pub extern "C" fn vkBeginCommandBuffer(
+    command_buffer: *mut c_void,
+    p_begin_info: *const c_void,
+) -> VkResult {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
     // A command buffer recorded WITHOUT `ONE_TIME_SUBMIT` is re-submittable every frame (vkcube's per-image
     // draw pattern); one with it is single-use. Read the flag from the begin info (absent/null ⇒ 0).
-    let one_time_submit = match unsafe { (p_begin_info as *const VkCommandBufferBeginInfo).as_ref() } {
-        Some(bi) => bi.flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT != 0,
-        None => false,
-    };
-    dev_sink(|dev, _| vk(record::begin(dev, cb, one_time_submit))).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+    let one_time_submit =
+        match unsafe { (p_begin_info as *const VkCommandBufferBeginInfo).as_ref() } {
+            Some(bi) => bi.flags & VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT != 0,
+            None => false,
+        };
+    ShimState::with_sink(|dev, _| {
+        ResultStatus::from_gpu(dev.begin_command_buffer(cb, one_time_submit))
+    })
+    .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
 #[no_mangle]
 pub extern "C" fn vkEndCommandBuffer(command_buffer: *mut c_void) -> VkResult {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    dev_sink(|dev, _| vk(record::end(dev, cb))).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
+    ShimState::with_sink(|dev, _| ResultStatus::from_gpu(dev.end_command_buffer(cb)))
+        .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
 #[no_mangle]
-pub extern "C" fn vkCmdBindPipeline(command_buffer: *mut c_void, _pipeline_bind_point: i32, pipeline: u64) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+pub extern "C" fn vkCmdBindPipeline(
+    command_buffer: *mut c_void,
+    _pipeline_bind_point: i32,
+    pipeline: u64,
+) {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev_sink(|dev, _| {
+    ShimState::with_sink(|dev, _| {
         let _ = record::cmd_bind_pipeline(dev, cb, pipeline);
     });
 }
@@ -867,30 +987,37 @@ pub extern "C" fn vkCmdBindDescriptorSets(
     dynamic_offset_count: u32,
     p_dynamic_offsets: *const u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
     let sets: Vec<u64> = if p_descriptor_sets.is_null() {
         Vec::new()
     } else {
-        unsafe { std::slice::from_raw_parts(p_descriptor_sets, descriptor_set_count as usize) }.to_vec()
+        unsafe { std::slice::from_raw_parts(p_descriptor_sets, descriptor_set_count as usize) }
+            .to_vec()
     };
     let dyn_offsets: Vec<u32> = if p_dynamic_offsets.is_null() || dynamic_offset_count == 0 {
         Vec::new()
     } else {
-        unsafe { std::slice::from_raw_parts(p_dynamic_offsets, dynamic_offset_count as usize) }.to_vec()
+        unsafe { std::slice::from_raw_parts(p_dynamic_offsets, dynamic_offset_count as usize) }
+            .to_vec()
     };
-    dev_sink(|dev, sink| {
+    ShimState::with_sink(|dev, sink| {
         let _ = record::cmd_bind_descriptor_sets(dev, sink, cb, first_set, &sets, &dyn_offsets);
     });
 }
 
 #[no_mangle]
-pub extern "C" fn vkCmdDispatch(command_buffer: *mut c_void, group_count_x: u32, group_count_y: u32, group_count_z: u32) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+pub extern "C" fn vkCmdDispatch(
+    command_buffer: *mut c_void,
+    group_count_x: u32,
+    group_count_y: u32,
+    group_count_z: u32,
+) {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev_sink(|dev, _| {
+    ShimState::with_sink(|dev, _| {
         let _ = record::cmd_dispatch(dev, cb, group_count_x, group_count_y, group_count_z);
     });
 }
@@ -900,10 +1027,10 @@ pub extern "C" fn vkCmdDispatch(command_buffer: *mut c_void, group_count_x: u32,
 /// the equivalent `vkCmdDispatch` would emit; erroring only on a bad buffer.
 #[no_mangle]
 pub extern "C" fn vkCmdDispatchIndirect(command_buffer: *mut c_void, buffer: u64, offset: u64) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
-    dev_sink(|dev, _| {
+    ShimState::with_sink(|dev, _| {
         let _ = record::cmd_dispatch_indirect(dev, cb, buffer, offset);
     });
 }
@@ -917,16 +1044,20 @@ pub extern "C" fn vkCmdExecuteCommands(
     command_buffer_count: u32,
     p_command_buffers: *const *mut c_void,
 ) {
-    let Some(primary) = (unsafe { cmdbuf_handle(command_buffer) }) else {
+    let Some(primary) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
         return;
     };
     if p_command_buffers.is_null() || command_buffer_count == 0 {
         return;
     }
-    let raw = unsafe { std::slice::from_raw_parts(p_command_buffers, command_buffer_count as usize) };
+    let raw =
+        unsafe { std::slice::from_raw_parts(p_command_buffers, command_buffer_count as usize) };
     // Unwrap each dispatchable secondary to its hl_vulkan u64 handle (skip any null slot).
-    let secondaries: Vec<VkCbHandle> = raw.iter().filter_map(|&p| unsafe { cmdbuf_handle(p) }).collect();
-    dev_sink(|dev, _| {
+    let secondaries: Vec<VkCbHandle> = raw
+        .iter()
+        .filter_map(|&p| unsafe { CommandBuffer::handle(p) })
+        .collect();
+    ShimState::with_sink(|dev, _| {
         let _ = record::cmd_execute_commands(dev, primary, &secondaries);
     });
 }
@@ -941,7 +1072,9 @@ pub extern "C" fn vkQueueSubmit(
     let submits = if p_submits.is_null() {
         &[][..]
     } else {
-        unsafe { std::slice::from_raw_parts(p_submits as *const VkSubmitInfo, submit_count as usize) }
+        unsafe {
+            std::slice::from_raw_parts(p_submits as *const VkSubmitInfo, submit_count as usize)
+        }
     };
     // Gather every submitted command buffer (unwrapping each dispatchable to its u64 handle) plus every
     // queue-side timeline signal from each batch's VkTimelineSemaphoreSubmitInfo pNext.
@@ -953,18 +1086,21 @@ pub extern "C" fn vkQueueSubmit(
                 std::slice::from_raw_parts(si.p_command_buffers, si.command_buffer_count as usize)
             };
             for &p in ptrs {
-                if let Some(h) = unsafe { cmdbuf_handle(p) } {
+                if let Some(h) = unsafe { CommandBuffer::handle(p) } {
                     cbs.push(h);
                 }
             }
         }
         // VkTimelineSemaphoreSubmitInfo::pSignalSemaphoreValues[i] pairs positionally with
         // VkSubmitInfo::pSignalSemaphores[i] — the value queue completion advances that semaphore to.
-        let node = unsafe { find_pnext(si.p_next, VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO) };
+        let node = unsafe {
+            ExtensionChain::find(si.p_next, VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO)
+        };
         if !node.is_null() && !si.p_signal_semaphores.is_null() {
             let ts = unsafe { &*(node as *const VkTimelineSemaphoreSubmitInfo) };
             if !ts.p_signal_semaphore_values.is_null() {
-                let n = (si.signal_semaphore_count as usize).min(ts.signal_semaphore_value_count as usize);
+                let n = (si.signal_semaphore_count as usize)
+                    .min(ts.signal_semaphore_value_count as usize);
                 let sems = unsafe { std::slice::from_raw_parts(si.p_signal_semaphores, n) };
                 let vals = unsafe { std::slice::from_raw_parts(ts.p_signal_semaphore_values, n) };
                 for i in 0..n {
@@ -974,16 +1110,21 @@ pub extern "C" fn vkQueueSubmit(
         }
     }
     let signal = if fence != 0 { Some(fence) } else { None };
-    let r = dev_sink(|dev, sink| {
-        let r = vk(submit::queue_submit(dev, sink, &cbs, signal));
+    let r = ShimState::with_sink(|dev, sink| {
+        let r = ResultStatus::from_gpu(submit::queue_submit(dev, sink, &cbs, signal));
         if r == VK_SUCCESS {
-            submit::signal_timeline_values(dev, &timeline_signals);
+            dev.signal_timeline_values(&timeline_signals);
         }
         r
     })
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED);
     if r != VK_SUCCESS {
-        hl_log::hl_warn!(hl_log::tag::SHIM, "vkQueueSubmit cbs={} -> {:?}", cbs.len(), r);
+        hl_log::hl_warn!(
+            hl_log::tag::SHIM,
+            "vkQueueSubmit cbs={} -> {:?}",
+            cbs.len(),
+            r
+        );
     }
     r
 }
@@ -1014,17 +1155,22 @@ pub extern "C" fn vkQueueSubmit2(
     let submits = if p_submits.is_null() {
         &[][..]
     } else {
-        unsafe { std::slice::from_raw_parts(p_submits as *const VkSubmitInfo2, submit_count as usize) }
+        unsafe {
+            std::slice::from_raw_parts(p_submits as *const VkSubmitInfo2, submit_count as usize)
+        }
     };
     let mut cbs: Vec<VkCbHandle> = Vec::new();
     let mut timeline_signals: Vec<(u64, u64)> = Vec::new();
     for si in submits {
         if !si.p_command_buffer_infos.is_null() {
             let infos = unsafe {
-                std::slice::from_raw_parts(si.p_command_buffer_infos, si.command_buffer_info_count as usize)
+                std::slice::from_raw_parts(
+                    si.p_command_buffer_infos,
+                    si.command_buffer_info_count as usize,
+                )
             };
             for info in infos {
-                if let Some(h) = unsafe { cmdbuf_handle(info.command_buffer) } {
+                if let Some(h) = unsafe { CommandBuffer::handle(info.command_buffer) } {
                     cbs.push(h);
                 }
             }
@@ -1043,10 +1189,10 @@ pub extern "C" fn vkQueueSubmit2(
         }
     }
     let signal = if fence != 0 { Some(fence) } else { None };
-    dev_sink(|dev, sink| {
-        let r = vk(submit::queue_submit(dev, sink, &cbs, signal));
+    ShimState::with_sink(|dev, sink| {
+        let r = ResultStatus::from_gpu(submit::queue_submit(dev, sink, &cbs, signal));
         if r == VK_SUCCESS {
-            submit::signal_timeline_values(dev, &timeline_signals);
+            dev.signal_timeline_values(&timeline_signals);
         }
         r
     })
@@ -1066,22 +1212,40 @@ pub extern "C" fn vkQueueSubmit2KHR(
 
 /// `vkMapMemory2` (maintenance5) — read the `VkMemoryMapInfo` aggregate and delegate to `vkMapMemory`.
 #[no_mangle]
-pub extern "C" fn vkMapMemory2(device: *mut c_void, p_memory_map_info: *const c_void, pp_data: *mut *mut c_void) -> VkResult {
+pub extern "C" fn vkMapMemory2(
+    device: *mut c_void,
+    p_memory_map_info: *const c_void,
+    pp_data: *mut *mut c_void,
+) -> VkResult {
     let Some(info) = (unsafe { (p_memory_map_info as *const VkMemoryMapInfo).as_ref() }) else {
         return VK_ERROR_MEMORY_MAP_FAILED;
     };
-    vkMapMemory(device, info.memory, info.offset, info.size, info.flags, pp_data)
+    vkMapMemory(
+        device,
+        info.memory,
+        info.offset,
+        info.size,
+        info.flags,
+        pp_data,
+    )
 }
 
 /// `vkMapMemory2KHR` — the `VK_KHR_map_memory2` alias.
 #[no_mangle]
-pub extern "C" fn vkMapMemory2KHR(device: *mut c_void, p_memory_map_info: *const c_void, pp_data: *mut *mut c_void) -> VkResult {
+pub extern "C" fn vkMapMemory2KHR(
+    device: *mut c_void,
+    p_memory_map_info: *const c_void,
+    pp_data: *mut *mut c_void,
+) -> VkResult {
     vkMapMemory2(device, p_memory_map_info, pp_data)
 }
 
 /// `vkUnmapMemory2` (maintenance5) — read the `VkMemoryUnmapInfo` aggregate and delegate to `vkUnmapMemory`.
 #[no_mangle]
-pub extern "C" fn vkUnmapMemory2(device: *mut c_void, p_memory_unmap_info: *const c_void) -> VkResult {
+pub extern "C" fn vkUnmapMemory2(
+    device: *mut c_void,
+    p_memory_unmap_info: *const c_void,
+) -> VkResult {
     let Some(info) = (unsafe { (p_memory_unmap_info as *const VkMemoryUnmapInfo).as_ref() }) else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
@@ -1091,7 +1255,10 @@ pub extern "C" fn vkUnmapMemory2(device: *mut c_void, p_memory_unmap_info: *cons
 
 /// `vkUnmapMemory2KHR` — the `VK_KHR_map_memory2` alias.
 #[no_mangle]
-pub extern "C" fn vkUnmapMemory2KHR(device: *mut c_void, p_memory_unmap_info: *const c_void) -> VkResult {
+pub extern "C" fn vkUnmapMemory2KHR(
+    device: *mut c_void,
+    p_memory_unmap_info: *const c_void,
+) -> VkResult {
     vkUnmapMemory2(device, p_memory_unmap_info)
 }
 
@@ -1115,21 +1282,23 @@ pub extern "C" fn vkCreateFence(
     if !p_fence.is_null() {
         unsafe { *p_fence = 0 };
     }
-    dev_sink(|dev, sink| match create::create_fence(dev, sink, signaled) {
-        Ok(h) => {
-            if !p_fence.is_null() {
-                unsafe { *p_fence = h };
+    ShimState::with_sink(
+        |dev, sink| match create::create_fence(dev, sink, signaled) {
+            Ok(h) => {
+                if !p_fence.is_null() {
+                    unsafe { *p_fence = h };
+                }
+                VK_SUCCESS
             }
-            VK_SUCCESS
-        }
-        Err(e) => vk_result_from_gpu_error(&e),
-    })
+            Err(e) => Status::from_error(&e),
+        },
+    )
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }
 
 #[no_mangle]
 pub extern "C" fn vkDestroyFence(_device: *mut c_void, fence: u64, _p_allocator: *const c_void) {
-    dev_sink(|dev, _| {
+    ShimState::with_sink(|dev, _| {
         dev.fences.remove(&fence);
     });
 }
@@ -1146,10 +1315,10 @@ pub extern "C" fn vkWaitForFences(
         return VK_SUCCESS;
     }
     let fences = unsafe { std::slice::from_raw_parts(p_fences, fence_count as usize) };
-    dev_sink(|dev, sink| {
+    ShimState::with_sink(|dev, sink| {
         for &f in fences {
-            if let Err(e) = submit::wait_for_fence(dev, sink, f) {
-                return vk_result_from_gpu_error(&e);
+            if let Err(e) = Device::wait_for_fence(dev, sink, f) {
+                return Status::from_error(&e);
             }
         }
         VK_SUCCESS
@@ -1158,14 +1327,18 @@ pub extern "C" fn vkWaitForFences(
 }
 
 #[no_mangle]
-pub extern "C" fn vkResetFences(_device: *mut c_void, fence_count: u32, p_fences: *const u64) -> VkResult {
+pub extern "C" fn vkResetFences(
+    _device: *mut c_void,
+    fence_count: u32,
+    p_fences: *const u64,
+) -> VkResult {
     if p_fences.is_null() {
         return VK_SUCCESS;
     }
     let fences = unsafe { std::slice::from_raw_parts(p_fences, fence_count as usize) };
-    dev_sink(|dev, _| {
+    ShimState::with_sink(|dev, _| {
         for &f in fences {
-            let _ = submit::reset_fence(dev, f);
+            let _ = dev.reset_fence(f);
         }
         VK_SUCCESS
     })
@@ -1176,10 +1349,10 @@ pub extern "C" fn vkResetFences(_device: *mut c_void, fence_count: u32, p_fences
 /// `VK_NOT_READY` otherwise). Non-blocking, unlike `vkWaitForFences`. Errors on an unknown fence.
 #[no_mangle]
 pub extern "C" fn vkGetFenceStatus(_device: *mut c_void, fence: u64) -> VkResult {
-    dev_sink(|dev, _| match submit::fence_status(dev, fence) {
+    ShimState::with_sink(|dev, _| match dev.is_fence_signaled(fence) {
         Ok(true) => VK_SUCCESS,
         Ok(false) => VK_NOT_READY,
-        Err(e) => vk_result_from_gpu_error(&e),
+        Err(e) => Status::from_error(&e),
     })
     .unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
 }

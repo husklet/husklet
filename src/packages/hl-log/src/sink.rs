@@ -1,7 +1,7 @@
 //! Output sink: where formatted log lines go.
 //!
 //! The default sink writes to a locked stderr in a single `write_all`. Apps and
-//! tests can swap the sink via [`set_sink`] (e.g. a `TestSink` that collects lines,
+//! tests can swap the sink via [`Output::set`] (e.g. a `TestSink` that collects lines,
 //! or an app router that fans out to a file + terminal).
 
 use std::io::Write;
@@ -26,28 +26,36 @@ impl Sink for StderrSink {
     }
 }
 
-/// The active sink. Boxed so it can be swapped at runtime. `OnceLock<Mutex<..>>`
-/// gives us a lazily-created, swappable slot without external deps.
-static SINK: OnceLock<Mutex<Box<dyn Sink>>> = OnceLock::new();
-
-fn slot() -> &'static Mutex<Box<dyn Sink>> {
-    SINK.get_or_init(|| Mutex::new(Box::new(StderrSink)))
+/// Synchronized access to the active sink.
+pub struct Output {
+    sink: Mutex<Box<dyn Sink>>,
 }
 
-/// Replace the active sink. Used by tests (collect lines) and the app (route logs).
-pub fn set_sink(sink: Box<dyn Sink>) {
-    *slot().lock().unwrap_or_else(|e| e.into_inner()) = sink;
-}
+impl Output {
+    fn new() -> Self {
+        Self {
+            sink: Mutex::new(Box::new(StderrSink)),
+        }
+    }
 
-/// Restore the default stderr sink.
-pub fn reset_sink() {
-    set_sink(Box::new(StderrSink));
-}
+    pub fn set(&self, sink: Box<dyn Sink>) {
+        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = sink;
+    }
 
-/// Hand a formatted line to the active sink.
-pub(crate) fn write_line(s: &str) {
-    slot()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .write_line(s);
+    pub fn reset(&self) {
+        self.set(Box::new(StderrSink));
+    }
+
+    pub(crate) fn write(&self, line: &str) {
+        self.sink
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .write_line(line);
+    }
+
+    /// Returns the process-wide log output.
+    pub fn global() -> &'static Self {
+        static OUTPUT: OnceLock<Output> = OnceLock::new();
+        OUTPUT.get_or_init(Self::new)
+    }
 }

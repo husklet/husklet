@@ -29,50 +29,6 @@ use std::collections::HashMap;
 /// binds the matching resources. (Duplicated, not shared, because the two crates only share the protocol.)
 const SAMPLER_BINDING_OFFSET: u32 = 16;
 
-/// `vkAllocateCommandBuffers` (one buffer) — mint an `Initial` command buffer.
-pub fn allocate_command_buffer(dev: &mut Device) -> VkCommandBuffer {
-    let handle = dev.alloc_handle();
-    dev.command_buffers.insert(handle, CmdBufRec::initial());
-    handle
-}
-
-/// `vkBeginCommandBuffer` — move the buffer to `Recording` and clear any prior recording. `one_time_submit`
-/// records `VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT`: a one-time buffer is not resubmittable, whereas a
-/// buffer without it returns to `Executable` after its (synchronous) submit completes so it can be
-/// re-submitted every frame (the standard vkcube per-image draw pattern).
-pub fn begin(dev: &mut Device, cb: VkCommandBuffer, one_time_submit: bool) -> Result<()> {
-    let rec = dev.command_buffers.get_mut(&cb).ok_or(GpuError::Invalid(
-        "vkBeginCommandBuffer: unknown VkCommandBuffer",
-    ))?;
-    rec.reset_recording();
-    rec.one_time_submit = one_time_submit;
-    rec.state = CommandBufferState::Recording;
-    Ok(())
-}
-
-/// `vkEndCommandBuffer` — move the buffer to `Executable` (submittable).
-pub fn end(dev: &mut Device, cb: VkCommandBuffer) -> Result<()> {
-    let rec = dev.command_buffers.get_mut(&cb).ok_or(GpuError::Invalid(
-        "vkEndCommandBuffer: unknown VkCommandBuffer",
-    ))?;
-    if rec.state != CommandBufferState::Recording {
-        return Err(GpuError::Invalid(
-            "vkEndCommandBuffer: buffer is not recording",
-        ));
-    }
-    rec.state = CommandBufferState::Executable;
-    Ok(())
-}
-
-/// Borrow a command buffer ONLY if it is `Recording` (the Vulkan rule that a `vkCmd*` outside an active
-/// begin/end is invalid). Ported from `VkState::recording_mut`.
-fn recording_mut<'a>(dev: &'a mut Device, cb: VkCommandBuffer) -> Result<&'a mut CmdBufRec> {
-    match dev.command_buffers.get_mut(&cb) {
-        Some(r) if r.state == CommandBufferState::Recording => Ok(r),
-        _ => Err(GpuError::Invalid("vkCmd*: command buffer is not recording")),
-    }
-}
-
 /// `vkCmdBindPipeline` — remember the bound hl-GPU pipeline id + kind for the next pass.
 pub fn cmd_bind_pipeline(
     dev: &mut Device,
@@ -86,7 +42,7 @@ pub fn cmd_bind_pipeline(
             .ok_or(GpuError::Invalid("vkCmdBindPipeline: unknown VkPipeline"))?;
         (p.ir_id, p.kind)
     };
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.bound_pipeline = Some(ir);
     rec.bound_pipeline_kind = Some(kind);
     Ok(())
@@ -194,7 +150,7 @@ pub fn cmd_bind_descriptor_sets(
                 entries,
             },
         )])?;
-        if let Ok(cbrec) = recording_mut(dev, cb) {
+        if let Ok(cbrec) = dev.require_recording(cb) {
             cbrec.pending_bind_groups.push((set_index, ir_id));
         }
     }
@@ -204,7 +160,7 @@ pub fn cmd_bind_descriptor_sets(
 /// `vkCmdDispatch` — record a compute pass: `BeginComputePass` → `SetPipeline` → `SetBindGroup`* →
 /// `Dispatch` → `EndComputePass`. Ported from `command.rs::vkCmdDispatch`.
 pub fn cmd_dispatch(dev: &mut Device, cb: VkCommandBuffer, x: u32, y: u32, z: u32) -> Result<()> {
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     let pipeline = rec.bound_pipeline;
     let groups = rec.pending_bind_groups.clone();
     rec.enc.push(Enc::BeginComputePass);
@@ -263,7 +219,7 @@ pub fn cmd_begin_render_pass(
         }
         None => None,
     };
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::BeginRenderPass {
         color: vec![ColorAttachment {
             texture,
@@ -299,7 +255,7 @@ pub fn cmd_bind_vertex_buffer(
             "vkCmdBindVertexBuffers: unknown VkBuffer",
         ))?
         .ir_id;
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::SetVertexBuffer {
         slot,
         buffer: ir,
@@ -327,7 +283,7 @@ pub fn cmd_bind_index_buffer(
     } else {
         IndexFormat::U16
     };
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::SetIndexBuffer {
         buffer: ir,
         offset,
@@ -346,7 +302,7 @@ pub fn cmd_draw(
     first_vertex: u32,
     first_instance: u32,
 ) -> Result<()> {
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     let pipeline = rec.bound_pipeline;
     let groups = rec.pending_bind_groups.clone();
     if let Some(p) = pipeline {
@@ -361,17 +317,19 @@ pub fn cmd_draw(
         first_vertex,
         first_instance,
     });
-    accumulate_occlusion(rec, instance_count);
+    rec.accumulate_occlusion(instance_count);
     Ok(())
 }
 
 /// If an OCCLUSION query is open on this command buffer, add the draw's scissor-clipped sample footprint
 /// to its running total (see [`CmdBufRec::occlusion_coverage`]).
-fn accumulate_occlusion(rec: &mut CmdBufRec, instance_count: u32) {
-    if rec.occlusion_accum.is_some() {
-        let cov = rec.occlusion_coverage(instance_count);
-        if let Some(acc) = rec.occlusion_accum.as_mut() {
-            *acc = acc.saturating_add(cov);
+impl CmdBufRec {
+    fn accumulate_occlusion(&mut self, instance_count: u32) {
+        if self.occlusion_accum.is_some() {
+            let cov = self.occlusion_coverage(instance_count);
+            if let Some(acc) = self.occlusion_accum.as_mut() {
+                *acc = acc.saturating_add(cov);
+            }
         }
     }
 }
@@ -387,7 +345,7 @@ pub fn cmd_draw_indexed(
     vertex_offset: i32,
     first_instance: u32,
 ) -> Result<()> {
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     let pipeline = rec.bound_pipeline;
     let groups = rec.pending_bind_groups.clone();
     if let Some(p) = pipeline {
@@ -403,7 +361,7 @@ pub fn cmd_draw_indexed(
         base_vertex: vertex_offset,
         first_instance,
     });
-    accumulate_occlusion(rec, instance_count);
+    rec.accumulate_occlusion(instance_count);
     Ok(())
 }
 
@@ -495,7 +453,7 @@ pub fn cmd_begin_rendering(
         None => None,
     };
     let active = color_targets.first().map(|c| c.texture);
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::BeginRenderPass {
         color: color_targets,
         depth: depth_target,
@@ -508,12 +466,14 @@ pub fn cmd_begin_rendering(
 }
 
 /// `vkCmdEndRenderPass` — close the render pass.
-pub fn cmd_end_render_pass(dev: &mut Device, cb: VkCommandBuffer) -> Result<()> {
-    let rec = recording_mut(dev, cb)?;
-    rec.enc.push(Enc::EndRenderPass);
-    rec.in_render_pass = false;
-    rec.active_render_texture = None;
-    Ok(())
+impl Device {
+    pub fn end_render_pass(&mut self, cb: VkCommandBuffer) -> Result<()> {
+        let rec = self.require_recording(cb)?;
+        rec.enc.push(Enc::EndRenderPass);
+        rec.in_render_pass = false;
+        rec.active_render_texture = None;
+        Ok(())
+    }
 }
 
 // ---- secondary command buffers -----------------------------------------------------------------
@@ -530,7 +490,7 @@ pub fn cmd_execute_commands(
     secondaries: &[VkCommandBuffer],
 ) -> Result<()> {
     // The primary must be recording.
-    let _ = recording_mut(dev, primary)?;
+    let _ = dev.require_recording(primary)?;
     // Every secondary must exist and be Executable — validate before splicing anything.
     for &sec in secondaries {
         match dev.command_buffers.get(&sec) {
@@ -549,7 +509,7 @@ pub fn cmd_execute_commands(
             spliced.push((r.enc.clone(), r.buffer_writes.clone(), r.deferred.clone()));
         }
     }
-    let primary_rec = recording_mut(dev, primary)?;
+    let primary_rec = dev.require_recording(primary)?;
     for (enc, writes, deferred) in spliced {
         primary_rec.enc.extend(enc);
         primary_rec.buffer_writes.extend(writes);
@@ -588,7 +548,7 @@ pub fn cmd_set_viewport(
     max_depth: f32,
 ) -> Result<()> {
     let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };
-    recording_mut(dev, cb)?.enc.push(Enc::SetViewport {
+    dev.require_recording(cb)?.enc.push(Enc::SetViewport {
         x,
         y,
         w,
@@ -609,7 +569,7 @@ pub fn cmd_set_scissor(
     w: u32,
     h: u32,
 ) -> Result<()> {
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     // Track the current scissor so an open occlusion query counts only the samples this rect admits.
     rec.scissor = Some((x, y, w, h));
     rec.enc.push(Enc::SetScissor { x, y, w, h });
@@ -619,7 +579,7 @@ pub fn cmd_set_scissor(
 /// `vkCmdSetLineWidth` — record the dynamic line width (honest command state; the fill rasterizer draws
 /// no wide lines, so this emits no encoder op — documented in [`DynamicState`]).
 pub fn cmd_set_line_width(dev: &mut Device, cb: VkCommandBuffer, line_width: f32) -> Result<()> {
-    recording_mut(dev, cb)?.dynamic.line_width = line_width;
+    dev.require_recording(cb)?.dynamic.line_width = line_width;
     Ok(())
 }
 
@@ -631,7 +591,7 @@ pub fn cmd_set_depth_bias(
     clamp: f32,
     slope_factor: f32,
 ) -> Result<()> {
-    recording_mut(dev, cb)?.dynamic.depth_bias = (constant_factor, clamp, slope_factor);
+    dev.require_recording(cb)?.dynamic.depth_bias = (constant_factor, clamp, slope_factor);
     Ok(())
 }
 
@@ -641,7 +601,7 @@ pub fn cmd_set_blend_constants(
     cb: VkCommandBuffer,
     constants: [f32; 4],
 ) -> Result<()> {
-    recording_mut(dev, cb)?.dynamic.blend_constants = constants;
+    dev.require_recording(cb)?.dynamic.blend_constants = constants;
     Ok(())
 }
 
@@ -664,7 +624,7 @@ pub fn cmd_set_stencil_compare_mask(
     mask: u32,
 ) -> Result<()> {
     set_stencil_faces(
-        &mut recording_mut(dev, cb)?.dynamic.stencil_compare_mask,
+        &mut dev.require_recording(cb)?.dynamic.stencil_compare_mask,
         face_mask,
         mask,
     );
@@ -679,7 +639,7 @@ pub fn cmd_set_stencil_write_mask(
     mask: u32,
 ) -> Result<()> {
     set_stencil_faces(
-        &mut recording_mut(dev, cb)?.dynamic.stencil_write_mask,
+        &mut dev.require_recording(cb)?.dynamic.stencil_write_mask,
         face_mask,
         mask,
     );
@@ -694,7 +654,7 @@ pub fn cmd_set_stencil_reference(
     reference: u32,
 ) -> Result<()> {
     set_stencil_faces(
-        &mut recording_mut(dev, cb)?.dynamic.stencil_reference,
+        &mut dev.require_recording(cb)?.dynamic.stencil_reference,
         face_mask,
         reference,
     );
@@ -715,7 +675,7 @@ pub fn set_dynamic<R>(
     cb: VkCommandBuffer,
     f: impl FnOnce(&mut crate::model::command::DynamicState) -> R,
 ) -> Result<R> {
-    Ok(f(&mut recording_mut(dev, cb)?.dynamic))
+    Ok(f(&mut dev.require_recording(cb)?.dynamic))
 }
 
 /// Set the extended-stencil-op state for the face(s) selected by `face_mask` (FRONT = 0x1, BACK = 0x2).
@@ -726,7 +686,7 @@ pub fn set_stencil_op(
     face_mask: u32,
     ops: (i32, i32, i32, i32),
 ) -> Result<()> {
-    let ds = &mut recording_mut(dev, cb)?.dynamic;
+    let ds = &mut dev.require_recording(cb)?.dynamic;
     if face_mask & 0x1 != 0 {
         ds.stencil_op_front = ops;
     }
@@ -755,7 +715,7 @@ pub fn set_dynamic_attachment_array(
             "vkCmdSet*EXT: attachment range exceeds maxColorAttachments",
         ));
     }
-    let ds = &mut recording_mut(dev, cb)?.dynamic;
+    let ds = &mut dev.require_recording(cb)?.dynamic;
     let target = select(ds);
     if target.len() < end {
         target.resize(end, 0);
@@ -792,7 +752,7 @@ pub fn cmd_push_constants(
             "vkCmdPushConstants: offset+size exceeds maxPushConstantsSize",
         ));
     }
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     let end = offset as usize + bytes.len();
     if rec.push_constants.len() < end {
         rec.push_constants.resize(end, 0);
@@ -839,11 +799,15 @@ fn read_buffer_bytes(dev: &Device, buffer: VkBuffer, offset: u64, len: usize) ->
 }
 
 /// Little-endian `u32` at `off` in `bytes` (0 if out of range).
-fn le_u32(bytes: &[u8], off: usize) -> u32 {
-    bytes
-        .get(off..off + 4)
-        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .unwrap_or(0)
+struct LittleEndian<'a>(&'a [u8]);
+
+impl LittleEndian<'_> {
+    fn u32(&self, off: usize) -> u32 {
+        self.0
+            .get(off..off + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .unwrap_or(0)
+    }
 }
 
 /// Validate that `buffer` is a valid INDIRECT source holding `draw_count` argument structs of
@@ -900,10 +864,15 @@ pub fn cmd_draw_indirect(
         .map(|i| {
             let base = offset.saturating_add(i as u64 * stride as u64);
             let b = read_buffer_bytes(dev, buffer, base, 16);
-            [le_u32(&b, 0), le_u32(&b, 4), le_u32(&b, 8), le_u32(&b, 12)]
+            [
+                LittleEndian(&b).u32(0),
+                LittleEndian(&b).u32(4),
+                LittleEndian(&b).u32(8),
+                LittleEndian(&b).u32(12),
+            ]
         })
         .collect();
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     let pipeline = rec.bound_pipeline;
     let groups = rec.pending_bind_groups.clone();
     for [vertex_count, instance_count, first_vertex, first_instance] in args {
@@ -922,7 +891,7 @@ pub fn cmd_draw_indirect(
             first_vertex,
             first_instance,
         });
-        accumulate_occlusion(rec, instance_count);
+        rec.accumulate_occlusion(instance_count);
     }
     Ok(())
 }
@@ -945,15 +914,15 @@ pub fn cmd_draw_indexed_indirect(
             let base = offset.saturating_add(i as u64 * stride as u64);
             let b = read_buffer_bytes(dev, buffer, base, 20);
             (
-                le_u32(&b, 0),
-                le_u32(&b, 4),
-                le_u32(&b, 8),
-                le_u32(&b, 12) as i32,
-                le_u32(&b, 16),
+                LittleEndian(&b).u32(0),
+                LittleEndian(&b).u32(4),
+                LittleEndian(&b).u32(8),
+                LittleEndian(&b).u32(12) as i32,
+                LittleEndian(&b).u32(16),
             )
         })
         .collect();
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     let pipeline = rec.bound_pipeline;
     let groups = rec.pending_bind_groups.clone();
     for (index_count, instance_count, first_index, base_vertex, first_instance) in args {
@@ -973,7 +942,7 @@ pub fn cmd_draw_indexed_indirect(
             base_vertex,
             first_instance,
         });
-        accumulate_occlusion(rec, instance_count);
+        rec.accumulate_occlusion(instance_count);
     }
     Ok(())
 }
@@ -998,7 +967,7 @@ fn read_indirect_count(
         ));
     }
     let bytes = read_buffer_bytes(dev, count_buffer, count_offset, 4);
-    Ok(le_u32(&bytes, 0).min(max_draw_count))
+    Ok(LittleEndian(&bytes).u32(0).min(max_draw_count))
 }
 
 /// `vkCmdDrawIndirectCount` (+ KHR/AMD aliases) — read the actual draw count from `count_buffer` (clamped
@@ -1054,8 +1023,12 @@ pub fn cmd_dispatch_indirect(
 ) -> Result<()> {
     validate_indirect(dev, buffer, offset, 1, 0, 12)?;
     let b = read_buffer_bytes(dev, buffer, offset, 12);
-    let (x, y, z) = (le_u32(&b, 0), le_u32(&b, 4), le_u32(&b, 8));
-    let rec = recording_mut(dev, cb)?;
+    let (x, y, z) = (
+        LittleEndian(&b).u32(0),
+        LittleEndian(&b).u32(4),
+        LittleEndian(&b).u32(8),
+    );
+    let rec = dev.require_recording(cb)?;
     let pipeline = rec.bound_pipeline;
     let groups = rec.pending_bind_groups.clone();
     rec.enc.push(Enc::BeginComputePass);
@@ -1091,7 +1064,7 @@ pub fn cmd_copy_buffer(
         .get(&dst)
         .ok_or(GpuError::Invalid("vkCmdCopyBuffer: unknown dst VkBuffer"))?
         .ir_id;
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::CopyBufferToBuffer {
         src: src_ir,
         src_offset,
@@ -1196,7 +1169,7 @@ pub fn cmd_copy_buffer_to_image(
         buf_size,
     )
     .ok_or(GpuError::OutOfBounds)?;
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::CopyBufferToTexture {
         src: src_ir,
         src_offset: buffer_offset,
@@ -1256,7 +1229,7 @@ pub fn cmd_copy_image_to_buffer(
         buf_size,
     )
     .ok_or(GpuError::OutOfBounds)?;
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::CopyTextureToBuffer {
         src: src_ir,
         mip: 0,
@@ -1328,7 +1301,7 @@ pub fn cmd_copy_image(
     {
         return Err(GpuError::Invalid("vkCmdCopyImage: overlapping self-copy"));
     }
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::CopyTextureToTexture {
         src: src_ir,
         src_sub: TextureSubresource::base(),
@@ -1410,7 +1383,7 @@ pub fn cmd_blit_image(
     {
         return Err(GpuError::OutOfBounds);
     }
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::BlitTexture {
         src: src_ir,
         src_sub: TextureSubresource::base(),
@@ -1517,7 +1490,7 @@ pub fn cmd_resolve_image(
     {
         return Err(GpuError::OutOfBounds);
     }
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::ResolveTexture {
         src: src_ir,
         src_sub: TextureSubresource::base(),
@@ -1564,7 +1537,7 @@ pub fn cmd_clear_color_image(
             "vkCmdClearColorImage: image missing COPY_DST usage",
         ));
     }
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::ClearRect {
         texture: ir,
         x: 0,
@@ -1624,7 +1597,7 @@ pub fn cmd_clear_depth_stencil_image(
     } else {
         0
     };
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     rec.enc.push(Enc::BeginRenderPass {
         color: Vec::new(),
         depth: Some(DepthAttachment {
@@ -1652,7 +1625,7 @@ pub fn cmd_clear_attachment_rect(
     if w == 0 || h == 0 {
         return Ok(()); // an empty rect clears nothing (spec-valid no-op).
     }
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     let texture = rec.active_render_texture.ok_or(GpuError::Invalid(
         "vkCmdClearAttachments: not inside a render pass",
     ))?;
@@ -1717,7 +1690,7 @@ pub fn cmd_fill_buffer(
     for _ in 0..words {
         bytes.extend_from_slice(&le);
     }
-    recording_mut(dev, cb)?
+    dev.require_recording(cb)?
         .buffer_writes
         .push((ir, dst_offset, bytes));
     Ok(())
@@ -1754,7 +1727,7 @@ pub fn cmd_update_buffer(
         Some(end) if end <= bsize => {}
         _ => return Err(GpuError::OutOfBounds),
     }
-    recording_mut(dev, cb)?
+    dev.require_recording(cb)?
         .buffer_writes
         .push((ir, dst_offset, data.to_vec()));
     Ok(())
@@ -1773,7 +1746,7 @@ pub fn cmd_pipeline_barrier(
     transitions: &[(VkImage, i32, i32)],
 ) -> Result<()> {
     // The barrier is only valid while recording; validate the buffer state (records/emits nothing else).
-    let _ = recording_mut(dev, cb)?;
+    let _ = dev.require_recording(cb)?;
     for &(image, _old, new_layout) in transitions {
         if dev.images.contains_key(&image) {
             dev.image_layouts.insert(image, new_layout);
@@ -1797,7 +1770,7 @@ pub fn cmd_set_event(
             "vkCmdSetEvent/ResetEvent: unknown VkEvent",
         ));
     }
-    recording_mut(dev, cb)?
+    dev.require_recording(cb)?
         .deferred
         .push(DeferredOp::Event { event, set });
     Ok(())
@@ -1807,7 +1780,7 @@ pub fn cmd_set_event(
 /// error). In this synchronous single-queue model the waited dependency has already resolved by submit
 /// completion, so the wait records no op. Ported from `event.rs::vkCmdWaitEvents`.
 pub fn cmd_wait_events(dev: &mut Device, cb: VkCommandBuffer, events: &[VkEvent]) -> Result<()> {
-    let _ = recording_mut(dev, cb)?;
+    let _ = dev.require_recording(cb)?;
     if !events.iter().all(|e| dev.events.contains_key(e)) {
         return Err(GpuError::Invalid("vkCmdWaitEvents: unknown VkEvent"));
     }
@@ -1833,7 +1806,7 @@ pub fn cmd_reset_query_pool(
             ))
         }
     }
-    recording_mut(dev, cb)?
+    dev.require_recording(cb)?
         .deferred
         .push(DeferredOp::QueryReset { pool, first, count });
     Ok(())
@@ -1857,7 +1830,7 @@ pub fn cmd_begin_query(
             ))
         }
     };
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     if rec.active_query.is_none() {
         rec.active_query = Some((pool, query));
         // Arm the occlusion accumulator so each draw in [begin,end) adds its sample footprint.
@@ -1877,7 +1850,7 @@ pub fn cmd_end_query(
     pool: VkQueryPool,
     query: u32,
 ) -> Result<()> {
-    let rec = recording_mut(dev, cb)?;
+    let rec = dev.require_recording(cb)?;
     if rec.active_query == Some((pool, query)) {
         rec.active_query = None;
         let value = rec.occlusion_accum.take().unwrap_or(0);
@@ -1903,7 +1876,7 @@ pub fn cmd_write_timestamp(
             ))
         }
     }
-    recording_mut(dev, cb)?
+    dev.require_recording(cb)?
         .deferred
         .push(DeferredOp::QueryTimestamp { pool, query });
     Ok(())
@@ -1962,7 +1935,7 @@ pub fn cmd_copy_query_pool_results(
         Some(end) if end <= bsize => {}
         _ => return Err(GpuError::OutOfBounds),
     }
-    recording_mut(dev, cb)?
+    dev.require_recording(cb)?
         .deferred
         .push(DeferredOp::CopyResults {
             pool,

@@ -50,7 +50,7 @@ fn setup_compute(c: &mut GlContext) {
     record::use_program(c, prog);
 
     // An SSBO with data, bound at indexed slot 0.
-    let ssbo = record::gen_buffer(c);
+    let ssbo = c.buffers.gen();
     record::bind_buffer(c, GL_SHADER_STORAGE_BUFFER, ssbo);
     record::buffer_data(c, GL_SHADER_STORAGE_BUFFER, &[7u8; 32], 0x88E9);
     record::bind_buffer_base(c, GL_SHADER_STORAGE_BUFFER, 0, ssbo);
@@ -143,7 +143,7 @@ fn fence_sync_signals_and_client_wait_waits_the_ir_fence() {
 
     let token =
         sync::fence_sync(&mut c, &mut sink, GL_SYNC_GPU_COMMANDS_COMPLETE, 0).expect("a GLsync");
-    assert!(sync::is_sync(&c, token));
+    assert!(c.has_sync(token));
 
     // The fence was created + signalled at timeline value 1 by a submitted command buffer.
     let batch = &sink.batches[0];
@@ -184,8 +184,8 @@ fn fence_sync_signals_and_client_wait_waits_the_ir_fence() {
     );
 
     // Deleting drops it; a bad condition is rejected.
-    sync::delete_sync(&mut c, token);
-    assert!(!sync::is_sync(&c, token));
+    c.delete_sync(token);
+    assert!(!c.has_sync(token));
     assert!(sync::fence_sync(&mut c, &mut sink, 0, 0).is_none());
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
 }
@@ -232,7 +232,7 @@ fn map_write_unmap_flushes_a_write_buffer() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
 
-    let buf = record::gen_buffer(&mut c);
+    let buf = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, buf);
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 32], 0x88E4);
 
@@ -303,7 +303,7 @@ fn flush_mapped_range_flushes_a_subrange_while_still_mapped() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
 
-    let buf = record::gen_buffer(&mut c);
+    let buf = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, buf);
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 32], 0x88E4);
 
@@ -353,7 +353,7 @@ fn dispatch_compute_indirect_reads_grid_from_buffer_and_dispatches() {
     setup_compute(&mut c);
 
     // An indirect buffer whose three little-endian u32 group counts are {3,5,7} at byte offset 4.
-    let ind = record::gen_buffer(&mut c);
+    let ind = c.buffers.gen();
     record::bind_buffer(&mut c, GL_DISPATCH_INDIRECT_BUFFER, ind);
     let mut bytes = vec![0u8; 4];
     bytes.extend_from_slice(&3u32.to_le_bytes());

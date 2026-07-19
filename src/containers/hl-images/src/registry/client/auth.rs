@@ -77,7 +77,7 @@ impl Client {
         } else {
             Some(&self.creds)
         };
-        let resp = http::get_with_basic(&url, creds)?;
+        let resp = http::Request::get_with_basic(&url, creds)?;
         if resp.status != 200 {
             // A registry that refuses to mint a *push*-scoped token for an unauthenticated client is
             // denying the push -- exactly `docker push` without `docker login`. Surface the conformant

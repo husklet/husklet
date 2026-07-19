@@ -14,7 +14,9 @@ use super::damage::Rect;
 use super::output::{Output, OutputId};
 use super::seat::Seat;
 use super::surface::{Surface, SurfaceId, Visibility};
-use super::window::{SubsurfaceState, SurfaceRole, WindowKind, WindowState};
+use super::window::{
+    PopupPlacement, Positioner, SubsurfaceState, SurfaceRole, WindowKind, WindowState,
+};
 
 /// Depth guard for the parent-link walks — defends against a pathological cycle exactly like the
 /// `for _ in 0..256` bounds in `hl-compositor`.
@@ -41,11 +43,83 @@ pub struct Scene {
 }
 
 impl Scene {
+    pub fn focus(&mut self, surface: SurfaceId) -> crate::scene::service::FocusChange {
+        let previous = self.seat().keyboard_focus;
+        self.seat_mut().keyboard_focus = Some(surface);
+        crate::scene::service::FocusChange {
+            previous,
+            current: Some(surface),
+        }
+    }
+
+    pub fn activate(&mut self, surface: SurfaceId) -> crate::scene::service::FocusChange {
+        self.focus(surface)
+    }
+
+    pub fn clear_focus(&mut self) -> crate::scene::service::FocusChange {
+        let previous = self.seat().keyboard_focus;
+        self.seat_mut().keyboard_focus = None;
+        crate::scene::service::FocusChange {
+            previous,
+            current: None,
+        }
+    }
+
+    pub fn on_window_gone(&mut self, surface: SurfaceId) -> crate::scene::service::FocusChange {
+        let previous = self.seat().keyboard_focus;
+        if previous == Some(surface) {
+            self.seat_mut().keyboard_focus = None;
+        }
+        crate::scene::service::FocusChange {
+            previous,
+            current: self.seat().keyboard_focus,
+        }
+    }
+
+    pub(crate) fn subsurface_offset(&self, surface: SurfaceId) -> (i32, i32) {
+        match self.get(surface).map(|surface| &surface.role) {
+            Some(SurfaceRole::Subsurface(subsurface)) => (subsurface.x, subsurface.y),
+            _ => (0, 0),
+        }
+    }
     pub fn new() -> Scene {
         Scene {
             next_id: 1,
             ..Scene::default()
         }
+    }
+
+    /// Parent-relative native-window placement for a popup surface.
+    pub fn popup_placement(&self, surface: SurfaceId) -> Option<PopupPlacement> {
+        let geometry = self.popup_geometry(surface)?;
+        Some(PopupPlacement {
+            parent: self.popup_parent(surface)?,
+            x: geometry.x,
+            y: geometry.y,
+        })
+    }
+
+    pub fn constrain_popup(&self, positioner: &Positioner) -> Rect {
+        let (width, height) = self.output_logical_size();
+        positioner.place(width, height)
+    }
+
+    pub fn constrain_popup_for_parent(&self, parent: SurfaceId, positioner: &Positioner) -> Rect {
+        let Some(root) = self.window_root(parent) else {
+            return self.constrain_popup(positioner);
+        };
+        let Some((width, height)) = self.get(root).and_then(|surface| surface.logical_size())
+        else {
+            return self.constrain_popup(positioner);
+        };
+        let (parent_x, parent_y) = if self.popup_parent(parent).is_some() {
+            self.popup_offset_to_toplevel(parent)
+                .map(|(_, x, y, _)| (x, y))
+                .unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
+        positioner.place_in(Rect::new(-parent_x, -parent_y, width.max(1), height.max(1)))
     }
 
     // ---- outputs ----------------------------------------------------------------------------------

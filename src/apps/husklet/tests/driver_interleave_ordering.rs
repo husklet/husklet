@@ -70,7 +70,7 @@ fn gl_clear_frame(
 ) -> (u32, Vec<u8>) {
     record::clear_color(gl, clear);
     record::clear(gl);
-    let mut f = frame::build_frame_ir(gl).expect("gl clear frame builds");
+    let mut f = frame::Frame::build(gl).expect("gl clear frame builds");
     let (surface, texture) = f.present;
     f.cmds.push(Cmd::Present { surface, texture });
     sink.submit(&f.cmds)
@@ -85,8 +85,8 @@ fn gl_clear_frame(
 
 /// Lower a real VK buffer, write a known byte pattern into it via IR, and return its IR id + a fresh readback.
 fn vk_buffer_op(sink: &mut InProcessCommandSink<WgpuExecutor>, pattern: &[u8]) -> u32 {
-    let inst = vk_create::create_instance(HL_API_VERSION);
-    let mut dev = vk_create::create_device(&inst);
+    let inst = hl_vulkan::model::instance::Instance::new(HL_API_VERSION);
+    let mut dev = inst.create_device();
     let handle = vk_create::create_buffer(
         &mut dev,
         sink,

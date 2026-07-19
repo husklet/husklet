@@ -18,28 +18,32 @@ use hl_cuda::model::device::DevicePtr;
 // value sets, `CTX_API_VERSION`, `CU_MEMORYTYPE_DEVICE`) — the query/context entry points map across
 // most of it, so a glob keeps the (already exhaustive) list from being restated here.
 use hl_cuda::result::*;
-use hl_cuda::service::{allocate, launch, load_module, synchronize, transfer};
+use hl_cuda::service::{allocate, launch, load_module, transfer};
 use hl_cuda::KernelArg;
 
-use crate::state::with;
+use crate::state::ShimState;
 
 // ---- small C-ABI marshalling helpers -------------------------------------------------------------
 
 /// Borrow a `const void*` + length as a byte slice (empty if null / zero-length).
-unsafe fn bytes<'a>(p: *const c_void, n: usize) -> &'a [u8] {
-    if p.is_null() || n == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(p as *const u8, n)
-    }
-}
+struct CInput;
 
-/// Read a nul-terminated C string into an owned `Vec<u8>` (without the nul). `None` if `p` is null.
-unsafe fn cstr_bytes(p: *const c_char) -> Option<Vec<u8>> {
-    if p.is_null() {
-        return None;
+impl CInput {
+    unsafe fn bytes<'a>(pointer: *const c_void, length: usize) -> &'a [u8] {
+        if pointer.is_null() || length == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(pointer as *const u8, length)
+        }
     }
-    Some(std::ffi::CStr::from_ptr(p).to_bytes().to_vec())
+
+    /// Read a nul-terminated C string into an owned `Vec<u8>` (without the nul).
+    unsafe fn string(pointer: *const c_char) -> Option<Vec<u8>> {
+        if pointer.is_null() {
+            return None;
+        }
+        Some(std::ffi::CStr::from_ptr(pointer).to_bytes().to_vec())
+    }
 }
 
 /// Write `s` (with a trailing nul) into the caller's `dst[..len]` buffer, truncating to fit.
@@ -59,7 +63,7 @@ unsafe fn write_cstr(dst: *mut c_char, len: i32, s: &str) {
 
 #[no_mangle]
 pub extern "C" fn cuInit(_flags: u32) -> i32 {
-    with(|s| s.inited = true);
+    ShimState::with(|s| s.inited = true);
     CUDA_SUCCESS
 }
 
@@ -73,18 +77,22 @@ pub extern "C" fn cuDriverGetVersion(version: *mut i32) -> i32 {
 }
 
 /// Static, nul-terminated error strings for `cuGetErrorString`/`cuGetErrorName`.
-fn error_text(code: i32, name: bool) -> &'static [u8] {
-    match (code, name) {
-        (0, false) => b"no error\0",
-        (0, true) => b"CUDA_SUCCESS\0",
-        (1, _) => b"CUDA_ERROR_INVALID_VALUE\0",
-        (2, _) => b"CUDA_ERROR_OUT_OF_MEMORY\0",
-        (3, _) => b"CUDA_ERROR_NOT_INITIALIZED\0",
-        (400, _) => b"CUDA_ERROR_INVALID_HANDLE\0",
-        (500, _) => b"CUDA_ERROR_NOT_FOUND\0",
-        (801, _) => b"CUDA_ERROR_NOT_SUPPORTED\0",
-        (_, true) => b"CUDA_ERROR_UNKNOWN\0",
-        (_, false) => b"unknown error\0",
+struct CudaError;
+
+impl CudaError {
+    fn text(code: i32, name: bool) -> &'static [u8] {
+        match (code, name) {
+            (0, false) => b"no error\0",
+            (0, true) => b"CUDA_SUCCESS\0",
+            (1, _) => b"CUDA_ERROR_INVALID_VALUE\0",
+            (2, _) => b"CUDA_ERROR_OUT_OF_MEMORY\0",
+            (3, _) => b"CUDA_ERROR_NOT_INITIALIZED\0",
+            (400, _) => b"CUDA_ERROR_INVALID_HANDLE\0",
+            (500, _) => b"CUDA_ERROR_NOT_FOUND\0",
+            (801, _) => b"CUDA_ERROR_NOT_SUPPORTED\0",
+            (_, true) => b"CUDA_ERROR_UNKNOWN\0",
+            (_, false) => b"unknown error\0",
+        }
     }
 }
 
@@ -93,7 +101,7 @@ pub extern "C" fn cuGetErrorString(error: i32, str_: *mut *const c_char) -> i32 
     if str_.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    unsafe { *str_ = error_text(error, false).as_ptr() as *const c_char };
+    unsafe { *str_ = CudaError::text(error, false).as_ptr() as *const c_char };
     CUDA_SUCCESS
 }
 
@@ -102,7 +110,7 @@ pub extern "C" fn cuGetErrorName(error: i32, str_: *mut *const c_char) -> i32 {
     if str_.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    unsafe { *str_ = error_text(error, true).as_ptr() as *const c_char };
+    unsafe { *str_ = CudaError::text(error, true).as_ptr() as *const c_char };
     CUDA_SUCCESS
 }
 
@@ -126,7 +134,7 @@ pub extern "C" fn cuDeviceGet(device: *mut i32, ordinal: i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn cuDeviceGetName(name: *mut c_char, len: i32, _dev: i32) -> i32 {
-    with(|s| unsafe { write_cstr(name, len, &s.ctx.device.name) });
+    ShimState::with(|s| unsafe { write_cstr(name, len, &s.ctx.device.name) });
     CUDA_SUCCESS
 }
 
@@ -135,7 +143,7 @@ pub extern "C" fn cuDeviceTotalMem_v2(bytes_out: *mut usize, _dev: i32) -> i32 {
     if bytes_out.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| unsafe { *bytes_out = s.ctx.device.total_mem as usize });
+    ShimState::with(|s| unsafe { *bytes_out = s.ctx.device.total_mem as usize });
     CUDA_SUCCESS
 }
 
@@ -148,7 +156,7 @@ pub extern "C" fn cuDeviceGetAttribute(pi: *mut i32, attrib: i32, dev: i32) -> i
     // (compute capability, warp size, SM count, clock); the rest are the fixed, truthful properties of
     // the simulated Ampere-class unified-memory device. The unmodeled attribute tail reports 0, which is
     // the spec-faithful "feature absent" answer a real driver gives for an attribute it doesn't set.
-    let v = with(|s| {
+    let v = ShimState::with(|s| {
         let d = &s.ctx.device;
         match attrib {
             CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK => d.max_threads_per_block as i32,
@@ -207,29 +215,33 @@ pub extern "C" fn cuDeviceComputeCapability(major: *mut i32, minor: *mut i32, _d
     if major.is_null() || minor.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| unsafe {
+    ShimState::with(|s| unsafe {
         *major = s.ctx.device.compute_capability.0 as i32;
         *minor = s.ctx.device.compute_capability.1 as i32;
     });
     CUDA_SUCCESS
 }
 
-unsafe fn write_uuid(uuid: *mut c_void) -> i32 {
-    if uuid.is_null() {
-        return CUDA_ERROR_INVALID_VALUE;
+struct DeviceUuid;
+
+impl DeviceUuid {
+    unsafe fn write(uuid: *mut c_void) -> i32 {
+        if uuid.is_null() {
+            return CUDA_ERROR_INVALID_VALUE;
+        }
+        ShimState::with(|s| std::ptr::copy_nonoverlapping(s.ctx.device.uuid.as_ptr(), uuid as *mut u8, 16));
+        CUDA_SUCCESS
     }
-    with(|s| std::ptr::copy_nonoverlapping(s.ctx.device.uuid.as_ptr(), uuid as *mut u8, 16));
-    CUDA_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn cuDeviceGetUuid(uuid: *mut c_void, _dev: i32) -> i32 {
-    unsafe { write_uuid(uuid) }
+    unsafe { DeviceUuid::write(uuid) }
 }
 
 #[no_mangle]
 pub extern "C" fn cuDeviceGetUuid_v2(uuid: *mut c_void, _dev: i32) -> i32 {
-    unsafe { write_uuid(uuid) }
+    unsafe { DeviceUuid::write(uuid) }
 }
 
 // ==================================================================================================
@@ -241,20 +253,20 @@ pub extern "C" fn cuCtxCreate_v2(pctx: *mut *mut c_void, flags: u32, dev: i32) -
     if pctx.is_null() || dev != 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let token = with(|s| s.create_ctx_with_flags(flags));
+    let token = ShimState::with(|s| s.create_ctx_with_flags(flags));
     unsafe { *pctx = token };
     CUDA_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn cuCtxDestroy_v2(ctx: *mut c_void) -> i32 {
-    with(|s| s.destroy_ctx(ctx));
+    ShimState::with(|s| s.destroy_ctx(ctx));
     CUDA_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn cuCtxSetCurrent(ctx: *mut c_void) -> i32 {
-    with(|s| s.set_current_ctx(ctx));
+    ShimState::with(|s| s.set_current_ctx(ctx));
     CUDA_SUCCESS
 }
 
@@ -263,7 +275,7 @@ pub extern "C" fn cuCtxGetCurrent(pctx: *mut *mut c_void) -> i32 {
     if pctx.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let cur = with(|s| s.current_ctx());
+    let cur = ShimState::with(|s| s.current_ctx());
     unsafe { *pctx = cur };
     CUDA_SUCCESS
 }
@@ -279,10 +291,12 @@ pub extern "C" fn cuCtxGetDevice(device: *mut i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn cuCtxSynchronize() -> i32 {
-    with(|s| match synchronize::ctx_synchronize(&mut s.ctx, &mut s.sink) {
-        Ok(()) => CUDA_SUCCESS,
-        Err(e) => cu_result_from_gpu_error(&e),
-    })
+    ShimState::with(
+        |s| match s.ctx.synchronize(&mut s.sink) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(e) => DriverStatus::from(&e).code(),
+        },
+    )
 }
 
 // ==================================================================================================
@@ -294,13 +308,13 @@ pub extern "C" fn cuCtxPushCurrent_v2(ctx: *mut c_void) -> i32 {
     if ctx.is_null() {
         return CUDA_ERROR_INVALID_HANDLE;
     }
-    with(|s| s.push_current_ctx(ctx));
+    ShimState::with(|s| s.push_current_ctx(ctx));
     CUDA_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn cuCtxPopCurrent_v2(pctx: *mut *mut c_void) -> i32 {
-    let popped = with(|s| s.pop_current_ctx());
+    let popped = ShimState::with(|s| s.pop_current_ctx());
     if !pctx.is_null() {
         unsafe { *pctx = popped };
     }
@@ -321,14 +335,14 @@ pub extern "C" fn cuCtxGetFlags(flags: *mut u32) -> i32 {
     if flags.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let f = with(|s| s.current_ctx_flags());
+    let f = ShimState::with(|s| s.current_ctx_flags());
     unsafe { *flags = f };
     CUDA_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn cuCtxSetFlags(flags: u32) -> i32 {
-    with(|s| s.set_current_ctx_flags(flags));
+    ShimState::with(|s| s.set_current_ctx_flags(flags));
     CUDA_SUCCESS
 }
 
@@ -341,7 +355,7 @@ pub extern "C" fn cuDevicePrimaryCtxRetain(pctx: *mut *mut c_void, dev: i32) -> 
     if pctx.is_null() || dev != 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let token = with(|s| s.primary_ctx_retain());
+    let token = ShimState::with(|s| s.primary_ctx_retain());
     unsafe { *pctx = token };
     CUDA_SUCCESS
 }
@@ -351,7 +365,7 @@ pub extern "C" fn cuDevicePrimaryCtxRelease_v2(dev: i32) -> i32 {
     if dev != 0 {
         return CUDA_ERROR_INVALID_DEVICE;
     }
-    with(|s| s.primary_ctx_release());
+    ShimState::with(|s| s.primary_ctx_release());
     CUDA_SUCCESS
 }
 
@@ -360,7 +374,7 @@ pub extern "C" fn cuDevicePrimaryCtxReset_v2(dev: i32) -> i32 {
     if dev != 0 {
         return CUDA_ERROR_INVALID_DEVICE;
     }
-    with(|s| s.primary_ctx_reset());
+    ShimState::with(|s| s.primary_ctx_reset());
     CUDA_SUCCESS
 }
 
@@ -369,7 +383,7 @@ pub extern "C" fn cuDevicePrimaryCtxGetState(dev: i32, flags: *mut u32, active: 
     if dev != 0 {
         return CUDA_ERROR_INVALID_DEVICE;
     }
-    let (f, a) = with(|s| s.primary_ctx_state());
+    let (f, a) = ShimState::with(|s| s.report_primary_context());
     if !flags.is_null() {
         unsafe { *flags = f };
     }
@@ -384,7 +398,7 @@ pub extern "C" fn cuDevicePrimaryCtxSetFlags_v2(dev: i32, flags: u32) -> i32 {
     if dev != 0 {
         return CUDA_ERROR_INVALID_DEVICE;
     }
-    with(|s| s.set_primary_ctx_flags(flags));
+    ShimState::with(|s| s.set_primary_ctx_flags(flags));
     CUDA_SUCCESS
 }
 
@@ -394,7 +408,7 @@ pub extern "C" fn cuDevicePrimaryCtxSetFlags_v2(dev: i32, flags: u32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn cuMemGetInfo_v2(free_out: *mut usize, total_out: *mut usize) -> i32 {
-    let (free, total) = with(|s| s.mem_info());
+    let (free, total) = ShimState::with(|s| s.mem_info());
     if !free_out.is_null() {
         unsafe { *free_out = free };
     }
@@ -406,7 +420,7 @@ pub extern "C" fn cuMemGetInfo_v2(free_out: *mut usize, total_out: *mut usize) -
 
 #[no_mangle]
 pub extern "C" fn cuMemGetAddressRange_v2(pbase: *mut u64, psize: *mut usize, dptr: u64) -> i32 {
-    match with(|s| s.ctx.mem.containing(DevicePtr(dptr))) {
+    match ShimState::with(|s| s.ctx.mem.containing(DevicePtr(dptr))) {
         Some((base, size)) => {
             if !pbase.is_null() {
                 unsafe { *pbase = base };
@@ -431,7 +445,7 @@ unsafe fn pointer_attr(attr: i32, data: *mut c_void, ptr: u64) -> i32 {
     if data.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let (found, base, size, managed, cur_ctx) = with(|s| {
+    let (found, base, size, managed, cur_ctx) = ShimState::with(|s| {
         let m = s.ctx.mem.containing(DevicePtr(ptr));
         (
             m.is_some(),
@@ -508,37 +522,51 @@ pub extern "C" fn cuMemAlloc_v2(dptr: *mut u64, bytesize: usize) -> i32 {
     if dptr.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match allocate::mem_alloc(&mut s.ctx, &mut s.sink, bytesize as u64) {
-        Ok(p) => {
-            unsafe { *dptr = p.0 };
-            CUDA_SUCCESS
-        }
-        Err(e) => cu_result_from_gpu_error(&e),
-    })
+    ShimState::with(
+        |s| match allocate::mem_alloc(&mut s.ctx, &mut s.sink, bytesize as u64) {
+            Ok(p) => {
+                unsafe { *dptr = p.0 };
+                CUDA_SUCCESS
+            }
+            Err(e) => DriverStatus::from(&e).code(),
+        },
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn cuMemFree_v2(dptr: u64) -> i32 {
-    with(|s| match allocate::mem_free(&mut s.ctx, &mut s.sink, DevicePtr(dptr)) {
-        Ok(()) => CUDA_SUCCESS,
-        Err(_) => CUDA_ERROR_INVALID_VALUE,
-    })
+    ShimState::with(
+        |s| match allocate::mem_free(&mut s.ctx, &mut s.sink, DevicePtr(dptr)) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        },
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn cuMemcpyHtoD_v2(dst: u64, src: *const c_void, n: usize) -> i32 {
-    let host = unsafe { bytes(src, n) };
-    with(|s| match transfer::memcpy_htod(&mut s.ctx, &mut s.sink, DevicePtr(dst), host) {
-        Ok(()) => CUDA_SUCCESS,
-        Err(_) => CUDA_ERROR_INVALID_VALUE,
-    })
+    let host = unsafe { CInput::bytes(src, n) };
+    ShimState::with(
+        |s| match transfer::memcpy_htod(&mut s.ctx, &mut s.sink, DevicePtr(dst), host) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        },
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn cuMemcpyDtoD_v2(dst: u64, src: u64, n: usize) -> i32 {
-    with(|s| match transfer::memcpy_dtod(&mut s.ctx, &mut s.sink, DevicePtr(dst), DevicePtr(src), n as u64) {
-        Ok(()) => CUDA_SUCCESS,
-        Err(_) => CUDA_ERROR_INVALID_VALUE,
+    ShimState::with(|s| {
+        match transfer::memcpy_dtod(
+            &mut s.ctx,
+            &mut s.sink,
+            DevicePtr(dst),
+            DevicePtr(src),
+            n as u64,
+        ) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        }
     })
 }
 
@@ -550,13 +578,17 @@ pub extern "C" fn cuMemcpyDtoH_v2(dst: *mut c_void, src: u64, n: usize) -> i32 {
     if dst.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match transfer::read_dtoh(&s.ctx, &mut s.sink, DevicePtr(src), n) {
-        Ok(bytes) => {
-            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len()) };
-            CUDA_SUCCESS
-        }
-        Err(_) => CUDA_ERROR_INVALID_VALUE,
-    })
+    ShimState::with(
+        |s| match transfer::read_dtoh(&s.ctx, &mut s.sink, DevicePtr(src), n) {
+            Ok(bytes) => {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len())
+                };
+                CUDA_SUCCESS
+            }
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        },
+    )
 }
 
 // ==================================================================================================
@@ -570,7 +602,7 @@ pub extern "C" fn cuMemAllocHost_v2(pp: *mut *mut c_void, size: usize) -> i32 {
     if pp.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    match with(|s| allocate::host_alloc(&mut s.ctx, size)) {
+    match ShimState::with(|s| s.ctx.host_alloc(size)) {
         Some(base) => {
             unsafe { *pp = base as *mut c_void };
             CUDA_SUCCESS
@@ -592,7 +624,7 @@ pub extern "C" fn cuMemFreeHost(p: *mut c_void) -> i32 {
     if p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match allocate::host_free(&mut s.ctx, p as u64) {
+    ShimState::with(|s| match s.ctx.host_free(p as u64) {
         Ok(()) => CUDA_SUCCESS,
         Err(_) => CUDA_ERROR_INVALID_VALUE,
     })
@@ -605,10 +637,12 @@ pub extern "C" fn cuMemHostRegister_v2(p: *mut c_void, size: usize, _flags: u32)
     if p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match allocate::host_register(&mut s.ctx, p as u64, size as u64) {
-        Ok(()) => CUDA_SUCCESS,
-        Err(_) => CUDA_ERROR_INVALID_VALUE,
-    })
+    ShimState::with(
+        |s| match s.ctx.host_register(p as u64, size as u64) {
+            Ok(()) => CUDA_SUCCESS,
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        },
+    )
 }
 
 /// `cuMemHostUnregister(p)` — unlock a previously registered host range. An unregistered base is
@@ -618,7 +652,7 @@ pub extern "C" fn cuMemHostUnregister(p: *mut c_void) -> i32 {
     if p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match allocate::host_unregister(&mut s.ctx, p as u64) {
+    ShimState::with(|s| match s.ctx.host_unregister(p as u64) {
         Ok(()) => CUDA_SUCCESS,
         Err(_) => CUDA_ERROR_INVALID_VALUE,
     })
@@ -628,17 +662,23 @@ pub extern "C" fn cuMemHostUnregister(p: *mut c_void) -> i32 {
 /// (lazily creating its backing device buffer). A pointer that is not a live host allocation is
 /// `INVALID_VALUE`.
 #[no_mangle]
-pub extern "C" fn cuMemHostGetDevicePointer_v2(pdptr: *mut u64, p: *mut c_void, _flags: u32) -> i32 {
+pub extern "C" fn cuMemHostGetDevicePointer_v2(
+    pdptr: *mut u64,
+    p: *mut c_void,
+    _flags: u32,
+) -> i32 {
     if pdptr.is_null() || p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match allocate::host_get_device_pointer(&mut s.ctx, &mut s.sink, p as u64) {
-        Ok(ptr) => {
-            unsafe { *pdptr = ptr.0 };
-            CUDA_SUCCESS
-        }
-        Err(_) => CUDA_ERROR_INVALID_VALUE,
-    })
+    ShimState::with(
+        |s| match s.ctx.host_get_device_pointer(&mut s.sink, p as u64) {
+            Ok(ptr) => {
+                unsafe { *pdptr = ptr.0 };
+                CUDA_SUCCESS
+            }
+            Err(_) => CUDA_ERROR_INVALID_VALUE,
+        },
+    )
 }
 
 /// `cuMemAllocManaged(dptr, bytesize, flags)` — a managed (unified) allocation: a device buffer that is
@@ -648,13 +688,15 @@ pub extern "C" fn cuMemAllocManaged(dptr: *mut u64, bytesize: usize, _flags: u32
     if dptr.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match allocate::mem_alloc_managed(&mut s.ctx, &mut s.sink, bytesize as u64) {
-        Ok(p) => {
-            unsafe { *dptr = p.0 };
-            CUDA_SUCCESS
-        }
-        Err(e) => cu_result_from_gpu_error(&e),
-    })
+    ShimState::with(
+        |s| match allocate::mem_alloc_managed(&mut s.ctx, &mut s.sink, bytesize as u64) {
+            Ok(p) => {
+                unsafe { *dptr = p.0 };
+                CUDA_SUCCESS
+            }
+            Err(e) => DriverStatus::from(&e).code(),
+        },
+    )
 }
 
 /// `cuMemAllocPitch_v2(dptr, pPitch, widthBytes, height, elementSizeBytes)` — a 2D allocation with a
@@ -670,7 +712,7 @@ pub extern "C" fn cuMemAllocPitch_v2(
     if dptr.is_null() || p_pitch.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| {
+    ShimState::with(|s| {
         match allocate::mem_alloc_pitch(
             &mut s.ctx,
             &mut s.sink,
@@ -698,12 +740,12 @@ fn memset_sync(dst: u64, value: u64, width: usize, n: usize) -> i32 {
     if n == 0 {
         return CUDA_SUCCESS;
     }
-    with(
-        |s| match transfer::memset_elements(&mut s.ctx, &mut s.sink, DevicePtr(dst), value, width, n) {
+    ShimState::with(|s| {
+        match transfer::memset_elements(&mut s.ctx, &mut s.sink, DevicePtr(dst), value, width, n) {
             Ok(()) => CUDA_SUCCESS,
             Err(_) => CUDA_ERROR_INVALID_VALUE,
-        },
-    )
+        }
+    })
 }
 
 /// Shared stream-ordered memset body: validate the stream, then lower the same bounded fill as
@@ -712,7 +754,7 @@ fn memset_stream(dst: u64, value: u64, width: usize, n: usize, hstream: *mut c_v
     if n == 0 {
         return CUDA_SUCCESS;
     }
-    with(|s| {
+    ShimState::with(|s| {
         let Some(st) = s.stream(hstream) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -764,9 +806,14 @@ pub extern "C" fn cuMemsetD32Async(dst: u64, ui: u32, n: usize, s: *mut c_void) 
 /// `cuMemcpyHtoDAsync_v2(dst, src, n, stream)` — stream-ordered HtoD; records the same `WriteBuffer` as
 /// the synchronous `cuMemcpyHtoD` once the stream is validated.
 #[no_mangle]
-pub extern "C" fn cuMemcpyHtoDAsync_v2(dst: u64, src: *const c_void, n: usize, s: *mut c_void) -> i32 {
-    let host = unsafe { bytes(src, n) };
-    with(|st| {
+pub extern "C" fn cuMemcpyHtoDAsync_v2(
+    dst: u64,
+    src: *const c_void,
+    n: usize,
+    s: *mut c_void,
+) -> i32 {
+    let host = unsafe { CInput::bytes(src, n) };
+    ShimState::with(|st| {
         let Some(stream) = st.stream(s) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -780,7 +827,7 @@ pub extern "C" fn cuMemcpyHtoDAsync_v2(dst: u64, src: *const c_void, n: usize, s
 /// `cuMemcpyDtoDAsync_v2(dst, src, n, stream)` — stream-ordered on-device copy.
 #[no_mangle]
 pub extern "C" fn cuMemcpyDtoDAsync_v2(dst: u64, src: u64, n: usize, s: *mut c_void) -> i32 {
-    with(|st| {
+    ShimState::with(|st| {
         let Some(stream) = st.stream(s) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -801,17 +848,24 @@ pub extern "C" fn cuMemcpyDtoDAsync_v2(dst: u64, src: u64, n: usize, s: *mut c_v
 /// `cuMemcpyDtoHAsync_v2(dst, src, n, stream)` — stream-ordered device→host readback; reads the bytes back
 /// through the sink like the synchronous `cuMemcpyDtoH`.
 #[no_mangle]
-pub extern "C" fn cuMemcpyDtoHAsync_v2(dst: *mut c_void, src: u64, n: usize, s: *mut c_void) -> i32 {
+pub extern "C" fn cuMemcpyDtoHAsync_v2(
+    dst: *mut c_void,
+    src: u64,
+    n: usize,
+    s: *mut c_void,
+) -> i32 {
     if dst.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|st| {
+    ShimState::with(|st| {
         let Some(stream) = st.stream(s) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
         match transfer::read_dtoh_async(&st.ctx, &mut st.sink, stream, DevicePtr(src), n) {
             Ok(bytes) => {
-                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len()) };
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len())
+                };
                 CUDA_SUCCESS
             }
             Err(_) => CUDA_ERROR_INVALID_VALUE,
@@ -829,31 +883,35 @@ pub extern "C" fn cuModuleLoadData(module: *mut *mut c_void, image: *const c_voi
         return CUDA_ERROR_INVALID_VALUE;
     }
     // The driver API hands `image` without a length; a PTX image is nul-terminated text, so read to nul.
-    let Some(img) = (unsafe { cstr_bytes(image as *const c_char) }) else {
+    let Some(img) = (unsafe { CInput::string(image as *const c_char) }) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
-    with(|s| match load_module::module_load_data(&mut s.ctx, &img) {
+    ShimState::with(|s| match s.ctx.load_module(&img) {
         Ok(id) => {
             let h = s.intern_module(id);
             unsafe { *module = h };
             CUDA_SUCCESS
         }
-        Err(e) => cu_result_from_gpu_error(&e),
+        Err(e) => DriverStatus::from(&e).code(),
     })
 }
 
 #[no_mangle]
-pub extern "C" fn cuModuleGetFunction(hfunc: *mut *mut c_void, hmod: *mut c_void, name: *const c_char) -> i32 {
+pub extern "C" fn cuModuleGetFunction(
+    hfunc: *mut *mut c_void,
+    hmod: *mut c_void,
+    name: *const c_char,
+) -> i32 {
     if hfunc.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let Some(nm) = (unsafe { cstr_bytes(name) }) else {
+    let Some(nm) = (unsafe { CInput::string(name) }) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
     let Ok(nm) = std::str::from_utf8(&nm) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
-    with(|s| {
+    ShimState::with(|s| {
         let Some(module_id) = s.module_id(hmod) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -863,20 +921,20 @@ pub extern "C" fn cuModuleGetFunction(hfunc: *mut *mut c_void, hmod: *mut c_void
                 unsafe { *hfunc = h };
                 CUDA_SUCCESS
             }
-            Err(e) => cu_result_from_gpu_error(&e),
+            Err(e) => DriverStatus::from(&e).code(),
         }
     })
 }
 
 /// `cuModuleLoad(module, fname)` — load a module from a file on the guest filesystem. Reads the file and
-/// loads it through the same [`load_module::module_load_data`] path as `cuModuleLoadData` (so a fatbin
+/// loads it through the same [`CudaContext::load_module`] path as `cuModuleLoadData` (so a fatbin
 /// container or raw PTX text both work). A missing file is `CUDA_ERROR_FILE_NOT_FOUND`.
 #[no_mangle]
 pub extern "C" fn cuModuleLoad(module: *mut *mut c_void, fname: *const c_char) -> i32 {
     if module.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let Some(path) = (unsafe { cstr_bytes(fname) }) else {
+    let Some(path) = (unsafe { CInput::string(fname) }) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
     let Ok(path) = std::str::from_utf8(&path) else {
@@ -885,14 +943,16 @@ pub extern "C" fn cuModuleLoad(module: *mut *mut c_void, fname: *const c_char) -
     let Ok(bytes) = std::fs::read(path) else {
         return CUDA_ERROR_FILE_NOT_FOUND;
     };
-    with(|s| match load_module::module_load_data(&mut s.ctx, &bytes) {
-        Ok(id) => {
-            let h = s.intern_module(id);
-            unsafe { *module = h };
-            CUDA_SUCCESS
-        }
-        Err(e) => cu_result_from_gpu_error(&e),
-    })
+    ShimState::with(
+        |s| match s.ctx.load_module(&bytes) {
+            Ok(id) => {
+                let h = s.intern_module(id);
+                unsafe { *module = h };
+                CUDA_SUCCESS
+            }
+            Err(e) => DriverStatus::from(&e).code(),
+        },
+    )
 }
 
 /// `cuModuleLoadDataEx(module, image, n, options, optionValues)` — the JIT-option form. The modeled
@@ -910,7 +970,7 @@ pub extern "C" fn cuModuleLoadDataEx(
 }
 
 /// `cuModuleLoadFatBinary(module, image)` — load from an nvcc fatbin container. The shared
-/// [`load_module::module_load_data`] path already walks a fatbin to recover its embedded PTX, so this is
+/// [`CudaContext::load_module`] already walks a fatbin to recover its embedded PTX, so this is
 /// `cuModuleLoadData` on the same image.
 #[no_mangle]
 pub extern "C" fn cuModuleLoadFatBinary(module: *mut *mut c_void, image: *const c_void) -> i32 {
@@ -922,7 +982,13 @@ pub extern "C" fn cuModuleLoadFatBinary(module: *mut *mut c_void, image: *const 
 /// is `CUDA_ERROR_INVALID_HANDLE`.
 #[no_mangle]
 pub extern "C" fn cuModuleUnload(m: *mut c_void) -> i32 {
-    with(|s| if s.module_id(m).is_some() { CUDA_SUCCESS } else { CUDA_ERROR_INVALID_HANDLE })
+    ShimState::with(|s| {
+        if s.module_id(m).is_some() {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_HANDLE
+        }
+    })
 }
 
 /// `cuModuleGetGlobal_v2(dptr, bytes, m, name)` — resolve a `__device__`/`__constant__` global symbol to
@@ -936,13 +1002,13 @@ pub extern "C" fn cuModuleGetGlobal_v2(
     m: *mut c_void,
     name: *const c_char,
 ) -> i32 {
-    let Some(nm) = (unsafe { cstr_bytes(name) }) else {
+    let Some(nm) = (unsafe { CInput::string(name) }) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
     let Ok(nm) = std::str::from_utf8(&nm) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
-    with(|s| {
+    ShimState::with(|s| {
         let Some(module_id) = s.module_id(m) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -957,7 +1023,7 @@ pub extern "C" fn cuModuleGetGlobal_v2(
                 CUDA_SUCCESS
             }
             Ok(None) => CUDA_ERROR_NOT_FOUND,
-            Err(e) => cu_result_from_gpu_error(&e),
+            Err(e) => DriverStatus::from(&e).code(),
         }
     })
 }
@@ -976,16 +1042,36 @@ pub extern "C" fn cuModuleGetLoadingMode(mode: *mut i32) -> i32 {
 /// honestly reports the symbol absent (`CUDA_ERROR_NOT_FOUND`) rather than handing back a null texref as a
 /// false success. A bogus module handle is `CUDA_ERROR_INVALID_HANDLE`.
 #[no_mangle]
-pub extern "C" fn cuModuleGetTexRef(t: *mut *mut c_void, m: *mut c_void, name: *const c_char) -> i32 {
+pub extern "C" fn cuModuleGetTexRef(
+    t: *mut *mut c_void,
+    m: *mut c_void,
+    name: *const c_char,
+) -> i32 {
     let _ = (t, name);
-    with(|s| if s.module_id(m).is_some() { CUDA_ERROR_NOT_FOUND } else { CUDA_ERROR_INVALID_HANDLE })
+    ShimState::with(|s| {
+        if s.module_id(m).is_some() {
+            CUDA_ERROR_NOT_FOUND
+        } else {
+            CUDA_ERROR_INVALID_HANDLE
+        }
+    })
 }
 
 /// `cuModuleGetSurfRef(s, m, name)` — as `cuModuleGetTexRef`, for surface references (also unmodeled).
 #[no_mangle]
-pub extern "C" fn cuModuleGetSurfRef(sref: *mut *mut c_void, m: *mut c_void, name: *const c_char) -> i32 {
+pub extern "C" fn cuModuleGetSurfRef(
+    sref: *mut *mut c_void,
+    m: *mut c_void,
+    name: *const c_char,
+) -> i32 {
     let _ = (sref, name);
-    with(|s| if s.module_id(m).is_some() { CUDA_ERROR_NOT_FOUND } else { CUDA_ERROR_INVALID_HANDLE })
+    ShimState::with(|s| {
+        if s.module_id(m).is_some() {
+            CUDA_ERROR_NOT_FOUND
+        } else {
+            CUDA_ERROR_INVALID_HANDLE
+        }
+    })
 }
 
 // ==================================================================================================
@@ -1055,7 +1141,13 @@ pub extern "C" fn cuLaunchKernel(
     kernel_params: *mut *mut c_void,
     _extra: *mut *mut c_void,
 ) -> i32 {
-    launch_kernel_impl(f, (gx, gy, gz), (bx, by, bz), kernel_params, "cuLaunchKernel")
+    launch_kernel_impl(
+        f,
+        (gx, gy, gz),
+        (bx, by, bz),
+        kernel_params,
+        "cuLaunchKernel",
+    )
 }
 
 /// Shared launch lowering for `cuLaunchKernel` / `cuLaunchKernelEx`: recover the kernel's parameter
@@ -1073,7 +1165,7 @@ fn launch_kernel_impl(
     kernel_params: *mut *mut c_void,
     who: &'static str,
 ) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         let Some(func) = s.function(f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
@@ -1086,8 +1178,8 @@ fn launch_kernel_impl(
         let prog = match ptx::compile(&src, &entry, block_arr) {
             Ok(p) => p,
             Err(e) => {
-                crate::stub::unsupported(who, &format!("entry `{entry}`: {e:?}"));
-                return cu_result_from_gpu_error(&e);
+                crate::stub::Call::unsupported(who, &format!("entry `{entry}`: {e:?}"));
+                return DriverStatus::from(&e).code();
             }
         };
         if kernel_params.is_null() && !prog.params.is_empty() {
@@ -1112,7 +1204,7 @@ fn launch_kernel_impl(
         }
         match launch::launch(&mut s.ctx, &mut s.sink, func, grid, block, &args) {
             Ok(_) => CUDA_SUCCESS,
-            Err(e) => cu_result_from_gpu_error(&e),
+            Err(e) => DriverStatus::from(&e).code(),
         }
     })
 }
@@ -1123,16 +1215,20 @@ fn launch_kernel_impl(
 ///
 /// # Safety
 /// `cfg`, when non-null, must point at a `CUlaunchConfig` whose first seven `u32` fields are initialized.
-unsafe fn parse_launch_config(cfg: *const c_void) -> Option<((u32, u32, u32), (u32, u32, u32), u32)> {
-    if cfg.is_null() {
-        return None;
+struct LaunchConfig;
+
+impl LaunchConfig {
+    unsafe fn parse(cfg: *const c_void) -> Option<((u32, u32, u32), (u32, u32, u32), u32)> {
+        if cfg.is_null() {
+            return None;
+        }
+        let d = cfg as *const u32;
+        Some((
+            (*d.add(0), *d.add(1), *d.add(2)),
+            (*d.add(3), *d.add(4), *d.add(5)),
+            *d.add(6),
+        ))
     }
-    let d = cfg as *const u32;
-    Some((
-        (*d.add(0), *d.add(1), *d.add(2)),
-        (*d.add(3), *d.add(4), *d.add(5)),
-        *d.add(6),
-    ))
 }
 
 /// `cuLaunchKernelEx(config, f, kernelParams, extra)` — the config-struct launch form. Parses the
@@ -1144,7 +1240,7 @@ pub extern "C" fn cuLaunchKernelEx(
     kernel_params: *mut *mut c_void,
     _extra: *mut *mut c_void,
 ) -> i32 {
-    let Some((grid, block, _smem)) = (unsafe { parse_launch_config(cfg) }) else {
+    let Some((grid, block, _smem)) = (unsafe { LaunchConfig::parse(cfg) }) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
     launch_kernel_impl(f, grid, block, kernel_params, "cuLaunchKernelEx")
@@ -1164,14 +1260,18 @@ const MAX_BLOCKS_PER_SM: i32 = 32;
 /// Compile the function's PTX to recover its real per-thread resource use `(num_regs, static_shared)`.
 /// `None` if the handle is bad; falls back to `Some((0, 0))` if the kernel is outside the modeled subset
 /// (so an attribute/occupancy query still answers rather than fabricating a value it cannot derive).
-fn func_resources(s: &crate::state::State, f: *mut c_void) -> Option<(u32, u32)> {
-    let func = s.function(f)?;
-    let Some((src, entry)) = s.ctx.entry_source(func) else {
-        return Some((0, 0));
-    };
-    match ptx::compile(&src, &entry, [1, 1, 1]) {
-        Ok(p) => Some((p.reg_count as u32, p.shared_bytes)),
-        Err(_) => Some((0, 0)),
+struct FunctionResources;
+
+impl FunctionResources {
+    fn get(s: &crate::state::State, f: *mut c_void) -> Option<(u32, u32)> {
+        let func = s.function(f)?;
+        let Some((src, entry)) = s.ctx.entry_source(func) else {
+            return Some((0, 0));
+        };
+        match ptx::compile(&src, &entry, [1, 1, 1]) {
+            Ok(p) => Some((p.reg_count as u32, p.shared_bytes)),
+            Err(_) => Some((0, 0)),
+        }
     }
 }
 
@@ -1198,9 +1298,9 @@ pub extern "C" fn cuFuncGetAttribute(pi: *mut i32, attrib: i32, f: *mut c_void) 
     if pi.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| {
+    ShimState::with(|s| {
         // Validate the handle + recover the modeled function's resource use.
-        let Some((num_regs, static_shared)) = func_resources(s, f) else {
+        let Some((num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
         let dyn_shared = s.func_dyn_shared(f).unwrap_or(0);
@@ -1228,7 +1328,7 @@ pub extern "C" fn cuFuncGetAttribute(pi: *mut i32, attrib: i32, f: *mut c_void) 
 /// any other attribute is accepted as a no-op once the handle validates.
 #[no_mangle]
 pub extern "C" fn cuFuncSetAttribute(f: *mut c_void, attrib: i32, value: i32) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         let ok = if attrib == CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES {
             s.set_func_dyn_shared(f, value)
         } else {
@@ -1246,7 +1346,7 @@ pub extern "C" fn cuFuncSetAttribute(f: *mut c_void, attrib: i32, value: i32) ->
 /// executor does not need to act on, but tracks faithfully). A bad handle is `INVALID_HANDLE`.
 #[no_mangle]
 pub extern "C" fn cuFuncSetCacheConfig(f: *mut c_void, config: i32) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         if s.set_func_cache_config(f, config) {
             CUDA_SUCCESS
         } else {
@@ -1265,8 +1365,8 @@ pub extern "C" fn cuOccupancyMaxActiveBlocksPerMultiprocessor(
     if num_blocks.is_null() || block_size <= 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| {
-        let Some((num_regs, static_shared)) = func_resources(s, f) else {
+    ShimState::with(|s| {
+        let Some((num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
         let shared = static_shared.saturating_add(dyn_smem.min(i32::MAX as usize) as u32);
@@ -1296,8 +1396,8 @@ pub extern "C" fn cuOccupancyMaxPotentialBlockSize(
     dyn_smem: usize,
     block_size_limit: i32,
 ) -> i32 {
-    with(|s| {
-        let Some((num_regs, static_shared)) = func_resources(s, f) else {
+    ShimState::with(|s| {
+        let Some((num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
         let max_threads = s.ctx.device.max_threads_per_block as i32;
@@ -1345,7 +1445,14 @@ pub extern "C" fn cuOccupancyMaxPotentialBlockSizeWithFlags(
     block_size_limit: i32,
     _flags: u32,
 ) -> i32 {
-    cuOccupancyMaxPotentialBlockSize(min_grid_size, block_size, f, b2d, dyn_smem, block_size_limit)
+    cuOccupancyMaxPotentialBlockSize(
+        min_grid_size,
+        block_size,
+        f,
+        b2d,
+        dyn_smem,
+        block_size_limit,
+    )
 }
 
 // ==================================================================================================
@@ -1357,7 +1464,7 @@ pub extern "C" fn cuStreamCreate(phstream: *mut *mut c_void, _flags: u32) -> i32
     if phstream.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let h = with(|s| {
+    let h = ShimState::with(|s| {
         let stream = s.ctx.streams.create();
         s.intern_stream(stream, _flags, 0)
     });
@@ -1367,7 +1474,7 @@ pub extern "C" fn cuStreamCreate(phstream: *mut *mut c_void, _flags: u32) -> i32
 
 #[no_mangle]
 pub extern "C" fn cuStreamDestroy_v2(hstream: *mut c_void) -> i32 {
-    with(|s| match s.stream(hstream) {
+    ShimState::with(|s| match s.stream(hstream) {
         Some(st) => {
             s.ctx.streams.destroy(st);
             CUDA_SUCCESS
@@ -1378,13 +1485,13 @@ pub extern "C" fn cuStreamDestroy_v2(hstream: *mut c_void) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn cuStreamSynchronize(hstream: *mut c_void) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         let Some(st) = s.stream(hstream) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
-        match synchronize::stream_synchronize(&mut s.ctx, &mut s.sink, st) {
+        match s.ctx.synchronize_stream(&mut s.sink, st) {
             Ok(()) => CUDA_SUCCESS,
-            Err(e) => cu_result_from_gpu_error(&e),
+            Err(e) => DriverStatus::from(&e).code(),
         }
     })
 }
@@ -1394,14 +1501,14 @@ pub extern "C" fn cuEventCreate(phevent: *mut *mut c_void, _flags: u32) -> i32 {
     if phevent.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let h = with(|s| s.create_event());
+    let h = ShimState::with(|s| s.create_event());
     unsafe { *phevent = h };
     CUDA_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn cuEventRecord(hevent: *mut c_void, _hstream: *mut c_void) -> i32 {
-    if with(|s| s.record_event(hevent)) {
+    if ShimState::with(|s| s.record_event(hevent)) {
         CUDA_SUCCESS
     } else {
         CUDA_ERROR_INVALID_HANDLE
@@ -1410,25 +1517,35 @@ pub extern "C" fn cuEventRecord(hevent: *mut c_void, _hstream: *mut c_void) -> i
 
 #[no_mangle]
 pub extern "C" fn cuEventSynchronize(hevent: *mut c_void) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         if !s.event_is_valid(hevent) {
             return CUDA_ERROR_INVALID_HANDLE;
         }
         // A recorded event completes when the context's prior work does; barrier the context.
-        match synchronize::ctx_synchronize(&mut s.ctx, &mut s.sink) {
+        match s.ctx.synchronize(&mut s.sink) {
             Ok(()) => CUDA_SUCCESS,
-            Err(e) => cu_result_from_gpu_error(&e),
+            Err(e) => DriverStatus::from(&e).code(),
         }
     })
 }
 
 #[no_mangle]
 pub extern "C" fn cuEventDestroy_v2(hevent: *mut c_void) -> i32 {
-    with(|s| if s.event_is_valid(hevent) { CUDA_SUCCESS } else { CUDA_ERROR_INVALID_HANDLE })
+    ShimState::with(|s| {
+        if s.event_is_valid(hevent) {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_HANDLE
+        }
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn cuEventRecordWithFlags(hevent: *mut c_void, hstream: *mut c_void, _flags: u32) -> i32 {
+pub extern "C" fn cuEventRecordWithFlags(
+    hevent: *mut c_void,
+    hstream: *mut c_void,
+    _flags: u32,
+) -> i32 {
     cuEventRecord(hevent, hstream)
 }
 
@@ -1437,7 +1554,7 @@ pub extern "C" fn cuEventRecordWithFlags(hevent: *mut c_void, hstream: *mut c_vo
 /// `CUDA_ERROR_INVALID_HANDLE`.
 #[no_mangle]
 pub extern "C" fn cuEventQuery(hevent: *mut c_void) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         if !s.event_is_valid(hevent) {
             CUDA_ERROR_INVALID_HANDLE
         } else if s.event_recorded(hevent) {
@@ -1453,7 +1570,7 @@ pub extern "C" fn cuEventElapsedTime(ms: *mut f32, start: *mut c_void, end: *mut
     if ms.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| {
+    ShimState::with(|s| {
         if !s.event_is_valid(start) || !s.event_is_valid(end) {
             return CUDA_ERROR_INVALID_HANDLE;
         }
@@ -1471,14 +1588,20 @@ pub extern "C" fn cuEventElapsedTime(ms: *mut f32, start: *mut c_void, end: *mut
 /// stream is always ready. An unknown handle is `CUDA_ERROR_INVALID_HANDLE`.
 #[no_mangle]
 pub extern "C" fn cuStreamQuery(hstream: *mut c_void) -> i32 {
-    with(|s| if s.stream(hstream).is_some() { CUDA_SUCCESS } else { CUDA_ERROR_INVALID_HANDLE })
+    ShimState::with(|s| {
+        if s.stream(hstream).is_some() {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_HANDLE
+        }
+    })
 }
 
 /// `cuStreamWaitEvent` — make `hstream` wait on `hevent`. With a synchronous executor the awaited work
 /// has already completed, so this validates both handles and returns success.
 #[no_mangle]
 pub extern "C" fn cuStreamWaitEvent(hstream: *mut c_void, hevent: *mut c_void, _flags: u32) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         if s.stream(hstream).is_none() || !s.event_is_valid(hevent) {
             CUDA_ERROR_INVALID_HANDLE
         } else {
@@ -1497,7 +1620,7 @@ pub extern "C" fn cuStreamGetFlags(hstream: *mut c_void, flags: *mut u32) -> i32
     if flags.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match s.stream_meta(hstream) {
+    ShimState::with(|s| match s.stream_meta(hstream) {
         Some((f, _)) => {
             unsafe { *flags = f };
             CUDA_SUCCESS
@@ -1513,7 +1636,7 @@ pub extern "C" fn cuStreamGetPriority(hstream: *mut c_void, priority: *mut i32) 
     if priority.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match s.stream_meta(hstream) {
+    ShimState::with(|s| match s.stream_meta(hstream) {
         Some((_, p)) => {
             unsafe { *priority = p };
             CUDA_SUCCESS
@@ -1529,7 +1652,7 @@ pub extern "C" fn cuStreamGetCtx(hstream: *mut c_void, pctx: *mut *mut c_void) -
     if pctx.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| {
+    ShimState::with(|s| {
         if s.stream(hstream).is_none() {
             return CUDA_ERROR_INVALID_HANDLE;
         }
@@ -1546,7 +1669,7 @@ pub extern "C" fn cuStreamGetId(hstream: *mut c_void, id: *mut u64) -> i32 {
     if id.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| {
+    ShimState::with(|s| {
         if s.stream(hstream).is_none() {
             return CUDA_ERROR_INVALID_HANDLE;
         }
@@ -1568,7 +1691,7 @@ pub extern "C" fn cuCtxGetLimit(pvalue: *mut usize, limit: i32) -> i32 {
     if limit < 0 || limit >= CU_LIMIT_MAX {
         return CUDA_ERROR_UNSUPPORTED_LIMIT;
     }
-    let v = with(|s| s.ctx_limit(limit as usize));
+    let v = ShimState::with(|s| s.ctx_limit(limit as usize));
     unsafe { *pvalue = v };
     CUDA_SUCCESS
 }
@@ -1580,7 +1703,7 @@ pub extern "C" fn cuCtxSetLimit(limit: i32, value: usize) -> i32 {
     if limit < 0 || limit >= CU_LIMIT_MAX {
         return CUDA_ERROR_UNSUPPORTED_LIMIT;
     }
-    with(|s| s.set_ctx_limit(limit as usize, value));
+    ShimState::with(|s| s.set_ctx_limit(limit as usize, value));
     CUDA_SUCCESS
 }
 
@@ -1590,7 +1713,7 @@ pub extern "C" fn cuCtxGetCacheConfig(pconfig: *mut i32) -> i32 {
     if pconfig.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let v = with(|s| s.ctx_cache_config());
+    let v = ShimState::with(|s| s.ctx_cache_config());
     unsafe { *pconfig = v };
     CUDA_SUCCESS
 }
@@ -1598,7 +1721,7 @@ pub extern "C" fn cuCtxGetCacheConfig(pconfig: *mut i32) -> i32 {
 /// `cuCtxSetCacheConfig` — record the context's preferred cache split (round-trips through the getter).
 #[no_mangle]
 pub extern "C" fn cuCtxSetCacheConfig(config: i32) -> i32 {
-    with(|s| s.set_ctx_cache_config(config));
+    ShimState::with(|s| s.set_ctx_cache_config(config));
     CUDA_SUCCESS
 }
 
@@ -1649,7 +1772,7 @@ pub extern "C" fn cuDeviceGetPCIBusId(s: *mut c_char, len: i32, dev: i32) -> i32
     if s.is_null() || len <= 0 || dev != 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|st| unsafe { write_cstr(s, len, &st.ctx.device.pci_bus_id) });
+    ShimState::with(|st| unsafe { write_cstr(s, len, &st.ctx.device.pci_bus_id) });
     CUDA_SUCCESS
 }
 
@@ -1661,7 +1784,7 @@ pub extern "C" fn cuDeviceGetLuid(luid: *mut c_char, mask: *mut u32, dev: i32) -
     if dev != 0 {
         return CUDA_ERROR_INVALID_DEVICE;
     }
-    crate::stub::unsupported("cuDeviceGetLuid", "LUID is Windows/TCC-only; not modeled");
+    crate::stub::Call::unsupported("cuDeviceGetLuid", "LUID is Windows/TCC-only; not modeled");
     CUDA_ERROR_NOT_SUPPORTED
 }
 
@@ -1688,7 +1811,7 @@ pub extern "C" fn cuDeviceGetProperties(prop: *mut c_void, dev: i32) -> i32 {
     if prop.is_null() || dev != 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let p = with(|s| {
+    let p = ShimState::with(|s| {
         let d = &s.ctx.device;
         CuDevprop {
             max_threads_per_block: d.max_threads_per_block as i32,
@@ -1734,7 +1857,7 @@ pub extern "C" fn cuCtxGetId(ctx: *mut c_void, id: *mut u64) -> i32 {
         return CUDA_ERROR_INVALID_VALUE;
     }
     let token = if ctx.is_null() {
-        with(|s| s.current_ctx_token())
+        ShimState::with(|s| s.current_ctx_token())
     } else {
         ctx as usize
     };
@@ -1748,7 +1871,7 @@ pub extern "C" fn cuCtxGetSharedMemConfig(c: *mut i32) -> i32 {
     if c.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let v = with(|s| s.ctx_shared_config());
+    let v = ShimState::with(|s| s.ctx_shared_config());
     unsafe { *c = v };
     CUDA_SUCCESS
 }
@@ -1757,7 +1880,7 @@ pub extern "C" fn cuCtxGetSharedMemConfig(c: *mut i32) -> i32 {
 /// the synchronous executor honors as a no-op but reports faithfully via the getter).
 #[no_mangle]
 pub extern "C" fn cuCtxSetSharedMemConfig(c: i32) -> i32 {
-    with(|s| s.set_ctx_shared_config(c));
+    ShimState::with(|s| s.set_ctx_shared_config(c));
     CUDA_SUCCESS
 }
 
@@ -1794,7 +1917,7 @@ pub extern "C" fn cuFuncGetModule(m: *mut *mut c_void, f: *mut c_void) -> i32 {
     if m.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match s.function(f) {
+    ShimState::with(|s| match s.function(f) {
         Some(func) => {
             // The module handle is `module id` interned as `index + 1` (see `intern_module`); the resolved
             // `Function.module` IS that model id, so the guest handle is the id itself.
@@ -1812,7 +1935,7 @@ pub extern "C" fn cuFuncGetName(name: *mut *const c_char, f: *mut c_void) -> i32
     if name.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| match s.func_name_ptr(f) {
+    ShimState::with(|s| match s.func_name_ptr(f) {
         Some(p) => {
             unsafe { *name = p };
             CUDA_SUCCESS
@@ -1826,7 +1949,13 @@ pub extern "C" fn cuFuncGetName(name: *mut *const c_char, f: *mut c_void) -> i32
 #[no_mangle]
 pub extern "C" fn cuFuncSetSharedMemConfig(f: *mut c_void, config: i32) -> i32 {
     let _ = config;
-    with(|s| if s.function(f).is_some() { CUDA_SUCCESS } else { CUDA_ERROR_INVALID_HANDLE })
+    ShimState::with(|s| {
+        if s.function(f).is_some() {
+            CUDA_SUCCESS
+        } else {
+            CUDA_ERROR_INVALID_HANDLE
+        }
+    })
 }
 
 // ==================================================================================================
@@ -1840,37 +1969,41 @@ extern "C" {
 /// Map a base (unversioned) `cu*` name to the newest versioned symbol the app should bind. A CUDA app
 /// that calls `cuGetProcAddress("cuMemAlloc", ...)` expects the `_v2` entry point back — the same alias
 /// table the real driver's dispatch applies.
-fn newest_symbol(name: &str) -> &str {
-    match name {
-        "cuDeviceTotalMem" => "cuDeviceTotalMem_v2",
-        "cuCtxCreate" => "cuCtxCreate_v2",
-        "cuCtxDestroy" => "cuCtxDestroy_v2",
-        "cuCtxPushCurrent" => "cuCtxPushCurrent_v2",
-        "cuCtxPopCurrent" => "cuCtxPopCurrent_v2",
-        "cuDevicePrimaryCtxRelease" => "cuDevicePrimaryCtxRelease_v2",
-        "cuDevicePrimaryCtxReset" => "cuDevicePrimaryCtxReset_v2",
-        "cuDevicePrimaryCtxSetFlags" => "cuDevicePrimaryCtxSetFlags_v2",
-        "cuModuleGetGlobal" => "cuModuleGetGlobal_v2",
-        "cuMemGetInfo" => "cuMemGetInfo_v2",
-        "cuMemAlloc" => "cuMemAlloc_v2",
-        "cuMemAllocPitch" => "cuMemAllocPitch_v2",
-        "cuMemFree" => "cuMemFree_v2",
-        "cuMemGetAddressRange" => "cuMemGetAddressRange_v2",
-        "cuMemAllocHost" => "cuMemAllocHost_v2",
-        "cuMemHostGetDevicePointer" => "cuMemHostGetDevicePointer_v2",
-        "cuMemHostRegister" => "cuMemHostRegister_v2",
-        "cuMemcpyHtoD" => "cuMemcpyHtoD_v2",
-        "cuMemcpyDtoH" => "cuMemcpyDtoH_v2",
-        "cuMemcpyDtoD" => "cuMemcpyDtoD_v2",
-        "cuMemcpyHtoDAsync" => "cuMemcpyHtoDAsync_v2",
-        "cuMemcpyDtoHAsync" => "cuMemcpyDtoHAsync_v2",
-        "cuMemcpyDtoDAsync" => "cuMemcpyDtoDAsync_v2",
-        "cuMemsetD8" => "cuMemsetD8_v2",
-        "cuMemsetD16" => "cuMemsetD16_v2",
-        "cuMemsetD32" => "cuMemsetD32_v2",
-        "cuStreamDestroy" => "cuStreamDestroy_v2",
-        "cuEventDestroy" => "cuEventDestroy_v2",
-        other => other, // already a real exported symbol (versioned or unversioned)
+struct CudaSymbol;
+
+impl CudaSymbol {
+    fn newest(name: &str) -> &str {
+        match name {
+            "cuDeviceTotalMem" => "cuDeviceTotalMem_v2",
+            "cuCtxCreate" => "cuCtxCreate_v2",
+            "cuCtxDestroy" => "cuCtxDestroy_v2",
+            "cuCtxPushCurrent" => "cuCtxPushCurrent_v2",
+            "cuCtxPopCurrent" => "cuCtxPopCurrent_v2",
+            "cuDevicePrimaryCtxRelease" => "cuDevicePrimaryCtxRelease_v2",
+            "cuDevicePrimaryCtxReset" => "cuDevicePrimaryCtxReset_v2",
+            "cuDevicePrimaryCtxSetFlags" => "cuDevicePrimaryCtxSetFlags_v2",
+            "cuModuleGetGlobal" => "cuModuleGetGlobal_v2",
+            "cuMemGetInfo" => "cuMemGetInfo_v2",
+            "cuMemAlloc" => "cuMemAlloc_v2",
+            "cuMemAllocPitch" => "cuMemAllocPitch_v2",
+            "cuMemFree" => "cuMemFree_v2",
+            "cuMemGetAddressRange" => "cuMemGetAddressRange_v2",
+            "cuMemAllocHost" => "cuMemAllocHost_v2",
+            "cuMemHostGetDevicePointer" => "cuMemHostGetDevicePointer_v2",
+            "cuMemHostRegister" => "cuMemHostRegister_v2",
+            "cuMemcpyHtoD" => "cuMemcpyHtoD_v2",
+            "cuMemcpyDtoH" => "cuMemcpyDtoH_v2",
+            "cuMemcpyDtoD" => "cuMemcpyDtoD_v2",
+            "cuMemcpyHtoDAsync" => "cuMemcpyHtoDAsync_v2",
+            "cuMemcpyDtoHAsync" => "cuMemcpyDtoHAsync_v2",
+            "cuMemcpyDtoDAsync" => "cuMemcpyDtoDAsync_v2",
+            "cuMemsetD8" => "cuMemsetD8_v2",
+            "cuMemsetD16" => "cuMemsetD16_v2",
+            "cuMemsetD32" => "cuMemsetD32_v2",
+            "cuStreamDestroy" => "cuStreamDestroy_v2",
+            "cuEventDestroy" => "cuEventDestroy_v2",
+            other => other, // already a real exported symbol (versioned or unversioned)
+        }
     }
 }
 
@@ -1889,13 +2022,13 @@ pub extern "C" fn cuGetProcAddress(
     if symbol.is_null() || pfn.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let Some(raw) = (unsafe { cstr_bytes(symbol) }) else {
+    let Some(raw) = (unsafe { CInput::string(symbol) }) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
     let Ok(name) = String::from_utf8(raw) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
-    let resolved = newest_symbol(&name);
+    let resolved = CudaSymbol::newest(&name);
     let Ok(cname) = std::ffi::CString::new(resolved) else {
         return CUDA_ERROR_INVALID_VALUE;
     };
@@ -1953,7 +2086,17 @@ pub extern "C" fn cuLaunchCooperativeKernel(
     kernel_params: *mut *mut c_void,
 ) -> i32 {
     cuLaunchKernel(
-        f, gx, gy, gz, bx, by, bz, shared_mem_bytes, stream, kernel_params, core::ptr::null_mut(),
+        f,
+        gx,
+        gy,
+        gz,
+        bx,
+        by,
+        bz,
+        shared_mem_bytes,
+        stream,
+        kernel_params,
+        core::ptr::null_mut(),
     )
 }
 
@@ -1962,11 +2105,15 @@ pub extern "C" fn cuLaunchCooperativeKernel(
 /// inline. It is invoked OUTSIDE the state lock (a callback may re-enter the driver API). A bogus stream
 /// handle is `CUDA_ERROR_INVALID_HANDLE`; a null callback is `CUDA_ERROR_INVALID_VALUE`.
 #[no_mangle]
-pub extern "C" fn cuLaunchHostFunc(stream: *mut c_void, fn_: *mut c_void, user_data: *mut c_void) -> i32 {
+pub extern "C" fn cuLaunchHostFunc(
+    stream: *mut c_void,
+    fn_: *mut c_void,
+    user_data: *mut c_void,
+) -> i32 {
     if fn_.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    if with(|s| s.stream(stream).is_none()) {
+    if ShimState::with(|s| s.stream(stream).is_none()) {
         return CUDA_ERROR_INVALID_HANDLE;
     }
     // SAFETY: `fn_` is a `CUhostFn = void(*)(void*)` supplied by the caller.
@@ -1990,11 +2137,12 @@ pub extern "C" fn cuStreamAddCallback(
     if cb.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    if with(|st| st.stream(s).is_none()) {
+    if ShimState::with(|st| st.stream(s).is_none()) {
         return CUDA_ERROR_INVALID_HANDLE;
     }
     // SAFETY: `cb` is a `CUstreamCallback = void(*)(CUstream, CUresult, void*)`.
-    let callback: extern "C" fn(*mut c_void, i32, *mut c_void) = unsafe { core::mem::transmute(cb) };
+    let callback: extern "C" fn(*mut c_void, i32, *mut c_void) =
+        unsafe { core::mem::transmute(cb) };
     callback(s, CUDA_SUCCESS, user_data);
     CUDA_SUCCESS
 }
@@ -2007,7 +2155,7 @@ pub extern "C" fn cuStreamAddCallback(
 /// completes it immediately, sharing `cuMemAlloc_v2`'s body once the stream validates.
 #[no_mangle]
 pub extern "C" fn cuMemAllocAsync(dptr: *mut u64, bytesize: usize, s: *mut c_void) -> i32 {
-    if with(|st| st.stream(s).is_none()) {
+    if ShimState::with(|st| st.stream(s).is_none()) {
         return CUDA_ERROR_INVALID_HANDLE;
     }
     cuMemAlloc_v2(dptr, bytesize)
@@ -2016,7 +2164,7 @@ pub extern "C" fn cuMemAllocAsync(dptr: *mut u64, bytesize: usize, s: *mut c_voi
 /// `cuMemFreeAsync(dptr, stream)` — stream-ordered free; shares `cuMemFree_v2` once the stream validates.
 #[no_mangle]
 pub extern "C" fn cuMemFreeAsync(dptr: u64, s: *mut c_void) -> i32 {
-    if with(|st| st.stream(s).is_none()) {
+    if ShimState::with(|st| st.stream(s).is_none()) {
         return CUDA_ERROR_INVALID_HANDLE;
     }
     cuMemFree_v2(dptr)
@@ -2036,7 +2184,7 @@ pub extern "C" fn cuMemAdvise(p: u64, n: usize, advice: i32, dev: i32) -> i32 {
 #[no_mangle]
 pub extern "C" fn cuMemPrefetchAsync(p: u64, n: usize, dst: i32, s: *mut c_void) -> i32 {
     let _ = (p, n, dst);
-    if with(|st| st.stream(s).is_none()) {
+    if ShimState::with(|st| st.stream(s).is_none()) {
         return CUDA_ERROR_INVALID_HANDLE;
     }
     CUDA_SUCCESS
@@ -2046,9 +2194,14 @@ pub extern "C" fn cuMemPrefetchAsync(p: u64, n: usize, dst: i32, s: *mut c_void)
 /// single-device unified model has no per-stream residency to change, so this is a valid no-op once the
 /// stream validates.
 #[no_mangle]
-pub extern "C" fn cuStreamAttachMemAsync(s: *mut c_void, dptr: u64, length: usize, flags: u32) -> i32 {
+pub extern "C" fn cuStreamAttachMemAsync(
+    s: *mut c_void,
+    dptr: u64,
+    length: usize,
+    flags: u32,
+) -> i32 {
     let _ = (dptr, length, flags);
-    if with(|st| st.stream(s).is_none()) {
+    if ShimState::with(|st| st.stream(s).is_none()) {
         return CUDA_ERROR_INVALID_HANDLE;
     }
     CUDA_SUCCESS
@@ -2063,7 +2216,7 @@ pub extern "C" fn cuMemHostGetFlags(pflags: *mut u32, p: *mut c_void) -> i32 {
     if pflags.is_null() || p.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    if !with(|s| s.ctx.host.is_host_base(p as u64)) {
+    if !ShimState::with(|s| s.ctx.host.is_host_base(p as u64)) {
         return CUDA_ERROR_INVALID_VALUE;
     }
     unsafe { *pflags = 0 };
@@ -2096,8 +2249,8 @@ pub extern "C" fn cuOccupancyAvailableDynamicSMemPerBlock(
     if dyn_smem.is_null() || num_blocks <= 0 {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    with(|s| {
-        let Some((_num_regs, static_shared)) = func_resources(s, f) else {
+    ShimState::with(|s| {
+        let Some((_num_regs, static_shared)) = FunctionResources::get(s, f) else {
             return CUDA_ERROR_INVALID_HANDLE;
         };
         let per_block = MAX_SHARED_PER_SM / num_blocks; // the SM shared budget divided among the blocks
@@ -2115,11 +2268,15 @@ pub extern "C" fn cuOccupancyAvailableDynamicSMemPerBlock(
 /// priority)`. The synchronous model has one priority band, but the requested priority round-trips through
 /// `cuStreamGetPriority` (as a real driver clamps then reports the honored priority).
 #[no_mangle]
-pub extern "C" fn cuStreamCreateWithPriority(phstream: *mut *mut c_void, flags: u32, priority: i32) -> i32 {
+pub extern "C" fn cuStreamCreateWithPriority(
+    phstream: *mut *mut c_void,
+    flags: u32,
+    priority: i32,
+) -> i32 {
     if phstream.is_null() {
         return CUDA_ERROR_INVALID_VALUE;
     }
-    let h = with(|s| {
+    let h = ShimState::with(|s| {
         let stream = s.ctx.streams.create();
         s.intern_stream(stream, flags, priority)
     });
@@ -2131,7 +2288,7 @@ pub extern "C" fn cuStreamCreateWithPriority(phstream: *mut *mut c_void, flags: 
 /// never capturing (`CU_STREAM_CAPTURE_STATUS_NONE`). A bogus handle is `CUDA_ERROR_INVALID_HANDLE`.
 #[no_mangle]
 pub extern "C" fn cuStreamIsCapturing(s: *mut c_void, status: *mut i32) -> i32 {
-    with(|st| {
+    ShimState::with(|st| {
         if st.stream(s).is_none() {
             return CUDA_ERROR_INVALID_HANDLE;
         }
@@ -2204,13 +2361,16 @@ pub extern "C" fn cuProfilerStop() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{reset, with};
+    use crate::state::reset;
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     /// Serialize the tests: they share one process-global `State`, so they must not run concurrently.
     fn guard() -> MutexGuard<'static, ()> {
         static L: OnceLock<Mutex<()>> = OnceLock::new();
-        let g = L.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner());
+        let g = L
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         reset();
         g
     }
@@ -2218,18 +2378,18 @@ mod tests {
     /// Record a live device allocation of `size` bytes directly in the model (no sink), returning its
     /// device pointer — the stand-in for a completed `cuMemAlloc`.
     fn record_alloc(size: u64) -> u64 {
-        with(|s| {
+        ShimState::with(|s| {
             let b = s.ctx.alloc_buffer();
-            s.ctx.mem.record(b, size).0
+            s.ctx.mem.insert(b, size).0
         })
     }
 
     /// Record a live *managed* allocation directly in the model (no sink) — the stand-in for a completed
     /// `cuMemAllocManaged`.
     fn record_managed_alloc(size: u64) -> u64 {
-        with(|s| {
+        ShimState::with(|s| {
             let b = s.ctx.alloc_buffer();
-            s.ctx.mem.record_managed(b, size).0
+            s.ctx.mem.insert_managed(b, size).0
         })
     }
 
@@ -2251,8 +2411,14 @@ mod tests {
         assert_eq!(cuMemFreeHost(p), CUDA_SUCCESS);
         assert_eq!(cuMemFreeHost(p), CUDA_ERROR_INVALID_VALUE);
         // a null out-pointer / null free are rejected.
-        assert_eq!(cuMemAllocHost_v2(core::ptr::null_mut(), 16), CUDA_ERROR_INVALID_VALUE);
-        assert_eq!(cuMemFreeHost(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuMemAllocHost_v2(core::ptr::null_mut(), 16),
+            CUDA_ERROR_INVALID_VALUE
+        );
+        assert_eq!(
+            cuMemFreeHost(core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_VALUE
+        );
 
         // the flagged form shares the same body.
         let mut q: *mut c_void = core::ptr::null_mut();
@@ -2274,9 +2440,15 @@ mod tests {
         assert_eq!(cuMemHostUnregister(p), CUDA_ERROR_INVALID_VALUE);
         // an unknown host pointer has no device mapping.
         let mut d = 0u64;
-        assert_eq!(cuMemHostGetDevicePointer_v2(&mut d, p, 0), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuMemHostGetDevicePointer_v2(&mut d, p, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
         // null args rejected.
-        assert_eq!(cuMemHostRegister_v2(core::ptr::null_mut(), 32, 0), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuMemHostRegister_v2(core::ptr::null_mut(), 32, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     #[test]
@@ -2287,13 +2459,21 @@ mod tests {
 
         let mut m = 9u32;
         assert_eq!(
-            cuPointerGetAttribute(&mut m as *mut u32 as *mut c_void, CU_POINTER_ATTRIBUTE_IS_MANAGED, managed),
+            cuPointerGetAttribute(
+                &mut m as *mut u32 as *mut c_void,
+                CU_POINTER_ATTRIBUTE_IS_MANAGED,
+                managed
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(m, 1, "a managed allocation reports IS_MANAGED = 1");
 
         assert_eq!(
-            cuPointerGetAttribute(&mut m as *mut u32 as *mut c_void, CU_POINTER_ATTRIBUTE_IS_MANAGED, device),
+            cuPointerGetAttribute(
+                &mut m as *mut u32 as *mut c_void,
+                CU_POINTER_ATTRIBUTE_IS_MANAGED,
+                device
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(m, 0, "a plain device allocation reports IS_MANAGED = 0");
@@ -2302,29 +2482,48 @@ mod tests {
     #[test]
     fn device_attribute_reports_configured_and_fixed_values() {
         let _g = guard();
-        let want = with(|s| s.ctx.device.clone());
+        let want = ShimState::with(|s| s.ctx.device.clone());
         let mut v = -1i32;
         let get = |attr: i32, out: &mut i32| cuDeviceGetAttribute(out as *mut i32, attr, 0);
 
-        assert_eq!(get(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, &mut v), CUDA_SUCCESS);
+        assert_eq!(
+            get(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, &mut v),
+            CUDA_SUCCESS
+        );
         assert_eq!(v, want.compute_capability.0 as i32);
-        assert_eq!(get(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, &mut v), CUDA_SUCCESS);
+        assert_eq!(
+            get(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, &mut v),
+            CUDA_SUCCESS
+        );
         assert_eq!(v, want.compute_capability.1 as i32);
         assert_eq!(get(CU_DEVICE_ATTRIBUTE_WARP_SIZE, &mut v), CUDA_SUCCESS);
         assert_eq!(v, want.warp_size as i32);
-        assert_eq!(get(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, &mut v), CUDA_SUCCESS);
+        assert_eq!(
+            get(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, &mut v),
+            CUDA_SUCCESS
+        );
         assert_eq!(v, want.multiprocessor_count as i32);
-        assert_eq!(get(CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK, &mut v), CUDA_SUCCESS);
+        assert_eq!(
+            get(CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK, &mut v),
+            CUDA_SUCCESS
+        );
         assert_eq!(v, want.max_threads_per_block as i32);
         // A fixed, truthful property of the modeled unified-memory device.
-        assert_eq!(get(CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING, &mut v), CUDA_SUCCESS);
+        assert_eq!(
+            get(CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING, &mut v),
+            CUDA_SUCCESS
+        );
         assert_eq!(v, 1);
         // A bad device ordinal is rejected.
-        assert_eq!(cuDeviceGetAttribute(&mut v as *mut i32, CU_DEVICE_ATTRIBUTE_WARP_SIZE, 1),
-                   CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuDeviceGetAttribute(&mut v as *mut i32, CU_DEVICE_ATTRIBUTE_WARP_SIZE, 1),
+            CUDA_ERROR_INVALID_VALUE
+        );
         // A null out-pointer is rejected.
-        assert_eq!(cuDeviceGetAttribute(core::ptr::null_mut(), CU_DEVICE_ATTRIBUTE_WARP_SIZE, 0),
-                   CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuDeviceGetAttribute(core::ptr::null_mut(), CU_DEVICE_ATTRIBUTE_WARP_SIZE, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     #[test]
@@ -2352,7 +2551,10 @@ mod tests {
         assert_eq!(cur, b);
 
         // A null context handle can't be pushed.
-        assert_eq!(cuCtxPushCurrent_v2(core::ptr::null_mut()), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuCtxPushCurrent_v2(core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_HANDLE
+        );
     }
 
     #[test]
@@ -2384,15 +2586,24 @@ mod tests {
 
         let mut active = -1i32;
         let mut flags = 0u32;
-        assert_eq!(cuDevicePrimaryCtxGetState(0, &mut flags, &mut active), CUDA_SUCCESS);
+        assert_eq!(
+            cuDevicePrimaryCtxGetState(0, &mut flags, &mut active),
+            CUDA_SUCCESS
+        );
         assert_eq!(active, 1, "active while a reference is held");
 
         // Two retains → two releases before it goes inactive.
         assert_eq!(cuDevicePrimaryCtxRelease_v2(0), CUDA_SUCCESS);
-        assert_eq!(cuDevicePrimaryCtxGetState(0, &mut flags, &mut active), CUDA_SUCCESS);
+        assert_eq!(
+            cuDevicePrimaryCtxGetState(0, &mut flags, &mut active),
+            CUDA_SUCCESS
+        );
         assert_eq!(active, 1);
         assert_eq!(cuDevicePrimaryCtxRelease_v2(0), CUDA_SUCCESS);
-        assert_eq!(cuDevicePrimaryCtxGetState(0, &mut flags, &mut active), CUDA_SUCCESS);
+        assert_eq!(
+            cuDevicePrimaryCtxGetState(0, &mut flags, &mut active),
+            CUDA_SUCCESS
+        );
         assert_eq!(active, 0, "last release deactivates the primary context");
 
         // A bad device ordinal is rejected.
@@ -2410,7 +2621,11 @@ mod tests {
         let (mut free1, mut total1) = (0usize, 0usize);
         assert_eq!(cuMemGetInfo_v2(&mut free1, &mut total1), CUDA_SUCCESS);
         assert_eq!(total1, total0, "total VRAM is fixed");
-        assert_eq!(free0 - free1, 1 << 20, "free dropped by exactly the allocation size");
+        assert_eq!(
+            free0 - free1,
+            1 << 20,
+            "free dropped by exactly the allocation size"
+        );
     }
 
     #[test]
@@ -2421,7 +2636,11 @@ mod tests {
         // MEMORY_TYPE of a live allocation is DEVICE.
         let mut mtype = 0u32;
         assert_eq!(
-            cuPointerGetAttribute(&mut mtype as *mut u32 as *mut c_void, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, ptr),
+            cuPointerGetAttribute(
+                &mut mtype as *mut u32 as *mut c_void,
+                CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+                ptr
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(mtype, CU_MEMORYTYPE_DEVICE);
@@ -2430,12 +2649,20 @@ mod tests {
         let mut start = 0u64;
         let mut size = 0usize;
         assert_eq!(
-            cuPointerGetAttribute(&mut start as *mut u64 as *mut c_void, CU_POINTER_ATTRIBUTE_RANGE_START_ADDR, ptr + 8),
+            cuPointerGetAttribute(
+                &mut start as *mut u64 as *mut c_void,
+                CU_POINTER_ATTRIBUTE_RANGE_START_ADDR,
+                ptr + 8
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(start, ptr);
         assert_eq!(
-            cuPointerGetAttribute(&mut size as *mut usize as *mut c_void, CU_POINTER_ATTRIBUTE_RANGE_SIZE, ptr + 8),
+            cuPointerGetAttribute(
+                &mut size as *mut usize as *mut c_void,
+                CU_POINTER_ATTRIBUTE_RANGE_SIZE,
+                ptr + 8
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(size, 4096);
@@ -2443,7 +2670,11 @@ mod tests {
         // IS_MANAGED is false (no managed-alloc path modeled).
         let mut managed = 9u32;
         assert_eq!(
-            cuPointerGetAttribute(&mut managed as *mut u32 as *mut c_void, CU_POINTER_ATTRIBUTE_IS_MANAGED, ptr),
+            cuPointerGetAttribute(
+                &mut managed as *mut u32 as *mut c_void,
+                CU_POINTER_ATTRIBUTE_IS_MANAGED,
+                ptr
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(managed, 0);
@@ -2451,16 +2682,26 @@ mod tests {
         // An unknown pointer can't honestly report a memory type.
         let mut junk = 0u32;
         assert_eq!(
-            cuPointerGetAttribute(&mut junk as *mut u32 as *mut c_void, CU_POINTER_ATTRIBUTE_MEMORY_TYPE, 0xdead_beef),
+            cuPointerGetAttribute(
+                &mut junk as *mut u32 as *mut c_void,
+                CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+                0xdead_beef
+            ),
             CUDA_ERROR_INVALID_VALUE
         );
 
         // cuMemGetAddressRange resolves the same base/size.
         let mut base = 0u64;
         let mut rsize = 0usize;
-        assert_eq!(cuMemGetAddressRange_v2(&mut base, &mut rsize, ptr + 16), CUDA_SUCCESS);
+        assert_eq!(
+            cuMemGetAddressRange_v2(&mut base, &mut rsize, ptr + 16),
+            CUDA_SUCCESS
+        );
         assert_eq!((base, rsize), (ptr, 4096));
-        assert_eq!(cuMemGetAddressRange_v2(&mut base, &mut rsize, 0xdead_beef), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuMemGetAddressRange_v2(&mut base, &mut rsize, 0xdead_beef),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     #[test]
@@ -2474,11 +2715,17 @@ mod tests {
         // Unrecorded → NOT_READY.
         assert_eq!(cuEventQuery(start), CUDA_ERROR_NOT_READY);
         // Unknown handle → INVALID_HANDLE.
-        assert_eq!(cuEventQuery(0x1234 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuEventQuery(0x1234 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
 
         // Record both; a recorded event queries ready and elapsed time is finite and non-negative.
         assert_eq!(cuEventRecord(start, core::ptr::null_mut()), CUDA_SUCCESS);
-        assert_eq!(cuEventRecordWithFlags(end, core::ptr::null_mut(), 0), CUDA_SUCCESS);
+        assert_eq!(
+            cuEventRecordWithFlags(end, core::ptr::null_mut(), 0),
+            CUDA_SUCCESS
+        );
         assert_eq!(cuEventQuery(start), CUDA_SUCCESS);
         assert_eq!(cuEventQuery(end), CUDA_SUCCESS);
         let mut ms = -1.0f32;
@@ -2496,12 +2743,18 @@ mod tests {
         assert_eq!(cuStreamCreate(&mut stream, 0), CUDA_SUCCESS);
         assert_eq!(cuStreamQuery(stream), CUDA_SUCCESS);
         // An unknown stream handle is rejected.
-        assert_eq!(cuStreamQuery(0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuStreamQuery(0x9999 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
 
         let mut ev: *mut c_void = core::ptr::null_mut();
         assert_eq!(cuEventCreate(&mut ev, 0), CUDA_SUCCESS);
         assert_eq!(cuStreamWaitEvent(stream, ev, 0), CUDA_SUCCESS);
-        assert_eq!(cuStreamWaitEvent(stream, 0x9999 as *mut c_void, 0), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuStreamWaitEvent(stream, 0x9999 as *mut c_void, 0),
+            CUDA_ERROR_INVALID_HANDLE
+        );
     }
 
     /// Load the reference `vecadd` PTX and resolve its `CUfunction` (no sink needed — module load +
@@ -2509,10 +2762,16 @@ mod tests {
     fn load_vecadd() -> *mut c_void {
         let img = std::ffi::CString::new(ptx::VECADD_PTX).unwrap();
         let mut module: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cuModuleLoadData(&mut module, img.as_ptr() as *const c_void), CUDA_SUCCESS);
+        assert_eq!(
+            cuModuleLoadData(&mut module, img.as_ptr() as *const c_void),
+            CUDA_SUCCESS
+        );
         let name = std::ffi::CString::new("vecadd").unwrap();
         let mut func: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cuModuleGetFunction(&mut func, module, name.as_ptr()), CUDA_SUCCESS);
+        assert_eq!(
+            cuModuleGetFunction(&mut func, module, name.as_ptr()),
+            CUDA_SUCCESS
+        );
         assert!(!func.is_null());
         func
     }
@@ -2524,7 +2783,10 @@ mod tests {
         let src = ".visible .global .align 4 .b8 gState[128];\n.visible .entry noop() { ret; }\n";
         let img = std::ffi::CString::new(src).unwrap();
         let mut module: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cuModuleLoadData(&mut module, img.as_ptr() as *const c_void), CUDA_SUCCESS);
+        assert_eq!(
+            cuModuleLoadData(&mut module, img.as_ptr() as *const c_void),
+            CUDA_SUCCESS
+        );
 
         // An undeclared symbol is honestly NOT_FOUND (this path resolves the size first and never submits).
         let missing = std::ffi::CString::new("nope").unwrap();
@@ -2546,12 +2808,21 @@ mod tests {
 
         // Unload validates the handle: a real module succeeds, a bogus one is INVALID_HANDLE.
         assert_eq!(cuModuleUnload(module), CUDA_SUCCESS);
-        assert_eq!(cuModuleUnload(0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuModuleUnload(0x9999 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
 
         // Texref/surfref are unmodeled → NOT_FOUND for a valid module, INVALID_HANDLE for a bogus one.
         let mut tref: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cuModuleGetTexRef(&mut tref, module, name.as_ptr()), CUDA_ERROR_NOT_FOUND);
-        assert_eq!(cuModuleGetSurfRef(&mut tref, module, name.as_ptr()), CUDA_ERROR_NOT_FOUND);
+        assert_eq!(
+            cuModuleGetTexRef(&mut tref, module, name.as_ptr()),
+            CUDA_ERROR_NOT_FOUND
+        );
+        assert_eq!(
+            cuModuleGetSurfRef(&mut tref, module, name.as_ptr()),
+            CUDA_ERROR_NOT_FOUND
+        );
         assert_eq!(
             cuModuleGetTexRef(&mut tref, 0x9999 as *mut c_void, name.as_ptr()),
             CUDA_ERROR_INVALID_HANDLE
@@ -2561,20 +2832,27 @@ mod tests {
         let mut mode = -1i32;
         assert_eq!(cuModuleGetLoadingMode(&mut mode), CUDA_SUCCESS);
         assert_eq!(mode, 1);
-        assert_eq!(cuModuleGetLoadingMode(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuModuleGetLoadingMode(core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     #[test]
     fn func_get_attribute_reports_modeled_function() {
         let _g = guard();
         let f = load_vecadd();
-        let want_max = with(|s| s.ctx.device.max_threads_per_block as i32);
+        let want_max = ShimState::with(|s| s.ctx.device.max_threads_per_block as i32);
 
         let mut v = -1i32;
-        let get = |attr: i32, out: &mut i32, f: *mut c_void| cuFuncGetAttribute(out as *mut i32, attr, f);
+        let get =
+            |attr: i32, out: &mut i32, f: *mut c_void| cuFuncGetAttribute(out as *mut i32, attr, f);
 
         // MAX_THREADS_PER_BLOCK is the modeled device's real value.
-        assert_eq!(get(CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, &mut v, f), CUDA_SUCCESS);
+        assert_eq!(
+            get(CU_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, &mut v, f),
+            CUDA_SUCCESS
+        );
         assert_eq!(v, want_max);
         // NUM_REGS is the function's real recovered register count (> 0 for vecadd).
         assert_eq!(get(CU_FUNC_ATTRIBUTE_NUM_REGS, &mut v, f), CUDA_SUCCESS);
@@ -2583,12 +2861,21 @@ mod tests {
         assert_eq!(get(CU_FUNC_ATTRIBUTE_PTX_VERSION, &mut v, f), CUDA_SUCCESS);
         assert_eq!(v, 86);
         // vecadd declares no static shared memory.
-        assert_eq!(get(CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, &mut v, f), CUDA_SUCCESS);
+        assert_eq!(
+            get(CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, &mut v, f),
+            CUDA_SUCCESS
+        );
         assert_eq!(v, 0);
 
         // A bad handle / null out-pointer are rejected honestly.
-        assert_eq!(get(CU_FUNC_ATTRIBUTE_NUM_REGS, &mut v, 0x1234 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
-        assert_eq!(cuFuncGetAttribute(core::ptr::null_mut(), CU_FUNC_ATTRIBUTE_NUM_REGS, f), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            get(CU_FUNC_ATTRIBUTE_NUM_REGS, &mut v, 0x1234 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(
+            cuFuncGetAttribute(core::ptr::null_mut(), CU_FUNC_ATTRIBUTE_NUM_REGS, f),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     #[test]
@@ -2597,7 +2884,10 @@ mod tests {
         let f = load_vecadd();
 
         // dynamic-shared bytes round-trip through get.
-        assert_eq!(cuFuncSetAttribute(f, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, 2048), CUDA_SUCCESS);
+        assert_eq!(
+            cuFuncSetAttribute(f, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, 2048),
+            CUDA_SUCCESS
+        );
         let mut v = -1i32;
         assert_eq!(
             cuFuncGetAttribute(&mut v, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, f),
@@ -2607,9 +2897,16 @@ mod tests {
 
         // cache config records (no-op hint) for a valid handle; a bad handle is rejected.
         assert_eq!(cuFuncSetCacheConfig(f, 1), CUDA_SUCCESS);
-        assert_eq!(cuFuncSetCacheConfig(0x1234 as *mut c_void, 1), CUDA_ERROR_INVALID_HANDLE);
         assert_eq!(
-            cuFuncSetAttribute(0x1234 as *mut c_void, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, 1),
+            cuFuncSetCacheConfig(0x1234 as *mut c_void, 1),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(
+            cuFuncSetAttribute(
+                0x1234 as *mut c_void,
+                CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+                1
+            ),
             CUDA_ERROR_INVALID_HANDLE
         );
     }
@@ -2620,8 +2917,14 @@ mod tests {
         let f = load_vecadd();
 
         let mut n = -1i32;
-        assert_eq!(cuOccupancyMaxActiveBlocksPerMultiprocessor(&mut n, f, 256, 0), CUDA_SUCCESS);
-        assert!(n > 0 && n <= MAX_BLOCKS_PER_SM, "expected a sane block count, got {n}");
+        assert_eq!(
+            cuOccupancyMaxActiveBlocksPerMultiprocessor(&mut n, f, 256, 0),
+            CUDA_SUCCESS
+        );
+        assert!(
+            n > 0 && n <= MAX_BLOCKS_PER_SM,
+            "expected a sane block count, got {n}"
+        );
         // WithFlags shares the body.
         let mut n2 = -1i32;
         assert_eq!(
@@ -2631,13 +2934,26 @@ mod tests {
         assert_eq!(n, n2);
 
         // Invalid args rejected.
-        assert_eq!(cuOccupancyMaxActiveBlocksPerMultiprocessor(core::ptr::null_mut(), f, 256, 0), CUDA_ERROR_INVALID_VALUE);
-        assert_eq!(cuOccupancyMaxActiveBlocksPerMultiprocessor(&mut n, f, 0, 0), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuOccupancyMaxActiveBlocksPerMultiprocessor(core::ptr::null_mut(), f, 256, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
+        assert_eq!(
+            cuOccupancyMaxActiveBlocksPerMultiprocessor(&mut n, f, 0, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
 
         // Potential-block-size returns a positive block size + a grid that fills the modeled device.
         let (mut min_grid, mut block) = (-1i32, -1i32);
         assert_eq!(
-            cuOccupancyMaxPotentialBlockSize(&mut min_grid, &mut block, f, core::ptr::null_mut(), 0, 0),
+            cuOccupancyMaxPotentialBlockSize(
+                &mut min_grid,
+                &mut block,
+                f,
+                core::ptr::null_mut(),
+                0,
+                0
+            ),
             CUDA_SUCCESS
         );
         assert!(block > 0, "block size {block}");
@@ -2649,12 +2965,20 @@ mod tests {
         let _g = guard();
         // CUlaunchConfig prefix: gridDim{X,Y,Z}, blockDim{X,Y,Z}, sharedMemBytes, then (unread) hStream.
         let cfg: [u32; 8] = [10, 2, 1, 256, 1, 1, 48, 0];
-        let parsed = unsafe { parse_launch_config(cfg.as_ptr() as *const c_void) };
+        let parsed = unsafe { LaunchConfig::parse(cfg.as_ptr() as *const c_void) };
         assert_eq!(parsed, Some(((10, 2, 1), (256, 1, 1), 48)));
         // These are exactly the (grid, block) a `cuLaunchKernel` call would forward, so `cuLaunchKernelEx`
         // funnels into the identical `launch_kernel_impl` lowering. A null config is rejected.
-        assert_eq!(unsafe { parse_launch_config(core::ptr::null()) }, None);
-        assert_eq!(cuLaunchKernelEx(core::ptr::null(), core::ptr::null_mut(), core::ptr::null_mut(), core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(unsafe { LaunchConfig::parse(core::ptr::null()) }, None);
+        assert_eq!(
+            cuLaunchKernelEx(
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut()
+            ),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     #[test]
@@ -2669,9 +2993,15 @@ mod tests {
         assert_eq!(v, 4096);
 
         // Out-of-range limits are rejected on both get and set.
-        assert_eq!(cuCtxGetLimit(&mut v, CU_LIMIT_MAX), CUDA_ERROR_UNSUPPORTED_LIMIT);
+        assert_eq!(
+            cuCtxGetLimit(&mut v, CU_LIMIT_MAX),
+            CUDA_ERROR_UNSUPPORTED_LIMIT
+        );
         assert_eq!(cuCtxSetLimit(CU_LIMIT_MAX, 1), CUDA_ERROR_UNSUPPORTED_LIMIT);
-        assert_eq!(cuCtxGetLimit(core::ptr::null_mut(), 0), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuCtxGetLimit(core::ptr::null_mut(), 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
 
         // Cache config round-trips.
         let mut c = -1i32;
@@ -2711,12 +3041,21 @@ mod tests {
         assert_eq!(id, stream as u64);
 
         // The default (null) stream reports flags/priority 0.
-        assert_eq!(cuStreamGetFlags(core::ptr::null_mut(), &mut flags), CUDA_SUCCESS);
+        assert_eq!(
+            cuStreamGetFlags(core::ptr::null_mut(), &mut flags),
+            CUDA_SUCCESS
+        );
         assert_eq!(flags, 0);
 
         // A bad handle is rejected.
-        assert_eq!(cuStreamGetFlags(0x9999 as *mut c_void, &mut flags), CUDA_ERROR_INVALID_HANDLE);
-        assert_eq!(cuStreamGetId(0x9999 as *mut c_void, &mut id), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuStreamGetFlags(0x9999 as *mut c_void, &mut flags),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(
+            cuStreamGetId(0x9999 as *mut c_void, &mut id),
+            CUDA_ERROR_INVALID_HANDLE
+        );
     }
 
     // ---- newly-implemented tail: device identity / context / function / dispatch / hints ----------
@@ -2745,7 +3084,10 @@ mod tests {
         let sf: extern "C" fn(*mut c_void, i32, *mut c_void) = stream_cb;
 
         // The host func runs inline on the default stream (synchronous executor).
-        assert_eq!(cuLaunchHostFunc(core::ptr::null_mut(), hf as *mut c_void, p), CUDA_SUCCESS);
+        assert_eq!(
+            cuLaunchHostFunc(core::ptr::null_mut(), hf as *mut c_void, p),
+            CUDA_SUCCESS
+        );
         assert_eq!(counter.load(Ordering::SeqCst), 1);
         // A null callback / bogus stream are rejected honestly.
         assert_eq!(
@@ -2758,7 +3100,10 @@ mod tests {
         );
 
         // The stream callback fires with success.
-        assert_eq!(cuStreamAddCallback(core::ptr::null_mut(), sf as *mut c_void, p, 0), CUDA_SUCCESS);
+        assert_eq!(
+            cuStreamAddCallback(core::ptr::null_mut(), sf as *mut c_void, p, 0),
+            CUDA_SUCCESS
+        );
         assert_eq!(counter.load(Ordering::SeqCst), 2);
         assert_eq!(
             cuStreamAddCallback(core::ptr::null_mut(), core::ptr::null_mut(), p, 0),
@@ -2774,9 +3119,9 @@ mod tests {
     fn get_proc_address_aliases_and_error_paths() {
         let _g = guard();
         // The alias table maps a base name to its newest versioned symbol (the app-facing contract).
-        assert_eq!(newest_symbol("cuMemAlloc"), "cuMemAlloc_v2");
-        assert_eq!(newest_symbol("cuCtxCreate"), "cuCtxCreate_v2");
-        assert_eq!(newest_symbol("cuLaunchKernel"), "cuLaunchKernel"); // already the real symbol
+        assert_eq!(CudaSymbol::newest("cuMemAlloc"), "cuMemAlloc_v2");
+        assert_eq!(CudaSymbol::newest("cuCtxCreate"), "cuCtxCreate_v2");
+        assert_eq!(CudaSymbol::newest("cuLaunchKernel"), "cuLaunchKernel"); // already the real symbol
 
         // Null args are rejected.
         let mut pfn: *mut c_void = core::ptr::null_mut();
@@ -2792,7 +3137,10 @@ mod tests {
 
         // A symbol this driver does not export is honestly NOT_FOUND, and _v2 reports the status.
         let bogus = std::ffi::CString::new("cuNotARealEntryPoint").unwrap();
-        assert_eq!(cuGetProcAddress(bogus.as_ptr(), &mut pfn, 12020, 0), CUDA_ERROR_NOT_FOUND);
+        assert_eq!(
+            cuGetProcAddress(bogus.as_ptr(), &mut pfn, 12020, 0),
+            CUDA_ERROR_NOT_FOUND
+        );
         assert!(pfn.is_null());
         let mut status = -1i32;
         assert_eq!(
@@ -2814,11 +3162,17 @@ mod tests {
         assert_eq!(id, ctx as u64);
         assert_eq!(cuCtxGetId(ctx, &mut id), CUDA_SUCCESS);
         assert_eq!(id, ctx as u64);
-        assert_eq!(cuCtxGetId(ctx, core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuCtxGetId(ctx, core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_VALUE
+        );
 
         // v3 create is equivalent to v2 (affinity params ignored).
         let mut ctx3: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cuCtxCreate_v3(&mut ctx3, core::ptr::null_mut(), 0, 5, 0), CUDA_SUCCESS);
+        assert_eq!(
+            cuCtxCreate_v3(&mut ctx3, core::ptr::null_mut(), 0, 5, 0),
+            CUDA_SUCCESS
+        );
         assert!(!ctx3.is_null());
 
         // Shared-mem config round-trips; persisting-L2 reset is a valid no-op.
@@ -2838,7 +3192,10 @@ mod tests {
         let mut can = -1i32;
         assert_eq!(cuDeviceCanAccessPeer(&mut can, 0, 0), CUDA_SUCCESS);
         assert_eq!(can, 0);
-        assert_eq!(cuDeviceCanAccessPeer(core::ptr::null_mut(), 0, 0), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuDeviceCanAccessPeer(core::ptr::null_mut(), 0, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
         // Enable/disable peer access are honest, distinct errors (never a fake success).
         assert_eq!(
             cuCtxEnablePeerAccess(0x1 as *mut c_void, 0),
@@ -2856,9 +3213,14 @@ mod tests {
         // PCI bus id is written into the caller's buffer.
         let mut buf = [0 as c_char; 32];
         assert_eq!(cuDeviceGetPCIBusId(buf.as_mut_ptr(), 32, 0), CUDA_SUCCESS);
-        let s = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap();
+        let s = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }
+            .to_str()
+            .unwrap();
         assert_eq!(s, "0000:00:00.0");
-        assert_eq!(cuDeviceGetPCIBusId(core::ptr::null_mut(), 32, 0), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuDeviceGetPCIBusId(core::ptr::null_mut(), 32, 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
 
         // By-PCI-id resolves the single device to ordinal 0.
         let mut dev = -1i32;
@@ -2869,8 +3231,14 @@ mod tests {
         // LUID is Windows/TCC-only → honest NOT_SUPPORTED (bad ordinal is INVALID_DEVICE).
         let mut luid = [0 as c_char; 8];
         let mut mask = 0u32;
-        assert_eq!(cuDeviceGetLuid(luid.as_mut_ptr(), &mut mask, 0), CUDA_ERROR_NOT_SUPPORTED);
-        assert_eq!(cuDeviceGetLuid(luid.as_mut_ptr(), &mut mask, 1), CUDA_ERROR_INVALID_DEVICE);
+        assert_eq!(
+            cuDeviceGetLuid(luid.as_mut_ptr(), &mut mask, 0),
+            CUDA_ERROR_NOT_SUPPORTED
+        );
+        assert_eq!(
+            cuDeviceGetLuid(luid.as_mut_ptr(), &mut mask, 1),
+            CUDA_ERROR_INVALID_DEVICE
+        );
 
         // The legacy properties struct mirrors the attribute values.
         let mut prop = CuDevprop {
@@ -2889,12 +3257,19 @@ mod tests {
             cuDeviceGetProperties(&mut prop as *mut CuDevprop as *mut c_void, 0),
             CUDA_SUCCESS
         );
-        let (want_max, want_warp) =
-            with(|s| (s.ctx.device.max_threads_per_block as i32, s.ctx.device.warp_size as i32));
+        let (want_max, want_warp) = ShimState::with(|s| {
+            (
+                s.ctx.device.max_threads_per_block as i32,
+                s.ctx.device.warp_size as i32,
+            )
+        });
         assert_eq!(prop.max_threads_per_block, want_max);
         assert_eq!(prop.simd_width, want_warp);
         assert_eq!(prop.total_constant_memory, 65536);
-        assert_eq!(cuDeviceGetProperties(core::ptr::null_mut(), 0), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuDeviceGetProperties(core::ptr::null_mut(), 0),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     #[test]
@@ -2915,13 +3290,22 @@ mod tests {
         assert_eq!(cuFuncSetSharedMemConfig(f, 1), CUDA_SUCCESS);
 
         // Bad handles are rejected honestly.
-        assert_eq!(cuFuncGetName(&mut np, 0x1234 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
-        assert_eq!(cuFuncGetModule(&mut m, 0x1234 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuFuncGetName(&mut np, 0x1234 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
+        assert_eq!(
+            cuFuncGetModule(&mut m, 0x1234 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
         assert_eq!(
             cuFuncSetSharedMemConfig(0x1234 as *mut c_void, 1),
             CUDA_ERROR_INVALID_HANDLE
         );
-        assert_eq!(cuFuncGetName(core::ptr::null_mut(), f), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuFuncGetName(core::ptr::null_mut(), f),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     #[test]
@@ -2938,26 +3322,41 @@ mod tests {
         let mut status = -1i32;
         assert_eq!(cuStreamIsCapturing(stream, &mut status), CUDA_SUCCESS);
         assert_eq!(status, 0);
-        assert_eq!(cuStreamIsCapturing(0x9999 as *mut c_void, &mut status), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuStreamIsCapturing(0x9999 as *mut c_void, &mut status),
+            CUDA_ERROR_INVALID_HANDLE
+        );
         let mut mode = 1i32;
         assert_eq!(cuThreadExchangeStreamCaptureMode(&mut mode), CUDA_SUCCESS);
-        assert_eq!(cuThreadExchangeStreamCaptureMode(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuThreadExchangeStreamCaptureMode(core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_VALUE
+        );
 
         // Unified-memory hints are valid no-ops; stream-scoped ones validate the stream.
         assert_eq!(cuMemAdvise(0xdead_beef, 4096, 0, 0), CUDA_SUCCESS);
-        assert_eq!(cuMemPrefetchAsync(0xdead_beef, 4096, 0, stream), CUDA_SUCCESS);
+        assert_eq!(
+            cuMemPrefetchAsync(0xdead_beef, 4096, 0, stream),
+            CUDA_SUCCESS
+        );
         assert_eq!(
             cuMemPrefetchAsync(0xdead_beef, 4096, 0, 0x9999 as *mut c_void),
             CUDA_ERROR_INVALID_HANDLE
         );
-        assert_eq!(cuStreamAttachMemAsync(stream, 0xdead_beef, 4096, 4), CUDA_SUCCESS);
+        assert_eq!(
+            cuStreamAttachMemAsync(stream, 0xdead_beef, 4096, 4),
+            CUDA_SUCCESS
+        );
         // Stream-ordered alloc/free reject a bogus stream before touching the allocator.
         let mut dptr = 0u64;
         assert_eq!(
             cuMemAllocAsync(&mut dptr, 64, 0x9999 as *mut c_void),
             CUDA_ERROR_INVALID_HANDLE
         );
-        assert_eq!(cuMemFreeAsync(0xdead_beef, 0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuMemFreeAsync(0xdead_beef, 0x9999 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
 
         // Host-alloc flags of a live pinned allocation are reported (0 for the modeled allocator).
         let mut hp: *mut c_void = core::ptr::null_mut();
@@ -2966,12 +3365,19 @@ mod tests {
         assert_eq!(cuMemHostGetFlags(&mut fl, hp), CUDA_SUCCESS);
         assert_eq!(fl, 0);
         assert_eq!(cuMemFreeHost(hp), CUDA_SUCCESS);
-        assert_eq!(cuMemHostGetFlags(&mut fl, core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuMemHostGetFlags(&mut fl, core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_VALUE
+        );
 
         // Pointer set-attribute (SYNC_MEMOPS) is a valid no-op; a null value is rejected.
         let one = 1i32;
         assert_eq!(
-            cuPointerSetAttribute(&one as *const i32 as *const c_void, CU_POINTER_ATTRIBUTE_SYNC_MEMOPS, 0),
+            cuPointerSetAttribute(
+                &one as *const i32 as *const c_void,
+                CU_POINTER_ATTRIBUTE_SYNC_MEMOPS,
+                0
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(
@@ -2986,10 +3392,16 @@ mod tests {
         let f = load_vecadd();
         // vecadd has no static shared, so the whole per-block SM budget is available as dynamic smem.
         let mut smem = 0usize;
-        assert_eq!(cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, f, 1, 256), CUDA_SUCCESS);
+        assert_eq!(
+            cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, f, 1, 256),
+            CUDA_SUCCESS
+        );
         assert_eq!(smem, MAX_SHARED_PER_SM as usize);
         // Splitting across 2 co-resident blocks halves it.
-        assert_eq!(cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, f, 2, 256), CUDA_SUCCESS);
+        assert_eq!(
+            cuOccupancyAvailableDynamicSMemPerBlock(&mut smem, f, 2, 256),
+            CUDA_SUCCESS
+        );
         assert_eq!(smem, (MAX_SHARED_PER_SM / 2) as usize);
         // Invalid args / bad handle rejected honestly.
         assert_eq!(
@@ -3013,7 +3425,10 @@ mod tests {
         assert_eq!(cuProfilerStop(), CUDA_SUCCESS);
         let cfg = std::ffi::CString::new("cfg").unwrap();
         let out = std::ffi::CString::new("out").unwrap();
-        assert_eq!(cuProfilerInitialize(cfg.as_ptr(), out.as_ptr(), 0), CUDA_SUCCESS);
+        assert_eq!(
+            cuProfilerInitialize(cfg.as_ptr(), out.as_ptr(), 0),
+            CUDA_SUCCESS
+        );
     }
 
     #[test]
@@ -3034,13 +3449,22 @@ mod tests {
         assert_eq!(mode, 2);
         // An out-of-range mode is rejected and leaves both the caller's value and the stored mode untouched.
         let mut bad = 7i32;
-        assert_eq!(cuThreadExchangeStreamCaptureMode(&mut bad), CUDA_ERROR_INVALID_VALUE);
-        assert_eq!(bad, 7, "a rejected exchange must not overwrite the caller's value");
+        assert_eq!(
+            cuThreadExchangeStreamCaptureMode(&mut bad),
+            CUDA_ERROR_INVALID_VALUE
+        );
+        assert_eq!(
+            bad, 7,
+            "a rejected exchange must not overwrite the caller's value"
+        );
         let mut probe = 1i32;
         assert_eq!(cuThreadExchangeStreamCaptureMode(&mut probe), CUDA_SUCCESS);
         assert_eq!(probe, 0, "the rejected exchange left the stored mode at 0");
         // Null is rejected.
-        assert_eq!(cuThreadExchangeStreamCaptureMode(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuThreadExchangeStreamCaptureMode(core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     #[test]
@@ -3056,11 +3480,17 @@ mod tests {
         // that is not a host allocation the model owns.
         let mut junk = [0u8; 8];
         let foreign = junk.as_mut_ptr() as *mut c_void;
-        assert_eq!(cuMemHostGetFlags(&mut fl, foreign), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuMemHostGetFlags(&mut fl, foreign),
+            CUDA_ERROR_INVALID_VALUE
+        );
         // Freeing the pinned allocation makes its pointer foreign again.
         assert_eq!(cuMemFreeHost(hp), CUDA_SUCCESS);
         assert_eq!(cuMemHostGetFlags(&mut fl, hp), CUDA_ERROR_INVALID_VALUE);
-        assert_eq!(cuMemHostGetFlags(&mut fl, core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuMemHostGetFlags(&mut fl, core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_VALUE
+        );
     }
 
     // ---- bring-up + query surface (no command sink needed) ----------------------------------------
@@ -3074,15 +3504,30 @@ mod tests {
         let mut ver = -1i32;
         assert_eq!(cuDriverGetVersion(&mut ver), CUDA_SUCCESS);
         assert_eq!(ver, DRIVER_VERSION);
-        assert_eq!(cuDriverGetVersion(core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            cuDriverGetVersion(core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_VALUE
+        );
 
         // error name / string lookups.
         let mut sp: *const c_char = core::ptr::null();
-        assert_eq!(cuGetErrorName(CUDA_ERROR_OUT_OF_MEMORY, &mut sp), CUDA_SUCCESS);
-        assert_eq!(unsafe { std::ffi::CStr::from_ptr(sp) }.to_str().unwrap(), "CUDA_ERROR_OUT_OF_MEMORY");
+        assert_eq!(
+            cuGetErrorName(CUDA_ERROR_OUT_OF_MEMORY, &mut sp),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            unsafe { std::ffi::CStr::from_ptr(sp) }.to_str().unwrap(),
+            "CUDA_ERROR_OUT_OF_MEMORY"
+        );
         assert_eq!(cuGetErrorString(CUDA_SUCCESS, &mut sp), CUDA_SUCCESS);
-        assert_eq!(unsafe { std::ffi::CStr::from_ptr(sp) }.to_str().unwrap(), "no error");
-        assert_eq!(cuGetErrorName(0, core::ptr::null_mut()), CUDA_ERROR_INVALID_VALUE);
+        assert_eq!(
+            unsafe { std::ffi::CStr::from_ptr(sp) }.to_str().unwrap(),
+            "no error"
+        );
+        assert_eq!(
+            cuGetErrorName(0, core::ptr::null_mut()),
+            CUDA_ERROR_INVALID_VALUE
+        );
 
         // device enumeration + identity.
         let mut count = -1i32;
@@ -3093,24 +3538,38 @@ mod tests {
         assert_eq!(d, 0);
         assert_eq!(cuDeviceGet(&mut d, 1), CUDA_ERROR_INVALID_VALUE); // no second device
 
-        let want = with(|s| s.ctx.device.clone());
+        let want = ShimState::with(|s| s.ctx.device.clone());
         let mut name = [0 as c_char; 128];
         assert_eq!(cuDeviceGetName(name.as_mut_ptr(), 128, 0), CUDA_SUCCESS);
-        assert_eq!(unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_str().unwrap(), want.name);
+        assert_eq!(
+            unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }
+                .to_str()
+                .unwrap(),
+            want.name
+        );
 
         let mut total = 0usize;
         assert_eq!(cuDeviceTotalMem_v2(&mut total, 0), CUDA_SUCCESS);
         assert_eq!(total, want.total_mem as usize);
 
         let (mut maj, mut min) = (-1i32, -1i32);
-        assert_eq!(cuDeviceComputeCapability(&mut maj, &mut min, 0), CUDA_SUCCESS);
+        assert_eq!(
+            cuDeviceComputeCapability(&mut maj, &mut min, 0),
+            CUDA_SUCCESS
+        );
         assert_eq!((maj as u32, min as u32), want.compute_capability);
 
         // UUID (both spellings write the same 16 bytes).
         let mut u1 = [0u8; 16];
         let mut u2 = [0u8; 16];
-        assert_eq!(cuDeviceGetUuid(u1.as_mut_ptr() as *mut c_void, 0), CUDA_SUCCESS);
-        assert_eq!(cuDeviceGetUuid_v2(u2.as_mut_ptr() as *mut c_void, 0), CUDA_SUCCESS);
+        assert_eq!(
+            cuDeviceGetUuid(u1.as_mut_ptr() as *mut c_void, 0),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuDeviceGetUuid_v2(u2.as_mut_ptr() as *mut c_void, 0),
+            CUDA_SUCCESS
+        );
         assert_eq!(u1, want.uuid);
         assert_eq!(u1, u2);
 
@@ -3131,7 +3590,10 @@ mod tests {
         assert_eq!(cuDevicePrimaryCtxSetFlags_v2(0, 4), CUDA_SUCCESS);
         assert_eq!(cuDevicePrimaryCtxReset_v2(0), CUDA_SUCCESS);
         assert_eq!(cuDevicePrimaryCtxReset_v2(1), CUDA_ERROR_INVALID_DEVICE);
-        assert_eq!(cuDevicePrimaryCtxSetFlags_v2(1, 0), CUDA_ERROR_INVALID_DEVICE);
+        assert_eq!(
+            cuDevicePrimaryCtxSetFlags_v2(1, 0),
+            CUDA_ERROR_INVALID_DEVICE
+        );
     }
 
     #[test]
@@ -3154,7 +3616,12 @@ mod tests {
             &mut is_managed as *mut u32 as *mut c_void,
         ];
         assert_eq!(
-            cuPointerGetAttributes(3, attrs.as_ptr() as *mut i32, data.as_ptr() as *mut *mut c_void, ptr),
+            cuPointerGetAttributes(
+                3,
+                attrs.as_ptr() as *mut i32,
+                data.as_ptr() as *mut *mut c_void,
+                ptr
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(mtype, CU_MEMORYTYPE_DEVICE);
@@ -3162,7 +3629,12 @@ mod tests {
         assert_eq!(is_managed, 0);
         // Null argument arrays are rejected.
         assert_eq!(
-            cuPointerGetAttributes(1, core::ptr::null_mut(), data.as_ptr() as *mut *mut c_void, ptr),
+            cuPointerGetAttributes(
+                1,
+                core::ptr::null_mut(),
+                data.as_ptr() as *mut *mut c_void,
+                ptr
+            ),
             CUDA_ERROR_INVALID_VALUE
         );
 
@@ -3175,7 +3647,15 @@ mod tests {
             CUDA_SUCCESS
         );
         assert_eq!(
-            cuOccupancyMaxPotentialBlockSizeWithFlags(&mut mg2, &mut bs2, f, core::ptr::null_mut(), 0, 0, 0),
+            cuOccupancyMaxPotentialBlockSizeWithFlags(
+                &mut mg2,
+                &mut bs2,
+                f,
+                core::ptr::null_mut(),
+                0,
+                0,
+                0
+            ),
             CUDA_SUCCESS
         );
         assert_eq!((mg1, bs1), (mg2, bs2));
@@ -3187,13 +3667,22 @@ mod tests {
         for load in ["ex", "fatbin"] {
             let mut m: *mut c_void = core::ptr::null_mut();
             let r = if load == "ex" {
-                cuModuleLoadDataEx(&mut m, img.as_ptr() as *const c_void, 0, core::ptr::null_mut(), core::ptr::null_mut())
+                cuModuleLoadDataEx(
+                    &mut m,
+                    img.as_ptr() as *const c_void,
+                    0,
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                )
             } else {
                 cuModuleLoadFatBinary(&mut m, img.as_ptr() as *const c_void)
             };
             assert_eq!(r, CUDA_SUCCESS, "load variant {load}");
             let mut func: *mut c_void = core::ptr::null_mut();
-            assert_eq!(cuModuleGetFunction(&mut func, m, name.as_ptr()), CUDA_SUCCESS);
+            assert_eq!(
+                cuModuleGetFunction(&mut func, m, name.as_ptr()),
+                CUDA_SUCCESS
+            );
             assert!(!func.is_null());
         }
 
@@ -3204,20 +3693,32 @@ mod tests {
         let mut fm: *mut c_void = core::ptr::null_mut();
         assert_eq!(cuModuleLoad(&mut fm, cpath.as_ptr()), CUDA_SUCCESS);
         let mut ff: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cuModuleGetFunction(&mut ff, fm, name.as_ptr()), CUDA_SUCCESS);
+        assert_eq!(
+            cuModuleGetFunction(&mut ff, fm, name.as_ptr()),
+            CUDA_SUCCESS
+        );
         let missing = std::ffi::CString::new("/nonexistent/hl/does_not_exist.ptx").unwrap();
-        assert_eq!(cuModuleLoad(&mut fm, missing.as_ptr()), CUDA_ERROR_FILE_NOT_FOUND);
+        assert_eq!(
+            cuModuleLoad(&mut fm, missing.as_ptr()),
+            CUDA_ERROR_FILE_NOT_FOUND
+        );
         let _ = std::fs::remove_file(&path);
 
         // Stream + event destroy validate their handles.
         let mut stream: *mut c_void = core::ptr::null_mut();
         assert_eq!(cuStreamCreate(&mut stream, 0), CUDA_SUCCESS);
         assert_eq!(cuStreamDestroy_v2(stream), CUDA_SUCCESS);
-        assert_eq!(cuStreamDestroy_v2(0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuStreamDestroy_v2(0x9999 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
         let mut ev: *mut c_void = core::ptr::null_mut();
         assert_eq!(cuEventCreate(&mut ev, 0), CUDA_SUCCESS);
         assert_eq!(cuEventDestroy_v2(ev), CUDA_SUCCESS);
-        assert_eq!(cuEventDestroy_v2(0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuEventDestroy_v2(0x9999 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
     }
 
     // ---- the IR-wired compute path over a LIVE socket executor ------------------------------------
@@ -3236,8 +3737,12 @@ mod tests {
         exec: hl_gpu::CpuExecutor,
     }
     impl hl_gpu::ConnectionHandler for RuntimeHost {
-        fn submit(&mut self, _h: &hl_gpu::transport::SubmitHeader, batch: &[hl_gpu::Cmd]) -> hl_gpu::transport::Verdict {
-            let frame_bytes = hl_gpu::encode_stream(batch).len();
+        fn submit(
+            &mut self,
+            _h: &hl_gpu::transport::SubmitHeader,
+            batch: &[hl_gpu::Cmd],
+        ) -> hl_gpu::transport::Verdict {
+            let frame_bytes = hl_gpu::Encoder::stream(batch).len();
             match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
                 Ok(_) => hl_gpu::transport::Verdict::Ack,
                 Err(_) => hl_gpu::transport::Verdict::Nack,
@@ -3259,7 +3764,9 @@ mod tests {
         v.iter().flat_map(|x| x.to_le_bytes()).collect()
     }
     fn as_f32s(b: &[u8]) -> Vec<f32> {
-        b.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
+        b.chunks_exact(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
     }
 
     #[test]
@@ -3281,7 +3788,9 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let caps = hl_gpu::Capabilities::full("host");
             let mut exec = hl_gpu::CpuExecutor::new();
-            exec.set_kernel_compiler(|desc: &KernelDescriptor| ptx::compile(&desc.ptx, &desc.entry, desc.block));
+            exec.set_kernel_compiler(|desc: &KernelDescriptor| {
+                ptx::compile(&desc.ptx, &desc.entry, desc.block)
+            });
             let limits = hl_gpu::Limits::from_capabilities(exec.capabilities());
             let session = hl_gpu::Session::new(
                 limits,
@@ -3301,10 +3810,16 @@ mod tests {
         // --- module load + kernel resolution ---
         let img = std::ffi::CString::new(ptx::VECADD_PTX).unwrap();
         let mut module: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cuModuleLoadData(&mut module, img.as_ptr() as *const c_void), CUDA_SUCCESS);
+        assert_eq!(
+            cuModuleLoadData(&mut module, img.as_ptr() as *const c_void),
+            CUDA_SUCCESS
+        );
         let name = std::ffi::CString::new("vecadd").unwrap();
         let mut func: *mut c_void = core::ptr::null_mut();
-        assert_eq!(cuModuleGetFunction(&mut func, module, name.as_ptr()), CUDA_SUCCESS);
+        assert_eq!(
+            cuModuleGetFunction(&mut func, module, name.as_ptr()),
+            CUDA_SUCCESS
+        );
 
         let a = [1.0f32, 2.0, 3.0, 4.0];
         let b = [10.0f32, 20.0, 30.0, 40.0];
@@ -3321,9 +3836,17 @@ mod tests {
         // --- HtoD upload: one sync, one async on the default stream ---
         let ab = f32s(&a);
         let bb = f32s(&b);
-        assert_eq!(cuMemcpyHtoD_v2(da, ab.as_ptr() as *const c_void, nbytes), CUDA_SUCCESS);
         assert_eq!(
-            cuMemcpyHtoDAsync_v2(db, bb.as_ptr() as *const c_void, nbytes, core::ptr::null_mut()),
+            cuMemcpyHtoD_v2(da, ab.as_ptr() as *const c_void, nbytes),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuMemcpyHtoDAsync_v2(
+                db,
+                bb.as_ptr() as *const c_void,
+                nbytes,
+                core::ptr::null_mut()
+            ),
             CUDA_SUCCESS
         );
 
@@ -3336,7 +3859,19 @@ mod tests {
             &n_v as *const i32 as *mut c_void,
         ];
         assert_eq!(
-            cuLaunchKernel(func, 1, 1, 1, n, 1, 1, 0, core::ptr::null_mut(), params.as_ptr() as *mut *mut c_void, core::ptr::null_mut()),
+            cuLaunchKernel(
+                func,
+                1,
+                1,
+                1,
+                n,
+                1,
+                1,
+                0,
+                core::ptr::null_mut(),
+                params.as_ptr() as *mut *mut c_void,
+                core::ptr::null_mut()
+            ),
             CUDA_SUCCESS
         );
         // --- ctx synchronize (real fence barrier over the socket) ---
@@ -3344,13 +3879,25 @@ mod tests {
 
         // --- DtoH readback (cuMemcpyDtoH_v2): the pipeline COMPUTED c = a + b ---
         let mut out = vec![0u8; nbytes];
-        assert_eq!(cuMemcpyDtoH_v2(out.as_mut_ptr() as *mut c_void, dc, nbytes), CUDA_SUCCESS);
-        assert_eq!(as_f32s(&out), vec![11.0, 22.0, 33.0, 44.0], "vecadd computed sum");
+        assert_eq!(
+            cuMemcpyDtoH_v2(out.as_mut_ptr() as *mut c_void, dc, nbytes),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            as_f32s(&out),
+            vec![11.0, 22.0, 33.0, 44.0],
+            "vecadd computed sum"
+        );
 
         // async DtoH gives the same bytes.
         let mut out2 = vec![0u8; nbytes];
         assert_eq!(
-            cuMemcpyDtoHAsync_v2(out2.as_mut_ptr() as *mut c_void, dc, nbytes, core::ptr::null_mut()),
+            cuMemcpyDtoHAsync_v2(
+                out2.as_mut_ptr() as *mut c_void,
+                dc,
+                nbytes,
+                core::ptr::null_mut()
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(out2, out);
@@ -3360,17 +3907,39 @@ mod tests {
         assert_eq!(cuMemAlloc_v2(&mut de, nbytes), CUDA_SUCCESS);
         assert_eq!(cuMemcpyDtoD_v2(de, dc, nbytes), CUDA_SUCCESS);
         let mut rb = vec![0u8; nbytes];
-        assert_eq!(cuMemcpyDtoH_v2(rb.as_mut_ptr() as *mut c_void, de, nbytes), CUDA_SUCCESS);
-        assert_eq!(rb, out, "DtoD copy reproduced the result");
-        assert_eq!(cuMemcpyDtoDAsync_v2(de, dc, nbytes, core::ptr::null_mut()), CUDA_SUCCESS);
-        assert_eq!(cuMemcpy(de, dc, nbytes), CUDA_SUCCESS); // unified copy
-        assert_eq!(cuMemcpyAsync(de, dc, nbytes, core::ptr::null_mut()), CUDA_SUCCESS);
-        assert_eq!(cuMemcpyPeer(de, core::ptr::null_mut(), dc, core::ptr::null_mut(), nbytes), CUDA_SUCCESS);
         assert_eq!(
-            cuMemcpyPeerAsync(de, core::ptr::null_mut(), dc, core::ptr::null_mut(), nbytes, core::ptr::null_mut()),
+            cuMemcpyDtoH_v2(rb.as_mut_ptr() as *mut c_void, de, nbytes),
             CUDA_SUCCESS
         );
-        assert_eq!(cuMemcpyDtoH_v2(rb.as_mut_ptr() as *mut c_void, de, nbytes), CUDA_SUCCESS);
+        assert_eq!(rb, out, "DtoD copy reproduced the result");
+        assert_eq!(
+            cuMemcpyDtoDAsync_v2(de, dc, nbytes, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+        assert_eq!(cuMemcpy(de, dc, nbytes), CUDA_SUCCESS); // unified copy
+        assert_eq!(
+            cuMemcpyAsync(de, dc, nbytes, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuMemcpyPeer(de, core::ptr::null_mut(), dc, core::ptr::null_mut(), nbytes),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuMemcpyPeerAsync(
+                de,
+                core::ptr::null_mut(),
+                dc,
+                core::ptr::null_mut(),
+                nbytes,
+                core::ptr::null_mut()
+            ),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuMemcpyDtoH_v2(rb.as_mut_ptr() as *mut c_void, de, nbytes),
+            CUDA_SUCCESS
+        );
         assert_eq!(rb, out, "unified/peer copies reproduced the result");
 
         // --- every memset variant fills a 32-byte buffer; readback proves the exact bytes landed ---
@@ -3379,37 +3948,71 @@ mod tests {
         let mut mb = vec![0u8; 32];
         // D8: 32 bytes of 0xAB.
         assert_eq!(cuMemsetD8_v2(dm, 0xAB, 32), CUDA_SUCCESS);
-        assert_eq!(cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32), CUDA_SUCCESS);
+        assert_eq!(
+            cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32),
+            CUDA_SUCCESS
+        );
         assert_eq!(mb, vec![0xABu8; 32]);
         // D16: 16 halfwords of 0xBEEF.
         assert_eq!(cuMemsetD16_v2(dm, 0xBEEF, 16), CUDA_SUCCESS);
-        assert_eq!(cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32), CUDA_SUCCESS);
+        assert_eq!(
+            cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32),
+            CUDA_SUCCESS
+        );
         for c in mb.chunks_exact(2) {
             assert_eq!(u16::from_le_bytes(c.try_into().unwrap()), 0xBEEF);
         }
         // D32: 8 words of 0xDEADBEEF.
         assert_eq!(cuMemsetD32_v2(dm, 0xDEAD_BEEF, 8), CUDA_SUCCESS);
-        assert_eq!(cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32), CUDA_SUCCESS);
+        assert_eq!(
+            cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32),
+            CUDA_SUCCESS
+        );
         for c in mb.chunks_exact(4) {
             assert_eq!(u32::from_le_bytes(c.try_into().unwrap()), 0xDEAD_BEEF);
         }
         // Async memset variants (default stream) succeed and are observable after a sync.
-        assert_eq!(cuMemsetD8Async(dm, 0x11, 32, core::ptr::null_mut()), CUDA_SUCCESS);
-        assert_eq!(cuMemsetD16Async(dm, 0x2222, 16, core::ptr::null_mut()), CUDA_SUCCESS);
-        assert_eq!(cuMemsetD32Async(dm, 0x3333_3333, 8, core::ptr::null_mut()), CUDA_SUCCESS);
-        assert_eq!(cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32), CUDA_SUCCESS);
-        assert_eq!(mb, vec![0x33u8; 32], "last async memset (D32 0x33333333) wins");
+        assert_eq!(
+            cuMemsetD8Async(dm, 0x11, 32, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuMemsetD16Async(dm, 0x2222, 16, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuMemsetD32Async(dm, 0x3333_3333, 8, core::ptr::null_mut()),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            cuMemcpyDtoH_v2(mb.as_mut_ptr() as *mut c_void, dm, 32),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            mb,
+            vec![0x33u8; 32],
+            "last async memset (D32 0x33333333) wins"
+        );
 
         // --- pitched allocation: a 2D buffer with a 512-aligned row pitch ---
         let (mut dp, mut pitch) = (0u64, 0usize);
-        assert_eq!(cuMemAllocPitch_v2(&mut dp, &mut pitch, 64, 8, 4), CUDA_SUCCESS);
-        assert!(dp != 0 && pitch >= 64 && pitch % 512 == 0, "pitch = {pitch}");
+        assert_eq!(
+            cuMemAllocPitch_v2(&mut dp, &mut pitch, 64, 8, 4),
+            CUDA_SUCCESS
+        );
+        assert!(
+            dp != 0 && pitch >= 64 && pitch % 512 == 0,
+            "pitch = {pitch}"
+        );
 
         // --- stream + event synchronize barriers over the live socket ---
         let mut stream: *mut c_void = core::ptr::null_mut();
         assert_eq!(cuStreamCreate(&mut stream, 0), CUDA_SUCCESS);
         assert_eq!(cuStreamSynchronize(stream), CUDA_SUCCESS);
-        assert_eq!(cuStreamSynchronize(0x9999 as *mut c_void), CUDA_ERROR_INVALID_HANDLE);
+        assert_eq!(
+            cuStreamSynchronize(0x9999 as *mut c_void),
+            CUDA_ERROR_INVALID_HANDLE
+        );
         let mut ev: *mut c_void = core::ptr::null_mut();
         assert_eq!(cuEventCreate(&mut ev, 0), CUDA_SUCCESS);
         assert_eq!(cuEventRecord(ev, stream), CUDA_SUCCESS);
@@ -3417,18 +4020,41 @@ mod tests {
 
         // --- the other two launch forms lower through the identical path ---
         assert_eq!(
-            cuLaunchCooperativeKernel(func, 1, 1, 1, n, 1, 1, 0, core::ptr::null_mut(), params.as_ptr() as *mut *mut c_void),
+            cuLaunchCooperativeKernel(
+                func,
+                1,
+                1,
+                1,
+                n,
+                1,
+                1,
+                0,
+                core::ptr::null_mut(),
+                params.as_ptr() as *mut *mut c_void
+            ),
             CUDA_SUCCESS
         );
         let cfg: [u32; 8] = [1, 1, 1, n, 1, 1, 0, 0];
         assert_eq!(
-            cuLaunchKernelEx(cfg.as_ptr() as *const c_void, func, params.as_ptr() as *mut *mut c_void, core::ptr::null_mut()),
+            cuLaunchKernelEx(
+                cfg.as_ptr() as *const c_void,
+                func,
+                params.as_ptr() as *mut *mut c_void,
+                core::ptr::null_mut()
+            ),
             CUDA_SUCCESS
         );
         assert_eq!(cuCtxSynchronize(), CUDA_SUCCESS);
         let mut fin = vec![0u8; nbytes];
-        assert_eq!(cuMemcpyDtoH_v2(fin.as_mut_ptr() as *mut c_void, dc, nbytes), CUDA_SUCCESS);
-        assert_eq!(as_f32s(&fin), vec![11.0, 22.0, 33.0, 44.0], "re-launches recomputed the sum");
+        assert_eq!(
+            cuMemcpyDtoH_v2(fin.as_mut_ptr() as *mut c_void, dc, nbytes),
+            CUDA_SUCCESS
+        );
+        assert_eq!(
+            as_f32s(&fin),
+            vec![11.0, 22.0, 33.0, 44.0],
+            "re-launches recomputed the sum"
+        );
 
         // --- free (cuMemFree_v2): a freed pointer no longer resolves ---
         assert_eq!(cuMemFree_v2(da), CUDA_SUCCESS);

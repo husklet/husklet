@@ -41,8 +41,7 @@ mod wgsl;
 use std::collections::HashMap;
 
 use hl_gpu::protocol::model::capability::{
-    command_bits, format_bits, shader_payload, Capabilities, PresentKind, COLOR_FORMATS,
-    DEPTH_FORMATS,
+    shader_payload, Capabilities, PresentKind, COLOR_FORMATS, DEPTH_FORMATS,
 };
 use hl_gpu::protocol::model::command::{etag, WIRE_VERSION};
 use hl_gpu::protocol::model::enums::TextureFormat;
@@ -113,7 +112,7 @@ impl WgpuExecutor {
     /// Acquire a wgpu device per `cfg` (headless software Vulkan by default) and build the executor with
     /// the capability descriptor it will advertise to a negotiating guest.
     pub fn new(cfg: DeviceConfig) -> Result<Self> {
-        let gpu = device::acquire(&cfg)?;
+        let gpu = device::Gpu::acquire(&cfg)?;
         let caps = Self::capabilities_for(&gpu.info.name);
         Ok(Self {
             gpu,
@@ -169,14 +168,14 @@ impl WgpuExecutor {
             max_texture_2d: 8192,
             present_kinds: vec![PresentKind::Shm],
             wire_version: WIRE_VERSION,
-            command_bits: command_bits(REPLAYED_COMMANDS),
+            command_bits: Capabilities::command_bits(REPLAYED_COMMANDS),
             shader_payloads: shader_payload::SPIRV | shader_payload::GLSL | shader_payload::KERNEL,
             // This executor lowers a real `wgpu::StencilState`, so unlike the CPU oracle (whose shared
             // `DEPTH_FORMATS` is depth-only) it also advertises the combined depth+stencil format that a
             // stencil-testing pipeline/attachment requires.
-            texture_formats: format_bits(COLOR_FORMATS)
-                | format_bits(DEPTH_FORMATS)
-                | format_bits(&[TextureFormat::Depth24PlusStencil8]),
+            texture_formats: TextureFormat::bits(COLOR_FORMATS)
+                | TextureFormat::bits(DEPTH_FORMATS)
+                | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]),
             // Per-frame wire-byte ceiling: a hostile-guest DoS guard (one decoded frame can't force an
             // unbounded transient allocation), NOT a correctness bound — the process-wide `GlobalLedger` is
             // the real host-OOM guard across all connections. Sized BROWSER-CLASS at 256 MiB: the old 64 MiB

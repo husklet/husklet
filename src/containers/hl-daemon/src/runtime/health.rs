@@ -92,7 +92,7 @@ pub(super) async fn health_monitor(
             failing_streak: 0,
             log: Vec::new(),
         });
-        save_state(&g, &app.state_path);
+        Store::save(&g, &app.state_path);
     }
     crate::events::emit_event(
         &app.events,
@@ -133,8 +133,8 @@ pub(super) async fn health_monitor(
         });
         let prev = h.status.clone();
         h.log.push(HealthLog {
-            start: fmt_rfc3339(start_ts),
-            end: fmt_rfc3339(end_ts),
+            start: Timestamp::seconds(start_ts).to_string(),
+            end: Timestamp::seconds(end_ts).to_string(),
             exit_code: code,
             output,
         });
@@ -147,7 +147,7 @@ pub(super) async fn health_monitor(
         h.status = next;
         h.failing_streak = streak;
         let cur = h.status.clone();
-        save_state(&g, &app.state_path);
+        Store::save(&g, &app.state_path);
         drop(g);
         if cur != prev {
             crate::events::emit_event(

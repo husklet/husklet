@@ -47,6 +47,30 @@ pub enum CursorKeys {
     Application,
 }
 
+/// Terminal paste protocol selected by the application through DEC private mode 2004.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PasteMode {
+    #[default]
+    Raw,
+    Bracketed,
+}
+
+impl PasteMode {
+    /// Encode pasted text for the selected terminal protocol.
+    pub fn encode(self, text: &str) -> Vec<u8> {
+        match self {
+            Self::Raw => text.as_bytes().to_vec(),
+            Self::Bracketed => {
+                let mut bytes = Vec::with_capacity(text.len() + 12);
+                bytes.extend_from_slice(b"\x1b[200~");
+                bytes.extend_from_slice(text.as_bytes());
+                bytes.extend_from_slice(b"\x1b[201~");
+                bytes
+            }
+        }
+    }
+}
+
 const ESC: u8 = 0x1b;
 
 /// The xterm modifier parameter: `1 + shift(1) + alt(2) + ctrl(4)`.
@@ -54,78 +78,43 @@ const ESC: u8 = 0x1b;
 /// Note this ordering (shift=1, alt=2, ctrl=4) is xterm's own numbering and is deliberately *not*
 /// the same as the [`Mods`] bitflag values (CTRL=1, ALT=2, SHIFT=4); we translate explicitly.
 /// SUPER has no standard CSI encoding and is ignored here.
-fn xterm_mod_param(mods: Mods) -> u8 {
-    let mut m = 1;
-    if mods.contains(Mods::SHIFT) {
-        m += 1;
+impl Mods {
+    fn csi_parameter(self) -> u8 {
+        1 + u8::from(self.contains(Self::SHIFT))
+            + 2 * u8::from(self.contains(Self::ALT))
+            + 4 * u8::from(self.contains(Self::CTRL))
     }
-    if mods.contains(Mods::ALT) {
-        m += 2;
-    }
-    if mods.contains(Mods::CTRL) {
-        m += 4;
-    }
-    m
-}
 
-/// True if any modifier that participates in CSI `1;<mod>` encoding is set.
-fn has_csi_mods(mods: Mods) -> bool {
-    mods.intersects(Mods::CTRL | Mods::ALT | Mods::SHIFT)
+    fn has_csi(self) -> bool {
+        self.intersects(Self::CTRL | Self::ALT | Self::SHIFT)
+    }
 }
 
 /// A cursor/edit key with a CSI *letter* final byte (arrows, Home, End).
 ///
 /// Unmodified: `ESC [ <final>` (normal) or `ESC O <final>` (application). Modified: `ESC [ 1 ; <m> <final>`.
-fn csi_letter(final_byte: u8, mods: Mods, app: bool) -> Vec<u8> {
-    if has_csi_mods(mods) {
-        let mut v = vec![ESC, b'[', b'1', b';'];
-        push_num(&mut v, xterm_mod_param(mods));
-        v.push(final_byte);
-        v
-    } else if app {
-        vec![ESC, b'O', final_byte]
-    } else {
-        vec![ESC, b'[', final_byte]
+impl Key {
+    fn letter(final_byte: u8, mods: Mods, application: bool) -> Vec<u8> {
+        if !mods.has_csi() {
+            return vec![ESC, if application { b'O' } else { b'[' }, final_byte];
+        }
+        let parameter = mods.csi_parameter();
+        vec![ESC, b'[', b'1', b';', b'0' + parameter, final_byte]
     }
-}
 
-/// An editing key with a `~` final byte (Insert, Delete, PageUp, PageDown).
-///
-/// Unmodified: `ESC [ <n> ~`. Modified: `ESC [ <n> ; <m> ~`.
-fn csi_tilde(n: u8, mods: Mods) -> Vec<u8> {
-    let mut v = vec![ESC, b'['];
-    push_num(&mut v, n);
-    if has_csi_mods(mods) {
-        v.push(b';');
-        push_num(&mut v, xterm_mod_param(mods));
-    }
-    v.push(b'~');
-    v
-}
-
-/// Append the decimal ASCII digits of `n` to `v`.
-fn push_num(v: &mut Vec<u8>, n: u8) {
-    // n is always small (key numbers ≤ 24, modifier params ≤ 16) but handle the general u8 range.
-    if n >= 100 {
-        v.push(b'0' + n / 100);
-    }
-    if n >= 10 {
-        v.push(b'0' + (n / 10) % 10);
-    }
-    v.push(b'0' + n % 10);
-}
-
-/// The control byte for `Ctrl+<c>`, or `None` if `c` has no control mapping (then Ctrl is a no-op
-/// and the char is sent as-is).
-fn ctrl_byte(c: char) -> Option<u8> {
-    match c {
-        ' ' | '@' => Some(0x00),
-        '?' => Some(0x7f),
-        // Letters fold to their control code; lowercase and uppercase both map via & 0x1f.
-        'a'..='z' | 'A'..='Z' => Some(c as u8 & 0x1f),
-        // The symbol block 0x40..=0x5f: `[ \ ] ^ _` give 0x1b..=0x1f.
-        '[' | '\\' | ']' | '^' | '_' => Some(c as u8 & 0x1f),
-        _ => None,
+    fn tilde(number: u8, mods: Mods) -> Vec<u8> {
+        let mut sequence = Vec::with_capacity(8);
+        sequence.extend_from_slice(&[ESC, b'[']);
+        if number >= 10 {
+            sequence.push(b'0' + number / 10);
+        }
+        sequence.push(b'0' + number % 10);
+        if mods.has_csi() {
+            let parameter = mods.csi_parameter();
+            sequence.extend_from_slice(&[b';', b'0' + parameter]);
+        }
+        sequence.push(b'~');
+        sequence
     }
 }
 
@@ -136,7 +125,14 @@ pub fn encode_key(key: Key, mods: Mods, cursor: CursorKeys) -> Vec<u8> {
         Key::Char(c) => {
             // Build the base byte(s): a control byte when Ctrl maps, otherwise the char's UTF-8.
             let mut base: Vec<u8> = if mods.contains(Mods::CTRL) {
-                match ctrl_byte(c) {
+                let control = match c {
+                    ' ' | '@' => Some(0x00),
+                    '?' => Some(0x7f),
+                    // Letters and the 0x40..=0x5f symbol block map through the low five bits.
+                    'a'..='z' | 'A'..='Z' | '[' | '\\' | ']' | '^' | '_' => Some(c as u8 & 0x1f),
+                    _ => None,
+                };
+                match control {
                     Some(b) => vec![b],
                     None => {
                         let mut buf = [0u8; 4];
@@ -166,16 +162,16 @@ pub fn encode_key(key: Key, mods: Mods, cursor: CursorKeys) -> Vec<u8> {
             }
         }
         Key::Escape => vec![ESC],
-        Key::Up => csi_letter(b'A', mods, app),
-        Key::Down => csi_letter(b'B', mods, app),
-        Key::Right => csi_letter(b'C', mods, app),
-        Key::Left => csi_letter(b'D', mods, app),
-        Key::Home => csi_letter(b'H', mods, app),
-        Key::End => csi_letter(b'F', mods, app),
-        Key::Insert => csi_tilde(2, mods),
-        Key::Delete => csi_tilde(3, mods),
-        Key::PageUp => csi_tilde(5, mods),
-        Key::PageDown => csi_tilde(6, mods),
+        Key::Up => Key::letter(b'A', mods, app),
+        Key::Down => Key::letter(b'B', mods, app),
+        Key::Right => Key::letter(b'C', mods, app),
+        Key::Left => Key::letter(b'D', mods, app),
+        Key::Home => Key::letter(b'H', mods, app),
+        Key::End => Key::letter(b'F', mods, app),
+        Key::Insert => Key::tilde(2, mods),
+        Key::Delete => Key::tilde(3, mods),
+        Key::PageUp => Key::tilde(5, mods),
+        Key::PageDown => Key::tilde(6, mods),
         Key::F(n) => match n {
             // F1..F4 are SS3-introduced (ESC O P..S), matching xterm's default vt100 keypad.
             1 => vec![ESC, b'O', b'P'],
@@ -183,29 +179,16 @@ pub fn encode_key(key: Key, mods: Mods, cursor: CursorKeys) -> Vec<u8> {
             3 => vec![ESC, b'O', b'R'],
             4 => vec![ESC, b'O', b'S'],
             // F5..F12 use the CSI `~` editing-key form with fixed key numbers.
-            5 => csi_tilde(15, Mods::empty()),
-            6 => csi_tilde(17, Mods::empty()),
-            7 => csi_tilde(18, Mods::empty()),
-            8 => csi_tilde(19, Mods::empty()),
-            9 => csi_tilde(20, Mods::empty()),
-            10 => csi_tilde(21, Mods::empty()),
-            11 => csi_tilde(23, Mods::empty()),
-            12 => csi_tilde(24, Mods::empty()),
+            5 => Key::tilde(15, Mods::empty()),
+            6 => Key::tilde(17, Mods::empty()),
+            7 => Key::tilde(18, Mods::empty()),
+            8 => Key::tilde(19, Mods::empty()),
+            9 => Key::tilde(20, Mods::empty()),
+            10 => Key::tilde(21, Mods::empty()),
+            11 => Key::tilde(23, Mods::empty()),
+            12 => Key::tilde(24, Mods::empty()),
             _ => Vec::new(),
         },
-    }
-}
-
-/// Encode pasted text, wrapping in bracketed-paste markers when the app enabled `?2004h`.
-pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
-    if bracketed {
-        let mut v = Vec::with_capacity(text.len() + 12);
-        v.extend_from_slice(b"\x1b[200~");
-        v.extend_from_slice(text.as_bytes());
-        v.extend_from_slice(b"\x1b[201~");
-        v
-    } else {
-        text.as_bytes().to_vec()
     }
 }
 
@@ -351,11 +334,14 @@ mod tests {
 
     #[test]
     fn paste_raw_vs_bracketed() {
-        assert_eq!(encode_paste("hi\nthere", false), b"hi\nthere");
-        assert_eq!(encode_paste("hi", true), b"\x1b[200~hi\x1b[201~".to_vec());
+        assert_eq!(PasteMode::Raw.encode("hi\nthere"), b"hi\nthere");
+        assert_eq!(
+            PasteMode::Bracketed.encode("hi"),
+            b"\x1b[200~hi\x1b[201~".to_vec()
+        );
         // Nothing inside the payload is stripped or escaped.
         assert_eq!(
-            encode_paste("a\x1b[201~b", true),
+            PasteMode::Bracketed.encode("a\x1b[201~b"),
             b"\x1b[200~a\x1b[201~b\x1b[201~".to_vec()
         );
     }

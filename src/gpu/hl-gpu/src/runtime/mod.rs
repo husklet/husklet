@@ -23,7 +23,7 @@ pub use model::resources::{
 pub use model::session::{Limits, Session};
 pub use model::timeline::{FenceState, FenceTimeline};
 pub use port::clock::{Clock, FakeClock, SystemClock};
-pub use port::executor::{GpuExecutor, Presented};
+pub use port::executor::{GpuExecutor, Presentation};
 pub use sink::InProcessCommandSink;
 
 use crate::protocol::model::command::Cmd;
@@ -39,7 +39,7 @@ pub fn submit(
     exec: &mut dyn GpuExecutor,
     frame_bytes: usize,
     batch: &[Cmd],
-) -> Result<Vec<Presented>> {
+) -> Result<Vec<Presentation>> {
     service::validate::validate(&session.limits, frame_bytes, batch)?;
     // Snapshot the residency ledger BEFORE the charge so a later executor NACK can undo it. `account`
     // commits the whole frame's charge up front (both the connection ledger and its slice of the shared
@@ -47,7 +47,7 @@ pub fn submit(
     // this rollback the charge would stick even though nothing rendered, so the connection's residency
     // would climb until every frame trips the cap — exactly the "NACK never recovers" failure.
     let ledger_before = session.ledger.clone();
-    service::account::charge_frame(session, batch)?;
+    session.charge_frame(batch)?;
     match service::dispatch::dispatch(session, exec, batch) {
         Ok(presents) => Ok(presents),
         Err(e) => {

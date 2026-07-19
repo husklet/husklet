@@ -14,17 +14,23 @@ use core::ffi::c_void;
 use hl_vulkan::service::record;
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::*;
 
 /// Run `f` with just the logical device (recording bodies emit into the command buffer, not the sink).
-fn dev<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
-    with(|s| s.device.as_mut().map(f))
+struct ShimState;
+impl ShimState {
+fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
+    StateStore::with(|s| s.device.as_mut().map(f))
+}
 }
 
 /// Unwrap a dispatchable `VkCommandBuffer` to its `hl_vulkan` `u64` command-buffer handle.
-unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
+struct CommandBuffer;
+impl CommandBuffer {
+unsafe fn handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
+}
 }
 
 // ---- buffer / image copies -----------------------------------------------------------------------
@@ -37,12 +43,12 @@ pub extern "C" fn vkCmdCopyBuffer(
     region_count: u32,
     p_regions: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_regions.is_null() {
         return;
     }
     let regions = unsafe { std::slice::from_raw_parts(p_regions as *const VkBufferCopy, region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             let _ = record::cmd_copy_buffer(d, cb, src_buffer, dst_buffer, r.src_offset, r.dst_offset, r.size);
         }
@@ -58,13 +64,13 @@ pub extern "C" fn vkCmdCopyBufferToImage(
     region_count: u32,
     p_regions: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_regions.is_null() {
         return;
     }
     let regions =
         unsafe { std::slice::from_raw_parts(p_regions as *const VkBufferImageCopy, region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             // The base color subresource only (mip 0 / layer 0 / origin 0) — the materialized subset.
             if r.image_subresource.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0
@@ -99,13 +105,13 @@ pub extern "C" fn vkCmdCopyImageToBuffer(
     region_count: u32,
     p_regions: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_regions.is_null() {
         return;
     }
     let regions =
         unsafe { std::slice::from_raw_parts(p_regions as *const VkBufferImageCopy, region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             if r.image_subresource.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0
                 || r.image_subresource.mip_level != 0
@@ -140,12 +146,12 @@ pub extern "C" fn vkCmdCopyImage(
     region_count: u32,
     p_regions: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_regions.is_null() {
         return;
     }
     let regions = unsafe { std::slice::from_raw_parts(p_regions as *const VkImageCopy, region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             if r.src_offset.x < 0 || r.src_offset.y < 0 || r.dst_offset.x < 0 || r.dst_offset.y < 0 {
                 continue;
@@ -174,13 +180,13 @@ pub extern "C" fn vkCmdBlitImage(
     p_regions: *const c_void,
     filter: i32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_regions.is_null() {
         return;
     }
     let regions = unsafe { std::slice::from_raw_parts(p_regions as *const VkImageBlit, region_count as usize) };
     let linear = filter == VK_FILTER_LINEAR;
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             let [s0, s1] = r.src_offsets;
             let [d0, d1] = r.dst_offsets;
@@ -211,14 +217,16 @@ pub extern "C" fn vkCmdBlitImage(
 // command, so both alias the shared body. Ported (delegated) from the v1 transfer commands above.
 
 /// Shared body for `vkCmdCopyBuffer2` / `vkCmdCopyBuffer2KHR`.
-fn copy_buffer2(command_buffer: *mut c_void, p_copy_buffer_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+struct Transfer2;
+impl Transfer2 {
+fn copy_buffer(command_buffer: *mut c_void, p_copy_buffer_info: *const c_void) {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(info) = (unsafe { (p_copy_buffer_info as *const VkCopyBufferInfo2).as_ref() }) else { return };
     if info.p_regions.is_null() {
         return;
     }
     let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             let _ = record::cmd_copy_buffer(d, cb, info.src_buffer, info.dst_buffer, r.src_offset, r.dst_offset, r.size);
         }
@@ -226,14 +234,14 @@ fn copy_buffer2(command_buffer: *mut c_void, p_copy_buffer_info: *const c_void) 
 }
 
 /// Shared body for `vkCmdCopyBufferToImage2` / `vkCmdCopyBufferToImage2KHR`.
-fn copy_buffer_to_image2(command_buffer: *mut c_void, p_copy_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+fn copy_buffer_to_image(command_buffer: *mut c_void, p_copy_info: *const c_void) {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(info) = (unsafe { (p_copy_info as *const VkCopyBufferToImageInfo2).as_ref() }) else { return };
     if info.p_regions.is_null() {
         return;
     }
     let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             if r.image_subresource.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0
                 || r.image_subresource.mip_level != 0
@@ -259,15 +267,15 @@ fn copy_buffer_to_image2(command_buffer: *mut c_void, p_copy_info: *const c_void
 }
 
 /// Shared body for `vkCmdBlitImage2` / `vkCmdBlitImage2KHR`.
-fn blit_image2(command_buffer: *mut c_void, p_blit_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+fn blit_image(command_buffer: *mut c_void, p_blit_info: *const c_void) {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(info) = (unsafe { (p_blit_info as *const VkBlitImageInfo2).as_ref() }) else { return };
     if info.p_regions.is_null() {
         return;
     }
     let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
     let linear = info.filter == VK_FILTER_LINEAR;
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             let [s0, s1] = r.src_offsets;
             let [d0, d1] = r.dst_offsets;
@@ -290,47 +298,49 @@ fn blit_image2(command_buffer: *mut c_void, p_blit_info: *const c_void) {
         }
     });
 }
+}
 
 #[no_mangle]
 pub extern "C" fn vkCmdCopyBuffer2(command_buffer: *mut c_void, p_copy_buffer_info: *const c_void) {
-    copy_buffer2(command_buffer, p_copy_buffer_info);
+    Transfer2::copy_buffer(command_buffer, p_copy_buffer_info);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdCopyBuffer2KHR(command_buffer: *mut c_void, p_copy_buffer_info: *const c_void) {
-    copy_buffer2(command_buffer, p_copy_buffer_info);
+    Transfer2::copy_buffer(command_buffer, p_copy_buffer_info);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdCopyBufferToImage2(command_buffer: *mut c_void, p_copy_buffer_to_image_info: *const c_void) {
-    copy_buffer_to_image2(command_buffer, p_copy_buffer_to_image_info);
+    Transfer2::copy_buffer_to_image(command_buffer, p_copy_buffer_to_image_info);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdCopyBufferToImage2KHR(command_buffer: *mut c_void, p_copy_buffer_to_image_info: *const c_void) {
-    copy_buffer_to_image2(command_buffer, p_copy_buffer_to_image_info);
+    Transfer2::copy_buffer_to_image(command_buffer, p_copy_buffer_to_image_info);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdBlitImage2(command_buffer: *mut c_void, p_blit_image_info: *const c_void) {
-    blit_image2(command_buffer, p_blit_image_info);
+    Transfer2::blit_image(command_buffer, p_blit_image_info);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdBlitImage2KHR(command_buffer: *mut c_void, p_blit_image_info: *const c_void) {
-    blit_image2(command_buffer, p_blit_image_info);
+    Transfer2::blit_image(command_buffer, p_blit_image_info);
 }
 
 /// Shared body for `vkCmdCopyImage2` / `vkCmdCopyImage2KHR` (reads `VkCopyImageInfo2`, delegates per region
 /// to the identical v1 image-copy lowering).
-fn copy_image2(command_buffer: *mut c_void, p_copy_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+impl Transfer2 {
+fn copy_image(command_buffer: *mut c_void, p_copy_info: *const c_void) {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(info) = (unsafe { (p_copy_info as *const VkCopyImageInfo2).as_ref() }) else { return };
     if info.p_regions.is_null() {
         return;
     }
     let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             if r.src_offset.x < 0 || r.src_offset.y < 0 || r.dst_offset.x < 0 || r.dst_offset.y < 0 {
                 continue;
@@ -349,14 +359,14 @@ fn copy_image2(command_buffer: *mut c_void, p_copy_info: *const c_void) {
 }
 
 /// Shared body for `vkCmdCopyImageToBuffer2` / `vkCmdCopyImageToBuffer2KHR` (reuses `VkBufferImageCopy2`).
-fn copy_image_to_buffer2(command_buffer: *mut c_void, p_copy_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+fn copy_image_to_buffer(command_buffer: *mut c_void, p_copy_info: *const c_void) {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(info) = (unsafe { (p_copy_info as *const VkCopyImageToBufferInfo2).as_ref() }) else { return };
     if info.p_regions.is_null() {
         return;
     }
     let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             if r.image_subresource.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0
                 || r.image_subresource.mip_level != 0
@@ -380,25 +390,26 @@ fn copy_image_to_buffer2(command_buffer: *mut c_void, p_copy_info: *const c_void
         }
     });
 }
+}
 
 #[no_mangle]
 pub extern "C" fn vkCmdCopyImage2(command_buffer: *mut c_void, p_copy_image_info: *const c_void) {
-    copy_image2(command_buffer, p_copy_image_info);
+    Transfer2::copy_image(command_buffer, p_copy_image_info);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdCopyImage2KHR(command_buffer: *mut c_void, p_copy_image_info: *const c_void) {
-    copy_image2(command_buffer, p_copy_image_info);
+    Transfer2::copy_image(command_buffer, p_copy_image_info);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdCopyImageToBuffer2(command_buffer: *mut c_void, p_copy_image_to_buffer_info: *const c_void) {
-    copy_image_to_buffer2(command_buffer, p_copy_image_to_buffer_info);
+    Transfer2::copy_image_to_buffer(command_buffer, p_copy_image_to_buffer_info);
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdCopyImageToBuffer2KHR(command_buffer: *mut c_void, p_copy_image_to_buffer_info: *const c_void) {
-    copy_image_to_buffer2(command_buffer, p_copy_image_to_buffer_info);
+    Transfer2::copy_image_to_buffer(command_buffer, p_copy_image_to_buffer_info);
 }
 
 /// `vkCmdPipelineBarrier2KHR` — the `VK_KHR_synchronization2` alias of [`vkCmdPipelineBarrier2`].
@@ -418,10 +429,10 @@ pub extern "C" fn vkCmdClearColorImage(
     _range_count: u32,
     _p_ranges: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(color) = (unsafe { (p_color as *const VkClearColorValue).as_ref() }) else { return };
     let rgba = color.float32;
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_clear_color_image(d, cb, image, rgba);
     });
 }
@@ -434,14 +445,14 @@ pub extern "C" fn vkCmdClearAttachments(
     rect_count: u32,
     p_rects: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if attachment_count == 0 || rect_count == 0 || p_attachments.is_null() || p_rects.is_null() {
         return;
     }
     let attachments =
         unsafe { std::slice::from_raw_parts(p_attachments as *const VkClearAttachment, attachment_count as usize) };
     let rects = unsafe { std::slice::from_raw_parts(p_rects as *const VkClearRect, rect_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for att in attachments {
             if att.aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT == 0 {
                 // A DEPTH/STENCIL clear-attachment clears a sub-rect of the depth attachment MID-pass. The
@@ -478,8 +489,8 @@ pub extern "C" fn vkCmdFillBuffer(
     size: u64,
     data: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    dev(|d| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    ShimState::with_device(|d| {
         let _ = record::cmd_fill_buffer(d, cb, dst_buffer, dst_offset, size, data);
     });
 }
@@ -492,12 +503,12 @@ pub extern "C" fn vkCmdUpdateBuffer(
     data_size: u64,
     p_data: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_data.is_null() || data_size == 0 {
         return;
     }
     let bytes = unsafe { std::slice::from_raw_parts(p_data as *const u8, data_size as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_update_buffer(d, cb, dst_buffer, dst_offset, bytes);
     });
 }
@@ -518,7 +529,7 @@ pub extern "C" fn vkCmdPipelineBarrier(
     image_memory_barrier_count: u32,
     p_image_memory_barriers: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let barriers = if image_memory_barrier_count == 0 || p_image_memory_barriers.is_null() {
         &[][..]
     } else {
@@ -531,14 +542,14 @@ pub extern "C" fn vkCmdPipelineBarrier(
     };
     let transitions: Vec<(u64, i32, i32)> =
         barriers.iter().map(|b| (b.image, b.old_layout, b.new_layout)).collect();
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_pipeline_barrier(d, cb, &transitions);
     });
 }
 
 #[no_mangle]
 pub extern "C" fn vkCmdPipelineBarrier2(command_buffer: *mut c_void, p_dependency_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(dep) = (unsafe { (p_dependency_info as *const VkDependencyInfo).as_ref() }) else { return };
     let barriers = if dep.image_memory_barrier_count == 0 || dep.p_image_memory_barriers.is_null() {
         &[][..]
@@ -549,7 +560,7 @@ pub extern "C" fn vkCmdPipelineBarrier2(command_buffer: *mut c_void, p_dependenc
     };
     let transitions: Vec<(u64, i32, i32)> =
         barriers.iter().map(|b| (b.image, b.old_layout, b.new_layout)).collect();
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_pipeline_barrier(d, cb, &transitions);
     });
 }

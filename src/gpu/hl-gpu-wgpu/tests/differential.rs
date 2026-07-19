@@ -61,7 +61,7 @@
 
 use std::collections::BTreeSet;
 
-use hl_gpu::protocol::model::capability::{format_bits, shader_payload};
+use hl_gpu::protocol::model::capability::shader_payload;
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment,
     ColorTargetState, ComputePipelineDesc, DepthAttachment, DepthState, Extent3d, Origin3d,
@@ -2096,7 +2096,7 @@ fn cpu_session(exec: &CpuExecutor) -> Session {
     // combined depth+stencil format so the identical stencil IR reaches the executor on both sides — exactly
     // as we widen `shader_payloads` for SPIR-V. This changes nothing the oracle computes; it only lets the
     // shared program past the runtime `validate` format gate.
-    caps.texture_formats |= format_bits(&[TextureFormat::Depth24PlusStencil8]);
+    caps.texture_formats |= TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]);
     let mut limits = Limits::from_capabilities(caps);
     limits.copy_alignment = 1;
     Session::new(

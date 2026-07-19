@@ -9,7 +9,6 @@
 //! router in main.rs and every `use crate::containers::*` site) is unchanged.
 use crate::images::*;
 use crate::model::*;
-use crate::networks::*;
 use crate::prelude::*;
 use crate::runtime::*;
 use crate::util::*;
@@ -29,10 +28,16 @@ pub(crate) use parse::*;
 /// pgid == leader pid) reaches the leader AND every forked child, so a multi-process container dies
 /// completely instead of leaving orphans. Only if the group signal fails (e.g. the leader is mid-
 /// teardown) do we fall back to the leader pid alone. Mirrors lifecycle.rs's `kill_group`.
-fn kill_group(pid: i32, sig: i32) {
-    unsafe {
-        if libc::kill(-pid, sig) != 0 {
-            libc::kill(pid, sig);
+pub(crate) struct Process(i32);
+impl Process {
+    pub(crate) fn new(pid: i32) -> Self {
+        Self(pid)
+    }
+    pub(crate) fn signal(&self, sig: i32) {
+        unsafe {
+            if libc::kill(-self.0, sig) != 0 {
+                libc::kill(self.0, sig);
+            }
         }
     }
 }
@@ -46,8 +51,8 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
     // resolve + grab the live pid, then release the lock before any waiting.
     let (full, pid) = {
         let g = a.inner.lock().await;
-        let Some(full) = resolve_cid(&g, id) else {
-            return no_such(id);
+        let Some(full) = ContainerId::resolve(&g, id) else {
+            return ErrorMessage::no_such(id);
         };
         // `docker stop` on an already-stopped container is a 304 Not Modified — a no-op that must NOT
         // rewrite finished_at or emit a `stop` event. Only a running/paused/restarting container is
@@ -74,9 +79,9 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
         (full, pid)
     };
     if let Some(pid) = pid {
-        kill_group(pid as i32, sig); // whole process group, not just the leader
-                                     // give the guest up to `t` seconds to exit on its own; the spawn reaper (runtime.rs) flips
-                                     // status to "exited" when the process dies, so poll that rather than racing on pid reuse.
+        Process::new(pid as i32).signal(sig); // whole process group, not just the leader
+                                              // give the guest up to `t` seconds to exit on its own; the spawn reaper (runtime.rs) flips
+                                              // status to "exited" when the process dies, so poll that rather than racing on pid reuse.
         let mut waited = 0i64;
         // After the stop timeout we SIGKILL, but SIGKILL is asynchronous — the process isn't reaped the
         // instant we send it. So instead of freeing ports / marking exited RIGHT AWAY (which races the
@@ -96,7 +101,7 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
                 break; // reaper confirmed the process is dead
             }
             if !killed && waited >= t * 1000 {
-                kill_group(pid as i32, libc::SIGKILL); // group SIGKILL, not just the leader
+                Process::new(pid as i32).signal(libc::SIGKILL); // group SIGKILL, not just the leader
                 killed = true;
             }
             if waited >= hard_cap {
@@ -108,7 +113,7 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
     }
     // Release the published-port host listeners — `docker stop` frees the binding (a later container may
     // re-publish the same host port). Idempotent + no-op when nothing was published.
-    ports::stop(&full);
+    ports::Forwarders::stop(&full);
     // mark exited (as before); the reaper sets the real exit_code when the signalled process dies.
     // `manually_stopped` is the DURABLE (persisted) equivalent of Moby's HasBeenManuallyStopped: it
     // survives a daemon restart so `unless-stopped` won't resurrect a container the user stopped (the
@@ -132,6 +137,6 @@ async fn do_stop(a: &App, id: &str, sig: i32, t: i64) -> Response {
         &full,
         json!({"name": cname, "image": cimage}),
     );
-    save_state(&g, &a.state_path);
+    Store::save(&g, &a.state_path);
     StatusCode::NO_CONTENT.into_response()
 }

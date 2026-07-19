@@ -29,8 +29,7 @@ use hl_gpu::protocol::model::enums::{
     buffer_usage, texture_usage, LoadOp, TextureDim, TextureFormat,
 };
 use hl_gpu::{
-    decode_stream, encode_stream, BufferId, Cmd, CommandBuffer, CommandSink, CpuExecutor, Enc,
-    InProcessCommandSink, TextureId,
+    BufferId, Cmd, CommandBuffer, CommandSink, CpuExecutor, Enc, InProcessCommandSink, TextureId,
 };
 
 // ===================================================================================================
@@ -188,20 +187,20 @@ fn align4(n: usize) -> usize {
 #[test]
 fn ir_encode_decode_throughput() {
     let stream = representative_stream(FRAME_DIM, DRAWS_PER_FRAME);
-    let encoded = encode_stream(&stream);
+    let encoded = hl_gpu::Encoder::stream(&stream);
     let frame_bytes = encoded.len();
 
     // Correctness gate: the round-trip must reproduce the exact stream (a silent lossy encode would make
     // any throughput number meaningless).
-    let decoded = decode_stream(&encoded).expect("decode round-trips");
+    let decoded = hl_gpu::Decoder::stream(&encoded).expect("decode round-trips");
     assert_eq!(decoded, stream, "encode→decode must be loss-free");
 
     let t0 = Instant::now();
     let mut sink_bytes = 0usize; // consume results so the loop can't be optimized away.
     for _ in 0..ENCODE_ITERS {
-        let enc = encode_stream(&stream);
+        let enc = hl_gpu::Encoder::stream(&stream);
         sink_bytes ^= enc.len();
-        let dec = decode_stream(&enc).expect("decode");
+        let dec = hl_gpu::Decoder::stream(&enc).expect("decode");
         sink_bytes ^= dec.len();
     }
     let elapsed = t0.elapsed();
@@ -392,14 +391,14 @@ fn large_frame_transport() {
 
     // Fixed small iteration count — the payload is large, so a few round-trips is plenty of signal.
     const MEASURED: usize = 5;
-    let encoded_once = encode_stream(&frame);
+    let encoded_once = hl_gpu::Encoder::stream(&frame);
     let frame_bytes = encoded_once.len();
 
     let t0 = Instant::now();
     for _ in 0..MEASURED {
         // Full transport shape: serialize, deserialize, then run it through the sink.
-        let enc = encode_stream(&frame);
-        let dec = decode_stream(&enc).expect("decode large frame");
+        let enc = hl_gpu::Encoder::stream(&frame);
+        let dec = hl_gpu::Decoder::stream(&enc).expect("decode large frame");
         sink.submit(&dec).expect("submit large frame");
     }
     let elapsed = t0.elapsed();

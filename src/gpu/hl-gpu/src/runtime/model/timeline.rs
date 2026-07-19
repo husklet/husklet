@@ -53,7 +53,7 @@ impl FenceTimeline {
     }
 
     /// The highest value fence `id` has been signaled to, if it is live.
-    pub fn value(&self, id: u32) -> Option<u64> {
+    pub fn get(&self, id: u32) -> Option<u64> {
         self.fences.get(&id).map(|s| s.value)
     }
 

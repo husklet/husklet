@@ -63,7 +63,7 @@ fn gl_recording_submits_nothing() {
     let mut c = ctx_640x480();
     let sink = RecordingSink::with_full_caps();
 
-    let vbo = record::gen_buffer(&mut c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[1u8; 48], 0x88E4);
 
@@ -132,7 +132,7 @@ fn clear_only_frame_lowers_to_clear_pass_and_present() {
 /// and one `glDrawArrays`, then swap.
 fn record_textured_quad(c: &mut GlContext) {
     // vertex buffer
-    let vbo = record::gen_buffer(c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(c, GL_ARRAY_BUFFER, vbo);
     let verts: Vec<u8> = (0..48).map(|i| i as u8).collect(); // 6 verts * vec2 f32
     record::buffer_data(c, GL_ARRAY_BUFFER, &verts, 0x88E4);
@@ -154,8 +154,8 @@ fn record_textured_quad(c: &mut GlContext) {
     record::uniform_sampler(c, 0, 0); // uTex -> texture unit 0
 
     // texture
-    let tex = record::gen_texture(c);
-    record::active_texture(c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(c, 2, 2, &[0xABu8; 16]); // 2x2 RGBA8
     record::tex_parameter(c, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -279,8 +279,8 @@ fn deleted_texture_and_buffer_retire_their_resident_ir() {
 
     // Now delete both GL objects. The next swap (no draws) submits a standalone destroy batch.
     // The GL names: the textured-quad helper mints vbo=1, tex=1 (first of each kind).
-    record::delete_texture(&mut c, 1);
-    record::delete_buffer(&mut c, 1);
+    c.delete_texture(1);
+    c.delete_buffer(1);
     assert!(
         c.has_pending_destroys(),
         "delete must queue persistent destroys"
@@ -313,7 +313,7 @@ fn reused_program_is_not_recreated_across_frames() {
     let mut sink = RecordingSink::with_full_caps();
 
     // ---- shared resources + program, set up once ----
-    let vbo = record::gen_buffer(&mut c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
     let verts: Vec<u8> = (0..48).map(|i| i as u8).collect();
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &verts, 0x88E4);
@@ -333,8 +333,8 @@ fn reused_program_is_not_recreated_across_frames() {
     record::use_program(&mut c, prog);
     record::uniform_sampler(&mut c, 0, 0);
 
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(&mut c, 2, 2, &[0xABu8; 16]);
     record::tex_parameter(&mut c, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -408,7 +408,7 @@ fn program_shaders_and_pipeline_created_once_across_n_frames_then_retired_on_del
     let mut sink = RecordingSink::with_full_caps();
 
     // ---- shared resources + program, set up once (same shape as the reuse test above) ----
-    let vbo = record::gen_buffer(&mut c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
     let verts: Vec<u8> = (0..48).map(|i| i as u8).collect();
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &verts, 0x88E4);
@@ -428,8 +428,8 @@ fn program_shaders_and_pipeline_created_once_across_n_frames_then_retired_on_del
     record::use_program(&mut c, prog);
     record::uniform_sampler(&mut c, 0, 0);
 
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(&mut c, 2, 2, &[0xABu8; 16]);
     record::tex_parameter(&mut c, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -631,7 +631,7 @@ in vec2 vUV;\nout vec4 fragColor;\nvoid main(){ fragColor = texture(GSK_TEXTURE0
     let mut sink = RecordingSink::with_full_caps();
 
     // A minimal vertex buffer + attribute so the draw lowers.
-    let vbo = record::gen_buffer(&mut c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &vec![0u8; 48], 0x88E4);
     record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
@@ -665,8 +665,8 @@ in vec2 vUV;\nout vec4 fragColor;\nvoid main(){ fragColor = texture(GSK_TEXTURE0
 
     // GSK_TEXTURE0 -> texture unit 0, with a real texture bound there (the only sampled texture).
     record::uniform_sampler(&mut c, 0, 0);
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(&mut c, 2, 2, &[0xABu8; 16]);
     record::viewport(&mut c, [0, 0, 640, 480]);
@@ -730,7 +730,7 @@ void main(){ gl_FragColor = texture2D(uTex0, vUV) + texture2D(uTex1, vUV) + text
     let mut c = ctx_640x480();
     let mut sink = RecordingSink::with_full_caps();
 
-    let vbo = record::gen_buffer(&mut c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &vec![0u8; 48], 0x88E4);
     record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
@@ -766,8 +766,8 @@ void main(){ gl_FragColor = texture2D(uTex0, vUV) + texture2D(uTex1, vUV) + text
     record::uniform_sampler(&mut c, 0, 0); // uTex0 -> unit 0 (populated)
     record::uniform_sampler(&mut c, 1, 1); // uTex1 -> unit 1 (empty)
     record::uniform_sampler(&mut c, 2, 2); // uTex2 -> unit 2 (empty)
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(&mut c, 2, 2, &[0xABu8; 16]);
     record::viewport(&mut c, [0, 0, 640, 480]);
@@ -981,7 +981,7 @@ fn gsk_vertex_pulling_instance_offset_is_hoisted_into_the_bind_offset() {
     const STRIDE: i32 = 48;
     const BASE_INSTANCE: i32 = 542;
     const BASE_OFF: i32 = BASE_INSTANCE * STRIDE; // 26016 — the baked region base for the first attribute
-    let vbo = record::gen_buffer(&mut c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
     record::buffer_data(
         &mut c,
@@ -1090,7 +1090,7 @@ fn gsk_vertex_pulling_instance_offset_is_hoisted_into_the_bind_offset() {
 
 #[test]
 fn glsl_translate_forwards_desktop_glsl_per_stage() {
-    let (vs, fs) = glsl::translate_render(VS, FS);
+    let (vs, fs) = glsl::StageSources::new(VS, FS).translate_render();
 
     // Vertex: a desktop `#version`, the attribute regenerated as a `layout(location) in`, the varying as a
     // `layout(location) out`, and the body (incl. gl_Position) carried through verbatim.
@@ -1142,9 +1142,12 @@ fn glsl_translate_forwards_desktop_glsl_per_stage() {
 
 #[test]
 fn glsl_collects_vertex_attrs_and_samplers() {
-    let attrs = glsl::collect_vertex_attrs(VS);
+    let attrs = glsl::Source::new(VS).vertex_attrs();
     assert_eq!(attrs.len(), 1);
     assert_eq!(attrs[0].name, "aPos");
     assert_eq!(attrs[0].ty, "vec2");
-    assert_eq!(glsl::program_samplers(VS, FS), vec!["uTex".to_string()]);
+    assert_eq!(
+        glsl::StageSources::new(VS, FS).samplers(),
+        vec!["uTex".to_string()]
+    );
 }

@@ -66,11 +66,11 @@ pub fn uniform_index(ctx: &GlContext, program: u32, name: &str) -> u32 {
     if !p.linked {
         return GL_INVALID_INDEX;
     }
-    let data = glsl::program_uniform_decls(&p.vs_src, &p.fs_src);
+    let data = glsl::StageSources::new(&p.vs_src, &p.fs_src).uniform_decls();
     if let Some(i) = data.iter().position(|d| d.name == name) {
         return i as u32;
     }
-    let samps = glsl::program_sampler_decls(&p.vs_src, &p.fs_src);
+    let samps = glsl::StageSources::new(&p.vs_src, &p.fs_src).sampler_decls();
     if let Some(i) = samps.iter().position(|d| d.name == name) {
         return (data.len() + i) as u32;
     }
@@ -85,7 +85,7 @@ pub fn active_uniformsiv(ctx: &GlContext, program: u32, index: u32, pname: u32) 
     if !p.linked {
         return None;
     }
-    let data = glsl::program_uniform_decls(&p.vs_src, &p.fs_src);
+    let data = glsl::StageSources::new(&p.vs_src, &p.fs_src).uniform_decls();
     let i = index as usize;
     if let Some(d) = data.get(i) {
         // A data uniform: it lives in the single implicit uniform block (index 0) at its layout offset.
@@ -102,7 +102,7 @@ pub fn active_uniformsiv(ctx: &GlContext, program: u32, index: u32, pname: u32) 
             _ => 0,
         });
     }
-    let samps = glsl::program_sampler_decls(&p.vs_src, &p.fs_src);
+    let samps = glsl::StageSources::new(&p.vs_src, &p.fs_src).sampler_decls();
     let d = samps.get(i - data.len())?;
     // A sampler uniform: not backed by a buffer block (offset/block-index are the "default block" -1).
     Some(match pname {
@@ -124,23 +124,25 @@ pub fn active_uniformsiv(ctx: &GlContext, program: u32, index: u32, pname: u32) 
 
 /// Ensure the program's block table has a canonical block 0 mirroring the reflected implicit block (the
 /// one `glUniform*` writes into) when the program declares data uniforms. Idempotent.
-fn seed_blocks(ctx: &mut GlContext, program: u32) {
-    let has_uniforms = ctx
-        .programs
-        .program(program)
-        .map(|p| p.has_uniforms())
-        .unwrap_or(false);
-    if !has_uniforms {
-        return;
-    }
-    let blocks = ctx.uniform_blocks.entry(program).or_default();
-    if blocks.is_empty() {
-        // The single implicit block this model reflects. GLSL flattens the block name away at collect
-        // time, so the canonical name is the MSL struct name the translator emits.
-        blocks.push(UniformBlock {
-            name: "Uniforms".to_string(),
-            binding: 0,
-        });
+impl GlContext {
+    fn seed_blocks(&mut self, program: u32) {
+        let has_uniforms = self
+            .programs
+            .program(program)
+            .map(|p| p.has_uniforms())
+            .unwrap_or(false);
+        if !has_uniforms {
+            return;
+        }
+        let blocks = self.uniform_blocks.entry(program).or_default();
+        if blocks.is_empty() {
+            // The single implicit block this model reflects. GLSL flattens the block name away at collect
+            // time, so the canonical name is the MSL struct name the translator emits.
+            blocks.push(UniformBlock {
+                name: "Uniforms".to_string(),
+                binding: 0,
+            });
+        }
     }
 }
 
@@ -148,10 +150,10 @@ fn seed_blocks(ctx: &mut GlContext, program: u32) {
 /// stable index the first time a name is seen (default binding 0), matching the reference shim. Returns
 /// `GL_INVALID_INDEX` for an unknown program.
 pub fn uniform_block_index(ctx: &mut GlContext, program: u32, name: &str) -> u32 {
-    if !ctx.programs.program_exists(program) {
+    if !ctx.programs.contains(program) {
         return GL_INVALID_INDEX;
     }
-    seed_blocks(ctx, program);
+    ctx.seed_blocks(program);
     let blocks = ctx.uniform_blocks.entry(program).or_default();
     if let Some(pos) = blocks.iter().position(|b| b.name == name) {
         return pos as u32;
@@ -168,7 +170,7 @@ pub fn uniform_block_index(ctx: &mut GlContext, program: u32, name: &str) -> u32
 /// errors: an unknown program or block index → `GL_INVALID_VALUE`; a binding beyond the cap →
 /// `GL_INVALID_VALUE`.
 pub fn uniform_block_binding(ctx: &mut GlContext, program: u32, block_index: u32, binding: u32) {
-    if !ctx.programs.program_exists(program) {
+    if !ctx.programs.contains(program) {
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
@@ -176,7 +178,7 @@ pub fn uniform_block_binding(ctx: &mut GlContext, program: u32, block_index: u32
         ctx.set_gl_error(GL_INVALID_VALUE);
         return;
     }
-    seed_blocks(ctx, program);
+    ctx.seed_blocks(program);
     let blocks = ctx.uniform_blocks.entry(program).or_default();
     match blocks.get_mut(block_index as usize) {
         Some(b) => b.binding = binding,
@@ -191,7 +193,7 @@ pub fn active_uniform_block_name(
     program: u32,
     block_index: u32,
 ) -> Option<String> {
-    seed_blocks(ctx, program);
+    ctx.seed_blocks(program);
     ctx.uniform_blocks
         .get(&program)
         .and_then(|b| b.get(block_index as usize))
@@ -208,7 +210,7 @@ pub fn active_uniform_blockiv(
     block_index: u32,
     pname: u32,
 ) -> Option<i32> {
-    seed_blocks(ctx, program);
+    ctx.seed_blocks(program);
     let (binding, name_len) = {
         let b = ctx
             .uniform_blocks
@@ -259,8 +261,8 @@ pub fn interface_resources(ctx: &GlContext, program: u32, interface: u32) -> Vec
     }
     match interface {
         GL_UNIFORM => {
-            let data = glsl::program_uniform_decls(&p.vs_src, &p.fs_src);
-            let samps = glsl::program_sampler_decls(&p.vs_src, &p.fs_src);
+            let data = glsl::StageSources::new(&p.vs_src, &p.fs_src).uniform_decls();
+            let samps = glsl::StageSources::new(&p.vs_src, &p.fs_src).sampler_decls();
             let n_data = data.len();
             data.into_iter()
                 .chain(samps)
@@ -278,7 +280,8 @@ pub fn interface_resources(ctx: &GlContext, program: u32, interface: u32) -> Vec
                 })
                 .collect()
         }
-        GL_PROGRAM_INPUT => glsl::collect_vertex_attrs(&p.vs_src)
+        GL_PROGRAM_INPUT => glsl::Source::new(&p.vs_src)
+            .vertex_attrs()
             .into_iter()
             .enumerate()
             .map(|(i, d)| Resource {
@@ -287,7 +290,8 @@ pub fn interface_resources(ctx: &GlContext, program: u32, interface: u32) -> Vec
                 location: i as i32,
             })
             .collect(),
-        GL_PROGRAM_OUTPUT => glsl::program_frag_outputs(&p.fs_src)
+        GL_PROGRAM_OUTPUT => glsl::StageSources::new("", &p.fs_src)
+            .frag_outputs()
             .into_iter()
             .enumerate()
             .map(|(i, d)| Resource {
@@ -412,7 +416,8 @@ pub fn frag_data_location(ctx: &GlContext, program: u32, name: &str) -> i32 {
     if !p.linked {
         return -1;
     }
-    glsl::program_frag_outputs(&p.fs_src)
+    glsl::StageSources::new("", &p.fs_src)
+        .frag_outputs()
         .iter()
         .position(|d| d.name == name)
         .map(|i| i as i32)
@@ -421,24 +426,28 @@ pub fn frag_data_location(ctx: &GlContext, program: u32, name: &str) -> i32 {
 
 /// `glIsEnabled(cap)` — the live enable state of a modeled fixed-function capability. An unmodeled cap
 /// reads `false` (the honest answer for a capability this deferred model does not track).
-pub fn is_enabled(ctx: &GlContext, cap: u32) -> bool {
-    match cap {
-        GL_DEPTH_TEST => ctx.depth,
-        GL_STENCIL_TEST => ctx.stencil,
-        GL_BLEND => ctx.blend,
-        GL_CULL_FACE => ctx.cull_enabled,
-        GL_SCISSOR_TEST => ctx.scissor_enabled,
-        _ => false,
+impl GlContext {
+    pub fn is_enabled(&self, cap: u32) -> bool {
+        match cap {
+            GL_DEPTH_TEST => self.depth,
+            GL_STENCIL_TEST => self.stencil,
+            GL_BLEND => self.blend,
+            GL_CULL_FACE => self.cull_enabled,
+            GL_SCISSOR_TEST => self.scissor_enabled,
+            _ => false,
+        }
     }
 }
 
 /// `glGetShaderSource(shader)` — the exact GLSL-ES source string last given to `glShaderSource` (empty for
 /// a source-less / unknown shader).
-pub fn get_shader_source(ctx: &GlContext, shader: u32) -> String {
-    ctx.programs
-        .shader(shader)
-        .and_then(|s| s.src.clone())
-        .unwrap_or_default()
+impl GlContext {
+    pub fn get_shader_source(&self, shader: u32) -> String {
+        self.programs
+            .shader(shader)
+            .and_then(|s| s.src.clone())
+            .unwrap_or_default()
+    }
 }
 
 /// `glGetTexLevelParameter{i,f}v(target, level, pname)` — the bound texture's level-0 extent + internal

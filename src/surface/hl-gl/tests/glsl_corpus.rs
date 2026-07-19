@@ -357,11 +357,12 @@ fn run_case(case: &Case) -> Result<(), String> {
             // `layout(location=N)` added to bare `in`/`out` attributes/varyings/outputs
             // ([`glsl::prepare_verbatim_program`]). The body + verbatim constructs (gl_VertexID, combined
             // sampler helpers) are carried untouched.
-            let routed = glsl::is_forward_verbatim(case.vs) || glsl::is_forward_verbatim(case.fs);
+            let routed = glsl::Source::new(case.vs).is_forward_verbatim()
+                || glsl::Source::new(case.fs).is_forward_verbatim();
             if !routed {
                 return Err("expected verbatim routing but the driver desktopized it".into());
             }
-            let combined = glsl::program_uniform_decls(case.vs, case.fs);
+            let combined = glsl::StageSources::new(case.vs, case.fs).uniform_decls();
             let (evs, efs) = glsl::prepare_verbatim_program(case.vs, case.fs, &combined);
             if vs_out != evs || fs_out != efs {
                 return Err("verbatim route must forward source with the documented binding/location injection".into());
@@ -429,7 +430,7 @@ mod render {
         record::clear_color(&mut c, [0.0, 0.0, 1.0, 1.0]); // blue background
         record::clear(&mut c);
 
-        let vbo = record::gen_buffer(&mut c);
+        let vbo = c.buffers.gen();
         record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
         let mut tri = Vec::new();
         for pos in [[-0.8f32, -0.8], [0.8, -0.8], [0.0, 0.8]] {

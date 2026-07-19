@@ -6,6 +6,7 @@
 
 use crate::pty::local::LocalPty;
 use hl_ws::{Launcher, PtyBackend, Workspace};
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 
@@ -13,6 +14,7 @@ use std::path::Path;
 /// engine and in tests.
 pub struct LocalShellLauncher {
     pub shell: Vec<String>,
+    pub environment: BTreeMap<String, String>,
 }
 
 impl Default for LocalShellLauncher {
@@ -24,6 +26,7 @@ impl Default for LocalShellLauncher {
         };
         LocalShellLauncher {
             shell: vec![sh.to_string()],
+            environment: BTreeMap::new(),
         }
     }
 }
@@ -31,12 +34,10 @@ impl Default for LocalShellLauncher {
 impl Launcher for LocalShellLauncher {
     fn launch(&self, ws: &Workspace, cols: u16, rows: u16) -> io::Result<Box<dyn PtyBackend>> {
         let argv: Vec<&str> = self.shell.iter().map(|s| s.as_str()).collect();
-        let pty = LocalPty::spawn(
-            &argv,
-            cols,
-            rows,
-            &[("TERM", "xterm-256color"), ("HL_WORKSPACE", &ws.name)],
-        )?;
+        let mut environment = self.environment.clone();
+        environment.insert("TERM".into(), "xterm-256color".into());
+        environment.insert("HL_WORKSPACE".into(), ws.name.clone());
+        let pty = LocalPty::spawn(&argv, cols, rows, &environment)?;
         Ok(Box::new(pty))
     }
 }

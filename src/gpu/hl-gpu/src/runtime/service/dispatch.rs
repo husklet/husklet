@@ -12,17 +12,17 @@ use crate::protocol::model::command::Cmd;
 use crate::protocol::model::error::Result;
 use crate::protocol::model::id::{BufferId, FenceId};
 use crate::runtime::model::session::Session;
-use crate::runtime::port::executor::{GpuExecutor, Presented};
+use crate::runtime::port::executor::{GpuExecutor, Presentation};
 
 /// Dispatch a validated, accounted batch. The executor performs the native work (creating/destroying
 /// resources behind `session.resources`, recording submits, presenting); afterwards the runtime records
-/// each fence's lifecycle and any completion-signal timeline values. Returns one [`Presented`] per
+/// each fence's lifecycle and any completion-signal timeline values. Returns one [`Presentation`] per
 /// `Present` command, in order.
 pub fn dispatch(
     session: &mut Session,
     exec: &mut dyn GpuExecutor,
     batch: &[Cmd],
-) -> Result<Vec<Presented>> {
+) -> Result<Vec<Presentation>> {
     // Execute inside an all-tables transaction so the batch's resource-lifecycle mutations are atomic:
     // an executor that fails PART-WAY through a batch (a Submit that fails device validation, an unknown
     // resource ref, a shader the backend can't compile — i.e. a NACK) would otherwise leave the id tables

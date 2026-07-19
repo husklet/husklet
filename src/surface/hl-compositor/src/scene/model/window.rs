@@ -156,6 +156,52 @@ impl ConstraintAdjustment {
         resize_x: false,
         resize_y: false,
     };
+
+    fn constrain_x(self, positioner: &Positioner, target: Rect, geometry: &mut Rect) {
+        if !geometry.violates_x(&target) {
+            return;
+        }
+        if self.flip_x {
+            let flipped = positioner.mirror_x().unconstrained();
+            if !flipped.violates_x(&target) {
+                geometry.x = flipped.x;
+            }
+        }
+        if geometry.violates_x(&target) && self.slide_x {
+            geometry.x = geometry
+                .x
+                .min(target.right().saturating_sub(geometry.w))
+                .max(target.x);
+        }
+        if geometry.violates_x(&target) && self.resize_x {
+            let right = geometry.right().min(target.right());
+            geometry.x = geometry.x.max(target.x);
+            geometry.w = right.saturating_sub(geometry.x).max(1);
+        }
+    }
+
+    fn constrain_y(self, positioner: &Positioner, target: Rect, geometry: &mut Rect) {
+        if !geometry.violates_y(&target) {
+            return;
+        }
+        if self.flip_y {
+            let flipped = positioner.mirror_y().unconstrained();
+            if !flipped.violates_y(&target) {
+                geometry.y = flipped.y;
+            }
+        }
+        if geometry.violates_y(&target) && self.slide_y {
+            geometry.y = geometry
+                .y
+                .min(target.bottom().saturating_sub(geometry.h))
+                .max(target.y);
+        }
+        if geometry.violates_y(&target) && self.resize_y {
+            let bottom = geometry.bottom().min(target.bottom());
+            geometry.y = geometry.y.max(target.y);
+            geometry.h = bottom.saturating_sub(geometry.y).max(1);
+        }
+    }
 }
 
 /// Where a popup's native window should open: the parent surface it hangs off plus the
@@ -181,4 +227,127 @@ pub struct Positioner {
     pub constraint_adjustment: ConstraintAdjustment,
     /// Additional `(x, y)` offset applied after anchor+gravity.
     pub offset: (i32, i32),
+}
+
+impl Positioner {
+    pub fn place(&self, width: i32, height: i32) -> Rect {
+        self.place_in(Rect::new(0, 0, width.max(1), height.max(1)))
+    }
+
+    /// Resolve this xdg-positioner within `target`, applying flip, slide, then resize on each axis.
+    pub fn place_in(&self, target: Rect) -> Rect {
+        let mut geometry = self.unconstrained();
+        self.constraint_adjustment
+            .constrain_x(self, target, &mut geometry);
+        self.constraint_adjustment
+            .constrain_y(self, target, &mut geometry);
+        geometry
+    }
+
+    fn unconstrained(&self) -> Rect {
+        let (ax, ay) = self.anchor.point(self.anchor_rect);
+        let (gx, gy) = self.gravity.offset(self.size);
+        Rect::new(
+            ax.saturating_add(gx).saturating_add(self.offset.0),
+            ay.saturating_add(gy).saturating_add(self.offset.1),
+            self.size.0,
+            self.size.1,
+        )
+    }
+
+    fn mirror_x(&self) -> Self {
+        Self {
+            anchor: self.anchor.mirror_x(),
+            gravity: self.gravity.mirror_x(),
+            offset: (self.offset.0.saturating_neg(), self.offset.1),
+            constraint_adjustment: ConstraintAdjustment::NONE,
+            ..*self
+        }
+    }
+
+    fn mirror_y(&self) -> Self {
+        Self {
+            anchor: self.anchor.mirror_y(),
+            gravity: self.gravity.mirror_y(),
+            offset: (self.offset.0, self.offset.1.saturating_neg()),
+            constraint_adjustment: ConstraintAdjustment::NONE,
+            ..*self
+        }
+    }
+}
+
+impl Anchor {
+    fn point(self, rect: Rect) -> (i32, i32) {
+        let x = match self {
+            Self::Left | Self::TopLeft | Self::BottomLeft => rect.x,
+            Self::Right | Self::TopRight | Self::BottomRight => rect.right(),
+            _ => rect.x.saturating_add(rect.w / 2),
+        };
+        let y = match self {
+            Self::Top | Self::TopLeft | Self::TopRight => rect.y,
+            Self::Bottom | Self::BottomLeft | Self::BottomRight => rect.bottom(),
+            _ => rect.y.saturating_add(rect.h / 2),
+        };
+        (x, y)
+    }
+    fn mirror_x(self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+            Self::TopLeft => Self::TopRight,
+            Self::TopRight => Self::TopLeft,
+            Self::BottomLeft => Self::BottomRight,
+            Self::BottomRight => Self::BottomLeft,
+            other => other,
+        }
+    }
+    fn mirror_y(self) -> Self {
+        match self {
+            Self::Top => Self::Bottom,
+            Self::Bottom => Self::Top,
+            Self::TopLeft => Self::BottomLeft,
+            Self::BottomLeft => Self::TopLeft,
+            Self::TopRight => Self::BottomRight,
+            Self::BottomRight => Self::TopRight,
+            other => other,
+        }
+    }
+}
+
+impl Gravity {
+    fn offset(self, (w, h): (i32, i32)) -> (i32, i32) {
+        let x = match self {
+            Self::Left | Self::TopLeft | Self::BottomLeft => w.saturating_neg(),
+            Self::Right | Self::TopRight | Self::BottomRight => 0,
+            _ => -(w / 2),
+        };
+        let y = match self {
+            Self::Top | Self::TopLeft | Self::TopRight => h.saturating_neg(),
+            Self::Bottom | Self::BottomLeft | Self::BottomRight => 0,
+            _ => -(h / 2),
+        };
+        (x, y)
+    }
+    fn mirror_x(self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+            Self::TopLeft => Self::TopRight,
+            Self::TopRight => Self::TopLeft,
+            Self::BottomLeft => Self::BottomRight,
+            Self::BottomRight => Self::BottomLeft,
+            other => other,
+        }
+    }
+    fn mirror_y(self) -> Self {
+        match self {
+            Self::Top => Self::Bottom,
+            Self::Bottom => Self::Top,
+            Self::TopLeft => Self::BottomLeft,
+            Self::BottomLeft => Self::TopLeft,
+            Self::TopRight => Self::BottomRight,
+            Self::BottomRight => Self::TopRight,
+            other => other,
+        }
+    }
 }

@@ -421,11 +421,15 @@ pub const GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT: u32 = 0x8CD7;
 /// …). Used to compute the tightly-packed element size when capturing a client-side vertex array (0 stride)
 /// and the per-index size of a client-side element array. An unrecognized type defaults to 4 (the safe,
 /// widest common case) so a capture never under-reads.
-pub fn gl_component_size(kind: u32) -> usize {
-    match kind {
-        GL_BYTE | GL_UNSIGNED_BYTE => 1,
-        GL_SHORT | GL_UNSIGNED_SHORT | GL_HALF_FLOAT => 2,
-        GL_INT | GL_UNSIGNED_INT | GL_FLOAT => 4,
-        _ => 4,
+pub struct GlType(pub u32);
+
+impl GlType {
+    pub fn component_size(self) -> usize {
+        match self.0 {
+            GL_BYTE | GL_UNSIGNED_BYTE => 1,
+            GL_SHORT | GL_UNSIGNED_SHORT | GL_HALF_FLOAT => 2,
+            GL_INT | GL_UNSIGNED_INT | GL_FLOAT => 4,
+            _ => 4,
+        }
     }
 }

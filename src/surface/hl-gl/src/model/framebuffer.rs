@@ -24,6 +24,10 @@ pub struct Framebuffers {
 }
 
 impl Framebuffers {
+    pub fn sample_count(&self, _fbo: u32) -> u32 {
+        1
+    }
+
     pub fn new() -> Self {
         // FBO names start at 1; name 0 is the default framebuffer.
         Self {

@@ -84,7 +84,7 @@ async fn exec_inspect_wire_shape() {
         .unwrap()
         .to_string();
 
-    let resp = crate::containers::exec_inspect(State(app.clone()), Path(exec_id.clone())).await;
+    let resp = crate::containers::Execs::inspect(State(app.clone()), Path(exec_id.clone())).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let v = to_body_json(resp).await;
     let obj = v.as_object().unwrap();
@@ -109,7 +109,7 @@ async fn exec_inspect_wire_shape() {
 #[tokio::test]
 async fn exec_inspect_missing_is_404() {
     let app = test_app();
-    let resp = crate::containers::exec_inspect(State(app.clone()), Path("noexec".into())).await;
+    let resp = crate::containers::Execs::inspect(State(app.clone()), Path("noexec".into())).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let msg = to_body_string(resp).await;
     assert!(msg.contains("no such exec"), "got: {msg}");
@@ -156,7 +156,7 @@ async fn flow_exec_lifecycle_two_distinct_execs_prestart_and_404() {
     let id1 = to_body_json(r).await["Id"].as_str().unwrap().to_string();
 
     // Step 2: inspect id1 BEFORE any start -> Running=false, ContainerID=c1.
-    let r = crate::containers::exec_inspect(State(app.clone()), Path(id1.clone())).await;
+    let r = crate::containers::Execs::inspect(State(app.clone()), Path(id1.clone())).await;
     assert_eq!(r.status(), StatusCode::OK);
     let v = to_body_json(r).await;
     assert_eq!(v["Running"], false, "un-started exec is not Running");
@@ -181,12 +181,12 @@ async fn flow_exec_lifecycle_two_distinct_execs_prestart_and_404() {
 
     // Step 4: both inspect cleanly and independently.
     for id in [&id1, &id2] {
-        let r = crate::containers::exec_inspect(State(app.clone()), Path(id.clone())).await;
+        let r = crate::containers::Execs::inspect(State(app.clone()), Path(id.clone())).await;
         assert_eq!(r.status(), StatusCode::OK, "exec {id} inspects");
     }
 
     // Step 5: a bogus exec id is a 404.
-    let r = crate::containers::exec_inspect(State(app.clone()), Path("bogusexec".into())).await;
+    let r = crate::containers::Execs::inspect(State(app.clone()), Path("bogusexec".into())).await;
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
 }
 
@@ -214,7 +214,7 @@ async fn flow_exec_survives_container_stop_then_fresh_exec_409() {
 
     // Step 3: inspect the pre-existing exec id — still 200 with a sane shape (no panic/500). The exec
     // record outlives the container's running state; Running=false, ContainerID still points at c1.
-    let r = crate::containers::exec_inspect(State(app.clone()), Path(exec_id.clone())).await;
+    let r = crate::containers::Execs::inspect(State(app.clone()), Path(exec_id.clone())).await;
     assert_eq!(
         r.status(),
         StatusCode::OK,
@@ -270,8 +270,9 @@ async fn exec_inspect_reports_full_docker_state_shape() {
         .as_str()
         .unwrap()
         .to_string();
-    let v = to_body_json(crate::containers::exec_inspect(State(app.clone()), Path(exec_id)).await)
-        .await;
+    let v =
+        to_body_json(crate::containers::Execs::inspect(State(app.clone()), Path(exec_id)).await)
+            .await;
     for key in [
         "CanRemove",
         "OpenStdin",

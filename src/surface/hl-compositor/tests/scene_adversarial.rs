@@ -20,8 +20,7 @@ use hl_compositor::scene::port::{
     Clock, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,
 };
 use hl_compositor::scene::service::{
-    self, commit_surface, compose_frame, focus, is_tree_dirty, place_popup, place_popup_in,
-    schedule, BufferChange, Commit, FramePacing,
+    commit_surface, focus, schedule, BufferChange, Commit, FramePacing,
 };
 use hl_compositor::Compositor;
 
@@ -188,10 +187,10 @@ fn rect_empty_and_negative_sizes_cover_nothing() {
     let empty = Rect::new(0, 0, 0, 0);
     assert!(!empty.contains_point(0, 0));
     assert!(
-        !Rect::new(0, 0, 100, 100).contains_rect(&empty),
+        !Rect::new(0, 0, 100, 100).contains(&empty),
         "empty target is never 'contained'"
     );
-    assert!(!empty.contains_rect(&Rect::new(0, 0, 1, 1)));
+    assert!(!empty.contains(&Rect::new(0, 0, 1, 1)));
     assert!(!empty.intersects(&Rect::new(-5, -5, 100, 100)));
 }
 
@@ -210,16 +209,16 @@ fn rect_contains_point_is_half_open() {
 fn rect_contains_rect_requires_full_containment() {
     let outer = Rect::new(0, 0, 100, 100);
     assert!(
-        outer.contains_rect(&Rect::new(0, 0, 100, 100)),
+        outer.contains(&Rect::new(0, 0, 100, 100)),
         "equal rect is contained"
     );
-    assert!(outer.contains_rect(&Rect::new(10, 10, 80, 80)));
+    assert!(outer.contains(&Rect::new(10, 10, 80, 80)));
     assert!(
-        !outer.contains_rect(&Rect::new(50, 50, 60, 10)),
+        !outer.contains(&Rect::new(50, 50, 60, 10)),
         "spills past the right edge"
     );
     assert!(
-        !outer.contains_rect(&Rect::new(-1, 0, 10, 10)),
+        !outer.contains(&Rect::new(-1, 0, 10, 10)),
         "starts left of the outer"
     );
 }
@@ -597,7 +596,7 @@ fn remove_surface_unlinks_from_parent_and_clears_focus() {
     let child = scene.create_surface();
     scene.set_role(child, sub(top, 10, 10));
     commit_surface(&mut scene, child, Commit::attach(shm(50, 50)));
-    focus::focus_surface(&mut scene, child);
+    scene.focus(child);
     focus::update_pointer(&mut scene, top, 15.0, 15.0);
     assert_eq!(scene.seat().pointer_focus, Some(child));
 
@@ -698,7 +697,7 @@ fn compose_returns_none_when_root_has_no_buffer() {
     let id = scene.create_surface();
     scene.set_role(id, SurfaceRole::Toplevel);
     assert!(
-        compose_frame(&scene, id).is_none(),
+        scene.compose_frame(id).is_none(),
         "no root buffer => nothing to present"
     );
 }
@@ -713,7 +712,7 @@ fn compose_skips_a_subsurface_with_no_buffer() {
     scene.set_role(real, sub(top, 20, 20));
     commit_surface(&mut scene, real, Commit::attach(shm(50, 50)));
 
-    let frame = compose_frame(&scene, top).unwrap();
+    let frame = scene.compose_frame(top).unwrap();
     assert_eq!(
         frame.present_order(),
         vec![top, real],
@@ -741,7 +740,7 @@ fn compose_damage_translates_partial_damage_into_root_space() {
         .with_damage(Rect::new(5, 5, 10, 10)),
     );
 
-    let frame = compose_frame(&scene, top).unwrap();
+    let frame = scene.compose_frame(top).unwrap();
     let child_item = frame
         .items
         .iter()
@@ -759,7 +758,7 @@ fn compose_dirty_layer_without_damage_rects_damages_its_whole_rect() {
     let mut scene = scene_with_output();
     let top = map_toplevel(&mut scene, 400, 300);
     // Fresh attach: dirty, but the damage list is empty => whole-rect damage.
-    let frame = compose_frame(&scene, top).unwrap();
+    let frame = scene.compose_frame(top).unwrap();
     let item = &frame.items[0];
     assert_eq!(
         item.damage,
@@ -776,7 +775,7 @@ fn compose_popup_image_carries_native_placement_and_offset() {
     scene.set_role(popup, popup_role(top, Rect::new(120, 90, 200, 150)));
     commit_surface(&mut scene, popup, Commit::attach(shm(200, 150)));
 
-    let frame = compose_frame(&scene, top).unwrap();
+    let frame = scene.compose_frame(top).unwrap();
     let item = frame
         .items
         .iter()
@@ -795,7 +794,7 @@ fn compose_image_format_reduces_to_opaque_or_alpha() {
     let top = scene.create_surface();
     scene.set_role(top, SurfaceRole::Toplevel);
     commit_surface(&mut scene, top, Commit::attach(xrgb(100, 100)));
-    let frame = compose_frame(&scene, top).unwrap();
+    let frame = scene.compose_frame(top).unwrap();
     assert_eq!(frame.items[0].image.format, Format::Xrgb8888);
     assert!(!frame.items[0].image.gpu);
 }
@@ -813,7 +812,7 @@ fn compose_carries_the_gpu_flag_through() {
             ..shm(100, 100)
         }),
     );
-    let frame = compose_frame(&scene, top).unwrap();
+    let frame = scene.compose_frame(top).unwrap();
     assert!(
         frame.items[0].image.gpu,
         "the zero-copy GPU flag reaches the presentable image"
@@ -834,7 +833,7 @@ fn deeply_nested_subsurface_offsets_accumulate() {
     scene.set_role(c, sub(b, 5, 7));
     commit_surface(&mut scene, c, Commit::attach(shm(10, 10)));
 
-    let frame = compose_frame(&scene, top).unwrap();
+    let frame = scene.compose_frame(top).unwrap();
     assert_eq!(
         frame.present_order(),
         vec![top, a, b, c],
@@ -857,7 +856,7 @@ fn negative_subsurface_offset_is_preserved() {
     let child = scene.create_surface();
     scene.set_role(child, sub(top, -30, -40));
     commit_surface(&mut scene, child, Commit::attach(shm(50, 50)));
-    let frame = compose_frame(&scene, top).unwrap();
+    let frame = scene.compose_frame(top).unwrap();
     let item = frame
         .items
         .iter()
@@ -880,7 +879,7 @@ fn clean_tree_is_not_dirty() {
     let mut scene = scene_with_output();
     let top = map_toplevel(&mut scene, 100, 100);
     scene.clear_dirty(top);
-    assert!(!is_tree_dirty(&scene, top));
+    assert!(!scene.is_tree_dirty(top));
 }
 
 #[test]
@@ -914,7 +913,7 @@ fn partial_opaque_cover_does_not_occlude() {
         .with_damage(Rect::new(150, 150, 10, 10)),
     );
     assert!(
-        is_tree_dirty(&c.scene, top),
+        c.scene.is_tree_dirty(top),
         "damage outside the opaque cover is visible"
     );
 }
@@ -929,7 +928,7 @@ fn dirty_surface_with_unknown_geometry_forces_present() {
     // Mark it dirty without giving it a buffer.
     scene.mark_dirty(ghost);
     assert!(
-        is_tree_dirty(&scene, top),
+        scene.is_tree_dirty(top),
         "a dirty surface of unknown size keeps the tree dirty"
     );
 }
@@ -985,7 +984,7 @@ fn bufferless_surface_with_stale_opaque_region_does_not_occlude() {
         .with_damage(Rect::new(10, 10, 20, 20)),
     );
     assert!(
-        is_tree_dirty(&c.scene, top),
+        c.scene.is_tree_dirty(top),
         "a detached (bufferless) surface must not occlude the damage below it"
     );
 }
@@ -1021,7 +1020,7 @@ fn occluded_then_uncovered_forces_a_repaint() {
         }
         .with_damage(Rect::new(0, 0, 50, 50)),
     );
-    assert!(!is_tree_dirty(&c.scene, top));
+    assert!(!c.scene.is_tree_dirty(top));
 
     // Shrink the opaque region; the same damage is now visible.
     c.apply_commit(
@@ -1032,7 +1031,7 @@ fn occluded_then_uncovered_forces_a_repaint() {
         },
     );
     assert!(
-        is_tree_dirty(&c.scene, top),
+        c.scene.is_tree_dirty(top),
         "shrunken cover no longer occludes the damage"
     );
 }
@@ -1052,7 +1051,7 @@ fn popup_anchor_center_and_gravity_center() {
         offset: (0, 0),
     };
     // top-left = anchor(120,110) - half size(5,5) = (115, 105)
-    assert_eq!(place_popup(&p, 2000, 2000), Rect::new(115, 105, 10, 10));
+    assert_eq!(p.place(2000, 2000), Rect::new(115, 105, 10, 10));
 }
 
 #[test]
@@ -1066,7 +1065,7 @@ fn popup_all_gravities_grow_away_from_anchor() {
         offset: (0, 0),
     };
     let at = |g: Gravity| {
-        let geo = place_popup(&Positioner { gravity: g, ..base }, 4000, 4000);
+        let geo = Positioner { gravity: g, ..base }.place(4000, 4000);
         (geo.x, geo.y)
     };
     assert_eq!(
@@ -1099,7 +1098,7 @@ fn popup_flip_x_mirrors_when_it_helps() {
         },
         offset: (0, 0),
     };
-    let geo = place_popup(&p, 500, 400);
+    let geo = p.place(500, 400);
     // Flipped: anchor Left (x=480), gravity Left (origin x = 480 - 100 = 380).
     assert_eq!(geo.x, 380, "flip_x mirrors the popup back on-screen");
     assert!(geo.x >= 0 && geo.right() <= 500);
@@ -1120,7 +1119,7 @@ fn popup_flip_is_declined_when_it_would_not_help() {
         },
         offset: (0, 0),
     };
-    let geo = place_popup(&p, 500, 400);
+    let geo = p.place(500, 400);
     // Flipped would put origin at 60 - 600 = -540 (overflow left), so flip is declined; origin stays 60.
     assert_eq!(geo.x, 60, "a flip that doesn't help is not applied");
 }
@@ -1138,7 +1137,7 @@ fn popup_slide_pushes_in_from_the_far_edge() {
         },
         offset: (0, 0),
     };
-    let geo = place_popup(&p, 500, 400);
+    let geo = p.place(500, 400);
     assert_eq!(
         geo.bottom(),
         400,
@@ -1161,7 +1160,7 @@ fn popup_slide_of_oversized_popup_flushes_near_edge() {
         },
         offset: (0, 0),
     };
-    let geo = place_popup_in(&p, Rect::new(0, 0, 500, 400));
+    let geo = p.place_in(Rect::new(0, 0, 500, 400));
     assert_eq!(geo.y, 0, "oversized popup slides flush to the near edge");
     assert_eq!(geo.h, 900, "slide never resizes");
 }
@@ -1180,7 +1179,7 @@ fn popup_resize_clamps_both_origin_and_extent() {
         },
         offset: (-50, 0), // pushes origin to -50 (left overflow)
     };
-    let geo = place_popup_in(&p, Rect::new(0, 0, 100, 400));
+    let geo = p.place_in(Rect::new(0, 0, 100, 400));
     assert_eq!(geo.x, 0, "origin clipped to the target left");
     assert!(geo.right() <= 100, "extent clipped to the target right");
     assert!(geo.w >= 1, "resize keeps a positive width");
@@ -1200,7 +1199,7 @@ fn popup_resize_never_produces_zero_size() {
         },
         offset: (0, 0),
     };
-    let geo = place_popup_in(&p, Rect::new(0, 0, 100, 100));
+    let geo = p.place_in(Rect::new(0, 0, 100, 100));
     assert!(geo.w >= 1, "width never collapses to zero (got {})", geo.w);
 }
 
@@ -1219,7 +1218,7 @@ fn popup_flip_then_slide_ordering() {
         },
         offset: (0, 0),
     };
-    let geo = place_popup(&p, 500, 400);
+    let geo = p.place(500, 400);
     // Flip puts origin at 470 - 100 = 370 (fits). Slide would have flushed to right=500 (origin 400).
     assert_eq!(
         geo.x, 370,
@@ -1241,7 +1240,7 @@ fn constrain_popup_uses_scene_output_area() {
         },
         offset: (0, 0),
     };
-    let geo = service::constrain_popup(&scene, &p);
+    let geo = scene.constrain_popup(&p);
     assert_eq!(
         geo.right(),
         2560,
@@ -1266,7 +1265,7 @@ fn popup_for_native_toplevel_is_constrained_to_window_content() {
         offset: (0, 0),
     };
 
-    let geo = service::constrain_popup_for_parent(&scene, top, &p);
+    let geo = scene.constrain_popup_for_parent(top, &p);
     assert!(
         geo.y < p.anchor_rect.y,
         "the dropdown flips above its field"
@@ -1297,7 +1296,7 @@ fn nested_popup_constraints_are_translated_into_parent_coordinates() {
         offset: (0, 0),
     };
 
-    let geo = service::constrain_popup_for_parent(&scene, menu, &p);
+    let geo = scene.constrain_popup_for_parent(menu, &p);
     assert!(
         500 + geo.right() <= 800,
         "submenu remains inside the owning native toplevel"
@@ -1313,7 +1312,7 @@ fn popup_placement_none_for_non_popup() {
     let mut scene = scene_with_output();
     let top = map_toplevel(&mut scene, 100, 100);
     assert_eq!(
-        service::popup_placement(&scene, top),
+        scene.popup_placement(top),
         None,
         "a toplevel has no popup placement"
     );
@@ -1480,12 +1479,12 @@ fn update_pointer_floors_fractional_coordinates() {
 fn focus_clear_and_refocus_report_changes() {
     let mut scene = scene_with_output();
     let a = map_toplevel(&mut scene, 100, 100);
-    focus::focus_surface(&mut scene, a);
-    let ch = focus::clear_focus(&mut scene);
+    scene.focus(a);
+    let ch = scene.clear_focus();
     assert_eq!((ch.previous, ch.current), (Some(a), None));
     assert!(ch.changed());
     // Clearing again is a no-op change.
-    let ch = focus::clear_focus(&mut scene);
+    let ch = scene.clear_focus();
     assert!(!ch.changed());
 }
 
@@ -1493,8 +1492,8 @@ fn focus_clear_and_refocus_report_changes() {
 fn refocusing_the_same_surface_is_not_a_change() {
     let mut scene = scene_with_output();
     let a = map_toplevel(&mut scene, 100, 100);
-    focus::focus_surface(&mut scene, a);
-    let ch = focus::focus_surface(&mut scene, a);
+    scene.focus(a);
+    let ch = scene.focus(a);
     assert!(
         !ch.changed(),
         "focusing the already-focused surface reports no change"
@@ -1520,31 +1519,31 @@ fn should_present_treats_backward_clock_as_not_due() {
 fn outcome_to_pacing_mapping_is_total() {
     use FramePacing::*;
     assert_eq!(
-        service::from_outcome(PresentOutcome::Delivered {
+        FramePacing::from(PresentOutcome::Delivered {
             serial: 1,
             timing: None
         }),
         Presented
     );
     assert_eq!(
-        service::from_outcome(PresentOutcome::Offscreen),
+        FramePacing::from(PresentOutcome::Offscreen),
         RetryableFailure
     );
     assert_eq!(
-        service::from_outcome(PresentOutcome::RetryableFailure),
+        FramePacing::from(PresentOutcome::RetryableFailure),
         RetryableFailure
     );
     assert_eq!(
-        service::from_outcome(PresentOutcome::TerminalFailure),
+        FramePacing::from(PresentOutcome::TerminalFailure),
         TerminalFailure
     );
 }
 
 #[test]
 fn fallback_timing_sets_vsync_only_with_a_known_refresh() {
-    let t = schedule::fallback_timing(1_000, 16_666_666);
+    let t = PresentTiming::fallback(1_000, 16_666_666);
     assert!(t.vsync && t.refresh_ns == 16_666_666 && t.present_ns == 1_000);
-    let t0 = schedule::fallback_timing(1_000, 0);
+    let t0 = PresentTiming::fallback(1_000, 0);
     assert!(!t0.vsync, "unknown refresh => no vsync claim");
 }
 

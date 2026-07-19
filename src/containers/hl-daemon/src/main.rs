@@ -38,7 +38,7 @@ mod test_support;
 mod util;
 mod volumes;
 
-use crate::http::strip_api_version;
+use crate::http::DockerHttp;
 use crate::model::*;
 use crate::networks::default_networks;
 use crate::util::*;
@@ -47,17 +47,19 @@ use crate::util::*;
 /// bundle's `Resources/images`, a sibling of this daemon binary. We discover (not copy) them so an app
 /// update always serves the current starter images and `~/.hl` never needs a manual refresh. Empty in a
 /// dev/test tree (no such sibling exists next to the binary), so it can't perturb the matrix.
-fn bundled_image_dirs(images_dir: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("images");
-            if p.is_dir() && p.to_string_lossy() != images_dir {
-                out.push(p.to_string_lossy().into_owned());
+impl Discovery<'_> {
+    fn bundled_dirs(images_dir: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let p = dir.join("images");
+                if p.is_dir() && p.to_string_lossy() != images_dir {
+                    out.push(p.to_string_lossy().into_owned());
+                }
             }
         }
+        out
     }
-    out
 }
 
 #[tokio::main]
@@ -93,16 +95,16 @@ async fn main() {
     // set straight from the bundle -- instead of copying it into ~/.hl -- means an app update always
     // carries the current starter images and nothing in ~/.hl ever needs refreshing. User pulls win on
     // a name clash.
-    let mut imgs = discover_images(&images_dir);
-    for d in bundled_image_dirs(&images_dir) {
-        for img in discover_images(&d) {
+    let mut imgs = Discovery::new(&images_dir).images();
+    for d in Discovery::bundled_dirs(&images_dir) {
+        for img in Discovery::new(&d).images() {
             if !imgs.iter().any(|i| i.name == img.name) {
                 imgs.push(img);
             }
         }
     }
     inner.images = imgs;
-    load_state(&mut inner, &state_path);
+    Store::load(&mut inner, &state_path);
     if inner.networks.is_empty() {
         inner.networks = default_networks();
     }
@@ -142,7 +144,7 @@ async fn main() {
         events: events::new_bus(),
     };
 
-    let router = routes::router(app);
+    let router = routes::Routes::new(app);
 
     let listener = tokio::net::UnixListener::bind(&sock).expect("bind unix socket");
     eprintln!("[hl-daemon] listening on unix://{sock}");
@@ -157,7 +159,7 @@ async fn main() {
             let io = hyper_util::rt::TokioIo::new(socket);
             let hsvc = hyper::service::service_fn(
                 move |mut req: hyper::Request<hyper::body::Incoming>| {
-                    strip_api_version(&mut req);
+                    DockerHttp::normalize(&mut req);
                     if std::env::var("HL_DEBUG").is_ok() {
                         eprintln!("[req] {} {}", req.method(), req.uri().path());
                     }

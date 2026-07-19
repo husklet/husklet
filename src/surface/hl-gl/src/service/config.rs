@@ -89,41 +89,47 @@ pub enum ConfigError {
 /// * a recognized `EGLConfig` attribute returns its real value; an unrecognized enum is
 ///   [`ConfigError::BadAttribute`] (never a silent `0`, so a caller probing an attribute learns the truth
 ///   instead of reading a fabricated value).
-pub fn config_attrib(is_our_config: bool, attribute: i32) -> Result<i32, ConfigError> {
-    if !is_our_config {
-        return Err(ConfigError::BadConfig);
+pub struct Config;
+
+impl Config {
+    pub fn attrib(is_our_config: bool, attribute: i32) -> Result<i32, ConfigError> {
+        if !is_our_config {
+            return Err(ConfigError::BadConfig);
+        }
+        let v = match attribute {
+            EGL_CONFIG_ID => CONFIG_ID,
+            EGL_BUFFER_SIZE => BUFFER,
+            EGL_RED_SIZE => RED,
+            EGL_GREEN_SIZE => GREEN,
+            EGL_BLUE_SIZE => BLUE,
+            EGL_ALPHA_SIZE => ALPHA,
+            EGL_LUMINANCE_SIZE => 0,
+            EGL_ALPHA_MASK_SIZE => 0,
+            EGL_DEPTH_SIZE => DEPTH,
+            EGL_STENCIL_SIZE => STENCIL,
+            EGL_SAMPLES => 0,
+            EGL_SAMPLE_BUFFERS => 0,
+            EGL_COLOR_BUFFER_TYPE => EGL_RGB_BUFFER,
+            EGL_CONFIG_CAVEAT => EGL_NONE,
+            EGL_CONFORMANT | EGL_RENDERABLE_TYPE => EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT,
+            EGL_SURFACE_TYPE => EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
+            EGL_LEVEL => 0,
+            EGL_MAX_PBUFFER_WIDTH | EGL_MAX_PBUFFER_HEIGHT => MAX_PBUFFER,
+            EGL_MAX_PBUFFER_PIXELS => MAX_PBUFFER * MAX_PBUFFER,
+            EGL_NATIVE_RENDERABLE => 0, // EGL_FALSE
+            EGL_NATIVE_VISUAL_ID => 0,
+            EGL_NATIVE_VISUAL_TYPE => EGL_NONE,
+            EGL_MIN_SWAP_INTERVAL => 0,
+            EGL_MAX_SWAP_INTERVAL => 1,
+            EGL_TRANSPARENT_TYPE => EGL_NONE,
+            EGL_TRANSPARENT_RED_VALUE
+            | EGL_TRANSPARENT_GREEN_VALUE
+            | EGL_TRANSPARENT_BLUE_VALUE => 0,
+            EGL_BIND_TO_TEXTURE_RGB | EGL_BIND_TO_TEXTURE_RGBA => 0, // EGL_FALSE
+            _ => return Err(ConfigError::BadAttribute),
+        };
+        Ok(v)
     }
-    let v = match attribute {
-        EGL_CONFIG_ID => CONFIG_ID,
-        EGL_BUFFER_SIZE => BUFFER,
-        EGL_RED_SIZE => RED,
-        EGL_GREEN_SIZE => GREEN,
-        EGL_BLUE_SIZE => BLUE,
-        EGL_ALPHA_SIZE => ALPHA,
-        EGL_LUMINANCE_SIZE => 0,
-        EGL_ALPHA_MASK_SIZE => 0,
-        EGL_DEPTH_SIZE => DEPTH,
-        EGL_STENCIL_SIZE => STENCIL,
-        EGL_SAMPLES => 0,
-        EGL_SAMPLE_BUFFERS => 0,
-        EGL_COLOR_BUFFER_TYPE => EGL_RGB_BUFFER,
-        EGL_CONFIG_CAVEAT => EGL_NONE,
-        EGL_CONFORMANT | EGL_RENDERABLE_TYPE => EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT,
-        EGL_SURFACE_TYPE => EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
-        EGL_LEVEL => 0,
-        EGL_MAX_PBUFFER_WIDTH | EGL_MAX_PBUFFER_HEIGHT => MAX_PBUFFER,
-        EGL_MAX_PBUFFER_PIXELS => MAX_PBUFFER * MAX_PBUFFER,
-        EGL_NATIVE_RENDERABLE => 0, // EGL_FALSE
-        EGL_NATIVE_VISUAL_ID => 0,
-        EGL_NATIVE_VISUAL_TYPE => EGL_NONE,
-        EGL_MIN_SWAP_INTERVAL => 0,
-        EGL_MAX_SWAP_INTERVAL => 1,
-        EGL_TRANSPARENT_TYPE => EGL_NONE,
-        EGL_TRANSPARENT_RED_VALUE | EGL_TRANSPARENT_GREEN_VALUE | EGL_TRANSPARENT_BLUE_VALUE => 0,
-        EGL_BIND_TO_TEXTURE_RGB | EGL_BIND_TO_TEXTURE_RGBA => 0, // EGL_FALSE
-        _ => return Err(ConfigError::BadAttribute),
-    };
-    Ok(v)
 }
 
 /// `eglGetConfigs` / `eglChooseConfig` enumeration contract, resolved without touching raw pointers.
@@ -133,12 +139,14 @@ pub fn config_attrib(is_our_config: bool, attribute: i32) -> Result<i32, ConfigE
 ///   * a NULL array is the "just tell me how many" query — write nothing, report the TOTAL config count;
 ///   * a real array is filled with `min(config_size, total)` config handles, and `num_config` reports
 ///     exactly how many were written (a `config_size` of `0`, or negative, writes none).
-pub fn enumerate(buffer_present: bool, config_size: i32) -> (usize, i32) {
-    if !buffer_present {
-        (0, NUM_CONFIGS)
-    } else {
-        let n = NUM_CONFIGS.min(config_size.max(0));
-        (n as usize, n)
+impl Config {
+    pub fn enumerate(buffer_present: bool, config_size: i32) -> (usize, i32) {
+        if !buffer_present {
+            (0, NUM_CONFIGS)
+        } else {
+            let n = NUM_CONFIGS.min(config_size.max(0));
+            (n as usize, n)
+        }
     }
 }
 
@@ -148,25 +156,25 @@ mod tests {
 
     #[test]
     fn our_config_reports_truthful_color_depth_stencil() {
-        assert_eq!(config_attrib(true, EGL_RED_SIZE), Ok(8));
-        assert_eq!(config_attrib(true, EGL_GREEN_SIZE), Ok(8));
-        assert_eq!(config_attrib(true, EGL_BLUE_SIZE), Ok(8));
-        assert_eq!(config_attrib(true, EGL_ALPHA_SIZE), Ok(8));
-        assert_eq!(config_attrib(true, EGL_BUFFER_SIZE), Ok(32));
-        assert_eq!(config_attrib(true, EGL_DEPTH_SIZE), Ok(24));
-        assert_eq!(config_attrib(true, EGL_STENCIL_SIZE), Ok(8));
-        assert_eq!(config_attrib(true, EGL_CONFIG_ID), Ok(CONFIG_ID));
+        assert_eq!(Config::attrib(true, EGL_RED_SIZE), Ok(8));
+        assert_eq!(Config::attrib(true, EGL_GREEN_SIZE), Ok(8));
+        assert_eq!(Config::attrib(true, EGL_BLUE_SIZE), Ok(8));
+        assert_eq!(Config::attrib(true, EGL_ALPHA_SIZE), Ok(8));
+        assert_eq!(Config::attrib(true, EGL_BUFFER_SIZE), Ok(32));
+        assert_eq!(Config::attrib(true, EGL_DEPTH_SIZE), Ok(24));
+        assert_eq!(Config::attrib(true, EGL_STENCIL_SIZE), Ok(8));
+        assert_eq!(Config::attrib(true, EGL_CONFIG_ID), Ok(CONFIG_ID));
         assert_eq!(
-            config_attrib(true, EGL_COLOR_BUFFER_TYPE),
+            Config::attrib(true, EGL_COLOR_BUFFER_TYPE),
             Ok(EGL_RGB_BUFFER)
         );
-        assert_eq!(config_attrib(true, EGL_CONFIG_CAVEAT), Ok(EGL_NONE));
+        assert_eq!(Config::attrib(true, EGL_CONFIG_CAVEAT), Ok(EGL_NONE));
         assert_eq!(
-            config_attrib(true, EGL_RENDERABLE_TYPE),
+            Config::attrib(true, EGL_RENDERABLE_TYPE),
             Ok(EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT)
         );
         assert_eq!(
-            config_attrib(true, EGL_SURFACE_TYPE),
+            Config::attrib(true, EGL_SURFACE_TYPE),
             Ok(EGL_WINDOW_BIT | EGL_PBUFFER_BIT)
         );
     }
@@ -175,16 +183,16 @@ mod tests {
     fn unknown_attribute_is_bad_attribute_not_a_fake_zero() {
         // A garbage enum must be reported, never silently answered with 0.
         assert_eq!(
-            config_attrib(true, 0x1234_5678),
+            Config::attrib(true, 0x1234_5678),
             Err(ConfigError::BadAttribute)
         );
-        assert_eq!(config_attrib(true, 0), Err(ConfigError::BadAttribute));
+        assert_eq!(Config::attrib(true, 0), Err(ConfigError::BadAttribute));
     }
 
     #[test]
     fn foreign_config_handle_is_bad_config() {
         assert_eq!(
-            config_attrib(false, EGL_RED_SIZE),
+            Config::attrib(false, EGL_RED_SIZE),
             Err(ConfigError::BadConfig)
         );
     }
@@ -192,17 +200,17 @@ mod tests {
     #[test]
     fn enumerate_null_buffer_reports_count_only() {
         // configs == NULL: write nothing, report the total.
-        assert_eq!(enumerate(false, 0), (0, NUM_CONFIGS));
-        assert_eq!(enumerate(false, 99), (0, NUM_CONFIGS));
+        assert_eq!(Config::enumerate(false, 0), (0, NUM_CONFIGS));
+        assert_eq!(Config::enumerate(false, 99), (0, NUM_CONFIGS));
     }
 
     #[test]
     fn enumerate_bounded_copy() {
         // Real array with room: write + report all configs.
-        assert_eq!(enumerate(true, 16), (1, 1));
-        assert_eq!(enumerate(true, 1), (1, 1));
+        assert_eq!(Config::enumerate(true, 16), (1, 1));
+        assert_eq!(Config::enumerate(true, 1), (1, 1));
         // Zero / negative capacity writes none (no OOB store into a zero-length array).
-        assert_eq!(enumerate(true, 0), (0, 0));
-        assert_eq!(enumerate(true, -1), (0, 0));
+        assert_eq!(Config::enumerate(true, 0), (0, 0));
+        assert_eq!(Config::enumerate(true, -1), (0, 0));
     }
 }

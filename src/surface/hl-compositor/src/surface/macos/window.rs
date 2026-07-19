@@ -25,33 +25,47 @@ use crate::scene::model::Visibility;
 /// Describe the primary Mac display in the compositor's `$HL_OUTPUTS` form: physical pixels for the
 /// mode and the integer Retina backing scale for Wayland. Advertising points as pixels makes clients
 /// render scale-1 buffers which Core Animation then stretches on Retina displays.
-pub fn primary_output_spec(mtm: MainThreadMarker) -> Option<String> {
-    let screen = NSScreen::mainScreen(mtm)?;
-    let scale = screen.backingScaleFactor().max(1.0).round() as i32;
-    // GTK's client-side maximize control is lowered to AppKit native full screen, so advertise the full
-    // display. The client then commits a buffer that exactly matches the full-screen Cocoa content area.
-    let frame = screen.frame();
-    let width = (frame.size.width * f64::from(scale)).round().max(1.0) as u32;
-    let height = (frame.size.height * f64::from(scale)).round().max(1.0) as u32;
-    Some(format!("{width}x{height}@0,0*{scale}"))
+pub struct DisplayConfig {
+    marker: MainThreadMarker,
 }
 
-/// Nominal maximum refresh of the primary display in millihertz. On ProMotion this is typically 120 Hz;
-/// publishing 60 Hz would unnecessarily throttle frame callbacks to every other host refresh.
-pub fn primary_refresh_millihz(mtm: MainThreadMarker) -> Option<i64> {
-    let hz = unsafe { NSScreen::mainScreen(mtm)?.maximumFramesPerSecond() };
-    (hz > 0).then_some(hz as i64 * 1_000)
+impl DisplayConfig {
+    pub fn new(marker: MainThreadMarker) -> Self {
+        Self { marker }
+    }
+
+    pub fn primary_spec(&self) -> Option<String> {
+        let screen = NSScreen::mainScreen(self.marker)?;
+        let scale = screen.backingScaleFactor().max(1.0).round() as i32;
+        // GTK's client-side maximize control is lowered to AppKit native full screen, so advertise the full
+        // display. The client then commits a buffer that exactly matches the full-screen Cocoa content area.
+        let frame = screen.frame();
+        let width = (frame.size.width * f64::from(scale)).round().max(1.0) as u32;
+        let height = (frame.size.height * f64::from(scale)).round().max(1.0) as u32;
+        Some(format!("{width}x{height}@0,0*{scale}"))
+    }
+
+    /// Nominal maximum refresh of the primary display in millihertz. On ProMotion this is typically 120 Hz;
+    /// publishing 60 Hz would unnecessarily throttle frame callbacks to every other host refresh.
+    pub fn primary_refresh_millihz(&self) -> Option<i64> {
+        let hz = unsafe { NSScreen::mainScreen(self.marker)?.maximumFramesPerSecond() };
+        (hz > 0).then_some(hz as i64 * 1_000)
+    }
 }
 
 /// Ensure there is a running `NSApplication` with a foreground (Regular) activation policy, so a window
 /// this presenter opens can actually become visible and key. Idempotent. Returns the main-thread marker.
-pub fn ensure_app(mtm: MainThreadMarker) -> Retained<NSApplication> {
-    let app = NSApplication::sharedApplication(mtm);
-    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-    unsafe { app.finishLaunching() };
-    #[allow(deprecated)]
-    app.activateIgnoringOtherApps(true);
-    app
+pub struct NativeApplication;
+
+impl NativeApplication {
+    pub fn ensure(mtm: MainThreadMarker) -> Retained<NSApplication> {
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        unsafe { app.finishLaunching() };
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+        app
+    }
 }
 
 /// A native window backing one surface: an `NSWindow` whose content view hosts a `CAMetalLayer`.
@@ -295,9 +309,7 @@ impl MetalWindow {
             frame.size.height += dy;
         }
 
-        let (min, max) = unsafe {
-            (self.window.contentMinSize(), self.window.contentMaxSize())
-        };
+        let (min, max) = unsafe { (self.window.contentMinSize(), self.window.contentMaxSize()) };
         let width = frame.size.width.clamp(min.width.max(1.0), max.width);
         let height = frame.size.height.clamp(min.height.max(1.0), max.height);
         if drag.left {

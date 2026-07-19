@@ -8,64 +8,72 @@ use crate::protocol::model::error::{GpuError, Result};
 
 /// Bytes per texel for a color format, or a typed error for a non-color (depth/stencil) format the
 /// software oracle cannot materialize.
-pub(crate) fn texel_bytes(fmt: TextureFormat) -> Result<usize> {
-    fmt.bytes_per_texel()
-        .ok_or(GpuError::Unsupported("software: non-color texture format"))
-}
-
-/// Convert a normalized (linear-light) color to packed bytes for the 8-bit color formats. Alpha — and
-/// every channel of a LINEAR format — is a plain unorm quantize (round half up). A COLOR channel of an
-/// sRGB format is gamma-ENCODED (the IEC 61966-2-1 linear→sRGB OETF) on write, exactly as the hardware ROP
-/// does for a `LoadOp::Clear` or a non-blended (replace) draw into an sRGB target — so the oracle stores
-/// e.g. 188 for linear 0.5, not the naive 128. (A BLENDED draw encodes via [`store_texel_linear`]; this is
-/// the clear / replace-draw path.)
-pub(crate) fn clear_texel(fmt: TextureFormat, c: [f32; 4]) -> Result<Vec<u8>> {
-    let lin = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-    let col = |v: f32| if is_srgb(fmt) { srgb_encode(v) } else { lin(v) };
-    Ok(match fmt {
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => {
-            vec![col(c[0]), col(c[1]), col(c[2]), lin(c[3])]
-        }
-        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => {
-            vec![col(c[2]), col(c[1]), col(c[0]), lin(c[3])]
-        }
-        TextureFormat::R8Unorm => vec![lin(c[0])],
-        TextureFormat::Rg8Unorm => vec![lin(c[0]), lin(c[1])],
-        _ => return Err(GpuError::Unsupported("software: clear for this format")),
-    })
-}
-
-/// The IEC 61966-2-1 sRGB EOTF on a normalized [0,1] value (electrical → linear-light optical).
-pub(crate) fn srgb_to_linear(x: f32) -> f32 {
-    if x <= 0.04045 {
-        x / 12.92
-    } else {
-        ((x + 0.055) / 1.055).powf(2.4)
+impl TextureFormat {
+    pub(crate) fn software_texel_bytes(self) -> Result<usize> {
+        self.bytes_per_texel()
+            .ok_or(GpuError::Unsupported("software: non-color texture format"))
     }
-}
-fn srgb_decode(v: u8) -> f32 {
-    srgb_to_linear(v as f32 / 255.0)
-}
-fn srgb_encode(v: f32) -> u8 {
-    let x = v.clamp(0.0, 1.0);
-    let y = if x <= 0.0031308 {
-        x * 12.92
-    } else {
-        1.055 * x.powf(1.0 / 2.4) - 0.055
-    };
-    (y * 255.0 + 0.5) as u8
-}
-pub(crate) fn is_srgb(f: TextureFormat) -> bool {
-    matches!(f, TextureFormat::Rgba8Srgb | TextureFormat::Bgra8Srgb)
-}
 
-/// Logical-RGBA → byte-offset permutation for the oracle's 4-channel color formats. `Bgra*` stores blue
-/// and red swapped; alpha is always the last byte. Returns `None` for a non-4-channel format.
-pub(crate) fn rgba_channel_order(f: TextureFormat) -> Option<[usize; 4]> {
-    match f {
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => Some([0, 1, 2, 3]),
-        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => Some([2, 1, 0, 3]),
-        _ => None,
+    /// Convert a normalized (linear-light) color to packed bytes for the 8-bit color formats. Alpha — and
+    /// every channel of a LINEAR format — is a plain unorm quantize (round half up). A COLOR channel of an
+    /// sRGB format is gamma-ENCODED (the IEC 61966-2-1 linear→sRGB OETF) on write, exactly as the hardware ROP
+    /// does for a `LoadOp::Clear` or a non-blended (replace) draw into an sRGB target — so the oracle stores
+    /// e.g. 188 for linear 0.5, not the naive 128. (A BLENDED draw encodes via [`store_texel_linear`]; this is
+    /// the clear / replace-draw path.)
+    pub(crate) fn clear_texel(self, c: [f32; 4]) -> Result<Vec<u8>> {
+        let lin = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let col = |v: f32| {
+            if self.is_srgb() {
+                Self::srgb_encode(v)
+            } else {
+                lin(v)
+            }
+        };
+        Ok(match self {
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => {
+                vec![col(c[0]), col(c[1]), col(c[2]), lin(c[3])]
+            }
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => {
+                vec![col(c[2]), col(c[1]), col(c[0]), lin(c[3])]
+            }
+            TextureFormat::R8Unorm => vec![lin(c[0])],
+            TextureFormat::Rg8Unorm => vec![lin(c[0]), lin(c[1])],
+            _ => return Err(GpuError::Unsupported("software: clear for this format")),
+        })
+    }
+
+    /// The IEC 61966-2-1 sRGB EOTF on a normalized [0,1] value (electrical → linear-light optical).
+    pub(crate) fn srgb_to_linear(x: f32) -> f32 {
+        if x <= 0.04045 {
+            x / 12.92
+        } else {
+            ((x + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    fn srgb_decode(v: u8) -> f32 {
+        Self::srgb_to_linear(v as f32 / 255.0)
+    }
+    fn srgb_encode(v: f32) -> u8 {
+        let x = v.clamp(0.0, 1.0);
+        let y = if x <= 0.0031308 {
+            x * 12.92
+        } else {
+            1.055 * x.powf(1.0 / 2.4) - 0.055
+        };
+        (y * 255.0 + 0.5) as u8
+    }
+    pub(crate) fn is_srgb(self) -> bool {
+        matches!(self, TextureFormat::Rgba8Srgb | TextureFormat::Bgra8Srgb)
+    }
+
+    /// Logical-RGBA → byte-offset permutation for the oracle's 4-channel color formats. `Bgra*` stores blue
+    /// and red swapped; alpha is always the last byte. Returns `None` for a non-4-channel format.
+    pub(crate) fn rgba_channel_order(self) -> Option<[usize; 4]> {
+        match self {
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8Srgb => Some([0, 1, 2, 3]),
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8Srgb => Some([2, 1, 0, 3]),
+            _ => None,
+        }
     }
 }
 
@@ -73,7 +81,7 @@ pub(crate) fn rgba_channel_order(f: TextureFormat) -> Option<[usize; 4]> {
 pub(crate) fn load_texel_linear(bytes: &[u8], order: [usize; 4], srgb: bool) -> [f32; 4] {
     let dec = |b: u8| {
         if srgb {
-            srgb_decode(b)
+            TextureFormat::srgb_decode(b)
         } else {
             b as f32 / 255.0
         }
@@ -90,7 +98,7 @@ pub(crate) fn load_texel_linear(bytes: &[u8], order: [usize; 4], srgb: bool) -> 
 pub(crate) fn store_texel_linear(bytes: &mut [u8], order: [usize; 4], srgb: bool, rgba: [f32; 4]) {
     let enc = |v: f32| {
         if srgb {
-            srgb_encode(v)
+            TextureFormat::srgb_encode(v)
         } else {
             (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
         }
@@ -137,8 +145,8 @@ pub(crate) fn sample_bilinear(
     let mut out = Vec::with_capacity(bpt);
     for c in 0..bpt {
         let cv = |v: u8| {
-            if c < 3 && is_srgb(format) {
-                srgb_decode(v)
+            if c < 3 && format.is_srgb() {
+                TextureFormat::srgb_decode(v)
             } else {
                 v as f32 / 255.0
             }
@@ -146,8 +154,8 @@ pub(crate) fn sample_bilinear(
         let top = cv(p00[c]) * (1.0 - tx) + cv(p10[c]) * tx;
         let bot = cv(p01[c]) * (1.0 - tx) + cv(p11[c]) * tx;
         let v = top * (1.0 - ty) + bot * ty;
-        out.push(if c < 3 && is_srgb(format) {
-            srgb_encode(v)
+        out.push(if c < 3 && format.is_srgb() {
+            TextureFormat::srgb_encode(v)
         } else {
             (v * 255.0 + 0.5) as u8
         });

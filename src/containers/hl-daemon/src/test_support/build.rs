@@ -125,7 +125,7 @@ async fn build_records_per_instruction_history() {
     let (_body, err) = run_build(&app, "histimg:latest", df, &[], None).await;
     assert!(!err, "build should succeed");
 
-    let resp = crate::images::image_history(
+    let resp = crate::images::ImageApi::history(
         State(app.clone()),
         axum::extract::Path("histimg:latest".into()),
     )
@@ -159,7 +159,7 @@ async fn build_records_per_instruction_history() {
 async fn history_without_recorded_history_is_single_row() {
     let app = test_app();
     seed_base(&app, "imported:latest", |_| {}).await;
-    let resp = crate::images::image_history(
+    let resp = crate::images::ImageApi::history(
         State(app.clone()),
         axum::extract::Path("imported:latest".into()),
     )
@@ -337,7 +337,7 @@ async fn build_failure_cleans_partial_image_dir() {
     let (_b, err) = run_build(&app, "partial:latest", df, &[], None).await;
     assert!(err, "COPY of a missing file must fail");
     let img_dir =
-        PathBuf::from(&app.images_dir).join(crate::build::safe_dir_name("partial:latest"));
+        PathBuf::from(&app.images_dir).join(hl_images::Key::from_name("partial:latest").as_str());
     assert!(
         !img_dir.exists(),
         "failed build must not leave an images/<tag> dir: {img_dir:?}"

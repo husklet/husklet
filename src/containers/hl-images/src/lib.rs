@@ -8,18 +8,13 @@ mod error;
 pub use error::Error;
 
 pub mod registry;
-pub use registry::{layer_short, Client, Credentials, ImageRef, PullEvent, Pulled};
+pub use registry::{Client, Credentials, ImageRef, LayerId, PullEvent, Pulled};
 
 pub mod image;
 pub use image::{
-    arch_from_config, config_exposed_ports, config_labels, config_stop_signal, config_strs,
-    config_volumes, default_shell, detect_arch, discover_images, encode_store_component, image_ref,
-    image_score, ref_name, ref_repo, ref_tag, repo_tag, safe_name, Arch, DiscoveredImage,
-    LoadedImage, LocalImage, Manifest, Store,
+    Arch, DiscoveredImage, Discovery, ImageConfig, Key, LoadedImage, LocalImage, Manifest, Rootfs,
+    Sha256Digest, Store,
 };
 
 pub mod build;
-pub use build::{
-    cache_id, is_fs_inst, parse_dockerfile, parse_env, parse_exec_form, parse_exec_form_checked,
-    parse_labels, path_digest, rootfs_digest, sha256_hex, substitute_args, BuildCache,
-};
+pub use build::{BuildCache, CacheId, Command, Dockerfile, Instruction};

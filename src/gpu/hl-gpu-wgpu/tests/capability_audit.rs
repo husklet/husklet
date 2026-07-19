@@ -16,12 +16,12 @@
 //! Skips with no adapter.
 
 use hl_gpu::protocol::model::capability::{
-    command_bits, format_bits, shader_payload, PresentKind, ALL_COMMANDS, COLOR_FORMATS,
-    DEPTH_FORMATS,
+    shader_payload, PresentKind, ALL_COMMANDS, COLOR_FORMATS, DEPTH_FORMATS,
 };
 use hl_gpu::protocol::model::command::WIRE_VERSION;
 use hl_gpu::protocol::model::descriptor::TextureDesc;
 use hl_gpu::protocol::model::enums::{texture_usage, TextureDim, TextureFormat};
+use hl_gpu::Capabilities;
 use hl_gpu::{Cmd, CommandBuffer, FakeClock, GlobalLedger, GpuExecutor, Limits, Session};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
@@ -50,7 +50,7 @@ fn advertised_wire_version_and_command_set_are_the_full_ir() {
     // The executor advertises EVERY encoder command; the other suites prove each runs with a real handler.
     assert_eq!(
         caps.command_bits,
-        command_bits(ALL_COMMANDS),
+        Capabilities::command_bits(ALL_COMMANDS),
         "executor must advertise exactly the full encoder-command set (no missing/extra command bit)"
     );
     // Every advertised command bit must be a real etag (< 64, present in ALL_COMMANDS).
@@ -106,9 +106,9 @@ fn every_advertised_texture_format_is_really_creatable() {
     };
     let caps = exec.capabilities();
     // The advertisement is exactly color ∪ depth ∪ combined-depth-stencil.
-    let expect = format_bits(COLOR_FORMATS)
-        | format_bits(DEPTH_FORMATS)
-        | format_bits(&[TextureFormat::Depth24PlusStencil8]);
+    let expect = TextureFormat::bits(COLOR_FORMATS)
+        | TextureFormat::bits(DEPTH_FORMATS)
+        | TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]);
     assert_eq!(
         caps.texture_formats, expect,
         "advertised texture formats must be exactly the backed union"

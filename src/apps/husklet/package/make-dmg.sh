@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Build a distributable .dmg from build/hl.app. Run after tools/bundle.sh.
+# Build a distributable .dmg from Husklet.app. Run after bundle.sh.
 #   nix develop "path:$PWD/nix" --command tools/make-dmg.sh   (Makefile `dmg` target)
 #
 # The .dmg is unsigned/ad-hoc like the app: on first launch users must right-click -> Open,
-# or run `xattr -dr com.apple.quarantine /Applications/hl.app` (also printed by `dd doctor`).
+# or run `xattr -dr com.apple.quarantine /Applications/Husklet.app`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 VERSION="${1:-0.1.0}"
-APP="$ROOT/target/hl.app"
+TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
+APP="$TARGET/Husklet.app"
 ARCH="$(uname -m)"
-DIST="$ROOT/target/dist"
-OUT="$DIST/dd.dmg"
+DIST="$TARGET/dist"
+OUT="$DIST/Husklet.dmg"
 
 [ -d "$APP" ] || { echo "missing $APP — run tools/bundle.sh first" >&2; exit 1; }
 mkdir -p "$DIST"
@@ -20,11 +21,11 @@ rm -f "$OUT" "$DIST"/rw.*.dmg
 if command -v create-dmg >/dev/null; then
   # create-dmg returns non-zero if it can't set the (cosmetic) window layout; tolerate that.
   create-dmg \
-    --volname "dd $VERSION" \
+    --volname "Husklet $VERSION" \
     --window-pos 200 120 --window-size 640 400 --icon-size 120 \
-    --icon "hl.app" 160 200 \
+    --icon "Husklet.app" 160 200 \
     --app-drop-link 480 200 \
-    --hide-extension "hl.app" \
+    --hide-extension "Husklet.app" \
     --no-internet-enable \
     "$OUT" "$APP" || true
 fi
@@ -34,7 +35,7 @@ if [ ! -f "$OUT" ]; then
   STAGE="$(mktemp -d)"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
-  hdiutil create -volname "dd $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$OUT" >/dev/null
+  hdiutil create -volname "Husklet $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$OUT" >/dev/null
   rm -rf "$STAGE"
 fi
 

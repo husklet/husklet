@@ -1,7 +1,7 @@
 //! Integration tests for hl-log: the gate, arg-not-evaluated proof, level filter,
-//! env parsing, sink swap + format, counters, timing, and a disabled-path cost bench.
+//! configuration, sink swap + format, counters, timing, and a disabled-path cost bench.
 //!
-//! These tests mutate global state (masks, level, sink) and the process environment,
+//! These tests mutate global state (masks, level, sink),
 //! so they are serialized behind a single mutex to avoid cross-test interference.
 
 use hl_log::{tag, Level};
@@ -34,7 +34,7 @@ impl TestSink {
         });
         s.lines.lock().unwrap().clear();
         // Route hl-log output into this collector.
-        hl_log::set_sink(Box::new(Collector(s)));
+        hl_log::Output::global().set(Box::new(Collector(s)));
         s
     }
     fn lines(&self) -> Vec<String> {
@@ -51,11 +51,11 @@ impl hl_log::Sink for Collector {
 
 /// Reset global state to a known baseline for a test.
 fn reset_state() {
-    hl_log::set_enabled(tag::NONE);
-    hl_log::set_counters(tag::NONE);
-    hl_log::set_level(Level::Trace); // permissive by default; individual tests tighten
-    hl_log::counters_reset();
-    hl_log::timing_reset();
+    hl_log::Logging::global().set(tag::NONE);
+    hl_log::Profiling::global().set(tag::NONE);
+    hl_log::Logging::global().set_level(Level::Trace); // permissive by default; individual tests tighten
+    hl_log::Counters::global().reset();
+    hl_log::Timings::global().reset();
 }
 
 // -------------------------------------------------------------------------------
@@ -68,8 +68,8 @@ fn gate_respects_tag_mask() {
     let _g = test_lock();
     let sink = TestSink::install();
     reset_state();
-    hl_log::set_enabled(tag::GPU);
-    hl_log::set_level(Level::Trace);
+    hl_log::Logging::global().set(tag::GPU);
+    hl_log::Logging::global().set_level(Level::Trace);
 
     hl_log::hl_debug!(tag::GPU, "gpu message");
     hl_log::hl_debug!(tag::VULKAN, "vulkan message"); // disabled tag -> no emit
@@ -90,8 +90,8 @@ fn gate_respects_level() {
     let _g = test_lock();
     let sink = TestSink::install();
     reset_state();
-    hl_log::set_enabled(tag::ALL);
-    hl_log::set_level(Level::Info); // Error/Warn/Info pass; Debug/Trace suppressed
+    hl_log::Logging::global().set(tag::ALL);
+    hl_log::Logging::global().set_level(Level::Info); // Error/Warn/Info pass; Debug/Trace suppressed
 
     hl_log::hl_error!(tag::GPU, "err");
     hl_log::hl_warn!(tag::GPU, "warn");
@@ -131,8 +131,8 @@ fn args_not_evaluated_when_disabled() {
     reset_state();
     // GPU tag is OFF (reset_state cleared the mask). The argument expression calls a
     // function that panics if ever evaluated. If the gate is correct it never runs.
-    hl_log::set_enabled(tag::VULKAN); // anything but GPU
-    hl_log::set_level(Level::Trace);
+    hl_log::Logging::global().set(tag::VULKAN); // anything but GPU
+    hl_log::Logging::global().set_level(Level::Trace);
 
     let before = SIDE_EFFECT_CALLS.load(SeqCst);
     hl_log::hl_debug!(tag::GPU, "value = {}", panics_if_called());
@@ -146,51 +146,53 @@ fn args_not_evaluated_when_disabled() {
 }
 
 // -------------------------------------------------------------------------------
-// Env parsing.
+// Typed configuration.
 // -------------------------------------------------------------------------------
 
 #[test]
-fn env_parsing_multi_all_off() {
+fn typed_configuration() {
     let _g = test_lock();
     let _sink = TestSink::install();
 
-    std::env::set_var("HL_LOG", "gpu,wgpu,transport");
-    std::env::set_var("HL_LOG_LEVEL", "debug");
-    std::env::set_var("HL_LOG_COUNTERS", "all");
-    hl_log::init();
+    hl_log::Config {
+        logging: tag::GPU | tag::WGPU | tag::TRANSPORT,
+        level: Level::Debug,
+        profiling: tag::ALL,
+    }
+    .apply();
     assert_eq!(
-        hl_log::enabled_mask(),
+        hl_log::Logging::global().tags(),
         tag::GPU | tag::WGPU | tag::TRANSPORT
     );
-    assert_eq!(hl_log::level(), Level::Debug);
-    assert_eq!(hl_log::counters_mask(), tag::ALL);
+    assert_eq!(hl_log::Logging::global().level(), Level::Debug);
+    assert_eq!(hl_log::Profiling::global().tags(), tag::ALL);
 
-    std::env::set_var("HL_LOG", "all");
-    std::env::set_var("HL_LOG_LEVEL", "error");
-    std::env::set_var("HL_LOG_COUNTERS", "off");
-    hl_log::init();
-    assert_eq!(hl_log::enabled_mask(), tag::ALL);
-    assert_eq!(hl_log::level(), Level::Error);
-    assert_eq!(hl_log::counters_mask(), tag::NONE);
+    hl_log::Config {
+        logging: tag::ALL,
+        level: Level::Error,
+        profiling: tag::NONE,
+    }
+    .apply();
+    assert_eq!(hl_log::Logging::global().tags(), tag::ALL);
+    assert_eq!(hl_log::Logging::global().level(), Level::Error);
+    assert_eq!(hl_log::Profiling::global().tags(), tag::NONE);
 
-    std::env::set_var("HL_LOG", "off");
-    hl_log::init();
-    assert_eq!(hl_log::enabled_mask(), tag::NONE);
-
-    std::env::remove_var("HL_LOG");
-    std::env::remove_var("HL_LOG_LEVEL");
-    std::env::remove_var("HL_LOG_COUNTERS");
+    hl_log::Config::default().apply();
+    assert_eq!(hl_log::Logging::global().tags(), tag::NONE);
 }
 
 #[test]
 fn tag_name_roundtrip() {
-    assert_eq!(tag::from_name("gpu"), Some(tag::GPU));
-    assert_eq!(tag::from_name("WGPU"), Some(tag::WGPU));
-    assert_eq!(tag::from_name("all"), Some(tag::ALL));
-    assert_eq!(tag::from_name("off"), Some(tag::NONE));
-    assert_eq!(tag::from_name("nope"), None);
-    assert_eq!(tag::name(tag::VULKAN), "vulkan");
-    assert_eq!(tag::name(tag::ALL), "all");
+    assert_eq!("gpu".parse::<hl_log::Tag>(), Ok(tag::GPU));
+    assert_eq!("WGPU".parse::<hl_log::Tag>(), Ok(tag::WGPU));
+    assert!("nope".parse::<hl_log::Tag>().is_err());
+    assert_eq!(tag::VULKAN.name(), "vulkan");
+    assert_eq!(tag::ALL.to_string(), "all");
+    assert_eq!((tag::GPU | tag::WGPU).to_string(), "gpu|wgpu");
+    assert_eq!(
+        "gpu,unknown,wgpu".parse::<hl_log::Tags>().unwrap(),
+        tag::GPU | tag::WGPU
+    );
 }
 
 // -------------------------------------------------------------------------------
@@ -203,8 +205,8 @@ fn sink_format() {
     let _g = test_lock();
     let sink = TestSink::install();
     reset_state();
-    hl_log::set_enabled(tag::GPU);
-    hl_log::set_level(Level::Trace);
+    hl_log::Logging::global().set(tag::GPU);
+    hl_log::Logging::global().set_level(Level::Trace);
 
     hl_log::hl_debug!(tag::GPU, "hello {}", 42);
     let lines = sink.lines();
@@ -230,7 +232,7 @@ fn counters_gated_and_snapshot() {
     let _g = test_lock();
     let _sink = TestSink::install();
     reset_state();
-    hl_log::enable_counters(tag::GPU); // GPU counters on, VULKAN off
+    hl_log::Profiling::global().enable(tag::GPU); // GPU counters on, VULKAN off
 
     hl_log::hl_count!(tag::GPU, "frames");
     hl_log::hl_count!(tag::GPU, "frames");
@@ -240,13 +242,13 @@ fn counters_gated_and_snapshot() {
     hl_log::hl_count!(tag::VULKAN, "vk_frames");
     hl_log::hl_add!(tag::VULKAN, "vk_frames", 999);
 
-    let snap = hl_log::counters_snapshot();
+    let snap = hl_log::Counters::global().snapshot();
     // Sorted by name: bytes, frames (vk_frames absent since it never incremented).
     assert_eq!(snap, vec![("bytes", 150u64), ("frames", 2u64)]);
-    assert_eq!(hl_log::counters::get("vk_frames"), 0);
+    assert_eq!(hl_log::Counters::global().get("vk_frames"), 0);
 
-    hl_log::counters_reset();
-    assert!(hl_log::counters_snapshot().is_empty());
+    hl_log::Counters::global().reset();
+    assert!(hl_log::Counters::global().snapshot().is_empty());
 }
 
 // -------------------------------------------------------------------------------
@@ -259,7 +261,7 @@ fn timing_records_only_when_enabled() {
     let _g = test_lock();
     let _sink = TestSink::install();
     reset_state();
-    hl_log::enable_counters(tag::WGPU); // WGPU timing on, GPU off
+    hl_log::Profiling::global().enable(tag::WGPU); // WGPU timing on, GPU off
 
     {
         let _s = hl_log::hl_span!(tag::WGPU, "readback");
@@ -271,15 +273,15 @@ fn timing_records_only_when_enabled() {
         std::hint::black_box(&_s);
     }
 
-    let snap = hl_log::timing_snapshot();
+    let snap = hl_log::Timings::global().snapshot();
     assert_eq!(snap.len(), 1, "only the enabled-tag span records: {snap:?}");
     assert_eq!(snap[0].0, "readback");
     assert_eq!(snap[0].1.count, 1);
     // sum_ns should be > 0 for a real (if tiny) span.
     assert!(snap[0].1.sum_ns >= snap[0].1.max_ns);
 
-    hl_log::timing_reset();
-    assert!(hl_log::timing_snapshot().is_empty());
+    hl_log::Timings::global().reset();
+    assert!(hl_log::Timings::global().snapshot().is_empty());
 }
 
 // -------------------------------------------------------------------------------
@@ -294,7 +296,7 @@ fn disabled_path_is_cheap() {
     let _g = test_lock();
     let _sink = TestSink::install();
     reset_state();
-    hl_log::set_enabled(tag::NONE); // everything off -> pure gate cost
+    hl_log::Logging::global().set(tag::NONE); // everything off -> pure gate cost
 
     const N: u64 = 5_000_000;
     let start = std::time::Instant::now();

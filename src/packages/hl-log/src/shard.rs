@@ -17,18 +17,18 @@ use std::sync::Mutex;
 const SHARDS: usize = 16;
 
 /// A striped map keyed by interned `&'static str` names.
-pub struct Sharded<V> {
+pub struct ShardMap<V> {
     shards: Vec<Mutex<HashMap<&'static str, V>>>,
 }
 
-impl<V: Default + Clone> Sharded<V> {
+impl<V: Default + Clone> ShardMap<V> {
     /// Build an empty sharded map.
     pub fn new() -> Self {
         let mut shards = Vec::with_capacity(SHARDS);
         for _ in 0..SHARDS {
             shards.push(Mutex::new(HashMap::new()));
         }
-        Sharded { shards }
+        ShardMap { shards }
     }
 
     #[inline]
@@ -81,7 +81,7 @@ impl<V: Default + Clone> Sharded<V> {
     }
 }
 
-impl<V: Default + Clone> Default for Sharded<V> {
+impl<V: Default + Clone> Default for ShardMap<V> {
     fn default() -> Self {
         Self::new()
     }

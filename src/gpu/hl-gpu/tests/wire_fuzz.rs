@@ -28,8 +28,8 @@ use hl_gpu::protocol::codec::wire::Encoder;
 use hl_gpu::protocol::model::command::{etag, tag};
 use hl_gpu::protocol::model::descriptor::BufferDesc;
 use hl_gpu::{
-    decode_stream, encode_stream, Capabilities, Cmd, CpuExecutor, FakeClock, FeatureRequest,
-    GlobalLedger, GpuError, GpuExecutor, Limits, Result, Session, WIRE_VERSION,
+    Capabilities, Cmd, CpuExecutor, FakeClock, FeatureRequest, GlobalLedger, GpuError, GpuExecutor,
+    Limits, Result, Session, WIRE_VERSION,
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -251,7 +251,7 @@ fn every_count_field_is_a_bounded_error_not_a_decode_bomb() {
             "{name}: bomb frame should be tiny, got {} bytes",
             bytes.len()
         );
-        let (result, growth) = peak_growth_during(|| decode_stream(&bytes));
+        let (result, growth) = peak_growth_during(|| hl_gpu::Decoder::stream(&bytes));
         assert!(
             result.is_err(),
             "{name}: a count claiming ~4 billion entries with no backing bytes must error, got Ok"
@@ -401,7 +401,7 @@ fn fresh_session() -> (Session, CpuExecutor) {
 /// Decode a byte stream and run it through the WHOLE runtime pipeline against the oracle. Any stage's
 /// typed error propagates; nothing here may panic on decodable-but-hostile input.
 fn decode_then_submit(bytes: &[u8]) -> Result<()> {
-    let cmds = decode_stream(bytes)?;
+    let cmds = hl_gpu::Decoder::stream(bytes)?;
     let (mut session, mut exec) = fresh_session();
     hl_gpu::runtime::submit(&mut session, &mut exec, bytes.len(), &cmds)?;
     Ok(())
@@ -412,7 +412,7 @@ fn duplicate_id_in_a_decoded_stream_is_typed_duplicate_id() {
     // Two creates of the same fence id — a self-referential/duplicate stream. account rejects the
     // re-create over a still-live id as DuplicateId before charging (failure-atomic), the same typed
     // error the executor's id table would raise, end-to-end from bytes.
-    let bytes = encode_stream(&[Cmd::CreateFence(1), Cmd::CreateFence(1)]);
+    let bytes = hl_gpu::Encoder::stream(&[Cmd::CreateFence(1), Cmd::CreateFence(1)]);
     assert_eq!(
         decode_then_submit(&bytes),
         Err(GpuError::DuplicateId {
@@ -425,7 +425,7 @@ fn duplicate_id_in_a_decoded_stream_is_typed_duplicate_id() {
 #[test]
 fn dangling_id_in_a_decoded_stream_is_typed_unknown_id() {
     // Destroy a buffer that was never created (a dangling reference) — a typed UnknownId, not a panic.
-    let bytes = encode_stream(&[Cmd::DestroyBuffer(7)]);
+    let bytes = hl_gpu::Encoder::stream(&[Cmd::DestroyBuffer(7)]);
     assert_eq!(
         decode_then_submit(&bytes),
         Err(GpuError::UnknownId {
@@ -439,7 +439,7 @@ fn dangling_id_in_a_decoded_stream_is_typed_unknown_id() {
 fn absurd_buffer_size_in_a_decoded_stream_is_resource_limit_not_oom() {
     // A CreateBuffer declaring u64::MAX bytes is rejected at VALIDATE against the negotiated per-buffer
     // ceiling — BEFORE the executor ever attempts `vec![0u8; size]` (which would OOM-abort the host).
-    let bytes = encode_stream(&[Cmd::CreateBuffer(
+    let bytes = hl_gpu::Encoder::stream(&[Cmd::CreateBuffer(
         1,
         BufferDesc {
             size: u64::MAX,
@@ -459,7 +459,7 @@ fn oversized_texture_footprint_in_a_decoded_stream_is_resource_limit() {
     use hl_gpu::protocol::model::enums::{TextureDim, TextureFormat};
     // A texture whose declared dimensions exceed the negotiated 2D ceiling is a typed ResourceLimit — the
     // footprint is never materialized. Dims over max_texture_2d (16384 for the oracle).
-    let bytes = encode_stream(&[Cmd::CreateTexture(
+    let bytes = hl_gpu::Encoder::stream(&[Cmd::CreateTexture(
         2,
         TextureDesc {
             width: 100_000,
@@ -485,7 +485,7 @@ fn the_whole_pipeline_never_panics_on_hostile_bytes() {
     // dispatch: decode either rejects them or the runtime returns a typed error — the pipeline never
     // panics, hangs, or OOM-aborts. (The existing fuzz corpora stop at decode_stream; this covers the
     // runtime stages too.)
-    let base = encode_stream(&[
+    let base = hl_gpu::Encoder::stream(&[
         Cmd::CreateBuffer(
             1,
             BufferDesc {

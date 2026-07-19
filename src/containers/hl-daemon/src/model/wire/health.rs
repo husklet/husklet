@@ -18,6 +18,38 @@ pub(crate) struct HealthConfig {
     pub(crate) start_period: i64, // ns grace where a failure doesn't count
 }
 
+impl HealthConfig {
+    pub(crate) fn from_oci(config: &serde_json::Value) -> Option<Self> {
+        let health = config["config"]["Healthcheck"].as_object()?;
+        let test = health
+            .get("Test")
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if test.is_empty() || test.first().map(String::as_str) == Some("NONE") {
+            return None;
+        }
+        let number = |key: &str| {
+            health
+                .get(key)
+                .and_then(|value| value.as_i64())
+                .unwrap_or(0)
+        };
+        Some(Self {
+            test,
+            interval: number("Interval"),
+            timeout: number("Timeout"),
+            retries: number("Retries"),
+            start_period: number("StartPeriod"),
+        })
+    }
+}
+
 /// A container's live health, surfaced as inspect `State.Health`. `status` is starting/healthy/unhealthy;
 /// `failing_streak` is the current run of consecutive failing probes; `log` keeps the most recent probe
 /// results (docker caps this at 5). Mirrors Moby `container.Health`.

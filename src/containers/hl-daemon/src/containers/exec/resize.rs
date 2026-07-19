@@ -10,8 +10,10 @@ pub(crate) struct ResizeQ {
 /// Whether a resize target — a container (by id/name/prefix) OR an exec id — exists at all. A resize for
 /// a truly-missing target must 404; a resolvable-but-not-yet-live one still 200s (its pty may not be
 /// ready, and `docker run -t` must not see a spurious failure).
-pub(crate) fn resize_target_exists(g: &Inner, id: &str) -> bool {
-    resolve_cid(g, id).is_some() || g.execs.contains_key(id)
+impl Execs {
+    pub(crate) fn target_exists(g: &Inner, id: &str) -> bool {
+        ContainerId::resolve(g, id).is_some() || g.execs.contains_key(id)
+    }
 }
 
 /// POST /containers/:id/resize and /exec/:id/resize -- set the PTY window size (TIOCSWINSZ) for a tty
@@ -23,10 +25,10 @@ pub(crate) async fn resize(
     Query(q): Query<ResizeQ>,
 ) -> Response {
     let g = a.inner.lock().await;
-    if !resize_target_exists(&g, &id) {
-        return no_such(&id);
+    if !Execs::target_exists(&g, &id) {
+        return ErrorMessage::no_such(&id);
     }
-    let key = resolve_cid(&g, &id).unwrap_or(id);
+    let key = ContainerId::resolve(&g, &id).unwrap_or(id);
     if let Some(live) = g.live.get(&key) {
         if let Some(fd) = *live.pty_master.lock().unwrap() {
             let ws = libc::winsize {
@@ -45,7 +47,7 @@ pub(crate) async fn resize(
 
 #[cfg(test)]
 mod tests {
-    use super::resize_target_exists;
+    use crate::containers::Execs;
     use crate::model::{Container, Exec, Inner};
 
     // "Resize Missing Container Or Exec Reports Success" (P2): a resize for a nonexistent target must be
@@ -75,11 +77,11 @@ mod tests {
                 exit_code: 0,
             },
         );
-        assert!(resize_target_exists(&g, "web"), "container by name");
-        assert!(resize_target_exists(&g, "c1full"), "container by id");
-        assert!(resize_target_exists(&g, "exec1"), "exec by id");
+        assert!(Execs::target_exists(&g, "web"), "container by name");
+        assert!(Execs::target_exists(&g, "c1full"), "container by id");
+        assert!(Execs::target_exists(&g, "exec1"), "exec by id");
         assert!(
-            !resize_target_exists(&g, "ghost"),
+            !Execs::target_exists(&g, "ghost"),
             "unknown target is missing"
         );
     }

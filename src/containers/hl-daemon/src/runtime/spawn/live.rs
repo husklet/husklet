@@ -1,7 +1,7 @@
 use super::super::health::health_monitor;
 use super::super::restart::maybe_restart;
-use super::etchosts::{eff_hostname, own_hosts_names, render_etc_hosts};
-use super::net::write_net_names;
+use super::etchosts::Hosts;
+use super::net::NetworkNames;
 use super::*;
 
 /// Spawn the container's guest process live (piped stdio) and wire its IO into `live`: stdout/stderr fan
@@ -15,7 +15,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     // `--tmpfs`: reset this container's tmpfs targets to a fresh empty dir for the new run. Skipped for an
     // exec (netns_key is Some) — an exec must see the container's LIVE tmpfs, not wipe it.
     if c.netns_key.is_none() {
-        clear_tmpfs(c);
+        Tmpfs::clear(c);
     }
     // Reach-by-name identity key. A `docker exec` runs with `c.id` set to the EXEC id (not a network
     // endpoint), but it JOINS the target container's network (`netns_key`), so it must inherit that
@@ -44,7 +44,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             .networks
             .iter()
             .find_map(|n| n.endpoints.get(&lookup_id))
-            .map(|own| (own.ip.clone(), own_hosts_names(&own.name, &c.hostname)));
+            .map(|own| (own.ip.clone(), Hosts::names(&own.name, &c.hostname)));
         // peers: every OTHER endpoint on any network this container is a member of.
         let mut peers: Vec<(String, String)> = Vec::new();
         for n in &g.networks {
@@ -58,7 +58,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
             }
         }
         // Render the reach-by-name /etc/hosts body from the gathered own+peer entries (pure builder).
-        let hosts = render_etc_hosts(
+        let hosts = Hosts::render(
             own.as_ref().map(|(ip, n)| (ip.as_str(), n.as_str())),
             &peers,
         );
@@ -67,10 +67,10 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // predefined networks are skipped. The file is rewritten on EVERY start, so it always reflects the
         // current endpoint set (late-joining peers included). The engine reads it per DNS query.
         for n in &g.networks {
-            if !n.endpoints.contains_key(&lookup_id) || is_predefined(&n.name) {
+            if !n.endpoints.contains_key(&lookup_id) || n.is_predefined() {
                 continue;
             }
-            write_net_names(&n.id, &n.endpoints);
+            NetworkNames::write(&n.id, &n.endpoints);
         }
         (bridge, hosts)
     };
@@ -147,7 +147,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // /etc/hostname: Docker generates this beside /etc/hosts and /etc/resolv.conf (the container's UTS
         // name + newline), shadowing any image copy via the overlay upper. Same value spawn_cfg passes as
         // HL_HOSTNAME -> gethostname(), so the two agree (user --hostname, else the 12-char short id).
-        let eff_hostname = eff_hostname(&c.id, &c.hostname);
+        let eff_hostname = Hosts::hostname(&c.id, &c.hostname);
         if let Err(e) = std::fs::write(format!("{etc}/hostname"), format!("{eff_hostname}\n")) {
             if std::env::var("HL_DEBUG").is_ok() {
                 eprintln!(
@@ -160,7 +160,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // (the container's engine is already running with warm caches) — bump its external-writer
         // generation so every running engine drops its caches. For a fresh container start this is a
         // harmless no-op signal: no engine is up yet, and the engine snapshots the current value at boot.
-        crate::util::fsgen_bump(&lookup_id);
+        crate::util::Generation::bump(&lookup_id);
     }
     // start the daemon-owned, process-independent host→container port forwarders. Idempotent (the
     // restart path re-enters here but the listeners persist), a no-op for a container that publishes
@@ -170,7 +170,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
     // Bind the published host ports FIRST; if a host port is already taken, FAIL the start (exit 127 with
     // a port-allocation message) instead of launching the guest and reporting a running-but-unreachable
     // container. live_fail marks it exited, persists, and releases any listeners already bound.
-    if let Err(e) = crate::containers::ports::start_for(c, &bridge).await {
+    if let Err(e) = crate::containers::ports::Forwarders::start_for(c, &bridge).await {
         return live_fail(app, &c.id, &live, format!("hl: {e}")).await;
     }
     // No launch command means the JIT engine for this guest arch isn't bundled (e.g. a darwin-only build
@@ -279,7 +279,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                 &cid,
                 serde_json::json!({"exitCode": code.to_string(), "name": cname, "image": cimage}),
             );
-            save_state(&g, &app.state_path);
+            Store::save(&g, &app.state_path);
         }
         let _ = live.exit.send(Some(code));
         // Drain the reader tasks so the final output lands in the log buffer, but never block the reaper
@@ -349,7 +349,7 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
         // removed container is never a restart candidate — return before the supervisor runs. Anything
         // waiting on the exit watch (the `docker run --rm` foreground client) already saw Some(code).
         if auto_remove {
-            crate::containers::ports::stop(&cid); // free published host ports on `--rm` teardown
+            crate::containers::ports::Forwarders::stop(&cid); // free published host ports on `--rm` teardown
             let mut g = app.inner.lock().await;
             if let Some(dc) = g.containers.remove(&cid) {
                 crate::events::emit_event(
@@ -360,10 +360,14 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                     serde_json::json!({"name": dc.name, "image": dc.image}),
                 );
                 for n in g.networks.iter_mut() {
-                    leave_network(n, &cid);
+                    n.leave(&cid);
                 }
                 // Reclaim the private writable upper layer (mirrors `docker rm`; the shared image is untouched).
-                let _ = discard_container_layer(&dc.upper);
+                let _ = Overlay {
+                    upper: &dc.upper,
+                    rootfs: &dc.rootfs,
+                }
+                .discard();
                 // `--rm` acts as `rm -v` for ANONYMOUS volumes (bare `-v /path` + image `VOLUME` dirs) —
                 // Moby removes them with the container on exit; named volumes are kept. Mirrors the
                 // explicit `rm -v` path in containers/lifecycle/manage.rs.
@@ -382,14 +386,14 @@ pub(crate) async fn spawn_live(app: &App, c: &Container, vols: &[Vol], live: Arc
                 }
             }
             g.live.remove(&cid);
-            save_state(&g, &app.state_path);
+            Store::save(&g, &app.state_path);
             return;
         }
         // Release the published host-port forwarders now that the guest is gone: a naturally-exited
         // (non-`--rm`) container must not keep host ports bound, or later containers can't reuse the port
         // and traffic routes to a dead service. A RestartPolicy restart re-binds them in spawn_live, so
         // freeing here is safe even for restarting containers (they re-acquire on the next start).
-        crate::containers::ports::stop(&cid);
+        crate::containers::ports::Forwarders::stop(&cid);
         // RestartPolicy supervisor: re-run the container per `--restart` unless it was deliberately
         // stopped (stop/kill/rm set stop_requested). A no-op for the default `no`/empty policy, so the
         // common `docker run` path is untouched.
@@ -416,7 +420,7 @@ pub(crate) async fn live_fail(app: &App, cid: &str, live: &Arc<Live>, msg: Strin
     let _ = live.out_done.send(true);
     // Release any published host-port forwarders spawn_live started before the failure — a failed start
     // must not leak a bound host port that later starts collide with.
-    crate::containers::ports::stop(cid);
+    crate::containers::ports::Forwarders::stop(cid);
     {
         let mut g = app.inner.lock().await;
         if let Some(cc) = g.containers.get_mut(cid) {
@@ -433,7 +437,7 @@ pub(crate) async fn live_fail(app: &App, cid: &str, live: &Arc<Live>, msg: Strin
         // PERSIST the terminal state: without this, a daemon restart reloads the container as `running`
         // (the failed start was only corrected in memory), so inspect/wait see a live-looking container
         // with no process. The normal reaper path saves state; the failed-spawn path must too.
-        save_state(&g, &app.state_path);
+        Store::save(&g, &app.state_path);
     }
     false
 }

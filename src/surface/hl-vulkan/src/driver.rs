@@ -114,17 +114,17 @@ impl Vulkan {
             .join(self.spec.arch.dir())
             .join(name)
     }
-}
 
-/// Prepend `dir` to the guest env's existing `LD_LIBRARY_PATH` (if any), producing the new `K=V` line.
-fn compose_ld_library_path(guest_env: &[String], dir: &str) -> String {
-    let existing = guest_env
-        .iter()
-        .find_map(|kv| kv.strip_prefix("LD_LIBRARY_PATH="))
-        .filter(|v| !v.is_empty());
-    match existing {
-        Some(v) => format!("LD_LIBRARY_PATH={dir}:{v}"),
-        None => format!("LD_LIBRARY_PATH={dir}"),
+    /// Prepend `dir` to the guest environment's existing library path.
+    fn library_path(&self, guest_env: &[String], dir: &str) -> String {
+        let existing = guest_env
+            .iter()
+            .find_map(|value| value.strip_prefix("LD_LIBRARY_PATH="))
+            .filter(|value| !value.is_empty());
+        match existing {
+            Some(value) => format!("LD_LIBRARY_PATH={dir}:{value}"),
+            None => format!("LD_LIBRARY_PATH={dir}"),
+        }
     }
 }
 
@@ -154,7 +154,7 @@ impl Driver for Vulkan {
         // 4. Env: prepend the shim libdir to LD_LIBRARY_PATH, point the Vulkan loader at the driver
         //    icd.json (VK_ICD_FILENAMES), and name the exec socket.
         let env = vec![
-            compose_ld_library_path(guest_env, libdir),
+            self.library_path(guest_env, libdir),
             format!("VK_ICD_FILENAMES={icd_path}"),
             format!("HL_GPU_EXEC={}", self.spec.guest_socket),
         ];

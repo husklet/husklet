@@ -285,7 +285,7 @@ mod tests {
     }
     impl hl_gpu::ConnectionHandler for RuntimeHost {
         fn submit(&mut self, _h: &hl_gpu::transport::SubmitHeader, batch: &[hl_gpu::Cmd]) -> hl_gpu::transport::Verdict {
-            let frame_bytes = hl_gpu::encode_stream(batch).len();
+            let frame_bytes = hl_gpu::Encoder::stream(batch).len();
             match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
                 Ok(_) => hl_gpu::transport::Verdict::Ack,
                 Err(_) => hl_gpu::transport::Verdict::Nack,

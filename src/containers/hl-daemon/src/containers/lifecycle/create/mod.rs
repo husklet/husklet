@@ -24,7 +24,7 @@ pub(crate) async fn containers_create(
     let image = body.image.unwrap_or_default();
     // Match the image by name and, when --platform is given, by arch. A platform mismatch returns 404 so
     // the docker CLI pulls the right arch (its default --pull=missing won't re-pull otherwise) and retries.
-    let want_arch = platform_arch(cq.platform.as_deref());
+    let want_arch = ImagePlatform::arch(cq.platform.as_deref());
     // On a miss, re-scan the images dir from disk before giving up: the image may be on disk (freshly
     // pulled/built) yet absent from the in-memory store, which would otherwise force a spurious re-pull.
     {
@@ -35,11 +35,14 @@ pub(crate) async fn containers_create(
         let present = g
             .images
             .iter()
-            .filter(|i| ref_repo(&i.name) == ref_repo(&image))
-            .any(|i| want_arch.map_or(true, |a| docker_arch(i.arch) == a));
+            .filter(|i| {
+                ImageRef::from(&i.name).repository_identity()
+                    == ImageRef::from(&image).repository_identity()
+            })
+            .any(|i| want_arch.map_or(true, |a| ImagePlatform::docker(i.arch) == a));
         if !present {
             drop(g);
-            rescan_images(&a).await;
+            Images::rescan(&a).await;
         }
     }
     let mut g = a.inner.lock().await;
@@ -48,12 +51,12 @@ pub(crate) async fn containers_create(
     let candidates: Vec<Image> = g
         .images
         .iter()
-        .filter(|i| want_arch.map_or(true, |a| docker_arch(i.arch) == a))
+        .filter(|i| want_arch.map_or(true, |a| ImagePlatform::docker(i.arch) == a))
         .cloned()
         .collect();
-    let img = match find_image(&candidates, &image).cloned() {
+    let img = match DiscoveredImages::new(&candidates).find(&image).cloned() {
         Some(i) => i,
-        None => return no_such_image(&image),
+        None => return ErrorMessage::no_such_image(&image),
     };
     // Reject a create whose selected image rootfs has DISAPPEARED from the store: recording a container
     // that points at a gone rootfs (then returning 201 + emitting container/create) is worse than a clean
@@ -63,14 +66,14 @@ pub(crate) async fn containers_create(
         && std::path::Path::new(&img.rootfs).starts_with(&a.images_dir)
         && !std::path::Path::new(&img.rootfs).exists()
     {
-        return no_such_image(&image);
+        return ErrorMessage::no_such_image(&image);
     }
     // Final argv = entrypoint ++ cmd (docker semantics). The entrypoint is the user's --entrypoint or the
     // IMAGE's ENTRYPOINT; a user --entrypoint resets CMD, but the image's own ENTRYPOINT still keeps the
     // image CMD. An empty Cmd falls back to the image default.
     let cmd = resolve_argv(
         body.entrypoint.clone(),
-        body.cmd.clone(),
+        body.process.cmd.clone(),
         &img.entrypoint,
         &img.cmd,
     );
@@ -82,6 +85,7 @@ pub(crate) async fn containers_create(
         .clone()
         .unwrap_or_else(|| img.entrypoint.clone());
     let cmd_config = body
+        .process
         .cmd
         .clone()
         .filter(|c| !c.is_empty())
@@ -95,18 +99,26 @@ pub(crate) async fn containers_create(
     // env = image ENV then `docker run -e` (later wins); working dir = -w or the image WORKDIR.
     // Dedup last-wins so inspect/state don't expose a stale image value that the runtime already overrides
     // (the guest launch env dedups the same way): `-e FOO=run` over image `FOO=image` yields one `FOO=run`.
-    let env = dedup_env_last_wins(img.env.iter().cloned().chain(body.env.unwrap_or_default()));
+    let env = EnvVars::resolve(
+        img.env
+            .iter()
+            .cloned()
+            .chain(body.process.env.unwrap_or_default()),
+    )
+    .into_vec();
     let working_dir = body
+        .process
         .working_dir
         .filter(|w| !w.is_empty())
         .unwrap_or_else(|| img.workdir.clone());
     // Run user = `docker run --user` if given, else the image's default Config.User (dropped to HL_UID/HL_GID
     // in runtime.rs). Computed before `img` is partially moved into the Container below.
     let user = body
+        .process
         .user
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| img.user.clone());
-    let tty = body.tty.unwrap_or(false);
+    let tty = body.process.tty.unwrap_or(false);
     // `docker run --name X` with a name already in use is a 409 Conflict (docker refuses to start a
     // second container under the same name). Match on the effective name (leading `/` stripped, as we
     // store it). An empty name (no --name) never conflicts.
@@ -118,14 +130,14 @@ pub(crate) async fn containers_create(
         .to_string();
     if !want_name.is_empty() {
         if let Some(existing) = g.containers.values().find(|c| c.name == want_name) {
-            return conflict(format!(
+            return ErrorMessage::conflict(format!(
                 "Conflict. The container name \"/{want_name}\" is already in use by container \"{}\". \
                  You have to remove (or rename) that container to be able to reuse that name.",
                 existing.id
             ));
         }
     }
-    let id = new_id(&image);
+    let id = ContainerId::new(&image);
     let hc = body.host_config;
     // Atomic network validation: a create attached to a MISSING user network must fail 404 BEFORE any
     // state mutation or event — previously the join silently no-oped and the daemon recorded a partial
@@ -148,7 +160,7 @@ pub(crate) async fn containers_create(
         }
         for w in &wanted {
             if !g.networks.iter().any(|n| n.name == *w) {
-                return no_such_network(w);
+                return ErrorMessage::no_such_network(w);
             }
         }
     }
@@ -227,7 +239,7 @@ pub(crate) async fn containers_create(
         && (std::fs::create_dir_all(&a.volumes_dir).is_err()
             || !std::path::Path::new(&a.volumes_dir).is_dir())
     {
-        return server_error(format!(
+        return ErrorMessage::server_error(format!(
             "cannot create anonymous volumes: volumes root {} is not a usable directory",
             a.volumes_dir
         ));
@@ -254,11 +266,11 @@ pub(crate) async fn containers_create(
     let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
     for m in &mounts {
         if !m.target.is_empty() {
-            covered.insert(norm_dir(&m.target));
+            covered.insert(VolumeRootfs::normalize(&m.target));
         }
     }
     for t in tmpfs.keys() {
-        covered.insert(norm_dir(t));
+        covered.insert(VolumeRootfs::normalize(t));
     }
     // Bare `-v /path` (single field, absolute) ⇒ anonymous volume at /path; `name:/dst` and `/host:/dst`
     // (both contain ':') are real named/bind mounts, left verbatim (their dst is marked covered).
@@ -275,12 +287,12 @@ pub(crate) async fn containers_create(
                 &name,
                 json!({"driver": "local"}),
             );
-            covered.insert(norm_dir(&b));
+            covered.insert(VolumeRootfs::normalize(&b));
             anon_volumes.push(name.clone());
             new_binds.push(format!("{name}:{b}"));
         } else {
-            if let Some((_, dst, _)) = parse_bind(&b) {
-                covered.insert(norm_dir(dst));
+            if let Some((_, dst, _)) = Bind::parse(&b) {
+                covered.insert(VolumeRootfs::normalize(dst));
             }
             new_binds.push(b);
         }
@@ -295,7 +307,7 @@ pub(crate) async fn containers_create(
         }
     }
     for vdir in &anon_dirs {
-        if vdir.is_empty() || covered.contains(&norm_dir(vdir)) {
+        if vdir.is_empty() || covered.contains(&VolumeRootfs::normalize(vdir)) {
             continue;
         }
         let v = anon_volume(&a.volumes_dir, &img_rootfs, vdir, &id);
@@ -308,7 +320,7 @@ pub(crate) async fn containers_create(
             &name,
             json!({"driver": "local"}),
         );
-        covered.insert(norm_dir(vdir));
+        covered.insert(VolumeRootfs::normalize(vdir));
         anon_volumes.push(name.clone());
         mounts.push(Mount {
             typ: "volume".into(),
@@ -362,7 +374,7 @@ pub(crate) async fn containers_create(
         publish: hc
             .as_ref()
             .and_then(|h| h.port_bindings.as_ref())
-            .map(|pb| publish_str_alloc(pb, &g))
+            .map(|pb| PublishedPorts::new(pb).allocate(&g))
             .unwrap_or_default(),
         created: now_secs(),
         tty,
@@ -453,7 +465,7 @@ pub(crate) async fn containers_create(
     };
     // Join the network now (fixes the bug where `docker run --network X` never added the container to
     // the network's membership/IPAM): pick the target network from --network, defaulting to `bridge`.
-    let cname = endpoint_name(&c);
+    let cname = Net::endpoint_name(&c);
     let net_name = match c.network_mode.as_str() {
         "" | "default" | "bridge" => "bridge",
         "host" | "none" => "", // no L3 identity
@@ -488,7 +500,7 @@ pub(crate) async fn containers_create(
     };
     if !net_name.is_empty() {
         let (req_ip, aliases) = ep_settings(net_name);
-        join_network_ex(
+        Net::join_network_ex(
             &mut g.networks,
             net_name,
             &id,
@@ -508,7 +520,7 @@ pub(crate) async fn containers_create(
         for ep_name in nc.keys() {
             if !ep_name.is_empty() {
                 let (req_ip, aliases) = ep_settings(ep_name);
-                join_network_ex(
+                Net::join_network_ex(
                     &mut g.networks,
                     ep_name,
                     &id,
@@ -531,15 +543,15 @@ pub(crate) async fn containers_create(
     // Persist BEFORE emitting the create event / returning 201. If the state save fails, roll back the
     // whole partial create (container, anon volumes, network endpoints) and fail — a `201` + create event
     // must never describe state that vanishes on restart.
-    if let Err(e) = save_state_checked(&g, &a.state_path) {
+    if let Err(e) = Store::save_checked(&g, &a.state_path) {
         g.containers.remove(&id);
         for name in &anon_names {
             g.volumes.retain(|v| &v.name != name);
         }
         for n in g.networks.iter_mut() {
-            leave_network(n, &id);
+            n.leave(&id);
         }
-        return server_error(format!("failed to persist container state: {e}"));
+        return ErrorMessage::server_error(format!("failed to persist container state: {e}"));
     }
     crate::events::emit_event(
         &a.events,

@@ -27,7 +27,7 @@ fn ctx() -> CudaContext {
 // ===================================================================================================
 
 fn vecadd_func(c: &mut CudaContext) -> hl_cuda::Function {
-    let m = load_module::module_load_ptx(c, ptx::VECADD_PTX);
+    let m = c.load_ptx(ptx::VECADD_PTX);
     load_module::module_get_function(c, m, "vecadd").unwrap()
 }
 
@@ -146,7 +146,7 @@ fn every_copy_direction_rejects_a_dangling_pointer() {
         "dangling dst"
     );
     assert!(transfer::read_dtoh(&c, &mut sink, dead, 8).is_err());
-    assert!(transfer::memcpy_dtoh(&c, dead).is_err());
+    assert!(c.device_location(dead).is_err());
     assert!(transfer::memset(&mut c, &mut sink, dead, &[0u8; 4]).is_err());
 }
 
@@ -241,10 +241,10 @@ fn host_free_of_a_device_pointer_and_vice_versa_are_rejected() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
     let dev = allocate::mem_alloc(&mut c, &mut sink, 128).unwrap();
-    let host = allocate::host_alloc(&mut c, 128).unwrap();
+    let host = c.host_alloc(128).unwrap();
     // Cross-kind frees are rejected (a device pointer is not a pinned host base, and vice versa).
     assert!(
-        allocate::host_free(&mut c, dev.0).is_err(),
+        c.host_free(dev.0).is_err(),
         "device ptr is not a pinned host base"
     );
     assert!(
@@ -252,7 +252,7 @@ fn host_free_of_a_device_pointer_and_vice_versa_are_rejected() {
         "host base is not a device alloc"
     );
     // Each frees correctly through its own path.
-    allocate::host_free(&mut c, host).unwrap();
+    c.host_free(host).unwrap();
     allocate::mem_free(&mut c, &mut sink, dev).unwrap();
 }
 
@@ -289,14 +289,14 @@ fn managed_and_device_allocations_do_not_alias_managed_flag() {
 fn host_get_device_pointer_bounds_the_backing_buffer_to_the_host_size() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
-    let base = allocate::host_alloc(&mut c, 200).unwrap();
-    let dptr = allocate::host_get_device_pointer(&mut c, &mut sink, base).unwrap();
+    let base = c.host_alloc(200).unwrap();
+    let dptr = c.host_get_device_pointer(&mut sink, base).unwrap();
     // The backing device buffer is exactly the host allocation size and resolves as a live allocation.
     assert_eq!(c.mem.containing(dptr), Some((dptr.0, 200)));
     // Freeing the pinned host allocation drops its device mapping; a re-map mints a NEW device buffer.
-    allocate::host_free(&mut c, base).unwrap();
+    c.host_free(base).unwrap();
     assert!(
-        allocate::host_get_device_pointer(&mut c, &mut sink, base).is_err(),
+        c.host_get_device_pointer(&mut sink, base).is_err(),
         "freed host base unmaps"
     );
 }
@@ -323,8 +323,8 @@ fn same_global_name_in_two_modules_gets_distinct_backing_buffers() {
     const G: &str = ".visible .global .align 4 .b8 buf[128];\n.visible .entry k() { ret; }\n";
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
-    let m1 = load_module::module_load_ptx(&mut c, G);
-    let m2 = load_module::module_load_ptx(&mut c, G);
+    let m1 = c.load_ptx(G);
+    let m2 = c.load_ptx(G);
     let (p1, s1) = load_module::module_get_global(&mut c, &mut sink, m1, "buf")
         .unwrap()
         .unwrap();
@@ -344,8 +344,8 @@ fn load_data_rejects_non_utf8_non_fatbin_image() {
     let mut c = ctx();
     // Bytes that are neither a fatbin container nor valid UTF-8 PTX text → typed error, never a load.
     let junk = [0xFFu8, 0xFE, 0x00, 0x80, 0x81];
-    assert!(!fatbin::is_fatbin(&junk));
-    assert!(load_module::module_load_data(&mut c, &junk).is_err());
+    assert!(!fatbin::Image::new(&junk).is_fatbin());
+    assert!(c.load_module(&junk).is_err());
 }
 
 // ===================================================================================================
@@ -376,18 +376,18 @@ fn fatbin_with(kind: u16, flags: u64, payload: &[u8]) -> Vec<u8> {
 fn fatbin_rejects_compressed_ptx_sass_only_and_truncated() {
     // A COMPRESSED PTX entry is out of the tier-1 scope → None (never a garbled decompress).
     let compressed = fatbin_with(1, FLAG_COMPRESS, b".version 7.5\n");
-    assert!(fatbin::is_fatbin(&compressed));
-    assert_eq!(fatbin::extract_ptx(&compressed), None);
+    assert!(fatbin::Image::new(&compressed).is_fatbin());
+    assert_eq!(fatbin::Image::new(&compressed).ptx(), None);
 
     // A SASS/ELF-only fatbin (kind != PTX) carries no PTX → None.
     let sass = fatbin_with(2, 0, b"\x7fELF-ish");
-    assert_eq!(fatbin::extract_ptx(&sass), None);
+    assert_eq!(fatbin::Image::new(&sass).ptx(), None);
 
     // A container whose self-declared fat_size runs past the slice is truncated → None.
     let mut trunc = fatbin_with(1, 0, b".version 7.5\n");
     let bad_size = (trunc.len() as u64) + 4096;
     trunc[8..16].copy_from_slice(&bad_size.to_le_bytes());
-    assert_eq!(fatbin::extract_ptx(&trunc), None);
+    assert_eq!(fatbin::Image::new(&trunc).ptx(), None);
 }
 
 #[test]
@@ -396,7 +396,7 @@ fn fatbin_trims_trailing_nul_padding_of_the_ptx_payload() {
     let mut padded = b".version 7.5\n".to_vec();
     padded.extend_from_slice(&[0u8; 8]); // NUL padding
     let img = fatbin_with(1, 0, &padded);
-    assert_eq!(fatbin::extract_ptx(&img).unwrap(), b".version 7.5\n");
+    assert_eq!(fatbin::Image::new(&img).ptx().unwrap(), b".version 7.5\n");
 }
 
 // ===================================================================================================
@@ -531,13 +531,13 @@ fn stream_lifecycle_and_synchronize_validation() {
 
     let s = c.streams.create();
     assert!(c.streams.is_valid(s));
-    synchronize::stream_synchronize(&mut c, &mut sink, s).unwrap();
+    c.synchronize_stream(&mut sink, s).unwrap();
 
     // destroy → no longer valid → synchronize + async ops reject it.
     assert!(c.streams.destroy(s));
     assert!(!c.streams.destroy(s), "double-destroy is rejected");
     assert!(!c.streams.is_valid(s));
-    assert!(synchronize::stream_synchronize(&mut c, &mut sink, s).is_err());
+    assert!(c.synchronize_stream(&mut sink, s).is_err());
 
     let base = allocate::mem_alloc(&mut c, &mut sink, 64).unwrap();
     assert!(transfer::memcpy_htod_async(&mut c, &mut sink, s, base, &[1, 2]).is_err());
@@ -550,8 +550,8 @@ fn stream_lifecycle_and_synchronize_validation() {
 fn ctx_synchronize_barrier_uses_a_fresh_fence_value_each_time() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
-    synchronize::ctx_synchronize(&mut c, &mut sink).unwrap();
-    synchronize::ctx_synchronize(&mut c, &mut sink).unwrap();
+    c.synchronize(&mut sink).unwrap();
+    c.synchronize(&mut sink).unwrap();
     // two barriers → two distinct, monotonically increasing fence signal values.
     assert_eq!(sink.waits.len(), 2);
     assert!(

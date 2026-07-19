@@ -56,71 +56,73 @@ pub struct Gpu {
     pub info: wgpu::AdapterInfo,
 }
 
-/// Acquire a headless (surfaceless) wgpu device per `cfg`. Blocks on the async requests with pollster.
-pub fn acquire(cfg: &DeviceConfig) -> Result<Gpu> {
-    if let Some(icd) = &cfg.vk_icd_filenames {
-        // Point the Vulkan loader at the software ICD before the instance enumerates drivers. Safe: done
-        // at device bring-up, before any wgpu/Vulkan call in this process.
-        std::env::set_var("VK_ICD_FILENAMES", icd);
+impl Gpu {
+    /// Acquire a headless (surfaceless) wgpu device per `cfg`. Blocks on the async requests with pollster.
+    pub fn acquire(cfg: &DeviceConfig) -> Result<Self> {
+        if let Some(icd) = &cfg.vk_icd_filenames {
+            // Point the Vulkan loader at the software ICD before the instance enumerates drivers. Safe: done
+            // at device bring-up, before any wgpu/Vulkan call in this process.
+            std::env::set_var("VK_ICD_FILENAMES", icd);
+        }
+
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: cfg.backends,
+            ..Default::default()
+        });
+
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::None,
+            force_fallback_adapter: cfg.force_fallback,
+            compatible_surface: None, // headless: no swapchain surface
+        }))
+        .ok_or(GpuError::Unsupported(
+            "wgpu: no adapter (is a Vulkan ICD / lavapipe reachable?)",
+        ))?;
+
+        let info = adapter.get_info();
+        hl_log::hl_info!(
+            hl_log::tag::WGPU,
+            "adapter={} backend={:?} type={:?}",
+            info.name,
+            info.backend,
+            info.device_type
+        );
+
+        // Enable PUSH_CONSTANTS when the adapter really supports it (lavapipe does). A guest wgpu (e.g. Zed's
+        // gpui_wgpu) builds an internal indirect-draw-validation compute pipeline during device creation whose
+        // shader declares `var<push_constant>`. That SPIR-V reaches this executor's `Device::create_shader_module`,
+        // and naga's validator only enables the `PUSH_CONSTANT` capability when the device requested the
+        // PUSH_CONSTANTS feature — otherwise it rejects the module ("Capability PUSH_CONSTANT is not supported"),
+        // which the guest sees as a lost device. Requesting the feature only when advertised keeps this truthful
+        // on backends that lack it. `adapter.limits()` already carries the adapter's real `max_push_constant_size`,
+        // which the feature requires to be nonzero.
+        //
+        // DUAL_SOURCE_BLENDING is enabled on the same truthful terms: ANGLE (Chrome, via
+        // `EXT_blend_func_extended`) forwards GLSL-ES fragment shaders with a second blend source
+        // (`layout(location=0, index=1) out`), which `crate::glsl_es` + `crate::wgsl::fix_dual_source_blend`
+        // lower to a `@second_blend_source` WGSL output. naga's validator only enables the
+        // `DUAL_SOURCE_BLENDING` capability when the device requested the feature, so a shader module using it
+        // is rejected otherwise. Requesting it only when the adapter advertises it keeps the capability honest.
+        let required_features = adapter.features()
+            & (wgpu::Features::PUSH_CONSTANTS | wgpu::Features::DUAL_SOURCE_BLENDING);
+
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("hl-gpu-wgpu"),
+                required_features,
+                // Downlevel/software-friendly: lavapipe advertises modest limits, so request the adapter's own
+                // limits rather than the desktop defaults (which a software device may not meet).
+                required_limits: adapter.limits(),
+                memory_hints: wgpu::MemoryHints::Performance,
+            },
+            None,
+        ))
+        .map_err(|e| GpuError::Kernel(format!("wgpu: request_device failed: {e}")))?;
+
+        Ok(Self {
+            device,
+            queue,
+            info,
+        })
     }
-
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: cfg.backends,
-        ..Default::default()
-    });
-
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::None,
-        force_fallback_adapter: cfg.force_fallback,
-        compatible_surface: None, // headless: no swapchain surface
-    }))
-    .ok_or(GpuError::Unsupported(
-        "wgpu: no adapter (is a Vulkan ICD / lavapipe reachable?)",
-    ))?;
-
-    let info = adapter.get_info();
-    hl_log::hl_info!(
-        hl_log::tag::WGPU,
-        "adapter={} backend={:?} type={:?}",
-        info.name,
-        info.backend,
-        info.device_type
-    );
-
-    // Enable PUSH_CONSTANTS when the adapter really supports it (lavapipe does). A guest wgpu (e.g. Zed's
-    // gpui_wgpu) builds an internal indirect-draw-validation compute pipeline during device creation whose
-    // shader declares `var<push_constant>`. That SPIR-V reaches this executor's `Device::create_shader_module`,
-    // and naga's validator only enables the `PUSH_CONSTANT` capability when the device requested the
-    // PUSH_CONSTANTS feature — otherwise it rejects the module ("Capability PUSH_CONSTANT is not supported"),
-    // which the guest sees as a lost device. Requesting the feature only when advertised keeps this truthful
-    // on backends that lack it. `adapter.limits()` already carries the adapter's real `max_push_constant_size`,
-    // which the feature requires to be nonzero.
-    //
-    // DUAL_SOURCE_BLENDING is enabled on the same truthful terms: ANGLE (Chrome, via
-    // `EXT_blend_func_extended`) forwards GLSL-ES fragment shaders with a second blend source
-    // (`layout(location=0, index=1) out`), which `crate::glsl_es` + `crate::wgsl::fix_dual_source_blend`
-    // lower to a `@second_blend_source` WGSL output. naga's validator only enables the
-    // `DUAL_SOURCE_BLENDING` capability when the device requested the feature, so a shader module using it
-    // is rejected otherwise. Requesting it only when the adapter advertises it keeps the capability honest.
-    let required_features = adapter.features()
-        & (wgpu::Features::PUSH_CONSTANTS | wgpu::Features::DUAL_SOURCE_BLENDING);
-
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("hl-gpu-wgpu"),
-            required_features,
-            // Downlevel/software-friendly: lavapipe advertises modest limits, so request the adapter's own
-            // limits rather than the desktop defaults (which a software device may not meet).
-            required_limits: adapter.limits(),
-            memory_hints: wgpu::MemoryHints::Performance,
-        },
-        None,
-    ))
-    .map_err(|e| GpuError::Kernel(format!("wgpu: request_device failed: {e}")))?;
-
-    Ok(Gpu {
-        device,
-        queue,
-        info,
-    })
 }

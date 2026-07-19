@@ -12,15 +12,9 @@
 pub mod commit;
 pub mod compose;
 pub mod focus;
-pub mod popup;
 pub mod schedule;
 
 pub use commit::{commit_surface, BufferChange, Commit};
-pub use compose::{compose_frame, is_tree_dirty, Frame, PresentItem};
-pub use focus::{
-    activate, clear_focus, focus_surface, on_window_gone, surface_at, update_pointer, FocusChange,
-};
-pub use popup::{
-    constrain_popup, constrain_popup_for_parent, place_popup, place_popup_in, popup_placement,
-};
-pub use schedule::{fallback_timing, from_outcome, should_present, FramePacing, PacingPolicy};
+pub use compose::{Frame, PresentItem};
+pub use focus::{surface_at, update_pointer, FocusChange};
+pub use schedule::{should_present, FramePacing, PacingPolicy};

@@ -8,30 +8,20 @@ use hl_gpu::{GpuError, Result};
 
 use crate::WgpuExecutor;
 
-/// Downcast a live sampler id to its native handle.
-pub fn native<'a>(res: &'a SessionResources, id: u32) -> Result<&'a wgpu::Sampler> {
-    res.samplers
-        .get(id)?
-        .downcast_ref::<wgpu::Sampler>()
-        .ok_or(GpuError::Invalid("wgpu: sampler native type mismatch"))
-}
-
-fn filter(f: Filter) -> wgpu::FilterMode {
-    match f {
-        Filter::Nearest => wgpu::FilterMode::Nearest,
-        Filter::Linear => wgpu::FilterMode::Linear,
-    }
-}
-
-fn address(a: AddressMode) -> wgpu::AddressMode {
-    match a {
-        AddressMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
-        AddressMode::Repeat => wgpu::AddressMode::Repeat,
-        AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
-    }
-}
-
 impl WgpuExecutor {
+    /// Downcast a live sampler id to its native handle.
+    pub(crate) fn sampler<'a>(
+        &self,
+        resources: &'a SessionResources,
+        id: u32,
+    ) -> Result<&'a wgpu::Sampler> {
+        resources
+            .samplers
+            .get(id)?
+            .downcast_ref::<wgpu::Sampler>()
+            .ok_or(GpuError::Invalid("wgpu: sampler native type mismatch"))
+    }
+
     pub(crate) fn create_sampler(
         &self,
         res: &mut SessionResources,
@@ -40,12 +30,33 @@ impl WgpuExecutor {
     ) -> Result<()> {
         let s = self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("hl-sampler"),
-            address_mode_u: address(d.address_u),
-            address_mode_v: address(d.address_v),
-            address_mode_w: address(d.address_w),
-            mag_filter: filter(d.mag_filter),
-            min_filter: filter(d.min_filter),
-            mipmap_filter: filter(d.mip_filter),
+            address_mode_u: match d.address_u {
+                AddressMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+                AddressMode::Repeat => wgpu::AddressMode::Repeat,
+                AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
+            },
+            address_mode_v: match d.address_v {
+                AddressMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+                AddressMode::Repeat => wgpu::AddressMode::Repeat,
+                AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
+            },
+            address_mode_w: match d.address_w {
+                AddressMode::ClampToEdge => wgpu::AddressMode::ClampToEdge,
+                AddressMode::Repeat => wgpu::AddressMode::Repeat,
+                AddressMode::MirrorRepeat => wgpu::AddressMode::MirrorRepeat,
+            },
+            mag_filter: match d.mag_filter {
+                Filter::Nearest => wgpu::FilterMode::Nearest,
+                Filter::Linear => wgpu::FilterMode::Linear,
+            },
+            min_filter: match d.min_filter {
+                Filter::Nearest => wgpu::FilterMode::Nearest,
+                Filter::Linear => wgpu::FilterMode::Linear,
+            },
+            mipmap_filter: match d.mip_filter {
+                Filter::Nearest => wgpu::FilterMode::Nearest,
+                Filter::Linear => wgpu::FilterMode::Linear,
+            },
             ..Default::default()
         });
         res.samplers.insert(id, Box::new(s))

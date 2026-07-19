@@ -1,6 +1,6 @@
 //! Regression tests for bugs found during the hl-term-core hardening pass.
 
-use hl_ws_term::session::{cwd_from_uri, Pane, PaneNode, Session, SessionTab};
+use hl_ws_term::session::{Pane, PaneNode, Session, SessionTab, WorkingDirectory};
 use hl_ws_term::{Attrs, Vt};
 
 // --- session unesc / round-trip (was: Latin-1 byte-wise decode → mojibake + char-boundary panic) ---
@@ -31,11 +31,15 @@ fn nonascii_title_and_cwd_roundtrip() {
 #[test]
 fn osc7_percent_encoded_utf8_path() {
     assert_eq!(
-        cwd_from_uri("file://host/tmp/%C3%A9").as_deref(),
+        WorkingDirectory::from_osc7("file://host/tmp/%C3%A9")
+            .map(|path| path.into_string())
+            .as_deref(),
         Some("/tmp/é")
     );
     assert_eq!(
-        cwd_from_uri("file:///a/%E4%B8%96%E7%95%8C").as_deref(),
+        WorkingDirectory::from_osc7("file:///a/%E4%B8%96%E7%95%8C")
+            .map(|path| path.into_string())
+            .as_deref(),
         Some("/a/世界")
     );
 }
@@ -43,7 +47,10 @@ fn osc7_percent_encoded_utf8_path() {
 #[test]
 fn percent_before_literal_multibyte_does_not_panic() {
     // A stray/hand-edited '%' immediately before a literal multibyte char used to panic slicing mid-char.
-    assert!(cwd_from_uri("file://h/%aé").is_some() || cwd_from_uri("file://h/%aé").is_none());
+    assert!(
+        WorkingDirectory::from_osc7("file://h/%aé").is_some()
+            || WorkingDirectory::from_osc7("file://h/%aé").is_none()
+    );
     let _ = Session::parse("version 1\ntab %aé leaf /%zé - -\n");
 }
 

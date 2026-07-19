@@ -8,7 +8,7 @@
 use hl_gpu::protocol::model::command::*;
 use hl_gpu::protocol::model::descriptor::*;
 use hl_gpu::protocol::model::enums::*;
-use hl_gpu::{decode_stream, encode_stream, WIRE_VERSION};
+use hl_gpu::WIRE_VERSION;
 
 #[test]
 fn wire_version_is_pinned_at_8() {
@@ -46,7 +46,7 @@ fn stream_a() -> Vec<Cmd> {
     ]
 }
 
-/// Byte-exact snapshot of `encode_stream(stream_a())`, captured from the shipping `hl-gpu`.
+/// Byte-exact snapshot of `hl_gpu::Encoder::stream(stream_a())`, captured from the shipping `hl-gpu`.
 const GOLDEN_A: &[u8] = &[
     0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x00, 0x00,
     0x00, 0x02, 0x00, 0x00, 0x00, 0x76, 0x62, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -103,7 +103,7 @@ fn stream_b() -> Vec<Cmd> {
     ]
 }
 
-/// Byte-exact snapshot of `encode_stream(stream_b())`, captured from the shipping `hl-gpu`.
+/// Byte-exact snapshot of `hl_gpu::Encoder::stream(stream_b())`, captured from the shipping `hl-gpu`.
 const GOLDEN_B: &[u8] = &[
     0x04, 0x02, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
     0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
@@ -147,22 +147,22 @@ fn stream_c() -> Vec<Cmd> {
 
 #[test]
 fn golden_a_bytes_are_stable() {
-    assert_eq!(encode_stream(&stream_a()), GOLDEN_A);
+    assert_eq!(hl_gpu::Encoder::stream(&stream_a()), GOLDEN_A);
     // and the snapshot decodes back to the source stream.
-    assert_eq!(decode_stream(GOLDEN_A).unwrap(), stream_a());
+    assert_eq!(hl_gpu::Decoder::stream(GOLDEN_A).unwrap(), stream_a());
 }
 
 #[test]
 fn golden_b_bytes_are_stable() {
-    assert_eq!(encode_stream(&stream_b()), GOLDEN_B);
-    assert_eq!(decode_stream(GOLDEN_B).unwrap(), stream_b());
+    assert_eq!(hl_gpu::Encoder::stream(&stream_b()), GOLDEN_B);
+    assert_eq!(hl_gpu::Decoder::stream(GOLDEN_B).unwrap(), stream_b());
 }
 
 #[test]
 fn golden_c_shader_magic_bytes_are_stable() {
-    assert_eq!(encode_stream(&stream_c()), GOLDEN_C);
+    assert_eq!(hl_gpu::Encoder::stream(&stream_c()), GOLDEN_C);
     // decoding the shipping-hl-gpu bytes classifies both shader payloads correctly here.
-    let back = decode_stream(GOLDEN_C).unwrap();
+    let back = hl_gpu::Decoder::stream(GOLDEN_C).unwrap();
     assert!(matches!(
         back[0],
         Cmd::CreateShader {
@@ -206,10 +206,10 @@ fn stream_d() -> Vec<Cmd> {
 
 #[test]
 fn golden_d_glsl_payload_bytes_are_stable() {
-    assert_eq!(encode_stream(&stream_d()), GOLDEN_D);
+    assert_eq!(hl_gpu::Encoder::stream(&stream_d()), GOLDEN_D);
     // The magic-led payload round-trips AND classifies as Glsl on decode.
-    assert_eq!(decode_stream(GOLDEN_D).unwrap(), stream_d());
-    let back = decode_stream(GOLDEN_D).unwrap();
+    assert_eq!(hl_gpu::Decoder::stream(GOLDEN_D).unwrap(), stream_d());
+    let back = hl_gpu::Decoder::stream(GOLDEN_D).unwrap();
     assert!(matches!(
         back[0],
         Cmd::CreateShader {

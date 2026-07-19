@@ -77,6 +77,11 @@ impl Default for TermConfig {
 }
 
 impl TermConfig {
+    /// The default config path, `<hl_root>/term.conf`.
+    pub fn path(hl_root: &Path) -> PathBuf {
+        hl_root.join("term.conf")
+    }
+
     /// The Pango font description string VTE wants, e.g. `"Menlo 12"`.
     pub fn font_string(&self) -> String {
         // Trim a trailing `.0` so integer sizes read cleanly.
@@ -118,70 +123,99 @@ impl TermConfig {
     /// Parse `key = value` lines into `self` (public for tests + live-reload).
     pub fn apply_text(&mut self, text: &str) {
         for raw in text.lines() {
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
+            self.apply_line(raw);
+        }
+    }
+
+    fn apply_line(&mut self, raw: &str) {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return;
+        };
+        self.apply_entry(key.trim(), value.trim());
+    }
+
+    fn apply_entry(&mut self, key: &str, value: &str) {
+        match key {
+            "font" if !value.is_empty() => self.apply_font(value),
+            "font_family" if !value.is_empty() => self.font_family = value.to_string(),
+            "font_size" | "size" => {
+                if let Some(n) = value.parse::<f64>().ok().filter(|n| *n > 0.0) {
+                    self.font_size = n;
+                }
             }
-            let Some((k, v)) = line.split_once('=') else {
-                continue;
-            };
-            let (k, v) = (k.trim(), v.trim());
-            match k {
-                "font_family" | "font" if !v.is_empty() => {
-                    // Allow `font = Menlo 13` (family + trailing size) as a convenience.
-                    if k == "font" {
-                        if let Some((fam, size)) = split_font(v) {
-                            self.font_family = fam;
-                            if let Some(s) = size {
-                                self.font_size = s;
-                            }
-                            continue;
-                        }
-                    }
-                    self.font_family = v.to_string();
+            "scrollback" => {
+                // `unlimited`/`0`/empty → unlimited; a number → cap.
+                self.scrollback = match value.to_ascii_lowercase().as_str() {
+                    "" | "0" | "unlimited" | "infinite" | "inf" => None,
+                    _ => value.parse::<u64>().ok().filter(|n| *n > 0),
+                };
+            }
+            "cursor_shape" | "cursor" => {
+                if let Some(cs) = CursorShape::parse(value) {
+                    self.cursor_shape = cs;
                 }
-                "font_size" | "size" => {
-                    if let Ok(n) = v.parse::<f64>() {
-                        if n > 0.0 {
-                            self.font_size = n;
-                        }
-                    }
-                }
-                "scrollback" => {
-                    // `unlimited`/`0`/empty → unlimited; a number → cap.
-                    self.scrollback = match v.to_ascii_lowercase().as_str() {
-                        "" | "0" | "unlimited" | "infinite" | "inf" => None,
-                        _ => v.parse::<u64>().ok().filter(|n| *n > 0),
-                    };
-                }
-                "cursor_shape" | "cursor" => {
-                    if let Some(cs) = CursorShape::parse(v) {
-                        self.cursor_shape = cs;
-                    }
-                }
-                "cursor_blink" | "blink" => {
-                    self.cursor_blink = parse_bool(v).unwrap_or(self.cursor_blink);
-                }
-                "foreground" | "fg" if is_hex(v) => self.foreground = normalize_hex(v),
-                "background" | "bg" if is_hex(v) => self.background = normalize_hex(v),
-                _ => {
-                    // color0..color15 = #rrggbb
-                    if let Some(idx) = k
-                        .strip_prefix("color")
-                        .and_then(|n| n.parse::<usize>().ok())
-                    {
-                        if idx < 16 && is_hex(v) {
-                            self.palette[idx] = normalize_hex(v);
-                        }
-                    } else if let Some(action) = k.strip_prefix("key.") {
-                        if !action.is_empty() && !v.is_empty() {
-                            self.keybindings.retain(|(a, _)| a != action);
-                            self.keybindings.push((action.to_string(), v.to_string()));
-                        }
-                    }
-                }
+            }
+            "cursor_blink" | "blink" => {
+                self.cursor_blink = match value.to_ascii_lowercase().as_str() {
+                    "true" | "1" | "yes" | "on" => true,
+                    "false" | "0" | "no" | "off" => false,
+                    _ => self.cursor_blink,
+                };
+            }
+            "foreground" | "fg" => self.apply_color(value, None),
+            "background" | "bg" => self.apply_color(value, Some(16)),
+            _ => {
+                self.apply_named_entry(key, value);
             }
         }
+    }
+
+    fn apply_named_entry(&mut self, key: &str, value: &str) {
+        if let Some(index) = key.strip_prefix("color").and_then(|n| n.parse().ok()) {
+            self.apply_color(value, Some(index));
+            return;
+        }
+        let Some(action) = key.strip_prefix("key.") else {
+            return;
+        };
+        if action.is_empty() || value.is_empty() {
+            return;
+        }
+        self.keybindings.retain(|(name, _)| name != action);
+        self.keybindings
+            .push((action.to_string(), value.to_string()));
+    }
+
+    fn apply_color(&mut self, value: &str, palette: Option<usize>) {
+        let Some(color) = ConfigColor::parse(value) else {
+            return;
+        };
+        match palette {
+            None => self.foreground = color,
+            Some(16) => self.background = color,
+            Some(index) if index < 16 => self.palette[index] = color,
+            Some(_) => {}
+        }
+    }
+
+    /// Apply the Pango-style `Family Name 13` shorthand used by the `font` config key.
+    fn apply_font(&mut self, value: &str) {
+        let value = value.trim();
+        let parsed = value
+            .rsplit_once(char::is_whitespace)
+            .and_then(|(family, size)| size.parse::<f64>().ok().map(|size| (family.trim(), size)));
+        if let Some((family, size)) =
+            parsed.filter(|(family, size)| !family.is_empty() && *size > 0.0)
+        {
+            self.font_family = family.to_string();
+            self.font_size = size;
+            return;
+        }
+        self.font_family = value.to_string();
     }
 
     /// A commented sample config (written on first run so users have something to edit).
@@ -204,49 +238,21 @@ impl TermConfig {
     }
 }
 
-fn parse_bool(v: &str) -> Option<bool> {
-    match v.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" | "on" => Some(true),
-        "false" | "0" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
+struct ConfigColor;
 
-fn is_hex(v: &str) -> bool {
-    let v = v.trim();
-    let body = v.strip_prefix('#').unwrap_or(v);
-    (body.len() == 6 || body.len() == 3) && body.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-fn normalize_hex(v: &str) -> String {
-    let v = v.trim();
-    if v.starts_with('#') {
-        v.to_string()
-    } else {
-        format!("#{v}")
-    }
-}
-
-/// Split a Pango-ish `"Family Name 13"` into `(family, Some(size))`, or `(whole, None)` if the last
-/// token isn't a number.
-fn split_font(v: &str) -> Option<(String, Option<f64>)> {
-    let v = v.trim();
-    if v.is_empty() {
-        return None;
-    }
-    if let Some((rest, last)) = v.rsplit_once(char::is_whitespace) {
-        if let Ok(size) = last.parse::<f64>() {
-            if size > 0.0 && !rest.trim().is_empty() {
-                return Some((rest.trim().to_string(), Some(size)));
-            }
+impl ConfigColor {
+    fn parse(value: &str) -> Option<String> {
+        let value = value.trim();
+        let body = value.strip_prefix('#').unwrap_or(value);
+        if !matches!(body.len(), 3 | 6) || !body.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
         }
+        Some(if value.starts_with('#') {
+            value.to_string()
+        } else {
+            format!("#{value}")
+        })
     }
-    Some((v.to_string(), None))
-}
-
-/// The default config path, `<hl_root>/term.conf`.
-pub fn config_path(hl_root: &Path) -> PathBuf {
-    hl_root.join("term.conf")
 }
 
 #[cfg(test)]
@@ -288,6 +294,22 @@ mod tests {
         assert_eq!(c.font_family, "SF Mono");
         assert_eq!(c.font_size, 13.0);
         assert_eq!(c.font_string(), "SF Mono 13");
+    }
+
+    #[test]
+    fn font_combined_form_keeps_family_when_size_is_invalid() {
+        let mut c = TermConfig::default();
+        c.apply_text("font = Berkeley Mono large\n");
+        assert_eq!(c.font_family, "Berkeley Mono large");
+        assert_eq!(c.font_size, 12.0);
+    }
+
+    #[test]
+    fn path_uses_terminal_config_name() {
+        assert_eq!(
+            TermConfig::path(Path::new("/tmp/hl")),
+            PathBuf::from("/tmp/hl/term.conf")
+        );
     }
 
     #[test]

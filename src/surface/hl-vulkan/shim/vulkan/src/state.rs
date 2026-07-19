@@ -215,12 +215,15 @@ impl State {
     }
 }
 
-static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+pub struct StateStore;
 
-/// Run `f` with exclusive access to the global shim state. Non-reentrant — never call [`with`] from
-/// inside an `f` (the `Mutex` is not recursive); each entry point does exactly one `with`.
-pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
-    let m = STATE.get_or_init(|| Mutex::new(State::new()));
-    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
-    f(&mut g)
+impl StateStore {
+    /// Run `f` with exclusive access to the global shim state. Non-reentrant — never call this method
+    /// from inside `f` (the `Mutex` is not recursive); each entry point takes the state exactly once.
+    pub fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
+        static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+        let state = STATE.get_or_init(|| Mutex::new(State::new()));
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        f(&mut state)
+    }
 }

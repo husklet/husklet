@@ -4,15 +4,17 @@ use crate::model::*;
 use crate::prelude::*;
 use crate::util::*;
 
-pub(crate) fn is_predefined(name: &str) -> bool {
-    matches!(name, "bridge" | "host" | "none")
+impl Net {
+    pub(crate) fn is_predefined(&self) -> bool {
+        matches!(self.name.as_str(), "bridge" | "host" | "none")
+    }
 }
 
 pub(crate) fn default_networks() -> Vec<Net> {
     ["bridge", "host", "none"]
         .iter()
         .map(|name| Net {
-            id: fake_id(&format!("net-{name}")),
+            id: Digest::fake(&format!("net-{name}")),
             name: name.to_string(),
             driver: if *name == "bridge" {
                 "bridge".into()
@@ -58,7 +60,7 @@ mod tests {
         assert_eq!(names, ["bridge", "host", "none"]);
         assert!(nets.iter().all(|n| n.scope == "local"));
         // All predefined per is_predefined, all with a stable non-empty id and no members.
-        assert!(nets.iter().all(|n| is_predefined(&n.name)));
+        assert!(nets.iter().all(|n| n.is_predefined()));
         assert!(nets.iter().all(|n| !n.id.is_empty()));
         assert!(nets
             .iter()
@@ -89,7 +91,7 @@ mod tests {
 
     #[test]
     fn default_networks_ids_are_deterministic() {
-        // ids come from fake_id(net-<name>), so two builds produce identical ids.
+        // ids come from Digest::fake(net-<name>), so two builds produce identical ids.
         let a = default_networks();
         let b = default_networks();
         for (na, nb) in a.iter().zip(b.iter()) {

@@ -46,7 +46,7 @@ fn flat_program(c: &mut GlContext, fs: &str) -> u32 {
 }
 
 fn tri_vbo(c: &mut GlContext) {
-    let vbo = record::gen_buffer(c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(c, GL_ARRAY_BUFFER, vbo);
     record::buffer_data(c, GL_ARRAY_BUFFER, &vec![0u8; 24], 0x88E4);
     record::vertex_attrib_pointer(c, 0, 2, GL_FLOAT, false, 8, 0);
@@ -241,8 +241,8 @@ fn textured_setup(c: &mut GlContext) {
     record::use_program(c, prog);
     record::uniform_sampler(c, 0, 0); // uTex -> texture unit 0
     tri_vbo(c);
-    let tex = record::gen_texture(c);
-    record::active_texture(c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(c, 2, 2, &[0xABu8; 16]);
     record::tex_parameter(c, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -267,7 +267,7 @@ fn bound_sampler_object_overrides_texture_filter_and_wrap() {
     let mut sink = RecordingSink::with_full_caps();
     textured_setup(&mut c);
     // A sampler object with LINEAR filtering + CLAMP_TO_EDGE — the opposite of the texture's NEAREST/REPEAT.
-    let samp = es3::gen_sampler(&mut c);
+    let samp = c.samplers.gen();
     es3::sampler_parameter(&mut c, samp, GL_TEXTURE_MIN_FILTER, GL_LINEAR as i32, 0.0);
     es3::sampler_parameter(&mut c, samp, GL_TEXTURE_MAG_FILTER, GL_LINEAR as i32, 0.0);
     es3::sampler_parameter(

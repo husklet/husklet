@@ -20,15 +20,25 @@ pub(crate) struct LogsQ {
     until: Option<String>,
 }
 
+impl LogsQ {
+    fn since(&self) -> Option<i64> {
+        Logs::timestamp(self.since.as_deref())
+    }
+    fn until(&self) -> Option<i64> {
+        Logs::timestamp(self.until.as_deref())
+    }
+}
+
 pub(crate) async fn containers_logs(
     State(a): State<App>,
     Path(id): Path<String>,
     Query(q): Query<LogsQ>,
 ) -> Response {
-    let follow = q_truthy(&q.follow);
-    let timestamps = q_truthy(&q.timestamps);
+    let follow = QueryFlag::is_true(&q.follow);
+    let timestamps = QueryFlag::is_true(&q.timestamps);
     // Stream selection: honor explicit stdout/stderr flags, defaulting to both when neither is given.
-    let (mut want_out, mut want_err) = (q_truthy(&q.stdout), q_truthy(&q.stderr));
+    let (mut want_out, mut want_err) =
+        (QueryFlag::is_true(&q.stdout), QueryFlag::is_true(&q.stderr));
     if !want_out && !want_err {
         want_out = true;
         want_err = true;
@@ -38,15 +48,15 @@ pub(crate) async fn containers_logs(
         None | Some("") | Some("all") => None,
         Some(s) => s.parse::<usize>().ok(),
     };
-    let since = parse_unix_ts(&q.since);
-    let until = parse_unix_ts(&q.until);
+    let since = q.since();
+    let until = q.until();
 
-    // Snapshot the container + its live IO under the daemon lock; clone the Arc<Live> so we can read its
+    // Persisted the container + its live IO under the daemon lock; clone the Arc<Live> so we can read its
     // buffers / subscribe to its broadcast after releasing the lock.
     let (tty, running, live, persisted_out, persisted_err, start_t, end_t) = {
         let g = a.inner.lock().await;
-        let Some((full, c)) = resolve_get(&g, &id) else {
-            return no_such(&id);
+        let Some((full, c)) = ContainerId::get(&g, &id) else {
+            return ErrorMessage::no_such(&id);
         };
         let running = c.status == "running" || c.status == "paused";
         let start_t = if c.started_at > 0 {
@@ -127,7 +137,7 @@ pub(crate) async fn containers_logs(
     }
     let mut entries: Vec<(i64, u8, Vec<u8>)> = Vec::new();
     for (ts, stream, data) in &runs {
-        for line in split_log_lines(data) {
+        for line in Logs::new(data).lines() {
             entries.push((*ts, *stream, line));
         }
     }

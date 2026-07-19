@@ -39,6 +39,16 @@ impl Default for Pen {
     }
 }
 
+impl Pen {
+    fn set_color(&mut self, foreground: bool, color: Color) {
+        if foreground {
+            self.fg = color;
+        } else {
+            self.bg = color;
+        }
+    }
+}
+
 /// A VT parser bound to a grid. Feed bytes via [`Vt::advance`] / [`Vt::advance_bytes`].
 pub struct Vt {
     grid: Grid,
@@ -160,25 +170,8 @@ impl Vt {
 
     // ---- Ground: printable text + C0 controls ---------------------------------------------------
     fn ground(&mut self, b: u8) {
-        // Mid-UTF8-sequence: accumulate continuation bytes.
-        if self.utf8_need > 0 {
-            if b & 0xC0 == 0x80 {
-                self.utf8_buf[self.utf8_len] = b;
-                self.utf8_len += 1;
-                if self.utf8_len == self.utf8_need {
-                    let ch = std::str::from_utf8(&self.utf8_buf[..self.utf8_len])
-                        .ok()
-                        .and_then(|s| s.chars().next())
-                        .unwrap_or('\u{fffd}');
-                    self.put_char(ch);
-                    self.utf8_need = 0;
-                    self.utf8_len = 0;
-                }
-                return;
-            }
-            // Malformed: drop the partial and fall through to handle `b` fresh.
-            self.utf8_need = 0;
-            self.utf8_len = 0;
+        if self.resume_utf8(b) {
+            return;
         }
         match b {
             0x1b => self.enter_esc(),
@@ -193,30 +186,50 @@ impl Vt {
             0x00..=0x06 | 0x0e..=0x1a | 0x1c..=0x1f => {} // other C0 (incl. SO/SI): ignore
             0x7f => {}                                    // DEL: ignored in ground (not a glyph)
             0x20..=0x7e => self.put_char(b as char),
-            _ => {
-                // Start of a UTF-8 multibyte sequence.
-                self.utf8_need = match b {
-                    0xC0..=0xDF => 2,
-                    0xE0..=0xEF => 3,
-                    0xF0..=0xF7 => 4,
-                    _ => 0,
-                };
-                if self.utf8_need > 0 {
-                    self.utf8_buf[0] = b;
-                    self.utf8_len = 1;
-                } else {
-                    self.put_char('\u{fffd}');
-                }
-            }
+            _ => self.start_utf8(b),
         }
     }
 
-    fn put_char(&mut self, ch: char) {
-        let ch = if self.charset_g0_dec {
-            dec_graphic(ch)
-        } else {
-            ch
+    fn resume_utf8(&mut self, byte: u8) -> bool {
+        if self.utf8_need == 0 {
+            return false;
+        }
+        if byte & 0xC0 != 0x80 {
+            self.utf8_need = 0;
+            self.utf8_len = 0;
+            return false;
+        }
+        self.utf8_buf[self.utf8_len] = byte;
+        self.utf8_len += 1;
+        if self.utf8_len != self.utf8_need {
+            return true;
+        }
+        let ch = std::str::from_utf8(&self.utf8_buf[..self.utf8_len])
+            .ok()
+            .and_then(|text| text.chars().next())
+            .unwrap_or('\u{fffd}');
+        self.utf8_need = 0;
+        self.utf8_len = 0;
+        self.put_char(ch);
+        true
+    }
+
+    fn start_utf8(&mut self, byte: u8) {
+        self.utf8_need = match byte {
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF7 => 4,
+            _ => {
+                self.put_char('\u{fffd}');
+                return;
+            }
         };
+        self.utf8_buf[0] = byte;
+        self.utf8_len = 1;
+    }
+
+    fn put_char(&mut self, ch: char) {
+        let ch = self.translate(ch);
         let cols = self.grid.cols();
         if self.wrap_pending {
             self.wrap_pending = false;
@@ -242,6 +255,48 @@ impl Vt {
             }
         } else {
             self.grid.cursor_col = c + 1;
+        }
+    }
+
+    /// Translate through the active G0 character set before storing a grid cell.
+    fn translate(&self, ch: char) -> char {
+        if !self.charset_g0_dec {
+            return ch;
+        }
+        match ch {
+            '_' => '\u{00a0}',
+            '`' => '\u{25c6}',
+            'a' => '\u{2592}',
+            'b' => '\u{2409}',
+            'c' => '\u{240c}',
+            'd' => '\u{240d}',
+            'e' => '\u{240a}',
+            'f' => '\u{00b0}',
+            'g' => '\u{00b1}',
+            'h' => '\u{2424}',
+            'i' => '\u{240b}',
+            'j' => '\u{2518}',
+            'k' => '\u{2510}',
+            'l' => '\u{250c}',
+            'm' => '\u{2514}',
+            'n' => '\u{253c}',
+            'o' => '\u{23ba}',
+            'p' => '\u{23bb}',
+            'q' => '\u{2500}',
+            'r' => '\u{23bc}',
+            's' => '\u{23bd}',
+            't' => '\u{251c}',
+            'u' => '\u{2524}',
+            'v' => '\u{2534}',
+            'w' => '\u{252c}',
+            'x' => '\u{2502}',
+            'y' => '\u{2264}',
+            'z' => '\u{2265}',
+            '{' => '\u{03c0}',
+            '|' => '\u{2260}',
+            '}' => '\u{00a3}',
+            '~' => '\u{00b7}',
+            other => other,
         }
     }
 
@@ -661,17 +716,7 @@ impl Vt {
                     // dotted/dashed. Consume the style sub-param so it isn't re-read as a standalone SGR
                     // code (a `4:3` undercurl must not also flip italic via a stray `3`). Plain `4`/`4;n`
                     // is just single underline.
-                    if self.param_colon.get(i).copied().unwrap_or(false) {
-                        let style = self.params.get(i + 1).copied().unwrap_or(1);
-                        if style == 0 {
-                            self.pen.attrs.remove(Attrs::UNDERLINE);
-                        } else {
-                            self.pen.attrs.insert(Attrs::UNDERLINE);
-                        }
-                        i += 1;
-                    } else {
-                        self.pen.attrs.insert(Attrs::UNDERLINE);
-                    }
+                    i += self.apply_underline(i);
                 }
                 7 => self.pen.attrs.insert(Attrs::REVERSE),
                 8 => self.pen.attrs.insert(Attrs::HIDDEN),
@@ -688,39 +733,48 @@ impl Vt {
                 39 => self.pen.fg = Color::Default,
                 49 => self.pen.bg = Color::Default,
                 38 | 48 => {
-                    // Extended color: 38;5;n (indexed) or 38;2;r;g;b (rgb).
-                    let target_fg = p == 38;
-                    if let Some(&kind) = self.params.get(i + 1) {
-                        if kind == 5 {
-                            if let Some(&n) = self.params.get(i + 2) {
-                                let col = Color::Indexed(n as u8);
-                                if target_fg {
-                                    self.pen.fg = col
-                                } else {
-                                    self.pen.bg = col
-                                }
-                            }
-                            i += 2;
-                        } else if kind == 2 {
-                            // Semicolon form is `38;2;r;g;b`; the ISO colon form is `38:2:<cs>:r:g:b`
-                            // with an extra colorspace-id slot to skip.
-                            let off = if self.saw_colon { 3 } else { 2 };
-                            let r = self.params.get(i + off).copied().unwrap_or(0) as u8;
-                            let g = self.params.get(i + off + 1).copied().unwrap_or(0) as u8;
-                            let b = self.params.get(i + off + 2).copied().unwrap_or(0) as u8;
-                            let col = Color::Rgb(r, g, b);
-                            if target_fg {
-                                self.pen.fg = col
-                            } else {
-                                self.pen.bg = col
-                            }
-                            i += off + 2;
-                        }
-                    }
+                    i += self.apply_extended_color(i, p == 38);
                 }
                 _ => {}
             }
             i += 1;
+        }
+    }
+
+    fn apply_underline(&mut self, index: usize) -> usize {
+        if !self.param_colon.get(index).copied().unwrap_or(false) {
+            self.pen.attrs.insert(Attrs::UNDERLINE);
+            return 0;
+        }
+        if self.params.get(index + 1).copied().unwrap_or(1) == 0 {
+            self.pen.attrs.remove(Attrs::UNDERLINE);
+        } else {
+            self.pen.attrs.insert(Attrs::UNDERLINE);
+        }
+        1
+    }
+
+    fn apply_extended_color(&mut self, index: usize, foreground: bool) -> usize {
+        let Some(kind) = self.params.get(index + 1).copied() else {
+            return 0;
+        };
+        match kind {
+            5 => {
+                if let Some(value) = self.params.get(index + 2).copied() {
+                    self.pen.set_color(foreground, Color::Indexed(value as u8));
+                }
+                2
+            }
+            2 => {
+                let offset = if self.saw_colon { 3 } else { 2 };
+                let channel = |at| self.params.get(index + at).copied().unwrap_or(0) as u8;
+                self.pen.set_color(
+                    foreground,
+                    Color::Rgb(channel(offset), channel(offset + 1), channel(offset + 2)),
+                );
+                offset + 2
+            }
+            _ => 0,
         }
     }
 
@@ -754,8 +808,8 @@ impl Vt {
                     "0" | "2" => self.title = rest.to_string(),
                     // OSC 7 reports the shell's cwd as a `file://host/path` URI.
                     "7" => {
-                        if let Some(path) = crate::session::cwd_from_uri(rest) {
-                            self.cwd = Some(path);
+                        if let Some(path) = crate::session::WorkingDirectory::from_osc7(rest) {
+                            self.cwd = Some(path.into_string());
                         }
                     }
                     _ => {}
@@ -763,48 +817,5 @@ impl Vt {
             }
         }
         self.osc.clear();
-    }
-}
-
-/// Translate a byte through the DEC Special Graphics charset (`ESC ( 0`) — the box-drawing set that
-/// `tmux`/`mc`/ncurses table UIs use. The complete VT100 set covers `0x5f..=0x7e`: `_` is a blank, the
-/// `` ` ``/`a`..`~` positions map to box-drawing lines, scan lines, and symbols (including the `b`..`i`
-/// control-picture glyphs). Anything outside that range passes through unchanged. The grid stores the
-/// real Unicode char, which is what a full renderer draws.
-fn dec_graphic(ch: char) -> char {
-    match ch {
-        '_' => '\u{00a0}', // NBSP (blank)
-        '`' => '\u{25c6}', // ◆ diamond
-        'a' => '\u{2592}', // ▒ checkerboard
-        'b' => '\u{2409}', // ␉ HT
-        'c' => '\u{240c}', // ␌ FF
-        'd' => '\u{240d}', // ␍ CR
-        'e' => '\u{240a}', // ␊ LF
-        'f' => '\u{00b0}', // ° degree
-        'g' => '\u{00b1}', // ± plus/minus
-        'h' => '\u{2424}', // ␤ NL
-        'i' => '\u{240b}', // ␋ VT
-        'j' => '\u{2518}', // ┘ lower-right corner
-        'k' => '\u{2510}', // ┐ upper-right corner
-        'l' => '\u{250c}', // ┌ upper-left corner
-        'm' => '\u{2514}', // └ lower-left corner
-        'n' => '\u{253c}', // ┼ crossing
-        'o' => '\u{23ba}', // ⎺ scan line 1
-        'p' => '\u{23bb}', // ⎻ scan line 3
-        'q' => '\u{2500}', // ─ horizontal (scan line 5)
-        'r' => '\u{23bc}', // ⎼ scan line 7
-        's' => '\u{23bd}', // ⎽ scan line 9
-        't' => '\u{251c}', // ├ left tee
-        'u' => '\u{2524}', // ┤ right tee
-        'v' => '\u{2534}', // ┴ bottom tee
-        'w' => '\u{252c}', // ┬ top tee
-        'x' => '\u{2502}', // │ vertical
-        'y' => '\u{2264}', // ≤ less-or-equal
-        'z' => '\u{2265}', // ≥ greater-or-equal
-        '{' => '\u{03c0}', // π pi
-        '|' => '\u{2260}', // ≠ not-equal
-        '}' => '\u{00a3}', // £ sterling
-        '~' => '\u{00b7}', // · centered dot
-        other => other,
     }
 }

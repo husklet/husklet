@@ -12,9 +12,7 @@ pub struct Volume {
     /// Scope the volume is valid in (e.g. `local`, `global`).
     pub scope: String,
     /// User-defined labels, sorted by key.
-    pub labels: Vec<(String, String)>,
-    /// Driver-specific options, sorted by key.
-    pub options: Vec<(String, String)>,
+    pub metadata: Metadata,
     /// ISO-8601 creation time (sorts chronologically as a string) — for newest-first sorting.
     pub created_at: String,
 }
@@ -26,8 +24,7 @@ impl From<bollard::models::Volume> for Volume {
             driver: v.driver,
             mountpoint: v.mountpoint,
             scope: v.scope.map(|s| s.to_string()).unwrap_or_default(),
-            labels: sorted_pairs(v.labels),
-            options: sorted_pairs(v.options),
+            metadata: Metadata::new(v.labels, v.options),
             created_at: v.created_at.unwrap_or_default(),
         }
     }

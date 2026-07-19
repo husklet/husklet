@@ -10,6 +10,4 @@ pub mod encode;
 pub mod tag;
 pub mod wire;
 
-pub use decode::decode_stream;
-pub use encode::encode_stream;
 pub use wire::{Decoder, Encoder};

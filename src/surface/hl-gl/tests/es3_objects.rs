@@ -25,16 +25,16 @@ fn ctx() -> GlContext {
 #[test]
 fn sampler_gen_bind_and_parameter_round_trip() {
     let mut c = ctx();
-    let s = es3::gen_sampler(&mut c);
+    let s = c.samplers.gen();
     assert_ne!(s, 0, "glGenSamplers must hand out a non-zero name");
     // A merely-reserved name is not yet a sampler OBJECT (lazy instantiation, matching GL).
-    assert!(!es3::is_sampler(&c, s));
+    assert!(!c.samplers.contains(s));
 
     // Bind it to a unit — this instantiates the object; the binding round-trips.
     es3::bind_sampler(&mut c, 3, s);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
     assert!(
-        es3::is_sampler(&c, s),
+        c.samplers.contains(s),
         "a bound sampler is a created object"
     );
     assert_eq!(c.samplers.binding(3), s);
@@ -74,7 +74,7 @@ fn sampler_gen_bind_and_parameter_round_trip() {
 #[test]
 fn sampler_rejects_bad_enum_and_unknown_name() {
     let mut c = ctx();
-    let s = es3::gen_sampler(&mut c);
+    let s = c.samplers.gen();
 
     // An out-of-range enum value raises GL_INVALID_ENUM and leaves the object untouched.
     es3::sampler_parameter(&mut c, s, GL_TEXTURE_MIN_FILTER, 0xDEAD, 0.0);
@@ -86,9 +86,9 @@ fn sampler_rejects_bad_enum_and_unknown_name() {
 
     // Deleting a bound sampler unbinds it from its unit.
     es3::bind_sampler(&mut c, 1, s);
-    es3::delete_sampler(&mut c, s);
+    c.samplers.delete(s);
     assert_eq!(c.samplers.binding(1), 0);
-    assert!(!es3::is_sampler(&c, s));
+    assert!(!c.samplers.contains(s));
 }
 
 // ---- query objects -------------------------------------------------------------------------------
@@ -96,29 +96,29 @@ fn sampler_rejects_bad_enum_and_unknown_name() {
 #[test]
 fn query_begin_end_lifecycle_and_result_round_trip() {
     let mut c = ctx();
-    let q = es3::gen_query(&mut c);
+    let q = c.queries.gen();
     assert_ne!(q, 0);
     assert!(
-        !es3::is_query(&c, q),
+        !c.queries.contains(q),
         "a reserved name is not yet a query object"
     );
 
     // Begin makes it the active query for its target.
     es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert!(es3::is_query(&c, q));
+    assert!(c.queries.contains(q));
     assert_eq!(
         es3::get_queryiv(&mut c, GL_ANY_SAMPLES_PASSED, GL_CURRENT_QUERY),
         Some(q as i32)
     );
 
     // A second begin on the same target while active is GL_INVALID_OPERATION.
-    let q2 = es3::gen_query(&mut c);
+    let q2 = c.queries.gen();
     es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q2);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
 
     // End clears the active slot; the result becomes available (deferred model completes synchronously).
-    es3::end_query(&mut c, GL_ANY_SAMPLES_PASSED);
+    c.end_query(GL_ANY_SAMPLES_PASSED);
     assert_eq!(
         es3::get_queryiv(&mut c, GL_ANY_SAMPLES_PASSED, GL_CURRENT_QUERY),
         Some(0)
@@ -157,34 +157,34 @@ fn query_rejects_bad_target_and_unknown_id() {
 #[test]
 fn transform_feedback_state_machine_and_varyings() {
     let mut c = ctx();
-    let tf = es3::gen_transform_feedback(&mut c);
+    let tf = c.transform_feedbacks.gen();
     assert_ne!(tf, 0);
     assert!(
-        !es3::is_transform_feedback(&c, tf),
+        !c.transform_feedbacks.contains(tf),
         "reserved, not yet an object"
     );
 
     es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, tf);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert!(es3::is_transform_feedback(&c, tf));
+    assert!(c.transform_feedbacks.contains(tf));
 
     // begin → pause → resume → end, all valid transitions.
-    es3::begin_transform_feedback(&mut c, GL_TRIANGLES);
+    c.begin_transform_feedback(GL_TRIANGLES);
     assert!(c.transform_feedbacks.bound_obj().active);
-    es3::pause_transform_feedback(&mut c);
+    c.pause_transform_feedback();
     assert!(c.transform_feedbacks.bound_obj().paused);
-    es3::resume_transform_feedback(&mut c);
+    c.resume_transform_feedback();
     assert!(!c.transform_feedbacks.bound_obj().paused);
-    es3::end_transform_feedback(&mut c);
+    c.end_transform_feedback();
     assert!(!c.transform_feedbacks.bound_obj().active);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 
     // A double-begin is GL_INVALID_OPERATION; a bad primitive mode is GL_INVALID_ENUM.
-    es3::begin_transform_feedback(&mut c, GL_TRIANGLES);
-    es3::begin_transform_feedback(&mut c, GL_TRIANGLES);
+    c.begin_transform_feedback(GL_TRIANGLES);
+    c.begin_transform_feedback(GL_TRIANGLES);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
-    es3::end_transform_feedback(&mut c);
-    es3::begin_transform_feedback(&mut c, 0xBEEF);
+    c.end_transform_feedback();
+    c.begin_transform_feedback(0xBEEF);
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
 }
 
@@ -256,11 +256,11 @@ fn program_pipeline_stage_binding() {
     record::attach_shader(&mut c, prog, fs);
     assert!(record::link_program(&mut c, prog));
 
-    let pipe = es3::gen_program_pipeline(&mut c);
+    let pipe = c.program_pipelines.gen();
     assert_ne!(pipe, 0);
-    es3::bind_program_pipeline(&mut c, pipe);
+    c.bind_program_pipeline(pipe);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
-    assert!(es3::is_program_pipeline(&c, pipe));
+    assert!(c.program_pipelines.contains(pipe));
 
     es3::use_program_stages(
         &mut c,
@@ -296,8 +296,8 @@ fn program_pipeline_stage_binding() {
 
 /// Bind a fresh texture to unit 0 and return its GL name.
 fn bound_texture(c: &mut GlContext) -> u32 {
-    let t = record::gen_texture(c);
-    record::active_texture(c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(c, GL_TEXTURE_2D, t);
     t
 }
@@ -353,7 +353,7 @@ fn tex_sub_image_2d_writes_into_allocated_storage() {
 #[test]
 fn get_buffer_parameteriv_reports_size_and_usage() {
     let mut c = ctx();
-    let b = record::gen_buffer(&mut c);
+    let b = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, b);
     record::buffer_data(
         &mut c,
@@ -380,11 +380,11 @@ fn get_buffer_parameteriv_reports_size_and_usage() {
 #[test]
 fn copy_buffer_sub_data_copies_bytes_between_buffers() {
     let mut c = ctx();
-    let src = record::gen_buffer(&mut c);
+    let src = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, src);
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[1, 2, 3, 4, 5, 6, 7, 8], 0);
 
-    let dst = record::gen_buffer(&mut c);
+    let dst = c.buffers.gen();
     record::bind_buffer(&mut c, GL_COPY_WRITE_BUFFER, dst);
     record::buffer_data(&mut c, GL_COPY_WRITE_BUFFER, &[0u8; 8], 0);
 
@@ -398,47 +398,47 @@ fn copy_buffer_sub_data_copies_bytes_between_buffers() {
 #[test]
 fn delete_query_object_makes_it_no_longer_a_query() {
     let mut c = ctx();
-    let q = es3::gen_query(&mut c);
+    let q = c.queries.gen();
     es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q);
-    es3::end_query(&mut c, GL_ANY_SAMPLES_PASSED);
-    assert!(es3::is_query(&c, q), "an instantiated query object");
+    c.end_query(GL_ANY_SAMPLES_PASSED);
+    assert!(c.queries.contains(q), "an instantiated query object");
 
-    es3::delete_query(&mut c, q);
-    assert!(!es3::is_query(&c, q), "glDeleteQueries drops the object");
+    c.queries.delete(q);
+    assert!(!c.queries.contains(q), "glDeleteQueries drops the object");
     // A deleted name is unknown again: begin on it is GL_INVALID_OPERATION.
     es3::begin_query(&mut c, GL_ANY_SAMPLES_PASSED, q);
     assert_eq!(c.take_gl_error(), GL_INVALID_OPERATION);
     // Deleting 0 (and a never-generated name) is a silent no-op.
-    es3::delete_query(&mut c, 0);
+    c.queries.delete(0);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
 
 #[test]
 fn delete_transform_feedback_object_makes_it_no_longer_a_tf() {
     let mut c = ctx();
-    let tf = es3::gen_transform_feedback(&mut c);
+    let tf = c.transform_feedbacks.gen();
     es3::bind_transform_feedback(&mut c, GL_TRANSFORM_FEEDBACK, tf);
-    assert!(es3::is_transform_feedback(&c, tf));
+    assert!(c.transform_feedbacks.contains(tf));
 
-    es3::delete_transform_feedback(&mut c, tf);
+    c.delete_transform_feedback(tf);
     assert!(
-        !es3::is_transform_feedback(&c, tf),
+        !c.transform_feedbacks.contains(tf),
         "glDeleteTransformFeedbacks drops the object"
     );
-    es3::delete_transform_feedback(&mut c, 0);
+    c.delete_transform_feedback(0);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
 
 #[test]
 fn delete_program_pipeline_object_makes_it_no_longer_a_pipeline() {
     let mut c = ctx();
-    let pipe = es3::gen_program_pipeline(&mut c);
-    es3::bind_program_pipeline(&mut c, pipe);
-    assert!(es3::is_program_pipeline(&c, pipe));
+    let pipe = c.program_pipelines.gen();
+    c.bind_program_pipeline(pipe);
+    assert!(c.program_pipelines.contains(pipe));
 
-    es3::delete_program_pipeline(&mut c, pipe);
+    c.program_pipelines.delete(pipe);
     assert!(
-        !es3::is_program_pipeline(&c, pipe),
+        !c.program_pipelines.contains(pipe),
         "glDeleteProgramPipelines drops the object"
     );
     // A getter on the deleted pipeline is GL_INVALID_OPERATION.
@@ -454,8 +454,8 @@ fn delete_program_pipeline_object_makes_it_no_longer_a_pipeline() {
 #[test]
 fn tex_storage_3d_sizes_and_seals_the_array_texture() {
     let mut c = ctx();
-    let t = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D_ARRAY, t);
 
     record::tex_storage_3d(&mut c, GL_TEXTURE_2D_ARRAY, 1, 16, 8, 4);
@@ -472,7 +472,7 @@ fn tex_storage_3d_sizes_and_seals_the_array_texture() {
     }
 
     // Bad target → GL_INVALID_ENUM; bad extent → GL_INVALID_VALUE.
-    let t2 = record::gen_texture(&mut c);
+    let t2 = c.textures.gen();
     record::bind_texture(&mut c, GL_TEXTURE_2D, t2);
     record::tex_storage_3d(&mut c, GL_TEXTURE_2D, 1, 4, 4, 4);
     assert_eq!(c.take_gl_error(), GL_INVALID_ENUM);
@@ -484,8 +484,8 @@ fn tex_storage_3d_sizes_and_seals_the_array_texture() {
 #[test]
 fn tex_image_3d_then_sub_image_3d_write_the_layer0_plane() {
     let mut c = ctx();
-    let t = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_3D, t);
 
     // A full 4x4x2 upload of a solid blue layer-0 plane.
@@ -513,8 +513,8 @@ fn tex_image_3d_then_sub_image_3d_write_the_layer0_plane() {
 #[test]
 fn get_tex_parameteriv_reports_bound_texture_filter_and_wrap() {
     let mut c = ctx();
-    let t = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let t = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, t);
     record::tex_image_2d(&mut c, 2, 2, &[0u8; 16]);
 
@@ -557,11 +557,11 @@ fn framebuffer_attachment_parameter_reflects_default_and_texture_attachment() {
     );
 
     // Bind an FBO with a color texture attachment.
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d(&mut c, 8, 8, &[0u8; 8 * 8 * 4]);
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut c,
@@ -599,7 +599,7 @@ fn framebuffer_attachment_parameter_reflects_default_and_texture_attachment() {
 #[test]
 fn get_integer_indexed_reads_back_indexed_buffer_bindings() {
     let mut c = ctx();
-    let ubo = record::gen_buffer(&mut c);
+    let ubo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_UNIFORM_BUFFER, ubo);
     record::buffer_data(&mut c, GL_UNIFORM_BUFFER, &[0u8; 64], 0x88E4);
     record::bind_buffer_base(&mut c, GL_UNIFORM_BUFFER, 2, ubo);

@@ -1,6 +1,6 @@
-# dd — code signing & notarization (macOS)
+# Husklet — code signing & notarization (macOS)
 
-Developer ID signing material for the `dd` GUI app. **Everything here except `README.md` and
+Developer ID signing material for the `Husklet` app. **Everything here except `README.md` and
 `.gitignore` is gitignored** (private keys, certs, the `.p12`, API keys, and the GitHub Actions secret
 values). Never commit those.
 
@@ -8,7 +8,7 @@ values). Never commit those.
 
 Push a tag `vX.Y.Z` → `.github/workflows/release.yml` runs on a macOS runner and:
 1. imports the Developer ID cert from the `HL_SIGN_P12_BASE64` / `HL_SIGN_P12_PW` secrets into a temp keychain, plus Apple's G2 intermediate;
-2. builds `hl.app` + `dd.dmg` (`make dmg`), where `hl-gui/package/bundle.sh` signs every Mach-O with **Developer ID Application: Richard Hutta (SMS68QA6VC)** + hardened runtime + secure timestamp (+ the `allow-jit` entitlement on the JIT engines);
+2. builds `Husklet.app` + `Husklet.dmg` (`make dmg`), where `src/apps/husklet/package/bundle.sh` signs every Mach-O with **Developer ID Application: Richard Hutta (SMS68QA6VC)** + hardened runtime + secure timestamp (+ the `allow-jit` entitlement on the JIT engines);
 3. notarizes the DMG with the app-specific password (`APPLE_ID` / `APPLE_TEAM_ID` / `APPLE_APP_PW`) and staples it;
 4. publishes the signed + notarized DMG to the GitHub Release.
 
@@ -39,4 +39,4 @@ Then `git tag vX.Y.Z && git push origin vX.Y.Z` → a signed + notarized release
 ## Local signing
 
 `make app HL_SIGN_ID="Developer ID Application: Richard Hutta (SMS68QA6VC)" HL_SIGN_KEYCHAIN=<kc> HL_SIGN_KEYCHAIN_PW=<pw>`
-signs `hl.app`; `make dmg` also notarizes + staples when `HL_NOTARY_PROFILE` (or inline `HL_NOTARY_APPLE_ID`/`HL_NOTARY_TEAM_ID`/`HL_NOTARY_PW`) is set — but the host clock must be synced.
+signs `Husklet.app`; `make dmg` also notarizes + staples when `HL_NOTARY_PROFILE` (or inline `HL_NOTARY_APPLE_ID`/`HL_NOTARY_TEAM_ID`/`HL_NOTARY_PW`) is set — but the host clock must be synced.

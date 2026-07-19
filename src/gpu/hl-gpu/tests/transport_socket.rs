@@ -25,15 +25,13 @@ use std::time::Duration;
 
 use hl_gpu::protocol::model::descriptor::BufferDesc;
 use hl_gpu::protocol::model::enums::buffer_usage;
-use hl_gpu::transport::adapter::unix::{
-    self, read_readback_response, write_readback_request, MAX_FRAME_BYTES,
-};
+use hl_gpu::transport::adapter::unix::{self, MAX_FRAME_BYTES};
 use hl_gpu::transport::model::header::{SubmitHeader, ACK_OK};
 use hl_gpu::transport::Verdict;
 use hl_gpu::{
-    encode_stream, serve_connection_with_handler, BufferId, Capabilities, Cmd, CommandSink,
-    ConnectionHandler, CpuExecutor, FakeClock, GlobalLedger, GpuExecutor, Limits, ReadbackRequest,
-    RemoteCommandSink, Session,
+    serve_connection_with_handler, BufferId, Capabilities, Cmd, CommandSink, ConnectionHandler,
+    CpuExecutor, FakeClock, GlobalLedger, GpuExecutor, Limits, ReadbackRequest, RemoteCommandSink,
+    Session,
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -86,7 +84,7 @@ impl RuntimeHost {
 
 impl ConnectionHandler for RuntimeHost {
     fn submit(&mut self, _header: &SubmitHeader, batch: &[Cmd]) -> Verdict {
-        let frame_bytes = encode_stream(batch).len();
+        let frame_bytes = hl_gpu::Encoder::stream(batch).len();
         match hl_gpu::runtime::submit(&mut self.session, &mut self.exec, frame_bytes, batch) {
             Ok(_) => Verdict::Ack,
             Err(_) => Verdict::Nack,
@@ -251,7 +249,7 @@ fn fragmented_frame_reassembles_through_the_serve_loop() {
         drain_handshake(&client);
 
         // Frame the submit ourselves so we control the byte-by-byte trickle.
-        let payload = encode_stream(&write_program(1, &data));
+        let payload = hl_gpu::Encoder::stream(&write_program(1, &data));
         let header = SubmitHeader {
             surface_id: 1,
             width: 0,
@@ -285,8 +283,12 @@ fn fragmented_frame_reassembles_through_the_serve_loop() {
         );
 
         // Read the uploaded buffer back: byte-exact == the fragmented submit was reassembled correctly.
-        write_readback_request(&client, &ReadbackRequest::buffer(1, 0, data.len() as u64)).unwrap();
-        let got = read_readback_response(&client).expect("readback after fragmented submit");
+        unix::Connection::new(&client)
+            .write_readback_request(&ReadbackRequest::buffer(1, 0, data.len() as u64))
+            .unwrap();
+        let got = unix::Connection::new(&client)
+            .read_readback_response()
+            .expect("readback after fragmented submit");
         assert_eq!(
             got, data,
             "the fragmented frame produced the same result as a single write"
@@ -516,7 +518,7 @@ fn pipelined_burst_does_not_deadlock_under_backpressure() {
 
         // Frame 0: create the destination buffer. Wait for its ack before pipelining writes into it.
         {
-            let create = encode_stream(&[Cmd::CreateBuffer(
+            let create = hl_gpu::Encoder::stream(&[Cmd::CreateBuffer(
                 1,
                 BufferDesc {
                     size: total as u64,
@@ -530,7 +532,9 @@ fn pipelined_burst_does_not_deadlock_under_backpressure() {
                 height: 0,
                 len: create.len() as u32,
             };
-            unix::write_frame(&client, &hdr, &create).unwrap();
+            unix::Connection::new(&client)
+                .write_frame(&hdr, &create)
+                .unwrap();
             let mut ack = [0u8; 1];
             (&client).read_exact(&mut ack).unwrap();
             assert_eq!(ack[0], ACK_OK, "buffer creation acked");
@@ -565,14 +569,16 @@ fn pipelined_burst_does_not_deadlock_under_backpressure() {
                     offset: (f * CHUNK) as u64,
                     data: chunk,
                 }];
-                let payload = encode_stream(&batch);
+                let payload = hl_gpu::Encoder::stream(&batch);
                 let hdr = SubmitHeader {
                     surface_id: 1,
                     width: 0,
                     height: 0,
                     len: payload.len() as u32,
                 };
-                unix::write_frame(w, &hdr, &payload).expect("pipelined frame write");
+                unix::Connection::new(w)
+                    .write_frame(&hdr, &payload)
+                    .expect("pipelined frame write");
                 let _ = w.flush();
             }
         }
@@ -584,8 +590,12 @@ fn pipelined_burst_does_not_deadlock_under_backpressure() {
         );
 
         // Final readback of the WHOLE buffer proves ordered, complete processing of the burst.
-        write_readback_request(&client, &ReadbackRequest::buffer(1, 0, total as u64)).unwrap();
-        let got = read_readback_response(&client).expect("full-buffer readback after the burst");
+        unix::Connection::new(&client)
+            .write_readback_request(&ReadbackRequest::buffer(1, 0, total as u64))
+            .unwrap();
+        let got = unix::Connection::new(&client)
+            .read_readback_response()
+            .expect("full-buffer readback after the burst");
         assert_eq!(
             got.len(),
             total,

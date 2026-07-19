@@ -41,6 +41,11 @@ impl FenceRec {
             signaled,
         }
     }
+
+    /// Returns this fence to its unsignaled state for a later submission.
+    pub fn reset(&mut self) {
+        self.signaled = false;
+    }
 }
 
 // ---- WSI (the presentation engine the queue presents through) ------------------------------------

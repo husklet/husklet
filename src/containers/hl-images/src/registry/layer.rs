@@ -4,187 +4,203 @@ use crate::Error;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Recursively re-add owner-write to every directory in the tree rooted at `p` (best-effort, per-entry).
-/// A previous (possibly failed) extraction, or a base layer, can leave a read-only dir (e.g. a
-/// `dr-xr-xr-x` cert dir); `remove_dir_all` / a later overwrite can't unlink entries inside a write-less
-/// dir, so we re-add owner-write first — otherwise stale content would survive a reset or block a retry.
-///
-/// Replaces the former `find <p> -type d -exec chmod u+w {} +` subprocess (shared by `reset_dir`,
-/// `clear_opaque_dirs`, and the extract retry in `registry::http::archive`). Symlinks are NOT followed
-/// (an entry's own `file_type()` is used, so a dir-typed symlink is not descended — a layer can't
-/// redirect the walk outside the tree), and each error is swallowed so one stubborn entry never aborts
-/// the sweep, matching `find`'s best-effort per-node semantics.
-pub(in crate::registry) fn make_dirs_writable(p: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let Ok(meta) = std::fs::symlink_metadata(p) else {
-        return;
-    };
-    if !meta.is_dir() {
-        return;
+pub(in crate::registry) struct LayerRootfs<'a>(&'a Path);
+impl<'a> LayerRootfs<'a> {
+    pub fn new(path: &'a Path) -> Self {
+        Self(path)
     }
-    // Re-add owner-write on THIS dir first, so its entries can be read/traversed and unlinked.
-    let mut perm = meta.permissions();
-    let mode = perm.mode();
-    if mode & 0o200 == 0 {
-        perm.set_mode(mode | 0o200);
-        let _ = std::fs::set_permissions(p, perm);
-    }
-    let Ok(entries) = std::fs::read_dir(p) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        // `file_type()` from read_dir does NOT follow symlinks, so a symlink-to-dir reads as non-dir and
-        // is skipped — the walk stays inside the real tree.
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            make_dirs_writable(&entry.path());
+
+    /// Recursively re-add owner-write to every directory in the tree rooted at `p` (best-effort, per-entry).
+    /// A previous (possibly failed) extraction, or a base layer, can leave a read-only dir (e.g. a
+    /// `dr-xr-xr-x` cert dir); `remove_dir_all` / a later overwrite can't unlink entries inside a write-less
+    /// dir, so we re-add owner-write first — otherwise stale content would survive a reset or block a retry.
+    ///
+    /// Replaces the former `find <p> -type d -exec chmod u+w {} +` subprocess (shared by `reset_dir`,
+    /// `clear_opaque_dirs`, and the extract retry in `registry::http::archive`). Symlinks are NOT followed
+    /// (an entry's own `file_type()` is used, so a dir-typed symlink is not descended — a layer can't
+    /// redirect the walk outside the tree), and each error is swallowed so one stubborn entry never aborts
+    /// the sweep, matching `find`'s best-effort per-node semantics.
+    pub fn make_writable(&self) {
+        let p = self.0;
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(meta) = std::fs::symlink_metadata(p) else {
+            return;
+        };
+        if !meta.is_dir() {
+            return;
+        }
+        // Re-add owner-write on THIS dir first, so its entries can be read/traversed and unlinked.
+        let mut perm = meta.permissions();
+        let mode = perm.mode();
+        if mode & 0o200 == 0 {
+            perm.set_mode(mode | 0o200);
+            let _ = std::fs::set_permissions(p, perm);
+        }
+        let Ok(entries) = std::fs::read_dir(p) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            // `file_type()` from read_dir does NOT follow symlinks, so a symlink-to-dir reads as non-dir and
+            // is skipped — the walk stays inside the real tree.
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                LayerRootfs(&entry.path()).make_writable();
+            }
         }
     }
-}
 
-pub(super) fn reset_dir(p: &Path) -> Result<(), Error> {
-    // A previous (possibly failed) extraction can leave read-only dirs (e.g. a base layer's
-    // `dr-xr-xr-x` cert dir); `remove_dir_all` can't unlink entries inside a write-less dir, so re-add
-    // owner-write to every dir first — otherwise stale content would survive the reset.
-    if p.exists() {
-        make_dirs_writable(p);
+    pub(super) fn reset(&self) -> Result<(), Error> {
+        let p = self.0;
+        // A previous (possibly failed) extraction can leave read-only dirs (e.g. a base layer's
+        // `dr-xr-xr-x` cert dir); `remove_dir_all` can't unlink entries inside a write-less dir, so re-add
+        // owner-write to every dir first — otherwise stale content would survive the reset.
+        if p.exists() {
+            self.make_writable();
+        }
+        let _ = std::fs::remove_dir_all(p);
+        std::fs::create_dir_all(p)
+            .map_err(|e| Error::Archive(format!("mkdir {}: {e}", p.display())))
     }
-    let _ = std::fs::remove_dir_all(p);
-    std::fs::create_dir_all(p).map_err(|e| Error::Archive(format!("mkdir {}: {e}", p.display())))
-}
 
-const WH_PREFIX: &str = ".wh.";
-const WH_OPAQUE: &str = ".wh..wh..opq";
+    const WH_PREFIX: &'static str = ".wh.";
+    const WH_OPAQUE: &'static str = ".wh..wh..opq";
 
-/// Apply OCI whiteouts left by a just-extracted layer: a `.wh.<name>` marker deletes the sibling
-/// `<name>`, and `.wh..wh..opq` clears the directory's lower contents (we just drop the marker — the
-/// layers are already flattened). Done with a plain filesystem walk rather than a `find | while …
-/// dirname/basename/rm` pipeline: a degenerate marker name can't make a shell utility error out
-/// ("sh failed: …") nor, worse, delete the wrong path (a bare `.wh.` made the old script run
-/// `rm -rf "$dir/"`, wiping the parent directory).
-pub(super) fn apply_whiteouts(rootfs: &Path) -> Result<(), Error> {
-    // Enumerate every marker first, then apply: a deletion can remove a whole subtree that itself
-    // holds further markers, so we must not mutate the tree while still walking it.
-    let mut markers = Vec::new();
-    collect_whiteouts(rootfs, &mut markers);
-    for marker in &markers {
-        let name = marker
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        // The opaque marker has no sibling to delete; any other `.wh.<name>` hides the sibling `<name>`.
-        // A marker that is *only* the `.wh.` prefix (empty target) is malformed — drop it without
-        // deleting anything rather than removing its parent directory.
-        if name != WH_OPAQUE {
-            if let Some(target) = name.strip_prefix(WH_PREFIX).filter(|t| !t.is_empty()) {
-                if let Some(parent) = marker.parent() {
-                    remove_path(&parent.join(target));
+    /// Apply OCI whiteouts left by a just-extracted layer: a `.wh.<name>` marker deletes the sibling
+    /// `<name>`, and `.wh..wh..opq` clears the directory's lower contents (we just drop the marker — the
+    /// layers are already flattened). Done with a plain filesystem walk rather than a `find | while …
+    /// dirname/basename/rm` pipeline: a degenerate marker name can't make a shell utility error out
+    /// ("sh failed: …") nor, worse, delete the wrong path (a bare `.wh.` made the old script run
+    /// `rm -rf "$dir/"`, wiping the parent directory).
+    pub(super) fn apply_whiteouts(&self) -> Result<(), Error> {
+        let rootfs = self.0;
+        // Enumerate every marker first, then apply: a deletion can remove a whole subtree that itself
+        // holds further markers, so we must not mutate the tree while still walking it.
+        let mut markers = Vec::new();
+        self.collect_whiteouts(rootfs, &mut markers);
+        for marker in &markers {
+            let name = marker
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            // The opaque marker has no sibling to delete; any other `.wh.<name>` hides the sibling `<name>`.
+            // A marker that is *only* the `.wh.` prefix (empty target) is malformed — drop it without
+            // deleting anything rather than removing its parent directory.
+            if name != Self::WH_OPAQUE {
+                if let Some(target) = name.strip_prefix(Self::WH_PREFIX).filter(|t| !t.is_empty()) {
+                    if let Some(parent) = marker.parent() {
+                        self.remove(&parent.join(target));
+                    }
                 }
             }
+            let _ = std::fs::remove_file(marker);
         }
-        let _ = std::fs::remove_file(marker);
+        Ok(())
     }
-    Ok(())
-}
 
-/// Directories a layer marks OPAQUE via a `.wh..wh..opq` entry, as rootfs-relative paths (an empty string
-/// means the rootfs root itself). Read straight from the layer tar (before extraction) so we can clear the
-/// dir's flattened lower content first.
-pub(super) fn opaque_dirs_in_tar(tar_gz: &Path) -> Vec<String> {
-    let out = match Command::new("tar").arg("tzf").arg(tar_gz).output() {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return Vec::new(),
-    };
-    String::from_utf8_lossy(&out)
-        .lines()
-        .filter_map(|l| {
-            let p = l.trim_end_matches('/');
-            let name = p.rsplit('/').next()?;
-            if name != WH_OPAQUE {
-                return None;
-            }
-            // the marker's parent dir, normalized (drop the leading "./" tar prefix and any leading '/').
-            let parent = p[..p.len() - name.len()].trim_end_matches('/');
-            Some(
-                parent
-                    .trim_start_matches("./")
-                    .trim_start_matches('/')
-                    .to_string(),
-            )
-        })
-        .collect()
-}
-
-/// Clear the flattened lower-layer content of each opaque dir (remove the subtree, recreate it empty) so
-/// that only the current layer's entries survive when it extracts on top.
-pub(super) fn clear_opaque_dirs(rootfs: &Path, dirs: &[String]) {
-    for d in dirs {
-        // CONTAINMENT: a malicious layer can carry an opaque marker whose parent dir uses `..`
-        // components (`../outside/.wh..wh..opq`). Joining that onto the rootfs and removing it would
-        // delete files OUTSIDE the rootfs. Only clear a dir whose normalized rootfs-relative path stays
-        // strictly under the rootfs; skip anything that escapes.
-        let Some(rel) = contained_relative(d) else {
-            continue;
+    /// Directories a layer marks OPAQUE via a `.wh..wh..opq` entry, as rootfs-relative paths (an empty string
+    /// means the rootfs root itself). Read straight from the layer tar (before extraction) so we can clear the
+    /// dir's flattened lower content first.
+    pub(super) fn opaque_dirs_in_tar(tar_gz: &Path) -> Vec<String> {
+        let out = match Command::new("tar").arg("tzf").arg(tar_gz).output() {
+            Ok(o) if o.status.success() => o.stdout,
+            _ => return Vec::new(),
         };
-        let target = if rel.is_empty() {
-            rootfs.to_path_buf()
-        } else {
-            rootfs.join(&rel)
-        };
-        // A base layer may have left the dir read-only (see reset_dir); re-add owner-write so it can be
-        // cleared, then remove + recreate empty.
-        if target.exists() {
-            make_dirs_writable(&target);
-        }
-        let _ = std::fs::remove_dir_all(&target);
-        let _ = std::fs::create_dir_all(&target);
+        String::from_utf8_lossy(&out)
+            .lines()
+            .filter_map(|l| {
+                let p = l.trim_end_matches('/');
+                let name = p.rsplit('/').next()?;
+                if name != Self::WH_OPAQUE {
+                    return None;
+                }
+                // the marker's parent dir, normalized (drop the leading "./" tar prefix and any leading '/').
+                let parent = p[..p.len() - name.len()].trim_end_matches('/');
+                Some(
+                    parent
+                        .trim_start_matches("./")
+                        .trim_start_matches('/')
+                        .to_string(),
+                )
+            })
+            .collect()
     }
-}
 
-/// Collect every `.wh.*` marker under `dir`, recursing into real subdirectories only (symlinks are not
-/// followed, so a layer can't redirect the walk outside the rootfs).
-fn collect_whiteouts(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with(WH_PREFIX) {
-            out.push(entry.path());
-        }
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            collect_whiteouts(&entry.path(), out);
-        }
-    }
-}
-
-/// Normalize a rootfs-relative path from a layer, returning `Some(components-joined)` only if it stays
-/// strictly under the rootfs. Returns `None` if it escapes (a leading/embedded `..` that pops above the
-/// root) or is absolute. An empty/`.`-only path normalizes to `""` (the rootfs root itself). Purely
-/// lexical (no fs access), which is exactly what we want for an untrusted archive-supplied path.
-fn contained_relative(rel: &str) -> Option<String> {
-    if rel.starts_with('/') {
-        return None; // absolute -> never rootfs-relative
-    }
-    let mut stack: Vec<&str> = Vec::new();
-    for comp in rel.split('/') {
-        match comp {
-            "" | "." => continue,
-            ".." => {
-                // popping past the root escapes the rootfs -> reject the whole path
-                stack.pop()?;
+    /// Clear the flattened lower-layer content of each opaque dir (remove the subtree, recreate it empty) so
+    /// that only the current layer's entries survive when it extracts on top.
+    pub(super) fn clear_opaque(&self, dirs: &[String]) {
+        let rootfs = self.0;
+        for d in dirs {
+            // CONTAINMENT: a malicious layer can carry an opaque marker whose parent dir uses `..`
+            // components (`../outside/.wh..wh..opq`). Joining that onto the rootfs and removing it would
+            // delete files OUTSIDE the rootfs. Only clear a dir whose normalized rootfs-relative path stays
+            // strictly under the rootfs; skip anything that escapes.
+            let Some(rel) = Self::contained(d) else {
+                continue;
+            };
+            let target = if rel.is_empty() {
+                rootfs.to_path_buf()
+            } else {
+                rootfs.join(&rel)
+            };
+            // A base layer may have left the dir read-only (see reset_dir); re-add owner-write so it can be
+            // cleared, then remove + recreate empty.
+            if target.exists() {
+                LayerRootfs(&target).make_writable();
             }
-            c => stack.push(c),
+            let _ = std::fs::remove_dir_all(&target);
+            let _ = std::fs::create_dir_all(&target);
         }
     }
-    Some(stack.join("/"))
-}
 
-/// Remove a path whether it's a file, a symlink, or a directory subtree; missing is success.
-fn remove_path(p: &Path) {
-    let _ = match std::fs::symlink_metadata(p) {
-        Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
-        Ok(_) => std::fs::remove_file(p),
-        Err(_) => Ok(()),
-    };
+    /// Collect every `.wh.*` marker under `dir`, recursing into real subdirectories only (symlinks are not
+    /// followed, so a layer can't redirect the walk outside the rootfs).
+    fn collect_whiteouts(&self, dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(Self::WH_PREFIX)
+            {
+                out.push(entry.path());
+            }
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                self.collect_whiteouts(&entry.path(), out);
+            }
+        }
+    }
+
+    /// Normalize a rootfs-relative path from a layer, returning `Some(components-joined)` only if it stays
+    /// strictly under the rootfs. Returns `None` if it escapes (a leading/embedded `..` that pops above the
+    /// root) or is absolute. An empty/`.`-only path normalizes to `""` (the rootfs root itself). Purely
+    /// lexical (no fs access), which is exactly what we want for an untrusted archive-supplied path.
+    fn contained(rel: &str) -> Option<String> {
+        if rel.starts_with('/') {
+            return None; // absolute -> never rootfs-relative
+        }
+        let mut stack: Vec<&str> = Vec::new();
+        for comp in rel.split('/') {
+            match comp {
+                "" | "." => continue,
+                ".." => {
+                    // popping past the root escapes the rootfs -> reject the whole path
+                    stack.pop()?;
+                }
+                c => stack.push(c),
+            }
+        }
+        Some(stack.join("/"))
+    }
+
+    /// Remove a path whether it's a file, a symlink, or a directory subtree; missing is success.
+    fn remove(&self, p: &Path) {
+        let _ = match std::fs::symlink_metadata(p) {
+            Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
+            Ok(_) => std::fs::remove_file(p),
+            Err(_) => Ok(()),
+        };
+    }
 }
 
 /// `tar | gzip` a rootfs into `out`; returns (compressed digest, compressed size).
@@ -197,56 +213,59 @@ fn remove_path(p: &Path) {
 /// The `tar` argv that packs `rootfs` to stdout for the layer blob. `--sparse` so holes in a sparse file
 /// are stored compactly (not expanded to full logical size); the rootfs path is an argv element (never a
 /// shell string) so apostrophes/metacharacters in it are safe.
-fn tar_pack_argv(rootfs: &Path) -> Vec<std::ffi::OsString> {
-    use std::ffi::OsString;
-    vec![
-        OsString::from("--sparse"),
-        OsString::from("-cf"),
-        OsString::from("-"),
-        OsString::from("-C"),
-        rootfs.as_os_str().to_os_string(),
-        OsString::from("."),
-    ]
-}
+pub(super) struct Tar;
+impl Tar {
+    fn pack_argv(rootfs: &Path) -> Vec<std::ffi::OsString> {
+        use std::ffi::OsString;
+        vec![
+            OsString::from("--sparse"),
+            OsString::from("-cf"),
+            OsString::from("-"),
+            OsString::from("-C"),
+            rootfs.as_os_str().to_os_string(),
+            OsString::from("."),
+        ]
+    }
 
-pub(super) fn tar_gzip(rootfs: &Path, out: &Path) -> Result<(String, u64), Error> {
-    use std::io::{BufReader, Read, Write};
-    use std::process::Stdio;
-    let outfile = std::fs::File::create(out).map_err(|e| Error::Archive(e.to_string()))?;
-    let mut tar = Command::new("tar")
-        .args(tar_pack_argv(rootfs))
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::Archive(format!("tar: {e}")))?;
-    let mut tar_stdout = BufReader::new(
-        tar.stdout
-            .take()
-            .ok_or_else(|| Error::Archive("tar stdout unavailable".to_string()))?,
-    );
-    // Compress the tar stream in-process with flate2 (pure-Rust). Default header carries MTIME=0 and no
-    // filename, matching the deterministic `gzip -n` output the old subprocess produced.
-    let mut enc = flate2::write::GzEncoder::new(outfile, flate2::Compression::default());
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = tar_stdout
-            .read(&mut buf)
-            .map_err(|e| Error::Archive(format!("read tar stream: {e}")))?;
-        if n == 0 {
-            break;
+    pub(super) fn gzip(rootfs: &Path, out: &Path) -> Result<(String, u64), Error> {
+        use std::io::{BufReader, Read, Write};
+        use std::process::Stdio;
+        let outfile = std::fs::File::create(out).map_err(|e| Error::Archive(e.to_string()))?;
+        let mut tar = Command::new("tar")
+            .args(Self::pack_argv(rootfs))
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::Archive(format!("tar: {e}")))?;
+        let mut tar_stdout = BufReader::new(
+            tar.stdout
+                .take()
+                .ok_or_else(|| Error::Archive("tar stdout unavailable".to_string()))?,
+        );
+        // Compress the tar stream in-process with flate2 (pure-Rust). Default header carries MTIME=0 and no
+        // filename, matching the deterministic `gzip -n` output the old subprocess produced.
+        let mut enc = flate2::write::GzEncoder::new(outfile, flate2::Compression::default());
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = tar_stdout
+                .read(&mut buf)
+                .map_err(|e| Error::Archive(format!("read tar stream: {e}")))?;
+            if n == 0 {
+                break;
+            }
+            enc.write_all(&buf[..n])
+                .map_err(|e| Error::Archive(format!("gzip: {e}")))?;
         }
-        enc.write_all(&buf[..n])
-            .map_err(|e| Error::Archive(format!("gzip: {e}")))?;
+        enc.finish()
+            .map_err(|e| Error::Archive(format!("gzip finish: {e}")))?;
+        let tar_status = tar.wait().map_err(|e| Error::Archive(e.to_string()))?;
+        if !tar_status.success() {
+            return Err(Error::Archive(format!("tar exited with {tar_status}")));
+        }
+        let size = std::fs::metadata(out)
+            .map_err(|e| Error::Archive(e.to_string()))?
+            .len();
+        Ok((crate::image::digest::Sha256Digest::file(out)?.oci(), size))
     }
-    enc.finish()
-        .map_err(|e| Error::Archive(format!("gzip finish: {e}")))?;
-    let tar_status = tar.wait().map_err(|e| Error::Archive(e.to_string()))?;
-    if !tar_status.success() {
-        return Err(Error::Archive(format!("tar exited with {tar_status}")));
-    }
-    let size = std::fs::metadata(out)
-        .map_err(|e| Error::Archive(e.to_string()))?
-        .len();
-    Ok((crate::image::digest::sha256_file(out)?, size))
 }
 
 #[cfg(test)]
@@ -284,7 +303,7 @@ mod tests {
         std::fs::write(root.join("remove"), b"r").unwrap();
         std::fs::write(root.join(".wh.remove"), b"").unwrap();
 
-        apply_whiteouts(root).unwrap();
+        LayerRootfs::new(root).apply_whiteouts().unwrap();
 
         // the marked sibling AND the marker itself are gone; the unrelated file survives.
         assert!(root.join("keep").exists());
@@ -300,7 +319,7 @@ mod tests {
         std::fs::write(root.join("d").join("sub").join("f"), b"x").unwrap();
         std::fs::write(root.join(".wh.d"), b"").unwrap();
 
-        apply_whiteouts(root).unwrap();
+        LayerRootfs::new(root).apply_whiteouts().unwrap();
 
         assert!(
             !root.join("d").exists(),
@@ -321,7 +340,7 @@ mod tests {
         std::fs::write(dir.join("safe"), b"s").unwrap();
         std::fs::write(dir.join(".wh."), b"").unwrap();
 
-        apply_whiteouts(root).unwrap();
+        LayerRootfs::new(root).apply_whiteouts().unwrap();
 
         // the parent dir and its real content survive; only the malformed marker is removed.
         assert!(
@@ -344,7 +363,7 @@ mod tests {
         std::fs::write(root.join("data"), b"d").unwrap();
         std::fs::write(root.join(".wh..wh..opq"), b"").unwrap();
 
-        apply_whiteouts(root).unwrap();
+        LayerRootfs::new(root).apply_whiteouts().unwrap();
 
         assert!(
             root.join("data").exists(),
@@ -360,7 +379,7 @@ mod tests {
     // its full logical size through the layer blob).
     #[test]
     fn tar_pack_argv_has_sparse_flag() {
-        let argv = tar_pack_argv(Path::new("/some/rootfs"));
+        let argv = Tar::pack_argv(Path::new("/some/rootfs"));
         assert!(
             argv.iter().any(|a| a == "--sparse"),
             "layer tar must pass --sparse, got {argv:?}"
@@ -380,7 +399,7 @@ mod tests {
         std::fs::create_dir_all(&rootfs).unwrap();
         std::fs::write(rootfs.join("file.txt"), b"hello\n").unwrap();
         let out = t.0.join("layer.tar.gz");
-        let (digest, size) = tar_gzip(&rootfs, &out).expect("apostrophe rootfs must package");
+        let (digest, size) = Tar::gzip(&rootfs, &out).expect("apostrophe rootfs must package");
         assert!(
             digest.starts_with("sha256:") && digest.len() == 71,
             "got {digest:?}"
@@ -413,7 +432,7 @@ mod tests {
         std::fs::write(outside.join("secret"), b"keep me").unwrap();
 
         // a malicious opaque dir pointing above the rootfs.
-        clear_opaque_dirs(&rootfs, &["../outside".to_string()]);
+        LayerRootfs::new(&rootfs).clear_opaque(&["../outside".to_string()]);
 
         assert!(
             outside.join("secret").exists(),
@@ -425,15 +444,15 @@ mod tests {
     // contained_relative is the lexical containment guard: normal paths pass, escapes reject.
     #[test]
     fn contained_relative_normalizes_and_rejects_escapes() {
-        assert_eq!(contained_relative("app"), Some("app".to_string()));
-        assert_eq!(contained_relative("a/b/../c"), Some("a/c".to_string()));
-        assert_eq!(contained_relative("./a/./b"), Some("a/b".to_string()));
-        assert_eq!(contained_relative(""), Some(String::new()));
-        assert_eq!(contained_relative("a/.."), Some(String::new()));
+        assert_eq!(LayerRootfs::contained("app"), Some("app".to_string()));
+        assert_eq!(LayerRootfs::contained("a/b/../c"), Some("a/c".to_string()));
+        assert_eq!(LayerRootfs::contained("./a/./b"), Some("a/b".to_string()));
+        assert_eq!(LayerRootfs::contained(""), Some(String::new()));
+        assert_eq!(LayerRootfs::contained("a/.."), Some(String::new()));
         // escapes reject
-        assert_eq!(contained_relative("../outside"), None);
-        assert_eq!(contained_relative("a/../.."), None);
-        assert_eq!(contained_relative("/abs"), None);
+        assert_eq!(LayerRootfs::contained("../outside"), None);
+        assert_eq!(LayerRootfs::contained("a/../.."), None);
+        assert_eq!(LayerRootfs::contained("/abs"), None);
     }
 
     // make_dirs_writable must recover a read-only directory subtree so `reset_dir`/`remove_dir_all` can
@@ -451,7 +470,7 @@ mod tests {
         std::fs::set_permissions(root.join("ro"), std::fs::Permissions::from_mode(0o555)).unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();
 
-        make_dirs_writable(&root);
+        LayerRootfs::new(&root).make_writable();
         // every dir regained owner-write.
         for d in [&root, &root.join("ro"), &inner] {
             let mode = std::fs::metadata(d).unwrap().permissions().mode();
@@ -463,7 +482,7 @@ mod tests {
             );
         }
         // and reset_dir (which now uses the helper) fully clears + recreates the read-only tree.
-        reset_dir(&root).unwrap();
+        LayerRootfs::new(&root).reset().unwrap();
         assert!(root.is_dir(), "reset_dir recreates the dir");
         assert!(
             std::fs::read_dir(&root).unwrap().next().is_none(),
@@ -485,7 +504,7 @@ mod tests {
         std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o555)).unwrap();
         symlink(&outside, tree.join("link")).unwrap();
 
-        make_dirs_writable(&tree);
+        LayerRootfs::new(&tree).make_writable();
 
         let mode = std::fs::metadata(&outside).unwrap().permissions().mode();
         assert_eq!(
@@ -507,7 +526,7 @@ mod tests {
         std::fs::write(sub.join("stay"), b"s").unwrap();
         std::fs::write(sub.join(".wh.gone"), b"").unwrap();
 
-        apply_whiteouts(root).unwrap();
+        LayerRootfs::new(root).apply_whiteouts().unwrap();
 
         assert!(!sub.join("gone").exists());
         assert!(sub.join("stay").exists());

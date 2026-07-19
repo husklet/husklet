@@ -43,8 +43,8 @@ fn pos_color_layout() -> VertexLayout {
 }
 
 fn dev() -> Device {
-    let inst = create::create_instance(result::HL_API_VERSION);
-    create::create_device(&inst)
+    let inst = Instance::new(result::HL_API_VERSION);
+    inst.create_device()
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -200,7 +200,7 @@ fn create_sampler_emits_create_sampler() {
 fn shader_module_forwards_spirv_verbatim() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    let words = spirv::sample_compute_spirv("main");
+    let words = spirv::Module::sample_compute("main");
     let _sh = create::create_shader_module_words(&mut d, &mut sink, words.clone()).unwrap();
 
     match &sink.batches[0][0] {
@@ -216,26 +216,29 @@ fn shader_module_forwards_spirv_verbatim() {
 
 #[test]
 fn spirv_adapter_parses_entry_points_and_rejects_garbage() {
-    let words = spirv::sample_compute_spirv("computeMain");
-    assert_eq!(spirv::entry_points(&words), vec!["computeMain".to_string()]);
-    assert!(spirv::validate(&words).is_ok());
+    let words = spirv::Module::sample_compute("computeMain");
+    let module = spirv::Module::from_words(words.clone()).unwrap();
+    assert_eq!(module.entry_points(), vec!["computeMain".to_string()]);
 
     // a byte image that is not a SPIR-V module is a typed error, not a panic.
     assert!(matches!(
-        spirv::words_from_bytes(b"not spirv at all!!!!"),
+        spirv::Module::from_bytes(b"not spirv at all!!!!"),
         Err(GpuError::Invalid(_))
     ));
     // a 3-byte (non word-multiple) image is rejected on size.
-    assert!(spirv::words_from_bytes(&[1, 2, 3]).is_err());
+    assert!(spirv::Module::from_bytes(&[1, 2, 3]).is_err());
 }
 
 #[test]
 fn compute_pipeline_rejects_missing_entry() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    let sh =
-        create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("main"))
-            .unwrap();
+    let sh = create::create_shader_module_words(
+        &mut d,
+        &mut sink,
+        spirv::Module::sample_compute("main"),
+    )
+    .unwrap();
     // a good entry succeeds; a missing one is a typed error (no id-zero default pipeline).
     assert!(create::create_compute_pipeline(&mut d, &mut sink, sh, "main").is_ok());
     assert!(create::create_compute_pipeline(&mut d, &mut sink, sh, "nope").is_err());
@@ -252,13 +255,13 @@ fn graphics_pipeline_emits_create_render_pipeline() {
     let vs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("vsmain"),
+        spirv::Module::sample_compute("vsmain"),
     )
     .unwrap();
     let fs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("fsmain"),
+        spirv::Module::sample_compute("fsmain"),
     )
     .unwrap();
     create::create_graphics_pipeline(
@@ -301,13 +304,13 @@ fn graphics_pipeline_threads_multisample_count() {
     let vs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("vsmain"),
+        spirv::Module::sample_compute("vsmain"),
     )
     .unwrap();
     let fs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("fsmain"),
+        spirv::Module::sample_compute("fsmain"),
     )
     .unwrap();
     // A 4x-MSAA pipeline (VkPipelineMultisampleStateCreateInfo::rasterizationSamples == _4_BIT).
@@ -349,13 +352,13 @@ fn graphics_pipeline_threads_cull_front_face_and_color_write_mask() {
     let vs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("vsmain"),
+        spirv::Module::sample_compute("vsmain"),
     )
     .unwrap();
     let fs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("fsmain"),
+        spirv::Module::sample_compute("fsmain"),
     )
     .unwrap();
     // cull BACK (2), front-face CW (1), RED-only write mask (0x1) — every field non-default.
@@ -409,13 +412,13 @@ fn graphics_pipeline_preserves_stencil_state_into_the_ir() {
     let vs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("vsmain"),
+        spirv::Module::sample_compute("vsmain"),
     )
     .unwrap();
     let fs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("fsmain"),
+        spirv::Module::sample_compute("fsmain"),
     )
     .unwrap();
     let face = StencilFaceState {
@@ -475,13 +478,13 @@ fn dynamic_rendering_pipeline_takes_color_formats_from_pnext_no_render_pass() {
     let vs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("vsmain"),
+        spirv::Module::sample_compute("vsmain"),
     )
     .unwrap();
     let fs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("fsmain"),
+        spirv::Module::sample_compute("fsmain"),
     )
     .unwrap();
     // Two color attachment formats from the pNext, and no render pass object at all.
@@ -534,13 +537,13 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
     let vs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("vsmain"),
+        spirv::Module::sample_compute("vsmain"),
     )
     .unwrap();
     let fs = create::create_shader_module_words(
         &mut d,
         &mut sink,
-        spirv::sample_compute_spirv("fsmain"),
+        spirv::Module::sample_compute("fsmain"),
     )
     .unwrap();
     let pipe = create::create_graphics_pipeline(
@@ -565,14 +568,14 @@ fn graphics_render_pass_draw_lowers_to_expected_encoder_stream() {
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 24 * 3).unwrap();
 
     // record the render pass: begin (clear) → bind pipeline → bind vertex buffer → draw → end.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_begin_render_pass(&mut d, cb, target, [0.0, 0.0, 1.0, 1.0], true, None).unwrap();
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_bind_vertex_buffer(&mut d, cb, 0, vbuf, 0).unwrap();
     record::cmd_draw(&mut d, cb, 3, 1, 0, 0).unwrap();
-    record::cmd_end_render_pass(&mut d, cb).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_render_pass(cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
 
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
@@ -647,7 +650,7 @@ fn begin_rendering_lowers_to_begin_render_pass_with_clear_attachment() {
             None,
         )
         .unwrap();
-        record::cmd_end_render_pass(d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
     });
     assert_eq!(
         enc,
@@ -665,8 +668,8 @@ fn begin_rendering_lowers_to_begin_render_pass_with_clear_attachment() {
         ]
     );
     // The active clear target is set, so a vkCmdClearAttachments inside the dynamic pass resolves.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_begin_rendering(
         &mut d,
         cb,
@@ -683,8 +686,8 @@ fn begin_rendering_lowers_to_begin_render_pass_with_clear_attachment() {
         record::cmd_clear_attachment_rect(&mut d, cb, 0, 0, 4, 4, [1.0, 0.0, 0.0, 1.0]).is_ok()
     );
     // An unknown attachment image is a typed error, not a silent skip.
-    let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2, false).unwrap();
+    let cb2 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb2, false).unwrap();
     assert!(record::cmd_begin_rendering(
         &mut d,
         cb2,
@@ -704,12 +707,12 @@ fn indexed_draw_lowers_set_index_buffer_and_draw_indexed() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
     let ibuf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDEX_BUFFER, 6).unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // VK_INDEX_TYPE_UINT16 = 0.
     record::cmd_bind_index_buffer(&mut d, cb, ibuf, 0, 0).unwrap();
     record::cmd_draw_indexed(&mut d, cb, 3, 1, 0, 0, 0).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::Submit(cbuf)] => {
@@ -749,41 +752,41 @@ fn full_compute_dispatch_lowers_to_expected_stream() {
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 1024).unwrap();
     let out_buf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 1024).unwrap();
-    let sh =
-        create::create_shader_module_words(&mut d, &mut sink, spirv::sample_compute_spirv("main"))
-            .unwrap();
+    let sh = create::create_shader_module_words(
+        &mut d,
+        &mut sink,
+        spirv::Module::sample_compute("main"),
+    )
+    .unwrap();
     let pipe = create::create_compute_pipeline(&mut d, &mut sink, sh, "main").unwrap();
 
     // descriptor set: two storage-buffer bindings (0 = in, 1 = out).
-    let layout = create::create_descriptor_set_layout(
-        &mut d,
-        vec![
-            LayoutBinding {
-                binding: 0,
-                descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: 0,
-            },
-            LayoutBinding {
-                binding: 1,
-                descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: 0,
-            },
-        ],
-    );
-    let pool = create::create_descriptor_pool(&mut d, 1);
+    let layout = d.create_descriptor_set_layout(vec![
+        LayoutBinding {
+            binding: 0,
+            descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+            descriptor_count: 1,
+            stage_flags: 0,
+        },
+        LayoutBinding {
+            binding: 1,
+            descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+            descriptor_count: 1,
+            stage_flags: 0,
+        },
+    ]);
+    let pool = d.create_descriptor_pool(1);
     let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     create::update_descriptor_buffer(&mut d, set, 0, in_buf, 0, 1024).unwrap();
     create::update_descriptor_buffer(&mut d, set, 1, out_buf, 0, 1024).unwrap();
 
     // record: bind pipeline + descriptor set (→ CreateBindGroup ir 5) + dispatch.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_bind_pipeline(&mut d, cb, pipe).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
     record::cmd_dispatch(&mut d, cb, 64, 1, 1).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
 
     // submit → one Cmd::Submit carrying the recorded compute encoder.
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
@@ -861,25 +864,22 @@ fn combined_image_sampler_descriptor_lowers_to_texture_and_sampler_binds() {
     let sampler = create::create_sampler(&mut d, &mut sink, 1, 1, 1, [0, 0, 0]);
 
     // A set with a single COMBINED_IMAGE_SAMPLER binding at binding 0.
-    let layout = create::create_descriptor_set_layout(
-        &mut d,
-        vec![LayoutBinding {
-            binding: 0,
-            descriptor_type: vk_descriptor_type::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: 1,
-            stage_flags: 0,
-        }],
-    );
-    let pool = create::create_descriptor_pool(&mut d, 1);
+    let layout = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 0,
+        descriptor_type: vk_descriptor_type::COMBINED_IMAGE_SAMPLER,
+        descriptor_count: 1,
+        stage_flags: 0,
+    }]);
+    let pool = d.create_descriptor_pool(1);
     let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     // `vkUpdateDescriptorSets`: the shim resolves the write's imageView → this VkImage; drive the
     // driver directly with (image, sampler) — the same tables the shim populates.
     create::update_descriptor_image(&mut d, set, 0, Some(image), Some(sampler)).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
 
     // The bind emits one CreateBindGroup (the last batch): a Texture(image) at the descriptor's binding 0
     // and a Sampler(sampler) at binding 0 + 16, the split the wgpu executor's `spirv_split` performs on
@@ -926,32 +926,29 @@ fn separate_sampled_image_and_sampler_descriptors_lower_at_their_own_bindings() 
     let sampler = create::create_sampler(&mut d, &mut sink, 0, 0, 0, [0, 0, 0]);
 
     // A SAMPLED_IMAGE at binding 0 and a separate SAMPLER at binding 1.
-    let layout = create::create_descriptor_set_layout(
-        &mut d,
-        vec![
-            LayoutBinding {
-                binding: 0,
-                descriptor_type: vk_descriptor_type::SAMPLED_IMAGE,
-                descriptor_count: 1,
-                stage_flags: 0,
-            },
-            LayoutBinding {
-                binding: 1,
-                descriptor_type: vk_descriptor_type::SAMPLER,
-                descriptor_count: 1,
-                stage_flags: 0,
-            },
-        ],
-    );
-    let pool = create::create_descriptor_pool(&mut d, 1);
+    let layout = d.create_descriptor_set_layout(vec![
+        LayoutBinding {
+            binding: 0,
+            descriptor_type: vk_descriptor_type::SAMPLED_IMAGE,
+            descriptor_count: 1,
+            stage_flags: 0,
+        },
+        LayoutBinding {
+            binding: 1,
+            descriptor_type: vk_descriptor_type::SAMPLER,
+            descriptor_count: 1,
+            stage_flags: 0,
+        },
+    ]);
+    let pool = d.create_descriptor_pool(1);
     let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     create::update_descriptor_image(&mut d, set, 0, Some(image), None).unwrap();
     create::update_descriptor_image(&mut d, set, 1, None, Some(sampler)).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_bind_descriptor_sets(&mut d, &mut sink, cb, 0, &[set], &[]).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
 
     // Two entries: a Texture at binding 0 and a Sampler at binding 1 (binding-ascending resolution).
     match &sink.batches.last().unwrap()[0] {
@@ -983,9 +980,9 @@ fn submit_with_fence_signals_and_wait_lowers_to_command_sink_wait() {
     let fence = create::create_fence(&mut d, &mut sink, false).unwrap(); // CreateFence(ir 1)
     assert!(matches!(sink.batches[0][0], Cmd::CreateFence(1)));
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], Some(fence)).unwrap();
 
     // the (empty) command buffer's Submit signals the fence at timeline value 1.
@@ -1004,14 +1001,14 @@ fn mapped_memory_flushes_as_write_buffer_at_submit() {
     let mut sink = RecordingSink::with_full_caps();
     let buf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 256).unwrap();
-    let mem = create::allocate_memory(&mut d, 256).unwrap();
+    let mem = d.allocate_memory(256).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[1, 2, 3, 4]).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     // the persistently-mapped buffer flushes as a WriteBuffer immediately before the Submit.
@@ -1047,20 +1044,20 @@ fn arena_memory_flushes_every_bound_buffer_at_submit() {
     let i_ir = d.buffers.get(&instances).unwrap().ir_id;
     let v_ir = d.buffers.get(&verts).unwrap().ir_id;
 
-    let mem = create::allocate_memory(&mut d, 3072).unwrap();
+    let mem = d.allocate_memory(3072).unwrap();
     create::bind_buffer_memory(&mut d, globals, mem, 0).unwrap();
     create::bind_buffer_memory(&mut d, instances, mem, 1024).unwrap();
     create::bind_buffer_memory(&mut d, verts, mem, 2048).unwrap(); // last-bound: the ONLY one the old model kept
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
 
     // The app memcpys each buffer's data at its own offset in the mapped arena.
     create::write_mapped(&mut d, mem, 0, &[0xAA; 16]).unwrap(); // globals
     create::write_mapped(&mut d, mem, 1024, &[0xBB; 32]).unwrap(); // instances
     create::write_mapped(&mut d, mem, 2048, &[0xCC; 16]).unwrap(); // verts
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     // Collect the (id, first-byte) of every WriteBuffer flushed this submit.
@@ -1119,15 +1116,15 @@ fn unmapped_memory_still_flushes_its_write_at_submit() {
     let buf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 256).unwrap();
     let buf_ir = d.buffers.get(&buf).unwrap().ir_id;
-    let mem = create::allocate_memory(&mut d, 256).unwrap();
+    let mem = d.allocate_memory(256).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[9, 8, 7, 6]).unwrap();
-    create::unmap_memory(&mut d, mem); // <-- unmap before submit; the write must not be dropped
+    d.unmap_memory(mem); // <-- unmap before submit; the write must not be dropped
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     // Exactly one WriteBuffer carrying the written bytes flushes despite the unmap.
@@ -1145,9 +1142,9 @@ fn unmapped_memory_still_flushes_its_write_at_submit() {
     }
 
     // The pending upload is one-shot: a SECOND submit (no re-map/re-write) flushes nothing more.
-    let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2, false).unwrap();
-    record::end(&mut d, cb2).unwrap();
+    let cb2 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb2, false).unwrap();
+    d.end_command_buffer(cb2).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb2], None).unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::Submit(_)] => {}
@@ -1164,16 +1161,16 @@ fn mapped_write_without_unmap_flushes_exactly_once() {
     let mut sink = RecordingSink::with_full_caps();
     let buf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::UNIFORM_BUFFER, 256).unwrap();
-    let mem = create::allocate_memory(&mut d, 256).unwrap();
+    let mem = d.allocate_memory(256).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[1, 2, 3, 4]).unwrap();
     // A flush of a sub-range while still mapped captures a pending record too — it must NOT double the write.
     create::capture_pending_upload(&mut d, mem, 0, 4);
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     let writes = sink
@@ -1195,18 +1192,18 @@ fn unmapped_unbound_host_staging_flushes_nothing() {
     // nothing (a truthful no-op) so the submit emits no WriteBuffer.
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    let mem = create::allocate_memory(&mut d, 128).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    let mem = d.allocate_memory(128).unwrap();
+    d.map_memory(mem).unwrap();
     create::write_mapped(&mut d, mem, 0, &[1, 2, 3, 4]).unwrap();
-    create::unmap_memory(&mut d, mem);
+    d.unmap_memory(mem);
     assert!(
         d.memories.get(&mem).unwrap().pending_flush.is_none(),
         "unbound staging captures nothing"
     );
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::Submit(_)] => {}
@@ -1223,9 +1220,9 @@ fn map_memory_reads_bound_buffer_back_over_the_sink() {
     let buf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 256).unwrap();
     let buf_ir = d.buffers.get(&buf).unwrap().ir_id;
-    let mem = create::allocate_memory(&mut d, 256).unwrap();
+    let mem = d.allocate_memory(256).unwrap();
     create::bind_buffer_memory(&mut d, buf, mem, 0).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    d.map_memory(mem).unwrap();
 
     // Invalidating / mapping a whole bound allocation reads the buffer back over the sink's device→host
     // port — the SAME `read_buffer` cuda's `cuMemcpyDtoH` and GL's `glReadPixels` issue.
@@ -1250,8 +1247,8 @@ fn map_memory_of_unbound_host_staging_issues_no_readback() {
     let mut sink = RecordingSink::with_full_caps();
     // Host-only staging: no buffer bound, so there is no readable device source. The readback must be a
     // truthful no-op (never a faked/zero read), leaving the staging as-is.
-    let mem = create::allocate_memory(&mut d, 128).unwrap();
-    create::map_memory(&mut d, mem).unwrap();
+    let mem = d.allocate_memory(128).unwrap();
+    d.map_memory(mem).unwrap();
     create::read_mapped(&mut d, &mut sink, mem, 0, u64::MAX).unwrap();
     assert!(sink.reads.is_empty(), "unbound staging must not read back");
 }
@@ -1289,7 +1286,7 @@ fn present_path_lowers_surface_and_present() {
                 && desc.usage & hl_gpu::protocol::model::enums::texture_usage::COPY_SRC != 0
     )));
 
-    let idx = present::acquire_next_image(&mut d, sc).unwrap();
+    let idx = d.acquire_next_image(sc).unwrap();
     present::queue_present(&mut d, &mut sink, sc, idx).unwrap();
 
     // the present names the surface's ir id + the presented image's REAL backing texture id.
@@ -1332,7 +1329,7 @@ fn acquire_round_robins_across_swapchain_images() {
 
     let mut acquired = Vec::new();
     for _ in 0..ITERS {
-        let idx = present::acquire_next_image(&mut d, sc).unwrap();
+        let idx = d.acquire_next_image(sc).unwrap();
         acquired.push(idx);
         present::queue_present(&mut d, &mut sink, sc, idx).unwrap();
         // The just-emitted Present names the acquired image's OWN texture (present == the acquired image).
@@ -1355,7 +1352,7 @@ fn acquire_round_robins_across_swapchain_images() {
     );
     // Back in the pool after the loop: a fresh acquire continues the cycle rather than failing.
     assert_eq!(
-        present::acquire_next_image(&mut d, sc).unwrap(),
+        d.acquire_next_image(sc).unwrap(),
         1,
         "the cursor persists across the loop"
     );
@@ -1383,10 +1380,10 @@ fn record_and_submit(
     sink: &mut RecordingSink,
     record_fn: impl FnOnce(&mut Device, u64),
 ) -> Vec<Enc> {
-    let cb = record::allocate_command_buffer(d);
-    record::begin(d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record_fn(d, cb);
-    record::end(d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(d, sink, &[cb], None).unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::Submit(cbuf)] => cbuf.encoder.clone(),
@@ -1615,8 +1612,8 @@ fn copy_image_lowers_to_copy_texture_to_texture() {
         1,
     )
     .unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(record::cmd_copy_image(&mut d, cb, src, other, (0, 0), (0, 0), (4, 4)).is_err());
 }
 
@@ -1685,8 +1682,8 @@ fn resolve_image_lowers_to_copy_texture_to_texture() {
         1,
     )
     .unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(record::cmd_resolve_image(&mut d, cb, src, bad, (0, 0), (0, 0), (8, 8)).is_err());
 }
 
@@ -1852,8 +1849,8 @@ fn clear_depth_stencil_image_lowers_to_depth_clear_render_pass() {
         1,
     )
     .unwrap();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(record::cmd_clear_depth_stencil_image(&mut d, cb, color, 0.0, 0, false).is_err());
     assert!(record::cmd_clear_depth_stencil_image(&mut d, cb, no_dst, 0.0, 0, false).is_err());
     assert!(record::cmd_clear_depth_stencil_image(&mut d, cb, 0xdead, 0.0, 0, false).is_err());
@@ -1877,7 +1874,7 @@ fn clear_attachments_lowers_to_clear_rect_on_active_target() {
     let enc = record_and_submit(&mut d, &mut sink, |d, cb| {
         record::cmd_begin_render_pass(d, cb, target, [0.0, 0.0, 0.0, 1.0], false, None).unwrap();
         record::cmd_clear_attachment_rect(d, cb, 8, 8, 16, 16, [1.0, 0.0, 0.0, 1.0]).unwrap();
-        record::cmd_end_render_pass(d, cb).unwrap();
+        d.end_render_pass(cb).unwrap();
     });
     assert_eq!(
         enc,
@@ -1903,8 +1900,8 @@ fn clear_attachments_lowers_to_clear_rect_on_active_target() {
         ]
     );
     // A clear-attachments outside a render pass is a typed error (no active target to clear).
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(record::cmd_clear_attachment_rect(&mut d, cb, 0, 0, 4, 4, [0.0; 4]).is_err());
 }
 
@@ -1914,12 +1911,12 @@ fn fill_and_update_buffer_flush_as_write_buffer_at_submit() {
     let mut sink = RecordingSink::with_full_caps();
     let buf = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
     let ir = buf_ir(&d, buf);
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // Fill [0,8) with 0x01010101 (two words), then update [16,20) with explicit bytes.
     record::cmd_fill_buffer(&mut d, cb, buf, 0, 8, 0x0101_0101).unwrap();
     record::cmd_update_buffer(&mut d, cb, buf, 16, &[9, 8, 7, 6]).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     // The two buffer writes flush (in record order) as WriteBuffers before the (empty) Submit.
@@ -1942,8 +1939,8 @@ fn fill_and_update_buffer_flush_as_write_buffer_at_submit() {
     // fill rejects a non-COPY_DST buffer and a misaligned offset.
     let vbuf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 64).unwrap();
-    let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2, false).unwrap();
+    let cb2 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb2, false).unwrap();
     assert!(record::cmd_fill_buffer(&mut d, cb2, vbuf, 0, 8, 0).is_err());
     assert!(record::cmd_fill_buffer(&mut d, cb2, buf, 2, 8, 0).is_err());
 }
@@ -1985,8 +1982,8 @@ fn set_viewport_and_scissor_lower_to_encoder_ops() {
 #[test]
 fn push_constants_reach_the_command_buffer_for_the_draw() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // Write 8 bytes at offset 0, then overwrite 4 bytes at offset 4 (grows/patches the block in place).
     record::cmd_push_constants(&mut d, cb, 0, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
     record::cmd_push_constants(&mut d, cb, 4, &[9, 9, 9, 9]).unwrap();
@@ -2003,15 +2000,15 @@ fn push_constants_reach_the_command_buffer_for_the_draw() {
 #[test]
 fn dynamic_state_is_recorded_but_emits_no_encoder_op() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_set_line_width(&mut d, cb, 2.5).unwrap();
     record::cmd_set_depth_bias(&mut d, cb, 1.0, 0.0, 2.0).unwrap();
     record::cmd_set_blend_constants(&mut d, cb, [0.1, 0.2, 0.3, 0.4]).unwrap();
     // FRONT_AND_BACK = 0x3 sets both faces; FRONT = 0x1 sets only the front.
     record::cmd_set_stencil_reference(&mut d, cb, 0x3, 7).unwrap();
     record::cmd_set_stencil_compare_mask(&mut d, cb, 0x1, 0xff).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
 
     // The state is recorded (observable, honest) …
     let rec = d.command_buffers.get(&cb).unwrap();
@@ -2036,7 +2033,7 @@ fn indirect_draws_read_args_and_lower_to_direct_draws() {
     // backed by memory the app has filled on the CPU (the mapped-buffer indirect-args pattern).
     let indirect =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
-    let mem = create::allocate_memory(&mut d, 64).unwrap();
+    let mem = d.allocate_memory(64).unwrap();
     create::bind_buffer_memory(&mut d, indirect, mem, 0).unwrap();
     // cmd0 = {vertexCount:6, instanceCount:2, firstVertex:3, firstInstance:1}
     // cmd1 = {vertexCount:3, instanceCount:1, firstVertex:0, firstInstance:0}
@@ -2080,7 +2077,7 @@ fn indirect_draws_read_args_and_lower_to_direct_draws() {
     // vkCmdDrawIndexedIndirect reads the 20-byte struct and lowers to the matching DrawIndexed.
     let idx =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
-    let mem2 = create::allocate_memory(&mut d, 64).unwrap();
+    let mem2 = d.allocate_memory(64).unwrap();
     create::bind_buffer_memory(&mut d, idx, mem2, 0).unwrap();
     // {indexCount:9, instanceCount:3, firstIndex:2, vertexOffset:0, firstInstance:5}
     let mut ib = Vec::new();
@@ -2127,8 +2124,8 @@ fn indirect_draws_read_args_and_lower_to_direct_draws() {
     );
 
     // Truthful failure: an unknown buffer, a non-INDIRECT buffer, and an out-of-range span all error.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     assert!(record::cmd_draw_indirect(&mut d, cb, 0xdead, 0, 1, 16).is_err());
     let vbuf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 64).unwrap();
@@ -2144,7 +2141,7 @@ fn indirect_count_draws_read_count_from_buffer_and_clamp_to_max() {
     // Argument buffer: three 16-byte VkDrawIndirectCommands, CPU-filled (the mapped indirect-args pattern).
     let indirect =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
-    let amem = create::allocate_memory(&mut d, 64).unwrap();
+    let amem = d.allocate_memory(64).unwrap();
     create::bind_buffer_memory(&mut d, indirect, amem, 0).unwrap();
     let mut args = Vec::new();
     for w in [6u32, 2, 3, 1, 3, 1, 0, 0, 9, 4, 2, 5] {
@@ -2154,7 +2151,7 @@ fn indirect_count_draws_read_count_from_buffer_and_clamp_to_max() {
     // A separate host-visible count buffer holding the GPU/CPU-produced draw count `2`.
     let count =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 16).unwrap();
-    let cmem = create::allocate_memory(&mut d, 16).unwrap();
+    let cmem = d.allocate_memory(16).unwrap();
     create::bind_buffer_memory(&mut d, count, cmem, 0).unwrap();
     create::write_mapped(&mut d, cmem, 0, &2u32.to_le_bytes()).unwrap();
 
@@ -2189,7 +2186,7 @@ fn indirect_count_draws_read_count_from_buffer_and_clamp_to_max() {
     // vkCmdDrawIndexedIndirectCount reads a 20-byte struct per draw; maxDrawCount 1 clamps to one DrawIndexed.
     let idx =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::INDIRECT_BUFFER, 64).unwrap();
-    let imem = create::allocate_memory(&mut d, 64).unwrap();
+    let imem = d.allocate_memory(64).unwrap();
     create::bind_buffer_memory(&mut d, idx, imem, 0).unwrap();
     let mut ib = Vec::new();
     for w in [9u32, 3, 2, 0, 5] {
@@ -2211,8 +2208,8 @@ fn indirect_count_draws_read_count_from_buffer_and_clamp_to_max() {
     );
 
     // Truthful failure: a count buffer without INDIRECT usage, and an unknown count buffer, both error.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     let vbuf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 16).unwrap();
     assert!(record::cmd_draw_indirect_count(&mut d, cb, indirect, 0, vbuf, 0, 3, 16).is_err());
@@ -2278,45 +2275,45 @@ fn pipeline_barrier_records_layout_transition_and_emits_no_ir() {
 fn event_host_ops_and_device_set_resolves_at_submit() {
     let mut d = dev();
     let mut sink = RecordingSink::with_full_caps();
-    let ev = sync::create_event(&mut d);
-    assert!(!sync::event_status(&d, ev).unwrap()); // created unsignaled
+    let ev = d.create_event();
+    assert!(!d.event_status(ev).unwrap()); // created unsignaled
 
     // Host set/reset mutate directly.
-    sync::set_event(&mut d, ev, true).unwrap();
-    assert!(sync::event_status(&d, ev).unwrap());
-    sync::set_event(&mut d, ev, false).unwrap();
-    assert!(!sync::event_status(&d, ev).unwrap());
+    d.set_event(ev, true).unwrap();
+    assert!(d.event_status(ev).unwrap());
+    d.set_event(ev, false).unwrap();
+    assert!(!d.event_status(ev).unwrap());
 
     // A device vkCmdSetEvent resolves at (synchronous) submit completion — signaled once submit returns.
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_set_event(&mut d, cb, ev, true).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     assert!(
-        !sync::event_status(&d, ev).unwrap(),
+        !d.event_status(ev).unwrap(),
         "not signaled until the submit completes"
     );
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
     assert!(
-        sync::event_status(&d, ev).unwrap(),
+        d.event_status(ev).unwrap(),
         "device-set event signaled after submit"
     );
 
     // An unknown event is a typed error, never a false success.
-    assert!(sync::set_event(&mut d, 0xdead, true).is_err());
+    assert!(d.set_event(0xdead, true).is_err());
 }
 
 #[test]
 fn timeline_semaphore_signal_wait_roundtrips() {
     let mut d = dev();
     let sem = sync::create_semaphore(&mut d, true, 2); // timeline, initial 2
-    assert_eq!(sync::semaphore_counter(&d, sem).unwrap(), 2);
+    assert_eq!(d.semaphore_counter(sem).unwrap(), 2);
 
     // Host signal advances the counter monotonically (a signal below the current value is a no-op).
-    sync::signal_semaphore(&mut d, sem, 5).unwrap();
-    assert_eq!(sync::semaphore_counter(&d, sem).unwrap(), 5);
-    sync::signal_semaphore(&mut d, sem, 3).unwrap();
-    assert_eq!(sync::semaphore_counter(&d, sem).unwrap(), 5);
+    d.signal_semaphore(sem, 5).unwrap();
+    assert_eq!(d.semaphore_counter(sem).unwrap(), 5);
+    d.signal_semaphore(sem, 3).unwrap();
+    assert_eq!(d.semaphore_counter(sem).unwrap(), 5);
 
     // A satisfied wait (counter >= value) is true; an unmet one is false (→ VK_TIMEOUT at the shim).
     assert!(sync::wait_semaphores(&d, &[sem], &[5], false));
@@ -2324,8 +2321,8 @@ fn timeline_semaphore_signal_wait_roundtrips() {
 
     // A binary semaphore has no timeline counter — host counter ops are typed errors.
     let bin = sync::create_semaphore(&mut d, false, 0);
-    assert!(sync::semaphore_counter(&d, bin).is_err());
-    assert!(sync::signal_semaphore(&mut d, bin, 1).is_err());
+    assert!(d.semaphore_counter(bin).is_err());
+    assert!(d.signal_semaphore(bin, 1).is_err());
 }
 
 #[test]
@@ -2335,11 +2332,11 @@ fn query_pool_timestamp_records_and_results_readable() {
     // A 2-slot TIMESTAMP pool (VkQueryType TIMESTAMP = 2).
     let pool = sync::create_query_pool(&mut d, 2, 2).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_reset_query_pool(&mut d, cb, pool, 0, 2).unwrap();
     record::cmd_write_timestamp(&mut d, cb, pool, 0).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
 
     // Before submit the slot is unavailable → NOT_READY (no WAIT/PARTIAL).
     let mut out = [0u8; 4];
@@ -2386,8 +2383,8 @@ fn occlusion_query_counts_scissor_clipped_coverage() {
     // A 2-slot OCCLUSION pool (VkQueryType OCCLUSION = 0).
     let pool = sync::create_query_pool(&mut d, 0, 2).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_reset_query_pool(&mut d, cb, pool, 0, 2).unwrap();
     record::cmd_begin_render_pass(&mut d, cb, target, [0.0; 4], true, None).unwrap();
     // Query 0: a full-frame draw with no scissor covers the whole 64x64 = 4096 samples.
@@ -2399,8 +2396,8 @@ fn occlusion_query_counts_scissor_clipped_coverage() {
     record::cmd_begin_query(&mut d, cb, pool, 1).unwrap();
     record::cmd_draw(&mut d, cb, 6, 1, 0, 0).unwrap();
     record::cmd_end_query(&mut d, cb, pool, 1).unwrap();
-    record::cmd_end_render_pass(&mut d, cb).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_render_pass(cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     let mut out = [0u8; 8];
@@ -2441,8 +2438,8 @@ fn occlusion_query_zero_when_fully_scissored_or_no_draw() {
     .unwrap();
     let pool = sync::create_query_pool(&mut d, 0, 2).unwrap();
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_reset_query_pool(&mut d, cb, pool, 0, 2).unwrap();
     record::cmd_begin_render_pass(&mut d, cb, target, [0.0; 4], true, None).unwrap();
     // Query 0: a draw fully scissored to an empty 0x0 rect passes zero samples (fully occluded).
@@ -2453,8 +2450,8 @@ fn occlusion_query_zero_when_fully_scissored_or_no_draw() {
     // Query 1: no draw at all in the scope → zero samples.
     record::cmd_begin_query(&mut d, cb, pool, 1).unwrap();
     record::cmd_end_query(&mut d, cb, pool, 1).unwrap();
-    record::cmd_end_render_pass(&mut d, cb).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_render_pass(cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     for q in 0..2 {
@@ -2479,13 +2476,13 @@ fn copy_query_pool_results_writes_dst_buffer_at_submit() {
     let dst = create::create_buffer(&mut d, &mut sink, vk_buffer_usage::TRANSFER_DST, 64).unwrap();
     let dst_ir = buf_ir(&d, dst);
 
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_reset_query_pool(&mut d, cb, pool, 0, 1).unwrap();
     record::cmd_write_timestamp(&mut d, cb, pool, 0).unwrap();
     // 32-bit results, no availability, stride 4.
     record::cmd_copy_query_pool_results(&mut d, cb, pool, 0, 1, dst, 0, 4, false, false).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
 
     // On completion the resolved timestamp is written into the destination buffer (trailing WriteBuffer).
@@ -2521,10 +2518,10 @@ fn bind_and_capture_entries(
     sink: &mut RecordingSink,
     set: u64,
 ) -> Vec<hl_gpu::protocol::model::descriptor::BindEntry> {
-    let cb = record::allocate_command_buffer(d);
-    record::begin(d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_bind_descriptor_sets(d, sink, cb, 0, &[set], &[]).unwrap();
-    record::end(d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     match sink.batches.last().unwrap().as_slice() {
         [Cmd::CreateBindGroup(_, desc)] => desc.entries.clone(),
         other => panic!("expected CreateBindGroup, got {other:?}"),
@@ -2540,24 +2537,21 @@ fn descriptor_template_update_matches_direct_writes() {
     let out_buf =
         create::create_buffer(&mut d, &mut sink, vk_buffer_usage::STORAGE_BUFFER, 1024).unwrap();
 
-    let layout = create::create_descriptor_set_layout(
-        &mut d,
-        vec![
-            LayoutBinding {
-                binding: 0,
-                descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: 0,
-            },
-            LayoutBinding {
-                binding: 1,
-                descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: 0,
-            },
-        ],
-    );
-    let pool = create::create_descriptor_pool(&mut d, 8);
+    let layout = d.create_descriptor_set_layout(vec![
+        LayoutBinding {
+            binding: 0,
+            descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+            descriptor_count: 1,
+            stage_flags: 0,
+        },
+        LayoutBinding {
+            binding: 1,
+            descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+            descriptor_count: 1,
+            stage_flags: 0,
+        },
+    ]);
+    let pool = d.create_descriptor_pool(8);
 
     // Set A: two direct buffer writes (the reference path).
     let set_direct = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
@@ -2642,8 +2636,8 @@ fn descriptor_template_rejects_non_descriptor_set_type_and_bad_handles() {
         }],
     )
     .unwrap();
-    let pool = create::create_descriptor_pool(&mut d, 1);
-    let layout = create::create_descriptor_set_layout(&mut d, vec![]);
+    let pool = d.create_descriptor_pool(1);
+    let layout = d.create_descriptor_set_layout(vec![]);
     let set = create::allocate_descriptor_set(&mut d, pool, layout, 0).unwrap();
     assert!(matches!(
         create::update_descriptor_set_with_template(&mut d, set, tmpl, &[0u8; 8]),
@@ -2664,17 +2658,17 @@ fn execute_commands_replays_secondary_ops_into_primary() {
     let (s, t) = (buf_ir(&d, src), buf_ir(&d, dst));
 
     // A secondary records a copy (encoder op) + a fill (buffer write), then becomes Executable.
-    let secondary = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, secondary, false).unwrap();
+    let secondary = d.allocate_command_buffer();
+    d.begin_command_buffer(secondary, false).unwrap();
     record::cmd_copy_buffer(&mut d, secondary, src, dst, 0, 0, 64).unwrap();
     record::cmd_fill_buffer(&mut d, secondary, dst, 128, 8, 0x0202_0202).unwrap();
-    record::end(&mut d, secondary).unwrap();
+    d.end_command_buffer(secondary).unwrap();
 
     // The primary executes the secondary, then is submitted.
-    let primary = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, primary, false).unwrap();
+    let primary = d.allocate_command_buffer();
+    d.begin_command_buffer(primary, false).unwrap();
     record::cmd_execute_commands(&mut d, primary, &[secondary]).unwrap();
-    record::end(&mut d, primary).unwrap();
+    d.end_command_buffer(primary).unwrap();
     submit::queue_submit(&mut d, &mut sink, &[primary], None).unwrap();
 
     // The primary's submit carries the secondary's copy (encoder) preceded by the spliced fill (write).
@@ -2701,10 +2695,10 @@ fn execute_commands_replays_secondary_ops_into_primary() {
     }
 
     // A secondary that is not Executable (still recording) is a typed error, splicing nothing.
-    let unfinished = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, unfinished, false).unwrap();
-    let p2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, p2, false).unwrap();
+    let unfinished = d.allocate_command_buffer();
+    d.begin_command_buffer(unfinished, false).unwrap();
+    let p2 = d.allocate_command_buffer();
+    d.begin_command_buffer(p2, false).unwrap();
     assert!(record::cmd_execute_commands(&mut d, p2, &[unfinished]).is_err());
 }
 
@@ -2715,8 +2709,8 @@ fn execute_commands_replays_secondary_ops_into_primary() {
 #[test]
 fn surface_queries_report_modeled_values() {
     // Support: only the lone present family (0) presents.
-    assert!(present::surface_supports_present(0));
-    assert!(!present::surface_supports_present(1));
+    assert!(present::QueueFamily(0).supports_present());
+    assert!(!present::QueueFamily(1).supports_present());
 
     // Capabilities: double/triple-buffered, surface-defined extent, identity/opaque.
     let caps = present::surface_capabilities();
@@ -2760,51 +2754,51 @@ fn image_subresource_layout_reports_linear_rgba8_layout() {
         1,
     )
     .unwrap();
-    let l = create::image_subresource_layout(&d, img).unwrap();
+    let l = d.image_subresource_layout(img).unwrap();
     assert_eq!(l.offset, 0);
     assert_eq!(l.row_pitch, 64 * 4); // width * 4 bytes/texel
     assert_eq!(l.size, 64 * 4 * 32); // rowPitch * height
                                      // An unknown image is a typed error.
-    assert!(create::image_subresource_layout(&d, 0xdead).is_err());
+    assert!(d.image_subresource_layout(0xdead).is_err());
 }
 
 #[test]
 fn pipeline_cache_roundtrips_a_valid_header() {
     let mut d = dev();
-    let cache = create::create_pipeline_cache(&mut d, &[]);
-    let data = create::get_pipeline_cache_data(&d, cache).unwrap();
+    let cache = create::PipelineCache::create(&mut d, &[]);
+    let data = create::PipelineCache::data(&d, cache).unwrap();
     // A valid VkPipelineCacheHeaderVersionOne: length 32, version 1 (little-endian).
     assert!(data.len() >= 32);
     assert_eq!(u32::from_le_bytes([data[0], data[1], data[2], data[3]]), 32);
     assert_eq!(u32::from_le_bytes([data[4], data[5], data[6], data[7]]), 1);
 
     // Merge is a truthful no-op that validates handles.
-    let other = create::create_pipeline_cache(&mut d, &[]);
-    assert!(create::merge_pipeline_caches(&d, cache, &[other]).is_ok());
-    assert!(create::merge_pipeline_caches(&d, cache, &[0xdead]).is_err());
-    assert!(create::merge_pipeline_caches(&d, 0xdead, &[]).is_err());
+    let other = create::PipelineCache::create(&mut d, &[]);
+    assert!(create::PipelineCache::merge(&d, cache, &[other]).is_ok());
+    assert!(create::PipelineCache::merge(&d, cache, &[0xdead]).is_err());
+    assert!(create::PipelineCache::merge(&d, 0xdead, &[]).is_err());
 
     // Destroy then query is a typed error.
-    create::destroy_pipeline_cache(&mut d, cache);
-    assert!(create::get_pipeline_cache_data(&d, cache).is_err());
+    create::PipelineCache::destroy(&mut d, cache);
+    assert!(create::PipelineCache::data(&d, cache).is_err());
 }
 
 #[test]
 fn gpu_error_maps_to_vk_result() {
     assert_eq!(
-        result::vk_result_from_gpu_error(&GpuError::Unsupported("x")),
+        result::Status::from_error(&GpuError::Unsupported("x")),
         result::VK_ERROR_FEATURE_NOT_PRESENT
     );
     assert_eq!(
-        result::vk_result_from_gpu_error(&GpuError::Invalid("x")),
+        result::Status::from_error(&GpuError::Invalid("x")),
         result::VK_ERROR_INITIALIZATION_FAILED
     );
     assert_eq!(
-        result::vk_result_from_gpu_error(&GpuError::ResourceLimit("x")),
+        result::Status::from_error(&GpuError::ResourceLimit("x")),
         result::VK_ERROR_OUT_OF_DEVICE_MEMORY
     );
     assert_eq!(
-        result::vk_result_from_gpu_error(&GpuError::UnknownId {
+        result::Status::from_error(&GpuError::UnknownId {
             kind: "buffer",
             id: 3
         }),
@@ -2837,8 +2831,8 @@ fn gpu_error_maps_to_vk_result() {
 #[test]
 fn extended_dynamic_state_records_every_field_and_emits_no_ir() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
 
     // Mirror each shim `vkCmdSet*` body: it records exactly this mutation through `record::set_dynamic`.
     record::set_dynamic(&mut d, cb, |ds| ds.cull_mode = 0x2).unwrap(); // VK_CULL_MODE_BACK_BIT
@@ -2877,7 +2871,7 @@ fn extended_dynamic_state_records_every_field_and_emits_no_ir() {
     .unwrap();
     record::set_dynamic(&mut d, cb, |ds| ds.sample_locations_enable = true).unwrap();
     record::set_dynamic(&mut d, cb, |ds| ds.rasterization_stream = 1).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
 
     let rec = d.command_buffers.get(&cb).unwrap();
     let ds = &rec.dynamic;
@@ -2927,10 +2921,10 @@ fn extended_dynamic_state_records_every_field_and_emits_no_ir() {
 #[test]
 fn set_dynamic_on_non_recording_buffer_is_an_error() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d); // Initial, never begun
+    let cb = d.allocate_command_buffer(); // Initial, never begun
     assert!(record::set_dynamic(&mut d, cb, |ds| ds.cull_mode = 1).is_err());
-    record::begin(&mut d, cb, false).unwrap();
-    record::end(&mut d, cb).unwrap(); // Executable, no longer recording
+    d.begin_command_buffer(cb, false).unwrap();
+    d.end_command_buffer(cb).unwrap(); // Executable, no longer recording
     assert!(record::set_dynamic(&mut d, cb, |ds| ds.cull_mode = 1).is_err());
 }
 
@@ -2940,22 +2934,22 @@ fn set_dynamic_on_non_recording_buffer_is_an_error() {
 #[test]
 fn set_stencil_op_selects_faces_by_mask() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // FRONT only.
     record::set_stencil_op(&mut d, cb, 0x1, (1, 2, 3, 4)).unwrap();
     // BACK only.
     record::set_stencil_op(&mut d, cb, 0x2, (5, 6, 7, 8)).unwrap();
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     let ds = &d.command_buffers.get(&cb).unwrap().dynamic;
     assert_eq!(ds.stencil_op_front, (1, 2, 3, 4));
     assert_eq!(ds.stencil_op_back, (5, 6, 7, 8));
 
     // FRONT_AND_BACK overwrites both.
-    let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2, false).unwrap();
+    let cb2 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb2, false).unwrap();
     record::set_stencil_op(&mut d, cb2, 0x3, (9, 9, 9, 9)).unwrap();
-    record::end(&mut d, cb2).unwrap();
+    d.end_command_buffer(cb2).unwrap();
     let ds2 = &d.command_buffers.get(&cb2).unwrap().dynamic;
     assert_eq!(ds2.stencil_op_front, (9, 9, 9, 9));
     assert_eq!(ds2.stencil_op_back, (9, 9, 9, 9));
@@ -2966,11 +2960,11 @@ fn set_stencil_op_selects_faces_by_mask() {
 #[test]
 fn set_stencil_write_mask_selects_faces_by_mask() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     record::cmd_set_stencil_write_mask(&mut d, cb, 0x1, 0xAA).unwrap(); // FRONT
     record::cmd_set_stencil_write_mask(&mut d, cb, 0x2, 0xBB).unwrap(); // BACK
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
     assert_eq!(
         d.command_buffers
             .get(&cb)
@@ -2980,10 +2974,10 @@ fn set_stencil_write_mask_selects_faces_by_mask() {
         (0xAA, 0xBB)
     );
 
-    let cb2 = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb2, false).unwrap();
+    let cb2 = d.allocate_command_buffer();
+    d.begin_command_buffer(cb2, false).unwrap();
     record::cmd_set_stencil_write_mask(&mut d, cb2, 0x3, 0xCC).unwrap(); // FRONT_AND_BACK
-    record::end(&mut d, cb2).unwrap();
+    d.end_command_buffer(cb2).unwrap();
     assert_eq!(
         d.command_buffers
             .get(&cb2)
@@ -3001,8 +2995,8 @@ fn set_stencil_write_mask_selects_faces_by_mask() {
 #[test]
 fn dynamic_attachment_arrays_record_at_span_and_bound_check() {
     let mut d = dev();
-    let cb = record::allocate_command_buffer(&mut d);
-    record::begin(&mut d, cb, false).unwrap();
+    let cb = d.allocate_command_buffer();
+    d.begin_command_buffer(cb, false).unwrap();
     // Write masks at attachments [1,3): the vector grows to length 3, slot 0 stays default (0).
     record::set_dynamic_attachment_array(&mut d, cb, 1, &[0x7, 0xF], |ds| {
         &mut ds.color_write_masks
@@ -3022,7 +3016,7 @@ fn dynamic_attachment_arrays_record_at_span_and_bound_check() {
         record::set_dynamic_attachment_array(&mut d, cb, 6, &big, |ds| &mut ds.color_blend_enables),
         Err(GpuError::Invalid(_))
     ));
-    record::end(&mut d, cb).unwrap();
+    d.end_command_buffer(cb).unwrap();
 }
 
 /// `vkCreatePipelineLayout` via `create::create_pipeline_layout` — the composed descriptor-set-layout
@@ -3030,32 +3024,26 @@ fn dynamic_attachment_arrays_record_at_span_and_bound_check() {
 #[test]
 fn pipeline_layout_records_composed_set_layouts() {
     let mut d = dev();
-    let sl0 = create::create_descriptor_set_layout(
-        &mut d,
-        vec![LayoutBinding {
-            binding: 0,
-            descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
-            descriptor_count: 1,
-            stage_flags: 0x20,
-        }],
-    );
-    let sl1 = create::create_descriptor_set_layout(
-        &mut d,
-        vec![LayoutBinding {
-            binding: 0,
-            descriptor_type: vk_descriptor_type::UNIFORM_BUFFER,
-            descriptor_count: 1,
-            stage_flags: 0x20,
-        }],
-    );
-    let layout = create::create_pipeline_layout(&mut d, vec![sl0, sl1]);
+    let sl0 = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 0,
+        descriptor_type: vk_descriptor_type::STORAGE_BUFFER,
+        descriptor_count: 1,
+        stage_flags: 0x20,
+    }]);
+    let sl1 = d.create_descriptor_set_layout(vec![LayoutBinding {
+        binding: 0,
+        descriptor_type: vk_descriptor_type::UNIFORM_BUFFER,
+        descriptor_count: 1,
+        stage_flags: 0x20,
+    }]);
+    let layout = d.create_pipeline_layout(vec![sl0, sl1]);
     let rec = d
         .pipeline_layouts
         .get(&layout)
         .expect("pipeline layout recorded");
     assert_eq!(rec.set_layouts, vec![sl0, sl1]);
     // A zero-set layout (push-constant-only / empty) is equally valid.
-    let empty = create::create_pipeline_layout(&mut d, vec![]);
+    let empty = d.create_pipeline_layout(vec![]);
     assert!(d
         .pipeline_layouts
         .get(&empty)
@@ -3075,16 +3063,16 @@ fn submit_side_timeline_signal_advances_counter_monotonically() {
     let bin = sync::create_semaphore(&mut d, false, 0); // binary — must be skipped
 
     // Signal timeline→5 and binary→9 (binary value ignored) in one batch.
-    submit::signal_timeline_values(&mut d, &[(tl, 5), (bin, 9)]);
-    assert_eq!(sync::semaphore_counter(&d, tl).unwrap(), 5);
+    d.signal_timeline_values(&[(tl, 5), (bin, 9)]);
+    assert_eq!(d.semaphore_counter(tl).unwrap(), 5);
     assert!(
-        sync::semaphore_counter(&d, bin).is_err(),
+        d.semaphore_counter(bin).is_err(),
         "binary semaphore has no counter"
     );
 
     // A lower value never regresses the counter (monotonic max); an unknown handle is a silent skip.
-    submit::signal_timeline_values(&mut d, &[(tl, 3), (0xdead_beef, 100)]);
-    assert_eq!(sync::semaphore_counter(&d, tl).unwrap(), 5);
+    d.signal_timeline_values(&[(tl, 3), (0xdead_beef, 100)]);
+    assert_eq!(d.semaphore_counter(tl).unwrap(), 5);
 
     // A consumer waiting on the signalled value is already satisfied.
     assert!(sync::wait_semaphores(&d, &[tl], &[5], false));

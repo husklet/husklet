@@ -7,7 +7,7 @@ use hl_gpu::protocol::model::capability::Capabilities;
 use hl_gpu::protocol::model::command::Cmd;
 use hl_gpu::protocol::model::id::{BufferId, FenceId};
 use hl_gpu::runtime::model::resources::SessionResources;
-use hl_gpu::runtime::port::executor::{GpuExecutor, Presented};
+use hl_gpu::runtime::port::executor::{GpuExecutor, Presentation};
 use hl_gpu::{GpuError, Result};
 
 use crate::{fence, present, WgpuExecutor};
@@ -17,7 +17,7 @@ impl GpuExecutor for WgpuExecutor {
         self.caps.clone()
     }
 
-    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presented>> {
+    fn execute(&mut self, res: &mut SessionResources, batch: &[Cmd]) -> Result<Vec<Presentation>> {
         // The runtime dispatches this batch inside an all-tables transaction (`begin_txn` → execute →
         // `commit_txn`/`rollback_txn`): if we return `Err`, the id tables roll back to the pre-batch state.
         // The dedup caches live outside `SessionResources`, so mirror that lifecycle here — journal every
@@ -38,7 +38,7 @@ impl GpuExecutor for WgpuExecutor {
     }
 
     fn wait(&mut self, res: &mut SessionResources, fence_id: FenceId, value: u64) -> Result<()> {
-        if fence::value(res, fence_id.0)? < value {
+        if fence::Fence::value(res, fence_id.0)? < value {
             return Err(GpuError::Invalid("wait on a fence value never signalled"));
         }
         Ok(())
@@ -62,7 +62,7 @@ impl WgpuExecutor {
         &mut self,
         res: &mut SessionResources,
         batch: &[Cmd],
-    ) -> Result<Vec<Presented>> {
+    ) -> Result<Vec<Presentation>> {
         let mut presents = Vec::new();
         for cmd in batch {
             match cmd {
@@ -108,7 +108,7 @@ impl WgpuExecutor {
                 }
                 Cmd::Submit(cb) => self.submit_cb(res, cb)?,
                 Cmd::WaitFence { id, value } => {
-                    if fence::value(res, *id)? < *value {
+                    if fence::Fence::value(res, *id)? < *value {
                         return Err(GpuError::Invalid("wait on a fence value never signalled"));
                     }
                 }

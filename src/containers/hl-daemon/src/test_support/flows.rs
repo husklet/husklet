@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 async fn flow_container_network_membership_join_on_create_leave_on_rm() {
     let app = test_app();
     seed_image_rootfs(&app, "alpine", "/store/alpine-rootfs").await;
-    crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+    crate::networks::Networks::create(State(app.clone()), net_create_body("mynet")).await;
 
     // Create a container attached to `mynet` (NetworkMode).
     let q: crate::containers::CreateQ = serde_json::from_value(serde_json::json!({})).unwrap();
@@ -57,7 +57,7 @@ async fn flow_container_network_membership_join_on_create_leave_on_rm() {
         "rm must free the endpoint too — the net is now empty and deletable"
     );
     // And the now-empty net is deletable (204), proving the leave was a true refcount decrement.
-    let r = crate::networks::network_delete(State(app.clone()), Path("mynet".into())).await;
+    let r = crate::networks::Networks::delete(State(app.clone()), Path("mynet".into())).await;
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
 }
 
@@ -149,13 +149,13 @@ async fn flow_teardown_named_volume_kept_network_endpoint_freed_on_rm() {
     let app = test_app();
     seed_image_rootfs(&app, "alpine", "/store/alpine-R").await;
     // A pre-existing NAMED volume and a user network.
-    let r = crate::volumes::volumes_create(
+    let r = crate::volumes::Volumes::create(
         State(app.clone()),
         axum::Json(serde_json::from_value(serde_json::json!({"Name":"myvol"})).unwrap()),
     )
     .await;
     assert_eq!(r.status(), StatusCode::CREATED);
-    crate::networks::networks_create(State(app.clone()), net_create_body("mynet")).await;
+    crate::networks::Networks::create(State(app.clone()), net_create_body("mynet")).await;
 
     // Create a container bound to myvol AND attached to mynet.
     let r = crate::containers::containers_create(
@@ -181,7 +181,7 @@ async fn flow_teardown_named_volume_kept_network_endpoint_freed_on_rm() {
         "endpoint allocated"
     );
     // In-use proof: delete of the bound named volume is refused (409).
-    let r = crate::volumes::volume_delete(State(app.clone()), Path("myvol".into())).await;
+    let r = crate::volumes::Volumes::delete(State(app.clone()), Path("myvol".into())).await;
     assert_eq!(
         r.status(),
         StatusCode::CONFLICT,
@@ -227,7 +227,7 @@ async fn flow_teardown_named_volume_kept_network_endpoint_freed_on_rm() {
     );
 
     // The now-unreferenced named volume is freely deletable (204) — proving the ref was truly released.
-    let r = crate::volumes::volume_delete(State(app.clone()), Path("myvol".into())).await;
+    let r = crate::volumes::Volumes::delete(State(app.clone()), Path("myvol".into())).await;
     assert_eq!(
         r.status(),
         StatusCode::NO_CONTENT,

@@ -24,7 +24,7 @@ use std::thread;
 use hl_gpu::protocol::model::kernel::KernelDescriptor;
 use hl_gpu::transport::{SubmitHeader, Verdict};
 use hl_gpu::{
-    encode_stream, BufferId, Cmd, ConnectionHandler, FakeClock, GlobalLedger, GpuExecutor, Limits,
+    BufferId, Cmd, ConnectionHandler, FakeClock, GlobalLedger, GpuExecutor, Limits,
     ReadbackRequest, Session,
 };
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
@@ -218,7 +218,7 @@ impl ConnectionHandler for WgpuHost {
         if std::env::var("HL_DUMP_OPS").is_ok() {
             dump_ops(self.submits.load(Ordering::Relaxed), batch);
         }
-        let frame_bytes = encode_stream(batch).len();
+        let frame_bytes = hl_gpu::Encoder::stream(batch).len();
         let mut exec = shared_exec().lock().unwrap_or_else(|e| e.into_inner());
         match hl_gpu::runtime::submit(&mut self.session, &mut *exec, frame_bytes, batch) {
             Ok(_) => {

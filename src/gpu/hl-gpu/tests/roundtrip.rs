@@ -6,7 +6,7 @@ use hl_gpu::protocol::codec::wire::{Decoder, Encoder};
 use hl_gpu::protocol::model::command::*;
 use hl_gpu::protocol::model::descriptor::*;
 use hl_gpu::protocol::model::enums::*;
-use hl_gpu::{decode_stream, encode_stream, GpuError};
+use hl_gpu::GpuError;
 
 /// A representative stream touching every command family: buffer create/write, texture, sampler, both
 /// shader kinds, render + compute pipelines, bind group, surface, fence, a Submit command buffer with a
@@ -323,8 +323,8 @@ fn representative_stream() -> Vec<Cmd> {
 #[test]
 fn stream_round_trips_unchanged() {
     let cmds = representative_stream();
-    let bytes = encode_stream(&cmds);
-    let back = decode_stream(&bytes).expect("decode");
+    let bytes = hl_gpu::Encoder::stream(&cmds);
+    let back = hl_gpu::Decoder::stream(&bytes).expect("decode");
     assert_eq!(cmds, back, "stream must survive encode→decode unchanged");
 }
 
@@ -368,7 +368,7 @@ fn shader_payload_kind_is_reclassified_by_neutral_magic() {
             spirv: vec![0x0000_00ff, 1, 2],
         },
     ];
-    let back = decode_stream(&encode_stream(&cmds)).unwrap();
+    let back = hl_gpu::Decoder::stream(&hl_gpu::Encoder::stream(&cmds)).unwrap();
     assert!(matches!(
         back[0],
         Cmd::CreateShader {
@@ -401,14 +401,14 @@ fn shader_payload_kind_is_reclassified_by_neutral_magic() {
 
 #[test]
 fn decode_rejects_truncation_and_bad_tags() {
-    let bytes = encode_stream(&representative_stream());
+    let bytes = hl_gpu::Encoder::stream(&representative_stream());
     // truncate mid-stream -> contextual ShortBuffer, never a panic
-    let err = decode_stream(&bytes[..bytes.len() - 3]).unwrap_err();
+    let err = hl_gpu::Decoder::stream(&bytes[..bytes.len() - 3]).unwrap_err();
     assert!(
         matches!(&err, GpuError::Decode(m) if m.contains("command") && m.contains("short buffer"))
     );
     // a bogus leading tag byte
-    let err = decode_stream(&[250, 0, 0, 0, 0]).unwrap_err();
+    let err = hl_gpu::Decoder::stream(&[250, 0, 0, 0, 0]).unwrap_err();
     assert!(
         matches!(&err, GpuError::Decode(m) if m.contains("command 0") && m.contains("bad command/encoder tag 250"))
     );
@@ -441,7 +441,7 @@ fn decoder_does_not_preallocate_on_bogus_counts() {
     e.u32(0); // set
     e.u32(0xFFFF_FFFF); // entry count = ~4 billion, no entries follow
     let bytes = e.into_vec();
-    let err = decode_stream(&bytes).unwrap_err();
+    let err = hl_gpu::Decoder::stream(&bytes).unwrap_err();
     assert!(matches!(&err, GpuError::Decode(m) if m.contains("short buffer")));
 }
 
@@ -454,7 +454,7 @@ fn decoder_does_not_preallocate_on_bogus_counts() {
 /// Round-trip one command stream through the codec and assert it comes back unchanged.
 fn rt(cmds: Vec<Cmd>) {
     assert_eq!(
-        decode_stream(&encode_stream(&cmds)).unwrap(),
+        hl_gpu::Decoder::stream(&hl_gpu::Encoder::stream(&cmds)).unwrap(),
         cmds,
         "stream must round-trip: {cmds:?}"
     );
@@ -751,7 +751,7 @@ fn every_shader_payload_kind_classifies_deterministically() {
         ),
     ];
     for (cmd, want) in magic_led {
-        let back = decode_stream(&encode_stream(&[cmd.clone()])).unwrap();
+        let back = hl_gpu::Decoder::stream(&hl_gpu::Encoder::stream(&[cmd.clone()])).unwrap();
         match &back[0] {
             Cmd::CreateShader { kind, .. } => {
                 assert_eq!(*kind, want, "magic-led payload must reclassify to {want:?}")
@@ -761,7 +761,7 @@ fn every_shader_payload_kind_classifies_deterministically() {
     }
     // DemoBuiltin (no magic) decodes as LegacyMsl — the only kinds that do not round-trip by design.
     for kind in [ShaderPayloadKind::DemoBuiltin, ShaderPayloadKind::LegacyMsl] {
-        let back = decode_stream(&encode_stream(&[Cmd::CreateShader {
+        let back = hl_gpu::Decoder::stream(&hl_gpu::Encoder::stream(&[Cmd::CreateShader {
             id: 1,
             kind,
             spirv: vec![0x4141_4141, 0x4242_4242],

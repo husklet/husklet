@@ -7,80 +7,83 @@ use super::super::*;
 /// (a named volume, carrying Name + resolved Source mountpoint + Driver), `--mount` bind/volume specs
 /// (volume ones likewise carry Name/Driver), and `--tmpfs`/`type=tmpfs` as Type=tmpfs. Previously only
 /// `c.binds` were enumerated and everything was hardcoded Type=bind (Name/Driver/tmpfs all dropped).
-pub(super) fn container_mounts_json(vols: &[Vol], c: &Container) -> Vec<Value> {
-    let vol_mp = |name: &str| {
-        vols.iter()
-            .find(|v| v.name == name)
-            .map(|v| v.mountpoint.clone())
-            .unwrap_or_default()
-    };
-    let mut out: Vec<Value> = Vec::new();
-    let to_val = |m: crate::api::MountPoint| serde_json::to_value(m).unwrap_or(Value::Null);
-    for b in &c.binds {
-        if let Some((src, dst, ro)) = parse_bind(b) {
-            if src.starts_with('/') {
+impl Container {
+    pub(super) fn mounts_json(&self, vols: &[Vol]) -> Vec<Value> {
+        let c = self;
+        let vol_mp = |name: &str| {
+            vols.iter()
+                .find(|v| v.name == name)
+                .map(|v| v.mountpoint.clone())
+                .unwrap_or_default()
+        };
+        let mut out: Vec<Value> = Vec::new();
+        let to_val = |m: crate::api::MountPoint| serde_json::to_value(m).unwrap_or(Value::Null);
+        for b in &c.binds {
+            if let Some((src, dst, ro)) = Bind::parse(b) {
+                if src.starts_with('/') {
+                    out.push(to_val(crate::api::MountPoint {
+                        type_: "bind".into(),
+                        name: None,
+                        source: src.to_string(),
+                        destination: dst.to_string(),
+                        driver: None,
+                        mode: Some(if ro { "ro" } else { "" }.to_string()),
+                        rw: !ro,
+                        propagation: "rprivate",
+                    }));
+                } else {
+                    out.push(to_val(crate::api::MountPoint {
+                        type_: "volume".into(),
+                        name: Some(src.to_string()),
+                        source: vol_mp(src),
+                        destination: dst.to_string(),
+                        driver: Some("local"),
+                        mode: Some(if ro { "ro" } else { "z" }.to_string()),
+                        rw: !ro,
+                        propagation: "",
+                    }));
+                }
+            }
+        }
+        for m in &c.mounts {
+            if m.typ == "volume" {
                 out.push(to_val(crate::api::MountPoint {
-                    type_: "bind".into(),
-                    name: None,
-                    source: src.to_string(),
-                    destination: dst.to_string(),
-                    driver: None,
-                    mode: Some(if ro { "ro" } else { "" }.to_string()),
-                    rw: !ro,
-                    propagation: "rprivate",
+                    type_: "volume".into(),
+                    name: Some(m.source.clone()),
+                    source: vol_mp(&m.source),
+                    destination: m.target.clone(),
+                    driver: Some("local"),
+                    mode: None,
+                    rw: !m.read_only,
+                    propagation: "",
                 }));
             } else {
                 out.push(to_val(crate::api::MountPoint {
-                    type_: "volume".into(),
-                    name: Some(src.to_string()),
-                    source: vol_mp(src),
-                    destination: dst.to_string(),
-                    driver: Some("local"),
-                    mode: Some(if ro { "ro" } else { "z" }.to_string()),
-                    rw: !ro,
-                    propagation: "",
+                    type_: m.typ.clone(),
+                    name: None,
+                    source: m.source.clone(),
+                    destination: m.target.clone(),
+                    driver: None,
+                    mode: None,
+                    rw: !m.read_only,
+                    propagation: "rprivate",
                 }));
             }
         }
-    }
-    for m in &c.mounts {
-        if m.typ == "volume" {
-            out.push(to_val(crate::api::MountPoint {
-                type_: "volume".into(),
-                name: Some(m.source.clone()),
-                source: vol_mp(&m.source),
-                destination: m.target.clone(),
-                driver: Some("local"),
-                mode: None,
-                rw: !m.read_only,
-                propagation: "",
-            }));
-        } else {
-            out.push(to_val(crate::api::MountPoint {
-                type_: m.typ.clone(),
-                name: None,
-                source: m.source.clone(),
-                destination: m.target.clone(),
-                driver: None,
-                mode: None,
-                rw: !m.read_only,
-                propagation: "rprivate",
-            }));
+        for target in c.tmpfs.keys() {
+            out.push(
+                serde_json::to_value(crate::api::TmpfsMountPoint {
+                    type_: "tmpfs",
+                    source: "",
+                    destination: target.clone(),
+                    rw: true,
+                    mode: "",
+                })
+                .unwrap_or(Value::Null),
+            );
         }
+        out
     }
-    for target in c.tmpfs.keys() {
-        out.push(
-            serde_json::to_value(crate::api::TmpfsMountPoint {
-                type_: "tmpfs",
-                source: "",
-                destination: target.clone(),
-                rw: true,
-                mode: "",
-            })
-            .unwrap_or(Value::Null),
-        );
-    }
-    out
 }
 
 #[cfg(test)]
@@ -102,7 +105,7 @@ mod tests {
     fn bind_with_absolute_source_is_type_bind() {
         let mut c = Container::default();
         c.binds = vec!["/host/data:/data".into()];
-        let out = container_mounts_json(&[], &c);
+        let out = c.mounts_json(&[]);
         assert_eq!(out.len(), 1);
         let m = &out[0];
         assert_eq!(m["Type"], "bind");
@@ -119,7 +122,7 @@ mod tests {
         let mut c = Container::default();
         c.binds = vec!["myvol:/data:ro".into()];
         let vols = [vol("myvol", "/var/lib/hl/volumes/myvol")];
-        let out = container_mounts_json(&vols, &c);
+        let out = c.mounts_json(&vols);
         let m = &out[0];
         assert_eq!(m["Type"], "volume");
         assert_eq!(m["Name"], "myvol");
@@ -141,7 +144,7 @@ mod tests {
             read_only: true,
             bind_options: None,
         }];
-        let out = container_mounts_json(&[vol("data", "/mp/data")], &c);
+        let out = c.mounts_json(&[vol("data", "/mp/data")]);
         let m = &out[0];
         assert_eq!(m["Type"], "volume");
         assert_eq!(m["Name"], "data");
@@ -160,7 +163,7 @@ mod tests {
             read_only: false,
             bind_options: None,
         }];
-        let out = container_mounts_json(&[], &c);
+        let out = c.mounts_json(&[]);
         let m = &out[0];
         assert_eq!(m["Type"], "bind");
         assert_eq!(m["Source"], "/h");
@@ -173,7 +176,7 @@ mod tests {
     fn tmpfs_target_becomes_tmpfs_mountpoint() {
         let mut c = Container::default();
         c.tmpfs.insert("/run".into(), "size=64m".into());
-        let out = container_mounts_json(&[], &c);
+        let out = c.mounts_json(&[]);
         assert_eq!(out.len(), 1);
         let m = &out[0];
         assert_eq!(m["Type"], "tmpfs");

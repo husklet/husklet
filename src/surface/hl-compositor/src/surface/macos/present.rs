@@ -34,9 +34,9 @@ use crate::scene::port::{
 };
 
 use super::capture::Capture;
-use super::iosurface::{cfrelease, dimensions, lookup};
-use super::metal::{bgra_to_rgba, MetalCtx};
-use super::window::{ensure_app, MetalWindow, ResizeDrag};
+use super::iosurface::IOSurface;
+use super::metal::{BgraFrame, MetalCtx};
+use super::window::{DisplayConfig, MetalWindow, NativeApplication, ResizeDrag};
 
 /// The pixel source a surface last attached — resolved to an `MTLTexture` at present time.
 enum Content {
@@ -120,10 +120,10 @@ pub struct MacPresenter {
 
 impl MacPresenter {
     pub fn primary_output_spec_on_main_thread() -> Option<String> {
-        super::window::primary_output_spec(MainThreadMarker::new()?)
+        DisplayConfig::new(MainThreadMarker::new()?).primary_spec()
     }
     pub fn primary_refresh_millihz_on_main_thread() -> Option<i64> {
-        super::window::primary_refresh_millihz(MainThreadMarker::new()?)
+        DisplayConfig::new(MainThreadMarker::new()?).primary_refresh_millihz()
     }
     /// Construct the visible presenter when called from the process main thread.
     pub fn new_windowed_on_main_thread() -> Option<MacPresenter> {
@@ -155,7 +155,7 @@ impl MacPresenter {
     /// main thread; a visible window additionally needs a GUI login session. `None` if Metal is
     /// unavailable / the pipeline fails.
     pub fn new_windowed(mtm: MainThreadMarker) -> Option<MacPresenter> {
-        ensure_app(mtm);
+        NativeApplication::ensure(mtm);
         let ctx = MetalCtx::new()?;
         let pipeline = ctx.make_composite_pipeline()?;
         let mut presenter = MacPresenter {
@@ -274,7 +274,7 @@ impl MacPresenter {
     pub fn last_rgba(&self, sid: SurfaceId) -> Option<(u32, u32, Vec<u8>)> {
         let (w, h, tex) = self.surfaces.get(&sid)?.composite.as_ref()?;
         let bgra = self.ctx.readback_bgra(tex, *w, *h);
-        Some((*w, *h, bgra_to_rgba(&bgra)))
+        Some((*w, *h, BgraFrame::new(&bgra).rgba()))
     }
 
     /// Compose surface `sid`'s attached content into its persistent target. Returns the composite
@@ -287,7 +287,7 @@ impl MacPresenter {
         let content = st.content.as_ref().ok_or("no content attached")?;
 
         // Resolve the source texture (and its device-pixel size) from the attached content.
-        let (src, w, h, io) = match content {
+        let (src, w, h) = match content {
             Content::Bgra { bgra, w, h, damage } => {
                 let expected = usize::try_from(*w)
                     .ok()
@@ -332,18 +332,16 @@ impl MacPresenter {
                     st.uploads[index].2.clone()
                 };
                 st.upload_cursor = (st.upload_cursor + 1) % 3;
-                (tex, *w, *h, std::ptr::null_mut())
+                (tex, *w, *h)
             }
             Content::IoSurfaceId(id) => {
-                let surface = unsafe { lookup(*id) };
-                if surface.is_null() {
-                    return Err(format!("IOSurface id {id} not found"));
-                }
-                let (sw, sh, _) = unsafe { dimensions(surface) };
+                let surface =
+                    IOSurface::lookup(*id).ok_or_else(|| format!("IOSurface id {id} not found"))?;
+                let (sw, sh, _) = surface.dimensions();
                 let tex = self
                     .ctx
-                    .texture_from_iosurface(surface, sw as u32, sh as u32);
-                (tex, sw as u32, sh as u32, surface)
+                    .texture_from_iosurface(surface.as_ptr(), sw as u32, sh as u32);
+                (tex, sw as u32, sh as u32)
             }
         };
 
@@ -423,9 +421,6 @@ impl MacPresenter {
             // therefore still require completion here.
             self.mtm.is_none() || self.capture.is_some(),
         );
-        if !io.is_null() {
-            unsafe { cfrelease(io) };
-        }
         Ok((out_w, out_h))
     }
 }
@@ -650,7 +645,7 @@ impl Presenter for MacPresenter {
                         }),
                         NSEventType::KeyDown | NSEventType::KeyUp => {
                             self.sync_key_modifiers(event.modifierFlags());
-                            if let Some(keycode) = mac_keycode_to_evdev(event.keyCode()) {
+                            if let Some(keycode) = KeyCode(event.keyCode()).evdev() {
                                 self.events.push(PresenterEvent::Key {
                                     keycode,
                                     pressed: event_type == NSEventType::KeyDown,
@@ -707,7 +702,10 @@ impl Presenter for MacPresenter {
                 // While entering full-screen AppKit briefly reports intermediate frames before the
                 // FullScreen style becomes authoritative. The client already has its XDG configure;
                 // do not turn those animation frames into contradictory windowed configures.
-                if state.desired.as_ref().is_some_and(|desired| desired.fullscreen)
+                if state
+                    .desired
+                    .as_ref()
+                    .is_some_and(|desired| desired.fullscreen)
                     && !native_fullscreen
                     && !fullscreen_changed
                 {
@@ -719,25 +717,18 @@ impl Presenter for MacPresenter {
                     .is_some_and(|(resize_surface, _)| *resize_surface == surface);
                 let maximized = !live_resize
                     && !native_fullscreen
-                    && state.desired.as_ref().is_some_and(|desired| desired.maximized);
-                state.native_resize_pending = Some((
-                    size.0,
-                    size.1,
-                    maximized,
-                    native_fullscreen,
-                    live_resize,
-                ));
+                    && state
+                        .desired
+                        .as_ref()
+                        .is_some_and(|desired| desired.maximized);
+                state.native_resize_pending =
+                    Some((size.0, size.1, maximized, native_fullscreen, live_resize));
                 state.native_resize_changed_at = Some(Instant::now());
             } else if fullscreen_changed {
                 // A native full-screen exit can finish without a final size delta. Still acknowledge
                 // the mode change so stale XDG state cannot request full-screen again.
-                state.native_resize_pending = Some((
-                    size.0,
-                    size.1,
-                    false,
-                    native_fullscreen,
-                    false,
-                ));
+                state.native_resize_pending =
+                    Some((size.0, size.1, false, native_fullscreen, false));
                 state.native_resize_changed_at = Some(Instant::now());
             }
         }
@@ -746,7 +737,9 @@ impl Presenter for MacPresenter {
             // Coalesce native geometry changes to at most one configure per display frame. Always keep
             // `native_resize_pending` at the newest AppKit size; XDG permits clients to acknowledge the
             // latest configure directly, and rendering superseded sizes creates seconds of resize debt.
-            if let Some((width, height, maximized, fullscreen, resizing)) = state.native_resize_pending {
+            if let Some((width, height, maximized, fullscreen, resizing)) =
+                state.native_resize_pending
+            {
                 let due = state
                     .native_resize_sent_at
                     .is_none_or(|sent| now.duration_since(sent) >= Duration::from_millis(8));
@@ -994,64 +987,68 @@ impl Presenter for MacPresenter {
 
 /// macOS virtual key code to Linux evdev. Covers the standard ANSI keyboard; unknown media/vendor keys
 /// are deliberately ignored instead of emitting the wrong key.
-fn mac_keycode_to_evdev(code: u16) -> Option<u32> {
-    Some(match code {
-        0 => 30,
-        1 => 31,
-        2 => 32,
-        3 => 33,
-        4 => 35,
-        5 => 34,
-        6 => 44,
-        7 => 45,
-        8 => 46,
-        9 => 47,
-        11 => 48,
-        12 => 16,
-        13 => 17,
-        14 => 18,
-        15 => 19,
-        16 => 21,
-        17 => 20,
-        18 => 2,
-        19 => 3,
-        20 => 4,
-        21 => 5,
-        22 => 7,
-        23 => 6,
-        24 => 13,
-        25 => 10,
-        26 => 8,
-        27 => 12,
-        28 => 9,
-        29 => 11,
-        30 => 27,
-        31 => 24,
-        32 => 22,
-        33 => 26,
-        34 => 23,
-        35 => 25,
-        36 => 28,
-        37 => 38,
-        38 => 36,
-        39 => 40,
-        40 => 37,
-        41 => 39,
-        42 => 43,
-        43 => 51,
-        44 => 53,
-        45 => 49,
-        46 => 50,
-        47 => 52,
-        48 => 15,
-        49 => 57,
-        50 => 41,
-        51 => 14,
-        53 => 1,
-        123 => 105,
-        124 => 106,
-        125 => 108,
-        126 => 103,
-        _ => return None,
-    })
+struct KeyCode(u16);
+
+impl KeyCode {
+    fn evdev(self) -> Option<u32> {
+        Some(match self.0 {
+            0 => 30,
+            1 => 31,
+            2 => 32,
+            3 => 33,
+            4 => 35,
+            5 => 34,
+            6 => 44,
+            7 => 45,
+            8 => 46,
+            9 => 47,
+            11 => 48,
+            12 => 16,
+            13 => 17,
+            14 => 18,
+            15 => 19,
+            16 => 21,
+            17 => 20,
+            18 => 2,
+            19 => 3,
+            20 => 4,
+            21 => 5,
+            22 => 7,
+            23 => 6,
+            24 => 13,
+            25 => 10,
+            26 => 8,
+            27 => 12,
+            28 => 9,
+            29 => 11,
+            30 => 27,
+            31 => 24,
+            32 => 22,
+            33 => 26,
+            34 => 23,
+            35 => 25,
+            36 => 28,
+            37 => 38,
+            38 => 36,
+            39 => 40,
+            40 => 37,
+            41 => 39,
+            42 => 43,
+            43 => 51,
+            44 => 53,
+            45 => 49,
+            46 => 50,
+            47 => 52,
+            48 => 15,
+            49 => 57,
+            50 => 41,
+            51 => 14,
+            53 => 1,
+            123 => 105,
+            124 => 106,
+            125 => 108,
+            126 => 103,
+            _ => return None,
+        })
+    }
 }

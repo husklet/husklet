@@ -74,7 +74,7 @@ fn readback(
     p: DevicePtr,
     len: usize,
 ) -> Vec<u8> {
-    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    let (buf, off): (BufferId, u64) = ctx.device_location(p).unwrap();
     sink.read_buffer(buf, off, len).unwrap()
 }
 
@@ -207,7 +207,7 @@ fn tiled_matmul_shared_memory_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, MATMUL_TILED_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(MATMUL_TILED_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "mm_tiled").unwrap();
 
     let da = upload(&mut sink, &mut ctx, &i32s_to_bytes(&a));
@@ -363,7 +363,7 @@ fn prefix_scan_inclusive_and_exclusive_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, BLOCK_SCAN_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(BLOCK_SCAN_PTX.as_bytes()).unwrap();
     let scan_fn = load_module::module_get_function(&ctx, module, "block_scan").unwrap();
     let add_fn = load_module::module_get_function(&ctx, module, "add_offset").unwrap();
 
@@ -553,9 +553,9 @@ fn histogram_atomic_global_and_shared_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module_g = load_module::module_load_data(&mut ctx, HIST_GLOBAL_PTX.as_bytes()).unwrap();
+    let module_g = ctx.load_module(HIST_GLOBAL_PTX.as_bytes()).unwrap();
     let gfn = load_module::module_get_function(&ctx, module_g, "hist_global").unwrap();
-    let module_s = load_module::module_load_data(&mut ctx, HIST_SHARED_PTX.as_bytes()).unwrap();
+    let module_s = ctx.load_module(HIST_SHARED_PTX.as_bytes()).unwrap();
     let sfn = load_module::module_get_function(&ctx, module_s, "hist_shared").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
@@ -687,7 +687,7 @@ fn conv1d_box_shared_halo_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, CONV1D_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(CONV1D_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "conv1d_box").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
@@ -801,7 +801,7 @@ fn conv2d_box_blur_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, CONV2D_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(CONV2D_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "conv2d_box").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&img));
@@ -945,7 +945,7 @@ fn sobel3x3_gradient_magnitude_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, SOBEL_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(SOBEL_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "sobel3x3").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&img));
@@ -1041,7 +1041,7 @@ fn reduce_segmented_sum_and_max_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, SEG_REDUCE_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(SEG_REDUCE_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "seg_reduce").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
@@ -1165,7 +1165,7 @@ fn transpose_shared_memory_coalesced_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, TRANSPOSE_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(TRANSPOSE_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "transpose").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
@@ -1274,7 +1274,7 @@ fn bitonic_sort_power_of_two_exact() {
 
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, BITONIC_PTX.as_bytes()).unwrap();
+    let module = ctx.load_module(BITONIC_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, "bitonic").unwrap();
 
     let d_data = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
@@ -1359,7 +1359,7 @@ const SREG_MOVFIRST_PTX: &str = r#"
 fn run_gidx(ptx_src: &str, entry: &str, grid: u32, block: u32, n: usize) -> Vec<i32> {
     let mut sink = harness();
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut ctx, ptx_src.as_bytes()).unwrap();
+    let module = ctx.load_module(ptx_src.as_bytes()).unwrap();
     let func = load_module::module_get_function(&ctx, module, entry).unwrap();
     let d_out = alloc_zeroed_i32(&mut sink, &mut ctx, n);
     let args = vec![KernelArg::Ptr(d_out), sc(n as i32)];

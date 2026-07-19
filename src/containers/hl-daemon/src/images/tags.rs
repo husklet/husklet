@@ -20,15 +20,15 @@ pub(crate) async fn image_tag(
     Query(q): Query<TagQ>,
 ) -> Response {
     let mut g = a.inner.lock().await;
-    let Some(src) = find_image(&g.images, &name).cloned() else {
-        return no_such_image(&name);
+    let Some(src) = DiscoveredImages::new(&g.images).find(&name).cloned() else {
+        return ErrorMessage::no_such_image(&name);
     };
     // Keep the FULL target repository (registry + namespace), e.g. `huttarichard/ddmac` — NOT the bare
-    // name. Stripping it (ref_name) would later push to `library/<name>` and be denied. docker sends the
+    // name. Stripping it to a bare component would later push to `library/<name>` and be denied.
     // repo without a tag and the tag separately.
     let repo = q.repo.unwrap_or_default();
     if repo.is_empty() {
-        return bad_request("repo required");
+        return ErrorMessage::bad_request("repo required");
     }
     let full = match q.tag.filter(|t| !t.is_empty()) {
         Some(t) => format!("{repo}:{t}"),
@@ -38,7 +38,7 @@ pub(crate) async fn image_tag(
     // Persist the alias so it SURVIVES a daemon restart / rediscovery: tags live only in memory otherwise,
     // and discovery rebuilds images from on-disk rootfs dirs (which carry only the canonical name), so a
     // `docker tag` alias would silently vanish on restart. `persist_tag_alias` records alias -> rootfs.
-    crate::util::persist_tag_alias(&a.images_dir, &full, &src.rootfs);
+    crate::util::Discovery::new(&a.images_dir).persist_alias(&full, &src.rootfs);
     crate::events::emit_event(&a.events, "image", "tag", &full, json!({"name": full}));
     StatusCode::CREATED.into_response()
 }
@@ -76,13 +76,17 @@ pub(crate) async fn image_delete(
 ) -> Response {
     let mut g = a.inner.lock().await;
     let force = matches!(q.force.as_deref(), Some("1") | Some("true"));
-    let (want_repo, want_tag) = (ref_repo(&name), ref_tag(&name));
+    let wanted = ImageRef::from(&name);
+    let (want_repo, want_tag) = (wanted.repository_identity(), wanted.tag);
     // The single tag entry the reference names (repository AND tag must match). Match on the FULLY-
-    // QUALIFIED repository (`ref_repo`), NOT the bare basename: `rmi nginx` must not delete an unrelated
+    // QUALIFIED repository identity, NOT the bare basename: `rmi nginx` must not delete an unrelated
     // `linuxserver/nginx:latest` that merely shares the final path segment.
-    let matches = |i: &Image| ref_repo(&i.name) == want_repo && ref_tag(&i.name) == want_tag;
+    let matches = |i: &Image| {
+        let reference = ImageRef::from(&i.name);
+        reference.repository_identity() == want_repo && reference.tag == want_tag
+    };
     let Some(target) = g.images.iter().find(|i| matches(i)).cloned() else {
-        return no_such_image(&name);
+        return ErrorMessage::no_such_image(&name);
     };
     // Whether ANY container is still backed by this rootfs. Keyed on the resolved `rootfs`, NOT the tag
     // being deleted: a container created through an OLDER alias (`c.image = "old"`) still references the
@@ -105,11 +109,11 @@ pub(crate) async fn image_delete(
             .find(|c| c.rootfs == target.rootfs)
             .map(|c| c.id[..c.id.len().min(12)].to_string())
             .unwrap_or_default();
-        return conflict(format!(
+        return ErrorMessage::conflict(format!(
             "conflict: unable to delete {name} (must be forced) - image is being used by container {cid}"
         ));
     }
-    let untagged = repo_tag(&target.name);
+    let untagged = ImageRef::from(&target.name).short();
     // Whether removing THIS tag leaves the rootfs unreferenced (its layers should then be deleted). Computed
     // BEFORE mutating the store so a failed on-disk removal can abort WITHOUT having dropped image state.
     let last_ref = g
@@ -128,17 +132,17 @@ pub(crate) async fn image_delete(
         // on-disk removal FAILS, keep the image in state (retryable) and report an error rather than
         // dropping state while the store entry lingers on disk.
         if let Err(e) = hl_images::Store::new(&a.images_dir).remove_image_dir(&target.rootfs) {
-            return server_error(format!("failed to remove image store entry: {e}"));
+            return ErrorMessage::server_error(format!("failed to remove image store entry: {e}"));
         }
-        report.push(DeleteRecord::Deleted(image_id(&target)));
+        report.push(DeleteRecord::Deleted(target.id()));
     }
     g.images.retain(|i| !matches(i)); // remove only this tag, never sibling tags of the same repo
     crate::events::emit_event(
         &a.events,
         "image",
         "delete",
-        ref_name(&name), // event actor keeps the short reference name, as before
-        json!({"name": repo_tag(&target.name)}),
+        ImageRef::from(&name).name(), // event actor keeps the short reference name, as before
+        json!({"name": ImageRef::from(&target.name).short()}),
     );
     Json(report).into_response()
 }
@@ -147,30 +151,37 @@ pub(crate) async fn image_delete(
 /// (keyed by `repository:tag`). A safety net for a lookup miss: an image whose rootfs + `hl-image.json`
 /// exist on disk but isn't registered in memory (e.g. pulled/built by another daemon process, or dropped
 /// in out-of-band) becomes visible without a daemon restart. Returns true if anything new was added.
-pub(crate) async fn rescan_images(a: &App) -> bool {
-    let dir = a.images_dir.clone();
-    let found = tokio::task::spawn_blocking(move || discover_images(&dir))
-        .await
-        .unwrap_or_default();
-    let mut g = a.inner.lock().await;
-    let mut added = false;
-    for img in found {
-        let tag = repo_tag(&img.name);
-        if !g.images.iter().any(|i| repo_tag(&i.name) == tag) {
-            g.images.push(img);
-            added = true;
+pub(crate) struct Images;
+impl Images {
+    pub(crate) async fn rescan(a: &App) -> bool {
+        let dir = a.images_dir.clone();
+        let found = tokio::task::spawn_blocking(move || Discovery::new(&dir).images())
+            .await
+            .unwrap_or_default();
+        let mut g = a.inner.lock().await;
+        let mut added = false;
+        for img in found {
+            let tag = ImageRef::from(&img.name).short();
+            if !g
+                .images
+                .iter()
+                .any(|i| ImageRef::from(&i.name).short() == tag)
+            {
+                g.images.push(img);
+                added = true;
+            }
         }
+        added
     }
-    added
-}
 
-/// Register a freshly load/import-ed image in the daemon's in-memory state, replacing any existing
-/// image sharing the same `repository:tag` (mirrors the re-pull dedupe in `images_create`).
-pub(crate) async fn register_image(a: &App, img: Image) {
-    let mut g = a.inner.lock().await;
-    let tag = repo_tag(&img.name);
-    g.images.retain(|i| repo_tag(&i.name) != tag);
-    g.images.push(img);
+    /// Register a freshly load/import-ed image in the daemon's in-memory state, replacing any existing
+    /// image sharing the same `repository:tag` (mirrors the re-pull dedupe in `images_create`).
+    pub(crate) async fn register(a: &App, img: Image) {
+        let mut g = a.inner.lock().await;
+        let tag = ImageRef::from(&img.name).short();
+        g.images.retain(|i| ImageRef::from(&i.name).short() != tag);
+        g.images.push(img);
+    }
 }
 
 #[cfg(test)]
@@ -217,8 +228,8 @@ mod tests {
         apply_tag(&mut images, &src, "src:v2");
         assert_eq!(images.len(), 2, "a new tag adds a second reference");
         assert_eq!(
-            image_id(&images[0]),
-            image_id(&images[1]),
+            images[0].id(),
+            images[1].id(),
             "two tags of one rootfs must share one image id"
         );
     }
@@ -226,8 +237,8 @@ mod tests {
     #[test]
     fn image_id_differs_for_distinct_rootfs() {
         assert_ne!(
-            image_id(&img("a:latest", "/store/a")),
-            image_id(&img("b:latest", "/store/b")),
+            img("a:latest", "/store/a").id(),
+            img("b:latest", "/store/b").id(),
             "distinct rootfs content must yield distinct image ids"
         );
     }
@@ -237,9 +248,13 @@ mod tests {
     #[test]
     fn rmi_match_key_is_fully_qualified_repository() {
         // The closure image_delete uses: fully-qualified repo AND tag must match.
-        let want_repo = ref_repo("nginx");
-        let want_tag = ref_tag("nginx");
-        let matches = |i: &Image| ref_repo(&i.name) == want_repo && ref_tag(&i.name) == want_tag;
+        let wanted = ImageRef::from("nginx");
+        let want_repo = wanted.repository_identity();
+        let want_tag = wanted.tag;
+        let matches = |i: &Image| {
+            let reference = ImageRef::from(&i.name);
+            reference.repository_identity() == want_repo && reference.tag == want_tag
+        };
         assert!(
             matches(&img("nginx:latest", "/store/n")),
             "bare nginx matches nginx:latest"

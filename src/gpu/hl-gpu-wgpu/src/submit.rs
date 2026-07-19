@@ -18,17 +18,9 @@ use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 use hl_log::tag;
 
-use crate::convert::{clear_texel, texel_bytes, texture_format};
-use crate::pipeline::{self, PipelineNative};
-use crate::{bindgroup, buffer, fence, texture, WgpuExecutor};
-
-/// Protocol index format → wgpu index format.
-fn index_format(f: IndexFormat) -> wgpu::IndexFormat {
-    match f {
-        IndexFormat::U16 => wgpu::IndexFormat::Uint16,
-        IndexFormat::U32 => wgpu::IndexFormat::Uint32,
-    }
-}
+use crate::convert::Format;
+use crate::pipeline::PipelineNative;
+use crate::{buffer, fence, texture, WgpuExecutor};
 
 /// Intersect a GL-style viewport rect `(x, y, w, h)` with the render target `[0, tw] × [0, th]` so it
 /// satisfies wgpu's strict `RenderPass::set_viewport` bounds (`x,y >= 0`, `x+w <= tw`, `y+h <= th`, `w,h > 0`
@@ -97,7 +89,7 @@ impl WgpuExecutor {
                     color,
                 } => {
                     let (fmt, tw, th) = {
-                        let t = texture::native(res, *texture)?;
+                        let t = texture::WgpuTexture::get(res, *texture)?;
                         (t.format, t.width, t.height)
                     };
                     // Clamp the rect to the texture, exactly as the CPU oracle's `clear_rect` does: a rect
@@ -112,7 +104,7 @@ impl WgpuExecutor {
                     let cw = x.saturating_add(*w).min(tw).saturating_sub(x0);
                     let ch = y.saturating_add(*h).min(th).saturating_sub(y0);
                     if cw != 0 && ch != 0 {
-                        let texel = clear_texel(fmt, *color)?;
+                        let texel = Format::from(fmt).clear_texel(*color)?;
                         let mut data = Vec::with_capacity(texel.len() * cw as usize * ch as usize);
                         for _ in 0..(cw as usize * ch as usize) {
                             data.extend_from_slice(&texel);
@@ -142,9 +134,9 @@ impl WgpuExecutor {
                     bytes_per_row,
                 } => {
                     let (bpt, tw, th, mips) = {
-                        let t = texture::native(res, *src)?;
+                        let t = texture::WgpuTexture::get(res, *src)?;
                         (
-                            texel_bytes(t.format)? as u32,
+                            Format::from(t.format).texel_bytes()? as u32,
                             t.width,
                             t.height,
                             t.mip_levels,
@@ -193,7 +185,7 @@ impl WgpuExecutor {
                     height,
                 } => {
                     let (bpt, dst_depth) = {
-                        let t = texture::native(res, *dst)?;
+                        let t = texture::WgpuTexture::get(res, *dst)?;
                         // The destination region (`mip`, `width`, `height`) must fit the texture: an
                         // out-of-range mip or a `width`/`height` overhanging the mip level would be handed
                         // to `queue.write_texture`, whose bounds validation is a HARD wgpu error (its
@@ -208,7 +200,7 @@ impl WgpuExecutor {
                         if *width > lw || *height > lh {
                             return Err(GpuError::OutOfBounds);
                         }
-                        (texel_bytes(t.format)? as u32, t.depth)
+                        (Format::from(t.format).texel_bytes()? as u32, t.depth)
                     };
                     let row = (*width * bpt) as usize;
                     // `bytes_per_row == 0` means the source rows are tightly packed (the oracle convention).
@@ -298,7 +290,7 @@ impl WgpuExecutor {
             }
         }
         if let Some((f, v)) = cb.signal {
-            fence::signal(res, f, v)?;
+            fence::Fence::signal(res, f, v)?;
         }
         Ok(())
     }
@@ -362,7 +354,7 @@ impl WgpuExecutor {
         // arithmetic (a debug panic) and, unchecked, would also read/write past the allocation. The runtime
         // does not range-check `FillBuffer`, so guard it into a typed `OutOfBounds` (matching `read_bytes`/
         // `write_bytes`).
-        let b = buffer::native(res, id)?;
+        let b = buffer::WgpuBuffer::get(res, id)?;
         let end = offset
             .checked_add(size)
             .filter(|e| *e <= b.size)
@@ -408,9 +400,12 @@ impl WgpuExecutor {
         // texel remap with no resampling. Copy-COMPATIBLE formats keep the fast raw byte copy below, so
         // there is no behaviour or perf change for existing apps.
         let (src_wfmt, dst_wfmt) = {
-            let s = texture::native(res, src)?;
-            let d = texture::native(res, dst)?;
-            (texture_format(s.format)?, texture_format(d.format)?)
+            let s = texture::WgpuTexture::get(res, src)?;
+            let d = texture::WgpuTexture::get(res, dst)?;
+            (
+                Format::from(s.format).native(),
+                Format::from(d.format).native(),
+            )
         };
         if src_wfmt.remove_srgb_suffix() != dst_wfmt.remove_srgb_suffix() {
             hl_log::hl_debug!(
@@ -447,12 +442,20 @@ impl WgpuExecutor {
             ));
         }
         let (sw, sh, s_bpt) = {
-            let t = texture::native(res, src)?;
-            (t.width, t.height, texel_bytes(t.format)? as u32)
+            let t = texture::WgpuTexture::get(res, src)?;
+            (
+                t.width,
+                t.height,
+                Format::from(t.format).texel_bytes()? as u32,
+            )
         };
         let (dw, dh, d_bpt) = {
-            let t = texture::native(res, dst)?;
-            (t.width, t.height, texel_bytes(t.format)? as u32)
+            let t = texture::WgpuTexture::get(res, dst)?;
+            (
+                t.width,
+                t.height,
+                Format::from(t.format).texel_bytes()? as u32,
+            )
         };
         // Copy-compatible formats (checked above) always share a texel size; keep the guard as a defensive
         // invariant so a future format whose sRGB base collides but whose byte size differs cannot slip
@@ -523,11 +526,11 @@ impl WgpuExecutor {
             }
         }
         let (src_view, src_samples, sw, sh, sfmt) = {
-            let t = texture::native(res, src)?;
+            let t = texture::WgpuTexture::get(res, src)?;
             (t.view.clone(), t.sample_count, t.width, t.height, t.format)
         };
         let (dst_view, dst_samples, dw, dh, dfmt) = {
-            let t = texture::native(res, dst)?;
+            let t = texture::WgpuTexture::get(res, dst)?;
             (t.view.clone(), t.sample_count, t.width, t.height, t.format)
         };
         if src_samples <= 1 {
@@ -632,7 +635,7 @@ impl WgpuExecutor {
         let mut target_w = u32::MAX;
         let mut target_h = u32::MAX;
         for c in color {
-            let t = texture::native(res, c.texture)?;
+            let t = texture::WgpuTexture::get(res, c.texture)?;
             target_w = target_w.min(t.width);
             target_h = target_h.min(t.height);
             views.push((t.view.clone(), c));
@@ -646,7 +649,7 @@ impl WgpuExecutor {
         // So the attachment's stencil clear/store is honored precisely when the format has that aspect.
         let depth_view = match depth {
             Some(d) => {
-                let t = texture::native(res, d.texture)?;
+                let t = texture::WgpuTexture::get(res, d.texture)?;
                 // The depth attachment MUST be a depth(+stencil) format: a color-format texture handed as a
                 // `depth_stencil_attachment` is a hard wgpu validation error (its handler panics). The
                 // runtime does not type-check the attachment, so reject a non-depth format here.
@@ -702,7 +705,7 @@ impl WgpuExecutor {
                     let mut groups = Vec::new();
                     for (idx, bound) in cur_groups.iter().enumerate() {
                         if let Some(g) = bound {
-                            let (layout, filter) = match pipeline::native(res, pid)? {
+                            let (layout, filter) = match PipelineNative::get(res, pid)? {
                                 PipelineNative::Render {
                                     pipeline,
                                     used_bindings,
@@ -724,7 +727,7 @@ impl WgpuExecutor {
                             let bg = self.build_bind_group(
                                 res,
                                 &layout,
-                                bindgroup::desc(res, *g)?,
+                                self.bind_group(res, *g)?,
                                 Some(filter),
                             )?;
                             groups.push((idx as u32, bg));
@@ -862,7 +865,7 @@ impl WgpuExecutor {
                         buffer,
                         offset,
                     } => {
-                        let vb = buffer::native(res, *buffer)?;
+                        let vb = buffer::WgpuBuffer::get(res, *buffer)?;
                         // `Buffer::slice(offset..)` PANICS (a hard Rust assert, not a routable wgpu error)
                         // when `offset` runs past the buffer, so a hostile offset must be rejected here.
                         if *offset > vb.size {
@@ -875,11 +878,15 @@ impl WgpuExecutor {
                         offset,
                         format,
                     } => {
-                        let ib = buffer::native(res, *buffer)?;
+                        let ib = buffer::WgpuBuffer::get(res, *buffer)?;
                         if *offset > ib.size {
                             return Err(GpuError::OutOfBounds);
                         }
-                        pass.set_index_buffer(ib.buffer.slice(*offset..), index_format(*format));
+                        let format = match format {
+                            IndexFormat::U16 => wgpu::IndexFormat::Uint16,
+                            IndexFormat::U32 => wgpu::IndexFormat::Uint32,
+                        };
+                        pass.set_index_buffer(ib.buffer.slice(*offset..), format);
                     }
                     Enc::Draw {
                         vertex_count,
@@ -890,7 +897,7 @@ impl WgpuExecutor {
                         let (pid, groups) = &draws[di];
                         di += 1;
                         if let PipelineNative::Render { pipeline, .. } =
-                            pipeline::native(res, *pid)?
+                            PipelineNative::get(res, *pid)?
                         {
                             pass.set_pipeline(pipeline);
                         }
@@ -922,7 +929,7 @@ impl WgpuExecutor {
                         let (pid, groups) = &draws[di];
                         di += 1;
                         if let PipelineNative::Render { pipeline, .. } =
-                            pipeline::native(res, *pid)?
+                            PipelineNative::get(res, *pid)?
                         {
                             pass.set_pipeline(pipeline);
                         }
@@ -997,13 +1004,13 @@ impl WgpuExecutor {
                 Enc::Dispatch { x, y, z } => {
                     hl_log::hl_count!(tag::EXEC, "dispatches");
                     let pid = cur_pipeline.ok_or(GpuError::Invalid("dispatch with no pipeline"))?;
-                    if let PipelineNative::Render { .. } = pipeline::native(res, pid)? {
+                    if let PipelineNative::Render { .. } = PipelineNative::get(res, pid)? {
                         return Err(GpuError::Unsupported("wgpu: dispatch on a render pipeline"));
                     }
                     let mut groups = Vec::new();
                     for (idx, bound) in cur_groups.iter().enumerate() {
                         if let Some(g) = bound {
-                            let layout = match pipeline::native(res, pid)? {
+                            let layout = match PipelineNative::get(res, pid)? {
                                 PipelineNative::Compute { pipeline } => {
                                     pipeline.get_bind_group_layout(idx as u32)
                                 }
@@ -1014,7 +1021,7 @@ impl WgpuExecutor {
                             let bg = self.build_bind_group(
                                 res,
                                 &layout,
-                                bindgroup::desc(res, *g)?,
+                                self.bind_group(res, *g)?,
                                 None,
                             )?;
                             groups.push((idx as u32, bg));
@@ -1051,7 +1058,7 @@ impl WgpuExecutor {
                 timestamp_writes: None,
             });
             for (pid, groups, (x, y, z)) in &dispatches {
-                if let PipelineNative::Compute { pipeline } = pipeline::native(res, *pid)? {
+                if let PipelineNative::Compute { pipeline } = PipelineNative::get(res, *pid)? {
                     pass.set_pipeline(pipeline);
                 }
                 for (idx, bg) in groups {
@@ -1111,7 +1118,7 @@ mod multi_group_render_proof {
     };
 
     use crate::pipeline::PipelineNative;
-    use crate::{bindgroup, pipeline, DeviceConfig, WgpuExecutor};
+    use crate::{bindgroup, DeviceConfig, WgpuExecutor};
 
     // Vertex reads the group-0 uniform (its `.w` scales the clip position → 1.0 = identity), emits a
     // fullscreen triangle with a constant uv.
@@ -1311,7 +1318,7 @@ void main() {
         // its 2 texture/sampler entries do NOT match group 0's single uniform-buffer binding — the exact
         // wgpu validation error that marked Zed's device lost. (The new path builds it against group 1's
         // layout instead, which the passing draw below proves.)
-        let (layout0, filter) = match pipeline::native(&s.resources, 1).unwrap() {
+        let (layout0, filter) = match PipelineNative::get(&s.resources, 1).unwrap() {
             PipelineNative::Render {
                 pipeline,
                 used_bindings,
@@ -1323,7 +1330,12 @@ void main() {
             .device
             .push_error_scope(wgpu::ErrorFilter::Validation);
         let _bad = exec
-            .build_bind_group(&s.resources, &layout0, bindgroup::desc(&s.resources, 2).unwrap(), Some(&filter))
+            .build_bind_group(
+                &s.resources,
+                &layout0,
+                exec.bind_group(&s.resources, 2).unwrap(),
+                Some(&filter),
+            )
             .expect("building the descriptor does not itself return Err (the error surfaces via the scope)");
         let err = pollster::block_on(exec.gpu.device.pop_error_scope()).expect(
             "validating the SET-1 bind group against GROUP 0's layout MUST error — if it did not, this test \

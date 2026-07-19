@@ -20,129 +20,140 @@ fn pull_line(status: String, id: Option<String>, detail: Option<ProgressDetail>)
 }
 
 /// The pull stream's error line as a JSON value, via the typed [`PullError`] DTO.
-fn pull_error_line(e: String) -> Value {
-    serde_json::to_value(PullError {
-        error_detail: ErrorMessage { message: e.clone() },
-        error: e,
-    })
-    .unwrap()
-}
-
-/// Stream a fresh `docker pull` as newline-delimited JSON, flushing each status line as the download
-/// proceeds (mirrors the `events.rs` streamed-body pattern). A background task drives the blocking
-/// registry pull, forwarding its per-layer [`PullEvent`]s into the response body live; on completion it
-/// registers the image and emits the closing `Digest:`/`Status:` lines (or an error line). This replaces
-/// the old "block until done, then dump a fixed sequence" behavior so the client renders moving bars.
-pub(super) fn pull_stream(
-    a: App,
-    name: String,
-    tag: String,
-    want: String,
-    creds: Credentials,
-    archs: Vec<&'static str>,
-) -> Response {
-    // Lines flow out through `line_rx`; the body stream just drains it (closed when the worker drops tx).
-    // An awaited `send` gives natural backpressure (a slow/stalled client throttles the producer rather
-    // than silently dropping lines); a send error just means the client hung up — stop quietly.
-    let (line_tx, line_rx) = mpsc::channel::<Vec<u8>>(256);
-    tokio::spawn(async move {
-        macro_rules! emit {
-            ($v:expr) => {
-                if line_tx
-                    .send(($v.to_string() + "\r\n").into_bytes())
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-            };
-        }
-        let repo = image_ref(&name, &tag).repository;
-        emit!(pull_line(
-            format!("Pulling from {repo}"),
-            Some(tag.clone()),
-            None
-        ));
-        // The blocking pull reports progress over `pev`; forward+format each event into a status line.
-        let (pev_tx, mut pev_rx) = mpsc::channel::<PullEvent>(256);
-        let (dir, nm, tg) = (a.images_dir.clone(), name.clone(), tag.clone());
-        let blocking = tokio::task::spawn_blocking(move || {
-            let mut cb = |e: PullEvent| {
-                let _ = pev_tx.blocking_send(e);
-            };
-            pull_image(&dir, &nm, &tg, creds, &archs, &mut cb)
-        });
-        while let Some(e) = pev_rx.recv().await {
-            emit!(pull_event_json(&e));
-        }
-        let res = blocking
-            .await
-            .unwrap_or_else(|e| Err(format!("pull task crashed: {e}")));
-        match res {
-            Ok(img) => {
-                let digest = format!("sha256:{}", fake_id(&img.name));
-                {
-                    let mut g = a.inner.lock().await;
-                    g.images.retain(|i| repo_tag(&i.name) != want); // a re-pull (new platform) replaces the old
-                    g.images.push(img);
-                }
-                crate::events::emit_event(&a.events, "image", "pull", &want, json!({"name": want}));
-                emit!(pull_line(format!("Digest: {digest}"), None, None));
-                emit!(pull_line(
-                    format!("Status: Downloaded newer image for {name}:{tag}"),
-                    None,
-                    None
-                ));
-            }
-            Err(e) => emit!(pull_error_line(e)),
-        }
-    });
-    let body = futures_util::stream::unfold(line_rx, |mut rx| async move {
-        rx.recv()
-            .await
-            .map(|b| (Ok::<Vec<u8>, std::io::Error>(b), rx))
-    });
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/json")
-        .body(Body::from_stream(body))
+pub(crate) struct Progress;
+impl Progress {
+    fn error(e: String) -> Value {
+        serde_json::to_value(PullError {
+            error_detail: ErrorMessage { message: e.clone() },
+            error: e,
+        })
         .unwrap()
-}
-
-/// Format one live [`PullEvent`] into the docker-shaped JSON status object the CLI renders as a bar.
-fn pull_event_json(e: &PullEvent) -> Value {
-    match e {
-        PullEvent::Layer { id } => pull_line("Pulling fs layer".into(), Some(id.clone()), None),
-        PullEvent::Downloading { id, current, total } => pull_line(
-            "Downloading".into(),
-            Some(id.clone()),
-            Some(ProgressDetail {
-                current: *current as i64,
-                total: *total as i64,
-            }),
-        ),
-        PullEvent::DownloadComplete { id } => {
-            pull_line("Download complete".into(), Some(id.clone()), None)
-        }
-        PullEvent::Extracting { id, current, total } => pull_line(
-            "Extracting".into(),
-            Some(id.clone()),
-            Some(ProgressDetail {
-                current: *current as i64,
-                total: *total as i64,
-            }),
-        ),
-        PullEvent::PullComplete { id } => pull_line("Pull complete".into(), Some(id.clone()), None),
     }
-}
 
-/// Decode the CLI's `X-Registry-Auth` header (base64 JSON credentials) into [`Credentials`].
-pub(crate) fn registry_auth(headers: &axum::http::HeaderMap) -> Credentials {
-    headers
-        .get("X-Registry-Auth")
-        .and_then(|v| v.to_str().ok())
-        .and_then(Credentials::from_x_registry_auth)
-        .unwrap_or_default()
+    /// Stream a fresh `docker pull` as newline-delimited JSON, flushing each status line as the download
+    /// proceeds (mirrors the `events.rs` streamed-body pattern). A background task drives the blocking
+    /// registry pull, forwarding its per-layer [`PullEvent`]s into the response body live; on completion it
+    /// registers the image and emits the closing `Digest:`/`Status:` lines (or an error line). This replaces
+    /// the old "block until done, then dump a fixed sequence" behavior so the client renders moving bars.
+    pub(super) fn pull_stream(
+        a: App,
+        name: String,
+        tag: String,
+        want: String,
+        creds: Credentials,
+        archs: Vec<&'static str>,
+    ) -> Response {
+        // Lines flow out through `line_rx`; the body stream just drains it (closed when the worker drops tx).
+        // An awaited `send` gives natural backpressure (a slow/stalled client throttles the producer rather
+        // than silently dropping lines); a send error just means the client hung up — stop quietly.
+        let (line_tx, line_rx) = mpsc::channel::<Vec<u8>>(256);
+        tokio::spawn(async move {
+            macro_rules! emit {
+                ($v:expr) => {
+                    if line_tx
+                        .send(($v.to_string() + "\r\n").into_bytes())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                };
+            }
+            let repo = ImageRef::with_tag(&name, &tag).repository;
+            emit!(pull_line(
+                format!("Pulling from {repo}"),
+                Some(tag.clone()),
+                None
+            ));
+            // The blocking pull reports progress over `pev`; forward+format each event into a status line.
+            let (pev_tx, mut pev_rx) = mpsc::channel::<PullEvent>(256);
+            let (dir, nm, tg) = (a.images_dir.clone(), name.clone(), tag.clone());
+            let blocking = tokio::task::spawn_blocking(move || {
+                let mut cb = |e: PullEvent| {
+                    let _ = pev_tx.blocking_send(e);
+                };
+                pull_image(&dir, &nm, &tg, creds, &archs, &mut cb)
+            });
+            while let Some(e) = pev_rx.recv().await {
+                emit!(Progress::event(&e));
+            }
+            let res = blocking
+                .await
+                .unwrap_or_else(|e| Err(format!("pull task crashed: {e}")));
+            match res {
+                Ok(img) => {
+                    let digest = format!("sha256:{}", Digest::fake(&img.name));
+                    {
+                        let mut g = a.inner.lock().await;
+                        g.images.retain(|i| ImageRef::from(&i.name).short() != want); // a re-pull (new platform) replaces the old
+                        g.images.push(img);
+                    }
+                    crate::events::emit_event(
+                        &a.events,
+                        "image",
+                        "pull",
+                        &want,
+                        json!({"name": want}),
+                    );
+                    emit!(pull_line(format!("Digest: {digest}"), None, None));
+                    emit!(pull_line(
+                        format!("Status: Downloaded newer image for {name}:{tag}"),
+                        None,
+                        None
+                    ));
+                }
+                Err(e) => emit!(Progress::error(e)),
+            }
+        });
+        let body = futures_util::stream::unfold(line_rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|b| (Ok::<Vec<u8>, std::io::Error>(b), rx))
+        });
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::from_stream(body))
+            .unwrap()
+    }
+
+    /// Format one live [`PullEvent`] into the docker-shaped JSON status object the CLI renders as a bar.
+    fn event(e: &PullEvent) -> Value {
+        match e {
+            PullEvent::Layer { id } => pull_line("Pulling fs layer".into(), Some(id.clone()), None),
+            PullEvent::Downloading { id, current, total } => pull_line(
+                "Downloading".into(),
+                Some(id.clone()),
+                Some(ProgressDetail {
+                    current: *current as i64,
+                    total: *total as i64,
+                }),
+            ),
+            PullEvent::DownloadComplete { id } => {
+                pull_line("Download complete".into(), Some(id.clone()), None)
+            }
+            PullEvent::Extracting { id, current, total } => pull_line(
+                "Extracting".into(),
+                Some(id.clone()),
+                Some(ProgressDetail {
+                    current: *current as i64,
+                    total: *total as i64,
+                }),
+            ),
+            PullEvent::PullComplete { id } => {
+                pull_line("Pull complete".into(), Some(id.clone()), None)
+            }
+        }
+    }
+
+    /// Decode the CLI's `X-Registry-Auth` header (base64 JSON credentials) into [`Credentials`].
+    pub(crate) fn auth(headers: &axum::http::HeaderMap) -> Credentials {
+        headers
+            .get("X-Registry-Auth")
+            .and_then(|v| v.to_str().ok())
+            .and_then(Credentials::from_x_registry_auth)
+            .unwrap_or_default()
+    }
 }
 
 /// docker-style pull progress: a newline-delimited stream of JSON status lines the CLI renders.
@@ -169,8 +180,8 @@ pub(crate) fn pull_progress(
             )
         ),
         Ok(false) => {
-            let repo = image_ref(name, tag).repository;
-            let layer_id = layer_short(&digest);
+            let repo = ImageRef::with_tag(name, tag).repository;
+            let layer_id = LayerId::from_digest(&digest).as_str().to_owned();
             let layer = layer_id.as_str();
             let half = (size / 2).max(0);
             let id = || Some(layer.to_string());
@@ -218,7 +229,7 @@ pub(crate) fn pull_progress(
             .join("\r\n")
                 + "\r\n"
         }
-        Err(e) => pull_error_line(e).to_string() + "\r\n",
+        Err(e) => Progress::error(e).to_string() + "\r\n",
     };
     (StatusCode::OK, [("Content-Type", "application/json")], body).into_response()
 }

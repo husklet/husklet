@@ -47,7 +47,7 @@ impl Renderbuffers {
     }
 
     /// `glIsRenderbuffer` — true once `name` names a generated (non-default) renderbuffer object.
-    pub fn is_renderbuffer(&self, name: u32) -> bool {
+    pub fn contains(&self, name: u32) -> bool {
         name != 0 && self.map.contains_key(&name)
     }
 

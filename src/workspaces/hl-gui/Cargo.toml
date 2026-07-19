@@ -10,3 +10,7 @@ name = "hl_gui"
 path = "src/lib.rs"
 
 [dependencies]
+gtk = { version = "0.9", package = "gtk4", features = ["v4_10"], optional = true }
+
+[features]
+gtk = ["dep:gtk"]

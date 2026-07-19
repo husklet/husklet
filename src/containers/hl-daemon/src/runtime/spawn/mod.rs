@@ -7,7 +7,7 @@ mod spec;
 mod tmpfs;
 
 pub(crate) use live::*;
-pub(crate) use net::write_net_names;
+pub(crate) use net::NetworkNames;
 use spec::*;
 pub(crate) use tmpfs::*;
 
@@ -49,11 +49,11 @@ pub(crate) fn spawn_container(
         // the daemon/host environment.
         .guest_env(&c.env, c.tty)
         // Effective UTS hostname: the user's `--hostname`, else Docker's default 12-char short id.
-        .hostname(etchosts::eff_hostname(&c.id, &c.hostname))
+        .hostname(etchosts::Hosts::hostname(&c.id, &c.hostname))
         .memory_bytes(c.memory.max(0) as u64)
         .pids(c.pids_limit.max(0) as u32)
         // `--cpus`: NanoCpus -> ceil to whole online CPUs (0 = unlimited).
-        .cpus(nano_cpus_to_cpus(c.nano_cpus))
+        .cpus(Resources::cpus(c.nano_cpus))
         .read_only(c.readonly_rootfs);
     for u in &c.ulimits {
         b = b.ulimit(u.name.clone(), u.soft.max(0) as u64, u.hard.max(0) as u64);
@@ -73,7 +73,7 @@ pub(crate) fn spawn_container(
     {
         let key = c.netns_key.as_deref().unwrap_or(&c.id);
         b = b.write_coherence_file(
-            crate::util::fsgen_ensure(key)
+            crate::util::Generation::ensure(key)
                 .to_string_lossy()
                 .into_owned(),
         );
@@ -90,10 +90,10 @@ pub(crate) fn spawn_container(
     b = b.user_spec(&c.rootfs, &c.user);
     // `--security-opt sandbox`/`untrusted`: run under the untrusted-guest sentry (deny-default OS sandbox
     // + syscall forwarding). The daemon-wide default sandbox (operator env) is owned by hl_jit::Runtime.
-    b = b.sandbox(wants_sandbox(&c.security_opt));
+    b = b.sandbox(Sandbox::requested(&c.security_opt));
     // `-v src:dst[:opts]` / Binds. `ro` marks the mount read-only (write-intent EROFS under the mount).
     for bd in &c.binds {
-        if let Some((host, dst, ro)) = parse_bind(bd) {
+        if let Some((host, dst, ro)) = Bind::parse(bd) {
             b = b.bind(resolve_mount_src(host, volumes_dir, vols), dst, ro);
         }
     }
@@ -119,12 +119,13 @@ pub(crate) fn spawn_container(
         if target.is_empty() {
             continue;
         }
-        b = b.bind(tmpfs_hostdir(tmpfs_key, target), target.clone(), false);
+        b = b.bind(Tmpfs::host_dir(tmpfs_key, target), target.clone(), false);
     }
     // Published ports. The daemon owns the process-independent host forwarder (containers/ports.rs), so
     // the engine must NOT start its own in-process listener (which raced/broke prefork servers) — but it
     // still gets the port map to report container ports + keep the guest-side switch redirect.
-    for p in crate::containers::parse_publish(&c.publish)
+    for p in crate::containers::Publish::new(&c.publish)
+        .bindings()
         .into_iter()
         .filter(|p| p.proto == "tcp")
     {

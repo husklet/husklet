@@ -66,63 +66,6 @@ impl Canvas {
     }
 }
 
-/// Run a scripted shell session sized `cols x rows` and return the resulting terminal grid.
-fn session(script: &str, cols: usize, rows: usize) -> Vt {
-    let sh = if std::path::Path::new("/bin/bash").exists() {
-        "/bin/bash"
-    } else {
-        "/bin/sh"
-    };
-    let mut pty = LocalPty::spawn(
-        &[sh, "-c", script],
-        cols as u16,
-        rows as u16,
-        &[("TERM", "xterm-256color")],
-    )
-    .expect("spawn");
-    let mut vt = Vt::new(cols, rows);
-    let fd = pty.master_fd().unwrap();
-    let mut buf = [0u8; 8192];
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut exited = false;
-    loop {
-        let mut pfd = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let pr = unsafe { libc::poll(&mut pfd, 1, 20) };
-        if pr > 0 && pfd.revents & libc::POLLIN != 0 {
-            let n = pty.read(&mut buf).unwrap_or(0);
-            if n > 0 {
-                vt.advance_bytes(&buf[..n]);
-                continue;
-            }
-        }
-        if exited || Instant::now() > deadline {
-            break;
-        }
-        if pty.try_wait().is_some() {
-            exited = true;
-        }
-    }
-    vt
-}
-
-/// Render a short title string into a small RGBA image (green on the tab background).
-fn title_img(text: &str, cols: usize) -> hl_ws_term::render::Image {
-    let mut vt = Vt::new(cols.max(text.len() + 1), 1);
-    vt.advance_bytes(b"\x1b[1;32m");
-    vt.advance_bytes(text.as_bytes());
-    vt.advance_bytes(b"\x1b[?25l"); // no cursor in the tab
-    let r = CpuRenderer {
-        scale: SCALE,
-        bg_default: (0x2b, 0x2b, 0x2b),
-        ..CpuRenderer::default()
-    };
-    r.render(vt.grid())
-}
-
 fn main() {
     let out = std::env::args()
         .nth(1)
@@ -182,7 +125,17 @@ fn main() {
         let (px, py, pw, ph) = (rect.x as u32, rect.y as u32, rect.w as u32, rect.h as u32);
         // Title tab.
         canvas.fill(px, py, pw, TITLE_H, (0x2b, 0x2b, 0x2b));
-        let t = title_img(&format!(" {title}"), (pw / CELL) as usize);
+        let title = format!(" {title}");
+        let mut title_vt = Vt::new(((pw / CELL) as usize).max(title.len() + 1), 1);
+        title_vt.advance_bytes(b"\x1b[1;32m");
+        title_vt.advance_bytes(title.as_bytes());
+        title_vt.advance_bytes(b"\x1b[?25l");
+        let title_renderer = CpuRenderer {
+            scale: SCALE,
+            bg_default: (0x2b, 0x2b, 0x2b),
+            ..CpuRenderer::default()
+        };
+        let t = title_renderer.render(title_vt.grid());
         canvas.blit(px, py + (TITLE_H - CELL) / 2, &t);
         // Terminal area.
         let tx = px + PAD;
@@ -192,7 +145,45 @@ fn main() {
         let cols = (tw / CELL).max(1) as usize;
         let rows = (th / CELL).max(1) as usize;
         canvas.fill(tx, ty, cols as u32 * CELL, rows as u32 * CELL, bg);
-        let vt = session(script, cols, rows);
+        let shell = if std::path::Path::new("/bin/bash").exists() {
+            "/bin/bash"
+        } else {
+            "/bin/sh"
+        };
+        let mut pty = LocalPty::spawn(
+            &[shell, "-c", script],
+            cols as u16,
+            rows as u16,
+            &std::collections::BTreeMap::from([(
+                String::from("TERM"),
+                String::from("xterm-256color"),
+            )]),
+        )
+        .expect("spawn");
+        let mut vt = Vt::new(cols, rows);
+        let fd = pty.master_fd().unwrap();
+        let mut buffer = [0u8; 8192];
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut exited = false;
+        loop {
+            let mut descriptor = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut descriptor, 1, 20) };
+            if ready > 0 && descriptor.revents & libc::POLLIN != 0 {
+                let count = pty.read(&mut buffer).unwrap_or(0);
+                if count > 0 {
+                    vt.advance_bytes(&buffer[..count]);
+                    continue;
+                }
+            }
+            if exited || Instant::now() > deadline {
+                break;
+            }
+            exited = pty.try_wait().is_some();
+        }
         let r = CpuRenderer {
             scale: SCALE,
             bg_default: bg,
@@ -208,7 +199,12 @@ fn main() {
         canvas.border(px, py, pw, ph, bc);
     }
 
-    let png = hl_ws_term::png::encode_rgba(canvas.w, canvas.h, &canvas.px);
+    let png = hl_ws_term::render::Image {
+        width: canvas.w,
+        height: canvas.h,
+        rgba: canvas.px,
+    }
+    .to_png();
     std::fs::write(&out, &png).expect("write");
     eprintln!(
         "wrote {out} ({}x{}px, {} panes)",

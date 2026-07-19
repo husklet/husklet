@@ -1,16 +1,20 @@
-# dd workspace.
-.PHONY: all jit fmt fmt-check test test-ci mac-crates perf test-docker test-docker-full test-compose test-docker-net test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage clean app dmg install uninstall
+# Husklet workspace product.
+.PHONY: all jit design-lint lint-cases fmt fmt-check test test-ci mac-crates perf test-docker test-docker-full test-compose test-docker-net test-realsw test-smoke scenarios scenarios-real scenarios-long scenarios-count scenarios-clean coverage clean app dmg install uninstall
 # Version is the git tag (v0.2.0 -> 0.2.0); falls back to 0.0.0-dev with no tags. CI passes it too.
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
 # Run a command inside the GTK4 dev shell (provides pkg-config/gtk4 + packaging tools on macOS).
 NIX_DEV = nix develop "path:$(CURDIR)/nix" --command
-all: jit
+all: design-lint jit
 jit:            ## build + codesign both guest-arch JITs (via cargo build.rs) + the crates
 	cargo build --release
+design-lint:    ## review free Rust functions with one or two arguments
+	cargo run -q -p hl-design-lint -- src
+lint-cases:     ## generate one review file per one/two-argument free function
+	cargo run -q -p hl-design-lint -- --cases lint src
 test: jit       ## run the engine × case matrix (grouped report); FILTER=name ENGINE=x86_64 to narrow
 	cargo run -q -p hl-jit-darwin --example matrix -- $(if $(ENGINE),-e $(ENGINE)) $(FILTER)
-test-ci: jit    ## the cargo-test path (one matrix test; for CI)
+test-ci: design-lint jit ## design errors + cargo-test path (one matrix test; for CI)
 	cargo test -p hl-jit-darwin
 mac-crates:     ## POST-MERGE GATE (macOS): build+test the mac-only GPU/compositor crates outside default-members.
 	@[ "$$(uname)" = "Darwin" ] || { echo "mac-crates: macOS-only (hl-compositor links libxkbcommon + the Cocoa/Metal present path) — skipping on $$(uname). Maintainer: run via the mac bridge."; exit 0; }
@@ -62,17 +66,16 @@ fmt:            ## format the whole tree: clang-format the C engine + cargo fmt 
 fmt-check:      ## CI: verify clang-format + cargo fmt are clean (no writes)
 	clang-format --dry-run --Werror $(RUNTIME_C)
 	cargo fmt --all -- --check
-app:            ## build + assemble & ad-hoc-sign build/hl.app (the GTK GUI bundle; macOS)
+app:            ## build + assemble and ad-hoc-sign Husklet.app (macOS)
 	@chmod +x src/apps/husklet/package/bundle.sh src/apps/husklet/package/make-dmg.sh
 	cargo clean -p hl-jit-darwin --release                 # FORCE a fresh C engine: build.rs's .c rerun-if-changed is unreliable under CI rust-cache, so a stale engine could otherwise ship (Rust/daemon fixes shipped while engine/C fixes silently didn't)
-	cargo build --release -p hl-daemon -p husklet
+	cargo build --release -p hl-daemon
 	HL_VERSION=$(VERSION) $(NIX_DEV) src/apps/husklet/package/bundle.sh $(VERSION)
 dmg: app        ## build dist/hl-<ver>-<arch>.dmg from the app bundle (macOS)
 	$(NIX_DEV) src/apps/husklet/package/make-dmg.sh $(VERSION)
-install: app    ## copy the app to /Applications and run `dd install` (per-user, no root)
-	rm -rf /Applications/hl.app && cp -R target/hl.app /Applications/
-	cargo run -q -p husklet --bin hl -- install
-uninstall:      ## remove the daemon agent + docker context (keeps ~/.hl unless --purge)
-	cargo run -q -p husklet --bin hl -- uninstall
+install: app    ## copy the workspace app to /Applications
+	rm -rf /Applications/Husklet.app && cp -R target/Husklet.app /Applications/
+uninstall:      ## remove the installed application; workspace data remains under ~/.hl
+	rm -rf /Applications/Husklet.app
 clean:
 	cargo clean

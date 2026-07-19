@@ -10,72 +10,80 @@ use super::super::*;
 /// Reclaim a container's private writable upper layer. Returns the I/O result so `docker rm` can fail
 /// (keeping state for retry) rather than silently orphaning the layer while reporting success. An empty
 /// upper (darwin / legacy containers) or an already-absent dir is `Ok(())` (nothing to do).
-pub(crate) fn discard_container_layer(upper: &str) -> std::io::Result<()> {
-    if upper.is_empty() {
-        return Ok(());
-    }
-    let dir = std::path::Path::new(upper)
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new(upper));
-    if dir.exists() {
-        std::fs::remove_dir_all(dir)?;
-    }
-    Ok(())
+pub(crate) struct Overlay<'a> {
+    pub(crate) upper: &'a str,
+    pub(crate) rootfs: &'a str,
 }
 
-/// Diff a container's copy-on-write upper layer against the image rootfs (the lower), producing the
-/// Docker `diff` kinds keyed by container-absolute path: 0=Modified, 1=Added, 2=Deleted. A file/symlink
-/// present in the upper is Modified if it also exists in the lower, else Added; a `.wh.NAME` whiteout
-/// marks NAME Deleted; a directory present only in the upper is Added (a copied-up dir that also exists
-/// in the lower is merely a parent and is surfaced via ancestor marking). Every ancestor directory of a
-/// change is then marked Modified, matching docker (`C /etc` for `A /etc/foo`).
-pub(crate) fn overlay_changes(upper: &str, rootfs: &str) -> HashMap<String, u8> {
-    fn in_lower(rootfs: &str, path: &str) -> bool {
-        std::fs::symlink_metadata(format!("{rootfs}{path}")).is_ok()
+impl Overlay<'_> {
+    pub(crate) fn discard(&self) -> std::io::Result<()> {
+        if self.upper.is_empty() {
+            return Ok(());
+        }
+        let dir = std::path::Path::new(self.upper)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(self.upper));
+        if dir.exists() {
+            std::fs::remove_dir_all(dir)?;
+        }
+        Ok(())
     }
-    fn walk(dir: &std::path::Path, prefix: &str, rootfs: &str, out: &mut HashMap<String, u8>) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for e in rd.flatten() {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            if let Some(stripped) = name.strip_prefix(".wh.") {
-                out.insert(format!("{prefix}/{stripped}"), 2); // whiteout -> deleted
-                continue;
-            }
-            let Ok(md) = e.path().symlink_metadata() else {
-                continue;
+
+    /// Diff a container's copy-on-write upper layer against the image rootfs (the lower), producing the
+    /// Docker `diff` kinds keyed by container-absolute path: 0=Modified, 1=Added, 2=Deleted. A file/symlink
+    /// present in the upper is Modified if it also exists in the lower, else Added; a `.wh.NAME` whiteout
+    /// marks NAME Deleted; a directory present only in the upper is Added (a copied-up dir that also exists
+    /// in the lower is merely a parent and is surfaced via ancestor marking). Every ancestor directory of a
+    /// change is then marked Modified, matching docker (`C /etc` for `A /etc/foo`).
+    pub(crate) fn changes(&self) -> HashMap<String, u8> {
+        fn walk(dir: &std::path::Path, prefix: &str, rootfs: &str, out: &mut HashMap<String, u8>) {
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
             };
-            let path = format!("{prefix}/{name}");
-            if md.file_type().is_dir() {
-                if !in_lower(rootfs, &path) {
-                    out.insert(path.clone(), 1);
+            for e in rd.flatten() {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if let Some(stripped) = name.strip_prefix(".wh.") {
+                    out.insert(format!("{prefix}/{stripped}"), 2); // whiteout -> deleted
+                    continue;
                 }
-                walk(&e.path(), &path, rootfs, out);
-            } else {
-                let kind = if in_lower(rootfs, &path) { 0 } else { 1 };
-                out.insert(path, kind);
+                let Ok(md) = e.path().symlink_metadata() else {
+                    continue;
+                };
+                let path = format!("{prefix}/{name}");
+                if md.file_type().is_dir() {
+                    if std::fs::symlink_metadata(format!("{rootfs}{path}")).is_err() {
+                        out.insert(path.clone(), 1);
+                    }
+                    walk(&e.path(), &path, rootfs, out);
+                } else {
+                    let kind = if std::fs::symlink_metadata(format!("{rootfs}{path}")).is_ok() {
+                        0
+                    } else {
+                        1
+                    };
+                    out.insert(path, kind);
+                }
             }
         }
-    }
-    let mut out = HashMap::new();
-    walk(std::path::Path::new(upper), "", rootfs, &mut out);
-    // Mark every ancestor directory of a change as modified (docker reports `C /etc` for `A /etc/foo`),
-    // without overriding a more specific Added/Deleted on that ancestor itself.
-    let leaves: Vec<String> = out.keys().cloned().collect();
-    for path in leaves {
-        let mut p = path.as_str();
-        while let Some(idx) = p.rfind('/') {
-            let parent = if idx == 0 { "/" } else { &p[..idx] };
-            out.entry(parent.to_string()).or_insert(0);
-            if idx == 0 {
-                break;
+        let mut out = HashMap::new();
+        walk(std::path::Path::new(self.upper), "", self.rootfs, &mut out);
+        // Mark every ancestor directory of a change as modified (docker reports `C /etc` for `A /etc/foo`),
+        // without overriding a more specific Added/Deleted on that ancestor itself.
+        let leaves: Vec<String> = out.keys().cloned().collect();
+        for path in leaves {
+            let mut p = path.as_str();
+            while let Some(idx) = p.rfind('/') {
+                let parent = if idx == 0 { "/" } else { &p[..idx] };
+                out.entry(parent.to_string()).or_insert(0);
+                if idx == 0 {
+                    break;
+                }
+                p = &p[..idx];
             }
-            p = &p[..idx];
         }
+        out
     }
-    out
 }
 
 /// `GET /containers/{id}/changes` — `docker diff`. hl gives each container a copy-on-write UPPER over the
@@ -83,26 +91,34 @@ pub(crate) fn overlay_changes(upper: &str, rootfs: &str) -> HashMap<String, u8> 
 /// `overlay_changes`). Reports the Docker shape: an array of `{Path, Kind}` (0=modified, 1=added,
 /// 2=deleted), with each changed entry's ancestor directories also reported as modified, as docker does.
 /// A darwin/flat-rootfs container (no upper) reports none.
-pub(crate) async fn containers_changes(State(a): State<App>, Path(id): Path<String>) -> Response {
-    let (upper, rootfs) = {
-        let g = a.inner.lock().await;
-        let Some((_, c)) = resolve_get(&g, &id) else {
-            return no_such(&id);
+impl Containers {
+    pub(crate) async fn changes(State(a): State<App>, Path(id): Path<String>) -> Response {
+        let (upper, rootfs) = {
+            let g = a.inner.lock().await;
+            let Some((_, c)) = ContainerId::get(&g, &id) else {
+                return ErrorMessage::no_such(&id);
+            };
+            (c.upper.clone(), c.rootfs.clone())
         };
-        (c.upper.clone(), c.rootfs.clone())
-    };
-    if upper.is_empty() {
-        return Json(Vec::<crate::api::ContainerChange>::new()).into_response();
-    }
-    let kinds = tokio::task::spawn_blocking(move || overlay_changes(&upper, &rootfs))
+        if upper.is_empty() {
+            return Json(Vec::<crate::api::ContainerChange>::new()).into_response();
+        }
+        let kinds = tokio::task::spawn_blocking(move || {
+            Overlay {
+                upper: &upper,
+                rootfs: &rootfs,
+            }
+            .changes()
+        })
         .await
         .unwrap_or_default();
-    let mut out: Vec<crate::api::ContainerChange> = kinds
-        .into_iter()
-        .map(|(p, k)| crate::api::ContainerChange { path: p, kind: k })
-        .collect();
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Json(out).into_response()
+        let mut out: Vec<crate::api::ContainerChange> = kinds
+            .into_iter()
+            .map(|(p, k)| crate::api::ContainerChange { path: p, kind: k })
+            .collect();
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        Json(out).into_response()
+    }
 }
 
 #[cfg(test)]
@@ -165,7 +181,11 @@ mod tests {
     fn added_file_is_kind_1_with_root_ancestor() {
         let t = Tmp::new("added");
         Tmp::write(&t.upper, "newfile", b"hi");
-        let got = overlay_changes(t.upper(), t.lower());
+        let got = Overlay {
+            upper: t.upper(),
+            rootfs: t.lower(),
+        }
+        .changes();
         assert_eq!(got, expect(&[("/newfile", 1), ("/", 0)]));
     }
 
@@ -175,7 +195,11 @@ mod tests {
         let t = Tmp::new("modified");
         Tmp::write(&t.upper, "existing", b"new-contents");
         Tmp::write(&t.lower, "existing", b"old-contents");
-        let got = overlay_changes(t.upper(), t.lower());
+        let got = Overlay {
+            upper: t.upper(),
+            rootfs: t.lower(),
+        }
+        .changes();
         assert_eq!(got, expect(&[("/existing", 0), ("/", 0)]));
     }
 
@@ -186,7 +210,11 @@ mod tests {
         let t = Tmp::new("whiteout");
         Tmp::write(&t.upper, ".wh.gone", b""); // whiteout marker file
         Tmp::write(&t.lower, "gone", b"was-here");
-        let got = overlay_changes(t.upper(), t.lower());
+        let got = Overlay {
+            upper: t.upper(),
+            rootfs: t.lower(),
+        }
+        .changes();
         assert_eq!(got, expect(&[("/gone", 2), ("/", 0)]));
     }
 
@@ -199,7 +227,11 @@ mod tests {
         Tmp::mkdir(&t.upper, "etc");
         Tmp::write(&t.upper, "etc/newfile", b"x");
         Tmp::mkdir(&t.lower, "etc"); // ancestor exists in lower => modified, not added
-        let got = overlay_changes(t.upper(), t.lower());
+        let got = Overlay {
+            upper: t.upper(),
+            rootfs: t.lower(),
+        }
+        .changes();
         assert_eq!(got, expect(&[("/etc/newfile", 1), ("/etc", 0), ("/", 0)]));
     }
 
@@ -210,7 +242,11 @@ mod tests {
     fn nested_add_new_dirs_are_each_added() {
         let t = Tmp::new("nested_new");
         Tmp::write(&t.upper, "a/b/c", b"deep");
-        let got = overlay_changes(t.upper(), t.lower());
+        let got = Overlay {
+            upper: t.upper(),
+            rootfs: t.lower(),
+        }
+        .changes();
         assert_eq!(
             got,
             expect(&[("/a", 1), ("/a/b", 1), ("/a/b/c", 1), ("/", 0)])
@@ -232,7 +268,11 @@ mod tests {
         // whiteout deleting /etc/old
         Tmp::write(&t.upper, "etc/.wh.old", b"");
         Tmp::write(&t.lower, "etc/old", b"gone");
-        let got = overlay_changes(t.upper(), t.lower());
+        let got = Overlay {
+            upper: t.upper(),
+            rootfs: t.lower(),
+        }
+        .changes();
         assert_eq!(
             got,
             expect(&[
@@ -250,7 +290,11 @@ mod tests {
     #[test]
     fn empty_upper_is_empty_map() {
         let t = Tmp::new("empty");
-        let got = overlay_changes(t.upper(), t.lower());
+        let got = Overlay {
+            upper: t.upper(),
+            rootfs: t.lower(),
+        }
+        .changes();
         assert!(got.is_empty());
     }
 }

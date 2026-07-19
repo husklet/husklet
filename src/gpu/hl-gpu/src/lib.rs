@@ -17,7 +17,7 @@ pub mod runtime;
 pub mod transport;
 
 // Ergonomic re-exports so downstream reads `hl_gpu::{GpuError, Result, Cmd, …}`.
-pub use protocol::codec::{decode_stream, encode_stream};
+pub use protocol::codec::{Decoder, Encoder};
 pub use protocol::model::capability::{Capabilities, FeatureRequest, PresentKind};
 pub use protocol::model::command::{Cmd, CommandBuffer, Enc, ShaderPayloadKind, WIRE_VERSION};
 pub use protocol::model::error::{GpuError, Result};
@@ -30,8 +30,8 @@ pub use protocol::port::sink::{CommandSink, RecordingSink};
 // Runtime layer: the per-connection Session that validates + accounts a decoded batch and dispatches it
 // to an injected GpuExecutor (built on top of `protocol`).
 pub use runtime::{
-    Clock, FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink, Ledger, Limits, Presented,
-    Session, SessionResources, SystemClock,
+    Clock, FakeClock, GlobalLedger, GpuExecutor, InProcessCommandSink, Ledger, Limits,
+    Presentation, Session, SessionResources, SystemClock,
 };
 pub use transport::{
     serve, serve_connection, serve_connection_with_handler, ConnectionHandler, GpuAlloc,

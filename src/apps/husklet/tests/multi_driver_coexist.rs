@@ -98,7 +98,7 @@ fn cuda_readback(
     p: DevicePtr,
     len: usize,
 ) -> Vec<f32> {
-    let (buf, off): (BufferId, u64) = transfer::memcpy_dtoh(ctx, p).unwrap();
+    let (buf, off): (BufferId, u64) = ctx.device_location(p).unwrap();
     to_f32s(&CommandSink::read_buffer(sink, buf, off, len).unwrap())
 }
 
@@ -169,7 +169,7 @@ fn cuda_vulkan_gl_coexist_on_one_engine_session() {
     let want: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x + y).collect();
 
     let mut cuda = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
-    let module = load_module::module_load_data(&mut cuda, VECADD_PTX.as_bytes()).unwrap();
+    let module = cuda.load_module(VECADD_PTX.as_bytes()).unwrap();
     let func = load_module::module_get_function(&cuda, module, "vecadd").unwrap();
     let da = upload(&mut sink, &mut cuda, &f32s(&a));
     let db = upload(&mut sink, &mut cuda, &f32s(&b));
@@ -207,7 +207,7 @@ fn cuda_vulkan_gl_coexist_on_one_engine_session() {
     };
     record::clear_color(&mut gl, clear);
     record::clear(&mut gl);
-    let mut f = frame::build_frame_ir(&mut gl).expect("gl clear frame builds");
+    let mut f = frame::Frame::build(&mut gl).expect("gl clear frame builds");
     let (surface, texture) = f.present;
     f.cmds.push(Cmd::Present { surface, texture });
     sink.submit(&f.cmds)
@@ -258,8 +258,8 @@ fn cuda_vulkan_gl_coexist_on_one_engine_session() {
     //     from base 1) — the runtime rejects it. We assert the collision, then free CUDA's buffers and
     //     run the SAME VK op successfully on the SAME session + executor.
     // -------------------------------------------------------------------------------------------
-    let inst = vk_create::create_instance(HL_API_VERSION);
-    let mut vk = vk_create::create_device(&inst);
+    let inst = hl_vulkan::model::instance::Instance::new(HL_API_VERSION);
+    let mut vk = inst.create_device();
     let collide = vk_create::create_buffer(&mut vk, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 256);
     assert!(
         collide.is_err(),
@@ -276,7 +276,7 @@ fn cuda_vulkan_gl_coexist_on_one_engine_session() {
         0,
         "CUDA buffers freed from the shared session"
     );
-    let mut vk2 = vk_create::create_device(&inst);
+    let mut vk2 = inst.create_device();
     let handle = vk_create::create_buffer(&mut vk2, &mut sink, vk_buffer_usage::VERTEX_BUFFER, 256)
         .expect("Vulkan buffer op runs on the same session+executor once the id table is free");
     let ir_id = vk2.buffers.get(&handle).unwrap().ir_id;

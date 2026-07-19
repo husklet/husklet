@@ -15,80 +15,82 @@ use crate::model::stream::Stream;
 use hl_gpu::{GpuError, Result};
 
 /// `cuEventCreate(flags)` — mint a fresh event handle. Infallible in the model (no resource pressure).
-pub fn event_create(ctx: &mut CudaContext) -> Event {
-    let e = ctx.events.create();
-    hl_log::hl_debug!(hl_log::tag::CUDA, "event_create ev={}", e.0);
-    e
-}
+impl CudaContext {
+    pub fn event_create(&mut self) -> Event {
+        let e = self.events.create();
+        hl_log::hl_debug!(hl_log::tag::CUDA, "event_create ev={}", e.0);
+        e
+    }
 
-/// `cuEventRecord(event, stream)` — capture the work outstanding on `stream` into `event`. Validates both
-/// handles, then marks the event recorded. In the synchronous model the captured work has already
-/// completed, so a recorded event is immediately complete.
-pub fn event_record(ctx: &mut CudaContext, event: Event, stream: Stream) -> Result<()> {
-    if !ctx.streams.is_valid(stream) {
-        return Err(GpuError::Invalid("cuEventRecord: invalid stream handle"));
-    }
-    if !ctx.events.mark_recorded(event) {
-        return Err(GpuError::Invalid("cuEventRecord: invalid event handle"));
-    }
-    hl_log::hl_debug!(
-        hl_log::tag::CUDA,
-        "event_record ev={} stream={}",
-        event.0,
-        stream.0
-    );
-    Ok(())
-}
-
-/// `cuStreamWaitEvent(stream, event, flags)` — make future work submitted to `stream` wait until `event`
-/// completes. Validates both handles. Because the event's captured work has already completed in the
-/// synchronous model, this is a validated ordering point that imposes no additional blocking — the
-/// dependency is honored by construction. A never-recorded event is a benign no-op (as in real CUDA).
-pub fn stream_wait_event(ctx: &CudaContext, stream: Stream, event: Event) -> Result<()> {
-    if !ctx.streams.is_valid(stream) {
-        return Err(GpuError::Invalid(
-            "cuStreamWaitEvent: invalid stream handle",
-        ));
-    }
-    if !ctx.events.is_valid(event) {
-        return Err(GpuError::Invalid("cuStreamWaitEvent: invalid event handle"));
-    }
-    hl_log::hl_debug!(
-        hl_log::tag::CUDA,
-        "stream_wait_event stream={} ev={}",
-        stream.0,
-        event.0
-    );
-    Ok(())
-}
-
-/// `cuEventSynchronize(event)` — block the host until `event` completes. Validates the handle; in the
-/// synchronous model the event is already complete once recorded, so this returns as soon as the handle
-/// checks out. Errors on an unknown handle.
-pub fn event_synchronize(ctx: &CudaContext, event: Event) -> Result<()> {
-    if !ctx.events.is_valid(event) {
-        return Err(GpuError::Invalid(
-            "cuEventSynchronize: invalid event handle",
-        ));
-    }
-    Ok(())
-}
-
-/// `cuEventQuery(event)` — is `event` complete? Returns `Ok(true)` when complete (recorded, hence done in
-/// the synchronous model), `Ok(false)` for a live-but-never-recorded event (the `CUDA_ERROR_NOT_READY`
-/// analogue), and errors on an unknown handle.
-pub fn event_query(ctx: &CudaContext, event: Event) -> Result<bool> {
-    if !ctx.events.is_valid(event) {
-        return Err(GpuError::Invalid("cuEventQuery: invalid event handle"));
-    }
-    Ok(ctx.events.is_recorded(event))
-}
-
-/// `cuEventDestroy(event)` — release the event handle. Errors on an unknown / already-destroyed handle.
-pub fn event_destroy(ctx: &mut CudaContext, event: Event) -> Result<()> {
-    if ctx.events.destroy(event) {
+    /// `cuEventRecord(event, stream)` — capture the work outstanding on `stream` into `event`. Validates both
+    /// handles, then marks the event recorded. In the synchronous model the captured work has already
+    /// completed, so a recorded event is immediately complete.
+    pub fn event_record(&mut self, event: Event, stream: Stream) -> Result<()> {
+        if !self.streams.is_valid(stream) {
+            return Err(GpuError::Invalid("cuEventRecord: invalid stream handle"));
+        }
+        if !self.events.mark_recorded(event) {
+            return Err(GpuError::Invalid("cuEventRecord: invalid event handle"));
+        }
+        hl_log::hl_debug!(
+            hl_log::tag::CUDA,
+            "event_record ev={} stream={}",
+            event.0,
+            stream.0
+        );
         Ok(())
-    } else {
-        Err(GpuError::Invalid("cuEventDestroy: invalid event handle"))
+    }
+
+    /// `cuStreamWaitEvent(stream, event, flags)` — make future work submitted to `stream` wait until `event`
+    /// completes. Validates both handles. Because the event's captured work has already completed in the
+    /// synchronous model, this is a validated ordering point that imposes no additional blocking — the
+    /// dependency is honored by construction. A never-recorded event is a benign no-op (as in real CUDA).
+    pub fn stream_wait_event(&self, stream: Stream, event: Event) -> Result<()> {
+        if !self.streams.is_valid(stream) {
+            return Err(GpuError::Invalid(
+                "cuStreamWaitEvent: invalid stream handle",
+            ));
+        }
+        if !self.events.is_valid(event) {
+            return Err(GpuError::Invalid("cuStreamWaitEvent: invalid event handle"));
+        }
+        hl_log::hl_debug!(
+            hl_log::tag::CUDA,
+            "stream_wait_event stream={} ev={}",
+            stream.0,
+            event.0
+        );
+        Ok(())
+    }
+
+    /// `cuEventSynchronize(event)` — block the host until `event` completes. Validates the handle; in the
+    /// synchronous model the event is already complete once recorded, so this returns as soon as the handle
+    /// checks out. Errors on an unknown handle.
+    pub fn event_synchronize(&self, event: Event) -> Result<()> {
+        if !self.events.is_valid(event) {
+            return Err(GpuError::Invalid(
+                "cuEventSynchronize: invalid event handle",
+            ));
+        }
+        Ok(())
+    }
+
+    /// `cuEventQuery(event)` — is `event` complete? Returns `Ok(true)` when complete (recorded, hence done in
+    /// the synchronous model), `Ok(false)` for a live-but-never-recorded event (the `CUDA_ERROR_NOT_READY`
+    /// analogue), and errors on an unknown handle.
+    pub fn event_query(&self, event: Event) -> Result<bool> {
+        if !self.events.is_valid(event) {
+            return Err(GpuError::Invalid("cuEventQuery: invalid event handle"));
+        }
+        Ok(self.events.is_recorded(event))
+    }
+
+    /// `cuEventDestroy(event)` — release the event handle. Errors on an unknown / already-destroyed handle.
+    pub fn event_destroy(&mut self, event: Event) -> Result<()> {
+        if self.events.destroy(event) {
+            Ok(())
+        } else {
+            Err(GpuError::Invalid("cuEventDestroy: invalid event handle"))
+        }
     }
 }

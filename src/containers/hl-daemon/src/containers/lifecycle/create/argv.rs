@@ -32,18 +32,25 @@ pub(crate) fn resolve_argv(
 /// (an `-e KEY=` override replaces the image's), the surviving entry keeps the last occurrence's position,
 /// and forward order is otherwise preserved. This is the *config* dedup so inspect/state don't expose a
 /// stale image value that the guest launch env (`hl_jit::guest_env`) already collapses the same way.
-pub(crate) fn dedup_env_last_wins(env: impl IntoIterator<Item = String>) -> Vec<String> {
-    let key = |kv: &str| kv.split('=').next().unwrap_or(kv).to_string();
-    let all: Vec<String> = env.into_iter().collect();
-    let mut seen = std::collections::HashSet::new();
-    let mut out: Vec<String> = Vec::with_capacity(all.len());
-    for kv in all.iter().rev() {
-        if seen.insert(key(kv)) {
-            out.push(kv.clone());
+pub(crate) struct EnvVars(Vec<String>);
+
+impl EnvVars {
+    pub(crate) fn resolve(env: impl IntoIterator<Item = String>) -> Self {
+        let key = |kv: &str| kv.split('=').next().unwrap_or(kv).to_string();
+        let all: Vec<String> = env.into_iter().collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut out: Vec<String> = Vec::with_capacity(all.len());
+        for kv in all.iter().rev() {
+            if seen.insert(key(kv)) {
+                out.push(kv.clone());
+            }
         }
+        out.reverse();
+        Self(out)
     }
-    out.reverse();
-    out
+    pub(crate) fn into_vec(self) -> Vec<String> {
+        self.0
+    }
 }
 
 #[cfg(test)]
@@ -57,7 +64,7 @@ mod tests {
     #[test]
     fn dedup_env_collapses_duplicate_keys_last_wins() {
         assert_eq!(
-            dedup_env_last_wins(v(&["FOO=image", "BAR=base", "FOO=run"])),
+            EnvVars::resolve(v(&["FOO=image", "BAR=base", "FOO=run"])).into_vec(),
             v(&["BAR=base", "FOO=run"])
         );
     }

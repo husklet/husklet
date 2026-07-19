@@ -42,7 +42,7 @@ fn flat_program(c: &mut GlContext) -> u32 {
 fn setup_geometry(c: &mut GlContext) {
     let p = flat_program(c);
     record::use_program(c, p);
-    let vbo = record::gen_buffer(c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(c, GL_ARRAY_BUFFER, vbo);
     record::buffer_data(c, GL_ARRAY_BUFFER, &[0u8; 32], 0x88E4);
     record::vertex_attrib_pointer(c, 0, 2, GL_FLOAT, false, 8, 0);
@@ -79,7 +79,7 @@ fn indexed_draw_lowers_to_set_index_buffer_and_draw_indexed_u16() {
     let mut sink = RecordingSink::with_full_caps();
     setup_geometry(&mut c);
     // element buffer of 6 u16 indices.
-    let ebo = record::gen_buffer(&mut c);
+    let ebo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, ebo);
     record::buffer_data(&mut c, GL_ELEMENT_ARRAY_BUFFER, &[0u8; 12], 0x88E4);
     record::draw_elements(&mut c, GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 4);
@@ -121,7 +121,7 @@ fn base_vertex_draw_lowers_u32_index_format_and_base_vertex() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
     setup_geometry(&mut c);
-    let ebo = record::gen_buffer(&mut c);
+    let ebo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, ebo);
     record::buffer_data(&mut c, GL_ELEMENT_ARRAY_BUFFER, &[0u8; 24], 0x88E4);
     record::draw_elements_base_vertex(&mut c, GL_TRIANGLES, 3, GL_UNSIGNED_INT, 0, 7);
@@ -283,7 +283,7 @@ fn a_draw_with_an_unlinked_program_presents_nothing() {
     record::attach_shader(&mut c, p, f);
     // NOTE: no link_program.
     record::use_program(&mut c, p);
-    let vbo = record::gen_buffer(&mut c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
     record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 32], 0x88E4);
     record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
@@ -445,7 +445,7 @@ fn blend_equation_lowers_same_op_for_color_and_alpha() {
 // ---------------------------------------------------------------------------------------------------
 
 fn set_indirect_buffer(c: &mut GlContext, words: &[u32]) {
-    let ind = record::gen_buffer(c);
+    let ind = c.buffers.gen();
     record::bind_buffer(c, GL_DRAW_INDIRECT_BUFFER, ind);
     let mut bytes = Vec::new();
     for w in words {
@@ -490,7 +490,7 @@ fn draw_elements_indirect_reads_indexed_args_and_lowers_draw_indexed() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
     setup_geometry(&mut c);
-    let ebo = record::gen_buffer(&mut c);
+    let ebo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, ebo);
     record::buffer_data(&mut c, GL_ELEMENT_ARRAY_BUFFER, &[0u8; 48], 0x88E4);
     // {count=6, instanceCount=2, firstIndex=0, baseVertex=5, baseInstance=0}
@@ -523,7 +523,7 @@ fn draw_elements_instanced_base_vertex_lowers_instances_and_base_offset() {
     let mut c = ctx();
     let mut sink = RecordingSink::with_full_caps();
     setup_geometry(&mut c);
-    let ebo = record::gen_buffer(&mut c);
+    let ebo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ELEMENT_ARRAY_BUFFER, ebo);
     record::buffer_data(&mut c, GL_ELEMENT_ARRAY_BUFFER, &[0u8; 24], 0x88E4);
     record::draw_elements_instanced_base_vertex(&mut c, GL_TRIANGLES, 3, GL_UNSIGNED_INT, 0, 8, 2);

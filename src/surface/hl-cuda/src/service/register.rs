@@ -54,7 +54,7 @@ impl Registry {
     }
 
     /// `__cudaRegisterFatBinary(fatbin)` — walk the fatbin container to its embedded PTX, load it as a
-    /// module (via [`load_module::module_load_data`], which handles the fatbin/raw-PTX split), and return
+    /// module (via [`CudaContext::load_module`], which handles the fatbin/raw-PTX split), and return
     /// a fresh opaque handle bound to that module. `image` is the fatbin CONTAINER bytes (the shim follows
     /// the `__fatBinC_Wrapper_t` to them before calling in).
     pub fn register_fatbinary(
@@ -62,7 +62,7 @@ impl Registry {
         ctx: &mut CudaContext,
         image: &[u8],
     ) -> Result<FatbinHandle> {
-        let module = load_module::module_load_data(ctx, image)?;
+        let module = ctx.load_module(image)?;
         let handle = self.next_handle;
         self.next_handle += 1;
         self.modules.insert(handle, module);

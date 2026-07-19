@@ -26,7 +26,8 @@ use std::path::PathBuf;
 const VK_ERROR_FEATURE_NOT_PRESENT: i32 = -8;
 
 fn main() {
-    let manifest = PathBuf::from(env("CARGO_MANIFEST_DIR")).join("registry/vk_commands.manifest");
+    let manifest =
+        PathBuf::from(BuildEnv::read("CARGO_MANIFEST_DIR")).join("registry/vk_commands.manifest");
     println!("cargo:rerun-if-changed={}", manifest.display());
     println!("cargo:rerun-if-changed=build.rs");
     // `-Wl,-soname` is a GNU-ld flag (the ICD only ships on the Linux guest); emit it only on Linux.
@@ -80,7 +81,11 @@ fn main() {
         // bare name (implemented ones via `use` in lib.rs), so the dispatch resolver references them
         // uniformly. The fn-item→address cast runs at RUNTIME (a `static` fails const-eval), so we emit
         // a match function rather than a table.
-        writeln!(dispatch, "        \"{name}\" => Some({name} as *const () as usize),").unwrap();
+        writeln!(
+            dispatch,
+            "        \"{name}\" => Some({name} as *const () as usize),"
+        )
+        .unwrap();
         writeln!(names, "    \"{name}\",").unwrap();
         if IMPLEMENTED.contains(&name) {
             continue; // hand-written in src/; a generated stub would collide.
@@ -89,27 +94,62 @@ fn main() {
         emit_stub(&mut out, name, ret, params, &kinds);
     }
 
-    writeln!(out, "\n/// Total Vulkan `vk*` entry points in the manifest (the exported command surface).").unwrap();
+    writeln!(
+        out,
+        "\n/// Total Vulkan `vk*` entry points in the manifest (the exported command surface)."
+    )
+    .unwrap();
     writeln!(out, "pub const VK_ENTRYPOINTS: usize = {cmds};").unwrap();
-    writeln!(out, "/// Entry points emitted as default stubs (not yet hand-implemented).").unwrap();
+    writeln!(
+        out,
+        "/// Entry points emitted as default stubs (not yet hand-implemented)."
+    )
+    .unwrap();
     writeln!(out, "pub const GENERATED_STUBS: usize = {stubs};").unwrap();
-    writeln!(out, "/// Entry points with real hand-written bodies in `src/`.").unwrap();
-    writeln!(out, "pub const IMPLEMENTED_ENTRYPOINTS: usize = {};", IMPLEMENTED.len()).unwrap();
+    writeln!(
+        out,
+        "/// Entry points with real hand-written bodies in `src/`."
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub const IMPLEMENTED_ENTRYPOINTS: usize = {};",
+        IMPLEMENTED.len()
+    )
+    .unwrap();
 
     // The name→address resolver the loader-facing proc-addr entries in `crate::icd` consult. A match
     // over the whole exported `vk*` surface; the address cast runs at call time (see above).
-    writeln!(out, "\n/// Resolve any exported `vk*` entry point by name to its address. Consulted by the").unwrap();
-    writeln!(out, "/// loader-facing proc-addr resolvers in `crate::icd`. Runtime cast (not a const table).").unwrap();
+    writeln!(
+        out,
+        "\n/// Resolve any exported `vk*` entry point by name to its address. Consulted by the"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// loader-facing proc-addr resolvers in `crate::icd`. Runtime cast (not a const table)."
+    )
+    .unwrap();
     writeln!(out, "pub fn dispatch_addr(name: &str) -> Option<usize> {{\n    match name {{\n{dispatch}        _ => None,\n    }}\n}}").unwrap();
     // A name-only census the surface tests can iterate without taking any addresses.
-    writeln!(out, "\n/// Every exported `vk*` entry-point name (the completeness census list).").unwrap();
+    writeln!(
+        out,
+        "\n/// Every exported `vk*` entry-point name (the completeness census list)."
+    )
+    .unwrap();
     writeln!(out, "pub static DISPATCH_NAMES: &[&str] = &[\n{names}];").unwrap();
 
-    let out_path = PathBuf::from(env("OUT_DIR")).join("generated_entrypoints.rs");
+    let out_path = PathBuf::from(BuildEnv::read("OUT_DIR")).join("generated_entrypoints.rs");
     std::fs::write(&out_path, out).unwrap();
 }
 
-fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str, kinds: &HashMap<String, String>) {
+fn emit_stub(
+    out: &mut String,
+    name: &str,
+    ret: &str,
+    params: &str,
+    kinds: &HashMap<String, String>,
+) {
     let is_vk_result = ret.trim() == "VkResult";
     let mut sig = String::new();
     let mut argnames: Vec<String> = Vec::new();
@@ -117,9 +157,11 @@ fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str, kinds: &Hash
     if !params.is_empty() {
         let n = params.split(';').count();
         for (i, p) in params.split(';').enumerate() {
-            let (ty, pname) = p.split_once('|').unwrap_or_else(|| panic!("bad param {p:?} in {name}"));
+            let (ty, pname) = p
+                .split_once('|')
+                .unwrap_or_else(|| panic!("bad param {p:?} in {name}"));
             let rty = map_type(ty.trim(), name, kinds);
-            let mut pn = sanitize(pname.trim(), i);
+            let mut pn = ParameterName::sanitize(pname.trim(), i);
             // Guarantee unique parameter identifiers (a manifest can carry repeated names across
             // api-variant params). Names are cosmetic — the ABI is unaffected.
             while argnames.contains(&pn) {
@@ -139,26 +181,35 @@ fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str, kinds: &Hash
         }
     }
     let rmap = map_ret(ret.trim(), name, kinds);
-    let arrow = rmap.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
+    let arrow = rmap
+        .as_ref()
+        .map(|r| format!(" -> {r}"))
+        .unwrap_or_default();
     let touch: String = argnames.iter().map(|a| format!("let _ = {a}; ")).collect();
     let init_out = match &last_out {
-        Some(outp) if is_vk_result && (name.starts_with("vkCreate") || name.starts_with("vkAllocate")) => {
+        Some(outp)
+            if is_vk_result && (name.starts_with("vkCreate") || name.starts_with("vkAllocate")) =>
+        {
             format!("unsafe {{ if !{outp}.is_null() {{ *({outp} as *mut u64) = 0; }} }} ")
         }
         _ => String::new(),
     };
     let body = match &rmap {
-        None => format!("{touch}crate::stub::hit(\"{name}\");"),
+        None => format!("{touch}crate::stub::Stub::hit(\"{name}\");"),
         Some(r) => {
             let retval = if is_vk_result {
                 VK_ERROR_FEATURE_NOT_PRESENT.to_string()
             } else {
-                default_for(r).to_string()
+                RustType::new(r).default_value().to_string()
             };
-            format!("{touch}{init_out}crate::stub::hit(\"{name}\"); {retval}")
+            format!("{touch}{init_out}crate::stub::Stub::hit(\"{name}\"); {retval}")
         }
     };
-    writeln!(out, "#[no_mangle]\npub extern \"C\" fn {name}({sig}){arrow} {{ {body} }}\n").unwrap();
+    writeln!(
+        out,
+        "#[no_mangle]\npub extern \"C\" fn {name}({sig}){arrow} {{ {body} }}\n"
+    )
+    .unwrap();
 }
 
 /// C return type -> Rust type (None == `void`/unit).
@@ -223,36 +274,54 @@ fn scalar(c: &str, ctx: &str, kinds: &HashMap<String, String>) -> String {
         "usize" | "size_t" => "usize".to_string(),
         "f32" | "float" => "f32".to_string(),
         "f64" | "double" => "f64".to_string(),
-        other => panic!("unmapped by-value type {other:?} (base {base:?} in {ctx}); extend build.rs"),
+        other => {
+            panic!("unmapped by-value type {other:?} (base {base:?} in {ctx}); extend build.rs")
+        }
     }
 }
 
-fn default_for(rust_ty: &str) -> &'static str {
-    if rust_ty.starts_with("*const") {
-        "core::ptr::null()"
-    } else if rust_ty.starts_with("*mut") {
-        "core::ptr::null_mut()"
-    } else {
-        "0" // truthful zero / VK_FALSE / NULL-equivalent for a non-VkResult scalar return.
+struct RustType<'a>(&'a str);
+
+impl<'a> RustType<'a> {
+    fn new(value: &'a str) -> Self {
+        Self(value)
+    }
+
+    fn default_value(&self) -> &'static str {
+        if self.0.starts_with("*const") {
+            "core::ptr::null()"
+        } else if self.0.starts_with("*mut") {
+            "core::ptr::null_mut()"
+        } else {
+            "0" // truthful zero / VK_FALSE / NULL-equivalent for a non-VkResult scalar return.
+        }
     }
 }
 
-fn sanitize(name: &str, i: usize) -> String {
-    const KW: &[&str] = &[
-        "type", "ref", "box", "in", "fn", "let", "match", "move", "mut", "as", "impl", "loop",
-        "where", "self", "final", "override", "become",
-    ];
-    if name.is_empty() {
-        return format!("a{i}");
+struct ParameterName;
+
+impl ParameterName {
+    fn sanitize(name: &str, index: usize) -> String {
+        const KEYWORDS: &[&str] = &[
+            "type", "ref", "box", "in", "fn", "let", "match", "move", "mut", "as", "impl", "loop",
+            "where", "self", "final", "override", "become",
+        ];
+        if name.is_empty() {
+            return format!("a{index}");
+        }
+        if KEYWORDS.contains(&name) {
+            return format!("{name}_");
+        }
+        name.to_string()
     }
-    if KW.contains(&name) {
-        return format!("{name}_");
-    }
-    name.to_string()
 }
 
-fn env(k: &str) -> String {
-    std::env::var(k).unwrap_or_else(|_| panic!("env {k} not set"))
+struct BuildEnv;
+
+impl BuildEnv {
+    fn read(key: &str) -> String {
+        std::env::var(key).unwrap_or_else(|_| panic!("env {key} not set"))
+    }
 }
 
 /// Entry points hand-implemented in `src/` (so the generator skips them to avoid duplicate symbols):
@@ -629,7 +698,6 @@ const IMPLEMENTED: &[&str] = &[
     "vkUpdateVideoSessionParametersKHR",
     "vkWriteAccelerationStructuresPropertiesKHR",
     "vkWriteMicromapsPropertiesEXT",
-
     // ================= converted GENERATED_STUBS -> IMPLEMENTED (this task) =================
     // ---- extended dynamic state 1/2/3 (dynstate.rs) ----
     "vkCmdSetCullMode",

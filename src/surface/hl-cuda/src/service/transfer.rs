@@ -123,8 +123,10 @@ pub fn memcpy_dtod(
 /// `cuMemcpyDtoH(host, src, n)` → resolve the device source to its (buffer, offset) for the caller to
 /// read back out-of-band. Submits no command; returns the source location. Prefer [`read_dtoh`] when you
 /// want the bytes — it performs the readback through the sink.
-pub fn memcpy_dtoh(ctx: &CudaContext, src: DevicePtr) -> Result<(BufferId, u64)> {
-    resolve(ctx, src, "cuMemcpyDtoH: dangling source pointer")
+impl CudaContext {
+    pub fn device_location(&self, src: DevicePtr) -> Result<(BufferId, u64)> {
+        resolve(self, src, "cuMemcpyDtoH: dangling source pointer")
+    }
 }
 
 /// `cuMemcpyDtoH(host, src, n)`, fully served: resolve the device source and read `n` bytes back through

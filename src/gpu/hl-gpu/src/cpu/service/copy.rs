@@ -2,7 +2,7 @@
 //! validation and the copy execution both use. Ported from the copy arms of `SoftwareBackend::submit` and
 //! the free layout helpers in `hl-gpu/src/software.rs`.
 
-use crate::cpu::format::{sample_bilinear, texel_at, texel_bytes};
+use crate::cpu::format::{sample_bilinear, texel_at};
 use crate::cpu::model::texture::Texture;
 use crate::cpu::model::{buffer, buffer_mut, texture, texture_mut};
 use crate::protocol::model::descriptor::{Extent3d, Origin3d, TextureSubresource};
@@ -216,7 +216,7 @@ pub(crate) fn copy_texture_to_buffer(
     };
     let (tw, bpt) = {
         let t = texture(res, src)?;
-        (t.desc.width as usize, texel_bytes(t.desc.format)?)
+        (t.desc.width as usize, t.desc.format.software_texel_bytes()?)
     };
     let rows_data: Vec<u8> = {
         let t = texture(res, src)?;
@@ -247,7 +247,7 @@ pub(crate) fn copy_texture_to_texture(
 ) -> Result<()> {
     let (sw, bpt) = {
         let t = texture(res, src)?;
-        (t.desc.width as usize, texel_bytes(t.desc.format)?)
+        (t.desc.width as usize, t.desc.format.software_texel_bytes()?)
     };
     let ew = extent.width as usize;
     let eh = extent.height as usize;
@@ -290,7 +290,7 @@ pub(crate) fn blit_texture(
         let t = texture(res, src)?;
         (
             t.desc.width as usize,
-            texel_bytes(t.desc.format)?,
+            t.desc.format.software_texel_bytes()?,
             t.desc.format,
         )
     };
@@ -345,7 +345,7 @@ pub(crate) fn resolve_texture(
         (
             t.desc.width as usize,
             t.desc.sample_count as usize,
-            texel_bytes(t.desc.format)?,
+            t.desc.format.software_texel_bytes()?,
             t.pixels.clone(),
         )
     };

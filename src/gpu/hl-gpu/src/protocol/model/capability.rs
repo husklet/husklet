@@ -45,26 +45,30 @@ pub(crate) mod present_bit {
 }
 
 /// Build a supported-command bitset from a slice of [`etag`] encoder-op tag numbers.
-pub fn command_bits(etags: &[u8]) -> u64 {
-    let mut b = 0u64;
-    for &t in etags {
-        if t < 64 {
-            b |= 1u64 << t;
+impl Capabilities {
+    pub fn command_bits(etags: &[u8]) -> u64 {
+        let mut b = 0u64;
+        for &t in etags {
+            if t < 64 {
+                b |= 1u64 << t;
+            }
         }
+        b
     }
-    b
 }
 
 /// Build a supported-format bitset (bit = `TextureFormat::to_u32()`).
-pub fn format_bits(formats: &[TextureFormat]) -> u32 {
-    let mut b = 0u32;
-    for f in formats {
-        let n = f.to_u32();
-        if n < 32 {
-            b |= 1u32 << n;
+impl TextureFormat {
+    pub fn bits(formats: &[TextureFormat]) -> u32 {
+        let mut b = 0u32;
+        for f in formats {
+            let n = f.to_u32();
+            if n < 32 {
+                b |= 1u32 << n;
+            }
         }
+        b
     }
-    b
 }
 
 /// The color formats every host backend can materialize (the non-depth `TextureFormat`s).
@@ -244,13 +248,13 @@ impl Capabilities {
                 PresentKind::DmaBuf,
             ],
             wire_version: super::command::WIRE_VERSION,
-            command_bits: command_bits(ALL_COMMANDS),
+            command_bits: Capabilities::command_bits(ALL_COMMANDS),
             shader_payloads: shader_payload::SPIRV
                 | shader_payload::GLSL
                 | shader_payload::MSL
                 | shader_payload::WGSL
                 | shader_payload::KERNEL,
-            texture_formats: format_bits(COLOR_FORMATS),
+            texture_formats: TextureFormat::bits(COLOR_FORMATS),
             // Browser-class per-frame wire-byte ceiling (hostile-DoS guard, not a correctness bound; the
             // `GlobalLedger` is the true host-OOM guard). Raised from 64 MiB — mis-sized for a browser, whose
             // real frames run to 89–168 MB — to a finite 256 MiB. See the wgpu executor for the full rationale.

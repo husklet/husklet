@@ -6,8 +6,9 @@
 use objc2::rc::Retained;
 use objc2_foundation::{NSDictionary, NSNumber, NSString};
 use std::ffi::c_void;
+use std::ptr::NonNull;
 
-/// An opaque `IOSurfaceRef` (a CoreFoundation type). Owned refs must be balanced with [`cfrelease`].
+/// Raw IOSurface handle used only at the native Metal boundary.
 pub type IOSurfaceRef = *mut c_void;
 type CFStringRef = *const c_void;
 
@@ -33,59 +34,67 @@ extern "C" {
 
 const PIXEL_FORMAT_BGRA: i32 = 0x4247_5241; // 'BGRA'
 
-/// Release a CF/IOSurface reference.
-pub unsafe fn cfrelease(s: IOSurfaceRef) {
-    if !s.is_null() {
-        CFRelease(s as *const c_void);
+/// An owned Core Foundation IOSurface reference.
+pub struct IOSurface(NonNull<c_void>);
+
+impl IOSurface {
+    /// Resolve a global IOSurface id. `IOSurfaceLookup` returns an owned (+1) reference.
+    pub fn lookup(id: u32) -> Option<Self> {
+        // SAFETY: the C function accepts every u32 id and returns either null or a valid +1 reference.
+        NonNull::new(unsafe { IOSurfaceLookup(id) }).map(Self)
+    }
+
+    /// Allocate BGRA8888 storage with tightly specified rows.
+    pub fn new(w: u32, h: u32) -> Option<Self> {
+        unsafe {
+            let k = |s: CFStringRef| &*(s as *const NSString);
+            let keys: [&NSString; 5] = [
+                k(kIOSurfaceWidth),
+                k(kIOSurfaceHeight),
+                k(kIOSurfaceBytesPerElement),
+                k(kIOSurfaceBytesPerRow),
+                k(kIOSurfacePixelFormat),
+            ];
+            let vals = [
+                NSNumber::numberWithInt(w as i32),
+                NSNumber::numberWithInt(h as i32),
+                NSNumber::numberWithInt(4),
+                NSNumber::numberWithInt((w * 4) as i32),
+                NSNumber::numberWithInt(PIXEL_FORMAT_BGRA),
+            ];
+            let props = NSDictionary::from_id_slice(&keys, &vals);
+            NonNull::new(IOSurfaceCreate(Retained::as_ptr(&props) as *const c_void)).map(Self)
+        }
+    }
+
+    pub fn dimensions(&self) -> (usize, usize, usize) {
+        unsafe {
+            (
+                IOSurfaceGetWidth(self.as_ptr()),
+                IOSurfaceGetHeight(self.as_ptr()),
+                IOSurfaceGetBytesPerRow(self.as_ptr()),
+            )
+        }
+    }
+
+    pub(crate) fn as_ptr(&self) -> IOSurfaceRef {
+        self.0.as_ptr()
     }
 }
 
-/// Resolve a global IOSurface id to a surface (`IOSurfaceLookup`). `null` if the id is unknown. The
-/// caller owns the returned reference (release with [`cfrelease`]).
-pub unsafe fn lookup(id: u32) -> IOSurfaceRef {
-    IOSurfaceLookup(id)
-}
-
-/// `(width, height, bytes_per_row)` of a live IOSurface.
-pub unsafe fn dimensions(s: IOSurfaceRef) -> (usize, usize, usize) {
-    (
-        IOSurfaceGetWidth(s),
-        IOSurfaceGetHeight(s),
-        IOSurfaceGetBytesPerRow(s),
-    )
-}
-
-/// Allocate a host `IOSurface` (BGRA8888, `w`×`h`). The host wraps it as an `MTLTexture` with zero copy;
-/// this is the buffer a guest's zero-copy allocation would be backed by. Caller owns it ([`cfrelease`]).
-/// # Safety
-///
-/// The returned Core Foundation object has a +1 retain count. The caller must eventually release it
-/// with [`cfrelease`] and must not use it after that release.
-pub unsafe fn create_iosurface(w: u32, h: u32) -> IOSurfaceRef {
-    let k = |s: CFStringRef| &*(s as *const NSString);
-    let keys: [&NSString; 5] = [
-        k(kIOSurfaceWidth),
-        k(kIOSurfaceHeight),
-        k(kIOSurfaceBytesPerElement),
-        k(kIOSurfaceBytesPerRow),
-        k(kIOSurfacePixelFormat),
-    ];
-    let vals = [
-        NSNumber::numberWithInt(w as i32),
-        NSNumber::numberWithInt(h as i32),
-        NSNumber::numberWithInt(4),
-        NSNumber::numberWithInt((w * 4) as i32),
-        NSNumber::numberWithInt(PIXEL_FORMAT_BGRA),
-    ];
-    let props = NSDictionary::from_id_slice(&keys, &vals);
-    IOSurfaceCreate(Retained::as_ptr(&props) as *const c_void)
+impl Drop for IOSurface {
+    fn drop(&mut self) {
+        // SAFETY: constructors accept only +1 references, this type is not Clone, and Drop runs once.
+        unsafe { CFRelease(self.0.as_ptr().cast_const()) };
+    }
 }
 
 /// CPU-fill a freshly created `IOSurface`'s pages with tight BGRA rows (`w*4` bytes per row), honoring the
 /// surface's real `bytesPerRow` stride. Plants a known pattern in the surface's storage before wrapping it
 /// as a texture (the zero-copy IOSurface present path). Rows beyond `bgra`'s length are left untouched.
 #[allow(dead_code)] // forward seam: IOSurface zero-copy fill, exercised once a live IOSurface id is bridged
-pub unsafe fn fill_bgra(s: IOSurfaceRef, bgra: &[u8], w: u32, h: u32) {
+pub unsafe fn fill_bgra(s: &IOSurface, bgra: &[u8], w: u32, h: u32) {
+    let s = s.as_ptr();
     IOSurfaceLock(s, 0, std::ptr::null_mut());
     let base = IOSurfaceGetBaseAddress(s) as *mut u8;
     let stride = IOSurfaceGetBytesPerRow(s);

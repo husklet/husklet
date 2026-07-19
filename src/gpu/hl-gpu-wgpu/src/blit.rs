@@ -21,7 +21,7 @@ use hl_gpu::protocol::model::enums::{Filter, TextureAspect};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
-use crate::convert::{texel_bytes, texture_format};
+use crate::convert::Format;
 use crate::{texture, WgpuExecutor};
 
 /// The blit shader. A fullscreen triangle whose interpolated `uv` runs `0..1` across the VIEWPORT (which
@@ -230,14 +230,14 @@ impl WgpuExecutor {
         // A blit reads the source through a sampler and writes the destination as a color attachment, so both
         // must have a packed COLOR layout — the depth/stencil formats have none and are rejected honestly.
         let (sw, sh) = {
-            let t = texture::native(res, src)?;
-            let _ = texel_bytes(t.format)?;
+            let t = texture::WgpuTexture::get(res, src)?;
+            let _ = Format::from(t.format).texel_bytes()?;
             (t.width, t.height)
         };
         let (dw, dh, dst_wfmt) = {
-            let t = texture::native(res, dst)?;
-            let _ = texel_bytes(t.format)?;
-            (t.width, t.height, texture_format(t.format)?)
+            let t = texture::WgpuTexture::get(res, dst)?;
+            let _ = Format::from(t.format).texel_bytes()?;
+            (t.width, t.height, Format::from(t.format).native())
         };
 
         // Bounds: the source region must lie inside `src`, the destination region inside `dst`.
@@ -289,10 +289,14 @@ impl WgpuExecutor {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform, 0, f32x4_bytes(&xform));
+        // SAFETY: `[f32; 4]` is contiguous and the read-only byte slice has the same lifetime.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(xform.as_ptr().cast::<u8>(), std::mem::size_of_val(&xform))
+        };
+        queue.write_buffer(&uniform, 0, bytes);
 
-        let src_view = &texture::native(res, src)?.view;
-        let dst_view = &texture::native(res, dst)?.view;
+        let src_view = &texture::WgpuTexture::get(res, src)?.view;
+        let dst_view = &texture::WgpuTexture::get(res, dst)?.view;
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hl-blit-bg"),
             layout: &cache.bind_group_layout,
@@ -361,12 +365,4 @@ impl WgpuExecutor {
         self.gpu.device.poll(wgpu::Maintain::Wait);
         Ok(())
     }
-}
-
-/// Reinterpret a `[f32; 4]` as its 16 little-endian bytes for a uniform upload (dependency-free; the host
-/// is little-endian, matching the shader's expected uniform byte order).
-fn f32x4_bytes(v: &[f32; 4]) -> &[u8] {
-    // SAFETY: `[f32; 4]` is 16 contiguous bytes with no padding and no invalid bit patterns; the returned
-    // read-only slice borrows `v` for the same lifetime.
-    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of::<[f32; 4]>()) }
 }

@@ -29,13 +29,13 @@ impl Capture {
                 .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]]),
         );
 
-        let path = self.path(surface);
+        let path = self.destination(surface);
         let pending = path.with_extension("ppm.pending");
         fs::write(&pending, ppm)?;
         fs::rename(pending, path)
     }
 
-    fn path(&self, surface: SurfaceId) -> PathBuf {
+    fn destination(&self, surface: SurfaceId) -> PathBuf {
         self.directory.join(format!("surface-{}.ppm", surface.0))
     }
 }

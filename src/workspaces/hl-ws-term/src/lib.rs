@@ -16,7 +16,6 @@ pub mod grid;
 pub mod input;
 pub mod launcher;
 pub mod layout;
-pub mod png;
 pub mod pty;
 pub mod render;
 pub mod session;
@@ -24,12 +23,12 @@ pub mod vt;
 
 pub use config::{CursorShape, TermConfig};
 pub use grid::{Attrs, Cell, Color, Grid};
-pub use input::{encode_key, encode_paste, CursorKeys, Key, Mods};
+pub use input::{encode_key, CursorKeys, Key, Mods, PasteMode};
 pub use launcher::LocalShellLauncher;
 pub use layout::{Dir, Layout, PaneId, Rect};
 pub use pty::PtyBackend;
 pub use render::{CpuRenderer, Image};
-pub use session::{Pane, PaneNode, Session, SessionTab, SplitDir};
+pub use session::{History, Pane, PaneNode, Session, SessionTab, SplitDir, WorkingDirectory};
 pub use vt::Vt;
 
 #[cfg(test)]

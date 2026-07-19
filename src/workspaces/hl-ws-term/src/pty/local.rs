@@ -7,30 +7,10 @@
 //! in-container workspace path is the sibling `HlJitPty`.
 
 use super::PtyBackend;
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::io;
 use std::os::unix::io::RawFd;
-
-/// Resolve a program name to an absolute path (done in the parent, before fork). If it already contains
-/// a `/`, it is used as-is; otherwise `PATH` is searched for the first executable match.
-fn resolve_prog(prog: &str) -> Option<String> {
-    if prog.contains('/') {
-        return Some(prog.to_string());
-    }
-    let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
-    for dir in path.split(':') {
-        if dir.is_empty() {
-            continue;
-        }
-        let cand = std::path::Path::new(dir).join(prog);
-        if let Ok(c) = CString::new(cand.to_string_lossy().as_bytes()) {
-            if unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0 {
-                return Some(cand.to_string_lossy().into_owned());
-            }
-        }
-    }
-    None
-}
 
 /// A forked child shell attached to a PTY master fd.
 pub struct LocalPty {
@@ -50,7 +30,7 @@ impl LocalPty {
         argv: &[&str],
         cols: u16,
         rows: u16,
-        env: &[(&str, &str)],
+        env: &BTreeMap<String, String>,
     ) -> io::Result<LocalPty> {
         if argv.is_empty() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty argv"));
@@ -60,8 +40,13 @@ impl LocalPty {
         // `execvp`) — those take locks that a *concurrent* thread may hold at fork time, which would
         // deadlock the child (the classic fork-in-a-threaded-program hazard). Resolve the program path
         // and merge the environment here, up front.
-        let prog = resolve_prog(argv[0])
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "program not found on PATH"))?;
+        if !argv[0].contains('/') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "executable path must be explicit",
+            ));
+        }
+        let prog = argv[0];
         let c_prog = CString::new(prog).unwrap_or_default();
         let c_args: Vec<CString> = argv
             .iter()
@@ -70,11 +55,7 @@ impl LocalPty {
         let mut c_argv: Vec<*const libc::c_char> = c_args.iter().map(|a| a.as_ptr()).collect();
         c_argv.push(std::ptr::null());
         // Merge the process environment with the caller's overrides into a full `KEY=VAL` envp.
-        let mut merged: std::collections::BTreeMap<String, String> = std::env::vars().collect();
-        for (k, v) in env {
-            merged.insert((*k).to_string(), (*v).to_string());
-        }
-        let c_envs: Vec<CString> = merged
+        let c_envs: Vec<CString> = env
             .iter()
             .map(|(k, v)| CString::new(format!("{k}={v}")).unwrap_or_default())
             .collect();
@@ -319,7 +300,10 @@ mod tests {
             &[sh, "-c", "printf 'hello\\r\\n'; printf 'world\\r\\n'"],
             40,
             10,
-            &[("TERM", "xterm-256color")],
+            &std::collections::BTreeMap::from([(
+                String::from("TERM"),
+                String::from("xterm-256color"),
+            )]),
         )
         .expect("spawn shell");
         let vt = run_into_vt(pty, 40, 10);
@@ -338,7 +322,10 @@ mod tests {
             &[sh, "-c", "printf '\\033[31mRED\\033[0m'"],
             40,
             5,
-            &[("TERM", "xterm-256color")],
+            &std::collections::BTreeMap::from([(
+                String::from("TERM"),
+                String::from("xterm-256color"),
+            )]),
         )
         .expect("spawn shell");
         let vt = run_into_vt(pty, 40, 5);
@@ -354,8 +341,16 @@ mod tests {
         } else {
             "/usr/bin/cat"
         };
-        let mut pty =
-            LocalPty::spawn(&[cat], 40, 5, &[("TERM", "xterm-256color")]).expect("spawn cat");
+        let mut pty = LocalPty::spawn(
+            &[cat],
+            40,
+            5,
+            &std::collections::BTreeMap::from([(
+                String::from("TERM"),
+                String::from("xterm-256color"),
+            )]),
+        )
+        .expect("spawn cat");
         pty.write(b"ping\n").unwrap();
         // Read the echo (cat + tty echo), then close stdin so cat exits.
         std::thread::sleep(Duration::from_millis(50));

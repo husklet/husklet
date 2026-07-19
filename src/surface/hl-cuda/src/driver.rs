@@ -132,14 +132,19 @@ impl Cuda {
 }
 
 /// Prepend `dir` to the guest env's existing `LD_LIBRARY_PATH` (if any), producing the new `K=V` line.
-fn compose_ld_library_path(guest_env: &[String], dir: &str) -> String {
-    let existing = guest_env
-        .iter()
-        .find_map(|kv| kv.strip_prefix("LD_LIBRARY_PATH="))
-        .filter(|v| !v.is_empty());
-    match existing {
-        Some(v) => format!("LD_LIBRARY_PATH={dir}:{v}"),
-        None => format!("LD_LIBRARY_PATH={dir}"),
+struct GuestEnvironment<'a>(&'a [String]);
+
+impl GuestEnvironment<'_> {
+    fn library_path(&self, dir: &str) -> String {
+        let existing = self
+            .0
+            .iter()
+            .find_map(|kv| kv.strip_prefix("LD_LIBRARY_PATH="))
+            .filter(|v| !v.is_empty());
+        match existing {
+            Some(v) => format!("LD_LIBRARY_PATH={dir}:{v}"),
+            None => format!("LD_LIBRARY_PATH={dir}"),
+        }
     }
 }
 
@@ -177,7 +182,7 @@ impl Driver for Cuda {
 
         // 3. Env: prepend the shim libdir to LD_LIBRARY_PATH, name the exec socket, advertise the device.
         let mut env = vec![
-            compose_ld_library_path(guest_env, libdir),
+            GuestEnvironment(guest_env).library_path(libdir),
             format!("HL_GPU_EXEC={}", self.spec.guest_socket),
         ];
         if let Some(name) = &self.spec.device_name {

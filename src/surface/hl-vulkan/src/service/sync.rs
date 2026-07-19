@@ -17,33 +17,35 @@ use hl_gpu::{GpuError, Result};
 // ---- events --------------------------------------------------------------------------------------
 
 /// `vkCreateEvent` — mint an unsignaled event. No IR.
-pub fn create_event(dev: &mut Device) -> VkEvent {
-    let handle = dev.alloc_handle();
-    dev.events.insert(handle, EventRec { signaled: false });
-    handle
-}
+impl Device {
+    pub fn create_event(&mut self) -> VkEvent {
+        let handle = self.alloc_handle();
+        self.events.insert(handle, EventRec { signaled: false });
+        handle
+    }
 
-/// `vkDestroyEvent` — drop the event (no-op on unknown / `VK_NULL_HANDLE`).
-pub fn destroy_event(dev: &mut Device, event: VkEvent) {
-    dev.events.remove(&event);
-}
+    /// `vkDestroyEvent` — drop the event (no-op on unknown / `VK_NULL_HANDLE`).
+    pub fn destroy_event(&mut self, event: VkEvent) {
+        self.events.remove(&event);
+    }
 
-/// `vkSetEvent` (`set = true`) / `vkResetEvent` (`set = false`) — host set/clear. Errors on unknown.
-pub fn set_event(dev: &mut Device, event: VkEvent, set: bool) -> Result<()> {
-    dev.events
-        .get_mut(&event)
-        .ok_or(GpuError::Invalid("vkSetEvent/ResetEvent: unknown VkEvent"))?
-        .signaled = set;
-    Ok(())
-}
+    /// `vkSetEvent` (`set = true`) / `vkResetEvent` (`set = false`) — host set/clear. Errors on unknown.
+    pub fn set_event(&mut self, event: VkEvent, set: bool) -> Result<()> {
+        self.events
+            .get_mut(&event)
+            .ok_or(GpuError::Invalid("vkSetEvent/ResetEvent: unknown VkEvent"))?
+            .signaled = set;
+        Ok(())
+    }
 
-/// `vkGetEventStatus` — the event's current signaled state (`true` → `VK_EVENT_SET`). Errors on unknown.
-pub fn event_status(dev: &Device, event: VkEvent) -> Result<bool> {
-    Ok(dev
-        .events
-        .get(&event)
-        .ok_or(GpuError::Invalid("vkGetEventStatus: unknown VkEvent"))?
-        .signaled)
+    /// `vkGetEventStatus` — the event's current signaled state (`true` → `VK_EVENT_SET`). Errors on unknown.
+    pub fn event_status(&self, event: VkEvent) -> Result<bool> {
+        Ok(self
+            .events
+            .get(&event)
+            .ok_or(GpuError::Invalid("vkGetEventStatus: unknown VkEvent"))?
+            .signaled)
+    }
 }
 
 // ---- semaphores (binary + timeline) --------------------------------------------------------------
@@ -63,33 +65,35 @@ pub fn create_semaphore(dev: &mut Device, timeline: bool, initial: u64) -> VkSem
 }
 
 /// `vkDestroySemaphore` — drop the semaphore (no-op on unknown / `VK_NULL_HANDLE`).
-pub fn destroy_semaphore(dev: &mut Device, semaphore: VkSemaphore) {
-    dev.semaphores.remove(&semaphore);
-}
-
-/// `vkSignalSemaphore` — host signal of a TIMELINE semaphore to `value` (the counter only advances, so
-/// it moves to `max(counter, value)`). Errors on unknown or a binary semaphore. Ported from
-/// `MVKTimelineSemaphore::signal`.
-pub fn signal_semaphore(dev: &mut Device, semaphore: VkSemaphore, value: u64) -> Result<()> {
-    match dev.semaphores.get_mut(&semaphore) {
-        Some(sm) if sm.timeline => {
-            sm.counter = sm.counter.max(value);
-            Ok(())
-        }
-        _ => Err(GpuError::Invalid(
-            "vkSignalSemaphore: unknown or non-timeline VkSemaphore",
-        )),
+impl Device {
+    pub fn destroy_semaphore(&mut self, semaphore: VkSemaphore) {
+        self.semaphores.remove(&semaphore);
     }
-}
 
-/// `vkGetSemaphoreCounterValue` — the current counter of a TIMELINE semaphore. Errors on unknown or a
-/// binary semaphore.
-pub fn semaphore_counter(dev: &Device, semaphore: VkSemaphore) -> Result<u64> {
-    match dev.semaphores.get(&semaphore) {
-        Some(sm) if sm.timeline => Ok(sm.counter),
-        _ => Err(GpuError::Invalid(
-            "vkGetSemaphoreCounterValue: unknown or non-timeline VkSemaphore",
-        )),
+    /// `vkSignalSemaphore` — host signal of a TIMELINE semaphore to `value` (the counter only advances, so
+    /// it moves to `max(counter, value)`). Errors on unknown or a binary semaphore. Ported from
+    /// `MVKTimelineSemaphore::signal`.
+    pub fn signal_semaphore(&mut self, semaphore: VkSemaphore, value: u64) -> Result<()> {
+        match self.semaphores.get_mut(&semaphore) {
+            Some(sm) if sm.timeline => {
+                sm.counter = sm.counter.max(value);
+                Ok(())
+            }
+            _ => Err(GpuError::Invalid(
+                "vkSignalSemaphore: unknown or non-timeline VkSemaphore",
+            )),
+        }
+    }
+
+    /// `vkGetSemaphoreCounterValue` — the current counter of a TIMELINE semaphore. Errors on unknown or a
+    /// binary semaphore.
+    pub fn semaphore_counter(&self, semaphore: VkSemaphore) -> Result<u64> {
+        match self.semaphores.get(&semaphore) {
+            Some(sm) if sm.timeline => Ok(sm.counter),
+            _ => Err(GpuError::Invalid(
+                "vkGetSemaphoreCounterValue: unknown or non-timeline VkSemaphore",
+            )),
+        }
     }
 }
 
@@ -137,8 +141,10 @@ pub fn create_query_pool(dev: &mut Device, query_type: i32, count: u32) -> Resul
 }
 
 /// `vkDestroyQueryPool` — drop the pool (no-op on unknown / `VK_NULL_HANDLE`).
-pub fn destroy_query_pool(dev: &mut Device, pool: VkQueryPool) {
-    dev.query_pools.remove(&pool);
+impl Device {
+    pub fn destroy_query_pool(&mut self, pool: VkQueryPool) {
+        self.query_pools.remove(&pool);
+    }
 }
 
 /// `vkResetQueryPool` (Vulkan 1.2 / `VK_EXT_host_query_reset`) — host reset of `[first, first+count)` to

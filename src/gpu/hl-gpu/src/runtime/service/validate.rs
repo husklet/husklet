@@ -9,38 +9,39 @@
 use crate::protocol::model::capability::shader_payload;
 use crate::protocol::model::command::{Cmd, Enc, ShaderPayloadKind};
 use crate::protocol::model::error::{GpuError, Result};
-use crate::runtime::model::resources::texture_bytes;
 use crate::runtime::model::session::Limits;
 
 /// The negotiated copy alignment must divide every buffer/image copy offset, size, and row stride.
-fn check_copy_alignment(alignment: u64, op: &Enc) -> Result<()> {
-    if alignment <= 1 {
-        return Ok(());
+impl Enc {
+    fn validate_copy_alignment(&self, alignment: u64) -> Result<()> {
+        if alignment <= 1 {
+            return Ok(());
+        }
+        let a = alignment;
+        let misaligned = match self {
+            Enc::CopyBufferToBuffer {
+                src_offset,
+                dst_offset,
+                size,
+                ..
+            } => src_offset % a != 0 || dst_offset % a != 0 || size % a != 0,
+            Enc::CopyBufferToTexture {
+                src_offset,
+                bytes_per_row,
+                ..
+            } => src_offset % a != 0 || (*bytes_per_row as u64) % a != 0,
+            Enc::CopyTextureToBuffer {
+                dst_offset,
+                bytes_per_row,
+                ..
+            } => dst_offset % a != 0 || (*bytes_per_row as u64) % a != 0,
+            _ => false,
+        };
+        if misaligned {
+            return Err(GpuError::ResourceLimit("copy alignment"));
+        }
+        Ok(())
     }
-    let a = alignment;
-    let misaligned = match op {
-        Enc::CopyBufferToBuffer {
-            src_offset,
-            dst_offset,
-            size,
-            ..
-        } => src_offset % a != 0 || dst_offset % a != 0 || size % a != 0,
-        Enc::CopyBufferToTexture {
-            src_offset,
-            bytes_per_row,
-            ..
-        } => src_offset % a != 0 || (*bytes_per_row as u64) % a != 0,
-        Enc::CopyTextureToBuffer {
-            dst_offset,
-            bytes_per_row,
-            ..
-        } => dst_offset % a != 0 || (*bytes_per_row as u64) % a != 0,
-        _ => false,
-    };
-    if misaligned {
-        return Err(GpuError::ResourceLimit("copy alignment"));
-    }
-    Ok(())
 }
 
 /// Validate a whole decoded frame against the negotiated [`Limits`]. Checked before any charge or
@@ -61,7 +62,7 @@ pub fn validate(limits: &Limits, frame_bytes: usize, cmds: &[Cmd]) -> Result<()>
                 if d.width > caps.max_texture_2d || d.height > caps.max_texture_2d {
                     return Err(GpuError::ResourceLimit("texture dimensions"));
                 }
-                if texture_bytes(d)? > caps.max_buffer_bytes {
+                if d.residency_bytes()? > caps.max_buffer_bytes {
                     return Err(GpuError::ResourceLimit("texture bytes"));
                 }
                 let bit = 1u32.checked_shl(d.format.to_u32()).unwrap_or(0);
@@ -90,7 +91,7 @@ pub fn validate(limits: &Limits, frame_bytes: usize, cmds: &[Cmd]) -> Result<()>
                     if tag >= 64 || caps.command_bits & (1u64 << tag) == 0 {
                         return Err(GpuError::ResourceLimit("encoder command"));
                     }
-                    check_copy_alignment(limits.copy_alignment, op)?;
+                    op.validate_copy_alignment(limits.copy_alignment)?;
                 }
             }
             _ => {}

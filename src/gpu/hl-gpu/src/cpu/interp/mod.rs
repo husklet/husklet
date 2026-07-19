@@ -15,11 +15,3 @@ mod exec;
 mod memory;
 
 pub use control::execute;
-
-use crate::protocol::model::error::GpuError;
-
-/// A kernel interpretation error (bad access, unbound region, malformed program) — the neutral analog of
-/// the old `GpuError::Ptx`, now carried as [`GpuError::Kernel`].
-pub(crate) fn kerr(m: impl Into<String>) -> GpuError {
-    GpuError::Kernel(m.into())
-}

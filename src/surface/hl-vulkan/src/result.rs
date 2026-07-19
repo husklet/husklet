@@ -56,21 +56,25 @@ pub const fn make_api_version(variant: u32, major: u32, minor: u32, patch: u32) 
 /// cannot run it) — matching a real driver — while an unknown/duplicate handle maps to
 /// `VK_ERROR_UNKNOWN`, a resource-limit to out-of-device-memory, and an invalid argument to
 /// `VK_ERROR_INITIALIZATION_FAILED`.
-pub fn vk_result_from_gpu_error(e: &GpuError) -> i32 {
-    match e {
-        GpuError::Unsupported(_) => VK_ERROR_FEATURE_NOT_PRESENT,
-        GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => VK_ERROR_UNKNOWN,
-        GpuError::ResourceLimit(_) => VK_ERROR_OUT_OF_DEVICE_MEMORY,
-        GpuError::OutOfBounds => VK_ERROR_MEMORY_MAP_FAILED,
-        GpuError::Kernel(_) => VK_ERROR_UNKNOWN,
-        GpuError::Decode(_) => VK_ERROR_DEVICE_LOST,
-        GpuError::Invalid(_)
-        | GpuError::BadEnum { .. }
-        | GpuError::BadTag(_)
-        | GpuError::NonFinite(_)
-        | GpuError::NonCanonicalBool(_)
-        | GpuError::Utf8
-        | GpuError::ShortBuffer
-        | GpuError::TrailingBytes => VK_ERROR_INITIALIZATION_FAILED,
+pub struct Status;
+
+impl Status {
+    pub fn from_error(e: &GpuError) -> i32 {
+        match e {
+            GpuError::Unsupported(_) => VK_ERROR_FEATURE_NOT_PRESENT,
+            GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => VK_ERROR_UNKNOWN,
+            GpuError::ResourceLimit(_) => VK_ERROR_OUT_OF_DEVICE_MEMORY,
+            GpuError::OutOfBounds => VK_ERROR_MEMORY_MAP_FAILED,
+            GpuError::Kernel(_) => VK_ERROR_UNKNOWN,
+            GpuError::Decode(_) => VK_ERROR_DEVICE_LOST,
+            GpuError::Invalid(_)
+            | GpuError::BadEnum { .. }
+            | GpuError::BadTag(_)
+            | GpuError::NonFinite(_)
+            | GpuError::NonCanonicalBool(_)
+            | GpuError::Utf8
+            | GpuError::ShortBuffer
+            | GpuError::TrailingBytes => VK_ERROR_INITIALIZATION_FAILED,
+        }
     }
 }

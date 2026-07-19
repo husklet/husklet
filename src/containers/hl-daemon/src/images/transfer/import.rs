@@ -11,12 +11,12 @@ pub(crate) async fn image_import(
     body: axum::body::Bytes,
 ) -> Response {
     if repo.is_empty() {
-        return import_progress(Err("repo is required".into()));
+        return ImportProgress::response(Err("repo is required".into()));
     }
     // hl imports a rootfs tar streamed in the body (`docker import - <name>`); importing from a remote
     // URL is not supported (hl has no HTTP fetcher).
     if src != "-" {
-        return import_progress(Err(format!(
+        return ImportProgress::response(Err(format!(
             "unsupported import source {src:?}; pipe the rootfs to `-`"
         )));
     }
@@ -32,27 +32,30 @@ pub(crate) async fn image_import(
         .map_err(|e| e.to_string())
     {
         Ok(l) => l,
-        Err(e) => return import_progress(Err(e)),
+        Err(e) => return ImportProgress::response(Err(e)),
     };
     let img = Image {
         name: loaded.name,
         rootfs: loaded.rootfs.to_string_lossy().into_owned(),
-        arch: guest_of(loaded.arch),
+        arch: ImagePlatform::guest(loaded.arch),
         cmd: loaded.cmd,
         created: now_secs(),
         ..Default::default()
     };
-    register_image(&a, img).await;
-    import_progress(Ok(format!("sha256:{}", fake_id(&name))))
+    Images::register(&a, img).await;
+    ImportProgress::response(Ok(format!("sha256:{}", Digest::fake(&name))))
 }
 
 /// `docker import` progress: a single JSON status line carrying the new image id, or an error line.
-fn import_progress(result: Result<String, String>) -> Response {
-    let body = match result {
-        Ok(id) => serde_json::to_string(&ImportStatus { status: id }).unwrap() + "\r\n",
-        Err(e) => {
-            json!({ "errorDetail": { "message": e.clone() }, "error": e }).to_string() + "\r\n"
-        }
-    };
-    (StatusCode::OK, [("Content-Type", "application/json")], body).into_response()
+struct ImportProgress;
+impl ImportProgress {
+    fn response(result: Result<String, String>) -> Response {
+        let body = match result {
+            Ok(id) => serde_json::to_string(&ImportStatus { status: id }).unwrap() + "\r\n",
+            Err(e) => {
+                json!({ "errorDetail": { "message": e.clone() }, "error": e }).to_string() + "\r\n"
+            }
+        };
+        (StatusCode::OK, [("Content-Type", "application/json")], body).into_response()
+    }
 }

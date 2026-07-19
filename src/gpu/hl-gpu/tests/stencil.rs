@@ -12,7 +12,6 @@
 //! so the harness widens the SESSION caps to admit the combined depth+stencil format (exactly as the
 //! differential does), which changes nothing the oracle computes.
 
-use hl_gpu::protocol::model::capability::format_bits;
 use hl_gpu::protocol::model::descriptor::{
     BufferDesc, ColorAttachment, ColorTargetState, DepthAttachment, DepthState, RenderPipelineDesc,
     ShaderRef, StencilFaceState, TextureDesc, VertexAttr, VertexLayout,
@@ -168,7 +167,7 @@ fn run(cmds: &[Cmd]) -> Vec<u8> {
     let mut exec = hl_gpu::CpuExecutor::new();
     exec.define_kernel(1, placeholder_shader());
     let mut caps = exec.capabilities();
-    caps.texture_formats |= format_bits(&[TextureFormat::Depth24PlusStencil8]);
+    caps.texture_formats |= TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]);
     let mut limits = hl_gpu::Limits::from_capabilities(caps);
     limits.copy_alignment = 1;
     let mut s = hl_gpu::Session::new(

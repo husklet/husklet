@@ -20,42 +20,46 @@ fn next_handle() -> u64 {
 
 /// `cudaMallocArray(&array, &channelDesc, width, height)` — allocate a `width × height` single-channel
 /// `f32` array, zero-initialized. Errors on a zero extent (the `cudaErrorInvalidValue` analogue).
-pub fn malloc_array(width: u32, height: u32) -> Result<CudaArray> {
-    if width == 0 || height == 0 {
-        return Err(GpuError::Invalid("cudaMallocArray: zero width or height"));
+impl CudaArray {
+    pub fn new(width: u32, height: u32) -> Result<Self> {
+        if width == 0 || height == 0 {
+            return Err(GpuError::Invalid("cudaMallocArray: zero width or height"));
+        }
+        let n = (width as usize)
+            .checked_mul(height as usize)
+            .ok_or(GpuError::Invalid("cudaMallocArray: width*height overflow"))?;
+        Ok(CudaArray {
+            id: next_handle(),
+            width,
+            height,
+            texels: vec![0.0; n],
+        })
     }
-    let n = (width as usize)
-        .checked_mul(height as usize)
-        .ok_or(GpuError::Invalid("cudaMallocArray: width*height overflow"))?;
-    Ok(CudaArray {
-        id: next_handle(),
-        width,
-        height,
-        texels: vec![0.0; n],
-    })
-}
 
-/// `cudaMemcpy2DToArray(array, 0, 0, src, …, cudaMemcpyHostToDevice)` — upload a full row-major `f32`
-/// image into the array. Errors if `src.len()` is not exactly `width * height` texels.
-pub fn memcpy_to_array(array: &mut CudaArray, src: &[f32]) -> Result<()> {
-    let expect = (array.width as usize) * (array.height as usize);
-    if src.len() != expect {
-        return Err(GpuError::Invalid(
-            "cudaMemcpy2DToArray: source length != array texel count",
-        ));
+    /// `cudaMemcpy2DToArray(array, 0, 0, src, …, cudaMemcpyHostToDevice)` — upload a full row-major `f32`
+    /// image into the array. Errors if `src.len()` is not exactly `width * height` texels.
+    pub fn upload(&mut self, src: &[f32]) -> Result<()> {
+        let expect = (self.width as usize) * (self.height as usize);
+        if src.len() != expect {
+            return Err(GpuError::Invalid(
+                "cudaMemcpy2DToArray: source length != array texel count",
+            ));
+        }
+        self.texels.copy_from_slice(src);
+        Ok(())
     }
-    array.texels.copy_from_slice(src);
-    Ok(())
 }
 
 /// `cudaCreateTextureObject(&texObj, &resDesc{array}, &texDesc, null)` — bind `array` to `desc`, returning
 /// a fetchable texture object. The object owns a snapshot of the array texels (a bound texture is immutable
 /// for its lifetime).
-pub fn create_texture_object(array: &CudaArray, desc: SamplerDesc) -> TextureObject {
-    TextureObject {
-        id: next_handle(),
-        array: array.clone(),
-        desc,
+impl TextureObject {
+    pub fn from_array(array: &CudaArray, desc: SamplerDesc) -> Self {
+        Self {
+            id: next_handle(),
+            array: array.clone(),
+            desc,
+        }
     }
 }
 

@@ -13,9 +13,7 @@ use hl_compositor::scene::model::{
     BufferState, BufferTransform, DamageRegion, Format, Output, OutputId, Rect, Scene,
     SubsurfaceState, SurfaceRole, Viewport,
 };
-use hl_compositor::scene::service::{
-    commit_surface, compose_frame, is_tree_dirty, BufferChange, Commit,
-};
+use hl_compositor::scene::service::{commit_surface, BufferChange, Commit};
 
 // ---- helpers -----------------------------------------------------------------------------------
 
@@ -88,8 +86,8 @@ fn rect_union_contains_intersects_survive_overflow() {
     // union computes right()/bottom() and (right - x): all must be overflow-safe.
     let u = a.union(&b);
     assert!(!u.is_empty());
-    let _ = a.contains_rect(&b);
-    let _ = b.contains_rect(&a);
+    let _ = a.contains(&b);
+    let _ = b.contains(&a);
     let _ = a.intersects(&b);
     // A normal union is still exact (guard only bites the extremes).
     assert_eq!(
@@ -132,10 +130,10 @@ fn compose_survives_absurd_subsurface_offset_chain() {
         parent = child;
     }
     // Compose must not panic and must still yield a frame (the root has content).
-    let frame = compose_frame(&scene, top).expect("root composes");
+    let frame = scene.compose_frame(top).expect("root composes");
     assert!(!frame.items.is_empty());
     let _ = frame.damage(); // unions every layer's (translated) damage
-    let _ = is_tree_dirty(&scene, top);
+    let _ = scene.is_tree_dirty(top);
 }
 
 #[test]
@@ -145,11 +143,11 @@ fn compose_survives_min_offset_subsurface() {
     let child = scene.create_surface();
     scene.set_role(child, sub(top, i32::MIN, i32::MIN));
     commit_surface(&mut scene, child, Commit::attach(shm(64, 64)));
-    let frame = compose_frame(&scene, top).expect("root composes");
+    let frame = scene.compose_frame(top).expect("root composes");
     let _ = frame.damage();
-    let _ = is_tree_dirty(&scene, top);
+    let _ = scene.is_tree_dirty(top);
     // A valid follow-up compose still works.
-    assert!(compose_frame(&scene, top).is_some());
+    assert!(scene.compose_frame(top).is_some());
 }
 
 #[test]
@@ -170,9 +168,9 @@ fn compose_survives_out_of_bounds_damage_rect() {
         }
         .with_damage(Rect::new(i32::MAX - 2, i32::MAX - 2, i32::MAX, i32::MAX)),
     );
-    let frame = compose_frame(&scene, top).expect("composes");
+    let frame = scene.compose_frame(top).expect("composes");
     let _ = frame.damage();
-    let _ = is_tree_dirty(&scene, top);
+    let _ = scene.is_tree_dirty(top);
 }
 
 // =================================================================================================
@@ -252,7 +250,7 @@ fn compose_present_crop_survives_huge_viewport_dst() {
             ..Commit::default()
         },
     );
-    let frame = compose_frame(&scene, top).expect("composes");
+    let frame = scene.compose_frame(top).expect("composes");
     // present_crop is computed in f64 (src * buffer_scale) — no panic, and it is present.
     assert!(frame.items[0].image.present_crop.is_some());
     let _ = frame.items[0].image.width;

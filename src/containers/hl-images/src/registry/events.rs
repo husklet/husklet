@@ -54,33 +54,51 @@ pub enum PullEvent {
 }
 
 /// docker's short layer id: the first 12 hex chars after the `sha256:` prefix.
-pub fn layer_short(digest: &str) -> String {
-    digest
-        .trim_start_matches("sha256:")
-        .chars()
-        .take(12)
-        .collect()
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct LayerId(String);
+
+impl LayerId {
+    /// Derives Docker's short identity from a layer digest.
+    pub fn from_digest(digest: &str) -> Self {
+        Self(
+            digest
+                .trim_start_matches("sha256:")
+                .chars()
+                .take(12)
+                .collect(),
+        )
+    }
+    /// Returns the short layer identity.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::layer_short;
+    use super::LayerId;
 
     #[test]
     fn layer_short_strips_prefix_and_takes_12() {
         // Docker's short id: first 12 hex chars after the `sha256:` prefix.
-        assert_eq!(layer_short("sha256:deadbeefcafe0000"), "deadbeefcafe");
+        assert_eq!(
+            LayerId::from_digest("sha256:deadbeefcafe0000").as_str(),
+            "deadbeefcafe"
+        );
     }
 
     #[test]
     fn layer_short_without_prefix() {
         // No `sha256:` prefix: still just the first 12 chars.
-        assert_eq!(layer_short("deadbeefcafe0000"), "deadbeefcafe");
+        assert_eq!(
+            LayerId::from_digest("deadbeefcafe0000").as_str(),
+            "deadbeefcafe"
+        );
     }
 
     #[test]
     fn layer_short_shorter_than_12() {
         // Fewer than 12 chars available: return the whole (prefix-stripped) string.
-        assert_eq!(layer_short("sha256:abc123"), "abc123");
+        assert_eq!(LayerId::from_digest("sha256:abc123").as_str(), "abc123");
     }
 }

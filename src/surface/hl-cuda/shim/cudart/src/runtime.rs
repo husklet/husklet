@@ -13,14 +13,14 @@ use core::ffi::{c_char, c_void};
 use hl_cuda::adapter::ptx;
 use hl_cuda::model::device::DevicePtr;
 use hl_cuda::result::{
-    cudart_from_gpu_error, CUDART_ERROR_INVALID_DEVICE, CUDART_ERROR_INVALID_RESOURCE_HANDLE,
+    RuntimeStatus, CUDART_ERROR_INVALID_DEVICE, CUDART_ERROR_INVALID_RESOURCE_HANDLE,
     CUDART_ERROR_INVALID_VALUE, CUDART_ERROR_MEMORY_ALLOCATION, CUDART_ERROR_NOT_SUPPORTED,
     CUDART_SUCCESS,
 };
 use hl_cuda::service::register::{self, FatbinHandle};
-use hl_cuda::service::{allocate, synchronize, transfer};
+use hl_cuda::service::{allocate, transfer};
 
-use crate::state::{with, CallCfg};
+use crate::state::{CallCfg, ShimState};
 use crate::Dim3;
 
 /// `cudaErrorNotReady` (600) — an async query whose work has not completed. The synchronous executor
@@ -43,11 +43,26 @@ const MEMCPY_HOST_TO_DEVICE: i32 = 1;
 const MEMCPY_DEVICE_TO_HOST: i32 = 2;
 const MEMCPY_DEVICE_TO_DEVICE: i32 = 3;
 
-unsafe fn bytes<'a>(p: *const c_void, n: usize) -> &'a [u8] {
-    if p.is_null() || n == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(p as *const u8, n)
+struct CInput;
+
+impl CInput {
+    unsafe fn bytes<'a>(pointer: *const c_void, length: usize) -> &'a [u8] {
+        if pointer.is_null() || length == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(pointer as *const u8, length)
+        }
+    }
+
+    /// Read a nul-terminated C string into an owned `String`.
+    unsafe fn string(pointer: *const c_char) -> Option<String> {
+        if pointer.is_null() {
+            return None;
+        }
+        std::ffi::CStr::from_ptr(pointer)
+            .to_str()
+            .ok()
+            .map(str::to_string)
     }
 }
 
@@ -58,15 +73,17 @@ unsafe fn bytes<'a>(p: *const c_void, n: usize) -> &'a [u8] {
 #[no_mangle]
 pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut c_void, size: usize) -> i32 {
     if dev_ptr.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    with(|s| match allocate::mem_alloc(&mut s.ctx, &mut s.sink, size as u64) {
-        Ok(p) => {
-            unsafe { *dev_ptr = p.0 as *mut c_void };
-            CUDART_SUCCESS
-        }
-        Err(e) => s.fail(cudart_from_gpu_error(&e)),
-    })
+    ShimState::with(
+        |s| match allocate::mem_alloc(&mut s.ctx, &mut s.sink, size as u64) {
+            Ok(p) => {
+                unsafe { *dev_ptr = p.0 as *mut c_void };
+                CUDART_SUCCESS
+            }
+            Err(e) => s.fail(RuntimeStatus::from(&e).code()),
+        },
+    )
 }
 
 #[no_mangle]
@@ -74,15 +91,17 @@ pub extern "C" fn cudaFree(dev_ptr: *mut c_void) -> i32 {
     if dev_ptr.is_null() {
         return CUDART_SUCCESS; // cudaFree(NULL) is a valid no-op.
     }
-    with(|s| match allocate::mem_free(&mut s.ctx, &mut s.sink, DevicePtr(dev_ptr as u64)) {
-        Ok(()) => CUDART_SUCCESS,
-        Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
-    })
+    ShimState::with(
+        |s| match allocate::mem_free(&mut s.ctx, &mut s.sink, DevicePtr(dev_ptr as u64)) {
+            Ok(()) => CUDART_SUCCESS,
+            Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
+        },
+    )
 }
 
 #[no_mangle]
 pub extern "C" fn cudaMemcpy(dst: *mut c_void, src: *const c_void, count: usize, kind: i32) -> i32 {
-    with(|s| memcpy_impl(s, dst, src, count, kind))
+    ShimState::with(|s| memcpy_impl(s, dst, src, count, kind))
 }
 
 #[no_mangle]
@@ -94,20 +113,32 @@ pub extern "C" fn cudaMemcpyAsync(
     _stream: *mut c_void,
 ) -> i32 {
     // Synchronous executor: async copy is the same lowering (ordering is trivially satisfied).
-    with(|s| memcpy_impl(s, dst, src, count, kind))
+    ShimState::with(|s| memcpy_impl(s, dst, src, count, kind))
 }
 
-fn memcpy_impl(s: &mut crate::state::State, dst: *mut c_void, src: *const c_void, count: usize, kind: i32) -> i32 {
+fn memcpy_impl(
+    s: &mut crate::state::State,
+    dst: *mut c_void,
+    src: *const c_void,
+    count: usize,
+    kind: i32,
+) -> i32 {
     match kind {
         MEMCPY_HOST_TO_DEVICE => {
-            let host = unsafe { bytes(src, count) };
+            let host = unsafe { CInput::bytes(src, count) };
             match transfer::memcpy_htod(&mut s.ctx, &mut s.sink, DevicePtr(dst as u64), host) {
                 Ok(()) => CUDART_SUCCESS,
                 Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
             }
         }
         MEMCPY_DEVICE_TO_DEVICE => {
-            match transfer::memcpy_dtod(&mut s.ctx, &mut s.sink, DevicePtr(dst as u64), DevicePtr(src as u64), count as u64) {
+            match transfer::memcpy_dtod(
+                &mut s.ctx,
+                &mut s.sink,
+                DevicePtr(dst as u64),
+                DevicePtr(src as u64),
+                count as u64,
+            ) {
                 Ok(()) => CUDART_SUCCESS,
                 Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
             }
@@ -119,7 +150,11 @@ fn memcpy_impl(s: &mut crate::state::State, dst: *mut c_void, src: *const c_void
                 Ok(bytes) => {
                     if !dst.is_null() {
                         unsafe {
-                            std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len())
+                            std::ptr::copy_nonoverlapping(
+                                bytes.as_ptr(),
+                                dst as *mut u8,
+                                bytes.len(),
+                            )
                         };
                     }
                     CUDART_SUCCESS
@@ -140,12 +175,17 @@ fn memcpy_impl(s: &mut crate::state::State, dst: *mut c_void, src: *const c_void
 
 #[no_mangle]
 pub extern "C" fn cudaMemset(dev_ptr: *mut c_void, value: i32, count: usize) -> i32 {
-    with(|s| memset_impl(s, dev_ptr, value, count))
+    ShimState::with(|s| memset_impl(s, dev_ptr, value, count))
 }
 
 #[no_mangle]
-pub extern "C" fn cudaMemsetAsync(dev_ptr: *mut c_void, value: i32, count: usize, _stream: *mut c_void) -> i32 {
-    with(|s| memset_impl(s, dev_ptr, value, count))
+pub extern "C" fn cudaMemsetAsync(
+    dev_ptr: *mut c_void,
+    value: i32,
+    count: usize,
+    _stream: *mut c_void,
+) -> i32 {
+    ShimState::with(|s| memset_impl(s, dev_ptr, value, count))
 }
 
 fn memset_impl(s: &mut crate::state::State, dev_ptr: *mut c_void, value: i32, count: usize) -> i32 {
@@ -157,7 +197,14 @@ fn memset_impl(s: &mut crate::state::State, dev_ptr: *mut c_void, value: i32, co
     // (checked, against the destination allocation) BEFORE allocating a single byte, so a hostile
     // `count` (e.g. near `usize::MAX`) returns a truthful `cudaErrorInvalidValue` instead of driving an
     // unbounded multi-GiB host allocation → OOM-abort.
-    match transfer::memset_elements(&mut s.ctx, &mut s.sink, DevicePtr(dev_ptr as u64), value as u8 as u64, 1, count) {
+    match transfer::memset_elements(
+        &mut s.ctx,
+        &mut s.sink,
+        DevicePtr(dev_ptr as u64),
+        value as u8 as u64,
+        1,
+        count,
+    ) {
         Ok(()) => CUDART_SUCCESS,
         Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
     }
@@ -166,9 +213,9 @@ fn memset_impl(s: &mut crate::state::State, dev_ptr: *mut c_void, value: i32, co
 #[no_mangle]
 pub extern "C" fn cudaMemGetInfo(free_b: *mut usize, total_b: *mut usize) -> i32 {
     if free_b.is_null() || total_b.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    with(|s| {
+    ShimState::with(|s| {
         // free = advertised VRAM minus the sum of every live device allocation (never underflows).
         let (free, total) = s.mem_info();
         unsafe {
@@ -189,15 +236,17 @@ pub extern "C" fn cudaMemGetInfo(free_b: *mut usize, total_b: *mut usize) -> i32
 #[no_mangle]
 pub extern "C" fn cudaMallocManaged(dev_ptr: *mut *mut c_void, size: usize, _flags: u32) -> i32 {
     if dev_ptr.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    with(|s| match allocate::mem_alloc_managed(&mut s.ctx, &mut s.sink, size as u64) {
-        Ok(p) => {
-            unsafe { *dev_ptr = p.0 as *mut c_void };
-            CUDART_SUCCESS
-        }
-        Err(e) => s.fail(cudart_from_gpu_error(&e)),
-    })
+    ShimState::with(
+        |s| match allocate::mem_alloc_managed(&mut s.ctx, &mut s.sink, size as u64) {
+            Ok(p) => {
+                unsafe { *dev_ptr = p.0 as *mut c_void };
+                CUDART_SUCCESS
+            }
+            Err(e) => s.fail(RuntimeStatus::from(&e).code()),
+        },
+    )
 }
 
 /// `cudaMallocHost(ptr, size)` — a page-locked host allocation. Hands back the base of a real host buffer
@@ -205,14 +254,14 @@ pub extern "C" fn cudaMallocManaged(dev_ptr: *mut *mut c_void, size: usize, _fla
 #[no_mangle]
 pub extern "C" fn cudaMallocHost(ptr: *mut *mut c_void, size: usize) -> i32 {
     if ptr.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    match with(|s| allocate::host_alloc(&mut s.ctx, size)) {
+    match ShimState::with(|s| s.ctx.host_alloc(size)) {
         Some(base) => {
             unsafe { *ptr = base as *mut c_void };
             CUDART_SUCCESS
         }
-        None => with(|s| s.fail(CUDART_ERROR_MEMORY_ALLOCATION)),
+        None => ShimState::with(|s| s.fail(CUDART_ERROR_MEMORY_ALLOCATION)),
     }
 }
 
@@ -230,7 +279,7 @@ pub extern "C" fn cudaFreeHost(ptr: *mut c_void) -> i32 {
     if ptr.is_null() {
         return CUDART_SUCCESS;
     }
-    with(|s| match allocate::host_free(&mut s.ctx, ptr as u64) {
+    ShimState::with(|s| match s.ctx.host_free(ptr as u64) {
         Ok(()) => CUDART_SUCCESS,
         Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
     })
@@ -246,15 +295,17 @@ pub extern "C" fn cudaHostGetDevicePointer(
     _flags: u32,
 ) -> i32 {
     if p_device.is_null() || p_host.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    with(|s| match allocate::host_get_device_pointer(&mut s.ctx, &mut s.sink, p_host as u64) {
-        Ok(ptr) => {
-            unsafe { *p_device = ptr.0 as *mut c_void };
-            CUDART_SUCCESS
-        }
-        Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
-    })
+    ShimState::with(
+        |s| match s.ctx.host_get_device_pointer(&mut s.sink, p_host as u64) {
+            Ok(ptr) => {
+                unsafe { *p_device = ptr.0 as *mut c_void };
+                CUDART_SUCCESS
+            }
+            Err(_) => s.fail(CUDART_ERROR_INVALID_VALUE),
+        },
+    )
 }
 
 // ==================================================================================================
@@ -263,9 +314,9 @@ pub extern "C" fn cudaHostGetDevicePointer(
 
 #[no_mangle]
 pub extern "C" fn cudaDeviceSynchronize() -> i32 {
-    with(|s| match synchronize::ctx_synchronize(&mut s.ctx, &mut s.sink) {
+    ShimState::with(|s| match s.ctx.synchronize(&mut s.sink) {
         Ok(()) => CUDART_SUCCESS,
-        Err(e) => s.fail(cudart_from_gpu_error(&e)),
+        Err(e) => s.fail(RuntimeStatus::from(&e).code()),
     })
 }
 
@@ -277,9 +328,9 @@ pub extern "C" fn cudaThreadSynchronize() -> i32 {
 #[no_mangle]
 pub extern "C" fn cudaStreamCreate(p_stream: *mut *mut c_void) -> i32 {
     if p_stream.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    let h = with(|s| {
+    let h = ShimState::with(|s| {
         let st = s.ctx.streams.create();
         s.intern_stream(st)
     });
@@ -294,7 +345,7 @@ pub extern "C" fn cudaStreamCreateWithFlags(p_stream: *mut *mut c_void, _flags: 
 
 #[no_mangle]
 pub extern "C" fn cudaStreamDestroy(stream: *mut c_void) -> i32 {
-    with(|s| match s.stream(stream) {
+    ShimState::with(|s| match s.stream(stream) {
         Some(st) => {
             s.ctx.streams.destroy(st);
             CUDART_SUCCESS
@@ -305,13 +356,13 @@ pub extern "C" fn cudaStreamDestroy(stream: *mut c_void) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn cudaStreamSynchronize(stream: *mut c_void) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         let Some(st) = s.stream(stream) else {
             return s.fail(CUDART_ERROR_INVALID_VALUE);
         };
-        match synchronize::stream_synchronize(&mut s.ctx, &mut s.sink, st) {
+        match s.ctx.synchronize_stream(&mut s.sink, st) {
             Ok(()) => CUDART_SUCCESS,
-            Err(e) => s.fail(cudart_from_gpu_error(&e)),
+            Err(e) => s.fail(RuntimeStatus::from(&e).code()),
         }
     })
 }
@@ -321,7 +372,7 @@ pub extern "C" fn cudaStreamSynchronize(stream: *mut c_void) -> i32 {
 /// `cudaErrorInvalidResourceHandle`.
 #[no_mangle]
 pub extern "C" fn cudaStreamQuery(stream: *mut c_void) -> i32 {
-    with(|s| match s.stream(stream) {
+    ShimState::with(|s| match s.stream(stream) {
         Some(_) => CUDART_SUCCESS,
         None => s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE),
     })
@@ -332,7 +383,7 @@ pub extern "C" fn cudaStreamQuery(stream: *mut c_void) -> i32 {
 /// An unknown stream or event handle is `cudaErrorInvalidResourceHandle`.
 #[no_mangle]
 pub extern "C" fn cudaStreamWaitEvent(stream: *mut c_void, event: *mut c_void, _flags: u32) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         if s.stream(stream).is_none() || !s.event_is_valid(event) {
             return s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE);
         }
@@ -348,9 +399,9 @@ pub extern "C" fn cudaStreamWaitEvent(stream: *mut c_void, event: *mut c_void, _
 #[no_mangle]
 pub extern "C" fn cudaEventCreate(event: *mut *mut c_void) -> i32 {
     if event.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    let h = with(|s| s.create_event());
+    let h = ShimState::with(|s| s.create_event());
     unsafe { *event = h };
     CUDART_SUCCESS
 }
@@ -367,7 +418,7 @@ pub extern "C" fn cudaEventCreateWithFlags(event: *mut *mut c_void, _flags: u32)
 /// `cudaEventElapsedTime`. A bad event handle is `cudaErrorInvalidResourceHandle`.
 #[no_mangle]
 pub extern "C" fn cudaEventRecord(event: *mut c_void, _stream: *mut c_void) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         if s.record_event(event) {
             CUDART_SUCCESS
         } else {
@@ -381,7 +432,7 @@ pub extern "C" fn cudaEventRecord(event: *mut c_void, _stream: *mut c_void) -> i
 /// `cudaErrorNotReady`; a bad handle is `cudaErrorInvalidResourceHandle`.
 #[no_mangle]
 pub extern "C" fn cudaEventSynchronize(event: *mut c_void) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         if !s.event_is_valid(event) {
             return s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE);
         }
@@ -397,7 +448,7 @@ pub extern "C" fn cudaEventSynchronize(event: *mut c_void) -> i32 {
 /// valid-but-unrecorded one is `cudaErrorNotReady`; a bad handle is `cudaErrorInvalidResourceHandle`.
 #[no_mangle]
 pub extern "C" fn cudaEventQuery(event: *mut c_void) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         if !s.event_is_valid(event) {
             return s.fail(CUDART_ERROR_INVALID_RESOURCE_HANDLE);
         }
@@ -415,9 +466,9 @@ pub extern "C" fn cudaEventQuery(event: *mut c_void) -> i32 {
 #[no_mangle]
 pub extern "C" fn cudaEventElapsedTime(ms: *mut f32, start: *mut c_void, end: *mut c_void) -> i32 {
     if ms.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    with(|s| match s.event_elapsed_ms(start, end) {
+    ShimState::with(|s| match s.event_elapsed_ms(start, end) {
         Some(v) => {
             unsafe { *ms = v };
             CUDART_SUCCESS
@@ -429,7 +480,7 @@ pub extern "C" fn cudaEventElapsedTime(ms: *mut f32, start: *mut c_void, end: *m
 /// `cudaEventDestroy(event)` — retire an event handle. A bad handle is `cudaErrorInvalidResourceHandle`.
 #[no_mangle]
 pub extern "C" fn cudaEventDestroy(event: *mut c_void) -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         if s.destroy_event(event) {
             CUDART_SUCCESS
         } else {
@@ -445,7 +496,7 @@ pub extern "C" fn cudaEventDestroy(event: *mut c_void) -> i32 {
 #[no_mangle]
 pub extern "C" fn cudaGetDeviceCount(count: *mut i32) -> i32 {
     if count.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
     unsafe { *count = 1 };
     CUDART_SUCCESS
@@ -454,18 +505,18 @@ pub extern "C" fn cudaGetDeviceCount(count: *mut i32) -> i32 {
 #[no_mangle]
 pub extern "C" fn cudaGetDevice(device: *mut i32) -> i32 {
     if device.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    with(|s| unsafe { *device = s.device });
+    ShimState::with(|s| unsafe { *device = s.device });
     CUDART_SUCCESS
 }
 
 #[no_mangle]
 pub extern "C" fn cudaSetDevice(device: i32) -> i32 {
     if device != 0 {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_DEVICE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_DEVICE));
     }
-    with(|s| s.device = 0);
+    ShimState::with(|s| s.device = 0);
     CUDART_SUCCESS
 }
 
@@ -578,18 +629,24 @@ struct CudaDeviceProp {
 #[no_mangle]
 pub extern "C" fn cudaGetDeviceProperties_v2(prop: *mut c_void, device: i32) -> i32 {
     if prop.is_null() || device != 0 {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_DEVICE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_DEVICE));
     }
     let p = unsafe { &mut *(prop as *mut CudaDeviceProp) };
     unsafe {
-        core::ptr::write_bytes(p as *mut CudaDeviceProp as *mut u8, 0, core::mem::size_of::<CudaDeviceProp>())
+        core::ptr::write_bytes(
+            p as *mut CudaDeviceProp as *mut u8,
+            0,
+            core::mem::size_of::<CudaDeviceProp>(),
+        )
     };
-    with(|s| {
+    ShimState::with(|s| {
         let d = &s.ctx.device;
         let nb = d.name.as_bytes();
         let n = nb.len().min(255);
         unsafe { core::ptr::copy_nonoverlapping(nb.as_ptr(), p.name.as_mut_ptr() as *mut u8, n) };
-        unsafe { core::ptr::copy_nonoverlapping(d.uuid.as_ptr(), p.uuid.as_mut_ptr() as *mut u8, 16) };
+        unsafe {
+            core::ptr::copy_nonoverlapping(d.uuid.as_ptr(), p.uuid.as_mut_ptr() as *mut u8, 16)
+        };
         p.total_global_mem = d.total_mem as usize;
         p.major = d.compute_capability.0 as i32;
         p.minor = d.compute_capability.1 as i32;
@@ -643,9 +700,9 @@ pub extern "C" fn cudaGetDeviceProperties(prop: *mut c_void, device: i32) -> i32
 #[no_mangle]
 pub extern "C" fn cudaDeviceGetPCIBusId(pci_bus_id: *mut c_char, len: i32, device: i32) -> i32 {
     if pci_bus_id.is_null() || len <= 0 || device != 0 {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    with(|s| {
+    ShimState::with(|s| {
         let id = s.ctx.device.pci_bus_id.as_bytes();
         let cap = (len as usize) - 1;
         let n = id.len().min(cap);
@@ -675,58 +732,62 @@ pub extern "C" fn cudaRuntimeGetVersion(version: *mut i32) -> i32 {
     CUDART_SUCCESS
 }
 
-fn error_text(code: i32, name: bool) -> &'static [u8] {
-    match (code, name) {
-        (0, false) => b"no error\0",
-        (0, true) => b"cudaSuccess\0",
-        (1, false) => b"invalid argument\0",
-        (1, true) => b"cudaErrorInvalidValue\0",
-        (2, false) => b"out of memory\0",
-        (2, true) => b"cudaErrorMemoryAllocation\0",
-        (3, false) => b"initialization error\0",
-        (3, true) => b"cudaErrorInitializationError\0",
-        (101, false) => b"invalid device ordinal\0",
-        (101, true) => b"cudaErrorInvalidDevice\0",
-        (200, false) => b"device kernel image is invalid\0",
-        (200, true) => b"cudaErrorInvalidKernelImage\0",
-        (218, false) => b"a PTX JIT compilation failed\0",
-        (218, true) => b"cudaErrorInvalidPtx\0",
-        (400, false) => b"invalid resource handle\0",
-        (400, true) => b"cudaErrorInvalidResourceHandle\0",
-        (500, false) => b"named symbol not found\0",
-        (500, true) => b"cudaErrorSymbolNotFound\0",
-        (600, false) => b"device not ready\0",
-        (600, true) => b"cudaErrorNotReady\0",
-        (801, false) => b"operation not supported\0",
-        (801, true) => b"cudaErrorNotSupported\0",
-        (_, true) => b"cudaErrorUnknown\0",
-        (_, false) => b"unknown error\0",
+struct CudaError;
+
+impl CudaError {
+    fn text(code: i32, name: bool) -> &'static [u8] {
+        match (code, name) {
+            (0, false) => b"no error\0",
+            (0, true) => b"cudaSuccess\0",
+            (1, false) => b"invalid argument\0",
+            (1, true) => b"cudaErrorInvalidValue\0",
+            (2, false) => b"out of memory\0",
+            (2, true) => b"cudaErrorMemoryAllocation\0",
+            (3, false) => b"initialization error\0",
+            (3, true) => b"cudaErrorInitializationError\0",
+            (101, false) => b"invalid device ordinal\0",
+            (101, true) => b"cudaErrorInvalidDevice\0",
+            (200, false) => b"device kernel image is invalid\0",
+            (200, true) => b"cudaErrorInvalidKernelImage\0",
+            (218, false) => b"a PTX JIT compilation failed\0",
+            (218, true) => b"cudaErrorInvalidPtx\0",
+            (400, false) => b"invalid resource handle\0",
+            (400, true) => b"cudaErrorInvalidResourceHandle\0",
+            (500, false) => b"named symbol not found\0",
+            (500, true) => b"cudaErrorSymbolNotFound\0",
+            (600, false) => b"device not ready\0",
+            (600, true) => b"cudaErrorNotReady\0",
+            (801, false) => b"operation not supported\0",
+            (801, true) => b"cudaErrorNotSupported\0",
+            (_, true) => b"cudaErrorUnknown\0",
+            (_, false) => b"unknown error\0",
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn cudaGetErrorString(error: i32) -> *const c_char {
-    error_text(error, false).as_ptr() as *const c_char
+    CudaError::text(error, false).as_ptr() as *const c_char
 }
 
 #[no_mangle]
 pub extern "C" fn cudaGetErrorName(error: i32) -> *const c_char {
-    error_text(error, true).as_ptr() as *const c_char
+    CudaError::text(error, true).as_ptr() as *const c_char
 }
 
 #[no_mangle]
 pub extern "C" fn cudaGetLastError() -> i32 {
-    with(|s| std::mem::replace(&mut s.last_error, CUDART_SUCCESS))
+    ShimState::with(|s| std::mem::replace(&mut s.last_error, CUDART_SUCCESS))
 }
 
 #[no_mangle]
 pub extern "C" fn cudaPeekAtLastError() -> i32 {
-    with(|s| s.last_error)
+    ShimState::with(|s| s.last_error)
 }
 
 #[no_mangle]
 pub extern "C" fn cudaDeviceReset() -> i32 {
-    with(|s| {
+    ShimState::with(|s| {
         s.last_error = CUDART_SUCCESS;
         s.device = 0;
     });
@@ -749,65 +810,68 @@ struct FatBinWrapper {
 
 /// Follow `fat_cubin` (a `__fatBinC_Wrapper_t*`, or defensively a bare container) to the fatbin CONTAINER
 /// bytes, sized by the container's own `header_size + fat_size`. `None` for a null/foreign/short image.
-unsafe fn container_bytes<'a>(fat_cubin: *const c_void) -> Option<&'a [u8]> {
-    if fat_cubin.is_null() {
-        return None;
-    }
-    let head = std::ptr::read_unaligned(fat_cubin as *const u32);
-    let container: *const u8 = if head == FATBIN_WRAPPER_MAGIC {
-        let w = &*(fat_cubin as *const FatBinWrapper);
-        if w.data.is_null() {
+struct FatbinImage;
+
+impl FatbinImage {
+    unsafe fn container_bytes<'a>(fat_cubin: *const c_void) -> Option<&'a [u8]> {
+        if fat_cubin.is_null() {
             return None;
         }
-        w.data as *const u8
-    } else if head == FATBIN_MAGIC {
-        fat_cubin as *const u8
-    } else {
-        return None;
-    };
-    if std::ptr::read_unaligned(container as *const u32) != FATBIN_MAGIC {
-        return None;
+        let head = std::ptr::read_unaligned(fat_cubin as *const u32);
+        let container: *const u8 = if head == FATBIN_WRAPPER_MAGIC {
+            let w = &*(fat_cubin as *const FatBinWrapper);
+            if w.data.is_null() {
+                return None;
+            }
+            w.data as *const u8
+        } else if head == FATBIN_MAGIC {
+            fat_cubin as *const u8
+        } else {
+            return None;
+        };
+        if std::ptr::read_unaligned(container as *const u32) != FATBIN_MAGIC {
+            return None;
+        }
+        let header_size = std::ptr::read_unaligned(container.add(6) as *const u16) as usize;
+        let fat_size = std::ptr::read_unaligned(container.add(8) as *const u64) as usize;
+        let total = header_size.checked_add(fat_size)?;
+        Some(std::slice::from_raw_parts(container, total))
     }
-    let header_size = std::ptr::read_unaligned(container.add(6) as *const u16) as usize;
-    let fat_size = std::ptr::read_unaligned(container.add(8) as *const u64) as usize;
-    let total = header_size.checked_add(fat_size)?;
-    Some(std::slice::from_raw_parts(container, total))
-}
-
-/// Read a nul-terminated C string into an owned `String` (`None` if null or not UTF-8).
-unsafe fn cstr_string(p: *const c_char) -> Option<String> {
-    if p.is_null() {
-        return None;
-    }
-    std::ffi::CStr::from_ptr(p).to_str().ok().map(str::to_string)
 }
 
 /// Encode a [`FatbinHandle`] as the opaque `void**` nvcc round-trips back to us: a heap cell whose stored
 /// `void*` value is the handle. [`decode_handle`] reads it back.
-fn encode_handle(h: FatbinHandle) -> *mut *mut c_void {
-    Box::into_raw(Box::new(h.0 as *mut c_void))
-}
-unsafe fn decode_handle(h: *mut *mut c_void) -> Option<FatbinHandle> {
-    if h.is_null() {
-        return None;
+struct OpaqueFatbinHandle;
+
+impl OpaqueFatbinHandle {
+    fn encode(handle: FatbinHandle) -> *mut *mut c_void {
+        Box::into_raw(Box::new(handle.0 as *mut c_void))
     }
-    Some(FatbinHandle(*h as u64))
+
+    unsafe fn decode(handle: *mut *mut c_void) -> Option<FatbinHandle> {
+        if handle.is_null() {
+            return None;
+        }
+        Some(FatbinHandle(*handle as u64))
+    }
 }
 
 /// `__cudaRegisterFatBinary(fatCubin)` — walk the wrapped fatbin to its PTX, load it as a module, and hand
 /// nvcc an opaque handle bound to that module. Returns null on a bad image (nvcc tolerates a null handle).
 #[no_mangle]
 pub extern "C" fn __cudaRegisterFatBinary(fatCubin: *mut c_void) -> *mut *mut c_void {
-    let Some(container) = (unsafe { container_bytes(fatCubin) }) else {
+    let Some(container) = (unsafe { FatbinImage::container_bytes(fatCubin) }) else {
         return core::ptr::null_mut();
     };
-    with(|s| match s.registry.register_fatbinary(&mut s.ctx, container) {
-        Ok(handle) => encode_handle(handle),
-        Err(e) => {
-            s.fail(cudart_from_gpu_error(&e));
-            core::ptr::null_mut()
-        }
-    })
+    ShimState::with(
+        |s| match s.registry.register_fatbinary(&mut s.ctx, container) {
+            Ok(handle) => OpaqueFatbinHandle::encode(handle),
+            Err(e) => {
+                s.fail(RuntimeStatus::from(&e).code());
+                core::ptr::null_mut()
+            }
+        },
+    )
 }
 
 /// `__cudaRegisterFunction(handle, hostFun, deviceFun, deviceName, …)` — bind the host function pointer
@@ -828,16 +892,16 @@ pub extern "C" fn __cudaRegisterFunction(
     wSize: *mut i32,
 ) {
     let _ = (deviceFun, thread_limit, tid, bid, bDim, gDim, wSize);
-    let Some(handle) = (unsafe { decode_handle(fatCubinHandle) }) else {
+    let Some(handle) = (unsafe { OpaqueFatbinHandle::decode(fatCubinHandle) }) else {
         return;
     };
-    let Some(name) = (unsafe { cstr_string(deviceName) }) else {
+    let Some(name) = (unsafe { CInput::string(deviceName) }) else {
         return;
     };
     let host_fn = hostFun as usize;
-    with(|s| {
+    ShimState::with(|s| {
         if let Err(e) = s.registry.register_function(&s.ctx, handle, host_fn, &name) {
-            s.fail(cudart_from_gpu_error(&e));
+            s.fail(RuntimeStatus::from(&e).code());
         }
     });
 }
@@ -845,8 +909,8 @@ pub extern "C" fn __cudaRegisterFunction(
 /// `__cudaRegisterFatBinaryEnd(handle)` — the finalization marker after the last `__cudaRegisterFunction`.
 #[no_mangle]
 pub extern "C" fn __cudaRegisterFatBinaryEnd(fatCubinHandle: *mut *mut c_void) {
-    if let Some(handle) = unsafe { decode_handle(fatCubinHandle) } {
-        with(|s| {
+    if let Some(handle) = unsafe { OpaqueFatbinHandle::decode(fatCubinHandle) } {
+        ShimState::with(|s| {
             s.registry.register_fatbinary_end(handle);
         });
     }
@@ -867,7 +931,7 @@ pub extern "C" fn cudaLaunchKernel(
     let host_fn = func as usize;
     let grid = (gridDim.x, gridDim.y, gridDim.z);
     let block = (blockDim.x, blockDim.y, blockDim.z);
-    with(|s| {
+    ShimState::with(|s| {
         match unsafe {
             register::launch_kernel(
                 &mut s.ctx,
@@ -880,7 +944,7 @@ pub extern "C" fn cudaLaunchKernel(
             )
         } {
             Ok(()) => CUDART_SUCCESS,
-            Err(e) => s.fail(cudart_from_gpu_error(&e)),
+            Err(e) => s.fail(RuntimeStatus::from(&e).code()),
         }
     })
 }
@@ -921,9 +985,9 @@ struct CudaFuncAttributes {
 #[no_mangle]
 pub extern "C" fn cudaFuncGetAttributes(attr: *mut c_void, func: *const c_void) -> i32 {
     if attr.is_null() {
-        return with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
+        return ShimState::with(|s| s.fail(CUDART_ERROR_INVALID_VALUE));
     }
-    let (cc, num_regs, shared_size_bytes) = with(|s| {
+    let (cc, num_regs, shared_size_bytes) = ShimState::with(|s| {
         // Resolve the host stub → device Function → real (reg_count, static-shared bytes) via the PTX
         // front-end; fall back to the modeled defaults for an unregistered host pointer.
         let (regs, shared) = s
@@ -979,15 +1043,24 @@ pub extern "C" fn __cudaRegisterVar(
     constant: i32,
     global: i32,
 ) {
-    let _ = (fatCubinHandle, hostVar, deviceAddress, deviceName, ext, size, constant, global);
+    let _ = (
+        fatCubinHandle,
+        hostVar,
+        deviceAddress,
+        deviceName,
+        ext,
+        size,
+        constant,
+        global,
+    );
 }
 
 /// `__cudaUnregisterFatBinary(handle)` — drop the fatbin handle's module binding. The loaded module stays
 /// resident in the context (a stale launch may still reference it), so this only forgets the handle.
 #[no_mangle]
 pub extern "C" fn __cudaUnregisterFatBinary(fatCubinHandle: *mut *mut c_void) {
-    if let Some(handle) = unsafe { decode_handle(fatCubinHandle) } {
-        with(|s| s.registry.unregister_fatbinary(handle));
+    if let Some(handle) = unsafe { OpaqueFatbinHandle::decode(fatCubinHandle) } {
+        ShimState::with(|s| s.registry.unregister_fatbinary(handle));
     }
 }
 
@@ -1008,7 +1081,7 @@ pub extern "C" fn __cudaPushCallConfiguration(
         shmem: sharedMem,
         stream: stream as usize,
     };
-    if with(|s| s.push_call_config(cfg)) {
+    if ShimState::with(|s| s.push_call_config(cfg)) {
         0
     } else {
         1
@@ -1026,15 +1099,23 @@ pub extern "C" fn __cudaPopCallConfiguration(
     stream: *mut c_void,
 ) -> i32 {
     const CUDART_ERROR_INVALID_CONFIGURATION: i32 = 9;
-    let Some(c) = with(|s| s.pop_call_config()) else {
+    let Some(c) = ShimState::with(|s| s.pop_call_config()) else {
         return CUDART_ERROR_INVALID_CONFIGURATION;
     };
     unsafe {
         if !gridDim.is_null() {
-            *gridDim = Dim3 { x: c.grid[0], y: c.grid[1], z: c.grid[2] };
+            *gridDim = Dim3 {
+                x: c.grid[0],
+                y: c.grid[1],
+                z: c.grid[2],
+            };
         }
         if !blockDim.is_null() {
-            *blockDim = Dim3 { x: c.block[0], y: c.block[1], z: c.block[2] };
+            *blockDim = Dim3 {
+                x: c.block[0],
+                y: c.block[1],
+                z: c.block[2],
+            };
         }
         if !sharedMem.is_null() {
             *sharedMem = c.shmem;

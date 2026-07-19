@@ -77,7 +77,7 @@ fn cpu_sink() -> InProcessCommandSink<CpuExecutor> {
 
 /// Link + bind the flat program and point attribute 0 at a freshly uploaded triangle VBO (`color`).
 fn record_triangle(c: &mut GlContext, color: [f32; 4]) {
-    let vbo = record::gen_buffer(c);
+    let vbo = c.buffers.gen();
     record::bind_buffer(c, GL_ARRAY_BUFFER, vbo);
     record::buffer_data(c, GL_ARRAY_BUFFER, &triangle(color), 0x88E4);
     record::vertex_attrib_pointer(c, 0, 2, GL_FLOAT, false, 24, 0);
@@ -99,7 +99,7 @@ fn record_triangle(c: &mut GlContext, color: [f32; 4]) {
 /// Lower the recorded frame, submit it + its `Present` through the sink (the `eglSwapBuffers` body), and
 /// return the presented render-target texture id.
 fn present_frame(c: &mut GlContext, sink: &mut InProcessCommandSink<CpuExecutor>) -> u32 {
-    let mut f = frame::build_frame_ir(c).expect("a frame to present");
+    let mut f = frame::Frame::build(c).expect("a frame to present");
     let (surface, texture) = f.present;
     f.cmds.push(Cmd::Present { surface, texture });
     sink.submit(&f.cmds)
@@ -189,8 +189,8 @@ fn clear_and_triangle_render_to_an_offscreen_rgba8_fbo() {
     let mut sink = cpu_sink();
 
     // An 8x8 Rgba8 offscreen color texture attached to a bound framebuffer.
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d_format(
         &mut c,
@@ -199,7 +199,7 @@ fn clear_and_triangle_render_to_an_offscreen_rgba8_fbo() {
         &[],
         hl_gpu::protocol::model::enums::TextureFormat::Rgba8Unorm,
     );
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_texture_2d(
         &mut c,
@@ -369,8 +369,8 @@ fn guest_bound_texture_fbo_renders_and_glreadpixels_reads_it_back() {
 
     // Guest FBO bring-up: an 8x8 Rgba8 color texture attached to a freshly-bound framebuffer, driven
     // entirely through the wired framebuffer record ops.
-    let tex = record::gen_texture(&mut c);
-    record::active_texture(&mut c, GL_TEXTURE0);
+    let tex = c.textures.gen();
+    c.active_texture(GL_TEXTURE0);
     record::bind_texture(&mut c, GL_TEXTURE_2D, tex);
     record::tex_image_2d_format(
         &mut c,
@@ -379,7 +379,7 @@ fn guest_bound_texture_fbo_renders_and_glreadpixels_reads_it_back() {
         &[],
         hl_gpu::protocol::model::enums::TextureFormat::Rgba8Unorm,
     );
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     assert!(
         record::is_framebuffer(&c, fbo),
         "generated name is a framebuffer object"
@@ -467,7 +467,7 @@ fn guest_renderbuffer_backed_fbo_renders_and_glreadpixels_reads_it_back() {
     );
     record::bind_renderbuffer(&mut c, GL_RENDERBUFFER, rbo);
 
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     record::framebuffer_renderbuffer(
         &mut c,
@@ -534,7 +534,7 @@ fn framebuffer_status_and_object_lifecycle_are_honest() {
     );
 
     // A freshly-bound FBO with no attachment reports MISSING_ATTACHMENT.
-    let fbo = record::gen_framebuffer(&mut c);
+    let fbo = c.framebuffers.gen();
     record::bind_framebuffer(&mut c, GL_FRAMEBUFFER, fbo);
     assert_eq!(
         record::check_framebuffer_status(&mut c, GL_FRAMEBUFFER),

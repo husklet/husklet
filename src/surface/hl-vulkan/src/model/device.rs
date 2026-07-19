@@ -19,6 +19,7 @@ use super::pipeline::{PipelineCacheRec, PipelineLayoutRec, PipelineRec, ShaderRe
 use super::queue::{FenceRec, Queue, SurfaceRec, SwapchainRec};
 use super::sync::{EventRec, QueryPoolRec, SemaphoreRec};
 use crate::*;
+use hl_gpu::{GpuError, Result};
 use std::collections::HashMap;
 
 /// The per-device aggregate: the object model + the id counters the lowering mutates.
@@ -113,6 +114,67 @@ impl Device {
     pub fn alloc_handle(&mut self) -> u64 {
         self.next_handle += 1;
         0x1000_0000 + self.next_handle
+    }
+
+    /// Mints an `Initial` command buffer owned by this device.
+    pub fn allocate_command_buffer(&mut self) -> VkCommandBuffer {
+        let handle = self.alloc_handle();
+        self.command_buffers.insert(handle, CmdBufRec::initial());
+        handle
+    }
+
+    /// Starts recording an owned command buffer.
+    pub fn begin_command_buffer(
+        &mut self,
+        command_buffer: VkCommandBuffer,
+        one_time_submit: bool,
+    ) -> Result<()> {
+        self.command_buffers
+            .get_mut(&command_buffer)
+            .ok_or(GpuError::Invalid(
+                "vkBeginCommandBuffer: unknown VkCommandBuffer",
+            ))?
+            .begin(one_time_submit);
+        Ok(())
+    }
+
+    /// Completes recording an owned command buffer.
+    pub fn end_command_buffer(&mut self, command_buffer: VkCommandBuffer) -> Result<()> {
+        self.command_buffers
+            .get_mut(&command_buffer)
+            .ok_or(GpuError::Invalid(
+                "vkEndCommandBuffer: unknown VkCommandBuffer",
+            ))?
+            .end()
+    }
+
+    /// Resolves an owned command buffer and requires its recording state.
+    pub(crate) fn require_recording(
+        &mut self,
+        command_buffer: VkCommandBuffer,
+    ) -> Result<&mut CmdBufRec> {
+        self.command_buffers
+            .get_mut(&command_buffer)
+            .ok_or(GpuError::Invalid("vkCmd*: unknown VkCommandBuffer"))?
+            .require_recording()
+    }
+
+    /// Polls an owned fence without blocking.
+    pub fn is_fence_signaled(&self, fence: VkFence) -> Result<bool> {
+        Ok(self
+            .fences
+            .get(&fence)
+            .ok_or(GpuError::Invalid("vkGetFenceStatus: unknown VkFence"))?
+            .signaled)
+    }
+
+    /// Resets an owned fence for a later submission.
+    pub fn reset_fence(&mut self, fence: VkFence) -> Result<()> {
+        self.fences
+            .get_mut(&fence)
+            .ok_or(GpuError::Invalid("vkResetFences: unknown VkFence"))?
+            .reset();
+        Ok(())
     }
 
     /// The next timeline value to signal/wait a fence at (monotonic across the device).

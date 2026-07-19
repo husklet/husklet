@@ -9,17 +9,22 @@ use hl_gpu::protocol::model::descriptor::{BindGroupDesc, BindResource};
 use hl_gpu::runtime::model::resources::SessionResources;
 use hl_gpu::{GpuError, Result};
 
-use crate::{buffer, sampler, texture, WgpuExecutor};
-
-/// Downcast a live bind-group id to its stored descriptor.
-pub fn desc<'a>(res: &'a SessionResources, id: u32) -> Result<&'a BindGroupDesc> {
-    res.bind_groups
-        .get(id)?
-        .downcast_ref::<BindGroupDesc>()
-        .ok_or(GpuError::Invalid("wgpu: bind-group native type mismatch"))
-}
+use crate::{buffer, texture, WgpuExecutor};
 
 impl WgpuExecutor {
+    /// Downcast a live bind-group id to its stored descriptor.
+    pub(crate) fn bind_group<'a>(
+        &self,
+        resources: &'a SessionResources,
+        id: u32,
+    ) -> Result<&'a BindGroupDesc> {
+        resources
+            .bind_groups
+            .get(id)?
+            .downcast_ref::<BindGroupDesc>()
+            .ok_or(GpuError::Invalid("wgpu: bind-group native type mismatch"))
+    }
+
     /// Record a bind group: store its descriptor after checking every referenced resource is live.
     pub(crate) fn create_bind_group(
         &self,
@@ -30,10 +35,10 @@ impl WgpuExecutor {
         for e in &d.entries {
             match &e.resource {
                 BindResource::Buffer { id, .. } => {
-                    buffer::native(res, *id)?;
+                    buffer::WgpuBuffer::get(res, *id)?;
                 }
                 BindResource::Texture { id } => {
-                    texture::native(res, *id)?;
+                    texture::WgpuTexture::get(res, *id)?;
                 }
                 BindResource::Sampler { id } => {
                     res.samplers.get(*id)?;
@@ -68,8 +73,10 @@ impl WgpuExecutor {
         let mut samplers = Vec::new();
         for e in d.entries.iter().filter(|e| keep(e)) {
             match &e.resource {
-                BindResource::Texture { id } => views.push(texture::native(res, *id)?.view.clone()),
-                BindResource::Sampler { id } => samplers.push(sampler::native(res, *id)?.clone()),
+                BindResource::Texture { id } => {
+                    views.push(texture::WgpuTexture::get(res, *id)?.view.clone())
+                }
+                BindResource::Sampler { id } => samplers.push(self.sampler(res, *id)?.clone()),
                 BindResource::Buffer { .. } => {}
             }
         }
@@ -79,7 +86,7 @@ impl WgpuExecutor {
         for e in d.entries.iter().filter(|e| keep(e)) {
             let resource = match &e.resource {
                 BindResource::Buffer { id, offset, size } => {
-                    let b = buffer::native(res, *id)?;
+                    let b = buffer::WgpuBuffer::get(res, *id)?;
                     wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &b.buffer,
                         offset: *offset,

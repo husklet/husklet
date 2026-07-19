@@ -6,7 +6,6 @@
 //! barrier phase), and the `ptr_int_add` / `ptr_target` pointer arithmetic over tagged `Val::P`.
 
 use super::exec::Val;
-use super::kerr;
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::kernel::{
     ATOM_ADD, ATOM_AND, ATOM_CAS, ATOM_EXCH, ATOM_MAX, ATOM_MIN, ATOM_OR, ATOM_XOR,
@@ -29,15 +28,6 @@ pub(super) fn write_scalar(mem: &mut [u8], at: usize, width: usize, val: u64) ->
     }
     mem[at..at + width].copy_from_slice(&val.to_le_bytes()[..width]);
     Ok(())
-}
-
-/// Resolve a shared-memory byte address from a base value + constant displacement, rejecting negatives.
-pub(super) fn shared_addr(base: Val, off: i64) -> Result<usize> {
-    let eff = base.as_i64().wrapping_add(off);
-    if eff < 0 {
-        return Err(GpuError::OutOfBounds);
-    }
-    Ok(eff as usize)
 }
 
 /// Perform a 32-bit atomic read-modify-write on `mem` at byte offset `at`, returning the OLD value.
@@ -79,7 +69,7 @@ pub(super) fn atomic_rmw(
                 old
             }
         }
-        _ => return Err(kerr("unknown atomic op")),
+        _ => return Err(GpuError::kernel("unknown atomic op")),
     };
     write_scalar(mem, at, 4, new as u64)?;
     Ok(old)
@@ -105,16 +95,5 @@ pub(super) fn ptr_int_add(a: Val, b: Val, wide: bool, sign: i64) -> Val {
                 Val::I(r as u32 as u64)
             }
         }
-    }
-}
-
-/// Resolve a tagged pointer value into `(region, byte offset)`, rejecting a non-pointer (the flat
-/// unified-VA case the oracle cannot model).
-pub(super) fn ptr_target(v: Val) -> Result<(u32, i64)> {
-    match v {
-        Val::P { region, off } => Ok((region, off)),
-        _ => Err(kerr(
-            "global access through a non-pointer value (unsupported flat addressing)",
-        )),
     }
 }

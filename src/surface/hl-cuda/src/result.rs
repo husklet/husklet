@@ -137,47 +137,59 @@ pub const CUDART_ERROR_UNKNOWN: i32 = 999; // cudaErrorUnknown
 /// an instruction/space/type outside hl's modeled subset is `CUDA_ERROR_NOT_SUPPORTED` (the executor
 /// genuinely cannot run it) — matching a real driver — while an invalid-argument/handle error maps to
 /// the closest `CUDA_ERROR_*`.
-pub fn cu_result_from_gpu_error(e: &GpuError) -> i32 {
-    let code = cu_code(e);
-    hl_log::hl_warn!(hl_log::tag::SHIM, "cu err={:?} -> {}", e, code);
-    code
+pub struct DriverStatus<'a>(&'a GpuError);
+
+impl<'a> From<&'a GpuError> for DriverStatus<'a> {
+    fn from(error: &'a GpuError) -> Self {
+        Self(error)
+    }
 }
 
-fn cu_code(e: &GpuError) -> i32 {
-    match e {
-        GpuError::Unsupported(_) => CUDA_ERROR_NOT_SUPPORTED,
-        GpuError::Kernel(_) => CUDA_ERROR_INVALID_PTX,
-        GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => CUDA_ERROR_INVALID_HANDLE,
-        GpuError::OutOfBounds => CUDA_ERROR_INVALID_VALUE,
-        GpuError::ResourceLimit(_) => CUDA_ERROR_OUT_OF_MEMORY,
-        GpuError::Decode(_) => CUDA_ERROR_UNKNOWN,
-        GpuError::Invalid(_)
-        | GpuError::BadEnum { .. }
-        | GpuError::BadTag(_)
-        | GpuError::NonFinite(_)
-        | GpuError::NonCanonicalBool(_)
-        | GpuError::Utf8
-        | GpuError::ShortBuffer
-        | GpuError::TrailingBytes => CUDA_ERROR_INVALID_VALUE,
+impl DriverStatus<'_> {
+    pub fn code(self) -> i32 {
+        let code = match self.0 {
+            GpuError::Unsupported(_) => CUDA_ERROR_NOT_SUPPORTED,
+            GpuError::Kernel(_) => CUDA_ERROR_INVALID_PTX,
+            GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => CUDA_ERROR_INVALID_HANDLE,
+            GpuError::OutOfBounds => CUDA_ERROR_INVALID_VALUE,
+            GpuError::ResourceLimit(_) => CUDA_ERROR_OUT_OF_MEMORY,
+            GpuError::Decode(_) => CUDA_ERROR_UNKNOWN,
+            GpuError::Invalid(_)
+            | GpuError::BadEnum { .. }
+            | GpuError::BadTag(_)
+            | GpuError::NonFinite(_)
+            | GpuError::NonCanonicalBool(_)
+            | GpuError::Utf8
+            | GpuError::ShortBuffer
+            | GpuError::TrailingBytes => CUDA_ERROR_INVALID_VALUE,
+        };
+        hl_log::hl_warn!(hl_log::tag::SHIM, "cu err={:?} -> {}", self.0, code);
+        code
     }
 }
 
 /// Map a lowering [`GpuError`] onto the `cudaError_t` a runtime-API entry point returns.
-pub fn cudart_from_gpu_error(e: &GpuError) -> i32 {
-    let code = cudart_code(e);
-    hl_log::hl_warn!(hl_log::tag::SHIM, "cudart err={:?} -> {}", e, code);
-    code
+pub struct RuntimeStatus<'a>(&'a GpuError);
+
+impl<'a> From<&'a GpuError> for RuntimeStatus<'a> {
+    fn from(error: &'a GpuError) -> Self {
+        Self(error)
+    }
 }
 
-fn cudart_code(e: &GpuError) -> i32 {
-    match e {
-        GpuError::Unsupported(_) => CUDART_ERROR_NOT_SUPPORTED,
-        GpuError::Kernel(_) => CUDART_ERROR_INVALID_PTX,
-        GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => {
-            CUDART_ERROR_INVALID_RESOURCE_HANDLE
-        }
-        GpuError::ResourceLimit(_) => CUDART_ERROR_MEMORY_ALLOCATION,
-        GpuError::Decode(_) => CUDART_ERROR_UNKNOWN,
-        _ => CUDART_ERROR_INVALID_VALUE,
+impl RuntimeStatus<'_> {
+    pub fn code(self) -> i32 {
+        let code = match self.0 {
+            GpuError::Unsupported(_) => CUDART_ERROR_NOT_SUPPORTED,
+            GpuError::Kernel(_) => CUDART_ERROR_INVALID_PTX,
+            GpuError::UnknownId { .. } | GpuError::DuplicateId { .. } => {
+                CUDART_ERROR_INVALID_RESOURCE_HANDLE
+            }
+            GpuError::ResourceLimit(_) => CUDART_ERROR_MEMORY_ALLOCATION,
+            GpuError::Decode(_) => CUDART_ERROR_UNKNOWN,
+            _ => CUDART_ERROR_INVALID_VALUE,
+        };
+        hl_log::hl_warn!(hl_log::tag::SHIM, "cudart err={:?} -> {}", self.0, code);
+        code
     }
 }

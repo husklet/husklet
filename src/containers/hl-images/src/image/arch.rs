@@ -72,11 +72,6 @@ impl Arch {
     }
 }
 
-/// Alias for [`Arch::from_config`].
-pub fn arch_from_config(config: &Value) -> Option<Arch> {
-    Arch::from_config(config)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,35 +104,35 @@ mod tests {
     fn arch_from_config_maps_os_and_arch() {
         // os defaults to linux when absent
         assert_eq!(
-            arch_from_config(&json!({"architecture": "amd64"})),
+            Arch::from_config(&json!({"architecture": "amd64"})),
             Some(Arch::LinuxX86_64)
         );
         assert_eq!(
-            arch_from_config(&json!({"architecture": "arm64"})),
+            Arch::from_config(&json!({"architecture": "arm64"})),
             Some(Arch::LinuxAarch64)
         );
         // darwin is no longer supported -> REJECTED (None)
         assert_eq!(
-            arch_from_config(&json!({"os": "darwin", "architecture": "arm64"})),
+            Arch::from_config(&json!({"os": "darwin", "architecture": "arm64"})),
             None
         );
         // Finding 9 — a PRESENT but unsupported os is REJECTED (None), not treated as Linux.
         assert_eq!(
-            arch_from_config(&json!({"os": "windows", "architecture": "amd64"})),
+            Arch::from_config(&json!({"os": "windows", "architecture": "amd64"})),
             None
         );
         assert_eq!(
-            arch_from_config(&json!({"os": "freebsd", "architecture": "aarch64"})),
+            Arch::from_config(&json!({"os": "freebsd", "architecture": "aarch64"})),
             None
         );
         // an empty os string still defaults to linux (back-compat with configs that omit it)
         assert_eq!(
-            arch_from_config(&json!({"os": "", "architecture": "amd64"})),
+            Arch::from_config(&json!({"os": "", "architecture": "amd64"})),
             Some(Arch::LinuxX86_64)
         );
         // missing/unknown architecture -> None
-        assert_eq!(arch_from_config(&json!({"os": "linux"})), None);
-        assert_eq!(arch_from_config(&json!({"architecture": "riscv64"})), None);
+        assert_eq!(Arch::from_config(&json!({"os": "linux"})), None);
+        assert_eq!(Arch::from_config(&json!({"architecture": "riscv64"})), None);
     }
 
     #[test]

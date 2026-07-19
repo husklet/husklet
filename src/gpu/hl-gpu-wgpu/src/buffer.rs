@@ -18,22 +18,24 @@ pub struct WgpuBuffer {
     pub size: u64,
 }
 
-/// Downcast a live buffer id to its native handle.
-pub fn native<'a>(res: &'a SessionResources, id: u32) -> Result<&'a WgpuBuffer> {
-    res.buffers
-        .get(id)?
-        .downcast_ref::<WgpuBuffer>()
-        .ok_or(GpuError::Invalid("wgpu: buffer native type mismatch"))
-}
+impl WgpuBuffer {
+    /// Downcast a live protocol buffer to its wgpu backing.
+    pub fn get(res: &SessionResources, id: u32) -> Result<&Self> {
+        res.buffers
+            .get(id)?
+            .downcast_ref::<Self>()
+            .ok_or(GpuError::Invalid("wgpu: buffer native type mismatch"))
+    }
 
-fn round4(n: u64) -> u64 {
-    n.div_ceil(4) * 4
+    fn allocation_size(size: u64) -> u64 {
+        size.div_ceil(4) * 4
+    }
 }
 
 impl WgpuExecutor {
     /// Allocate a zero-initialized device buffer for `size` logical bytes (wgpu zero-inits lazily).
     pub(crate) fn make_buffer(&self, size: u64) -> WgpuBuffer {
-        let alloc = round4(size).max(4);
+        let alloc = WgpuBuffer::allocation_size(size).max(4);
         let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hl-buffer"),
             size: alloc,
@@ -58,7 +60,7 @@ impl WgpuExecutor {
         offset: u64,
         len: usize,
     ) -> Result<Vec<u8>> {
-        let b = native(res, id)?;
+        let b = WgpuBuffer::get(res, id)?;
         let end = offset
             .checked_add(len as u64)
             .filter(|e| *e <= b.size)
@@ -67,7 +69,7 @@ impl WgpuExecutor {
             return Ok(Vec::new());
         }
         let astart = offset & !3;
-        let window = self.read_span(&b.buffer, astart, round4(end) - astart);
+        let window = self.read_span(&b.buffer, astart, WgpuBuffer::allocation_size(end) - astart);
         let lo = (offset - astart) as usize;
         Ok(window[lo..lo + len].to_vec())
     }
@@ -112,7 +114,7 @@ impl WgpuExecutor {
         offset: u64,
         data: &[u8],
     ) -> Result<()> {
-        let b = native(res, id)?;
+        let b = WgpuBuffer::get(res, id)?;
         let end = offset
             .checked_add(data.len() as u64)
             .filter(|e| *e <= b.size)
@@ -128,7 +130,8 @@ impl WgpuExecutor {
         // Unaligned: read the enclosing 4-aligned window (against the allocation, which may extend past
         // the logical size into tail padding), patch, write it back whole.
         let astart = offset & !3;
-        let mut window = self.read_span(&b.buffer, astart, round4(end) - astart);
+        let mut window =
+            self.read_span(&b.buffer, astart, WgpuBuffer::allocation_size(end) - astart);
         let lo = (offset - astart) as usize;
         window[lo..lo + data.len()].copy_from_slice(data);
         self.gpu.queue.write_buffer(&b.buffer, astart, &window);

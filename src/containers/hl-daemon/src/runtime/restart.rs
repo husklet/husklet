@@ -47,7 +47,7 @@ pub(super) fn maybe_restart<'a>(
                     cc.status = "restarting".into();
                 }
             }
-            save_state(&g, &app.state_path);
+            Store::save(&g, &app.state_path);
         }
         // Backoff (capped) so a container that exits immediately doesn't spin the daemon.
         let backoff = (100u64 << (count.clamp(0, 6) as u32)).min(10_000);
@@ -78,7 +78,7 @@ pub(super) fn maybe_restart<'a>(
                 cc.started_at_ns = now_nanos();
                 cc.restart_count += 1;
             }
-            save_state(&g, &app.state_path);
+            Store::save(&g, &app.state_path);
         }
         crate::events::emit_event(
             &app.events,

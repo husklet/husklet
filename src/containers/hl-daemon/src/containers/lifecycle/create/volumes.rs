@@ -6,90 +6,94 @@ use super::super::super::*;
 
 /// Normalize a container mount target for dedup: strip a trailing slash (except root). `/data/` and
 /// `/data` name the same mount point, so an image VOLUME at a `-v`-covered path isn't duplicated.
-pub(super) fn norm_dir(p: &str) -> String {
-    let t = p.trim_end_matches('/');
-    if t.is_empty() {
-        "/".into()
-    } else {
-        t.to_string()
+pub(super) struct VolumeRootfs<'a>(pub(super) &'a std::path::Path);
+impl<'a> VolumeRootfs<'a> {
+    pub(super) fn normalize(p: &str) -> String {
+        let t = p.trim_end_matches('/');
+        if t.is_empty() {
+            "/".into()
+        } else {
+            t.to_string()
+        }
     }
-}
 
-/// Recursively copy the contents of `src` INTO `dst` (files, dirs, symlinks) — Moby's `populateVolumes`:
-/// a freshly-created anonymous volume is seeded with the image's existing content at the mount point, so
-/// a `VOLUME /var/lib/postgresql/data` over a populated image dir keeps those files instead of hiding
-/// them behind an empty mount. Best-effort (never fails the create on an I/O error).
-fn copy_dir_into(src: &std::path::Path, dst: &std::path::Path) {
-    let Ok(rd) = std::fs::read_dir(src) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let from = e.path();
-        let to = dst.join(e.file_name());
-        match e.file_type() {
-            Ok(ft) if ft.is_dir() => {
-                let _ = std::fs::create_dir_all(&to);
-                copy_dir_into(&from, &to);
-                // Preserve the source directory's mode (populateVolumes seeds a data dir like
-                // `/var/lib/postgresql/data`, whose 0700/0711 perms matter — `create_dir_all` uses the
-                // umask default and drops them). Apply the mode AFTER recursing so a restrictive source
-                // mode (e.g. 0555, no write bit) can't block us from writing the children first.
-                if let Ok(md) = std::fs::metadata(&from) {
-                    use std::os::unix::fs::PermissionsExt;
-                    let mode = md.permissions().mode() & 0o7777;
-                    let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(mode));
+    /// Recursively copy the contents of `src` INTO `dst` (files, dirs, symlinks) — Moby's `populateVolumes`:
+    /// a freshly-created anonymous volume is seeded with the image's existing content at the mount point, so
+    /// a `VOLUME /var/lib/postgresql/data` over a populated image dir keeps those files instead of hiding
+    /// them behind an empty mount. Best-effort (never fails the create on an I/O error).
+    fn copy_into(src: &std::path::Path, dst: &std::path::Path) {
+        let Ok(rd) = std::fs::read_dir(src) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let from = e.path();
+            let to = dst.join(e.file_name());
+            match e.file_type() {
+                Ok(ft) if ft.is_dir() => {
+                    let _ = std::fs::create_dir_all(&to);
+                    Self::copy_into(&from, &to);
+                    // Preserve the source directory's mode (populateVolumes seeds a data dir like
+                    // `/var/lib/postgresql/data`, whose 0700/0711 perms matter — `create_dir_all` uses the
+                    // umask default and drops them). Apply the mode AFTER recursing so a restrictive source
+                    // mode (e.g. 0555, no write bit) can't block us from writing the children first.
+                    if let Ok(md) = std::fs::metadata(&from) {
+                        use std::os::unix::fs::PermissionsExt;
+                        let mode = md.permissions().mode() & 0o7777;
+                        let _ =
+                            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(mode));
+                    }
                 }
-            }
-            Ok(ft) if ft.is_symlink() => {
-                if let Ok(t) = std::fs::read_link(&from) {
-                    let _ = std::os::unix::fs::symlink(t, &to);
+                Ok(ft) if ft.is_symlink() => {
+                    if let Ok(t) = std::fs::read_link(&from) {
+                        let _ = std::os::unix::fs::symlink(t, &to);
+                    }
                 }
-            }
-            _ => {
-                let _ = std::fs::copy(&from, &to);
+                _ => {
+                    let _ = std::fs::copy(&from, &to);
+                }
             }
         }
     }
-}
 
-/// Lexically resolve container-absolute mount `target` against `rootfs`, collapsing `.`/`..` WITHOUT
-/// touching the filesystem (the seed dir may not exist yet, so `canonicalize` is unusable). Returns
-/// `None` when the normalized path would climb ABOVE `rootfs` — an image `VOLUME /../outside` (or any
-/// `..`-laden target) must never seed a volume from OUTSIDE the image rootfs (a container-escape /
-/// host-file-disclosure vector). Interior `..` that stays within rootfs (e.g. `/a/../b`) is allowed.
-fn confine_to_rootfs(rootfs: &std::path::Path, target: &str) -> Option<PathBuf> {
-    use std::path::Component;
-    let mut rel = PathBuf::new();
-    let mut depth: usize = 0;
-    for comp in std::path::Path::new(target).components() {
-        match comp {
-            Component::RootDir | Component::Prefix(_) | Component::CurDir => {}
-            Component::Normal(c) => {
-                rel.push(c);
-                depth += 1;
-            }
-            Component::ParentDir => {
-                // A `..` at rootfs depth 0 escapes — reject the whole target.
-                depth = depth.checked_sub(1)?;
-                rel.pop();
+    /// Lexically resolve container-absolute mount `target` against `rootfs`, collapsing `.`/`..` WITHOUT
+    /// touching the filesystem (the seed dir may not exist yet, so `canonicalize` is unusable). Returns
+    /// `None` when the normalized path would climb ABOVE `rootfs` — an image `VOLUME /../outside` (or any
+    /// `..`-laden target) must never seed a volume from OUTSIDE the image rootfs (a container-escape /
+    /// host-file-disclosure vector). Interior `..` that stays within rootfs (e.g. `/a/../b`) is allowed.
+    fn confine(&self, target: &str) -> Option<PathBuf> {
+        use std::path::Component;
+        let mut rel = PathBuf::new();
+        let mut depth: usize = 0;
+        for comp in std::path::Path::new(target).components() {
+            match comp {
+                Component::RootDir | Component::Prefix(_) | Component::CurDir => {}
+                Component::Normal(c) => {
+                    rel.push(c);
+                    depth += 1;
+                }
+                Component::ParentDir => {
+                    // A `..` at rootfs depth 0 escapes — reject the whole target.
+                    depth = depth.checked_sub(1)?;
+                    rel.pop();
+                }
             }
         }
+        Some(self.0.join(rel))
     }
-    Some(rootfs.join(rel))
 }
 
 /// Create an ANONYMOUS local volume (64-hex name, docker-style) backing container path `target`, seeding
 /// it from the image's content at that path (populateVolumes). Returns the [`Vol`]; the caller registers
 /// it + records the name in the container's `anon_volumes` (so `rm -v`/prune can reclaim it).
 pub(super) fn anon_volume(volumes_dir: &str, image_rootfs: &str, target: &str, cid: &str) -> Vol {
-    let name = fake_id(&format!("anon:{cid}:{target}:{}", now_nanos()));
+    let name = Digest::fake(&format!("anon:{cid}:{target}:{}", now_nanos()));
     let mountpoint = PathBuf::from(volumes_dir).join(&name);
     let _ = std::fs::create_dir_all(&mountpoint);
     // Confine the copy-up source to the image rootfs: a `..`-escaping target seeds NOTHING (the empty
     // volume is still created/registered so the mount point exists — matching a covered-but-empty dir).
-    if let Some(src) = confine_to_rootfs(std::path::Path::new(image_rootfs), target) {
+    if let Some(src) = VolumeRootfs(std::path::Path::new(image_rootfs)).confine(target) {
         if src.is_dir() {
-            copy_dir_into(&src, &mountpoint);
+            VolumeRootfs::copy_into(&src, &mountpoint);
         }
     }
     Vol {
@@ -109,36 +113,36 @@ mod tests {
     // ---- norm_dir: strip a trailing slash for mount-target dedup (root stays "/") ----
     #[test]
     fn norm_dir_plain_path_unchanged() {
-        assert_eq!(norm_dir("/data"), "/data");
+        assert_eq!(VolumeRootfs::normalize("/data"), "/data");
         assert_eq!(
-            norm_dir("/var/lib/postgresql/data"),
+            VolumeRootfs::normalize("/var/lib/postgresql/data"),
             "/var/lib/postgresql/data"
         );
     }
     #[test]
     fn norm_dir_strips_single_trailing_slash() {
-        assert_eq!(norm_dir("/data/"), "/data");
+        assert_eq!(VolumeRootfs::normalize("/data/"), "/data");
     }
     #[test]
     fn norm_dir_strips_multiple_trailing_slashes() {
         // trim_end_matches removes ALL trailing slashes.
-        assert_eq!(norm_dir("/data///"), "/data");
+        assert_eq!(VolumeRootfs::normalize("/data///"), "/data");
     }
     #[test]
     fn norm_dir_root_stays_root() {
-        assert_eq!(norm_dir("/"), "/");
-        assert_eq!(norm_dir("///"), "/");
+        assert_eq!(VolumeRootfs::normalize("/"), "/");
+        assert_eq!(VolumeRootfs::normalize("///"), "/");
     }
     #[test]
     fn norm_dir_empty_becomes_root() {
         // An all-slash-or-empty target collapses to "/" (never the empty string).
-        assert_eq!(norm_dir(""), "/");
+        assert_eq!(VolumeRootfs::normalize(""), "/");
     }
     #[test]
     fn norm_dir_relative_and_no_leading_slash() {
         // Only the TRAILING slash is touched; a relative target keeps its shape.
-        assert_eq!(norm_dir("data/"), "data");
-        assert_eq!(norm_dir("data"), "data");
+        assert_eq!(VolumeRootfs::normalize("data/"), "data");
+        assert_eq!(VolumeRootfs::normalize("data"), "data");
     }
 
     // ---- copy_dir_into: recursive seed of a fresh volume from image content ----
@@ -178,7 +182,7 @@ mod tests {
         std::fs::write(src.join("d").join("b"), b"world").unwrap();
         std::os::unix::fs::symlink("a", src.join("l")).unwrap();
 
-        copy_dir_into(&src, &dst);
+        VolumeRootfs::copy_into(&src, &dst);
 
         // regular file copied with its content
         assert_eq!(std::fs::read(dst.join("a")).unwrap(), b"hello");
@@ -206,7 +210,7 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o711)).unwrap();
 
-        copy_dir_into(&src, &dst);
+        VolumeRootfs::copy_into(&src, &dst);
 
         let mode = std::fs::metadata(dst.join("seeded"))
             .unwrap()
@@ -250,14 +254,14 @@ mod tests {
     #[test]
     fn confine_to_rootfs_rejects_escape_allows_interior() {
         let rootfs = std::path::Path::new("/img/rootfs");
-        assert_eq!(confine_to_rootfs(rootfs, "/../outside"), None);
-        assert_eq!(confine_to_rootfs(rootfs, "/a/../../outside"), None);
+        assert_eq!(VolumeRootfs(rootfs).confine("/../outside"), None);
+        assert_eq!(VolumeRootfs(rootfs).confine("/a/../../outside"), None);
         assert_eq!(
-            confine_to_rootfs(rootfs, "/a/../b"),
+            VolumeRootfs(rootfs).confine("/a/../b"),
             Some(PathBuf::from("/img/rootfs/b"))
         );
         assert_eq!(
-            confine_to_rootfs(rootfs, "/data"),
+            VolumeRootfs(rootfs).confine("/data"),
             Some(PathBuf::from("/img/rootfs/data"))
         );
     }
@@ -268,7 +272,7 @@ mod tests {
         let dst = root.0.join("dst");
         std::fs::create_dir_all(&dst).unwrap();
         // A non-existent source directory must not error and must leave dst empty.
-        copy_dir_into(&root.0.join("does-not-exist"), &dst);
+        VolumeRootfs::copy_into(&root.0.join("does-not-exist"), &dst);
         assert_eq!(std::fs::read_dir(&dst).unwrap().count(), 0);
     }
 }

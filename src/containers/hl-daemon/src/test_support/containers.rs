@@ -44,7 +44,7 @@ async fn stop_already_exited_is_304_and_unchanged() {
 async fn start_already_running_is_304_and_unchanged() {
     let app = test_app();
     seed_container(&app, "c1", "running").await;
-    let resp = crate::containers::containers_start(State(app.clone()), Path("c1".into())).await;
+    let resp = crate::containers::Containers::start(State(app.clone()), Path("c1".into())).await;
     assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
     let g = app.inner.lock().await;
     let c = &g.containers["c1"];
@@ -56,7 +56,7 @@ async fn start_already_running_is_304_and_unchanged() {
 async fn start_already_paused_is_304_and_unchanged() {
     let app = test_app();
     seed_container(&app, "c1", "paused").await;
-    let resp = crate::containers::containers_start(State(app.clone()), Path("c1".into())).await;
+    let resp = crate::containers::Containers::start(State(app.clone()), Path("c1".into())).await;
     assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
     let g = app.inner.lock().await;
     let c = &g.containers["c1"];
@@ -72,7 +72,7 @@ async fn containers_json_includes_paused_without_all() {
     seed_container(&app, "ppaused", "paused").await;
     seed_container(&app, "pexited", "exited").await;
     let axum::Json(list) =
-        crate::containers::containers_json(State(app.clone()), Query(empty_q())).await;
+        crate::containers::Containers::list(State(app.clone()), Query(empty_q())).await;
     let ids: Vec<&str> = list.iter().map(|c| c.id.as_str()).collect();
     assert!(ids.contains(&"prunning"), "running must be listed");
     assert!(
@@ -95,14 +95,14 @@ async fn containers_json_wire_shape_and_all_filter() {
 
     // Default (no `all`): running + paused only (exited hidden).
     let axum::Json(def) =
-        crate::containers::containers_json(State(app.clone()), Query(empty_q())).await;
+        crate::containers::Containers::list(State(app.clone()), Query(empty_q())).await;
     assert_eq!(def.len(), 2, "default ps lists running+paused, not exited");
 
     // `all=true`: every container.
     let all_q: crate::containers::PsQ =
         serde_json::from_value(serde_json::json!({"all": "true"})).unwrap();
     let axum::Json(all) =
-        crate::containers::containers_json(State(app.clone()), Query(all_q)).await;
+        crate::containers::Containers::list(State(app.clone()), Query(all_q)).await;
     assert_eq!(all.len(), 3, "all=true lists every container");
 
     // Serialize to the wire and assert the exact docker keys/casing on each row.
@@ -139,7 +139,7 @@ async fn containers_inspect_wire_shape() {
     let app = test_app();
     seed_container(&app, "inspectme000", "exited").await;
     let resp =
-        crate::containers::containers_inspect(State(app.clone()), Path("inspectme000".into()))
+        crate::containers::Containers::inspect(State(app.clone()), Path("inspectme000".into()))
             .await
             .into_response();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -194,7 +194,7 @@ async fn containers_inspect_wire_shape() {
 #[tokio::test]
 async fn containers_inspect_missing_is_404() {
     let app = test_app();
-    let resp = crate::containers::containers_inspect(State(app.clone()), Path("nope".into()))
+    let resp = crate::containers::Containers::inspect(State(app.clone()), Path("nope".into()))
         .await
         .into_response();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -293,7 +293,7 @@ async fn flow_container_rename_then_inspect_lookup_and_update_noop() {
     );
 
     // Step 3: inspect (by new name AND by id) shows the new Name with the leading '/'.
-    let r = crate::containers::containers_inspect(State(app.clone()), Path("app".into()))
+    let r = crate::containers::Containers::inspect(State(app.clone()), Path("app".into()))
         .await
         .into_response();
     assert_eq!(
@@ -303,7 +303,7 @@ async fn flow_container_rename_then_inspect_lookup_and_update_noop() {
     );
     assert_eq!(to_body_json(r).await["Name"], "/app");
     // The OLD name no longer resolves (docker frees it on rename) -> 404.
-    let r = crate::containers::containers_inspect(State(app.clone()), Path("web".into()))
+    let r = crate::containers::Containers::inspect(State(app.clone()), Path("web".into()))
         .await
         .into_response();
     assert_eq!(
@@ -316,7 +316,7 @@ async fn flow_container_rename_then_inspect_lookup_and_update_noop() {
     let all_q: crate::containers::PsQ =
         serde_json::from_value(serde_json::json!({"all":"true"})).unwrap();
     let axum::Json(list) =
-        crate::containers::containers_json(State(app.clone()), Query(all_q)).await;
+        crate::containers::Containers::list(State(app.clone()), Query(all_q)).await;
     let v = serde_json::to_value(&list).unwrap();
     let found = v.as_array().unwrap().iter().any(|row| {
         row["Names"]
@@ -338,7 +338,7 @@ async fn flow_container_rename_then_inspect_lookup_and_update_noop() {
         StatusCode::OK,
         "update returns 200 {{Warnings}}"
     );
-    let r = crate::containers::containers_inspect(State(app.clone()), Path(cid.clone()))
+    let r = crate::containers::Containers::inspect(State(app.clone()), Path(cid.clone()))
         .await
         .into_response();
     let v = to_body_json(r).await;
@@ -352,7 +352,7 @@ async fn flow_container_rename_then_inspect_lookup_and_update_noop() {
 // docker contract: `docker rename web app` when `app` is already taken is a 409 Conflict; the rename
 // is refused and both names stay distinct. *** DIVERGENCE (bug): hl's `containers_rename` never checks
 // for a target-name collision — it silently overwrites, leaving TWO containers named `app`. A later
-// `resolve_cid("app")` then resolves to an arbitrary one. Flagged, not fixed. ***
+// `ContainerId::resolve("app")` then resolves to an arbitrary one. Flagged, not fixed. ***
 #[tokio::test]
 async fn flow_rename_onto_existing_name_creates_duplicate_divergence() {
     let app = test_app();
@@ -460,7 +460,7 @@ async fn flow_containers_prune_removes_only_stopped_keeps_running() {
     seed_container(&app, "exitidB00000", "exited").await;
 
     // Prune: reclaims exactly the two exited ids; the running one is untouched.
-    let axum::Json(rep) = crate::containers::containers_prune(State(app.clone())).await;
+    let axum::Json(rep) = crate::containers::Containers::prune(State(app.clone())).await;
     let deleted: std::collections::HashSet<&str> =
         rep.containers_deleted.iter().map(|s| s.as_str()).collect();
     assert_eq!(
@@ -496,7 +496,7 @@ async fn flow_containers_prune_removes_only_stopped_keeps_running() {
     let all_q: crate::containers::PsQ =
         serde_json::from_value(serde_json::json!({"all": "true"})).unwrap();
     let axum::Json(list) =
-        crate::containers::containers_json(State(app.clone()), Query(all_q)).await;
+        crate::containers::Containers::list(State(app.clone()), Query(all_q)).await;
     assert_eq!(
         list.len(),
         1,
@@ -681,7 +681,7 @@ async fn container_inspect_round_trips_full_create_config() {
     let r = crate::containers::containers_create(State(app.clone()), Query(q), body).await;
     assert_eq!(r.status(), StatusCode::CREATED);
 
-    let resp = crate::containers::containers_inspect(State(app.clone()), Path("rich".into()))
+    let resp = crate::containers::Containers::inspect(State(app.clone()), Path("rich".into()))
         .await
         .into_response();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -784,7 +784,7 @@ async fn top_on_stopped_container_is_409() {
     let app = test_app();
     seed_container(&app, "stopped00000", "exited").await;
     let resp =
-        crate::containers::containers_top(State(app.clone()), Path("stopped00000".into())).await;
+        crate::containers::Containers::top(State(app.clone()), Path("stopped00000".into())).await;
     assert_eq!(
         resp.status(),
         StatusCode::CONFLICT,
@@ -793,7 +793,7 @@ async fn top_on_stopped_container_is_409() {
     // A running container still returns the synthetic process row (200).
     seed_container(&app, "running00000", "running").await;
     let ok =
-        crate::containers::containers_top(State(app.clone()), Path("running00000".into())).await;
+        crate::containers::Containers::top(State(app.clone()), Path("running00000".into())).await;
     assert_eq!(ok.status(), StatusCode::OK);
 }
 
@@ -803,7 +803,7 @@ async fn inspect_dead_status_sets_dead_boolean() {
     let app = test_app();
     seed_container(&app, "deadone00000", "dead").await;
     let v = to_body_json(
-        crate::containers::containers_inspect(State(app.clone()), Path("deadone00000".into()))
+        crate::containers::Containers::inspect(State(app.clone()), Path("deadone00000".into()))
             .await
             .into_response(),
     )
@@ -1020,7 +1020,7 @@ async fn start_installs_starting_health_state_synchronously() {
     // start spawns (which fails with no engine and reaps to exited), but the `starting` health object is
     // installed BEFORE spawn as part of the start transition, so it is present afterward.
     let _ =
-        crate::containers::containers_start(State(app.clone()), Path("healthstart0".into())).await;
+        crate::containers::Containers::start(State(app.clone()), Path("healthstart0".into())).await;
     let g = app.inner.lock().await;
     let c = g.containers.get("healthstart0").unwrap();
     let h = c.health.as_ref().expect("health object installed at start");

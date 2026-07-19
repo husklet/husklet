@@ -22,17 +22,17 @@ pub struct LocalImage {
 impl LocalImage {
     /// The image's `Entrypoint` (OCI `config.config.Entrypoint`).
     pub fn entrypoint(&self) -> Vec<String> {
-        config_strs(&self.config, "Entrypoint")
+        ImageConfig::from(&self.config).entrypoint()
     }
 
     /// The image's default `Cmd` (OCI `config.config.Cmd`).
     pub fn cmd(&self) -> Vec<String> {
-        config_strs(&self.config, "Cmd")
+        ImageConfig::from(&self.config).command()
     }
 
     /// The image's `Env` lines (`K=V`).
     pub fn env(&self) -> Vec<String> {
-        config_strs(&self.config, "Env")
+        ImageConfig::from(&self.config).environment()
     }
 
     /// The image's `WorkingDir` (empty if unset).
@@ -78,7 +78,7 @@ mod tests {
             rootfs: PathBuf::from("/tmp/rootfs"),
             arch: Arch::LinuxAarch64,
             config: json!({ "config": { "Entrypoint": entrypoint, "Cmd": cmd } }),
-            iref: ImageRef::parse("nginx"),
+            iref: ImageRef::from("nginx"),
         }
     }
 

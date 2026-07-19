@@ -7,20 +7,16 @@ use super::super::super::*;
 
 #[derive(Deserialize)]
 pub(crate) struct CreateBody {
+    #[serde(flatten)]
+    pub(super) process: ProcessCreateBody,
     #[serde(rename = "Image")]
     pub(super) image: Option<String>,
-    #[serde(rename = "Cmd")]
-    pub(super) cmd: Option<Vec<String>>,
-    #[serde(rename = "Env")]
-    pub(super) env: Option<Vec<String>>,
     #[serde(rename = "Entrypoint")]
     pub(super) entrypoint: Option<Vec<String>>,
     #[serde(rename = "Hostname")]
     pub(super) hostname: Option<String>,
     #[serde(rename = "Domainname")]
     pub(super) domainname: Option<String>,
-    #[serde(rename = "Tty")]
-    pub(super) tty: Option<bool>,
     // `-i` (Config.OpenStdin) and Config.StdinOnce — interactive-stdio flags, persisted for inspect fidelity.
     #[serde(rename = "OpenStdin")]
     pub(super) open_stdin: Option<bool>,
@@ -30,14 +26,10 @@ pub(crate) struct CreateBody {
     // host bindings. Round-tripped through inspect (Config.ExposedPorts + null NetworkSettings.Ports).
     #[serde(rename = "ExposedPorts")]
     pub(super) exposed_ports: Option<HashMap<String, Value>>,
-    #[serde(rename = "WorkingDir")]
-    pub(super) working_dir: Option<String>,
     #[serde(rename = "Labels")]
     pub(super) labels: Option<HashMap<String, String>>,
     // `docker run --user U[:G]` — docker puts the "uid:gid" / "name" string in Config.User (top-level
     // of the create body, alongside Image/Cmd/Env). Stored on the Container and turned into HL_UID/HL_GID.
-    #[serde(rename = "User")]
-    pub(super) user: Option<String>,
     #[serde(rename = "HostConfig")]
     pub(super) host_config: Option<HostConfig>,
     // `docker create`/compose attach a container to one or more user-defined networks via the

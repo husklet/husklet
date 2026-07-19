@@ -74,7 +74,7 @@ impl MetalCtx {
         h: u32,
     ) -> Retained<ProtocolObject<dyn MTLTexture>> {
         let tex = self.new_bgra_texture(w, h);
-        let region = full_region(w, h);
+        let region = FrameSize::new(w, h).region();
         unsafe {
             tex.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
                 region,
@@ -90,7 +90,7 @@ impl MetalCtx {
     /// across same-sized wl_shm commits so animation does not allocate and retire a multi-megabyte Metal
     /// resource every frame.
     pub fn update_bgra(&self, tex: &ProtocolObject<dyn MTLTexture>, bgra: &[u8], w: u32, h: u32) {
-        let region = full_region(w, h);
+        let region = FrameSize::new(w, h).region();
         unsafe {
             tex.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
                 region,
@@ -173,7 +173,7 @@ impl MetalCtx {
     /// Read a `BGRA8Unorm` texture back to CPU bytes (BGRA, tight `w*4` rows).
     pub fn readback_bgra(&self, tex: &ProtocolObject<dyn MTLTexture>, w: u32, h: u32) -> Vec<u8> {
         let mut out = vec![0u8; (w * h * 4) as usize];
-        let region = full_region(w, h);
+        let region = FrameSize::new(w, h).region();
         unsafe {
             tex.getBytes_bytesPerRow_fromRegion_mipmapLevel(
                 std::ptr::NonNull::new(out.as_mut_ptr() as *mut _).unwrap(),
@@ -316,21 +316,42 @@ fragment float4 fmain(VOut in [[stage_in]], texture2d<float> src [[texture(0)]],
 }
 
 /// Convert tight BGRA bytes to RGBA (swap B/R and preserve alpha) for capture / pixel inspection.
-pub fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
-    let mut rgba = Vec::with_capacity(bgra.len() / 4 * 4);
-    for pixel in bgra.chunks_exact(4) {
-        rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
-    }
-    rgba
+pub struct BgraFrame<'a> {
+    pixels: &'a [u8],
 }
 
-fn full_region(w: u32, h: u32) -> MTLRegion {
-    MTLRegion {
-        origin: MTLOrigin { x: 0, y: 0, z: 0 },
-        size: MTLSize {
-            width: w as usize,
-            height: h as usize,
-            depth: 1,
-        },
+impl<'a> BgraFrame<'a> {
+    pub fn new(pixels: &'a [u8]) -> Self {
+        Self { pixels }
+    }
+
+    pub fn rgba(&self) -> Vec<u8> {
+        let mut rgba = Vec::with_capacity(self.pixels.len() / 4 * 4);
+        for pixel in self.pixels.chunks_exact(4) {
+            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+        rgba
+    }
+}
+
+struct FrameSize {
+    width: u32,
+    height: u32,
+}
+
+impl FrameSize {
+    fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+
+    fn region(self) -> MTLRegion {
+        MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width: self.width as usize,
+                height: self.height as usize,
+                depth: 1,
+            },
+        }
     }
 }

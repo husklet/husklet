@@ -19,43 +19,45 @@ pub mod vk_descriptor_type {
     pub const STORAGE_BUFFER_DYNAMIC: i32 = 9;
 }
 
-/// Whether a `VkDescriptorType` is one of the buffer descriptors the bring-up compute path models (the
-/// only class carried in [`DsetRec::buffers`]). Texel-buffer / storage-image descriptors are not
-/// materialized here, so — exactly as `vkUpdateDescriptorSets` does — a template applying them is a
-/// truthful no-op for that entry.
-pub fn is_buffer_descriptor(descriptor_type: i32) -> bool {
-    use vk_descriptor_type::*;
-    matches!(
-        descriptor_type,
-        UNIFORM_BUFFER | STORAGE_BUFFER | UNIFORM_BUFFER_DYNAMIC | STORAGE_BUFFER_DYNAMIC
-    )
+/// A raw `VkDescriptorType` with the classification behavior supported by Husklet's descriptor model.
+/// Unknown values remain representable so unsupported or newer Vulkan descriptor classes can be handled
+/// as truthful no-ops at the lowering boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DescriptorType(i32);
+
+impl DescriptorType {
+    /// Whether this is one of the buffer descriptors materialized in [`DsetRec::buffers`].
+    pub fn is_buffer(self) -> bool {
+        use vk_descriptor_type::*;
+        matches!(
+            self.0,
+            UNIFORM_BUFFER | STORAGE_BUFFER | UNIFORM_BUFFER_DYNAMIC | STORAGE_BUFFER_DYNAMIC
+        )
+    }
+
+    /// Whether this is a sampled-image or sampler descriptor materialized in [`DsetRec::images`].
+    pub fn is_image(self) -> bool {
+        use vk_descriptor_type::*;
+        matches!(self.0, SAMPLER | COMBINED_IMAGE_SAMPLER | SAMPLED_IMAGE)
+    }
+
+    /// Whether this descriptor consumes `pImageInfo.imageView`.
+    pub fn binds_image(self) -> bool {
+        use vk_descriptor_type::*;
+        matches!(self.0, COMBINED_IMAGE_SAMPLER | SAMPLED_IMAGE)
+    }
+
+    /// Whether this descriptor consumes `pImageInfo.sampler`.
+    pub fn binds_sampler(self) -> bool {
+        use vk_descriptor_type::*;
+        matches!(self.0, COMBINED_IMAGE_SAMPLER | SAMPLER)
+    }
 }
 
-/// Whether a `VkDescriptorType` is a sampled-image / sampler descriptor materialized in [`DsetRec::images`]
-/// and resolved to `BindResource::Texture`/`Sampler` at `vkCmdBindDescriptorSets`. Covers the three
-/// texture-binding classes the shaders sample through: `COMBINED_IMAGE_SAMPLER` (image + sampler at one
-/// binding), the separate `SAMPLED_IMAGE` (image only), and `SAMPLER` (sampler only). Storage images and
-/// texel buffers are out of scope (no matching IR bind).
-pub fn is_image_descriptor(descriptor_type: i32) -> bool {
-    use vk_descriptor_type::*;
-    matches!(
-        descriptor_type,
-        SAMPLER | COMBINED_IMAGE_SAMPLER | SAMPLED_IMAGE
-    )
-}
-
-/// Whether `descriptor_type` binds a sampled image (its `pImageInfo.imageView` is consumed): a
-/// `COMBINED_IMAGE_SAMPLER` or a separate `SAMPLED_IMAGE`.
-pub fn descriptor_binds_image(descriptor_type: i32) -> bool {
-    use vk_descriptor_type::*;
-    matches!(descriptor_type, COMBINED_IMAGE_SAMPLER | SAMPLED_IMAGE)
-}
-
-/// Whether `descriptor_type` binds a sampler (its `pImageInfo.sampler` is consumed): a
-/// `COMBINED_IMAGE_SAMPLER` or a separate `SAMPLER`.
-pub fn descriptor_binds_sampler(descriptor_type: i32) -> bool {
-    use vk_descriptor_type::*;
-    matches!(descriptor_type, COMBINED_IMAGE_SAMPLER | SAMPLER)
+impl From<i32> for DescriptorType {
+    fn from(value: i32) -> Self {
+        Self(value)
+    }
 }
 
 /// `VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET` — the only template kind without
@@ -177,5 +179,39 @@ impl DsetRec {
             buffers: HashMap::new(),
             images: HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{vk_descriptor_type, DescriptorType};
+
+    #[test]
+    fn descriptor_type_classifies_supported_resources() {
+        let buffer = DescriptorType::from(vk_descriptor_type::STORAGE_BUFFER_DYNAMIC);
+        assert!(buffer.is_buffer());
+        assert!(!buffer.is_image());
+
+        let combined = DescriptorType::from(vk_descriptor_type::COMBINED_IMAGE_SAMPLER);
+        assert!(combined.is_image());
+        assert!(combined.binds_image());
+        assert!(combined.binds_sampler());
+
+        let image = DescriptorType::from(vk_descriptor_type::SAMPLED_IMAGE);
+        assert!(image.binds_image());
+        assert!(!image.binds_sampler());
+
+        let sampler = DescriptorType::from(vk_descriptor_type::SAMPLER);
+        assert!(!sampler.binds_image());
+        assert!(sampler.binds_sampler());
+    }
+
+    #[test]
+    fn unknown_descriptor_type_is_unsupported_without_becoming_invalid() {
+        let descriptor = DescriptorType::from(i32::MAX);
+        assert!(!descriptor.is_buffer());
+        assert!(!descriptor.is_image());
+        assert!(!descriptor.binds_image());
+        assert!(!descriptor.binds_sampler());
     }
 }

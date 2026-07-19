@@ -4,93 +4,96 @@ use super::*;
 /// Write containers/volumes/networks to `path` atomically (temp file + rename). Best-effort:
 /// persistence failures are logged but never abort a request. Durability-sensitive handlers that must
 /// fail/roll back on a persistence error call [`save_state_checked`] instead.
-pub(crate) fn save_state(inner: &Inner, path: &str) {
-    if let Err(e) = save_state_checked(inner, path) {
-        eprintln!("[hl-daemon] state save failed: {e}");
+pub(crate) struct Store;
+impl Store {
+    pub(crate) fn save(inner: &Inner, path: &str) {
+        if let Err(e) = Self::save_checked(inner, path) {
+            eprintln!("[hl-daemon] state save failed: {e}");
+        }
     }
-}
 
-/// Like [`save_state`] but returns the I/O error so a caller can fail the request or roll back the
-/// in-memory mutation — a successful `201`/`204` must not describe state that will vanish on restart.
-pub(crate) fn save_state_checked(inner: &Inner, path: &str) -> std::io::Result<()> {
-    let p = Persisted {
-        containers: inner.containers.values().cloned().collect(),
-        volumes: inner.volumes.clone(),
-        networks: inner.networks.clone(),
-    };
-    let bytes = serde_json::to_vec_pretty(&p)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        let _ = std::fs::create_dir_all(parent);
+    /// Like [`save_state`] but returns the I/O error so a caller can fail the request or roll back the
+    /// in-memory mutation — a successful `201`/`204` must not describe state that will vanish on restart.
+    pub(crate) fn save_checked(inner: &Inner, path: &str) -> std::io::Result<()> {
+        let p = Persisted {
+            containers: inner.containers.values().cloned().collect(),
+            volumes: inner.volumes.clone(),
+            networks: inner.networks.clone(),
+        };
+        let bytes = serde_json::to_vec_pretty(&p)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = format!("{path}.tmp");
+        std::fs::write(&tmp, &bytes)?;
+        std::fs::rename(&tmp, path)
     }
-    let tmp = format!("{path}.tmp");
-    std::fs::write(&tmp, &bytes)?;
-    std::fs::rename(&tmp, path)
-}
 
-/// Load persisted state into `inner`, re-resolving each container's arch/rootfs from the
-/// freshly discovered images.
-pub(crate) fn load_state(inner: &mut Inner, path: &str) {
-    let Ok(bytes) = std::fs::read(path) else {
-        return;
-    };
-    let Ok(p) = serde_json::from_slice::<Persisted>(&bytes) else {
-        eprintln!("[hl-daemon] ignoring unreadable state file {path}");
-        return;
-    };
-    for mut c in p.containers {
-        // Re-resolve arch/rootfs from the freshly discovered images. Match on the persisted rootfs first
-        // (exact, so a re-tagged image still resolves), then fall back to the SAME lenient resolver that
-        // `containers_create` uses (repository + tag aware). The prior exact/`{name}:latest` string match
-        // missed the common case — a container created from a BARE ref (`docker run nginx`, stored
-        // `c.image = "nginx"`) never matched its pulled image named `nginx:latest`, so EVERY pulled-image
-        // container fell through to the arm64 default. Harmless for arm64, but it silently reset an amd64
-        // container's arch to arm64 across a daemon restart (it would then run x86 code on the arm64 engine).
-        let resolved = inner
-            .images
-            .iter()
-            .find(|i| !c.rootfs.is_empty() && i.rootfs == c.rootfs)
-            .or_else(|| crate::util::find_image(&inner.images, &c.image));
-        match resolved {
-            Some(img) => {
-                c.arch = Some(img.arch);
-                c.rootfs = img.rootfs.clone();
+    /// Load persisted state into `inner`, re-resolving each container's arch/rootfs from the
+    /// freshly discovered images.
+    pub(crate) fn load(inner: &mut Inner, path: &str) {
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let Ok(p) = serde_json::from_slice::<Persisted>(&bytes) else {
+            eprintln!("[hl-daemon] ignoring unreadable state file {path}");
+            return;
+        };
+        for mut c in p.containers {
+            // Re-resolve arch/rootfs from the freshly discovered images. Match on the persisted rootfs first
+            // (exact, so a re-tagged image still resolves), then fall back to the SAME lenient resolver that
+            // `containers_create` uses (repository + tag aware). The prior exact/`{name}:latest` string match
+            // missed the common case — a container created from a BARE ref (`docker run nginx`, stored
+            // `c.image = "nginx"`) never matched its pulled image named `nginx:latest`, so EVERY pulled-image
+            // container fell through to the arm64 default. Harmless for arm64, but it silently reset an amd64
+            // container's arch to arm64 across a daemon restart (it would then run x86 code on the arm64 engine).
+            let resolved = inner
+                .images
+                .iter()
+                .find(|i| !c.rootfs.is_empty() && i.rootfs == c.rootfs)
+                .or_else(|| crate::util::DiscoveredImages::new(&inner.images).find(&c.image));
+            match resolved {
+                Some(img) => {
+                    c.arch = Some(img.arch);
+                    c.rootfs = img.rootfs.clone();
+                }
+                // No image resolves: keep the PERSISTED arch (deserialized from state.json) rather than
+                // forcing arm64 — an amd64 container whose image was removed must not silently switch engines
+                // on restart. Only fall back to the arm64 default when nothing was persisted either.
+                None => c.arch = c.arch.or(Some(Guest::LinuxAarch64)),
             }
-            // No image resolves: keep the PERSISTED arch (deserialized from state.json) rather than
-            // forcing arm64 — an amd64 container whose image was removed must not silently switch engines
-            // on restart. Only fall back to the arm64 default when nothing was persisted either.
-            None => c.arch = c.arch.or(Some(Guest::LinuxAarch64)),
-        }
-        // A daemon restart loses every live process. A container persisted as running/paused/restarting has
-        // no backing process after reload, so normalize it to a terminal state — otherwise inspect reports
-        // Running=true with Pid=0 and `POST /start` becomes a 304 no-op instead of (re)starting it, and a
-        // `restarting` container stays stuck forever with no supervisor to advance it. Docker uses exit code
-        // 255 for containers still running at daemon shutdown.
-        if matches!(c.status.as_str(), "running" | "paused" | "restarting") {
-            c.status = "exited".into();
-            if c.exit_code == 0 {
-                c.exit_code = 255;
+            // A daemon restart loses every live process. A container persisted as running/paused/restarting has
+            // no backing process after reload, so normalize it to a terminal state — otherwise inspect reports
+            // Running=true with Pid=0 and `POST /start` becomes a 304 no-op instead of (re)starting it, and a
+            // `restarting` container stays stuck forever with no supervisor to advance it. Docker uses exit code
+            // 255 for containers still running at daemon shutdown.
+            if matches!(c.status.as_str(), "running" | "paused" | "restarting") {
+                c.status = "exited".into();
+                if c.exit_code == 0 {
+                    c.exit_code = 255;
+                }
+                if c.finished_at == 0 {
+                    c.finished_at = crate::util::now_secs();
+                }
             }
-            if c.finished_at == 0 {
-                c.finished_at = crate::util::now_secs();
+            // Restore the exited container's persisted logs (stdout/stderr are `#[serde(skip)]`, so the state
+            // file carries none) so `docker logs` still returns output after a daemon restart.
+            let logdir = crate::util::hl_home()
+                .join("containers")
+                .join(&c.id)
+                .join("logs");
+            if let Ok(b) = std::fs::read(logdir.join("stdout")) {
+                c.stdout = b;
             }
+            if let Ok(b) = std::fs::read(logdir.join("stderr")) {
+                c.stderr = b;
+            }
+            inner.containers.insert(c.id.clone(), c);
         }
-        // Restore the exited container's persisted logs (stdout/stderr are `#[serde(skip)]`, so the state
-        // file carries none) so `docker logs` still returns output after a daemon restart.
-        let logdir = crate::util::hl_home()
-            .join("containers")
-            .join(&c.id)
-            .join("logs");
-        if let Ok(b) = std::fs::read(logdir.join("stdout")) {
-            c.stdout = b;
-        }
-        if let Ok(b) = std::fs::read(logdir.join("stderr")) {
-            c.stderr = b;
-        }
-        inner.containers.insert(c.id.clone(), c);
+        inner.volumes = p.volumes;
+        inner.networks = p.networks;
     }
-    inner.volumes = p.volumes;
-    inner.networks = p.networks;
 }
 
 #[cfg(test)]
@@ -135,11 +138,11 @@ mod tests {
                 ..Default::default()
             },
         );
-        save_state(&src, &path);
+        Store::save(&src, &path);
 
         let mut dst = Inner::default();
         dst.images = vec![img("nginx:latest", "/img/nginx/rootfs", Guest::LinuxX86_64)];
-        load_state(&mut dst, &path);
+        Store::load(&mut dst, &path);
         let got = dst.containers.get("c1").expect("container reloaded");
         assert_eq!(
             got.arch,
@@ -165,10 +168,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        save_state(&src, &path);
+        Store::save(&src, &path);
         let mut dst = Inner::default();
         dst.images = vec![img("renamed:latest", "/img/x/rootfs", Guest::LinuxX86_64)];
-        load_state(&mut dst, &path);
+        Store::load(&mut dst, &path);
         assert_eq!(
             dst.containers.get("c2").unwrap().arch,
             Some(Guest::LinuxX86_64)
@@ -192,9 +195,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        save_state(&src, &path);
+        Store::save(&src, &path);
         let mut dst = Inner::default(); // no images -> nothing resolves
-        load_state(&mut dst, &path);
+        Store::load(&mut dst, &path);
         assert_eq!(
             dst.containers.get("c4").unwrap().arch,
             Some(Guest::LinuxX86_64),
@@ -225,9 +228,9 @@ mod tests {
                 },
             );
         }
-        save_state(&src, &path);
+        Store::save(&src, &path);
         let mut dst = Inner::default();
-        load_state(&mut dst, &path);
+        Store::load(&mut dst, &path);
         for id in ["run1", "pau1", "res1"] {
             let c = dst.containers.get(id).unwrap();
             assert_eq!(
@@ -264,9 +267,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        save_state(&src, &path);
+        Store::save(&src, &path);
         let mut dst = Inner::default();
-        load_state(&mut dst, &path);
+        Store::load(&mut dst, &path);
         let c = dst.containers.get(&cid).unwrap();
         assert_eq!(
             c.stdout, b"hello after restart\n",
@@ -294,9 +297,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        save_state(&src, &path);
+        Store::save(&src, &path);
         let mut dst = Inner::default();
-        load_state(&mut dst, &path);
+        Store::load(&mut dst, &path);
         assert_eq!(
             dst.containers.get("c3").unwrap().arch,
             Some(Guest::LinuxAarch64)

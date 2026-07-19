@@ -62,13 +62,15 @@ pub struct Frame {
 /// Total upload bytes a lowered frame carries: the sum of every `WriteBuffer` payload (vertex / index /
 /// uniform data + hoisted texture-staging copies — the CreateTexture pixels ride a staging `WriteBuffer`).
 /// This is the single most valuable frame instrument: the 4.3 GiB GTK frame is exactly this number.
-fn frame_upload_bytes(cmds: &[Cmd]) -> u64 {
-    cmds.iter()
-        .map(|c| match c {
-            Cmd::WriteBuffer { data, .. } => data.len() as u64,
-            _ => 0,
-        })
-        .sum()
+impl Frame {
+    fn upload_bytes(cmds: &[Cmd]) -> u64 {
+        cmds.iter()
+            .map(|c| match c {
+                Cmd::WriteBuffer { data, .. } => data.len() as u64,
+                _ => 0,
+            })
+            .sum()
+    }
 }
 
 /// Emit the per-frame observability: one scannable `key=val` debug line + the frame counters. Gated +
@@ -105,204 +107,211 @@ fn log_frame(w: i32, h: i32, draws: usize, passes: usize, cmds: usize, bytes: u6
 /// pipelines, shaders, render targets) are re-referenced by id next frame and left intact. (Cross-frame
 /// texture retirement is NOT done here: a draw retained across a NACKed swap can still reference an
 /// abandoned/deleted id, so destroying it would `UnknownId` the retained frame — a deeper deferral gap.)
-pub fn build_frame_ir(ctx: &mut GlContext) -> Option<Frame> {
-    let mut frame = build_frame_ir_raw(ctx)?;
-    // Append `Destroy*` for every PER-DRAW EPHEMERAL resource this frame created — the ones referenced ONLY
-    // within the frame's own `Submit`s and never reused across frames: the single-use `COPY_SRC` texture
-    // staging buffers, the per-draw implicit `UNIFORM` uniform buffers, the per-draw bind groups, and the
-    // per-draw samplers (EXCEPT the shared placeholder sampler, which persists). Freed AFTER the submits and
-    // BEFORE the swap's `Present` (the builder's cmds carry no `Present`), so their residency nets to ZERO in
-    // the transactional per-frame charge — without this a long-running app (Chrome) leaks a uniform buffer +
-    // sampler + bind group PER DRAW every frame and exhausts the connection residency + object caps. The
-    // PERSISTENT resources (cached vertex/index buffers, cached sampled textures, pipelines, shaders, render
-    // targets, the placeholder texture+sampler) are NOT freed — they are re-referenced by id next frame.
-    use hl_gpu::protocol::model::enums::buffer_usage;
-    let placeholder_samp = ctx.placeholder_sampler_ir();
-    let mut cleanup: Vec<Cmd> = Vec::new();
-    for c in &frame.cmds {
-        match c {
-            Cmd::CreateBuffer(id, d)
-                if d.usage == buffer_usage::COPY_SRC || d.usage == buffer_usage::UNIFORM =>
-            {
-                cleanup.push(Cmd::DestroyBuffer(*id));
+impl Frame {
+    pub fn build(ctx: &mut GlContext) -> Option<Frame> {
+        let mut frame = Self::build_raw(ctx)?;
+        // Append `Destroy*` for every PER-DRAW EPHEMERAL resource this frame created — the ones referenced ONLY
+        // within the frame's own `Submit`s and never reused across frames: the single-use `COPY_SRC` texture
+        // staging buffers, the per-draw implicit `UNIFORM` uniform buffers, the per-draw bind groups, and the
+        // per-draw samplers (EXCEPT the shared placeholder sampler, which persists). Freed AFTER the submits and
+        // BEFORE the swap's `Present` (the builder's cmds carry no `Present`), so their residency nets to ZERO in
+        // the transactional per-frame charge — without this a long-running app (Chrome) leaks a uniform buffer +
+        // sampler + bind group PER DRAW every frame and exhausts the connection residency + object caps. The
+        // PERSISTENT resources (cached vertex/index buffers, cached sampled textures, pipelines, shaders, render
+        // targets, the placeholder texture+sampler) are NOT freed — they are re-referenced by id next frame.
+        use hl_gpu::protocol::model::enums::buffer_usage;
+        let placeholder_samp = ctx.placeholder_sampler_ir();
+        let mut cleanup: Vec<Cmd> = Vec::new();
+        for c in &frame.cmds {
+            match c {
+                Cmd::CreateBuffer(id, d)
+                    if d.usage == buffer_usage::COPY_SRC || d.usage == buffer_usage::UNIFORM =>
+                {
+                    cleanup.push(Cmd::DestroyBuffer(*id));
+                }
+                Cmd::CreateBindGroup(id, _) => cleanup.push(Cmd::DestroyBindGroup(*id)),
+                Cmd::CreateSampler(id, _) if *id != placeholder_samp => {
+                    cleanup.push(Cmd::DestroySampler(*id))
+                }
+                _ => {}
             }
-            Cmd::CreateBindGroup(id, _) => cleanup.push(Cmd::DestroyBindGroup(*id)),
-            Cmd::CreateSampler(id, _) if *id != placeholder_samp => {
-                cleanup.push(Cmd::DestroySampler(*id))
-            }
-            _ => {}
         }
+        frame.cmds.extend(cleanup);
+        Some(frame)
     }
-    frame.cmds.extend(cleanup);
-    Some(frame)
-}
 
-/// The raw frame assembler (pre-residency-cleanup). See [`build_frame_ir`].
-fn build_frame_ir_raw(ctx: &mut GlContext) -> Option<Frame> {
-    if !ctx.surf.have || ctx.draws.is_empty() {
-        return None;
+    /// The raw frame assembler (pre-residency-cleanup). See [`build_frame_ir`].
+    fn build_raw(ctx: &mut GlContext) -> Option<Frame> {
+        if !ctx.surf.have || ctx.draws.is_empty() {
+            return None;
+        }
+        // Partition the recorded draw-list into contiguous runs that share a bound framebuffer. A frame that
+        // renders to more than one framebuffer (the GskGL / offscreen-compositor shape: a glyph atlas + offscreen
+        // render targets, then a final default-framebuffer pass that SAMPLES them) lowers as a SEQUENCE of render
+        // passes, one per run — not collapsed onto the first draw's FBO. A single run is the single-target fast
+        // path (byte-identical to the pre-frame-graph lowering).
+        let groups = RenderPasses::groups(&ctx.draws);
+        // A `glBlitFramebuffer` frame (or a genuinely multi-framebuffer frame) lowers as a SEQUENCE of passes,
+        // one per FBO run, followed by the recorded blit copies — so route to the multi-pass builder whenever a
+        // blit was recorded, even if all draws share one framebuffer.
+        if groups.len() > 1 || !ctx.blits.is_empty() {
+            return RenderPasses::build_multi(ctx, &groups);
+        }
+        if ctx.draws.iter().all(|d| d.is_clear) {
+            return Some(Self::build_clear(ctx));
+        }
+        // One framebuffer, one or more geometry draws (optionally led by a clear) → the single/multi-draw path.
+        Self::build_geometry(ctx)
     }
-    // Partition the recorded draw-list into contiguous runs that share a bound framebuffer. A frame that
-    // renders to more than one framebuffer (the GskGL / offscreen-compositor shape: a glyph atlas + offscreen
-    // render targets, then a final default-framebuffer pass that SAMPLES them) lowers as a SEQUENCE of render
-    // passes, one per run — not collapsed onto the first draw's FBO. A single run is the single-target fast
-    // path (byte-identical to the pre-frame-graph lowering).
-    let groups = fbo_groups(&ctx.draws);
-    // A `glBlitFramebuffer` frame (or a genuinely multi-framebuffer frame) lowers as a SEQUENCE of passes,
-    // one per FBO run, followed by the recorded blit copies — so route to the multi-pass builder whenever a
-    // blit was recorded, even if all draws share one framebuffer.
-    if groups.len() > 1 || !ctx.blits.is_empty() {
-        return build_multi_pass_frame(ctx, &groups);
-    }
-    if ctx.draws.iter().all(|d| d.is_clear) {
-        return Some(build_clear_frame(ctx));
-    }
-    // One framebuffer, one or more geometry draws (optionally led by a clear) → the single/multi-draw path.
-    build_geometry_frame(ctx)
 }
 
 /// Partition the draw-list into maximal contiguous runs that share a bound framebuffer, in record order,
 /// as `(fbo, start, end)` half-open index ranges into `draws`. Each run becomes one render pass targeting
 /// that FBO's color attachment (fbo `0` = the default window framebuffer). A clear carries the FBO bound
 /// when it was recorded, so a `glClear` under an offscreen FBO groups with that FBO's geometry.
-fn fbo_groups(draws: &[DrawCall]) -> Vec<(u32, usize, usize)> {
-    let mut groups: Vec<(u32, usize, usize)> = Vec::new();
-    for (i, d) in draws.iter().enumerate() {
-        match groups.last_mut() {
-            Some((fbo, start, end)) if *fbo == d.fbo && draws[*start].target == d.target => {
-                *end = i + 1
-            }
-            _ => groups.push((d.fbo, i, i + 1)),
-        }
-    }
-    groups
-}
+struct RenderPasses;
 
-/// Lower a multi-framebuffer frame as a SEQUENCE of render passes, one per contiguous `fbo` run (see
-/// [`fbo_groups`]). Each offscreen run renders into its FBO's color-attachment texture; a later run that
-/// samples that attachment binds the render-target texture directly (see [`lower_draw`]'s cross-pass path),
-/// so the atlas/offscreen → window composite works. The DEFAULT framebuffer (fbo `0`) run renders into the
-/// window color target — and THAT target is what the frame presents and a `glReadPixels` reads back, at
-/// window dimensions (not an offscreen atlas). Falls back to the last run's target for a frame that never
-/// bound fbo `0` (a pure render-to-offscreen frame). Returns `None` if nothing could be lowered.
-fn build_multi_pass_frame(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -> Option<Frame> {
-    let draws = ctx.draws.clone();
-    let blits = ctx.blits.clone();
-    let mut cmds: Vec<Cmd> = Vec::new();
-    // GL texture name of an FBO color attachment → the render-target texture IR a prior pass rendered into,
-    // so a later pass sampling that attachment reads the rendered pixels rather than re-uploading its CPU
-    // storage (an FBO attachment allocated via glTexImage2D(…, NULL) carries a zeroed plane, not the render).
-    let mut fbo_tex_ir: std::collections::HashMap<(u32, u64), u32> =
-        std::collections::HashMap::new();
-    // FBO name → its resolved render target `(surface, texture, w, h, fmt)`, so a recorded
-    // `glBlitFramebuffer` can find the source + destination attachment textures after the passes are built.
-    let mut fbo_target: std::collections::HashMap<u32, (u32, u32, i32, i32, TextureFormat)> =
-        std::collections::HashMap::new();
-    // The default-framebuffer (window) target to present + read back; the last run's target is the fallback.
-    let mut present: Option<(u32, u32, i32, i32, TextureFormat)> = None;
-    let mut last: Option<(u32, u32, i32, i32, TextureFormat)> = None;
-
-    for &(fbo, start, end) in groups {
-        let run = &draws[start..end];
-        let (surface, target_tex, tw, th, fmt) =
-            resolve_target(ctx, fbo, run.first().and_then(|d| d.target), &mut cmds);
-        fbo_target.insert(fbo, (surface, target_tex, tw, th, fmt));
-        // Register this run's offscreen attachment so a later run can sample its rendered pixels. Mirror
-        // resolve_target's offscreen condition (a sized attachment) so `target_tex` is the offscreen target.
-        if let Some(target) = run.first().and_then(|d| d.target) {
-            fbo_tex_ir.insert((target.texture, target.generation), target_tex);
-        }
-        // An unscissored full-framebuffer clear wipes the run's target, so the pass clear-loads with the LAST
-        // such clear's color and replays only the draws recorded AFTER it (see [`effective_clear`]); with no
-        // full clear this is the run's first-draw clear + replay-all (byte-identical to before).
-        let (clear, rstart) = effective_clear(run);
-        let survivors = &run[rstart..];
-
-        let depth_fmt = pass_depth_format(survivors);
-        let mut copies: Vec<Enc> = Vec::new();
-        let mut draw_ops: Vec<Enc> = Vec::new();
-        for d in survivors.iter().filter(|d| !d.is_clear) {
-            if let Some(l) = lower_draw(ctx, d, fmt, depth_fmt, tw, th, &mut cmds, &fbo_tex_ir) {
-                copies.extend(l.copies);
-                draw_ops.extend(l.ops);
+impl RenderPasses {
+    fn groups(draws: &[DrawCall]) -> Vec<(u32, usize, usize)> {
+        let mut groups: Vec<(u32, usize, usize)> = Vec::new();
+        for (i, d) in draws.iter().enumerate() {
+            match groups.last_mut() {
+                Some((fbo, start, end)) if *fbo == d.fbo && draws[*start].target == d.target => {
+                    *end = i + 1
+                }
+                _ => groups.push((d.fbo, i, i + 1)),
             }
         }
-
-        let depth = depth_attachment_for(ctx, target_tex, tw, th, survivors, &mut cmds);
-        let mut ops: Vec<Enc> = copies;
-        ops.push(Enc::BeginRenderPass {
-            color: vec![ColorAttachment {
-                texture: target_tex,
-                load: LoadOp::Clear,
-                clear,
-                store: true,
-            }],
-            depth,
-        });
-        ops.extend(draw_ops);
-        ops.push(Enc::EndRenderPass);
-        cmds.push(Cmd::Submit(CommandBuffer {
-            encoder: ops,
-            signal: None,
-        }));
-
-        last = Some((surface, target_tex, tw, th, fmt));
-        if fbo == 0 {
-            present = Some((surface, target_tex, tw, th, fmt));
-        }
+        groups
     }
 
-    // Apply the recorded `glBlitFramebuffer` copies AFTER the render passes. Each copies a sub-rect from the
-    // read FBO's resolved render target into the draw FBO's, lowered to `Enc::CopyTextureToTexture` for the
-    // equal-size (non-scaling) case. The last blit's destination becomes the frame's present/read-back
-    // target so a `glReadPixels` after the blit observes the copied result.
-    for b in &blits {
-        // Resolve each side's render target (rendered/cleared by a pass above, or created on demand).
-        let src = match fbo_target.get(&b.read_fbo).copied() {
-            Some(t) => t,
-            None => {
-                let t = resolve_target(ctx, b.read_fbo, None, &mut cmds);
-                fbo_target.insert(b.read_fbo, t);
-                t
+    /// Lower a multi-framebuffer frame as a SEQUENCE of render passes, one per contiguous `fbo` run (see
+    /// [`fbo_groups`]). Each offscreen run renders into its FBO's color-attachment texture; a later run that
+    /// samples that attachment binds the render-target texture directly (see [`lower_draw`]'s cross-pass path),
+    /// so the atlas/offscreen → window composite works. The DEFAULT framebuffer (fbo `0`) run renders into the
+    /// window color target — and THAT target is what the frame presents and a `glReadPixels` reads back, at
+    /// window dimensions (not an offscreen atlas). Falls back to the last run's target for a frame that never
+    /// bound fbo `0` (a pure render-to-offscreen frame). Returns `None` if nothing could be lowered.
+    fn build_multi(ctx: &mut GlContext, groups: &[(u32, usize, usize)]) -> Option<Frame> {
+        let draws = ctx.draws.clone();
+        let blits = ctx.blits.clone();
+        let mut cmds: Vec<Cmd> = Vec::new();
+        // GL texture name of an FBO color attachment → the render-target texture IR a prior pass rendered into,
+        // so a later pass sampling that attachment reads the rendered pixels rather than re-uploading its CPU
+        // storage (an FBO attachment allocated via glTexImage2D(…, NULL) carries a zeroed plane, not the render).
+        let mut fbo_tex_ir: std::collections::HashMap<(u32, u64), u32> =
+            std::collections::HashMap::new();
+        // FBO name → its resolved render target `(surface, texture, w, h, fmt)`, so a recorded
+        // `glBlitFramebuffer` can find the source + destination attachment textures after the passes are built.
+        let mut fbo_target: std::collections::HashMap<u32, (u32, u32, i32, i32, TextureFormat)> =
+            std::collections::HashMap::new();
+        // The default-framebuffer (window) target to present + read back; the last run's target is the fallback.
+        let mut present: Option<(u32, u32, i32, i32, TextureFormat)> = None;
+        let mut last: Option<(u32, u32, i32, i32, TextureFormat)> = None;
+
+        for &(fbo, start, end) in groups {
+            let run = &draws[start..end];
+            let (surface, target_tex, tw, th, fmt) =
+                resolve_target(ctx, fbo, run.first().and_then(|d| d.target), &mut cmds);
+            fbo_target.insert(fbo, (surface, target_tex, tw, th, fmt));
+            // Register this run's offscreen attachment so a later run can sample its rendered pixels. Mirror
+            // resolve_target's offscreen condition (a sized attachment) so `target_tex` is the offscreen target.
+            if let Some(target) = run.first().and_then(|d| d.target) {
+                fbo_tex_ir.insert((target.texture, target.generation), target_tex);
             }
-        };
-        let dstt = match fbo_target.get(&b.draw_fbo).copied() {
-            Some(t) => t,
-            None => {
-                let t = resolve_target(ctx, b.draw_fbo, None, &mut cmds);
-                fbo_target.insert(b.draw_fbo, t);
-                t
+            // An unscissored full-framebuffer clear wipes the run's target, so the pass clear-loads with the LAST
+            // such clear's color and replays only the draws recorded AFTER it (see [`effective_clear`]); with no
+            // full clear this is the run's first-draw clear + replay-all (byte-identical to before).
+            let (clear, rstart) = Self::effective_clear(run);
+            let survivors = &run[rstart..];
+
+            let depth_fmt = Self::depth_format(survivors);
+            let mut copies: Vec<Enc> = Vec::new();
+            let mut draw_ops: Vec<Enc> = Vec::new();
+            for d in survivors.iter().filter(|d| !d.is_clear) {
+                if let Some(l) = lower_draw(ctx, d, fmt, depth_fmt, tw, th, &mut cmds, &fbo_tex_ir)
+                {
+                    copies.extend(l.copies);
+                    draw_ops.extend(l.ops);
+                }
             }
-        };
-        if let Some(copy) = blit_copy_enc(
-            &b.src, &b.dst, src.1, src.3, src.4, dstt.1, dstt.3, dstt.4, b.filter,
-        ) {
+
+            let depth = depth_attachment_for(ctx, target_tex, tw, th, survivors, &mut cmds);
+            let mut ops: Vec<Enc> = copies;
+            ops.push(Enc::BeginRenderPass {
+                color: vec![ColorAttachment {
+                    texture: target_tex,
+                    load: LoadOp::Clear,
+                    clear,
+                    store: true,
+                }],
+                depth,
+            });
+            ops.extend(draw_ops);
+            ops.push(Enc::EndRenderPass);
             cmds.push(Cmd::Submit(CommandBuffer {
-                encoder: vec![copy],
+                encoder: ops,
                 signal: None,
             }));
-        }
-        present = Some(dstt);
-        last = Some(dstt);
-    }
 
-    let (surface, texture, tw, th, fmt) = present.or(last)?;
-    log_frame(
-        tw,
-        th,
-        draws.len(),
-        groups.len(),
-        cmds.len(),
-        frame_upload_bytes(&cmds),
-    );
-    Some(Frame {
-        cmds,
-        present: (surface, texture),
-        target_width: tw,
-        target_height: th,
-        target_format: fmt,
-        color_attachments: Vec::new(),
-    })
+            last = Some((surface, target_tex, tw, th, fmt));
+            if fbo == 0 {
+                present = Some((surface, target_tex, tw, th, fmt));
+            }
+        }
+
+        // Apply the recorded `glBlitFramebuffer` copies AFTER the render passes. Each copies a sub-rect from the
+        // read FBO's resolved render target into the draw FBO's, lowered to `Enc::CopyTextureToTexture` for the
+        // equal-size (non-scaling) case. The last blit's destination becomes the frame's present/read-back
+        // target so a `glReadPixels` after the blit observes the copied result.
+        for b in &blits {
+            // Resolve each side's render target (rendered/cleared by a pass above, or created on demand).
+            let src = match fbo_target.get(&b.read_fbo).copied() {
+                Some(t) => t,
+                None => {
+                    let t = resolve_target(ctx, b.read_fbo, None, &mut cmds);
+                    fbo_target.insert(b.read_fbo, t);
+                    t
+                }
+            };
+            let dstt = match fbo_target.get(&b.draw_fbo).copied() {
+                Some(t) => t,
+                None => {
+                    let t = resolve_target(ctx, b.draw_fbo, None, &mut cmds);
+                    fbo_target.insert(b.draw_fbo, t);
+                    t
+                }
+            };
+            if let Some(copy) = blit_copy_enc(
+                &b.src, &b.dst, src.1, src.3, src.4, dstt.1, dstt.3, dstt.4, b.filter,
+            ) {
+                cmds.push(Cmd::Submit(CommandBuffer {
+                    encoder: vec![copy],
+                    signal: None,
+                }));
+            }
+            present = Some(dstt);
+            last = Some(dstt);
+        }
+
+        let (surface, texture, tw, th, fmt) = present.or(last)?;
+        log_frame(
+            tw,
+            th,
+            draws.len(),
+            groups.len(),
+            cmds.len(),
+            Frame::upload_bytes(&cmds),
+        );
+        Some(Frame {
+            cmds,
+            present: (surface, texture),
+            target_width: tw,
+            target_height: th,
+            target_format: fmt,
+            color_attachments: Vec::new(),
+        })
+    }
 }
 
 /// The render target + presentable surface for a frame whose draws target framebuffer `fbo`. Mints the
@@ -415,15 +424,17 @@ fn push_target_creates(
 /// needs a depth attachment at all (the common 2D path). Every depth-carrying pipeline in the run MUST use
 /// this ONE format — wgpu requires the pipeline's depth-stencil format to match the pass attachment — so a
 /// pass that stencil-tests any draw lowers ALL its depth pipelines as `Depth24PlusStencil8`.
-fn pass_depth_format(draws: &[DrawCall]) -> Option<TextureFormat> {
-    let any_stencil = draws.iter().any(|d| !d.is_clear && d.stencil);
-    let any_depth = draws.iter().any(|d| !d.is_clear && d.depth);
-    if any_stencil {
-        Some(TextureFormat::Depth24PlusStencil8)
-    } else if any_depth {
-        Some(TextureFormat::Depth32Float)
-    } else {
-        None
+impl RenderPasses {
+    fn depth_format(draws: &[DrawCall]) -> Option<TextureFormat> {
+        let any_stencil = draws.iter().any(|d| !d.is_clear && d.stencil);
+        let any_depth = draws.iter().any(|d| !d.is_clear && d.depth);
+        if any_stencil {
+            Some(TextureFormat::Depth24PlusStencil8)
+        } else if any_depth {
+            Some(TextureFormat::Depth32Float)
+        } else {
+            None
+        }
     }
 }
 
@@ -444,7 +455,7 @@ fn depth_attachment_for(
     draws: &[DrawCall],
     cmds: &mut Vec<Cmd>,
 ) -> Option<DepthAttachment> {
-    let format = pass_depth_format(draws)?;
+    let format = RenderPasses::depth_format(draws)?;
     let with_stencil = matches!(format, TextureFormat::Depth24PlusStencil8);
     let clear_depth = ctx.clear_depth;
     // GL clears the stencil plane to `glClearStencil`'s value (default 0), masked to the 8-bit buffer.
@@ -492,26 +503,30 @@ fn depth_attachment_for(
 /// A scissored clear only touches its rect, so it does NOT wipe — it is not a boundary here. With no
 /// unscissored clear at all the run falls back to `(first-draw clear, 0)` = the prior leading-clear behavior,
 /// so an ordinary "clear then draw" frame lowers byte-identically.
-fn effective_clear(run: &[DrawCall]) -> ([f32; 4], usize) {
-    let mut last_full: Option<usize> = None;
-    for (i, d) in run.iter().enumerate() {
-        if d.is_clear && !d.scissor_enabled {
-            last_full = Some(i);
+impl RenderPasses {
+    fn effective_clear(run: &[DrawCall]) -> ([f32; 4], usize) {
+        let mut last_full: Option<usize> = None;
+        for (i, d) in run.iter().enumerate() {
+            if d.is_clear && !d.scissor_enabled {
+                last_full = Some(i);
+            }
         }
-    }
-    match last_full {
-        Some(i) => (run[i].clear, i + 1),
-        None => (run.first().map(|d| d.clear).unwrap_or([0.0; 4]), 0),
+        match last_full {
+            Some(i) => (run[i].clear, i + 1),
+            None => (run.first().map(|d| d.clear).unwrap_or([0.0; 4]), 0),
+        }
     }
 }
 
 /// Clear-only frame: a render pass over the target that clears it (`LoadOp::Clear`), honoring the LAST
 /// unscissored clear's color (see [`effective_clear`]).
-fn build_clear_frame(ctx: &mut GlContext) -> Frame {
-    let cmds: Vec<Cmd> = Vec::new();
-    let fbo = ctx.draws.last().map(|d| d.fbo).unwrap_or(0);
-    let clear = effective_clear(&ctx.draws).0;
-    build_clear_frame_color(ctx, fbo, clear, cmds)
+impl Frame {
+    fn build_clear(ctx: &mut GlContext) -> Frame {
+        let cmds: Vec<Cmd> = Vec::new();
+        let fbo = ctx.draws.last().map(|d| d.fbo).unwrap_or(0);
+        let clear = RenderPasses::effective_clear(&ctx.draws).0;
+        build_clear_frame_color(ctx, fbo, clear, cmds)
+    }
 }
 
 /// A clear-only frame for framebuffer `fbo` with an explicit clear `color`: the pass clears the resolved
@@ -552,7 +567,7 @@ fn build_clear_frame_color(
         ctx.draws.len(),
         1,
         cmds.len(),
-        frame_upload_bytes(&cmds),
+        Frame::upload_bytes(&cmds),
     );
     Frame {
         cmds,
@@ -566,97 +581,171 @@ fn build_clear_frame_color(
 
 /// The per-draw lowering result: the texture staging copies (hoisted before `BeginRenderPass`) and the
 /// in-pass encoder ops (`SetPipeline` … `Draw`) for one geometry draw.
-struct DrawLowering {
+struct DrawCommands {
     copies: Vec<Enc>,
     ops: Vec<Enc>,
 }
 
 /// Geometry frame: clear once, then replay every geometry draw into a single render pass over the target.
 /// Handles single-draw, multi-draw, and clear-then-draw, against the default surface or an offscreen FBO.
-fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
-    // An unscissored full-framebuffer `glClear` wipes all prior rendering, so the effective pass clear is the
-    // LAST such clear's color and only draws recorded AFTER it survive (see [`effective_clear`]). Chrome's
-    // window frame clears the default framebuffer to `#ff7700` (the page background) partway through its
-    // draw-list, then composites tiles — replaying the wiped pre-clear draws or using the leading transparent
-    // clear (the old behavior) dropped that background and read back blank.
-    let (clear, start) = effective_clear(&ctx.draws);
-    let survivors: Vec<DrawCall> = ctx.draws[start..].to_vec();
-    let geom: Vec<DrawCall> = survivors.iter().filter(|d| !d.is_clear).cloned().collect();
-    // A SCISSORED `glClear` among the survivors fills a sub-rect with a color (GskGpu/Chrome fill the page
-    // background this way: `glEnable(GL_SCISSOR_TEST); glClear(#ff7700)` over the content rect). It is a real
-    // paint op, not a pass boundary — lowered below as an `Enc::ClearRect` between render-pass segments.
-    let has_scissored_clear = survivors.iter().any(|d| d.is_clear && d.scissor_enabled);
-    if geom.is_empty() && !has_scissored_clear {
-        // Every geometry draw was erased by a trailing full-framebuffer clear — present just that clear color.
-        // All draws in this single-group path share one framebuffer, so the last draw's fbo is the target.
-        let fbo = ctx.draws.last().map(|d| d.fbo).unwrap_or(0);
-        return Some(build_clear_frame_color(ctx, fbo, clear, Vec::new()));
-    }
-    // The render target follows the surviving geometry's (or the first survivor's) framebuffer binding.
-    let fbo = geom
-        .first()
-        .or_else(|| survivors.first())
-        .map(|d| d.fbo)
-        .unwrap_or(0);
-
-    // A `glDrawBuffers` MRT frame: the bound FBO carries 2+ contiguous color attachments, so the frame
-    // renders ALL of them in ONE pass with N color targets (see [`build_mrt_geometry_frame`]). An FBO with
-    // one (or zero) attachment, or the default framebuffer, stays on the byte-identical single-target path.
-    // MRT never co-occurs with a scissored clear in practice, so it keeps the single-pass path.
-    if !has_scissored_clear && fbo != 0 && ctx.framebuffers.color_attachment_count(fbo) > 1 {
-        if let Some(f) = build_mrt_geometry_frame(ctx, &geom, fbo, clear) {
-            return Some(f);
+impl Frame {
+    fn build_geometry(ctx: &mut GlContext) -> Option<Frame> {
+        // An unscissored full-framebuffer `glClear` wipes all prior rendering, so the effective pass clear is the
+        // LAST such clear's color and only draws recorded AFTER it survive (see [`effective_clear`]). Chrome's
+        // window frame clears the default framebuffer to `#ff7700` (the page background) partway through its
+        // draw-list, then composites tiles — replaying the wiped pre-clear draws or using the leading transparent
+        // clear (the old behavior) dropped that background and read back blank.
+        let (clear, start) = RenderPasses::effective_clear(&ctx.draws);
+        let survivors: Vec<DrawCall> = ctx.draws[start..].to_vec();
+        let geom: Vec<DrawCall> = survivors.iter().filter(|d| !d.is_clear).cloned().collect();
+        // A SCISSORED `glClear` among the survivors fills a sub-rect with a color (GskGpu/Chrome fill the page
+        // background this way: `glEnable(GL_SCISSOR_TEST); glClear(#ff7700)` over the content rect). It is a real
+        // paint op, not a pass boundary — lowered below as an `Enc::ClearRect` between render-pass segments.
+        let has_scissored_clear = survivors.iter().any(|d| d.is_clear && d.scissor_enabled);
+        if geom.is_empty() && !has_scissored_clear {
+            // Every geometry draw was erased by a trailing full-framebuffer clear — present just that clear color.
+            // All draws in this single-group path share one framebuffer, so the last draw's fbo is the target.
+            let fbo = ctx.draws.last().map(|d| d.fbo).unwrap_or(0);
+            return Some(build_clear_frame_color(ctx, fbo, clear, Vec::new()));
         }
-        // Fall through to the single-target path if the MRT attachments could not be fully resolved.
-    }
+        // The render target follows the surviving geometry's (or the first survivor's) framebuffer binding.
+        let fbo = geom
+            .first()
+            .or_else(|| survivors.first())
+            .map(|d| d.fbo)
+            .unwrap_or(0);
 
-    let mut cmds: Vec<Cmd> = Vec::new();
-    let snapshot = geom
-        .first()
-        .or_else(|| survivors.first())
-        .and_then(|d| d.target);
-    let (surface, target_tex, tw, th, target_fmt) = resolve_target(ctx, fbo, snapshot, &mut cmds);
-    let no_fbo_tex = std::collections::HashMap::new();
+        // A `glDrawBuffers` MRT frame: the bound FBO carries 2+ contiguous color attachments, so the frame
+        // renders ALL of them in ONE pass with N color targets (see [`build_mrt_geometry_frame`]). An FBO with
+        // one (or zero) attachment, or the default framebuffer, stays on the byte-identical single-target path.
+        // MRT never co-occurs with a scissored clear in practice, so it keeps the single-pass path.
+        if !has_scissored_clear && fbo != 0 && ctx.framebuffers.color_attachment_count(fbo) > 1 {
+            if let Some(f) = build_mrt_geometry_frame(ctx, &geom, fbo, clear) {
+                return Some(f);
+            }
+            // Fall through to the single-target path if the MRT attachments could not be fully resolved.
+        }
 
-    if !has_scissored_clear {
-        // ---- single-pass path (byte-identical to the pre-scissored-clear builder) ----
-        // The pass's shared depth(+stencil) attachment format (if any draw is depth/stencil-tested) — every
-        // depth pipeline in the pass must be built at this format to match the attachment (wgpu requirement).
-        let depth_fmt = pass_depth_format(&geom);
-        let mut copies: Vec<Enc> = Vec::new();
-        let mut draw_ops: Vec<Enc> = Vec::new();
-        for d in &geom {
-            if let Some(lowered) = lower_draw(
-                ctx,
-                d,
-                target_fmt,
-                depth_fmt,
+        let mut cmds: Vec<Cmd> = Vec::new();
+        let snapshot = geom
+            .first()
+            .or_else(|| survivors.first())
+            .and_then(|d| d.target);
+        let (surface, target_tex, tw, th, target_fmt) =
+            resolve_target(ctx, fbo, snapshot, &mut cmds);
+        let no_fbo_tex = std::collections::HashMap::new();
+
+        if !has_scissored_clear {
+            // ---- single-pass path (byte-identical to the pre-scissored-clear builder) ----
+            // The pass's shared depth(+stencil) attachment format (if any draw is depth/stencil-tested) — every
+            // depth pipeline in the pass must be built at this format to match the attachment (wgpu requirement).
+            let depth_fmt = RenderPasses::depth_format(&geom);
+            let mut copies: Vec<Enc> = Vec::new();
+            let mut draw_ops: Vec<Enc> = Vec::new();
+            for d in &geom {
+                if let Some(lowered) = lower_draw(
+                    ctx,
+                    d,
+                    target_fmt,
+                    depth_fmt,
+                    tw,
+                    th,
+                    &mut cmds,
+                    &no_fbo_tex,
+                ) {
+                    copies.extend(lowered.copies);
+                    draw_ops.extend(lowered.ops);
+                }
+            }
+            // Not one geometry draw could be lowered (e.g. every program was unlinked) → present nothing.
+            if draw_ops.is_empty() {
+                return None;
+            }
+            let depth = depth_attachment_for(ctx, target_tex, tw, th, &geom, &mut cmds);
+            let mut ops: Vec<Enc> = copies;
+            ops.push(Enc::BeginRenderPass {
+                color: vec![ColorAttachment {
+                    texture: target_tex,
+                    load: LoadOp::Clear,
+                    clear,
+                    store: true,
+                }],
+                depth,
+            });
+            ops.extend(draw_ops);
+            ops.push(Enc::EndRenderPass);
+            cmds.push(Cmd::Submit(CommandBuffer {
+                encoder: ops,
+                signal: None,
+            }));
+            log_frame(
                 tw,
                 th,
-                &mut cmds,
-                &no_fbo_tex,
-            ) {
-                copies.extend(lowered.copies);
-                draw_ops.extend(lowered.ops);
+                ctx.draws.len(),
+                1,
+                cmds.len(),
+                Frame::upload_bytes(&cmds),
+            );
+            return Some(Frame {
+                cmds,
+                present: (surface, target_tex),
+                target_width: tw,
+                target_height: th,
+                target_format: target_fmt,
+                color_attachments: Vec::new(),
+            });
+        }
+
+        // ---- segmented path: a scissored clear paints a rect, so the frame is a SEQUENCE of render-pass
+        // segments separated by `Enc::ClearRect` fills, all writing the ONE target in draw order. The first
+        // segment's pass clear-loads the target (`clear`, the effective full clear); every later segment
+        // load-preserves what the prior segments + fills already wrote (`LoadOp::Load`). This is what renders
+        // Chrome's page background: `clear(full transparent); …draws; SCISSORED clear(#ff7700 over the content
+        // rect); …composite tile draws` → transparent clear, orange rect fill, tiles composited on top.
+        let mut ops: Vec<Enc> = Vec::new();
+        let mut seg: Vec<DrawCall> = Vec::new();
+        let mut first_pass = true;
+        for d in &survivors {
+            if d.is_clear {
+                if d.scissor_enabled {
+                    emit_segment_pass(
+                        ctx,
+                        &mut cmds,
+                        &mut ops,
+                        &seg,
+                        target_tex,
+                        target_fmt,
+                        tw,
+                        th,
+                        clear,
+                        first_pass,
+                        &no_fbo_tex,
+                    );
+                    first_pass = false;
+                    seg.clear();
+                    if let Some(cr) = scissored_clear_rect_enc(d, target_tex, tw, th) {
+                        ops.push(cr);
+                    }
+                }
+                // A non-scissored clear cannot appear after `start` (that index is past the last full clear).
+            } else {
+                seg.push(d.clone());
             }
         }
-        // Not one geometry draw could be lowered (e.g. every program was unlinked) → present nothing.
-        if draw_ops.is_empty() {
-            return None;
-        }
-        let depth = depth_attachment_for(ctx, target_tex, tw, th, &geom, &mut cmds);
-        let mut ops: Vec<Enc> = copies;
-        ops.push(Enc::BeginRenderPass {
-            color: vec![ColorAttachment {
-                texture: target_tex,
-                load: LoadOp::Clear,
-                clear,
-                store: true,
-            }],
-            depth,
-        });
-        ops.extend(draw_ops);
-        ops.push(Enc::EndRenderPass);
+        emit_segment_pass(
+            ctx,
+            &mut cmds,
+            &mut ops,
+            &seg,
+            target_tex,
+            target_fmt,
+            tw,
+            th,
+            clear,
+            first_pass,
+            &no_fbo_tex,
+        );
+
         cmds.push(Cmd::Submit(CommandBuffer {
             encoder: ops,
             signal: None,
@@ -667,88 +756,17 @@ fn build_geometry_frame(ctx: &mut GlContext) -> Option<Frame> {
             ctx.draws.len(),
             1,
             cmds.len(),
-            frame_upload_bytes(&cmds),
+            Frame::upload_bytes(&cmds),
         );
-        return Some(Frame {
+        Some(Frame {
             cmds,
             present: (surface, target_tex),
             target_width: tw,
             target_height: th,
             target_format: target_fmt,
             color_attachments: Vec::new(),
-        });
+        })
     }
-
-    // ---- segmented path: a scissored clear paints a rect, so the frame is a SEQUENCE of render-pass
-    // segments separated by `Enc::ClearRect` fills, all writing the ONE target in draw order. The first
-    // segment's pass clear-loads the target (`clear`, the effective full clear); every later segment
-    // load-preserves what the prior segments + fills already wrote (`LoadOp::Load`). This is what renders
-    // Chrome's page background: `clear(full transparent); …draws; SCISSORED clear(#ff7700 over the content
-    // rect); …composite tile draws` → transparent clear, orange rect fill, tiles composited on top.
-    let mut ops: Vec<Enc> = Vec::new();
-    let mut seg: Vec<DrawCall> = Vec::new();
-    let mut first_pass = true;
-    for d in &survivors {
-        if d.is_clear {
-            if d.scissor_enabled {
-                emit_segment_pass(
-                    ctx,
-                    &mut cmds,
-                    &mut ops,
-                    &seg,
-                    target_tex,
-                    target_fmt,
-                    tw,
-                    th,
-                    clear,
-                    first_pass,
-                    &no_fbo_tex,
-                );
-                first_pass = false;
-                seg.clear();
-                if let Some(cr) = scissored_clear_rect_enc(d, target_tex, tw, th) {
-                    ops.push(cr);
-                }
-            }
-            // A non-scissored clear cannot appear after `start` (that index is past the last full clear).
-        } else {
-            seg.push(d.clone());
-        }
-    }
-    emit_segment_pass(
-        ctx,
-        &mut cmds,
-        &mut ops,
-        &seg,
-        target_tex,
-        target_fmt,
-        tw,
-        th,
-        clear,
-        first_pass,
-        &no_fbo_tex,
-    );
-
-    cmds.push(Cmd::Submit(CommandBuffer {
-        encoder: ops,
-        signal: None,
-    }));
-    log_frame(
-        tw,
-        th,
-        ctx.draws.len(),
-        1,
-        cmds.len(),
-        frame_upload_bytes(&cmds),
-    );
-    Some(Frame {
-        cmds,
-        present: (surface, target_tex),
-        target_width: tw,
-        target_height: th,
-        target_format: target_fmt,
-        color_attachments: Vec::new(),
-    })
 }
 
 /// Emit one render-pass SEGMENT of the scissored-clear-split geometry frame (see [`build_geometry_frame`]):
@@ -770,7 +788,7 @@ fn emit_segment_pass(
     first_pass: bool,
     no_fbo_tex: &std::collections::HashMap<(u32, u64), u32>,
 ) {
-    let depth_fmt = pass_depth_format(seg);
+    let depth_fmt = RenderPasses::depth_format(seg);
     let mut copies: Vec<Enc> = Vec::new();
     let mut draw_ops: Vec<Enc> = Vec::new();
     for d in seg {
@@ -906,7 +924,14 @@ fn build_mrt_geometry_frame(
         encoder: ops,
         signal: None,
     }));
-    log_frame(tw, th, geom.len(), 1, cmds.len(), frame_upload_bytes(&cmds));
+    log_frame(
+        tw,
+        th,
+        geom.len(),
+        1,
+        cmds.len(),
+        Frame::upload_bytes(&cmds),
+    );
     // Present + default readback target is attachment 0 (there is no default window surface — MRT renders
     // only to the FBO textures); the full `color_attachments` list routes `glReadBuffer` selection.
     let present_tex = targets[0];
@@ -932,7 +957,7 @@ fn lower_draw(
     th: i32,
     cmds: &mut Vec<Cmd>,
     fbo_tex_ir: &std::collections::HashMap<(u32, u64), u32>,
-) -> Option<DrawLowering> {
+) -> Option<DrawCommands> {
     lower_draw_n(ctx, d, target_fmt, depth_fmt, 1, tw, th, cmds, fbo_tex_ir)
 }
 
@@ -952,13 +977,13 @@ fn lower_draw_n(
     th: i32,
     cmds: &mut Vec<Cmd>,
     fbo_tex_ir: &std::collections::HashMap<(u32, u64), u32>,
-) -> Option<DrawLowering> {
+) -> Option<DrawCommands> {
     let d = d.clone();
     let prog_name = if d.prog != 0 { d.prog } else { ctx.cur_prog };
     let prog = ctx.programs.program(prog_name)?.clone();
     let vs_ir = prog.vs_ir.clone()?;
     let fs_ir = prog.fs_ir.clone()?;
-    let vdecl = crate::adapter::glsl::collect_vertex_attrs(&prog.vs_src);
+    let vdecl = crate::adapter::glsl::Source::new(&prog.vs_src).vertex_attrs();
     let ndecl = vdecl.len();
     let captured_buffer = |name: u32| d.buffers.iter().find(|buffer| buffer.name == name);
 
@@ -1091,7 +1116,7 @@ fn lower_draw_n(
             offset: 0,
             data: ca.data.clone(),
         });
-        let elem = ca.size.clamp(1, 4) as u32 * gl_component_size(ca.kind) as u32;
+        let elem = ca.size.clamp(1, 4) as u32 * GlType(ca.kind).component_size() as u32;
         client_slots.push(ClientSlot {
             ir,
             stride: elem.max(1),
@@ -1119,10 +1144,12 @@ fn lower_draw_n(
             };
             let offset = if d.elem_buf != 0 { d.index_offset } else { 0 };
             source
-                .and_then(|bytes| decode_indices(bytes, offset, d.index_type, d.count))
-                .map(|indices| expand_index_sequence(d.mode, &indices))
+                .and_then(|bytes| {
+                    PrimitiveAssembly::decode_indices(bytes, offset, d.index_type, d.count)
+                })
+                .map(|indices| PrimitiveAssembly::expand(d.mode, &indices))
         } else {
-            expanded_array_indices(d.mode, d.first, d.count)
+            PrimitiveAssembly::expanded_array_indices(d.mode, d.first, d.count)
         }
     } else {
         None
@@ -1242,7 +1269,7 @@ fn lower_draw_n(
             let samp_ir = ctx.alloc_sampler_ir();
             cmds.push(Cmd::CreateSampler(
                 samp_ir,
-                sampler_desc_for(&t, &d.samp_objs[unit]),
+                Pipeline::sampler_desc(&t, &d.samp_objs[unit]),
             ));
             texbinds.push(TexBind {
                 slot,
@@ -1278,7 +1305,7 @@ fn lower_draw_n(
                     let samp_ir = ctx.alloc_sampler_ir();
                     cmds.push(Cmd::CreateSampler(
                         samp_ir,
-                        sampler_desc_for(&t, &d.samp_objs[unit]),
+                        Pipeline::sampler_desc(&t, &d.samp_objs[unit]),
                     ));
                     texbinds.push(TexBind {
                         slot,
@@ -1404,7 +1431,7 @@ fn lower_draw_n(
         };
         cmds.push(Cmd::CreateSampler(
             samp_ir,
-            sampler_desc_for(&t, &d.samp_objs[unit]),
+            Pipeline::sampler_desc(&t, &d.samp_objs[unit]),
         ));
         texbinds.push(TexBind {
             slot,
@@ -1458,10 +1485,8 @@ fn lower_draw_n(
             let mut descriptor = GlslDescriptor::from_words(&fs_ir)
                 .and_then(|result| result.ok())
                 .expect("linked GL fragment shader is a GLSL descriptor");
-            descriptor.source = crate::adapter::glsl::flip_render_target_samplers(
-                &descriptor.source,
-                &flip_samplers,
-            );
+            descriptor.source = crate::adapter::glsl::Source::new(&descriptor.source)
+                .flip_render_target_samplers(&flip_samplers);
             descriptor.to_words()
         };
         cmds.push(Cmd::CreateShader {
@@ -1516,7 +1541,7 @@ fn lower_draw_n(
                     } else {
                         "vec4"
                     };
-                    (decl_format_wire(t), 0)
+                    (Pipeline::decl_format(t), 0)
                 };
             attrs.push(VertexAttr {
                 location: l as u32,
@@ -1553,12 +1578,12 @@ fn lower_draw_n(
     // glBlendFunc / glDepthFunc / glCullFace / glFrontFace, mapped to their opaque WebGPU wire enums).
     let blend = if d.blend {
         Some(BlendState {
-            src_color: blend_factor_wire(d.blend_src_rgb),
-            dst_color: blend_factor_wire(d.blend_dst_rgb),
-            op_color: blend_op_wire(d.blend_eq_rgb),
-            src_alpha: blend_factor_wire(d.blend_src_alpha),
-            dst_alpha: blend_factor_wire(d.blend_dst_alpha),
-            op_alpha: blend_op_wire(d.blend_eq_alpha),
+            src_color: Pipeline::blend_factor(d.blend_src_rgb),
+            dst_color: Pipeline::blend_factor(d.blend_dst_rgb),
+            op_color: Pipeline::blend_op(d.blend_eq_rgb),
+            src_alpha: Pipeline::blend_factor(d.blend_src_alpha),
+            dst_alpha: Pipeline::blend_factor(d.blend_dst_alpha),
+            op_alpha: Pipeline::blend_op(d.blend_eq_alpha),
         })
     } else {
         None
@@ -1571,12 +1596,12 @@ fn lower_draw_n(
     // (never writes depth, `ALWAYS` compare, stencil `DISABLED`), so it renders unaffected while staying
     // format-compatible with the attachment. A pass with NO depth attachment (the common 2D path) keeps
     // `None` — unchanged.
-    let depth = depth_fmt.map(|fmt| build_depth_state(fmt, &d));
-    let topology = gl_topology(d.mode);
+    let depth = depth_fmt.map(|fmt| Pipeline::depth_state(fmt, &d));
+    let topology = PrimitiveAssembly::topology(d.mode);
     // MSAA sample count the pipeline must declare so a multisampled attachment actually resolves (the GL
     // analogue of the Vulkan `sample_count` drop). Sourced from the bound draw framebuffer's attachments;
     // see `framebuffer_sample_count` for this model's (single-sampled-only) status.
-    let sample_count = framebuffer_sample_count(ctx, d.fbo);
+    let sample_count = ctx.framebuffers.sample_count(d.fbo);
     // One color target for the ordinary path; `n_color_targets` identical targets for a `glDrawBuffers` MRT
     // pass (each attachment shares the draw's format + blend). The fragment shader's `layout(location = k)`
     // outputs map onto target `k` (see `adapter::glsl::translate_render`).
@@ -1588,11 +1613,11 @@ fn lower_draw_n(
         })
         .collect();
     let cull = if d.cull_enabled {
-        cull_wire(d.cull_face)
+        Pipeline::cull(d.cull_face)
     } else {
         0
     };
-    let front_face = front_face_wire(d.front_face);
+    let front_face = Pipeline::front_face(d.front_face);
     // Program-keyed pipeline residency: the render pipeline depends on the program's shaders PLUS this draw's
     // fixed-function + vertex-layout state, so the cache key folds a signature of that state in. A program
     // re-drawn with the SAME state reuses its resident pipeline (no `CreateRenderPipeline`); a genuinely new
@@ -1669,7 +1694,7 @@ fn lower_draw_n(
         && ubuf.iter().all(|&b| b == 0)
         && prog.vs_src.contains("GSK_GLOBAL_MVP")
     {
-        ubuf = gsk_globals_std140(tw as f32, th as f32);
+        ubuf = Frame::gsk_globals_std140(tw as f32, th as f32);
     }
     let mut uniform_ir = 0u32;
     if has_u {
@@ -1836,7 +1861,7 @@ fn lower_draw_n(
         });
     }
 
-    Some(DrawLowering { copies, ops })
+    Some(DrawCommands { copies, ops })
 }
 
 /// The 128-byte std140 bytes of GskGpu's `PushConstants { mat4 mvp; mat3x4 clip; vec2 scale; }` for a render
@@ -1850,24 +1875,26 @@ fn lower_draw_n(
 /// `push.clip[0]` and forms bounds `(x, y, x+w, y+h)`); a full-target rect (with a 1px margin so edge coverage
 /// is not trimmed) disables clipping. `scale` is the device pixel scale (1 on our compositor, so `in_rect`
 /// logical units already equal device pixels).
-fn gsk_globals_std140(w: f32, h: f32) -> Vec<u8> {
-    let mut m = [0f32; 32];
-    // mat4 mvp @0 (column-major): cols 0..3 at floats 0,4,8,12.
-    m[0] = 2.0 / w; // col0.x
-    m[5] = -2.0 / h; // col1.y (top-left origin → GL clip space)
-    m[10] = 1.0; // col2.z
-    m[12] = -1.0; // col3.x
-    m[13] = 1.0; // col3.y
-    m[15] = 1.0; // col3.w
-                 // mat3x4 clip @64 (floats 16..28): clip[0] = (x, y, w, h) covering the whole target; clip[1]/clip[2] = 0.
-    m[16] = -1.0;
-    m[17] = -1.0;
-    m[18] = w + 2.0;
-    m[19] = h + 2.0;
-    // vec2 scale @112 (floats 28..30).
-    m[28] = 1.0;
-    m[29] = 1.0;
-    m.iter().flat_map(|f| f.to_le_bytes()).collect()
+impl Frame {
+    fn gsk_globals_std140(w: f32, h: f32) -> Vec<u8> {
+        let mut m = [0f32; 32];
+        // mat4 mvp @0 (column-major): cols 0..3 at floats 0,4,8,12.
+        m[0] = 2.0 / w; // col0.x
+        m[5] = -2.0 / h; // col1.y (top-left origin → GL clip space)
+        m[10] = 1.0; // col2.z
+        m[12] = -1.0; // col3.x
+        m[13] = 1.0; // col3.y
+        m[15] = 1.0; // col3.w
+                     // mat3x4 clip @64 (floats 16..28): clip[0] = (x, y, w, h) covering the whole target; clip[1]/clip[2] = 0.
+        m[16] = -1.0;
+        m[17] = -1.0;
+        m[18] = w + 2.0;
+        m[19] = h + 2.0;
+        // vec2 scale @112 (floats 28..30).
+        m[28] = 1.0;
+        m[29] = 1.0;
+        m.iter().flat_map(|f| f.to_le_bytes()).collect()
+    }
 }
 
 /// `SetViewport` with the GL→Metal Y-flip (`gl_shim.c` `emit_viewport_h`), against a `tw`×`th` target.
@@ -2047,9 +2074,12 @@ fn pipeline_state_key(
 /// non-indexed draws into exact line/triangle lists before submission.
 ///
 /// Any unrecognized mode also falls back to `TriangleList` and never panics.
-fn gl_topology(mode: u32) -> Topology {
-    // GL_LINE_LOOP (0x0002) and GL_TRIANGLE_FAN (0x0006) have no glconst here; matched by raw value.
-    match mode {
+struct PrimitiveAssembly;
+
+impl PrimitiveAssembly {
+    fn topology(mode: u32) -> Topology {
+        // GL_LINE_LOOP (0x0002) and GL_TRIANGLE_FAN (0x0006) have no glconst here; matched by raw value.
+        match mode {
         GL_POINTS => Topology::PointList,
         GL_LINES => Topology::LineList,
         0x0002 /* GL_LINE_LOOP */ => Topology::LineList,
@@ -2058,21 +2088,21 @@ fn gl_topology(mode: u32) -> Topology {
         // GL_TRIANGLES, GL_TRIANGLE_FAN (0x0006, no neutral fan), and any unknown mode → safe TriangleList.
         _ => Topology::TriangleList,
     }
-}
-
-/// Expand a non-indexed GL primitive that has no neutral topology into an exact `u32` index list.
-fn expanded_array_indices(mode: u32, first: i32, count: i32) -> Option<Vec<u32>> {
-    if first < 0 || count < 0 {
-        return None;
     }
-    let first = first as u32;
-    let count = count as u32;
-    let indices = (first..first.checked_add(count)?).collect::<Vec<_>>();
-    Some(expand_index_sequence(mode, &indices))
-}
 
-fn expand_index_sequence(mode: u32, source: &[u32]) -> Vec<u32> {
-    match mode {
+    /// Expand a non-indexed GL primitive that has no neutral topology into an exact `u32` index list.
+    fn expanded_array_indices(mode: u32, first: i32, count: i32) -> Option<Vec<u32>> {
+        if first < 0 || count < 0 {
+            return None;
+        }
+        let first = first as u32;
+        let count = count as u32;
+        let indices = (first..first.checked_add(count)?).collect::<Vec<_>>();
+        Some(Self::expand(mode, &indices))
+    }
+
+    fn expand(mode: u32, source: &[u32]) -> Vec<u32> {
+        match mode {
         0x0002 /* GL_LINE_LOOP */ => {
             if source.len() < 2 {
                 return Vec::new();
@@ -2096,28 +2126,29 @@ fn expand_index_sequence(mode: u32, source: &[u32]) -> Vec<u32> {
         }
         _ => source.to_vec(),
     }
-}
+    }
 
-fn decode_indices(bytes: &[u8], offset: usize, kind: u32, count: i32) -> Option<Vec<u32>> {
-    let count = usize::try_from(count).ok()?;
-    let width = match kind {
-        GL_UNSIGNED_BYTE => 1,
-        GL_UNSIGNED_SHORT => 2,
-        GL_UNSIGNED_INT => 4,
-        _ => return None,
-    };
-    let end = offset.checked_add(count.checked_mul(width)?)?;
-    let bytes = bytes.get(offset..end)?;
-    Some(
-        bytes
-            .chunks_exact(width)
-            .map(|chunk| match width {
-                1 => chunk[0] as u32,
-                2 => u16::from_le_bytes([chunk[0], chunk[1]]) as u32,
-                _ => u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
-            })
-            .collect(),
-    )
+    fn decode_indices(bytes: &[u8], offset: usize, kind: u32, count: i32) -> Option<Vec<u32>> {
+        let count = usize::try_from(count).ok()?;
+        let width = match kind {
+            GL_UNSIGNED_BYTE => 1,
+            GL_UNSIGNED_SHORT => 2,
+            GL_UNSIGNED_INT => 4,
+            _ => return None,
+        };
+        let end = offset.checked_add(count.checked_mul(width)?)?;
+        let bytes = bytes.get(offset..end)?;
+        Some(
+            bytes
+                .chunks_exact(width)
+                .map(|chunk| match width {
+                    1 => chunk[0] as u32,
+                    2 => u16::from_le_bytes([chunk[0], chunk[1]]) as u32,
+                    _ => u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+                })
+                .collect(),
+        )
+    }
 }
 
 /// The MSAA sample count the pass's render pipeline must declare so a multisampled attachment resolves (the
@@ -2135,10 +2166,6 @@ fn decode_indices(bytes: &[u8], offset: usize, kind: u32, count: i32) -> Option<
 /// `TextureDesc.sample_count` on the render-target + depth textures (`push_target_creates` /
 /// `depth_attachment_for`) — MSAA then flows end to end with no other change to this lowering. Never panics;
 /// a plain or unknown FBO yields 1.
-fn framebuffer_sample_count(_ctx: &GlContext, _fbo: u32) -> u32 {
-    1
-}
-
 /// Vertex-attribute format packing (`gl_shim.c` `vertex_format_wire`):
 /// `comps | (kind<<8) | (normalized<<16) | (integer<<17)`, comps clamped to [1,4].
 fn vertex_format_wire(kind_enum: u32, comps: i32, normalized: bool, integer: bool) -> u32 {
@@ -2159,181 +2186,185 @@ fn vertex_format_wire(kind_enum: u32, comps: i32, normalized: bool, integer: boo
 /// Build the `SamplerDesc` for a sampled texture, honoring a bound ES3 sampler OBJECT when present. A
 /// `glBindSampler`d object overrides the texture's own filter/wrap (ES 3.0 §3.8.13); with no object bound
 /// (`obj == None`) the texture parameters win — byte-identical to the pre-sampler-object path.
-fn sampler_desc_for(
-    t: &crate::model::texture::GlTexture,
-    obj: &Option<crate::model::es3::SamplerObj>,
-) -> SamplerDesc {
-    match obj {
-        Some(o) => SamplerDesc {
-            min_filter: o.ir_min_filter(),
-            mag_filter: o.ir_mag_filter(),
-            mip_filter: Filter::Nearest,
-            address_u: o.ir_wrap_s(),
-            address_v: o.ir_wrap_t(),
-            address_w: AddressMode::ClampToEdge,
-        },
-        None => SamplerDesc {
-            min_filter: t.ir_min_filter(),
-            mag_filter: t.ir_mag_filter(),
-            mip_filter: Filter::Nearest,
-            address_u: t.ir_wrap_s(),
-            address_v: t.ir_wrap_t(),
-            address_w: AddressMode::ClampToEdge,
-        },
-    }
-}
+struct Pipeline;
 
-/// GL blend factor enum → opaque WebGPU blend-factor wire value (`gl_shim.c` `blend_factor_wire`).
-fn blend_factor_wire(f: u32) -> u32 {
-    match f {
-        GL_ZERO => 0,
-        GL_ONE => 1,
-        GL_SRC_COLOR => 2,
-        GL_ONE_MINUS_SRC_COLOR => 3,
-        GL_SRC_ALPHA => 4,
-        GL_ONE_MINUS_SRC_ALPHA => 5,
-        GL_DST_COLOR => 6,
-        GL_ONE_MINUS_DST_COLOR => 7,
-        GL_DST_ALPHA => 8,
-        GL_ONE_MINUS_DST_ALPHA => 9,
-        GL_SRC_ALPHA_SATURATE => 10,
-        0x8001 | 0x8003 => 11, // GL_CONSTANT_COLOR / GL_CONSTANT_ALPHA
-        0x8002 | 0x8004 => 12, // GL_ONE_MINUS_CONSTANT_COLOR / _ALPHA
-        _ => 1,                // GL_ONE default for an unmodeled factor.
-    }
-}
-
-/// GL blend equation enum → opaque WebGPU blend-op wire value (`gl_shim.c` `blend_op_wire`).
-fn blend_op_wire(e: u32) -> u32 {
-    match e {
-        GL_FUNC_SUBTRACT => 1,
-        GL_FUNC_REVERSE_SUBTRACT => 2,
-        GL_MIN => 3,
-        GL_MAX => 4,
-        _ => 0, // GL_FUNC_ADD and unknown.
-    }
-}
-
-/// GL depth-compare enum → the neutral protocol compare code the executor decodes (`hl_gpu`'s
-/// `enums::compare`, Vulkan `VkCompareOp` ordering: NEVER=0 … ALWAYS=7). This MUST match those constants,
-/// NOT WebGPU's 1-based `CompareFunction`: the wgpu executor maps the wire value through `compare::*`
-/// (`pipeline::compare_function`), so an off-by-one here silently turns `GL_LESS` into `EQUAL` and rejects
-/// every depth-tested fragment.
-fn compare_wire(func: u32) -> u32 {
-    use hl_gpu::protocol::model::enums::compare;
-    match func {
-        GL_NEVER => compare::NEVER,
-        GL_LESS => compare::LESS,
-        GL_EQUAL => compare::EQUAL,
-        GL_LEQUAL => compare::LESS_EQUAL,
-        GL_GREATER => compare::GREATER,
-        GL_NOTEQUAL => compare::NOT_EQUAL,
-        GL_GEQUAL => compare::GREATER_EQUAL,
-        GL_ALWAYS => compare::ALWAYS,
-        _ => compare::LESS, // GL_LESS default.
-    }
-}
-
-/// Build the pipeline `DepthState` (depth compare + write, and the front/back stencil test/ops + masks)
-/// for a depth- or stencil-tested draw, at the pass's depth-attachment `format`. When the draw only
-/// stencil-tests (no `GL_DEPTH_TEST`), depth is neutral (`ALWAYS` compare, writes off) so the stencil test
-/// alone governs; the stencil faces are `DISABLED` when the draw does not stencil-test, reproducing the
-/// pure-depth behavior on a `Depth24PlusStencil8` pass.
-fn build_depth_state(format: TextureFormat, d: &DrawCall) -> DepthState {
-    let (stencil_front, stencil_back, read_mask, write_mask) = if d.stencil {
-        (
-            StencilFaceState {
-                compare: compare_wire(d.stencil_func_front),
-                fail_op: stencil_op_wire(d.stencil_fail_front),
-                depth_fail_op: stencil_op_wire(d.stencil_zfail_front),
-                pass_op: stencil_op_wire(d.stencil_zpass_front),
+impl Pipeline {
+    fn sampler_desc(
+        t: &crate::model::texture::GlTexture,
+        obj: &Option<crate::model::es3::SamplerObj>,
+    ) -> SamplerDesc {
+        match obj {
+            Some(o) => SamplerDesc {
+                min_filter: o.ir_min_filter(),
+                mag_filter: o.ir_mag_filter(),
+                mip_filter: Filter::Nearest,
+                address_u: o.ir_wrap_s(),
+                address_v: o.ir_wrap_t(),
+                address_w: AddressMode::ClampToEdge,
             },
-            StencilFaceState {
-                compare: compare_wire(d.stencil_func_back),
-                fail_op: stencil_op_wire(d.stencil_fail_back),
-                depth_fail_op: stencil_op_wire(d.stencil_zfail_back),
-                pass_op: stencil_op_wire(d.stencil_zpass_back),
+            None => SamplerDesc {
+                min_filter: t.ir_min_filter(),
+                mag_filter: t.ir_mag_filter(),
+                mip_filter: Filter::Nearest,
+                address_u: t.ir_wrap_s(),
+                address_v: t.ir_wrap_t(),
+                address_w: AddressMode::ClampToEdge,
             },
-            d.stencil_read_mask & 0xff,
-            d.stencil_write_mask & 0xff,
-        )
-    } else {
-        (
-            StencilFaceState::DISABLED,
-            StencilFaceState::DISABLED,
-            0xff,
-            0xff,
-        )
-    };
-    DepthState {
-        format,
-        // A stencil-only draw (no GL_DEPTH_TEST) leaves depth neutral: never writes depth, always passes.
-        depth_write: d.depth && d.depth_write,
-        depth_compare: if d.depth {
-            compare_wire(d.depth_func)
+        }
+    }
+
+    /// GL blend factor enum → opaque WebGPU blend-factor wire value (`gl_shim.c` `blend_factor_wire`).
+    fn blend_factor(f: u32) -> u32 {
+        match f {
+            GL_ZERO => 0,
+            GL_ONE => 1,
+            GL_SRC_COLOR => 2,
+            GL_ONE_MINUS_SRC_COLOR => 3,
+            GL_SRC_ALPHA => 4,
+            GL_ONE_MINUS_SRC_ALPHA => 5,
+            GL_DST_COLOR => 6,
+            GL_ONE_MINUS_DST_COLOR => 7,
+            GL_DST_ALPHA => 8,
+            GL_ONE_MINUS_DST_ALPHA => 9,
+            GL_SRC_ALPHA_SATURATE => 10,
+            0x8001 | 0x8003 => 11, // GL_CONSTANT_COLOR / GL_CONSTANT_ALPHA
+            0x8002 | 0x8004 => 12, // GL_ONE_MINUS_CONSTANT_COLOR / _ALPHA
+            _ => 1,                // GL_ONE default for an unmodeled factor.
+        }
+    }
+
+    /// GL blend equation enum → opaque WebGPU blend-op wire value (`gl_shim.c` `blend_op_wire`).
+    fn blend_op(e: u32) -> u32 {
+        match e {
+            GL_FUNC_SUBTRACT => 1,
+            GL_FUNC_REVERSE_SUBTRACT => 2,
+            GL_MIN => 3,
+            GL_MAX => 4,
+            _ => 0, // GL_FUNC_ADD and unknown.
+        }
+    }
+
+    /// GL depth-compare enum → the neutral protocol compare code the executor decodes (`hl_gpu`'s
+    /// `enums::compare`, Vulkan `VkCompareOp` ordering: NEVER=0 … ALWAYS=7). This MUST match those constants,
+    /// NOT WebGPU's 1-based `CompareFunction`: the wgpu executor maps the wire value through `compare::*`
+    /// (`pipeline::compare_function`), so an off-by-one here silently turns `GL_LESS` into `EQUAL` and rejects
+    /// every depth-tested fragment.
+    fn compare(func: u32) -> u32 {
+        use hl_gpu::protocol::model::enums::compare;
+        match func {
+            GL_NEVER => compare::NEVER,
+            GL_LESS => compare::LESS,
+            GL_EQUAL => compare::EQUAL,
+            GL_LEQUAL => compare::LESS_EQUAL,
+            GL_GREATER => compare::GREATER,
+            GL_NOTEQUAL => compare::NOT_EQUAL,
+            GL_GEQUAL => compare::GREATER_EQUAL,
+            GL_ALWAYS => compare::ALWAYS,
+            _ => compare::LESS, // GL_LESS default.
+        }
+    }
+
+    /// Build the pipeline `DepthState` (depth compare + write, and the front/back stencil test/ops + masks)
+    /// for a depth- or stencil-tested draw, at the pass's depth-attachment `format`. When the draw only
+    /// stencil-tests (no `GL_DEPTH_TEST`), depth is neutral (`ALWAYS` compare, writes off) so the stencil test
+    /// alone governs; the stencil faces are `DISABLED` when the draw does not stencil-test, reproducing the
+    /// pure-depth behavior on a `Depth24PlusStencil8` pass.
+    fn depth_state(format: TextureFormat, d: &DrawCall) -> DepthState {
+        let (stencil_front, stencil_back, read_mask, write_mask) = if d.stencil {
+            (
+                StencilFaceState {
+                    compare: Pipeline::compare(d.stencil_func_front),
+                    fail_op: Pipeline::stencil_op(d.stencil_fail_front),
+                    depth_fail_op: Pipeline::stencil_op(d.stencil_zfail_front),
+                    pass_op: Pipeline::stencil_op(d.stencil_zpass_front),
+                },
+                StencilFaceState {
+                    compare: Pipeline::compare(d.stencil_func_back),
+                    fail_op: Pipeline::stencil_op(d.stencil_fail_back),
+                    depth_fail_op: Pipeline::stencil_op(d.stencil_zfail_back),
+                    pass_op: Pipeline::stencil_op(d.stencil_zpass_back),
+                },
+                d.stencil_read_mask & 0xff,
+                d.stencil_write_mask & 0xff,
+            )
         } else {
-            hl_gpu::protocol::model::enums::compare::ALWAYS
-        },
-        stencil_front,
-        stencil_back,
-        stencil_read_mask: read_mask,
-        stencil_write_mask: write_mask,
+            (
+                StencilFaceState::DISABLED,
+                StencilFaceState::DISABLED,
+                0xff,
+                0xff,
+            )
+        };
+        DepthState {
+            format,
+            // A stencil-only draw (no GL_DEPTH_TEST) leaves depth neutral: never writes depth, always passes.
+            depth_write: d.depth && d.depth_write,
+            depth_compare: if d.depth {
+                Pipeline::compare(d.depth_func)
+            } else {
+                hl_gpu::protocol::model::enums::compare::ALWAYS
+            },
+            stencil_front,
+            stencil_back,
+            stencil_read_mask: read_mask,
+            stencil_write_mask: write_mask,
+        }
     }
-}
 
-/// GL stencil-operation enum (`glStencilOp*`) → the neutral protocol stencil-op wire code the executor
-/// decodes (`hl_gpu`'s `enums::stencil_op`, Vulkan `VkStencilOp` ordering). An unmodeled op maps to `KEEP`.
-fn stencil_op_wire(op: u32) -> u32 {
-    use hl_gpu::protocol::model::enums::stencil_op as so;
-    match op {
-        GL_KEEP => so::KEEP,
-        GL_ZERO => so::ZERO,
-        GL_REPLACE => so::REPLACE,
-        GL_INCR => so::INCREMENT_CLAMP,
-        GL_DECR => so::DECREMENT_CLAMP,
-        GL_INVERT => so::INVERT,
-        GL_INCR_WRAP => so::INCREMENT_WRAP,
-        GL_DECR_WRAP => so::DECREMENT_WRAP,
-        _ => so::KEEP,
+    /// GL stencil-operation enum (`glStencilOp*`) → the neutral protocol stencil-op wire code the executor
+    /// decodes (`hl_gpu`'s `enums::stencil_op`, Vulkan `VkStencilOp` ordering). An unmodeled op maps to `KEEP`.
+    fn stencil_op(op: u32) -> u32 {
+        use hl_gpu::protocol::model::enums::stencil_op as so;
+        match op {
+            GL_KEEP => so::KEEP,
+            GL_ZERO => so::ZERO,
+            GL_REPLACE => so::REPLACE,
+            GL_INCR => so::INCREMENT_CLAMP,
+            GL_DECR => so::DECREMENT_CLAMP,
+            GL_INVERT => so::INVERT,
+            GL_INCR_WRAP => so::INCREMENT_WRAP,
+            GL_DECR_WRAP => so::DECREMENT_WRAP,
+            _ => so::KEEP,
+        }
     }
-}
 
-/// GL cull-face enum → pipeline cull mode (`0` none, `1` front, `2` back). `GL_FRONT_AND_BACK` has no
-/// single-face WebGPU equivalent, so it maps to back (the conservative common case).
-fn cull_wire(face: u32) -> u32 {
-    match face {
-        GL_FRONT => 1,
-        _ => 2, // GL_BACK / GL_FRONT_AND_BACK.
+    /// GL cull-face enum → pipeline cull mode (`0` none, `1` front, `2` back). `GL_FRONT_AND_BACK` has no
+    /// single-face WebGPU equivalent, so it maps to back (the conservative common case).
+    fn cull(face: u32) -> u32 {
+        match face {
+            GL_FRONT => 1,
+            _ => 2, // GL_BACK / GL_FRONT_AND_BACK.
+        }
     }
-}
 
-/// GL front-face winding enum → pipeline front-face (`0` CCW, `1` CW).
-fn front_face_wire(mode: u32) -> u32 {
-    if mode == GL_CW {
-        1
-    } else {
-        0
+    /// GL front-face winding enum → pipeline front-face (`0` CCW, `1` CW).
+    fn front_face(mode: u32) -> u32 {
+        if mode == GL_CW {
+            1
+        } else {
+            0
+        }
     }
-}
 
-/// Vertex-attribute format from a GLSL declaration type string (`gl_shim.c` `decl_format_wire`).
-fn decl_format_wire(t: &str) -> u32 {
-    let comps: u32 = if t.contains("vec2") {
-        2
-    } else if t.contains("vec3") {
-        3
-    } else if t.starts_with("float") {
-        1
-    } else {
-        4
-    };
-    let integer = t.starts_with("ivec") || t.starts_with("uvec");
-    let kind: u32 = if t.starts_with("ivec") {
-        6
-    } else if t.starts_with("uvec") {
-        5
-    } else {
-        0
-    };
-    comps | (kind << 8) | ((integer as u32) << 17)
+    /// Vertex-attribute format from a GLSL declaration type string (`gl_shim.c` `decl_format_wire`).
+    fn decl_format(t: &str) -> u32 {
+        let comps: u32 = if t.contains("vec2") {
+            2
+        } else if t.contains("vec3") {
+            3
+        } else if t.starts_with("float") {
+            1
+        } else {
+            4
+        };
+        let integer = t.starts_with("ivec") || t.starts_with("uvec");
+        let kind: u32 = if t.starts_with("ivec") {
+            6
+        } else if t.starts_with("uvec") {
+            5
+        } else {
+            0
+        };
+        comps | (kind << 8) | ((integer as u32) << 17)
+    }
 }

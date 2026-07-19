@@ -3,7 +3,7 @@
 //! block advances past it). Ported from `execute` / `run_block` in `hl-gpu/src/ptx.rs`.
 
 use super::exec::{run_until, Stop, Val};
-use crate::protocol::model::error::Result;
+use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::kernel::{Inst, KernelProgram};
 
 /// Execute `prog` over the launch `grid` (in blocks). `param_blob` is the flat kernel-parameter bytes
@@ -147,7 +147,7 @@ fn run_block(
         }
         phases += 1;
         if phases > phase_cap {
-            return Err(super::kerr(
+            return Err(GpuError::kernel(
                 "kernel block exceeded barrier-phase cap (barrier not reached by all threads?)",
             ));
         }

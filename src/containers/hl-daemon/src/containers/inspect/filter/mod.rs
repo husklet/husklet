@@ -13,8 +13,6 @@ mod predicate;
 mod sizes;
 mod status;
 pub(crate) use predicate::*;
-pub(crate) use sizes::*;
-pub(crate) use status::*;
 
 /// Shared test fixture: a minimal running `nginx` container. Lives here (not in a single submodule)
 /// because all three submodules' test suites build off it; reachable from each via `use super::*`.

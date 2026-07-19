@@ -84,12 +84,12 @@ impl GlTexture {
 
     /// The neutral S wrap (`gl_shim.c`: ClampToEdge / MirrorRepeat / else Repeat).
     pub fn ir_wrap_s(&self) -> AddressMode {
-        address_mode(self.wrap_s)
+        Self::address_mode(self.wrap_s)
     }
 
     /// The neutral T wrap.
     pub fn ir_wrap_t(&self) -> AddressMode {
-        address_mode(self.wrap_t)
+        Self::address_mode(self.wrap_t)
     }
 
     /// Has this texture usable sampled content (materialized pixels)?
@@ -107,11 +107,13 @@ impl GlTexture {
     }
 }
 
-fn address_mode(gl: u32) -> AddressMode {
-    match gl {
-        GL_CLAMP_TO_EDGE => AddressMode::ClampToEdge,
-        GL_MIRRORED_REPEAT => AddressMode::MirrorRepeat,
-        _ => AddressMode::Repeat,
+impl GlTexture {
+    fn address_mode(gl: u32) -> AddressMode {
+        match gl {
+            GL_CLAMP_TO_EDGE => AddressMode::ClampToEdge,
+            GL_MIRRORED_REPEAT => AddressMode::MirrorRepeat,
+            _ => AddressMode::Repeat,
+        }
     }
 }
 

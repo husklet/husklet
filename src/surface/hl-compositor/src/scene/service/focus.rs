@@ -24,51 +24,13 @@ impl FocusChange {
 
 /// Give `sid` keyboard focus (a toplevel mapped or was activated/raised). Records the previous focus so
 /// the caller can diff. Mirrors `focus_surface` (minus the Smithay keyboard/selection wiring).
-pub fn focus_surface(scene: &mut Scene, sid: SurfaceId) -> FocusChange {
-    let previous = scene.seat().keyboard_focus;
-    scene.seat_mut().keyboard_focus = Some(sid);
-    FocusChange {
-        previous,
-        current: Some(sid),
-    }
-}
-
 /// Activate a window: focus + raise (the effect of `xdg_activation_v1` / a compositor-driven raise).
 /// Neutral equivalent of `activate_surface` — the raise is the presenter's job, so this only moves
 /// focus here.
-pub fn activate(scene: &mut Scene, sid: SurfaceId) -> FocusChange {
-    focus_surface(scene, sid)
-}
-
 /// Clear keyboard focus (nothing focused).
-pub fn clear_focus(scene: &mut Scene) -> FocusChange {
-    let previous = scene.seat().keyboard_focus;
-    scene.seat_mut().keyboard_focus = None;
-    FocusChange {
-        previous,
-        current: None,
-    }
-}
-
 /// A window closed / was destroyed / was minimized: drop keyboard focus if it held it, otherwise leave
 /// focus untouched. Mirrors the focus-clearing in `toplevel_destroyed` / `set_surface_visibility`.
 /// (There is no auto-refocus policy — focus goes to `None`, exactly as the ported code does.)
-pub fn on_window_gone(scene: &mut Scene, sid: SurfaceId) -> FocusChange {
-    let previous = scene.seat().keyboard_focus;
-    if previous == Some(sid) {
-        scene.seat_mut().keyboard_focus = None;
-        FocusChange {
-            previous,
-            current: None,
-        }
-    } else {
-        FocusChange {
-            previous,
-            current: previous,
-        }
-    }
-}
-
 /// The topmost input-sensitive surface at root-local logical coordinates `(x, y)`, with its root-space
 /// offset. Walks the tree top → bottom (subsurface children reversed, deepest-first), honouring each
 /// surface's input region. Exact port of `input_surface_at` / `input_surface_at_offset`.
@@ -99,7 +61,7 @@ fn surface_at_offset(
         if child == surface {
             continue;
         }
-        let (cx, cy) = subsurface_offset(scene, child);
+        let (cx, cy) = scene.subsurface_offset(child);
         if let Some(hit) = surface_at_offset(scene, child, x, y, ox + cx, oy + cy) {
             return Some(hit);
         }
@@ -109,13 +71,6 @@ fn surface_at_offset(
     surface_ref
         .accepts_input_at(lx, ly)
         .then_some((surface, ox, oy))
-}
-
-fn subsurface_offset(scene: &Scene, sid: SurfaceId) -> (i32, i32) {
-    match scene.get(sid).map(|s| &s.role) {
-        Some(crate::scene::model::SurfaceRole::Subsurface(s)) => (s.x, s.y),
-        _ => (0, 0),
-    }
 }
 
 /// Move the pointer to `(x, y)` (root-local logical) and recompute pointer focus by hit-testing the

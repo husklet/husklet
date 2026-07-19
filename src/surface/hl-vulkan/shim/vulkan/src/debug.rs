@@ -11,7 +11,7 @@
 
 use core::ffi::{c_char, c_void};
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::{VkResult, VK_SUCCESS};
 
 /// `VkDebugUtilsObjectNameInfoEXT` head (LP64): `sType`(+pad), `pNext`, `objectType` (i32, +pad),
@@ -41,11 +41,14 @@ struct VkDebugMarkerObjectNameInfoEXT {
 }
 
 /// Borrow a nul-terminated C string as an owned `String` (empty on NULL / bad UTF-8).
-unsafe fn c_str(p: *const c_char) -> String {
+struct DebugName;
+impl DebugName {
+unsafe fn read(p: *const c_char) -> String {
     if p.is_null() {
         return String::new();
     }
     core::ffi::CStr::from_ptr(p).to_str().unwrap_or("").to_string()
+}
 }
 
 // ==================================================================================================
@@ -55,8 +58,8 @@ unsafe fn c_str(p: *const c_char) -> String {
 #[no_mangle]
 pub extern "C" fn vkSetDebugUtilsObjectNameEXT(_device: *mut c_void, p_name_info: *const c_void) -> VkResult {
     if let Some(info) = unsafe { (p_name_info as *const VkDebugUtilsObjectNameInfoEXT).as_ref() } {
-        let name = unsafe { c_str(info.p_object_name) };
-        with(|s| {
+        let name = unsafe { DebugName::read(info.p_object_name) };
+        StateStore::with(|s| {
             if name.is_empty() {
                 s.debug_object_names.remove(&(info.object_type, info.object_handle));
             } else {
@@ -96,7 +99,7 @@ pub extern "C" fn vkCreateDebugUtilsMessengerEXT(
     if p_messenger.is_null() {
         return VK_SUCCESS;
     }
-    let handle = with(|s| {
+    let handle = StateStore::with(|s| {
         let h = s.mint_aux();
         s.debug_messengers.insert(h);
         h
@@ -107,7 +110,7 @@ pub extern "C" fn vkCreateDebugUtilsMessengerEXT(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyDebugUtilsMessengerEXT(_instance: *mut c_void, messenger: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         s.debug_messengers.remove(&messenger);
     });
 }
@@ -128,8 +131,8 @@ pub extern "C" fn vkSubmitDebugUtilsMessageEXT(
 #[no_mangle]
 pub extern "C" fn vkDebugMarkerSetObjectNameEXT(_device: *mut c_void, p_name_info: *const c_void) -> VkResult {
     if let Some(info) = unsafe { (p_name_info as *const VkDebugMarkerObjectNameInfoEXT).as_ref() } {
-        let name = unsafe { c_str(info.p_object_name) };
-        with(|s| {
+        let name = unsafe { DebugName::read(info.p_object_name) };
+        StateStore::with(|s| {
             if name.is_empty() {
                 s.debug_object_names.remove(&(info.object_type, info.object));
             } else {
@@ -166,7 +169,7 @@ pub extern "C" fn vkCreateDebugReportCallbackEXT(
     if p_callback.is_null() {
         return VK_SUCCESS;
     }
-    let handle = with(|s| {
+    let handle = StateStore::with(|s| {
         let h = s.mint_aux();
         s.debug_report_callbacks.insert(h);
         h
@@ -177,7 +180,7 @@ pub extern "C" fn vkCreateDebugReportCallbackEXT(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyDebugReportCallbackEXT(_instance: *mut c_void, callback: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         s.debug_report_callbacks.remove(&callback);
     });
 }

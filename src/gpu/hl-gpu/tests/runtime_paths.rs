@@ -9,8 +9,7 @@
 //! pipeline kinds, bind group, surface) and the three negotiation reject branches they never hit.
 
 use hl_gpu::protocol::model::capability::{
-    command_bits, format_bits, shader_payload, Capabilities, FeatureRequest, ALL_COMMANDS,
-    COLOR_FORMATS,
+    shader_payload, Capabilities, FeatureRequest, ALL_COMMANDS, COLOR_FORMATS,
 };
 use hl_gpu::protocol::model::command::etag;
 use hl_gpu::protocol::model::descriptor::{
@@ -376,8 +375,15 @@ fn negotiate_accepts_a_compatible_request() {
     let req = FeatureRequest {
         wire_version: caps.wire_version,
         shader_payloads: shader_payload::SPIRV | shader_payload::GLSL,
-        command_bits: command_bits(&[etag::BEGIN_RENDER_PASS, etag::DRAW, etag::DISPATCH]),
-        texture_formats: format_bits(&[TextureFormat::Rgba8Unorm, TextureFormat::Bgra8Unorm]),
+        command_bits: hl_gpu::Capabilities::command_bits(&[
+            etag::BEGIN_RENDER_PASS,
+            etag::DRAW,
+            etag::DISPATCH,
+        ]),
+        texture_formats: TextureFormat::bits(&[
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Bgra8Unorm,
+        ]),
     };
     assert!(
         caps.negotiate(&req).is_ok(),
@@ -387,8 +393,8 @@ fn negotiate_accepts_a_compatible_request() {
     let full_req = FeatureRequest {
         wire_version: caps.wire_version,
         shader_payloads: caps.shader_payloads,
-        command_bits: command_bits(ALL_COMMANDS),
-        texture_formats: format_bits(COLOR_FORMATS),
+        command_bits: hl_gpu::Capabilities::command_bits(ALL_COMMANDS),
+        texture_formats: TextureFormat::bits(COLOR_FORMATS),
     };
     assert!(
         caps.negotiate(&full_req).is_ok(),
@@ -434,7 +440,7 @@ fn negotiate_rejects_each_incompatible_axis() {
         GpuError::Unsupported("capability: command tag not supported"),
     );
     // a texture format the backend cannot materialize (a depth format is not in the color-only advertisement).
-    let depth_bit = format_bits(&[TextureFormat::Depth24PlusStencil8]);
+    let depth_bit = TextureFormat::bits(&[TextureFormat::Depth24PlusStencil8]);
     assert_eq!(
         caps.negotiate(&FeatureRequest {
             texture_formats: depth_bit,
@@ -459,7 +465,7 @@ fn negotiate_through_the_runtime_service_records_or_rejects() {
     let req = FeatureRequest {
         wire_version: caps.wire_version,
         shader_payloads: shader_payload::KERNEL,
-        command_bits: command_bits(&[etag::DISPATCH]),
+        command_bits: hl_gpu::Capabilities::command_bits(&[etag::DISPATCH]),
         texture_formats: 0,
     };
     let negotiated =

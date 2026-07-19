@@ -85,7 +85,7 @@ impl Program {
         // program-keyed shader/pipeline cache invalidates any IR it created for the previous link.
         self.link_gen += 1;
         if !cs_src.is_empty() {
-            let source = glsl::translate_compute(&cs_src);
+            let source = glsl::Translator::compute(&cs_src);
             self.compute_ir = Some(
                 GlslDescriptor {
                     stage: glsl_stage::COMPUTE,
@@ -98,8 +98,8 @@ impl Program {
             self.linked = true;
             return;
         }
-        let (unis, ubuf_size) = glsl::uni_layout(&vs_src, &fs_src);
-        self.samp_names = glsl::program_samplers(&vs_src, &fs_src);
+        let (unis, ubuf_size) = glsl::StageSources::new(&vs_src, &fs_src).uniform_layout();
+        self.samp_names = glsl::StageSources::new(&vs_src, &fs_src).samplers();
         // GskGpu (GTK4 "gl") / ANGLE (Chrome) source uses helper functions taking combined sampler
         // parameters and `gl_VertexID` vertex-pulling — constructs `translate_render`'s reflect-and-
         // regenerate would destroy (it keeps only `main` and reflects a flat ES2 interface). For such
@@ -107,7 +107,8 @@ impl Program {
         // `spirv_split`-style combined→separate sampler split) compiles the REAL text. The sampler /
         // uniform reflection above still drives the bind-group layout, which stays on the shared
         // `binding = 1+2k / 2+2k` scheme the executor emits. Simple ES2 shaders take `translate_render`.
-        let verbatim = glsl::is_forward_verbatim(&vs_src) || glsl::is_forward_verbatim(&fs_src);
+        let verbatim = glsl::Source::new(&vs_src).is_forward_verbatim()
+            || glsl::Source::new(&fs_src).is_forward_verbatim();
         let (vs_glsl, fs_glsl) = if verbatim {
             hl_log::hl_debug!(
                 hl_log::tag::GL,
@@ -125,16 +126,16 @@ impl Program {
             // (`BindingCollision`) — so inject `layout(location = N)` across BOTH stages (name-matching a
             // vertex `out` to the fragment `in` varying). GskGpu's `IN()`/`PASS()` macro varyings already
             // carry a location, so its stages stay byte-identical.
-            let combined = glsl::program_uniform_decls(&vs_src, &fs_src);
+            let combined = glsl::StageSources::new(&vs_src, &fs_src).uniform_decls();
             glsl::prepare_verbatim_program(&vs_src, &fs_src, &combined)
         } else {
-            glsl::translate_render(&vs_src, &fs_src)
+            glsl::StageSources::new(&vs_src, &fs_src).translate_render()
         };
         // Bind-group binding index per sampler. The ES2 path EMITS its own `layout(binding=)` in declaration
         // order, so `k == index`; the verbatim path is numbered by the HOST across all preprocessor branches
         // (incl. inactive `samplerExternalOES` decls), so `k` is recovered from the forwarded fragment text.
         self.samp_bindings = if verbatim {
-            glsl::verbatim_sampler_bindings(&self.samp_names, &fs_src)
+            glsl::StageSources::new("", &fs_src).verbatim_sampler_bindings(&self.samp_names)
         } else {
             (0..self.samp_names.len() as u32).collect()
         };
@@ -198,7 +199,8 @@ impl Program {
         if !self.linked {
             return -1;
         }
-        crate::adapter::glsl::collect_vertex_attrs(&self.vs_src)
+        crate::adapter::glsl::Source::new(&self.vs_src)
+            .vertex_attrs()
             .iter()
             .position(|a| a.name == name)
             .map(|i| i as i32)
@@ -501,7 +503,7 @@ impl Programs {
     }
 
     /// `glCreateProgram()` — mint a program name.
-    pub fn create_program(&mut self) -> u32 {
+    pub fn create(&mut self) -> u32 {
         let name = self.next_program;
         self.next_program += 1;
         self.programs.insert(name, Program::default());
@@ -555,12 +557,12 @@ impl Programs {
         self.programs.get(&name)
     }
 
-    pub fn program_mut(&mut self, name: u32) -> Option<&mut Program> {
+    pub fn get_mut(&mut self, name: u32) -> Option<&mut Program> {
         self.programs.get_mut(&name)
     }
 
     /// `glIsProgram(name)` — true once `name` names a live program object (`0` is never a program).
-    pub fn program_exists(&self, name: u32) -> bool {
+    pub fn contains(&self, name: u32) -> bool {
         name != 0 && self.programs.contains_key(&name)
     }
 
@@ -572,7 +574,7 @@ impl Programs {
     /// `glDeleteProgram(name)` — drop the program object (deleting `0` is a silent no-op; GL defines it
     /// so). This model has no deferred-delete-while-current subtlety: the object is removed immediately.
     /// Returns `false` for an unknown / zero name.
-    pub fn delete_program(&mut self, name: u32) -> bool {
+    pub fn delete(&mut self, name: u32) -> bool {
         if name == 0 {
             return false;
         }

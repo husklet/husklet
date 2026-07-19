@@ -357,6 +357,72 @@ fn command_buffer_that_ends_inside_a_pass_is_rejected() {
 }
 
 #[test]
+fn bind_group_rejects_a_reused_resource_id() {
+    let (mut exec, mut res) = primed(&[
+        Cmd::CreateShader {
+            id: 1,
+            kind: ShaderPayloadKind::SpirV,
+            spirv: vec![0x0723_0203],
+        },
+        Cmd::CreateComputePipeline(
+            1,
+            ComputePipelineDesc {
+                compute: ShaderRef {
+                    module: 1,
+                    entry: "main".into(),
+                },
+                label: String::new(),
+            },
+        ),
+        Cmd::CreateBuffer(1, buf(16, buffer_usage::STORAGE)),
+        Cmd::CreateBindGroup(
+            1,
+            BindGroupDesc {
+                set: 0,
+                entries: vec![BindEntry {
+                    binding: 0,
+                    resource: BindResource::Buffer {
+                        id: 1,
+                        offset: 0,
+                        size: 16,
+                    },
+                }],
+            },
+        ),
+    ]);
+
+    exec.execute(
+        &mut res,
+        &[
+            Cmd::DestroyBuffer(1),
+            Cmd::CreateBuffer(1, buf(16, buffer_usage::STORAGE)),
+        ],
+    )
+    .expect("reusing a destroyed resource id creates a distinct allocation");
+
+    let error = exec
+        .execute(
+            &mut res,
+            &[submit(vec![
+                Enc::BeginComputePass,
+                Enc::SetPipeline(1),
+                Enc::SetBindGroup { index: 0, group: 1 },
+                Enc::Dispatch { x: 1, y: 1, z: 1 },
+                Enc::EndComputePass,
+            ])],
+        )
+        .expect_err("the bind group must retain the original allocation generation");
+
+    assert_eq!(
+        error,
+        GpuError::UnknownId {
+            kind: BufferId::KIND,
+            id: 1,
+        }
+    );
+}
+
+#[test]
 fn nested_render_pass_is_rejected() {
     let (mut exec, mut res) = primed(&[Cmd::CreateTexture(
         1,
@@ -801,7 +867,7 @@ fn runtime_rejects_a_shader_payload_the_backend_never_advertised() {
 
 #[test]
 fn present_returns_the_presented_pair() {
-    // A well-formed present flows a Presented{surface, texture} back out of execute.
+    // A well-formed present flows a Presentation{surface, texture} back out of execute.
     let (mut exec, mut res) = primed(&[
         Cmd::CreateTexture(
             1,

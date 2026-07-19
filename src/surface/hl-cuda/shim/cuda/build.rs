@@ -13,7 +13,8 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 fn main() {
-    let manifest = PathBuf::from(env("CARGO_MANIFEST_DIR")).join("registry/cuda_driver.manifest");
+    let manifest = PathBuf::from(BuildEnvironment::get("CARGO_MANIFEST_DIR"))
+        .join("registry/cuda_driver.manifest");
     println!("cargo:rerun-if-changed={}", manifest.display());
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libcuda.so.1");
@@ -47,125 +48,182 @@ fn main() {
             continue; // hand-written in src/driver.rs; a generated stub would collide.
         }
         stubs += 1;
-        emit_stub(&mut out, name, ret, params);
+        Generator::emit_stub(&mut out, name, ret, params);
     }
 
-    writeln!(out, "\n/// Total CUDA Driver API entry points in the manifest (the exported surface).").unwrap();
+    writeln!(
+        out,
+        "\n/// Total CUDA Driver API entry points in the manifest (the exported surface)."
+    )
+    .unwrap();
     writeln!(out, "pub const CUDA_DRIVER_ENTRYPOINTS: usize = {cu};").unwrap();
-    writeln!(out, "/// Entry points emitted as default stubs (not yet hand-implemented).").unwrap();
+    writeln!(
+        out,
+        "/// Entry points emitted as default stubs (not yet hand-implemented)."
+    )
+    .unwrap();
     writeln!(out, "pub const GENERATED_STUBS: usize = {stubs};").unwrap();
-    writeln!(out, "/// Entry points with real hand-written bodies in `src/driver.rs`.").unwrap();
-    writeln!(out, "pub const IMPLEMENTED_ENTRYPOINTS: usize = {};", IMPLEMENTED.len()).unwrap();
+    writeln!(
+        out,
+        "/// Entry points with real hand-written bodies in `src/driver.rs`."
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "pub const IMPLEMENTED_ENTRYPOINTS: usize = {};",
+        IMPLEMENTED.len()
+    )
+    .unwrap();
 
-    let out_path = PathBuf::from(env("OUT_DIR")).join("generated_entrypoints.rs");
+    let out_path = PathBuf::from(BuildEnvironment::get("OUT_DIR")).join("generated_entrypoints.rs");
     std::fs::write(&out_path, out).unwrap();
 }
 
-fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str) {
-    let mut sig = String::new();
-    let mut argnames = Vec::new();
-    if !params.is_empty() {
-        for (i, p) in params.split(';').enumerate() {
-            let (ty, pname) = p.split_once('|').unwrap_or_else(|| panic!("bad param {p:?} in {name}"));
-            let rty = map_type(ty.trim(), name);
-            let pn = sanitize(pname.trim(), i);
-            if i > 0 {
-                sig.push_str(", ");
+struct Generator;
+impl Generator {
+    fn emit_stub(out: &mut String, name: &str, ret: &str, params: &str) {
+        let mut sig = String::new();
+        let mut argnames = Vec::new();
+        if !params.is_empty() {
+            for (i, p) in params.split(';').enumerate() {
+                let (ty, pname) = p
+                    .split_once('|')
+                    .unwrap_or_else(|| panic!("bad param {p:?} in {name}"));
+                let rty = Binding::new(ty.trim(), name).rust_type();
+                let pn = Signature::parameter(pname.trim(), i);
+                if i > 0 {
+                    sig.push_str(", ");
+                }
+                write!(sig, "{pn}: {rty}").unwrap();
+                argnames.push(pn);
             }
-            write!(sig, "{pn}: {rty}").unwrap();
-            argnames.push(pn);
+        }
+        let rmap = Binding::new(ret.trim(), name).return_type();
+        let arrow = rmap
+            .as_ref()
+            .map(|r| format!(" -> {r}"))
+            .unwrap_or_default();
+        let touch: String = argnames.iter().map(|a| format!("let _ = {a}; ")).collect();
+        let body = match &rmap {
+            None => format!("{touch}crate::stub::Stub::hit(\"{name}\");"),
+            Some(r) => format!(
+                "{touch}crate::stub::Stub::hit(\"{name}\"); {}",
+                Binding::default_value(r)
+            ),
+        };
+        writeln!(
+            out,
+            "#[no_mangle]\npub extern \"C\" fn {name}({sig}){arrow} {{ {body} }}\n"
+        )
+        .unwrap();
+    }
+}
+
+struct Binding<'a> {
+    c: &'a str,
+    context: &'a str,
+}
+impl<'a> Binding<'a> {
+    fn new(c: &'a str, context: &'a str) -> Self {
+        Self { c, context }
+    }
+    fn return_type(&self) -> Option<String> {
+        if self.c == "void" {
+            return None;
+        }
+        Some(self.rust_type())
+    }
+
+    fn rust_type(&self) -> String {
+        let c = self.c.trim();
+        if let Some(base) = c.strip_suffix("*const*") {
+            return format!("*const *const {}", Self::pointee(base, self.context));
+        }
+        if let Some(base) = c.strip_suffix("**") {
+            return format!("*mut *mut {}", Self::pointee(base, self.context));
+        }
+        if let Some(base) = c.strip_suffix('*') {
+            let is_const = base.trim_start().starts_with("const ");
+            let q = if is_const { "*const" } else { "*mut" };
+            return format!("{q} {}", Self::pointee(base, self.context));
+        }
+        Self::scalar(c, self.context).to_string()
+    }
+
+    fn pointee(base: &str, context: &str) -> String {
+        let b = base.trim();
+        let b = b.strip_prefix("const ").unwrap_or(b).trim();
+        Self::scalar(b, context).to_string()
+    }
+
+    fn scalar(c: &str, context: &str) -> &'static str {
+        match c {
+            "void" => "core::ffi::c_void",
+            "char" => "core::ffi::c_char",
+            "float" => "f32",
+            "int" => "i32",
+            "unsigned char" => "u8",
+            "unsigned short" => "u16",
+            "unsigned int" | "cuuint32_t" => "u32",
+            "unsigned long" => "u64",
+            "unsigned long long" | "cuuint64_t" => "u64",
+            "size_t" => "usize",
+            "CUdeviceptr" => "u64",
+            "CUresult"
+            | "CUdevice"
+            | "CUdevice_attribute"
+            | "CUlimit"
+            | "CUfunc_cache"
+            | "CUsharedconfig"
+            | "CUpointer_attribute"
+            | "CUfunction_attribute"
+            | "CUjit_option"
+            | "CUmoduleLoadingMode"
+            | "CUdriverProcAddressQueryResult" => "i32",
+            "CUcontext" | "CUmodule" | "CUfunction" | "CUstream" | "CUevent" | "CUtexref"
+            | "CUsurfref" | "CUhostFn" | "CUstreamCallback" | "CUoccupancyB2DSize" => {
+                "*mut core::ffi::c_void"
+            }
+            "CUdevprop" | "CUuuid" | "CUlaunchConfig" => "core::ffi::c_void",
+            other => {
+                panic!("unmapped C base type {other:?} (in {context}); extend scalar() in build.rs")
+            }
         }
     }
-    let rmap = map_ret(ret.trim(), name);
-    let arrow = rmap.as_ref().map(|r| format!(" -> {r}")).unwrap_or_default();
-    let touch: String = argnames.iter().map(|a| format!("let _ = {a}; ")).collect();
-    let body = match &rmap {
-        None => format!("{touch}crate::stub::hit(\"{name}\");"),
-        Some(r) => format!("{touch}crate::stub::hit(\"{name}\"); {}", default_for(r)),
-    };
-    writeln!(out, "#[no_mangle]\npub extern \"C\" fn {name}({sig}){arrow} {{ {body} }}\n").unwrap();
-}
 
-fn map_ret(c: &str, ctx: &str) -> Option<String> {
-    if c == "void" {
-        return None;
-    }
-    Some(map_type(c, ctx))
-}
-
-fn map_type(c: &str, ctx: &str) -> String {
-    let c = c.trim();
-    if let Some(base) = c.strip_suffix("*const*") {
-        return format!("*const *const {}", pointee(base, ctx));
-    }
-    if let Some(base) = c.strip_suffix("**") {
-        return format!("*mut *mut {}", pointee(base, ctx));
-    }
-    if let Some(base) = c.strip_suffix('*') {
-        let is_const = base.trim_start().starts_with("const ");
-        let q = if is_const { "*const" } else { "*mut" };
-        return format!("{q} {}", pointee(base, ctx));
-    }
-    scalar(c, ctx).to_string()
-}
-
-fn pointee(base: &str, ctx: &str) -> String {
-    let b = base.trim();
-    let b = b.strip_prefix("const ").unwrap_or(b).trim();
-    scalar(b, ctx).to_string()
-}
-
-fn scalar(c: &str, ctx: &str) -> &'static str {
-    match c {
-        "void" => "core::ffi::c_void",
-        "char" => "core::ffi::c_char",
-        "float" => "f32",
-        "int" => "i32",
-        "unsigned char" => "u8",
-        "unsigned short" => "u16",
-        "unsigned int" | "cuuint32_t" => "u32",
-        "unsigned long" => "u64",
-        "unsigned long long" | "cuuint64_t" => "u64",
-        "size_t" => "usize",
-        "CUdeviceptr" => "u64",
-        "CUresult" | "CUdevice" | "CUdevice_attribute" | "CUlimit" | "CUfunc_cache"
-        | "CUsharedconfig" | "CUpointer_attribute" | "CUfunction_attribute" | "CUjit_option"
-        | "CUmoduleLoadingMode" | "CUdriverProcAddressQueryResult" => "i32",
-        "CUcontext" | "CUmodule" | "CUfunction" | "CUstream" | "CUevent" | "CUtexref"
-        | "CUsurfref" | "CUhostFn" | "CUstreamCallback" | "CUoccupancyB2DSize" => {
-            "*mut core::ffi::c_void"
+    fn default_value(rust_ty: &str) -> &'static str {
+        if rust_ty.starts_with("*const") {
+            "core::ptr::null()"
+        } else if rust_ty.starts_with("*mut") {
+            "core::ptr::null_mut()"
+        } else {
+            "0" // CUDA_SUCCESS for the CUresult all driver entry points return.
         }
-        "CUdevprop" | "CUuuid" | "CUlaunchConfig" => "core::ffi::c_void",
-        other => panic!("unmapped C base type {other:?} (in {ctx}); extend scalar() in build.rs"),
     }
 }
 
-fn default_for(rust_ty: &str) -> &'static str {
-    if rust_ty.starts_with("*const") {
-        "core::ptr::null()"
-    } else if rust_ty.starts_with("*mut") {
-        "core::ptr::null_mut()"
-    } else {
-        "0" // CUDA_SUCCESS for the CUresult all driver entry points return.
+struct Signature;
+impl Signature {
+    fn parameter(name: &str, i: usize) -> String {
+        const KW: &[&str] = &[
+            "type", "ref", "box", "in", "fn", "let", "match", "move", "mut", "as", "impl", "loop",
+            "where", "self", "final", "override", "become",
+        ];
+        if name.is_empty() {
+            return format!("a{i}");
+        }
+        if KW.contains(&name) {
+            return format!("{name}_");
+        }
+        name.to_string()
     }
 }
 
-fn sanitize(name: &str, i: usize) -> String {
-    const KW: &[&str] = &[
-        "type", "ref", "box", "in", "fn", "let", "match", "move", "mut", "as", "impl", "loop",
-        "where", "self", "final", "override", "become",
-    ];
-    if name.is_empty() {
-        return format!("a{i}");
+struct BuildEnvironment;
+impl BuildEnvironment {
+    fn get(key: &str) -> String {
+        std::env::var(key).unwrap_or_else(|_| panic!("env {key} not set"))
     }
-    if KW.contains(&name) {
-        return format!("{name}_");
-    }
-    name.to_string()
-}
-
-fn env(k: &str) -> String {
-    std::env::var(k).unwrap_or_else(|_| panic!("env {k} not set"))
 }
 
 /// Entry points hand-written in `src/driver.rs` (the generator skips them to avoid duplicate symbols):

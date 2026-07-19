@@ -30,6 +30,34 @@ pub struct StoredBuffer {
     pub damage: Option<Vec<Rect>>,
 }
 
+impl StoredBuffer {
+    fn tight_bytes(&self) -> Option<usize> {
+        if self.width <= 0 || self.height <= 0 {
+            return None;
+        }
+        (self.width as i64)
+            .checked_mul(self.height as i64)?
+            .checked_mul(4)
+            .and_then(|bytes| usize::try_from(bytes).ok())
+    }
+
+    fn transformed(&self, transform: BufferTransform) -> Vec<u8> {
+        let bw = self.width as usize;
+        let (ow, oh) = transform.surface_size(self.width, self.height);
+        let (ow_u, oh_u) = (ow as usize, oh as usize);
+        let mut out = vec![0u8; ow_u * oh_u * 4];
+        for by in 0..self.height {
+            for bx in 0..self.width {
+                let (sx, sy) = transform.map_point(bx, by, self.width, self.height);
+                let si = (by as usize * bw + bx as usize) * 4;
+                let di = (sy as usize * ow_u + sx as usize) * 4;
+                out[di..di + 4].copy_from_slice(&self.rgba[si..si + 4]);
+            }
+        }
+        out
+    }
+}
+
 /// A frame the presenter actually presented — the evidence a headless test asserts on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CapturedFrame {
@@ -249,8 +277,7 @@ impl Presenter for PngPresenter {
             (false, true) => image.transform.surface_size(buf.width, buf.height),
             (false, false) => (buf.width, buf.height),
         };
-        let buffer_consistent =
-            tight_rgba_bytes(buf.width, buf.height).is_some_and(|need| buf.rgba.len() >= need);
+        let buffer_consistent = buf.tight_bytes().is_some_and(|need| buf.rgba.len() >= need);
         if !buffer_consistent
             || out_w <= 0
             || out_h <= 0
@@ -267,7 +294,7 @@ impl Presenter for PngPresenter {
                 let surface_buf = StoredBuffer {
                     width: tw,
                     height: th,
-                    rgba: transform_buffer(buf, image.transform),
+                    rgba: buf.transformed(image.transform),
                     bgra: false,
                     damage: None,
                 };
@@ -286,7 +313,7 @@ impl Presenter for PngPresenter {
             // Transform only: rotate/flip the whole buffer into surface space.
             (None, true) => {
                 let (tw, th) = image.transform.surface_size(buf.width, buf.height);
-                (tw, th, transform_buffer(buf, image.transform))
+                (tw, th, buf.transformed(image.transform))
             }
             // Neither: the raw client buffer verbatim.
             (None, false) => (buf.width, buf.height, buf.rgba.clone()),
@@ -331,16 +358,6 @@ const MAX_PRESENT_DIM: i32 = 1 << 14;
 
 /// The tight RGBA byte count (`w·h·4`) for a `w`×`h` image, or `None` if the dimensions are non-positive
 /// or the product overflows `i64` — i.e. a buffer the presenter must refuse rather than trust.
-fn tight_rgba_bytes(w: i32, h: i32) -> Option<usize> {
-    if w <= 0 || h <= 0 {
-        return None;
-    }
-    (w as i64)
-        .checked_mul(h as i64)?
-        .checked_mul(4)
-        .map(|b| b as usize)
-}
-
 /// Rotate/flip `buf` by a `wl_surface.set_buffer_transform` into surface space — the un-rotation a real
 /// backend applies so a client's pre-rotated buffer presents upright. Scatters each buffer pixel to its
 /// surface pixel via [`BufferTransform::map_point`] (a bijection over the rectangle, so every output pixel
@@ -349,21 +366,6 @@ fn tight_rgba_bytes(w: i32, h: i32) -> Option<usize> {
 /// The caller ([`Presenter::present`]) gates dimensions: `buf` is consistent (`rgba.len() >= w·h·4`, both
 /// `> 0`) and the surface size is within `MAX_PRESENT_DIM`, so the `usize` index math below cannot
 /// overflow or slice out of bounds.
-fn transform_buffer(buf: &StoredBuffer, transform: BufferTransform) -> Vec<u8> {
-    let bw = buf.width as usize;
-    let (ow, oh) = transform.surface_size(buf.width, buf.height);
-    let (ow_u, oh_u) = (ow as usize, oh as usize);
-    let mut out = vec![0u8; ow_u * oh_u * 4];
-    for by in 0..buf.height {
-        for bx in 0..buf.width {
-            let (sx, sy) = transform.map_point(bx, by, buf.width, buf.height);
-            let si = (by as usize * bw + bx as usize) * 4;
-            let di = (sy as usize * ow_u + sx as usize) * 4;
-            out[di..di + 4].copy_from_slice(&buf.rgba[si..si + 4]);
-        }
-    }
-    out
-}
 
 /// Nearest-neighbour sample the source rectangle `src = (x, y, w, h)` (in BUFFER PIXELS) of `buf` into a
 /// tight `dw`×`dh` RGBA image — the `wp_viewport` crop+scale a real backend rasterizes. Each destination
@@ -434,7 +436,7 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
         raw.extend_from_slice(&rgba[start..start + row_bytes]);
     }
 
-    write_chunk(&mut out, b"IDAT", &zlib_store(&raw));
+    write_chunk(&mut out, b"IDAT", &Zlib::new(&raw).stored());
     write_chunk(&mut out, b"IEND", &[]);
     out
 }
@@ -450,37 +452,48 @@ fn write_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
 }
 
 /// Wrap `data` in a zlib stream using DEFLATE stored (uncompressed) blocks.
-fn zlib_store(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.push(0x78); // CMF: deflate, 32K window
-    out.push(0x01); // FLG: no dict, check bits
-    let mut i = 0;
-    while i < data.len() || data.is_empty() {
-        let remaining = data.len() - i;
-        let block = remaining.min(0xFFFF);
-        let final_block = i + block >= data.len();
-        out.push(if final_block { 1 } else { 0 });
-        let len = block as u16;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(&data[i..i + block]);
-        i += block;
-        if final_block {
-            break;
-        }
-    }
-    out.extend_from_slice(&adler32(data).to_be_bytes());
-    out
+struct Zlib<'a> {
+    data: &'a [u8],
 }
 
-fn adler32(data: &[u8]) -> u32 {
-    let mut a: u32 = 1;
-    let mut b: u32 = 0;
-    for &byte in data {
-        a = (a + byte as u32) % 65521;
-        b = (b + a) % 65521;
+impl<'a> Zlib<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data }
     }
-    (b << 16) | a
+
+    fn stored(&self) -> Vec<u8> {
+        let data = self.data;
+        let mut out = Vec::new();
+        out.push(0x78); // CMF: deflate, 32K window
+        out.push(0x01); // FLG: no dict, check bits
+        let mut i = 0;
+        while i < data.len() || data.is_empty() {
+            let remaining = data.len() - i;
+            let block = remaining.min(0xFFFF);
+            let final_block = i + block >= data.len();
+            out.push(if final_block { 1 } else { 0 });
+            let len = block as u16;
+            out.extend_from_slice(&len.to_le_bytes());
+            out.extend_from_slice(&(!len).to_le_bytes());
+            out.extend_from_slice(&data[i..i + block]);
+            i += block;
+            if final_block {
+                break;
+            }
+        }
+        out.extend_from_slice(&self.adler32().to_be_bytes());
+        out
+    }
+
+    fn adler32(&self) -> u32 {
+        let mut a: u32 = 1;
+        let mut b: u32 = 0;
+        for &byte in self.data {
+            a = (a + byte as u32) % 65521;
+            b = (b + a) % 65521;
+        }
+        (b << 16) | a
+    }
 }
 
 struct Crc32 {

@@ -61,6 +61,16 @@ pub struct PresentTiming {
     pub vsync: bool,
 }
 
+impl PresentTiming {
+    pub fn fallback(present_ns: u64, refresh_ns: u64) -> Self {
+        Self {
+            present_ns,
+            refresh_ns,
+            vsync: refresh_ns > 0,
+        }
+    }
+}
+
 /// What a presenter did with a frame. Neutral port of `hl-display::present::PresentOutcome`: it
 /// distinguishes "visibly on screen" from "rendered offscreen" from "failed", so the schedule service
 /// never advances frame pacing for a frame that did not actually reach the display.

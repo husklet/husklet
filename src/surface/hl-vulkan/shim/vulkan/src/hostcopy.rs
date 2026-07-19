@@ -9,34 +9,36 @@
 
 use core::ffi::c_void;
 
-use hl_vulkan::service::create;
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::*;
 
 /// Whether a logical device exists (host-copy commands need one). `false` maps to
 /// `VK_ERROR_INITIALIZATION_FAILED`.
 fn have_device() -> bool {
-    with(|s| s.device.is_some())
+    StateStore::with(|s| s.device.is_some())
 }
 
 /// The shared truthful answer for an unmodeled host-image-copy op: validate the device + the argument
 /// pointer, then report the honest `VK_ERROR_FEATURE_NOT_PRESENT` (the `hostImageCopy` feature is not
 /// advertised — the executor holds image texels host-side, not as guest-CPU bytes).
-fn host_copy_unsupported(cmd: &'static str, info: *const c_void) -> VkResult {
+struct HostCopy;
+impl HostCopy {
+fn unsupported(cmd: &'static str, info: *const c_void) -> VkResult {
     if info.is_null() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
     if !have_device() {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-    crate::stub::unsupported(cmd, "hostImageCopy feature is not advertised (image texels are host-owned)");
+    crate::stub::Call::unsupported(cmd, "hostImageCopy feature is not advertised (image texels are host-owned)");
     VK_ERROR_FEATURE_NOT_PRESENT
+}
 }
 
 #[no_mangle]
 pub extern "C" fn vkCopyMemoryToImage(_device: *mut c_void, p_copy_memory_to_image_info: *const c_void) -> VkResult {
-    host_copy_unsupported("vkCopyMemoryToImage", p_copy_memory_to_image_info)
+    HostCopy::unsupported("vkCopyMemoryToImage", p_copy_memory_to_image_info)
 }
 
 #[no_mangle]
@@ -46,7 +48,7 @@ pub extern "C" fn vkCopyMemoryToImageEXT(device: *mut c_void, p_copy_memory_to_i
 
 #[no_mangle]
 pub extern "C" fn vkCopyImageToMemory(_device: *mut c_void, p_copy_image_to_memory_info: *const c_void) -> VkResult {
-    host_copy_unsupported("vkCopyImageToMemory", p_copy_image_to_memory_info)
+    HostCopy::unsupported("vkCopyImageToMemory", p_copy_image_to_memory_info)
 }
 
 #[no_mangle]
@@ -56,7 +58,7 @@ pub extern "C" fn vkCopyImageToMemoryEXT(device: *mut c_void, p_copy_image_to_me
 
 #[no_mangle]
 pub extern "C" fn vkCopyImageToImage(_device: *mut c_void, p_copy_image_to_image_info: *const c_void) -> VkResult {
-    host_copy_unsupported("vkCopyImageToImage", p_copy_image_to_image_info)
+    HostCopy::unsupported("vkCopyImageToImage", p_copy_image_to_image_info)
 }
 
 #[no_mangle]
@@ -70,7 +72,7 @@ pub extern "C" fn vkTransitionImageLayout(
     _transition_count: u32,
     p_transitions: *const c_void,
 ) -> VkResult {
-    host_copy_unsupported("vkTransitionImageLayout", p_transitions)
+    HostCopy::unsupported("vkTransitionImageLayout", p_transitions)
 }
 
 #[no_mangle]
@@ -100,7 +102,7 @@ pub extern "C" fn vkGetImageSubresourceLayout2(
         return;
     };
     out.subresource_layout = VkSubresourceLayout::default();
-    if let Some(Ok(l)) = with(|s| s.device.as_ref().map(|d| create::image_subresource_layout(d, image))) {
+    if let Some(Ok(l)) = StateStore::with(|s| s.device.as_ref().map(|d| d.image_subresource_layout(image))) {
         out.subresource_layout = VkSubresourceLayout {
             offset: l.offset,
             size: l.size,

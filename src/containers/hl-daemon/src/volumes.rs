@@ -32,7 +32,7 @@ pub(crate) fn container_uses_volume(c: &Container, name: &str, mp: Option<&str>)
 
 /// A fresh, UNIQUE name for an anonymous `docker volume create` (empty `Name`). Docker mints a random
 /// id per call; hl uses `vol_<12 hex>`. The seed MUST be unique per call: an earlier version seeded
-/// `fake_id("v")` — a pure hash of a constant — so every unnamed create produced the SAME name, and the
+/// `Digest::fake("v")` — a pure hash of a constant — so every unnamed create produced the SAME name, and the
 /// second call returned the FIRST volume, silently sharing one backing dir across unrelated containers.
 fn new_unnamed_volume_name() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -42,7 +42,7 @@ fn new_unnamed_volume_name() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("vol_{}", &fake_id(&format!("v{nanos}-{seq}"))[..12])
+    format!("vol_{}", &Digest::fake(&format!("v{nanos}-{seq}"))[..12])
 }
 
 /// Outcome of a `DELETE /volumes/{name}` request, decided against daemon state. Existence is checked
@@ -55,44 +55,52 @@ pub(crate) enum VolDeleteVerdict {
     Remove(String), // mountpoint to unlink
 }
 
-pub(crate) fn volume_delete_verdict(g: &Inner, name: &str) -> VolDeleteVerdict {
-    let Some(mp) = g
-        .volumes
-        .iter()
-        .find(|v| v.name == name)
-        .map(|v| v.mountpoint.clone())
-    else {
-        return VolDeleteVerdict::NotFound;
-    };
-    if volume_in_use(g, name, Some(&mp)) {
-        return VolDeleteVerdict::InUse;
-    }
-    VolDeleteVerdict::Remove(mp)
-}
-
-pub(crate) fn vol_json(v: &Vol) -> crate::api::VolumeJson {
-    let driver = if v.driver.is_empty() {
-        "local".to_string()
-    } else {
-        v.driver.clone()
-    };
-    crate::api::VolumeJson {
-        name: v.name.clone(),
-        driver,
-        mountpoint: v.mountpoint.clone(),
-        created_at: fmt_rfc3339(v.created_at),
-        scope: "local",
-        labels: v.labels.clone(),
-        options: v.options.clone(),
+pub(crate) struct Volumes;
+impl Volumes {
+    pub(crate) fn delete_verdict(g: &Inner, name: &str) -> VolDeleteVerdict {
+        let Some(mp) = g
+            .volumes
+            .iter()
+            .find(|v| v.name == name)
+            .map(|v| v.mountpoint.clone())
+        else {
+            return VolDeleteVerdict::NotFound;
+        };
+        if volume_in_use(g, name, Some(&mp)) {
+            return VolDeleteVerdict::InUse;
+        }
+        VolDeleteVerdict::Remove(mp)
     }
 }
 
-pub(crate) async fn volumes_list(State(a): State<App>) -> Json<crate::api::VolumeList> {
-    let g = a.inner.lock().await;
-    Json(crate::api::VolumeList {
-        volumes: g.volumes.iter().map(vol_json).collect::<Vec<_>>(),
-        warnings: vec![],
-    })
+impl Vol {
+    pub(crate) fn json(&self) -> crate::api::VolumeJson {
+        let v = self;
+        let driver = if v.driver.is_empty() {
+            "local".to_string()
+        } else {
+            v.driver.clone()
+        };
+        crate::api::VolumeJson {
+            name: v.name.clone(),
+            driver,
+            mountpoint: v.mountpoint.clone(),
+            created_at: Timestamp::seconds(v.created_at).to_string(),
+            scope: "local",
+            labels: v.labels.clone(),
+            options: v.options.clone(),
+        }
+    }
+}
+
+impl Volumes {
+    pub(crate) async fn list(State(a): State<App>) -> Json<crate::api::VolumeList> {
+        let g = a.inner.lock().await;
+        Json(crate::api::VolumeList {
+            volumes: g.volumes.iter().map(Vol::json).collect::<Vec<_>>(),
+            warnings: vec![],
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -107,131 +115,143 @@ pub(crate) struct VolumeCreateBody {
     labels: Option<HashMap<String, String>>,
 }
 
-pub(crate) async fn volumes_create(
-    State(a): State<App>,
-    Json(body): Json<VolumeCreateBody>,
-) -> Response {
-    let name = body
-        .name
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(new_unnamed_volume_name);
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
-    {
-        return bad_request("invalid volume name");
-    }
-    let driver = body
-        .driver
-        .filter(|d| !d.is_empty())
-        .unwrap_or_else(|| "local".into());
-    let options = body.driver_opts.unwrap_or_default();
-    let labels = body.labels.unwrap_or_default();
-    let mountpoint = PathBuf::from(&a.volumes_dir).join(&name);
-    // Creating a volume WITHOUT its backing directory is a lie — a later mount would fail. Fail the
-    // request if the storage can't be created rather than reporting `201` for a volume with no storage.
-    if let Err(e) = std::fs::create_dir_all(&mountpoint) {
-        return server_error(format!("failed to create volume storage: {e}"));
-    }
-    let mut g = a.inner.lock().await;
-    let v = if let Some(existing) = g.volumes.iter().find(|v| v.name == name).cloned() {
-        existing
-    } else {
-        let v = Vol {
-            name: name.clone(),
-            mountpoint: mountpoint.to_string_lossy().into_owned(),
-            created_at: now_secs(),
-            driver,
-            options,
-            labels,
-        };
-        g.volumes.push(v.clone());
-        save_state(&g, &a.state_path);
-        // Flatten the volume's labels into the event attributes so `--filter label=...` selects it.
-        let mut attrs = serde_json::Map::new();
-        attrs.insert("driver".into(), json!(v.driver));
-        for (k, val) in &v.labels {
-            attrs.insert(k.clone(), json!(val));
+impl Volumes {
+    pub(crate) async fn create(
+        State(a): State<App>,
+        Json(body): Json<VolumeCreateBody>,
+    ) -> Response {
+        let name = body
+            .name
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(new_unnamed_volume_name);
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        {
+            return ErrorMessage::bad_request("invalid volume name");
         }
-        crate::events::emit_event(&a.events, "volume", "create", &name, Value::Object(attrs));
-        v
-    };
-    (StatusCode::CREATED, Json(vol_json(&v))).into_response()
-}
-
-pub(crate) async fn volume_inspect(State(a): State<App>, Path(name): Path<String>) -> Response {
-    match a.inner.lock().await.volumes.iter().find(|v| v.name == name) {
-        Some(v) => Json(vol_json(v)).into_response(),
-        None => no_such_volume(&name),
+        let driver = body
+            .driver
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| "local".into());
+        let options = body.driver_opts.unwrap_or_default();
+        let labels = body.labels.unwrap_or_default();
+        let mountpoint = PathBuf::from(&a.volumes_dir).join(&name);
+        // Creating a volume WITHOUT its backing directory is a lie — a later mount would fail. Fail the
+        // request if the storage can't be created rather than reporting `201` for a volume with no storage.
+        if let Err(e) = std::fs::create_dir_all(&mountpoint) {
+            return ErrorMessage::server_error(format!("failed to create volume storage: {e}"));
+        }
+        let mut g = a.inner.lock().await;
+        let v = if let Some(existing) = g.volumes.iter().find(|v| v.name == name).cloned() {
+            existing
+        } else {
+            let v = Vol {
+                name: name.clone(),
+                mountpoint: mountpoint.to_string_lossy().into_owned(),
+                created_at: now_secs(),
+                driver,
+                options,
+                labels,
+            };
+            g.volumes.push(v.clone());
+            Store::save(&g, &a.state_path);
+            // Flatten the volume's labels into the event attributes so `--filter label=...` selects it.
+            let mut attrs = serde_json::Map::new();
+            attrs.insert("driver".into(), json!(v.driver));
+            for (k, val) in &v.labels {
+                attrs.insert(k.clone(), json!(val));
+            }
+            crate::events::emit_event(&a.events, "volume", "create", &name, Value::Object(attrs));
+            v
+        };
+        (StatusCode::CREATED, Json(v.json())).into_response()
     }
 }
 
-pub(crate) async fn volume_delete(State(a): State<App>, Path(name): Path<String>) -> Response {
-    let mut g = a.inner.lock().await;
-    // Existence is checked BEFORE the in-use scan: a missing volume is 404 even if a container's bind
-    // string mentions its name — otherwise cleanup tools see a spurious `409 volume is in use`.
-    match volume_delete_verdict(&g, &name) {
-        VolDeleteVerdict::NotFound => no_such_volume(&name),
-        VolDeleteVerdict::InUse => conflict(format!("remove {name}: volume is in use")),
-        VolDeleteVerdict::Remove(_) => {
-            // Remove the backing storage FIRST; if that fails, keep the volume in state (retryable) and
-            // report an error rather than dropping state while a stale mountpoint lingers on disk.
-            let dir = PathBuf::from(&a.volumes_dir).join(&name);
-            if dir.exists() {
-                if let Err(e) = std::fs::remove_dir_all(&dir) {
-                    return server_error(format!("failed to remove volume storage: {e}"));
-                }
+impl Volumes {
+    pub(crate) async fn inspect(State(a): State<App>, Path(name): Path<String>) -> Response {
+        match a.inner.lock().await.volumes.iter().find(|v| v.name == name) {
+            Some(v) => Json(v.json()).into_response(),
+            None => ErrorMessage::no_such_volume(&name),
+        }
+    }
+}
+
+impl Volumes {
+    pub(crate) async fn delete(State(a): State<App>, Path(name): Path<String>) -> Response {
+        let mut g = a.inner.lock().await;
+        // Existence is checked BEFORE the in-use scan: a missing volume is 404 even if a container's bind
+        // string mentions its name — otherwise cleanup tools see a spurious `409 volume is in use`.
+        match Volumes::delete_verdict(&g, &name) {
+            VolDeleteVerdict::NotFound => ErrorMessage::no_such_volume(&name),
+            VolDeleteVerdict::InUse => {
+                ErrorMessage::conflict(format!("remove {name}: volume is in use"))
             }
-            g.volumes.retain(|v| v.name != name);
-            save_state(&g, &a.state_path);
-            crate::events::emit_event(
-                &a.events,
-                "volume",
-                "destroy",
-                &name,
-                json!({"driver": "local"}),
-            );
-            StatusCode::NO_CONTENT.into_response()
+            VolDeleteVerdict::Remove(_) => {
+                // Remove the backing storage FIRST; if that fails, keep the volume in state (retryable) and
+                // report an error rather than dropping state while a stale mountpoint lingers on disk.
+                let dir = PathBuf::from(&a.volumes_dir).join(&name);
+                if dir.exists() {
+                    if let Err(e) = std::fs::remove_dir_all(&dir) {
+                        return ErrorMessage::server_error(format!(
+                            "failed to remove volume storage: {e}"
+                        ));
+                    }
+                }
+                g.volumes.retain(|v| v.name != name);
+                Store::save(&g, &a.state_path);
+                crate::events::emit_event(
+                    &a.events,
+                    "volume",
+                    "destroy",
+                    &name,
+                    json!({"driver": "local"}),
+                );
+                StatusCode::NO_CONTENT.into_response()
+            }
         }
     }
 }
 
 /// `POST /volumes/prune` — `docker volume prune`. Removes volumes not referenced by any container's
 /// binds and reports reclaimed names. (No space accounting yet.)
-pub(crate) async fn volumes_prune(State(a): State<App>) -> Json<crate::api::VolumesPruneReport> {
-    let mut g = a.inner.lock().await;
-    // Prune every volume no container references — scanning BOTH `-v`/Binds AND `--mount`/anon volumes
-    // (via `volume_in_use`), so an in-use `--mount type=volume` volume is no longer wrongly reclaimed.
-    let candidates: Vec<String> = g
-        .volumes
-        .iter()
-        .filter(|v| !volume_in_use(&g, &v.name, Some(&v.mountpoint)))
-        .map(|v| v.name.clone())
-        .collect();
-    // Only drop a volume from state once its backing dir is actually gone: a failed removal keeps the
-    // volume (retryable) instead of orphaning storage while reporting it pruned.
-    let mut pruned: Vec<String> = Vec::new();
-    for name in &candidates {
-        let dir = std::path::Path::new(&a.volumes_dir).join(name);
-        if dir.exists() && std::fs::remove_dir_all(&dir).is_err() {
-            continue; // keep this volume in state; it can be retried
+impl Volumes {
+    pub(crate) async fn prune(State(a): State<App>) -> Json<crate::api::VolumesPruneReport> {
+        let mut g = a.inner.lock().await;
+        // Prune every volume no container references — scanning BOTH `-v`/Binds AND `--mount`/anon volumes
+        // (via `volume_in_use`), so an in-use `--mount type=volume` volume is no longer wrongly reclaimed.
+        let candidates: Vec<String> = g
+            .volumes
+            .iter()
+            .filter(|v| !volume_in_use(&g, &v.name, Some(&v.mountpoint)))
+            .map(|v| v.name.clone())
+            .collect();
+        // Only drop a volume from state once its backing dir is actually gone: a failed removal keeps the
+        // volume (retryable) instead of orphaning storage while reporting it pruned.
+        let mut pruned: Vec<String> = Vec::new();
+        for name in &candidates {
+            let dir = std::path::Path::new(&a.volumes_dir).join(name);
+            if dir.exists() && std::fs::remove_dir_all(&dir).is_err() {
+                continue; // keep this volume in state; it can be retried
+            }
+            pruned.push(name.clone());
+            // Emit `volume/destroy` per pruned volume so event mirrors drop stale references (docker parity).
+            crate::events::emit_event(
+                &a.events,
+                "volume",
+                "destroy",
+                name,
+                json!({"driver": "local"}),
+            );
         }
-        pruned.push(name.clone());
-        // Emit `volume/destroy` per pruned volume so event mirrors drop stale references (docker parity).
-        crate::events::emit_event(
-            &a.events,
-            "volume",
-            "destroy",
-            name,
-            json!({"driver": "local"}),
-        );
+        g.volumes.retain(|v| !pruned.contains(&v.name));
+        Store::save(&g, &a.state_path);
+        Json(crate::api::VolumesPruneReport {
+            volumes_deleted: pruned,
+            space_reclaimed: 0,
+        })
     }
-    g.volumes.retain(|v| !pruned.contains(&v.name));
-    save_state(&g, &a.state_path);
-    Json(crate::api::VolumesPruneReport {
-        volumes_deleted: pruned,
-        space_reclaimed: 0,
-    })
 }
 
 #[cfg(test)]
@@ -324,7 +344,7 @@ mod tests {
             options: Default::default(),
             labels: Default::default(),
         };
-        let j = vol_json(&v);
+        let j = v.json();
         assert_eq!(j.driver, "local");
         assert_eq!(j.name, "n");
         assert_eq!(j.mountpoint, "/mp/n");
@@ -343,7 +363,7 @@ mod tests {
             options: Default::default(),
             labels: Default::default(),
         };
-        assert_eq!(vol_json(&v).driver, "nfs");
+        assert_eq!(v.json().driver, "nfs");
     }
 
     fn vol(name: &str) -> Vol {
@@ -375,7 +395,7 @@ mod tests {
         c.binds = vec!["ghost:/data".into()];
         let g = inner_with(c);
         assert_eq!(
-            volume_delete_verdict(&g, "ghost"),
+            Volumes::delete_verdict(&g, "ghost"),
             VolDeleteVerdict::NotFound,
             "deleting a nonexistent volume must be NotFound, not InUse"
         );
@@ -388,9 +408,9 @@ mod tests {
         let mut g = inner_with(c);
         g.volumes.push(vol("data"));
         g.volumes.push(vol("free"));
-        assert_eq!(volume_delete_verdict(&g, "data"), VolDeleteVerdict::InUse);
+        assert_eq!(Volumes::delete_verdict(&g, "data"), VolDeleteVerdict::InUse);
         assert_eq!(
-            volume_delete_verdict(&g, "free"),
+            Volumes::delete_verdict(&g, "free"),
             VolDeleteVerdict::Remove("/vol/free".into())
         );
     }

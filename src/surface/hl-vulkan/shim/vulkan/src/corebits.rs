@@ -23,7 +23,7 @@ use hl_vulkan::service::{create, record};
 use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 use hl_gpu::CommandSink;
 
-use crate::state::with;
+use crate::state::StateStore;
 use crate::types::{
     Dispatchable, VkClearDepthStencilValue, VkCopyImageInfo2, VkExtent2D, VkImageCopy,
     VkImageSubresourceRange, VkMappedMemoryRange, VkResult, VK_SUCCESS,
@@ -32,22 +32,28 @@ use crate::types::{
 /// `VkImageAspectFlagBits::VK_IMAGE_ASPECT_STENCIL_BIT` (stable value from vk.xml).
 const VK_IMAGE_ASPECT_STENCIL_BIT: u32 = 0x0000_0004;
 
-unsafe fn cmdbuf_handle(p: *mut c_void) -> Option<VkCbHandle> {
+struct CommandBuffer;
+impl CommandBuffer {
+unsafe fn handle(p: *mut c_void) -> Option<VkCbHandle> {
     Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
 }
+}
 
-fn dev<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
-    with(|s| s.device.as_mut().map(f))
+struct ShimState;
+impl ShimState {
+fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
+    StateStore::with(|s| s.device.as_mut().map(f))
 }
 
 /// Run `f` with the logical device + the command sink (disjoint `State` fields) — the readback path
 /// `vkInvalidateMappedMemoryRanges` needs. `None` if no device exists yet.
-fn dev_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option<R> {
-    with(|s| {
+fn with_sink<R>(f: impl FnOnce(&mut Device, &mut dyn CommandSink) -> R) -> Option<R> {
+    StateStore::with(|s| {
         let sink = &mut s.sink;
         let dev = s.device.as_mut()?;
         Some(f(dev, sink))
     })
+}
 }
 
 // ---- mapped-memory flush/invalidate (unified coherent memory → no-op success) ------------------
@@ -71,7 +77,7 @@ pub extern "C" fn vkFlushMappedMemoryRanges(
                 memory_range_count as usize,
             )
         };
-        dev(|d| {
+        ShimState::with_device(|d| {
             for r in ranges {
                 create::capture_pending_upload(d, r.memory, r.offset, r.size);
             }
@@ -98,7 +104,7 @@ pub extern "C" fn vkInvalidateMappedMemoryRanges(
     let ranges = unsafe {
         core::slice::from_raw_parts(p_memory_ranges as *const VkMappedMemoryRange, memory_range_count as usize)
     };
-    dev_sink(|dev, sink| {
+    ShimState::with_sink(|dev, sink| {
         for r in ranges {
             // A readback transport error on one range is non-fatal to the invalidate; the memory stays
             // valid host-visible staging.
@@ -119,7 +125,7 @@ pub extern "C" fn vkGetDeviceMemoryCommitment(
     if p_committed_memory_in_bytes.is_null() {
         return;
     }
-    let size = dev(|d| d.memories.get(&memory).map(|m| m.size).unwrap_or(0)).unwrap_or(0);
+    let size = ShimState::with_device(|d| d.memories.get(&memory).map(|m| m.size).unwrap_or(0)).unwrap_or(0);
     unsafe { *(p_committed_memory_in_bytes as *mut u64) = size };
 }
 
@@ -174,7 +180,7 @@ pub extern "C" fn vkCreateBufferView(
     if p_view.is_null() {
         return VK_SUCCESS;
     }
-    let handle = with(|s| {
+    let handle = StateStore::with(|s| {
         let h = s.mint_aux();
         s.buffer_views.insert(h);
         h
@@ -185,7 +191,7 @@ pub extern "C" fn vkCreateBufferView(
 
 #[no_mangle]
 pub extern "C" fn vkDestroyBufferView(_device: *mut c_void, buffer_view: u64, _p_allocator: *const c_void) {
-    with(|s| {
+    StateStore::with(|s| {
         s.buffer_views.remove(&buffer_view);
     });
 }
@@ -201,7 +207,7 @@ pub extern "C" fn vkFreeDescriptorSets(
 ) -> VkResult {
     if !p_descriptor_sets.is_null() && descriptor_set_count > 0 {
         let sets = unsafe { core::slice::from_raw_parts(p_descriptor_sets as *const u64, descriptor_set_count as usize) };
-        dev(|d| {
+        ShimState::with_device(|d| {
             for &s in sets {
                 d.descriptor_sets.remove(&s);
             }
@@ -212,7 +218,7 @@ pub extern "C" fn vkFreeDescriptorSets(
 
 #[no_mangle]
 pub extern "C" fn vkResetDescriptorPool(_device: *mut c_void, descriptor_pool: u64, _flags: u32) -> VkResult {
-    dev(|d| {
+    ShimState::with_device(|d| {
         d.descriptor_sets.retain(|_, r| r.pool != descriptor_pool);
     });
     VK_SUCCESS
@@ -313,7 +319,7 @@ pub extern "C" fn vkCmdClearDepthStencilImage(
     range_count: u32,
     p_ranges: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(ds) = (unsafe { (p_depth_stencil as *const VkClearDepthStencilValue).as_ref() }) else { return };
     // Whether ANY passed subresource range selects the stencil aspect (a depth-only aspect must not write
     // the stencil plane). No ranges ⇒ nothing to clear.
@@ -323,7 +329,7 @@ pub extern "C" fn vkCmdClearDepthStencilImage(
         let ranges = unsafe { std::slice::from_raw_parts(p_ranges as *const VkImageSubresourceRange, range_count as usize) };
         ranges.iter().any(|r| r.aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT != 0)
     };
-    dev(|d| {
+    ShimState::with_device(|d| {
         let _ = record::cmd_clear_depth_stencil_image(d, cb, image, ds.depth, ds.stencil, clears_stencil);
     });
 }
@@ -343,14 +349,14 @@ pub extern "C" fn vkCmdResolveImage(
     region_count: u32,
     p_regions: *const c_void,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     if p_regions.is_null() {
         return;
     }
     // `VkImageResolve` has the exact layout of `VkImageCopy` (srcSubresource, srcOffset, dstSubresource,
     // dstOffset, extent) — reinterpret and reuse the copy region parsing.
     let regions = unsafe { std::slice::from_raw_parts(p_regions as *const VkImageCopy, region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             if r.src_offset.x < 0 || r.src_offset.y < 0 || r.dst_offset.x < 0 || r.dst_offset.y < 0 {
                 continue;
@@ -373,13 +379,13 @@ pub extern "C" fn vkCmdResolveImage(
 /// those struct views and lowers each region to the same image COPY.
 #[no_mangle]
 pub extern "C" fn vkCmdResolveImage2(command_buffer: *mut c_void, p_resolve_image_info: *const c_void) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
     let Some(info) = (unsafe { (p_resolve_image_info as *const VkCopyImageInfo2).as_ref() }) else { return };
     if info.p_regions.is_null() {
         return;
     }
     let regions = unsafe { std::slice::from_raw_parts(info.p_regions, info.region_count as usize) };
-    dev(|d| {
+    ShimState::with_device(|d| {
         for r in regions {
             if r.src_offset.x < 0 || r.src_offset.y < 0 || r.dst_offset.x < 0 || r.dst_offset.y < 0 {
                 continue;
@@ -415,8 +421,8 @@ pub extern "C" fn vkCmdDrawIndirectCount(
     max_draw_count: u32,
     stride: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    dev(|d| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    ShimState::with_device(|d| {
         let _ = record::cmd_draw_indirect_count(
             d,
             cb,
@@ -448,8 +454,8 @@ pub extern "C" fn vkCmdDrawIndexedIndirectCount(
     max_draw_count: u32,
     stride: u32,
 ) {
-    let Some(cb) = (unsafe { cmdbuf_handle(command_buffer) }) else { return };
-    dev(|d| {
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    ShimState::with_device(|d| {
         let _ = record::cmd_draw_indexed_indirect_count(
             d,
             cb,

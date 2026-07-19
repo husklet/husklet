@@ -9,14 +9,13 @@
 
 use crate::adapter::spirv;
 use crate::model::descriptor::{
-    is_buffer_descriptor, DescriptorPoolRec, DescriptorTemplateEntry, DescriptorUpdateTemplateRec,
+    DescriptorPoolRec, DescriptorTemplateEntry, DescriptorType, DescriptorUpdateTemplateRec,
     DsetRec, LayoutBinding, SetLayoutRec, TemplateBufferInfo,
     VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
 };
 use crate::model::instance::Instance;
 use crate::model::memory::{
-    buffer_usage_from_vk, is_render_target, tex_format_from_vk, texture_usage_from_vk, BufferRec,
-    ImageRec, MemRec, SamplerRec,
+    BufferRec, BufferUsage, Format, ImageRec, ImageUsage, MemRec, SamplerRec,
 };
 use crate::model::pipeline::{
     PipelineCacheRec, PipelineKind, PipelineLayoutRec, PipelineRec, ShaderRec,
@@ -33,13 +32,11 @@ use hl_gpu::{BufferId, Cmd, CommandSink, GpuError, Result};
 // ---- instance / device (pure object model — no IR) -----------------------------------------------
 
 /// `vkCreateInstance` — build the instance exposing the hl physical device.
-pub fn create_instance(app_api_version: u32) -> Instance {
-    Instance::new(app_api_version)
-}
-
-/// `vkCreateDevice` — build a logical device over the instance's physical device.
-pub fn create_device(instance: &Instance) -> Device {
-    Device::new(instance.physical_device.clone())
+impl Instance {
+    /// `vkCreateDevice` — build a logical device over this instance's physical device.
+    pub fn create_device(&self) -> Device {
+        Device::new(self.physical_device.clone())
+    }
 }
 
 // ---- buffers / device memory ---------------------------------------------------------------------
@@ -54,7 +51,7 @@ pub fn create_buffer(
 ) -> Result<VkBuffer> {
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
-    let usage = buffer_usage_from_vk(vk_usage);
+    let usage = BufferUsage(vk_usage).wire();
     sink.submit(&[Cmd::CreateBuffer(
         ir_id,
         BufferDesc {
@@ -96,29 +93,31 @@ pub fn destroy_buffer(
 /// memory_heap_bytes`]) is a truthful `VK_ERROR_OUT_OF_DEVICE_MEMORY` analogue ([`GpuError::ResourceLimit`])
 /// — NEVER a fake success, and (crucially) never a host `Vec` capacity-overflow/OOM abort from
 /// `vec![0u8; huge as usize]`: the budget check rejects an over-heap size before any host allocation.
-pub fn allocate_memory(dev: &mut Device, size: u64) -> Result<VkDeviceMemory> {
-    if size == 0 {
-        return Err(GpuError::Invalid(
-            "vkAllocateMemory: allocationSize must be greater than 0",
-        ));
+impl Device {
+    pub fn allocate_memory(&mut self, size: u64) -> Result<VkDeviceMemory> {
+        if size == 0 {
+            return Err(GpuError::Invalid(
+                "vkAllocateMemory: allocationSize must be greater than 0",
+            ));
+        }
+        if size > self.physical_device.memory_heap_bytes {
+            return Err(GpuError::ResourceLimit(
+                "vkAllocateMemory: allocation exceeds the device memory heap",
+            ));
+        }
+        let handle = self.alloc_handle();
+        self.memories.insert(
+            handle,
+            MemRec {
+                data: vec![0u8; size as usize],
+                size,
+                bound_buffers: Vec::new(),
+                mapped: false,
+                pending_flush: None,
+            },
+        );
+        Ok(handle)
     }
-    if size > dev.physical_device.memory_heap_bytes {
-        return Err(GpuError::ResourceLimit(
-            "vkAllocateMemory: allocation exceeds the device memory heap",
-        ));
-    }
-    let handle = dev.alloc_handle();
-    dev.memories.insert(
-        handle,
-        MemRec {
-            data: vec![0u8; size as usize],
-            size,
-            bound_buffers: Vec::new(),
-            mapped: false,
-            pending_flush: None,
-        },
-    );
-    Ok(handle)
 }
 
 /// `vkBindBufferMemory` — bind `memory` to `buffer` at `offset`. Errors on an unknown handle. No IR
@@ -152,12 +151,14 @@ pub fn bind_buffer_memory(
 
 /// `vkMapMemory` — mark `memory` mapped (its bytes now flush to the host at each submit). Errors on an
 /// unknown handle.
-pub fn map_memory(dev: &mut Device, memory: VkDeviceMemory) -> Result<()> {
-    dev.memories
-        .get_mut(&memory)
-        .ok_or(GpuError::Invalid("vkMapMemory: unknown VkDeviceMemory"))?
-        .mapped = true;
-    Ok(())
+impl Device {
+    pub fn map_memory(&mut self, memory: VkDeviceMemory) -> Result<()> {
+        self.memories
+            .get_mut(&memory)
+            .ok_or(GpuError::Invalid("vkMapMemory: unknown VkDeviceMemory"))?
+            .mapped = true;
+        Ok(())
+    }
 }
 
 /// Write `bytes` into a mapped memory at `offset` (the app's `memcpy` into the mapped pointer). Errors
@@ -263,11 +264,13 @@ pub fn read_mapped(
 /// as a `Cmd::WriteBuffer` and clears the record. Unbound host-only staging has no device buffer to
 /// upload to, so nothing is captured (a truthful no-op). Coalesced with the still-mapped path so a
 /// buffer that is submitted while still mapped is never written twice.
-pub fn unmap_memory(dev: &mut Device, memory: VkDeviceMemory) {
-    if let Some(m) = dev.memories.get_mut(&memory) {
-        m.mapped = false;
-        if !m.bound_buffers.is_empty() {
-            m.pending_flush = Some((0, VK_WHOLE_SIZE));
+impl Device {
+    pub fn unmap_memory(&mut self, memory: VkDeviceMemory) {
+        if let Some(m) = self.memories.get_mut(&memory) {
+            m.mapped = false;
+            if !m.bound_buffers.is_empty() {
+                m.pending_flush = Some((0, VK_WHOLE_SIZE));
+            }
         }
     }
 }
@@ -282,24 +285,22 @@ pub fn capture_pending_upload(dev: &mut Device, memory: VkDeviceMemory, offset: 
     if let Some(m) = dev.memories.get_mut(&memory) {
         if !m.bound_buffers.is_empty() {
             m.pending_flush = Some(match m.pending_flush {
-                Some(prev) => widen_range(prev, (offset, size)),
+                Some(prev) => {
+                    let start = prev.0.min(offset);
+                    if prev.1 == VK_WHOLE_SIZE || size == VK_WHOLE_SIZE {
+                        (start, VK_WHOLE_SIZE)
+                    } else {
+                        let end = prev
+                            .0
+                            .saturating_add(prev.1)
+                            .max(offset.saturating_add(size));
+                        (start, end - start)
+                    }
+                }
                 None => (offset, size),
             });
         }
     }
-}
-
-/// Merge two `(offset, size)` upload ranges into one that covers both (`size == VK_WHOLE_SIZE` extends
-/// to the end of the allocation, so any whole-size operand yields a whole-size result from the smaller
-/// offset). The result is always a superset of both inputs — the flush intersects it with the buffer's
-/// footprint at submit, so over-covering is safe (`data` is the source of truth) and never drops bytes.
-fn widen_range(a: (u64, u64), b: (u64, u64)) -> (u64, u64) {
-    let start = a.0.min(b.0);
-    if a.1 == VK_WHOLE_SIZE || b.1 == VK_WHOLE_SIZE {
-        return (start, VK_WHOLE_SIZE);
-    }
-    let end = a.0.saturating_add(a.1).max(b.0.saturating_add(b.1));
-    (start, end - start)
 }
 
 // ---- images / samplers ---------------------------------------------------------------------------
@@ -336,8 +337,8 @@ pub fn create_image(
     }
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
-    let format = tex_format_from_vk(vk_format);
-    let usage = texture_usage_from_vk(vk_usage);
+    let format = Format(vk_format).wire();
+    let usage = ImageUsage(vk_usage).wire();
     // `VkSampleCountFlagBits` encodes the count AS its bit value (1/2/4/8/16/32/64); an absent/`_1_BIT`
     // field is single-sample. Anything else threads through as the requested multisample count.
     let sample_count = vk_samples.max(1);
@@ -364,7 +365,7 @@ pub fn create_image(
             format,
             usage,
             sample_count,
-            is_render_target: is_render_target(vk_usage),
+            is_render_target: ImageUsage(vk_usage).is_render_target(),
         },
     );
     Ok(handle)
@@ -381,12 +382,12 @@ pub fn create_sampler(
     vk_address_uvw: [u32; 3],
 ) -> VkSampler {
     let desc = SamplerDesc {
-        min_filter: ir_filter(vk_min_filter),
-        mag_filter: ir_filter(vk_mag_filter),
-        mip_filter: ir_filter(vk_mipmap_mode), // VkSamplerMipmapMode shares NEAREST=0/LINEAR=1
-        address_u: ir_address(vk_address_uvw[0]),
-        address_v: ir_address(vk_address_uvw[1]),
-        address_w: ir_address(vk_address_uvw[2]),
+        min_filter: SamplerFilter::from_vk(vk_min_filter),
+        mag_filter: SamplerFilter::from_vk(vk_mag_filter),
+        mip_filter: SamplerFilter::from_vk(vk_mipmap_mode), // VkSamplerMipmapMode shares NEAREST=0/LINEAR=1
+        address_u: SamplerAddress::from_vk(vk_address_uvw[0]),
+        address_v: SamplerAddress::from_vk(vk_address_uvw[1]),
+        address_w: SamplerAddress::from_vk(vk_address_uvw[2]),
     };
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
@@ -397,21 +398,27 @@ pub fn create_sampler(
 }
 
 /// `VkFilter` (0 = NEAREST, 1 = LINEAR) → hl-GPU [`Filter`].
-fn ir_filter(v: u32) -> Filter {
-    if v == 1 {
-        Filter::Linear
-    } else {
-        Filter::Nearest
+struct SamplerFilter;
+impl SamplerFilter {
+    fn from_vk(v: u32) -> Filter {
+        if v == 1 {
+            Filter::Linear
+        } else {
+            Filter::Nearest
+        }
     }
 }
 
 /// `VkSamplerAddressMode` → hl-GPU [`AddressMode`] (CLAMP_TO_BORDER / MIRROR_CLAMP fold to the nearest
 /// supported neighbour — a bounded translation, ported from `memory.rs::ir_address`).
-fn ir_address(v: u32) -> AddressMode {
-    match v {
-        0 => AddressMode::Repeat,           // REPEAT
-        1 | 4 => AddressMode::MirrorRepeat, // MIRRORED_REPEAT / MIRROR_CLAMP
-        _ => AddressMode::ClampToEdge,      // CLAMP_TO_EDGE / CLAMP_TO_BORDER
+struct SamplerAddress;
+impl SamplerAddress {
+    fn from_vk(v: u32) -> AddressMode {
+        match v {
+            0 => AddressMode::Repeat,           // REPEAT
+            1 | 4 => AddressMode::MirrorRepeat, // MIRRORED_REPEAT / MIRROR_CLAMP
+            _ => AddressMode::ClampToEdge,      // CLAMP_TO_EDGE / CLAMP_TO_BORDER
+        }
     }
 }
 
@@ -424,8 +431,8 @@ pub fn create_shader_module(
     sink: &mut dyn CommandSink,
     code: &[u8],
 ) -> Result<VkShaderModule> {
-    let words = spirv::words_from_bytes(code)?;
-    create_shader_module_words(dev, sink, words)
+    let module = spirv::Module::from_bytes(code)?;
+    create_shader_module_words(dev, sink, module.into_words())
 }
 
 /// `vkCreateShaderModule` from SPIR-V words directly (the `pCode` already reinterpreted as `u32`s).
@@ -434,11 +441,12 @@ pub fn create_shader_module_words(
     sink: &mut dyn CommandSink,
     words: Vec<u32>,
 ) -> Result<VkShaderModule> {
-    spirv::validate(&words)?;
-    let entries = spirv::entry_points(&words);
+    let module = spirv::Module::from_words(words)?;
+    let entries = module.entry_points();
     let ir_id = dev.alloc_ir();
     let handle = dev.alloc_handle();
-    sink.submit(&[spirv::create_shader(ir_id, words.clone())])?;
+    let words = module.words().to_vec();
+    sink.submit(&[module.create_shader(ir_id)])?;
     hl_log::hl_debug!(
         hl_log::tag::VULKAN,
         "shader ir={} words={} entries={}",
@@ -623,39 +631,43 @@ pub fn create_graphics_pipeline(
 }
 
 /// `vkCreatePipelineLayout` — record the composed set-layouts. No IR (bindings arrive with the sets).
-pub fn create_pipeline_layout(
-    dev: &mut Device,
-    set_layouts: Vec<VkDescriptorSetLayout>,
-) -> VkPipelineLayout {
-    let handle = dev.alloc_handle();
-    dev.pipeline_layouts
-        .insert(handle, PipelineLayoutRec { set_layouts });
-    handle
+impl Device {
+    pub fn create_pipeline_layout(
+        &mut self,
+        set_layouts: Vec<VkDescriptorSetLayout>,
+    ) -> VkPipelineLayout {
+        let handle = self.alloc_handle();
+        self.pipeline_layouts
+            .insert(handle, PipelineLayoutRec { set_layouts });
+        handle
+    }
 }
 
 // ---- descriptor sets -----------------------------------------------------------------------------
 
 /// `vkCreateDescriptorSetLayout` — record the immutable binding table. No IR.
-pub fn create_descriptor_set_layout(
-    dev: &mut Device,
-    bindings: Vec<LayoutBinding>,
-) -> VkDescriptorSetLayout {
-    let handle = dev.alloc_handle();
-    dev.set_layouts.insert(handle, SetLayoutRec { bindings });
-    handle
-}
+impl Device {
+    pub fn create_descriptor_set_layout(
+        &mut self,
+        bindings: Vec<LayoutBinding>,
+    ) -> VkDescriptorSetLayout {
+        let handle = self.alloc_handle();
+        self.set_layouts.insert(handle, SetLayoutRec { bindings });
+        handle
+    }
 
-/// `vkCreateDescriptorPool` — record the pool capacity. No IR.
-pub fn create_descriptor_pool(dev: &mut Device, max_sets: u32) -> VkDescriptorPool {
-    let handle = dev.alloc_handle();
-    dev.descriptor_pools.insert(
-        handle,
-        DescriptorPoolRec {
-            max_sets,
-            allocated: 0,
-        },
-    );
-    handle
+    /// `vkCreateDescriptorPool` — record the pool capacity. No IR.
+    pub fn create_descriptor_pool(&mut self, max_sets: u32) -> VkDescriptorPool {
+        let handle = self.alloc_handle();
+        self.descriptor_pools.insert(
+            handle,
+            DescriptorPoolRec {
+                max_sets,
+                allocated: 0,
+            },
+        );
+        handle
+    }
 }
 
 /// `vkAllocateDescriptorSets` (one set) — allocate a set of `layout` from `pool`. Errors
@@ -752,8 +764,10 @@ pub fn create_descriptor_update_template(
 }
 
 /// `vkDestroyDescriptorUpdateTemplate(KHR)` — drop the template. No-op on `VK_NULL_HANDLE`/unknown.
-pub fn destroy_descriptor_update_template(dev: &mut Device, template: VkDescriptorUpdateTemplate) {
-    dev.descriptor_update_templates.remove(&template);
+impl Device {
+    pub fn destroy_descriptor_update_template(&mut self, template: VkDescriptorUpdateTemplate) {
+        self.descriptor_update_templates.remove(&template);
+    }
 }
 
 /// `vkUpdateDescriptorSetWithTemplate(KHR)` — walk the template entries, reading each buffer descriptor
@@ -786,7 +800,7 @@ pub fn update_descriptor_set_with_template(
     for e in &entries {
         // Array elements fold onto the binding (the model keys a set's resources by binding), matching
         // `vkUpdateDescriptorSets`.
-        if !is_buffer_descriptor(e.descriptor_type) {
+        if !DescriptorType::from(e.descriptor_type).is_buffer() {
             continue;
         }
         for i in 0..e.descriptor_count as usize {
@@ -815,24 +829,26 @@ pub fn update_descriptor_set_with_template(
 /// build a correctly-bounded slice over the raw `pData` pointer (the C API carries no data size), so the
 /// bounds check in [`update_descriptor_set_with_template`] is exact. `None` on an unknown template; `0`
 /// if the template reads no buffer bytes.
-pub fn descriptor_template_data_len(
-    dev: &Device,
-    template: VkDescriptorUpdateTemplate,
-) -> Option<usize> {
-    let rec = dev.descriptor_update_templates.get(&template)?;
-    let mut max = 0usize;
-    for e in &rec.entries {
-        if !is_buffer_descriptor(e.descriptor_type) || e.descriptor_count == 0 {
-            continue;
+impl Device {
+    pub fn descriptor_template_data_len(
+        &self,
+        template: VkDescriptorUpdateTemplate,
+    ) -> Option<usize> {
+        let rec = self.descriptor_update_templates.get(&template)?;
+        let mut max = 0usize;
+        for e in &rec.entries {
+            if !DescriptorType::from(e.descriptor_type).is_buffer() || e.descriptor_count == 0 {
+                continue;
+            }
+            let last = (e.descriptor_count as usize - 1).saturating_mul(e.stride);
+            let end = e
+                .offset
+                .saturating_add(last)
+                .saturating_add(core::mem::size_of::<TemplateBufferInfo>());
+            max = max.max(end);
         }
-        let last = (e.descriptor_count as usize - 1).saturating_mul(e.stride);
-        let end = e
-            .offset
-            .saturating_add(last)
-            .saturating_add(core::mem::size_of::<TemplateBufferInfo>());
-        max = max.max(end);
+        Some(max)
     }
-    Some(max)
 }
 
 // ---- image subresource layout --------------------------------------------------------------------
@@ -853,18 +869,20 @@ pub struct SubresourceLayout {
 /// images are 4-byte-per-texel (RGBA8/BGRA8) single-mip 2D targets: `row_pitch = width*4`,
 /// `size = row_pitch*height`, tightly packed from offset 0. Errors on an unknown image. Ported (for the
 /// single-subresource model) from `hl-shim-vk`'s image-layout reporting.
-pub fn image_subresource_layout(dev: &Device, image: VkImage) -> Result<SubresourceLayout> {
-    let img = dev.images.get(&image).ok_or(GpuError::Invalid(
-        "vkGetImageSubresourceLayout: unknown VkImage",
-    ))?;
-    let row_pitch = img.width as u64 * 4;
-    Ok(SubresourceLayout {
-        offset: 0,
-        size: row_pitch * img.height as u64,
-        row_pitch,
-        array_pitch: 0,
-        depth_pitch: 0,
-    })
+impl Device {
+    pub fn image_subresource_layout(&self, image: VkImage) -> Result<SubresourceLayout> {
+        let img = self.images.get(&image).ok_or(GpuError::Invalid(
+            "vkGetImageSubresourceLayout: unknown VkImage",
+        ))?;
+        let row_pitch = img.width as u64 * 4;
+        Ok(SubresourceLayout {
+            offset: 0,
+            size: row_pitch * img.height as u64,
+            row_pitch,
+            array_pitch: 0,
+            depth_pitch: 0,
+        })
+    }
 }
 
 // ---- pipeline cache (modeled: a valid, versioned header; no host binary to cache) ----------------
@@ -873,69 +891,68 @@ pub fn image_subresource_layout(dev: &Device, image: VkImage) -> Result<Subresou
 /// `{ u32 length=32; u32 version=1; u32 vendorID; u32 deviceID; u8 uuid[16] }` (all little-endian, from
 /// vk.xml). The hl-GPU pipelines forward SPIR-V verbatim (no compiled host artifact), so a cache carries
 /// only this header — enough that a loader/app re-reading it via `vkGetPipelineCacheData` accepts it.
-pub fn pipeline_cache_header(dev: &Device) -> Vec<u8> {
-    const HEADER_LEN: u32 = 32;
-    const VK_PIPELINE_CACHE_HEADER_VERSION_ONE: u32 = 1;
-    let pd = &dev.physical_device;
-    let mut hdr = Vec::with_capacity(HEADER_LEN as usize);
-    hdr.extend_from_slice(&HEADER_LEN.to_le_bytes());
-    hdr.extend_from_slice(&VK_PIPELINE_CACHE_HEADER_VERSION_ONE.to_le_bytes());
-    hdr.extend_from_slice(&pd.vendor_id.to_le_bytes());
-    hdr.extend_from_slice(&pd.device_id.to_le_bytes());
-    hdr.extend_from_slice(&pd.pipeline_cache_uuid);
-    hdr
-}
-
-/// `vkCreatePipelineCache` — mint a cache holding a valid header (plus any app-provided `initial_data`,
-/// retained verbatim for round-trip). No IR.
-pub fn create_pipeline_cache(dev: &mut Device, initial_data: &[u8]) -> VkPipelineCache {
-    // A well-formed `initialDataSize` blob is retained as-is; anything else falls back to a fresh header.
-    let data = if initial_data.len() >= 32 {
-        initial_data.to_vec()
-    } else {
-        pipeline_cache_header(dev)
-    };
-    let handle = dev.alloc_handle();
-    dev.pipeline_caches
-        .insert(handle, PipelineCacheRec { data });
-    handle
-}
-
-/// `vkDestroyPipelineCache` — drop the cache. No-op on `VK_NULL_HANDLE`/unknown.
-pub fn destroy_pipeline_cache(dev: &mut Device, cache: VkPipelineCache) {
-    dev.pipeline_caches.remove(&cache);
-}
-
-/// `vkMergePipelineCaches` — merge `src` caches into `dst`. There is no compiled artifact to combine, so
-/// this is a truthful no-op that validates the handles. Errors on an unknown `dst`/`src` cache.
-pub fn merge_pipeline_caches(
-    dev: &Device,
-    dst: VkPipelineCache,
-    srcs: &[VkPipelineCache],
-) -> Result<()> {
-    if !dev.pipeline_caches.contains_key(&dst) {
-        return Err(GpuError::Invalid(
-            "vkMergePipelineCaches: unknown dst VkPipelineCache",
-        ));
+pub struct PipelineCache;
+impl PipelineCache {
+    pub fn header(dev: &Device) -> Vec<u8> {
+        const HEADER_LEN: u32 = 32;
+        const VK_PIPELINE_CACHE_HEADER_VERSION_ONE: u32 = 1;
+        let pd = &dev.physical_device;
+        let mut hdr = Vec::with_capacity(HEADER_LEN as usize);
+        hdr.extend_from_slice(&HEADER_LEN.to_le_bytes());
+        hdr.extend_from_slice(&VK_PIPELINE_CACHE_HEADER_VERSION_ONE.to_le_bytes());
+        hdr.extend_from_slice(&pd.vendor_id.to_le_bytes());
+        hdr.extend_from_slice(&pd.device_id.to_le_bytes());
+        hdr.extend_from_slice(&pd.pipeline_cache_uuid);
+        hdr
     }
-    if !srcs.iter().all(|s| dev.pipeline_caches.contains_key(s)) {
-        return Err(GpuError::Invalid(
-            "vkMergePipelineCaches: unknown src VkPipelineCache",
-        ));
-    }
-    Ok(())
-}
 
-/// `vkGetPipelineCacheData` — the serialized cache blob (a spec-valid header). Errors on an unknown cache.
-pub fn get_pipeline_cache_data(dev: &Device, cache: VkPipelineCache) -> Result<Vec<u8>> {
-    Ok(dev
-        .pipeline_caches
-        .get(&cache)
-        .ok_or(GpuError::Invalid(
-            "vkGetPipelineCacheData: unknown VkPipelineCache",
-        ))?
-        .data
-        .clone())
+    /// `vkCreatePipelineCache` — mint a cache holding a valid header (plus any app-provided `initial_data`,
+    /// retained verbatim for round-trip). No IR.
+    pub fn create(dev: &mut Device, initial_data: &[u8]) -> VkPipelineCache {
+        // A well-formed `initialDataSize` blob is retained as-is; anything else falls back to a fresh header.
+        let data = if initial_data.len() >= 32 {
+            initial_data.to_vec()
+        } else {
+            Self::header(dev)
+        };
+        let handle = dev.alloc_handle();
+        dev.pipeline_caches
+            .insert(handle, PipelineCacheRec { data });
+        handle
+    }
+
+    /// `vkDestroyPipelineCache` — drop the cache. No-op on `VK_NULL_HANDLE`/unknown.
+    pub fn destroy(dev: &mut Device, cache: VkPipelineCache) {
+        dev.pipeline_caches.remove(&cache);
+    }
+
+    /// `vkMergePipelineCaches` — merge `src` caches into `dst`. There is no compiled artifact to combine, so
+    /// this is a truthful no-op that validates the handles. Errors on an unknown `dst`/`src` cache.
+    pub fn merge(dev: &Device, dst: VkPipelineCache, srcs: &[VkPipelineCache]) -> Result<()> {
+        if !dev.pipeline_caches.contains_key(&dst) {
+            return Err(GpuError::Invalid(
+                "vkMergePipelineCaches: unknown dst VkPipelineCache",
+            ));
+        }
+        if !srcs.iter().all(|s| dev.pipeline_caches.contains_key(s)) {
+            return Err(GpuError::Invalid(
+                "vkMergePipelineCaches: unknown src VkPipelineCache",
+            ));
+        }
+        Ok(())
+    }
+
+    /// `vkGetPipelineCacheData` — the serialized cache blob (a spec-valid header). Errors on an unknown cache.
+    pub fn data(dev: &Device, cache: VkPipelineCache) -> Result<Vec<u8>> {
+        Ok(dev
+            .pipeline_caches
+            .get(&cache)
+            .ok_or(GpuError::Invalid(
+                "vkGetPipelineCacheData: unknown VkPipelineCache",
+            ))?
+            .data
+            .clone())
+    }
 }
 
 // ---- fences --------------------------------------------------------------------------------------

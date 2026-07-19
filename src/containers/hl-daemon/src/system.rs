@@ -76,239 +76,250 @@ pub(crate) fn runtimes() -> std::collections::HashMap<&'static str, crate::api::
     )])
 }
 
-pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
-    use crate::api::{Info, Plugins, Swarm};
-    let g = a.inner.lock().await;
-    let running = g
-        .containers
-        .values()
-        .filter(|c| c.status == "running")
-        .count();
-    let paused = g
-        .containers
-        .values()
-        .filter(|c| c.status == "paused")
-        .count();
-    let stopped = g.containers.len() - running - paused;
-    Json(Info {
-        id: "HL",
-        name: "hl",
-        containers: g.containers.len(),
-        containers_running: running,
-        containers_paused: paused,
-        containers_stopped: stopped,
-        images: g.images.len(),
-        volumes: g.volumes.len(),
-        networks: g.networks.len(),
-        driver: "jit-overlay",
-        operating_system: "hl (VM-less JIT on macOS)",
-        os_type: "linux",
-        architecture: "aarch64",
-        ncpu: host_ncpu(),
-        mem_total: host_mem_total(),
-        kernel_version: "6.1.0-hl",
-        server_version: HL_VERSION,
-        docker_root_dir: hl_home().to_string_lossy().into_owned(),
-        cgroup_driver: "none",
-        default_runtime: DEFAULT_RUNTIME,
-        runtimes: runtimes(),
-        swarm: Swarm {
-            local_node_state: "inactive",
-            control_available: false,
-        },
-        plugins: Plugins {
-            volume: vec!["local"],
-            network: vec!["bridge", "host", "none"],
-            authorization: None,
-            log: vec![],
-        },
-        security_options: vec![],
-        warnings: vec![],
-    })
+pub(crate) struct System;
+impl System {
+    pub(crate) async fn info(State(a): State<App>) -> Json<crate::api::Info> {
+        use crate::api::{Info, Plugins, Swarm};
+        let g = a.inner.lock().await;
+        let running = g
+            .containers
+            .values()
+            .filter(|c| c.status == "running")
+            .count();
+        let paused = g
+            .containers
+            .values()
+            .filter(|c| c.status == "paused")
+            .count();
+        let stopped = g.containers.len() - running - paused;
+        Json(Info {
+            id: "HL",
+            name: "hl",
+            containers: g.containers.len(),
+            containers_running: running,
+            containers_paused: paused,
+            containers_stopped: stopped,
+            images: g.images.len(),
+            volumes: g.volumes.len(),
+            networks: g.networks.len(),
+            driver: "jit-overlay",
+            operating_system: "hl (VM-less JIT on macOS)",
+            os_type: "linux",
+            architecture: "aarch64",
+            ncpu: host_ncpu(),
+            mem_total: host_mem_total(),
+            kernel_version: "6.1.0-hl",
+            server_version: HL_VERSION,
+            docker_root_dir: hl_home().to_string_lossy().into_owned(),
+            cgroup_driver: "none",
+            default_runtime: DEFAULT_RUNTIME,
+            runtimes: runtimes(),
+            swarm: Swarm {
+                local_node_state: "inactive",
+                control_available: false,
+            },
+            plugins: Plugins {
+                volume: vec!["local"],
+                network: vec!["bridge", "host", "none"],
+                authorization: None,
+                log: vec![],
+            },
+            security_options: vec![],
+            warnings: vec![],
+        })
+    }
 }
 
 /// `POST /auth` — `docker login`. hl has no central auth store; accept any credentials so the CLI
 /// records them locally (pull/push then send them via `X-Registry-Auth`). Empty body = a probe.
-pub(crate) async fn auth(body: axum::body::Bytes) -> Response {
-    let _ = body;
-    (
-        StatusCode::OK,
-        Json(crate::api::AuthResponse {
-            status: "Login Succeeded",
-            identity_token: "",
-        }),
-    )
-        .into_response()
+impl System {
+    pub(crate) async fn auth(body: axum::body::Bytes) -> Response {
+        let _ = body;
+        (
+            StatusCode::OK,
+            Json(crate::api::AuthResponse {
+                status: "Login Succeeded",
+                identity_token: "",
+            }),
+        )
+            .into_response()
+    }
 }
 
 /// `GET /system/df` — `docker system df`. Reports the rough disk usage of images, containers and
 /// volumes. hl has no build cache and no per-container/volume size accounting yet, so `BuildCache`
 /// is empty, `BuilderSize` is 0 and the rw/volume sizes take Docker's "not calculated" sentinels.
-pub(crate) async fn system_df(State(a): State<App>) -> Json<crate::api::DiskUsage> {
-    use crate::api::{ContainerDf, DiskUsage, ImageDf, Usage, VolumeDf, VolumeUsageData};
-    let g = a.inner.lock().await;
-    let images: Vec<ImageDf> = g
-        .images
-        .iter()
-        .map(|i| {
-            let size = image_size(&i.rootfs, &i.name);
-            // Containers backed by THIS exact image tag — Docker's `system df` counts by the precise
-            // `repository:tag`, so a container from `repo/app:v1` must not be attributed to sibling `:v2`.
-            let containers = g
-                .containers
-                .values()
-                .filter(|c| {
-                    ref_repo(&c.image) == ref_repo(&i.name) && ref_tag(&c.image) == ref_tag(&i.name)
-                })
-                .count();
-            ImageDf {
-                id: image_id(i),
-                parent_id: "",
-                repo_tags: vec![repo_tag(&i.name)],
-                created: 0,
-                size,
-                shared_size: 0,
-                virtual_size: size,
-                containers,
-            }
-        })
-        .collect();
-    let layers: i64 = images.iter().map(|i| i.size).sum();
-    let containers: Vec<ContainerDf> = g
-        .containers
-        .values()
-        .map(|c| ContainerDf {
-            id: c.id.clone(),
-            image: c.image.clone(),
-            command: "",
-            created: c.created,
-            size_rw: 0,
-            size_root_fs: 0,
-            state: c.status.clone(),
-            status: c.status.clone(),
-            names: vec![format!(
-                "/{}",
-                if c.name.is_empty() {
-                    c.id[..12.min(c.id.len())].to_string()
-                } else {
-                    c.name.clone()
+impl System {
+    pub(crate) async fn df(State(a): State<App>) -> Json<crate::api::DiskUsage> {
+        use crate::api::{ContainerDf, DiskUsage, ImageDf, Usage, VolumeDf, VolumeUsageData};
+        let g = a.inner.lock().await;
+        let images: Vec<ImageDf> = g
+            .images
+            .iter()
+            .map(|i| {
+                let size = PathSize::image(&i.rootfs, &i.name);
+                // Containers backed by THIS exact image tag — Docker's `system df` counts by the precise
+                // `repository:tag`, so a container from `repo/app:v1` must not be attributed to sibling `:v2`.
+                let containers = g
+                    .containers
+                    .values()
+                    .filter(|c| {
+                        ImageRef::from(&c.image).repository_identity()
+                            == ImageRef::from(&i.name).repository_identity()
+                            && ImageRef::from(&c.image).tag == ImageRef::from(&i.name).tag
+                    })
+                    .count();
+                ImageDf {
+                    id: i.id(),
+                    parent_id: "",
+                    repo_tags: vec![ImageRef::from(&i.name).short()],
+                    created: 0,
+                    size,
+                    shared_size: 0,
+                    virtual_size: size,
+                    containers,
                 }
-            )],
-        })
-        .collect();
-    let volumes: Vec<VolumeDf> = g
-        .volumes
-        .iter()
-        .map(|v| {
-            // RefCount = number of containers referencing this volume (by name/bind/mount/anon) — a
-            // mounted volume must not read back as unused. Docker reports the live reference count here.
-            let ref_count = g
-                .containers
-                .values()
-                .filter(|c| crate::volumes::container_uses_volume(c, &v.name, Some(&v.mountpoint)))
-                .count() as i64;
-            VolumeDf {
-                name: v.name.clone(),
-                driver: "local",
-                mountpoint: v.mountpoint.clone(),
-                usage_data: VolumeUsageData {
-                    size: -1,
-                    ref_count,
-                },
-            }
-        })
-        .collect();
-    // Volumes with at least one live container reference (for VolumeUsage.ActiveCount).
-    let volumes_active = volumes
-        .iter()
-        .filter(|v| v.usage_data.ref_count > 0)
-        .count() as i64;
-    // Images actively used by at least one container (ImageUsage.ActiveCount describes IMAGES, not the
-    // container count — two containers on one image is one active image).
-    let images_active = images.iter().filter(|i| i.containers > 0).count() as i64;
-    // Emit BOTH shapes: the classic flat lists (older clients) AND the newer nested *Usage objects
-    // current clients (docker CLI / bollard) read — so `docker system df` and the GUI both populate.
-    let running = g
-        .containers
-        .values()
-        .filter(|c| c.status == "running")
-        .count() as i64;
-    let (nimg, nctr, nvol) = (
-        images.len() as i64,
-        containers.len() as i64,
-        volumes.len() as i64,
-    );
-    // Persistent JIT translated-code cache (~/.hl/pcache, one <binid>.pcache per guest binary). It's the
-    // closest analogue to Docker's build cache, so we surface it in that slot: shown by `system df`,
-    // reclaimed by `system prune` / `builder prune` (see build_prune). Fully reclaimable (rebuilds on demand).
-    // Materialize one build-cache ITEM per pcache file so the reported TotalCount always matches the
-    // item list — a nonzero count with an empty Items list is internally contradictory (docker parity).
-    let pc_items: Vec<Value> = std::fs::read_dir(crate::util::hl_home().join("pcache"))
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let m = e.metadata().ok()?;
-                    if !m.is_file() {
-                        return None;
+            })
+            .collect();
+        let layers: i64 = images.iter().map(|i| i.size).sum();
+        let containers: Vec<ContainerDf> = g
+            .containers
+            .values()
+            .map(|c| ContainerDf {
+                id: c.id.clone(),
+                image: c.image.clone(),
+                command: "",
+                created: c.created,
+                size_rw: 0,
+                size_root_fs: 0,
+                state: c.status.clone(),
+                status: c.status.clone(),
+                names: vec![format!(
+                    "/{}",
+                    if c.name.is_empty() {
+                        c.id[..12.min(c.id.len())].to_string()
+                    } else {
+                        c.name.clone()
                     }
-                    let id = e.file_name().to_string_lossy().into_owned();
-                    Some(json!({
-                        "ID": id,
-                        "Type": "regular",
-                        "Size": m.len() as i64,
-                        "InUse": false,
-                        "Shared": false,
-                        "CreatedAt": "0001-01-01T00:00:00Z",
-                        "LastUsedAt": null,
-                        "UsageCount": 0,
-                        "Parent": "",
-                        "Description": "hl JIT translated-code cache",
-                    }))
-                })
-                .collect()
+                )],
+            })
+            .collect();
+        let volumes: Vec<VolumeDf> = g
+            .volumes
+            .iter()
+            .map(|v| {
+                // RefCount = number of containers referencing this volume (by name/bind/mount/anon) — a
+                // mounted volume must not read back as unused. Docker reports the live reference count here.
+                let ref_count = g
+                    .containers
+                    .values()
+                    .filter(|c| {
+                        crate::volumes::container_uses_volume(c, &v.name, Some(&v.mountpoint))
+                    })
+                    .count() as i64;
+                VolumeDf {
+                    name: v.name.clone(),
+                    driver: "local",
+                    mountpoint: v.mountpoint.clone(),
+                    usage_data: VolumeUsageData {
+                        size: -1,
+                        ref_count,
+                    },
+                }
+            })
+            .collect();
+        // Volumes with at least one live container reference (for VolumeUsage.ActiveCount).
+        let volumes_active = volumes
+            .iter()
+            .filter(|v| v.usage_data.ref_count > 0)
+            .count() as i64;
+        // Images actively used by at least one container (ImageUsage.ActiveCount describes IMAGES, not the
+        // container count — two containers on one image is one active image).
+        let images_active = images.iter().filter(|i| i.containers > 0).count() as i64;
+        // Emit BOTH shapes: the classic flat lists (older clients) AND the newer nested *Usage objects
+        // current clients (docker CLI / bollard) read — so `docker system df` and the GUI both populate.
+        let running = g
+            .containers
+            .values()
+            .filter(|c| c.status == "running")
+            .count() as i64;
+        let (nimg, nctr, nvol) = (
+            images.len() as i64,
+            containers.len() as i64,
+            volumes.len() as i64,
+        );
+        // Persistent JIT translated-code cache (~/.hl/pcache, one <binid>.pcache per guest binary). It's the
+        // closest analogue to Docker's build cache, so we surface it in that slot: shown by `system df`,
+        // reclaimed by `system prune` / `builder prune` (see build_prune). Fully reclaimable (rebuilds on demand).
+        // Materialize one build-cache ITEM per pcache file so the reported TotalCount always matches the
+        // item list — a nonzero count with an empty Items list is internally contradictory (docker parity).
+        let pc_items: Vec<Value> = std::fs::read_dir(crate::util::hl_home().join("pcache"))
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter_map(|e| {
+                        let m = e.metadata().ok()?;
+                        if !m.is_file() {
+                            return None;
+                        }
+                        let id = e.file_name().to_string_lossy().into_owned();
+                        Some(json!({
+                            "ID": id,
+                            "Type": "regular",
+                            "Size": m.len() as i64,
+                            "InUse": false,
+                            "Shared": false,
+                            "CreatedAt": "0001-01-01T00:00:00Z",
+                            "LastUsedAt": null,
+                            "UsageCount": 0,
+                            "Parent": "",
+                            "Description": "hl JIT translated-code cache",
+                        }))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let pc_size: i64 = pc_items
+            .iter()
+            .map(|i| i["Size"].as_i64().unwrap_or(0))
+            .sum();
+        let pc_count = pc_items.len() as i64;
+        Json(DiskUsage {
+            layers_size: layers,
+            image_usage: Usage {
+                active_count: images_active,
+                total_count: nimg,
+                reclaimable: 0,
+                total_size: layers,
+                items: images.clone(),
+            },
+            container_usage: Usage {
+                active_count: running,
+                total_count: nctr,
+                reclaimable: 0,
+                total_size: 0,
+                items: containers.clone(),
+            },
+            volume_usage: Usage {
+                active_count: volumes_active,
+                total_count: nvol,
+                reclaimable: 0,
+                total_size: 0,
+                items: volumes.clone(),
+            },
+            build_cache_usage: Usage {
+                active_count: 0,
+                total_count: pc_count,
+                reclaimable: pc_size,
+                total_size: pc_size,
+                items: pc_items.clone(),
+            },
+            images,
+            containers,
+            volumes,
+            build_cache: pc_items,
+            builder_size: pc_size,
         })
-        .unwrap_or_default();
-    let pc_size: i64 = pc_items
-        .iter()
-        .map(|i| i["Size"].as_i64().unwrap_or(0))
-        .sum();
-    let pc_count = pc_items.len() as i64;
-    Json(DiskUsage {
-        layers_size: layers,
-        image_usage: Usage {
-            active_count: images_active,
-            total_count: nimg,
-            reclaimable: 0,
-            total_size: layers,
-            items: images.clone(),
-        },
-        container_usage: Usage {
-            active_count: running,
-            total_count: nctr,
-            reclaimable: 0,
-            total_size: 0,
-            items: containers.clone(),
-        },
-        volume_usage: Usage {
-            active_count: volumes_active,
-            total_count: nvol,
-            reclaimable: 0,
-            total_size: 0,
-            items: volumes.clone(),
-        },
-        build_cache_usage: Usage {
-            active_count: 0,
-            total_count: pc_count,
-            reclaimable: pc_size,
-            total_size: pc_size,
-            items: pc_items.clone(),
-        },
-        images,
-        containers,
-        volumes,
-        build_cache: pc_items,
-        builder_size: pc_size,
-    })
+    }
 }
 
 /// `GET /plugins` — `docker plugin ls`. hl ships no managed plugins, but `/info` advertises plugin
@@ -321,20 +332,22 @@ pub(crate) async fn plugins_list() -> Json<Vec<Value>> {
 /// `POST /system/prune` — `docker system prune`. Runs the individual prune passes (stopped containers,
 /// unused user networks, unreferenced volumes, dangling images) and returns the combined report docker
 /// clients expect. Previously unrouted, so compatible clients hit a 404 fallback.
-pub(crate) async fn system_prune(State(a): State<App>) -> Json<Value> {
-    let containers = crate::containers::containers_prune(State(a.clone()))
-        .await
-        .0;
-    let networks = crate::networks::networks_prune(State(a.clone())).await.0;
-    let volumes = crate::volumes::volumes_prune(State(a.clone())).await.0;
-    let images = crate::images::images_prune(State(a.clone())).await.0;
-    Json(json!({
-        "ContainersDeleted": containers.containers_deleted,
-        "NetworksDeleted": networks.networks_deleted,
-        "VolumesDeleted": volumes.volumes_deleted,
-        "ImagesDeleted": images.images_deleted,
-        "SpaceReclaimed": 0,
-    }))
+impl System {
+    pub(crate) async fn prune(State(a): State<App>) -> Json<Value> {
+        let containers = crate::containers::Containers::prune(State(a.clone()))
+            .await
+            .0;
+        let networks = crate::networks::Networks::prune(State(a.clone())).await.0;
+        let volumes = crate::volumes::Volumes::prune(State(a.clone())).await.0;
+        let images = crate::images::ImageApi::prune(State(a.clone())).await.0;
+        Json(json!({
+            "ContainersDeleted": containers.containers_deleted,
+            "NetworksDeleted": networks.networks_deleted,
+            "VolumesDeleted": volumes.volumes_deleted,
+            "ImagesDeleted": images.images_deleted,
+            "SpaceReclaimed": 0,
+        }))
+    }
 }
 
 // `GET /events` — `docker events`. The handler now lives in `crate::events` (the lifecycle bus):

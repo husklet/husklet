@@ -2,7 +2,7 @@
 //! (rendezvous) or `ret` (retire). Ported from `run_until` in `hl-gpu/src/ptx.rs`, plus the [`Val`]
 //! tagged-value model. Called by [`super::control`] once per phase per live thread.
 
-use super::memory::{atomic_rmw, ptr_int_add, ptr_target, read_scalar, shared_addr, write_scalar};
+use super::memory::{atomic_rmw, ptr_int_add, read_scalar, write_scalar};
 use crate::protocol::model::error::{GpuError, Result};
 use crate::protocol::model::kernel::{
     gty, Inst, KernelProgram, Op, BIT_AND, BIT_OR, CMP_EQ, CMP_GT, CMP_LE, CMP_LT, CMP_NE,
@@ -41,6 +41,25 @@ impl Val {
     fn as_bool(self) -> bool {
         matches!(self, Val::Pred(true))
     }
+
+    /// Resolve a shared-memory byte address from this base plus a displacement.
+    fn shared_addr(self, displacement: i64) -> Result<usize> {
+        let address = self.as_i64().wrapping_add(displacement);
+        if address < 0 {
+            return Err(GpuError::OutOfBounds);
+        }
+        Ok(address as usize)
+    }
+
+    /// Resolve this tagged pointer into its region and byte offset.
+    fn ptr_target(self) -> Result<(u32, i64)> {
+        match self {
+            Val::P { region, off } => Ok((region, off)),
+            _ => Err(GpuError::kernel(
+                "global access through a non-pointer value (unsupported flat addressing)",
+            )),
+        }
+    }
 }
 
 /// Where a thread paused: at a `bar.sync` (rendezvous) or a `ret` (retired).
@@ -75,7 +94,7 @@ pub(super) fn run_until(
     while *pc < prog.insts.len() {
         steps += 1;
         if steps > step_cap {
-            return Err(super::kerr(
+            return Err(GpuError::kernel(
                 "kernel exceeded step cap (suspected infinite loop)",
             ));
         }
@@ -188,7 +207,7 @@ pub(super) fn run_until(
                 }
             }
             Inst::LdGlobal { d, addr, off, ty } => {
-                let (region, base) = ptr_target(regs[*addr as usize])?;
+                let (region, base) = regs[*addr as usize].ptr_target()?;
                 let eff = base.wrapping_add(*off);
                 if eff < 0 {
                     return Err(GpuError::OutOfBounds);
@@ -196,7 +215,7 @@ pub(super) fn run_until(
                 let at = eff as usize;
                 let mem = regions
                     .get(region as usize)
-                    .ok_or_else(|| super::kerr("ld.global: unbound region"))?;
+                    .ok_or_else(|| GpuError::kernel("ld.global: unbound region"))?;
                 regs[*d as usize] = match *ty {
                     gty::F32 => Val::F(f32::from_bits(read_scalar(mem, at, 4)? as u32)),
                     gty::U32 => Val::I(read_scalar(mem, at, 4)?),
@@ -204,7 +223,7 @@ pub(super) fn run_until(
                 };
             }
             Inst::StGlobal { addr, off, src, ty } => {
-                let (region, base) = ptr_target(regs[*addr as usize])?;
+                let (region, base) = regs[*addr as usize].ptr_target()?;
                 let eff = base.wrapping_add(*off);
                 if eff < 0 {
                     return Err(GpuError::OutOfBounds);
@@ -213,7 +232,7 @@ pub(super) fn run_until(
                 let v = eval(regs, src);
                 let mem = regions
                     .get_mut(region as usize)
-                    .ok_or_else(|| super::kerr("st.global: unbound region"))?;
+                    .ok_or_else(|| GpuError::kernel("st.global: unbound region"))?;
                 match *ty {
                     gty::F32 => write_scalar(mem, at, 4, v.as_f32().to_bits() as u64)?,
                     gty::U32 => write_scalar(mem, at, 4, v.as_u64())?,
@@ -273,7 +292,7 @@ pub(super) fn run_until(
                 regs[*d as usize] = Val::I(r as u64);
             }
             Inst::LdShared { d, base, off, ty } => {
-                let at = shared_addr(eval(regs, base), *off)?;
+                let at = eval(regs, base).shared_addr(*off)?;
                 regs[*d as usize] = match *ty {
                     gty::F32 => Val::F(f32::from_bits(read_scalar(shared, at, 4)? as u32)),
                     gty::U32 => Val::I(read_scalar(shared, at, 4)?),
@@ -281,7 +300,7 @@ pub(super) fn run_until(
                 };
             }
             Inst::StShared { base, off, src, ty } => {
-                let at = shared_addr(eval(regs, base), *off)?;
+                let at = eval(regs, base).shared_addr(*off)?;
                 let v = eval(regs, src);
                 match *ty {
                     gty::F32 => write_scalar(shared, at, 4, v.as_f32().to_bits() as u64)?,
@@ -298,7 +317,7 @@ pub(super) fn run_until(
                 val,
                 unsigned,
             } => {
-                let (region, base) = ptr_target(regs[*addr as usize])?;
+                let (region, base) = regs[*addr as usize].ptr_target()?;
                 let eff = base.wrapping_add(*off);
                 if eff < 0 {
                     return Err(GpuError::OutOfBounds);
@@ -308,7 +327,7 @@ pub(super) fn run_until(
                 let valv = eval(regs, val).as_u64() as u32;
                 let mem = regions
                     .get_mut(region as usize)
-                    .ok_or_else(|| super::kerr("atom.global: unbound region"))?;
+                    .ok_or_else(|| GpuError::kernel("atom.global: unbound region"))?;
                 let old = atomic_rmw(mem, at, *op, cmpv, valv, *unsigned)?;
                 if let Some(dr) = d {
                     regs[*dr as usize] = Val::I(old as u64);
@@ -323,7 +342,7 @@ pub(super) fn run_until(
                 val,
                 unsigned,
             } => {
-                let at = shared_addr(eval(regs, base), *off)?;
+                let at = eval(regs, base).shared_addr(*off)?;
                 let cmpv = eval(regs, cmp).as_u64() as u32;
                 let valv = eval(regs, val).as_u64() as u32;
                 let old = atomic_rmw(shared, at, *op, cmpv, valv, *unsigned)?;
