@@ -1,5 +1,7 @@
 //! Wayland-EGL platform ABI: drive the REAL staged `libwayland-egl.so.1` + `libEGL.so.1` objects through
 //! a `dlopen`, exactly as a Wayland GUI app (`weston-simple-egl`) would after linking them.
+
+#![cfg(target_os = "linux")]
 //!
 //! This proves the wayland window path end to end WITHOUT a compositor:
 //!   1. `libEGL` advertises `EGL_EXT_platform_wayland` / `EGL_KHR_platform_wayland` in

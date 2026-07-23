@@ -171,7 +171,7 @@ fn damage_region_precision() {
         "no double-present: exactly two frames total"
     );
 
-    let (union_area, (bx, by, bw, bh)) = union_area_and_bbox();
+    let (union_area, (bx, by, bw, _bh)) = union_area_and_bbox();
     assert_eq!(
         (frame2.x, frame2.y),
         (bx, by),

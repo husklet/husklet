@@ -1,0 +1,718 @@
+cases:
+- id: weird/auxval-hwcap
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <sys/auxv.h>
+      int main(){
+        unsigned long hw=getauxval(AT_HWCAP);   /* exercise AT_HWCAP read */
+        unsigned long ps=getauxval(AT_PAGESZ);
+        (void)hw;
+        printf("AUXV=%lu\n", ps); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - AUXV=4096
+- id: weird/awk-compute
+  image: alpine:latest
+  run:
+    shell: awk 'BEGIN{for(i=1;i<=1000;i++)s+=i;print "AWK="s}'
+  expect:
+    stdout_contains:
+    - AWK=500500
+- id: weird/beam-jit
+  image: erlang:27
+  class: long
+  run:
+    shell: erl -noshell -eval 'io:format("ERL=~w~n",[lists:sum(lists:seq(1,1000))]), halt().'
+  expect:
+    stdout_contains:
+    - ERL=500500
+- id: weird/bpf-map-create
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #define _GNU_SOURCE
+      #include <stdio.h>
+      #include <errno.h>
+      #include <string.h>
+      #include <sys/syscall.h>
+      #include <linux/bpf.h>
+      #include <unistd.h>
+      int main(){
+        union bpf_attr a; memset(&a,0,sizeof a);
+        a.map_type=BPF_MAP_TYPE_ARRAY; a.key_size=4; a.value_size=4; a.max_entries=1;
+        long r=syscall(SYS_bpf,BPF_MAP_CREATE,&a,sizeof a);
+        printf("BPF=%s\n", r<0?strerror(errno):"ok"); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - BPF=Operation not permitted
+- id: weird/bzip2-roundtrip
+  image: alpine:latest
+  run:
+    shell: seq 1 1000 | bzip2 -9 | bzip2 -d | awk '{s+=$1}END{print "BZIP="s}'
+  expect:
+    stdout_contains:
+    - BZIP=500500
+- id: weird/cc-canary
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      int main(){ long s=0; for(long i=1;i<=1000;i++) s+=i; printf("CC=%ld\n", s); return 0; }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - CC=500500
+- id: weird/dotnet-ryujit
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  class: long
+  timeout: 300
+  xfail:
+  - arm64
+  - amd64
+  run:
+    shell: |-
+      mkdir -p /app && cd /app && dotnet new console -o . >/dev/null 2>&1 && cat > Program.cs <<'EOF'
+      long s=0; for(long i=1;i<=1000;i++) s+=i; System.Console.WriteLine("NET="+s);
+      EOF
+      dotnet run -c Release 2>/dev/null
+  expect:
+    stdout_contains:
+    - NET=500500
+- id: weird/eventfd
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <sys/eventfd.h>
+      #include <unistd.h>
+      #include <stdint.h>
+      int main(){
+        int fd=eventfd(0,0);
+        uint64_t v=41; write(fd,&v,8); v=1; write(fd,&v,8);
+        uint64_t r; read(fd,&r,8);
+        printf("EVENTFD=%llu\n",(unsigned long long)r); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - EVENTFD=42
+- id: weird/getrandom
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #define _GNU_SOURCE
+      #include <stdio.h>
+      #include <sys/random.h>
+      int main(){char b[16]; ssize_t n=getrandom(b,16,0); printf("GETRANDOM=%zd\n",n); return 0;}
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - GETRANDOM=16
+- id: weird/gforth
+  image: debian:bookworm
+  class: long
+  run:
+    shell: 'set -eu; apt-get update >/dev/null; apt-get install -y gforth >/dev/null; command -v gforth >/dev/null; gforth -e '': sm 0 1001 1 do i + loop . ; sm cr bye'''
+  expect:
+    stdout_contains:
+    - '500500'
+- id: weird/gzip-roundtrip
+  image: alpine:latest
+  run:
+    shell: seq 1 1000 | gzip -9 | gzip -d | awk '{s+=$1}END{print "GZIP="s}'
+  expect:
+    stdout_contains:
+    - GZIP=500500
+- id: weird/haskell-ghc
+  image: haskell:9.8
+  class: long
+  run:
+    shell: echo 'main = putStrLn ("HS=" ++ show (sum [1..1000::Int]))' > /m.hs && ghc -O2 -o /mh /m.hs >/dev/null 2>&1 && /mh
+  expect:
+    stdout_contains:
+    - HS=500500
+- id: weird/inotify
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #define _GNU_SOURCE
+      #include <stdio.h>
+      #include <sys/inotify.h>
+      #include <unistd.h>
+      #include <fcntl.h>
+      int main(){
+        int fd=inotify_init1(0);
+        if(fd<0){perror("inotify");return 1;}
+        inotify_add_watch(fd,"/tmp",IN_CREATE);
+        int f=open("/tmp/hl-inotify",O_CREAT|O_WRONLY,0644); close(f);
+        char buf[4096]; read(fd,buf,sizeof buf);
+        struct inotify_event *ev=(void*)buf;
+        printf("INOTIFY=%s\n", ev->len?ev->name:"none"); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - INOTIFY=hl-inotify
+- id: weird/io-uring
+  image: gcc:latest
+  class: long
+  xfail:
+  - arm64
+  - amd64
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #define _GNU_SOURCE
+      #include <stdio.h>
+      #include <string.h>
+      #include <sys/syscall.h>
+      #include <linux/io_uring.h>
+      #include <unistd.h>
+      int main(){
+        struct io_uring_params p; memset(&p,0,sizeof p);
+        int fd=syscall(SYS_io_uring_setup,8,&p);
+        if(fd<0){perror("io_uring_setup");return 1;}
+        printf("IOURING=ok sq=%u\n",p.sq_entries); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - 'io_uring_setup: Operation not permitted'
+- id: weird/julia-jit
+  image: julia:1
+  class: long
+  run:
+    shell: julia -e 'println("JL=", sum(1:1000))'
+  expect:
+    stdout_contains:
+    - JL=500500
+- id: weird/jvm-c2-jit
+  image: eclipse-temurin:21
+  run:
+    shell: |-
+      cat > /M.java <<'EOF'
+      public class M{public static void main(String[] a){long s=0;for(long i=0;i<50000000L;i++)s+=i%7;System.out.println("JVM="+s);}}
+      EOF
+      javac /M.java -d /o && java -cp /o M
+  expect:
+    stdout_contains:
+    - JVM=149999997
+- id: weird/jvm-fib
+  image: eclipse-temurin:21
+  run:
+    shell: |-
+      cat > /F.java <<'EOF'
+      public class F{public static void main(String[] a){long x=0,y=1;for(int i=0;i<50;i++){long t=x+y;x=y;y=t;}System.out.println("JFIB="+x);}}
+      EOF
+      javac /F.java -d /o && java -cp /o F
+  expect:
+    stdout_contains:
+    - JFIB=12586269025
+- id: weird/lua
+  image: nickblah/lua:5.4-alpine
+  class: long
+  run:
+    shell: lua -e 's=0 for i=1,1000 do s=s+i end print("LUA="..s)'
+  expect:
+    stdout_contains:
+    - LUA=500500
+- id: weird/luajit-trace
+  image: openresty/openresty:alpine
+  run:
+    shell: /usr/local/openresty/luajit/bin/luajit -e 'local s=0 for i=1,10000000 do s=s+i%7 end print("LUAJIT="..s)'
+  expect:
+    stdout_contains:
+    - LUAJIT=29999997
+- id: weird/memfd-create
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #define _GNU_SOURCE
+      #include <stdio.h>
+      #include <sys/mman.h>
+      #include <unistd.h>
+      int main(){
+        int fd=memfd_create("dd",0);
+        if(fd<0){perror("memfd");return 1;}
+        write(fd,"hl-memfd-ok",11);
+        char b[32]={0}; lseek(fd,0,SEEK_SET); read(fd,b,11);
+        printf("%s\n",b); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - hl-memfd-ok
+- id: weird/mongo-cpu-topology
+  image: mongo
+  run:
+    argv:
+    - mongod
+    - --version
+  expect:
+    stdout_contains:
+    - db version
+- id: weird/node-primes
+  image: node:alpine
+  run:
+    shell: node -e 'let p=0;for(let n=2;n<100000;n++){let q=1;for(let d=2;d*d<=n;d++)if(n%d===0){q=0;break}p+=q}console.log("PRIMES="+p)'
+  expect:
+    stdout_contains:
+    - PRIMES=9592
+- id: weird/nproc
+  image: alpine:latest
+  run:
+    shell: '[ "$(nproc)" -ge 1 ] && echo NPROC-OK || echo NPROC-BAD'
+  expect:
+    stdout_contains:
+    - NPROC-OK
+- id: weird/openssl-sha256
+  image: alpine/openssl:latest
+  class: long
+  run:
+    shell: set -eu; printf abc > /tmp/input; openssl dgst -sha256 /tmp/input | awk '{print $NF}'
+  expect:
+    stdout_contains:
+    - ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+- id: weird/openssl-sha512
+  image: alpine/openssl:latest
+  class: long
+  run:
+    shell: set -eu; printf abc > /tmp/input; openssl dgst -sha512 /tmp/input | awk '{print $NF}'
+  expect:
+    stdout_contains:
+    - ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f
+- id: weird/openssl-speed
+  image: alpine/openssl:latest
+  class: long
+  run:
+    shell: |-
+      set -eu; output=$(openssl speed -seconds 1 -evp aes-128-cbc 2>&1); printf '%s
+      ' "$output" | grep -q Doing; echo SPEED-OK
+  expect:
+    stdout_contains:
+    - SPEED-OK
+- id: weird/perl-regex
+  image: perl:5.40
+  run:
+    shell: perl -e '$s="abc"x100000; $n=()=$s=~/abc/g; print "REGEX=$n\n"'
+  expect:
+    stdout_contains:
+    - REGEX=100000
+- id: weird/prctl-name
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <sys/prctl.h>
+      int main(){
+        prctl(PR_SET_NAME,"hl-proc");
+        char n[16]={0}; prctl(PR_GET_NAME,n);
+        printf("PRCTL=%s\n",n); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - PRCTL=hl-proc
+- id: weird/proc-cpuinfo
+  image: alpine:latest
+  run:
+    shell: grep -qE '^(processor|Features|flags)' /proc/cpuinfo && echo CPUINFO-OK || echo CPUINFO-NO
+  expect:
+    stdout_contains:
+    - CPUINFO-OK
+- id: weird/pthread-atomics
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <pthread.h>
+      #include <stdatomic.h>
+      atomic_long c=0;
+      void*w(void*x){ (void)x; for(int i=0;i<100000;i++) atomic_fetch_add(&c,1); return 0; }
+      int main(){ pthread_t t[8]; for(int i=0;i<8;i++)pthread_create(&t[i],0,w,0);
+        for(int i=0;i<8;i++)pthread_join(t[i],0);
+        printf("THREADS=%ld\n",(long)c); return 0;}
+      CEOF
+      cc /m.c -O2 -pthread -o /m && /m
+  expect:
+    stdout_contains:
+    - THREADS=800000
+- id: weird/ptrace-traceme
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <sys/ptrace.h>
+      int main(){
+        long r=ptrace(PTRACE_TRACEME,0,0,0);
+        printf("PTRACE=%ld\n", r); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - PTRACE=0
+- id: weird/pypy-compute
+  image: pypy:3
+  run:
+    shell: pypy3 -c "print('PYPY='+str(sum(1 for n in range(2,30000) if all(n%d for d in range(2,int(n**0.5)+1)))))"
+  expect:
+    stdout_contains:
+    - PYPY=3245
+- id: weird/python-ctypes
+  image: python:3.12-slim
+  run:
+    shell: python3 -c "import ctypes;libc=ctypes.CDLL(None);print('CTYPES='+str(libc.strlen(b'hello')))"
+  expect:
+    stdout_contains:
+    - CTYPES=5
+- id: weird/python-hashlib
+  image: python:3.12-slim
+  run:
+    shell: python3 -c "import hashlib;print('SHA='+hashlib.sha256(b'abc').hexdigest())"
+  expect:
+    stdout_contains:
+    - SHA=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+- id: weird/python-zlib
+  image: python:3.12-slim
+  run:
+    shell: python3 -c "import zlib;d=bytes(range(256))*100;print('ZLIB='+str(len(zlib.decompress(zlib.compress(d,9)))))"
+  expect:
+    stdout_contains:
+    - ZLIB=25600
+- id: weird/r-compute
+  image: r-base
+  class: long
+  run:
+    shell: Rscript -e 'cat("R=", sum(as.numeric(1:1000)), "\n", sep="")'
+  expect:
+    stdout_contains:
+    - R=500500
+- id: weird/ruby-fib
+  image: ruby:3.3
+  run:
+    shell: ruby -e 'a,b=0,1;50.times{a,b=b,a+b};puts "RB=#{a}"'
+  expect:
+    stdout_contains:
+    - RB=12586269025
+- id: weird/ruby-yjit
+  image: ruby:3.3
+  run:
+    shell: ruby --yjit -e 's=0; (1..2000000).each{|i| s+=i%7}; puts "YJIT=#{s}"'
+  expect:
+    stdout_contains:
+    - YJIT=5999997
+- id: weird/sched-affinity
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #define _GNU_SOURCE
+      #include <stdio.h>
+      #include <sched.h>
+      int main(){
+        cpu_set_t s; CPU_ZERO(&s);
+        if(sched_getaffinity(0,sizeof s,&s)<0){perror("aff");return 1;}
+        printf("AFFINITY=%s\n", CPU_COUNT(&s)>0?"nonzero":"zero"); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - AFFINITY=nonzero
+- id: weird/seccomp-filter
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #define _GNU_SOURCE
+      #include <stdio.h>
+      #include <linux/seccomp.h>
+      #include <linux/filter.h>
+      #include <sys/prctl.h>
+      #include <sys/syscall.h>
+      #include <unistd.h>
+      int main(){
+        struct sock_filter f[]={ BPF_STMT(BPF_RET|BPF_K, SECCOMP_RET_ALLOW) };
+        struct sock_fprog prog={.len=1,.filter=f};
+        prctl(PR_SET_NO_NEW_PRIVS,1,0,0,0);
+        if(syscall(SYS_seccomp,SECCOMP_SET_MODE_FILTER,0,&prog)<0){perror("seccomp");return 1;}
+        printf("SECCOMP=installed\n"); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - SECCOMP=installed
+- id: weird/self-modifying-rwx
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <string.h>
+      #include <sys/mman.h>
+      int main(void){
+        unsigned char *m=mmap(0,4096,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+        if(m==MAP_FAILED){perror("mmap");return 1;}
+      #if defined(__x86_64__)
+        unsigned char code[]={0xB8,0x2A,0x00,0x00,0x00,0xC3};
+      #elif defined(__aarch64__)
+        unsigned char code[]={0x40,0x05,0x80,0x52,0xC0,0x03,0x5F,0xD6};
+      #endif
+        memcpy(m,code,sizeof(code));
+        __builtin___clear_cache((char*)m,(char*)m+sizeof(code));
+        int (*f)(void)=(int(*)(void))m;
+        printf("RWX=%d\n",f());
+        return 0;
+      }
+      CEOF
+      cc /m.c -O0 -o /m && /m
+  expect:
+    stdout_contains:
+    - RWX=42
+- id: weird/sigsegv-recover
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <signal.h>
+      #include <setjmp.h>
+      static sigjmp_buf jb;
+      static void h(int s){ (void)s; siglongjmp(jb,1); }
+      int main(){
+        signal(SIGSEGV,h);
+        if(sigsetjmp(jb,1)==0){ volatile int *p=0; *p=1; printf("NOFAULT\n"); }
+        else printf("RECOVERED\n");
+        return 0;
+      }
+      CEOF
+      cc /m.c -O0 -o /m && /m
+  expect:
+    stdout_contains:
+    - RECOVERED
+- id: weird/simd-probe
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #if defined(__x86_64__)
+      #include <cpuid.h>
+      int main(){ unsigned a,b,c,d; __get_cpuid(1,&a,&b,&c,&d);
+        printf("SIMD=%s\n",(d&(1u<<26))?"ok":"no"); return 0; }
+      #elif defined(__aarch64__)
+      #include <sys/auxv.h>
+      int main(){ unsigned long h=getauxval(AT_HWCAP);
+        printf("SIMD=%s\n",(h&(1u<<1))?"ok":"no"); return 0; }
+      #endif
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - SIMD=ok
+- id: weird/smc-rewrite
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <string.h>
+      #include <sys/mman.h>
+      typedef int(*fn)(void);
+      int main(void){
+        unsigned char *m=mmap(0,4096,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+        if(m==MAP_FAILED){perror("mmap");return 1;}
+      #if defined(__x86_64__)
+        unsigned char c1[]={0xB8,0x01,0x00,0x00,0x00,0xC3};
+        unsigned char c2[]={0xB8,0x02,0x00,0x00,0x00,0xC3};
+      #elif defined(__aarch64__)
+        unsigned char c1[]={0x20,0x00,0x80,0x52,0xC0,0x03,0x5F,0xD6};
+        unsigned char c2[]={0x40,0x00,0x80,0x52,0xC0,0x03,0x5F,0xD6};
+      #endif
+        memcpy(m,c1,sizeof c1); __builtin___clear_cache((char*)m,(char*)m+16);
+        int r1=((fn)m)();
+        memcpy(m,c2,sizeof c2); __builtin___clear_cache((char*)m,(char*)m+16);
+        int r2=((fn)m)();
+        printf("SMC=%d,%d\n",r1,r2); return 0;
+      }
+      CEOF
+      cc /m.c -O0 -o /m && /m
+  expect:
+    stdout_contains:
+    - SMC=1,2
+- id: weird/static-nonpie-helloworld
+  image: hello-world
+  run:
+    entrypoint: true
+  expect:
+    stdout_contains:
+    - Hello from Docker
+- id: weird/tcl
+  image: debian:bookworm
+  class: long
+  run:
+    shell: set -eu; apt-get update >/dev/null; apt-get install -y tcl >/dev/null; command -v tclsh >/dev/null; echo 'set s 0; for {set i 1} {$i<=1000} {incr i} {incr s $i}; puts TCL=$s' | tclsh
+  expect:
+    stdout_contains:
+    - TCL=500500
+- id: weird/timerfd
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <sys/timerfd.h>
+      #include <unistd.h>
+      #include <stdint.h>
+      int main(){
+        int fd=timerfd_create(CLOCK_MONOTONIC,0);
+        if(fd<0){perror("timerfd");return 1;}
+        struct itimerspec its={{0,0},{0,50000000}};
+        timerfd_settime(fd,0,&its,0);
+        uint64_t e; read(fd,&e,8);
+        printf("TIMERFD=%llu\n",(unsigned long long)e); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - TIMERFD=1
+- id: weird/tsc-counter
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <stdint.h>
+      static inline uint64_t rd(){
+      #if defined(__x86_64__)
+       unsigned lo,hi; __asm__ volatile("rdtsc":"=a"(lo),"=d"(hi)); return ((uint64_t)hi<<32)|lo;
+      #elif defined(__aarch64__)
+       uint64_t v; __asm__ volatile("mrs %0, cntvct_el0":"=r"(v)); return v;
+      #endif
+      }
+      int main(){uint64_t a=rd(); for(volatile long i=0;i<100000;i++); uint64_t b=rd();
+       printf("TSC=%s\n", b>=a?"ok":"no"); return 0;}
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - TSC=ok
+- id: weird/userfaultfd
+  image: gcc:latest
+  class: long
+  xfail:
+  - arm64
+  - amd64
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #define _GNU_SOURCE
+      #include <stdio.h>
+      #include <linux/userfaultfd.h>
+      #include <sys/syscall.h>
+      #include <sys/ioctl.h>
+      #include <unistd.h>
+      int main(){
+        int fd=syscall(SYS_userfaultfd,0);
+        if(fd<0){perror("userfaultfd");return 1;}
+        struct uffdio_api api={.api=UFFD_API};
+        if(ioctl(fd,UFFDIO_API,&api)<0){perror("api");return 1;}
+        printf("UFFD=ok\n"); return 0;
+      }
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - 'userfaultfd: Operation not permitted'
+- id: weird/v8-bigint
+  image: node:alpine
+  run:
+    shell: node -e 'let a=0n,b=1n;for(let i=0;i<90;i++){[a,b]=[b,a+b]};console.log("FIB="+a)'
+  expect:
+    stdout_contains:
+    - FIB=2880067194370816120
+- id: weird/v8-jit-in-jit
+  image: node:alpine
+  run:
+    shell: node -e 'let s=0;for(let i=1;i<=1000000;i++)s+=i;console.log("sum",s)'
+  expect:
+    stdout_contains:
+    - sum 500000500000
+- id: weird/vdso-clock
+  image: gcc:latest
+  class: long
+  run:
+    shell: |-
+      cat > /m.c <<'CEOF'
+      #include <stdio.h>
+      #include <time.h>
+      int main(){struct timespec a,b; clock_gettime(CLOCK_MONOTONIC,&a);
+        for(volatile long i=0;i<1000000;i++); clock_gettime(CLOCK_MONOTONIC,&b);
+        printf("CLOCK=%s\n",(b.tv_sec>a.tv_sec||(b.tv_sec==a.tv_sec&&b.tv_nsec>=a.tv_nsec))?"ok":"no"); return 0;}
+      CEOF
+      cc /m.c -O2 -o /m && /m
+  expect:
+    stdout_contains:
+    - CLOCK=ok
+- id: weird/xz-roundtrip
+  image: debian:bookworm
+  class: long
+  run:
+    shell: set -eu; apt-get update >/dev/null; apt-get install -y xz-utils >/dev/null; seq 1 1000 > /tmp/input; xz -9 -c /tmp/input > /tmp/input.xz; xz -d -c /tmp/input.xz > /tmp/output; cmp /tmp/input /tmp/output; awk '{s+=$1}END{print "XZ="s}' /tmp/output
+  expect:
+    stdout_contains:
+    - XZ=500500
+- id: weird/zstd-roundtrip
+  image: debian:bookworm
+  class: long
+  run:
+    shell: set -eu; apt-get update >/dev/null; apt-get install -y zstd >/dev/null; seq 1 1000 > /tmp/input; zstd -q -19 -o /tmp/input.zst /tmp/input; zstd -q -d -o /tmp/output /tmp/input.zst; cmp /tmp/input /tmp/output; awk '{s+=$1}END{print "ZSTD="s}' /tmp/output
+  expect:
+    stdout_contains:
+    - ZSTD=500500

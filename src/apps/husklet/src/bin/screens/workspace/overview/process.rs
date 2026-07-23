@@ -11,10 +11,9 @@ impl<'a> WorkspaceProcesses<'a> {
     }
 
     /// Reads launcher shells and their guest descendants from the host process table.
-    pub(crate) fn read(&self) -> Vec<Vec<String>> {
+    pub(crate) fn read(&self) -> std::io::Result<Vec<Vec<String>>> {
         crate::host::process::Processes::snapshot()
             .map(|snapshot| filter_workspace_procs(&snapshot, self.name, self.shell))
-            .unwrap_or_default()
     }
 }
 
@@ -26,6 +25,17 @@ struct HostProcess {
 }
 
 impl HostProcess {
+    fn launches(&self, workspace: &str) -> bool {
+        let workspace = hl_ws::Workspace::storage_component(workspace);
+        let marker = format!("--worker launch {workspace}");
+        self.command.match_indices(&marker).any(|(index, _)| {
+            let before = &self.command[..index];
+            let after = &self.command[index + marker.len()..];
+            before.chars().next_back().is_none_or(char::is_whitespace)
+                && after.chars().next().is_none_or(char::is_whitespace)
+        })
+    }
+
     fn guest_command(&self) -> String {
         if let Some(index) = self.command.find(" --rootfs ") {
             let after = &self.command[index + " --rootfs ".len()..];
@@ -78,11 +88,7 @@ pub(crate) fn filter_workspace_procs(
     // argv, so this set includes BOTH the real launcher shells and their in-guest forks.
     let launch_pids: std::collections::HashSet<String> = procs
         .iter()
-        .filter(|p| {
-            let toks: Vec<&str> = p.command.split_whitespace().collect();
-            toks.windows(3)
-                .any(|window| window == ["--worker", "launch", ws_name])
-        })
+        .filter(|process| process.launches(ws_name))
         .map(|p| p.pid.clone())
         .collect();
     // A launcher shell is a launch process whose PARENT is not itself a launcher (its parent is Husklet
@@ -153,7 +159,12 @@ pub(crate) fn live_proc_pane() -> (gtk::ScrolledWindow, gtk::Box) {
     (sc, body)
 }
 
-pub(crate) fn fill_proc_table(body: &gtk::Box, rows: &[Vec<String>], error: Option<&str>) {
+pub(crate) fn fill_proc_table(
+    body: &gtk::Box,
+    workspace: &str,
+    rows: &[Vec<String>],
+    error: Option<&str>,
+) {
     while let Some(c) = body.first_child() {
         body.remove(&c);
     }
@@ -173,9 +184,12 @@ pub(crate) fn fill_proc_table(body: &gtk::Box, rows: &[Vec<String>], error: Opti
         return;
     }
     for r in rows {
-        let pid = crate::host::process::ProcessId::parse(
+        let Some(pid) = crate::host::process::ProcessId::parse(
             r.first().map(String::as_str).unwrap_or_default(),
-        );
+            &hl_ws::Workspace::storage_component(workspace),
+        ) else {
+            continue;
+        };
         let name = r.get(2).cloned().unwrap_or_default();
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         row.add_css_class("trow");
@@ -196,12 +210,27 @@ pub(crate) fn fill_proc_table(body: &gtk::Box, rows: &[Vec<String>], error: Opti
         stop.add_css_class("sigbtn");
         stop.set_tooltip_text(Some("Stop — send SIGTERM"));
         stop.set_valign(gtk::Align::Center);
-        stop.connect_clicked(move |_| pid.terminate());
+        let stop_pid = pid.clone();
+        stop.connect_clicked(move |_| {
+            if let Err(error) = stop_pid.terminate() {
+                hl_log::hl_warn!(
+                    hl_log::tag::RUNTIME,
+                    "workspace process stop ignored: {error}"
+                );
+            }
+        });
         let force = gtk::Button::from_icon_name("user-trash-symbolic");
         force.add_css_class("sigbtn");
         force.set_tooltip_text(Some("Force kill — send SIGKILL"));
         force.set_valign(gtk::Align::Center);
-        force.connect_clicked(move |_| pid.kill());
+        force.connect_clicked(move |_| {
+            if let Err(error) = pid.kill() {
+                hl_log::hl_warn!(
+                    hl_log::tag::RUNTIME,
+                    "workspace process kill ignored: {error}"
+                );
+            }
+        });
         row.append(&stop);
         row.append(&force);
         body.append(&row);

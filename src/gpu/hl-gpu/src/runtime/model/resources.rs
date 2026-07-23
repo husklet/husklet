@@ -342,7 +342,9 @@ impl TextureDesc {
             TextureDim::D3 if d.sample_count != 1 => {
                 return Err(GpuError::ResourceLimit("invalid 3D texture sample count"));
             }
-            TextureDim::Cube if d.width != d.height || d.depth % 6 != 0 || d.sample_count != 1 => {
+            TextureDim::Cube
+                if d.width != d.height || !d.depth.is_multiple_of(6) || d.sample_count != 1 =>
+            {
                 return Err(GpuError::ResourceLimit("invalid cube texture shape"));
             }
             _ => {}

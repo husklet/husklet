@@ -1,6 +1,8 @@
 //! Surfaceless display + config enumeration ABI — the path the real Khronos `eglinfo` (and every GL
 //! toolkit's EGL bring-up: GTK, Qt, Chromium/Chrome ozone, Zed) drives at startup, run against the staged
 //! `libEGL.so.1` through a `dlopen`, exactly as those programs do.
+
+#![cfg(target_os = "linux")]
 //!
 //! REGRESSION GUARD (real crash): `eglinfo` SIGSEGV'd against our libEGL because the client extension
 //! string advertises `EGL_EXT_platform_base`, so a caller resolves `eglGetPlatformDisplayEXT` via

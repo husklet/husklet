@@ -341,19 +341,10 @@ impl MemoryRenderBufferInner {
 }
 
 /// A memory backed render buffer
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MemoryRenderBuffer {
     id: Id,
     inner: Arc<Mutex<MemoryRenderBufferInner>>,
-}
-
-impl Default for MemoryRenderBuffer {
-    fn default() -> Self {
-        Self {
-            id: Id::new(),
-            inner: Default::default(),
-        }
-    }
 }
 
 impl MemoryRenderBuffer {

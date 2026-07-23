@@ -4,7 +4,6 @@
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
 NIX_DEV = nix develop "path:$(CURDIR)/nix" --command
-CONTAINERS := $(abspath ../containers)
 
 all: design-lint test
 
@@ -26,7 +25,7 @@ test: design-lint
 test-ci: fmt-check test
 
 containers:
-	cargo test --manifest-path "$(CONTAINERS)/Cargo.toml" --workspace
+	cargo test -p hl-images -p hl-container -p hl-daemon -p hl-client
 
 mac-crates:
 	@[ "$$(uname)" = "Darwin" ] || { echo "mac-crates: macOS-only; skipping on $$(uname)"; exit 0; }
@@ -38,8 +37,10 @@ mac-crates:
 
 app:
 	@chmod +x src/apps/husklet/package/bundle.sh src/apps/husklet/package/make-dmg.sh
-	CARGO_TARGET_DIR="$(CURDIR)/target" cargo build --manifest-path "$(CONTAINERS)/Cargo.toml" --release -p hl-daemon
-	HL_VERSION=$(VERSION) $(NIX_DEV) src/apps/husklet/package/bundle.sh $(VERSION)
+	HL_VERSION=$(VERSION) $(NIX_DEV) bash -euc '\
+	  export CARGO_TARGET_DIR="$(CURDIR)/target-macos" \
+	         HL_BUNDLE_TARGET="$(CURDIR)/target"; \
+	  src/apps/husklet/package/bundle.sh $(VERSION)'
 
 dmg: app
 	$(NIX_DEV) src/apps/husklet/package/make-dmg.sh $(VERSION)

@@ -2,8 +2,8 @@
 //!
 //! A counter is a `&'static str name -> u64` total. Increment/add only touch the
 //! registry when profiling is enabled for the tag (checked by `hl_count!` /
-//! `hl_add!`), so a counter under a disabled tag is a pure no-op — one relaxed load
-//! + branch, no lock. When enabled, updates go through the sharded registry so
+//! `hl_add!`), so a counter under a disabled tag is a pure no-op: one relaxed load
+//! and one branch, with no lock. When enabled, updates go through the sharded registry so
 //! concurrent threads bumping different counters don't serialize on one lock.
 
 use crate::shard::ShardMap;

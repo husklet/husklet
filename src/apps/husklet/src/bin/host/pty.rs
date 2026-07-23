@@ -9,11 +9,20 @@ impl PtyProcess {
         env: &[&str],
     ) -> std::io::Result<(i32, vte4::Pty)> {
         use std::ffi::{CStr, CString};
-        // Darwin and glibc assign different values to the non-portable SETSID extension.
+        let c_argv = Self::strings(argv, "argument")?;
+        if c_argv.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "terminal process requires an executable",
+            ));
+        }
+        let c_env = Self::strings(env, "environment value")?;
+        // Darwin and glibc assign different values to the non-portable SETSID extension. Resetting the
+        // mask/dispositions keeps GTK's process-wide signal policy out of the isolated worker.
         #[cfg(target_os = "macos")]
-        const POSIX_SPAWN_SETSID: libc::c_short = 0x0400;
+        const POSIX_SPAWN_FLAGS: libc::c_short = 0x0400 | 0x4000 | 0x0004 | 0x0008;
         #[cfg(target_os = "linux")]
-        const POSIX_SPAWN_SETSID: libc::c_short = 0x0080;
+        const POSIX_SPAWN_FLAGS: libc::c_short = 0x0080 | 0x0004 | 0x0008;
         unsafe {
             let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
             if master < 0 {
@@ -35,10 +44,7 @@ impl PtyProcess {
             let sname = libc::ptsname(master);
             if sname.is_null() {
                 libc::close(master);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "ptsname failed",
-                ));
+                return Err(std::io::Error::other("ptsname failed"));
             }
             let slave = CString::from(CStr::from_ptr(sname));
 
@@ -53,13 +59,27 @@ impl PtyProcess {
 
             let mut attr: libc::posix_spawnattr_t = std::mem::zeroed();
             libc::posix_spawnattr_init(&mut attr);
-            libc::posix_spawnattr_setflags(&mut attr, POSIX_SPAWN_SETSID);
+            let mut mask: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut mask);
+            libc::posix_spawnattr_setsigmask(&mut attr, &mask);
+            let mut defaults: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut defaults);
+            // Signals 1..31 are the portable POSIX/BSD set that a GUI runtime may alter. Real-time
+            // signals are platform-specific and remain untouched.
+            for signal in 1..=31 {
+                if signal != libc::SIGKILL && signal != libc::SIGSTOP {
+                    libc::sigaddset(&mut defaults, signal);
+                }
+            }
+            libc::posix_spawnattr_setsigdefault(&mut attr, &defaults);
+            // macOS GUI libraries keep internal descriptors without FD_CLOEXEC. The Darwin
+            // CLOEXEC_DEFAULT extension (0x4000) closes every descriptor not mentioned by these file
+            // actions, preventing GTK event pipes/sockets from leaking into the engine worker.
+            libc::posix_spawnattr_setflags(&mut attr, POSIX_SPAWN_FLAGS);
 
-            let c_argv: Vec<CString> = argv.iter().map(|s| CString::new(*s).unwrap()).collect();
             let mut p_argv: Vec<*mut libc::c_char> =
                 c_argv.iter().map(|c| c.as_ptr() as *mut _).collect();
             p_argv.push(std::ptr::null_mut());
-            let c_env: Vec<CString> = env.iter().map(|s| CString::new(*s).unwrap()).collect();
             let mut p_env: Vec<*mut libc::c_char> =
                 c_env.iter().map(|c| c.as_ptr() as *mut _).collect();
             p_env.push(std::ptr::null_mut());
@@ -84,9 +104,36 @@ impl PtyProcess {
             use std::os::fd::FromRawFd;
             let owned = std::os::fd::OwnedFd::from_raw_fd(master);
             let pty = vte4::Pty::foreign_sync(owned, gio::Cancellable::NONE)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
             term.set_pty(Some(&pty));
             Ok((pid, pty))
         }
+    }
+
+    fn strings(values: &[&str], kind: &str) -> std::io::Result<Vec<std::ffi::CString>> {
+        values
+            .iter()
+            .map(|value| {
+                std::ffi::CString::new(*value).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("terminal {kind} contains a NUL byte"),
+                    )
+                })
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PtyProcess;
+
+    #[test]
+    fn nul_bytes_are_rejected_before_allocating_a_pty() {
+        let error = PtyProcess::strings(&["valid", "bad\0value"], "argument").unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("NUL"));
     }
 }

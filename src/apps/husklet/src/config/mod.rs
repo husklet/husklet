@@ -90,15 +90,34 @@ impl VpnConfig {
             .split_once(':')
             .and_then(|(kind, endpoint)| VpnKind::parse(kind).map(|kind| (kind, endpoint.trim())))
         else {
-            return Some(VpnConfig::socks5(s));
+            return Self::valid_proxy_endpoint(s).then(|| VpnConfig::socks5(s));
         };
         if endpoint.is_empty() {
+            return None;
+        }
+        if matches!(kind, VpnKind::Socks5 | VpnKind::Http) && !Self::valid_proxy_endpoint(endpoint)
+        {
             return None;
         }
         Some(VpnConfig {
             kind,
             endpoint: endpoint.to_owned(),
         })
+    }
+
+    fn valid_proxy_endpoint(endpoint: &str) -> bool {
+        let Some((host, port)) = endpoint.rsplit_once(':') else {
+            return false;
+        };
+        let host = host.trim();
+        let port = port.trim();
+        let bracketed = host.starts_with('[') && host.ends_with(']') && host.len() > 2;
+        let plain = !host.contains(['[', ']', ':']);
+        !host.is_empty()
+            && !host.bytes().any(|byte| byte.is_ascii_whitespace())
+            && (plain || bracketed)
+            && !port.is_empty()
+            && port.parse::<u16>().is_ok_and(|port| port > 0)
     }
     /// The canonical `<kind>:<endpoint>` persisted form (round-trips through [`VpnConfig::parse`]).
     pub fn to_spec(&self) -> String {
@@ -158,24 +177,40 @@ impl CudaDevice {
         }
         let mut d = CudaDevice::default_device();
         let parts: Vec<&str> = s.split('|').collect();
-        if let Some(n) = parts.first() {
-            let n = n.trim();
-            if !n.is_empty() {
-                d.name = n.to_string();
-            }
+        if parts.len() > 3 {
+            return None;
         }
+        let name = parts.first()?.trim();
+        if name.is_empty() {
+            return None;
+        }
+        d.name = name.to_owned();
         if let Some(cc) = parts.get(1) {
             let cc = cc.trim();
-            if !cc.is_empty() {
-                d.compute_capability = cc.to_string();
+            if !Self::valid_capability(cc) {
+                return None;
             }
+            d.compute_capability = cc.to_string();
         }
         if let Some(v) = parts.get(2) {
-            if let Ok(mb) = v.trim().parse::<u32>() {
-                d.vram_mb = mb;
+            let mb = v.trim().parse::<u32>().ok()?;
+            if mb == 0 {
+                return None;
             }
+            d.vram_mb = mb;
         }
         Some(d)
+    }
+
+    fn valid_capability(value: &str) -> bool {
+        let Some((major, minor)) = value.split_once('.') else {
+            return false;
+        };
+        !major.is_empty()
+            && !minor.is_empty()
+            && !minor.contains('.')
+            && major.bytes().all(|byte| byte.is_ascii_digit())
+            && minor.bytes().all(|byte| byte.is_ascii_digit())
     }
     /// The canonical persisted form (round-trips through [`CudaDevice::parse`]).
     pub fn to_spec(&self) -> String {
@@ -220,6 +255,11 @@ impl DerefMut for WorkspaceConfig {
 }
 
 impl WorkspaceConfig {
+    /// Stable, whitespace-free identity used at process and filesystem boundaries.
+    pub fn key(&self) -> String {
+        hl_ws::Workspace::storage_component(&self.name)
+    }
+
     /// A fresh config: a bare `Workspace` with the safe feature defaults (docker socket on; everything else off).
     pub fn new(name: impl Into<String>, image: impl Into<String>, arch: Arch) -> WorkspaceConfig {
         WorkspaceConfig::from_ws(Workspace::new(name, image, arch))
@@ -283,19 +323,27 @@ impl WorkspaceConfig {
 /// (`[workspace]` + `key = value` lines, repeatable `env`/`mount`) — no serde/toml. Still reads the legacy
 /// one-line `name<TAB>arch<TAB>image` rows so old config keeps working. Persists the full [`WorkspaceConfig`]
 /// (bare workspace + feature settings), byte-compatible with the format the old `hl-ws` store wrote.
+#[derive(Debug)]
 pub struct WorkspaceStore {
     path: PathBuf,
     items: Vec<WorkspaceConfig>,
 }
 
 impl WorkspaceStore {
-    /// Load the store at `path` (absent/empty → empty store; malformed entries skipped).
-    pub fn load(path: impl Into<PathBuf>) -> WorkspaceStore {
+    /// Opens the store at `path`. An absent file is an empty store.
+    ///
+    /// # Errors
+    ///
+    /// Returns read failures and malformed workspace documents. Callers must not replace a store they
+    /// could not read, because doing so could destroy recoverable configuration.
+    pub fn load(path: impl Into<PathBuf>) -> io::Result<WorkspaceStore> {
         let path = path.into();
-        let items = std::fs::read_to_string(&path)
-            .map(|text| WorkspaceDocument::parse(&text))
-            .unwrap_or_default();
-        WorkspaceStore { path, items }
+        let items = match std::fs::read_to_string(&path) {
+            Ok(text) => WorkspaceDocument::parse(&text)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        Ok(WorkspaceStore { path, items })
     }
 
     pub fn all(&self) -> &[WorkspaceConfig] {
@@ -305,28 +353,37 @@ impl WorkspaceStore {
         self.items.iter().find(|w| w.name == name)
     }
 
+    pub fn get_key(&self, key: &str) -> Option<&WorkspaceConfig> {
+        self.items.iter().find(|workspace| workspace.key() == key)
+    }
+
     /// Add or replace a workspace by name, then persist.
     pub fn upsert(&mut self, ws: WorkspaceConfig) -> io::Result<()> {
-        self.items.retain(|w| w.name != ws.name);
-        self.items.push(ws);
-        self.save()
+        let mut items = self.items.clone();
+        items.retain(|workspace| workspace.name != ws.name);
+        items.push(ws);
+        self.save(&items)?;
+        self.items = items;
+        Ok(())
     }
 
     /// Remove a workspace by name; returns whether one was removed, then persists.
     pub fn remove(&mut self, name: &str) -> io::Result<bool> {
-        let before = self.items.len();
-        self.items.retain(|w| w.name != name);
-        let removed = self.items.len() != before;
-        self.save()?;
+        let mut items = self.items.clone();
+        let before = items.len();
+        items.retain(|workspace| workspace.name != name);
+        let removed = items.len() != before;
+        self.save(&items)?;
+        self.items = items;
         Ok(removed)
     }
 
-    fn save(&self) -> io::Result<()> {
+    fn save(&self, items: &[WorkspaceConfig]) -> io::Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let mut out = WorkspaceText::new();
-        for w in &self.items {
+        for w in items {
             out.section();
             out.field("name", &w.name);
             out.field("image", &w.image);
@@ -392,7 +449,7 @@ impl WorkspaceStore {
                 );
             }
         }
-        std::fs::write(&self.path, out.into_string())
+        hl_fs::File::from(self.path.clone()).replace(out.into_string()?)
     }
 }
 

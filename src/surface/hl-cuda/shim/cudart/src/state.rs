@@ -11,6 +11,7 @@ use std::time::Instant;
 use hl_cuda::model::stream::Stream;
 use hl_cuda::service::register::Registry;
 use hl_cuda::{CudaContext, CudaDeviceDesc};
+use hl_gpu::transport::DEFAULT_EXEC_SOCK;
 use hl_gpu::RemoteCommandSink;
 
 /// A `<<<>>>`-launch configuration pushed by `__cudaPushCallConfiguration` and consumed by the matching
@@ -52,7 +53,9 @@ impl State {
             .unwrap_or(8u64 << 30);
         State {
             ctx: CudaContext::new(CudaDeviceDesc::apple_default(vram)),
-            sink: RemoteCommandSink::from_env(),
+            sink: RemoteCommandSink::new(
+                std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
+            ),
             registry: Registry::new(),
             last_error: 0,
             device: 0,

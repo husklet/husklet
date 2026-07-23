@@ -1,34 +1,34 @@
-#[derive(Default, serde::Deserialize)]
-#[serde(default, rename_all = "PascalCase")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub(crate) struct ContainerSummary {
     pub(crate) names: Vec<String>,
     pub(crate) image: String,
     status: String,
 }
 
-#[derive(Default, serde::Deserialize)]
-#[serde(default, rename_all = "PascalCase")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub(crate) struct ImageSummary {
     pub(crate) repo_tags: Vec<String>,
     id: String,
     pub(crate) size: i64,
 }
 
-#[derive(Default, serde::Deserialize)]
-#[serde(default, rename_all = "PascalCase")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub(crate) struct VolumeSummary {
     pub(crate) name: String,
     driver: String,
 }
 
-#[derive(Default, serde::Deserialize)]
-#[serde(default, rename_all = "PascalCase")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub(crate) struct VolumesResponse {
     pub(crate) volumes: Vec<VolumeSummary>,
 }
 
-#[derive(Default, serde::Deserialize)]
-#[serde(default, rename_all = "PascalCase")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub(crate) struct NetworkSummary {
     name: String,
     driver: String,
@@ -39,6 +39,13 @@ pub(crate) struct WorkspaceResources<'a> {
     client: crate::host::transport::LocalHttp<'a>,
 }
 
+pub(crate) struct ResourceRows {
+    pub(crate) containers: Vec<Vec<String>>,
+    pub(crate) images: Vec<Vec<String>>,
+    pub(crate) volumes: Vec<Vec<String>>,
+    pub(crate) networks: Vec<Vec<String>>,
+}
+
 impl<'a> WorkspaceResources<'a> {
     pub(crate) fn new(socket: &'a std::path::Path) -> Self {
         Self {
@@ -46,10 +53,19 @@ impl<'a> WorkspaceResources<'a> {
         }
     }
 
-    pub(crate) fn containers(&self) -> Vec<Vec<String>> {
-        self.client
-            .get::<Vec<ContainerSummary>>("/containers/json?all=1")
-            .unwrap_or_default()
+    pub(crate) fn read(&self) -> std::io::Result<ResourceRows> {
+        Ok(ResourceRows {
+            containers: self.containers()?,
+            images: self.images()?,
+            volumes: self.volumes()?,
+            networks: self.networks()?,
+        })
+    }
+
+    fn containers(&self) -> std::io::Result<Vec<Vec<String>>> {
+        Ok(self
+            .client
+            .get::<Vec<ContainerSummary>>("/containers/json?all=1")?
             .into_iter()
             .map(|container| {
                 let name = container
@@ -61,13 +77,13 @@ impl<'a> WorkspaceResources<'a> {
                     .to_string();
                 vec![name, container.image, container.status]
             })
-            .collect()
+            .collect())
     }
 
-    pub(crate) fn images(&self) -> Vec<Vec<String>> {
-        self.client
-            .get::<Vec<ImageSummary>>("/images/json")
-            .unwrap_or_default()
+    fn images(&self) -> std::io::Result<Vec<Vec<String>>> {
+        Ok(self
+            .client
+            .get::<Vec<ImageSummary>>("/images/json")?
             .into_iter()
             .map(|image| {
                 let repository = image
@@ -84,25 +100,25 @@ impl<'a> WorkspaceResources<'a> {
                 let size = format!("{} MB", image.size / 1_000_000);
                 vec![repository, id, size]
             })
-            .collect()
+            .collect())
     }
 
-    pub(crate) fn volumes(&self) -> Vec<Vec<String>> {
-        self.client
-            .get::<VolumesResponse>("/volumes")
-            .unwrap_or_default()
+    fn volumes(&self) -> std::io::Result<Vec<Vec<String>>> {
+        Ok(self
+            .client
+            .get::<VolumesResponse>("/volumes")?
             .volumes
             .into_iter()
             .map(|volume| vec![volume.name, volume.driver])
-            .collect()
+            .collect())
     }
 
-    pub(crate) fn networks(&self) -> Vec<Vec<String>> {
-        self.client
-            .get::<Vec<NetworkSummary>>("/networks")
-            .unwrap_or_default()
+    fn networks(&self) -> std::io::Result<Vec<Vec<String>>> {
+        Ok(self
+            .client
+            .get::<Vec<NetworkSummary>>("/networks")?
             .into_iter()
             .map(|network| vec![network.name, network.driver, network.scope])
-            .collect()
+            .collect())
     }
 }

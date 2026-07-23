@@ -58,6 +58,17 @@ fn exact_name_match_no_prefix_collision() {
 }
 
 #[test]
+fn workspace_process_matching_preserves_names_with_spaces() {
+    let ps = "100 1 00:10 /x/husklet --worker launch design%20system pane-1\n\
+              101 1 00:20 /x/husklet --worker launch design slot";
+
+    let rows = filter_workspace_procs(ps, "design system", "bash");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0][0], "100");
+}
+
+#[test]
 fn workspace_overview_decodes_resource_fields() {
     let containers: Vec<ContainerSummary> =
         serde_json::from_str(r#"[{"Names":["/web"],"Image":"nginx","Status":"Up"}]"#).unwrap();
@@ -77,6 +88,9 @@ fn workspace_overview_decodes_resource_fields() {
     let networks: Vec<NetworkSummary> =
         serde_json::from_str(r#"[{"Name":"bridge","Driver":"bridge","Scope":"local"}]"#).unwrap();
     assert_eq!(networks[0].scope, "local");
+
+    assert!(serde_json::from_str::<Vec<ContainerSummary>>(r#"[{"Names":["/web"]}]"#).is_err());
+    assert!(serde_json::from_str::<Vec<ImageSummary>>(r#"[{"RepoTags":[]}]"#).is_err());
 }
 
 #[test]

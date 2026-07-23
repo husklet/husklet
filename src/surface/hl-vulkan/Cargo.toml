@@ -18,6 +18,7 @@ name = "hl_vulkan"
 path = "src/lib.rs"
 
 [dependencies]
+hl-fs = { path = "../../packages/hl-fs", default-features = false }
 # Temporary design classifications for emerging Vulkan model values.
 hl-design = { path = "../../packages/hl-design" }
 

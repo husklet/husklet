@@ -21,6 +21,13 @@ fn entity(value: &str) -> &str {
 #[hl_design::naming(reason = "external protocol terminology")]
 struct Updated;
 
+struct State<T>(T);
+
+#[hl_design::adapter]
+fn handler(State(value): State<u32>) -> u32 {
+    value
+}
+
 struct Example;
 
 impl Example {
@@ -36,6 +43,7 @@ fn classifications_preserve_functions() {
     assert_eq!(domain(7), 7);
     assert_eq!(package(2.0), 2.0);
     assert_eq!(entity("path"), "path");
+    assert_eq!(handler(State(9)), 9);
     let _ = Example.image("image");
     let _ = Updated;
 }

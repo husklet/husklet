@@ -2157,3 +2157,27 @@ impl BuildArgs {
 Remove `parse_build_args`; no classification macro. Do not eagerly convert `BuildArgs` into the stage's
 plain map: submitted arguments, global declarations, stage-scoped values, and environment variables have
 different precedence and lifecycles.
+
+## Framework extractors identify transport adapters
+
+### Original
+
+```rust
+#[hl_design::adapter]
+pub(super) async fn info(
+    State(state): State<DockerState>,
+) -> ApiResult<Json<SystemInfo>> {
+    let containers = state.containers.list().await
+        .map_err(ApiError::container)?;
+    let images = state.image_summaries().await?;
+    Ok(Json(SystemInfo::from_runtime(containers, images)))
+}
+```
+
+### Decision
+
+Keep the handler free. Axum owns the extractor signature, so it is a transport adapter rather than behavior
+to move mechanically onto `DockerState`. Moving it to `DockerState::info()` would mix HTTP response policy
+with application state. The handler may coordinate calls needed for one response, but domain calculations
+and reusable operations still belong to their entities or services. `#[hl_design::adapter]` records the
+reviewed framework boundary; it is not a provisional classification.

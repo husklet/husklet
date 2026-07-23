@@ -12,10 +12,19 @@ impl PaneWidget {
         let tw = session.window;
         match node {
             PaneNode::Leaf(pane) => {
-                let history = pane
-                    .history_file
-                    .as_ref()
-                    .and_then(|f| std::fs::read_to_string(Session::history_path(storage, f)).ok());
+                let history = pane.history_file.as_ref().and_then(|file| {
+                    match HistorySnapshot::read(storage, file) {
+                        Ok(history) => Some(history),
+                        Err(error) => {
+                            hl_log::hl_error!(
+                                hl_log::tag::RUNTIME,
+                                "failed to restore terminal history workspace={:?} file={file:?} error={error}",
+                                session.window.ws.name
+                            );
+                            None
+                        }
+                    }
+                });
                 // Reuse the pane's saved layout slot (fresh one if the session predates slots).
                 let slot = Slots::new(tw).adopt(&pane.slot);
                 let (term, pid) = make_terminal_ex(tw, pane.cwd.clone(), history, slot);

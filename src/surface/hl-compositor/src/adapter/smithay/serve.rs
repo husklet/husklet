@@ -61,14 +61,15 @@ struct LoopData {
 impl LoopData {
     /// Turn an accepted client stream into a wayland-server client with its own [`ClientState`]. Shared by
     /// both socket paths (raw bind and the standard `ListeningSocketSource`).
-    fn insert_client(&mut self, stream: UnixStream) {
-        let _ = stream.set_nonblocking(true);
+    fn insert_client(&mut self, stream: UnixStream) -> std::io::Result<()> {
+        stream.set_nonblocking(true)?;
         let cs: Arc<ClientState> = Arc::new(self.state.new_client_state());
-        if let Err(e) = self.display.handle().insert_client(stream, cs) {
-            eprintln!("hl-compositor: insert_client failed: {e}");
-            return;
-        }
+        self.display
+            .handle()
+            .insert_client(stream, cs)
+            .map_err(|error| std::io::Error::other(format!("insert Wayland client: {error}")))?;
         hl_info!(tag::WAYLAND, "client connected");
+        Ok(())
     }
 }
 
@@ -81,15 +82,21 @@ pub fn run(
     presenter: impl Into<AdapterPresenter>,
     stop: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
-    let display: Display<HlState> = Display::new().expect("create wl_display");
+    let display: Display<HlState> = Display::new()
+        .map_err(|error| std::io::Error::other(format!("create Wayland display: {error}")))?;
     let dh = display.handle();
     let state = HlState::new(&dh, presenter);
 
-    let _ = std::fs::remove_file(socket_path); // clear a stale socket
+    match std::fs::remove_file(socket_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     let listener = UnixListener::bind(socket_path)?;
     listener.set_nonblocking(true)?;
 
-    let event_loop: EventLoop<LoopData> = EventLoop::try_new().expect("calloop event loop");
+    let event_loop: EventLoop<LoopData> = EventLoop::try_new()
+        .map_err(|error| std::io::Error::other(format!("create compositor event loop: {error}")))?;
     let handle = event_loop.handle();
 
     // Accept new clients: each connection becomes a wayland-server client with its own ClientState.
@@ -100,7 +107,11 @@ pub fn run(
             |_, listener, data: &mut LoopData| {
                 loop {
                     match listener.accept() {
-                        Ok((stream, _)) => data.insert_client(stream),
+                        Ok((stream, _)) => {
+                            if let Err(error) = data.insert_client(stream) {
+                                eprintln!("hl-compositor: rejected client: {error}");
+                            }
+                        }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                         Err(e) => {
                             eprintln!("hl-compositor: accept error: {e}");
@@ -111,7 +122,7 @@ pub fn run(
                 Ok(PostAction::Continue)
             },
         )
-        .expect("insert socket source");
+        .map_err(|error| std::io::Error::other(format!("register Wayland socket: {error}")))?;
 
     drive(event_loop, LoopData { state, display }, stop)
 }
@@ -157,18 +168,15 @@ fn run_auto_inner(
     input: Option<Channel<InputCommand>>,
     on_bound: impl FnOnce(OsString),
 ) -> std::io::Result<()> {
-    let display: Display<HlState> = Display::new().expect("create wl_display");
+    let display: Display<HlState> = Display::new()
+        .map_err(|error| std::io::Error::other(format!("create Wayland display: {error}")))?;
     let dh = display.handle();
     let state = HlState::new(&dh, presenter);
 
     // The real discovery socket: `$XDG_RUNTIME_DIR/wayland-N` + its `.lock`, the same seam a real client
     // reaches through `$WAYLAND_DISPLAY`.
-    let source = ListeningSocketSource::new_auto().map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("bind wayland socket: {e}"),
-        )
-    })?;
+    let source = ListeningSocketSource::new_auto()
+        .map_err(|error| std::io::Error::other(format!("bind wayland socket: {error}")))?;
     let socket_name = source.socket_name().to_os_string();
     hl_info!(
         tag::WAYLAND,
@@ -177,14 +185,17 @@ fn run_auto_inner(
     );
     on_bound(socket_name);
 
-    let event_loop: EventLoop<LoopData> = EventLoop::try_new().expect("calloop event loop");
+    let event_loop: EventLoop<LoopData> = EventLoop::try_new()
+        .map_err(|error| std::io::Error::other(format!("create compositor event loop: {error}")))?;
     let handle = event_loop.handle();
     handle
         .insert_source(source, |stream, _, data: &mut LoopData| {
             // `ListeningSocketSource` yields one already-accepted client stream per invocation.
-            data.insert_client(stream);
+            if let Err(error) = data.insert_client(stream) {
+                eprintln!("hl-compositor: rejected client: {error}");
+            }
         })
-        .expect("insert listening socket source");
+        .map_err(|error| std::io::Error::other(format!("register Wayland socket: {error}")))?;
 
     // The host/test input seam: each `InputCommand` is applied to the seat as it arrives (a channel
     // message also wakes the loop, so injected input is delivered promptly, not a tick later).
@@ -195,7 +206,7 @@ fn run_auto_inner(
                     data.state.apply_input(cmd);
                 }
             })
-            .expect("insert input channel source");
+            .map_err(|error| std::io::Error::other(format!("register input channel: {error}")))?;
     }
 
     drive(event_loop, LoopData { state, display }, stop)
@@ -211,12 +222,7 @@ fn drive(
     let handle = event_loop.handle();
 
     // Drive the wl_display fd so queued client requests dispatch into the handlers.
-    let display_fd = data
-        .display
-        .backend()
-        .poll_fd()
-        .try_clone_to_owned()
-        .expect("dup display fd");
+    let display_fd = data.display.backend().poll_fd().try_clone_to_owned()?;
     handle
         .insert_source(
             Generic::new(display_fd, Interest::READ, Mode::Level),
@@ -227,7 +233,7 @@ fn drive(
                 Ok(PostAction::Continue)
             },
         )
-        .expect("insert display source");
+        .map_err(|error| std::io::Error::other(format!("register Wayland display: {error}")))?;
 
     // Native AppKit events are drained by `Presenter::poll_events` below rather than through a calloop
     // source, so keep their worst-case input latency well below one ProMotion frame. Other targets retain
@@ -279,6 +285,41 @@ fn drive(
                     PresenterEvent::Key { keycode, pressed } => {
                         InputCommand::Key { keycode, pressed }
                     }
+                    PresenterEvent::GestureSwipeBegin { fingers } => {
+                        InputCommand::GestureSwipeBegin { fingers }
+                    }
+                    PresenterEvent::GestureSwipeUpdate { dx, dy } => {
+                        InputCommand::GestureSwipeUpdate { dx, dy }
+                    }
+                    PresenterEvent::GestureSwipeEnd { cancelled } => {
+                        InputCommand::GestureSwipeEnd { cancelled }
+                    }
+                    PresenterEvent::GesturePinchBegin { fingers } => {
+                        InputCommand::GesturePinchBegin { fingers }
+                    }
+                    PresenterEvent::GesturePinchUpdate {
+                        dx,
+                        dy,
+                        scale,
+                        rotation,
+                    } => InputCommand::GesturePinchUpdate {
+                        dx,
+                        dy,
+                        scale,
+                        rotation,
+                    },
+                    PresenterEvent::GesturePinchEnd { cancelled } => {
+                        InputCommand::GesturePinchEnd { cancelled }
+                    }
+                    PresenterEvent::TabletProximityIn { x, y } => {
+                        InputCommand::TabletToolProximityIn { x, y }
+                    }
+                    PresenterEvent::TabletMotion { x, y, pressure } => {
+                        InputCommand::TabletToolMotion { x, y, pressure }
+                    }
+                    PresenterEvent::TabletTipDown => InputCommand::TabletToolTipDown,
+                    PresenterEvent::TabletTipUp => InputCommand::TabletToolTipUp,
+                    PresenterEvent::TabletProximityOut => InputCommand::TabletToolProximityOut,
                     PresenterEvent::Resize {
                         surface,
                         width,

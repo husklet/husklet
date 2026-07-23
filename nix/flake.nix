@@ -29,6 +29,10 @@
         # language toolchains
         python3 nodejs go rustc cargo
       ]);
+      alpine = pkgs.fetchurl {
+        url = "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/alpine-minirootfs-3.24.1-aarch64.tar.gz";
+        hash = "sha256-9VqQ9pBSxb1vkssJqPRwZZcIMLGUyRegBvuUAo5yElk=";
+      };
       mkEnv = name: paths: pkgs.buildEnv { inherit name paths; ignoreCollisions = true; };
     in {
       packages.${system} = {
@@ -44,6 +48,9 @@
           pkgs.gobject-introspection
           pkgs.glib                # glib-compile-schemas
           pkgs.gdk-pixbuf          # gdk-pixbuf-query-loaders
+          pkgs.cmake
+          pkgs.clang
+          pkgs.perl
           pkgs.macdylibbundler     # provides `dylibbundler` — relocate the dylib graph
           pkgs.create-dmg          # build the .dmg
         ];
@@ -60,6 +67,11 @@
         HL_HICOLOR_ICONS = pkgs.hicolor-icon-theme;
         HL_GSETTINGS_SCHEMAS = pkgs.gsettings-desktop-schemas;
         HL_LIBXKBCOMMON = pkgs.libxkbcommon;
+        # An explicit tool path avoids activating the cross stdenv setup hook, which would replace CC/CXX
+        # globally and make native macOS dependencies compile with the Linux compiler.
+        HL_AARCH64_LINUX_CC = "${pkgs.pkgsCross.aarch64-multiplatform.stdenv.cc}/bin/aarch64-unknown-linux-gnu-gcc";
+        # Deterministic Linux fixture used by the container integration suite.
+        HL_ALPINE_ARCHIVE = alpine;
       };
     };
 }

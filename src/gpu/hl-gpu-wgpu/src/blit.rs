@@ -11,6 +11,7 @@
 //!
 //! The blit pipeline/sampler are CACHED on the executor (`BlitCache`): the WGSL module + bind-group layout
 //! + the two samplers are built once, and one render pipeline per `(dst format, filter)` is memoized — a
+//!
 //! GL app blits constantly, so a per-call rebuild would be wasteful. The concrete source-texture bind group
 //! + a 16-byte UV-transform uniform are the only per-call allocations.
 

@@ -18,5 +18,9 @@ path = "src/lib.rs"
 # The shared foundation: the terminal-interface (`PtyBackend`) + `Launcher` traits + the `Workspace`
 # model. The edge points UP to the std-only leaf `hl-ws` (this crate implements those traits).
 hl-ws = { path = "../hl-ws" }
+hl-fs = { path = "../../packages/hl-fs", default-features = false }
 libc = "0.2"
 bitflags = "2"
+
+[dev-dependencies]
+tempfile.workspace = true

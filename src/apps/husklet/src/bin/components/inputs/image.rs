@@ -125,6 +125,16 @@ impl ImagePicker {
         root.append(&footer);
 
         win.set_child(Some(&root));
+        let keys = gtk::EventControllerKey::new();
+        let dismiss = win.clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                dismiss.close();
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        win.add_controller(keys);
         win.present();
         host::appearance::Appearance::apply();
     }

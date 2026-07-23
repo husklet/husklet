@@ -13,19 +13,10 @@ pub struct Daemon {
 
 impl Daemon {
     pub fn new(workspace: &str) -> Self {
-        let component: String = workspace
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                    character
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-
         Self {
-            directory: paths::hl_root().join("ws").join(component),
+            directory: paths::hl_root()
+                .join("ws")
+                .join(hl_ws::Workspace::storage_component(workspace)),
         }
     }
 
@@ -44,7 +35,11 @@ impl Daemon {
             return Ok(sock);
         }
         // Stale socket file from a dead daemon — remove so bind() succeeds.
-        let _ = std::fs::remove_file(&sock);
+        match std::fs::remove_file(&sock) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
 
         let bin = daemon_bin();
         if !bin.exists() {
@@ -74,15 +69,39 @@ impl Daemon {
         unsafe {
             use std::os::unix::process::CommandExt;
             cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
+                if libc::setsid() < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
             });
         }
-        cmd.spawn()?;
-        // Do NOT block the caller waiting for the socket — the daemon takes a few seconds to init its JIT
-        // engines + discover images, and blocking here stalls every shell launch. Return the path now; the
-        // docker-socket bind + the overview connect it once it is ready.
-        Ok(sock)
+        let child = cmd.spawn()?;
+        self.wait_for_start(child, std::time::Duration::from_secs(15))
+    }
+
+    fn wait_for_start(
+        &self,
+        mut child: std::process::Child,
+        timeout: std::time::Duration,
+    ) -> std::io::Result<PathBuf> {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if self.is_up() {
+                return Ok(self.socket());
+            }
+            if let Some(status) = child.try_wait()? {
+                return Err(std::io::Error::other(format!(
+                    "hl-daemon exited before publishing its API ({status}); see {}",
+                    self.directory.join("daemon.log").display()
+                )));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("hl-daemon did not publish {}", self.socket().display()),
+        ))
     }
 
     fn is_up(&self) -> bool {
@@ -97,4 +116,38 @@ fn daemon_bin() -> PathBuf {
         return PathBuf::from(p);
     }
     paths::daemon_bin()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Daemon;
+
+    #[test]
+    fn startup_reports_an_exited_daemon_without_waiting_for_timeout() {
+        let daemon = Daemon {
+            directory: tempfile::tempdir().unwrap().path().join("daemon"),
+        };
+        let child = std::process::Command::new("/usr/bin/false")
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+
+        let error = daemon
+            .wait_for_start(child, std::time::Duration::from_secs(10))
+            .unwrap_err();
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(error.to_string().contains("exited before publishing"));
+        assert!(error.to_string().contains("daemon.log"));
+    }
+
+    #[test]
+    fn distinct_workspace_names_never_share_daemon_state() {
+        let slash = Daemon::new("a/b");
+        let question = Daemon::new("a?b");
+
+        assert_ne!(slash.directory, question.directory);
+        assert!(slash.directory.ends_with("a%2Fb"));
+        assert!(question.directory.ends_with("a%3Fb"));
+    }
 }

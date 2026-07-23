@@ -203,7 +203,7 @@ impl PhysicalDeviceDesc {
             api_version: HL_API_VERSION,
             driver_version: HL_DRIVER_VERSION,
             vendor_id: APPLE_VENDOR_ID,
-            device_id: 0xdd_00_0001,
+            device_id: 0xdd00_0001,
             device_type: DEVICE_TYPE_INTEGRATED_GPU,
             pipeline_cache_uuid: *b"hlMetalVulkan\0\0\0",
             limits: Limits::metal_class(),

@@ -3,15 +3,17 @@
 //!
 //! Per arch it runs a nested `cargo build --release --target <triple>` of each shim crate into a
 //! dedicated target dir, then installs the resulting `.so` under its guest soname:
+//!
 //!   * `~/.hl/cuda/<arch>/libcuda.so.1`     (from `shim/cuda`, DT_SONAME baked by that crate's build.rs)
 //!   * `~/.hl/cuda/<arch>/libcudart.so.1`   (from `shim/cudart`)
 //!   * `~/.hl/nvml/<arch>/libnvidia-ml.so.1` (from `shim/nvml`)
-//! plus an unversioned `lib*.so` symlink some loaders want.
+//!
+//! Each library also has an unversioned `lib*.so` symlink for loaders that require one.
 //!
 //! HOST NOTE: only the aarch64 rust std is installed here (system rust, no rustup), so the aarch64 build
 //! MUST succeed (a failure fails this build). For x86_64 the build is ATTEMPTED, but if the target std is
 //! missing it emits a `cargo:warning` and skips gracefully — it never fails the build. Cross linkers
-//! `aarch64-linux-gnu-gcc` / `x86_64-linux-gnu-gcc` select the right linker per arch.
+//! The build environment selects the Linux linker.
 //!
 //! RECURSION GUARD: the nested shim build re-compiles THIS crate (the shim's `hl_cuda` path dep), which
 //! re-runs this build script. The `HL_CUDA_BUILDING_SHIM` sentinel (set on the child `cargo`) makes that
@@ -89,10 +91,14 @@ fn main() {
     let sysroot = rustc_sysroot();
 
     for (triple, linker, arch_dir) in ARCHES {
-        let host = *triple == host_triple();
+        let required = *arch_dir == "aarch64";
+        let linker = required
+            .then(|| std::env::var("HL_AARCH64_LINUX_CC").ok())
+            .flatten()
+            .unwrap_or_else(|| (*linker).to_owned());
         if !BuildEnvironment::std_available(&sysroot, triple) {
             // aarch64 std is guaranteed on this host; a missing HOST std is a real, fail-loud error.
-            if host {
+            if required {
                 panic!(
                     "host target std for {triple} is missing under {}",
                     sysroot.display()
@@ -107,10 +113,10 @@ fn main() {
 
         let mut built_ok = true;
         for s in SHIMS {
-            match build_shim(&cargo, &manifest_dir, &shim_target, s, triple, linker) {
+            match build_shim(&cargo, &manifest_dir, &shim_target, s, triple, &linker) {
                 Ok(()) => {
                     if let Err(e) = stage(&shim_target, &stage_root, s, triple, arch_dir) {
-                        if host {
+                        if required {
                             panic!("staging {} for {triple}: {e}", s.soname);
                         }
                         println!(
@@ -121,7 +127,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    if host {
+                    if required {
                         panic!("building {} for {triple}: {e}", s.dir);
                     }
                     println!(
@@ -174,6 +180,11 @@ fn build_shim(
         // Don't inherit the parent build's RUSTFLAGS (e.g. a host-only flag) into the guest cdylib.
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("CLIPPY_ARGS")
+        .env_remove("NIX_LDFLAGS")
+        .env_remove("NIX_CFLAGS_COMPILE")
         .status()
         .map_err(|e| format!("spawn cargo: {e}"))?;
     if !status.success() {
@@ -248,9 +259,4 @@ impl BuildEnvironment {
     fn required(key: &str) -> String {
         std::env::var(key).unwrap_or_else(|_| panic!("env {key} not set"))
     }
-}
-
-/// The build host's target triple (`cargo` sets `HOST` for build scripts).
-fn host_triple() -> String {
-    std::env::var("HOST").unwrap_or_default()
 }

@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+use hl_gpu::transport::DEFAULT_EXEC_SOCK;
 use hl_gpu::RemoteCommandSink;
 use hl_vulkan::adapter::wayland_app::WaylandAppPresenter;
 use hl_vulkan::{Device, Instance};
@@ -133,7 +134,9 @@ impl State {
             instance: None,
             device: None,
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
-            sink: RemoteCommandSink::from_env(),
+            sink: RemoteCommandSink::new(
+                std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
+            ),
             image_views: HashMap::new(),
             render_passes: HashMap::new(),
             framebuffers: HashMap::new(),

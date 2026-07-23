@@ -152,7 +152,7 @@ where
                     Some("offset must not be negative".to_string())
                 } else if width <= 0 || height <= 0 {
                     Some(format!("invalid width or height ({}x{})", width, height))
-                } else if checked_end().is_none_or(|end| end > arc_pool.size()) {
+                } else if checked_end().map_or(true, |end| end > arc_pool.size()) {
                     Some("buffer geometry exceeds wl_shm_pool bounds".to_string())
                 } else {
                     None

@@ -69,13 +69,10 @@ impl<'a> Image<'a> {
         let m0 = Bytes(image).u32(0)?;
         // A wrapper's container lives behind a `const void* data` pointer we cannot follow from a byte
         // slice; only a directly-embedded fatbin container is walkable here.
-        let container: &[u8] = if m0 == FATBIN_MAGIC {
-            image
-        } else if m0 == WRAPPER_MAGIC {
+        if m0 != FATBIN_MAGIC {
             return None;
-        } else {
-            return None;
-        };
+        }
+        let container = image;
 
         let magic = Bytes(container).u32(0)?;
         let header_size = Bytes(container).u16(6)? as usize;

@@ -16,6 +16,7 @@ use core::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
 use hl_gl::model::context::GlContext;
+use hl_gpu::transport::DEFAULT_EXEC_SOCK;
 use hl_gpu::RemoteCommandSink;
 
 /// The single opaque `EGLDisplay` this shim hands out (`eglGetDisplay` → this token). Non-null.
@@ -91,7 +92,9 @@ impl State {
             inited: false,
             ctx: GlContext::new(),
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
-            sink: RemoteCommandSink::from_env(),
+            sink: RemoteCommandSink::new(
+                std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
+            ),
             next_token: 1,
             current_is_wayland: false,
             wl_surface_ptr: 0,
@@ -128,7 +131,11 @@ impl State {
             if self.wl_app_unavailable {
                 return AppPresentOutcome::Unavailable;
             }
-            match hl_gl::adapter::wayland_app::WaylandAppPresenter::new(self.wl_surface_ptr) {
+            // SAFETY: wl_surface_ptr comes from the live wl_egl_window supplied by the application and
+            // the presenter is dropped when this EGL state releases that surface.
+            match unsafe {
+                hl_gl::adapter::wayland_app::WaylandAppPresenter::new(self.wl_surface_ptr)
+            } {
                 Ok(p) => self.wl_app = Some(p),
                 Err(_) => {
                     self.wl_app_unavailable = true;

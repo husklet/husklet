@@ -25,12 +25,12 @@ and cross-domain orchestration. No crate depends on it.
 ```text
 src/
   apps/husklet/
-  packages/hl-log/
-  engine/{hl-jit,hl-jit-darwin}/
-  containers/{hl-daemon,hl-client,hl-images}/
+  packages/{hl-fs,hl-log}/
+  containers/{hl-container,hl-daemon,hl-client,hl-images}/
   gpu/{hl-gpu,hl-gpu-wgpu}/
   surface/{hl-compositor,hl-gl,hl-cuda,hl-vulkan}/
   workspaces/{hl-gui,hl-ws,hl-ws-term}/
+../engine/pkgs/rust/ (`hl-engine`)
 ```
 
 - Reusable packages use `hl-`; the product is `husklet` and is never a dependency.
@@ -478,6 +478,13 @@ pub async fn create(
 Extraction and response encoding belong to HTTP. Validation of workspace rules belongs to the model;
 orchestration belongs to `Workspaces`.
 
+Framework handlers may remain free functions because the framework owns their extractor signature. For
+example, `info(State(state): State<DockerState>)` is an Axum adapter, not misplaced `DockerState` behavior.
+Do not move a handler onto state mechanically. Keep its body limited to extraction, thin response
+orchestration, error translation, and encoding; reusable domain behavior still belongs to models or services.
+Mark a reviewed handler with `#[hl_design::adapter]`. The marker is valid only with a recognized framework
+extractor signature and is not a general free-function suppression.
+
 ### Services
 
 A service implements a use case by composing models, domain libraries, and ports. It is the layer called by
@@ -528,7 +535,7 @@ pub trait Images {
 
 ```text
 ports/engine.rs          domain requirement
-adapters/jit.rs          `hl-jit` implementation
+adapters/container.rs    `hl-container` implementation backed by `hl-engine`
 adapters/memory.rs       deterministic test implementation
 ```
 
@@ -539,7 +546,7 @@ building a repository or service locator for the whole application.
 The composition root supplies implementations:
 
 ```rust
-let engine = Jit::open(engine_config)?;
+let engine = Containers::builder(container_config).build().await?;
 let images = Registry::open(registry_config)?;
 let workspaces = Workspaces::new(images, engine);
 ```
@@ -583,7 +590,7 @@ Do not interpret permission to register events as permission to implement worksp
 rendering, persistence, or terminal workflows on `Application`. Registration says who receives intent; the
 receiving capability still owns what that intent means.
 
-Replacing `Jit` with another engine changes construction in `husklet`, not workspace use cases or endpoints.
+Replacing the container engine changes construction in `husklet`, not workspace use cases or endpoints.
 That is the practical test of the boundary.
 
 ### Review a placement
@@ -598,7 +605,7 @@ Before adding code, state its owner and reason:
 | Render a generic currency input | GUI `lib/currency` | Transferable within GUI domains |
 | Open a workspace from image + engine | workspace `service` | Multi-capability use case |
 | Define what workspace execution requires | workspace `ports::Engine` | Stable replaceable boundary |
-| Translate `hl-jit` calls into `Engine` | application adapter | Concrete integration |
+| Translate `hl-container` calls into `Engine` | application adapter | Concrete integration |
 | Decode `POST /workspaces` | `api/http` | Transport adapter |
 
 A placement is wrong when moving or replacing one mechanism requires edits across unrelated models,
@@ -658,6 +665,9 @@ implementation, test seam, platform boundary, or stable contract.
 - Write a failing behavioral test when fixing a defect or adding testable behavior. Test exact outcomes, edge
   cases, errors, public workflows, and invariants; use property tests when examples cannot cover the state
   space.
+- Keep repository tests unit-scoped and beside their owning source. Tests that launch processes, compile guest
+  programs, require host applications or hardware, automate platform UI, or cross package/runtime boundaries
+  belong in `../e2e`, where they consume built artifacts and public APIs.
 - Keep tests deterministic, independent, and responsible for their resources. Expected panics name the
   expected condition; production code does not panic merely to simplify a test.
 - Refactor incrementally; prove behavior, protocols, failures, and relevant performance.
@@ -683,6 +693,8 @@ implementation, test seam, platform boundary, or stable contract.
 - Prefer short single-word module and file names.
 - A file remains a file until cohesive child modules justify a directory.
 - Split modules by responsibility; mirror equivalent domain shapes where useful.
+- Keep every Rust production and test file at or below 500 lines. Split by cohesive entities, adapters, or
+  test behaviors; numbered fragments, `include!`, and oversized test monoliths do not create boundaries.
 - Prefer receiver methods and standard conversions to orphan helpers. Extract a one-use function only when it
   names construction, isolates testable logic, or clarifies a real operation.
 - Do not write getters that merely return a field unchanged. Public data models may expose fields directly

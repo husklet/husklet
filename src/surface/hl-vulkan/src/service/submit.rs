@@ -141,6 +141,14 @@ pub fn queue_submit(
     Ok(())
 }
 
+/// Wait for a device fence through the host command sink.
+///
+/// This free function is the stable service boundary for callers that do not
+/// own a concrete [`Device`] implementation.
+pub fn wait_for_fence(dev: &mut Device, sink: &mut dyn CommandSink, fence: VkFence) -> Result<()> {
+    Device::wait_for_fence(dev, sink, fence)
+}
+
 /// Apply a batch's queue-side timeline signals (`VkTimelineSemaphoreSubmitInfo::pSignalSemaphoreValues`
 /// / sync2 `VkSemaphoreSubmitInfo::value`) AFTER [`queue_submit`] has returned. The host replay is
 /// SYNCHRONOUS, so the producer's command buffers have fully executed by the time this runs — advancing

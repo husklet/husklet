@@ -91,12 +91,17 @@ impl Service {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            if socket.exists() {
+            if Self::is_up(&socket) {
                 break;
             }
             if Instant::now() >= deadline {
                 stop.store(true, Ordering::Release);
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    hl_log::hl_error!(
+                        hl_log::tag::COMPOSITOR,
+                        "headless compositor panicked during startup timeout"
+                    );
+                }
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "compositor socket was not ready",
@@ -113,7 +118,12 @@ impl Service {
                 ),
                 Err(error) => error,
             };
-            let _ = thread.join();
+            if thread.join().is_err() {
+                hl_log::hl_error!(
+                    hl_log::tag::COMPOSITOR,
+                    "headless compositor panicked during failed startup"
+                );
+            }
             return Err(error);
         }
 
@@ -135,6 +145,27 @@ impl Service {
             Err(error) => Err(error),
         }
     }
+
+    fn is_up(path: &Path) -> bool {
+        std::os::unix::net::UnixStream::connect(path).is_ok()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn stop_native(mut child: Child, control: ChildStdin, timeout: Duration) -> io::Result<()> {
+        drop(control);
+        let deadline = Instant::now() + timeout;
+        loop {
+            if child.try_wait()?.is_some() {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                child.kill()?;
+                child.wait()?;
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 impl Drop for Service {
@@ -142,16 +173,31 @@ impl Drop for Service {
         self.stop.store(true, Ordering::Release);
         match self.worker.take() {
             Some(Worker::Thread(thread)) => {
-                let _ = thread.join();
+                if thread.join().is_err() {
+                    hl_log::hl_error!(
+                        hl_log::tag::COMPOSITOR,
+                        "headless compositor thread panicked during shutdown"
+                    );
+                }
             }
             #[cfg(target_os = "macos")]
-            Some(Worker::Process { mut child, control }) => {
-                drop(control);
-                let _ = child.wait();
+            Some(Worker::Process { child, control }) => {
+                if let Err(error) = Self::stop_native(child, control, Duration::from_secs(2)) {
+                    hl_log::hl_error!(
+                        hl_log::tag::COMPOSITOR,
+                        "native compositor shutdown failed error={error}"
+                    );
+                }
             }
             None => {}
         }
-        let _ = Service::remove_socket(&self.socket);
+        if let Err(error) = Service::remove_socket(&self.socket) {
+            hl_log::hl_error!(
+                hl_log::tag::COMPOSITOR,
+                "compositor socket cleanup failed path={} error={error}",
+                self.socket.display()
+            );
+        }
     }
 }
 
@@ -176,23 +222,34 @@ impl Service {
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .spawn()?;
-            let control = child.stdin.take().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "compositor control pipe was not created",
-                )
-            })?;
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while !socket.exists() {
-                if let Some(status) = child.try_wait()? {
+            let control = match child.stdin.take() {
+                Some(control) => control,
+                None => {
+                    let _ = child.kill();
+                    let _ = child.wait();
                     return Err(io::Error::new(
                         io::ErrorKind::BrokenPipe,
-                        format!("native compositor stopped during startup with {status}"),
+                        "compositor control pipe was not created",
                     ));
                 }
+            };
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !Self::is_up(&socket) {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            format!("native compositor stopped during startup with {status}"),
+                        ));
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = Self::stop_native(child, control, Duration::from_secs(2));
+                        return Err(error);
+                    }
+                }
                 if Instant::now() >= deadline {
-                    drop(control);
-                    let _ = child.wait();
+                    Self::stop_native(child, control, Duration::from_secs(2))?;
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         "native compositor socket was not ready",
@@ -284,9 +341,26 @@ mod tests {
         let service = Service::start(&socket, root.join("frames")).unwrap();
         assert_eq!(service.socket(), socket);
         assert!(socket.exists());
+        assert!(Service::is_up(&socket));
         drop(service);
         assert!(!socket.exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_worker_shutdown_is_bounded_when_control_close_is_ignored() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("60")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let control = child.stdin.take().unwrap();
+        let started = Instant::now();
+
+        Service::stop_native(child, control, Duration::from_millis(30)).unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[cfg(not(target_os = "macos"))]

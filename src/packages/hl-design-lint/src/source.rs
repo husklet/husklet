@@ -65,22 +65,29 @@ impl Source {
 /// Parsed Rust sources discovered from requested paths.
 pub struct Workspace {
     sources: Vec<Source>,
+    empty_directories: Vec<PathBuf>,
 }
 
 impl Workspace {
     /// Discovers, reads, and parses Rust sources once.
     pub fn load(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self> {
         let mut files = Vec::new();
+        let mut empty_directories = Vec::new();
         for path in paths {
             rust_files(&path, &mut files).map_err(|error| LintError::io("walk", &path, error))?;
+            empty_dirs(&path, &mut empty_directories)
+                .map_err(|error| LintError::io("walk", &path, error))?;
         }
         files.sort();
         files.dedup();
+        empty_directories.sort();
+        empty_directories.dedup();
         Ok(Self {
             sources: files
                 .into_iter()
                 .map(Source::load)
                 .collect::<std::result::Result<_, _>>()?,
+            empty_directories,
         })
     }
 
@@ -92,6 +99,11 @@ impl Workspace {
     /// Iterates over non-test sources.
     pub fn production(&self) -> impl Iterator<Item = &Source> {
         self.sources.iter().filter(|source| !source.test)
+    }
+
+    /// Returns repository-owned directories with no substantive entries.
+    pub fn empty_directories(&self) -> &[PathBuf] {
+        &self.empty_directories
     }
 }
 
@@ -231,6 +243,39 @@ fn rust_files(path: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     Ok(())
 }
 
+fn empty_dirs(path: &Path, empty: &mut Vec<PathBuf>) -> io::Result<()> {
+    if excluded(path) || fs::symlink_metadata(path)?.file_type().is_symlink() || path.is_file() {
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.path());
+    if entries.iter().all(|entry| placeholder(&entry.path())) {
+        empty.push(path.to_owned());
+    }
+    for entry in entries {
+        if entry.file_type()?.is_dir() {
+            empty_dirs(&entry.path(), empty)?;
+        }
+    }
+    Ok(())
+}
+
+fn placeholder(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, ".gitkeep" | ".keep" | ".DS_Store"))
+}
+
+fn excluded(path: &Path) -> bool {
+    if is_linter(path) || is_paused_domain(path) {
+        return true;
+    }
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, ".git" | "target" | "vendor" | "lint"))
+}
+
 fn is_paused_domain(path: &Path) -> bool {
     let mut components = path.components().filter_map(|component| match component {
         std::path::Component::Normal(value) => value.to_str(),
@@ -238,9 +283,7 @@ fn is_paused_domain(path: &Path) -> bool {
     });
     while let Some(component) = components.next() {
         if component == "src" {
-            return components
-                .next()
-                .is_some_and(|domain| matches!(domain, "engine" | "containers"));
+            return components.next().is_some_and(|domain| domain == "engine");
         }
     }
     false

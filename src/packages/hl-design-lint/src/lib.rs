@@ -14,8 +14,8 @@ pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
-    DeepControlFlow, DuplicateEntity, EnvironmentAccess, FileLength, FreeFunction, Registry, Rule,
-    SingleUse, StructNaming,
+    DeepControlFlow, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FreeFunction,
+    Registry, Rule, SingleUse, StructNaming,
 };
 pub use source::{Source, Workspace};
 
@@ -40,7 +40,8 @@ impl Linter {
                 .register(rule::StructNaming)
                 .register(rule::SingleUse)
                 .register(rule::DeepControlFlow)
-                .register(rule::FileLength),
+                .register(rule::FileLength)
+                .register(rule::EmptyDirectory),
         )
     }
 
@@ -145,7 +146,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 7);
+        assert_eq!(summaries.len(), 8);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "deep-control-flow");
@@ -179,7 +180,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 7);
+        assert_eq!(summaries.len(), 8);
         assert!(reporter
             .0
             .iter()
@@ -254,6 +255,9 @@ fn one(value: usize) { let _ = value; }
 fn two(left: usize, right: usize) { let _ = (left, right); }
 fn three(a: usize, b: usize, c: usize) { let _ = (a, b, c); }
 extern "C" fn ffi(value: usize) { let _ = value; }
+#[hl_design::adapter] async fn handler(State(state): State<AppState>) { let _ = state; }
+async fn unreviewed_handler(State(state): State<AppState>) { let _ = state; }
+fn detached(state: AppState) { let _ = state; }
 #[cfg(test)] fn test_only(value: usize) { let _ = value; }
 #[hl_design::classify(pkg)] fn package(value: usize) { let _ = value; }
 #[hl_design::classify(domain = "gpu")] fn domain(value: usize) { let _ = value; }
@@ -266,7 +270,15 @@ extern "C" fn ffi(value: usize) { let _ = value; }
                 .iter()
                 .map(|finding| finding.subject.as_str())
                 .collect::<Vec<_>>(),
-            ["one", "two", "package", "domain", "malformed"]
+            [
+                "one",
+                "two",
+                "unreviewed_handler",
+                "detached",
+                "package",
+                "domain",
+                "malformed"
+            ]
         );
         assert!(values
             .iter()
@@ -421,6 +433,68 @@ impl Workspaces {
     }
 
     #[test]
+    fn file_length_rule_includes_integration_tests() {
+        let root = temporary("test-file-length");
+        let tests = root.join("tests");
+        fs::create_dir_all(&tests).unwrap();
+        let path = tests.join("oversized.rs");
+        fs::write(&path, format!("{}struct Fixture;\n", "\n".repeat(500))).unwrap();
+
+        let workspace = Workspace::load([path]).unwrap();
+        let findings = FileLength.check(&workspace).unwrap();
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("501 lines"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_directory_rule_reports_empty_and_placeholder_only_folders() {
+        let root = temporary("empty-directory");
+        fs::create_dir_all(root.join("src/model/unused")).unwrap();
+        fs::create_dir_all(root.join("src/adapter/planned")).unwrap();
+        fs::write(root.join("src/adapter/planned/.gitkeep"), "").unwrap();
+        write(&root, "pub struct Present;\n");
+
+        let workspace = Workspace::load([root.join("src")]).unwrap();
+        let findings = EmptyDirectory.check(&workspace).unwrap();
+        let paths = findings
+            .iter()
+            .map(|finding| finding.location.path.strip_prefix(&root).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            [
+                Path::new("src/adapter/planned"),
+                Path::new("src/model/unused"),
+            ]
+        );
+        assert!(findings.iter().all(Finding::is_violation));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_directory_rule_ignores_generated_and_excluded_trees() {
+        let root = temporary("empty-directory-exclusions");
+        for path in [
+            "lint/errors",
+            "target/debug/empty",
+            "vendor/package/empty",
+            "src/engine/hl-engine/empty",
+            "src/packages/hl-design-lint/empty",
+        ] {
+            fs::create_dir_all(root.join(path)).unwrap();
+        }
+        write(&root, "pub struct Present;\n");
+
+        let workspace = Workspace::load([root.clone()]).unwrap();
+
+        assert!(EmptyDirectory.check(&workspace).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn workspace_excludes_the_linter_even_when_addressed_directly() {
         let root = temporary("self-exclusion");
         let linter = root.join("hl-design-lint");
@@ -436,10 +510,10 @@ impl Workspaces {
     }
 
     #[test]
-    fn workspace_excludes_paused_engine_and_container_domains() {
+    fn workspace_excludes_only_the_paused_engine_domain() {
         let root = temporary("paused-domains");
         for (domain, package, source) in [
-            ("engine", "hl-jit", "fn engine(value: u8) {}\n"),
+            ("engine", "hl-engine", "fn engine(value: u8) {}\n"),
             ("containers", "hl-daemon", "fn container(value: u8) {}\n"),
             ("gpu", "hl-gpu", "fn gpu(value: u8) {}\n"),
         ] {
@@ -455,7 +529,13 @@ impl Workspaces {
             .map(|source| source.path.as_path())
             .collect::<Vec<_>>();
 
-        assert_eq!(paths, [root.join("src/gpu/hl-gpu/src/lib.rs").as_path()]);
+        assert_eq!(
+            paths,
+            [
+                root.join("src/containers/hl-daemon/src/lib.rs").as_path(),
+                root.join("src/gpu/hl-gpu/src/lib.rs").as_path(),
+            ]
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

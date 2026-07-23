@@ -384,128 +384,6 @@ fn assert_exact_and_write(name: &str, px: &[u8], mask: &Mask) {
 // PointList — N points at known centers each light exactly one pixel; between stays clear
 // ---------------------------------------------------------------------------------------------------
 
-#[test]
-fn pointlist_lights_exact_pixels() {
-    if WgpuExecutor::new(DeviceConfig::default()).is_err() {
-        return;
-    }
-    // Scattered, well-separated centers (corners, mid-edges, an interior cluster) — a point that bleeds
-    // to a neighbour or shifts by one is caught, and the wide gaps prove "between stays clear".
-    let pts = [
-        (2, 2),
-        (29, 2),
-        (2, 29),
-        (29, 29),
-        (16, 16),
-        (10, 20),
-        (23, 8),
-        (16, 17),
-    ];
-    let verts: Vec<[f32; 2]> = pts.iter().map(|&(x, y)| center_ndc(x, y)).collect();
-    let out = draw(Topology::PointList, &verts);
-
-    let mut mask = empty_mask();
-    for &(x, y) in &pts {
-        set(&mut mask, x, y);
-    }
-    assert_exact_and_write("pointlist", &out, &mask);
-}
-
-// ---------------------------------------------------------------------------------------------------
-// LineList — independent pairs: a horizontal, a vertical, and a 45° diagonal line
-// ---------------------------------------------------------------------------------------------------
-
-#[test]
-fn linelist_axis_and_diagonal() {
-    if WgpuExecutor::new(DeviceConfig::default()).is_err() {
-        return;
-    }
-    // Three disjoint segments in ONE LineList draw (6 verts / 3 pairs). Each is axis-aligned or exact-45°
-    // so its rasterized staircase is unambiguous; they don't touch, so each is asserted in isolation.
-    //   horizontal: (3,5)   -> (27,5)      row 5, cols 3..=26   (27 excluded by diamond-exit)
-    //   vertical:   (6,8)   -> (6,28)       col 6, rows 8..=27
-    //   diagonal:   (12,10) -> (26,24)      perfect 45°, (12,10)..=(25,23)
-    let segs: [((i32, i32), (i32, i32)); 3] =
-        [((3, 5), (27, 5)), ((6, 8), (6, 28)), ((12, 10), (26, 24))];
-    let mut verts = Vec::new();
-    for (a, b) in segs {
-        verts.push(center_ndc(a.0, a.1));
-        verts.push(center_ndc(b.0, b.1));
-    }
-    let out = draw(Topology::LineList, &verts);
-
-    let model: Vec<(i32, i32)> = segs.iter().flat_map(|&(a, b)| [a, b]).collect();
-    let mask = linelist_mask(&model);
-    assert_exact_and_write("linelist", &out, &mask);
-}
-
-// ---------------------------------------------------------------------------------------------------
-// LineStrip — a connected chain (monotone right/down staircase) with shared vertices painted once
-// ---------------------------------------------------------------------------------------------------
-
-#[test]
-fn linestrip_connected_polyline() {
-    if WgpuExecutor::new(DeviceConfig::default()).is_err() {
-        return;
-    }
-    // A 6-vertex strip tracing a staircase that only ever moves RIGHT or DOWN: down, right, down, right,
-    // down. Five connected segments sharing four interior corners. Because the path is monotone, each
-    // corner is the excluded (max) endpoint of the segment arriving at it and the kept (min) endpoint of
-    // the segment leaving it, so the diamond-exit rule paints every corner exactly once and the polyline
-    // is fully connected — no hole, no double-paint. A strip that restarts per pair (drawing disjoint
-    // segments), reverses a segment, or double-paints a corner fails. Only the final vertex (28,29) is
-    // dropped (it is nobody's min endpoint).
-    let chain = [(3, 3), (3, 12), (14, 12), (14, 20), (28, 20), (28, 29)];
-    let verts: Vec<[f32; 2]> = chain.iter().map(|&(x, y)| center_ndc(x, y)).collect();
-    let out = draw(Topology::LineStrip, &verts);
-
-    let mask = linestrip_mask(&chain);
-    assert_exact_and_write("linestrip", &out, &mask);
-}
-
-// ---------------------------------------------------------------------------------------------------
-// TriangleStrip vs TriangleList — 4 verts (2 triangles, shared edge) == the 6-vert list of the same quad
-// ---------------------------------------------------------------------------------------------------
-
-#[test]
-fn trianglestrip_quad_equals_trianglelist() {
-    if WgpuExecutor::new(DeviceConfig::default()).is_err() {
-        return;
-    }
-    // Corners of an axis-aligned quad on pixel centers. Strip winding is (v0,v1,v2),(v1,v2,v3); with
-    // cull off both triangles paint, filling the solid rect [tl..br). The equivalent TriangleList is the
-    // very same two triangles as 6 explicit vertices.
-    let tl = (6, 6);
-    let tr = (25, 6);
-    let bl = (6, 25);
-    let br = (25, 25);
-    let c = |p: (i32, i32)| center_ndc(p.0, p.1);
-
-    // TriangleStrip: v0=TL, v1=TR, v2=BL, v3=BR.
-    let strip = draw(Topology::TriangleStrip, &[c(tl), c(tr), c(bl), c(br)]);
-    // TriangleList: the same two triangles (TL,TR,BL) + (TR,BL,BR).
-    let list = draw(
-        Topology::TriangleList,
-        &[c(tl), c(tr), c(bl), c(tr), c(bl), c(br)],
-    );
-
-    // Both must equal the solid quad by the top-left fill rule: cols/rows 6..25.
-    let mask = quad_mask(tl, br);
-    assert_exact_and_write("trianglestrip_quad", &strip, &mask);
-    assert_exact_and_write("trianglelist_quad", &list, &mask);
-
-    // And they must be byte-for-byte identical to each other (strip and list rasterize the same coverage).
-    assert_eq!(
-        strip, list,
-        "TriangleStrip and the equivalent TriangleList produced different pixels — a strip-winding or \
-         fill-rule mismatch"
-    );
-}
-
-// ---------------------------------------------------------------------------------------------------
-// tiny built-in PNG encoder (RGBA8, stored DEFLATE) — human visual confirmation only
-// ---------------------------------------------------------------------------------------------------
-
 fn write_png(name: &str, rgba: &[u8]) {
     let _ = std::fs::create_dir_all(OUT_DIR);
     let path = format!("{OUT_DIR}/{name}.png");
@@ -580,3 +458,12 @@ fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
     png_chunk(&mut png, b"IEND", &[]);
     png
 }
+
+#[path = "topology/line.rs"]
+mod line;
+#[path = "topology/point.rs"]
+mod point;
+#[path = "topology/strip.rs"]
+mod strip;
+#[path = "topology/triangle.rs"]
+mod triangle;

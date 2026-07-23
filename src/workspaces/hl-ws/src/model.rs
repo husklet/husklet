@@ -97,7 +97,7 @@ impl Workspace {
     pub fn storage_dir(&self, base: &Path) -> PathBuf {
         self.storage.clone().unwrap_or_else(|| {
             base.join("workspaces")
-                .join(Self::path_component(&self.name))
+                .join(Self::storage_component(&self.name))
         })
     }
     /// The default shell command to run in the workspace.
@@ -106,16 +106,24 @@ impl Workspace {
     }
 
     /// Encode a workspace name as one safe path component.
-    fn path_component(name: &str) -> String {
-        name.chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                    character
-                } else {
-                    '_'
-                }
-            })
-            .collect()
+    /// Reversible, traversal-safe filesystem component for a workspace identity.
+    pub fn storage_component(name: &str) -> String {
+        if name.is_empty() {
+            return "%00".to_owned();
+        }
+
+        let mut component = String::with_capacity(name.len());
+        for byte in name.bytes() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_') {
+                component.push(char::from(byte));
+            } else {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                component.push('%');
+                component.push(char::from(HEX[usize::from(byte >> 4)]));
+                component.push(char::from(HEX[usize::from(byte & 0x0f)]));
+            }
+        }
+        component
     }
 }
 
@@ -139,5 +147,30 @@ mod tests {
     fn os_arch_label_is_full_os_slash_arch() {
         assert_eq!(Arch::Arm64.os_arch_label(), "linux/aarch64");
         assert_eq!(Arch::Amd64.os_arch_label(), "linux/x86_64");
+    }
+
+    #[test]
+    fn workspace_names_map_to_distinct_safe_storage_components() {
+        let base = Path::new("/state");
+        let slash = Workspace::new("a/b", "image", Arch::Arm64).storage_dir(base);
+        let question = Workspace::new("a?b", "image", Arch::Arm64).storage_dir(base);
+        let traversal = Workspace::new("../outside", "image", Arch::Arm64).storage_dir(base);
+        let unicode = Workspace::new("dévelop", "image", Arch::Arm64).storage_dir(base);
+
+        assert_eq!(slash, base.join("workspaces/a%2Fb"));
+        assert_eq!(question, base.join("workspaces/a%3Fb"));
+        assert_eq!(traversal, base.join("workspaces/%2E%2E%2Foutside"));
+        assert_eq!(unicode, base.join("workspaces/d%C3%A9velop"));
+        assert_ne!(slash, question);
+        assert!(traversal.starts_with(base.join("workspaces")));
+    }
+
+    #[test]
+    fn empty_workspace_name_never_selects_the_workspace_root() {
+        let base = Path::new("/state");
+        assert_eq!(
+            Workspace::new("", "image", Arch::Arm64).storage_dir(base),
+            base.join("workspaces/%00")
+        );
     }
 }

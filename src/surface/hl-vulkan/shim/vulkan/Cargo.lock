@@ -6,8 +6,13 @@ version = 4
 name = "hl-design"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
  "syn",
 ]
+
+[[package]]
+name = "hl-fs"
+version = "0.1.0"
 
 [[package]]
 name = "hl-gpu"
@@ -26,6 +31,7 @@ name = "hl-vulkan"
 version = "0.0.0"
 dependencies = [
  "hl-design",
+ "hl-fs",
  "hl-gpu",
  "hl-log",
 ]

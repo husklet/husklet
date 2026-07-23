@@ -1,6 +1,7 @@
 //! GTK adapters for generic input components.
 
 use gtk::prelude::*;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::{Action, Dialog as DialogModel, EventId, Role};
@@ -13,7 +14,7 @@ impl Dialog {
         parent: Option<&gtk::Window>,
         model: DialogModel,
         on_action: impl Fn(EventId) + 'static,
-    ) {
+    ) -> gtk::Window {
         let window = gtk::Window::builder()
             .title(&model.title)
             .modal(true)
@@ -45,11 +46,28 @@ impl Dialog {
         actions.set_halign(gtk::Align::End);
         let handler = Rc::new(on_action);
         for action in model.actions {
-            actions.append(&Self::button(&window, action, handler.clone()));
+            let role = action.role;
+            let button = Self::button(&window, action, handler.clone());
+            if role == Role::Suggested {
+                window.set_default_widget(Some(&button));
+            }
+            actions.append(&button);
         }
         content.append(&actions);
         window.set_child(Some(&content));
+
+        let keys = gtk::EventControllerKey::new();
+        let dismiss = window.clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                dismiss.close();
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        window.add_controller(keys);
         window.present();
+        window
     }
 
     fn button(
@@ -117,27 +135,108 @@ impl Uri {
 }
 
 #[derive(Clone)]
-pub struct ColorPicker(gtk::ColorDialogButton);
+pub struct ColorPicker {
+    button: gtk::Button,
+    color: Rc<RefCell<gtk::gdk::RGBA>>,
+    label: gtk::Label,
+    swatch: gtk::DrawingArea,
+}
 
 impl ColorPicker {
     pub fn new(value: &str) -> Self {
-        let picker = Self(gtk::ColorDialogButton::new(Some(gtk::ColorDialog::new())));
+        let color = Rc::new(RefCell::new(gtk::gdk::RGBA::BLACK));
+        let label = gtk::Label::new(None);
+        let swatch = gtk::DrawingArea::new();
+        swatch.set_content_width(28);
+        swatch.set_content_height(18);
+        {
+            let color = color.clone();
+            swatch.set_draw_func(move |_, context, width, height| {
+                let color = color.borrow();
+                context.set_source_rgba(
+                    color.red().into(),
+                    color.green().into(),
+                    color.blue().into(),
+                    color.alpha().into(),
+                );
+                context.rectangle(0.5, 0.5, f64::from(width - 1), f64::from(height - 1));
+                let _ = context.fill_preserve();
+                context.set_source_rgba(0.5, 0.5, 0.5, 0.8);
+                context.set_line_width(1.0);
+                let _ = context.stroke();
+            });
+        }
+
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        content.append(&swatch);
+        content.append(&label);
+        let button = gtk::Button::new();
+        button.set_child(Some(&content));
+
+        let active = Rc::new(Cell::new(false));
+        let dialog = gtk::ColorDialog::builder()
+            .title("Pick a Color")
+            .modal(true)
+            .with_alpha(false)
+            .build();
+        {
+            let active = active.clone();
+            let color = color.clone();
+            let label = label.clone();
+            let swatch = swatch.clone();
+            button.connect_clicked(move |button| {
+                if active.replace(true) {
+                    return;
+                }
+                let parent = button.root().and_downcast::<gtk::Window>();
+                let initial = *color.borrow();
+                let active = active.clone();
+                let color = color.clone();
+                let label = label.clone();
+                let swatch = swatch.clone();
+                dialog.choose_rgba(
+                    parent.as_ref(),
+                    Some(&initial),
+                    gtk::gio::Cancellable::NONE,
+                    move |result| {
+                        if let Ok(selected) = result {
+                            *color.borrow_mut() = selected;
+                            label.set_text(&Self::format(&selected));
+                            swatch.queue_draw();
+                        }
+                        active.set(false);
+                    },
+                );
+            });
+        }
+
+        let picker = Self {
+            button,
+            color,
+            label,
+            swatch,
+        };
         picker.set_value(value);
         picker
     }
 
-    pub fn widget(&self) -> &gtk::ColorDialogButton {
-        &self.0
+    pub fn widget(&self) -> &gtk::Button {
+        &self.button
     }
 
     pub fn set_value(&self, value: &str) {
         if let Ok(color) = gtk::gdk::RGBA::parse(value) {
-            self.0.set_rgba(&color);
+            *self.color.borrow_mut() = color;
+            self.label.set_text(&Self::format(&color));
+            self.swatch.queue_draw();
         }
     }
 
     pub fn value(&self) -> String {
-        let color = self.0.rgba();
+        Self::format(&self.color.borrow())
+    }
+
+    fn format(color: &gtk::gdk::RGBA) -> String {
         format!(
             "#{:02x}{:02x}{:02x}",
             (color.red().clamp(0.0, 1.0) * 255.0).round() as u8,

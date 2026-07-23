@@ -19,16 +19,16 @@ use crate::types::{Dispatchable, VkResult, VK_SUCCESS};
 
 struct CommandBuffer;
 impl CommandBuffer {
-unsafe fn handle(p: *mut c_void) -> Option<VkCbHandle> {
-    Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
-}
+    unsafe fn handle(p: *mut c_void) -> Option<VkCbHandle> {
+        Dispatchable::<VkCbHandle>::inner(p).map(|h| *h)
+    }
 }
 
 struct ShimState;
 impl ShimState {
-fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
-    StateStore::with(|s| s.device.as_mut().map(f))
-}
+    fn with_device<R>(f: impl FnOnce(&mut Device) -> R) -> Option<R> {
+        StateStore::with(|s| s.device.as_mut().map(f))
+    }
 }
 
 /// `VkPeerMemoryFeatureFlagBits` (stable ABI): COPY_SRC|COPY_DST|GENERIC_SRC|GENERIC_DST.
@@ -60,7 +60,13 @@ pub extern "C" fn vkGetDeviceGroupPeerMemoryFeaturesKHR(
     remote_device_index: u32,
     p_peer_memory_features: *mut c_void,
 ) {
-    vkGetDeviceGroupPeerMemoryFeatures(device, heap_index, local_device_index, remote_device_index, p_peer_memory_features)
+    vkGetDeviceGroupPeerMemoryFeatures(
+        device,
+        heap_index,
+        local_device_index,
+        remote_device_index,
+        p_peer_memory_features,
+    )
 }
 
 /// `vkCmdSetDeviceMask` — a single-device group has exactly one valid mask (bit 0); recording it is a
@@ -86,7 +92,9 @@ pub extern "C" fn vkCmdDispatchBase(
     group_count_y: u32,
     group_count_z: u32,
 ) {
-    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else { return };
+    let Some(cb) = (unsafe { CommandBuffer::handle(command_buffer) }) else {
+        return;
+    };
     ShimState::with_device(|d| {
         let _ = record::cmd_dispatch(d, cb, group_count_x, group_count_y, group_count_z);
     });
@@ -101,7 +109,15 @@ pub extern "C" fn vkCmdDispatchBaseKHR(
     group_count_y: u32,
     group_count_z: u32,
 ) {
-    vkCmdDispatchBase(command_buffer, base_group_x, base_group_y, base_group_z, group_count_x, group_count_y, group_count_z)
+    vkCmdDispatchBase(
+        command_buffer,
+        base_group_x,
+        base_group_y,
+        base_group_z,
+        group_count_x,
+        group_count_y,
+        group_count_z,
+    )
 }
 
 // ---- device-group present ----------------------------------------------------------------------
@@ -123,7 +139,9 @@ pub extern "C" fn vkGetDeviceGroupPresentCapabilitiesKHR(
     _device: *mut c_void,
     p_device_group_present_capabilities: *mut c_void,
 ) -> VkResult {
-    if let Some(caps) = unsafe { (p_device_group_present_capabilities as *mut VkDeviceGroupPresentCapabilitiesKHR).as_mut() } {
+    if let Some(caps) = unsafe {
+        (p_device_group_present_capabilities as *mut VkDeviceGroupPresentCapabilitiesKHR).as_mut()
+    } {
         caps.present_mask = [0; VK_MAX_DEVICE_GROUP_SIZE];
         caps.present_mask[0] = 0x1; // device 0 can present to itself
         caps.modes = PRESENT_MODE_LOCAL;
@@ -222,7 +240,8 @@ pub extern "C" fn vkEnumeratePhysicalDeviceGroups(
     }
     let phys = StateStore::with(|s| s.phys_dev_handle());
     unsafe {
-        let props = &mut *(p_physical_device_group_properties as *mut VkPhysicalDeviceGroupProperties);
+        let props =
+            &mut *(p_physical_device_group_properties as *mut VkPhysicalDeviceGroupProperties);
         props.physical_device_count = 1;
         props.physical_devices[0] = phys;
         props.subset_allocation = 0; // VK_FALSE — a single device is not a subset allocation
@@ -236,7 +255,11 @@ pub extern "C" fn vkEnumeratePhysicalDeviceGroupsKHR(
     p_physical_device_group_count: *mut c_void,
     p_physical_device_group_properties: *mut c_void,
 ) -> VkResult {
-    vkEnumeratePhysicalDeviceGroups(instance, p_physical_device_group_count, p_physical_device_group_properties)
+    vkEnumeratePhysicalDeviceGroups(
+        instance,
+        p_physical_device_group_count,
+        p_physical_device_group_properties,
+    )
 }
 
 // ---- external handle properties (report NO external handle types) ------------------------------
@@ -248,14 +271,14 @@ pub extern "C" fn vkEnumeratePhysicalDeviceGroupsKHR(
 /// Zero the three `u32` capability words at byte offset 16 of a `Vk*Properties` output struct.
 struct ExternalProperties;
 impl ExternalProperties {
-unsafe fn zero(p: *mut c_void) {
-    if !p.is_null() {
-        let words = (p as *mut u8).add(16) as *mut u32;
-        *words.add(0) = 0;
-        *words.add(1) = 0;
-        *words.add(2) = 0;
+    unsafe fn zero(p: *mut c_void) {
+        if !p.is_null() {
+            let words = (p as *mut u8).add(16) as *mut u32;
+            *words.add(0) = 0;
+            *words.add(1) = 0;
+            *words.add(2) = 0;
+        }
     }
-}
 }
 
 #[no_mangle]
@@ -272,7 +295,11 @@ pub extern "C" fn vkGetPhysicalDeviceExternalBufferPropertiesKHR(
     p_external_buffer_info: *const c_void,
     p_external_buffer_properties: *mut c_void,
 ) {
-    vkGetPhysicalDeviceExternalBufferProperties(physical_device, p_external_buffer_info, p_external_buffer_properties)
+    vkGetPhysicalDeviceExternalBufferProperties(
+        physical_device,
+        p_external_buffer_info,
+        p_external_buffer_properties,
+    )
 }
 
 #[no_mangle]
@@ -289,7 +316,11 @@ pub extern "C" fn vkGetPhysicalDeviceExternalFencePropertiesKHR(
     p_external_fence_info: *const c_void,
     p_external_fence_properties: *mut c_void,
 ) {
-    vkGetPhysicalDeviceExternalFenceProperties(physical_device, p_external_fence_info, p_external_fence_properties)
+    vkGetPhysicalDeviceExternalFenceProperties(
+        physical_device,
+        p_external_fence_info,
+        p_external_fence_properties,
+    )
 }
 
 #[no_mangle]
@@ -306,5 +337,9 @@ pub extern "C" fn vkGetPhysicalDeviceExternalSemaphorePropertiesKHR(
     p_external_semaphore_info: *const c_void,
     p_external_semaphore_properties: *mut c_void,
 ) {
-    vkGetPhysicalDeviceExternalSemaphoreProperties(physical_device, p_external_semaphore_info, p_external_semaphore_properties)
+    vkGetPhysicalDeviceExternalSemaphoreProperties(
+        physical_device,
+        p_external_semaphore_info,
+        p_external_semaphore_properties,
+    )
 }

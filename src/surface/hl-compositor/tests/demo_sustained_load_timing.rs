@@ -29,7 +29,7 @@ use wayland_client::protocol::{
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols::wp::presentation_time::client::{
-    wp_presentation::{self, WpPresentation},
+    wp_presentation::WpPresentation,
     wp_presentation_feedback::{self, Kind, WpPresentationFeedback},
 };
 use wayland_protocols::xdg::shell::client::{

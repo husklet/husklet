@@ -18,7 +18,7 @@
 //! HOST NOTE: only the aarch64 rust std is installed here (system rust, no rustup), so the aarch64 build
 //! MUST succeed (a failure fails this build). For x86_64 the build is ATTEMPTED, but if the target std is
 //! missing it emits a `cargo:warning` and skips gracefully — it never fails the build. Cross linkers
-//! `aarch64-linux-gnu-gcc` / `x86_64-linux-gnu-gcc` select the right linker + C compiler per arch.
+//! The build environment selects the Linux linker + C compiler.
 //!
 //! STAGING PATH NOTE: the shims stage under `~/.hl/gl/<arch>/` (NOT the old `~/.hl/gui/<arch>/lib`), one
 //! flat dir per arch, matching the CUDA driver's `~/.hl/cuda/<arch>/` layout.
@@ -27,6 +27,7 @@
 //! re-runs this build script. The `HL_GL_BUILDING_SHIM` sentinel (set on the child `cargo`) makes that
 //! inner invocation a no-op, so there is no infinite recursion.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -89,10 +90,14 @@ fn main() {
     let wlegl_c = manifest_dir.join("shim/wayland-egl/wayland_egl.c");
 
     for (triple, cc, arch_dir) in ARCHES {
-        let host = *triple == host_triple();
+        let required = *arch_dir == "aarch64";
+        let cc = required
+            .then(|| std::env::var("HL_AARCH64_LINUX_CC").ok())
+            .flatten()
+            .unwrap_or_else(|| (*cc).to_owned());
         if !BuildEnvironment::std_available(&sysroot, triple) {
             // aarch64 std is guaranteed on this host; a missing HOST std is a real, fail-loud error.
-            if host {
+            if required {
                 panic!(
                     "host target std for {triple} is missing under {}",
                     sysroot.display()
@@ -109,20 +114,27 @@ fn main() {
         // 1. Cross-build + stage libEGL.so.1 (the `egl*` object; OWNS the shared `State`). Each role uses
         //    its OWN target subdir so the two builds of this one crate don't thrash each other's cache.
         let egl_target = shim_target.join("egl");
-        if let Err(e) = build_shim(&cargo, &manifest_dir, &egl_target, triple, cc, "egl", None) {
-            if host {
+        if let Err(e) = build_shim(&cargo, &manifest_dir, &egl_target, triple, &cc, "egl", None) {
+            if required {
                 panic!("building {SHIM_DIR} ({EGL_SONAME}) for {triple}: {e}");
             }
             println!("cargo:warning=hl-gl: building {EGL_SONAME} for {triple} failed: {e}");
             continue;
         }
         if let Err(e) = stage_lib(&egl_target, triple, &dst_dir, EGL_SONAME) {
-            if host {
+            if required {
                 panic!("staging {EGL_SONAME} for {triple}: {e}");
             }
             println!("cargo:warning=hl-gl: staging {EGL_SONAME} for {triple} failed: {e}");
             continue;
         }
+        validate_exports(
+            &cc,
+            &dst_dir.join(EGL_SONAME),
+            &manifest_dir.join("shim/egl/tests/golden/abi_symbols_egl.txt"),
+            "egl",
+        )
+        .unwrap_or_else(|error| panic!("validating {EGL_SONAME} for {triple}: {error}"));
         // 2. Cross-build + stage libGLESv2.so.2 (the `gl*` object; `cfg(gles_client)`, DT_NEEDED on the
         //    just-staged libEGL.so.1 so it imports the shared-state accessor). Real gl* symbols in ITS
         //    OWN dynsym — matching real Mesa, so libepoxy resolves core gl* directly from it.
@@ -132,27 +144,34 @@ fn main() {
             &manifest_dir,
             &gles_target,
             triple,
-            cc,
+            &cc,
             "gles",
             Some(&dst_dir),
         ) {
-            if host {
+            if required {
                 panic!("building {SHIM_DIR} ({GLES_SONAME}) for {triple}: {e}");
             }
             println!("cargo:warning=hl-gl: building {GLES_SONAME} for {triple} failed: {e}");
             continue;
         }
         if let Err(e) = stage_lib(&gles_target, triple, &dst_dir, GLES_SONAME) {
-            if host {
+            if required {
                 panic!("staging {GLES_SONAME} for {triple}: {e}");
             }
             println!("cargo:warning=hl-gl: staging {GLES_SONAME} for {triple} failed: {e}");
             continue;
         }
+        validate_exports(
+            &cc,
+            &dst_dir.join(GLES_SONAME),
+            &manifest_dir.join("shim/egl/tests/golden/abi_symbols_gl.txt"),
+            "gl",
+        )
+        .unwrap_or_else(|error| panic!("validating {GLES_SONAME} for {triple}: {error}"));
         // 3. Compile + stage the libwayland-egl.so.1 wayland-egl ABI object (the app's `wl_egl_window`
         //    library). A SEPARATE object from libEGL — libEGL reads its `wl_egl_window` struct back.
-        if let Err(e) = generate_wayland_egl(cc, &wlegl_c, &dst_dir) {
-            if host {
+        if let Err(e) = generate_wayland_egl(&cc, &wlegl_c, &dst_dir) {
+            if required {
                 panic!("generating {WLEGL_SONAME} for {triple}: {e}");
             }
             println!("cargo:warning=hl-gl: generating {WLEGL_SONAME} for {triple} failed: {e}");
@@ -164,6 +183,50 @@ fn main() {
             dst_dir.display()
         );
     }
+}
+
+/// Require the staged ELF object to expose exactly its committed API surface. A hand-written entry point
+/// without the role-specific `no_mangle` attribute otherwise compiles cleanly but fails at `dlsym` in GTK.
+fn validate_exports(
+    linker: &str,
+    library: &Path,
+    golden: &Path,
+    prefix: &str,
+) -> Result<(), String> {
+    let nm = linker
+        .strip_suffix("gcc")
+        .map_or_else(|| "nm".to_owned(), |toolchain| format!("{toolchain}nm"));
+    let output = Command::new(&nm)
+        .args(["-D", "--defined-only"])
+        .arg(library)
+        .output()
+        .map_err(|error| format!("spawn {nm}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("{nm} exited with {}", output.status));
+    }
+    let actual = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .filter(|name| name.starts_with(prefix))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let expected = std::fs::read_to_string(golden)
+        .map_err(|error| format!("read {}: {error}", golden.display()))?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if actual == expected {
+        return Ok(());
+    }
+    let missing = expected.difference(&actual).cloned().collect::<Vec<_>>();
+    let extra = actual.difference(&expected).cloned().collect::<Vec<_>>();
+    Err(format!(
+        "{} export surface differs from {}: missing={missing:?}, extra={extra:?}",
+        library.display(),
+        golden.display()
+    ))
 }
 
 /// Cross-build the shim crate for `triple` in the given `role` (`egl` or `gles`), with the recursion
@@ -200,7 +263,16 @@ fn build_shim(
         .env(&linker_env, linker)
         // Don't inherit the parent build's RUSTFLAGS (e.g. a host-only flag) into the guest cdylib.
         .env_remove("RUSTFLAGS")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS");
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        // `cargo clippy` injects its driver through these variables. The nested command builds a target
+        // artifact; it must not accidentally turn into a second, cross-target Clippy invocation.
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("CLIPPY_ARGS")
+        // The parent Darwin shell contributes native linker flags (including `-lintl`). They are
+        // invalid for Linux ELF and must not cross the target boundary.
+        .env_remove("NIX_LDFLAGS")
+        .env_remove("NIX_CFLAGS_COMPILE");
     if let Some(libdir) = egl_libdir {
         cmd.env("HL_SHIM_EGL_LIBDIR", libdir);
     }
@@ -242,6 +314,8 @@ fn generate_wayland_egl(cc: &str, wlegl_c: &Path, dst_dir: &Path) -> Result<(), 
         .arg(&out)
         .arg(wlegl_c)
         .arg(format!("-Wl,-soname,{WLEGL_SONAME}"))
+        .env_remove("NIX_LDFLAGS")
+        .env_remove("NIX_CFLAGS_COMPILE")
         .status()
         .map_err(|e| format!("spawn {cc}: {e}"))?;
     if !status.success() {
@@ -304,9 +378,4 @@ impl BuildEnvironment {
     fn required(key: &str) -> String {
         std::env::var(key).unwrap_or_else(|_| panic!("env {key} not set"))
     }
-}
-
-/// The build host's target triple (`cargo` sets `HOST` for build scripts).
-fn host_triple() -> String {
-    std::env::var("HOST").unwrap_or_default()
 }

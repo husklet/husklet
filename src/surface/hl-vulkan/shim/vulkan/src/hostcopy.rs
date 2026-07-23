@@ -9,7 +9,6 @@
 
 use core::ffi::c_void;
 
-
 use crate::state::StateStore;
 use crate::types::*;
 
@@ -24,45 +23,66 @@ fn have_device() -> bool {
 /// advertised — the executor holds image texels host-side, not as guest-CPU bytes).
 struct HostCopy;
 impl HostCopy {
-fn unsupported(cmd: &'static str, info: *const c_void) -> VkResult {
-    if info.is_null() {
-        return VK_ERROR_INITIALIZATION_FAILED;
+    fn unsupported(cmd: &'static str, info: *const c_void) -> VkResult {
+        if info.is_null() {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        if !have_device() {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        crate::stub::Call::unsupported(
+            cmd,
+            "hostImageCopy feature is not advertised (image texels are host-owned)",
+        );
+        VK_ERROR_FEATURE_NOT_PRESENT
     }
-    if !have_device() {
-        return VK_ERROR_INITIALIZATION_FAILED;
-    }
-    crate::stub::Call::unsupported(cmd, "hostImageCopy feature is not advertised (image texels are host-owned)");
-    VK_ERROR_FEATURE_NOT_PRESENT
-}
 }
 
 #[no_mangle]
-pub extern "C" fn vkCopyMemoryToImage(_device: *mut c_void, p_copy_memory_to_image_info: *const c_void) -> VkResult {
+pub extern "C" fn vkCopyMemoryToImage(
+    _device: *mut c_void,
+    p_copy_memory_to_image_info: *const c_void,
+) -> VkResult {
     HostCopy::unsupported("vkCopyMemoryToImage", p_copy_memory_to_image_info)
 }
 
 #[no_mangle]
-pub extern "C" fn vkCopyMemoryToImageEXT(device: *mut c_void, p_copy_memory_to_image_info: *const c_void) -> VkResult {
+pub extern "C" fn vkCopyMemoryToImageEXT(
+    device: *mut c_void,
+    p_copy_memory_to_image_info: *const c_void,
+) -> VkResult {
     vkCopyMemoryToImage(device, p_copy_memory_to_image_info)
 }
 
 #[no_mangle]
-pub extern "C" fn vkCopyImageToMemory(_device: *mut c_void, p_copy_image_to_memory_info: *const c_void) -> VkResult {
+pub extern "C" fn vkCopyImageToMemory(
+    _device: *mut c_void,
+    p_copy_image_to_memory_info: *const c_void,
+) -> VkResult {
     HostCopy::unsupported("vkCopyImageToMemory", p_copy_image_to_memory_info)
 }
 
 #[no_mangle]
-pub extern "C" fn vkCopyImageToMemoryEXT(device: *mut c_void, p_copy_image_to_memory_info: *const c_void) -> VkResult {
+pub extern "C" fn vkCopyImageToMemoryEXT(
+    device: *mut c_void,
+    p_copy_image_to_memory_info: *const c_void,
+) -> VkResult {
     vkCopyImageToMemory(device, p_copy_image_to_memory_info)
 }
 
 #[no_mangle]
-pub extern "C" fn vkCopyImageToImage(_device: *mut c_void, p_copy_image_to_image_info: *const c_void) -> VkResult {
+pub extern "C" fn vkCopyImageToImage(
+    _device: *mut c_void,
+    p_copy_image_to_image_info: *const c_void,
+) -> VkResult {
     HostCopy::unsupported("vkCopyImageToImage", p_copy_image_to_image_info)
 }
 
 #[no_mangle]
-pub extern "C" fn vkCopyImageToImageEXT(device: *mut c_void, p_copy_image_to_image_info: *const c_void) -> VkResult {
+pub extern "C" fn vkCopyImageToImageEXT(
+    device: *mut c_void,
+    p_copy_image_to_image_info: *const c_void,
+) -> VkResult {
     vkCopyImageToImage(device, p_copy_image_to_image_info)
 }
 
@@ -102,7 +122,9 @@ pub extern "C" fn vkGetImageSubresourceLayout2(
         return;
     };
     out.subresource_layout = VkSubresourceLayout::default();
-    if let Some(Ok(l)) = StateStore::with(|s| s.device.as_ref().map(|d| d.image_subresource_layout(image))) {
+    if let Some(Ok(l)) =
+        StateStore::with(|s| s.device.as_ref().map(|d| d.image_subresource_layout(image)))
+    {
         out.subresource_layout = VkSubresourceLayout {
             offset: l.offset,
             size: l.size,

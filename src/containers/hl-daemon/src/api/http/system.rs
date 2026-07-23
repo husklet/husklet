@@ -1,0 +1,259 @@
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::Json;
+use hl_container::ContainerState;
+use hl_images::content::Store;
+
+use super::{ApiError, ApiResult, DockerState};
+use crate::api::{
+    Authentication, Container, Credentials, DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData,
+    Version, VolumeUsage,
+};
+use serde::Deserialize;
+use std::collections::BTreeMap;
+
+#[hl_design::adapter]
+pub(super) async fn ping() -> &'static str {
+    "OK"
+}
+
+#[hl_design::adapter]
+pub(super) async fn version(State(state): State<DockerState>) -> Json<Version> {
+    Json(Version {
+        version: state.release.version,
+        api_version: "1.43".into(),
+        min_api_version: "1.24".into(),
+        os: state.platform.os,
+        arch: state.platform.architecture,
+    })
+}
+
+#[hl_design::adapter]
+pub(super) async fn plugins() -> Json<Vec<Plugin>> {
+    Json(Vec::new())
+}
+
+#[hl_design::adapter]
+pub(super) async fn auth(Json(_credentials): Json<Credentials>) -> Json<Authentication> {
+    Json(Authentication {
+        status: "Login Succeeded".into(),
+        identity_token: String::new(),
+    })
+}
+
+#[hl_design::adapter]
+pub(super) async fn info(State(state): State<DockerState>) -> ApiResult<Json<SystemInfo>> {
+    let containers = state.containers.list().await.map_err(ApiError::container)?;
+    let running = containers
+        .iter()
+        .filter(|container| matches!(container.state, ContainerState::Running { .. }))
+        .count();
+    let paused = containers
+        .iter()
+        .filter(|container| container.state.is_paused())
+        .count();
+    let images = state.image_summaries().await?;
+    Ok(Json(SystemInfo {
+        id: "hl-daemon".into(),
+        containers: i64::try_from(containers.len()).unwrap_or(i64::MAX),
+        containers_running: i64::try_from(running).unwrap_or(i64::MAX),
+        containers_paused: i64::try_from(paused).unwrap_or(i64::MAX),
+        containers_stopped: i64::try_from(containers.len().saturating_sub(running + paused))
+            .unwrap_or(i64::MAX),
+        images: i64::try_from(images.len()).unwrap_or(i64::MAX),
+        driver: "hl-engine".into(),
+        memory_limit: false,
+        ncpu: std::thread::available_parallelism()
+            .map_or(1, |value| i64::try_from(value.get()).unwrap_or(i64::MAX)),
+        os_type: state.platform.os.clone(),
+        architecture: state.platform.architecture.clone(),
+        operating_system: "Linux".into(),
+        name: "hl-daemon".into(),
+        server_version: state.release.version,
+    }))
+}
+
+#[hl_design::adapter]
+pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<DiskUsage>> {
+    let containers = state
+        .containers
+        .list()
+        .await
+        .map_err(ApiError::container)?
+        .into_iter()
+        .map(Container::from)
+        .collect();
+    let images = state.image_summaries().await?;
+    let volume_service = state.containers.volumes();
+    let mut volumes = Vec::new();
+    for volume in volume_service.list().await.map_err(ApiError::container)? {
+        let size = volume_service
+            .size(&volume.name)
+            .await
+            .map_err(ApiError::container)?;
+        let references = volume_service
+            .references(&volume.name)
+            .await
+            .map_err(ApiError::container)?;
+        volumes.push(VolumeUsage {
+            name: volume.name,
+            mountpoint: volume.path.to_string_lossy().into_owned(),
+            usage_data: UsageData {
+                size: i64::try_from(size).unwrap_or(i64::MAX),
+                ref_count: i64::try_from(references).unwrap_or(i64::MAX),
+            },
+        });
+    }
+    let image_service = state.containers.images().map_err(ApiError::container)?;
+    let layers_size = tokio::task::spawn_blocking(move || {
+        image_service
+            .content()
+            .digests()?
+            .into_iter()
+            .try_fold(0_i64, |total, digest| {
+                let size = image_service.content().info(&digest)?.size;
+                Ok::<_, hl_images::Error>(
+                    total.saturating_add(i64::try_from(size).unwrap_or(i64::MAX)),
+                )
+            })
+    })
+    .await
+    .map_err(ApiError::task)?
+    .map_err(ApiError::image)?;
+    Ok(Json(DiskUsage {
+        layers_size,
+        images,
+        containers,
+        volumes,
+    }))
+}
+
+#[derive(Default, Deserialize)]
+pub(super) struct PruneQuery {
+    #[serde(default)]
+    volumes: bool,
+    filters: Option<String>,
+}
+
+#[hl_design::adapter]
+pub(super) async fn prune(
+    State(state): State<DockerState>,
+    Query(query): Query<PruneQuery>,
+) -> ApiResult<Json<SystemPrune>> {
+    let filters = Filters::parse(query.filters.as_deref())?;
+    // Compute and validate every resource projection before the first deletion. Docker's `until`
+    // filter applies to timestamped resources, while volumes receive only the label selection.
+    let common = filters.raw(&["until", "label", "label!"])?;
+    crate::api::filter::Prune::parse(common.as_deref())
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error))?;
+    let volume_filters = filters.raw(&["label", "label!"])?;
+    let image_filters = common.clone();
+    let Json(containers) = super::container::prune(
+        State(state.clone()),
+        Query(super::container::PruneQuery {
+            filters: common.clone(),
+        }),
+    )
+    .await?;
+    let Json(networks) = super::network::prune(
+        State(state.clone()),
+        Query(super::network::ListQuery { filters: common }),
+    )
+    .await?;
+    let volumes = if query.volumes {
+        super::volume::prune(
+            State(state.clone()),
+            Query(super::volume::ListQuery {
+                filters: Filters::with_all(volume_filters.as_deref())?,
+            }),
+        )
+        .await?
+        .0
+    } else {
+        crate::api::VolumePrune {
+            volumes_deleted: Vec::new(),
+            space_reclaimed: 0,
+        }
+    };
+    let images = super::image::Prune::parse(image_filters.as_deref())?
+        .execute(&state)
+        .await?;
+    let image_space = u64::try_from(images.space_reclaimed).unwrap_or(0);
+    let result = SystemPrune {
+        containers_deleted: containers.containers_deleted,
+        images_deleted: images.images_deleted,
+        networks_deleted: networks.networks_deleted,
+        volumes_deleted: volumes.volumes_deleted,
+        space_reclaimed: containers
+            .space_reclaimed
+            .saturating_add(volumes.space_reclaimed)
+            .saturating_add(image_space),
+    };
+    hl_log::hl_info!(
+        hl_log::tag::DAEMON,
+        "system prune containers={} images={} networks={} volumes={} reclaimed={}",
+        result.containers_deleted.len(),
+        result.images_deleted.len(),
+        result.networks_deleted.len(),
+        result.volumes_deleted.len(),
+        result.space_reclaimed
+    );
+    Ok(Json(result))
+}
+
+#[derive(Default)]
+struct Filters(BTreeMap<String, Vec<String>>);
+
+impl Filters {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
+            return Ok(Self::default());
+        };
+        let values: BTreeMap<String, Vec<String>> = serde_json::from_str(raw).map_err(|error| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                format!("invalid system prune filters: {error}"),
+            )
+        })?;
+        let unsupported = values
+            .keys()
+            .filter(|name| !matches!(name.as_str(), "until" | "label" | "label!"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unsupported.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "unsupported system prune filters: {}",
+                    unsupported.join(", ")
+                ),
+            ));
+        }
+        Ok(Self(values))
+    }
+
+    fn raw(&self, names: &[&str]) -> ApiResult<Option<String>> {
+        let values = self
+            .0
+            .iter()
+            .filter(|(name, _)| names.contains(&name.as_str()))
+            .map(|(name, values)| (name.clone(), values.clone()))
+            .collect::<BTreeMap<_, _>>();
+        (!values.is_empty())
+            .then(|| serde_json::to_string(&values))
+            .transpose()
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))
+    }
+
+    fn with_all(raw: Option<&str>) -> ApiResult<Option<String>> {
+        let mut values: BTreeMap<String, Vec<String>> = raw
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?
+            .unwrap_or_default();
+        values.insert("all".into(), vec!["true".into()]);
+        serde_json::to_string(&values)
+            .map(Some)
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))
+    }
+}

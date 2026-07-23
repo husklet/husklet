@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use hl_cuda::model::stream::Stream;
 use hl_cuda::{CudaContext, CudaDeviceDesc, Function};
+use hl_gpu::transport::DEFAULT_EXEC_SOCK;
 use hl_gpu::RemoteCommandSink;
 
 /// Everything the shim tracks between `cu*` calls.
@@ -84,7 +85,9 @@ impl State {
             inited: false,
             ctx: CudaContext::new(CudaDeviceDesc::apple_default(vram)),
             // Connect target from $HL_GPU_EXEC; the connection itself is opened lazily on first submit.
-            sink: RemoteCommandSink::from_env(),
+            sink: RemoteCommandSink::new(
+                std::env::var("HL_GPU_EXEC").unwrap_or_else(|_| DEFAULT_EXEC_SOCK.to_owned()),
+            ),
             functions: Vec::new(),
             func_dyn_shared: Vec::new(),
             func_cache_config: Vec::new(),

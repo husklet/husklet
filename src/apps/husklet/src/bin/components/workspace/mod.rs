@@ -2,6 +2,8 @@ use super::inputs::{FormValidation, ImagePicker, WorkspaceFeatureFields};
 use super::layout::{Field, Panel};
 use crate::*;
 
+mod configuration;
+
 /// Controls shared by workspace creation and an existing workspace's settings tab.
 /// Husklet owns their behavior; the toolkit widgets only collect and report values.
 pub(crate) struct Form {
@@ -38,6 +40,7 @@ impl Form {
             .build();
 
         let form = Rc::new(build_form());
+        form.add_environment();
         use screens::workspace::create::Page as CreatePage;
         let view = screens::workspace::create::View::new([
             (CreatePage::General, form.general()),
@@ -60,6 +63,7 @@ impl Form {
             let w = window.clone();
             let on_created = on_created.clone();
             let pages = view.pages.clone();
+            let status = view.status.clone();
             view.create.connect_clicked(move |_| {
                 // Validate: name + image are required. Mark empties red and jump to General.
                 let name_ok = !form.name.text().trim().is_empty();
@@ -72,9 +76,18 @@ impl Form {
                     FormValidation::focus_missing(&form, name_ok);
                     return;
                 }
-                if form.save() {
-                    on_created();
-                    w.close();
+                let result = form.configuration().and_then(|workspace| {
+                    WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace)
+                });
+                match result {
+                    Ok(()) => {
+                        on_created();
+                        w.close();
+                    }
+                    Err(error) => {
+                        status.add_css_class("err");
+                        status.set_text(&error.to_string());
+                    }
                 }
             });
         }
@@ -86,6 +99,16 @@ impl Form {
 
         window.set_child(Some(&view.widget));
         window.present();
+        if AppConfig::get().open_color_picker {
+            let picker = form.background.widget().clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+                picker.activate();
+            });
+            let picker = form.background.widget().clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+                picker.activate();
+            });
+        }
         host::appearance::Appearance::apply();
         Screenshot::schedule(&window, "newws");
     }
@@ -305,7 +328,6 @@ impl Form {
         let form2 = form.clone();
         add.connect_clicked(move |_| form2.add_environment());
         p.append(&add);
-        form.add_environment(); // start with one empty row
         p
     }
 
@@ -401,93 +423,6 @@ impl Form {
             form2.mount_box.remove(&row2);
             form2.mount_rows.borrow_mut().retain(|(hh, _, _)| hh != &h2);
         });
-    }
-
-    pub(crate) fn save(&self) -> bool {
-        let form = self;
-        let name = form.name.text().trim().to_string();
-        let image = form.image.text().trim().to_string();
-        if name.is_empty() || image.is_empty() {
-            return false;
-        }
-        // Map the arch toggle to the internal target (Linux only).
-        let arch = if form.cpu_amd.get() {
-            Arch::Amd64
-        } else {
-            Arch::Arm64
-        };
-        let mut ws = WorkspaceConfig::new(&name, &image, arch);
-        let shell = form.shell.text().trim().to_string();
-        if !shell.is_empty() {
-            ws.shell = Some(shell);
-        }
-        let storage = form.storage.text().trim().to_string();
-        if !storage.is_empty() {
-            ws.storage = Some(std::path::PathBuf::from(storage));
-        }
-        let c = form.cpus.value() as u32;
-        if c > 0 {
-            ws.cpus = Some(c);
-        }
-        let m = form.mem.value() as u32;
-        if m > 0 {
-            ws.memory_mb = Some(m);
-        }
-        // Terminal scrollback: blank / 0 / "unlimited" → None (unlimited); a positive number → cap.
-        let sb = form.scrollback.text().trim().to_ascii_lowercase();
-        ws.scrollback = match sb.as_str() {
-            "" | "0" | "unlimited" => None,
-            _ => sb.parse::<u64>().ok().filter(|n| *n > 0),
-        };
-        ws.terminal = TerminalPreferences {
-            font_family: Some(form.font.value()),
-            font_size: Some(form.font_size.value().round() as u16),
-            foreground: Some(form.foreground.value()),
-            background: Some(form.background.value()),
-            cursor_shape: Some(form.cursor.get().as_str().to_owned()),
-            cursor_blink: Some(form.cursor_blink.is_active()),
-        };
-        ws.docker_sock = form.features.docker.is_active();
-        ws.gui = form.features.graphical.is_active();
-        // VPN/proxy egress: blank → direct (None); otherwise parse the spec (bare host:port defaults to SOCKS5).
-        ws.vpn = VpnConfig::parse(form.features.vpn.text().trim());
-        // Simulated CUDA device: off → None; on → build the reported device props (backed by host Metal).
-        ws.cuda = if form.features.cuda.is_active() {
-            let mut d = CudaDevice::default_device();
-            let name = form.features.cuda_name.text().trim().to_string();
-            if !name.is_empty() {
-                d.name = name;
-            }
-            let cc = form.features.cuda_capability.text().trim().to_string();
-            if !cc.is_empty() {
-                d.compute_capability = cc;
-            }
-            if let Ok(mb) = form.features.cuda_memory.text().trim().parse::<u32>() {
-                d.vram_mb = mb.max(1);
-            }
-            Some(d)
-        } else {
-            None
-        };
-        for (k, v) in form.env_rows.borrow().iter() {
-            let key = k.text().trim().to_string();
-            if !key.is_empty() {
-                ws.env.push((key, v.text().trim().to_string()));
-            }
-        }
-        for (h, c, ro) in form.mount_rows.borrow().iter() {
-            let host = h.text().trim().to_string();
-            let cont = c.text().trim().to_string();
-            if !host.is_empty() && !cont.is_empty() {
-                ws.mounts.push(Mount {
-                    host,
-                    container: cont,
-                    ro: ro.is_active(),
-                });
-            }
-        }
-        let mut store = WorkspaceStore::load(Home::current().workspaces_config());
-        store.upsert(ws).is_ok()
     }
 }
 

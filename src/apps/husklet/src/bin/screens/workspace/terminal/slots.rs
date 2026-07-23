@@ -35,9 +35,9 @@ impl<'a> Slots<'a> {
         let mut found = None;
         tw.panes
             .borrow_mut()
-            .retain(|(w, slot, _)| match w.upgrade() {
+            .retain(|pane| match pane.terminal.upgrade() {
                 Some(t) if &t == term => {
-                    found = Some(slot.clone());
+                    found = Some(pane.slot.clone());
                     true
                 }
                 Some(_) => true,
@@ -51,11 +51,8 @@ impl<'a> Slots<'a> {
         let tw = self.0;
         tw.panes
             .borrow_mut()
-            .retain(|(w, slot, _)| match w.upgrade() {
-                Some(t) if &t == term => {
-                    let _ = slot;
-                    false
-                }
+            .retain(|pane| match pane.terminal.upgrade() {
+                Some(t) if &t == term => false,
                 Some(_) => true,
                 None => false, // prune dead entries while we're here
             });

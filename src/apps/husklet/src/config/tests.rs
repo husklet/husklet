@@ -24,6 +24,27 @@ fn vpn_spec_parses_and_roundtrips() {
     assert_eq!(VpnConfig::parse(&wg.to_spec()).unwrap(), wg);
     assert_eq!(VpnConfig::parse(""), None);
     assert_eq!(VpnConfig::parse("   "), None);
+    for malformed in [
+        "not an endpoint",
+        "localhost",
+        "localhost:0",
+        "localhost:65536",
+        "localhost:port",
+        "socks5:localhost",
+        "http::8080",
+        "socks5:[::1:1080",
+        "socks5:host]:1080",
+        "socks5:[host:1080",
+        "socks5:bad host:1080",
+    ] {
+        assert_eq!(VpnConfig::parse(malformed), None, "{malformed}");
+    }
+    assert_eq!(
+        VpnConfig::parse("socks5:[::1]:1080")
+            .unwrap()
+            .socks_endpoint(),
+        Some("[::1]:1080")
+    );
 }
 
 #[test]
@@ -50,13 +71,22 @@ fn cuda_device_spec_parses_and_roundtrips() {
         ("JustAName", "8.6", 4096)
     );
     assert_eq!(CudaDevice::parse(""), None);
+    for malformed in [
+        "|8.6|4096",
+        "GPU|eight.six|4096",
+        "GPU|8.6|nope",
+        "GPU|8.6|0",
+        "GPU|8.6|4096|extra",
+    ] {
+        assert_eq!(CudaDevice::parse(malformed), None, "{malformed}");
+    }
 }
 
 #[test]
 fn store_persists_across_reload() {
     let path = tmp_path("persist");
     let _ = std::fs::remove_file(&path);
-    let mut store = WorkspaceStore::load(&path);
+    let mut store = WorkspaceStore::load(&path).unwrap();
     assert!(store.all().is_empty());
     store
         .upsert(WorkspaceConfig::new(
@@ -76,7 +106,7 @@ fn store_persists_across_reload() {
         ))
         .unwrap();
 
-    let reloaded = WorkspaceStore::load(&path);
+    let reloaded = WorkspaceStore::load(&path).unwrap();
     assert_eq!(reloaded.all().len(), 2);
     assert_eq!(reloaded.get("ubuntu-dev").unwrap().image, "ubuntu:22.04");
     assert_eq!(reloaded.get("legacy").unwrap().arch, Arch::Amd64);
@@ -111,10 +141,14 @@ fn rich_config_roundtrips() {
         cursor_shape: Some("beam".into()),
         cursor_blink: Some(false),
     };
-    let mut store = WorkspaceStore::load(&path);
+    let mut store = WorkspaceStore::load(&path).unwrap();
     store.upsert(cfg.clone()).unwrap();
 
-    let got = WorkspaceStore::load(&path).get("api").cloned().unwrap();
+    let got = WorkspaceStore::load(&path)
+        .unwrap()
+        .get("api")
+        .cloned()
+        .unwrap();
     assert_eq!(
         got, cfg,
         "rich workspace config should round-trip through the block format"
@@ -126,7 +160,7 @@ fn rich_config_roundtrips() {
 fn legacy_tab_format_still_loads() {
     let path = tmp_path("legacy-tab");
     std::fs::write(&path, "# old\nubuntu-dev\tarm64\tubuntu:24.04\n").unwrap();
-    let store = WorkspaceStore::load(&path);
+    let store = WorkspaceStore::load(&path).unwrap();
     let w = store.get("ubuntu-dev").unwrap();
     assert_eq!(w.image, "ubuntu:24.04");
     assert_eq!(w.arch, Arch::Arm64);
@@ -138,12 +172,130 @@ fn legacy_tab_format_still_loads() {
 fn store_remove() {
     let path = tmp_path("remove");
     let _ = std::fs::remove_file(&path);
-    let mut store = WorkspaceStore::load(&path);
+    let mut store = WorkspaceStore::load(&path).unwrap();
     store
         .upsert(WorkspaceConfig::new("a", "alpine", Arch::Arm64))
         .unwrap();
     assert!(store.remove("a").unwrap());
     assert!(!store.remove("a").unwrap());
-    assert!(WorkspaceStore::load(&path).all().is_empty());
+    assert!(WorkspaceStore::load(&path).unwrap().all().is_empty());
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn failed_persistence_does_not_change_the_live_store() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("store");
+    std::fs::create_dir(&path).unwrap();
+    let original = WorkspaceConfig::new("original", "ubuntu:24.04", Arch::Arm64);
+    let mut store = WorkspaceStore {
+        path,
+        items: vec![original.clone()],
+    };
+
+    assert!(store
+        .upsert(WorkspaceConfig::new("new", "debian:bookworm", Arch::Arm64))
+        .is_err());
+    assert_eq!(store.all(), [original]);
+}
+
+#[test]
+fn malformed_store_is_reported_and_never_replaced() {
+    let path = tmp_path("malformed");
+    let original = b"[workspace]\nname = runtime\nimage = ubuntu:24.04\narch = nonsense\n";
+    std::fs::write(&path, original).unwrap();
+
+    let error = WorkspaceStore::load(&path).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("line 4"), "{error}");
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn unknown_fields_are_not_silently_destroyed() {
+    let path = tmp_path("unknown-field");
+    let original = concat!(
+        "[workspace]\n",
+        "name = runtime\n",
+        "image = ubuntu:24.04\n",
+        "arch = arm64\n",
+        "future_capability = enabled\n",
+    );
+    std::fs::write(&path, original).unwrap();
+
+    let error = WorkspaceStore::load(&path).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("future_capability"), "{error}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn incomplete_workspace_is_not_mistaken_for_an_empty_store() {
+    let path = tmp_path("incomplete");
+    std::fs::write(&path, "[workspace]\nname = runtime\n").unwrap();
+
+    let error = WorkspaceStore::load(&path).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("missing image"), "{error}");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn duplicate_workspace_names_are_rejected() {
+    let path = tmp_path("duplicate-name");
+    let original = concat!(
+        "[workspace]\nname = runtime\nimage = ubuntu:24.04\narch = arm64\n",
+        "[workspace]\nname = runtime\nimage = debian:bookworm\narch = arm64\n",
+    );
+    std::fs::write(&path, original).unwrap();
+
+    let error = WorkspaceStore::load(&path).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(
+        error.to_string().contains("duplicate workspace name"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn empty_workspace_identity_is_rejected() {
+    let path = tmp_path("empty-identity");
+    std::fs::write(
+        &path,
+        "[workspace]\nname = \nimage = ubuntu\narch = arm64\n",
+    )
+    .unwrap();
+
+    let error = WorkspaceStore::load(&path).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("workspace name"), "{error}");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn unsupported_control_characters_never_mutate_persisted_values() {
+    let path = tmp_path("control-character");
+    let _ = std::fs::remove_file(&path);
+    let original = WorkspaceConfig::new("runtime", "ubuntu:24.04", Arch::Arm64);
+    let mut store = WorkspaceStore::load(&path).unwrap();
+    store.upsert(original.clone()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut invalid = WorkspaceConfig::new("other", "ubuntu:24.04", Arch::Arm64);
+    invalid.shell = Some("/bin/bash\nmalicious = value".into());
+
+    let error = store.upsert(invalid).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(store.all(), [original]);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let _ = std::fs::remove_file(path);
 }

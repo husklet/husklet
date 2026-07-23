@@ -43,12 +43,15 @@ struct VkDebugMarkerObjectNameInfoEXT {
 /// Borrow a nul-terminated C string as an owned `String` (empty on NULL / bad UTF-8).
 struct DebugName;
 impl DebugName {
-unsafe fn read(p: *const c_char) -> String {
-    if p.is_null() {
-        return String::new();
+    unsafe fn read(p: *const c_char) -> String {
+        if p.is_null() {
+            return String::new();
+        }
+        core::ffi::CStr::from_ptr(p)
+            .to_str()
+            .unwrap_or("")
+            .to_string()
     }
-    core::ffi::CStr::from_ptr(p).to_str().unwrap_or("").to_string()
-}
 }
 
 // ==================================================================================================
@@ -56,14 +59,19 @@ unsafe fn read(p: *const c_char) -> String {
 // ==================================================================================================
 
 #[no_mangle]
-pub extern "C" fn vkSetDebugUtilsObjectNameEXT(_device: *mut c_void, p_name_info: *const c_void) -> VkResult {
+pub extern "C" fn vkSetDebugUtilsObjectNameEXT(
+    _device: *mut c_void,
+    p_name_info: *const c_void,
+) -> VkResult {
     if let Some(info) = unsafe { (p_name_info as *const VkDebugUtilsObjectNameInfoEXT).as_ref() } {
         let name = unsafe { DebugName::read(info.p_object_name) };
         StateStore::with(|s| {
             if name.is_empty() {
-                s.debug_object_names.remove(&(info.object_type, info.object_handle));
+                s.debug_object_names
+                    .remove(&(info.object_type, info.object_handle));
             } else {
-                s.debug_object_names.insert((info.object_type, info.object_handle), name);
+                s.debug_object_names
+                    .insert((info.object_type, info.object_handle), name);
             }
         });
     }
@@ -71,23 +79,42 @@ pub extern "C" fn vkSetDebugUtilsObjectNameEXT(_device: *mut c_void, p_name_info
 }
 
 #[no_mangle]
-pub extern "C" fn vkSetDebugUtilsObjectTagEXT(_device: *mut c_void, _p_tag_info: *const c_void) -> VkResult {
+pub extern "C" fn vkSetDebugUtilsObjectTagEXT(
+    _device: *mut c_void,
+    _p_tag_info: *const c_void,
+) -> VkResult {
     // Tags are opaque app data with no modeled effect; accepting them is a benign no-op.
     VK_SUCCESS
 }
 
 #[no_mangle]
-pub extern "C" fn vkQueueBeginDebugUtilsLabelEXT(_queue: *mut c_void, _p_label_info: *const c_void) {}
+pub extern "C" fn vkQueueBeginDebugUtilsLabelEXT(
+    _queue: *mut c_void,
+    _p_label_info: *const c_void,
+) {
+}
 #[no_mangle]
 pub extern "C" fn vkQueueEndDebugUtilsLabelEXT(_queue: *mut c_void) {}
 #[no_mangle]
-pub extern "C" fn vkQueueInsertDebugUtilsLabelEXT(_queue: *mut c_void, _p_label_info: *const c_void) {}
+pub extern "C" fn vkQueueInsertDebugUtilsLabelEXT(
+    _queue: *mut c_void,
+    _p_label_info: *const c_void,
+) {
+}
 #[no_mangle]
-pub extern "C" fn vkCmdBeginDebugUtilsLabelEXT(_command_buffer: *mut c_void, _p_label_info: *const c_void) {}
+pub extern "C" fn vkCmdBeginDebugUtilsLabelEXT(
+    _command_buffer: *mut c_void,
+    _p_label_info: *const c_void,
+) {
+}
 #[no_mangle]
 pub extern "C" fn vkCmdEndDebugUtilsLabelEXT(_command_buffer: *mut c_void) {}
 #[no_mangle]
-pub extern "C" fn vkCmdInsertDebugUtilsLabelEXT(_command_buffer: *mut c_void, _p_label_info: *const c_void) {}
+pub extern "C" fn vkCmdInsertDebugUtilsLabelEXT(
+    _command_buffer: *mut c_void,
+    _p_label_info: *const c_void,
+) {
+}
 
 #[no_mangle]
 pub extern "C" fn vkCreateDebugUtilsMessengerEXT(
@@ -109,7 +136,11 @@ pub extern "C" fn vkCreateDebugUtilsMessengerEXT(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyDebugUtilsMessengerEXT(_instance: *mut c_void, messenger: u64, _p_allocator: *const c_void) {
+pub extern "C" fn vkDestroyDebugUtilsMessengerEXT(
+    _instance: *mut c_void,
+    messenger: u64,
+    _p_allocator: *const c_void,
+) {
     StateStore::with(|s| {
         s.debug_messengers.remove(&messenger);
     });
@@ -129,14 +160,19 @@ pub extern "C" fn vkSubmitDebugUtilsMessageEXT(
 // ==================================================================================================
 
 #[no_mangle]
-pub extern "C" fn vkDebugMarkerSetObjectNameEXT(_device: *mut c_void, p_name_info: *const c_void) -> VkResult {
+pub extern "C" fn vkDebugMarkerSetObjectNameEXT(
+    _device: *mut c_void,
+    p_name_info: *const c_void,
+) -> VkResult {
     if let Some(info) = unsafe { (p_name_info as *const VkDebugMarkerObjectNameInfoEXT).as_ref() } {
         let name = unsafe { DebugName::read(info.p_object_name) };
         StateStore::with(|s| {
             if name.is_empty() {
-                s.debug_object_names.remove(&(info.object_type, info.object));
+                s.debug_object_names
+                    .remove(&(info.object_type, info.object));
             } else {
-                s.debug_object_names.insert((info.object_type, info.object), name);
+                s.debug_object_names
+                    .insert((info.object_type, info.object), name);
             }
         });
     }
@@ -144,16 +180,27 @@ pub extern "C" fn vkDebugMarkerSetObjectNameEXT(_device: *mut c_void, p_name_inf
 }
 
 #[no_mangle]
-pub extern "C" fn vkDebugMarkerSetObjectTagEXT(_device: *mut c_void, _p_tag_info: *const c_void) -> VkResult {
+pub extern "C" fn vkDebugMarkerSetObjectTagEXT(
+    _device: *mut c_void,
+    _p_tag_info: *const c_void,
+) -> VkResult {
     VK_SUCCESS
 }
 
 #[no_mangle]
-pub extern "C" fn vkCmdDebugMarkerBeginEXT(_command_buffer: *mut c_void, _p_marker_info: *const c_void) {}
+pub extern "C" fn vkCmdDebugMarkerBeginEXT(
+    _command_buffer: *mut c_void,
+    _p_marker_info: *const c_void,
+) {
+}
 #[no_mangle]
 pub extern "C" fn vkCmdDebugMarkerEndEXT(_command_buffer: *mut c_void) {}
 #[no_mangle]
-pub extern "C" fn vkCmdDebugMarkerInsertEXT(_command_buffer: *mut c_void, _p_marker_info: *const c_void) {}
+pub extern "C" fn vkCmdDebugMarkerInsertEXT(
+    _command_buffer: *mut c_void,
+    _p_marker_info: *const c_void,
+) {
+}
 
 // ==================================================================================================
 // VK_EXT_debug_report (legacy instance-level callback)
@@ -179,7 +226,11 @@ pub extern "C" fn vkCreateDebugReportCallbackEXT(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyDebugReportCallbackEXT(_instance: *mut c_void, callback: u64, _p_allocator: *const c_void) {
+pub extern "C" fn vkDestroyDebugReportCallbackEXT(
+    _instance: *mut c_void,
+    callback: u64,
+    _p_allocator: *const c_void,
+) {
     StateStore::with(|s| {
         s.debug_report_callbacks.remove(&callback);
     });

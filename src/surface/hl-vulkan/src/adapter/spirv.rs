@@ -26,7 +26,7 @@ pub struct Module {
 
 impl Module {
     pub fn from_bytes(code: &[u8]) -> Result<Self> {
-        if code.len() % 4 != 0 || code.len() < HEADER_WORDS * 4 {
+        if !code.len().is_multiple_of(4) || code.len() < HEADER_WORDS * 4 {
             return Err(GpuError::Invalid(
                 "vkCreateShaderModule: SPIR-V code size invalid",
             ));
@@ -237,7 +237,7 @@ impl Literal {
     fn encode(s: &str) -> Vec<u32> {
         let mut bytes = s.as_bytes().to_vec();
         bytes.push(0); // NUL terminator
-        while bytes.len() % 4 != 0 {
+        while !bytes.len().is_multiple_of(4) {
             bytes.push(0);
         }
         bytes

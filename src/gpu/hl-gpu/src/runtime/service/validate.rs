@@ -29,12 +29,12 @@ impl Enc {
                 src_offset,
                 bytes_per_row,
                 ..
-            } => src_offset % a != 0 || (*bytes_per_row as u64) % a != 0,
+            } => src_offset % a != 0 || !(*bytes_per_row as u64).is_multiple_of(a),
             Enc::CopyTextureToBuffer {
                 dst_offset,
                 bytes_per_row,
                 ..
-            } => dst_offset % a != 0 || (*bytes_per_row as u64) % a != 0,
+            } => dst_offset % a != 0 || !(*bytes_per_row as u64).is_multiple_of(a),
             _ => false,
         };
         if misaligned {

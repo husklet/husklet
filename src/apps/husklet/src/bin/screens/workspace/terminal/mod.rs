@@ -10,7 +10,7 @@ pub(crate) struct TermWin {
     /// Monotonic stable identity allocator for persisted pane layouts.
     pub(crate) slot_ctr: Cell<u32>,
     /// Registry of every live pane: its terminal (weak), layout slot, and worker pid.
-    pub(crate) panes: RefCell<Vec<(glib::WeakRef<vte4::Terminal>, String, Rc<Cell<i32>>)>>,
+    pub(crate) panes: RefCell<Vec<PaneRegistration>>,
     /// Slim Cmd+F search bar over the focused terminal.
     search: Search,
     /// Keyboard scrollback-navigation ("copy") mode is active.
@@ -22,14 +22,32 @@ pub(crate) struct TermWin {
 
 pub(crate) struct PaneRegistry;
 
+pub(crate) struct PaneRegistration {
+    terminal: glib::WeakRef<vte4::Terminal>,
+    slot: String,
+    pid: Rc<Cell<i32>>,
+}
+
+impl PaneRegistration {
+    pub(crate) fn new(terminal: &vte4::Terminal, slot: String, pid: Rc<Cell<i32>>) -> Self {
+        Self {
+            terminal: terminal.downgrade(),
+            slot,
+            pid,
+        }
+    }
+}
+
 impl PaneRegistry {
     pub(crate) fn live(window: &TermWin) -> Vec<(String, Rc<Cell<i32>>)> {
         window
             .panes
             .borrow()
             .iter()
-            .filter_map(|(terminal, slot, pid)| {
-                terminal.upgrade().map(|_| (slot.clone(), pid.clone()))
+            .filter_map(|pane| {
+                pane.terminal
+                    .upgrade()
+                    .map(|_| (pane.slot.clone(), pane.pid.clone()))
             })
             .collect()
     }
@@ -53,6 +71,40 @@ pub(crate) struct Clipboard;
 
 pub(crate) struct SplitAction;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Shortcut {
+    Tab,
+    Close,
+    Split(bool),
+    Search,
+    CopyMode,
+    Copy,
+    Cut,
+    Paste,
+    SelectAll,
+}
+
+impl Shortcut {
+    fn from_key(key: gdk::Key, state: gdk::ModifierType) -> Option<Self> {
+        if !state.contains(gdk::ModifierType::META_MASK) {
+            return None;
+        }
+        let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
+        match key {
+            gdk::Key::t | gdk::Key::T => Some(Self::Tab),
+            gdk::Key::w | gdk::Key::W => Some(Self::Close),
+            gdk::Key::d | gdk::Key::D => Some(Self::Split(shift)),
+            gdk::Key::f | gdk::Key::F => Some(Self::Search),
+            gdk::Key::c | gdk::Key::C if shift => Some(Self::CopyMode),
+            gdk::Key::c | gdk::Key::C => Some(Self::Copy),
+            gdk::Key::x | gdk::Key::X => Some(Self::Cut),
+            gdk::Key::v | gdk::Key::V => Some(Self::Paste),
+            gdk::Key::a | gdk::Key::A => Some(Self::SelectAll),
+            _ => None,
+        }
+    }
+}
+
 impl SplitAction {
     pub(crate) fn focused(window: &Rc<TermWin>, vertical: bool) {
         let Some(terminal) = window.focused.borrow().clone() else {
@@ -70,16 +122,22 @@ impl SplitAction {
 impl Clipboard {
     pub(crate) fn copy_selection(window: &TermWin) -> glib::Propagation {
         let focused = window.focused.borrow();
-        let Some(terminal) = focused.as_ref().filter(|terminal| terminal.has_selection()) else {
-            return glib::Propagation::Proceed;
-        };
-        terminal.copy_clipboard_format(vte4::Format::Text);
+        if let Some(terminal) = focused.as_ref().filter(|terminal| terminal.has_selection()) {
+            terminal.copy_clipboard_format(vte4::Format::Text);
+        }
         glib::Propagation::Stop
     }
 
     pub(crate) fn paste(window: &TermWin) -> glib::Propagation {
         if let Some(terminal) = window.focused.borrow().as_ref() {
             terminal.paste_clipboard();
+        }
+        glib::Propagation::Stop
+    }
+
+    pub(crate) fn select_all(window: &TermWin) -> glib::Propagation {
+        if let Some(terminal) = window.focused.borrow().as_ref() {
+            terminal.select_all();
         }
         glib::Propagation::Stop
     }
@@ -169,36 +227,31 @@ impl TerminalWindow {
                 {
                     return glib::Propagation::Stop;
                 }
-                if !state.contains(gdk::ModifierType::META_MASK) {
-                    return glib::Propagation::Proceed;
-                }
-                let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
-                match key {
-                    gdk::Key::t | gdk::Key::T => {
+                match Shortcut::from_key(key, state) {
+                    Some(Shortcut::Tab) => {
                         Tabs::new(&tw).terminal();
                         glib::Propagation::Stop
                     }
-                    gdk::Key::w | gdk::Key::W => {
+                    Some(Shortcut::Close) => {
                         CurrentPage::close(&tw);
                         glib::Propagation::Stop
                     }
-                    gdk::Key::d | gdk::Key::D => {
-                        SplitAction::focused(&tw, shift);
+                    Some(Shortcut::Split(vertical)) => {
+                        SplitAction::focused(&tw, vertical);
                         glib::Propagation::Stop
                     }
-                    // Cmd+F — toggle the search bar over the focused terminal.
-                    gdk::Key::f | gdk::Key::F => {
+                    Some(Shortcut::Search) => {
                         tw.search.toggle(tw.focused.borrow().clone());
                         glib::Propagation::Stop
                     }
-                    // Cmd+Shift+C — enter keyboard scroll/copy mode (Esc/q exits).
-                    gdk::Key::c | gdk::Key::C if shift => {
+                    Some(Shortcut::CopyMode) => {
                         tw.copymode.enter(tw.focused.borrow().clone());
                         glib::Propagation::Stop
                     }
-                    gdk::Key::c | gdk::Key::C => Clipboard::copy_selection(&tw),
-                    gdk::Key::v | gdk::Key::V => Clipboard::paste(&tw),
-                    _ => glib::Propagation::Proceed,
+                    Some(Shortcut::Copy | Shortcut::Cut) => Clipboard::copy_selection(&tw),
+                    Some(Shortcut::Paste) => Clipboard::paste(&tw),
+                    Some(Shortcut::SelectAll) => Clipboard::select_all(&tw),
+                    None => glib::Propagation::Proceed,
                 }
             });
         }
@@ -209,7 +262,13 @@ impl TerminalWindow {
             let tw = tw.clone();
             window.connect_close_request(move |_| {
                 tw.closing.set(true);
-                WindowSession::new(&tw).save();
+                if let Err(error) = WindowSession::new(&tw).save() {
+                    hl_log::hl_error!(
+                        hl_log::tag::RUNTIME,
+                        "failed to save terminal session for {}: {error}",
+                        tw.ws.name
+                    );
+                }
                 let live = PaneRegistry::live(&tw);
                 for (_slot, pid) in &live {
                     ProcessGroup::new(pid.get()).hangup();
@@ -221,11 +280,17 @@ impl TerminalWindow {
         Tabs::new(&tw).overview();
         // Restore the saved session (tabs + splits + per-pane history) if this workspace has one; else open a
         // single fresh shell. The debug hooks below still layer on top.
-        let saved = Session::load(&tw.ws.storage_dir(&Home::current().root()));
-        if saved.tabs.is_empty() {
-            Tabs::new(&tw).terminal();
-        } else {
-            WindowSession::new(&tw).restore(&saved);
+        match Session::open(&tw.ws.storage_dir(&Home::current().root())) {
+            Ok(saved) if !saved.tabs.is_empty() => WindowSession::new(&tw).restore(&saved),
+            Ok(_) => Tabs::new(&tw).terminal(),
+            Err(error) => {
+                hl_log::hl_error!(
+                    hl_log::tag::RUNTIME,
+                    "failed to restore terminal session for {}: {error}",
+                    tw.ws.name
+                );
+                Tabs::new(&tw).terminal();
+            }
         }
         // Debug: HL_TERM_TABS=N opens N total shell tabs (to verify exact equal-width tabs).
         if let Some(n) = AppConfig::get().tabs {
@@ -324,7 +389,7 @@ impl<'a> Terminal<'a> {
         // The vadjustment spans the whole buffer: value range [lower, upper); rows are 1:1 with it.
         let (first, last) = match term.vadjustment() {
             Some(adj) => (adj.lower() as i64, adj.upper() as i64),
-            None => (0, term.row_count() as i64),
+            None => (0, term.row_count()),
         };
         let (text, _len) = term.text_range_format(vte4::Format::Text, first, 0, last, -1);
         let raw = text.map(|g| g.to_string()).unwrap_or_default();
@@ -362,3 +427,34 @@ pub(crate) use launch::*;
 pub(crate) use pane::*;
 pub(crate) use slots::*;
 pub(crate) use state::*;
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::Shortcut;
+    use gtk::gdk;
+
+    #[test]
+    fn macos_edit_shortcuts_never_fall_through_to_vte() {
+        let command = gdk::ModifierType::META_MASK;
+        assert_eq!(
+            Shortcut::from_key(gdk::Key::c, command),
+            Some(Shortcut::Copy)
+        );
+        assert_eq!(
+            Shortcut::from_key(gdk::Key::x, command),
+            Some(Shortcut::Cut)
+        );
+        assert_eq!(
+            Shortcut::from_key(gdk::Key::v, command),
+            Some(Shortcut::Paste)
+        );
+        assert_eq!(
+            Shortcut::from_key(gdk::Key::a, command),
+            Some(Shortcut::SelectAll)
+        );
+        assert_eq!(
+            Shortcut::from_key(gdk::Key::c, gdk::ModifierType::empty()),
+            None
+        );
+    }
+}

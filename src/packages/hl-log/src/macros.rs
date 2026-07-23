@@ -48,7 +48,11 @@ macro_rules! __hl_do {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __hl_do {
-    ($tag:expr, $level:expr, $($arg:tt)+) => {{}};
+    ($tag:expr, $level:expr, $($arg:tt)+) => {{
+        if false {
+            let _ = (&$tag, &$level, format_args!($($arg)+));
+        }
+    }};
 }
 
 // ---------------------------------------------------------------------------------
@@ -67,7 +71,9 @@ macro_rules! hl_log {
 #[cfg(feature = "disabled")]
 #[macro_export]
 macro_rules! hl_log {
-    ($tag:expr, $level:expr, $($arg:tt)+) => {{}};
+    ($tag:expr, $level:expr, $($arg:tt)+) => {
+        $crate::__hl_do!($tag, $level, $($arg)+)
+    };
 }
 
 // ---------------------------------------------------------------------------------
@@ -85,7 +91,9 @@ macro_rules! hl_error {
 #[cfg(feature = "disabled")]
 #[macro_export]
 macro_rules! hl_error {
-    ($tag:expr, $($arg:tt)+) => {{}};
+    ($tag:expr, $($arg:tt)+) => {
+        $crate::__hl_do!($tag, $crate::Level::Error, $($arg)+)
+    };
 }
 
 // ---------------------------------------------------------------------------------
@@ -110,7 +118,9 @@ macro_rules! hl_warn {
 )))]
 #[macro_export]
 macro_rules! hl_warn {
-    ($tag:expr, $($arg:tt)+) => {{}};
+    ($tag:expr, $($arg:tt)+) => {{
+        if false { let _ = (&$tag, format_args!($($arg)+)); }
+    }};
 }
 
 #[cfg(all(
@@ -127,7 +137,9 @@ macro_rules! hl_info {
 )))]
 #[macro_export]
 macro_rules! hl_info {
-    ($tag:expr, $($arg:tt)+) => {{}};
+    ($tag:expr, $($arg:tt)+) => {{
+        if false { let _ = (&$tag, format_args!($($arg)+)); }
+    }};
 }
 
 #[cfg(all(
@@ -144,7 +156,9 @@ macro_rules! hl_debug {
 )))]
 #[macro_export]
 macro_rules! hl_debug {
-    ($tag:expr, $($arg:tt)+) => {{}};
+    ($tag:expr, $($arg:tt)+) => {{
+        if false { let _ = (&$tag, format_args!($($arg)+)); }
+    }};
 }
 
 #[cfg(all(
@@ -161,7 +175,9 @@ macro_rules! hl_trace {
 )))]
 #[macro_export]
 macro_rules! hl_trace {
-    ($tag:expr, $($arg:tt)+) => {{}};
+    ($tag:expr, $($arg:tt)+) => {{
+        if false { let _ = (&$tag, format_args!($($arg)+)); }
+    }};
 }
 
 // ---------------------------------------------------------------------------------
@@ -187,7 +203,11 @@ macro_rules! hl_count {
 )))]
 #[macro_export]
 macro_rules! hl_count {
-    ($tag:expr, $name:expr) => {{}};
+    ($tag:expr, $name:expr) => {{
+        if false {
+            let _ = (&$tag, &$name);
+        }
+    }};
 }
 
 #[cfg(all(
@@ -208,7 +228,11 @@ macro_rules! hl_add {
 )))]
 #[macro_export]
 macro_rules! hl_add {
-    ($tag:expr, $name:expr, $n:expr) => {{}};
+    ($tag:expr, $name:expr, $n:expr) => {{
+        if false {
+            let _ = (&$tag, &$name, &$n);
+        }
+    }};
 }
 
 /// Open a timing span. Bind the result: `let _s = hl_span!(tag::WGPU, "readback");`.
@@ -234,7 +258,10 @@ macro_rules! hl_span {
 )))]
 #[macro_export]
 macro_rules! hl_span {
-    ($tag:expr, $name:expr) => {
+    ($tag:expr, $name:expr) => {{
+        if false {
+            let _ = (&$tag, &$name);
+        }
         $crate::Span::disabled()
-    };
+    }};
 }

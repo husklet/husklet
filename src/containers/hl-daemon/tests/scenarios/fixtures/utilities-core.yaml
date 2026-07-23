@@ -1,0 +1,2498 @@
+cases:
+  - id: utilities/sha256-abc
+    image: alpine:3.24.1
+    run:
+      shell: printf abc | sha256sum | cut -d' ' -f1
+    expect:
+      stdout_contains:
+        - ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+
+  - id: utilities/md5-abc
+    image: alpine:3.24.1
+    run:
+      shell: printf abc | md5sum | cut -d' ' -f1
+    expect:
+      stdout_contains:
+        - 900150983cd24fb0d6963f7d28e17f72
+
+  - id: utilities/base64-encode
+    image: alpine:3.24.1
+    run:
+      shell: printf dd | base64
+    expect:
+      stdout_contains:
+        - ZGQ=
+
+  - id: utilities/base64-roundtrip
+    image: alpine:3.24.1
+    run:
+      shell: printf hello | base64 | base64 -d
+    expect:
+      stdout_contains:
+        - hello
+
+  - id: utilities/sort-numeric
+    image: alpine:3.24.1
+    run:
+      shell: |-
+        printf '3
+        1
+        2
+        ' | sort -n | paste -sd, -
+    expect:
+      stdout_contains:
+        - 1,2,3
+
+  - id: utilities/tr-upper
+    image: alpine:3.24.1
+    run:
+      shell: echo 'the quick brown' | tr a-z A-Z
+    expect:
+      stdout_contains:
+        - THE QUICK BROWN
+
+  - id: utilities/cut-field
+    image: alpine:3.24.1
+    run:
+      shell: "echo a:b:c | cut -d: -f2"
+    expect:
+      stdout_contains:
+        - b
+
+  - id: utilities/grep-count
+    image: alpine:3.24.1
+    run:
+      shell: |-
+        printf 'foo
+        bar
+        foo
+        ' | grep -c foo
+    expect:
+      stdout_contains:
+        - '2'
+
+  - id: utilities/sed-substitute
+    image: alpine:3.24.1
+    run:
+      shell: echo abcabc | sed 's/a/X/g'
+    expect:
+      stdout_contains:
+        - XbcXbc
+
+  - id: utilities/head-tail
+    image: alpine:3.24.1
+    run:
+      shell: seq 1 10 | head -3 | tail -1
+    expect:
+      stdout_contains:
+        - '3'
+
+  - id: utilities/wc-lines
+    image: alpine:3.24.1
+    run:
+      shell: seq 1 100 | wc -l
+    expect:
+      stdout_contains:
+        - '100'
+
+  - id: utilities/wc-chars
+    image: alpine:3.24.1
+    run:
+      shell: printf abc | wc -c
+    expect:
+      stdout_contains:
+        - '3'
+
+  - id: utilities/factor
+    image: alpine:3.24.1
+    run:
+      shell: |-
+        factor 500500 | tr ' ' '\n' | tail -n1
+    expect:
+      stdout_contains:
+        - '13'
+
+  - id: utilities/awk-squares
+    image: alpine:3.24.1
+    run:
+      shell: |-
+        awk 'BEGIN{for(i=1;i<=100;i++)s+=i*i;print s}'
+    expect:
+      stdout_contains:
+        - '338350'
+
+  - id: utilities/seq-awk-sum
+    image: alpine:3.24.1
+    run:
+      shell: |-
+        seq 1 1000 | awk '{s+=$1} END{print "SUM="s}'
+    expect:
+      stdout_contains:
+        - SUM=500500
+
+  - id: utilities/paste-bc
+    image: alpine:3.24.1
+    run:
+      shell: seq 1 1000 | paste -sd+ - | bc
+    expect:
+      stdout_contains:
+        - '500500'
+
+  - id: utilities/sort-uniq-count
+    image: alpine:3.24.1
+    run:
+      shell: |-
+        printf 'b
+        a
+        c
+        a
+        b
+        ' | sort | uniq -c | awk '{print $1$2}' | paste -sd, -
+    expect:
+      stdout_contains:
+        - 2a,2b,1c
+
+  - id: utilities/word-frequency
+    image: alpine:3.24.1
+    run:
+      shell: |-
+        printf 'apple
+        banana
+        apple
+        cherry
+        banana
+        apple
+        ' | sort | uniq -c | sort -rn | awk 'NR == 1 {print $2}'
+    expect:
+      stdout_contains:
+        - apple
+
+  - id: utilities/printf-hex
+    image: alpine:3.24.1
+    run:
+      shell: printf '%x\n' 255
+    expect:
+      stdout_contains:
+        - ff
+
+  - id: utilities/printf-pad
+    image: alpine:3.24.1
+    run:
+      shell: printf '%05d\n' 42
+    expect:
+      stdout_contains:
+        - '00042'
+
+  - id: utilities/arith-shift
+    image: alpine:3.24.1
+    run:
+      shell: echo $((1 << 10))
+    expect:
+      stdout_contains:
+        - '1024'
+
+  - id: utilities/arith-mod
+    image: alpine:3.24.1
+    run:
+      shell: echo $((17 % 5))
+    expect:
+      stdout_contains:
+        - '2'
+
+  - id: utilities/param-length
+    image: alpine:3.24.1
+    run:
+      shell: s=hello; echo ${#s}
+    expect:
+      stdout_contains:
+        - '5'
+
+  - id: utilities/param-suffix-strip
+    image: alpine:3.24.1
+    run:
+      shell: f=archive.tar.gz; echo ${f%.gz}
+    expect:
+      stdout_contains:
+        - archive.tar
+
+  - id: utilities/proc-version-linux
+    image: alpine:3.24.1
+    run:
+      shell: head -c5 /proc/version
+    expect:
+      stdout_contains:
+        - Linux
+
+  - id: utilities/id-root
+    image: alpine:3.24.1
+    run:
+      shell: id -u
+    expect:
+      stdout_contains:
+        - '0'
+
+  - id: utilities/uname-linux
+    image: alpine:3.24.1
+    run:
+      shell: uname -s
+    expect:
+      stdout_contains:
+        - Linux
+
+  - id: utilities/seq-separator
+    image: alpine:3.24.1
+    run:
+      shell: seq -s, 1 5
+    expect:
+      stdout_contains:
+        - 1,2,3,4,5
+
+  - id: utilities/tr-delete-digits
+    image: alpine:3.24.1
+    run:
+      shell: echo a1b2c3 | tr -d 0-9
+    expect:
+      stdout_contains:
+        - abc
+
+  - id: utilities/rev-string
+    image: alpine:3.24.1
+    run:
+      shell: echo abc | rev
+    expect:
+      stdout_contains:
+        - cba
+
+  - id: utilities/od-hex-byte
+    image: alpine:3.24.1
+    run:
+      shell: printf A | od -An -tx1 | tr -d ' '
+    expect:
+      stdout_contains:
+        - '41'
+
+  - id: utilities/xargs-count
+    image: alpine:3.24.1
+    run:
+      shell: echo 1 2 3 4 | xargs -n1 | wc -l
+    expect:
+      stdout_contains:
+        - '4'
+
+  - id: utilities/grep-only-count
+    image: alpine:3.24.1
+    run:
+      shell: echo foobar | grep -o o | wc -l
+    expect:
+      stdout_contains:
+        - '2'
+
+  - id: utilities/sed-print-line
+    image: alpine:3.24.1
+    run:
+      shell: |-
+        printf 'a
+        b
+        c
+        ' | sed -n 2p
+    expect:
+      stdout_contains:
+        - b
+
+  - id: utilities/awk-field-sep
+    image: alpine:3.24.1
+    run:
+      shell: echo a,b,c | awk -F, '{print $2}'
+    expect:
+      stdout_contains:
+        - b
+
+  - id: utilities/trap-exit
+    image: alpine:3.24.1
+    run:
+      shell: trap 'echo trapped' EXIT; true
+    expect:
+      stdout_contains:
+        - trapped
+
+  - id: utilities/exit-code-capture
+    image: alpine:3.24.1
+    run:
+      shell: sh -c 'exit 3'; echo rc=$?
+    expect:
+      stdout_contains:
+        - rc=3
+
+  - id: utilities/expr-length
+    image: alpine:3.24.1
+    run:
+      shell: expr length abcde
+    expect:
+      stdout_contains:
+        - '5'
+
+  - id: utilities/proc-self-comm
+    image: alpine:3.24.1
+    run:
+      shell: cat /proc/self/comm
+    expect:
+      stdout_contains:
+        - cat
+
+  - id: utilities/proc-meminfo
+    image: alpine:3.24.1
+    run:
+      shell: grep -q MemTotal /proc/meminfo && echo mem-ok
+    expect:
+      stdout_contains:
+        - mem-ok
+
+  - id: utilities/proc-mounts-root
+    image: alpine:3.24.1
+    run:
+      shell: awk '$2=="/"{print "root-fs"; exit}' /proc/mounts
+    expect:
+      stdout_contains:
+        - root-fs
+
+  - id: utilities/proc-uptime
+    image: alpine:3.24.1
+    run:
+      shell: awk '{print ($1>=0)?"up-ok":"bad"}' /proc/uptime
+    expect:
+      stdout_contains:
+        - up-ok
+
+  - id: utilities/proc-cpuinfo
+    image: alpine:3.24.1
+    run:
+      shell: awk '/^processor/{c++}END{print (c>=1)?"cpu-ok":"none"}' /proc/cpuinfo
+    expect:
+      stdout_contains:
+        - cpu-ok
+
+  - id: utilities/proc-stat-cpu
+    image: alpine:3.24.1
+    run:
+      shell: grep -q '^cpu ' /proc/stat && echo stat-ok
+    expect:
+      stdout_contains:
+        - stat-ok
+
+  - id: utilities/sys-kernel-ostype
+    image: alpine:3.24.1
+    run:
+      shell: cat /proc/sys/kernel/ostype
+    expect:
+      stdout_contains:
+        - Linux
+
+  - id: utilities/tail-plus
+    image: alpine:3.24.1
+    run:
+      shell: seq 1 5 | tail -n +3 | head -1
+    expect:
+      stdout_contains:
+        - '3'
+
+  - id: utilities/cut-chars
+    image: alpine:3.24.1
+    run:
+      shell: echo abcdef | cut -c2-4
+    expect:
+      stdout_contains:
+        - bcd
+
+  - id: utilities/comm-common
+    image: alpine:3.24.1
+    run:
+      shell: printf 'a\nb\nc\n' >/tmp/cx; printf 'b\nc\nd\n' >/tmp/cy; comm -12 /tmp/cx /tmp/cy | paste -sd, -
+    expect:
+      stdout_contains:
+        - b,c
+
+  - id: utilities/fold-width
+    image: alpine:3.24.1
+    run:
+      shell: echo abcdef | fold -w2 | wc -l
+    expect:
+      stdout_contains:
+        - '3'
+
+  - id: utilities/nl-number
+    image: alpine:3.24.1
+    run:
+      shell: printf 'x\ny\n' | nl | awk 'NR==2{print $1}'
+    expect:
+      stdout_contains:
+        - '2'
+
+  - id: utilities/tac-reverse
+    image: alpine:3.24.1
+    run:
+      shell: printf '1\n2\n3\n' | tac | paste -sd, -
+    expect:
+      stdout_contains:
+        - 3,2,1
+
+  - id: utilities/wc-words
+    image: alpine:3.24.1
+    run:
+      shell: echo 'one two three' | wc -w
+    expect:
+      stdout_contains:
+        - '3'
+
+  - id: utilities/sha1-abc
+    image: alpine:3.24.1
+    run:
+      shell: printf abc | sha1sum | cut -d' ' -f1
+    expect:
+      stdout_contains:
+        - a9993e364706816aba3e25717850c26c9cd0d89d
+
+  - id: utilities/sha512-abc
+    image: alpine:3.24.1
+    run:
+      shell: printf abc | sha512sum | cut -d' ' -f1
+    expect:
+      stdout_contains:
+        - ddaf35a193617aba
+
+  - id: utilities/cksum-abc
+    image: alpine:3.24.1
+    run:
+      shell: printf abc | cksum
+    expect:
+      stdout_contains:
+        - '1219131554'
+
+  - id: utilities/sort-reverse
+    image: alpine:3.24.1
+    run:
+      shell: printf '1\n2\n3\n' | sort -r | paste -sd, -
+    expect:
+      stdout_contains:
+        - 3,2,1
+
+  - id: utilities/umask-default
+    image: alpine:3.24.1
+    run:
+      shell: umask
+    expect:
+      stdout_contains:
+        - '0022'
+
+  - id: utilities/printf-octal
+    image: alpine:3.24.1
+    run:
+      shell: printf '%o\n' 8
+    expect:
+      stdout_contains:
+        - '10'
+
+  - id: utilities/printf-float
+    image: alpine:3.24.1
+    run:
+      shell: printf '%.2f\n' 3.14159
+    expect:
+      stdout_contains:
+        - '3.14'
+
+  - id: utilities/getent-passwd-root
+    image: alpine:3.24.1
+    run:
+      shell: "getent passwd root | cut -d: -f1"
+    expect:
+      stdout_contains:
+        - root
+
+  - id: utilities/dd-count-bs
+    image: alpine:3.24.1
+    run:
+      shell: dd if=/dev/zero bs=1024 count=4 2>/dev/null | wc -c
+    expect:
+      stdout_contains:
+        - '4096'
+
+  - id: utilities/stat-size
+    image: alpine:3.24.1
+    run:
+      shell: printf abc > /tmp/statz; stat -c %s /tmp/statz
+    expect:
+      stdout_contains:
+        - '3'
+
+  - id: utilities/stat-name
+    image: alpine:3.24.1
+    run:
+      shell: stat -c %n /etc/passwd
+    expect:
+      stdout_contains:
+        - /etc/passwd
+
+  - id: utilities/find-type-name
+    image: alpine:3.24.1
+    run:
+      shell: find /etc -maxdepth 1 -type f -name passwd
+    expect:
+      stdout_contains:
+        - /etc/passwd
+
+  - id: utilities/test-string-eq
+    image: alpine:3.24.1
+    run:
+      shell: "[ abc = abc ] && echo eq"
+    expect:
+      stdout_contains:
+        - eq
+
+  - id: utilities/test-int-gt
+    image: alpine:3.24.1
+    run:
+      shell: "[ 5 -gt 3 ] && echo yes"
+    expect:
+      stdout_contains:
+        - yes
+
+  - id: utilities/case-glob
+    image: alpine:3.24.1
+    run:
+      shell: x=hello; case $x in hel*) echo match;; esac
+    expect:
+      stdout_contains:
+        - match
+
+  - id: utilities/while-read-loop
+    image: alpine:3.24.1
+    run:
+      shell: printf 'a\nb\nc\n' | while read l; do echo L:$l; done | tail -1
+    expect:
+      stdout_contains:
+        - L:c
+
+  - id: utilities/getopts-flag
+    image: alpine:3.24.1
+    run:
+      shell: "f(){ while getopts a: o; do echo $o=$OPTARG; done; }; f -a xyz"
+    expect:
+      stdout_contains:
+        - a=xyz
+
+  - id: utilities/env-clean
+    image: alpine:3.24.1
+    run:
+      shell: env -i FOO=bar sh -c 'echo $FOO'
+    expect:
+      stdout_contains:
+        - bar
+
+  - id: utilities/readlink-canon
+    image: alpine:3.24.1
+    run:
+      shell: readlink -f /etc/../etc/passwd
+    expect:
+      stdout_contains:
+        - /etc/passwd
+
+  - id: utilities/basename-suffix
+    image: alpine:3.24.1
+    run:
+      shell: basename /usr/local/bin/foo.sh .sh
+    expect:
+      stdout_contains:
+        - foo
+
+  - id: utilities/dirname-path
+    image: alpine:3.24.1
+    run:
+      shell: dirname /usr/local/bin/foo
+    expect:
+      stdout_contains:
+        - /usr/local/bin
+
+  - id: utilities/tr-class-lower
+    image: alpine:3.24.1
+    run:
+      shell: echo 'Hello World' | tr '[:upper:]' '[:lower:]'
+    expect:
+      stdout_contains:
+        - hello world
+
+  - id: utilities/sort-field-numeric
+    image: alpine:3.24.1
+    run:
+      shell: |-
+        printf '3:a\n1:b\n2:c\n' | sort -t: -k1 -n | head -1
+    expect:
+      stdout_contains:
+        - '1:b'
+
+  - id: utilities/uniq-count
+    image: alpine:3.24.1
+    run:
+      shell: printf 'a\na\nb\n' | uniq -c | awk 'NR==1{print $1}'
+    expect:
+      stdout_contains:
+        - '2'
+
+  - id: utilities/sed-range
+    image: alpine:3.24.1
+    run:
+      shell: printf '1\n2\n3\n4\n' | sed -n '2,3p' | paste -sd, -
+    expect:
+      stdout_contains:
+        - '2,3'
+
+  - id: utilities/awk-nr-end
+    image: alpine:3.24.1
+    run:
+      shell: printf 'a\nb\nc\n' | awk 'END{print NR}'
+    expect:
+      stdout_contains:
+        - '3'
+
+  - id: utilities/head-bytes
+    image: alpine:3.24.1
+    run:
+      shell: printf abcdef | head -c3
+    expect:
+      stdout_contains:
+        - abc
+
+  - id: utilities/expr-multiply
+    image: alpine:3.24.1
+    run:
+      shell: expr 6 '*' 7
+    expect:
+      stdout_contains:
+        - '42'
+
+  - id: utilities/expr-substr
+    image: alpine:3.24.1
+    run:
+      shell: expr substr abcdef 2 3
+    expect:
+      stdout_contains:
+        - bcd
+
+  - id: utilities/test-file-exists
+    image: alpine:3.24.1
+    run:
+      shell: "[ -e /etc/passwd ] && echo present"
+    expect:
+      stdout_contains:
+        - present
+
+  - id: utilities/sort-unique
+    image: alpine:3.24.1
+    run:
+      shell: printf 'b\na\nb\n' | sort -u | paste -sd, -
+    expect:
+      stdout_contains:
+        - 'a,b'
+
+  - id: utilities/grep-extended
+    image: alpine:3.24.1
+    run:
+      shell: echo abc123 | grep -oE '[0-9]+'
+    expect:
+      stdout_contains:
+        - '123'
+
+  - id: utilities/awk-gsub
+    image: alpine:3.24.1
+    run:
+      shell: echo aaa | awk '{gsub(/a/,"b"); print}'
+    expect:
+      stdout_contains:
+        - bbb
+
+  - id: utilities/ubuntu-stat-format-size
+    image: ubuntu:24.04
+    run:
+      shell: printf abcde > /tmp/sf; stat --format=%s /tmp/sf
+    expect:
+      stdout_contains:
+        - '5'
+
+  - id: utilities/ubuntu-stat-format-octal
+    image: ubuntu:24.04
+    run:
+      shell: install -m 640 /dev/null /tmp/pf; stat --format=%a /tmp/pf
+    expect:
+      stdout_contains:
+        - '640'
+
+  - id: utilities/ubuntu-du-apparent-size
+    image: ubuntu:24.04
+    run:
+      shell: printf 0123456789 > /tmp/du; du --apparent-size -b /tmp/du | cut -f1
+    expect:
+      stdout_contains:
+        - '10'
+
+  - id: utilities/ubuntu-numfmt-to-iec
+    image: ubuntu:24.04
+    run:
+      shell: numfmt --to=iec 1048576
+    expect:
+      stdout_contains:
+        - '1.0M'
+
+  - id: utilities/ubuntu-numfmt-from-iec
+    image: ubuntu:24.04
+    run:
+      shell: numfmt --from=iec 1K
+    expect:
+      stdout_contains:
+        - '1024'
+
+  - id: utilities/ubuntu-factor-semicolon
+    image: ubuntu:24.04
+    run:
+      shell: factor 91
+    expect:
+      stdout_contains:
+        - '91: 7 13'
+
+  - id: utilities/ubuntu-seq-width
+    image: ubuntu:24.04
+    run:
+      shell: seq -w 8 11 | paste -sd, -
+    expect:
+      stdout_contains:
+        - '08,09,10,11'
+
+  - id: utilities/ubuntu-sort-version
+    image: ubuntu:24.04
+    run:
+      shell: printf '10\n9\n100\n' | sort --version-sort | paste -sd, -
+    expect:
+      stdout_contains:
+        - '9,10,100'
+
+  - id: utilities/ubuntu-nl-ba-blank
+    image: ubuntu:24.04
+    run:
+      shell: printf 'x\n\ny\n' | nl -ba | awk 'NR==2{print $1}'
+    expect:
+      stdout_contains:
+        - '2'
+
+  - id: utilities/ubuntu-fmt-width
+    image: ubuntu:24.04
+    run:
+      shell: printf 'aa bb cc dd ee ff\n' | fmt -w 8 | head -1
+    expect:
+      stdout_contains:
+        - 'aa bb'
+
+  - id: utilities/ubuntu-proc-maps-exec
+    image: ubuntu:24.04
+    run:
+      shell: grep -q r-xp /proc/self/maps && echo maps-ok
+    expect:
+      stdout_contains:
+        - 'maps-ok'
+
+  - id: utilities/ubuntu-proc-status-vmrss
+    image: ubuntu:24.04
+    run:
+      shell: grep -q VmRSS /proc/self/status && echo status-ok
+    expect:
+      stdout_contains:
+        - 'status-ok'
+
+  - id: utilities/ubuntu-proc-limits-nofile
+    image: ubuntu:24.04
+    run:
+      shell: grep -q 'Max open files' /proc/self/limits && echo limits-ok
+    expect:
+      stdout_contains:
+        - 'limits-ok'
+
+  - id: utilities/ubuntu-proc-stat-comm
+    image: ubuntu:24.04
+    run:
+      shell: cat /proc/self/stat | sed 's/.*(\(.*\)).*/\1/'
+    expect:
+      stdout_contains:
+        - 'cat'
+
+  - id: utilities/ubuntu-getconf-longbit
+    image: ubuntu:24.04
+    run:
+      shell: getconf LONG_BIT
+    expect:
+      stdout_contains:
+        - '64'
+
+  - id: utilities/ubuntu-getconf-pagesize
+    image: ubuntu:24.04
+    run:
+      shell: getconf PAGESIZE
+    expect:
+      stdout_contains:
+        - '4096'
+
+  - id: utilities/ubuntu-ldd-version-glibc
+    image: ubuntu:24.04
+    run:
+      shell: ldd --version | head -1
+    expect:
+      stdout_contains:
+        - 'GLIBC'
+
+  - id: utilities/ubuntu-getent-group-root
+    image: ubuntu:24.04
+    run:
+      shell: "getent group root | cut -d: -f1"
+    expect:
+      stdout_contains:
+        - 'root'
+
+  - id: utilities/ubuntu-date-epoch-zero
+    image: ubuntu:24.04
+    run:
+      shell: date -u -d @0 +%Y-%m-%d
+    expect:
+      stdout_contains:
+        - '1970-01-01'
+
+  - id: utilities/ubuntu-date-parse-epoch
+    image: ubuntu:24.04
+    run:
+      shell: date -u -d '2000-01-01 12:00:00' +%s
+    expect:
+      stdout_contains:
+        - '946728000'
+
+  - id: utilities/ubuntu-large-pipe-count
+    image: ubuntu:24.04
+    run:
+      shell: seq 100000 | wc -l
+    expect:
+      stdout_contains:
+        - '100000'
+
+  - id: utilities/ubuntu-printf-many-args
+    image: ubuntu:24.04
+    run:
+      shell: printf '%s+' 1 2 3 4 5; echo
+    expect:
+      stdout_contains:
+        - '1+2+3+4+5+'
+
+  - id: utilities/ubuntu-dd-copy-bytes
+    image: ubuntu:24.04
+    run:
+      shell: dd if=/dev/zero bs=1000 count=5 2>/dev/null | wc -c
+    expect:
+      stdout_contains:
+        - '5000'
+
+  - id: utilities/ubuntu-iconv-roundtrip
+    image: ubuntu:24.04
+    run:
+      shell: printf AAA | iconv -f ascii -t utf-16 | iconv -f utf-16 -t ascii
+    expect:
+      stdout_contains:
+        - 'AAA'
+
+  - id: utilities/ubuntu-truncate-size
+    image: ubuntu:24.04
+    run:
+      shell: truncate -s 8192 /tmp/tr8; stat --format=%s /tmp/tr8
+    expect:
+      stdout_contains:
+        - '8192'
+
+  - id: utilities/deep-pipeline
+    image: alpine:3.24.1
+    run:
+      shell: "seq 1 100 | cat | cat | cat | cat | cat | cat | cat | cat | wc -l"
+    expect:
+      stdout_contains:
+        - "100"
+
+  - id: utilities/xargs-parallel
+    image: alpine:3.24.1
+    run:
+      shell: "seq 1 200 | xargs -P4 -n1 echo | wc -l"
+    expect:
+      stdout_contains:
+        - "200"
+
+  - id: utilities/subshell-fanout
+    image: alpine:3.24.1
+    run:
+      shell: "(echo a & echo b & echo c & wait) | sort | paste -sd, -"
+    expect:
+      stdout_contains:
+        - "a,b,c"
+
+  - id: utilities/nested-subst
+    image: alpine:3.24.1
+    run:
+      shell: "s=0; i=1; while [ $i -le 200 ]; do s=$(( $s + $(echo $i) )); i=$((i+1)); done; echo T=$s"
+    expect:
+      stdout_contains:
+        - "T=20100"
+
+  - id: utilities/trap-usr1
+    image: alpine:3.24.1
+    run:
+      shell: "trap 'echo got-usr1' USR1; kill -USR1 $$; echo done"
+    expect:
+      stdout_contains:
+        - "got-usr1"
+
+  - id: utilities/trap-term-handler
+    image: alpine:3.24.1
+    run:
+      shell: "trap 'echo caught-term; exit 0' TERM; kill -TERM $$; echo after"
+    expect:
+      stdout_contains:
+        - "caught-term"
+
+  - id: utilities/background-wait
+    image: alpine:3.24.1
+    run:
+      shell: "(sleep 0.1; echo child-done) & wait; echo parent-done"
+    expect:
+      stdout_contains:
+        - "parent-done"
+
+  - id: utilities/wait-many
+    image: alpine:3.24.1
+    run:
+      shell: "for i in 1 2 3 4 5; do (echo j$i) & done; wait; echo all-done"
+    expect:
+      stdout_contains:
+        - "all-done"
+
+  - id: utilities/bang-pid-wait
+    image: alpine:3.24.1
+    run:
+      shell: "sleep 0.1 & p=$!; wait $p; echo waited=$?"
+    expect:
+      stdout_contains:
+        - "waited=0"
+
+  - id: utilities/timeout-ok
+    image: alpine:3.24.1
+    run:
+      shell: "timeout 5 echo hi; echo rc=$?"
+    expect:
+      stdout_contains:
+        - "rc=0"
+
+  - id: utilities/large-pipe-count
+    image: alpine:3.24.1
+    run:
+      shell: "seq 1000000 | wc -l"
+    expect:
+      stdout_contains:
+        - "1000000"
+
+  - id: utilities/zero-throughput
+    image: alpine:3.24.1
+    run:
+      shell: "head -c 10485760 /dev/zero | wc -c"
+    expect:
+      stdout_contains:
+        - "10485760"
+
+  - id: utilities/dd-big-block
+    image: alpine:3.24.1
+    run:
+      shell: "dd if=/dev/zero bs=1048576 count=16 2>/dev/null | wc -c"
+    expect:
+      stdout_contains:
+        - "16777216"
+
+  - id: utilities/parallel-writers
+    image: alpine:3.24.1
+    run:
+      shell: "cd /tmp; rm -f pw*; for i in 1 2 3 4 5 6 7 8; do (seq 1 1000 > /tmp/pw$i) & done; wait; cat /tmp/pw* | awk '{s+=$1}END{print \"S=\"s}'"
+    expect:
+      stdout_contains:
+        - "S=4004000"
+
+  - id: utilities/mkfifo-io
+    image: alpine:3.24.1
+    run:
+      shell: "rm -f /tmp/ff1; mkfifo /tmp/ff1; (echo fifo-ok > /tmp/ff1) & cat /tmp/ff1"
+    expect:
+      stdout_contains:
+        - "fifo-ok"
+
+  - id: utilities/ubuntu-pipefail-status
+    image: ubuntu:24.04
+    run:
+      shell: "bash -c 'set -o pipefail; (exit 42) | cat; echo rc=$?'"
+    expect:
+      stdout_contains:
+        - "rc=42"
+
+  - id: utilities/ubuntu-brace-jobs
+    image: ubuntu:24.04
+    run:
+      shell: "bash -c 'for i in {1..8}; do (echo x) & done; wait; echo done8'"
+    expect:
+      stdout_contains:
+        - "done8"
+
+  - id: utilities/ubuntu-big-pipe
+    image: ubuntu:24.04
+    run:
+      shell: "seq 2000000 | wc -l"
+    expect:
+      stdout_contains:
+        - "2000000"
+
+  - id: utilities/date-epoch
+    image: alpine:3.24.1
+    run:
+      shell: "date -u -d @0 +%Y-%m-%d"
+    expect:
+      stdout_contains:
+        - "1970-01-01"
+
+  - id: utilities/date-utc-year
+    image: alpine:3.24.1
+    run:
+      shell: "TZ=UTC0 date -u -d @1000000000 +%Y"
+    expect:
+      stdout_contains:
+        - "2001"
+
+  - id: utilities/uptime-mono
+    image: alpine:3.24.1
+    run:
+      shell: "a=$(cut -d. -f1 /proc/uptime); sleep 1; b=$(cut -d. -f1 /proc/uptime); [ $b -ge $a ] && echo mono-ok"
+    expect:
+      stdout_contains:
+        - "mono-ok"
+
+  - id: utilities/sleep-frac
+    image: alpine:3.24.1
+    run:
+      shell: "sleep 0.1 && echo slept"
+    expect:
+      stdout_contains:
+        - "slept"
+
+  - id: utilities/hardlink-count
+    image: alpine:3.24.1
+    run:
+      shell: "cd /tmp; rm -f h1 h2; echo x>h1; ln h1 h2; stat -c %h h1"
+    expect:
+      stdout_contains:
+        - "2"
+
+  - id: utilities/truncate-grow
+    image: alpine:3.24.1
+    run:
+      shell: "rm -f /tmp/tg; truncate -s 4096 /tmp/tg; stat -c %s /tmp/tg"
+    expect:
+      stdout_contains:
+        - "4096"
+
+  - id: utilities/sparse-seek
+    image: alpine:3.24.1
+    run:
+      shell: "rm -f /tmp/sp; dd if=/dev/zero of=/tmp/sp bs=1 count=1 seek=1000000 2>/dev/null; stat -c %s /tmp/sp"
+    expect:
+      stdout_contains:
+        - "1000001"
+
+  - id: utilities/mkdir-deep
+    image: alpine:3.24.1
+    run:
+      shell: "rm -rf /tmp/dd0; mkdir -p /tmp/dd0/a/b/c/d/e/f/g; [ -d /tmp/dd0/a/b/c/d/e/f/g ] && echo deep-ok"
+    expect:
+      stdout_contains:
+        - "deep-ok"
+
+  - id: utilities/readlink-chain
+    image: alpine:3.24.1
+    run:
+      shell: "cd /tmp; rm -f l1 l2 tgt0; echo z>tgt0; ln -s tgt0 l1; ln -s l1 l2; readlink -f l2"
+    expect:
+      stdout_contains:
+        - "/tmp/tgt0"
+
+  - id: utilities/mktemp
+    image: alpine:3.24.1
+    run:
+      shell: "f=$(mktemp); [ -f \"$f\" ] && echo mktemp-ok; rm -f \"$f\""
+    expect:
+      stdout_contains:
+        - "mktemp-ok"
+
+  - id: utilities/rename-atomic
+    image: alpine:3.24.1
+    run:
+      shell: "cd /tmp; rm -f ra rb; echo v>ra; mv ra rb; [ ! -e ra ] && [ -e rb ] && echo rename-ok"
+    expect:
+      stdout_contains:
+        - "rename-ok"
+
+  - id: utilities/sort-big-buffer
+    image: alpine:3.24.1
+    run:
+      shell: "seq 1 100000 | sort -S 1M -n | tail -1"
+    expect:
+      stdout_contains:
+        - "100000"
+
+  - id: utilities/awk-big-array
+    image: alpine:3.24.1
+    run:
+      shell: "awk 'BEGIN{for(i=0;i<100000;i++)a[i]=i; s=0; for(k in a)s+=a[k]; print s}'"
+    expect:
+      stdout_contains:
+        - "4999950000"
+
+  - id: utilities/grep-huge
+    image: alpine:3.24.1
+    run:
+      shell: "seq 1 1000000 | grep -x 999999 | head -1"
+    expect:
+      stdout_contains:
+        - "999999"
+
+  - id: utilities/nproc
+    image: alpine:3.24.1
+    run:
+      shell: "n=$(nproc); [ $n -ge 1 ] && echo nproc-ok"
+    expect:
+      stdout_contains:
+        - "nproc-ok"
+
+  - id: utilities/getconf-nproc
+    image: alpine:3.24.1
+    run:
+      shell: "[ $(getconf _NPROCESSORS_ONLN) -ge 1 ] && echo cpu-conf-ok"
+    expect:
+      stdout_contains:
+        - "cpu-conf-ok"
+
+  - id: utilities/self-threads
+    image: alpine:3.24.1
+    run:
+      shell: "grep -q '^Threads:' /proc/self/status && echo threads-ok"
+    expect:
+      stdout_contains:
+        - "threads-ok"
+
+  - id: utilities/exec-replace
+    image: alpine:3.24.1
+    run:
+      shell: "sh -c 'exec echo replaced'"
+    expect:
+      stdout_contains:
+        - "replaced"
+
+  - id: utilities/eof-read
+    image: alpine:3.24.1
+    run:
+      shell: "timeout 2 sh -c 'read x' </dev/null; echo rc=$?"
+    expect:
+      stdout_contains:
+        - "rc=1"
+
+  - id: utilities/lc-c-sort
+    image: alpine:3.24.1
+    run:
+      shell: "printf 'b\\nA\\na\\nB\\n' | LC_ALL=C sort | paste -sd, -"
+    expect:
+      stdout_contains:
+        - "A,B,a,b"
+
+  - id: utilities/getconf-clk
+    image: alpine:3.24.1
+    run:
+      shell: "getconf CLK_TCK"
+    expect:
+      stdout_contains:
+        - "100"
+
+  - id: utilities/stat-blocks
+    image: alpine:3.24.1
+    run:
+      shell: "rm -f /tmp/sb; dd if=/dev/zero of=/tmp/sb bs=1024 count=8 2>/dev/null; stat -c %b /tmp/sb"
+    expect:
+      stdout_contains:
+        - "16"
+
+  - id: utilities/ubuntu-flock
+    image: ubuntu:24.04
+    run:
+      shell: "flock /tmp/lkx -c 'echo locked'"
+    expect:
+      stdout_contains:
+        - "locked"
+
+  - id: utilities/ubuntu-fallocate
+    image: ubuntu:24.04
+    run:
+      shell: "rm -f /tmp/fa; fallocate -l 8192 /tmp/fa; stat -c %s /tmp/fa"
+    expect:
+      stdout_contains:
+        - "8192"
+
+  - id: utilities/ubuntu-iconv-latin1
+    image: ubuntu:24.04
+    run:
+      shell: "printf 'caf\\303\\251' | iconv -f utf-8 -t latin1 | iconv -f latin1 -t utf-8 | wc -c"
+    expect:
+      stdout_contains:
+        - "5"
+
+  - id: utilities/ubuntu-wc-m
+    image: ubuntu:24.04
+    run:
+      shell: "printf '\\303\\251\\303\\251' | LC_ALL=C.UTF-8 wc -m"
+    expect:
+      stdout_contains:
+        - "2"
+
+  - id: utilities/ubuntu-read-timeout
+    image: ubuntu:24.04
+    run:
+      shell: "bash -c 'read -t 1 x < <(sleep 5); echo rc=$?'"
+    expect:
+      stdout_contains:
+        - "rc=1"
+
+  - id: utilities/ubuntu-taskset
+    image: ubuntu:24.04
+    run:
+      shell: "taskset -c 0 sh -c 'echo pinned'"
+    expect:
+      stdout_contains:
+        - "pinned"
+
+  - id: utilities/ubuntu-nsenter-self
+    image: ubuntu:24.04
+    run:
+      shell: "readlink /proc/self/ns/pid | grep -q 'pid:\\[' && echo ns-ok"
+    expect:
+      stdout_contains:
+        - "ns-ok"
+
+  - id: utilities/big-argv
+    image: alpine:3.24.1
+    run:
+      shell: "set -- $(seq 1 50000); echo $#"
+    expect:
+      stdout_contains:
+        - "50000"
+
+  - id: utilities/argmax
+    image: alpine:3.24.1
+    run:
+      shell: "[ $(getconf ARG_MAX) -ge 4096 ] && echo argmax-ok"
+    expect:
+      stdout_contains:
+        - "argmax-ok"
+
+  - id: utilities/self-fd
+    image: alpine:3.24.1
+    run:
+      shell: "[ $(ls /proc/self/fd | wc -l) -ge 3 ] && echo fd-ok"
+    expect:
+      stdout_contains:
+        - "fd-ok"
+  - id: utilities/urandom
+    image: alpine:3.24.1
+    run:
+      shell: "head -c 16 /dev/urandom | wc -c"
+    expect:
+      stdout_contains:
+        - "16"
+
+  - id: utilities/dev-full
+    image: alpine:3.24.1
+    run:
+      shell: "dd if=/dev/zero of=/dev/full bs=1 count=1 2>/dev/null; echo rc=$?"
+    expect:
+      stdout_contains:
+        - "rc=1"
+
+  - id: utilities/sparse-blocks
+    image: alpine:3.24.1
+    run:
+      shell: "rm -f /tmp/sp3; truncate -s 1048576 /tmp/sp3; [ $(stat -c %b /tmp/sp3) -lt 100 ] && echo sparse-ok"
+    expect:
+      stdout_contains:
+        - "sparse-ok"
+
+  - id: utilities/hardlink-share
+    image: alpine:3.24.1
+    run:
+      shell: "cd /tmp; rm -f ha hb; echo one>ha; ln ha hb; echo two>>ha; [ \"$(wc -l < hb)\" = 2 ] && echo hl-share-ok"
+    expect:
+      stdout_contains:
+        - "hl-share-ok"
+
+  - id: utilities/mtime-persist
+    image: alpine:3.24.1
+    run:
+      shell: "touch -d @1000000000 /tmp/tmx; [ \"$(date -u -d @$(stat -c %Y /tmp/tmx) +%Y)\" = 2001 ] && echo mtime-ok"
+    expect:
+      stdout_contains:
+        - "mtime-ok"
+
+  - id: utilities/suid-bit
+    image: alpine:3.24.1
+    run:
+      shell: "rm -f /tmp/su0; touch /tmp/su0; chmod 4755 /tmp/su0; stat -c %a /tmp/su0"
+    expect:
+      stdout_contains:
+        - "4755"
+
+  - id: utilities/statfs-bsize
+    image: alpine:3.24.1
+    run:
+      shell: "stat -f -c %S / | grep -qE '^[0-9]+$' && echo bsz-ok"
+    expect:
+      stdout_contains:
+        - "bsz-ok"
+
+  - id: utilities/truncate-shrink
+    image: alpine:3.24.1
+    run:
+      shell: "rm -f /tmp/ts0; printf 0123456789 > /tmp/ts0; truncate -s 4 /tmp/ts0; cat /tmp/ts0; echo"
+    expect:
+      stdout_contains:
+        - "0123"
+
+  - id: utilities/proc-net-tcp-header
+    image: alpine:3.24.1
+    run:
+      shell: "head -1 /proc/net/tcp | grep -q local_address && echo tcp-hdr-ok"
+    expect:
+      stdout_contains:
+        - "tcp-hdr-ok"
+
+  - id: utilities/proc-net-dev-lo
+    image: alpine:3.24.1
+    run:
+      shell: "grep -q 'lo:' /proc/net/dev && echo lo-dev-ok"
+    expect:
+      stdout_contains:
+        - "lo-dev-ok"
+
+  - id: utilities/proc-net-unix-header
+    image: alpine:3.24.1
+    run:
+      shell: "head -1 /proc/net/unix | grep -qi num && echo unix-hdr-ok"
+    expect:
+      stdout_contains:
+        - "unix-hdr-ok"
+
+  - id: utilities/getent-hosts-localhost
+    image: alpine:3.24.1
+    run:
+      shell: "getent hosts localhost | grep -qE '::1|127.0.0.1' && echo getent-host-ok"
+    expect:
+      stdout_contains:
+        - "getent-host-ok"
+
+  - id: utilities/sha256-1mb-zero
+    image: alpine:3.24.1
+    run:
+      shell: "head -c 1048576 /dev/zero | sha256sum | cut -d' ' -f1"
+    expect:
+      stdout_contains:
+        - "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58"
+
+  - id: utilities/md5-1mb-zero
+    image: alpine:3.24.1
+    run:
+      shell: "head -c 1048576 /dev/zero | md5sum | cut -d' ' -f1"
+    expect:
+      stdout_contains:
+        - "b6d81b360a5672d80c27430f39153e2c"
+
+  - id: utilities/base64-large-roundtrip
+    image: alpine:3.24.1
+    run:
+      shell: "head -c 100000 /dev/zero | base64 | base64 -d | wc -c"
+    expect:
+      stdout_contains:
+        - "100000"
+
+  - id: utilities/gzip9-roundtrip
+    image: alpine:3.24.1
+    run:
+      shell: "echo hl-gz9-ok | gzip -9 | gunzip"
+    expect:
+      stdout_contains:
+        - "hl-gz9-ok"
+
+  - id: utilities/zcat-stream
+    image: alpine:3.24.1
+    run:
+      shell: "echo zcat-ok | gzip | zcat"
+    expect:
+      stdout_contains:
+        - "zcat-ok"
+
+  - id: utilities/gzip-ratio
+    image: alpine:3.24.1
+    run:
+      shell: "[ $(head -c 5242880 /dev/zero | gzip | wc -c) -lt 100000 ] && echo gz-ratio-ok"
+    expect:
+      stdout_contains:
+        - "gz-ratio-ok"
+
+  - id: utilities/tar-list
+    image: alpine:3.24.1
+    run:
+      shell: "cd /tmp && rm -rf tl tl.tar && mkdir tl && echo x > tl/inside.txt && tar cf tl.tar tl && tar tf tl.tar | grep inside.txt"
+    expect:
+      stdout_contains:
+        - "tl/inside.txt"
+
+  - id: utilities/tar-big-roundtrip
+    image: alpine:3.24.1
+    run:
+      shell: "cd /tmp && rm -rf tb tb.tar && mkdir tb && seq 1 5000 > tb/n && tar cf tb.tar tb && rm -rf tb && tar xf tb.tar && awk '{s+=$1}END{print s}' tb/n"
+    expect:
+      stdout_contains:
+        - "12502500"
+
+  - id: utilities/find-head-count
+    image: alpine:3.24.1
+    run:
+      shell: "find / -type f 2>/dev/null | wc -l | awk '{print ($1>100)?\"find-count-ok\":\"low\"}'"
+    expect:
+      stdout_contains:
+        - "find-count-ok"
+
+  - id: utilities/grep-r-etc
+    image: alpine:3.24.1
+    run:
+      shell: "grep -rl root /etc 2>/dev/null | head -1 | grep -q /etc/ && echo grep-r-ok"
+    expect:
+      stdout_contains:
+        - "grep-r-ok"
+
+  - id: utilities/xargs-spawn-many
+    image: alpine:3.24.1
+    run:
+      shell: "seq 1 300 | xargs -n1 sh -c 'echo $1' _ | wc -l"
+    expect:
+      stdout_contains:
+        - "300"
+
+  - id: utilities/shell-fib
+    image: alpine:3.24.1
+    run:
+      shell: "fib(){ [ $1 -lt 2 ] && echo $1 && return; echo $(( $(fib $(($1-1))) + $(fib $(($1-2))) )); }; fib 15"
+    expect:
+      stdout_contains:
+        - "610"
+
+  - id: utilities/sort-descending-huge
+    image: alpine:3.24.1
+    run:
+      shell: "seq 1 300000 | awk '{print 300000-$1}' | sort -n | tail -1"
+    expect:
+      stdout_contains:
+        - "299999"
+
+  - id: utilities/sha256sum-check
+    image: alpine:3.24.1
+    run:
+      shell: "printf abc > /tmp/scv; echo \"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  /tmp/scv\" | sha256sum -c"
+    expect:
+      stdout_contains:
+        - "/tmp/scv: OK"
+
+  - id: utilities/ubuntu-flock-w
+    image: ubuntu:24.04
+    run:
+      shell: "flock -w 2 /tmp/lkw -c 'echo flock-w-ok'"
+    expect:
+      stdout_contains:
+        - "flock-w-ok"
+
+  - id: utilities/ubuntu-getent-hosts
+    image: ubuntu:24.04
+    run:
+      shell: "getent hosts localhost | grep -qE '::1|127.0.0.1' && echo getent-host-ok"
+    expect:
+      stdout_contains:
+        - "getent-host-ok"
+
+  - id: utilities/ubuntu-tar-gzip-list
+    image: ubuntu:24.04
+    run:
+      shell: "cd /tmp && rm -rf ug ug.tgz && mkdir ug && seq 1 2000 > ug/n && tar czf ug.tgz ug && tar tzf ug.tgz | grep ug/n"
+    expect:
+      stdout_contains:
+        - "ug/n"
+
+  - id: utilities/ubuntu-sha256-big
+    image: ubuntu:24.04
+    run:
+      shell: "head -c 1048576 /dev/zero | sha256sum | cut -d' ' -f1"
+    expect:
+      stdout_contains:
+        - "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58"
+
+  - id: utilities/ulimit-nofile
+    image: alpine:3.24.1
+    run:
+      shell: "ulimit -n | grep -qE '^[0-9]+$|unlimited' && echo nofile-ok"
+    expect:
+      stdout_contains:
+        - "nofile-ok"
+
+  - id: utilities/ulimit-stack
+    image: alpine:3.24.1
+    run:
+      shell: "ulimit -s | grep -qE '^[0-9]+$|unlimited' && echo stack-ok"
+    expect:
+      stdout_contains:
+        - "stack-ok"
+
+  - id: utilities/ulimit-cpu-unlimited
+    image: alpine:3.24.1
+    run:
+      shell: "sh -c 'ulimit -t unlimited; echo ok'"
+    expect:
+      stdout_contains:
+        - "ok"
+
+  - id: utilities/getconf-openmax
+    image: alpine:3.24.1
+    run:
+      shell: "getconf OPEN_MAX | grep -qE '^[0-9]+$' && echo openmax-ok"
+    expect:
+      stdout_contains:
+        - "openmax-ok"
+
+  - id: utilities/proc-limits-nofile-value
+    image: alpine:3.24.1
+    run:
+      shell: "awk '/Max open files/{print ($4>0)?\"lim-ok\":\"bad\"}' /proc/self/limits"
+    expect:
+      stdout_contains:
+        - "lim-ok"
+
+  - id: utilities/nice-default
+    image: alpine:3.24.1
+    run:
+      shell: "nice"
+    expect:
+      stdout_contains:
+        - "0"
+
+  - id: utilities/nice-adjust
+    image: alpine:3.24.1
+    run:
+      shell: "nice -n 7 nice"
+    expect:
+      stdout_contains:
+        - "7"
+
+  - id: utilities/env-i-clears
+    image: alpine:3.24.1
+    run:
+      shell: "FOO=bar env -i sh -c 'echo ${FOO:-cleared}'"
+    expect:
+      stdout_contains:
+        - "cleared"
+
+  - id: utilities/env-inline-var
+    image: alpine:3.24.1
+    run:
+      shell: "A=1 sh -c 'echo $A'"
+    expect:
+      stdout_contains:
+        - "1"
+
+  - id: utilities/export-cross
+    image: alpine:3.24.1
+    run:
+      shell: "export XV=hi; sh -c 'echo $XV'"
+    expect:
+      stdout_contains:
+        - "hi"
+
+  - id: utilities/unset-cross
+    image: alpine:3.24.1
+    run:
+      shell: "XV=hi; unset XV; echo \"[${XV:-gone}]\""
+    expect:
+      stdout_contains:
+        - "[gone]"
+
+  - id: utilities/long-env-var
+    image: alpine:3.24.1
+    run:
+      shell: "export A=$(printf 'a%.0s' $(seq 1 5000)); echo ${#A}"
+    expect:
+      stdout_contains:
+        - "5000"
+
+  - id: utilities/printenv-count
+    image: alpine:3.24.1
+    run:
+      shell: "env -i A=1 B=2 C=3 printenv | wc -l"
+    expect:
+      stdout_contains:
+        - "3"
+
+  - id: utilities/positional-count
+    image: alpine:3.24.1
+    run:
+      shell: "set -- a b c; echo $#"
+    expect:
+      stdout_contains:
+        - "3"
+
+  - id: utilities/positional-at
+    image: alpine:3.24.1
+    run:
+      shell: "set -- x y z; echo \"$@\""
+    expect:
+      stdout_contains:
+        - "x y z"
+
+  - id: utilities/set-reset
+    image: alpine:3.24.1
+    run:
+      shell: "set -- a b c; set --; echo count=$#"
+    expect:
+      stdout_contains:
+        - "count=0"
+
+  - id: utilities/dollar-zero
+    image: alpine:3.24.1
+    run:
+      shell: "sh -c 'echo $0' myname"
+    expect:
+      stdout_contains:
+        - "myname"
+
+  - id: utilities/mountinfo-count
+    image: alpine:3.24.1
+    run:
+      shell: "[ $(wc -l < /proc/self/mountinfo) -ge 1 ] && echo minfo-ok"
+    expect:
+      stdout_contains:
+        - "minfo-ok"
+
+  - id: utilities/proc-self-cgroup
+    image: alpine:3.24.1
+    run:
+      shell: "[ -e /proc/self/cgroup ] && echo cgroup-ok"
+    expect:
+      stdout_contains:
+        - "cgroup-ok"
+
+  - id: utilities/proc-init-comm
+    image: alpine:3.24.1
+    run:
+      shell: "cat /proc/1/comm | grep -q . && echo init-ok"
+    expect:
+      stdout_contains:
+        - "init-ok"
+
+  - id: utilities/proc-status-uid
+    image: alpine:3.24.1
+    run:
+      shell: "awk '/^Uid:/{print $2}' /proc/self/status"
+    expect:
+      stdout_contains:
+        - "0"
+
+  - id: utilities/proc-status-gid
+    image: alpine:3.24.1
+    run:
+      shell: "awk '/^Gid:/{print $2}' /proc/self/status"
+    expect:
+      stdout_contains:
+        - "0"
+
+  - id: utilities/hostname-read
+    image: alpine:3.24.1
+    run:
+      shell: "hostname | grep -q . && echo host-ok"
+    expect:
+      stdout_contains:
+        - "host-ok"
+
+  - id: utilities/statfs-stat-f
+    image: alpine:3.24.1
+    run:
+      shell: "stat -f -c %b / | grep -qE '^[0-9]+$' && echo statf-ok"
+    expect:
+      stdout_contains:
+        - "statf-ok"
+
+  - id: utilities/bc-power
+    image: alpine:3.24.1
+    run:
+      shell: "echo '2^10' | bc"
+    expect:
+      stdout_contains:
+        - "1024"
+
+  - id: utilities/bc-scale
+    image: alpine:3.24.1
+    run:
+      shell: "echo 'scale=4; 10/3' | bc"
+    expect:
+      stdout_contains:
+        - "3.3333"
+
+  - id: utilities/dc-rpn
+    image: alpine:3.24.1
+    run:
+      shell: "echo '2 3 + p' | dc"
+    expect:
+      stdout_contains:
+        - "5"
+
+  - id: utilities/expr-precedence
+    image: alpine:3.24.1
+    run:
+      shell: "expr \\( 2 + 3 \\) \\* 4"
+    expect:
+      stdout_contains:
+        - "20"
+
+  - id: utilities/awk-prime-sum
+    image: alpine:3.24.1
+    run:
+      shell: "awk 'BEGIN{for(i=2;i<100;i++){p=1;for(j=2;j*j<=i;j++)if(i%j==0)p=0;if(p)s+=i}print s}'"
+    expect:
+      stdout_contains:
+        - "1060"
+
+  - id: utilities/ubuntu-ulimit-nofile
+    image: ubuntu:24.04
+    run:
+      shell: "ulimit -n | grep -qE '^[0-9]+$|unlimited' && echo nofile-ok"
+    expect:
+      stdout_contains:
+        - "nofile-ok"
+
+  - id: utilities/ubuntu-proc-cgroup-v2
+    image: ubuntu:24.04
+    run:
+      shell: "grep -q '^0::' /proc/self/cgroup && echo cg2-ok"
+    expect:
+      stdout_contains:
+        - "cg2-ok"
+
+  - id: utilities/ubuntu-getconf-openmax
+    image: ubuntu:24.04
+    run:
+      shell: "getconf OPEN_MAX | grep -qE '^[0-9]+$' && echo openmax-ok"
+    expect:
+      stdout_contains:
+        - "openmax-ok"
+
+  - id: utilities/ubuntu-nproc-all
+    image: ubuntu:24.04
+    run:
+      shell: "[ $(nproc --all) -ge 1 ] && echo nproc-all-ok"
+    expect:
+      stdout_contains:
+        - "nproc-all-ok"
+  - id: utilities/pycompute-fib30
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "import sys
+        sys.setrecursionlimit(100000)
+        def f(n):
+         return n if n<2 else f(n-1)+f(n-2)
+        print('FIB', f(30))"
+    expect:
+      stdout_contains:
+        - "FIB 832040"
+  - id: utilities/pycompute-ackermann
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "import sys
+        sys.setrecursionlimit(100000)
+        def a(m,n):
+         return n+1 if m==0 else (a(m-1,1) if n==0 else a(m-1,a(m,n-1)))
+        print('ACK', a(2,3))"
+    expect:
+      stdout_contains:
+        - "ACK 9"
+  - id: utilities/pycompute-bigint-pow
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "print('BI', 2**100)"
+    expect:
+      stdout_contains:
+        - "BI 1267650600228229401496703205376"
+  - id: utilities/pycompute-sort-1e5
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "a=list(range(100000))
+        a.sort(reverse=True)
+        print('S', a[0], a[-1], sum(a))"
+    expect:
+      stdout_contains:
+        - "S 99999 0 4999950000"
+  - id: utilities/pycompute-dict-agg
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "d={}
+        for i in range(100000): d[i%1000]=d.get(i%1000,0)+i
+        print('SUM', sum(d.values()), len(d))"
+    expect:
+      stdout_contains:
+        - "SUM 4999950000 1000"
+  - id: utilities/pycompute-json-roundtrip
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "import json
+        o={'a':list(range(1000)),'b':{'x':'ддд'}}
+        s=json.dumps(o,ensure_ascii=False)
+        p=json.loads(s)
+        print('JSON', sum(p['a']), p['b']['x'])"
+    expect:
+      stdout_contains:
+        - "JSON 499500 \u0434\u0434\u0434"
+  - id: utilities/pycompute-sha256-1mb
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "import hashlib
+        print(hashlib.sha256(b'\0'*1048576).hexdigest())"
+    expect:
+      stdout_contains:
+        - "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58"
+  - id: utilities/pycompute-harmonic
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "print('H %.6f' % sum(1.0/n for n in range(1,1000001)))"
+    expect:
+      stdout_contains:
+        - "H 14.392727"
+  - id: utilities/pycompute-regex
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "import re
+        s='ab'*100000
+        print('RE', len(re.findall('ab',s)), bool(re.match(r'(a+)+$','a'*20)))"
+    expect:
+      stdout_contains:
+        - "RE 100000 True"
+  - id: utilities/pycompute-setops
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "A=set(range(100000))
+        B=set(range(50000,150000))
+        print('SET', len(A&B), len(A|B))"
+    expect:
+      stdout_contains:
+        - "SET 50000 150000"
+  - id: utilities/pycompute-strbuilder
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "print('SB', len(''.join(str(i) for i in range(100000))))"
+    expect:
+      stdout_contains:
+        - "SB 488890"
+  - id: utilities/pycompute-gc-churn
+    image: python:3.13-slim
+    run:
+      shell: |-
+        python3 -c "s=0
+        for _ in range(100): s+=sum([i*i for i in range(1000)])
+        print('GC', s)"
+    expect:
+      stdout_contains:
+        - "GC 33283350000"
+  - id: utilities/nodecompute-fib30
+    image: node:22-alpine
+    run:
+      shell: |-
+        node -e 'function f(n){return n<2?n:f(n-1)+f(n-2)}console.log("FIB",f(30))'
+    expect:
+      stdout_contains:
+        - "FIB 832040"
+  - id: utilities/nodecompute-bigint
+    image: node:22-alpine
+    run:
+      shell: |-
+        node -e 'console.log("BI",(2n**100n).toString())'
+    expect:
+      stdout_contains:
+        - "BI 1267650600228229401496703205376"
+  - id: utilities/nodecompute-typedarray
+    image: node:22-alpine
+    run:
+      shell: |-
+        node -e 'let a=new Float64Array(100000);for(let i=0;i<a.length;i++)a[i]=Math.sqrt(i);let s=0;for(let i=0;i<a.length;i++)s+=a[i];console.log("TA",s.toFixed(2))'
+    expect:
+      stdout_contains:
+        - "TA 21081692.75"
+  - id: utilities/nodecompute-json
+    image: node:22-alpine
+    run:
+      shell: |-
+        node -e 'let o={a:[]};for(let i=0;i<1000;i++)o.a.push(i);let p=JSON.parse(JSON.stringify(o));console.log("J",p.a.reduce((x,y)=>x+y,0))'
+    expect:
+      stdout_contains:
+        - "J 499500"
+  - id: utilities/nodecompute-sort-1e5
+    image: node:22-alpine
+    run:
+      shell: |-
+        node -e 'let a=[];for(let i=0;i<100000;i++)a.push((i*2654435761)%100000);a.sort((x,y)=>x-y);console.log("NS",a[0],a[99999])'
+    expect:
+      stdout_contains:
+        - "NS 0 99999"
+  - id: utilities/nodecompute-gc-churn
+    image: node:22-alpine
+    run:
+      shell: |-
+        node -e 'let s=0;for(let k=0;k<100;k++){let a=[];for(let i=0;i<1000;i++)a.push(i);s+=a.reduce((x,y)=>x+y,0)}console.log("GC",s)'
+    expect:
+      stdout_contains:
+        - "GC 49950000"
+  - id: utilities/rubycompute-fib30
+    image: ruby:3.3-alpine
+    run:
+      shell: |-
+        ruby -e 'def f(n); n<2 ? n : f(n-1)+f(n-2); end; puts "FIB #{f(30)}"'
+    expect:
+      stdout_contains:
+        - "FIB 832040"
+  - id: utilities/rubycompute-bignum
+    image: ruby:3.3-alpine
+    run:
+      shell: |-
+        ruby -e 'puts "BN #{2**100}"'
+    expect:
+      stdout_contains:
+        - "BN 1267650600228229401496703205376"
+  - id: utilities/rubycompute-sort
+    image: ruby:3.3-alpine
+    run:
+      shell: |-
+        ruby -e 'a=(0...100000).map{|i|(i*2654435761)%100000}.sort; puts "RS #{a.first} #{a.last}"'
+    expect:
+      stdout_contains:
+        - "RS 0 99999"
+  - id: utilities/rubycompute-hash-agg
+    image: ruby:3.3-alpine
+    run:
+      shell: |-
+        ruby -e 'h=Hash.new(0);(0...100000).each{|i| h[i%1000]+=i}; puts "HS #{h.values.sum} #{h.size}"'
+    expect:
+      stdout_contains:
+        - "HS 4999950000 1000"
+  - id: utilities/rubycompute-json
+    image: ruby:3.3-alpine
+    run:
+      shell: |-
+        ruby -e 'require "json"; o={"a"=>(0...1000).to_a}; p=JSON.parse(o.to_json); puts "J #{p["a"].sum}"'
+    expect:
+      stdout_contains:
+        - "J 499500"
+  - id: utilities/perlcompute-fib
+    image: perl:5.40
+    run:
+      shell: |-
+        perl -e 'sub f{my $n=shift; $n<2?$n:f($n-1)+f($n-2)} print "FIB ",f(30),"\n"'
+    expect:
+      stdout_contains:
+        - "FIB 832040"
+  - id: utilities/perlcompute-sort
+    image: perl:5.40
+    run:
+      shell: |-
+        perl -e 'my @a=sort {$a<=>$b} map {($_*2654435761)%100000} (0..99999); print "PS $a[0] $a[-1]\n"'
+    expect:
+      stdout_contains:
+        - "PS 0 99999"
+  - id: utilities/perlcompute-hash
+    image: perl:5.40
+    run:
+      shell: |-
+        perl -e 'my %h; for my $i (0..99999){ $h{$i%1000}+=$i } my $s=0; $s+=$_ for values %h; print "HS $s ",scalar(keys %h),"\n"'
+    expect:
+      stdout_contains:
+        - "HS 4999950000 1000"
+  - id: utilities/perlcompute-regex
+    image: perl:5.40
+    run:
+      shell: |-
+        perl -e 'my $s="ab" x 100000; my $c=()=($s=~/ab/g); print "RE $c\n"'
+    expect:
+      stdout_contains:
+        - "RE 100000"
+  - id: utilities/phpcompute-fib
+    image: php:8.3-cli
+    run:
+      shell: |-
+        php -r 'function f($n){return $n<2?$n:f($n-1)+f($n-2);} echo "FIB ".f(30)."\n";'
+    expect:
+      stdout_contains:
+        - "FIB 832040"
+  - id: utilities/phpcompute-sort
+    image: php:8.3-cli
+    run:
+      shell: |-
+        php -r '$a=[];for($i=0;$i<100000;$i++)$a[]=($i*2654435761)%100000;sort($a);echo "PS ".$a[0]." ".$a[99999]."\n";'
+    expect:
+      stdout_contains:
+        - "PS 0 99999"
+  - id: utilities/compile-c-sieve
+    image: gcc:13
+    run:
+      shell: |-
+        gcc -O2 -x c -o /tmp/p - <<'EOF' && /tmp/p
+        #include <stdio.h>
+        int main(void){static char c[1000000];int n=0;for(long i=2;i<1000000;i++){if(!c[i]){n++;for(long j=i*i;j<1000000;j+=i)c[j]=1;}}printf("PRIMES %d\n",n);return 0;}
+        EOF
+    expect:
+      stdout_contains:
+        - "PRIMES 78498"
+  - id: utilities/compile-c-fib
+    image: gcc:13
+    run:
+      shell: |-
+        gcc -O2 -x c -o /tmp/p - <<'EOF' && /tmp/p
+        #include <stdio.h>
+        static long f(long n){return n<2?n:f(n-1)+f(n-2);}
+        int main(void){printf("FIB %ld\n",f(40));return 0;}
+        EOF
+    expect:
+      stdout_contains:
+        - "FIB 102334155"
+  - id: utilities/compile-c-qsort
+    image: gcc:13
+    run:
+      shell: |-
+        gcc -O2 -x c -o /tmp/p - <<'EOF' && /tmp/p
+        #include <stdio.h>
+        #include <stdlib.h>
+        static int cmp(const void*a,const void*b){long x=*(const long*)a,y=*(const long*)b;return (x>y)-(x<y);}
+        int main(void){static long v[100000];for(int i=0;i<100000;i++)v[i]=99999-i;qsort(v,100000,sizeof(long),cmp);long s=0;for(int i=0;i<100000;i++)s+=v[i];printf("QS %ld %ld %ld\n",v[0],v[99999],s);return 0;}
+        EOF
+    expect:
+      stdout_contains:
+        - "QS 0 99999 4999950000"
+  - id: utilities/compile-cpp-stl
+    image: gcc:13
+    run:
+      shell: |-
+        g++ -O2 -x c++ -o /tmp/p - <<'EOF' && /tmp/p
+        #include <cstdio>
+        #include <vector>
+        #include <numeric>
+        #include <algorithm>
+        int main(){std::vector<long> v;for(long i=1;i<=1000000;i++)v.push_back(i);std::sort(v.begin(),v.end(),std::greater<long>());long s=std::accumulate(v.begin(),v.end(),0L);printf("SUM %ld %ld\n",s,v.front());return 0;}
+        EOF
+    expect:
+      stdout_contains:
+        - "SUM 500000500000 1000000"
+  - id: utilities/compile-cpp-map
+    image: gcc:13
+    run:
+      shell: |-
+        g++ -O2 -x c++ -o /tmp/p - <<'EOF' && /tmp/p
+        #include <cstdio>
+        #include <map>
+        #include <string>
+        int main(){std::map<std::string,int> m;const char* w[]={"a","b","a","c","b","a"};for(auto s:w)m[s]++;printf("MAP %d %d %d %zu\n",m["a"],m["b"],m["c"],m.size());return 0;}
+        EOF
+    expect:
+      stdout_contains:
+        - "MAP 3 2 1 3"
+  - id: utilities/compile-rust-sieve
+    image: rust:1-slim
+    run:
+      shell: |-
+        cat > /tmp/p.rs <<'EOF'
+        fn main(){let n=1000000usize;let mut c=vec![false;n];let mut k=0u64;let mut i=2usize;while i<n{if !c[i]{k+=1;let mut j=i*i;while j<n{c[j]=true;j+=i;}}i+=1;}println!("PRIMES {}",k);}
+        EOF
+        rustc -O /tmp/p.rs -o /tmp/p && /tmp/p
+    expect:
+      stdout_contains:
+        - "PRIMES 78498"
+  - id: utilities/compile-rust-sum
+    image: rust:1-slim
+    run:
+      shell: |-
+        cat > /tmp/p.rs <<'EOF'
+        fn main(){let s:u64=(1..=1000000u64).sum();println!("SUM {}",s);}
+        EOF
+        rustc -O /tmp/p.rs -o /tmp/p && /tmp/p
+    expect:
+      stdout_contains:
+        - "SUM 500000500000"
+  - id: utilities/git-log-count
+    image: bitnami/git:latest
+    run:
+      shell: |-
+        cd /tmp && rm -rf r && mkdir r && cd r && git init -q && git config user.email dd@dd && git config user.name dd && for i in 1 2 3; do echo $i > f$i && git add f$i && git commit -q -m "c$i"; done && printf 'COMMITS %s\n' "$(git log --oneline | wc -l | tr -d ' ')"
+    expect:
+      stdout_contains:
+        - "COMMITS 3"
+  - id: utilities/sha256-abc-glibc
+    image: debian:bookworm
+    run:
+      shell: printf abc | sha256sum | cut -d' ' -f1
+    expect:
+      stdout_contains:
+      - ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+  - id: utilities/openssl-sha256-empty
+    image: alpine/openssl:latest
+    run:
+      argv:
+      - dgst
+      - -sha256
+      - -r
+    expect:
+      stdout_contains:
+      - e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  - id: utilities/openssl-version
+    image: alpine/openssl:latest
+    run:
+      argv:
+      - version
+    expect:
+      stdout_contains:
+      - OpenSSL 3
+  - id: utilities/sort-uniq-count-glibc
+    image: debian:bookworm
+    run:
+      shell: 'printf ''b
+
+        a
+
+        c
+
+        a
+
+        b
+
+        '' | sort | uniq -c | awk ''{print $1$2}'' | paste -sd, -'
+    expect:
+      stdout_contains:
+      - 2a,2b,1c
+  - id: utilities/awk-squares-glibc
+    image: debian:bookworm
+    run:
+      shell: awk 'BEGIN{for(i=1;i<=100;i++)s+=i*i;print s}'
+    expect:
+      stdout_contains:
+      - '338350'
+  - id: utilities/factor-glibc
+    image: debian:bookworm
+    run:
+      shell: factor 500500 | tr ' ' '\n' | tail -n1
+    expect:
+      stdout_contains:
+      - '13'
+  - id: utilities/paste-bc-bash
+    image: bash:5.2
+    run:
+      shell: bash -c 'seq 1 1000 | paste -sd+ - | bc'
+    expect:
+      stdout_contains:
+      - '500500'
+  - id: utilities/fork-loop
+    image: alpine:3.24.1
+    run:
+      shell: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+    expect:
+      stdout_contains:
+      - SUM=500500
+  - id: utilities/fork-loop-glibc
+    image: debian:bookworm
+    run:
+      shell: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+    expect:
+      stdout_contains:
+      - SUM=500500
+  - id: utilities/fork-subshells
+    image: alpine:3.24.1
+    run:
+      shell: t=0; n=1; while [ $n -le 500 ]; do v=$(sh -c "echo $((n*2))"); t=$(expr $t + $v); n=$(expr $n + 1); done; echo "T=$t"
+    expect:
+      stdout_contains:
+      - T=250500
+  - id: utilities/fork-subshells-glibc
+    image: debian:bookworm
+    run:
+      shell: t=0; n=1; while [ $n -le 500 ]; do v=$(sh -c "echo $((n*2))"); t=$(expr $t + $v); n=$(expr $n + 1); done; echo "T=$t"
+    expect:
+      stdout_contains:
+      - T=250500
+  - id: utilities/tar-roundtrip
+    image: alpine:3.24.1
+    run:
+      shell: cd /tmp && rm -rf d a.tar && mkdir d && echo hl-tar-ok > d/f.txt && tar cf a.tar d && rm -rf d && tar xf a.tar && cat d/f.txt
+    expect:
+      stdout_contains:
+      - hl-tar-ok
+  - id: utilities/gzip-roundtrip
+    image: alpine:3.24.1
+    run:
+      shell: 'printf ''hl-gzip-ok
+
+        '' | gzip | gunzip'
+    expect:
+      stdout_contains:
+      - hl-gzip-ok
+  - id: utilities/targz-roundtrip
+    image: alpine:3.24.1
+    run:
+      shell: cd /tmp && rm -rf g g.tgz && mkdir g && seq 1 1000 > g/n.txt && tar czf g.tgz g && rm -rf g && tar xzf g.tgz && awk '{s+=$1}END{print s}' g/n.txt
+    expect:
+      stdout_contains:
+      - '500500'
+  - id: utilities/tar-roundtrip-glibc
+    image: debian:bookworm
+    run:
+      shell: cd /tmp && rm -rf d a.tar && mkdir d && echo hl-tar-ok > d/f.txt && tar cf a.tar d && rm -rf d && tar xf a.tar && cat d/f.txt
+    expect:
+      stdout_contains:
+      - hl-tar-ok
+  - id: utilities/gzip-roundtrip-glibc
+    image: debian:bookworm
+    run:
+      shell: 'printf ''hl-gzip-ok
+
+        '' | gzip | gunzip'
+    expect:
+      stdout_contains:
+      - hl-gzip-ok
+  - id: utilities/overlay-metadata
+    image: alpine:3.24.1
+    run:
+      shell: set -e; ls -laR /usr/lib >/dev/null; touch /usr/lib/NEWFILE; test -f /usr/lib/NEWFILE; sh -c 'echo x > /usr/lib/XPROC'; test -f /usr/lib/XPROC; rm /etc/os-release; test ! -e /etc/os-release; ! ls /etc | grep -q '^os-release$'; echo SHADOW > /etc/hostname.d; chmod 600 /etc/passwd; [ "$(stat -c %a /etc/passwd)" = 600 ]; grep -q root /etc/passwd; rm -rf /usr/share/apk; mkdir /usr/share/apk; [ -z "$(ls /usr/share/apk)" ]; echo overlay-metadata-ok
+    expect:
+      stdout_contains:
+      - overlay-metadata-ok
+  - id: utilities/dentry-storm-overlay
+    image: alpine:3.24.1
+    run:
+      shell: ok=1; i=0; while [ $i -lt 15 ]; do echo v$i > /tmp/f; mv /tmp/f /tmp/g; [ -e /tmp/f ] && ok=0; read w < /tmp/g; [ "$w" = v$i ] || ok=0; rm /tmp/g; [ -e /tmp/g ] && ok=0; echo A > /tmp/a; echo B > /tmp/b; ln -s a /tmp/l; read w < /tmp/l; [ "$w" = A ] || ok=0; rm /tmp/l; ln -s b /tmp/l; read w < /tmp/l; [ "$w" = B ] || ok=0; rm /tmp/l /tmp/a /tmp/b; i=$((i+1)); done; ls /usr/share/udhcpc >/dev/null; chmod 600 /usr/share/udhcpc/default.script || ok=0; grep -q . /usr/share/udhcpc/default.script || ok=0; rm /etc/services; [ -e /etc/services ] && ok=0; echo re-created > /etc/services; read w < /etc/services; [ "$w" = re-created ] || ok=0; mv /usr/share/udhcpc /usr/share/udhcpc2; [ -e /usr/share/udhcpc/default.script ] && ok=0; [ -e /usr/share/udhcpc2/default.script ] || ok=0; echo dentry-overlay ok=$ok
+    expect:
+      stdout_contains:
+      - dentry-overlay ok=1
+  - id: utilities/busybox-arith
+    image: busybox:latest
+    run:
+      shell: sh -c 'echo $((7*6))'
+    expect:
+      stdout_contains:
+      - '42'
+  - id: utilities/busybox-pipe
+    image: busybox:latest
+    run:
+      shell: seq 1 1000 | awk '{s+=$1}END{print s}'
+    expect:
+      stdout_contains:
+      - '500500'
+  - id: utilities/busybox-banner
+    image: busybox:latest
+    run:
+      shell: busybox 2>&1 | head -1
+    expect:
+      stdout_contains:
+      - BusyBox v1.3
+  - id: utilities/busybox-fork-loop
+    image: busybox:latest
+    run:
+      shell: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+    expect:
+      stdout_contains:
+      - SUM=500500
+  - id: utilities/busybox-sha256
+    image: busybox:latest
+    run:
+      shell: printf abc | sha256sum | cut -d' ' -f1
+    expect:
+      stdout_contains:
+      - ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+  - id: utilities/bash-base-convert
+    image: bash:5.2
+    run:
+      argv:
+      - bash
+      - -c
+      - echo $((2#1010))
+    expect:
+      stdout_contains:
+      - '10'
+  - id: utilities/bash-brace-arith
+    image: bash:5.2
+    run:
+      argv:
+      - bash
+      - -c
+      - for i in {1..1000}; do :; done; echo $((1000*1001/2))
+    expect:
+      stdout_contains:
+      - '500500'
+  - id: utilities/bash-arrays
+    image: bash:5.2
+    run:
+      argv:
+      - bash
+      - -c
+      - a=(1 2 3); echo ${#a[@]}
+    expect:
+      stdout_contains:
+      - '3'
+  - id: utilities/bash-param-expand
+    image: bash:5.2
+    run:
+      argv:
+      - bash
+      - -c
+      - echo ${x:-default}
+    expect:
+      stdout_contains:
+      - default
+  - id: utilities/bash-version
+    image: bash:5.2
+    run:
+      argv:
+      - bash
+      - --version
+    expect:
+      stdout_contains:
+      - version 5.2
+  - id: utilities/jq-add
+    image: ghcr.io/jqlang/jq:latest
+    run:
+      argv:
+      - -n
+      - '[range(1;1001)]|add'
+    expect:
+      stdout_contains:
+      - '500500'
+  - id: utilities/jq-object
+    image: ghcr.io/jqlang/jq:latest
+    run:
+      argv:
+      - -n
+      - '{a:1,b:2}|.a+.b'
+    expect:
+      stdout_contains:
+      - '3'
+  - id: utilities/jq-sort
+    image: ghcr.io/jqlang/jq:latest
+    run:
+      argv:
+      - -nc
+      - '[3,1,2]|sort'
+    expect:
+      stdout_contains:
+      - '[1,2,3]'
+  - id: utilities/jq-version
+    image: ghcr.io/jqlang/jq:latest
+    run:
+      argv:
+      - --version
+    expect:
+      stdout_contains:
+      - jq-1.
+  - id: utilities/git-version
+    image: alpine/git:latest
+    run:
+      argv:
+      - --version
+    expect:
+      stdout_contains:
+      - git version 2.
+  - id: utilities/git-empty-blob
+    image: bitnami/git:latest
+    run:
+      shell: printf '' | git hash-object --stdin
+    expect:
+      stdout_contains:
+      - e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+  - id: utilities/git-hashobject-dd
+    image: bitnami/git:latest
+    run:
+      shell: 'printf ''dd
+
+        '' | git hash-object --stdin'
+    expect:
+      stdout_contains:
+      - f03f6945fbf941fa91cb460eab583c7f36c8cee3
+  - id: utilities/git-init-commit
+    image: bitnami/git:latest
+    run:
+      shell: 'export GIT_AUTHOR_NAME=dd GIT_AUTHOR_EMAIL=dd@dd GIT_COMMITTER_NAME=dd GIT_COMMITTER_EMAIL=dd@dd GIT_AUTHOR_DATE=''2000-01-01T00:00:00Z'' GIT_COMMITTER_DATE=''2000-01-01T00:00:00Z''; cd /tmp && rm -rf r && mkdir r && cd r && git init -q && echo dd > f && git add f && git commit -q -m ''dd: first commit'' && git log --format=''%s'' -1'
+    expect:
+      stdout_contains:
+      - 'dd: first commit'
+  - id: utilities/git-deterministic-sha
+    image: bitnami/git:latest
+    run:
+      shell: 'export GIT_AUTHOR_NAME=dd GIT_AUTHOR_EMAIL=dd@dd GIT_COMMITTER_NAME=dd GIT_COMMITTER_EMAIL=dd@dd GIT_AUTHOR_DATE=''2000-01-01T00:00:00Z'' GIT_COMMITTER_DATE=''2000-01-01T00:00:00Z''; cd /tmp && rm -rf r && mkdir r && cd r && git init -q && echo dd > f && git add f && git commit -q -m ''dd: first commit'' && git rev-parse HEAD'
+    expect:
+      stdout_contains:
+      - 9fba1c3dda82182611817eab9c713c8f5afbd0c1
+  - id: utilities/curl-version
+    image: curlimages/curl:latest
+    run:
+      argv:
+      - --version
+    expect:
+      stdout_contains:
+      - curl 8.
+  - id: utilities/socat-version
+    image: alpine/socat:latest
+    run:
+      argv:
+      - -V
+    expect:
+      stdout_contains:
+      - socat by Gerhard Rieger
+  - id: utilities/nc-loopback
+    image: alpine:3.24.1
+    run:
+      shell: '{ echo hl-echo-ok | nc -l -p 9000; } & sleep 0.4; nc 127.0.0.1 9000 </dev/null'
+    expect:
+      stdout_contains:
+      - hl-echo-ok
+  - id: utilities/wget-loopback
+    image: busybox:latest
+    run:
+      shell: mkdir -p /www && echo hl-http-ok > /www/f.txt && httpd -p 127.0.0.1:8080 -h /www && sleep 0.3 && wget -qO- http://127.0.0.1:8080/f.txt
+    expect:
+      stdout_contains:
+      - hl-http-ok
+  - id: utilities/hello-world
+    image: hello-world:latest
+    run:
+      entrypoint: true
+    expect:
+      stdout_contains:
+      - Hello from Docker!

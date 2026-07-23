@@ -18,6 +18,7 @@ name = "hl_gl"
 path = "src/lib.rs"
 
 [dependencies]
+hl-fs = { path = "../../packages/hl-fs", default-features = false }
 hl-design = { path = "../../packages/hl-design" }
 # The neutral hl-GPU protocol (Cmd/Enc, descriptors, kernel-IR, CommandSink). Package `hl_gpu`,
 # lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.

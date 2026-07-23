@@ -236,7 +236,7 @@ pub trait Images {
 
 ```text
 ports/engine.rs          domain requirement
-adapters/jit.rs          `hl-jit` implementation
+adapters/container.rs    `hl-container` implementation backed by `hl-engine`
 adapters/memory.rs       deterministic test implementation
 ```
 
@@ -247,12 +247,12 @@ building a repository or service locator for the whole application.
 The composition root supplies implementations:
 
 ```rust
-let engine = Jit::open(engine_config)?;
+let engine = Containers::builder(container_config).build().await?;
 let images = Registry::open(registry_config)?;
 let workspaces = Workspaces::new(images, engine);
 ```
 
-Replacing `Jit` with another engine changes construction in `husklet`, not workspace use cases or endpoints.
+Replacing the container engine changes construction in `husklet`, not workspace use cases or endpoints.
 That is the practical test of the boundary.
 
 ## Review a placement
@@ -267,7 +267,7 @@ Before adding code, state its owner and reason:
 | Render a generic currency input | GUI `lib/currency` | Transferable within GUI domains |
 | Open a workspace from image + engine | workspace `service` | Multi-capability use case |
 | Define what workspace execution requires | workspace `ports::Engine` | Stable replaceable boundary |
-| Translate `hl-jit` calls into `Engine` | application adapter | Concrete integration |
+| Translate `hl-container` calls into `Engine` | application adapter | Concrete integration |
 | Decode `POST /workspaces` | `api/http` | Transport adapter |
 
 A placement is wrong when moving or replacing one mechanism requires edits across unrelated models,

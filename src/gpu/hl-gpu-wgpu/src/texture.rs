@@ -56,12 +56,12 @@ impl WgpuExecutor {
     ///
     /// * `D1`   → a wgpu 1D texture (`desc.height` must be 1; 1D forbids mips/MSAA), `D1` view.
     /// * `D2`   → a wgpu 2D texture; `desc.depth` is the **array-layer** count (`1` = a plain 2D image), so
-    ///            `depth > 1` is a 2D-array whose default view is `D2Array` (else `D2`).
+    ///   `depth > 1` is a 2D-array whose default view is `D2Array` (else `D2`).
     /// * `D3`   → a wgpu 3D texture, `desc.depth` depth slices, `D3` view.
     /// * `Cube` → a wgpu 2D texture with exactly **6 array layers** (the faces) and a `Cube` default view —
-    ///            which is what a `samplerCube` bind-group binding, built from the shader's auto layout,
-    ///            requires. Collapsing this to a 2D texture (the old behaviour) made every cube draw fail
-    ///            device validation at bind time.
+    ///   which is what a `samplerCube` bind-group binding, built from the shader's auto layout,
+    ///   requires. Collapsing this to a 2D texture (the old behaviour) made every cube draw fail
+    ///   device validation at bind time.
     ///
     /// `desc.mip_levels` mip levels are allocated so a mipmapped source can be uploaded per level and sampled
     /// at an explicit LOD. The default view spans all mips and all layers/faces.

@@ -1,6 +1,9 @@
 use std::collections::{BTreeSet, HashMap};
 
-use syn::{spanned::Spanned, visit::Visit, Expr, ExprCall, ExprMacro, ItemFn, ItemMod};
+use syn::{
+    spanned::Spanned, visit::Visit, Expr, ExprCall, ExprMacro, FnArg, ItemFn, ItemMod,
+    PathArguments, Type,
+};
 
 use crate::{
     model::{Finding, Related, Review, ReviewState, Severity},
@@ -166,12 +169,46 @@ impl<'ast> Visit<'ast> for Functions {
 fn candidate(function: &ItemFn) -> bool {
     function.sig.abi.is_none()
         && matches!(function.sig.inputs.len(), 1 | 2)
+        && !framework_adapter(function)
         && !function.attrs.iter().any(|attribute| {
             let path = attribute.path();
             path.is_ident("proc_macro")
                 || path.is_ident("proc_macro_attribute")
                 || path.is_ident("proc_macro_derive")
         })
+}
+
+fn framework_adapter(function: &ItemFn) -> bool {
+    if !function.attrs.iter().any(|attribute| {
+        attribute
+            .path()
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "adapter")
+    }) {
+        return false;
+    }
+    function.sig.inputs.iter().any(|argument| {
+        let FnArg::Typed(argument) = argument else {
+            return false;
+        };
+        let Type::Path(ty) = argument.ty.as_ref() else {
+            return false;
+        };
+        ty.path.segments.last().is_some_and(|segment| {
+            let name = segment.ident.to_string();
+            let generic = matches!(segment.arguments, PathArguments::AngleBracketed(_));
+            (generic
+                && matches!(
+                    name.as_str(),
+                    "State" | "Path" | "Query" | "Json" | "Form" | "Extension" | "ConnectInfo"
+                ))
+                || matches!(
+                    name.as_str(),
+                    "OriginalUri" | "RawQuery" | "WebSocketUpgrade" | "Multipart"
+                )
+        })
+    })
 }
 
 #[derive(Clone)]

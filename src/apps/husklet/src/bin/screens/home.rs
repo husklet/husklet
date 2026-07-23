@@ -9,6 +9,12 @@ pub struct View {
     pub create: gtk::Button,
 }
 
+impl Default for View {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl View {
     pub fn new() -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);

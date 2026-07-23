@@ -1,265 +1,76 @@
-<p align="center">
-  <img src="assets/logo.png" alt="dd" width="128" height="128" />
-</p>
+# Husklet
 
-<h1 align="center">dd</h1>
+Husklet provides configurable Linux workspaces on macOS. A workspace combines an OCI image,
+terminal, mounts, environment, networking, optional container services, and optional GUI/GPU
+capabilities in one signed desktop application.
 
-<p align="center">
-  <strong>Run Linux containers on macOS — with no VM.</strong>
-</p>
+## Architecture
 
-<p align="center">
-  <a href="https://github.com/ricccrd/dd/releases/latest"><img alt="Download" src="https://img.shields.io/badge/download-.dmg-2f6fe6?style=flat-square" /></a>
-  <img alt="Platform" src="https://img.shields.io/badge/macOS-Apple%20Silicon-4f88ff?style=flat-square" />
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-81b5ff?style=flat-square" />
-  <a href="https://ricccrd.github.io/dd/"><img alt="Website" src="https://img.shields.io/badge/website-docs-97cdff?style=flat-square" /></a>
-</p>
+The `husklet` application is the composition root. It translates workspace configuration into the
+typed container API from `src/containers`; `hl-container` lowers each launch into the Rust engine API
+from `../engine`. Product code does not invoke an engine binary or construct an engine-specific
+environment dialect.
 
----
+Graphics follows the same composition model:
 
-## What is dd?
-
-`dd` runs **Linux containers natively on Apple-Silicon macOS without a virtual machine**. There is no
-Linux kernel and no hypervisor underneath: a **JIT** translates the container's code and services its
-Linux **syscalls in userspace** (the gVisor / PRoot lineage). The JIT *is* the guest's Linux kernel —
-namespaces, cgroups, overlay image layers and networking are maintained as userspace state. It speaks
-the **Docker Engine API**, so the ordinary `docker` CLI drives it.
-
-The container's *compute* runs as native Apple-Silicon instructions; only its *syscalls* are
-interpreted. No VM to boot, no daemon-in-a-VM, no virtualization cost.
-
-> **Website & docs:** https://ricccrd.github.io/dd/
-
-```sh
-make jit                                          # build.rs compiles + codesigns the JITs
-DD_IMAGES=/path/to/images cargo run -p dd-daemon  # start the daemon
-export DOCKER_HOST=unix://$PWD/dd.sock
-docker run -p 8080:80 -m 256m alpine sh -c 'echo hi from $(hostname)'
+```text
+workspace configuration
+  -> husklet Graphics device
+  -> hl-container Device contract
+  -> hl-engine MachineSpec extensions and mounts
+  -> guest GL / CUDA / Vulkan shims
+  -> hl-gpu neutral IR
+  -> hl-gpu-wgpu host execution
+  -> hl-compositor
+  -> native macOS surface
 ```
 
-## Features
+Read-only guest libraries are projected through the engine's versioned `engine.namespace`
+extension. Live GPU and Wayland sockets remain typed writable container mounts until the engine
+supports writable socket projection. Backend selection and service lifetime stay in Husklet;
+container and engine crates remain GPU-neutral.
 
-- **No virtual machine.** No hypervisor, no Linux kernel, no VM to keep resident. The guest's
-  instructions run natively on arm64; only the syscall boundary is trapped and serviced in userspace.
-- **Drop-in Docker.** dd implements the Docker Engine API. Point `DOCKER_HOST` at its socket and your
-  existing `docker run / ps / images / build` commands work unchanged.
-- **The JIT is the kernel.** Namespaces, cgroups, overlay image layers and networking are ordinary
-  userspace state — a userspace kernel in the gVisor / PRoot lineage, with none of a VM's cost.
-- **Three guest runtimes, one engine.** Native **arm64 Linux** images; **x86-64 Linux** images via a JIT
-  (`jit86`) that decodes x86, synthesizes its flags, and lowers SSE/x87 onto NEON (glibc binaries run);
-  and **macOS arm64** guests (`ddcli mac`) — no VM in any of them.
-- **Real container isolation.** Overlay image layers (copy-up / `.wh.` whiteout, merged `getdents`),
-  a TOCTOU-free path-jail VFS, PID / UTS / USER namespaces, a private loopback netns with `-p` port
-  publishing, and cgroup memory + pids limits (OOM at the limit).
-- **Desktop app, no root.** A native GTK4 app (**dd-app**) plus a `dd` CLI install a per-user
-  background daemon and a `docker context` — everything under `$HOME`, never `sudo`.
+Repository crates are grouped under `src/`:
 
-## Why a JIT, not a VM?
-
-Every other way to run Linux containers on a Mac — Docker Desktop, Colima, Rancher, OrbStack — boots a
-Linux **VM** under a hypervisor and runs the daemon *inside* it. That VM is a tax you pay all day. dd
-deletes it: a container is a plain macOS process whose syscalls happen to be serviced by a userspace
-Linux kernel.
-
-|                              | **dd** — userspace kernel (JIT)                              | VM-based Docker (Desktop / Colima / …)            |
-| ---------------------------- | ----------------------------------------------------------- | ------------------------------------------------- |
-| Underlying model             | A JIT services Linux syscalls in userspace (gVisor lineage) | A full Linux kernel inside a hypervisor VM        |
-| Resident RAM when idle       | **None** — per-container, freed on exit                     | Gigabytes reserved for the VM, always on          |
-| Startup                      | **Process spawn** — no VM to boot                           | Boot a Linux VM + the in-VM daemon first          |
-| Bind-mount / file I/O        | **Direct host filesystem** through a path jail              | `virtiofs`/gRPC-FUSE bridge across the VM boundary |
-| Port publishing              | Straight to host sockets                                    | Through the VM's NAT/forwarding layer             |
-| Battery / background cost    | **Nothing** running when no container is                    | A VM idling and draining battery                  |
-| Footprint to ship &amp; patch | No Linux kernel — nothing to CVE-track                      | Ships, patches and tracks a whole Linux kernel    |
-| Observability                | **A normal macOS process** — sample, debug, Activity Monitor | An opaque VM; the workload is invisible to host tools |
-
-The win is structural: the guest's *compute* runs as **native Apple-Silicon instructions** (no
-hardware-virtualization layer in the hot path), and the notorious Docker-Desktop file-sharing
-bottleneck — the `virtiofs`/FUSE bridge between macOS and the VM — simply doesn't exist, because dd's
-VFS *is* the host filesystem behind a path jail.
-
-> **Honest trade-off:** a userspace kernel is only as complete as the syscalls it implements, and today
-> By default the guest runs in **one process** — fast, and the right call for code you trust (your dev
-> environment, CI, your own tools). For **untrusted** code there's now an opt-in **sentry split**
-> (`DDJIT_UNTRUSTED`): the guest runs in a deny-default Seatbelt sandbox holding no host fs/net authority,
-> while a trusted *sentry* process owns the real resources and serves syscalls across a shared-memory
-> ring — the gVisor shape. It's early (the core file syscalls — read/write/open/close/lseek — forward
-> today; sockets/exec/fork are landing), so for fully hostile code a VM still exposes a narrower surface.
-
-## Performance
-
-The **same static Linux binary**, run two ways on an **Apple M5 Pro** (macOS 26.3): inside the Linux VM
-(how VM-based Docker runs containers) vs. through dd's JIT on the host with **no VM**. Median of 7
-(`make bench`). Lower time is better; "dd vs VM" > 1× means dd is faster. The dd lane even pays a small
-cross-process bridge tax the real app doesn't — so these are *conservative*.
-
-**x86-64 containers — dd vs VM emulation** (qemu-user; running x86 on Apple Silicon means *translating*
-it either way). dd's JIT beats qemu on **9 of 10** workloads, dramatically on floating-point:
-
-| Workload | VM (qemu) | dd (no VM) | dd vs VM |
-|---|--:|--:|:--:|
-| float n-body | 5.39s | 0.23s | **24× faster** |
-| mandelbrot | 7.81s | 0.83s | **9.4× faster** |
-| matmul | 8.21s | 1.37s | **6.0× faster** |
-| SQLite (600k rows) | 2.99s | 1.01s | **3.0× faster** |
-| qsort | 3.91s | 1.68s | 2.3× faster |
-| memcpy | 2.40s | 1.10s | 2.2× faster |
-| text-scan (wc/grep) | 1.42s | 1.11s | 1.3× faster |
-| int sieve | 1.31s | 1.04s | 1.25× faster |
-| SHA-256 | 2.72s | 2.44s | 1.1× faster |
-| base64 | 4.28s | 5.39s | 0.79× (1.26× slower) |
-
-**aarch64 containers — dd vs a native VM** (the VM runs arm64 at full native speed — the hardest bar):
-
-| Workload | VM (native) | dd (no VM) | dd vs VM |
-|---|--:|--:|:--:|
-| int sieve | 0.75s | 0.48s | **1.58× faster** |
-| mandelbrot | 0.79s | 0.77s | 1.03× faster |
-| matmul | 0.66s | 0.66s | ~parity |
-| memcpy | 0.55s | 0.56s | ~parity |
-| base64 | 0.68s | 0.68s | ~parity |
-| float n-body | 0.17s | 0.17s | ~parity |
-| SHA-256 | 0.80s | 0.82s | ~parity |
-| qsort | 0.83s | 1.10s | 1.33× slower |
-| text-scan (wc/grep) | 0.51s | 0.68s | 1.35× slower |
-| SQLite (600k rows) | 0.36s | 0.62s | 1.71× slower |
-
-dd runs arm64 **compute at native speed** — ahead on int sieve + mandelbrot, at parity on SHA-256, matmul,
-memcpy, n-body, and base64. The remaining gaps are **indirect-branch / syscall-heavy** work — qsort (~1.3×),
-text-scan (~1.35×) and SQLite (~1.5×) — narrowed sharply by the latest passes (§B-off + stolen x16/x17 took
-SQLite from ~1.9× to ~1.5×). Closing the rest (VDBE dispatch) is the active frontier; see
-`docs/design/arm-sqlite-parity.md`. (Every
-workload is sized to run ≥0.45s, so the harness's small per-run bridge tax is negligible here.)
-
-These are *compute* micro-benchmarks — they don't even capture dd's structural wins (no VM to boot, no
-resident RAM, direct host-filesystem I/O). All numbers measured, median of 7. Reproduce: `make bench`.
-
-> **The goal is to beat the VM on *every* benchmark.** dd already wins every x86-64 workload above and
-> matches or beats native arm64; where it's still behind — syscall/allocation-heavy arm64 SQLite, and
-> squeezing more out of the x86 translator — is exactly the optimization frontier (the tier-2 trace
-> optimizer and the jit86 perf work). Parity-or-better everywhere is the bar.
-
-## How it works
-
-dd runs a Linux container by **being its kernel in userspace**. A JIT translates the guest's machine
-code and traps every syscall instruction; the trap handler — `service()` in `dd-jit-darwin/src/runtime/os/linux/`
-— *is* the Linux syscall ABI, implemented against the macOS host.
-
-1. **Load** the guest ELF (static-PIE, or dynamic via its `ld.so`) and build the initial stack.
-2. **Translate & dispatch** the guest PC block-by-block; same-ISA code is mostly transliterated, x86-64
-   is decoded and re-emitted on arm64.
-3. **Run** the translated block as native host code until a terminator (branch / indirect jump / syscall).
-4. **Service** the syscall — every path passes through the container VFS jail; namespaces and cgroups
-   are just process state.
-
-## Examples
-
-```sh
-# 1. Start the daemon, point docker at it
-make jit
-DD_IMAGES=/path/to/images cargo run -p dd-daemon
-export DOCKER_HOST=unix://$PWD/dd.sock
-
-# 2. It's just Docker
-docker run -p 8080:80 -m 256m alpine sh -c 'echo hi from $(hostname)'
-docker ps
-docker images
-docker run --rm -it ubuntu bash
-
-# 3. Or via the installed desktop app (per-user, no root)
-dd install                                  # LaunchAgent + docker context
-dd app                                       # open the GUI
-docker --context dd run alpine echo hi
+```text
+src/
+  apps/husklet/          signed product and composition root
+  gpu/                   neutral GPU protocol and host backend
+  surface/               compositor and guest GL/CUDA/Vulkan libraries
+  workspaces/            workspace models, terminal, and generic GUI
+  packages/              reusable foundations
 ```
 
-## Install
+The container and engine repositories are sibling dependencies:
 
-dd targets **Apple-Silicon macOS** (arm64, macOS 12+). The JIT needs the Xcode Command Line Tools
-(`clang` + `codesign`).
-
-### Download the app (recommended)
-
-Grab the latest `.dmg` from the [**releases page**](https://github.com/ricccrd/dd/releases/latest),
-open it, and drag **dd** to Applications. Then in a terminal:
-
-```sh
-dd install     # ~/.dd tree + per-user LaunchAgent + `docker context create dd`
-dd app         # open the GUI
-dd doctor      # check socket / agent / context / app quarantine
+```text
+src/containers/          images, container lifecycle, daemon, client
+../engine/               typed Linux execution engine
 ```
 
-> **Gatekeeper:** the DMG is unsigned (ad-hoc). On first launch, right-click the app → **Open**, or run
-> `xattr -dr com.apple.quarantine /Applications/dd-app.app` (`dd doctor` detects this and prints the fix).
+## Development
 
-### Build from source
-
-```sh
-xcode-select --install                       # clang + codesign
-# install Rust (stable) and Nix (for the GTK4 dev shell)
-git clone https://github.com/ricccrd/dd && cd dd
-make app       # build + assemble & ad-hoc-sign target/dd-app.app
-make dmg       # -> target/dist/dd-<ver>-<arch>.dmg
-make install   # copy to /Applications and run `dd install`
-```
-
-`make app`/`dmg` run the bundling inside the Nix dev shell ([`nix/flake.nix`](nix/flake.nix)), which
-provides GTK4 + `dylibbundler` / `create-dmg`. The bundle relocates the GTK dylib graph into
-`Contents/Frameworks`, stages the GTK runtime data, and ad-hoc-signs inner→outer.
-
-## Workspace
-
-A Cargo workspace.
-
-- **[`dd-jit/`](dd-jit/)** — the **typed container-runtime API**: `Runtime`, `Container` (+ fluent
-  builder), `Image`, and the `RunHandle`/`RunningContainer` handles. It selects a per-OS backend at
-  compile time and launches a container through a typed FFI — no shell, no env-var dialect. This is the
-  crate a developer embeds to run containers directly from Rust.
-- **`dd-jit-darwin/`** — the **macOS engine backend** dd-jit compiles against. The C JIT lives here
-  (under `src/runtime/`); `build.rs` compiles and codesigns **one binary per guest architecture**
-  (`aarch64`, `x86_64`, `darwin_aarch64`), and it exposes the `ddjit_spawn` FFI the runtime forks
-  through (the C side does the fork/exec; config travels as a typed struct). A future `dd-jit-linux`
-  would be a same-API sibling.
-- **`dd-images/`** — **image management**: OCI registry pull, on-disk store, `docker build`
-  (Dockerfile), rootfs unpack, and image discovery. Runtime-agnostic (**no dd-jit dependency**) — it
-  hands a ready rootfs to dd-jit and is usable standalone.
-- **`dd-daemon/`** — the **thin Docker Engine API server**: HTTP handlers + Docker model state that
-  wire `dd-images` and `dd-jit` together. It detects each image's guest architecture, then launches it
-  via `dd_jit::Runtime` (typed DTOs for the wire format; no business logic of its own).
-- **`dd-tests/`** — a declarative test harness; cases run across **every engine** with a grouped report.
-- **`dd-client/`** — a small typed Docker-Engine-API client over the daemon's Unix socket (the single
-  source of truth for the wire format, shared by the GUI and CLI).
-- **`dd-gui/`** (binary **`dd-app`**) — a GTK4 desktop UI. Built only on macOS via the Nix dev shell.
-- **`dd-cli/`** (binary **`dd`**) — the install/control surface, all without root.
-
-The daemon listens on `~/.dd/run/docker.sock`; both the GUI and `docker --context dd` use it. State
-persists to `~/.dd/state.json`.
-
-## Testing
+Portable checks:
 
 ```sh
-make test                       # the engine × case matrix, grouped report
-make test ENGINE=x86_64         # one engine
-make test FILTER=container      # one group / cases matching a name
-cargo run -p dd-tests -- --list # list groups + cases
-make test-ci                    # the cargo-test path (CI)
+make test
+cargo check -p husklet --features runtime --lib
+cargo test -p hl-container
 ```
 
-Cases are declared in `dd-tests/src/cases/`. A case is a guest program + assertions; aarch64 guests are
-compiled on the fly (`gcc -static-pie`) and diffed against a native oracle, x86-64 guests come from
-prebuilt fixtures. Each case runs on every engine it has a guest for.
+The macOS GUI requires the pinned Nix development shell:
 
-## Status
+```sh
+nix develop "path:$PWD/nix" --command \
+  cargo check -p husklet --bin husklet --features gui
+```
 
-- **Guest:** Linux **aarch64** (decomposed, full container engine) + **x86-64** (jit86, runs glibc).
-- **Host:** macOS **arm64** (Apple Silicon). The JIT needs `clang` + `codesign` (Xcode CLT).
-- **Containers:** rootfs + overlay image layers (copy-up/whiteout), bind volumes, port publishing
-  (`-p`), private-loopback netns, cgroup memory+pids limits, UTS/PID/USER namespaces.
-- **Roadmap:** OCI registry pull/unpack, the jit86 dedup onto the shared engine, a full external
-  netstack, and the sentry split for untrusted images. See `docs/` for the detailed write-ups.
+Build the signed application bundle with:
 
-## Author
+```sh
+make app
+```
 
-**Richard Hutta** — [huttarichard@gmail.com](mailto:huttarichard@gmail.com)
-
-## License
-
-[MIT](LICENSE).
+See [AGENTS.md](AGENTS.md) for stable architecture and design rules, and
+[docs/ENGINE.md](docs/ENGINE.md) for the engine capabilities required to remove current runtime
+workarounds.

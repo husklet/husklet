@@ -237,7 +237,7 @@ struct ParameterBlob(Vec<u8>);
 
 impl ParameterBlob {
     fn align(&mut self, alignment: usize) {
-        while self.0.len() % alignment != 0 {
+        while !self.0.len().is_multiple_of(alignment) {
             self.0.push(0);
         }
     }

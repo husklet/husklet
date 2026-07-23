@@ -26,9 +26,9 @@ struct HandleInfoHead {
 /// Read the trailing `u64` handle from a `Vk*Info` whose only field after `pNext` is that handle.
 struct AddressInfo;
 impl AddressInfo {
-unsafe fn handle(p_info: *const c_void) -> Option<u64> {
-    (p_info as *const HandleInfoHead).as_ref().map(|h| h.handle)
-}
+    unsafe fn handle(p_info: *const c_void) -> Option<u64> {
+        (p_info as *const HandleInfoHead).as_ref().map(|h| h.handle)
+    }
 }
 
 /// The stable modeled device address of buffer `handle`, or 0 if unknown. Derived from the buffer's
@@ -36,32 +36,39 @@ unsafe fn handle(p_info: *const c_void) -> Option<u64> {
 /// small host pointers.
 struct BufferAddress;
 impl BufferAddress {
-fn get(dev: &Device, handle: u64) -> u64 {
-    match dev.buffers.get(&handle) {
-        Some(b) => 0x0000_4000_0000_0000u64 + (b.ir_id as u64) * 0x1_0000,
-        None => 0,
+    fn get(dev: &Device, handle: u64) -> u64 {
+        match dev.buffers.get(&handle) {
+            Some(b) => 0x0000_4000_0000_0000u64 + (b.ir_id as u64) * 0x1_0000,
+            None => 0,
+        }
     }
-}
 }
 
 /// The stable modeled opaque capture address of memory `handle`, or 0 if unknown.
 struct MemoryAddress;
 impl MemoryAddress {
-fn get(dev: &Device, handle: u64) -> u64 {
-    if dev.memories.contains_key(&handle) {
-        0x0000_5000_0000_0000u64 + handle
-    } else {
-        0
+    fn get(dev: &Device, handle: u64) -> u64 {
+        if dev.memories.contains_key(&handle) {
+            0x0000_5000_0000_0000u64 + handle
+        } else {
+            0
+        }
     }
-}
 }
 
 // ---- vkGetBufferDeviceAddress (+ KHR/EXT aliases) ----------------------------------------------
 
 #[no_mangle]
 pub extern "C" fn vkGetBufferDeviceAddress(_device: *mut c_void, p_info: *const c_void) -> u64 {
-    let Some(handle) = (unsafe { AddressInfo::handle(p_info) }) else { return 0 };
-    StateStore::with(|s| s.device.as_ref().map(|d| BufferAddress::get(d, handle)).unwrap_or(0))
+    let Some(handle) = (unsafe { AddressInfo::handle(p_info) }) else {
+        return 0;
+    };
+    StateStore::with(|s| {
+        s.device
+            .as_ref()
+            .map(|d| BufferAddress::get(d, handle))
+            .unwrap_or(0)
+    })
 }
 #[no_mangle]
 pub extern "C" fn vkGetBufferDeviceAddressKHR(device: *mut c_void, p_info: *const c_void) -> u64 {
@@ -77,23 +84,49 @@ pub extern "C" fn vkGetBufferDeviceAddressEXT(device: *mut c_void, p_info: *cons
 // stable modeled address as the device address (a valid, consistent choice for a single-device model).
 
 #[no_mangle]
-pub extern "C" fn vkGetBufferOpaqueCaptureAddress(_device: *mut c_void, p_info: *const c_void) -> u64 {
-    let Some(handle) = (unsafe { AddressInfo::handle(p_info) }) else { return 0 };
-    StateStore::with(|s| s.device.as_ref().map(|d| BufferAddress::get(d, handle)).unwrap_or(0))
+pub extern "C" fn vkGetBufferOpaqueCaptureAddress(
+    _device: *mut c_void,
+    p_info: *const c_void,
+) -> u64 {
+    let Some(handle) = (unsafe { AddressInfo::handle(p_info) }) else {
+        return 0;
+    };
+    StateStore::with(|s| {
+        s.device
+            .as_ref()
+            .map(|d| BufferAddress::get(d, handle))
+            .unwrap_or(0)
+    })
 }
 #[no_mangle]
-pub extern "C" fn vkGetBufferOpaqueCaptureAddressKHR(device: *mut c_void, p_info: *const c_void) -> u64 {
+pub extern "C" fn vkGetBufferOpaqueCaptureAddressKHR(
+    device: *mut c_void,
+    p_info: *const c_void,
+) -> u64 {
     vkGetBufferOpaqueCaptureAddress(device, p_info)
 }
 
 // ---- vkGetDeviceMemoryOpaqueCaptureAddress (+ KHR) ---------------------------------------------
 
 #[no_mangle]
-pub extern "C" fn vkGetDeviceMemoryOpaqueCaptureAddress(_device: *mut c_void, p_info: *const c_void) -> u64 {
-    let Some(handle) = (unsafe { AddressInfo::handle(p_info) }) else { return 0 };
-    StateStore::with(|s| s.device.as_ref().map(|d| MemoryAddress::get(d, handle)).unwrap_or(0))
+pub extern "C" fn vkGetDeviceMemoryOpaqueCaptureAddress(
+    _device: *mut c_void,
+    p_info: *const c_void,
+) -> u64 {
+    let Some(handle) = (unsafe { AddressInfo::handle(p_info) }) else {
+        return 0;
+    };
+    StateStore::with(|s| {
+        s.device
+            .as_ref()
+            .map(|d| MemoryAddress::get(d, handle))
+            .unwrap_or(0)
+    })
 }
 #[no_mangle]
-pub extern "C" fn vkGetDeviceMemoryOpaqueCaptureAddressKHR(device: *mut c_void, p_info: *const c_void) -> u64 {
+pub extern "C" fn vkGetDeviceMemoryOpaqueCaptureAddressKHR(
+    device: *mut c_void,
+    p_info: *const c_void,
+) -> u64 {
     vkGetDeviceMemoryOpaqueCaptureAddress(device, p_info)
 }

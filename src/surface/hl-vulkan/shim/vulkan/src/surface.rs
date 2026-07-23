@@ -22,14 +22,14 @@ use crate::types::*;
 /// Mint a modeled `VkSurfaceKHR`, writing it to `p_surface`. Every platform constructor funnels here.
 struct Surface;
 impl Surface {
-fn create(p_surface: *mut u64) -> VkResult {
-    if p_surface.is_null() {
-        return VK_ERROR_INITIALIZATION_FAILED;
+    fn create(p_surface: *mut u64) -> VkResult {
+        if p_surface.is_null() {
+            return VK_ERROR_INITIALIZATION_FAILED;
+        }
+        let handle = StateStore::with(|s| s.mint_surface());
+        unsafe { *p_surface = handle };
+        VK_SUCCESS
     }
-    let handle = StateStore::with(|s| s.mint_surface());
-    unsafe { *p_surface = handle };
-    VK_SUCCESS
-}
 }
 
 #[no_mangle]
@@ -65,10 +65,14 @@ pub extern "C" fn vkCreateWaylandSurfaceKHR(
     // Capture the app's OWN wayland handles (its `wl_display*` + `wl_surface*`, on its own
     // `libwayland-client` connection) so `vkQueuePresentKHR` can marshal the presented frame onto that
     // exact `wl_surface`. The pointers are recorded (as raw addresses), never dereferenced here.
-    let Some(ci) = (unsafe { (p_create_info as *const VkWaylandSurfaceCreateInfoKHR).as_ref() }) else {
+    let Some(ci) = (unsafe { (p_create_info as *const VkWaylandSurfaceCreateInfoKHR).as_ref() })
+    else {
         return VK_ERROR_INITIALIZATION_FAILED;
     };
-    let window = crate::state::WaylandWindow { display: ci.display as usize, surface: ci.surface as usize };
+    let window = crate::state::WaylandWindow {
+        display: ci.display as usize,
+        surface: ci.surface as usize,
+    };
     let handle = StateStore::with(|s| {
         let h = s.mint_surface();
         s.wayland_surfaces.insert(h, window);
@@ -89,7 +93,11 @@ pub extern "C" fn vkCreateHeadlessSurfaceEXT(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroySurfaceKHR(_instance: *mut c_void, surface: u64, _p_allocator: *const c_void) {
+pub extern "C" fn vkDestroySurfaceKHR(
+    _instance: *mut c_void,
+    surface: u64,
+    _p_allocator: *const c_void,
+) {
     StateStore::with(|s| {
         s.surfaces.remove(&surface);
         s.wayland_surfaces.remove(&surface);
@@ -129,13 +137,13 @@ pub extern "C" fn vkGetPhysicalDeviceWaylandPresentationSupportKHR(
 
 struct PresentationSupport;
 impl PresentationSupport {
-fn query(queue_family_index: u32) -> VkBool32 {
-    if present::QueueFamily(queue_family_index).supports_present() {
-        VK_TRUE
-    } else {
-        VK_FALSE
+    fn query(queue_family_index: u32) -> VkBool32 {
+        if present::QueueFamily(queue_family_index).supports_present() {
+            VK_TRUE
+        } else {
+            VK_FALSE
+        }
     }
-}
 }
 
 // ---- physical-device surface queries -------------------------------------------------------------
@@ -153,7 +161,11 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceSupportKHR(
     if !StateStore::with(|s| s.surface_valid(surface)) {
         return VK_ERROR_SURFACE_LOST_KHR;
     }
-    *out = if present::QueueFamily(queue_family_index).supports_present() { VK_TRUE } else { VK_FALSE };
+    *out = if present::QueueFamily(queue_family_index).supports_present() {
+        VK_TRUE
+    } else {
+        VK_FALSE
+    };
     VK_SUCCESS
 }
 
@@ -173,9 +185,18 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     *out = VkSurfaceCapabilitiesKHR {
         min_image_count: c.min_image_count,
         max_image_count: c.max_image_count,
-        current_extent: VkExtent2D { width: c.current_extent.0, height: c.current_extent.1 },
-        min_image_extent: VkExtent2D { width: c.min_image_extent.0, height: c.min_image_extent.1 },
-        max_image_extent: VkExtent2D { width: c.max_image_extent.0, height: c.max_image_extent.1 },
+        current_extent: VkExtent2D {
+            width: c.current_extent.0,
+            height: c.current_extent.1,
+        },
+        min_image_extent: VkExtent2D {
+            width: c.min_image_extent.0,
+            height: c.min_image_extent.1,
+        },
+        max_image_extent: VkExtent2D {
+            width: c.max_image_extent.0,
+            height: c.max_image_extent.1,
+        },
         max_image_array_layers: c.max_image_array_layers,
         supported_transforms: c.supported_transforms,
         current_transform: c.current_transform,
@@ -197,7 +218,10 @@ pub extern "C" fn vkGetPhysicalDeviceSurfaceFormatsKHR(
     }
     let formats: Vec<VkSurfaceFormatKHR> = present::surface_formats()
         .into_iter()
-        .map(|f| VkSurfaceFormatKHR { format: f.format as i32, color_space: f.color_space })
+        .map(|f| VkSurfaceFormatKHR {
+            format: f.format as i32,
+            color_space: f.color_space,
+        })
         .collect();
     unsafe { write_enumeration(&formats, p_surface_format_count, p_surface_formats) }
 }
@@ -268,14 +292,21 @@ mod tests {
         );
         assert_ne!(handle, 0, "a live VkSurfaceKHR must be minted");
         // The captured pointers are stored (as raw addresses) keyed by the surface handle.
-        let win = StateStore::with(|s| s.wayland_surfaces.get(&handle).copied()).expect("wayland window captured");
+        let win = StateStore::with(|s| s.wayland_surfaces.get(&handle).copied())
+            .expect("wayland window captured");
         assert_eq!(win.display, fake_display as usize);
         assert_eq!(win.surface, fake_surface as usize);
-        assert!(StateStore::with(|s| s.surface_valid(handle)), "surface handle must be live");
+        assert!(
+            StateStore::with(|s| s.surface_valid(handle)),
+            "surface handle must be live"
+        );
 
         // Destroy clears both the surface set and the captured window.
         vkDestroySurfaceKHR(core::ptr::null_mut(), handle, core::ptr::null());
-        assert!(StateStore::with(|s| s.wayland_surfaces.get(&handle).is_none()));
+        assert!(StateStore::with(|s| s
+            .wayland_surfaces
+            .get(&handle)
+            .is_none()));
         assert!(!StateStore::with(|s| s.surface_valid(handle)));
     }
 
@@ -284,7 +315,12 @@ mod tests {
     fn wayland_surface_creation_rejects_null_pointers() {
         let mut handle: u64 = 0;
         assert_eq!(
-            vkCreateWaylandSurfaceKHR(core::ptr::null_mut(), core::ptr::null(), core::ptr::null(), &mut handle),
+            vkCreateWaylandSurfaceKHR(
+                core::ptr::null_mut(),
+                core::ptr::null(),
+                core::ptr::null(),
+                &mut handle
+            ),
             VK_ERROR_INITIALIZATION_FAILED
         );
         let ci = VkWaylandSurfaceCreateInfoKHR {
@@ -309,12 +345,20 @@ mod tests {
     #[test]
     fn wayland_presentation_support_is_true_for_the_present_family() {
         assert_eq!(
-            vkGetPhysicalDeviceWaylandPresentationSupportKHR(core::ptr::null_mut(), 0, core::ptr::null_mut()),
+            vkGetPhysicalDeviceWaylandPresentationSupportKHR(
+                core::ptr::null_mut(),
+                0,
+                core::ptr::null_mut()
+            ),
             VK_TRUE
         );
         // A non-present family index is not supported.
         assert_eq!(
-            vkGetPhysicalDeviceWaylandPresentationSupportKHR(core::ptr::null_mut(), 7, core::ptr::null_mut()),
+            vkGetPhysicalDeviceWaylandPresentationSupportKHR(
+                core::ptr::null_mut(),
+                7,
+                core::ptr::null_mut()
+            ),
             VK_FALSE
         );
     }

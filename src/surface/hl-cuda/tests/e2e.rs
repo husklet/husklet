@@ -25,8 +25,9 @@ use hl_cuda::service::{allocate, launch, load_module, transfer};
 use hl_cuda::{CudaContext, CudaDeviceDesc, DevicePtr, KernelArg};
 
 use hl_gpu::protocol::model::capability::{
-    command_bits, format_bits, shader_payload, ALL_COMMANDS, COLOR_FORMATS,
+    shader_payload, Capabilities, ALL_COMMANDS, COLOR_FORMATS,
 };
+use hl_gpu::protocol::model::enums::TextureFormat;
 use hl_gpu::protocol::model::kernel::KernelDescriptor;
 use hl_gpu::{
     BufferId, CommandSink, CpuExecutor, FeatureRequest, InProcessCommandSink, WIRE_VERSION,
@@ -83,8 +84,8 @@ fn cuda_vecadd_runs_end_to_end_and_reads_back_the_elementwise_sum() {
     let req = FeatureRequest {
         wire_version: WIRE_VERSION,
         shader_payloads: shader_payload::KERNEL,
-        command_bits: command_bits(ALL_COMMANDS),
-        texture_formats: format_bits(COLOR_FORMATS),
+        command_bits: Capabilities::command_bits(ALL_COMMANDS),
+        texture_formats: TextureFormat::bits(COLOR_FORMATS),
     };
     let caps = sink.negotiate(&req).expect("negotiate against CpuExecutor");
     assert!(caps.supports_shader_payload(shader_payload::KERNEL));
@@ -173,8 +174,8 @@ fn cuda_runtime_api_vecadd_registers_and_launches_end_to_end() {
     let req = FeatureRequest {
         wire_version: WIRE_VERSION,
         shader_payloads: shader_payload::KERNEL,
-        command_bits: command_bits(ALL_COMMANDS),
-        texture_formats: format_bits(COLOR_FORMATS),
+        command_bits: Capabilities::command_bits(ALL_COMMANDS),
+        texture_formats: TextureFormat::bits(COLOR_FORMATS),
     };
     let caps = sink.negotiate(&req).expect("negotiate against CpuExecutor");
     assert!(caps.supports_shader_payload(shader_payload::KERNEL));
@@ -275,8 +276,8 @@ fn harness() -> InProcessCommandSink<CpuExecutor> {
     let req = FeatureRequest {
         wire_version: WIRE_VERSION,
         shader_payloads: shader_payload::KERNEL,
-        command_bits: command_bits(ALL_COMMANDS),
-        texture_formats: format_bits(COLOR_FORMATS),
+        command_bits: Capabilities::command_bits(ALL_COMMANDS),
+        texture_formats: TextureFormat::bits(COLOR_FORMATS),
     };
     sink.negotiate(&req).expect("negotiate against CpuExecutor");
     sink

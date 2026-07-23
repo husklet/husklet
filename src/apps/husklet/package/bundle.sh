@@ -17,8 +17,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 VERSION="${1:-0.1.0}"
 export HL_VERSION="${HL_VERSION:-$VERSION}"
-TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
-APP="$TARGET/Husklet.app"
+BUILD_TARGET="${CARGO_TARGET_DIR:-$ROOT/target-macos}"
+BUNDLE_TARGET="${HL_BUNDLE_TARGET:-$ROOT/target}"
+APP="$BUNDLE_TARGET/Husklet.app"
 C="$APP/Contents"; MACOS="$C/MacOS"; RES="$C/Resources"; FW="$C/Frameworks"
 ENT="${HL_ENGINE_ENTITLEMENTS:-$ROOT/../engine/packaging/macos/jit.entitlements}"
 
@@ -29,11 +30,39 @@ die() { printf '\033[1;31m[bundle] %s\033[0m\n' "$*" >&2; exit 1; }
 [ -n "${HL_GTK4:-}" ] || die "run inside the nix dev shell: nix develop \"path:$ROOT/nix\" --command tools/bundle.sh"
 command -v dylibbundler >/dev/null || die "dylibbundler not found (nix dev shell)"
 
-# 1. Release GUI binary. The daemon is built from the sibling containers repository by `make app`.
-log "building release husklet"
-( cd "$ROOT" && RUSTFLAGS="-L native=$HL_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" \
+# Fail before Cargo's linker invocation when the Rust bindings and engine archive were packaged from
+# different revisions. The linker error is enormous and hides the dependency contract violation.
+PACKAGED_ENGINE="$ROOT/../engine/build/package/macos-aarch64/libhl-engine.a"
+EMBEDDED_ENGINE="$ROOT/../engine/pkgs/rust/assets/lib/aarch64-apple-darwin/libhl-engine.a"
+if [ -n "${HL_ENGINE_ARCHIVE:-}" ]; then
+  ENGINE_ARCHIVE="$HL_ENGINE_ARCHIVE"
+elif [ -f "$PACKAGED_ENGINE" ]; then
+  ENGINE_ARCHIVE="$PACKAGED_ENGINE"
+else
+  ENGINE_ARCHIVE="$EMBEDDED_ENGINE"
+fi
+[ -f "$ENGINE_ARCHIVE" ] || die "hl-engine archive missing: $ENGINE_ARCHIVE"
+ENGINE_LIB_DIR="$(cd "$(dirname "$ENGINE_ARCHIVE")" && pwd)"
+ENGINE_SYMBOLS="$(mktemp -t husklet-engine-symbols.XXXXXX)"
+trap 'rm -f "$ENGINE_SYMBOLS"' EXIT
+nm -gU "$ENGINE_ARCHIVE" > "$ENGINE_SYMBOLS"
+for symbol in \
+  hl_activation_start_with_transport \
+  hl_activation_start_terminal_with_transport \
+  hl_engine_guest_fd_limit
+do
+  grep -Fq " _${symbol}" "$ENGINE_SYMBOLS" || \
+    die "hl-engine archive is incompatible with its Rust API: missing $symbol ($ENGINE_ARCHIVE)"
+done
+rm -f "$ENGINE_SYMBOLS"
+trap - EXIT
+
+# 1. Release product binaries. Build both against the exact archive validated above; otherwise Cargo may
+# select an older archive embedded in the Rust crate and fail late with a wall of missing ABI symbols.
+log "building release husklet and hl-daemon"
+( cd "$ROOT" && export RUSTFLAGS="-L native=$ENGINE_LIB_DIR -L native=$HL_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" && \
+    cargo build --release -p hl-daemon && \
     cargo build --release -p husklet --features gui --bin husklet )
-[ -f "$TARGET/release/hl-daemon" ] || die "target/release/hl-daemon missing — run 'cargo build --release -p hl-daemon' first (the Makefile 'app' target does this)"
 [ -f "$ENT" ] || die "engine entitlements missing at $ENT"
 
 # 2. Skeleton.
@@ -41,37 +70,70 @@ log "laying out bundle skeleton"
 chmod -R u+w "$APP" 2>/dev/null || true   # nix-store copies are read-only; make removable
 rm -rf "$APP"
 mkdir -p "$MACOS" "$RES" "$FW"
-cp "$TARGET/release/husklet" "$MACOS/husklet"
-cp "$TARGET/release/hl-daemon" "$RES/hl-daemon"
+cp "$BUILD_TARGET/release/husklet" "$MACOS/husklet"
+cp "$BUILD_TARGET/release/hl-daemon" "$RES/hl-daemon"
 printf 'APPL????' > "$C/PkgInfo"
 sed "s/@VERSION@/$VERSION/g" "$ROOT/src/apps/husklet/package/Info.plist.in" > "$C/Info.plist"
 [ -f "$ROOT/src/apps/husklet/package/husklet.icns" ] && cp "$ROOT/src/apps/husklet/package/husklet.icns" "$RES/husklet.icns" || true
 [ -f "$ROOT/assets/logo.png" ] && cp "$ROOT/assets/logo.png" "$RES/logo.png" || true # onboarding logo
 [ -d "$ROOT/assets/images" ] && cp -R "$ROOT/assets/images" "$RES/images" || true # bundled starter images
 
-# hl-compositor — the host Wayland renderer for GUI workspaces.
-# hl-compositor links the system libxkbcommon at link+run time (its Smithay keymap seat); the nix dev
-# shell provides it via $HL_LIBXKBCOMMON, and dylibbundler (step 4) relocates it into Contents/Frameworks
-# with an @executable_path/../Frameworks install name so the compositor loads it on the user's machine.
-# Guarded: if $HL_LIBXKBCOMMON is absent (older dev shell) the compositor is skipped and HL_DISPLAY_SMITHAY
-# transparently falls back to the legacy path — the bundle stays shippable either way.
-COMPOSITOR_XARGS=()
-if [ -n "${HL_LIBXKBCOMMON:-}" ]; then
-  log "building hl-compositor (smithay renderer; libxkbcommon from nix)"
-  if ( cd "$ROOT" && RUSTFLAGS="-L native=$HL_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" \
-         cargo build --release -p hl-compositor ); then
-    for b in hl-compositor; do
-      if [ -f "$TARGET/release/$b" ]; then
-        cp "$TARGET/release/$b" "$RES/$b"; log "  + $b"
-        COMPOSITOR_XARGS+=( -x "$RES/$b" )   # relocate its dylib graph (incl. libxkbcommon) in step 4
-      fi
-    done
-  else
-    log "  ! hl-compositor build failed — shipping without GUI surface presentation"
-  fi
-else
-  log "  ! HL_LIBXKBCOMMON unset — skipping hl-compositor"
-fi
+# Linux guest drivers are part of the product, not mutable user state. The Rust surface crates stage a
+# freshly cross-linked aarch64 set while building Husklet; fail closed if any required object is absent.
+DRIVER_STAGE="${HOME:?HOME is required}/.hl"
+DRIVER_DEST="$RES/drivers"
+DRIVER_FILES=(
+  gl/aarch64/libEGL.so.1
+  gl/aarch64/libGLESv2.so.2
+  gl/aarch64/libwayland-egl.so.1
+  vulkan/aarch64/libvk_hl.so.1
+  vulkan/aarch64/icd.json
+  cuda/aarch64/libcuda.so.1
+  cuda/aarch64/libcudart.so.1
+  nvml/aarch64/libnvidia-ml.so.1
+)
+for driver in "${DRIVER_FILES[@]}"; do
+  [ -f "$DRIVER_STAGE/$driver" ] || die "required guest driver missing: $DRIVER_STAGE/$driver"
+done
+READELF="${HL_AARCH64_LINUX_CC%gcc}readelf"
+[ -x "$READELF" ] || die "aarch64 Linux readelf missing beside $HL_AARCH64_LINUX_CC"
+ELF_NM="${HL_AARCH64_LINUX_CC%gcc}nm"
+[ -x "$ELF_NM" ] || die "aarch64 Linux nm missing beside $HL_AARCH64_LINUX_CC"
+DRIVER_SONAMES=(
+  gl/aarch64/libEGL.so.1:libEGL.so.1
+  gl/aarch64/libGLESv2.so.2:libGLESv2.so.2
+  gl/aarch64/libwayland-egl.so.1:libwayland-egl.so.1
+  vulkan/aarch64/libvk_hl.so.1:libvk_hl.so.1
+  cuda/aarch64/libcuda.so.1:libcuda.so.1
+  cuda/aarch64/libcudart.so.1:libcudart.so.1
+  nvml/aarch64/libnvidia-ml.so.1:libnvidia-ml.so.1
+)
+for entry in "${DRIVER_SONAMES[@]}"; do
+  driver="${entry%%:*}"; soname="${entry#*:}"; artifact="$DRIVER_STAGE/$driver"
+  file "$artifact" | grep -q 'ELF 64-bit.*ARM aarch64' || die "guest driver is not aarch64 ELF: $artifact"
+  "$READELF" -d "$artifact" | grep -Fq "Library soname: [$soname]" || \
+    die "guest driver has wrong SONAME (expected $soname): $artifact"
+done
+"$READELF" -d "$DRIVER_STAGE/gl/aarch64/libGLESv2.so.2" | \
+  grep -Fq 'Shared library: [libEGL.so.1]' || die "libGLESv2 does not bind the shared EGL state owner"
+for api in gl egl; do
+  if [ "$api" = gl ]; then artifact="$DRIVER_STAGE/gl/aarch64/libGLESv2.so.2"; else artifact="$DRIVER_STAGE/gl/aarch64/libEGL.so.1"; fi
+  golden="$ROOT/src/surface/hl-gl/shim/egl/tests/golden/abi_symbols_${api}.txt"
+  actual="$(mktemp -t husklet-${api}-exports.XXXXXX)"
+  "$ELF_NM" -D --defined-only "$artifact" | awk '{print $3}' | grep "^${api}" | LC_ALL=C sort -u > "$actual" || true
+  diff -u "$golden" "$actual" >/dev/null || { rm -f "$actual"; die "$artifact does not export the complete ${api} ABI"; }
+  rm -f "$actual"
+done
+log "staging Linux guest drivers"
+mkdir -p "$DRIVER_DEST"
+for family in gl vulkan cuda nvml; do
+  cp -R "$DRIVER_STAGE/$family" "$DRIVER_DEST/$family"
+done
+
+# The compositor is a library linked into the Husklet executable. Husklet re-executes itself with the
+# private `__compositor` operation so AppKit presentation starts on that process's main thread. There is no
+# standalone compositor binary to package; relocating Husklet's dylib graph below includes libxkbcommon.
+[ -n "${HL_LIBXKBCOMMON:-}" ] || die "HL_LIBXKBCOMMON is required by the embedded compositor"
 
 # 3. Stage gdk-pixbuf loaders (png from gdk-pixbuf, svg from librsvg) with a RELATIVE cache.
 #    They live under Resources/ (NOT Frameworks/) so Frameworks stays a flat set of dylibs —
@@ -90,32 +152,42 @@ shopt -s nullglob
 LOADER_SOS=( "$DEST_LOADERS"/*.so )
 shopt -u nullglob
 
+# Generate metadata while the copied loaders still reference their valid Nix dependencies. Once
+# relocated, query-loaders itself resolves `@executable_path` from the Nix tool rather than Husklet,
+# so querying at that point rejects otherwise valid app-relative plugins and writes an empty cache.
+if [ ${#LOADER_SOS[@]} -gt 0 ]; then
+  GDK_PIXBUF_MODULEDIR="$DEST_LOADERS" gdk-pixbuf-query-loaders "${LOADER_SOS[@]}" \
+    | sed -E "s#\"$DEST_LOADERS/#\"#g" > "$DEST_LOADERS/loaders.cache"
+  grep -q '^"' "$DEST_LOADERS/loaders.cache" || die "gdk-pixbuf loader cache is empty"
+else
+  : > "$DEST_LOADERS/loaders.cache"
+fi
+
 # 4. Relocate the dylib graph: Husklet + each loader .so (+ hl-compositor when built) ->
 #    Contents/Frameworks. Adding the compositor binaries here pulls libxkbcommon (and any other non-system
 #    dylib the Smithay renderer links) into Frameworks with @executable_path/../Frameworks install names,
 #    which — for a binary in Resources/ — resolves to Contents/Frameworks. That is what lets an end-user
 #    hl.app launch the compositor (readiness Gap 4).
 log "relocating dylibs (dylibbundler)"
-XARGS=( -x "$MACOS/husklet" )
-[ ${#COMPOSITOR_XARGS[@]} -gt 0 ] && XARGS+=( "${COMPOSITOR_XARGS[@]}" )
+XARGS=( -x "$MACOS/husklet" -x "$RES/hl-daemon" )
 for so in "${LOADER_SOS[@]}"; do XARGS+=( -x "$so" ); done
 dylibbundler -of -cd -b -d "$FW" -p '@executable_path/../Frameworks' "${XARGS[@]}" >/dev/null
-
-# Regenerate loaders.cache with bare-filename (relative) module paths.
-if [ ${#LOADER_SOS[@]} -gt 0 ]; then
-  GDK_PIXBUF_MODULEDIR="$DEST_LOADERS" gdk-pixbuf-query-loaders "${LOADER_SOS[@]}" \
-    | sed -E "s#\"$DEST_LOADERS/#\"#g" > "$DEST_LOADERS/loaders.cache"
-else
-  : > "$DEST_LOADERS/loaders.cache"
-fi
 
 # 5. Compile GSettings schemas (GTK aborts at startup without them).
 log "compiling gsettings schemas"
 SCHEMA_DEST="$RES/glib-2.0/schemas"
 mkdir -p "$SCHEMA_DEST"
-cp -L "$HL_GTK4"/share/glib-2.0/schemas/*.xml "$SCHEMA_DEST"/ 2>/dev/null || true
-cp -L "$HL_GSETTINGS_SCHEMAS"/share/glib-2.0/schemas/*.xml "$SCHEMA_DEST"/ 2>/dev/null || true
+# nixpkgs installs schemas below `share/gsettings-schemas/<package>/glib-2.0/schemas`, while other
+# distributions install them directly below `share/glib-2.0/schemas`. Discover both layouts.
+while IFS= read -r -d '' schema; do cp -L "$schema" "$SCHEMA_DEST"/; done < <(
+  find "$HL_GTK4/share" "$HL_GSETTINGS_SCHEMAS/share" \
+    -path '*/glib-2.0/schemas/*.xml' -type f -print0
+)
 glib-compile-schemas "$SCHEMA_DEST" >/dev/null
+[ -s "$SCHEMA_DEST/gschemas.compiled" ] || die "GSettings schema bundle is empty"
+gsettings --schemadir "$SCHEMA_DEST" list-schemas \
+  | grep -qx 'org.gtk.gtk4.Settings.ColorChooser' \
+  || die "GTK color chooser schema is missing"
 
 # 6. Icon themes (Adwaita symbolic icons used by the toolbar + hicolor fallback).
 log "staging icon themes"
@@ -163,6 +235,15 @@ if [ "$needgnu" = 1 ] && ! nm -gU "$FW/libiconv.2.dylib" 2>/dev/null | grep -qw 
   fi
 fi
 
+# No packaged Mach-O may retain a build-machine Nix dependency. Such a bundle signs successfully but
+# fails on an end-user machine at dyld startup.
+while IFS= read -r -d '' binary; do
+  if file "$binary" | grep -q 'Mach-O' && otool -L "$binary" | grep -q '/nix/store'; then
+    otool -L "$binary" | grep '/nix/store' >&2
+    die "unrelocated Nix dependency in $binary"
+  fi
+done < <(find "$MACOS" "$FW" "$RES" -type f -print0)
+
 # 8. Strip + codesign, deepest first (any later edit invalidates a signature).
 #    HL_SIGN_ID unset/"-" = ad-hoc (default). A "Developer ID Application: …" identity name turns on real
 #    signing with hardened runtime + secure timestamp; HL_SIGN_KEYCHAIN[/_PW] selects the keychain holding it.
@@ -191,8 +272,9 @@ done
 for b in hl-compositor; do [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/$b" >/dev/null 2>&1 || true; done
 codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$MACOS/husklet" >/dev/null 2>&1 || true
 codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$APP" >/dev/null 2>&1 || true   # outermost signed last
+codesign --verify --deep --strict "$APP" || die "bundle signature verification failed"
 if [ "$SIGN_ID" != "-" ]; then
-  codesign --verify --strict --verbose=2 "$APP" || { echo "[bundle] Developer ID signature verify FAILED" >&2; exit 1; }
+  codesign --verify --strict --verbose=2 "$APP" || die "Developer ID signature verification failed"
   log "signed + verified ($(codesign -dv "$APP" 2>&1 | awk -F= '/^Authority/{print $2; exit}'))"
 fi
 

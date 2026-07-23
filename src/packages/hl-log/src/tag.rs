@@ -178,9 +178,7 @@ impl FromStr for Tags {
         }
 
         let mut tags = Self::NONE;
-        for name in
-            value.split(|character| character == ',' || character == '|' || character == ' ')
-        {
+        for name in value.split([',', '|', ' ']) {
             if let Ok(tag) = name.parse::<Tag>() {
                 tags |= tag;
             }
@@ -204,6 +202,10 @@ pub const RUNTIME: Tag = Tag::new(1 << 11, "runtime");
 pub const CPU: Tag = Tag::new(1 << 12, "cpu");
 pub const EGL: Tag = Tag::new(1 << 13, "egl");
 pub const WAYLAND: Tag = Tag::new(1 << 14, "wayland");
+pub const CONTAINER: Tag = Tag::new(1 << 15, "container");
+pub const IMAGE: Tag = Tag::new(1 << 16, "image");
+pub const DAEMON: Tag = Tag::new(1 << 17, "daemon");
+pub const UI: Tag = Tag::new(1 << 18, "ui");
 
 /// Every tag enabled.
 pub const ALL: Tags = Tags::ALL;
@@ -213,5 +215,5 @@ pub const NONE: Tags = Tags::NONE;
 /// Registered tags in deterministic display order.
 pub const TAGS: &[Tag] = &[
     GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU,
-    EGL, WAYLAND,
+    EGL, WAYLAND, CONTAINER, IMAGE, DAEMON, UI,
 ];

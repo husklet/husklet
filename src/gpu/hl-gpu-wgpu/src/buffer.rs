@@ -122,7 +122,7 @@ impl WgpuExecutor {
         if data.is_empty() {
             return Ok(());
         }
-        if offset % 4 == 0 && data.len() % 4 == 0 {
+        if offset.is_multiple_of(4) && data.len().is_multiple_of(4) {
             self.gpu.queue.write_buffer(&b.buffer, offset, data);
             self.gpu.queue.submit(None::<wgpu::CommandBuffer>);
             return Ok(());

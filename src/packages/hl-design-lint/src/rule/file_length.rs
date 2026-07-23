@@ -8,7 +8,7 @@ use crate::{
     Result,
 };
 
-/// Rejects production source files whose size obscures cohesive ownership boundaries.
+/// Rejects Rust files whose size obscures cohesive ownership boundaries.
 pub struct FileLength;
 
 impl Rule for FileLength {
@@ -22,7 +22,7 @@ impl Rule for FileLength {
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
-        for source in workspace.production() {
+        for source in workspace.sources() {
             if source.package == "hl-design-lint" {
                 continue;
             }
@@ -43,8 +43,7 @@ impl Rule for FileLength {
                 .unwrap_or("source file")
                 .to_owned();
             let mut finding = Finding::error(self.id(), subject, source.location(span));
-            finding.message =
-                format!("production source contains {lines} lines; the maximum is 500");
+            finding.message = format!("Rust source contains {lines} lines; the maximum is 500");
             finding.help = "split by cohesive entity, component, screen region, adapter, or service; do not use include! or arbitrary numbered fragments".to_owned();
             let mut review = Review::error();
             review

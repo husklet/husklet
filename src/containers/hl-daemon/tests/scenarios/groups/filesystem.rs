@@ -1,0 +1,18 @@
+//! Filesystem compatibility cases.
+
+use crate::runner::Runner;
+use hl_container::Containers;
+
+type Error = Box<dyn std::error::Error>;
+
+pub(crate) fn group() -> crate::contract::Group {
+    crate::contract::Group::new(
+        "filesystem",
+        crate::manifest::load(include_str!("../fixtures/filesystem-core.yaml"))
+            .expect("the checked-in filesystem manifest must satisfy the schema"),
+    )
+}
+
+pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
+    Runner::arm64(containers).run(group()).await
+}

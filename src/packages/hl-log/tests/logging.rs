@@ -185,6 +185,10 @@ fn typed_configuration() {
 fn tag_name_roundtrip() {
     assert_eq!("gpu".parse::<hl_log::Tag>(), Ok(tag::GPU));
     assert_eq!("WGPU".parse::<hl_log::Tag>(), Ok(tag::WGPU));
+    assert_eq!("container".parse::<hl_log::Tag>(), Ok(tag::CONTAINER));
+    assert_eq!("IMAGE".parse::<hl_log::Tag>(), Ok(tag::IMAGE));
+    assert_eq!("daemon".parse::<hl_log::Tag>(), Ok(tag::DAEMON));
+    assert_eq!("ui".parse::<hl_log::Tag>(), Ok(tag::UI));
     assert!("nope".parse::<hl_log::Tag>().is_err());
     assert_eq!(tag::VULKAN.name(), "vulkan");
     assert_eq!(tag::ALL.to_string(), "all");

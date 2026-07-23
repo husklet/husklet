@@ -34,6 +34,40 @@ pub enum PresenterEvent {
         keycode: u32,
         pressed: bool,
     },
+    GestureSwipeBegin {
+        fingers: u32,
+    },
+    GestureSwipeUpdate {
+        dx: f64,
+        dy: f64,
+    },
+    GestureSwipeEnd {
+        cancelled: bool,
+    },
+    GesturePinchBegin {
+        fingers: u32,
+    },
+    GesturePinchUpdate {
+        dx: f64,
+        dy: f64,
+        scale: f64,
+        rotation: f64,
+    },
+    GesturePinchEnd {
+        cancelled: bool,
+    },
+    TabletProximityIn {
+        x: f64,
+        y: f64,
+    },
+    TabletMotion {
+        x: f64,
+        y: f64,
+        pressure: f64,
+    },
+    TabletTipDown,
+    TabletTipUp,
+    TabletProximityOut,
     Resize {
         surface: SurfaceId,
         width: u32,

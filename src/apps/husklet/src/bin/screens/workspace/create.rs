@@ -45,6 +45,7 @@ pub struct View {
     pub pages: gtk::Stack,
     pub cancel: gtk::Button,
     pub create: gtk::Button,
+    pub status: gtk::Label,
     labels: Rc<RefCell<Vec<gtk::Label>>>,
 }
 
@@ -57,12 +58,19 @@ impl View {
         nav.add_css_class("nav");
         let pages = gtk::Stack::new();
         pages.set_hexpand(true);
+        pages.set_vexpand(true);
         pages.set_transition_type(gtk::StackTransitionType::None);
         let labels: Rc<RefCell<Vec<gtk::Label>>> = Rc::new(RefCell::new(Vec::new()));
 
         for (index, (page, content)) in content.into_iter().enumerate() {
             let name = page.title();
-            pages.add_named(&content, Some(name));
+            let scroller = gtk::ScrolledWindow::builder()
+                .hexpand(true)
+                .vexpand(true)
+                .child(&content)
+                .build();
+            scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+            pages.add_named(&scroller, Some(name));
             let label = gtk::Label::new(Some(name));
             label.add_css_class("navi");
             label.set_xalign(0.0);
@@ -71,10 +79,12 @@ impl View {
             }
             let click = gtk::GestureClick::new();
             let stack = pages.clone();
+            let page_focus = scroller.clone();
             let event_labels = labels.clone();
             click.connect_released(move |_, _, _, _| {
                 stack.set_visible_child_name(name);
                 Self::select_labels(&event_labels.borrow(), name);
+                page_focus.child_focus(gtk::DirectionType::TabForward);
             });
             label.add_controller(click);
             nav.append(&label);
@@ -87,9 +97,11 @@ impl View {
 
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         footer.add_css_class("footer");
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        footer.append(&spacer);
+        let status = gtk::Label::new(None);
+        status.add_css_class("fhint");
+        status.set_xalign(0.0);
+        status.set_hexpand(true);
+        footer.append(&status);
         let cancel = gtk::Button::with_label("Cancel");
         cancel.add_css_class("btn");
         let create = gtk::Button::with_label("Create workspace");
@@ -104,6 +116,7 @@ impl View {
             pages,
             cancel,
             create,
+            status,
             labels,
         }
     }

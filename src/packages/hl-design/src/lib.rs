@@ -116,6 +116,20 @@ pub fn naming(attribute: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Marks a reviewed free function whose signature is owned by a framework.
+#[proc_macro_attribute]
+pub fn adapter(attribute: TokenStream, item: TokenStream) -> TokenStream {
+    if !attribute.is_empty() {
+        return Error::new(
+            proc_macro2::Span::call_site(),
+            "adapter does not accept arguments",
+        )
+        .into_compile_error()
+        .into();
+    }
+    item
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

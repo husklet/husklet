@@ -48,7 +48,7 @@ impl PtxType<'_> {
 /// `name[count]` array form (an initializer, if any, is ignored).
 impl GlobalVar {
     fn parse(line: &str) -> Option<Self> {
-        let mut toks = line.trim().split_whitespace();
+        let mut toks = line.split_whitespace();
         // Skip leading linkage qualifiers to reach the state-space directive.
         let mut tok = toks.next()?;
         while matches!(

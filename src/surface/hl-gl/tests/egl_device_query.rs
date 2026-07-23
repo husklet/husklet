@@ -13,6 +13,8 @@
 //!   * an unknown display attribute is `EGL_BAD_ATTRIBUTE` + `EGL_FALSE` (no deref / fabricated value),
 //!   * a foreign `EGLDeviceEXT` handle is `EGL_BAD_DEVICE_EXT` (no deref crash).
 
+#![cfg(target_os = "linux")]
+
 use core::ffi::{c_char, c_int, c_void};
 use std::path::PathBuf;
 

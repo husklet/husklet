@@ -65,7 +65,7 @@ impl WgpuExecutor {
         filter: Option<&[(u32, u32)]>,
     ) -> Result<wgpu::BindGroup> {
         let keep = |e: &hl_gpu::protocol::model::descriptor::BindEntry| {
-            filter.map_or(true, |f| f.contains(&(d.set, e.binding)))
+            filter.is_none_or(|f| f.contains(&(d.set, e.binding)))
         };
         // The wgpu entries borrow the resolved views/samplers; collect those first so they outlive the
         // `BindGroupEntry` slice. Only resources for KEPT entries are resolved + bound, in order.

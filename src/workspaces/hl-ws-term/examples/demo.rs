@@ -85,7 +85,7 @@ fn main() {
     };
     let rects = lay.rects(area, 8.0);
 
-    let panes: [(&str, &str, (u8, u8, u8), &str); 3] = [
+    let panes = [
         (
             "ubuntu-dev  -  ubuntu:24.04 (arm64)",
             "workspace",

@@ -1,6 +1,5 @@
-// Test helper for the engine→compositor allocation-generation channel. Replicates the engine's
-// hl_gpu_send_port (hl-jit-darwin vfs.c): create a real host IOSurface, look up hl-display's GPU mach
-// bridge, and send the SAME hl_gpu_msg_t the engine sends — a complex message carrying the IOSurface
+// Test helper for the engine→compositor allocation-generation channel. Creates a real host IOSurface,
+// looks up the compositor GPU Mach bridge, and sends the production protocol message carrying its
 // send-right + its id + its allocation generation. The Rust harness starts the real bridge, runs this,
 // and asserts hl_display::metal::iosurface_generation(id) reports the generation we sent — proving the
 // new generation field flows over the real mach ABI into the compositor's authenticated metadata.
@@ -15,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// MUST match hl-jit-darwin vfs.c hl_gpu_msg_t and hl-display mach_bridge.c hl_gpu_msg_t.
+// MUST match the engine/compositor Mach bridge ABI.
 typedef struct {
     mach_msg_header_t header;
     mach_msg_body_t body;

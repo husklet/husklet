@@ -90,6 +90,12 @@ impl Id {
     }
 }
 
+impl Default for Id {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(feature = "wayland_frontend")]
 impl<R: Resource> From<&R> for Id {
     #[inline]

@@ -2,6 +2,7 @@
 name = "husklet"
 version = "0.4.0"
 edition = "2021"
+autobins = false
 description = "Husklet workspace application and command-line interface."
 license = "MIT"
 
@@ -18,18 +19,17 @@ required-features = ["gui"]
 
 [dependencies]
 hl-design = { path = "../../packages/hl-design" }
+hl-fs = { path = "../../packages/hl-fs", default-features = false }
 # The bare workspace primitive the `config` module wraps — the ONLY non-optional dep, so a `default-
 # features = false` consumer (e.g. hl-gui) gets just the light config and none of the engine stack.
 hl-ws = { path = "../../workspaces/hl-ws" }
 hl-log = { path = "../../packages/hl-log" }
 
 hl-ws-term = { path = "../../workspaces/hl-ws-term", optional = true }
-# The container domain remains a sibling repository until it is moved into this workspace. Keeping
-# these as direct path dependencies makes that later migration a path-only Cargo change.
-hl-container = { path = "../../../../containers/hl-container", optional = true }
-hl-daemon = { path = "../../../../containers/hl-daemon", optional = true }
-hl-client = { path = "../../../../containers/hl-client", optional = true }
-hl-images = { path = "../../../../containers/hl-images", optional = true }
+hl-container = { path = "../../containers/hl-container", optional = true }
+hl-daemon = { path = "../../containers/hl-daemon", optional = true }
+hl-client = { path = "../../containers/hl-client", optional = true }
+hl-images = { path = "../../containers/hl-images", optional = true }
 # GPU composition is being moved into this crate. The new hl-gpu exposes protocol/runtime ports;
 # hl will construct the selected drivers and executor rather than enabling an integration sidecar.
 hl-gpu = { path = "../../gpu/hl-gpu", optional = true }
@@ -42,6 +42,7 @@ hl-gui = { path = "../../workspaces/hl-gui", features = ["gtk"], optional = true
 libc = { version = "0.2", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 serde_json = { version = "1", optional = true }
+sha2 = { workspace = true, optional = true }
 gtk = { version = "0.9", package = "gtk4", features = ["v4_10"], optional = true }
 vte4 = { version = "0.8", features = ["v0_72"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -52,9 +53,7 @@ objc2-foundation = { version = "0.2", optional = true }
 objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSResponder", "NSView", "NSAppearance", "NSColor"], optional = true }
 
 [dev-dependencies]
-naga = { version = "24", features = ["wgsl-in", "spv-out"] }
-wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
+tempfile.workspace = true
 
 [features]
 # The default library is portable workspace configuration. The signed app enables its private runtime.
@@ -77,6 +76,7 @@ runtime = [
     "dep:libc",
     "dep:tokio",
     "dep:serde_json",
+    "dep:sha2",
 ]
 gui = [
     "runtime",

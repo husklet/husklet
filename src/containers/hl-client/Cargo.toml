@@ -1,0 +1,40 @@
+[package]
+name = "hl-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Typed Docker-compatible client for hl-daemon"
+readme = "../../../README.md"
+
+[dependencies]
+bytes.workspace = true
+base64.workspace = true
+futures-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+hl-daemon = { version = "0.1.0", path = "../hl-daemon", default-features = false }
+hl-log = { path = "../../packages/hl-log" }
+percent-encoding.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["io"] }
+
+[dev-dependencies]
+async-trait.workspace = true
+flate2.workspace = true
+hl-container = { version = "0.1.0", path = "../hl-container" }
+hl-daemon = { version = "0.1.0", path = "../hl-daemon", features = ["runtime"] }
+hl-images = { version = "0.1.0", path = "../hl-images" }
+tar.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true

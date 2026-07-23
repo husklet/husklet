@@ -38,8 +38,8 @@ fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// The host rust target triple (this host is aarch64-unknown-linux-gnu; the test runs Linux-side).
-fn host_triple() -> &'static str {
+/// Linux guest target matching the current host architecture.
+fn guest_triple() -> &'static str {
     match std::env::consts::ARCH {
         "aarch64" => "aarch64-unknown-linux-gnu",
         "x86_64" => "x86_64-unknown-linux-gnu",
@@ -76,7 +76,13 @@ fn manifest_surface(path: &Path) -> BTreeSet<String> {
 fn built_exports(shim_target: &Path) -> BTreeSet<String> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let crate_manifest = manifest_dir().join(SHIM_DIR).join("Cargo.toml");
-    let triple = host_triple();
+    let triple = guest_triple();
+    let linker =
+        std::env::var("HL_AARCH64_LINUX_CC").unwrap_or_else(|_| "aarch64-linux-gnu-gcc".to_owned());
+    let linker_env = format!(
+        "CARGO_TARGET_{}_LINKER",
+        triple.to_uppercase().replace('-', "_")
+    );
 
     let status = Command::new(&cargo)
         .args(["build", "--release", "--offline", "--manifest-path"])
@@ -84,8 +90,14 @@ fn built_exports(shim_target: &Path) -> BTreeSet<String> {
         .args(["--target", triple, "--target-dir"])
         .arg(shim_target)
         .env("HL_VULKAN_BUILDING_SHIM", "1")
+        .env(linker_env, linker)
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("CLIPPY_ARGS")
+        .env_remove("NIX_LDFLAGS")
+        .env_remove("NIX_CFLAGS_COMPILE")
         .status()
         .unwrap_or_else(|e| panic!("spawn cargo build for {SHIM_DIR}: {e}"));
     assert!(status.success(), "aarch64 build of {SHIM_DIR} must succeed");

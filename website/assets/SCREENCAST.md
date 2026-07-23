@@ -22,7 +22,7 @@ Tool: **Kap** (free, https://getkap.co) or **Gifox** — both record a screen re
 Shot list (~10–15s, keep it tight):
 1. dd app open on the **Home/Overview** dashboard (containers/images/disk).
 2. Click **Run hello-world** (or run `docker run --rm hello-dd` in a terminal beside it).
-3. Cut to **Activity Monitor** → filter "vm"/"linux"/"qemu" → **nothing** — just the `hljit`
+3. Cut to **Activity Monitor** → filter "vm"/"linux"/"qemu" → **nothing** — only the Husklet engine
    process. (The whole point: the container is a process, not a VM.)
 4. Optional end card: the container appears in the app's Containers list.
 

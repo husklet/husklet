@@ -1,0 +1,23 @@
+[package]
+name = "hl-fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Transferable filesystem entities for Husklet crates"
+
+[dependencies]
+tokio = { workspace = true, features = ["fs"], optional = true }
+
+[features]
+default = ["async"]
+async = ["dep:tokio"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

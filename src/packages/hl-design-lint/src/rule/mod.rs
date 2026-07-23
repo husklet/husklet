@@ -6,6 +6,7 @@ use crate::{
 
 mod deep_control_flow;
 mod duplicate_entity;
+mod empty_directory;
 mod environment_access;
 mod file_length;
 mod free_function;
@@ -15,6 +16,7 @@ mod usage;
 
 pub use deep_control_flow::DeepControlFlow;
 pub use duplicate_entity::DuplicateEntity;
+pub use empty_directory::EmptyDirectory;
 pub use environment_access::EnvironmentAccess;
 pub use file_length::FileLength;
 pub use free_function::FreeFunction;

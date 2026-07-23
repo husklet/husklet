@@ -76,6 +76,7 @@ struct AppConfig {
     view: Option<String>,
     workspace: Option<String>,
     new_workspace_pane: Option<String>,
+    open_color_picker: bool,
     tabs: Option<usize>,
     split: Option<String>,
     overview: bool,
@@ -95,6 +96,7 @@ impl AppConfig {
             view: std::env::var("HL_TERM_VIEW").ok(),
             workspace: std::env::var("HL_TERM_WS").ok(),
             new_workspace_pane: std::env::var("HL_TERM_NEWWS_PANE").ok(),
+            open_color_picker: std::env::var("HL_TERM_OPEN_COLOR").is_ok(),
             tabs: std::env::var("HL_TERM_TABS")
                 .ok()
                 .and_then(|value| value.parse().ok()),
@@ -124,11 +126,11 @@ impl AppConfig {
 static APP_CONFIG: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
 
 fn main() -> glib::ExitCode {
+    hl::logging::configure();
     if let Some(code) = host::worker::Worker::run() {
         return glib::ExitCode::from(code);
     }
     host::runtime::Runtime::configure();
-    hl::logging::configure();
     APP_CONFIG
         .set(AppConfig::parse())
         .ok()
@@ -198,13 +200,14 @@ impl Application {
         // Debug: jump straight to a surface for headless screenshotting.
         match AppConfig::get().view.as_deref() {
             Some("terminal") => {
-                let store = WorkspaceStore::load(Home::current().workspaces_config());
-                let want = AppConfig::get().workspace.as_deref();
-                let ws = want
-                    .and_then(|n| store.get(n))
-                    .or_else(|| store.all().first());
-                if let Some(ws) = ws {
-                    self.open_terminal(ws);
+                if let Ok(store) = WorkspaceStore::load(Home::current().workspaces_config()) {
+                    let want = AppConfig::get().workspace.as_deref();
+                    let ws = want
+                        .and_then(|n| store.get(n))
+                        .or_else(|| store.all().first());
+                    if let Some(ws) = ws {
+                        self.open_terminal(ws);
+                    }
                 }
             }
             Some("newws") => {
@@ -219,7 +222,22 @@ impl Application {
         while let Some(c) = list.first_child() {
             list.remove(&c);
         }
-        let store = WorkspaceStore::load(Home::current().workspaces_config());
+        let store = match WorkspaceStore::load(Home::current().workspaces_config()) {
+            Ok(store) => store,
+            Err(error) => {
+                let row = gtk::ListBoxRow::new();
+                row.set_selectable(false);
+                let message = gtk::Label::new(Some(&format!(
+                    "Could not load workspaces: {error}\nThe configuration was left unchanged."
+                )));
+                message.add_css_class("error");
+                message.set_wrap(true);
+                message.set_xalign(0.0);
+                row.set_child(Some(&message));
+                list.append(&row);
+                return;
+            }
+        };
         if store.all().is_empty() {
             let row = gtk::ListBoxRow::new();
             row.set_selectable(false);
@@ -297,10 +315,9 @@ impl Application {
         bx.append(&play);
 
         // ⋯ three-dots menu → a popover with per-workspace actions (Remove for now).
-        let menu = gtk::MenuButton::new();
+        let menu = gtk::Button::new();
         menu.add_css_class("rowbtn");
         menu.set_valign(gtk::Align::Center);
-        menu.set_always_show_arrow(false); // just the ⋯, no dropdown arrow
         menu.set_tooltip_text(Some("More"));
         let dots = gtk::Label::new(Some("\u{22ef}")); // ⋯ (reliable glyph vs a maybe-missing symbolic icon)
         dots.add_css_class("dots");
@@ -315,6 +332,7 @@ impl Application {
             let workspace = ws.clone();
             let popover = pop.clone();
             settings.connect_clicked(move |_| {
+                hl_log::hl_info!(hl_log::tag::UI, "workspace settings action selected");
                 popover.popdown();
                 TerminalWindow::settings(&app, &workspace);
             });
@@ -328,21 +346,47 @@ impl Application {
             let list2 = list.clone();
             let pop2 = pop.clone();
             remove.connect_clicked(move |_| {
+                hl_log::hl_info!(hl_log::tag::UI, "workspace removal action selected");
                 pop2.popdown();
                 let parent = app2.active_window();
                 let app = app2.clone();
                 let list = list2.clone();
                 let workspace_name = name.clone();
                 RemoveWorkspace::new(name.clone()).present(parent.as_ref(), move || {
-                    let mut store = WorkspaceStore::load(Home::current().workspaces_config());
-                    let _ = store.remove(&workspace_name);
+                    let mut store = WorkspaceStore::load(Home::current().workspaces_config())?;
+                    if !store.remove(&workspace_name)? {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("Workspace {workspace_name:?} no longer exists."),
+                        ));
+                    }
                     Application(app.clone()).refresh_workspace_list(&list);
+                    Ok(())
                 });
             });
         }
         pbox.append(&remove);
         pop.set_child(Some(&pbox));
-        menu.set_popover(Some(&pop));
+        pop.set_autohide(true);
+        pop.set_position(gtk::PositionType::Bottom);
+        pop.set_parent(&menu);
+        {
+            let popover = pop.clone();
+            let first_action = settings.clone();
+            menu.connect_clicked(move |_| {
+                if popover.is_visible() {
+                    hl_log::hl_info!(hl_log::tag::UI, "workspace menu closing from anchor");
+                    popover.popdown();
+                } else {
+                    hl_log::hl_info!(hl_log::tag::UI, "workspace menu opening from anchor");
+                    popover.popup();
+                    let first_action = first_action.clone();
+                    glib::idle_add_local_once(move || {
+                        first_action.grab_focus();
+                    });
+                }
+            });
+        }
         bx.append(&menu);
 
         row.set_child(Some(&bx));
@@ -418,12 +462,20 @@ impl Screenshot {
             match (snapshot.to_node(), win.renderer()) {
                 (Some(node), Some(renderer)) => {
                     let tex = renderer.render_texture(&node, None);
-                    let _ = tex.save_to_png(&path);
-                    eprintln!("[husklet] wrote screenshot {path} ({w}x{h})");
+                    match tex.save_to_png(&path) {
+                        Ok(()) => eprintln!("[husklet] wrote screenshot {path} ({w}x{h})"),
+                        Err(error) => {
+                            eprintln!("[husklet] screenshot write failed for {path}: {error}")
+                        }
+                    }
                 }
                 _ => eprintln!("[husklet] screenshot failed: no render node/renderer"),
             }
-            std::process::exit(0);
+            let application = win.application();
+            win.close();
+            if let Some(application) = application {
+                application.quit();
+            }
         });
     }
 }

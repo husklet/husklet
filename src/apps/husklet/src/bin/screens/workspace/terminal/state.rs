@@ -1,4 +1,7 @@
 use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static SESSION_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct CopyMode(Cell<bool>);
 
@@ -91,15 +94,13 @@ impl<'a> WindowSession<'a> {
         Self { window }
     }
 
-    pub(crate) fn save(&self) {
+    pub(crate) fn save(&self) -> std::io::Result<()> {
         let tw = self.window;
         let storage = tw.ws.storage_dir(&Home::current().root());
-        // Fresh history files each save (avoid stale accumulation).
-        let dir = Session::dir(&storage);
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::create_dir_all(&dir);
+        std::fs::create_dir_all(Session::dir(&storage))?;
 
         let mut hist_idx = 0usize;
+        let generation = HistoryGeneration::new(&storage)?;
         let mut tabs = Vec::new();
         // entries[0] is the non-closable overview; shells are the rest.
         let entries: Vec<(String, String)> = {
@@ -113,15 +114,17 @@ impl<'a> WindowSession<'a> {
             let Some(child) = tw.stack.child_by_name(&page_name) else {
                 continue;
             };
-            if let Some(root) = self.snapshot_node(&child, &storage, &mut hist_idx) {
+            if let Some(root) =
+                self.snapshot_node(&child, &storage, generation.as_str(), &mut hist_idx)?
+            {
                 tabs.push(SessionTab { title, root });
             }
         }
         let session = Session { tabs };
         if session.tabs.is_empty() {
-            Session::clear(&storage);
+            Session::clear(&storage)
         } else {
-            let _ = session.save(&storage);
+            session.save(&storage)
         }
     }
 
@@ -129,9 +132,10 @@ impl<'a> WindowSession<'a> {
         &self,
         widget: &gtk::Widget,
         storage: &std::path::Path,
+        generation: &str,
         history_index: &mut usize,
-    ) -> Option<PaneNode> {
-        PaneSnapshot::capture(self, widget, storage, history_index)
+    ) -> std::io::Result<Option<PaneNode>> {
+        PaneSnapshot::capture(self, widget, storage, generation, history_index)
     }
 }
 
@@ -169,19 +173,20 @@ impl PaneSnapshot {
         session: &WindowSession<'_>,
         w: &gtk::Widget,
         storage: &std::path::Path,
+        generation: &str,
         hist_idx: &mut usize,
-    ) -> Option<PaneNode> {
+    ) -> std::io::Result<Option<PaneNode>> {
         let tw = session.window;
         if let Some(t) = w.downcast_ref::<vte4::Terminal>() {
             let cwd = PaneWorkingDirectory::read(t);
             let text = Terminal::new(t).history();
-            let history_file = HistorySnapshot::write(storage, &text, hist_idx);
+            let history_file = HistorySnapshot::write(storage, generation, &text, hist_idx)?;
             let slot = Slots::new(tw).of(t);
-            return Some(PaneNode::Leaf(Pane {
+            return Ok(Some(PaneNode::Leaf(Pane {
                 cwd,
                 history_file,
                 slot,
-            }));
+            })));
         }
         if let Some(paned) = w.downcast_ref::<gtk::Paned>() {
             let dir = if paned.orientation() == gtk::Orientation::Horizontal {
@@ -201,11 +206,15 @@ impl PaneSnapshot {
             };
             let a = paned
                 .start_child()
-                .and_then(|c| session.snapshot_node(&c, storage, hist_idx));
+                .map(|child| session.snapshot_node(&child, storage, generation, hist_idx))
+                .transpose()?
+                .flatten();
             let b = paned
                 .end_child()
-                .and_then(|c| session.snapshot_node(&c, storage, hist_idx));
-            return match (a, b) {
+                .map(|child| session.snapshot_node(&child, storage, generation, hist_idx))
+                .transpose()?
+                .flatten();
+            return Ok(match (a, b) {
                 (Some(a), Some(b)) => Some(PaneNode::Split {
                     dir,
                     ratio,
@@ -214,21 +223,51 @@ impl PaneSnapshot {
                 }),
                 (Some(n), None) | (None, Some(n)) => Some(n),
                 (None, None) => None,
-            };
+            });
         }
         // A container (the paneroot Box) — descend into its first meaningful child.
         let mut c = w.first_child();
         while let Some(ch) = c {
-            if let Some(n) = session.snapshot_node(&ch, storage, hist_idx) {
-                return Some(n);
+            if let Some(n) = session.snapshot_node(&ch, storage, generation, hist_idx)? {
+                return Ok(Some(n));
             }
             c = ch.next_sibling();
         }
-        None
+        Ok(None)
     }
 }
 
 pub(crate) struct HistorySnapshot;
+
+struct HistoryGeneration(String);
+
+impl HistoryGeneration {
+    fn new(storage: &std::path::Path) -> std::io::Result<Self> {
+        let directory = Session::dir(storage);
+        loop {
+            let sequence = SESSION_GENERATION.fetch_add(1, Ordering::Relaxed);
+            let candidate = format!("{}-{sequence}", std::process::id());
+            if Self::available(&directory, &candidate)? {
+                return Ok(Self(candidate));
+            }
+        }
+    }
+
+    fn available(directory: &std::path::Path, candidate: &str) -> std::io::Result<bool> {
+        let prefix = format!("hist-{candidate}-");
+        for entry in std::fs::read_dir(directory)? {
+            let name = entry?.file_name();
+            if name.to_string_lossy().starts_with(&prefix) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 pub(crate) struct PaneWorkingDirectory;
 
@@ -240,19 +279,43 @@ impl PaneWorkingDirectory {
 }
 
 impl HistorySnapshot {
+    const TRANSIENT_MESSAGES: [&'static str; 5] = [
+        "workspace session ended immediately (",
+        "failed to start shell: ",
+        "hl-engine fault: ",
+        "bash: cannot set terminal process group ",
+        "bash: no job control in this shell",
+    ];
+
+    pub(super) fn persistent(text: &str) -> String {
+        text.lines()
+            .filter(|line| {
+                !Self::TRANSIENT_MESSAGES
+                    .iter()
+                    .any(|message| line.contains(message))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub(crate) fn read(storage: &std::path::Path, file: &str) -> std::io::Result<String> {
+        std::fs::read_to_string(Session::history_path(storage, file)?)
+    }
+
     pub(crate) fn write(
         storage: &std::path::Path,
+        generation: &str,
         text: &str,
         index: &mut usize,
-    ) -> Option<String> {
+    ) -> std::io::Result<Option<String>> {
+        let text = Self::persistent(text);
         if text.trim().is_empty() {
-            return None;
+            return Ok(None);
         }
-        let file = format!("hist-{}.txt", *index);
+        let file = format!("hist-{generation}-{}.txt", *index);
         *index += 1;
-        std::fs::write(Session::history_path(storage, &file), text)
-            .is_ok()
-            .then_some(file)
+        hl_fs::File::from(Session::history_path(storage, &file)?).replace(text)?;
+        Ok(Some(file))
     }
 }
 
@@ -290,5 +353,63 @@ impl WindowSession<'_> {
         pids: &mut Vec<Rc<Cell<i32>>>,
     ) -> (gtk::Widget, Option<vte4::Terminal>) {
         PaneWidget::build(self, node, storage, pids)
+    }
+}
+
+#[cfg(test)]
+mod history_snapshot_tests {
+    use super::{HistoryGeneration, HistorySnapshot};
+
+    #[test]
+    fn transient_launch_failures_are_not_persisted() {
+        let history = concat!(
+            "prior output\n",
+            "workspace session ended immediately (exit code 255)\n",
+            "live output\n",
+            "failed to start shell: resource unavailable\n",
+            "hl-engine fault: status=-1, detail=0\n",
+            "bash: cannot set terminal process group (42): Bad file descriptor\n",
+            "bash: no job control in this shell\n",
+            "prompt\n",
+        );
+
+        assert_eq!(
+            HistorySnapshot::persistent(history),
+            "prior output\nlive output\nprompt"
+        );
+    }
+
+    #[test]
+    fn persisted_history_prevents_generation_reuse() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::write(temporary.path().join("hist-42-0-0.txt"), "history").unwrap();
+
+        assert!(!HistoryGeneration::available(temporary.path(), "42-0").unwrap());
+        assert!(HistoryGeneration::available(temporary.path(), "42-1").unwrap());
+    }
+
+    #[test]
+    fn history_reads_report_missing_and_unsafe_references() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = hl_ws_term::session::Session::dir(temporary.path());
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("hist-current.txt"), "saved output").unwrap();
+
+        assert_eq!(
+            HistorySnapshot::read(temporary.path(), "hist-current.txt").unwrap(),
+            "saved output"
+        );
+        assert_eq!(
+            HistorySnapshot::read(temporary.path(), "hist-missing.txt")
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            HistorySnapshot::read(temporary.path(), "../outside")
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
     }
 }

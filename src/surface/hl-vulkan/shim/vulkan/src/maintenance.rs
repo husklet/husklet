@@ -1,41 +1,16 @@
-//! Maintenance1-5 + private-data + ycbcr-conversion + calibrated-timestamp entry points.
-//!
-//! Hand-written bodies for the "device housekeeping" long tail a modern app (wgpu-hal, vkcube) touches:
-//! command-pool/buffer lifecycle (`vkTrimCommandPool`/`vkReset*`/`vkFreeCommandBuffers`), the
-//! no-object-needed memory-requirement queries (`vkGetDevice{Buffer,Image}MemoryRequirements`,
-//! `vkGetDescriptorSetLayoutSupport`), the `VK_EXT_private_data` per-object `u64` store, sampler ycbcr
-//! conversion objects, and calibrated timestamps. Each body is a REAL model action (mint/store/query)
-//! or a truthful query answer — never a false `VK_SUCCESS` over an unmodeled op. Sparse queries report a
-//! truthful zero (no sparse residency is modeled). Ported (for the modeled subset) from `hl-shim-vk`.
+//! Modeled maintenance1-5, private-data, ycbcr-conversion, and calibrated-timestamp entry points.
+//! Each operation mutates or queries real shim state; unsupported sparse residency is reported as empty.
 
 use core::ffi::c_void;
 
-use hl_vulkan::model::command::CommandBufferState;
-use hl_vulkan::model::memory::Format;
-use hl_vulkan::Device;
-
 use crate::state::StateStore;
 use crate::types::*;
+use hl_vulkan::model::command::CommandBufferState;
+use hl_vulkan::model::memory::Format;
 
-/// Run `f` with the logical device, or `VK_ERROR_INITIALIZATION_FAILED` if none has been created.
-struct ShimState;
-impl ShimState {
-fn with_device_result(f: impl FnOnce(&mut Device) -> VkResult) -> VkResult {
-    StateStore::with(|s| s.device.as_mut().map(f)).unwrap_or(VK_ERROR_INITIALIZATION_FAILED)
-}
-}
+mod support;
 
-/// Unwrap a dispatchable `VkCommandBuffer` to its `hl_vulkan` `u64` command-buffer handle.
-struct CommandBuffer;
-impl CommandBuffer {
-unsafe fn handle(p: *mut c_void) -> Option<u64> {
-    Dispatchable::<u64>::inner(p).map(|h| *h)
-}
-}
-
-// ==================================================================================================
-// command pool + buffer lifecycle (maintenance1)
-// ==================================================================================================
+use support::{CommandBuffer, MemoryRequirements, ShimState, SparseRequirements};
 
 /// `vkTrimCommandPool` — recycle a pool's unused command-buffer memory. The bring-up model pools no
 /// backing memory (command buffers are plain device-table records), so trimming is a truthful no-op.
@@ -46,7 +21,11 @@ pub extern "C" fn vkTrimCommandPool(_device: *mut c_void, _command_pool: u64, _f
 /// not scope buffers to a pool object, so a pool reset resets all — a superset that is spec-safe for the
 /// single-pool bring-up flow). Clears each recording.
 #[no_mangle]
-pub extern "C" fn vkResetCommandPool(_device: *mut c_void, _command_pool: u64, _flags: u32) -> VkResult {
+pub extern "C" fn vkResetCommandPool(
+    _device: *mut c_void,
+    _command_pool: u64,
+    _flags: u32,
+) -> VkResult {
     ShimState::with_device_result(|d| {
         for rec in d.command_buffers.values_mut() {
             rec.reset_recording();
@@ -85,7 +64,8 @@ pub extern "C" fn vkFreeCommandBuffers(
     if p_command_buffers.is_null() || command_buffer_count == 0 {
         return;
     }
-    let raw = unsafe { std::slice::from_raw_parts(p_command_buffers, command_buffer_count as usize) };
+    let raw =
+        unsafe { std::slice::from_raw_parts(p_command_buffers, command_buffer_count as usize) };
     for &p in raw {
         if p.is_null() {
             continue;
@@ -100,10 +80,6 @@ pub extern "C" fn vkFreeCommandBuffers(
         unsafe { Dispatchable::<u64>::free(p) };
     }
 }
-
-// ==================================================================================================
-// no-object memory-requirement + support queries (maintenance3/4)
-// ==================================================================================================
 
 /// `vkGetDescriptorSetLayoutSupport(KHR)` — report whether a set of the queried layout can be created.
 /// The bring-up model accepts any layout within the reported device limits, so `supported = VK_TRUE`.
@@ -126,19 +102,6 @@ pub extern "C" fn vkGetDescriptorSetLayoutSupportKHR(
     p_support: *mut c_void,
 ) {
     vkGetDescriptorSetLayoutSupport(device, p_create_info, p_support)
-}
-
-/// Fill a `VkMemoryRequirements2`'s base requirements with `size`. Every advertised memory type can back
-/// the resource (all our memory is host RAM), so `memoryTypeBits` exposes the full set — matching the
-/// v1 `vkGetBuffer/ImageMemoryRequirements` path. See `PhysicalDeviceDesc::memory_types`.
-struct MemoryRequirements;
-impl MemoryRequirements {
-fn write(p_memory_requirements: *mut c_void, size: u64) {
-    if let Some(out) = unsafe { (p_memory_requirements as *mut VkMemoryRequirements2).as_mut() } {
-        let type_bits = StateStore::with(|s| s.physical_device().all_memory_type_bits());
-        out.memory_requirements = VkMemoryRequirements { size, alignment: 256, memory_type_bits: type_bits };
-    }
-}
 }
 
 /// `vkGetDeviceBufferMemoryRequirements(KHR)` — derive a buffer's requirements from its create info
@@ -185,7 +148,10 @@ pub extern "C" fn vkGetDeviceImageMemoryRequirements(
             .as_ref()
             .and_then(|i| i.p_create_info.as_ref())
             .map(|ci| {
-                let bpt = Format(ci.format as u32).wire().bytes_per_texel().unwrap_or(4) as u64;
+                let bpt = Format(ci.format as u32)
+                    .wire()
+                    .bytes_per_texel()
+                    .unwrap_or(4) as u64;
                 ci.extent.width as u64 * ci.extent.height.max(1) as u64 * bpt
             })
             .unwrap_or(0)
@@ -201,21 +167,6 @@ pub extern "C" fn vkGetDeviceImageMemoryRequirementsKHR(
     p_memory_requirements: *mut c_void,
 ) {
     vkGetDeviceImageMemoryRequirements(device, p_info, p_memory_requirements)
-}
-
-// ==================================================================================================
-// sparse image memory requirements (no sparse residency modeled — a truthful empty answer)
-// ==================================================================================================
-
-/// Write the two-call sparse-requirement count as 0 (the modeled device supports no sparse residency, so
-/// an image has no sparse memory requirements). `p_count` is set to 0 whether or not the array is present.
-struct SparseRequirements;
-impl SparseRequirements {
-fn write_empty(p_count: *mut u32) {
-    if let Some(c) = unsafe { p_count.as_mut() } {
-        *c = 0;
-    }
-}
 }
 
 #[no_mangle]
@@ -245,7 +196,12 @@ pub extern "C" fn vkGetImageSparseMemoryRequirements2KHR(
     p_sparse_memory_requirement_count: *mut u32,
     p_sparse_memory_requirements: *mut c_void,
 ) {
-    vkGetImageSparseMemoryRequirements2(device, p_info, p_sparse_memory_requirement_count, p_sparse_memory_requirements)
+    vkGetImageSparseMemoryRequirements2(
+        device,
+        p_info,
+        p_sparse_memory_requirement_count,
+        p_sparse_memory_requirements,
+    )
 }
 
 #[no_mangle]
@@ -265,12 +221,15 @@ pub extern "C" fn vkGetDeviceImageSparseMemoryRequirementsKHR(
     p_sparse_memory_requirement_count: *mut u32,
     p_sparse_memory_requirements: *mut c_void,
 ) {
-    vkGetDeviceImageSparseMemoryRequirements(device, p_info, p_sparse_memory_requirement_count, p_sparse_memory_requirements)
+    vkGetDeviceImageSparseMemoryRequirements(
+        device,
+        p_info,
+        p_sparse_memory_requirement_count,
+        p_sparse_memory_requirements,
+    )
 }
 
-// ==================================================================================================
 // private data (VK_EXT_private_data / core 1.3) — a real per-object `u64` store
-// ==================================================================================================
 
 #[no_mangle]
 pub extern "C" fn vkCreatePrivateDataSlot(
@@ -306,15 +265,24 @@ pub extern "C" fn vkCreatePrivateDataSlotEXT(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyPrivateDataSlot(_device: *mut c_void, private_data_slot: u64, _p_allocator: *const c_void) {
+pub extern "C" fn vkDestroyPrivateDataSlot(
+    _device: *mut c_void,
+    private_data_slot: u64,
+    _p_allocator: *const c_void,
+) {
     StateStore::with(|s| {
         s.private_data_slots.remove(&private_data_slot);
-        s.private_data.retain(|(_, _, slot), _| *slot != private_data_slot);
+        s.private_data
+            .retain(|(_, _, slot), _| *slot != private_data_slot);
     });
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroyPrivateDataSlotEXT(device: *mut c_void, private_data_slot: u64, p_allocator: *const c_void) {
+pub extern "C" fn vkDestroyPrivateDataSlotEXT(
+    device: *mut c_void,
+    private_data_slot: u64,
+    p_allocator: *const c_void,
+) {
     vkDestroyPrivateDataSlot(device, private_data_slot, p_allocator)
 }
 
@@ -330,7 +298,8 @@ pub extern "C" fn vkSetPrivateData(
         if !s.private_data_slots.contains(&private_data_slot) {
             return VK_ERROR_INITIALIZATION_FAILED;
         }
-        s.private_data.insert((object_type, object_handle, private_data_slot), data);
+        s.private_data
+            .insert((object_type, object_handle, private_data_slot), data);
         VK_SUCCESS
     })
 }
@@ -373,12 +342,16 @@ pub extern "C" fn vkGetPrivateDataEXT(
     private_data_slot: u64,
     p_data: *mut u64,
 ) {
-    vkGetPrivateData(device, object_type, object_handle, private_data_slot, p_data)
+    vkGetPrivateData(
+        device,
+        object_type,
+        object_handle,
+        private_data_slot,
+        p_data,
+    )
 }
 
-// ==================================================================================================
 // sampler ycbcr conversion (VK_KHR_sampler_ycbcr_conversion / core 1.1) — a real host object
-// ==================================================================================================
 
 #[no_mangle]
 pub extern "C" fn vkCreateSamplerYcbcrConversion(
@@ -417,20 +390,26 @@ pub extern "C" fn vkCreateSamplerYcbcrConversionKHR(
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroySamplerYcbcrConversion(_device: *mut c_void, ycbcr_conversion: u64, _p_allocator: *const c_void) {
+pub extern "C" fn vkDestroySamplerYcbcrConversion(
+    _device: *mut c_void,
+    ycbcr_conversion: u64,
+    _p_allocator: *const c_void,
+) {
     StateStore::with(|s| {
         s.ycbcr_conversions.remove(&ycbcr_conversion);
     });
 }
 
 #[no_mangle]
-pub extern "C" fn vkDestroySamplerYcbcrConversionKHR(device: *mut c_void, ycbcr_conversion: u64, p_allocator: *const c_void) {
+pub extern "C" fn vkDestroySamplerYcbcrConversionKHR(
+    device: *mut c_void,
+    ycbcr_conversion: u64,
+    p_allocator: *const c_void,
+) {
     vkDestroySamplerYcbcrConversion(device, ycbcr_conversion, p_allocator)
 }
 
-// ==================================================================================================
 // calibrated timestamps (VK_KHR_calibrated_timestamps) — monotonic device serials
-// ==================================================================================================
 
 /// `vkGetCalibratedTimestampsKHR` — write one host-monotonic serial per queried timestamp info and a
 /// zero max-deviation (the synchronous model has no sampling jitter). Errors on a null info/output array.
@@ -467,7 +446,13 @@ pub extern "C" fn vkGetCalibratedTimestampsEXT(
     p_timestamps: *mut u64,
     p_max_deviation: *mut u64,
 ) -> VkResult {
-    vkGetCalibratedTimestampsKHR(device, timestamp_count, p_timestamp_infos, p_timestamps, p_max_deviation)
+    vkGetCalibratedTimestampsKHR(
+        device,
+        timestamp_count,
+        p_timestamp_infos,
+        p_timestamps,
+        p_max_deviation,
+    )
 }
 
 /// `vkGetPhysicalDeviceCalibrateableTimeDomainsKHR` — the modeled device reports one calibrateable
@@ -504,5 +489,9 @@ pub extern "C" fn vkGetPhysicalDeviceCalibrateableTimeDomainsEXT(
     p_time_domain_count: *mut u32,
     p_time_domains: *mut i32,
 ) -> VkResult {
-    vkGetPhysicalDeviceCalibrateableTimeDomainsKHR(physical_device, p_time_domain_count, p_time_domains)
+    vkGetPhysicalDeviceCalibrateableTimeDomainsKHR(
+        physical_device,
+        p_time_domain_count,
+        p_time_domains,
+    )
 }

@@ -1,5 +1,38 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChildStatus {
+    Exited(i32),
+    Signaled(i32),
+    Unknown(i32),
+}
+
+impl ChildStatus {
+    fn from_wait(status: i32) -> Self {
+        if libc::WIFEXITED(status) {
+            Self::Exited(libc::WEXITSTATUS(status))
+        } else if libc::WIFSIGNALED(status) {
+            Self::Signaled(libc::WTERMSIG(status))
+        } else {
+            Self::Unknown(status)
+        }
+    }
+
+    fn succeeded(self) -> bool {
+        self == Self::Exited(0)
+    }
+}
+
+impl std::fmt::Display for ChildStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exited(code) => write!(formatter, "exit code {code}"),
+            Self::Signaled(signal) => write!(formatter, "signal {signal}"),
+            Self::Unknown(status) => write!(formatter, "wait status {status:#x}"),
+        }
+    }
+}
+
 /// Builds a terminal for one persisted layout slot.
 pub(crate) fn make_terminal_ex(
     tw: &Rc<TermWin>,
@@ -45,32 +78,26 @@ pub(crate) fn make_terminal_ex(
     // own slot, and `save_session` can record which slot each pane owns.
     tw.panes
         .borrow_mut()
-        .push((term.downgrade(), slot.clone(), pid.clone()));
+        .push(PaneRegistration::new(&term, slot.clone(), pid.clone()));
     let application = application_path().to_string_lossy().into_owned();
-    // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs hl); HL_TERM_DEBUG_LOG
-    // captures hl's output to a file to diagnose the early exit.
+    let workspace_key = tw.ws.key();
+    // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs hl). The debug-log path is
+    // passed to the worker explicitly: redirecting its standard streams would change the PTY contract being
+    // diagnosed.
     let testcmd = AppConfig::get().command.as_ref();
     let dbg = AppConfig::get().debug_log.as_ref();
-    let dbgcmd = dbg.as_ref().map(|p| {
-        format!(
-            "exec '{}' --worker launch '{}' '{}' '' '' > '{}' 2>&1",
-            application, tw.ws.name, slot, p
-        )
-    });
     let cwd_arg = cwd.filter(|c| c.starts_with('/'));
     let directory = cwd_arg.as_deref().unwrap_or("");
     let launch_args: Vec<&str> = vec![
         application.as_str(),
         "--worker",
         "launch",
-        tw.ws.name.as_str(),
+        workspace_key.as_str(),
         slot.as_str(),
-        "",
+        dbg.map(String::as_str).unwrap_or(""),
         directory,
     ];
     let argv: Vec<&str> = if let Some(c) = &testcmd {
-        vec!["/bin/sh", "-c", c.as_str()]
-    } else if let Some(c) = &dbgcmd {
         vec!["/bin/sh", "-c", c.as_str()]
     } else {
         launch_args
@@ -83,7 +110,11 @@ pub(crate) fn make_terminal_ex(
     // Replay saved scrollback/screen history (freeze/restore persistence) ABOVE the live shell, before
     // spawning, so the user's prior screen is visible the instant the window reopens.
     if let Some(text) = history {
-        let bytes = session::History::new(&text).replay();
+        // Old sessions may contain launch diagnostics written before transient-output filtering was
+        // introduced. Sanitize on read as well as write so a successful retry never appears to have
+        // inherited the previous process's failure state.
+        let history = HistorySnapshot::persistent(&text);
+        let bytes = session::History::new(&history).replay();
         if !bytes.is_empty() {
             term.feed(&bytes);
         }
@@ -117,11 +148,13 @@ pub(crate) fn make_terminal_ex(
             let te = term.clone();
             let born = std::time::Instant::now();
             glib::child_watch_add_local(glib::Pid(child), move |_pid, status| {
-                if born.elapsed() < std::time::Duration::from_millis(2500) {
-                    let code = (status >> 8) & 0xff;
+                let status = ChildStatus::from_wait(status);
+                if !status.succeeded() && born.elapsed() < std::time::Duration::from_millis(2500) {
                     te.feed(
-                        format!("\r\n\x1b[31mshell exited immediately (status {code}) — launch failed; press ⌘T to retry\x1b[0m\r\n")
-                            .as_bytes(),
+                        format!(
+                            "\r\n\x1b[31mworkspace session ended immediately ({status})\x1b[0m\r\n"
+                        )
+                        .as_bytes(),
                     );
                     return;
                 }
@@ -145,3 +178,20 @@ pub(crate) fn make_terminal_ex(
 /// hyperlinks are handled separately (via `hyperlink_hover_uri`).
 pub(crate) const URL_REGEX: &str =
     r"(?:https?://|www\.)[^\s<>\x22'`{}|\\^\[\]]+[^\s<>\x22'`{}|\\^\[\].,;:!?)]";
+
+#[cfg(test)]
+mod child_status_tests {
+    use super::ChildStatus;
+
+    #[test]
+    fn decodes_exit_and_signal_wait_statuses_without_inventing_255() {
+        assert_eq!(ChildStatus::from_wait(0), ChildStatus::Exited(0));
+        assert_eq!(ChildStatus::from_wait(7 << 8), ChildStatus::Exited(7));
+        assert_eq!(
+            ChildStatus::from_wait(libc::SIGTERM),
+            ChildStatus::Signaled(libc::SIGTERM)
+        );
+        assert!(ChildStatus::from_wait(0).succeeded());
+        assert!(!ChildStatus::from_wait(libc::SIGTERM).succeeded());
+    }
+}

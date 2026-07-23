@@ -55,23 +55,12 @@ use crate::{
 use super::{AsRenderElements, Element, Id, Kind, RenderElement};
 
 /// A single color buffer
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SolidColorBuffer {
     id: Id,
     size: Size<i32, Logical>,
     commit: CommitCounter,
     color: Color32F,
-}
-
-impl Default for SolidColorBuffer {
-    fn default() -> Self {
-        Self {
-            id: Id::new(),
-            size: Default::default(),
-            commit: Default::default(),
-            color: Default::default(),
-        }
-    }
 }
 
 impl SolidColorBuffer {

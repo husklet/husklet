@@ -314,8 +314,10 @@ mod tests {
 
     #[test]
     fn scrollback_unlimited_word() {
-        let mut c = TermConfig::default();
-        c.scrollback = Some(10);
+        let mut c = TermConfig {
+            scrollback: Some(10),
+            ..TermConfig::default()
+        };
         c.apply_text("scrollback = unlimited\n");
         assert_eq!(c.scrollback, None);
     }
@@ -347,9 +349,11 @@ mod tests {
     #[test]
     fn sample_roundtrips_to_default() {
         let sample = TermConfig::sample();
-        let mut c = TermConfig::default();
-        // mutate away from default first, then re-apply the sample → back to default values.
-        c.font_size = 99.0;
+        // Start away from the default, then re-apply the sample → back to default values.
+        let mut c = TermConfig {
+            font_size: 99.0,
+            ..TermConfig::default()
+        };
         c.apply_text(&sample);
         assert_eq!(c, TermConfig::default());
     }
