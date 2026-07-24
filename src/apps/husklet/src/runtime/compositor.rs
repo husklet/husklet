@@ -244,7 +244,14 @@ impl Service {
                     }
                     Ok(None) => {}
                     Err(error) => {
-                        let _ = Self::stop_native(child, control, Duration::from_secs(2));
+                        if let Err(cleanup) =
+                            Self::stop_native(child, control, Duration::from_secs(2))
+                        {
+                            hl_log::hl_error!(
+                                hl_log::tag::COMPOSITOR,
+                                "native compositor cleanup after status failure failed error={cleanup}"
+                            );
+                        }
                         return Err(error);
                     }
                 }

@@ -296,9 +296,25 @@ impl Presenter for PngPresenter {
             serial,
         };
         if let Some(dir) = &self.out_dir {
-            let _ = std::fs::create_dir_all(dir);
-            let path = dir.join(format!("frame-{serial}.png"));
-            let _ = write_png(&path, frame.width, frame.height, &frame.rgba);
+            match std::fs::create_dir_all(dir) {
+                Ok(()) => {
+                    let path = dir.join(format!("frame-{serial}.png"));
+                    if let Err(error) = write_png(&path, frame.width, frame.height, &frame.rgba) {
+                        hl_log::hl_error!(
+                            tag::PRESENT,
+                            "captured frame write failed path={} error={error}",
+                            path.display()
+                        );
+                    }
+                }
+                Err(error) => {
+                    hl_log::hl_error!(
+                        tag::PRESENT,
+                        "captured frame directory creation failed path={} error={error}",
+                        dir.display()
+                    );
+                }
+            }
         }
         hl_add!(tag::PRESENT, "captured_frames", 1);
         hl_add!(tag::PRESENT, "captured_bytes", buf.rgba.len() as u64);
