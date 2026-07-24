@@ -20,6 +20,9 @@ mod environment_access;
 mod file_length;
 mod finite_state_string;
 mod free_function;
+mod god_object;
+#[cfg(test)]
+mod god_object_tests;
 mod gui_toolkit_leakage;
 mod ignored_result;
 mod model_duplication;
@@ -43,6 +46,7 @@ pub use environment_access::EnvironmentAccess;
 pub use file_length::FileLength;
 pub use finite_state_string::FiniteStateString;
 pub use free_function::FreeFunction;
+pub use god_object::GodObject;
 pub use gui_toolkit_leakage::GuiToolkitLeakage;
 pub use ignored_result::IgnoredResult;
 pub use model_duplication::ModelDuplication;
