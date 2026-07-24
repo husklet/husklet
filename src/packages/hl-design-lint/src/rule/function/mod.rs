@@ -7,7 +7,7 @@ use syn::{
 
 use crate::{
     model::{Finding, Related, Review, ReviewState, Severity},
-    rule::{usage::References, Rule},
+    rule::{references::References, Rule},
     source::{requires_test, Workspace},
     Result,
 };
@@ -27,7 +27,7 @@ impl Rule for FreeFunction {
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut candidates = Vec::new();
         let mut definitions = HashMap::<String, usize>::new();
-        let mut references = HashMap::<String, Vec<crate::rule::usage::Reference>>::new();
+        let mut references = HashMap::<String, Vec<crate::rule::references::Reference>>::new();
         for source in workspace.production() {
             let mut functions = Functions {
                 test_scope: false,
@@ -75,7 +75,7 @@ impl Candidate {
         self,
         rule: &'static str,
         source: &crate::source::Source,
-        usages: impl Iterator<Item = &'a crate::rule::usage::Reference>,
+        usages: impl Iterator<Item = &'a crate::rule::references::Reference>,
         ambiguous: bool,
     ) -> Finding {
         let mut finding = Finding::error(rule, &self.name, source.location(self.span));

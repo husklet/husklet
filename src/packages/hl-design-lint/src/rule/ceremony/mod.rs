@@ -9,6 +9,9 @@ mod marker;
 mod namespace;
 mod wrapper;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) const ID: &str = "ceremonial-structure";
 
 /// Reviews structure that adds navigation without a contract, boundary, or invariant.

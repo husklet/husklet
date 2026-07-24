@@ -4,7 +4,7 @@ use syn::{spanned::Spanned, visit::Visit, ItemFn, ItemMod};
 
 use crate::{
     model::{Finding, Related, Severity},
-    rule::{usage::References, Rule},
+    rule::{references::References, Rule},
     source::{requires_test, Source, Workspace},
     Result,
 };
@@ -39,7 +39,7 @@ impl Rule for SingleUse {
         for definition in &definitions {
             *counts.entry(definition.name.clone()).or_insert(0_usize) += 1;
         }
-        let mut uses = HashMap::<&str, Vec<&crate::rule::usage::Reference>>::new();
+        let mut uses = HashMap::<&str, Vec<&crate::rule::references::Reference>>::new();
         for reference in &references {
             uses.entry(&reference.name).or_default().push(reference);
         }
@@ -72,7 +72,7 @@ struct Definition {
     location: crate::Location,
 }
 impl Definition {
-    fn finding(self, rule: &'static str, usage: &crate::rule::usage::Reference) -> Finding {
+    fn finding(self, rule: &'static str, usage: &crate::rule::references::Reference) -> Finding {
         let mut finding = Finding::warning(rule, &self.name, self.location);
         finding.message = format!("private free function `{}` has one use", self.name);
         finding.help="inline it at the use site or mark a deliberate section boundary with `// hl-lint: visual-section`".into();

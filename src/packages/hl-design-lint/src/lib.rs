@@ -830,16 +830,24 @@ const PROSE: &str = "mod misc {}";
     }
 
     #[test]
-    fn workspace_excludes_the_linter_even_when_addressed_directly() {
+    fn workspace_includes_the_linter_only_when_addressed_directly() {
         let root = temporary("self-exclusion");
         let linter = root.join("hl-design-lint");
         fs::create_dir_all(linter.join("src")).unwrap();
+        fs::write(
+            linter.join("Cargo.toml"),
+            "[package]\nname = \"hl-design-lint\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
         fs::write(
             linter.join("src/lib.rs"),
             "fn would_otherwise_be_reported(value: usize) { let _ = value; }",
         )
         .unwrap();
-        let workspace = Workspace::load([linter]).unwrap();
+        let workspace = Workspace::load([linter.clone()]).unwrap();
+        assert_eq!(workspace.sources().len(), 1);
+
+        let workspace = Workspace::load([root.clone()]).unwrap();
         assert!(workspace.sources().is_empty());
         fs::remove_dir_all(root).unwrap();
     }

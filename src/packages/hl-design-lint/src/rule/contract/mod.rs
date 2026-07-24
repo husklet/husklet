@@ -12,6 +12,9 @@ use crate::{
     Result,
 };
 
+#[cfg(test)]
+mod tests;
+
 const MINIMUM_METHODS: usize = 8;
 const MINIMUM_CLUSTERS: usize = 3;
 const MINIMUM_METHODS_PER_CLUSTER: usize = 2;

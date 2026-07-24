@@ -15,6 +15,9 @@ use crate::{
 
 mod dependencies;
 
+#[cfg(test)]
+mod tests;
+
 use dependencies::local_dependencies;
 
 /// Reviews likely copies of the same model across serialization boundaries.

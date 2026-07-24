@@ -4,7 +4,7 @@ use syn::{spanned::Spanned, visit::Visit, Expr, ImplItemFn, ItemFn, Pat, ReturnT
 
 use crate::{
     model::{Finding, Location, Related, Severity},
-    rule::Rule,
+    rule::{syntax::type_name, Rule},
     source::{requires_test, Source, Workspace},
     Result,
 };
@@ -388,16 +388,5 @@ fn insert_declaration<K: Eq + std::hash::Hash>(
     }
 }
 
-fn type_name(ty: &Type) -> Option<String> {
-    let Type::Path(path) = ty else {
-        return None;
-    };
-    path.path
-        .segments
-        .last()
-        .map(|segment| segment.ident.to_string())
-}
-
 #[cfg(test)]
-#[path = "ignored_result_tests.rs"]
 mod tests;

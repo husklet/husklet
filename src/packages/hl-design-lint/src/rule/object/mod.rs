@@ -18,6 +18,9 @@ const CLUSTER_THRESHOLD: usize = 3;
 
 mod origin;
 
+#[cfg(test)]
+mod tests;
+
 /// Reviews state-owning types whose methods span several unrelated capabilities.
 pub struct GodObject;
 

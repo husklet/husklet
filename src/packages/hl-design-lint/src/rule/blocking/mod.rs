@@ -385,5 +385,4 @@ impl Blocking<'_> {
 }
 
 #[cfg(test)]
-#[path = "async_blocking/tests.rs"]
 mod tests;

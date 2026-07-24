@@ -12,7 +12,10 @@ use crate::{
     Result,
 };
 
-use super::Rule;
+#[cfg(test)]
+mod tests;
+
+use super::{syntax::type_name, Rule};
 
 /// Detects accessors that duplicate access callers already have.
 pub struct AccessorBloat;
@@ -390,19 +393,6 @@ fn visibility(visibility: &Visibility) -> String {
     match visibility {
         Visibility::Inherited => "private".into(),
         _ => visibility.to_token_stream().to_string().replace(' ', ""),
-    }
-}
-
-fn type_name(ty: &syn::Type) -> Option<String> {
-    match ty {
-        syn::Type::Path(path) if path.qself.is_none() => path
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string()),
-        syn::Type::Group(group) => type_name(&group.elem),
-        syn::Type::Paren(paren) => type_name(&paren.elem),
-        _ => None,
     }
 }
 

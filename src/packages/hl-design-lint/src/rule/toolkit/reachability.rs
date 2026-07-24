@@ -3,9 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use syn::{Item, ItemImpl, Type, UseTree, Visibility};
+use syn::{Item, ItemImpl, UseTree, Visibility};
 
-use crate::source::Source;
+use crate::{rule::syntax::type_name, source::Source};
 
 pub(super) fn public_files(sources: &[&Source]) -> BTreeSet<PathBuf> {
     let mut public = sources
@@ -116,19 +116,6 @@ fn flatten_use(tree: &UseTree, mut prefix: Vec<String>, paths: &mut Vec<Vec<Stri
             }
         }
         UseTree::Glob(_) => {}
-    }
-}
-
-fn type_name(ty: &Type) -> Option<String> {
-    match ty {
-        Type::Path(path) => path
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string()),
-        Type::Group(group) => type_name(&group.elem),
-        Type::Paren(paren) => type_name(&paren.elem),
-        _ => None,
     }
 }
 

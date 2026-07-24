@@ -7,10 +7,13 @@ use syn::{
 
 use crate::{
     model::{Finding, Related, Review, Severity},
-    rule::Rule,
+    rule::{syntax::type_name, Rule},
     source::{requires_test, Source, Workspace},
     Result,
 };
+
+#[cfg(test)]
+mod tests;
 
 /// Reviews related boolean fields that encode one mutually exclusive state.
 pub struct BooleanState;
@@ -393,14 +396,4 @@ fn literal_bool(expr: &Expr) -> Option<bool> {
         return None;
     };
     Some(value.value)
-}
-
-fn type_name(ty: &Type) -> Option<String> {
-    let Type::Path(path) = ty else {
-        return None;
-    };
-    path.path
-        .segments
-        .last()
-        .map(|segment| segment.ident.to_string())
 }

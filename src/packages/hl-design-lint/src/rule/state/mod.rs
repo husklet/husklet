@@ -12,7 +12,6 @@ use crate::{
     Result,
 };
 
-#[path = "finite_state_string/syntax.rs"]
 mod syntax;
 use syntax::{
     excluded_name, is_self, pattern_literals, peel, preserves_unknown, state_name, string_literal,
@@ -416,5 +415,4 @@ fn finding(rule: &'static str, concept: Concept, evidence: Evidence) -> Option<F
 }
 
 #[cfg(test)]
-#[path = "finite_state_string_tests.rs"]
 mod tests;

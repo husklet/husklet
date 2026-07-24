@@ -76,8 +76,10 @@ impl Workspace {
         let mut files = Vec::new();
         let mut empty_directories = Vec::new();
         for path in &paths {
-            rust_files(path, &mut files).map_err(|error| LintError::io("walk", path, error))?;
-            empty_dirs(path, &mut empty_directories)
+            let include_linter = explicit_linter(path);
+            rust_files(path, &mut files, include_linter)
+                .map_err(|error| LintError::io("walk", path, error))?;
+            empty_dirs(path, &mut empty_directories, include_linter)
                 .map_err(|error| LintError::io("walk", path, error))?;
         }
         files.sort();
@@ -224,8 +226,8 @@ fn parse_cfg_items(list: &syn::MetaList) -> Option<Punctuated<Meta, Token![,]>> 
         .ok()
 }
 
-fn rust_files(path: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
-    if is_linter(path) || is_paused_domain(path) {
+fn rust_files(path: &Path, files: &mut Vec<PathBuf>, include_linter: bool) -> io::Result<()> {
+    if (!include_linter && is_linter(path)) || is_paused_domain(path) {
         return Ok(());
     }
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
@@ -240,19 +242,23 @@ fn rust_files(path: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Ok(());
     };
-    if matches!(name, ".git" | "target" | "vendor" | "hl-design-lint") {
+    if matches!(name, ".git" | "target" | "vendor") || (!include_linter && name == "hl-design-lint")
+    {
         return Ok(());
     }
     let mut entries = fs::read_dir(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.path());
     for entry in entries {
-        rust_files(&entry.path(), files)?;
+        rust_files(&entry.path(), files, include_linter)?;
     }
     Ok(())
 }
 
-fn empty_dirs(path: &Path, empty: &mut Vec<PathBuf>) -> io::Result<()> {
-    if excluded(path) || fs::symlink_metadata(path)?.file_type().is_symlink() || path.is_file() {
+fn empty_dirs(path: &Path, empty: &mut Vec<PathBuf>, include_linter: bool) -> io::Result<()> {
+    if excluded(path, include_linter)
+        || fs::symlink_metadata(path)?.file_type().is_symlink()
+        || path.is_file()
+    {
         return Ok(());
     }
 
@@ -263,7 +269,7 @@ fn empty_dirs(path: &Path, empty: &mut Vec<PathBuf>) -> io::Result<()> {
     }
     for entry in entries {
         if entry.file_type()?.is_dir() {
-            empty_dirs(&entry.path(), empty)?;
+            empty_dirs(&entry.path(), empty, include_linter)?;
         }
     }
     Ok(())
@@ -275,8 +281,8 @@ fn placeholder(path: &Path) -> bool {
         .is_some_and(|name| matches!(name, ".gitkeep" | ".keep" | ".DS_Store"))
 }
 
-fn excluded(path: &Path) -> bool {
-    if is_linter(path) || is_paused_domain(path) {
+fn excluded(path: &Path, include_linter: bool) -> bool {
+    if (!include_linter && is_linter(path)) || is_paused_domain(path) {
         return true;
     }
     path.file_name()
@@ -304,6 +310,13 @@ fn is_linter(path: &Path) -> bool {
             .to_str()
             .is_some_and(|name| name == "hl-design-lint")
     })
+}
+
+fn explicit_linter(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "hl-design-lint")
+        && path.join("Cargo.toml").is_file()
 }
 
 fn is_test(path: &Path) -> bool {

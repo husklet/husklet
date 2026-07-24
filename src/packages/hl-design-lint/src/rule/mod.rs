@@ -4,64 +4,53 @@ use crate::{
     Result,
 };
 
-mod accessor_bloat;
-#[cfg(test)]
-mod accessor_bloat_tests;
-mod async_blocking;
-mod boolean_state;
-#[cfg(test)]
-mod boolean_state_tests;
-mod broad_trait;
-#[cfg(test)]
-mod broad_trait_tests;
-mod catch_all_module;
-mod ceremonial_structure;
-#[cfg(test)]
-mod ceremonial_structure_tests;
-mod deep_control_flow;
-mod dependency_direction;
-mod duplicate_entity;
-mod empty_directory;
-mod environment_access;
-mod file_length;
-mod finite_state_string;
-mod free_function;
-mod god_object;
-#[cfg(test)]
-mod god_object_tests;
-mod gui_toolkit_leakage;
-mod ignored_result;
-mod model_duplication;
-#[cfg(test)]
-mod model_duplication_tests;
-mod platform_command;
-mod receiver_repetition;
-mod single_use;
-mod struct_naming;
-mod usage;
+mod accessor;
+mod blocking;
+mod boolean;
+mod catchall;
+mod ceremony;
+mod command;
+mod contract;
+mod dependency;
+mod duplicate;
+mod empty;
+mod environment;
+mod function;
+mod length;
+mod model;
+mod naming;
+mod nesting;
+mod object;
+mod receiver;
+mod references;
+mod result;
+mod single;
+mod state;
+mod syntax;
+mod toolkit;
 
-pub use accessor_bloat::AccessorBloat;
-pub use async_blocking::AsyncBlocking;
-pub use boolean_state::BooleanState;
-pub use broad_trait::BroadTrait;
-pub use catch_all_module::CatchAllModule;
-pub use ceremonial_structure::CeremonialStructure;
-pub use deep_control_flow::DeepControlFlow;
-pub use dependency_direction::DependencyDirection;
-pub use duplicate_entity::DuplicateEntity;
-pub use empty_directory::EmptyDirectory;
-pub use environment_access::EnvironmentAccess;
-pub use file_length::FileLength;
-pub use finite_state_string::FiniteStateString;
-pub use free_function::FreeFunction;
-pub use god_object::GodObject;
-pub use gui_toolkit_leakage::GuiToolkitLeakage;
-pub use ignored_result::IgnoredResult;
-pub use model_duplication::ModelDuplication;
-pub use platform_command::PlatformCommand;
-pub use receiver_repetition::ReceiverRepetition;
-pub use single_use::SingleUse;
-pub use struct_naming::StructNaming;
+pub use accessor::AccessorBloat;
+pub use blocking::AsyncBlocking;
+pub use boolean::BooleanState;
+pub use catchall::CatchAllModule;
+pub use ceremony::CeremonialStructure;
+pub use command::PlatformCommand;
+pub use contract::BroadTrait;
+pub use dependency::DependencyDirection;
+pub use duplicate::DuplicateEntity;
+pub use empty::EmptyDirectory;
+pub use environment::EnvironmentAccess;
+pub use function::FreeFunction;
+pub use length::FileLength;
+pub use model::ModelDuplication;
+pub use naming::StructNaming;
+pub use nesting::DeepControlFlow;
+pub use object::GodObject;
+pub use receiver::ReceiverRepetition;
+pub use result::IgnoredResult;
+pub use single::SingleUse;
+pub use state::FiniteStateString;
+pub use toolkit::GuiToolkitLeakage;
 
 /// One independently executable design check.
 pub trait Rule {
