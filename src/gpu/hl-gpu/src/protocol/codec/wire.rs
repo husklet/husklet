@@ -9,7 +9,7 @@ use crate::protocol::model::error::{GpuError, Result};
 /// Append-only little-endian encoder over a `Vec<u8>`.
 #[derive(Default)]
 pub struct Encoder {
-    pub buf: Vec<u8>,
+    buf: Vec<u8>,
 }
 
 impl Encoder {

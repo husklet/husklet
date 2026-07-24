@@ -71,5 +71,5 @@ fn extreme_viewport_and_scissor_dims_do_not_panic() {
     record::scissor(&mut c, [i32::MIN, i32::MIN, -4, -4]);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
     record::viewport(&mut c, [0, 0, 320, 240]);
-    assert_eq!(c.viewport, [0, 0, 320, 240]);
+    assert_eq!(c.viewport(), [0, 0, 320, 240]);
 }

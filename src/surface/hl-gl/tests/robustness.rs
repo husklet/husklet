@@ -301,9 +301,13 @@ fn deleting_the_bound_program_and_texture_clears_the_binding() {
     let mut c = ctx();
     let p = record::create_program(&mut c);
     record::use_program(&mut c, p);
-    assert_eq!(c.cur_prog, p);
+    assert_eq!(c.current_program(), p);
     record::delete_program(&mut c, p);
-    assert_eq!(c.cur_prog, 0, "deleting the current program unbinds it");
+    assert_eq!(
+        c.current_program(),
+        0,
+        "deleting the current program unbinds it"
+    );
 
     let t = c.textures.gen();
     c.active_texture(GL_TEXTURE0);

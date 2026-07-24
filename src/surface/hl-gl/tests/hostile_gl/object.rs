@@ -40,7 +40,7 @@ fn dangling_object_names_to_bind_use_attach_never_panic() {
     record::attach_shader(&mut c, p, f);
     assert!(record::link_program(&mut c, p));
     record::use_program(&mut c, p);
-    assert_eq!(c.cur_prog, p);
+    assert_eq!(c.current_program(), p);
     assert_eq!(c.take_gl_error(), GL_NO_ERROR);
 }
 

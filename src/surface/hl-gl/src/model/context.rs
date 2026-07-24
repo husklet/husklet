@@ -45,7 +45,7 @@ pub struct GlContext {
 
     // ---- currently-bound GL state ----------------------------------------------------------------
     /// The program bound by `glUseProgram`.
-    pub cur_prog: u32,
+    pub(crate) cur_prog: u32,
     /// The buffer bound to `GL_ARRAY_BUFFER`.
     pub array_buffer: u32,
     /// The buffer bound to `GL_ELEMENT_ARRAY_BUFFER`.
@@ -60,13 +60,13 @@ pub struct GlContext {
     pub tex_unit: [u32; 8],
     /// Per-location vertex-attribute pointer state.
     pub attr: [Attr; MAX_ATTR],
-    pub clear_color: [f32; 4],
+    pub(crate) clear_color: [f32; 4],
     /// The depth-buffer clear value (`glClearDepthf`). Recorded for completeness; the default framebuffer
     /// models no depth attachment, so it is not lowered to a pass clear (honest no-op — see `service::frame`).
-    pub clear_depth: f32,
-    pub viewport: [i32; 4],
+    pub(crate) clear_depth: f32,
+    pub(crate) viewport: [i32; 4],
     pub scissor_enabled: bool,
-    pub scissor: [i32; 4],
+    pub(crate) scissor: [i32; 4],
     /// `GL_BLEND` enabled + its factors/equations (`glBlendFunc`/`glBlendFuncSeparate`/`glBlendEquation`).
     pub blend: bool,
     pub blend_src_rgb: u32,
@@ -78,8 +78,8 @@ pub struct GlContext {
     pub blend_color: [f32; 4],
     /// `GL_DEPTH_TEST` enabled + its compare func (`glDepthFunc`) and write mask (`glDepthMask`).
     pub depth: bool,
-    pub depth_func: u32,
-    pub depth_write: bool,
+    pub(crate) depth_func: u32,
+    pub(crate) depth_write: bool,
     /// `GL_STENCIL_TEST` enabled + the front/back stencil test state. Set by
     /// `glStencilFunc`/`glStencilFuncSeparate` (compare func + reference + value read mask),
     /// `glStencilOp`/`glStencilOpSeparate` (stencil-fail / depth-fail / depth-pass ops), and
@@ -103,13 +103,13 @@ pub struct GlContext {
     /// Front-face value read mask (`glStencilFunc*`) — WebGPU `stencilReadMask`.
     pub stencil_read_mask: u32,
     /// Front-face write mask (`glStencilMask*`) — WebGPU `stencilWriteMask`.
-    pub stencil_write_mask: u32,
+    pub(crate) stencil_write_mask: u32,
     /// The stencil-buffer clear value (`glClearStencil`), lowered to `DepthAttachment.clear_stencil`.
-    pub clear_stencil: i32,
+    pub(crate) clear_stencil: i32,
     /// `GL_CULL_FACE` enabled + the culled face (`glCullFace`) and front-face winding (`glFrontFace`).
     pub cull_enabled: bool,
-    pub cull_face: u32,
-    pub front_face: u32,
+    pub(crate) cull_face: u32,
+    pub(crate) front_face: u32,
     /// `glColorMask` per-channel write enable, packed into the low 4 bits as `R<<0 | G<<1 | B<<2 | A<<3`
     /// (the exact `ColorTargetState::write_mask` encoding). Default `0xf` (all channels written). A guest
     /// that masks a channel — e.g. `glColorMask(1,1,1,0)` to leave the framebuffer alpha untouched, or an
@@ -268,6 +268,18 @@ pub struct GlContext {
     /// below, so any later reference re-resolves to a FRESH id — never the destroyed one. The #226 agent had
     /// to leave this un-retired only because NACK-retain corrupted ids; that is fixed.
     pending_destroys: Vec<Cmd>,
+}
+
+impl GlContext {
+    /// Returns the currently bound program name (`0` means no program).
+    pub fn current_program(&self) -> u32 {
+        self.cur_prog
+    }
+
+    /// Returns the current GL viewport.
+    pub fn viewport(&self) -> [i32; 4] {
+        self.viewport
+    }
 }
 
 mod resources;

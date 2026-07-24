@@ -40,7 +40,7 @@ pub struct GlTexture {
     /// [`GlTexture::has_real_pixels`]) to prefer the resident FBO render target over the zeroed plane when
     /// sampling an offscreen attachment across frames (Chrome's tile→window composite). `false` until a real
     /// upload lands; reset to `false` by a `glTexImage2D(…, NULL)` re-define (GL discards the old content).
-    pub real_pixels: bool,
+    pub(crate) real_pixels: bool,
 }
 
 impl Default for GlTexture {

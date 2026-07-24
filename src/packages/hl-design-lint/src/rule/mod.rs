@@ -4,6 +4,9 @@ use crate::{
     Result,
 };
 
+mod accessor_bloat;
+#[cfg(test)]
+mod accessor_bloat_tests;
 mod async_blocking;
 mod boolean_state;
 #[cfg(test)]
@@ -24,6 +27,7 @@ mod single_use;
 mod struct_naming;
 mod usage;
 
+pub use accessor_bloat::AccessorBloat;
 pub use async_blocking::AsyncBlocking;
 pub use boolean_state::BooleanState;
 pub use catch_all_module::CatchAllModule;

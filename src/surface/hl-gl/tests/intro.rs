@@ -350,7 +350,7 @@ fn delete_and_detach_mutate_program_state() {
     // glDeleteProgram of the current program removes it and clears the binding.
     record::delete_program(&mut c, prog);
     assert!(!c.programs.contains(prog));
-    assert_eq!(c.cur_prog, 0);
+    assert_eq!(c.current_program(), 0);
 
     // glDetachShader errors: unknown program → GL_INVALID_VALUE.
     let vs = record::create_shader(&mut c, GL_VERTEX_SHADER);
