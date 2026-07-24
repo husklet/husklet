@@ -10,6 +10,8 @@ mod filesystem;
 mod format;
 mod image;
 mod inspect;
+#[cfg(feature = "runtime")]
+mod lifecycle;
 mod log;
 mod process;
 mod stats;

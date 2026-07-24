@@ -1,6 +1,8 @@
 #[cfg(feature = "runtime")]
 use super::format::{ImageName, PortKey, Ports, Signal};
 #[cfg(feature = "runtime")]
+use super::lifecycle::State as LifecycleState;
+#[cfg(feature = "runtime")]
 use super::timestamp::Timestamp;
 use super::ContainerMetadata;
 #[cfg(feature = "runtime")]
@@ -182,7 +184,7 @@ impl From<hl_container::Container> for InspectContainer {
                 .unwrap_or_default(),
             created: Timestamp::from_millis(value.created_at_ms).to_string(),
             state: ContainerState {
-                status: lifecycle.status.into(),
+                status: lifecycle.status.to_string(),
                 activity: lifecycle.activity,
                 condition: Condition {
                     oom_killed: false,
@@ -236,7 +238,7 @@ impl From<hl_container::Container> for InspectContainer {
 
 #[cfg(feature = "runtime")]
 struct Lifecycle {
-    status: &'static str,
+    status: LifecycleState,
     activity: Activity,
     pid: u64,
     exit: Exit,
@@ -247,6 +249,7 @@ struct Lifecycle {
 #[cfg(feature = "runtime")]
 impl From<&RuntimeState> for Lifecycle {
     fn from(state: &RuntimeState) -> Self {
+        let status = LifecycleState::from(state);
         let inactive = || Activity {
             running: false,
             paused: false,
@@ -254,7 +257,7 @@ impl From<&RuntimeState> for Lifecycle {
         };
         match state {
             RuntimeState::Created => Self {
-                status: "created",
+                status,
                 activity: inactive(),
                 pid: 0,
                 exit: Exit::success(),
@@ -265,7 +268,7 @@ impl From<&RuntimeState> for Lifecycle {
                 process_id,
                 started_at_ms,
             } => Self {
-                status: "running",
+                status,
                 activity: Activity {
                     running: true,
                     paused: false,
@@ -281,7 +284,7 @@ impl From<&RuntimeState> for Lifecycle {
                 started_at_ms,
                 ..
             } => Self {
-                status: "paused",
+                status,
                 activity: Activity {
                     running: true,
                     paused: true,
@@ -297,7 +300,7 @@ impl From<&RuntimeState> for Lifecycle {
                 finished_at_ms,
                 ..
             } => Self {
-                status: "restarting",
+                status,
                 activity: Activity {
                     running: true,
                     paused: false,
@@ -312,7 +315,7 @@ impl From<&RuntimeState> for Lifecycle {
                 result,
                 finished_at_ms,
             } => Self {
-                status: "exited",
+                status,
                 activity: inactive(),
                 pid: 0,
                 exit: Exit::from(result),

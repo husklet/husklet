@@ -1,5 +1,7 @@
 #[cfg(feature = "runtime")]
 use super::format::{ImageName, Ports};
+#[cfg(feature = "runtime")]
+use super::lifecycle::State as LifecycleState;
 use super::MountPoint;
 #[cfg(feature = "runtime")]
 use hl_container::{ContainerState as RuntimeState, ExitStatus};
@@ -114,7 +116,7 @@ impl From<hl_container::Container> for Container {
                 .unwrap_or_default(),
             command,
             created: i64::try_from(value.created_at_ms / 1_000).unwrap_or(i64::MAX),
-            state: lifecycle.state.into(),
+            state: lifecycle.state.to_string(),
             status: lifecycle.status,
             ports: Ports::from(&value.spec).summaries(),
             labels: value.spec.labels,
@@ -124,16 +126,17 @@ impl From<hl_container::Container> for Container {
 
 #[cfg(feature = "runtime")]
 pub(super) struct Lifecycle {
-    state: &'static str,
+    state: LifecycleState,
     pub(super) status: String,
 }
 
 #[cfg(feature = "runtime")]
 impl Lifecycle {
     fn from_runtime(value: &RuntimeState, created_at_ms: u64) -> Self {
+        let state = LifecycleState::from(value);
         match value {
             RuntimeState::Created => Self {
-                state: "created",
+                state,
                 status: "Created".into(),
             },
             RuntimeState::Running { started_at_ms, .. } => {
@@ -143,7 +146,7 @@ impl Lifecycle {
                     *started_at_ms
                 };
                 Self {
-                    state: "running",
+                    state,
                     status: format!("Up {}", Age::since(started_at_ms)),
                 }
             }
@@ -154,7 +157,7 @@ impl Lifecycle {
                     *started_at_ms
                 };
                 Self {
-                    state: "paused",
+                    state,
                     status: format!("Up {} (Paused)", Age::since(started_at_ms)),
                 }
             }
@@ -169,7 +172,7 @@ impl Lifecycle {
                     ExitStatus::Fault { status, .. } => *status,
                 };
                 Self {
-                    state: "restarting",
+                    state,
                     status: format!("Restarting ({code}) {} ago", Age::since(*finished_at_ms)),
                 }
             }
@@ -184,7 +187,7 @@ impl Lifecycle {
                 };
                 let finished_at_ms = (*finished_at_ms).max(created_at_ms);
                 Self {
-                    state: "exited",
+                    state,
                     status: format!("Exited ({code}) {} ago", Age::since(finished_at_ms)),
                 }
             }
