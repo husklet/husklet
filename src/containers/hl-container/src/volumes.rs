@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[path = "volume_transaction.rs"]
 mod transaction;
 
 /// Locally managed durable volumes.

@@ -152,5 +152,6 @@ impl Operand<'_> {
     }
 }
 
+#[path = "kernel_emit.rs"]
 mod emit;
 pub use emit::Kernel;

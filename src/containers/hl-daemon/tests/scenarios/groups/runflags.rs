@@ -1,5 +1,6 @@
 //! Container run-option compatibility cases.
 
+#[path = "runflags_docker.rs"]
 mod docker;
 
 use crate::report::LegacyBatch;

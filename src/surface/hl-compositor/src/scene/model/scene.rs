@@ -392,4 +392,5 @@ impl Scene {
     }
 }
 
+#[path = "scene_tree.rs"]
 mod tree;

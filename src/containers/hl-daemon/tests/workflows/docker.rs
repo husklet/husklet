@@ -1,5 +1,6 @@
 //! Typed daemon/client API sweep replacing Docker CLI shell orchestration.
 
+#[path = "docker_container.rs"]
 mod container;
 
 use hl_client::{

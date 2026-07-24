@@ -30,6 +30,7 @@ use hl_vulkan::Device;
 use crate::state::StateStore;
 use crate::types::{VkExtent2D, VkMappedMemoryRange, VkResult, VK_SUCCESS};
 
+#[path = "corebits_command.rs"]
 mod command;
 pub use command::*;
 

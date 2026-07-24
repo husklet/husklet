@@ -384,4 +384,5 @@ fn ray_tracing_family_returns_extension_not_present() {
     assert_eq!(r, -7); // VK_ERROR_EXTENSION_NOT_PRESENT
 }
 
+#[path = "tests_commands.rs"]
 mod commands;

@@ -17,7 +17,8 @@ pub use rule::{
     AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure,
     DeepControlFlow, DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
     FileLength, FiniteStateString, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
-    ModelDuplication, PlatformCommand, ReceiverRepetition, Registry, Rule, SingleUse, StructNaming,
+    ModelDuplication, PlatformCommand, ReceiverRepetition, Registry, Rule, SingleFileDirectory,
+    SingleUse, StructNaming,
 };
 pub use source::{Source, Workspace};
 
@@ -57,6 +58,7 @@ impl Linter {
                 .register(rule::FiniteStateString)
                 .register(rule::CatchAllModule)
                 .register(rule::EmptyDirectory)
+                .register(rule::SingleFileDirectory)
                 .register(rule::CeremonialStructure),
         )
     }
@@ -162,7 +164,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 22);
+        assert_eq!(summaries.len(), 23);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "deep-control-flow");
@@ -196,7 +198,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 22);
+        assert_eq!(summaries.len(), 23);
         assert!(reporter
             .0
             .iter()

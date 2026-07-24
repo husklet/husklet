@@ -469,5 +469,5 @@ fn two_interleaved_toplevels_both_present() {
 
 // ============================ wayland-client Dispatch plumbing ============================
 
-#[path = "wayland_serve_adversarial/dispatch.rs"]
+#[path = "compositor/adversarial.rs"]
 mod dispatch;

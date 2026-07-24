@@ -375,9 +375,9 @@ fn run_case(case: &Case) -> Result<(), String> {
 // ===================================================================================================
 // THE CORPUS — ANGLE / GskGpu-shaped GLSL-ES, one entry per real failure mode
 // ===================================================================================================
-include!("corpus/cases.rs");
+include!("render/corpus.rs");
 
-#[path = "glsl_corpus/render.rs"]
+#[path = "render/glsl.rs"]
 mod render;
 
 #[test]

@@ -397,5 +397,5 @@ impl PixelIs for CapturedFrame {
 
 // ------------------------- wayland-client Dispatch plumbing (client side) -------------------------
 
-#[path = "wayland_live_popup_subsurface/dispatch.rs"]
+#[path = "compositor/popup_subsurface.rs"]
 mod dispatch;

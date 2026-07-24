@@ -11,7 +11,7 @@ pub const HL_WL_EGL_MAGIC: isize = 0x686c_776c_5f65_676c; // "hlwl_egl"
 
 /// The `wl_egl_window` the app links against (the `libwayland-egl` ABI). It is a plain
 /// `wl_surface` + backing size; our libEGL reads it in `eglCreateWindowSurface`. `#[repr(C)]` with the
-/// field order the staged C shim (`shim/wayland-egl/wayland_egl.c`) allocates, so the two agree on the
+/// field order the staged C shim (`shim/wayland_egl.c`) allocates, so the two agree on the
 /// 64-byte layout byte-for-byte (asserted in the tests + the dlopen integration test).
 #[repr(C)]
 pub struct WlEglWindow {

@@ -357,5 +357,5 @@ fn real_client_discovers_compositor_via_wayland_display_and_composites() {
 
 // ------------------------- wayland-client Dispatch plumbing (client side) -------------------------
 
-#[path = "wayland_live_socket/dispatch.rs"]
+#[path = "compositor/live_socket.rs"]
 mod dispatch;

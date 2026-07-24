@@ -22,6 +22,7 @@ use std::cell::Cell;
 use super::metal::MetalCtx;
 use crate::scene::model::Visibility;
 
+#[path = "window_application.rs"]
 mod application;
 
 pub use application::{DisplayConfig, NativeApplication};

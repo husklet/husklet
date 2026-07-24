@@ -352,5 +352,5 @@ fn injected_pointer_and_keyboard_reach_the_focused_client() {
 
 // ------------------------- wayland-client Dispatch plumbing (client side) -------------------------
 
-#[path = "wayland_input_socket/dispatch.rs"]
+#[path = "compositor/input_socket.rs"]
 mod dispatch;

@@ -17,6 +17,7 @@ use hl_vulkan::{Device, VkCommandBuffer as VkCbHandle};
 use crate::state::StateStore;
 use crate::types::*;
 
+#[path = "sync_semaphore.rs"]
 mod semaphore;
 
 pub use semaphore::*;

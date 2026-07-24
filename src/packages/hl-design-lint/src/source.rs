@@ -66,6 +66,7 @@ impl Source {
 pub struct Workspace {
     sources: Vec<Source>,
     empty_directories: Vec<PathBuf>,
+    single_file_directories: Vec<(PathBuf, PathBuf)>,
     paths: Vec<PathBuf>,
 }
 
@@ -75,23 +76,32 @@ impl Workspace {
         let paths = paths.into_iter().collect::<Vec<_>>();
         let mut files = Vec::new();
         let mut empty_directories = Vec::new();
+        let mut single_file_directories = Vec::new();
         for path in &paths {
             let include_linter = explicit_linter(path);
             rust_files(path, &mut files, include_linter)
                 .map_err(|error| LintError::io("walk", path, error))?;
-            empty_dirs(path, &mut empty_directories, include_linter)
-                .map_err(|error| LintError::io("walk", path, error))?;
+            directory_shapes(
+                path,
+                &mut empty_directories,
+                &mut single_file_directories,
+                include_linter,
+            )
+            .map_err(|error| LintError::io("walk", path, error))?;
         }
         files.sort();
         files.dedup();
         empty_directories.sort();
         empty_directories.dedup();
+        single_file_directories.sort();
+        single_file_directories.dedup();
         Ok(Self {
             sources: files
                 .into_iter()
                 .map(Source::load)
                 .collect::<std::result::Result<_, _>>()?,
             empty_directories,
+            single_file_directories,
             paths,
         })
     }
@@ -109,6 +119,11 @@ impl Workspace {
     /// Returns repository-owned directories with no substantive entries.
     pub fn empty_directories(&self) -> &[PathBuf] {
         &self.empty_directories
+    }
+
+    /// Returns non-conventional directories containing one substantive file.
+    pub fn single_file_directories(&self) -> &[(PathBuf, PathBuf)] {
+        &self.single_file_directories
     }
 
     /// Returns the roots explicitly requested by the lint invocation.
@@ -254,7 +269,12 @@ fn rust_files(path: &Path, files: &mut Vec<PathBuf>, include_linter: bool) -> io
     Ok(())
 }
 
-fn empty_dirs(path: &Path, empty: &mut Vec<PathBuf>, include_linter: bool) -> io::Result<()> {
+fn directory_shapes(
+    path: &Path,
+    empty: &mut Vec<PathBuf>,
+    single: &mut Vec<(PathBuf, PathBuf)>,
+    include_linter: bool,
+) -> io::Result<()> {
     if excluded(path, include_linter)
         || fs::symlink_metadata(path)?.file_type().is_symlink()
         || path.is_file()
@@ -264,15 +284,44 @@ fn empty_dirs(path: &Path, empty: &mut Vec<PathBuf>, include_linter: bool) -> io
 
     let mut entries = fs::read_dir(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.path());
-    if entries.iter().all(|entry| placeholder(&entry.path())) {
+    let substantive = entries
+        .iter()
+        .filter(|entry| !placeholder(&entry.path()))
+        .collect::<Vec<_>>();
+    if substantive.is_empty() {
         empty.push(path.to_owned());
+    } else if substantive.len() == 1
+        && substantive[0].file_type()?.is_file()
+        && !conventional_single_file_directory(path)
+    {
+        single.push((path.to_owned(), substantive[0].path()));
     }
     for entry in entries {
         if entry.file_type()?.is_dir() {
-            empty_dirs(&entry.path(), empty, include_linter)?;
+            directory_shapes(&entry.path(), empty, single, include_linter)?;
         }
     }
     Ok(())
+}
+
+fn conventional_single_file_directory(path: &Path) -> bool {
+    let name = path.file_name().and_then(|name| name.to_str());
+    let artifact_boundary = path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some("references" | "registry" | "golden")
+        )
+    });
+    matches!(
+        name,
+        Some("tests" | "benches" | "examples" | "migrations" | "bin" | ".cargo")
+    ) || artifact_boundary
+        || (name == Some("src") && path.join("../Cargo.toml").is_file())
+        || (path.join("tests.rs").is_file()
+            && path
+                .parent()
+                .zip(name)
+                .is_some_and(|(parent, name)| parent.join(format!("{name}.rs")).is_file()))
 }
 
 fn placeholder(path: &Path) -> bool {

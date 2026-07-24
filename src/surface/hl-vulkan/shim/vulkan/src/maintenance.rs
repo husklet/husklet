@@ -8,6 +8,7 @@ use crate::types::*;
 use hl_vulkan::model::command::CommandBufferState;
 use hl_vulkan::model::memory::Format;
 
+#[path = "maintenance_support.rs"]
 mod support;
 
 use support::{CommandBuffer, MemoryRequirements, ShimState, SparseRequirements};

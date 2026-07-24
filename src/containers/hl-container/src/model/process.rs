@@ -235,5 +235,6 @@ impl Guest {
     }
 }
 
+#[path = "process_spec.rs"]
 mod spec;
 pub use spec::ContainerSpec;

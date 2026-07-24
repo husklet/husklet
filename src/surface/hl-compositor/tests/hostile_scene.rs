@@ -15,7 +15,7 @@ use hl_compositor::scene::model::{
 };
 use hl_compositor::scene::service::{commit_surface, BufferChange, Commit};
 
-#[path = "hostile_scene/geometry.rs"]
+#[path = "compositor/hostile_scene.rs"]
 mod geometry;
 
 // ---- helpers -----------------------------------------------------------------------------------

@@ -388,5 +388,5 @@ fn drag_and_drop() {
 
 // ---------- Dispatch plumbing ----------
 
-#[path = "demo_drag_and_drop/dispatch.rs"]
+#[path = "compositor/demo_drag_and_drop.rs"]
 mod dispatch;

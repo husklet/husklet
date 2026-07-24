@@ -437,5 +437,6 @@ impl<'a> Images<'a> {
         self.transport.stream(Method::GET, &path).await
     }
 }
+#[path = "image_transfer.rs"]
 mod transfer;
 pub use transfer::{Pull, Push};

@@ -12,6 +12,7 @@ use crate::model::context::{GlContext, UniformBlock};
 use crate::model::glconst::*;
 use crate::service::query::gl_type_enum;
 
+#[path = "intro_resource.rs"]
 mod resource;
 
 pub use resource::*;

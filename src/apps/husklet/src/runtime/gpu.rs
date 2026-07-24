@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
+#[path = "gpu_service.rs"]
 mod service;
 
 pub use service::{Backend, Configuration, Service};

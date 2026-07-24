@@ -78,16 +78,14 @@ fn main() {
     );
     println!(
         "cargo:rerun-if-changed={}",
-        manifest_dir
-            .join("shim/wayland-egl/wayland_egl.c")
-            .display()
+        manifest_dir.join("shim/wayland_egl.c").display()
     );
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let shim_target = manifest_dir.join("target").join("shim-build");
     let stage_root = stage_root();
     let sysroot = rustc_sysroot();
-    let wlegl_c = manifest_dir.join("shim/wayland-egl/wayland_egl.c");
+    let wlegl_c = manifest_dir.join("shim/wayland_egl.c");
 
     for (triple, cc, arch_dir) in ARCHES {
         let required = *arch_dir == "aarch64";
