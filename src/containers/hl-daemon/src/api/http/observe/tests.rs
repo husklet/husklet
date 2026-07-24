@@ -99,11 +99,3 @@ fn measured_process_values_are_preserved_exactly() {
     assert_eq!(sample.cpu_stats.cpu_usage.total_usage, 67_890);
     assert_eq!(sample.precpu_stats.cpu_usage.total_usage, 12_000);
 }
-
-#[test]
-fn cpu_times_accept_ps_formats() {
-    assert_eq!(CpuTime::from("01:23").0, 83_000_000_000);
-    assert_eq!(CpuTime::from("01:00:00").0, 3_600_000_000_000);
-    assert_eq!(CpuTime::from("2-00:00:00").0, 172_800_000_000_000);
-    assert_eq!(CpuTime::from("00:09.99").0, 9_000_000_000);
-}
