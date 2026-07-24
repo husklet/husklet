@@ -278,14 +278,17 @@ impl Volumes {
                         "subpath is only valid for managed volume mounts".into(),
                     ));
                 }
-                let root = std::fs::canonicalize(&source)?;
-                let selected = std::fs::canonicalize(source.join(subpath)).map_err(|error| {
-                    Error::InvalidSpec(format!(
-                        "volume subpath {} is unavailable: {error}",
-                        subpath.display()
-                    ))
-                })?;
-                if !selected.starts_with(&root) || !selected.is_dir() {
+                let root = tokio::fs::canonicalize(&source).await?;
+                let selected = tokio::fs::canonicalize(source.join(subpath))
+                    .await
+                    .map_err(|error| {
+                        Error::InvalidSpec(format!(
+                            "volume subpath {} is unavailable: {error}",
+                            subpath.display()
+                        ))
+                    })?;
+                let directory = tokio::fs::metadata(&selected).await?.is_dir();
+                if !selected.starts_with(&root) || !directory {
                     return Err(Error::InvalidSpec(format!(
                         "volume subpath {} must resolve to a directory inside the volume",
                         subpath.display()

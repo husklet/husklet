@@ -25,7 +25,8 @@ impl Volumes {
             if matches!(volume.source, VolumeSource::Bind { .. }) {
                 continue;
             }
-            if std::fs::read_dir(&volume.path)?.next().is_some() {
+            let mut entries = tokio::fs::read_dir(&volume.path).await?;
+            if entries.next_entry().await?.is_some() {
                 continue;
             }
             let source = rootfs.join(
@@ -34,11 +35,11 @@ impl Volumes {
                     .strip_prefix("/")
                     .map_err(|_| Error::InvalidSpec("mount target must be absolute".into()))?,
             );
-            if !source.exists() {
+            if !tokio::fs::try_exists(&source).await? {
                 continue;
             }
-            let canonical_root = std::fs::canonicalize(rootfs)?;
-            let canonical_source = std::fs::canonicalize(&source)?;
+            let canonical_root = tokio::fs::canonicalize(rootfs).await?;
+            let canonical_source = tokio::fs::canonicalize(&source).await?;
             if !canonical_source.starts_with(&canonical_root) {
                 return Err(Error::InvalidSpec(format!(
                     "volume population source {} escapes the rootfs",
@@ -61,13 +62,14 @@ impl Volumes {
         let volumes = self.storage.list().await?;
         for volume in &volumes {
             if let VolumeSource::Bind { device, .. } = &volume.source {
-                let canonical = std::fs::canonicalize(device).map_err(|error| {
+                let canonical = tokio::fs::canonicalize(device).await.map_err(|error| {
                     Error::Corrupt(format!(
                         "volume {:?} bind device is unavailable: {error}",
                         volume.name
                     ))
                 })?;
-                if canonical != *device || !canonical.is_dir() {
+                let directory = tokio::fs::metadata(&canonical).await?.is_dir();
+                if canonical != *device || !directory {
                     return Err(Error::Corrupt(format!(
                         "volume {:?} bind device is not a stable directory",
                         volume.name

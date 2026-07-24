@@ -48,7 +48,7 @@ impl Builder {
                         working_directory: Some(directory.into()),
                         ..RuntimeOverrides::default()
                     })?;
-                    std::fs::create_dir_all(root.join(directory.trim_start_matches('/')))?;
+                    tokio::fs::create_dir_all(root.join(directory.trim_start_matches('/'))).await?;
                     let program = shell.first().ok_or_else(|| {
                         hl_images::Error::MalformedOci("RUN shell is empty".into())
                     })?;

@@ -2,8 +2,8 @@ use super::BuildError;
 use futures_util::StreamExt as _;
 use hl_images::build::{Recipe, Step};
 use sha2::{Digest as _, Sha256};
-use std::io::Write;
 use std::path::PathBuf;
+use tokio::io::AsyncWriteExt as _;
 
 #[derive(Debug)]
 pub(super) struct RemoteSources {
@@ -64,8 +64,8 @@ impl RemoteSources {
                     let digest =
                         hl_images::Digest::from(<[u8; 32]>::from(Sha256::digest(url.as_bytes())));
                     let root = directory.path().join(digest.encoded());
-                    std::fs::create_dir(&root)?;
-                    let mut output = std::fs::File::create(root.join(&name))?;
+                    tokio::fs::create_dir(&root).await?;
+                    let mut output = tokio::fs::File::create(root.join(&name)).await?;
                     let mut digest = Sha256::new();
                     let mut size = 0_u64;
                     let mut stream = response.bytes_stream();
@@ -78,7 +78,7 @@ impl RemoteSources {
                             )));
                         }
                         digest.update(&chunk);
-                        output.write_all(&chunk)?;
+                        output.write_all(&chunk).await?;
                     }
                     let digest: [u8; 32] = digest.finalize().into();
                     if let Some(expected) = checksum

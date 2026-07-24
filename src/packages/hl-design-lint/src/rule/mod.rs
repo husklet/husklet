@@ -4,6 +4,7 @@ use crate::{
     Result,
 };
 
+mod async_blocking;
 mod catch_all_module;
 mod deep_control_flow;
 mod dependency_direction;
@@ -20,6 +21,7 @@ mod single_use;
 mod struct_naming;
 mod usage;
 
+pub use async_blocking::AsyncBlocking;
 pub use catch_all_module::CatchAllModule;
 pub use deep_control_flow::DeepControlFlow;
 pub use dependency_direction::DependencyDirection;

@@ -119,7 +119,7 @@ impl Domain {
 
     pub async fn serve(workspace: &WorkspaceConfig) -> io::Result<()> {
         let owner = Self::new(workspace);
-        std::fs::create_dir_all(&owner.directory)?;
+        tokio::fs::create_dir_all(&owner.directory).await?;
         let _lease = Lease::acquire(owner.directory.join("domain.lock"))?;
         let (containers, platform) = Runtime::open(workspace).await?;
         Runtime::remove_legacy_terminals(&containers).await?;
