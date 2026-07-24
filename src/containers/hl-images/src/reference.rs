@@ -30,7 +30,7 @@ impl Reference {
     pub fn digest(&self) -> Option<&Digest> {
         self.digest.as_ref()
     }
-    pub fn manifest_reference(&self) -> &str {
+    pub fn manifest_selector(&self) -> &str {
         self.digest
             .as_ref()
             .map_or_else(|| self.tag.as_deref().unwrap_or("latest"), Digest::as_str)

@@ -10,6 +10,7 @@ mod empty_directory;
 mod environment_access;
 mod file_length;
 mod free_function;
+mod receiver_repetition;
 mod single_use;
 mod struct_naming;
 mod usage;
@@ -20,6 +21,7 @@ pub use empty_directory::EmptyDirectory;
 pub use environment_access::EnvironmentAccess;
 pub use file_length::FileLength;
 pub use free_function::FreeFunction;
+pub use receiver_repetition::ReceiverRepetition;
 pub use single_use::SingleUse;
 pub use struct_naming::StructNaming;
 

@@ -18,7 +18,7 @@ fn references_are_normalized_and_validated() {
         .parse()
         .unwrap();
     assert_eq!(pinned.tag(), None);
-    assert_eq!(pinned.manifest_reference(), format!("sha256:{digest}"));
+    assert_eq!(pinned.manifest_selector(), format!("sha256:{digest}"));
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn digest_pinned_reference_parses_repository_and_digest() {
     let reference: Reference = format!("alpine@sha256:{digest}").parse().unwrap();
     assert_eq!(reference.repository(), "library/alpine");
     assert_eq!(reference.tag(), None);
-    assert_eq!(reference.manifest_reference(), format!("sha256:{digest}"));
+    assert_eq!(reference.manifest_selector(), format!("sha256:{digest}"));
 }
 
 #[test]
@@ -95,14 +95,14 @@ fn digest_pinned_reference_with_registry_and_tag() {
     assert_eq!(reference.registry(), "ghcr.io");
     assert_eq!(reference.repository(), "o/a");
     assert_eq!(reference.tag(), Some("v2"));
-    assert_eq!(reference.manifest_reference(), format!("sha256:{digest}"));
+    assert_eq!(reference.manifest_selector(), format!("sha256:{digest}"));
 }
 
 #[test]
 fn plain_reference_has_no_digest_and_uses_tag() {
     let reference: Reference = "alpine:3.19".parse().unwrap();
     assert!(reference.digest().is_none());
-    assert_eq!(reference.manifest_reference(), "3.19");
+    assert_eq!(reference.manifest_selector(), "3.19");
 }
 
 #[test]

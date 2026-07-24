@@ -144,7 +144,7 @@ impl<R: Read> Layer<R> {
             let _parents = physical_path.prepare(&root)?;
             let kind = entry.header().entry_type();
             let ownership = Ownership::from_header(entry.header(), &path)?;
-            if path.is_device_path()
+            if path.is_device()
                 && matches!(
                     kind,
                     tar::EntryType::Char | tar::EntryType::Block | tar::EntryType::Fifo

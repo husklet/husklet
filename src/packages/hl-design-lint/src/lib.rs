@@ -15,7 +15,7 @@ pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summa
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
     DeepControlFlow, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FreeFunction,
-    Registry, Rule, SingleUse, StructNaming,
+    ReceiverRepetition, Registry, Rule, SingleUse, StructNaming,
 };
 pub use source::{Source, Workspace};
 
@@ -38,6 +38,7 @@ impl Linter {
                 .register(rule::DuplicateEntity)
                 .register(rule::EnvironmentAccess)
                 .register(rule::StructNaming)
+                .register(rule::ReceiverRepetition)
                 .register(rule::SingleUse)
                 .register(rule::DeepControlFlow)
                 .register(rule::FileLength)
@@ -146,7 +147,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 8);
+        assert_eq!(summaries.len(), 9);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "deep-control-flow");
@@ -180,7 +181,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 8);
+        assert_eq!(summaries.len(), 9);
         assert!(reporter
             .0
             .iter()
@@ -406,6 +407,68 @@ impl Workspaces {
         assert!(!values.iter().any(|finding| finding.subject == "Updated"));
         assert!(!values.iter().any(|finding| finding.subject == "remove"));
         assert!(!values.iter().any(|finding| finding.subject == "from_items"));
+    }
+
+    #[test]
+    fn receiver_repetition_handles_traits_acronyms_versions_and_exclusions() {
+        let values = findings(
+            r#"
+struct Directory;
+impl Directory {
+    fn create_directory(&self) {}
+    fn directory_remove(&self) {}
+    fn create_file(&self) {}
+    fn from_directory(_: Directory) -> Self { Self }
+    fn into_directory(self) -> Directory { self }
+    fn try_into_directory(self) -> Result<Directory, ()> { Ok(self) }
+    fn try_again_directory(&self) {}
+}
+
+struct HTTPServerV2;
+impl HTTPServerV2 {
+    fn restart_http_server_v2(&self) {}
+    fn restart_http_server(&self) {}
+}
+
+struct Id;
+impl Id {
+    fn parse_id(&self) {}
+}
+
+trait Workspace {
+    fn remove_workspace(&self);
+    fn workspace_settings(&self);
+}
+
+trait Foreign {
+    fn remove_directory(&self);
+}
+impl Foreign for Directory {
+    fn remove_directory(&self) {}
+}
+"#,
+            "receiver-name-repetition",
+        );
+        let subjects = values
+            .iter()
+            .map(|finding| finding.subject.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            subjects,
+            [
+                "Directory::create_directory",
+                "Directory::directory_remove",
+                "Directory::try_again_directory",
+                "HTTPServerV2::restart_http_server_v2",
+                "Workspace::remove_workspace",
+                "Workspace::workspace_settings",
+            ]
+        );
+        assert!(values.iter().all(|finding| finding.review.is_some()));
+        assert_eq!(
+            values[3].review.as_ref().unwrap().metadata[1].1,
+            "http, server, v, 2"
+        );
     }
 
     #[test]

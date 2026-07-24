@@ -75,7 +75,7 @@ impl Path {
     }
 
     #[must_use]
-    pub fn is_device_path(&self) -> bool {
+    pub fn is_device(&self) -> bool {
         self.0
             .components()
             .next()
