@@ -15,6 +15,9 @@ mod broad_trait;
 #[cfg(test)]
 mod broad_trait_tests;
 mod catch_all_module;
+mod ceremonial_structure;
+#[cfg(test)]
+mod ceremonial_structure_tests;
 mod deep_control_flow;
 mod dependency_direction;
 mod duplicate_entity;
@@ -42,6 +45,7 @@ pub use async_blocking::AsyncBlocking;
 pub use boolean_state::BooleanState;
 pub use broad_trait::BroadTrait;
 pub use catch_all_module::CatchAllModule;
+pub use ceremonial_structure::CeremonialStructure;
 pub use deep_control_flow::DeepControlFlow;
 pub use dependency_direction::DependencyDirection;
 pub use duplicate_entity::DuplicateEntity;
