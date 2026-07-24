@@ -1418,6 +1418,7 @@ dependencies = [
  "proc-macro2",
  "syn",
  "thiserror 2.0.18",
+ "toml",
  "wordnet-lemmatizer",
 ]
 

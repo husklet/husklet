@@ -6,6 +6,7 @@ use crate::{
 
 mod catch_all_module;
 mod deep_control_flow;
+mod dependency_direction;
 mod duplicate_entity;
 mod empty_directory;
 mod environment_access;
@@ -18,6 +19,7 @@ mod usage;
 
 pub use catch_all_module::CatchAllModule;
 pub use deep_control_flow::DeepControlFlow;
+pub use dependency_direction::DependencyDirection;
 pub use duplicate_entity::DuplicateEntity;
 pub use empty_directory::EmptyDirectory;
 pub use environment_access::EnvironmentAccess;

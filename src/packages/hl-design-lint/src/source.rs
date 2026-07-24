@@ -66,14 +66,16 @@ impl Source {
 pub struct Workspace {
     sources: Vec<Source>,
     empty_directories: Vec<PathBuf>,
+    paths: Vec<PathBuf>,
 }
 
 impl Workspace {
     /// Discovers, reads, and parses Rust sources once.
     pub fn load(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self> {
+        let paths = paths.into_iter().collect::<Vec<_>>();
         let mut files = Vec::new();
         let mut empty_directories = Vec::new();
-        for path in paths {
+        for path in &paths {
             rust_files(&path, &mut files).map_err(|error| LintError::io("walk", &path, error))?;
             empty_dirs(&path, &mut empty_directories)
                 .map_err(|error| LintError::io("walk", &path, error))?;
@@ -88,6 +90,7 @@ impl Workspace {
                 .map(Source::load)
                 .collect::<std::result::Result<_, _>>()?,
             empty_directories,
+            paths,
         })
     }
 
@@ -104,6 +107,11 @@ impl Workspace {
     /// Returns repository-owned directories with no substantive entries.
     pub fn empty_directories(&self) -> &[PathBuf] {
         &self.empty_directories
+    }
+
+    /// Returns the roots explicitly requested by the lint invocation.
+    pub fn paths(&self) -> &[PathBuf] {
+        &self.paths
     }
 }
 
