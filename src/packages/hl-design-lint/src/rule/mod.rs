@@ -5,6 +5,9 @@ use crate::{
 };
 
 mod async_blocking;
+mod boolean_state;
+#[cfg(test)]
+mod boolean_state_tests;
 mod catch_all_module;
 mod deep_control_flow;
 mod dependency_direction;
@@ -22,6 +25,7 @@ mod struct_naming;
 mod usage;
 
 pub use async_blocking::AsyncBlocking;
+pub use boolean_state::BooleanState;
 pub use catch_all_module::CatchAllModule;
 pub use deep_control_flow::DeepControlFlow;
 pub use dependency_direction::DependencyDirection;

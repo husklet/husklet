@@ -14,9 +14,10 @@ pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
-    AsyncBlocking, CatchAllModule, DeepControlFlow, DependencyDirection, DuplicateEntity,
-    EmptyDirectory, EnvironmentAccess, FileLength, FreeFunction, GuiToolkitLeakage, IgnoredResult,
-    PlatformCommand, ReceiverRepetition, Registry, Rule, SingleUse, StructNaming,
+    AsyncBlocking, BooleanState, CatchAllModule, DeepControlFlow, DependencyDirection,
+    DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FreeFunction,
+    GuiToolkitLeakage, IgnoredResult, PlatformCommand, ReceiverRepetition, Registry, Rule,
+    SingleUse, StructNaming,
 };
 pub use source::{Source, Workspace};
 
@@ -38,6 +39,7 @@ impl Linter {
                 .register(rule::DependencyDirection)
                 .register(rule::FreeFunction)
                 .register(rule::DuplicateEntity)
+                .register(rule::BooleanState)
                 .register(rule::EnvironmentAccess)
                 .register(rule::PlatformCommand)
                 .register(rule::IgnoredResult)
@@ -154,7 +156,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 15);
+        assert_eq!(summaries.len(), 16);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "deep-control-flow");
@@ -188,7 +190,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 15);
+        assert_eq!(summaries.len(), 16);
         assert!(reporter
             .0
             .iter()
