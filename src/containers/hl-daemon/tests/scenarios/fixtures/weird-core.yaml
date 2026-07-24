@@ -646,9 +646,6 @@ cases:
 - id: weird/userfaultfd
   image: gcc:latest
   class: long
-  xfail:
-  - arm64
-  - amd64
   run:
     shell: |-
       cat > /m.c <<'CEOF'
@@ -668,6 +665,7 @@ cases:
       CEOF
       cc /m.c -O2 -o /m && /m
   expect:
+    exit: 1
     stdout_contains:
     - 'userfaultfd: Operation not permitted'
 - id: weird/v8-bigint
