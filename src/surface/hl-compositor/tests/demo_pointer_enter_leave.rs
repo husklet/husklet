@@ -9,8 +9,8 @@
 //! right surface, and that the client's REACTION to the leave (clearing the cursor marker) actually
 //! re-composites.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

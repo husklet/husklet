@@ -5,8 +5,8 @@
 //! bind time. A 2-texel 1D texture gets two distinct colors; sampling `u = 0.25` lands on texel 0 and
 //! `u = 0.75` on texel 1 (NEAREST), so each readback must equal that texel's exact color.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,

@@ -1,6 +1,6 @@
 //! DEMO (batch-3) — `many_surface_zorder` (K=6 stacked subsurfaces composite in EXACT paint order).
 //!
-//! A toplevel with SIX overlapping desynchronized `wl_subsurface`s, all covering one common region, each
+//! A toplevel with SIX overlapping desynchronized `wl_subsurface`s, all covering one client_harness region, each
 //! a distinct color. The headless presenter captures LAYERS (not a blended framebuffer), so the z-order
 //! evidence is the PRESENT ORDER within a single compose cycle: `compose_frame` emits the tree bottom →
 //! top, so the six layers present with SIX CONTIGUOUS serials in stacking order — exactly the order a
@@ -9,13 +9,13 @@
 //!   * default stacking (creation order) composites the six as `[0,1,2,3,4,5]` bottom → top — the six
 //!     subsurface present-serials are contiguous and ascending in that order;
 //!   * after `sub0.place_above(sub5)` the order becomes `[1,2,3,4,5,0]` (surface 0 raised to the top);
-//!   * at every point in the common-overlap region the reconstructed composite equals the TOPMOST
+//!   * at every point in the client_harness-overlap region the reconstructed composite equals the TOPMOST
 //!     surface's color — before the reorder that is surface 5, after it is surface 0.
 //!
 //! A composited PNG is written for each stacking so the overlap visibly flips color.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -41,7 +41,7 @@ const TL: [u8; 4] = [0x30, 0x30, 0x38, 0xFF]; // dark slate
 
 const SUB_W: i32 = 60;
 const SUB_H: i32 = 45;
-// Cascaded positions; all six overlap the common region x[60,90) y[50,70).
+// Cascaded positions; all six overlap the client_harness region x[60,90) y[50,70).
 fn sub_pos(i: usize) -> (i32, i32) {
     (30 + i as i32 * 6, 25 + i as i32 * 5)
 }
@@ -53,7 +53,7 @@ const COLORS: [[u8; 4]; K] = [
     [0xE0, 0x20, 0xE0, 0xFF], // 4 magenta
     [0x20, 0xE0, 0xE0, 0xFF], // 5 cyan
 ];
-// Points inside the common overlap of all six subsurfaces (toplevel space).
+// Points inside the client_harness overlap of all six subsurfaces (toplevel space).
 const OVERLAP_POINTS: [(i32, i32); 3] = [(75, 60), (65, 55), (85, 68)];
 
 /// A capture is subsurface `i` iff it has the subsurface geometry and its solid color.

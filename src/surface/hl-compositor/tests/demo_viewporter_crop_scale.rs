@@ -10,8 +10,8 @@
 //! corners (red / green / blue / yellow), a white center, the interior background gray, and NO trace of
 //! the out-of-crop magenta. A PNG of the presented (cropped+scaled) frame is written for confirmation.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

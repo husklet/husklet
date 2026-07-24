@@ -13,8 +13,8 @@
 //! End to end this proves events drive rendering FLUENTLY from outside: injected order is preserved on the
 //! wire, and the render they trigger lands in the immediately following frame.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

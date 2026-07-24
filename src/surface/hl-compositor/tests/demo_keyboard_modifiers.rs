@@ -11,8 +11,8 @@
 //! This proves the compositor's xkb modifier state tracking is delivered faithfully — a toolkit reading
 //! Shift/Ctrl chords (select-text, Ctrl+C) sees the right state, not a stuck or dropped modifier.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

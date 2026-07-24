@@ -15,8 +15,8 @@
 //! This proves ext-session-lock is honoured end to end: real lock/unlock state, the lock surface presents,
 //! and protected content is genuinely withheld while locked.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

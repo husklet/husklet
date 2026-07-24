@@ -12,8 +12,8 @@
 //! Smithay ships no handler for this staging protocol; it is hand-dispatched in the adapter. This proves
 //! that hand-wired path genuinely reads the committed hint each commit, not merely that the global binds.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

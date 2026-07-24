@@ -20,8 +20,8 @@
 //! the compositor + a neighbor, which is exactly what a real compositor must guarantee (one client's
 //! protocol violation cannot take down the others).
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

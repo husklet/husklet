@@ -4,6 +4,7 @@ use crate::{
     Result,
 };
 
+mod catch_all_module;
 mod deep_control_flow;
 mod duplicate_entity;
 mod empty_directory;
@@ -15,6 +16,7 @@ mod single_use;
 mod struct_naming;
 mod usage;
 
+pub use catch_all_module::CatchAllModule;
 pub use deep_control_flow::DeepControlFlow;
 pub use duplicate_entity::DuplicateEntity;
 pub use empty_directory::EmptyDirectory;

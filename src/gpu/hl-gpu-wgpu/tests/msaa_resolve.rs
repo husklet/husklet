@@ -25,9 +25,9 @@
 //!
 //! If NO adapter is reachable (no lavapipe/Vulkan ICD) the test skips, mirroring the rest of the suite.
 
-mod common;
+mod gpu_harness;
 
-use common::{new_session, write_png, OUT_DIR};
+use gpu_harness::{new_session, write_png, OUT_DIR};
 
 use hl_gpu::protocol::model::command::etag;
 use hl_gpu::protocol::model::descriptor::{

@@ -6,8 +6,8 @@
 //! the boilerplate every demo repeats: standing up the compositor on a private socket, building
 //! `wl_shm` buffers with drawn content, sampling captured pixels, and writing human-viewable PNGs.
 //!
-//! Not a test binary itself — it lives under `tests/common/` so cargo treats it as a shared module a
-//! `demo_*.rs` file pulls in with `mod common;`.
+//! Not a test binary itself — it lives under `tests/client_harness/` so cargo treats it as a shared module a
+//! `demo_*.rs` file pulls in with `mod client_harness;`.
 
 #![allow(dead_code)]
 

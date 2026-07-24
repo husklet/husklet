@@ -186,9 +186,9 @@ fn whole(binding: u32, id: u32, size: u64) -> BindEntry {
 mod atomic;
 #[path = "compute_conformance/dependency.rs"]
 mod dependency;
-#[path = "compute_conformance/shared.rs"]
-mod shared;
 #[path = "compute_conformance/storage.rs"]
 mod storage;
 #[path = "compute_conformance/workgroup.rs"]
 mod workgroup;
+#[path = "compute_conformance/workgroup_memory.rs"]
+mod workgroup_memory;

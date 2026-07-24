@@ -21,8 +21,8 @@
 //! commits, not a fixed 16.6 ms cadence. The DETERMINISTIC, drift-free quantities are therefore (a) the
 //! constant refresh the adapter reports and (b) the +1-per-frame sequence — both asserted exactly here.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

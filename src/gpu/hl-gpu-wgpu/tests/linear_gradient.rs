@@ -16,8 +16,8 @@
 //! ULP away from the real `f`) and the unorm store rounds to nearest; ±2 bounds those two effects and
 //! nothing larger — the gradient is otherwise an exact integer ramp. Skips if no adapter is reachable.
 
-mod common;
-use common::{glsl, le_f32, new_session, px, write_png};
+mod gpu_harness;
+use gpu_harness::{glsl, le_f32, new_session, px, write_png};
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,
@@ -28,7 +28,7 @@ use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{Cmd, CommandBuffer, Enc, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
-use common::{color_target, tex2d};
+use gpu_harness::{color_target, tex2d};
 
 const W: u32 = 64;
 const H: u32 = 8;

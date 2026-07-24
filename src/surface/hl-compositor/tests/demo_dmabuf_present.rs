@@ -21,8 +21,8 @@
 //! tiled/GPU-modifier buffer (which a no-GPU backend cannot detile) is rejected at import and falls back
 //! to `wl_shm`; that rejection path is out of scope for this positive demo.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::io::Write as _;
 use std::os::fd::AsFd;

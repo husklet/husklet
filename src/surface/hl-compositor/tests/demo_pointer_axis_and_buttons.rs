@@ -14,8 +14,8 @@
 //! Proves the compositor's scroll value/sign and event framing are faithful — a toolkit's smooth-scroll
 //! and chord handling see coherent, correctly-grouped events.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

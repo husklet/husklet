@@ -12,8 +12,8 @@
 //! Proves focus changes propagate to the right client AND drive a real re-render — the visible "active
 //! window" affordance every desktop shows, closed on composited pixels, not just the focus event log.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

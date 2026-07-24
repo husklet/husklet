@@ -23,7 +23,7 @@
 //! ColorDodge, HSL Hue/Saturation/Color/Luminosity, …) have NO representation in the protocol at all — they
 //! cannot even be requested — so they are an honest protocol-level gap, not a wrong pixel.
 
-mod common;
+mod gpu_harness;
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BlendState, BufferDesc, ColorAttachment,
@@ -36,7 +36,7 @@ use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{Cmd, CommandBuffer, Enc, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
-use common::{glsl, new_session};
+use gpu_harness::{glsl, new_session};
 
 const W: u32 = 4;
 const H: u32 = 4;

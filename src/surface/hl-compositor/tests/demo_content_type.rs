@@ -10,8 +10,8 @@
 //! Proves the adapter's newly-wired content-type global genuinely reads the committed per-surface hint each
 //! commit (and tracks changes), not merely that the global binds.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

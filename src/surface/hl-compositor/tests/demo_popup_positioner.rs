@@ -6,8 +6,8 @@
 //! positioner-resolved rectangle (not merely "a popup exists"), in its own color, and that the composite
 //! order is toplevel -> popup -> submenu. A viewable composited PNG is written for human confirmation.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

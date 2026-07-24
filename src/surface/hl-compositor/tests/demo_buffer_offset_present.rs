@@ -19,8 +19,8 @@
 //!     age to report. This is a documented skip, asserted only insofar as no such global appears and the
 //!     present path is unaffected by the offset request.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

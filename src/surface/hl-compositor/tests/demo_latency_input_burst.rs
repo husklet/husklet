@@ -13,8 +13,8 @@
 //! This is the "rapid input does not queue up" proof: a flood of events is drained promptly and the
 //! resulting frame is not stuck behind them.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

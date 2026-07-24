@@ -9,8 +9,8 @@
 //! scissor, its BOTTOM edge (y=20) comes from the viewport — so the exact rectangle can only be produced
 //! when BOTH are honored. Every covered pixel must be FILL, every other pixel CLEAR.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{ColorAttachment, RenderPipelineDesc, ShaderRef};
 use hl_gpu::protocol::model::enums::{texture_usage, LoadOp, Topology};

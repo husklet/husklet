@@ -8,8 +8,8 @@
 //! THIRD buffer with identical pixels and NO damage and asserts the re-presented frame is byte-identical
 //! to the second — a zero-damage re-present neither corrupts nor drops content.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

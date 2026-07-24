@@ -8,8 +8,8 @@
 //! the adapter's newly-wired single-pixel global genuinely turns the color into presented pixels, not just
 //! that the global binds.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{

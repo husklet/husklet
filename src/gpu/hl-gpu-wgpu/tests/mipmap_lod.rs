@@ -11,8 +11,8 @@
 //! Materializing multiple mips + uploading to a non-base mip required backend changes (see `texture.rs`
 //! `make_texture`/`write_region` and `submit.rs`'s `CopyBufferToTexture` mip handling).
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,

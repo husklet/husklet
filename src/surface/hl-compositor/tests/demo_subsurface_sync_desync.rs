@@ -14,8 +14,8 @@
 //! present each buffer lands in. A composited PNG is written for the sync-visible and desync-visible
 //! states so a human can confirm the child pixels are really there.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

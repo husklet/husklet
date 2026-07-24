@@ -14,8 +14,8 @@
 //! three (it rejects a non-zero mip copy, and never culls or masks — see `hl-gpu/src/cpu`), exactly like
 //! the MSAA analytic tests. If no wgpu adapter is reachable the tests skip, like the rest of the suite.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BufferDesc, ColorAttachment, ColorTargetState, RenderPipelineDesc, ShaderRef,

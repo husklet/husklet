@@ -11,8 +11,8 @@
 //!
 //! Drives a real in-process wayland-client. A PNG of the presented buffer is written for confirmation.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

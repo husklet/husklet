@@ -8,8 +8,8 @@
 //! Both cases below drive a FULLSCREEN triangle (covers all of NDC), so the viewport rectangle is filled
 //! EXACTLY — which is what lets us read the effective viewport straight off the pixels.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{ColorAttachment, RenderPipelineDesc, ShaderRef};
 use hl_gpu::protocol::model::enums::{texture_usage, LoadOp, Topology};

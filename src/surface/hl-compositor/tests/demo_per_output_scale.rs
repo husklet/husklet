@@ -14,8 +14,8 @@
 //! re-emits the surface's preferred fractional scale from its new output. No PNG: the evidence is the exact
 //! `preferred_scale` wire values.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

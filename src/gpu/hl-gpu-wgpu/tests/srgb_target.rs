@@ -21,8 +21,8 @@
 //! Both readbacks are RAW stored bytes (`copy_texture_to_buffer` copies the encoded texels verbatim — it
 //! does NOT decode), so the asserted byte IS the on-device stored value.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, ColorTargetState,

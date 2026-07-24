@@ -17,8 +17,8 @@
 //! No PNG: this asserts advertised OUTPUT geometry across two monitors, not composited pixels, so its
 //! evidence is the exact wire values a client receives for each.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

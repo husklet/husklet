@@ -15,8 +15,8 @@
 //! test-chosen on-screen slot — the neutral scene roots every toplevel at (0,0), so global placement is
 //! the viewer's, asserted per-surface by color).
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

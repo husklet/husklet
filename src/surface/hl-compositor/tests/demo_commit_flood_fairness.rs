@@ -10,8 +10,8 @@
 //! This exercises the adapter's per-root pacing: throttling/coalescing is tracked per window root, so one
 //! surface spamming commits must not monopolize the present path and block another surface's frames.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

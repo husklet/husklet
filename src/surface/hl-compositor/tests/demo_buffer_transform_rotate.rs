@@ -13,8 +13,8 @@
 //!   bottom-right. A rotation moves each marker to a predictable surface corner (see the per-transform
 //!   expectations below), which we assert pixel-exact and confirm from the written PNG.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use hl_compositor::adapter::smithay::CapturedFrame;
 

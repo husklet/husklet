@@ -15,8 +15,8 @@
 //! This proves the adapter's `InputCommand::Touch*` seam delivers genuine multi-touch over the wire with
 //! per-point ids, exact placement, and correct frame grouping.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

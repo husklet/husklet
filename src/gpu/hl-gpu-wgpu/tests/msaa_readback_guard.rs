@@ -11,9 +11,9 @@
 //!
 //! Skips cleanly if no adapter (lavapipe/Vulkan ICD) is reachable, mirroring the rest of the suite.
 
-mod common;
+mod gpu_harness;
 
-use common::new_session;
+use gpu_harness::new_session;
 
 use hl_gpu::protocol::model::descriptor::TextureDesc;
 use hl_gpu::protocol::model::enums::{texture_usage, TextureDim, TextureFormat};

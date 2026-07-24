@@ -5,7 +5,7 @@
 //! combination (1- and 3-component 8-/16-bit, f16×1/×3) is asserted to return a clean typed error rather
 //! than being silently widened.
 //!
-//! (Byte-level data transport for the common formats is already pinned by `executor_coverage.rs`
+//! (Byte-level data transport for the gpu_harness formats is already pinned by `executor_coverage.rs`
 //! `vertex_buffer_two_attributes_float_and_unorm8` + `instanced_*`; this file completes the MAP coverage.)
 //! Skips with no adapter.
 

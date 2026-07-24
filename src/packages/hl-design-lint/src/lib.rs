@@ -14,8 +14,8 @@ pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
-    DeepControlFlow, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FreeFunction,
-    ReceiverRepetition, Registry, Rule, SingleUse, StructNaming,
+    CatchAllModule, DeepControlFlow, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
+    FileLength, FreeFunction, ReceiverRepetition, Registry, Rule, SingleUse, StructNaming,
 };
 pub use source::{Source, Workspace};
 
@@ -42,6 +42,7 @@ impl Linter {
                 .register(rule::SingleUse)
                 .register(rule::DeepControlFlow)
                 .register(rule::FileLength)
+                .register(rule::CatchAllModule)
                 .register(rule::EmptyDirectory),
         )
     }
@@ -147,7 +148,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 9);
+        assert_eq!(summaries.len(), 10);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "deep-control-flow");
@@ -181,7 +182,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 9);
+        assert_eq!(summaries.len(), 10);
         assert!(reporter
             .0
             .iter()
@@ -469,6 +470,96 @@ impl Foreign for Directory {
             values[3].review.as_ref().unwrap().metadata[1].1,
             "http, server, v, 2"
         );
+    }
+
+    #[test]
+    fn catch_all_module_rule_checks_rust_module_identity_only() {
+        let values = findings(
+            r#"
+mod util {}
+mod r#common {}
+mod utility {}
+fn helper() {}
+struct SharedState;
+use external_crate::core;
+const PROSE: &str = "mod misc {}";
+"#,
+            "catch-all-module-name",
+        );
+        assert_eq!(
+            values
+                .iter()
+                .map(|finding| finding.subject.as_str())
+                .collect::<Vec<_>>(),
+            ["util", "common"]
+        );
+        assert!(values.iter().all(Finding::is_violation));
+        assert!(values.iter().all(|finding| {
+            finding.review.as_ref().is_some_and(|review| {
+                review.metadata.iter().any(|(key, value)| {
+                    key == "declaration" && value == "inline module declaration"
+                })
+            })
+        }));
+    }
+
+    #[test]
+    fn catch_all_module_rule_maps_files_directories_and_external_modules() {
+        let root = temporary("catch-all-files");
+        fs::create_dir_all(root.join("src/common")).unwrap();
+        fs::create_dir_all(root.join("src/fixture")).unwrap();
+        fs::write(root.join("src/lib.rs"), "mod common;\nmod helper;\n").unwrap();
+        fs::write(root.join("src/common/mod.rs"), "pub struct Fixture;\n").unwrap();
+        fs::write(root.join("src/helper.rs"), "pub struct Value;\n").unwrap();
+        fs::write(
+            root.join("src/path_root.rs"),
+            "#[path = \"fixture/shared.rs\"] mod shared;\n",
+        )
+        .unwrap();
+        fs::write(root.join("src/fixture/shared.rs"), "pub struct Input;\n").unwrap();
+
+        let workspace = Workspace::load([root.join("src")]).unwrap();
+        let values = CatchAllModule.check(&workspace).unwrap();
+        assert_eq!(values.len(), 3);
+        assert_eq!(
+            values
+                .iter()
+                .map(|finding| finding.subject.as_str())
+                .collect::<Vec<_>>(),
+            ["common", "shared", "helper"]
+        );
+        assert!(values.iter().all(|finding| finding.location.line == 1));
+        assert!(values.iter().all(|finding| {
+            finding
+                .review
+                .as_ref()
+                .unwrap()
+                .metadata
+                .iter()
+                .any(|(key, value)| key == "scope" && value == "production")
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn catch_all_module_rule_does_not_exempt_test_support() {
+        let root = temporary("catch-all-tests");
+        let tests = root.join("tests");
+        fs::create_dir_all(tests.join("common")).unwrap();
+        fs::write(tests.join("common/mod.rs"), "pub struct Harness;\n").unwrap();
+        fs::write(tests.join("workflow.rs"), "mod common;\n").unwrap();
+
+        let workspace = Workspace::load([tests]).unwrap();
+        let values = CatchAllModule.check(&workspace).unwrap();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].subject, "common");
+        assert!(values[0]
+            .review
+            .as_ref()
+            .unwrap()
+            .metadata
+            .contains(&("scope".to_owned(), "test".to_owned())));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

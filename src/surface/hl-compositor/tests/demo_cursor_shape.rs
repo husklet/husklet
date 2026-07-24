@@ -9,8 +9,8 @@
 //! CSS name `pointer` — proving the adapter's newly-wired cursor-shape global genuinely applies the named
 //! cursor, not merely that the global binds. It also proves a STALE serial is rejected (no shape recorded).
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

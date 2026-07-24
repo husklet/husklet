@@ -12,8 +12,8 @@
 //!
 //! Cube layer order is the WebGPU/Vulkan face order: +X, -X, +Y, -Y, +Z, -Z (layers 0..6).
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,

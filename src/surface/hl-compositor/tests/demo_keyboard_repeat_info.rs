@@ -7,8 +7,8 @@
 //! client receives EXACTLY `repeat_info(rate=25, delay=200)`, plus the `keymap` handshake (an xkb_v1
 //! keymap fd) every keyboard needs. This locks the auto-repeat contract real toolkits depend on.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{

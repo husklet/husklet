@@ -18,8 +18,8 @@
 //! damage-clipped upload), so the per-pixel evidence is the buffer content while the coalesced/clamped
 //! damage evidence is the single present + the reported bounding-box origin.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

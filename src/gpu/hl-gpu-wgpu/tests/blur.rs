@@ -20,8 +20,8 @@
 //! TOLERANCE ±2 per channel: bounds the intermediate + final unorm rounding and f32 summation-order ULPs;
 //! the box means avoid `.5` ties so nothing larger can occur. Skips if no adapter is reachable.
 
-mod common;
-use common::{glsl, le_f32, new_session, px, write_png};
+mod gpu_harness;
+use gpu_harness::{glsl, le_f32, new_session, px, write_png};
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,
@@ -34,7 +34,7 @@ use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{Cmd, CommandBuffer, Enc, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
-use common::color_target;
+use gpu_harness::color_target;
 
 const W: u32 = 16;
 const H: u32 = 16;

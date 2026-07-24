@@ -11,8 +11,8 @@
 //!     show the marker at each drag position in order (monotonic present serials) — the drag is delivered
 //!     completely and in sequence, none dropped or reordered.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

@@ -17,8 +17,8 @@
 //! row (buffer is only 40 tall) and yields a flat YELLOW image — no blue. The blue/yellow split is proof
 //! the rotation happened before the crop. A PNG of the presented frame is written for confirmation.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

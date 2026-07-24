@@ -19,8 +19,8 @@
 //!   * a commit "hello" replaces the preedit → committed text == "hello";
 //!   * a delete_surrounding(2,0) then commit "p!" → committed text == "help!".
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

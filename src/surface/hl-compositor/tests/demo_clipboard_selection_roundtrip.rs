@@ -11,8 +11,8 @@
 //! is out of scope understates the adapter: Smithay forwards the client-source fd natively; this proves
 //! it works through the hl adapter's focus-follows-selection wiring.)
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::io::{Read, Write};
 use std::os::fd::AsFd;

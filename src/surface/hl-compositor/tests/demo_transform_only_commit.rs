@@ -12,8 +12,8 @@
 //! the SAME buffer rotated 90° (now 40×80, corners moved exactly as the rotation dictates). A PNG of each
 //! phase is written. Without the self-dirty fix, phase (2) never re-presents and the wait times out.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use hl_compositor::adapter::smithay::CapturedFrame;
 

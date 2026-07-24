@@ -16,8 +16,8 @@
 //! Proves the adapter's newly-wired presentation-time global delivers real present-timing feedback — what a
 //! media player / compositor-throttled client uses to schedule the next frame.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

@@ -13,8 +13,8 @@
 //! Proves the compositor's wheel framing is complete: a toolkit that page-scrolls on discrete notches
 //! (not accumulated smooth deltas) sees a coherent, correctly-signed, single-frame wheel event.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

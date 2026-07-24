@@ -14,8 +14,8 @@
 //! This proves the tablet adapter delivers genuine stylus input with per-axis fidelity, not just a bound
 //! global.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

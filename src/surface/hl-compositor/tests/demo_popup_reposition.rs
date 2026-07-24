@@ -11,8 +11,8 @@
 //!
 //! Covers the reposition request AND its `repositioned` reply, closed on composited pixels.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

@@ -11,8 +11,8 @@
 //! Materializing a `D3` texture + uploading every slice required backend changes (see `texture.rs`
 //! `make_texture`/`write_region` and `submit.rs`'s `CopyBufferToTexture` volume handling).
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,

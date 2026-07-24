@@ -21,8 +21,8 @@
 //!
 //! Before this was wired the headless adapter never produced DnD enter/motion/drop — nothing to assert.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::io::Read;
 use std::io::Write;

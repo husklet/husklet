@@ -21,8 +21,8 @@
 //!
 //! Skips cleanly if no adapter (lavapipe/Vulkan ICD) is reachable, like the rest of the suite.
 
-mod common;
-use common::{glsl, new_session, write_png};
+mod gpu_harness;
+use gpu_harness::{glsl, new_session, write_png};
 
 use hl_gpu::protocol::model::descriptor::{
     ColorAttachment, ColorTargetState, Extent3d, Origin3d, RenderPipelineDesc, ShaderRef,

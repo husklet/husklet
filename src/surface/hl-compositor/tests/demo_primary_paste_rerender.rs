@@ -5,8 +5,8 @@
 //! derived deterministically from the pasted payload, and the compositor composites exactly that color.
 //! Proves the primary-selection paste drives a real client re-render, closed on composited pixels.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::io::{Read, Write};
 use std::os::fd::AsFd;

@@ -15,8 +15,8 @@
 //! which resolves the output whose logical rectangle contains the point — genuine position-based routing.
 //! No PNG: the evidence is the exact `wl_output` each enter/leave names.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

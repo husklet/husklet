@@ -9,8 +9,8 @@
 //! The LINEAR midpoint is neither A nor B, so it proves genuine bilinear interpolation (not a nearest tap
 //! that happened to round). All targets are LINEAR `Rgba8Unorm`, so the interpolation is an exact integer.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,

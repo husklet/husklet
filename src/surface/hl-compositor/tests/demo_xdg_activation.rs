@@ -12,8 +12,8 @@
 //! activation by re-targeting focus onto the exact surface the token was redeemed against — a genuine
 //! activation-driven focus change, not merely that the global binds.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

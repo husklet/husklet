@@ -13,8 +13,8 @@
 //! paste over a real fd, with the offered mime and the byte payload round-tripping exactly — and that
 //! PRIMARY focus correctly follows keyboard focus (so A's set + B's read are both honored).
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::io::{Read, Write};
 use std::os::fd::AsFd;

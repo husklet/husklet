@@ -16,8 +16,8 @@
 //! `i32`, so `width*height*4` cannot exceed `i32::MAX`. This demo drives the reachable abuse (the wire
 //! request) and proves the survivor.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

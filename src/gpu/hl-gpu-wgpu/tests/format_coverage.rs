@@ -35,8 +35,8 @@
 //! depths with a `LESS` test prove the NEAREST fragment occludes the farther ones regardless of draw order
 //! (the control re-runs with the test forced `ALWAYS`, where the LAST-drawn — farthest — fragment wins).
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::capability::{COLOR_FORMATS, DEPTH_FORMATS};
 use hl_gpu::protocol::model::descriptor::{

@@ -10,8 +10,8 @@
 //! Before this was wired the headless adapter emitted no `xdg_toplevel.close` at all (there was no host
 //! seam), so a toolkit's programmatic/WM-driven close never fired — nothing to assert. Now it does.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

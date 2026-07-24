@@ -10,8 +10,8 @@
 //! Proves the adapter's newly-wired idle-inhibit global genuinely tracks an inhibitor's whole lifecycle
 //! (create → registered on the exact surface, destroy → unregistered), not merely that the global binds.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

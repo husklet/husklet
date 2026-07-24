@@ -12,8 +12,8 @@
 //! neighbor is up and asserts the neighbor keeps compositing (its surface id was not trampled by the
 //! churn, and the id space did not wedge).
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::Duration;
 

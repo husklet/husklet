@@ -20,8 +20,8 @@
 //! bounds, returning a benign no-content commit rather than reading out of bounds) for any malformed
 //! geometry that a future non-shm buffer path might deliver un-validated.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::io::Write;
 use std::os::fd::AsFd;

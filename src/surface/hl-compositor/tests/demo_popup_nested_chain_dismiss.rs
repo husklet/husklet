@@ -10,8 +10,8 @@
 //!
 //! Extends `demo_popup_dismiss` (single popup) to the nested case real menu systems rely on.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

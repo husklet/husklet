@@ -6,8 +6,8 @@
 //! dismissal AND the re-present that removes the dismissed popup from the screen without the client
 //! having to repaint its toplevel.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

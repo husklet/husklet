@@ -9,8 +9,8 @@
 //! To prove the outputs are DATA (not two baked constants that happen to land right), the two colors arrive
 //! in a single std140 uniform block and the fragment routes `u.a → location 0`, `u.b → location 1`.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,

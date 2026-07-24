@@ -7,8 +7,8 @@
 //! released every frame (the animation self-drove to completion). This proves the compose/pace loop
 //! delivers a fluent animation to a real client end to end.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

@@ -17,8 +17,8 @@
 //! one refresh interval coalesces), but here — one frame in flight at a time — every distinct frame must
 //! still reach the presenter exactly once and in order.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 
@@ -46,7 +46,7 @@ fn frame_color(i: usize) -> [u8; 4] {
 }
 
 /// A tight top-left RGBA canvas filled with a solid color — the exact bytes a captured frame must carry
-/// (the presenter stores deposited pixels as RGBA; `common::solid` produces the BGRA the shm buffer holds).
+/// (the presenter stores deposited pixels as RGBA; `client_harness::solid` produces the BGRA the shm buffer holds).
 fn solid_rgba(rgba: [u8; 4]) -> Vec<u8> {
     let mut px = Vec::with_capacity((W * H * 4) as usize);
     for _ in 0..(W * H) {

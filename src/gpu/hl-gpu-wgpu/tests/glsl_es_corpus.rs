@@ -13,8 +13,8 @@
 //! naga-24 genuinely cannot model with any reasonable textual normalization -- asserted to STILL fail, with
 //! the exact reason logged, so the limit is on the record and never faked into a green).
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -218,7 +218,7 @@ fn approx(a: [u8; 4], b: [u8; 4], tol: i16) -> bool {
     (0..4).all(|k| (a[k] as i16 - b[k] as i16).abs() <= tol)
 }
 
-#[path = "common/glsl_es_corpus_data.rs"]
+#[path = "gpu_harness/glsl_es_corpus_data.rs"]
 mod corpus;
 #[path = "glsl_es_corpus/compile.rs"]
 mod corpus_test;

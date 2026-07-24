@@ -7,8 +7,8 @@
 //! framebuffer rectangle the NDC quad maps to — a backend that mis-set the index element size would fetch
 //! garbage indices and rasterize a wrong/empty shape.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BufferDesc, ColorAttachment, RenderPipelineDesc, ShaderRef, VertexAttr, VertexLayout,

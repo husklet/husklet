@@ -15,8 +15,8 @@
 //! This is the pointer-lock experience FPS games and pointer-lock web content rely on. Proves the adapter's
 //! newly-wired pointer-constraints global both engages the lock and enforces the frozen absolute position.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

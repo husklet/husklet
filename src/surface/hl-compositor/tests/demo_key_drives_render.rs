@@ -13,8 +13,8 @@
 //! Proves a key press/release AND a modifier-state change both drive a real client re-render end to end —
 //! not just an event log, but new pixels on screen.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

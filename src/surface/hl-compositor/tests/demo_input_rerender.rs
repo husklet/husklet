@@ -7,8 +7,8 @@
 //! over the socket -> client receives motion on the wire -> client redraws -> compositor re-composites ->
 //! new pixels captured) proves events drive rendering fluently from OUTSIDE.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

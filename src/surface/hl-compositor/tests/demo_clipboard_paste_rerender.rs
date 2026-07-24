@@ -7,8 +7,8 @@
 //! those bytes → the compositor presents the re-rendered frame. The pasted content visibly drives a real
 //! client re-render, not just a byte comparison.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::io::{Read, Write};
 use std::os::fd::AsFd;

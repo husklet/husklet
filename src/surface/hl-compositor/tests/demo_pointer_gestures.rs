@@ -13,8 +13,8 @@
 //! This proves the gesture adapter delivers genuine multi-finger touchpad gestures with per-field fidelity
 //! (finger count, center delta, absolute scale, rotation), targeted at the pointer-focused surface.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

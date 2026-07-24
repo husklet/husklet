@@ -13,8 +13,8 @@
 //! (a mapped toplevel is on the output; an unmapped one is not). Position-based multi-output routing is a
 //! documented gap (there is one output), so this locks the map/unmap enter/leave transitions exactly.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

@@ -14,8 +14,8 @@
 //! A companion KEY event is injected and asserted delivered, proving the key path drives the same seam.
 //! This is the core "no input-to-present delay" proof.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

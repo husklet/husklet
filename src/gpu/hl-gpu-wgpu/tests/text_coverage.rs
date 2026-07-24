@@ -18,8 +18,8 @@
 //! not a nearest tap. TOLERANCE ±2: hardware bilinear uses finite sub-texel fixed-point weights; ±2 bounds
 //! that plus the unorm store. Skips if no adapter is reachable.
 
-mod common;
-use common::{glsl, le_f32, new_session, tex2d, write_png};
+mod gpu_harness;
+use gpu_harness::{glsl, le_f32, new_session, tex2d, write_png};
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,
@@ -32,7 +32,7 @@ use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{Cmd, CommandBuffer, Enc, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
-use common::color_target;
+use gpu_harness::color_target;
 
 // 2x2 coverage atlas, `COV[col][row]` — four distinct coverage bytes so the bilinear weights are observable.
 const COV: [[u8; 2]; 2] = [

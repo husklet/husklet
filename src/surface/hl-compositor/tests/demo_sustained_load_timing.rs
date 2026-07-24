@@ -16,8 +16,8 @@
 //!     would report several vblanks at a single instant, which no display can produce. This is exactly the
 //!     coalesced-burst case a flood forces, so this demo is the regression guard for that invariant.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};

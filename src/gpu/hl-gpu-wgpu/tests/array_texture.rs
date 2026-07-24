@@ -8,8 +8,8 @@
 //! distinct colors, uploaded as one 4-slice volume via `CopyBufferToTexture` (origin.z = layer). Sampling
 //! layer `k` with NEAREST must return that layer's exact color.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,

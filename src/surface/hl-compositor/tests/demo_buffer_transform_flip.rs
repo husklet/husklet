@@ -14,8 +14,8 @@
 //! YELLOW = buffer bottom-right. The exact per-transform corner mapping is asserted pixel-exact and
 //! confirmed from the written PNG.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use hl_compositor::adapter::smithay::CapturedFrame;
 

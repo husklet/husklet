@@ -11,8 +11,8 @@
 //! of the absolute cursor position. Proves the adapter's newly-wired relative-pointer global delivers the
 //! delta stream faithfully and in order.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

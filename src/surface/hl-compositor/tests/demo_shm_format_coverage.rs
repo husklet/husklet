@@ -18,8 +18,8 @@
 //! Formats NOT supported by the adapter's read path (e.g. 10-bit `xrgb2101010`, packed 16-bit `rgb565`,
 //! or any planar/YUV format) are neither advertised nor decoded and are out of scope for this demo.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use hl_compositor::adapter::smithay::CapturedFrame;
 

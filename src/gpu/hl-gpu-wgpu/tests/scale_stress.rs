@@ -14,8 +14,8 @@
 //! Each test acquires its own executor and SKIPS (returns) if no adapter is reachable, mirroring the rest of
 //! the wgpu suite so a host with no Vulkan ICD still passes.
 
-mod common;
-use common::*;
+mod gpu_harness;
+use gpu_harness::*;
 
 use std::time::Instant;
 

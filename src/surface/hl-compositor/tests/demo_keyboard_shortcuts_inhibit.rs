@@ -8,8 +8,8 @@
 //! handler would consult it). Destroying the inhibitor then clears both — proving the adapter genuinely
 //! tracks the grab lifecycle, not merely that the global binds.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

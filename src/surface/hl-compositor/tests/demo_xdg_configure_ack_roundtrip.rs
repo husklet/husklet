@@ -14,8 +14,8 @@
 //!
 //! Drives a real in-process wayland-client. PNGs are written for the mapped + maximized content.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

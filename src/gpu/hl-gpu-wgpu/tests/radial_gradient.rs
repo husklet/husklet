@@ -16,8 +16,8 @@
 //! nearest; ±2 bounds those. The ramp is smooth (no hard edge), so no sample can diverge by more. Skips if
 //! no adapter is reachable.
 
-mod common;
-use common::{glsl, le_f32, new_session, px, write_png};
+mod gpu_harness;
+use gpu_harness::{glsl, le_f32, new_session, px, write_png};
 
 use hl_gpu::protocol::model::descriptor::{
     BindEntry, BindGroupDesc, BindResource, BufferDesc, ColorAttachment, RenderPipelineDesc,
@@ -28,7 +28,7 @@ use hl_gpu::protocol::model::kernel::glsl_stage;
 use hl_gpu::{Cmd, CommandBuffer, Enc, ShaderPayloadKind};
 use hl_gpu_wgpu::{DeviceConfig, WgpuExecutor};
 
-use common::{color_target, tex2d};
+use gpu_harness::{color_target, tex2d};
 
 const W: u32 = 48;
 const H: u32 = 48;

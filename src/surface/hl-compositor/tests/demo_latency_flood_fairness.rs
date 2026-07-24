@@ -11,8 +11,8 @@
 //! storm shares neither B's present schedule nor its frame-callback path. If B's marker were stuck behind
 //! A's flood, the wall-clock bound would trip.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

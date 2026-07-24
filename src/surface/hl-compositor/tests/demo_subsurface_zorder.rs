@@ -7,8 +7,8 @@
 //! cycle — which is exactly the stacking a real backend blends. A composited PNG is written per stacking
 //! (before/after the reorder) so the overlap region visibly flips color.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 

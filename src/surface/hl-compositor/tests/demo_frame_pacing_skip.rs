@@ -14,8 +14,8 @@
 //! zero presents while each still delivered a `wl_callback.done`. That is the redundant-present skip the
 //! scene's `is_tree_dirty` short-circuit performs, proven from outside the compositor.
 
-mod common;
-use common::*;
+mod client_harness;
+use client_harness::*;
 
 use std::time::{Duration, Instant};
 
