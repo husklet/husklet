@@ -22,6 +22,9 @@ mod finite_state_string;
 mod free_function;
 mod gui_toolkit_leakage;
 mod ignored_result;
+mod model_duplication;
+#[cfg(test)]
+mod model_duplication_tests;
 mod platform_command;
 mod receiver_repetition;
 mod single_use;
@@ -42,6 +45,7 @@ pub use finite_state_string::FiniteStateString;
 pub use free_function::FreeFunction;
 pub use gui_toolkit_leakage::GuiToolkitLeakage;
 pub use ignored_result::IgnoredResult;
+pub use model_duplication::ModelDuplication;
 pub use platform_command::PlatformCommand;
 pub use receiver_repetition::ReceiverRepetition;
 pub use single_use::SingleUse;
