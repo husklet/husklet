@@ -13,7 +13,9 @@ fn main() {
         BufferTransform, Format, OutputId, PresentableImage, SurfaceId, Visibility, WindowKind,
         WindowState,
     };
-    use hl_compositor::scene::port::{PresentOutcome, PresentTiming, Presenter};
+    use hl_compositor::scene::port::{
+        HostEvents, PresentOutcome, PresentTiming, Presenter, Windows,
+    };
     use hl_compositor::surface::macos::MacPresenter;
     use objc2_foundation::{MainThreadMarker, NSDate, NSRunLoop};
 

@@ -9,5 +9,6 @@ pub mod presenter;
 
 pub use clock::Clock;
 pub use presenter::{
-    PresentOutcome, PresentTiming, PresentationFeedback, Presenter, PresenterEvent,
+    Clipboard, HostEvents, HostSurface, PresentOutcome, PresentTiming, PresentationFeedback,
+    Presenter, PresenterEvent, Windows,
 };

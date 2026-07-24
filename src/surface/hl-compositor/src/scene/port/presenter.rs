@@ -147,8 +147,8 @@ impl PresentationFeedback {
     }
 }
 
-/// The platform window backend, behind which all Cocoa/Metal/DRM/PNG specifics live.
-pub trait Presenter {
+/// Host-window event ingress.
+pub trait HostEvents {
     /// Service platform-window events without presenting a frame. Most backends need no polling;
     /// main-thread window systems can use this hook from the host adapter's event loop.
     fn poll_events(&mut self) {}
@@ -157,7 +157,10 @@ pub trait Presenter {
     fn take_events(&mut self) -> Vec<PresenterEvent> {
         Vec::new()
     }
+}
 
+/// Host clipboard exchange.
+pub trait Clipboard {
     /// Publish UTF-8 text copied by a Wayland client to the host clipboard.
     fn set_clipboard_text(&mut self, _text: &str) {}
 
@@ -165,7 +168,10 @@ pub trait Presenter {
     fn take_clipboard_text(&mut self) -> Option<String> {
         None
     }
+}
 
+/// Native window lifecycle and interaction.
+pub trait Windows {
     /// Atomically reconcile a native window from authoritative scene state.
     fn reconcile_window(&mut self, _window: &WindowState) {}
 
@@ -174,7 +180,10 @@ pub trait Presenter {
 
     /// Begin an interactive window-manager operation.
     fn begin_interaction(&mut self, _surface: SurfaceId, _interaction: WindowInteraction) {}
+}
 
+/// Finished-frame presentation.
+pub trait Presenter {
     /// Present one composed image to the named output, with its `damage` (root-space upload hint) and
     /// `timing`. Returns a [`PresentationFeedback`] describing the fate of the frame. The scene calls
     /// this in composite order (bottom → top) for each layer of a present root; the schedule service
@@ -187,3 +196,8 @@ pub trait Presenter {
         timing: PresentTiming,
     ) -> PresentationFeedback;
 }
+
+/// Complete host surface capability required by a platform adapter.
+pub trait HostSurface: Presenter + HostEvents + Clipboard + Windows {}
+
+impl<T: Presenter + HostEvents + Clipboard + Windows> HostSurface for T {}

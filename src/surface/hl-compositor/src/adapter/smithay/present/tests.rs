@@ -10,14 +10,6 @@ struct RecordingPresenter {
 }
 
 impl Presenter for RecordingPresenter {
-    fn poll_events(&mut self) {
-        self.polls.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn reconcile_window(&mut self, _window: &crate::scene::model::WindowState) {
-        self.windows.fetch_add(1, Ordering::Relaxed);
-    }
-
     fn present(
         &mut self,
         _output: OutputId,
@@ -28,6 +20,20 @@ impl Presenter for RecordingPresenter {
         PresentationFeedback::offscreen()
     }
 }
+
+impl HostEvents for RecordingPresenter {
+    fn poll_events(&mut self) {
+        self.polls.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Windows for RecordingPresenter {
+    fn reconcile_window(&mut self, _window: &crate::scene::model::WindowState) {
+        self.windows.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Clipboard for RecordingPresenter {}
 
 impl SurfacePresenter for RecordingPresenter {
     fn deposit(&mut self, _surface: SurfaceId, _buffer: StoredBuffer) {

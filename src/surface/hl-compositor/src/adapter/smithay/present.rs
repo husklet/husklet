@@ -14,7 +14,9 @@ use std::sync::{Arc, Mutex};
 use hl_log::{hl_add, tag};
 
 use crate::scene::model::{BufferTransform, OutputId, PresentableImage, Rect, SurfaceId};
-use crate::scene::port::{PresentTiming, PresentationFeedback, Presenter};
+use crate::scene::port::{
+    Clipboard, HostEvents, HostSurface, PresentTiming, PresentationFeedback, Presenter, Windows,
+};
 
 mod buffer;
 mod png;
@@ -330,6 +332,10 @@ impl Presenter for PngPresenter {
     }
 }
 
+impl HostEvents for PngPresenter {}
+impl Clipboard for PngPresenter {}
+impl Windows for PngPresenter {}
+
 /// Hard cap on any single presented axis. A real display dimension is far below this; a hostile
 /// `wp_viewport` destination or buffer size beyond it is refused by [`Presenter::present`] rather than
 /// rasterized, so no attacker-chosen geometry can drive an unbounded (or `i32`-overflowing) allocation.
@@ -343,7 +349,7 @@ pub use png::{encode_png, write_png};
 ///
 /// The neutral [`Presenter`] remains independent of Wayland buffers. A platform presenter implements
 /// this small adapter port when it can receive the committed CPU pixels that Smithay extracted.
-pub trait SurfacePresenter: Presenter {
+pub trait SurfacePresenter: HostSurface {
     fn deposit(&mut self, surface: SurfaceId, buffer: StoredBuffer);
     fn forget(&mut self, surface: SurfaceId);
 
@@ -436,6 +442,18 @@ where
 }
 
 impl Presenter for AdapterPresenter {
+    fn present(
+        &mut self,
+        output: OutputId,
+        image: &PresentableImage,
+        damage: &[Rect],
+        timing: PresentTiming,
+    ) -> PresentationFeedback {
+        self.inner.present(output, image, damage, timing)
+    }
+}
+
+impl HostEvents for AdapterPresenter {
     fn poll_events(&mut self) {
         self.inner.poll_events();
     }
@@ -443,7 +461,9 @@ impl Presenter for AdapterPresenter {
     fn take_events(&mut self) -> Vec<crate::scene::port::PresenterEvent> {
         self.inner.take_events()
     }
+}
 
+impl Clipboard for AdapterPresenter {
     fn set_clipboard_text(&mut self, text: &str) {
         self.inner.set_clipboard_text(text);
     }
@@ -451,7 +471,9 @@ impl Presenter for AdapterPresenter {
     fn take_clipboard_text(&mut self) -> Option<String> {
         self.inner.take_clipboard_text()
     }
+}
 
+impl Windows for AdapterPresenter {
     fn reconcile_window(&mut self, window: &crate::scene::model::WindowState) {
         self.inner.reconcile_window(window);
     }
@@ -466,16 +488,6 @@ impl Presenter for AdapterPresenter {
         interaction: crate::scene::model::WindowInteraction,
     ) {
         self.inner.begin_interaction(surface, interaction);
-    }
-
-    fn present(
-        &mut self,
-        output: OutputId,
-        image: &PresentableImage,
-        damage: &[Rect],
-        timing: PresentTiming,
-    ) -> PresentationFeedback {
-        self.inner.present(output, image, damage, timing)
     }
 }
 

@@ -30,7 +30,8 @@ use crate::scene::model::{
     WindowKind, WindowState,
 };
 use crate::scene::port::{
-    PresentOutcome, PresentTiming, PresentationFeedback, Presenter, PresenterEvent,
+    Clipboard, HostEvents, PresentOutcome, PresentTiming, PresentationFeedback, Presenter,
+    PresenterEvent, Windows,
 };
 
 use super::capture::Capture;
@@ -416,7 +417,7 @@ impl MacPresenter {
     }
 }
 
-impl Presenter for MacPresenter {
+impl Clipboard for MacPresenter {
     fn set_clipboard_text(&mut self, text: &str) {
         let pasteboard = unsafe { NSPasteboard::generalPasteboard() };
         unsafe {
@@ -435,7 +436,9 @@ impl Presenter for MacPresenter {
         self.pasteboard_change = change;
         unsafe { pasteboard.stringForType(NSPasteboardTypeString) }.map(|text| text.to_string())
     }
+}
 
+impl Windows for MacPresenter {
     fn reconcile_window(&mut self, desired: &WindowState) {
         self.reconcile_native_window(desired);
     }
@@ -456,7 +459,9 @@ impl Presenter for MacPresenter {
             }
         }
     }
+}
 
+impl HostEvents for MacPresenter {
     fn poll_events(&mut self) {
         self.poll_native_events();
     }
@@ -464,7 +469,9 @@ impl Presenter for MacPresenter {
     fn take_events(&mut self) -> Vec<PresenterEvent> {
         std::mem::take(&mut self.events)
     }
+}
 
+impl Presenter for MacPresenter {
     fn present(
         &mut self,
         output: OutputId,

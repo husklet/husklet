@@ -40,7 +40,7 @@ impl PlatformPool {
 
 use super::present::AdapterPresenter;
 use super::state::{ClientState, HlState, InputCommand};
-use crate::scene::port::{Clock, Presenter, PresenterEvent};
+use crate::scene::port::{Clock, HostEvents, PresenterEvent};
 
 /// The cross-thread sender half of an [`InputCommand`] channel. `Send` — a host/test on another thread
 /// injects input through it while the serve loop runs.

@@ -15,7 +15,7 @@ use hl_compositor::scene::model::{
     BufferTransform, Format, OutputId, PresentableImage, Rect, SurfaceId, Visibility, WindowKind,
     WindowState,
 };
-use hl_compositor::scene::port::{PresentOutcome, PresentTiming, Presenter};
+use hl_compositor::scene::port::{PresentOutcome, PresentTiming, Presenter, Windows};
 use hl_compositor::surface::macos::MacPresenter;
 
 fn known_frame(w: u32, h: u32, bgra: [u8; 4]) -> Vec<u8> {
