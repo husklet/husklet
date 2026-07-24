@@ -95,7 +95,7 @@ impl Layer {
             .components()
             .filter_map(|component| component.as_os_str().to_str())
             .collect::<Vec<_>>();
-        let Some(index) = components.iter().position(|component| *component == "src") else {
+        let Some(index) = components.iter().rposition(|component| *component == "src") else {
             return Self::Other;
         };
         match components.get(index + 1).copied() {
