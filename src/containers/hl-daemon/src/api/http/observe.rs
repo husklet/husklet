@@ -370,48 +370,16 @@ impl ProcessMetrics {
     }
 
     fn read(process_id: u64) -> Self {
-        let output = std::process::Command::new("ps")
-            .args(["-o", "rss=,time=", "-p", &process_id.to_string()])
-            .output();
-        let Ok(output) = output else {
-            return Self::default();
-        };
-        if !output.status.success() {
-            return Self::default();
-        }
-        let output = String::from_utf8_lossy(&output.stdout);
-        let mut fields = output.split_whitespace();
+        let sample = crate::adapter::process::Sample::read(process_id);
         Self {
-            memory: fields
-                .next()
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or_default()
-                .saturating_mul(1024),
-            cpu: fields.next().map_or_else(CpuTime::default, CpuTime::from),
+            memory: sample.memory,
+            cpu: CpuTime(sample.cpu_seconds.saturating_mul(1_000_000_000)),
         }
     }
 }
 
 #[derive(Clone, Copy, Default)]
 struct CpuTime(u64);
-
-impl From<&str> for CpuTime {
-    fn from(value: &str) -> Self {
-        let (days, value) = value.split_once('-').map_or((0, value), |(days, value)| {
-            (days.parse::<u64>().unwrap_or_default(), value)
-        });
-        let seconds = value.split(':').fold(0_u64, |total, value| {
-            total
-                .saturating_mul(60)
-                .saturating_add(value.split('.').next().unwrap_or("0").parse().unwrap_or(0))
-        });
-        Self(
-            days.saturating_mul(86_400)
-                .saturating_add(seconds)
-                .saturating_mul(1_000_000_000),
-        )
-    }
-}
 
 #[cfg(test)]
 mod tests;

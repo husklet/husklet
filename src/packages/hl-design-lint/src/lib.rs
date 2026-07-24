@@ -15,8 +15,8 @@ pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summa
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
     CatchAllModule, DeepControlFlow, DependencyDirection, DuplicateEntity, EmptyDirectory,
-    EnvironmentAccess, FileLength, FreeFunction, ReceiverRepetition, Registry, Rule, SingleUse,
-    StructNaming,
+    EnvironmentAccess, FileLength, FreeFunction, PlatformCommand, ReceiverRepetition, Registry,
+    Rule, SingleUse, StructNaming,
 };
 pub use source::{Source, Workspace};
 
@@ -39,6 +39,7 @@ impl Linter {
                 .register(rule::FreeFunction)
                 .register(rule::DuplicateEntity)
                 .register(rule::EnvironmentAccess)
+                .register(rule::PlatformCommand)
                 .register(rule::StructNaming)
                 .register(rule::ReceiverRepetition)
                 .register(rule::SingleUse)
@@ -150,7 +151,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 11);
+        assert_eq!(summaries.len(), 12);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "deep-control-flow");
@@ -184,7 +185,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 11);
+        assert_eq!(summaries.len(), 12);
         assert!(reporter
             .0
             .iter()
@@ -328,6 +329,173 @@ fn reads() {
         assert_eq!(values.len(), 6);
         assert!(values.iter().all(Finding::is_violation));
         assert!(values.iter().all(|finding| !finding.related.is_empty()));
+    }
+
+    #[test]
+    fn platform_command_rule_resolves_qualified_grouped_and_renamed_imports() {
+        let values = findings(
+            r#"
+use std::process::Command;
+use std::process as host_process;
+use tokio::{process::Command as AsyncCommand};
+fn commands() {
+    let _ = Command::new("git");
+    let _ = host_process::Command::new("git");
+    let _ = AsyncCommand::new("git");
+    let _ = std::process::Command::new("git");
+    let _ = tokio::process::Command::new("git");
+}
+"#,
+            "platform-command-boundary",
+        );
+        assert_eq!(values.len(), 5);
+        assert!(values.iter().all(Finding::is_violation));
+        assert!(values
+            .iter()
+            .all(|finding| finding.message.contains("outside an application")));
+    }
+
+    #[test]
+    fn platform_command_rule_distinguishes_guest_process_models() {
+        let values = findings(
+            r#"
+struct Process;
+impl Process { fn new(_: &str) -> Self { Self } }
+fn guest() {
+    let _ = Process::new("/bin/sh");
+    let _ = hl_engine::Process::new("/bin/bash");
+}
+"#,
+            "platform-command-boundary",
+        );
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn platform_command_rule_allows_explicit_adapter_modules() {
+        let values = findings(
+            r#"
+mod adapters {
+    use std::process::Command as HostCommand;
+    fn run() { let _ = HostCommand::new("git"); }
+}
+mod model {
+    fn run() { let _ = std::process::Command::new("git"); }
+}
+"#,
+            "platform-command-boundary",
+        );
+        assert_eq!(values.len(), 1);
+        assert!(values[0].location.source.contains("std::process::Command"));
+    }
+
+    #[test]
+    fn platform_command_rule_rejects_interpolated_shell_source() {
+        let values = findings(
+            r#"
+fn unsafe_shell(value: &str) {
+    let _ = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("echo {value}"));
+    let _ = tokio::process::Command::new("bash")
+        .args(["-c", value]);
+}
+"#,
+            "platform-command-boundary",
+        );
+        assert_eq!(values.len(), 4);
+        assert_eq!(
+            values
+                .iter()
+                .filter(|finding| finding.subject.contains("interpolated script"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn platform_command_rule_allows_build_commands_but_not_dynamic_shells() {
+        let root = temporary("platform-build");
+        let path = root.join("build.rs");
+        fs::write(
+            &path,
+            r#"
+fn main() {
+    let _ = std::process::Command::new("cc").arg("--version").status();
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(concat!("echo ", "static"))
+        .status();
+    let value = "untrusted";
+    let _ = std::process::Command::new("sh").arg("-c").arg(value).status();
+}
+"#,
+        )
+        .unwrap();
+        let workspace = Workspace::load([path]).unwrap();
+        let values = PlatformCommand.check(&workspace).unwrap();
+        assert_eq!(values.len(), 1);
+        assert!(values[0].subject.contains("interpolated script"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn platform_command_rule_allows_cfg_test_commands() {
+        let values = findings(
+            r#"
+#[cfg(test)]
+mod tests {
+    fn fixture() { let _ = std::process::Command::new("git"); }
+}
+#[test]
+fn test_fixture() { let _ = tokio::process::Command::new("git"); }
+"#,
+            "platform-command-boundary",
+        );
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn platform_command_rule_tracks_staged_shell_builders_with_lexical_scope() {
+        let root = temporary("platform-staged");
+        let path = root.join("build.rs");
+        fs::write(
+            &path,
+            r#"
+use std::process::Command as HostCommand;
+
+fn unsafe_build(value: &str) {
+    let mut command = HostCommand::new("/bin/sh");
+    command.arg("-c");
+    command.arg(format!("echo {value}"));
+
+    let mut alias = command;
+    alias.args(["-c", value]);
+}
+
+fn safe_build() {
+    let mut command = HostCommand::new("sh");
+    command.arg("-c");
+    command.arg(concat!("echo ", "static"));
+}
+
+fn unrelated(value: &str) {
+    struct Builder;
+    impl Builder { fn arg(&mut self, _: &str) {} }
+    let mut command = Builder;
+    command.arg("-c");
+    command.arg(value);
+}
+"#,
+        )
+        .unwrap();
+        let workspace = Workspace::load([path]).unwrap();
+        let values = PlatformCommand.check(&workspace).unwrap();
+        assert_eq!(values.len(), 2);
+        assert!(values
+            .iter()
+            .all(|finding| finding.message.contains("staged shell")));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

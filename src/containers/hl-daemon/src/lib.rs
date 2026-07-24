@@ -1,6 +1,7 @@
 //! Docker-compatible server and headless composition over [`hl_container`].
 #![forbid(unsafe_code)]
 
+mod adapter;
 pub mod api;
 #[cfg(feature = "runtime")]
 mod builder;
