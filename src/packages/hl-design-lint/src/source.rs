@@ -76,9 +76,9 @@ impl Workspace {
         let mut files = Vec::new();
         let mut empty_directories = Vec::new();
         for path in &paths {
-            rust_files(&path, &mut files).map_err(|error| LintError::io("walk", &path, error))?;
-            empty_dirs(&path, &mut empty_directories)
-                .map_err(|error| LintError::io("walk", &path, error))?;
+            rust_files(path, &mut files).map_err(|error| LintError::io("walk", path, error))?;
+            empty_dirs(path, &mut empty_directories)
+                .map_err(|error| LintError::io("walk", path, error))?;
         }
         files.sort();
         files.dedup();
