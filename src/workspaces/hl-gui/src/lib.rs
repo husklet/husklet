@@ -7,9 +7,6 @@ mod component;
 mod settings;
 mod size;
 
-#[cfg(feature = "gtk")]
-pub mod gtk;
-
 pub use component::{
     Action, Component, Dialog, Element, Event, EventId, Events, ListItem, Role, View,
 };

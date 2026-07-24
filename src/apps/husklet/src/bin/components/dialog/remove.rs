@@ -22,14 +22,14 @@ impl RemoveWorkspace {
 
         let parent = parent.cloned();
         let confirmation_parent = parent.clone();
-        hl_gui::gtk::Dialog::present(confirmation_parent.as_ref(), model, move |event| {
+        crate::gtk_adapter::Dialog::present(confirmation_parent.as_ref(), model, move |event| {
             if event == remove {
                 if let Err(error) = on_remove() {
                     let dismiss = EventId::new("dismiss");
                     let failure = Dialog::new("Could not remove workspace")
                         .detail(error.to_string())
                         .action(Action::new(dismiss, "OK").suggested());
-                    hl_gui::gtk::Dialog::present(parent.as_ref(), failure, |_| {});
+                    crate::gtk_adapter::Dialog::present(parent.as_ref(), failure, |_| {});
                 }
             }
         });

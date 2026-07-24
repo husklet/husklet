@@ -411,7 +411,7 @@ impl Url {
     }
 
     pub(crate) fn open(&self) {
-        let _ = hl_gui::gtk::Uri::new(&self.0).open();
+        let _ = crate::gtk_adapter::Uri::new(&self.0).open();
     }
 }
 

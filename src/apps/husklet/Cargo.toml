@@ -38,7 +38,7 @@ hl-gl = { path = "../../surface/hl-gl", optional = true }
 hl-vulkan = { path = "../../surface/hl-vulkan", optional = true }
 hl-gpu-wgpu = { path = "../../gpu/hl-gpu-wgpu", optional = true }
 hl-compositor = { path = "../../surface/hl-compositor", features = ["smithay-adapter", "macos-surface"], optional = true }
-hl-gui = { path = "../../workspaces/hl-gui", features = ["gtk"], optional = true }
+hl-gui = { path = "../../workspaces/hl-gui", optional = true }
 libc = { version = "0.2", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 serde_json = { version = "1", optional = true }

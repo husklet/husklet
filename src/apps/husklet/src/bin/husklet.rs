@@ -20,12 +20,12 @@ use vte4::prelude::*;
 use vte4::TerminalExtManual;
 
 use hl::config::{CudaDevice, TerminalPreferences, VpnConfig, WorkspaceConfig, WorkspaceStore};
-use hl_gui::gtk::{ColorPicker, FontPicker};
 use hl_ws::{Arch, Mount};
 use hl_ws_term::config::{CursorShape, TermConfig};
 use hl_ws_term::session::{self, Pane, PaneNode, Session, SessionTab, SplitDir};
 
 mod components;
+mod gtk_adapter;
 mod host;
 pub mod screens;
 
@@ -33,6 +33,7 @@ use components::dialog::RemoveWorkspace;
 use components::layout::Field;
 use components::theme::{css, ACCENT};
 use components::workspace::{build_form, Form};
+use gtk_adapter::{ColorPicker, FontPicker};
 use host::process::ProcessGroup;
 use host::pty::PtyProcess;
 use host::{

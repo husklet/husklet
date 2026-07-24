@@ -4,7 +4,7 @@ use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::{Action, Dialog as DialogModel, EventId, Role};
+use hl_gui::{Action, Dialog as DialogModel, EventId, Role};
 
 /// Non-blocking GTK presentation of a toolkit-neutral dialog model.
 pub struct Dialog;

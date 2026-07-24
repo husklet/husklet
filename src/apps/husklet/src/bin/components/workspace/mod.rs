@@ -290,7 +290,7 @@ impl Form {
             browse.connect_clicked(move |button| {
                 let parent = button.root().and_downcast::<gtk::Window>();
                 let entry = entry.clone();
-                hl_gui::gtk::DirectoryPicker::new("Choose workspace storage").present(
+                crate::gtk_adapter::DirectoryPicker::new("Choose workspace storage").present(
                     parent.as_ref(),
                     move |path| {
                         entry.set_text(&path.to_string_lossy());
