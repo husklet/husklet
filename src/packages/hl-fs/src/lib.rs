@@ -84,8 +84,8 @@ impl AnonymousFile {
     /// Linux and macOS hosts supported by Husklet and avoids platform-specific `memfd_create` assumptions.
     ///
     /// # Errors
-    /// Returns temporary-directory, exclusive-create, sizing, or unlink failures.
-    pub fn new(name: &str, length: u64) -> io::Result<Self> {
+    /// Returns directory, exclusive-create, sizing, or unlink failures.
+    pub fn new(directory: &Path, name: &str, length: u64) -> io::Result<Self> {
         let name: String = name
             .chars()
             .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
@@ -94,7 +94,7 @@ impl AnonymousFile {
 
         for _ in 0..128 {
             let id = ANONYMOUS_FILE_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!("hl-{name}-{}-{id}", std::process::id()));
+            let path = directory.join(format!("hl-{name}-{}-{id}", std::process::id()));
             let file = match std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -249,7 +249,9 @@ mod tests {
 
     #[test]
     fn anonymous_file_is_sized_writable_and_unlinked() {
-        let mut file = AnonymousFile::new("wayland shm", 16).unwrap().into_file();
+        let mut file = AnonymousFile::new(&std::env::temp_dir(), "wayland shm", 16)
+            .unwrap()
+            .into_file();
         assert_eq!(file.metadata().unwrap().len(), 16);
         file.write_all(b"pixels").unwrap();
         file.rewind().unwrap();

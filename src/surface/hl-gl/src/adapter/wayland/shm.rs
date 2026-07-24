@@ -12,7 +12,7 @@ impl ShmBuffer {
     /// Allocate an anonymous file, map it, copy `pixels` in, then unmap (the fd retains the contents).
     pub(crate) fn new(pixels: &[u8]) -> WlResult<ShmBuffer> {
         let len = pixels.len();
-        let fd = hl_fs::AnonymousFile::new("wayland-shm", len as u64)
+        let fd = hl_fs::AnonymousFile::new(&std::env::temp_dir(), "wayland-shm", len as u64)
             .map_err(|_| WlError::ShmAlloc)?
             .into_file()
             .into_raw_fd();
