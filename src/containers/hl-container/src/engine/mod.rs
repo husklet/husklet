@@ -13,7 +13,34 @@ use spec::Spec;
 #[derive(Default)]
 pub(crate) struct Engine;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CheckpointLaunch {
+    Ordinary,
+    Store,
+}
+
 impl Engine {
+    fn checkpoint_launch(
+        engine: hl_engine::Engine,
+        guest: crate::Guest,
+        restore: Option<bool>,
+    ) -> CheckpointLaunch {
+        let Some(restore) = restore else {
+            return CheckpointLaunch::Ordinary;
+        };
+        let guest = match guest {
+            crate::Guest::Aarch64 => hl_engine::Guest::Aarch64,
+            crate::Guest::X86_64 => hl_engine::Guest::X86_64,
+        };
+        if engine.capabilities().checkpoint.supports(guest) || restore {
+            CheckpointLaunch::Store
+        } else {
+            // Every ordinary container gets a best-effort capture store. It must
+            // not turn an otherwise supported guest into an invalid launch.
+            CheckpointLaunch::Ordinary
+        }
+    }
+
     fn io(launch: &ProcessConfig) -> hl_engine::ProcessIo {
         hl_engine::ProcessIo {
             stdin: if launch.input.is_some() {
@@ -83,12 +110,20 @@ impl Runtime for Engine {
                 config.rootfs.display()
             )));
         }
+        let engine = hl_engine::Engine::new();
         let checkpoint = config.checkpoint.clone();
+        let checkpoint_launch = Self::checkpoint_launch(
+            engine,
+            config.guest,
+            checkpoint.as_ref().map(|checkpoint| checkpoint.restore),
+        );
+        let checkpoint = (checkpoint_launch == CheckpointLaunch::Store)
+            .then_some(checkpoint)
+            .flatten();
         let checkpointable = checkpoint.is_some();
         let spec = hl_engine::MachineSpec::from(Spec::try_from(&config)?);
         let io = Self::io(&config);
         let authorities = Self::authorities(config.authorities.clone())?;
-        let engine = hl_engine::Engine::new();
         let started = match checkpoint {
             Some(checkpoint) => engine.spawn_with_store_and_authorities(
                 spec,
@@ -340,6 +375,28 @@ mod tests {
             extensions: Vec::new(),
             authorities: Vec::new(),
         }
+    }
+
+    #[test]
+    fn optional_checkpointing_is_gated_by_guest_capability() {
+        let engine = hl_engine::Engine::new();
+        assert_eq!(
+            Engine::checkpoint_launch(engine, crate::Guest::Aarch64, Some(false)),
+            super::CheckpointLaunch::Store
+        );
+        assert_eq!(
+            Engine::checkpoint_launch(engine, crate::Guest::X86_64, Some(false)),
+            super::CheckpointLaunch::Ordinary
+        );
+        assert_eq!(
+            Engine::checkpoint_launch(engine, crate::Guest::X86_64, Some(true)),
+            super::CheckpointLaunch::Store,
+            "an explicit restore must reach engine validation instead of being dropped"
+        );
+        assert_eq!(
+            Engine::checkpoint_launch(engine, crate::Guest::Aarch64, None),
+            super::CheckpointLaunch::Ordinary
+        );
     }
 
     #[test]
