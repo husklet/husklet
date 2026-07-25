@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>dd — Roadmap: run anything, anywhere, at native speed</title>
-<meta name="description" content="The dd roadmap: Linux as a host (and macOS containers on Linux), full Metal rendering, declarative secure dev environments, a cross-platform terminal, first-class LLM/GPU support, and hardware emulation — pluggable devices with a Metal↔CUDA bridge to run the CUDA ML stack on a Mac — all converging on native performance on any OS and architecture." />
-<meta property="og:title" content="dd — Roadmap" />
-<meta property="og:description" content="Where dd is going: any OS as host, GPU-accelerated rendering, perfect DX, a cross-platform terminal, run any LLM — all at near-native speed on any arch." />
+<title>Husklet — Roadmap: run anything, anywhere, at native speed</title>
+<meta name="description" content="The Husklet roadmap: Linux hosting, full Metal rendering, declarative secure workspaces, a cross-platform terminal, first-class LLM/GPU support, and pluggable devices." />
+<meta property="og:title" content="Husklet — Roadmap" />
+<meta property="og:description" content="Where Husklet is going: any OS as host, GPU-accelerated rendering, secure workspaces, a cross-platform terminal, and first-class accelerator support." />
 <meta property="og:type" content="website" />
 <meta property="og:image" content="./assets/logo@2x.png" />
 <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon.png" />
@@ -32,13 +32,13 @@
 <!-- nav -->
 <header class="sticky top-0 z-20 border-b border-edge bg-ink/70 backdrop-blur-md">
   <div class="mx-auto flex h-14 max-w-wrap items-center gap-4 px-5">
-    <a href="./index.html" class="flex items-center gap-2 font-bold text-lg"><img src="./assets/logo.png" alt="" class="h-7 w-7 rounded-md" /> dd</a>
+    <a href="./index.html" class="flex items-center gap-2 font-bold text-lg"><img src="./assets/logo.png" alt="" class="h-7 w-7 rounded-md" /> Husklet</a>
     <nav class="ml-auto flex items-center gap-5 text-sm">
       <a href="./index.html#features" class="hidden text-muted hover:text-txt md:inline">Features</a>
       <a href="./index.html#speed" class="hidden text-muted hover:text-txt md:inline">Speed</a>
       <a href="./roadmap.html" class="text-txt">Roadmap</a>
       <a href="./blog/index.html" class="text-muted hover:text-txt">Blog</a>
-      <a href="https://github.com/ricccrd/dd" class="rounded-lg border border-edge px-3 py-1.5 font-semibold hover:border-blue3">GitHub</a>
+      <a href="https://github.com/ricccrd/husklet" class="rounded-lg border border-edge px-3 py-1.5 font-semibold hover:border-blue3">GitHub</a>
     </nav>
   </div>
 </header>
@@ -49,7 +49,7 @@
   <div class="relative mx-auto max-w-wrap px-5 py-16 text-center md:py-24">
     <div class="mb-4"><span class="inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-white/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-white"><span class="h-1.5 w-1.5 rounded-full bg-white"></span>Roadmap</span></div>
     <h1 class="mx-auto max-w-3xl text-3xl font-extrabold leading-tight tracking-tight text-white md:text-5xl">Run anything, anywhere — at native speed.</h1>
-    <p class="mx-auto mt-4 max-w-2xl text-base text-blue-50/90 md:text-lg">Today dd runs Linux &amp; macOS containers on Apple-Silicon macOS with no VM. The roadmap takes the same idea — <strong>a userspace kernel + a JIT, not a hypervisor</strong> — to every host, every architecture, and beyond containers: graphics, dev environments, a terminal, AI, and emulated hardware.</p>
+    <p class="mx-auto mt-4 max-w-2xl text-base text-blue-50/90 md:text-lg">Today Husklet provides configurable Linux workspaces on Apple-Silicon macOS. The roadmap takes the same userspace-kernel foundation to more hosts and architectures, richer graphics, developer environments, terminals, AI, and emulated hardware.</p>
     <p class="mx-auto mt-4 max-w-2xl text-sm text-blue-50/80">This is a direction, not a dated commitment. Status labels below are honest about where each pillar stands.</p>
   </div>
 </section>
@@ -83,7 +83,7 @@
           <h3 class="text-xl font-bold tracking-tight">Linux as a host — and macOS containers on Linux</h3>
           <span class="rounded-full border border-blue3/40 bg-blue6/15 px-2.5 py-0.5 text-xs font-semibold text-blue1 sm:ml-auto">Designed · seams in place</span>
         </div>
-        <p class="mt-3 text-muted">Today dd hosts on macOS. Next: the same engine running on <strong>Linux</strong> — Linux <em>and</em> macOS containers, on a Linux box — so the host stops mattering. The runtime is already split along host/guest seams (HAL, per-ISA emitters, OS personalities); the work is wiring the Linux host primitives and the Mach-O/Darwin guest path on Linux.</p>
+        <p class="mt-3 text-muted">Today Husklet hosts on macOS. Next: the same engine running on <strong>Linux</strong> — Linux <em>and</em> macOS workloads on a Linux box — so the host stops mattering. The runtime is already split along host/guest seams; the work is wiring the Linux host primitives and the Mach-O/Darwin guest path on Linux.</p>
         <p class="mt-2 text-sm text-muted2">Why it matters: run your Mac's containers on a Linux server, and Linux's on your Mac — one runtime, any host.</p>
       </article>
 
@@ -116,7 +116,7 @@
           <h3 class="text-xl font-bold tracking-tight">A cross-platform terminal emulator</h3>
           <span class="rounded-full border border-blue3/40 bg-blue6/15 px-2.5 py-0.5 text-xs font-semibold text-blue1 sm:ml-auto">Planned</span>
         </div>
-        <p class="mt-3 text-muted">An iTerm2-class terminal built on dd — but able to drop you into a shell for <strong>any OS and architecture</strong> the runtime emulates, with the same UX everywhere. Interactive TTYs already work end-to-end (real pty, signals, resize); the terminal makes that the front door.</p>
+        <p class="mt-3 text-muted">An iTerm2-class terminal built into Husklet — able to drop you into a shell for <strong>any OS and architecture</strong> the runtime supports, with the same UX everywhere.</p>
         <p class="mt-2 text-sm text-muted2">Why it matters: one terminal, any OS/arch shell — local, containerized, or cross-platform.</p>
       </article>
 
@@ -127,7 +127,7 @@
           <h3 class="text-xl font-bold tracking-tight">First-class agents &amp; LLMs — optimized CUDA/Metal bindings</h3>
           <span class="rounded-full border border-blue3/40 bg-blue6/15 px-2.5 py-0.5 text-xs font-semibold text-blue1 sm:ml-auto">Researching</span>
         </div>
-        <p class="mt-3 text-muted">Run LLMs and agent workloads of any kind, with <strong>optimized CUDA and Metal bindings</strong> so model code reaches the GPU at full speed — whether it was written for one accelerator or the other. The container brings the model; dd bridges it to whatever silicon is present.</p>
+        <p class="mt-3 text-muted">Run LLMs and agent workloads with <strong>optimized CUDA and Metal bindings</strong> so model code reaches the available GPU efficiently. The workspace brings the model; Husklet connects it to the available silicon.</p>
         <p class="mt-2 text-sm text-muted2">Why it matters: portable AI — the same model and agent stack runs on a Mac's Metal or a server's CUDA.</p>
       </article>
 
@@ -138,7 +138,7 @@
           <h3 class="text-xl font-bold tracking-tight">Hardware emulation — pluggable devices &amp; a Metal&#8596;CUDA bridge</h3>
           <span class="rounded-full border border-blue3/40 bg-blue6/15 px-2.5 py-0.5 text-xs font-semibold text-blue1 sm:ml-auto">Researching</span>
         </div>
-        <p class="mt-3 text-muted">Treat accelerators as <strong>pluggable devices</strong>: <code class="rounded bg-code px-1 py-0.5 font-mono text-[12px] text-blue1">append</code> a GPU or accelerator to a container and the runtime presents it to the guest — even when the host's silicon is different. The centerpiece is a <strong>Metal&#8596;CUDA translation layer</strong> that maps CUDA — the language of the ML ecosystem — onto Apple-Silicon <strong>Metal</strong> (and back), so model and kernel code reaches the GPU at full speed without a rewrite. Same userspace-kernel idea, now for the device layer: the container declares the hardware it wants; dd bridges it to whatever's actually present.</p>
+        <p class="mt-3 text-muted">Treat accelerators as <strong>pluggable devices</strong>: add a GPU or accelerator to a workspace and the runtime presents it to the guest, even when the host's silicon is different. The centerpiece is a <strong>Metal&#8596;CUDA translation layer</strong> so model and kernel code can reach the available GPU without a rewrite.</p>
         <p class="mt-2 text-sm text-muted2">Why it matters: run the <strong>CUDA ML stack on a Mac</strong> unchanged — local training/inference and accelerated workflows become portable across accelerators, no NVIDIA box required.</p>
       </article>
 
@@ -161,9 +161,9 @@
 <section class="border-t border-edge px-5 py-16 text-center md:py-20">
   <div class="mx-auto max-w-wrap">
     <h2 class="text-2xl font-bold tracking-tight md:text-3xl">Follow along — or help build it.</h2>
-    <p class="mx-auto mt-3 max-w-xl text-muted">dd is open source and in active development. The roadmap evolves in the open.</p>
+    <p class="mx-auto mt-3 max-w-xl text-muted">Husklet is open source and in active development. The roadmap evolves in the open.</p>
     <div class="mt-7 flex flex-col items-stretch justify-center gap-3 sm:flex-row">
-      <a href="https://github.com/ricccrd/dd" class="rounded-xl bg-gradient-to-br from-blue3 to-blue6 px-6 py-3 font-semibold text-white shadow-lg transition hover:-translate-y-0.5">View on GitHub</a>
+      <a href="https://github.com/ricccrd/husklet" class="rounded-xl bg-gradient-to-br from-blue3 to-blue6 px-6 py-3 font-semibold text-white shadow-lg transition hover:-translate-y-0.5">View on GitHub</a>
       <a href="./index.html#download" class="rounded-xl border border-edge px-6 py-3 font-semibold text-txt hover:border-blue3">Download for macOS</a>
     </div>
   </div>
@@ -172,13 +172,13 @@
 <!-- footer -->
 <footer class="border-t border-edge px-5 py-10 text-muted2">
   <div class="mx-auto flex max-w-wrap flex-wrap items-center gap-4">
-    <span class="flex items-center gap-2 font-bold text-txt"><img src="./assets/logo.png" alt="" class="h-6 w-6 rounded-md" /> dd</span>
+    <span class="flex items-center gap-2 font-bold text-txt"><img src="./assets/logo.png" alt="" class="h-6 w-6 rounded-md" /> Husklet</span>
     <span class="text-sm">Run anything, anywhere, at native speed. MIT licensed.</span>
     <nav class="flex flex-wrap gap-5 text-sm sm:ml-auto">
       <a href="./roadmap.html" class="text-muted hover:text-txt">Roadmap</a>
       <a href="./blog/index.html" class="text-muted hover:text-txt">Blog</a>
-      <a href="https://github.com/ricccrd/dd" class="text-muted hover:text-txt">GitHub</a>
-      <a href="https://github.com/ricccrd/dd/releases" class="text-muted hover:text-txt">Releases</a>
+      <a href="https://github.com/ricccrd/husklet" class="text-muted hover:text-txt">GitHub</a>
+      <a href="https://github.com/ricccrd/husklet/releases" class="text-muted hover:text-txt">Releases</a>
       <a href="mailto:huttarichard@gmail.com" class="text-muted hover:text-txt">Contact</a>
     </nav>
   </div>

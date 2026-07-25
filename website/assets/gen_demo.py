@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# Render dd terminal-demo GIFs (+ static posters for click-to-play). No Chromium needed.
+# Render historical dd terminal-demo GIFs (+ static posters for the original blog post).
 #   nix profile install nixpkgs#imagemagick nixpkgs#dejavu_fonts nixpkgs#ffmpeg
-#   python3 gen_demo.py     -> dd-run.gif/.png, dd-inside.gif/.png, dd-docker.gif/.png
+#   python3 gen_demo.py     -> hl-run.gif/.png, hl-inside.gif/.png, hl-docker.gif/.png
 # Content is real (captured from `docker --context dd ...`).
 import subprocess, os, shutil
 
@@ -14,7 +14,7 @@ def cmd(c): return s("$", green) + s(" " + c, txt)
 P = lambda body: f'<span font="{FONT} {SZ}">{body}</span>'
 
 DEMOS = [
-    ("dd-run", [
+    ("hl-run", [
         (s("# dd — Docker on macOS, no VM.", grey), 4),
         (cmd("docker context use dd"), 4),
         (s('Current context is now "dd"', mut), 3),
@@ -23,7 +23,7 @@ DEMOS = [
         (cmd("time docker run --rm alpine true"), 4),
         (s("real    0m0.023s", yel) + s("   # a process spawn, not a boot", grey), 8),
     ]),
-    ("dd-inside", [
+    ("hl-inside", [
         (s("# it's a real Alpine Linux userland:", grey), 4),
         (cmd("docker run --rm alpine cat /etc/os-release"), 4),
         (s('NAME="Alpine Linux"', mut), 2),
@@ -32,7 +32,7 @@ DEMOS = [
         (cmd('docker run --rm alpine echo "hello from a container, no VM"'), 4),
         (s("hello from a container, no VM", yel), 8),
     ]),
-    ("dd-docker", [
+    ("hl-docker", [
         (s("# the Docker you already know — just a context:", grey), 4),
         (cmd("docker pull alpine"), 4),
         (s("Status: Downloaded newer image for alpine:latest", mut), 3),

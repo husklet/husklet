@@ -1,0 +1,37 @@
+[package]
+name = "hl-images"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "OCI content, registry, image, layer, snapshot, and rootfs primitives"
+readme = "../../../README.md"
+
+[dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+fs2.workspace = true
+hl-fs = { path = "../../packages/hl-fs" }
+hl-log = { path = "../../packages/hl-log" }
+oci-client.workspace = true
+oci-spec.workspace = true
+reflink-copy.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "sync"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

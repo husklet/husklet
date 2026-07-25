@@ -1,0 +1,442 @@
+cases:
+  - id: terminal/ubuntu-isatty
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: "[ -t 0 ] && [ -t 1 ] && [ -t 2 ] && echo TTY-ALL"
+    expect:
+      stdout_contains:
+        - TTY-ALL
+
+  - id: terminal/ubuntu-notty
+    image: ubuntu:latest
+    timeout: 60
+    run:
+      shell: "[ -t 1 ] && echo HAS || echo NO-TTY"
+    expect:
+      stdout_contains:
+        - NO-TTY
+
+  - id: terminal/ubuntu-tty-dev
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: tty
+    expect:
+      stdout_contains:
+        - /dev/pts/
+
+  - id: terminal/ubuntu-notty-dev
+    image: ubuntu:latest
+    timeout: 60
+    run:
+      shell: tty || true
+    expect:
+      stdout_contains:
+        - not a tty
+
+  - id: terminal/ubuntu-tty-name
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: tty
+    expect:
+      stdout_contains:
+        - /dev/pts/0
+
+  - id: terminal/ubuntu-fd0-link
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: readlink /proc/self/fd/0
+    expect:
+      stdout_contains:
+        - /dev/pts/0
+
+  - id: terminal/ubuntu-pts-listing
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: ls /dev/pts
+    expect:
+      stdout_contains:
+        - '0'
+
+  - id: terminal/ubuntu-tput-cols
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: tput cols
+    expect:
+      stdout_contains:
+        - '80'
+
+  - id: terminal/ubuntu-stty-echo
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: "stty -echo; stty -a | grep -q -- '-echo' && echo ECHO-OFF"
+    expect:
+      stdout_contains:
+        - ECHO-OFF
+
+  - id: terminal/ubuntu-stty-sane
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: stty sane && echo SANE-OK
+    expect:
+      stdout_contains:
+        - SANE-OK
+
+  - id: terminal/alpine-tty-name
+    image: alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: tty
+    expect:
+      stdout_contains:
+        - /dev/pts/0
+
+  - id: terminal/alpine-isatty
+    image: alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: "[ -t 1 ] && echo TTY-OK"
+    expect:
+      stdout_contains:
+        - TTY-OK
+
+  - id: terminal/alpine-stty-setsize
+    image: alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: stty rows 24 cols 80; stty size
+    expect:
+      stdout_contains:
+        - 24 80
+
+  - id: terminal/tty-term-xterm
+    image: alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: echo TERM=[$TERM]
+    expect:
+      stdout_contains:
+        - TERM=[xterm]
+
+  - id: terminal/notty-term-unset
+    image: alpine
+    timeout: 60
+    run:
+      shell: echo TERM=[$TERM]
+    expect:
+      stdout_contains:
+        - TERM=[]
+
+  - id: terminal/ubuntu-pts0-chardev
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: "[ -c /dev/pts/0 ] && echo PTS0-CHARDEV"
+    expect:
+      stdout_contains:
+        - PTS0-CHARDEV
+
+  - id: terminal/ubuntu-reopen-tty
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: echo REOPEN-OK > "$(tty)"
+    expect:
+      stdout_contains:
+        - REOPEN-OK
+
+  - id: terminal/py-ttyname
+    image: python:alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        python3 -c 'import os; print("TTYNAME", os.ttyname(0))'
+    expect:
+      stdout_contains:
+        - TTYNAME /dev/pts/0
+
+  - id: terminal/py-openpty-ttyname
+    image: python:alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        python3 -c 'import pty,os; m,s=pty.openpty(); print("SLAVE", os.ttyname(s))'
+    expect:
+      stdout_contains:
+        - SLAVE /dev/pts/1
+
+  - id: terminal/py-openpty-fdlink
+    image: python:alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        python3 -c 'import pty,os; m,s=pty.openpty(); print("LINK", os.readlink("/proc/self/fd/%d"%s))'
+    expect:
+      stdout_contains:
+        - LINK /dev/pts/1
+
+  - id: terminal/py-openpty-pts-listing
+    image: python:alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        python3 -c 'import pty,os; m,s=pty.openpty(); print("LS", " ".join(sorted(os.listdir("/dev/pts"))))'
+    expect:
+      stdout_contains:
+        - LS 0 1 ptmx
+
+  - id: terminal/debian-isatty
+    image: debian:bookworm
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: "[ -t 1 ] && echo TTY-OK"
+    expect:
+      stdout_contains:
+        - TTY-OK
+
+  - id: terminal/bash52-isatty
+    image: bash:5.2
+    timeout: 60
+    resources: [pty]
+    run:
+      argv: ["bash", "-c", "[ -t 1 ] && echo TTY-OK"]
+    expect:
+      stdout_contains:
+        - TTY-OK
+
+  - id: terminal/tty-term-override
+    image: alpine
+    timeout: 60
+    resources: [pty]
+    env:
+      TERM: screen
+    run:
+      shell: echo TERM=[$TERM]
+    expect:
+      stdout_contains:
+        - TERM=[screen]
+
+  - id: terminal/ubuntu-stty-setsize
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: stty rows 40 cols 100; stty size
+    expect:
+      stdout_contains:
+        - 40 100
+
+  - id: terminal/py-isatty
+    image: python:alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        python3 -c 'import sys; print("PYTTY", sys.stdin.isatty(), sys.stdout.isatty())'
+    expect:
+      stdout_contains:
+        - PYTTY True True
+
+  - id: terminal/py-termsize
+    image: python:alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        stty rows 30 cols 90; python3 -c 'import os; s=os.get_terminal_size(); print("SIZE", s.columns, s.lines)'
+    expect:
+      stdout_contains:
+        - SIZE 90 30
+
+  - id: terminal/py-termios
+    image: python:alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        python3 -c 'import sys,termios; a=termios.tcgetattr(sys.stdin.fileno()); print("TERMIOS", len(a))'
+    expect:
+      stdout_contains:
+        - TERMIOS 7
+
+  - id: terminal/py-openpty
+    image: python:alpine
+    timeout: 60
+    run:
+      shell: |-
+        python3 -c 'import os,pty; m,s=pty.openpty(); os.write(s,b"hi\n"); print("OPENPTY", os.read(m,3).decode().strip())'
+    expect:
+      stdout_contains:
+        - OPENPTY hi
+
+  - id: terminal/bash-interactive
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        printf 'echo hello-bash-i\nexit\n' | bash -i 2>&1 | grep hello
+    expect:
+      stdout_contains:
+        - hello-bash-i
+
+  - id: terminal/bash-dollar-flags
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        bash -ic 'case $- in *i*) echo INTERACTIVE;; esac' 2>&1 | tail -1
+    expect:
+      stdout_contains:
+        - INTERACTIVE
+
+  - id: terminal/dash-interactive
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        printf 'echo hello-dash\nexit\n' | dash -i 2>&1 | grep hello
+    expect:
+      stdout_contains:
+        - hello-dash
+
+  - id: terminal/busybox-interactive
+    image: alpine
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        printf 'echo hello-ash\nexit\n' | /bin/sh -i 2>&1 | grep hello
+    expect:
+      stdout_contains:
+        - hello-ash
+
+  - id: terminal/zsh-interactive
+    image: zshusers/zsh:5.9
+    timeout: 60
+    run:
+      shell: |-
+        printf 'echo hello-zsh\nexit\n' | zsh -i 2>&1 | grep hello
+    expect:
+      stdout_contains:
+        - hello-zsh
+
+  - id: terminal/zsh-version
+    image: zshusers/zsh:5.9
+    timeout: 60
+    run:
+      shell: zsh --version
+    expect:
+      stdout_contains:
+        - zsh 5
+
+  - id: terminal/jobctl-jobs
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        bash -c 'set -m; sleep 0.4 & jobs | grep -c Running'
+    expect:
+      stdout_contains:
+        - '1'
+
+  - id: terminal/jobctl-wait-rc
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: set -m; (exit 7) & wait $!; echo rc=$?
+    expect:
+      stdout_contains:
+        - rc=7
+
+  - id: terminal/jobctl-fgbg
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        bash -c "set -m; sleep 0.5 & disown -h %1 2>/dev/null; jobs -p | grep -q '[0-9]' && echo JOB-PID-OK"
+    expect:
+      stdout_contains:
+        - JOB-PID-OK
+
+  - id: terminal/jobctl-fg-pipeline
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: |-
+        bash -ic 'ls / | cat >/dev/null && echo PIPE-OK' 2>&1 | tail -1
+    expect:
+      stdout_contains:
+        - PIPE-OK
+
+  - id: terminal/setsid-newsession
+    image: ubuntu:latest
+    timeout: 60
+    run:
+      shell: |-
+        setsid sh -c 'echo SETSID-OK' 2>&1 | head -1
+    expect:
+      stdout_contains:
+        - SETSID-OK
+
+  - id: terminal/tput-colors
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: export TERM=xterm; tput colors
+    expect:
+      stdout_contains:
+        - '8'
+
+  - id: terminal/tput-setaf-escape
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: "export TERM=xterm; tput setaf 1 | od -An -tx1 | tr -d ' \\n'"
+    expect:
+      stdout_contains:
+        - 1b5b
+
+  - id: terminal/clear-escape
+    image: ubuntu:latest
+    timeout: 60
+    resources: [pty]
+    run:
+      shell: "export TERM=xterm; clear | od -An -tx1 | tr -d ' \\n' | grep -q 1b5b && echo CLEAR-ESC"
+    expect:
+      stdout_contains:
+        - CLEAR-ESC

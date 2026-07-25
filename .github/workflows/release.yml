@@ -1,147 +1,213 @@
-name: Release (build DMG + publish)
+name: Release Husklet
 
-# Builds the macOS app + DMG via the Nix dev shell on an Apple-Silicon runner and
-# attaches the .dmg to a GitHub Release.
-#
-# Trigger by pushing a version tag:
-#     git tag v0.1.0 && git push origin v0.1.0
-# or run it manually from the Actions tab (workflow_dispatch) with a version.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to build (e.g. 0.1.0). Defaults to the tag."
-        required: false
-        default: "0.1.0"
+        description: "Version to build, in X.Y.Z form"
+        required: true
+        type: string
 
 permissions:
-  contents: write   # create the release + upload assets
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  smoke:
+    name: Release real-image gate
+    uses: ./.github/workflows/smoke.yml
+    secrets:
+      HL_REGISTRY_USERNAME: ${{ secrets.HL_REGISTRY_USERNAME }}
+      HL_REGISTRY_PASSWORD: ${{ secrets.HL_REGISTRY_PASSWORD }}
+
   dmg:
-    # macos-14 = Apple Silicon (arm64). dd only targets arm64 macOS.
-    runs-on: macos-14
-    timeout-minutes: 60   # never let a wedged step hang the runner for hours
+    name: Signed and notarized DMG
+    needs: smoke
+    runs-on: macos-26
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Resolve version
-        id: ver
+      - name: Require an Apple Silicon host
         run: |
-          REF="${GITHUB_REF#refs/tags/}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            V="${{ github.event.inputs.version }}"
-          else
-            V="${REF#v}"
-          fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "Building dd $V"
+          architecture="$(uname -m)"
+          test "$architecture" = arm64 || {
+            echo "Husklet releases require an arm64 macOS host, got: $architecture" >&2
+            exit 1
+          }
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      # Stable key (NOT per-version) so compiled dependencies are reused across releases.
-      # rust-cache already keys on Cargo.lock + rustc, so a real dep change still busts it.
-      - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: dmg-release
-
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
-
-      # Persist the GTK4 dev-shell closure in the GitHub Actions cache so later releases
-      # restore /nix instead of re-downloading it from cache.nixos.org every time.
-      # (Replaces magic-nix-cache, which is sunset and crashes on Apple-Silicon runners.)
-      # Key is the flake lock+def: it only busts when the pinned nixpkgs / inputs change.
-      - name: Cache the Nix store (GTK4 dev shell closure)
-        uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('nix/flake.lock', 'nix/flake.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-
-      - name: Warm the dev shell (fetch GTK4 + tools on a cache miss)
-        run: nix develop "path:$PWD/nix" --command true
-
-      - name: Set up Developer ID signing + notarization (skips cleanly without secrets)
+      - name: Resolve and validate version
+        id: version
         env:
-          P12_B64: ${{ secrets.DD_SIGN_P12_BASE64 }}
-          P12_PW: ${{ secrets.DD_SIGN_P12_PW }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PW: ${{ secrets.APPLE_APP_PW }}
+          MANUAL_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ -z "${P12_B64:-}" ]; then echo "no DD_SIGN_P12_BASE64 secret — building ad-hoc (unsigned)"; exit 0; fi
-          KC="$RUNNER_TEMP/dd-sign.keychain"; KCPW="$(uuidgen)"
-          printf '%s' "$P12_B64" | base64 --decode > "$RUNNER_TEMP/dd.p12"
-          security create-keychain -p "$KCPW" "$KC"
-          security set-keychain-settings -lut 3600 "$KC"
-          security unlock-keychain -p "$KCPW" "$KC"
-          security import "$RUNNER_TEMP/dd.p12" -k "$KC" -P "$P12_PW" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" >/dev/null
-          security list-keychains -d user -s "$KC" $(security list-keychains -d user | sed 's/"//g')
-          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/g2.cer"
-          security import "$RUNNER_TEMP/g2.cer" -k "$KC" 2>/dev/null || true
-          ID="$(security find-identity -v -p codesigning "$KC" | awk -F'"' '/Developer ID Application/{print $2; exit}')"
-          [ -n "$ID" ] || { echo "no Developer ID Application identity in the imported .p12" >&2; exit 1; }
-          {
-            echo "DD_SIGN_ID=$ID"
-            echo "DD_SIGN_KEYCHAIN=$KC"
-            echo "DD_SIGN_KEYCHAIN_PW=$KCPW"
-            echo "DD_NOTARY_APPLE_ID=$APPLE_ID"
-            echo "DD_NOTARY_TEAM_ID=$APPLE_TEAM_ID"
-            echo "DD_NOTARY_PW=$APPLE_APP_PW"
-          } >> "$GITHUB_ENV"
-          echo "configured Developer ID signing: $ID"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            [[ "$GITHUB_REF_NAME" == v* ]] || {
+              echo "release tag must start with v" >&2
+              exit 1
+            }
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$MANUAL_VERSION"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "version must have X.Y.Z form, got: $version" >&2
+            exit 1
+          }
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "tag and resolved version disagree" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building Husklet $version"
 
-      - name: Build the DMG (signs + notarizes when the secrets are set)
-        run: make dmg VERSION=${{ steps.ver.outputs.version }}
-
-      - name: Locate the DMG
-        id: dmg
-        run: |
-          DMG="$(ls target/dist/*.dmg | head -1)"
-          [ -n "$DMG" ] || { echo "no .dmg produced" >&2; exit 1; }
-          echo "path=$DMG" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "$DMG")" >> "$GITHUB_OUTPUT"
-          shasum -a 256 "$DMG"
-
-      - name: Upload DMG as a build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.dmg.outputs.name }}
-          path: ${{ steps.dmg.outputs.path }}
-
-      # Drop any assets from a prior run of this tag (e.g. an old-named .dmg) so the
-      # release ends up with exactly the current dd.dmg, not a pile of stale files.
-      - name: Remove stale release assets
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Require release signing and notarization secrets
         env:
-          GH_TOKEN: ${{ github.token }}
+          P12_B64: ${{ secrets.HL_SIGN_P12_BASE64 }}
+          P12_PW: ${{ secrets.HL_SIGN_P12_PW }}
+          NOTARY_APPLE_ID: ${{ secrets.HL_NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.HL_NOTARY_TEAM_ID }}
+          NOTARY_PW: ${{ secrets.HL_NOTARY_PW }}
         run: |
-          gh release view "${{ github.ref_name }}" --json assets -q '.assets[].name' 2>/dev/null \
-            | while read -r a; do [ -n "$a" ] && gh release delete-asset "${{ github.ref_name }}" "$a" --yes || true; done || true
+          set -euo pipefail
+          missing=()
+          [[ -n "$P12_B64" ]] || missing+=(HL_SIGN_P12_BASE64)
+          [[ -n "$P12_PW" ]] || missing+=(HL_SIGN_P12_PW)
+          [[ -n "$NOTARY_APPLE_ID" ]] || missing+=(HL_NOTARY_APPLE_ID)
+          [[ -n "$NOTARY_TEAM_ID" ]] || missing+=(HL_NOTARY_TEAM_ID)
+          [[ -n "$NOTARY_PW" ]] || missing+=(HL_NOTARY_PW)
+          if (( ${#missing[@]} )); then
+            printf 'release requires secret: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
 
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
         with:
-          name: dd ${{ steps.ver.outputs.version }}
+          diagnostic-endpoint: ""
+
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('nix/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache Cargo build products
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: husklet-release
+
+      - name: Configure Developer ID signing and notarization
+        env:
+          P12_B64: ${{ secrets.HL_SIGN_P12_BASE64 }}
+          P12_PW: ${{ secrets.HL_SIGN_P12_PW }}
+          NOTARY_APPLE_ID: ${{ secrets.HL_NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.HL_NOTARY_TEAM_ID }}
+          NOTARY_PW: ${{ secrets.HL_NOTARY_PW }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/husklet-sign.keychain-db"
+          keychain_password="$(uuidgen)"
+          p12="$RUNNER_TEMP/husklet-signing.p12"
+          printf '%s' "$P12_B64" | base64 --decode > "$p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$p12" -k "$keychain" -P "$P12_PW" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain"
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+            -o "$RUNNER_TEMP/developer-id-g2.cer"
+          security import "$RUNNER_TEMP/developer-id-g2.cer" -k "$keychain"
+          identity="$(
+            security find-identity -v -p codesigning "$keychain" |
+              awk -F'"' '/Developer ID Application/{print $2; exit}'
+          )"
+          [[ -n "$identity" ]] || {
+            echo "the signing archive contains no Developer ID Application identity" >&2
+            exit 1
+          }
+          {
+            echo "HL_SIGN_ID=$identity"
+            echo "HL_SIGN_KEYCHAIN=$keychain"
+            echo "HL_SIGN_KEYCHAIN_PW=$keychain_password"
+            echo "HL_NOTARY_APPLE_ID=$NOTARY_APPLE_ID"
+            echo "HL_NOTARY_TEAM_ID=$NOTARY_TEAM_ID"
+            echo "HL_NOTARY_PW=$NOTARY_PW"
+          } >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, and staple Husklet
+        run: make dmg VERSION="${{ steps.version.outputs.version }}"
+
+      - name: Verify the distributable
+        id: artifact
+        run: |
+          set -euo pipefail
+          dmg="$PWD/target/dist/Husklet.dmg"
+          checksum="$dmg.sha256"
+          [[ -s "$dmg" ]] || {
+            echo "missing Husklet DMG: $dmg" >&2
+            exit 1
+          }
+          [[ -s "$checksum" ]] || {
+            echo "missing Husklet checksum: $checksum" >&2
+            exit 1
+          }
+          (cd "$(dirname "$dmg")" && shasum -a 256 -c "$(basename "$checksum")")
+          /usr/bin/xcrun stapler validate "$dmg"
+
+          mountpoint="$(mktemp -d)"
+          cleanup() {
+            hdiutil detach "$mountpoint" >/dev/null 2>&1 || true
+            rmdir "$mountpoint" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          hdiutil attach -nobrowse -readonly -mountpoint "$mountpoint" "$dmg" >/dev/null
+          app="$mountpoint/Husklet.app"
+          [[ -d "$app" ]] || {
+            echo "Husklet.app is absent from the DMG" >&2
+            exit 1
+          }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 |
+            grep -q '^Authority=Developer ID Application:'
+          spctl --assess --type execute --verbose=2 "$app"
+
+          echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the verified distributable
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Husklet-${{ steps.version.outputs.version }}
+          path: |
+            ${{ steps.artifact.outputs.dmg }}
+            ${{ steps.artifact.outputs.checksum }}
+          if-no-files-found: error
+
+      - name: Publish the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          name: Husklet ${{ steps.version.outputs.version }}
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: ${{ steps.dmg.outputs.path }}
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.artifact.outputs.dmg }}
+            ${{ steps.artifact.outputs.checksum }}
           body: |
-            ## dd ${{ steps.ver.outputs.version }}
+            ## Husklet ${{ steps.version.outputs.version }}
 
-            Linux containers on macOS, with no VM. Apple-Silicon (arm64), macOS 12+.
+            Configurable Linux workspaces on Apple Silicon Macs.
 
-            ### Install
-            1. Download the `.dmg` and drag **dd** to Applications.
-            2. Open a terminal: `dd install` then `dd app`.
-
-            Signed with a Developer ID and notarized by Apple — no Gatekeeper override needed. (If a
-            release was built without the signing secrets and Gatekeeper complains, right-click the app
-            → **Open** once, or `xattr -dr com.apple.quarantine /Applications/dd.app`.)
+            Download `Husklet.dmg`, open it, and drag `Husklet.app` to Applications.
+            The application and disk image are Developer ID signed, notarized, and stapled.

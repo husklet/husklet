@@ -1,11 +1,97 @@
-# dd — VM-less Linux container runtime on macOS. Cargo workspace.
+# hl — VM-less Linux container runtime on macOS. Cargo workspace.
 [workspace]
 resolver = "2"
-members = ["dd-jit", "dd-daemon", "dd-tests", "dd-client", "dd-cli", "dd-gui"]
-# dd-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
+members = [
+    "src/containers/hl-client",
+    "src/containers/hl-container",
+    "src/containers/hl-daemon",
+    "src/containers/hl-images",
+    "src/gpu/hl-gpu",
+    "src/gpu/hl-gpu-wgpu",
+    "src/surface/hl-compositor",
+    "src/surface/hl-cuda",
+    "src/surface/hl-gl",
+    "src/surface/hl-vulkan",
+    "src/workspaces/hl-gui",
+    "src/workspaces/hl-ws-term",
+    "src/workspaces/hl-ws",
+    "src/packages/hl-log",
+    "src/packages/hl-fs",
+    "src/packages/hl-design",
+    "src/packages/hl-design-lint",
+    "src/apps/husklet",
+]
+exclude = ["vendor/smithay-0.7.0"]
+default-members = [
+    "src/gpu/hl-gpu",
+    "src/workspaces/hl-ws-term",
+    "src/workspaces/hl-ws",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/husklet/husklet"
+homepage = "https://github.com/husklet/husklet"
+rust-version = "1.85"
+
+[workspace.dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+chrono = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+futures-util = "0.3"
+fs2 = "0.4"
+http = "1"
+http-body-util = "0.1"
+hl-engine = "0.1.28"
+hyper = "1"
+hyper-util = "0.1"
+oci-client = { version = "0.17", default-features = false, features = ["rustls-tls"] }
+oci-spec = "0.9"
+percent-encoding = "2"
+reflink-copy = "0.1.30"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
+serde = "1"
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.11"
+tar = "0.4"
+tempfile = "3"
+thiserror = "2"
+tokio = "1"
+tokio-util = "0.7"
+tower = "0.5"
+uuid = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+# hl-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
 # Keep it out of the default set so a bare `cargo build` works everywhere; build it
-# explicitly with `cargo build -p dd-gui` (or `make app`) on the macOS host.
-default-members = ["dd-jit", "dd-daemon", "dd-tests", "dd-client", "dd-cli"]
+# explicitly with `cargo build -p hl-gui` (or `make app`) on the macOS host.
+# hl-compositor pulls in Smithay and is kept out of default-members so a bare headless build does not
+# compile the Wayland adapter. Its build script locates the platform's versioned libxkbcommon library.
+# hl-gpu-wgpu wraps wgpu/naga (macOS-gated deps; compiles to an empty lib elsewhere) and is likewise
+# kept out of default-members so a bare Linux `cargo build` never fetches/compiles wgpu.
+# Guest GPU libraries now belong to their drivers: hl-gl owns EGL/GLES, hl-cuda owns CUDA/CUDART/NVML,
+# and hl-vulkan owns its ICD. Their cdylib packages remain outside default-members because they are
+# cross-built for guest ELF targets by the owning driver packages.
+# Offline-vendored smithay 0.7.0 with a single macOS-only fix: its `zwp_linux_dmabuf` v4-feedback
+# format-table is backed by a POSIX shm object whose name (`smithay-dmabuffeedback-format-table` +
+# random suffix, ~43 bytes) exceeds macOS `PSHMNAMLEN` (31) and fails `shm_open` with ENAMETOOLONG,
+# so the v4 global could not stand up on the macOS host and `hl-compositor` fell back to advertising
+# `zwp_linux_dmabuf` v3 only (no feedback → no accelerated-Chromium render-node probe). The vendored
+# copy shortens that shm object name in `src/utils/sealed_file.rs`; nothing else is changed. smithay is
+# only a dependency of the macOS-only `hl-compositor` (kept out of default-members), so this patch is a
+# no-op for the Linux headless build — resolution reads the manifest but never compiles smithay there.
+[patch.crates-io]
+smithay = { path = "vendor/smithay-0.7.0" }
 
 [profile.release]
 opt-level = 2

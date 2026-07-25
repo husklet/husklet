@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workspace:
+    name: Workspace quality and tests
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an Apple Silicon host
+        run: |
+          architecture="$(uname -m)"
+          test "$architecture" = arm64 || {
+            echo "Husklet CI requires an arm64 macOS host, got: $architecture" >&2
+            exit 1
+          }
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('nix/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Check formatting
+        run: nix develop "path:$PWD/nix" --command cargo fmt --all -- --check
+
+      - name: Enforce Clippy warnings
+        run: nix develop "path:$PWD/nix" --command cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test deterministic workspace targets
+        run: |
+          nix develop "path:$PWD/nix" --command cargo test --workspace --exclude hl-daemon
+          nix develop "path:$PWD/nix" --command \
+            cargo test -p hl-daemon --lib --bin hl-daemon --test analyze --test report
+
+      - name: Build the complete workspace
+        run: nix develop "path:$PWD/nix" --command cargo build --workspace
+
+      - name: Build the runtime library
+        run: nix develop "path:$PWD/nix" --command cargo check -p husklet --features runtime --lib
+
+      - name: Build the macOS application
+        run: nix develop "path:$PWD/nix" --command cargo check -p husklet --bin husklet --features gui

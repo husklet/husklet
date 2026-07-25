@@ -1,0 +1,30 @@
+# hl-cuda — the standalone CUDA guest-driver crate.
+#
+# Its ONLY dependency is the neutral protocol crate `hl-gpu` (package `hl_gpu`, lib `hl_gpu`):
+# a CUDA operation lowers to protocol `Cmd`s and is submitted through a `CommandSink`. Nothing
+# CUDA-specific leaks into the protocol; nothing protocol-transport-specific leaks into the driver.
+#
+[package]
+name = "hl-cuda"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+# Downstream reads the driver through `hl_cuda::…`.
+name = "hl_cuda"
+path = "src/lib.rs"
+
+[dependencies]
+# The neutral hl-GPU protocol (Cmd/Enc, descriptors, kernel-IR, CommandSink). Package `hl_gpu`,
+# lib target `hl_gpu` — so code here reads `hl_gpu::protocol::…`.
+hl_gpu = { package = "hl-gpu", path = "../../gpu/hl-gpu" }
+
+# Tag-based logging + counters + timing. std-only, zero external deps, cross-compiles to the guest
+# arches, and (crucially) exports NO #[no_mangle] symbols — so pulling it into the libcuda/libcudart/
+# libnvml cdylibs (transitively via this lib) leaves the 132/49/62 C-ABI export surface untouched. In a
+# `--release` cdylib the verbose macros + counters compile to nothing (zero-cost); debug/tests keep them.
+hl-log = { path = "../../packages/hl-log" }
+
+[features]
+default = []

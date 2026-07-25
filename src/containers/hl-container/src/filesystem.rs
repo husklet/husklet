@@ -1,0 +1,408 @@
+mod inventory;
+mod overlay;
+mod path;
+
+pub use inventory::{Change, ChangeKind, Changes};
+pub use path::Path;
+
+use self::overlay::{Overlay, Resolution};
+use crate::{model::ResolvedMount, Access, Error, Result};
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::{Path as FsPath, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
+
+/// Bounds applied while importing a container filesystem archive.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub entries: u64,
+    pub bytes: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            entries: 100_000,
+            bytes: 128 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
+/// Filesystem metadata independent from Docker's wire encoding.
+#[derive(Clone, Debug)]
+pub struct Stat {
+    pub name: String,
+    pub size: u64,
+    pub mode: u32,
+    pub modified: SystemTime,
+    pub link: Option<PathBuf>,
+}
+
+/// Mount-aware filesystem surface for one container.
+#[derive(Clone, Debug)]
+pub struct Filesystem {
+    root: PathBuf,
+    overlay: Option<Overlay>,
+    mounts: Vec<ResolvedMount>,
+    generation: Option<crate::generation::Generation>,
+}
+
+impl Filesystem {
+    pub(crate) fn new(root: PathBuf, mounts: Vec<ResolvedMount>) -> Self {
+        Self {
+            root,
+            overlay: None,
+            mounts,
+            generation: None,
+        }
+    }
+
+    pub(crate) fn overlay(
+        lower: PathBuf,
+        upper: PathBuf,
+        lower_ownership: hl_images::snapshot::Ownerships,
+        upper_ownership: hl_images::snapshot::Ownerships,
+        mounts: Vec<ResolvedMount>,
+    ) -> Self {
+        Self {
+            root: lower.clone(),
+            overlay: Some(Overlay {
+                lower,
+                upper,
+                lower_ownership: Arc::new(Mutex::new(lower_ownership)),
+                upper_ownership: Arc::new(Mutex::new(upper_ownership)),
+            }),
+            mounts,
+            generation: None,
+        }
+    }
+
+    pub(crate) fn with_generation(mut self, value: crate::generation::Generation) -> Self {
+        self.generation = Some(value);
+        self
+    }
+
+    /// Reads metadata without following the final symlink.
+    ///
+    /// # Errors
+    /// Returns an error for unsafe guest paths, symlink escapes, or filesystem failures.
+    pub fn stat(&self, path: impl AsRef<FsPath>) -> Result<Stat> {
+        let _span = hl_log::hl_span!(hl_log::tag::CONTAINER, "filesystem.stat");
+        let resolved = self.resolve(path.as_ref(), false)?;
+        let metadata = fs::symlink_metadata(&resolved.path)?;
+        #[cfg(unix)]
+        let mode = metadata.permissions().mode();
+        #[cfg(not(unix))]
+        let mode = u32::from(metadata.is_dir()) << 31;
+        Ok(Stat {
+            name: resolved
+                .path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+            size: metadata.len(),
+            mode,
+            modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            link: metadata
+                .file_type()
+                .is_symlink()
+                .then(|| fs::read_link(&resolved.path))
+                .transpose()?,
+        })
+    }
+
+    /// Produces a tar archive containing the requested path and its basename.
+    ///
+    /// # Errors
+    /// Returns an error for unsafe paths, missing files, or archive/filesystem failures.
+    pub fn archive(&self, path: impl AsRef<FsPath>, writer: impl Write) -> Result<()> {
+        let _span = hl_log::hl_span!(hl_log::tag::CONTAINER, "filesystem.archive");
+        let guest = Path::guest(path.as_ref())?;
+        let mounted = self.mounts.iter().any(|mount| {
+            guest.as_path() == mount.target || guest.as_path().starts_with(&mount.target)
+        });
+        if !mounted {
+            if let Some(overlay) = &self.overlay {
+                let relative = guest.as_path().strip_prefix("/").unwrap_or(guest.as_path());
+                return overlay.archive(relative, writer);
+            }
+        }
+        let resolved = self.resolve(path.as_ref(), false)?;
+        fs::symlink_metadata(&resolved.path)?;
+        let name = resolved
+            .path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("."));
+        let mut archive = tar::Builder::new(writer);
+        archive.follow_symlinks(false);
+        if resolved.path == fs::canonicalize(&self.root)? {
+            for entry in fs::read_dir(&resolved.path)? {
+                let entry = entry?;
+                let path = entry.path();
+                let name = entry.file_name();
+                if path.is_dir() {
+                    archive.append_dir_all(&name, &path)?;
+                } else {
+                    archive.append_path_with_name(&path, &name)?;
+                }
+            }
+        } else if resolved.path.is_dir() {
+            archive.append_dir_all(name, &resolved.path)?;
+        } else {
+            archive.append_path_with_name(&resolved.path, name)?;
+        }
+        archive.finish()?;
+        Ok(())
+    }
+
+    /// Extracts a tar archive into an existing container directory.
+    ///
+    /// # Errors
+    /// Returns an error for read-only mounts, unsafe/special entries, exceeded limits, or I/O failures.
+    pub fn extract(
+        &self,
+        path: impl AsRef<FsPath>,
+        reader: impl Read,
+        limits: Limits,
+    ) -> Result<()> {
+        self.extract_owned(path, reader, limits, false)
+    }
+
+    /// Extract a tar archive, optionally preserving its guest uid/gid metadata.
+    ///
+    /// # Errors
+    /// Returns the same validation and filesystem failures as [`Self::extract`].
+    pub fn extract_owned(
+        &self,
+        path: impl AsRef<FsPath>,
+        mut reader: impl Read,
+        limits: Limits,
+        copy_uid_gid: bool,
+    ) -> Result<()> {
+        let _span = hl_log::hl_span!(hl_log::tag::CONTAINER, "filesystem.extract");
+        let destination = self.resolve(path.as_ref(), true)?;
+        if destination.access == Access::ReadOnly {
+            return Err(Error::ReadOnly(path.as_ref().to_owned()));
+        }
+        let root = fs::canonicalize(&destination.path)?;
+        if !root.is_dir() {
+            return Err(Error::InvalidSpec(
+                "archive destination must be a directory".into(),
+            ));
+        }
+        let raw_limit = limits
+            .bytes
+            .saturating_add(limits.entries.saturating_mul(1024))
+            .saturating_add(1024);
+        let mut staged = tempfile::tempfile()?;
+        let received = std::io::copy(
+            &mut reader.by_ref().take(raw_limit.saturating_add(1)),
+            &mut staged,
+        )?;
+        if received > raw_limit {
+            return Err(Error::InvalidSpec(
+                "archive input exceeds extraction limit".into(),
+            ));
+        }
+        hl_log::hl_debug!(
+            hl_log::tag::CONTAINER,
+            "filesystem archive received bytes={} preserve_owner={}",
+            received,
+            copy_uid_gid
+        );
+        staged.seek(SeekFrom::Start(0))?;
+        Self::preflight(&mut staged, limits)?;
+        staged.seek(SeekFrom::Start(0))?;
+        let mut archive = tar::Archive::new(staged);
+        let destination_relative = self
+            .overlay
+            .as_ref()
+            .map(|overlay| fs::canonicalize(&overlay.upper))
+            .transpose()?
+            .and_then(|upper| destination.path.strip_prefix(upper).ok().map(PathBuf::from));
+        let ownership = self
+            .overlay
+            .as_ref()
+            .map(|overlay| Arc::clone(&overlay.upper_ownership));
+        let extracted = archive.entries()?.try_for_each(|item| {
+            let mut entry = item?;
+            let relative = Path::entry(&entry.path()?)?.as_path().to_owned();
+            let owner = if copy_uid_gid {
+                Some(hl_images::snapshot::Ownership {
+                    uid: u32::try_from(entry.header().uid()?)
+                        .map_err(|_| Error::InvalidSpec("archive uid exceeds u32".into()))?,
+                    gid: u32::try_from(entry.header().gid()?)
+                        .map_err(|_| Error::InvalidSpec("archive gid exceeds u32".into()))?,
+                })
+            } else {
+                Some(hl_images::snapshot::Ownership { uid: 0, gid: 0 })
+            };
+            Self::extract_entry(&root, &mut entry)?;
+            if let (Some(base), Some(ownership), Some(owner)) =
+                (&destination_relative, ownership.as_ref(), owner)
+            {
+                ownership
+                    .lock()
+                    .map_err(|_| Error::Corrupt("rootfs ownership lock is poisoned".into()))?
+                    .set(base.join(relative), owner)?;
+            }
+            Ok(())
+        });
+        if let Some(generation) = &self.generation {
+            generation.bump()?;
+        }
+        extracted
+    }
+
+    fn extract_entry<R: Read>(root: &FsPath, entry: &mut tar::Entry<'_, R>) -> Result<()> {
+        let path = Path::entry(&entry.path()?)?;
+        let output = path.output(root);
+        path.prepare(root)?;
+        let kind = entry.header().entry_type();
+        if kind.is_dir() {
+            path.ensure_dir(root)?;
+        } else if kind.is_file() {
+            path.replace(root)?;
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut file = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&output)?;
+            std::io::copy(&mut *entry, &mut file)?;
+            file.flush()?;
+        } else if kind.is_symlink() {
+            let target = entry
+                .link_name()?
+                .ok_or_else(|| Error::InvalidSpec("symlink entry has no target".into()))?;
+            path.validate_link(&target)?;
+            path.replace(root)?;
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &output)?;
+            #[cfg(not(unix))]
+            return Err(Error::InvalidSpec(
+                "symlink archives are unsupported".into(),
+            ));
+        } else if kind.is_hard_link() {
+            let target = entry
+                .link_name()?
+                .ok_or_else(|| Error::InvalidSpec("hard-link entry has no target".into()))?;
+            let canonical = fs::canonicalize(Path::entry(&target)?.output(root))?;
+            if !canonical.starts_with(root) || !canonical.is_file() {
+                return Err(Error::InvalidSpec(
+                    "archive hard-link target is unsafe".into(),
+                ));
+            }
+            path.replace(root)?;
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::hard_link(canonical, &output)?;
+        } else {
+            return Err(Error::InvalidSpec(
+                "special archive entries are unsupported".into(),
+            ));
+        }
+        #[cfg(unix)]
+        if !kind.is_symlink() {
+            if let Ok(mode) = entry.header().mode() {
+                fs::set_permissions(&output, fs::Permissions::from_mode(mode & 0o7777))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn preflight(reader: impl Read, limits: Limits) -> Result<()> {
+        let mut archive = tar::Archive::new(reader);
+        let mut entries = 0_u64;
+        let mut bytes = 0_u64;
+        for item in archive.entries()? {
+            let entry = item?;
+            entries = entries.saturating_add(1);
+            bytes = bytes.saturating_add(entry.size());
+            if entries > limits.entries || bytes > limits.bytes {
+                return Err(Error::InvalidSpec(
+                    "archive extraction limit exceeded".into(),
+                ));
+            }
+            let path = Path::entry(&entry.path()?)?;
+            let kind = entry.header().entry_type();
+            if kind.is_symlink() {
+                let target = entry
+                    .link_name()?
+                    .ok_or_else(|| Error::InvalidSpec("symlink entry has no target".into()))?;
+                path.validate_link(&target)?;
+            } else if kind.is_hard_link() {
+                let target = entry
+                    .link_name()?
+                    .ok_or_else(|| Error::InvalidSpec("hard-link entry has no target".into()))?;
+                Path::entry(&target)?;
+            } else if !kind.is_dir() && !kind.is_file() {
+                return Err(Error::InvalidSpec(
+                    "special archive entries are unsupported".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve(&self, path: &FsPath, write: bool) -> Result<Resolution> {
+        let guest = Path::guest(path)?;
+        let selected = self
+            .mounts
+            .iter()
+            .filter(|mount| {
+                guest.as_path() == mount.target || guest.as_path().starts_with(&mount.target)
+            })
+            .max_by_key(|mount| mount.target.components().count());
+        if selected.is_none() {
+            if let Some(overlay) = &self.overlay {
+                let relative = guest.as_path().strip_prefix("/").unwrap_or(guest.as_path());
+                return overlay.resolve(relative, write);
+            }
+        }
+        let (base, relative, access) = selected.map_or_else(
+            || {
+                (
+                    self.root.as_path(),
+                    guest.as_path().strip_prefix("/").unwrap_or(guest.as_path()),
+                    Access::ReadWrite,
+                )
+            },
+            |mount| {
+                (
+                    mount.source.as_path(),
+                    guest
+                        .as_path()
+                        .strip_prefix(&mount.target)
+                        .unwrap_or(FsPath::new("")),
+                    mount.access,
+                )
+            },
+        );
+        let base = fs::canonicalize(base)?;
+        let path = base.join(relative);
+        let parent = if write || path == base {
+            path.as_path()
+        } else {
+            path.parent().unwrap_or(&path)
+        };
+        let canonical = fs::canonicalize(Path::nearest(parent)?)?;
+        if !canonical.starts_with(&base) {
+            return Err(Error::InvalidSpec(
+                "container path escapes its filesystem root".into(),
+            ));
+        }
+        Ok(Resolution { path, access })
+    }
+}
+
+#[cfg(test)]
+mod tests;

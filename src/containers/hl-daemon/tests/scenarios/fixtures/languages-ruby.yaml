@@ -1,0 +1,35 @@
+cases:
+  - id: languages/ruby-sum-33-alpine
+    image: ruby:3.3-alpine
+    run:
+      argv: ["ruby", "-e", "puts (1..1000).sum"]
+    expect:
+      stdout_contains: ["500500"]
+
+  - id: languages/ruby-fib-32-alpine
+    image: ruby:3.2-alpine
+    run:
+      argv: ["ruby", "-e", "a,b=0,1;50.times{a,b=b,a+b};puts a"]
+    expect:
+      stdout_contains: ["12586269025"]
+
+  - id: languages/ruby-json-33-alpine
+    image: ruby:3.3-alpine
+    run:
+      argv: ["ruby", "-e", "require 'json';puts({s:(1..1000).sum}.to_json)"]
+    expect:
+      stdout_contains: ['{"s":500500}']
+
+  - id: languages/ruby-primes-33-alpine
+    image: ruby:3.3-alpine
+    run:
+      argv: ["ruby", "-e", "puts (2...10000).count{|n| (2..Integer.sqrt(n)).all?{|d| n%d!=0}}"]
+    expect:
+      stdout_contains: ["1229"]
+
+  - id: languages/ruby-sort-repl-33-slim
+    image: ruby:3.3-slim
+    run:
+      shell: echo 'puts [3,1,2].sort.join(",")' | ruby
+    expect:
+      stdout_contains: ["1,2,3"]

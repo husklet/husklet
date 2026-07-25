@@ -1,0 +1,105 @@
+use super::*;
+
+/// `VkBindBufferMemoryInfo` — one `vkBindBufferMemory2` binding.
+#[repr(C)]
+pub struct VkBindBufferMemoryInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub buffer: u64,
+    pub memory: u64,
+    pub memory_offset: VkDeviceSize,
+}
+
+/// `VkBindImageMemoryInfo` — one `vkBindImageMemory2` binding.
+#[repr(C)]
+pub struct VkBindImageMemoryInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub image: u64,
+    pub memory: u64,
+    pub memory_offset: VkDeviceSize,
+}
+
+/// `VkBufferMemoryRequirementsInfo2` — the `vkGetBufferMemoryRequirements2` input (the queried buffer).
+#[repr(C)]
+pub struct VkBufferMemoryRequirementsInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub buffer: u64,
+}
+
+/// `VkImageMemoryRequirementsInfo2` — the `vkGetImageMemoryRequirements2` input (the queried image).
+#[repr(C)]
+pub struct VkImageMemoryRequirementsInfo2 {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub image: u64,
+}
+
+/// `VkMemoryRequirements2` — the `...Requirements2` output (base `VkMemoryRequirements` + preserved chain).
+#[repr(C)]
+pub struct VkMemoryRequirements2 {
+    pub s_type: i32,
+    pub p_next: *mut c_void,
+    pub memory_requirements: VkMemoryRequirements,
+}
+
+#[repr(C)]
+pub struct VkSemaphoreCreateInfo {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+}
+
+#[repr(C)]
+pub struct VkSwapchainCreateInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    pub surface: u64,
+    pub min_image_count: u32,
+    pub image_format: i32,
+    pub image_color_space: i32,
+    pub image_extent: VkExtent2D,
+    pub image_array_layers: u32,
+    pub image_usage: VkFlags,
+    pub image_sharing_mode: i32,
+    pub queue_family_index_count: u32,
+    pub p_queue_family_indices: *const u32,
+    pub pre_transform: VkFlags,
+    pub composite_alpha: VkFlags,
+    pub present_mode: i32,
+    pub clipped: VkBool32,
+    pub old_swapchain: u64,
+}
+
+/// `VkWaylandSurfaceCreateInfoKHR` (`VK_KHR_wayland_surface`) — the app's native wayland handles the ICD
+/// captures at `vkCreateWaylandSurfaceKHR`: `display` is the app's `wl_display*` and `surface` its
+/// `wl_surface*`, both on the app's OWN `libwayland-client` connection. The shim records these (never
+/// dereferences them here) so `vkQueuePresentKHR` can marshal the presented frame onto that `wl_surface`.
+#[repr(C)]
+pub struct VkWaylandSurfaceCreateInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub flags: VkFlags,
+    /// `struct wl_display*` — the app's connection.
+    pub display: *mut c_void,
+    /// `struct wl_surface*` — the app window's surface.
+    pub surface: *mut c_void,
+}
+
+#[repr(C)]
+pub struct VkPresentInfoKHR {
+    pub s_type: i32,
+    pub p_next: *const c_void,
+    pub wait_semaphore_count: u32,
+    pub p_wait_semaphores: *const u64,
+    pub swapchain_count: u32,
+    pub p_swapchains: *const u64,
+    pub p_image_indices: *const u32,
+    pub p_results: *mut i32,
+}
+
+// ==================================================================================================
+// transfer-path structs (buffer/image copies, blits, clears, pipeline barriers) — layout from vk.xml
+// ==================================================================================================

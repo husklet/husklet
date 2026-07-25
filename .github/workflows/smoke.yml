@@ -1,38 +1,111 @@
-name: Smoke (real images, cross-arch)
+name: Real-image smoke
 
-# User-perspective regression guard. The unit matrix uses static-PIE guests + curated rootfs
-# fixtures, so it never exercises a FRESH PULL of a real distro whose binaries load libc.so.6
-# through glibc's dynamic linker — the exact path `ddcli run ubuntu` died on ("libc.so.6:
-# failed to map segment"). This job does the user's action for real, on both arches, so that
-# class of bug cannot ship green again. Needs network (registry pull) -> CI, not the offline matrix.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+  pull_request:
   workflow_dispatch:
+  workflow_call:
+    secrets:
+      HL_REGISTRY_USERNAME:
+        required: false
+      HL_REGISTRY_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  smoke:
-    runs-on: macos-14   # Apple Silicon (arm64); the amd64 cases exercise the x86_64 -> arm64 JIT.
-    timeout-minutes: 45
+  real-image:
+    name: ${{ matrix.target }} / ${{ matrix.name }}
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      HL_SCENARIO_IMAGE_CACHE: ${{ github.workspace }}/.cache/oci-smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: arm64
+            name: Ubuntu 24.04
+            case: distros/ubuntu-2404-osrelease
+          - target: arm64
+            name: Debian 12
+            case: distros/debian-bookworm-osrelease
+          - target: amd64
+            name: Ubuntu 24.04
+            case: distros/ubuntu-2404-osrelease
+          - target: amd64
+            name: Debian 12
+            case: distros/debian-bookworm-osrelease
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Require an Apple Silicon host
+        run: |
+          architecture="$(uname -m)"
+          test "$architecture" = arm64 || {
+            echo "Husklet smoke tests require an arm64 macOS host, got: $architecture" >&2
+            exit 1
+          }
 
-      - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+      - name: Restore the exact OCI fixture cache
+        id: images
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          shared-key: smoke
+          path: ${{ env.HL_SCENARIO_IMAGE_CACHE }}
+          key: >-
+            oci-smoke-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{
+            hashFiles(
+              'Cargo.lock',
+              'src/containers/hl-daemon/tests/scenarios/fixtures/distros-full.yaml',
+              'src/containers/hl-daemon/tests/scenarios/harness/fixture.rs',
+              'src/containers/hl-images/src/**'
+            ) }}-${{ matrix.case }}
 
-      # Builds ddcli + dd-daemon and (via ddjit's build.rs) compiles + allow-jit-signs the
-      # ddjit-linux_{aarch64,x86_64} engines that ddcli run needs.
-      - name: Build ddcli + daemon + JIT engines
-        run: cargo build --release -p dd-cli -p dd-daemon
+      - name: Select authenticated or exact-cache image access
+        env:
+          CACHE_HIT: ${{ steps.images.outputs.cache-hit }}
+          REGISTRY_USERNAME: ${{ secrets.HL_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.HL_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ "$CACHE_HIT" == true ]]; then
+            echo "HL_SCENARIO_OFFLINE=1" >> "$GITHUB_ENV"
+            echo "using the exact cached OCI fixture; registry access is disabled"
+          elif [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_PASSWORD" ]]; then
+            echo "exact OCI fixture cache missed; using authenticated registry access"
+          elif [[ -n "$REGISTRY_USERNAME" || -n "$REGISTRY_PASSWORD" ]]; then
+            echo "both HL_REGISTRY_USERNAME and HL_REGISTRY_PASSWORD are required" >&2
+            exit 1
+          else
+            echo "exact OCI fixture cache missed and registry credentials are unavailable" >&2
+            echo "populate this key from a trusted main run with HL_REGISTRY_* secrets" >&2
+            exit 1
+          fi
 
-      - name: Install docker CLI (the scenarios drive dd-daemon through it)
-        run: brew install docker
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
 
-      - name: Real-image smoke (fresh pull + run via dd-daemon; arm64 ubuntu/debian + amd64 debian)
-        run: bash dd-tests/scenarios/smoke-realimage.sh
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('nix/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Run the real image through the container runtime
+        env:
+          HL_REGISTRY_USERNAME: ${{ secrets.HL_REGISTRY_USERNAME }}
+          HL_REGISTRY_PASSWORD: ${{ secrets.HL_REGISTRY_PASSWORD }}
+        run: >-
+          nix develop "path:$PWD/nix" --command
+          cargo test -p hl-daemon --test scenarios --
+          all --jobs 1 --category distros
+          --case "${{ matrix.case }}"
+          --target "${{ matrix.target }}"

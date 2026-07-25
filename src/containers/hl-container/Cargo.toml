@@ -1,0 +1,31 @@
+[package]
+name = "hl-container"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Headless Linux container lifecycle built on hl-engine"
+readme = "../../../README.md"
+
+[dependencies]
+async-trait.workspace = true
+hl-engine.workspace = true
+hl-fs = { path = "../../packages/hl-fs" }
+hl-images = { version = "0.1.0", path = "../hl-images" }
+hl-log = { path = "../../packages/hl-log" }
+nix = { version = "0.30", features = ["signal"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "sync", "time"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

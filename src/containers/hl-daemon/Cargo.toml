@@ -1,0 +1,86 @@
+[package]
+name = "hl-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Docker-compatible server over hl-container"
+readme = "../../../README.md"
+
+[[bin]]
+name = "hl-daemon"
+path = "src/bin/hl-daemon.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "scenarios"
+path = "tests/scenarios/main.rs"
+harness = false
+required-features = ["runtime"]
+
+[features]
+default = ["runtime"]
+runtime = [
+    "dep:axum",
+    "dep:base64",
+    "dep:bytes",
+    "dep:chrono",
+    "dep:futures-util",
+    "dep:flate2",
+    "dep:hl-container",
+    "dep:http",
+    "dep:http-body-util",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:reqwest",
+    "dep:tempfile",
+    "dep:sha2",
+    "dep:tar",
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:tower",
+]
+
+[dependencies]
+axum = { version = "0.7", features = ["json"], optional = true }
+base64 = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+hl-container = { version = "0.1.0", path = "../hl-container", optional = true }
+hl-design = { path = "../../packages/hl-design" }
+hl-images = { version = "0.1.0", path = "../hl-images" }
+hl-log = { path = "../../packages/hl-log" }
+http = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+hyper = { workspace = true, features = ["http1", "server"], optional = true }
+hyper-util = { workspace = true, features = ["http1", "server", "tokio"], optional = true }
+reqwest = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2 = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"], optional = true }
+tokio-util = { workspace = true, features = ["io"], optional = true }
+tower = { workspace = true, features = ["util"], optional = true }
+
+[dev-dependencies]
+fs2.workspace = true
+flate2.workspace = true
+hl-client = { path = "../hl-client" }
+hl-container = { path = "../hl-container" }
+hl-images = { path = "../hl-images" }
+nix = { version = "0.30", features = ["signal"] }
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

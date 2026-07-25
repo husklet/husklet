@@ -1,5 +1,6 @@
 /target/
 **/target/
+/artifacts/
 *.o
 /website/docs/
 dd.sock
@@ -21,3 +22,10 @@ target-*/
 .shatmp/
 .wt-*/
 dd-tests/compliance/ltp/out/
+
+# Reference implementations (local-only, cloned to study upstream APIs)
+reference/
+
+# pcachex libmap test generates these at runtime (O_CREAT); never commit them
+pclib_blob_*.bin
+.agents

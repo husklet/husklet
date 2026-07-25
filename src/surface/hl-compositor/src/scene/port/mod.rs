@@ -1,0 +1,14 @@
+//! The boundary traits the scene talks through — its inward contracts.
+//!
+//! Two small ports keep the whole policy testable with fakes: [`Presenter`] (where finished frames go)
+//! and [`Clock`] (the monotonic time source). Everything platform — Cocoa/Metal, DRM/GBM, the host
+//! clock — lives behind these; the neutral core depends only on the traits.
+
+pub mod clock;
+pub mod presenter;
+
+pub use clock::Clock;
+pub use presenter::{
+    Clipboard, HostEvents, HostSurface, PresentOutcome, PresentTiming, PresentationFeedback,
+    Presenter, PresenterEvent, Windows,
+};

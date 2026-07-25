@@ -1,0 +1,273 @@
+//! [`RemoteCommandSink`] — a [`CommandSink`] that encodes protocol batches and writes them, framed, over
+//! the Unix adapter. It owns connect/reconnect, the residency journal + replay-on-reconnect, and the
+//! capability handshake driving. Ported from `hl-shim`'s `ExecConn` + `negotiate_host_capabilities`.
+//!
+//! Layering: this is the guest-side realization of the `CommandSink` port. It executes nothing and knows
+//! no GPU semantics — it encodes via `protocol::codec`, frames via [`crate::transport::model`], and moves
+//! bytes via [`crate::transport::adapter::unix`]. The 16-byte submit header + 1-byte ack framing is
+//! transport-private and byte-identical to the shipped guest/host.
+
+use std::collections::HashSet;
+use std::io::{self, ErrorKind};
+use std::os::unix::net::UnixStream;
+
+use crate::protocol::model::capability::{Capabilities, FeatureRequest};
+use crate::protocol::model::command::{Cmd, Enc};
+use crate::protocol::model::descriptor::BindResource;
+use crate::protocol::model::error::{GpuError, Result};
+use crate::protocol::model::id::{BufferId, FenceId};
+use crate::protocol::port::sink::CommandSink;
+use crate::runtime::model::resources::{
+    KIND_BIND_GROUP, KIND_BUFFER, KIND_FENCE, KIND_PIPELINE, KIND_SAMPLER, KIND_SHADER,
+    KIND_SURFACE, KIND_TEXTURE,
+};
+
+mod residency;
+use residency::ResidencyJournal;
+
+#[cfg(test)]
+mod tests;
+use crate::transport::adapter::unix;
+use crate::transport::model::abi::Surface;
+use crate::transport::model::header::{SubmitHeader, ACK_OK};
+use crate::transport::model::readback::ReadbackRequest;
+
+const MAX_REPLAY_BYTES: usize = 64 << 20;
+
+/// Commands acknowledged by the current executor and therefore required to reconstruct the next executor.
+/// Keeping the ordered command history is deliberate: uploads and GPU copies/draws can mutate resources,
+/// so a create-only cache is not authoritative. Presents and waits are observations, not residency, and
+/// are never repeated.
+pub struct RemoteCommandSink {
+    path: String,
+    sock: Option<UnixStream>,
+    connects: u64,
+    residency_reset: bool,
+    generation: u64,
+    residency: ResidencyJournal,
+    /// Signature (handshake bytes) of the last capability descriptor read off the connection. A changed
+    /// signature while objects are resident cannot be recovered and is reported as API loss.
+    negotiated_capabilities: Option<Vec<u8>>,
+    /// The most recent decoded host advertisement, returned by [`CommandSink::negotiate`].
+    host_caps: Option<Capabilities>,
+    /// The surface the submit header names (which output the host presents to).
+    surface: Surface,
+}
+
+impl RemoteCommandSink {
+    fn api_loss(message: &'static str) -> io::Error {
+        io::Error::new(
+            ErrorKind::ConnectionAborted,
+            format!("API/device/context lost: {message}"),
+        )
+    }
+    pub fn new(path: impl Into<String>) -> Self {
+        RemoteCommandSink {
+            path: path.into(),
+            sock: None,
+            connects: 0,
+            residency_reset: false,
+            generation: 0,
+            residency: ResidencyJournal::default(),
+            negotiated_capabilities: None,
+            host_caps: None,
+            surface: Surface::default(),
+        }
+    }
+
+    /// Connect to `path` targeting `surface` (the output the submit header names).
+    pub fn with_surface(path: impl Into<String>, surface: Surface) -> Self {
+        let mut s = Self::new(path);
+        s.surface = surface;
+        s
+    }
+
+    /// Set the surface the submit header will name for subsequent submits.
+    pub fn set_surface(&mut self, surface: Surface) {
+        self.surface = surface;
+    }
+
+    /// The surface the submit header currently names.
+    pub fn surface(&self) -> Surface {
+        self.surface
+    }
+
+    /// Total successful connects over this channel's life; should be 1 for a healthy run.
+    pub fn connects(&self) -> u64 {
+        self.connects
+    }
+
+    /// Monotonic executor generation. It advances only after a successful socket connection.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Compatibility observer for callers predating internal replay. Successful reconnect recovery
+    /// consumes this flag before `submit` returns, so producers normally observe `false`.
+    pub fn take_residency_reset(&mut self) -> bool {
+        core::mem::replace(&mut self.residency_reset, false)
+    }
+
+    /// Pin the negotiated backend profile to this connection. A changed profile while objects are resident
+    /// cannot be recovered safely and is reported as API loss instead of replaying commands under
+    /// different wire/shader/format semantics.
+    pub fn set_negotiated_capabilities(&mut self, caps: &Capabilities) -> io::Result<()> {
+        let signature = caps.to_handshake();
+        if self
+            .negotiated_capabilities
+            .as_ref()
+            .is_some_and(|old| old != &signature)
+            && !self.residency.cmds.is_empty()
+        {
+            return Err(Self::api_loss(
+                "executor capabilities changed with live residency",
+            ));
+        }
+        self.negotiated_capabilities = Some(signature);
+        self.host_caps = Some(caps.clone());
+        Ok(())
+    }
+
+    /// Ensure the socket is connected, reading + pinning the host's capability handshake on any fresh
+    /// connection. A RE-connect (not the first) means a fresh host backend with an EMPTY resource cache,
+    /// so the residency-reset flag is raised for the next submit to replay against.
+    fn ensure(&mut self) -> io::Result<()> {
+        if self.sock.is_some() {
+            return Ok(());
+        }
+        let s = UnixStream::connect(&self.path)?;
+        // The host advertises its capabilities first thing on every connection; read + pin them, which
+        // also detects an incompatible profile change across a reconnect that has live residency.
+        let caps = unix::Connection::new(&s).read_handshake()?;
+        self.set_negotiated_capabilities(&caps)?;
+        if self.connects >= 1 {
+            self.residency_reset = true;
+        }
+        self.connects += 1;
+        self.generation += 1;
+        self.sock = Some(s);
+        Ok(())
+    }
+
+    /// Submit one already-encoded frame's IR (`ir`) whose decoded form is `current`, and block until the
+    /// host acks the render. `current` drives residency recording without re-decoding the wire bytes.
+    ///
+    /// Wire (byte-identical to `gl_shim.c` `exec_stream` and the host executor's reader): a 16-byte
+    /// little-endian header `[surface.id, surface.width, surface.height, payload.len()]` followed by the
+    /// payload bytes; the host replies with a single ack byte. On any I/O error the connection is torn down
+    /// and retried once (the executor may have restarted).
+    fn submit_ir(&mut self, ir: &[u8], current: &[Cmd]) -> io::Result<()> {
+        let mut last_err = None;
+        for _ in 0..2 {
+            // The closure yields the host's ack byte on success. A transport (I/O) error is retried on a
+            // fresh connection; a NACK is NOT — the host received the frame and reported failure, so the
+            // connection is healthy and re-sending would double-submit.
+            let r = (|| -> io::Result<u8> {
+                self.ensure()?;
+                let mut payload = Vec::new();
+                if self.residency_reset {
+                    payload = self.residency.replay_bytes()?;
+                }
+                payload.extend_from_slice(ir);
+                let header = SubmitHeader::for_frame(&self.surface, payload.len() as u32);
+                let s = self
+                    .sock
+                    .as_ref()
+                    .expect("ensure installed executor socket");
+                unix::Connection::new(s).write_frame(&header, &payload)?;
+                unix::Connection::new(s).read_ack()
+            })();
+            match r {
+                Ok(ACK_OK) => {
+                    self.residency_reset = false;
+                    self.residency.append(current);
+                    return Ok(());
+                }
+                // The executor NACKed this frame (replay failed / surface missing). Surface it as an error
+                // rather than letting the guest commit a stale or partly-rendered frame as if it presented.
+                Ok(nack) => {
+                    hl_log::hl_count!(hl_log::tag::TRANSPORT, "nacks");
+                    hl_log::hl_warn!(
+                        hl_log::tag::TRANSPORT,
+                        "host executor rejected frame ack={} bytes={}",
+                        nack,
+                        ir.len()
+                    );
+                    return Err(io::Error::other(format!(
+                        "host executor NACKed frame (ack={nack})"
+                    )));
+                }
+                Err(e) if e.kind() == ErrorKind::ConnectionAborted => {
+                    // A typed API-loss (over-budget replay / incompatible profile change) is terminal — do
+                    // not retry it as a transient transport fault.
+                    return Err(e);
+                }
+                Err(e) => {
+                    hl_log::hl_count!(hl_log::tag::TRANSPORT, "reconnects");
+                    hl_log::hl_debug!(
+                        hl_log::tag::TRANSPORT,
+                        "transport retry generation={} error={}",
+                        self.generation,
+                        e
+                    );
+                    self.sock = None; // reconnect on next attempt
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| io::Error::from(ErrorKind::BrokenPipe)))
+    }
+}
+
+impl CommandSink for RemoteCommandSink {
+    fn negotiate(&mut self, request: &FeatureRequest) -> Result<Capabilities> {
+        // Read (if not already) the host's advertised capabilities off the connection, then check the
+        // guest's required features against them BEFORE advertising any matching API feature to the app.
+        self.ensure().map_err(GpuError::transport)?;
+        let caps = self
+            .host_caps
+            .clone()
+            .expect("ensure pinned host capabilities");
+        caps.negotiate(request)?;
+        Ok(caps)
+    }
+
+    fn submit(&mut self, batch: &[Cmd]) -> Result<()> {
+        let ir = crate::protocol::codec::Encoder::stream(batch);
+        self.submit_ir(&ir, batch).map_err(GpuError::transport)
+    }
+
+    fn wait(&mut self, fence: FenceId, value: u64) -> Result<()> {
+        // A fence wait crosses the wire as a single-command frame — the host observes it in stream order.
+        // It is an observation, not residency, so it is never replayed on reconnect (see `record`).
+        let batch = [Cmd::WaitFence {
+            id: fence.raw(),
+            value,
+        }];
+        let ir = crate::protocol::codec::Encoder::stream(&batch);
+        self.submit_ir(&ir, &batch).map_err(GpuError::transport)
+    }
+
+    /// Read `len` bytes of buffer `id` back from the host executor over the wire (the socketed
+    /// `cuMemcpyDtoH` / `glReadPixels` path). Sends a readback-magic REQUEST frame — disjoint from a submit,
+    /// so it never collides on the wire — and reads the host's length-prefixed byte response.
+    fn read_buffer(&mut self, id: BufferId, offset: u64, len: usize) -> Result<Vec<u8>> {
+        self.ensure().map_err(GpuError::transport)?;
+        // If a reconnect emptied the host's resource cache, flush acknowledged residency first so the buffer
+        // being read is actually resident on the current executor before we query it.
+        if self.residency_reset {
+            self.submit_ir(&[], &[]).map_err(GpuError::transport)?;
+        }
+        let req = ReadbackRequest::buffer(id.raw(), offset, len as u64);
+        let s = self
+            .sock
+            .as_ref()
+            .expect("ensure installed executor socket");
+        unix::Connection::new(s)
+            .write_readback_request(&req)
+            .map_err(GpuError::transport)?;
+        unix::Connection::new(s)
+            .read_readback_response()
+            .map_err(GpuError::transport)
+    }
+}

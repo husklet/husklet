@@ -1,0 +1,268 @@
+cases:
+- id: filesystem/busybox-symlink
+  image: alpine:3.24.1
+  run:
+    shell: echo bb > /r && ln -s /r /l && cat /l
+  expect:
+    stdout_contains:
+    - bb
+- id: filesystem/busybox-traversal
+  image: alpine:3.24.1
+  run:
+    shell: mkdir -p /t/a/b/c && cd /t/a/b/c && cd ../../.. && pwd
+  expect:
+    stdout_contains:
+    - /t
+- id: filesystem/cd-absolute
+  image: alpine:3.24.1
+  run:
+    shell: cd /usr/bin && pwd
+  expect:
+    stdout_contains:
+    - /usr/bin
+- id: filesystem/cd-dotdot-existing
+  image: alpine:3.24.1
+  run:
+    shell: cd /usr/bin && cd .. && pwd | grep -qx /usr && echo CD_DOTDOT_OK
+  expect:
+    stdout_contains:
+    - CD_DOTDOT_OK
+- id: filesystem/cd-relative
+  image: alpine:3.24.1
+  run:
+    shell: cd /usr && cd bin && pwd
+  expect:
+    stdout_contains:
+    - /usr/bin
+- id: filesystem/chmod-bits
+  image: alpine:3.24.1
+  run:
+    shell: touch /f && chmod 640 /f && stat -c %a /f
+  expect:
+    stdout_contains:
+    - '640'
+- id: filesystem/chmod-exec-runs
+  image: alpine:3.24.1
+  run:
+    shell: |-
+      printf '#!/bin/sh
+      echo SCRIPT_RAN
+      ' > /s && chmod +x /s && /s
+  expect:
+    stdout_contains:
+    - SCRIPT_RAN
+- id: filesystem/chown-uid-gid
+  image: alpine:3.24.1
+  run:
+    shell: touch /f && chown 1:1 /f && stat -c '%u:%g' /f
+  expect:
+    stdout_contains:
+    - '1:1'
+- id: filesystem/deep-mkdir
+  image: alpine:3.24.1
+  run:
+    shell: mkdir -p /a/b/c/d/e && echo deep > /a/b/c/d/e/f && cat /a/b/c/d/e/f
+  expect:
+    stdout_contains:
+    - deep
+- id: filesystem/dev-full-enospc
+  image: alpine:3.24.1
+  run:
+    shell: if echo x 2>/dev/null > /dev/full; then echo WROTE; else echo FULL_ENOSPC; fi
+  expect:
+    stdout_contains:
+    - FULL_ENOSPC
+- id: filesystem/dev-null
+  image: alpine:3.24.1
+  run:
+    shell: echo discard > /dev/null && head -c1 /dev/null | wc -c
+  expect:
+    stdout_contains:
+    - '0'
+- id: filesystem/dev-shm-rw
+  image: alpine:3.24.1
+  run:
+    shell: echo shmdata > /dev/shm/t && cat /dev/shm/t
+  expect:
+    stdout_contains:
+    - shmdata
+- id: filesystem/dev-zero
+  image: alpine:3.24.1
+  run:
+    shell: head -c8 /dev/zero | tr '\0' '0'
+  expect:
+    stdout_contains:
+    - '00000000'
+- id: filesystem/dot-stays
+  image: alpine:3.24.1
+  run:
+    shell: cd /etc && cd . && pwd
+  expect:
+    stdout_contains:
+    - /etc
+- id: filesystem/dotdot-ascends
+  image: alpine:3.24.1
+  run:
+    shell: mkdir -p /t/a/b && cd /t/a/b && cd ../.. && pwd
+  expect:
+    stdout_contains:
+    - /t
+- id: filesystem/dotdot-to-root
+  image: alpine:3.24.1
+  run:
+    shell: cd /usr/lib && cd ../.. && pwd | grep -qx / && echo AT_ROOT
+  expect:
+    stdout_contains:
+    - AT_ROOT
+- id: filesystem/etc-files-present
+  image: alpine:3.24.1
+  run:
+    shell: test -f /etc/hosts && test -f /etc/resolv.conf && test -f /etc/hostname && echo ETC_OK
+  expect:
+    stdout_contains:
+    - ETC_OK
+- id: filesystem/etc-hostname
+  image: alpine:3.24.1
+  run:
+    shell: test "$(cat /etc/hostname)" = "$(hostname)" && echo HN_MATCH
+  expect:
+    stdout_contains:
+    - HN_MATCH
+- id: filesystem/find-by-name
+  image: alpine:3.24.1
+  run:
+    shell: mkdir -p /t/x/y && touch /t/x/y/needle.txt && find /t -name needle.txt
+  expect:
+    stdout_contains:
+    - /t/x/y/needle.txt
+- id: filesystem/find-type-d
+  image: alpine:3.24.1
+  run:
+    shell: |-
+      mkdir -p /t/d1 /t/d2 && find /t -mindepth 1 -type d | sort | tr '
+      ' ' '
+  expect:
+    stdout_contains:
+    - /t/d1 /t/d2
+- id: filesystem/lower-read
+  image: alpine:3.24.1
+  run:
+    shell: test -f /etc/os-release && grep -q Alpine /etc/os-release && echo LOWER_READ_OK
+  expect:
+    stdout_contains:
+    - LOWER_READ_OK
+- id: filesystem/ls-rootfs
+  image: alpine:3.24.1
+  run:
+    shell: cd / && ls | grep -qx etc && ls | grep -qx bin && echo LS_OK
+  expect:
+    stdout_contains:
+    - LS_OK
+- id: filesystem/mkdir-rmdir
+  image: alpine:3.24.1
+  run:
+    shell: mkdir -p /t/a && test -d /t/a && echo MADE && rm -r /t/a && test ! -e /t/a && echo REMOVED
+  expect:
+    stdout_contains:
+    - MADE
+    - REMOVED
+- id: filesystem/overlay-copyup
+  image: alpine:3.24.1
+  run:
+    shell: cat /etc/alpine-release > /dev/null && echo COPYUP_MARK >> /etc/hostname && grep -q COPYUP_MARK /etc/hostname && echo COPYUP_OK
+  expect:
+    stdout_contains:
+    - COPYUP_OK
+- id: filesystem/overlay-newfile-upper
+  image: alpine:3.24.1
+  run:
+    shell: echo upper > /upper-file && sync && cat /upper-file
+  expect:
+    stdout_contains:
+    - upper
+- id: filesystem/proc-self-cwd
+  image: alpine:3.24.1
+  run:
+    shell: cd /usr && readlink /proc/self/cwd
+  expect:
+    stdout_contains:
+    - /usr
+- id: filesystem/proc-self-root
+  image: alpine:3.24.1
+  run:
+    shell: readlink /proc/self/root
+  expect:
+    stdout_contains:
+    - /
+- id: filesystem/readlink
+  image: alpine:3.24.1
+  run:
+    shell: ln -s /etc/hostname /lnk && readlink /lnk
+  expect:
+    stdout_contains:
+    - /etc/hostname
+- id: filesystem/rename-dir
+  image: alpine:3.24.1
+  run:
+    shell: mkdir -p /src && echo x > /src/f && mv /src /dst && cat /dst/f && test ! -e /src && echo DMOVED
+  expect:
+    stdout_contains:
+    - DMOVED
+- id: filesystem/rename-file
+  image: alpine:3.24.1
+  run:
+    shell: echo val > /a && mv /a /b && cat /b && test ! -e /a && echo MOVED
+  expect:
+    stdout_contains:
+    - val
+    - MOVED
+- id: filesystem/setuid-drop-owns-newfile
+  image: postgres:16-alpine
+  run:
+    shell: gosu postgres sh -c 'mkdir /td && touch /td/f && stat -c %u:%g /td/f && stat -c %u:%g /td'
+  expect:
+    stdout_contains:
+    - 70:70
+- id: filesystem/stat-size
+  image: alpine:3.24.1
+  run:
+    shell: printf 'hello' > /f && stat -c %s /f
+  expect:
+    stdout_contains:
+    - '5'
+- id: filesystem/stat-type
+  image: alpine:3.24.1
+  run:
+    shell: mkdir -p /d && stat -c %F /d
+  expect:
+    stdout_contains:
+    - directory
+- id: filesystem/symlink-dangling
+  image: alpine:3.24.1
+  run:
+    shell: ln -s /no/such/target /d && test -L /d && readlink /d && { cat /d 2>&1 || echo DANGLING; }
+  expect:
+    stdout_contains:
+    - /no/such/target
+    - DANGLING
+- id: filesystem/symlink-follow
+  image: alpine:3.24.1
+  run:
+    shell: echo data > /real && ln -s /real /link && cat /link
+  expect:
+    stdout_contains:
+    - data
+- id: filesystem/symlink-is-link
+  image: alpine:3.24.1
+  run:
+    shell: echo x > /real && ln -s /real /link && test -L /link && echo IS_LINK
+  expect:
+    stdout_contains:
+    - IS_LINK
+- id: filesystem/symlink-relative
+  image: alpine:3.24.1
+  run:
+    shell: mkdir -p /t && echo rel > /t/target && ln -s target /t/link && cat /t/link
+  expect:
+    stdout_contains:
+    - rel

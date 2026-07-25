@@ -1,4 +1,4 @@
-# dd terminal demo — deterministic GIF. Render on the Mac (vhs + dd daemon running):
+# Historical dd terminal demo — retained for the original blog post, not current install guidance.
 #   cd website/assets && vhs demo.tape
 # VHS runs each command for real, headless — the output in the GIF is genuine.
 

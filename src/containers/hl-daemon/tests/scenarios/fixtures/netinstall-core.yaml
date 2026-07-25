@@ -1,0 +1,56 @@
+cases:
+- id: netinstall/debian-apt-update-clean
+  image: debian:bookworm-slim
+  timeout: 180
+  class: long
+  run:
+    shell: "rm -rf /var/lib/apt/lists/*\napt-get update > /tmp/aptu.log 2>&1\nstatus=$?\ncat /tmp/aptu.log\nif [ \"$status\" -ne 0 ] \\\n    || grep -Eq '^(Ign|Err|W|E):|NO_PUBKEY|BADSIG|EXPKEYSIG' /tmp/aptu.log; then\n    echo APT_UPDATE_DIRTY\nelif find /var/lib/apt/lists -type f -name '*InRelease' -print -quit | grep -q . \\\n    && find /var/lib/apt/lists -type f -name '*_Packages*' -print -quit | grep -q .; then\n    echo APT_UPDATE_CLEAN\nelse\n    echo APT_UPDATE_NOLISTS\nfi"
+  expect:
+    stdout_contains:
+    - APT_UPDATE_CLEAN
+- id: netinstall/ubuntu-apt-install-htop
+  image: ubuntu:22.04
+  timeout: 240
+  class: long
+  run:
+    shell: "set -eu\nexport DEBIAN_FRONTEND=noninteractive\nrm -rf /var/lib/apt/lists/*\nif ! apt-get update >/tmp/apt-update.log 2>&1; then\n    cat /tmp/apt-update.log\n    exit 1\nfi\ninrelease=$(find /var/lib/apt/lists -type f -name '*InRelease' -print -quit)\ntest -n \"$inrelease\"\ngpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg \"$inrelease\" \\\n    >/tmp/apt-signature.log 2>&1\napt-get install -y --no-install-recommends htop >/tmp/apt-install.log 2>&1\ncommand -v htop >/dev/null\ndpkg -s htop | grep -q '^Status: install ok installed'\napt-cache policy htop | grep -q 'Installed: [0-9]'\nhtop --version | grep -Eq '^htop [0-9]'\nif command -v ldd >/dev/null; then\n    ! ldd \"$(command -v htop)\" | grep -q 'not found'\nfi\necho HTOP_INSTALLED_AND_RUNNABLE"
+  expect:
+    stdout_contains:
+    - HTOP_INSTALLED_AND_RUNNABLE
+- id: netinstall/ubuntu-apt-update-clean
+  image: ubuntu:22.04
+  timeout: 180
+  class: long
+  run:
+    shell: "rm -rf /var/lib/apt/lists/*\napt-get update > /tmp/aptu.log 2>&1\nstatus=$?\ncat /tmp/aptu.log\nif [ \"$status\" -ne 0 ] \\\n    || grep -Eq '^(Ign|Err|W|E):|NO_PUBKEY|BADSIG|EXPKEYSIG' /tmp/aptu.log; then\n    echo APT_UPDATE_DIRTY\nelif find /var/lib/apt/lists -type f -name '*InRelease' -print -quit | grep -q . \\\n    && find /var/lib/apt/lists -type f -name '*_Packages*' -print -quit | grep -q .; then\n    echo APT_UPDATE_CLEAN\nelse\n    echo APT_UPDATE_NOLISTS\nfi"
+  expect:
+    stdout_contains:
+    - APT_UPDATE_CLEAN
+- id: netinstall/ubuntu-htop-render
+  image: ubuntu:22.04
+  timeout: 240
+  class: long
+  run:
+    shell: "export DEBIAN_FRONTEND=noninteractive TERM=xterm LINES=45 COLUMNS=200\napt-get update >/dev/null 2>&1\napt-get install -y htop >/dev/null 2>&1\n# a couple of uniquely-named processes so a REAL process row is guaranteed in the table.\nsleep 4242 & sleep 4243 &\necho q | htop -d 10 > /tmp/htop.frame 2>&1\nrc=$?\nf=$(tr -cd '[:print:]\\n' < /tmp/htop.frame)   # drop control bytes, keep the on-screen glyphs\necho \"$f\" | grep -q 'Tasks' \\\n  && echo \"$f\" | grep -q 'Load average' \\\n  && echo \"$f\" | grep -q 'PID' && echo \"$f\" | grep -q 'USER' && echo \"$f\" | grep -q 'Command' \\\n  && echo \"$f\" | grep -q 'Help' && echo \"$f\" | grep -q 'Quit' \\\n  && echo \"$f\" | grep -q 'sleep 4242' \\\n  && [ $rc -eq 0 ] && echo HTOP_RENDER_OK"
+  expect:
+    stdout_contains:
+    - HTOP_RENDER_OK
+- id: netinstall/ubuntu-python-cryptography
+  image: ubuntu:22.04
+  timeout: 240
+  class: long
+  run:
+    shell: "set -eu\nexport DEBIAN_FRONTEND=noninteractive\nrm -rf /var/lib/apt/lists/*\nif ! apt-get update >/tmp/apt-update.log 2>&1; then\n    cat /tmp/apt-update.log\n    exit 1\nfi\nif ! apt-get install -y --no-install-recommends python3-cryptography openssl ca-certificates \\\n    >/tmp/apt-install.log 2>&1; then\n    cat /tmp/apt-install.log\n    for attribute in mode timestamps ownership; do\n        rm -f /etc/inputrc\n        if cp \"--preserve=$attribute\" /usr/share/readline/inputrc /etc/inputrc; then\n            echo \"CP_PRESERVE_${attribute}_OK\"\n        else\n            echo \"CP_PRESERVE_${attribute}_FAILED\"\n        fi\n    done\n    exit 1\nfi\npython3 - <<'PY'\nfrom cryptography.hazmat.primitives.ciphers.aead import AESGCM\n\nkey = bytes(range(32))\nnonce = bytes(range(12))\nplain = b\"husklet-apt-cryptography\"\ncipher = AESGCM(key)\nsealed = cipher.encrypt(nonce, plain, b\"scenario\")\nassert cipher.decrypt(nonce, sealed, b\"scenario\") == plain\nprint(\"PYTHON_CRYPTOGRAPHY_OK\")\nPY\nprintf husklet | openssl dgst -sha256 | grep -Eq '[0-9a-f]{64}$'\necho OPENSSL_CRYPTOGRAPHY_OK"
+  expect:
+    stdout_contains:
+    - PYTHON_CRYPTOGRAPHY_OK
+    - OPENSSL_CRYPTOGRAPHY_OK
+- id: netinstall/ubuntu-top-render
+  image: ubuntu:22.04
+  timeout: 240
+  class: long
+  run:
+    shell: "export DEBIAN_FRONTEND=noninteractive\napt-get update >/dev/null 2>&1\napt-get install -y procps >/dev/null 2>&1\nsleep 5252 &\ntop -bn1 > /tmp/top.out 2>&1\nrc=$?\ngrep -q 'Tasks:' /tmp/top.out \\\n  && grep -Eq '%Cpu' /tmp/top.out \\\n  && grep -q 'PID USER' /tmp/top.out \\\n  && grep -q 'sleep' /tmp/top.out \\\n  && [ $rc -eq 0 ] && echo TOP_RENDER_OK"
+  expect:
+    stdout_contains:
+    - TOP_RENDER_OK

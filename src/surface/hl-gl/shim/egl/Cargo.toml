@@ -1,0 +1,43 @@
+# hl-gl shim: the guest GLES2/EGL front-end, deployed as `libEGL.so.1` (the PRIMARY object).
+#
+# A cdylib whose exported `egl*` + `gl*` C-ABI surface is code-generated from
+# `registry/gles2_egl.manifest` (build.rs) so it can never drift from the golden (402 entry points).
+# The core render path has real bodies that marshal C args and call the `hl_gl` lowering services
+# through a process-global `hl_gpu::RemoteCommandSink` ($HL_GPU_EXEC); GL is DEFERRED-lowering, so
+# `gl*` calls record into per-context state and `eglSwapBuffers` flushes the frame IR. The long tail
+# are benign, correct-ABI stubs.
+#
+# The thin `libGLESv2.so.2` forwarding stub (a DT_NEEDED->libEGL object exporting nothing) is NOT this
+# crate — the top-level hl-gl/build.rs synthesizes it against this built library.
+#
+# Carries an EMPTY `[workspace]` so it is its own workspace root — excluded from the shared repo
+# workspace AND from the hl-gl workspace, and cross-compiled standalone by hl-gl/build.rs.
+[package]
+name = "hl-gl-shim-egl"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+# Output object is `libhl_egl_guest.so`; build.rs bakes DT_SONAME=libEGL.so.1 and the stager installs
+# it under that name. The name is deliberately hl-prefixed so it never collides on the host build.
+name = "hl_egl_guest"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The GLES/EGL -> hl-GPU-IR lowering services (record/frame/swap) + the GL object model.
+hl_gl = { package = "hl-gl", path = "../..", default-features = false }
+# The neutral protocol + the guest-side RemoteCommandSink transport over $HL_GPU_EXEC.
+hl_gpu = { package = "hl-gpu", path = "../../../../gpu/hl-gpu" }
+# Tag-based logging (std-only, zero-cost when off). Named directly so the shim's `hl_log::` macros resolve
+# (macros are crate-root `#[macro_export]`; a transitive dep can't be reached by path). NOT `#[no_mangle]`,
+# so the exported `egl*`/`gl*` ABI surface is unchanged; verbose+counters compile out of the release cdylib.
+hl-log = { path = "../../../../packages/hl-log" }
+
+[profile.release]
+# Injected .so: keep it small; abort-on-panic so a Rust panic can never unwind across the C-ABI seam.
+panic = "abort"
+opt-level = "z"
+
+# Empty table => own workspace root, excluded from every surrounding workspace.
+[workspace]
