@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Render dd terminal-demo GIFs (+ static posters for click-to-play). No Chromium needed.
+# Render historical dd terminal-demo GIFs (+ static posters for the original blog post).
 #   nix profile install nixpkgs#imagemagick nixpkgs#dejavu_fonts nixpkgs#ffmpeg
 #   python3 gen_demo.py     -> hl-run.gif/.png, hl-inside.gif/.png, hl-docker.gif/.png
 # Content is real (captured from `docker --context dd ...`).

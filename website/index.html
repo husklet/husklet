@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>dd — run Linux containers on macOS, with no VM</title>
-<meta name="description" content="dd runs Linux (and macOS) containers natively on Apple-Silicon macOS without a virtual machine. A JIT is the container's kernel in userspace, and it speaks the Docker Engine API." />
-<meta property="og:title" content="dd — Linux containers on macOS, no VM" />
-<meta property="og:description" content="A JIT that is the container's kernel in userspace. No hypervisor, no Linux kernel — and it speaks the Docker Engine API." />
+<title>Husklet — configurable Linux workspaces for macOS</title>
+<meta name="description" content="Husklet combines OCI images, terminals, mounts, networking, services, and optional GUI/GPU capabilities in one signed macOS application." />
+<meta property="og:title" content="Husklet — Linux workspaces for macOS" />
+<meta property="og:description" content="OCI-based Linux workspaces with integrated terminals, mounts, networking, services, and optional graphics." />
 <meta property="og:type" content="website" />
 <meta property="og:image" content="./assets/logo@2x.png" />
 <link rel="icon" type="image/png" sizes="32x32" href="./assets/favicon.png" />
@@ -32,7 +32,7 @@
 <!-- nav -->
 <header class="sticky top-0 z-20 border-b border-edge bg-ink/70 backdrop-blur-md">
   <div class="mx-auto flex h-14 max-w-wrap items-center gap-4 px-5">
-    <a href="./index.html" class="flex items-center gap-2 font-bold text-lg"><img src="./assets/logo.png" alt="" class="h-7 w-7 rounded-md" /> dd</a>
+    <a href="./index.html" class="flex items-center gap-2 font-bold text-lg"><img src="./assets/logo.png" alt="" class="h-7 w-7 rounded-md" /> Husklet</a>
     <nav class="ml-auto flex items-center gap-5 text-sm">
       <a href="#features" class="hidden text-muted hover:text-txt md:inline">Features</a>
       <a href="#why" class="hidden text-muted hover:text-txt md:inline">Why no VM</a>
@@ -40,7 +40,7 @@
       <a href="#start" class="text-muted hover:text-txt">Get&nbsp;started</a>
       <a href="./roadmap.html" class="text-muted hover:text-txt">Roadmap</a>
       <a href="./blog/index.html" class="text-muted hover:text-txt">Blog</a>
-      <a href="https://github.com/ricccrd/dd" class="rounded-lg border border-edge px-3 py-1.5 font-semibold hover:border-blue3">GitHub</a>
+      <a href="https://github.com/ricccrd/husklet" class="rounded-lg border border-edge px-3 py-1.5 font-semibold hover:border-blue3">GitHub</a>
     </nav>
   </div>
 </header>
@@ -49,18 +49,18 @@
 <section class="relative overflow-hidden" style="background:linear-gradient(to top left,#1c52c8 0%,#2f6fe6 28%,#4f88ff 55%,#81b5ff 80%,#97cdff 100%)">
   <div class="absolute inset-0" style="background:radial-gradient(1100px 520px at 80% 120%,rgba(12,19,34,.55),transparent 60%)"></div>
   <div class="relative mx-auto max-w-wrap px-5 py-16 text-center md:py-24">
-    <img src="./assets/logo@2x.png" alt="dd" class="mx-auto h-24 w-24 rounded-[26px] shadow-2xl md:h-28 md:w-28" />
+    <img src="./assets/logo@2x.png" alt="Husklet" class="mx-auto h-24 w-24 rounded-[26px] shadow-2xl md:h-28 md:w-28" />
     <div class="mt-5"><span class="inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-white/15 px-3 py-1 text-xs font-bold uppercase tracking-wider text-white"><span class="h-1.5 w-1.5 rounded-full bg-white"></span>Alpha release</span></div>
-    <h1 class="mx-auto mt-4 max-w-3xl text-3xl font-extrabold leading-tight tracking-tight text-white md:text-5xl">Run Linux containers on macOS — with <em>no</em> VM.</h1>
-    <p class="mx-auto mt-4 max-w-2xl text-base text-blue-50/90 md:text-lg">dd's JIT runs your container's code <strong>natively</strong> and services its Linux syscalls in userspace — no hypervisor, no Linux kernel. It speaks the Docker Engine API, so <code class="font-mono">docker</code> just works.</p>
+    <h1 class="mx-auto mt-4 max-w-3xl text-3xl font-extrabold leading-tight tracking-tight text-white md:text-5xl">Configurable Linux workspaces for macOS.</h1>
+    <p class="mx-auto mt-4 max-w-2xl text-base text-blue-50/90 md:text-lg">Husklet creates configurable Linux workspaces from OCI images and runs their code through a userspace kernel — with integrated terminals, mounts, networking, services, and optional graphics.</p>
     <div class="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row">
       <a href="#download" class="rounded-xl bg-white px-5 py-3 font-semibold text-blue6 shadow-lg transition hover:-translate-y-0.5">Download for macOS</a>
-      <a href="https://github.com/ricccrd/dd" class="rounded-xl border border-white/50 bg-white/10 px-5 py-3 font-semibold text-white hover:bg-white/20">View on GitHub</a>
+      <a href="https://github.com/ricccrd/husklet" class="rounded-xl border border-white/50 bg-white/10 px-5 py-3 font-semibold text-white hover:bg-white/20">View on GitHub</a>
     </div>
     <div class="mt-7 flex flex-wrap justify-center gap-2 text-xs font-semibold text-blue-50">
       <span class="rounded-full border border-white/25 bg-white/15 px-3 py-1">Apple Silicon</span>
-      <span class="rounded-full border border-white/25 bg-white/15 px-3 py-1">Docker Engine API</span>
-      <span class="rounded-full border border-white/25 bg-white/15 px-3 py-1">3 runtimes: Linux arm64 · x86-64 · macOS</span>
+      <span class="rounded-full border border-white/25 bg-white/15 px-3 py-1">OCI images</span>
+      <span class="rounded-full border border-white/25 bg-white/15 px-3 py-1">Linux arm64 · x86-64</span>
       <span class="rounded-full border border-white/25 bg-white/15 px-3 py-1">Installs without root</span>
     </div>
   </div>
@@ -76,13 +76,13 @@
       <!-- card -->
       <div class="rounded-2xl border border-edge bg-panel p-6 transition hover:-translate-y-1 hover:border-blue4">
         <div class="mb-4 grid h-11 w-11 place-items-center rounded-xl border border-blue3/30 bg-gradient-to-br from-blue2/20 to-blue6/20 text-blue1"><svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7l-9-5z"/><path d="M3 7l9 5 9-5"/><path d="M12 12v10"/></svg></div>
-        <h3 class="text-lg font-semibold">Drop-in Docker</h3>
-        <p class="mt-2 text-sm text-muted">Implements the Docker Engine API. Your <code class="font-mono text-[13px]">docker run / ps / images / build</code> commands — and existing images — work unchanged.</p>
+        <h3 class="text-lg font-semibold">OCI workspaces</h3>
+        <p class="mt-2 text-sm text-muted">Compose an OCI image with terminal panes, mounts, environment, networking, optional services, and graphics in one workspace.</p>
       </div>
       <div class="rounded-2xl border border-edge bg-panel p-6 transition hover:-translate-y-1 hover:border-blue4">
         <div class="mb-4 grid h-11 w-11 place-items-center rounded-xl border border-blue3/30 bg-gradient-to-br from-blue2/20 to-blue6/20 text-blue1"><svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 12l10 5 10-5"/><path d="M2 17l10 5 10-5"/></svg></div>
-        <h3 class="text-lg font-semibold">Three guest runtimes</h3>
-        <p class="mt-2 text-sm text-muted">Native <strong>arm64 Linux</strong>, <strong>x86-64 Linux</strong> via the JIT, and <strong>macOS</strong> — one engine, three runtimes, no VM in any of them.</p>
+        <h3 class="text-lg font-semibold">Two Linux architectures</h3>
+        <p class="mt-2 text-sm text-muted">Run <strong>arm64 Linux</strong> workloads and <strong>x86-64 Linux</strong> workloads through the matching engine frontend.</p>
       </div>
       <div class="rounded-2xl border border-edge bg-panel p-6 transition hover:-translate-y-1 hover:border-blue4">
         <div class="mb-4 grid h-11 w-11 place-items-center rounded-xl border border-blue3/30 bg-gradient-to-br from-blue2/20 to-blue6/20 text-blue1"><svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg></div>
@@ -102,7 +102,7 @@
       <div class="rounded-2xl border border-edge bg-panel p-6 transition hover:-translate-y-1 hover:border-blue4">
         <div class="mb-4 grid h-11 w-11 place-items-center rounded-xl border border-blue3/30 bg-gradient-to-br from-blue2/20 to-blue6/20 text-blue1"><svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><circle cx="6.5" cy="6.6" r=".7" fill="currentColor" stroke="none"/><circle cx="9" cy="6.6" r=".7" fill="currentColor" stroke="none"/></svg></div>
         <h3 class="text-lg font-semibold">Desktop app, no root</h3>
-        <p class="mt-2 text-sm text-muted">A native macOS app plus a <code class="font-mono text-[13px]">ddcli</code> tool install a per-user background daemon and a <code class="font-mono text-[13px]">docker context</code> — never <code class="font-mono text-[13px]">sudo</code>.</p>
+        <p class="mt-2 text-sm text-muted">A native macOS application owns workspace configuration and its bundled runtime services in one place.</p>
       </div>
     </div>
   </div>
@@ -226,60 +226,52 @@
 <section id="start" class="border-t border-edge bg-ink2 px-5 py-14 md:py-20">
   <div class="mx-auto max-w-wrap">
     <p class="text-xs font-bold uppercase tracking-widest text-blue3">Get started</p>
-    <h2 class="mt-2 text-2xl font-bold tracking-tight md:text-4xl">Install once, then it's just Docker</h2>
-    <p class="mt-3 max-w-2xl text-base text-muted md:text-lg">Download the app, drop it in Applications, run one setup command. dd registers a background daemon and a <code class="font-mono">docker</code> context — no VM, no <code class="font-mono">sudo</code>. The <code class="font-mono">ddcli</code> tool ships inside the app.</p>
+    <h2 class="mt-2 text-2xl font-bold tracking-tight md:text-4xl">Install the app and create a workspace</h2>
+    <p class="mt-3 max-w-2xl text-base text-muted md:text-lg">Download the disk image, drag <strong>Husklet.app</strong> to Applications, and launch it. Workspace configuration and runtime services are managed by the app; no separate command-line setup is required.</p>
 
     <div class="mt-8 grid gap-6 md:grid-cols-2">
       <div>
-        <h3 class="text-lg font-semibold">The easy way — <code class="font-mono">ddcli</code></h3>
-        <p class="mt-1 text-sm text-muted">One word drops you into a shell in any image — current dir mounted, arch auto-detected.</p>
+        <h3 class="text-lg font-semibold">Install Husklet</h3>
+        <p class="mt-1 text-sm text-muted">The signed application contains the workspace UI and its runtime services.</p>
         <div class="mt-3 overflow-hidden rounded-xl border border-edge bg-code">
           <div class="flex items-center gap-1.5 border-b border-edge px-3 py-2.5"><span class="h-2.5 w-2.5 rounded-full bg-[#ff5f57]"></span><span class="h-2.5 w-2.5 rounded-full bg-[#febc2e]"></span><span class="h-2.5 w-2.5 rounded-full bg-[#28c840]"></span></div>
-<pre class="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed text-[#d7e3fa]"><span class="text-slate-500"># a shell in ubuntu, here in this folder</span>
-<span class="text-emerald-400">$</span> ddcli ubuntu
-
-<span class="text-slate-500"># a one-off command; force amd64 (x86 JIT)</span>
-<span class="text-emerald-400">$</span> ddcli run alpine echo hi
-<span class="text-emerald-400">$</span> ddcli run ubuntu --platform linux/amd64
-
-<span class="text-slate-500"># a macOS container</span>
-<span class="text-emerald-400">$</span> ddcli mac</pre>
+<pre class="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed text-[#d7e3fa]"><span class="text-emerald-400">$</span> open Husklet.dmg
+<span class="text-slate-500"># drag Husklet.app to Applications</span>
+<span class="text-emerald-400">$</span> open /Applications/Husklet.app</pre>
         </div>
       </div>
       <div>
-        <h3 class="text-lg font-semibold">…or plain Docker</h3>
-        <p class="mt-1 text-sm text-muted">dd registers a <code class="font-mono">dd</code> context, so every ordinary flag flows through.</p>
+        <h3 class="text-lg font-semibold">Build from source</h3>
+        <p class="mt-1 text-sm text-muted">Contributors can build the same <code class="font-mono">Husklet.app</code> bundle from this repository.</p>
         <div class="mt-3 overflow-hidden rounded-xl border border-edge bg-code">
           <div class="flex items-center gap-1.5 border-b border-edge px-3 py-2.5"><span class="h-2.5 w-2.5 rounded-full bg-[#ff5f57]"></span><span class="h-2.5 w-2.5 rounded-full bg-[#febc2e]"></span><span class="h-2.5 w-2.5 rounded-full bg-[#28c840]"></span></div>
-<pre class="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed text-[#d7e3fa]"><span class="text-emerald-400">$</span> ddcli install   <span class="text-slate-500"># daemon + context (no sudo)</span>
-
-<span class="text-emerald-400">$</span> docker --context dd run -p 8080:80 alpine \
-      sh -c <span class="text-amber-300">'echo hi from $(hostname)'</span>
-<span class="text-emerald-400">$</span> docker --context dd pull ubuntu
-<span class="text-emerald-400">$</span> docker --context dd ps</pre>
+<pre class="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed text-[#d7e3fa]"><span class="text-emerald-400">$</span> git clone https://github.com/ricccrd/husklet.git
+<span class="text-emerald-400">$</span> cd husklet
+<span class="text-emerald-400">$</span> make app
+<span class="text-emerald-400">$</span> open target/Husklet.app</pre>
         </div>
       </div>
     </div>
 
     <!-- download band -->
     <div id="download" class="mt-12 rounded-2xl border border-edge bg-panel p-8 text-center">
-      <h3 class="text-xl font-bold md:text-2xl">Download dd for macOS</h3>
-      <p class="mx-auto mt-2 max-w-xl text-muted">Apple-Silicon Macs (arm64), macOS 12+. A single self-contained app — the UI, the <code class="font-mono">ddcli</code> tool and the runtime. Free and open source (MIT).</p>
-      <a href="https://github.com/ricccrd/dd/releases/latest" class="mt-5 inline-block rounded-xl bg-gradient-to-br from-blue3 to-blue6 px-6 py-3 font-semibold text-white shadow-lg transition hover:-translate-y-0.5">Download the latest&nbsp;.dmg</a>
-      <p class="mx-auto mt-4 max-w-xl text-sm text-muted2"><strong class="text-muted">Alpha software</strong> — expect rough edges. Not notarized yet, so on first launch right-click <strong>dd</strong> → <strong>Open</strong> once; it runs normally after. <code class="font-mono">ddcli doctor</code> can clear it for you.</p>
+      <h3 class="text-xl font-bold md:text-2xl">Download Husklet for macOS</h3>
+      <p class="mx-auto mt-2 max-w-xl text-muted">Apple-Silicon Macs. One self-contained <code class="font-mono">Husklet.app</code> with its workspace runtime and container daemon.</p>
+      <a href="https://github.com/ricccrd/husklet/releases/latest" class="mt-5 inline-block rounded-xl bg-gradient-to-br from-blue3 to-blue6 px-6 py-3 font-semibold text-white shadow-lg transition hover:-translate-y-0.5">Download Husklet.dmg</a>
+      <p class="mx-auto mt-4 max-w-xl text-sm text-muted2">Open the disk image, drag <strong>Husklet.app</strong> to Applications, then launch it normally.</p>
     </div>
   </div>
 </section>
 
 <footer class="border-t border-edge px-5 py-10 text-muted2">
   <div class="mx-auto flex max-w-wrap flex-wrap items-center gap-4">
-    <span class="flex items-center gap-2 font-bold text-txt"><img src="./assets/logo.png" alt="" class="h-6 w-6 rounded-md" /> dd</span>
-    <span class="text-sm">Linux containers on macOS, no VM. MIT licensed.</span>
+    <span class="flex items-center gap-2 font-bold text-txt"><img src="./assets/logo.png" alt="" class="h-6 w-6 rounded-md" /> Husklet</span>
+    <span class="text-sm">Configurable Linux workspaces for macOS. MIT licensed.</span>
     <nav class="flex flex-wrap gap-5 text-sm sm:ml-auto">
       <a href="./roadmap.html" class="text-muted hover:text-txt">Roadmap</a>
       <a href="./blog/index.html" class="text-muted hover:text-txt">Blog</a>
-      <a href="https://github.com/ricccrd/dd" class="text-muted hover:text-txt">GitHub</a>
-      <a href="https://github.com/ricccrd/dd/releases" class="text-muted hover:text-txt">Releases</a>
+      <a href="https://github.com/ricccrd/husklet" class="text-muted hover:text-txt">GitHub</a>
+      <a href="https://github.com/ricccrd/husklet/releases" class="text-muted hover:text-txt">Releases</a>
       <a href="mailto:huttarichard@gmail.com" class="text-muted hover:text-txt">Contact</a>
     </nav>
   </div>
