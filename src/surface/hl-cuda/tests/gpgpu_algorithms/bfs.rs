@@ -103,7 +103,7 @@ fn bfs_frontier_expansion_step_exact() {
     let d_cnt = alloc_zeroed_i32(&mut sink, &mut ctx, 1);
 
     let block = 4u32;
-    let grid = (v as u32 + block - 1) / block; // 2 blocks
+    let grid = (v as u32).div_ceil(block); // 2 blocks
     let args = vec![
         KernelArg::Ptr(d_roff),
         KernelArg::Ptr(d_col),

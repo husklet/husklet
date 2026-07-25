@@ -336,12 +336,12 @@ fn separable_box_blur_matches_the_two_stage_convolution() {
         for x in 0..W {
             let got = px(&img, W, x, y);
             let want = refimg[(y * W + x) as usize];
-            for k in 0..3 {
-                worst = worst.max((got[k] as i16 - want as i16).abs());
+            for (k, channel) in got.iter().enumerate().take(3) {
+                worst = worst.max((*channel as i16 - want as i16).abs());
                 assert!(
-                    (got[k] as i16 - want as i16).abs() <= 2,
+                    (*channel as i16 - want as i16).abs() <= 2,
                     "blur at ({x},{y}) ch{k}: expected two-stage reference {want}, got {}",
-                    got[k]
+                    channel
                 );
             }
             // (b) count softened pixels — a value strictly between black and white that the SHARP source

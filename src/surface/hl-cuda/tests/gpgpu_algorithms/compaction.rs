@@ -173,7 +173,7 @@ const SCATTER_PTX: &str = r#"
 fn stream_compaction_predicate_scan_scatter_exact() {
     let block = 256usize;
     let n = 1000usize; // multi-block, non-multiple of block → partial last block
-    let grid = (n + block - 1) / block; // 4 blocks
+    let grid = n.div_ceil(block); // 4 blocks
     let input: Vec<i32> = (0..n).map(|i| (i as i32 * 37 + 11) % 100).collect();
 
     let mut sink = harness();

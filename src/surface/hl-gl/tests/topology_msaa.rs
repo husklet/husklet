@@ -57,7 +57,7 @@ fn flat_program(c: &mut GlContext) -> u32 {
 fn tri_vbo(c: &mut GlContext) {
     let vbo = c.buffers.gen();
     record::bind_buffer(c, GL_ARRAY_BUFFER, vbo);
-    record::buffer_data(c, GL_ARRAY_BUFFER, &vec![0u8; 24], 0x88E4);
+    record::buffer_data(c, GL_ARRAY_BUFFER, &[0u8; 24], 0x88E4);
     record::vertex_attrib_pointer(c, 0, 2, GL_FLOAT, false, 8, 0);
     record::enable_vertex_attrib(c, 0);
 }

@@ -111,7 +111,7 @@ fn histogram_atomic_global_and_shared_exact() {
     let sfn = load_module::module_get_function(&ctx, module_s, "hist_shared").unwrap();
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
-    let grid = ((n + 255) / 256) as u32; // 20 blocks × 256 threads
+    let grid = n.div_ceil(256) as u32; // 20 blocks × 256 threads
 
     // (a) global-atomic histogram
     let d_hist_g = alloc_zeroed_i32(&mut sink, &mut ctx, k);

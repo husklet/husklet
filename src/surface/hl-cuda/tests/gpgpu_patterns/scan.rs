@@ -110,7 +110,7 @@ const BLOCK_SCAN_PTX: &str = r#"
 fn prefix_scan_inclusive_and_exclusive_exact() {
     let block = 256usize;
     let n = 1000usize; // NOT a multiple of the block → last block is partial (remainder handling)
-    let grid = (n + block - 1) / block; // 4 blocks
+    let grid = n.div_ceil(block); // 4 blocks
     let input: Vec<i32> = (0..n).map(|i| (i as i32 % 7) + 1).collect(); // 1..=7, sum ≤ 7000 (no overflow)
 
     let mut sink = harness();

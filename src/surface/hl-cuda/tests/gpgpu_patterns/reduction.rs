@@ -50,7 +50,7 @@ fn reduce_segmented_sum_and_max_exact() {
     let n = 1000usize;
     let seg_shift = 6u32; // segment width = 64
     let seg_w = 1usize << seg_shift;
-    let nseg = (n + seg_w - 1) / seg_w; // 16 segments (last partial: 960..999)
+    let nseg = n.div_ceil(seg_w); // 16 segments (last partial: 960..999)
     let input: Vec<i32> = (0..n).map(|i| (i as i32 * 37 + 11) % 200 - 60).collect(); // signed, spans ±
 
     let mut sink = harness();
@@ -71,7 +71,7 @@ fn reduce_segmented_sum_and_max_exact() {
     .unwrap();
 
     let block = 128u32;
-    let grid = ((n as u32) + block - 1) / block; // 8 blocks; boundaries cross segments
+    let grid = (n as u32).div_ceil(block); // 8 blocks; boundaries cross segments
     let args = vec![
         KernelArg::Ptr(d_in),
         KernelArg::Ptr(d_sum),
@@ -95,10 +95,10 @@ fn reduce_segmented_sum_and_max_exact() {
     // Reference per-segment sum + max.
     let mut want_sum = vec![0i32; nseg];
     let mut want_max = vec![i32::MIN; nseg];
-    for i in 0..n {
+    for (i, value) in input.iter().enumerate().take(n) {
         let s = i >> seg_shift;
-        want_sum[s] += input[i];
-        want_max[s] = want_max[s].max(input[i]);
+        want_sum[s] += value;
+        want_max[s] = want_max[s].max(*value);
     }
     assert_eq!(
         got_sum, want_sum,

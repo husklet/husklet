@@ -2,24 +2,24 @@
 //! `tests/compute_demo.rs` (which is pure compute-correctness). Every demo drives a real CUDA workload
 //! through the REAL hl-cuda driver lowering → an in-process [`InProcessCommandSink`] over the reference
 //! [`CpuExecutor`], and then asserts one of:
-//!   * an invalid operation returns the **specific, honest `CUresult`/`cudaError_t`** a real driver
-//!     returns (never `cudaSuccess` — a faked success is the anti-pattern these demos exist to catch), or
+//!   * an invalid operation returns the **specific, honest `CUresult`/`cudaError_t`** a real driver;
+//!     never `cudaSuccess`, the fake-success anti-pattern these demos exist to catch; or
 //!   * a valid operation is **bit-exact** and **deterministic** across repeats / issue interleavings.
 //!
 //! Batteries:
 //!   1. `error_bad_launch`            — an over-`maxThreadsPerBlock` / zero-dim launch returns
-//!                                       `CUDA_ERROR_INVALID_VALUE`, emits NOTHING, computes nothing.
+//!      `CUDA_ERROR_INVALID_VALUE`, emits NOTHING, computes nothing.
 //!   2. `stream_event_ordering`       — record an event on stream A, make stream B wait on it; the
-//!                                       dependent kernel observes A's result, bit-exact. Bad handles error.
+//!      dependent kernel observes A's result, bit-exact. Bad handles error.
 //!   3. `async_overlap_correctness`   — async H2D + kernel + async D2H on a stream, synchronized; the
-//!                                       final host data is bit-exact (overlap never corrupts).
+//!      final host data is bit-exact (overlap never corrupts).
 //!   4. `oom_alloc_rejected`          — an allocation past the modeled device budget returns
-//!                                       `CUDA_ERROR_OUT_OF_MEMORY` / `cudaErrorMemoryAllocation`, mints
-//!                                       no state, and never null-derefs or fakes success.
+//!      `CUDA_ERROR_OUT_OF_MEMORY` / `cudaErrorMemoryAllocation`, mints
+//!      no state, and never null-derefs or fakes success.
 //!   5. `large_reduction_determinism` — a large sum + max reduction run twice yields identical bit-exact
-//!                                       results, matching an independent CPU reference.
+//!      results, matching an independent CPU reference.
 //!   6. `concurrent_kernels_determinism` — kernels across multiple streams produce identical bit-exact
-//!                                       output regardless of the order they are issued in.
+//!      output regardless of the order they are issued in.
 
 use hl_cuda::adapter::ptx;
 use hl_cuda::model::event::Event;

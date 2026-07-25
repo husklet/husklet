@@ -92,7 +92,7 @@ fn spmv_csr_exact() {
     let d_y = alloc_zeroed_i32(&mut sink, &mut ctx, rows);
 
     let block = 4u32;
-    let grid = (rows as u32 + block - 1) / block; // 2 blocks
+    let grid = (rows as u32).div_ceil(block); // 2 blocks
     let args = vec![
         KernelArg::Ptr(d_roff),
         KernelArg::Ptr(d_col),

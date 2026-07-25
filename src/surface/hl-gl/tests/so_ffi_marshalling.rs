@@ -6,18 +6,18 @@
 //!
 //!   * STRING RETURNS         — `eglQueryString` (vendor / version / client-APIs / client+display EXTENSIONS)
 //!   * POINTER-OUT + errors   — `eglGetConfigAttrib` (real 8/8/8/8 + 24/8 sizes; BAD_CONFIG / BAD_ATTRIBUTE
-//!                              / BAD_PARAMETER without writing `value`)
+//!     / BAD_PARAMETER without writing `value`)
 //!   * IN-OUT arrays + count  — `eglChooseConfig` / `eglGetConfigs` (attrib-list in; `configs[]` + `num`
-//!                              out; null-array count-only; bounded copy; null-`num` → BAD_PARAMETER)
+//!     out; null-array count-only; bounded copy; null-`num` → BAD_PARAMETER)
 //!   * SCALAR in/out          — `eglBindAPI` / `eglQueryAPI` (per-thread API bind + read-back; a non-GLES
-//!                              API → EGL_FALSE + BAD_PARAMETER)
+//!     API → EGL_FALSE + BAD_PARAMETER)
 //!   * FUNCTION-PTR return    — `eglGetProcAddress` (a core name resolves to a *callable* pointer that
-//!                              returns the right value; an unknown name / null → null)
+//!     returns the right value; an unknown name / null → null)
 //!   * ARRAY-IN contents      — `glBufferData` + `glBufferSubData` ptr+size upload, read back BYTE-FOR-BYTE
-//!                              through `glMapBufferRange`'s host-storage pointer
+//!     through `glMapBufferRange`'s host-storage pointer
 //!   * ARRAY-IN draw path     — `glVertexAttribPointer` + `glDrawArrays` / `glDrawElements` over both
-//!                              VBO-backed and CLIENT-side vertex/index arrays (the shim reads guest memory
-//!                              through the marshalled pointer), plus their `GL_INVALID_*` error paths
+//!     VBO-backed and CLIENT-side vertex/index arrays (the shim reads guest memory
+//!     through the marshalled pointer), plus their `GL_INVALID_*` error paths
 //!   * POINTER-OUT (pixels)   — `glReadPixels` argument + error-path marshalling (7 args; bad enum / value)
 //!   * POINTER-OUT (attrib)   — `glGetVertexAttrib{i,f}v` null-safe out-param stores
 //!

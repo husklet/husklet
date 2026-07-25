@@ -146,7 +146,7 @@ mod tests {
         }
         fn create_queue(&self, display: *mut c_void) -> *mut c_void {
             self.push(Rec::CreateQueue(display as usize));
-            0x0_9EE_0usize as *mut c_void // a fixed non-null "private queue"
+            0x0000_9EE0_usize as *mut c_void // a fixed non-null "private queue"
         }
         fn create_wrapper(&self, proxy: *mut c_void) -> *mut c_void {
             self.push(Rec::CreateWrapper(proxy as usize));
@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(log[1], Rec::CreateQueue(0xD15_9000));
         // 3) A display wrapper is created + pinned to the private queue, and get_registry runs on it.
         assert!(matches!(log[2], Rec::CreateWrapper(0xD15_9000)));
-        assert!(matches!(log[3], Rec::SetQueue(_, 0x0_9EE_0)));
+        assert!(matches!(log[3], Rec::SetQueue(_, 0x0000_9EE0)));
         assert!(matches!(log[4], Rec::GetRegistry { .. }));
         // 4) wl_shm is discovered then bound with the DISCOVERED registry name (7) at the discovered version.
         assert!(log.iter().any(|r| matches!(r, Rec::DiscoverShm { .. })));
@@ -294,7 +294,9 @@ mod tests {
         assert!(log
             .iter()
             .any(|r| matches!(r, Rec::CreateWrapper(a) if *a == SURFACE as usize)));
-        assert!(log.iter().any(|r| matches!(r, Rec::SetQueue(_, 0x0_9EE_0))));
+        assert!(log
+            .iter()
+            .any(|r| matches!(r, Rec::SetQueue(_, 0x0000_9EE0))));
     }
 
     /// A present marshals pool → buffer → attach → damage → commit → flush with the right args, onto the

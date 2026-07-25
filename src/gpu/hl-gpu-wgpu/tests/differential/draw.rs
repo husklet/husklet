@@ -2,7 +2,6 @@ use super::*;
 
 /// (8) FLAT opaque draw: a fullscreen triangle, all three vertices the same opaque colour, blend disabled
 /// (replace). Full coverage + identical unorm rounding of a constant → EXACT (±1 guard).
-
 pub(super) fn gen_draw_flat(seed: u64) -> Prog {
     let c = fcolor_opaque(seed);
     let vbytes: Vec<u8> = FS_TRI

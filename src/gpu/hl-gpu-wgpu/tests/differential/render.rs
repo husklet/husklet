@@ -3,11 +3,10 @@ use super::*;
 /// (10) DEPTH-TESTED draw: two fullscreen triangles at different constant depths through one pipeline
 /// (`LESS` + depth-write). The nearer fragment wins on both backends regardless of draw order → the winning
 /// flat colour is EXACT (±1). We alternate which of the two is nearer by seed parity.
-
 pub(super) fn gen_draw_depth(seed: u64) -> Prog {
     let w = 4 + (seed % 4) as u32;
     let h = 4 + (seed % 3) as u32;
-    let near_first = seed % 2 == 0;
+    let near_first = seed.is_multiple_of(2);
     let (za, ca, zb, cb) = if near_first {
         (
             0.25f32,

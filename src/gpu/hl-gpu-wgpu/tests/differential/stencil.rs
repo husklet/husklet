@@ -18,7 +18,6 @@ const CQUAD: [(f32, f32); 6] = [
 
 /// The `pos2 @loc0 (0..8)` + `colour @loc1 (8..24)`, stride-24 vertex layout the `SEED_POS2_COLOR` forwarding
 /// shader (and the CPU oracle's `stride >= 24` arm) both read.
-
 fn stencil_face(cmp: u32, pass: u32) -> StencilFaceState {
     StencilFaceState {
         compare: cmp,

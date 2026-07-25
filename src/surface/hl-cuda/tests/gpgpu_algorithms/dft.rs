@@ -93,7 +93,7 @@ fn dft_fixed_point_integer_twiddle_exact() {
     let d_im = alloc_zeroed_i32(&mut sink, &mut ctx, n);
 
     let block = 8u32;
-    let grid = (n as u32 + block - 1) / block; // 2 blocks
+    let grid = (n as u32).div_ceil(block); // 2 blocks
     let args = vec![
         KernelArg::Ptr(d_x),
         KernelArg::Ptr(d_cos),
@@ -121,10 +121,10 @@ fn dft_fixed_point_integer_twiddle_exact() {
     for k in 0..n {
         let mut re = 0i32;
         let mut im = 0i32;
-        for nn in 0..n {
+        for (nn, sample) in x.iter().enumerate().take(n) {
             let idx = (k * nn) & (n - 1);
-            re = re.wrapping_add(x[nn].wrapping_mul(cos_t[idx]));
-            im = im.wrapping_add(x[nn].wrapping_mul(sin_t[idx]));
+            re = re.wrapping_add(sample.wrapping_mul(cos_t[idx]));
+            im = im.wrapping_add(sample.wrapping_mul(sin_t[idx]));
         }
         want_re[k] = re;
         want_im[k] = -im;

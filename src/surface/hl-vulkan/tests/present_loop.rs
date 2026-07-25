@@ -232,7 +232,7 @@ fn acquire_round_robin_present_sources_the_acquired_image() {
         "acquire cycles through all {N} images in FIFO order"
     );
     assert!(
-        acquired.iter().any(|&i| i == N - 1),
+        acquired.contains(&(N - 1)),
         "the whole ring is used, not just image 0"
     );
 }
@@ -425,17 +425,17 @@ fn swapchain_recreation_retires_old_images_without_leak() {
 
     // A is FULLY retired — record, every image, and surface gone from the device tables.
     assert!(
-        d.swapchains.get(&sc_a).is_none(),
+        !d.swapchains.contains_key(&sc_a),
         "A's swapchain record is retired"
     );
     for &h in &imgs_a {
         assert!(
-            d.images.get(&h).is_none(),
+            !d.images.contains_key(&h),
             "A's presentable image {h:#x} is retired from dev.images (no leak)"
         );
     }
     assert!(
-        d.surfaces.get(&surf_a).is_none(),
+        !d.surfaces.contains_key(&surf_a),
         "A's presentation surface is retired"
     );
     // The retire emitted the freeing IR: DestroyTexture per image, then DestroySurface.
@@ -468,7 +468,7 @@ fn swapchain_recreation_retires_old_images_without_leak() {
     );
     for &h in &imgs_b {
         assert!(
-            d.images.get(&h).is_some(),
+            d.images.contains_key(&h),
             "B's image {h:#x} survives A's destruction"
         );
     }

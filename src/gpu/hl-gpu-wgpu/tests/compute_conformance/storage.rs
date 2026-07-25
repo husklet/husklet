@@ -23,8 +23,8 @@ fn storage_rmw_in_place_multi_workgroup() {
         .enumerate()
         .map(|(i, &v)| v.wrapping_mul(v).wrapping_add(i as u32))
         .collect();
-    data.extend(std::iter::repeat(SENTINEL).take(PAD as usize));
-    expect.extend(std::iter::repeat(SENTINEL).take(PAD as usize));
+    data.extend(std::iter::repeat_n(SENTINEL, PAD as usize));
+    expect.extend(std::iter::repeat_n(SENTINEL, PAD as usize));
 
     let src = "\
 @group(0) @binding(0) var<storage, read_write> data: array<u32>;

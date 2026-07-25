@@ -5,6 +5,7 @@
 //!   * viewport (x=4, y=4, w=24, h=16) → the draw fills framebuffer pixels x∈[4,28), y∈[4,20). Because the
 //!     triangle covers all of clip space, the viewport rectangle is filled EXACTLY — proving the transform.
 //!   * scissor  (x=10, y=8, w=14, h=20) → pixels are additionally clipped to x∈[10,24), y∈[8,28).
+//!
 //! The visible result is the intersection x∈[10,24), y∈[8,20): its left/right/top edges come from the
 //! scissor, its BOTTOM edge (y=20) comes from the viewport — so the exact rectangle can only be produced
 //! when BOTH are honored. Every covered pixel must be FILL, every other pixel CLEAR.

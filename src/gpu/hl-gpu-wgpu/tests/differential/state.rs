@@ -13,7 +13,6 @@ use super::*;
 /// half-up and the GPU half-to-even quantizers land on the same byte). Used with `mask = 0x7` (RGB, alpha
 /// preserved) and `mask = 0x8` (alpha only, RGB preserved) — the two masks a `glColorMask` guest most
 /// commonly sets.
-
 fn mask_prog(seed: u64, category: &'static str, mask: u32) -> Prog {
     let w = 4 + (seed % 5) as u32; // 4..=8
     let h = 4 + (seed % 4) as u32; // 4..=7

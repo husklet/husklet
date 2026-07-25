@@ -98,7 +98,7 @@ in vec2 vUV;\nout vec4 fragColor;\nvoid main(){ fragColor = texture(GSK_TEXTURE0
     // A minimal vertex buffer + attribute so the draw lowers.
     let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
-    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &vec![0u8; 48], 0x88E4);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 48], 0x88E4);
     record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
     record::enable_vertex_attrib(&mut c, 0);
 
@@ -197,7 +197,7 @@ void main(){ gl_FragColor = texture2D(uTex0, vUV) + texture2D(uTex1, vUV) + text
 
     let vbo = c.buffers.gen();
     record::bind_buffer(&mut c, GL_ARRAY_BUFFER, vbo);
-    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &vec![0u8; 48], 0x88E4);
+    record::buffer_data(&mut c, GL_ARRAY_BUFFER, &[0u8; 48], 0x88E4);
     record::vertex_attrib_pointer(&mut c, 0, 2, GL_FLOAT, false, 8, 0);
     record::enable_vertex_attrib(&mut c, 0);
 

@@ -17,15 +17,15 @@
 //! Batteries:
 //!   1. `tiled_matmul`     — shared-memory blocked (TILE=16) 64×64 integer matmul, C == A·B exact.
 //!   2. `prefix_scan`      — multi-block Hillis-Steele inclusive scan (shared mem + double barrier per
-//!                           step) + host block-offset combine, exact inclusive AND exclusive scan.
+//!      step) + host block-offset combine, exact inclusive AND exclusive scan.
 //!   3. `histogram`        — atomic histogram into K bins, BOTH a global-atomic and a shared-privatized
-//!                           (shared atomics + merge) variant, exact bin counts under contention.
+//!      (shared atomics + merge) variant, exact bin counts under contention.
 //!   4. `convolution`      — 1D box stencil with a shared-memory halo tile, 2D 3×3 box blur, and a 3×3
-//!                           Sobel |Gx|+|Gy|, each exact vs a CPU convolution.
+//!      Sobel |Gx|+|Gy|, each exact vs a CPU convolution.
 //!   5. `reduce_segmented` — per-segment sum AND signed max via atomics into per-segment bins, exact.
 //!   6. `transpose`        — shared-memory coalesced tiled matrix transpose (non-square, remainder), exact.
 //!   7. `bitonic_sort`     — in-shared-memory bitonic sorting network (power-of-2 N) with a barrier per
-//!                           compare-exchange substep, exact vs a sorted reference.
+//!      compare-exchange substep, exact vs a sorted reference.
 
 use hl_cuda::adapter::ptx;
 use hl_cuda::service::{allocate, launch, load_module, transfer};

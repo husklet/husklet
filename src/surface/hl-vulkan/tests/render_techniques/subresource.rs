@@ -9,6 +9,7 @@ use super::harness::*;
 ///   * the IR `ColorAttachment`/`DepthAttachment` carry only a whole `texture` id — there is NO mip/layer
 ///     subresource selector on a render attachment (that lives in the protocol crate, which a concurrent
 ///     agent owns and this task must not touch).
+///
 /// So a render-to-layer/mip request collapses to rendering the WHOLE texture. This test pins that truth:
 /// the created texture is single-mip/single-layer, and the attachment names the whole texture id.
 #[test]

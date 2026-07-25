@@ -15,11 +15,13 @@ fn rgb565_glyph_atlas_upload_expands_exact_channels() {
 
 #[test]
 fn unpack_row_length_alignment_and_skips_select_the_exact_rectangle() {
-    let mut store = PixelStore::default();
-    store.unpack_alignment = 4;
-    store.unpack_row_length = 3;
-    store.unpack_skip_rows = 1;
-    store.unpack_skip_pixels = 1;
+    let store = PixelStore {
+        unpack_alignment: 4,
+        unpack_row_length: 3,
+        unpack_skip_rows: 1,
+        unpack_skip_pixels: 1,
+        ..PixelStore::default()
+    };
     let upload = Upload::new(GL_RED, GL_UNSIGNED_BYTE, 2, 2, store).unwrap();
     // Three one-byte pixels per row, padded to four. Skip row 0 and pixel 0 of rows 1 and 2.
     let source = [9, 9, 9, 0, 8, 10, 20, 0, 7, 30, 40];

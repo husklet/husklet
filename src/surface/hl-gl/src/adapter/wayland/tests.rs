@@ -19,7 +19,7 @@ fn global_event(name: u32, interface: &str, version: u32) -> Vec<u8> {
     body.extend_from_slice(&((interface.len() + 1) as u32).to_le_bytes());
     let mut s = interface.as_bytes().to_vec();
     s.push(0);
-    while s.len() % 4 != 0 {
+    while !s.len().is_multiple_of(4) {
         s.push(0);
     }
     body.extend_from_slice(&s);
@@ -27,7 +27,7 @@ fn global_event(name: u32, interface: &str, version: u32) -> Vec<u8> {
     let size = (8 + body.len()) as u32;
     let mut msg = Vec::new();
     msg.extend_from_slice(&OBJ_REGISTRY.to_le_bytes());
-    msg.extend_from_slice(&((size << 16) | 0u32).to_le_bytes());
+    msg.extend_from_slice(&(size << 16).to_le_bytes());
     msg.extend_from_slice(&body);
     msg
 }
@@ -186,7 +186,7 @@ fn ack_configure_echoes_received_serial() {
     let serial = 4242u32;
     let mut msg = Vec::new();
     msg.extend_from_slice(&OBJ_XDG_SURFACE.to_le_bytes());
-    msg.extend_from_slice(&((12u32 << 16) | 0).to_le_bytes());
+    msg.extend_from_slice(&(12u32 << 16).to_le_bytes());
     msg.extend_from_slice(&serial.to_le_bytes());
     w.rx.extend_from_slice(&msg);
     w.dispatch_pending().unwrap();
@@ -206,7 +206,7 @@ fn display_error_is_reported_as_protocol_failure() {
     let mut w = blank();
     let mut msg = Vec::new();
     msg.extend_from_slice(&OBJ_DISPLAY.to_le_bytes());
-    msg.extend_from_slice(&((16u32 << 16) | 0).to_le_bytes());
+    msg.extend_from_slice(&(16u32 << 16).to_le_bytes());
     msg.extend_from_slice(&OBJ_WL_SURFACE.to_le_bytes());
     msg.extend_from_slice(&3u32.to_le_bytes());
     w.rx.extend_from_slice(&msg);

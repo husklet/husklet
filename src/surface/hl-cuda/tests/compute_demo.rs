@@ -10,12 +10,12 @@
 //! Batteries:
 //!   1. `saxpy`        — `y[i] = a*x[i] + y[i]`, multi-block grid, every element vs an `fma` reference.
 //!   2. `reduction`    — sum AND max of an N-element array across a MULTI-BLOCK grid via global atomics
-//!                       (`red.global.add` / `red.global.max`), asserting the exact cross-block total.
+//!      (`red.global.add` / `red.global.max`), asserting the exact cross-block total.
 //!   3. `matmul`       — MxK · KxN → MxN over a 2D block/grid, vs a CPU triple-loop (`fma`), per element.
 //!   4. `elementwise`  — `mul` / `add` (f32) and `min` (s32, branch-selected) over two arrays, exact.
 //!   5. `strided/2D`   — copy a sub-rectangle out of a wider row-major source, exact resulting layout.
 //!   6. `shared+sync`  — block-scoped tree reduction in `.shared` memory with `bar.sync`, one partial per
-//!                       block over a multi-block grid; each partial AND the host-summed total exact.
+//!      block over a multi-block grid; each partial AND the host-summed total exact.
 
 use hl_cuda::adapter::ptx;
 use hl_cuda::service::{allocate, launch, load_module, transfer};

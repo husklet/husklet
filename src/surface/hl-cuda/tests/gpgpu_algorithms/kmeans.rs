@@ -116,7 +116,7 @@ fn kmeans_step_assign_and_accumulate_exact() {
     let d_count = alloc_zeroed_i32(&mut sink, &mut ctx, k);
 
     let block = 16u32;
-    let grid = (n as u32 + block - 1) / block; // 2 blocks
+    let grid = (n as u32).div_ceil(block); // 2 blocks
     let args = vec![
         KernelArg::Ptr(d_px),
         KernelArg::Ptr(d_py),

@@ -6,15 +6,15 @@
 //!
 //! Batteries:
 //!   1. `texture_object`     — a `cudaTextureObject` over a 2D array, fetched with POINT (exact texel) and
-//!                             LINEAR (exact bilinear midpoint) filtering; both bit-exact.
+//!      LINEAR (exact bilinear midpoint) filtering; both bit-exact.
 //!   2. `managed_memory`     — `cudaMallocManaged`: host writes a pattern, a kernel transforms it in place,
-//!                             the host reads it back — the unified pointer round-trips, bit-exact.
+//!      the host reads it back — the unified pointer round-trips, bit-exact.
 //!   3. `cuda_graph`         — a kernel sequence built into a `cudaGraph`, instantiated + launched; the
-//!                             replayed result equals running the sequence eagerly, bit-exact + idempotent.
+//!      replayed result equals running the sequence eagerly, bit-exact + idempotent.
 //!   4. `constant_memory`    — a `.const` global set from host via `cudaMemcpyToSymbol` and read in a
-//!                             kernel; the round-trip and the kernel output are both exact.
+//!      kernel; the round-trip and the kernel output are both exact.
 //!   5. `multi_stream`       — overlapping async copies + kernels across four streams into a shared output,
-//!                             deterministic + bit-exact regardless of issue interleaving.
+//!      deterministic + bit-exact regardless of issue interleaving.
 //!
 //! ## The one honest boundary (texture)
 //! A kernel-side `tex2D` is a `tex.2d` PTX instruction served by the GPU texture unit. The neutral

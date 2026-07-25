@@ -267,13 +267,13 @@ fn glyph_atlas_bilinear_coverage_matches_the_subpixel_reference() {
     // A genuinely sub-pixel offset (unequal weights) must differ from EVERY atlas texel — real bilinear
     // positioning, not a nearest tap that snapped to one texel.
     let off = tap(&mut exec, [0.375, 0.625])[0];
-    for col in 0..2 {
-        for row in 0..2 {
+    for (col, column) in COV.iter().enumerate() {
+        for (row, coverage) in column.iter().enumerate() {
             assert!(
-                (off as i16 - COV[col][row] as i16).abs() > 2,
+                (off as i16 - *coverage as i16).abs() > 2,
                 "sub-pixel coverage {off} must differ from atlas texel COV[{col}][{row}]={} — else it is a \
                  nearest tap, not bilinear",
-                COV[col][row]
+                coverage
             );
         }
     }

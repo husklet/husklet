@@ -69,10 +69,9 @@ fn query_pool_timestamp_records_and_results_readable() {
 
     // Before submit the slot is unavailable → NOT_READY (no WAIT/PARTIAL).
     let mut out = [0u8; 4];
-    assert_eq!(
-        sync::get_query_pool_results(&d, pool, 0, 1, &mut out, 4, false, false, false, false)
-            .unwrap(),
-        false
+    assert!(
+        !sync::get_query_pool_results(&d, pool, 0, 1, &mut out, 4, false, false, false, false)
+            .unwrap()
     );
 
     submit::queue_submit(&mut d, &mut sink, &[cb], None).unwrap();
@@ -88,10 +87,9 @@ fn query_pool_timestamp_records_and_results_readable() {
     // A host reset clears availability again.
     sync::reset_query_pool(&mut d, pool, 0, 2);
     let mut out = [0u8; 4];
-    assert_eq!(
-        sync::get_query_pool_results(&d, pool, 0, 1, &mut out, 4, false, false, false, false)
-            .unwrap(),
-        false
+    assert!(
+        !sync::get_query_pool_results(&d, pool, 0, 1, &mut out, 4, false, false, false, false)
+            .unwrap()
     );
 }
 

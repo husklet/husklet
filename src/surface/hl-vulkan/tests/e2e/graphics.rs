@@ -6,6 +6,7 @@ use super::*;
 /// clear — that draws a full-screen quad at z = 0.6 over a blue clear. The depth test is `0.6 < D`:
 ///   * D = 0.5 ⇒ 0.6 < 0.5 is FALSE ⇒ the quad is occluded by the cleared depth ⇒ the pixel stays BLUE.
 ///   * D = 1.0 ⇒ 0.6 < 1.0 is TRUE  ⇒ the quad passes ⇒ the pixel is RED.
+///
 /// The two runs differ ONLY in the depth value the standalone clear wrote, so the color flip proves the
 /// clear reached the depth buffer (the former no-op left it untouched — the quad would always draw).
 #[test]

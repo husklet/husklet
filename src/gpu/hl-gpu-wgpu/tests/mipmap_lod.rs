@@ -5,6 +5,7 @@
 //! NEAREST mip filter into a 1×1 target:
 //!   * lod = 0.0 → base mip → exactly M0.
 //!   * lod = 1.0 → mip 1     → exactly M1.
+//!
 //! M0 and M1 are distinct, so reading M1 at lod=1 proves the sampler descended to the correct mip level
 //! (and that the executor materialized more than one mip and uploaded to the non-base level).
 //!

@@ -102,18 +102,18 @@ fn htod_over_length_and_interior_overrun_are_out_of_bounds() {
     let p = allocate::mem_alloc(&mut c, &mut sink, 64).unwrap();
 
     // Exact-fit write of the whole 64-byte allocation succeeds.
-    transfer::memcpy_htod(&mut c, &mut sink, p, &vec![0xABu8; 64]).unwrap();
+    transfer::memcpy_htod(&mut c, &mut sink, p, &[0xABu8; 64]).unwrap();
 
     // One byte past the end → OutOfBounds (would be a silent OOB WriteBuffer without the guard).
-    assert_oob(&transfer::memcpy_htod(&mut c, &mut sink, p, &vec![0u8; 65]).unwrap_err());
+    assert_oob(&transfer::memcpy_htod(&mut c, &mut sink, p, &[0u8; 65]).unwrap_err());
 
     // An interior pointer whose write overruns the allocation end (48 + 32 > 64) → OutOfBounds.
     assert_oob(
-        &transfer::memcpy_htod(&mut c, &mut sink, DevicePtr(p.0 + 48), &vec![0u8; 32]).unwrap_err(),
+        &transfer::memcpy_htod(&mut c, &mut sink, DevicePtr(p.0 + 48), &[0u8; 32]).unwrap_err(),
     );
 
     // An interior write that exactly reaches the end (48 + 16 == 64) still works.
-    transfer::memcpy_htod(&mut c, &mut sink, DevicePtr(p.0 + 48), &vec![0u8; 16]).unwrap();
+    transfer::memcpy_htod(&mut c, &mut sink, DevicePtr(p.0 + 48), &[0u8; 16]).unwrap();
 
     // The rejected writes touched nothing: [0,48) is still 0xAB, only the accepted tail write cleared [48,64).
     let got = readback(&mut sink, &c, p, 64);
@@ -209,7 +209,7 @@ fn memset_huge_count_is_checked_and_bounded_no_giant_vec() {
     // A bad element width is a typed error, not a slice-panic.
     assert!(transfer::memset_elements(&mut c, &mut sink, p, 0, 9, 1).is_err());
     // The pre-expanded byte-pattern memset is bounded against the allocation too.
-    assert_oob(&transfer::memset(&mut c, &mut sink, p, &vec![0u8; 65]).unwrap_err());
+    assert_oob(&transfer::memset(&mut c, &mut sink, p, &[0u8; 65]).unwrap_err());
 
     // Exact-fit fill: 16 × u32 = 64 bytes of 0x01010101 works and lands byte-for-byte.
     transfer::memset_elements(&mut c, &mut sink, p, 0x0101_0101, 4, 16).unwrap();
@@ -248,7 +248,7 @@ fn freed_and_bogus_pointers_are_rejected_across_every_path() {
 
     // The allocator is still healthy: a fresh alloc + valid copy still works.
     let q = allocate::mem_alloc(&mut c, &mut sink, 16).unwrap();
-    transfer::memcpy_htod(&mut c, &mut sink, q, &vec![9u8; 16]).unwrap();
+    transfer::memcpy_htod(&mut c, &mut sink, q, &[9u8; 16]).unwrap();
     assert_eq!(readback(&mut sink, &c, q, 16), vec![9u8; 16]);
 }
 
@@ -271,9 +271,7 @@ fn async_ops_enforce_both_stream_validation_and_bounds() {
     assert!(transfer::memset_elements_async(&mut c, &mut sink, bad, p, 0, 4, 1).is_err());
 
     // Valid stream but out-of-bounds / overflowing length → OutOfBounds (bounds enforced on async too).
-    assert_oob(
-        &transfer::memcpy_htod_async(&mut c, &mut sink, good, p, &vec![0u8; 65]).unwrap_err(),
-    );
+    assert_oob(&transfer::memcpy_htod_async(&mut c, &mut sink, good, p, &[0u8; 65]).unwrap_err());
     assert_oob(
         &transfer::memset_elements_async(&mut c, &mut sink, good, p, 0, 4, usize::MAX).unwrap_err(),
     );

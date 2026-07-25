@@ -13,6 +13,7 @@
 //!     accept them — see `lib.rs`);
 //!   * supports_timeline_fences == false, advertised truthfully: fences are emulated via submission
 //!     completion, which still services a wait for a signalled value.
+//!
 //! Skips with no adapter.
 
 use hl_gpu::protocol::model::capability::{

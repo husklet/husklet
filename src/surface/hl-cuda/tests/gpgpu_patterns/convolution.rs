@@ -110,7 +110,7 @@ fn conv1d_box_shared_halo_exact() {
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
     let d_out = alloc_zeroed_i32(&mut sink, &mut ctx, n);
-    let grid = ((n + block - 1) / block) as u32; // 4 blocks
+    let grid = n.div_ceil(block) as u32; // 4 blocks
 
     let args = vec![KernelArg::Ptr(d_in), KernelArg::Ptr(d_out), sc(n as i32)];
     launch::launch(
@@ -224,8 +224,8 @@ fn conv2d_box_blur_exact() {
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&img));
     let d_out = alloc_zeroed_i32(&mut sink, &mut ctx, w * h);
-    let gx = ((w + 15) / 16) as u32;
-    let gy = ((h + 15) / 16) as u32;
+    let gx = w.div_ceil(16) as u32;
+    let gy = h.div_ceil(16) as u32;
 
     let args = vec![
         KernelArg::Ptr(d_in),
@@ -368,8 +368,8 @@ fn sobel3x3_gradient_magnitude_exact() {
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&img));
     let d_out = alloc_zeroed_i32(&mut sink, &mut ctx, w * h);
-    let gxg = ((w + 15) / 16) as u32;
-    let gyg = ((h + 15) / 16) as u32;
+    let gxg = w.div_ceil(16) as u32;
+    let gyg = h.div_ceil(16) as u32;
 
     let args = vec![
         KernelArg::Ptr(d_in),

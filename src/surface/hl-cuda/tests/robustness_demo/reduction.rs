@@ -12,7 +12,7 @@ fn run_reduction(input: &[i32]) -> (i32, i32) {
     let mut ctx = CudaContext::new(CudaDeviceDesc::apple_default(8 << 30));
 
     // grid sized so grid.x * 128 >= n; the `i >= n` guard masks the tail lanes.
-    let blocks = ((n + 127) / 128) as u32;
+    let blocks = n.div_ceil(128) as u32;
 
     let sum_mod = ctx.load_module(REDUCE_SUM_PTX.as_bytes()).unwrap();
     let sum_fn = load_module::module_get_function(&ctx, sum_mod, "reduce_sum").unwrap();

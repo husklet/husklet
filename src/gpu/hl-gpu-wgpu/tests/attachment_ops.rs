@@ -8,6 +8,7 @@
 //!   * LoadOp::Load preserves a prior pass's content in the un-drawn region;
 //!   * LoadOp::DontCare is mapped conservatively to Load (the executor's documented choice), so it likewise
 //!     preserves rather than corrupts.
+//!
 //! Skips with no adapter.
 
 use hl_gpu::protocol::model::descriptor::{

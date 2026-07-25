@@ -85,7 +85,7 @@ fn relu_and_gelu_cubic_exact() {
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
     let d_relu = alloc_zeroed_i32(&mut sink, &mut ctx, n);
     let d_gelu = alloc_zeroed_i32(&mut sink, &mut ctx, n);
-    let grid = ((n + 127) / 128) as u32; // 4 blocks × 128
+    let grid = n.div_ceil(128) as u32; // 4 blocks × 128
 
     let args_r = vec![KernelArg::Ptr(d_in), KernelArg::Ptr(d_relu), sc(n as i32)];
     launch::launch(
@@ -125,7 +125,7 @@ fn relu_and_gelu_cubic_exact() {
         "fixed-point GELU-cubic elementwise exact"
     );
     assert!(
-        want_relu.iter().any(|&v| v == 0) && want_relu.iter().any(|&v| v > 0),
+        want_relu.contains(&0) && want_relu.iter().any(|&v| v > 0),
         "ReLU exercises both sides"
     );
     assert!(

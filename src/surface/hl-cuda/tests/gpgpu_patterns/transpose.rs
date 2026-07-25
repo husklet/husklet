@@ -72,8 +72,8 @@ fn transpose_shared_memory_coalesced_exact() {
 
     let d_in = upload(&mut sink, &mut ctx, &i32s_to_bytes(&input));
     let d_out = alloc_zeroed_i32(&mut sink, &mut ctx, w * h);
-    let gx = ((w + 15) / 16) as u32; // 3
-    let gy = ((h + 15) / 16) as u32; // 3
+    let gx = w.div_ceil(16) as u32; // 3
+    let gy = h.div_ceil(16) as u32; // 3
 
     let args = vec![
         KernelArg::Ptr(d_in),

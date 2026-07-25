@@ -138,7 +138,7 @@ fn gemv_and_argmax_exact() {
     let d_idx = allocate::mem_alloc(&mut ctx, &mut sink, 4).unwrap();
     transfer::memset(&mut ctx, &mut sink, d_idx, &i32s_to_bytes(&[m as i32])).unwrap();
 
-    let grid = ((m + 255) / 256) as u32; // 4 blocks × 256
+    let grid = m.div_ceil(256) as u32; // 4 blocks × 256
 
     let args_gemv = vec![
         KernelArg::Ptr(d_a),

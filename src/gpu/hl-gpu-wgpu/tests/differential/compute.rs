@@ -2,7 +2,6 @@ use super::*;
 
 /// (18) COMPUTE `iota`: `out[gid] = gid` for `gid < n`, driven by the SAME neutral kernel-IR
 /// (`KernelProgram`) on both backends — the CPU interpreter and the wgpu WGSL-lowered compute. EXACT.
-
 pub(super) fn gen_compute_iota(seed: u64) -> Prog {
     let n = 8 + (seed % 25) as u32; // 8..=32
     let mut param = vec![0u8; 12];

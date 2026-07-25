@@ -267,7 +267,6 @@ struct Prog {
 
 /// (0) Render-pass `LoadOp::Clear` on a colour target — no draw. Both backends fill every texel with the
 /// exact packed clear colour. EXACT.
-
 fn pos2_color_layout() -> VertexLayout {
     VertexLayout {
         stride: 24,

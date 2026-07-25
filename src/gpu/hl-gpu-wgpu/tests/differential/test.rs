@@ -172,7 +172,8 @@ fn differential_cpu_oracle_vs_wgpu() {
         ops_covered.len()
     );
     // The newly-covered op surface must actually be present in the run.
-    for op in ["SetStencilReference"] {
+    {
+        let op = "SetStencilReference";
         assert!(
             ops_covered.contains(op),
             "expected `{op}` in the covered op set"

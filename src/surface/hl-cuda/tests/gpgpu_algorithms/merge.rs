@@ -119,8 +119,8 @@ fn merge_sort_multiblock_u32_exact() {
     let mut passes = 0u32;
     let mut runlen = 1u32;
     while (runlen as usize) < n {
-        let tasks = (n as u32 + 2 * runlen - 1) / (2 * runlen);
-        let grid = (tasks + block - 1) / block;
+        let tasks = (n as u32).div_ceil(2 * runlen);
+        let grid = tasks.div_ceil(block);
         let args = vec![
             KernelArg::Ptr(buf_a),
             KernelArg::Ptr(buf_b),

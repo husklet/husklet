@@ -18,22 +18,22 @@
 //!
 //! Batteries:
 //!   1. `merge_sort`       — iterative bottom-up multi-block merge sort of N u32 keys, ping-pong buffers,
-//!                           one kernel launch per doubling pass. Exact vs a stable-sorted reference.
+//!      one kernel launch per doubling pass. Exact vs a stable-sorted reference.
 //!   2. `dft_fixed_point`  — fixed-point DFT of an N=16 signal with an INTEGER twiddle table and power-of-two
-//!                           modular index `(k·n)&(N−1)`. Exact real/imag bins vs the same integer DFT on CPU.
+//!      modular index `(k·n)&(N−1)`. Exact real/imag bins vs the same integer DFT on CPU.
 //!   3. `bfs_frontier`     — one BFS level-expansion step (pull model) over a symmetric CSR graph, with a
-//!                           cross-block atomic frontier count. Exact new `dist`, frontier mask, and count.
+//!      cross-block atomic frontier count. Exact new `dist`, frontier mask, and count.
 //!   4. `spmv_csr`         — sparse matrix–vector product in CSR (ragged rows incl. an empty row). Exact.
 //!   5. `stream_compaction`— predicate → multi-block inclusive prefix scan → scatter, compacting the
-//!                           elements that pass. Exact compacted prefix + exact count.
+//!      elements that pass. Exact compacted prefix + exact count.
 //!   6. `monte_carlo_pi`   — deterministic per-thread LCG (seeded by thread index) → integer count of
-//!                           samples inside the quarter circle, summed by atomics. Exact hit count vs the
-//!                           identical LCG replayed on CPU (bit-exact count, NOT a statistical π).
+//!      samples inside the quarter circle, summed by atomics. Exact hit count vs the
+//!      identical LCG replayed on CPU (bit-exact count, NOT a statistical π).
 //!   7. `kmeans_step`      — one k-means iteration: assign each point to its nearest of K centroids by
-//!                           integer L2, then atomically accumulate per-cluster coordinate sums + counts.
-//!                           Exact assignment, sums, and counts.
+//!      integer L2, then atomically accumulate per-cluster coordinate sums + counts.
+//!      Exact assignment, sums, and counts.
 //!   8. `running_minmax`   — inclusive Hillis-Steele running min AND running max scans in shared memory
-//!                           (a barrier per doubling step). Exact prefix-min and prefix-max.
+//!      (a barrier per doubling step). Exact prefix-min and prefix-max.
 
 use hl_cuda::adapter::ptx;
 use hl_cuda::service::{allocate, launch, load_module, transfer};

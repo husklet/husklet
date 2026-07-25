@@ -7,7 +7,6 @@ use super::*;
 /// (13) sRGB CLEAR: `LoadOp::Clear` an `Rgba8Srgb` target to a mid-range opaque colour. Both backends
 /// gamma-ENCODE the clear into sRGB on write (linear 0.5 → 188, not 128). ±2 for the encode's last-ULP
 /// rounding (the CPU rounds half-up; lavapipe's clear path agrees to within a step).
-
 pub(super) fn gen_clear_srgb(seed: u64) -> Prog {
     let w = 3 + (seed % 6) as u32; // 3..=8
     let h = 2 + (seed % 5) as u32; // 2..=6

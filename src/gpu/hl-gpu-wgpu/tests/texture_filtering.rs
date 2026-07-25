@@ -6,6 +6,7 @@
 //!   * NEAREST @ u=0.25 → the LEFT texel center → exactly A.
 //!   * NEAREST @ u=0.75 → the RIGHT texel center → exactly B.
 //!   * LINEAR  @ u=0.50 → the midpoint between the two texel centers → exactly (A+B)/2.
+//!
 //! The LINEAR midpoint is neither A nor B, so it proves genuine bilinear interpolation (not a nearest tap
 //! that happened to round). All targets are LINEAR `Rgba8Unorm`, so the interpolation is an exact integer.
 

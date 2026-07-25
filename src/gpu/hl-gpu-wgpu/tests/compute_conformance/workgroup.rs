@@ -12,7 +12,7 @@ fn workgroup_sizes_all_agree_and_respect_bounds() {
         .iter()
         .map(|v| v.wrapping_mul(3).wrapping_add(7))
         .collect();
-    expect.extend(std::iter::repeat(SENTINEL).take(PAD as usize));
+    expect.extend(std::iter::repeat_n(SENTINEL, PAD as usize));
     let out_len = (N + PAD) as usize;
     let dst_init = u32s(&vec![SENTINEL; out_len]);
 
