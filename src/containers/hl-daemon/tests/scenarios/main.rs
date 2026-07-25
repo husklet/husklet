@@ -37,7 +37,8 @@ pub(crate) use groups::{
     web, weird,
 };
 
-use std::env;
+use contract::Target;
+use std::{collections::BTreeSet, env};
 
 #[tokio::main]
 async fn main() {
@@ -76,6 +77,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "report-partial" => report_command::partial()?,
         "report-invalidate" => report_command::invalidate()?,
         "cache-quarantine" => cache_command::quarantine()?,
+        "cache-preflight" => cache_preflight()?,
         "contract-test" => {
             contract::test_firewall()?;
             weird::test_expected_failures()?;
@@ -130,4 +132,43 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         other => return Err(format!("unknown scenario {other:?}").into()),
     }
     Ok(())
+}
+
+fn cache_preflight() -> Result<(), Box<dyn std::error::Error>> {
+    let target = env::args()
+        .nth(2)
+        .ok_or("cache-preflight requires arm64 or amd64")?;
+    let target = match target.as_str() {
+        "arm64" => Target::Arm64,
+        "amd64" => Target::Amd64,
+        other => return Err(format!("unsupported cache-preflight target {other:?}").into()),
+    };
+    let references = registry::build()
+        .scenarios()
+        .filter(|scenario| scenario.targets.contains(&target))
+        .map(|scenario| scenario.image)
+        .collect::<BTreeSet<_>>();
+    let mut checked = 0;
+    let mut missing = Vec::new();
+    for reference in references {
+        checked += 1;
+        if !fixture::preflight(reference, &target.platform())? {
+            missing.push(reference);
+        }
+    }
+    if missing.is_empty() {
+        println!(
+            "offline OCI preflight passed: {checked} references for {}",
+            target.name()
+        );
+        Ok(())
+    } else {
+        Err(format!(
+            "offline OCI preflight failed for {}: {} of {checked} references absent: {}",
+            target.name(),
+            missing.len(),
+            missing.join(", ")
+        )
+        .into())
+    }
 }

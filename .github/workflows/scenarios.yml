@@ -1,0 +1,53 @@
+name: Full scenario census
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scenarios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  census:
+    name: Offline arm64 and amd64 census
+    runs-on: [self-hosted, macOS, ARM64, husklet-census]
+    timeout-minutes: 360
+    env:
+      HL_SCENARIO_IMAGE_CACHE: /Users/Shared/husklet/oci-census
+      HL_SCENARIO_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an Apple Silicon host
+        run: |
+          architecture="$(uname -m)"
+          test "$architecture" = arm64 || {
+            echo "Husklet scenarios require an arm64 macOS host, got: $architecture" >&2
+            exit 1
+          }
+
+      - name: Prove the persistent cache is complete
+        run: |
+          test -d "$HL_SCENARIO_IMAGE_CACHE" || {
+            echo "persistent OCI census cache is absent: $HL_SCENARIO_IMAGE_CACHE" >&2
+            exit 1
+          }
+          nix develop "path:$PWD/nix" --command \
+            cargo test -p hl-daemon --test scenarios -- cache-preflight arm64
+          nix develop "path:$PWD/nix" --command \
+            cargo test -p hl-daemon --test scenarios -- cache-preflight amd64
+
+      - name: Run every registered arm64 scenario and workflow offline
+        run: >-
+          nix develop "path:$PWD/nix" --command
+          cargo test -p hl-daemon --test scenarios --
+          all --offline --jobs 8 --target arm64
+
+      - name: Run every registered amd64 scenario and workflow offline
+        run: >-
+          nix develop "path:$PWD/nix" --command
+          cargo test -p hl-daemon --test scenarios --
+          all --offline --jobs 8 --target amd64

@@ -275,3 +275,8 @@ pub(crate) fn quarantine(raw: &str) -> Result<Option<String>, Error> {
     }
     Ok(digest)
 }
+
+pub(crate) fn preflight(raw: &str, platform: &Platform) -> Result<bool, Error> {
+    let (images, reference) = cache(raw)?;
+    Ok(resolve_for_platform(&images, &reference, platform)?.is_some())
+}

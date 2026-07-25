@@ -46,8 +46,11 @@ jobs:
       - name: Enforce Clippy warnings
         run: nix develop "path:$PWD/nix" --command cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Test the complete workspace
-        run: nix develop "path:$PWD/nix" --command cargo test --workspace
+      - name: Test deterministic workspace targets
+        run: |
+          nix develop "path:$PWD/nix" --command cargo test --workspace --exclude hl-daemon
+          nix develop "path:$PWD/nix" --command \
+            cargo test -p hl-daemon --lib --bin hl-daemon --test analyze --test report
 
       - name: Build the complete workspace
         run: nix develop "path:$PWD/nix" --command cargo build --workspace
