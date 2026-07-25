@@ -106,11 +106,20 @@ impl Options {
             Err(format!("failed categories: {}", failures.join(", ")).into())
         }
     }
+
+    async fn workflows(
+        &self,
+        executable: &Path,
+        cache: &Path,
+        run: &str,
+    ) -> Result<Vec<&'static str>, Error> {
+        workflow::run(executable, self.jobs, cache, run, self.resume, self.target).await
+    }
 }
 
 pub(crate) async fn run(options: Options) -> Result<(), Error> {
     let executable = env::current_exe()?;
-    let cache = cache::absolute()?;
+    let cache = cache::absolute(options.target)?;
     let run = env::var("HL_SCENARIO_RUN_ID")
         .unwrap_or_else(|_| default_run_id(SystemTime::now(), std::process::id()));
     let workers = cache
@@ -201,8 +210,7 @@ pub(crate) async fn run(options: Options) -> Result<(), Error> {
         failures.extend(result??);
     }
     if options.category.is_none() && options.case.is_none() {
-        failures
-            .extend(workflow::run(&executable, options.jobs, &cache, &run, options.resume).await?);
+        failures.extend(options.workflows(&executable, &cache, &run).await?);
     }
     options.finish(&run, &failures)
 }
@@ -221,6 +229,10 @@ pub(crate) fn test_requirements() -> Result<(), Error> {
 
 pub(crate) fn test_run_lock() -> Result<(), Error> {
     cache::test_lock()
+}
+
+pub(crate) fn test_workflow_target_cache() {
+    workflow::test_target_cache();
 }
 
 pub(crate) mod tests {

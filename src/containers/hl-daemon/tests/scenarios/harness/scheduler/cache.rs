@@ -1,7 +1,7 @@
 use super::Error;
+use crate::contract::Target;
 use fs2::FileExt as _;
 use std::{
-    env,
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
 };
@@ -27,21 +27,8 @@ impl RunLock {
     }
 }
 
-pub(super) fn absolute() -> Result<PathBuf, Error> {
-    let path = env::var_os("HL_SCENARIO_IMAGE_CACHE").map_or_else(
-        || {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .expect("hl-daemon belongs to a workspace")
-                .join("target/scenarios/images")
-        },
-        PathBuf::from,
-    );
-    Ok(if path.is_absolute() {
-        path
-    } else {
-        env::current_dir()?.join(path)
-    })
+pub(super) fn absolute(target: Target) -> Result<PathBuf, Error> {
+    Ok(crate::fixture::cache_root(&target.platform())?)
 }
 
 pub(super) fn test_lock() -> Result<(), Error> {

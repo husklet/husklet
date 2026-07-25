@@ -38,7 +38,7 @@ impl Fixture {
     async fn materialize_inner(raw: &str, platform: &Platform) -> Result<Self, Error> {
         let parsed: Reference = raw.parse()?;
         let absent = env::var_os("HL_SCENARIO_OFFLINE").is_some()
-            && FsImageStore::open(cache_root()?.join("metadata"))?
+            && FsImageStore::open(cache_root(platform)?.join("metadata"))?
                 .get(&parsed)?
                 .is_none();
         if absent {
@@ -47,7 +47,7 @@ impl Fixture {
             )
             .into());
         }
-        let (images, reference) = cache(raw)?;
+        let (images, reference) = cache(raw, platform)?;
         let image = if let Some(image) = resolve_for_platform(&images, &reference, platform)? {
             image
         } else {
@@ -223,50 +223,90 @@ fn resolve_for_platform(
 
 pub(crate) fn test_platform_aware_cache_resolution() -> Result<(), Error> {
     let root = tempfile::tempdir()?;
-    let images = Images::open(root.path())?;
+    assert_eq!(
+        cache_path(None, &Platform::linux_arm64(), root.path()),
+        root.path().join("target/scenarios/images/arm64")
+    );
+    assert_eq!(
+        cache_path(None, &Platform::linux_amd64(), root.path()),
+        root.path().join("target/scenarios/images/amd64")
+    );
+    let configured = root.path().join("persistent/amd64");
+    assert_eq!(
+        cache_path(
+            Some(configured.clone()),
+            &Platform::linux_amd64(),
+            root.path()
+        ),
+        configured,
+        "an explicitly selected per-platform cache remains the exact leaf path"
+    );
+    let arm64 = Images::open(root.path().join("arm64"))?;
+    let amd64 = Images::open(root.path().join("amd64"))?;
     let reference: Reference = "example.test/cache:latest".parse()?;
     let mut layer = Vec::new();
     tar::Builder::new(&mut layer).finish()?;
-    images.import(
+    let runtime = RuntimeConfig {
+        entrypoint: Vec::new(),
+        command: vec!["/bin/true".into()],
+        environment: std::collections::BTreeMap::new(),
+        working_directory: "/".into(),
+        user: String::new(),
+    };
+    arm64.import(
         layer.as_slice(),
-        &RuntimeConfig {
-            entrypoint: Vec::new(),
-            command: vec!["/bin/true".into()],
-            environment: std::collections::BTreeMap::new(),
-            working_directory: "/".into(),
-            user: String::new(),
-        },
+        &runtime,
         &Platform::linux_arm64(),
         &reference,
     )?;
-    assert!(resolve_for_platform(&images, &reference, &Platform::linux_arm64())?.is_some());
+    amd64.import(
+        layer.as_slice(),
+        &runtime,
+        &Platform::linux_amd64(),
+        &reference,
+    )?;
+    assert!(resolve_for_platform(&arm64, &reference, &Platform::linux_arm64())?.is_some());
+    assert!(resolve_for_platform(&amd64, &reference, &Platform::linux_amd64())?.is_some());
     assert!(
-        resolve_for_platform(&images, &reference, &Platform::linux_amd64())?.is_none(),
-        "an ARM-only cached tag must be a cache miss for an amd64 request"
+        resolve_for_platform(&arm64, &reference, &Platform::linux_amd64())?.is_none(),
+        "the arm64 catalog must not resolve its canonical name as amd64"
+    );
+    assert!(
+        resolve_for_platform(&amd64, &reference, &Platform::linux_arm64())?.is_none(),
+        "the amd64 catalog must not resolve its canonical name as arm64"
     );
     Ok(())
 }
 
-fn cache(raw: &str) -> Result<(Images, Reference), Error> {
-    let cache = cache_root()?;
+fn cache(raw: &str, platform: &Platform) -> Result<(Images, Reference), Error> {
+    let cache = cache_root(platform)?;
     let images = Images::open(cache)?;
     let reference: Reference = raw.parse()?;
     Ok((images, reference))
 }
 
-fn cache_root() -> Result<PathBuf, Error> {
-    let cache = env::var_os("HL_SCENARIO_IMAGE_CACHE")
-        .map_or_else(|| PathBuf::from("target/scenarios/images"), PathBuf::from);
-    let cache = if cache.is_absolute() {
-        cache
+pub(crate) fn cache_root(platform: &Platform) -> io::Result<PathBuf> {
+    Ok(cache_path(
+        env::var_os("HL_SCENARIO_IMAGE_CACHE").map(PathBuf::from),
+        platform,
+        &env::current_dir()?,
+    ))
+}
+
+fn cache_path(configured: Option<PathBuf>, platform: &Platform, current: &Path) -> PathBuf {
+    let path = configured.unwrap_or_else(|| {
+        PathBuf::from("target/scenarios/images").join(platform.architecture.as_str())
+    });
+    if path.is_absolute() {
+        path
     } else {
-        env::current_dir()?.join(cache)
-    };
-    Ok(cache)
+        current.join(path)
+    }
 }
 
 pub(crate) fn quarantine(raw: &str) -> Result<Option<String>, Error> {
-    let (images, reference) = cache(raw)?;
+    let platform = crate::contract::Target::from_env()?.platform();
+    let (images, reference) = cache(raw, &platform)?;
     let digest = images
         .resolve(&reference)?
         .map(|image| image.target.digest().to_string());
@@ -277,6 +317,6 @@ pub(crate) fn quarantine(raw: &str) -> Result<Option<String>, Error> {
 }
 
 pub(crate) fn preflight(raw: &str, platform: &Platform) -> Result<bool, Error> {
-    let (images, reference) = cache(raw)?;
+    let (images, reference) = cache(raw, platform)?;
     Ok(resolve_for_platform(&images, &reference, platform)?.is_some())
 }

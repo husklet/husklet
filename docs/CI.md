@@ -21,17 +21,19 @@ Provisioning checklist:
    workflows. Do not allow pull-request workflows from forks to target it.
 2. Install Nix and verify that `nix develop "path:$PWD/nix"` works in the
    runner service account.
-3. Create `/Users/Shared/husklet/oci-census` on persistent storage with enough
-   capacity for both architectures. The complete store is substantially larger
-   than the GitHub Actions repository cache quota and must not use
-   `actions/cache`.
+3. Create `/Users/Shared/husklet/oci-census/{arm64,amd64}` on persistent
+   storage. Each architecture needs its own image catalog because one canonical
+   OCI reference resolves to one platform manifest. The complete stores are
+   substantially larger than the GitHub Actions repository cache quota and
+   must not use `actions/cache`.
 4. Seed both platforms using authenticated registry credentials:
 
    ```sh
-   export HL_SCENARIO_IMAGE_CACHE=/Users/Shared/husklet/oci-census
    export HL_REGISTRY_USERNAME=...
    export HL_REGISTRY_PASSWORD=...
+   export HL_SCENARIO_IMAGE_CACHE=/Users/Shared/husklet/oci-census/arm64
    cargo test -p hl-daemon --test scenarios -- all --prefetch --jobs 8 --target arm64
+   export HL_SCENARIO_IMAGE_CACHE=/Users/Shared/husklet/oci-census/amd64
    cargo test -p hl-daemon --test scenarios -- all --prefetch --jobs 8 --target amd64
    ```
 
@@ -39,9 +41,10 @@ Provisioning checklist:
    complete and platform-correct:
 
    ```sh
-   export HL_SCENARIO_IMAGE_CACHE=/Users/Shared/husklet/oci-census
    export HL_SCENARIO_OFFLINE=1
+   export HL_SCENARIO_IMAGE_CACHE=/Users/Shared/husklet/oci-census/arm64
    cargo test -p hl-daemon --test scenarios -- cache-preflight arm64
+   export HL_SCENARIO_IMAGE_CACHE=/Users/Shared/husklet/oci-census/amd64
    cargo test -p hl-daemon --test scenarios -- cache-preflight amd64
    ```
 

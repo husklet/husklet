@@ -12,6 +12,7 @@ pub(super) fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     manifest::test_validation()?;
     scheduler::test_requirements().map_err(|error| error.to_string())?;
     scheduler::test_run_lock().map_err(|error| error.to_string())?;
+    scheduler::test_workflow_target_cache();
     scheduler::tests::run_ids_survive_process_id_reuse();
     analyze::tests::normalization_removes_volatile_values();
     languages::tests::registry_has_every_stable_id_once();

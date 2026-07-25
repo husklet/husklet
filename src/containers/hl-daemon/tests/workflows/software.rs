@@ -3,20 +3,15 @@
 use hl_container::{ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
 use hl_images::{
     remote::{Auth, Registry},
-    Images, Platform, Reference,
+    Images, Reference,
 };
-use std::{env, path::PathBuf, time::Duration};
+use std::time::Duration;
 
 type Error = Box<dyn std::error::Error>;
 
 pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
-    let cache = env::var_os("HL_SCENARIO_IMAGE_CACHE")
-        .map_or_else(|| PathBuf::from("target/scenarios/images"), PathBuf::from);
-    let cache = if cache.is_absolute() {
-        cache
-    } else {
-        env::current_dir()?.join(cache)
-    };
+    let platform = crate::contract::Target::from_env()?.platform();
+    let cache = crate::fixture::cache_root(&platform)?;
     let images = Images::open(cache)?;
     finite(
         containers, &images, "redis:alpine", "realsw-redis",
@@ -157,20 +152,17 @@ async fn rootfs(
     images: &Images,
     raw: &str,
 ) -> Result<(hl_images::rootfs::Reference, hl_images::rootfs::View), Error> {
+    let platform = crate::contract::Target::from_env()?.platform();
     let reference: Reference = raw.parse()?;
     let image = match images.resolve(&reference)? {
         Some(image) => image,
         None => {
             images
-                .pull(
-                    &Registry::new(Auth::Anonymous),
-                    reference,
-                    &Platform::linux_arm64(),
-                )
+                .pull(&Registry::new(Auth::Anonymous), reference, &platform)
                 .await?
         }
     };
-    let unpacked = images.unpack(&image, &Platform::linux_arm64())?;
+    let unpacked = images.unpack(&image, &platform)?;
     let root = images.rootfs(&unpacked)?;
     let view = images.roots().open(&root)?;
     Ok((root, view))

@@ -1,4 +1,5 @@
 use super::{process::ProcessGroup, Error};
+use crate::contract::Target;
 use crate::report::{Status, Store, WorkflowAttempt, WorkflowKey, WorkflowOutcome};
 use std::{
     collections::BTreeMap,
@@ -16,6 +17,7 @@ pub(super) async fn run(
     cache: &Path,
     run: &str,
     resume: bool,
+    target: Target,
 ) -> Result<Vec<&'static str>, Error> {
     let report_base = env::var_os("HL_SCENARIO_REPORT_DIR").map_or_else(
         || {
@@ -67,15 +69,7 @@ pub(super) async fn run(
             })?;
             let timer = Instant::now();
             eprintln!("START [workflow] {workflow}");
-            let mut command = Command::new(executable);
-            command
-                .args(["workflow", workflow])
-                .env("HL_SCENARIO_RUN_ID", run)
-                .env("HL_SCENARIO_CHILD", "1")
-                .env("HL_SCENARIO_IMAGE_CACHE", cache)
-                .stdin(Stdio::null())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit());
+            let mut command = command(&executable, &cache, &run, target, workflow);
             let completion = match ProcessGroup::spawn(&mut command) {
                 Ok(process) => process.wait().await,
                 Err(error) => Err(error),
@@ -114,4 +108,43 @@ pub(super) async fn run(
         }
     }
     Ok(failures)
+}
+
+fn command(executable: &Path, cache: &Path, run: &str, target: Target, workflow: &str) -> Command {
+    let mut command = Command::new(executable);
+    command
+        .args(["workflow", workflow])
+        .env("HL_SCENARIO_RUN_ID", run)
+        .env("HL_SCENARIO_CHILD", "1")
+        .env("HL_SCENARIO_IMAGE_CACHE", cache)
+        .env("HL_SCENARIO_TARGET", target.name())
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    command
+}
+
+pub(super) fn test_target_cache() {
+    let command = command(
+        Path::new("/scenario-runner"),
+        Path::new("/cache/amd64"),
+        "run-1",
+        Target::Amd64,
+        "realsw",
+    );
+    let command = command.as_std();
+    let value = |expected: &str| {
+        command
+            .get_envs()
+            .find(|(name, _)| *name == expected)
+            .and_then(|(_, value)| value)
+    };
+    assert_eq!(
+        value("HL_SCENARIO_IMAGE_CACHE"),
+        Some(std::ffi::OsStr::new("/cache/amd64"))
+    );
+    assert_eq!(
+        value("HL_SCENARIO_TARGET"),
+        Some(std::ffi::OsStr::new("amd64"))
+    );
 }
