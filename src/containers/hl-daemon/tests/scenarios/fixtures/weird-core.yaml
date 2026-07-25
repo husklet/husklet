@@ -180,9 +180,6 @@ cases:
 - id: weird/io-uring
   image: gcc:latest
   class: long
-  xfail:
-  - arm64
-  - amd64
   run:
     shell: |-
       cat > /m.c <<'CEOF'
@@ -201,6 +198,7 @@ cases:
       CEOF
       cc /m.c -O2 -o /m && /m
   expect:
+    exit: 1
     stdout_contains:
     - 'io_uring_setup: Operation not permitted'
 - id: weird/julia-jit

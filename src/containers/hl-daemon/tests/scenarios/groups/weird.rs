@@ -21,7 +21,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
 }
 
 pub(crate) fn test_expected_failures() -> Result<(), String> {
-    let expected = ["weird/dotnet-ryujit", "weird/io-uring"];
+    let expected = ["weird/dotnet-ryujit"];
     for target in [contract::Target::Arm64, contract::Target::Amd64] {
         let mut actual = group()
             .scenarios
