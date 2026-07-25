@@ -90,12 +90,17 @@ pub struct BatchReport {
 }
 impl BatchReport {
     pub fn new(
-        metadata: BatchMetadata,
+        mut metadata: BatchMetadata,
         mut outcomes: Vec<ScenarioOutcome>,
         mut workflows: Vec<WorkflowOutcome>,
     ) -> Self {
         outcomes.sort_by(|a, b| a.key.cmp(&b.key));
         workflows.sort_by(|a, b| a.key.cmp(&b.key));
+        metadata
+            .categories
+            .extend(outcomes.iter().map(|outcome| outcome.category.clone()));
+        metadata.categories.sort();
+        metadata.categories.dedup();
         let scenario_cases = outcomes.len().try_into().unwrap_or(u64::MAX);
         let workflow_cases = workflows.len().try_into().unwrap_or(u64::MAX);
         let mut value = Self {

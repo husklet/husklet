@@ -86,6 +86,7 @@ pub(crate) fn persistence_resume_and_summaries_are_deterministic() {
     };
     let report = BatchReport::new(metadata, resumed.into_values().collect(), Vec::new());
     assert_eq!(report.outcomes[0].key.scenario, "a");
+    assert_eq!(report.metadata.categories, ["database"]);
     store.finish(&report).unwrap();
     assert_eq!(
         fs::read_to_string(temp.path().join("latest")).unwrap(),
@@ -94,6 +95,31 @@ pub(crate) fn persistence_resume_and_summaries_are_deterministic() {
     assert!(fs::read_to_string(temp.path().join("run-1/summary.md"))
         .unwrap()
         .contains("Passed"));
+}
+
+pub(crate) fn summary_categories_cover_every_recorded_outcome() {
+    let mut database = outcome("database/postgres");
+    database.category = "databases".into();
+    let mut network = outcome("networking/tcp-loopback");
+    network.category = "networking".into();
+    let report = BatchReport::new(
+        BatchMetadata {
+            run_id: "mixed".into(),
+            started_unix_ms: 1,
+            engine_archive_hash: "sha256:engine".into(),
+            targets: vec!["arm64".into()],
+            images: BTreeMap::new(),
+            categories: vec!["netinstall".into()],
+            filters: Vec::new(),
+        },
+        vec![network, database],
+        Vec::new(),
+    );
+
+    assert_eq!(
+        report.metadata.categories,
+        ["databases", "netinstall", "networking"]
+    );
 }
 
 pub(crate) fn workflow_evidence_is_append_only_resumable_and_summarized() {
