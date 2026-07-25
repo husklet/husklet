@@ -82,7 +82,6 @@ cases:
   class: long
   timeout: 300
   xfail:
-  - arm64
   - amd64
   run:
     shell: |-

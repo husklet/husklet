@@ -173,7 +173,7 @@ impl<'a> Runner<'a> {
             let outcome = evidence::report_outcome(
                 case,
                 key,
-                status,
+                status.clone(),
                 report_error,
                 timer.elapsed(),
                 started,
@@ -196,7 +196,7 @@ impl<'a> Runner<'a> {
                 println!("PASS {}", case.id);
                 summary.passed += 1;
             }
-            Err(error) if expected => {
+            Err(error) if expected && matches!(status, Status::RuntimeFail | Status::Timeout) => {
                 println!("XFAIL {}: {error}", case.id);
                 summary.xfailed += 1;
             }
@@ -224,7 +224,7 @@ fn resume_outcome(
         }
         Status::Pass => summary.passed += 1,
         Status::ArchSkip => summary.skipped += 1,
-        Status::RuntimeFail | Status::MaterializationFail | Status::Timeout if expected => {
+        Status::RuntimeFail | Status::Timeout if expected => {
             summary.xfailed += 1;
         }
         Status::RuntimeFail | Status::MaterializationFail | Status::Timeout => {
@@ -300,6 +300,22 @@ fn test_resume_outcomes() {
     ));
     assert_eq!(summary.xfailed, 1);
     assert!(summary.failed.is_empty());
+
+    let mut summary = Summary::default();
+    assert!(resume_outcome(
+        &expected,
+        Target::Arm64,
+        &recorded(
+            Status::MaterializationFail,
+            Some("image materialization unavailable offline: missing image")
+        ),
+        &mut summary
+    ));
+    assert_eq!(summary.xfailed, 0);
+    assert_eq!(
+        summary.failed,
+        ["resume/example: image materialization unavailable offline: missing image"]
+    );
 
     let mut summary = Summary::default();
     assert!(resume_outcome(
