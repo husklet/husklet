@@ -1,4 +1,4 @@
-//! Typed legacy single-container networking contracts.
+//! Typed single-container networking contracts.
 
 use crate::contract::Group;
 

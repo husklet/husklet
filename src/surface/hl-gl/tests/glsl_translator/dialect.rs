@@ -128,7 +128,7 @@ fn es_precision_qualifiers_are_stripped_from_the_carried_body() {
 
 #[test]
 fn comments_do_not_leak_phantom_attributes_or_uniforms() {
-    // A commented-out legacy attribute + a block comment hiding a uniform must NOT be reflected.
+    // A commented-out attribute + a block comment hiding a uniform must NOT be reflected.
     let vs = "// attribute vec4 aLegacy;\n/* uniform mat4 uOld; */\nattribute vec2 aPos;\n\
               void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }\n";
     let fs = "void main(){ gl_FragColor = vec4(1.0); }\n";

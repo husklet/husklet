@@ -3,8 +3,8 @@ use super::*;
 #[test]
 fn every_shader_payload_kind_classifies_deterministically() {
     // The wire carries NO kind byte; the decoder re-derives the kind from the payload's leading magic.
-    // SpirV/PtxKernel/Glsl are magic-led (round-trip exactly); DemoBuiltin + LegacyMsl are magic-less and
-    // BOTH classify as LegacyMsl on decode (documented lossy classification — no magic to distinguish).
+    // SpirV/PtxKernel/Glsl are magic-led (round-trip exactly); DemoBuiltin + Msl are magic-less and
+    // BOTH classify as Msl on decode (documented lossy classification — no magic to distinguish).
     use hl_gpu::protocol::model::kernel::{
         glsl_stage, GlslDescriptor, KernelDescriptor, SPIRV_MAGIC,
     };
@@ -54,8 +54,8 @@ fn every_shader_payload_kind_classifies_deterministically() {
             other => panic!("expected CreateShader, got {other:?}"),
         }
     }
-    // DemoBuiltin (no magic) decodes as LegacyMsl — the only kinds that do not round-trip by design.
-    for kind in [ShaderPayloadKind::DemoBuiltin, ShaderPayloadKind::LegacyMsl] {
+    // DemoBuiltin (no magic) decodes as Msl — the only kinds that do not round-trip by design.
+    for kind in [ShaderPayloadKind::DemoBuiltin, ShaderPayloadKind::Msl] {
         let back = hl_gpu::Decoder::stream(&hl_gpu::Encoder::stream(&[Cmd::CreateShader {
             id: 1,
             kind,
@@ -66,11 +66,11 @@ fn every_shader_payload_kind_classifies_deterministically() {
             matches!(
                 back[0],
                 Cmd::CreateShader {
-                    kind: ShaderPayloadKind::LegacyMsl,
+                    kind: ShaderPayloadKind::Msl,
                     ..
                 }
             ),
-            "magic-less payload classifies as LegacyMsl"
+            "magic-less payload classifies as Msl"
         );
     }
 }

@@ -55,13 +55,9 @@ impl Default for Streams {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ExecSpec {
     pub process: Process,
-    #[serde(default)]
     pub streams: Streams,
-    #[serde(default)]
     pub privileged: bool,
-    #[serde(default)]
     pub detach_keys: String,
-    #[serde(default)]
     pub user: String,
 }
 
@@ -151,6 +147,7 @@ pub struct Exec {
     pub spec: ExecSpec,
     pub state: ExecState,
     pub created_at_ms: u64,
+    pub checkpoint: Option<crate::Checkpoint>,
 }
 
 impl Exec {
@@ -161,6 +158,7 @@ impl Exec {
             spec,
             state: ExecState::Created,
             created_at_ms: now_ms(),
+            checkpoint: None,
         }
     }
 }

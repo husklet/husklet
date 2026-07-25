@@ -53,7 +53,7 @@ impl Service {
             }
         }
         for mut exec in self.execs.list().await? {
-            if exec.state.is_active() {
+            if exec.state.is_active() && exec.checkpoint.is_none() {
                 exec.state = ExecState::Exited {
                     result: ExitStatus::Fault {
                         status: -1,

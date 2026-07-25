@@ -5,6 +5,78 @@ use super::*;
 // =================================================================================================
 
 #[test]
+fn render_pipeline_attachment_format_mismatch_is_invalid() {
+    let Some(mut g) = exec() else { return };
+    let vertex = "#version 460\nvoid main(){ gl_Position = vec4(0.0,0.0,0.0,1.0); }\n";
+    let fragment = "#version 460\nlayout(location=0) out vec4 c; void main(){ c = vec4(1.0); }\n";
+    hostile(
+        &mut g,
+        "render_attachment_format",
+        &[
+            Cmd::CreateTexture(1, tex(4, 4, TextureFormat::Rgba8Unorm, RT)),
+            Cmd::CreateShader {
+                id: 1,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::VERTEX, "vmain", vertex),
+            },
+            Cmd::CreateShader {
+                id: 2,
+                kind: ShaderPayloadKind::Glsl,
+                spirv: glsl(glsl_stage::FRAGMENT, "fmain", fragment),
+            },
+            Cmd::CreateRenderPipeline(
+                1,
+                RenderPipelineDesc {
+                    vertex: ShaderRef {
+                        module: 1,
+                        entry: "vmain".into(),
+                    },
+                    fragment: Some(ShaderRef {
+                        module: 2,
+                        entry: "fmain".into(),
+                    }),
+                    vertex_buffers: vec![],
+                    color_targets: vec![ColorTargetState {
+                        format: TextureFormat::Bgra8Unorm,
+                        blend: None,
+                        write_mask: 0xF,
+                    }],
+                    depth: None,
+                    topology: Topology::TriangleList,
+                    cull: 0,
+                    front_face: 0,
+                    sample_count: 1,
+                    label: String::new(),
+                },
+            ),
+            Cmd::Submit(CommandBuffer {
+                encoder: vec![
+                    Enc::BeginRenderPass {
+                        color: vec![ColorAttachment {
+                            texture: 1,
+                            load: LoadOp::Clear,
+                            clear: [0.0, 0.0, 0.0, 1.0],
+                            store: true,
+                        }],
+                        depth: None,
+                    },
+                    Enc::SetPipeline(1),
+                    Enc::Draw {
+                        vertex_count: 3,
+                        instance_count: 1,
+                        first_vertex: 0,
+                        first_instance: 0,
+                    },
+                    Enc::EndRenderPass,
+                ],
+                signal: None,
+            }),
+        ],
+        is_invalid,
+    );
+}
+
+#[test]
 fn copy_texture_to_texture_between_incompatible_formats_converts_not_rejects() {
     let Some(mut g) = exec() else { return };
     // R8 (1 byte/texel) → Rgba8 (4 bytes/texel): DIFFERENT texel layouts. GL permits this as a CONVERTING

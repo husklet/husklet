@@ -117,8 +117,8 @@ impl Containers {
         let checkpoint = self.service.checkpoint(reference, timeout).await?;
         hl_log::hl_info!(
             hl_log::tag::CONTAINER,
-            "checkpointed reference={reference} directory={}",
-            checkpoint.directory.display()
+            "checkpointed reference={reference} namespace={}",
+            checkpoint.namespace
         );
         Ok(checkpoint)
     }
@@ -165,6 +165,57 @@ impl Containers {
             }
         }
         failure.map_or(Ok(()), Err)
+    }
+
+    /// Checkpoints every running container so the complete execution domain can continue later.
+    ///
+    /// Paused containers are resumed only long enough for the engine to capture them. Processing continues
+    /// after an individual failure so callers receive the first error without abandoning unrelated
+    /// containers.
+    ///
+    /// # Errors
+    /// Returns the first resume, checkpoint, lifecycle, or persistence failure.
+    pub async fn checkpoint_all(&self, timeout: std::time::Duration) -> Result<()> {
+        self.service.checkpoint_execs(timeout).await?;
+        let mut failure = None;
+        let active = self.list().await?;
+        for container in active {
+            let result = match container.state {
+                crate::ContainerState::Running { .. } => self
+                    .checkpoint(container.id.as_str(), timeout)
+                    .await
+                    .map(|_| ()),
+                crate::ContainerState::Paused { .. } => {
+                    match self.unpause(container.id.as_str()).await {
+                        Ok(()) => self
+                            .checkpoint(container.id.as_str(), timeout)
+                            .await
+                            .map(|_| ()),
+                        Err(error) => Err(error),
+                    }
+                }
+                crate::ContainerState::Restarting { .. } => {
+                    self.signal(container.id.as_str(), Signal::Terminate).await
+                }
+                crate::ContainerState::Created | crate::ContainerState::Exited { .. } => Ok(()),
+            };
+            let error = match result {
+                Ok(()) | Err(crate::Error::NotFound(_)) => None,
+                Err(error) => Some(error),
+            };
+            if failure.is_none() {
+                failure = error;
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    /// Verifies that every active attached execution has a checkpoint transport before shutdown starts.
+    ///
+    /// # Errors
+    /// Returns a runtime error naming the first active process that cannot be checkpointed.
+    pub async fn require_checkpointable(&self) -> Result<()> {
+        self.service.checkpointable_execs().await.map(|_| ())
     }
 
     /// Removes a created or exited container. Running containers are rejected.

@@ -20,9 +20,6 @@ extern "C" {
     static kIOSurfaceBytesPerRow: CFStringRef;
     static kIOSurfacePixelFormat: CFStringRef;
     fn IOSurfaceCreate(properties: *const c_void) -> IOSurfaceRef;
-    fn IOSurfaceLock(s: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
-    fn IOSurfaceUnlock(s: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;
-    fn IOSurfaceGetBaseAddress(s: IOSurfaceRef) -> *mut c_void;
     fn IOSurfaceGetBytesPerRow(s: IOSurfaceRef) -> usize;
     fn IOSurfaceGetWidth(s: IOSurfaceRef) -> usize;
     fn IOSurfaceGetHeight(s: IOSurfaceRef) -> usize;
@@ -87,24 +84,4 @@ impl Drop for IOSurface {
         // SAFETY: constructors accept only +1 references, this type is not Clone, and Drop runs once.
         unsafe { CFRelease(self.0.as_ptr().cast_const()) };
     }
-}
-
-/// CPU-fill a freshly created `IOSurface`'s pages with tight BGRA rows (`w*4` bytes per row), honoring the
-/// surface's real `bytesPerRow` stride. Plants a known pattern in the surface's storage before wrapping it
-/// as a texture (the zero-copy IOSurface present path). Rows beyond `bgra`'s length are left untouched.
-#[allow(dead_code)] // forward seam: IOSurface zero-copy fill, exercised once a live IOSurface id is bridged
-pub unsafe fn fill_bgra(s: &IOSurface, bgra: &[u8], w: u32, h: u32) {
-    let s = s.as_ptr();
-    IOSurfaceLock(s, 0, std::ptr::null_mut());
-    let base = IOSurfaceGetBaseAddress(s) as *mut u8;
-    let stride = IOSurfaceGetBytesPerRow(s);
-    let tight = (w * 4) as usize;
-    for y in 0..h as usize {
-        let src = y * tight;
-        if src + tight > bgra.len() {
-            break;
-        }
-        std::ptr::copy_nonoverlapping(bgra.as_ptr().add(src), base.add(y * stride), tight);
-    }
-    IOSurfaceUnlock(s, 0, std::ptr::null_mut());
 }

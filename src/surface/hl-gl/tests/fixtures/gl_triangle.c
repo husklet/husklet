@@ -12,7 +12,7 @@
  * "GL_CLEAR_READBACK_OK r g b a".
  *
  * PHASE 2 (best-effort, reproduces a known gap): compile a GLES2 vertex+fragment shader, upload a VBO, draw
- * a triangle, glReadPixels. Our GL shim translates GLSL→MSL and tags the shader payload `LegacyMsl`, which
+ * a triangle, glReadPixels. Our GL shim translates GLSL→MSL and tags the shader payload `Msl`, which
  * the wgpu/naga host executor REJECTS (it only consumes SPIR-V/GLSL/WGSL) — so the geometry frame is
  * Nacked and the readback fails. The program reports the outcome ("GL_TRIANGLE_READBACK_FAILED" with the
  * GL error, or the sampled center pixel) so the Rust test can surface the gap precisely without crashing. */
@@ -117,7 +117,7 @@ int main(void) {
     }
     printf("GL_CLEAR_READBACK_OK %u %u %u %u\n", c[0], c[1], c[2], c[3]);
 
-    /* ---- PHASE 2: real triangle (best-effort; reproduces the LegacyMsl-shader gap) -------------- */
+    /* ---- PHASE 2: real triangle (best-effort; reproduces the Msl-shader gap) -------------- */
     GLuint vs = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vs, 1, &VS, 0);
     glCompileShader(vs);

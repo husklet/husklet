@@ -1,6 +1,6 @@
 //! Container lifecycle compatibility cases.
 
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_container::{
     Check, ContainerSpec, ContainerState, Containers, ExitStatus, HealthStatus, Healthcheck,
     Isolation, Process, RestartPolicy, Sandbox, Signal,
@@ -43,7 +43,7 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Er
         .into_iter()
         .map(|value| (value.id, value))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut reports = LegacyBatch::new("lifecycle")?;
+    let mut reports = ScenarioBatch::new("lifecycle")?;
     let mut failures = Vec::new();
     for id in IDS {
         let scenario = &scenarios[id];

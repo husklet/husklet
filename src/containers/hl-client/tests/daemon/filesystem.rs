@@ -319,7 +319,7 @@ async fn legacy_host_config_tmpfs_executes_and_is_reclaimed() {
                 }),
                 ..Default::default()
             },
-            Some("legacy-tmpfs"),
+            Some("test-tmpfs"),
         )
         .await
         .unwrap();

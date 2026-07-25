@@ -17,7 +17,7 @@
 //! inside a draw (and therefore a textured-quad's sampled output) is not observable on the CPU oracle; that
 //! is a real-GPU-executor concern, exercised in `tests/lowering.rs` at the `Cmd`-stream level instead.
 //!
-//! One deliberate accommodation: the frame's shader lowers to a `ShaderPayloadKind::LegacyMsl`
+//! One deliberate accommodation: the frame's shader lowers to a `ShaderPayloadKind::Msl`
 //! `CreateShader` (correct for the real Metal host). The CPU executor accepts an MSL module as an opaque
 //! placeholder (it never runs it), but the runtime's capability *validation* would reject the payload since
 //! the CPU advertises `KERNEL` only — so the session's negotiated caps are widened to allow `MSL`, exactly

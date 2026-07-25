@@ -43,7 +43,7 @@ pub extern "C" fn cuDeviceGetLuid(luid: *mut c_char, mask: *mut u32, dev: i32) -
     CUDA_ERROR_NOT_SUPPORTED
 }
 
-/// The legacy `CUdevprop` struct `cuDeviceGetProperties` fills (layout matches cuda.h). Superseded by
+/// The original `CUdevprop` struct `cuDeviceGetProperties` fills (layout matches cuda.h). Superseded by
 /// `cuDeviceGetAttribute`, but still queried by old apps.
 #[repr(C)]
 pub(super) struct CuDevprop {

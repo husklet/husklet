@@ -344,7 +344,7 @@ const IMPLEMENTED: &[&str] = &[
     "cuCtxGetCacheConfig",
     "cuCtxSetCacheConfig",
     "cuCtxGetStreamPriorityRange",
-    // device: peer access, PCI/LUID identity, legacy properties struct
+    // device: peer access, PCI/LUID identity, original properties struct
     "cuDeviceCanAccessPeer",
     "cuDeviceGetByPCIBusId",
     "cuDeviceGetPCIBusId",

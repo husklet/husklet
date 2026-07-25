@@ -38,12 +38,14 @@ impl WgpuExecutor {
         // is exactly the bound wgpu validates a viewport against (`state.info.extent`). It is the clip
         // rectangle a GL-style out-of-bounds viewport must be intersected with (see `clamp_viewport`).
         let mut views = Vec::with_capacity(color.len());
+        let mut target_formats = Vec::with_capacity(color.len());
         let mut target_w = u32::MAX;
         let mut target_h = u32::MAX;
         for c in color {
             let t = texture::WgpuTexture::get(res, c.texture)?;
             target_w = target_w.min(t.width);
             target_h = target_h.min(t.height);
+            target_formats.push(t.format);
             views.push((t.view.clone(), c));
         }
         // Resolve the depth attachment's view + load/clear (it too must outlive the pass). A pipeline
@@ -108,24 +110,29 @@ impl WgpuExecutor {
                     hl_log::hl_count!(tag::EXEC, "draws");
                     let pid =
                         cur_pipeline.ok_or(GpuError::Invalid("draw with no pipeline bound"))?;
+                    let (pipeline, pipeline_formats, used_bindings) =
+                        match PipelineNative::get(res, pid)? {
+                            PipelineNative::Render {
+                                pipeline,
+                                color_formats,
+                                used_bindings,
+                                ..
+                            } => (pipeline, color_formats, used_bindings),
+                            PipelineNative::Compute { .. } => {
+                                return Err(GpuError::Unsupported(
+                                    "wgpu: draw on a compute pipeline",
+                                ))
+                            }
+                        };
+                    if pipeline_formats != &target_formats {
+                        return Err(GpuError::Invalid(
+                            "pipeline color format mismatches render attachment",
+                        ));
+                    }
                     let mut groups = Vec::new();
                     for (idx, bound) in cur_groups.iter().enumerate() {
                         if let Some(g) = bound {
-                            let (layout, filter) = match PipelineNative::get(res, pid)? {
-                                PipelineNative::Render {
-                                    pipeline,
-                                    used_bindings,
-                                    ..
-                                } => (
-                                    pipeline.get_bind_group_layout(idx as u32),
-                                    used_bindings.as_slice(),
-                                ),
-                                PipelineNative::Compute { .. } => {
-                                    return Err(GpuError::Unsupported(
-                                        "wgpu: draw on a compute pipeline",
-                                    ))
-                                }
-                            };
+                            let layout = pipeline.get_bind_group_layout(idx as u32);
                             // Filter the driver's bind-group entries to the bindings this pipeline's shaders
                             // actually read in THIS group (the filter keys on the bind group's own `set`, so it
                             // restricts to this set's slots), so a GskGpu bind group that carries an unsampled
@@ -134,7 +141,7 @@ impl WgpuExecutor {
                                 res,
                                 &layout,
                                 self.bind_group(res, *g)?,
-                                Some(filter),
+                                Some(used_bindings),
                             )?;
                             groups.push((idx as u32, bg));
                         }

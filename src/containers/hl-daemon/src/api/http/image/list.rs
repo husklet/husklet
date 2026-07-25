@@ -209,7 +209,7 @@ impl Prune {
                     .iter()
                     .filter_map(|container| container.spec.image.as_ref().map(ToString::to_string))
                     .collect::<std::collections::BTreeSet<_>>();
-                let graphs = images.metadata().graphs().map_err(ApiError::image)?;
+                let graphs = images.graphs().map_err(ApiError::image)?;
                 let selected = graphs
                     .into_iter()
                     .filter(hl_images::Graph::filterable)

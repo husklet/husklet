@@ -229,16 +229,134 @@ async fn checkpoint_is_durable_and_start_restores_while_arming_the_next_capture(
     {
         let launches = runtime.checkpoints.lock().unwrap();
         assert_eq!(launches.len(), 2);
-        assert_eq!(launches[0].0.as_ref(), Some(&checkpoint.directory));
-        assert_eq!(launches[0].1, None);
-        assert_eq!(launches[1].1.as_ref(), Some(&checkpoint.directory));
-        assert_ne!(launches[1].0, launches[0].0);
+        assert_eq!(launches[0], Some(false));
+        assert_eq!(launches[1], Some(true));
     }
     let restored = containers.inspect("checkpointed").await.unwrap();
     assert!(matches!(restored.state, ContainerState::Running { .. }));
     assert_eq!(restored.checkpoint, None);
 
     containers.remove_force("checkpointed").await.unwrap();
+}
+
+#[tokio::test]
+async fn checkpoint_all_captures_running_and_paused_containers_for_later_restore() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("running")).await.unwrap();
+    containers.create(spec("paused")).await.unwrap();
+    containers.start("running").await.unwrap();
+    containers.start("paused").await.unwrap();
+    containers.pause("paused").await.unwrap();
+
+    containers
+        .checkpoint_all(Duration::from_secs(1))
+        .await
+        .unwrap();
+
+    for name in ["running", "paused"] {
+        let container = containers.inspect(name).await.unwrap();
+        assert!(matches!(container.state, ContainerState::Exited { .. }));
+        assert_eq!(
+            container
+                .checkpoint
+                .as_ref()
+                .map(|value| value.namespace.as_str()),
+            Some(container.id.as_str())
+        );
+    }
+    assert_eq!(*runtime.suspensions.lock().unwrap(), vec![true, false]);
+}
+
+#[tokio::test]
+async fn checkpoint_all_restores_attached_exec_as_its_own_process_image() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("workspace")).await.unwrap();
+    containers.start("workspace").await.unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "workspace",
+            ExecSpec::new(
+                Process::new("/bin/sh")
+                    .console(Console::default().terminal(Size::new(24, 80).unwrap())),
+            ),
+        )
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&exec.id).await.unwrap();
+
+    containers
+        .checkpoint_all(Duration::from_secs(1))
+        .await
+        .unwrap();
+    let checkpointed = containers.executions().inspect(&exec.id).await.unwrap();
+    assert_eq!(checkpointed.state, ExecState::Created);
+    assert_eq!(
+        checkpointed
+            .checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.namespace.as_str()),
+        Some(format!("exec-{}", exec.id).as_str())
+    );
+
+    containers.start("workspace").await.unwrap();
+    let _restored = containers.executions().start(&exec.id).await.unwrap();
+    assert!(matches!(
+        containers
+            .executions()
+            .inspect(&exec.id)
+            .await
+            .unwrap()
+            .state,
+        ExecState::Running { .. }
+    ));
+    assert_eq!(
+        runtime.checkpoints.lock().unwrap().as_slice(),
+        [Some(false), Some(false), Some(true), Some(true)]
+    );
+}
+
+#[tokio::test]
+async fn checkpoint_rejection_preserves_every_running_process() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    runtime.checkpointable.store(false, Ordering::SeqCst);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("workspace")).await.unwrap();
+    containers.start("workspace").await.unwrap();
+    let exec = containers
+        .executions()
+        .create(
+            "workspace",
+            ExecSpec::new(
+                Process::new("/bin/sh")
+                    .console(Console::default().terminal(Size::new(24, 80).unwrap())),
+            ),
+        )
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&exec.id).await.unwrap();
+
+    let error = containers
+        .checkpoint_all(Duration::from_secs(1))
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("not checkpointable"));
+    let container = containers.inspect("workspace").await.unwrap();
+    assert!(matches!(container.state, ContainerState::Running { .. }));
+    assert_eq!(container.checkpoint, None);
+    let execution = containers.executions().inspect(&exec.id).await.unwrap();
+    assert!(matches!(execution.state, ExecState::Running { .. }));
+    assert_eq!(execution.checkpoint, None);
+    assert!(runtime.suspensions.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

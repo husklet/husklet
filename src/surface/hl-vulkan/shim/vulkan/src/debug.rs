@@ -203,7 +203,7 @@ pub extern "C" fn vkCmdDebugMarkerInsertEXT(
 }
 
 // ==================================================================================================
-// VK_EXT_debug_report (legacy instance-level callback)
+// VK_EXT_debug_report (deprecated instance-level callback)
 // ==================================================================================================
 
 #[no_mangle]

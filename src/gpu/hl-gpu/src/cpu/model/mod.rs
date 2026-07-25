@@ -32,15 +32,16 @@ use crate::runtime::model::resources::SessionResources;
 // failed downcast still surfaces as a typed `UnknownId` rather than a panic.
 
 macro_rules! accessor {
-    ($get:ident, $get_mut:ident, $table:ident, $ty:ty, $kind:literal) => {
-        #[allow(dead_code)]
+    ($get:ident, $table:ident, $ty:ty, $kind:literal) => {
         pub(crate) fn $get(res: &SessionResources, id: u32) -> Result<&$ty> {
             res.$table
                 .get(id)?
                 .downcast_ref::<$ty>()
                 .ok_or(GpuError::UnknownId { kind: $kind, id })
         }
-        #[allow(dead_code)]
+    };
+    ($get:ident, $get_mut:ident, $table:ident, $ty:ty, $kind:literal) => {
+        accessor!($get, $table, $ty, $kind);
         pub(crate) fn $get_mut(res: &mut SessionResources, id: u32) -> Result<&mut $ty> {
             res.$table
                 .get_mut(id)?
@@ -52,14 +53,8 @@ macro_rules! accessor {
 
 accessor!(buffer, buffer_mut, buffers, Buffer, "buffer");
 accessor!(texture, texture_mut, textures, Texture, "texture");
-accessor!(pipeline, pipeline_mut, pipelines, Pipeline, "pipeline");
-accessor!(shader, shader_mut, shaders, ShaderModule, "shader");
-accessor!(
-    bind_group,
-    bind_group_mut,
-    bind_groups,
-    BindGroupState,
-    "bind_group"
-);
-accessor!(surface, surface_mut, surfaces, SurfaceDesc, "surface");
+accessor!(pipeline, pipelines, Pipeline, "pipeline");
+accessor!(shader, shaders, ShaderModule, "shader");
+accessor!(bind_group, bind_groups, BindGroupState, "bind_group");
+accessor!(surface, surfaces, SurfaceDesc, "surface");
 accessor!(fence, fence_mut, fences, u64, "fence");

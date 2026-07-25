@@ -59,7 +59,7 @@ fn legacy_msl_payload_rejected() {
     let mut g = exec();
     assert!(try_batch(
         &mut g,
-        &create_shader_only(ShaderPayloadKind::LegacyMsl, vec![0x1234_5678, 1, 2])
+        &create_shader_only(ShaderPayloadKind::Msl, vec![0x1234_5678, 1, 2])
     )
     .is_err());
 }

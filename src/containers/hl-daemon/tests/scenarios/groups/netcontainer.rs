@@ -1,4 +1,4 @@
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_container::{
     ContainerSpec, Containers, EndpointSpec, ExitStatus, Isolation, NetworkSpec, Process, Sandbox,
     Subnet,
@@ -56,7 +56,7 @@ impl<'a> NetworkCases<'a> {
             .into_iter()
             .map(|value| (value.id, value))
             .collect::<std::collections::BTreeMap<_, _>>();
-        let mut reports = LegacyBatch::new("netcontainer")?;
+        let mut reports = ScenarioBatch::new("netcontainer")?;
         let mut failures = Vec::new();
         for id in CASES.map(|value| value.0) {
             let scenario = &scenarios[id];

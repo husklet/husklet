@@ -30,9 +30,6 @@ impl WorkspaceDocument {
             self.current = Some(WsBuilder::default());
             return Ok(());
         }
-        if self.current.is_none() && line.contains('\t') {
-            return self.legacy(line);
-        }
         let Some((key, value)) = line.split_once('=') else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -46,19 +43,6 @@ impl WorkspaceDocument {
             )
         })?;
         builder.set(key.trim(), value.trim())
-    }
-
-    fn legacy(&mut self, line: &str) -> io::Result<()> {
-        let mut fields = line.splitn(3, '\t');
-        let (Some(name), Some(arch), Some(image)) = (fields.next(), fields.next(), fields.next())
-        else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "legacy workspace row requires name, architecture, and image",
-            ));
-        };
-        let arch = Arch::parse(arch).ok_or_else(|| Value::new("architecture", arch).invalid())?;
-        self.push(WorkspaceConfig::new(name, image, arch))
     }
 
     fn finish(&mut self) -> io::Result<()> {

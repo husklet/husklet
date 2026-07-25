@@ -1,6 +1,5 @@
 use super::Containers;
 use crate::{Container, ContainerSpec, Result};
-use hl_images::ImageStore as _;
 
 #[derive(Clone, Debug, Default)]
 pub struct CommitMetadata {
@@ -23,7 +22,7 @@ impl Containers {
             crate::Error::InvalidSpec("commit changes require an image-backed container".into())
         })?;
         let images = self.images()?;
-        let parent = images.metadata().get(parent_name)?.ok_or_else(|| {
+        let parent = images.resolve(parent_name)?.ok_or_else(|| {
             crate::Error::Corrupt(format!("parent image {parent_name} is missing"))
         })?;
         let platform = match container.spec.guest {
@@ -74,7 +73,7 @@ impl Containers {
             (&container.spec.rootfs, &container.spec.image)
         {
             if let Ok(overlay) = images.roots().open_overlay(rootfs) {
-                let parent = images.metadata().get(parent_name)?.ok_or_else(|| {
+                let parent = images.resolve(parent_name)?.ok_or_else(|| {
                     crate::Error::Corrupt(format!("parent image {parent_name} is missing"))
                 })?;
                 let mut metadata = images.details(&parent, &platform)?;

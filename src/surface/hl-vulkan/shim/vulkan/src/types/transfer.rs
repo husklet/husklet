@@ -169,7 +169,7 @@ pub struct VkBlitImageInfo2 {
     pub filter: i32,
 }
 
-/// `VkImageMemoryBarrier` (legacy / core 1.0) — an image's `oldLayout → newLayout` transition.
+/// `VkImageMemoryBarrier` (core 1.0) — an image's `oldLayout → newLayout` transition.
 #[repr(C)]
 pub struct VkImageMemoryBarrier {
     pub s_type: i32,

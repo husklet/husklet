@@ -334,6 +334,36 @@ mod tests {
     }
 
     #[test]
+    fn real_shell_renders_a_png() {
+        let shell = if have("/bin/bash") {
+            "/bin/bash"
+        } else {
+            "/bin/sh"
+        };
+        let pty = LocalPty::spawn(
+            &[
+                shell,
+                "-c",
+                "printf '\\033[32mterminal-pipeline\\033[0m\\r\\n'",
+            ],
+            40,
+            5,
+            &std::collections::BTreeMap::from([(
+                String::from("TERM"),
+                String::from("xterm-256color"),
+            )]),
+        )
+        .expect("spawn shell");
+
+        let terminal = run_into_vt(pty, 40, 5);
+        let png = crate::CpuRenderer::default().render_png(terminal.grid());
+
+        assert_eq!(terminal.grid().row_text(0), "terminal-pipeline");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(png.len() > 100);
+    }
+
+    #[test]
     fn write_to_shell_stdin_is_echoed_back() {
         // `cat` echoes stdin; prove the write path reaches the child and its output returns.
         let cat = if have("/bin/cat") {

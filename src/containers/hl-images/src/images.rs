@@ -16,8 +16,8 @@ use crate::{
     remote::Source,
     rootfs::{Reference as RootReference, Roots},
     snapshot::{Id, Snapshots},
-    Descriptor, DescriptorKind as _, Digest, Error, FsImageStore, Image, ImageStore, LeaseStore,
-    Leases, Platform, Reference, Result,
+    Descriptor, DescriptorGraph, DescriptorKind as _, Digest, Error, FsImageStore, Graph, Image,
+    ImageStore, LeaseStore, Leases, Platform, Reference, Result,
 };
 
 /// Composition façade for content, names, leases, snapshots, pull, unpack, and GC.
@@ -28,6 +28,8 @@ pub struct Images {
     leases: Leases,
     snapshots: Snapshots,
     operation_lock: std::path::PathBuf,
+    fallback: Option<Arc<Images>>,
+    pull_target: Option<Arc<Images>>,
 }
 
 /// Deduplicated compressed content usage for one immutable image graph.

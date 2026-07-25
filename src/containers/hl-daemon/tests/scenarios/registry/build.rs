@@ -1,4 +1,4 @@
-//! Typed legacy image-build contracts.
+//! Typed image-build contracts.
 
 use crate::contract::{Group, Scenario, Target};
 

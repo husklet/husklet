@@ -16,7 +16,7 @@ impl Workspace {
         let graphics = crate::runtime::gpu::Graphics::for_workspace(config)?;
         let docker = config
             .docker_sock
-            .then(|| crate::runtime::resources::Daemon::new(&config.name).ensure())
+            .then(|| crate::runtime::resources::Daemon::new(config).ensure())
             .transpose()?;
         Ok(Self { graphics, docker })
     }

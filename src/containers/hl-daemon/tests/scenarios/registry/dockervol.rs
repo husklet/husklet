@@ -1,4 +1,4 @@
-//! Typed legacy managed-volume contracts.
+//! Typed managed-volume contracts.
 
 use crate::contract::{Group, Scenario, Target};
 

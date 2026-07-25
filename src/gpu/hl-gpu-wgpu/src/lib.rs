@@ -156,7 +156,7 @@ impl WgpuExecutor {
     ///
     /// WGSL is intentionally NOT advertised: the protocol's `CreateShader` derives the payload kind from a
     /// leading magic word ([`ShaderPayloadKind`] has no `Wgsl` variant, and a payload with no known magic
-    /// is classified as `LegacyMsl`, which this executor rejects), so there is no wire path by which a
+    /// is classified as `Msl`, which this executor rejects), so there is no wire path by which a
     /// guest could hand this backend a WGSL payload it would accept. Advertising it would be a capability
     /// lie (a negotiated-but-unaccepted payload); the honest set is SPIRV | GLSL | KERNEL.
     fn capabilities_for(name: &str) -> Capabilities {

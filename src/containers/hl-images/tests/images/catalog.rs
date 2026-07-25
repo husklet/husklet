@@ -27,52 +27,6 @@ fn image_catalog_writer_process() {
 }
 
 #[test]
-fn legacy_bare_image_map_migrates_without_losing_aliases() {
-    let temp = tempfile::tempdir().unwrap();
-    let metadata = temp.path().join("metadata");
-    std::fs::create_dir_all(&metadata).unwrap();
-    let target = descriptor("application/vnd.oci.image.manifest.v1+json", b"legacy");
-    let first: Reference = "example.test/legacy:v1".parse().unwrap();
-    let second: Reference = "example.test/legacy:stable".parse().unwrap();
-    let legacy = BTreeMap::from([
-        (
-            first.to_string(),
-            Image {
-                name: first.clone(),
-                target: target.clone(),
-            },
-        ),
-        (
-            second.to_string(),
-            Image {
-                name: second.clone(),
-                target: target.clone(),
-            },
-        ),
-    ]);
-    std::fs::write(
-        metadata.join("images.json"),
-        serde_json::to_vec(&legacy).unwrap(),
-    )
-    .unwrap();
-
-    let store = FsImageStore::open(&metadata).unwrap();
-    assert_eq!(store.list().unwrap().len(), 2);
-    let graphs = store.graphs().unwrap();
-    assert_eq!(graphs.len(), 1);
-    assert_eq!(
-        graphs[0].names,
-        BTreeSet::from([first.to_string(), second.to_string()])
-    );
-    assert!(!graphs[0].filterable());
-    assert!(store.enrich(&target, Some(7), BTreeMap::new()).unwrap());
-
-    let reopened = FsImageStore::open(&metadata).unwrap();
-    assert_eq!(reopened.list().unwrap().len(), 2);
-    assert!(reopened.graphs().unwrap()[0].filterable());
-}
-
-#[test]
 fn corrupt_catalog_fails_closed_and_is_never_overwritten() {
     let temp = tempfile::tempdir().unwrap();
     let metadata = temp.path().join("metadata");

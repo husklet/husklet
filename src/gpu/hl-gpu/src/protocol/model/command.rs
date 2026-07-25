@@ -206,7 +206,7 @@ pub struct CommandBuffer {
 /// Declares the origin and required handling of a shader-word payload.
 ///
 /// `SpirV` is strict: an executor must translate it or return an error — it must never silently
-/// substitute a built-in shader. Legacy/demo payloads opt into compatibility handling explicitly, while
+/// substitute a built-in shader. Opaque/demo payloads opt into explicit handling, while
 /// neutral kernel descriptors remain a separate, self-identifying channel (classified by
 /// [`super::kernel::KERNEL_MAGIC`], never a CUDA/PTX constant). `Glsl` is the graphics analogue of the
 /// kernel channel: the guest GLES/GL driver forwards GLSL source (a [`super::kernel::GlslDescriptor`],
@@ -216,7 +216,7 @@ pub struct CommandBuffer {
 #[repr(u8)]
 pub enum ShaderPayloadKind {
     SpirV = 1,
-    LegacyMsl = 2,
+    Msl = 2,
     PtxKernel = 3,
     DemoBuiltin = 4,
     Glsl = 5,

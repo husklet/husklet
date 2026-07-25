@@ -3,7 +3,7 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use hl_images::{ImageStore, Reference};
+use hl_images::Reference;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use std::{collections::BTreeMap, fmt::Write as _};
@@ -259,7 +259,7 @@ pub(super) async fn prune(
 ) -> ApiResult<Json<crate::api::BuildPrune>> {
     let images = state.containers.images().map_err(ApiError::container)?;
     let report = tokio::task::spawn_blocking(move || {
-        for image in images.metadata().list()? {
+        for image in images.list()? {
             if image.name.repository().starts_with("hl-build-cache/") {
                 images.remove(&image.name)?;
             }

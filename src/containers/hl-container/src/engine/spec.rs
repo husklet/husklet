@@ -15,15 +15,6 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::filesystem(&mut spec, launch)?;
         Self::resources(&mut spec, launch);
         Self::network(&mut spec, launch)?;
-        if launch.checkpoint_directory.is_some() || launch.restore_directory.is_some() {
-            spec.checkpoint.enabled = true;
-            spec.checkpoint
-                .capture_directory
-                .clone_from(&launch.checkpoint_directory);
-            spec.checkpoint
-                .restore_directory
-                .clone_from(&launch.restore_directory);
-        }
         spec.extensions.clone_from(&launch.extensions);
         Ok(Self(spec))
     }
@@ -200,8 +191,7 @@ mod tests {
             overlay: None,
             owners: Vec::new(),
             filesystem_generation: "/generation".into(),
-            checkpoint_directory: None,
-            restore_directory: None,
+            checkpoint: None,
             guest: crate::Guest::Aarch64,
             process: crate::Process::new("/bin/true"),
             hostname: None,
@@ -258,28 +248,12 @@ mod tests {
     }
 
     #[test]
-    fn maps_checkpoint_capture_and_restore_directories() {
-        let mut capture = launch();
-        capture.checkpoint_directory = Some("/checkpoints/capture".into());
-        let capture = hl_engine::MachineSpec::from(Spec::try_from(&capture).unwrap());
+    fn streaming_checkpoint_transport_is_selected_by_the_runtime() {
+        let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch()).unwrap());
 
-        assert!(capture.checkpoint.enabled);
-        assert_eq!(
-            capture.checkpoint.capture_directory.as_deref(),
-            Some(std::path::Path::new("/checkpoints/capture"))
-        );
-        assert!(capture.checkpoint.restore_directory.is_none());
-
-        let mut restore = launch();
-        restore.restore_directory = Some("/checkpoints/restore".into());
-        let restore = hl_engine::MachineSpec::from(Spec::try_from(&restore).unwrap());
-
-        assert!(restore.checkpoint.enabled);
-        assert_eq!(
-            restore.checkpoint.restore_directory.as_deref(),
-            Some(std::path::Path::new("/checkpoints/restore"))
-        );
-        assert!(restore.checkpoint.capture_directory.is_none());
+        assert!(!spec.checkpoint.enabled);
+        assert!(spec.checkpoint.capture_directory.is_none());
+        assert!(spec.checkpoint.restore_directory.is_none());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Typed legacy `docker cp` contracts.
+//! Typed `docker cp` contracts.
 
 use crate::contract::{Group, Scenario, Target};
 

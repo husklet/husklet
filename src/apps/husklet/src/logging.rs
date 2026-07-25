@@ -1,6 +1,6 @@
 use hl_log::{Config, Level, Tags};
 
-/// Apply Husklet's environment compatibility at the composition boundary.
+/// Apply Husklet's logging configuration at the composition boundary.
 pub fn configure() {
     let environment = Environment::read();
     Config {

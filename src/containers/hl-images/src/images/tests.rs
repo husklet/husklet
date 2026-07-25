@@ -93,6 +93,112 @@ fn child_commit_reuses_parent_descriptors_and_appends_one_diff() {
 }
 
 #[test]
+fn workspace_catalog_resolves_local_first_and_keeps_builds_local() {
+    let external_root = tempfile::tempdir().unwrap();
+    let workspace_root = tempfile::tempdir().unwrap();
+    let external = Images::open(external_root.path()).unwrap();
+    let platform = Platform::linux_arm64();
+    let runtime = RuntimeConfig {
+        entrypoint: vec!["/bin/sh".into()],
+        command: Vec::new(),
+        environment: std::collections::BTreeMap::new(),
+        working_directory: "/".into(),
+        user: "0:0".into(),
+    };
+    let external_name: Reference = "library/postgres:latest".parse().unwrap();
+    let external_image = external
+        .commit(
+            &layer("postgres", b"external"),
+            &runtime,
+            &platform,
+            &external_name,
+        )
+        .unwrap();
+    let images = Images::workspace(
+        Images::open(workspace_root.path()).unwrap(),
+        external.clone(),
+    );
+
+    assert_eq!(
+        images
+            .resolve(&external_name)
+            .unwrap()
+            .unwrap()
+            .target
+            .digest(),
+        external_image.target.digest()
+    );
+    let unpacked = images.unpack(&external_image, &platform).unwrap();
+    assert!(images.rootfs(&unpacked).is_ok());
+
+    let built_name: Reference = "project/app:dev".parse().unwrap();
+    let built = images
+        .commit(
+            &layer("app", b"workspace"),
+            &runtime,
+            &platform,
+            &built_name,
+        )
+        .unwrap();
+    assert!(Images::open(workspace_root.path())
+        .unwrap()
+        .resolve(&built_name)
+        .unwrap()
+        .is_some());
+    assert!(external.resolve(&built_name).unwrap().is_none());
+    assert_eq!(
+        images
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|image| image.name.to_string())
+            .collect::<Vec<_>>(),
+        [built.name.to_string(), external_name.to_string()]
+    );
+}
+
+#[tokio::test]
+async fn workspace_pull_publishes_external_catalog_only() {
+    let source_root = tempfile::tempdir().unwrap();
+    let layout_root = tempfile::tempdir().unwrap();
+    let external_root = tempfile::tempdir().unwrap();
+    let workspace_root = tempfile::tempdir().unwrap();
+    let source = Images::open(source_root.path()).unwrap();
+    let platform = Platform::linux_arm64();
+    let runtime = RuntimeConfig {
+        entrypoint: vec!["/bin/sh".into()],
+        command: Vec::new(),
+        environment: std::collections::BTreeMap::new(),
+        working_directory: "/".into(),
+        user: "0:0".into(),
+    };
+    let name: Reference = "library/ubuntu:latest".parse().unwrap();
+    let image = source
+        .commit(&layer("ubuntu", b"external"), &runtime, &platform, &name)
+        .unwrap();
+    let layout = crate::format::layout::Layout::open(layout_root.path())
+        .await
+        .unwrap();
+    layout.export(&image, source.content()).await.unwrap();
+
+    let external = Images::open(external_root.path()).unwrap();
+    let images = Images::workspace(
+        Images::open(workspace_root.path()).unwrap(),
+        external.clone(),
+    );
+    images.pull(&layout, name.clone(), &platform).await.unwrap();
+
+    assert!(external.resolve(&name).unwrap().is_some());
+    assert!(Images::open(workspace_root.path())
+        .unwrap()
+        .resolve(&name)
+        .unwrap()
+        .is_none());
+    let resolved = images.resolve(&name).unwrap().unwrap();
+    assert!(images.unpack(&resolved, &platform).is_ok());
+}
+
+#[test]
 fn blob_descriptor_matches_exact_bytes_and_digest() {
     let bytes = br#"{"schemaVersion":2}"#;
     let descriptor = Blob::new(bytes, MediaType::ImageManifest)

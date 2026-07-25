@@ -1,6 +1,6 @@
 # references/oracle — retired hand-rolled Wayland server
 
-The legacy hand-written protocol machine `hl-display/src/server.rs` (~4900 lines, plus its
+The original hand-written protocol machine `hl-display/src/server.rs` (~4900 lines, plus its
 `selftest.rs`) is **retired** here as a parity **oracle**, not shipped code. Smithay is now the ONE
 Wayland path (`core/` + `handlers/`); this file records that when the merge lands, `server.rs` moves
 here so its behavior can be diffed against the Smithay core during bring-up, then deleted once the

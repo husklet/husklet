@@ -3,13 +3,11 @@ use crate::{
     Error, ExitStatus, LogChunk, Result, Signal, Stream,
 };
 use async_trait::async_trait;
-use std::{
-    io::Read,
-    sync::{Arc, Mutex as StdMutex},
-};
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 
 mod spec;
+mod stream;
 use spec::Spec;
 
 #[derive(Default)]
@@ -43,34 +41,6 @@ impl Engine {
         }
         Ok(authorities)
     }
-
-    fn spawn_terminal_writer(
-        terminal: Arc<StdMutex<hl_engine::Terminal>>,
-        mut input: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    ) {
-        std::thread::spawn(move || {
-            use std::io::Write as _;
-            while let Some(bytes) = input.blocking_recv() {
-                let Ok(mut terminal) = terminal.lock() else {
-                    break;
-                };
-                if terminal.write_all(&bytes).is_err() {
-                    break;
-                }
-            }
-        });
-    }
-
-    fn spawn_writer(mut file: std::fs::File, mut input: tokio::sync::mpsc::Receiver<Vec<u8>>) {
-        std::thread::spawn(move || {
-            use std::io::Write as _;
-            while let Some(bytes) = input.blocking_recv() {
-                if file.write_all(&bytes).is_err() {
-                    break;
-                }
-            }
-        });
-    }
 }
 
 struct Process {
@@ -80,6 +50,7 @@ struct Process {
     terminal: Option<Arc<StdMutex<hl_engine::Terminal>>>,
     domain: hl_engine::Domain,
     domain_owner: bool,
+    checkpointable: bool,
 }
 
 #[async_trait]
@@ -112,32 +83,47 @@ impl Runtime for Engine {
                 config.rootfs.display()
             )));
         }
+        let checkpoint = config.checkpoint.clone();
+        let checkpointable = checkpoint.is_some();
         let spec = hl_engine::MachineSpec::from(Spec::try_from(&config)?);
         let io = Self::io(&config);
-        let authorities = Self::authorities(config.authorities)?;
-        let mut child = hl_engine::Engine::new()
-            .spawn_with_authorities(spec, io, authorities)
-            .map_err(|error| Error::Runtime(error.to_string()))?;
+        let authorities = Self::authorities(config.authorities.clone())?;
+        let engine = hl_engine::Engine::new();
+        let started = match checkpoint {
+            Some(checkpoint) => engine.spawn_with_store_and_authorities(
+                spec,
+                io,
+                Arc::new(crate::checkpoint::EngineImage::new(checkpoint.image)),
+                if checkpoint.restore {
+                    hl_engine::StoreDirection::Both
+                } else {
+                    hl_engine::StoreDirection::Capture
+                },
+                authorities,
+            ),
+            None => engine.spawn_with_authorities(spec, io, authorities),
+        };
+        let mut child = started.map_err(|error| Error::Runtime(error.to_string()))?;
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let terminal = if let Some(terminal) = child.take_terminal() {
             let reader = terminal
                 .try_clone()
                 .map_err(|error| Error::Runtime(error.to_string()))?;
             let terminal = Arc::new(StdMutex::new(terminal));
-            spawn_reader(reader, Stream::Stdout, sender.clone());
+            Self::reader(reader, Stream::Stdout, sender.clone());
             if let Some(input) = config.input {
-                Self::spawn_terminal_writer(Arc::clone(&terminal), input);
+                Self::terminal_writer(Arc::clone(&terminal), input);
             }
             Some(terminal)
         } else {
             if let (Some(file), Some(input)) = (child.take_stdin(), config.input) {
-                Self::spawn_writer(file, input);
+                Self::writer(file, input);
             }
             if let Some(file) = child.take_stdout() {
-                spawn_reader(file, Stream::Stdout, sender.clone());
+                Self::reader(file, Stream::Stdout, sender.clone());
             }
             if let Some(file) = child.take_stderr() {
-                spawn_reader(file, Stream::Stderr, sender.clone());
+                Self::reader(file, Stream::Stderr, sender.clone());
             }
             None
         };
@@ -150,6 +136,7 @@ impl Runtime for Engine {
             terminal,
             domain,
             domain_owner: config.domain_owner,
+            checkpointable,
         }))
     }
 }
@@ -161,6 +148,9 @@ impl Running for Process {
     }
     fn domain(&self) -> Option<hl_engine::Domain> {
         Some(self.domain)
+    }
+    fn checkpointable(&self) -> bool {
+        self.checkpointable
     }
 
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
@@ -226,13 +216,13 @@ impl Running for Process {
         self.send(nix::sys::signal::Signal::SIGCONT)
     }
 
-    async fn checkpoint(&self, timeout: std::time::Duration) -> Result<std::path::PathBuf> {
+    async fn checkpoint(&self, timeout: std::time::Duration) -> Result<()> {
         self.child
             .lock()
             .await
             .as_ref()
             .ok_or_else(|| Error::Runtime("process result was already consumed".into()))?
-            .checkpoint(timeout)
+            .checkpoint_into_store(timeout)
             .map_err(|error| Error::Runtime(error.to_string()))
     }
 
@@ -262,32 +252,6 @@ impl Process {
         nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal)
             .map_err(|error| Error::Runtime(error.to_string()))
     }
-}
-
-fn spawn_reader(
-    mut file: impl Read + Send + 'static,
-    stream: Stream,
-    sender: tokio::sync::mpsc::UnboundedSender<LogChunk>,
-) {
-    std::thread::spawn(move || {
-        let mut buffer = [0_u8; 8192];
-        loop {
-            match file.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(length) => {
-                    if sender
-                        .send(LogChunk {
-                            stream,
-                            bytes: buffer[..length].to_vec(),
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-    });
 }
 
 #[cfg(test)]
@@ -356,8 +320,7 @@ mod tests {
             overlay: None,
             owners: Vec::new(),
             filesystem_generation: "/generation".into(),
-            checkpoint_directory: None,
-            restore_directory: None,
+            checkpoint: None,
             guest: crate::Guest::Aarch64,
             process: crate::Process::new("/bin/true"),
             hostname: None,

@@ -14,8 +14,7 @@ impl<'a> Slots<'a> {
         n.to_string()
     }
 
-    /// Reuse a pane's saved slot on restore (or allocate a fresh one for a slot-less legacy session). Keeps
-    /// the allocator ahead of any reused numeric slot so later new panes never collide with a restored one.
+    /// Reuse a pane's saved slot and keep the allocator ahead of numeric restored slots.
     pub(crate) fn adopt(&self, saved: &Option<String>) -> String {
         let tw = self.0;
         let Some(saved) = saved else {

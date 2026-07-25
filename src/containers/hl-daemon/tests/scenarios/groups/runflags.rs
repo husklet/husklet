@@ -3,7 +3,7 @@
 #[path = "runflags_docker.rs"]
 mod docker;
 
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_container::{
     Console, ContainerSpec, Containers, ExitStatus, Isolation, Mount, Process, Resources,
     RestartPolicy, Sandbox, Size,
@@ -49,7 +49,7 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path, work: &Path) -> 
         .into_iter()
         .map(|value| (value.id, value))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut reports = LegacyBatch::new("runflags")?;
+    let mut reports = ScenarioBatch::new("runflags")?;
     let mut failures = Vec::new();
     let selected = std::env::var("HL_SCENARIO_CASE").ok();
     for id in IDS

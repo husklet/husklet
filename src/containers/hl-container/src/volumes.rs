@@ -184,13 +184,27 @@ impl Volumes {
         self.remove_locked(name).await
     }
 
+    /// Remove a volume even when persisted containers still reference it.
+    ///
+    /// # Errors
+    /// Returns validation, not-found, persistence, or filesystem cleanup failures.
+    pub async fn remove_force(&self, name: &str) -> Result<Volume> {
+        VolumeSpec::new(name).validate()?;
+        let _guard = self.operation.lock().await;
+        self.remove_locked_with(name, true).await
+    }
+
     pub(crate) async fn remove_locked(&self, name: &str) -> Result<Volume> {
+        self.remove_locked_with(name, false).await
+    }
+
+    async fn remove_locked_with(&self, name: &str, force: bool) -> Result<Volume> {
         let volume = self
             .storage
             .get(name)
             .await?
             .ok_or_else(|| Error::VolumeNotFound(name.into()))?;
-        if self.in_use(&volume).await? {
+        if !force && self.in_use(&volume).await? {
             return Err(Error::VolumeInUse(name.into()));
         }
         if matches!(volume.source, VolumeSource::Bind { .. }) {

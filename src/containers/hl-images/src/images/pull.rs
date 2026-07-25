@@ -11,6 +11,18 @@ impl Images {
         reference: Reference,
         platform: &Platform,
     ) -> Result<Image> {
+        if let Some(target) = &self.pull_target {
+            return target.pull_local(source, reference, platform).await;
+        }
+        self.pull_local(source, reference, platform).await
+    }
+
+    async fn pull_local(
+        &self,
+        source: &(impl Source + ?Sized),
+        reference: Reference,
+        platform: &Platform,
+    ) -> Result<Image> {
         let _span = hl_log::hl_span!(hl_log::tag::IMAGE, "pull");
         hl_log::hl_info!(hl_log::tag::IMAGE, "pull begin reference={reference}");
         let lease = self
@@ -137,6 +149,7 @@ impl Images {
     /// # Errors
     /// Returns an error for missing/corrupt content, invalid configuration, unsafe layers, or snapshot failures.
     pub fn unpack(&self, image: &Image, platform: &Platform) -> Result<UnpackedImage> {
+        self.mirror(image)?;
         // Publishing an immutable chain and pinning it must be one operation with
         // respect to GC.  Without this lock GC can remove the newly committed,
         // not-yet-leased chain while rootfs() is about to fork it.

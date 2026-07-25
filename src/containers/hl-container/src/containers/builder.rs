@@ -11,7 +11,55 @@ use std::sync::Arc;
 pub struct Builder {
     config: Config,
     images: Option<hl_images::Images>,
+    checkpoints: Option<Arc<dyn crate::CheckpointImages>>,
     devices: crate::Devices,
+}
+
+struct Assembly<S> {
+    storage: Arc<S>,
+    runtime: Arc<dyn Runtime>,
+    rootfs: Option<hl_images::rootfs::Roots>,
+    images: Option<hl_images::Images>,
+    volume_root: std::path::PathBuf,
+    runtime_root: std::path::PathBuf,
+    devices: crate::Devices,
+    checkpoints: Arc<dyn crate::CheckpointImages>,
+}
+
+impl<S: Storage + 'static> Assembly<S> {
+    async fn build(self) -> Result<Containers> {
+        let volume_storage: Arc<dyn crate::storage::VolumeStore> = self.storage.clone();
+        let container_storage: Arc<dyn crate::storage::Containers> = self.storage.clone();
+        let volumes =
+            crate::Volumes::open(volume_storage, container_storage, self.volume_root).await?;
+        let network_storage: Arc<dyn crate::storage::NetworkStore> = self.storage.clone();
+        let network_containers: Arc<dyn crate::storage::Containers> = self.storage.clone();
+        let networks = crate::Networks::new(
+            network_storage,
+            network_containers,
+            volumes.operation(),
+            self.runtime_root.clone(),
+        );
+        networks.reconcile().await?;
+        let service = Arc::new(Service::new(Dependencies {
+            storage: self.storage,
+            runtime: self.runtime,
+            rootfs: self.rootfs,
+            images: self.images,
+            volumes: volumes.clone(),
+            networks: networks.clone(),
+            runtime_root: self.runtime_root,
+            devices: self.devices,
+            checkpoints: self.checkpoints,
+        }));
+        service.reconcile().await?;
+        service.recover().await?;
+        Ok(Containers {
+            service,
+            volumes,
+            networks,
+        })
+    }
 }
 
 impl Builder {
@@ -19,6 +67,7 @@ impl Builder {
         Self {
             config,
             images: None,
+            checkpoints: None,
             devices: crate::Devices::new(),
         }
     }
@@ -37,6 +86,13 @@ impl Builder {
         self
     }
 
+    /// Uses application-owned durable checkpoint object storage.
+    #[must_use]
+    pub fn checkpoints(mut self, value: Arc<dyn crate::CheckpointImages>) -> Self {
+        self.checkpoints = Some(value);
+        self
+    }
+
     /// Builds the service, opens storage, and reconciles unowned running records.
     ///
     /// # Errors
@@ -46,6 +102,12 @@ impl Builder {
         let devices = self.devices;
         let volume_root = root.join("volumes");
         let runtime_root = root.join("runtime");
+        let checkpoints = match self.checkpoints {
+            Some(value) => value,
+            None => Arc::new(crate::checkpoint::DirectoryImages::open(
+                runtime_root.join("checkpoints"),
+            )?),
+        };
         let images = match self.images {
             Some(value) => value,
             None => hl_images::Images::open(root.join("images"))?,
@@ -53,33 +115,38 @@ impl Builder {
         let rootfs = images.roots();
         match self.config.persistence {
             Persistence::File => {
-                build_with(
-                    Arc::new(Disk::open(root).await?),
-                    Arc::new(Engine),
-                    Some(rootfs),
-                    Some(images),
+                Assembly {
+                    storage: Arc::new(Disk::open(root).await?),
+                    runtime: Arc::new(Engine),
+                    rootfs: Some(rootfs),
+                    images: Some(images),
                     volume_root,
                     runtime_root,
                     devices,
-                )
+                    checkpoints,
+                }
+                .build()
                 .await
             }
             Persistence::Memory => {
-                build_with(
-                    Arc::new(Memory::default()),
-                    Arc::new(Engine),
-                    Some(rootfs),
-                    Some(images),
+                Assembly {
+                    storage: Arc::new(Memory::default()),
+                    runtime: Arc::new(Engine),
+                    rootfs: Some(rootfs),
+                    images: Some(images),
                     volume_root,
                     runtime_root,
                     devices,
-                )
+                    checkpoints,
+                }
+                .build()
                 .await
             }
         }
     }
 }
 
+#[cfg(test)]
 pub(super) async fn build_with<S: Storage + 'static>(
     storage: Arc<S>,
     runtime: Arc<dyn Runtime>,
@@ -89,35 +156,21 @@ pub(super) async fn build_with<S: Storage + 'static>(
     runtime_root: std::path::PathBuf,
     devices: crate::Devices,
 ) -> Result<Containers> {
-    let volume_storage: Arc<dyn crate::storage::VolumeStore> = storage.clone();
-    let container_storage: Arc<dyn crate::storage::Containers> = storage.clone();
-    let volumes = crate::Volumes::open(volume_storage, container_storage, volume_root).await?;
-    let network_storage: Arc<dyn crate::storage::NetworkStore> = storage.clone();
-    let network_containers: Arc<dyn crate::storage::Containers> = storage.clone();
-    let networks = crate::Networks::new(
-        network_storage,
-        network_containers,
-        volumes.operation(),
-        runtime_root.clone(),
-    );
-    networks.reconcile().await?;
-    let service = Arc::new(Service::new(Dependencies {
+    let checkpoints = Arc::new(crate::checkpoint::DirectoryImages::open(
+        runtime_root.join("checkpoints"),
+    )?);
+    Assembly {
         storage,
         runtime,
         rootfs,
         images,
-        volumes: volumes.clone(),
-        networks: networks.clone(),
+        volume_root,
         runtime_root,
         devices,
-    }));
-    service.reconcile().await?;
-    service.recover().await?;
-    Ok(Containers {
-        service,
-        volumes,
-        networks,
-    })
+        checkpoints,
+    }
+    .build()
+    .await
 }
 
 #[cfg(test)]

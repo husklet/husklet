@@ -1,6 +1,6 @@
 /* REAL GL GEOMETRY — a real EGL + GLES2 offscreen program that RASTERIZES a triangle on lavapipe.
  *
- * The milestone counterpart of `gl_triangle.c`: where that program reports the (now-fixed) LegacyMsl gap,
+ * The milestone counterpart of `gl_triangle.c`: where that program reports the (now-fixed) Msl gap,
  * this one HARD-ASSERTS that real GL geometry rasterizes. No hl-specific calls and no vendor headers — the
  * GLES2/EGL ABI is self-declared (exactly as a `-lEGL -lGLESv2` app sees it), and
  * `LD_LIBRARY_PATH=~/.hl/gl/<arch>` makes the `libEGL.so.1` / `libGLESv2.so.2` it resolves OURS. Every GL

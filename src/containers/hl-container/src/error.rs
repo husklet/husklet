@@ -3,6 +3,8 @@ use crate::{ContainerId, ContainerState, ExecId, ExecState};
 /// Container lifecycle failure.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Checkpoint(#[from] crate::CheckpointError),
     #[error("invalid container specification: {0}")]
     InvalidSpec(String),
     #[error("invalid volume: {0}")]

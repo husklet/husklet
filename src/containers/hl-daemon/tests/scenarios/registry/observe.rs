@@ -1,4 +1,4 @@
-//! Typed legacy container-observability contracts.
+//! Typed container-observability contracts.
 
 use crate::contract::{Group, Scenario, Target};
 

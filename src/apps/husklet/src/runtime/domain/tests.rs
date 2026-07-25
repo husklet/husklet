@@ -91,41 +91,36 @@ fn domain_startup_reports_an_exited_worker_without_waiting_for_timeout() {
     assert!(error.to_string().contains("domain.log"));
 }
 
-#[tokio::test]
-async fn migration_removes_only_inactive_pre_domain_terminals() {
+#[test]
+fn restore_summary_is_consumed_once_and_names_each_failure() {
     let root = tempfile::tempdir().unwrap();
-    let containers = Containers::builder(Config::new(root.path()))
-        .build()
-        .await
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
+    workspace.storage = Some(root.path().to_owned());
+    let summary = RestoreSummary::new(&workspace);
+
+    summary
+        .publish(&[
+            "terminal pane-1: restored process cannot be attached".into(),
+            "container database: checkpoint object is incomplete".into(),
+        ])
         .unwrap();
-    containers
-        .create(
-            ContainerSpec::from_directory("/", hl_container::Process::new("/bin/true"))
-                .name("legacy-terminal"),
-        )
-        .await
-        .unwrap();
-    containers
-        .create(
-            ContainerSpec::from_directory("/", hl_container::Process::new("/bin/true"))
-                .name(CONTAINER)
-                .label(SIGNATURE, "current"),
-        )
-        .await
-        .unwrap();
-    Runtime::remove_legacy_terminals(&containers).await.unwrap();
-    assert!(matches!(
-        containers.inspect("legacy-terminal").await,
-        Err(hl_container::Error::NotFound(_))
-    ));
-    assert_eq!(
-        containers
-            .inspect(CONTAINER)
-            .await
-            .unwrap()
-            .spec
-            .name
-            .as_deref(),
-        Some(CONTAINER)
-    );
+
+    let text = summary.take().unwrap().unwrap();
+    assert!(text.contains("workspace restored with 2 failure(s)"));
+    assert!(text.contains("terminal pane-1: restored process cannot be attached"));
+    assert!(text.contains("container database: checkpoint object is incomplete"));
+    assert_eq!(summary.take().unwrap(), None);
+}
+
+#[test]
+fn successful_restore_removes_an_obsolete_failure_summary() {
+    let root = tempfile::tempdir().unwrap();
+    let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
+    workspace.storage = Some(root.path().to_owned());
+    let summary = RestoreSummary::new(&workspace);
+
+    summary.publish(&["old failure".into()]).unwrap();
+    summary.publish(&[]).unwrap();
+
+    assert_eq!(summary.take().unwrap(), None);
 }

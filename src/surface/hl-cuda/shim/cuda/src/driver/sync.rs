@@ -279,5 +279,5 @@ pub extern "C" fn cuCtxGetStreamPriorityRange(least: *mut i32, greatest: *mut i3
 }
 
 // ==================================================================================================
-// device: peer access, PCI/LUID identity, legacy properties struct
+// device: peer access, PCI/LUID identity, original properties struct
 // ==================================================================================================

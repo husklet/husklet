@@ -1425,9 +1425,9 @@ dependencies = [
 
 [[package]]
 name = "hl-engine"
-version = "0.1.26"
+version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51c18b285c80435a03cebd075eb538ae1b438340931d33858f57257b30edc3b6"
+checksum = "5a1c783e3e4594233d2fae6ec6bdd5146d3c6743441425324c4288851fdb4164"
 
 [[package]]
 name = "hl-fs"

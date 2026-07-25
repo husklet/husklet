@@ -27,7 +27,6 @@ pub struct WgpuTexture {
     /// Number of mip levels materialized (>= 1). A value > 1 means a `CopyBufferToTexture` may target a
     /// non-zero `mip` and a sampler may select a LOD. Retained for introspection / future readback of a
     /// non-base mip.
-    #[allow(dead_code)]
     pub mip_levels: u32,
     /// MSAA sample count (`>= 1`). `1` is a plain single-sampled texture; `> 1` is a multisampled render
     /// target that can only be a `RENDER_ATTACHMENT` (never copied to/from) and is consumed by a

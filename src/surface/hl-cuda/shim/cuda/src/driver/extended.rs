@@ -50,7 +50,7 @@ pub extern "C" fn cuLaunchHostFunc(
     CUDA_SUCCESS
 }
 
-/// `cuStreamAddCallback(stream, callback, userData, flags)` — the legacy stream-callback API. As with
+/// `cuStreamAddCallback(stream, callback, userData, flags)` — the deprecated stream-callback API. As with
 /// `cuLaunchHostFunc`, the synchronous executor has already completed preceding work, so the callback
 /// fires inline with `CUDA_SUCCESS`, OUTSIDE the state lock. A bogus stream is `INVALID_HANDLE`; a null
 /// callback is `INVALID_VALUE`.

@@ -88,7 +88,6 @@ pub struct Volume {
     pub created_at_ms: u64,
     pub labels: BTreeMap<String, String>,
     pub options: BTreeMap<String, String>,
-    #[serde(default)]
     pub source: VolumeSource,
     pub kind: VolumeKind,
 }

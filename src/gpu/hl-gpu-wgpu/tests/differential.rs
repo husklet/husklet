@@ -69,8 +69,8 @@ use hl_gpu::protocol::model::descriptor::{
     VertexLayout,
 };
 use hl_gpu::protocol::model::enums::{
-    buffer_usage, compare, stencil_op, texture_usage, Filter, IndexFormat, LoadOp, TextureDim,
-    TextureFormat, Topology,
+    buffer_usage, compare, stencil_op, texture_usage, Filter, LoadOp, TextureDim, TextureFormat,
+    Topology,
 };
 use hl_gpu::protocol::model::kernel::{
     gty, Inst, KernelProgram, Op, Param, CMP_GE, KERNEL_MAGIC, SR_CTAID_X, SR_NTID_X, SR_TID_X,

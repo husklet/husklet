@@ -11,6 +11,7 @@ use crate::{storage, Descriptor, Error, Reference, Result};
 const CATALOG_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Image {
     pub name: Reference,
     pub target: Descriptor,
@@ -18,32 +19,17 @@ pub struct Image {
 
 /// Durable metadata for one immutable descriptor graph, independent of its current tags.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Graph {
     pub target: Descriptor,
-    #[serde(default)]
     pub names: BTreeSet<String>,
-    #[serde(default)]
     pub created_at_ms: Option<u64>,
-    #[serde(default)]
     pub labels: Option<BTreeMap<String, String>>,
-    #[serde(default)]
     pub build_cache: bool,
-    #[serde(default)]
     pub metadata_known: bool,
 }
 
 impl Graph {
-    fn unknown(image: &Image) -> Self {
-        Self {
-            target: image.target.clone(),
-            names: BTreeSet::from([image.name.to_string()]),
-            created_at_ms: None,
-            labels: None,
-            build_cache: image.name.repository().starts_with("hl-build-cache/"),
-            metadata_known: false,
-        }
-    }
-
     #[must_use]
     pub const fn filterable(&self) -> bool {
         self.metadata_known
@@ -51,13 +37,12 @@ impl Graph {
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 struct Catalog {
     version: u32,
-    #[serde(default)]
     generation: u64,
     images: BTreeMap<String, Image>,
     graphs: BTreeMap<String, Graph>,
-    #[serde(default)]
     pending_prunes: BTreeMap<String, PendingPrune>,
 }
 
@@ -69,7 +54,14 @@ impl Catalog {
                 ..Self::default()
             });
         }
-        serde_json::from_reader::<_, StoredCatalog>(File::open(path)?)?.catalog()
+        let catalog: Catalog = serde_json::from_reader(File::open(path)?)?;
+        if catalog.version != CATALOG_VERSION {
+            return Err(Error::InvalidMetadata(format!(
+                "unsupported image catalog version {}",
+                catalog.version
+            )));
+        }
+        Ok(catalog)
     }
 
     fn put(&mut self, image: Image) -> Option<Image> {
@@ -184,48 +176,6 @@ impl Catalog {
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 pub(crate) struct PendingPrune {
     pub(crate) content: BTreeMap<String, u64>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-enum StoredCatalog {
-    Current(Catalog),
-    Legacy(BTreeMap<String, Image>),
-}
-
-impl StoredCatalog {
-    fn catalog(self) -> Result<Catalog> {
-        match self {
-            Self::Current(state) if state.version == CATALOG_VERSION => Ok(state),
-            Self::Current(state) => Err(Error::InvalidMetadata(format!(
-                "unsupported image catalog version {}",
-                state.version
-            ))),
-            Self::Legacy(images) => Ok(Self::legacy(images)),
-        }
-    }
-
-    fn legacy(images: BTreeMap<String, Image>) -> Catalog {
-        let mut graphs: BTreeMap<String, Graph> = BTreeMap::new();
-        for image in images.values() {
-            let digest = image.target.digest().to_string();
-            match graphs.entry(digest) {
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().names.insert(image.name.to_string());
-                }
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(Graph::unknown(image));
-                }
-            }
-        }
-        Catalog {
-            version: CATALOG_VERSION,
-            generation: 0,
-            images,
-            graphs,
-            pending_prunes: BTreeMap::new(),
-        }
-    }
 }
 
 pub trait ImageStore: Clone + Send + Sync + 'static {

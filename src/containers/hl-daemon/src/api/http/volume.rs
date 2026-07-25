@@ -205,7 +205,6 @@ pub(super) async fn inspect(
 
 #[derive(Default, Deserialize)]
 pub(super) struct RemoveQuery {
-    #[allow(dead_code)]
     force: bool,
 }
 
@@ -213,14 +212,15 @@ pub(super) struct RemoveQuery {
 pub(super) async fn remove(
     State(state): State<DockerState>,
     Path(name): Path<String>,
-    Query(_query): Query<RemoveQuery>,
+    Query(query): Query<RemoveQuery>,
 ) -> ApiResult<StatusCode> {
-    let volume = state
-        .containers
-        .volumes()
-        .remove(&name)
-        .await
-        .map_err(ApiError::container)?;
+    let volumes = state.containers.volumes();
+    let volume = if query.force {
+        volumes.remove_force(&name).await
+    } else {
+        volumes.remove(&name).await
+    }
+    .map_err(ApiError::container)?;
     let mut attributes = volume.labels;
     attributes.insert("name".into(), volume.name.clone());
     attributes.insert("driver".into(), "local".into());

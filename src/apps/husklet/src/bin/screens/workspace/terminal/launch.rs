@@ -78,7 +78,7 @@ pub(crate) fn make_terminal_ex(
     // own slot, and `save_session` can record which slot each pane owns.
     tw.panes
         .borrow_mut()
-        .push(PaneRegistration::new(&term, slot.clone(), pid.clone()));
+        .push(PaneRegistration::new(&term, slot.clone()));
     let application = application_path().to_string_lossy().into_owned();
     let workspace_key = tw.ws.key();
     // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs hl). The debug-log path is

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_client::{
     model::{CreateContainer, VolumeCreate},
     Client,
@@ -17,7 +17,7 @@ pub(super) async fn run_docker_contracts(client: &Client) -> Result<(), Error> {
         .into_iter()
         .map(|value| (value.id, value))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut reports = LegacyBatch::new("dockervol")?;
+    let mut reports = ScenarioBatch::new("dockervol")?;
     let managed = Managed::new(client);
     for (ids, kind) in managed_groups() {
         let mut attempts = Vec::new();

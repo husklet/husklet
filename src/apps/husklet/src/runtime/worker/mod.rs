@@ -108,6 +108,11 @@ impl Worker {
                     std::process::exit(WorkerStatus::LAUNCH_FAILED);
                 }
             };
+        match crate::runtime::domain::Domain::take_restore_summary(&workspace) {
+            Ok(Some(summary)) => eprintln!("{summary}"),
+            Ok(None) => {}
+            Err(error) => eprintln!("workspace restore summary unavailable: {error}"),
+        }
         diagnostics.record("workspace launch started");
         let status = TerminalSession::run(&mut *terminal);
         diagnostics.record(format_args!("workspace terminal exited: {status}"));
@@ -115,7 +120,14 @@ impl Worker {
     }
 
     pub fn daemon(name: &str) -> std::io::Result<std::path::PathBuf> {
-        crate::runtime::resources::Daemon::new(name).ensure()
+        let store = WorkspaceStore::load(Self::store())?;
+        let workspace = store.get_key(name).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("workspace key {name:?} does not exist"),
+            )
+        })?;
+        crate::runtime::resources::Daemon::new(workspace).ensure()
     }
 
     pub fn domain(name: &str) -> std::io::Result<()> {

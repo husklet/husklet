@@ -82,15 +82,11 @@ impl Console {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Process {
     pub program: String,
-    #[serde(default)]
     pub args: Vec<String>,
-    #[serde(default)]
     pub env: BTreeMap<String, String>,
-    #[serde(default = "Process::default_working_dir")]
     pub working_dir: PathBuf,
     pub uid: Option<i32>,
     pub gid: Option<i32>,
-    #[serde(default)]
     pub console: Console,
 }
 

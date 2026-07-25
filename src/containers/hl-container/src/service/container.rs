@@ -56,7 +56,7 @@ pub(crate) struct Service {
     events: std::sync::RwLock<Vec<Arc<dyn crate::LifecycleEvents>>>,
     event_history: std::sync::Mutex<Vec<crate::LifecycleEvent>>,
     devices: crate::Devices,
-    checkpoint_root: std::path::PathBuf,
+    checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
 pub(crate) struct Dependencies<S> {
@@ -68,6 +68,7 @@ pub(crate) struct Dependencies<S> {
     pub(crate) networks: crate::Networks,
     pub(crate) runtime_root: std::path::PathBuf,
     pub(crate) devices: crate::Devices,
+    pub(crate) checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
 impl Service {
@@ -84,6 +85,7 @@ impl Service {
             networks,
             runtime_root,
             devices,
+            checkpoints,
         } = dependencies;
         let operations = volumes.operation();
         let containers: Arc<dyn ContainerStorage> = storage.clone();
@@ -112,7 +114,7 @@ impl Service {
             events: std::sync::RwLock::new(Vec::new()),
             event_history: std::sync::Mutex::new(Vec::new()),
             devices,
-            checkpoint_root: runtime_root.join("checkpoints"),
+            checkpoints,
         }
     }
 

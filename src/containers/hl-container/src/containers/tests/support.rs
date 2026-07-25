@@ -61,13 +61,14 @@ pub(super) const RESOLVE_AMBIGUOUS: &str = "aaaaaaaa-1111-4000-8000-000000000003
 pub(super) type RecordedMounts =
     Arc<std::sync::Mutex<Vec<Vec<(std::path::PathBuf, std::path::PathBuf, Access)>>>>;
 
-type CheckpointLaunch = (Option<std::path::PathBuf>, Option<std::path::PathBuf>);
+type CheckpointLaunch = Option<bool>;
 
 pub(super) struct FakeRuntime {
     pub(super) next: AtomicU64,
     pub(super) fail: AtomicBool,
     pub(super) fail_wait: AtomicBool,
     pub(super) hold_logs: AtomicBool,
+    pub(super) checkpointable: AtomicBool,
     pub(super) delay: Duration,
     pub(super) result: ExitStatus,
     pub(super) signals: Arc<std::sync::Mutex<Vec<Signal>>>,
@@ -92,6 +93,7 @@ impl FakeRuntime {
             fail: AtomicBool::new(false),
             fail_wait: AtomicBool::new(false),
             hold_logs: AtomicBool::new(false),
+            checkpointable: AtomicBool::new(true),
             delay: Duration::from_millis(10),
             result,
             signals: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -121,7 +123,7 @@ struct FakeProcess {
     resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
     logs: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<crate::LogChunk>>>,
     _log_owner: Option<tokio::sync::mpsc::UnboundedSender<crate::LogChunk>>,
-    checkpoint_directory: Option<std::path::PathBuf>,
+    checkpoint_armed: bool,
 }
 
 #[async_trait]
@@ -131,6 +133,9 @@ impl Running for FakeProcess {
     }
     fn domain(&self) -> Option<hl_engine::Domain> {
         None
+    }
+    fn checkpointable(&self) -> bool {
+        self.checkpoint_armed
     }
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
         tokio::time::sleep(self.delay).await;
@@ -151,10 +156,14 @@ impl Running for FakeProcess {
         self.suspensions.lock().unwrap().push(false);
         Ok(())
     }
-    async fn checkpoint(&self, _timeout: Duration) -> Result<std::path::PathBuf> {
-        self.checkpoint_directory
-            .clone()
-            .ok_or_else(|| Error::Runtime("process was not armed for checkpoint".into()))
+    async fn checkpoint(&self, _timeout: Duration) -> Result<()> {
+        if self.checkpoint_armed {
+            Ok(())
+        } else {
+            Err(Error::Runtime(
+                "process was not armed for checkpoint".into(),
+            ))
+        }
     }
     async fn resize(&self, size: crate::Size) -> Result<()> {
         self.resizes.lock().unwrap().push(size);
@@ -181,10 +190,12 @@ impl Runtime for FakeRuntime {
         self.isolations.lock().unwrap().push(launch.isolation);
         self.publishes.lock().unwrap().push(launch.publish);
         self.terminals.lock().unwrap().push(launch.terminal);
-        self.checkpoints.lock().unwrap().push((
-            launch.checkpoint_directory.clone(),
-            launch.restore_directory.clone(),
-        ));
+        self.checkpoints.lock().unwrap().push(
+            launch
+                .checkpoint
+                .as_ref()
+                .map(|checkpoint| checkpoint.restore),
+        );
         self.mounts.lock().unwrap().push(
             launch
                 .mounts
@@ -227,7 +238,8 @@ impl Runtime for FakeRuntime {
             resizes: Arc::clone(&self.resizes),
             logs: std::sync::Mutex::new(Some(receiver)),
             _log_owner: log_owner,
-            checkpoint_directory: launch.checkpoint_directory,
+            checkpoint_armed: launch.checkpoint.is_some()
+                && self.checkpointable.load(Ordering::SeqCst),
         }))
     }
 }

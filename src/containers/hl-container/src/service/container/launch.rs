@@ -2,6 +2,7 @@ use super::{
     now_ms, Arc, Container, ContainerState, Error, JournalId, NetworkConfig, Notify, ProcessConfig,
     Result, Run, Running, Service, Signal,
 };
+use crate::service::CheckpointConfig;
 
 impl Service {
     pub(super) fn devices(
@@ -69,13 +70,17 @@ impl Service {
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
         mounts.extend(self.identity.prepare(&container, &networks)?);
         let filesystem_generation = self.identity.generation(&container)?.path().to_owned();
-        let restore_directory = container
-            .checkpoint
-            .as_ref()
-            .map(|checkpoint| checkpoint.directory.clone());
-        let checkpoint_directory = Some(self.checkpoint_root.join(container.id.as_str()).join(
-            format!("capture-{}", container.generation.saturating_add(1)),
-        ));
+        let checkpoint_namespace = container.checkpoint.as_ref().map_or_else(
+            || container.id.to_string(),
+            |checkpoint| checkpoint.namespace.clone(),
+        );
+        let checkpoint = Some(CheckpointConfig {
+            image: self
+                .checkpoints
+                .open(&checkpoint_namespace)
+                .map_err(|error| Error::Runtime(error.to_string()))?,
+            restore: container.checkpoint.is_some(),
+        });
         let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
         let process = self
             .runtime
@@ -85,8 +90,7 @@ impl Service {
                 overlay,
                 owners,
                 filesystem_generation,
-                checkpoint_directory,
-                restore_directory,
+                checkpoint,
                 guest: container.spec.guest,
                 process: process_spec,
                 hostname: Some(container.hostname()),

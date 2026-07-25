@@ -1,5 +1,5 @@
 use crate::api::support::{raw_http, wait_for_path, write_image_archive};
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_client::Client;
 use hl_container::{Config, Containers};
 use hl_daemon::Daemon;
@@ -50,7 +50,7 @@ impl Images {
             .into_iter()
             .map(|value| (value.id, value))
             .collect::<std::collections::BTreeMap<_, _>>();
-        let mut reports = LegacyBatch::new("imagescmd")?;
+        let mut reports = ScenarioBatch::new("imagescmd")?;
         for id in [
             "imagescmd/list",
             "imagescmd/tag",

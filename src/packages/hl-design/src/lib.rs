@@ -154,7 +154,7 @@ mod tests {
     fn rejects_empty_missing_and_unknown_reasons() {
         assert!(parse("reason = \"\"").is_err());
         assert!(parse("").is_err());
-        assert!(parse("because = \"legacy\"").is_err());
-        assert!(parse("reason = \"legacy\", extra = \"value\"").is_err());
+        assert!(parse("because = \"unsupported\"").is_err());
+        assert!(parse("reason = \"unsupported\", extra = \"value\"").is_err());
     }
 }

@@ -4,7 +4,7 @@
 //! ships) is translated to WGSL by naga at create time and handed to `create_shader_module`, so the guest's
 //! real vertex/fragment shader executes on the device. A neutral *kernel* payload (`PtxKernel`) is kept as
 //! its compiled [`KernelProgram`] and lowered to a WGSL compute entry point when a compute pipeline
-//! references it (see `pipeline.rs`). Legacy MSL / demo-builtin payloads have no honest WGSL translation and
+//! references it (see `pipeline.rs`). MSL / demo-builtin payloads have no honest WGSL translation and
 //! are rejected rather than silently substituted.
 
 use hl_gpu::protocol::model::command::ShaderPayloadKind;
@@ -95,7 +95,7 @@ impl WgpuExecutor {
 
         if matches!(
             kind,
-            ShaderPayloadKind::LegacyMsl | ShaderPayloadKind::DemoBuiltin
+            ShaderPayloadKind::Msl | ShaderPayloadKind::DemoBuiltin
         ) {
             hl_log::hl_warn!(
                 hl_log::tag::WGPU,
@@ -103,7 +103,7 @@ impl WgpuExecutor {
                 kind
             );
             return Err(GpuError::Unsupported(
-                "wgpu: legacy MSL / demo-builtin payloads (no WGSL)",
+                "wgpu: MSL / demo-builtin payloads (no WGSL)",
             ));
         }
 
@@ -171,7 +171,7 @@ impl WgpuExecutor {
                     })?;
                 (src, reflected, "hl-glsl")
             }
-            // PtxKernel / LegacyMsl / DemoBuiltin already returned above.
+            // PtxKernel / Msl / DemoBuiltin already returned above.
             _ => unreachable!("kernel and non-WGSL kinds handled above"),
         };
         let module = self

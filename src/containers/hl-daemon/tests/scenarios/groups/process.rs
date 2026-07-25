@@ -1,6 +1,6 @@
 //! Guest process compatibility cases.
 
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_container::{
     ContainerSpec, Containers, ExecSpec, ExecState, ExitStatus, Isolation, Process, Sandbox,
 };
@@ -41,7 +41,7 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Er
         .into_iter()
         .map(|value| (value.id, value))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut reports = LegacyBatch::new("process")?;
+    let mut reports = ScenarioBatch::new("process")?;
     for case in Case::all() {
         let id = case.id();
         let scenario = &scenarios[id];

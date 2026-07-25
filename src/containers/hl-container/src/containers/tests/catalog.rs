@@ -120,7 +120,7 @@ async fn labels_can_be_rotated_without_changing_runtime_state() {
     runtime.delay = Duration::from_secs(1);
     let containers = service(Arc::new(runtime)).await;
     containers
-        .create(spec("labeled").label("credential", "legacy-secret"))
+        .create(spec("labeled").label("credential", "test-secret"))
         .await
         .unwrap();
     containers.start("labeled").await.unwrap();

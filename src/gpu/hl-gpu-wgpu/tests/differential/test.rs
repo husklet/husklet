@@ -196,9 +196,3 @@ fn differential_cpu_oracle_vs_wgpu() {
         );
     }
 }
-
-// The index-buffer path (DrawIndexed / IndexFormat) shares the same fixed-function raster + shader path as
-// Draw; it is exercised by the coverage suite and left out of the per-pixel fuzz to avoid edge-rule
-// ambiguity on partial-coverage indexed geometry. Keep the import wired without a dedicated case.
-#[allow(dead_code)]
-const _: Option<IndexFormat> = None;

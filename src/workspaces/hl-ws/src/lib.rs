@@ -16,8 +16,10 @@
 
 pub mod launch;
 pub mod model;
+pub mod storage;
 pub mod terminal;
 
 pub use launch::Launcher;
 pub use model::{Arch, Mount, Workspace};
+pub use storage::{Directory, Key, Namespace, Storage};
 pub use terminal::PtyBackend;

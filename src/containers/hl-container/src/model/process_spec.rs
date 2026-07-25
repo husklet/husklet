@@ -14,40 +14,26 @@ use crate::{
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ContainerSpec {
     pub name: Option<String>,
-    #[serde(default)]
     pub labels: BTreeMap<String, String>,
     /// OCI image name used to prepare this rootfs, independent from its snapshot path.
     pub image: Option<hl_images::Reference>,
     pub rootfs: Rootfs,
-    #[serde(default)]
     pub guest: Guest,
     pub process: Process,
-    #[serde(default)]
     pub hostname: Option<String>,
-    #[serde(default)]
     pub hosts: BTreeMap<String, IpAddr>,
-    #[serde(default)]
     pub mounts: Vec<Mount>,
-    #[serde(default)]
     pub resources: Resources,
-    #[serde(default)]
     pub isolation: Isolation,
-    #[serde(default)]
     pub network_mode: crate::NetworkMode,
-    #[serde(default)]
     pub healthcheck: Option<Healthcheck>,
-    #[serde(default)]
     pub restart: RestartPolicy,
-    #[serde(default)]
     pub removal: crate::RemovalPolicy,
     /// Signal delivered by a graceful stop before its timeout expires.
-    #[serde(default)]
     pub stop_signal: crate::Signal,
     /// Declared process ports, including ports that are not host-published.
-    #[serde(default)]
     pub ports: BTreeSet<crate::Port>,
     /// Durable host-to-container publications, re-applied on every process generation.
-    #[serde(default)]
     pub publish: Vec<crate::Publication>,
 }
 

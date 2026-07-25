@@ -1,6 +1,7 @@
 //! Embeddable headless Linux container lifecycle.
 #![forbid(unsafe_code)]
 
+mod checkpoint;
 mod config;
 mod console;
 mod containers;
@@ -17,6 +18,7 @@ mod service;
 mod storage;
 mod volumes;
 
+pub use checkpoint::{CheckpointError, CheckpointImage, CheckpointImages};
 pub use config::{Config, Persistence};
 pub use console::{Input, Session};
 pub use containers::{

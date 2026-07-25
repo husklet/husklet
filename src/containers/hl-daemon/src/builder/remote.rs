@@ -80,6 +80,7 @@ impl RemoteSources {
                         digest.update(&chunk);
                         output.write_all(&chunk).await?;
                     }
+                    output.flush().await?;
                     let digest: [u8; 32] = digest.finalize().into();
                     if let Some(expected) = checksum
                         .as_deref()

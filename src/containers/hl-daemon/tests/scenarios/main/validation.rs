@@ -2,7 +2,7 @@ use crate::{analyze, contract, languages, manifest, provenance, registry, report
 
 pub(super) fn parity() -> Result<(), Box<dyn std::error::Error>> {
     registry::build()
-        .verify(include_str!("../golden/legacy.contracts"))
+        .verify(include_str!("../golden/scenario.contracts"))
         .map_err(Into::into)
 }
 

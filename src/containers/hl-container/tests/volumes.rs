@@ -237,8 +237,16 @@ async fn prune_skips_every_volume_referenced_by_persisted_containers() {
     assert_eq!(containers.volumes().inspect("held").await.unwrap(), held);
     assert!(!free.path().exists());
 
+    assert_eq!(
+        containers.volumes().remove_force("held").await.unwrap(),
+        held
+    );
+    assert!(!held.path().exists());
+    assert!(matches!(
+        containers.volumes().inspect("held").await,
+        Err(Error::VolumeNotFound(name)) if name == "held"
+    ));
     containers.remove("owner").await.unwrap();
-    assert_eq!(containers.volumes().prune().await.unwrap(), vec![held]);
 }
 
 #[tokio::test]

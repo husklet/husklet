@@ -25,7 +25,18 @@ impl Images {
             leases: Leases::open(root.join("metadata"))?,
             snapshots: Snapshots::open(root.join("snapshots"))?,
             operation_lock: root.join("operations.lock"),
+            fallback: None,
+            pull_target: None,
         })
+    }
+
+    /// Creates a workspace-first catalog whose registry pulls are stored in the external catalog.
+    #[must_use]
+    pub fn workspace(mut workspace: Self, external: Self) -> Self {
+        let external = Arc::new(external);
+        workspace.fallback = Some(Arc::clone(&external));
+        workspace.pull_target = Some(external);
+        workspace
     }
 
     #[must_use]
@@ -46,7 +57,94 @@ impl Images {
     /// # Errors
     /// Returns an error when image metadata cannot be read.
     pub fn resolve(&self, reference: &Reference) -> Result<Option<Image>> {
-        self.metadata.get(reference)
+        match self.metadata.get(reference)? {
+            Some(image) => Ok(Some(image)),
+            None => self
+                .fallback
+                .as_deref()
+                .map_or(Ok(None), |fallback| fallback.resolve(reference)),
+        }
+    }
+
+    /// Lists workspace images first, followed by external images not shadowed by workspace names.
+    ///
+    /// # Errors
+    /// Returns an error when either catalog cannot be read.
+    pub fn list(&self) -> Result<Vec<Image>> {
+        let mut images = self.metadata.list()?;
+        let Some(fallback) = &self.fallback else {
+            return Ok(images);
+        };
+        let local = images
+            .iter()
+            .map(|image| image.name.to_string())
+            .collect::<HashSet<_>>();
+        images.extend(
+            fallback
+                .list()?
+                .into_iter()
+                .filter(|image| !local.contains(&image.name.to_string())),
+        );
+        Ok(images)
+    }
+
+    /// Returns graph metadata across the workspace and external catalogs.
+    ///
+    /// # Errors
+    /// Returns an error when either catalog cannot be read.
+    pub fn graphs(&self) -> Result<Vec<Graph>> {
+        let mut graphs = self.metadata.graphs()?;
+        if let Some(fallback) = &self.fallback {
+            let local = graphs
+                .iter()
+                .map(|graph| graph.target.digest().to_string())
+                .collect::<HashSet<_>>();
+            graphs.extend(
+                fallback
+                    .graphs()?
+                    .into_iter()
+                    .filter(|graph| !local.contains(&graph.target.digest().to_string())),
+            );
+        }
+        Ok(graphs)
+    }
+
+    pub(super) fn mirror(&self, image: &Image) -> Result<()> {
+        use std::io::Read as _;
+
+        if self.content.reader(&image.target).is_ok() {
+            return Ok(());
+        }
+        let source = self
+            .fallback
+            .as_deref()
+            .ok_or_else(|| Error::ContentNotFound(image.target.digest().to_string()))?;
+        let source = source.owner(image)?;
+        for descriptor in DescriptorGraph::walk(image.target.clone(), &source.content)? {
+            let digest: Digest = descriptor.digest().to_string().parse()?;
+            if self.content.contains(&digest)? {
+                continue;
+            }
+            let mut bytes = Vec::with_capacity(usize::try_from(descriptor.size()).unwrap_or(0));
+            source
+                .content
+                .reader(&descriptor)?
+                .read_to_end(&mut bytes)?;
+            let mut draft = self.content.ingest(format!("workspace-{digest}"))?;
+            draft.write(&bytes)?;
+            draft.commit(&descriptor)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn owner(&self, image: &Image) -> Result<&Images> {
+        if self.content.reader(&image.target).is_ok() {
+            return Ok(self);
+        }
+        self.fallback
+            .as_deref()
+            .ok_or_else(|| Error::ContentNotFound(image.target.digest().to_string()))?
+            .owner(image)
     }
 
     /// Return the deduplicated compressed byte size of an image's complete descriptor graph.
@@ -54,6 +152,7 @@ impl Images {
     /// # Errors
     /// Returns an error when referenced content is missing, corrupt, or malformed.
     pub fn size(&self, image: &Image) -> Result<u64> {
+        self.mirror(image)?;
         crate::DescriptorGraph::walk(image.target.clone(), &self.content)?
             .into_iter()
             .try_fold(0_u64, |total, descriptor| {
@@ -70,6 +169,9 @@ impl Images {
     /// # Errors
     /// Returns an error when referenced content is missing, corrupt, or malformed.
     pub fn usage(&self, images: &[Image]) -> Result<BTreeMap<String, ImageUsage>> {
+        for image in images {
+            self.mirror(image)?;
+        }
         let mut graphs = BTreeMap::new();
         for image in images {
             let target = image.target.digest().to_string();

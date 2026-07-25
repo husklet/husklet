@@ -1,7 +1,7 @@
-//! Exact legacy Docker-network plus single-container network contracts.
+//! Exact Docker-network plus single-container network contracts.
 
 use super::{registry, runner::Runner, volume};
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_client::{
     model::{
         Attachment, CreateContainer, EndpointConfig, EndpointsConfig, ExecConfig, ExecStart,
@@ -63,7 +63,7 @@ async fn docker(containers: &Containers, selected: Option<&str>) -> Result<(), E
         .into_iter()
         .map(|value| (value.id, value))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut reports = LegacyBatch::new("dockernet")?;
+    let mut reports = ScenarioBatch::new("dockernet")?;
     let work = TempDir::new()?;
     let archive = volume::archive(work.path())?;
     let socket = work.path().join("daemon.sock");

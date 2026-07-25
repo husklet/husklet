@@ -7,7 +7,6 @@ pub enum PipelineNative {
         /// The color-target formats the pipeline was built for — retained for draw-time attachment
         /// compatibility checks (the CPU oracle rejects a format mismatch); the frozen suite's single
         /// target already matches, so it is not yet consulted.
-        #[allow(dead_code)]
         color_formats: Vec<TextureFormat>,
         /// The `(group, binding)` slots this pipeline's shaders actually READ — the union of its vertex +
         /// fragment entry points' usage ([`crate::reflect`]), which is exactly the set the EXPLICIT pipeline

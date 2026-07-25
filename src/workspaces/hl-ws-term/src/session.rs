@@ -129,13 +129,12 @@ impl Session {
         out
     }
 
-    /// Parse the text format for compatibility. Invalid input produces an empty session; persistent
-    /// callers should use [`Session::open`] to receive corruption errors.
-    pub fn parse(text: &str) -> Session {
-        Self::parse_checked(text).unwrap_or_default()
-    }
-
-    fn parse_checked(text: &str) -> io::Result<Session> {
+    /// Parse a complete session document.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-data error when the version, structure, or values are malformed.
+    pub fn parse(text: &str) -> io::Result<Session> {
         // Tokenize the whole file by whitespace; prefix notation is self-delimiting.
         let toks: Vec<&str> = text
             .lines()
@@ -161,11 +160,6 @@ impl Session {
         Ok(Session { tabs })
     }
 
-    /// Load a workspace's session from disk (absent = empty session).
-    pub fn load(storage_dir: &Path) -> Session {
-        Self::open(storage_dir).unwrap_or_default()
-    }
-
     /// Opens a workspace session, distinguishing an absent session from unreadable or malformed state.
     ///
     /// # Errors
@@ -173,7 +167,7 @@ impl Session {
     /// Returns filesystem read failures and invalid layout documents.
     pub fn open(storage_dir: &Path) -> io::Result<Session> {
         match std::fs::read_to_string(Self::layout_path(storage_dir)) {
-            Ok(text) => Self::parse_checked(&text),
+            Ok(text) => Self::parse(&text),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Session::default()),
             Err(error) => Err(error),
         }
@@ -279,16 +273,10 @@ impl<'a> Layout<'a> {
                 if let Some(file) = history_file.as_deref() {
                     Session::history_path(Path::new(""), file)?;
                 }
-                // Optional third field: the pane's stable layout slot. Old session files have only
-                // cwd + history_file, where the NEXT token is a structural keyword (`leaf`/`hsplit`/`vsplit`/
-                // `tab`) or EOF — so only consume a third token when it is NOT one of those, i.e. a real slot.
-                let slot = match self.peek() {
-                    Some(t) if !matches!(t, "leaf" | "hsplit" | "vsplit" | "tab") => {
-                        self.next();
-                        Self::value(t)
-                    }
-                    _ => None,
-                };
+                let slot = Self::value(
+                    self.next()
+                        .ok_or_else(|| Layout::invalid("leaf is missing its slot"))?,
+                );
                 Ok(PaneNode::Leaf(Pane {
                     cwd,
                     history_file,

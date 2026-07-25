@@ -315,12 +315,12 @@ mod memory_layout_tests {
         );
 
         // memoryTypeBits covers exactly the advertised types (all memory is host RAM: any type can back
-        // any resource), and exposes more than the single legacy type (index 0).
+        // any resource), and exposes more than the single core-1.0 type (index 0).
         let bits = pd.all_memory_type_bits();
         assert_eq!(bits, (1u32 << types.len()) - 1);
         assert!(
             bits > 1,
-            "must expose more than the single legacy combined type"
+            "must expose more than the single core-1.0 combined type"
         );
     }
 }

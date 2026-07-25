@@ -206,14 +206,15 @@ mod tests {
         assert_eq!(nvmlDeviceGetMemoryInfo_v2(dev, mem2.as_mut_ptr() as *mut c_void), 0);
         assert_eq!(mem2[1], 6u64 << 30, "total @ byte offset 8");
 
-        // PCI info (all three versions share the body): the legacy bus id is field @0. Backed by a
+        // PCI info (all three versions share the body): the v1 bus id is field @0. Backed by a
         // `[u32; 24]` (96 bytes, 4-aligned) for the struct's u32 fields.
         for variant in [nvmlDeviceGetPciInfo as usize, nvmlDeviceGetPciInfo_v2 as usize, nvmlDeviceGetPciInfo_v3 as usize] {
             let f: extern "C" fn(*mut c_void, *mut c_void) -> i32 = unsafe { core::mem::transmute(variant) };
             let mut pinfo = [0u32; 24];
             assert_eq!(f(dev, pinfo.as_mut_ptr() as *mut c_void), 0);
-            let legacy = unsafe { std::ffi::CStr::from_ptr(pinfo.as_ptr() as *const c_char) }.to_string_lossy();
-            assert_eq!(legacy, "0000:00:00.0");
+            let bus_id_v1 =
+                unsafe { std::ffi::CStr::from_ptr(pinfo.as_ptr() as *const c_char) }.to_string_lossy();
+            assert_eq!(bus_id_v1, "0000:00:00.0");
         }
         // The extended PCI struct is an undocumented private layout → honestly unsupported.
         let mut ext = [0u8; 128];

@@ -2,27 +2,39 @@
 
 use crate::config::WorkspaceConfig;
 use crate::paths;
-use hl_container::{
-    Config, ContainerSpec, Containers, Devices, Guest, Isolation, Mount, Prune, Resources, Sandbox,
-};
+use hl_container::{Config, Containers, Devices};
 use hl_images::remote::{Auth, Registry};
 use hl_images::{Images, Platform, Reference, RuntimeOverrides};
 use hl_ws::Arch;
-use std::collections::BTreeMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+mod close;
+mod configuration;
 mod lifecycle;
+mod publication;
+mod restore;
 
-use lifecycle::{Lease, Peer, Shutdown};
+use crate::runtime::process::Peer;
+use close::ResultFile;
+use configuration::Configuration;
+use lifecycle::{Disposition, Lease, Shutdown};
+use publication::{ConfigurationIdentity as PublishedConfiguration, Protocol as PublishedProtocol};
+use restore::RestoreSummary;
 
 const CONTAINER: &str = "workspace";
 const SIGNATURE: &str = "husklet.workspace.signature";
-const PROTOCOL: &str = "1";
+const PROTOCOL: &str = "3";
 
 /// Owns the host process and socket serving one workspace's persistent execution domain.
 pub struct Domain {
     directory: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Close {
+    Kill,
+    Continue,
 }
 
 impl Domain {
@@ -34,6 +46,10 @@ impl Domain {
 
     pub fn socket(&self) -> PathBuf {
         self.directory.join("domain.sock")
+    }
+
+    fn control(&self) -> PathBuf {
+        self.directory.join("control.sock")
     }
 
     /// Starts the workspace domain process when needed and waits until its API accepts connections.
@@ -48,9 +64,11 @@ impl Domain {
                 PublishedConfiguration::new(&self.directory).validate(workspace)?;
                 return Ok(self.socket());
             }
-            Peer::new(connection)?.stop(std::time::Duration::from_secs(10), || {
-                std::os::unix::net::UnixStream::connect(self.socket())
-            })?;
+            Peer::new(connection)?.stop(
+                libc::SIGTERM,
+                std::time::Duration::from_secs(10),
+                || std::os::unix::net::UnixStream::connect(self.socket()),
+            )?;
             Lease::wait_available(
                 self.directory.join("domain.lock"),
                 std::time::Duration::from_secs(10),
@@ -88,6 +106,35 @@ impl Domain {
         self.wait_for_start(child, std::time::Duration::from_secs(180))
     }
 
+    /// Stops this workspace execution domain according to the user's close choice.
+    pub fn close(&self, choice: Close) -> io::Result<()> {
+        let connection = match std::os::unix::net::UnixStream::connect(self.socket()) {
+            Ok(connection) => connection,
+            Err(error) if Peer::offline(&error) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        match choice {
+            Close::Kill => {
+                let peer = Peer::new(connection)?;
+                Shutdown::request(&self.control(), Disposition::Kill)?;
+                peer.wait(std::time::Duration::from_secs(45), || {
+                    std::os::unix::net::UnixStream::connect(self.socket())
+                })
+            }
+            Close::Continue => {
+                let result = ResultFile::new(&self.directory);
+                result.clear()?;
+                drop(connection);
+                Shutdown::request(&self.control(), Disposition::Checkpoint)?;
+                result.wait(&self.socket(), std::time::Duration::from_secs(90))
+            }
+        }
+    }
+
+    pub fn take_restore_summary(workspace: &WorkspaceConfig) -> io::Result<Option<String>> {
+        RestoreSummary::new(workspace).take()
+    }
+
     fn wait_for_start(
         &self,
         mut child: std::process::Child,
@@ -122,25 +169,77 @@ impl Domain {
         tokio::fs::create_dir_all(&owner.directory).await?;
         let _lease = Lease::acquire(owner.directory.join("domain.lock"))?;
         let (containers, platform) = Runtime::open(workspace).await?;
-        Runtime::remove_legacy_terminals(&containers).await?;
-        Runtime::remove_stale_executions(&containers).await?;
+        let mut failures = Runtime::remove_stale_executions(&containers).await?;
         Runtime::ensure_container(&containers, workspace).await?;
+        failures.extend(Runtime::restore_checkpoints(&containers).await?);
+        RestoreSummary::new(workspace).publish(&failures)?;
         let configuration = PublishedConfiguration::new(&owner.directory);
         let protocol = PublishedProtocol::new(&owner.directory);
+        let close_result = ResultFile::new(&owner.directory);
+        close_result.clear()?;
         protocol.publish()?;
         configuration.publish(workspace)?;
         let server = hl_daemon::Daemon::new(containers.clone())
             .platform(platform)
             .release(hl_daemon::Release::new(env!("CARGO_PKG_VERSION")))
             .server(owner.socket());
+        let shutdown = Shutdown::bind(owner.control())?;
+        let cleanup = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let completed = std::sync::Arc::clone(&cleanup);
+        let stopping = containers.clone();
+        let stopped_workspace = workspace.clone();
         let served = server
-            .serve_with_shutdown(Shutdown::wait())
+            .serve_with_shutdown(async move {
+                loop {
+                    let disposition = shutdown.clone().wait().await;
+                    let docker = stopped_workspace
+                        .docker_sock
+                        .then(|| crate::runtime::resources::Daemon::new(&stopped_workspace));
+                    let stopped = match disposition {
+                        Disposition::Kill => {
+                            let docker = docker
+                                .map(|daemon| daemon.close(crate::runtime::resources::Close::Kill))
+                                .unwrap_or(Ok(()));
+                            let workspace =
+                                match crate::runtime::execution::PaneExecution::clear_all(
+                                    &stopped_workspace,
+                                ) {
+                                    Ok(()) => {
+                                        stopping.shutdown(std::time::Duration::from_secs(5)).await
+                                    }
+                                    Err(error) => {
+                                        Err(hl_container::Error::Runtime(error.to_string()))
+                                    }
+                                };
+                            docker.and_then(|()| workspace.map_err(io::Error::other))
+                        }
+                        Disposition::Checkpoint => {
+                            let workspace = Runtime::checkpoint(&stopping, docker.as_ref()).await;
+                            if let Err(error) = close_result.publish(&workspace) {
+                                if let Ok(mut result) = completed.lock() {
+                                    *result = Some(Err(error));
+                                }
+                                break;
+                            }
+                            if workspace.is_err() {
+                                continue;
+                            }
+                            workspace
+                        }
+                    };
+                    if let Ok(mut result) = completed.lock() {
+                        *result = Some(stopped);
+                    }
+                    break;
+                }
+            })
             .await
             .map_err(io::Error::other);
-        let stopped = containers
-            .shutdown(std::time::Duration::from_secs(5))
-            .await
-            .map_err(io::Error::other);
+        let stopped = cleanup
+            .lock()
+            .map_err(|_| io::Error::other("workspace cleanup result lock is poisoned"))?
+            .take()
+            .unwrap_or_else(|| Err(io::Error::other("workspace cleanup did not run")));
         let result = match (served, stopped) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
@@ -167,91 +266,57 @@ impl Domain {
     }
 }
 
-struct PublishedProtocol {
-    path: PathBuf,
-}
-
-impl PublishedProtocol {
-    fn new(directory: &Path) -> Self {
-        Self {
-            path: directory.join("protocol"),
-        }
-    }
-
-    fn publish(&self) -> io::Result<()> {
-        hl_fs::File::from(self.path.clone()).replace(PROTOCOL)
-    }
-
-    fn compatible(&self) -> io::Result<bool> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(value) => Ok(value.trim() == PROTOCOL),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error),
-        }
-    }
-
-    fn remove(&self) -> io::Result<()> {
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
-    }
-}
-
-struct PublishedConfiguration {
-    path: PathBuf,
-}
-
-impl PublishedConfiguration {
-    fn new(directory: &Path) -> Self {
-        Self {
-            path: directory.join("configuration.sha256"),
-        }
-    }
-
-    fn publish(&self, workspace: &WorkspaceConfig) -> io::Result<()> {
-        hl_fs::File::from(self.path.clone()).replace(Configuration::new(workspace).signature())
-    }
-
-    fn validate(&self, workspace: &WorkspaceConfig) -> io::Result<()> {
-        let effective = std::fs::read_to_string(&self.path).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("live workspace domain has no verifiable configuration identity: {error}"),
-            )
-        })?;
-        let requested = Configuration::new(workspace).signature();
-        if effective.trim() == requested {
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "workspace settings changed while its execution domain is running; stop the workspace runtime before reopening",
-            ))
-        }
-    }
-
-    fn remove(&self) -> io::Result<()> {
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
-    }
-}
-
 struct Runtime;
 
 impl Runtime {
+    async fn checkpoint(
+        containers: &Containers,
+        docker: Option<&crate::runtime::resources::Daemon>,
+    ) -> io::Result<()> {
+        containers
+            .require_checkpointable()
+            .await
+            .map_err(io::Error::other)?;
+        if let Some(daemon) = docker {
+            daemon.close(crate::runtime::resources::Close::Checkpoint)?;
+        }
+        let checkpoint = containers
+            .checkpoint_all(std::time::Duration::from_secs(30))
+            .await
+            .map_err(io::Error::other);
+        match checkpoint {
+            Ok(()) => Ok(()),
+            Err(checkpoint) => {
+                if let Some(daemon) = docker {
+                    if let Err(restart) = daemon.ensure() {
+                        return Err(io::Error::other(format!(
+                            "{checkpoint}; workspace Docker service restart failed: {restart}"
+                        )));
+                    }
+                }
+                Err(checkpoint)
+            }
+        }
+    }
+
     async fn open(workspace: &WorkspaceConfig) -> io::Result<(Containers, Platform)> {
-        let images = Images::open(paths::images_dir()).map_err(io::Error::other)?;
+        let external = Images::open(paths::images_dir()).map_err(io::Error::other)?;
         let platform = Self::platform(workspace.arch);
         let devices = Devices::new().with(crate::runtime::devices::Workspace::new(workspace)?);
-        let root = workspace.storage_dir(&paths::hl_root()).join("containers");
+        let workspace_root = workspace.storage_dir(&paths::hl_root());
+        let images = Images::workspace(
+            Images::open(workspace_root.join("images")).map_err(io::Error::other)?,
+            external,
+        );
+        let checkpoints = std::sync::Arc::new(
+            crate::runtime::checkpoint::WorkspaceCheckpoints::open(&workspace_root)
+                .map_err(io::Error::other)?,
+        );
+        let root = workspace_root.join("containers");
         let containers = Containers::builder(Config::new(root))
             .images(images)
             .devices(devices)
+            .checkpoints(checkpoints)
             .build()
             .await
             .map_err(io::Error::other)?;
@@ -266,24 +331,11 @@ impl Runtime {
         match containers.inspect(CONTAINER).await {
             Ok(container) => {
                 let stored = container.spec.labels.get(SIGNATURE);
-                let legacy = Configuration::new(workspace).legacy_signature();
-                let current = stored == Some(&signature);
-                let legacy_match = stored == Some(&legacy);
-                if !current && !legacy_match {
+                if stored != Some(&signature) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "workspace runtime configuration changed; reset its runtime before reopening",
                     ));
-                }
-                if legacy_match {
-                    containers
-                        .set_label(CONTAINER, SIGNATURE, &signature)
-                        .await
-                        .map_err(io::Error::other)?;
-                    hl_log::hl_info!(
-                        hl_log::tag::CONTAINER,
-                        "replaced legacy workspace configuration label with a digest"
-                    );
                 }
                 if !container.state.is_active() {
                     containers
@@ -327,170 +379,56 @@ impl Runtime {
         containers.start(CONTAINER).await.map_err(io::Error::other)
     }
 
-    async fn remove_legacy_terminals(containers: &Containers) -> io::Result<()> {
-        let removed = containers
-            .prune(&Prune::default().without_label(SIGNATURE))
-            .await
-            .map_err(io::Error::other)?;
-        if !removed.is_empty() {
-            hl_log::hl_info!(
-                hl_log::tag::CONTAINER,
-                "removed {} legacy workspace terminal containers",
-                removed.len()
-            );
-        }
-        Ok(())
-    }
-
-    async fn remove_stale_executions(containers: &Containers) -> io::Result<()> {
+    async fn remove_stale_executions(containers: &Containers) -> io::Result<Vec<String>> {
         let executions = containers.executions();
         let stale = executions.list().await.map_err(io::Error::other)?;
-        for execution in &stale {
+        let removable = stale
+            .iter()
+            .filter(|execution| execution.checkpoint.is_none())
+            .collect::<Vec<_>>();
+        for execution in &removable {
             executions
                 .remove(&execution.id)
                 .await
                 .map_err(io::Error::other)?;
         }
-        if !stale.is_empty() {
+        if !removable.is_empty() {
             hl_log::hl_info!(
                 hl_log::tag::CONTAINER,
                 "removed {} stale workspace executions",
-                stale.len()
+                removable.len()
             );
         }
-        Ok(())
+        Ok(Vec::new())
+    }
+
+    async fn restore_checkpoints(containers: &Containers) -> io::Result<Vec<String>> {
+        let mut failures = Vec::new();
+        for container in containers.list().await.map_err(io::Error::other)? {
+            if container.spec.name.as_deref() == Some(CONTAINER)
+                || container.state.is_active()
+                || container.checkpoint.is_none()
+            {
+                continue;
+            }
+            if let Err(error) = containers.start(container.id.as_str()).await {
+                failures.push(format!(
+                    "{}: {error}",
+                    container
+                        .spec
+                        .name
+                        .as_deref()
+                        .unwrap_or(container.id.as_str())
+                ));
+            }
+        }
+        Ok(failures)
     }
 
     fn platform(arch: Arch) -> Platform {
         match arch {
             Arch::Arm64 => Platform::linux_arm64(),
             Arch::Amd64 => Platform::linux_amd64(),
-        }
-    }
-}
-
-struct Configuration<'a>(&'a WorkspaceConfig);
-
-impl<'a> Configuration<'a> {
-    fn new(workspace: &'a WorkspaceConfig) -> Self {
-        Self(workspace)
-    }
-
-    fn container(&self, mut spec: ContainerSpec, signature: String) -> ContainerSpec {
-        spec = spec
-            .name(CONTAINER)
-            .hostname(self.hostname())
-            .label(SIGNATURE, signature)
-            .guest(match self.0.arch {
-                Arch::Arm64 => Guest::Aarch64,
-                Arch::Amd64 => Guest::X86_64,
-            })
-            .resources(Resources {
-                memory_bytes: self
-                    .0
-                    .memory_mb
-                    .map_or(0, |value| u64::from(value) * 1024 * 1024),
-                cpu_count: self.0.cpus.unwrap_or(0),
-                ..Resources::default()
-            })
-            .isolation(Isolation {
-                sandbox: Sandbox::Disabled,
-                network_isolated: false,
-                ..Isolation::default()
-            });
-        for mount in &self.0.mounts {
-            spec = spec.mount(if mount.ro {
-                Mount::read_only(&mount.host, &mount.container)
-            } else {
-                Mount::read_write(&mount.host, &mount.container)
-            });
-        }
-        spec
-    }
-
-    fn environment(&self) -> BTreeMap<String, String> {
-        let mut values = BTreeMap::from([
-            ("TERM".into(), "xterm-256color".into()),
-            ("HOME".into(), "/root".into()),
-            (
-                "PATH".into(),
-                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into(),
-            ),
-        ]);
-        values.extend(self.0.env.iter().cloned());
-        values
-    }
-
-    fn signature(&self) -> String {
-        use sha2::Digest as _;
-
-        let digest = sha2::Sha256::digest(self.legacy_signature().as_bytes());
-        let mut signature = String::with_capacity(digest.len() * 2);
-        for byte in digest {
-            use std::fmt::Write as _;
-            let _ = write!(signature, "{byte:02x}");
-        }
-        signature
-    }
-
-    fn legacy_signature(&self) -> String {
-        let mut value = String::new();
-        for item in [
-            self.0.image.as_str(),
-            self.0.arch.as_str(),
-            self.0.shell.as_deref().unwrap_or_default(),
-        ] {
-            Self::field(&mut value, item);
-        }
-        for (name, item) in &self.0.env {
-            Self::field(&mut value, name);
-            Self::field(&mut value, item);
-        }
-        for mount in &self.0.mounts {
-            Self::field(&mut value, &mount.host);
-            Self::field(&mut value, &mount.container);
-            Self::field(&mut value, if mount.ro { "ro" } else { "rw" });
-        }
-        for item in [
-            self.0
-                .cpus
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
-            self.0
-                .memory_mb
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
-            self.0.docker_sock.to_string(),
-            self.0.gui.to_string(),
-            format!("{:?}", self.0.vpn),
-            format!("{:?}", self.0.cuda),
-        ] {
-            Self::field(&mut value, &item);
-        }
-        value
-    }
-
-    fn field(output: &mut String, value: &str) {
-        use std::fmt::Write as _;
-        let _ = write!(output, "{}:{value}", value.len());
-    }
-
-    fn hostname(&self) -> String {
-        let value: String = self
-            .0
-            .name
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || character == '-' {
-                    character
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        match value.trim_matches('-') {
-            "" => "workspace".to_owned(),
-            value => value.to_owned(),
         }
     }
 }

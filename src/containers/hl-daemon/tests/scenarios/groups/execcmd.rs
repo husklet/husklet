@@ -1,4 +1,4 @@
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_container::{
     ContainerSpec, Containers, ExecSpec, ExecState, ExitStatus, Isolation, Process, Sandbox,
     Stream, Streams,
@@ -42,7 +42,7 @@ impl<'a> Execs<'a> {
             .into_iter()
             .map(|value| (value.id, value))
             .collect::<std::collections::BTreeMap<_, _>>();
-        let mut reports = LegacyBatch::new("execcmd")?;
+        let mut reports = ScenarioBatch::new("execcmd")?;
         let mut failures = Vec::new();
         for id in IDS {
             let scenario = &scenarios[id];

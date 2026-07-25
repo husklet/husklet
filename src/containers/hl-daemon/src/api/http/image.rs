@@ -4,7 +4,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hl_images::format::docker::{Archive, Limits};
-use hl_images::{ImageStore, Platform, Reference};
+use hl_images::{Platform, Reference};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::io::{Seek, SeekFrom};
@@ -98,7 +98,7 @@ impl DockerState {
     }
     async fn image_records(&self) -> ApiResult<Vec<hl_images::Image>> {
         let images = self.containers.images().map_err(ApiError::container)?;
-        tokio::task::spawn_blocking(move || images.metadata().list())
+        tokio::task::spawn_blocking(move || images.list())
             .await
             .map_err(ApiError::task)?
             .map(|images| {

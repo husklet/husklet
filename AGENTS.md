@@ -658,6 +658,12 @@ implementation, test seam, platform boundary, or stable contract.
 - Keep transport handlers thin: decode, call domain behavior, map errors, encode.
 - Reject unsupported meaningful input. Never accept configuration the runtime ignores.
 - Keep libraries free of product policy and demonstration binaries.
+- Until Husklet has a public release, internal persisted formats, unpublished Rust APIs, and unpublished
+  protocols have no compatibility contract. Change them directly, delete obsolete readers and migrations,
+  and fail clearly on stale data instead of carrying fallbacks. Do not retain permanent categories for
+  obsolete internal implementations. This does not permit dropping compatibility with external standards
+  Husklet implements, such as Docker, OCI, Wayland, CUDA, Vulkan, or host platform APIs; name those paths by
+  the exact protocol version, extension, or deprecated symbol they support.
 - Treat external executables, command-line flags, filesystem ownership, permission bits, and host utilities as
   platform adapters. A well-shaped entity around `Command` improves ownership but does not make the mechanism
   portable. Keep the domain contract platform-neutral, select the adapter at composition, and test capability

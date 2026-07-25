@@ -50,8 +50,7 @@ pub(crate) struct ProcessConfig {
     pub(crate) overlay: Option<OverlayConfig>,
     pub(crate) owners: Vec<(PathBuf, u32, u32)>,
     pub(crate) filesystem_generation: PathBuf,
-    pub(crate) checkpoint_directory: Option<PathBuf>,
-    pub(crate) restore_directory: Option<PathBuf>,
+    pub(crate) checkpoint: Option<CheckpointConfig>,
     pub(crate) guest: Guest,
     pub(crate) process: Process,
     pub(crate) hostname: Option<String>,
@@ -69,15 +68,31 @@ pub(crate) struct ProcessConfig {
     pub(crate) authorities: Vec<crate::Authority>,
 }
 
+#[derive(Clone)]
+pub(crate) struct CheckpointConfig {
+    pub(crate) image: Arc<dyn crate::CheckpointImage>,
+    pub(crate) restore: bool,
+}
+
+impl std::fmt::Debug for CheckpointConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CheckpointConfig")
+            .field("restore", &self.restore)
+            .finish_non_exhaustive()
+    }
+}
+
 #[async_trait]
 pub(crate) trait Running: Send + Sync {
     fn id(&self) -> u64;
     fn domain(&self) -> Option<hl_engine::Domain>;
+    fn checkpointable(&self) -> bool;
     async fn wait(self: Arc<Self>) -> Result<ExitStatus>;
     async fn signal(&self, signal: Signal) -> Result<()>;
     async fn pause(&self) -> Result<()>;
     async fn resume(&self) -> Result<()>;
-    async fn checkpoint(&self, timeout: std::time::Duration) -> Result<PathBuf>;
+    async fn checkpoint(&self, timeout: std::time::Duration) -> Result<()>;
     async fn resize(&self, size: Size) -> Result<()>;
     fn take_logs(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<LogChunk>>;
 }

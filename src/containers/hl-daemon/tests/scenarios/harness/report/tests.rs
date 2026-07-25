@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, fs};
 use crate::contract::Scenario;
 
 use super::{
-    Attempt, BatchMetadata, BatchReport, LegacyAttempt, LegacyBatch, ScenarioKey, ScenarioOutcome,
-    Status, Store, WorkflowAttempt, WorkflowKey, WorkflowOutcome,
+    Attempt, BatchMetadata, BatchReport, ScenarioAttempt, ScenarioBatch, ScenarioKey,
+    ScenarioOutcome, Status, Store, WorkflowAttempt, WorkflowKey, WorkflowOutcome,
 };
 
 fn outcome(id: &str) -> ScenarioOutcome {
@@ -168,7 +168,7 @@ pub(crate) fn workflow_evidence_is_append_only_resumable_and_summarized() {
 
 pub(crate) fn legacy_resume_filters_before_case_body() {
     let value = outcome("a");
-    let batch = LegacyBatch {
+    let batch = ScenarioBatch {
         category: "test".into(),
         archive: "sha256:engine".into(),
         store: None,
@@ -223,14 +223,14 @@ pub(crate) fn architecture_skip_writes_exactly_one_terminal_result() {
     let temp = tempfile::tempdir().unwrap();
     let store = Store::create(temp.path(), "single-terminal").unwrap();
     let results = store.root().join("results.jsonl");
-    let mut batch = LegacyBatch {
+    let mut batch = ScenarioBatch {
         category: "copy".into(),
         archive: "sha256:engine".into(),
         store: Some(store),
         recorded: BTreeMap::new(),
     };
     let scenario = Scenario::new("cpcoherence/example.amd", "alpine:3.20");
-    let attempt: LegacyAttempt = batch.begin(&scenario).unwrap().unwrap();
+    let attempt: ScenarioAttempt = batch.begin(&scenario).unwrap().unwrap();
     batch.skip(&scenario, attempt).unwrap();
     let raw = fs::read_to_string(results).unwrap();
     assert_eq!(raw.lines().count(), 1);

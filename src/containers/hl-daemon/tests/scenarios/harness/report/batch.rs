@@ -12,18 +12,18 @@ use super::{
     store::Store,
 };
 
-pub struct LegacyBatch {
+pub struct ScenarioBatch {
     pub(super) category: String,
     pub(super) archive: String,
     pub(super) store: Option<Store>,
     pub(super) recorded: BTreeMap<ScenarioKey, ScenarioOutcome>,
 }
-pub struct LegacyAttempt {
+pub struct ScenarioAttempt {
     key: ScenarioKey,
     started: Duration,
     timer: Instant,
 }
-impl LegacyBatch {
+impl ScenarioBatch {
     pub fn new(category: &str) -> io::Result<Self> {
         let store = Store::from_env()?;
         let recorded = store
@@ -38,7 +38,7 @@ impl LegacyBatch {
             recorded,
         })
     }
-    pub fn begin(&self, scenario: &Scenario) -> io::Result<Option<LegacyAttempt>> {
+    pub fn begin(&self, scenario: &Scenario) -> io::Result<Option<ScenarioAttempt>> {
         let key = ScenarioKey {
             scenario: scenario.id.into(),
             target: "arm64".into(),
@@ -62,7 +62,7 @@ impl LegacyBatch {
                 log_path: store.log_path(scenario.id).display().to_string(),
             })?;
         }
-        Ok(Some(LegacyAttempt {
+        Ok(Some(ScenarioAttempt {
             key,
             started,
             timer: Instant::now(),
@@ -71,7 +71,7 @@ impl LegacyBatch {
     pub fn complete(
         &mut self,
         scenario: &Scenario,
-        attempt: LegacyAttempt,
+        attempt: ScenarioAttempt,
         result: &Result<(), Box<dyn std::error::Error>>,
     ) -> io::Result<()> {
         let error = result.as_ref().err().map(ToString::to_string);
@@ -96,7 +96,7 @@ impl LegacyBatch {
     fn record(
         &mut self,
         scenario: &Scenario,
-        attempt: LegacyAttempt,
+        attempt: ScenarioAttempt,
         status: Status,
         error: Option<String>,
     ) -> io::Result<()> {
@@ -137,7 +137,7 @@ impl LegacyBatch {
         self.recorded.insert(outcome.key.clone(), outcome);
         Ok(())
     }
-    pub fn skip(&mut self, scenario: &Scenario, attempt: LegacyAttempt) -> io::Result<()> {
+    pub fn skip(&mut self, scenario: &Scenario, attempt: ScenarioAttempt) -> io::Result<()> {
         self.record(scenario, attempt, Status::ArchSkip, None)
     }
     pub fn finish(self, filters: Vec<String>) -> io::Result<()> {

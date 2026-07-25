@@ -96,7 +96,7 @@ fn store_persists_across_reload() {
         ))
         .unwrap();
     store
-        .upsert(WorkspaceConfig::new("legacy", "centos:7", Arch::Amd64))
+        .upsert(WorkspaceConfig::new("centos", "centos:7", Arch::Amd64))
         .unwrap();
     store
         .upsert(WorkspaceConfig::new(
@@ -109,7 +109,7 @@ fn store_persists_across_reload() {
     let reloaded = WorkspaceStore::load(&path).unwrap();
     assert_eq!(reloaded.all().len(), 2);
     assert_eq!(reloaded.get("ubuntu-dev").unwrap().image, "ubuntu:22.04");
-    assert_eq!(reloaded.get("legacy").unwrap().arch, Arch::Amd64);
+    assert_eq!(reloaded.get("centos").unwrap().arch, Arch::Amd64);
     let _ = std::fs::remove_file(&path);
 }
 
@@ -157,18 +157,6 @@ fn rich_config_roundtrips() {
 }
 
 #[test]
-fn legacy_tab_format_still_loads() {
-    let path = tmp_path("legacy-tab");
-    std::fs::write(&path, "# old\nubuntu-dev\tarm64\tubuntu:24.04\n").unwrap();
-    let store = WorkspaceStore::load(&path).unwrap();
-    let w = store.get("ubuntu-dev").unwrap();
-    assert_eq!(w.image, "ubuntu:24.04");
-    assert_eq!(w.arch, Arch::Arm64);
-    assert!(w.docker_sock, "legacy rows default docker_sock on");
-    let _ = std::fs::remove_file(&path);
-}
-
-#[test]
 fn store_remove() {
     let path = tmp_path("remove");
     let _ = std::fs::remove_file(&path);
@@ -209,6 +197,20 @@ fn malformed_store_is_reported_and_never_replaced() {
 
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(error.to_string().contains("line 4"), "{error}");
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn store_rejects_unversioned_tab_rows() {
+    let path = tmp_path("tab-row");
+    let original = b"runtime\tubuntu:24.04\tarm64\n";
+    std::fs::write(&path, original).unwrap();
+
+    let error = WorkspaceStore::load(&path).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("line 1"), "{error}");
     assert_eq!(std::fs::read(&path).unwrap(), original);
     let _ = std::fs::remove_file(path);
 }

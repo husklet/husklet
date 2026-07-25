@@ -92,7 +92,8 @@ impl ApiError {
             | ContainerError::Corrupt(_)
             | ContainerError::Io(_)
             | ContainerError::Json(_)
-            | ContainerError::Image(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | ContainerError::Image(_)
+            | ContainerError::Checkpoint(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self::new(status, message)
     }

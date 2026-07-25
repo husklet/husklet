@@ -94,8 +94,8 @@ impl Service {
 
     async fn append(&self, id: &JournalId, chunk: crate::LogChunk) -> bool {
         match self.logs.append(id, chunk.stream, &chunk.bytes).await {
-            Ok(_) => {
-                self.notify_output(id).await;
+            Ok(entry) => {
+                self.publish_output(id, entry).await;
                 true
             }
             Err(error) => {
@@ -117,6 +117,9 @@ impl Service {
         loop {
             let notified = io.notify.notified();
             tokio::pin!(notified);
+            if let Some(entry) = io.after(cursor) {
+                return Ok(Some(entry));
+            }
             if let Some(entry) = self.logs.after(id, cursor, 1).await?.into_iter().next() {
                 return Ok(Some(entry));
             }
@@ -147,9 +150,9 @@ impl Service {
         io
     }
 
-    async fn notify_output(&self, id: &JournalId) {
+    async fn publish_output(&self, id: &JournalId, entry: crate::Entry) {
         if let Some(io) = self.io.lock().await.get(id).cloned() {
-            io.notify.notify_waiters();
+            io.publish(entry);
         }
     }
 }

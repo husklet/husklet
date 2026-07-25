@@ -1,6 +1,6 @@
 //! `docker cp` direction and live-filesystem coherence compatibility.
 
-use crate::{contract::Target, report::LegacyBatch};
+use crate::{contract::Target, report::ScenarioBatch};
 use hl_container::{ContainerSpec, Containers, ExitStatus, Isolation, Limits, Process, Sandbox};
 use std::{io::Cursor, path::Path, time::Duration};
 
@@ -28,7 +28,7 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Er
         .chain(crate::coherence::group().scenarios)
         .map(|value| (value.id, value))
         .collect::<std::collections::BTreeMap<_, _>>();
-    let mut reports = LegacyBatch::new("copy")?;
+    let mut reports = ScenarioBatch::new("copy")?;
     let mut failures = Vec::new();
     for id in IDS {
         let scenario = &scenarios[id];

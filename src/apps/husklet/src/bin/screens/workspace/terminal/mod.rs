@@ -20,36 +20,17 @@ pub(crate) struct TermWin {
     overview_page: Option<screens::workspace::Page>,
 }
 
-pub(crate) struct PaneRegistry;
-
 pub(crate) struct PaneRegistration {
     terminal: glib::WeakRef<vte4::Terminal>,
     slot: String,
-    pid: Rc<Cell<i32>>,
 }
 
 impl PaneRegistration {
-    pub(crate) fn new(terminal: &vte4::Terminal, slot: String, pid: Rc<Cell<i32>>) -> Self {
+    pub(crate) fn new(terminal: &vte4::Terminal, slot: String) -> Self {
         Self {
             terminal: terminal.downgrade(),
             slot,
-            pid,
         }
-    }
-}
-
-impl PaneRegistry {
-    pub(crate) fn live(window: &TermWin) -> Vec<(String, Rc<Cell<i32>>)> {
-        window
-            .panes
-            .borrow()
-            .iter()
-            .filter_map(|pane| {
-                pane.terminal
-                    .upgrade()
-                    .map(|_| (pane.slot.clone(), pane.pid.clone()))
-            })
-            .collect()
     }
 }
 pub(crate) struct TabEntry {
@@ -257,25 +238,7 @@ impl TerminalWindow {
         }
         window.add_controller(keys);
 
-        // Persist layout and scrollback, then terminate each container-backed terminal session.
-        {
-            let tw = tw.clone();
-            window.connect_close_request(move |_| {
-                tw.closing.set(true);
-                if let Err(error) = WindowSession::new(&tw).save() {
-                    hl_log::hl_error!(
-                        hl_log::tag::RUNTIME,
-                        "failed to save terminal session for {}: {error}",
-                        tw.ws.name
-                    );
-                }
-                let live = PaneRegistry::live(&tw);
-                for (_slot, pid) in &live {
-                    ProcessGroup::new(pid.get()).hangup();
-                }
-                glib::Propagation::Proceed
-            });
-        }
+        CloseRequest::install(&window, &tw);
 
         Tabs::new(&tw).overview();
         // Restore the saved session (tabs + splits + per-pane history) if this workspace has one; else open a
@@ -290,6 +253,18 @@ impl TerminalWindow {
                     tw.ws.name
                 );
                 Tabs::new(&tw).terminal();
+                if let Some(terminal) = tw
+                    .stack
+                    .visible_child()
+                    .and_then(|page| TerminalPane::first(&page))
+                {
+                    terminal.feed(
+                        format!(
+                            "\r\n\x1b[31mworkspace restore incomplete: layout/history could not be restored: {error}\x1b[0m\r\n"
+                        )
+                        .as_bytes(),
+                    );
+                }
             }
         }
         // Debug: HL_TERM_TABS=N opens N total shell tabs (to verify exact equal-width tabs).
@@ -417,12 +392,14 @@ impl Url {
 
 use crate::*;
 
+mod close;
 mod launch;
 mod pane;
 mod search;
 mod slots;
 mod state;
 
+pub(crate) use close::*;
 pub(crate) use launch::*;
 pub(crate) use pane::*;
 pub(crate) use slots::*;

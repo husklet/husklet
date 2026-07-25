@@ -75,10 +75,10 @@ fn representative_stream() -> Vec<Cmd> {
             kind: ShaderPayloadKind::SpirV,
             spirv: vec![0x0723_0203, 0x0001_0000, 99],
         },
-        // A payload with neither magic classifies as LegacyMsl on decode.
+        // A payload with neither magic classifies as Msl on decode.
         Cmd::CreateShader {
             id: 11,
-            kind: ShaderPayloadKind::LegacyMsl,
+            kind: ShaderPayloadKind::Msl,
             spirv: vec![0x4141_4141, 0x4242_4242],
         },
         Cmd::CreateRenderPipeline(

@@ -2,9 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-const INVENTORY: &str = include_str!("golden/legacy.tests");
+const INVENTORY: &str = include_str!("golden/provenance.tests");
 const IMAGE_MANIFEST: &str = include_str!("golden/images.manifest");
-const SCENARIOS: &str = include_str!("golden/legacy.contracts");
+const SCENARIOS: &str = include_str!("golden/scenario.contracts");
 const EXPECTED: usize = 536;
 const EXPECTED_IMAGES: usize = 133;
 
@@ -23,7 +23,7 @@ impl Disposition {
             "transferred" => Ok(Self::Transferred),
             "superseded" => Ok(Self::Superseded),
             "pending" => Ok(Self::Pending),
-            _ => Err(format!("unknown legacy-test disposition {value:?}")),
+            _ => Err(format!("unknown provenance disposition {value:?}")),
         }
     }
 }
@@ -41,20 +41,22 @@ pub fn audit(strict: bool) -> Result<(), String> {
         let fields = line.split('\t').collect::<Vec<_>>();
         if fields.len() != 5 {
             return Err(format!(
-                "legacy.tests:{} has {} fields; expected five",
+                "provenance.tests:{} has {} fields; expected five",
                 index + 1,
                 fields.len()
             ));
         }
         validate_owner(fields[0], fields[1])
-            .map_err(|error| format!("legacy.tests:{}: {error}", index + 1))?;
+            .map_err(|error| format!("provenance.tests:{}: {error}", index + 1))?;
         let identity = format!("{}::{}", fields[1], fields[2]);
         if !identities.insert(identity.clone()) {
-            return Err(format!("duplicate legacy test identity {identity:?}"));
+            return Err(format!("duplicate provenance test identity {identity:?}"));
         }
         let disposition = Disposition::parse(fields[3])?;
         if disposition != Disposition::Pending && fields[4] == "-" {
-            return Err(format!("resolved legacy test {identity:?} has no proof"));
+            return Err(format!(
+                "resolved provenance test {identity:?} has no proof"
+            ));
         }
         if disposition == Disposition::Pending {
             pending.push(identity);
@@ -64,12 +66,12 @@ pub fn audit(strict: bool) -> Result<(), String> {
 
     if identities.len() != EXPECTED {
         return Err(format!(
-            "legacy test inventory has {} identities; expected {EXPECTED}",
+            "provenance test inventory has {} identities; expected {EXPECTED}",
             identities.len()
         ));
     }
     println!(
-        "legacy Rust tests: total={EXPECTED} mapped={} transferred={} superseded={} pending={}",
+        "provenance tests: total={EXPECTED} mapped={} transferred={} superseded={} pending={}",
         counts
             .get(&Disposition::Mapped)
             .copied()
@@ -142,11 +144,11 @@ fn audit_images() -> Result<(), String> {
     let mut contracts = BTreeSet::new();
     for (index, line) in SCENARIOS.lines().enumerate() {
         let value: serde_json::Value = serde_json::from_str(line)
-            .map_err(|error| format!("legacy.contracts:{}: {error}", index + 1))?;
+            .map_err(|error| format!("scenario.contracts:{}: {error}", index + 1))?;
         let image = value
             .get("image")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| format!("legacy.contracts:{} has no string image", index + 1))?;
+            .ok_or_else(|| format!("scenario.contracts:{} has no string image", index + 1))?;
         contracts.insert(image.to_owned());
     }
     let missing = contracts.difference(&manifest).cloned().collect::<Vec<_>>();

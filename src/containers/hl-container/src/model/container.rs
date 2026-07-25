@@ -2,7 +2,6 @@ use super::{ContainerSpec, Health, MountSource, Restart};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
-    path::PathBuf,
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -10,7 +9,8 @@ use std::{
 /// Durable native process-tree checkpoint associated with a stopped container.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Checkpoint {
-    pub directory: PathBuf,
+    #[serde(alias = "directory")]
+    pub namespace: String,
     pub created_at_ms: u64,
 }
 
@@ -123,13 +123,9 @@ pub struct Container {
     pub spec: ContainerSpec,
     pub state: ContainerState,
     pub created_at_ms: u64,
-    #[serde(default)]
     pub generation: u64,
-    #[serde(default)]
     pub restart: Restart,
-    #[serde(default)]
     pub health: Option<Health>,
-    #[serde(default)]
     pub checkpoint: Option<Checkpoint>,
 }
 
@@ -187,37 +183,6 @@ mod tests {
 
         assert_eq!(id.namespace(), "c-0123456789abcdef0123456789abcdef");
         assert!(id.namespace().len() <= 39);
-    }
-
-    #[test]
-    fn additive_runtime_fields_default_when_absent() {
-        let container = Container {
-            id: ContainerId::new(),
-            spec: ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")),
-            state: ContainerState::Exited {
-                result: ExitStatus::Code(0),
-                finished_at_ms: 1,
-            },
-            created_at_ms: 1,
-            generation: 4,
-            restart: Restart {
-                count: 2,
-                manually_stopped: true,
-            },
-            health: None,
-            checkpoint: None,
-        };
-        let mut value = serde_json::to_value(container).unwrap();
-        let object = value.as_object_mut().unwrap();
-        object.remove("generation");
-        object.remove("restart");
-        object.remove("health");
-        object.remove("checkpoint");
-        let decoded: Container = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.generation, 0);
-        assert_eq!(decoded.restart, Restart::default());
-        assert!(decoded.health.is_none());
-        assert!(decoded.checkpoint.is_none());
     }
 
     #[test]

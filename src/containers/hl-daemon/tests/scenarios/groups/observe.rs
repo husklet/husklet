@@ -1,5 +1,5 @@
 use crate::api::support::{raw_http, wait_for_path};
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_client::Client;
 use hl_container::{
     ContainerSpec, ContainerState, Containers, EndpointSpec, Isolation, Mount, NetworkSpec,
@@ -33,7 +33,7 @@ impl<'a> Observe<'a> {
             .into_iter()
             .map(|value| (value.id, value))
             .collect::<std::collections::BTreeMap<_, _>>();
-        let mut reports = LegacyBatch::new("observe")?;
+        let mut reports = ScenarioBatch::new("observe")?;
         let mut failures = Vec::new();
         for id in OBSERVE_IDS {
             let scenario = &scenarios[id];

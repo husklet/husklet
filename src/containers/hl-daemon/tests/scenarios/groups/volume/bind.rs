@@ -1,6 +1,6 @@
 use std::{env, path::Path};
 
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_client::Client;
 use tempfile::TempDir;
 
@@ -16,7 +16,7 @@ use super::{
 pub(super) async fn binds(
     client: &Client,
     scenarios: &std::collections::BTreeMap<&str, crate::contract::Scenario>,
-    reports: &mut LegacyBatch,
+    reports: &mut ScenarioBatch,
 ) -> Result<(), Error> {
     const CASES: [(&str, &str, &str, &str); 16] = [
         (

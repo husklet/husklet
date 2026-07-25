@@ -166,7 +166,7 @@ fn device_identity_pci_luid_and_properties() {
         CUDA_ERROR_INVALID_DEVICE
     );
 
-    // The legacy properties struct mirrors the attribute values.
+    // The original properties struct mirrors the attribute values.
     let mut prop = CuDevprop {
         max_threads_per_block: 0,
         max_threads_dim: [0; 3],

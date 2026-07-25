@@ -1,4 +1,4 @@
-//! Typed legacy network package-install contracts.
+//! Typed network package-install contracts.
 
 use crate::contract::Group;
 

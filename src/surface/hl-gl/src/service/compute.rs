@@ -7,7 +7,7 @@
 //! group, and the grid becomes a `Dispatch` inside a compute pass.
 //!
 //! HONEST LIMIT: the software CPU oracle runs only neutral KERNEL programs (classified by
-//! `KERNEL_MAGIC`); a GLSL-compute program lowers to a `LegacyMsl` shader payload the CPU executor
+//! `KERNEL_MAGIC`); a GLSL-compute program lowers to a `Msl` shader payload the CPU executor
 //! accepts but does not run (`ShaderModule::Spirv => Ok(())` in the dispatch path). So this drives the
 //! full lowering + submits the exact `Cmd` stream — asserted by the lowering tests — but the result is
 //! not materialized on the CPU oracle (a real Metal/Vulkan host would run the `cmain` kernel). The

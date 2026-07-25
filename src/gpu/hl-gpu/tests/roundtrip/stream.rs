@@ -44,7 +44,7 @@ fn shader_payload_kind_is_reclassified_by_neutral_magic() {
         },
         Cmd::CreateShader {
             id: 3,
-            kind: ShaderPayloadKind::LegacyMsl,
+            kind: ShaderPayloadKind::Msl,
             spirv: vec![0x0000_00ff, 1, 2],
         },
     ];
@@ -66,7 +66,7 @@ fn shader_payload_kind_is_reclassified_by_neutral_magic() {
     assert!(matches!(
         back[2],
         Cmd::CreateShader {
-            kind: ShaderPayloadKind::LegacyMsl,
+            kind: ShaderPayloadKind::Msl,
             ..
         }
     ));

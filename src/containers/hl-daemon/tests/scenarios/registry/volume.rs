@@ -1,4 +1,4 @@
-//! Typed legacy bind-volume contracts.
+//! Typed bind-volume contracts.
 
 use crate::contract::{Group, Scenario};
 

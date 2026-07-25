@@ -240,10 +240,10 @@ fn every_command() -> Vec<Cmd> {
             kind: ShaderPayloadKind::Glsl,
             spirv: gd.to_words(),
         },
-        // A payload with no magic classifies as LegacyMsl.
+        // A payload with no magic classifies as Msl.
         Cmd::CreateShader {
             id: 7,
-            kind: ShaderPayloadKind::LegacyMsl,
+            kind: ShaderPayloadKind::Msl,
             spirv: vec![0x4141_4141],
         },
         Cmd::CreateRenderPipeline(

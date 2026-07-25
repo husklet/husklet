@@ -2,6 +2,7 @@ use super::{
     now_ms, Arc, Error, Exec, ExecId, ExecSpec, ExecState, ExitStatus, Io, JournalId,
     ProcessConfig, Result, Service, Signal,
 };
+use crate::service::CheckpointConfig;
 
 impl Service {
     pub(crate) async fn create_exec(&self, reference: &str, mut spec: ExecSpec) -> Result<Exec> {
@@ -113,8 +114,13 @@ impl Service {
                 overlay,
                 owners,
                 filesystem_generation,
-                checkpoint_directory: None,
-                restore_directory: None,
+                checkpoint: Some(CheckpointConfig {
+                    image: self
+                        .checkpoints
+                        .open(&format!("exec-{}", exec.id))
+                        .map_err(Error::Checkpoint)?,
+                    restore: exec.checkpoint.is_some(),
+                }),
                 guest: container.spec.guest,
                 process: process_spec,
                 hostname: Some(container.hostname()),
@@ -143,6 +149,7 @@ impl Service {
             process_id: process.id(),
             started_at_ms: now_ms(),
         };
+        exec.checkpoint = None;
         if let Err(error) = self.execs.replace(&exec).await {
             let _ = process.signal(Signal::Kill).await;
             return Err(error);
@@ -174,6 +181,9 @@ impl Service {
             ),
         };
         if let Ok(mut exec) = self.inspect_exec(&id).await {
+            if exec.checkpoint.is_some() {
+                return;
+            }
             exec.state = ExecState::Exited {
                 result,
                 finished_at_ms: now_ms(),
@@ -204,6 +214,67 @@ impl Service {
         if let Some(io) = self.io.lock().await.remove(&JournalId::exec(id)) {
             io.finish();
         }
+    }
+
+    pub(crate) async fn checkpoint_execs(&self, timeout: std::time::Duration) -> Result<()> {
+        let ids = self.checkpointable_execs().await?;
+        for id in ids {
+            let _guard = self.operations.lock().await;
+            let mut exec = self.inspect_exec(&id).await?;
+            let process = self
+                .exec_live
+                .lock()
+                .await
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::Runtime(format!("running exec {id} has no runtime process"))
+                })?;
+            process.checkpoint(timeout).await?;
+            let checkpoint = crate::Checkpoint {
+                namespace: format!("exec-{id}"),
+                created_at_ms: now_ms(),
+            };
+            exec.state = ExecState::Created;
+            exec.checkpoint = Some(checkpoint);
+            self.execs.replace(&exec).await?;
+            self.exec_live.lock().await.remove(&id);
+            if let Some(io) = self.io.lock().await.remove(&JournalId::exec(id.clone())) {
+                io.finish();
+            }
+            if let Some(waiters) = self.exec_waiters.lock().await.get(&id) {
+                waiters.notify_waiters();
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn checkpointable_execs(&self) -> Result<Vec<crate::ExecId>> {
+        let ids = self
+            .execs
+            .list()
+            .await?
+            .into_iter()
+            .filter(|exec| exec.state.is_active())
+            .map(|exec| exec.id)
+            .collect::<Vec<_>>();
+        for id in &ids {
+            let process = self
+                .exec_live
+                .lock()
+                .await
+                .get(id)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::Runtime(format!("running exec {id} has no runtime process"))
+                })?;
+            if !process.checkpointable() {
+                return Err(Error::Runtime(format!(
+                    "running terminal {id} is not checkpointable by its runtime"
+                )));
+            }
+        }
+        Ok(ids)
     }
 
     pub(crate) async fn resize_exec(&self, id: &ExecId, size: crate::Size) -> Result<()> {

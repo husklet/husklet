@@ -204,7 +204,7 @@ pub extern "C" fn cudaGetDeviceProperties_v2(prop: *mut c_void, device: i32) -> 
     CUDART_SUCCESS
 }
 
-/// `cudaGetDeviceProperties(prop, device)` — the legacy alias; identical fill to the `_v2` form.
+/// `cudaGetDeviceProperties(prop, device)` — the unversioned alias; identical fill to the `_v2` form.
 #[no_mangle]
 pub extern "C" fn cudaGetDeviceProperties(prop: *mut c_void, device: i32) -> i32 {
     cudaGetDeviceProperties_v2(prop, device)

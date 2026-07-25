@@ -140,7 +140,7 @@ mod tests {
             __cudaUnregisterFatBinary(core::ptr::null_mut());
         }
 
-        // cudaGetDeviceProperties_v2 fills the same struct as the legacy alias: name @0, major/minor set.
+        // cudaGetDeviceProperties_v2 fills the same struct as the unversioned alias: name @0, major/minor set.
         let mut p2 = vec![0u8; 4096];
         assert_eq!(cudaGetDeviceProperties_v2(p2.as_mut_ptr() as *mut c_void, 0), 0);
         let n2 = unsafe { std::ffi::CStr::from_ptr(p2.as_ptr() as *const c_char) }

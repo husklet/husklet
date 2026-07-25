@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn glsl_and_legacy_graphics_shaders_are_accepted_opaquely_by_the_executor() {
     // The fixed-function CPU oracle rasterizes from the pipeline + vertex data, not the shader source, so a
-    // forwarded GLSL / legacy-MSL graphics module is an accepted opaque handle at the executor boundary.
+    // forwarded GLSL / MSL graphics module is an accepted opaque handle at the executor boundary.
     let gd = GlslDescriptor {
         stage: glsl_stage::VERTEX,
         entry: "vmain".into(),
@@ -21,7 +21,7 @@ fn glsl_and_legacy_graphics_shaders_are_accepted_opaquely_by_the_executor() {
             },
             Cmd::CreateShader {
                 id: 2,
-                kind: ShaderPayloadKind::LegacyMsl,
+                kind: ShaderPayloadKind::Msl,
                 spirv: vec![0x4141_4141],
             },
         ],

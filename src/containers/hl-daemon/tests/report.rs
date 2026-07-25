@@ -43,7 +43,7 @@ mod report;
 fn every_contract_has_stable_report_metadata() {
     let mut ids = std::collections::BTreeSet::new();
     let mut categories = std::collections::BTreeSet::new();
-    for line in include_str!("scenarios/golden/legacy.contracts").lines() {
+    for line in include_str!("scenarios/golden/scenario.contracts").lines() {
         let value: serde_json::Value = serde_json::from_str(line).unwrap();
         let id = value["id"].as_str().unwrap().to_owned();
         assert!(ids.insert(id.clone()), "duplicate report key {id}");

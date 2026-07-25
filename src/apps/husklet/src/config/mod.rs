@@ -147,7 +147,7 @@ pub struct CudaDevice {
     pub vram_mb: u32,
 }
 
-/// Terminal preferences persisted with one workspace. Missing legacy fields use built-in defaults.
+/// Terminal preferences persisted with one workspace. Unset fields use built-in defaults.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct TerminalPreferences {
     pub font_family: Option<String>,
@@ -319,10 +319,8 @@ impl WorkspaceConfig {
     }
 }
 
-/// A file-backed set of workspace configs (`~/.hl/workspaces.conf`), in a tiny dependency-free block format
-/// (`[workspace]` + `key = value` lines, repeatable `env`/`mount`) — no serde/toml. Still reads the legacy
-/// one-line `name<TAB>arch<TAB>image` rows so old config keeps working. Persists the full [`WorkspaceConfig`]
-/// (bare workspace + feature settings), byte-compatible with the format the old `hl-ws` store wrote.
+/// A file-backed set of workspace configs (`~/.hl/workspaces.conf`) in a small dependency-free block format:
+/// `[workspace]` sections with `key = value` fields and repeatable `env` and `mount` fields.
 #[derive(Debug)]
 pub struct WorkspaceStore {
     path: PathBuf,

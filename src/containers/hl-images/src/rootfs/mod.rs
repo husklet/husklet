@@ -13,16 +13,13 @@ use tree::{Changes, Tree};
 
 /// Durable identity of a pinned root filesystem. Persist this with container metadata.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Reference {
-    #[serde(default = "Reference::version")]
     version: u16,
     snapshot: Id,
-    #[serde(default)]
     baseline: Option<Id>,
     lease: String,
-    #[serde(default)]
     owned: bool,
-    #[serde(default)]
     overlay: Option<OverlayReference>,
 }
 
@@ -35,6 +32,7 @@ impl Reference {
 /// Durable identities for an overlay root. The lower tree remains immutable;
 /// the upper and work trees are private to this reference.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OverlayReference {
     lower: Id,
     upper: Id,
@@ -92,20 +90,6 @@ mod tests {
         assert!(view.work().is_dir());
         roots.release(&reference).unwrap();
         assert!(!view.work().exists());
-    }
-
-    #[test]
-    fn legacy_reference_deserializes_as_copied_version_one() {
-        let reference: Reference = serde_json::from_value(serde_json::json!({
-            "snapshot": "legacy-root",
-            "baseline": "legacy-lower",
-            "lease": "lease-1",
-            "owned": true
-        }))
-        .unwrap();
-        assert_eq!(reference.version, 1);
-        assert_eq!(reference.snapshot().as_str(), "legacy-root");
-        assert!(reference.overlay().is_none());
     }
 }
 

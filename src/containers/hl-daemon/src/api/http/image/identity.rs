@@ -1,6 +1,6 @@
 use super::{
     ApiError, ApiResult, BTreeMap, Deserialize, DockerState, Field, Fields, ImageDelete,
-    ImageHistory, ImageStore, InspectImage, Json, Path, Query, Reference, State, StatusCode,
+    ImageHistory, InspectImage, Json, Path, Query, Reference, State, StatusCode,
 };
 
 #[hl_design::adapter]
@@ -203,7 +203,7 @@ pub(in super::super) async fn remove(
     let images = state.containers.images().map_err(ApiError::container)?;
     let digest_for_lookup = digest.clone();
     let retained = tokio::task::spawn_blocking(move || {
-        images.metadata().list().map(|images| {
+        images.list().map(|images| {
             images
                 .iter()
                 .any(|image| image.target.digest().to_string() == digest_for_lookup)

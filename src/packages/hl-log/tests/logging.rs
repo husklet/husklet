@@ -37,6 +37,7 @@ impl TestSink {
         hl_log::Output::global().set(Box::new(Collector(s)));
         s
     }
+    #[cfg(not(feature = "disabled"))]
     fn lines(&self) -> Vec<String> {
         self.lines.lock().unwrap().clone()
     }

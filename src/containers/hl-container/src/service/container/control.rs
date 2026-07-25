@@ -225,9 +225,9 @@ impl Service {
             });
         }
         let process = self.live(&container).await?;
-        let directory = process.checkpoint(timeout).await?;
+        process.checkpoint(timeout).await?;
         let checkpoint = crate::Checkpoint {
-            directory,
+            namespace: container.id.to_string(),
             created_at_ms: now_ms(),
         };
         container.restart.manual();

@@ -1,4 +1,4 @@
-//! Typed legacy Docker network-command contracts.
+//! Typed Docker network-command contracts.
 
 use crate::contract::{Group, Scenario, Target};
 

@@ -1,6 +1,6 @@
-//! Exact legacy bind and managed-volume scenarios through the typed Docker client.
+//! Exact bind and managed-volume scenarios through the typed Docker client.
 
-use crate::report::LegacyBatch;
+use crate::report::ScenarioBatch;
 use hl_client::Client;
 use hl_container::{Config, Containers};
 use hl_daemon::Daemon;
@@ -44,7 +44,7 @@ pub(crate) async fn run() -> Result<(), Error> {
             .into_iter()
             .map(|value| (value.id, value))
             .collect::<std::collections::BTreeMap<_, _>>();
-        let mut reports = LegacyBatch::new("volumes")?;
+        let mut reports = ScenarioBatch::new("volumes")?;
         let result = bind::binds(&client, &scenarios, &mut reports).await;
         reports.finish(env::var("HL_VOLUME_CASE").ok().into_iter().collect())?;
         result

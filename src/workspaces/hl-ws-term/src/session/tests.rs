@@ -41,7 +41,7 @@ fn sample_session() -> Session {
 fn layout_roundtrips() {
     let s = sample_session();
     let text = s.serialize();
-    let back = Session::parse(&text);
+    let back = Session::parse(&text).unwrap();
     assert_eq!(back.tabs.len(), 2);
     assert_eq!(back.tabs[0].title, "shell 1");
     // ratio is formatted to 4 decimals; compare the structure with tolerance.
@@ -51,26 +51,6 @@ fn layout_roundtrips() {
     assert_eq!(back.tabs[0].root.leaves()[0].slot.as_deref(), Some("0"));
     assert_eq!(back.tabs[1].root.leaves()[0].slot.as_deref(), Some("1"));
     assert_eq!(back.tabs[1].root.leaves()[1].slot.as_deref(), Some("2"));
-}
-
-#[test]
-fn old_layout_without_slots_still_parses() {
-    // Pre-slot session files wrote only `leaf <cwd> <history>` (two fields). They must still load,
-    // with every pane's slot defaulting to None (a fresh slot is allocated on reopen).
-    let text = "version 1\ntab shell%201 leaf /root hist-0.txt\ntab build hsplit 0.5 leaf /a - leaf /b -\n";
-    let s = Session::parse(text);
-    assert_eq!(s.tabs.len(), 2);
-    assert_eq!(s.tabs[0].root.leaves()[0].cwd.as_deref(), Some("/root"));
-    assert_eq!(
-        s.tabs[0].root.leaves()[0].history_file.as_deref(),
-        Some("hist-0.txt")
-    );
-    assert_eq!(s.tabs[0].root.leaves()[0].slot, None);
-    let build = s.tabs[1].root.leaves();
-    assert_eq!(build.len(), 2);
-    assert_eq!(build[0].cwd.as_deref(), Some("/a"));
-    assert_eq!(build[1].cwd.as_deref(), Some("/b"));
-    assert!(build.iter().all(|p| p.slot.is_none()));
 }
 
 #[test]
@@ -85,7 +65,7 @@ fn escaping_survives_spaces_and_specials() {
             }),
         }],
     };
-    let back = Session::parse(&s.serialize());
+    let back = Session::parse(&s.serialize()).unwrap();
     assert_eq!(back.tabs[0].title, "a b%c");
     assert_eq!(
         back.tabs[0].root.leaves()[0].cwd.as_deref(),
@@ -95,23 +75,26 @@ fn escaping_survives_spaces_and_specials() {
 
 #[test]
 fn empty_and_absent_are_empty() {
-    assert_eq!(Session::parse("").tabs.len(), 0);
+    assert!(Session::parse("").is_err());
     assert_eq!(
-        Session::parse("# just a comment\nversion 1\n").tabs.len(),
+        Session::parse("# just a comment\nversion 1\n")
+            .unwrap()
+            .tabs
+            .len(),
         0
     );
 }
 
 #[test]
-fn compatibility_parser_rejects_the_whole_malformed_layout() {
-    let session =
+fn parser_rejects_the_whole_malformed_layout() {
+    let result =
         Session::parse("version 1\ntab valid leaf /ok hist 7\ntab broken hsplit nope leaf /a -\n");
-    assert!(session.tabs.is_empty());
+    assert!(result.is_err());
 }
 
 #[test]
 fn malformed_percent_escape_is_preserved() {
-    let session = Session::parse("version 1\ntab bad%zz leaf /tmp - -");
+    let session = Session::parse("version 1\ntab bad%zz leaf /tmp - -").unwrap();
     assert_eq!(session.tabs[0].title, "bad%zz");
 }
 
@@ -145,10 +128,10 @@ fn save_load_via_disk() {
     let _ = std::fs::remove_dir_all(&dir);
     let s = sample_session();
     s.save(&dir).unwrap();
-    let back = Session::load(&dir);
+    let back = Session::open(&dir).unwrap();
     assert_eq!(back, s);
     Session::clear(&dir).unwrap();
-    assert_eq!(Session::load(&dir), Session::default());
+    assert_eq!(Session::open(&dir).unwrap(), Session::default());
 }
 
 #[test]

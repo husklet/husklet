@@ -52,7 +52,6 @@ impl Disk {
         file.write_all(&timestamp_ms.to_le_bytes())?;
         file.write_all(&length.to_le_bytes())?;
         file.write_all(bytes)?;
-        file.sync_data()?;
         index.push(offset);
         Ok(Entry {
             sequence,

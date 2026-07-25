@@ -17,7 +17,7 @@ fn nonascii_title_and_cwd_roundtrip() {
             }),
         }],
     };
-    let back = Session::parse(&s.serialize());
+    let back = Session::parse(&s.serialize()).unwrap();
     assert_eq!(
         back.tabs[0].title, "café ☕",
         "title must survive round-trip"
@@ -51,7 +51,7 @@ fn percent_before_literal_multibyte_does_not_panic() {
         WorkingDirectory::from_osc7("file://h/%aé").is_some()
             || WorkingDirectory::from_osc7("file://h/%aé").is_none()
     );
-    let _ = Session::parse("version 1\ntab %aé leaf /%zé - -\n");
+    let _ = Session::parse("version 1\ntab %aé leaf /%zé - -\n").unwrap();
 }
 
 // --- VT: SGR colon-grouped underline style must not leak the style digit as a separate SGR code ---

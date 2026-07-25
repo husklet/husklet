@@ -31,11 +31,7 @@ pub use application::{DisplayConfig, NativeApplication};
 pub struct MetalWindow {
     window: Retained<NSWindow>,
     layer: Retained<CAMetalLayer>,
-    /// Device pixels per point (`backingScaleFactor`); the layer drawable is sized `size * scale`.
-    #[allow(dead_code)] // read by pixel_size (the retina readback helper)
-    scale: f64,
     /// Logical surface size in points (window content size).
-    #[allow(dead_code)] // read by pixel_size (the retina readback helper)
     size: Cell<(u32, u32)>,
     /// Requested AppKit full-screen state. Kept separately because `toggleFullScreen` transitions
     /// asynchronously and the style-mask bit does not change immediately.
@@ -109,7 +105,7 @@ impl MetalWindow {
                 false,
             )
         };
-        // `MetalWindow` owns a retained NSWindow. AppKit's legacy release-on-close policy would release
+        // `MetalWindow` owns a retained NSWindow. AppKit's release-on-close policy would release
         // the same object when an xdg_popup is dismissed, then objc2 would release the retained handle
         // again when `MetalWindow` drops (observed as EXC_BAD_ACCESS at autorelease-pool drain).
         unsafe { window.setReleasedWhenClosed(false) };
@@ -198,7 +194,6 @@ impl MetalWindow {
         MetalWindow {
             window,
             layer,
-            scale,
             size: Cell::new((w, h)),
             fullscreen: Cell::new(false),
             maximized: Cell::new(false),
@@ -360,15 +355,6 @@ impl MetalWindow {
         origin.x += offset;
         origin.y -= offset;
         self.set_screen_origin(origin);
-    }
-
-    /// Device-pixel size of the drawable (`size * scale`).
-    #[allow(dead_code)] // helper for reading back a windowed frame at device resolution
-    pub fn pixel_size(&self) -> (u32, u32) {
-        (
-            (self.size.get().0 as f64 * self.scale).round() as u32,
-            (self.size.get().1 as f64 * self.scale).round() as u32,
-        )
     }
 
     /// Keep the host frame in lockstep with the committed Wayland logical size. XDG maximize/fullscreen

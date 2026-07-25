@@ -2,7 +2,7 @@
  * whose vertex data lives in CLIENT memory (a stack array), with NO vertex buffer object bound.
  *
  * The counterpart of `gl_geometry.c`: that program draws from a VBO (glGenBuffers/glBindBuffer/
- * glBufferData); THIS one draws exactly as weston-simple-egl and legacy/immediate-ish GL apps do —
+ * glBufferData); THIS one draws exactly as weston-simple-egl and immediate-mode-style GL apps do —
  * `glVertexAttribPointer(index, size, type, normalized, stride, ptr)` where `ptr` points into a local
  * array and buffer 0 is bound (no glGenBuffers for vertices at all). Before the client-array lowering the
  * shim emitted a pipeline that needed vertex buffer slot 0 to be set but never set it, so the executor

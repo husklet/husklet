@@ -94,7 +94,7 @@ impl SeatHandler for HlState {
     fn focus_changed(&mut self, _seat: &Seat<HlState>, _focused: Option<&WlSurface>) {}
 
     /// The focused client set the pointer cursor. A `wp_cursor_shape_device_v1.set_shape` arrives here as
-    /// [`CursorImageStatus::Named`] (Smithay decoded the shape enum to a `CursorIcon`); a legacy
+    /// [`CursorImageStatus::Named`] (Smithay decoded the shape enum to a `CursorIcon`); a client-provided
     /// `wl_pointer.set_cursor` with a surface arrives as `Surface`, and hiding it as `Hidden`. Headless there
     /// is no on-screen cursor to repaint, but recording the requested NAMED shape into [`Observations`] is
     /// the observable proof the compositor honoured `wp_cursor_shape` (it carries no reply event), and lets a

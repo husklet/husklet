@@ -264,6 +264,8 @@ make that group foreground before the program starts. The guest must observe all
 - foreground/background transitions, `SIGTTIN`, `SIGTTOU`, `SIGTSTP`, `SIGCONT`, and hangup semantics match
   Linux;
 - forked and executed descendants inherit the session and controlling terminal normally;
+- every guest write to the terminal becomes readable by the host immediately, including a single byte
+  without a newline; line buffering is application policy, not an engine transport policy;
 - resize updates the terminal and delivers `SIGWINCH` to its foreground process group;
 - closing the final host terminal handle produces EOF/hangup and deterministic process cleanup.
 
@@ -272,9 +274,19 @@ machine domain. On 2026-07-20 `interactive_shell_owns_a_controlling_terminal` pa
 `/dev/pts/0`, `isatty(0)` succeeded, Bash enabled job control, and `fg` completed a real foreground handoff.
 The current macOS engine still fails `process_inventory_reports_terminal_and_foreground_group`: `ps` reports
 `TTY=?`, `PGID=1`, and `TPGID=-1` for that same working shell. The remaining proven defect is therefore the
-engine's guest process/proc metadata, not PTY byte transport or basic foreground job control. Full completion
-still requires signal, hangup, inheritance, and resize conformance for
-`ProcessSpec { domain: Some(existing), terminal: Some(size) }`; no single shell probe proves those contracts.
+engine's guest process/proc metadata.
+
+On 2026-07-24, `hl-engine 0.1.28` exposed a separate terminal-output defect. Husklet measured each input byte
+crossing VTE, its worker, the Docker upgrade, the daemon, and `Terminal::write` in under one millisecond.
+Kernel PTY echo from `cat` returned a single byte immediately. Bash Readline consumed the byte with the slave
+in `-icanon -echo` mode, but its own one-byte redisplay write did not become readable from the terminal
+master until a later newline or write. The engine must add a native regression test that launches an
+interactive Bash, writes one ordinary character, and reads that character back without sending Enter.
+Disabling Readline, locally echoing input, or replacing Bash with `sh` is not compatible behavior.
+
+Full completion still requires unbuffered terminal writes plus signal, hangup, inheritance, and resize
+conformance for `ProcessSpec { domain: Some(existing), terminal: Some(size) }`; no single shell probe proves
+those contracts.
 
 ### Executable files remain executable across filesystem layers
 
@@ -444,7 +456,7 @@ it must not learn how the host service was launched. Provider preparation fails 
 implementation is unavailable.
 
 Engine distribution must also be explicit. A library may locate artifacts relative to its own verified
-distribution, but it must not search Husklet bundles, `~/.hl`, `PATH`, or legacy executable names. Prefer an
+distribution, but it must not search Husklet bundles, `~/.hl`, `PATH`, or obsolete executable names. Prefer an
 engine builder/configuration value that identifies the backend distribution and verifies architecture,
 version, executable/library identity, permissions, and signing requirements before launch. Platform-specific
 resolution stays in the backend adapter; the public engine contract remains portable.

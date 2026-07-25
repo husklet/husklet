@@ -76,7 +76,10 @@ pub struct Scenario {
     pub service: Option<Service>,
 }
 
-#[allow(dead_code, reason = "builders are consumed as legacy groups transfer")]
+#[allow(
+    dead_code,
+    reason = "builders are consumed as scenario groups transfer"
+)]
 impl Scenario {
     pub fn new(id: &'static str, image: &'static str) -> Self {
         Self {

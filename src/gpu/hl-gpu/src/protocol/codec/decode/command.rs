@@ -21,7 +21,7 @@ impl Cmd {
                 //   * SPIRV_MAGIC (0x07230203)  → SpirV     (translated Vulkan modules)
                 //   * KERNEL_MAGIC (0xDD6B0001) → PtxKernel (neutral kernel descriptor)
                 //   * GLSL_MAGIC  (0xDD670001)  → Glsl      (forwarded GLSL descriptor, WIRE_VERSION 6)
-                //   * anything else             → LegacyMsl (already-translated MSL words)
+                //   * anything else             → Msl (already-translated MSL words)
                 // MSL text words never collide with these magics (both decode to non-ASCII byte runs), so
                 // the inference is unambiguous for every payload that actually crosses the ring.
                 let id = d.u32()?;
@@ -30,7 +30,7 @@ impl Cmd {
                     Some(SPIRV_MAGIC) => ShaderPayloadKind::SpirV,
                     Some(w) if w == KERNEL_MAGIC => ShaderPayloadKind::PtxKernel,
                     Some(w) if w == GLSL_MAGIC => ShaderPayloadKind::Glsl,
-                    _ => ShaderPayloadKind::LegacyMsl,
+                    _ => ShaderPayloadKind::Msl,
                 };
                 Cmd::CreateShader { id, kind, spirv }
             }

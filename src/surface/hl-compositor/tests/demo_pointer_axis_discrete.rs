@@ -8,7 +8,7 @@
 //!   * `wl_pointer.axis` with the EXACT smooth values (+15 vertical, -10 horizontal — sign preserved);
 //!   * `wl_pointer.axis_source(wheel)`;
 //!   * the discrete notch on each axis — `wl_pointer.axis_value120` (client v8+, 120 units = one notch)
-//!     or the legacy `wl_pointer.axis_discrete` (v5-7), with the exact signed step count.
+//!     or `wl_pointer.axis_discrete` (v5-7), with the exact signed step count.
 //!
 //! Proves the compositor's wheel framing is complete: a toolkit that page-scrolls on discrete notches
 //! (not accumulated smooth deltas) sees a coherent, correctly-signed, single-frame wheel event.
@@ -53,7 +53,7 @@ enum PtrEv {
     Source(u32), // axis_source as its wire discriminant
     V120(i32),   // axis_value120 vertical
     H120(i32),
-    Discrete(u32, i32), // axis_discrete (axis wire, steps) — legacy v5-7 fallback
+    Discrete(u32, i32), // axis_discrete (axis wire, steps) — v5-7 form
     Frame,
 }
 
@@ -163,7 +163,7 @@ fn pointer_axis_discrete() {
         wheel.contains(&PtrEv::Source(u32::from(AxisSource::Wheel))),
         "axis_source(wheel) delivered, got {wheel:?}"
     );
-    // Discrete notch: value120 (v8+) OR the legacy axis_discrete (v5-7). Accept either, exact + signed.
+    // Discrete notch: value120 (v8+) OR axis_discrete (v5-7). Accept either, exact + signed.
     let v_notch = wheel.contains(&PtrEv::V120(V120))
         || wheel.contains(&PtrEv::Discrete(u32::from(Axis::VerticalScroll), 1));
     let h_notch = wheel.contains(&PtrEv::H120(H120))

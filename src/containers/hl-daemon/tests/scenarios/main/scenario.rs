@@ -172,7 +172,7 @@ pub(super) async fn build() -> Result<(), Box<dyn std::error::Error>> {
     let work = TempDir::new()?;
     let containers = containers_for(work.path()).await?;
     let scenarios = registry::build::group().scenarios;
-    let mut reports = report::LegacyBatch::new("buildcmd")?;
+    let mut reports = report::ScenarioBatch::new("buildcmd")?;
     let mut attempts = Vec::new();
     for scenario in &scenarios {
         if let Some(attempt) = reports.begin(scenario)? {

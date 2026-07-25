@@ -6,6 +6,7 @@ impl Images {
     /// # Errors
     /// Returns an error for missing, malformed, or platform-incompatible image content.
     pub fn details(&self, image: &Image, platform: &Platform) -> Result<Metadata> {
+        self.mirror(image)?;
         let root = self.content.read_document(&image.target)?;
         let manifest = if image.target.is_index() {
             serde_json::from_slice::<IndexDocument>(&root)?.select_platform(platform)?

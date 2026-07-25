@@ -113,6 +113,7 @@ impl Input {
 
 pub(crate) struct Io {
     pub(crate) notify: tokio::sync::Notify,
+    live: std::sync::Mutex<std::collections::VecDeque<Entry>>,
     done: std::sync::atomic::AtomicBool,
     stdin: bool,
     input: tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>,
@@ -120,10 +121,13 @@ pub(crate) struct Io {
 }
 
 impl Io {
+    const LIVE_CAPACITY: usize = 1_024;
+
     pub(crate) fn new(stdin: bool) -> Self {
         let (input, receiver) = tokio::sync::mpsc::channel(64);
         Self {
             notify: tokio::sync::Notify::new(),
+            live: std::sync::Mutex::new(std::collections::VecDeque::new()),
             done: std::sync::atomic::AtomicBool::new(false),
             stdin,
             input: tokio::sync::Mutex::new(stdin.then_some(input)),
@@ -167,5 +171,48 @@ impl Io {
 
     pub(crate) fn is_done(&self) -> bool {
         self.done.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn publish(&self, entry: Entry) {
+        let mut live = self
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        live.push_back(entry);
+        if live.len() > Self::LIVE_CAPACITY {
+            live.pop_front();
+        }
+        drop(live);
+        self.notify.notify_waiters();
+    }
+
+    pub(crate) fn after(&self, cursor: u64) -> Option<Entry> {
+        let next = cursor.checked_add(1)?;
+        self.live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|entry| entry.sequence == next)
+            .cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Io;
+    use crate::{Entry, Stream};
+
+    #[test]
+    fn live_entries_are_available_without_reopening_the_journal() {
+        let io = Io::new(false);
+        io.publish(Entry {
+            sequence: 8,
+            timestamp_ms: 1,
+            stream: Stream::Stdout,
+            bytes: b"x".to_vec(),
+        });
+
+        assert_eq!(io.after(7).unwrap().bytes, b"x");
+        assert!(io.after(8).is_none());
     }
 }

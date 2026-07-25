@@ -6,7 +6,7 @@ impl OutputHandler for HlState {}
 /// A client created a `wp_fractional_scale_v1` for a surface. Tell it the compositor's preferred
 /// fractional render scale so it can rasterize crisply on HiDPI without integer-only
 /// `wl_surface.set_buffer_scale`. We source the scale from the primary output's scale (consistent with the
-/// legacy integer `wl_output.scale`); smithay serializes it as `round(scale × 120)`.
+/// integer `wl_output.scale`); smithay serializes it as `round(scale × 120)`.
 impl FractionalScaleHandler for HlState {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
         // Source the preferred scale from the surface's OWN output (its selected output, else the primary),

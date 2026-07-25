@@ -19,9 +19,11 @@ VERSION="${1:-0.1.0}"
 export HL_VERSION="${HL_VERSION:-$VERSION}"
 BUILD_TARGET="${CARGO_TARGET_DIR:-$ROOT/target-macos}"
 BUNDLE_TARGET="${HL_BUNDLE_TARGET:-$ROOT/target}"
-APP="$BUNDLE_TARGET/Husklet.app"
+FINAL_APP="$BUNDLE_TARGET/Husklet.app"
+APP="$BUNDLE_TARGET/.Husklet.app.build.$$"
 C="$APP/Contents"; MACOS="$C/MacOS"; RES="$C/Resources"; FW="$C/Frameworks"
-ENT="${HL_ENGINE_ENTITLEMENTS:-$ROOT/../engine/packaging/macos/jit.entitlements}"
+ENT="${HL_ENGINE_ENTITLEMENTS:-$ROOT/src/apps/husklet/package/engine.entitlements}"
+trap 'rm -rf "$APP"' EXIT
 
 log() { printf '\033[1;34m[bundle]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[bundle] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -30,44 +32,18 @@ die() { printf '\033[1;31m[bundle] %s\033[0m\n' "$*" >&2; exit 1; }
 [ -n "${HL_GTK4:-}" ] || die "run inside the nix dev shell: nix develop \"path:$ROOT/nix\" --command tools/bundle.sh"
 command -v dylibbundler >/dev/null || die "dylibbundler not found (nix dev shell)"
 
-# Fail before Cargo's linker invocation when the Rust bindings and engine archive were packaged from
-# different revisions. The linker error is enormous and hides the dependency contract violation.
-PACKAGED_ENGINE="$ROOT/../engine/build/package/macos-aarch64/libhl-engine.a"
-EMBEDDED_ENGINE="$ROOT/../engine/pkgs/rust/assets/lib/aarch64-apple-darwin/libhl-engine.a"
-if [ -n "${HL_ENGINE_ARCHIVE:-}" ]; then
-  ENGINE_ARCHIVE="$HL_ENGINE_ARCHIVE"
-elif [ -f "$PACKAGED_ENGINE" ]; then
-  ENGINE_ARCHIVE="$PACKAGED_ENGINE"
-else
-  ENGINE_ARCHIVE="$EMBEDDED_ENGINE"
-fi
-[ -f "$ENGINE_ARCHIVE" ] || die "hl-engine archive missing: $ENGINE_ARCHIVE"
-ENGINE_LIB_DIR="$(cd "$(dirname "$ENGINE_ARCHIVE")" && pwd)"
-ENGINE_SYMBOLS="$(mktemp -t husklet-engine-symbols.XXXXXX)"
-trap 'rm -f "$ENGINE_SYMBOLS"' EXIT
-nm -gU "$ENGINE_ARCHIVE" > "$ENGINE_SYMBOLS"
-for symbol in \
-  hl_activation_start_with_transport \
-  hl_activation_start_terminal_with_transport \
-  hl_engine_guest_fd_limit
-do
-  grep -Fq " _${symbol}" "$ENGINE_SYMBOLS" || \
-    die "hl-engine archive is incompatible with its Rust API: missing $symbol ($ENGINE_ARCHIVE)"
-done
-rm -f "$ENGINE_SYMBOLS"
-trap - EXIT
-
-# 1. Release product binaries. Build both against the exact archive validated above; otherwise Cargo may
-# select an older archive embedded in the Rust crate and fail late with a wall of missing ABI symbols.
+# 1. Release product binaries. Cargo links the native archive shipped by the selected `hl-engine` crate,
+# keeping the Rust API and native ABI on one published version.
 log "building release husklet and hl-daemon"
-( cd "$ROOT" && export RUSTFLAGS="-L native=$ENGINE_LIB_DIR -L native=$HL_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" && \
+( cd "$ROOT" && export RUSTFLAGS="-L native=$HL_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" && \
     cargo build --release -p hl-daemon && \
     cargo build --release -p husklet --features gui --bin husklet )
 [ -f "$ENT" ] || die "engine entitlements missing at $ENT"
 
-# 2. Skeleton.
+# 2. Skeleton. Assemble beside the installed bundle so a running or newly
+# launched application never observes a partially relocated dependency graph.
 log "laying out bundle skeleton"
-chmod -R u+w "$APP" 2>/dev/null || true   # nix-store copies are read-only; make removable
+chmod -R u+w "$APP" 2>/dev/null || true
 rm -rf "$APP"
 mkdir -p "$MACOS" "$RES" "$FW"
 cp "$BUILD_TARGET/release/husklet" "$MACOS/husklet"
@@ -279,4 +255,8 @@ if [ "$SIGN_ID" != "-" ]; then
 fi
 
 SIZE="$(du -sh "$APP" | cut -f1)"
-log "done -> $APP ($SIZE)"
+chmod -R u+w "$FINAL_APP" 2>/dev/null || true
+rm -rf "$FINAL_APP"
+mv "$APP" "$FINAL_APP"
+trap - EXIT
+log "done -> $FINAL_APP ($SIZE)"

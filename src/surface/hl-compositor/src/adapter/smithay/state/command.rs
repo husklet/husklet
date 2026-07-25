@@ -55,7 +55,7 @@ pub enum InputCommand {
     /// notch count. `horizontal`/`vertical` are the smooth logical amounts; `h120`/`v120` the
     /// high-resolution discrete steps (120 units = one wheel detent, the `wl_pointer` v8 convention).
     /// Delivered as `wl_pointer.axis` (smooth) + `axis_source(wheel)` + `axis_value120` (client v8+, or
-    /// the legacy `axis_discrete` on v5-7), all grouped in ONE `wl_pointer.frame`.
+    /// `axis_discrete` on v5-7), all grouped in ONE `wl_pointer.frame`.
     PointerAxisDiscrete {
         horizontal: f64,
         vertical: f64,

@@ -39,11 +39,8 @@ pub struct Mount {
     pub target: PathBuf,
     pub access: Access,
     pub populate: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subpath: Option<PathBuf>,
-    #[serde(default)]
     pub propagation: BindPropagation,
-    #[serde(default = "recursive")]
     pub recursive: bool,
 }
 
@@ -166,10 +163,6 @@ impl Mount {
         self.propagation = value;
         self
     }
-}
-
-const fn recursive() -> bool {
-    true
 }
 
 /// Runtime-only mount with its managed source resolved to a current host path.

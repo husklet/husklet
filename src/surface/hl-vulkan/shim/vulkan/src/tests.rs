@@ -150,7 +150,7 @@ fn device_buffer_memory_requirements_reports_size_and_alias_matches_base() {
     assert_eq!(base.memory_requirements.memory_type_bits, want_bits);
     assert!(
         want_bits > 1,
-        "must expose more than the single legacy type (index 0)"
+        "must expose more than the single core-1.0 type (index 0)"
     );
 }
 

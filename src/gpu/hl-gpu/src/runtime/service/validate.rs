@@ -74,7 +74,7 @@ pub fn validate(limits: &Limits, frame_bytes: usize, cmds: &[Cmd]) -> Result<()>
                 let bit = match kind {
                     ShaderPayloadKind::SpirV => shader_payload::SPIRV,
                     ShaderPayloadKind::Glsl => shader_payload::GLSL,
-                    ShaderPayloadKind::LegacyMsl => shader_payload::MSL,
+                    ShaderPayloadKind::Msl => shader_payload::MSL,
                     ShaderPayloadKind::PtxKernel => shader_payload::KERNEL,
                     ShaderPayloadKind::DemoBuiltin => 0,
                 };
