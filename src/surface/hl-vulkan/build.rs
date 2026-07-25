@@ -69,6 +69,10 @@ fn main() {
         "cargo:rerun-if-changed={}",
         manifest_dir.join(SHIM_DIR).join("icd.json").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        vendor_dir(&manifest_dir).display()
+    );
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let shim_target = manifest_dir.join("target").join("shim-build");
@@ -130,6 +134,13 @@ fn build_shim(
     linker: &str,
 ) -> Result<(), String> {
     let crate_manifest = manifest_dir.join(SHIM_DIR).join("Cargo.toml");
+    let vendor = vendor_dir(manifest_dir);
+    if !vendor.is_dir() {
+        return Err(format!(
+            "checked-in shim dependency source is missing: {}",
+            vendor.display()
+        ));
+    }
     let linker_env = format!(
         "CARGO_TARGET_{}_LINKER",
         triple.to_uppercase().replace('-', "_")
@@ -139,6 +150,10 @@ fn build_shim(
         .arg("build")
         .arg("--release")
         .arg("--offline")
+        .arg("--config")
+        .arg("source.crates-io.replace-with=\"vendored-sources\"")
+        .arg("--config")
+        .arg(format!("source.vendored-sources.directory={vendor:?}"))
         .arg("--manifest-path")
         .arg(&crate_manifest)
         .arg("--target")
@@ -168,6 +183,10 @@ fn build_shim(
         ));
     }
     Ok(())
+}
+
+fn vendor_dir(manifest_dir: &Path) -> PathBuf {
+    manifest_dir.join("../../../third_party/rust/shim-deps")
 }
 
 /// Install the built `.so` under `<stage_root>/vulkan/<arch>/<soname>` (+ an unversioned symlink) and
