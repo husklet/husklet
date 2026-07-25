@@ -151,7 +151,6 @@ impl<'a> Runner<'a> {
                     timer.elapsed(),
                     started,
                     store,
-                    self.target,
                 );
                 store.append(&outcome)?;
                 Store::write_log(Path::new(&outcome.log_path), "architecture skip\n")?;
@@ -179,7 +178,6 @@ impl<'a> Runner<'a> {
                 timer.elapsed(),
                 started,
                 store,
-                self.target,
             );
             store.append(&outcome)?;
             Store::write_log(

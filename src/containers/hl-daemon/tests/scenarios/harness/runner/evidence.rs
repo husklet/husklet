@@ -94,8 +94,11 @@ pub(super) fn report_outcome(
     duration: Duration,
     started: Duration,
     store: &Store,
-    target: Target,
 ) -> ScenarioOutcome {
+    let target = match key.target.as_str() {
+        "amd64" => Target::Amd64,
+        _ => Target::Arm64,
+    };
     ScenarioOutcome {
         key,
         category: case.id.split('/').next().unwrap_or("other").into(),
