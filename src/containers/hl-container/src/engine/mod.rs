@@ -378,16 +378,22 @@ mod tests {
     }
 
     #[test]
-    fn optional_checkpointing_is_gated_by_guest_capability() {
+    fn optional_checkpointing_follows_each_guest_capability() {
         let engine = hl_engine::Engine::new();
-        assert_eq!(
-            Engine::checkpoint_launch(engine, crate::Guest::Aarch64, Some(false)),
-            super::CheckpointLaunch::Store
-        );
-        assert_eq!(
-            Engine::checkpoint_launch(engine, crate::Guest::X86_64, Some(false)),
-            super::CheckpointLaunch::Ordinary
-        );
+        for (guest, engine_guest) in [
+            (crate::Guest::Aarch64, hl_engine::Guest::Aarch64),
+            (crate::Guest::X86_64, hl_engine::Guest::X86_64),
+        ] {
+            let expected = if engine.capabilities().checkpoint.supports(engine_guest) {
+                super::CheckpointLaunch::Store
+            } else {
+                super::CheckpointLaunch::Ordinary
+            };
+            assert_eq!(
+                Engine::checkpoint_launch(engine, guest, Some(false)),
+                expected
+            );
+        }
         assert_eq!(
             Engine::checkpoint_launch(engine, crate::Guest::X86_64, Some(true)),
             super::CheckpointLaunch::Store,
