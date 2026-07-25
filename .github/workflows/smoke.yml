@@ -17,7 +17,7 @@ concurrency:
 jobs:
   real-image:
     name: ${{ matrix.target }} / ${{ matrix.name }}
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -37,6 +37,14 @@ jobs:
             case: distros/debian-bookworm-osrelease
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an Apple Silicon host
+        run: |
+          architecture="$(uname -m)"
+          test "$architecture" = arm64 || {
+            echo "Husklet smoke tests require an arm64 macOS host, got: $architecture" >&2
+            exit 1
+          }
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20

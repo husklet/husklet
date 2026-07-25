@@ -25,10 +25,18 @@ jobs:
   dmg:
     name: Signed and notarized DMG
     needs: smoke
-    runs-on: macos-14
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Require an Apple Silicon host
+        run: |
+          architecture="$(uname -m)"
+          test "$architecture" = arm64 || {
+            echo "Husklet releases require an arm64 macOS host, got: $architecture" >&2
+            exit 1
+          }
 
       - name: Resolve and validate version
         id: version
