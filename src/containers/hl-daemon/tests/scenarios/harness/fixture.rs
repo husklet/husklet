@@ -48,13 +48,13 @@ impl Fixture {
             .into());
         }
         let (images, reference) = cache(raw)?;
-        let image = if let Some(image) = images.resolve(&reference)? {
+        let image = if let Some(image) = resolve_for_platform(&images, &reference, platform)? {
             image
         } else {
             if env::var_os("HL_SCENARIO_DOCKER_IMAGES").is_some() {
-                let _ = load_docker_image(&images, raw)?;
+                let _ = load_docker_image(&images, raw, platform)?;
             }
-            if let Some(image) = images.resolve(&reference)? {
+            if let Some(image) = resolve_for_platform(&images, &reference, platform)? {
                 image
             } else {
                 if env::var_os("HL_SCENARIO_OFFLINE").is_some() {
@@ -151,20 +151,25 @@ fn retryable(error: &str) -> bool {
     .any(|needle| error.to_ascii_lowercase().contains(needle))
 }
 
-fn load_docker_image(images: &Images, reference: &str) -> Result<bool, Error> {
-    let direct = Command::new("docker")
-        .args(["image", "inspect"])
-        .arg(reference)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?
-        .success();
-    let mut command = if direct {
-        Command::new("docker")
+fn load_docker_image(images: &Images, reference: &str, platform: &Platform) -> Result<bool, Error> {
+    let direct = docker_inspect(reference, false)?;
+    let (inspect, sudo) = if direct.status.success() {
+        (direct, false)
     } else {
+        (docker_inspect(reference, true)?, true)
+    };
+    if !inspect.status.success()
+        || String::from_utf8_lossy(&inspect.stdout).trim()
+            != format!("{}/{}", platform.os, platform.architecture)
+    {
+        return Ok(false);
+    }
+    let mut command = if sudo {
         let mut command = Command::new("sudo");
         command.args(["-n", "docker"]);
         command
+    } else {
+        Command::new("docker")
     };
     let mut archive = tempfile::NamedTempFile::new()?;
     let mut child = command
@@ -185,6 +190,61 @@ fn load_docker_image(images: &Images, reference: &str) -> Result<bool, Error> {
     }
     Archive::load(File::open(archive.path())?, images, Limits::default())?;
     Ok(true)
+}
+
+fn docker_inspect(reference: &str, sudo: bool) -> Result<std::process::Output, Error> {
+    let mut command = if sudo {
+        let mut command = Command::new("sudo");
+        command.args(["-n", "docker"]);
+        command
+    } else {
+        Command::new("docker")
+    };
+    Ok(command
+        .args(["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}"])
+        .arg(reference)
+        .output()?)
+}
+
+fn resolve_for_platform(
+    images: &Images,
+    reference: &Reference,
+    platform: &Platform,
+) -> Result<Option<Image>, Error> {
+    let Some(image) = images.resolve(reference)? else {
+        return Ok(None);
+    };
+    match images.details(&image, platform) {
+        Ok(_) => Ok(Some(image)),
+        Err(hl_images::Error::UnsupportedPlatform { .. }) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub(crate) fn test_platform_aware_cache_resolution() -> Result<(), Error> {
+    let root = tempfile::tempdir()?;
+    let images = Images::open(root.path())?;
+    let reference: Reference = "example.test/cache:latest".parse()?;
+    let mut layer = Vec::new();
+    tar::Builder::new(&mut layer).finish()?;
+    images.import(
+        layer.as_slice(),
+        &RuntimeConfig {
+            entrypoint: Vec::new(),
+            command: vec!["/bin/true".into()],
+            environment: std::collections::BTreeMap::new(),
+            working_directory: "/".into(),
+            user: String::new(),
+        },
+        &Platform::linux_arm64(),
+        &reference,
+    )?;
+    assert!(resolve_for_platform(&images, &reference, &Platform::linux_arm64())?.is_some());
+    assert!(
+        resolve_for_platform(&images, &reference, &Platform::linux_amd64())?.is_none(),
+        "an ARM-only cached tag must be a cache miss for an amd64 request"
+    );
+    Ok(())
 }
 
 fn cache(raw: &str) -> Result<(Images, Reference), Error> {
