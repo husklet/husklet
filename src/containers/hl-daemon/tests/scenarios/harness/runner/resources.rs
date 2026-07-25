@@ -24,6 +24,7 @@ pub(super) async fn acquire(case: &Scenario) -> Result<Vec<OwnedSemaphorePermit>
 }
 
 pub(crate) async fn test_resources() -> Result<(), Error> {
+    super::test_resume_outcomes();
     let port = Scenario::new("collision", "fixture").resource(Resource::HostPort);
     let plain = Scenario::new("plain", "fixture");
     let first = acquire(&port).await?;

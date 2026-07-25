@@ -122,12 +122,11 @@ impl<'a> Runner<'a> {
             image_digest: case.image.into(),
             engine_archive_hash: archive.into(),
         };
-        if recorded
-            .get(&key)
-            .is_some_and(|outcome| outcome.status != Status::InfrastructureFail)
-        {
-            println!("RESUME {}", case.id);
-            return Ok(());
+        if let Some(outcome) = recorded.get(&key) {
+            if resume_outcome(case, self.target, outcome, summary) {
+                println!("RESUME {} {:?}", case.id, outcome.status);
+                return Ok(());
+            }
         }
         let started = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -208,4 +207,107 @@ impl<'a> Runner<'a> {
         }
         Ok(())
     }
+}
+
+fn resume_outcome(
+    case: &Scenario,
+    target: Target,
+    outcome: &ScenarioOutcome,
+    summary: &mut Summary,
+) -> bool {
+    let expected = case.expected_failures.contains(&target);
+    match outcome.status {
+        Status::InfrastructureFail => return false,
+        Status::Pass if expected => {
+            summary.xpassed += 1;
+            summary.failed.push(format!("{}: unexpected pass", case.id));
+        }
+        Status::Pass => summary.passed += 1,
+        Status::ArchSkip => summary.skipped += 1,
+        Status::RuntimeFail | Status::MaterializationFail | Status::Timeout if expected => {
+            summary.xfailed += 1;
+        }
+        Status::RuntimeFail | Status::MaterializationFail | Status::Timeout => {
+            let error = outcome
+                .error
+                .as_deref()
+                .unwrap_or("recorded scenario failure");
+            summary.failed.push(format!("{}: {error}", case.id));
+        }
+    }
+    true
+}
+
+fn test_resume_outcomes() {
+    fn recorded(status: Status, error: Option<&str>) -> ScenarioOutcome {
+        ScenarioOutcome {
+            key: ScenarioKey {
+                scenario: "resume/example".into(),
+                target: "arm64".into(),
+                image_digest: "alpine:3.20".into(),
+                engine_archive_hash: "sha256:engine".into(),
+            },
+            category: "resume".into(),
+            declared_image: "alpine:3.20".into(),
+            resolved_digest: None,
+            step: serde_json::Value::Null,
+            timeout_seconds: 30,
+            checks: Vec::new(),
+            started_at: "0".into(),
+            duration_ms: 1,
+            status,
+            process_exit: None,
+            process_signal: None,
+            expected_failure: false,
+            error: error.map(str::to_owned),
+            log_path: "resume.log".into(),
+        }
+    }
+
+    for status in [
+        Status::RuntimeFail,
+        Status::MaterializationFail,
+        Status::Timeout,
+    ] {
+        let case = Scenario::new("resume/example", "alpine:3.20");
+        let mut summary = Summary::default();
+        assert!(resume_outcome(
+            &case,
+            Target::Arm64,
+            &recorded(status, Some("recorded failure")),
+            &mut summary
+        ));
+        assert_eq!(summary.failed, ["resume/example: recorded failure"]);
+    }
+
+    let case = Scenario::new("resume/example", "alpine:3.20");
+    let mut summary = Summary::default();
+    assert!(!resume_outcome(
+        &case,
+        Target::Arm64,
+        &recorded(Status::InfrastructureFail, Some("retry me")),
+        &mut summary
+    ));
+    assert!(summary.failed.is_empty());
+
+    let expected = Scenario::new("resume/example", "alpine:3.20").xfail(&[Target::Arm64]);
+    let mut summary = Summary::default();
+    assert!(resume_outcome(
+        &expected,
+        Target::Arm64,
+        &recorded(Status::RuntimeFail, Some("known failure")),
+        &mut summary
+    ));
+    assert_eq!(summary.xfailed, 1);
+    assert!(summary.failed.is_empty());
+
+    let mut summary = Summary::default();
+    assert!(resume_outcome(
+        &expected,
+        Target::Arm64,
+        &recorded(Status::Pass, None),
+        &mut summary
+    ));
+    assert_eq!(summary.xpassed, 1);
+    assert_eq!(summary.failed, ["resume/example: unexpected pass"]);
 }
