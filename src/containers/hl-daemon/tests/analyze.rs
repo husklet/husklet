@@ -12,6 +12,23 @@ mod contract {
         Arm64,
         Amd64,
     }
+    impl Target {
+        pub fn from_env() -> Result<Self, String> {
+            match std::env::var("HL_SCENARIO_TARGET").as_deref() {
+                Ok("amd64") => Ok(Self::Amd64),
+                Ok("arm64") | Err(std::env::VarError::NotPresent) => Ok(Self::Arm64),
+                Ok(value) => Err(format!("unsupported scenario target {value:?}")),
+                Err(error) => Err(format!("invalid scenario target: {error}")),
+            }
+        }
+
+        pub const fn name(&self) -> &'static str {
+            match self {
+                Self::Arm64 => "arm64",
+                Self::Amd64 => "amd64",
+            }
+        }
+    }
     #[derive(Clone, Debug, Serialize)]
     pub enum Step {
         Run(Vec<String>),
