@@ -215,12 +215,10 @@ pub(super) async fn remove(
     Query(query): Query<RemoveQuery>,
 ) -> ApiResult<StatusCode> {
     let volumes = state.containers.volumes();
-    let volume = if query.force {
-        volumes.remove_force(&name).await
-    } else {
-        volumes.remove(&name).await
-    }
-    .map_err(ApiError::container)?;
+    // Docker accepts `force` for compatibility, but an attached volume remains
+    // protected: removing it would leave persisted container mounts dangling.
+    let _ = query.force;
+    let volume = volumes.remove(&name).await.map_err(ApiError::container)?;
     let mut attributes = volume.labels;
     attributes.insert("name".into(), volume.name.clone());
     attributes.insert("driver".into(), "local".into());
