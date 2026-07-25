@@ -87,8 +87,43 @@ impl WgpuExecutor {
             // (`get_bind_group_layout(index)`), so 2+ groups bind at their declared set indices. Push
             // constants require the PUSH_CONSTANTS feature, which `device::acquire` requests when the
             // adapter advertises it (lavapipe does).
-            ShaderNative::Module { module: m, .. } => {
+            ShaderNative::Module {
+                module: m,
+                reflected,
+                ..
+            } => {
                 let module = m.clone();
+                let merged: BTreeMap<_, _> = reflected
+                    .used_for(&desc.compute.entry)
+                    .iter()
+                    .map(|binding| {
+                        (
+                            (binding.group, binding.binding),
+                            (wgpu::ShaderStages::COMPUTE, binding.kind),
+                        )
+                    })
+                    .collect();
+                let group_layouts = self.build_render_bind_group_layouts(&merged);
+                let layout_refs: Vec<_> = group_layouts.iter().collect();
+                let push_constant_ranges = self
+                    .gpu
+                    .device
+                    .features()
+                    .contains(wgpu::Features::PUSH_CONSTANTS)
+                    .then(|| wgpu::PushConstantRange {
+                        stages: wgpu::ShaderStages::COMPUTE,
+                        range: 0..self.gpu.device.limits().max_push_constant_size,
+                    })
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let pipeline_layout =
+                    self.gpu
+                        .device
+                        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: Some("hl-compute-module-pl"),
+                            bind_group_layouts: &layout_refs,
+                            push_constant_ranges: &push_constant_ranges,
+                        });
                 // A validation error scope turns wgpu's async device error (raised when the module has no
                 // compute entry point matching `entry` — e.g. a graphics-only SPIR-V module used for
                 // compute) into a clean typed error, instead of the default uncaptured handler PANICKING.
@@ -100,7 +135,7 @@ impl WgpuExecutor {
                         .device
                         .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                             label: Some("hl-compute-spirv"),
-                            layout: None,
+                            layout: Some(&pipeline_layout),
                             module: &module,
                             entry_point: Some(desc.compute.entry.as_str()),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
