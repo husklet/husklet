@@ -18,6 +18,30 @@ fn archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
     bytes
 }
 
+fn archive_with_forward_hardlink(target_present: bool) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut tar = tar::Builder::new(&mut bytes);
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(tar::EntryType::Link);
+        link.set_size(0);
+        link.set_mode(0o644);
+        link.set_link_name("target").unwrap();
+        link.set_cksum();
+        tar.append_data(&mut link, "link", &[][..]).unwrap();
+        if target_present {
+            let mut target = tar::Header::new_gnu();
+            target.set_size(7);
+            target.set_mode(0o644);
+            target.set_cksum();
+            tar.append_data(&mut target, "target", &b"content"[..])
+                .unwrap();
+        }
+        tar.finish().unwrap();
+    }
+    bytes
+}
+
 fn archive_with_root() -> Vec<u8> {
     let mut bytes = Vec::new();
     {
@@ -253,4 +277,31 @@ fn replacing_a_lower_symlink_never_writes_through_it() {
         .unwrap()
         .file_type()
         .is_symlink());
+}
+
+#[cfg(unix)]
+#[test]
+fn forward_hardlink_is_resolved_after_the_complete_layer() {
+    use std::os::unix::fs::MetadataExt;
+
+    let root = tempfile::tempdir().unwrap();
+    Layer::new(Cursor::new(archive_with_forward_hardlink(true)))
+        .apply(root.path())
+        .unwrap();
+    assert_eq!(std::fs::read(root.path().join("link")).unwrap(), b"content");
+    assert_eq!(
+        std::fs::metadata(root.path().join("link")).unwrap().ino(),
+        std::fs::metadata(root.path().join("target")).unwrap().ino()
+    );
+}
+
+#[test]
+fn unresolved_forward_hardlink_fails_after_layer_closure() {
+    let root = tempfile::tempdir().unwrap();
+    let error = Layer::new(Cursor::new(archive_with_forward_hardlink(false)))
+        .apply(root.path())
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("was not present after applying the complete layer"));
 }

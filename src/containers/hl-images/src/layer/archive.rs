@@ -22,8 +22,62 @@ struct Directory {
     mode: u32,
 }
 
+struct HardLink {
+    path: Path,
+    target: PathBuf,
+    destination: PathBuf,
+}
+
+#[derive(Default)]
+struct HardLinks(Vec<HardLink>);
+
+impl HardLinks {
+    fn supersede(&mut self, destination: &FsPath) {
+        self.0.retain(|link| link.destination != destination);
+    }
+
+    fn finish(mut self) -> Result<()> {
+        if self.0.is_empty() {
+            return Ok(());
+        }
+        for _ in 0..self.0.len() {
+            let mut remaining = Vec::new();
+            let mut progress = false;
+            for link in self.0 {
+                match fs::hard_link(&link.target, &link.destination) {
+                    Ok(()) => progress = true,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        remaining.push(link);
+                    }
+                    Err(error) => return Err(link.path.io("create deferred hard link", error)),
+                }
+            }
+            self.0 = remaining;
+            if self.0.is_empty() {
+                return Ok(());
+            }
+            if !progress {
+                break;
+            }
+        }
+        let link = self
+            .0
+            .first()
+            .expect("unresolved hard-link set is non-empty");
+        Err(link
+            .path
+            .error("hardlink target was not present after applying the complete layer"))
+    }
+}
+
 #[derive(Default)]
 struct Directories(Vec<Directory>);
+
+#[derive(Default)]
+struct Deferred {
+    directories: Directories,
+    hard_links: HardLinks,
+}
 
 impl Directories {
     fn push(&mut self, path: Path, destination: PathBuf, mode: u32) {
@@ -119,7 +173,7 @@ impl<R: Read> Layer<R> {
         let root = root.canonicalize()?;
         let mut archive = tar::Archive::new(&mut self.reader);
         let mut report = Report::default();
-        let mut directories = Directories::default();
+        let mut deferred = Deferred::default();
         for item in archive.entries()? {
             let mut entry = item?;
             let raw = entry.path()?;
@@ -141,6 +195,7 @@ impl<R: Read> Layer<R> {
             )?;
             let physical_path = Path::new(&physical)?;
             let destination = physical_path.destination(&root);
+            deferred.hard_links.supersede(&destination);
             let _parents = physical_path.prepare(&root)?;
             let kind = entry.header().entry_type();
             let ownership = Ownership::from_header(entry.header(), &path)?;
@@ -158,14 +213,15 @@ impl<R: Read> Layer<R> {
                 &destination,
                 &root,
                 names.as_deref_mut(),
-                &mut directories,
+                &mut deferred,
             )?;
             if let Some(ownerships) = ownerships.as_deref_mut() {
                 ownerships.record(path.as_path(), ownership)?;
             }
             report.entries += 1;
         }
-        directories.finish(ownerships)?;
+        deferred.hard_links.finish()?;
+        deferred.directories.finish(ownerships)?;
         Ok(report)
     }
 }
@@ -178,7 +234,7 @@ impl Path {
         destination: &FsPath,
         root: &FsPath,
         names: Option<&mut Names>,
-        directories: &mut Directories,
+        deferred: &mut Deferred,
     ) -> Result<()> {
         let path = self;
         match entry.header().entry_type() {
@@ -190,7 +246,11 @@ impl Path {
                 }
                 fs::create_dir_all(destination)
                     .map_err(|source| path.io("create directory", source))?;
-                directories.push(path.clone(), destination.to_owned(), entry.header().mode()?);
+                deferred.directories.push(
+                    path.clone(),
+                    destination.to_owned(),
+                    entry.header().mode()?,
+                );
             }
             tar::EntryType::Regular | tar::EntryType::GNUSparse => {
                 fs::create_dir_all(destination.parent().unwrap_or(root))?;
@@ -243,8 +303,18 @@ impl Path {
                 if fs::symlink_metadata(destination).is_ok() {
                     path.remove(destination)?;
                 }
-                fs::hard_link(physical_target.destination(root), destination)
-                    .map_err(|source| path.io("create hard link", source))?;
+                let target = physical_target.destination(root);
+                match fs::hard_link(&target, destination) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        deferred.hard_links.0.push(HardLink {
+                            path: path.clone(),
+                            target,
+                            destination: destination.to_owned(),
+                        });
+                    }
+                    Err(error) => return Err(path.io("create hard link", error)),
+                }
             }
             _ => return Err(path.error("special filesystem node is forbidden")),
         }

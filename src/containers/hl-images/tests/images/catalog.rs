@@ -1,6 +1,6 @@
 use super::support::descriptor;
 use hl_images::{FsImageStore, Image, ImageStore, Reference};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[test]
 #[ignore = "subprocess entry point for the cross-process catalog regression"]
