@@ -19,7 +19,7 @@ pub(super) fn finish(options: &Options, run: &str) -> Result<(), Error> {
             started_unix_ms: 0,
             engine_archive_hash: env::var("HL_ENGINE_ARCHIVE_SHA256")
                 .unwrap_or_else(|_| "unknown".into()),
-            targets: vec!["arm64".into()],
+            targets: vec![options.target.name().into()],
             images: BTreeMap::new(),
             categories: TASKS
                 .iter()

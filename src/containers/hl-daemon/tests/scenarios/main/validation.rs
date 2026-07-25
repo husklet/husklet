@@ -16,6 +16,7 @@ pub(super) fn self_test() -> Result<(), Box<dyn std::error::Error>> {
     analyze::tests::normalization_removes_volatile_values();
     languages::tests::registry_has_every_stable_id_once();
     scheduler::tests::options_reject_zero_jobs_and_accept_filters();
+    crate::contract::test_target_routing();
     report::tests::persistence_resume_and_summaries_are_deterministic();
     report::tests::summary_categories_cover_every_recorded_outcome();
     report::tests::legacy_resume_filters_before_case_body();

@@ -94,6 +94,7 @@ pub(super) fn report_outcome(
     duration: Duration,
     started: Duration,
     store: &Store,
+    target: Target,
 ) -> ScenarioOutcome {
     ScenarioOutcome {
         key,
@@ -108,7 +109,7 @@ pub(super) fn report_outcome(
         status,
         process_exit: None,
         process_signal: None,
-        expected_failure: case.expected_failures.contains(&Target::Arm64),
+        expected_failure: case.expected_failures.contains(&target),
         error,
         log_path: store.log_path(case.id).display().to_string(),
     }

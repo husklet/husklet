@@ -6,7 +6,7 @@ use hl_container::Containers;
 type Error = Box<dyn std::error::Error>;
 
 pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
-    Runner::arm64(containers).run(group()).await
+    Runner::from_env(containers)?.run(group()).await
 }
 
 pub(crate) fn group() -> Group {

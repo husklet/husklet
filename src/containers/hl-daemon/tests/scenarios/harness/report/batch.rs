@@ -17,6 +17,7 @@ pub struct ScenarioBatch {
     pub(super) archive: String,
     pub(super) store: Option<Store>,
     pub(super) recorded: BTreeMap<ScenarioKey, ScenarioOutcome>,
+    pub(super) target: Target,
 }
 pub struct ScenarioAttempt {
     key: ScenarioKey,
@@ -31,17 +32,20 @@ impl ScenarioBatch {
             .map(Store::resume)
             .transpose()?
             .unwrap_or_default();
+        let target = Target::from_env()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         Ok(Self {
             category: category.into(),
             archive: std::env::var("HL_ENGINE_ARCHIVE_SHA256").unwrap_or_else(|_| "unknown".into()),
             store,
             recorded,
+            target,
         })
     }
     pub fn begin(&self, scenario: &Scenario) -> io::Result<Option<ScenarioAttempt>> {
         let key = ScenarioKey {
             scenario: scenario.id.into(),
-            target: "arm64".into(),
+            target: self.target.name().into(),
             image_digest: scenario.image.into(),
             engine_archive_hash: self.archive.clone(),
         };
@@ -125,7 +129,7 @@ impl ScenarioBatch {
             status,
             process_exit: None,
             process_signal: None,
-            expected_failure: scenario.expected_failures.contains(&Target::Arm64),
+            expected_failure: scenario.expected_failures.contains(&self.target),
             error,
             log_path: store.log_path(scenario.id).display().to_string(),
         };
@@ -149,7 +153,7 @@ impl ScenarioBatch {
                 run_id: std::env::var("HL_SCENARIO_RUN_ID").unwrap_or_default(),
                 started_unix_ms: 0,
                 engine_archive_hash: self.archive,
-                targets: vec!["arm64".into()],
+                targets: vec![self.target.name().into()],
                 images: BTreeMap::new(),
                 categories: vec![self.category],
                 filters,

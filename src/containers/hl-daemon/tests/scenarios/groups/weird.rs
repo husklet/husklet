@@ -17,7 +17,7 @@ pub(crate) fn group() -> contract::Group {
 }
 
 pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
-    Runner::arm64(containers).run(group()).await
+    Runner::from_env(containers)?.run(group()).await
 }
 
 pub(crate) fn test_expected_failures() -> Result<(), String> {

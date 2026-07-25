@@ -164,8 +164,18 @@ pub(super) async fn filesystem() -> Result<(), Box<dyn std::error::Error>> {
 
 pub(super) async fn copy() -> Result<(), Box<dyn std::error::Error>> {
     let work = TempDir::new()?;
-    let rootfs = alpine(work.path()).await?;
-    copy::run(&containers_for(work.path()).await?, &rootfs).await
+    let containers = containers_for(work.path()).await?;
+    let target = crate::contract::Target::from_env()?;
+    if target == crate::contract::Target::Arm64 {
+        let rootfs = alpine(work.path()).await?;
+        return copy::run(&containers, &rootfs).await;
+    }
+    let fixture =
+        crate::fixture::Fixture::materialize_for("alpine:3.20", &target.platform()).await?;
+    let result = copy::run(&containers, fixture.path()).await;
+    let release = fixture.release();
+    result?;
+    release
 }
 
 pub(super) async fn build() -> Result<(), Box<dyn std::error::Error>> {
@@ -193,7 +203,7 @@ pub(super) async fn build() -> Result<(), Box<dyn std::error::Error>> {
 pub(super) async fn databases() -> Result<(), Box<dyn std::error::Error>> {
     let work = TempDir::new()?;
     let containers = containers_for(work.path()).await?;
-    runner::Runner::arm64(&containers)
+    runner::Runner::from_env(&containers)?
         .run(databases::group())
         .await
 }
@@ -224,7 +234,7 @@ pub(super) async fn languages() -> Result<(), Box<dyn std::error::Error>> {
 pub(super) async fn toolchains() -> Result<(), Box<dyn std::error::Error>> {
     let work = TempDir::new()?;
     let containers = containers_for(work.path()).await?;
-    runner::Runner::arm64(&containers)
+    runner::Runner::from_env(&containers)?
         .run(registry::toolchains::group())
         .await
 }

@@ -6,6 +6,7 @@ mod queue;
 mod report;
 mod workflow;
 
+use crate::contract::Target;
 use cache::RunLock;
 use process::ProcessGroup;
 use queue::{owns, requirements, Resources, Task, TASKS};
@@ -28,6 +29,7 @@ pub(crate) struct Options {
     resume: bool,
     offline: bool,
     dry_run: bool,
+    target: Target,
 }
 
 impl Options {
@@ -41,6 +43,7 @@ impl Options {
             resume: false,
             offline: false,
             dry_run: false,
+            target: Target::Arm64,
         };
         let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
@@ -54,6 +57,16 @@ impl Options {
                 "--offline" => value.offline = true,
                 "--prefetch" => value.offline = false,
                 "--dry-run" => value.dry_run = true,
+                "--target" => {
+                    value.target = match arguments.next().as_deref() {
+                        Some("arm64") => Target::Arm64,
+                        Some("amd64") => Target::Amd64,
+                        Some(value) => {
+                            return Err(format!("unsupported target {value:?}").into());
+                        }
+                        None => return Err("--target needs a value".into()),
+                    };
+                }
                 other => return Err(format!("unknown all-suite option {other:?}").into()),
             }
         }
@@ -131,6 +144,7 @@ pub(crate) async fn run(options: Options) -> Result<(), Error> {
     let queue = Arc::new(Mutex::new(tasks));
     let resources = Resources::new();
     let offline = options.offline;
+    let target = options.target;
     let mut workers_set = JoinSet::new();
     for worker in 0..options.jobs {
         let queue = queue.clone();
@@ -163,6 +177,7 @@ pub(crate) async fn run(options: Options) -> Result<(), Error> {
                     .env("HL_SCENARIO_RUN_ID", &run)
                     .env("HL_SCENARIO_CHILD", "1")
                     .env("HL_SCENARIO_IMAGE_CACHE", &worker_cache)
+                    .env("HL_SCENARIO_TARGET", target.name())
                     .stdin(Stdio::null())
                     .stdout(Stdio::inherit())
                     .stderr(Stdio::inherit());
@@ -228,6 +243,8 @@ pub(crate) mod tests {
                 "--category".into(),
                 "web".into(),
                 "--dry-run".into(),
+                "--target".into(),
+                "amd64".into(),
             ]
             .into_iter(),
         )
@@ -235,6 +252,7 @@ pub(crate) mod tests {
         assert_eq!(options.jobs, 3);
         assert_eq!(options.category.as_deref(), Some("web"));
         assert!(options.dry_run);
+        assert_eq!(options.target, crate::contract::Target::Amd64);
     }
 
     pub(crate) async fn timeout_reaps_owned_process_group() {

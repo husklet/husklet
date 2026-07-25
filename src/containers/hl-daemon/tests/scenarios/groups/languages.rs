@@ -30,7 +30,7 @@ pub(crate) async fn run(work: &Path) -> Result<(), Error> {
     let containers = Containers::builder(Config::new(state.path().join("state")))
         .build()
         .await?;
-    Runner::arm64(&containers).run(group()).await
+    Runner::from_env(&containers)?.run(group()).await
 }
 
 pub(crate) mod tests {

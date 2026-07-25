@@ -12,6 +12,43 @@ pub enum Target {
 
 impl Target {
     pub const LINUX: [Self; 2] = [Self::Arm64, Self::Amd64];
+
+    pub fn from_env() -> Result<Self, String> {
+        match std::env::var("HL_SCENARIO_TARGET").as_deref() {
+            Ok("amd64") => Ok(Self::Amd64),
+            Ok("arm64") | Err(std::env::VarError::NotPresent) => Ok(Self::Arm64),
+            Ok(value) => Err(format!("unsupported scenario target {value:?}")),
+            Err(error) => Err(format!("invalid scenario target: {error}")),
+        }
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Arm64 => "arm64",
+            Self::Amd64 => "amd64",
+        }
+    }
+
+    pub fn platform(self) -> hl_images::Platform {
+        match self {
+            Self::Arm64 => hl_images::Platform::linux_arm64(),
+            Self::Amd64 => hl_images::Platform::linux_amd64(),
+        }
+    }
+
+    pub const fn guest(self) -> hl_container::Guest {
+        match self {
+            Self::Arm64 => hl_container::Guest::Aarch64,
+            Self::Amd64 => hl_container::Guest::X86_64,
+        }
+    }
+}
+
+pub(crate) fn test_target_routing() {
+    assert_eq!(Target::Arm64.platform(), hl_images::Platform::linux_arm64());
+    assert_eq!(Target::Amd64.platform(), hl_images::Platform::linux_amd64());
+    assert_eq!(Target::Arm64.guest(), hl_container::Guest::Aarch64);
+    assert_eq!(Target::Amd64.guest(), hl_container::Guest::X86_64);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

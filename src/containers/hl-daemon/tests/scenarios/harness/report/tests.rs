@@ -199,6 +199,7 @@ pub(crate) fn legacy_resume_filters_before_case_body() {
         archive: "sha256:engine".into(),
         store: None,
         recorded: BTreeMap::from([(value.key.clone(), value)]),
+        target: crate::contract::Target::Arm64,
     };
     let scenario = Scenario::new("a", "sha256:image");
     let mut invoked = 0;
@@ -254,6 +255,7 @@ pub(crate) fn architecture_skip_writes_exactly_one_terminal_result() {
         archive: "sha256:engine".into(),
         store: Some(store),
         recorded: BTreeMap::new(),
+        target: crate::contract::Target::Amd64,
     };
     let scenario = Scenario::new("cpcoherence/example.amd", "alpine:3.20");
     let attempt: ScenarioAttempt = batch.begin(&scenario).unwrap().unwrap();
@@ -262,6 +264,7 @@ pub(crate) fn architecture_skip_writes_exactly_one_terminal_result() {
     assert_eq!(raw.lines().count(), 1);
     let terminal: ScenarioOutcome = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(terminal.key.scenario, scenario.id);
+    assert_eq!(terminal.key.target, "amd64");
     assert_eq!(terminal.status, Status::ArchSkip);
     assert!(batch.begin(&scenario).unwrap().is_none());
 }

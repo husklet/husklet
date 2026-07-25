@@ -40,11 +40,11 @@ pub(crate) struct Runner<'a> {
 }
 
 impl<'a> Runner<'a> {
-    pub(crate) fn arm64(containers: &'a Containers) -> Self {
-        Self {
+    pub(crate) fn from_env(containers: &'a Containers) -> Result<Self, Error> {
+        Ok(Self {
             containers,
-            target: Target::Arm64,
-        }
+            target: Target::from_env()?,
+        })
     }
 
     pub(crate) async fn run(&self, group: Group) -> Result<(), Error> {
@@ -90,7 +90,7 @@ impl<'a> Runner<'a> {
                 run_id: std::env::var("HL_SCENARIO_RUN_ID").unwrap_or_default(),
                 started_unix_ms: 0,
                 engine_archive_hash: archive,
-                targets: vec![format!("{:?}", self.target).to_lowercase()],
+                targets: vec![self.target.name().into()],
                 images: BTreeMap::new(),
                 categories: vec![group.name.into()],
                 filters: selected.into_iter().collect(),
@@ -118,7 +118,7 @@ impl<'a> Runner<'a> {
     ) -> Result<(), Error> {
         let key = ScenarioKey {
             scenario: case.id.into(),
-            target: format!("{:?}", self.target).to_lowercase(),
+            target: self.target.name().into(),
             image_digest: case.image.into(),
             engine_archive_hash: archive.into(),
         };
@@ -151,6 +151,7 @@ impl<'a> Runner<'a> {
                     timer.elapsed(),
                     started,
                     store,
+                    self.target,
                 );
                 store.append(&outcome)?;
                 Store::write_log(Path::new(&outcome.log_path), "architecture skip\n")?;
@@ -178,6 +179,7 @@ impl<'a> Runner<'a> {
                 timer.elapsed(),
                 started,
                 store,
+                self.target,
             );
             store.append(&outcome)?;
             Store::write_log(

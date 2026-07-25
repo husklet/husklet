@@ -24,14 +24,18 @@ impl Runner<'_> {
         if let Step::Api(operation) = &case.step {
             return Err(format!("API contract is not translated to Rust: {operation}").into());
         }
-        let fixture = tokio::time::timeout(MATERIALIZE_TIMEOUT, Fixture::materialize(case.image))
-            .await
-            .map_err(|_| {
-                format!(
-                    "image materialization timed out after {} seconds",
-                    MATERIALIZE_TIMEOUT.as_secs()
-                )
-            })??;
+        let platform = self.target.platform();
+        let fixture = tokio::time::timeout(
+            MATERIALIZE_TIMEOUT,
+            Fixture::materialize_for(case.image, &platform),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "image materialization timed out after {} seconds",
+                MATERIALIZE_TIMEOUT.as_secs()
+            )
+        })??;
         let name = case.id.replace('/', "-");
         let primary = self.execute_fixture(case, &name, &fixture).await;
         let cleanup = self
@@ -71,6 +75,7 @@ impl Runner<'_> {
             .create(
                 ContainerSpec::from_directory(fixture.path(), initial)
                     .name(name)
+                    .guest(self.target.guest())
                     .resources(resources)
                     .isolation(Isolation {
                         sandbox: Sandbox::Disabled,

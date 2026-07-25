@@ -32,7 +32,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
         .as_deref()
         .is_none_or(|id| id.starts_with("networking/"))
     {
-        if let Err(error) = Runner::arm64(containers)
+        if let Err(error) = Runner::from_env(containers)?
             .run(registry::networking::group())
             .await
         {
@@ -43,7 +43,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
         .as_deref()
         .is_none_or(|id| id.starts_with("netinstall/"))
     {
-        if let Err(error) = Runner::arm64(containers)
+        if let Err(error) = Runner::from_env(containers)?
             .run(registry::netinstall::group())
             .await
         {

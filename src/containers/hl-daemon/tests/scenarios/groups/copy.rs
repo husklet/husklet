@@ -22,6 +22,8 @@ const IDS: [&str; 12] = [
 ];
 
 pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Error> {
+    let target = Target::from_env()?;
+    let selected = std::env::var("HL_SCENARIO_CASE").ok();
     let scenarios = crate::registry::copy::group()
         .scenarios
         .into_iter()
@@ -30,18 +32,28 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Er
         .collect::<std::collections::BTreeMap<_, _>>();
     let mut reports = ScenarioBatch::new("copy")?;
     let mut failures = Vec::new();
-    for id in IDS {
+    let ids = IDS
+        .into_iter()
+        .filter(|id| selected.as_deref().is_none_or(|selected| selected == *id))
+        .collect::<Vec<_>>();
+    for id in &ids {
         let scenario = &scenarios[id];
         let Some(attempt) = reports.begin(scenario)? else {
             println!("RESUME {id}");
             continue;
         };
-        if !scenario.targets.contains(&Target::Arm64) {
+        if !scenario.targets.contains(&target) {
             reports.skip(scenario, attempt)?;
             println!("SKIP {id}");
             continue;
         }
-        let result = Case { containers, rootfs }.run(id).await;
+        let result = Case {
+            containers,
+            rootfs,
+            target,
+        }
+        .run(id)
+        .await;
         reports.complete(scenario, attempt, &result)?;
         match result {
             Ok(()) => println!("PASS {id}"),
@@ -53,9 +65,9 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Er
     }
     println!(
         "copy scenarios: {} passed; {} failed; {} total",
-        IDS.len() - failures.len(),
+        ids.len() - failures.len(),
         failures.len(),
-        IDS.len()
+        ids.len()
     );
     reports.finish(Vec::new())?;
     if failures.is_empty() {
@@ -68,10 +80,12 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Er
 struct Case<'a> {
     containers: &'a Containers,
     rootfs: &'a Path,
+    target: Target,
 }
 
 impl Case<'_> {
     async fn run(&self, id: &str) -> Result<(), Error> {
+        let id = id.strip_suffix(".amd").unwrap_or(id);
         match id {
             "cpcmd/host-to-container-file" => {
                 self.simple(id, "sleep 60", "/tmp", &[("f", b"CPFILE\n")], "/tmp/f", b"CPFILE\n").await
@@ -85,9 +99,6 @@ impl Case<'_> {
             "cpcmd/container-to-host-dir" => {
                 self.simple(id, "mkdir -p /tmp/e; echo XXX > /tmp/e/x; echo YYY > /tmp/e/y; touch /tmp/cp-ready; sleep 60", "/tmp", &[], "/tmp/e", b"XXX\nYYY\n").await
             }
-            id if id.strip_suffix(".amd").is_some() => Err(
-                "AMD64 guest execution is unavailable in the pinned ARM64 matrix".into(),
-            ),
             "cpcoherence/cp-new-file-live-poll" => self.live(id, "mkdir -p /tmp/cp-new; touch /tmp/cp-ready; i=0; while [ $i -lt 400 ]; do if [ -e /tmp/cp-new/probe ]; then echo SEEN:$(cat /tmp/cp-new/probe); exit 0; fi; i=$((i+1)); sleep .1; done; echo TIMEOUT; exit 1", "/tmp/cp-new", &[("probe", b"hello-cp\n")], &["SEEN:hello-cp"]).await,
             "cpcoherence/cp-overwrite-cached-positive" => self.live(id, "mkdir -p /tmp/cp-over; : > /tmp/cp-over/probe; touch /tmp/cp-ready; i=0; while [ $i -lt 400 ]; do if [ -s /tmp/cp-over/probe ]; then echo GREW:$(cat /tmp/cp-over/probe); exit 0; fi; i=$((i+1)); sleep .1; done; echo TIMEOUT; exit 1", "/tmp/cp-over", &[("probe", b"new-content\n")], &["GREW:new-content"]).await,
             "cpcoherence/cp-dir-tree-live-poll" => self.live(id, "mkdir -p /tmp/cp-tree; touch /tmp/cp-ready; i=0; while [ $i -lt 400 ]; do if [ -e /tmp/cp-tree/d/sub/leaf ]; then echo TREE:$(cat /tmp/cp-tree/d/sub/leaf); exit 0; fi; i=$((i+1)); sleep .1; done; echo TIMEOUT; exit 1", "/tmp/cp-tree", &[("d/sub/leaf", b"LEAF-CONTENT\n")], &["TREE:LEAF-CONTENT"]).await,
@@ -105,6 +116,7 @@ impl Case<'_> {
                     Process::new("/bin/sh").args(["-c", command]),
                 )
                 .name(&name)
+                .guest(self.target.guest())
                 .isolation(Isolation {
                     sandbox: Sandbox::Disabled,
                     ..Isolation::default()
