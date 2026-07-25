@@ -259,11 +259,7 @@ pub(super) async fn basic_registry(
     );
     let task = tokio::spawn(async move {
         loop {
-            let Ok(Ok((mut socket, _))) =
-                tokio::time::timeout(Duration::from_secs(10), listener.accept()).await
-            else {
-                break;
-            };
+            let (mut socket, _) = listener.accept().await.unwrap();
             let root = fixture.root.clone();
             let blobs = fixture.blobs.clone();
             let expected = expected.clone();
@@ -283,7 +279,7 @@ pub(super) async fn basic_registry(
                     .any(|line| line.eq_ignore_ascii_case(&format!("authorization: {expected}")))
                 {
                     socket
-                        .write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"mock\"\r\nContent-Length: 0\r\n\r\n")
+                        .write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"mock\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                         .await
                         .unwrap();
                     return;
@@ -300,7 +296,7 @@ pub(super) async fn basic_registry(
                     String::new()
                 };
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: {}\r\n{digest_header}Content-Length: {}\r\n\r\n",
+                    "HTTP/1.1 200 OK\r\nContent-Type: {}\r\n{digest_header}Content-Length: {}\r\nConnection: close\r\n\r\n",
                     if path.contains("/manifests/") {
                         root.media_type().to_string()
                     } else {
