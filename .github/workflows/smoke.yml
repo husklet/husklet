@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    secrets:
+      HL_REGISTRY_USERNAME:
+        required: false
+      HL_REGISTRY_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -19,6 +24,8 @@ jobs:
     name: ${{ matrix.target }} / ${{ matrix.name }}
     runs-on: macos-26
     timeout-minutes: 20
+    env:
+      HL_SCENARIO_IMAGE_CACHE: ${{ github.workspace }}/.cache/oci-smoke
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +53,41 @@ jobs:
             exit 1
           }
 
+      - name: Restore the exact OCI fixture cache
+        id: images
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.HL_SCENARIO_IMAGE_CACHE }}
+          key: >-
+            oci-smoke-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{
+            hashFiles(
+              'Cargo.lock',
+              'src/containers/hl-daemon/tests/scenarios/fixtures/distros-full.yaml',
+              'src/containers/hl-daemon/tests/scenarios/harness/fixture.rs',
+              'src/containers/hl-images/src/**'
+            ) }}-${{ matrix.case }}
+
+      - name: Select authenticated or exact-cache image access
+        env:
+          CACHE_HIT: ${{ steps.images.outputs.cache-hit }}
+          REGISTRY_USERNAME: ${{ secrets.HL_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.HL_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ "$CACHE_HIT" == true ]]; then
+            echo "HL_SCENARIO_OFFLINE=1" >> "$GITHUB_ENV"
+            echo "using the exact cached OCI fixture; registry access is disabled"
+          elif [[ -n "$REGISTRY_USERNAME" && -n "$REGISTRY_PASSWORD" ]]; then
+            echo "exact OCI fixture cache missed; using authenticated registry access"
+          elif [[ -n "$REGISTRY_USERNAME" || -n "$REGISTRY_PASSWORD" ]]; then
+            echo "both HL_REGISTRY_USERNAME and HL_REGISTRY_PASSWORD are required" >&2
+            exit 1
+          else
+            echo "exact OCI fixture cache missed and registry credentials are unavailable" >&2
+            echo "populate this key from a trusted main run with HL_REGISTRY_* secrets" >&2
+            exit 1
+          fi
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
         with:
@@ -58,6 +100,9 @@ jobs:
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Run the real image through the container runtime
+        env:
+          HL_REGISTRY_USERNAME: ${{ secrets.HL_REGISTRY_USERNAME }}
+          HL_REGISTRY_PASSWORD: ${{ secrets.HL_REGISTRY_PASSWORD }}
         run: >-
           nix develop "path:$PWD/nix" --command
           cargo test -p hl-daemon --test scenarios --

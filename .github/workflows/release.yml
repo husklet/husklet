@@ -21,6 +21,9 @@ jobs:
   smoke:
     name: Release real-image gate
     uses: ./.github/workflows/smoke.yml
+    secrets:
+      HL_REGISTRY_USERNAME: ${{ secrets.HL_REGISTRY_USERNAME }}
+      HL_REGISTRY_PASSWORD: ${{ secrets.HL_REGISTRY_PASSWORD }}
 
   dmg:
     name: Signed and notarized DMG
