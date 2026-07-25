@@ -199,6 +199,64 @@ fn case_distinct_layer_names_persist_and_export_as_guest_names() {
 
 #[cfg(unix)]
 #[test]
+fn hardlink_resolves_through_a_case_distinct_directory() {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut tar = Vec::new();
+    {
+        let mut archive = tar::Builder::new(&mut tar);
+        for name in ["usr/share/terminfo/L", "usr/share/terminfo/l"] {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive.append_data(&mut header, name, &[][..]).unwrap();
+            if name.ends_with("/L") {
+                let mut file = tar::Header::new_gnu();
+                file.set_size(7);
+                file.set_mode(0o644);
+                file.set_cksum();
+                archive
+                    .append_data(&mut file, "usr/share/terminfo/L/LFT-PC850", &b"content"[..])
+                    .unwrap();
+            }
+        }
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(tar::EntryType::Link);
+        link.set_size(0);
+        link.set_mode(0o644);
+        link.set_link_name("usr/share/terminfo/L/LFT-PC850")
+            .unwrap();
+        link.set_cksum();
+        archive
+            .append_data(&mut link, "usr/share/terminfo/l/lft-pc850", &[][..])
+            .unwrap();
+        archive.finish().unwrap();
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let snapshots = Snapshots::open(temp.path()).unwrap();
+    let mut draft = snapshots.prepare(id("active-hardlink"), None).unwrap();
+    let root = draft.path().to_owned();
+    let (owners, names) = draft.metadata_mut();
+    Layer::new(tar.as_slice())
+        .apply_with_metadata(&root, owners, names)
+        .unwrap();
+    let upper = draft
+        .names()
+        .physical(Path::new("usr/share/terminfo/L/LFT-PC850"));
+    let lower = draft
+        .names()
+        .physical(Path::new("usr/share/terminfo/l/lft-pc850"));
+    assert_eq!(
+        fs::metadata(root.join(upper)).unwrap().ino(),
+        fs::metadata(root.join(lower)).unwrap().ino()
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn metadata_layer_preserves_same_directory_symlink_target() {
     let mut bytes = Vec::new();
     {

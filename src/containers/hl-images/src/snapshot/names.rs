@@ -85,10 +85,6 @@ impl Name {
         Path::new(&self.0)
     }
 
-    fn into_path(self) -> PathBuf {
-        self.0.into()
-    }
-
     fn into_string(self) -> String {
         self.0
     }
@@ -221,7 +217,10 @@ impl Names {
         let physical_parent = if guest_parent.as_os_str().is_empty() {
             PathBuf::new()
         } else {
-            self.physical(guest_parent).to_owned()
+            // A case-distinct ancestor may itself be encoded. Resolve it first so
+            // descendants cannot fall back to the host's case-insensitive alias
+            // and overwrite the sibling that caused the encoding.
+            self.resolve(root, guest_parent)?
         };
         let name = guest
             .as_path()
@@ -235,6 +234,7 @@ impl Names {
             })?;
         let directory = root.join(&physical_parent);
         if directory.is_dir() {
+            let mut collides = false;
             for entry in fs::read_dir(&directory)? {
                 let entry = entry?;
                 let physical = physical_parent.join(entry.file_name());
@@ -247,26 +247,37 @@ impl Names {
                     return Ok(physical);
                 }
                 if visible_name.eq_ignore_ascii_case(name) {
-                    for salt in 0..u32::MAX {
-                        let candidate = guest.encoded(salt);
-                        if !root.join(candidate.as_path()).exists()
-                            || self.guest(candidate.as_path()) == guest.as_path()
-                        {
-                            let path = candidate.as_path().to_owned();
-                            self.entries
-                                .0
-                                .insert(candidate.into_string(), guest.into_string());
-                            self.save()?;
-                            return Ok(path);
-                        }
-                    }
-                    return Err(Error::InvalidMetadata(
-                        "snapshot name encoding space exhausted".into(),
-                    ));
+                    collides = true;
                 }
             }
+            if collides {
+                for salt in 0..u32::MAX {
+                    let encoded = guest.encoded(salt);
+                    let candidate = Name::from_path(
+                        &physical_parent.join(
+                            encoded
+                                .as_path()
+                                .file_name()
+                                .expect("encoded name has a leaf"),
+                        ),
+                    )?;
+                    if !root.join(candidate.as_path()).exists()
+                        || self.guest(candidate.as_path()) == guest.as_path()
+                    {
+                        let path = candidate.as_path().to_owned();
+                        self.entries
+                            .0
+                            .insert(candidate.into_string(), guest.into_string());
+                        self.save()?;
+                        return Ok(path);
+                    }
+                }
+                return Err(Error::InvalidMetadata(
+                    "snapshot name encoding space exhausted".into(),
+                ));
+            }
         }
-        Ok(guest.into_path())
+        Ok(physical_parent.join(name))
     }
 
     pub(super) fn relocate(&mut self, path: PathBuf) {
