@@ -1,0 +1,58 @@
+name: Real-image smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-image:
+    name: ${{ matrix.target }} / ${{ matrix.name }}
+    runs-on: macos-14
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: arm64
+            name: Ubuntu 24.04
+            case: distros/ubuntu-2404-osrelease
+          - target: arm64
+            name: Debian 12
+            case: distros/debian-bookworm-osrelease
+          - target: amd64
+            name: Ubuntu 24.04
+            case: distros/ubuntu-2404-osrelease
+          - target: amd64
+            name: Debian 12
+            case: distros/debian-bookworm-osrelease
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
+        with:
+          diagnostic-endpoint: ""
+
+      - name: Cache the Nix development environment
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('nix/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Run the real image through the container runtime
+        run: >-
+          nix develop "path:$PWD/nix" --command
+          cargo test -p hl-daemon --test scenarios --
+          all --jobs 1 --category distros
+          --case "${{ matrix.case }}"
+          --target "${{ matrix.target }}"
